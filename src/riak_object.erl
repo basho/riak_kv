@@ -77,7 +77,8 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
             throw({error,key_too_large});
         false ->
             Contents = [#r_content{metadata=MD, value=V}],
-            #r_object{bucket=B,key=K,contents=Contents,vclock=vclock:fresh()}
+            #r_object{bucket=B,key=K,updatemetadata=MD,
+                      contents=Contents,vclock=vclock:fresh()}
     end.
 
 -spec equal(riak_object(), riak_object()) -> true | false.
