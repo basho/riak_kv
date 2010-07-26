@@ -61,8 +61,8 @@ is_x_deleted(Obj) ->
 obj_not_deleted(Obj) ->
     case [{M, V} || {M, V} <- riak_object:get_contents(Obj),
                     dict:is_key(<<"X-Riak-Deleted">>, M) =:= false] of
-	[] -> undefined;
-	_ -> Obj
+        [] -> undefined;
+        _ -> Obj
     end.
 
 %% @spec try_cast(term(), term(), [node()], [{Index :: term(), Node :: node()}]) ->

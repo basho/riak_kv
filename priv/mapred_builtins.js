@@ -17,34 +17,34 @@ var Riak = function() {
       if (obj && obj.constructor && obj.constructor.toString) {
         var arr = obj.constructor.toString().match(/function\s*(\w+)/);
         if (arr && arr.length == 2) {
-	  return arr[1];
+          return arr[1];
         }
       }
       return undefined;
     },
     filterNotFound: function(values) {
       return values.filter(function(value, index, data) {
-			     if (typeof value === 'object') {
-			       return value['not_found'] === undefined;
-			     }
-			     else {
-			       return true;
-			     } });
+        if (typeof value === 'object') {
+          return value['not_found'] === undefined;
+        }
+        else {
+          return true;
+        } });
     },
     mapValues: function(value, keyData, arg) {
       if (value["not_found"]) {
-	return [value];
+        return [value];
       }
       var data = value["values"][0]["data"];
       if (Riak.getClassName(data) !== "Array") {
-	return [data];
+        return [data];
       }
       else {
-	return data;
+        return data;
       }},
      mapValuesJson: function(value, keyData, arg) {
       if (value["not_found"]) {
-	return [value];
+        return [value];
       }
       var newValues = Riak.mapValues(value, keyData, arg);
       return newValues.map(function(nv) { return JSON.parse(nv); });
@@ -66,10 +66,10 @@ var Riak = function() {
     reduceSum: function(values, arg) {
       values = Riak.filterNotFound(values);
       if (values.length > 0) {
-	return [values.reduce(function(prev, curr, index, array) { return prev + curr; } )];
+        return [values.reduce(function(prev, curr, index, array) { return prev + curr; } )];
       }
       else {
-	return [0];
+        return [0];
       }},
     reduceMin: function(values, arg) {
       values.sort();
@@ -81,11 +81,11 @@ var Riak = function() {
     },
     reduceSort: function(value, arg) {
       try {
-	var c = eval(arg);
-	return value.sort(c);
+        var c = eval(arg);
+        return value.sort(c);
       }
       catch (e) {
-	return value.sort();
+        return value.sort();
       }
     },
     reduceNumericSort: function(value, arg) {
@@ -99,10 +99,10 @@ var Riak = function() {
       var start = arg[0];
       var end = arg[1];
       if (end > value.length) {
-	return value;
+        return value;
       }
       else {
-	return value.slice(start, end);
+        return value.slice(start, end);
       }
     }
   };

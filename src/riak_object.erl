@@ -139,8 +139,8 @@ reconcile(Objects, AllowMultiple) ->
     Contents = case AllowMultiple of
         false ->
             [hd(lists:sort(fun compare_content_dates/2, AllContents))];
-	true ->
-	    AllContents
+        true ->
+            AllContents
     end,
     VClock = vclock:merge([O#r_object.vclock || O <- RObjs]),
     HdObj = hd(RObjs),
@@ -158,7 +158,7 @@ ancestors(Objects) ->
     ToRemove = [[O2 || O2 <- Objects,
      vclock:descends(O1#r_object.vclock,O2#r_object.vclock),
      (vclock:descends(O2#r_object.vclock,O1#r_object.vclock) == false)]
-		|| O1 <- Objects],
+                || O1 <- Objects],
     lists:flatten(ToRemove).
 
 %% @spec reconcile([riak_object()]) -> [riak_object()]
@@ -189,21 +189,21 @@ merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
     OldObject#r_object{contents= NewObj1#r_object.contents ++
                                  OldObject#r_object.contents,
-		     vclock=vclock:merge([OldObject#r_object.vclock,
-					  NewObj1#r_object.vclock]),
-		     updatemetadata=dict:store(clean, true, dict:new()),
-		     updatevalue=undefined}.
+                       vclock=vclock:merge([OldObject#r_object.vclock,
+                          NewObj1#r_object.vclock]),
+                       updatemetadata=dict:store(clean, true, dict:new()),
+                       updatevalue=undefined}.
 
 %% @spec apply_updates(riak_object()) -> riak_object()
 %% @doc  Promote pending updates (made with the update_value() and
 %%       update_metadata() calls) to this riak_object.
 apply_updates(Object=#r_object{}) ->
     VL = case Object#r_object.updatevalue of
-	     undefined ->
-		 [C#r_content.value || C <- Object#r_object.contents];
-	     _ ->
-		 [Object#r_object.updatevalue]
-	 end,
+             undefined ->
+                 [C#r_content.value || C <- Object#r_object.contents];
+             _ ->
+                 [Object#r_object.updatevalue]
+         end,
     MD = case dict:find(clean, Object#r_object.updatemetadata) of
              {ok,_} ->
                  MDs = [C#r_content.metadata || C <- Object#r_object.contents],
@@ -212,8 +212,8 @@ apply_updates(Object=#r_object{}) ->
                      _ -> [hd(MDs)]
                  end;
              error ->
-		 [dict:erase(clean,Object#r_object.updatemetadata) || _X <- VL]
-	 end,
+                 [dict:erase(clean,Object#r_object.updatemetadata) || _X <- VL]
+         end,
     Contents = [#r_content{metadata=M,value=V} || {M,V} <- lists:zip(MD, VL)],
     Object#r_object{contents=Contents,
                  updatemetadata=dict:store(clean, true, dict:new()),
@@ -411,7 +411,7 @@ syntactic_merge(CurrentObject, NewObject, FromClientId) ->
                 true -> increment_vclock(apply_updates(WinObject),FromClientId);
                 false -> WinObject
             end;
-	[] ->
+        [] ->
             case riak_object:equal(CurrentObject, NewObject) of
                 true ->
                     NewObject;

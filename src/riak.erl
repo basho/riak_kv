@@ -60,11 +60,11 @@ get_app_env(Opt) -> get_app_env(Opt, undefined).
 %%      Will return Default if that option is unset.
 get_app_env(Opt, Default) ->
     case application:get_env(riak, Opt) of
-	{ok, Val} -> Val;
+        {ok, Val} -> Val;
     _ ->
         case init:get_argument(Opt) of
-	    {ok, [[Val | _]]} -> Val;
-	    error       -> Default
+            {ok, [[Val | _]]} -> Val;
+            error       -> Default
         end
     end.
 
