@@ -91,11 +91,11 @@ perform_reduce({Lang,{reduce,FunTerm,Arg,_Acc}},
             {javascript, _} ->
                case  riak_kv_js_manager:blocking_dispatch({FunTerm,
                                                            [riak_kv_mapred_json:jsonify_not_found(R) || R <- Reduced],
-                                                           Arg}) of
+                                                           Arg}, 5) of
                    {ok, Data} when is_list(Data) ->
                        {ok, [riak_kv_mapred_json:dejsonify_not_found(Datum) || Datum <- Data]};
-                   Data ->
-                       Data
+                   Error ->
+                       throw(Error)
                end
         end
     catch _:R ->

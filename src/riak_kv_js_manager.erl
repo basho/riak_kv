@@ -205,6 +205,7 @@ mark_pending_reloads(VMState, Master, Idle) ->
     mark_pending_reloads(ets:next(Master), Master, Idle).
 
 dispatch(_JSCall, _MaxCount, 0) ->
+    error_logger:info_msg("JS call failed: All VMs are busy.~n");
     {error, no_vms};
 dispatch(JSCall, MaxCount, Count) ->
     case reserve_vm() of
@@ -220,6 +221,7 @@ dispatch(JSCall, MaxCount, Count) ->
     end.
 
 blocking_dispatch(_JSCall, _MaxCount, 0) ->
+    error_logger:info_msg("JS call failed: All VMs are busy.~n");
     {error, no_vms};
 blocking_dispatch(JSCall, MaxCount, Count) ->
     case reserve_vm() of
