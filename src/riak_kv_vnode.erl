@@ -431,12 +431,6 @@ do_map({javascript, {map, FunTerm, Arg, _}=QTerm}, BKey, Mod, ModState, KeyData,
                         {ok, _JobId} ->
                             map_executing;
                         Error ->
-                            case Error of
-                                {error, no_vms} ->
-                                    error_logger:info_msg("JS call failed: All VMs busy~n");
-                                _ ->
-                                    error_logger:error_msg("JS call error: ~p~n", [Error])
-                            end,
                             Error
                     end;
                 {error, notfound} ->
