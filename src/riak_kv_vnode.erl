@@ -49,10 +49,16 @@
 -export([map_test/3]).
 -endif.
 
+-record(mrjob, {cachekey :: term(),
+                bkey :: term(),
+                reqid :: term(),
+                target :: pid()}).
+
 -record(state, {idx :: partition(), 
                 mod :: module(),
                 modstate :: term(),
                 mapcache :: term(),
+                mrjobs :: term(),
                 in_handoff = false :: boolean()}).
 
 -record(putargs, {returnbody :: boolean(),
@@ -111,7 +117,7 @@ map(Preflist, ClientPid, QTerm, BKey, KeyData) ->
                                                  qterm=QTerm,
                                                  bkey=BKey,
                                                  keydata=KeyData,
-                                                 from={fsm, undefined, ClientPid}},
+                                                 from=ClientPid},
                                               riak_kv_vnode_master).
 
 fold(Preflist, Fun, Acc0) ->
@@ -140,7 +146,7 @@ init([Index]) ->
     Configuration = app_helper:get_env(riak_kv),
     {ok, ModState} = Mod:start(Index, Configuration),
     schedule_clear_mapcache(),
-    {ok, #state{idx=Index, mod=Mod, modstate=ModState, mapcache=orddict:new()}}.
+    {ok, #state{idx=Index, mod=Mod, modstate=ModState, mapcache=orddict:new(), mrjobs=dict:new()}}.
 
 handle_command(?KV_PUT_REQ{bkey=BKey,
                            object=Object,
@@ -200,7 +206,38 @@ handle_command(purge_mapcache, _Sender, State) ->
     {noreply, State#state{mapcache=orddict:new()}};
 handle_command(clear_mapcache, _Sender, State) ->
     schedule_clear_mapcache(),
-    {noreply, State#state{mapcache=orddict:new()}}.
+    {noreply, State#state{mapcache=orddict:new()}};
+handle_command({mapexec_error_noretry, JobId, Err}, _Sender, #state{mrjobs=Jobs}=State) ->
+    NewState = case dict:find(JobId, Jobs) of
+                   {ok, Job} ->
+                       Jobs1 = dict:erase(JobId, Jobs),
+                       #mrjob{target=Target} = Job,
+                       gen_fsm:send_event(Target, {mapexec_error_noretry, self(), Err}),
+                       State#state{mrjobs=Jobs1};
+                   error ->
+                       State
+               end,
+    {noreply, NewState};
+handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs,
+                                                               mapcache=MapCache}=State) ->
+    NewState = case dict:find(JobId, Jobs) of
+                   {ok, Job} ->
+                       Jobs1 = dict:erase(JobId, Jobs),
+                       #mrjob{cachekey=CacheKey, target=Target, bkey=BKey} = Job,
+                       Cache = case orddict:find(BKey, MapCache) of
+                                   error ->
+                                       orddict:new();
+                                   {ok, C} ->
+                                       C
+                               end,
+                       Cache1 = orddict:store(CacheKey, Result, Cache),
+                       gen_fsm:send_event(Target, {mapexec_reply, Result, self()}),
+                       MapCache1 = orddict:store(BKey, Cache1, MapCache),
+                       State#state{mrjobs=Jobs1, mapcache=MapCache1};
+                   error ->
+                       State
+               end,
+    {noreply, NewState}.
 
 handle_handoff_command(Req=?FOLD_REQ{}, Sender, State) -> 
     handle_command(Req, Sender, State);
@@ -399,10 +436,14 @@ do_diffobj_put(BKey={Bucket,_}, DiffObj,
     end.
 
 %% @private
-do_map(Sender, QTerm, BKey, KeyData, #state{mod=Mod, modstate=ModState, mapcache=Cache}=State, VNode) ->
-    {Reply, NewState} = case do_map(QTerm, BKey, Mod, ModState, KeyData, Cache, VNode, Sender) of
-                            map_executing ->
-                                {{mapexec_reply, executing, self()}, State};
+do_map(Sender, QTerm, BKey, KeyData, #state{mrjobs=Jobs, mod=Mod, modstate=ModState,
+                                            mapcache=Cache}=State, VNode) ->
+    {Reply, NewState} = case do_map(QTerm, BKey, Mod, ModState, KeyData, Cache, VNode) of
+                            {map_executing, BKey, CacheKey, ReqId} ->
+                                J = #mrjob{reqid=ReqId, target=Sender,
+                                           bkey=BKey, cachekey=CacheKey},
+                                Jobs1 = dict:store(ReqId, J, Jobs),
+                                {{mapexec_reply, executing, self()}, State#state{mrjobs=Jobs1}};
                             {ok, Retval} ->
                                 {{mapexec_reply, Retval, self()}, State};
                             {error, Error} ->
@@ -410,7 +451,7 @@ do_map(Sender, QTerm, BKey, KeyData, #state{mod=Mod, modstate=ModState, mapcache
                         end,
     {reply, Reply, NewState}.
 
-do_map({erlang, {map, FunTerm, Arg, _Acc}}, BKey, Mod, ModState, KeyData, Cache, VNode, _Sender) ->
+do_map({erlang, {map, FunTerm, Arg, _Acc}}, BKey, Mod, ModState, KeyData, Cache, VNode) ->
     CacheKey = build_key(FunTerm, Arg, KeyData),
     CacheVal = cache_fetch(BKey, CacheKey, Cache),
     case CacheVal of
@@ -419,7 +460,7 @@ do_map({erlang, {map, FunTerm, Arg, _Acc}}, BKey, Mod, ModState, KeyData, Cache,
         CV ->
             {ok, CV}
     end;
-do_map({javascript, {map, FunTerm, Arg, _}=QTerm}, BKey, Mod, ModState, KeyData, Cache, _VNode, Sender) ->
+do_map({javascript, {map, FunTerm, Arg, _}=QTerm}, BKey, Mod, ModState, KeyData, Cache, _VNode) ->
     CacheKey = build_key(FunTerm, Arg, KeyData),
     CacheVal = cache_fetch(BKey, CacheKey, Cache),
     case CacheVal of
@@ -427,9 +468,9 @@ do_map({javascript, {map, FunTerm, Arg, _}=QTerm}, BKey, Mod, ModState, KeyData,
             case Mod:get(ModState, BKey) of
                 {ok, Binary} ->
                     V = binary_to_term(Binary),
-                    case riak_kv_js_manager:dispatch({Sender, QTerm, V, KeyData, BKey}, 10) of
-                        {ok, _JobId} ->
-                            map_executing;
+                    case riak_kv_js_manager:dispatch({self(), QTerm, V, KeyData, BKey}, 10) of
+                        {ok, JobId} ->
+                            {map_executing, BKey, CacheKey, JobId};
                         Error ->
                             Error
                     end;
@@ -444,6 +485,8 @@ build_key({modfun, CMod, CFun}, Arg, KeyData) ->
     {CMod, CFun, Arg, KeyData};
 build_key({jsfun, FunName}, Arg, KeyData) ->
     {FunName, Arg, KeyData};
+build_key({jsanon, Src}, Arg, KeyData) ->
+    {erlang:phash2(Src), Arg, KeyData};
 build_key(_, _, _) ->
     no_key.
 

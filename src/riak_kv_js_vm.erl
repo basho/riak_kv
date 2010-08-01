@@ -99,7 +99,7 @@ handle_cast(reload, #state{ctx=Ctx}=State) ->
     {noreply, State};
 
 %% Map phase with anonymous function
-handle_cast({dispatch, Requestor, _JobId, {Sender, {map, {jsanon, JS}, Arg, _Acc},
+handle_cast({dispatch, _Requestor, JobId, {Sender, {map, {jsanon, JS}, Arg, _Acc},
                                             Value,
                                             KeyData, _BKey}}, #state{ctx=Ctx}=State) ->
     {Result, UpdatedState} = case define_anon_js(JS, State) of
@@ -117,10 +117,10 @@ handle_cast({dispatch, Requestor, _JobId, {Sender, {map, {jsanon, JS}, Arg, _Acc
                              end,
     FinalState = case Result of
                      {ok, ReturnValue} ->
-                         riak_core_vnode:reply(Sender, {mapexec_reply, ReturnValue, Requestor}),
+                         riak_core_vnode:send_command(Sender, {mapexec_reply, JobId, ReturnValue}),
                          UpdatedState;
                      ErrorResult ->
-                         riak_core_vnode:reply(Sender, {mapexec_error_noretry, Requestor, ErrorResult}),
+                         riak_core_vnode:send_command(Sender, {mapexec_error_noretry, JobId, ErrorResult}),
                          State
                  end,
     riak_kv_js_manager:mark_idle(),
@@ -198,7 +198,7 @@ define_anon_js(JS, #state{ctx=Ctx, anon_funs=AnonFuns, next_funid=NextFunId}=Sta
                     {ok, FunName, State#state{anon_funs=[{Hash, FunName}|AnonFuns], next_funid=NextFunId + 1}};
                 Error ->
                     error_logger:warning_msg("Error defining anonymous Javascript function: ~p~n", [Error]),
-                    {error, undefined, State}
+                    {Error, undefined, State}
             end;
         FunName ->
             {ok, FunName, State}
