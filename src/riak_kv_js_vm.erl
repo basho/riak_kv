@@ -58,7 +58,7 @@ init([Manager]) ->
         {ok, Ctx} ->
             error_logger:info_msg("Spidermonkey VM (thread stack: ~pMB, max heap: ~pMB) host starting (~p)~n",
                                   [StackSize, HeapSize, self()]),
-            riak_kv_js_manager:add_to_manager(),
+            riak_kv_js_manager:add_vm(),
             erlang:monitor(process, Manager),
             {ok, #state{manager=Manager, ctx=Ctx}};
         Error ->
@@ -78,13 +78,18 @@ handle_call({dispatch, _JobId, {{jsanon, JS}, Reduced, Arg}}, _From, #state{ctx=
                                 {Error, undefined, NewState} ->
                                     {Error, NewState}
                             end,
+    riak_kv_js_manager:mark_idle(),
     {reply, Reply, UpdatedState};
 %% Reduce phase with named function
 handle_call({dispatch, _JobId, {{jsfun, JS}, Reduced, Arg}}, _From, #state{ctx=Ctx}=State) ->
-    {reply, invoke_js(Ctx, JS, [Reduced, Arg]), State};
+    Reply = invoke_js(Ctx, JS, [Reduced, Arg]),
+    riak_kv_js_manager:mark_idle(),
+    {reply, Reply, State};
 %% Pre-commit hook with named function
 handle_call({dispatch, _JobId, {{jsfun, JS}, Obj}}, _From, #state{ctx=Ctx}=State) ->
-    {reply, invoke_js(Ctx, JS, [riak_object:to_json(Obj)]), State};
+    Reply = invoke_js(Ctx, JS, [riak_object:to_json(Obj)]),
+    riak_kv_js_manager:mark_idle(),
+    {reply, Reply, State};
 handle_call(_Request, _From, State) ->
     {reply, ignore, State}.
 
@@ -98,26 +103,28 @@ handle_cast({dispatch, Requestor, _JobId, {Sender, {map, {jsanon, JS}, Arg, _Acc
                                             Value,
                                             KeyData, _BKey}}, #state{ctx=Ctx}=State) ->
     {Result, UpdatedState} = case define_anon_js(JS, State) of
-                                {ok, FunName, NewState} ->
-                                    JsonValue = riak_object:to_json(Value),
-                                    JsonArg = jsonify_arg(Arg),
-                                    case invoke_js(Ctx, FunName, [JsonValue, KeyData, JsonArg]) of
-                                        {ok, R} ->
-                                            {{ok, R}, NewState};
-                                        Error ->
-                                            {Error, State}
-                                    end;
-                                {Error, undefined, NewState} ->
-                                    {Error, NewState}
-                            end,
-    case Result of
-        {ok, ReturnValue} ->
-            riak_core_vnode:reply(Sender, {mapexec_reply, ReturnValue, Requestor}),
-            {noreply, UpdatedState};
-        ErrorResult ->
-            riak_core_vnode:reply(Sender, {mapexec_error_noretry, Requestor, ErrorResult}),
-            {noreply, State}
-    end;
+                                 {ok, FunName, NewState} ->
+                                     JsonValue = riak_object:to_json(Value),
+                                     JsonArg = jsonify_arg(Arg),
+                                     case invoke_js(Ctx, FunName, [JsonValue, KeyData, JsonArg]) of
+                                         {ok, R} ->
+                                             {{ok, R}, NewState};
+                                         Error ->
+                                             {Error, State}
+                                     end;
+                                 {Error, undefined, NewState} ->
+                                     {Error, NewState}
+                             end,
+    FinalState = case Result of
+                     {ok, ReturnValue} ->
+                         riak_core_vnode:reply(Sender, {mapexec_reply, ReturnValue, Requestor}),
+                         UpdatedState;
+                     ErrorResult ->
+                         riak_core_vnode:reply(Sender, {mapexec_error_noretry, Requestor, ErrorResult}),
+                         State
+                 end,
+    riak_kv_js_manager:mark_idle(),
+    {noreply, FinalState};
 
 %% Map phase with named function
 handle_cast({dispatch, Requestor, _JobId, {Sender, {map, {jsfun, JS}, Arg, _Acc},
@@ -133,6 +140,7 @@ handle_cast({dispatch, Requestor, _JobId, {Sender, {map, {jsfun, JS}, Arg, _Acc}
         Error ->
             riak_core_vnode:reply(Sender, {mapexec_error_noretry, Requestor, Error})
     end,
+    riak_kv_js_manager:mark_idle(),
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.

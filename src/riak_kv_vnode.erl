@@ -427,8 +427,18 @@ do_map({javascript, {map, FunTerm, Arg, _}=QTerm}, BKey, Mod, ModState, KeyData,
             case Mod:get(ModState, BKey) of
                 {ok, Binary} ->
                     V = binary_to_term(Binary),
-                    riak_kv_js_manager:dispatch({Sender, QTerm, V, KeyData, BKey}),
-                    map_executing;
+                    case riak_kv_js_manager:dispatch({Sender, QTerm, V, KeyData, BKey}, 10) of
+                        {ok, _JobId} ->
+                            map_executing;
+                        Error ->
+                            case Error of
+                                {error, no_vms} ->
+                                    error_logger:info_msg("JS call failed: All VMs busy~n");
+                                _ ->
+                                    error_logger:error_msg("JS call error: ~p~n", [Error])
+                            end,
+                            Error
+                    end;
                 {error, notfound} ->
                     {error, notfound}
             end;
