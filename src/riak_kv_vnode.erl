@@ -106,13 +106,13 @@ list_keys(Preflist, Bucket, ReqId) ->
                                    riak_kv_vnode_master).
 
 map(Preflist, ClientPid, QTerm, BKey, KeyData) ->
-    riak_core_vnode_master:command(Preflist,
-                                   ?KV_MAP_REQ{
-                                      qterm=QTerm,
-                                      bkey=BKey,
-                                      keydata=KeyData},
-                                   {fsm, undefined, ClientPid},
-                                   riak_kv_vnode_master).
+    riak_core_vnode_master:sync_spawn_command(Preflist,
+                                              ?KV_MAP_REQ{
+                                                 qterm=QTerm,
+                                                 bkey=BKey,
+                                                 keydata=KeyData,
+                                                 from={fsm, undefined, ClientPid}},
+                                              riak_kv_vnode_master).
 
 fold(Preflist, Fun, Acc0) ->
     riak_core_vnode_master:sync_spawn_command(Preflist,
@@ -167,9 +167,9 @@ handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender,
         {error, _Reason} ->
             {reply, {fail, Idx, ReqId}, NewState}
     end;
-handle_command(?KV_MAP_REQ{bkey=BKey,qterm=QTerm,keydata=KeyData},
-               Sender, State) ->
-    do_map(Sender,QTerm,BKey,KeyData,State,self());
+handle_command(?KV_MAP_REQ{bkey=BKey,qterm=QTerm,keydata=KeyData,from=From},
+               _Sender, State) ->
+    do_map(From,QTerm,BKey,KeyData,State,self());
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
     {reply, do_get_vclocks(BKeys, State), State};
 handle_command(?FOLD_REQ{foldfun=Fun, acc0=Acc},_Sender,State) ->

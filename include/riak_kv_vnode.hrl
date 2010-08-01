@@ -22,7 +22,8 @@
 -record(riak_kv_map_req_v1, {
           bkey :: {binary(), binary()},
           qterm :: term(),
-          keydata :: term()}).
+          keydata :: term(),
+          from :: term()}).
 
 -record(riak_kv_vclock_req_v1, {
           bkeys = [] :: [{binary(), binary()}]
@@ -34,6 +35,3 @@
 -define(KV_DELETE_REQ, #riak_kv_delete_req_v1).
 -define(KV_MAP_REQ, #riak_kv_map_req_v1).
 -define(KV_VCLOCK_REQ, #riak_kv_vclock_req_v1).
-
-
-
