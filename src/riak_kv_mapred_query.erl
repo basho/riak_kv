@@ -76,7 +76,6 @@ check_query_syntax(Query) ->
 check_query_syntax([], Accum) ->
     {ok, Accum};
 check_query_syntax([QTerm|Rest], Accum) ->
-    io:format("QTerm: ~p~n", [QTerm]),
     {QTermType, QueryFun, Misc, Rereduce, Acc} = parse_qterm(QTerm),
     PhaseDef = case QTermType of
                    link ->
