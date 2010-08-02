@@ -116,28 +116,42 @@ parse_query([{struct, [{Type, {struct, StepDef}}]}|T], Accum)
                    <<"link">> -> link
                end,
     Keep = proplists:get_value(<<"keep">>, StepDef, T==[]),
-    Step = case not(Keep =:= true orelse Keep =:= false) of
+    Rereduce = proplists:get_value(<<"rereduce">>, StepDef, true),
+    Step = case (StepType =:= reduce andalso (Rereduce /= true andalso Rereduce /= false)) of
                true ->
-                   {error, ["The \"keep\" field was not a boolean value in:\n"
+                   {error, ["The \"rereduce\" field was not a boolean value in:\n"
                             "   ",mochijson2:encode(
                                     {struct,[{Type,{struct,StepDef}}]}),
                             "\n"]};
                false ->
-                   if StepType == link ->
-                          case parse_link_step(StepDef) of
-                              {ok, {Bucket, Tag}} ->
-                                  {ok, {link, Bucket, Tag, Keep}};
-                              LError ->
-                                  LError
-                          end;
-                      true -> % map or reduce
-                           Lang = proplists:get_value(<<"language">>, StepDef),
-                           case parse_step(Lang, StepDef) of
-                               {ok, ParsedStep} ->
-                                   Arg = proplists:get_value(<<"arg">>, StepDef, none),
-                                   {ok, {StepType, ParsedStep, Arg, Keep}};
-                               QError ->
-                                   QError
+                   case not(Keep =:= true orelse Keep =:= false) of
+                       true ->
+                           {error, ["The \"keep\" field was not a boolean value in:\n"
+                                    "   ",mochijson2:encode(
+                                            {struct,[{Type,{struct,StepDef}}]}),
+                                    "\n"]};
+                       false ->
+                           if StepType == link ->
+                                   case parse_link_step(StepDef) of
+                                       {ok, {Bucket, Tag}} ->
+                                           {ok, {link, Bucket, Tag, Keep}};
+                                       LError ->
+                                           LError
+                                   end;
+                              true -> % map or reduce
+                                   Lang = proplists:get_value(<<"language">>, StepDef),
+                                   case parse_step(Lang, StepDef) of
+                                       {ok, ParsedStep} ->
+                                           Arg = proplists:get_value(<<"arg">>, StepDef, none),
+                                           case StepType of
+                                               reduce ->
+                                                   {ok, {StepType, ParsedStep, Arg, Rereduce, Keep}};
+                                               _ ->
+                                                   {ok, {StepType, ParsedStep, Arg, Keep}}
+                                           end;
+                                       QError ->
+                                           QError
+                                   end
                            end
                    end
            end,
