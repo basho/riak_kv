@@ -47,7 +47,7 @@ handle_input(Inputs, #state{rereduce=Rereduce, reduced=Reduced0, qterm=QTerm,
                         true ->
                             {no_output, State0#state{reduced=Reduced0 ++ Reduced, new_inputs=[]}, 250};
                         false ->
-                            {output, Reduced, State0#state{reduced=[]}}
+                            {output, Reduced, State0#state{reduced=[], new_inputs=[]}}
                     end;
                 Error ->
                     {stop, Error, State0#state{reduced=[], new_inputs=[]}}
