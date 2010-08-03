@@ -101,19 +101,14 @@ handle_call(reload_vms, _From, #state{master=Master, idle=Idle}=State) ->
     {reply, ok, State};
 
 handle_call(reserve_vm, _From, #state{idle=Idle}=State) ->
-    try
-        ets:safe_fixtable(Idle, true),
-        Reply = case ets:first(Idle) of
-                    '$end_of_table' ->
-                        {error, no_vms};
-                    VM ->
-                        ets:delete(Idle, VM),
-                        {ok, VM}
-                end,
-        {reply, Reply, State}
-    after
-        ets:safe_fixtable(Idle, false)
-    end;
+    Reply = case ets:first(Idle) of
+                '$end_of_table' ->
+                    {error, no_vms};
+                VM ->
+                    ets:delete(Idle, VM),
+                    {ok, VM}
+            end,
+    {reply, Reply, State};
 
 handle_call(pool_size, _From, #state{idle=Idle}=State) ->
     {reply, ets:info(Idle, size), State};
@@ -171,12 +166,7 @@ start_vms(Count) ->
     start_vms(Count - 1).
 
 reload_idle_vms(Tid) ->
-    try
-        ets:safe_fixtable(Tid, true),
-        reload_idle_vms(ets:first(Tid), Tid)
-    after
-        ets:safe_fixtable(Tid, false)
-    end.
+    reload_idle_vms(ets:first(Tid), Tid).
 
 reload_idle_vms('$end_of_table', _Tid) ->
     ok;
@@ -185,12 +175,7 @@ reload_idle_vms(Current, Tid) ->
     reload_idle_vms(ets:next(Tid), Tid).
 
 mark_pending_reloads(Master, Idle) ->
-    try
-        ets:safe_fixtable(Master, true),
-        mark_pending_reloads(ets:first(Master), Master, Idle)
-    after
-        ets:safe_fixtable(Master, false)
-    end.
+    mark_pending_reloads(ets:first(Master), Master, Idle).
 
 mark_pending_reloads('$end_of_table', _Master, _Idle) ->
     ok;
