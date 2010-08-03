@@ -142,7 +142,8 @@ get_vclocks(Preflist, BKeyList) ->
 
 init([Index]) ->
     Mod = app_helper:get_env(riak_kv, storage_backend),
-    CacheSize = app_helper:get_env(riak_kv, mapcache_size, 100),
+    CacheSize = app_helper:get_env(riak_kv, vnode_cache_entries, 100),
+    io:format("CacheSize: ~p~n", [CacheSize]),
     Configuration = app_helper:get_env(riak_kv),
     {ok, ModState} = Mod:start(Index, Configuration),
     
