@@ -82,35 +82,26 @@ terminate(_Reason, _State) ->
 
 perform_reduce({Lang,{reduce,FunTerm,Arg,_Acc}},
                Reduced) ->
-    Key = erlang:phash2({FunTerm, Arg, Reduced}),
-    case luke_phase:check_cache(Key) of
-        not_found ->
-            try
-                case {Lang, FunTerm} of
-                    {erlang, {qfun,F}} ->
-                        Value = F(Reduced,Arg),
-                        luke_phase:cache_value(Key, Value),
-                        {ok, Value};
-                    {erlang, {modfun,M,F}} ->
-                        Value = M:F(Reduced,Arg),
-                        luke_phase:cache_value(Key, Value),
-                        {ok, Value};
-                    {javascript, _} ->
-                        case  riak_kv_js_manager:blocking_dispatch({FunTerm,
-                                                           [riak_kv_mapred_json:jsonify_not_found(R) || R <- Reduced],
-                                                                    Arg}, 5) of
-                            {ok, Data} when is_list(Data) ->
-                                Data1 = [riak_kv_mapred_json:dejsonify_not_found(Datum) || Datum <- Data],
-                                luke_phase:cache_value(Key, Data1),
-                                {ok, Data1};
-                            Error ->
-                                throw(Error)
-                        end
+    try
+        case {Lang, FunTerm} of
+            {erlang, {qfun,F}} ->
+                Value = F(Reduced,Arg),
+                {ok, Value};
+            {erlang, {modfun,M,F}} ->
+                Value = M:F(Reduced,Arg),
+                {ok, Value};
+            {javascript, _} ->
+                case  riak_kv_js_manager:blocking_dispatch({FunTerm,
+                                                            [riak_kv_mapred_json:jsonify_not_found(R) || R <- Reduced],
+                                                            Arg}, 5) of
+                    {ok, Data} when is_list(Data) ->
+                        Data1 = [riak_kv_mapred_json:dejsonify_not_found(Datum) || Datum <- Data],
+                        {ok, Data1};
+                    Error ->
+                        throw(Error)
                 end
-            catch _:R ->
-                    error_logger:error_msg("Failed reduce: ~p~n", [R]),
-                    {error, failed_reduce}
-            end;
-        Value ->
-            {ok, Value}
+        end
+    catch _:R ->
+            error_logger:error_msg("Failed reduce: ~p~n", [R]),
+            {error, failed_reduce}
     end.
