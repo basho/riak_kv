@@ -157,7 +157,7 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
     riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
     do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
     riak_kv_lru:remove(Cache, BKey),
-    {noreply, State}};
+    {noreply, State};
 
 handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
     do_get(Sender, BKey, ReqId, State);
@@ -193,7 +193,7 @@ handle_command({mapcache, BKey,{FunName,Arg,KeyData}, MF_Res}, _Sender,
     {noreply, State};
 handle_command({mapcache, BKey,{M,F,Arg,KeyData},MF_Res}, _Sender, 
                State=#state{mapcache=Cache}) ->
-    riak_kv_lru:put(Cache, {Bkey, {M,F,Arg,KeyData}}, MF_Res),
+    riak_kv_lru:put(Cache, {BKey, {M,F,Arg,KeyData}}, MF_Res),
     {noreply, State};
 handle_command(purge_mapcache, _Sender, #state{mapcache=Cache}=State) ->
     riak_kv_lru:clear(Cache),
@@ -218,7 +218,7 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs,
                    {ok, Job} ->
                        Jobs1 = dict:erase(JobId, Jobs),
                        #mrjob{cachekey=CacheKey, target=Target, bkey=BKey} = Job,
-                       riak_kv_lru:put({BKey, CacheKey}, Result),
+                       riak_kv_lru:put(MapCache, {BKey, CacheKey}, Result),
                        gen_fsm:send_event(Target, {mapexec_reply, Result, self()}),
                        State#state{mrjobs=Jobs1};
                    error ->
@@ -438,17 +438,16 @@ do_map(Sender, QTerm, BKey, KeyData, #state{mrjobs=Jobs, mod=Mod, modstate=ModSt
                         end,
     {reply, Reply, NewState}.
 
-do_map({erlang, {map, FunTerm, Arg, _Acc}}, BKey, Mod, ModState, KeyData, Cache, VNode) ->
+do_map({erlang, {map, FunTerm, Arg, _Acc}}, BKey, Mod, ModState, KeyData, Cache, _VNode) ->
     CacheKey = build_key(FunTerm, Arg, KeyData),
     case riak_kv_lru:fetch(Cache, {BKey, CacheKey}) of
         notfound ->
-            uncached_map(BKey, Mod, ModState, FunTerm, Arg, KeyData, VNode);
+            uncached_map(BKey, Mod, ModState, FunTerm, Arg, KeyData);
         CV ->
             {ok, CV}
     end;
 do_map({javascript, {map, FunTerm, Arg, _}=QTerm}, BKey, Mod, ModState, KeyData, Cache, _VNode) ->
     CacheKey = build_key(FunTerm, Arg, KeyData),
-    CacheVal = cache_fetch(BKey, CacheKey, Cache),
     case riak_kv_lru:fetch(Cache, {BKey, CacheKey}) of
         notfound ->
             case Mod:get(ModState, BKey) of
@@ -476,18 +475,18 @@ build_key({jsanon, Src}, Arg, KeyData) ->
 build_key(_, _, _) ->
     no_key.
 
-uncached_map(BKey, Mod, ModState, FunTerm, Arg, KeyData, VNode) ->
+uncached_map(BKey, Mod, ModState, FunTerm, Arg, KeyData) ->
     case Mod:get(ModState, BKey) of
         {ok, Binary} ->
             V = binary_to_term(Binary),
-            exec_map(V, FunTerm, Arg, BKey, KeyData, VNode);
+            exec_map(V, FunTerm, Arg, BKey, KeyData);
         {error, notfound} ->
-            exec_map({error, notfound}, FunTerm, Arg, BKey, KeyData, VNode);
+            exec_map({error, notfound}, FunTerm, Arg, BKey, KeyData);
         X ->
             {error, X}
     end.
 
-exec_map(V, FunTerm, Arg, BKey, KeyData, _VNode) ->
+exec_map(V, FunTerm, Arg, BKey, KeyData) ->
     try
         case FunTerm of
             {qfun, F} -> {ok, (F)(V,KeyData,Arg)};
@@ -500,10 +499,6 @@ exec_map(V, FunTerm, Arg, BKey, KeyData, _VNode) ->
             Reason = {C, R, erlang:get_stacktrace()},
             {error, Reason}
     end.
-
-schedule_clear_mapcache() ->
-    riak_core_vnode:send_command_after(?CLEAR_MAPCACHE_INTERVAL, clear_mapcache).
-
 
 -ifdef(TEST).
 
