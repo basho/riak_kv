@@ -17,15 +17,15 @@
                  idx,
                  cache}).
 
--record(kv_lru_entry, {ts,
-                       key,
-                       value}).
+-record(kv_lru_entry, {key,
+                       value,
+                       ts}).
 
 new(Size) ->
     IdxName = pid_to_list(self()) ++ "_cache_idx",
     CacheName = pid_to_list(self()) ++ "_cache",
-    Idx = ets:new(list_to_atom(IdxName), [set, private]),
-    Cache = ets:new(list_to_atom(CacheName), [ordered_set, private, {keypos, 2}]),
+    Idx = ets:new(list_to_atom(IdxName), [ordered_set, private]),
+    Cache = ets:new(list_to_atom(CacheName), [private, {keypos, 2}]),
     #kv_lru{max_size=Size, idx=Idx, cache=Cache}.
 
 put(#kv_lru{max_size=MaxSize, idx=Idx, cache=Cache}, Key, Value) ->
@@ -33,13 +33,13 @@ put(#kv_lru{max_size=MaxSize, idx=Idx, cache=Cache}, Key, Value) ->
     insert_value(Idx, Cache, Key, Value),
     prune_oldest_if_needed(MaxSize, Idx, Cache).
 
-fetch(#kv_lru{idx=Idx, cache=Cache}=LRU, Key) ->
-    case fetch_value(Idx, Cache, Key) of
+fetch(#kv_lru{cache=Cache}=LRU, Key) ->
+    case fetch_value(Cache, Key) of
         notfound ->
             notfound;
         Value ->
             %% Do a put to update the timestamp in the cache
-            put(LRU, Key, Value),
+            riak_kv_lru:put(LRU, Key, Value),
             Value
     end.
 
@@ -62,39 +62,39 @@ destroy(#kv_lru{idx=Idx, cache=Cache}) ->
 
 %% Internal functions
 remove_existing_if_needed(Idx, Cache, Key) ->
-    case ets:lookup(Idx, Key) of
-        [] ->
+    case ets:lookup(Cache, Key) of
+        [Entry] ->
+            ets:delete(Idx, Entry#kv_lru_entry.ts),
+            ets:delete(Cache, Key),
             ok;
-        [{Key, TS}] ->
-            ets:delete(Cache, TS),
-            ets:delete(Idx, Key)
+        [] ->
+            ok
     end.
 
 insert_value(Idx, Cache, Key, Value) ->
     TS = erlang:now(),
-    Entry = #kv_lru_entry{ts=TS, key=Key, value=Value},
+    Entry = #kv_lru_entry{key=Key, value=Value, ts=TS},
     ets:insert_new(Cache, Entry),
-    ets:insert(Idx, {Key, TS}).
+    ets:insert(Idx, {TS, Key}).
 
 prune_oldest_if_needed(MaxSize, Idx, Cache) ->
     OverSize = MaxSize + 1,
     case ets:info(Idx, size) of
         OverSize ->
-            Key = ets:first(Cache),
-            [Entry] = ets:lookup(Cache, Key),
-            ets:delete(Cache, Entry#kv_lru_entry.ts),
-            ets:delete(Idx, Entry#kv_lru_entry.key),
+            TS = ets:first(Idx),
+            [{TS, Key}] = ets:lookup(Idx, TS),
+            ets:delete(Idx, TS),
+            ets:delete(Cache, Key),
             ok;
         _ ->
             ok
     end.
 
-fetch_value(Idx, Cache, Key) ->
-    case ets:lookup(Idx, Key) of
+fetch_value(Cache, Key) ->
+    case ets:lookup(Cache, Key) of
         [] ->
             notfound;
-        [{Key, TS}] ->
-            [Entry] = ets:lookup(Cache, TS),
+        [Entry] ->
             Entry#kv_lru_entry.value
     end.
 
@@ -123,4 +123,14 @@ size_test() ->
     6 = riak_kv_lru:fetch(C, 6),
     riak_kv_lru:destroy(C).
 
+age_test() ->
+    C = riak_kv_lru:new(3),
+    [riak_kv_lru:put(C, X, X) || X <- lists:seq(1, 3)],
+    timer:sleep(500),
+    2 = riak_kv_lru:fetch(C, 2),
+    riak_kv_lru:put(C, 4, 4),
+    2 = riak_kv_lru:fetch(C, 2),
+    4 = riak_kv_lru:fetch(C, 4),
+    notfound = riak_kv_lru:fetch(C, 1),
+    riak_kv_lru:destroy(C).
 -endif.
