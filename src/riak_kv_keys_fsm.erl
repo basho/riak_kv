@@ -53,6 +53,13 @@ init([ReqId,Bucket,Timeout,ClientType,ErrorTolerance,Client]) ->
     {ok, Bloom} = ebloom:new(10000000,ErrorTolerance,ReqId),
     StateData = #state{client=Client, client_type=ClientType, timeout=Timeout,
                        bloom=Bloom, req_id=ReqId, bucket=Bucket, ring=Ring},
+    case ClientType of
+        %% Link to the mapred job so we die if the job dies
+        mapred ->
+            link(Client);
+        _ ->
+            ok
+    end,
     {ok,initialize,StateData,0}.
 
 %% @private
