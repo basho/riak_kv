@@ -63,9 +63,10 @@
 -export([start/6]).
 
 start(Node, Client, ReqId, Query0, ResultTransformer, Timeout) ->
+    EffectiveTimeout = erlang:trunc(Timeout  * 1.1),
     case check_query_syntax(Query0) of
         {ok, Query} ->
-            luke:new_flow(Node, Client, ReqId, Query, ResultTransformer, Timeout);
+            luke:new_flow(Node, Client, ReqId, Query, ResultTransformer, EffectiveTimeout);
         {bad_qterm, QTerm} ->
             {stop, {bad_qterm, QTerm}}
     end.
@@ -75,32 +76,30 @@ check_query_syntax(Query) ->
 
 check_query_syntax([], Accum) ->
     {ok, Accum};
-check_query_syntax([QTerm|Rest], Accum) ->
-    io:format("QTerm: ~p~n", [QTerm]),
-    {QTermType, QueryFun, Misc, Rereduce, Acc} = parse_qterm(QTerm),
+check_query_syntax([QTerm={QTermType, QueryFun, Misc, Acc}|Rest], Accum) when is_boolean(Acc) ->
     PhaseDef = case QTermType of
                    link ->
-                       {phase_mod(link), phase_behavior(link, QueryFun, Rereduce, Acc), [{erlang, QTerm}]};
+                       {phase_mod(link), phase_behavior(link, QueryFun, Acc), [{erlang, QTerm}]};
                    T when T =:= map orelse T=:= reduce ->
                        case QueryFun of
                            {modfun, Mod, Fun} when is_atom(Mod),
                                                    is_atom(Fun) ->
-                               {phase_mod(T), phase_behavior(T, QueryFun, Rereduce, Acc), [{erlang, QTerm}]};
+                               {phase_mod(T), phase_behavior(T, QueryFun, Acc), [{erlang, QTerm}]};
                            {qfun, Fun} when is_function(Fun) ->
-                               {phase_mod(T), phase_behavior(T, QueryFun, Rereduce, Acc), [{erlang, QTerm}]};
+                               {phase_mod(T), phase_behavior(T, QueryFun, Acc), [{erlang, QTerm}]};
                            {jsanon, JS} when is_binary(JS) ->
-                               {phase_mod(T), phase_behavior(T, QueryFun, Rereduce, Acc), [{javascript, QTerm}]};
+                               {phase_mod(T), phase_behavior(T, QueryFun, Acc), [{javascript, QTerm}]};
                            {jsanon, {Bucket, Key}} when is_binary(Bucket),
                                                         is_binary(Key) ->
                                case fetch_js(Bucket, Key) of
                                    {ok, JS} ->
-                                       {phase_mod(T), phase_behavior(T, QueryFun, Rereduce, Acc),
-                                        [{javascript, {T, {jsanon, JS}, Misc, Rereduce, Acc}}]};
+                                       {phase_mod(T), phase_behavior(T, QueryFun, Acc), [{javascript,
+                                                                                          {T, {jsanon, JS}, Misc, Acc}}]};
                                    _ ->
                                        {bad_qterm, QTerm}
                                end;
                            {jsfun, JS} when is_binary(JS) ->
-                               {phase_mod(T), phase_behavior(T, QueryFun, Rereduce, Acc), [{javascript, QTerm}]};
+                               {phase_mod(T), phase_behavior(T, QueryFun, Acc), [{javascript, QTerm}]};
                            _ ->
                                {bad_qterm, QTerm}
                        end
@@ -112,11 +111,6 @@ check_query_syntax([QTerm|Rest], Accum) ->
             check_query_syntax(Rest, [PhaseDef|Accum])
     end.
 
-parse_qterm({Type, QueryFun, Misc, Rereduce, Accum}) ->
-    {Type, QueryFun, Misc, Rereduce, Accum};
-parse_qterm({Type, QueryFun, Misc, Accum}) ->
-    {Type, QueryFun, Misc, false, Accum}.
-
 phase_mod(link) ->
     riak_kv_map_phase;
 phase_mod(map) ->
@@ -124,27 +118,37 @@ phase_mod(map) ->
 phase_mod(reduce) ->
     riak_kv_reduce_phase.
 
-phase_behavior(link, _QueryFun, _, true) ->
+phase_behavior(link, _QueryFun, true) ->
     [accumulate];
-phase_behavior(link, _QueryFun, _, false) ->
+phase_behavior(link, _QueryFun, false) ->
     [];
-phase_behavior(map, _QueryFun, _, true) ->
+phase_behavior(map, _QueryFun, true) ->
     [accumulate];
-phase_behavior(map, _QueryFun, _, false) ->
+phase_behavior(map, _QueryFun, false) ->
     [];
-phase_behavior(reduce, _QueryFun, Rereduce, Accumulate) ->
-    Props = build_props(Rereduce, Accumulate),
-    [{converge, 2}|Props].
-
-build_props(Rereduce, Accumulate) ->
-    Props1 = [{rereduce, Rereduce}],
-    case Accumulate of
+%% Turn off parallel converges for jsanon since
+%% they take too long to execute and wind up
+%% monopolizing the available JS VMs on a given node
+phase_behavior(reduce, {FunType, _}, Accumulate) ->
+    CP = if
+             FunType =:= jsanon ->
+                 1;
+             true ->
+                 2
+         end,
+    if
+        Accumulate =:= true ->
+            [{converge, CP}, accumulate];
         true ->
-            [accumulate|Props1];
-        false ->
-            Props1
+            [{converge, CP}]
+    end;
+phase_behavior(reduce, {modfun, _, _}, Accumulate) ->
+    if
+        Accumulate =:= true ->
+            [{converge, 2}, accumulate];
+        true ->
+            [{converge, 2}]
     end.
-
 fetch_js(Bucket, Key) ->
     {ok, Client} = riak:local_client(),
     case Client:get(Bucket, Key, 1) of
