@@ -23,6 +23,8 @@
                        value,
                        ts}).
 
+new(0) ->
+    #kv_lru{max_size=0};
 new(Size) ->
     IdxName = pid_to_list(self()) ++ "_cache_age_idx",
     BucketIdxName = pid_to_list(self()) ++ "_bucket_idx",
@@ -32,12 +34,16 @@ new(Size) ->
     Cache = ets:new(list_to_atom(CacheName), [private, {keypos, 2}]),
     #kv_lru{max_size=Size, age_idx=Idx, bucket_idx=BucketIdx, cache=Cache}.
 
+put(#kv_lru{max_size=0}, _BKey, _Key, _Value) ->
+    ok;
 put(#kv_lru{max_size=MaxSize, age_idx=Idx, bucket_idx=BucketIdx,
             cache=Cache}, BKey, Key, Value) ->
     remove_existing(Idx, BucketIdx, Cache, BKey, Key),
     insert_value(Idx, BucketIdx, Cache, BKey, Key, Value),
     prune_oldest_if_needed(MaxSize, Idx, BucketIdx, Cache).
 
+fetch(#kv_lru{max_size=0}, _BKey, _Key) ->
+    notfound;
 fetch(#kv_lru{cache=Cache}=LRU, BKey, Key) ->
     case fetch_value(Cache, BKey, Key) of
         notfound ->
@@ -48,19 +54,29 @@ fetch(#kv_lru{cache=Cache}=LRU, BKey, Key) ->
             Value
     end.
 
+remove(#kv_lru{max_size=0}, _BKey, _Key) ->
+    ok;
 remove(#kv_lru{age_idx=Idx, bucket_idx=BucketIdx, cache=Cache}, BKey, Key) ->
-    remove_existing(Idx, BucketIdx, Cache, BKey, Key).
+    remove_existing(Idx, BucketIdx, Cache, BKey, Key),
+    ok.
 
+size(#kv_lru{max_size=0}) ->
+    0;
 size(#kv_lru{age_idx=Idx}) ->
     ets:info(Idx, size).
 
 max_size(#kv_lru{max_size=MaxSize}) ->
     MaxSize.
 
+clear(#kv_lru{max_size=0}) ->
+    ok;
 clear(#kv_lru{age_idx=Idx, cache=Cache}) ->
     ets:delete_all_objects(Idx),
-    ets:delete_all_objects(Cache).
+    ets:delete_all_objects(Cache),
+    ok.
 
+clear_bkey(#kv_lru{max_size=0}, _BKey) ->
+    ok;
 clear_bkey(#kv_lru{bucket_idx=BucketIdx}=LRU, BKey) ->
     R = ets:match(BucketIdx, {BKey, '$1'}),
     case R of
@@ -71,10 +87,13 @@ clear_bkey(#kv_lru{bucket_idx=BucketIdx}=LRU, BKey) ->
             ok
     end.
 
+destroy(#kv_lru{max_size=0}) ->
+    ok;
 destroy(#kv_lru{age_idx=Idx, bucket_idx=BucketIdx, cache=Cache}) ->
     ets:delete(Idx),
     ets:delete(BucketIdx),
-    ets:delete(Cache).
+    ets:delete(Cache),
+    ok.
 
 %% Internal functions
 remove_existing(Idx, BucketIdx, Cache, BKey, Key) ->
@@ -166,7 +185,16 @@ clear_bkey_test() ->
                 riak_kv_lru:put(C, BKey2, X, X) end,
     [F(X) || X <- lists:seq(1, 5)],
     riak_kv_lru:clear_bkey(C, BKey2),
-    notfound = riak_kv_lru:fetch(C, BKey1, 3),
-    3 = riak_kv_lru:fetch(C, BKey2, 3).
+    notfound = riak_kv_lru:fetch(C, BKey2, 3),
+    3 = riak_kv_lru:fetch(C, BKey1, 3),
+    riak_kv_lru:destroy(C).
+
+zero_size_test() ->
+    BKey = {<<"test">>, <<"foo">>},
+    C = riak_kv_lru:new(0),
+    ok = riak_kv_lru:put(C, BKey, 1, 1),
+    notfound = riak_kv_lru:fetch(C, BKey, 1),
+    0 = riak_kv_lru:size(C),
+    riak_kv_lru:destroy(C).
 
 -endif.
