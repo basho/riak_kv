@@ -60,7 +60,7 @@
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
 new(B, K, V) when is_binary(B), is_binary(K) ->
-    new(B, K, V, dict:new()).
+    new(B, K, V, no_initial_metadata).
 
 %% @doc Constructor for new riak objects with an initial content-type.
 -spec new(Bucket::bucket(), Key::key(), Value::value(), string() | dict()) -> riak_object().
@@ -76,9 +76,16 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
         true ->
             throw({error,key_too_large});
         false ->
-            Contents = [#r_content{metadata=MD, value=V}],
-            #r_object{bucket=B,key=K,updatemetadata=MD,
-                      contents=Contents,vclock=vclock:fresh()}
+            case MD of
+                no_initial_metadata -> 
+                    Contents = [#r_content{metadata=dict:new(), value=V}],
+                    #r_object{bucket=B,key=K,
+                              contents=Contents,vclock=vclock:fresh()};
+                _ ->
+                    Contents = [#r_content{metadata=MD, value=V}],
+                    #r_object{bucket=B,key=K,updatemetadata=MD,
+                              contents=Contents,vclock=vclock:fresh()}
+            end
     end.
 
 -spec equal(riak_object(), riak_object()) -> true | false.
