@@ -165,7 +165,12 @@ process_keys(Keys,Bucket,ClientType,Bloom,ReqId,Client) ->
 %% @private
 process_keys([],Bucket,ClientType,_Bloom,ReqId,Client,Acc) ->
     case ClientType of
-        mapred -> luke_flow:add_inputs(Client, [{Bucket,K} || K <- Acc]);
+        mapred ->
+            try
+                luke_flow:add_inputs(Client, [{Bucket,K} || K <- Acc])
+            catch _Error ->
+                    exit(self(), shutdown)
+            end;
         plain -> Client ! {ReqId, {keys, Acc}}
     end,
     ok;

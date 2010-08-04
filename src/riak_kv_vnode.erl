@@ -156,7 +156,7 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
                Sender, State=#state{idx=Idx,mapcache=Cache}) ->
     riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
     do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
-    riak_kv_lru:remove(Cache, BKey),
+    riak_kv_lru:clear_bkey(Cache, BKey),
     {noreply, State};
 
 handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
@@ -167,7 +167,7 @@ handle_command(?KV_LISTKEYS_REQ{bucket=Bucket, req_id=ReqId}, _Sender,
 handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender, 
                State=#state{mod=Mod, modstate=ModState, 
                             idx=Idx, mapcache=Cache}) ->
-    riak_kv_lru:remove(BKey, Cache),
+    riak_kv_lru:clear_bkey(Cache, BKey),
     case Mod:delete(ModState, BKey) of
         ok ->
             {reply, {del, Idx, ReqId}, State};
@@ -189,11 +189,11 @@ handle_command({backend_callback, Ref, Msg}, _Sender,
     {noreply, State};
 handle_command({mapcache, BKey,{FunName,Arg,KeyData}, MF_Res}, _Sender,
                State=#state{mapcache=Cache}) ->
-    riak_kv_lru:put(Cache, {BKey, {FunName,Arg,KeyData}}, MF_Res),
+    riak_kv_lru:put(Cache, BKey, {FunName,Arg,KeyData}, MF_Res),
     {noreply, State};
 handle_command({mapcache, BKey,{M,F,Arg,KeyData},MF_Res}, _Sender, 
                State=#state{mapcache=Cache}) ->
-    riak_kv_lru:put(Cache, {BKey, {M,F,Arg,KeyData}}, MF_Res),
+    riak_kv_lru:put(Cache, BKey, {M,F,Arg,KeyData}, MF_Res),
     {noreply, State};
 handle_command(purge_mapcache, _Sender, #state{mapcache=Cache}=State) ->
     riak_kv_lru:clear(Cache),
@@ -218,7 +218,7 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs,
                    {ok, Job} ->
                        Jobs1 = dict:erase(JobId, Jobs),
                        #mrjob{cachekey=CacheKey, target=Target, bkey=BKey} = Job,
-                       riak_kv_lru:put(MapCache, {BKey, CacheKey}, Result),
+                       riak_kv_lru:put(MapCache, BKey, CacheKey, Result),
                        gen_fsm:send_event(Target, {mapexec_reply, Result, self()}),
                        State#state{mrjobs=Jobs1};
                    error ->
@@ -440,7 +440,7 @@ do_map(Sender, QTerm, BKey, KeyData, #state{mrjobs=Jobs, mod=Mod, modstate=ModSt
 
 do_map({erlang, {map, FunTerm, Arg, _Acc}}, BKey, Mod, ModState, KeyData, Cache, _VNode) ->
     CacheKey = build_key(FunTerm, Arg, KeyData),
-    case riak_kv_lru:fetch(Cache, {BKey, CacheKey}) of
+    case riak_kv_lru:fetch(Cache, BKey, CacheKey) of
         notfound ->
             uncached_map(BKey, Mod, ModState, FunTerm, Arg, KeyData);
         CV ->
@@ -448,7 +448,7 @@ do_map({erlang, {map, FunTerm, Arg, _Acc}}, BKey, Mod, ModState, KeyData, Cache,
     end;
 do_map({javascript, {map, FunTerm, Arg, _}=QTerm}, BKey, Mod, ModState, KeyData, Cache, _VNode) ->
     CacheKey = build_key(FunTerm, Arg, KeyData),
-    case riak_kv_lru:fetch(Cache, {BKey, CacheKey}) of
+    case riak_kv_lru:fetch(Cache, BKey, CacheKey) of
         notfound ->
             case Mod:get(ModState, BKey) of
                 {ok, Binary} ->
