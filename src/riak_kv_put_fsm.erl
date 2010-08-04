@@ -341,7 +341,9 @@ invoke_hook(precommit, undefined, undefined, JSName, RObj) ->
         {ok, [{<<"fail">>, Message}]} ->
             {fail, Message};
         {ok, NewObj} ->
-            riak_object:from_json(NewObj);
+            Obj = riak_object:from_json(NewObj),
+            io:format("Object: ~p~n", [Obj]),
+            Obj;
         {error, Error} ->
             error_logger:error_msg("Error executing pre-commit hook: ~s",
                                    [Error]),

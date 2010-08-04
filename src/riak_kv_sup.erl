@@ -45,12 +45,10 @@ init([]) ->
                {riak_core_vnode_master, start_link,
                 [riak_kv_vnode, riak_kv_legacy_vnode]},
                permanent, 5000, worker, [riak_core_vnode_master]},
-    RiakPb = [{riak_kv_pb_listener,
-               {riak_kv_pb_listener, start_link, []},
-               permanent, 5000, worker, [riak_kv_pb_listener]},
-              {riak_kv_pb_socket_sup,
-               {riak_kv_pb_socket_sup, start_link, []},
-               permanent, infinity, supervisor, [riak_kv_pb_socket_sup]}
+    RiakPb = [ {riak_kv_pb_socket_sup, {riak_kv_pb_socket_sup, start_link, []},
+                permanent, infinity, supervisor, [riak_kv_pb_socket_sup]},
+               {riak_kv_pb_listener, {riak_kv_pb_listener, start_link, []},
+               permanent, 5000, worker, [riak_kv_pb_listener]}
               ],
     RiakStat = {riak_kv_stat,
                 {riak_kv_stat, start_link, []},
