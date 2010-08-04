@@ -127,18 +127,18 @@ handle_cast({dispatch, _Requestor, JobId, {Sender, {map, {jsanon, JS}, Arg, _Acc
     {noreply, FinalState};
 
 %% Map phase with named function
-handle_cast({dispatch, Requestor, _JobId, {Sender, {map, {jsfun, JS}, Arg, _Acc},
+handle_cast({dispatch, _Requestor, JobId, {Sender, {map, {jsfun, JS}, Arg, _Acc},
                                             Value,
-                                            KeyData, BKey}}, #state{ctx=Ctx}=State) ->
+                                            KeyData, _BKey}}, #state{ctx=Ctx}=State) ->
     JsonValue = riak_object:to_json(Value),
     JsonArg = jsonify_arg(Arg),
     case invoke_js(Ctx, JS, [JsonValue, KeyData, JsonArg]) of
         {ok, R} ->
             %% Requestor should be the dispatching vnode
-            riak_kv_vnode:mapcache(Requestor, BKey, {JS, Arg, KeyData}, R),
-            riak_core_vnode:reply(Sender, {mapexec_reply, R, Requestor});
+            %%riak_kv_vnode:mapcache(Requestor, BKey, {JS, Arg, KeyData}, R),
+            riak_core_vnode:send_command(Sender, {mapexec_reply, JobId, R});
         Error ->
-            riak_core_vnode:reply(Sender, {mapexec_error_noretry, Requestor, Error})
+            riak_core_vnode:send_command(Sender, {mapexec_error_noretry, JobId, Error})
     end,
     riak_kv_js_manager:mark_idle(),
     {noreply, State};
