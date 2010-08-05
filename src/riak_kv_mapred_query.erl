@@ -126,7 +126,7 @@ phase_behavior(map, _QueryFun, true) ->
     [accumulate];
 phase_behavior(map, _QueryFun, false) ->
     [];
-phase_behavior(reduce, {_, _}, Accumulate) ->
+phase_behavior(reduce, _QueryFun, Accumulate) ->
     Behaviors0 = [{converge, 2}],
     case Accumulate of
         true ->
@@ -134,6 +134,7 @@ phase_behavior(reduce, {_, _}, Accumulate) ->
         false ->
             Behaviors0
     end.
+
 fetch_js(Bucket, Key) ->
     {ok, Client} = riak:local_client(),
     case Client:get(Bucket, Key, 1) of
