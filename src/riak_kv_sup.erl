@@ -60,6 +60,14 @@ init([]) ->
     RiakJsSup = {riak_kv_js_sup,
                  {riak_kv_js_sup, start_link, []},
                  permanent, infinity, supervisor, [riak_kv_js_sup]},
+    KLMaster = {riak_kv_keylister_master,
+                 {riak_kv_keylister_master, start_link, []},
+                 permanent, 30000, worker, [riak_kv_keylister_master]},
+    KLSup = {riak_kv_keylister_sup,
+             {riak_kv_keylister_sup, start_link, []},
+             permanent, infinity, supervisor, [riak_kv_keylister_sup]},
+
+
     % Figure out which processes we should run...
     IsPbConfigured = (app_helper:get_env(riak_kv, pb_ip) /= undefined)
         andalso (app_helper:get_env(riak_kv, pb_port) /= undefined),
@@ -71,6 +79,8 @@ init([]) ->
         ?IF(HasStorageBackend, VMaster, []),
         ?IF(IsPbConfigured, RiakPb, []),
         ?IF(IsStatEnabled, RiakStat, []),
+        KLSup,
+        KLMaster,
         RiakJsSup,
         RiakJsMgr
     ]),
