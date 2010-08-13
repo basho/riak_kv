@@ -66,23 +66,25 @@ init([Manager]) ->
     end.
 
 %% Reduce phase with anonymous function
-handle_call({dispatch, _JobId, {{jsanon, JS}, Reduced, Arg}}, _From, #state{ctx=Ctx}=State) ->
-    {Reply, UpdatedState} = case define_anon_js(JS, State) of
-                                {ok, FunName, NewState} ->
-                                    case invoke_js(Ctx, FunName, [Reduced, Arg]) of
-                                        {ok, R} ->
-                                            {{ok, R}, NewState};
-                                        Error ->
-                                            {Error, State}
-                                    end;
-                                {Error, undefined, NewState} ->
-                                    {Error, NewState}
-                            end,
+handle_call({dispatch, _JobId, {{jsanon, JS}, Reduced, Arg}}, _From, State) ->
+    {Reply, UpdatedState} = define_invoke_anon_js(JS, [Reduced, Arg], State),
     riak_kv_js_manager:mark_idle(),
     {reply, Reply, UpdatedState};
 %% Reduce phase with named function
 handle_call({dispatch, _JobId, {{jsfun, JS}, Reduced, Arg}}, _From, #state{ctx=Ctx}=State) ->
     Reply = invoke_js(Ctx, JS, [Reduced, Arg]),
+    riak_kv_js_manager:mark_idle(),
+    {reply, Reply, State};
+%% General dispatch function for anonymous function with variable number of arguments
+handle_call({dispatch, _JobId, {{jsanon, Source}, Args}}, _From, 
+            State) when is_list(Args) ->
+    {Reply, UpdatedState} = define_invoke_anon_js(Source, Args, State),
+    riak_kv_js_manager:mark_idle(),
+    {reply, Reply, UpdatedState};
+%% General dispatch function for named function with variable number of arguments
+handle_call({dispatch, _JobId, {{jsfun, JS}, Args}}, _From, 
+            #state{ctx=Ctx}=State) when is_list(Args) ->
+    Reply = invoke_js(Ctx, JS, Args),
     riak_kv_js_manager:mark_idle(),
     {reply, Reply, State};
 %% Pre-commit hook with named function
@@ -102,20 +104,10 @@ handle_cast(reload, #state{ctx=Ctx}=State) ->
 %% Map phase with anonymous function
 handle_cast({dispatch, _Requestor, JobId, {Sender, {map, {jsanon, JS}, Arg, _Acc},
                                             Value,
-                                            KeyData, _BKey}}, #state{ctx=Ctx}=State) ->
-    {Result, UpdatedState} = case define_anon_js(JS, State) of
-                                 {ok, FunName, NewState} ->
-                                     JsonValue = riak_object:to_json(Value),
-                                     JsonArg = jsonify_arg(Arg),
-                                     case invoke_js(Ctx, FunName, [JsonValue, KeyData, JsonArg]) of
-                                         {ok, R} ->
-                                             {{ok, R}, NewState};
-                                         Error ->
-                                             {Error, State}
-                                     end;
-                                 {Error, undefined, NewState} ->
-                                     {Error, NewState}
-                             end,
+                                            KeyData, _BKey}}, State) ->
+    JsonValue = riak_object:to_json(Value),
+    JsonArg = jsonify_arg(Arg),
+    {Result, UpdatedState} = define_invoke_anon_js(JS, [JsonValue, KeyData, JsonArg], State),
     FinalState = case Result of
                      {ok, ReturnValue} ->
                          riak_core_vnode:send_command(Sender, {mapexec_reply, JobId, ReturnValue}),
@@ -160,6 +152,19 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %% Internal functions
+define_invoke_anon_js(JS, Args, #state{ctx=Ctx}=State) ->
+    case define_anon_js(JS, State) of
+        {ok, FunName, NewState} ->
+            case invoke_js(Ctx, FunName, Args) of
+                {ok, R} ->
+                    {{ok, R}, NewState};
+                Error ->
+                    {Error, State}
+            end;
+        {Error, undefined, NewState} ->
+            {Error, NewState}
+    end.
+
 invoke_js(Ctx, Js, Args) ->
     try
         case js:call(Ctx, Js, Args) of
