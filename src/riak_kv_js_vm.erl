@@ -90,7 +90,8 @@ handle_call({dispatch, _JobId, {{jsfun, JS}, Obj}}, _From, #state{ctx=Ctx}=State
     Reply = invoke_js(Ctx, JS, [riak_object:to_json(Obj)]),
     riak_kv_js_manager:mark_idle(),
     {reply, Reply, State};
-handle_call(_Request, _From, State) ->
+handle_call(Request, _From, State) ->
+    io:format("Request: ~p~n", [Request]),
     {reply, ignore, State}.
 
 handle_cast(reload, #state{ctx=Ctx}=State) ->
