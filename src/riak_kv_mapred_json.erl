@@ -66,6 +66,8 @@ parse_request(Req) ->
             {error, not_json}
     end.
 
+parse_inputs([<<"modfun">>,Mod, Fun, Options]) ->
+    {ok, {modfun, binary_to_atom(Mod, utf8), binary_to_atom(Fun, utf8), Options}};
 parse_inputs(Bucket) when is_binary(Bucket) ->
     {ok, Bucket};
 parse_inputs(Targets) when is_list(Targets) ->
