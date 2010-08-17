@@ -35,6 +35,7 @@
          fold/3,
          drop/1,
          is_empty/1,
+         snapshot_keys/2,
          callback/3]).
 
 
@@ -199,6 +200,10 @@ schedule_sync(Ref, SyncIntervalMs) when is_reference(Ref) ->
 
 schedule_merge(Ref) when is_reference(Ref) ->
     riak_kv_backend:callback_after(?MERGE_CHECK_INTERVAL, Ref, merge_check).
+
+snapshot_keys(Ref, FilterFun) when is_reference(Ref),
+                                   is_fun(FilterFun) ->
+    bitcask_snapshot:snapshot_keys(Ref, FilterFun).
 
 
 %% ===================================================================
