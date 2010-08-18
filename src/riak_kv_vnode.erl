@@ -381,14 +381,6 @@ do_list_bucket(ReqID,Bucket,Mod,ModState,Idx,State) ->
     RetVal = Mod:list_bucket(ModState,Bucket),
     {reply, {kl, RetVal, Idx, ReqID}, State}.
 
-do_list_keys2(Caller,ReqId,Bucket,Idx,Mod,ModState) when Mod =:= riak_kv_bitcask_backend ->
-    F = fun(BKey) ->
-                {B,K} = binary_to_term(BKey),
-                B =:= Bucket end,
-    Snapshot = Mod:snapshot_keys(ModState, F),
-    Snapshot1 = bitcask_snapshot:open_snapshot(ModState, Snapshot),
-    spawn(fun() -> stream_keys(Snapshot1, Caller, ReqId, Idx) end),
-    ok;
 do_list_keys2(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
     F = fun(BKey, _, Acc) ->
                 process_keys(Caller, ReqId, Idx, Bucket, BKey, Acc) end,
