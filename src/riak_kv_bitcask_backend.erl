@@ -202,7 +202,7 @@ schedule_merge(Ref) when is_reference(Ref) ->
     riak_kv_backend:callback_after(?MERGE_CHECK_INTERVAL, Ref, merge_check).
 
 snapshot_keys(Ref, FilterFun) when is_reference(Ref),
-                                   is_fun(FilterFun) ->
+                                   is_function(FilterFun) ->
     bitcask_snapshot:snapshot_keys(Ref, FilterFun).
 
 
