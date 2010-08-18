@@ -203,6 +203,7 @@ schedule_merge(Ref) when is_reference(Ref) ->
 snapshot_keys({Ref, _}, FilterFun) when is_reference(Ref) ->
     bitcask_snapshot:snapshot_keys(Ref, FilterFun).
 
+
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
