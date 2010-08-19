@@ -200,10 +200,6 @@ schedule_sync(Ref, SyncIntervalMs) when is_reference(Ref) ->
 schedule_merge(Ref) when is_reference(Ref) ->
     riak_kv_backend:callback_after(?MERGE_CHECK_INTERVAL, Ref, merge_check).
 
-snapshot_keys({Ref, _}, FilterFun) when is_reference(Ref) ->
-    bitcask_snapshot:snapshot_keys(Ref, FilterFun).
-
-
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
