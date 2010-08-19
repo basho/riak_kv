@@ -22,7 +22,7 @@ list_keys(ListerPid, VNode) ->
     gen_fsm:send_event(ListerPid, {lk, VNode}).
 
 start_link(ReqId, Caller, Bucket) ->
-    gen_fsm:start_link({local, ?MODULE}, ?MODULE, [ReqId, Caller, Bucket], []).
+    gen_fsm:start_link(?MODULE, [ReqId, Caller, Bucket], []).
 
 init([ReqId, Caller, Bucket]) ->
     process_flag(trap_exit, true),

@@ -52,22 +52,23 @@ start(ReqId,Bucket,Timeout,ClientType,ErrorTolerance,From) ->
 init([ReqId,Bucket,Timeout,ClientType,ErrorTolerance,Client]) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     {ok, Bloom} = ebloom:new(10000000,ErrorTolerance,ReqId),
-    Listers = start_listers(ReqId, Bucket),
     StateData = #state{client=Client, client_type=ClientType, timeout=Timeout,
-                       bloom=Bloom, req_id=ReqId, bucket=Bucket, ring=Ring,
-                       listers=Listers},
+                       bloom=Bloom, req_id=ReqId, bucket=Bucket, ring=Ring},
     {ok,initialize,StateData,0}.
 
 %% @private
-initialize(timeout, StateData0=#state{bucket=Bucket, ring=Ring}) ->
+initialize(timeout, StateData0=#state{bucket=Bucket, ring=Ring, req_id=ReqId}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     N = proplists:get_value(n_val,BucketProps),
     PLS0 = riak_core_ring:all_preflists(Ring,N),
-    {LA1, LA2} = lists:partition(fun({A,_B}) -> A rem N == 0 end,
-                              lists:zip(lists:seq(0,(length(PLS0)-1)), PLS0)),
-    {_, PLS} = lists:unzip(lists:append(LA1,LA2)),
+    {LA1, LA2} = lists:partition(fun({A,_B}) ->
+                                       A rem N == 0 orelse A rem (N + 1) == 0
+                               end,
+                               lists:zip(lists:seq(0,(length(PLS0)-1)), PLS0)),
+    {_, PLS} = lists:unzip(LA1 ++ LA2),
     Simul_PLS = trunc(length(PLS) / N),
-    StateData = StateData0#state{pls=PLS,simul_pls=Simul_PLS,
+    Listers = start_listers(ReqId, Bucket),
+    StateData = StateData0#state{pls=PLS,simul_pls=Simul_PLS, listers=Listers,
                                  wait_pls=[],vns=sets:from_list([])},
     reduce_pls(StateData).
 
@@ -207,7 +208,7 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 
 %% @private
 start_listers(ReqId, Bucket) ->
-    Nodes = [node()|nodes()],
+    Nodes = riak_core_node_watcher:nodes(riak_kv),
     start_listers(Nodes, ReqId, Bucket, []).
 
 start_listers([], _ReqId, _Bucket, Accum) ->
