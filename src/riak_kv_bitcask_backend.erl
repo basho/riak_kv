@@ -33,6 +33,7 @@
          list/1,
          list_bucket/2,
          fold/3,
+         fold_keys/3,
          drop/1,
          is_empty/1,
          callback/3]).
@@ -41,6 +42,8 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
+
+-include_lib("bitcask/include/bitcask.hrl").
 
 -define(MERGE_CHECK_INTERVAL, timer:minutes(3)).
 
@@ -134,6 +137,11 @@ fold({Ref, _}, Fun0, Acc0) ->
                          Fun0(binary_to_term(K), V, Acc)
                  end,
                  Acc0).
+
+fold_keys({Ref, _}, Fun, Acc) ->
+    F = fun(#bitcask_entry{key=K}, Acc1) ->
+                Fun(binary_to_term(K), Acc1) end,
+    bitcask:fold_keys(Ref, F, Acc).
 
 drop({Ref, BitcaskRoot}) ->
     %% todo: once bitcask has a more friendly drop function

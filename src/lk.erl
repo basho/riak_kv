@@ -7,6 +7,7 @@ fsm(Bucket) ->
     Start = erlang:now(),
     riak_kv_keys_fsm:start(ReqId, Bucket, 60000, plain, 0.0001, self()),
     {ok, Count} = gather_fsm_results(ReqId, 0),
+    io:format("~n"),
     End = erlang:now(),
     Ms = erlang:round(timer:now_diff(End, Start) / 1000),
     io:format("Found ~p keys in ~pms.~n", [Count, Ms]).
@@ -29,6 +30,7 @@ pn(Bucket) ->
 gather_fsm_results(ReqId, Count) ->
     receive
         {ReqId, {keys, Keys}} ->
+            io:format("."),
             gather_fsm_results(ReqId, Count + length(Keys));
         {ReqId, done} ->
             {ok, Count}

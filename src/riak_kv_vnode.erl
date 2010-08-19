@@ -381,6 +381,16 @@ do_list_bucket(ReqID,Bucket,Mod,ModState,Idx,State) ->
     RetVal = Mod:list_bucket(ModState,Bucket),
     {reply, {kl, RetVal, Idx, ReqID}, State}.
 
+do_list_keys2(Caller,ReqId,Bucket,Idx,Mod,ModState) when Mod =:= riak_kv_bitcask_backend ->
+    F = fun(BKey, Acc) ->
+                process_keys(Caller, ReqId, Idx, Bucket, BKey, Acc) end,
+    case Mod:fold_keys(ModState, F, []) of
+        [] ->
+            ok;
+        Remainder ->
+            Caller ! {ReqId, {kl, Idx, Remainder}}
+    end,
+    Caller ! {ReqId, Idx, done};
 do_list_keys2(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
     F = fun(BKey, _, Acc) ->
                 process_keys(Caller, ReqId, Idx, Bucket, BKey, Acc) end,
@@ -392,19 +402,19 @@ do_list_keys2(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
     end,
     Caller ! {ReqId, Idx, done}.
 
-%% stream_keys(Snapshot, Caller, ReqId, Idx) ->
-%%     try
-%%         case bitcask_snapshot:read_snapshot_records(Snapshot) of
-%%             {ok, R0} ->
-%%                 R = [binary_to_term(Rec) || Rec <- R0],
-%%                 Caller ! {ReqId, {kl, Idx, R}},
-%%                 stream_keys(Snapshot, Caller, ReqId, Idx);
-%%             eof ->
-%%                 Caller ! {ReqId, Idx, done}
-%%         end
-%%     after
-%%         bitcask_snapshot:close_snapshot(Snapshot)
-%%     end.
+stream_keys(Snapshot, Caller, ReqId, Idx) ->
+    try
+        case bitcask_snapshot:read_snapshot_records(Snapshot) of
+            {ok, R0} ->
+                R = [binary_to_term(Rec) || Rec <- R0],
+                Caller ! {ReqId, {kl, Idx, R}},
+                stream_keys(Snapshot, Caller, ReqId, Idx);
+            eof ->
+                Caller ! {ReqId, Idx, done}
+        end
+    after
+        bitcask_snapshot:close_snapshot(Snapshot)
+    end.
 
 process_keys(Caller, ReqId, Idx, Bucket, {Bucket, K}, Acc0) ->
     Acc = [K|Acc0],
