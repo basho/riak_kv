@@ -38,6 +38,7 @@
          is_empty/1,
          callback/3]).
 
+-include("deps/bitcask/include/bitcask.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -118,15 +119,38 @@ list({Ref, _}) ->
             Other
     end.
 
-list_bucket(State, {filter, Bucket, Fun}) ->
-    [K || {B, K} <- ?MODULE:list(State),
-          B =:= Bucket,
-          Fun(K)];
-list_bucket(State, '_') ->
-    [B || {B, _K} <- ?MODULE:list(State)];
-list_bucket(State, Bucket) ->
-    [K || {B, K} <- ?MODULE:list(State), B =:= Bucket].
-
+list_bucket({Ref, _}, {filter, Bucket, Fun}) ->
+    bitcask:fold_keys(Ref,
+        fun(#bitcask_entry{key=BK},Acc) ->
+                {B,K} = binary_to_term(BK),
+                case B of
+                    Bucket ->
+                        case Fun(K) of
+                            true -> [K|Acc];
+                            false -> Acc
+                        end;
+                    _ ->
+                        Acc
+                end
+        end, []);
+list_bucket({Ref, _}, '_') ->
+    bitcask:fold_keys(Ref,
+        fun(#bitcask_entry{key=BK},Acc) ->
+                {B,_K} = binary_to_term(BK),
+                case lists:member(B,Acc) of
+                    true -> Acc;
+                    false -> [B|Acc]
+                end
+        end, []);
+list_bucket({Ref, _}, Bucket) ->
+    bitcask:fold_keys(Ref,
+        fun(#bitcask_entry{key=BK},Acc) ->
+                {B,K} = binary_to_term(BK),
+                case B of
+                    Bucket -> [K|Acc];
+                    _ -> Acc
+                end
+        end, []).
 
 fold({Ref, _}, Fun0, Acc0) ->
     %% When folding across the bitcask, the bucket/key tuple must

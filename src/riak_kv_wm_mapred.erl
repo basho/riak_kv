@@ -76,19 +76,22 @@ nop(RD, State) ->
 process_post(RD, #state{inputs=Inputs, mrquery=Query, timeout=Timeout}=State) ->
     Me = self(),
     {ok, Client} = riak:local_client(),
+    ResultTransformer = fun riak_kv_mapred_json:jsonify_not_found/1,
     case wrq:get_qs_value("chunked", RD) of
         "true" ->
             {ok, ReqId} =
                 if is_list(Inputs) ->
-                        {ok, {RId, FSM}} = Client:mapred_stream(Query, Me,
-                                                                fun riak_kv_mapred_json:jsonify_not_found/1,
-                                                                Timeout),
+                        {ok, {RId, FSM}} = Client:mapred_stream(Query, Me, ResultTransformer, Timeout),
                         luke_flow:add_inputs(FSM, Inputs),
                         luke_flow:finish_inputs(FSM),
                         {ok, RId};
                    is_binary(Inputs) ->
-                        Client:mapred_bucket_stream(Inputs, Query, Me,
-                                                    Timeout)
+                        Client:mapred_bucket_stream(Inputs, Query, Me, Timeout);
+                   is_tuple(Inputs) ->
+                        {ok, {RId, FSM}} = Client:mapred_stream(Query, Me, ResultTransformer, Timeout),
+                        Client:mapred_dynamic_inputs_stream(FSM, Inputs, Timeout),
+                        luke_flow:finish_inputs(FSM),
+                        {ok, RId}
                 end,
             Boundary = riak_core_util:unique_id_62(),
             RD1 = wrq:set_resp_header("Content-Type", "multipart/mixed;boundary=" ++ Boundary, RD),
@@ -97,12 +100,18 @@ process_post(RD, #state{inputs=Inputs, mrquery=Query, timeout=Timeout}=State) ->
         Param when Param =:= "false";
                    Param =:= undefined ->
             Results = if is_list(Inputs) ->
-                              Client:mapred(Inputs, Query,
-                                            fun riak_kv_mapred_json:jsonify_not_found/1,
-                                            Timeout);
+                              Client:mapred(Inputs, Query, ResultTransformer, Timeout);
                          is_binary(Inputs) ->
-                              Client:mapred_bucket(Inputs, Query, fun riak_kv_mapred_json:jsonify_not_found/1,
-                                                   Timeout)
+                              Client:mapred_bucket(Inputs, Query, ResultTransformer, Timeout);
+                         is_tuple(Inputs) ->
+                              case Client:mapred_stream(Query,Me,ResultTransformer,Timeout) of
+                                  {ok, {ReqId, FlowPid}} ->
+                                      Client:mapred_dynamic_inputs_stream(FlowPid, Inputs, Timeout),
+                                      luke_flow:finish_inputs(FlowPid),
+                                      luke_flow:collect_output(ReqId, Timeout);
+                                  Error ->
+                                      Error
+                              end
                       end,
             RD1 = wrq:set_resp_header("Content-Type", "application/json", RD),
             case Results of

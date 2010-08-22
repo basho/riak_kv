@@ -58,7 +58,7 @@ init([Manager]) ->
         {ok, Ctx} ->
             error_logger:info_msg("Spidermonkey VM (thread stack: ~pMB, max heap: ~pMB) host starting (~p)~n",
                                   [StackSize, HeapSize, self()]),
-            riak_kv_js_manager:add_to_manager(),
+            riak_kv_js_manager:add_vm(),
             erlang:monitor(process, Manager),
             {ok, #state{manager=Manager, ctx=Ctx}};
         Error ->
@@ -66,26 +66,34 @@ init([Manager]) ->
     end.
 
 %% Reduce phase with anonymous function
-handle_call({dispatch, _JobId, {{jsanon, JS}, Reduced, Arg}}, _From, #state{ctx=Ctx}=State) ->
-    {Reply, UpdatedState} = case define_anon_js(JS, State) of
-                                {ok, FunName, NewState} ->
-                                    case invoke_js(Ctx, FunName, [Reduced, Arg]) of
-                                        {ok, R} ->
-                                            {{ok, R}, NewState};
-                                        Error ->
-                                            {Error, State}
-                                    end;
-                                {Error, undefined, NewState} ->
-                                    {Error, NewState}
-                            end,
+handle_call({dispatch, _JobId, {{jsanon, JS}, Reduced, Arg}}, _From, State) ->
+    {Reply, UpdatedState} = define_invoke_anon_js(JS, [Reduced, Arg], State),
+    riak_kv_js_manager:mark_idle(),
     {reply, Reply, UpdatedState};
 %% Reduce phase with named function
 handle_call({dispatch, _JobId, {{jsfun, JS}, Reduced, Arg}}, _From, #state{ctx=Ctx}=State) ->
-    {reply, invoke_js(Ctx, JS, [Reduced, Arg]), State};
+    Reply = invoke_js(Ctx, JS, [Reduced, Arg]),
+    riak_kv_js_manager:mark_idle(),
+    {reply, Reply, State};
+%% General dispatch function for anonymous function with variable number of arguments
+handle_call({dispatch, _JobId, {{jsanon, Source}, Args}}, _From, 
+            State) when is_list(Args) ->
+    {Reply, UpdatedState} = define_invoke_anon_js(Source, Args, State),
+    riak_kv_js_manager:mark_idle(),
+    {reply, Reply, UpdatedState};
+%% General dispatch function for named function with variable number of arguments
+handle_call({dispatch, _JobId, {{jsfun, JS}, Args}}, _From, 
+            #state{ctx=Ctx}=State) when is_list(Args) ->
+    Reply = invoke_js(Ctx, JS, Args),
+    riak_kv_js_manager:mark_idle(),
+    {reply, Reply, State};
 %% Pre-commit hook with named function
 handle_call({dispatch, _JobId, {{jsfun, JS}, Obj}}, _From, #state{ctx=Ctx}=State) ->
-    {reply, invoke_js(Ctx, JS, [riak_object:to_json(Obj)]), State};
-handle_call(_Request, _From, State) ->
+    Reply = invoke_js(Ctx, JS, [riak_object:to_json(Obj)]),
+    riak_kv_js_manager:mark_idle(),
+    {reply, Reply, State};
+handle_call(Request, _From, State) ->
+    io:format("Request: ~p~n", [Request]),
     {reply, ignore, State}.
 
 handle_cast(reload, #state{ctx=Ctx}=State) ->
@@ -94,45 +102,38 @@ handle_cast(reload, #state{ctx=Ctx}=State) ->
     {noreply, State};
 
 %% Map phase with anonymous function
-handle_cast({dispatch, Requestor, _JobId, {Sender, {map, {jsanon, JS}, Arg, _Acc},
+handle_cast({dispatch, _Requestor, JobId, {Sender, {map, {jsanon, JS}, Arg, _Acc},
                                             Value,
-                                            KeyData, _BKey}}, #state{ctx=Ctx}=State) ->
-    {Result, UpdatedState} = case define_anon_js(JS, State) of
-                                {ok, FunName, NewState} ->
-                                    JsonValue = riak_object:to_json(Value),
-                                    JsonArg = jsonify_arg(Arg),
-                                    case invoke_js(Ctx, FunName, [JsonValue, KeyData, JsonArg]) of
-                                        {ok, R} ->
-                                            {{ok, R}, NewState};
-                                        Error ->
-                                            {Error, State}
-                                    end;
-                                {Error, undefined, NewState} ->
-                                    {Error, NewState}
-                            end,
-    case Result of
-        {ok, ReturnValue} ->
-            riak_core_vnode:reply(Sender, {mapexec_reply, ReturnValue, Requestor}),
-            {noreply, UpdatedState};
-        ErrorResult ->
-            riak_core_vnode:reply(Sender, {mapexec_error_noretry, Requestor, ErrorResult}),
-            {noreply, State}
-    end;
+                                            KeyData, _BKey}}, State) ->
+    JsonValue = riak_object:to_json(Value),
+    JsonArg = jsonify_arg(Arg),
+    {Result, UpdatedState} = define_invoke_anon_js(JS, [JsonValue, KeyData, JsonArg], State),
+    FinalState = case Result of
+                     {ok, ReturnValue} ->
+                         riak_core_vnode:send_command(Sender, {mapexec_reply, JobId, ReturnValue}),
+                         UpdatedState;
+                     ErrorResult ->
+                         riak_core_vnode:send_command(Sender, {mapexec_error_noretry, JobId, ErrorResult}),
+                         State
+                 end,
+    riak_kv_js_manager:mark_idle(),
+    {noreply, FinalState};
 
 %% Map phase with named function
-handle_cast({dispatch, Requestor, _JobId, {Sender, {map, {jsfun, JS}, Arg, _Acc},
+handle_cast({dispatch, _Requestor, JobId, {Sender, {map, {jsfun, JS}, Arg, _Acc},
                                             Value,
-                                            KeyData, BKey}}, #state{ctx=Ctx}=State) ->
+                                            KeyData, _BKey}}, #state{ctx=Ctx}=State) ->
     JsonValue = riak_object:to_json(Value),
     JsonArg = jsonify_arg(Arg),
     case invoke_js(Ctx, JS, [JsonValue, KeyData, JsonArg]) of
         {ok, R} ->
             %% Requestor should be the dispatching vnode
-            riak_kv_vnode:mapcache(Requestor, BKey, {JS, Arg, KeyData}, R),
-            riak_core_vnode:reply(Sender, {mapexec_reply, R, Requestor});
+            %%riak_kv_vnode:mapcache(Requestor, BKey, {JS, Arg, KeyData}, R),
+            riak_core_vnode:send_command(Sender, {mapexec_reply, JobId, R});
         Error ->
-            riak_core_vnode:reply(Sender, {mapexec_error_noretry, Requestor, Error})
+            riak_core_vnode:send_command(Sender, {mapexec_error_noretry, JobId, Error})
     end,
+    riak_kv_js_manager:mark_idle(),
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -151,6 +152,19 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %% Internal functions
+define_invoke_anon_js(JS, Args, #state{ctx=Ctx}=State) ->
+    case define_anon_js(JS, State) of
+        {ok, FunName, NewState} ->
+            case invoke_js(Ctx, FunName, Args) of
+                {ok, R} ->
+                    {{ok, R}, NewState};
+                Error ->
+                    {Error, State}
+            end;
+        {Error, undefined, NewState} ->
+            {Error, NewState}
+    end.
+
 invoke_js(Ctx, Js, Args) ->
     try
         case js:call(Ctx, Js, Args) of
@@ -190,7 +204,7 @@ define_anon_js(JS, #state{ctx=Ctx, anon_funs=AnonFuns, next_funid=NextFunId}=Sta
                     {ok, FunName, State#state{anon_funs=[{Hash, FunName}|AnonFuns], next_funid=NextFunId + 1}};
                 Error ->
                     error_logger:warning_msg("Error defining anonymous Javascript function: ~p~n", [Error]),
-                    {error, undefined, State}
+                    {Error, undefined, State}
             end;
         FunName ->
             {ok, FunName, State}

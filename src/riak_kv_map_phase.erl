@@ -58,7 +58,7 @@ handle_event({mapexec_reply, Reply, Executor}, #state{fsms=FSMs0}=State) ->
     FSMs = lists:delete(Executor, FSMs0),
     {output, Reply, State#state{fsms=FSMs}};
 handle_event({mapexec_error, _Executor, Reply}, State) ->
-    {stop, Reply, State};
+    {stop, Reply, State#state{ring=none, fsms=none, acc=none}};
 handle_event(_Event, State) ->
     {no_output, State}.
 

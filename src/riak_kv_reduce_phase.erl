@@ -85,18 +85,21 @@ perform_reduce({Lang,{reduce,FunTerm,Arg,_Acc}},
     try
         case {Lang, FunTerm} of
             {erlang, {qfun,F}} ->
-                {ok, F(Reduced,Arg)};
+                Value = F(Reduced,Arg),
+                {ok, Value};
             {erlang, {modfun,M,F}} ->
-                {ok, M:F(Reduced,Arg)};
+                Value = M:F(Reduced,Arg),
+                {ok, Value};
             {javascript, _} ->
-               case  riak_kv_js_manager:blocking_dispatch({FunTerm,
-                                                           [riak_kv_mapred_json:jsonify_not_found(R) || R <- Reduced],
-                                                           Arg}) of
-                   {ok, Data} when is_list(Data) ->
-                       {ok, [riak_kv_mapred_json:dejsonify_not_found(Datum) || Datum <- Data]};
-                   Data ->
-                       Data
-               end
+                case  riak_kv_js_manager:blocking_dispatch({FunTerm,
+                                                            [riak_kv_mapred_json:jsonify_not_found(R) || R <- Reduced],
+                                                            Arg}, 5) of
+                    {ok, Data} when is_list(Data) ->
+                        Data1 = [riak_kv_mapred_json:dejsonify_not_found(Datum) || Datum <- Data],
+                        {ok, Data1};
+                    Error ->
+                        throw(Error)
+                end
         end
     catch _:R ->
             error_logger:error_msg("Failed reduce: ~p~n", [R]),

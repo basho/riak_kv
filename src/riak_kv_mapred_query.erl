@@ -126,29 +126,15 @@ phase_behavior(map, _QueryFun, true) ->
     [accumulate];
 phase_behavior(map, _QueryFun, false) ->
     [];
-%% Turn off parallel converges for jsanon since
-%% they take too long to execute and wind up
-%% monopolizing the available JS VMs on a given node
-phase_behavior(reduce, {FunType, _}, Accumulate) ->
-    CP = if
-             FunType =:= jsanon ->
-                 1;
-             true ->
-                 2
-         end,
-    if
-        Accumulate =:= true ->
-            [{converge, CP}, accumulate];
+phase_behavior(reduce, _QueryFun, Accumulate) ->
+    Behaviors0 = [{converge, 2}],
+    case Accumulate of
         true ->
-            [{converge, CP}]
-    end;
-phase_behavior(reduce, {modfun, _, _}, Accumulate) ->
-    if
-        Accumulate =:= true ->
-            [{converge, 2}, accumulate];
-        true ->
-            [{converge, 2}]
+            [accumulate|Behaviors0];
+        false ->
+            Behaviors0
     end.
+
 fetch_js(Bucket, Key) ->
     {ok, Client} = riak:local_client(),
     case Client:get(Bucket, Key, 1) of

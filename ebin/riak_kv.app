@@ -29,6 +29,7 @@
              riak_kv_keylister_sup,
              riak_kv_keys_fsm,
              riak_kv_legacy_vnode,
+             riak_kv_lru,
              riak_kv_map_executor,
              riak_kv_map_localphase,
              riak_kv_map_phase,
