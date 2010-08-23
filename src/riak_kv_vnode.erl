@@ -21,8 +21,7 @@
          del/3,
          put/6,
          readrepair/6,
-         list_keys/3,
-         list_keys2/4,
+         list_keys/4,
          map/5,
          fold/3,
          get_vclocks/2,
@@ -55,7 +54,7 @@
                 reqid :: term(),
                 target :: pid()}).
 
--record(state, {idx :: partition(), 
+-record(state, {idx :: partition(),
                 mod :: module(),
                 modstate :: term(),
                 mapcache :: term(),
@@ -103,22 +102,14 @@ put(Preflist, BKey, Obj, ReqId, StartTime, Options, Sender)
 readrepair(Preflist, BKey, Obj, ReqId, StartTime, Options) ->
     put(Preflist, BKey, Obj, ReqId, StartTime, Options, ignore).
 
-list_keys(Preflist, Bucket, ReqId) ->
-    riak_core_vnode_master:command(Preflist,
-                                   ?KV_LISTKEYS_REQ{
-                                      bucket=Bucket,
-                                      req_id=ReqId},
-                                   {fsm, undefined, self()},
-                                   riak_kv_vnode_master).
-
-list_keys2(Preflist, ReqId, Caller, Bucket) ->
-    riak_core_vnode_master:command(Preflist,
-                                   ?KV_LISTKEYS2_REQ{
-                                      bucket=Bucket,
-                                      req_id=ReqId,
-                                      caller=Caller},
-                                   ignore,
-                                   riak_kv_vnode_master).
+list_keys(Preflist, ReqId, Caller, Bucket) ->
+  riak_core_vnode_master:command(Preflist,
+                                 ?KV_LISTKEYS_REQ{
+                                    bucket=Bucket,
+                                    req_id=ReqId,
+                                    caller=Caller},
+                                 ignore,
+                                 riak_kv_vnode_master).
 
 map(Preflist, ClientPid, QTerm, BKey, KeyData) ->
     riak_core_vnode_master:sync_spawn_command(Preflist,
@@ -155,7 +146,7 @@ init([Index]) ->
     CacheSize = app_helper:get_env(riak_kv, vnode_cache_entries, 100),
     Configuration = app_helper:get_env(riak_kv),
     {ok, ModState} = Mod:start(Index, Configuration),
-    
+
     {ok, #state{idx=Index, mod=Mod, modstate=ModState, mapcache=riak_kv_lru:new(CacheSize), mrjobs=dict:new()}}.
 
 handle_command(?KV_PUT_REQ{bkey=BKey,
@@ -171,12 +162,12 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
 
 handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
     do_get(Sender, BKey, ReqId, State);
-handle_command(?KV_LISTKEYS_REQ{bucket=Bucket, req_id=ReqId}, _Sender,
-               State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
+handle_command(#riak_kv_listkeys_req_v1{bucket=Bucket, req_id=ReqId}, _Sender,
+                State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
     do_list_bucket(ReqId,Bucket,Mod,ModState,Idx,State);
-handle_command(?KV_LISTKEYS2_REQ{bucket=Bucket, req_id=ReqId, caller=Caller}, _Sender,
+handle_command(?KV_LISTKEYS_REQ{bucket=Bucket, req_id=ReqId, caller=Caller}, _Sender,
                State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
-    do_list_keys2(Caller,ReqId,Bucket,Idx,Mod,ModState),
+    do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState),
     {noreply, State};
 
 handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender,
@@ -409,7 +400,10 @@ do_list_bucket(ReqID,Bucket,Mod,ModState,Idx,State) ->
     RetVal = Mod:list_bucket(ModState,Bucket),
     {reply, {kl, RetVal, Idx, ReqID}, State}.
 
-do_list_keys2(Caller,ReqId,Bucket,Idx,Mod,ModState) when Mod =:= riak_kv_bitcask_backend ->
+%% Use in-memory key list for bitcask backend
+%% @private
+do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState)
+  when Mod =:= riak_kv_bitcask_backend ->
     F = fun(BKey, Acc) ->
                 process_keys(Caller, ReqId, Idx, Bucket, BKey, Acc) end,
     case Mod:fold_keys(ModState, F, []) of
@@ -419,7 +413,8 @@ do_list_keys2(Caller,ReqId,Bucket,Idx,Mod,ModState) when Mod =:= riak_kv_bitcask
             Caller ! {ReqId, {kl, Idx, Remainder}}
     end,
     Caller ! {ReqId, Idx, done};
-do_list_keys2(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
+%% @private
+do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
     F = fun(BKey, _, Acc) ->
                 process_keys(Caller, ReqId, Idx, Bucket, BKey, Acc) end,
     case Mod:fold(ModState, F, []) of
@@ -430,20 +425,7 @@ do_list_keys2(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
     end,
     Caller ! {ReqId, Idx, done}.
 
-%% stream_keys(Snapshot, Caller, ReqId, Idx) ->
-%%     try
-%%         case bitcask_snapshot:read_snapshot_records(Snapshot) of
-%%             {ok, R0} ->
-%%                 R = [binary_to_term(Rec) || Rec <- R0],
-%%                 Caller ! {ReqId, {kl, Idx, R}},
-%%                 stream_keys(Snapshot, Caller, ReqId, Idx);
-%%             eof ->
-%%                 Caller ! {ReqId, Idx, done}
-%%         end
-%%     after
-%%         bitcask_snapshot:close_snapshot(Snapshot)
-%%     end.
-
+%% @private
 process_keys(Caller, ReqId, Idx, Bucket, {Bucket, K}, Acc0) ->
     Acc = [K|Acc0],
     case length(Acc) >= 100 of
@@ -455,6 +437,7 @@ process_keys(Caller, ReqId, Idx, Bucket, {Bucket, K}, Acc0) ->
     end;
 process_keys(_Caller, _ReqId, _Idx, _Bucket, {_B, _K}, Acc) ->
     Acc.
+
 %% @private
 do_fold(Fun, Acc0, _State=#state{mod=Mod, modstate=ModState}) ->
     Mod:fold(ModState, Fun, Acc0).

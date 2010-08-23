@@ -50,6 +50,7 @@ start(ReqId,Bucket,Timeout,ClientType,ErrorTolerance,From) ->
 
 %% @private
 init([ReqId,Bucket,Timeout,ClientType,ErrorTolerance,Client]) ->
+    process_flag(trap_exit, true),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     {ok, Bloom} = ebloom:new(10000000,ErrorTolerance,ReqId),
     StateData = #state{client=Client, client_type=ClientType, timeout=Timeout,
@@ -132,17 +133,26 @@ reduce_pls(StateData0=#state{timeout=Timeout, wait_pls=WPL,
                     reduce_pls(StateData0#state{pls=[RestPL|PLS]});
                 _ ->
                     %% Look up keylister for that node
-                    LPid = proplists:get_value(Node, Listers),
-                    %% Send the keylist request to the lister
-                    riak_kv_keylister:list_keys(LPid, {Idx, Node}),
-                    %% riak_kv_vnode:list_keys({Idx,Node},Bucket,ReqId),
-                    WaitPLS = [{Idx,Node,RestPL}|WPL],
-                    StateData = StateData0#state{pls=PLS, wait_pls=WaitPLS},
-                    case length(WaitPLS) > Simul_PLS of
-                        true ->
-                            {next_state, waiting_kl, StateData, Timeout};
-                        false ->
-                            reduce_pls(StateData)
+                    case proplists:get_value(Node, Listers) of
+                        undefined ->
+                            %% Node is down or hasn't been removed from preflists yet
+                            %% Log a warning, skip the node and continue sending
+                            %% out key list requests
+                            error_logger:warning_msg("Skipping keylist request for unknown node: ~p~n", [Node]),
+                            WaitPLS = [{Idx,Node,RestPL}|WPL],
+                            StateData = StateData0#state{pls=PLS, wait_pls=WaitPLS},
+                            reduce_pls(StateData);
+                        LPid ->
+                            %% Send the keylist request to the lister
+                            riak_kv_keylister:list_keys(LPid, {Idx, Node}),
+                            WaitPLS = [{Idx,Node,RestPL}|WPL],
+                            StateData = StateData0#state{pls=PLS, wait_pls=WaitPLS},
+                            case length(WaitPLS) > Simul_PLS of
+                                true ->
+                                    {next_state, waiting_kl, StateData, Timeout};
+                                false ->
+                                    reduce_pls(StateData)
+                            end
                     end
             end
     end.
@@ -211,7 +221,8 @@ handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
 %% @private
-terminate(Reason, _StateName, _State) ->
+terminate(Reason, _StateName, #state{bloom=Bloom}) ->
+    ebloom:clear(Bloom),
     Reason.
 
 %% @private

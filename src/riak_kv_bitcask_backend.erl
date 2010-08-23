@@ -38,8 +38,6 @@
          is_empty/1,
          callback/3]).
 
--include("deps/bitcask/include/bitcask.hrl").
-
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
