@@ -426,6 +426,16 @@ do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
     Caller ! {ReqId, Idx, done}.
 
 %% @private
+process_keys(Caller, ReqId, Idx, '_', {Bucket, _K}, Acc0) ->
+    %% Bucket='_' means "list buckets" instead of "list keys"
+    Acc = [Bucket|Acc0],
+    case length(Acc) >= 100 of
+        true ->
+            Caller ! {ReqId, {kl, Idx, Acc}},
+            [];
+        false ->
+            Acc
+    end;
 process_keys(Caller, ReqId, Idx, Bucket, {Bucket, K}, Acc0) ->
     Acc = [K|Acc0],
     case length(Acc) >= 100 of
