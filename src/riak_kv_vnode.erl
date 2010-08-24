@@ -426,43 +426,31 @@ do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
     Caller ! {ReqId, Idx, done}.
 
 %% @private
-process_keys(Caller, ReqId, Idx, '_', {Bucket, _K}, Acc0) ->
+process_keys(Caller, ReqId, Idx, '_', {Bucket, _K}, Acc) ->
     %% Bucket='_' means "list buckets" instead of "list keys"
-    Acc = [Bucket|Acc0],
-    case length(Acc) >= 100 of
-        true ->
-            Caller ! {ReqId, {kl, Idx, Acc}},
-            [];
-        false ->
-            Acc
-    end;
-process_keys(Caller, ReqId, Idx, {filter, Bucket, Fun}, {Bucket, K}, Acc0) ->
+    buffer_key_result(Caller, ReqId, Idx, [Bucket|Acc]);
+process_keys(Caller, ReqId, Idx, {filter, Bucket, Fun}, {Bucket, K}, Acc) ->
     %% Bucket={filter,Bucket,Fun} means "only include keys
     %% in Bucket that make Fun(K) return 'true'"
     case Fun(K) of
         true ->
-            Acc = [K|Acc0],
-            case length(Acc) >= 100 of
-                true ->
-                    Caller ! {ReqId, {kl, Idx, Acc}},
-                    [];
-                false ->
-                    Acc
-            end;
+            buffer_key_result(Caller, ReqId, Idx, [K|Acc]);
         false ->
-            Acc0
+            Acc
     end;
-process_keys(Caller, ReqId, Idx, Bucket, {Bucket, K}, Acc0) ->
-    Acc = [K|Acc0],
+process_keys(Caller, ReqId, Idx, Bucket, {Bucket, K}, Acc) ->
+    buffer_key_result(Caller, ReqId, Idx, [K|Acc]);
+process_keys(_Caller, _ReqId, _Idx, _Bucket, {_B, _K}, Acc) ->
+    Acc.
+
+buffer_key_result(Caller, ReqId, Idx, Acc) ->
     case length(Acc) >= 100 of
         true ->
             Caller ! {ReqId, {kl, Idx, Acc}},
             [];
         false ->
             Acc
-    end;
-process_keys(_Caller, _ReqId, _Idx, _Bucket, {_B, _K}, Acc) ->
-    Acc.
+    end.
 
 %% @private
 do_fold(Fun, Acc0, _State=#state{mod=Mod, modstate=ModState}) ->
