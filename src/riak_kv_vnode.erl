@@ -436,6 +436,22 @@ process_keys(Caller, ReqId, Idx, '_', {Bucket, _K}, Acc0) ->
         false ->
             Acc
     end;
+process_keys(Caller, ReqId, Idx, {filter, Bucket, Fun}, {Bucket, K}, Acc0) ->
+    %% Bucket={filter,Bucket,Fun} means "only include keys
+    %% in Bucket that make Fun(K) return 'true'"
+    case Fun(K) of
+        true ->
+            Acc = [K|Acc0],
+            case length(Acc) >= 100 of
+                true ->
+                    Caller ! {ReqId, {kl, Idx, Acc}},
+                    [];
+                false ->
+                    Acc
+            end;
+        false ->
+            Acc0
+    end;
 process_keys(Caller, ReqId, Idx, Bucket, {Bucket, K}, Acc0) ->
     Acc = [K|Acc0],
     case length(Acc) >= 100 of
