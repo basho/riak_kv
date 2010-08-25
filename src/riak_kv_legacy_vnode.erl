@@ -71,8 +71,8 @@ rewrite_cast({vnode_get, {Partition,_Node},
 rewrite_cast({vnode_list_bucket, {Partition,_Node},
               {FSM_pid, Bucket, ReqID}}) ->
     Req = riak_core_vnode_master:make_request(
-            ?KV_LISTKEYS_REQ{
-               bucket=Bucket, 
+            #riak_kv_listkeys_req_v1{
+               bucket=Bucket,
                req_id=ReqID},
             {fsm, undefined, FSM_pid},
             Partition),

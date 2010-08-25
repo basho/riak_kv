@@ -563,10 +563,10 @@ mapcache_put_test() ->
     BKey = {<<"b">>,<<"k">>},
     CacheKey = {mod,func,arg,keydata},
     {ok, S1} = init([0]),
-    ?assertEqual(not_cached, cache_fetch(BKey, CacheKey, S1#state.mapcache)),
+    ?assertEqual(notfound, riak_kv_lru:fetch(S1#state.mapcache, BKey, CacheKey)),
     {noreply, S2} = handle_command({mapcache, BKey, CacheKey, result},
                                    noreply, S1),
-    ?assertEqual(result, cache_fetch(BKey, CacheKey, S2#state.mapcache)),
+    ?assertEqual(result, riak_kv_lru:fetch(S2#state.mapcache, BKey, CacheKey)),
 
     O = riak_object:new(<<"b">>,<<"k">>,<<"v">>),
     {noreply, S3} = handle_command(?KV_PUT_REQ{bkey=BKey,
@@ -575,7 +575,7 @@ mapcache_put_test() ->
                                                start_time=riak_core_util:moment(),
                                                options=[]},
                                    {raw, 456, self()}, S2),
-    ?assertEqual(not_cached, cache_fetch(BKey, CacheKey, S3#state.mapcache)),
+    ?assertEqual(notfound, riak_kv_lru:fetch(S3#state.mapcache, BKey, CacheKey)),
     %% The put request generates a {w,...} and {dw,...} event
     flush_msgs().
 
@@ -585,15 +585,15 @@ mapcache_delete_test() ->
     BKey = {<<"b">>,<<"k">>},
     CacheKey = {mod,func,arg,keydata},
     {ok, S1} = init([0]),
-    ?assertEqual(not_cached, cache_fetch(BKey, CacheKey, S1#state.mapcache)),
+    ?assertEqual(notfound, riak_kv_lru:fetch(S1#state.mapcache, BKey, CacheKey)),
     {noreply, S2} = handle_command({mapcache, BKey, CacheKey, result},
                                    noreply, S1),
-    ?assertEqual(result, cache_fetch(BKey, CacheKey, S2#state.mapcache)),
+    ?assertEqual(result, riak_kv_lru:fetch(S2#state.mapcache, BKey, CacheKey)),
 
     {reply, {del, 0, 123}, S3} = handle_command(?KV_DELETE_REQ{bkey=BKey,
                                                   req_id=123},
                                    {raw, 456, self()}, S2),
-    ?assertEqual(not_cached, cache_fetch(BKey, CacheKey, S3#state.mapcache)),
+    ?assertEqual(notfound, riak_kv_lru:fetch(S3#state.mapcache, BKey, CacheKey)),
     %% The put request generates a {w,...} and {dw,...} event
     flush_msgs().
 
@@ -655,13 +655,10 @@ cleanup_servers() ->
 
 
 check_mapcache(Index, QTerm, BKey, KeyData, Expect) ->
-    map({Index,node()}, self(), QTerm, BKey, KeyData),
-    receive
-        Msg ->
-            {'$gen_event',{mapexec_reply,Result,_Pid}} = Msg,
-            ?assertEqual(Expect, Result)
-    after
-        100 ->
+    case map({Index,node()}, self(), QTerm, BKey, KeyData) of
+        {mapexec_reply, Result, _Pid} ->
+            ?assertMatch(Expect, Result);
+        _ ->
             ?assert(false)
     end.
 
