@@ -570,6 +570,90 @@ dummy_backend() ->
     application:set_env(riak_kv, storage_backend, riak_kv_ets_backend),
     application:set_env(riak_core, default_bucket_props, []).
 
+backend_with_known_key() ->
+    dummy_backend(),
+    {ok, S1} = init([0]),
+    B = <<"f">>,
+    K = <<"b">>,
+    O = riak_object:new(B, K, <<"z">>),
+    {noreply, S2} = handle_command(?KV_PUT_REQ{bkey={B,K},
+                                               object=O,
+                                               req_id=123,
+                                               start_time=riak_core_util:moment(),
+                                               options=[]},
+                                   {raw, 456, self()},
+                                   S1),
+    {S2, B, K}.
+
+list_buckets_test() ->
+    {S, B, _K} = backend_with_known_key(),
+    Caller = new_result_listener(),
+    handle_command(?KV_LISTKEYS_REQ{bucket='_',
+                                    req_id=124,
+                                    caller=Caller},
+                   {raw, 456, self()}, S),
+    ?assertEqual({ok, [B]}, results_from_listener(Caller)),
+    flush_msgs().
+
+filter_keys_test() ->
+    {S, B, K} = backend_with_known_key(),
+
+    Caller1 = new_result_listener(),
+    handle_command(?KV_LISTKEYS_REQ{
+                      bucket={filter,B,fun(_) -> true end},
+                      req_id=124,
+                      caller=Caller1},
+                   {raw, 456, self()}, S),
+    ?assertEqual({ok, [K]}, results_from_listener(Caller1)),
+
+    Caller2 = new_result_listener(),
+    handle_command(?KV_LISTKEYS_REQ{
+                      bucket={filter,B,fun(_) -> false end},
+                      req_id=125,
+                      caller=Caller2},
+                   {raw, 456, self()}, S),
+    ?assertEqual({ok, []}, results_from_listener(Caller2)),
+
+    Caller3 = new_result_listener(),
+    handle_command(?KV_LISTKEYS_REQ{
+                      bucket={filter,<<"g">>,fun(_) -> true end},
+                      req_id=126,
+                      caller=Caller3},
+                   {raw, 456, self()}, S),
+    ?assertEqual({ok, []}, results_from_listener(Caller3)),
+
+    flush_msgs().
+
+new_result_listener() ->
+    spawn(fun result_listener/0).
+
+result_listener() ->
+    result_listener_keys([]).
+
+result_listener_keys(Acc) ->
+    receive
+        {_,{kl,_,Keys}} ->
+            result_listener_keys(Keys++Acc);
+        {_, _, done} ->
+            result_listener_done(Acc)
+    after 5000 ->
+            result_listener_done({timeout, Acc})
+    end.
+
+result_listener_done(Result) ->
+    receive
+        {get_results, Pid} ->
+            Pid ! {listener_results, Result}
+    end.
+
+results_from_listener(Listener) ->
+    Listener ! {get_results, self()},
+    receive
+        {listener_results, Result} ->
+            {ok, Result}
+    after 5000 ->
+            {error, listener_timeout}
+    end.
 
 %% Make sure the mapcache gets cleared when the bkey is updated
 mapcache_put_test() ->
