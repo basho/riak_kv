@@ -444,7 +444,7 @@ get_bucket(BucketName) ->
 %% @spec reload_all(Module :: atom()) -> term()
 %% @doc Force all Riak nodes to reload Module.
 %%      This is used when loading new modules for map/reduce functionality.
-reload_all(Module) -> rpc:call(Node,riak_kv_util,reload_all,[Module]).
+reload_all(Module) -> rpc:call(Node,riak_core_util,reload_all,[Module]).
 
 %% @spec remove_from_cluster(ExitingNode :: atom()) -> term()
 %% @doc Cause all partitions owned by ExitingNode to be taken over
