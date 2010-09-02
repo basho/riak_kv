@@ -191,8 +191,8 @@ process_keys([],Bucket,ClientType,_Bloom,ReqId,Client,Acc) ->
         mapred ->
             try
                 luke_flow:add_inputs(Client, [{Bucket,K} || K <- Acc])
-            catch _Error ->
-                    exit(self(), shutdown)
+            catch _:_ ->
+                    exit(self(), normal)
             end;
         plain -> Client ! {ReqId, {keys, Acc}}
     end,

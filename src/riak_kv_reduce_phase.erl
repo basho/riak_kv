@@ -102,6 +102,5 @@ perform_reduce({Lang,{reduce,FunTerm,Arg,_Acc}},
                 end
         end
     catch _:R ->
-            error_logger:error_msg("Failed reduce: ~p~n", [R]),
-            {error, failed_reduce}
+            R
     end.
