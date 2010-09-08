@@ -74,7 +74,7 @@ start(_Type, _StartArgs) ->
     case riak_kv_sup:start_link() of
         {ok, Pid} ->
             %% Go ahead and mark the riak_kv service as up in the node watcher.
-            %% The riak_kv_ring_handler blocks until all vnodes have been started
+            %% The riak_core_ring_handler blocks until all vnodes have been started
             %% synchronously.
             riak_core:register_vnode_module(riak_kv_vnode),
             riak_core_node_watcher:service_up(riak_kv, self()),
