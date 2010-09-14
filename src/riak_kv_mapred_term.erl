@@ -60,8 +60,11 @@ valid_inputs(Bucket) when is_binary(Bucket) ->
     ok;
 valid_inputs(Targets) when is_list(Targets) ->
     valid_input_targets(Targets);
+valid_inputs({modfun, Module, Function, _Options})
+  when is_atom(Module), is_atom(Function) ->
+    ok;
 valid_inputs(Invalid) ->
-    {error, {"Inputs must be a binary bucket or a list of target tuples:", Invalid}}.
+    {error, {"Inputs must be a binary bucket, a list of target tuples, or a modfun tuple:", Invalid}}.
 
 valid_input_targets([]) ->
     ok;

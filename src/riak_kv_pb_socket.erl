@@ -274,6 +274,23 @@ process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
 
                         {ok, ReqId} ->
                             {pause, State#state{req = Req, req_ctx = ReqId}}
+                    end;
+               is_tuple(Inputs), size(Inputs)==4,
+               element(1, Inputs) == modfun,
+               is_atom(element(2, Inputs)),
+               is_atom(element(3, Inputs)) ->
+                    case C:mapred_stream(Query, self(), Timeout) of
+                        {stop, Error} ->
+                            send_error("~p", [Error], State);
+
+                        {ok, {ReqId, FSM}} ->
+                            C:mapred_dynamic_inputs_stream(
+                              FSM, Inputs, Timeout),
+                            luke_flow:finish_inputs(FSM),
+                            %% Pause incoming packets - map/reduce results
+                            %% will be processed by handle_info, it will 
+                            %% set socket active again on completion of streaming.
+                            {pause, State#state{req = Req, req_ctx = ReqId}}
                     end
             end
     end.
