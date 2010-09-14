@@ -217,6 +217,8 @@ handle_sync_event(_Event, _From, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
 %% @private
+handle_info({'EXIT', Pid, normal}, _StateName, #state{client=Pid}=StateData) ->
+    {stop,normal,StateData};
 handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
