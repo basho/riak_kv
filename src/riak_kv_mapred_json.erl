@@ -66,18 +66,36 @@ parse_request(Req) ->
             {error, not_json}
     end.
 
-parse_inputs([<<"modfun">>,Mod, Fun, Options]) ->
-    {ok, {modfun, binary_to_atom(Mod, utf8), binary_to_atom(Fun, utf8), Options}};
 parse_inputs(Bucket) when is_binary(Bucket) ->
     {ok, Bucket};
 parse_inputs(Targets) when is_list(Targets) ->
     parse_inputs(Targets, []);
+parse_inputs({struct, ModFun}) ->
+    case {proplists:lookup(<<"module">>, ModFun),
+          proplists:lookup(<<"function">>, ModFun),
+          proplists:lookup(<<"arg">>, ModFun)} of
+        {{_, Module}, {_, Function}, {_, Options}} ->
+            {ok, {modfun,
+                  binary_to_atom(Module, utf8),
+                  binary_to_atom(Function, utf8),
+                  Options}};
+        _ ->
+            {error, ["Missing fields in modfun input specification.\n"
+                     "Required fields are:\n"
+                     "   - module : string name of a module\n",
+                     "   - function : string name of a function in module\n",
+                     "   - arg : argument to pass function\n"]}
+    end;
 parse_inputs(Invalid) ->
     {error, ["Unrecognized format of \"inputs\" field:",
              "   ",mochijson2:encode(Invalid),
              "\n\nValid formats are:\n"
              "   - a bucket name, as a string\n"
-             "   - a list of bucket/key pairs\n"]}.
+             "   - a list of bucket/key pairs\n",
+             "   - an object naming a module and function to run, ex:\n",
+             "     {\"module\":\"my_module\",\n",
+             "      \"function\":\"my_function\",\n",
+             "      \"arg\":[\"my\",\"arguments\"]}\n"]}.
 
 parse_inputs([], Accum) ->
     if
