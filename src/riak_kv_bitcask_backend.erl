@@ -176,12 +176,12 @@ drop({Ref, BitcaskRoot}) ->
 
 is_empty({Ref, _}) ->
     %% Determining if a bitcask is empty requires us to find at least
-    %% one value that is NOT a tombstone. Accomplish this by doing a fold
-    %% that forcibly bails on the very first k/v encountered.
-    F = fun(_K, _V, _Acc0) ->
+    %% one value that is NOT a tombstone. Accomplish this by doing a fold_keys
+    %% that forcibly bails on the very first key encountered.
+    F = fun(_K, _Acc0) ->
                 throw(found_one_value)
         end,
-    case catch(bitcask:fold(Ref, F, undefined)) of
+    case catch(bitcask:fold_keys(Ref, F, undefined)) of
         found_one_value ->
             false;
         _ ->
