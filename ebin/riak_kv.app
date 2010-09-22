@@ -3,7 +3,7 @@
 {application, riak_kv,
  [
   {description, "Riak Key/Value Store"},
-  {vsn, "0.13.0pre"},
+  {vsn, "0.13.0rc1"},
   {modules, [
              lk,
              raw_link_walker,
