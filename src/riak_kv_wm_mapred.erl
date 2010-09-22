@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% mapred_resource: webmachine resource for mapreduce requests
+%% riak_kv_wm_mapred: webmachine resource for mapreduce requests
 %%
 %% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
 %%

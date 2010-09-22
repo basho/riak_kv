@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% ping_http_resource: simple Webmachine resource for availability test
+%% riak_kv_wm_ping: simple Webmachine resource for availability test
 %%
 %% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
 %%
