@@ -52,7 +52,8 @@ terminate(_Reason, _State) -> ok.
 code_change(_OldVsn, State, _Extra) -> {ok, State}.
 
 new_connection(Socket, State) ->
-    {ok, Pid} = riak_kv_pb_socket_sup:start_socket(Socket),
+    {ok, Pid} = riak_kv_pb_socket_sup:start_socket(),
     ok = gen_tcp:controlling_process(Socket, Pid),
+    ok = riak_kv_pb_socket:set_socket(Pid, Socket),
     {ok, State}.
 
