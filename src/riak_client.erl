@@ -28,7 +28,8 @@
 -export([mapred/2,mapred/3,mapred/4]).
 -export([mapred_stream/2,mapred_stream/3,mapred_stream/4]).
 -export([mapred_bucket/2,mapred_bucket/3,mapred_bucket/4]).
--export([mapred_bucket_stream/3,mapred_bucket_stream/4,mapred_bucket_stream/6]).
+-export([mapred_bucket_stream/3,mapred_bucket_stream/4,mapred_bucket_stream/5,
+         mapred_bucket_stream/6]).
 -export([mapred_dynamic_inputs_stream/3]).
 -export([get/2, get/3,get/4]).
 -export([put/1, put/2,put/3,put/4,put/5]).
@@ -141,7 +142,11 @@ mapred_bucket_stream(Bucket, Query, ClientPid) ->
     mapred_bucket_stream(Bucket, Query, ClientPid, ?DEFAULT_TIMEOUT).
 
 mapred_bucket_stream(Bucket, Query, ClientPid, Timeout) ->
-    mapred_bucket_stream(Bucket, Query, ClientPid, undefined, Timeout, ?DEFAULT_ERRTOL).
+    mapred_bucket_stream(Bucket, Query, ClientPid, undefined, Timeout).
+
+mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout) ->
+    mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout,
+                         ?DEFAULT_ERRTOL).
 
 mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout, ErrorTolerance) ->
     {ok,{MR_ReqId,MR_FSM}} = mapred_stream(Query,ClientPid,ResultTransformer,Timeout),

@@ -30,7 +30,7 @@
 -include_lib("riakc/include/riakc_pb.hrl").
 -behaviour(gen_server).
 
--export([start_link/1]).
+-export([start_link/0, set_socket/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
@@ -50,22 +50,27 @@
 %% Public API
 %% ===================================================================
 
-start_link(Socket) ->
-    gen_server2:start_link(?MODULE, [Socket], []).
+start_link() ->
+    gen_server2:start_link(?MODULE, [], []).
 
-init([Socket]) -> 
+set_socket(Pid, Socket) ->
+    gen_server2:call(Pid, {set_socket, Socket}).
+
+init([]) -> 
     riak_kv_stat:update(pbc_connect),
-    inet:setopts(Socket, [{active, once}, {packet, 4}, {header, 1}]),
     {ok, C} = riak:local_client(),
-    {ok, #state{sock = Socket, client = C}}.
+    {ok, #state{client = C}}.
 
-handle_call(_Request, _From, State) ->
-    {reply, not_implemented, State}.
+handle_call({set_socket, Socket}, _From, State) ->
+    inet:setopts(Socket, [{active, once}, {packet, 4}, {header, 1}]),
+    {reply, ok, State#state{sock = Socket}}.
 
 handle_cast(_Msg, State) -> 
     {noreply, State}.
 
 handle_info({tcp_closed, Socket}, State=#state{sock=Socket}) ->
+    {stop, normal, State};
+handle_info({tcp_error, Socket, _Reason}, State=#state{sock=Socket}) ->
     {stop, normal, State};
 handle_info({tcp, _Sock, Data}, State=#state{sock=Socket}) ->
     [MsgCode|MsgData] = Data,

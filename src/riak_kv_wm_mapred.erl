@@ -86,7 +86,7 @@ process_post(RD, #state{inputs=Inputs, mrquery=Query, timeout=Timeout}=State) ->
                         luke_flow:finish_inputs(FSM),
                         {ok, RId};
                    is_binary(Inputs) ->
-                        Client:mapred_bucket_stream(Inputs, Query, Me, Timeout);
+                        Client:mapred_bucket_stream(Inputs, Query, Me, ResultTransformer, Timeout);
                    is_tuple(Inputs) ->
                         {ok, {RId, FSM}} = Client:mapred_stream(Query, Me, ResultTransformer, Timeout),
                         Client:mapred_dynamic_inputs_stream(FSM, Inputs, Timeout),
