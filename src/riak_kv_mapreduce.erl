@@ -27,7 +27,8 @@
 -export([map_identity/1,
          map_object_value/1,
          map_object_value_list/1]).
--export([reduce_set_union/1,
+-export([reduce_identity/1,
+         reduce_set_union/1,
          reduce_sort/1,
          reduce_string_to_integer/1,
          reduce_sum/1,
@@ -37,7 +38,8 @@
 -export([map_identity/3,
          map_object_value/3,
          map_object_value_list/3]).
--export([reduce_set_union/2,
+-export([reduce_identity/2,
+         reduce_set_union/2,
          reduce_sort/2,
          reduce_string_to_integer/2,
          reduce_sum/2,
@@ -97,6 +99,31 @@ map_object_value_list(RiakObject, _, _) ->
 %%
 %% Reduce Phases
 %%
+
+%% @spec reduce_identity(boolean()) -> reduce_phase_spec()
+%% @doc Produces a spec for a reduce phase that simply returns
+%%      back [Bucket, Key] for each BKey it's handed.  
+reduce_identity(Acc) ->
+    {reduce, {modfun, riak_kv_mapreduce, reduce_identity}, none, Acc}.
+
+%% @spec reduce_identity([term()], term()) -> [term()]
+%% @doc map phase function for reduce_identity/1
+reduce_identity(List, _) -> 
+    F = fun({{Bucket, Key}, _}, Acc) ->
+                %% Handle BKeys with a extra data.
+                [[Bucket, Key]|Acc];
+           ({Bucket, Key}, Acc) ->
+                %% Handle BKeys.
+                [[Bucket, Key]|Acc];
+           ([Bucket, Key], Acc) ->
+                %% Handle re-reduces.
+                [[Bucket, Key]|Acc]
+           (Other, _Acc) ->
+                %% Fail loudly on anything unexpected.
+                error_logger:error_msg("Unhandled entry: ~p~n", [Other]),
+                throw({unhandled_entry, Other})
+        end,
+    lists:foldl(F, [], List).
 
 %% @spec reduce_set_union(boolean()) -> reduce_phase_spec()
 %% @doc Produces a spec for a reduce phase that produces the
