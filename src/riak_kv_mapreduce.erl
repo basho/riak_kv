@@ -117,7 +117,7 @@ reduce_identity(List, _) ->
                 [[Bucket, Key]|Acc];
            ([Bucket, Key], Acc) ->
                 %% Handle re-reduces.
-                [[Bucket, Key]|Acc]
+                [[Bucket, Key]|Acc];
            (Other, _Acc) ->
                 %% Fail loudly on anything unexpected.
                 error_logger:error_msg("Unhandled entry: ~p~n", [Other]),
