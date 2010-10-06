@@ -72,7 +72,7 @@ handle_call({fold, Fun0, Acc}, _From, State) ->
 % @spec stop(state()) -> ok | {error, Reason :: term()}
 stop(SrvRef) -> gen_server:call(SrvRef,stop).
 srv_stop(State) ->
-    true = ets:delete(State#state.t),
+    catch ets:delete(State#state.t),
     ok.
 
 % get(state(), riak_object:bkey()) ->
