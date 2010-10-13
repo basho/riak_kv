@@ -51,7 +51,7 @@
 
 -type riak_client() :: term().
 
-%% @spec mapred(Inputs :: list(),
+%% @spec mapred(Inputs :: riak_kv_mapred_term:mapred_inputs(),
 %%              Query :: [riak_kv_mapred_query:mapred_queryterm()]) ->
 %%       {ok, riak_kv_mapred_query:mapred_result()} |
 %%       {error, {bad_qterm, riak_kv_mapred_query:mapred_queryterm()}} |
@@ -62,7 +62,7 @@
 %% @equiv mapred(Inputs, Query, default_timeout())
 mapred(Inputs,Query) -> mapred(Inputs,Query,?DEFAULT_TIMEOUT).
 
-%% @spec mapred(Inputs :: list(),
+%% @spec mapred(Inputs :: riak_kv_mapred_term:mapred_inputs(),
 %%              Query :: [riak_kv_mapred_query:mapred_queryterm()],
 %%              TimeoutMillisecs :: integer()  | 'infinity') ->
 %%       {ok, riak_kv_mapred_query:mapred_result()} |
@@ -74,7 +74,7 @@ mapred(Inputs,Query) -> mapred(Inputs,Query,?DEFAULT_TIMEOUT).
 mapred(Inputs,Query,Timeout) ->
     mapred(Inputs,Query,undefined,Timeout).
 
-%% @spec mapred(Inputs :: list(),
+%% @spec mapred(Inputs :: riak_kv_mapred_term:mapred_inputs(),
 %%              Query :: [riak_kv_mapred_query:mapred_queryterm()],
 %%              TimeoutMillisecs :: integer()  | 'infinity',
 %%              ResultTransformer :: function()) ->
@@ -85,12 +85,19 @@ mapred(Inputs,Query,Timeout) ->
 %% @doc Perform a map/reduce job across the cluster.
 %%      See the map/reduce documentation for explanation of behavior.
 mapred(Inputs,Query,ResultTransformer,Timeout)
-  when is_list(Inputs), is_list(Query),
+  when is_binary(Inputs) ->
+    mapred_bucket(Inputs, Query, ResultTransformer, Timeout);
+mapred(Inputs,Query,ResultTransformer,Timeout)
+  when is_list(Query),
        (is_integer(Timeout) orelse Timeout =:= infinity) ->
     Me = self(),
     case mapred_stream(Query,Me,ResultTransformer,Timeout) of
         {ok, {ReqId, FlowPid}} ->
-            luke_flow:add_inputs(FlowPid, Inputs),
+            if is_list(Inputs) ->
+                    luke_flow:add_inputs(FlowPid, Inputs);
+               is_tuple(Inputs) ->
+                    mapred_dynamic_inputs_stream(FlowPid, Inputs, Timeout)
+            end,
             luke_flow:finish_inputs(FlowPid),
             luke_flow:collect_output(ReqId, Timeout);
         Error ->

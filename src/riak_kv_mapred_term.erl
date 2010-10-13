@@ -56,6 +56,9 @@ parse_request(BinReq) ->
     end.
 
 %% Return ok if inputs are valid, {error, Reason} if not
+%% @type mapred_inputs() = [bucket_key()]
+%%                        |bucket()
+%%                        |{modfun, atom(), atom(), list()}
 valid_inputs(Bucket) when is_binary(Bucket) ->    
     ok;
 valid_inputs(Targets) when is_list(Targets) ->
@@ -66,6 +69,8 @@ valid_inputs({modfun, Module, Function, _Options})
 valid_inputs(Invalid) ->
     {error, {"Inputs must be a binary bucket, a list of target tuples, or a modfun tuple:", Invalid}}.
 
+%% @type bucket_key() = {binary(), binary()}
+%%                     |{{binary(), binary()}, term()}
 valid_input_targets([]) ->
     ok;
 valid_input_targets([{B,K}|Rest]) when is_binary(B), is_binary(K) ->
