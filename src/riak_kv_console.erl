@@ -139,10 +139,8 @@ format_stats([{Stat, V}|T], Acc) ->
 
 %% Retrieve the rings for all other nodes by RPC
 get_rings() ->
-    {ok, MyRing} = riak_core_ring_manager:get_my_ring(),
-    Nodes = riak_core_ring:all_members(MyRing),
-    
-    {RawRings, Down} = rpc:multicall(Nodes, riak_core_ring_manager, get_my_ring, [], 30000),
+    {RawRings, Down} = riak_core_util:rpc_every_member(
+                         riak_core_ring_manager, get_my_ring, [], 30000),
     Rings = orddict:from_list([{riak_core_ring:owner_node(R), R} || {ok, R} <- RawRings]),
     {lists:sort(Down), Rings}.      
 
