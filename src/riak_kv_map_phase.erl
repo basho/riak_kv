@@ -25,7 +25,7 @@
 -behaviour(luke_phase).
 
 -export([init/1, handle_input/3, handle_input_done/1, handle_event/2,
-         handle_info/2, handle_timeout/1, terminate/2]).
+         handle_sync_event/3, handle_info/2, handle_timeout/1, terminate/2]).
 
 -record(state, {done=false, qterm, acc=[], ring, fsms=[]}).
 
@@ -61,6 +61,9 @@ handle_event({mapexec_error, _Executor, Reply}, State) ->
     {stop, Reply, State#state{ring=none, fsms=none, acc=none}};
 handle_event(_Event, State) ->
     {no_output, State}.
+
+handle_sync_event(_Event, _From, State) ->
+    {reply, ignored, State}.
 
 handle_info(_Info, State) ->
     {no_output, State}.

@@ -27,7 +27,7 @@
 -behaviour(luke_phase).
 
 -export([init/1, handle_input/3, handle_input_done/1, handle_event/2,
-         handle_timeout/1, handle_info/2, terminate/2]).
+         handle_sync_event/3, handle_timeout/1, handle_info/2, terminate/2]).
 
 -record(state, {qterm, reduced=[], new_inputs=[]}).
 
@@ -70,6 +70,9 @@ handle_timeout(#state{qterm=QTerm, reduced=Reduced0, new_inputs=New0}=State) ->
         true ->
             {no_output, State, 250}
     end.
+
+handle_sync_event(_Event, _From, State) ->
+    {reply, ignored, State}.
 
 handle_event(_Event, State) ->
     {no_output, State}.
