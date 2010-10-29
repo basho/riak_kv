@@ -172,7 +172,7 @@ reload_idle_vms('$end_of_table', _Tid) ->
     ok;
 reload_idle_vms(Current, Tid) ->
     riak_kv_js_vm:reload(Current),
-    reload_idle_vms(ets:next(Tid), Tid).
+    reload_idle_vms(ets:next(Tid, Current), Tid).
 
 mark_pending_reloads(Master, Idle) ->
     mark_pending_reloads(ets:first(Master), Master, Idle).
@@ -187,7 +187,7 @@ mark_pending_reloads(VMState, Master, Idle) ->
             VMState1 = VMState#vm_state{needs_reload=true},
             ets:insert(Master, VMState1)
     end,
-    mark_pending_reloads(ets:next(Master), Master, Idle).
+    mark_pending_reloads(ets:next(Master, VMState), Master, Idle).
 
 dispatch(_JSCall, _MaxCount, 0) ->
     error_logger:info_msg("JS call failed: All VMs are busy.~n"),
