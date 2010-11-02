@@ -52,7 +52,8 @@ new(Size) ->
     CacheName = pid_to_list(self()) ++ "_cache",
     Idx = ets:new(list_to_atom(IdxName), [ordered_set, private]),
     BucketIdx = ets:new(list_to_atom(BucketIdxName), [bag, private]),
-    Cache = ets:new(list_to_atom(CacheName), [private, {keypos, 2}]),
+    Cache = ets:new(list_to_atom(CacheName), [private,
+					      {keypos, #kv_lru_entry.key}]),
     #kv_lru{max_size=Size, age_idx=Idx, bucket_idx=BucketIdx, cache=Cache}.
 
 put(#kv_lru{max_size=0}, _BKey, _Key, _Value) ->
