@@ -123,7 +123,7 @@ remove_existing(Idx, BucketIdx, Cache, BKey, Key) ->
     case ets:lookup(Cache, CacheKey) of
         [Entry] ->
             ets:delete(Idx, Entry#kv_lru_entry.ts),
-            ets:delete(BucketIdx, CacheKey),
+            ets:delete_object(BucketIdx, CacheKey),
             ets:delete(Cache, CacheKey),
             ok;
         [] ->
@@ -218,5 +218,22 @@ zero_size_test() ->
     notfound = riak_kv_lru:fetch(C, BKey, 1),
     0 = riak_kv_lru:size(C),
     riak_kv_lru:destroy(C).
+
+consistency_test() ->
+    BKey = {<<"test">>, <<"foo">>},
+    C = riak_kv_lru:new(3),
+    F = fun(X) ->
+		riak_kv_lru:put(C, BKey, X, X)
+	end,
+    [F(X) || X <- lists:seq(1,10)],
+    consistency_check(C).
+
+consistency_check(#kv_lru { cache = Cache,
+			    age_idx = AgeCache,
+			    bucket_idx = BucketIdx }) ->
+    S = ets:info(Cache, size),
+    S = ets:info(AgeCache, size),
+    S = ets:info(BucketIdx, size),
+    true.
 
 -endif.
