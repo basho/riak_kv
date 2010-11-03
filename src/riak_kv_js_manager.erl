@@ -177,17 +177,33 @@ reload_idle_vms(Current, Tid) ->
 mark_pending_reloads(Master, Idle) ->
     mark_pending_reloads(ets:first(Master), Master, Idle).
 
-mark_pending_reloads('$end_of_table', _Master, _Idle) ->
+mark_pending_reloads('$end_of_table', Master, Idle) ->
     ok;
-mark_pending_reloads(VMState, Master, Idle) ->
-    case is_vm_idle(Idle, VMState#vm_state.pid) of
+mark_pending_reloads(VMPid, Master, Idle) ->
+    case is_vm_idle(Idle, VMPid) of
         true ->
             ok;
         false ->
+            [VMState] = ets:lookup(Master, VMPid),
             VMState1 = VMState#vm_state{needs_reload=true},
             ets:insert(Master, VMState1)
     end,
-    mark_pending_reloads(ets:next(Master, VMState), Master, Idle).
+    mark_pending_reloads(ets:next(Master, VMPid), Master, Idle).
+
+%% mark_pending_reloads('$end_of_table', _Master, _Idle) ->
+%%     io:format("Here 2~n"),
+%%     ok;
+%% mark_pending_reloads(VMState, Master, Idle) ->
+%%     io:format("Here 3~n"),
+%%     io:format("VMState: ~p~n", [VMState]),
+%%     case is_vm_idle(Idle, VMState#vm_state.pid) of
+%%         true ->
+%%             ok;
+%%         false ->
+%%             VMState1 = VMState#vm_state{needs_reload=true},
+%%             ets:insert(Master, VMState1)
+%%     end,
+%%     mark_pending_reloads(ets:next(Master, VMState), Master, Idle).
 
 dispatch(_JSCall, _MaxCount, 0) ->
     error_logger:info_msg("JS call failed: All VMs are busy.~n"),
