@@ -177,7 +177,7 @@ reload_idle_vms(Current, Tid) ->
 mark_pending_reloads(Master, Idle) ->
     mark_pending_reloads(ets:first(Master), Master, Idle).
 
-mark_pending_reloads('$end_of_table', Master, Idle) ->
+mark_pending_reloads('$end_of_table', _Master, _Idle) ->
     ok;
 mark_pending_reloads(VMPid, Master, Idle) ->
     case is_vm_idle(Idle, VMPid) of
