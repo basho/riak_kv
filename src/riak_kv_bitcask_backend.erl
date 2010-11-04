@@ -25,6 +25,7 @@
 -author('Andy Gross <andy@basho.com>').
 -author('Dave Smith <dizzyd@basho.com>').
 
+%% KV Backend API
 -export([start/2,
          stop/1,
          get/2,
@@ -37,6 +38,9 @@
          drop/1,
          is_empty/1,
          callback/3]).
+
+%% Helper API
+-export([key_counts/0]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -203,9 +207,28 @@ callback({Ref, BitcaskRoot}, Ref, merge_check) when is_reference(Ref) ->
 callback(_State, _Ref, _Msg) ->
     ok.
 
+key_counts() ->
+    case application:get_env(bitcask, data_root) of
+        {ok, RootDir} ->
+            [begin
+                 {Keys, _} = status(filename:join(RootDir, Dir)),
+                 {Dir, Keys}
+             end || Dir <- element(2, file:list_dir(RootDir))];
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
+%% @private
+%% Invoke bitcask:status/1 for a given directory
+status(Dir) ->
+    Ref = bitcask:open(Dir),
+    Status = bitcask:status(Ref),
+    bitcask:close(Ref),
+    Status.
 
 %% @private
 %% Schedule sync (if necessary)
