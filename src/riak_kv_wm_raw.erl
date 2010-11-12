@@ -24,6 +24,12 @@
 %%
 %% Available operations:
 %%
+%% GET /Prefix
+%%   Get information about available buckets.
+%%   Include the query param "buckets=true" to get a list of buckets.
+%%   The bucket list is excluded by default, because generating it is
+%%   expensive.
+%%
 %% GET /Prefix/Bucket
 %%   Get information about the named Bucket, in JSON form:
 %%     {"props":{Prop1:Val1,Prop2:Val2,...},
@@ -114,6 +120,11 @@
 %%
 %% Webmachine dispatch lines for this resource should look like:
 %%
+%%  {["riak"],
+%%   riak_kv_wm_raw,
+%%   [{prefix, "riak"},
+%%    {riak, local} %% or {riak, {'riak@127.0.0.1', riak_cookie}}
+%%   ]}.
 %%  {["riak", bucket],
 %%   riak_kv_wm_raw,
 %%   [{prefix, "riak"},
@@ -125,8 +136,8 @@
 %%    {riak, local} %% or {riak, {'riak@127.0.0.1', riak_cookie}}
 %%   ]}.
 %%
-%% These example dispatch lines will expose this resource at
-%% /riak/Bucket and /riak/Bucket/Key.  The resource will attempt to
+%% These example dispatch lines will expose this resource at /riak,
+%% /riak/Bucket, and /riak/Bucket/Key.  The resource will attempt to
 %% connect to Riak on the same Erlang node one which the resource
 %% is executing.  Using the alternate {riak, {Node, Cookie}} form
 %% will cause the resource to connect to riak on the specified
@@ -148,6 +159,7 @@
          charsets_provided/2,
          encodings_provided/2,
          content_types_accepted/2,
+         produce_toplevel_body/2,
          produce_bucket_body/2,
          accept_bucket_body/2,
          post_is_create/2,
@@ -211,7 +223,10 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
              Ctx#ctx{
                method=wrq:method(RD),
                client=C,
-               bucket=list_to_binary(wrq:path_info(bucket, RD)),
+               bucket=case wrq:path_info(bucket, RD) of
+                         undefined -> undefined;
+                         B -> list_to_binary(B)
+                      end,
                key=case wrq:path_info(key, RD) of
                        undefined -> undefined;
                        K -> list_to_binary(K)
@@ -259,6 +274,9 @@ get_client_id(RD) ->
 %%      HEAD, GET, POST, and PUT are supported at both
 %%      the bucket and key levels.  DELETE is supported
 %%      at the key level only.
+allowed_methods(RD, Ctx=#ctx{bucket=undefined}) ->
+    %% top-level: no modification allowed
+    {['HEAD', 'GET'], RD, Ctx};
 allowed_methods(RD, Ctx=#ctx{key=undefined}) ->
     %% bucket-level: no delete
     {['HEAD', 'GET', 'POST', 'PUT'], RD, Ctx};
@@ -449,6 +467,9 @@ malformed_link_headers(RD, Ctx) ->
 %%      "application/json" is the content-type for bucket-level GET requests
 %%      The content-type for a key-level request is the content-type that
 %%      was used in the PUT request that stored the document in Riak.
+content_types_provided(RD, Ctx=#ctx{bucket=undefined}) ->
+    %% top-level: JSON description only
+    {[{"application/json", produce_toplevel_body}], RD, Ctx};
 content_types_provided(RD, Ctx=#ctx{key=undefined}) ->
     %% bucket-level: JSON description only
     {[{"application/json", produce_bucket_body}], RD, Ctx};
@@ -476,7 +497,7 @@ content_types_provided(RD, Ctx0) ->
 %%      in the PUT request that stored the document in Riak (none if
 %%      no charset was specified at PUT-time).
 charsets_provided(RD, Ctx=#ctx{key=undefined}) ->
-    %% default charset for bucket-level request
+    %% default charset for top-level and bucket-level requests
     {no_charset, RD, Ctx};
 charsets_provided(RD, #ctx{method=Method}=Ctx) when Method =:= 'PUT';
                                                     Method =:= 'POST' ->
@@ -518,7 +539,7 @@ charsets_provided(RD, Ctx0) ->
 %%      used in the PUT request that stored the document in Riak, or
 %%      "identity" and "gzip" if no encoding was specified at PUT-time.
 encodings_provided(RD, Ctx=#ctx{key=undefined}) ->
-    %% identity and gzip for bucket-level request
+    %% identity and gzip for top-level and bucket-level requests
     {default_encodings(), RD, Ctx};
 encodings_provided(RD, Ctx0) ->
     DocCtx = ensure_doc(Ctx0),
@@ -595,7 +616,7 @@ content_types_accepted(RD, Ctx) ->
 %%      and either no vtag query parameter was specified, or the value of the
 %%      vtag param matches the vtag of some value of the Riak object.
 resource_exists(RD, Ctx=#ctx{key=undefined}) ->
-    %% all buckets exist
+    %% top-level and all buckets exist
     {true, RD, Ctx};
 resource_exists(RD, Ctx0) ->
     DocCtx = ensure_doc(Ctx0),
@@ -621,6 +642,23 @@ resource_exists(RD, Ctx0) ->
                                 " n value of ~p~n", [N]),
             {{halt, 400}, wrq:append_to_response_body(Msg, RD), DocCtx}
     end.
+
+%% @spec produce_toplevel_body(reqdata(), context()) -> {binary(), reqdata(), context()}
+%% @doc Produce the JSON response to a bucket-level GET.
+%%      Includes a list of known buckets if the "buckets=true" query
+%%      param is specified.
+produce_toplevel_body(RD, Ctx=#ctx{client=C}) ->
+    {ListPart, LinkRD} =
+        case wrq:get_qs_value(?Q_BUCKETS, RD) of
+            ?Q_TRUE ->
+                {ok, Buckets} = C:list_buckets(),
+                {[{?JSON_BUCKETS, Buckets}],
+                 lists:foldl(fun(B, Acc) -> add_bucket_link(B,Acc,Ctx) end,
+                             RD, Buckets)};
+            _ ->
+                {[], RD}
+        end,
+    {mochijson2:encode({struct, ListPart}), LinkRD, Ctx}.
 
 %% @spec produce_bucket_body(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Produce the JSON response to a bucket-level GET.
@@ -884,7 +922,7 @@ extract_user_meta(RD) ->
 %%      resource_exists will have filtered out requests earlier for
 %%      vtags that are invalid for this version of the document.
 multiple_choices(RD, Ctx=#ctx{key=undefined}) ->
-    %% bucket operations never have multiple choices
+    %% top-level and bucket operations never have multiple choices
     {false, RD, Ctx};
 multiple_choices(RD, Ctx=#ctx{vtag=undefined, doc={ok, Doc}}) ->
     %% user didn't specify a vtag, so there better not be siblings
@@ -1082,7 +1120,7 @@ delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C, rw=RW}) ->
 %% @spec generate_etag(reqdata(), context()) ->
 %%          {undefined|string(), reqdata(), context()}
 %% @doc Get the etag for this resource.
-%%      Bucket requests will have no etag.
+%%      Top-level and Bucket requests will have no etag.
 %%      Documents will have an etag equal to their vtag.  No etag will be
 %%      given for documents with siblings, if no sibling was chosen with the
 %%      vtag query param.
@@ -1099,7 +1137,7 @@ generate_etag(RD, Ctx) ->
 %% @spec last_modified(reqdata(), context()) ->
 %%          {undefined|datetime(), reqdata(), context()}
 %% @doc Get the last-modified time for this resource.
-%%      Bucket requests will have no last-modified time.
+%%      Top-level and Bucket requests will have no last-modified time.
 %%      Documents will have the last-modified time specified by the riak_object.
 %%      No last-modified time will be given for documents with siblings, if no
 %%      sibling was chosen with the vtag query param.
@@ -1126,6 +1164,12 @@ add_container_link(RD, #ctx{prefix=Prefix, bucket=Bucket}) ->
     Val = format_link(Prefix, Bucket),
     wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
 
+%% @spec add_bucket_link(reqdata(), context()) -> reqdata()
+%% @doc Add the Link header pointing to a bucket
+add_bucket_link(Bucket, RD, #ctx{prefix=Prefix}) ->
+    Val = format_link(Prefix, Bucket, "contained"),
+    wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
+
 %% @spec add_link_head(binary(), binary(), binary(), reqdata(), context()) ->
 %%          reqdata()
 %% @doc Add a Link header specifying the given Bucket and Key
@@ -1135,11 +1179,17 @@ add_link_head(Bucket, Key, Tag, RD, #ctx{prefix=Prefix}) ->
     wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
 
 %% @spec format_link(string(), binary()) -> string()
-%% @doc Format a Link header to a bucket.
+%% @doc Produce the standard link header from an object up to its bucket.
 format_link(Prefix, Bucket) ->
-    io_lib:format("</~s/~s>; rel=\"up\"",
+    format_link(Prefix, Bucket, "up").
+
+%% @spec format_link(string(), binary(), string()) -> string()
+%% @doc Format a Link header to a bucket.
+format_link(Prefix, Bucket, Tag) ->
+    io_lib:format("</~s/~s>; rel=\"~s\"",
                   [Prefix,
-                   mochiweb_util:quote_plus(Bucket)]).
+                   mochiweb_util:quote_plus(Bucket),
+                   Tag]).
 
 %% @spec format_link(string(), binary(), binary(), binary()) -> string()
 %% @doc Format a Link header to another document.
