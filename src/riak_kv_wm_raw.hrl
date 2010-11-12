@@ -33,6 +33,7 @@
 
 %% Names of JSON fields in bucket properties
 -define(JSON_PROPS,   <<"props">>).
+-define(JSON_BUCKETS, <<"buckets">>).
 -define(JSON_KEYS,    <<"keys">>).
 -define(JSON_LINKFUN, <<"linkfun">>).
 -define(JSON_MOD,     <<"mod">>).
@@ -47,6 +48,7 @@
 
 %% Names of HTTP query parameters
 -define(Q_PROPS, "props").
+-define(Q_BUCKETS, "buckets").
 -define(Q_KEYS,  "keys").
 -define(Q_FALSE, "false").
 -define(Q_TRUE, "true").
