@@ -115,16 +115,21 @@ handle_options([{update_last_modified, Value}|T], State) ->
     handle_options(T, State#state{update_last_modified=Value});
 handle_options([{returnbody, true}|T], State) ->
     VnodeOpts = [{returnbody, true} | State#state.vnode_options],
+    %% Force DW>0 if requesting return body to ensure the dw event 
+    %% returned by the vnode includes the object.
     handle_options(T, State#state{vnode_options=VnodeOpts,
+                                  dw=erlang:max(1,State#state.dw),
                                   returnbody=true});
 handle_options([{returnbody, false}|T], State) ->
     case has_postcommit_hooks(element(1,State#state.bkey)) of
         true ->
             %% We have post-commit hooks, we'll need to get the body back
             %% from the vnode, even though we don't plan to return that to the
-            %% original caller
+            %% original caller.  Force DW>0 to ensure the dw event returned by
+            %% the vnode includes the object.
             VnodeOpts = [{returnbody, true} | State#state.vnode_options],
             handle_options(T, State#state{vnode_options=VnodeOpts,
+                                          dw=erlang:max(1,State#state.dw),
                                           returnbody=false});
         false ->
             handle_options(T, State#state{returnbody=false})
