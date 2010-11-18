@@ -26,7 +26,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("riak_kv_vnode.hrl").
 -behaviour(gen_fsm).
--define(DEFAULT_OPTS, [{returnbody, false}]).
+-define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
 -export([start/6,start/7]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
@@ -53,7 +53,8 @@
                 vnode_options :: list(),
                 returnbody :: boolean(),
                 resobjs :: list(),
-                allowmult :: boolean()
+                allowmult :: boolean(),
+                update_last_modified :: boolean()
                }).
 
 start(ReqId,RObj,W,DW,Timeout,From) ->
@@ -110,6 +111,8 @@ flatten_options([{Key, Value} | Rest], Opts) ->
 %% @private
 handle_options([], State) ->
     State;
+handle_options([{update_last_modified, Value}|T], State) ->
+    handle_options(T, State#state{update_last_modified=Value});
 handle_options([{returnbody, true}|T], State) ->
     VnodeOpts = [{returnbody, true} | State#state.vnode_options],
     handle_options(T, State#state{vnode_options=VnodeOpts,
@@ -130,9 +133,10 @@ handle_options([{_,_}|T], State) -> handle_options(T, State).
 
 %% @private
 initialize(timeout, StateData0=#state{robj=RObj0, req_id=ReqId, client=Client,
+                                      update_last_modified=UpdateLastMod,
                                       timeout=Timeout, ring=Ring, bkey={Bucket,Key}=BKey,
                                       rclient=RClient, vnode_options=VnodeOptions}) ->
-    case invoke_hook(precommit, RClient, update_metadata(RObj0)) of
+    case invoke_hook(precommit, RClient, update_last_modified(UpdateLastMod, RObj0)) of
         fail ->
             Client ! {ReqId, {error, precommit_fail}},
             {stop, normal, StateData0};
@@ -291,16 +295,34 @@ terminate(Reason, _StateName, _State) ->
 %% @private
 code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 
-update_metadata(RObj) ->
-    MD0 = riak_object:get_update_metadata(RObj),
-    NewMD = case dict:is_key("no_update", MD0) of
-        true -> dict:erase("no_update", MD0);
-        false -> dict:store(<<"X-Riak-VTag">>,
-                       make_vtag(RObj),
-                       dict:store(<<"X-Riak-Last-Modified">>,
-                                  erlang:now(),
-                                  MD0))
-    end,
+%%
+%% Update X-Riak-Tag and X-Riak-Last-Modified in the object's metadata, if
+%% necessary.
+%%
+%% @private
+update_last_modified(false, RObj) ->
+    RObj;
+update_last_modified(true, RObj) ->
+    MD0 = case dict:find(clean, riak_object:get_update_metadata(RObj)) of
+              {ok, true} ->
+                  %% There have been no changes to updatemetadata. If we stash the
+                  %% last modified in this dict, it will cause us to lose existing
+                  %% metadata (bz://508). If there is only one instance of metadata,
+                  %% we can safely update that one, but in the case of multiple siblings,
+                  %% it's hard to know which one to use. In that situation, use the update
+                  %% metadata as is.
+                  case riak_object:get_metadatas(RObj) of
+                      [MD] ->
+                          MD;
+                      _ ->
+                          riak_object:get_update_metadata(RObj)
+                  end;
+               _ ->
+                  riak_object:get_update_metadata(RObj)
+          end,
+    NewMD = dict:store(<<"X-Riak-Tag">>, make_vtag(RObj),
+                       dict:store(<<"X-Riak-Last-Modified">>, erlang:now(),
+                                  MD0)),
     riak_object:apply_updates(riak_object:update_metadata(RObj, NewMD)).
 
 make_vtag(RObj) ->
