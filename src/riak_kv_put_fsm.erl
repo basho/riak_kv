@@ -50,22 +50,21 @@
                 tref    :: reference(),
                 ring :: riak_core_ring:riak_core_ring(),
                 startnow :: {pos_integer(), pos_integer(), pos_integer()},
-                options :: list(),
+                vnode_options :: list(),
                 returnbody :: boolean(),
                 resobjs :: list(),
-                allowmult :: boolean(),
-                reply_arity :: 1 | 2
+                allowmult :: boolean()
                }).
 
 start(ReqId,RObj,W,DW,Timeout,From) ->
-    start(ReqId,RObj,W,DW,Timeout,From,?DEFAULT_OPTS).
+    start(ReqId,RObj,W,DW,Timeout,From,[]).
 
 start(ReqId,RObj,W,DW,Timeout,From,Options) ->
     gen_fsm:start(?MODULE, [ReqId,RObj,W,DW,Timeout,From,Options], []).
 
 %% @private
 init([ReqId,RObj0,W0,DW0,Timeout,Client,Options0]) ->
-    Options = case Options0 of [] -> ?DEFAULT_OPTS; _ -> Options0 end,
+    Options = flatten_options(proplists:unfold(Options0 ++ ?DEFAULT_OPTS), []),
     {ok,Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj0), Ring),
     N = proplists:get_value(n_val,BucketProps),
@@ -84,28 +83,43 @@ init([ReqId,RObj0,W0,DW0,Timeout,Client,Options0]) ->
                                 client=Client, w=W, dw=DW, bkey={Bucket, Key},
                                 req_id=ReqId, timeout=Timeout, ring=Ring,
                                 rclient=RClient, 
-                                options=proplists:unfold(Options),
-                                resobjs=[], allowmult=AllowMult, reply_arity=1},
-            StateData = handle_options(StateData0),
+                                vnode_options=[],
+                                resobjs=[], allowmult=AllowMult},
+            StateData = handle_options(Options, StateData0),
             {ok,initialize,StateData,0}
     end.
 
+%%
+%% Given an expanded proplist of options, take the first entry for any given key
+%% and ignore the rest
+%%
 %% @private
-handle_options(State=#state{options=Options}) ->
-    handle_options(Options, State).
+flatten_options([], Opts) ->
+    Opts;
+flatten_options([{Key, Value} | Rest], Opts) ->
+    case lists:keymember(Key, 1, Opts) of
+        true ->
+            flatten_options(Rest, Opts);
+        false ->
+            flatten_options(Rest, [{Key, Value} | Opts])
+    end.
+
 %% @private
 handle_options([], State) ->
     State;
-handle_options([{returnbody, true}|T], State=#state{w=W}) ->
-    handle_options(T, State#state{returnbody=true,dw=W, reply_arity=2});
-handle_options([{returnbody, false}|T], State=#state{w=W}) ->
+handle_options([{returnbody, true}|T], State) ->
+    VnodeOpts = [{returnbody, true} | State#state.vnode_options],
+    handle_options(T, State#state{vnode_options=VnodeOpts,
+                                  returnbody=true});
+handle_options([{returnbody, false}|T], State) ->
     case has_postcommit_hooks(element(1,State#state.bkey)) of
         true ->
-            Options = [{returnbody, true}],
-            handle_options(T, State#state{options=Options,
-                                          returnbody=true,
-                                          dw=W,
-                                          reply_arity=1});
+            %% We have post-commit hooks, we'll need to get the body back
+            %% from the vnode, even though we don't plan to return that to the
+            %% original caller
+            VnodeOpts = [{returnbody, true} | State#state.vnode_options],
+            handle_options(T, State#state{vnode_options=VnodeOpts,
+                                          returnbody=false});
         false ->
             handle_options(T, State#state{returnbody=false})
     end;
@@ -114,7 +128,7 @@ handle_options([{_,_}|T], State) -> handle_options(T, State).
 %% @private
 initialize(timeout, StateData0=#state{robj=RObj0, req_id=ReqId, client=Client,
                                       timeout=Timeout, ring=Ring, bkey={Bucket,Key}=BKey,
-                                      rclient=RClient, options=Options}) ->
+                                      rclient=RClient, vnode_options=VnodeOptions}) ->
     case invoke_hook(precommit, RClient, update_metadata(RObj0)) of
         fail ->
             Client ! {ReqId, {error, precommit_fail}},
@@ -133,7 +147,7 @@ initialize(timeout, StateData0=#state{robj=RObj0, req_id=ReqId, client=Client,
               object = RObj1,
               req_id = ReqId,
               start_time = RealStartTime,
-              options = Options},
+              options = VnodeOptions},
             N = proplists:get_value(n_val,BucketProps),
             Preflist = riak_core_ring:preflist(DocIdx, Ring),
             %% TODO: Replace this with call to riak_kv_vnode:put/6
@@ -216,14 +230,17 @@ waiting_vnode_dw({dw, Idx, ReqId},
     end;
 waiting_vnode_dw({dw, Idx, ResObj, ReqId},
                  StateData=#state{dw=DW, client=Client, replied_dw=Replied0,
-                                  allowmult=AllowMult, reply_arity=ReplyArity,
+                                  allowmult=AllowMult, returnbody=ReturnBody,
                                   rclient=RClient, resobjs=ResObjs0}) ->
     Replied = [Idx|Replied0],
     ResObjs = [ResObj|ResObjs0],
     case length(Replied) >= DW of
         true ->
             ReplyObj = merge_robjs(ResObjs, AllowMult),
-            Reply = case ReplyArity of 1 -> ok; 2 -> {ok, ReplyObj} end,
+            Reply = case ReturnBody of
+                        true  -> {ok, ReplyObj};
+                        false -> ok
+                    end,
             Client ! {ReqId, Reply},
             invoke_hook(postcommit, RClient, ReplyObj),
             update_stats(StateData),
