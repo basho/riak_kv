@@ -38,6 +38,7 @@
                 simul_pls :: integer(),
                 vns :: term(),
                 bucket :: riak_object:bucket(),
+                input,
                 timeout :: pos_integer(),
                 req_id :: pos_integer(),
                 ring :: riak_core_ring:riak_core_ring(),
@@ -49,12 +50,18 @@ start(ReqId,Bucket,Timeout,ClientType,ErrorTolerance,From) ->
                   [ReqId,Bucket,Timeout,ClientType,ErrorTolerance,From], []).
 
 %% @private
-init([ReqId,Bucket,Timeout,ClientType,ErrorTolerance,Client]) ->
+init([ReqId,Input,Timeout,ClientType,ErrorTolerance,Client]) ->
     process_flag(trap_exit, true),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     {ok, Bloom} = ebloom:new(10000000,ErrorTolerance,ReqId),
+    Bucket = case Input of
+                 {B, _} ->
+                     B;
+                 _ ->
+                     Input
+             end,
     StateData = #state{client=Client, client_type=ClientType, timeout=Timeout,
-                       bloom=Bloom, req_id=ReqId, bucket=Bucket, ring=Ring},
+                       bloom=Bloom, req_id=ReqId, input=Input, bucket=Bucket, ring=Ring},
     case ClientType of
         %% Link to the mapred job so we die if the job dies
         mapred ->
@@ -65,7 +72,7 @@ init([ReqId,Bucket,Timeout,ClientType,ErrorTolerance,Client]) ->
     {ok,initialize,StateData,0}.
 
 %% @private
-initialize(timeout, StateData0=#state{bucket=Bucket, ring=Ring, req_id=ReqId}) ->
+initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, req_id=ReqId}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     N = proplists:get_value(n_val,BucketProps),
     PLS0 = riak_core_ring:all_preflists(Ring,N),
@@ -75,7 +82,7 @@ initialize(timeout, StateData0=#state{bucket=Bucket, ring=Ring, req_id=ReqId}) -
                                lists:zip(lists:seq(0,(length(PLS0)-1)), PLS0)),
     {_, PLS} = lists:unzip(LA1 ++ LA2),
     Simul_PLS = trunc(length(PLS) / N),
-    Listers = start_listers(ReqId, Bucket),
+    Listers = start_listers(ReqId, Input),
     StateData = StateData0#state{pls=PLS,simul_pls=Simul_PLS, listers=Listers,
                                  wait_pls=[],vns=sets:from_list([])},
     reduce_pls(StateData).

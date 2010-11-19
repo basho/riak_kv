@@ -24,6 +24,10 @@
 
 -module(riak_kv_mapred_json).
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 -export([parse_request/1, parse_inputs/1, parse_query/1]).
 -export([jsonify_not_found/1, dejsonify_not_found/1]).
 
@@ -70,21 +74,12 @@ parse_inputs(Bucket) when is_binary(Bucket) ->
     {ok, Bucket};
 parse_inputs(Targets) when is_list(Targets) ->
     parse_inputs(Targets, []);
-parse_inputs({struct, ModFun}) ->
-    case {proplists:lookup(<<"module">>, ModFun),
-          proplists:lookup(<<"function">>, ModFun),
-          proplists:lookup(<<"arg">>, ModFun)} of
-        {{_, Module}, {_, Function}, {_, Options}} ->
-            {ok, {modfun,
-                  binary_to_atom(Module, utf8),
-                  binary_to_atom(Function, utf8),
-                  Options}};
-        _ ->
-            {error, ["Missing fields in modfun input specification.\n"
-                     "Required fields are:\n"
-                     "   - module : string name of a module\n",
-                     "   - function : string name of a function in module\n",
-                     "   - arg : argument to pass function\n"]}
+parse_inputs({struct, Inputs}) ->
+    case is_modfun(Inputs) of
+        true ->
+            parse_modfun(Inputs);
+        false ->
+            parse_key_filters(Inputs)
     end;
 parse_inputs(Invalid) ->
     {error, ["Unrecognized format of \"inputs\" field:",
@@ -117,6 +112,43 @@ parse_inputs([Input|_], _Accum) ->
              "   [Bucket, Key]\n"
              "   [Bucket, Key, KeyData]\n"
              "where Bucket and Key are strings\n"]}.
+
+parse_modfun(ModFun) ->
+    case {proplists:lookup(<<"module">>, ModFun),
+          proplists:lookup(<<"function">>, ModFun),
+          proplists:lookup(<<"arg">>, ModFun)} of
+        {{_, Module}, {_, Function}, {_, Options}} ->
+            {ok, {modfun,
+                  binary_to_atom(Module, utf8),
+                  binary_to_atom(Function, utf8),
+                  Options}};
+        _ ->
+            {error, ["Missing fields in modfun input specification.\n"
+                     "Required fields are:\n"
+                     "   - module : string name of a module\n",
+                     "   - function : string name of a function in module\n",
+                     "   - arg : argument to pass function\n"]}
+    end.
+
+parse_key_filters(Filter) when is_list(Filter) ->
+    case proplists:get_value(<<"bucket">>, Filter) of
+        undefined ->
+            {error, ["Key filter expression missing target bucket.\n"]};
+        Bucket ->
+            case proplists:get_value(<<"key_filters">>, Filter) of
+                undefined ->
+                    {error, ["Key filter expression missing filter list.\n"]};
+                Pred ->
+                    case length(Pred) >= 1 of
+                        true ->
+                            {ok, {Bucket, Pred}};
+                        false ->
+                            {error, ["Illegal key filter statement.\n"]}
+                    end
+            end
+    end;
+parse_key_filters(_Filter) ->
+    {error, ["Illegal key filter statement.\n"]}.
 
 parse_query(Query) ->
     parse_query(Query, []).
@@ -281,3 +313,41 @@ bin_to_atom(Binary) ->
     catch
         error:badarg -> error
     end.
+
+is_modfun(Inputs) ->
+    case proplists:get_value(<<"module">>, Inputs) of
+        undefined ->
+            false;
+        _ ->
+            true
+    end.
+
+-ifdef(TEST).
+-define(DISCRETE_ERLANG_JOB, <<"{\"inputs\": [[\"foo\", \"bar\"]], \"query\":[{\"map\":{\"language\":\"erlang\","
+                              "\"module\":\"foo\", \"function\":\"bar\", \"keep\": false}}]}">>).
+-define(DISCRETE_JS_JOB, <<"{\"inputs\": [[\"foo\", \"bar\"]], \"query\":[{\"map\":{\"language\":\"javascript\","
+                          "\"name\":\"Riak.foo\", \"keep\": false}}]}">>).
+
+-define(BUCKET_ERLANG_JOB, <<"{\"inputs\": \"foo\", \"query\":[{\"map\":{\"language\":\"erlang\","
+                              "\"module\":\"foo\", \"function\":\"bar\", \"keep\": false}}]}">>).
+-define(BUCKET_JS_JOB, <<"{\"inputs\": \"foo\", \"query\":[{\"map\":{\"language\":\"javascript\","
+                              "\"source\":\"function(obj) { return obj; }\", \"keep\": false}}]}">>).
+
+-define(KEY_SELECTION_JOB, <<"{\"inputs\": {\"bucket\":\"users\","
+                            "\"key_filters\": [[\"matches\", \"ksmith.*\"]]},"
+                            "\"query\":[{\"map\":{\"language\":\"javascript\","
+                            "\"source\":\"function(obj) { return obj; }\", \"keep\": false}}]}">>).
+
+
+discrete_test() ->
+    {ok, _Inputs, _Query, _Timeout} = riak_kv_mapred_json:parse_request(?DISCRETE_ERLANG_JOB),
+    {ok, _Inputs1, _Query1, _Timeout1} = riak_kv_mapred_json:parse_request(?DISCRETE_JS_JOB).
+
+bucket_test() ->
+    {ok, _Inputs, _Query, _Timeout} = riak_kv_mapred_json:parse_request(?BUCKET_ERLANG_JOB),
+    {ok, _Inputs1, _Query1, _Timeout1} = riak_kv_mapred_json:parse_request(?BUCKET_JS_JOB).
+
+key_select_test() ->
+    {ok, _Inputs, _Query, _Timeout} = riak_kv_mapred_json:parse_request(?KEY_SELECTION_JOB).
+
+-endif.

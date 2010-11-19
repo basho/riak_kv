@@ -23,13 +23,16 @@
 %% @doc interaction with JavaScript VMs
 
 -module(riak_kv_js_vm).
+-author('Kevin Smith <kevin@basho.com>').
+-author('John Muellerleile <johnm@basho.com>').
 
 -behaviour(gen_server).
 
 -define(MAX_ANON_FUNS, 25).
 
 %% API
--export([start_link/1, dispatch/4, blocking_dispatch/3, reload/1]).
+-export([start_link/2, dispatch/4, blocking_dispatch/3, reload/1,
+         batch_blocking_dispatch/2, start_batch/1, finish_batch/1, batch_dispatch/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -37,68 +40,148 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {manager, ctx, next_funid=1, anon_funs=[]}).
+-record(state, {manager, pool, ctx, next_funid=1, anon_funs=[], in_batch=false}).
 
-start_link(Manager) ->
-    gen_server:start_link(?MODULE, [Manager], []).
+start_link(Manager, PoolName) ->
+    gen_server:start_link(?MODULE, [Manager, PoolName], []).
+
+start_batch(VMPid) ->
+    gen_server:call(VMPid, start_batch, infinity).
+
+finish_batch(VMPid) ->
+    gen_server:call(VMPid, finish_batch, infinity).
 
 dispatch(VMPid, Requestor, JobId, JSCall) ->
     gen_server:cast(VMPid, {dispatch, Requestor, JobId, JSCall}).
 
 blocking_dispatch(VMPid, JobId, JSCall) ->
-    gen_server:call(VMPid, {dispatch, JobId, JSCall}, 10000).
+    gen_server:call(VMPid, {dispatch, JobId, JSCall}, infinity).
+
+batch_dispatch(VMPid, JobId, JSCall) ->
+    gen_server:cast(VMPid, {batch_dispatch, JobId, JSCall}).
+
+batch_blocking_dispatch(VMPid, JSCall) ->
+    gen_server:call(VMPid, {batch_dispatch, JSCall}, infinity).
 
 reload(VMPid) ->
     gen_server:cast(VMPid, reload).
 
-init([Manager]) ->
+init([Manager, PoolName]) ->
     HeapSize = read_config(js_max_vm_mem, 8),
     StackSize = read_config(js_thread_stack, 8),
     case new_context(StackSize, HeapSize) of
         {ok, Ctx} ->
-            error_logger:info_msg("Spidermonkey VM (thread stack: ~pMB, max heap: ~pMB) host starting (~p)~n",
-                                  [StackSize, HeapSize, self()]),
-            riak_kv_js_manager:add_vm(),
+            error_logger:info_msg("Spidermonkey VM (thread stack: ~pMB, max heap: ~pMB, pool: ~p) host starting (~p)~n",
+                                  [StackSize, HeapSize, PoolName, self()]),
+            riak_kv_js_manager:add_vm(PoolName),
             erlang:monitor(process, Manager),
-            {ok, #state{manager=Manager, ctx=Ctx}};
+            {ok, #state{manager=Manager, pool=PoolName, ctx=Ctx}};
         Error ->
             {stop, Error}
     end.
 
+handle_call(start_batch, _From, State) ->
+    {reply, ok, State#state{in_batch=true}};
+
+handle_call(finish_batch, _From, State) ->
+    NewState = State#state{in_batch=false},
+    maybe_idle(NewState),
+    {reply, ok, NewState};
+
+%% Batch synchronous dispatching
+
+%% Blocking batch reduce phase with anonymous function
+handle_call({batch_dispatch, _JobId, {_Sender, {map, {jsanon, JS}, Reduced, Arg}},
+                                      _Value, _KeyData, _BKey}, _From, State) ->
+    {Reply, UpdatedState} = define_invoke_anon_js(JS, [Reduced, Arg], State),
+    {reply, Reply, UpdatedState};
+%% Blocking batch reduce phase with named function
+handle_call({batch_dispatch, _JobId, {_Sender, {map, {jsfun, JS}, _Reduced, Arg},
+                                      Value, KeyData, _BKey}},
+                                     _From, #state{ctx=Ctx}=State) ->
+    JsonValue = riak_object:to_json(Value),
+    JsonArg = jsonify_arg(Arg),
+    Reply = invoke_js(Ctx, JS, [JsonValue, KeyData, JsonArg]),
+    {reply, Reply, State};
+
+%% Blocking Batch general dispatch function for anonymous function with variable number of arguments
+handle_call({batch_dispatch, {map, {jsanon, Source}, Args}}, _From,
+            State) when is_list(Args) ->
+    {Reply, UpdatedState} = define_invoke_anon_js(Source, Args, State),
+    {reply, Reply, UpdatedState};
+%% Blocking Batch general dispatch function for named function with variable number of arguments
+handle_call({batch_dispatch, {map, {jsfun, JS}, Args}}, _From,
+            #state{ctx=Ctx}=State) when is_list(Args) ->
+    Reply = invoke_js(Ctx, JS, Args),
+    {reply, Reply, State};
+
+%% Non-batch synchronous dispatching
+
 %% Reduce phase with anonymous function
 handle_call({dispatch, _JobId, {{jsanon, JS}, Reduced, Arg}}, _From, State) ->
     {Reply, UpdatedState} = define_invoke_anon_js(JS, [Reduced, Arg], State),
-    riak_kv_js_manager:mark_idle(),
+    maybe_idle(State),
     {reply, Reply, UpdatedState};
 %% Reduce phase with named function
 handle_call({dispatch, _JobId, {{jsfun, JS}, Reduced, Arg}}, _From, #state{ctx=Ctx}=State) ->
     Reply = invoke_js(Ctx, JS, [Reduced, Arg]),
-    riak_kv_js_manager:mark_idle(),
+    maybe_idle(State),
     {reply, Reply, State};
 %% General dispatch function for anonymous function with variable number of arguments
-handle_call({dispatch, _JobId, {{jsanon, Source}, Args}}, _From, 
+handle_call({dispatch, _JobId, {{jsanon, Source}, Args}}, _From,
             State) when is_list(Args) ->
     {Reply, UpdatedState} = define_invoke_anon_js(Source, Args, State),
-    riak_kv_js_manager:mark_idle(),
+    maybe_idle(State),
     {reply, Reply, UpdatedState};
 %% General dispatch function for named function with variable number of arguments
-handle_call({dispatch, _JobId, {{jsfun, JS}, Args}}, _From, 
+handle_call({dispatch, _JobId, {{jsfun, JS}, Args}}, _From,
             #state{ctx=Ctx}=State) when is_list(Args) ->
     Reply = invoke_js(Ctx, JS, Args),
-    riak_kv_js_manager:mark_idle(),
+    maybe_idle(State),
     {reply, Reply, State};
 %% Pre-commit hook with named function
 handle_call({dispatch, _JobId, {{jsfun, JS}, Obj}}, _From, #state{ctx=Ctx}=State) ->
     Reply = invoke_js(Ctx, JS, [riak_object:to_json(Obj)]),
-    riak_kv_js_manager:mark_idle(),
+    maybe_idle(State),
     {reply, Reply, State};
 handle_call(Request, _From, State) ->
     io:format("Request: ~p~n", [Request]),
     {reply, ignore, State}.
 
-handle_cast(reload, #state{ctx=Ctx}=State) ->
+handle_cast(reload, #state{ctx=Ctx, pool=Pool}=State) ->
     init_context(Ctx),
-    error_logger:info_msg("Spidermonkey VM host reloaded (~p)~n", [self()]),
+    error_logger:info_msg("Spidermonkey VM (pool: ~p) host reloaded (~p)~n", [Pool, self()]),
+    {noreply, State};
+
+%% Batch map phase with anonymous function
+handle_cast({batch_dispatch, JobId, {Sender, {map, {jsanon, JS}, Arg, _Acc},
+                                            Value,
+                                            KeyData, _BKey}}, State) ->
+    JsonValue = riak_object:to_json(Value),
+    JsonArg = jsonify_arg(Arg),
+    {Result, UpdatedState} = define_invoke_anon_js(JS, [JsonValue, KeyData, JsonArg], State),
+    FinalState = case Result of
+                     {ok, ReturnValue} ->
+                         Sender ! {mapexec_reply, JobId, ReturnValue},
+                         UpdatedState;
+                     ErrorResult ->
+                         Sender ! {mapexec_error_noretry, JobId, ErrorResult},
+                         State
+                 end,
+    {noreply, FinalState};
+
+%% Batch map phase with named function
+handle_cast({batch_dispatch, JobId, {Sender, {map, {jsfun, JS}, Arg, _Acc},
+                                            Value,
+                                            KeyData, _BKey}}, #state{ctx=Ctx}=State) ->
+    JsonValue = riak_object:to_json(Value),
+    JsonArg = jsonify_arg(Arg),
+    case invoke_js(Ctx, JS, [JsonValue, KeyData, JsonArg]) of
+        {ok, R} ->
+            Sender ! {mapexec_reply, JobId, R};
+        Error ->
+            Sender ! {mapexec_error_noretry, JobId, Error}
+    end,
     {noreply, State};
 
 %% Map phase with anonymous function
@@ -116,7 +199,7 @@ handle_cast({dispatch, _Requestor, JobId, {Sender, {map, {jsanon, JS}, Arg, _Acc
                          riak_core_vnode:send_command(Sender, {mapexec_error_noretry, JobId, ErrorResult}),
                          State
                  end,
-    riak_kv_js_manager:mark_idle(),
+    maybe_idle(State),
     {noreply, FinalState};
 
 %% Map phase with named function
@@ -133,7 +216,7 @@ handle_cast({dispatch, _Requestor, JobId, {Sender, {map, {jsfun, JS}, Arg, _Acc}
         Error ->
             riak_core_vnode:send_command(Sender, {mapexec_error_noretry, JobId, Error})
     end,
-    riak_kv_js_manager:mark_idle(),
+    maybe_idle(State),
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -143,9 +226,9 @@ handle_info({'DOWN', _MRef, _Type, Manager, _Info}, #state{manager=Manager}=Stat
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{ctx=Ctx}) ->
+terminate(_Reason, #state{pool=Pool, ctx=Ctx}) ->
     js_driver:destroy(Ctx),
-    error_logger:info_msg("Spidermonkey VM host stopping (~p)~n", [self()]),
+    error_logger:info_msg("Spidermonkey VM (pool: ~p) host stopping (~p)~n", [Pool, self()]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -261,3 +344,8 @@ read_config(Param, Default) ->
         _ ->
             Default
     end.
+
+maybe_idle(#state{in_batch=false, pool=Pool}) ->
+    riak_kv_js_manager:mark_idle(Pool);
+maybe_idle(#state{in_batch=true}) ->
+    ok.

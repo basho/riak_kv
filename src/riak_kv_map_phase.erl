@@ -21,60 +21,143 @@
 %% -------------------------------------------------------------------
 
 -module(riak_kv_map_phase).
+-author('Kevin Smith <kevin@basho.com>').
+-author('John Muellerleile <johnm@basho.com>').
+
+-include("riak_kv_map_phase.hrl").
 
 -behaviour(luke_phase).
 
 -export([init/1, handle_input/3, handle_input_done/1, handle_event/2,
          handle_sync_event/3, handle_info/2, handle_timeout/1, terminate/2]).
 
--record(state, {done=false, qterm, acc=[], ring, fsms=[]}).
+-record(state, {done=false, qterm, fsms=dict:new(), mapper_data=[]}).
 
 init([QTerm]) ->
+    {ok, #state{qterm=QTerm}}.
+
+handle_input(Inputs0, #state{fsms=FSMs0, qterm=QTerm, mapper_data=MapperData}=State, _Timeout) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    {ok, #state{ring=Ring, qterm=QTerm}}.
-
-handle_input(Inputs0, #state{ring=Ring, qterm=QTerm, fsms=FSMs0}=State, Timeout) ->
-    Inputs = [convert_input(I) || I <- Inputs0],
-    NewFSMs = start_executors(Ring, Inputs, QTerm, Timeout),
-    NewState = State#state{fsms=NewFSMs ++ FSMs0},
-    {no_output, NewState}.
-
-handle_input_done(#state{fsms=[]}=State) ->
-    luke_phase:complete(),
-    {no_output, State};
+    Inputs1 = [build_input(I, Ring) || I <- Inputs0],
+    case length(Inputs1) > 0 of
+        true ->
+            ClaimLists = riak_kv_mapred_planner:plan_map(Inputs1),
+            {NewFSMs, _ClaimLists1, FsmKeys} = schedule_input(Inputs1, ClaimLists, QTerm, FSMs0, State),
+            MapperData1 = MapperData ++ FsmKeys,
+            {no_output, State#state{fsms=NewFSMs, mapper_data=MapperData1}};
+        false ->
+            {no_output, State}
+    end.
 
 handle_input_done(State) ->
-    {no_output, State#state{done=true}}.
+    {no_output, maybe_done(State#state{done=true})}.
 
-handle_event({mapexec_reply, Reply, Executor}, #state{done=Done, fsms=[Executor]}=State) ->
-    if
-        Done =:= true ->
-            luke_phase:complete();
-        true ->
-            ok
+handle_event({register_mapper, Id, MapperPid}, #state{mapper_data=MapperData}=State) ->
+    MapperData0 = case lists:keyfind(Id, 1, MapperData) of
+        {Id, MapperProps} -> lists:keyreplace(Id, 1, MapperData, {Id, MapperProps ++ [{pid, MapperPid}]});
+        false -> MapperData
     end,
-    {output, Reply, State#state{fsms=[]}};
-handle_event({mapexec_reply, Reply, Executor}, #state{fsms=FSMs0}=State) ->
-    FSMs = lists:delete(Executor, FSMs0),
-    {output, Reply, State#state{fsms=FSMs}};
+    MapperData1 = MapperData0 ++ [{MapperPid, Id}],
+    erlang:monitor(process, MapperPid),
+    {no_output, State#state{mapper_data=MapperData1}};
+
+handle_event({mapexec_reply, VNode, BKey, Reply, Executor}, #state{fsms=FSMs, mapper_data=MapperData}=State) ->
+    case dict:find(Executor, FSMs) of
+        error ->
+            % node retry case will produce dictionary miss
+            {no_output, maybe_done(State)};
+        {ok, _V} ->
+            FSMs1 = update_counter(Executor, FSMs),
+            MapperData1 = update_inputs(Executor, VNode, BKey, MapperData),
+            {output, Reply, maybe_done(State#state{fsms=FSMs1, mapper_data=MapperData1})}
+    end;
+
 handle_event({mapexec_error, _Executor, Reply}, State) ->
-    {stop, Reply, State#state{ring=none, fsms=none, acc=none}};
+    %{no_output, State};
+    {stop, Reply, State#state{fsms=[]}};
 handle_event(_Event, State) ->
+    {no_output, State}.
+
+handle_info({'DOWN', Ref, process, Pid, _Reason}, #state{mapper_data=MapperData, fsms=FSMs, qterm=QTerm}=State) ->
+    erlang:demonitor(Ref, [flush]),
+    case lists:keyfind(Pid, 1, MapperData) of
+        {Pid, Id} ->
+            case lists:keyfind(Id, 1, MapperData) of
+                {Id, MapperProps} ->
+                    {keys, {VNode, Keys}} = lists:keyfind(keys, 1, MapperProps),
+                    case length(Keys) of
+                        0 ->
+                            MapperData1 = lists:keydelete(Id, 1, lists:keydelete(Pid, 1, MapperData)),
+                            {no_output, maybe_done(State#state{mapper_data=MapperData1})};
+                        _C ->
+                            try
+                                {_Partition, BadNode} = VNode,
+                                NewKeys = prune_inputs(Keys, BadNode),
+                                ClaimLists = riak_kv_mapred_planner:plan_map(NewKeys),
+                                {NewFSMs, _ClaimLists1, FsmKeys} = schedule_input(NewKeys, ClaimLists, QTerm, FSMs, State),
+                                MapperData1 = lists:keydelete(Id, 1, lists:keydelete(Pid, 1, MapperData ++ FsmKeys)),
+                                {no_output, maybe_done(State#state{mapper_data=MapperData1, fsms=NewFSMs})}
+                            catch
+                                _C:Error ->
+                                    {stop, {error, {no_candidate_nodes, Error, erlang:get_stacktrace(), MapperData}}, State}
+                            end
+                    end;
+                false ->
+                    MapperData1 = lists:keydelete(Pid, 1, MapperData),
+                    {no_output, maybe_done(State#state{mapper_data=MapperData1})}
+            end;
+        false ->
+            {stop, {error, {dead_mapper, erlang:get_stacktrace(), MapperData}}, State}
+    end;
+
+handle_info(_Info, State) ->
     {no_output, State}.
 
 handle_sync_event(_Event, _From, State) ->
     {reply, ignored, State}.
 
-handle_info(_Info, State) ->
-    {no_output, State}.
-
 handle_timeout(State) ->
     {no_output, State}.
 
 terminate(_Reason, _State) ->
-    ok.
+    _Reason.
 
 %% Internal functions
+
+schedule_input(Inputs1, ClaimLists, QTerm, FSMs0, State) ->
+    try
+        {FSMs1, FsmKeys} = start_mappers(ClaimLists, QTerm, FSMs0, []),
+        {FSMs1, ClaimLists, FsmKeys}
+    catch
+        exit:{{nodedown, Node}, _} ->
+            Inputs2 = prune_inputs(Inputs1, Node),
+            ClaimLists2 = riak_kv_mapred_planner:plan_map(Inputs2),
+            schedule_input(Inputs2, ClaimLists2, QTerm, FSMs0, State);
+        Error ->
+            throw(Error)
+    end.
+
+prune_inputs(Inputs, BadNode) ->
+    prune_inputs(Inputs, BadNode, []).
+prune_inputs([], _BadNode, NewInputs) ->
+    NewInputs;
+prune_inputs([Input|T], BadNode, NewInputs) ->
+    #riak_kv_map_input{preflist=Targets} = Input,
+    Targets2 = lists:keydelete(BadNode, 2, Targets),
+    prune_inputs(T, BadNode, [Input#riak_kv_map_input{preflist=Targets2}|NewInputs]).
+
+build_input(I, Ring) ->
+    {{Bucket, Key}, KD} = convert_input(I),
+    Props = riak_core_bucket:get_bucket(Bucket, Ring),
+    {value, {_, NVal}} = lists:keysearch(n_val, 1, Props),
+    Idx = riak_core_util:chash_key({Bucket, Key}),
+    PL = riak_core_ring:preflist(Idx, Ring),
+    {Targets, _} = lists:split(NVal, PL),
+    #riak_kv_map_input{bkey={Bucket, Key},
+                       bprops=Props,
+                       kd=KD,
+                       preflist=Targets}.
+
 convert_input(I={{_B,_K},_D})
   when is_binary(_B) andalso (is_list(_K) orelse is_binary(_K)) -> I;
 convert_input(I={_B,_K})
@@ -89,16 +172,61 @@ convert_input({not_found, {Bucket, Key}, KD}) ->
     {{Bucket, Key}, KD};
 convert_input(I) -> I.
 
-start_executors(Ring, Inputs, QTerm, Timeout) ->
-    start_executors(Ring, Inputs, QTerm, Timeout, []).
-start_executors(_Ring, [], _QTerm, _Timeout, Accum) ->
-    lists:reverse(Accum);
-start_executors(Ring, [H|T], QTerm, Timeout, Accum) ->
-    case riak_kv_map_executor:start_link(Ring, H, QTerm, Timeout, self()) of
+start_mappers([], _QTerm, Accum, FsmKeys) ->
+    {Accum, FsmKeys};
+%% TODO Figure out why we're getting zero-key partitions
+%%      from the planner. We shouldn't need this clause, IMHO.
+start_mappers([{_Partition, []}|T], QTerm, Accum, FsmKeys) ->
+    start_mappers(T, QTerm, Accum, FsmKeys);
+start_mappers([{Partition, Inputs}|T], QTerm, Accum, FsmKeys) ->
+    case riak_kv_map_master:new_mapper(Partition, QTerm, Inputs, self()) of
         {ok, FSM} ->
-            start_executors(Ring, T, QTerm, Timeout, [FSM|Accum]);
-        {error, no_vnodes} ->
-            throw({error, no_vnodes});
-        {error, bad_input} ->
-            throw({error, bad_input})
+            %%log_event(start_mapper, [FSM]),
+            Accum1 = dict:store(FSM, length(Inputs), Accum),
+            start_mappers(T, QTerm, Accum1, FsmKeys ++ [{FSM, [{keys, {Partition, Inputs}}]}]);
+        Error ->
+            throw(Error)
     end.
+
+update_counter(Executor, FSMs) ->
+    case dict:find(Executor, FSMs) of
+        {ok, 1} ->
+            %%log_event(mapper_complete, [Executor]),
+            dict:erase(Executor, FSMs);
+        {ok, _C} ->
+            %%log_event(mapper_reply, [Executor, C - 1]),
+            dict:update_counter(Executor, -1, FSMs)
+    end.
+
+maybe_done(#state{done=Done, fsms=FSMs, mapper_data=MapperData}=State) ->
+    case Done =:= true andalso dict:size(FSMs) == 0 andalso MapperData == [] of
+        true ->
+            luke_phase:complete();
+        false -> ok
+    end,
+    State.
+
+update_inputs(Id, VNode, BKey, MapperData) ->
+    case lists:keyfind(Id, 1, MapperData) of
+        {Id, MapperProps} ->
+            case lists:keyfind(keys, 1, MapperProps) of
+                {keys, {VNode, Keys}} ->
+                    MapperProps1 = lists:keyreplace(keys, 1, MapperProps,
+                                     {keys, {VNode, lists:keydelete(BKey, 2, Keys)}}),
+                    lists:keyreplace(Id, 1, MapperData, {Id, MapperProps1});
+                false -> throw(bad_mapper_props_no_keys)
+            end;
+        false -> throw(bad_mapper_props_no_id)
+    end.
+
+%% log_event(Event, Args) ->
+%%     Template0 = lists:flatten(["~p," || _X <- lists:seq(1, length(Args) + 2)]),
+%%     Template = string:left(Template0, length(Template0) - 1) ++ "\n",
+%%     Msg = io_lib:format(Template, [timestamp(), Event] ++ Args),
+%%     file:write_file("/tmp/riak_kv_map_phase.csv", Msg, [append]).
+
+%% timestamp() ->
+%%     TS = {_,_,Micro} = os:timestamp(),
+%%     {{Year,Month,Day},{Hour,Minute,Second}} = calendar:now_to_universal_time(TS),
+%%     Mstr = element(Month,{"Jan","Feb","Mar","Apr","May","Jun","Jul", "Aug","Sep","Oct","Nov","Dec"}),
+%%     lists:flatten(io_lib:format("~2w ~s ~4w ~2w:~2..0w:~2..0w.~6..0w", [Day,Mstr,Year,Hour,Minute,Second,Micro])).

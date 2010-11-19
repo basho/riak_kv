@@ -335,7 +335,7 @@ invoke_hook(precommit, Mod0, Fun0, undefined, RObj) ->
     Fun = binary_to_atom(Fun0, utf8),
     wrap_hook(Mod, Fun, RObj);
 invoke_hook(precommit, undefined, undefined, JSName, RObj) ->
-    case riak_kv_js_manager:blocking_dispatch({{jsfun, JSName}, RObj}, 5) of
+    case riak_kv_js_manager:blocking_dispatch(riak_kv_js_hook, {{jsfun, JSName}, RObj}, 5) of
         {ok, <<"fail">>} ->
             fail;
         {ok, [{<<"fail">>, Message}]} ->
