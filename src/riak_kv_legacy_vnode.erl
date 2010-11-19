@@ -189,24 +189,6 @@ legacy_kv_test_() ->
                 100 ->
                     ?assert(false)
             end
-        end)},
-       {"map", ?_test(
-        begin
-            FunTerm = {qfun, fun(Obj, _KeyData, _Arg) -> Obj end},
-            Arg = arg, 
-            QTerm = {erlang, {map, FunTerm, Arg, acc}},
-            KeyData = keydata,
-
-            BKey = {<<"bucket">>,<<"notakey">>},
-            send_0_11_0_cmd(vnode_map, {self(),QTerm,BKey,KeyData}),
-            receive
-                Msg ->
-                    {'$gen_event',{mapexec_reply, Result,_Pid}} = Msg,
-                    ?assertEqual({error, notfound}, Result)
-            after
-                100 ->
-                    ?assert(false)
-            end
         end)}]
      }}.
 

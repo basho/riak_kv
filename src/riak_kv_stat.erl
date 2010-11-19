@@ -155,7 +155,7 @@
                node_gets_total, node_puts_total,
                get_fsm_time,put_fsm_time,
                pbc_connects,pbc_connects_total,pbc_active,read_repairs,
-               read_repairs_total}).
+               read_repairs_total, mapper_count}).
 
 %% @spec start_link() -> {ok,Pid} | ignore | {error,Error}
 %% @doc Start the server.  Also start the os_mon application, if it's
@@ -192,7 +192,8 @@ init([]) ->
                 pbc_connects_total=0,
                 pbc_active=0,
                 read_repairs=spiraltime:fresh(),
-                read_repairs_total=0}}.
+                read_repairs_total=0,
+                mapper_count=0}}.
 
 %% @private
 handle_call(get_stats, _From, State) ->
@@ -234,12 +235,16 @@ update({get_fsm_time, Microsecs}, Moment, State=#state{node_gets_total=NGT}) ->
 update({put_fsm_time, Microsecs}, Moment, State=#state{node_puts_total=NPT}) ->
     slide_incr(#state.put_fsm_time, Microsecs, Moment, State#state{node_puts_total=NPT+1});
 update(pbc_connect, Moment, State=#state{pbc_connects_total=NCT, pbc_active=Active}) ->
-    spiral_incr(#state.pbc_connects, Moment, State#state{pbc_connects_total=NCT+1, 
+    spiral_incr(#state.pbc_connects, Moment, State#state{pbc_connects_total=NCT+1,
                                                          pbc_active=Active+1});
 update(pbc_disconnect, _Moment, State=#state{pbc_active=Active}) ->
     State#state{pbc_active=decrzero(Active)};
 update(read_repairs, Moment, State=#state{read_repairs_total=RRT}) ->
     spiral_incr(#state.read_repairs, Moment, State#state{read_repairs_total=RRT+1});
+update(mapper_start, _Moment, State=#state{mapper_count=Count0}) ->
+    State#state{mapper_count=Count0 + 1};
+update(mapper_end, _Moment, State=#state{mapper_count=Count0}) ->
+    State#state{mapper_count=decrzero(Count0)};
 update(_, _, State) ->
     State.
 
@@ -278,7 +283,8 @@ produce_stats(State) ->
        ring_stats(),
        config_stats(),
        pbc_stats(Moment, State),
-       app_stats()
+       app_stats(),
+       mapper_stats(State)
       ]).
 
 %% @spec spiral_minute(integer(), integer(), state()) -> integer()
@@ -313,14 +319,14 @@ vnode_stats(Moment, State=#state{vnode_gets_total=VGT, vnode_puts_total=VPT}) ->
        || {F, Elt} <- [{vnode_gets, #state.vnode_gets},
                        {vnode_puts, #state.vnode_puts},
                        {read_repairs,#state.read_repairs}]],
-      [{vnode_gets_total, VGT}, 
+      [{vnode_gets_total, VGT},
        {vnode_puts_total, VPT}]).
-          
+
 
 
 %% @spec node_stats(integer(), state()) -> proplist()
 %% @doc Get the node stats proplist.
-node_stats(Moment, State=#state{node_gets_total=NGT, 
+node_stats(Moment, State=#state{node_gets_total=NGT,
                                 node_puts_total=NPT,
                                 read_repairs_total=RRT}) ->
     {Gets, GetMean, {GetMedian, GetNF, GetNN, GetH}} =
@@ -383,7 +389,7 @@ system_stats() ->
      {sys_wordsize, erlang:system_info(wordsize)}].
 
 app_stats() ->
-    [{list_to_atom(atom_to_list(A) ++ "_version"), list_to_binary(V)} 
+    [{list_to_atom(atom_to_list(A) ++ "_version"), list_to_binary(V)}
      || {A,_,V} <- application:which_applications()].
 
 ring_stats() ->
@@ -391,19 +397,22 @@ ring_stats() ->
     [{ring_members, riak_core_ring:all_members(R)},
      {ring_num_partitions, riak_core_ring:num_partitions(R)},
      {ring_ownership, list_to_binary(lists:flatten(io_lib:format("~p", [dict:to_list(
-                        lists:foldl(fun({_P, N}, Acc) -> 
-                                            case dict:find(N, Acc) of 
+                        lists:foldl(fun({_P, N}, Acc) ->
+                                            case dict:find(N, Acc) of
                                                 {ok, V} ->
                                                     dict:store(N, V+1, Acc);
                                                 error ->
                                                     dict:store(N, 1, Acc)
                                             end
                                     end, dict:new(), riak_core_ring:all_owners(R)))])))}].
-                                          
+
 
 config_stats() ->
     [{ring_creation_size, app_helper:get_env(riak_core, ring_creation_size)},
      {storage_backend, app_helper:get_env(riak_kv, storage_backend)}].
+
+mapper_stats(#state{mapper_count=Count}) ->
+    [{executing_mappers, Count}].
 
 %% @spec pbc_stats(integer(), state()) -> proplist()
 %% @doc Get stats on the disk, as given by the disksup module

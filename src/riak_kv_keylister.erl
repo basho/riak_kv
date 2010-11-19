@@ -39,6 +39,7 @@
 -record(state, {reqid,
                 caller,
                 bucket,
+                filter,
                 bloom}).
 
 list_keys(ListerPid, VNode) ->
@@ -47,10 +48,12 @@ list_keys(ListerPid, VNode) ->
 start_link(ReqId, Caller, Bucket) ->
     gen_fsm:start_link(?MODULE, [ReqId, Caller, Bucket], []).
 
-init([ReqId, Caller, Bucket]) ->
+init([ReqId, Caller, Inputs]) ->
     erlang:monitor(process, Caller),
     {ok, Bloom} = ebloom:new(10000000, 0.0001, crypto:rand_uniform(1, 5000)),
-    {ok, waiting, #state{reqid=ReqId, caller=Caller, bloom=Bloom, bucket=Bucket}}.
+    {Bucket, Filter} = build_filter(Inputs),
+    {ok, waiting, #state{reqid=ReqId, caller=Caller, bloom=Bloom, bucket=Bucket,
+                         filter=Filter}}.
 
 waiting({lk, VNode}, #state{reqid=ReqId, bucket=Bucket}=State) ->
     riak_kv_vnode:list_keys(VNode, ReqId, self(), Bucket),
@@ -69,15 +72,24 @@ handle_sync_event(_Event, _From, StateName, State) ->
     {reply, ignored, StateName, State}.
 
 handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{reqid=ReqId, bloom=Bloom,
-                                                       caller=Caller}=State) ->
+                                                       filter=Filter, caller=Caller}=State) ->
     F = fun(Key, Acc) ->
                 case ebloom:contains(Bloom, Key) of
                     true ->
                         Acc;
                     false ->
-                        ebloom:insert(Bloom, Key),
-                        [Key|Acc]
-                end end,
+                        case is_function(Filter) of
+                            true ->
+                                case Filter(Key) of
+                                    true ->
+                                        ebloom:insert(Bloom, Key),
+                                        [Key|Acc];
+                                    false ->
+                                        Acc
+                                end;
+                            false ->
+                                [Key|Acc]
+                        end end end,
     case lists:foldl(F, [], Keys0) of
         [] ->
             ok;
@@ -101,3 +113,8 @@ code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
 %% Internal functions
+build_filter(Bucket) when is_binary(Bucket) ->
+    {Bucket, []};
+build_filter({Bucket, Filters}) ->
+    FilterFun = riak_kv_mapred_filters:compose(Filters),
+    {Bucket, FilterFun}.
