@@ -54,7 +54,7 @@ handle_input_done(State) ->
 
 handle_event({register_mapper, Id, MapperPid}, #state{mapper_data=MapperData}=State) ->
     MapperData0 = case lists:keyfind(Id, 1, MapperData) of
-        {Id, MapperProps} -> lists:keyreplace(Id, 1, MapperData, {Id, MapperProps ++ [{pid, MapperPid}]});
+        {Id, MapperProps} -> lists:keyreplace(Id, 1, MapperData, {Id, [{pid, MapperPid}|MapperProps]});
         false -> MapperData
     end,
     MapperData1 = MapperData0 ++ [{MapperPid, Id}],
@@ -174,14 +174,9 @@ convert_input(I) -> I.
 
 start_mappers([], _QTerm, Accum, FsmKeys) ->
     {Accum, FsmKeys};
-%% TODO Figure out why we're getting zero-key partitions
-%%      from the planner. We shouldn't need this clause, IMHO.
-start_mappers([{_Partition, []}|T], QTerm, Accum, FsmKeys) ->
-    start_mappers(T, QTerm, Accum, FsmKeys);
 start_mappers([{Partition, Inputs}|T], QTerm, Accum, FsmKeys) ->
     case riak_kv_map_master:new_mapper(Partition, QTerm, Inputs, self()) of
         {ok, FSM} ->
-            %%log_event(start_mapper, [FSM]),
             Accum1 = dict:store(FSM, length(Inputs), Accum),
             start_mappers(T, QTerm, Accum1, FsmKeys ++ [{FSM, [{keys, {Partition, Inputs}}]}]);
         Error ->
@@ -191,10 +186,8 @@ start_mappers([{Partition, Inputs}|T], QTerm, Accum, FsmKeys) ->
 update_counter(Executor, FSMs) ->
     case dict:find(Executor, FSMs) of
         {ok, 1} ->
-            %%log_event(mapper_complete, [Executor]),
             dict:erase(Executor, FSMs);
         {ok, _C} ->
-            %%log_event(mapper_reply, [Executor, C - 1]),
             dict:update_counter(Executor, -1, FSMs)
     end.
 
@@ -218,15 +211,3 @@ update_inputs(Id, VNode, BKey, MapperData) ->
             end;
         false -> throw(bad_mapper_props_no_id)
     end.
-
-%% log_event(Event, Args) ->
-%%     Template0 = lists:flatten(["~p," || _X <- lists:seq(1, length(Args) + 2)]),
-%%     Template = string:left(Template0, length(Template0) - 1) ++ "\n",
-%%     Msg = io_lib:format(Template, [timestamp(), Event] ++ Args),
-%%     file:write_file("/tmp/riak_kv_map_phase.csv", Msg, [append]).
-
-%% timestamp() ->
-%%     TS = {_,_,Micro} = os:timestamp(),
-%%     {{Year,Month,Day},{Hour,Minute,Second}} = calendar:now_to_universal_time(TS),
-%%     Mstr = element(Month,{"Jan","Feb","Mar","Apr","May","Jun","Jul", "Aug","Sep","Oct","Nov","Dec"}),
-%%     lists:flatten(io_lib:format("~2w ~s ~4w ~2w:~2..0w:~2..0w.~6..0w", [Day,Mstr,Year,Hour,Minute,Second,Micro])).
