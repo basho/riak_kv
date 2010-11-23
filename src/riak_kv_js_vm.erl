@@ -90,12 +90,13 @@ handle_call(finish_batch, _From, State) ->
 
 %% Batch synchronous dispatching
 
-%% Blocking batch reduce phase with anonymous function
+%% Blocking batch map phase with named function
 handle_call({batch_dispatch, _JobId, {_Sender, {map, {jsanon, JS}, Reduced, Arg}},
                                       _Value, _KeyData, _BKey}, _From, State) ->
     {Reply, UpdatedState} = define_invoke_anon_js(JS, [Reduced, Arg], State),
     {reply, Reply, UpdatedState};
-%% Blocking batch reduce phase with named function
+
+%% Blocking batch map phase with named function
 handle_call({batch_dispatch, _JobId, {_Sender, {map, {jsfun, JS}, _Reduced, Arg},
                                       Value, KeyData, _BKey}},
                                      _From, #state{ctx=Ctx}=State) ->
