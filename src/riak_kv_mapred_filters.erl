@@ -62,29 +62,27 @@ int_to_string(_) ->
     fun(V) -> list_to_binary(integer_to_list(V)) end.
 
 string_to_int(_) ->
-    fun(V) -> list_to_integer(riak_kv_mapred_filters:to_string(V)) end.
+    fun(V) -> list_to_integer(to_string(V)) end.
 
 float_to_string(_) ->
     fun(V) -> list_to_binary(float_to_list(V)) end.
 
 string_to_float(_) ->
-    fun(V) -> list_to_float(riak_kv_mapred_filters:to_string(V)) end.
+    fun(V) -> list_to_float(to_string(V)) end.
 
 to_upper(_) ->
-    fun(V) -> string:to_upper(riak_kv_mapred_filters:to_string(V)) end.
+    fun(V) -> string:to_upper(to_string(V)) end.
 
 to_lower(_) ->
-    fun(V) -> string:to_lower(riak_kv_mapred_filters:to_string(V)) end.
+    fun(V) -> string:to_lower(to_string(V)) end.
 
 tokenize(Args) ->
     Seps = riak_kv_mapred_filters:to_string(lists:nth(1, Args)),
     TokenNum = lists:nth(2, Args),
-    fun(V) -> list_to_binary(lists:nth(TokenNum, string:tokens(
-        riak_kv_mapred_filters:to_string(V), Seps))) end.
+    fun(V) -> list_to_binary(lists:nth(TokenNum, string:tokens(to_string(V), Seps))) end.
 
 urldecode(_) ->
-    fun(V) -> {_, V1} = hd(mochiweb_util:parse_qs("x=" ++
-        riak_kv_mapred_filters:to_string(V))), V1 end.
+    fun(V) -> {_, V1} = hd(mochiweb_util:parse_qs("x=" ++ to_string(V))), V1 end.
 
 %% Filter functions
 
