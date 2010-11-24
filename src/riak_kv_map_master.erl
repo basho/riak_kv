@@ -21,6 +21,7 @@
 %% -------------------------------------------------------------------
 
 -module(riak_kv_map_master).
+-include_lib("riak_kv_js_pools.hrl").
 
 -behaviour(gen_server2).
 
@@ -77,7 +78,7 @@ handle_call({new_mapper, VNode, {erlang, _}=QTerm, MapInputs, PhasePid}, _From, 
     {reply, {ok, Id}, State};
 
 handle_call({new_mapper, VNode, {javascript, _}=QTerm, MapInputs, PhasePid}, _From, State) ->
-    case riak_kv_js_manager:pool_size(riak_kv_js_map) > 0 of
+    case riak_kv_js_manager:pool_size(?JSPOOL_MAP) > 0 of
         true ->
             Id = make_id(),
             {ok, Pid} = riak_kv_mapper_sup:new_mapper(VNode, Id, QTerm,
@@ -146,7 +147,7 @@ dequeue_mapper(State) ->
                 true ->
                     #mapper{vnode=VNode, qterm=QTerm,
                             inputs=MapInputs, phase=Phase} = Mapper,
-                    case riak_kv_js_manager:pool_size(riak_kv_js_map) > 0 of
+                    case riak_kv_js_manager:pool_size(?JSPOOL_MAP) > 0 of
                         true ->
                             {ok, Pid} = riak_kv_mapper_sup:new_mapper(VNode, {Id, node()}, QTerm,
                                                                       MapInputs, Phase),

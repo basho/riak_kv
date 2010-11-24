@@ -23,7 +23,8 @@
 
 -behaviour(gen_fsm).
 
--include("riak_kv_map_phase.hrl").
+-include_lib("riak_kv_map_phase.hrl").
+-include_lib("riak_kv_js_pools.hrl").
 
 -define(READ_TIMEOUT, 30000).
 
@@ -160,7 +161,7 @@ fetch_data(#state{inputs=Inputs, reqid=ReqId,
 reserve_jsvm({erlang, _}) ->
     {ok, undefined};
 reserve_jsvm({javascript, _}) ->
-    riak_kv_js_manager:reserve_batch_vm(riak_kv_js_map, 10).
+    riak_kv_js_manager:reserve_batch_vm(?JSPOOL_MAP, 10).
 
 release_jsvm(undefined) ->
     ok;

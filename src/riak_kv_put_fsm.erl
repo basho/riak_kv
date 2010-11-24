@@ -25,6 +25,8 @@
 -module(riak_kv_put_fsm).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("riak_kv_vnode.hrl").
+-include_lib("riak_kv_js_pools.hrl").
+
 -behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}]).
 -export([start/6,start/7]).
@@ -335,7 +337,7 @@ invoke_hook(precommit, Mod0, Fun0, undefined, RObj) ->
     Fun = binary_to_atom(Fun0, utf8),
     wrap_hook(Mod, Fun, RObj);
 invoke_hook(precommit, undefined, undefined, JSName, RObj) ->
-    case riak_kv_js_manager:blocking_dispatch(riak_kv_js_hook, {{jsfun, JSName}, RObj}, 5) of
+    case riak_kv_js_manager:blocking_dispatch(?JSPOOL_HOOK, {{jsfun, JSName}, RObj}, 5) of
         {ok, <<"fail">>} ->
             fail;
         {ok, [{<<"fail">>, Message}]} ->

@@ -24,6 +24,8 @@
 
 -module(riak_kv_sup).
 
+-include_lib("riak_kv_js_pools.hrl").
+
 -behaviour(supervisor).
 
 -export([start_link/0]).
@@ -53,17 +55,17 @@ init([]) ->
     RiakStat = {riak_kv_stat,
                 {riak_kv_stat, start_link, []},
                 permanent, 5000, worker, [riak_kv_stat]},
-    MapJSPool = {riak_kv_js_map,
+    MapJSPool = {?JSPOOL_MAP,
                  {riak_kv_js_manager, start_link,
-                  [riak_kv_js_map, app_helper:get_env(riak_kv, map_js_vm_count, 0)]},
+                  [?JSPOOL_MAP, app_helper:get_env(riak_kv, map_js_vm_count, 0)]},
                  permanent, 30000, worker, [riak_kv_js_manager]},
-    ReduceJSPool = {riak_kv_js_reduce,
+    ReduceJSPool = {?JSPOOL_REDUCE,
                     {riak_kv_js_manager, start_link,
-                     [riak_kv_js_reduce, app_helper:get_env(riak_kv, reduce_js_vm_count, 0)]},
+                     [?JSPOOL_REDUCE, app_helper:get_env(riak_kv, reduce_js_vm_count, 0)]},
                     permanent, 30000, worker, [riak_kv_js_manager]},
-    HookJSPool = {riak_kv_js_hook,
+    HookJSPool = {?JSPOOL_HOOK,
                   {riak_kv_js_manager, start_link,
-                  [riak_kv_js_hook, app_helper:get_env(riak_kv, hook_js_vm_count, 0)]},
+                  [?JSPOOL_HOOK, app_helper:get_env(riak_kv, hook_js_vm_count, 0)]},
                   permanent, 30000, worker, [riak_kv_js_manager]},
     JSSup = {riak_kv_js_sup,
              {riak_kv_js_sup, start_link, []},
