@@ -23,7 +23,9 @@
 %% @doc coordination of Riak PUT requests
 
 -module(riak_kv_put_fsm).
+%-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+%-endif.
 -include_lib("riak_kv_vnode.hrl").
 -behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}]).

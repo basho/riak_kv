@@ -45,7 +45,9 @@
          reduce_sum/2,
          reduce_plist_sum/2]).
 
+%-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+%-endif.
 
 %%
 %% Map Phases

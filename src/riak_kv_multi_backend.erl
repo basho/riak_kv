@@ -24,7 +24,9 @@
 -behavior(riak_kv_backend).
 -export([start/2, stop/1,get/2,put/3,list/1,list_bucket/2,delete/2,is_empty/1,drop/1,fold/3]).
 -export([callback/3]).
+-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-endif.
 
 -record (state, {backends, default_backend}).
 
