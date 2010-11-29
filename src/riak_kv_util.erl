@@ -65,7 +65,7 @@ obj_not_deleted(Obj) ->
         _ -> Obj
     end.
 
-%% @spec try_cast(term(), term(), [node()], [{Index :: term(), Node :: node()}]) ->
+%% @spec try_cast(term(), [node()], [{Index :: term(), Node :: node()}]) ->
 %%          {[{Index :: term(), Node :: node(), Node :: node()}],
 %%           [{Index :: term(), Node :: node()}]}
 %% @doc Cast {Cmd, {Index,Node}, Msg} at riak_kv_vnode_master on Node

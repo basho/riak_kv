@@ -292,7 +292,7 @@ put(RObj, W, DW, Timeout, Options) ->
     spawn(Node, riak_kv_put_fsm, start, [ReqId,R0,W,DW,Timeout,Me,Options]),
     wait_for_reqid(ReqId, Timeout).
 
-%% @spec delete(riak_object:bucket(), riak_object:key(), RW :: integer()) ->
+%% @spec delete(riak_object:bucket(), riak_object:key()) ->
 %%        ok |
 %%       {error, too_many_fails} |
 %%       {error, notfound} |

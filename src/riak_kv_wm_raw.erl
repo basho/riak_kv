@@ -1164,7 +1164,7 @@ add_container_link(RD, #ctx{prefix=Prefix, bucket=Bucket}) ->
     Val = format_link(Prefix, Bucket),
     wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
 
-%% @spec add_bucket_link(reqdata(), context()) -> reqdata()
+%% @spec add_bucket_link(binary(), reqdata(), context()) -> reqdata()
 %% @doc Add the Link header pointing to a bucket
 add_bucket_link(Bucket, RD, #ctx{prefix=Prefix}) ->
     Val = format_link(Prefix, Bucket, "contained"),
