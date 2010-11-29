@@ -400,7 +400,6 @@ simple_test() ->
     riak_kv_backend:standard_test(?MODULE, []).
     
 -ifdef(EQC).
-%% @private
 eqc_test() ->
     ?assertEqual(true, backend_eqc:test(?MODULE, true)).
 

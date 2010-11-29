@@ -180,12 +180,10 @@ srv_fold1({K,V,Iter}, Fun0, Acc) ->
 %%
 -ifdef(TEST).
 
-% @private
 simple_test() ->
     riak_kv_backend:standard_test(?MODULE, []).
 
 -ifdef(EQC).
-%% @private
 eqc_test() ->
     ?assertEqual(true, backend_eqc:test(?MODULE, true)).
 

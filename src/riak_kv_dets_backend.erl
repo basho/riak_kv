@@ -119,12 +119,11 @@ drop(#state{table=T, path=P}) ->
 callback(_State, _Ref, _Msg) ->
     ok.
 
+-ifdef(TEST).
 %%
 %% Test
 %%
--ifdef(TEST).
 
-% @private
 simple_test() ->
     ?assertCmd("rm -rf test/dets-backend"),
     Config = [{riak_kv_dets_backend_root, "test/dets-backend"}],
@@ -132,12 +131,10 @@ simple_test() ->
 
 -ifdef(EQC).
 
-%% @private
 eqc_test_() ->
     {timeout, 60,
      [{"eqc test", ?_test(eqc_test_inner())}]}.
 
-%% @private
 eqc_test_inner() ->
     Cleanup = 
         fun(State, OldS) ->
