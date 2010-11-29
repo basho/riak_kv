@@ -113,6 +113,8 @@ code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
 %% Internal functions
+build_filter('_') ->
+    {'_', []};
 build_filter(Bucket) when is_binary(Bucket) ->
     {Bucket, []};
 build_filter({Bucket, Filters}) ->
