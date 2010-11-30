@@ -207,7 +207,8 @@ update_inputs(Id, VNode, BKey, MapperData) ->
                     MapperProps1 = lists:keyreplace(keys, 1, MapperProps,
                                      {keys, {VNode, lists:keydelete(BKey, 2, Keys)}}),
                     lists:keyreplace(Id, 1, MapperData, {Id, MapperProps1});
-                false -> throw(bad_mapper_props_no_keys)
+                false -> throw(bad_mapper_props_no_keys);
+                _ -> ok
             end;
         false -> throw(bad_mapper_props_no_id)
     end.
