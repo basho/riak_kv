@@ -32,7 +32,9 @@
          join/1]).
 -export([code_hash/0]).
 
+-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-endif.
 
 
 %% @spec stop() -> ok

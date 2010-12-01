@@ -23,7 +23,9 @@
 %% @doc container for Riak data and metadata
 
 -module(riak_object).
+-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-endif.
 -include("riak_kv_wm_raw.hrl").
 
 -type key() :: binary().
