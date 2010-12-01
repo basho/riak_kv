@@ -55,15 +55,23 @@ remove_node(Node) when is_atom(Node) ->
     io:format("~p\n", [Res]).
 
 status([]) ->
+    status2(true);
+status(quiet) ->                                % Used by riak_kv_cinfo
+    status2(false).
+
+status2(Verbose) ->
     case whereis(riak_kv_stat) of
         undefined ->
-            io:format("riak_kv_stat is not enabled.~n");
+            verbose(Verbose, "riak_kv_stat is not enabled.~n", []),
+            not_enabled;
         _ ->
+            Stats = riak_kv_stat:get_stats(),
             StatString =
-                format_stats(riak_kv_stat:get_stats(), 
+                format_stats(Stats, 
                              ["-------------------------------------------\n",
                               io_lib:format("1-minute stats for ~p~n",[node()])]),
-            io:format("~s~n", [StatString])
+            verbose(Verbose, "~s~n", [StatString]),
+            Stats
     end.
 
 reip([OldNode, NewNode]) ->
@@ -81,31 +89,49 @@ reip([OldNode, NewNode]) ->
 
 %% Check if all nodes in the cluster agree on the partition assignment
 ringready([]) ->
-    case get_rings() of
-        {[], Rings} ->
-            {N1,R1}=hd(Rings),
-            case rings_match(hash_ring(R1), tl(Rings)) of
-                true ->
-                    Nodes = [N || {N,_} <- Rings],
-                    io:format("TRUE All nodes agree on the ring ~p\n", [Nodes]);
-                {false, N2} ->
-                    io:format("FALSE Node ~p and ~p list different partition owners\n", [N1, N2]),
-                    false % make nodetool exit 1
-            end;
-        {Down, _Rings} ->
-            io:format("FALSE ~p down.  All nodes need to be up to check.\n", [Down]),
-            false % make nodetool exit 1
-   end.
+    ringready2(true);
+ringready(quiet) ->                                % Used by riak_kv_cinfo
+    ringready2(false).
+
+ringready2(Verbose) ->
+    {Res, Extra} = 
+        case get_rings() of
+            {[], Rings} ->
+                {N1,R1}=hd(Rings),
+                case rings_match(hash_ring(R1), tl(Rings)) of
+                    true ->
+                        Nodes = [N || {N,_} <- Rings],
+                        verbose(Verbose, "TRUE All nodes agree on the ring ~p\n", [Nodes]),
+                        {true, {true, all_agree, Nodes}};
+                    {false, N2} ->
+                        verbose(Verbose, "FALSE Node ~p and ~p list different partition owners\n", [N1, N2]),
+                        {false, {false, different_owners, N1, N2}}
+                end;
+            {Down, _Rings} ->
+                verbose(Verbose, "FALSE ~p down.  All nodes need to be up to check.\n", [Down]),
+                {false, {false, nodes_down, Down}}
+        end,
+    if Verbose == true ->
+            Res; % make nodetool exit 0 or 1
+       true ->
+            Extra
+    end.
 
 %% Provide a list of nodes with pending partition transfers (i.e. any secondary vnodes)
 %% and list any owned vnodes that are *not* running
+
 transfers([]) ->
+    transfers2(true);
+transfers(quiet) ->                                % Used by riak_kv_cinfo
+    transfers2(false).
+
+transfers2(Verbose) ->
     {Down, Rings} = get_rings(),
     case Down of
         [] ->
             ok;
         _ ->
-            io:format("Nodes ~p are currently down.\n", [Down])
+            verbose(Verbose, "Nodes ~p are currently down.\n", [Down])
     end,
 
     %% Work out which vnodes are running and which partitions they claim
@@ -115,25 +141,27 @@ transfers([]) ->
                     [] ->
                         [];
                     _ ->
-                        io:format("~p waiting to handoff ~p partitions\n", [N, length(Sec)]),
+                        verbose(Verbose, "~p waiting to handoff ~p partitions\n", [N, length(Sec)]),
                         [{waiting_to_handoff, N, length(Sec)}]
                 end ++
                     case Stopped of
                         [] ->
                             [];
                         _ ->
-                            io:format("~p does not have ~p primary partitions running\n",
+                            verbose(Verbose, "~p does not have ~p primary partitions running\n",
                                       [N, length(Stopped)]),
                             [{stopped, N}]
                     end ++
                     Acc
         end,
-    case lists:foldl(F, [], Rings) of
+    Res = lists:foldl(F, [], Rings),
+    case Res of
         [] ->
-            io:format("No transfers active\n");
+            verbose(Verbose, "No transfers active\n", []);
         _ ->
             ok
-    end.
+    end,
+    Res.
 
 
 format_stats([], Acc) ->
@@ -196,3 +224,7 @@ partitions(Node, Ring) ->
 owned_partitions(Owners, Node) ->
     [P || {P, Owner} <- Owners, Owner =:= Node].          
 
+verbose(false, _Fmt, _Args) ->
+    ok;
+verbose(true, Fmt, Args) ->
+    io:format(Fmt, Args).
