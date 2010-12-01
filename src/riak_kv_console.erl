@@ -24,7 +24,7 @@
 
 -module(riak_kv_console).
 
--export([join/1, leave/1, status/1, reip/1, ringready/1, transfers/1]).
+-export([join/1, leave/1, remove/1, status/1, reip/1, ringready/1, transfers/1]).
 
 join([NodeStr]) ->
     case riak:join(NodeStr) of
@@ -44,8 +44,14 @@ join(_) ->
     error.
 
 leave([]) ->
+    remove_node(node()).
+
+remove([Node]) ->
+    remove_node(list_to_atom(Node)).
+
+remove_node(Node) when is_atom(Node) ->
     {ok, C} = riak:local_client(),
-    Res = C:remove_from_cluster(node()),
+    Res = C:remove_from_cluster(Node),
     io:format("~p\n", [Res]).
 
 status([]) ->
