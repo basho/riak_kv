@@ -57,15 +57,15 @@ init([]) ->
                 permanent, 5000, worker, [riak_kv_stat]},
     MapJSPool = {?JSPOOL_MAP,
                  {riak_kv_js_manager, start_link,
-                  [?JSPOOL_MAP, app_helper:get_env(riak_kv, map_js_vm_count, 0)]},
+                  [?JSPOOL_MAP, read_js_pool_size(map_js_vm_count, "map")]},
                  permanent, 30000, worker, [riak_kv_js_manager]},
     ReduceJSPool = {?JSPOOL_REDUCE,
                     {riak_kv_js_manager, start_link,
-                     [?JSPOOL_REDUCE, app_helper:get_env(riak_kv, reduce_js_vm_count, 0)]},
+                     [?JSPOOL_REDUCE, read_js_pool_size(reduce_js_vm_count, "reduce")]},
                     permanent, 30000, worker, [riak_kv_js_manager]},
     HookJSPool = {?JSPOOL_HOOK,
                   {riak_kv_js_manager, start_link,
-                  [?JSPOOL_HOOK, app_helper:get_env(riak_kv, hook_js_vm_count, 0)]},
+                  [?JSPOOL_HOOK, read_js_pool_size(hook_js_vm_count, "hook callback")]},
                   permanent, 30000, worker, [riak_kv_js_manager]},
     JSSup = {riak_kv_js_sup,
              {riak_kv_js_sup, start_link, []},
@@ -110,3 +110,20 @@ init([]) ->
 
     % Run the proesses...
     {ok, {{one_for_one, 10, 10}, Processes}}.
+
+%% Internal functions
+read_js_pool_size(Entry, PoolType) ->
+    case app_helper:get_env(riak_kv, Entry, undefined) of
+        undefined ->
+            OldSize = app_helper:get_env(riak_kv, js_vm_count, 0),
+            error_logger:warning_msg("js_vm_count has been deprecated. " ++
+                                     "Please use ~p to configure the ~s pool.", [Entry, PoolType]),
+            case OldSize > 8 of
+                true ->
+                    OldSize div 3;
+                false ->
+                    OldSize
+            end;
+        Size ->
+            Size
+    end.

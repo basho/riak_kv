@@ -62,11 +62,11 @@ handle_event({register_mapper, Id, MapperPid}, #state{mapper_data=MapperData}=St
     {no_output, State#state{mapper_data=MapperData1}};
 
 handle_event({mapexec_reply, VNode, BKey, Reply, Executor}, #state{fsms=FSMs, mapper_data=MapperData}=State) ->
-    case dict:find(Executor, FSMs) of
-        error ->
+    case dict:is_key(Executor, FSMs) of
+        false ->
             % node retry case will produce dictionary miss
             {no_output, maybe_done(State)};
-        {ok, _V} ->
+        true ->
             FSMs1 = update_counter(Executor, FSMs),
             MapperData1 = update_inputs(Executor, VNode, BKey, MapperData),
             {output, Reply, maybe_done(State#state{fsms=FSMs1, mapper_data=MapperData1})}
@@ -208,7 +208,7 @@ update_inputs(Id, VNode, BKey, MapperData) ->
                                      {keys, {VNode, lists:keydelete(BKey, 2, Keys)}}),
                     lists:keyreplace(Id, 1, MapperData, {Id, MapperProps1});
                 false -> throw(bad_mapper_props_no_keys);
-                _ -> ok
+                _ -> MapperData
             end;
         false -> throw(bad_mapper_props_no_id)
     end.
