@@ -97,10 +97,12 @@ perform_reduce({Lang,{reduce,FunTerm,Arg,_Acc}},
             {javascript, _} ->
                 case  riak_kv_js_manager:blocking_dispatch(?JSPOOL_REDUCE, {FunTerm,
                                                             [riak_kv_mapred_json:jsonify_not_found(R) || R <- Reduced],
-                                                            Arg}, 5) of
+                                                            Arg}, 25) of
                     {ok, Data} when is_list(Data) ->
                         Data1 = [riak_kv_mapred_json:dejsonify_not_found(Datum) || Datum <- Data],
                         {ok, Data1};
+                    {error, timeout} ->
+                        throw({error, javascript_reduce_timeout});
                     Error ->
                         throw(Error)
                 end
