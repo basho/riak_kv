@@ -24,6 +24,8 @@
 
 -module(riak_kv_sup).
 
+-include_lib("riak_kv_js_pools.hrl").
+
 -behaviour(supervisor).
 
 -export([start_link/0]).
@@ -53,20 +55,36 @@ init([]) ->
     RiakStat = {riak_kv_stat,
                 {riak_kv_stat, start_link, []},
                 permanent, 5000, worker, [riak_kv_stat]},
-    RiakJsMgr = {riak_kv_js_manager,
+    MapJSPool = {?JSPOOL_MAP,
                  {riak_kv_js_manager, start_link,
-                  [app_helper:get_env(riak_kv, js_vm_count, 0)]},
+                  [?JSPOOL_MAP, read_js_pool_size(map_js_vm_count, "map")]},
                  permanent, 30000, worker, [riak_kv_js_manager]},
-    RiakJsSup = {riak_kv_js_sup,
-                 {riak_kv_js_sup, start_link, []},
-                 permanent, infinity, supervisor, [riak_kv_js_sup]},
+    ReduceJSPool = {?JSPOOL_REDUCE,
+                    {riak_kv_js_manager, start_link,
+                     [?JSPOOL_REDUCE, read_js_pool_size(reduce_js_vm_count, "reduce")]},
+                    permanent, 30000, worker, [riak_kv_js_manager]},
+    HookJSPool = {?JSPOOL_HOOK,
+                  {riak_kv_js_manager, start_link,
+                  [?JSPOOL_HOOK, read_js_pool_size(hook_js_vm_count, "hook callback")]},
+                  permanent, 30000, worker, [riak_kv_js_manager]},
+    JSSup = {riak_kv_js_sup,
+             {riak_kv_js_sup, start_link, []},
+             permanent, infinity, supervisor, [riak_kv_js_sup]},
     KLMaster = {riak_kv_keylister_master,
                  {riak_kv_keylister_master, start_link, []},
                  permanent, 30000, worker, [riak_kv_keylister_master]},
     KLSup = {riak_kv_keylister_sup,
              {riak_kv_keylister_sup, start_link, []},
              permanent, infinity, supervisor, [riak_kv_keylister_sup]},
-
+    MapCache = {riak_kv_mapred_cache,
+                 {riak_kv_mapred_cache, start_link, []},
+                 permanent, 30000, worker, [riak_kv_mapred_cache]},
+    MapMaster = {riak_kv_map_master,
+                 {riak_kv_map_master, start_link, []},
+                 permanent, 30000, worker, [riak_kv_map_master]},
+    MapperSup = {riak_kv_mapper_sup,
+                 {riak_kv_mapper_sup, start_link, []},
+                 permanent, infinity, supervisor, [riak_kv_mapper_sup]},
 
     % Figure out which processes we should run...
     IsPbConfigured = (app_helper:get_env(riak_kv, pb_ip) /= undefined)
@@ -81,9 +99,31 @@ init([]) ->
         ?IF(IsStatEnabled, RiakStat, []),
         KLSup,
         KLMaster,
-        RiakJsSup,
-        RiakJsMgr
+        JSSup,
+        MapJSPool,
+        ReduceJSPool,
+        HookJSPool,
+        MapperSup,
+        MapMaster,
+        MapCache
     ]),
 
     % Run the proesses...
     {ok, {{one_for_one, 10, 10}, Processes}}.
+
+%% Internal functions
+read_js_pool_size(Entry, PoolType) ->
+    case app_helper:get_env(riak_kv, Entry, undefined) of
+        undefined ->
+            OldSize = app_helper:get_env(riak_kv, js_vm_count, 0),
+            error_logger:warning_msg("js_vm_count has been deprecated. " ++
+                                     "Please use ~p to configure the ~s pool.", [Entry, PoolType]),
+            case OldSize > 8 of
+                true ->
+                    OldSize div 3;
+                false ->
+                    OldSize
+            end;
+        Size ->
+            Size
+    end.

@@ -80,18 +80,21 @@ process_post(RD, #state{inputs=Inputs, mrquery=Query, timeout=Timeout}=State) ->
     case wrq:get_qs_value("chunked", RD) of
         "true" ->
             {ok, ReqId} =
-                if is_list(Inputs) ->
-                        {ok, {RId, FSM}} = Client:mapred_stream(Query, Me, ResultTransformer, Timeout),
-                        luke_flow:add_inputs(FSM, Inputs),
-                        luke_flow:finish_inputs(FSM),
-                        {ok, RId};
-                   is_binary(Inputs) ->
+                case is_binary(Inputs) orelse is_key_filter(Inputs) of
+                    true ->
                         Client:mapred_bucket_stream(Inputs, Query, Me, ResultTransformer, Timeout);
-                   is_tuple(Inputs) ->
-                        {ok, {RId, FSM}} = Client:mapred_stream(Query, Me, ResultTransformer, Timeout),
-                        Client:mapred_dynamic_inputs_stream(FSM, Inputs, Timeout),
-                        luke_flow:finish_inputs(FSM),
-                        {ok, RId}
+                    false ->
+                        if is_list(Inputs) ->
+                                {ok, {RId, FSM}} = Client:mapred_stream(Query, Me, ResultTransformer, Timeout),
+                                luke_flow:add_inputs(FSM, Inputs),
+                                luke_flow:finish_inputs(FSM),
+                                {ok, RId};
+                           is_tuple(Inputs) ->
+                                {ok, {RId, FSM}} = Client:mapred_stream(Query, Me, ResultTransformer, Timeout),
+                                Client:mapred_dynamic_inputs_stream(FSM, Inputs, Timeout),
+                                luke_flow:finish_inputs(FSM),
+                                {ok, RId}
+                        end
                 end,
             Boundary = riak_core_util:unique_id_62(),
             RD1 = wrq:set_resp_header("Content-Type", "multipart/mixed;boundary=" ++ Boundary, RD),
@@ -99,18 +102,21 @@ process_post(RD, #state{inputs=Inputs, mrquery=Query, timeout=Timeout}=State) ->
             {true, wrq:set_resp_body({stream, stream_mapred_results(RD1, ReqId, State1)}, RD1), State1};
         Param when Param =:= "false";
                    Param =:= undefined ->
-            Results = if is_list(Inputs) ->
-                              Client:mapred(Inputs, Query, ResultTransformer, Timeout);
-                         is_binary(Inputs) ->
+            Results = case is_binary(Inputs) orelse is_key_filter(Inputs) of
+                          true ->
                               Client:mapred_bucket(Inputs, Query, ResultTransformer, Timeout);
-                         is_tuple(Inputs) ->
-                              case Client:mapred_stream(Query,Me,ResultTransformer,Timeout) of
-                                  {ok, {ReqId, FlowPid}} ->
-                                      Client:mapred_dynamic_inputs_stream(FlowPid, Inputs, Timeout),
-                                      luke_flow:finish_inputs(FlowPid),
-                                      luke_flow:collect_output(ReqId, Timeout);
-                                  Error ->
-                                      Error
+                          false ->
+                              if is_list(Inputs) ->
+                                      Client:mapred(Inputs, Query, ResultTransformer, Timeout);
+                                 is_tuple(Inputs) ->
+                                      case Client:mapred_stream(Query,Me,ResultTransformer,Timeout) of
+                                          {ok, {ReqId, FlowPid}} ->
+                                              Client:mapred_dynamic_inputs_stream(FlowPid, Inputs, Timeout),
+                                              luke_flow:finish_inputs(FlowPid),
+                                              luke_flow:collect_output(ReqId, Timeout);
+                                          Error ->
+                                              Error
+                                      end
                               end
                       end,
             RD1 = wrq:set_resp_header("Content-Type", "application/json", RD),
@@ -185,3 +191,9 @@ usage() ->
         " \"inputs\":[...list of inputs...],\n"
         " \"query\":[...list of map/reduce phases...]\n"
         "}\n".
+
+is_key_filter({Bucket, Filters}) when is_binary(Bucket),
+                                      is_list(Filters) ->
+    true;
+is_key_filter(_) ->
+    false.

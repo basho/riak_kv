@@ -84,18 +84,37 @@ mapred(Inputs,Query,Timeout) ->
 %%       {error, Err :: term()}
 %% @doc Perform a map/reduce job across the cluster.
 %%      See the map/reduce documentation for explanation of behavior.
-mapred(Inputs,Query,ResultTransformer,Timeout)
-  when is_binary(Inputs) ->
-    mapred_bucket(Inputs, Query, ResultTransformer, Timeout);
+mapred(Inputs,Query,ResultTransformer,Timeout) when is_binary(Inputs) orelse
+                                                    is_tuple(Inputs) ->
+    case is_binary(Inputs) orelse is_key_filter(Inputs) of
+        true ->
+            mapred_bucket(Inputs, Query, ResultTransformer, Timeout);
+        false ->
+            Me = self(),
+            case mapred_stream(Query,Me,ResultTransformer,Timeout) of
+                {ok, {ReqId, FlowPid}} ->
+                    case is_list(Inputs) of
+                        true ->
+                            add_inputs(FlowPid, Inputs);
+                        false ->
+                            mapred_dynamic_inputs_stream(FlowPid, Inputs, Timeout)
+                    end,
+                    luke_flow:finish_inputs(FlowPid),
+                    luke_flow:collect_output(ReqId, Timeout);
+                Error ->
+                    Error
+            end
+    end;
 mapred(Inputs,Query,ResultTransformer,Timeout)
   when is_list(Query),
        (is_integer(Timeout) orelse Timeout =:= infinity) ->
     Me = self(),
     case mapred_stream(Query,Me,ResultTransformer,Timeout) of
         {ok, {ReqId, FlowPid}} ->
-            if is_list(Inputs) ->
-                    luke_flow:add_inputs(FlowPid, Inputs);
-               is_tuple(Inputs) ->
+            case is_list(Inputs) of
+                true ->
+                    add_inputs(FlowPid, Inputs);
+                false ->
                     mapred_dynamic_inputs_stream(FlowPid, Inputs, Timeout)
             end,
             luke_flow:finish_inputs(FlowPid),
@@ -186,7 +205,7 @@ mapred_bucket(Bucket, Query, ResultTransformer, Timeout, ErrorTolerance) ->
 %% review of Map/Reduce.
 mapred_dynamic_inputs_stream(FSMPid, InputDef, Timeout) ->
     case InputDef of
-        {modfun, Mod, Fun, Options} -> 
+        {modfun, Mod, Fun, Options} ->
             Mod:Fun(FSMPid, Options, Timeout);
         _ ->
             throw({invalid_inputdef, InputDef})
@@ -224,7 +243,7 @@ get(Bucket, Key, R) -> get(Bucket, Key, R, ?DEFAULT_TIMEOUT).
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as R
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
 get(Bucket, Key, R, Timeout) when is_binary(Bucket), is_binary(Key),
-                                  (is_atom(R) or is_integer(R)), 
+                                  (is_atom(R) or is_integer(R)),
                                   is_integer(Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
@@ -237,7 +256,7 @@ get(Bucket, Key, R, Timeout) when is_binary(Bucket), is_binary(Key),
 %%       {error, timeout} |
 %%       {error, {n_val_violation, N::integer()}}
 %% @doc Store RObj in the cluster.
-%%      Return as soon as the default W value number of nodes for this bucket 
+%%      Return as soon as the default W value number of nodes for this bucket
 %%      nodes have received the request.
 %% @equiv put(RObj, W, W, default_timeout())
 put(RObj) -> put(RObj, default, default, ?DEFAULT_TIMEOUT).
@@ -387,11 +406,16 @@ stream_list_keys(Bucket, Timeout, ErrorTolerance, Client) ->
 %%      keys in Bucket on any single vnode.
 %%      If ClientType is set to 'mapred' instead of 'plain', then the
 %%      messages will be sent in the form of a MR input stream.
-stream_list_keys(Bucket, Timeout, ErrorTolerance, Client, ClientType) ->
+stream_list_keys(Bucket0, Timeout, ErrorTolerance, Client, ClientType) ->
     ReqId = mk_reqid(),
-    spawn(Node, riak_kv_keys_fsm, start,
-          [ReqId,Bucket,Timeout,ClientType,ErrorTolerance,Client]),
-    {ok, ReqId}.
+    case build_filter(Bucket0) of
+        {ok, Filter} ->
+            spawn(Node, riak_kv_keys_fsm, start,
+                  [ReqId,Filter,Timeout,ClientType,ErrorTolerance,Client]),
+            {ok, ReqId};
+        Error ->
+            Error
+    end.
 
 %% @spec filter_keys(riak_object:bucket(), Fun :: function()) ->
 %%       {ok, [Key :: riak_object:key()]} |
@@ -507,4 +531,42 @@ wait_for_listkeys(ReqId,Timeout,Acc) ->
         {ReqId,{keys,Res}} -> wait_for_listkeys(ReqId,Timeout,[Res|Acc])
     after Timeout ->
             {error, timeout, Acc}
+    end.
+
+add_inputs(_FlowPid, []) ->
+    ok;
+add_inputs(FlowPid, Inputs) when length(Inputs) < 100 ->
+    luke_flow:add_inputs(FlowPid, Inputs);
+ add_inputs(FlowPid, Inputs) ->
+    {Current, Next} = lists:split(100, Inputs),
+    luke_flow:add_inputs(FlowPid, Current),
+    add_inputs(FlowPid, Next).
+
+is_key_filter({Bucket, Filters}) when is_binary(Bucket),
+                                      is_list(Filters) ->
+    true;
+is_key_filter(_) ->
+    false.
+
+build_filter({Bucket, Exprs}) ->
+    case build_exprs(Exprs) of
+        {ok, Filters} ->
+            {ok, {Bucket, Filters}};
+        Error ->
+            Error
+    end;
+build_filter(Bucket) when is_binary(Bucket) ->
+    {ok, {Bucket, []}}.
+
+build_exprs(Exprs) ->
+    build_exprs(Exprs, []).
+
+build_exprs([], Accum) ->
+    {ok, lists:reverse(Accum)};
+build_exprs([[FunName|Args]|T], Accum) ->
+    case riak_kv_mapred_filters:resolve_name(FunName) of
+        error ->
+            {error, {bad_filter, FunName}};
+        Fun ->
+            build_exprs(T, [{riak_kv_mapred_filters, Fun, Args}|Accum])
     end.

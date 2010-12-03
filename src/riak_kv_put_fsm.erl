@@ -23,10 +23,14 @@
 %% @doc coordination of Riak PUT requests
 
 -module(riak_kv_put_fsm).
+%-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+%-endif.
 -include_lib("riak_kv_vnode.hrl").
+-include_lib("riak_kv_js_pools.hrl").
+
 -behaviour(gen_fsm).
--define(DEFAULT_OPTS, [{returnbody, false}]).
+-define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
 -export([start/6,start/7]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
@@ -50,27 +54,30 @@
                 tref    :: reference(),
                 ring :: riak_core_ring:riak_core_ring(),
                 startnow :: {pos_integer(), pos_integer(), pos_integer()},
-                options :: list(),
+                vnode_options :: list(),
                 returnbody :: boolean(),
                 resobjs :: list(),
                 allowmult :: boolean(),
-                reply_arity :: 1 | 2
+                update_last_modified :: boolean()
                }).
 
 start(ReqId,RObj,W,DW,Timeout,From) ->
-    start(ReqId,RObj,W,DW,Timeout,From,?DEFAULT_OPTS).
+    start(ReqId,RObj,W,DW,Timeout,From,[]).
 
 start(ReqId,RObj,W,DW,Timeout,From,Options) ->
     gen_fsm:start(?MODULE, [ReqId,RObj,W,DW,Timeout,From,Options], []).
 
 %% @private
 init([ReqId,RObj0,W0,DW0,Timeout,Client,Options0]) ->
-    Options = case Options0 of [] -> ?DEFAULT_OPTS; _ -> Options0 end,
+    Options = flatten_options(proplists:unfold(Options0 ++ ?DEFAULT_OPTS), []),
     {ok,Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj0), Ring),
     N = proplists:get_value(n_val,BucketProps),
     W = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
-    DW = riak_kv_util:expand_rw_value(dw, DW0, BucketProps, N),
+
+    %% Expand the DW value, but also ensure that DW <= W
+    DW = erlang:min(riak_kv_util:expand_rw_value(dw, DW0, BucketProps, N), W),
+
     case (W > N) or (DW > N) of
         true ->
             Client ! {ReqId, {error, {n_val_violation, N}}},
@@ -84,28 +91,50 @@ init([ReqId,RObj0,W0,DW0,Timeout,Client,Options0]) ->
                                 client=Client, w=W, dw=DW, bkey={Bucket, Key},
                                 req_id=ReqId, timeout=Timeout, ring=Ring,
                                 rclient=RClient, 
-                                options=proplists:unfold(Options),
-                                resobjs=[], allowmult=AllowMult, reply_arity=1},
-            StateData = handle_options(StateData0),
+                                vnode_options=[],
+                                resobjs=[], allowmult=AllowMult},
+            StateData = handle_options(Options, StateData0),
             {ok,initialize,StateData,0}
     end.
 
+%%
+%% Given an expanded proplist of options, take the first entry for any given key
+%% and ignore the rest
+%%
 %% @private
-handle_options(State=#state{options=Options}) ->
-    handle_options(Options, State).
+flatten_options([], Opts) ->
+    Opts;
+flatten_options([{Key, Value} | Rest], Opts) ->
+    case lists:keymember(Key, 1, Opts) of
+        true ->
+            flatten_options(Rest, Opts);
+        false ->
+            flatten_options(Rest, [{Key, Value} | Opts])
+    end.
+
 %% @private
 handle_options([], State) ->
     State;
-handle_options([{returnbody, true}|T], State=#state{w=W}) ->
-    handle_options(T, State#state{returnbody=true,dw=W, reply_arity=2});
-handle_options([{returnbody, false}|T], State=#state{w=W}) ->
+handle_options([{update_last_modified, Value}|T], State) ->
+    handle_options(T, State#state{update_last_modified=Value});
+handle_options([{returnbody, true}|T], State) ->
+    VnodeOpts = [{returnbody, true} | State#state.vnode_options],
+    %% Force DW>0 if requesting return body to ensure the dw event 
+    %% returned by the vnode includes the object.
+    handle_options(T, State#state{vnode_options=VnodeOpts,
+                                  dw=erlang:max(1,State#state.dw),
+                                  returnbody=true});
+handle_options([{returnbody, false}|T], State) ->
     case has_postcommit_hooks(element(1,State#state.bkey)) of
         true ->
-            Options = [{returnbody, true}],
-            handle_options(T, State#state{options=Options,
-                                          returnbody=true,
-                                          dw=W,
-                                          reply_arity=1});
+            %% We have post-commit hooks, we'll need to get the body back
+            %% from the vnode, even though we don't plan to return that to the
+            %% original caller.  Force DW>0 to ensure the dw event returned by
+            %% the vnode includes the object.
+            VnodeOpts = [{returnbody, true} | State#state.vnode_options],
+            handle_options(T, State#state{vnode_options=VnodeOpts,
+                                          dw=erlang:max(1,State#state.dw),
+                                          returnbody=false});
         false ->
             handle_options(T, State#state{returnbody=false})
     end;
@@ -113,9 +142,10 @@ handle_options([{_,_}|T], State) -> handle_options(T, State).
 
 %% @private
 initialize(timeout, StateData0=#state{robj=RObj0, req_id=ReqId, client=Client,
+                                      update_last_modified=UpdateLastMod,
                                       timeout=Timeout, ring=Ring, bkey={Bucket,Key}=BKey,
-                                      rclient=RClient, options=Options}) ->
-    case invoke_hook(precommit, RClient, update_metadata(RObj0)) of
+                                      rclient=RClient, vnode_options=VnodeOptions}) ->
+    case invoke_hook(precommit, RClient, update_last_modified(UpdateLastMod, RObj0)) of
         fail ->
             Client ! {ReqId, {error, precommit_fail}},
             {stop, normal, StateData0};
@@ -133,7 +163,7 @@ initialize(timeout, StateData0=#state{robj=RObj0, req_id=ReqId, client=Client,
               object = RObj1,
               req_id = ReqId,
               start_time = RealStartTime,
-              options = Options},
+              options = VnodeOptions},
             N = proplists:get_value(n_val,BucketProps),
             Preflist = riak_core_ring:preflist(DocIdx, Ring),
             %% TODO: Replace this with call to riak_kv_vnode:put/6
@@ -216,14 +246,17 @@ waiting_vnode_dw({dw, Idx, ReqId},
     end;
 waiting_vnode_dw({dw, Idx, ResObj, ReqId},
                  StateData=#state{dw=DW, client=Client, replied_dw=Replied0,
-                                  allowmult=AllowMult, reply_arity=ReplyArity,
+                                  allowmult=AllowMult, returnbody=ReturnBody,
                                   rclient=RClient, resobjs=ResObjs0}) ->
     Replied = [Idx|Replied0],
     ResObjs = [ResObj|ResObjs0],
     case length(Replied) >= DW of
         true ->
             ReplyObj = merge_robjs(ResObjs, AllowMult),
-            Reply = case ReplyArity of 1 -> ok; 2 -> {ok, ReplyObj} end,
+            Reply = case ReturnBody of
+                        true  -> {ok, ReplyObj};
+                        false -> ok
+                    end,
             Client ! {ReqId, Reply},
             invoke_hook(postcommit, RClient, ReplyObj),
             update_stats(StateData),
@@ -271,16 +304,34 @@ terminate(Reason, _StateName, _State) ->
 %% @private
 code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 
-update_metadata(RObj) ->
-    MD0 = riak_object:get_update_metadata(RObj),
-    NewMD = case dict:is_key("no_update", MD0) of
-        true -> dict:erase("no_update", MD0);
-        false -> dict:store(<<"X-Riak-VTag">>,
-                       make_vtag(RObj),
-                       dict:store(<<"X-Riak-Last-Modified">>,
-                                  erlang:now(),
-                                  MD0))
-    end,
+%%
+%% Update X-Riak-Tag and X-Riak-Last-Modified in the object's metadata, if
+%% necessary.
+%%
+%% @private
+update_last_modified(false, RObj) ->
+    RObj;
+update_last_modified(true, RObj) ->
+    MD0 = case dict:find(clean, riak_object:get_update_metadata(RObj)) of
+              {ok, true} ->
+                  %% There have been no changes to updatemetadata. If we stash the
+                  %% last modified in this dict, it will cause us to lose existing
+                  %% metadata (bz://508). If there is only one instance of metadata,
+                  %% we can safely update that one, but in the case of multiple siblings,
+                  %% it's hard to know which one to use. In that situation, use the update
+                  %% metadata as is.
+                  case riak_object:get_metadatas(RObj) of
+                      [MD] ->
+                          MD;
+                      _ ->
+                          riak_object:get_update_metadata(RObj)
+                  end;
+               _ ->
+                  riak_object:get_update_metadata(RObj)
+          end,
+    NewMD = dict:store(<<"X-Riak-Tag">>, make_vtag(RObj),
+                       dict:store(<<"X-Riak-Last-Modified">>, erlang:now(),
+                                  MD0)),
     riak_object:apply_updates(riak_object:update_metadata(RObj, NewMD)).
 
 make_vtag(RObj) ->
@@ -335,7 +386,7 @@ invoke_hook(precommit, Mod0, Fun0, undefined, RObj) ->
     Fun = binary_to_atom(Fun0, utf8),
     wrap_hook(Mod, Fun, RObj);
 invoke_hook(precommit, undefined, undefined, JSName, RObj) ->
-    case riak_kv_js_manager:blocking_dispatch({{jsfun, JSName}, RObj}, 5) of
+    case riak_kv_js_manager:blocking_dispatch(?JSPOOL_HOOK, {{jsfun, JSName}, RObj}, 5) of
         {ok, <<"fail">>} ->
             fail;
         {ok, [{<<"fail">>, Message}]} ->

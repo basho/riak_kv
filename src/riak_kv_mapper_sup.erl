@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_js_sup: supervise JavaScript VMs
+%% riak_kv_mapper_sup: Supervisor for starting mapper processes
 %%
 %% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -19,26 +19,30 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
+-module(riak_kv_mapper_sup).
 
-%% @doc supervise JavaScript VMs
-
--module(riak_kv_js_sup).
 -behaviour(supervisor).
--export([start_link/0, init/1, stop/1]).
--export([start_js/2]).
 
-start_js(Manager, Pool) when is_pid(Manager) ->
-    supervisor:start_child(?MODULE, [Manager, Pool]).
+%% API
+-export([start_link/0,
+         new_mapper/5]).
+
+%% Supervisor callbacks
+-export([init/1]).
+
+new_mapper({_, Node}=VNode, Id, QTerm, MapInputs, PhasePid) ->
+    start_child(Node, [VNode, Id, QTerm, MapInputs, PhasePid]).
 
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
-stop(_S) -> ok.
-
-%% @private
 init([]) ->
-    {ok,
-     {{simple_one_for_one, 10, 10},
-      [{undefined,
-        {riak_kv_js_vm, start_link, []},
-        temporary, 2000, worker, [riak_kv_js_vm]}]}}.
+    SupFlags = {simple_one_for_one, 0, 1},
+    Process = {undefined,
+               {riak_kv_mapper, start_link, []},
+               temporary, brutal_kill, worker, dynamic},
+    {ok, {SupFlags, [Process]}}.
+
+%% Internal functions
+start_child(Node, Args) ->
+  supervisor:start_child({?MODULE, Node}, Args).

@@ -144,14 +144,8 @@ read_and_restore_function(Client, BinTerm) ->
     % Data Cleaning...
     Obj1 = make_binary_bucket(Bucket, Key, Obj),
 
-    % Use the existing metadata, and tell Riak not to 
-    % update the X-Riak-VTag or X-Riak-Last-Modified values.
-    MetaData = hd(riak_object:get_metadatas(Obj1)), 
-    MetaData1 = dict:store("no_update", no_update, MetaData),
-    Obj2 = riak_object:update_metadata(Obj1, MetaData1),
-    
-    % Store the object...
-    Response = Client:put(Obj2,1,1,1200000),
+    %% Store the object; be sure to tell the FSM not to update last modified!
+    Response = Client:put(Obj1,1,1,1200000, [{update_last_modified, false}]),
     {continue, Response}.
    
 %%% DATA CLEANING %%% 

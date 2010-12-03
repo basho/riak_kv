@@ -43,8 +43,9 @@
 
 -define(PRINT(Var), error_logger:info_msg("DEBUG: ~p:~p - ~p: ~p~n", [?MODULE, ?LINE, ??Var, Var])).
 
-
+-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-endif.
 
 -define (DEFAULT_TTL,     timer:minutes(10)).
 -define (DEFAULT_MAX_TTL, timer:hours(1)).

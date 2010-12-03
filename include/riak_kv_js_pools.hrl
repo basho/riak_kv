@@ -1,0 +1,3 @@
+-define(JSPOOL_HOOK, riak_kv_js_hook).
+-define(JSPOOL_MAP, riak_kv_js_map).
+-define(JSPOOL_REDUCE, riak_kv_js_reduce).
