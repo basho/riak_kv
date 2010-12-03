@@ -300,8 +300,7 @@ to_string(V) ->
 %% http://www.trapexit.org/String_similar_to_(Levenshtein)
 %%
 %%------------------------------------------------------------------------------
-%% @spec levenshtein(StringA, StringB) -> integer()
-%%		StringA = StringB = string()
+%% @spec levenshtein(StringA :: string(), StringB :: string()) -> integer()
 %% @doc Calculates the Levenshtein distance between two strings
 %% @end
 %%------------------------------------------------------------------------------
