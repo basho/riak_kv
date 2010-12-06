@@ -14,6 +14,7 @@
              riak_kv_backend,
              riak_kv_bitcask_backend,
              riak_kv_cache_backend,
+             riak_kv_cinfo,
              riak_kv_console,
              riak_kv_delete,
              riak_kv_dets_backend,
