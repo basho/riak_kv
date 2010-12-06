@@ -28,6 +28,7 @@
 %-endif.
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_js_pools.hrl").
+-include("riak_kv_wm_raw.hrl").
 
 -behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
@@ -305,7 +306,7 @@ terminate(Reason, _StateName, _State) ->
 code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 
 %%
-%% Update X-Riak-Tag and X-Riak-Last-Modified in the object's metadata, if
+%% Update X-Riak-VTag and X-Riak-Last-Modified in the object's metadata, if
 %% necessary.
 %%
 %% @private
@@ -329,8 +330,8 @@ update_last_modified(true, RObj) ->
                _ ->
                   riak_object:get_update_metadata(RObj)
           end,
-    NewMD = dict:store(<<"X-Riak-Tag">>, make_vtag(RObj),
-                       dict:store(<<"X-Riak-Last-Modified">>, erlang:now(),
+    NewMD = dict:store(?MD_VTAG, make_vtag(RObj),
+                       dict:store(?MD_LASTMOD, erlang:now(),
                                   MD0)),
     riak_object:apply_updates(riak_object:update_metadata(RObj, NewMD)).
 
