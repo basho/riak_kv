@@ -51,6 +51,7 @@
              riak_kv_put_fsm,
              riak_kv_reduce_phase,
              riak_kv_stat,
+             riak_kv_status,
              riak_kv_sup,
              riak_kv_test_util,
              riak_kv_util,
