@@ -44,11 +44,11 @@ cluster_info_generator_funs() ->
     ].
 
 status(CPid) -> % CPid is the data collector's pid.
-    cluster_info:format(CPid, "~p\n", [riak_kv_console:status(quiet)]).
+    cluster_info:format(CPid, "~p\n", [riak_kv_status:statistics()]).
 
 ringready(CPid) ->
-    cluster_info:format(CPid, "~p\n", [riak_kv_console:ringready(quiet)]).
+    cluster_info:format(CPid, "~p\n", [riak_kv_status:ringready()]).
 
 transfers(CPid) ->
-    cluster_info:format(CPid, "~p\n", [riak_kv_console:transfers(quiet)]).
+    cluster_info:format(CPid, "~p\n", [riak_kv_status:transfers()]).
 
