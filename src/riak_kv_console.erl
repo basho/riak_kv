@@ -24,7 +24,8 @@
 
 -module(riak_kv_console).
 
--export([join/1, leave/1, remove/1, status/1, reip/1, ringready/1, transfers/1]).
+-export([join/1, leave/1, remove/1, status/1, reip/1, ringready/1, transfers/1,
+         cluster_info/1]).
 
 join([NodeStr]) ->
     case riak:join(NodeStr) of
@@ -109,6 +110,16 @@ transfers([]) ->
         end,
     lists:foldl(F, ok, Pending).
 
+cluster_info([OutFile|Rest]) ->
+    case atomify_nodestrs(Rest) of
+        [] ->
+            cluster_info:dump_all_connected(OutFile);
+        Nodes ->
+            cluster_info:dump_nodes(Nodes, OutFile)
+    end;
+cluster_info(_) ->
+    io:format("Usage: output-file ['local'|node_name ['local'|node_name] [...]]\n"),
+    error.
 
 format_stats([], Acc) ->
     lists:reverse(Acc);
@@ -117,3 +128,7 @@ format_stats([{vnode_gets, V}|T], Acc) ->
 format_stats([{Stat, V}|T], Acc) ->
     format_stats(T, [io_lib:format("~p : ~p~n", [Stat, V])|Acc]).
 
+atomify_nodestrs(Strs) ->
+    lists:map(fun("local") -> node();
+                 (NodeStr) -> list_to_atom(NodeStr)
+              end, Strs).
