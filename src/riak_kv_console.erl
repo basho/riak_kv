@@ -102,12 +102,20 @@ transfers([]) ->
         [] -> ok;
         _  -> io:format("Nodes ~p are currently down.\n", [DownNodes])
     end,
-    F = fun({waiting_to_handoff, Node, Count}, _) ->
-                io:format("~p waiting to handoff ~p partitions\n", [Node, Count]);
-           ({stopped, Node, Count}, _) ->
-                io:format("~p does not have ~p primary partitions running\n", [Node, Count])
+    F = fun({waiting_to_handoff, Node, Count}, Acc) ->
+                io:format("~p waiting to handoff ~p partitions\n", [Node, Count]),
+                Acc + 1;
+           ({stopped, Node, Count}, Acc) ->
+                io:format("~p does not have ~p primary partitions running\n", [Node, Count]),
+                Acc + 1
         end,
-    lists:foldl(F, ok, Pending).
+    case lists:foldl(F, 0, Pending) of
+        0 ->
+            io:format("No transfers active\n"),
+            ok;
+        _ ->
+            error
+    end.
 
 
 format_stats([], Acc) ->
