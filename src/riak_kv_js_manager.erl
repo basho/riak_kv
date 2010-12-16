@@ -72,7 +72,7 @@ blocking_dispatch(Name, JSCall, Tries) ->
     blocking_dispatch(Name, JSCall, Tries, Tries).
 
 reserve_vm(Name) ->
-    gen_server:call(Name, reserve_vm).
+    gen_server:call(Name, reserve_vm, infinity).
 
 reserve_batch_vm(Name, Tries) ->
     reserve_batch_vm(Name, Tries, Tries).
