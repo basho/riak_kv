@@ -168,8 +168,8 @@ release_jsvm(undefined) ->
 release_jsvm(VM) when is_pid(VM) ->
     riak_kv_js_vm:finish_batch(VM).
 
-obj_bkey({error, notfound}=Error) ->
-    Error;
+obj_bkey({{error, notfound},Bkey}) ->
+    Bkey;
 obj_bkey(Obj) ->
     {riak_object:bucket(Obj), riak_object:key(Obj)}.
 
@@ -183,10 +183,14 @@ find_input(BKey, [#riak_kv_map_input{bkey=BKey}=H|_], CompleteSet) ->
 find_input(BKey, [_|T], CompleteSet) ->
     find_input(BKey, T, CompleteSet).
 
-run_map(_VNode, _Id, {erlang, {map, _FunTerm, _Arg, _}}, _KD, {error, notfound}, _Phase, _VM, _CacheKey, _CacheRef) ->
-    ok;
-run_map(VNode, Id, {erlang, {map, FunTerm, Arg, _}}, KD, Obj, Phase, _VM, CacheKey, CacheRef) ->
-    BKey = {riak_object:bucket(Obj), riak_object:key(Obj)},
+run_map(VNode, Id, {erlang, {map, FunTerm, Arg, _}}, KD, Obj0, Phase, _VM, CacheKey, CacheRef) ->
+    Obj = case Obj0 of
+              {{error,notfound},_} ->
+                  {error, notfound};
+              _ ->
+                  Obj0
+          end,
+    BKey = obj_bkey(Obj0),
     Result = try
                  case FunTerm of
                      {qfun, F} ->
@@ -200,7 +204,7 @@ run_map(VNode, Id, {erlang, {map, FunTerm, Arg, _}}, KD, Obj, Phase, _VM, CacheK
              end,
     case Result of
         {ok, Value} ->
-            riak_kv_phase_proto:mapexec_result(Phase, VNode, obj_bkey(Obj), Value, Id),
+            riak_kv_phase_proto:mapexec_result(Phase, VNode, obj_bkey(Obj0), Value, Id),
             if
                 is_list(Value) ->
                     case CacheKey of
@@ -216,8 +220,10 @@ run_map(VNode, Id, {erlang, {map, FunTerm, Arg, _}}, KD, Obj, Phase, _VM, CacheK
             riak_kv_phase_proto:mapexec_error(Phase, Result, Id)
     end;
 
-run_map(_VNode, _Id, {javascript, {map, _FunTerm, _Arg, _}}, _KD, {error, notfound}, _Phase, _VM, _CacheKey, _CacheRef) ->
-    ok;
+run_map(VNode, Id, {javascript, {map, _FunTerm, _Arg, _}}, KD, {{error, notfound},_}=Obj, Phase, _VM, _CacheKey, _CacheRef) ->
+    BKey = obj_bkey(Obj),
+    riak_kv_phase_proto:mapexec_result(
+      Phase, VNode, BKey, [{not_found, BKey, KD}], Id);
 run_map(VNode, Id, {javascript, {map, FunTerm, Arg, _}}, KD, Obj, Phase, VM, CacheKey, CacheRef) ->
     BKey = {riak_object:bucket(Obj), riak_object:key(Obj)},
     JSArgs = [riak_object:to_json(Obj), KD, Arg],

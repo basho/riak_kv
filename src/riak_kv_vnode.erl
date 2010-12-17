@@ -378,7 +378,7 @@ do_mget({fsm, Sender}, BKeys, ReqId, State=#state{idx=Idx, mod=Mod, modstate=Mod
                     {ok, Obj} ->
                         gen_fsm:send_event(Sender, {r, Obj, Idx, ReqId});
                     _ ->
-                        gen_fsm:send_event(Sender, {r, R, Idx, ReqId})
+                        gen_fsm:send_event(Sender, {r, {R, BKey}, Idx, ReqId})
                 end,
                 riak_kv_stat:update(vnode_get) end,
     [F(BKey) || BKey <- BKeys],
