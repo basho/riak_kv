@@ -214,6 +214,8 @@ not_found_filter(Values) ->
               is_datum(Value)].
 is_datum({not_found, _}) ->
     false;
+is_datum({not_found, _, _}) ->
+    false;
 is_datum(_) ->
     true.
 
