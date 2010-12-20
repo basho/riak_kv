@@ -111,7 +111,7 @@ transfers([]) ->
     lists:foldl(F, ok, Pending).
 
 cluster_info([OutFile|Rest]) ->
-    case atomify_nodestrs(Rest) of
+    case lists:reverse(atomify_nodestrs(Rest)) of
         [] ->
             cluster_info:dump_all_connected(OutFile);
         Nodes ->
@@ -129,6 +129,11 @@ format_stats([{Stat, V}|T], Acc) ->
     format_stats(T, [io_lib:format("~p : ~p~n", [Stat, V])|Acc]).
 
 atomify_nodestrs(Strs) ->
-    lists:map(fun("local") -> node();
-                 (NodeStr) -> list_to_atom(NodeStr)
-              end, Strs).
+    lists:foldl(fun("local", Acc) -> [node()|Acc];
+                   (NodeStr, Acc) -> try
+                                         [list_to_existing_atom(NodeStr)|Acc]
+                                     catch error:badarg ->
+                                         io:format("Bad node: ~s\n", [NodeStr]),
+                                         Acc
+                                     end
+                end, [], Strs).
