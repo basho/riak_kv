@@ -243,7 +243,7 @@ init_data_dir() ->
         ok ->
             DataDir0;
         {error, Reason} ->
-            error_logger:warning_msg("Failed to create ~p for mr_queue (~p); "
+            error_logger:warning_msg("Failed to create ~p for mapred_queue_dir (~p); "
                                      "defaulting to /tmp/mr_queue\n",
                                      [DataDir0, Reason]),
             ok = ensure_dir("/tmp/mr_queue"),
