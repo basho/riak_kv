@@ -117,6 +117,9 @@ build_filter('_') ->
     {'_', []};
 build_filter(Bucket) when is_binary(Bucket) ->
     {Bucket, []};
+build_filter({filter, Bucket, Fun}) when is_function(Fun) ->
+    %% this is the representation used by riak_client:filter_keys
+    {Bucket, Fun};
 build_filter({Bucket, Filters}) ->
     FilterFun = riak_kv_mapred_filters:compose(Filters),
     {Bucket, FilterFun}.
