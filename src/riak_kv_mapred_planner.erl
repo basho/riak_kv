@@ -40,7 +40,7 @@ build_claim_list(InputData) ->
     claim_keys(PartList0, [], Keys).
 
 claim_keys([], [], _) ->
-    exit(self(), exhausted_preflist);
+    exit(exhausted_preflist);
 claim_keys(_, ClaimList, []) ->
     ClaimList;
 claim_keys([H|T], ClaimList, Keys) ->

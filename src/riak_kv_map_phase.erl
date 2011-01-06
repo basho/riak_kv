@@ -98,7 +98,7 @@ handle_info({'DOWN', Ref, process, Pid, _Reason}, #state{mapper_data=MapperData,
                                 MapperData1 = lists:keydelete(Id, 1, lists:keydelete(Pid, 1, MapperData ++ FsmKeys)),
                                 {no_output, maybe_done(State#state{mapper_data=MapperData1, fsms=NewFSMs})}
                             catch
-                                _C:Error ->
+                                _:Error ->
                                     {stop, {error, {no_candidate_nodes, Error, erlang:get_stacktrace(), MapperData}}, State}
                             end
                     end;

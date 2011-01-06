@@ -50,15 +50,20 @@
 
 -define(MERGE_CHECK_INTERVAL, timer:minutes(3)).
 
-start(Partition, _Config) ->
+start(Partition, Config) ->
 
     %% Get the data root directory
     DataDir =
-        case application:get_env(bitcask, data_root) of
-            {ok, Dir} ->
-                Dir;
-            _ ->
-                riak:stop("bitcask data_root unset, failing")
+        case proplists:get_value(data_root, Config) of
+            undefined ->
+                case application:get_env(bitcask, data_root) of
+                    {ok, Dir} ->
+                        Dir;
+                    _ ->
+                        riak:stop("bitcask data_root unset, failing")
+                end;
+            Value ->
+                Value
         end,
 
     %% Setup actual bitcask dir for this partition
@@ -73,7 +78,8 @@ start(Partition, _Config) ->
             riak:stop("riak_kv_bitcask_backend failed to start.")
     end,
 
-    case bitcask:open(BitcaskRoot, [{read_write, true}]) of
+    BitcaskOpts = [{read_write, true}|Config],
+    case bitcask:open(BitcaskRoot, BitcaskOpts) of
         Ref when is_reference(Ref) ->
             schedule_merge(Ref),
             maybe_schedule_sync(Ref),
@@ -262,5 +268,10 @@ simple_test() ->
     ?assertCmd("rm -rf test/bitcask-backend"),
     application:set_env(bitcask, data_root, "test/bitcask-backend"),
     riak_kv_backend:standard_test(?MODULE, []).
+
+custom_config_test() ->
+    ?assertCmd("rm -rf test/bitcask-backend"),
+    application:set_env(bitcask, data_root, ""),
+    riak_kv_backend:standard_test(?MODULE, [{data_root, "test/bitcask-backend"}]).
 
 -endif.

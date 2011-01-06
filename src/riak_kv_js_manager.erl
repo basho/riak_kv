@@ -57,13 +57,13 @@ start_link(Name, ChildCount) ->
 reload(Name, []) ->
     reload(Name).
 reload(Name) ->
-    gen_server:call(Name, reload_vms).
+    gen_server:call(Name, reload_vms, infinity).
 
 add_vm(Name) ->
     gen_server:cast(Name, {add_vm, self()}).
 
 mark_idle(Name) ->
-    gen_server:call(Name, {mark_idle, self()}).
+    gen_server:call(Name, {mark_idle, self()}, infinity).
 
 dispatch(Name, JSCall, Tries) ->
     dispatch(Name, JSCall, Tries, Tries).
@@ -72,13 +72,13 @@ blocking_dispatch(Name, JSCall, Tries) ->
     blocking_dispatch(Name, JSCall, Tries, Tries).
 
 reserve_vm(Name) ->
-    gen_server:call(Name, reserve_vm).
+    gen_server:call(Name, reserve_vm, infinity).
 
 reserve_batch_vm(Name, Tries) ->
     reserve_batch_vm(Name, Tries, Tries).
 
 pool_size(Name) ->
-    gen_server:call(Name, pool_size).
+    gen_server:call(Name, pool_size, infinity).
 
 init([Name, ChildCount]) ->
     Master = ets:new(Name, [private, {keypos, 2}]),

@@ -78,6 +78,21 @@ map_object_value(Acc) ->
 
 %% @spec map_object_value(riak_object:riak_object(), term(), term()) -> [term()]
 %% @doc map phase function for map_object_value/1
+%%      If the RiakObject is the tuple {error, notfound}, the
+%%      behavior of this function is defined by the Action argument.
+%%      Values for Action are:
+%%        <<"filter_notfound">> : produce no output (literally [])
+%%        <<"include_notfound">> : produce the not-found as the result
+%%                                 (literally [{error, notfound}])
+%%        <<"include_keydata">> : produce the keydata as the result
+%%                                (literally [KD])
+%%        {struct,[{<<"sub">>,term()}]} : produce term() as the result
+%%                                        (literally term())
+%%      The last form has a strange stucture, in order to allow
+%%      its specification over the HTTP interface
+%%      (as JSON like ..."arg":{"sub":1234}...).
+map_object_value({error, notfound}=NF, KD, Action) ->
+    notfound_map_action(NF, KD, Action);
 map_object_value(RiakObject, _, _) ->
     [riak_object:get_value(RiakObject)].
 
@@ -95,8 +110,19 @@ map_object_value_list(Acc) ->
 %% @spec map_object_value_list(riak_object:riak_object(), term(), term()) ->
 %%                            [term()]
 %% @doc map phase function for map_object_value_list/1
+%%      See map_object_value/3 for a description of the behavior of
+%%      this function with the RiakObject is {error, notfound}.
+map_object_value_list({error, notfound}=NF, KD, Action) ->
+    notfound_map_action(NF, KD, Action);
 map_object_value_list(RiakObject, _, _) ->
     riak_object:get_value(RiakObject).
+
+%% implementation of the notfound behavior for
+%% map_object_value and map_object_value_list
+notfound_map_action(_NF, _KD, <<"filter_notfound">>)    -> [];
+notfound_map_action(NF, _KD, <<"include_notfound">>)    -> [NF];
+notfound_map_action(_NF, KD, <<"include_keydata">>)     -> [KD]; 
+notfound_map_action(_NF, _KD, {struct,[{<<"sub">>,V}]}) -> V.
 
 %%
 %% Reduce Phases
@@ -213,6 +239,8 @@ not_found_filter(Values) ->
     [Value || Value <- Values,
               is_datum(Value)].
 is_datum({not_found, _}) ->
+    false;
+is_datum({not_found, _, _}) ->
     false;
 is_datum(_) ->
     true.

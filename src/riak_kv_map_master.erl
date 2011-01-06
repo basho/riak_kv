@@ -61,8 +61,7 @@ start_link() ->
 
 init([]) ->
     process_flag(trap_exit, true),
-    DataDir = app_helper:get_env(riak_kv, mapred_queue_dir, "data/mr_queue"),
-    ok = filelib:ensure_dir(filename:join(DataDir, ".empty")),
+    DataDir = init_data_dir(),
     Store = bitcask:open(DataDir, [read_write]),
     {ok, NextCounter} = file:open(filename:join(DataDir, "_next_"), [read, write, raw, binary]),
     {ok, HighestCounter} = file:open(filename:join(DataDir, "_highest_"), [read, write, raw, binary]),
@@ -226,3 +225,28 @@ read_entry(Id, Store) ->
 
 delete_entry(Id, Store) ->
     bitcask:delete(Store, Id).
+
+ensure_dir(Dir) ->
+    filelib:ensure_dir(filename:join(Dir, ".empty")).
+
+init_data_dir() ->
+    %% There are some upgrade situations where the mapred_queue_dir, is not
+    %% specified and as such we'll wind up using the default data/mr_queue,
+    %% relative to current working dir. This causes problems in a packaged env
+    %% (such as rpm/deb) where the current working dir is NOT writable. To
+    %% accomodate these situations, we fallback to creating the mr_queue in
+    %% /tmp.
+    {ok, Cwd} = file:get_cwd(),
+    DataDir0 = app_helper:get_env(riak_kv, mapred_queue_dir,
+                                  filename:join(Cwd, "data/mr_queue")),
+    case ensure_dir(DataDir0) of
+        ok ->
+            DataDir0;
+        {error, Reason} ->
+            error_logger:warning_msg("Failed to create ~p for mapred_queue_dir (~p); "
+                                     "defaulting to /tmp/mr_queue\n",
+                                     [DataDir0, Reason]),
+            ok = ensure_dir("/tmp/mr_queue"),
+            "/tmp/mr_queue"
+    end.
+
