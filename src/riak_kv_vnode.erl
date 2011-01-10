@@ -74,7 +74,7 @@
                   robj :: term(),
                   reqid :: non_neg_integer(),
                   bprops :: maybe_improper_list(),
-                  prunetime :: non_neg_integer()}).
+                  prunetime :: undefined | non_neg_integer()}).
 
 %% TODO: add -specs to all public API funcs, this module seems fragile?
 
@@ -125,7 +125,7 @@ put(Preflist, BKey, Obj, ReqId, StartTime, Options, Sender)
 
 %% Do a put without sending any replies
 readrepair(Preflist, BKey, Obj, ReqId, StartTime, Options) ->
-    put(Preflist, BKey, Obj, ReqId, StartTime, Options, ignore).
+    put(Preflist, BKey, Obj, ReqId, StartTime, [rr | Options], ignore).
 
 list_keys(Preflist, ReqId, Caller, Bucket) ->
   riak_core_vnode_master:command(Preflist,
@@ -273,9 +273,15 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
 
 %% @private
 % upon receipt of a client-initiated put
-do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, PruneTime, Options, State) ->
+do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     {ok,Ring} = riak_core_ring_manager:get_my_ring(),
     BProps = riak_core_bucket:get_bucket(Bucket, Ring),
+    case proplists:get_value(rr, Options, false) of
+        true ->
+            PruneTime = undefined;
+        false ->
+            PruneTime = StartTime
+    end,
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false),
                        lww=proplists:get_value(last_write_wins, BProps, false),
                        bkey=BKey,
@@ -300,10 +306,15 @@ prepare_put(#state{mod=Mod,modstate=ModState}, #putargs{bkey=BKey,
         {newobj, NewObj} ->
             VC = riak_object:vclock(NewObj),
             AMObj = enforce_allow_mult(NewObj, BProps),
-            ObjToStore = riak_object:set_vclock(
-                           AMObj,
-                           vclock:prune(VC,PruneTime,BProps)
-                           ),
+            case PruneTime of
+                undefined ->
+                    ObjToStore = AMObj;
+                _ ->
+                    ObjToStore = riak_object:set_vclock(
+                                   AMObj,
+                                   vclock:prune(VC,PruneTime,BProps)
+                                  )
+            end,
             {true, ObjToStore}
     end.
 
