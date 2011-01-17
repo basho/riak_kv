@@ -42,27 +42,27 @@ var Riak = function() {
       else {
         return data;
       }},
-     mapValuesJson: function(value, keyData, arg) {
+    mapValuesJson: function(value, keyData, arg) {
       if (value["not_found"]) {
         return [value];
       }
       var newValues = Riak.mapValues(value, keyData, arg);
       return newValues.map(function(nv) { return JSON.parse(nv); });
     },
-     mapByFields: function(value, keyData, fields) {
-         if(!value.not_found) {
-             var object = Riak.mapValuesJson(value)[0];
-             for(field in fields) {
-                 if(object[field] != fields[field]) {
-                     return [];
-                 }
-             }
-             return [object];
-         } 
-         else {
-             return [];
-         }
-     },
+    mapByFields: function(value, keyData, fields) {
+      if(!value.not_found) {
+        var object = Riak.mapValuesJson(value)[0];
+        for(field in fields) {
+          if(object[field] != fields[field]) {
+            return [];
+          }
+        }
+        return [object];
+      }
+      else {
+        return [];
+      }
+    },
     reduceSum: function(values, arg) {
       values = Riak.filterNotFound(values);
       if (values.length > 0) {
