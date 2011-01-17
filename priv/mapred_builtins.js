@@ -72,12 +72,20 @@ var Riak = function() {
         return [0];
       }},
     reduceMin: function(values, arg) {
-      values.sort();
-      return [values[0]];
+      if(values.length == 0)
+        return [];
+      else
+        return [values.reduce(function(prev,next){ 
+          return (prev < next) ? prev : next; 
+        })];
     },
     reduceMax: function(values, arg) {
-      values.sort().reverse();
-      return [values[0]];
+      if(values.length == 0)
+        return [];
+      else
+        return [values.reduce(function(prev,next){ 
+          return (prev > next) ? prev : next; 
+        })];
     },
     reduceSort: function(value, arg) {
       try {
