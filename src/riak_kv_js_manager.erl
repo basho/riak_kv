@@ -164,10 +164,10 @@ handle_cast({add_vm, VMPid}, #state{master=Master, idle=Idle}=State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info(#'DOWN'{pid=Pid}, #state{master=Master, idle=Idle}=State) ->
+handle_info(#'DOWN'{pid=Pid}, #state{name=Name, master=Master, idle=Idle}=State) ->
     ets:delete(Master, Pid),
     ets:delete(Idle, Pid),
-    riak_kv_js_sup:start_js(self()),
+    riak_kv_js_sup:start_js(self(), Name),
     {noreply, State};
 
 handle_info(_Info, State) ->
