@@ -111,7 +111,7 @@ do_map(timeout, #state{data=Data, vm=VM, qterm=QTermFun, pending=Pending,
                             {Input, WorkingSet1} ->
                                 case QTermFun(Input) of
                                     {error, Error} ->
-                                        riak_kv_map_phase_proto:mapexec_error(Phase, {error, Error}, Id);
+                                        riak_kv_phase_proto:mapexec_error(Phase, {error, Error}, Id);
                                     QTerm ->
                                         CacheKey = generate_final_cachekey(CacheKeyBase,
                                                                            Input#riak_kv_map_input.kd),
