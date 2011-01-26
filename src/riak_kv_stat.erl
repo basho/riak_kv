@@ -144,8 +144,9 @@
 
 -behaviour(gen_server2).
 
+-compile(export_all). %%SLF debugging only.
 %% API
--export([start_link/0, get_stats/0, update/1]).
+-export([start_link/0, get_stats/0, get_stats/1, update/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -171,12 +172,52 @@ start_link() ->
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
 get_stats() ->
-    gen_server2:call(?MODULE, get_stats).
+    get_stats(riak_kv_util:moment()).
+
+get_stats(Moment) ->
+    gen_server2:call(?MODULE, {get_stats, Moment}, infinity).
 
 %% @spec update(term()) -> ok
 %% @doc Update the given stat.
 update(Stat) ->
     gen_server2:cast(?MODULE, {update, Stat, riak_core_util:moment()}).
+
+update_a_sec(Moment, N) ->
+    [begin
+         Fudge = 0,                             % Tests show Non-0 not different
+         %% Fudge = case random:uniform(5000) of
+         %%             1 -> 3 - random:uniform(6);
+         %%             _ -> 0
+         %%         end,
+         [gen_server2:cast(?MODULE, {update, vnode_get, Moment+Fudge}) ||
+               _ <- [1,2,3]],
+         %gen_server2:cast(?MODULE, {update, {get_fsm_time, 100}, Moment+Fudge})
+         gen_server2:cast(?MODULE, {update, {get_fsm_time, random:uniform(100)}, Moment+Fudge})
+     end || _ <- lists:seq(1, N)].
+
+update_lots_of_secs(StartMoment, EndMoment, N) ->
+    [begin
+         update_a_sec(Moment, N),
+         if Moment rem 3600 == 0 -> io:format("h"),
+                                    _ = get_stats(EndMoment), % force sync/catchup
+                                    riak_kv_stat ! foo;
+             true -> ok
+         end,
+         if Moment rem (3600*24) == 0 -> io:format("d");
+             true -> ok
+         end
+     end || Moment <- lists:seq(StartMoment, EndMoment)],
+    ok.
+
+%% e.g. riak_kv_stat:update_test(122, 10*1000).
+update_test(NumSecs, N) ->
+    exit(whereis(riak_kv_stat), kill),
+    timer:sleep(100),
+    M = riak_core_util:moment(),
+    USec1 = element(1, timer:tc(riak_kv_stat, update_lots_of_secs, [M, M+NumSecs, N])),
+    USec2 = element(1, timer:tc(gen_server2,call,[riak_kv_stat,{get_stats, M+NumSecs},infinity])),
+    {all_msecs, USec1 div 1000, USec2 div 1000, (USec1 + USec2) div 1000}.
+    
 
 %% @private
 init([]) ->
@@ -196,8 +237,10 @@ init([]) ->
                 mapper_count=0}}.
 
 %% @private
-handle_call(get_stats, _From, State) ->
-    {reply, produce_stats(State), State};
+handle_call(foo, _From, State) ->
+    {reply, ok, State};
+handle_call({get_stats, Moment}, _From, State) ->
+    {reply, produce_stats(State, Moment), State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -209,6 +252,9 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 %% @private
+handle_info(foo, State) ->
+    io:format("~p ~p\n", [time(), [erts_debug:flat_size(element(N, State)) || N <- lists:seq(1, size(State))]]),
+    {noreply, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -268,11 +314,10 @@ slide_incr(Elt, Reading, Moment, State) ->
     setelement(Elt, State,
                slide:update(element(Elt, State), Reading, Moment)).
 
-%% @spec produce_stats(state()) -> proplist()
+%% @spec produce_stats(state(), integer()) -> proplist()
 %% @doc Produce a proplist-formatted view of the current aggregation
 %%      of stats.
-produce_stats(State) ->
-    Moment = spiraltime:n(),
+produce_stats(State, Moment) ->
     lists:append(
       [vnode_stats(Moment, State),
        node_stats(Moment, State),
