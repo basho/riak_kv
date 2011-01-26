@@ -145,7 +145,7 @@
 -behaviour(gen_server2).
 
 %% API
--export([start_link/0, get_stats/0, update/1]).
+-export([start_link/0, get_stats/0, get_stats/1, update/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -171,15 +171,20 @@ start_link() ->
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
 get_stats() ->
-    gen_server2:call(?MODULE, get_stats).
+    get_stats(slide:moment()).
+
+get_stats(Moment) ->
+    gen_server2:call(?MODULE, {get_stats, Moment}, infinity).
 
 %% @spec update(term()) -> ok
 %% @doc Update the given stat.
 update(Stat) ->
-    gen_server2:cast(?MODULE, {update, Stat, riak_core_util:moment()}).
+    gen_server2:cast(?MODULE, {update, Stat, slide:moment()}).
 
 %% @private
 init([]) ->
+    process_flag(trap_exit, true),
+    remove_slide_private_dirs(),
     {ok, #state{vnode_gets=spiraltime:fresh(),
                 vnode_puts=spiraltime:fresh(),
                 vnode_gets_total=0,
@@ -196,8 +201,8 @@ init([]) ->
                 mapper_count=0}}.
 
 %% @private
-handle_call(get_stats, _From, State) ->
-    {reply, produce_stats(State), State};
+handle_call({get_stats, Moment}, _From, State) ->
+    {reply, produce_stats(State, Moment), State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -214,6 +219,7 @@ handle_info(_Info, State) ->
 
 %% @private
 terminate(_Reason, _State) ->
+    remove_slide_private_dirs(),
     ok.
 
 %% @private
@@ -268,11 +274,10 @@ slide_incr(Elt, Reading, Moment, State) ->
     setelement(Elt, State,
                slide:update(element(Elt, State), Reading, Moment)).
 
-%% @spec produce_stats(state()) -> proplist()
+%% @spec produce_stats(state(), integer()) -> proplist()
 %% @doc Produce a proplist-formatted view of the current aggregation
 %%      of stats.
-produce_stats(State) ->
-    Moment = spiraltime:n(),
+produce_stats(State, Moment) ->
     lists:append(
       [vnode_stats(Moment, State),
        node_stats(Moment, State),
@@ -290,9 +295,8 @@ produce_stats(State) ->
 %% @spec spiral_minute(integer(), integer(), state()) -> integer()
 %% @doc Get the count of events in the last minute from the spiraltime
 %%      structure at the given element of the state tuple.
-spiral_minute(Moment, Elt, State) ->
-    Up = spiraltime:incr(0, Moment, element(Elt, State)),
-    {_,Count} = spiraltime:rep_minute(Up),
+spiral_minute(_Moment, Elt, State) ->
+    {_,Count} = spiraltime:rep_minute(element(Elt, State)),
     Count.
 
 %% @spec slide_minute(integer(), integer(), state()) ->
@@ -307,8 +311,7 @@ spiral_minute(Moment, Elt, State) ->
 %%      If Count is 0, then all other elements will be the atom
 %%      'undefined'.
 slide_minute(Moment, Elt, State) ->
-    {Count, Mean} = slide:mean(element(Elt, State), Moment),
-    {_, Nines} = slide:nines(element(Elt, State), Moment),
+    {Count, Mean, Nines} = slide:mean_and_nines(element(Elt, State), Moment),
     {Count, Mean, Nines}.
 
 %% @spec vnode_stats(integer(), state()) -> proplist()
@@ -425,3 +428,6 @@ pbc_stats(Moment, State=#state{pbc_connects_total=NCT, pbc_active=Active}) ->
               {pbc_connects, spiral_minute(Moment, #state.pbc_connects, State)},
               {pbc_active, Active}]
     end.
+
+remove_slide_private_dirs() ->
+    os:cmd("rm -rf " ++ slide:private_dir()).
