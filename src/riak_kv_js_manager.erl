@@ -31,7 +31,6 @@
 -export([start_link/2,
          add_vm/1,
          reload/1,
-         reload/2,
          mark_idle/1,
          reserve_vm/1,
          reserve_batch_vm/2,
@@ -47,6 +46,8 @@
          terminate/2,
          code_change/3]).
 
+-include("riak_kv_js_pools.hrl").
+
 -record('DOWN', {ref, type, pid, info}).
 -record(vm_state, {pid, needs_reload=false}).
 -record(state, {name, master, idle, reserve}).
@@ -54,10 +55,12 @@
 start_link(Name, ChildCount) ->
     gen_server:start_link({local, Name}, ?MODULE, [Name, ChildCount], []).
 
-reload(Name, []) ->
-    reload(Name).
-reload(Name) ->
-    gen_server:call(Name, reload_vms, infinity).
+reload([]) ->
+    %% no names == reload all vms
+    reload([ atom_to_list(N) || N <- ?JSPOOL_LIST]);
+reload(Names) ->
+    [ gen_server:call(list_to_existing_atom(N), reload_vms, infinity)
+      || N <- Names ].
 
 add_vm(Name) ->
     gen_server:cast(Name, {add_vm, self()}).
@@ -101,7 +104,11 @@ handle_call({mark_idle, VM}, _From, #state{master=Master,
 handle_call(reload_vms, _From, #state{master=Master, idle=Idle}=State) ->
     reload_idle_vms(Idle),
     mark_pending_reloads(Master, Idle),
-    riak_kv_vnode:purge_mapcaches(),
+    if State#state.name == ?JSPOOL_MAP ->
+            riak_kv_mapred_cache:clear();
+       true ->
+            ok
+    end,
     {reply, ok, State};
 
 handle_call(reserve_batch_vm, _From, State) ->
