@@ -83,13 +83,13 @@ map_object_value(Acc) ->
 %%      If the RiakObject is the tuple {error, notfound}, the
 %%      behavior of this function is defined by the Action argument.
 %%      Values for Action are:
-%%        <<"filter_notfound">> : produce no output (literally [])
-%%        <<"include_notfound">> : produce the not-found as the result
-%%                                 (literally [{error, notfound}])
-%%        <<"include_keydata">> : produce the keydata as the result
-%%                                (literally [KD])
-%%        {struct,[{<<"sub">>,term()}]} : produce term() as the result
-%%                                        (literally term())
+%%        `<<"filter_notfound">>' : produce no output (literally [])
+%%        `<<"include_notfound">>' : produce the not-found as the result
+%%                                   (literally [{error, notfound}])
+%%        `<<"include_keydata">>' : produce the keydata as the result
+%%                                  (literally [KD])
+%%        `{struct,[{<<"sub">>,term()}]}' : produce term() as the result
+%%                                          (literally term())
 %%      The last form has a strange stucture, in order to allow
 %%      its specification over the HTTP interface
 %%      (as JSON like ..."arg":{"sub":1234}...).
