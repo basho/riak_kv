@@ -32,7 +32,8 @@
          reduce_sort/1,
          reduce_string_to_integer/1,
          reduce_sum/1,
-         reduce_plist_sum/1]).
+         reduce_plist_sum/1,
+         reduce_count_inputs/1]).
 
 %% phase function definitions
 -export([map_identity/3,
@@ -43,7 +44,8 @@
          reduce_sort/2,
          reduce_string_to_integer/2,
          reduce_sum/2,
-         reduce_plist_sum/2]).
+         reduce_plist_sum/2,
+         reduce_count_inputs/2]).
 
 %-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -215,6 +217,35 @@ reduce_sort(Acc) ->
 reduce_sort(List, _) ->
     lists:sort(List).
 
+
+%% @spec reduce_count_inputs(boolean()) -> reduce_phase_spec()
+%% @doc Produces a spec for a reduce phase that counts its
+%%      inputs.  Inputs to this phase must not be integers, or
+%%      they will confuse the counting.  The output of this
+%%      phase is a list of one integer.
+%%
+%%      The original purpose of this function was to count
+%%      the results of a key-listing.  For example:
+%%```
+%%      [KeyCount] = C:mapred(<<"my_bucket">>,
+%%                            [riak_kv_mapreduce:reduce_count_inputs(true)]).
+%%'''
+%%      KeyCount will contain the number of keys found in "my_bucket".
+reduce_count_inputs(Acc) ->
+    {reduce, {modfun, riak_kv_mapreduce, reduce_count_inputs}, none, Acc}.
+
+%% @spec reduce_count_inputs([term()|integer()], term()) -> [integer()]
+%% @doc reduce phase function for reduce_count_inputs/1
+reduce_count_inputs(Results, _) ->
+    [ lists:foldl(fun input_counter_fold/2, 0, Results) ].
+
+%% @spec input_counter_fold(term()|integer(), integer()) -> integer()
+input_counter_fold(PrevCount, Acc) when is_integer(PrevCount) ->
+    PrevCount+Acc;
+input_counter_fold(_, Acc) ->
+    1+Acc.
+
+
 %% @spec reduce_string_to_integer(boolean()) -> reduce_phase_spec()
 %% @doc Produces a spec for a reduce phase that converts
 %%      its inputs to integers. Inputs can be either Erlang
@@ -296,3 +327,13 @@ reduce_string_to_integer_test() ->
     [1,2,3] = reduce_string_to_integer([<<"1">>, <<"2">>, <<"3">>], none),
     [1,2,3,4,5] = reduce_string_to_integer(["1", <<"2">>, <<"3">>, "4", "5"], none),
     [1,2,3,4,5] = reduce_string_to_integer(["1", <<"2">>, <<"3">>, 4, 5], none).
+
+reduce_count_inputs_test() ->
+    ?assertEqual([1], reduce_count_inputs([{"b1","k1"}])),
+    ?assertEqual([2], reduce_count_inputs([{"b1","k1"},{"b2","k2"}])),
+    ?assertEqual([9], reduce_count_inputs(
+                        [{"b1","k1"},{"b2","k2"},{"b3","k3"}}
+                        ++ reduce_count_inputs([{"b4","k4"},{"b5","k5"}])
+                        ++ reduce_count_inputs(
+                             [{"b4","k4"},{"b5","k5"},
+                              {"b5","k5"},{"b5","k5"}]))).
