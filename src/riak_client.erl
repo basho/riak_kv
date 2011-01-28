@@ -489,12 +489,11 @@ remove_from_cluster(ExitingNode) ->
     rpc:call(Node, riak_core_gossip, remove_from_cluster,[ExitingNode]).
 
 get_stats(local) ->
-    [{Node, rpc:call(Node, gen_server, call, [riak_kv_stat, get_stats])}];
+    [{Node, rpc:call(Node, riak_kv_stat, get_stats, [])}];
 get_stats(global) ->
     {ok, Ring} = rpc:call(Node, riak_core_ring_manager, get_my_ring, []),
     Nodes = riak_core_ring:all_members(Ring),
-    [{N, rpc:call(N, gen_server, call, [riak_kv_stat, get_stats])}
-     || N <- Nodes].
+    [{N, rpc:call(N, riak_kv_stat, get_stats, [])} || N <- Nodes].
 
 %% @doc Return the client id beign used for this client
 get_client_id() ->
