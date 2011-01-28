@@ -55,12 +55,29 @@
 start_link(Name, ChildCount) ->
     gen_server:start_link({local, Name}, ?MODULE, [Name, ChildCount], []).
 
+%% @spec reload([string()|atom()]) -> ok
+%% @doc Reload the Javascript VMs in the named pools.  If no pool
+%%      names are given, all pools in the JSPOOL_LIST (defined in
+%%      riak_kv_js_pools.hrl) are reloaded.  Pool names may be given
+%%      as either list-strings (as they will be when this function is
+%%      invoked via 'riak-admin js_reload') or as atoms (as they are
+%%      defined in riak_kv_js_pools.hrl).
 reload([]) ->
     %% no names == reload all vms
-    reload([ atom_to_list(N) || N <- ?JSPOOL_LIST]);
+    reload(?JSPOOL_LIST);
 reload(Names) ->
-    [ gen_server:call(list_to_existing_atom(N), reload_vms, infinity)
-      || N <- Names ].
+    reload_internal(Names).
+
+%% @spec reload_internal([string()|atom()]) -> ok
+%% @doc Recursive implementation of reload/1.
+reload_internal([Name|Rest]) when is_atom(Name) ->
+    gen_server:call(Name, reload_vms, infinity),
+    reload_internal(Rest);
+reload_internal([Name|Rest]) when is_list(Name) ->
+    %% convert riak-admin string argument to atom gen_server name
+    reload_internal([list_to_existing_atom(Name)|Rest]);
+reload_internal([]) ->
+    ok.
 
 add_vm(Name) ->
     gen_server:cast(Name, {add_vm, self()}).
