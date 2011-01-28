@@ -183,6 +183,7 @@ update(Stat) ->
 
 %% @private
 init([]) ->
+    os:cmd("rm -rf " ++ slide:private_dir()),
     {ok, #state{vnode_gets=spiraltime:fresh(),
                 vnode_puts=spiraltime:fresh(),
                 vnode_gets_total=0,
