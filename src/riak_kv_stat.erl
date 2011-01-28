@@ -172,7 +172,7 @@ start_link() ->
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
 get_stats() ->
-    get_stats(riak_kv_util:moment()).
+    get_stats(slide:moment()).
 
 get_stats(Moment) ->
     gen_server2:call(?MODULE, {get_stats, Moment}, infinity).
@@ -180,7 +180,7 @@ get_stats(Moment) ->
 %% @spec update(term()) -> ok
 %% @doc Update the given stat.
 update(Stat) ->
-    gen_server2:cast(?MODULE, {update, Stat, riak_core_util:moment()}).
+    gen_server2:cast(?MODULE, {update, Stat, slide:moment()}).
 
 update_a_sec(Moment, N) ->
     [begin
@@ -213,7 +213,7 @@ update_lots_of_secs(StartMoment, EndMoment, N) ->
 update_test(NumSecs, N) ->
     exit(whereis(riak_kv_stat), kill),
     timer:sleep(100),
-    M = riak_core_util:moment(),
+    M = slide:moment(),
     USec1 = element(1, timer:tc(riak_kv_stat, update_lots_of_secs, [M, M+NumSecs, N])),
     USec2 = element(1, timer:tc(gen_server2,call,[riak_kv_stat,{get_stats, M+NumSecs},infinity])),
     {all_msecs, USec1 div 1000, USec2 div 1000, (USec1 + USec2) div 1000}.
@@ -237,7 +237,7 @@ init([]) ->
                 mapper_count=0}}.
 
 %% @private
-handle_call(foo, _From, State) ->
+handle_call(sync, _From, State) ->
     {reply, ok, State};
 handle_call({get_stats, Moment}, _From, State) ->
     {reply, produce_stats(State, Moment), State};
@@ -335,9 +335,8 @@ produce_stats(State, Moment) ->
 %% @spec spiral_minute(integer(), integer(), state()) -> integer()
 %% @doc Get the count of events in the last minute from the spiraltime
 %%      structure at the given element of the state tuple.
-spiral_minute(Moment, Elt, State) ->
-    Up = spiraltime:incr(0, Moment, element(Elt, State)),
-    {_,Count} = spiraltime:rep_minute(Up),
+spiral_minute(_Moment, Elt, State) ->
+    {_,Count} = spiraltime:rep_minute(element(Elt, State)),
     Count.
 
 %% @spec slide_minute(integer(), integer(), state()) ->
@@ -352,8 +351,7 @@ spiral_minute(Moment, Elt, State) ->
 %%      If Count is 0, then all other elements will be the atom
 %%      'undefined'.
 slide_minute(Moment, Elt, State) ->
-    {Count, Mean} = slide:mean(element(Elt, State), Moment),
-    {_, Nines} = slide:nines(element(Elt, State), Moment),
+    {Count, Mean, Nines} = slide:mean_and_nines(element(Elt, State), Moment),
     {Count, Mean, Nines}.
 
 %% @spec vnode_stats(integer(), state()) -> proplist()
