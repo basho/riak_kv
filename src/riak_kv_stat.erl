@@ -183,7 +183,7 @@ update(Stat) ->
 
 %% @private
 init([]) ->
-    os:cmd("rm -rf " ++ slide:private_dir()),
+    remove_slide_private_dirs(),
     {ok, #state{vnode_gets=spiraltime:fresh(),
                 vnode_puts=spiraltime:fresh(),
                 vnode_gets_total=0,
@@ -218,6 +218,7 @@ handle_info(_Info, State) ->
 
 %% @private
 terminate(_Reason, _State) ->
+    remove_slide_private_dirs(),
     ok.
 
 %% @private
@@ -426,3 +427,6 @@ pbc_stats(Moment, State=#state{pbc_connects_total=NCT, pbc_active=Active}) ->
               {pbc_connects, spiral_minute(Moment, #state.pbc_connects, State)},
               {pbc_active, Active}]
     end.
+
+remove_slide_private_dirs() ->
+    os:cmd("rm -rf " ++ slide:private_dir()).
