@@ -183,6 +183,7 @@ update(Stat) ->
 
 %% @private
 init([]) ->
+    process_flag(trap_exit, true),
     remove_slide_private_dirs(),
     {ok, #state{vnode_gets=spiraltime:fresh(),
                 vnode_puts=spiraltime:fresh(),
