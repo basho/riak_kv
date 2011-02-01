@@ -209,6 +209,8 @@ are_mappers_waiting(State) ->
     Next = read_counter(State#state.next),
     Next < Highest.
 
+is_mapper_runnable({error,_}) -> false;
+is_mapper_runnable(not_found) -> false;
 is_mapper_runnable(#mapper{phase=Phase}) ->
     Node = node(Phase),
     ClusterNodes = riak_core_node_watcher:nodes(riak_kv),
@@ -220,8 +222,10 @@ write_entry(Id, Mapper, Store) ->
     Id.
 
 read_entry(Id, Store) ->
-    {ok, D} = bitcask:get(Store, Id),
-    binary_to_term(D).
+    case bitcask:get(Store, Id) of
+        {ok, D} ->  binary_to_term(D);
+        Err -> Err
+    end.
 
 delete_entry(Id, Store) ->
     bitcask:delete(Store, Id).
