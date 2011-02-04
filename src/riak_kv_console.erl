@@ -124,10 +124,7 @@ cluster_info([OutFile|Rest]) ->
             cluster_info:dump_all_connected(OutFile);
         Nodes ->
             cluster_info:dump_nodes(Nodes, OutFile)
-    end;
-cluster_info(_) ->
-    io:format("Usage: output-file ['local'|node_name ['local'|node_name] [...]]\n"),
-    error.
+    end.
 
 format_stats([], Acc) ->
     lists:reverse(Acc);
