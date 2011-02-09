@@ -128,10 +128,16 @@ expand_rw_value(_Type, Val, _BucketProps, N) ->
 
 normalize_rw_value(RW, _N) when is_integer(RW) -> RW;
 normalize_rw_value(RW, N) when is_binary(RW) ->
-    normalize_rw_value(binary_to_atom(RW, utf8), N);
+    try
+        ExistingAtom = binary_to_existing_atom(RW, utf8),
+        normalize_rw_value(ExistingAtom, N)
+    catch _:badarg ->
+        error
+    end;
 normalize_rw_value(one, _N) -> 1;
 normalize_rw_value(quorum, N) -> erlang:trunc((N/2)+1);
-normalize_rw_value(all, N) -> N.
+normalize_rw_value(all, N) -> N;
+normalize_rw_value(_, _) -> error.
 
 
 %% ===================================================================
@@ -143,7 +149,13 @@ normalize_test() ->
     3 = normalize_rw_value(3, 3),
     1 = normalize_rw_value(one, 3),
     2 = normalize_rw_value(quorum, 3),
-    3 = normalize_rw_value(all, 3).
+    3 = normalize_rw_value(all, 3),
+    1 = normalize_rw_value(<<"one">>, 3),
+    2 = normalize_rw_value(<<"quorum">>, 3),
+    3 = normalize_rw_value(<<"all">>, 3),
+    error = normalize_rw_value(garbage, 3),
+    error = normalize_rw_value(<<"garbage">>, 3).
+
 
 deleted_test() ->
     O = riak_object:new(<<"test">>, <<"k">>, "v"),
