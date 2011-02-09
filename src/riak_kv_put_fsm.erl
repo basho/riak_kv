@@ -77,13 +77,26 @@ init([ReqId,RObj0,W0,DW0,Timeout,Client,Options0]) ->
     W = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
 
     %% Expand the DW value, but also ensure that DW <= W
-    DW = erlang:min(riak_kv_util:expand_rw_value(dw, DW0, BucketProps, N), W),
+    DW1 = riak_kv_util:expand_rw_value(dw, DW0, BucketProps, N),
+    %% If no error occurred expanding DW also ensure that DW <= W
+    case DW1 of
+         error ->
+             DW = error;
+         _ ->
+             DW = erlang:min(DW1, W)
+    end,
 
-    case (W > N) or (DW > N) of
-        true ->
+    if
+        W =:= error ->
+            Client ! {ReqId, {error, {w_val_violation, W0}}},
+            {stop, normal, none};
+        DW =:= error ->
+            Client ! {ReqId, {error, {dw_val_violation, DW0}}},
+            {stop, normal, none};
+        (W > N) or (DW > N) ->
             Client ! {ReqId, {error, {n_val_violation, N}}},
             {stop, normal, none};
-        false ->
+        true ->
             AllowMult = proplists:get_value(allow_mult,BucketProps),
             {ok, RClient} = riak:local_client(),
             Bucket = riak_object:bucket(RObj0),
