@@ -413,38 +413,36 @@ do_list_bucket(ReqID,Bucket,Mod,ModState,Idx,State) ->
     RetVal = Mod:list_bucket(ModState,Bucket),
     {reply, {kl, RetVal, Idx, ReqID}, State}.
 
-%% Use in-memory key list for bitcask backend
-%% @private
-do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState)
-  when Mod =:= riak_kv_bitcask_backend ->
-    F = fun(BKey, Acc) ->
-                process_keys(Caller, ReqId, Idx, Bucket, BKey, Acc) end,
-    case Mod:fold_keys(ModState, F, []) of
-        [] ->
-            ok;
-        Remainder ->
-            Caller ! {ReqId, {kl, Idx, Remainder}}
-    end,
-    Caller ! {ReqId, Idx, done};
-do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState)
-  when Mod =:= riak_kv_innostore_backend ->
-    F = fun(Key, Acc) ->
-                process_keys(Caller, ReqId, Idx, Bucket, {Bucket, Key}, Acc) end,
-    case Mod:fold_bucket_keys(ModState, Bucket, F) of
-        [] ->
-            ok;
-        Remainder ->
-            Caller ! {ReqId, {kl, Idx, Remainder}}
-    end,
-    Caller ! {ReqId, Idx, done};
 %% @private
 do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
-    F = fun(BKey, _, Acc) ->
-                process_keys(Caller, ReqId, Idx, Bucket, BKey, Acc) end,
-    case Mod:fold(ModState, F, []) of
+    F = fun({_, _} = BKey, _Val, Acc) ->
+                process_keys(Caller, ReqId, Idx, Bucket, BKey, Acc);
+           (Key, _Val, Acc) when is_binary(Key) ->
+                %% Backend's fold gives us keys only, so add bucket.
+                process_keys(Caller, ReqId, Idx, Bucket, {Bucket, Key}, Acc)
+        end,
+    TryFuns = [fun() ->
+                       %% Difficult to coordinate external backend API, so
+                       %% we'll live with it for the moment/eternity.
+                       Mod:fold_bucket_keys(ModState, Bucket, F)
+               end,
+               fun() ->
+                       %% Newer backend API
+                       Mod:fold_bucket_keys(ModState, Bucket, F, [])
+               end,
+               fun() ->
+                       %% Older API for third-parties
+                       Mod:fold(ModState, F, [])
+               end],
+    Final = lists:foldl(fun(TryFun, try_next) ->
+                                try TryFun() catch error:undef -> try_next end;
+                           (_TryFun, Res) ->
+                                Res
+                        end, try_next, TryFuns),
+    case Final of
         [] ->
             ok;
-        Remainder ->
+        Remainder when is_list(Remainder) ->
             Caller ! {ReqId, {kl, Idx, Remainder}}
     end,
     Caller ! {ReqId, Idx, done}.
@@ -512,14 +510,26 @@ do_diffobj_put(BKey={Bucket,_}, DiffObj,
 
 -ifdef(TEST).
 
-dummy_backend() ->
+dummy_backend(BackendMod) ->
     Ring = riak_core_ring:fresh(16,node()),
     riak_core_ring_manager:set_ring_global(Ring),
-    application:set_env(riak_kv, storage_backend, riak_kv_ets_backend),
-    application:set_env(riak_core, default_bucket_props, []).
+    application:set_env(riak_kv, storage_backend, BackendMod),
+    application:set_env(riak_core, default_bucket_props, []),
+    application:set_env(bitcask, data_root, bitcask_test_dir()),
+    application:set_env(riak_kv, riak_kv_dets_backend_root, dets_test_dir()),
+    application:set_env(riak_kv, riak_kv_fs_backend_root, fs_test_dir()).
 
-backend_with_known_key() ->
-    dummy_backend(),
+bitcask_test_dir() ->
+    "./test.bitcask-temp-data".
+
+dets_test_dir() ->
+    "./test.dets-temp-data".
+
+fs_test_dir() ->
+    "./test.fs-temp-data".
+
+backend_with_known_key(BackendMod) ->
+    dummy_backend(BackendMod),
     {ok, S1} = init([0]),
     B = <<"f">>,
     K = <<"b">>,
@@ -533,8 +543,33 @@ backend_with_known_key() ->
                                    S1),
     {S2, B, K}.
 
-list_buckets_test() ->
-    {S, B, _K} = backend_with_known_key(),
+must_be_first_setup_stuff_test() ->
+    application:start(sasl),
+    dets_server:stop(),
+    erlang:put({?MODULE, kv}, application:get_all_env(riak_kv)).
+
+list_buckets_bitcask_test() ->
+    list_buckets_test_i(riak_kv_bitcask_backend).
+
+list_buckets_cache_test() ->
+    list_buckets_test_i(riak_kv_cache_backend).
+
+list_buckets_dets_test() ->
+    redbug:start({dets, apply_op}, [{msgs,100}, {print_file, "zoozoo"}]),
+    os:cmd("rm -rf " ++ dets_test_dir()),
+    list_buckets_test_i(riak_kv_dets_backend).
+
+list_buckets_ets_test() ->
+    list_buckets_test_i(riak_kv_ets_backend).
+
+list_buckets_fs_test() ->
+    list_buckets_test_i(riak_kv_fs_backend).
+
+list_buckets_gb_trees_test() ->
+    list_buckets_test_i(riak_kv_gb_trees_backend).
+
+list_buckets_test_i(BackendMod) ->
+    {S, B, _K} = backend_with_known_key(BackendMod),
     Caller = new_result_listener(),
     handle_command(?KV_LISTKEYS_REQ{bucket='_',
                                     req_id=124,
@@ -544,7 +579,7 @@ list_buckets_test() ->
     flush_msgs().
 
 filter_keys_test() ->
-    {S, B, K} = backend_with_known_key(),
+    {S, B, K} = backend_with_known_key(riak_kv_ets_backend),
 
     Caller1 = new_result_listener(),
     handle_command(?KV_LISTKEYS_REQ{
@@ -571,6 +606,11 @@ filter_keys_test() ->
     ?assertEqual({ok, []}, results_from_listener(Caller3)),
 
     flush_msgs().
+
+must_be_last_cleanup_stuff_test() ->
+    [application:unset_env(riak_kv, K) ||
+        {K, _V} <- application:get_all_env(riak_kv)],
+    [application:set_env(riak_kv, K, V) || {K, V} <- erlang:get({?MODULE, kv})].
 
 new_result_listener() ->
     spawn(fun result_listener/0).
