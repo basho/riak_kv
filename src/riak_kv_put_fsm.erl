@@ -526,7 +526,7 @@ setup() ->
     application:start(os_mon),
     %% Set some missing env vars that are normally 
     %% part of release packaging.
-    application:set_env(riak_core, ring_creation_size, 256),
+    application:set_env(riak_core, ring_creation_size, 64),
     application:set_env(riak_kv, storage_backend, riak_kv_ets_backend),
     %% Create a fresh ring for the test
     Ring = riak_core_ring:fresh(),
