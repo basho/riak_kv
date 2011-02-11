@@ -352,11 +352,6 @@ make_vtag(RObj) ->
     <<HashAsNum:128/integer>> = crypto:md5(term_to_binary(riak_object:vclock(RObj))),
     riak_core_util:integer_to_list(HashAsNum,62).
 
-make_vtag_test() ->
-    Obj = riak_object:new(<<"b">>,<<"k">>,<<"v1">>),
-    ?assertNot(make_vtag(Obj) =:=
-               make_vtag(riak_object:increment_vclock(Obj,<<"client_id">>))).
-
 update_stats(#state{startnow=StartNow}) ->
     EndNow = now(),
     riak_kv_stat:update({put_fsm_time, timer:now_diff(EndNow, StartNow)}).
@@ -441,3 +436,115 @@ merge_robjs(RObjs0,AllowMult) ->
 
 has_postcommit_hooks(Bucket) ->
     lists:flatten(proplists:get_all_values(postcommit, riak_core_bucket:get_bucket(Bucket))) /= [].
+
+
+%% ===================================================================
+%% EUnit tests
+%% ===================================================================
+-ifdef(TEST).
+
+make_vtag_test() ->
+    Obj = riak_object:new(<<"b">>,<<"k">>,<<"v1">>),
+    ?assertNot(make_vtag(Obj) =:=
+               make_vtag(riak_object:increment_vclock(Obj,<<"client_id">>))).
+
+start_test_() ->
+    %% Start erlang node
+    net_kernel:start([test@localhost]),
+    %% Execute the test cases
+    { foreach, 
+      fun setup/0,
+      fun cleanup/1,
+      [
+       fun successful_start/0,
+       fun invalid_w_start/0,
+       fun invalid_dw_start/0,
+       fun invalid_n_val_start/0
+      ]
+    }.
+
+successful_start() ->
+    W = DW = 1,
+    {ok, _Pid} = put_fsm_start(W, DW).
+
+invalid_w_start() ->
+    W = <<"abc">>,
+    DW = 1,
+    {error, {bad_return_value, {stop, normal, none}}} = put_fsm_start(W, DW),
+    %% Wait for error response
+    receive
+        {_RequestId, Result} ->
+            ?assertEqual({error, {w_val_violation, <<"abc">>}}, Result)
+    after
+        5000 ->
+            ?assert(false)
+    end.                
+
+invalid_dw_start() ->
+    W = 1,
+    DW = <<"abc">>,
+    {error, {bad_return_value, {stop, normal, none}}} = put_fsm_start(W, DW),
+    %% Wait for error response
+    receive
+        {_RequestId, Result} ->
+            ?assertEqual({error, {dw_val_violation, <<"abc">>}}, Result)
+    after
+        5000 ->
+            ?assert(false)
+    end.                
+
+invalid_n_val_start() ->
+    W = 4,
+    DW = 1,
+    {error, {bad_return_value, {stop, normal, none}}} = put_fsm_start(W, DW),
+    %% Wait for error response
+    receive
+        {_RequestId, Result} ->
+            ?assertEqual({error, {n_val_violation, 3}}, Result)
+    after
+        5000 ->
+            ?assert(false)
+    end.                
+    
+put_fsm_start(W, DW) ->
+    %% Start the gen_fsm process
+    RequestId = erlang:phash2(erlang:now()),
+    RObj = riak_object:new(<<"testbucket">>, <<"testkey">>, <<"testvalue">>),
+    Timeout = 60000,
+    riak_kv_put_fsm:start(RequestId, RObj, W, DW, Timeout, self()).
+
+setup() ->
+    %% Start the applications required for riak_kv to start
+    application:start(sasl),
+    application:start(crypto),
+    application:start(riak_sysmon),
+    application:start(webmachine),
+    application:start(riak_core),
+    application:start(luke),
+    application:start(erlang_js),
+    application:start(mochiweb),
+    application:start(os_mon),
+    %% Set some missing env vars that are normally 
+    %% part of release packaging.
+    application:set_env(riak_core, ring_creation_size, 256),
+    application:set_env(riak_kv, storage_backend, riak_kv_ets_backend),
+    %% Create a fresh ring for the test
+    Ring = riak_core_ring:fresh(),
+    riak_core_ring_manager:set_my_ring(Ring),
+    %% Start riak_kv
+    application:start(riak_kv),
+    ok.
+
+cleanup(_Pid) ->
+    application:stop(riak_kv),
+    application:stop(os_mon),
+    application:stop(mochiweb),
+    application:stop(erlang_js),
+    application:stop(luke),
+    application:stop(riak_core),
+    application:stop(webmachine),
+    application:stop(riak_sysmon),
+    application:stop(crypto),
+    application:stop(sasl).
+
+-endif.
