@@ -127,7 +127,9 @@ setup() ->
     Ring = riak_core_ring:fresh(),
     riak_core_ring_manager:set_my_ring(Ring),
     %% Start riak_kv
+    timer:sleep(500),
     application:start(riak_kv),
+    timer:sleep(500),
     ok.
 
 cleanup(_Pid) ->

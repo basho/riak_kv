@@ -524,6 +524,7 @@ setup() ->
     application:start(erlang_js),
     application:start(mochiweb),
     application:start(os_mon),
+    timer:sleep(500),
     %% Set some missing env vars that are normally 
     %% part of release packaging.
     application:set_env(riak_core, ring_creation_size, 64),
@@ -533,18 +534,10 @@ setup() ->
     riak_core_ring_manager:set_my_ring(Ring),
     %% Start riak_kv
     application:start(riak_kv),
+    timer:sleep(500),
     ok.
 
 cleanup(_Pid) ->
-    application:stop(riak_kv),
-    application:stop(os_mon),
-    application:stop(mochiweb),
-    application:stop(erlang_js),
-    application:stop(luke),
-    application:stop(riak_core),
-    application:stop(webmachine),
-    application:stop(riak_sysmon),
-    application:stop(crypto),
-    application:stop(sasl).
+    application:stop(riak_kv).
 
 -endif.
