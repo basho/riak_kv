@@ -142,6 +142,9 @@ cleanup(_Pid) ->
     application:stop(webmachine),
     application:stop(riak_sysmon),
     application:stop(crypto),
-    application:stop(sasl).
+    application:stop(sasl),
+    
+    %% Reset the riak_core vnode_modules
+    application:set_env(riak_core, vnode_modules, []).
 
 -endif.

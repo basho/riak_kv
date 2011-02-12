@@ -538,6 +538,18 @@ setup() ->
     ok.
 
 cleanup(_Pid) ->
-    application:stop(riak_kv).
+    application:stop(riak_kv),
+    application:stop(os_mon),
+    application:stop(mochiweb),
+    application:stop(erlang_js),
+    application:stop(luke),
+    application:stop(riak_core),
+    application:stop(webmachine),
+    application:stop(riak_sysmon),
+    application:stop(crypto),
+    application:stop(sasl),    
+
+    %% Reset the riak_core vnode_modules
+    application:set_env(riak_core, vnode_modules, []).
 
 -endif.
