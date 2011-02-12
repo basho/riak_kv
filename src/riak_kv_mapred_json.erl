@@ -283,21 +283,14 @@ parse_step(<<"javascript">>, StepDef) ->
             {ok, {jsanon, Source}}
     end;
 parse_step(<<"erlang">>, StepDef) ->
-    case bin_to_atom(proplists:get_value(<<"module">>, StepDef)) of
-        {ok, Module} ->
-            case bin_to_atom(proplists:get_value(<<"function">>, StepDef)) of
-                {ok, Function} ->
-                    {ok, {modfun, Module, Function}};
-                error ->
-                    {error, ["Could not convert \"function\" field value"
-                             " to an atom in:"
-                             "   ",mochijson2:encode({struct, StepDef}),
-                             "\n"]}
-            end;
-        error ->
-            {error, ["Could not convert \"module\" field value"
-                     " to an atom in:"
-                     "   ",mochijson2:encode({struct, StepDef}),"\n"]}
+    case extract_fun_type(StepDef) of
+        {source, Source} ->
+            {ok, {strfun, Source}};
+        {bucket_key, {Bucket, Key}} ->
+            {ok, {strfun, {Bucket, Key}}};
+        {modfun, M, F} ->
+            {ok, {modfun, M, F}};
+        Else -> Else
     end;
 parse_step(undefined, StepDef) ->
     {error, ["No \"language\" was specified for the phase:\n",
@@ -306,7 +299,9 @@ parse_step(Language,StepDef) ->
     {error, ["Unknown language ",mochijson2:encode(Language)," in phase:\n",
              "   ",mochijson2:encode({struct,StepDef}),"\n"]}.
 
-bin_to_atom(Binary) ->
+bin_to_atom(undefined) ->
+    error;
+bin_to_atom(Binary) when is_binary(Binary) ->
     L = binary_to_list(Binary),
     try
         {ok, list_to_atom(L)}
@@ -321,6 +316,51 @@ is_modfun(Inputs) ->
         _ ->
             true
     end.
+
+extract_fun_type(StepDef) ->
+    Source = proplists:get_value(<<"source">>, StepDef),
+    Bucket = proplists:get_value(<<"bucket">>, StepDef),
+    Key = proplists:get_value(<<"key">>, StepDef),
+    Module = proplists:get_value(<<"module">>, StepDef),
+    Function = proplists:get_value(<<"function">>, StepDef),
+    match_fun_type(StepDef, Source, {Bucket, Key}, {Module, Function}).
+
+match_fun_type(_StepDef, Source, {undefined, undefined}, {undefined, undefined})
+  when is_binary(Source) orelse is_list(Source) ->
+    {source, Source};
+match_fun_type(_StepDef, undefined, {Bucket, Key}, {undefined, undefined})
+  when is_binary(Bucket) andalso is_binary(Key) ->
+    {bucket_key, {Bucket, Key}};
+match_fun_type(StepDef, undefined, {undefined, undefined}, {Module, Function})
+  when is_binary(Module) andalso is_binary(Function) ->
+    case {bin_to_atom(Module), bin_to_atom(Function)} of
+        {{ok, M}, {ok, F}} ->
+            {modfun, M, F};
+        {error, _} ->
+            modfun_error("module", StepDef);
+        {_, error} ->
+            modfun_error("function", StepDef)
+    end;
+match_fun_type(StepDef, _, _, _) ->
+    erl_phase_error(StepDef).
+
+modfun_error(What, StepDef) ->
+    {error, ["Could not convert \"" ++ What ++ "\" field value"
+             " to an atom in:"
+             "   ",mochijson2:encode({struct, StepDef}),
+             "\n"]}.
+
+erl_phase_error(StepDef) ->
+    {error, ["No function specified in Erlang phase:\n"
+             "   ", mochijson2:encode({struct, StepDef}),
+             "\n\nFunctions may be specified by:\n"
+             "   - a \"source\" field, with source for"
+             " an Erlang function\n"
+             "   - \"module\" and \"function\" fields,"
+             " specifying an Erlang module and function\n"
+             "   - \"bucket\" and \"key\" fields,"
+             " specifying a Riak object containing"
+             " Erlang function source\n"]}.
 
 -ifdef(TEST).
 -define(DISCRETE_ERLANG_JOB, <<"{\"inputs\": [[\"foo\", \"bar\"]], \"query\":[{\"map\":{\"language\":\"erlang\","
