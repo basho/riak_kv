@@ -119,38 +119,40 @@ waiting_vnode_r({r, {ok, RObj}, Idx, ReqId},
             {next_state,waiting_vnode_r,NewStateData}
     end;
 waiting_vnode_r({r, {error, notfound}, Idx, ReqId},
-                  StateData=#state{r=R,allowmult=AllowMult,replied_fail=Fails,
-                                   req_id=ReqId,client=Client,n=N,
+                  StateData=#state{r=R,allowmult=AllowMult,
+                                   req_id=ReqId,client=Client,
                                    replied_r=Replied,
                                    replied_notfound=NotFound0}) ->
     NotFound = [Idx|NotFound0],
     NewStateData = StateData#state{replied_notfound=NotFound},
-    FailThreshold = erlang:min(trunc((N/2.0)+1), % basic quorum, or
-                               (N-R+1)), % cannot ever get R 'ok' replies
-    %% FailThreshold = N-R+1,
-    case (length(NotFound) + length(Fails)) >= FailThreshold of
+
+    case has_all_replies(NewStateData) of
         false ->
             {next_state,waiting_vnode_r,NewStateData};
         true ->
             update_stats(StateData),
-            Client ! {ReqId, {error,notfound}},
             Final = merge(Replied,AllowMult),
+	    case Final of
+		{ok,_} -> 
+		    Client ! {ReqId, {error,{r_val_unsatisfied, R, length(Replied)}}};
+		_ -> 
+		    Client ! {ReqId, {error,notfound}}
+	    end,
             finalize(NewStateData#state{final_obj=Final})
     end;
 waiting_vnode_r({r, {error, Err}, Idx, ReqId},
-                  StateData=#state{r=R,client=Client,n=N,allowmult=AllowMult,
+                  StateData=#state{r=R,client=Client,allowmult=AllowMult,
                                    replied_r=Replied,
                                    replied_fail=Failed0,req_id=ReqId,
                                    replied_notfound=NotFound}) ->
     Failed = [{Err,Idx}|Failed0],
     NewStateData = StateData#state{replied_fail=Failed},
-    FailThreshold = erlang:min(trunc((N/2.0)+1), % basic quorum, or
-                               (N-R+1)), % cannot ever get R 'ok' replies
-    %% FailThreshold = N-R+1,
-    case (length(Failed) + length(NotFound)) >= FailThreshold of
+
+    case has_all_replies(NewStateData) of
         false ->
             {next_state,waiting_vnode_r,NewStateData};
         true ->
+            Final = merge(Replied,AllowMult),
             case length(NotFound) of
                 0 ->
                     FullErr = [E || {E,_I} <- Failed],
@@ -158,10 +160,14 @@ waiting_vnode_r({r, {error, Err}, Idx, ReqId},
                     Client ! {ReqId, {error,FullErr}};
                 _ ->
                     update_stats(StateData),
-                    Client ! {ReqId, {error,notfound}}
-            end,
-            Final = merge(Replied,AllowMult),
-            finalize(NewStateData#state{final_obj=Final})
+		    case Final of
+			{ok,_} ->
+			    Client ! {ReqId, {error,{r_val_unsatisfied, R, length(Replied)}}};
+			_ -> 
+			    Client ! {ReqId, {error,notfound}}
+		    end
+	    end,
+	    finalize(NewStateData#state{final_obj=Final})
     end;
 waiting_vnode_r(timeout, StateData=#state{client=Client,req_id=ReqId,replied_r=Replied,allowmult=AllowMult}) ->
     update_stats(StateData),
