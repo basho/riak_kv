@@ -450,7 +450,7 @@ make_vtag_test() ->
 
 start_test_() ->
     %% Start erlang node
-    net_kernel:start([test@localhost]),
+    net_kernel:start([testnode, shortnames]),
     %% Execute the test cases
     { foreach, 
       fun setup/0,

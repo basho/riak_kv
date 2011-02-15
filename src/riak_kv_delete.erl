@@ -81,7 +81,7 @@ reap(Bucket, Key, Timeout) ->
 
 delete_test_() ->
     %% Start erlang node
-    net_kernel:start([test@localhost]),
+    net_kernel:start([testnode, shortnames]),
     %% Execute the test cases
     { foreach, 
       fun setup/0,
