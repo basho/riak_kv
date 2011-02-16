@@ -110,7 +110,7 @@ waiting_vnode_r({r, {ok, RObj}, Idx, ReqId},
     Replied = [{RObj,Idx}|Replied0],
     case length(Replied) >= R of
         true ->
-            Final = respond(Client,Replied,AllowMult,ReqId),
+            Final = respond(Client,R,Replied,AllowMult,ReqId),
             update_stats(StateData),
             NewStateData = StateData#state{replied_r=Replied,final_obj=Final},
             finalize(NewStateData);
@@ -131,20 +131,13 @@ waiting_vnode_r({r, {error, notfound}, Idx, ReqId},
             {next_state,waiting_vnode_r,NewStateData};
         true ->
             update_stats(StateData),
-            Final = merge(Replied,AllowMult),
-	    case Final of
-		{ok,_} -> 
-		    Client ! {ReqId, {error,{r_val_unsatisfied, R, length(Replied)}}};
-		_ -> 
-		    Client ! {ReqId, {error,notfound}}
-	    end,
+            Final = respond(Client,R,Replied,AllowMult,ReqId),
             finalize(NewStateData#state{final_obj=Final})
     end;
 waiting_vnode_r({r, {error, Err}, Idx, ReqId},
                   StateData=#state{r=R,client=Client,allowmult=AllowMult,
                                    replied_r=Replied,
-                                   replied_fail=Failed0,req_id=ReqId,
-                                   replied_notfound=NotFound}) ->
+                                   replied_fail=Failed0,req_id=ReqId}) ->
     Failed = [{Err,Idx}|Failed0],
     NewStateData = StateData#state{replied_fail=Failed},
 
@@ -152,22 +145,9 @@ waiting_vnode_r({r, {error, Err}, Idx, ReqId},
         false ->
             {next_state,waiting_vnode_r,NewStateData};
         true ->
-            Final = merge(Replied,AllowMult),
-            case length(NotFound) of
-                0 ->
-                    FullErr = [E || {E,_I} <- Failed],
-                    update_stats(StateData),
-                    Client ! {ReqId, {error,FullErr}};
-                _ ->
-                    update_stats(StateData),
-		    case Final of
-			{ok,_} ->
-			    Client ! {ReqId, {error,{r_val_unsatisfied, R, length(Replied)}}};
-			_ -> 
-			    Client ! {ReqId, {error,notfound}}
-		    end
-	    end,
-	    finalize(NewStateData#state{final_obj=Final})
+            Final = respond(Client,R,Replied,AllowMult,ReqId),
+            update_stats(StateData),
+            finalize(NewStateData#state{final_obj=Final})
     end;
 waiting_vnode_r(timeout, StateData=#state{client=Client,req_id=ReqId,replied_r=Replied,allowmult=AllowMult}) ->
     update_stats(StateData),
@@ -282,8 +262,8 @@ code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 merge(VResponses, AllowMult) ->
    merge_robjs([R || {R,_I} <- VResponses],AllowMult).
 
-respond(Client,VResponses,AllowMult,ReqId) ->
-    Merged = merge(VResponses, AllowMult),
+respond(Client,R,VResponses,AllowMult,ReqId) ->
+    Merged = merge(VResponses,AllowMult),
     case Merged of
         tombstone ->
             Reply = {error,notfound};
@@ -292,10 +272,16 @@ respond(Client,VResponses,AllowMult,ReqId) ->
                 true ->
                     Reply = {error, notfound};
                 false ->
-                    Reply = {ok, Obj}
+                    NumResponses = length(VResponses),
+                    case NumResponses >= R of
+                        true ->
+                            Reply = {ok, Obj};
+                        false ->
+                            Reply = {error,{r_val_unsatisfied, R, NumResponses}}
+                    end
             end;
-        X ->
-            Reply = X
+        {error,_}=Err -> 
+            Reply = Err
     end,
     Client ! {ReqId, Reply},
     Merged.
