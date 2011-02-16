@@ -345,38 +345,43 @@ malformed_request(RD, Ctx) ->
             case DocCtx#ctx.doc of
                 {error, notfound} ->
                     {{halt, 404},
+                     wrq:set_resp_header("X-Riak-Error", io_lib:format("~p~n", [DocCtx#ctx.doc]),
                      wrq:set_resp_header("Content-Type", "text/plain",
                                          wrq:append_to_response_body(
                                            io_lib:format("not found~n",[]),
-                                           ResRD)),
+                                           ResRD))),
                      DocCtx};
                 {error, {r_val_unsatisfied, Requested, Given}} ->
                     {{halt, 503},
+                     wrq:set_resp_header("X-Riak-Error", io_lib:format("~p~n", [DocCtx#ctx.doc]),
                      wrq:set_resp_header("Content-Type", "text/plain",
                                          wrq:append_to_response_body(
                                            io_lib:format("R-value unsatisfied (got ~p of ~p)~n",[Given,Requested]),
-                                           ResRD)),
+                                           ResRD))),
                      DocCtx};
                 {error, timeout} ->
                     {{halt, 503},
+                     wrq:set_resp_header("X-Riak-Error", io_lib:format("~p~n", [DocCtx#ctx.doc]),
                      wrq:set_resp_header("Content-Type", "text/plain",
                                       wrq:append_to_response_body(
                                         io_lib:format("request timed out~n",[]),
-                                        ResRD)),
+                                        ResRD))),
                      DocCtx};
                 {error, {n_val_violation, _}} ->
                     {{halt, 400},
+                     wrq:set_resp_header("X-Riak-Error", io_lib:format("~p~n", [DocCtx#ctx.doc]),
                      wrq:set_resp_header("Content-Type", "text/plain",
                                   wrq:append_to_response_body(
                                     io_lib:format("R-value unsatisfiable~n",[]),
-                                    ResRD)),
+                                    ResRD))),
                      DocCtx};
                 {error, Err} ->
                     {{halt, 500},
+                     wrq:set_resp_header("X-Riak-Error", io_lib:format("~p~n", [DocCtx#ctx.doc]),
                      wrq:set_resp_header("Content-Type", "text/plain",
                                   wrq:append_to_response_body(
                                     io_lib:format("Error:~n~p~n",[Err]),
-                                    ResRD)),
+                                    ResRD))),
                      DocCtx};
                 _ ->
                     {false, ResRD, DocCtx}
@@ -644,17 +649,21 @@ resource_exists(RD, Ctx0) ->
                                MDs),
                      RD, DocCtx#ctx{vtag=Vtag}}
             end;
-        {error, notfound} ->
-            {false, RD, DocCtx};
-        {error, {r_val_unsatisfied, Requested, Given}} ->
-            Msg = io_lib:format("R-value unsatisfied (got ~p of ~p)~n", [Given,Requested]),
-            {{halt, 503}, wrq:append_to_response_body(Msg, RD), DocCtx};
-        {error, timeout} ->
-            {{halt, 503}, RD, DocCtx};
-        {error, {n_val_violation, N}} ->
-            Msg = io_lib:format("Specified r/w/dw values invalid for bucket"
-                                " n value of ~p~n", [N]),
-            {{halt, 400}, wrq:append_to_response_body(Msg, RD), DocCtx}
+        {error,_} ->
+            RD2 = wrq:set_resp_header("X-Riak-Error", io_lib:format("~p~n", [DocCtx#ctx.doc]), RD),
+            case DocCtx#ctx.doc of
+                {error, notfound} ->
+                    {false, RD2, DocCtx};
+                {error, {r_val_unsatisfied, Requested, Given}} ->
+                    Msg = io_lib:format("R-value unsatisfied (got ~p of ~p)~n", [Given,Requested]),
+                    {{halt, 503}, wrq:append_to_response_body(Msg, RD2), DocCtx};
+                {error, timeout} ->
+                    {{halt, 503}, RD, DocCtx};
+                {error, {n_val_violation, N}} ->
+                    Msg = io_lib:format("Specified r/w/dw values invalid for bucket"
+                                        " n value of ~p~n", [N]),
+                    {{halt, 400}, wrq:append_to_response_body(Msg, RD2), DocCtx}
+            end
     end.
 
 %% @spec produce_toplevel_body(reqdata(), context()) -> {binary(), reqdata(), context()}
