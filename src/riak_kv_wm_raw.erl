@@ -868,6 +868,11 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L}) ->
     Doc = riak_object:update_value(MDDoc, accept_value(CType, wrq:req_body(RD))),
     Options = case wrq:get_qs_value(?Q_RETURNBODY, RD) of ?Q_TRUE -> [returnbody]; _ -> [] end,
     case C:put(Doc, Ctx#ctx.w, Ctx#ctx.dw, 60000, Options) of
+        {error, timeout} ->
+            {{halt, 503}, 
+	     wrq:set_resp_header("Content-Type", "text/plain",
+				 wrq:append_to_response_body(
+				   io_lib:format("request timed out~n",[]), RD)), Ctx};
         {error, precommit_fail} ->
             {{halt, 403}, send_precommit_error(RD, undefined), Ctx};
         {error, {precommit_fail, Reason}} ->
