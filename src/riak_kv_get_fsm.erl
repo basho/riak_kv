@@ -110,7 +110,7 @@ waiting_vnode_r({r, {ok, RObj}, Idx, ReqId},
     Replied = [{RObj,Idx}|Replied0],
     case length(Replied) >= R of
         true ->
-            Final = respond(Client,Replied,AllowMult,ReqId),
+            Final = respond(Client,R,Replied,AllowMult,ReqId),
             update_stats(StateData),
             NewStateData = StateData#state{replied_r=Replied,final_obj=Final},
             finalize(NewStateData);
@@ -119,48 +119,34 @@ waiting_vnode_r({r, {ok, RObj}, Idx, ReqId},
             {next_state,waiting_vnode_r,NewStateData}
     end;
 waiting_vnode_r({r, {error, notfound}, Idx, ReqId},
-                  StateData=#state{r=R,allowmult=AllowMult,replied_fail=Fails,
-                                   req_id=ReqId,client=Client,n=N,
+                  StateData=#state{r=R,allowmult=AllowMult,
+                                   req_id=ReqId,client=Client,
                                    replied_r=Replied,
                                    replied_notfound=NotFound0}) ->
     NotFound = [Idx|NotFound0],
     NewStateData = StateData#state{replied_notfound=NotFound},
-    FailThreshold = erlang:min(trunc((N/2.0)+1), % basic quorum, or
-                               (N-R+1)), % cannot ever get R 'ok' replies
-    %% FailThreshold = N-R+1,
-    case (length(NotFound) + length(Fails)) >= FailThreshold of
+
+    case has_all_replies(NewStateData) of
         false ->
             {next_state,waiting_vnode_r,NewStateData};
         true ->
             update_stats(StateData),
-            Client ! {ReqId, {error,notfound}},
-            Final = merge(Replied,AllowMult),
+            Final = respond(Client,R,Replied,AllowMult,ReqId),
             finalize(NewStateData#state{final_obj=Final})
     end;
 waiting_vnode_r({r, {error, Err}, Idx, ReqId},
-                  StateData=#state{r=R,client=Client,n=N,allowmult=AllowMult,
+                  StateData=#state{r=R,client=Client,allowmult=AllowMult,
                                    replied_r=Replied,
-                                   replied_fail=Failed0,req_id=ReqId,
-                                   replied_notfound=NotFound}) ->
+                                   replied_fail=Failed0,req_id=ReqId}) ->
     Failed = [{Err,Idx}|Failed0],
     NewStateData = StateData#state{replied_fail=Failed},
-    FailThreshold = erlang:min(trunc((N/2.0)+1), % basic quorum, or
-                               (N-R+1)), % cannot ever get R 'ok' replies
-    %% FailThreshold = N-R+1,
-    case (length(Failed) + length(NotFound)) >= FailThreshold of
+
+    case has_all_replies(NewStateData) of
         false ->
             {next_state,waiting_vnode_r,NewStateData};
         true ->
-            case length(NotFound) of
-                0 ->
-                    FullErr = [E || {E,_I} <- Failed],
-                    update_stats(StateData),
-                    Client ! {ReqId, {error,FullErr}};
-                _ ->
-                    update_stats(StateData),
-                    Client ! {ReqId, {error,notfound}}
-            end,
-            Final = merge(Replied,AllowMult),
+            Final = respond(Client,R,Replied,AllowMult,ReqId),
+            update_stats(StateData),
             finalize(NewStateData#state{final_obj=Final})
     end;
 waiting_vnode_r(timeout, StateData=#state{client=Client,req_id=ReqId,replied_r=Replied,allowmult=AllowMult}) ->
@@ -276,8 +262,8 @@ code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 merge(VResponses, AllowMult) ->
    merge_robjs([R || {R,_I} <- VResponses],AllowMult).
 
-respond(Client,VResponses,AllowMult,ReqId) ->
-    Merged = merge(VResponses, AllowMult),
+respond(Client,R,VResponses,AllowMult,ReqId) ->
+    Merged = merge(VResponses,AllowMult),
     case Merged of
         tombstone ->
             Reply = {error,notfound};
@@ -286,7 +272,13 @@ respond(Client,VResponses,AllowMult,ReqId) ->
                 true ->
                     Reply = {error, notfound};
                 false ->
-                    Reply = {ok, Obj}
+                    NumResponses = length(VResponses),
+                    case NumResponses >= R of
+                        true ->
+                            Reply = {ok, Obj};
+                        false ->
+                            Reply = {error,{r_val_unsatisfied, R, NumResponses}}
+                    end
             end;
         X ->
             Reply = X

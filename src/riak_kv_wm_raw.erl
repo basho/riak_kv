@@ -350,6 +350,13 @@ malformed_request(RD, Ctx) ->
                                            io_lib:format("not found~n",[]),
                                            ResRD)),
                      DocCtx};
+                {error, {r_val_unsatisfied, Requested, Given}} ->
+                    {{halt, 503},
+                     wrq:set_resp_header("Content-Type", "text/plain",
+                                         wrq:append_to_response_body(
+                                           io_lib:format("R-value unsatisfied (got ~p of ~p)~n",[Given,Requested]),
+                                           ResRD)),
+                     DocCtx};
                 {error, timeout} ->
                     {{halt, 503},
                      wrq:set_resp_header("Content-Type", "text/plain",
@@ -527,6 +534,8 @@ charsets_provided(RD, Ctx0) ->
             {no_charset, RD, DocCtx};
         {error, timeout} ->
             {no_charset, RD, DocCtx};
+        {error, {r_val_unsatisfied, _, _}} ->
+            {no_charset, RD, DocCtx};
         {error, {n_val_violation, _}} ->
             {no_charset, RD, DocCtx}
     end.
@@ -559,6 +568,8 @@ encodings_provided(RD, Ctx0) ->
         {error, notfound} ->
             {default_encodings(), RD, DocCtx};
         {error, timeout} ->
+            {default_encodings(), RD, DocCtx};
+        {error, {r_val_unsatisfied, _, _}} ->
             {default_encodings(), RD, DocCtx};
         {error, {n_val_violation, _}} ->
             {default_encodings(), RD, DocCtx}
@@ -635,6 +646,9 @@ resource_exists(RD, Ctx0) ->
             end;
         {error, notfound} ->
             {false, RD, DocCtx};
+        {error, {r_val_unsatisfied, Requested, Given}} ->
+            Msg = io_lib:format("R-value unsatisfied (got ~p of ~p)~n", [Given,Requested]),
+            {{halt, 503}, wrq:append_to_response_body(Msg, RD), DocCtx};
         {error, timeout} ->
             {{halt, 503}, RD, DocCtx};
         {error, {n_val_violation, N}} ->
