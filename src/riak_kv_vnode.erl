@@ -424,7 +424,11 @@ do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
     TryFuns = [fun() ->
                        %% Difficult to coordinate external backend API, so
                        %% we'll live with it for the moment/eternity.
-                       Mod:fold_bucket_keys(ModState, Bucket, F)
+                       F2 = fun(Key, Acc) ->
+                            process_keys(Caller, ReqId, Idx, Bucket,
+                                         {Bucket, Key}, Acc)
+                            end,
+                       Mod:fold_bucket_keys(ModState, Bucket, F2)
                end,
                fun() ->
                        %% Newer backend API
