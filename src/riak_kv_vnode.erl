@@ -521,7 +521,11 @@ dummy_backend(BackendMod) ->
     application:set_env(riak_core, default_bucket_props, []),
     application:set_env(bitcask, data_root, bitcask_test_dir()),
     application:set_env(riak_kv, riak_kv_dets_backend_root, dets_test_dir()),
-    application:set_env(riak_kv, riak_kv_fs_backend_root, fs_test_dir()).
+    application:set_env(riak_kv, riak_kv_fs_backend_root, fs_test_dir()),
+    application:set_env(riak_kv, multi_backend_default, multi_dummy_ets),
+    application:set_env(riak_kv, multi_backend,
+                        [{multi_dummy_ets, riak_kv_ets_backend, []},
+                         {multi_dummy_gb, riak_kv_gb_trees_backend, []}]).
 
 bitcask_test_dir() ->
     "./test.bitcask-temp-data".
@@ -571,6 +575,9 @@ list_buckets_fs_test() ->
 
 list_buckets_gb_trees_test() ->
     list_buckets_test_i(riak_kv_gb_trees_backend).
+
+list_buckets_multi_backend_test() ->
+    list_buckets_test_i(riak_kv_multi_backend).
 
 list_buckets_test_i(BackendMod) ->
     {S, B, _K} = backend_with_known_key(BackendMod),

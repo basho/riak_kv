@@ -22,7 +22,8 @@
 
 -module (riak_kv_multi_backend).
 -behavior(riak_kv_backend).
--export([start/2, stop/1,get/2,put/3,list/1,list_bucket/2,delete/2,is_empty/1,drop/1,fold/3]).
+-export([start/2, stop/1,get/2,put/3,list/1,list_bucket/2,delete/2,is_empty/1,
+         drop/1,fold/3,fold_bucket_keys/4]).
 -export([callback/3]).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -150,6 +151,16 @@ drop(State) ->
 fold(State, Fun, Extra) ->    
     lists:foldl(fun({_, Module, SubState}, Acc) ->
                         Module:fold(SubState, Fun, Acc)
+                end, Extra, State#state.backends).
+
+fold_bucket_keys(State, Bucket, Fun, Extra) ->    
+    lists:foldl(fun({_, Module, SubState}, Acc) ->
+                        try
+                            Module:fold_bucket_keys(SubState, Bucket, Fun, Acc)
+                        catch error:undef ->
+                            %% Backend doesn't support newer API, use older API
+                            Module:fold(SubState, Fun, Acc)
+                        end
                 end, Extra, State#state.backends).
 
 callback(State, Ref, Msg) ->
