@@ -74,9 +74,15 @@ reip([OldNode, NewNode]) ->
     BackupFN = filename:join([RingStateDir, filename:basename(RingFile)++".BAK"]),
     {ok, _} = file:copy(RingFile, BackupFN),
     io:format("Backed up existing ring file to ~p~n", [BackupFN]),
-    Ring = riak_core_ring_manager:read_ringfile(RingFile),
-    NewRing = riak_core_ring:rename_node(Ring, OldNode, NewNode),
-    riak_core_ring_manager:do_write_ringfile(NewRing),
+    F = fun(Ring, []) ->
+                case riak_core_ring:rename_node(Ring, OldNode, NewNode) of
+                    Ring ->
+                        ignore;
+                    NewRing ->
+                        {new_ring, NewRing}
+                end
+        end,
+    {ok, _NewRing} = riak_core_ring_manager:ring_trans(F, []),
     io:format("New ring file written to ~p~n", 
               [element(2, riak_core_ring_manager:find_latest_ringfile())]).
 
