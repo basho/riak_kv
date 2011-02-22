@@ -153,15 +153,22 @@ fold(State, Fun, Extra) ->
                         Module:fold(SubState, Fun, Acc)
                 end, Extra, State#state.backends).
 
-fold_bucket_keys(State, Bucket, Fun, Extra) ->    
-    lists:foldl(fun({_, Module, SubState}, Acc) ->
-                        try
-                            Module:fold_bucket_keys(SubState, Bucket, Fun, Acc)
-                        catch error:undef ->
-                            %% Backend doesn't support newer API, use older API
-                            Module:fold(SubState, Fun, Acc)
-                        end
-                end, Extra, State#state.backends).
+fold_bucket_keys(State, Bucket, Fun, Extra) ->
+    %% We have less work to do than fold/3 does because we're a
+    %% backend-aware manager.
+    %% Mimic riak_kv_vnode:do_list_keys() logic but with nested try/catch.
+    {_Name, Module, SubState} = get_backend(Bucket, State),
+    try
+        WrapFun = fun(K, Acc) -> Fun({Bucket, K}, unused_val, Acc) end,
+        Module:fold_bucket_keys(SubState, Bucket, WrapFun)
+    catch error:undef ->
+            try
+                Module:fold_bucket_keys(SubState, Bucket, Fun, Extra)
+            catch error:undef ->
+                    %% Backend doesn't support newer API, use older API
+                    Module:fold(SubState, Fun, Extra)
+            end
+    end.
 
 callback(State, Ref, Msg) ->
     %% Pass the callback on to all submodules - their responsbility to
