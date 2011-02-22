@@ -26,7 +26,7 @@
 -export([start/6]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
--export([initialize/2,waiting_vnode_r/2,waiting_read_repair/2]).
+-export([prepare/2,execute/2,waiting_vnode_r/2,waiting_read_repair/2]).
 
 -record(state, {client :: {pid(), reference()},
                 n :: pos_integer(), 
@@ -36,15 +36,17 @@
                 waiting_for :: [{pos_integer(), atom(), atom()}],
                 req_id :: pos_integer(), 
                 starttime :: pos_integer(), 
-                replied_r :: list(), 
-                replied_notfound :: list(),
-                replied_fail :: list(),
-                repair_sent :: list(), 
+                replied_r = [] :: list(), 
+                replied_notfound = [] :: list(),
+                replied_fail = [] :: list(),
+                repair_sent = [] :: list(), 
                 final_obj :: undefined | {ok, riak_object:riak_object()} |
                              tombstone | {error, notfound},
                 timeout :: pos_integer(),
                 tref    :: reference(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
+                bucket_props,
+                up_nodes,
                 ring :: riak_core_ring:riak_core_ring(),
                 startnow :: {pos_integer(), pos_integer(), pos_integer()}
                }).
@@ -54,37 +56,47 @@ start(ReqId,Bucket,Key,R,Timeout,From) ->
 
 %% @private
 init([ReqId,Bucket,Key,R,Timeout,Client]) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     StateData = #state{client=Client,r=R, timeout=Timeout,
-                req_id=ReqId, bkey={Bucket,Key}, ring=Ring},
-    {ok,initialize,StateData,0}.
+                req_id=ReqId, bkey={Bucket,Key}},
+    {ok,prepare,StateData,0}.
+
+prepare(timeout, StateData=#state{bkey={Bucket,_Key}}) ->
+    StartNow = now(),
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    {next_state, execute, StateData#state{starttime=riak_core_util:moment(),
+                                          bucket_props=BucketProps,
+                                          up_nodes=UpNodes,
+                                          ring=Ring,
+                                          startnow=StartNow}, 0}.
 
 %% @private
-initialize(timeout, StateData0=#state{timeout=Timeout, r=R0, req_id=ReqId,
-                                      bkey={Bucket,Key}=BKey, ring=Ring}) ->
-    StartNow = now(),
+execute(timeout, StateData0=#state{timeout=Timeout, r=R0, req_id=ReqId,
+                                   bkey={Bucket,Key}=BKey, 
+                                   bucket_props=BucketProps,
+                                   up_nodes=UpNodes,
+                                   ring=Ring}) ->
     TRef = erlang:send_after(Timeout, self(), timeout),
     DocIdx = riak_core_util:chash_key({Bucket, Key}),
     Req = #riak_kv_get_req_v1{
       bkey = BKey,
       req_id = ReqId
      },
-    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     N = proplists:get_value(n_val,BucketProps),
     R = riak_kv_util:expand_rw_value(r, R0, BucketProps, N),
     case R > N of
         true ->
             client_reply({error, {n_val_violation, N}}, StateData0),
             {stop, normal, StateData0};
-        false -> 
+        false ->
             AllowMult = proplists:get_value(allow_mult,BucketProps),
             Preflist = riak_core_ring:preflist(DocIdx, Ring),
             {Targets, Fallbacks} = lists:split(N, Preflist),
-            UpNodes = riak_core_node_watcher:nodes(riak_kv),
             {Sent1, Pangs1} = riak_kv_util:try_cast(Req, UpNodes, Targets),
-            Sent = 
+            Sent =
                 % Sent is [{Index,TargetNode,SentNode}]
-                case length(Sent1) =:= N of   
+                case length(Sent1) =:= N of
                     true -> Sent1;
                     false -> Sent1 ++ riak_kv_util:fallback(Req, UpNodes, Pangs1,
                                                             Fallbacks)
@@ -95,8 +107,7 @@ initialize(timeout, StateData0=#state{timeout=Timeout, r=R0, req_id=ReqId,
                                          replied_r=[],replied_fail=[],
                                          replied_notfound=[],
                                          starttime=riak_core_util:moment(),
-                                         waiting_for=Sent,tref=TRef,
-                                         startnow=StartNow},
+                                         waiting_for=Sent,tref=TRef},
             {next_state,waiting_vnode_r,StateData}
     end.
 
