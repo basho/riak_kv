@@ -59,12 +59,9 @@ init([ReqId,Bucket,Key,R,Timeout,Client]) ->
                 req_id=ReqId, bkey={Bucket,Key}, ring=Ring},
     {ok,initialize,StateData,0}.
 
-
-
 %% @private
 initialize(timeout, StateData0=#state{timeout=Timeout, r=R0, req_id=ReqId,
-                                      bkey={Bucket,Key}=BKey, ring=Ring,
-                                      client=Client}) ->
+                                      bkey={Bucket,Key}=BKey, ring=Ring}) ->
     StartNow = now(),
     TRef = erlang:send_after(Timeout, self(), timeout),
     DocIdx = riak_core_util:chash_key({Bucket, Key}),
@@ -77,7 +74,7 @@ initialize(timeout, StateData0=#state{timeout=Timeout, r=R0, req_id=ReqId,
     R = riak_kv_util:expand_rw_value(r, R0, BucketProps, N),
     case R > N of
         true ->
-            Client ! {ReqId, {error, {n_val_violation, N}}},
+            client_reply({error, {n_val_violation, N}}, StateData0),
             {stop, normal, StateData0};
         false -> 
             AllowMult = proplists:get_value(allow_mult,BucketProps),
@@ -105,12 +102,13 @@ initialize(timeout, StateData0=#state{timeout=Timeout, r=R0, req_id=ReqId,
 
 waiting_vnode_r({r, {ok, RObj}, Idx, ReqId},
                   StateData=#state{r=R,allowmult=AllowMult,
-                                   req_id=ReqId,client=Client,
+                                   req_id=ReqId,
                                    replied_r=Replied0}) ->
     Replied = [{RObj,Idx}|Replied0],
     case length(Replied) >= R of
         true ->
-            Final = respond(Client,Replied,AllowMult,ReqId),
+            {Reply, Final} = respond(Replied,AllowMult),
+            client_reply(Reply, StateData),
             update_stats(StateData),
             NewStateData = StateData#state{replied_r=Replied,final_obj=Final},
             finalize(NewStateData);
@@ -120,7 +118,7 @@ waiting_vnode_r({r, {ok, RObj}, Idx, ReqId},
     end;
 waiting_vnode_r({r, {error, notfound}, Idx, ReqId},
                   StateData=#state{r=R,allowmult=AllowMult,replied_fail=Fails,
-                                   req_id=ReqId,client=Client,n=N,
+                                   req_id=ReqId,n=N,
                                    replied_r=Replied,
                                    replied_notfound=NotFound0}) ->
     NotFound = [Idx|NotFound0],
@@ -133,12 +131,12 @@ waiting_vnode_r({r, {error, notfound}, Idx, ReqId},
             {next_state,waiting_vnode_r,NewStateData};
         true ->
             update_stats(StateData),
-            Client ! {ReqId, {error,notfound}},
+            client_reply({error,notfound}, StateData),
             Final = merge(Replied,AllowMult),
             finalize(NewStateData#state{final_obj=Final})
     end;
 waiting_vnode_r({r, {error, Err}, Idx, ReqId},
-                  StateData=#state{r=R,client=Client,n=N,allowmult=AllowMult,
+                  StateData=#state{r=R,n=N,allowmult=AllowMult,
                                    replied_r=Replied,
                                    replied_fail=Failed0,req_id=ReqId,
                                    replied_notfound=NotFound}) ->
@@ -155,17 +153,17 @@ waiting_vnode_r({r, {error, Err}, Idx, ReqId},
                 0 ->
                     FullErr = [E || {E,_I} <- Failed],
                     update_stats(StateData),
-                    Client ! {ReqId, {error,FullErr}};
+                    client_reply({error,FullErr}, StateData);
                 _ ->
                     update_stats(StateData),
-                    Client ! {ReqId, {error,notfound}}
+                    client_reply({error,notfound}, StateData)
             end,
             Final = merge(Replied,AllowMult),
             finalize(NewStateData#state{final_obj=Final})
     end;
-waiting_vnode_r(timeout, StateData=#state{client=Client,req_id=ReqId,replied_r=Replied,allowmult=AllowMult}) ->
+waiting_vnode_r(timeout, StateData=#state{replied_r=Replied,allowmult=AllowMult}) ->
     update_stats(StateData),
-    Client ! {ReqId, {error,timeout}},
+    client_reply({error,timeout}, StateData),
     really_finalize(StateData#state{final_obj=merge(Replied, AllowMult)}).
 
 waiting_read_repair({r, {ok, RObj}, Idx, ReqId},
@@ -273,10 +271,13 @@ terminate(Reason, _StateName, _State) ->
 %% @private
 code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 
+client_reply(Reply, #state{client = Client, req_id = ReqId}) ->
+    Client ! {ReqId, Reply}.
+
 merge(VResponses, AllowMult) ->
    merge_robjs([R || {R,_I} <- VResponses],AllowMult).
 
-respond(Client,VResponses,AllowMult,ReqId) ->
+respond(VResponses,AllowMult) ->
     Merged = merge(VResponses, AllowMult),
     case Merged of
         tombstone ->
@@ -291,8 +292,7 @@ respond(Client,VResponses,AllowMult,ReqId) ->
         X ->
             Reply = X
     end,
-    Client ! {ReqId, Reply},
-    Merged.
+    {Reply, Merged}.
 
 merge_robjs([], _) ->
     {error, notfound};
