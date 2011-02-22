@@ -77,7 +77,7 @@ execute(timeout, StateData0=#state{timeout=Timeout, r=R0, req_id=ReqId,
                                    bucket_props=BucketProps,
                                    up_nodes=UpNodes,
                                    ring=Ring}) ->
-    TRef = erlang:send_after(Timeout, self(), timeout),
+    TRef = schedule_timeout(Timeout),
     DocIdx = riak_core_util:chash_key({Bucket, Key}),
     Req = #riak_kv_get_req_v1{
       bkey = BKey,
@@ -281,6 +281,11 @@ terminate(Reason, _StateName, _State) ->
 
 %% @private
 code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
+
+schedule_timeout(infinity) ->
+    undefined;
+schedule_timeout(Timeout) ->
+    erlang:send_after(Timeout, self(), timeout).
 
 client_reply(Reply, #state{client = Client, req_id = ReqId}) ->
     Client ! {ReqId, Reply}.
