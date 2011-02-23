@@ -101,10 +101,10 @@ mget(Preflist, BKeys, ReqId) ->
                                    riak_kv_vnode_master).
 
 del(Preflist, BKey, ReqId) ->
-    riak_core_vnode_master:sync_command(Preflist,
-                                        ?KV_DELETE_REQ{bkey=BKey,
-                                                       req_id=ReqId},
-                                        riak_kv_vnode_master).
+    riak_core_vnode_master:command(Preflist,
+                                   ?KV_DELETE_REQ{bkey=BKey,
+                                                  req_id=ReqId},
+                                   riak_kv_vnode_master).
 
 %% Issue a put for the object to the preflist, expecting a reply
 %% to an FSM.
