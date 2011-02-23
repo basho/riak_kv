@@ -93,66 +93,15 @@ execute(timeout, StateData0=#state{timeout=Timeout, n=N, r=R0, req_id=ReqId,
             {next_state,waiting_vnode_r,StateData}
     end.
 
-waiting_vnode_r({r, {ok, RObj}, Idx, ReqId},
-                  StateData=#state{r=R,allowmult=AllowMult,
-                                   req_id=ReqId,
-                                   replied_r=Replied0}) ->
-    Replied = [{RObj,Idx}|Replied0],
-    case length(Replied) >= R of
-        true ->
-            {Reply, Final} = respond(Replied,AllowMult),
-            client_reply(Reply, StateData),
-            update_stats(StateData),
-            NewStateData = StateData#state{replied_r=Replied,final_obj=Final},
-            finalize(NewStateData);
-        false ->
-            NewStateData = StateData#state{replied_r=Replied},
-            {next_state,waiting_vnode_r,NewStateData}
-    end;
-waiting_vnode_r({r, {error, notfound}, Idx, ReqId},
-                  StateData=#state{r=R,allowmult=AllowMult,replied_fail=Fails,
-                                   req_id=ReqId,n=N,
-                                   replied_r=Replied,
-                                   replied_notfound=NotFound0}) ->
-    NotFound = [Idx|NotFound0],
-    NewStateData = StateData#state{replied_notfound=NotFound},
-    FailThreshold = erlang:min(trunc((N/2.0)+1), % basic quorum, or
-                               (N-R+1)), % cannot ever get R 'ok' replies
-    %% FailThreshold = N-R+1,
-    case (length(NotFound) + length(Fails)) >= FailThreshold of
-        false ->
-            {next_state,waiting_vnode_r,NewStateData};
-        true ->
-            update_stats(StateData),
-            client_reply({error,notfound}, StateData),
-            Final = merge(Replied,AllowMult),
-            finalize(NewStateData#state{final_obj=Final})
-    end;
-waiting_vnode_r({r, {error, Err}, Idx, ReqId},
-                  StateData=#state{r=R,n=N,allowmult=AllowMult,
-                                   replied_r=Replied,
-                                   replied_fail=Failed0,req_id=ReqId,
-                                   replied_notfound=NotFound}) ->
-    Failed = [{Err,Idx}|Failed0],
-    NewStateData = StateData#state{replied_fail=Failed},
-    FailThreshold = erlang:min(trunc((N/2.0)+1), % basic quorum, or
-                               (N-R+1)), % cannot ever get R 'ok' replies
-    %% FailThreshold = N-R+1,
-    case (length(Failed) + length(NotFound)) >= FailThreshold of
-        false ->
-            {next_state,waiting_vnode_r,NewStateData};
-        true ->
-            case length(NotFound) of
-                0 ->
-                    FullErr = [E || {E,_I} <- Failed],
-                    update_stats(StateData),
-                    client_reply({error,FullErr}, StateData);
-                _ ->
-                    update_stats(StateData),
-                    client_reply({error,notfound}, StateData)
-            end,
-            Final = merge(Replied,AllowMult),
-            finalize(NewStateData#state{final_obj=Final})
+waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData) ->
+    NewStateData1 = add_vnode_result(Idx, VnodeResult, StateData),
+    case enough_results(NewStateData1) of
+        {reply, Reply, NewStateData2} ->
+            client_reply(Reply, NewStateData2),
+            update_stats(NewStateData2),
+            finalize(NewStateData2);
+        {false, NewStateData2} ->
+            {next_state, waiting_vnode_r, NewStateData2}
     end;
 waiting_vnode_r(timeout, StateData=#state{replied_r=Replied,allowmult=AllowMult}) ->
     update_stats(StateData),
@@ -260,6 +209,36 @@ terminate(Reason, _StateName, _State) ->
 %% @private
 code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 
+add_vnode_result(Idx, {ok, RObj}, StateData = #state{replied_r = Replied}) ->
+    StateData#state{replied_r = [{RObj, Idx} | Replied]};
+add_vnode_result(Idx, {error, notfound}, StateData = #state{replied_notfound = NotFound}) ->
+    StateData#state{replied_notfound = [Idx | NotFound]};
+add_vnode_result(Idx, {error, Err}, StateData = #state{replied_fail = Fail}) ->
+    StateData#state{replied_fail = [{Err, Idx} | Fail]}.
+
+enough_results(StateData = #state{n = N, r = R, allowmult = AllowMult,
+                                  replied_r = Replied, replied_notfound = NotFound,
+                                  replied_fail = Fails}) ->
+    FailThreshold = erlang:min((N div 2)+1, % basic quorum, or
+                               (N-R+1)), % cannot ever get R 'ok' replies
+    if
+        length(Replied) >= R ->
+            {Reply, Final} = respond(Replied, AllowMult),
+            {reply, Reply, StateData#state{final_obj = Final}};
+        length(NotFound) + length(Fails) >= FailThreshold ->
+            Reply = case length(NotFound) of
+                        0 ->
+                            {error, [E || {E,_I} <- Fails]};
+                        _ ->
+                            {error, notfound}
+                    end,
+            Final = merge(Replied, AllowMult),
+            {reply, Reply, StateData#state{final_obj = Final}};
+        true ->
+            {false, StateData}
+    end.
+                
+    
 schedule_timeout(infinity) ->
     undefined;
 schedule_timeout(Timeout) ->
