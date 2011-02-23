@@ -31,6 +31,7 @@
 -record(state, {client :: {pid(), reference()},
                 n :: pos_integer(),
                 r :: pos_integer(),
+                fail_threshold :: pos_integer(),
                 allowmult :: boolean(),
                 preflist2 :: riak_core_apl:preflist2(),
                 waiting_for=[] :: [{pos_integer(), atom(), atom()}],
@@ -39,6 +40,9 @@
                 replied_r = [] :: list(),
                 replied_notfound = [] :: list(),
                 replied_fail = [] :: list(),
+                num_r = 0,
+                num_notfound = 0,
+                num_fail = 0,
                 repair_sent = [] :: list(),
                 final_obj :: undefined | {ok, riak_object:riak_object()} |
                              tombstone | {error, notfound},
@@ -79,6 +83,8 @@ execute(timeout, StateData0=#state{timeout=Timeout, n=N, r=R0, req_id=ReqId,
                                    preflist2 = Preflist2}) ->
     TRef = schedule_timeout(Timeout),
     R = riak_kv_util:expand_rw_value(r, R0, BucketProps, N),
+    FailThreshold = erlang:min((N div 2)+1, % basic quorum, or
+                               (N-R+1)), % cannot ever get R 'ok' replies
     case R > N of
         true ->
             client_reply({error, {n_val_violation, N}}, StateData0),
@@ -87,7 +93,7 @@ execute(timeout, StateData0=#state{timeout=Timeout, n=N, r=R0, req_id=ReqId,
             AllowMult = proplists:get_value(allow_mult,BucketProps),
             Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
             riak_kv_vnode:get(Preflist, BKey, ReqId),
-            StateData = StateData0#state{n=N,r=R,
+            StateData = StateData0#state{n=N,r=R,fail_threshold=FailThreshold,
                                          allowmult=AllowMult,
                                          waiting_for=Preflist2,tref=TRef},
             {next_state,waiting_vnode_r,StateData}
@@ -209,23 +215,29 @@ terminate(Reason, _StateName, _State) ->
 %% @private
 code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 
-add_vnode_result(Idx, {ok, RObj}, StateData = #state{replied_r = Replied}) ->
-    StateData#state{replied_r = [{RObj, Idx} | Replied]};
-add_vnode_result(Idx, {error, notfound}, StateData = #state{replied_notfound = NotFound}) ->
-    StateData#state{replied_notfound = [Idx | NotFound]};
-add_vnode_result(Idx, {error, Err}, StateData = #state{replied_fail = Fail}) ->
-    StateData#state{replied_fail = [{Err, Idx} | Fail]}.
+add_vnode_result(Idx, {ok, RObj}, StateData = #state{replied_r = Replied,
+                                                     num_r = NumR}) ->
+    StateData#state{replied_r = [{RObj, Idx} | Replied],
+                    num_r = NumR + 1};
+add_vnode_result(Idx, {error, notfound}, StateData = #state{replied_notfound = NotFound,
+                                                            num_notfound = NumNotFound}) ->
+    StateData#state{replied_notfound = [Idx | NotFound],
+                    num_notfound = NumNotFound + 1};
+add_vnode_result(Idx, {error, Err}, StateData = #state{replied_fail = Fail,
+                                                       num_fail = NumFail}) ->
+    StateData#state{replied_fail = [{Err, Idx} | Fail],
+                   num_fail = NumFail + 1}.
 
-enough_results(StateData = #state{n = N, r = R, allowmult = AllowMult,
-                                  replied_r = Replied, replied_notfound = NotFound,
-                                  replied_fail = Fails}) ->
-    FailThreshold = erlang:min((N div 2)+1, % basic quorum, or
-                               (N-R+1)), % cannot ever get R 'ok' replies
+enough_results(StateData = #state{r = R, allowmult = AllowMult,
+                                  fail_threshold = FailThreshold,
+                                  replied_r = Replied, num_r = NumR,
+                                  replied_notfound = NotFound, num_notfound = NumNotFound,
+                                  replied_fail = Fails, num_fail = NumFail}) ->
     if
-        length(Replied) >= R ->
+        NumR >= R ->
             {Reply, Final} = respond(Replied, AllowMult),
             {reply, Reply, StateData#state{final_obj = Final}};
-        length(NotFound) + length(Fails) >= FailThreshold ->
+        NumNotFound + NumFail >= FailThreshold ->
             Reply = case length(NotFound) of
                         0 ->
                             {error, [E || {E,_I} <- Fails]};
