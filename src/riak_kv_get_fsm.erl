@@ -34,7 +34,6 @@
                 fail_threshold :: pos_integer(),
                 allowmult :: boolean(),
                 preflist2 :: riak_core_apl:preflist2(),
-                waiting_for=[] :: [{pos_integer(), atom(), atom()}],
                 req_id :: pos_integer(),
                 starttime :: pos_integer(),
                 replied_r = [] :: list(),
@@ -43,7 +42,6 @@
                 num_r = 0,
                 num_notfound = 0,
                 num_fail = 0,
-                repair_sent = [] :: list(),
                 final_obj :: undefined | {ok, riak_object:riak_object()} |
                              tombstone | {error, notfound},
                 timeout :: pos_integer(),
@@ -60,7 +58,7 @@ start(ReqId,Bucket,Key,R,Timeout,From) ->
 init([ReqId,Bucket,Key,R,Timeout,Client]) ->
     StateData = #state{client=Client,r=R, timeout=Timeout,
                 req_id=ReqId, bkey={Bucket,Key}},
-    {ok,prepare,StateData,0}.
+    {ok,prepare,StateData,0};
 
 prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
     StartNow = now(),
@@ -95,7 +93,7 @@ execute(timeout, StateData0=#state{timeout=Timeout, n=N, r=R0, req_id=ReqId,
             riak_kv_vnode:get(Preflist, BKey, ReqId),
             StateData = StateData0#state{n=N,r=R,fail_threshold=FailThreshold,
                                          allowmult=AllowMult,
-                                         waiting_for=Preflist2,tref=TRef},
+                                         tref=TRef},
             {next_state,waiting_vnode_r,StateData}
     end.
 
@@ -136,7 +134,7 @@ finalize(StateData) ->
 
 really_finalize(StateData=#state{allowmult = AllowMult,
                                  final_obj = FinalObj,
-                                 waiting_for=Sent,
+                                 preflist2=Sent,
                                  replied_r=RepliedR,
                                  bkey=BKey,
                                  req_id=ReqId,
@@ -160,7 +158,7 @@ really_finalize(StateData=#state{allowmult = AllowMult,
 
 maybe_finalize_delete(_StateData=#state{replied_notfound=NotFound,n=N,
                                         replied_r=RepliedR,
-                                        waiting_for=Sent,req_id=ReqId,
+                                        preflist2=Sent,req_id=ReqId,
                                         bkey=BKey}) ->
     IdealNodes = [{I,Node} || {{I,Node},primary} <- Sent],
     case length(IdealNodes) of
