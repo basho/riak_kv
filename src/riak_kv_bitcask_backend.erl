@@ -35,6 +35,7 @@
          list_bucket/2,
          fold/3,
          fold_keys/3,
+         fold_bucket_keys/4,
          drop/1,
          is_empty/1,
          callback/3]).
@@ -174,6 +175,9 @@ fold_keys({Ref, _}, Fun, Acc) ->
     F = fun(#bitcask_entry{key=K}, Acc1) ->
                 Fun(binary_to_term(K), Acc1) end,
     bitcask:fold_keys(Ref, F, Acc).
+
+fold_bucket_keys(ModState, _Bucket, Fun, Acc) ->
+    fold_keys(ModState, fun(Key2, Acc2) -> Fun(Key2, dummy_val, Acc2) end, Acc).
 
 drop({Ref, BitcaskRoot}) ->
     %% todo: once bitcask has a more friendly drop function

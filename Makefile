@@ -12,6 +12,7 @@ deps:
 
 clean:
 	./rebar clean
+	rm -rf test.*-temp-data
 
 distclean: clean 
 	./rebar delete-deps

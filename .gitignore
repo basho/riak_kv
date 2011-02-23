@@ -4,3 +4,4 @@ priv/*
 *.o
 *.beam
 doc
+test.*-temp-data

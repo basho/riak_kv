@@ -22,7 +22,8 @@
 
 -module (riak_kv_multi_backend).
 -behavior(riak_kv_backend).
--export([start/2, stop/1,get/2,put/3,list/1,list_bucket/2,delete/2,is_empty/1,drop/1,fold/3]).
+-export([start/2, stop/1,get/2,put/3,list/1,list_bucket/2,delete/2,is_empty/1,
+         drop/1,fold/3,fold_bucket_keys/4]).
 -export([callback/3]).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -151,6 +152,23 @@ fold(State, Fun, Extra) ->
     lists:foldl(fun({_, Module, SubState}, Acc) ->
                         Module:fold(SubState, Fun, Acc)
                 end, Extra, State#state.backends).
+
+fold_bucket_keys(State, Bucket, Fun, Extra) ->
+    %% We have less work to do than fold/3 does because we're a
+    %% backend-aware manager.
+    %% Mimic riak_kv_vnode:do_list_keys() logic but with nested try/catch.
+    {_Name, Module, SubState} = get_backend(Bucket, State),
+    try
+        WrapFun = fun(K, Acc) -> Fun({Bucket, K}, unused_val, Acc) end,
+        Module:fold_bucket_keys(SubState, Bucket, WrapFun)
+    catch error:undef ->
+            try
+                Module:fold_bucket_keys(SubState, Bucket, Fun, Extra)
+            catch error:undef ->
+                    %% Backend doesn't support newer API, use older API
+                    Module:fold(SubState, Fun, Extra)
+            end
+    end.
 
 callback(State, Ref, Msg) ->
     %% Pass the callback on to all submodules - their responsbility to

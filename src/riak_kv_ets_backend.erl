@@ -29,7 +29,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 -export([start/2,stop/1,get/2,put/3,list/1,list_bucket/2,delete/2,
-         is_empty/1, drop/1, fold/3, callback/3]).
+         is_empty/1, drop/1, fold/3, fold_bucket_keys/4, callback/3]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -66,8 +66,12 @@ handle_call(drop, _From, State) ->
 handle_call({fold, Fun0, Acc}, _From, State) ->
     Fun = fun({{B,K}, V}, AccIn) -> Fun0({B,K}, V, AccIn) end,
     Reply = ets:foldl(Fun, Acc, State#state.t),
-    {reply, Reply, State}.
-
+    {reply, Reply, State};
+handle_call({fold_bucket_keys, _Bucket, Fun0, Acc}, From, State) ->
+    %% We could do something with the Bucket arg, but for this backend
+    %% there isn't much point, so we'll do the same thing as the older
+    %% API fold.
+    handle_call({fold, Fun0, Acc}, From, State).
 
 % @spec stop(state()) -> ok | {error, Reason :: term()}
 stop(SrvRef) -> gen_server:call(SrvRef,stop).
@@ -129,6 +133,9 @@ is_empty(SrvRef) -> gen_server:call(SrvRef, is_empty).
 drop(SrvRef) -> gen_server:call(SrvRef, drop).
     
 fold(SrvRef, Fun, Acc0) -> gen_server:call(SrvRef, {fold, Fun, Acc0}, infinity).
+
+fold_bucket_keys(SrvRef, Bucket, Fun, Acc0) ->
+    gen_server:call(SrvRef, {fold_bucket_keys, Bucket, Fun, Acc0}, infinity).
 
 %% Ignore callbacks for other backends so multi backend works
 callback(_State, _Ref, _Msg) ->
