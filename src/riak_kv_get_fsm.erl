@@ -114,17 +114,9 @@ waiting_vnode_r(timeout, StateData=#state{replied_r=Replied,allowmult=AllowMult}
     client_reply({error,timeout}, StateData),
     really_finalize(StateData#state{final_obj=merge(Replied, AllowMult)}).
 
-waiting_read_repair({r, {ok, RObj}, Idx, ReqId},
-                  StateData=#state{req_id=ReqId,allowmult=AllowMult,replied_r=Replied0}) ->
-    Replied = [{RObj,Idx}|Replied0],
-    Final = merge(Replied,AllowMult),
-    finalize(StateData#state{replied_r=Replied,final_obj=Final});
-waiting_read_repair({r, {error, notfound}, Idx, ReqId},
-                  StateData=#state{req_id=ReqId,replied_notfound=Replied0}) ->
-    finalize(StateData#state{replied_notfound=[Idx|Replied0]});
-waiting_read_repair({r, {error, Err}, Idx, ReqId},
-                  StateData=#state{req_id=ReqId,replied_fail=Replied0}) ->
-    finalize(StateData#state{replied_fail=[{Err,Idx}|Replied0]});
+waiting_read_repair({r, VnodeResult, Idx, _ReqId}, StateData) ->
+    NewStateData1 = add_vnode_result(Idx, VnodeResult, StateData),
+    finalize(NewStateData1#state{final_obj = undefined});
 waiting_read_repair(timeout, StateData) ->
     really_finalize(StateData).
 
@@ -142,13 +134,20 @@ finalize(StateData) ->
         false -> {next_state,waiting_read_repair,StateData}
     end.
 
-really_finalize(StateData=#state{final_obj=Final,
+really_finalize(StateData=#state{allowmult = AllowMult,
+                                 final_obj = FinalObj,
                                  waiting_for=Sent,
                                  replied_r=RepliedR,
                                  bkey=BKey,
                                  req_id=ReqId,
                                  replied_notfound=NotFound,
                                  starttime=StartTime}) ->
+    Final = case FinalObj of
+                undefined -> %% Recompute if extra read repairs have arrived
+                    merge(RepliedR,AllowMult);
+                _ ->
+                    FinalObj
+            end,
     case Final of
         tombstone ->
             maybe_finalize_delete(StateData);
