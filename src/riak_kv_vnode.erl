@@ -87,10 +87,10 @@ get(Preflist, BKey, ReqId) ->
                       req_id=ReqId},
     %% Assuming this function is called from a FSM process
     %% so self() == FSM pid
-    riak_core_vnode_master:sync_spawn_command(Preflist,
-                                              Req,
-                                              {fsm, ReqId, self()},
-                                              riak_kv_vnode_master).
+    riak_core_vnode_master:command(Preflist,
+                                   Req,
+                                   {fsm, undefined, self()},
+                                   riak_kv_vnode_master).
 
 mget(Preflist, BKeys, ReqId) ->
     Req = ?KV_MGET_REQ{bkeys=BKeys,
