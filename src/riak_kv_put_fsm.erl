@@ -528,6 +528,8 @@ setup() ->
     %% Set some missing env vars that are normally 
     %% part of release packaging.
     application:set_env(riak_core, ring_creation_size, 64),
+    application:set_env(riak_core, default_bucket_props, []),
+    riak_core_bucket:append_bucket_defaults([{n_val, 3}]),
     application:set_env(riak_kv, storage_backend, riak_kv_ets_backend),
     %% Create a fresh ring for the test
     Ring = riak_core_ring:fresh(),
