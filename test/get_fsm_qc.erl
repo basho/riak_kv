@@ -465,7 +465,7 @@ eqc_test_() ->
     {timeout, 200, ?_test(
         begin
             start_mock_servers(),
-            ?assert(test(300))
+            ?assert(test(50))
         end)
     }}.
 
