@@ -19,7 +19,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--record(state, {objects, partvals, history=[], repair_history=[]}).
+-record(state, {objects, partvals, history=[], put_history=[]}).
 
 %%====================================================================
 %% API
@@ -37,8 +37,8 @@ start() ->
 get_history() ->
     gen_server:call(riak_kv_vnode_master, get_history).
 
-get_repair_history() ->
-    gen_server:call(riak_kv_vnode_master, get_repair_history).
+get_put_history() ->
+    gen_server:call(riak_kv_vnode_master, get_put_history).
 
 %%====================================================================
 %% gen_server callbacks
@@ -67,12 +67,12 @@ handle_call({set_data, Objects, Partvals}, _From, State) ->
     {reply, ok, set_data(Objects, Partvals, State)};
 handle_call(get_history, _From, State) ->
     {reply, lists:reverse(State#state.history), State};
-handle_call(get_repair_history, _From, State) -> %
-    {reply, lists:reverse(State#state.repair_history), State};
+handle_call(get_put_history, _From, State) -> %
+    {reply, lists:reverse(State#state.put_history), State};
 
 handle_call(?VNODE_REQ{index=Idx, request=?KV_DELETE_REQ{}=Msg},
             _From, State) ->
-    {reply, ok, State#state{repair_history=[{Idx,Msg}|State#state.repair_history]}};
+    {reply, ok, State#state{put_history=[{Idx,Msg}|State#state.put_history]}};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -95,8 +95,34 @@ handle_cast(?VNODE_REQ{index=Idx,
     end,
     {noreply, State1};
 handle_cast(?VNODE_REQ{index=Idx,
-                       request=?KV_PUT_REQ{}=Msg}, State) ->
-    {noreply, State#state{repair_history=[{Idx,Msg}|State#state.repair_history]}};    
+                       sender=Sender,
+                       request=?KV_PUT_REQ{req_id=ReqId}=Msg}, State) ->
+    %% Options to handle
+    %% {returnbody, true|false}
+    %% {update_last_modified, true|false}
+    %% Needs to respond with a {w, Idx, ReqId}
+    %% Then another message
+    %%   return_body=true, {dw, Idx, Obj, ReqId}
+    %%   return_body=false, {dw, Idx, ReqId}
+    %%   on error {fail, Idx, ReqId}
+    %% How to order the messages?  For now, just send immediately if responding.
+
+    {Value, State1} = get_data(Idx,State),
+
+    %% Initial receipt of the request
+    %% TODO: Timeout on this
+    riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
+
+    %% Combine incoming value with stored value
+    case Value of
+        {error, timeout} ->
+            ok;
+        {error, error} ->
+            riak_core_vnode:reply(Sender, {fail, Idx, ReqId});
+        _ ->
+            riak_core_vnode:reply(Sender, {dw, Idx, ReqId})
+    end,
+    {noreply, State1#state{put_history=[{Idx,Msg}|State#state.put_history]}};    
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -132,8 +158,10 @@ code_change(_OldVsn, _State, _Extra) ->
 
 set_data(Objects, Partvals, State) ->
     State#state{objects=Objects, partvals=Partvals,
-                history=[], repair_history=[]}.
+                history=[], put_history=[]}.
 
+get_data(_Partition, #state{partvals=[]} = State) ->
+    {{error, timeout}, State};
 get_data(Partition, #state{objects=Objects, partvals=[Res|Rest]} = State) ->
     State1 = State#state{partvals = Rest,
                          history=[{Partition,Res}|State#state.history]},
