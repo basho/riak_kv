@@ -863,11 +863,11 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L}) ->
                                 " n value of ~p~n", [N]),
             {{halt, 400}, wrq:append_to_response_body(Msg, RD), Ctx};
         {error, timeout} ->
-	    {{halt, 503},
-	     wrq:set_resp_header("Content-Type", "text/plain",
-				 wrq:append_to_response_body(
-				   io_lib:format("request timed out~n",[]),
-				   RD)),
+            {{halt, 503},
+             wrq:set_resp_header("Content-Type", "text/plain",
+                                 wrq:append_to_response_body(
+                                   io_lib:format("request timed out~n",[]),
+                                   RD)),
                      Ctx};
         ok ->
             {true, RD, Ctx#ctx{doc={ok, Doc}}};
