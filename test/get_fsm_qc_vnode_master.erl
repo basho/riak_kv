@@ -19,7 +19,11 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--record(state, {objects, partvals, history=[], put_history=[]}).
+-record(state, {objects, partvals,
+                lidx_map=[],
+                vput_replies=[],
+                reply_history=[],
+                history=[], put_history=[]}).
 
 %%====================================================================
 %% API
@@ -39,6 +43,9 @@ get_history() ->
 
 get_put_history() ->
     gen_server:call(riak_kv_vnode_master, get_put_history).
+
+get_reply_history() ->
+    gen_server:call(riak_kv_vnode_master, get_reply_history).
 
 %%====================================================================
 %% gen_server callbacks
@@ -65,10 +72,14 @@ init([]) ->
 %%--------------------------------------------------------------------
 handle_call({set_data, Objects, Partvals}, _From, State) ->
     {reply, ok, set_data(Objects, Partvals, State)};
+handle_call({set_vput_replies, VPutReplies}, _From, State) ->
+    {reply, ok, set_vput_replies(VPutReplies, State)};
 handle_call(get_history, _From, State) ->
     {reply, lists:reverse(State#state.history), State};
 handle_call(get_put_history, _From, State) -> %
     {reply, lists:reverse(State#state.put_history), State};
+handle_call(get_reply_history, _From, State) -> %
+    {reply, lists:reverse(State#state.reply_history), State};
 
 handle_call(?VNODE_REQ{index=Idx, request=?KV_DELETE_REQ{}=Msg},
             _From, State) ->
@@ -107,21 +118,8 @@ handle_cast(?VNODE_REQ{index=Idx,
     %%   on error {fail, Idx, ReqId}
     %% How to order the messages?  For now, just send immediately if responding.
 
-    {Value, State1} = get_data(Idx,State),
-
-    %% Initial receipt of the request
-    %% TODO: Timeout on this
-    riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
-
-    %% Combine incoming value with stored value
-    case Value of
-        {error, timeout} ->
-            ok;
-        {error, error} ->
-            riak_core_vnode:reply(Sender, {fail, Idx, ReqId});
-        _ ->
-            riak_core_vnode:reply(Sender, {dw, Idx, ReqId})
-    end,
+    %% Send up to the next w or timeout message, substituting indices
+    State1 = send_vput_replies(State#state.vput_replies, Idx, Sender, ReqId, State),
     {noreply, State1#state{put_history=[{Idx,Msg}|State#state.put_history]}};    
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -160,6 +158,11 @@ set_data(Objects, Partvals, State) ->
     State#state{objects=Objects, partvals=Partvals,
                 history=[], put_history=[]}.
 
+set_vput_replies(VPutReplies, State) ->
+    State#state{vput_replies = VPutReplies,
+                reply_history = [],
+                lidx_map=[]}.
+
 get_data(_Partition, #state{partvals=[]} = State) ->
     {{error, timeout}, State};
 get_data(Partition, #state{objects=Objects, partvals=[Res|Rest]} = State) ->
@@ -175,3 +178,48 @@ get_data(Partition, #state{objects=Objects, partvals=[Res|Rest]} = State) ->
         error ->
             {{error, error}, State1}
     end.
+
+
+%% Send the next vnode put response then send any 'extra' responses in sequence
+%% until the next w/timeout
+send_vput_replies([], _Idx, _Sender, _ReqId, State) ->
+    State;
+send_vput_replies([{LIdx, FirstResp} | Rest], Idx, Sender, ReqId,
+               #state{lidx_map = LIdxMap} = State) ->
+    %% Check have not seen this logical index before and store it
+    error = orddict:find(LIdx, LIdxMap),
+    NewState1 = State#state{lidx_map = orddict:store(LIdx, Idx, LIdxMap)},
+    Reply = case FirstResp of
+                w ->
+                    {w, Idx, ReqId};
+                {timeout, 1} ->
+                    {{timeout, 1}, Idx, ReqId}
+            end,    
+    NewState2 = record_reply(Sender, Reply, NewState1),
+    send_vput_extra(Rest, Sender, ReqId, NewState2).
+
+send_vput_extra([], _Sender, _ReqId, State) ->
+    State#state{vput_replies = []};
+send_vput_extra([{LIdx, dw} | Rest], Sender, ReqId, #state{lidx_map = LIdxMap} = State) ->
+    Idx = orddict:fetch(LIdx, LIdxMap),
+    NewState = record_reply(Sender, {dw, Idx, ReqId}, State),
+    send_vput_extra(Rest, Sender, ReqId, NewState);
+send_vput_extra([{LIdx, fail} | Rest], Sender, ReqId, #state{lidx_map = LIdxMap} = State) ->
+    Idx = orddict:fetch(LIdx, LIdxMap),
+    NewState = record_reply(Sender, {fail, Idx, ReqId}, State),
+    send_vput_extra(Rest, Sender, ReqId, NewState);
+send_vput_extra([{LIdx, {timeout, 2}} | Rest], Sender, ReqId, #state{lidx_map = LIdxMap} = State) ->
+    Idx = orddict:fetch(LIdx, LIdxMap),
+    NewState = record_reply(Sender, {{timeout, 2}, Idx, ReqId}, State),
+    send_vput_extra(Rest, Sender, ReqId, NewState);
+send_vput_extra(VPutReplies, _Sender, _ReqId, State) ->
+    State#state{vput_replies = VPutReplies}.
+
+record_reply(Sender, Reply, #state{reply_history = H} = State) ->
+    case Reply of
+        {{timeout,_N},_Idx,_ReqId} ->
+            nop;
+        _ ->
+            riak_core_vnode:reply(Sender, Reply)
+    end,
+    State#state{reply_history = [Reply | H]}.
