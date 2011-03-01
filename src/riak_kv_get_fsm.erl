@@ -27,7 +27,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -export([test/7, test_link/7]).
 -endif.
--export([start/6]).
+-export([start_link/6]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
 -export([prepare/2,execute/2,waiting_vnode_r/2,waiting_read_repair/2]).
@@ -55,7 +55,7 @@
                 startnow :: {pos_integer(), pos_integer(), pos_integer()}
                }).
 
-start(ReqId,Bucket,Key,R,Timeout,From) ->
+start_link(ReqId,Bucket,Key,R,Timeout,From) ->
     gen_fsm:start(?MODULE, [ReqId,Bucket,Key,R,Timeout,From], []).
 
 -ifdef(TEST).
