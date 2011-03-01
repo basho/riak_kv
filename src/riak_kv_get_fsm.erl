@@ -217,7 +217,7 @@ maybe_finalize_delete(_StateData=#state{replied_notfound=NotFound,n=N,
                                         replied_r=RepliedR,
                                         waiting_for=Sent,req_id=ReqId,
                                         bkey=BKey}) ->
-    spawn(fun() ->
+    spawn_link(fun() ->
     IdealNodes = [{I,Node} || {I,Node,Node} <- Sent],
     case length(IdealNodes) of
         N -> % this means we sent to a perfect preflist
