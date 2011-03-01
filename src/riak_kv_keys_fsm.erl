@@ -25,7 +25,7 @@
 -module(riak_kv_keys_fsm).
 -behaviour(gen_fsm).
 -include_lib("riak_kv_vnode.hrl").
--export([start/6]).
+-export([start_link/6]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
 -export([initialize/2,waiting_kl/2]).
@@ -45,8 +45,8 @@
                 listers :: [{atom(), pid()}]
                }).
 
-start(ReqId,Bucket,Timeout,ClientType,ErrorTolerance,From) ->
-    gen_fsm:start(?MODULE,
+start_link(ReqId,Bucket,Timeout,ClientType,ErrorTolerance,From) ->
+    gen_fsm:start_link(?MODULE,
                   [ReqId,Bucket,Timeout,ClientType,ErrorTolerance,From], []).
 
 %% @private
