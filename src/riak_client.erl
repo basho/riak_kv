@@ -373,8 +373,7 @@ list_keys(Bucket, Timeout, ErrorTolerance) ->
     Me = self(),
     ReqId = mk_reqid(),
     FSM_Timeout = trunc(Timeout / 8),
-    spawn(Node, riak_kv_keys_fsm, start,
-          [ReqId,Bucket,FSM_Timeout,plain,ErrorTolerance,Me]),
+    riak_kv_keys_fsm:start_keys_fsm(Node, [ReqId, Bucket, FSM_Timeout, plain, ErrorTolerance, Me]),
     wait_for_listkeys(ReqId, Timeout).
 
 stream_list_keys(Bucket) ->
@@ -410,8 +409,7 @@ stream_list_keys(Bucket0, Timeout, ErrorTolerance, Client, ClientType) ->
     ReqId = mk_reqid(),
     case build_filter(Bucket0) of
         {ok, Filter} ->
-            spawn(Node, riak_kv_keys_fsm, start,
-                  [ReqId,Filter,Timeout,ClientType,ErrorTolerance,Client]),
+            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [ReqId, Filter, Timeout, ClientType, ErrorTolerance, Client]),
             {ok, ReqId};
         Error ->
             Error

@@ -94,6 +94,9 @@ init([]) ->
     DeleteSup = {riak_kv_delete_sup,
                  {riak_kv_delete_sup, start_link, []},
                  permanent, infinity, supervisor, [riak_kv_delete_sup]},
+    KeysFsmSup = {riak_kv_keys_fsm_sup,
+                 {riak_kv_keys_fsm_sup, start_link, []},
+                 permanent, infinity, supervisor, [riak_kv_keys_fsm_sup]},
 
     % Figure out which processes we should run...
     IsPbConfigured = (app_helper:get_env(riak_kv, pb_ip) /= undefined)
@@ -109,6 +112,7 @@ init([]) ->
         GetFsmSup,
         PutFsmSup,
         DeleteSup,
+        KeysFsmSup,                               
         KLSup,
         KLMaster,
         JSSup,
