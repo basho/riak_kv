@@ -54,6 +54,8 @@
 -include_lib("riak_kv_vnode.hrl").
 
 -compile(export_all).
+
+-define(REQ_ID, 1234).
 -define(RING_KEY, riak_ring).
 -define(DEFAULT_BUCKET_PROPS,
         [{allow_mult, false},
@@ -99,9 +101,14 @@ vnodeputresps() ->
     fsm_eqc_util:not_empty(fsm_eqc_util:longer_list(2, vnodeputresp())).
 
 vnodeputresp() ->
-    {fsm_eqc_util:lineage(),
+    {vputpartval(),
      vputfirst(), fsm_eqc_util:largenat(),
      vputsecond(), fsm_eqc_util:largenat()}.
+
+vputpartval() ->
+    Shrink = fun(G) -> ?SHRINK(G, [notfound]) end,
+    frequency([{2,Shrink({ok, fsm_eqc_util:lineage()})},
+               {1,notfound}]).
 
 vputfirst() ->    
     frequency([{9, w},
@@ -119,9 +126,9 @@ vputsecond() ->
 prop_basic_put() ->
     %% ?FORALL({WSeed,DWSeed},
     ?FORALL({WSeed,DWSeed,NQdiff,
-             Objects,ReqId,_PartVals,VPutResp,NodeStatus0}, 
+             Objects,_PartVals,VPutResp,NodeStatus0}, 
             {fsm_eqc_util:largenat(),fsm_eqc_util:largenat(),choose(0,4096),
-             fsm_eqc_util:riak_objects(), noshrink(largeint()),
+             fsm_eqc_util:riak_objects(), 
              fsm_eqc_util:partvals(),vnodeputresps(),
              fsm_eqc_util:some_up_node_status(10)},
     begin
@@ -138,7 +145,7 @@ prop_basic_put() ->
 
         [{_,Object}|_] = Objects,
 
-        VPutReplies = make_vput_replies(VPutResp, Object, Objects),
+        VPutReplies = make_vput_replies(VPutResp, Object, Objects, Options),
 
         ok = gen_server:call(riak_kv_vnode_master,
                              {set_data, Objects, []}),
@@ -153,7 +160,7 @@ prop_basic_put() ->
                              |?DEFAULT_BUCKET_PROPS]),
 
 
-        {ok, PutPid} = riak_kv_put_fsm:start(ReqId,
+        {ok, PutPid} = riak_kv_put_fsm:start(?REQ_ID,
                                              Object,
                                              W,
                                              DW,
@@ -161,7 +168,7 @@ prop_basic_put() ->
                                              self(),
                                              Options),
         ok = riak_kv_test_util:wait_for_pid(PutPid),
-        Res = fsm_eqc_util:wait_for_req_id(ReqId),
+        Res = fsm_eqc_util:wait_for_req_id(?REQ_ID),
         H = get_fsm_qc_vnode_master:get_reply_history(),
 
         Expected = expect(H, N, W, DW),
@@ -177,23 +184,46 @@ prop_basic_put() ->
     end).
 
 
-make_vput_replies(VPutResp, Object, Objects) ->
-    make_vput_replies(VPutResp, Object, Objects, 1, []).
+make_vput_replies(VPutResp, PutObj, Objects, Options) ->
+    make_vput_replies(VPutResp, PutObj, Objects, Options, 1, []).
     
-make_vput_replies([], _Object, _Objects, _LIdx, SeqReplies) ->
+make_vput_replies([], _PutObj, _Objects, _Options, _LIdx, SeqReplies) ->
     {_Seqs, Replies} = lists:unzip(lists:sort(SeqReplies)),
     Replies;
 make_vput_replies([{_CurObj, {timeout, 1}, FirstSeq, _Second, SecondSeq} | Rest],
-                  Object, Objects, LIdx, Replies) ->
-    make_vput_replies(Rest, Object, Objects, LIdx + 1, 
+                  PutObj, Objects, Options, LIdx, Replies) ->
+    make_vput_replies(Rest, PutObj, Objects, Options, LIdx + 1, 
                      [{FirstSeq, {LIdx, {timeout, 1}}},
                       {FirstSeq+SecondSeq+1, {LIdx, {timeout, 2}}} | Replies]);
+make_vput_replies([{CurPartVal, First, FirstSeq, dw, SecondSeq} | Rest],
+                  PutObj, Objects, Options, LIdx, Replies) ->
+    %% Work out what the result of syntactic put merge is
+    Obj = case CurPartVal of
+              notfound ->
+                  PutObj;
+              {ok, Lineage} ->
+                  CurObj = proplists:get_value(Lineage, Objects),
+                  {_, ResObj} = put_merge(CurObj, PutObj, term_to_binary(?REQ_ID)),
+                  ResObj
+          end,
+    make_vput_replies(Rest, PutObj, Objects, Options, LIdx + 1,
+                      [{FirstSeq, {LIdx, First}},
+                       {FirstSeq+SecondSeq+1, {LIdx, {dw, Obj}}} | Replies]);
 make_vput_replies([{_CurObj, First, FirstSeq, Second, SecondSeq} | Rest],
-                  Object, Objects, LIdx, Replies) ->
-    make_vput_replies(Rest, Object, Objects, LIdx + 1,
+                  PutObj, Objects, Options, LIdx, Replies) ->
+    make_vput_replies(Rest, PutObj, Objects, Options, LIdx + 1,
                      [{FirstSeq, {LIdx, First}},
                       {FirstSeq+SecondSeq+1, {LIdx, Second}} | Replies]).
 
+%% TODO: The riak_kv_vnode code should be refactored to expose this function
+%%       so we are close to testing the real thing.
+put_merge(CurObj, NewObj, ReqId) ->
+    ResObj = riak_object:syntactic_merge(
+               CurObj,NewObj, ReqId),
+    case riak_object:vclock(ResObj) =:= riak_object:vclock(CurObj) of
+        true -> {oldobj, ResObj};
+        false -> {newobj, ResObj}
+    end.
 
 expect(H, N, W, DW) ->
     case {H, N, W, DW} of
@@ -248,10 +278,28 @@ expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail}) ->
             %%           {{timeout,2},
             %%            1096126227998177188652763624537212264741949407232,6059244597}]
             %% Expected: ok Res: {error,timeout}
-            case {NumW+1, Rest, length([x || {What, _, _} <- Rest, What == dw])} of
-                {W, [{fail,_,_}|_], 0} -> 
+
+            %% Q: 4 N: 4 W:3 DW: 1
+            %% History: [{w,730750818665451459101842416358141509827966271488,1234},
+            %%           {w,1096126227998177188652763624537212264741949407232,1234},
+            %%           {dw,730750818665451459101842416358141509827966271488, _Obj, 1234},
+            %%           {dw,1096126227998177188652763624537212264741949407232, _Obj, 1234},
+            %%           {w,0,1234},
+            %%           {w,365375409332725729550921208179070754913983135744,1234},
+            %%           {{timeout,2},0,1234},
+            %%           {{timeout,2},365375409332725729550921208179070754913983135744,1234}]
+            %% Expected: ok Res: {error,timeout}
+
+            DWLeft = length([x || Reply <- Rest, element(1,Reply) == dw]),
+            OnlyWLeft = lists:all(fun({w, _, _}) -> true;
+                                     (_) -> false
+                                  end, Rest),
+            case {NumW+1, Rest, DWLeft, OnlyWLeft} of
+                {W, [{fail,_,_}|_], 0, _} -> 
                     {error, timeout};
-                {W, [], 0} when NumDW >= DW ->
+                {W, [], 0, _} when NumDW >= DW ->
+                    {error, timeout};
+                {W, _, 0, true} when DW > 0 ->
                     {error, timeout};
                 _ ->
                     Expect % and here is passing on expected value
@@ -262,7 +310,7 @@ expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail}) ->
         false ->
             expect(Rest, S)
     end;
-expect([{dw, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail}) ->
+expect([DWReply|Rest], {H, N, W, DW, NumW, NumDW, NumFail}) when element(1, DWReply) == dw->
     S = {H, N, W, DW, NumW, NumDW + 1, NumFail},
     case enough_replies(S) of
         {true, Expect} ->
@@ -276,6 +324,8 @@ expect([{dw, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail}) ->
             %%           {dw,730750818665451459101842416358141509827966271488,-7826778492}]
             case S of
                 {[{w,_,_},{fail,_,_},{w,_,_},{dw,_,_}], 2, 2, 1, _, _, _} ->
+                    {error, too_many_fails};
+                {[{w,_,_},{fail,_,_},{w,_,_},{dw,_,_,_}], 2, 2, 1, _, _, _} ->
                     {error, too_many_fails};
                 _ ->
                     Expect
@@ -310,111 +360,6 @@ enough_replies({_H, N, W, DW, NumW, NumDW, NumFail}) ->
         true ->
             false
     end.
-
-%% expect([], _N, _W, _DW) ->
-%%     {error, timeout};
-%% expect(History, N, W, DW) ->
-%%     %% Count non-timeout/errors, check > W and DW
-%%     MaxFails = N - max(DW, W),
-
-%%     {NumW, NumDW, NumFail} = Counters = 
-%%         lists:foldl(fun(Result, {NumW0, NumDW0, NumFail0}) -> 
-%%                             case Result of
-%%                                 {w, _Idx, _ReqId} ->
-%%                                     {NumW0+1, NumDW0, NumFail0};
-%%                                 {dw, _Idx, _ReqId} ->
-%%                                     {NumW0, NumDW0 + 1, NumFail0};
-%%                                 {fail, _Idx, _ReqId} ->
-%%                                     {NumW0, NumDW0, NumFail0 + 1};
-%%                                 {{timeout, _Stage}, _Idx, _ReqId} ->
-%%                                     {NumW0, NumDW0, NumFail0}
-%%                             end
-%%                     end, {0, 0, 0}, History),
-%%     io:format(user, "Counters=~p\n", [Counters]),
-%%     io:format(user, "History=~p\n", [History]),
-%%     if
-%%         NumW >= W andalso NumDW >= DW ->
-%%             case {History, N, W, DW} of
-%%                 %% Check for bug - if DW > 0 and
-%%                 %% dw response is received before enough W responses received
-%%                 %% and the remaining responses 
-%%                 %% expect_working_around_dw_bug(History);
-%%                 {[{w,_,_},{dw,_,_},{w,_,_},{fail,_,_}], 2, 2, 1} ->
-%%                     {error, timeout};
-
-%%                 _ ->
-%%                     %% Bug - if fail is before last w and N-numfail >= W then
-%%                     %% too_many_fails is returned incorrectly
-%%                     History2 = trim_non_dw(History),
-%%                     FailBeforeLastW = fail_before_last_w(History2),
-%%                     NotDWAfterLastW = not_dw_after_last_w(History2),
-%%                     Last = element(1, hd(lists:reverse(History2))),
-%%                     LastNotDw = (Last /= dw andalso Last /= w),
-%%                     LastIsTimeout = (Last == {timeout,1} orelse Last == {timeout,2}),
-%%                     if
-%%                         FailBeforeLastW andalso 
-%%                         (N - NumFail < W orelse
-%%                          N - NumFail < DW)  ->
-%%                             {error, too_many_fails};
- 
-%%                         N > DW andalso LastIsTimeout ->
-%%                             {error, timeout};
-                       
-%%                         %% Last is history item is fail after W
-%%                         %% Does not correctly check for meeting dw after
-%%                         %% last fail
-%%                         NotDWAfterLastW andalso LastNotDw andalso
-%%                           DW > 0 andalso NumW >= W ->
-%%                             {error, timeout};
-                        
-                        
-%%                         true ->
-%%                             %% The correct answer when FSM fixed
-%%                             io:format(user,
-%%                                       "History2: ~p\n"
-%%                                       "Last: ~p\n"
-%%                                       "LastNotDw: ~p\n"
-%%                                       "LastIsTimeout: ~p\n",
-%%                                       [History2, Last, LastNotDw, LastIsTimeout]),
-                                     
-%%                             ok
-%%                     end
-%%             end;
-%%         NumFail > MaxFails ->
-%%             {error, too_many_fails};
-%%         true ->
-%%             {error, timeout}
-%%     end.
-
-%% %% Return true if a fail is returned before the last w
-%% fail_before_last_w(History) ->
-%%     HSeq = lists:zip(History, lists:seq(1, length(History))),
-%%     LastW = maxifdef([Seq || {{w,_,_}, Seq} <- HSeq]),
-%%     FirstFail = maxifdef([Seq || {{fail,_,_}, Seq} <- HSeq]),
-%%     LastW /= undefined andalso FirstFail /= undefined andalso FirstFail < LastW.     
-
-%% %% Check for a fail immediately after the last w
-%% not_dw_after_last_w(History) ->
-%%     SeqH = lists:zip(lists:seq(1, length(History)), History),
-%%     LastW = maxifdef([Seq || {Seq, {w,_,_}} <- SeqH]),
-%%     LastW /= undefined andalso proplists:get_value(LastW+1, SeqH) /= dw.
-
-%% trim_non_dw(History) ->
-%%     do_trim_non_dw(lists:reverse(History)).
-
-%% do_trim_non_dw([]) ->
-%%     [];
-%% do_trim_non_dw([{dw, _, _}|_]=RevHist) ->
-%%     lists:reverse(RevHist);
-%% do_trim_non_dw([{w, _, _}|_]=RevHist) ->
-%%     lists:reverse(RevHist);
-%% do_trim_non_dw([_|Rest]) ->
-%%     do_trim_non_dw(Rest).
-
-%% maxifdef([]) ->
-%%     undefined;
-%% maxifdef(L) ->
-%%     lists:max(L).
 
 
 -endif. % EQC

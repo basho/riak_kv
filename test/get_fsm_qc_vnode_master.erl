@@ -107,7 +107,8 @@ handle_cast(?VNODE_REQ{index=Idx,
     {noreply, State1};
 handle_cast(?VNODE_REQ{index=Idx,
                        sender=Sender,
-                       request=?KV_PUT_REQ{req_id=ReqId}=Msg}, State) ->
+                       request=?KV_PUT_REQ{req_id=ReqId,
+                                           options = Options}=Msg}, State) ->
     %% Options to handle
     %% {returnbody, true|false}
     %% {update_last_modified, true|false}
@@ -119,7 +120,8 @@ handle_cast(?VNODE_REQ{index=Idx,
     %% How to order the messages?  For now, just send immediately if responding.
 
     %% Send up to the next w or timeout message, substituting indices
-    State1 = send_vput_replies(State#state.vput_replies, Idx, Sender, ReqId, State),
+    State1 = send_vput_replies(State#state.vput_replies, Idx,
+                               Sender, ReqId, Options, State),
     {noreply, State1#state{put_history=[{Idx,Msg}|State#state.put_history]}};    
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -182,9 +184,9 @@ get_data(Partition, #state{objects=Objects, partvals=[Res|Rest]} = State) ->
 
 %% Send the next vnode put response then send any 'extra' responses in sequence
 %% until the next w/timeout
-send_vput_replies([], _Idx, _Sender, _ReqId, State) ->
+send_vput_replies([], _Idx, _Sender, _ReqId, _Options, State) ->
     State;
-send_vput_replies([{LIdx, FirstResp} | Rest], Idx, Sender, ReqId,
+send_vput_replies([{LIdx, FirstResp} | Rest], Idx, Sender, ReqId, Options,
                #state{lidx_map = LIdxMap} = State) ->
     %% Check have not seen this logical index before and store it
     error = orddict:find(LIdx, LIdxMap),
@@ -194,25 +196,33 @@ send_vput_replies([{LIdx, FirstResp} | Rest], Idx, Sender, ReqId,
                     {w, Idx, ReqId};
                 {timeout, 1} ->
                     {{timeout, 1}, Idx, ReqId}
-            end,    
+            end,
     NewState2 = record_reply(Sender, Reply, NewState1),
-    send_vput_extra(Rest, Sender, ReqId, NewState2).
+    send_vput_extra(Rest, Sender, ReqId, Options, NewState2).
 
-send_vput_extra([], _Sender, _ReqId, State) ->
+send_vput_extra([], _Sender, _ReqId, _Options, State) ->
     State#state{vput_replies = []};
-send_vput_extra([{LIdx, dw} | Rest], Sender, ReqId, #state{lidx_map = LIdxMap} = State) ->
+send_vput_extra([{LIdx, {dw, Obj}} | Rest], Sender, ReqId, Options,
+                #state{lidx_map = LIdxMap} = State) ->
     Idx = orddict:fetch(LIdx, LIdxMap),
-    NewState = record_reply(Sender, {dw, Idx, ReqId}, State),
-    send_vput_extra(Rest, Sender, ReqId, NewState);
-send_vput_extra([{LIdx, fail} | Rest], Sender, ReqId, #state{lidx_map = LIdxMap} = State) ->
+    NewState = case proplists:get_value(returnbody, Options, false) of
+                   true ->
+                       record_reply(Sender, {dw, Idx, ReqId}, State);
+                   false ->
+                       record_reply(Sender, {dw, Idx, Obj, ReqId}, State)
+               end,
+    send_vput_extra(Rest, Sender, ReqId, Options, NewState);
+send_vput_extra([{LIdx, fail} | Rest], Sender, ReqId, Options,
+                #state{lidx_map = LIdxMap} = State) ->
     Idx = orddict:fetch(LIdx, LIdxMap),
     NewState = record_reply(Sender, {fail, Idx, ReqId}, State),
-    send_vput_extra(Rest, Sender, ReqId, NewState);
-send_vput_extra([{LIdx, {timeout, 2}} | Rest], Sender, ReqId, #state{lidx_map = LIdxMap} = State) ->
+    send_vput_extra(Rest, Sender, ReqId, Options, NewState);
+send_vput_extra([{LIdx, {timeout, 2}} | Rest], Sender, ReqId, Options,
+                #state{lidx_map = LIdxMap} = State) ->
     Idx = orddict:fetch(LIdx, LIdxMap),
     NewState = record_reply(Sender, {{timeout, 2}, Idx, ReqId}, State),
-    send_vput_extra(Rest, Sender, ReqId, NewState);
-send_vput_extra(VPutReplies, _Sender, _ReqId, State) ->
+    send_vput_extra(Rest, Sender, ReqId, Options, NewState);
+send_vput_extra(VPutReplies, _Sender, _ReqId, _Options, State) ->
     State#state{vput_replies = VPutReplies}.
 
 record_reply(Sender, Reply, #state{reply_history = H} = State) ->
