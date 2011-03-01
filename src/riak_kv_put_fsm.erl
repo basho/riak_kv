@@ -32,7 +32,7 @@
 
 -behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
--export([start/6,start/7]).
+-export([start_link/6,start_link/7]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
 -export([initialize/2,waiting_vnode_w/2,waiting_vnode_dw/2]).
@@ -62,11 +62,11 @@
                 update_last_modified :: boolean()
                }).
 
-start(ReqId,RObj,W,DW,Timeout,From) ->
-    start(ReqId,RObj,W,DW,Timeout,From,[]).
+start_link(ReqId,RObj,W,DW,Timeout,From) ->
+    start_link(ReqId,RObj,W,DW,Timeout,From,[]).
 
-start(ReqId,RObj,W,DW,Timeout,From,Options) ->
-    gen_fsm:start(?MODULE, [ReqId,RObj,W,DW,Timeout,From,Options], []).
+start_link(ReqId,RObj,W,DW,Timeout,From,Options) ->
+    gen_fsm:start_link(?MODULE, [ReqId,RObj,W,DW,Timeout,From,Options], []).
 
 %% @private
 init([ReqId,RObj0,W0,DW0,Timeout,Client,Options0]) ->
