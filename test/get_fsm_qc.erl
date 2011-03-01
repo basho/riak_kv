@@ -256,7 +256,7 @@ prop_basic_get() ->
     
         [{_,Object}|_] = Objects,
     
-        {ok, GetPid} = riak_kv_get_fsm:start(ReqId,
+        {ok, GetPid} = riak_kv_get_fsm:start_link(ReqId,
                             riak_object:bucket(Object),
                             riak_object:key(Object),
                             R,

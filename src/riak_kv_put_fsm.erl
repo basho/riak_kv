@@ -465,12 +465,14 @@ start_test_() ->
 
 successful_start() ->
     W = DW = 1,
+    process_flag(trap_exit, true),
     {ok, _Pid} = put_fsm_start(W, DW).
 
 invalid_w_start() ->
     W = <<"abc">>,
     DW = 1,
-    {error, {bad_return_value, {stop, normal, none}}} = put_fsm_start(W, DW),
+    process_flag(trap_exit, true),
+    ?assertEqual({error, {bad_return_value, {stop, normal, none}}}, put_fsm_start(W, DW)),
     %% Wait for error response
     receive
         {_RequestId, Result} ->
@@ -483,7 +485,8 @@ invalid_w_start() ->
 invalid_dw_start() ->
     W = 1,
     DW = <<"abc">>,
-    {error, {bad_return_value, {stop, normal, none}}} = put_fsm_start(W, DW),
+    process_flag(trap_exit, true),
+    ?assertEqual({error, {bad_return_value, {stop, normal, none}}}, put_fsm_start(W, DW)),
     %% Wait for error response
     receive
         {_RequestId, Result} ->
@@ -496,7 +499,8 @@ invalid_dw_start() ->
 invalid_n_val_start() ->
     W = 4,
     DW = 1,
-    {error, {bad_return_value, {stop, normal, none}}} = put_fsm_start(W, DW),
+    process_flag(trap_exit, true),
+    ?assertEqual({error, {bad_return_value, {stop, normal, none}}}, put_fsm_start(W, DW)),
     %% Wait for error response
     receive
         {_RequestId, Result} ->
@@ -511,7 +515,7 @@ put_fsm_start(W, DW) ->
     RequestId = erlang:phash2(erlang:now()),
     RObj = riak_object:new(<<"testbucket">>, <<"testkey">>, <<"testvalue">>),
     Timeout = 60000,
-    riak_kv_put_fsm:start(RequestId, RObj, W, DW, Timeout, self()).
+    riak_kv_put_fsm:start_link(RequestId, RObj, W, DW, Timeout, self()).
 
 setup() ->
     %% Start the applications required for riak_kv to start

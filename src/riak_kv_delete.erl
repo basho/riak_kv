@@ -98,7 +98,7 @@ invalid_rw_delete() ->
     Bucket = <<"testbucket">>,
     Key = <<"testkey">>,
     Timeout = 60000,
-    riak_kv_delete:delete(RequestId, Bucket, Key, RW, Timeout, self()),
+    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, RW, Timeout, self()]),
     %% Wait for error response
     receive
         {_RequestId, Result} ->
