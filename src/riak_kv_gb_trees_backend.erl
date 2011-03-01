@@ -37,7 +37,7 @@
 % @spec start(Partition :: integer(), Config :: integer()) ->
 %                        {ok, state()} | {{error, Reason :: term()}, state()}
 start(_Partition, _Config) ->
-    Pid = spawn(fun() -> 
+    Pid = spawn_link(fun() -> 
         {A1,A2,A3} = now(),
         random:seed(A1, A2, A3),
         tree_loop(gb_trees:empty()) 
