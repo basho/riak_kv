@@ -54,7 +54,7 @@ delete(ReqId,Bucket,Key,RW0,Timeout,Client) ->
                     Reply = C:put(NewObj, RW, RW, RemainingTime),
                     case Reply of
                         ok -> 
-                            spawn(
+                            spawn_link(
                               fun()-> reap(Bucket,Key,RemainingTime) end);
                         _ -> nop
                     end,
