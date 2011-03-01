@@ -410,7 +410,7 @@ invoke_hook(precommit, undefined, undefined, JSName, RObj) ->
 invoke_hook(postcommit, Mod0, Fun0, undefined, Obj) ->
     Mod = binary_to_atom(Mod0, utf8),
     Fun = binary_to_atom(Fun0, utf8),
-    proc_lib:spawn(fun() -> wrap_hook(Mod, Fun, Obj) end);
+    proc_lib:spawn_link(fun() -> wrap_hook(Mod, Fun, Obj) end);
 invoke_hook(postcommit, undefined, undefined, _JSName, _Obj) ->
     error_logger:warning_msg("Javascript post-commit hooks aren't implemented");
 %% NOP to handle all other cases
