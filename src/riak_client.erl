@@ -247,7 +247,7 @@ get(Bucket, Key, R, Timeout) when is_binary(Bucket), is_binary(Key),
                                   is_integer(Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
-    spawn(Node, riak_kv_get_fsm, start, [ReqId,Bucket,Key,R,Timeout,Me]),
+    supervisor:start_child(riak_kv_get_fsm_sup, [ReqId, Bucket, Key, R, Timeout, Me]),
     wait_for_reqid(ReqId, Timeout).
 
 %% @spec put(RObj :: riak_object:riak_object()) ->

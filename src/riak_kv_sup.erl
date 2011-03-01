@@ -85,6 +85,9 @@ init([]) ->
     MapperSup = {riak_kv_mapper_sup,
                  {riak_kv_mapper_sup, start_link, []},
                  permanent, infinity, supervisor, [riak_kv_mapper_sup]},
+    GetFsmSup = {riak_kv_get_fsm_sup,
+                 {riak_kv_get_fsm_sup, start_link, []},
+                 permanent, infinity, supervisor, [riak_kv_get_fsm_sup]},
 
     % Figure out which processes we should run...
     IsPbConfigured = (app_helper:get_env(riak_kv, pb_ip) /= undefined)
@@ -97,6 +100,7 @@ init([]) ->
         ?IF(HasStorageBackend, VMaster, []),
         ?IF(IsPbConfigured, RiakPb, []),
         ?IF(IsStatEnabled, RiakStat, []),
+        GetFsmSup,
         KLSup,
         KLMaster,
         JSSup,
