@@ -91,6 +91,9 @@ init([]) ->
     PutFsmSup = {riak_kv_put_fsm_sup,
                  {riak_kv_put_fsm_sup, start_link, []},
                  permanent, infinity, supervisor, [riak_kv_put_fsm_sup]},
+    DeleteSup = {riak_kv_delete_sup,
+                 {riak_kv_delete_sup, start_link, []},
+                 permanent, infinity, supervisor, [riak_kv_delete_sup]},
 
     % Figure out which processes we should run...
     IsPbConfigured = (app_helper:get_env(riak_kv, pb_ip) /= undefined)
@@ -105,6 +108,7 @@ init([]) ->
         ?IF(IsStatEnabled, RiakStat, []),
         GetFsmSup,
         PutFsmSup,
+        DeleteSup,
         KLSup,
         KLMaster,
         JSSup,
