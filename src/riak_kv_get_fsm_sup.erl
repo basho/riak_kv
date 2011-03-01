@@ -26,12 +26,12 @@
 
 -behaviour(supervisor).
 
--export([start_get_fsm/1]).
+-export([start_get_fsm/2]).
 -export([start_link/0]).
 -export([init/1]).
 
-start_get_fsm(Args) ->
-    supervisor:start_child(?MODULE, Args).
+start_get_fsm(Node, Args) ->
+    supervisor:start_child({?MODULE, Node}, Args).
 
 %% @spec start_link() -> ServerRet
 %% @doc API for starting the supervisor.

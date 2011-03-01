@@ -56,7 +56,7 @@
                }).
 
 start_link(ReqId,Bucket,Key,R,Timeout,From) ->
-    gen_fsm:start(?MODULE, [ReqId,Bucket,Key,R,Timeout,From], []).
+    gen_fsm:start_link(?MODULE, [ReqId,Bucket,Key,R,Timeout,From], []).
 
 -ifdef(TEST).
 %% Create a get FSM for testing.  StateProps must include
