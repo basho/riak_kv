@@ -79,7 +79,7 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
             throw({error,key_too_large});
         false ->
             case MD of
-                no_initial_metadata -> 
+                no_initial_metadata ->
                     Contents = [#r_content{metadata=dict:new(), value=V}],
                     #r_object{bucket=B,key=K,
                               contents=Contents,vclock=vclock:fresh()};
@@ -384,7 +384,7 @@ dejsonify_values([{<<"metadata">>, {struct, MD0}},
     Converter = fun({Key, Val}) ->
                         case Key of
                             <<"Links">> ->
-                                {Key, [{{B, K, Tag}} || [B, K, Tag] <- Val]};
+                                {Key, [{{B, K}, Tag} || [B, K, Tag] <- Val]};
                             <<"X-Riak-Last-Modified">> ->
                                 {Key, erlang:now()};
                             _ ->
