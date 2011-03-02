@@ -91,19 +91,8 @@ check_query_syntax([QTerm={QTermType, QueryFun, Misc, Acc}|Rest], Accum) when is
                                {phase_mod(T), phase_behavior(T, QueryFun, Acc), [{erlang, QTerm}]};
                            {qfun, Fun} when is_function(Fun) ->
                                {phase_mod(T), phase_behavior(T, QueryFun, Acc), [{erlang, QTerm}]};
-                           {strfun, FunStr} when is_binary(FunStr); is_list(FunStr) ->
-                               Fun = define_anon_erl(FunStr),
-                               {phase_mod(T), phase_behavior(T, QueryFun, Acc),
-                                [{erlang, {T, {qfun, Fun}, Misc, Acc}}]};
-                           {strfun, {Bucket, Key}} when is_binary(Bucket), is_binary(Key) ->
-                               case fetch_src(Bucket, Key) of
-                                   {ok, FunStr} ->
-                                       Fun = define_anon_erl(FunStr),
-                                       {phase_mod(T), phase_behavior(T, QueryFun, Acc),
-                                        [{erlang, {T, {qfun, Fun}, Misc, Acc}}]};
-                                   _ ->
-                                       {bad_qterm, QTerm}
-                               end;
+                           {strfun, FunStr} ->
+                               handle_strfun(FunStr, QTerm);
                            {jsanon, JS} when is_binary(JS) ->
                                {phase_mod(T), phase_behavior(T, QueryFun, Acc), [{javascript, QTerm}]};
                            {jsanon, {Bucket, Key}} when is_binary(Bucket),
@@ -169,6 +158,25 @@ define_anon_erl(FunStr) when is_list(FunStr) ->
     {value, Fun, _} = erl_eval:expr(Form, erl_eval:new_bindings()),
     Fun.
 
+handle_strfun({Bucket, Key}, QTerm) when is_binary(Bucket), is_binary(Key) ->
+    case fetch_src(Bucket, Key) of
+        {ok, FunStr} ->
+            handle_strfun(FunStr, QTerm);
+        _ ->
+            {bad_qterm, QTerm}
+    end;
+handle_strfun(FunStr, QTerm={T, QueryFun, Misc, Acc}) when is_binary(FunStr); is_list(FunStr) ->
+    case catch define_anon_erl(FunStr) of
+        Fun when is_function(Fun, 3) ->
+            {phase_mod(T), phase_behavior(T, QueryFun, Acc),
+             [{erlang, {T, {qfun, Fun}, Misc, Acc}}]};
+        _ ->
+            {bad_qterm, QTerm}
+    end;
+handle_strfun(_, QTerm) ->
+    {bad_qterm, QTerm}.
+
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
@@ -177,5 +185,13 @@ strfun_test() ->
     {ok, [{riak_kv_map_phase, [accumulate], [{erlang, {map, {qfun, Fun}, none, true}}]}]}
         = check_query_syntax(Query),
     ?assertEqual(true, erlang:is_function(Fun, 3)).
+
+bad_strfun_test() ->
+    Query = [{map, {strfun, "fun(_,_,_) -> [] end"}, none, true}],
+    {bad_qterm, _} = check_query_syntax(Query).
+
+unbound_var_strfun_test() ->
+    Query = [{map, {strfun, "fun(_,_,_) -> [UnboundVar] end."}, none, true}],
+    {bad_qterm, _} = check_query_syntax(Query).
 
 -endif.
