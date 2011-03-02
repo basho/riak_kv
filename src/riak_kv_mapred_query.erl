@@ -158,14 +158,23 @@ define_anon_erl(FunStr) when is_list(FunStr) ->
     {value, Fun, _} = erl_eval:expr(Form, erl_eval:new_bindings()),
     Fun.
 
-handle_strfun({Bucket, Key}, QTerm) when is_binary(Bucket), is_binary(Key) ->
+handle_strfun(FunStr, QTerm) ->
+    case application:get_env(riak_kv, allow_strfun) of
+        {ok, true} ->
+            handle_strfun1(FunStr, QTerm);
+        _ ->
+            {bad_qterm, QTerm}
+    end.
+
+handle_strfun1({Bucket, Key}, QTerm) when is_binary(Bucket), is_binary(Key) ->
     case fetch_src(Bucket, Key) of
         {ok, FunStr} ->
             handle_strfun(FunStr, QTerm);
         _ ->
             {bad_qterm, QTerm}
     end;
-handle_strfun(FunStr, QTerm={T, QueryFun, Misc, Acc}) when is_binary(FunStr); is_list(FunStr) ->
+handle_strfun1(FunStr, QTerm={T, QueryFun, Misc, Acc})
+  when is_binary(FunStr); is_list(FunStr) ->
     case catch define_anon_erl(FunStr) of
         Fun when is_function(Fun, 3) ->
             {phase_mod(T), phase_behavior(T, QueryFun, Acc),
@@ -173,7 +182,7 @@ handle_strfun(FunStr, QTerm={T, QueryFun, Misc, Acc}) when is_binary(FunStr); is
         _ ->
             {bad_qterm, QTerm}
     end;
-handle_strfun(_, QTerm) ->
+handle_strfun1(_, QTerm) ->
     {bad_qterm, QTerm}.
 
 
@@ -181,17 +190,25 @@ handle_strfun(_, QTerm) ->
 -include_lib("eunit/include/eunit.hrl").
 
 strfun_test() ->
+    application:set_env(riak_kv, allow_strfun, true),
     Query = [{map, {strfun, "fun(_,_,_) -> [] end."}, none, true}],
     {ok, [{riak_kv_map_phase, [accumulate], [{erlang, {map, {qfun, Fun}, none, true}}]}]}
         = check_query_syntax(Query),
     ?assertEqual(true, erlang:is_function(Fun, 3)).
 
 bad_strfun_test() ->
+    application:set_env(riak_kv, allow_strfun, true),
     Query = [{map, {strfun, "fun(_,_,_) -> [] end"}, none, true}],
     {bad_qterm, _} = check_query_syntax(Query).
 
 unbound_var_strfun_test() ->
+    application:set_env(riak_kv, allow_strfun, true),
     Query = [{map, {strfun, "fun(_,_,_) -> [UnboundVar] end."}, none, true}],
+    {bad_qterm, _} = check_query_syntax(Query).
+
+disabled_strfun_test() ->
+    application:set_env(riak_kv, allow_strfun, false),
+    Query = [{map, {strfun, "fun(_,_,_) -> [] end."}, none, true}],
     {bad_qterm, _} = check_query_syntax(Query).
 
 -endif.

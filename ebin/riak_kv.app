@@ -83,6 +83,15 @@
          {stats_urlpath, "stats"},
 
          %% Secondary code paths
-         {add_paths, []}
+         {add_paths, []},
+
+         %% Allow Erlang MapReduce functions to be specified as
+         %% strings.
+         %%
+         %% !!!WARNING!!!
+         %% This will allow arbitrary Erlang code to be submitted
+         %% through the REST and Protocol Buffers interfaces. This
+         %% should only be used for development purposes.
+         {allow_strfun, false}
         ]}
  ]}.
