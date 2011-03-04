@@ -31,7 +31,7 @@
 -export([init/1, handle_input/3, handle_input_done/1, handle_event/2,
          handle_sync_event/3, handle_info/2, handle_timeout/1, terminate/2]).
 
--record(state, {done=false, qterm, fsms=dict:new(), mapper_data=[]}).
+-record(state, {done=false, qterm, fsms=dict:new(), mapper_data=[], pending=[]}).
 
 init([QTerm]) ->
     process_flag(trap_exit, true),
@@ -51,7 +51,7 @@ handle_input(Inputs0, #state{fsms=FSMs0, qterm=QTerm, mapper_data=MapperData}=St
     end.
 
 handle_input_done(State) ->
-    {no_output, maybe_done(State#state{done=true})}.
+    maybe_done(State#state{done=true}).
 
 handle_event({register_mapper, Id, MapperPid}, #state{mapper_data=MapperData}=State) ->
     MapperData0 = case lists:keyfind(Id, 1, MapperData) of
@@ -77,8 +77,9 @@ handle_event({mapexec_reply, VNode, BKey, Reply, Executor}, #state{fsms=FSMs, ma
                     Pending1 = Pending ++ Reply,
                     FSMs1 = update_counter(Executor, FSMs),
                     MapperData1 = update_inputs(Executor, VNode, BKey, MapperData),
-                    maybe_done(State#state{fsms=FSMs1, mapper_data=MapperData1, pending=Pending1})
+                                        maybe_done(State#state{fsms=FSMs1, mapper_data=MapperData1, pending=Pending1})
             end
+
     end;
 
 handle_event({mapexec_error, _Executor, Reply}, State) ->
@@ -97,7 +98,7 @@ handle_info({'EXIT', Pid, _Reason}, #state{mapper_data=MapperData, fsms=FSMs, qt
                     case length(Keys) of
                         0 ->
                             MapperData1 = lists:keydelete(Id, 1, lists:keydelete(Pid, 1, MapperData)),
-                            {no_output, maybe_done(State#state{mapper_data=MapperData1})};
+                            maybe_done(State#state{mapper_data=MapperData1});
                         _C ->
                             try
                                 {_Partition, BadNode} = VNode,
@@ -105,7 +106,7 @@ handle_info({'EXIT', Pid, _Reason}, #state{mapper_data=MapperData, fsms=FSMs, qt
                                 ClaimLists = riak_kv_mapred_planner:plan_map(NewKeys),
                                 {NewFSMs, _ClaimLists1, FsmKeys} = schedule_input(NewKeys, ClaimLists, QTerm, FSMs, State),
                                 MapperData1 = lists:keydelete(Id, 1, lists:keydelete(Pid, 1, MapperData ++ FsmKeys)),
-                                {no_output, maybe_done(State#state{mapper_data=MapperData1, fsms=NewFSMs})}
+                                maybe_done(State#state{mapper_data=MapperData1, fsms=NewFSMs})
                             catch
                                 _:Error ->
                                     {stop, {error, {no_candidate_nodes, Error, erlang:get_stacktrace(), MapperData}}, State}
@@ -113,7 +114,7 @@ handle_info({'EXIT', Pid, _Reason}, #state{mapper_data=MapperData, fsms=FSMs, qt
                     end;
                 false ->
                     MapperData1 = lists:keydelete(Pid, 1, MapperData),
-                    {no_output, maybe_done(State#state{mapper_data=MapperData1})}
+                    maybe_done(State#state{mapper_data=MapperData1})
             end;
         false ->
             {stop, {error, {dead_mapper, erlang:get_stacktrace(), MapperData}}, State}
@@ -210,13 +211,25 @@ update_counter(Executor, FSMs) ->
             dict:update_counter(Executor, -1, FSMs)
     end.
 
-maybe_done(#state{done=Done, fsms=FSMs, mapper_data=MapperData}=State) ->
+maybe_done(#state{done=Done, fsms=FSMs, mapper_data=MapperData, pending=Pending}=State) ->
     case Done =:= true andalso dict:size(FSMs) == 0 andalso MapperData == [] of
         true ->
-            luke_phase:complete();
-        false -> ok
-    end,
-    State.
+            luke_phase:complete(),
+            case Pending of
+                [] ->
+                    {no_output, State};
+                _ ->
+                    {output, Pending, State#state{pending=[]}}
+            end;
+        false ->
+            BatchSize = app_helper:get_env(riak_kv, mapper_batch_size, 5),
+            case length(Pending) == BatchSize of
+                true ->
+                    {output, Pending, State#state{pending=[]}};
+                false ->
+                    {no_output, State}
+            end
+    end.
 
 update_inputs(Id, VNode, BKey, MapperData) ->
     case lists:keyfind(Id, 1, MapperData) of
