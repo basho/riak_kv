@@ -223,7 +223,7 @@ maybe_done(#state{done=Done, fsms=FSMs, mapper_data=MapperData, pending=Pending}
             end;
         false ->
             BatchSize = app_helper:get_env(riak_kv, mapper_batch_size, 5),
-            case length(Pending) == BatchSize of
+            case length(Pending) >= BatchSize of
                 true ->
                     {output, Pending, State#state{pending=[]}};
                 false ->
