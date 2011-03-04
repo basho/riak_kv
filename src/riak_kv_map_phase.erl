@@ -79,7 +79,6 @@ handle_event({mapexec_reply, VNode, BKey, Reply, Executor}, #state{fsms=FSMs, ma
                     MapperData1 = update_inputs(Executor, VNode, BKey, MapperData),
                                         maybe_done(State#state{fsms=FSMs1, mapper_data=MapperData1, pending=Pending1})
             end
-
     end;
 
 handle_event({mapexec_error, _Executor, Reply}, State) ->
