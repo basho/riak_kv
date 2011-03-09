@@ -363,6 +363,7 @@ setup() ->
 
     %% Have tracer on hand to grab any traces we want
     riak_core_tracer:start_link(),
+    riak_core_tracer:reset(),
     riak_core_tracer:filter([{riak_kv_vnode, readrepair}],
                    fun({trace, _Pid, call,
                         {riak_kv_vnode, readrepair, 
@@ -428,6 +429,7 @@ happy_path_case() ->
     %% Check readrepair issued to third node
     ExpRRPrefList = lists:sublist(Preflist, 3, 1),
     riak_kv_test_util:wait_for_pid(_FsmPid2),
+    riak_core_tracer:stop_collect(),
     ?assertEqual([{0, {rr, ExpRRPrefList, Obj1, ReqId3}}],
                  riak_core_tracer:results()).
 
