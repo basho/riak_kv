@@ -126,9 +126,10 @@ vputsecond() ->
 prop_basic_put() ->
     %% ?FORALL({WSeed,DWSeed},
     ?FORALL({WSeed,DWSeed,NQdiff,
-             Objects,_PartVals,VPutResp,NodeStatus0}, 
+             Objects,ObjectIdxSeed,
+             _PartVals,VPutResp,NodeStatus0}, 
             {fsm_eqc_util:largenat(),fsm_eqc_util:largenat(),choose(0,4096),
-             fsm_eqc_util:riak_objects(), 
+             fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
              fsm_eqc_util:partvals(),vnodeputresps(),
              fsm_eqc_util:some_up_node_status(10)},
     begin
@@ -143,7 +144,12 @@ prop_basic_put() ->
         Ring = fsm_eqc_util:reassign_nodes(NodeStatus,
                                            riak_core_ring:fresh(Q, node())),
 
-        [{_,Object}|_] = Objects,
+        
+        %% Pick the object to put - as ObjectIdxSeed shrinks, it should go towards
+        %% the end of the list (for current), so simplest to just reverse the list
+        %% and calculate modulo list length
+        ObjectIdx = (ObjectIdxSeed rem length(Objects)) + 1,
+        {_,Object} = lists:nth(ObjectIdx, lists:reverse(Objects)),
 
         VPutReplies = make_vput_replies(VPutResp, Object, Objects, Options),
 
@@ -171,7 +177,7 @@ prop_basic_put() ->
         Res = fsm_eqc_util:wait_for_req_id(?REQ_ID),
         H = get_fsm_qc_vnode_master:get_reply_history(),
 
-        Expected = expect(H, N, W, DW),
+        Expected = expect(H, N, W, DW, Options),
         ?WHENFAIL(
            begin
                io:format(user, "NodeStatus: ~p\n", [NodeStatus]),
@@ -225,7 +231,13 @@ put_merge(CurObj, NewObj, ReqId) ->
         false -> {newobj, ResObj}
     end.
 
-expect(H, N, W, DW) ->
+expect(H, N, W, DW, Options) ->
+    ReturnObj = case proplists:get_value(returnbody, Options, false) of
+                    true ->
+                        undefined;
+                    false ->
+                        noreply
+                end,
     case {H, N, W, DW} of
         %% Workaround for bug transitioning from awaiting_w to awaiting_dw
         {[{w,_,_},{dw,_,_},{w,_,_},{fail,_,_}], 2, 2, 1} ->
@@ -236,13 +248,13 @@ expect(H, N, W, DW) ->
             HNoTimeout = lists:filter(fun({{timeout,_},_,_}) -> false;
                                              (_) -> true
                                           end, H),
-            expect(HNoTimeout, {H, N, W, DW, 0, 0, 0})
+            expect(HNoTimeout, {H, N, W, DW, 0, 0, 0, ReturnObj})
     end.
 
-expect([], {_H, _N, _W, _DW, _NumW, _NumDW, _NumFail}) ->
+expect([], {_H, _N, _W, _DW, _NumW, _NumDW, _NumFail, _RObj}) ->
     {error, timeout};
-expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail}) ->
-    S = {H, N, W, DW, NumW + 1, NumDW, NumFail},
+expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj}) ->
+    S = {H, N, W, DW, NumW + 1, NumDW, NumFail, RObj},
 
     case enough_replies(S) of
         {true, Expect} when Expect == {error, too_many_fails};
@@ -302,16 +314,16 @@ expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail}) ->
                 {W, _, 0, true} when DW > 0 ->
                     {error, timeout};
                 _ ->
-                    Expect % and here is passing on expected value
+                    maybe_add_robj(Expect, RObj) % and here is passing on expected value
             end;
         {true, Expect} ->
-            Expect;
+            maybe_add_robj(Expect, RObj);
         
         false ->
             expect(Rest, S)
     end;
-expect([DWReply|Rest], {H, N, W, DW, NumW, NumDW, NumFail}) when element(1, DWReply) == dw->
-    S = {H, N, W, DW, NumW, NumDW + 1, NumFail},
+expect([DWReply|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj}) when element(1, DWReply) == dw->
+    S = {H, N, W, DW, NumW, NumDW + 1, NumFail, RObj},
     case enough_replies(S) of
         {true, Expect} ->
 
@@ -328,23 +340,23 @@ expect([DWReply|Rest], {H, N, W, DW, NumW, NumDW, NumFail}) when element(1, DWRe
                 {[{w,_,_},{fail,_,_},{w,_,_},{dw,_,_,_}], 2, 2, 1, _, _, _} ->
                     {error, too_many_fails};
                 _ ->
-                    Expect
+                    maybe_add_robj(Expect, RObj)
             end;
         false ->
             expect(Rest, S)
     end;
-expect([{fail, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail}) ->
-    S = {H, N, W, DW, NumW, NumDW, NumFail + 1},
+expect([{fail, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj}) ->
+    S = {H, N, W, DW, NumW, NumDW, NumFail + 1, RObj},
     case enough_replies(S) of
         {true, Expect} ->
-            Expect;
+            maybe_add_robj(Expect, RObj);
         false ->
             expect(Rest, S)
     end;
 expect([{{timeout,_Stage}, _, _}|Rest], S) ->
     expect(Rest, S).
 
-enough_replies({_H, N, W, DW, NumW, NumDW, NumFail}) ->
+enough_replies({_H, N, W, DW, NumW, NumDW, NumFail, _RObj}) ->
     MaxWFails =  N - W,
     MaxDWFails =  N - DW,
     if
@@ -361,5 +373,11 @@ enough_replies({_H, N, W, DW, NumW, NumDW, NumFail}) ->
             false
     end.
 
+maybe_add_robj(ok, noreply) ->
+    ok;
+maybe_add_robj(ok, RObj) ->
+    {ok, RObj};
+maybe_add_robj(Expect, _Robj) ->
+    Expect.
 
 -endif. % EQC
