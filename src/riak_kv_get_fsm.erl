@@ -104,7 +104,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
     DocIdx = riak_core_util:chash_key(BKey),
     N = proplists:get_value(n_val,BucketProps),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    Preflist2 = riak_core_apl:get_apl2(DocIdx, N, Ring, UpNodes),
+    Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
     {next_state, execute, StateData#state{starttime=riak_core_util:moment(),
                                           n = N,
                                           bucket_props=BucketProps,
