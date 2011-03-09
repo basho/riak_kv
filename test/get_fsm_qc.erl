@@ -11,6 +11,8 @@
 -define(DEFAULT_BUCKET_PROPS,
         [{allow_mult, false},
          {chash_keyfun, {riak_core_util, chash_std_keyfun}}]).
+-define(QC_OUT(P),
+        eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
 %% Generators
 
@@ -324,7 +326,7 @@ test() ->
     test(100).
 
 test(N) ->
-    quickcheck(numtests(N, prop_basic_get())).
+    quickcheck(numtests(N, ?QC_OUT(prop_basic_get()))).
 
 do_repair(_Heads, notfound) ->
     true;
@@ -460,10 +462,10 @@ wait_for_pid(Pid) ->
     
 eqc_test_() ->
     {spawn,
-    {timeout, 20, ?_test(
+    {timeout, 200, ?_test(
         begin
             start_mock_servers(),
-            ?assert(test(30))
+            ?assert(test(50))
         end)
     }}.
 

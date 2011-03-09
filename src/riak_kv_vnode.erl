@@ -26,6 +26,7 @@
 -behaviour(riak_core_vnode).
 
 %% API
+-export([test_vnode/1, put/7]).
 -export([start_vnode/1,
          get/3,
          mget/3,
@@ -82,15 +83,18 @@
 start_vnode(I) ->
     riak_core_vnode_master:get_vnode_pid(I, riak_kv_vnode).
 
+test_vnode(I) ->
+    riak_core_vnode:start_link(riak_kv_vnode, I, infinity).
+
 get(Preflist, BKey, ReqId) ->
     Req = ?KV_GET_REQ{bkey=BKey,
                       req_id=ReqId},
     %% Assuming this function is called from a FSM process
     %% so self() == FSM pid
-    riak_core_vnode_master:sync_spawn_command(Preflist,
-                                              Req,
-                                              {fsm, ReqId, self()},
-                                              riak_kv_vnode_master).
+    riak_core_vnode_master:command(Preflist,
+                                   Req,
+                                   {fsm, undefined, self()},
+                                   riak_kv_vnode_master).
 
 mget(Preflist, BKeys, ReqId) ->
     Req = ?KV_MGET_REQ{bkeys=BKeys,
@@ -101,10 +105,10 @@ mget(Preflist, BKeys, ReqId) ->
                                    riak_kv_vnode_master).
 
 del(Preflist, BKey, ReqId) ->
-    riak_core_vnode_master:sync_command(Preflist,
-                                        ?KV_DELETE_REQ{bkey=BKey,
-                                                       req_id=ReqId},
-                                        riak_kv_vnode_master).
+    riak_core_vnode_master:command(Preflist,
+                                   ?KV_DELETE_REQ{bkey=BKey,
+                                                  req_id=ReqId},
+                                   riak_kv_vnode_master).
 
 %% Issue a put for the object to the preflist, expecting a reply
 %% to an FSM.
@@ -274,8 +278,13 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
 %% @private
 % upon receipt of a client-initiated put
 do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
-    {ok,Ring} = riak_core_ring_manager:get_my_ring(),
-    BProps = riak_core_bucket:get_bucket(Bucket, Ring),
+    case proplists:get_value(bucket_props, Options) of
+        undefined ->
+            {ok,Ring} = riak_core_ring_manager:get_my_ring(),
+            BProps = riak_core_bucket:get_bucket(Bucket, Ring);
+        BProps ->
+            BProps
+    end,
     case proplists:get_value(rr, Options, false) of
         true ->
             PruneTime = undefined;
