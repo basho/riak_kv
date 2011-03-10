@@ -23,7 +23,7 @@
 -module(riak_kv_get_fsm).
 -behaviour(gen_fsm).
 -include_lib("riak_kv_vnode.hrl").
--export([start_link/6]).
+-export([start/6, start_link/6]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
 -export([initialize/2,waiting_vnode_r/2,waiting_read_repair/2]).
@@ -48,6 +48,10 @@
                 ring :: riak_core_ring:riak_core_ring(),
                 startnow :: {pos_integer(), pos_integer(), pos_integer()}
                }).
+
+%% In place only for backwards compatibility
+start(ReqId,Bucket,Key,R,Timeout,From) ->
+    start_link(ReqId,Bucket,Key,R,Timeout,From).
 
 start_link(ReqId,Bucket,Key,R,Timeout,From) ->
     gen_fsm:start_link(?MODULE, [ReqId,Bucket,Key,R,Timeout,From], []).
