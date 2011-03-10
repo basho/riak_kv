@@ -461,15 +461,17 @@ start_test_() ->
     %% Start erlang node
     net_kernel:start([testnode, shortnames]),
     %% Execute the test cases
-    { foreach, 
-      fun setup/0,
-      fun cleanup/1,
-      [
-       fun successful_start/0,
-       fun invalid_w_start/0,
-       fun invalid_dw_start/0,
-       fun invalid_n_val_start/0
-      ]
+    {spawn,
+     { foreach, 
+       fun setup/0,
+       fun cleanup/1,
+       [
+        fun successful_start/0,
+        fun invalid_w_start/0,
+        fun invalid_dw_start/0,
+        fun invalid_n_val_start/0
+       ]
+     }
     }.
 
 successful_start() ->
