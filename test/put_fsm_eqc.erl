@@ -60,15 +60,25 @@
 -define(DEFAULT_BUCKET_PROPS,
         [{allow_mult, false},
          {chash_keyfun, {riak_core_util, chash_std_keyfun}}]).
+-define(QC_OUT(P),
+        eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
 eqc_test_() ->
-    {timeout, 2000, 
      {spawn, [{ setup,
                 fun setup/0,
                 fun cleanup/1,
-                [?_test(begin test(100) end)]}
-                   
-             ]}}.
+                [%% Check networking/clients are set up 
+                 ?_assert(node() /= 'nonode@nohost'),
+                 ?_assertEqual(pong, net_adm:ping(node())),
+                 ?_assertEqual(pang, net_adm:ping('nonode@nohost')),
+                 ?_assertMatch({ok,_C}, riak:local_client()),
+                 %% Run the quickcheck tests
+                 {timeout, 60000, % do not trust the docs - timeout is in msec
+                  ?_test(begin 
+                             quickcheck(numtests(100, ?QC_OUT(prop_basic_put())))
+                         end)}]
+                }]}.
+
 
 setup() ->
     fsm_eqc_util:start_mock_servers(),
@@ -76,7 +86,7 @@ setup() ->
         {error, not_allowed} ->
             running;
         _ ->
-            {ok, _Pid} = net_kernel:start(['putfsmeqc@localhost', shortnames]),
+            {ok, _Pid} = net_kernel:start(['putfsmeqc', shortnames]),
             started
     end.
 
@@ -120,9 +130,6 @@ vputsecond() ->
                {1, Shrink(fail)},
                {1, Shrink({timeout, 2})}]).
    
-
-
-
 prop_basic_put() ->
     %% ?FORALL({WSeed,DWSeed},
     ?FORALL({WSeed,DWSeed,NQdiff,
@@ -164,7 +171,6 @@ prop_basic_put() ->
                             default_bucket_props,
                             [{n_val, N}
                              |?DEFAULT_BUCKET_PROPS]),
-
 
         {ok, PutPid} = riak_kv_put_fsm:start(?REQ_ID,
                                              Object,
@@ -346,8 +352,8 @@ expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj}) ->
                 {W, _, 0, true} when DW > 0 ->
                     {error, timeout};
                 _ ->
-                    io:format("NumW+1=~p W=~p Rest=~p DWLeft = ~p, OnlyWLeft=~p\n",
-                              [NumW+1, W, Rest, DWLeft, OnlyWLeft]),
+                    %% io:format("NumW+1=~p W=~p Rest=~p DWLeft = ~p, OnlyWLeft=~p\n",
+                    %%           [NumW+1, W, Rest, DWLeft, OnlyWLeft]),
                     maybe_add_robj(Expect, RObj) % and here is passing on expected value
             end;
         {true, Expect} ->
