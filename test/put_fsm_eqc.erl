@@ -151,8 +151,8 @@ prop_basic_put() ->
              fsm_eqc_util:some_up_node_status(10),options()},
     begin
         N = length(VPutResp),
-        W = (WSeed rem N) + 1,
-        DW = (DWSeed rem W) + 1,
+        W = (WSeed rem N) + 1, %% W from 1..N
+        DW = DWSeed rem (W + 1), %% DW from 0..DW
 
         Q = fsm_eqc_util:make_power_of_two(N + NQdiff),
         NodeStatus = fsm_eqc_util:cycle(Q, NodeStatus0),
@@ -352,11 +352,12 @@ expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj}) ->
                                      (_) -> false
                                   end, Rest),
             case {NumW+1, Rest, DWLeft, OnlyWLeft} of
-                {W, [{fail,_,_}|_], 0, _} -> 
+                {W, [{fail,_,_}|_], 0, _} when DW > 0-> 
                     {error, timeout};
-                {X, [{w,_,_},{fail,_,_}|_], 0, _} when X >= W->  %DW met before last w, then fail
+                %% DW met before last w, then fail
+                {X, [{w,_,_},{fail,_,_}|_], 0, _} when DW > 0, X >= W->  
                     {error, timeout};
-                {W, [], 0, _} when NumDW >= DW ->
+                {W, [], 0, _} when DW > 0, NumDW >= DW ->
                     {error, timeout};
                 {W, _, 0, true} when DW > 0 ->
                     {error, timeout};
