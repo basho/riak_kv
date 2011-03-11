@@ -58,37 +58,40 @@
 -define(REQ_ID, 1234).
 -define(RING_KEY, riak_ring).
 -define(DEFAULT_BUCKET_PROPS,
-        [{allow_mult, false},
-         {chash_keyfun, {riak_core_util, chash_std_keyfun}}]).
+        [{chash_keyfun, {riak_core_util, chash_std_keyfun}}]).
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
 eqc_test_() ->
-     {spawn, [{ setup,
-                fun setup/0,
-                fun cleanup/1,
-                [%% Check networking/clients are set up 
-                 ?_assert(node() /= 'nonode@nohost'),
-                 ?_assertEqual(pong, net_adm:ping(node())),
-                 ?_assertEqual(pang, net_adm:ping('nonode@nohost')),
-                 ?_assertMatch({ok,_C}, riak:local_client()),
-                 %% Run the quickcheck tests
-                 {timeout, 60000, % do not trust the docs - timeout is in msec
-                  ?_test(begin 
-                             quickcheck(numtests(100, ?QC_OUT(prop_basic_put())))
-                         end)}]
-                }]}.
+     %% {spawn, 
+     %%  [
+    { setup,
+      fun setup/0,
+      fun cleanup/1,
+      [%% Check networking/clients are set up 
+       ?_assert(node() /= 'nonode@nohost'),
+       ?_assertEqual(pong, net_adm:ping(node())),
+       ?_assertEqual(pang, net_adm:ping('nonode@nohost')),
+       ?_assertMatch({ok,_C}, riak:local_client()),
+       %% Run the quickcheck tests
+       {timeout, 60000, % do not trust the docs - timeout is in msec
+        ?_test(begin 
+                   quickcheck(numtests(250, ?QC_OUT(prop_basic_put())))
+               end)}]
+    }.
+      %]}.
 
 
 setup() ->
+    State = case net_kernel:stop() of
+                {error, not_allowed} ->
+                    running;
+                _ ->
+                    {ok, _Pid} = net_kernel:start(['putfsmeqc@localhost', shortnames]),
+                    started
+            end,
     fsm_eqc_util:start_mock_servers(),
-    case net_kernel:stop() of
-        {error, not_allowed} ->
-            running;
-        _ ->
-            {ok, _Pid} = net_kernel:start(['putfsmeqc', shortnames]),
-            started
-    end.
+    State.
 
 cleanup(running) ->
     ok;
@@ -130,20 +133,26 @@ vputsecond() ->
                {1, Shrink(fail)},
                {1, Shrink({timeout, 2})}]).
    
+maybe_return_body() ->
+    frequency([{5, []},
+               {1, [returnbody]}]).
+
+options() ->
+    maybe_return_body().
+
 prop_basic_put() ->
     %% ?FORALL({WSeed,DWSeed},
     ?FORALL({WSeed,DWSeed,NQdiff,
              Objects,ObjectIdxSeed,
-             _PartVals,VPutResp,NodeStatus0}, 
+             _PartVals,VPutResp,NodeStatus0,Options}, 
             {fsm_eqc_util:largenat(),fsm_eqc_util:largenat(),choose(0,4096),
              fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
              fsm_eqc_util:partvals(),vnodeputresps(),
-             fsm_eqc_util:some_up_node_status(10)},
+             fsm_eqc_util:some_up_node_status(10),options()},
     begin
         N = length(VPutResp),
         W = (WSeed rem N) + 1,
         DW = (DWSeed rem W) + 1,
-        Options = [],
 
         Q = fsm_eqc_util:make_power_of_two(N + NQdiff),
         NodeStatus = fsm_eqc_util:cycle(Q, NodeStatus0),
@@ -151,7 +160,6 @@ prop_basic_put() ->
         Ring = fsm_eqc_util:reassign_nodes(NodeStatus,
                                            riak_core_ring:fresh(Q, node())),
 
-        
         %% Pick the object to put - as ObjectIdxSeed shrinks, it should go towards
         %% the end of the list (for current), so simplest to just reverse the list
         %% and calculate modulo list length
@@ -167,10 +175,13 @@ prop_basic_put() ->
         
         mochiglobal:put(?RING_KEY, Ring),
 
+        AllowMult = false,
+
         application:set_env(riak_core,
                             default_bucket_props,
-                            [{n_val, N}
-                             |?DEFAULT_BUCKET_PROPS]),
+                            [{n_val, N},
+                             {allow_mult, AllowMult} |
+                             ?DEFAULT_BUCKET_PROPS]),
 
         {ok, PutPid} = riak_kv_put_fsm:start(?REQ_ID,
                                              Object,
@@ -183,7 +194,7 @@ prop_basic_put() ->
         Res = fsm_eqc_util:wait_for_req_id(?REQ_ID),
         H = get_fsm_qc_vnode_master:get_reply_history(),
 
-        Expected = expect(H, N, W, DW, Options),
+        Expected = expect(H, N, W, DW, AllowMult, Options),
         ?WHENFAIL(
            begin
                io:format(user, "NodeStatus: ~p\n", [NodeStatus]),
@@ -237,10 +248,10 @@ put_merge(CurObj, NewObj, ReqId) ->
         false -> {newobj, ResObj}
     end.
 
-expect(H, N, W, DW, Options) ->
+expect(H, N, W, DW, AllowMult, Options) ->
     ReturnObj = case proplists:get_value(returnbody, Options, false) of
                     true ->
-                        undefined;
+                        expect_object(H, W, DW, AllowMult);
                     false ->
                         noreply
                 end,
@@ -251,9 +262,7 @@ expect(H, N, W, DW, Options) ->
         {[{w,_,_},{dw,_,_},{w,_,_},{{timeout,_},_,_}], 2, 2, 1} ->
             {error, timeout};
         _ ->
-            HNoTimeout = lists:filter(fun({{timeout,_},_,_}) -> false;
-                                             (_) -> true
-                                          end, H),
+            HNoTimeout = filter_timeouts(H),
             expect(HNoTimeout, {H, N, W, DW, 0, 0, 0, ReturnObj})
     end.
 
@@ -395,6 +404,38 @@ expect([{fail, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj}) ->
     end;
 expect([{{timeout,_Stage}, _, _}|Rest], S) ->
     expect(Rest, S).
+
+expect_object(H, W, DW, AllowMult) ->
+    expect_object(filter_timeouts(H), W, DW, AllowMult, 0, 0, []).
+
+%% Once W and DW are met, reconcile the returned object
+expect_object([], _W, _DW, _AllowMult, _NumW, _NumDW, _Objs) ->
+    noreply;
+expect_object([{w,_,_} | H], W, DW, AllowMult, NumW, NumDW, Objs) ->
+    %% Bug in current impl waits for dw message to be received after
+    %% NumW meets DW.
+    %% case NumW+1 >= W andalso NumDW >= DW of
+    %%     true ->
+    %%         riak_object:reconcile(Objs, AllowMult);
+    %%     false ->
+    %%         expect_object(H, W, DW, AllowMult, NumW + 1, NumDW, Objs)
+    %% end;
+    expect_object(H, W, DW, AllowMult, NumW + 1, NumDW, Objs);
+expect_object([{dw,_,Obj, _} | H], W, DW, AllowMult, NumW, NumDW, Objs) ->
+    case NumW >= W andalso NumDW +1 >= DW of
+        true ->
+            riak_object:reconcile([Obj | Objs], AllowMult);
+        false ->
+            expect_object(H, W, DW, AllowMult, NumW, NumDW + 1, [Obj | Objs])
+    end;
+expect_object([_ | H], W, DW, AllowMult, NumW, NumDW, Objs) ->
+    expect_object(H, W, DW, AllowMult, NumW, NumDW, Objs).
+
+    
+filter_timeouts(H) ->
+    lists:filter(fun({{timeout,_},_,_}) -> false;
+                    (_) -> true
+                 end, H).
 
 enough_replies({_H, N, W, DW, NumW, NumDW, NumFail, _RObj}) ->
     MaxWFails =  N - W,

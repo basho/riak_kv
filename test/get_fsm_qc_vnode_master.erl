@@ -207,9 +207,9 @@ send_vput_extra([{LIdx, {dw, Obj}} | Rest], Sender, ReqId, Options,
     Idx = orddict:fetch(LIdx, LIdxMap),
     NewState = case proplists:get_value(returnbody, Options, false) of
                    true ->
-                       record_reply(Sender, {dw, Idx, ReqId}, State);
+                       record_reply(Sender, {dw, Idx, Obj, ReqId}, State);
                    false ->
-                       record_reply(Sender, {dw, Idx, Obj, ReqId}, State)
+                       record_reply(Sender, {dw, Idx, ReqId}, State)
                end,
     send_vput_extra(Rest, Sender, ReqId, Options, NewState);
 send_vput_extra([{LIdx, fail} | Rest], Sender, ReqId, Options,
