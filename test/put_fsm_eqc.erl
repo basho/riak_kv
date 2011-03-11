@@ -302,6 +302,36 @@ expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj}) ->
             %%           {{timeout,2},365375409332725729550921208179070754913983135744,1234}]
             %% Expected: ok Res: {error,timeout}
 
+            %% Q: 4 N: 3 W:2 DW: 1
+            %% History: [{w,365375409332725729550921208179070754913983135744,1234},
+            %%           {dw,365375409332725729550921208179070754913983135744,
+            %%               {r_object,
+            %%                   <<133,95,45,109,7,80>>,
+            %%                   <<"@Ü±,0ü">>,
+            %%                   [{r_content,
+            %%                        {dict,1,16,16,8,80,48,
+            %%                            {[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]},
+            %%                            {{[],[],[],[],[],[],[],[],[],[],[],[],[],
+            %%                              [[<<"X-Riak-Last-Modified">>|
+            %%                                {1298,999408,148661}]],
+            %%                              [],[]}}},
+            %%                        <<"current">>}],
+            %%                   [{<<"bro!">>,{1,63466218608}},
+            %%                    {<<"bro2">>,{1,63466218608}},
+            %%                    {<<"sis!">>,{1,63466218608}}],
+            %%                   {dict,1,16,16,8,80,48,
+            %%                       {[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]},
+            %%                       {{[],[],[],[],[],[],[],[],[],[],[],[],[],[],
+            %%                         [[clean|true]],
+            %%                         []}}},
+            %%                   undefined},
+            %%               1234},
+            %%           {w,730750818665451459101842416358141509827966271488,1234},
+            %%           {w,1096126227998177188652763624537212264741949407232,1234},
+            %%           {{timeout,2},730750818665451459101842416358141509827966271488,1234},
+            %%           {fail,1096126227998177188652763624537212264741949407232,1234}]
+            %% Expected: ok Res: {error,timeout}
+
             DWLeft = length([x || Reply <- Rest, element(1,Reply) == dw]),
             OnlyWLeft = lists:all(fun({w, _, _}) -> true;
                                      (_) -> false
@@ -309,11 +339,15 @@ expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj}) ->
             case {NumW+1, Rest, DWLeft, OnlyWLeft} of
                 {W, [{fail,_,_}|_], 0, _} -> 
                     {error, timeout};
+                {X, [{w,_,_},{fail,_,_}|_], 0, _} when X >= W->  %DW met before last w, then fail
+                    {error, timeout};
                 {W, [], 0, _} when NumDW >= DW ->
                     {error, timeout};
                 {W, _, 0, true} when DW > 0 ->
                     {error, timeout};
                 _ ->
+                    io:format("NumW+1=~p W=~p Rest=~p DWLeft = ~p, OnlyWLeft=~p\n",
+                              [NumW+1, W, Rest, DWLeft, OnlyWLeft]),
                     maybe_add_robj(Expect, RObj) % and here is passing on expected value
             end;
         {true, Expect} ->
