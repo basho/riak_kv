@@ -108,6 +108,7 @@ handle_cast(?VNODE_REQ{index=Idx,
 handle_cast(?VNODE_REQ{index=Idx,
                        sender=Sender,
                        request=?KV_PUT_REQ{req_id=ReqId,
+                                           object = Obj,
                                            options = Options}=Msg}, State) ->
     %% Options to handle
     %% {returnbody, true|false}
@@ -121,7 +122,7 @@ handle_cast(?VNODE_REQ{index=Idx,
 
     %% Send up to the next w or timeout message, substituting indices
     State1 = send_vput_replies(State#state.vput_replies, Idx,
-                               Sender, ReqId, Options, State),
+                               Sender, ReqId, Obj, Options, State),
     {noreply, State1#state{put_history=[{Idx,Msg}|State#state.put_history]}};    
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -184,9 +185,9 @@ get_data(Partition, #state{objects=Objects, partvals=[Res|Rest]} = State) ->
 
 %% Send the next vnode put response then send any 'extra' responses in sequence
 %% until the next w/timeout
-send_vput_replies([], _Idx, _Sender, _ReqId, _Options, State) ->
+send_vput_replies([], _Idx, _Sender, _ReqId, _Obj, _Options, State) ->
     State;
-send_vput_replies([{LIdx, FirstResp} | Rest], Idx, Sender, ReqId, Options,
+send_vput_replies([{LIdx, FirstResp} | Rest], Idx, Sender, ReqId, Obj, Options,
                #state{lidx_map = LIdxMap} = State) ->
     %% Check have not seen this logical index before and store it
     error = orddict:find(LIdx, LIdxMap),
@@ -198,7 +199,8 @@ send_vput_replies([{LIdx, FirstResp} | Rest], Idx, Sender, ReqId, Options,
                     {{timeout, 1}, Idx, ReqId}
             end,
     NewState2 = record_reply(Sender, Reply, NewState1),
-    send_vput_extra(Rest, Sender, ReqId, Options, NewState2).
+    Rest2 = fail_on_bad_obj(LIdx, Obj, Rest),
+    send_vput_extra(Rest2, Sender, ReqId, Options, NewState2).
 
 send_vput_extra([], _Sender, _ReqId, _Options, State) ->
     State#state{vput_replies = []};
@@ -233,3 +235,16 @@ record_reply(Sender, Reply, #state{reply_history = H} = State) ->
             riak_core_vnode:reply(Sender, Reply)
     end,
     State#state{reply_history = [Reply | H]}.
+
+
+%% If the requested object is not an r_object tuple, make sure the {dw} response is fail
+%% Leave any other failures the same.
+fail_on_bad_obj(_LIdx, Obj, VPutReplies) when element(1, Obj) =:= r_object ->
+   VPutReplies;
+fail_on_bad_obj(LIdx, _Obj, VPutReplies) ->
+    case lists:keysearch(LIdx, 1, VPutReplies) of
+        {value, {LIdx, {dw, _}}} ->
+            lists:keyreplace(LIdx, 1, VPutReplies, {LIdx, fail});
+        _ ->
+            VPutReplies
+    end.

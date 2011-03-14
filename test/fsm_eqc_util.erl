@@ -141,6 +141,7 @@ start_mock_servers() ->
             riak_kv_test_util:wait_for_pid(Pid)
     end,
     get_fsm_qc_vnode_master:start_link(),
+    application:unload(riak_core),
     ok = application:load(riak_core),
     application:start(crypto),
     riak_core_ring_events:start_link(),
