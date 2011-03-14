@@ -157,18 +157,26 @@ precommit_hooks() ->
     frequency([{5, []},
                {1, list(precommit_hook())}]).
 
+postcommit_hook() ->
+    frequency([{17, postcommit_ok},
+               {1,  postcommit_crash}]).
+                
+postcommit_hooks() ->
+    frequency([{5, []},
+               {1, list(postcommit_hook())}]).
+
 
 prop_basic_put() ->
     %% ?FORALL({WSeed,DWSeed},
     ?FORALL({WSeed,DWSeed,NQdiff,
              Objects,ObjectIdxSeed,
              _PartVals,VPutResp,NodeStatus0,Options,
-             Precommit}, 
+             Precommit, Postcommit}, 
             {fsm_eqc_util:largenat(),fsm_eqc_util:largenat(),choose(0,4096),
              fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
              fsm_eqc_util:partvals(),vnodeputresps(),
              fsm_eqc_util:some_up_node_status(10),options(),
-             precommit_hooks()},
+             precommit_hooks(), postcommit_hooks()},
     begin
         N = length(VPutResp),
         W = (WSeed rem N) + 1, %% W from 1..N
@@ -197,23 +205,32 @@ prop_basic_put() ->
 
         AllowMult = false,
 
+        ModDef = {<<"mod">>, atom_to_binary(?MODULE, latin1)},
         PrecommitProps = case Precommit of
                              [] ->
                                  [];
                              _ ->
-                                 ModDef = {<<"mod">>, atom_to_binary(?MODULE, latin1)},
-                                 HookStruct = [{struct, [ModDef,
+                                 [{precommit, [{struct, [ModDef,
                                                          {<<"fun">>,
                                                           atom_to_binary(Hook,latin1)}]} || 
-                                                  Hook <- Precommit],
-                                 [{precommit, HookStruct}]
+                                                  Hook <- Precommit]}]
                          end,
-                                 
+        PostcommitProps = case Postcommit of
+                              [] ->
+                                  [];
+                              _ ->
+                                  [{postcommit, [{struct, [ModDef,
+                                                           {<<"fun">>,
+                                                            atom_to_binary(Hook,latin1)}]} || 
+                                                    Hook <- Postcommit]}]
+                          end,
+        
         application:set_env(riak_core,
                             default_bucket_props,
                             [{n_val, N},
                              {allow_mult, AllowMult} |
                              PrecommitProps ++
+                             PostcommitProps ++
                              ?DEFAULT_BUCKET_PROPS]),
 
         {ok, PutPid} = riak_kv_put_fsm:start(?REQ_ID,
@@ -227,7 +244,7 @@ prop_basic_put() ->
         Res = fsm_eqc_util:wait_for_req_id(?REQ_ID),
         H = get_fsm_qc_vnode_master:get_reply_history(),
 
-        Expected = expect(H, N, W, DW, AllowMult, Options, Precommit),
+        Expected = expect(H, N, W, DW, AllowMult, Options, Precommit, Postcommit),
         ?WHENFAIL(
            begin
                io:format(user, "NodeStatus: ~p\n", [NodeStatus]),
@@ -281,8 +298,8 @@ put_merge(CurObj, NewObj, ReqId) ->
         false -> {newobj, ResObj}
     end.
 
-expect(H, N, W, DW, AllowMult, Options, Precommit) ->
-    {EffDW, ReturnObj} = case proplists:get_value(returnbody, Options, false) of
+expect(H, N, W, DW, AllowMult, Options, Precommit, Postcommit) ->
+    {EffDW1, ReturnObj} = case proplists:get_value(returnbody, Options, false) of
                              true ->
                                  %% If returnbody is set, DW is set to a minimum
                                  %% of 1 to make the vnode return a response
@@ -291,7 +308,13 @@ expect(H, N, W, DW, AllowMult, Options, Precommit) ->
                              false ->
                                  {DW, noreply}
                          end,
-
+    EffDW = case Postcommit of
+                [] ->
+                    EffDW1;
+                _ ->
+                    erlang:max(1, EffDW1)
+            end,
+    
     case {H, N, W, EffDW} of
         %% Workaround for bug transitioning from awaiting_w to awaiting_dw
         {[{w,_,_},{dw,_,_},{w,_,_},{fail,_,_}], 2, 2, 1} ->
@@ -557,5 +580,14 @@ precommit_fail(Obj) -> % Pre-commit fails
 precommit_crash(_Obj) ->
     Ok = ok,
     Ok = precommit_crash.
+
+postcommit_ok(_Obj) ->
+    %% TODO: create some indication the postcommit hook fired.
+    %% Maybe register a process name for the eunit test?
+    ok.
+
+postcommit_crash() ->
+    Ok = ok,
+    Ok = postcommit_crash.
 
 -endif. % EQC
