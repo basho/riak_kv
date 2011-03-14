@@ -43,6 +43,6 @@ start_link() ->
 init([]) ->
     PutFsmSpec = {undefined,
                {riak_kv_put_fsm, start_link, []},
-               transient, 5000, worker, [riak_kv_put_fsm]},
+               temporary, 5000, worker, [riak_kv_put_fsm]},
 
     {ok, {{simple_one_for_one, 10, 10}, [PutFsmSpec]}}.

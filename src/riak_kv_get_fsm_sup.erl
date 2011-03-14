@@ -43,6 +43,6 @@ start_link() ->
 init([]) ->
     GetFsmSpec = {undefined,
                {riak_kv_get_fsm, start_link, []},
-               transient, 5000, worker, [riak_kv_get_fsm]},
+               temporary, 5000, worker, [riak_kv_get_fsm]},
 
     {ok, {{simple_one_for_one, 10, 10}, [GetFsmSpec]}}.
