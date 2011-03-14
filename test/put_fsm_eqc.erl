@@ -19,7 +19,15 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-
+%%
+%% To run outside of eunit
+%%
+%% $ erl -name t -pa deps/*/{ebin,.eunit} .eunit
+%% (t@jons-macpro.local)1> fsm_eqc_util:start_mock_servers().
+%% (t@jons-macpro.local)2> put_fsm_eqc:check().
+%%
+%% Remember, if the eunit test failed the current_counterexample file is under .eunit dir
+%%
 %% Set up mock server like get FSM?  
 %% Re-use preferencelist / ring set up code
 %% Initial data (per-vnode)
@@ -75,9 +83,8 @@ eqc_test_() ->
        ?_assertMatch({ok,_C}, riak:local_client()),
        %% Run the quickcheck tests
        {timeout, 60000, % do not trust the docs - timeout is in msec
-        ?_test(begin 
-                   quickcheck(numtests(250, ?QC_OUT(prop_basic_put())))
-               end)}]
+        ?_assertEqual(true, quickcheck(numtests(250, ?QC_OUT(prop_basic_put()))))}
+      ]
     }.
       %]}.
 
@@ -140,15 +147,27 @@ maybe_return_body() ->
 options() ->
     maybe_return_body().
 
+precommit_hook() ->
+    frequency([{18, precommit_noop},
+               {1,  precommit_fail},
+               {1,  precommit_crash}]).
+                
+precommit_hooks() ->
+    frequency([{5, []},
+               {1, list(precommit_hook())}]).
+
+
 prop_basic_put() ->
     %% ?FORALL({WSeed,DWSeed},
     ?FORALL({WSeed,DWSeed,NQdiff,
              Objects,ObjectIdxSeed,
-             _PartVals,VPutResp,NodeStatus0,Options}, 
+             _PartVals,VPutResp,NodeStatus0,Options,
+             Precommit}, 
             {fsm_eqc_util:largenat(),fsm_eqc_util:largenat(),choose(0,4096),
              fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
              fsm_eqc_util:partvals(),vnodeputresps(),
-             fsm_eqc_util:some_up_node_status(10),options()},
+             fsm_eqc_util:some_up_node_status(10),options(),
+             precommit_hooks()},
     begin
         N = length(VPutResp),
         W = (WSeed rem N) + 1, %% W from 1..N
@@ -177,10 +196,23 @@ prop_basic_put() ->
 
         AllowMult = false,
 
+        PrecommitProps = case Precommit of
+                             [] ->
+                                 [];
+                             _ ->
+                                 ModDef = {<<"mod">>, atom_to_binary(?MODULE, latin1)},
+                                 HookStruct = [{struct, [ModDef,
+                                                         {<<"fun">>,
+                                                          atom_to_binary(Hook,latin1)}]} || 
+                                                  Hook <- Precommit],
+                                 [{precommit, HookStruct}]
+                         end,
+                                 
         application:set_env(riak_core,
                             default_bucket_props,
                             [{n_val, N},
                              {allow_mult, AllowMult} |
+                             PrecommitProps ++
                              ?DEFAULT_BUCKET_PROPS]),
 
         {ok, PutPid} = riak_kv_put_fsm:start(?REQ_ID,
@@ -194,7 +226,7 @@ prop_basic_put() ->
         Res = fsm_eqc_util:wait_for_req_id(?REQ_ID),
         H = get_fsm_qc_vnode_master:get_reply_history(),
 
-        Expected = expect(H, N, W, DW, AllowMult, Options),
+        Expected = expect(H, N, W, DW, AllowMult, Options, Precommit),
         ?WHENFAIL(
            begin
                io:format(user, "NodeStatus: ~p\n", [NodeStatus]),
@@ -248,22 +280,31 @@ put_merge(CurObj, NewObj, ReqId) ->
         false -> {newobj, ResObj}
     end.
 
-expect(H, N, W, DW, AllowMult, Options) ->
-    ReturnObj = case proplists:get_value(returnbody, Options, false) of
-                    true ->
-                        expect_object(H, W, DW, AllowMult);
-                    false ->
-                        noreply
-                end,
-    case {H, N, W, DW} of
-        %% Workaround for bug transitioning from awaiting_w to awaiting_dw
-        {[{w,_,_},{dw,_,_},{w,_,_},{fail,_,_}], 2, 2, 1} ->
-            {error, timeout};
-        {[{w,_,_},{dw,_,_},{w,_,_},{{timeout,_},_,_}], 2, 2, 1} ->
-            {error, timeout};
-        _ ->
-            HNoTimeout = filter_timeouts(H),
-            expect(HNoTimeout, {H, N, W, DW, 0, 0, 0, ReturnObj})
+expect(H, N, W, DW, AllowMult, Options, Precommit) ->
+    case precommit_should_fail(Precommit) of
+        {true, Expect} ->
+            Expect;
+        
+        false ->
+            {EffDW, ReturnObj} = case proplists:get_value(returnbody, Options, false) of
+                                     true ->
+                                         %% If returnbody is set, DW is set to a minimum
+                                         %% of 1 to make the vnode return a response
+                                         EffDW0 = erlang:max(1, DW),
+                                         {EffDW0, expect_object(H, W, EffDW0, AllowMult)};
+                                     false ->
+                                         {DW, noreply}
+                                 end,
+            case {H, N, W, EffDW} of
+                %% Workaround for bug transitioning from awaiting_w to awaiting_dw
+                {[{w,_,_},{dw,_,_},{w,_,_},{fail,_,_}], 2, 2, 1} ->
+                    {error, timeout};
+                {[{w,_,_},{dw,_,_},{w,_,_},{{timeout,_},_,_}], 2, 2, 1} ->
+                    {error, timeout};
+                _ ->
+                    HNoTimeout = filter_timeouts(H),
+                    expect(HNoTimeout, {H, N, W, EffDW, 0, 0, 0, ReturnObj})
+            end
     end.
 
 expect([], {_H, _N, _W, _DW, _NumW, _NumDW, _NumFail, _RObj}) ->
@@ -455,11 +496,30 @@ enough_replies({_H, N, W, DW, NumW, NumDW, NumFail, _RObj}) ->
             false
     end.
 
+precommit_should_fail([]) ->
+    false;
+precommit_should_fail([Hook | _Rest]) when Hook =:= precommit_fail;
+                                           Hook =:= precommit_crash ->
+    {true, {error, precommit_fail}};
+precommit_should_fail([_Hook | Rest]) ->
+    precommit_should_fail(Rest).
+
 maybe_add_robj(ok, noreply) ->
     ok;
 maybe_add_robj(ok, RObj) ->
     {ok, RObj};
 maybe_add_robj(Expect, _Robj) ->
     Expect.
+
+precommit_noop(Obj) -> % No-op precommit, no changed
+    r_object = element(1, Obj),
+    Obj.
+
+precommit_fail(_Obj) -> % Pre-commit fails
+    fail.
+
+precommit_crash(_Obj) ->
+    Ok = ok,
+    Ok = precommit_crash.
 
 -endif. % EQC
