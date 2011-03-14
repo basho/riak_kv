@@ -43,6 +43,6 @@ start_link() ->
 init([]) ->
     DeleteSpec = {undefined,
                {riak_kv_delete, delete, []},
-               transient, 5000, worker, [riak_kv_delete]},
+               temporary, 5000, worker, [riak_kv_delete]},
 
     {ok, {{simple_one_for_one, 10, 10}, [DeleteSpec]}}.
