@@ -144,9 +144,11 @@ precommit_hook() ->
                {1,  {erlang, precommit_crash}},
                {1,  {erlang, precommit_undefined}},
                {1,  {js, precommit_noop}},
+               {1,  {js, precommit_nonobj}},
                {1,  {js, precommit_fail}},
                {1,  {js, precommit_fail_reason}},
-               {1,  {js, precommit_crash}}]).
+               {1,  {js, precommit_crash}},
+               {1,  {js, precommit_undefined}}]).
                 
 precommit_hooks() ->
     frequency([{5, []},
@@ -553,6 +555,9 @@ precommit_should_fail([{_Lang,Hook} | _Rest], _DW) when Hook =:= precommit_fail;
     {true, {error, precommit_fail}};
 precommit_should_fail([{_Lang,precommit_fail_reason}], _DW) ->
     {true, {error, {precommit_fail, ?HOOK_SAYS_NO}}};
+precommit_should_fail([{js, precommit_nonobj} | _Rest], _DW) ->
+    %% Javascript precommit returning a non-object crashes the JS VM.
+    {true, timeout};
 precommit_should_fail([{_Lang,Hook} | Rest], DW) when Hook =:= precommit_nonobj;
                                                       Hook =:= precommit_fail_reason ->
     %% Work around bug - no check for valid object on return from precommit hook.

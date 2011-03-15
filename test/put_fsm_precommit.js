@@ -3,6 +3,11 @@ function precommit_noop(object)
     return object;
 }
 
+function precommit_nonobj(object)
+{
+    return "not_an_obj";
+}
+
 function precommit_fail(object)
 {
     return "fail";
