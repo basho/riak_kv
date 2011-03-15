@@ -48,6 +48,7 @@
 -define(RING_KEY, riak_ring).
 -define(DEFAULT_BUCKET_PROPS,
         [{chash_keyfun, {riak_core_util, chash_std_keyfun}}]).
+-define(HOOK_SAYS_NO, <<"the hook says no">>).
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
@@ -93,6 +94,8 @@ test() ->
     test(100).
 
 test(N) ->
+    fsm_eqc_util:start_mock_servers(),
+    start_javascript(),
     quickcheck(numtests(N, prop_basic_put())).
 
 check() ->
@@ -135,9 +138,12 @@ precommit_hook() ->
     frequency([{17, {erlang, precommit_noop}},
                {1,  {erlang, precommit_nonobj}},
                {1,  {erlang, precommit_fail}},
+               {1,  {erlang, precommit_fail_reason}},
                {1,  {erlang, precommit_crash}},
+               {1,  {erlang, precommit_undefined}},
                {1,  {js, precommit_noop}},
-               {1,  {js, precommit_fail}}]).
+               {1,  {js, precommit_fail}},
+               {1,  {js, precommit_fail_reason}}]).
                 
 precommit_hooks() ->
     frequency([{5, []},
@@ -314,15 +320,16 @@ expect(H, N, W, EffDW, Options, Precommit, Postcommit, Object) ->
                            expect(HNoTimeout, {H, N, W, EffDW, 0, 0, 0, ReturnObj, Precommit})
                    end,
     ExpectPostcommit = case {ExpectResult, Postcommit} of
-                            {{error, _}, _} ->
-                                [];
-
-                            {_, []} ->
-                                [];
-                            {_, _} ->
-                                %% Postcommit should be called for each ok hook registered.
-                                [Object || Hook <- Postcommit, Hook =:= {erlang, postcommit_ok}]
-                        end,
+                           {{error, _}, _} ->
+                               [];
+                           {timeout, _} ->
+                               [];
+                           {_, []} ->
+                               [];
+                           {_, _} ->
+                               %% Postcommit should be called for each ok hook registered.
+                               [Object || Hook <- Postcommit, Hook =:= {erlang, postcommit_ok}]
+                       end,
     {ExpectResult, ExpectPostcommit}.
 
 %% Work out what DW value is being effectively used by the FSM - anything
@@ -538,9 +545,13 @@ enough_replies({_H, N, W, DW, NumW, NumDW, NumFail, _RObj, _Precommit}) ->
 precommit_should_fail([], _DW) ->
     false;
 precommit_should_fail([{_Lang,Hook} | _Rest], _DW) when Hook =:= precommit_fail;
-                                                        Hook =:= precommit_crash ->
+                                                        Hook =:= precommit_crash;
+                                                        Hook =:= precommit_undefined ->
     {true, {error, precommit_fail}};
-precommit_should_fail([{_Lang,precommit_nonobj} | Rest], DW) ->
+precommit_should_fail([{_Lang,precommit_fail_reason}], _DW) ->
+    {true, {error, {precommit_fail, ?HOOK_SAYS_NO}}};
+precommit_should_fail([{_Lang,Hook} | Rest], DW) when Hook =:= precommit_nonobj;
+                                                      Hook =:= precommit_fail_reason ->
     %% Work around bug - no check for valid object on return from precommit hook.
     %% instead tries to use it anyway as a valid object and puts fail.
     case {DW, Rest} of 
@@ -549,14 +560,7 @@ precommit_should_fail([{_Lang,precommit_nonobj} | Rest], DW) ->
         {_, []} ->
             {true, {error, too_many_fails}};
         _ ->
-            case crashfail_before_js(Rest) of
-                true ->
-                    {true, {error, precommit_fail}};
-                false ->
-                    %% Javascript precommit with non-object crashes the VM and we get
-                    %% a timeout waiting for the VM to reply
-                    {true, timeout}
-            end
+            {true, crashfail_before_js(Rest)}
     end;
 precommit_should_fail([_LangHook | Rest], DW) ->
     precommit_should_fail(Rest, DW).
@@ -564,14 +568,23 @@ precommit_should_fail([_LangHook | Rest], DW) ->
 %% Return true if there is a crash or fail that will prevent more precommit hooks
 %% running before a javascript one is hit.
 crashfail_before_js([]) ->
-    true; % for our purposes no js hook was hit, so kinda true.
+    {error, precommit_fail}; % for our purposes no js hook was hit, so kinda true.
+crashfail_before_js([{js, precommit_fail_reason}]) ->
+    %% has been a non-obj/{fail,Reason} before so the erlang hook just crashed without reason
+    %% only the js version will return error.
+    {error, {precommit_fail, ?HOOK_SAYS_NO}};
+crashfail_before_js([{js, _} | _Rest]) ->
+    %% Javascript precommit with non-object crashes the VM and we get
+    %% a timeout waiting for the VM to reply
+    timeout;
 crashfail_before_js([{_, Hook} | _Rest]) when Hook =:= precommit_fail;
+                                              Hook =:= precommit_fail_reason; % comment below
                                               Hook =:= precommit_crash;
                                               Hook =:= precommit_noop ->
+    %% precommit_fail_reason needs to be treated as nonobj as not currently handled
+    %% in the run_hooks 
     %% All erlang test hooks check to see if valid object coming in
-    true;
-crashfail_before_js([{js, _} | _Rest]) ->
-    false;
+    {error, precommit_fail};
 crashfail_before_js([_|Rest]) ->
     crashfail_before_js(Rest).
 
@@ -595,6 +608,8 @@ maybe_add_robj({error, timeout}, _Robj, Precommit, DW) ->
     case precommit_should_fail(Precommit, DW) of
         {true, {error, precommit_fail}} ->
             {error, precommit_fail};
+        {true, {error, {precommit_fail, Why}}} ->
+            {error, {precommit_fail, Why}};
         {true, {error, _}} ->
             {error, timeout};
         {true, Other} ->
@@ -616,6 +631,10 @@ precommit_nonobj(Obj) -> % Non-riak object
 precommit_fail(Obj) -> % Pre-commit fails
     r_object = element(1, Obj),
     fail.
+
+precommit_fail_reason(Obj) -> % Pre-commit fails
+    r_object = element(1, Obj),
+    {fail, ?HOOK_SAYS_NO}. % return binary so same tests can be used on javascript hooks
 
 precommit_crash(_Obj) ->
     Ok = ok,
