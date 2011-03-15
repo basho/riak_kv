@@ -278,7 +278,7 @@ handle_exit({_Pid, _Reason}, _StateName, State) ->
     %% by riak_core_vnode_master to prevent 
     %% messages from stacking up on the process message
     %% queue and never being processed.
-    {stop, process_crash, State}.
+    {stop, linked_process_crash, State}.
 
 %% old vnode helper functions
 
