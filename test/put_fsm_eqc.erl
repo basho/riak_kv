@@ -23,7 +23,7 @@
 %% To run outside of eunit
 %%
 %% $ erl -name t -pa deps/*/{ebin,.eunit} .eunit
-%% (t@jons-macpro.local)1> fsm_eqc_util:start_mock_servers().
+%% (t@jons-macpro.local)1> put_fsm_eqc:prepare().
 %% (t@jons-macpro.local)2> put_fsm_eqc:check().
 %%
 %% Remember, if the eunit test failed the current_counterexample file is under .eunit dir
@@ -90,12 +90,14 @@ cleanup(running) ->
 cleanup(started) ->
     ok = net_kernel:stop().
 
+prepare() ->
+    fsm_eqc_util:start_mock_servers(),
+    start_javascript().
+    
 test() ->
     test(100).
 
 test(N) ->
-    fsm_eqc_util:start_mock_servers(),
-    start_javascript(),
     quickcheck(numtests(N, prop_basic_put())).
 
 check() ->
@@ -143,7 +145,8 @@ precommit_hook() ->
                {1,  {erlang, precommit_undefined}},
                {1,  {js, precommit_noop}},
                {1,  {js, precommit_fail}},
-               {1,  {js, precommit_fail_reason}}]).
+               {1,  {js, precommit_fail_reason}},
+               {1,  {js, precommit_crash}}]).
                 
 precommit_hooks() ->
     frequency([{5, []},
@@ -580,7 +583,8 @@ crashfail_before_js([{js, _} | _Rest]) ->
 crashfail_before_js([{_, Hook} | _Rest]) when Hook =:= precommit_fail;
                                               Hook =:= precommit_fail_reason; % comment below
                                               Hook =:= precommit_crash;
-                                              Hook =:= precommit_noop ->
+                                              Hook =:= precommit_noop;
+                                              Hook =:= precommit_undefined ->
     %% precommit_fail_reason needs to be treated as nonobj as not currently handled
     %% in the run_hooks 
     %% All erlang test hooks check to see if valid object coming in

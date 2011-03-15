@@ -12,3 +12,8 @@ function precommit_fail_reason(object)
 {
     return {"fail":"the hook says no"};
 }
+
+function precommit_crash(object)
+{
+    throw "wobbler";
+}
