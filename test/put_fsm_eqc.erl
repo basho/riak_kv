@@ -28,32 +28,11 @@
 %%
 %% Remember, if the eunit test failed the current_counterexample file is under .eunit dir
 %%
-%% Set up mock server like get FSM?  
-%% Re-use preferencelist / ring set up code
-%% Initial data (per-vnode)
-%%   - notfound
-%%   - ancestor
-%%   - sibling
-%%   - descendant
-
-%% Hooks
-%%   - precommit/postcommit
-%%   - crash
-%%   - java / erlang?
-
-%% Set responses for vnodes
-%%   none
-%%   just w
-%%   w, then dw
-
-%% Options:
-%%   update_last_modified
-%%   returnbody
-
-%% Things to check
-%%   - last modified time
-%%   - optionally return object
-
+%% TODO: Add tests for javascript precondition hooks
+%%       Move bucket props into a helper function to clean up property
+%%       Test with allow_mult true
+%%       Move common create ring code into fsm_eqc_util
+%%
 -module(put_fsm_eqc).
 -ifdef(EQC).
 
@@ -62,6 +41,7 @@
 -include_lib("riak_kv_vnode.hrl").
 
 -compile(export_all).
+-export([postcommit_ok/1]).
 
 -define(REQ_ID, 1234).
 -define(RING_KEY, riak_ring).
@@ -241,19 +221,28 @@ prop_basic_put() ->
                                              self(),
                                              Options),
         ok = riak_kv_test_util:wait_for_pid(PutPid),
+        ok = riak_kv_test_util:wait_for_children(PutPid),
         Res = fsm_eqc_util:wait_for_req_id(?REQ_ID),
         H = get_fsm_qc_vnode_master:get_reply_history(),
+        PostCommits = get_fsm_qc_vnode_master:get_postcommits(),
 
-        Expected = expect(H, N, W, DW, AllowMult, Options, Precommit, Postcommit),
+        EffDW = get_effective_dw(DW, Options, Postcommit),
+        ExpectObject = expect_object(H, W, EffDW, AllowMult),
+        {Expected, ExpectedPostCommits} = expect(H, N, W, EffDW, Options,
+                                                 Precommit, Postcommit, ExpectObject),
         ?WHENFAIL(
            begin
                io:format(user, "NodeStatus: ~p\n", [NodeStatus]),
                io:format(user, "VPutReplies = ~p\n", [VPutReplies]),
-               io:format(user, "Q: ~p N: ~p W:~p DW: ~p\n", [Q, N, W, DW]),
+               io:format(user, "Q: ~p N: ~p W:~p DW: ~p EffDW: ~p\n",
+                         [Q, N, W, DW, get_effective_dw(DW, Options, Postcommit)]),
+               io:format(user, "Expected Object: ~p\n", [ExpectObject]),
                io:format(user, "History: ~p\n", [H]),
-               io:format(user, "Expected: ~p Res: ~p\n", [Expected, Res])
+               io:format(user, "Expected: ~p Res: ~p\n", [Expected, Res]),
+               io:format(user, "PostCommits: ~p Got: ~p\n", [ExpectedPostCommits, PostCommits])
            end,
-           equals(Res, Expected))
+           conjunction([{result, equals(Res, Expected)},
+                        {postcommit, equals(PostCommits, ExpectedPostCommits)}]))
     end).
 
 
@@ -298,33 +287,52 @@ put_merge(CurObj, NewObj, ReqId) ->
         false -> {newobj, ResObj}
     end.
 
-expect(H, N, W, DW, AllowMult, Options, Precommit, Postcommit) ->
-    {EffDW1, ReturnObj} = case proplists:get_value(returnbody, Options, false) of
-                             true ->
-                                 %% If returnbody is set, DW is set to a minimum
-                                 %% of 1 to make the vnode return a response
-                                 EffDW0 = erlang:max(1, DW),
-                                 {EffDW0, expect_object(H, W, EffDW0, AllowMult)};
-                             false ->
-                                 {DW, noreply}
-                         end,
-    EffDW = case Postcommit of
-                [] ->
-                    EffDW1;
-                _ ->
-                    erlang:max(1, EffDW1)
-            end,
+%% Work out the expected return value from the FSM and the expected postcommit log.
+expect(H, N, W, EffDW, Options, Precommit, Postcommit, Object) ->
+    ReturnObj = case proplists:get_value(returnbody, Options, false) of
+                    true ->
+                        Object;
+                    false ->
+                        noreply
+                end,
     
-    case {H, N, W, EffDW} of
-        %% Workaround for bug transitioning from awaiting_w to awaiting_dw
-        {[{w,_,_},{dw,_,_},{w,_,_},{fail,_,_}], 2, 2, 1} ->
-            {error, timeout};
-        {[{w,_,_},{dw,_,_},{w,_,_},{{timeout,_},_,_}], 2, 2, 1} ->
-            {error, timeout};
-        _ ->
-            HNoTimeout = filter_timeouts(H),
-            expect(HNoTimeout, {H, N, W, EffDW, 0, 0, 0, ReturnObj, Precommit})
-    end.
+    ExpectResult = case {H, N, W, EffDW} of
+                       %% Workaround for bug transitioning from awaiting_w to awaiting_dw
+                       {[{w,_,_},{dw,_,_},{w,_,_},{fail,_,_}], 2, 2, 1} ->
+                           {error, timeout};
+                       {[{w,_,_},{dw,_,_},{w,_,_},{{timeout,_},_,_}], 2, 2, 1} ->
+                           {error, timeout};
+                       _ ->
+                           HNoTimeout = filter_timeouts(H),
+                           expect(HNoTimeout, {H, N, W, EffDW, 0, 0, 0, ReturnObj, Precommit})
+                   end,
+    ExpectPostcommit = case {ExpectResult, Postcommit} of
+                            {{error, _}, _} ->
+                                [];
+                            {_, []} ->
+                                [];
+                            {_, _} ->
+                                %% Postcommit should be called for each ok hook registered.
+                                [Object || Hook <- Postcommit, Hook =:= postcommit_ok]
+                        end,
+    {ExpectResult, ExpectPostcommit}.
+
+%% Work out what DW value is being effectively used by the FSM - anything
+%% that needs a result - postcommit or returnbody requires a minimum DW of 1.
+get_effective_dw(DW, Options, PostCommit) ->
+    OptionsDW = case proplists:get_value(returnbody, Options, false) of
+                     true ->
+                         1;
+                     false ->
+                         0
+                 end,
+    PostCommitDW = case PostCommit of
+                       [] ->
+                           0;
+                       _ ->
+                           1
+                   end,
+    lists:max([DW, OptionsDW, PostCommitDW]).
 
 expect([], {_H, _N, _W, DW, _NumW, _NumDW, _NumFail, RObj, Precommit}) ->
     maybe_add_robj({error, timeout}, RObj, Precommit, DW);
@@ -517,6 +525,7 @@ enough_replies({_H, N, W, DW, NumW, NumDW, NumFail, _RObj, _Precommit}) ->
         true ->
             false
     end.
+   
 
 precommit_should_fail([], _DW) ->
     false;
@@ -581,12 +590,11 @@ precommit_crash(_Obj) ->
     Ok = ok,
     Ok = precommit_crash.
 
-postcommit_ok(_Obj) ->
-    %% TODO: create some indication the postcommit hook fired.
-    %% Maybe register a process name for the eunit test?
+postcommit_ok(Obj) ->
+    get_fsm_qc_vnode_master:log_postcommit(Obj),
     ok.
 
-postcommit_crash() ->
+postcommit_crash(_Obj) ->
     Ok = ok,
     Ok = postcommit_crash.
 
