@@ -31,8 +31,19 @@ largenat() ->
 
 bkey() ->
     %%TODO: "make this nastier"
-    {binary(6),  %% bucket
-     binary(6)}. %% key
+    %%TODO: once json encoding of bkeys as binaries rather than utf8 strings
+    %%      start creating general binaries instead
+    {non_blank_string(),  %% bucket
+     non_blank_string()}. %% key
+
+non_blank_string() ->
+    ?LET(X,not_empty(list(lower_char())), list_to_binary(X)).
+
+%% Generate a lower 7-bit ACSII character that should not cause any problems
+%% with utf8 conversion.
+lower_char() ->
+    choose(16#20, 16#7f).
+    
 
 vclock() ->
     ?LET(VclockSym, vclock_sym(), eval(VclockSym)).
@@ -149,8 +160,6 @@ start_mock_servers() ->
     riak_core_node_watcher:start_link(),
     riak_core_node_watcher:service_up(riak_kv, self()),
     ok.
-
-
 
 reassign_nodes(Status, Ring) ->
     Ids = [ I || {I, _} <- riak_core_ring:all_owners(Ring) ],

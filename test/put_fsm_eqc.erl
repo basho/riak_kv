@@ -39,6 +39,7 @@
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("riak_kv_vnode.hrl").
+-include_lib("riak_kv_js_pools.hrl").
 
 -compile(export_all).
 -export([postcommit_ok/1]).
@@ -61,6 +62,8 @@ eqc_test_() ->
        ?_assertEqual(pong, net_adm:ping(node())),
        ?_assertEqual(pang, net_adm:ping('nonode@nohost')),
        ?_assertMatch({ok,_C}, riak:local_client()),
+       ?_assertMatch({ok, 123}, riak_kv_js_manager:blocking_dispatch(riak_kv_js_hook,
+                                  {{jsanon, <<"function() { return 123; }">>},[]}, 5)),
        %% Run the quickcheck tests
        {timeout, 60000, % do not trust the docs - timeout is in msec
         ?_assertEqual(true, quickcheck(numtests(250, ?QC_OUT(prop_basic_put()))))}
@@ -78,6 +81,7 @@ setup() ->
                     started
             end,
     fsm_eqc_util:start_mock_servers(),
+    start_javascript(),
     State.
 
 cleanup(running) ->
@@ -128,18 +132,20 @@ options() ->
     maybe_return_body().
 
 precommit_hook() ->
-    frequency([{17, precommit_noop},
-               {1,  precommit_nonobj},
-               {1,  precommit_fail},
-               {1,  precommit_crash}]).
+    frequency([{17, {erlang, precommit_noop}},
+               {1,  {erlang, precommit_nonobj}},
+               {1,  {erlang, precommit_fail}},
+               {1,  {erlang, precommit_crash}},
+               {1,  {js, precommit_noop}},
+               {1,  {js, precommit_fail}}]).
                 
 precommit_hooks() ->
     frequency([{5, []},
                {1, list(precommit_hook())}]).
 
 postcommit_hook() ->
-    frequency([{17, postcommit_ok},
-               {1,  postcommit_crash}]).
+    frequency([{17, {erlang, postcommit_ok}},
+               {1,  {erlang, postcommit_crash}}]).
                 
 postcommit_hooks() ->
     frequency([{5, []},
@@ -184,34 +190,7 @@ prop_basic_put() ->
         mochiglobal:put(?RING_KEY, Ring),
 
         AllowMult = false,
-
-        ModDef = {<<"mod">>, atom_to_binary(?MODULE, latin1)},
-        PrecommitProps = case Precommit of
-                             [] ->
-                                 [];
-                             _ ->
-                                 [{precommit, [{struct, [ModDef,
-                                                         {<<"fun">>,
-                                                          atom_to_binary(Hook,latin1)}]} || 
-                                                  Hook <- Precommit]}]
-                         end,
-        PostcommitProps = case Postcommit of
-                              [] ->
-                                  [];
-                              _ ->
-                                  [{postcommit, [{struct, [ModDef,
-                                                           {<<"fun">>,
-                                                            atom_to_binary(Hook,latin1)}]} || 
-                                                    Hook <- Postcommit]}]
-                          end,
-        
-        application:set_env(riak_core,
-                            default_bucket_props,
-                            [{n_val, N},
-                             {allow_mult, AllowMult} |
-                             PrecommitProps ++
-                             PostcommitProps ++
-                             ?DEFAULT_BUCKET_PROPS]),
+        set_bucket_props(N, AllowMult, Precommit, Postcommit),
 
         {ok, PutPid} = riak_kv_put_fsm:start(?REQ_ID,
                                              Object,
@@ -235,7 +214,7 @@ prop_basic_put() ->
                io:format(user, "NodeStatus: ~p\n", [NodeStatus]),
                io:format(user, "VPutReplies = ~p\n", [VPutReplies]),
                io:format(user, "Q: ~p N: ~p W:~p DW: ~p EffDW: ~p\n",
-                         [Q, N, W, DW, get_effective_dw(DW, Options, Postcommit)]),
+                         [Q, N, W, DW, EffDW]),
                io:format(user, "Expected Object: ~p\n", [ExpectObject]),
                io:format(user, "History: ~p\n", [H]),
                io:format(user, "Expected: ~p Res: ~p\n", [Expected, Res]),
@@ -287,6 +266,34 @@ put_merge(CurObj, NewObj, ReqId) ->
         false -> {newobj, ResObj}
     end.
 
+set_bucket_props(N, AllowMult, Precommit, Postcommit) ->
+    RequestProps =  [{n_val, N},
+                     {allow_mult, AllowMult}],
+    ModDef = {<<"mod">>, atom_to_binary(?MODULE, latin1)},
+    HookXform = fun({erlang, Hook}) ->
+                        {struct, [ModDef,
+                                   {<<"fun">>, atom_to_binary(Hook,latin1)}]};
+                   ({js, Hook}) ->
+                        {struct, [{<<"name">>, atom_to_binary(Hook,latin1)}]}
+                end,
+    PrecommitProps = case Precommit of
+                         [] ->
+                             [];
+                         _ ->
+                             [{precommit, [HookXform(H) || H <- Precommit]}]
+                     end,
+    PostcommitProps = case Postcommit of
+                          [] ->
+                              [];
+                          _ ->
+                              [{postcommit, [HookXform(H) || H <- Postcommit]}]
+                      end,
+    application:set_env(riak_core, default_bucket_props,
+                        lists:flatten([RequestProps,
+                                       PrecommitProps, PostcommitProps, 
+                                       ?DEFAULT_BUCKET_PROPS])).
+    
+
 %% Work out the expected return value from the FSM and the expected postcommit log.
 expect(H, N, W, EffDW, Options, Precommit, Postcommit, Object) ->
     ReturnObj = case proplists:get_value(returnbody, Options, false) of
@@ -309,11 +316,12 @@ expect(H, N, W, EffDW, Options, Precommit, Postcommit, Object) ->
     ExpectPostcommit = case {ExpectResult, Postcommit} of
                             {{error, _}, _} ->
                                 [];
+
                             {_, []} ->
                                 [];
                             {_, _} ->
                                 %% Postcommit should be called for each ok hook registered.
-                                [Object || Hook <- Postcommit, Hook =:= postcommit_ok]
+                                [Object || Hook <- Postcommit, Hook =:= {erlang, postcommit_ok}]
                         end,
     {ExpectResult, ExpectPostcommit}.
 
@@ -529,10 +537,10 @@ enough_replies({_H, N, W, DW, NumW, NumDW, NumFail, _RObj, _Precommit}) ->
 
 precommit_should_fail([], _DW) ->
     false;
-precommit_should_fail([Hook | _Rest], _DW) when Hook =:= precommit_fail;
-                                                Hook =:= precommit_crash ->
+precommit_should_fail([{_Lang,Hook} | _Rest], _DW) when Hook =:= precommit_fail;
+                                                        Hook =:= precommit_crash ->
     {true, {error, precommit_fail}};
-precommit_should_fail([Hook | Rest], DW) when Hook =:= precommit_nonobj ->
+precommit_should_fail([{_Lang,precommit_nonobj} | Rest], DW) ->
     %% Work around bug - no check for valid object on return from precommit hook.
     %% instead tries to use it anyway as a valid object and puts fail.
     case {DW, Rest} of 
@@ -541,10 +549,31 @@ precommit_should_fail([Hook | Rest], DW) when Hook =:= precommit_nonobj ->
         {_, []} ->
             {true, {error, too_many_fails}};
         _ ->
-            {true, {error, precommit_fail}}
+            case crashfail_before_js(Rest) of
+                true ->
+                    {true, {error, precommit_fail}};
+                false ->
+                    %% Javascript precommit with non-object crashes the VM and we get
+                    %% a timeout waiting for the VM to reply
+                    {true, timeout}
+            end
     end;
-precommit_should_fail([_Hook | Rest], DW) ->
+precommit_should_fail([_LangHook | Rest], DW) ->
     precommit_should_fail(Rest, DW).
+
+%% Return true if there is a crash or fail that will prevent more precommit hooks
+%% running before a javascript one is hit.
+crashfail_before_js([]) ->
+    true; % for our purposes no js hook was hit, so kinda true.
+crashfail_before_js([{_, Hook} | _Rest]) when Hook =:= precommit_fail;
+                                              Hook =:= precommit_crash;
+                                              Hook =:= precommit_noop ->
+    %% All erlang test hooks check to see if valid object coming in
+    true;
+crashfail_before_js([{js, _} | _Rest]) ->
+    false;
+crashfail_before_js([_|Rest]) ->
+    crashfail_before_js(Rest).
 
 maybe_add_robj(ok, RObj, Precommit, DW) ->
     case precommit_should_fail(Precommit, DW) of
@@ -568,6 +597,8 @@ maybe_add_robj({error, timeout}, _Robj, Precommit, DW) ->
             {error, precommit_fail};
         {true, {error, _}} ->
             {error, timeout};
+        {true, Other} ->
+            Other;
         false ->
             {error, timeout}
     end;
@@ -597,5 +628,19 @@ postcommit_ok(Obj) ->
 postcommit_crash(_Obj) ->
     Ok = ok,
     Ok = postcommit_crash.
+
+
+start_javascript() ->
+    application:stop(erlang_js),
+    application:start(sasl),
+    application:load(erlang_js),
+    application:start(erlang_js),
+    %% Set up the test dir so erlang_js will find put_fsm_precommit.js
+    TestDir = filename:join([filename:dirname(code:which(?MODULE)), "..", "test"]),
+    application:set_env(riak_kv, js_source_dir, TestDir),
+    {ok, _} = riak_kv_js_sup:start_link(),
+    {ok, _} = riak_kv_js_manager:start_link(?JSPOOL_HOOK, 1),
+    ok.
+
 
 -endif. % EQC
