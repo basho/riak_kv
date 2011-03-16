@@ -184,6 +184,9 @@ start_mock_servers() ->
     riak_core_node_watcher:service_up(riak_kv, self()),
     ok.
 
+cleanup_mock_servers() ->
+    application:unload(riak_core).
+
 reassign_nodes(Status, Ring) ->
     Ids = [ I || {I, _} <- riak_core_ring:all_owners(Ring) ],
     lists:foldl(

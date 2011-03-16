@@ -53,26 +53,33 @@
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
-eqc_test_() ->
-     %% {spawn, 
-     %%  [
-    { setup,
-      fun setup/0,
-      fun cleanup/1,
-      [%% Check networking/clients are set up 
-       ?_assert(node() /= 'nonode@nohost'),
-       ?_assertEqual(pong, net_adm:ping(node())),
-       ?_assertEqual(pang, net_adm:ping('nonode@nohost')),
-       ?_assertMatch({ok,_C}, riak:local_client()),
-       ?_assertMatch({ok, 123}, riak_kv_js_manager:blocking_dispatch(riak_kv_js_hook,
-                                  {{jsanon, <<"function() { return 123; }">>},[]}, 5)),
-       %% Run the quickcheck tests
-       {timeout, 60000, % do not trust the docs - timeout is in msec
-        ?_assertEqual(true, quickcheck(numtests(250, ?QC_OUT(prop_basic_put()))))}
-      ]
-    }.
-      %]}.
+%%====================================================================
+%% eunit test 
+%%====================================================================
 
+eqc_test_() ->
+    {spawn, 
+     [{setup,
+       fun setup/0,
+       fun cleanup/1,
+       [%% Check networking/clients are set up 
+        ?_assert(node() /= 'nonode@nohost'),
+        ?_assertEqual(pong, net_adm:ping(node())),
+        ?_assertEqual(pang, net_adm:ping('nonode@nohost')),
+        ?_assertMatch({ok,_C}, riak:local_client()),
+        %% Check javascript is working
+        ?_assertMatch({ok, 123}, 
+                      riak_kv_js_manager:blocking_dispatch(riak_kv_js_hook,
+                                                           {{jsanon, 
+                                                             <<"function() { return 123; }">>},
+                                                            []}, 5)),
+        %% Run the quickcheck tests
+        {timeout, 60000, % do not trust the docs - timeout is in msec
+         ?_assertEqual(true, quickcheck(numtests(250, ?QC_OUT(prop_basic_put()))))}
+       ]
+      }
+     ]
+    }.
 
 setup() ->
     State = case net_kernel:stop() of
@@ -87,9 +94,16 @@ setup() ->
     State.
 
 cleanup(running) ->
+    cleanup_javascript(),
+    fsm_eqc_util:cleanup_mock_servers(),
     ok;
 cleanup(started) ->
-    ok = net_kernel:stop().
+    ok = net_kernel:stop(),
+    cleanup(running).
+
+%%====================================================================
+%% Shell helpers 
+%%====================================================================
 
 prepare() ->
     fsm_eqc_util:start_mock_servers(),
@@ -104,9 +118,19 @@ test(N) ->
 check() ->
     check(prop_basic_put(), current_counterexample()).
 
+%%====================================================================
+%% Generators
+%%====================================================================
 
-%% Vnode put responses
+%% Vnode put response. Responses are generated one per-vnode
+%% and consisists of an initial first response {w} or timeout
+%% and perhaps a second response {dw},{fail} or timeout.
+%%
+%% The sequence numbers let quickcheck re-order the messages so that
+%% different vnode responses are interleaved.
+%%
 %% {FirstResp, FirstSeq, SecondResp, SecondSeq}
+
 vnodeputresps() ->
     fsm_eqc_util:not_empty(fsm_eqc_util:longer_list(2, vnodeputresp())).
 
@@ -129,7 +153,9 @@ vputsecond() ->
     frequency([{18, dw},
                {1, Shrink(fail)},
                {1, Shrink({timeout, 2})}]).
-   
+  
+%% Put FSM options
+%% 
 option() ->
     frequency([{1, returnbody},
                {1, {returnbody, bool()}},
@@ -138,6 +164,9 @@ option() ->
 
 options() ->
     list(option()).
+
+%% Pre/postcommit hooks
+%% 
 
 precommit_hook() ->
     frequency([
@@ -170,6 +199,9 @@ postcommit_hooks() ->
     frequency([{5, []},
                {1, list(postcommit_hook())}]).
 
+%%====================================================================
+%% Property
+%%====================================================================
 
 prop_basic_put() ->
     %% ?FORALL({WSeed,DWSeed},
@@ -727,6 +759,10 @@ start_javascript() ->
     {ok, _} = riak_kv_js_manager:start_link(?JSPOOL_HOOK, 1),
     ok.
 
+cleanup_javascript() ->
+    application:stop(erlang_js),
+    application:unload(erlang_js),
+    application:stop(sasl).
 
 -endif. % EQC
 
