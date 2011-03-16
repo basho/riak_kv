@@ -130,12 +130,14 @@ vputsecond() ->
                {1, Shrink(fail)},
                {1, Shrink({timeout, 2})}]).
    
-maybe_return_body() ->
-    frequency([{5, []},
-               {1, [returnbody]}]).
+option() ->
+    frequency([{1, returnbody},
+               {1, {returnbody, bool()}},
+               {1, update_last_modified},
+               {1, {update_last_modified, bool()}}]).
 
 options() ->
-    maybe_return_body().
+    list(option()).
 
 precommit_hook() ->
     frequency([
