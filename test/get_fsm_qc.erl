@@ -7,7 +7,6 @@
 -include_lib("riak_kv_vnode.hrl").
 
 -compile(export_all).
--define(RING_KEY, riak_ring).
 -define(DEFAULT_BUCKET_PROPS,
         [{allow_mult, false},
          {chash_keyfun, {riak_core_util, chash_std_keyfun}}]).
@@ -72,17 +71,10 @@ prop_basic_get() ->
     begin
         N = length(PartVals),
         R = (RSeed rem N) + 1,
-        Q = fsm_eqc_util:make_power_of_two(N + NQdiff),
-        NodeStatus = fsm_eqc_util:cycle(Q, NodeStatus0),
-        Ring = fsm_eqc_util:reassign_nodes(NodeStatus,
-                                           riak_core_ring:fresh(Q, node())),
-                              
-        
+        {Q, Ring, NodeStatus} = fsm_eqc_util:mock_ring(N + NQdiff, NodeStatus0),
 
         ok = gen_server:call(riak_kv_vnode_master,
                          {set_data, Objects, PartVals}),
-
-        mochiglobal:put(?RING_KEY, Ring),
 
         application:set_env(riak_core,
                             default_bucket_props,

@@ -4,6 +4,7 @@
 -ifdef(EQC).
 
 -include_lib("eqc/include/eqc.hrl").
+-define(RING_KEY, riak_ring).
 
 not_empty(G) ->
     ?SUCHTHAT(X, G, X /= [] andalso X /= <<>>).
@@ -186,6 +187,21 @@ start_mock_servers() ->
 
 cleanup_mock_servers() ->
     application:unload(riak_core).
+
+
+mock_ring(Q0, NodeStatus0) ->
+    %% Round up to next power of two
+    Q = fsm_eqc_util:make_power_of_two(Q0),
+
+    %% Expand the node status to match the size of the ring
+    NodeStatus = cycle(Q, NodeStatus0),
+
+    %% Assign the node owners and store the ring.
+    Ring = reassign_nodes(NodeStatus, riak_core_ring:fresh(Q, node())),
+    mochiglobal:put(?RING_KEY, Ring),
+
+    %% Return details - useful for ?WHENFAILs
+    {Q, Ring, NodeStatus}.
 
 reassign_nodes(Status, Ring) ->
     Ids = [ I || {I, _} <- riak_core_ring:all_owners(Ring) ],

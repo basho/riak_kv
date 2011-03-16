@@ -46,7 +46,6 @@
 -export([postcommit_ok/1]).
 
 -define(REQ_ID, 1234).
--define(RING_KEY, riak_ring).
 -define(DEFAULT_BUCKET_PROPS,
         [{chash_keyfun, {riak_core_util, chash_std_keyfun}}]).
 -define(HOOK_SAYS_NO, <<"the hook says no">>).
@@ -82,6 +81,7 @@ eqc_test_() ->
     }.
 
 setup() ->
+    %% Start net_kernel - hopefully can remove this after FSM is purified..
     State = case net_kernel:stop() of
                 {error, not_allowed} ->
                     running;
@@ -89,6 +89,13 @@ setup() ->
                     {ok, _Pid} = net_kernel:start(['putfsmeqc@localhost', shortnames]),
                     started
             end,
+    %% Shut logging up - too noisy.
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, "put_fsm_eqc_sasl.log"}),
+    error_logger:tty(false),
+    error_logger:logfile({open, "put_fsm_eqc.log"}),
+
+    %% Start up mock servers and dependencies
     fsm_eqc_util:start_mock_servers(),
     start_javascript(),
     State.
@@ -165,6 +172,7 @@ option() ->
 options() ->
     list(option()).
 
+%%
 %% Pre/postcommit hooks
 %% 
 
@@ -204,52 +212,41 @@ postcommit_hooks() ->
 %%====================================================================
 
 prop_basic_put() ->
-    %% ?FORALL({WSeed,DWSeed},
-    ?FORALL({WSeed,DWSeed,NQdiff,
-             Objects,ObjectIdxSeed,
-             _PartVals,VPutResp,NodeStatus0,Options,AllowMult,
-             Precommit, Postcommit}, 
+    ?FORALL({WSeed, DWSeed, NQdiff,
+             Objects, ObjectIdxSeed,
+             VPutResp, NodeStatus0,
+             Options, AllowMult, Precommit, Postcommit}, 
             {fsm_eqc_util:largenat(),fsm_eqc_util:largenat(),choose(0,4096),
              fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
-             fsm_eqc_util:partvals(),vnodeputresps(),
-             fsm_eqc_util:some_up_node_status(10), options(),bool(),
-             precommit_hooks(), postcommit_hooks()},
+             vnodeputresps(), fsm_eqc_util:some_up_node_status(10),
+             options(),bool(), precommit_hooks(), postcommit_hooks()},
     begin
         N = length(VPutResp),
         W = (WSeed rem N) + 1, %% W from 1..N
         DW = DWSeed rem (W + 1), %% DW from 0..DW
 
-        Q = fsm_eqc_util:make_power_of_two(N + NQdiff),
-        NodeStatus = fsm_eqc_util:cycle(Q, NodeStatus0),
-
-        Ring = fsm_eqc_util:reassign_nodes(NodeStatus,
-                                           riak_core_ring:fresh(Q, node())),
+        {Q, _Ring, NodeStatus} = fsm_eqc_util:mock_ring(N + NQdiff, NodeStatus0),
 
         %% Pick the object to put - as ObjectIdxSeed shrinks, it should go towards
         %% the end of the list (for current), so simplest to just reverse the list
         %% and calculate modulo list length
         ObjectIdx = (ObjectIdxSeed rem length(Objects)) + 1,
-        {PutLin,Object} = lists:nth(ObjectIdx, lists:reverse(Objects)),
+        {_PutLin,Object} = lists:nth(ObjectIdx, lists:reverse(Objects)),
 
-        %% ObjectAfterPrecommit = apply_precommit(Object, Precommit),
+        %% Work out how the vnodes should respond and in which order
+        %% the messages shoudl be delivered.
+        VPutReplies = make_vput_replies(VPutResp, Objects, Options),
 
-        VPutReplies = make_vput_replies(VPutResp, PutLin, Objects, Options),
-        %% ExpectObjectGivenLineage = case ResultLin of
-        %%                                PutLin ->
-        %%                                    ObjectAfterPrecommit;
-        %%                                _ ->
-        %%                                    proplists:get_value(ResultLin, Objects)
-        %%                            end,
-
+        %% Prepare the mock vnode master
         ok = gen_server:call(riak_kv_vnode_master,
                              {set_data, Objects, []}),
         ok = gen_server:call(riak_kv_vnode_master,
                              {set_vput_replies, VPutReplies}),
         
-        mochiglobal:put(?RING_KEY, Ring),
-
+        %% Transform the hook test atoms into the arcane hook config
         set_bucket_props(N, AllowMult, Precommit, Postcommit),
 
+        %% Run the test and wait for all processes spawned by it to settle.
         {ok, PutPid} = riak_kv_put_fsm:start(?REQ_ID,
                                              Object,
                                              W,
@@ -260,20 +257,18 @@ prop_basic_put() ->
         ok = riak_kv_test_util:wait_for_pid(PutPid),
         ok = riak_kv_test_util:wait_for_children(PutPid),
         Res = fsm_eqc_util:wait_for_req_id(?REQ_ID),
+
+        %% Get the history of what happened to the vnode master
         H = get_fsm_qc_vnode_master:get_reply_history(),
         PostCommits = get_fsm_qc_vnode_master:get_postcommits(),
 
+        %% Work out the expected results.  Have to determine the effective dw
+        %% the FSM would have used to know when it would have stopped processing responses
+        %% and returned to the client.
         EffDW = get_effective_dw(DW, Options, Postcommit),
         ExpectObject = expect_object(H, W, EffDW, AllowMult),
         {Expected, ExpectedPostCommits} = expect(H, N, W, EffDW, Options,
                                                  Precommit, Postcommit, ExpectObject),
-        %% io:format(user, "=========================================================\n",[]),
-        %% io:format(user, "Precommit: ~p\n", [Precommit]),
-        %% io:format(user, "Object: ~p\n", [Object]),
-        %% io:format(user, "ObjectAfterPrecommit: ~p\n", [ObjectAfterPrecommit]),
-        %% io:format(user, "Expect: ~p\n", [Expected]),
-        %% io:format(user, "Res: ~p\n", [Res]),
-
         ?WHENFAIL(
            begin
                io:format(user, "NodeStatus: ~p\n", [NodeStatus]),
@@ -289,28 +284,32 @@ prop_basic_put() ->
            end,
            conjunction([{result, equals(Res, Expected)},
                         {postcommit, equals(PostCommits, ExpectedPostCommits)}]))
-            %%          {result_object, compare_md_vals(Res, ExpectObjectGivenLineage)}
     end).
 
-compare_md_vals({ok, Obj}, ObjAfterPrecommit) ->
-    equals(object_md_vals(Obj),
-           object_md_vals(ObjAfterPrecommit));
-compare_md_vals(_Res, _ObjAfterPrecommit) ->
-    true.
-
-make_vput_replies(VPutResp, PutLin, Objects, Options) ->
-    make_vput_replies(VPutResp, PutLin, Objects, Options, 1, []).
+%% make_vput_replies - build the list of vnode replies to pass to the mock vnode master.
+%%
+%% If the first response is a timeout, no second response is sent.
+%%
+%% If the second response is a dw requests, lookup the object currently 
+%% on the vnode so the vnode master can merge it.
+%%
+%% Pass on all other requests as they are.
+%%
+%% The generated sequence numbers are used to re-order the responses - the second
+%% is added to the first to make sure the first response from a vnode comes first.
+make_vput_replies(VPutResp, Objects, Options) ->
+    make_vput_replies(VPutResp, Objects, Options, 1, []).
     
-make_vput_replies([], _PutLin, _Objects, _Options, _LIdx, SeqReplies) ->
+make_vput_replies([], _Objects, _Options, _LIdx, SeqReplies) ->
     {_Seqs, Replies} = lists:unzip(lists:sort(SeqReplies)),
     Replies;
 make_vput_replies([{_CurObj, {timeout, 1}, FirstSeq, _Second, SecondSeq} | Rest],
-                  PutLin, Objects, Options, LIdx, Replies) ->
-    make_vput_replies(Rest, PutLin, Objects, Options, LIdx + 1, 
+                  Objects, Options, LIdx, Replies) ->
+    make_vput_replies(Rest, Objects, Options, LIdx + 1, 
                      [{FirstSeq, {LIdx, {timeout, 1}}},
                       {FirstSeq+SecondSeq+1, {LIdx, {timeout, 2}}} | Replies]);
 make_vput_replies([{CurPartVal, First, FirstSeq, dw, SecondSeq} | Rest],
-                  PutLin, Objects, Options, LIdx, Replies) ->
+                  Objects, Options, LIdx, Replies) ->
     %% Lookup the lineage for the current object and prepare it for
     %% merging in get_fsm_qc_vnode_master
     {Obj, CurLin} = case CurPartVal of
@@ -319,24 +318,15 @@ make_vput_replies([{CurPartVal, First, FirstSeq, dw, SecondSeq} | Rest],
                         {ok, PartValLin} ->
                             {proplists:get_value(PartValLin, Objects), PartValLin}
                      end,
-    make_vput_replies(Rest, PutLin, Objects, Options, LIdx + 1,
+    make_vput_replies(Rest, Objects, Options, LIdx + 1,
                       [{FirstSeq, {LIdx, First}},
                        {FirstSeq+SecondSeq+1, {LIdx, {dw, Obj, CurLin}}} | Replies]);
 make_vput_replies([{_CurObj, First, FirstSeq, Second, SecondSeq} | Rest],
-                  PutLin, Objects, Options, LIdx, Replies) ->
-    make_vput_replies(Rest, PutLin, Objects, Options, LIdx + 1,
+                  Objects, Options, LIdx, Replies) ->
+    make_vput_replies(Rest, Objects, Options, LIdx + 1,
                      [{FirstSeq, {LIdx, First}},
                       {FirstSeq+SecondSeq+1, {LIdx, Second}} | Replies]).
 
-%% %% TODO: The riak_kv_vnode code should be refactored to expose this function
-%% %%       so we are close to testing the real thing.
-%% put_merge(CurObj, NewObj, ReqId) ->
-%%     ResObj = riak_object:syntactic_merge(
-%%                CurObj,NewObj, ReqId),
-%%     case riak_object:vclock(ResObj) =:= riak_object:vclock(CurObj) of
-%%         true -> {oldobj, ResObj};
-%%         false -> {newobj, ResObj}
-%%     end.
 
 set_bucket_props(N, AllowMult, Precommit, Postcommit) ->
     RequestProps =  [{n_val, N},
@@ -364,7 +354,10 @@ set_bucket_props(N, AllowMult, Precommit, Postcommit) ->
                         lists:flatten([RequestProps,
                                        PrecommitProps, PostcommitProps, 
                                        ?DEFAULT_BUCKET_PROPS])).
-    
+
+%%====================================================================
+%% Expected Result Calculation
+%%====================================================================
 
 %% Work out the expected return value from the FSM and the expected postcommit log.
 expect(H, N, W, EffDW, Options, Precommit, Postcommit, Object) ->
@@ -397,23 +390,6 @@ expect(H, N, W, EffDW, Options, Precommit, Postcommit, Object) ->
                                [Object || Hook <- Postcommit, Hook =:= {erlang, postcommit_ok}]
                        end,
     {ExpectResult, ExpectPostcommit}.
-
-%% Work out what DW value is being effectively used by the FSM - anything
-%% that needs a result - postcommit or returnbody requires a minimum DW of 1.
-get_effective_dw(DW, Options, PostCommit) ->
-    OptionsDW = case proplists:get_value(returnbody, Options, false) of
-                     true ->
-                         1;
-                     false ->
-                         0
-                 end,
-    PostCommitDW = case PostCommit of
-                       [] ->
-                           0;
-                       _ ->
-                           1
-                   end,
-    lists:max([DW, OptionsDW, PostCommitDW]).
 
 expect([], {_H, _N, _W, DW, _NumW, _NumDW, _NumFail, RObj, Precommit}) ->
     maybe_add_robj({error, timeout}, RObj, Precommit, DW);
@@ -528,7 +504,7 @@ expect([DWReply|Rest], {H, N, W, DW, NumW, NumDW, NumFail,
     case enough_replies(S) of
         {true, Expect} ->
 
-            %% Workaround for - seems like you should wait for DWs until you know
+            %% Workaround: it seems like you should wait for DWs until you know
             %% enough cannot be received.  Nasty N=2 case anyway.
             %% Q: 2 N: 2 W:2 DW: 1
             %% History: [{w,0,-7826778492},
@@ -584,7 +560,25 @@ expect_object([{dw,_,Obj, _} | H], W, DW, AllowMult, NumW, NumDW, Objs) ->
 expect_object([_ | H], W, DW, AllowMult, NumW, NumDW, Objs) ->
     expect_object(H, W, DW, AllowMult, NumW, NumDW, Objs).
 
-    
+%% Work out what DW value is being effectively used by the FSM - anything
+%% that needs a result - postcommit or returnbody requires a minimum DW of 1.
+get_effective_dw(DW, Options, PostCommit) ->
+    OptionsDW = case proplists:get_value(returnbody, Options, false) of
+                     true ->
+                         1;
+                     false ->
+                         0
+                 end,
+    PostCommitDW = case PostCommit of
+                       [] ->
+                           0;
+                       _ ->
+                           1
+                   end,
+    lists:max([DW, OptionsDW, PostCommitDW]).
+
+%% Filter any timeouts from the history to make it easier to look
+%% for events that immediately follow one another.
 filter_timeouts(H) ->
     lists:filter(fun({{timeout,_},_,_}) -> false;
                     (_) -> true
@@ -606,48 +600,7 @@ enough_replies({_H, N, W, DW, NumW, NumDW, NumFail, _RObj, _Precommit}) ->
         true ->
             false
     end.
-   
-
-precommit_should_fail([], _DW) ->
-    false;
-precommit_should_fail([{_Lang,Hook} | _Rest], _DW) when Hook =:= precommit_fail;
-                                                        Hook =:= precommit_crash;
-                                                        Hook =:= precommit_undefined ->
-    {true, {error, precommit_fail}};
-precommit_should_fail([{_Lang,precommit_fail_reason}], _DW) ->
-    {true, {error, {precommit_fail, ?HOOK_SAYS_NO}}};
-precommit_should_fail([{js, precommit_nonobj} | _Rest], _DW) ->
-    %% Javascript precommit returning a non-object crashes the JS VM.
-    {true, timeout};
-precommit_should_fail([{_Lang,Hook} | Rest], DW) when Hook =:= precommit_nonobj;
-                                                      Hook =:= precommit_fail_reason ->
-    %% Work around bug - no check for valid object on return from precommit hook.
-    %% instead tries to use it anyway as a valid object and puts fail.
-    case {DW, Rest} of 
-        {0, []} ->
-            false;
-        {_, []} ->
-            {true, {error, too_many_fails}};
-        _ ->
-            {true, crashfail_before_js(Rest)}
-    end;
-precommit_should_fail([_LangHook | Rest], DW) ->
-    precommit_should_fail(Rest, DW).
-
-%% Return true if there is a crash or fail that will prevent more precommit hooks
-%% running before a javascript one is hit.
-crashfail_before_js([]) ->
-    {error, precommit_fail}; % for our purposes no js hook was hit, so kinda true.
-crashfail_before_js([{js, _} | _Rest]) ->
-    %% Javascript precommit with non-object crashes the VM and we get
-    %% a timeout waiting for the VM to reply
-    timeout;
-crashfail_before_js([{erlang, _Hook} | _Rest]) ->
-    %% All erlang test hooks check to see if valid object coming in
-    {error, precommit_fail};
-crashfail_before_js([_|Rest]) ->
-    crashfail_before_js(Rest).
-
+ 
 maybe_add_robj(ok, RObj, Precommit, DW) ->
     case precommit_should_fail(Precommit, DW) of
         {true, Expect} ->
@@ -680,17 +633,9 @@ maybe_add_robj({error, timeout}, _Robj, Precommit, DW) ->
 maybe_add_robj(Expect, _Robj, _Precommit, _DW) ->
     Expect.
 
-apply_precommit(Object, []) ->
-    Object;
-apply_precommit(Object, [{_, precommit_add_md} | Rest]) ->
-    UpdObj = riak_object:apply_updates(precommit_add_md(Object)),
-    apply_precommit(UpdObj, Rest);
-apply_precommit(Object, [{_, precommit_append_value} | Rest]) ->
-    UpdObj = riak_object:apply_updates(precommit_append_value(Object)),
-    apply_precommit(UpdObj, Rest);
-apply_precommit(Object, [_ | Rest]) ->
-    apply_precommit(Object, Rest).
-
+%%====================================================================
+%% Expected Result Calculation
+%%====================================================================
 
 precommit_noop(Obj) -> % No-op precommit, no changed
     r_object = element(1, Obj),
@@ -732,23 +677,64 @@ postcommit_crash(_Obj) ->
     Ok = ok,
     Ok = postcommit_crash.
 
-object_md_vals(Obj) ->
-    C = riak_object:get_contents(Obj),
-    lists:sort([{lists:sort(dict:to_list(trim_md(MD))), V} || {MD, V} <- C]).
+apply_precommit(Object, []) ->
+    Object;
+apply_precommit(Object, [{_, precommit_add_md} | Rest]) ->
+    UpdObj = riak_object:apply_updates(precommit_add_md(Object)),
+    apply_precommit(UpdObj, Rest);
+apply_precommit(Object, [{_, precommit_append_value} | Rest]) ->
+    UpdObj = riak_object:apply_updates(precommit_append_value(Object)),
+    apply_precommit(UpdObj, Rest);
+apply_precommit(Object, [_ | Rest]) ->
+    apply_precommit(Object, Rest).
 
-trim_md(MD) ->
-    %% Remove riak-side metadata for comparison - currently last modified and vtag
-    dict:erase(?MD_VTAG, dict:erase(?MD_LASTMOD, MD)).
+precommit_should_fail([], _DW) ->
+    false;
+precommit_should_fail([{_Lang,Hook} | _Rest], _DW) when Hook =:= precommit_fail;
+                                                        Hook =:= precommit_crash;
+                                                        Hook =:= precommit_undefined ->
+    {true, {error, precommit_fail}};
+precommit_should_fail([{_Lang,precommit_fail_reason}], _DW) ->
+    {true, {error, {precommit_fail, ?HOOK_SAYS_NO}}};
+precommit_should_fail([{js, precommit_nonobj} | _Rest], _DW) ->
+    %% Javascript precommit returning a non-object crashes the JS VM.
+    {true, timeout};
+precommit_should_fail([{_Lang,Hook} | Rest], DW) when Hook =:= precommit_nonobj;
+                                                      Hook =:= precommit_fail_reason ->
+    %% Work around bug - no check for valid object on return from precommit hook.
+    %% instead tries to use it anyway as a valid object and puts fail.
+    case {DW, Rest} of 
+        {0, []} ->
+            false;
+        {_, []} ->
+            {true, {error, too_many_fails}};
+        _ ->
+            {true, crashfail_before_js(Rest)}
+    end;
+precommit_should_fail([_LangHook | Rest], DW) ->
+    precommit_should_fail(Rest, DW).
 
-remove_last_modified(Obj) ->
-    C = riak_object:get_contents(Obj),
-    %% Deliberately break the riak_object here - easiest way to compare them
-    UpdC = [{lists:sort(dict:to_list(dict:erase(?MD_VTAG, dict:erase(?MD_LASTMOD, MD)))), V} || {MD, V} <- C],
-    riak_object:set_contents(Obj, UpdC).
+%% Return true if there is a crash or fail that will prevent more precommit hooks
+%% running before a javascript one is hit.
+crashfail_before_js([]) ->
+    {error, precommit_fail}; % for our purposes no js hook was hit, so kinda true.
+crashfail_before_js([{js, _} | _Rest]) ->
+    %% Javascript precommit with non-object crashes the VM and we get
+    %% a timeout waiting for the VM to reply
+    timeout;
+crashfail_before_js([{erlang, _Hook} | _Rest]) ->
+    %% All erlang test hooks check to see if valid object coming in
+    {error, precommit_fail};
+crashfail_before_js([_|Rest]) ->
+    crashfail_before_js(Rest).
 
+%%====================================================================
+%% Javascript helpers 
+%%====================================================================
 
 start_javascript() ->
     application:stop(erlang_js),
+    application:stop(sasl),
     application:start(sasl),
     application:load(erlang_js),
     application:start(erlang_js),
