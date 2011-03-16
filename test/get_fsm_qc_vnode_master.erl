@@ -123,11 +123,11 @@ handle_cast(?VNODE_REQ{index=Idx,
 handle_cast(?VNODE_REQ{index=Idx,
                        sender=Sender,
                        request=?KV_PUT_REQ{req_id=ReqId,
-                                           object = Obj,
+                                           object = PutObj,
                                            options = Options}=Msg}, State) ->
     %% Send up to the next w or timeout message, substituting indices
     State1 = send_vput_replies(State#state.vput_replies, Idx,
-                               Sender, ReqId, Obj, Options, State),
+                               Sender, ReqId, PutObj, Options, State),
     {noreply, State1#state{put_history=[{Idx,Msg}|State#state.put_history]}};    
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -175,11 +175,11 @@ get_data(Partition, #state{objects=Objects, partvals=[Res|Rest]} = State) ->
 %% until the next w or the list is emptied.
 send_vput_replies([], _Idx, _Sender, _ReqId, _Obj, _Options, State) ->
     State;
-send_vput_replies([{LIdx, FirstResp} | Rest], Idx, Sender, ReqId, Obj, Options,
+send_vput_replies([{LIdx, FirstResp} | Rest], Idx, Sender, ReqId, PutObj, Options,
                #state{lidx_map = LIdxMap} = State) ->
     %% Check have not seen this logical index before and store it
     error = orddict:find(LIdx, LIdxMap),
-    NewState1 = State#state{lidx_map = orddict:store(LIdx, Idx, LIdxMap)},
+    NewState1 = State#state{lidx_map = orddict:store(LIdx, {Idx, PutObj}, LIdxMap)},
     Reply = case FirstResp of
                 w ->
                     {w, Idx, ReqId};
@@ -187,14 +187,15 @@ send_vput_replies([{LIdx, FirstResp} | Rest], Idx, Sender, ReqId, Obj, Options,
                     {{timeout, 1}, Idx, ReqId}
             end,
     NewState2 = record_reply(Sender, Reply, NewState1),
-    Rest2 = fail_on_bad_obj(LIdx, Obj, Rest),
+    Rest2 = fail_on_bad_obj(LIdx, PutObj, Rest),
     send_vput_extra(Rest2, Sender, ReqId, Options, NewState2).
 
 send_vput_extra([], _Sender, _ReqId, _Options, State) ->
     State#state{vput_replies = []};
-send_vput_extra([{LIdx, {dw, Obj}} | Rest], Sender, ReqId, Options,
+send_vput_extra([{LIdx, {dw, CurObj, _CurLin}} | Rest], Sender, ReqId, Options,
                 #state{lidx_map = LIdxMap} = State) ->
-    Idx = orddict:fetch(LIdx, LIdxMap),
+    {Idx, PutObj} = orddict:fetch(LIdx, LIdxMap),
+    Obj = put_merge(CurObj, PutObj, ReqId),
     NewState = case proplists:get_value(returnbody, Options, false) of
                    true ->
                        record_reply(Sender, {dw, Idx, Obj, ReqId}, State);
@@ -231,8 +232,16 @@ fail_on_bad_obj(_LIdx, Obj, VPutReplies) when element(1, Obj) =:= r_object ->
    VPutReplies;
 fail_on_bad_obj(LIdx, _Obj, VPutReplies) ->
     case lists:keysearch(LIdx, 1, VPutReplies) of
-        {value, {LIdx, {dw, _}}} ->
+        {value, {LIdx, {dw, _, _}}} ->
             lists:keyreplace(LIdx, 1, VPutReplies, {LIdx, fail});
         _ ->
             VPutReplies
     end.
+
+%% TODO: The riak_kv_vnode code should be refactored to expose this function
+%%       so we are close to testing the real thing.
+put_merge(notfound, NewObj, _ReqId) ->
+    NewObj;
+put_merge(CurObj, NewObj, ReqId) ->
+    riak_object:syntactic_merge(CurObj,NewObj, ReqId).
+

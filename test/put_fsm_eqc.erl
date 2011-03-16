@@ -138,25 +138,30 @@ options() ->
     maybe_return_body().
 
 precommit_hook() ->
-    frequency([{10, {erlang, precommit_noop}},
+    frequency([
+               {5,  {erlang, precommit_noop}},
+               {5,  {erlang, precommit_add_md}},
+               {5,  {erlang, precommit_append_value}},
                {1,  {erlang, precommit_nonobj}},
                {1,  {erlang, precommit_fail}},
                {1,  {erlang, precommit_fail_reason}},
                {1,  {erlang, precommit_crash}},
                {1,  {erlang, precommit_undefined}},
-               {1,  {js, precommit_noop}},
-               {1,  {js, precommit_nonobj}},
+               {5,  {js, precommit_noop}},
+               {5,  {js, precommit_append_value}},
+               {5,  {js, precommit_nonobj}},
                {1,  {js, precommit_fail}},
                {1,  {js, precommit_fail_reason}},
                {1,  {js, precommit_crash}},
                {1,  {js, precommit_undefined}}]).
                 
+               
 precommit_hooks() ->
-    frequency([{5, []},
+    frequency([{4, []},
                {1, list(precommit_hook())}]).
 
 postcommit_hook() ->
-    frequency([{17, {erlang, postcommit_ok}},
+    frequency([{9, {erlang, postcommit_ok}},
                {1,  {erlang, postcommit_crash}}]).
                 
 postcommit_hooks() ->
@@ -168,12 +173,12 @@ prop_basic_put() ->
     %% ?FORALL({WSeed,DWSeed},
     ?FORALL({WSeed,DWSeed,NQdiff,
              Objects,ObjectIdxSeed,
-             _PartVals,VPutResp,NodeStatus0,Options,
+             _PartVals,VPutResp,NodeStatus0,Options,AllowMult,
              Precommit, Postcommit}, 
             {fsm_eqc_util:largenat(),fsm_eqc_util:largenat(),choose(0,4096),
              fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
              fsm_eqc_util:partvals(),vnodeputresps(),
-             fsm_eqc_util:some_up_node_status(10),options(),
+             fsm_eqc_util:some_up_node_status(10), options(),bool(),
              precommit_hooks(), postcommit_hooks()},
     begin
         N = length(VPutResp),
@@ -190,9 +195,17 @@ prop_basic_put() ->
         %% the end of the list (for current), so simplest to just reverse the list
         %% and calculate modulo list length
         ObjectIdx = (ObjectIdxSeed rem length(Objects)) + 1,
-        {_,Object} = lists:nth(ObjectIdx, lists:reverse(Objects)),
+        {PutLin,Object} = lists:nth(ObjectIdx, lists:reverse(Objects)),
 
-        VPutReplies = make_vput_replies(VPutResp, Object, Objects, Options),
+        %% ObjectAfterPrecommit = apply_precommit(Object, Precommit),
+
+        VPutReplies = make_vput_replies(VPutResp, PutLin, Objects, Options),
+        %% ExpectObjectGivenLineage = case ResultLin of
+        %%                                PutLin ->
+        %%                                    ObjectAfterPrecommit;
+        %%                                _ ->
+        %%                                    proplists:get_value(ResultLin, Objects)
+        %%                            end,
 
         ok = gen_server:call(riak_kv_vnode_master,
                              {set_data, Objects, []}),
@@ -201,7 +214,6 @@ prop_basic_put() ->
         
         mochiglobal:put(?RING_KEY, Ring),
 
-        AllowMult = false,
         set_bucket_props(N, AllowMult, Precommit, Postcommit),
 
         {ok, PutPid} = riak_kv_put_fsm:start(?REQ_ID,
@@ -221,62 +233,76 @@ prop_basic_put() ->
         ExpectObject = expect_object(H, W, EffDW, AllowMult),
         {Expected, ExpectedPostCommits} = expect(H, N, W, EffDW, Options,
                                                  Precommit, Postcommit, ExpectObject),
+        %% io:format(user, "=========================================================\n",[]),
+        %% io:format(user, "Precommit: ~p\n", [Precommit]),
+        %% io:format(user, "Object: ~p\n", [Object]),
+        %% io:format(user, "ObjectAfterPrecommit: ~p\n", [ObjectAfterPrecommit]),
+        %% io:format(user, "Expect: ~p\n", [Expected]),
+        %% io:format(user, "Res: ~p\n", [Res]),
+
         ?WHENFAIL(
            begin
                io:format(user, "NodeStatus: ~p\n", [NodeStatus]),
                io:format(user, "VPutReplies = ~p\n", [VPutReplies]),
                io:format(user, "Q: ~p N: ~p W:~p DW: ~p EffDW: ~p\n",
                          [Q, N, W, DW, EffDW]),
+               io:format(user, "Object: ~p\n", [Object]),
                io:format(user, "Expected Object: ~p\n", [ExpectObject]),
+               %% io:format(user, "Expected Object Given Lineage: ~p\n", [ExpectObjectGivenLineage]),
                io:format(user, "History: ~p\n", [H]),
                io:format(user, "Expected: ~p Res: ~p\n", [Expected, Res]),
                io:format(user, "PostCommits: ~p Got: ~p\n", [ExpectedPostCommits, PostCommits])
            end,
            conjunction([{result, equals(Res, Expected)},
                         {postcommit, equals(PostCommits, ExpectedPostCommits)}]))
+            %%          {result_object, compare_md_vals(Res, ExpectObjectGivenLineage)}
     end).
 
+compare_md_vals({ok, Obj}, ObjAfterPrecommit) ->
+    equals(object_md_vals(Obj),
+           object_md_vals(ObjAfterPrecommit));
+compare_md_vals(_Res, _ObjAfterPrecommit) ->
+    true.
 
-make_vput_replies(VPutResp, PutObj, Objects, Options) ->
-    make_vput_replies(VPutResp, PutObj, Objects, Options, 1, []).
+make_vput_replies(VPutResp, PutLin, Objects, Options) ->
+    make_vput_replies(VPutResp, PutLin, Objects, Options, 1, []).
     
-make_vput_replies([], _PutObj, _Objects, _Options, _LIdx, SeqReplies) ->
+make_vput_replies([], _PutLin, _Objects, _Options, _LIdx, SeqReplies) ->
     {_Seqs, Replies} = lists:unzip(lists:sort(SeqReplies)),
     Replies;
 make_vput_replies([{_CurObj, {timeout, 1}, FirstSeq, _Second, SecondSeq} | Rest],
-                  PutObj, Objects, Options, LIdx, Replies) ->
-    make_vput_replies(Rest, PutObj, Objects, Options, LIdx + 1, 
+                  PutLin, Objects, Options, LIdx, Replies) ->
+    make_vput_replies(Rest, PutLin, Objects, Options, LIdx + 1, 
                      [{FirstSeq, {LIdx, {timeout, 1}}},
                       {FirstSeq+SecondSeq+1, {LIdx, {timeout, 2}}} | Replies]);
 make_vput_replies([{CurPartVal, First, FirstSeq, dw, SecondSeq} | Rest],
-                  PutObj, Objects, Options, LIdx, Replies) ->
-    %% Work out what the result of syntactic put merge is
-    Obj = case CurPartVal of
-              notfound ->
-                  PutObj;
-              {ok, Lineage} ->
-                  CurObj = proplists:get_value(Lineage, Objects),
-                  {_, ResObj} = put_merge(CurObj, PutObj, term_to_binary(?REQ_ID)),
-                  ResObj
-          end,
-    make_vput_replies(Rest, PutObj, Objects, Options, LIdx + 1,
+                  PutLin, Objects, Options, LIdx, Replies) ->
+    %% Lookup the lineage for the current object and prepare it for
+    %% merging in get_fsm_qc_vnode_master
+    {Obj, CurLin} = case CurPartVal of
+                        notfound ->
+                            {notfound, notfound};
+                        {ok, PartValLin} ->
+                            {proplists:get_value(PartValLin, Objects), PartValLin}
+                     end,
+    make_vput_replies(Rest, PutLin, Objects, Options, LIdx + 1,
                       [{FirstSeq, {LIdx, First}},
-                       {FirstSeq+SecondSeq+1, {LIdx, {dw, Obj}}} | Replies]);
+                       {FirstSeq+SecondSeq+1, {LIdx, {dw, Obj, CurLin}}} | Replies]);
 make_vput_replies([{_CurObj, First, FirstSeq, Second, SecondSeq} | Rest],
-                  PutObj, Objects, Options, LIdx, Replies) ->
-    make_vput_replies(Rest, PutObj, Objects, Options, LIdx + 1,
+                  PutLin, Objects, Options, LIdx, Replies) ->
+    make_vput_replies(Rest, PutLin, Objects, Options, LIdx + 1,
                      [{FirstSeq, {LIdx, First}},
                       {FirstSeq+SecondSeq+1, {LIdx, Second}} | Replies]).
 
-%% TODO: The riak_kv_vnode code should be refactored to expose this function
-%%       so we are close to testing the real thing.
-put_merge(CurObj, NewObj, ReqId) ->
-    ResObj = riak_object:syntactic_merge(
-               CurObj,NewObj, ReqId),
-    case riak_object:vclock(ResObj) =:= riak_object:vclock(CurObj) of
-        true -> {oldobj, ResObj};
-        false -> {newobj, ResObj}
-    end.
+%% %% TODO: The riak_kv_vnode code should be refactored to expose this function
+%% %%       so we are close to testing the real thing.
+%% put_merge(CurObj, NewObj, ReqId) ->
+%%     ResObj = riak_object:syntactic_merge(
+%%                CurObj,NewObj, ReqId),
+%%     case riak_object:vclock(ResObj) =:= riak_object:vclock(CurObj) of
+%%         true -> {oldobj, ResObj};
+%%         false -> {newobj, ResObj}
+%%     end.
 
 set_bucket_props(N, AllowMult, Precommit, Postcommit) ->
     RequestProps =  [{n_val, N},
@@ -620,9 +646,33 @@ maybe_add_robj({error, timeout}, _Robj, Precommit, DW) ->
 maybe_add_robj(Expect, _Robj, _Precommit, _DW) ->
     Expect.
 
+apply_precommit(Object, []) ->
+    Object;
+apply_precommit(Object, [{_, precommit_add_md} | Rest]) ->
+    UpdObj = riak_object:apply_updates(precommit_add_md(Object)),
+    apply_precommit(UpdObj, Rest);
+apply_precommit(Object, [{_, precommit_append_value} | Rest]) ->
+    UpdObj = riak_object:apply_updates(precommit_append_value(Object)),
+    apply_precommit(UpdObj, Rest);
+apply_precommit(Object, [_ | Rest]) ->
+    apply_precommit(Object, Rest).
+
+
 precommit_noop(Obj) -> % No-op precommit, no changed
     r_object = element(1, Obj),
     Obj.
+
+precommit_add_md(Obj) ->
+    r_object = element(1, Obj),
+    MD = riak_object:get_metadata(Obj),
+    UpdMD = dict:store(?MD_USERMETA, [{"X-Riak-Meta-PrecommitHook","was here"}], MD),
+    riak_object:update_metadata(Obj, UpdMD).
+    
+precommit_append_value(Obj) ->
+    r_object = element(1, Obj),
+    Val = riak_object:get_value(Obj),
+    UpdVal = <<Val/binary, "_precommit_hook_was_here">>,
+    riak_object:update_value(Obj, UpdVal).
 
 precommit_nonobj(Obj) -> % Non-riak object
     r_object = element(1, Obj),
@@ -648,6 +698,20 @@ postcommit_crash(_Obj) ->
     Ok = ok,
     Ok = postcommit_crash.
 
+object_md_vals(Obj) ->
+    C = riak_object:get_contents(Obj),
+    lists:sort([{lists:sort(dict:to_list(trim_md(MD))), V} || {MD, V} <- C]).
+
+trim_md(MD) ->
+    %% Remove riak-side metadata for comparison - currently last modified and vtag
+    dict:erase(?MD_VTAG, dict:erase(?MD_LASTMOD, MD)).
+
+remove_last_modified(Obj) ->
+    C = riak_object:get_contents(Obj),
+    %% Deliberately break the riak_object here - easiest way to compare them
+    UpdC = [{lists:sort(dict:to_list(dict:erase(?MD_VTAG, dict:erase(?MD_LASTMOD, MD)))), V} || {MD, V} <- C],
+    riak_object:set_contents(Obj, UpdC).
+
 
 start_javascript() ->
     application:stop(erlang_js),
@@ -663,3 +727,4 @@ start_javascript() ->
 
 
 -endif. % EQC
+

@@ -3,6 +3,13 @@ function precommit_noop(object)
     return object;
 }
 
+function precommit_append_value(object)
+{
+    upd_data = object.values[[0]].data + "_precommit_hook_was_here";
+    object.values[[0]].data = upd_data;
+    return object;
+}
+
 function precommit_nonobj(object)
 {
     return "not_an_obj";

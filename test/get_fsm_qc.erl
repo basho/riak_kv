@@ -26,36 +26,6 @@ ring(Partitions) ->
     riak_core_ring:fresh(Partitions, node()).
 
 
-
-    
-
-
-%%
-%%         ancestor
-%%       /     |    \
-%%  brother   sister otherbrother
-%%       \     |    /
-%%         current
-%%    
-lineage() ->
-    elements([current, ancestor, brother, sister, otherbrother]).
- 
-merge(ancestor, Lineage) -> Lineage;
-merge(Lineage, ancestor) -> Lineage;
-merge(_, current)        -> current;
-merge(current, _)        -> current;
-merge(otherbrother, _)   -> otherbrother;
-merge(_, otherbrother)   -> otherbrother;
-merge(sister, _)         -> sister;
-merge(_, sister)         -> sister;
-merge(brother, _)        -> brother;
-merge(_, brother)        -> brother.
-
-merge([Lin]) ->
-    Lin;
-merge([Lin|Lins]) ->
-    merge(Lin, merge(Lins)).
-
 merge_heads([]) ->
     [];
 merge_heads([Lin|Lins]) ->
@@ -254,7 +224,7 @@ check_delete(Objects, RepairH, H, PerfectPreflist) ->
    
 
 build_merged_object(Heads, Objects) ->
-    Lineage = merge(Heads),
+    Lineage = fsm_eqc_util:merge(Heads),
     Object  = proplists:get_value(Lineage, Objects),
     Vclock  = vclock:merge(
                 [ riak_object:vclock(proplists:get_value(Head, Objects))
