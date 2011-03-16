@@ -40,6 +40,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_js_pools.hrl").
+-include_lib("riak_kv/src/riak_kv_wm_raw.hrl").
 
 -compile(export_all).
 -export([postcommit_ok/1]).
@@ -137,7 +138,7 @@ options() ->
     maybe_return_body().
 
 precommit_hook() ->
-    frequency([{17, {erlang, precommit_noop}},
+    frequency([{10, {erlang, precommit_noop}},
                {1,  {erlang, precommit_nonobj}},
                {1,  {erlang, precommit_fail}},
                {1,  {erlang, precommit_fail_reason}},
@@ -577,21 +578,11 @@ precommit_should_fail([_LangHook | Rest], DW) ->
 %% running before a javascript one is hit.
 crashfail_before_js([]) ->
     {error, precommit_fail}; % for our purposes no js hook was hit, so kinda true.
-crashfail_before_js([{js, precommit_fail_reason}]) ->
-    %% has been a non-obj/{fail,Reason} before so the erlang hook just crashed without reason
-    %% only the js version will return error.
-    {error, {precommit_fail, ?HOOK_SAYS_NO}};
 crashfail_before_js([{js, _} | _Rest]) ->
     %% Javascript precommit with non-object crashes the VM and we get
     %% a timeout waiting for the VM to reply
     timeout;
-crashfail_before_js([{_, Hook} | _Rest]) when Hook =:= precommit_fail;
-                                              Hook =:= precommit_fail_reason; % comment below
-                                              Hook =:= precommit_crash;
-                                              Hook =:= precommit_noop;
-                                              Hook =:= precommit_undefined ->
-    %% precommit_fail_reason needs to be treated as nonobj as not currently handled
-    %% in the run_hooks 
+crashfail_before_js([{erlang, _Hook} | _Rest]) ->
     %% All erlang test hooks check to see if valid object coming in
     {error, precommit_fail};
 crashfail_before_js([_|Rest]) ->
