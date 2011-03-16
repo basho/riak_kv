@@ -28,10 +28,10 @@
 %%
 %% Remember, if the eunit test failed the current_counterexample file is under .eunit dir
 %%
-%% TODO: Add tests for javascript precondition hooks
-%%       Move bucket props into a helper function to clean up property
-%%       Test with allow_mult true
-%%       Move common create ring code into fsm_eqc_util
+%% TODO: Would like to clean up the expecte result code and make it dependent
+%%       on the generate vnode responses.  Hard because the update to the last modified
+%%       time stamp breaks the pre-defined lineage code in fsm_eqc_util and the current
+%%       last-w-does-not-check-dw bug makes reasoning hard. 
 %%
 -module(put_fsm_eqc).
 -ifdef(EQC).
