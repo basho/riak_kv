@@ -284,6 +284,8 @@ prop_basic_put() ->
                io:format(user, "VPutReplies = ~p\n", [VPutReplies]),
                io:format(user, "Q: ~p N: ~p W:~p DW: ~p EffDW: ~p Pid: ~p\n",
                          [Q, N, W, DW, EffDW, PutPid]),
+               io:format(user, "Precommit: ~p\n", [Precommit]),
+               io:format(user, "Postcommit: ~p\n", [Postcommit]),
                io:format(user, "Object: ~p\n", [Object]),
                io:format(user, "Expected Object: ~p\n", [ExpectObject]),
                %% io:format(user, "Expected Object Given Lineage: ~p\n", [ExpectObjectGivenLineage]),
@@ -707,40 +709,19 @@ precommit_should_fail([{_Lang,Hook} | _Rest], _DW) when Hook =:= precommit_fail;
                                                         Hook =:= precommit_crash;
                                                         Hook =:= precommit_undefined ->
     {true, {error, precommit_fail}};
-precommit_should_fail([{_Lang,precommit_fail_reason}], _DW) ->
+precommit_should_fail([{_Lang,precommit_fail_reason}| _Rest], _DW) ->
     {true, {error, {precommit_fail, ?HOOK_SAYS_NO}}};
-precommit_should_fail([{js, precommit_nonobj} | _Rest], _DW) ->
+precommit_should_fail([{Lang, precommit_nonobj} | _Rest], _DW) ->
     %% Javascript precommit returning a non-object crashes the JS VM.
-    {true, timeout};
-precommit_should_fail([{_Lang,Hook} | Rest], DW) when Hook =:= precommit_nonobj;
-                                                      Hook =:= precommit_fail_reason ->
-    %% Work around bug - no check for valid object on return from precommit
-    %% hook.  instead tries to use it anyway as a valid object and puts fail.
-    case {DW, Rest} of 
-        {0, []} ->
-            false;
-        {_, []} ->
-            {true, {error, too_many_fails}};
-        _ ->
-            {true, crashfail_before_js(Rest)}
-    end;
+    Details = case Lang of
+                  js ->
+                      {<<"precommit_nonobj">>,<<"not_an_obj">>};
+                  erlang ->
+                      {?MODULE, precommit_nonobj, not_an_obj}
+              end,
+    {true, {error, {precommit_fail, {invalid_return, Details}}}};
 precommit_should_fail([_LangHook | Rest], DW) ->
     precommit_should_fail(Rest, DW).
-
-%% Return true if there is a crash or fail that will prevent more precommit
-%% hooks running before a javascript one is hit.
-crashfail_before_js([]) ->
-    %% for our purposes no js hook was hit, so kinda true.
-    {error, precommit_fail};
-crashfail_before_js([{js, _} | _Rest]) ->
-    %% Javascript precommit with non-object crashes the VM and we get
-    %% a timeout waiting for the VM to reply
-    timeout;
-crashfail_before_js([{erlang, _Hook} | _Rest]) ->
-    %% All erlang test hooks check to see if valid object coming in
-    {error, precommit_fail};
-crashfail_before_js([_|Rest]) ->
-    crashfail_before_js(Rest).
 
 %%====================================================================
 %% Javascript helpers 

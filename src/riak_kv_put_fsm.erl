@@ -53,7 +53,6 @@
                 replied_fail :: list(),
                 timeout :: pos_integer(),
                 tref    :: reference(),
-                ring :: riak_core_ring:riak_core_ring(),
                 startnow :: {pos_integer(), pos_integer(), pos_integer()}, % for FSM duration
                 options=[] :: list(),
                 vnode_options=[] :: list(),
@@ -144,7 +143,6 @@ prepare(timeout, StateData0 = #state{robj = RObj0}) ->
     
     StateData = StateData0#state{n = N,
                                  bkey = BKey,
-                                 ring = Ring,
                                  bucket_props = BucketProps,
                                  preflist2 = Preflist2,
                                  rclient = RClient,
@@ -394,6 +392,8 @@ run_hooks(HookType, RObj, [{struct, Hook}|T]) ->
             case Result of
                 fail ->
                     Result;
+                {fail, _Reason} ->
+                    Result;
                 _ ->
                     run_hooks(HookType, Result, T)
             end;
@@ -405,15 +405,30 @@ run_hooks(HookType, RObj, [{struct, Hook}|T]) ->
 invoke_hook(precommit, Mod0, Fun0, undefined, RObj) ->
     Mod = binary_to_atom(Mod0, utf8),
     Fun = binary_to_atom(Fun0, utf8),
-    wrap_hook(Mod, Fun, RObj);
+    Result = wrap_hook(Mod, Fun, RObj),
+    case Result of
+        fail ->
+            fail;
+        {fail, _Reason} ->
+            Result;
+        Obj when element(1, Obj) == r_object ->
+            Obj;
+        _ ->
+            {fail, {invalid_return, {Mod, Fun, Result}}}
+    end;
 invoke_hook(precommit, undefined, undefined, JSName, RObj) ->
     case riak_kv_js_manager:blocking_dispatch(?JSPOOL_HOOK, {{jsfun, JSName}, RObj}, 5) of
         {ok, <<"fail">>} ->
             fail;
         {ok, [{<<"fail">>, Message}]} ->
             {fail, Message};
-        {ok, NewObj} ->
-            riak_object:from_json(NewObj);
+        {ok, Json} ->
+            case catch riak_object:from_json(Json) of
+                {'EXIT', _} ->
+                    {fail, {invalid_return, {JSName, Json}}};
+                Obj ->
+                    Obj
+            end;
         {error, Error} ->
             error_logger:error_msg("Error executing pre-commit hook: ~s",
                                    [Error]),
