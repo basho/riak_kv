@@ -141,7 +141,7 @@ prepare(timeout, StateData0 = #state{robj = RObj0}) ->
     {next_state, validate, StateData, 0}.
     
 validate(timeout, StateData0 = #state{robj = RObj0, w=W0, dw=DW0, bucket_props = BucketProps, 
-                                     options = Options0, req_id = ReqId, client = Client}) ->
+                                     options = Options0}) ->
     N = proplists:get_value(n_val,BucketProps),
     W = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
 
@@ -157,13 +157,13 @@ validate(timeout, StateData0 = #state{robj = RObj0, w=W0, dw=DW0, bucket_props =
 
     if
         W =:= error ->
-            Client ! {ReqId, {error, {w_val_violation, W0}}},
+            client_reply({error, {w_val_violation, W0}}, StateData0),
             {stop, normal, none};
         DW =:= error ->
-            Client ! {ReqId, {error, {dw_val_violation, DW0}}},
+            client_reply({error, {dw_val_violation, DW0}}, StateData0),
             {stop, normal, none};
         (W > N) or (DW > N) ->
-            Client ! {ReqId, {error, {n_val_violation, N}}},
+            client_reply({error, {n_val_violation, N}}, StateData0),
             {stop, normal, none};
         true ->
             AllowMult = proplists:get_value(allow_mult,BucketProps),
@@ -176,16 +176,16 @@ validate(timeout, StateData0 = #state{robj = RObj0, w=W0, dw=DW0, bucket_props =
             {next_state,execute,StateData,0}
     end.
 
-execute(timeout, StateData0=#state{robj=RObj0, req_id=ReqId, client=Client,
-                                      update_last_modified=UpdateLastMod,
-                                      timeout=Timeout, ring=Ring, bkey={Bucket,Key}=BKey,
-                                      rclient=RClient, vnode_options=VnodeOptions}) ->
+execute(timeout, StateData0=#state{robj=RObj0, req_id = ReqId,
+                                   update_last_modified=UpdateLastMod,
+                                   timeout=Timeout, ring=Ring, bkey={Bucket,Key}=BKey,
+                                   rclient=RClient, vnode_options=VnodeOptions}) ->
     case invoke_hook(precommit, RClient, update_last_modified(UpdateLastMod, RObj0)) of
         fail ->
-            Client ! {ReqId, {error, precommit_fail}},
+            client_reply({error, precommit_fail}, StateData0),
             {stop, normal, StateData0};
         {fail, Reason} ->
-            Client ! {ReqId, {error, {precommit_fail, Reason}}},
+            client_reply({error, {precommit_fail, Reason}}, StateData0),
             {stop, normal, StateData0};
         RObj1 ->
             StartNow = now(),
@@ -218,13 +218,13 @@ execute(timeout, StateData0=#state{robj=RObj0, req_id=ReqId, client=Client,
     end.
 
 waiting_vnode_w({w, Idx, ReqId},
-                StateData=#state{w=W,dw=DW,req_id=ReqId,client=Client,replied_w=Replied0}) ->
+                StateData=#state{w=W,dw=DW,req_id=ReqId,replied_w=Replied0}) ->
     Replied = [Idx|Replied0],
     case length(Replied) >= W of
         true ->
             case DW of
                 0 ->
-                    Client ! {ReqId, ok},
+                    client_reply(ok, StateData),
                     update_stats(StateData),
                     {stop,normal,StateData};
                 _ ->
@@ -247,7 +247,7 @@ waiting_vnode_w({dw, Idx, ResObj, _ReqId},
     NewStateData = StateData#state{replied_dw=Replied, resobjs=ResObjs},
     {next_state,waiting_vnode_w,NewStateData};
 waiting_vnode_w({fail, Idx, ReqId},
-                  StateData=#state{n=N,w=W,client=Client,
+                  StateData=#state{n=N,w=W, req_id = ReqId,
                                    replied_fail=Replied0}) ->
     Replied = [Idx|Replied0],
     NewStateData = StateData#state{replied_fail=Replied},
@@ -255,24 +255,24 @@ waiting_vnode_w({fail, Idx, ReqId},
         true ->
             {next_state,waiting_vnode_w,NewStateData};
         false ->
-            update_stats(StateData),
-            Client ! {ReqId, {error,too_many_fails}},
+            update_stats(NewStateData),
+            client_reply({error,too_many_fails}, NewStateData),
             {stop,normal,NewStateData}
     end;
-waiting_vnode_w(timeout, StateData=#state{client=Client,req_id=ReqId}) ->
+waiting_vnode_w(timeout, StateData) ->
     update_stats(StateData),
-    Client ! {ReqId, {error,timeout}},
+    client_reply({error,timeout}, StateData),
     {stop,normal,StateData}.
 
 waiting_vnode_dw({w, _Idx, ReqId},
           StateData=#state{req_id=ReqId}) ->
     {next_state,waiting_vnode_dw,StateData};
 waiting_vnode_dw({dw, Idx, ReqId},
-                 StateData=#state{dw=DW, client=Client, replied_dw=Replied0}) ->
+                 StateData=#state{dw=DW, req_id=ReqId, replied_dw=Replied0}) ->
     Replied = [Idx|Replied0],
     case length(Replied) >= DW of
         true ->
-            Client ! {ReqId, ok},
+            client_reply(ok, StateData),
             update_stats(StateData),
             {stop,normal,StateData};
         false ->
@@ -280,7 +280,7 @@ waiting_vnode_dw({dw, Idx, ReqId},
             {next_state,waiting_vnode_dw,NewStateData}
     end;
 waiting_vnode_dw({dw, Idx, ResObj, ReqId},
-                 StateData=#state{dw=DW, client=Client, replied_dw=Replied0,
+                 StateData=#state{dw=DW, req_id=ReqId, replied_dw=Replied0,
                                   allowmult=AllowMult, returnbody=ReturnBody,
                                   rclient=RClient, resobjs=ResObjs0}) ->
     Replied = [Idx|Replied0],
@@ -292,7 +292,7 @@ waiting_vnode_dw({dw, Idx, ResObj, ReqId},
                         true  -> {ok, ReplyObj};
                         false -> ok
                     end,
-            Client ! {ReqId, Reply},
+            client_reply(Reply, StateData),
             invoke_hook(postcommit, RClient, ReplyObj),
             update_stats(StateData),
             {stop,normal,StateData};
@@ -301,20 +301,19 @@ waiting_vnode_dw({dw, Idx, ResObj, ReqId},
             {next_state,waiting_vnode_dw,NewStateData}
     end;
 waiting_vnode_dw({fail, Idx, ReqId},
-                  StateData=#state{n=N,dw=DW,client=Client,
-                                   replied_fail=Replied0}) ->
+                  StateData=#state{n=N,dw=DW, req_id = ReqId, replied_fail=Replied0}) ->
     Replied = [Idx|Replied0],
     NewStateData = StateData#state{replied_fail=Replied},
     case (N - length(Replied)) >= DW of
         true ->
             {next_state,waiting_vnode_dw,NewStateData};
         false ->
-            Client ! {ReqId, {error,too_many_fails}},
+            client_reply({error,too_many_fails}, NewStateData),
             {stop,normal,NewStateData}
     end;
-waiting_vnode_dw(timeout, StateData=#state{client=Client,req_id=ReqId}) ->
+waiting_vnode_dw(timeout, StateData) ->
     update_stats(StateData),
-    Client ! {ReqId, {error,timeout}},
+    client_reply({error,timeout}, StateData),
     {stop,normal,StateData}.
 
 %% @private
@@ -458,6 +457,8 @@ merge_robjs(RObjs0,AllowMult) ->
 has_postcommit_hooks(Bucket) ->
     lists:flatten(proplists:get_all_values(postcommit, riak_core_bucket:get_bucket(Bucket))) /= [].
 
+client_reply(Reply, #state{client = Client, req_id = ReqId}) ->
+    Client ! {ReqId, Reply}.
 
 %% ===================================================================
 %% EUnit tests
