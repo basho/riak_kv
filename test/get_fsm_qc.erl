@@ -7,7 +7,6 @@
 -include_lib("riak_kv_vnode.hrl").
 
 -compile(export_all).
--define(RING_KEY, riak_ring).
 -define(DEFAULT_BUCKET_PROPS,
         [{allow_mult, false},
          {chash_keyfun, {riak_core_util, chash_std_keyfun}}]).
@@ -16,135 +15,17 @@
 
 %% Generators
 
-longer_list(K, G) ->
-    ?SIZED(Size, resize(trunc(K*Size), list(resize(Size, G)))).
-
-not_empty(G) ->
-    ?SUCHTHAT(X, G, X /= [] andalso X /= <<>>).
-
-%% Make sure at least one node is up - code in riak_kv_util makes
-%% some assumptions that the node the get FSM is running on is
-%% in the cluster causing problems if it isn't.
-at_least_one_up(G) ->
-    ?SUCHTHAT(X, G, lists:member(up, X)).
-
-largenat() ->
-    ?LET(X, largeint(), abs(X)).
-
 n(Max) ->
     choose(1, Max).
 
-bkey() ->
-    %%TODO: "make this nastier"
-    {binary(6),  %% bucket
-     binary(6)}. %% key
-
-pow(_, 0) -> 1;
-pow(A, N) -> A * pow(A, N - 1).
-
-make_power_of_two(Q) -> make_power_of_two(Q, 1).
-
-make_power_of_two(Q, P) when P >= Q -> P;
-make_power_of_two(Q, P) -> make_power_of_two(Q, P*2).
 
 all_distinct(Xs) ->
     equals(lists:sort(Xs),lists:usort(Xs)).
 
-num_partitions() ->
-    %% TODO: use some unfortunate parition counts (1, 50, etc.)
-    % elements([4, 16, 64]).
-    ?LET(N, choose(0, 6), pow(2, N)).
 
 ring(Partitions) ->
     riak_core_ring:fresh(Partitions, node()).
 
-vclock() ->
-    ?LET(VclockSym, vclock_sym(), eval(VclockSym)).
-
-vclock_sym() ->
-    ?LAZY(
-       oneof([
-              {call, vclock, fresh, []},
-              ?LETSHRINK([Clock], [vclock_sym()],
-                         {call, ?MODULE, increment,
-                          [noshrink(binary(4)), nat(), Clock]})
-              ])).
-
-increment(Actor, Count, Vclock) ->
-    lists:foldl(
-      fun vclock:increment/2,
-      Vclock,
-      lists:duplicate(Count, Actor)).
-
-riak_object() ->
-    ?LET({{Bucket, Key}, Vclock, Value},
-         {bkey(), vclock(), binary()},
-         riak_object:set_vclock(
-           riak_object:new(Bucket, Key, Value),
-           Vclock)).
-
-build_riak_obj(B,K,Vc,Val,notombstone) ->
-    riak_object:set_contents(
-        riak_object:set_vclock(
-            riak_object:new(B,K,Val),
-                Vc),
-        [{dict:from_list([{<<"X-Riak-Last-Modified">>,now()}]), Val}]);
-build_riak_obj(B,K,Vc,Val,tombstone) ->
-    Obj = build_riak_obj(B,K,Vc,Val,notombstone),
-    add_tombstone(Obj).
-    
-add_tombstone(Obj) ->
-    [{M,V}] = riak_object:get_contents(Obj),
-    NewM = dict:store(<<"X-Riak-Deleted">>, true, M),
-    riak_object:set_contents(Obj, [{NewM, V}]).
-                
-maybe_tombstone() ->
-    weighted_default({2, notombstone}, {1, tombstone}).
-
-%% Generate 5 riak objects with the same bkey
-%% 
-riak_objects() ->
-    ?LET({{Bucket,Key},AncestorVclock,Tombstones}, 
-         {noshrink(bkey()),vclock(),vector(5, maybe_tombstone())},
-    begin
-        BrotherVclock  = vclock:increment(<<"bro!">>, AncestorVclock),
-        OtherBroVclock = vclock:increment(<<"bro2">>, AncestorVclock),
-        SisterVclock   = vclock:increment(<<"sis!">>, AncestorVclock),
-        CurrentVclock  = vclock:merge([BrotherVclock,SisterVclock,OtherBroVclock]),
-        Clocks = [{ancestor, AncestorVclock, <<"ancestor">>},
-                  {brother,  BrotherVclock, <<"brother">>},
-                  {sister,   SisterVclock, <<"sister">>},
-                  {otherbrother, OtherBroVclock, <<"otherbrother">>},
-                  {current,  CurrentVclock, <<"current">>}],
-        [ {Lineage, build_riak_obj(Bucket, Key, Vclock, Value, Tombstone)}
-            || {{Lineage, Vclock, Value}, Tombstone} <- lists:zip(Clocks, Tombstones) ]
-    end).
-
-%%
-%%         ancestor
-%%       /     |    \
-%%  brother   sister otherbrother
-%%       \     |    /
-%%         current
-%%    
-lineage() ->
-    elements([current, ancestor, brother, sister, otherbrother]).
- 
-merge(ancestor, Lineage) -> Lineage;
-merge(Lineage, ancestor) -> Lineage;
-merge(_, current)        -> current;
-merge(current, _)        -> current;
-merge(otherbrother, _)   -> otherbrother;
-merge(_, otherbrother)   -> otherbrother;
-merge(sister, _)         -> sister;
-merge(_, sister)         -> sister;
-merge(brother, _)        -> brother;
-merge(_, brother)        -> brother.
-
-merge([Lin]) ->
-    Lin;
-merge([Lin|Lins]) ->
-    merge(Lin, merge(Lins)).
 
 merge_heads([]) ->
     [];
@@ -177,79 +58,25 @@ is_sibling(Lin1, Lin2) ->
     not is_descendant(Lin1, Lin2) andalso
     not is_descendant(Lin2, Lin1).
 
-partval() ->
-    Shrink = fun(G) -> ?SHRINK(G, [{ok, current}]) end,
-    frequency([{2,{ok, lineage()}},
-               {1,Shrink(notfound)},
-               {1,Shrink(timeout)},
-               {1,Shrink(error)}]).
 
-partvals() ->
-    not_empty(longer_list(2, partval())).
-
-start_mock_servers() ->
-    case whereis(riak_kv_vnode_master) of
-        undefined -> ok;
-        Pid       ->
-            unlink(Pid),
-            exit(Pid, shutdown),
-            wait_for_pid(Pid)
-    end,
-    get_fsm_qc_vnode_master:start_link(),
-    application:load(riak_core),
-    application:start(crypto),
-    riak_core_ring_events:start_link(),
-    riak_core_node_watcher_events:start_link(),
-    riak_core_node_watcher:start_link(),
-    riak_core_node_watcher:service_up(riak_kv, self()),
-    ok.
-
-node_status() ->
-    frequency([{1, ?SHRINK(down, [up])},
-               {9, up}]).
-
-cycle(N, Xs=[_|_]) when N >= 0 ->
-    cycle(Xs, N, Xs).
-
-cycle(_Zs, 0, _Xs) ->
-    [];
-cycle(Zs, N, [X|Xs]) ->
-    [X|cycle(Zs, N - 1, Xs)];
-cycle(Zs, N, []) ->
-    cycle(Zs, N, Zs).
-
-reassign_nodes(Status, Ring) ->
-    Ids = [ I || {I, _} <- riak_core_ring:all_owners(Ring) ],
-    lists:foldl(
-        fun({down, Id}, R) ->
-                riak_core_ring:transfer_node(Id, 'dummy@nohost', R);
-           (_, R) -> R
-        end, Ring, lists:zip(Status, Ids)).
 
 prop_len() ->
-    ?FORALL({R, Ps}, {choose(1, 10), partvals()},
+    ?FORALL({R, Ps}, {choose(1, 10), fsm_eqc_util:partvals()},
         collect({R, length(Ps)}, true)
     ).
 
 prop_basic_get() ->
     ?FORALL({RSeed,NQdiff,Objects,ReqId,PartVals,NodeStatus0},
-            {largenat(),choose(0,4096),
-             riak_objects(), noshrink(largeint()),
-             partvals(),at_least_one_up(longer_list(10, node_status()))},
+            {fsm_eqc_util:largenat(),choose(0,4096),
+             fsm_eqc_util:riak_objects(), noshrink(largeint()),
+             fsm_eqc_util:partvals(),fsm_eqc_util:some_up_node_status(10)},
     begin
         N = length(PartVals),
         R = (RSeed rem N) + 1,
-        Q = make_power_of_two(N + NQdiff),
-        NodeStatus = cycle(Q, NodeStatus0),
-        Ring = reassign_nodes(NodeStatus,
-                              riak_core_ring:fresh(Q, node())),
-                              
-        
+        {Q, Ring, NodeStatus} = fsm_eqc_util:mock_ring(N + NQdiff, NodeStatus0),
 
         ok = gen_server:call(riak_kv_vnode_master,
                          {set_data, Objects, PartVals}),
-
-        mochiglobal:put(?RING_KEY, Ring),
 
         application:set_env(riak_core,
                             default_bucket_props,
@@ -265,12 +92,15 @@ prop_basic_get() ->
                             200,
                             self()),
 
-        ok = wait_for_pid(GetPid),
+        process_flag(trap_exit, true),
+        ok = riak_kv_test_util:wait_for_pid(GetPid),
         % Give read repairs and deletes a chance to go through
         timer:sleep(5),
-        Res = wait_for_req_id(ReqId),
+        Res = fsm_eqc_util:wait_for_req_id(ReqId, GetPid),
+        process_flag(trap_exit, false),
+
         History = get_fsm_qc_vnode_master:get_history(),
-        RepairHistory = get_fsm_qc_vnode_master:get_repair_history(),
+        RepairHistory = get_fsm_qc_vnode_master:get_put_history(),
         Ok         = length([ ok || {_, {ok, _}} <- History ]),
         NotFound   = length([ ok || {_, notfound} <- History ]),
         NoReply    = length([ ok || {_, timeout}  <- History ]),
@@ -308,18 +138,6 @@ prop_basic_get() ->
                  {distinct, all_distinct(Partitions)}
                 ]))
     end).
-
-wait_for_req_id(ReqId) ->
-    receive
-        {ReqId, {ok, Reply1}} ->
-            {ok, Reply1};
-        {ReqId, Error1} ->
-            Error1;
-        Anything1 ->
-            {anything, Anything1}
-    after 400 ->
-            timeout
-    end.
 
 
 test() ->
@@ -403,7 +221,7 @@ check_delete(Objects, RepairH, H, PerfectPreflist) ->
    
 
 build_merged_object(Heads, Objects) ->
-    Lineage = merge(Heads),
+    Lineage = fsm_eqc_util:merge(Heads),
     Object  = proplists:get_value(Lineage, Objects),
     Vclock  = vclock:merge(
                 [ riak_object:vclock(proplists:get_value(Head, Objects))
@@ -449,22 +267,12 @@ expect(H, N, R, NotFounds, Oks, Errs, Heads) ->
             end
     end.
 
-wait_for_pid(Pid) ->
-    Mref = erlang:monitor(process, Pid),
-    receive
-        {'DOWN',Mref,process,_,_} ->
-            ok
-    after
-        1000 ->
-            {error, didnotexit}
-    end.
-    
     
 eqc_test_() ->
     {spawn,
     {timeout, 200, ?_test(
         begin
-            start_mock_servers(),
+            fsm_eqc_util:start_mock_servers(),
             ?assert(test(50))
         end)
     }}.

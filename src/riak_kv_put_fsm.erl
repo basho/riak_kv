@@ -530,6 +530,22 @@ put_fsm_start(W, DW) ->
 
 setup() ->
     %% Start the applications required for riak_kv to start
+    %% Start net_kernel - hopefully can remove this after FSM is purified..
+    State = case net_kernel:stop() of
+                {error, not_allowed} ->
+                    running;
+                _X ->
+                    %% Make sure epmd is started - will not be if erl -name has
+                    %% not been run from the commandline.
+                    os:cmd("epmd -daemon"),
+                    timer:sleep(100),
+                    case net_kernel:start(['kvputfsm@localhost', shortnames]) of
+                        {ok, _Pid} ->
+                            started;
+                        ER ->
+                            throw({net_kernel_start_failed, ER})
+                    end
+            end,
     application:start(sasl),
     application:start(crypto),
     application:start(riak_sysmon),
@@ -552,9 +568,9 @@ setup() ->
     %% Start riak_kv
     application:start(riak_kv),
     timer:sleep(500),
-    ok.
+    State.
 
-cleanup(_Pid) ->
+cleanup(State) ->
     application:stop(riak_kv),
     application:stop(os_mon),
     application:stop(mochiweb),
@@ -565,6 +581,12 @@ cleanup(_Pid) ->
     application:stop(riak_sysmon),
     application:stop(crypto),
     application:stop(sasl),    
+    case State of
+        started ->
+            ok = net_kernel:stop();
+        _ ->
+            ok
+    end,
 
     %% Reset the riak_core vnode_modules
     application:set_env(riak_core, vnode_modules, []).

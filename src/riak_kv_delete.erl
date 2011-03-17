@@ -80,16 +80,15 @@ reap(Bucket, Key, Timeout) ->
 -ifdef(TEST).
 
 delete_test_() ->
-    %% Start erlang node
-    net_kernel:start([testnode, shortnames]),
     %% Execute the test cases
+    {spawn, [
     { foreach, 
       fun setup/0,
       fun cleanup/1,
       [
        fun invalid_rw_delete/0
       ]
-    }.
+    }]}.
 
 invalid_rw_delete() ->
     RW = <<"abc">>,
@@ -109,8 +108,11 @@ invalid_rw_delete() ->
     end.                
     
 setup() ->
+    %% Start erlang node
+    net_kernel:start([testnode, shortnames]),
     cleanup(unused_arg),
     do_dep_apps(start, dep_apps()),
+    {ok, _Pid} = riak_kv_delete_sup:start_link(),
     timer:sleep(500).
 
 cleanup(_Pid) ->
