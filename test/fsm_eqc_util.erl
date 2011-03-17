@@ -23,7 +23,7 @@ at_least_one_up(G) ->
     ?SUCHTHAT(X, G, lists:member(up, X)).
 
 num_partitions() ->
-    %% TODO: use some unfortunate parition counts (1, 50, etc.)
+    %% TODO: use some unfortunate partition counts (1, 50, etc.)
     % elements([4, 16, 64]).
     ?LET(N, choose(0, 6), pow(2, N)).
 
