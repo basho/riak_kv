@@ -40,7 +40,6 @@
 
 -record(state, {robj :: riak_object:riak_object(),
                 client :: {pid(), reference()},
-                rclient :: riak_client:riak_client(),
                 n :: pos_integer(),
                 w :: pos_integer(),
                 dw :: non_neg_integer(),
@@ -59,6 +58,7 @@
                 returnbody :: boolean(),
                 resobjs=[] :: list(),
                 allowmult :: boolean(),
+                precommit=[] :: list(),
                 postcommit=[] :: list(),
                 update_last_modified :: boolean(),
                 bucket_props:: list(),
@@ -150,14 +150,12 @@ prepare(timeout, StateData0 = #state{robj = RObj0}) ->
     N = proplists:get_value(n_val,BucketProps),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
-    {ok, RClient} = riak:local_client(),
     StartTime = riak_core_util:moment(),
     
     StateData = StateData0#state{n = N,
                                  bkey = BKey,
                                  bucket_props = BucketProps,
                                  preflist2 = Preflist2,
-                                 rclient = RClient,
                                  starttime = StartTime},
     {next_state, validate, StateData, 0}.
     
@@ -193,8 +191,10 @@ validate(timeout, StateData0 = #state{n=N, w=W0, dw=DW0, bucket_props = BucketPr
             {stop, normal, StateData0};
         true ->
             AllowMult = proplists:get_value(allow_mult,BucketProps),
+            Precommit = get_hooks(precommit, BucketProps),
             Postcommit = get_hooks(postcommit, BucketProps),
             StateData1 = StateData0#state{n=N, w=W, dw=DW, allowmult=AllowMult,
+                                          precommit = Precommit,
                                           postcommit = Postcommit},
             Options = flatten_options(proplists:unfold(Options0 ++ ?DEFAULT_OPTS), []),
             StateData2 = handle_options(Options, StateData1),
@@ -206,9 +206,10 @@ validate(timeout, StateData0 = #state{n=N, w=W0, dw=DW0, bucket_props = BucketPr
 execute(timeout, StateData0=#state{robj=RObj0, req_id = ReqId,
                                    update_last_modified=UpdateLastMod,
                                    timeout=Timeout, preflist2 = Preflist2, bkey=BKey,
-                                   rclient=RClient, vnode_options=VnodeOptions,
-                                   starttime = StartTime}) ->
-    case invoke_hook(precommit, RClient, update_last_modified(UpdateLastMod, RObj0)) of
+                                   vnode_options=VnodeOptions,
+                                   starttime = StartTime,
+                                   precommit = Precommit}) ->
+    case invoke_precommit(Precommit, update_last_modified(UpdateLastMod, RObj0)) of
         fail ->
             client_reply({error, precommit_fail}, StateData0),
             {stop, normal, StateData0};
@@ -365,7 +366,7 @@ update_last_modified(true, RObj) ->
     NewMD = dict:store(?MD_VTAG, make_vtag(RObj),
                        dict:store(?MD_LASTMOD, erlang:now(),
                                   MD0)),
-    riak_object:apply_updates(riak_object:update_metadata(RObj, NewMD)).
+    riak_object:update_metadata(RObj, NewMD).
 
 make_vtag(RObj) ->
     <<HashAsNum:128/integer>> = crypto:md5(term_to_binary(riak_object:vclock(RObj))),
@@ -375,36 +376,16 @@ update_stats(#state{startnow=StartNow}) ->
     EndNow = now(),
     riak_kv_stat:update({put_fsm_time, timer:now_diff(EndNow, StartNow)}).
 
-%% Internal functions
-invoke_hook(HookType, RClient, RObj) ->
-    Bucket = riak_object:bucket(RObj),
-    BucketProps = RClient:get_bucket(Bucket),
-    R = proplists:get_value(HookType, BucketProps, []),
-    case R of
-        <<"none">> ->
-            RObj;
-        [] ->
-            RObj;
-        Hooks when is_list(Hooks) ->
-            run_hooks(HookType, RObj, Hooks)
-    end.
-
-run_hooks(_HookType, RObj, []) ->
-    RObj;
-run_hooks(HookType, RObj, [{struct, Hook}|T]) ->
-    Result = extract_invoke_hook(HookType, Hook, RObj),
-    case HookType of
-        precommit ->
-            case Result of
-                fail ->
-                    Result;
-                {fail, _Reason} ->
-                    Result;
-                _ ->
-                    run_hooks(HookType, Result, T)
-            end;
-        postcommit ->
-            run_hooks(HookType, RObj, T)
+%% Run the precommit hooks
+invoke_precommit([], RObj) ->
+    riak_object:apply_updates(RObj);
+invoke_precommit([{struct, Hook} | Rest], RObj) ->
+    Result = extract_invoke_hook(precommit, Hook, RObj),
+    case Result of
+        Obj when element(1, Obj) == r_object ->
+            invoke_precommit(Rest, riak_object:apply_updates(RObj));
+        _ ->
+            Result
     end.
 
 extract_invoke_hook(HookType, Hook, RObj) ->
