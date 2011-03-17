@@ -215,6 +215,7 @@ reassign_nodes(Status, Ring) ->
 wait_for_req_id(ReqId, Pid) ->
     receive
         {'EXIT', Pid, _Reason} ->
+            io:format(user, "FSM died:\n~p\n", [_Reason]),
             %{exit, _Reason};
             %% Mark as timeout for now - no reply is coming, so why wait
             timeout;
