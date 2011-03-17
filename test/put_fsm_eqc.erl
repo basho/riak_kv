@@ -27,12 +27,14 @@
 %% (t@jons-macpro.local)2> put_fsm_eqc:test(100).
 %% (t@jons-macpro.local)3> put_fsm_eqc:check().
 %%
-%% Remember, if the eunit test failed the current_counterexample file is under .eunit dir
+%% Remember, if the eunit test failed the current_counterexample file
+%% is under .eunit dir
 %%
 %% TODO: Would like to clean up the expecte result code and make it dependent
-%%       on the generate vnode responses.  Hard because the update to the last modified
-%%       time stamp breaks the pre-defined lineage code in fsm_eqc_util and the current
-%%       last-w-does-not-check-dw bug makes reasoning hard. 
+%%       on the generate vnode responses.  Hard because the update to the last
+%%       modified time stamp breaks the pre-defined lineage code in
+%%       fsm_eqc_util and the current last-w-does-not-check-dw bug makes
+%%       reasoning hard.
 %%
 -module(put_fsm_eqc).
 -ifdef(EQC).
@@ -228,9 +230,9 @@ prop_basic_put() ->
 
         {Q, _Ring, NodeStatus} = fsm_eqc_util:mock_ring(N + NQdiff, NodeStatus0),
 
-        %% Pick the object to put - as ObjectIdxSeed shrinks, it should go towards
-        %% the end of the list (for current), so simplest to just reverse the list
-        %% and calculate modulo list length
+        %% Pick the object to put - as ObjectIdxSeed shrinks, it should go
+        %% towards the end of the list (for current), so simplest to just
+        %% reverse the list and calculate modulo list length
         ObjectIdx = (ObjectIdxSeed rem length(Objects)) + 1,
         {_PutLin,Object} = lists:nth(ObjectIdx, lists:reverse(Objects)),
 
@@ -264,8 +266,8 @@ prop_basic_put() ->
         PostCommits = get_fsm_qc_vnode_master:get_postcommits(),
 
         %% Work out the expected results.  Have to determine the effective dw
-        %% the FSM would have used to know when it would have stopped processing responses
-        %% and returned to the client.
+        %% the FSM would have used to know when it would have stopped
+        %% processing responses and returned to the client.
         EffDW = get_effective_dw(DW, Options, Postcommit),
         ExpectObject = expect_object(H, W, EffDW, AllowMult),
         {Expected, ExpectedPostCommits} = expect(H, N, W, EffDW, Options,
@@ -287,7 +289,8 @@ prop_basic_put() ->
                         {postcommit, equals(PostCommits, ExpectedPostCommits)}]))
     end).
 
-%% make_vput_replies - build the list of vnode replies to pass to the mock vnode master.
+%% make_vput_replies - build the list of vnode replies to pass to the mock
+%% vnode master.
 %%
 %% If the first response is a timeout, no second response is sent.
 %%
@@ -296,8 +299,9 @@ prop_basic_put() ->
 %%
 %% Pass on all other requests as they are.
 %%
-%% The generated sequence numbers are used to re-order the responses - the second
-%% is added to the first to make sure the first response from a vnode comes first.
+%% The generated sequence numbers are used to re-order the responses - the
+%% second is added to the first to make sure the first response from a vnode
+%% comes first.
 make_vput_replies(VPutResp, Objects, Options) ->
     make_vput_replies(VPutResp, Objects, Options, 1, []).
     
@@ -360,7 +364,8 @@ set_bucket_props(N, AllowMult, Precommit, Postcommit) ->
 %% Expected Result Calculation
 %%====================================================================
 
-%% Work out the expected return value from the FSM and the expected postcommit log.
+%% Work out the expected return value from the FSM and the expected postcommit
+%% log.
 expect(H, N, W, EffDW, Options, Precommit, Postcommit, Object) ->
     ReturnObj = case proplists:get_value(returnbody, Options, false) of
                     true ->
@@ -400,8 +405,8 @@ expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit}) -
     case enough_replies(S) of
         {true, Expect} when Expect == {error, too_many_fails};
                             Expect == ok ->
-            %% Workaround for DW met before last w and only fail after last w, no more
-            %% dws
+            %% Workaround for DW met before last w and only fail after last w,
+            %% no more dws
             %% Q: 4 N: 3 W:3 DW: 1
             %%     History: [{w,0,-885709871},
             %%               {w,365375409332725729550921208179070754913983135744,-885709871},
@@ -664,7 +669,8 @@ precommit_fail(Obj) -> % Pre-commit fails
 
 precommit_fail_reason(Obj) -> % Pre-commit fails
     r_object = element(1, Obj),
-    {fail, ?HOOK_SAYS_NO}. % return binary so same tests can be used on javascript hooks
+    {fail, ?HOOK_SAYS_NO}. % return binary so same tests can be used on
+                           % javascript hooks
 
 precommit_crash(_Obj) ->
     Ok = ok,
@@ -702,8 +708,8 @@ precommit_should_fail([{js, precommit_nonobj} | _Rest], _DW) ->
     {true, timeout};
 precommit_should_fail([{_Lang,Hook} | Rest], DW) when Hook =:= precommit_nonobj;
                                                       Hook =:= precommit_fail_reason ->
-    %% Work around bug - no check for valid object on return from precommit hook.
-    %% instead tries to use it anyway as a valid object and puts fail.
+    %% Work around bug - no check for valid object on return from precommit
+    %% hook.  instead tries to use it anyway as a valid object and puts fail.
     case {DW, Rest} of 
         {0, []} ->
             false;
@@ -715,10 +721,11 @@ precommit_should_fail([{_Lang,Hook} | Rest], DW) when Hook =:= precommit_nonobj;
 precommit_should_fail([_LangHook | Rest], DW) ->
     precommit_should_fail(Rest, DW).
 
-%% Return true if there is a crash or fail that will prevent more precommit hooks
-%% running before a javascript one is hit.
+%% Return true if there is a crash or fail that will prevent more precommit
+%% hooks running before a javascript one is hit.
 crashfail_before_js([]) ->
-    {error, precommit_fail}; % for our purposes no js hook was hit, so kinda true.
+    %% for our purposes no js hook was hit, so kinda true.
+    {error, precommit_fail};
 crashfail_before_js([{js, _} | _Rest]) ->
     %% Javascript precommit with non-object crashes the VM and we get
     %% a timeout waiting for the VM to reply

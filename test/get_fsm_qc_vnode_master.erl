@@ -118,8 +118,8 @@ handle_cast(?VNODE_REQ{index=Idx,
     end,
     {noreply, State1};
 
-%% Handle a put request - send the responses prepared by call to 'set_vput_replies'
-%% up until the next 'w' response for a different partition.
+%% Handle a put request - send the responses prepared by call to
+%% 'set_vput_replies' up until the next 'w' response for a different partition.
 handle_cast(?VNODE_REQ{index=Idx,
                        sender=Sender,
                        request=?KV_PUT_REQ{req_id=ReqId,
@@ -226,8 +226,8 @@ record_reply(Sender, Reply, #state{reply_history = H} = State) ->
     State#state{reply_history = [Reply | H]}.
 
 
-%% If the requested object is not an r_object tuple, make sure the {dw} response is fail
-%% Leave any other failures the same.
+%% If the requested object is not an r_object tuple, make sure the {dw}
+%% response is fail Leave any other failures the same.
 fail_on_bad_obj(_LIdx, Obj, VPutReplies) when element(1, Obj) =:= r_object ->
    VPutReplies;
 fail_on_bad_obj(LIdx, _Obj, VPutReplies) ->
