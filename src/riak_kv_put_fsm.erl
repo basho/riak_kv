@@ -120,9 +120,12 @@ handle_options([{returnbody, true}|T], State) ->
     handle_options(T, State#state{vnode_options=VnodeOpts,
                                   dw=erlang:max(1,State#state.dw),
                                   returnbody=true});
-handle_options([{returnbody, false}|T], State) ->
-    case has_postcommit_hooks(element(1,State#state.bkey)) of
-        true ->
+handle_options([{returnbody, false}|T], State = #state{postcommit = Postcommit}) ->
+    case Postcommit of
+        [] ->
+            handle_options(T, State#state{returnbody=false});
+            
+        _ ->
             %% We have post-commit hooks, we'll need to get the body back
             %% from the vnode, even though we don't plan to return that to the
             %% original caller.  Force DW>0 to ensure the dw event returned by
@@ -130,9 +133,7 @@ handle_options([{returnbody, false}|T], State) ->
             VnodeOpts = [{returnbody, true} | State#state.vnode_options],
             handle_options(T, State#state{vnode_options=VnodeOpts,
                                           dw=erlang:max(1,State#state.dw),
-                                          returnbody=false});
-        false ->
-            handle_options(T, State#state{returnbody=false})
+                                          returnbody=false})
     end;
 handle_options([{_,_}|T], State) -> handle_options(T, State).
 
@@ -160,6 +161,7 @@ prepare(timeout, StateData0 = #state{robj = RObj0}) ->
                                  starttime = StartTime},
     {next_state, validate, StateData, 0}.
     
+%% @private
 validate(timeout, StateData0 = #state{n=N, w=W0, dw=DW0, bucket_props = BucketProps, 
                                       options = Options0, preflist2 = Preflist2}) ->
     W = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
@@ -191,7 +193,7 @@ validate(timeout, StateData0 = #state{n=N, w=W0, dw=DW0, bucket_props = BucketPr
             {stop, normal, StateData0};
         true ->
             AllowMult = proplists:get_value(allow_mult,BucketProps),
-            Postcommit = proplists:get_value(postcommit, BucketProps, []),
+            Postcommit = get_hooks(postcommit, BucketProps),
             StateData1 = StateData0#state{n=N, w=W, dw=DW, allowmult=AllowMult,
                                           postcommit = Postcommit},
             Options = flatten_options(proplists:unfold(Options0 ++ ?DEFAULT_OPTS), []),
@@ -200,6 +202,7 @@ validate(timeout, StateData0 = #state{n=N, w=W0, dw=DW0, bucket_props = BucketPr
             {next_state,execute,StateData,0}
     end.
 
+%% @private
 execute(timeout, StateData0=#state{robj=RObj0, req_id = ReqId,
                                    update_last_modified=UpdateLastMod,
                                    timeout=Timeout, preflist2 = Preflist2, bkey=BKey,
@@ -223,6 +226,7 @@ execute(timeout, StateData0=#state{robj=RObj0, req_id = ReqId,
             {next_state,waiting_vnode,StateData}
     end.
 
+%% @private
 waiting_vnode(request_timeout, StateData) ->
     update_stats(StateData),
     client_reply({error,timeout}, StateData),
@@ -245,11 +249,15 @@ waiting_vnode(Result, StateData) ->
             {next_state, waiting_vnode, StateData2}
     end.
 
+%% @private
 postcommit(timeout, StateData = #state{postcommit = []}) ->
     {stop, normal, StateData};
-postcommit(timeout, StateData = #state{rclient = RClient, final_obj = ReplyObj}) ->
-    invoke_hook(postcommit, RClient, ReplyObj),
-    {stop, normal, StateData};
+postcommit(timeout, StateData = #state{postcommit = [{struct, Hook} | Rest],
+                                       final_obj = ReplyObj}) ->
+    %% Process the next hook - gives sys:get_status messages a chance if hooks
+    %% take a long time.  No checking error returns for postcommit hooks.
+    extract_invoke_hook(postcommit, Hook, ReplyObj),
+    {next_state, postcommit, StateData#state{postcommit = Rest}, 0};
 postcommit(request_timeout, StateData) -> % still process hooks even if request timed out
     {next_state, postcommit, StateData, 0};
 postcommit(Reply, StateData) -> % late responses - add to state
@@ -384,10 +392,7 @@ invoke_hook(HookType, RClient, RObj) ->
 run_hooks(_HookType, RObj, []) ->
     RObj;
 run_hooks(HookType, RObj, [{struct, Hook}|T]) ->
-    Mod = proplists:get_value(<<"mod">>, Hook),
-    Fun = proplists:get_value(<<"fun">>, Hook),
-    JSName = proplists:get_value(<<"name">>, Hook),
-    Result = invoke_hook(HookType, Mod, Fun, JSName, RObj),
+    Result = extract_invoke_hook(HookType, Hook, RObj),
     case HookType of
         precommit ->
             case Result of
@@ -402,7 +407,13 @@ run_hooks(HookType, RObj, [{struct, Hook}|T]) ->
             run_hooks(HookType, RObj, T)
     end.
 
-invoke_hook(_, _Mod, _fun, _JSName, undefiend) ->
+extract_invoke_hook(HookType, Hook, RObj) ->
+    Mod = proplists:get_value(<<"mod">>, Hook),
+    Fun = proplists:get_value(<<"fun">>, Hook),
+    JSName = proplists:get_value(<<"name">>, Hook),
+    invoke_hook(HookType, Mod, Fun, JSName, RObj).
+   
+invoke_hook(_, _Mod, _fun, _JSName, undefined) ->
     throw(no_object_for_hook);
 invoke_hook(precommit, Mod0, Fun0, undefined, RObj) ->
     Mod = binary_to_atom(Mod0, utf8),
@@ -439,11 +450,12 @@ invoke_hook(precommit, undefined, undefined, JSName, RObj) ->
 invoke_hook(postcommit, Mod0, Fun0, undefined, Obj) ->
     Mod = binary_to_atom(Mod0, utf8),
     Fun = binary_to_atom(Fun0, utf8),
-    proc_lib:spawn_link(fun() -> wrap_hook(Mod, Fun, Obj) end);
+    wrap_hook(Mod, Fun, Obj);
 invoke_hook(postcommit, undefined, undefined, _JSName, _Obj) ->
     error_logger:warning_msg("Javascript post-commit hooks aren't implemented");
 %% NOP to handle all other cases
 invoke_hook(_, _, _, _, RObj) ->
+    %% TODO: Log here!
     RObj.
 
 wrap_hook(Mod, Fun, Obj)->
@@ -455,6 +467,15 @@ wrap_hook(Mod, Fun, Obj)->
             fail
     end.
 
+get_hooks(HookType, BucketProps) ->
+    Hooks = proplists:get_value(HookType, BucketProps, []),
+    case Hooks of
+        <<"none">> ->
+            [];
+        Hooks when is_list(Hooks) ->
+            Hooks
+    end.
+              
 merge_robjs(RObjs0,AllowMult) ->
     RObjs1 = [X || X <- RObjs0,
                    X /= undefined],
@@ -462,9 +483,6 @@ merge_robjs(RObjs0,AllowMult) ->
         [] -> {error, notfound};
         _ -> riak_object:reconcile(RObjs1,AllowMult)
     end.
-
-has_postcommit_hooks(Bucket) ->
-    lists:flatten(proplists:get_all_values(postcommit, riak_core_bucket:get_bucket(Bucket))) /= [].
 
 schedule_timeout(infinity) ->
     undefined;
