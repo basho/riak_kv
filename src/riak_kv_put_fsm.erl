@@ -44,18 +44,17 @@
                 n :: pos_integer(),
                 w :: pos_integer(),
                 dw :: non_neg_integer(),
-                preflist :: [{pos_integer(), atom()}],
+                preflist2 :: riak_core_apl:preflist2(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
-                waiting_for :: list(),
                 req_id :: pos_integer(),
-                starttime :: pos_integer(),
+                starttime :: pos_integer(), % start time to send to vnodes
                 replied_w :: list(),
                 replied_dw :: list(),
                 replied_fail :: list(),
                 timeout :: pos_integer(),
                 tref    :: reference(),
                 ring :: riak_core_ring:riak_core_ring(),
-                startnow :: {pos_integer(), pos_integer(), pos_integer()},
+                startnow :: {pos_integer(), pos_integer(), pos_integer()}, % for FSM duration
                 options=[] :: list(),
                 vnode_options=[] :: list(),
                 returnbody :: boolean(),
@@ -81,9 +80,11 @@ start_link(ReqId,RObj,W,DW,Timeout,From,Options) ->
 
 %% @private
 init([ReqId,RObj0,W0,DW0,Timeout,Client,Options0]) ->
+    StartNow = now(),
     StateData = #state{robj=RObj0, 
                        client=Client, w=W0, dw=DW0,
-                       req_id=ReqId, timeout=Timeout, options = Options0},
+                       req_id=ReqId, timeout=Timeout, options = Options0,
+                       startnow=StartNow},
     {ok,prepare,StateData,0}.
 
 %%
@@ -133,16 +134,25 @@ handle_options([{_,_}|T], State) -> handle_options(T, State).
 prepare(timeout, StateData0 = #state{robj = RObj0}) ->
     {ok,Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj0), Ring),
+    BKey = {riak_object:bucket(RObj0), riak_object:key(RObj0)},
+    DocIdx = riak_core_util:chash_key(BKey),
+    N = proplists:get_value(n_val,BucketProps),
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
     {ok, RClient} = riak:local_client(),
+    StartTime = riak_core_util:moment(),
     
-    StateData = StateData0#state{ring=Ring,
-                       bucket_props = BucketProps,
-                       rclient=RClient},
+    StateData = StateData0#state{n = N,
+                                 bkey = BKey,
+                                 ring = Ring,
+                                 bucket_props = BucketProps,
+                                 preflist2 = Preflist2,
+                                 rclient = RClient,
+                                 starttime = StartTime},
     {next_state, validate, StateData, 0}.
     
-validate(timeout, StateData0 = #state{robj = RObj0, w=W0, dw=DW0, bucket_props = BucketProps, 
+validate(timeout, StateData0 = #state{robj = RObj0, n=N, w=W0, dw=DW0, bucket_props = BucketProps, 
                                      options = Options0}) ->
-    N = proplists:get_value(n_val,BucketProps),
     W = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
 
     %% Expand the DW value, but also ensure that DW <= W
@@ -178,8 +188,9 @@ validate(timeout, StateData0 = #state{robj = RObj0, w=W0, dw=DW0, bucket_props =
 
 execute(timeout, StateData0=#state{robj=RObj0, req_id = ReqId,
                                    update_last_modified=UpdateLastMod,
-                                   timeout=Timeout, ring=Ring, bkey={Bucket,Key}=BKey,
-                                   rclient=RClient, vnode_options=VnodeOptions}) ->
+                                   timeout=Timeout, preflist2 = Preflist2, bkey=BKey,
+                                   rclient=RClient, vnode_options=VnodeOptions,
+                                   starttime = StartTime}) ->
     case invoke_hook(precommit, RClient, update_last_modified(UpdateLastMod, RObj0)) of
         fail ->
             client_reply({error, precommit_fail}, StateData0),
@@ -188,32 +199,13 @@ execute(timeout, StateData0=#state{robj=RObj0, req_id = ReqId,
             client_reply({error, {precommit_fail, Reason}}, StateData0),
             {stop, normal, StateData0};
         RObj1 ->
-            StartNow = now(),
-            TRef = erlang:send_after(Timeout, self(), timeout),
-            RealStartTime = riak_core_util:moment(),
-            BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
-            DocIdx = riak_core_util:chash_key({Bucket, Key}),
-            Req = ?KV_PUT_REQ{
-              bkey = BKey,
-              object = RObj1,
-              req_id = ReqId,
-              start_time = RealStartTime,
-              options = VnodeOptions},
-            N = proplists:get_value(n_val,BucketProps),
-            Preflist = riak_core_ring:preflist(DocIdx, Ring),
-            %% TODO: Replace this with call to riak_kv_vnode:put/6
-            {Targets, Fallbacks} = lists:split(N, Preflist),
-            UpNodes = riak_core_node_watcher:nodes(riak_kv),
-            {Sent1, Pangs1} = riak_kv_util:try_cast(Req, UpNodes, Targets),
-            Sent = case length(Sent1) =:= N of   % Sent is [{Index,TargetNode,SentNode}]
-                       true -> Sent1;
-                       false -> Sent1 ++ riak_kv_util:fallback(Req,UpNodes,Pangs1,Fallbacks)
-                   end,
+            TRef = schedule_timeout(Timeout),
+            Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
+            riak_kv_vnode:put(Preflist, BKey, RObj1, ReqId, StartTime, VnodeOptions),
             StateData = StateData0#state{
-                          robj=RObj1, n=N, preflist=Preflist,
-                          waiting_for=Sent, starttime=riak_core_util:moment(),
+                          robj=RObj1,
                           replied_w=[], replied_dw=[], replied_fail=[],
-                          tref=TRef,startnow=StartNow},
+                          tref=TRef},
             {next_state,waiting_vnode_w,StateData}
     end.
 
@@ -456,6 +448,11 @@ merge_robjs(RObjs0,AllowMult) ->
 
 has_postcommit_hooks(Bucket) ->
     lists:flatten(proplists:get_all_values(postcommit, riak_core_bucket:get_bucket(Bucket))) /= [].
+
+schedule_timeout(infinity) ->
+    undefined;
+schedule_timeout(Timeout) ->
+    erlang:send_after(Timeout, self(), timeout).
 
 client_reply(Reply, #state{client = Client, req_id = ReqId}) ->
     Client ! {ReqId, Reply}.
