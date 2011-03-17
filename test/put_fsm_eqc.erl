@@ -235,7 +235,7 @@ prop_basic_put() ->
         {_PutLin,Object} = lists:nth(ObjectIdx, lists:reverse(Objects)),
 
         %% Work out how the vnodes should respond and in which order
-        %% the messages shoudl be delivered.
+        %% the messages should be delivered.
         VPutReplies = make_vput_replies(VPutResp, Objects, Options),
 
         %% Prepare the mock vnode master
