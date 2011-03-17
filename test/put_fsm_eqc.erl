@@ -265,6 +265,13 @@ prop_basic_put() ->
         ok = riak_kv_test_util:wait_for_pid(PutPid),
         ok = riak_kv_test_util:wait_for_children(PutPid),
         Res = fsm_eqc_util:wait_for_req_id(?REQ_ID, PutPid),
+        receive % check for death during postcommit hooks
+            {'EXIT', PutPid, Why} ->
+                ?assertEqual(normal, Why)
+        after
+            0 ->
+                ok
+        end,
         process_flag(trap_exit, false),
 
         %% Get the history of what happened to the vnode master
@@ -277,7 +284,7 @@ prop_basic_put() ->
         EffDW = get_effective_dw(DW, Options, Postcommit),
         ExpectObject = expect_object(H, W, EffDW, AllowMult),
         {Expected, ExpectedPostCommits} = expect(H, N, W, EffDW, Options,
-                                                 Precommit, Postcommit, ExpectObject),
+                                                 Precommit, Postcommit, ExpectObject, NodeStatus),
         ?WHENFAIL(
            begin
                io:format(user, "NodeStatus: ~p\n", [NodeStatus]),
@@ -372,26 +379,34 @@ set_bucket_props(N, AllowMult, Precommit, Postcommit) ->
 %% Expected Result Calculation
 %%====================================================================
 
-%% Work out the expected return value from the FSM and the expected postcommit
-%% log.
-expect(H, N, W, EffDW, Options, Precommit, Postcommit, Object) ->
+%% Work out the expected return value from the FSM and the expected postcommit log.
+expect(H, N, W, EffDW, Options, Precommit, Postcommit, Object, NodeStatus) ->
     ReturnObj = case proplists:get_value(returnbody, Options, false) of
                     true ->
                         Object;
                     false ->
                         noreply
                 end,
-    
-    ExpectResult = case {H, N, W, EffDW} of
-                       %% Workaround for bug transitioning from awaiting_w to awaiting_dw
-                       {[{w,_,_},{dw,_,_},{w,_,_},{fail,_,_}], 2, 2, 1} ->
-                           {error, timeout};
-                       {[{w,_,_},{dw,_,_},{w,_,_},{{timeout,_},_,_}], 2, 2, 1} ->
-                           {error, timeout};
-                       _ ->
-                           HNoTimeout = filter_timeouts(H),
-                           expect(HNoTimeout, {H, N, W, EffDW, 0, 0, 0, ReturnObj, Precommit})
-                   end,
+    UpNodes =  length([x || up <- NodeStatus]),
+    MinNodes = erlang:max(W, EffDW),
+    ExpectResult = 
+        if UpNodes < MinNodes ->
+                {error,{insufficient_vnodes,UpNodes,need,MinNodes}};
+           
+           true ->
+                HNoTimeout = filter_timeouts(H),
+                expect(HNoTimeout, {H, N, W, EffDW, 0, 0, 0, ReturnObj, Precommit})
+        end,
+    %% ExpectResult = case {H, N, W, EffDW} of
+    %%                    %% Workaround for bug transitioning from awaiting_w to awaiting_dw
+    %%                    {[{w,_,_},{dw,_,_},{w,_,_},{fail,_,_}], 2, 2, 1} ->
+    %%                        {error, timeout};
+    %%                    {[{w,_,_},{dw,_,_},{w,_,_},{{timeout,_},_,_}], 2, 2, 1} ->
+    %%                        {error, timeout};
+    %%                    _ ->
+    %%                        HNoTimeout = filter_timeouts(H),
+    %%                        expect(HNoTimeout, {H, N, W, EffDW, 0, 0, 0, ReturnObj, Precommit})
+    %%                end,
     ExpectPostcommit = case {ExpectResult, Postcommit} of
                            {{error, _}, _} ->
                                [];
@@ -486,23 +501,24 @@ expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit}) -
             %%           {fail,1096126227998177188652763624537212264741949407232,1234}]
             %% Expected: ok Res: {error,timeout}
 
-            DWLeft = length([x || Reply <- Rest, element(1,Reply) == dw]),
-            OnlyWLeft = lists:all(fun({w, _, _}) -> true;
-                                     (_) -> false
-                                  end, Rest),
-            Expect2 = case {NumW+1, Rest, DWLeft, OnlyWLeft} of
-                          {W, [{fail,_,_}|_], 0, _} when DW > 0-> 
-                              {error, timeout};
-                          %% DW met before last w, then fail
-                          {X, [{w,_,_},{fail,_,_}|_], 0, _} when DW > 0, X >= W->  
-                              {error, timeout};
-                          {W, [], 0, _} when DW > 0, NumDW >= DW ->
-                              {error, timeout};
-                          {W, _, 0, true} when DW > 0 ->
-                              {error, timeout};
-                          _ ->
-                              Expect
-                      end,
+            %% DWLeft = length([x || Reply <- Rest, element(1,Reply) == dw]),
+            %% OnlyWLeft = lists:all(fun({w, _, _}) -> true;
+            %%                          (_) -> false
+            %%                       end, Rest),
+            Expect2 = Expect,
+            %% Expect2 = case {NumW+1, Rest, DWLeft, OnlyWLeft} of
+            %%               {W, [{fail,_,_}|_], 0, _} when DW > 0-> 
+            %%                   {error, timeout};
+            %%               %% DW met before last w, then fail
+            %%               {X, [{w,_,_},{fail,_,_}|_], 0, _} when DW > 0, X >= W->  
+            %%                   {error, timeout};
+            %%               {W, [], 0, _} when DW > 0, NumDW >= DW ->
+            %%                   {error, timeout};
+            %%               {W, _, 0, true} when DW > 0 ->
+            %%                   {error, timeout};
+            %%               _ ->
+            %%                   Expect
+            %%           end,
             %% io:format("NumW+1=~p W=~p Rest=~p DWLeft = ~p, OnlyWLeft=~p\n",
             %%           [NumW+1, W, Rest, DWLeft, OnlyWLeft]),
             maybe_add_robj(Expect2, RObj, Precommit, DW);
@@ -517,23 +533,7 @@ expect([DWReply|Rest], {H, N, W, DW, NumW, NumDW, NumFail,
     S = {H, N, W, DW, NumW, NumDW + 1, NumFail, RObj, Precommit},
     case enough_replies(S) of
         {true, Expect} ->
-
-            %% Workaround: it seems like you should wait for DWs until you know
-            %% enough cannot be received.  Nasty N=2 case anyway.
-            %% Q: 2 N: 2 W:2 DW: 1
-            %% History: [{w,0,-7826778492},
-            %%           {fail,0,-7826778492},
-            %%           {w,730750818665451459101842416358141509827966271488,-7826778492},
-            %%           {dw,730750818665451459101842416358141509827966271488,-7826778492}]
-            Expect2 = case S of
-                {[{w,_,_},{fail,_,_},{w,_,_},{dw,_,_}], 2, 2, 1, _, _, _} ->
-                    {error, too_many_fails};
-                {[{w,_,_},{fail,_,_},{w,_,_},{dw,_,_,_}], 2, 2, 1, _, _, _} ->
-                    {error, too_many_fails};
-                _ ->
-                    Expect
-            end,
-            maybe_add_robj(Expect2, RObj, Precommit, DW);
+            maybe_add_robj(Expect, RObj, Precommit, DW);
         false ->
             expect(Rest, S)
     end;
@@ -555,15 +555,13 @@ expect_object(H, W, DW, AllowMult) ->
 expect_object([], _W, _DW, _AllowMult, _NumW, _NumDW, _Objs) ->
     noreply;
 expect_object([{w,_,_} | H], W, DW, AllowMult, NumW, NumDW, Objs) ->
-    %% Bug in current impl waits for dw message to be received after
-    %% NumW meets DW.
-    %% case NumW+1 >= W andalso NumDW >= DW of
-    %%     true ->
-    %%         riak_object:reconcile(Objs, AllowMult);
-    %%     false ->
-    %%         expect_object(H, W, DW, AllowMult, NumW + 1, NumDW, Objs)
-    %% end;
-    expect_object(H, W, DW, AllowMult, NumW + 1, NumDW, Objs);
+    case NumW+1 >= W andalso NumDW >= DW andalso Objs /= [] of
+        true ->
+            riak_object:reconcile(Objs, AllowMult);
+        false ->
+            expect_object(H, W, DW, AllowMult, NumW + 1, NumDW, Objs)
+    end;
+ %%   expect_object(H, W, DW, AllowMult, NumW + 1, NumDW, Objs);
 expect_object([{dw,_,Obj, _} | H], W, DW, AllowMult, NumW, NumDW, Objs) ->
     case NumW >= W andalso NumDW +1 >= DW of
         true ->
