@@ -36,7 +36,7 @@
 -export([start_link/6,start_link/7]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
--export([initialize/2,waiting_vnode_w/2,waiting_vnode_dw/2]).
+-export([prepare/2, validate/2, execute/2, waiting_vnode_w/2,waiting_vnode_dw/2]).
 
 -record(state, {robj :: riak_object:riak_object(),
                 client :: {pid(), reference()},
@@ -56,11 +56,13 @@
                 tref    :: reference(),
                 ring :: riak_core_ring:riak_core_ring(),
                 startnow :: {pos_integer(), pos_integer(), pos_integer()},
-                vnode_options :: list(),
+                options=[] :: list(),
+                vnode_options=[] :: list(),
                 returnbody :: boolean(),
-                resobjs :: list(),
+                resobjs=[] :: list(),
                 allowmult :: boolean(),
-                update_last_modified :: boolean()
+                update_last_modified :: boolean(),
+                bucket_props:: list()
                }).
 
 %% In place only for backwards compatibility
@@ -79,46 +81,10 @@ start_link(ReqId,RObj,W,DW,Timeout,From,Options) ->
 
 %% @private
 init([ReqId,RObj0,W0,DW0,Timeout,Client,Options0]) ->
-    Options = flatten_options(proplists:unfold(Options0 ++ ?DEFAULT_OPTS), []),
-    {ok,Ring} = riak_core_ring_manager:get_my_ring(),
-    BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj0), Ring),
-    N = proplists:get_value(n_val,BucketProps),
-    W = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
-
-    %% Expand the DW value, but also ensure that DW <= W
-    DW1 = riak_kv_util:expand_rw_value(dw, DW0, BucketProps, N),
-    %% If no error occurred expanding DW also ensure that DW <= W
-    case DW1 of
-         error ->
-             DW = error;
-         _ ->
-             DW = erlang:min(DW1, W)
-    end,
-
-    if
-        W =:= error ->
-            Client ! {ReqId, {error, {w_val_violation, W0}}},
-            {stop, normal, none};
-        DW =:= error ->
-            Client ! {ReqId, {error, {dw_val_violation, DW0}}},
-            {stop, normal, none};
-        (W > N) or (DW > N) ->
-            Client ! {ReqId, {error, {n_val_violation, N}}},
-            {stop, normal, none};
-        true ->
-            AllowMult = proplists:get_value(allow_mult,BucketProps),
-            {ok, RClient} = riak:local_client(),
-            Bucket = riak_object:bucket(RObj0),
-            Key = riak_object:key(RObj0),
-            StateData0 = #state{robj=RObj0, 
-                                client=Client, w=W, dw=DW, bkey={Bucket, Key},
-                                req_id=ReqId, timeout=Timeout, ring=Ring,
-                                rclient=RClient, 
-                                vnode_options=[],
-                                resobjs=[], allowmult=AllowMult},
-            StateData = handle_options(Options, StateData0),
-            {ok,initialize,StateData,0}
-    end.
+    StateData = #state{robj=RObj0, 
+                       client=Client, w=W0, dw=DW0,
+                       req_id=ReqId, timeout=Timeout, options = Options0},
+    {ok,prepare,StateData,0}.
 
 %%
 %% Given an expanded proplist of options, take the first entry for any given key
@@ -164,7 +130,53 @@ handle_options([{returnbody, false}|T], State) ->
 handle_options([{_,_}|T], State) -> handle_options(T, State).
 
 %% @private
-initialize(timeout, StateData0=#state{robj=RObj0, req_id=ReqId, client=Client,
+prepare(timeout, StateData0 = #state{robj = RObj0}) ->
+    {ok,Ring} = riak_core_ring_manager:get_my_ring(),
+    BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj0), Ring),
+    {ok, RClient} = riak:local_client(),
+    
+    StateData = StateData0#state{ring=Ring,
+                       bucket_props = BucketProps,
+                       rclient=RClient},
+    {next_state, validate, StateData, 0}.
+    
+validate(timeout, StateData0 = #state{robj = RObj0, w=W0, dw=DW0, bucket_props = BucketProps, 
+                                     options = Options0, req_id = ReqId, client = Client}) ->
+    N = proplists:get_value(n_val,BucketProps),
+    W = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
+
+    %% Expand the DW value, but also ensure that DW <= W
+    DW1 = riak_kv_util:expand_rw_value(dw, DW0, BucketProps, N),
+    %% If no error occurred expanding DW also ensure that DW <= W
+    case DW1 of
+         error ->
+             DW = error;
+         _ ->
+             DW = erlang:min(DW1, W)
+    end,
+
+    if
+        W =:= error ->
+            Client ! {ReqId, {error, {w_val_violation, W0}}},
+            {stop, normal, none};
+        DW =:= error ->
+            Client ! {ReqId, {error, {dw_val_violation, DW0}}},
+            {stop, normal, none};
+        (W > N) or (DW > N) ->
+            Client ! {ReqId, {error, {n_val_violation, N}}},
+            {stop, normal, none};
+        true ->
+            AllowMult = proplists:get_value(allow_mult,BucketProps),
+            Bucket = riak_object:bucket(RObj0),
+            Key = riak_object:key(RObj0),
+            StateData1 = StateData0#state{n=N, w=W, dw=DW, bkey={Bucket, Key},
+                                         allowmult=AllowMult},
+            Options = flatten_options(proplists:unfold(Options0 ++ ?DEFAULT_OPTS), []),
+            StateData = handle_options(Options, StateData1),
+            {next_state,execute,StateData,0}
+    end.
+
+execute(timeout, StateData0=#state{robj=RObj0, req_id=ReqId, client=Client,
                                       update_last_modified=UpdateLastMod,
                                       timeout=Timeout, ring=Ring, bkey={Bucket,Key}=BKey,
                                       rclient=RClient, vnode_options=VnodeOptions}) ->
