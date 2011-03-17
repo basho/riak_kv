@@ -183,7 +183,7 @@ find_input(BKey, [#riak_kv_map_input{bkey=BKey}=H|_], CompleteSet) ->
 find_input(BKey, [_|T], CompleteSet) ->
     find_input(BKey, T, CompleteSet).
 
-run_map(VNode, Id, {erlang, {map, FunTerm, Arg, _}}, KD, Obj0, Phase, _VM, CacheKey, CacheRef) ->
+run_map(VNode, Id, {Language, {map, FunTerm, Arg, _}}, KeyData, Obj0, Phase, VM, CacheKey, CacheRef) ->
     Obj = case Obj0 of
               {{error,notfound},_} ->
                   {error, notfound};
@@ -191,20 +191,30 @@ run_map(VNode, Id, {erlang, {map, FunTerm, Arg, _}}, KD, Obj0, Phase, _VM, Cache
                   Obj0
           end,
     BKey = obj_bkey(Obj0),
+    case Language of 
+        erlang ->
+            run_erlang_map(VNode, Id, FunTerm, Arg, KeyData, Obj, Phase, CacheKey, CacheRef, BKey);
+        javascript ->
+            run_javascript_map(VNode, Id, FunTerm, Arg, KeyData, Obj, Phase, VM, CacheKey, CacheRef, BKey);
+        _ ->
+            unsupported_language
+    end.
+
+run_erlang_map(VNode, Id, FunTerm, Arg, KeyData, Obj, Phase, CacheKey, CacheRef, BKey) ->
     Result = try
                  case FunTerm of
                      {qfun, F} ->
-                         {ok, (F)(Obj, KD, Arg)};
+                         {ok, (F)(Obj, KeyData, Arg)};
                      {modfun, M, F} ->
-                         {ok, M:F(Obj, KD, Arg)}
+                         {ok, M:F(Obj, KeyData, Arg)}
                  end
              catch C:R ->
-                     Reason = {C, R, erlang:get_stacktrace()},
+                     Reason = {C, R, erlang:get_stacktrace()},                 
                      {error, Reason}
              end,
     case Result of
         {ok, Value} ->
-            riak_kv_phase_proto:mapexec_result(Phase, VNode, obj_bkey(Obj0), Value, Id),
+            riak_kv_phase_proto:mapexec_result(Phase, VNode, BKey, Value, Id),
             if
                 is_list(Value) ->
                     case CacheKey of
@@ -218,32 +228,39 @@ run_map(VNode, Id, {erlang, {map, FunTerm, Arg, _}}, KD, Obj0, Phase, _VM, Cache
             end;
         {error, _} ->
             riak_kv_phase_proto:mapexec_error(Phase, Result, Id)
-    end;
+    end.
 
-run_map(VNode, Id, {javascript, {map, _FunTerm, _Arg, _}}, KD, {{error, notfound},_}=Obj, Phase, _VM, _CacheKey, _CacheRef) ->
-    BKey = obj_bkey(Obj),
-    riak_kv_phase_proto:mapexec_result(
-      Phase, VNode, BKey, [{not_found, BKey, KD}], Id);
-run_map(VNode, Id, {javascript, {map, FunTerm, Arg, _}}, KD, Obj, Phase, VM, CacheKey, CacheRef) ->
-    BKey = {riak_object:bucket(Obj), riak_object:key(Obj)},
-    JSArgs = [riak_object:to_json(Obj), KD, Arg],
-    JSCall = {map, FunTerm, JSArgs},
-    case riak_kv_js_vm:batch_blocking_dispatch(VM, JSCall) of
-        {ok, Result} ->
-            riak_kv_phase_proto:mapexec_result(Phase, VNode, obj_bkey(Obj), Result, Id),
-            if
-                is_list(Result) ->
-                    case CacheKey of
-                        not_cached ->
-                            ok;
-                        _ ->
-                            riak_kv_lru:put(CacheRef, BKey, CacheKey, Result)
+run_javascript_map(VNode, Id, FunTerm, Arg, KeyData, Obj, Phase, VM, CacheKey, CacheRef, BKey) ->
+    ObjectJson = 
+        try
+            riak_object:to_json(Obj)
+        catch C:R ->
+                Reason = {C, R, erlang:get_stacktrace()},              
+                {error, Reason}
+        end,
+    case ObjectJson of 
+        {struct, _} ->
+            JSArgs = [riak_object:to_json(Obj), KeyData, Arg],
+            JSCall = {map, FunTerm, JSArgs},
+            case riak_kv_js_vm:batch_blocking_dispatch(VM, JSCall) of    
+                {ok, Result} ->
+                    riak_kv_phase_proto:mapexec_result(Phase, VNode, BKey, Result, Id),
+                    if
+                        is_list(Result) ->
+                            case CacheKey of
+                                not_cached ->
+                                    ok;
+                                _ ->
+                                    riak_kv_lru:put(CacheRef, BKey, CacheKey, Result)
+                            end;
+                        true ->
+                            ok
                     end;
-                true ->
-                    ok
+                DispatchError ->
+                    riak_kv_phase_proto:mapexec_error(Phase, DispatchError, Id)
             end;
-        Error ->
-            riak_kv_phase_proto:mapexec_error(Phase, Error, Id)
+        JsonError ->
+            riak_kv_phase_proto:mapexec_error(Phase, JsonError, Id)
     end.
 
 split(L) when length(L) =< 5 ->
