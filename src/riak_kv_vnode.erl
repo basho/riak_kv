@@ -320,7 +320,7 @@ prepare_put(#state{mod=Mod,modstate=ModState}, #putargs{bkey=BKey,
                                                         reqid=ReqID,
                                                         bprops=BProps,
                                                         prunetime=PruneTime}) ->
-    case syntactic_put_merge(Mod, ModState, BKey, RObj, ReqID) of
+    case syntactic_put_merge(Mod, ModState, BKey, RObj, ReqID, PruneTime) of
         {oldobj, OldObj} ->
             {false, OldObj};
         {newobj, NewObj} ->
@@ -383,12 +383,15 @@ select_newest_content(Mult) ->
 
 %% @private
 syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId) ->
+    syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId, vclock:timestamp()).
+
+syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId, StartTime) ->
     case Mod:get(ModState, BKey) of
         {error, notfound} -> {newobj, Obj1};
         {ok, Val0} ->
             Obj0 = binary_to_term(Val0),
             ResObj = riak_object:syntactic_merge(
-                       Obj0,Obj1,term_to_binary(ReqId)),
+                       Obj0,Obj1,term_to_binary(ReqId)), StartTime,
             case riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
                 true -> {oldobj, ResObj};
                 false -> {newobj, ResObj}
