@@ -137,7 +137,7 @@ check() ->
 %% The sequence numbers let quickcheck re-order the messages so that
 %% different vnode responses are interleaved.
 %%
-%% {FirstResp, FirstSeq, SecondResp, SecondSeq}
+%% {notfound|{ok, lineage()}, FirstResp, FirstSeq, SecondResp, SecondSeq}
 
 vnodeputresps() ->
     fsm_eqc_util:not_empty(fsm_eqc_util:longer_list(2, vnodeputresp())).
