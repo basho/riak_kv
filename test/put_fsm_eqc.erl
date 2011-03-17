@@ -24,7 +24,8 @@
 %%
 %% $ erl -name t -pa deps/*/{ebin,.eunit} .eunit
 %% (t@jons-macpro.local)1> put_fsm_eqc:prepare().
-%% (t@jons-macpro.local)2> put_fsm_eqc:check().
+%% (t@jons-macpro.local)2> put_fsm_eqc:test(100).
+%% (t@jons-macpro.local)3> put_fsm_eqc:check().
 %%
 %% Remember, if the eunit test failed the current_counterexample file is under .eunit dir
 %%
