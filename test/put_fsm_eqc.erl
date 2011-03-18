@@ -77,7 +77,7 @@ eqc_test_() ->
                                                             []}, 5)),
         %% Run the quickcheck tests
         {timeout, 60000, % do not trust the docs - timeout is in msec
-         ?_assertEqual(true, quickcheck(numtests(250000, ?QC_OUT(prop_basic_put()))))}
+         ?_assertEqual(true, quickcheck(numtests(250, ?QC_OUT(prop_basic_put()))))}
        ]
       }
      ]
@@ -235,7 +235,7 @@ prop_basic_put() ->
              Options, AllowMult, Precommit, Postcommit}, 
             {w_dw_seed(), w_dw_seed(),choose(0,4096),
              fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
-             vnodeputresps(), fsm_eqc_util:some_up_node_status(10),
+             vnodeputresps(), fsm_eqc_util:nodes_status(10),
              options(),bool(), precommit_hooks(), postcommit_hooks()},
     begin
         N = length(VPutResp),

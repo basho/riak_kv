@@ -146,8 +146,10 @@ add_tombstone(Obj) ->
                 
 
 some_up_node_status(NumNodes) ->
-  at_least_one_up(longer_list(NumNodes, node_status())).
+    at_least_one_up(nodes_status(NumNodes)).
 
+nodes_status(NumNodes) ->
+    non_empty(longer_list(NumNodes, node_status())).
 
 pow(_, 0) -> 1;
 pow(A, N) -> A * pow(A, N - 1).

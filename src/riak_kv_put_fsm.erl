@@ -62,12 +62,12 @@
                 postcommit=[] :: list(),
                 update_last_modified :: boolean(),
                 bucket_props:: list(),
-                num_w = 0,
-                num_dw = 0,
-                num_fail = 0,
-                w_fail_threshold,
-                dw_fail_threshold,
-                final_obj
+                num_w = 0 :: non_neg_integer(),
+                num_dw = 0 :: non_neg_integer(),
+                num_fail = 0 :: non_neg_integer(),
+                w_fail_threshold :: undefined | non_neg_integer(),
+                dw_fail_threshold :: undefined | non_neg_integer(),
+                final_obj :: undefined | riak_object:riak_object()
                }).
 
 %% In place only for backwards compatibility
