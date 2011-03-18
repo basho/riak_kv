@@ -29,3 +29,13 @@ function precommit_crash(object)
 {
     throw "wobbler";
 }
+
+function postcommit_ok(object)
+{
+    return ok;
+}
+
+function postcommit_crash(object)
+{
+    throw "postcommit_crash";
+}

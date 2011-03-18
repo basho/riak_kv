@@ -253,7 +253,7 @@ waiting_vnode(Result, StateData) ->
 %% @private
 postcommit(timeout, StateData = #state{postcommit = []}) ->
     {stop, normal, StateData};
-postcommit(timeout, StateData = #state{postcommit = [{struct, Hook} | Rest],
+postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
                                        final_obj = ReplyObj}) ->
     %% Process the next hook - gives sys:get_status messages a chance if hooks
     %% take a long time.  No checking error returns for postcommit hooks.
@@ -379,7 +379,7 @@ update_stats(#state{startnow=StartNow}) ->
 %% Run the precommit hooks
 invoke_precommit([], RObj) ->
     riak_object:apply_updates(RObj);
-invoke_precommit([{struct, Hook} | Rest], RObj) ->
+invoke_precommit([Hook | Rest], RObj) ->
     Result = decode_precommit(invoke_hook(Hook, RObj)),
     case Result of
         Obj when element(1, Obj) == r_object ->
@@ -393,13 +393,15 @@ invoke_precommit([{struct, Hook} | Rest], RObj) ->
 %% {Lang, Called, Result}
 %% Where Called = {Mod, Fun} if Lang = erlang
 %%       Called = JSName if Lang = javascript
-invoke_hook(Hook, RObj) ->
+invoke_hook({struct, Hook}, RObj) ->
     Mod = proplists:get_value(<<"mod">>, Hook),
     Fun = proplists:get_value(<<"fun">>, Hook),
     JSName = proplists:get_value(<<"name">>, Hook),
-    invoke_hook(Mod, Fun, JSName, RObj).
+    invoke_hook(Mod, Fun, JSName, RObj);
+invoke_hook(HookDef, _RObj) ->
+    {error, {invalid_hook_def, HookDef}}.
 
-invoke_hook(Mod0, Fun0, undefined, RObj) ->
+invoke_hook(Mod0, Fun0, undefined, RObj) when Mod0 /= undefined, Fun0 /= undefined ->
     Mod = binary_to_atom(Mod0, utf8),
     Fun = binary_to_atom(Fun0, utf8),
     try
@@ -408,13 +410,13 @@ invoke_hook(Mod0, Fun0, undefined, RObj) ->
         Class:Exception ->
             {erlang, {Mod, Fun}, {'EXIT', Mod, Fun, Class, Exception}}
     end;
-invoke_hook(undefined, undefined, JSName, RObj) ->
+invoke_hook(undefined, undefined, JSName, RObj) when JSName /= undefined ->
     {js, JSName, riak_kv_js_manager:blocking_dispatch(?JSPOOL_HOOK, {{jsfun, JSName}, RObj}, 5)};
 invoke_hook(_, _, _, _) ->
-    {error, invalid_hook_def}.
+    {error, {invalid_hook_def, no_hook}}.
 
 decode_precommit({erlang, {Mod, Fun}, Result}) ->
-   case Result of
+    case Result of
         fail ->
             fail;
         {fail, _Reason} ->
@@ -448,8 +450,8 @@ decode_precommit({js, JSName, Result}) ->
                                    [Error]),
             fail
     end;
-decode_precommit(ErrorReason) ->
-    ErrorReason.
+decode_precommit({error, Reason}) ->
+    {fail, Reason}.
 
 get_hooks(HookType, BucketProps) ->
     Hooks = proplists:get_value(HookType, BucketProps, []),
