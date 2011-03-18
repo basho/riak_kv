@@ -224,7 +224,21 @@ execute(timeout, StateData0=#state{robj=RObj0, req_id = ReqId,
                           robj=RObj1,
                           replied_w=[], replied_dw=[], replied_fail=[],
                           tref=TRef},
-            {next_state,waiting_vnode,StateData}
+            case enough_results(StateData) of
+                {reply, Reply, StateData1} ->
+                    client_reply(Reply, StateData1),
+                    update_stats(StateData1),
+                    case Reply of
+                        ok ->
+                            {next_state, postcommit, StateData1, 0};
+                        {ok, _} ->
+                            {next_state, postcommit, StateData1, 0};
+                        _ ->
+                            {stop, normal, StateData1}
+                    end;
+                {false, StateData} ->
+                    {next_state, waiting_vnode, StateData}
+            end
     end.
 
 %% @private
