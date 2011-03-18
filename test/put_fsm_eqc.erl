@@ -73,8 +73,8 @@ eqc_test_() ->
                                                              <<"function() { return 123; }">>},
                                                             []}, 5)),
         %% Run the quickcheck tests
-        {timeout, 60000000, % do not trust the docs - timeout is in msec
-         ?_assertEqual(true, quickcheck(numtests(250, ?QC_OUT(prop_basic_put()))))}
+        {timeout, 60000, % do not trust the docs - timeout is in msec
+         ?_assertEqual(true, quickcheck(numtests(250000, ?QC_OUT(prop_basic_put()))))}
        ]
       }
      ]
@@ -406,12 +406,12 @@ expect(H, N, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Object, NodeSt
             DW =:= garbage ->
                 {error, {dw_val_violation, garbage}};
 
-            UpNodes < MinNodes ->
-                {error,{insufficient_vnodes,UpNodes,need,MinNodes}};
-           
             RealW > N orelse EffDW > N ->
                 {error, {n_val_violation, N}};
 
+            UpNodes < MinNodes ->
+                {error,{insufficient_vnodes,UpNodes,need,MinNodes}};
+           
            true ->
                 HNoTimeout = filter_timeouts(H),
                 expect(HNoTimeout, {H, N, RealW, EffDW, 0, 0, 0, ReturnObj, Precommit})

@@ -194,7 +194,8 @@ send_vput_replies([{LIdx, FirstResp} | Rest], Idx, Sender, ReqId, PutObj, Option
     Rest2 = fail_on_bad_obj(LIdx, PutObj, Rest),
     send_vput_extra(Rest2, Sender, ReqId, Options, NewState2).
 
-send_vput_extra([], _Sender, _ReqId, _Options, State) ->
+send_vput_extra([], {fsm, undefined, Pid} = _Sender, _ReqId, _Options, State) ->
+    Pid ! request_timeout, % speed things along by sending the request timeout
     State#state{vput_replies = []};
 send_vput_extra([{LIdx, {dw, CurObj, _CurLin}} | Rest], Sender, ReqId, Options,
                 #state{lidx_map = LIdxMap} = State) ->
