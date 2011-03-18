@@ -320,7 +320,7 @@ to_json({{error, notfound}, {Bucket, Key}}) ->
               {<<"vclock">>, <<"">>},
               {<<"values">>,
                [{struct,
-                 [{<<"data">>, {struct, [{<<"error">>, <<"notfound">>}]}}]
+                 [{<<"data">>, <<"{\"error\":\"notfound\"}">>}]
                 }]
               }]};
 to_json(Obj=#r_object{}) ->
