@@ -33,6 +33,7 @@
 -behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
 -export([start/6,start/7]).
+-export([start_link/6,start_link/7]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
 -export([initialize/2,waiting_vnode_w/2,waiting_vnode_dw/2]).
@@ -62,11 +63,19 @@
                 update_last_modified :: boolean()
                }).
 
+%% In place only for backwards compatibility
 start(ReqId,RObj,W,DW,Timeout,From) ->
-    start(ReqId,RObj,W,DW,Timeout,From,[]).
+    start_link(ReqId,RObj,W,DW,Timeout,From,[]).
 
+%% In place only for backwards compatibility
 start(ReqId,RObj,W,DW,Timeout,From,Options) ->
-    gen_fsm:start(?MODULE, [ReqId,RObj,W,DW,Timeout,From,Options], []).
+    start_link(ReqId,RObj,W,DW,Timeout,From,Options).
+
+start_link(ReqId,RObj,W,DW,Timeout,From) ->
+    start_link(ReqId,RObj,W,DW,Timeout,From,[]).
+
+start_link(ReqId,RObj,W,DW,Timeout,From,Options) ->
+    gen_fsm:start_link(?MODULE, [ReqId,RObj,W,DW,Timeout,From,Options], []).
 
 %% @private
 init([ReqId,RObj0,W0,DW0,Timeout,Client,Options0]) ->
@@ -410,7 +419,7 @@ invoke_hook(precommit, undefined, undefined, JSName, RObj) ->
 invoke_hook(postcommit, Mod0, Fun0, undefined, Obj) ->
     Mod = binary_to_atom(Mod0, utf8),
     Fun = binary_to_atom(Fun0, utf8),
-    proc_lib:spawn(fun() -> wrap_hook(Mod, Fun, Obj) end);
+    proc_lib:spawn_link(fun() -> wrap_hook(Mod, Fun, Obj) end);
 invoke_hook(postcommit, undefined, undefined, _JSName, _Obj) ->
     error_logger:warning_msg("Javascript post-commit hooks aren't implemented");
 %% NOP to handle all other cases
@@ -452,25 +461,29 @@ start_test_() ->
     %% Start erlang node
     net_kernel:start([testnode, shortnames]),
     %% Execute the test cases
-    { foreach, 
-      fun setup/0,
-      fun cleanup/1,
-      [
-       fun successful_start/0,
-       fun invalid_w_start/0,
-       fun invalid_dw_start/0,
-       fun invalid_n_val_start/0
-      ]
+    {spawn,
+     { foreach, 
+       fun setup/0,
+       fun cleanup/1,
+       [
+        fun successful_start/0,
+        fun invalid_w_start/0,
+        fun invalid_dw_start/0,
+        fun invalid_n_val_start/0
+       ]
+     }
     }.
 
 successful_start() ->
     W = DW = 1,
+    process_flag(trap_exit, true),
     {ok, _Pid} = put_fsm_start(W, DW).
 
 invalid_w_start() ->
     W = <<"abc">>,
     DW = 1,
-    {error, {bad_return_value, {stop, normal, none}}} = put_fsm_start(W, DW),
+    process_flag(trap_exit, true),
+    ?assertEqual({error, {bad_return_value, {stop, normal, none}}}, put_fsm_start(W, DW)),
     %% Wait for error response
     receive
         {_RequestId, Result} ->
@@ -483,7 +496,8 @@ invalid_w_start() ->
 invalid_dw_start() ->
     W = 1,
     DW = <<"abc">>,
-    {error, {bad_return_value, {stop, normal, none}}} = put_fsm_start(W, DW),
+    process_flag(trap_exit, true),
+    ?assertEqual({error, {bad_return_value, {stop, normal, none}}}, put_fsm_start(W, DW)),
     %% Wait for error response
     receive
         {_RequestId, Result} ->
@@ -496,7 +510,8 @@ invalid_dw_start() ->
 invalid_n_val_start() ->
     W = 4,
     DW = 1,
-    {error, {bad_return_value, {stop, normal, none}}} = put_fsm_start(W, DW),
+    process_flag(trap_exit, true),
+    ?assertEqual({error, {bad_return_value, {stop, normal, none}}}, put_fsm_start(W, DW)),
     %% Wait for error response
     receive
         {_RequestId, Result} ->
@@ -511,10 +526,26 @@ put_fsm_start(W, DW) ->
     RequestId = erlang:phash2(erlang:now()),
     RObj = riak_object:new(<<"testbucket">>, <<"testkey">>, <<"testvalue">>),
     Timeout = 60000,
-    riak_kv_put_fsm:start(RequestId, RObj, W, DW, Timeout, self()).
+    riak_kv_put_fsm:start_link(RequestId, RObj, W, DW, Timeout, self()).
 
 setup() ->
     %% Start the applications required for riak_kv to start
+    %% Start net_kernel - hopefully can remove this after FSM is purified..
+    State = case net_kernel:stop() of
+                {error, not_allowed} ->
+                    running;
+                _X ->
+                    %% Make sure epmd is started - will not be if erl -name has
+                    %% not been run from the commandline.
+                    os:cmd("epmd -daemon"),
+                    timer:sleep(100),
+                    case net_kernel:start(['kvputfsm@localhost', shortnames]) of
+                        {ok, _Pid} ->
+                            started;
+                        ER ->
+                            throw({net_kernel_start_failed, ER})
+                    end
+            end,
     application:start(sasl),
     application:start(crypto),
     application:start(riak_sysmon),
@@ -528,6 +559,8 @@ setup() ->
     %% Set some missing env vars that are normally 
     %% part of release packaging.
     application:set_env(riak_core, ring_creation_size, 64),
+    application:set_env(riak_core, default_bucket_props, []),
+    riak_core_bucket:append_bucket_defaults([{n_val, 3}]),
     application:set_env(riak_kv, storage_backend, riak_kv_ets_backend),
     %% Create a fresh ring for the test
     Ring = riak_core_ring:fresh(),
@@ -535,9 +568,9 @@ setup() ->
     %% Start riak_kv
     application:start(riak_kv),
     timer:sleep(500),
-    ok.
+    State.
 
-cleanup(_Pid) ->
+cleanup(State) ->
     application:stop(riak_kv),
     application:stop(os_mon),
     application:stop(mochiweb),
@@ -548,6 +581,12 @@ cleanup(_Pid) ->
     application:stop(riak_sysmon),
     application:stop(crypto),
     application:stop(sasl),    
+    case State of
+        started ->
+            ok = net_kernel:stop();
+        _ ->
+            ok
+    end,
 
     %% Reset the riak_core vnode_modules
     application:set_env(riak_core, vnode_modules, []).

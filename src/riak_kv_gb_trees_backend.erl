@@ -37,7 +37,7 @@
 % @spec start(Partition :: integer(), Config :: integer()) ->
 %                        {ok, state()} | {{error, Reason :: term()}, state()}
 start(_Partition, _Config) ->
-    Pid = spawn(fun() -> 
+    Pid = spawn_link(fun() -> 
         {A1,A2,A3} = now(),
         random:seed(A1, A2, A3),
         tree_loop(gb_trees:empty()) 
@@ -47,8 +47,15 @@ start(_Partition, _Config) ->
 % @spec stop(state()) -> ok | {error, Reason :: term()}
 stop(#state { pid=Pid }) -> 
     Ref = make_ref(),
-    Pid ! {stop, self(), Ref},
-    receive {stop_response, Result, Ref} -> Result end.
+    %% Make sure the backend process is alive or 
+    %% the call to receive will wait indefinitely.
+    case is_process_alive(Pid) of
+        true ->
+            Pid ! {stop, self(), Ref},
+            receive {stop_response, Result, Ref} -> Result end;
+        false ->
+            ok
+    end.
 
 % get(state(), Key :: binary()) ->
 %   {ok, Val :: binary()} | {error, Reason :: term()}

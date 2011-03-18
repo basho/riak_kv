@@ -212,8 +212,15 @@ reassign_nodes(Status, Ring) ->
         end, Ring, lists:zip(Status, Ids)).
 
 
-wait_for_req_id(ReqId) ->
+wait_for_req_id(ReqId, Pid) ->
     receive
+        {'EXIT', Pid, _Reason} ->
+            %{exit, _Reason};
+            %% Mark as timeout for now - no reply is coming, so why wait
+            timeout;
+        {'EXIT', _OtherPid, _Reason} ->
+            %% Probably from previous test death
+            wait_for_req_id(ReqId, Pid);
         {ReqId, {ok, Reply1}} ->
             {ok, Reply1};
         {ReqId, Error1} ->

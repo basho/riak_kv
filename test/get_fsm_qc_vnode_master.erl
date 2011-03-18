@@ -98,9 +98,10 @@ handle_call({log_postcommit, Obj}, _From, State) -> %
 handle_call(get_postcommits, _From, State) -> %
     {reply, lists:reverse(State#state.postcommit), State};
 
-handle_call(?VNODE_REQ{index=Idx, request=?KV_DELETE_REQ{}=Msg},
+handle_call(Req=?VNODE_REQ{request=?KV_DELETE_REQ{}},
             _From, State) ->
-    {reply, ok, State#state{put_history=[{Idx,Msg}|State#state.put_history]}};
+    {noreply, NewState} = handle_cast(Req, State),
+    {reply, ok, NewState};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -129,6 +130,9 @@ handle_cast(?VNODE_REQ{index=Idx,
     State1 = send_vput_replies(State#state.vput_replies, Idx,
                                Sender, ReqId, PutObj, Options, State),
     {noreply, State1#state{put_history=[{Idx,Msg}|State#state.put_history]}};    
+
+handle_cast(?VNODE_REQ{index=Idx, request=?KV_DELETE_REQ{}=Msg}, State) ->
+    {noreply, State#state{put_history=[{Idx,Msg}|State#state.put_history]}};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 

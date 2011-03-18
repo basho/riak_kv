@@ -89,6 +89,10 @@ setup() ->
                 {error, not_allowed} ->
                     running;
                 _ ->
+                    %% Make sure epmd is started - will not be if erl -name has
+                    %% not been run from the commandline.
+                    os:cmd("epmd -daemon"),
+                    timer:sleep(100),
                     {ok, _Pid} = net_kernel:start(['putfsmeqc@localhost', shortnames]),
                     started
             end,
@@ -250,16 +254,18 @@ prop_basic_put() ->
         set_bucket_props(N, AllowMult, Precommit, Postcommit),
 
         %% Run the test and wait for all processes spawned by it to settle.
-        {ok, PutPid} = riak_kv_put_fsm:start(?REQ_ID,
-                                             Object,
-                                             W,
-                                             DW,
-                                             200,
-                                             self(),
-                                             Options),
+        process_flag(trap_exit, true),
+        {ok, PutPid} = riak_kv_put_fsm:start_link(?REQ_ID,
+                                                  Object,
+                                                  W,
+                                                  DW,
+                                                  200,
+                                                  self(),
+                                                  Options),
         ok = riak_kv_test_util:wait_for_pid(PutPid),
         ok = riak_kv_test_util:wait_for_children(PutPid),
-        Res = fsm_eqc_util:wait_for_req_id(?REQ_ID),
+        Res = fsm_eqc_util:wait_for_req_id(?REQ_ID, PutPid),
+        process_flag(trap_exit, false),
 
         %% Get the history of what happened to the vnode master
         H = get_fsm_qc_vnode_master:get_reply_history(),
@@ -276,8 +282,8 @@ prop_basic_put() ->
            begin
                io:format(user, "NodeStatus: ~p\n", [NodeStatus]),
                io:format(user, "VPutReplies = ~p\n", [VPutReplies]),
-               io:format(user, "Q: ~p N: ~p W:~p DW: ~p EffDW: ~p\n",
-                         [Q, N, W, DW, EffDW]),
+               io:format(user, "Q: ~p N: ~p W:~p DW: ~p EffDW: ~p Pid: ~p\n",
+                         [Q, N, W, DW, EffDW, PutPid]),
                io:format(user, "Object: ~p\n", [Object]),
                io:format(user, "Expected Object: ~p\n", [ExpectObject]),
                %% io:format(user, "Expected Object Given Lineage: ~p\n", [ExpectObjectGivenLineage]),

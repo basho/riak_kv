@@ -68,6 +68,11 @@ status([]) ->
     end.
 
 reip([OldNode, NewNode]) ->
+    %% reip is called when node is down (so riak_core_ring_manager is not running),
+    %% so it has to use the basic ring operations.
+    %%
+    %% Do *not* convert to use riak_core_ring_manager:ring_trans.
+    %%
     application:load(riak_core),
     RingStateDir = app_helper:get_env(riak_core, ring_state_dir),
     {ok, RingFile} = riak_core_ring_manager:find_latest_ringfile(),

@@ -10,6 +10,8 @@
 -define(DEFAULT_BUCKET_PROPS,
         [{allow_mult, false},
          {chash_keyfun, {riak_core_util, chash_std_keyfun}}]).
+-define(QC_OUT(P),
+        eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
 %% Generators
 
@@ -83,17 +85,20 @@ prop_basic_get() ->
     
         [{_,Object}|_] = Objects,
     
-        {ok, GetPid} = riak_kv_get_fsm:start(ReqId,
+        {ok, GetPid} = riak_kv_get_fsm:start_link(ReqId,
                             riak_object:bucket(Object),
                             riak_object:key(Object),
                             R,
                             200,
                             self()),
 
+        process_flag(trap_exit, true),
         ok = riak_kv_test_util:wait_for_pid(GetPid),
         % Give read repairs and deletes a chance to go through
         timer:sleep(5),
-        Res = fsm_eqc_util:wait_for_req_id(ReqId),
+        Res = fsm_eqc_util:wait_for_req_id(ReqId, GetPid),
+        process_flag(trap_exit, false),
+
         History = get_fsm_qc_vnode_master:get_history(),
         RepairHistory = get_fsm_qc_vnode_master:get_put_history(),
         Ok         = length([ ok || {_, {ok, _}} <- History ]),
@@ -139,7 +144,7 @@ test() ->
     test(100).
 
 test(N) ->
-    quickcheck(numtests(N, prop_basic_get())).
+    quickcheck(numtests(N, ?QC_OUT(prop_basic_get()))).
 
 do_repair(_Heads, notfound) ->
     true;
@@ -265,10 +270,10 @@ expect(H, N, R, NotFounds, Oks, Errs, Heads) ->
     
 eqc_test_() ->
     {spawn,
-    {timeout, 20, ?_test(
+    {timeout, 200, ?_test(
         begin
             fsm_eqc_util:start_mock_servers(),
-            ?assert(test(30))
+            ?assert(test(50))
         end)
     }}.
 

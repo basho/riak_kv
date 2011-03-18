@@ -247,7 +247,7 @@ get(Bucket, Key, R, Timeout) when is_binary(Bucket), is_binary(Key),
                                   is_integer(Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
-    spawn(Node, riak_kv_get_fsm, start, [ReqId,Bucket,Key,R,Timeout,Me]),
+    riak_kv_get_fsm_sup:start_get_fsm(Node, [ReqId, Bucket, Key, R, Timeout, Me]),
     wait_for_reqid(ReqId, Timeout).
 
 %% @spec put(RObj :: riak_object:riak_object()) ->
@@ -308,7 +308,7 @@ put(RObj, W, DW, Timeout, Options) ->
     R0 = riak_object:increment_vclock(RObj, ClientId),
     Me = self(),
     ReqId = mk_reqid(),
-    spawn(Node, riak_kv_put_fsm, start, [ReqId,R0,W,DW,Timeout,Me,Options]),
+    riak_kv_put_fsm_sup:start_put_fsm(Node, [ReqId, R0, W, DW, Timeout, Me, Options]),
     wait_for_reqid(ReqId, Timeout).
 
 %% @spec delete(riak_object:bucket(), riak_object:key()) ->
@@ -346,7 +346,7 @@ delete(Bucket,Key,RW) -> delete(Bucket,Key,RW,?DEFAULT_TIMEOUT).
 delete(Bucket,Key,RW,Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
-    spawn(Node, riak_kv_delete, delete, [ReqId,Bucket,Key,RW,Timeout,Me]),
+    riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, RW, Timeout, Me]),
     wait_for_reqid(ReqId, Timeout).
 
 %% @spec list_keys(riak_object:bucket()) ->
@@ -373,8 +373,7 @@ list_keys(Bucket, Timeout, ErrorTolerance) ->
     Me = self(),
     ReqId = mk_reqid(),
     FSM_Timeout = trunc(Timeout / 8),
-    spawn(Node, riak_kv_keys_fsm, start,
-          [ReqId,Bucket,FSM_Timeout,plain,ErrorTolerance,Me]),
+    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [ReqId, Bucket, FSM_Timeout, plain, ErrorTolerance, Me]),
     wait_for_listkeys(ReqId, Timeout).
 
 stream_list_keys(Bucket) ->
@@ -410,8 +409,7 @@ stream_list_keys(Bucket0, Timeout, ErrorTolerance, Client, ClientType) ->
     ReqId = mk_reqid(),
     case build_filter(Bucket0) of
         {ok, Filter} ->
-            spawn(Node, riak_kv_keys_fsm, start,
-                  [ReqId,Filter,Timeout,ClientType,ErrorTolerance,Client]),
+            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [ReqId, Filter, Timeout, ClientType, ErrorTolerance, Client]),
             {ok, ReqId};
         Error ->
             Error

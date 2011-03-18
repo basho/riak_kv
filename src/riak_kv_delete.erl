@@ -54,7 +54,7 @@ delete(ReqId,Bucket,Key,RW0,Timeout,Client) ->
                     Reply = C:put(NewObj, RW, RW, RemainingTime),
                     case Reply of
                         ok -> 
-                            spawn(
+                            spawn_link(
                               fun()-> reap(Bucket,Key,RemainingTime) end);
                         _ -> nop
                     end,
@@ -80,16 +80,15 @@ reap(Bucket, Key, Timeout) ->
 -ifdef(TEST).
 
 delete_test_() ->
-    %% Start erlang node
-    net_kernel:start([testnode, shortnames]),
     %% Execute the test cases
+    {spawn, [
     { foreach, 
       fun setup/0,
       fun cleanup/1,
       [
        fun invalid_rw_delete/0
       ]
-    }.
+    }]}.
 
 invalid_rw_delete() ->
     RW = <<"abc">>,
@@ -98,7 +97,7 @@ invalid_rw_delete() ->
     Bucket = <<"testbucket">>,
     Key = <<"testkey">>,
     Timeout = 60000,
-    riak_kv_delete:delete(RequestId, Bucket, Key, RW, Timeout, self()),
+    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, RW, Timeout, self()]),
     %% Wait for error response
     receive
         {_RequestId, Result} ->
@@ -109,42 +108,42 @@ invalid_rw_delete() ->
     end.                
     
 setup() ->
-    %% Start the applications required for riak_kv to start
-    application:start(sasl),
-    application:start(crypto),
-    application:start(riak_sysmon),
-    application:start(webmachine),
-    application:start(riak_core),
-    application:start(luke),
-    application:start(erlang_js),
-    application:start(mochiweb),
-    application:start(os_mon),
-    %% Set some missing env vars that are normally 
-    %% part of release packaging.
-    application:set_env(riak_core, ring_creation_size, 64),
-    application:set_env(riak_kv, storage_backend, riak_kv_ets_backend),
-    %% Create a fresh ring for the test
-    Ring = riak_core_ring:fresh(),
-    riak_core_ring_manager:set_my_ring(Ring),
-    %% Start riak_kv
-    timer:sleep(500),
-    application:start(riak_kv),
-    timer:sleep(500),
-    ok.
+    %% Start erlang node
+    net_kernel:start([testnode, shortnames]),
+    cleanup(unused_arg),
+    do_dep_apps(start, dep_apps()),
+    {ok, _Pid} = riak_kv_delete_sup:start_link(),
+    timer:sleep(500).
 
 cleanup(_Pid) ->
-    application:stop(riak_kv),
-    application:stop(os_mon),
-    application:stop(mochiweb),
-    application:stop(erlang_js),
-    application:stop(luke),
-    application:stop(riak_core),
-    application:stop(webmachine),
-    application:stop(riak_sysmon),
-    application:stop(crypto),
-    application:stop(sasl),
-    
+    do_dep_apps(stop, lists:reverse(dep_apps())),
+    catch exit(whereis(riak_kv_vnode_master), kill), %% Leaks occasionally
+    catch exit(whereis(riak_sysmon_filter), kill), %% Leaks occasionally
     %% Reset the riak_core vnode_modules
     application:set_env(riak_core, vnode_modules, []).
+
+dep_apps() ->
+    SetupFun =
+        fun(start) ->
+            %% Set some missing env vars that are normally 
+            %% part of release packaging.
+            application:set_env(riak_core, ring_creation_size, 64),
+            application:set_env(riak_kv, storage_backend, riak_kv_ets_backend),
+            %% Create a fresh ring for the test
+            Ring = riak_core_ring:fresh(),
+            riak_core_ring_manager:set_my_ring(Ring),
+            %% Start riak_kv
+            timer:sleep(500);
+           (stop) ->
+            ok
+        end,
+    XX = fun(_) -> error_logger:info_msg("Registered: ~w\n", [lists:sort(registered())]) end,
+    [sasl, crypto, riak_sysmon, webmachine, XX, riak_core, XX, luke, erlang_js,
+     mochiweb, os_mon, SetupFun, riak_kv].
+
+do_dep_apps(StartStop, Apps) ->
+    lists:map(fun(A) when is_atom(A) -> application:StartStop(A);
+                 (F)                 -> F(StartStop)
+              end, Apps).
 
 -endif.
