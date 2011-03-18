@@ -378,6 +378,8 @@ erl_phase_error(StepDef) ->
                             "\"query\":[{\"map\":{\"language\":\"javascript\","
                             "\"source\":\"function(obj) { return obj; }\", \"keep\": false}}]}">>).
 
+-define(ERLANG_STRFUN_JOB, <<"{\"inputs\": [[\"foo\", \"bar\"]], \"query\":[{\"map\":{\"language\":\"erlang\","
+                               "\"source\":\"fun(_, _, _) -> [] end.\"}}]}">>).
 
 discrete_test() ->
     {ok, _Inputs, _Query, _Timeout} = riak_kv_mapred_json:parse_request(?DISCRETE_ERLANG_JOB),
@@ -389,5 +391,8 @@ bucket_test() ->
 
 key_select_test() ->
     {ok, _Inputs, _Query, _Timeout} = riak_kv_mapred_json:parse_request(?KEY_SELECTION_JOB).
+
+strfun_test() ->
+    {ok, _Inputs, _Query, _Timeout} = riak_kv_mapred_json:parse_request(?ERLANG_STRFUN_JOB).
 
 -endif.
