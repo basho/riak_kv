@@ -392,16 +392,6 @@ expect(H, N, W, EffDW, Options, Precommit, Postcommit, Object, NodeStatus) ->
                 HNoTimeout = filter_timeouts(H),
                 expect(HNoTimeout, {H, N, W, EffDW, 0, 0, 0, ReturnObj, Precommit})
         end,
-    %% ExpectResult = case {H, N, W, EffDW} of
-    %%                    %% Workaround for bug transitioning from awaiting_w to awaiting_dw
-    %%                    {[{w,_,_},{dw,_,_},{w,_,_},{fail,_,_}], 2, 2, 1} ->
-    %%                        {error, timeout};
-    %%                    {[{w,_,_},{dw,_,_},{w,_,_},{{timeout,_},_,_}], 2, 2, 1} ->
-    %%                        {error, timeout};
-    %%                    _ ->
-    %%                        HNoTimeout = filter_timeouts(H),
-    %%                        expect(HNoTimeout, {H, N, W, EffDW, 0, 0, 0, ReturnObj, Precommit})
-    %%                end,
     ExpectPostcommit = case {ExpectResult, Postcommit} of
                            {{error, _}, _} ->
                                [];
@@ -421,102 +411,6 @@ expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit}) -
     S = {H, N, W, DW, NumW + 1, NumDW, NumFail, RObj, Precommit},
 
     case enough_replies(S) of
-        {true, Expect} when Expect == {error, too_many_fails};
-                            Expect == ok ->
-            %% Workaround for DW met before last w and only fail after last w, no more
-            %% dws
-            %% Q: 4 N: 3 W:3 DW: 1
-            %%     History: [{w,0,-885709871},
-            %%               {w,365375409332725729550921208179070754913983135744,-885709871},
-            %%               {dw,0,-885709871},
-            %%               {dw,365375409332725729550921208179070754913983135744,-885709871},
-            %%               {w,730750818665451459101842416358141509827966271488,-885709871},
-            %%               {fail,730750818665451459101842416358141509827966271488,-885709871}]
-
-            %% Q: 4 N: 3 W:2 DW: 1
-            %% History: [{w,730750818665451459101842416358141509827966271488,3289308765},
-            %%           {{timeout,1},
-            %%            1096126227998177188652763624537212264741949407232,3289308765},
-            %%           {dw,730750818665451459101842416358141509827966271488,3289308765},
-            %%           {w,0,3289308765},
-            %%           {{timeout,2},
-            %%            1096126227998177188652763624537212264741949407232,3289308765},
-            %%           {fail,0,3289308765}]
-            %% Expected: ok Res: {error,timeout}
-
-            %% Q: 4 N: 3 W:3 DW: 1
-            %% NodeStatus: [up,up,up,up]
-            %% History: [{w,365375409332725729550921208179070754913983135744,6059244597},
-            %%           {w,730750818665451459101842416358141509827966271488,6059244597},
-            %%           {dw,365375409332725729550921208179070754913983135744,6059244597},
-            %%           {dw,730750818665451459101842416358141509827966271488,6059244597},
-            %%           {w,1096126227998177188652763624537212264741949407232,6059244597},
-            %%           {{timeout,2},
-            %%            1096126227998177188652763624537212264741949407232,6059244597}]
-            %% Expected: ok Res: {error,timeout}
-
-            %% Q: 4 N: 4 W:3 DW: 1
-            %% History: [{w,730750818665451459101842416358141509827966271488,1234},
-            %%           {w,1096126227998177188652763624537212264741949407232,1234},
-            %%           {dw,730750818665451459101842416358141509827966271488, _Obj, 1234},
-            %%           {dw,1096126227998177188652763624537212264741949407232, _Obj, 1234},
-            %%           {w,0,1234},
-            %%           {w,365375409332725729550921208179070754913983135744,1234},
-            %%           {{timeout,2},0,1234},
-            %%           {{timeout,2},365375409332725729550921208179070754913983135744,1234}]
-            %% Expected: ok Res: {error,timeout}
-
-            %% Q: 4 N: 3 W:2 DW: 1
-            %% History: [{w,365375409332725729550921208179070754913983135744,1234},
-            %%           {dw,365375409332725729550921208179070754913983135744,
-            %%               {r_object,
-            %%                   <<133,95,45,109,7,80>>,
-            %%                   <<"@Ü±,0ü">>,
-            %%                   [{r_content,
-            %%                        {dict,1,16,16,8,80,48,
-            %%                            {[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]},
-            %%                            {{[],[],[],[],[],[],[],[],[],[],[],[],[],
-            %%                              [[<<"X-Riak-Last-Modified">>|
-            %%                                {1298,999408,148661}]],
-            %%                              [],[]}}},
-            %%                        <<"current">>}],
-            %%                   [{<<"bro!">>,{1,63466218608}},
-            %%                    {<<"bro2">>,{1,63466218608}},
-            %%                    {<<"sis!">>,{1,63466218608}}],
-            %%                   {dict,1,16,16,8,80,48,
-            %%                       {[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]},
-            %%                       {{[],[],[],[],[],[],[],[],[],[],[],[],[],[],
-            %%                         [[clean|true]],
-            %%                         []}}},
-            %%                   undefined},
-            %%               1234},
-            %%           {w,730750818665451459101842416358141509827966271488,1234},
-            %%           {w,1096126227998177188652763624537212264741949407232,1234},
-            %%           {{timeout,2},730750818665451459101842416358141509827966271488,1234},
-            %%           {fail,1096126227998177188652763624537212264741949407232,1234}]
-            %% Expected: ok Res: {error,timeout}
-
-            %% DWLeft = length([x || Reply <- Rest, element(1,Reply) == dw]),
-            %% OnlyWLeft = lists:all(fun({w, _, _}) -> true;
-            %%                          (_) -> false
-            %%                       end, Rest),
-            Expect2 = Expect,
-            %% Expect2 = case {NumW+1, Rest, DWLeft, OnlyWLeft} of
-            %%               {W, [{fail,_,_}|_], 0, _} when DW > 0-> 
-            %%                   {error, timeout};
-            %%               %% DW met before last w, then fail
-            %%               {X, [{w,_,_},{fail,_,_}|_], 0, _} when DW > 0, X >= W->  
-            %%                   {error, timeout};
-            %%               {W, [], 0, _} when DW > 0, NumDW >= DW ->
-            %%                   {error, timeout};
-            %%               {W, _, 0, true} when DW > 0 ->
-            %%                   {error, timeout};
-            %%               _ ->
-            %%                   Expect
-            %%           end,
-            %% io:format("NumW+1=~p W=~p Rest=~p DWLeft = ~p, OnlyWLeft=~p\n",
-            %%           [NumW+1, W, Rest, DWLeft, OnlyWLeft]),
-            maybe_add_robj(Expect2, RObj, Precommit, DW);
         {true, Expect} ->
             maybe_add_robj(Expect, RObj, Precommit, DW);
         
