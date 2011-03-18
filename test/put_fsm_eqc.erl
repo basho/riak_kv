@@ -74,7 +74,7 @@ eqc_test_() ->
                                                             []}, 5)),
         %% Run the quickcheck tests
         {timeout, 60000000, % do not trust the docs - timeout is in msec
-         ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop_basic_put()))))}
+         ?_assertEqual(true, quickcheck(numtests(250, ?QC_OUT(prop_basic_put()))))}
        ]
       }
      ]
@@ -214,6 +214,13 @@ postcommit_hooks() ->
     frequency([{5, []},
                {1, list(postcommit_hook())}]).
 
+w_dw_seed() ->
+    frequency([{5, fsm_eqc_util:largenat()},
+               {1, one},
+               {1, all},
+               {1, quorum},
+               {1, garbage}]).
+
 %%====================================================================
 %% Property
 %%====================================================================
@@ -223,14 +230,14 @@ prop_basic_put() ->
              Objects, ObjectIdxSeed,
              VPutResp, NodeStatus0,
              Options, AllowMult, Precommit, Postcommit}, 
-            {fsm_eqc_util:largenat(),fsm_eqc_util:largenat(),choose(0,4096),
+            {w_dw_seed(), w_dw_seed(),choose(0,4096),
              fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
              vnodeputresps(), fsm_eqc_util:some_up_node_status(10),
              options(),bool(), precommit_hooks(), postcommit_hooks()},
     begin
         N = length(VPutResp),
-        W = (WSeed rem N) + 1, %% W from 1..N
-        DW = DWSeed rem (W + 1), %% DW from 0..DW
+        {W, RealW} = w_dw_val(N, 1000000, WSeed),
+        {DW, RealDW}  = w_dw_val(N, RealW, DWSeed),
 
         {Q, _Ring, NodeStatus} = fsm_eqc_util:mock_ring(N + NQdiff, NodeStatus0),
 
@@ -281,16 +288,16 @@ prop_basic_put() ->
         %% Work out the expected results.  Have to determine the effective dw
         %% the FSM would have used to know when it would have stopped processing responses
         %% and returned to the client.
-        EffDW = get_effective_dw(DW, Options, Postcommit),
-        ExpectObject = expect_object(H, W, EffDW, AllowMult),
-        {Expected, ExpectedPostCommits} = expect(H, N, W, EffDW, Options,
+        EffDW = get_effective_dw(RealDW, Options, Postcommit),
+        ExpectObject = expect_object(H, RealW, EffDW, AllowMult),
+        {Expected, ExpectedPostCommits} = expect(H, N, W, RealW, DW, EffDW, Options,
                                                  Precommit, Postcommit, ExpectObject, NodeStatus),
         ?WHENFAIL(
            begin
                io:format(user, "NodeStatus: ~p\n", [NodeStatus]),
                io:format(user, "VPutReplies = ~p\n", [VPutReplies]),
-               io:format(user, "Q: ~p N: ~p W:~p DW: ~p EffDW: ~p Pid: ~p\n",
-                         [Q, N, W, DW, EffDW, PutPid]),
+               io:format(user, "Q: ~p N: ~p W:~p RealW: ~p DW: ~p RealDW: ~p EffDW: ~p Pid: ~p\n",
+                         [Q, N, W, RealW, DW, RealDW, EffDW, PutPid]),
                io:format(user, "Precommit: ~p\n", [Precommit]),
                io:format(user, "Postcommit: ~p\n", [Postcommit]),
                io:format(user, "Object: ~p\n", [Object]),
@@ -382,7 +389,7 @@ set_bucket_props(N, AllowMult, Precommit, Postcommit) ->
 %%====================================================================
 
 %% Work out the expected return value from the FSM and the expected postcommit log.
-expect(H, N, W, EffDW, Options, Precommit, Postcommit, Object, NodeStatus) ->
+expect(H, N, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Object, NodeStatus) ->
     ReturnObj = case proplists:get_value(returnbody, Options, false) of
                     true ->
                         Object;
@@ -390,15 +397,24 @@ expect(H, N, W, EffDW, Options, Precommit, Postcommit, Object, NodeStatus) ->
                         noreply
                 end,
     UpNodes =  length([x || up <- NodeStatus]),
-    MinNodes = erlang:max(W, EffDW),
+    MinNodes = erlang:max(RealW, EffDW),
     ExpectResult = 
         if
+            W =:= garbage ->
+                {error, {w_val_violation, garbage}};
+
+            DW =:= garbage ->
+                {error, {dw_val_violation, garbage}};
+
             UpNodes < MinNodes ->
                 {error,{insufficient_vnodes,UpNodes,need,MinNodes}};
            
-            true ->
+            RealW > N orelse EffDW > N ->
+                {error, {n_val_violation, N}};
+
+           true ->
                 HNoTimeout = filter_timeouts(H),
-                expect(HNoTimeout, {H, N, W, EffDW, 0, 0, 0, ReturnObj, Precommit})
+                expect(HNoTimeout, {H, N, RealW, EffDW, 0, 0, 0, ReturnObj, Precommit})
         end,
     ExpectPostcommit = case {ExpectResult, Postcommit} of
                            {{error, _}, _} ->
@@ -469,8 +485,27 @@ expect_object([{dw,_,Obj, _} | H], W, DW, AllowMult, NumW, NumDW, Objs) ->
 expect_object([_ | H], W, DW, AllowMult, NumW, NumDW, Objs) ->
     expect_object(H, W, DW, AllowMult, NumW, NumDW, Objs).
 
+%% Work out W and DW given a seed.
+%% Generate a value from 0..N+1
+w_dw_val(_N, _Min, garbage) ->
+    {garbage, 1000000};
+w_dw_val(N, Min, Seed) when is_number(Seed) ->
+    Val = Seed rem N + 2,
+    {Val, erlang:min(Min, Val)};
+w_dw_val(N, Min, Seed) ->
+    Val = case Seed of
+              one -> 1;
+              all -> N;
+              quorum -> (N div 2) + 1;
+              _ -> Seed
+          end,
+    {Seed, erlang:min(Min, Val)}.
+                  
+
 %% Work out what DW value is being effectively used by the FSM - anything
 %% that needs a result - postcommit or returnbody requires a minimum DW of 1.
+get_effective_dw(error, _Options, _Postcommit) ->
+    error;
 get_effective_dw(DW, Options, PostCommit) ->
     OptionsDW = case proplists:get_value(returnbody, Options, false) of
                      true ->
