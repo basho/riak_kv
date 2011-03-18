@@ -257,7 +257,7 @@ postcommit(timeout, StateData = #state{postcommit = [{struct, Hook} | Rest],
                                        final_obj = ReplyObj}) ->
     %% Process the next hook - gives sys:get_status messages a chance if hooks
     %% take a long time.  No checking error returns for postcommit hooks.
-    extract_invoke_hook(postcommit, Hook, ReplyObj),
+    invoke_hook(Hook, ReplyObj),
     {next_state, postcommit, StateData#state{postcommit = Rest}, 0};
 postcommit(request_timeout, StateData) -> % still process hooks even if request timed out
     {next_state, postcommit, StateData, 0};
@@ -380,7 +380,7 @@ update_stats(#state{startnow=StartNow}) ->
 invoke_precommit([], RObj) ->
     riak_object:apply_updates(RObj);
 invoke_precommit([{struct, Hook} | Rest], RObj) ->
-    Result = extract_invoke_hook(precommit, Hook, RObj),
+    Result = decode_precommit(invoke_hook(Hook, RObj)),
     case Result of
         Obj when element(1, Obj) == r_object ->
             invoke_precommit(Rest, riak_object:apply_updates(RObj));
@@ -388,30 +388,50 @@ invoke_precommit([{struct, Hook} | Rest], RObj) ->
             Result
     end.
 
-extract_invoke_hook(HookType, Hook, RObj) ->
+
+%% Invokes the hook and returns a tuple of
+%% {Lang, Called, Result}
+%% Where Called = {Mod, Fun} if Lang = erlang
+%%       Called = JSName if Lang = javascript
+invoke_hook(Hook, RObj) ->
     Mod = proplists:get_value(<<"mod">>, Hook),
     Fun = proplists:get_value(<<"fun">>, Hook),
     JSName = proplists:get_value(<<"name">>, Hook),
-    invoke_hook(HookType, Mod, Fun, JSName, RObj).
-   
-invoke_hook(_, _Mod, _fun, _JSName, undefined) ->
-    throw(no_object_for_hook);
-invoke_hook(precommit, Mod0, Fun0, undefined, RObj) ->
+    invoke_hook(Mod, Fun, JSName, RObj).
+
+invoke_hook(Mod0, Fun0, undefined, RObj) ->
     Mod = binary_to_atom(Mod0, utf8),
     Fun = binary_to_atom(Fun0, utf8),
-    Result = wrap_hook(Mod, Fun, RObj),
-    case Result of
+    try
+        {erlang, {Mod, Fun}, Mod:Fun(RObj)}
+    catch
+        Class:Exception ->
+            {erlang, {Mod, Fun}, {'EXIT', Mod, Fun, Class, Exception}}
+    end;
+invoke_hook(undefined, undefined, JSName, RObj) ->
+    {js, JSName, riak_kv_js_manager:blocking_dispatch(?JSPOOL_HOOK, {{jsfun, JSName}, RObj}, 5)};
+invoke_hook(_, _, _, _) ->
+    {error, invalid_hook_def}.
+
+decode_precommit({erlang, {Mod, Fun}, Result}) ->
+   case Result of
         fail ->
             fail;
         {fail, _Reason} ->
             Result;
         Obj when element(1, Obj) == r_object ->
             Obj;
-        _ ->
-            {fail, {invalid_return, {Mod, Fun, Result}}}
-    end;
-invoke_hook(precommit, undefined, undefined, JSName, RObj) ->
-    case riak_kv_js_manager:blocking_dispatch(?JSPOOL_HOOK, {{jsfun, JSName}, RObj}, 5) of
+       {'EXIT',  Mod, Fun, Class, Exception} ->
+           error_logger:error_msg("problem invoking hook ~p:~p -> ~p:~p~n~p~n",
+                                  [Mod,Fun,Class,Exception,
+                                   erlang:get_stacktrace()]),
+    
+           {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
+       _ ->
+           {fail, {invalid_return, {Mod, Fun, Result}}}
+   end;
+decode_precommit({js, JSName, Result}) ->
+    case Result of
         {ok, <<"fail">>} ->
             fail;
         {ok, [{<<"fail">>, Message}]} ->
@@ -428,25 +448,8 @@ invoke_hook(precommit, undefined, undefined, JSName, RObj) ->
                                    [Error]),
             fail
     end;
-invoke_hook(postcommit, Mod0, Fun0, undefined, Obj) ->
-    Mod = binary_to_atom(Mod0, utf8),
-    Fun = binary_to_atom(Fun0, utf8),
-    wrap_hook(Mod, Fun, Obj);
-invoke_hook(postcommit, undefined, undefined, _JSName, _Obj) ->
-    error_logger:warning_msg("Javascript post-commit hooks aren't implemented");
-%% NOP to handle all other cases
-invoke_hook(_, _, _, _, RObj) ->
-    %% TODO: Log here!
-    RObj.
-
-wrap_hook(Mod, Fun, Obj)->
-    try Mod:Fun(Obj)
-    catch
-        EType:X ->
-            error_logger:error_msg("problem invoking hook ~p:~p -> ~p:~p~n~p~n",
-                                   [Mod,Fun,EType,X,erlang:get_stacktrace()]),
-            fail
-    end.
+decode_precommit(ErrorReason) ->
+    ErrorReason.
 
 get_hooks(HookType, BucketProps) ->
     Hooks = proplists:get_value(HookType, BucketProps, []),

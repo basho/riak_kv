@@ -697,6 +697,13 @@ apply_precommit(Object, [_ | Rest]) ->
 
 precommit_should_fail([], _DW) ->
     false;
+precommit_should_fail([{erlang,precommit_undefined} | _Rest], _DW) ->
+    {true, {error, {precommit_fail, 
+                    {hook_crashed,{put_fsm_eqc,precommit_undefined,error,undef}}}}};
+precommit_should_fail([{erlang,precommit_crash} | _Rest], _DW) ->
+    {true, {error, {precommit_fail, 
+                    {hook_crashed,{put_fsm_eqc,precommit_crash,
+                                   error,{badmatch,precommit_crash}}}}}};
 precommit_should_fail([{_Lang,Hook} | _Rest], _DW) when Hook =:= precommit_fail;
                                                         Hook =:= precommit_crash;
                                                         Hook =:= precommit_undefined ->
