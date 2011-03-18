@@ -195,7 +195,7 @@ run_map(VNode, Id, {Language, {map, FunTerm, Arg, _}}, KeyData, Obj0, Phase, VM,
         erlang ->
             run_erlang_map(VNode, Id, FunTerm, Arg, KeyData, Obj, Phase, CacheKey, CacheRef, BKey);
         javascript ->
-            run_javascript_map(VNode, Id, FunTerm, Arg, KeyData, Obj, Phase, VM, CacheKey, CacheRef, BKey);
+            run_javascript_map(VNode, Id, FunTerm, Arg, KeyData, Obj0, Phase, VM, CacheKey, CacheRef, BKey);
         _ ->
             unsupported_language
     end.
@@ -231,36 +231,24 @@ run_erlang_map(VNode, Id, FunTerm, Arg, KeyData, Obj, Phase, CacheKey, CacheRef,
     end.
 
 run_javascript_map(VNode, Id, FunTerm, Arg, KeyData, Obj, Phase, VM, CacheKey, CacheRef, BKey) ->
-    ObjectJson = 
-        try
-            riak_object:to_json(Obj)
-        catch C:R ->
-                Reason = {C, R, erlang:get_stacktrace()},              
-                {error, Reason}
-        end,
-    case ObjectJson of 
-        {struct, _} ->
-            JSArgs = [riak_object:to_json(Obj), KeyData, Arg],
-            JSCall = {map, FunTerm, JSArgs},
-            case riak_kv_js_vm:batch_blocking_dispatch(VM, JSCall) of    
-                {ok, Result} ->
-                    riak_kv_phase_proto:mapexec_result(Phase, VNode, BKey, Result, Id),
-                    if
-                        is_list(Result) ->
-                            case CacheKey of
-                                not_cached ->
-                                    ok;
-                                _ ->
-                                    riak_kv_lru:put(CacheRef, BKey, CacheKey, Result)
-                            end;
-                        true ->
-                            ok
+    JSArgs = [riak_object:to_json(Obj), KeyData, Arg],
+    JSCall = {map, FunTerm, JSArgs},
+    case riak_kv_js_vm:batch_blocking_dispatch(VM, JSCall) of    
+        {ok, Result} ->
+            riak_kv_phase_proto:mapexec_result(Phase, VNode, BKey, Result, Id),
+            if
+                is_list(Result) ->
+                    case CacheKey of
+                        not_cached ->
+                            ok;
+                        _ ->
+                            riak_kv_lru:put(CacheRef, BKey, CacheKey, Result)
                     end;
-                DispatchError ->
-                    riak_kv_phase_proto:mapexec_error(Phase, DispatchError, Id)
+                true ->
+                    ok
             end;
-        JsonError ->
-            riak_kv_phase_proto:mapexec_error(Phase, JsonError, Id)
+        Error ->
+            riak_kv_phase_proto:mapexec_error(Phase, Error, Id)
     end.
 
 split(L) when length(L) =< 5 ->
