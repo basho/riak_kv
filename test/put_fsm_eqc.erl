@@ -76,8 +76,8 @@ eqc_test_() ->
                                                              <<"function() { return 123; }">>},
                                                             []}, 5)),
         %% Run the quickcheck tests
-        {timeout, 60000, % do not trust the docs - timeout is in msec
-         ?_assertEqual(true, quickcheck(numtests(250, ?QC_OUT(prop_basic_put()))))}
+        {timeout, 60000000, % do not trust the docs - timeout is in msec
+         ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop_basic_put()))))}
        ]
       }
      ]
@@ -199,7 +199,9 @@ precommit_hook() ->
                {1,  {js, precommit_fail}},
                {1,  {js, precommit_fail_reason}},
                {1,  {js, precommit_crash}},
-               {1,  {js, precommit_undefined}}]).
+               {1,  {js, precommit_undefined}},
+               {1,  {garbage, garbage}},
+               {1,  {garbage, empty}}]).
                 
                
 precommit_hooks() ->
@@ -208,8 +210,9 @@ precommit_hooks() ->
 
 postcommit_hook() ->
     frequency([{9, {erlang, postcommit_ok}},
-               {1,  {erlang, postcommit_crash}}]).
-                
+               {1,  {erlang, postcommit_crash}},
+               {1,  {garbage, garbage}}]).
+ 
 postcommit_hooks() ->
     frequency([{5, []},
                {1, list(postcommit_hook())}]).
@@ -356,7 +359,11 @@ set_bucket_props(N, AllowMult, Precommit, Postcommit) ->
                         {struct, [ModDef,
                                    {<<"fun">>, atom_to_binary(Hook,latin1)}]};
                    ({js, Hook}) ->
-                        {struct, [{<<"name">>, atom_to_binary(Hook,latin1)}]}
+                        {struct, [{<<"name">>, atom_to_binary(Hook,latin1)}]};
+                   ({garbage, garbage}) ->
+                        not_a_hook_def;
+                   ({garbage, empty}) ->
+                        {struct, []}
                 end,
     PrecommitProps = case Precommit of
                          [] ->
@@ -390,10 +397,11 @@ expect(H, N, W, EffDW, Options, Precommit, Postcommit, Object, NodeStatus) ->
     UpNodes =  length([x || up <- NodeStatus]),
     MinNodes = erlang:max(W, EffDW),
     ExpectResult = 
-        if UpNodes < MinNodes ->
+        if
+            UpNodes < MinNodes ->
                 {error,{insufficient_vnodes,UpNodes,need,MinNodes}};
            
-           true ->
+            true ->
                 HNoTimeout = filter_timeouts(H),
                 expect(HNoTimeout, {H, N, W, EffDW, 0, 0, 0, ReturnObj, Precommit})
         end,
@@ -597,6 +605,10 @@ apply_precommit(Object, [_ | Rest]) ->
 
 precommit_should_fail([], _DW) ->
     false;
+precommit_should_fail([{garbage, garbage} | _Rest], _DW) ->
+    {true, {error, {precommit_fail, {invalid_hook_def, not_a_hook_def}}}};
+precommit_should_fail([{garbage, empty} | _Rest], _DW) ->
+    {true, {error, {precommit_fail, {invalid_hook_def, no_hook}}}};
 precommit_should_fail([{erlang,precommit_undefined} | _Rest], _DW) ->
     {true, {error, {precommit_fail, 
                     {hook_crashed,{put_fsm_eqc,precommit_undefined,error,undef}}}}};
