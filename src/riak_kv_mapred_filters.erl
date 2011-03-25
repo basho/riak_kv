@@ -80,12 +80,12 @@ tokenize(Args) ->
     Seps = riak_kv_mapred_filters:to_string(lists:nth(1, Args)),
     TokenNum = lists:nth(2, Args),
     fun(V) ->
-	    Tokens = string:tokens(to_string(V), Seps),
-	    case length(Tokens) < TokenNum of
-		true -> [];
-		false ->
-		    list_to_binary(lists:nth(TokenNum, Tokens))
-	    end
+            Tokens = string:tokens(to_string(V), Seps),
+            case length(Tokens) < TokenNum of
+                true -> [];
+                false ->
+                    list_to_binary(lists:nth(TokenNum, Tokens))
+            end
     end.
 
 urldecode(_) ->
