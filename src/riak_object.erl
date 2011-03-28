@@ -51,11 +51,12 @@
 
 -define(MAX_KEY_SIZE, 65536).
 
--export([new/3, new/4, ancestors/1, reconcile/2, increment_vclock/2, equal/2]).
+-export([new/3, new/4, ancestors/1, reconcile/2, equal/2]).
+-export([increment_vclock/2, increment_vclock/3]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([vclock/1, update_value/2, update_metadata/2, bucket/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
--export([merge/2, apply_updates/1, syntactic_merge/3]).
+-export([merge/2, apply_updates/1, syntactic_merge/3, syntactic_merge/4]).
 -export([to_json/1, from_json/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 
@@ -304,6 +305,11 @@ set_vclock(Object=#r_object{}, VClock) -> Object#r_object{vclock=VClock}.
 increment_vclock(Object=#r_object{}, ClientId) ->
     Object#r_object{vclock=vclock:increment(ClientId, Object#r_object.vclock)}.
 
+%% @doc  Increment the entry for ClientId in O's vclock.
+-spec increment_vclock(riak_object(), vclock:vclock_node(), vclock:timestamp()) -> riak_object().
+increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
+    Object#r_object{vclock=vclock:increment(ClientId, Timestamp, Object#r_object.vclock)}.
+
 %% @spec set_contents(riak_object(), [{dict(), value()}]) -> riak_object()
 %% @doc  INTERNAL USE ONLY.  Set the contents of riak_object to the
 %%       {Metadata, Value} pairs in MVs. Normal clients should use the
@@ -409,7 +415,11 @@ is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
             end
     end.
 
+
 syntactic_merge(CurrentObject, NewObject, FromClientId) ->
+    syntactic_merge(CurrentObject, NewObject, FromClientId, vclock:timestamp()).
+
+syntactic_merge(CurrentObject, NewObject, FromClientId, Timestamp) ->
     case ancestors([CurrentObject, NewObject]) of
         [OlderObject] ->
             WinObject = case vclock(OlderObject) =:= vclock(CurrentObject) of
@@ -417,7 +427,7 @@ syntactic_merge(CurrentObject, NewObject, FromClientId) ->
                 false -> CurrentObject
             end,
             case is_updated(WinObject) of
-                true -> increment_vclock(apply_updates(WinObject),FromClientId);
+                true -> increment_vclock(apply_updates(WinObject), FromClientId, Timestamp);
                 false -> WinObject
             end;
         [] ->
@@ -426,7 +436,7 @@ syntactic_merge(CurrentObject, NewObject, FromClientId) ->
                     NewObject;
                 false ->
                     increment_vclock(
-                      merge(CurrentObject, NewObject), FromClientId)
+                      merge(CurrentObject, NewObject), FromClientId, Timestamp)
             end
     end.
 
