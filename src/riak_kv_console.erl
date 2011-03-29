@@ -43,9 +43,9 @@ join([NodeStr]) ->
         end
     catch
         Exception:Reason ->
-            log_to_riak_node("join failed ~p:~p~n", [Exception,
+            log_to_riak_node("Join failed ~p:~p~n", [Exception,
                     Reason]),
-            io:format("join failed, see log for details~n"),
+            io:format("Join failed, see log for details~n"),
             error
     end.
 
@@ -68,11 +68,11 @@ remove_node(Node) when is_atom(Node) ->
                         %% the result of subtracting the current node from the
                         %% cluster member list results in the empty list. When
                         %% that code gets refactored this can probably go away.
-                        io:format("leave failed, this node is the only member.~n");
+                        io:format("Leave failed, this node is the only member.~n");
                     _ ->
-                        log_to_riak_node("Error leaving cluster ~p~n",
+                        log_to_riak_node("Leave failed ~p~n",
                             [RPCReason]),
-                        io:format("leave failed, see log for details~n")
+                        io:format("Leave failed, see log for details~n")
                 end,
                 error;
             Res ->
@@ -80,9 +80,9 @@ remove_node(Node) when is_atom(Node) ->
         end
     catch
         Exception:Reason ->
-            log_to_riak_node("leave failed ~p:~p~n", [Exception,
+            log_to_riak_node("Leave failed ~p:~p~n", [Exception,
                     Reason]),
-            io:format("leave failed, see log for details~n"),
+            io:format("Leave failed, see log for details~n"),
             error
     end.
 
@@ -101,9 +101,9 @@ status([]) ->
         end
     catch
         Exception:Reason ->
-            log_to_riak_node("status failed ~p:~p~n", [Exception,
+            log_to_riak_node("Status failed ~p:~p~n", [Exception,
                     Reason]),
-            io:format("status failed, see log for details~n"),
+            io:format("Status failed, see log for details~n"),
             error
     end.
 
@@ -128,9 +128,9 @@ reip([OldNode, NewNode]) ->
             [element(2, riak_core_ring_manager:find_latest_ringfile())])
     catch
         Exception:Reason ->
-            log_to_riak_node("reip failed ~p:~p~n", [Exception,
+            log_to_riak_node("Reip failed ~p:~p~n", [Exception,
                     Reason]),
-            io:format("reip failed, see log for details~n"),
+            io:format("Reip failed, see log for details~n"),
             error
     end.
 
@@ -150,9 +150,9 @@ ringready([]) ->
         end
     catch
         Exception:Reason ->
-            log_to_riak_node("ringready failed ~p:~p~n", [Exception,
+            log_to_riak_node("Ringready failed ~p:~p~n", [Exception,
                     Reason]),
-            io:format("ringready failed, see log for details~n"),
+            io:format("Ringready failed, see log for details~n"),
             error
     end.
 
@@ -182,9 +182,9 @@ transfers([]) ->
         end
     catch
         Exception:Reason ->
-            log_to_riak_node("transfers failed ~p:~p~n", [Exception,
+            log_to_riak_node("Transfers failed ~p:~p~n", [Exception,
                     Reason]),
-            io:format("transfers failed, see log for details~n"),
+            io:format("Transfers failed, see log for details~n"),
             error
     end.
 
@@ -199,15 +199,15 @@ cluster_info([OutFile|Rest]) ->
         end
     catch
         error:{badmatch, {error, eacces}} ->
-            io:format("cluster_info failed, permission denied writing to ~p~n", [OutFile]);
+            io:format("Cluster_info failed, permission denied writing to ~p~n", [OutFile]);
         error:{badmatch, {error, enoent}} ->
-            io:format("cluster_info failed, no such directory ~p~n", [filename:dirname(OutFile)]);
+            io:format("Cluster_info failed, no such directory ~p~n", [filename:dirname(OutFile)]);
         error:{badmatch, {error, enotdir}} ->
-            io:format("cluster_info failed, not a directory ~p~n", [filename:dirname(OutFile)]);
+            io:format("Cluster_info failed, not a directory ~p~n", [filename:dirname(OutFile)]);
         Exception:Reason ->
-            log_to_riak_node("cluster_info failed ~p:~p~n",
+            log_to_riak_node("Cluster_info failed ~p:~p~n",
                 [Exception, Reason]),
-            io:format("cluster_info failed, see log for details~n"),
+            io:format("Cluster_info failed, see log for details~n"),
             error
     end.
 
