@@ -410,7 +410,7 @@ eqc_test() ->
 % @private
 ttl_test() ->
     % Set TTL to 0.02 seconds...
-    Config = [{riak_kv_cache_backend_ttl, 0.02}],
+    Config = [{riak_kv_cache_backend_ttl, 0.02}, {riak_kv_cache_backend_max_ttl, 0.04}],
     {ok, State} = start(42, Config),
 
     Bucket = <<"Bucket">>, 
