@@ -112,7 +112,6 @@ setup() ->
     net_kernel:start([testnode, shortnames]),
     cleanup(unused_arg),
     do_dep_apps(start, dep_apps()),
-    {ok, _Pid} = riak_kv_delete_sup:start_link(),
     timer:sleep(500).
 
 cleanup(_Pid) ->
