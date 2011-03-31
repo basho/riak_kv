@@ -62,13 +62,19 @@ start_link(VNode, Id, QTerm, MapInputs, PhasePid) ->
 init([VNode, Id, QTerm0, MapInputs, PhasePid]) ->
     QTermFun = xform_link_walk(QTerm0),
     {_, _, ReqId} = erlang:now(),
-    process_flag(trap_exit, true),
     gen_fsm:send_event(PhasePid, {register_mapper, Id, self()}),
-    erlang:monitor(process, PhasePid),
+    erlang:link(PhasePid),
     riak_kv_stat:update(mapper_start),
     {ok, CacheRef} = riak_kv_mapred_cache:cache_ref(),
     CacheKeyBase = generate_cache_key_base(QTermFun(undefined)),
     {ok, VM} = reserve_jsvm(QTermFun(undefined)),
+    %% we need some way to reclaim the JS VM if it is busy doing something
+    %% when the rest of the MapReduce phase exists (e.g. on timeout)
+    %% easiest method is simply to link, such that the VM is also killed,
+    %% which will cause the supervisor to spin up a fresh one
+    if is_pid(VM) -> erlang:link(VM);
+       true       -> ok %% erlang phases do not use VMs
+    end,
     {ok, prepare, #state{id=Id, vnode=VNode, qterm=QTermFun, inputs=MapInputs,
                          cache_key_base=CacheKeyBase, reqid=ReqId, phase=PhasePid,
                          cache_ref=CacheRef, vm=VM}, 0}.
@@ -134,9 +140,6 @@ handle_event(_Event, StateName, State) ->
 handle_sync_event(_Event, _From, StateName, State) ->
     {reply, ignored, StateName, State}.
 
-handle_info({'DOWN', _Ref, _Type, PhasePid, _Reason}, _StateName, #state{phase=PhasePid}=State) ->
-    %% Phase has stopped so let's stop the mapper too
-    {stop, normal, State#state{data=[], pending=[], inputs=[]}};
 handle_info(_Info, StateName, State) ->
     {next_state, StateName, State}.
 
