@@ -258,7 +258,7 @@ eqc_test() ->
     % Start the ring manager...
     crypto:start(),
     {ok, P1} = riak_core_ring_events:start_link(),
-    {ok, P1} = riak_core_ring_manager:start_link(test),
+    {ok, P2} = riak_core_ring_manager:start_link(test),
 
     % Set some buckets...
     application:load(riak_core), % make sure default_bucket_props is set

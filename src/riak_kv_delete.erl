@@ -112,6 +112,16 @@ setup() ->
     net_kernel:start([testnode, shortnames]),
     cleanup(unused_arg),
     do_dep_apps(start, dep_apps()),
+    %% There's some weird interaction with the quickcheck tests in put_fsm_eqc
+    %% that somehow makes the riak_kv_delete sup not be running if those tests
+    %% run before these. I'm sick of trying to figure out what is not being
+    %% cleaned up right, thus the following workaround.
+    case whereis(riak_kv_delete_sup) of
+        undefined ->
+            {ok, _} = riak_kv_delete_sup:start_link();
+        _ ->
+            ok
+    end,
     timer:sleep(500).
 
 cleanup(_Pid) ->
