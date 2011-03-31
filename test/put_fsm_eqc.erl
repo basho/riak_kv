@@ -110,6 +110,14 @@ setup() ->
 cleanup(running) ->
     cleanup_javascript(),
     fsm_eqc_util:cleanup_mock_servers(),
+    %% Cleanup the JS manager process
+    %% since it tends to hang around too long.
+    case whereis(?JSPOOL_HOOK) of
+        undefined ->
+            ignore;
+        Pid ->
+            exit(Pid, put_fsm_eqc_js_cleanup)
+    end,
     ok;
 cleanup(started) ->
     ok = net_kernel:stop(),
