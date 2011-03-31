@@ -289,7 +289,8 @@ produce_stats(State, Moment) ->
        config_stats(),
        pbc_stats(Moment, State),
        app_stats(),
-       mapper_stats(State)
+       mapper_stats(State),
+       memory_stats()
       ]).
 
 %% @spec spiral_minute(integer(), integer(), state()) -> integer()
@@ -394,6 +395,9 @@ system_stats() ->
 app_stats() ->
     [{list_to_atom(atom_to_list(A) ++ "_version"), list_to_binary(V)}
      || {A,_,V} <- application:which_applications()].
+
+memory_stats() ->
+    [{list_to_atom("memory_" ++ atom_to_list(K)), V} || {K,V} <- erlang:memory()].
 
 ring_stats() ->
     {ok, R} = riak_core_ring_manager:get_my_ring(),
