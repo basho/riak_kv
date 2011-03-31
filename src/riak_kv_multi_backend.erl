@@ -197,28 +197,68 @@ assert(false, Error) -> throw({?MODULE, Error}).
 -ifdef(TEST).
 
 % @private
-simple_test() ->    
-    % Start the ring manager...
-    crypto:start(),
-    riak_core_ring_events:start_link(),
-    riak_core_ring_manager:start_link(test),
-    
-    % Set some buckets...
-    application:load(riak_core), % make sure default_bucket_props is set
-    riak_core_bucket:set_bucket(<<"b1">>, [{backend, first_backend}]),
-    riak_core_bucket:set_bucket(<<"b2">>, [{backend, second_backend}]),
+multi_backend_test_() ->
+    {foreach,
+        fun() ->
+            crypto:start(),
 
-    % Run the standard backend test...
-    Config = sample_config(),
-    riak_kv_backend:standard_test(?MODULE, Config).
+            % start the ring manager
+            {ok, P1} = riak_core_ring_events:start_link(),
+            {ok, P2} = riak_core_ring_manager:start_link(test),
+            application:load(riak_core),
+            application:set_env(riak_core, default_bucket_props, []),
+            [P1, P2]
+        end,
+        fun([P1, P2]) ->
+            crypto:stop(),
+            unlink(P1),
+            unlink(P2),
+            catch exit(P1, kill),
+            catch exit(P2, kill)
+        end,
+        [
+            fun(_) ->
+                {"simple test",
+                    fun() ->
+                        riak_core_bucket:set_bucket(<<"b1">>, [{backend, first_backend}]),
+                        riak_core_bucket:set_bucket(<<"b2">>, [{backend, second_backend}]),
+
+                        % Run the standard backend test...
+                        Config = sample_config(),
+                        riak_kv_backend:standard_test(?MODULE, Config)
+                    end
+                }
+            end,
+            fun(_) ->
+                {"get_backend_test",
+                    fun() ->
+                        riak_core_bucket:set_bucket(<<"b1">>, [{backend, first_backend}]),
+                        riak_core_bucket:set_bucket(<<"b2">>, [{backend, second_backend}]),
+
+                        % Start the backend...    
+                        {ok, State} = start(42, sample_config()),
+
+                        % Check our buckets...
+                        {first_backend, riak_kv_gb_trees_backend, _} = get_backend(<<"b1">>, State),
+                        {second_backend, riak_kv_ets_backend, _} = get_backend(<<"b2">>, State),
+
+                        % Check the default...
+                        {second_backend, riak_kv_ets_backend, _} = get_backend(<<"b3">>, State),
+                        ok
+                    end
+                }
+            end
+        ]
+    }.
 
 -ifdef(EQC).
 %% @private
+
 eqc_test() ->
     % Start the ring manager...
     crypto:start(),
-    riak_core_ring_events:start_link(),
-    riak_core_ring_manager:start_link(test),
+    {ok, P1} = riak_core_ring_events:start_link(),
+    {ok, P1} = riak_core_ring_manager:start_link(test),
 
     % Set some buckets...
     application:load(riak_core), % make sure default_bucket_props is set
@@ -228,33 +268,18 @@ eqc_test() ->
     % Run the standard backend test... sample is volatile as it uses
     % gb_trees and ets
     Config = sample_config(),
-    ?assertEqual(true, backend_eqc:test(?MODULE, true, Config)).
+    ?assertEqual(true, backend_eqc:test(?MODULE, true, Config)),
+
+    %% cleanup
+    crypto:stop(),
+    application:unload(riak_core),
+    unlink(P1),
+    unlink(P2),
+    catch exit(P1, kill),
+    catch exit(P2, kill).
+
 
 -endif. % EQC
-
-
-get_backend_test() ->
-    % Start the ring manager...
-    crypto:start(),
-    riak_core_ring_events:start_link(),
-    riak_core_ring_manager:start_link(test),
-    
-    % Set some buckets...
-    application:load(riak_core), % make sure default_bucket_props is set
-    riak_core_bucket:set_bucket(<<"b1">>, [{backend, first_backend}]),
-    riak_core_bucket:set_bucket(<<"b2">>, [{backend, second_backend}]),
-    
-    % Start the backend...    
-    {ok, State} = start(42, sample_config()),
-
-    % Check our buckets...
-    {first_backend, riak_kv_gb_trees_backend, _} = get_backend(<<"b1">>, State),
-    {second_backend, riak_kv_ets_backend, _} = get_backend(<<"b2">>, State),
-    
-    % Check the default...
-    {second_backend, riak_kv_ets_backend, _} = get_backend(<<"b3">>, State),
-    
-    ok.
 
 %% Check extra callback messages are ignored by backends
 extra_callback_test() ->
@@ -284,7 +309,8 @@ extra_callback_test() ->
                 {fs, riak_kv_fs_backend, FsConfig},
                 {gb_trees, riak_kv_gb_trees_backend, []}]}],
     {ok, State} = start(0, Config),
-    callback(State, make_ref(), ignore_me).
+    callback(State, make_ref(), ignore_me),
+    application:unload(bitcask).
     
            
 bad_config_test() ->     
