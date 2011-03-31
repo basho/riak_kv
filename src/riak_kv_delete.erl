@@ -108,6 +108,11 @@ invalid_rw_delete() ->
     end.                
     
 setup() ->
+    %% Shut logging up - too noisy.
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_delete_test_sasl.log"}),
+    error_logger:tty(false),
+    error_logger:logfile({open, "riak_kv_delete_test.log"}),
     %% Start erlang node
     net_kernel:start([testnode, shortnames]),
     cleanup(unused_arg),
