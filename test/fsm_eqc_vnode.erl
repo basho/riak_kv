@@ -19,6 +19,12 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
+%%
+%% Mock vnode for FSM testing.  Originally tried to use riak_core_vnode
+%% directly but we need the index for the tests and no clean way to do
+%% the sync events for resetting, so for now just use a gen_fsm.
+%%
+%% -------------------------------------------------------------------
 
 -module(fsm_eqc_vnode).
 -behaviour(gen_fsm).
