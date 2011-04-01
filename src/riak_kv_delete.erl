@@ -114,7 +114,7 @@ setup() ->
     error_logger:tty(false),
     error_logger:logfile({open, "riak_kv_delete_test.log"}),
     %% Start erlang node
-    net_kernel:start([testnode, shortnames]),
+    {ok, _} = net_kernel:start([testnode, shortnames]),
     cleanup(unused_arg),
     do_dep_apps(start, dep_apps()),
     %% There's some weird interaction with the quickcheck tests in put_fsm_eqc
@@ -133,6 +133,7 @@ cleanup(_Pid) ->
     do_dep_apps(stop, lists:reverse(dep_apps())),
     catch exit(whereis(riak_kv_vnode_master), kill), %% Leaks occasionally
     catch exit(whereis(riak_sysmon_filter), kill), %% Leaks occasionally
+    net_kernel:stop(),
     %% Reset the riak_core vnode_modules
     application:set_env(riak_core, vnode_modules, []).
 
