@@ -24,7 +24,7 @@ eqc_test_() ->
        fun cleanup/1,
        [%% Run the quickcheck tests
         {timeout, 60000, % do not trust the docs - timeout is in msec
-         ?_assertEqual(true, quickcheck(numtests(250, ?QC_OUT(prop_basic_get()))))}
+         ?_assertEqual(true, quickcheck(numtests(500, ?QC_OUT(prop_basic_get()))))}
        ]
       }
      ]
@@ -170,8 +170,6 @@ prop_basic_get() ->
                              {bucket_props, BucketProps},
                              {preflist2, PL2}]),
 
-        %io:format(user, "N=~p R=~p RealR=~p, PL2=~p\n", [N, R, RealR, PL2]),
-
         process_flag(trap_exit, true),
         ok = riak_kv_test_util:wait_for_pid(GetPid),
         % Give read repairs and deletes a chance to go through
@@ -192,7 +190,7 @@ prop_basic_get() ->
                        }
                         || {Lin, Obj} <- Objects ],
         H          = [ V || {_, V} <- History ],
-        Expected   = expect(Objects, H, N, R, RealR),
+        Expected   = expect(Objects, Deleted, H, N, R, RealR),
         ExpectedN = case Expected of
                         {error, {n_val_violation, _}} ->
                             0;
@@ -313,7 +311,6 @@ check_delete(Objects, RepairH, H, PerfectPreflist) ->
     AllDeleted = lists:all(fun({_Idx, {ok, Lineage}}) ->
                                 Obj = proplists:get_value(Lineage, Objects),
                                 Rc = riak_kv_util:is_x_deleted(Obj),
-                                %% io:format("AllDeleted Lineage=~p Obj=~p Rc=~p\n", [Lineage, Obj, Rc]),
                                 Rc;
                               ({_Idx, notfound}) -> true;
                               ({_, error})    -> false;
@@ -343,12 +340,12 @@ build_merged_object(Heads, Objects) ->
                     || Head <- Heads ]),
    riak_object:set_vclock(Object, Vclock).
 
-expect(_Object, _History, _N, R, _RealR) when R =:= garbage ->
+expect(_Object, _Deleted, _History, _N, R, _RealR) when R =:= garbage ->
     {error, {r_val_violation, garbage}};
-expect(_Object, _History, N, _R, RealR) when RealR > N ->
+expect(_Object, _Deleted, _History, N, _R, RealR) when RealR > N ->
     {error, {n_val_violation, N}};
-expect(Objects,History,N, _R, RealR) ->
-    case expect(History,N,RealR,0,0,0,[]) of
+expect(Objects, Deleted, History,N, _R, RealR) ->
+    case expect(Deleted, History,N,RealR,0,0,0,0,[]) of
         {ok, Heads} ->
             case riak_kv_util:obj_not_deleted(build_merged_object(Heads, Objects)) of
                 undefined -> {error, notfound};
@@ -358,30 +355,34 @@ expect(Objects,History,N, _R, RealR) ->
             {error, Err}
     end.
 
-notfound_or_error(0, Err) ->
-    lists:duplicate(Err, error);
-notfound_or_error(_NotFound, _Err) ->
-    notfound.
+%% decide on error message - if only got notfound messages, return notfound
+%% otherwise let caller know R value was not met.
+notfound_or_error(NotFound, 0, 0, _R) when NotFound > 0 ->
+    notfound;
+notfound_or_error(_NotFound, Oks, _Err, R) ->
+    {r_val_unsatisfied, R, Oks}.
 
-expect(H, N, R, NotFounds, Oks, Errs, Heads) ->
+expect(D, H, N, R, NotFounds, Oks, DelOks, Errs, Heads) ->
     Pending = N - (NotFounds + Oks + Errs),
     if  Oks >= R ->                     % we made quorum
             {ok, Heads};
         (NotFounds + Errs)*2 > N orelse % basic quorum
         Pending + Oks < R ->            % no way we'll make quorum
-            notfound_or_error(NotFounds, Errs);
+            %% Adjust counts to make deleted objects count towards notfound.
+            notfound_or_error(NotFounds + DelOks, Oks - DelOks, Errs, R);
         true ->
             case H of
                 [] ->
                     timeout;
                 [timeout|Rest] ->
-                    expect(Rest, N, R, NotFounds, Oks, Errs, Heads);
+                    expect(D, Rest, N, R, NotFounds, Oks, DelOks, Errs, Heads);
                 [notfound|Rest] ->
-                    expect(Rest, N, R, NotFounds + 1, Oks, Errs, Heads);
+                    expect(D, Rest, N, R, NotFounds + 1, Oks, DelOks, Errs, Heads);
                 [error|Rest] ->
-                    expect(Rest, N, R, NotFounds, Oks, Errs + 1, Heads);
+                    expect(D, Rest, N, R, NotFounds, Oks, DelOks, Errs + 1, Heads);
                 [{ok,Lineage}|Rest] ->
-                    expect(Rest, N, R, NotFounds, Oks + 1, Errs,
+                    IncDelOks = length([xx || {Lineage1, deleted} <- D, Lineage1 == Lineage]),
+                    expect(D, Rest, N, R, NotFounds, Oks + 1, DelOks + IncDelOks, Errs,
                            merge_heads(Lineage, Heads))
             end
     end.

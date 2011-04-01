@@ -273,26 +273,26 @@ add_vnode_result(Idx, {error, Err}, StateData = #state{replied_fail = Fail,
 enough_results(StateData = #state{r = R, allowmult = AllowMult,
                                   fail_threshold = FailThreshold,
                                   replied_r = Replied, num_r = NumR,
-                                  replied_notfound = NotFound, num_notfound = NumNotFound,
+                                  num_notfound = NumNotFound,
                                   replied_fail = Fails, num_fail = NumFail}) ->
     if
         NumR >= R ->
             {Reply, Final} = respond(Replied, AllowMult),
             {reply, Reply, StateData#state{final_obj = Final}};
         NumNotFound + NumFail >= FailThreshold ->
-            Reply = case length(NotFound) of
-                        0 ->
-                            {error, [E || {E,_I} <- Fails]};
-                        _ ->
-                            {error, notfound}
-                    end,
+            DelObjs = length([xx || {RObj, _Idx} <- Replied, riak_kv_util:is_x_deleted(RObj)]),
+            Reply = fail_reply(R, NumR - DelObjs, NumNotFound + DelObjs, Fails),
             Final = merge(Replied, AllowMult),
             {reply, Reply, StateData#state{final_obj = Final}};
         true ->
             {false, StateData}
     end.
-                
-    
+                    
+fail_reply(_R, 0, NumNotFound, []) when NumNotFound > 0 ->
+    {error, notfound};
+fail_reply(R, NumR, _NumNotFound, _Fails) ->
+    {error, {r_val_unsatisfied, R,  NumR}}.
+
 schedule_timeout(infinity) ->
     undefined;
 schedule_timeout(Timeout) ->
