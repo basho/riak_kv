@@ -121,13 +121,16 @@ execute(timeout, StateData0=#state{timeout=Timeout, n=N, r=R0, req_id=ReqId,
                                    preflist2 = Preflist2}) ->
     TRef = schedule_timeout(Timeout),
     R = riak_kv_util:expand_rw_value(r, R0, BucketProps, N),
-    FailThreshold = erlang:min((N div 2)+1, % basic quorum, or
-                               (N-R+1)), % cannot ever get R 'ok' replies
-    case R > N of
-        true ->
+    if
+        R =:= error ->
+            client_reply({error, {r_val_violation, R0}}, StateData0),
+            {stop, normal, StateData0};
+        R > N ->
             client_reply({error, {n_val_violation, N}}, StateData0),
             {stop, normal, StateData0};
-        false ->
+        true ->
+            FailThreshold = erlang:min((N div 2)+1, % basic quorum, or
+                                       (N-R+1)), % cannot ever get R 'ok' replies
             AllowMult = proplists:get_value(allow_mult,BucketProps),
             Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
             riak_kv_vnode:get(Preflist, BKey, ReqId),

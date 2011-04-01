@@ -127,10 +127,17 @@ prop_len() ->
         collect({R, length(Ps)}, true)
     ).
 
+r_seed() ->
+    frequency([{50, quorum},
+               {10, one},
+               {10, all},
+               {10, fsm_eqc_util:largenat()},
+               { 1, garbage}]).
+
 
 prop_basic_get() ->
     ?FORALL({RSeed,Objects,ReqId,VGetResps},
-            {fsm_eqc_util:largenat(),
+            {r_seed(),
              fsm_eqc_util:riak_objects(), noshrink(largeint()),
              vnodegetresps()},
     begin
@@ -138,6 +145,7 @@ prop_basic_get() ->
         {R, RealR} = r_val(N, 1000000, RSeed),
         PL2 = make_preflist2(VGetResps, 1, []),
         PartVals = make_partvals(VGetResps, []),
+        fsm_eqc_vnode:set_data(Objects, PartVals),
         ok = gen_server:call(riak_kv_vnode_master,
                              {set_data, Objects, PartVals}),
         
@@ -162,15 +170,17 @@ prop_basic_get() ->
                              {bucket_props, BucketProps},
                              {preflist2, PL2}]),
 
+        %io:format(user, "N=~p R=~p RealR=~p, PL2=~p\n", [N, R, RealR, PL2]),
+
         process_flag(trap_exit, true),
         ok = riak_kv_test_util:wait_for_pid(GetPid),
         % Give read repairs and deletes a chance to go through
-        timer:sleep(5),
+        %timer:sleep(5),
         Res = fsm_eqc_util:wait_for_req_id(ReqId, GetPid),
         process_flag(trap_exit, false),
 
-        History = get_fsm_qc_vnode_master:get_history(),
-        RepairHistory = get_fsm_qc_vnode_master:get_put_history(),
+        History = fsm_eqc_vnode:get_history(),
+        RepairHistory = fsm_eqc_vnode:get_put_history(),
         Ok         = length([ ok || {_, {ok, _}} <- History ]),
         NotFound   = length([ ok || {_, notfound} <- History ]),
         NoReply    = length([ ok || {_, timeout}  <- History ]),
@@ -182,8 +192,15 @@ prop_basic_get() ->
                        }
                         || {Lin, Obj} <- Objects ],
         H          = [ V || {_, V} <- History ],
-        Expected   = expect(Objects, H, N, RealR),
-%        ExpectedN  = length([xx || {_, Resp} <- VGetResps, Resp /= timeout]),
+        Expected   = expect(Objects, H, N, R, RealR),
+        ExpectedN = case Expected of
+                        {error, {n_val_violation, _}} ->
+                            0;
+                        {error, {r_val_violation, _}} ->
+                            0;
+                        _ ->
+                            length([xx || {_, Resp} <- VGetResps, Resp /= timeout])
+                    end,
 
         %% A perfect preference list has all owner partitions available
         PerfectPreflist = lists:all(fun({{_Idx,_Node},primary}) -> true;
@@ -202,7 +219,7 @@ prop_basic_get() ->
             end,
             conjunction(
                 [{result, Res =:= Expected},
- %                {n_value, equals(length(History), ExpectedN)},
+                 {n_value, equals(length(History), ExpectedN)},
                  {repair, check_repair(Objects, RepairHistory, History)},
                  {delete,  check_delete(Objects, RepairHistory, History, PerfectPreflist)},
                  {distinct, all_distinct(Partitions)}
@@ -216,7 +233,7 @@ make_preflist2([], _Index, PL2) ->
     lists:reverse(PL2);
 make_preflist2([{_PartVal, PrimaryFallback} | Rest], Index, PL2) ->
     make_preflist2(Rest, Index + 1, 
-                   [{{Index, whereis(riak_kv_vnode_master)}, PrimaryFallback} | PL2]).
+                   [{{Index, whereis(fsm_eqc_vnode)}, PrimaryFallback} | PL2]).
 
 %% Make responses
 make_partvals([], PartVals) ->
@@ -316,6 +333,8 @@ check_delete(Objects, RepairH, H, PerfectPreflist) ->
               equals(lists:sort(Expected), lists:sort(Deletes))).
    
 
+build_merged_object([], _Objects) ->
+    undefined;
 build_merged_object(Heads, Objects) ->
     Lineage = fsm_eqc_util:merge(Heads),
     Object  = proplists:get_value(Lineage, Objects),
@@ -324,10 +343,12 @@ build_merged_object(Heads, Objects) ->
                     || Head <- Heads ]),
    riak_object:set_vclock(Object, Vclock).
 
-expect(_Object, _History, N, R) when R > N ->
+expect(_Object, _History, _N, R, _RealR) when R =:= garbage ->
+    {error, {r_val_violation, garbage}};
+expect(_Object, _History, N, _R, RealR) when RealR > N ->
     {error, {n_val_violation, N}};
-expect(Objects,History,N,R) ->
-    case expect(History,N,R,0,0,0,[]) of
+expect(Objects,History,N, _R, RealR) ->
+    case expect(History,N,RealR,0,0,0,[]) of
         {ok, Heads} ->
             case riak_kv_util:obj_not_deleted(build_merged_object(Heads, Objects)) of
                 undefined -> {error, notfound};
