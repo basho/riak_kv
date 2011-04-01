@@ -147,7 +147,7 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData) ->
         {false, NewStateData2} ->
             {next_state, waiting_vnode_r, NewStateData2}
     end;
-waiting_vnode_r(timeout, StateData=#state{replied_r=Replied,allowmult=AllowMult}) ->
+waiting_vnode_r(request_timeout, StateData=#state{replied_r=Replied,allowmult=AllowMult}) ->
     update_stats(StateData),
     client_reply({error,timeout}, StateData),
     really_finalize(StateData#state{final_obj=merge(Replied, AllowMult)}).
@@ -155,7 +155,7 @@ waiting_vnode_r(timeout, StateData=#state{replied_r=Replied,allowmult=AllowMult}
 waiting_read_repair({r, VnodeResult, Idx, _ReqId}, StateData) ->
     NewStateData1 = add_vnode_result(Idx, VnodeResult, StateData),
     finalize(NewStateData1#state{final_obj = undefined});
-waiting_read_repair(timeout, StateData) ->
+waiting_read_repair(request_timeout, StateData) ->
     really_finalize(StateData).
 
 has_all_replies(#state{replied_r=R,replied_fail=F,replied_notfound=NF, n=N}) ->
@@ -241,8 +241,8 @@ handle_sync_event(_Event, _From, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
 %% @private
-handle_info(timeout, StateName, StateData) ->
-    ?MODULE:StateName(timeout, StateData);
+handle_info(request_timeout, StateName, StateData) ->
+    ?MODULE:StateName(request_timeout, StateData);
 %% @private
 handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
@@ -293,7 +293,7 @@ enough_results(StateData = #state{r = R, allowmult = AllowMult,
 schedule_timeout(infinity) ->
     undefined;
 schedule_timeout(Timeout) ->
-    erlang:send_after(Timeout, self(), timeout).
+    erlang:send_after(Timeout, self(), request_timeout).
 
 client_reply(Reply, #state{client = Client, req_id = ReqId}) ->
     Client ! {ReqId, Reply}.

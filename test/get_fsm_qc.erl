@@ -13,11 +13,62 @@
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
+%%====================================================================
+%% eunit test 
+%%====================================================================
+
+eqc_test_() ->
+    {spawn, 
+     [{setup,
+       fun setup/0,
+       fun cleanup/1,
+       [%% Run the quickcheck tests
+        {timeout, 60000, % do not trust the docs - timeout is in msec
+         ?_assertEqual(true, quickcheck(numtests(250, ?QC_OUT(prop_basic_get()))))}
+       ]
+      }
+     ]
+    }.
+
+setup() ->
+    %% Shut logging up - too noisy.
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, "get_fsm_eqc_sasl.log"}),
+    error_logger:tty(false),
+    error_logger:logfile({open, "get_fsm_eqc.log"}),
+
+    %% Start up mock servers and dependencies
+    fsm_eqc_util:start_mock_servers(),
+    ok.
+
+cleanup(_) ->
+    fsm_eqc_util:cleanup_mock_servers(),
+    ok.
+
+%% Call unused callback functions to clear them in the coverage
+%% checker so the real code stands out.
+coverage_test() ->
+    riak_kv_test_util:call_unused_fsm_funs(riak_kv_get_fsm).
+
+%%====================================================================
+%% Shell helpers 
+%%====================================================================
+
+prepare() ->
+    fsm_eqc_util:start_mock_servers().
+    
+test() ->
+    test(100).
+
+test(N) ->
+    quickcheck(numtests(N, prop_basic_get())).
+
+check() ->
+    check(prop_basic_get(), current_counterexample()).
+
+%%====================================================================
 %% Generators
-
-n(Max) ->
-    choose(1, Max).
-
+%%====================================================================
 
 all_distinct(Xs) ->
     equals(lists:sort(Xs),lists:usort(Xs)).
@@ -59,38 +110,57 @@ is_sibling(Lin1, Lin2) ->
     not is_descendant(Lin2, Lin1).
 
 
+vnodegetresps() ->
+    fsm_eqc_util:not_empty(fsm_eqc_util:longer_list(2, vnodegetresp())).
+
+vnodegetresp() ->
+    {fsm_eqc_util:partval(), nodestatus()}.
+
+
+nodestatus() ->
+    ?SHRINK(frequency([{9, primary},
+                       {1, fallback}]),
+            [primary]).
 
 prop_len() ->
     ?FORALL({R, Ps}, {choose(1, 10), fsm_eqc_util:partvals()},
         collect({R, length(Ps)}, true)
     ).
 
+
 prop_basic_get() ->
-    ?FORALL({RSeed,NQdiff,Objects,ReqId,PartVals,NodeStatus0},
-            {fsm_eqc_util:largenat(),choose(0,4096),
+    ?FORALL({RSeed,Objects,ReqId,VGetResps},
+            {fsm_eqc_util:largenat(),
              fsm_eqc_util:riak_objects(), noshrink(largeint()),
-             fsm_eqc_util:partvals(),fsm_eqc_util:some_up_node_status(10)},
+             vnodegetresps()},
     begin
-        N = length(PartVals),
-        R = (RSeed rem N) + 1,
-        {Q, Ring, NodeStatus} = fsm_eqc_util:mock_ring(N + NQdiff, NodeStatus0),
-
+        N = length(VGetResps),
+        {R, RealR} = r_val(N, 1000000, RSeed),
+        PL2 = make_preflist2(VGetResps, 1, []),
+        PartVals = make_partvals(VGetResps, []),
         ok = gen_server:call(riak_kv_vnode_master,
-                         {set_data, Objects, PartVals}),
+                             {set_data, Objects, PartVals}),
+        
+        BucketProps = [{n_val, N}
+                       |?DEFAULT_BUCKET_PROPS],
 
+        %% The app set_env will probably go away.
         application:set_env(riak_core,
                             default_bucket_props,
-                            [{n_val, N}
-                             |?DEFAULT_BUCKET_PROPS]),
-    
+                            BucketProps),
+        
         [{_,Object}|_] = Objects,
-    
-        {ok, GetPid} = riak_kv_get_fsm:start_link(ReqId,
+        
+        {ok, GetPid} = riak_kv_get_fsm:test_link(ReqId,
                             riak_object:bucket(Object),
                             riak_object:key(Object),
                             R,
                             200,
-                            self()),
+                            self(),
+                            [{starttime, riak_core_util:moment()},
+                             {n, N},
+                             {bucket_props, BucketProps},
+                             {preflist2, PL2}]),
 
         process_flag(trap_exit, true),
         ok = riak_kv_test_util:wait_for_pid(GetPid),
@@ -112,27 +182,27 @@ prop_basic_get() ->
                        }
                         || {Lin, Obj} <- Objects ],
         H          = [ V || {_, V} <- History ],
-        ExpectedN  = lists:min([N, length([xx || up <- NodeStatus])]),
-        Expected   = expect(Objects, H, N, R),
+        Expected   = expect(Objects, H, N, RealR),
+%        ExpectedN  = length([xx || {_, Resp} <- VGetResps, Resp /= timeout]),
+
         %% A perfect preference list has all owner partitions available
-        DocIdx = riak_core_util:chash_key({riak_object:bucket(Object),
-                                           riak_object:key(Object)}),
-        Preflist = lists:sublist(riak_core_ring:preflist(DocIdx, Ring), N),
-        PerfectPreflist = lists:all(fun({_Idx,Node}) -> Node =:= node() end, Preflist),
+        PerfectPreflist = lists:all(fun({{_Idx,_Node},primary}) -> true;
+                                       ({{_Idx,_Node},fallback}) -> false
+                                    end, PL2),
         ?WHENFAIL(
             begin
-                io:format("Ring: ~p~nRepair: ~p~nHistory: ~p~n",
-                          [Ring, RepairHistory, History]),
-                io:format("Result: ~p~nExpected: ~p~nNode status: ~p~nDeleted objects: ~p~n",
-                          [Res, Expected, NodeStatus, Deleted]),
-                io:format("N: ~p~nR: ~p~nQ: ~p~n",
-                          [N, R, Q]),
+                io:format("Repair: ~p~nHistory: ~p~n",
+                          [RepairHistory, History]),
+                io:format("Result: ~p~nExpected: ~p~nDeleted objects: ~p~n",
+                          [Res, Expected, Deleted]),
+                io:format("N: ~p~nR: ~p~nRealR: ~p~nVGetResps: ~p~n",
+                          [N, R, RealR, VGetResps]),
                 io:format("H: ~p~nOk: ~p~nNotFound: ~p~nNoReply: ~p~n",
                           [H, Ok, NotFound, NoReply])
             end,
             conjunction(
                 [{result, Res =:= Expected},
-                 {n_value, equals(length(History), ExpectedN)},
+ %                {n_value, equals(length(History), ExpectedN)},
                  {repair, check_repair(Objects, RepairHistory, History)},
                  {delete,  check_delete(Objects, RepairHistory, History, PerfectPreflist)},
                  {distinct, all_distinct(Partitions)}
@@ -140,11 +210,37 @@ prop_basic_get() ->
     end).
 
 
-test() ->
-    test(100).
+%% make preflist2 from the vnode responses.
+%% [{notfound|{ok, lineage()}, PrimaryFallback, Response]
+make_preflist2([], _Index, PL2) ->
+    lists:reverse(PL2);
+make_preflist2([{_PartVal, PrimaryFallback} | Rest], Index, PL2) ->
+    make_preflist2(Rest, Index + 1, 
+                   [{{Index, whereis(riak_kv_vnode_master)}, PrimaryFallback} | PL2]).
 
-test(N) ->
-    quickcheck(numtests(N, ?QC_OUT(prop_basic_get()))).
+%% Make responses
+make_partvals([], PartVals) ->
+    lists:reverse(PartVals);
+make_partvals([{PartVal, _PrimaryFallback} | Rest], PartVals) ->
+    make_partvals(Rest, [PartVal | PartVals]).
+ 
+
+%% Work out R given a seed.
+%% Generate a value from 0..N+1
+r_val(_N, _Min, garbage) ->
+    {garbage, 1000000};
+r_val(N, Min, Seed) when is_number(Seed) ->
+    Val = Seed rem N + 2,
+    {Val, erlang:min(Min, Val)};
+r_val(N, Min, Seed) ->
+    Val = case Seed of
+              one -> 1;
+              all -> N;
+              quorum -> (N div 2) + 1;
+              _ -> Seed
+          end,
+    {Seed, erlang:min(Min, Val)}.
+
 
 do_repair(_Heads, notfound) ->
     true;
@@ -228,6 +324,8 @@ build_merged_object(Heads, Objects) ->
                     || Head <- Heads ]),
    riak_object:set_vclock(Object, Vclock).
 
+expect(_Object, _History, N, R) when R > N ->
+    {error, {n_val_violation, N}};
 expect(Objects,History,N,R) ->
     case expect(History,N,R,0,0,0,[]) of
         {ok, Heads} ->
@@ -268,18 +366,5 @@ expect(H, N, R, NotFounds, Oks, Errs, Heads) ->
     end.
 
     
-eqc_test_() ->
-    {spawn,
-    {timeout, 200, ?_test(
-        begin
-            fsm_eqc_util:start_mock_servers(),
-            ?assert(test(50))
-        end)
-    }}.
-
-%% Call unused callback functions to clear them in the coverage
-%% checker so the real code stands out.
-coverage_test() ->
-    riak_kv_test_util:call_unused_fsm_funs(riak_kv_get_fsm).
     
 -endif. % EQC

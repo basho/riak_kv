@@ -117,6 +117,14 @@ handle_cast(?VNODE_REQ{index=Idx,
         _ ->
             riak_core_vnode:reply(Sender, {r, Value, Idx, ReqId})
     end,
+    %% Speed things up by banging along a timeout if the last entry
+    case State1#state.partvals of
+        [] ->
+            {fsm, undefined, Pid} = Sender,
+            Pid ! request_timeout;
+        _ ->
+            ok
+    end,
     {noreply, State1};
 
 %% Handle a put request - send the responses prepared by call to
