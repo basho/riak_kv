@@ -190,7 +190,7 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
     % erlang_protobuffs encodes as 1/0/undefined
     W = normalize_rw_value(W0),
     DW = normalize_rw_value(DW0),
-    Options = case ReturnBody of 1 -> [returnbody]; _ -> [] end,
+    Options = case ReturnBody of 1 -> [returnbody]; true -> [returnbody]; _ -> [] end,
     case C:put(O, default_w(W), default_dw(DW), default_timeout(), Options) of
         ok ->
             send_msg(#rpbputresp{}, State);
@@ -366,6 +366,8 @@ default_timeout() ->
         
 %% Convert a vector clock to erlang
 erlify_rpbvc(undefined) ->
+    vclock:fresh();
+erlify_rpbvc(<<>>) ->
     vclock:fresh();
 erlify_rpbvc(PbVc) ->
     binary_to_term(zlib:unzip(PbVc)).
