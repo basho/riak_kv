@@ -527,9 +527,7 @@ mk_reqid() -> erlang:phash2(erlang:now()). % only has to be unique per-pid
 %% @private
 wait_for_reqid(ReqId, Timeout) ->
     receive
-        {ReqId, {error, Err}} -> {error, Err};
-        {ReqId, ok} -> ok;
-        {ReqId, {ok, Res}} -> {ok, Res}
+        {ReqId, Response} -> Response
     after Timeout ->
             {error, timeout}
     end.

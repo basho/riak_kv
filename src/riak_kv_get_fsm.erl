@@ -57,7 +57,8 @@
                 tref    :: reference(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
                 bucket_props,
-                startnow :: {pos_integer(), pos_integer(), pos_integer()}
+                startnow :: {pos_integer(), pos_integer(), pos_integer()},
+                get_usecs :: undefined | non_neg_integer()
                }).
 
 -define(DEFAULT_TIMEOUT, 60000).
@@ -164,6 +165,7 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData) ->
     NewStateData1 = add_vnode_result(Idx, VnodeResult, StateData),
     case enough_results(NewStateData1) of
         {reply, Reply, NewStateData2} ->
+
             client_reply(Reply, NewStateData2),
             update_stats(NewStateData2),
             finalize(NewStateData2);
@@ -298,12 +300,12 @@ enough_results(StateData = #state{r = R, allowmult = AllowMult,
     if
         NumR >= R ->
             {Reply, Final} = respond(Replied, AllowMult),
-            {reply, Reply, StateData#state{final_obj = Final}};
+            {reply, Reply, update_timing(StateData#state{final_obj = Final})};
         NumNotFound + NumFail >= FailThreshold ->
             DelObjs = length([xx || {RObj, _Idx} <- Replied, riak_kv_util:is_x_deleted(RObj)]),
             Reply = fail_reply(R, NumR - DelObjs, NumNotFound + DelObjs, Fails),
             Final = merge(Replied, AllowMult),
-            {reply, Reply, StateData#state{final_obj = Final}};
+            {reply, Reply, update_timing(StateData#state{final_obj = Final})};
         true ->
             {false, StateData}
     end.
@@ -321,8 +323,18 @@ schedule_timeout(infinity) ->
 schedule_timeout(Timeout) ->
     erlang:send_after(Timeout, self(), request_timeout).
 
-client_reply(Reply, #state{from = {raw, ReqId, Pid}}) ->
-    Pid ! {ReqId, Reply}.
+client_reply(Reply, StateData = #state{from = {raw, ReqId, Pid}, options = Options}) ->
+    Msg = case proplists:get_value(details, Options, false) of
+              false ->
+                  {ReqId, Reply};
+              [] ->
+                  {ReqId, Reply};
+              Details ->
+                  {OkError, ObjReason} = Reply,
+                  Info = client_info(Details, StateData, []),
+                  {ReqId, {OkError, ObjReason, Info}}
+          end,
+    Pid ! Msg. 
 
 merge(VResponses, AllowMult) ->
    merge_robjs([R || {R,_I} <- VResponses],AllowMult).
@@ -363,11 +375,24 @@ strict_descendant(O1, O2) ->
 ancestor_indices({ok, Final},AnnoObjects) ->
     [Idx || {O,Idx} <- AnnoObjects, strict_descendant(Final, O)].
 
-
-update_stats(#state{startnow=StartNow}) ->
+update_timing(StateData = #state{startnow = StartNow}) ->
     EndNow = now(),
-    riak_kv_stat:update({get_fsm_time, timer:now_diff(EndNow, StartNow)}).    
+    StateData#state{get_usecs = timer:now_diff(EndNow, StartNow)}.
 
+update_stats(#state{get_usecs = GetUsecs}) ->
+    riak_kv_stat:update({get_fsm_time, GetUsecs}).    
+
+client_info(true, StateData, Acc) ->
+    client_info(details(), StateData, Acc);
+client_info([], _StateData, Acc) ->
+    Acc;
+client_info([timing | Rest], StateData = #state{get_usecs = GetUsecs}, Acc) ->
+    client_info(Rest, StateData, [{get_usecs, GetUsecs} | Acc]);
+client_info([Unknown | Rest], StateData, Acc) ->
+    client_info(Rest, StateData, [{Unknown, unknown_detail} | Acc]).
+
+details() ->
+    [timing].
 
 -ifdef(TEST).
 -define(expect_msg(Exp,Timeout), 

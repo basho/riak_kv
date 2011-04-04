@@ -234,10 +234,8 @@ wait_for_req_id(ReqId, Pid) ->
         {'EXIT', _OtherPid, _Reason} ->
             %% Probably from previous test death
             wait_for_req_id(ReqId, Pid);
-        {ReqId, {ok, Reply1}} ->
-            {ok, Reply1};
-        {ReqId, Error1} ->
-            Error1;
+        {ReqId, Response} ->
+            Response;
         Anything1 ->
             {anything, Anything1}
     after 400 ->

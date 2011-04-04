@@ -1,7 +1,6 @@
 -module(get_fsm_qc).
 
 -ifdef(EQC).
-
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("riak_kv_vnode.hrl").
@@ -134,10 +133,22 @@ r_seed() ->
                {10, fsm_eqc_util:largenat()},
                { 1, garbage}]).
 
+detail() -> frequency([{1, timing},
+                       {1, not_a_detail}]).
+    
+details() -> frequency([{10, true}, %% All details requested
+                        {10, list(detail())},
+                        { 1, false}]).
+    
+option() -> 
+    frequency([{1, {details, details()}}]).
+
+options() ->
+    list(option()).
 
 prop_basic_get() ->
-    ?FORALL({RSeed,Objects,ReqId,VGetResps},
-            {r_seed(),
+    ?FORALL({RSeed,Options0, Objects,ReqId,VGetResps},
+            {r_seed(), options(),
              fsm_eqc_util:riak_objects(), noshrink(largeint()),
              vnodegetresps()},
     begin
@@ -159,12 +170,12 @@ prop_basic_get() ->
         
         [{_,Object}|_] = Objects,
         
-        {ok, GetPid} = riak_kv_get_fsm:test_link(ReqId,
+        Options = [{r, R}, {timeout, 200} | Options0],
+
+        {ok, GetPid} = riak_kv_get_fsm:test_link({raw, ReqId, self()},
                             riak_object:bucket(Object),
                             riak_object:key(Object),
-                            R,
-                            200,
-                            self(),
+                            Options,
                             [{starttime, riak_core_util:moment()},
                              {n, N},
                              {bucket_props, BucketProps},
@@ -190,7 +201,7 @@ prop_basic_get() ->
                        }
                         || {Lin, Obj} <- Objects ],
         H          = [ V || {_, V} <- History ],
-        Expected   = expect(Objects, Deleted, H, N, R, RealR),
+        Expected  = expect(Objects, Deleted, H, N, R, RealR),
         ExpectedN = case Expected of
                         {error, {n_val_violation, _}} ->
                             0;
@@ -204,19 +215,33 @@ prop_basic_get() ->
         PerfectPreflist = lists:all(fun({{_Idx,_Node},primary}) -> true;
                                        ({{_Idx,_Node},fallback}) -> false
                                     end, PL2),
+
+        {RetResult, RetInfo} = case Res of 
+                                   timeout ->
+                                       {Res, undefined};
+                                   {ok, _RetObj} ->
+                                       {Res, undefined};
+                                   {error, _Reason} ->
+                                       {Res, undefined};
+                                   {ok, RetObj, Info0} ->
+                                       {{ok, RetObj}, Info0};
+                                   {error, Reason, Info0} ->
+                                       {{error, Reason}, Info0}
+                               end,                                                 
         ?WHENFAIL(
             begin
                 io:format("Repair: ~p~nHistory: ~p~n",
                           [RepairHistory, History]),
                 io:format("Result: ~p~nExpected: ~p~nDeleted objects: ~p~n",
                           [Res, Expected, Deleted]),
-                io:format("N: ~p~nR: ~p~nRealR: ~p~nVGetResps: ~p~n",
-                          [N, R, RealR, VGetResps]),
+                io:format("N: ~p~nR: ~p~nRealR: ~p~nOptions: ~p~nVGetResps: ~p~n",
+                          [N, R, RealR, Options, VGetResps]),
                 io:format("H: ~p~nOk: ~p~nNotFound: ~p~nNoReply: ~p~n",
                           [H, Ok, NotFound, NoReply])
             end,
             conjunction(
-                [{result, Res =:= Expected},
+                [{result, equals(RetResult, Expected)},
+                 {details, check_details(RetInfo, Options)},
                  {n_value, equals(length(History), ExpectedN)},
                  {repair, check_repair(Objects, RepairHistory, History)},
                  {delete,  check_delete(Objects, RepairHistory, History, PerfectPreflist)},
@@ -274,6 +299,16 @@ expected_repairs(H) ->
             Heads = merge_heads(Lins),
             [ Part || {Part, V} <- H,
                       do_repair(Heads, V) ]
+    end.
+
+check_details(Details, Options) ->
+    case proplists:get_value(details, Options, false) of
+        false ->
+            equals(undefined, Details);
+        [] ->
+            equals(undefined, Details);
+        _ ->
+            Details /= undefined
     end.
 
 check_repair(Objects, RepairH, H) ->
