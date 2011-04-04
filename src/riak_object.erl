@@ -45,7 +45,7 @@
           bucket :: bucket(),
           key :: key(),
           contents :: [#r_content{}],
-          vclock :: vclock:vclock(),
+          vclock = vclock:fresh() :: vclock:vclock(),
           updatemetadata=dict:store(clean, true, dict:new()) :: dict(),
           updatevalue :: term()
          }).
