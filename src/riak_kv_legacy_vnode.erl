@@ -92,7 +92,7 @@ rewrite_call({vnode_del, {Partition,_Node},
     Req = riak_core_vnode_master:make_request(
             ?KV_DELETE_REQ{bkey=BKey,
                            req_id=ReqID},
-            noreply,
+            ignore,
             Partition),
     {ok, Req}.
 %% rewrite_call({get_merkle, Partition}, From, State) ->

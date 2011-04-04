@@ -93,12 +93,7 @@ mapred(Inputs,Query,ResultTransformer,Timeout) when is_binary(Inputs) orelse
             Me = self(),
             case mapred_stream(Query,Me,ResultTransformer,Timeout) of
                 {ok, {ReqId, FlowPid}} ->
-                    case is_list(Inputs) of
-                        true ->
-                            add_inputs(FlowPid, Inputs);
-                        false ->
-                            mapred_dynamic_inputs_stream(FlowPid, Inputs, Timeout)
-                    end,
+                    mapred_dynamic_inputs_stream(FlowPid, Inputs, Timeout),
                     luke_flow:finish_inputs(FlowPid),
                     luke_flow:collect_output(ReqId, Timeout);
                 Error ->

@@ -69,16 +69,13 @@ reload(VMPid) ->
 init([Manager, PoolName]) ->
     HeapSize = read_config(js_max_vm_mem, 8),
     StackSize = read_config(js_thread_stack, 8),
-    case new_context(StackSize, HeapSize) of
-        {ok, Ctx} ->
-            error_logger:info_msg("Spidermonkey VM (thread stack: ~pMB, max heap: ~pMB, pool: ~p) host starting (~p)~n",
-                                  [StackSize, HeapSize, PoolName, self()]),
-            riak_kv_js_manager:add_vm(PoolName),
-            erlang:monitor(process, Manager),
-            {ok, #state{manager=Manager, pool=PoolName, ctx=Ctx}};
-        Error ->
-            {stop, Error}
-    end.
+    %% Dialyzer: js_driver:new throws on failure- we can match on {ok,Ctx} here.
+    {ok, Ctx} =  new_context(StackSize, HeapSize),
+    error_logger:info_msg("Spidermonkey VM (thread stack: ~pMB, max heap: ~pMB, pool: ~p) host starting (~p)~n", [StackSize, HeapSize, PoolName, self()]),
+    riak_kv_js_manager:add_vm(PoolName),
+    erlang:monitor(process, Manager),
+    {ok, #state{manager=Manager, pool=PoolName, ctx=Ctx}}.
+
 
 handle_call(start_batch, _From, State) ->
     {reply, ok, State#state{in_batch=true}};

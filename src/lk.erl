@@ -26,7 +26,7 @@
 fsm(Bucket) ->
     ReqId = random:uniform(10000),
     Start = erlang:now(),
-    riak_kv_keys_fsm:start(ReqId, Bucket, 60000, plain, 0.0001, self()),
+    riak_kv_keys_fsm:start_link(ReqId, Bucket, 60000, plain, 0.0001, self()),
     {ok, Count} = gather_fsm_results(ReqId, 0),
     End = erlang:now(),
     Ms = erlang:round(timer:now_diff(End, Start) / 1000),

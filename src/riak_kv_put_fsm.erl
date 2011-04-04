@@ -50,7 +50,7 @@
                 replied_w :: list(),
                 replied_dw :: list(),
                 replied_fail :: list(),
-                timeout :: pos_integer(),
+                timeout :: pos_integer()|infinity,
                 tref    :: reference(),
                 startnow :: {pos_integer(), pos_integer(), pos_integer()}, % for FSM duration
                 options=[] :: list(),

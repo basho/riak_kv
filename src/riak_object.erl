@@ -28,6 +28,8 @@
 -endif.
 -include("riak_kv_wm_raw.hrl").
 
+-export_type([riak_object/0, bucket/0, key/0, value/0]).
+
 -type key() :: binary().
 -type bucket() :: binary().
 %% -type bkey() :: {bucket(), key()}.
@@ -47,7 +49,7 @@
           updatemetadata=dict:store(clean, true, dict:new()) :: dict(),
           updatevalue :: term()
          }).
--type riak_object() :: #r_object{}.
+-opaque riak_object() :: #r_object{}.
 
 -define(MAX_KEY_SIZE, 65536).
 
@@ -66,7 +68,8 @@ new(B, K, V) when is_binary(B), is_binary(K) ->
     new(B, K, V, no_initial_metadata).
 
 %% @doc Constructor for new riak objects with an initial content-type.
--spec new(Bucket::bucket(), Key::key(), Value::value(), string() | dict()) -> riak_object().
+-spec new(Bucket::bucket(), Key::key(), Value::value(), 
+          string() | dict() | no_initial_metadata) -> riak_object().
 new(B, K, V, C) when is_binary(B), is_binary(K), is_list(C) ->
     new(B, K, V, dict:from_list([{?MD_CTYPE, C}]));
 

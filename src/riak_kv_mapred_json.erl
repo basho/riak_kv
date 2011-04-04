@@ -146,9 +146,7 @@ parse_key_filters(Filter) when is_list(Filter) ->
                             {error, ["Illegal key filter statement.\n"]}
                     end
             end
-    end;
-parse_key_filters(_Filter) ->
-    {error, ["Illegal key filter statement.\n"]}.
+    end.
 
 parse_query(Query) ->
     parse_query(Query, []).
@@ -299,8 +297,6 @@ parse_step(Language,StepDef) ->
     {error, ["Unknown language ",mochijson2:encode(Language)," in phase:\n",
              "   ",mochijson2:encode({struct,StepDef}),"\n"]}.
 
-bin_to_atom(undefined) ->
-    error;
 bin_to_atom(Binary) when is_binary(Binary) ->
     L = binary_to_list(Binary),
     try

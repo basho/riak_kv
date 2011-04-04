@@ -107,18 +107,10 @@ get({Ref, _}, BKey) ->
 
 put({Ref, _}, BKey, Val) ->
     Key = term_to_binary(BKey),
-    case bitcask:put(Ref, Key, Val) of
-        ok -> ok;
-        {error, Reason} ->
-            {error, Reason}
-    end.
+    ok =  bitcask:put(Ref, Key, Val).
 
 delete({Ref, _}, BKey) ->
-    case bitcask:delete(Ref, term_to_binary(BKey)) of
-        ok -> ok;
-        {error, Reason} ->
-            {error, Reason}
-    end.
+    ok = bitcask:delete(Ref, term_to_binary(BKey)).
 
 list({Ref, _}) ->
     case bitcask:list_keys(Ref) of
@@ -224,8 +216,8 @@ key_counts() ->
                  {Keys, _} = status(filename:join(RootDir, Dir)),
                  {Dir, Keys}
              end || Dir <- element(2, file:list_dir(RootDir))];
-        {error, Reason} ->
-            {error, Reason}
+        undefined ->
+            {error, data_root_not_set}
     end.
 
 %% ===================================================================

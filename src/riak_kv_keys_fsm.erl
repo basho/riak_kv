@@ -30,7 +30,7 @@
          handle_info/3, terminate/3, code_change/4]).
 -export([initialize/2,waiting_kl/2]).
 
--record(state, {client :: {pid(), reference()},
+-record(state, {client :: pid(),
                 client_type :: atom(),
                 bloom :: term(),
                 pls :: [list()],

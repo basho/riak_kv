@@ -21,7 +21,7 @@
           req_id :: non_neg_integer()}).
 
 -record(riak_kv_listkeys_req_v2, {
-          bucket :: binary(),
+          bucket :: binary()|'_'|tuple(),
           req_id :: non_neg_integer(),
           caller :: pid()}).
 
