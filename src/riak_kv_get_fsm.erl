@@ -25,14 +25,15 @@
 -include_lib("riak_kv_vnode.hrl").
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--export([test/7, test_link/7]).
+-export([test_link/7, test_link/5]).
 -endif.
--export([start/6, start_link/6]).
+-export([start/6, start_link/6, start_link/4]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
--export([prepare/2,execute/2,waiting_vnode_r/2,waiting_read_repair/2]).
+-export([prepare/2,validate/2,execute/2,waiting_vnode_r/2,waiting_read_repair/2]).
 
--record(state, {client :: {pid(), reference()},
+-record(state, {from :: {integer(), pid()},
+                options=[],
                 n :: pos_integer(),
                 r :: pos_integer(),
                 fail_threshold :: pos_integer(),
@@ -55,12 +56,18 @@
                 startnow :: {pos_integer(), pos_integer(), pos_integer()}
                }).
 
+-define(DEFAULT_TIMEOUT, 60000).
+-define(DEFAULT_R, quorum).
+
 %% In place only for backwards compatibility
 start(ReqId,Bucket,Key,R,Timeout,From) ->
-    start_link(ReqId,Bucket,Key,R,Timeout,From).
+    start_link({raw, ReqId, From}, Bucket, Key, [{r, R}, {timeout, Timeout}]).
 
 start_link(ReqId,Bucket,Key,R,Timeout,From) ->
-    gen_fsm:start_link(?MODULE, [ReqId,Bucket,Key,R,Timeout,From], []).
+    start_link({raw, ReqId, From}, Bucket, Key, [{r, R}, {timeout, Timeout}]).
+
+start_link(From, Bucket, Key, GetOptions) ->
+    gen_fsm:start_link(?MODULE, [From, Bucket, Key, GetOptions], []).
 
 -ifdef(TEST).
 %% Create a get FSM for testing.  StateProps must include
@@ -69,21 +76,22 @@ start_link(ReqId,Bucket,Key,R,Timeout,From) ->
 %% bucket_props - bucket properties
 %% preflist2 - [{{Idx,Node},primary|fallback}] preference list
 %% 
-test(ReqId,Bucket,Key,R,Timeout,From,StateProps) ->
-    gen_fsm:start(?MODULE, {test, [ReqId,Bucket,Key,R,Timeout,From], StateProps}, []).
-
-%% As test, but linked to the caller
 test_link(ReqId,Bucket,Key,R,Timeout,From,StateProps) ->
-    gen_fsm:start_link(?MODULE, {test, [ReqId,Bucket,Key,R,Timeout,From], StateProps}, []).
+    test_link({raw, ReqId, From}, Bucket, Key, [{r, R}, {timeout, Timeout}], StateProps).
+
+test_link(From, Bucket, Key, GetOptions, StateProps) ->
+    gen_fsm:start_link(?MODULE, {test, [From, Bucket, Key, GetOptions], StateProps}, []).
+
 -endif.
 
 %% @private
-init([ReqId,Bucket,Key,R,Timeout,Client]) ->
+init([From, Bucket, Key, Options]) ->
     StartNow = now(),
-    StateData = #state{client=Client,r=R, timeout=Timeout,
-                       req_id=ReqId, bkey={Bucket,Key},
-                       startnow=StartNow},
-    {ok,prepare,StateData,0};
+    StateData = #state{from = From,
+                       options = Options,
+                       bkey = {Bucket, Key},
+                       startnow = StartNow},
+    {ok, prepare, StateData, 0};
 init({test, Args, StateProps}) ->
     %% Call normal init
     {ok, prepare, StateData, 0} = init(Args),
@@ -99,7 +107,7 @@ init({test, Args, StateProps}) ->
 
     %% Enter into the execute state, skipping any code that relies on the
     %% state of the rest of the system
-    {ok, execute, TestStateData, 0}.
+    {ok, validate, TestStateData, 0}.
 
 %% @private
 prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
@@ -109,36 +117,44 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
     N = proplists:get_value(n_val,BucketProps),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
-    {next_state, execute, StateData#state{starttime=riak_core_util:moment(),
+    {next_state, validate, StateData#state{starttime=riak_core_util:moment(),
                                           n = N,
                                           bucket_props=BucketProps,
                                           preflist2 = Preflist2}, 0}.
 
-%% @private
-execute(timeout, StateData0=#state{timeout=Timeout, n=N, r=R0, req_id=ReqId,
-                                   bkey=BKey, 
-                                   bucket_props=BucketProps,
-                                   preflist2 = Preflist2}) ->
-    TRef = schedule_timeout(Timeout),
+validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
+                                   n = N, bucket_props = BucketProps}) ->
+    Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
+    R0 = get_option(r, Options, ?DEFAULT_R),
     R = riak_kv_util:expand_rw_value(r, R0, BucketProps, N),
     if
         R =:= error ->
-            client_reply({error, {r_val_violation, R0}}, StateData0),
-            {stop, normal, StateData0};
+            client_reply({error, {r_val_violation, R0}}, StateData),
+            {stop, normal, StateData};
         R > N ->
-            client_reply({error, {n_val_violation, N}}, StateData0),
-            {stop, normal, StateData0};
+            client_reply({error, {n_val_violation, N}}, StateData),
+            {stop, normal, StateData};
         true ->
             FailThreshold = erlang:min((N div 2)+1, % basic quorum, or
                                        (N-R+1)), % cannot ever get R 'ok' replies
             AllowMult = proplists:get_value(allow_mult,BucketProps),
-            Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
-            riak_kv_vnode:get(Preflist, BKey, ReqId),
-            StateData = StateData0#state{n=N,r=R,fail_threshold=FailThreshold,
-                                         allowmult=AllowMult,
-                                         tref=TRef},
-            {next_state,waiting_vnode_r,StateData}
+            {next_state, execute, StateData#state{r = R,
+                                                  fail_threshold = FailThreshold,
+                                                  timeout = Timeout,
+                                                  allowmult = AllowMult,
+                                                  req_id = ReqId}, 0}
     end.
+
+%% @private
+execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
+                                   bkey=BKey, 
+                                   
+                                   preflist2 = Preflist2}) ->
+    TRef = schedule_timeout(Timeout),
+    Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
+    riak_kv_vnode:get(Preflist, BKey, ReqId),
+    StateData = StateData0#state{tref=TRef},
+    {next_state,waiting_vnode_r,StateData}.
 
 waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData) ->
     NewStateData1 = add_vnode_result(Idx, VnodeResult, StateData),
@@ -293,13 +309,16 @@ fail_reply(_R, 0, NumNotFound, []) when NumNotFound > 0 ->
 fail_reply(R, NumR, _NumNotFound, _Fails) ->
     {error, {r_val_unsatisfied, R,  NumR}}.
 
+get_option(Name, Options, Default) ->
+    proplists:get_value(Name, Options, Default).
+
 schedule_timeout(infinity) ->
     undefined;
 schedule_timeout(Timeout) ->
     erlang:send_after(Timeout, self(), request_timeout).
 
-client_reply(Reply, #state{client = Client, req_id = ReqId}) ->
-    Client ! {ReqId, Reply}.
+client_reply(Reply, #state{from = {raw, ReqId, Pid}}) ->
+    Pid ! {ReqId, Reply}.
 
 merge(VResponses, AllowMult) ->
    merge_robjs([R || {R,_I} <- VResponses],AllowMult).
