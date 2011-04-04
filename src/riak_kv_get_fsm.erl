@@ -32,8 +32,12 @@
          handle_info/3, terminate/3, code_change/4]).
 -export([prepare/2,validate/2,execute/2,waiting_vnode_r/2,waiting_read_repair/2]).
 
+-type option() :: {r, pos_integer()} |
+                  {timeout, pos_integer() | infinity}.
+-type options() :: [option()].
+
 -record(state, {from :: {integer(), pid()},
-                options=[],
+                options=[] :: options(),
                 n :: pos_integer(),
                 r :: pos_integer(),
                 fail_threshold :: pos_integer(),
@@ -57,7 +61,7 @@
                }).
 
 -define(DEFAULT_TIMEOUT, 60000).
--define(DEFAULT_R, quorum).
+-define(DEFAULT_R, default).
 
 %% In place only for backwards compatibility
 start(ReqId,Bucket,Key,R,Timeout,From) ->
