@@ -12,6 +12,19 @@
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
+-record(state, {n,
+                r,
+                real_r,
+                history,
+                objects,
+                deleted,
+                options,
+                exp_result,
+                num_oks = 0,
+                del_oks = 0,
+                num_errs = 0}).
+                
+
 %%====================================================================
 %% eunit test 
 %%====================================================================
@@ -134,6 +147,7 @@ r_seed() ->
                { 1, garbage}]).
 
 detail() -> frequency([{1, timing},
+                       {1, vnodes},
                        {1, not_a_detail}]).
     
 details() -> frequency([{10, true}, %% All details requested
@@ -200,9 +214,11 @@ prop_basic_get() ->
                              end
                        }
                         || {Lin, Obj} <- Objects ],
-        H          = [ V || {_, V} <- History ],
-        Expected  = expect(Objects, Deleted, H, N, R, RealR),
-        ExpectedN = case Expected of
+  
+        State = expect(#state{n = N, r = R, real_r = RealR, history = History,
+                              objects = Objects, deleted = Deleted, options = Options}),
+        ExpResult = State#state.exp_result,
+        ExpectedN = case ExpResult of
                         {error, {n_val_violation, _}} ->
                             0;
                         {error, {r_val_violation, _}} ->
@@ -230,18 +246,19 @@ prop_basic_get() ->
                                end,                                                 
         ?WHENFAIL(
             begin
+                io:format("Res: ~p\n", [Res]),
                 io:format("Repair: ~p~nHistory: ~p~n",
                           [RepairHistory, History]),
-                io:format("Result: ~p~nExpected: ~p~nDeleted objects: ~p~n",
-                          [Res, Expected, Deleted]),
+                io:format("RetResult: ~p~nExpResult: ~p~nDeleted objects: ~p~n",
+                          [RetResult, ExpResult, Deleted]),
                 io:format("N: ~p~nR: ~p~nRealR: ~p~nOptions: ~p~nVGetResps: ~p~n",
                           [N, R, RealR, Options, VGetResps]),
-                io:format("H: ~p~nOk: ~p~nNotFound: ~p~nNoReply: ~p~n",
-                          [H, Ok, NotFound, NoReply])
+                io:format("Ok: ~p~nNotFound: ~p~nNoReply: ~p~n",
+                          [Ok, NotFound, NoReply])
             end,
             conjunction(
-                [{result, equals(RetResult, Expected)},
-                 {details, check_details(RetInfo, Options)},
+                [{result, equals(RetResult, ExpResult)},
+                 {details, check_details(RetInfo, State)},
                  {n_value, equals(length(History), ExpectedN)},
                  {repair, check_repair(Objects, RepairHistory, History)},
                  {delete,  check_delete(Objects, RepairHistory, History, PerfectPreflist)},
@@ -301,15 +318,34 @@ expected_repairs(H) ->
                       do_repair(Heads, V) ]
     end.
 
-check_details(Details, Options) ->
+check_details(Info, State = #state{options = Options}) ->
     case proplists:get_value(details, Options, false) of
         false ->
-            equals(undefined, Details);
+            equals(undefined, Info);
         [] ->
-            equals(undefined, Details);
+            equals(undefined, Info);
         _ ->
-            Details /= undefined
+            equals(check_info(Info, State), true)
     end.
+
+check_info([], _State) ->
+    true;
+check_info([{not_a_detail, unknown_detail} | Rest], State) ->
+    check_info(Rest, State);
+check_info([{get_usecs, _} | Rest], State) ->
+    check_info(Rest, State);
+check_info([{vnode_oks, VnodeOks} | Rest], State = #state{num_oks = NumOks}) ->
+    %% How many Ok's in first RealR responses received by FSM.
+    case NumOks of
+        VnodeOks ->
+            check_info(Rest, State);
+        Expected ->
+            {vnode_oks, VnodeOks, expected, Expected}
+    end;
+check_info([{vnode_errors, _Errors} | Rest], State) ->
+    %% The first RealR errors from the vnode history
+    check_info(Rest, State).
+
 
 check_repair(Objects, RepairH, H) ->
     Actual = [ Part || {Part, ?KV_PUT_REQ{}} <- RepairH ],
@@ -375,49 +411,54 @@ build_merged_object(Heads, Objects) ->
                     || Head <- Heads ]),
    riak_object:set_vclock(Object, Vclock).
 
-expect(_Object, _Deleted, _History, _N, R, _RealR) when R =:= garbage ->
-    {error, {r_val_violation, garbage}};
-expect(_Object, _Deleted, _History, N, _R, RealR) when RealR > N ->
-    {error, {n_val_violation, N}};
-expect(Objects, Deleted, History,N, _R, RealR) ->
-    case expect(Deleted, History,N,RealR,0,0,0,0,[]) of
+expect(State = #state{r = R}) when R =:= garbage ->
+    State#state{exp_result = {error, {r_val_violation, garbage}}};
+expect(State = #state{n = N, real_r = RealR}) when RealR > N ->
+    State#state{exp_result = {error, {n_val_violation, N}}};
+expect(State = #state{history = History, objects = Objects}) ->
+    H = [ V || {_, V} <- History ],
+    State1 = expect(H, State, 0, 0 , 0, 0, []),
+    case State1#state.exp_result of
         {ok, Heads} ->
             case riak_kv_util:obj_not_deleted(build_merged_object(Heads, Objects)) of
-                undefined -> {error, notfound};
-                Obj       -> {ok, Obj}
+                undefined -> State1#state{exp_result = {error, notfound}};
+                Obj       -> State1#state{exp_result = {ok, Obj}}
             end;
         Err ->
-            {error, Err}
+            State1#state{exp_result = {error, Err}}
     end.
 
 %% decide on error message - if only got notfound messages, return notfound
 %% otherwise let caller know R value was not met.
-notfound_or_error(NotFound, 0, 0, _R) when NotFound > 0 ->
+notfound_or_error(NotFound, 0, 0, _Oks, _R) when NotFound > 0 ->
     notfound;
-notfound_or_error(_NotFound, Oks, _Err, R) ->
+notfound_or_error(_NotFound, _NumNotDeleted, _Err, Oks, R) ->
     {r_val_unsatisfied, R, Oks}.
 
-expect(D, H, N, R, NotFounds, Oks, DelOks, Errs, Heads) ->
+expect(H, State = #state{n = N, real_r = R, deleted = Deleted},
+       NotFounds, Oks, DelOks, Errs, Heads) ->
     Pending = N - (NotFounds + Oks + Errs),
     if  Oks >= R ->                     % we made quorum
-            {ok, Heads};
+            State#state{exp_result = {ok, Heads}, num_oks = Oks, num_errs = Errs};
         (NotFounds + Errs)*2 > N orelse % basic quorum
         Pending + Oks < R ->            % no way we'll make quorum
             %% Adjust counts to make deleted objects count towards notfound.
-            notfound_or_error(NotFounds + DelOks, Oks - DelOks, Errs, R);
+            State#state{exp_result = notfound_or_error(NotFounds + DelOks, Oks - DelOks,
+                                                       Errs, Oks, R),
+                        num_oks = Oks, del_oks = DelOks, num_errs = Errs};
         true ->
             case H of
                 [] ->
-                    timeout;
+                    State#state{exp_result = timeout, num_oks = Oks, num_errs = Errs};
                 [timeout|Rest] ->
-                    expect(D, Rest, N, R, NotFounds, Oks, DelOks, Errs, Heads);
+                    expect(Rest, State, NotFounds, Oks, DelOks, Errs, Heads);
                 [notfound|Rest] ->
-                    expect(D, Rest, N, R, NotFounds + 1, Oks, DelOks, Errs, Heads);
+                    expect(Rest, State, NotFounds + 1, Oks, DelOks, Errs, Heads);
                 [error|Rest] ->
-                    expect(D, Rest, N, R, NotFounds, Oks, DelOks, Errs + 1, Heads);
+                    expect(Rest, State, NotFounds, Oks, DelOks, Errs + 1, Heads);
                 [{ok,Lineage}|Rest] ->
-                    IncDelOks = length([xx || {Lineage1, deleted} <- D, Lineage1 == Lineage]),
-                    expect(D, Rest, N, R, NotFounds, Oks + 1, DelOks + IncDelOks, Errs,
+                    IncDelOks = length([xx || {Lineage1, deleted} <- Deleted, Lineage1 == Lineage]),
+                    expect(Rest, State, NotFounds, Oks + 1, DelOks + IncDelOks, Errs,
                            merge_heads(Lineage, Heads))
             end
     end.

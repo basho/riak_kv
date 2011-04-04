@@ -303,16 +303,16 @@ enough_results(StateData = #state{r = R, allowmult = AllowMult,
             {reply, Reply, update_timing(StateData#state{final_obj = Final})};
         NumNotFound + NumFail >= FailThreshold ->
             DelObjs = length([xx || {RObj, _Idx} <- Replied, riak_kv_util:is_x_deleted(RObj)]),
-            Reply = fail_reply(R, NumR - DelObjs, NumNotFound + DelObjs, Fails),
+            Reply = fail_reply(R, NumR, NumR - DelObjs, NumNotFound + DelObjs, Fails),
             Final = merge(Replied, AllowMult),
             {reply, Reply, update_timing(StateData#state{final_obj = Final})};
         true ->
             {false, StateData}
     end.
                     
-fail_reply(_R, 0, NumNotFound, []) when NumNotFound > 0 ->
+fail_reply(_R, _NumR, 0, NumNotFound, []) when NumNotFound > 0 ->
     {error, notfound};
-fail_reply(R, NumR, _NumNotFound, _Fails) ->
+fail_reply(R, NumR, _NumNotDeleted, _NumNotFound, _Fails) ->
     {error, {r_val_unsatisfied, R,  NumR}}.
 
 get_option(Name, Options, Default) ->
@@ -388,11 +388,23 @@ client_info([], _StateData, Acc) ->
     Acc;
 client_info([timing | Rest], StateData = #state{get_usecs = GetUsecs}, Acc) ->
     client_info(Rest, StateData, [{get_usecs, GetUsecs} | Acc]);
+client_info([vnodes | Rest], StateData = #state{num_r = NumOks,
+                                                replied_fail = Fail}, Acc) ->
+    Oks = [{vnode_oks, NumOks}],
+    Info = case Fail of
+               [] ->
+                   Oks;
+               _ ->
+                   Errors = [Err || {Err, _Idx} <- Fail],
+                   [{vnode_errors, Errors} | Oks]
+           end,
+    client_info(Rest, StateData, Info ++ Acc);
 client_info([Unknown | Rest], StateData, Acc) ->
     client_info(Rest, StateData, [{Unknown, unknown_detail} | Acc]).
 
 details() ->
-    [timing].
+    [timing,
+     vnodes].
 
 -ifdef(TEST).
 -define(expect_msg(Exp,Timeout), 
