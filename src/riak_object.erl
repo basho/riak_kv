@@ -171,13 +171,12 @@ ancestors(pure_baloney_to_fool_dialyzer) ->
     [#r_object{vclock = vclock:fresh()}];
 ancestors(Objects) ->
     ToRemove = [[O2 || O2 <- Objects,
-                       vclock:descends(O1#r_object.vclock,O2#r_object.vclock),
-                       (vclock:descends(O2#r_object.vclock,O1#r_object.vclock) == false)]
+     vclock:descends(O1#r_object.vclock,O2#r_object.vclock),
+     (vclock:descends(O2#r_object.vclock,O1#r_object.vclock) == false)]
                 || O1 <- Objects],
     lists:flatten(ToRemove).
 
 %% @spec reconcile([riak_object()]) -> [riak_object()]
-
 reconcile(Objects) ->
     All = sets:from_list(Objects),
     Del = sets:from_list(ancestors(Objects)),
