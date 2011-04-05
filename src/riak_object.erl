@@ -430,10 +430,10 @@ syntactic_merge(CurrentObject, NewObject, FromClientId, Timestamp) ->
                      false -> CurrentObject
                  end,
 
-    case ancestors([CurrentObject, UpdatedNew]) of
+    case ancestors([UpdatedCurr, UpdatedNew]) of
         [] -> merge(UpdatedCurr, UpdatedNew);
         [Ancestor] ->
-            case equal(Ancestor, CurrentObject) of
+            case equal(Ancestor, UpdatedCurr) of
                 true  -> UpdatedNew;
                 false -> UpdatedCurr
             end
