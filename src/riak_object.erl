@@ -435,8 +435,13 @@ syntactic_merge(CurrentObject, NewObject, FromClientId, Timestamp) ->
                 true ->
                     NewObject;
                 false ->
-                    increment_vclock(
-                      merge(CurrentObject, NewObject), FromClientId, Timestamp)
+                    MergedObject = merge(CurrentObject, NewObject),
+                    case is_updated(NewObject) of
+                        true ->
+                            increment_vclock(MergedObject, FromClientId, Timestamp);
+                        false ->
+                            MergedObject
+                    end
             end
     end.
 
