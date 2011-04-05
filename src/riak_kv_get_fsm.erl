@@ -42,6 +42,7 @@
                 r :: pos_integer(),
                 fail_threshold :: pos_integer(),
                 allowmult :: boolean(),
+                notfound_ok :: boolean(),
                 preflist2 :: riak_core_apl:preflist2(),
                 req_id :: pos_integer(),
                 starttime :: pos_integer(),
@@ -143,10 +144,12 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
             FailThreshold = erlang:min((N div 2)+1, % basic quorum, or
                                        (N-R+1)), % cannot ever get R 'ok' replies
             AllowMult = proplists:get_value(allow_mult,BucketProps),
+            NotFoundOk = get_option(notfound_ok, Options, false),
             {next_state, execute, StateData#state{r = R,
                                                   fail_threshold = FailThreshold,
                                                   timeout = Timeout,
                                                   allowmult = AllowMult,
+                                                  notfound_ok = NotFoundOk,
                                                   req_id = ReqId}, 0}
     end.
 
@@ -284,9 +287,15 @@ add_vnode_result(Idx, {ok, RObj}, StateData = #state{replied_r = Replied,
     StateData#state{replied_r = [{RObj, Idx} | Replied],
                     num_r = NumR + 1};
 add_vnode_result(Idx, {error, notfound}, StateData = #state{replied_notfound = NotFound,
-                                                            num_notfound = NumNotFound}) ->
+                                                            num_notfound = NumNotFound,
+                                                            notfound_ok = false}) ->
     StateData#state{replied_notfound = [Idx | NotFound],
                     num_notfound = NumNotFound + 1};
+add_vnode_result(Idx, {error, notfound}, StateData = #state{replied_notfound = NotFound,
+                                                            num_r = NumR,
+                                                            notfound_ok = true}) ->
+    StateData#state{replied_notfound = [Idx | NotFound],
+                    num_r = NumR + 1};
 add_vnode_result(Idx, {error, Err}, StateData = #state{replied_fail = Fail,
                                                        num_fail = NumFail}) ->
     StateData#state{replied_fail = [{Err, Idx} | Fail],
@@ -336,14 +345,13 @@ client_reply(Reply, StateData = #state{from = {raw, ReqId, Pid}, options = Optio
           end,
     Pid ! Msg. 
 
-merge(VResponses, AllowMult) ->
-   merge_robjs([R || {R,_I} <- VResponses],AllowMult).
-
 respond(VResponses,AllowMult) ->
     Merged = merge(VResponses, AllowMult),
     case Merged of
         tombstone ->
             Reply = {error,notfound};
+        {error, notfound} ->
+            Reply = Merged;
         {ok, Obj} ->
             case riak_kv_util:is_x_deleted(Obj) of
                 true ->
@@ -355,6 +363,9 @@ respond(VResponses,AllowMult) ->
             Reply = X
     end,
     {Reply, Merged}.
+
+merge(VResponses, AllowMult) ->
+   merge_robjs([R || {R,_I} <- VResponses],AllowMult).
 
 merge_robjs([], _) ->
     {error, notfound};

@@ -19,6 +19,7 @@
                 objects,
                 deleted,
                 options,
+                notfound_is_ok,
                 exp_result,
                 num_oks = 0,
                 del_oks = 0,
@@ -154,8 +155,14 @@ details() -> frequency([{10, true}, %% All details requested
                         {10, list(detail())},
                         { 1, false}]).
     
+bool_prop(Name) ->
+    frequency([{4, {Name, true}},
+               {1, Name},
+               {5, {Name, false}}]).
+
 option() -> 
-    frequency([{1, {details, details()}}]).
+    frequency([{1, {details, details()}},
+               {1, bool_prop(notfound_ok)}]).
 
 options() ->
     list(option()).
@@ -214,9 +221,10 @@ prop_basic_get() ->
                              end
                        }
                         || {Lin, Obj} <- Objects ],
-  
+        NotFoundIsOk = proplists:get_value(notfound_ok, Options, false),
         State = expect(#state{n = N, r = R, real_r = RealR, history = History,
-                              objects = Objects, deleted = Deleted, options = Options}),
+                              objects = Objects, deleted = Deleted, options = Options,
+                              notfound_is_ok = NotFoundIsOk}),
         ExpResult = State#state.exp_result,
         ExpectedN = case ExpResult of
                         {error, {n_val_violation, _}} ->
@@ -435,11 +443,17 @@ notfound_or_error(NotFound, 0, 0, _Oks, _R) when NotFound > 0 ->
 notfound_or_error(_NotFound, _NumNotDeleted, _Err, Oks, R) ->
     {r_val_unsatisfied, R, Oks}.
 
-expect(H, State = #state{n = N, real_r = R, deleted = Deleted},
+expect(H, State = #state{n = N, real_r = R, deleted = Deleted, notfound_is_ok = NotFoundIsOk},
        NotFounds, Oks, DelOks, Errs, Heads) ->
     Pending = N - (NotFounds + Oks + Errs),
     if  Oks >= R ->                     % we made quorum
-            State#state{exp_result = {ok, Heads}, num_oks = Oks, num_errs = Errs};
+            ExpResult = case Heads of
+                            [] ->
+                                notfound;
+                            _ ->
+                                {ok, Heads}
+                        end,
+            State#state{exp_result = ExpResult, num_oks = Oks, num_errs = Errs};
         (NotFounds + Errs)*2 > N orelse % basic quorum
         Pending + Oks < R ->            % no way we'll make quorum
             %% Adjust counts to make deleted objects count towards notfound.
@@ -453,7 +467,12 @@ expect(H, State = #state{n = N, real_r = R, deleted = Deleted},
                 [timeout|Rest] ->
                     expect(Rest, State, NotFounds, Oks, DelOks, Errs, Heads);
                 [notfound|Rest] ->
-                    expect(Rest, State, NotFounds + 1, Oks, DelOks, Errs, Heads);
+                    case NotFoundIsOk of
+                        true ->
+                            expect(Rest, State, NotFounds, Oks + 1, DelOks, Errs, Heads);
+                        false ->
+                            expect(Rest, State, NotFounds + 1, Oks, DelOks, Errs, Heads)
+                    end;
                 [error|Rest] ->
                     expect(Rest, State, NotFounds, Oks, DelOks, Errs + 1, Heads);
                 [{ok,Lineage}|Rest] ->
