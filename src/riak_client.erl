@@ -308,7 +308,8 @@ put(RObj, W, DW, Timeout) -> put(RObj, W, DW, Timeout, []).
 %%      at least DW nodes have stored it in their storage backend, or
 %%      TimeoutMillisecs passes.
 put(RObj, W, DW, Timeout, Options) ->
-    R0 = riak_object:increment_vclock(RObj, ClientId),
+    RUpdated = riak_object:apply_updates(RObj),
+    R0 = riak_object:increment_vclock(RUpdated, ClientId),
     Me = self(),
     ReqId = mk_reqid(),
     spawn(Node, riak_kv_put_fsm, start, [ReqId,R0,W,DW,Timeout,Me,Options]),

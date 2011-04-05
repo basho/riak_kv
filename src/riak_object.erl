@@ -196,11 +196,10 @@ compare_content_dates(C1,C2) ->
 %% @doc  Merge the contents and vclocks of OldObject and NewObject.
 %%       Note:  This function calls apply_updates on NewObject.
 merge(OldObject, NewObject) ->
-    NewObj1 = apply_updates(NewObject),
     OldObject#r_object{contents=lists:umerge(lists:usort(NewObject#r_object.contents),
                                              lists:usort(OldObject#r_object.contents)),
                        vclock=vclock:merge([OldObject#r_object.vclock,
-                          NewObj1#r_object.vclock]),
+                                            NewObject#r_object.vclock]),
                        updatemetadata=dict:store(clean, true, dict:new()),
                        updatevalue=undefined}.
 
@@ -420,23 +419,23 @@ syntactic_merge(CurrentObject, NewObject, FromClientId) ->
     syntactic_merge(CurrentObject, NewObject, FromClientId, vclock:timestamp()).
 
 syntactic_merge(CurrentObject, NewObject, FromClientId, Timestamp) ->
-    case ancestors([CurrentObject, NewObject]) of
-        [OlderObject] ->
-            WinObject = case vclock(OlderObject) =:= vclock(CurrentObject) of
-                true -> NewObject;
-                false -> CurrentObject
-            end,
-            case is_updated(WinObject) of
-                true -> increment_vclock(apply_updates(WinObject), FromClientId, Timestamp);
-                false -> WinObject
-            end;
-        [] ->
-            case riak_object:equal(CurrentObject, NewObject) of
-                true ->
-                    NewObject;
-                false ->
-                    increment_vclock(
-                      merge(CurrentObject, NewObject), FromClientId, Timestamp)
+
+    UpdatedNew = case is_updated(NewObject) of
+                     true  -> increment_vclock(apply_updates(NewObject), FromClientId, Timestamp);
+                     false -> NewObject
+                 end,
+
+    UpdatedCurr = case is_updated(CurrentObject) of
+                     true  -> increment_vclock(apply_updates(CurrentObject), FromClientId, Timestamp);
+                     false -> CurrentObject
+                 end,
+
+    case ancestors([UpdatedCurr, UpdatedNew]) of
+        [] -> merge(UpdatedCurr, UpdatedNew);
+        [Ancestor] ->
+            case equal(Ancestor, UpdatedCurr) of
+                true  -> UpdatedNew;
+                false -> UpdatedCurr
             end
     end.
 
@@ -480,14 +479,19 @@ merge1_test() ->
     O3 = riak_object:syntactic_merge(O,O3,node_does_not_matter_here),
     {O,O3}.
 
-merge2_test() ->
-    B = <<"buckets_are_binaries">>,
-    K = <<"keys are binaries">>,
-    V = <<"testvalue2">>,
+merge2_noupdate_test() ->
     O1 = riak_object:increment_vclock(object_test(), node1),
-    O2 = riak_object:increment_vclock(riak_object:new(B,K,V), node2),
+    O2 = riak_object:increment_vclock(object_test(), node2),
     O3 = riak_object:syntactic_merge(O1, O2, other_node),
-    [other_node, node1, node2] = [N || {N,_} <- riak_object:vclock(O3)],
+    [node1, node2] = [N || {N,_} <- riak_object:vclock(O3)],
+    1 = riak_object:value_count(O3).
+
+merge2_update_test() ->
+    O1 = riak_object:increment_vclock(object_test(), node1),
+    O2 = riak_object:increment_vclock(update_value(object_test(),
+                                                   <<"testvalue_update">>), node2),
+    O3 = riak_object:syntactic_merge(O1, O2, other_node),
+    [node1, node2, other_node] = lists:sort([N || {N,_} <- riak_object:vclock(O3)]),
     2 = riak_object:value_count(O3).
 
 merge3_test() ->
