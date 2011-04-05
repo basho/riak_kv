@@ -579,28 +579,78 @@ must_be_first_setup_stuff_test() ->
     dets_server:stop(),
     erlang:put({?MODULE, kv}, application:get_all_env(riak_kv)).
 
-list_buckets_bitcask_test() ->
-    list_buckets_test_i(riak_kv_bitcask_backend).
-
-list_buckets_cache_test() ->
-    list_buckets_test_i(riak_kv_cache_backend).
-
-list_buckets_dets_test() ->
-    redbug:start({dets, apply_op}, [{msgs,100}, {print_file, "zoozoo"}]),
-    os:cmd("rm -rf " ++ dets_test_dir()),
-    list_buckets_test_i(riak_kv_dets_backend).
-
-list_buckets_ets_test() ->
-    list_buckets_test_i(riak_kv_ets_backend).
-
-list_buckets_fs_test() ->
-    list_buckets_test_i(riak_kv_fs_backend).
-
-list_buckets_gb_trees_test() ->
-    list_buckets_test_i(riak_kv_gb_trees_backend).
-
-list_buckets_multi_backend_test() ->
-    list_buckets_test_i(riak_kv_multi_backend).
+list_buckets_test_() ->
+    {foreach,
+        fun() ->
+            application:start(sasl),
+            application:get_all_env(riak_kv)
+        end,
+        fun(Env) ->
+            application:stop(sasl),
+            [application:unset_env(riak_kv, K) ||
+            {K, _V} <- application:get_all_env(riak_kv)],
+            [application:set_env(riak_kv, K, V) || {K, V} <- Env]
+        end,
+        [
+        fun(_) ->
+            {"bitcask list buckets",
+                fun() ->
+                    list_buckets_test_i(riak_kv_bitcask_backend)
+                end
+            }
+        end,
+        fun(_) ->
+            {"cache list buckets",
+                fun() ->
+                    list_buckets_test_i(riak_kv_cache_backend)
+                end
+            }
+        end,
+        fun(_) ->
+            {"dets list buckets",
+                fun() ->
+                    dets_server:stop(),
+                    redbug:start({dets, apply_op}, [{msgs,100}, {print_file, "zoozoo"}]),
+                    os:cmd("rm -rf " ++ dets_test_dir()),
+                    list_buckets_test_i(riak_kv_dets_backend),
+                    redbug:stop()
+                end
+            }
+        end,
+        fun(_) ->
+            {"ets list buckets",
+                fun() ->
+                    list_buckets_test_i(riak_kv_ets_backend),
+                    ok
+                end
+            }
+        end,
+        fun(_) ->
+            {"fs list buckets",
+                fun() ->
+                    list_buckets_test_i(riak_kv_fs_backend),
+                    ok
+                end
+            }
+        end,
+        fun(_) ->
+            {"gb_trees list buckets",
+                fun() ->
+                    list_buckets_test_i(riak_kv_gb_trees_backend),
+                    ok
+                end
+            }
+        end,
+        fun(_) ->
+            {"multi list buckets",
+                fun() ->
+                    list_buckets_test_i(riak_kv_multi_backend),
+                    ok
+                end
+            }
+        end
+        ]
+    }.
 
 list_buckets_test_i(BackendMod) ->
     {S, B, _K} = backend_with_known_key(BackendMod),

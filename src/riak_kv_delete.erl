@@ -108,17 +108,32 @@ invalid_rw_delete() ->
     end.                
     
 setup() ->
+    %% Shut logging up - too noisy.
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_delete_test_sasl.log"}),
+    error_logger:tty(false),
+    error_logger:logfile({open, "riak_kv_delete_test.log"}),
     %% Start erlang node
-    net_kernel:start([testnode, shortnames]),
+    {ok, _} = net_kernel:start([testnode, shortnames]),
     cleanup(unused_arg),
     do_dep_apps(start, dep_apps()),
-    {ok, _Pid} = riak_kv_delete_sup:start_link(),
+    %% There's some weird interaction with the quickcheck tests in put_fsm_eqc
+    %% that somehow makes the riak_kv_delete sup not be running if those tests
+    %% run before these. I'm sick of trying to figure out what is not being
+    %% cleaned up right, thus the following workaround.
+    case whereis(riak_kv_delete_sup) of
+        undefined ->
+            {ok, _} = riak_kv_delete_sup:start_link();
+        _ ->
+            ok
+    end,
     timer:sleep(500).
 
 cleanup(_Pid) ->
     do_dep_apps(stop, lists:reverse(dep_apps())),
     catch exit(whereis(riak_kv_vnode_master), kill), %% Leaks occasionally
     catch exit(whereis(riak_sysmon_filter), kill), %% Leaks occasionally
+    net_kernel:stop(),
     %% Reset the riak_core vnode_modules
     application:set_env(riak_core, vnode_modules, []).
 
