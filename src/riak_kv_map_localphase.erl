@@ -50,12 +50,6 @@ wait(done, StateData=#state{pending=Pending}) ->
         [] -> finish(StateData);
         _ -> {next_state, wait, StateData#state{done=true}}
     end;
-wait({input,Inputs0}, StateData=#state{qterm=QTerm,vnode=VN,pending=Pending,
-                                       partition=Partition}) ->
-    Inputs = [convert_input(I) || I <- Inputs0],
-    [riak_kv_vnode:map({Partition,VN},self(),QTerm,BKey,KeyData) ||
-        {BKey,KeyData} <- Inputs],
-    {next_state, wait, StateData#state{pending=Inputs++Pending}};
 wait({mapexec_error, {BKey,KeyData}, _VN, _ErrMsg},
      StateData=#state{phase_pid=PhasePid,pending=Pending}) ->
     gen_fsm:send_event(PhasePid, {mapexec_error, self(), {BKey,KeyData}}),
@@ -106,12 +100,6 @@ send_results(_StateData=#state{next_qterm=NextQTerm,phase_pid=PhasePid,
                                {mapexec_error, self(), {BKey,KeyData}}) ||
                 {BKey,KeyData} <- Finished]
     end.
-
-%% @private
-convert_input(I={{_B,_K},_D})
-  when is_binary(_B) andalso (is_list(_K) orelse is_binary(_K)) -> I;
-convert_input(I={_B,_K})
-  when is_binary(_B) andalso (is_list(_K) orelse is_binary(_K)) -> {I,undefined}.
 
 %% @private
 maybe_reduce(Values,NextQTerm) ->
