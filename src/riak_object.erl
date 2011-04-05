@@ -61,9 +61,6 @@
 -export([merge/2, apply_updates/1, syntactic_merge/3, syntactic_merge/4]).
 -export([to_json/1, from_json/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
-%% -export([grrrrr_fool_dialyzer_for_ancestors_typing/0, grrrrr_fool_dialyzer_for_ancestors_typing2/0]).
-%% grrrrr_fool_dialyzer_for_ancestors_typing() -> ancestors([#r_object{vclock = vclock:fresh()}, #r_object{vclock = vclock:increment(grrrrr_fool_dialyzer_for_ancestors_typing, vclock:fresh())}]).
-%% grrrrr_fool_dialyzer_for_ancestors_typing2() -> ancestors([]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -175,17 +172,13 @@ reconcile(Objects, AllowMultiple) ->
 ancestors(pure_baloney_to_fool_dialyzer) ->
     [#r_object{vclock = vclock:fresh()}];
 ancestors(Objects) ->
-    ToRemove = to_remove(Objects),
+    ToRemove = [[O2 || O2 <- Objects,
+                       vclock:descends(O1#r_object.vclock,O2#r_object.vclock),
+                       (vclock:descends(O2#r_object.vclock,O1#r_object.vclock) == false)]
+                || O1 <- Objects],
     lists:flatten(ToRemove).
 
-%%FOO: -spec to_remove([] | [riak_object(),...]) -> [[]] | [[riak_object(),...]].
-to_remove(Objects) ->
-    [[O2 || O2 <- Objects,
-            vclock:descends(O1#r_object.vclock,O2#r_object.vclock),
-            (vclock:descends(O2#r_object.vclock,O1#r_object.vclock) == false)]
-     || O1 <- Objects].
-
-%%FOO: -spec reconcile([] | nonempty_list(riak_object())) -> [riak_object()].
+%% @spec reconcile([riak_object()]) -> [riak_object()]
 
 reconcile(Objects) ->
     All = sets:from_list(Objects),
