@@ -167,8 +167,6 @@ reconcile(Objects, AllowMultiple) ->
 %%       the other objects in Objects, and can safely be discarded from the list
 %%       without losing data.
 
--spec ancestors(pure_baloney_to_fool_dialyzer | pure_baloney_to_fool_dialyzer2 | [riak_object()]) -> [riak_object()].
-
 ancestors(pure_baloney_to_fool_dialyzer) ->
     [#r_object{vclock = vclock:fresh()}];
 ancestors(Objects) ->
