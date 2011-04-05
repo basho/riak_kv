@@ -161,12 +161,12 @@ reconcile(Objects, AllowMultiple) ->
                    updatemetadata=dict:store(clean, true, dict:new()),
                    updatevalue=undefined}.
 
+%% @spec ancestors([riak_object()]) -> [riak_object()]
 %% @doc  Given a list of riak_object()s, return the objects that are pure
 %%       ancestors of other objects in the list, if any.  The changes in the
 %%       objects returned by this function are guaranteed to be reflected in
 %%       the other objects in Objects, and can safely be discarded from the list
 %%       without losing data.
-
 ancestors(pure_baloney_to_fool_dialyzer) ->
     [#r_object{vclock = vclock:fresh()}];
 ancestors(Objects) ->
