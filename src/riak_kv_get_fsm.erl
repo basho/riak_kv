@@ -141,8 +141,14 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
             client_reply({error, {n_val_violation, N}}, StateData),
             {stop, normal, StateData};
         true ->
-            FailThreshold = erlang:min((N div 2)+1, % basic quorum, or
-                                       (N-R+1)), % cannot ever get R 'ok' replies
+            FailThreshold = 
+                case get_option(basic_quorum, Options, true) of
+                    true ->
+                        erlang:min((N div 2)+1, % basic quorum, or
+                                   (N-R+1)); % cannot ever get R 'ok' replies
+                    false ->
+                        N - R + 1 % cannot ever get R 'ok' replies
+                end,
             AllowMult = proplists:get_value(allow_mult,BucketProps),
             NotFoundOk = get_option(notfound_ok, Options, false),
             {next_state, execute, StateData#state{r = R,

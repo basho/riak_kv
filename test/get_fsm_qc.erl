@@ -20,6 +20,7 @@
                 deleted,
                 options,
                 notfound_is_ok,
+                basic_quorum,
                 exp_result,
                 num_oks = 0,
                 del_oks = 0,
@@ -162,7 +163,8 @@ bool_prop(Name) ->
 
 option() -> 
     frequency([{1, {details, details()}},
-               {1, bool_prop(notfound_ok)}]).
+               {1, bool_prop(notfound_ok)},
+               {1, bool_prop(basic_quorum)}]).
 
 options() ->
     list(option()).
@@ -222,9 +224,10 @@ prop_basic_get() ->
                        }
                         || {Lin, Obj} <- Objects ],
         NotFoundIsOk = proplists:get_value(notfound_ok, Options, false),
+        BasicQuorum = proplists:get_value(basic_quorum, Options, true),
         State = expect(#state{n = N, r = R, real_r = RealR, history = History,
                               objects = Objects, deleted = Deleted, options = Options,
-                              notfound_is_ok = NotFoundIsOk}),
+                              notfound_is_ok = NotFoundIsOk, basic_quorum = BasicQuorum}),
         ExpResult = State#state.exp_result,
         ExpectedN = case ExpResult of
                         {error, {n_val_violation, _}} ->
@@ -443,7 +446,8 @@ notfound_or_error(NotFound, 0, 0, _Oks, _R) when NotFound > 0 ->
 notfound_or_error(_NotFound, _NumNotDeleted, _Err, Oks, R) ->
     {r_val_unsatisfied, R, Oks}.
 
-expect(H, State = #state{n = N, real_r = R, deleted = Deleted, notfound_is_ok = NotFoundIsOk},
+expect(H, State = #state{n = N, real_r = R, deleted = Deleted, notfound_is_ok = NotFoundIsOk,
+                         basic_quorum = BasicQuorum},
        NotFounds, Oks, DelOks, Errs, Heads) ->
     Pending = N - (NotFounds + Oks + Errs),
     if  Oks >= R ->                     % we made quorum
@@ -454,7 +458,7 @@ expect(H, State = #state{n = N, real_r = R, deleted = Deleted, notfound_is_ok = 
                                 {ok, Heads}
                         end,
             State#state{exp_result = ExpResult, num_oks = Oks, num_errs = Errs};
-        (NotFounds + Errs)*2 > N orelse % basic quorum
+        (BasicQuorum andalso (NotFounds + Errs)*2 > N) orelse % basic quorum
         Pending + Oks < R ->            % no way we'll make quorum
             %% Adjust counts to make deleted objects count towards notfound.
             State#state{exp_result = notfound_or_error(NotFounds + DelOks, Oks - DelOks,
