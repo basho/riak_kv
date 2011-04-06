@@ -64,6 +64,7 @@
 
 -define(DEFAULT_TIMEOUT, 60000).
 -define(DEFAULT_R, default).
+-define(DEFAULT_PR, 0).
 
 %% In place only for backwards compatibility
 start(ReqId,Bucket,Key,R,Timeout,From) ->
@@ -129,16 +130,28 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
                                           preflist2 = Preflist2}, 0}.
 
 validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
-                                   n = N, bucket_props = BucketProps}) ->
+                                   n = N, bucket_props = BucketProps, preflist2 = PL2}) ->
     Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
     R0 = get_option(r, Options, ?DEFAULT_R),
+    PR0 = get_option(pr, Options, ?DEFAULT_PR),
     R = riak_kv_util:expand_rw_value(r, R0, BucketProps, N),
+    PR = riak_kv_util:expand_rw_value(pr, PR0, BucketProps, N),
+    NumPrimaries = length([x || {_,primary} <- PL2]),
     if
         R =:= error ->
             client_reply({error, {r_val_violation, R0}}, StateData),
             {stop, normal, StateData};
         R > N ->
             client_reply({error, {n_val_violation, N}}, StateData),
+            {stop, normal, StateData};
+        PR =:= error ->
+            client_reply({error, {pr_val_violation, PR0}}, StateData),
+            {stop, normal, StateData};
+        PR > N ->
+            client_reply({error, {n_val_violation, N}}, StateData),
+            {stop, normal, StateData};
+        PR > NumPrimaries ->
+            client_reply({error, {pr_val_unsatisfied, PR, NumPrimaries}}, StateData),
             {stop, normal, StateData};
         true ->
             FailThreshold = 

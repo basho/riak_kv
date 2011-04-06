@@ -8,13 +8,18 @@
 -compile(export_all).
 -define(DEFAULT_BUCKET_PROPS,
         [{allow_mult, false},
-         {chash_keyfun, {riak_core_util, chash_std_keyfun}}]).
+         {chash_keyfun, {riak_core_util, chash_std_keyfun}},
+         {r, quorum},
+         {pr, 0}]).
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
 -record(state, {n,
                 r,
                 real_r,
+                pr,
+                real_pr,
+                num_primaries,
                 history,
                 objects,
                 deleted,
@@ -142,7 +147,9 @@ prop_len() ->
     ).
 
 r_seed() ->
-    frequency([{50, quorum},
+    frequency([{10, quorum},
+               {10, default},
+               {10, missing},
                {10, one},
                {10, all},
                {10, fsm_eqc_util:largenat()},
@@ -170,13 +177,14 @@ options() ->
     list(option()).
 
 prop_basic_get() ->
-    ?FORALL({RSeed,Options0, Objects,ReqId,VGetResps},
-            {r_seed(), options(),
+    ?FORALL({RSeed,PRSeed,Options0, Objects,ReqId,VGetResps},
+            {r_seed(), r_seed(), options(),
              fsm_eqc_util:riak_objects(), noshrink(largeint()),
              vnodegetresps()},
     begin
         N = length(VGetResps),
         {R, RealR} = r_val(N, 1000000, RSeed),
+        {PR, RealPR} = pr_val(N, 1000000, PRSeed),
         PL2 = make_preflist2(VGetResps, 1, []),
         PartVals = make_partvals(VGetResps, []),
         fsm_eqc_vnode:set_data(Objects, PartVals),
@@ -193,7 +201,7 @@ prop_basic_get() ->
         
         [{_,Object}|_] = Objects,
         
-        Options = [{r, R}, {timeout, 200} | Options0],
+        Options = make_options([{r, R}, {pr, PR}], [{timeout, 200} | Options0]),
 
         {ok, GetPid} = riak_kv_get_fsm:test_link({raw, ReqId, self()},
                             riak_object:bucket(Object),
@@ -225,14 +233,21 @@ prop_basic_get() ->
                         || {Lin, Obj} <- Objects ],
         NotFoundIsOk = proplists:get_value(notfound_ok, Options, false),
         BasicQuorum = proplists:get_value(basic_quorum, Options, true),
-        State = expect(#state{n = N, r = R, real_r = RealR, history = History,
+        NumPrimaries = length([xx || {_,primary} <- PL2]),
+        State = expect(#state{n = N, r = R, real_r = RealR, pr = PR, real_pr = RealPR,
+                              history = History,
                               objects = Objects, deleted = Deleted, options = Options,
-                              notfound_is_ok = NotFoundIsOk, basic_quorum = BasicQuorum}),
+                              notfound_is_ok = NotFoundIsOk, basic_quorum = BasicQuorum,
+                              num_primaries = NumPrimaries}),
         ExpResult = State#state.exp_result,
         ExpectedN = case ExpResult of
                         {error, {n_val_violation, _}} ->
                             0;
                         {error, {r_val_violation, _}} ->
+                            0;
+                        {error, {pr_val_violation, _}} ->
+                            0;
+                        {error, {pr_val_unsatisfied, _, _}} ->
                             0;
                         _ ->
                             length([xx || {_, Resp} <- VGetResps, Resp /= timeout])
@@ -242,6 +257,7 @@ prop_basic_get() ->
         PerfectPreflist = lists:all(fun({{_Idx,_Node},primary}) -> true;
                                        ({{_Idx,_Node},fallback}) -> false
                                     end, PL2),
+        
 
         {RetResult, RetInfo} = case Res of 
                                    timeout ->
@@ -262,8 +278,9 @@ prop_basic_get() ->
                           [RepairHistory, History]),
                 io:format("RetResult: ~p~nExpResult: ~p~nDeleted objects: ~p~n",
                           [RetResult, ExpResult, Deleted]),
-                io:format("N: ~p~nR: ~p~nRealR: ~p~nOptions: ~p~nVGetResps: ~p~n",
-                          [N, R, RealR, Options, VGetResps]),
+                io:format("N: ~p  R: ~p  RealR: ~p  PR: ~p  RealPR: ~p~n"
+                          "Options: ~p~nVGetResps: ~p~nPL2: ~p~n",
+                          [N, R, RealR, PR, RealPR, Options, VGetResps, PL2]),
                 io:format("Ok: ~p~nNotFound: ~p~nNoReply: ~p~n",
                           [Ok, NotFound, NoReply])
             end,
@@ -277,6 +294,13 @@ prop_basic_get() ->
                 ]))
     end).
 
+
+make_options([], Options) ->
+    Options;
+make_options([{_Name, missing} | Rest], Options) ->
+    make_options(Rest, Options);
+make_options([Option | Rest], Options) ->
+    make_options(Rest, [Option | Options]).
 
 %% make preflist2 from the vnode responses.
 %% [{notfound|{ok, lineage()}, PrimaryFallback, Response]
@@ -304,7 +328,23 @@ r_val(N, Min, Seed) ->
     Val = case Seed of
               one -> 1;
               all -> N;
+              X when X == quorum; X == missing; X == default ->
+                  (N div 2) + 1;
+              _ -> Seed
+          end,
+    {Seed, erlang:min(Min, Val)}.
+
+pr_val(_N, _Min, garbage) ->
+    {garbage, 1000000};
+pr_val(N, Min, Seed) when is_number(Seed) ->
+    Val = Seed rem N + 2,
+    {Val, erlang:min(Min, Val)};
+pr_val(N, Min, Seed) ->
+    Val = case Seed of
+              one -> 1;
+              all -> N;
               quorum -> (N div 2) + 1;
+              X when X == missing; X == default -> 0;
               _ -> Seed
           end,
     {Seed, erlang:min(Min, Val)}.
@@ -426,6 +466,12 @@ expect(State = #state{r = R}) when R =:= garbage ->
     State#state{exp_result = {error, {r_val_violation, garbage}}};
 expect(State = #state{n = N, real_r = RealR}) when RealR > N ->
     State#state{exp_result = {error, {n_val_violation, N}}};
+expect(State = #state{pr = PR}) when PR =:= garbage ->
+    State#state{exp_result = {error, {pr_val_violation, garbage}}};
+expect(State = #state{n = N, real_pr = RealPR}) when RealPR > N ->
+    State#state{exp_result = {error, {n_val_violation, N}}};
+expect(State = #state{real_pr = RealPR, num_primaries = NumPrimaries}) when RealPR > NumPrimaries ->
+    State#state{exp_result = {error, {pr_val_unsatisfied, RealPR, NumPrimaries}}};
 expect(State = #state{history = History, objects = Objects}) ->
     H = [ V || {_, V} <- History ],
     State1 = expect(H, State, 0, 0 , 0, 0, []),
