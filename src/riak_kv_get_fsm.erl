@@ -66,6 +66,10 @@
 -define(DEFAULT_R, default).
 -define(DEFAULT_PR, 0).
 
+%% ===================================================================
+%% Public API
+%% ===================================================================
+
 %% In place only for backwards compatibility
 start(ReqId,Bucket,Key,R,Timeout,From) ->
     start_link({raw, ReqId, From}, Bucket, Key, [{r, R}, {timeout, Timeout}]).
@@ -75,6 +79,10 @@ start_link(ReqId,Bucket,Key,R,Timeout,From) ->
 
 start_link(From, Bucket, Key, GetOptions) ->
     gen_fsm:start_link(?MODULE, [From, Bucket, Key, GetOptions], []).
+
+%% ===================================================================
+%% Test API
+%% ===================================================================
 
 -ifdef(TEST).
 %% Create a get FSM for testing.  StateProps must include
@@ -90,6 +98,10 @@ test_link(From, Bucket, Key, GetOptions, StateProps) ->
     gen_fsm:start_link(?MODULE, {test, [From, Bucket, Key, GetOptions], StateProps}, []).
 
 -endif.
+
+%% ====================================================================
+%% gen_fsm callbacks
+%% ====================================================================
 
 %% @private
 init([From, Bucket, Key, Options]) ->
@@ -129,6 +141,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
                                           bucket_props=BucketProps,
                                           preflist2 = Preflist2}, 0}.
 
+%% @private
 validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
                                    n = N, bucket_props = BucketProps, preflist2 = PL2}) ->
     Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
@@ -183,6 +196,7 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
     StateData = StateData0#state{tref=TRef},
     {next_state,waiting_vnode_r,StateData}.
 
+%% @private
 waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData) ->
     NewStateData1 = add_vnode_result(Idx, VnodeResult, StateData),
     case enough_results(NewStateData1) of
@@ -199,12 +213,76 @@ waiting_vnode_r(request_timeout, StateData=#state{replied_r=Replied,allowmult=Al
     client_reply({error,timeout}, StateData),
     really_finalize(StateData#state{final_obj=merge(Replied, AllowMult)}).
 
+%% @private
 waiting_read_repair({r, VnodeResult, Idx, _ReqId}, StateData) ->
     NewStateData1 = add_vnode_result(Idx, VnodeResult, StateData),
     finalize(NewStateData1#state{final_obj = undefined});
 waiting_read_repair(request_timeout, StateData) ->
     really_finalize(StateData).
 
+%% @private
+handle_event(_Event, _StateName, StateData) ->
+    {stop,badmsg,StateData}.
+
+%% @private
+handle_sync_event(_Event, _From, _StateName, StateData) ->
+    {stop,badmsg,StateData}.
+
+%% @private
+handle_info(request_timeout, StateName, StateData) ->
+    ?MODULE:StateName(request_timeout, StateData);
+%% @private
+handle_info(_Info, _StateName, StateData) ->
+    {stop,badmsg,StateData}.
+
+%% @private
+terminate(Reason, _StateName, _State) ->
+    Reason.
+
+%% @private
+code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
+
+%% ====================================================================
+%% Internal functions
+%% ====================================================================
+
+add_vnode_result(Idx, {ok, RObj}, StateData = #state{replied_r = Replied,
+                                                     num_r = NumR}) ->
+    StateData#state{replied_r = [{RObj, Idx} | Replied],
+                    num_r = NumR + 1};
+add_vnode_result(Idx, {error, notfound}, StateData = #state{replied_notfound = NotFound,
+                                                            num_notfound = NumNotFound,
+                                                            notfound_ok = false}) ->
+    StateData#state{replied_notfound = [Idx | NotFound],
+                    num_notfound = NumNotFound + 1};
+add_vnode_result(Idx, {error, notfound}, StateData = #state{replied_notfound = NotFound,
+                                                            num_r = NumR,
+                                                            notfound_ok = true}) ->
+    StateData#state{replied_notfound = [Idx | NotFound],
+                    num_r = NumR + 1};
+add_vnode_result(Idx, {error, Err}, StateData = #state{replied_fail = Fail,
+                                                       num_fail = NumFail}) ->
+    StateData#state{replied_fail = [{Err, Idx} | Fail],
+                   num_fail = NumFail + 1}.
+
+enough_results(StateData = #state{r = R, allowmult = AllowMult,
+                                  fail_threshold = FailThreshold,
+                                  replied_r = Replied, num_r = NumR,
+                                  num_notfound = NumNotFound,
+                                  replied_fail = Fails, num_fail = NumFail}) ->
+    if
+        NumR >= R ->
+            {Reply, Final} = respond(Replied, AllowMult),
+            {reply, Reply, update_timing(StateData#state{final_obj = Final})};
+        NumNotFound + NumFail >= FailThreshold ->
+            DelObjs = length([xx || {RObj, _Idx} <- Replied, riak_kv_util:is_x_deleted(RObj)]),
+            Reply = fail_reply(R, NumR, NumR - DelObjs, NumNotFound + DelObjs, Fails),
+            Final = merge(Replied, AllowMult),
+            {reply, Reply, update_timing(StateData#state{final_obj = Final})};
+        true ->
+            {false, StateData}
+    end.
+                    
 has_all_replies(#state{replied_r=R,replied_fail=F,replied_notfound=NF, n=N}) ->
     length(R) + length(F) + length(NF) >= N.
 
@@ -279,65 +357,6 @@ maybe_do_read_repair(Sent,Final,RepliedR,NotFound,BKey,ReqId,StartTime,BucketPro
     end.
 
 
-%% @private
-handle_event(_Event, _StateName, StateData) ->
-    {stop,badmsg,StateData}.
-
-%% @private
-handle_sync_event(_Event, _From, _StateName, StateData) ->
-    {stop,badmsg,StateData}.
-
-%% @private
-handle_info(request_timeout, StateName, StateData) ->
-    ?MODULE:StateName(request_timeout, StateData);
-%% @private
-handle_info(_Info, _StateName, StateData) ->
-    {stop,badmsg,StateData}.
-
-%% @private
-terminate(Reason, _StateName, _State) ->
-    Reason.
-
-%% @private
-code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
-
-add_vnode_result(Idx, {ok, RObj}, StateData = #state{replied_r = Replied,
-                                                     num_r = NumR}) ->
-    StateData#state{replied_r = [{RObj, Idx} | Replied],
-                    num_r = NumR + 1};
-add_vnode_result(Idx, {error, notfound}, StateData = #state{replied_notfound = NotFound,
-                                                            num_notfound = NumNotFound,
-                                                            notfound_ok = false}) ->
-    StateData#state{replied_notfound = [Idx | NotFound],
-                    num_notfound = NumNotFound + 1};
-add_vnode_result(Idx, {error, notfound}, StateData = #state{replied_notfound = NotFound,
-                                                            num_r = NumR,
-                                                            notfound_ok = true}) ->
-    StateData#state{replied_notfound = [Idx | NotFound],
-                    num_r = NumR + 1};
-add_vnode_result(Idx, {error, Err}, StateData = #state{replied_fail = Fail,
-                                                       num_fail = NumFail}) ->
-    StateData#state{replied_fail = [{Err, Idx} | Fail],
-                   num_fail = NumFail + 1}.
-
-enough_results(StateData = #state{r = R, allowmult = AllowMult,
-                                  fail_threshold = FailThreshold,
-                                  replied_r = Replied, num_r = NumR,
-                                  num_notfound = NumNotFound,
-                                  replied_fail = Fails, num_fail = NumFail}) ->
-    if
-        NumR >= R ->
-            {Reply, Final} = respond(Replied, AllowMult),
-            {reply, Reply, update_timing(StateData#state{final_obj = Final})};
-        NumNotFound + NumFail >= FailThreshold ->
-            DelObjs = length([xx || {RObj, _Idx} <- Replied, riak_kv_util:is_x_deleted(RObj)]),
-            Reply = fail_reply(R, NumR, NumR - DelObjs, NumNotFound + DelObjs, Fails),
-            Final = merge(Replied, AllowMult),
-            {reply, Reply, update_timing(StateData#state{final_obj = Final})};
-        true ->
-            {false, StateData}
-    end.
-                    
 fail_reply(_R, _NumR, 0, NumNotFound, []) when NumNotFound > 0 ->
     {error, notfound};
 fail_reply(R, NumR, _NumNotDeleted, _NumNotFound, _Fails) ->
