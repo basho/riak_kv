@@ -61,17 +61,57 @@ handle_event({register_mapper, Id, MapperPid}, #state{mapper_data=MapperData}=St
     erlang:monitor(process, MapperPid),
     {no_output, State#state{mapper_data=MapperData1}};
 
-handle_event({mapexec_reply, VNode, BKey, Reply, Executor}, #state{fsms=FSMs, mapper_data=MapperData,
+handle_event({mapexec_reply, VNode, BKey, Reply, Executor}, #state{fsms=FSMs, mapper_data=MapperData, qterm=QTerm,
                                                                    pending=Pending}=State) ->
     case dict:is_key(Executor, FSMs) of
         false ->
-            % node retry case will produce dictionary miss
+            %% node retry case will produce dictionary miss
             maybe_done(State);
         true ->
-            Pending1 = Pending ++ Reply,
-            FSMs1 = update_counter(Executor, FSMs),
-            MapperData1 = update_inputs(Executor, VNode, BKey, MapperData),
-            maybe_done(State#state{fsms=FSMs1, mapper_data=MapperData1, pending=Pending1})
+            case Reply of
+                [{not_found, _, _}] ->
+                    %% If the reply is not_found, then check if there are other
+                    %% preflist entries that can be tried before giving up.
+                    case lists:keyfind(Executor, 1, MapperData) of
+                        {_Id, MapperProps} ->
+                            {keys, {VNode, Keys}} = lists:keyfind(keys, 1, MapperProps),
+                            case length(Keys) of
+                                0 ->
+                                    MapperData1 = lists:keydelete(Executor, 1, MapperData),
+                                    maybe_done(State#state{mapper_data=MapperData1});
+                                _ ->
+                                    try
+                                        %% Remove the current partition from
+                                        %% the list of potential inputs.
+                                        {BadPartition, _Node} = VNode,
+                                        NewKeys = prune_input_partitions(Keys, BadPartition),
+                                        %% Create a new map plan using a different preflist entry
+                                        ClaimLists = riak_kv_mapred_planner:plan_map(NewKeys),
+                                        FSMs1 = update_counter(Executor, FSMs),
+                                        {NewFSMs, _ClaimLists1, FsmKeys} = schedule_input(NewKeys, ClaimLists, QTerm, FSMs1, State),
+                                        MapperData1 = lists:keydelete(Executor, 1, MapperData ++ FsmKeys),
+                                        maybe_done(State#state{mapper_data=MapperData1, fsms=NewFSMs})
+                                    catch
+                                        _:_Error ->
+                                            %% At this point the preflist has been exhausted
+                                            FSMs2 = update_counter(Executor, FSMs),
+                                            MapperData2 = update_inputs(Executor, VNode, BKey, MapperData),
+                                            maybe_done(State#state{fsms=FSMs2, mapper_data=MapperData2})
+                                    end
+                            end;
+                        false ->
+                            FSMs1 = update_counter(Executor, FSMs),
+                            MapperData1 = lists:keydelete(Executor, 1, MapperData),
+                            maybe_done(State#state{mapper_data=MapperData1, fsms=FSMs1})                            
+                    end;        
+
+                _ ->
+                    Pending1 = Pending ++ Reply,
+                    FSMs1 = update_counter(Executor, FSMs),
+                    MapperData1 = update_inputs(Executor, VNode, BKey, MapperData),
+                    maybe_done(State#state{fsms=FSMs1, mapper_data=MapperData1, pending=Pending1})
+            end
+
     end;
 
 handle_event({mapexec_error, _Executor, Reply}, State) ->
@@ -94,7 +134,7 @@ handle_info({'DOWN', Ref, process, Pid, _Reason}, #state{mapper_data=MapperData,
                         _C ->
                             try
                                 {_Partition, BadNode} = VNode,
-                                NewKeys = prune_inputs(Keys, BadNode),
+                                NewKeys = prune_input_nodes(Keys, BadNode),
                                 ClaimLists = riak_kv_mapred_planner:plan_map(NewKeys),
                                 {NewFSMs, _ClaimLists1, FsmKeys} = schedule_input(NewKeys, ClaimLists, QTerm, FSMs, State),
                                 MapperData1 = lists:keydelete(Id, 1, lists:keydelete(Pid, 1, MapperData ++ FsmKeys)),
@@ -132,21 +172,31 @@ schedule_input(Inputs1, ClaimLists, QTerm, FSMs0, State) ->
         {FSMs1, ClaimLists, FsmKeys}
     catch
         exit:{{nodedown, Node}, _} ->
-            Inputs2 = prune_inputs(Inputs1, Node),
+            Inputs2 = prune_input_nodes(Inputs1, Node),
             ClaimLists2 = riak_kv_mapred_planner:plan_map(Inputs2),
             schedule_input(Inputs2, ClaimLists2, QTerm, FSMs0, State);
         Error ->
             throw(Error)
     end.
 
-prune_inputs(Inputs, BadNode) ->
-    prune_inputs(Inputs, BadNode, []).
-prune_inputs([], _BadNode, NewInputs) ->
+prune_input_nodes(Inputs, BadNode) ->
+    prune_input_nodes(Inputs, BadNode, []).
+prune_input_nodes([], _BadNode, NewInputs) ->
     NewInputs;
-prune_inputs([Input|T], BadNode, NewInputs) ->
+prune_input_nodes([Input|T], BadNode, NewInputs) ->
     #riak_kv_map_input{preflist=Targets} = Input,
     Targets2 = lists:keydelete(BadNode, 2, Targets),
-    prune_inputs(T, BadNode, [Input#riak_kv_map_input{preflist=Targets2}|NewInputs]).
+    prune_input_nodes(T, BadNode, [Input#riak_kv_map_input{preflist=Targets2}|NewInputs]).
+
+prune_input_partitions(Inputs, BadNode) ->
+    prune_input_partitions(Inputs, BadNode, []).
+prune_input_partitions([], _BadNode, NewInputs) ->
+    NewInputs;
+prune_input_partitions([Input|T], BadPartition, NewInputs) ->
+    #riak_kv_map_input{preflist=Targets} = Input,
+    Targets2 = lists:keydelete(BadPartition, 1, Targets),
+    prune_input_partitions(T, BadPartition, [Input#riak_kv_map_input{preflist=Targets2}|NewInputs]).
+
 
 build_input(I, Ring) ->
     {{Bucket, Key}, KD} = convert_input(I),
