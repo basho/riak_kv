@@ -1116,6 +1116,12 @@ ensure_doc(Ctx) -> Ctx.
 %% @doc Delete the document specified.
 delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C, rw=RW}) ->
     case C:delete(B, K, RW) of
+        {error, notfound} ->
+            {{halt, 404},
+             wrq:set_resp_header("Content-Type", "text/plain",
+                                 wrq:append_to_response_body(
+                                   io_lib:format("not found~n",[]),
+                                   RD)), Ctx};
         {error, precommit_fail} ->
             {{halt, 403}, send_precommit_error(RD, undefined), Ctx};
         {error, {precommit_fail, Reason}} ->
