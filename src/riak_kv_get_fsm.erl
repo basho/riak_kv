@@ -417,7 +417,7 @@ client_info(true, StateData, Acc) ->
 client_info([], _StateData, Acc) ->
     Acc;
 client_info([timing | Rest], StateData = #state{get_usecs = GetUsecs}, Acc) ->
-    client_info(Rest, StateData, [{get_usecs, GetUsecs} | Acc]);
+    client_info(Rest, StateData, [{duration, GetUsecs} | Acc]);
 client_info([vnodes | Rest], StateData = #state{num_r = NumOks,
                                                 replied_fail = Fail}, Acc) ->
     Oks = [{vnode_oks, NumOks}],
@@ -539,10 +539,16 @@ n_val_violation_case() ->
     R = 5,
     Timeout = 1000,
     BucketProps = bucket_props(Bucket, Nval),
+    %% Fake three nodes
+    Indices = [1, 2, 3],
+    Preflist2 = [begin 
+                     {{Idx, self()}, primary}
+                 end || Idx <- Indices],
     {ok, _FsmPid1} = test_link(ReqId1, Bucket, Key, R, Timeout, self(),
                                [{starttime, 63465712389},
                                {n, Nval},
-                               {bucket_props, BucketProps}]),
+                               {bucket_props, BucketProps},
+                               {preflist2, Preflist2}]),
     ?assertEqual({error, {n_val_violation, 3}}, wait_for_reqid(ReqId1, Timeout + 1000)).
  
     

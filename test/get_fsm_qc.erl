@@ -89,14 +89,6 @@ check() ->
 %% Generators
 %%====================================================================
 
-all_distinct(Xs) ->
-    equals(lists:sort(Xs),lists:usort(Xs)).
-
-
-ring(Partitions) ->
-    riak_core_ring:fresh(Partitions, node()).
-
-
 merge_heads([]) ->
     [];
 merge_heads([Lin|Lins]) ->
@@ -140,11 +132,6 @@ nodestatus() ->
     ?SHRINK(frequency([{9, primary},
                        {1, fallback}]),
             [primary]).
-
-prop_len() ->
-    ?FORALL({R, Ps}, {choose(1, 10), fsm_eqc_util:partvals()},
-        collect({R, length(Ps)}, true)
-    ).
 
 r_seed() ->
     frequency([{10, quorum},
@@ -383,7 +370,7 @@ check_info([], _State) ->
     true;
 check_info([{not_a_detail, unknown_detail} | Rest], State) ->
     check_info(Rest, State);
-check_info([{get_usecs, _} | Rest], State) ->
+check_info([{duration, _} | Rest], State) ->
     check_info(Rest, State);
 check_info([{vnode_oks, VnodeOks} | Rest], State = #state{num_oks = NumOks}) ->
     %% How many Ok's in first RealR responses received by FSM.
@@ -450,8 +437,10 @@ check_delete(Objects, RepairH, H, PerfectPreflist) ->
     ?WHENFAIL(io:format("Objects: ~p\nExpected: ~p\nDeletes: ~p\nAllDeleted: ~p\nHasOk: ~p\nH: ~p\n",
                         [Objects, Expected, Deletes, AllDeleted, HasOk, H]),
               equals(lists:sort(Expected), lists:sort(Deletes))).
-   
 
+all_distinct(Xs) ->
+    equals(lists:sort(Xs),lists:usort(Xs)).
+   
 build_merged_object([], _Objects) ->
     undefined;
 build_merged_object(Heads, Objects) ->
