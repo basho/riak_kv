@@ -184,7 +184,17 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                            w=W0, dw=DW0, return_body=ReturnBody}, 
                 #state{client=C} = State) ->
 
-    O0 = riak_object:new(B, K, <<>>),  
+    case K of
+        undefined ->
+            % Generate a key, the user didn't supply one
+            Key = list_to_binary(riak_core_util:unique_id_62()),
+            ReturnKey = Key;
+        _ ->
+            Key = K,
+            % Don't return the key since we're not generating one
+            ReturnKey = undefined
+    end,
+    O0 = riak_object:new(B, Key, <<>>),
     O1 = update_rpbcontent(O0, RpbContent),
     O  = update_pbvc(O1, PbVC),
     % erlang_protobuffs encodes as 1/0/undefined
@@ -192,12 +202,17 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
     DW = normalize_rw_value(DW0),
     Options = case ReturnBody of 1 -> [returnbody]; true -> [returnbody]; _ -> [] end,
     case C:put(O, default_w(W), default_dw(DW), default_timeout(), Options) of
+        ok when is_binary(ReturnKey) ->
+            PutResp = #rpbputresp{key = ReturnKey},
+            send_msg(PutResp, State);
         ok ->
             send_msg(#rpbputresp{}, State);
         {ok, Obj} ->
             PbContents = riakc_pb:pbify_rpbcontents(riak_object:get_contents(Obj), []),
             PutResp = #rpbputresp{content = PbContents,
-                                  vclock = pbify_rpbvc(riak_object:vclock(Obj))},
+                                  vclock = pbify_rpbvc(riak_object:vclock(Obj)),
+                                  key = ReturnKey
+                              },
             send_msg(PutResp, State);
         {error, notfound} ->
             send_msg(#rpbputresp{}, State);            
