@@ -37,7 +37,6 @@
              riak_kv_map_master,
              riak_kv_mapper,
              riak_kv_mapper_sup,
-             riak_kv_map_localphase,
              riak_kv_map_phase,
              riak_kv_mapred_cache,
              riak_kv_mapred_filters,
