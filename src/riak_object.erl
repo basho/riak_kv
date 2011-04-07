@@ -102,8 +102,8 @@ equal(Obj1,Obj2) ->
 	andalso vclock:equal(vclock(Obj1),vclock(Obj2))
 	andalso equal2(Obj1,Obj2).
 equal2(Obj1,Obj2) ->
-    UM1 = lists:sort(dict:to_list(Obj1#r_object.updatemetadata)),
-    UM2 = lists:sort(dict:to_list(Obj2#r_object.updatemetadata)),
+    UM1 = lists:keysort(1, dict:to_list(Obj1#r_object.updatemetadata)),
+    UM2 = lists:keysort(1, dict:to_list(Obj2#r_object.updatemetadata)),
     (UM1 =:= UM2)
 	andalso (Obj1#r_object.updatevalue =:= Obj2#r_object.updatevalue)
 	andalso begin
@@ -115,8 +115,8 @@ equal_contents([],[]) -> true;
 equal_contents(_,[]) -> false;
 equal_contents([],_) -> false;
 equal_contents([C1|R1],[C2|R2]) ->
-    MD1 = lists:sort(dict:to_list(C1#r_content.metadata)),
-    MD2 = lists:sort(dict:to_list(C2#r_content.metadata)),
+    MD1 = lists:keysort(1, dict:to_list(C1#r_content.metadata)),
+    MD2 = lists:keysort(1, dict:to_list(C2#r_content.metadata)),
     (MD1 =:= MD2)
 	andalso (C1#r_content.value =:= C2#r_content.value)
 	andalso equal_contents(R1,R2).
