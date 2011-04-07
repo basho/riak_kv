@@ -202,8 +202,8 @@ compare_content_dates(C1,C2) ->
 %%       Note:  This function calls apply_updates on NewObject.
 merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
-    OldObject#r_object{contents= NewObj1#r_object.contents ++
-                                 OldObject#r_object.contents,
+    OldObject#r_object{contents=lists:umerge(lists:usort(NewObject#r_object.contents),
+                                             lists:usort(OldObject#r_object.contents)),
                        vclock=vclock:merge([OldObject#r_object.vclock,
                           NewObj1#r_object.vclock]),
                        updatemetadata=dict:store(clean, true, dict:new()),
@@ -486,8 +486,11 @@ merge1_test() ->
     {O,O3}.
 
 merge2_test() ->
+    B = <<"buckets_are_binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"testvalue2">>,
     O1 = riak_object:increment_vclock(object_test(), node1),
-    O2 = riak_object:increment_vclock(object_test(), node2),
+    O2 = riak_object:increment_vclock(riak_object:new(B,K,V), node2),
     O3 = riak_object:syntactic_merge(O1, O2, other_node),
     [other_node, node1, node2] = [N || {N,_} <- riak_object:vclock(O3)],
     2 = riak_object:value_count(O3).
@@ -508,6 +511,16 @@ merge4_test() ->
     OMp = riak_object:syntactic_merge(O1, O0, y),
     ?assertEqual(OM, OMp), %% merge should be symmetric here
     {O0, O1}.
+
+merge5_test() ->
+    B = <<"buckets_are_binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"testvalue2">>,
+    O1 = riak_object:increment_vclock(object_test(), node1),
+    O2 = riak_object:increment_vclock(riak_object:new(B,K,V), node2),
+    TS = vclock:timestamp(),
+    ?assertEqual(riak_object:syntactic_merge(O1, O2, syn_put_mrg, TS),
+                 riak_object:syntactic_merge(O2, O1, syn_put_mrg, TS)).
 
 equality1_test() ->
     MD0 = dict:new(),
