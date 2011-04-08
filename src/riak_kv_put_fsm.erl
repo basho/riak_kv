@@ -73,6 +73,10 @@
                 final_obj :: undefined | riak_object:riak_object()
                }).
 
+%% ===================================================================
+%% Public API
+%% ===================================================================
+
 %% In place only for backwards compatibility
 start(ReqId,RObj,W,DW,Timeout,From) ->
     start_link(ReqId,RObj,W,DW,Timeout,From,[]).
@@ -87,6 +91,10 @@ start_link(ReqId,RObj,W,DW,Timeout,From) ->
 start_link(ReqId,RObj,W,DW,Timeout,From,Options) ->
     gen_fsm:start_link(?MODULE, [ReqId,RObj,W,DW,Timeout,From,Options], []).
 
+%% ===================================================================
+%% Test API
+%% ===================================================================
+
 -ifdef(TEST).
 %% Create a put FSM for testing.  StateProps must include
 %% starttime - start time in gregorian seconds
@@ -99,6 +107,10 @@ start_link(ReqId,RObj,W,DW,Timeout,From,Options) ->
 test_link(ReqId,RObj,W,DW,Timeout,From,Options,StateProps) ->
     gen_fsm:start_link(?MODULE, {test, [ReqId,RObj,W,DW,Timeout,From,Options], StateProps}, []).
 -endif.
+
+%% ====================================================================
+%% gen_fsm callbacks
+%% ====================================================================
 
 %% @private
 init([ReqId,RObj0,W0,DW0,Timeout,Client,Options0]) ->
@@ -125,53 +137,6 @@ init({test, Args, StateProps}) ->
     %% state of the rest of the system
     {ok, validate, TestStateData, 0}.
 
-%%
-%% Given an expanded proplist of options, take the first entry for any given key
-%% and ignore the rest
-%%
-%% @private
-flatten_options([], Opts) ->
-    Opts;
-flatten_options([{Key, Value} | Rest], Opts) ->
-    case lists:keymember(Key, 1, Opts) of
-        true ->
-            flatten_options(Rest, Opts);
-        false ->
-            flatten_options(Rest, [{Key, Value} | Opts])
-    end.
-
-%% @private
-handle_options([], State) ->
-    State;
-handle_options([{update_last_modified, Value}|T], State) ->
-    handle_options(T, State#state{update_last_modified=Value});
-handle_options([{returnbody, true}|T], State) ->
-    VnodeOpts = [{returnbody, true} | State#state.vnode_options],
-    %% Force DW>0 if requesting return body to ensure the dw event 
-    %% returned by the vnode includes the object.
-    handle_options(T, State#state{vnode_options=VnodeOpts,
-                                  dw=erlang:max(1,State#state.dw),
-                                  returnbody=true});
-handle_options([{returnbody, false}|T], State = #state{postcommit = Postcommit}) ->
-    case Postcommit of
-        [] ->
-            handle_options(T, State#state{returnbody=false});
-            
-        _ ->
-            %% We have post-commit hooks, we'll need to get the body back
-            %% from the vnode, even though we don't plan to return that to the
-            %% original caller.  Force DW>0 to ensure the dw event returned by
-            %% the vnode includes the object.
-            VnodeOpts = [{returnbody, true} | State#state.vnode_options],
-            handle_options(T, State#state{vnode_options=VnodeOpts,
-                                          dw=erlang:max(1,State#state.dw),
-                                          returnbody=false})
-    end;
-handle_options([{_,_}|T], State) -> handle_options(T, State).
-
-find_fail_threshold(State = #state{n = N, w = W, dw = DW}) ->
-    State#state{ w_fail_threshold = N-W+1,    % cannot ever get W replies
-                 dw_fail_threshold = N-DW+1}. % cannot ever get DW replies
 
 %% @private
 prepare(timeout, StateData0 = #state{robj = RObj0}) ->
@@ -333,6 +298,57 @@ terminate(Reason, _StateName, _State) ->
 
 %% @private
 code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
+
+%% ====================================================================
+%% Internal functions
+%% ====================================================================
+%%
+%% Given an expanded proplist of options, take the first entry for any given key
+%% and ignore the rest
+%%
+%% @private
+flatten_options([], Opts) ->
+    Opts;
+flatten_options([{Key, Value} | Rest], Opts) ->
+    case lists:keymember(Key, 1, Opts) of
+        true ->
+            flatten_options(Rest, Opts);
+        false ->
+            flatten_options(Rest, [{Key, Value} | Opts])
+    end.
+
+%% @private
+handle_options([], State) ->
+    State;
+handle_options([{update_last_modified, Value}|T], State) ->
+    handle_options(T, State#state{update_last_modified=Value});
+handle_options([{returnbody, true}|T], State) ->
+    VnodeOpts = [{returnbody, true} | State#state.vnode_options],
+    %% Force DW>0 if requesting return body to ensure the dw event 
+    %% returned by the vnode includes the object.
+    handle_options(T, State#state{vnode_options=VnodeOpts,
+                                  dw=erlang:max(1,State#state.dw),
+                                  returnbody=true});
+handle_options([{returnbody, false}|T], State = #state{postcommit = Postcommit}) ->
+    case Postcommit of
+        [] ->
+            handle_options(T, State#state{returnbody=false});
+            
+        _ ->
+            %% We have post-commit hooks, we'll need to get the body back
+            %% from the vnode, even though we don't plan to return that to the
+            %% original caller.  Force DW>0 to ensure the dw event returned by
+            %% the vnode includes the object.
+            VnodeOpts = [{returnbody, true} | State#state.vnode_options],
+            handle_options(T, State#state{vnode_options=VnodeOpts,
+                                          dw=erlang:max(1,State#state.dw),
+                                          returnbody=false})
+    end;
+handle_options([{_,_}|T], State) -> handle_options(T, State).
+
+find_fail_threshold(State = #state{n = N, w = W, dw = DW}) ->
+    State#state{ w_fail_threshold = N-W+1,    % cannot ever get W replies
+                 dw_fail_threshold = N-DW+1}. % cannot ever get DW replies
 
 %% Add a vnode result to the state structure and update the counts
 add_vnode_result({w, Idx, _ReqId}, StateData = #state{replied_w = Replied,
