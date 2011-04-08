@@ -50,7 +50,9 @@
 
 -define(REQ_ID, 1234).
 -define(DEFAULT_BUCKET_PROPS,
-        [{chash_keyfun, {riak_core_util, chash_std_keyfun}}]).
+        [{chash_keyfun, {riak_core_util, chash_std_keyfun}},
+         {w, quorum},
+         {dw, quorum}]).
 -define(HOOK_SAYS_NO, <<"the hook says no">>).
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
@@ -233,11 +235,13 @@ postcommit_hooks() ->
                {1, list(postcommit_hook())}]).
 
 w_dw_seed() ->
-    frequency([{5, fsm_eqc_util:largenat()},
-               {1, one},
-               {1, all},
-               {1, quorum},
-               {1, garbage}]).
+    frequency([{10, quorum},
+               {10, default},
+               {10, missing},
+               {10, one},
+               {10, all},
+               {10, fsm_eqc_util:largenat()},
+               { 1, garbage}]).
 
 %%====================================================================
 %% Property
@@ -247,7 +251,7 @@ prop_basic_put() ->
     ?FORALL({WSeed, DWSeed,
              Objects, ObjectIdxSeed,
              VPutResp,
-             Options, AllowMult, Precommit, Postcommit}, 
+             Options0, AllowMult, Precommit, Postcommit}, 
             {w_dw_seed(), w_dw_seed(),
              fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
              vnodeputresps(),
@@ -267,6 +271,7 @@ prop_basic_put() ->
 
         %% Work out how the vnodes should respond and in which order
         %% the messages should be delivered.
+        Options = fsm_eqc_util:make_options([{w, W}, {dw, DW}, {timeout, 200} | Options0], []),
         VPutReplies = make_vput_replies(VPutResp, Objects, Options),
         PL2 = make_preflist2(VPutResp, 1, []),
 
@@ -277,14 +282,15 @@ prop_basic_put() ->
         %% Transform the hook test atoms into the arcane hook config
         BucketProps = make_bucket_props(N, AllowMult, Precommit, Postcommit),
 
+        %% Needed for riak_kv_util get_default_rw_val
+        application:set_env(riak_core,
+                            default_bucket_props,
+                            BucketProps),
+
         %% Run the test and wait for all processes spawned by it to settle.
         process_flag(trap_exit, true),
-        {ok, PutPid} = riak_kv_put_fsm:test_link(?REQ_ID,
+        {ok, PutPid} = riak_kv_put_fsm:test_link({raw, ?REQ_ID, self()},
                                                  Object,
-                                                 W,
-                                                 DW,
-                                                 200,
-                                                 self(),
                                                  Options,
                                                  [{starttime, riak_core_util:moment()},
                                                   {n, N},
@@ -315,9 +321,11 @@ prop_basic_put() ->
                                                  Precommit, Postcommit, ExpectObject, PL2),
         ?WHENFAIL(
            begin
+               io:format(user, "BucketProps: ~p\n", [BucketProps]),
                io:format(user, "VPutReplies = ~p\n", [VPutReplies]),
                io:format(user, "N: ~p W:~p RealW: ~p DW: ~p RealDW: ~p EffDW: ~p Pid: ~p\n",
                          [N, W, RealW, DW, RealDW, EffDW, PutPid]),
+               io:format(user, "Options: ~p\n", [Options]),
                io:format(user, "Precommit: ~p\n", [Precommit]),
                io:format(user, "Postcommit: ~p\n", [Postcommit]),
                io:format(user, "Object: ~p\n", [Object]),
@@ -330,6 +338,13 @@ prop_basic_put() ->
            conjunction([{result, equals(Res, Expected)},
                         {postcommit, equals(PostCommits, ExpectedPostCommits)}]))
     end).
+
+make_options([], Options) ->
+    Options;
+make_options([{_Name, missing} | Rest], Options) ->
+    make_options(Rest, Options);
+make_options([Option | Rest], Options) ->
+    make_options(Rest, [Option | Options]).
 
 %% make preflist2 from the vnode responses.
 %% [{notfound|{ok, lineage()}, PrimaryFallback, Response, NodeStatus]
@@ -535,7 +550,7 @@ w_dw_val(N, Min, Seed) ->
     Val = case Seed of
               one -> 1;
               all -> N;
-              quorum -> (N div 2) + 1;
+              X when X == quorum; X == default; X == missing -> (N div 2) + 1;
               _ -> Seed
           end,
     {Seed, erlang:min(Min, Val)}.

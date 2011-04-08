@@ -117,10 +117,6 @@ start_link(From, Object, PutOptions) ->
 %% preflist2 - [{{Idx,Node},primary|fallback}] preference list
 %% 
 %% As test, but linked to the caller
-test_link(ReqId,RObj,W,DW,Timeout,From,Options,StateProps) ->
-    NewOpts = [{w, W}, {dw, DW}, {timeout, Timeout} | Options],
-    test_link({raw, ReqId, From}, RObj, NewOpts, StateProps).
-
 test_link(From, Object, PutOptions, StateProps) ->
     gen_fsm:start_link(?MODULE, {test, [From, Object, PutOptions], StateProps}, []).
 

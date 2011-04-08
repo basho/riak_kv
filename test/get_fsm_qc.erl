@@ -185,7 +185,7 @@ prop_basic_get() ->
         
         [{_,Object}|_] = Objects,
         
-        Options = make_options([{r, R}, {pr, PR}], [{timeout, 200} | Options0]),
+        Options = fsm_eqc_util:make_options([{r, R}, {pr, PR}], [{timeout, 200} | Options0]),
 
         {ok, GetPid} = riak_kv_get_fsm:test_link({raw, ReqId, self()},
                             riak_object:bucket(Object),
@@ -276,13 +276,6 @@ prop_basic_get() ->
                 ]))
     end).
 
-
-make_options([], Options) ->
-    Options;
-make_options([{_Name, missing} | Rest], Options) ->
-    make_options(Rest, Options);
-make_options([Option | Rest], Options) ->
-    make_options(Rest, [Option | Options]).
 
 %% make preflist2 from the vnode responses.
 %% [{notfound|{ok, lineage()}, PrimaryFallback, Response]

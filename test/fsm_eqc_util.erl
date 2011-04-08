@@ -191,6 +191,12 @@ start_mock_servers() ->
 cleanup_mock_servers() ->
     application:unload(riak_core).
 
+make_options([], Options) ->
+    Options;
+make_options([{_Name, missing} | Rest], Options) ->
+    make_options(Rest, Options);
+make_options([Option | Rest], Options) ->
+    make_options(Rest, [Option | Options]).
 
 mock_ring(Q0, NodeStatus0) ->
     %% Round up to next power of two
