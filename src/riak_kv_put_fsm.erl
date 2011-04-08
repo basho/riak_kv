@@ -33,16 +33,22 @@
 -behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
 -export([start/6,start/7]).
--export([start_link/6,start_link/7]).
+-export([start_link/3,start_link/6,start_link/7]).
 -ifdef(TEST).
--export([test_link/8]).
+-export([test_link/4, test_link/8]).
 -endif.
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
 -export([prepare/2, validate/2, execute/2, waiting_vnode/2, postcommit/2]).
 
--record(state, {robj :: riak_object:riak_object(),
-                client :: {pid(), reference()},
+-type option() :: {w, pos_integer()} |
+                  {dw, pos_integer()} |
+                  {timeout, pos_integer() | infinity}.
+-type options() :: [option()].
+
+-record(state, {from :: {raw, integer(), pid()},
+                robj :: riak_object:riak_object(),
+                options=[] :: options(),
                 n :: pos_integer(),
                 w :: pos_integer(),
                 dw :: non_neg_integer(),
@@ -56,7 +62,6 @@
                 timeout :: pos_integer()|infinity,
                 tref    :: reference(),
                 startnow :: {pos_integer(), pos_integer(), pos_integer()}, % for FSM duration
-                options=[] :: list(),
                 vnode_options=[] :: list(),
                 returnbody :: boolean(),
                 resobjs=[] :: list(),
@@ -73,23 +78,31 @@
                 final_obj :: undefined | riak_object:riak_object()
                }).
 
+
+-define(DEFAULT_TIMEOUT, 60000).
+-define(DEFAULT_W, default).
+-define(DEFAULT_DW, default).
+
 %% ===================================================================
 %% Public API
 %% ===================================================================
 
 %% In place only for backwards compatibility
-start(ReqId,RObj,W,DW,Timeout,From) ->
-    start_link(ReqId,RObj,W,DW,Timeout,From,[]).
+start(ReqId,RObj,W,DW,Timeout,ResultPid) ->
+    start_link(ReqId,RObj,W,DW,Timeout,ResultPid,[]).
 
 %% In place only for backwards compatibility
-start(ReqId,RObj,W,DW,Timeout,From,Options) ->
-    start_link(ReqId,RObj,W,DW,Timeout,From,Options).
+start(ReqId,RObj,W,DW,Timeout,ResultPid,Options) ->
+    start_link(ReqId,RObj,W,DW,Timeout,ResultPid,Options).
 
-start_link(ReqId,RObj,W,DW,Timeout,From) ->
-    start_link(ReqId,RObj,W,DW,Timeout,From,[]).
+start_link(ReqId,RObj,W,DW,Timeout,ResultPid) ->
+    start_link(ReqId,RObj,W,DW,Timeout,ResultPid,[]).
 
-start_link(ReqId,RObj,W,DW,Timeout,From,Options) ->
-    gen_fsm:start_link(?MODULE, [ReqId,RObj,W,DW,Timeout,From,Options], []).
+start_link(ReqId,RObj,W,DW,Timeout,ResultPid,Options) ->
+    start_link({raw, ReqId, ResultPid}, RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options]).
+
+start_link(From, Object, PutOptions) ->
+    gen_fsm:start_link(?MODULE, [From, Object, PutOptions], []).
 
 %% ===================================================================
 %% Test API
@@ -105,7 +118,12 @@ start_link(ReqId,RObj,W,DW,Timeout,From,Options) ->
 %% 
 %% As test, but linked to the caller
 test_link(ReqId,RObj,W,DW,Timeout,From,Options,StateProps) ->
-    gen_fsm:start_link(?MODULE, {test, [ReqId,RObj,W,DW,Timeout,From,Options], StateProps}, []).
+    NewOpts = [{w, W}, {dw, DW}, {timeout, Timeout} | Options],
+    test_link({raw, ReqId, From}, RObj, NewOpts, StateProps).
+
+test_link(From, Object, PutOptions, StateProps) ->
+    gen_fsm:start_link(?MODULE, {test, [From, Object, PutOptions], StateProps}, []).
+
 -endif.
 
 %% ====================================================================
@@ -113,11 +131,11 @@ test_link(ReqId,RObj,W,DW,Timeout,From,Options,StateProps) ->
 %% ====================================================================
 
 %% @private
-init([ReqId,RObj0,W0,DW0,Timeout,Client,Options0]) ->
+init([From, RObj, Options]) ->
     StartNow = now(),
-    StateData = #state{robj=RObj0, 
-                       client=Client, w=W0, dw=DW0,
-                       req_id=ReqId, timeout=Timeout, options = Options0,
+    StateData = #state{from = From,
+                       robj = RObj, 
+                       options = Options,
                        startnow=StartNow},
     {ok,prepare,StateData,0};
 init({test, Args, StateProps}) ->
@@ -136,7 +154,6 @@ init({test, Args, StateProps}) ->
     %% Enter into the validate state, skipping any code that relies on the
     %% state of the rest of the system
     {ok, validate, TestStateData, 0}.
-
 
 %% @private
 prepare(timeout, StateData0 = #state{robj = RObj0}) ->
@@ -157,8 +174,14 @@ prepare(timeout, StateData0 = #state{robj = RObj0}) ->
     {next_state, validate, StateData, 0}.
     
 %% @private
-validate(timeout, StateData0 = #state{n=N, w=W0, dw=DW0, bucket_props = BucketProps, 
-                                      options = Options0, preflist2 = Preflist2}) ->
+validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
+                                      options = Options0,
+                                      n=N, bucket_props = BucketProps,
+                                      preflist2 = Preflist2}) ->
+    Timeout = get_option(timeout, Options0, ?DEFAULT_TIMEOUT),
+    W0 = get_option(w, Options0, ?DEFAULT_W),
+    DW0 = get_option(dw, Options0, ?DEFAULT_DW),
+
     W = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
 
     %% Expand the DW value, but also ensure that DW <= W
@@ -192,7 +215,9 @@ validate(timeout, StateData0 = #state{n=N, w=W0, dw=DW0, bucket_props = BucketPr
             Postcommit = get_hooks(postcommit, BucketProps),
             StateData1 = StateData0#state{n=N, w=W, dw=DW, allowmult=AllowMult,
                                           precommit = Precommit,
-                                          postcommit = Postcommit},
+                                          postcommit = Postcommit,
+                                          req_id = ReqId,
+                                          timeout = Timeout},
             Options = flatten_options(proplists:unfold(Options0 ++ ?DEFAULT_OPTS), []),
             StateData2 = handle_options(Options, StateData1),
             StateData = find_fail_threshold(StateData2), 
@@ -532,13 +557,16 @@ merge_robjs(RObjs0,AllowMult) ->
         _ -> riak_object:reconcile(RObjs1,AllowMult)
     end.
 
+get_option(Name, Options, Default) ->
+    proplists:get_value(Name, Options, Default).
+
 schedule_timeout(infinity) ->
     undefined;
 schedule_timeout(Timeout) ->
     erlang:send_after(Timeout, self(), request_timeout).
 
-client_reply(Reply, #state{client = Client, req_id = ReqId}) ->
-    Client ! {ReqId, Reply}.
+client_reply(Reply, #state{from = {raw, ReqId, Pid}}) ->
+    Pid ! {ReqId, Reply}.
 
 %% ===================================================================
 %% EUnit tests
