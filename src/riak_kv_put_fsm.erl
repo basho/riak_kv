@@ -35,15 +35,22 @@
 -export([start/6,start/7]).
 -export([start_link/3,start_link/6,start_link/7]).
 -ifdef(TEST).
--export([test_link/4, test_link/8]).
+-export([test_link/4]).
 -endif.
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
--export([prepare/2, validate/2, execute/2, waiting_vnode/2, postcommit/2]).
+-export([prepare/2, validate/2, execute/2, waiting_vnode/2, postcommit/2, finish/2]).
+
+
+-type detail_info() :: timing.
+-type detail() :: true |
+                  false |
+                  [detail_info()].
 
 -type option() :: {w, pos_integer()} |
                   {dw, pos_integer()} |
-                  {timeout, pos_integer() | infinity}.
+                  {timeout, pos_integer() | infinity} |
+                  {detail, detail()}
 -type options() :: [option()].
 
 -record(state, {from :: {raw, integer(), pid()},
@@ -61,7 +68,6 @@
                 replied_fail :: list(),
                 timeout :: pos_integer()|infinity,
                 tref    :: reference(),
-                startnow :: {pos_integer(), pos_integer(), pos_integer()}, % for FSM duration
                 vnode_options=[] :: list(),
                 returnbody :: boolean(),
                 resobjs=[] :: list(),
@@ -75,7 +81,11 @@
                 num_fail = 0 :: non_neg_integer(),
                 w_fail_threshold :: undefined | non_neg_integer(),
                 dw_fail_threshold :: undefined | non_neg_integer(),
-                final_obj :: undefined | riak_object:riak_object()
+                final_obj :: undefined | riak_object:riak_object(),
+                put_usecs :: undefined | non_neg_integer(),
+                timing = [] :: [{atom(), {non_neg_integer(), non_neg_integer(),
+                                          non_neg_integer()}}],
+                reply % reply sent to client
                }).
 
 
@@ -128,12 +138,10 @@ test_link(From, Object, PutOptions, StateProps) ->
 
 %% @private
 init([From, RObj, Options]) ->
-    StartNow = now(),
-    StateData = #state{from = From,
-                       robj = RObj, 
-                       options = Options,
-                       startnow=StartNow},
-    {ok,prepare,StateData,0};
+    StateData = add_timing(prepare, #state{from = From,
+                                           robj = RObj, 
+                                           options = Options}),
+    {ok, prepare, StateData, 0};
 init({test, Args, StateProps}) ->
     %% Call normal init
     {ok, prepare, StateData, 0} = init(Args),
@@ -167,7 +175,7 @@ prepare(timeout, StateData0 = #state{robj = RObj0}) ->
                                  bucket_props = BucketProps,
                                  preflist2 = Preflist2,
                                  starttime = StartTime},
-    {next_state, validate, StateData, 0}.
+    new_state_timeout(validate, StateData).
     
 %% @private
 validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
@@ -193,18 +201,14 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
     MinVnodes = erlang:max(1, erlang:max(W, DW)), % always need at least one vnode
     if
         W =:= error ->
-            client_reply({error, {w_val_violation, W0}}, StateData0),
-            {stop, normal, StateData0};
+            process_reply({error, {w_val_violation, W0}}, StateData0);
         DW =:= error ->
-            client_reply({error, {dw_val_violation, DW0}}, StateData0),
-            {stop, normal, StateData0};
+            process_reply({error, {dw_val_violation, DW0}}, StateData0);
         (W > N) or (DW > N) ->
-            client_reply({error, {n_val_violation, N}}, StateData0),
-            {stop, normal, StateData0};
+            process_reply({error, {n_val_violation, N}}, StateData0);
         NumVnodes < MinVnodes ->
-            client_reply({error, {insufficient_vnodes, NumVnodes, need, MinVnodes}},
-                         StateData0),
-            {stop, normal, StateData0};
+            process_reply({error, {insufficient_vnodes, NumVnodes,
+                                   need, MinVnodes}}, StateData0);
         true ->
             AllowMult = proplists:get_value(allow_mult,BucketProps),
             Precommit = get_hooks(precommit, BucketProps),
@@ -217,7 +221,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
             Options = flatten_options(proplists:unfold(Options0 ++ ?DEFAULT_OPTS), []),
             StateData2 = handle_options(Options, StateData1),
             StateData = find_fail_threshold(StateData2), 
-            {next_state,execute,StateData,0}
+            new_state_timeout(execute, StateData)
     end.
 
 %% @private
@@ -229,11 +233,9 @@ execute(timeout, StateData0=#state{robj=RObj0, req_id = ReqId,
                                    precommit = Precommit}) ->
     case invoke_precommit(Precommit, update_last_modified(UpdateLastMod, RObj0)) of
         fail ->
-            client_reply({error, precommit_fail}, StateData0),
-            {stop, normal, StateData0};
+            process_reply({error, precommit_fail}, StateData0);
         {fail, Reason} ->
-            client_reply({error, {precommit_fail, Reason}}, StateData0),
-            {stop, normal, StateData0};
+            process_reply({error, {precommit_fail, Reason}}, StateData0);
         RObj1 ->
             TRef = schedule_timeout(Timeout),
             Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
@@ -244,47 +246,28 @@ execute(timeout, StateData0=#state{robj=RObj0, req_id = ReqId,
                           tref=TRef},
             case enough_results(StateData) of
                 {reply, Reply, StateData1} ->
-                    client_reply(Reply, StateData1),
-                    update_stats(StateData1),
-                    case Reply of
-                        ok ->
-                            {next_state, postcommit, StateData1, 0};
-                        {ok, _} ->
-                            {next_state, postcommit, StateData1, 0};
-                        _ ->
-                            {stop, normal, StateData1}
-                    end;
+                    process_reply(Reply, StateData1);
                 {false, StateData} ->
-                    {next_state, waiting_vnode, StateData}
+                    new_state(waiting_vnode, StateData)
             end
     end.
 
 %% @private
 waiting_vnode(request_timeout, StateData) ->
-    update_stats(StateData),
-    client_reply({error,timeout}, StateData),
-    {stop, normal, StateData};
+    process_reply({error,timeout}, StateData);
 waiting_vnode(Result, StateData) ->
     StateData1 = add_vnode_result(Result, StateData),
     case enough_results(StateData1) of
         {reply, Reply, StateData2} ->
-            client_reply(Reply, StateData2),
-            update_stats(StateData2),
-            case Reply of
-                ok ->
-                    {next_state, postcommit, StateData2, 0};
-                {ok, _} ->
-                    {next_state, postcommit, StateData2, 0};
-                _ ->
-                    {stop, normal, StateData2}
-            end;
+            process_reply(Reply, StateData2);
+
         {false, StateData2} ->
             {next_state, waiting_vnode, StateData2}
     end.
 
 %% @private
 postcommit(timeout, StateData = #state{postcommit = []}) ->
-    {stop, normal, StateData};
+    new_state_timeout(finish, StateData);
 postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
                                        final_obj = ReplyObj}) ->
     %% Process the next hook - gives sys:get_status messages a chance if hooks
@@ -297,6 +280,20 @@ postcommit(Reply, StateData) -> % late responses - add to state
     StateData1 = add_vnode_result(Reply, StateData),
     {next_state, postcommit, StateData1, 0}.
 
+finish(timeout, StateData = #state{timing = Timing, reply = Reply}) ->
+    case Reply of
+        {error, _} ->
+            ok;
+        _Ok ->
+            %% TODO: Improve reporting of timing
+            %% For now can add debug tracers to view the return from calc_timing
+            {Duration, _Stages} = calc_timing(Timing),
+            riak_kv_stat:update({put_fsm_time, Duration})
+    end,
+    {stop, normal, StateData};
+finish(Reply, StateData) -> % late responses - add to state
+    StateData1 = add_vnode_result(Reply, StateData),
+    {next_state, finish, StateData1, 0}.
 
 %% @private
 handle_event(_Event, _StateName, StateData) ->
@@ -323,6 +320,28 @@ code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
+
+%% Move to the new state, marking the time it started
+new_state(StateName, StateData) ->
+    {next_state, StateName, add_timing(StateName, StateData)}.
+
+%% Move to the new state, marking the time it started and trigger an immediate
+%% timeout.
+new_state_timeout(StateName, StateData) ->
+    {next_state, StateName, add_timing(StateName, StateData), 0}.
+
+%% What to do once enough responses from vnodes have been received to reply
+process_reply(Reply, StateData) ->
+    StateData1 = client_reply(Reply, StateData),
+    case Reply of
+        ok ->
+            new_state_timeout(postcommit, StateData1);
+        {ok, _} ->
+            new_state_timeout(postcommit, StateData1);
+        _ ->
+            new_state_timeout(finish, StateData1)
+    end.
+
 %%
 %% Given an expanded proplist of options, take the first entry for any given key
 %% and ignore the rest
@@ -455,10 +474,6 @@ make_vtag(RObj) ->
     <<HashAsNum:128/integer>> = crypto:md5(term_to_binary(riak_object:vclock(RObj))),
     riak_core_util:integer_to_list(HashAsNum,62).
 
-update_stats(#state{startnow=StartNow}) ->
-    EndNow = now(),
-    riak_kv_stat:update({put_fsm_time, timer:now_diff(EndNow, StartNow)}).
-
 %% Run the precommit hooks
 invoke_precommit([], RObj) ->
     riak_object:apply_updates(RObj);
@@ -561,8 +576,67 @@ schedule_timeout(infinity) ->
 schedule_timeout(Timeout) ->
     erlang:send_after(Timeout, self(), request_timeout).
 
-client_reply(Reply, #state{from = {raw, ReqId, Pid}}) ->
-    Pid ! {ReqId, Reply}.
+client_reply(Reply, State = #state{from = {raw, ReqId, Pid}, options = Options}) ->
+    State2 = add_timing(reply, State),
+    Reply2 = case proplists:get_value(details, Options, false) of
+                 false ->
+                     Reply;
+                 [] ->
+                     Reply;
+                 Details ->
+                     add_client_info(Reply, Details, State2)
+             end,
+    Pid ! {ReqId, Reply2},
+    add_timing(reply, State2#state{reply = Reply}).
+
+add_client_info(Reply, Details, State) ->
+    Info = client_info(Details, State, []),
+    case Reply of
+        ok ->
+            {ok, Info};
+        {OkError, ObjReason} ->
+            {OkError, ObjReason, Info}
+    end.
+
+client_info(true, StateData, Info) ->
+    client_info(default_details(), StateData, Info);
+client_info([], _StateData, Info) ->
+    Info;
+client_info([timing | Rest], StateData = #state{timing = Timing}, Info) ->
+    %% Duration is time from receiving request to responding
+    {ResponseUsecs, Stages} = calc_timing(Timing),
+    client_info(Rest, StateData, [{response_usecs, ResponseUsecs},
+                                  {stages, Stages} | Info]).
+
+default_details() ->
+    [timing].
+
+
+%% Add timing information to the state
+add_timing(Stage, State = #state{timing = Timing}) ->
+    State#state{timing = [{Stage, os:timestamp()} | Timing]}.
+
+%% Calc timing information - stored as {Stage, StageStart} in reverse order. 
+%% ResponseUsecs is calculated as time from reply to start.
+calc_timing([{Stage, Now} | Timing]) ->
+    ReplyNow = case Stage of
+                   reply ->
+                       Now;
+                   _ ->
+                       undefined
+               end,
+    calc_timing(Timing, Now, ReplyNow, []).
+
+%% Each timing stage has start time.
+calc_timing([], StageEnd, ReplyNow, Stages) ->
+    %% StageEnd is prepare time
+    {timer:now_diff(ReplyNow, StageEnd), Stages}; 
+calc_timing([{reply, ReplyNow}|_]=Timing, StageEnd, undefined, Stages) ->
+    %% Populate ReplyNow then handle normally.
+    calc_timing(Timing, StageEnd, ReplyNow, Stages);
+calc_timing([{Stage, StageStart} | Rest], StageEnd, ReplyNow, Stages) ->
+    calc_timing(Rest, StageStart, ReplyNow,
+                [{Stage, timer:now_diff(StageEnd, StageStart)} | Stages]).
 
 %% ===================================================================
 %% EUnit tests
