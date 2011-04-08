@@ -175,9 +175,6 @@ prop_basic_get() ->
         PL2 = make_preflist2(VGetResps, 1, []),
         PartVals = make_partvals(VGetResps, []),
         fsm_eqc_vnode:set_data(Objects, PartVals),
-        ok = gen_server:call(riak_kv_vnode_master,
-                             {set_data, Objects, PartVals}),
-        
         BucketProps = [{n_val, N}
                        |?DEFAULT_BUCKET_PROPS],
 

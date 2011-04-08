@@ -30,7 +30,8 @@
 -behaviour(gen_fsm).
 -include_lib("riak_kv_vnode.hrl").
 
--export([start_link/0, start_link/1, set_data/2, get_history/0, get_put_history/0,
+-export([start_link/0, start_link/1, set_data/2, set_vput_replies/1, 
+         get_history/0, get_put_history/0,
          get_reply_history/0, log_postcommit/1, get_postcommits/0]).
 -export([init/1, 
          active/2, 
@@ -72,6 +73,9 @@ start_link(RegName) ->
 
 set_data(Objs, PartVals) ->
     ok = gen_fsm:sync_send_all_state_event(?MODULE, {set_data, Objs, PartVals}).
+
+set_vput_replies(VPutReplies) ->
+    ok = gen_fsm:sync_send_all_state_event(?MODULE, {set_vput_replies, VPutReplies}).
 
 get_history() ->
     gen_fsm:sync_send_all_state_event(?MODULE, get_history).

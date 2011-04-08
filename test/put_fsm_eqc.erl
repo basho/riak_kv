@@ -77,7 +77,7 @@ eqc_test_() ->
                                                             []}, 5)),
         %% Run the quickcheck tests
         {timeout, 60000, % do not trust the docs - timeout is in msec
-         ?_assertEqual(true, quickcheck(numtests(250, ?QC_OUT(prop_basic_put()))))}
+         ?_assertEqual(true, quickcheck(numtests(500, ?QC_OUT(prop_basic_put()))))}
        ]
       }
      ]
@@ -159,7 +159,8 @@ vnodeputresps() ->
 vnodeputresp() ->
     {vputpartval(),
      vputfirst(), fsm_eqc_util:largenat(),
-     vputsecond(), fsm_eqc_util:largenat()}.
+     vputsecond(), fsm_eqc_util:largenat(),
+     nodestatus()}.
 
 vputpartval() ->
     Shrink = fun(G) -> ?SHRINK(G, [notfound]) end,
@@ -175,7 +176,13 @@ vputsecond() ->
     frequency([{18, dw},
                {1, Shrink(fail)},
                {1, Shrink({timeout, 2})}]).
-  
+
+nodestatus() ->
+    ?SHRINK(frequency([{16, primary},
+                       {4, fallback},
+                       {1, down}]),
+            [primary]).
+
 %% Put FSM options
 %% 
 option() ->
@@ -237,20 +244,20 @@ w_dw_seed() ->
 %%====================================================================
 
 prop_basic_put() ->
-    ?FORALL({WSeed, DWSeed, NQdiff,
+    ?FORALL({WSeed, DWSeed,
              Objects, ObjectIdxSeed,
-             VPutResp, NodeStatus0,
+             VPutResp,
              Options, AllowMult, Precommit, Postcommit}, 
-            {w_dw_seed(), w_dw_seed(),choose(0,4096),
+            {w_dw_seed(), w_dw_seed(),
              fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
-             vnodeputresps(), fsm_eqc_util:nodes_status(10),
+             vnodeputresps(),
              options(),bool(), precommit_hooks(), postcommit_hooks()},
     begin
         N = length(VPutResp),
         {W, RealW} = w_dw_val(N, 1000000, WSeed),
         {DW, RealDW}  = w_dw_val(N, RealW, DWSeed),
 
-        {Q, _Ring, NodeStatus} = fsm_eqc_util:mock_ring(N + NQdiff, NodeStatus0),
+        %% {Q, _Ring, NodeStatus} = fsm_eqc_util:mock_ring(N + NQdiff, NodeStatus0), 
 
         %% Pick the object to put - as ObjectIdxSeed shrinks, it should go
         %% towards the end of the list (for current), so simplest to just
@@ -261,25 +268,28 @@ prop_basic_put() ->
         %% Work out how the vnodes should respond and in which order
         %% the messages should be delivered.
         VPutReplies = make_vput_replies(VPutResp, Objects, Options),
+        PL2 = make_preflist2(VPutResp, 1, []),
 
         %% Prepare the mock vnode master
-        ok = gen_server:call(riak_kv_vnode_master,
-                             {set_data, Objects, []}),
-        ok = gen_server:call(riak_kv_vnode_master,
-                             {set_vput_replies, VPutReplies}),
+        ok = fsm_eqc_vnode:set_data(Objects, []),
+        ok = fsm_eqc_vnode:set_vput_replies(VPutReplies),
         
         %% Transform the hook test atoms into the arcane hook config
-        set_bucket_props(N, AllowMult, Precommit, Postcommit),
+        BucketProps = make_bucket_props(N, AllowMult, Precommit, Postcommit),
 
         %% Run the test and wait for all processes spawned by it to settle.
         process_flag(trap_exit, true),
-        {ok, PutPid} = riak_kv_put_fsm:start_link(?REQ_ID,
-                                                  Object,
-                                                  W,
-                                                  DW,
-                                                  200,
-                                                  self(),
-                                                  Options),
+        {ok, PutPid} = riak_kv_put_fsm:test_link(?REQ_ID,
+                                                 Object,
+                                                 W,
+                                                 DW,
+                                                 200,
+                                                 self(),
+                                                 Options,
+                                                 [{starttime, riak_core_util:moment()},
+                                                  {n, N},
+                                                  {bucket_props, BucketProps},
+                                                  {preflist2, PL2}]),
         ok = riak_kv_test_util:wait_for_pid(PutPid),
         ok = riak_kv_test_util:wait_for_children(PutPid),
         Res = fsm_eqc_util:wait_for_req_id(?REQ_ID, PutPid),
@@ -293,8 +303,8 @@ prop_basic_put() ->
         process_flag(trap_exit, false),
 
         %% Get the history of what happened to the vnode master
-        H = get_fsm_qc_vnode_master:get_reply_history(),
-        PostCommits = get_fsm_qc_vnode_master:get_postcommits(),
+        H = fsm_eqc_vnode:get_reply_history(),
+        PostCommits = fsm_eqc_vnode:get_postcommits(),
 
         %% Work out the expected results.  Have to determine the effective dw
         %% the FSM would have used to know when it would have stopped processing responses
@@ -302,13 +312,12 @@ prop_basic_put() ->
         EffDW = get_effective_dw(RealDW, Options, Postcommit),
         ExpectObject = expect_object(H, RealW, EffDW, AllowMult),
         {Expected, ExpectedPostCommits} = expect(H, N, W, RealW, DW, EffDW, Options,
-                                                 Precommit, Postcommit, ExpectObject, NodeStatus),
+                                                 Precommit, Postcommit, ExpectObject, PL2),
         ?WHENFAIL(
            begin
-               io:format(user, "NodeStatus: ~p\n", [NodeStatus]),
                io:format(user, "VPutReplies = ~p\n", [VPutReplies]),
-               io:format(user, "Q: ~p N: ~p W:~p RealW: ~p DW: ~p RealDW: ~p EffDW: ~p Pid: ~p\n",
-                         [Q, N, W, RealW, DW, RealDW, EffDW, PutPid]),
+               io:format(user, "N: ~p W:~p RealW: ~p DW: ~p RealDW: ~p EffDW: ~p Pid: ~p\n",
+                         [N, W, RealW, DW, RealDW, EffDW, PutPid]),
                io:format(user, "Precommit: ~p\n", [Precommit]),
                io:format(user, "Postcommit: ~p\n", [Postcommit]),
                io:format(user, "Object: ~p\n", [Object]),
@@ -321,6 +330,16 @@ prop_basic_put() ->
            conjunction([{result, equals(Res, Expected)},
                         {postcommit, equals(PostCommits, ExpectedPostCommits)}]))
     end).
+
+%% make preflist2 from the vnode responses.
+%% [{notfound|{ok, lineage()}, PrimaryFallback, Response, NodeStatus]
+make_preflist2([], _Index, PL2) ->
+    lists:reverse(PL2);
+make_preflist2([{_PartVal, _First, _FirstSeq, _Sec, _SecSeq, down} | Rest], Index, PL2) ->
+    make_preflist2(Rest, Index, PL2);
+make_preflist2([{_PartVal, _First, _FirstSeq, _Sec, _SecSeq, NodeStatus} | Rest], Index, PL2) ->
+    make_preflist2(Rest, Index + 1, 
+                   [{{Index, whereis(fsm_eqc_vnode)}, NodeStatus} | PL2]).
 
 %% make_vput_replies - build the list of vnode replies to pass to the mock
 %% vnode master.
@@ -341,15 +360,18 @@ make_vput_replies(VPutResp, Objects, Options) ->
 make_vput_replies([], _Objects, _Options, _LIdx, SeqReplies) ->
     {_Seqs, Replies} = lists:unzip(lists:sort(SeqReplies)),
     Replies;
-make_vput_replies([{_CurObj, {timeout, 1}, FirstSeq, _Second, SecondSeq} | Rest],
+make_vput_replies([{_CurObj, _First, _FirstSeq, _Second, _SecondSeq, down} | Rest],
+                  Objects, Options, LIdx, Replies) ->
+    make_vput_replies(Rest, Objects, Options, LIdx, Replies); 
+make_vput_replies([{_CurObj, {timeout, 1}, FirstSeq, _Second, SecondSeq, _NodeStatus} | Rest],
                   Objects, Options, LIdx, Replies) ->
     make_vput_replies(Rest, Objects, Options, LIdx + 1, 
                      [{FirstSeq, {LIdx, {timeout, 1}}},
                       {FirstSeq+SecondSeq+1, {LIdx, {timeout, 2}}} | Replies]);
-make_vput_replies([{CurPartVal, First, FirstSeq, dw, SecondSeq} | Rest],
+make_vput_replies([{CurPartVal, First, FirstSeq, dw, SecondSeq, _NodeStatus} | Rest],
                   Objects, Options, LIdx, Replies) ->
     %% Lookup the lineage for the current object and prepare it for
-    %% merging in get_fsm_qc_vnode_master
+    %% merging in fsm_eqc_vnode
     {Obj, CurLin} = case CurPartVal of
                         notfound ->
                             {notfound, notfound};
@@ -359,14 +381,14 @@ make_vput_replies([{CurPartVal, First, FirstSeq, dw, SecondSeq} | Rest],
     make_vput_replies(Rest, Objects, Options, LIdx + 1,
                       [{FirstSeq, {LIdx, First}},
                        {FirstSeq+SecondSeq+1, {LIdx, {dw, Obj, CurLin}}} | Replies]);
-make_vput_replies([{_CurObj, First, FirstSeq, Second, SecondSeq} | Rest],
+make_vput_replies([{_CurObj, First, FirstSeq, Second, SecondSeq, _NodeStatus} | Rest],
                   Objects, Options, LIdx, Replies) ->
     make_vput_replies(Rest, Objects, Options, LIdx + 1,
                      [{FirstSeq, {LIdx, First}},
                       {FirstSeq+SecondSeq+1, {LIdx, Second}} | Replies]).
 
 
-set_bucket_props(N, AllowMult, Precommit, Postcommit) ->
+make_bucket_props(N, AllowMult, Precommit, Postcommit) ->
     RequestProps =  [{n_val, N},
                      {allow_mult, AllowMult}],
     ModDef = {<<"mod">>, atom_to_binary(?MODULE, latin1)},
@@ -392,25 +414,24 @@ set_bucket_props(N, AllowMult, Precommit, Postcommit) ->
                           _ ->
                               [{postcommit, [HookXform(H) || H <- Postcommit]}]
                       end,
-    application:set_env(riak_core, default_bucket_props,
-                        lists:flatten([RequestProps,
-                                       PrecommitProps, PostcommitProps, 
-                                       ?DEFAULT_BUCKET_PROPS])).
+    lists:flatten([RequestProps,
+                   PrecommitProps, PostcommitProps, 
+                   ?DEFAULT_BUCKET_PROPS]).
 
 %%====================================================================
 %% Expected Result Calculation
 %%====================================================================
 
 %% Work out the expected return value from the FSM and the expected postcommit log.
-expect(H, N, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Object, NodeStatus) ->
+expect(H, N, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Object, PL2) ->
     ReturnObj = case proplists:get_value(returnbody, Options, false) of
                     true ->
                         Object;
                     false ->
                         noreply
                 end,
-    UpNodes =  length([x || up <- NodeStatus]),
-    MinNodes = erlang:max(RealW, EffDW),
+    UpNodes =  length(PL2),
+    MinNodes = erlang:max(1, erlang:max(RealW, EffDW)),
     ExpectResult = 
         if
             W =:= garbage ->
@@ -442,8 +463,13 @@ expect(H, N, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Object, NodeSt
                        end,
     {ExpectResult, ExpectPostcommit}.
 
-expect([], {_H, _N, _W, DW, _NumW, _NumDW, _NumFail, RObj, Precommit}) ->
-    maybe_add_robj({error, timeout}, RObj, Precommit, DW);
+expect([], {_H, _N, _W, DW, _NumW, _NumDW, _NumFail, RObj, Precommit}=S) ->
+    case enough_replies(S) of % this handles W=0 case
+        {true, Expect} ->
+            maybe_add_robj(Expect, RObj, Precommit, DW);
+        false ->
+            maybe_add_robj({error, timeout}, RObj, Precommit, DW)
+    end;
 expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit}) ->
     S = {H, N, W, DW, NumW + 1, NumDW, NumFail, RObj, Precommit},
 
@@ -503,7 +529,7 @@ expect_object([_ | H], W, DW, AllowMult, NumW, NumDW, Objs) ->
 w_dw_val(_N, _Min, garbage) ->
     {garbage, 1000000};
 w_dw_val(N, Min, Seed) when is_number(Seed) ->
-    Val = Seed rem N + 2,
+    Val = Seed rem (N + 2),
     {Val, erlang:min(Min, Val)};
 w_dw_val(N, Min, Seed) ->
     Val = case Seed of
@@ -628,7 +654,7 @@ precommit_crash(_Obj) ->
     Ok = precommit_crash.
 
 postcommit_ok(Obj) ->
-    get_fsm_qc_vnode_master:log_postcommit(Obj),
+    fsm_eqc_vnode:log_postcommit(Obj),
     ok.
 
 postcommit_crash(_Obj) ->

@@ -34,6 +34,9 @@
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
 -export([start/6,start/7]).
 -export([start_link/6,start_link/7]).
+-ifdef(TEST).
+-export([test_link/8]).
+-endif.
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
 -export([prepare/2, validate/2, execute/2, waiting_vnode/2, postcommit/2]).
@@ -84,6 +87,19 @@ start_link(ReqId,RObj,W,DW,Timeout,From) ->
 start_link(ReqId,RObj,W,DW,Timeout,From,Options) ->
     gen_fsm:start_link(?MODULE, [ReqId,RObj,W,DW,Timeout,From,Options], []).
 
+-ifdef(TEST).
+%% Create a put FSM for testing.  StateProps must include
+%% starttime - start time in gregorian seconds
+%% n - N-value for request (is grabbed from bucket props in prepare)
+%% bkey - Bucket / Key
+%% bucket_props - bucket properties
+%% preflist2 - [{{Idx,Node},primary|fallback}] preference list
+%% 
+%% As test, but linked to the caller
+test_link(ReqId,RObj,W,DW,Timeout,From,Options,StateProps) ->
+    gen_fsm:start_link(?MODULE, {test, [ReqId,RObj,W,DW,Timeout,From,Options], StateProps}, []).
+-endif.
+
 %% @private
 init([ReqId,RObj0,W0,DW0,Timeout,Client,Options0]) ->
     StartNow = now(),
@@ -91,7 +107,23 @@ init([ReqId,RObj0,W0,DW0,Timeout,Client,Options0]) ->
                        client=Client, w=W0, dw=DW0,
                        req_id=ReqId, timeout=Timeout, options = Options0,
                        startnow=StartNow},
-    {ok,prepare,StateData,0}.
+    {ok,prepare,StateData,0};
+init({test, Args, StateProps}) ->
+    %% Call normal init
+    {ok, prepare, StateData, 0} = init(Args),
+
+    %% Then tweak the state record with entries provided by StateProps
+    Fields = record_info(fields, state),
+    FieldPos = lists:zip(Fields, lists:seq(2, length(Fields)+1)),
+    F = fun({Field, Value}, State0) ->
+                Pos = proplists:get_value(Field, FieldPos),
+                setelement(Pos, State0, Value)
+        end,
+    TestStateData = lists:foldl(F, StateData, StateProps),
+
+    %% Enter into the validate state, skipping any code that relies on the
+    %% state of the rest of the system
+    {ok, validate, TestStateData, 0}.
 
 %%
 %% Given an expanded proplist of options, take the first entry for any given key
@@ -174,7 +206,7 @@ validate(timeout, StateData0 = #state{n=N, w=W0, dw=DW0, bucket_props = BucketPr
              DW = erlang:min(DW1, W)
     end,
     NumVnodes = length(Preflist2),
-    MinVnodes = erlang:max(W, DW),
+    MinVnodes = erlang:max(1, erlang:max(W, DW)), % always need at least one vnode
     if
         W =:= error ->
             client_reply({error, {w_val_violation, W0}}, StateData0),
