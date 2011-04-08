@@ -181,7 +181,7 @@ prop_basic_get() ->
         BucketProps = [{n_val, N}
                        |?DEFAULT_BUCKET_PROPS],
 
-        %% The app set_env will probably go away.
+        %% Needed for riak_kv_util get_default_rw_val
         application:set_env(riak_core,
                             default_bucket_props,
                             BucketProps),
@@ -201,8 +201,6 @@ prop_basic_get() ->
 
         process_flag(trap_exit, true),
         ok = riak_kv_test_util:wait_for_pid(GetPid),
-        % Give read repairs and deletes a chance to go through
-        %timer:sleep(5),
         Res = fsm_eqc_util:wait_for_req_id(ReqId, GetPid),
         process_flag(trap_exit, false),
 

@@ -231,6 +231,11 @@ get(Bucket, Key) ->
 %%       {error, Err :: term()}
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as R-value for the nodes
 %%      have responded with a value or error.
+-spec get(binary(), binary(), riak_kv_get_fsm:options()) ->
+                 {ok, any()} | %% TODO: Replace any() with opaque type for riak_object
+                 {ok, any(), [any()]} |
+                 {error, any()} |
+                 {error, any(), [any()]}.
 get(Bucket, Key, Options) when is_list(Options) ->
     Me = self(),
     ReqId = mk_reqid(),

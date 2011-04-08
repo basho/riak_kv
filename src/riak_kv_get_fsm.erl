@@ -32,34 +32,41 @@
          handle_info/3, terminate/3, code_change/4]).
 -export([prepare/2,validate/2,execute/2,waiting_vnode_r/2,waiting_read_repair/2]).
 
--type option() :: {r, pos_integer()} |
-                  {timeout, pos_integer() | infinity}.
+-type option() :: {r, pos_integer()} |         %% Minimum number of successful responses
+                  {pr, non_neg_integer()} |    %% Minimum number of primary vnodes participating
+                  {basic_quorum, boolean()} |  %% Whether to use basic quorum (return early 
+                                               %% in some failure cases.
+                  {notfound_ok, boolean()}  |  %% Count notfound reponses as successful.
+                  {timeout, pos_integer() | infinity}. %% Timeout for vnode responses
 -type options() :: [option()].
+-type req_id() :: non_neg_integer().
 
--record(state, {from :: {integer(), pid()},
+-export_type([options/0, option/0]).
+
+-record(state, {from :: {raw, req_id(), pid()},
                 options=[] :: options(),
                 n :: pos_integer(),
                 r :: pos_integer(),
-                fail_threshold :: pos_integer(),
+                fail_threshold :: non_neg_integer(),
                 allowmult :: boolean(),
                 notfound_ok :: boolean(),
                 preflist2 :: riak_core_apl:preflist2(),
-                req_id :: pos_integer(),
+                req_id :: non_neg_integer(),
                 starttime :: pos_integer(),
                 replied_r = [] :: list(),
                 replied_notfound = [] :: list(),
                 replied_fail = [] :: list(),
-                num_r = 0,
-                num_notfound = 0,
-                num_fail = 0,
-                final_obj :: undefined | {ok, riak_object:riak_object()} |
+                num_r = 0 :: non_neg_integer(),
+                num_notfound = 0 :: non_neg_integer(),
+                num_fail = 0 :: non_neg_integer(),
+                final_obj :: {ok, riak_object:riak_object()} |
                              tombstone | {error, notfound},
                 timeout :: infinity | pos_integer(),
                 tref    :: reference(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
                 bucket_props,
-                startnow :: {pos_integer(), pos_integer(), pos_integer()},
-                get_usecs :: undefined | non_neg_integer()
+                startnow :: {non_neg_integer(), non_neg_integer(), non_neg_integer()},
+                get_usecs :: non_neg_integer()
                }).
 
 -define(DEFAULT_TIMEOUT, 60000).
@@ -77,6 +84,16 @@ start(ReqId,Bucket,Key,R,Timeout,From) ->
 start_link(ReqId,Bucket,Key,R,Timeout,From) ->
     start_link({raw, ReqId, From}, Bucket, Key, [{r, R}, {timeout, Timeout}]).
 
+%% @doc Start the get FSM - retrieve Bucket/Key with the options provided
+%% 
+%% {r, pos_integer()}        - Minimum number of successful responses
+%% {pr, non_neg_integer()}   - Minimum number of primary vnodes participating
+%% {basic_quorum, boolean()} - Whether to use basic quorum (return early 
+%%                             in some failure cases.
+%% {notfound_ok, boolean()}  - Count notfound reponses as successful.
+%% {timeout, pos_integer() | infinity} -  Timeout for vnode responses
+-spec start_link({raw, req_id(), pid()}, binary(), binary(), options()) ->
+                        {ok, pid()} | {error, any()}.
 start_link(From, Bucket, Key, GetOptions) ->
     gen_fsm:start_link(?MODULE, [From, Bucket, Key, GetOptions], []).
 
@@ -188,7 +205,6 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
 %% @private
 execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                                    bkey=BKey, 
-                                   
                                    preflist2 = Preflist2}) ->
     TRef = schedule_timeout(Timeout),
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
@@ -201,7 +217,6 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData) ->
     NewStateData1 = add_vnode_result(Idx, VnodeResult, StateData),
     case enough_results(NewStateData1) of
         {reply, Reply, NewStateData2} ->
-
             client_reply(Reply, NewStateData2),
             update_stats(NewStateData2),
             finalize(NewStateData2);
@@ -396,9 +411,7 @@ respond(VResponses,AllowMult) ->
                     Reply = {error, notfound};
                 false ->
                     Reply = {ok, Obj}
-            end;
-        X ->
-            Reply = X
+            end
     end,
     {Reply, Merged}.
 
