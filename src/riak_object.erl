@@ -98,19 +98,19 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
 %% @doc Deep (expensive) comparison of Riak objects.
 equal(Obj1,Obj2) ->
     (Obj1#r_object.bucket =:= Obj2#r_object.bucket)
-	andalso (Obj1#r_object.key =:= Obj2#r_object.key)
-	andalso vclock:equal(vclock(Obj1),vclock(Obj2))
-	andalso equal2(Obj1,Obj2).
+        andalso (Obj1#r_object.key =:= Obj2#r_object.key)
+        andalso vclock:equal(vclock(Obj1),vclock(Obj2))
+        andalso equal2(Obj1,Obj2).
 equal2(Obj1,Obj2) ->
     UM1 = lists:keysort(1, dict:to_list(Obj1#r_object.updatemetadata)),
     UM2 = lists:keysort(1, dict:to_list(Obj2#r_object.updatemetadata)),
     (UM1 =:= UM2)
-	andalso (Obj1#r_object.updatevalue =:= Obj2#r_object.updatevalue)
-	andalso begin
+        andalso (Obj1#r_object.updatevalue =:= Obj2#r_object.updatevalue)
+        andalso begin
                     Cont1 = lists:sort(Obj1#r_object.contents),
                     Cont2 = lists:sort(Obj2#r_object.contents),
                     equal_contents(Cont1,Cont2)
-		end.
+                end.
 equal_contents([],[]) -> true;
 equal_contents(_,[]) -> false;
 equal_contents([],_) -> false;
@@ -118,8 +118,8 @@ equal_contents([C1|R1],[C2|R2]) ->
     MD1 = lists:keysort(1, dict:to_list(C1#r_content.metadata)),
     MD2 = lists:keysort(1, dict:to_list(C2#r_content.metadata)),
     (MD1 =:= MD2)
-	andalso (C1#r_content.value =:= C2#r_content.value)
-	andalso equal_contents(R1,R2).
+        andalso (C1#r_content.value =:= C2#r_content.value)
+        andalso equal_contents(R1,R2).
 
 %% @spec reconcile([riak_object()], boolean()) -> riak_object()
 %% @doc  Reconcile a list of riak objects.  If AllowMultiple is true,
