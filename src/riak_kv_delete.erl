@@ -146,7 +146,8 @@ dep_apps() ->
             application:set_env(riak_kv, storage_backend, riak_kv_ets_backend),
             %% Create a fresh ring for the test
             Ring = riak_core_ring:fresh(),
-            riak_core_ring_manager:set_my_ring(Ring),
+            riak_core_ring_manager:set_ring_global(Ring),
+
             %% Start riak_kv
             timer:sleep(500);
            (stop) ->
