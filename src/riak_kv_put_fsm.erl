@@ -39,7 +39,7 @@
 -endif.
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
--export([prepare/2, validate/2, execute/2, waiting_vnode/2, postcommit/2, finish/2]).
+-export([prepare/2, validate/2, precommit/2, execute/2, waiting_vnode/2, postcommit/2, finish/2]).
 
 
 -type detail_info() :: timing.
@@ -50,7 +50,7 @@
 -type option() :: {w, pos_integer()} |
                   {dw, pos_integer()} |
                   {timeout, pos_integer() | infinity} |
-                  {detail, detail()}
+                  {detail, detail()}.
 -type options() :: [option()].
 
 -record(state, {from :: {raw, integer(), pid()},
@@ -74,7 +74,6 @@
                 allowmult :: boolean(),
                 precommit=[] :: list(),
                 postcommit=[] :: list(),
-                update_last_modified :: boolean(),
                 bucket_props:: list(),
                 num_w = 0 :: non_neg_integer(),
                 num_dw = 0 :: non_neg_integer(),
@@ -179,6 +178,7 @@ prepare(timeout, StateData0 = #state{robj = RObj0}) ->
     
 %% @private
 validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
+                                      robj = RObj,
                                       options = Options0,
                                       n=N, bucket_props = BucketProps,
                                       preflist2 = Preflist2}) ->
@@ -217,39 +217,50 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                           precommit = Precommit,
                                           postcommit = Postcommit,
                                           req_id = ReqId,
-                                          timeout = Timeout},
+                                          timeout = Timeout,
+                                          robj = riak_object:apply_updates(RObj)},
             Options = flatten_options(proplists:unfold(Options0 ++ ?DEFAULT_OPTS), []),
             StateData2 = handle_options(Options, StateData1),
-            StateData = find_fail_threshold(StateData2), 
-            new_state_timeout(execute, StateData)
+            StateData = find_fail_threshold(StateData2),
+            case Precommit of
+                [] -> % Nothing to run, spare the timing code
+                    new_state_timeout(execute, StateData);
+                _ ->
+                    new_state_timeout(precommit, StateData)
+            end
+    end.
+
+%% Run the precommit hooks
+precommit(timeout, State = #state{precommit = []}) ->
+    new_state_timeout(execute, State);
+precommit(timeout, State = #state{precommit = [Hook | Rest], robj = RObj}) ->
+    Result = decode_precommit(invoke_hook(Hook, RObj)),
+    case Result of
+        Result when element(1, Result) == r_object ->
+            {next_state, precommit, State#state{robj = riak_object:apply_updates(Result),
+                                                precommit = Rest}, 0};
+        fail ->
+            process_reply({error, precommit_fail}, State);
+        {fail, Reason} ->
+            process_reply({error, {precommit_fail, Reason}}, State)
     end.
 
 %% @private
-execute(timeout, StateData0=#state{robj=RObj0, req_id = ReqId,
-                                   update_last_modified=UpdateLastMod,
+execute(timeout, StateData0=#state{robj=RObj, req_id = ReqId,
                                    timeout=Timeout, preflist2 = Preflist2, bkey=BKey,
                                    vnode_options=VnodeOptions,
-                                   starttime = StartTime,
-                                   precommit = Precommit}) ->
-    case invoke_precommit(Precommit, update_last_modified(UpdateLastMod, RObj0)) of
-        fail ->
-            process_reply({error, precommit_fail}, StateData0);
-        {fail, Reason} ->
-            process_reply({error, {precommit_fail, Reason}}, StateData0);
-        RObj1 ->
-            TRef = schedule_timeout(Timeout),
-            Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
-            riak_kv_vnode:put(Preflist, BKey, RObj1, ReqId, StartTime, VnodeOptions),
-            StateData = StateData0#state{
-                          robj=RObj1,
-                          replied_w=[], replied_dw=[], replied_fail=[],
-                          tref=TRef},
-            case enough_results(StateData) of
-                {reply, Reply, StateData1} ->
-                    process_reply(Reply, StateData1);
-                {false, StateData} ->
-                    new_state(waiting_vnode, StateData)
-            end
+                                   starttime = StartTime}) ->
+    TRef = schedule_timeout(Timeout),
+    Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
+    riak_kv_vnode:put(Preflist, BKey, RObj, ReqId, StartTime, VnodeOptions),
+    StateData = StateData0#state{
+                  replied_w=[], replied_dw=[], replied_fail=[],
+                  tref=TRef},
+    case enough_results(StateData) of
+        {reply, Reply, StateData1} ->
+            process_reply(Reply, StateData1);
+        {false, StateData} ->
+            new_state(waiting_vnode, StateData)
     end.
 
 %% @private
@@ -360,8 +371,10 @@ flatten_options([{Key, Value} | Rest], Opts) ->
 %% @private
 handle_options([], State) ->
     State;
-handle_options([{update_last_modified, Value}|T], State) ->
-    handle_options(T, State#state{update_last_modified=Value});
+handle_options([{update_last_modified, false}|T], State) ->
+    handle_options(T, State);
+handle_options([{update_last_modified, true}|T], State = #state{robj = RObj}) ->
+    handle_options(T, State#state{robj = update_last_modified(RObj)});
 handle_options([{returnbody, true}|T], State) ->
     VnodeOpts = [{returnbody, true} | State#state.vnode_options],
     %% Force DW>0 if requesting return body to ensure the dw event 
@@ -445,9 +458,7 @@ maybe_return_body(StateData = #state{resobjs = ResObjs, allowmult = AllowMult,
 %% necessary.
 %%
 %% @private
-update_last_modified(false, RObj) ->
-    RObj;
-update_last_modified(true, RObj) ->
+update_last_modified(RObj) ->
     MD0 = case dict:find(clean, riak_object:get_update_metadata(RObj)) of
               {ok, true} ->
                   %% There have been no changes to updatemetadata. If we stash the
@@ -473,19 +484,6 @@ update_last_modified(true, RObj) ->
 make_vtag(RObj) ->
     <<HashAsNum:128/integer>> = crypto:md5(term_to_binary(riak_object:vclock(RObj))),
     riak_core_util:integer_to_list(HashAsNum,62).
-
-%% Run the precommit hooks
-invoke_precommit([], RObj) ->
-    riak_object:apply_updates(RObj);
-invoke_precommit([Hook | Rest], RObj) ->
-    Result = decode_precommit(invoke_hook(Hook, RObj)),
-    case Result of
-        Obj when element(1, Obj) == r_object ->
-            invoke_precommit(Rest, riak_object:apply_updates(RObj));
-        _ ->
-            Result
-    end.
-
 
 %% Invokes the hook and returns a tuple of
 %% {Lang, Called, Result}
