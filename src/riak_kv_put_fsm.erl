@@ -179,7 +179,6 @@ prepare(timeout, StateData0 = #state{robj = RObj0}) ->
     
 %% @private
 validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
-                                      robj = RObj,
                                       options = Options0,
                                       n=N, bucket_props = BucketProps,
                                       preflist2 = Preflist2}) ->
@@ -225,11 +224,11 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                           precommit = Precommit,
                                           postcommit = Postcommit,
                                           req_id = ReqId,
-                                          timeout = Timeout,
-                                          robj = riak_object:apply_updates(RObj)},
+                                          timeout = Timeout},
             Options = flatten_options(proplists:unfold(Options0 ++ ?DEFAULT_OPTS), []),
             StateData2 = handle_options(Options, StateData1),
-            StateData = find_fail_threshold(StateData2),
+            StateData3 = apply_updates(StateData2),
+            StateData = find_fail_threshold(StateData3),
             case Precommit of
                 [] -> % Nothing to run, spare the timing code
                     new_state_timeout(execute, StateData);
@@ -460,6 +459,10 @@ maybe_return_body(StateData = #state{resobjs = ResObjs, allowmult = AllowMult,
                 false -> ok
             end,
     {reply, Reply, StateData#state{final_obj = ReplyObj}}.
+
+%% Apply any pending updates to robj
+apply_updates(State = #state{robj = RObj}) ->
+    State#state{robj = riak_object:apply_updates(RObj)}.
 
 %%
 %% Update X-Riak-VTag and X-Riak-Last-Modified in the object's metadata, if

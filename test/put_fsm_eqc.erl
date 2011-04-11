@@ -269,7 +269,8 @@ prop_basic_put() ->
         %% towards the end of the list (for current), so simplest to just
         %% reverse the list and calculate modulo list length
         ObjectIdx = (ObjectIdxSeed rem length(Objects)) + 1,
-        {_PutLin,Object} = lists:nth(ObjectIdx, lists:reverse(Objects)),
+        {_PutLin,Object0} = lists:nth(ObjectIdx, lists:reverse(Objects)),
+        Object = riak_object:update_value(Object0, riak_object:get_value(Object0)),
 
         %% Work out how the vnodes should respond and in which order
         %% the messages should be delivered.
