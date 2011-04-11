@@ -170,14 +170,24 @@ cycle(Zs, N, []) ->
     cycle(Zs, N, Zs).
 
 start_mock_servers() ->
+    %% Start original mock vnode
     case whereis(riak_kv_vnode_master) of
         undefined -> ok;
-        Pid       ->
-            unlink(Pid),
-            exit(Pid, shutdown),
-            riak_kv_test_util:wait_for_pid(Pid)
+        Pid1      ->
+            unlink(Pid1),
+            exit(Pid1, shutdown),
+            riak_kv_test_util:wait_for_pid(Pid1)
     end,
     get_fsm_qc_vnode_master:start_link(),
+    %% Start new core_vnode based EQC FSM test mock
+    case whereis(fsm_eqc_vnode) of
+        undefined -> ok;
+        Pid2      ->
+            unlink(Pid2),
+            exit(Pid2, shutdown),
+            riak_kv_test_util:wait_for_pid(Pid2)
+    end,
+    {ok, _Pid3} = fsm_eqc_vnode:start_link(),
     application:unload(riak_core),
     ok = application:load(riak_core),
     application:start(crypto),
@@ -224,10 +234,8 @@ wait_for_req_id(ReqId, Pid) ->
         {'EXIT', _OtherPid, _Reason} ->
             %% Probably from previous test death
             wait_for_req_id(ReqId, Pid);
-        {ReqId, {ok, Reply1}} ->
-            {ok, Reply1};
-        {ReqId, Error1} ->
-            Error1;
+        {ReqId, Response} ->
+            Response;
         Anything1 ->
             {anything, Anything1}
     after 400 ->

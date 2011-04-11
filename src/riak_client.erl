@@ -215,7 +215,29 @@ mapred_dynamic_inputs_stream(FSMPid, InputDef, Timeout) ->
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as the default
 %%      R-value for the nodes have responded with a value or error.
 %% @equiv get(Bucket, Key, R, default_timeout())
-get(Bucket, Key) -> get(Bucket, Key, default, ?DEFAULT_TIMEOUT).
+get(Bucket, Key) -> 
+    get(Bucket, Key, []).
+
+%% @spec get(riak_object:bucket(), riak_object:key(), options()) ->
+%%       {ok, riak_object:riak_object()} |
+%%       {error, notfound} |
+%%       {error, timeout} |
+%%       {error, {n_val_violation, N::integer()}} |
+%%       {error, Err :: term()}
+%% @doc Fetch the object at Bucket/Key.  Return a value as soon as R-value for the nodes
+%%      have responded with a value or error.
+-spec get(binary(), binary(), riak_kv_get_fsm:options()) ->
+                 {ok, any()} | %% TODO: Replace any() with opaque type for riak_object
+                 {ok, any(), [any()]} |
+                 {error, any()} |
+                 {error, any(), [any()]}.
+get(Bucket, Key, Options) when is_list(Options) ->
+    Me = self(),
+    ReqId = mk_reqid(),
+    riak_kv_get_fsm_sup:start_get_fsm(Node, [{raw, ReqId, Me}, Bucket, Key, Options]),
+    %% TODO: Investigate adding a monitor here and eliminating the timeout.
+    Timeout = recv_timeout(Options),
+    wait_for_reqid(ReqId, Timeout);
 
 %% @spec get(riak_object:bucket(), riak_object:key(), R :: integer()) ->
 %%       {ok, riak_object:riak_object()} |
@@ -226,7 +248,8 @@ get(Bucket, Key) -> get(Bucket, Key, default, ?DEFAULT_TIMEOUT).
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as R
 %%      nodes have responded with a value or error.
 %% @equiv get(Bucket, Key, R, default_timeout())
-get(Bucket, Key, R) -> get(Bucket, Key, R, ?DEFAULT_TIMEOUT).
+get(Bucket, Key, R) -> 
+    get(Bucket, Key, [{r, R}]).
 
 %% @spec get(riak_object:bucket(), riak_object:key(), R :: integer(),
 %%           TimeoutMillisecs :: integer()) ->
@@ -240,10 +263,8 @@ get(Bucket, Key, R) -> get(Bucket, Key, R, ?DEFAULT_TIMEOUT).
 get(Bucket, Key, R, Timeout) when is_binary(Bucket), is_binary(Key),
                                   (is_atom(R) or is_integer(R)),
                                   is_integer(Timeout) ->
-    Me = self(),
-    ReqId = mk_reqid(),
-    riak_kv_get_fsm_sup:start_get_fsm(Node, [ReqId, Bucket, Key, R, Timeout, Me]),
-    wait_for_reqid(ReqId, Timeout).
+    get(Bucket, Key, [{r, R}, {timeout, Timeout}]).
+
 
 %% @spec put(RObj :: riak_object:riak_object()) ->
 %%        ok |
@@ -506,9 +527,7 @@ mk_reqid() -> erlang:phash2(erlang:now()). % only has to be unique per-pid
 %% @private
 wait_for_reqid(ReqId, Timeout) ->
     receive
-        {ReqId, {error, Err}} -> {error, Err};
-        {ReqId, ok} -> ok;
-        {ReqId, {ok, Res}} -> {ok, Res}
+        {ReqId, Response} -> Response
     after Timeout ->
             {error, timeout}
     end.
@@ -561,4 +580,15 @@ build_exprs([[FunName|Args]|T], Accum) ->
             {error, {bad_filter, FunName}};
         Fun ->
             build_exprs(T, [{riak_kv_mapred_filters, Fun, Args}|Accum])
+    end.
+
+recv_timeout(Options) ->
+    case proplists:get_value(recv_timeout, Options) of
+        undefined ->
+            %% If no reply timeout given, use the FSM timeout + 100ms to give it a chance
+            %% to respond.
+            proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) + 100;
+        Timeout ->
+            %% Otherwise use the directly supplied timeout.
+            Timeout
     end.

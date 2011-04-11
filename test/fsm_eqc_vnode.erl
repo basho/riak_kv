@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% get_fsm_qc_vnode_master: mock vnode for get/put FSM testing
+%% fsm_eqc_vnode: mock vnode for get/put FSM testing
 %%
 %% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -19,19 +19,27 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
--module(get_fsm_qc_vnode_master).
+%%
+%% Mock vnode for FSM testing.  Originally tried to use riak_core_vnode
+%% directly but we need the index for the tests and no clean way to do
+%% the sync events for resetting, so for now just use a gen_fsm.
+%%
+%% -------------------------------------------------------------------
 
--behaviour(gen_server).
+-module(fsm_eqc_vnode).
+-behaviour(gen_fsm).
 -include_lib("riak_kv_vnode.hrl").
 
-%% API
--export([start_link/0,
-         start/0]).
--compile(export_all).
-
-%% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+-export([start_link/0, start_link/1, set_data/2, get_history/0, get_put_history/0,
+         get_reply_history/0, log_postcommit/1, get_postcommits/0]).
+-export([init/1, 
+         active/2, 
+         active/3, 
+         handle_event/3,
+         handle_sync_event/4, 
+         handle_info/3, 
+         terminate/3, 
+         code_change/4]).
 
 -record(state, {objects, partvals,
 
@@ -50,66 +58,47 @@
                 history=[], put_history=[],
                 postcommit=[]}).
 
-%%====================================================================
-%% API
-%%====================================================================
+%% ===================================================================
+%% Test API
+%% ===================================================================
 
 start_link() ->
-    gen_server:start_link({local, riak_kv_vnode_master}, ?MODULE, [], []).
+    start_link(?MODULE).
 
-start() ->
-    gen_server:start({local, riak_kv_vnode_master}, ?MODULE, [], []).
+start_link(undefined) ->
+    gen_fsm:start_link(?MODULE, [], []);
+start_link(RegName) ->
+    gen_fsm:start_link({local, RegName}, ?MODULE, [], []).
+
+set_data(Objs, PartVals) ->
+    ok = gen_fsm:sync_send_all_state_event(?MODULE, {set_data, Objs, PartVals}).
 
 get_history() ->
-    gen_server:call(riak_kv_vnode_master, get_history).
+    gen_fsm:sync_send_all_state_event(?MODULE, get_history).
 
 get_put_history() ->
-    gen_server:call(riak_kv_vnode_master, get_put_history).
+    gen_fsm:sync_send_all_state_event(?MODULE, get_put_history).
 
 get_reply_history() ->
-    gen_server:call(riak_kv_vnode_master, get_reply_history).
+    gen_fsm:sync_send_all_state_event(?MODULE, get_reply_history).
 
 log_postcommit(Obj) ->
-    gen_server:call(riak_kv_vnode_master, {log_postcommit, Obj}).
+    gen_fsm:sync_send_all_state_event(?MODULE, {log_postcommit, Obj}).
     
 get_postcommits() ->
-    gen_server:call(riak_kv_vnode_master, get_postcommits).
-    
+    gen_fsm:sync_send_all_state_event(?MODULE, get_postcommits).
 
-%%====================================================================
-%% gen_server callbacks
-%%====================================================================
+%% ====================================================================
+%% gen_fsm callbacks
+%% ====================================================================
 
 init([]) ->
-    {ok, #state{}}.
+    {ok, active, #state{}}.
 
-handle_call({set_data, Objects, Partvals}, _From, State) ->
-    {reply, ok, set_data(Objects, Partvals, State)};
-handle_call({set_vput_replies, VPutReplies}, _From, State) ->
-    {reply, ok, set_vput_replies(VPutReplies, State)};
-handle_call(get_history, _From, State) ->
-    {reply, lists:reverse(State#state.history), State};
-handle_call(get_put_history, _From, State) -> %
-    {reply, lists:reverse(State#state.put_history), State};
-handle_call(get_reply_history, _From, State) -> %
-    {reply, lists:reverse(State#state.reply_history), State};
-handle_call({log_postcommit, Obj}, _From, State) -> %
-    {reply, ok, State#state{postcommit = [Obj | State#state.postcommit]}};
-handle_call(get_postcommits, _From, State) -> %
-    {reply, lists:reverse(State#state.postcommit), State};
-
-handle_call(Req=?VNODE_REQ{request=?KV_DELETE_REQ{}},
-            _From, State) ->
-    {noreply, NewState} = handle_cast(Req, State),
-    {reply, ok, NewState};
-handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
-
-%% Handle a get request - return the next get response prepared by call to 'set_data'
-handle_cast(?VNODE_REQ{index=Idx,
-                       sender=Sender,
-                       request=?KV_GET_REQ{req_id=ReqId}}, State) ->
+active(?VNODE_REQ{index=Idx,
+                  sender=Sender,
+                  request=?KV_GET_REQ{req_id=ReqId}}, State) ->
+    %io:format(user, "Get ~p reqid ~p\n", [Idx, ReqId]),
     {Value, State1} = get_data(Idx,State),
     case Value of
         {error, timeout} ->
@@ -125,36 +114,61 @@ handle_cast(?VNODE_REQ{index=Idx,
         _ ->
             ok
     end,
-    {noreply, State1};
-
+    {next_state, active, State1};
 %% Handle a put request - send the responses prepared by call to
 %% 'set_vput_replies' up until the next 'w' response for a different partition.
-handle_cast(?VNODE_REQ{index=Idx,
-                       sender=Sender,
-                       request=?KV_PUT_REQ{req_id=ReqId,
-                                           object = PutObj,
-                                           options = Options}=Msg}, State) ->
+active(?VNODE_REQ{index=Idx,
+                  sender=Sender,
+                  request=?KV_PUT_REQ{req_id=ReqId,
+                                      object = PutObj,
+                                      options = Options}=Msg}, State) ->
     %% Send up to the next w or timeout message, substituting indices
     State1 = send_vput_replies(State#state.vput_replies, Idx,
                                Sender, ReqId, PutObj, Options, State),
-    {noreply, State1#state{put_history=[{Idx,Msg}|State#state.put_history]}};    
+    {next_state, active, State1#state{put_history=[{Idx,Msg}|State#state.put_history]}};    
+active(?VNODE_REQ{index=Idx, request=?KV_DELETE_REQ{}=Msg}, State) ->
+    {next_state, active, State#state{put_history=[{Idx,Msg}|State#state.put_history]}}.
 
-handle_cast(?VNODE_REQ{index=Idx, request=?KV_DELETE_REQ{}=Msg}, State) ->
-    {noreply, State#state{put_history=[{Idx,Msg}|State#state.put_history]}};
-handle_cast(_Msg, State) ->
-    {noreply, State}.
+active(Req=?VNODE_REQ{request=?KV_DELETE_REQ{}},
+            _From, State) ->
+    {next_state, active, NewState} = active(Req, State),
+    {reply, ok, NewState};
+active(_Request, _From, State) ->
+    {stop, bad_request, State}.
 
-handle_info(_Info, State) ->
-    {noreply, State}.
+%% @private
+handle_event(_Event, _StateName, StateData) ->
+    {stop,badmsg,StateData}.
 
-terminate(_Reason, _State) ->
-    ok.
-code_change(_OldVsn, _State, _Extra) ->
-    {ok, #state{history=[]}}.
+handle_sync_event({set_data, Objects, Partvals}, _From, StateName, State) ->
+    {reply, ok, StateName, set_data(Objects, Partvals, State)};
+handle_sync_event({set_vput_replies, VPutReplies}, _From, StateName, State) ->
+    {reply, ok, StateName, set_vput_replies(VPutReplies, State)};
+handle_sync_event(get_history, _From, StateName, State) ->
+    {reply, lists:reverse(State#state.history), StateName, State};
+handle_sync_event(get_put_history, _From, StateName, State) -> %
+    {reply, lists:reverse(State#state.put_history), StateName, State};
+handle_sync_event(get_reply_history, _From, StateName, State) -> %
+    {reply, lists:reverse(State#state.reply_history), StateName, State};
+handle_sync_event({log_postcommit, Obj}, _From, StateName, State) -> %
+    {reply, ok, StateName, State#state{postcommit = [Obj | State#state.postcommit]}};
+handle_sync_event(get_postcommits, _From, StateName, State) -> %
+    {reply, lists:reverse(State#state.postcommit), StateName, State}.
 
-%%--------------------------------------------------------------------
+%% @private
+handle_info(_Info, _StateName, StateData) ->
+    {stop,badmsg,StateData}.
+
+%% @private
+terminate(Reason, _StateName, _State) ->
+    Reason.
+
+code_change(_OldVsn, StateName, _State, _Extra) -> 
+    {ok, StateName, #state{}}.
+
+%% ====================================================================
 %% Internal functions
-%%--------------------------------------------------------------------
+%% ====================================================================
 
 set_data(Objects, Partvals, State) ->
     State#state{objects=Objects, partvals=Partvals,
