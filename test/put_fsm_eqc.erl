@@ -51,6 +51,7 @@
 -define(REQ_ID, 1234).
 -define(DEFAULT_BUCKET_PROPS,
         [{chash_keyfun, {riak_core_util, chash_std_keyfun}},
+         {pw, 0},
          {w, quorum},
          {dw, quorum}]).
 -define(HOOK_SAYS_NO, <<"the hook says no">>).
@@ -248,16 +249,17 @@ w_dw_seed() ->
 %%====================================================================
 
 prop_basic_put() ->
-    ?FORALL({WSeed, DWSeed,
+    ?FORALL({PWSeed, WSeed, DWSeed,
              Objects, ObjectIdxSeed,
              VPutResp,
              Options0, AllowMult, Precommit, Postcommit}, 
-            {w_dw_seed(), w_dw_seed(),
+            {w_dw_seed(), w_dw_seed(), w_dw_seed(),
              fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
              vnodeputresps(),
              options(),bool(), precommit_hooks(), postcommit_hooks()},
     begin
         N = length(VPutResp),
+        {PW, RealPW} = w_dw_val(N, 1000000, PWSeed),
         {W, RealW} = w_dw_val(N, 1000000, WSeed),
         {DW, RealDW}  = w_dw_val(N, RealW, DWSeed),
 
@@ -271,7 +273,8 @@ prop_basic_put() ->
 
         %% Work out how the vnodes should respond and in which order
         %% the messages should be delivered.
-        Options = fsm_eqc_util:make_options([{w, W}, {dw, DW}, {timeout, 200} | Options0], []),
+        Options = fsm_eqc_util:make_options([{pw, PW}, {w, W}, {dw, DW},
+                                             {timeout, 200} | Options0], []),
         VPutReplies = make_vput_replies(VPutResp, Objects, Options),
         PL2 = make_preflist2(VPutResp, 1, []),
 
@@ -317,14 +320,15 @@ prop_basic_put() ->
         %% and returned to the client.
         EffDW = get_effective_dw(RealDW, Options, Postcommit),
         ExpectObject = expect_object(H, RealW, EffDW, AllowMult),
-        {Expected, ExpectedPostCommits} = expect(H, N, W, RealW, DW, EffDW, Options,
+        {Expected, ExpectedPostCommits} = expect(H, N, PW, RealPW, W, RealW, DW, EffDW, Options,
                                                  Precommit, Postcommit, ExpectObject, PL2),
         ?WHENFAIL(
            begin
                io:format(user, "BucketProps: ~p\n", [BucketProps]),
                io:format(user, "VPutReplies = ~p\n", [VPutReplies]),
-               io:format(user, "N: ~p W:~p RealW: ~p DW: ~p RealDW: ~p EffDW: ~p Pid: ~p\n",
-                         [N, W, RealW, DW, RealDW, EffDW, PutPid]),
+               io:format(user, "N: ~p PW: ~p RealPW: ~pW:~p RealW: ~p DW: ~p RealDW: ~p EffDW: ~p"
+                         " Pid: ~p\n",
+                         [N, PW, RealPW, W, RealW, DW, RealDW, EffDW, PutPid]),
                io:format(user, "Options: ~p\n", [Options]),
                io:format(user, "Precommit: ~p\n", [Precommit]),
                io:format(user, "Postcommit: ~p\n", [Postcommit]),
@@ -438,22 +442,29 @@ make_bucket_props(N, AllowMult, Precommit, Postcommit) ->
 %%====================================================================
 
 %% Work out the expected return value from the FSM and the expected postcommit log.
-expect(H, N, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Object, PL2) ->
+expect(H, N, PW, RealPW, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Object, PL2) ->
     ReturnObj = case proplists:get_value(returnbody, Options, false) of
                     true ->
                         Object;
                     false ->
                         noreply
                 end,
+    NumPrimaries = length([xx || {_,primary} <- PL2]),
     UpNodes =  length(PL2),
     MinNodes = erlang:max(1, erlang:max(RealW, EffDW)),
     ExpectResult = 
         if
+            PW =:= garbage ->
+                {error, {pw_val_violation, garbage}};
+
             W =:= garbage ->
                 {error, {w_val_violation, garbage}};
 
             DW =:= garbage ->
                 {error, {dw_val_violation, garbage}};
+
+            RealPW > NumPrimaries ->
+                {error, {pr_val_unsatisfied, RealPW, NumPrimaries}};
 
             RealW > N orelse EffDW > N ->
                 {error, {n_val_violation, N}};
