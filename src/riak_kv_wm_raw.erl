@@ -364,6 +364,14 @@ malformed_request(RD, Ctx) ->
                                     io_lib:format("R-value unsatisfiable~n",[]),
                                     ResRD)),
                      DocCtx};
+                {error, {r_val_unsatisfied, Requested, Returned}} ->
+                    {{halt, 503},
+                     wrq:set_resp_header("Content-Type", "text/plain",
+                                  wrq:append_to_response_body(
+                                    io_lib:format("R-value unsatisfied: ~p/~p~n",
+                                        [Returned, Requested]),
+                                    ResRD)),
+                    DocCtx};
                 {error, Err} ->
                     {{halt, 500},
                      wrq:set_resp_header("Content-Type", "text/plain",
@@ -523,11 +531,7 @@ charsets_provided(RD, Ctx0) ->
                 multiple_choices ->
                     {no_charset, RD, DocCtx}
             end;
-        {error, notfound} ->
-            {no_charset, RD, DocCtx};
-        {error, timeout} ->
-            {no_charset, RD, DocCtx};
-        {error, {n_val_violation, _}} ->
+        {error, _} ->
             {no_charset, RD, DocCtx}
     end.
 
@@ -556,11 +560,7 @@ encodings_provided(RD, Ctx0) ->
                 multiple_choices ->
                     {default_encodings(), RD, DocCtx}
             end;
-        {error, notfound} ->
-            {default_encodings(), RD, DocCtx};
-        {error, timeout} ->
-            {default_encodings(), RD, DocCtx};
-        {error, {n_val_violation, _}} ->
+        {error, _} ->
             {default_encodings(), RD, DocCtx}
     end.
 
@@ -640,7 +640,11 @@ resource_exists(RD, Ctx0) ->
         {error, {n_val_violation, N}} ->
             Msg = io_lib:format("Specified r/w/dw values invalid for bucket"
                                 " n value of ~p~n", [N]),
-            {{halt, 400}, wrq:append_to_response_body(Msg, RD), DocCtx}
+            {{halt, 400}, wrq:append_to_response_body(Msg, RD), DocCtx};
+        {error, {r_val_unsatisfied, Requested, Returned}} ->
+            Msg = io_lib:format("R-value unsatisfied: ~p/~p~n",
+                                [Returned, Requested]),
+            {{halt, 503}, wrq:append_to_response_body(Msg, RD), DocCtx}
     end.
 
 %% @spec produce_toplevel_body(reqdata(), context()) -> {binary(), reqdata(), context()}

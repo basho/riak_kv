@@ -212,6 +212,7 @@ mapred_dynamic_inputs_stream(FSMPid, InputDef, Timeout) ->
 %%       {error, notfound} |
 %%       {error, timeout} |
 %%       {error, {n_val_violation, N::integer()}} |
+%%       {error, {r_val_unsatisfied, R::integer(), Replies::integer()}} |
 %%       {error, Err :: term()}
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as the default
 %%      R-value for the nodes have responded with a value or error.
@@ -224,6 +225,7 @@ get(Bucket, Key) ->
 %%       {error, notfound} |
 %%       {error, timeout} |
 %%       {error, {n_val_violation, N::integer()}} |
+%%       {error, {r_val_unsatisfied, R::integer(), Replies::integer()}} |
 %%       {error, Err :: term()}
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as R-value for the nodes
 %%      have responded with a value or error.
@@ -240,6 +242,7 @@ get(Bucket, Key, Options) when is_list(Options) ->
 %%       {error, notfound} |
 %%       {error, timeout} |
 %%       {error, {n_val_violation, N::integer()}} |
+%%       {error, {r_val_unsatisfied, R::integer(), Replies::integer()}} |
 %%       {error, Err :: term()}
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as R
 %%      nodes have responded with a value or error.
@@ -253,6 +256,7 @@ get(Bucket, Key, R) ->
 %%       {error, notfound} |
 %%       {error, timeout} |
 %%       {error, {n_val_violation, N::integer()}} |
+%%       {error, {r_val_unsatisfied, R::integer(), Replies::integer()}} |
 %%       {error, Err :: term()}
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as R
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
