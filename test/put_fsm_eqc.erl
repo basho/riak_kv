@@ -259,7 +259,7 @@ prop_basic_put() ->
              options(),bool(), precommit_hooks(), postcommit_hooks()},
     begin
         N = length(VPutResp),
-        {PW, RealPW} = w_dw_val(N, 1000000, PWSeed),
+        {PW, RealPW} = pw_val(N, 1000000, PWSeed),
         {W, RealW} = w_dw_val(N, 1000000, WSeed),
         {DW, RealDW}  = w_dw_val(N, RealW, DWSeed),
 
@@ -326,7 +326,8 @@ prop_basic_put() ->
            begin
                io:format(user, "BucketProps: ~p\n", [BucketProps]),
                io:format(user, "VPutReplies = ~p\n", [VPutReplies]),
-               io:format(user, "N: ~p PW: ~p RealPW: ~pW:~p RealW: ~p DW: ~p RealDW: ~p EffDW: ~p"
+               io:format(user, "PrefList2: ~p\n", [PL2]),
+               io:format(user, "N: ~p PW: ~p RealPW: ~p W:~p RealW: ~p DW: ~p RealDW: ~p EffDW: ~p"
                          " Pid: ~p\n",
                          [N, PW, RealPW, W, RealW, DW, RealDW, EffDW, PutPid]),
                io:format(user, "Options: ~p\n", [Options]),
@@ -463,11 +464,11 @@ expect(H, N, PW, RealPW, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Ob
             DW =:= garbage ->
                 {error, {dw_val_violation, garbage}};
 
-            RealPW > NumPrimaries ->
-                {error, {pr_val_unsatisfied, RealPW, NumPrimaries}};
-
             RealW > N orelse EffDW > N ->
                 {error, {n_val_violation, N}};
+
+            RealPW > NumPrimaries ->
+                {error, {pw_val_unsatisfied, RealPW, NumPrimaries}};
 
             UpNodes < MinNodes ->
                 {error,{insufficient_vnodes,UpNodes,need,MinNodes}};
@@ -562,6 +563,23 @@ w_dw_val(N, Min, Seed) ->
               one -> 1;
               all -> N;
               X when X == quorum; X == default; X == missing -> (N div 2) + 1;
+              _ -> Seed
+          end,
+    {Seed, erlang:min(Min, Val)}.
+
+%% Work out W and DW given a seed.
+%% Generate a value from 0..N+1
+pw_val(_N, _Min, garbage) ->
+    {garbage, 1000000};
+pw_val(N, Min, Seed) when is_number(Seed) ->
+    Val = Seed rem (N + 2),
+    {Val, erlang:min(Min, Val)};
+pw_val(N, Min, Seed) ->
+    Val = case Seed of
+              one -> 1;
+              all -> N;
+              quorum -> (N div 2) + 1;
+              X when X == default; X == missing -> 0;
               _ -> Seed
           end,
     {Seed, erlang:min(Min, Val)}.

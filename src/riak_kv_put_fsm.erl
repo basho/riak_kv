@@ -89,6 +89,7 @@
 
 
 -define(DEFAULT_TIMEOUT, 60000).
+-define(DEFAULT_PW, 0).
 -define(DEFAULT_W, default).
 -define(DEFAULT_DW, default).
 
@@ -183,9 +184,11 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                       n=N, bucket_props = BucketProps,
                                       preflist2 = Preflist2}) ->
     Timeout = get_option(timeout, Options0, ?DEFAULT_TIMEOUT),
+    PW0 = get_option(pw, Options0, ?DEFAULT_PW),
     W0 = get_option(w, Options0, ?DEFAULT_W),
     DW0 = get_option(dw, Options0, ?DEFAULT_DW),
 
+    PW = riak_kv_util:expand_rw_value(pw, PW0, BucketProps, N),
     W = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
 
     %% Expand the DW value, but also ensure that DW <= W
@@ -197,15 +200,20 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
          _ ->
              DW = erlang:min(DW1, W)
     end,
+    NumPrimaries = length([x || {_,primary} <- Preflist2]),
     NumVnodes = length(Preflist2),
     MinVnodes = erlang:max(1, erlang:max(W, DW)), % always need at least one vnode
     if
+        PW =:= error ->
+            process_reply({error, {pw_val_violation, PW0}}, StateData0);
         W =:= error ->
             process_reply({error, {w_val_violation, W0}}, StateData0);
         DW =:= error ->
             process_reply({error, {dw_val_violation, DW0}}, StateData0);
         (W > N) or (DW > N) ->
             process_reply({error, {n_val_violation, N}}, StateData0);
+        PW > NumPrimaries ->
+            process_reply({error, {pw_val_unsatisfied, PW, NumPrimaries}}, StateData0);
         NumVnodes < MinVnodes ->
             process_reply({error, {insufficient_vnodes, NumVnodes,
                                    need, MinVnodes}}, StateData0);
