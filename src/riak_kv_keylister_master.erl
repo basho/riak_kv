@@ -25,23 +25,34 @@
 
 %% API
 -export([start_link/0,
-         start_keylist/3]).
+         start_keylist/3,
+         start_keylist/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
+-define(DEFAULT_TIMEOUT, 5000).
 
 -record(state, {}).
 
 start_keylist(Node, ReqId, Bucket) ->
-    case gen_server:call({?SERVER, Node}, {start_kl, ReqId, self(), Bucket}) of
-        {ok, Pid} ->
-            {ok, Pid};
-        Error ->
-            Error
+    start_keylist(Node, ReqId, Bucket, ?DEFAULT_TIMEOUT).
+
+start_keylist(Node, ReqId, Bucket, Timeout) ->
+    try
+        case gen_server:call({?SERVER, Node}, {start_kl, ReqId, self(), Bucket}, Timeout) of
+            {ok, Pid} ->
+                {ok, Pid};
+            Error ->
+                Error
+        end
+    catch
+        exit:{timeout, _} ->
+            {error, timeout}
     end.
+
 
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
