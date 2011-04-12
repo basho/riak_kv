@@ -527,7 +527,8 @@ wait_for_listkeys(ReqId, Timeout) ->
 wait_for_listkeys(ReqId,Timeout,Acc) ->
     receive
         {ReqId, done} -> {ok, lists:flatten(Acc)};
-        {ReqId,{keys,Res}} -> wait_for_listkeys(ReqId,Timeout,[Res|Acc])
+        {ReqId,{keys,Res}} -> wait_for_listkeys(ReqId,Timeout,[Res|Acc]);
+        {ReqId, Error} -> {error, Error}
     after Timeout ->
             {error, timeout, Acc}
     end.
