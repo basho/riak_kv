@@ -61,7 +61,7 @@ handle_event({register_mapper, Id, MapperPid}, #state{mapper_data=MapperData}=St
     erlang:monitor(process, MapperPid),
     {no_output, State#state{mapper_data=MapperData1}};
 
-handle_event({mapexec_reply, VNode, BKey, Reply, Executor}, #state{fsms=FSMs, mapper_data=MapperData, qterm=QTerm,
+handle_event({mapexec_reply, VNode, BKey, Reply, Executor}, #state{fsms=FSMs, mapper_data=MapperData,
                                                                    pending=Pending}=State) ->
     case dict:is_key(Executor, FSMs) of
         false ->
@@ -70,41 +70,9 @@ handle_event({mapexec_reply, VNode, BKey, Reply, Executor}, #state{fsms=FSMs, ma
         true ->
             case Reply of
                 [{not_found, _, _}] ->
-                    %% If the reply is not_found, then check if there are other
-                    %% preflist entries that can be tried before giving up.
-                    case lists:keyfind(Executor, 1, MapperData) of
-                        {_Id, MapperProps} ->
-                            {keys, {VNode, Keys}} = lists:keyfind(keys, 1, MapperProps),
-                            case length(Keys) of
-                                0 ->
-                                    MapperData1 = lists:keydelete(Executor, 1, MapperData),
-                                    maybe_done(State#state{mapper_data=MapperData1});
-                                _ ->
-                                    try
-                                        %% Remove the current partition from
-                                        %% the list of potential inputs.
-                                        {BadPartition, _Node} = VNode,
-                                        NewKeys = prune_input_partitions(Keys, BadPartition),
-                                        %% Create a new map plan using a different preflist entry
-                                        ClaimLists = riak_kv_mapred_planner:plan_map(NewKeys),
-                                        FSMs1 = update_counter(Executor, FSMs),
-                                        {NewFSMs, _ClaimLists1, FsmKeys} = schedule_input(NewKeys, ClaimLists, QTerm, FSMs1, State),
-                                        MapperData1 = lists:keydelete(Executor, 1, MapperData ++ FsmKeys),
-                                        maybe_done(State#state{mapper_data=MapperData1, fsms=NewFSMs})
-                                    catch
-                                        _:_Error ->
-                                            %% At this point the preflist has been exhausted
-                                            FSMs2 = update_counter(Executor, FSMs),
-                                            MapperData2 = update_inputs(Executor, VNode, BKey, MapperData),
-                                            maybe_done(State#state{fsms=FSMs2, mapper_data=MapperData2})
-                                    end
-                            end;
-                        false ->
-                            FSMs1 = update_counter(Executor, FSMs),
-                            MapperData1 = lists:keydelete(Executor, 1, MapperData),
-                            maybe_done(State#state{mapper_data=MapperData1, fsms=FSMs1})                            
-                    end;        
-
+                    handle_not_found_reply(VNode, BKey, Executor, State);
+                [{error, notfound}] ->
+                    handle_not_found_reply(VNode, BKey, Executor, State);
                 _ ->
                     Pending1 = Pending ++ Reply,
                     FSMs1 = update_counter(Executor, FSMs),
@@ -275,4 +243,40 @@ update_inputs(Id, VNode, BKey, MapperData) ->
                 _ -> MapperData
             end;
         false -> throw(bad_mapper_props_no_id)
+    end.
+
+handle_not_found_reply(VNode, BKey, Executor, #state{fsms=FSMs, mapper_data=MapperData, qterm=QTerm}=State) ->
+    %% If the reply is not_found, then check if there are other
+    %% preflist entries that can be tried before giving up.
+    case lists:keyfind(Executor, 1, MapperData) of
+        {_Id, MapperProps} ->
+            {keys, {VNode, Keys}} = lists:keyfind(keys, 1, MapperProps),
+            case length(Keys) of
+                0 ->
+                    MapperData1 = lists:keydelete(Executor, 1, MapperData),
+                    maybe_done(State#state{mapper_data=MapperData1});
+                _ ->
+                    try
+                        %% Remove the current partition from
+                        %% the list of potential inputs.
+                        {BadPartition, _Node} = VNode,
+                        NewKeys = prune_input_partitions(Keys, BadPartition),
+                        %% Create a new map plan using a different preflist entry
+                        ClaimLists = riak_kv_mapred_planner:plan_map(NewKeys),
+                        FSMs1 = update_counter(Executor, FSMs),
+                        {NewFSMs, _ClaimLists1, FsmKeys} = schedule_input(NewKeys, ClaimLists, QTerm, FSMs1, State),
+                        MapperData1 = lists:keydelete(Executor, 1, MapperData ++ FsmKeys),
+                        maybe_done(State#state{mapper_data=MapperData1, fsms=NewFSMs})
+                    catch
+                        _:_Error ->
+                            %% At this point the preflist has been exhausted
+                            FSMs2 = update_counter(Executor, FSMs),
+                            MapperData2 = update_inputs(Executor, VNode, BKey, MapperData),
+                            maybe_done(State#state{fsms=FSMs2, mapper_data=MapperData2})
+                    end
+            end;
+        false ->
+            FSMs1 = update_counter(Executor, FSMs),
+            MapperData1 = lists:keydelete(Executor, 1, MapperData),
+            maybe_done(State#state{mapper_data=MapperData1, fsms=FSMs1})                            
     end.
