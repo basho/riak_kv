@@ -47,11 +47,15 @@
                   false |
                   [detail_info()].
 
--type option() :: {w, pos_integer()} |
-                  {dw, pos_integer()} |
+-type option() :: {pw, non_neg_integer()} | %% Min number of primary (owner) vnodes participating
+                  {w, pos_integer()} |      %% Minimum number of vnodes receiving write
+                  {dw, pos_integer()} |     %% Minimum number of vnodes completing write
                   {timeout, pos_integer() | infinity} |
-                  {detail, detail()}.
+                  {detail, detail()}.       %% Request additional details about request
+                                            %% added as extra element at the end of result tuplezd 
 -type options() :: [option()].
+
+-export_type([option/0, options/0, detail/0, detail_info/0]).
 
 -record(state, {from :: {raw, integer(), pid()},
                 robj :: riak_object:riak_object(),
@@ -243,13 +247,13 @@ precommit(timeout, State = #state{precommit = []}) ->
 precommit(timeout, State = #state{precommit = [Hook | Rest], robj = RObj}) ->
     Result = decode_precommit(invoke_hook(Hook, RObj)),
     case Result of
-        Result when element(1, Result) == r_object ->
-            {next_state, precommit, State#state{robj = riak_object:apply_updates(Result),
-                                                precommit = Rest}, 0};
         fail ->
             process_reply({error, precommit_fail}, State);
         {fail, Reason} ->
-            process_reply({error, {precommit_fail, Reason}}, State)
+            process_reply({error, {precommit_fail, Reason}}, State);
+        Result ->
+            {next_state, precommit, State#state{robj = riak_object:apply_updates(Result),
+                                                precommit = Rest}, 0}
     end.
 
 %% @private
@@ -522,23 +526,26 @@ invoke_hook(undefined, undefined, JSName, RObj) when JSName /= undefined ->
 invoke_hook(_, _, _, _) ->
     {error, {invalid_hook_def, no_hook}}.
 
+-spec decode_precommit(any()) -> fail | {fail, any()} | riak_object:riak_object().
 decode_precommit({erlang, {Mod, Fun}, Result}) ->
-    case Result of
-        fail ->
-            fail;
-        {fail, _Reason} ->
-            Result;
-        Obj when element(1, Obj) == r_object ->
-            Obj;
-       {'EXIT',  Mod, Fun, Class, Exception} ->
-           error_logger:error_msg("problem invoking hook ~p:~p -> ~p:~p~n~p~n",
-                                  [Mod,Fun,Class,Exception,
-                                   erlang:get_stacktrace()]),
-    
-           {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
-       _ ->
-           {fail, {invalid_return, {Mod, Fun, Result}}}
-   end;
+    try
+        case Result of
+            fail ->
+                fail;
+            {fail, _Reason} ->
+                Result;
+            {'EXIT',  Mod, Fun, Class, Exception} ->
+                error_logger:error_msg("problem invoking hook ~p:~p -> ~p:~p~n~p~n",
+                                       [Mod,Fun,Class,Exception,
+                                        erlang:get_stacktrace()]),
+                {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
+            Obj ->
+                riak_object:ensure_robject(Obj)
+        end
+    catch
+        _:_ ->
+            {fail, {invalid_return, {Mod, Fun, Result}}}
+    end;
 decode_precommit({js, JSName, Result}) ->
     case Result of
         {ok, <<"fail">>} ->

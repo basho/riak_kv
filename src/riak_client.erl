@@ -227,11 +227,6 @@ get(Bucket, Key) ->
 %%       {error, Err :: term()}
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as R-value for the nodes
 %%      have responded with a value or error.
--spec get(binary(), binary(), riak_kv_get_fsm:options()) ->
-                 {ok, any()} | %% TODO: Replace any() with opaque type for riak_object
-                 {ok, any(), [any()]} |
-                 {error, any()} |
-                 {error, any(), [any()]}.
 get(Bucket, Key, Options) when is_list(Options) ->
     Me = self(),
     ReqId = mk_reqid(),
@@ -281,11 +276,14 @@ put(RObj) -> put(RObj, []).
 
 %% @spec put(RObj :: riak_object:riak_object(), riak_kv_put_fsm::options()) ->
 %%       ok |
+%%       {ok, details()} |
 %%       {ok, riak_object:riak_object()} |
+%%       {ok, riak_object:riak_object(), details()} |
 %%       {error, notfound} |
 %%       {error, timeout} |
 %%       {error, {n_val_violation, N::integer()}} |
 %%       {error, Err :: term()}
+%%       {error, Err :: term(), details()}
 %% @doc Store RObj in the cluster.
 put(RObj, Options) when is_list(Options) ->
     UpdObj = riak_object:increment_vclock(RObj, ClientId),

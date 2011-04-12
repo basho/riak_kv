@@ -53,7 +53,7 @@
 
 -define(MAX_KEY_SIZE, 65536).
 
--export([new/3, new/4, ancestors/1, reconcile/2, equal/2]).
+-export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([vclock/1, update_value/2, update_metadata/2, bucket/1, value_count/1]).
@@ -93,6 +93,10 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
                               contents=Contents,vclock=vclock:fresh()}
             end
     end.
+
+%% Ensure the incoming term is a riak_object.
+-spec ensure_robject(any()) -> riak_object().
+ensure_robject(Obj = #r_object{}) -> Obj.
 
 -spec equal(riak_object(), riak_object()) -> true | false.
 %% @doc Deep (expensive) comparison of Riak objects.
@@ -337,6 +341,7 @@ to_json(Obj=#r_object{}) ->
                 || {MD, V} <- riak_object:get_contents(Obj)
                       ]}]}.
 
+-spec from_json(any()) -> riak_object().
 from_json({struct, Obj}) ->
     from_json(Obj);
 from_json(Obj) ->
