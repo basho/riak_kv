@@ -453,7 +453,8 @@ malformed_rw_param({Idx, Name, Default}, {Result, RD, Ctx}) ->
         _ ->
             {true,
              wrq:append_to_resp_body(
-               io_lib:format("~s query parameter must be an integer~n",
+               io_lib:format("~s query parameter must be an integer or "
+                   "one of the following words: 'one', 'quorum' or 'all'~n",
                              [Name]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx}
