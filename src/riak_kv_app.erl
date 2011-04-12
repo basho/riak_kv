@@ -54,8 +54,10 @@ start(_Type, _StartArgs) ->
        {young_vclock, 20},
        {big_vclock, 50},
        {small_vclock, 10},
+       {pr, 0},
        {r, quorum},
        {w, quorum},
+       {pw, 0},
        {dw, quorum},
        {rw, quorum}]),
 

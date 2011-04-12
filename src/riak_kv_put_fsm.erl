@@ -50,8 +50,8 @@
 -type option() :: {pw, non_neg_integer()} | %% Min number of primary (owner) vnodes participating
                   {w, pos_integer()} |      %% Minimum number of vnodes receiving write
                   {dw, pos_integer()} |     %% Minimum number of vnodes completing write
-                  {timeout, pos_integer() | infinity} |
-                  {detail, detail()}.       %% Request additional details about request
+                  {timeout, timeout()} |
+                  {details, detail()}.      %% Request additional details about request
                                             %% added as extra element at the end of result tuplezd 
 -type options() :: [option()].
 
@@ -93,9 +93,6 @@
 
 
 -define(DEFAULT_TIMEOUT, 60000).
--define(DEFAULT_PW, 0).
--define(DEFAULT_W, default).
--define(DEFAULT_DW, default).
 
 %% ===================================================================
 %% Public API
@@ -187,9 +184,9 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                       n=N, bucket_props = BucketProps,
                                       preflist2 = Preflist2}) ->
     Timeout = get_option(timeout, Options0, ?DEFAULT_TIMEOUT),
-    PW0 = get_option(pw, Options0, ?DEFAULT_PW),
-    W0 = get_option(w, Options0, ?DEFAULT_W),
-    DW0 = get_option(dw, Options0, ?DEFAULT_DW),
+    PW0 = get_option(pw, Options0, default),
+    W0 = get_option(w, Options0, default),
+    DW0 = get_option(dw, Options0, default),
 
     PW = riak_kv_util:expand_rw_value(pw, PW0, BucketProps, N),
     W = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
@@ -282,7 +279,6 @@ waiting_vnode(Result, StateData) ->
     case enough_results(StateData1) of
         {reply, Reply, StateData2} ->
             process_reply(Reply, StateData2);
-
         {false, StateData2} ->
             {next_state, waiting_vnode, StateData2}
     end.
