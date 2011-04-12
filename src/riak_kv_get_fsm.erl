@@ -184,8 +184,9 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
             client_reply({error, {pr_val_unsatisfied, PR, NumPrimaries}}, StateData),
             {stop, normal, StateData};
         true ->
+            BQ0 = get_option(basic_quorum, Options, true),
             FailThreshold = 
-                case get_option(basic_quorum, Options, true) of
+                case riak_kv_util:expand_value(basic_quorum, BQ0, BucketProps) of
                     true ->
                         erlang:min((N div 2)+1, % basic quorum, or
                                    (N-R+1)); % cannot ever get R 'ok' replies
@@ -193,7 +194,8 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
                         N - R + 1 % cannot ever get R 'ok' replies
                 end,
             AllowMult = proplists:get_value(allow_mult,BucketProps),
-            NotFoundOk = get_option(notfound_ok, Options, false),
+            NFOk0 = get_option(notfound_ok, Options, false),
+            NotFoundOk = riak_kv_util:expand_value(notfound_ok, NFOk0, BucketProps),
             {next_state, execute, StateData#state{r = R,
                                                   fail_threshold = FailThreshold,
                                                   timeout = Timeout,

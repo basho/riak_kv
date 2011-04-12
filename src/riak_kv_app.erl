@@ -59,7 +59,11 @@ start(_Type, _StartArgs) ->
        {w, quorum},
        {pw, 0},
        {dw, quorum},
-       {rw, quorum}]),
+       {rw, quorum},
+       {pr, 0},
+       {basic_quorum, true},
+       {notfound_ok, false}
+   ]),
 
     %% Check the storage backend
     StorageBackend = app_helper:get_env(riak_kv, storage_backend),
