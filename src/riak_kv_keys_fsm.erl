@@ -72,7 +72,7 @@ init([ReqId,Input,Timeout,ClientType,ErrorTolerance,Client]) ->
     {ok,initialize,StateData,0}.
 
 %% @private
-initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, req_id=ReqId}) ->
+initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, req_id=ReqId, timeout=Timeout}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     N = proplists:get_value(n_val,BucketProps),
     PLS0 = riak_core_ring:all_preflists(Ring,N),
@@ -82,10 +82,19 @@ initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, req
                                lists:zip(lists:seq(0,(length(PLS0)-1)), PLS0)),
     {_, PLS} = lists:unzip(LA1 ++ LA2),
     Simul_PLS = trunc(length(PLS) / N),
-    Listers = start_listers(ReqId, Input),
+    Listers = start_listers(ReqId, Input, Timeout),
     StateData = StateData0#state{pls=PLS,simul_pls=Simul_PLS, listers=Listers,
                                  wait_pls=[],vns=sets:from_list([])},
-    reduce_pls(StateData).
+    %% Make sure there are actually some nodes available
+    %% to perform the key listing operations.
+    case Listers of 
+        [] ->
+            %% No nodes are currently available so return
+            %% an error back to the requesting party.
+            finish(StateData);
+        _ ->
+            reduce_pls(StateData)
+    end.
 
 waiting_kl({ReqId, {kl, _Idx, Keys}},
            StateData=#state{bloom=Bloom,
@@ -118,10 +127,26 @@ waiting_kl(timeout, StateData=#state{pls=PLS,wait_pls=WPL}) ->
     NewPLS = lists:append(PLS, [W_PL || {_W_Idx,_W_Node,W_PL} <- WPL]),
     reduce_pls(StateData#state{pls=NewPLS,wait_pls=[]}).
 
+finish(StateData=#state{req_id=ReqId,client=Client,client_type=ClientType, listers=[]}) ->
+    case ClientType of
+        mapred -> 
+            %% No nodes are available for key listing so all
+            %% we can do now is die so that the rest of the
+            %% MapReduce processes will also die and be cleaned up.
+            exit(all_nodes_unavailable);
+        plain -> 
+            %%Notify the requesting client that the key 
+            %% listing is complete or that no nodes are 
+            %% available to fulfil the request.
+            Client ! {ReqId, all_nodes_unavailable}
+    end,
+    {stop,normal,StateData};
 finish(StateData=#state{req_id=ReqId,client=Client,client_type=ClientType}) ->
     case ClientType of
-        mapred -> luke_flow:finish_inputs(Client);
-        plain -> Client ! {ReqId, done}
+        mapred ->
+            luke_flow:finish_inputs(Client);
+        plain -> 
+            Client ! {ReqId, done}
     end,
     {stop,normal,StateData}.
 
@@ -226,6 +251,11 @@ handle_sync_event(_Event, _From, _StateName, StateData) ->
 %% @private
 handle_info({'EXIT', Pid, normal}, _StateName, #state{client=Pid}=StateData) ->
     {stop,normal,StateData};
+handle_info({_ReqId, {ok, _Pid}}, StateName, StateData=#state{timeout=Timeout}) ->
+    %% Received a message from a key lister node that 
+    %% did not start up within the timeout. Just ignore
+    %% the message and move on.
+    {next_state, StateName, StateData, Timeout};
 handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
@@ -239,12 +269,16 @@ code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
 %% @private
-start_listers(ReqId, Bucket) ->
+start_listers(ReqId, Bucket, Timeout) ->
     Nodes = riak_core_node_watcher:nodes(riak_kv),
-    start_listers(Nodes, ReqId, Bucket, []).
+    start_listers(Nodes, ReqId, Bucket, Timeout, []).
 
-start_listers([], _ReqId, _Bucket, Accum) ->
+start_listers([], _ReqId, _Bucket, _Timeout, Accum) ->
     Accum;
-start_listers([H|T], ReqId, Bucket, Accum) ->
-    {ok, Pid} = riak_kv_keylister_master:start_keylist(H, ReqId, Bucket),
-    start_listers(T, ReqId, Bucket, [{H, Pid}|Accum]).
+start_listers([H|T], ReqId, Bucket, Timeout, Accum) ->
+    case riak_kv_keylister_master:start_keylist(H, ReqId, Bucket, Timeout) of
+        {ok, Pid} ->
+            start_listers(T, ReqId, Bucket, Timeout, [{H, Pid}|Accum]);
+         _Error ->
+            start_listers(T, ReqId, Bucket, Timeout, Accum)
+    end.
