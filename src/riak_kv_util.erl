@@ -29,6 +29,7 @@
          obj_not_deleted/1,
          try_cast/3,
          fallback/4,
+         expand_value/3,
          expand_rw_value/4,
          normalize_rw_value/2,
          make_request/2]).
@@ -112,17 +113,21 @@ make_request(Request, Index) ->
                                         {fsm, undefined, self()},
                                         Index).
 
-get_default_rw_val(Type, BucketProps) ->
-    {ok, DefaultProps} = application:get_env(riak_core, default_bucket_props),
-    case {proplists:get_value(Type, BucketProps),
-          proplists:get_value(Type, DefaultProps)} of
-        {undefined, Val} -> Val;
-        {Val, undefined} -> Val;
-        {Val1, _Val2} -> Val1
+get_bucket_option(Type, BucketProps) ->
+    case proplists:get_value(Type, BucketProps, default) of
+        default ->
+            {ok, DefaultProps} = application:get_env(riak_core, default_bucket_props),
+            proplists:get_value(Type, DefaultProps, error);
+        Val -> Val
     end.
-            
+
+expand_value(Type, default, BucketProps) ->
+    get_bucket_option(Type, BucketProps);
+expand_value(_Type, Value, _BucketProps) ->
+    Value.
+
 expand_rw_value(Type, default, BucketProps, N) ->
-    normalize_rw_value(get_default_rw_val(Type, BucketProps), N);    
+    normalize_rw_value(get_bucket_option(Type, BucketProps), N);
 expand_rw_value(_Type, Val, _BucketProps, N) ->
     normalize_rw_value(Val, N).
 
