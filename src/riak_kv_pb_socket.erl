@@ -165,10 +165,13 @@ process_message(rpbgetserverinforeq, State) ->
                                  server_version = get_riak_version()},
     send_msg(Resp, State);
 
-process_message(#rpbgetreq{bucket=B, key=K, r=R0}, 
-                #state{client=C} = State) ->
+process_message(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
+                           basic_quorum=BQ}, #state{client=C} = State) ->
     R = normalize_rw_value(R0),
-    case C:get(B, K, default_r(R)) of
+    PR = normalize_rw_value(PR0),
+    case C:get(B, K, [{r, default_if_undef(R)}, {pr, default_if_undef(PR)},
+                      {notfound_ok, default_if_undef(NFOk)},
+                      {basic_quorum, default_if_undef(BQ)}]) of
         {ok, O} ->
             PbContent = riakc_pb:pbify_rpbcontents(riak_object:get_contents(O), []),
             GetResp = #rpbgetresp{content = PbContent,
@@ -201,7 +204,7 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
     W = normalize_rw_value(W0),
     DW = normalize_rw_value(DW0),
     Options = case ReturnBody of 1 -> [returnbody]; true -> [returnbody]; _ -> [] end,
-    case C:put(O, default_w(W), default_dw(DW), default_timeout(), Options) of
+    case C:put(O, default_if_undef(W), default_if_undef(DW), default_timeout(), Options) of
         ok when is_binary(ReturnKey) ->
             PutResp = #rpbputresp{key = ReturnKey},
             send_msg(PutResp, State);
@@ -223,7 +226,7 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
 process_message(#rpbdelreq{bucket=B, key=K, rw=RW0}, 
                 #state{client=C} = State) ->
     RW = normalize_rw_value(RW0),
-    case C:delete(B, K, default_rw(RW)) of
+    case C:delete(B, K, default_if_undef(RW)) of
         ok ->
             send_msg(rpbdelresp, State);
         {error, notfound} ->  %% delete succeeds if already deleted
@@ -356,29 +359,15 @@ update_pbvc(O0, PbVc) ->
 
 %% Set default values in the options record if none are provided.
 %% Erlang protobuffs does not support default, so have to do it here.
-default_r(undefined) ->
-    default;
-default_r(R) ->
-    R.
 
-default_w(undefined) ->
+default_if_undef(undefined) ->
     default;
-default_w(W) ->
-    W.
-
-default_dw(undefined) ->
-    default;
-default_dw(DW) ->
-    DW.
-
-default_rw(undefined) ->
-    default;
-default_rw(RW) ->
-    RW.
+default_if_undef(V) ->
+    V.
 
 default_timeout() ->
     60000.
-        
+
 %% Convert a vector clock to erlang
 erlify_rpbvc(undefined) ->
     vclock:fresh();
