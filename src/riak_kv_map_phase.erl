@@ -262,13 +262,13 @@ handle_not_found_reply(VNode, BKey, Executor, #state{fsms=FSMs, mapper_data=Mapp
     %% The call to plan_map will call exit with reason 
     %% exhausted_preflist if all the preference list 
     %% entries have been checked.
-    try
-        %% Create a new map plan using a different preflist entry
-        ClaimLists = riak_kv_mapred_planner:plan_map(NewKeys),
-        FSMs1 = update_counter(Executor, FSMs),
-        {NewFSMs, _ClaimLists1, FsmKeys} = schedule_input(NewKeys, ClaimLists, QTerm, FSMs1, State),
-        MapperData1 = lists:keydelete(Executor, 1, MapperData ++ FsmKeys),
-        maybe_done(State#state{mapper_data=MapperData1, fsms=NewFSMs})
+    try riak_kv_mapred_planner:plan_map(NewKeys) of
+        ClaimLists ->
+            %% Create a new map plan using a different preflist entry
+            FSMs1 = update_counter(Executor, FSMs),
+            {NewFSMs, _ClaimLists1, FsmKeys} = schedule_input(NewKeys, ClaimLists, QTerm, FSMs1, State),
+            MapperData1 = lists:keydelete(Executor, 1, MapperData ++ FsmKeys),
+            maybe_done(State#state{mapper_data=MapperData1, fsms=NewFSMs})
     catch
         exit:exhausted_preflist ->
             %% At this point the preflist has been exhausted
