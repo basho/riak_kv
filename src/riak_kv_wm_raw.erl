@@ -189,6 +189,7 @@
               dw,           %% integer() - dw-value for writes
               rw,           %% integer() - rw-value for deletes
               pr,           %% integer() - number of primary nodes required in preflist on read
+              pw,           %% integer() - number of primary nodes required in preflist on write
               basic_quorum, %% boolean() - whether to use basic_quorum
               notfound_ok,  %% boolean() - whether to treat notfounds as successes
               prefix,       %% string() - prefix for resource uris
@@ -434,6 +435,7 @@ malformed_rw_params(RD, Ctx) ->
                  {#ctx.w, "w", "default"},
                  {#ctx.dw, "dw", "default"},
                  {#ctx.rw, "rw", "default"},
+                 {#ctx.pw, "pw", "default"},
                  {#ctx.pr, "pr", "default"}]),
     lists:foldl(fun malformed_boolean_param/2,
                 Res,
@@ -890,15 +892,23 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L}) ->
     MDDoc = riak_object:update_metadata(VclockDoc, UserMetaMD),
     Doc = riak_object:update_value(MDDoc, accept_value(CType, wrq:req_body(RD))),
     Options = case wrq:get_qs_value(?Q_RETURNBODY, RD) of ?Q_TRUE -> [returnbody]; _ -> [] end,
-    case C:put(Doc, Ctx#ctx.w, Ctx#ctx.dw, 60000, Options) of
+    case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
+                Options]) of
         {error, precommit_fail} ->
             {{halt, 403}, send_precommit_error(RD, undefined), Ctx};
         {error, {precommit_fail, Reason}} ->
             {{halt, 403}, send_precommit_error(RD, Reason), Ctx};
         {error, {n_val_violation, N}} ->
-            Msg = io_lib:format("Specified r/w/dw values invalid for bucket"
+            Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
                                 " n value of ~p~n", [N]),
             {{halt, 400}, wrq:append_to_response_body(Msg, RD), Ctx};
+        {error, {pw_val_unsatisfied, Requested, Returned}} ->
+            Msg = io_lib:format("PW-value unsatisfied: ~p/~p~n", [Returned,
+                    Requested]),
+            {{halt, 503}, wrq:append_to_response_body(Msg, RD), Ctx};
+        {error, too_many_fails} ->
+            {{halt, 503}, wrq:append_to_response_body("Too Many write failures"
+                                                      " to satisfy W/DW\n", RD), Ctx};
         {error, timeout} ->
             {{halt, 503},
              wrq:set_resp_header("Content-Type", "text/plain",
