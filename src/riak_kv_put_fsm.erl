@@ -48,8 +48,8 @@
                   [detail_info()].
 
 -type option() :: {pw, non_neg_integer()} | %% Min number of primary (owner) vnodes participating
-                  {w, pos_integer()} |      %% Minimum number of vnodes receiving write
-                  {dw, pos_integer()} |     %% Minimum number of vnodes completing write
+                  {w,  non_neg_integer()} | %% Minimum number of vnodes receiving write
+                  {dw, non_neg_integer()} | %% Minimum number of vnodes completing write
                   {timeout, timeout()} |
                   {details, detail()}.      %% Request additional details about request
                                             %% added as extra element at the end of result tuplezd 
@@ -61,7 +61,7 @@
                 robj :: riak_object:riak_object(),
                 options=[] :: options(),
                 n :: pos_integer(),
-                w :: pos_integer(),
+                w :: non_neg_integer(),
                 dw :: non_neg_integer(),
                 preflist2 :: riak_core_apl:preflist2(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
