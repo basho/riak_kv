@@ -253,8 +253,16 @@ handle_not_found_reply(VNode, BKey, Executor, #state{fsms=FSMs, mapper_data=Mapp
             {keys, {VNode, Keys}} = lists:keyfind(keys, 1, MapperProps),
             case length(Keys) of
                 0 ->
+                    %% This case-clause should never execute. It would only be
+                    %% run in the case that list of map inputs to be run
+                    %% on VNode were empty, but either the call to 
+                    %% riak_kv_mapred_planner:plan_map/1 would cause the 
+                    %% process to exit or the start_mappers function
+                    %% would throw an error and the execution would
+                    %% never reach this point.                     
+                    FSMs1 = update_counter(Executor, FSMs),
                     MapperData1 = lists:keydelete(Executor, 1, MapperData),
-                    maybe_done(State#state{mapper_data=MapperData1});
+                    maybe_done(State#state{mapper_data=MapperData1, fsms=FSMs1});
                 _ ->
                     try
                         %% Remove the current partition from
@@ -276,7 +284,11 @@ handle_not_found_reply(VNode, BKey, Executor, #state{fsms=FSMs, mapper_data=Mapp
                     end
             end;
         false ->
-            FSMs1 = update_counter(Executor, FSMs),
-            MapperData1 = lists:keydelete(Executor, 1, MapperData),
-            maybe_done(State#state{mapper_data=MapperData1, fsms=FSMs1})                            
+            %% This case-clause will execute if a notfound error  
+            %% reply is received from a riak_kv_mapper process that
+            %% was not started by this map phase. Since the message
+            %% is from a process not started by this phase there is no
+            %% data about it in our state to be cleaned up and we
+            %% can just ignore it and move on.
+            maybe_done(State#state{mapper_data=MapperData, fsms=FSMs})                            
     end.
