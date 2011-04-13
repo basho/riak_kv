@@ -49,7 +49,7 @@
          handoff_finished/2,
          handle_handoff_data/2,
          encode_handoff_item/2,
-         handle_exit/4]).
+         handle_exit/3]).
 
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_map_phase.hrl").
@@ -270,7 +270,7 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
-handle_exit(_Pid, _Reason, _StateName, State) ->    
+handle_exit(_Pid, _Reason, State) ->    
     %% A linked processes has died so the vnode
     %% process should take appropriate action here.
     %% The default behavior is to crash the vnode 
