@@ -170,15 +170,6 @@ cycle(Zs, N, []) ->
     cycle(Zs, N, Zs).
 
 start_mock_servers() ->
-    %% Start original mock vnode
-    case whereis(riak_kv_vnode_master) of
-        undefined -> ok;
-        Pid1      ->
-            unlink(Pid1),
-            exit(Pid1, shutdown),
-            riak_kv_test_util:wait_for_pid(Pid1)
-    end,
-    get_fsm_qc_vnode_master:start_link(),
     %% Start new core_vnode based EQC FSM test mock
     case whereis(fsm_eqc_vnode) of
         undefined -> ok;
@@ -200,6 +191,12 @@ start_mock_servers() ->
 cleanup_mock_servers() ->
     application:unload(riak_core).
 
+make_options([], Options) ->
+    Options;
+make_options([{_Name, missing} | Rest], Options) ->
+    make_options(Rest, Options);
+make_options([Option | Rest], Options) ->
+    make_options(Rest, [Option | Options]).
 
 mock_ring(Q0, NodeStatus0) ->
     %% Round up to next power of two
