@@ -248,47 +248,27 @@ update_inputs(Id, VNode, BKey, MapperData) ->
 handle_not_found_reply(VNode, BKey, Executor, #state{fsms=FSMs, mapper_data=MapperData, qterm=QTerm}=State) ->
     %% If the reply is not_found, then check if there are other
     %% preflist entries that can be tried before giving up.
-    case lists:keyfind(Executor, 1, MapperData) of
-        {_Id, MapperProps} ->
-            {keys, {VNode, Keys}} = lists:keyfind(keys, 1, MapperProps),
-            case length(Keys) of
-                0 ->
-                    %% This case-clause should never execute. It would only be
-                    %% run in the case that list of map inputs to be run
-                    %% on VNode were empty, but either the call to 
-                    %% riak_kv_mapred_planner:plan_map/1 would cause the 
-                    %% process to exit or the start_mappers function
-                    %% would throw an error and the execution would
-                    %% never reach this point.                     
-                    FSMs1 = update_counter(Executor, FSMs),
-                    MapperData1 = lists:keydelete(Executor, 1, MapperData),
-                    maybe_done(State#state{mapper_data=MapperData1, fsms=FSMs1});
-                _ ->
-                    try
-                        %% Remove the current partition from
-                        %% the list of potential inputs.
-                        {BadPartition, _Node} = VNode,
-                        NewKeys = prune_input_partitions(Keys, BadPartition),
-                        %% Create a new map plan using a different preflist entry
-                        ClaimLists = riak_kv_mapred_planner:plan_map(NewKeys),
-                        FSMs1 = update_counter(Executor, FSMs),
-                        {NewFSMs, _ClaimLists1, FsmKeys} = schedule_input(NewKeys, ClaimLists, QTerm, FSMs1, State),
-                        MapperData1 = lists:keydelete(Executor, 1, MapperData ++ FsmKeys),
-                        maybe_done(State#state{mapper_data=MapperData1, fsms=NewFSMs})
-                    catch
-                        _:_Error ->
-                            %% At this point the preflist has been exhausted
-                            FSMs2 = update_counter(Executor, FSMs),
-                            MapperData2 = update_inputs(Executor, VNode, BKey, MapperData),
-                            maybe_done(State#state{fsms=FSMs2, mapper_data=MapperData2})
-                    end
-            end;
-        false ->
-            %% This case-clause will execute if a notfound error  
-            %% reply is received from a riak_kv_mapper process that
-            %% was not started by this map phase. Since the message
-            %% is from a process not started by this phase there is no
-            %% data about it in our state to be cleaned up and we
-            %% can just ignore it and move on.
-            maybe_done(State#state{mapper_data=MapperData, fsms=FSMs})                            
+
+    %% Look up the properties for the replying mapper
+    {_Id, MapperProps} = lists:keyfind(Executor, 1, MapperData),
+    %% Extract the vnode data and the list of inputs
+    {keys, {VNode, Keys}} = lists:keyfind(keys, 1, MapperProps),
+    try
+        %% Remove the current partition from
+        %% the list of potential inputs.
+        {BadPartition, _Node} = VNode,
+        NewKeys = prune_input_partitions(Keys, BadPartition),
+        %% Create a new map plan using a different preflist entry
+        ClaimLists = riak_kv_mapred_planner:plan_map(NewKeys),
+        FSMs1 = update_counter(Executor, FSMs),
+        {NewFSMs, _ClaimLists1, FsmKeys} = schedule_input(NewKeys, ClaimLists, QTerm, FSMs1, State),
+        MapperData1 = lists:keydelete(Executor, 1, MapperData ++ FsmKeys),
+        maybe_done(State#state{mapper_data=MapperData1, fsms=NewFSMs})
+    catch
+        _:_Error ->
+            %% At this point the preflist has been exhausted
+            FSMs2 = update_counter(Executor, FSMs),
+            MapperData2 = update_inputs(Executor, VNode, BKey, MapperData),
+            maybe_done(State#state{fsms=FSMs2, mapper_data=MapperData2})
+
     end.
