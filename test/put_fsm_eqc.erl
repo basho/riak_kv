@@ -465,7 +465,7 @@ expect(H, N, PW, RealPW, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Ob
             DW =:= garbage ->
                 {error, {dw_val_violation, garbage}};
 
-            RealW > N orelse EffDW > N ->
+            RealW > N orelse EffDW > N orelse RealPW > N ->
                 {error, {n_val_violation, N}};
 
             RealPW > NumPrimaries ->
