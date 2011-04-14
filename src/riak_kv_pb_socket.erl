@@ -184,7 +184,7 @@ process_message(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
     end;
 
 process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
-                           w=W0, dw=DW0, return_body=ReturnBody}, 
+                           w=W0, dw=DW0, pw=PW0, return_body=ReturnBody},
                 #state{client=C} = State) ->
 
     case K of
@@ -203,8 +203,10 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
     % erlang_protobuffs encodes as 1/0/undefined
     W = normalize_rw_value(W0),
     DW = normalize_rw_value(DW0),
+    PW = normalize_rw_value(PW0),
     Options = case ReturnBody of 1 -> [returnbody]; true -> [returnbody]; _ -> [] end,
-    case C:put(O, default_if_undef(W), default_if_undef(DW), default_timeout(), Options) of
+    case C:put(O, [{w, default_if_undef(W)}, {dw, default_if_undef(DW)},
+                   {pw, default_if_undef(PW)}, {timeout, default_timeout()} | Options]) of
         ok when is_binary(ReturnKey) ->
             PutResp = #rpbputresp{key = ReturnKey},
             send_msg(PutResp, State);
