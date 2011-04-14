@@ -169,9 +169,9 @@ process_message(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                            basic_quorum=BQ}, #state{client=C} = State) ->
     R = normalize_rw_value(R0),
     PR = normalize_rw_value(PR0),
-    case C:get(B, K, [{r, default_if_undef(R)}, {pr, default_if_undef(PR)},
-                      {notfound_ok, default_if_undef(NFOk)},
-                      {basic_quorum, default_if_undef(BQ)}]) of
+    case C:get(B, K, make_option(r, R) ++ make_option(pr, PR) ++
+                     make_option(notfound_ok, NFOk) ++
+                     make_option(basic_quorum, BQ)) of
         {ok, O} ->
             PbContent = riakc_pb:pbify_rpbcontents(riak_object:get_contents(O), []),
             GetResp = #rpbgetresp{content = PbContent,
@@ -205,8 +205,8 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
     DW = normalize_rw_value(DW0),
     PW = normalize_rw_value(PW0),
     Options = case ReturnBody of 1 -> [returnbody]; true -> [returnbody]; _ -> [] end,
-    case C:put(O, [{w, default_if_undef(W)}, {dw, default_if_undef(DW)},
-                   {pw, default_if_undef(PW)}, {timeout, default_timeout()} | Options]) of
+    case C:put(O, make_option(w, W) ++ make_option(dw, DW) ++
+                   make_option(pw, PW) ++ [{timeout, default_timeout()} | Options]) of
         ok when is_binary(ReturnKey) ->
             PutResp = #rpbputresp{key = ReturnKey},
             send_msg(PutResp, State);
@@ -359,13 +359,21 @@ update_pbvc(O0, PbVc) ->
     Vclock = erlify_rpbvc(PbVc),
     riak_object:set_vclock(O0, Vclock).
 
-%% Set default values in the options record if none are provided.
-%% Erlang protobuffs does not support default, so have to do it here.
-
+%% convert undefined to default so the option can be inherited from the bucket
 default_if_undef(undefined) ->
     default;
 default_if_undef(V) ->
     V.
+
+%% return a key/value tuple that we can ++ to other options so long as the
+%% value is not default or undefined -- those values are pulled from the
+%% bucket by the get/put FSMs.
+make_option(_, undefined) ->
+    [];
+make_option(_, default) ->
+    [];
+make_option(K, V) ->
+    [{K, V}].
 
 default_timeout() ->
     60000.
