@@ -275,8 +275,7 @@ get(Bucket, Key, R, Timeout) when is_binary(Bucket), is_binary(Key),
 %%      Return as soon as the default W value number of nodes for this bucket
 %%      nodes have received the request.
 %% @equiv put(RObj, [])
-put(RObj) -> put(RObj, []).
-
+put(RObj) -> do_put(RObj, []).
 
 %% @spec put(RObj :: riak_object:riak_object(), riak_kv_put_fsm::options()) ->
 %%       ok |
@@ -290,13 +289,7 @@ put(RObj) -> put(RObj, []).
 %%       {error, Err :: term(), details()}
 %% @doc Store RObj in the cluster.
 put(RObj, Options) when is_list(Options) ->
-    UpdObj = riak_object:increment_vclock(RObj, ClientId),
-    Me = self(),
-    ReqId = mk_reqid(),
-    riak_kv_put_fsm_sup:start_put_fsm(Node, [{raw, ReqId, Me}, UpdObj, Options]),
-    %% TODO: Investigate adding a monitor here and eliminating the timeout.
-    Timeout = recv_timeout(Options),
-    wait_for_reqid(ReqId, Timeout);
+    do_put(RObj, Options);
 
 %% @spec put(RObj :: riak_object:riak_object(), W :: integer()) ->
 %%        ok |
@@ -306,7 +299,7 @@ put(RObj, Options) when is_list(Options) ->
 %% @doc Store RObj in the cluster.
 %%      Return as soon as at least W nodes have received the request.
 %% @equiv put(RObj, [{w, W}, {dw, W}])
-put(RObj, W) -> put(RObj, [{w, W}, {dw, W}]).
+put(RObj, W) -> do_put(RObj, [{w, W}, {dw, W}]).
 
 %% @spec put(RObj::riak_object:riak_object(),W :: integer(),RW :: integer()) ->
 %%        ok |
@@ -317,7 +310,7 @@ put(RObj, W) -> put(RObj, [{w, W}, {dw, W}]).
 %%      Return as soon as at least W nodes have received the request, and
 %%      at least DW nodes have stored it in their storage backend.
 %% @equiv put(Robj, W, DW, default_timeout())
-put(RObj, W, DW) -> put(RObj, [{w, W}, {dw, DW}]).
+put(RObj, W, DW) -> do_put(RObj, [{w, W}, {dw, DW}]).
 
 %% @spec put(RObj::riak_object:riak_object(), W :: integer(), RW :: integer(),
 %%           TimeoutMillisecs :: integer()) ->
@@ -329,7 +322,7 @@ put(RObj, W, DW) -> put(RObj, [{w, W}, {dw, DW}]).
 %%      Return as soon as at least W nodes have received the request, and
 %%      at least DW nodes have stored it in their storage backend, or
 %%      TimeoutMillisecs passes.
-put(RObj, W, DW, Timeout) -> put(RObj,  [{w, W}, {dw, DW}, {timeout, Timeout}]).
+put(RObj, W, DW, Timeout) -> do_put(RObj,  [{w, W}, {dw, DW}, {timeout, Timeout}]).
 
 %% @spec put(RObj::riak_object:riak_object(), W :: integer(), RW :: integer(),
 %%           TimeoutMillisecs :: integer(), Options::list()) ->
@@ -342,7 +335,20 @@ put(RObj, W, DW, Timeout) -> put(RObj,  [{w, W}, {dw, DW}, {timeout, Timeout}]).
 %%      at least DW nodes have stored it in their storage backend, or
 %%      TimeoutMillisecs passes.
 put(RObj, W, DW, Timeout, Options) ->
-    put(RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options]).
+    do_put(RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options]).
+
+%% Break out the guts of put/2 into a seperate function to avoid a namespace
+%% collision with the BIF put/2.  Need to be compatible with versions prior
+%% to R14A so cannot rely on no_auto_import.
+%% @private
+do_put(RObj, Options) ->
+    UpdObj = riak_object:increment_vclock(RObj, ClientId),
+    Me = self(),
+    ReqId = mk_reqid(),
+    riak_kv_put_fsm_sup:start_put_fsm(Node, [{raw, ReqId, Me}, UpdObj, Options]),
+    %% TODO: Investigate adding a monitor here and eliminating the timeout.
+    Timeout = recv_timeout(Options),
+    wait_for_reqid(ReqId, Timeout).
 
 %% @spec delete(riak_object:bucket(), riak_object:key()) ->
 %%        ok |
