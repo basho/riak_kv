@@ -38,7 +38,9 @@ start_link() ->
 init([PortNum]) -> 
     {ok, #state{portnum=PortNum}}.
 
-sock_opts() -> [binary, {packet, 4}, {reuseaddr, true}].
+sock_opts() ->
+    BackLog = app_helper:get_env(riak_kv, pb_backlog, 5),
+    [binary, {packet, 4}, {reuseaddr, true}, {backlog, BackLog}].
 
 handle_call(_Req, _From, State) -> 
     {reply, not_implemented, State}.
