@@ -275,7 +275,7 @@ get(Bucket, Key, R, Timeout) when is_binary(Bucket), is_binary(Key),
 %%      Return as soon as the default W value number of nodes for this bucket
 %%      nodes have received the request.
 %% @equiv put(RObj, [])
-put(RObj) -> put(RObj, []).
+put(RObj) -> THIS:put(RObj, []).
 
 
 %% @spec put(RObj :: riak_object:riak_object(), riak_kv_put_fsm::options()) ->
@@ -306,7 +306,7 @@ put(RObj, Options) when is_list(Options) ->
 %% @doc Store RObj in the cluster.
 %%      Return as soon as at least W nodes have received the request.
 %% @equiv put(RObj, [{w, W}, {dw, W}])
-put(RObj, W) -> put(RObj, [{w, W}, {dw, W}]).
+put(RObj, W) -> THIS:put(RObj, [{w, W}, {dw, W}]).
 
 %% @spec put(RObj::riak_object:riak_object(),W :: integer(),RW :: integer()) ->
 %%        ok |
@@ -317,7 +317,7 @@ put(RObj, W) -> put(RObj, [{w, W}, {dw, W}]).
 %%      Return as soon as at least W nodes have received the request, and
 %%      at least DW nodes have stored it in their storage backend.
 %% @equiv put(Robj, W, DW, default_timeout())
-put(RObj, W, DW) -> put(RObj, [{w, W}, {dw, DW}]).
+put(RObj, W, DW) -> THIS:put(RObj, [{w, W}, {dw, DW}]).
 
 %% @spec put(RObj::riak_object:riak_object(), W :: integer(), RW :: integer(),
 %%           TimeoutMillisecs :: integer()) ->
@@ -329,7 +329,7 @@ put(RObj, W, DW) -> put(RObj, [{w, W}, {dw, DW}]).
 %%      Return as soon as at least W nodes have received the request, and
 %%      at least DW nodes have stored it in their storage backend, or
 %%      TimeoutMillisecs passes.
-put(RObj, W, DW, Timeout) -> put(RObj,  [{w, W}, {dw, DW}, {timeout, Timeout}]).
+put(RObj, W, DW, Timeout) -> THIS:put(RObj,  [{w, W}, {dw, DW}, {timeout, Timeout}]).
 
 %% @spec put(RObj::riak_object:riak_object(), W :: integer(), RW :: integer(),
 %%           TimeoutMillisecs :: integer(), Options::list()) ->
@@ -342,7 +342,7 @@ put(RObj, W, DW, Timeout) -> put(RObj,  [{w, W}, {dw, DW}, {timeout, Timeout}]).
 %%      at least DW nodes have stored it in their storage backend, or
 %%      TimeoutMillisecs passes.
 put(RObj, W, DW, Timeout, Options) ->
-    put(RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options]).
+   THIS:put(RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options]).
 
 %% @spec delete(riak_object:bucket(), riak_object:key()) ->
 %%        ok |
