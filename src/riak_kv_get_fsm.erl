@@ -208,11 +208,15 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                                    preflist2 = Preflist2}) ->
     TRef = schedule_timeout(Timeout),
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
-    riak_kv_vnode:get(Preflist, BKey, ReqId),
+    riak_kv_vnode:get_bin(Preflist, BKey, ReqId),
     StateData = StateData0#state{tref=TRef},
     {next_state,waiting_vnode_r,StateData}.
 
 %% @private
+waiting_vnode_r({r_bin, {ok, VnodeResult}, Idx, _ReqId}, StateData) ->
+    waiting_vnode_r({r, {ok, binary_to_term(VnodeResult)}, Idx, _ReqId}, StateData);
+waiting_vnode_r({r_bin, VnodeResult, Idx, _ReqId}, StateData) ->
+    waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData);
 waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData) ->
     NewStateData1 = add_vnode_result(Idx, VnodeResult, StateData),
     case enough_results(NewStateData1) of
@@ -229,6 +233,12 @@ waiting_vnode_r(request_timeout, StateData=#state{replied_r=Replied,allowmult=Al
     really_finalize(StateData#state{final_obj=merge(Replied, AllowMult)}).
 
 %% @private
+waiting_read_repair({r_bin, {ok, VnodeResult}, Idx, _ReqId}, StateData) ->
+    waiting_read_repair({r, {ok, binary_to_term(VnodeResult)}, Idx, _ReqId},
+                        StateData);
+waiting_read_repair({r_bin, VnodeResult, Idx, _ReqId}, StateData) ->
+    waiting_read_repair({r, VnodeResult, Idx, _ReqId},
+                        StateData);
 waiting_read_repair({r, VnodeResult, Idx, _ReqId}, StateData) ->
     NewStateData1 = add_vnode_result(Idx, VnodeResult, StateData),
     finalize(NewStateData1#state{final_obj = undefined});
