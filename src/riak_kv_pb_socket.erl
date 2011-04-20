@@ -166,17 +166,23 @@ process_message(rpbgetserverinforeq, State) ->
     send_msg(Resp, State);
 
 process_message(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
-                           basic_quorum=BQ}, #state{client=C} = State) ->
+                           basic_quorum=BQ, if_vclock_different=VClock},
+                           #state{client=C} = State) ->
     R = normalize_rw_value(R0),
     PR = normalize_rw_value(PR0),
     case C:get(B, K, make_option(r, R) ++ make_option(pr, PR) ++
                      make_option(notfound_ok, NFOk) ++
                      make_option(basic_quorum, BQ)) of
         {ok, O} ->
-            PbContent = riakc_pb:pbify_rpbcontents(riak_object:get_contents(O), []),
-            GetResp = #rpbgetresp{content = PbContent,
-                                  vclock = pbify_rpbvc(riak_object:vclock(O))},
-            send_msg(GetResp, State);
+            case erlify_rpbvc(VClock) == riak_object:vclock(O) of
+                true ->
+                    send_msg(#rpbgetresp{unchanged = true}, State);
+                _ ->
+                    PbContent = riakc_pb:pbify_rpbcontents(riak_object:get_contents(O), []),
+                    GetResp = #rpbgetresp{content = PbContent,
+                        vclock = pbify_rpbvc(riak_object:vclock(O))},
+                    send_msg(GetResp, State)
+            end;
         {error, notfound} ->
             send_msg(#rpbgetresp{}, State);
         {error, Reason} ->
