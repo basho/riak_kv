@@ -93,6 +93,11 @@ handle_info({ReqId, {keys, []}}, State=#state{req=#rpblistkeysreq{}, req_ctx=Req
     {noreply, State}; % No keys - no need to send a message, will send done soon.
 handle_info({ReqId, {keys, Keys}}, State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     {noreply, send_msg(#rpblistkeysresp{keys = Keys}, State)};
+handle_info({ReqId, Error},
+            State=#state{sock = Socket, req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
+    NewState = send_error("~p", [Error], State),
+    inet:setopts(Socket, [{active, once}]),
+    {noreply, NewState#state{req = undefined, req_ctx = undefined}};
 
 %% Handle response from mapred_stream/mapred_bucket_stream
 handle_info({flow_results, ReqId, done},
