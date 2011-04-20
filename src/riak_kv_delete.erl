@@ -28,7 +28,11 @@
 -include_lib("eunit/include/eunit.hrl").
 %-endif.
 
--export([delete/6]).
+-export([start_link/6, delete/6]).
+
+start_link(ReqId, Bucket, Key, RW, Timeout, Client) ->
+    {ok, proc_lib:spawn_link(?MODULE, delete, [ReqId, Bucket, Key,
+                                               RW, Timeout, Client])}.
 
 %% @spec delete(ReqId :: binary(), riak_object:bucket(), riak_object:key(),
 %%             RW :: integer(), TimeoutMillisecs :: integer(), Client :: pid())

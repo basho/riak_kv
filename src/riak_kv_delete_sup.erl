@@ -42,7 +42,7 @@ start_link() ->
 %% @doc supervisor callback.
 init([]) ->
     DeleteSpec = {undefined,
-               {riak_kv_delete, delete, []},
+               {riak_kv_delete, start_link, []},
                temporary, 5000, worker, [riak_kv_delete]},
 
     {ok, {{simple_one_for_one, 10, 10}, [DeleteSpec]}}.
