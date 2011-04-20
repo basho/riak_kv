@@ -56,13 +56,11 @@ delete(ReqId,Bucket,Key,RW0,Timeout,Client) ->
                     NewObj = riak_object:update_metadata(OrigObj,
                                                          dict:store(<<"X-Riak-Deleted">>, "true", OrigMD)),
                     Reply = C:put(NewObj, RW, RW, RemainingTime),
+                    Client ! {ReqId, Reply},
                     case Reply of
-                        ok -> 
-                            spawn_link(
-                              fun()-> reap(Bucket,Key,RemainingTime) end);
+                        ok -> reap(Bucket,Key,RemainingTime);
                         _ -> nop
-                    end,
-                    Client ! {ReqId, Reply};
+                    end;
                 {error, notfound} ->
                     Client ! {ReqId, {error, notfound}};
                 X ->
