@@ -25,12 +25,18 @@
 -module(riak_kv_keys_fsm).
 -behaviour(gen_fsm).
 -include_lib("riak_kv_vnode.hrl").
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-export([test_link/7, test_link/5]).
+-endif.
 -export([start_link/6]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
 -export([initialize/2,waiting_kl/2]).
 
--record(state, {client :: pid(),
+-type req_id() :: non_neg_integer().
+
+-record(state, {from :: {raw, req_id(), pid()},
                 client_type :: atom(),
                 bloom :: term(),
                 pls :: [list()],
@@ -40,17 +46,46 @@
                 bucket :: riak_object:bucket(),
                 input,
                 timeout :: pos_integer(),
-                req_id :: pos_integer(),
                 ring :: riak_core_ring:riak_core_ring(),
                 listers :: [{atom(), pid()}]
                }).
 
+%% ===================================================================
+%% Public API
+%% ===================================================================
+
 start_link(ReqId,Bucket,Timeout,ClientType,ErrorTolerance,From) ->
+    start_link({raw, ReqId, From}, Bucket, Timeout, ClientType, ErrorTolerance).
+
+start_link(From,Bucket,Timeout,ClientType,ErrorTolerance) ->    
     gen_fsm:start_link(?MODULE,
-                  [ReqId,Bucket,Timeout,ClientType,ErrorTolerance,From], []).
+                  [From,Bucket,Timeout,ClientType,ErrorTolerance], []).
+
+%% ===================================================================
+%% Test API
+%% ===================================================================
+
+-ifdef(TEST).
+%% Create an keys FSM for testing.  StateProps must include
+%% starttime - start time in gregorian seconds
+%% n - N-value for request (is grabbed from bucket props in prepare)
+%% bucket_props - bucket properties
+%% preflist2 - [{{Idx,Node},primary|fallback}] preference list
+%% 
+test_link(ReqId,Bucket,Key,R,Timeout,From,StateProps) ->
+    test_link({raw, ReqId, From}, Bucket, [{r, R}, {timeout, Timeout}], StateProps).
+
+test_link(From, Bucket, Options, StateProps) ->
+    gen_fsm:start_link(?MODULE, {test, [From, Bucket, Timeout, ClientType, ErrorTolerance], StateProps}, []).
+
+-endif.
+
+%% ====================================================================
+%% gen_fsm callbacks
+%% ====================================================================
 
 %% @private
-init([ReqId,Input,Timeout,ClientType,ErrorTolerance,Client]) ->
+init([From={raw,ReqId,ClientPid},Input,Timeout,ClientType,ErrorTolerance]) ->
     process_flag(trap_exit, true),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     {ok, Bloom} = ebloom:new(10000000,ErrorTolerance,ReqId),
@@ -60,19 +95,36 @@ init([ReqId,Input,Timeout,ClientType,ErrorTolerance,Client]) ->
                  _ ->
                      Input
              end,
-    StateData = #state{client=Client, client_type=ClientType, timeout=Timeout,
-                       bloom=Bloom, req_id=ReqId, input=Input, bucket=Bucket, ring=Ring},
+    StateData = #state{client_type=ClientType, timeout=Timeout,
+                       bloom=Bloom, from=From, input=Input, bucket=Bucket, ring=Ring},
     case ClientType of
         %% Link to the mapred job so we die if the job dies
         mapred ->
-            link(Client);
+            link(ClientPid);
         _ ->
             ok
     end,
-    {ok,initialize,StateData,0}.
+    {ok,initialize,StateData,0};
+init({test, Args, StateProps}) ->
+    %% Call normal init
+    {ok, initialize, StateData, 0} = init(Args),
+
+    %% Then tweak the state record with entries provided by StateProps
+    Fields = record_info(fields, state),
+    FieldPos = lists:zip(Fields, lists:seq(2, length(Fields)+1)),
+    F = fun({Field, Value}, State0) ->
+                Pos = proplists:get_value(Field, FieldPos),
+                setelement(Pos, State0, Value)
+        end,
+    TestStateData = lists:foldl(F, StateData, StateProps),
+
+    %% Enter into the execute state, skipping any code that relies on the
+    %% state of the rest of the system
+    {ok, waiting_kl, TestStateData, 0}.
+
 
 %% @private
-initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, req_id=ReqId, timeout=Timeout}) ->
+initialize(timeout, StateData0=#state{input=_Input, bucket=Bucket, ring=Ring, from={_, _ReqId, _}, timeout=_Timeout}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     N = proplists:get_value(n_val,BucketProps),
     PLS0 = riak_core_ring:all_preflists(Ring,N),
@@ -82,29 +134,20 @@ initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, req
                                lists:zip(lists:seq(0,(length(PLS0)-1)), PLS0)),
     {_, PLS} = lists:unzip(LA1 ++ LA2),
     Simul_PLS = trunc(length(PLS) / N),
-    Listers = start_listers(ReqId, Input, Timeout),
-    StateData = StateData0#state{pls=PLS,simul_pls=Simul_PLS, listers=Listers,
+    %% Listers = start_listers(ReqId, Input, Timeout),
+    StateData = StateData0#state{pls=PLS,simul_pls=Simul_PLS, listers=[],
                                  wait_pls=[],vns=sets:from_list([])},
-    %% Make sure there are actually some nodes available
-    %% to perform the key listing operations.
-    case Listers of 
-        [] ->
-            %% No nodes are currently available so return
-            %% an error back to the requesting party.
-            finish(StateData);
-        _ ->
-            reduce_pls(StateData)
-    end.
+    reduce_pls(StateData).
 
 waiting_kl({ReqId, {kl, _Idx, Keys}},
            StateData=#state{bloom=Bloom,
-                            req_id=ReqId,client=Client,timeout=Timeout,
+                            from=From={raw,ReqId,_},timeout=Timeout,
                             bucket=Bucket,client_type=ClientType}) ->
-    process_keys(Keys,Bucket,ClientType,Bloom,ReqId,Client),
+    process_keys(Keys,Bucket,ClientType,Bloom,From),
     {next_state, waiting_kl, StateData, Timeout};
 
 waiting_kl({ReqId, Idx, done}, StateData0=#state{wait_pls=WPL0,vns=VNS0,pls=PLS,
-                                                  req_id=ReqId,timeout=Timeout}) ->
+                                                  from={raw,ReqId,_},timeout=Timeout}) ->
     WPL = [{W_Idx,W_Node,W_PL} || {W_Idx,W_Node,W_PL} <- WPL0, W_Idx /= Idx],
     WNs = [W_Node || {W_Idx,W_Node,_W_PL} <- WPL0, W_Idx =:= Idx],
     Node = case WNs of
@@ -122,36 +165,26 @@ waiting_kl({ReqId, Idx, done}, StateData0=#state{wait_pls=WPL0,vns=VNS0,pls=PLS,
         _ -> reduce_pls(StateData)
     end;
 
-
 waiting_kl(timeout, StateData=#state{pls=PLS,wait_pls=WPL}) ->
     NewPLS = lists:append(PLS, [W_PL || {_W_Idx,_W_Node,W_PL} <- WPL]),
     reduce_pls(StateData#state{pls=NewPLS,wait_pls=[]}).
 
-finish(StateData=#state{req_id=ReqId,client=Client,client_type=ClientType, listers=[]}) ->
-    case ClientType of
-        mapred -> 
-            %% No nodes are available for key listing so all
-            %% we can do now is die so that the rest of the
-            %% MapReduce processes will also die and be cleaned up.
-            exit(all_nodes_unavailable);
-        plain -> 
-            %%Notify the requesting client that the key 
-            %% listing is complete or that no nodes are 
-            %% available to fulfil the request.
-            Client ! {ReqId, all_nodes_unavailable}
-    end,
-    {stop,normal,StateData};
-finish(StateData=#state{req_id=ReqId,client=Client,client_type=ClientType}) ->
+finish(StateData=#state{from={raw,ReqId,ClientPid},client_type=ClientType, vns=VNS}) ->
+    VnsList = sets:to_list(VNS),
     case ClientType of
         mapred ->
-            luke_flow:finish_inputs(Client);
+            luke_flow:finish_inputs(ClientPid);
         plain -> 
-            Client ! {ReqId, done}
+            ClientPid ! {ReqId, done}
     end,
     {stop,normal,StateData}.
 
-reduce_pls(StateData0=#state{timeout=Timeout, wait_pls=WPL,
-                             listers=Listers, simul_pls=Simul_PLS}) ->
+%% ====================================================================
+%% Internal functions
+%% ====================================================================
+
+reduce_pls(StateData0=#state{timeout=Timeout, wait_pls=WPL, bucket=Bucket, from={raw,ReqId,_}, listers=Listers,
+                             simul_pls=Simul_PLS}) ->
     case find_free_pl(StateData0) of
         {none_free,NewPLS} ->
             StateData = StateData0#state{pls=NewPLS},
@@ -160,32 +193,41 @@ reduce_pls(StateData0=#state{timeout=Timeout, wait_pls=WPL,
                 false -> {next_state, waiting_kl, StateData, Timeout}
             end;
         {[{Idx,Node}|RestPL],PLS} ->
-            case riak_core_node_watcher:services(Node) of
-                [] ->
-                    reduce_pls(StateData0#state{pls=[RestPL|PLS]});
-                _ ->
-                    %% Look up keylister for that node
-                    case proplists:get_value(Node, Listers) of
-                        undefined ->
+            case proplists:get_value(Node, Listers) of
+                undefined ->
+                    case riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Bucket, {Idx, Node}]) of
+                        {ok, LPid} ->
+                            %% Send the keylist request to the lister
+                            %% riak_kv_keylister:list_keys(LPid, {Idx, Node}),
+                            WaitPLS = [{Idx,Node,RestPL}|WPL],
+                            StateData = StateData0#state{pls=PLS, wait_pls=WaitPLS, listers=[{Node, LPid} | Listers]},
+                            case length(WaitPLS) > Simul_PLS of
+                                true ->
+                                    {next_state, waiting_kl, StateData, Timeout};
+                                false ->
+                                    reduce_pls(StateData)
+                            end;
+                        _Error ->
                             %% Node is down or hasn't been removed from preflists yet
                             %% Log a warning, skip the node and continue sending
                             %% out key list requests
                             error_logger:warning_msg("Skipping keylist request for unknown node: ~p~n", [Node]),
                             WaitPLS = [{Idx,Node,RestPL}|WPL],
                             StateData = StateData0#state{pls=PLS, wait_pls=WaitPLS},
-                            reduce_pls(StateData);
-                        LPid ->
-                            %% Send the keylist request to the lister
-                            riak_kv_keylister:list_keys(LPid, {Idx, Node}),
-                            WaitPLS = [{Idx,Node,RestPL}|WPL],
-                            StateData = StateData0#state{pls=PLS, wait_pls=WaitPLS},
-                            case length(WaitPLS) > Simul_PLS of
-                                true ->
-                                    {next_state, waiting_kl, StateData, Timeout};
-                                false ->
-                                    reduce_pls(StateData)
-                            end
+                            reduce_pls(StateData)
+                    end;
+                Pid ->
+                    %% Send the keylist request to the lister
+                    riak_kv_keylister:list_keys(Pid, {Idx, Node}),
+                    WaitPLS = [{Idx,Node,RestPL}|WPL],
+                    StateData = StateData0#state{pls=PLS, wait_pls=WaitPLS},
+                    case length(WaitPLS) > Simul_PLS of
+                        true ->
+                            {next_state, waiting_kl, StateData, Timeout};
+                        false ->
+                            reduce_pls(StateData)
                     end
+
             end
     end.
 
@@ -204,7 +246,8 @@ find_free_pl1(StateData=#state{wait_pls=WPL,pls=[PL|PLS],vns=VNS}, NotFree) ->
 
 check_pl(PL,VNS,WPL) ->
     case sets:is_disjoint(sets:from_list(PL),VNS) of
-        false -> redundant;
+        false -> 
+            redundant;
         true ->
             PL_Nodes = sets:from_list([Node || {_Idx,Node} <- PL]),
             WaitNodes = sets:from_list([Node || {_Idx,Node,_RestPL} <- WPL]),
@@ -215,29 +258,29 @@ check_pl(PL,VNS,WPL) ->
     end.
 
 %% @private
-process_keys(Keys,Bucket,ClientType,Bloom,ReqId,Client) ->
-    process_keys(Keys,Bucket,ClientType,Bloom,ReqId,Client,[]).
+process_keys(Keys,Bucket,ClientType,Bloom,From) ->
+    process_keys(Keys,Bucket,ClientType,Bloom,From,[]).
 %% @private
-process_keys([],Bucket,ClientType,_Bloom,ReqId,Client,Acc) ->
+process_keys([],Bucket,ClientType,_Bloom,{raw,ReqId,ClientPid},Acc) ->
     case ClientType of
         mapred ->
             try
-                luke_flow:add_inputs(Client, [{Bucket,K} || K <- Acc])
+                luke_flow:add_inputs(ClientPid, [{Bucket,K} || K <- Acc])
             catch _:_ ->
                     exit(self(), normal)
             end;
-        plain -> Client ! {ReqId, {keys, Acc}}
+        plain -> ClientPid ! {ReqId, {keys, Acc}}
     end,
     ok;
-process_keys([K|Rest],Bucket,ClientType,Bloom,ReqId,Client,Acc) ->
+process_keys([K|Rest],Bucket,ClientType,Bloom,From,Acc) ->
     case ebloom:contains(Bloom,K) of
         true ->
             process_keys(Rest,Bucket,ClientType,
-                         Bloom,ReqId,Client,Acc);
+                         Bloom,From,Acc);
         false ->
             ebloom:insert(Bloom,K),
             process_keys(Rest,Bucket,ClientType,
-                         Bloom,ReqId,Client,[K|Acc])
+                         Bloom,From,[K|Acc])
     end.
 
 %% @private
@@ -249,7 +292,7 @@ handle_sync_event(_Event, _From, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
 %% @private
-handle_info({'EXIT', Pid, Reason}, _StateName, #state{client=Pid}=StateData) ->
+handle_info({'EXIT', Pid, Reason}, _StateName, #state{from={raw,_,Pid}}=StateData) ->
     {stop,Reason,StateData};
 handle_info({_ReqId, {ok, _Pid}}, StateName, StateData=#state{timeout=Timeout}) ->
     %% Received a message from a key lister node that 
@@ -267,18 +310,3 @@ terminate(Reason, _StateName, #state{bloom=Bloom}) ->
 %% @private
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
-
-%% @private
-start_listers(ReqId, Bucket, Timeout) ->
-    Nodes = riak_core_node_watcher:nodes(riak_kv),
-    start_listers(Nodes, ReqId, Bucket, Timeout, []).
-
-start_listers([], _ReqId, _Bucket, _Timeout, Accum) ->
-    Accum;
-start_listers([H|T], ReqId, Bucket, Timeout, Accum) ->
-    case riak_kv_keylister_master:start_keylist(H, ReqId, Bucket, Timeout) of
-        {ok, Pid} ->
-            start_listers(T, ReqId, Bucket, Timeout, [{H, Pid}|Accum]);
-         _Error ->
-            start_listers(T, ReqId, Bucket, Timeout, Accum)
-    end.
