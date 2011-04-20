@@ -166,8 +166,8 @@ process_message(rpbgetserverinforeq, State) ->
     send_msg(Resp, State);
 
 process_message(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
-                           basic_quorum=BQ, if_vclock_different=VClock},
-                           #state{client=C} = State) ->
+                           basic_quorum=BQ, if_vclock_different=VClock,
+                           head=Head}, #state{client=C} = State) ->
     R = normalize_rw_value(R0),
     PR = normalize_rw_value(PR0),
     case C:get(B, K, make_option(r, R) ++ make_option(pr, PR) ++
@@ -178,7 +178,17 @@ process_message(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                 true ->
                     send_msg(#rpbgetresp{unchanged = true}, State);
                 _ ->
-                    PbContent = riakc_pb:pbify_rpbcontents(riak_object:get_contents(O), []),
+                    Contents = riak_object:get_contents(O),
+                    PbContent = case Head of
+                        true ->
+                            %% Remove all the 'value' fields from the contents
+                            %% This is a rough equivalent of a REST HEAD
+                            %% request
+                            BlankContents = [{MD, <<>>} || {MD, _} <- Contents],
+                            riakc_pb:pbify_rpbcontents(BlankContents, []);
+                        _ ->
+                            riakc_pb:pbify_rpbcontents(Contents, [])
+                    end,
                     GetResp = #rpbgetresp{content = PbContent,
                         vclock = pbify_rpbvc(riak_object:vclock(O))},
                     send_msg(GetResp, State)
