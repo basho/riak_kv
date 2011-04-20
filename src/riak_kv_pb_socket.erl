@@ -166,7 +166,7 @@ process_message(rpbgetserverinforeq, State) ->
     send_msg(Resp, State);
 
 process_message(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
-                           basic_quorum=BQ, if_not_modified=VClock,
+                           basic_quorum=BQ, if_modified=VClock,
                            head=Head}, #state{client=C} = State) ->
     R = normalize_rw_value(R0),
     PR = normalize_rw_value(PR0),
