@@ -199,6 +199,30 @@ process_message(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
             send_error("~p", [Reason], State)
     end;
 
+process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC,
+                           if_not_modified=NotMod, if_none_match=NoneMatch} = Req,
+                #state{client=C} = State) when NotMod; NoneMatch ->
+    case C:get(B, K) of
+        {ok, _} when NoneMatch ->
+            send_error("match_found", [], State);
+        {ok, O} when NotMod ->
+            case erlify_rpbvc(PbVC) == riak_object:vclock(O) of
+                true ->
+                    process_message(Req#rpbputreq{if_not_modified=undefined,
+                                                  if_none_match=undefined},
+                                    State);
+                _ ->
+                    send_error("modified", [], State)
+            end;
+        {error, _} when NoneMatch ->
+            process_message(Req#rpbputreq{if_not_modified=undefined,
+                                          if_none_match=undefined},
+                            State);
+        {error, notfound} when NotMod ->
+            send_error("notfound", [], State);
+        {error, Reason} ->
+            send_error("~p", [Reason], State)
+    end;
 process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                            w=W0, dw=DW0, pw=PW0, return_body=ReturnBody},
                 #state{client=C} = State) ->
