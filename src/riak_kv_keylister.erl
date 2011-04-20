@@ -27,6 +27,7 @@
 
 %% API
 -export([start_link/3,
+         start_link/4,
          list_keys/2]).
 
 %% States
@@ -39,20 +40,26 @@
 -record(state, {reqid,
                 caller,
                 bucket,
-                filter,
-                bloom}).
+                filter}).
 
 list_keys(ListerPid, VNode) ->
     gen_fsm:send_event(ListerPid, {lk, VNode}).
 
 start_link(ReqId, Caller, Bucket) ->
-    gen_fsm:start_link(?MODULE, [ReqId, Caller, Bucket], []).
+    start_link(ReqId, Caller, Bucket, []).
 
-init([ReqId, Caller, Inputs]) ->
-    erlang:monitor(process, Caller),
-    {ok, Bloom} = ebloom:new(10000000, 0.0001, crypto:rand_uniform(1, 5000)),
+start_link(ReqId, Caller, Bucket, VNode) ->
+    gen_fsm:start_link(?MODULE, [ReqId, Caller, Bucket, VNode], []).
+
+init([ReqId, Caller, Inputs, VNode]) ->
     {Bucket, Filter} = build_filter(Inputs),
-    {ok, waiting, #state{reqid=ReqId, caller=Caller, bloom=Bloom, bucket=Bucket,
+    case VNode of 
+        [] ->
+            riak_kv_vnode:list_keys(VNode, ReqId, self(), Bucket);
+        _ ->
+            ok
+    end,
+    {ok, waiting, #state{reqid=ReqId, caller=Caller, bucket=Bucket,
                          filter=Filter}}.
 
 waiting({lk, VNode}, #state{reqid=ReqId, bucket=Bucket}=State) ->
@@ -71,25 +78,20 @@ handle_event(_Event, StateName, State) ->
 handle_sync_event(_Event, _From, StateName, State) ->
     {reply, ignored, StateName, State}.
 
-handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{reqid=ReqId, bloom=Bloom,
-                                                       filter=Filter, caller=Caller}=State) ->
+handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{reqid=ReqId,
+                                                       filter=Filter, caller=Caller}=State) ->    
     F = fun(Key, Acc) ->
-                case ebloom:contains(Bloom, Key) of
+                case is_function(Filter) of
                     true ->
-                        Acc;
-                    false ->
-                        case is_function(Filter) of
+                        case Filter(Key) of
                             true ->
-                                case Filter(Key) of
-                                    true ->
-                                        ebloom:insert(Bloom, Key),
-                                        [Key|Acc];
-                                    false ->
-                                        Acc
-                                end;
+                                [Key|Acc];
                             false ->
-                                [Key|Acc]
-                        end end end,
+                                Acc
+                        end;
+                    false ->
+                        [Key|Acc]
+                end end,
     case lists:foldl(F, [], Keys0) of
         [] ->
             ok;
@@ -105,8 +107,7 @@ handle_info({'DOWN', _MRef, _Type, Caller, _Info}, waiting, #state{caller=Caller
 handle_info(_Info, StateName, State) ->
     {next_state, StateName, State}.
 
-terminate(_Reason, _StateName, #state{bloom=Bloom}) ->
-    ebloom:clear(Bloom),
+terminate(_Reason, _StateName, _State) ->
     ok.
 
 code_change(_OldVsn, StateName, State, _Extra) ->
