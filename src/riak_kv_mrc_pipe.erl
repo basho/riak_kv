@@ -22,7 +22,8 @@
 -module(riak_kv_mrc_pipe).
 
 -export([
-         mapred/2
+         mapred/2,
+         mapred_stream/1
         ]).
 -export([example/0, example_bucket/0, example_reduce/0]).
 
@@ -33,11 +34,14 @@
 %% TODO: Timeout
 %% TODO: Streaming output
 mapred(Inputs, Query) ->
-    {ok, Builder, Sink} = riak_pipe:exec(mr2pipe_phases(Query),
-                                         [{log, sasl},{trace, all}]),
-    {ok, Head} = riak_pipe:wait_first_fitting(Builder),
+    {ok, Head, Sink} = mapred_stream(Query),
     send_inputs(Head, Inputs),
     collect_outputs(Sink).
+
+mapred_stream(Query) ->
+    {ok, Builder, Sink} = riak_pipe:exec(mr2pipe_phases(Query), []),
+    {ok, Head} = riak_pipe:wait_first_fitting(Builder),
+    {ok, Head, Sink}.
 
 mr2pipe_phases(Query) ->
     Numbered = lists:zip(Query, lists:seq(0, length(Query)-1)),
