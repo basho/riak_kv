@@ -224,7 +224,8 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC,
             send_error("~p", [Reason], State)
     end;
 process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
-                           w=W0, dw=DW0, pw=PW0, return_body=ReturnBody},
+                           w=W0, dw=DW0, pw=PW0, return_body=ReturnBody,
+                           return_head=ReturnHead},
                 #state{client=C} = State) ->
 
     case K of
@@ -244,7 +245,15 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
     W = normalize_rw_value(W0),
     DW = normalize_rw_value(DW0),
     PW = normalize_rw_value(PW0),
-    Options = case ReturnBody of 1 -> [returnbody]; true -> [returnbody]; _ -> [] end,
+    Options = case ReturnBody of
+        1 -> [returnbody];
+        true -> [returnbody];
+        _ ->
+            case ReturnHead of
+                true -> [returnbody];
+                _ -> []
+            end
+    end,
     case C:put(O, make_option(w, W) ++ make_option(dw, DW) ++
                    make_option(pw, PW) ++ [{timeout, default_timeout()} | Options]) of
         ok when is_binary(ReturnKey) ->
@@ -253,14 +262,24 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
         ok ->
             send_msg(#rpbputresp{}, State);
         {ok, Obj} ->
-            PbContents = riakc_pb:pbify_rpbcontents(riak_object:get_contents(Obj), []),
+            Contents = riak_object:get_contents(Obj),
+            PbContents = case ReturnHead of
+                true ->
+                    %% Remove all the 'value' fields from the contents
+                    %% This is a rough equivalent of a REST HEAD
+                    %% request
+                    BlankContents = [{MD, <<>>} || {MD, _} <- Contents],
+                    riakc_pb:pbify_rpbcontents(BlankContents, []);
+                _ ->
+                    riakc_pb:pbify_rpbcontents(Contents, [])
+            end,
             PutResp = #rpbputresp{content = PbContents,
                                   vclock = pbify_rpbvc(riak_object:vclock(Obj)),
                                   key = ReturnKey
                               },
             send_msg(PutResp, State);
         {error, notfound} ->
-            send_msg(#rpbputresp{}, State);            
+            send_msg(#rpbputresp{}, State);
         {error, Reason} ->
             send_error("~p", [Reason], State)
     end;
