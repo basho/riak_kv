@@ -38,16 +38,16 @@
 
 -record(state, {from :: {raw, req_id(), pid()},
                 client_type :: atom(),
-                bloom :: term(),
                 pls :: [list()],
-                wait_pls :: [term()],
-                simul_pls :: integer(),
-                vns :: term(),
                 bucket :: riak_object:bucket(),
                 input,
                 timeout :: pos_integer(),
                 ring :: riak_core_ring:riak_core_ring(),
-                listers :: [{atom(), pid()}]
+                node_indexes :: dict(),
+                upnodes :: [node()],
+                responses :: non_neg_integer(),
+                required_responses :: pos_integer(),                
+                n_val :: pos_integer()
                }).
 
 %% ===================================================================
@@ -85,10 +85,9 @@ test_link(From, Bucket, Options, StateProps) ->
 %% ====================================================================
 
 %% @private
-init([From={raw,ReqId,ClientPid},Input,Timeout,ClientType,ErrorTolerance]) ->
+init([From={raw, _, ClientPid}, Input, Timeout, ClientType, _ErrorTolerance]) ->
     process_flag(trap_exit, true),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    {ok, Bloom} = ebloom:new(10000000,ErrorTolerance,ReqId),
     Bucket = case Input of
                  {B, _} ->
                      B;
@@ -96,7 +95,7 @@ init([From={raw,ReqId,ClientPid},Input,Timeout,ClientType,ErrorTolerance]) ->
                      Input
              end,
     StateData = #state{client_type=ClientType, timeout=Timeout,
-                       bloom=Bloom, from=From, input=Input, bucket=Bucket, ring=Ring},
+                       from=From, input=Input, bucket=Bucket, ring=Ring},
     case ClientType of
         %% Link to the mapred job so we die if the job dies
         mapred ->
@@ -104,7 +103,7 @@ init([From={raw,ReqId,ClientPid},Input,Timeout,ClientType,ErrorTolerance]) ->
         _ ->
             ok
     end,
-    {ok,initialize,StateData,0};
+    {ok, initialize, StateData, 0};
 init({test, Args, StateProps}) ->
     %% Call normal init
     {ok, initialize, StateData, 0} = init(Args),
@@ -124,53 +123,67 @@ init({test, Args, StateProps}) ->
 
 
 %% @private
-initialize(timeout, StateData0=#state{input=_Input, bucket=Bucket, ring=Ring, from={_, _ReqId, _}, timeout=_Timeout}) ->
+initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, from={_, ReqId, _}, timeout=Timeout}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     N = proplists:get_value(n_val,BucketProps),
     PLS0 = riak_core_ring:all_preflists(Ring,N),
-    {LA1, LA2} = lists:partition(fun({A,_B}) ->
+    {LA1, LA2} = lists:partition(fun({A, _B}) ->
                                        A rem N == 0 orelse A rem (N + 1) == 0
                                end,
-                               lists:zip(lists:seq(0,(length(PLS0)-1)), PLS0)),
+                               lists:zip(lists:seq(0, (length(PLS0)-1)), PLS0)),
     {_, PLS} = lists:unzip(LA1 ++ LA2),
-    Simul_PLS = trunc(length(PLS) / N),
-    %% Listers = start_listers(ReqId, Input, Timeout),
-    StateData = StateData0#state{pls=PLS,simul_pls=Simul_PLS, listers=[],
-                                 wait_pls=[],vns=sets:from_list([])},
-    reduce_pls(StateData).
+    %% The call to reduce_pls minimizes the set of VNodes that
+    %% need to perform key listings to ensure full coverage of 
+    %% all of the bucket's keys. It returns a 2-tuple. The first
+    %% element is a dictionary with unique riak nodes as the
+    %% keys and the lists of VNodes that particular nodes should
+    %% list the keys for as the values. The second element is the
+    %% the number of unique responses from VNodes required before
+    %% the key listing fsm can transition to the finish state.
+    {NodeIndexDict, RequiredResponses} = reduce_pls(PLS),
+    %% The call to begin_key_listings will start keylister
+    %% processes on each node that has a key in NodeIndexDict.
+    %% The keylister process is given a list of VNodes that it 
+    %% should list the keys for and those VNodes lists are the values 
+    %% stored in NodeIndexDict.
+    NodeIndexDict1 = begin_key_listings(ReqId, Input, NodeIndexDict),
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    StateData = StateData0#state{pls=PLS, 
+                                 node_indexes = NodeIndexDict1,
+                                 upnodes=UpNodes,
+                                 responses=0,
+                                 required_responses=RequiredResponses,
+                                 n_val=N},
+    {next_state, waiting_kl, StateData, Timeout}.
+    
 
-waiting_kl({ReqId, {kl, _Idx, Keys}},
-           StateData=#state{bloom=Bloom,
-                            from=From={raw,ReqId,_},timeout=Timeout,
-                            bucket=Bucket,client_type=ClientType}) ->
-    process_keys(Keys,Bucket,ClientType,Bloom,From),
+waiting_kl({ReqId, {kl, Index, Keys}},
+           StateData=#state{from=From={raw, ReqId, _},
+                             timeout=Timeout,
+                             upnodes=UpNodes,
+                             n_val=NVal,
+                             ring=Ring,
+                             bucket=Bucket,
+                             client_type=ClientType}) ->
+    process_keys(Index, Keys, Bucket, ClientType, Ring, NVal, UpNodes, From),
     {next_state, waiting_kl, StateData, Timeout};
-
-waiting_kl({ReqId, Idx, done}, StateData0=#state{wait_pls=WPL0,vns=VNS0,pls=PLS,
-                                                  from={raw,ReqId,_},timeout=Timeout}) ->
-    WPL = [{W_Idx,W_Node,W_PL} || {W_Idx,W_Node,W_PL} <- WPL0, W_Idx /= Idx],
-    WNs = [W_Node || {W_Idx,W_Node,_W_PL} <- WPL0, W_Idx =:= Idx],
-    Node = case WNs of
-        [WN] -> WN;
-        _ -> undefined
-    end,
-    VNS = sets:add_element({Idx,Node},VNS0),
-    StateData = StateData0#state{wait_pls=WPL,vns=VNS},
-    case PLS of
-        [] ->
-            case WPL of
-                [] -> finish(StateData);
-                _ -> {next_state, waiting_kl, StateData, Timeout}
-            end;
-        _ -> reduce_pls(StateData)
+waiting_kl({ReqId, _Index, done}, StateData0=#state{pls=_PLS,
+                                                   from={raw, ReqId, _},
+                                                   responses=Responses,
+                                                   required_responses=RequiredResponses,
+                                                   timeout=Timeout}) ->
+    Responses1 = Responses + 1,
+    StateData = StateData0#state{responses=Responses1},
+    case Responses1 >= RequiredResponses of
+        true -> 
+            finish(StateData);
+        false -> {next_state, waiting_kl, StateData, Timeout}
     end;
+waiting_kl(timeout, StateData) ->
+    finish(StateData).
 
-waiting_kl(timeout, StateData=#state{pls=PLS,wait_pls=WPL}) ->
-    NewPLS = lists:append(PLS, [W_PL || {_W_Idx,_W_Node,W_PL} <- WPL]),
-    reduce_pls(StateData#state{pls=NewPLS,wait_pls=[]}).
 
-finish(StateData=#state{from={raw,ReqId,ClientPid},client_type=ClientType, vns=VNS}) ->
-    VnsList = sets:to_list(VNS),
+finish(StateData=#state{from={raw, ReqId, ClientPid}, client_type=ClientType}) ->
     case ClientType of
         mapred ->
             luke_flow:finish_inputs(ClientPid);
@@ -183,85 +196,61 @@ finish(StateData=#state{from={raw,ReqId,ClientPid},client_type=ClientType, vns=V
 %% Internal functions
 %% ====================================================================
 
-reduce_pls(StateData0=#state{timeout=Timeout, wait_pls=WPL, bucket=Bucket, from={raw,ReqId,_}, listers=Listers,
-                             simul_pls=Simul_PLS}) ->
-    case find_free_pl(StateData0) of
-        {none_free,NewPLS} ->
-            StateData = StateData0#state{pls=NewPLS},
-            case NewPLS =:= [] andalso WPL =:= [] of
-                true -> finish(StateData);
-                false -> {next_state, waiting_kl, StateData, Timeout}
-            end;
-        {[{Idx,Node}|RestPL],PLS} ->
-            case proplists:get_value(Node, Listers) of
-                undefined ->
-                    case riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Bucket, {Idx, Node}]) of
-                        {ok, LPid} ->
-                            %% Send the keylist request to the lister
-                            %% riak_kv_keylister:list_keys(LPid, {Idx, Node}),
-                            WaitPLS = [{Idx,Node,RestPL}|WPL],
-                            StateData = StateData0#state{pls=PLS, wait_pls=WaitPLS, listers=[{Node, LPid} | Listers]},
-                            case length(WaitPLS) > Simul_PLS of
-                                true ->
-                                    {next_state, waiting_kl, StateData, Timeout};
-                                false ->
-                                    reduce_pls(StateData)
-                            end;
-                        _Error ->
-                            %% Node is down or hasn't been removed from preflists yet
-                            %% Log a warning, skip the node and continue sending
-                            %% out key list requests
-                            error_logger:warning_msg("Skipping keylist request for unknown node: ~p~n", [Node]),
-                            WaitPLS = [{Idx,Node,RestPL}|WPL],
-                            StateData = StateData0#state{pls=PLS, wait_pls=WaitPLS},
-                            reduce_pls(StateData)
-                    end;
-                Pid ->
-                    %% Send the keylist request to the lister
-                    riak_kv_keylister:list_keys(Pid, {Idx, Node}),
-                    WaitPLS = [{Idx,Node,RestPL}|WPL],
-                    StateData = StateData0#state{pls=PLS, wait_pls=WaitPLS},
-                    case length(WaitPLS) > Simul_PLS of
-                        true ->
-                            {next_state, waiting_kl, StateData, Timeout};
-                        false ->
-                            reduce_pls(StateData)
-                    end
+reduce_pls([[{Index, Node} | RestPrefList] | RestPrefLists]) ->
+    VNodeSet = sets:new(),
+    VNodeSet1 = sets:add_element({Index, Node}, VNodeSet),
+    NodeIndexDict = dict:new(),
+    NodeIndexDict1 = dict:store(Node, [{Index, RestPrefList}], NodeIndexDict),
+    reduce_pls(RestPrefLists, NodeIndexDict1, VNodeSet1).
 
-            end
-    end.
-
-find_free_pl(StateData) -> find_free_pl1(StateData, []).
-find_free_pl1(_StateData=#state{pls=[]}, NotFree) -> {none_free,NotFree};
-find_free_pl1(StateData=#state{wait_pls=WPL,pls=[PL|PLS],vns=VNS}, NotFree) ->
-    case PL of
-        [] -> find_free_pl1(StateData#state{pls=PLS}, NotFree);
-        _ ->
-            case check_pl(PL,VNS,WPL) of
-                redundant -> find_free_pl1(StateData#state{pls=PLS},NotFree);
-                notfree -> find_free_pl1(StateData#state{pls=PLS},[PL|NotFree]);
-                free -> {PL,lists:append(PLS,NotFree)}
-            end
-    end.
-
-check_pl(PL,VNS,WPL) ->
-    case sets:is_disjoint(sets:from_list(PL),VNS) of
-        false -> 
-            redundant;
+reduce_pls([], NodeIndexDict, VNodeSet) ->
+    {NodeIndexDict, sets:size(VNodeSet)};
+reduce_pls(HeadPrefList=[[{Index, Node} | RestPrefList] | RestPrefLists], NodeIndexDict, VNodeSet) ->
+    case sets:is_disjoint(sets:from_list(HeadPrefList), VNodeSet) of 
         true ->
-            PL_Nodes = sets:from_list([Node || {_Idx,Node} <- PL]),
-            WaitNodes = sets:from_list([Node || {_Idx,Node,_RestPL} <- WPL]),
-            case sets:is_disjoint(PL_Nodes,WaitNodes) of
-                false -> notfree;
-                true -> free
-            end
+            %% Check if there an entry for Node in NodeIndexDict
+            case dict:is_key(Node, NodeIndexDict) of
+                true ->
+                    %% An entry for the physical node is already present
+                    %% so just append the index information to the value
+                    %% for the node.
+                    NodeIndexDict1 = dict:append(Node, {Index, RestPrefList}, NodeIndexDict);
+                false ->
+                    %% The is the first vnode for this physical node 
+                    %% so add an entry for the node in NodeIndexList
+                    NodeIndexDict1 = dict:store([{Node, [{Index, RestPrefList}]}], NodeIndexDict)                
+            end,
+            %% Add an entry to the VNode set
+            VNodeSet1 = sets:add_element({Index, Node}, VNodeSet),
+            reduce_pls(RestPrefLists, NodeIndexDict1, VNodeSet1);
+        false ->
+            %% A vnode from this preference list has already
+            %% been seen so move on to the next preference list.
+            reduce_pls(RestPrefLists, NodeIndexDict, VNodeSet)
     end.
 
+begin_key_listings(ReqId, Bucket, NodeIndexDict) ->
+    StartListerFunc = fun(Node, Indexes) ->
+                            VNodes = [{Index, Node} || {Index, _} <- Indexes],
+                            case riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Bucket, VNodes]) of
+                                {ok, _Pid} ->                      
+                                    Indexes;
+                                _Error ->
+                                    %% TODO: Properly handlle errors here
+                                    error_logger:warning_msg("Skipping keylist request for unknown node: ~p~n", [Node]),
+                                    Indexes
+                            end                
+                    end,
+    %% Map over the node keys to start the keylister process on each node 
+    dict:map(StartListerFunc, NodeIndexDict).
+
+
 %% @private
-process_keys(Keys,Bucket,ClientType,Bloom,From) ->
-    process_keys(Keys,Bucket,ClientType,Bloom,From,[]).
+process_keys(Index, Keys, Bucket, ClientType, Ring, NVal, UpNodes, From) ->
+    process_keys(Index, Keys, Bucket, ClientType, Ring, NVal, UpNodes, From, []).
+
 %% @private
-process_keys([],Bucket,ClientType,_Bloom,{raw,ReqId,ClientPid},Acc) ->
+process_keys(_, [], Bucket, ClientType, _, _, _, {raw,ReqId,ClientPid}, Acc) ->
     case ClientType of
         mapred ->
             try
@@ -270,17 +259,18 @@ process_keys([],Bucket,ClientType,_Bloom,{raw,ReqId,ClientPid},Acc) ->
                     exit(self(), normal)
             end;
         plain -> ClientPid ! {ReqId, {keys, Acc}}
-    end,
-    ok;
-process_keys([K|Rest],Bucket,ClientType,Bloom,From,Acc) ->
-    case ebloom:contains(Bloom,K) of
-        true ->
-            process_keys(Rest,Bucket,ClientType,
-                         Bloom,From,Acc);
+    end;
+process_keys(Index, [K|Rest], Bucket, ClientType, Ring, NVal, UpNodes, From, Acc) ->
+    %% Get the Index for the BKey and check if it's in the list of 
+    %% Indexes that have already reported.
+    ChashKey = riak_core_util:chash_key({Bucket, K}),
+    [HeadPrefList | _] = riak_core_apl:get_apl_ann(ChashKey, NVal, Ring, UpNodes),
+    {{HeadPrefListIndex, _}, primary} = HeadPrefList,
+    case Index == HeadPrefListIndex of
+        true ->            
+            process_keys(Index, Rest, Bucket, ClientType, Ring, NVal, UpNodes, From, [K|Acc]);
         false ->
-            ebloom:insert(Bloom,K),
-            process_keys(Rest,Bucket,ClientType,
-                         Bloom,From,[K|Acc])
+            process_keys(Index, Rest, Bucket, ClientType, Ring, NVal, UpNodes, From, Acc)
     end.
 
 %% @private
@@ -303,8 +293,7 @@ handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
 %% @private
-terminate(Reason, _StateName, #state{bloom=Bloom}) ->
-    ebloom:clear(Bloom),
+terminate(Reason, _StateName, _State) ->
     Reason.
 
 %% @private
