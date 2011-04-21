@@ -34,43 +34,44 @@
 -export([waiting/2]).
 
 %% gen_fsm callbacks
--export([init/1, state_name/2, state_name/3, handle_event/3,
-         handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
+-export([init/1, 
+         handle_event/3,
+         handle_sync_event/4,
+         handle_info/3,
+         terminate/3,
+         code_change/4]).
 
 -record(state, {reqid,
                 caller,
                 bucket,
                 filter}).
 
-list_keys(ListerPid, VNode) ->
-    gen_fsm:send_event(ListerPid, {lk, VNode}).
+%% ===================================================================
+%% Public API
+%% ===================================================================
 
 start_link(ReqId, Caller, Bucket) ->
     start_link(ReqId, Caller, Bucket, []).
 
-start_link(ReqId, Caller, Bucket, VNode) ->
-    gen_fsm:start_link(?MODULE, [ReqId, Caller, Bucket, VNode], []).
+start_link(ReqId, Caller, Bucket, VNodes) ->
+    gen_fsm:start_link(?MODULE, [ReqId, Caller, Bucket, VNodes], []).
 
-init([ReqId, Caller, Inputs, VNode]) ->
-    {Bucket, Filter} = build_filter(Inputs),
-    case VNode of 
-        [] ->
-            riak_kv_vnode:list_keys(VNode, ReqId, self(), Bucket);
-        _ ->
-            ok
-    end,
+list_keys(ListerPid, VNode) ->    
+    gen_fsm:send_event(ListerPid, {lk, VNode}).
+
+%% ===================================================================
+%% gen_fsm callbacks
+%% ===================================================================
+
+init([ReqId, Caller, Inputs, VNodes]) ->
+    {Bucket, Filter} = build_filter(Inputs),    
+    riak_kv_vnode:list_keys(VNodes, ReqId, self(), Bucket),
     {ok, waiting, #state{reqid=ReqId, caller=Caller, bucket=Bucket,
                          filter=Filter}}.
 
 waiting({lk, VNode}, #state{reqid=ReqId, bucket=Bucket}=State) ->
     riak_kv_vnode:list_keys(VNode, ReqId, self(), Bucket),
     {next_state, waiting, State}.
-
-state_name(_Event, State) ->
-    {next_state, waiting, State}.
-
-state_name(_Event, _From, State) ->
-    {reply, ignored, state_name, State}.
 
 handle_event(_Event, StateName, State) ->
     {next_state, StateName, State}.
@@ -113,7 +114,10 @@ terminate(_Reason, _StateName, _State) ->
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
+%% ====================================================================
 %% Internal functions
+%% ====================================================================
+
 build_filter('_') ->
     {'_', []};
 build_filter(Bucket) when is_binary(Bucket) ->
