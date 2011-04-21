@@ -28,7 +28,11 @@
 -include_lib("eunit/include/eunit.hrl").
 %-endif.
 
--export([delete/6]).
+-export([start_link/6, delete/6]).
+
+start_link(ReqId, Bucket, Key, RW, Timeout, Client) ->
+    {ok, proc_lib:spawn_link(?MODULE, delete, [ReqId, Bucket, Key,
+                                               RW, Timeout, Client])}.
 
 %% @spec delete(ReqId :: binary(), riak_object:bucket(), riak_object:key(),
 %%             RW :: integer(), TimeoutMillisecs :: integer(), Client :: pid())
@@ -52,13 +56,11 @@ delete(ReqId,Bucket,Key,RW0,Timeout,Client) ->
                     NewObj = riak_object:update_metadata(OrigObj,
                                                          dict:store(<<"X-Riak-Deleted">>, "true", OrigMD)),
                     Reply = C:put(NewObj, RW, RW, RemainingTime),
+                    Client ! {ReqId, Reply},
                     case Reply of
-                        ok -> 
-                            spawn_link(
-                              fun()-> reap(Bucket,Key,RemainingTime) end);
+                        ok -> reap(Bucket,Key,RemainingTime);
                         _ -> nop
-                    end,
-                    Client ! {ReqId, Reply};
+                    end;
                 {error, notfound} ->
                     Client ! {ReqId, {error, notfound}};
                 X ->
