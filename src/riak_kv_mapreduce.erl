@@ -254,7 +254,9 @@ map_object_value_test() ->
     O1 = riak_object:new(<<"a">>, <<"1">>, "value1"),
     O2 = riak_object:new(<<"a">>, <<"1">>, ["value1"]),
     ["value1"] = map_object_value(O1, test, test),
-    ["value1"] = map_object_value_list(O2, test, test).
+    ["value1"] = map_object_value_list(O2, test, test),
+    [] = map_object_value({error, notfound}, test, <<"filter_notfound">>),
+    [{error,notfound}] = map_object_value({error, notfound}, test, <<"include_notfound">>).
 
 reduce_set_union_test() ->
     [bar,baz,foo] = lists:sort(reduce_set_union([foo,foo,bar,baz], test)).
