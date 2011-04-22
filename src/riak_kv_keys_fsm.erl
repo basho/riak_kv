@@ -141,12 +141,12 @@ initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, fro
     %% the number of unique responses from VNodes required before
     %% the key listing fsm can transition to the finish state.
     {NodeIndexDict, RequiredResponses} = reduce_pls(PLS),
-    %% The call to begin_key_listings will start keylister
+    %% The call to start_keylisters will start keylister
     %% processes on each node that has a key in NodeIndexDict.
     %% The keylister process is given a list of VNodes that it 
     %% should list the keys for and those VNodes lists are the values 
     %% stored in NodeIndexDict.
-    NodeIndexDict1 = begin_key_listings(ReqId, Input, NodeIndexDict),
+    NodeIndexDict1 = start_keylisters(ReqId, Input, NodeIndexDict, Timeout),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     StateData = StateData0#state{pls=PLS, 
                                  node_indexes = NodeIndexDict1,
@@ -182,7 +182,6 @@ waiting_kl({ReqId, _Index, done}, StateData0=#state{pls=_PLS,
 waiting_kl(timeout, StateData) ->
     finish(StateData).
 
-
 finish(StateData=#state{from={raw, ReqId, ClientPid}, client_type=ClientType}) ->
     case ClientType of
         mapred ->
@@ -216,7 +215,7 @@ reduce_pls(HeadPrefList=[[{Index, Node} | RestPrefList] | RestPrefLists], NodeIn
                     %% for the node.
                     NodeIndexDict1 = dict:append(Node, {Index, RestPrefList}, NodeIndexDict);
                 false ->
-                    %% The is the first vnode for this physical node 
+                    %% This is the first vnode for this physical node 
                     %% so add an entry for the node in NodeIndexList
                     NodeIndexDict1 = dict:store([{Node, [{Index, RestPrefList}]}], NodeIndexDict)                
             end,
@@ -229,18 +228,18 @@ reduce_pls(HeadPrefList=[[{Index, Node} | RestPrefList] | RestPrefLists], NodeIn
             reduce_pls(RestPrefLists, NodeIndexDict, VNodeSet)
     end.
 
-begin_key_listings(ReqId, Bucket, NodeIndexDict) ->
+start_keylisters(ReqId, Bucket, NodeIndexDict, Timeout) ->
     StartListerFunc = fun(Node, Indexes) ->
-                            VNodes = [{Index, Node} || {Index, _} <- Indexes],
-                            case riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Bucket, VNodes]) of
-                                {ok, _Pid} ->                      
-                                    Indexes;
-                                _Error ->
-                                    %% TODO: Properly handlle errors here
-                                    error_logger:warning_msg("Skipping keylist request for unknown node: ~p~n", [Node]),
-                                    Indexes
-                            end                
-                    end,
+                              VNodes = [{Index, Node} || {Index, _} <- Indexes],
+                              case riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Bucket, VNodes, Timeout]) of
+                                  {ok, _Pid} ->
+                                      Indexes;                                
+                                  {error, Error}->
+                                      %% TODO: More robust error handling 
+                                      error_logger:warning_msg("Unable to start a keylister process on ~p~n", [Node]),
+                                      Indexes
+                              end
+                      end,
     %% Map over the node keys to start the keylister process on each node 
     dict:map(StartListerFunc, NodeIndexDict).
 
