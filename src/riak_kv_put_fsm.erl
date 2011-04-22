@@ -656,6 +656,7 @@ calc_timing([{Stage, StageStart} | Rest], StageEnd, ReplyNow, Stages) ->
 -ifdef(TEST).
 
 make_vtag_test() ->
+    crypto:start(),
     Obj = riak_object:new(<<"b">>,<<"k">>,<<"v1">>),
     ?assertNot(make_vtag(Obj) =:=
                make_vtag(riak_object:increment_vclock(Obj,<<"client_id">>))).
