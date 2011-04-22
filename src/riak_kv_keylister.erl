@@ -27,7 +27,7 @@
 
 %% API
 -export([start_link/3,
-         start_link/4,
+         start_link/5,
          list_keys/2]).
 
 %% States
@@ -41,6 +41,8 @@
          terminate/3,
          code_change/4]).
 
+-define (DEFAULT_TIMEOUT, 60000).
+
 -record(state, {reqid,
                 caller,
                 bucket,
@@ -51,10 +53,10 @@
 %% ===================================================================
 
 start_link(ReqId, Caller, Bucket) ->
-    start_link(ReqId, Caller, Bucket, []).
+    start_link(ReqId, Caller, Bucket, [], ?DEFAULT_TIMEOUT).
 
-start_link(ReqId, Caller, Bucket, VNodes) ->
-    gen_fsm:start_link(?MODULE, [ReqId, Caller, Bucket, VNodes], []).
+start_link(ReqId, Caller, Bucket, VNodes, Timeout) ->
+    gen_fsm:start_link(?MODULE, [ReqId, Caller, Bucket, VNodes], [{timeout, Timeout}]).
 
 list_keys(ListerPid, VNode) ->    
     gen_fsm:send_event(ListerPid, {lk, VNode}).
@@ -64,6 +66,7 @@ list_keys(ListerPid, VNode) ->
 %% ===================================================================
 
 init([ReqId, Caller, Inputs, VNodes]) ->
+    erlang:monitor(process, Caller),
     {Bucket, Filter} = build_filter(Inputs),    
     riak_kv_vnode:list_keys(VNodes, ReqId, self(), Bucket),
     {ok, waiting, #state{reqid=ReqId, caller=Caller, bucket=Bucket,
