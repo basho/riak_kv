@@ -70,9 +70,9 @@ handle_event({mapexec_reply, VNode, BKey, Reply, Executor}, #state{fsms=FSMs, ma
         true ->
             case Reply of
                 [{not_found, _, _}] ->
-                    handle_not_found_reply(VNode, BKey, Executor, State);
+                    handle_not_found_reply(VNode, BKey, Executor, State, Reply);
                 [{error, notfound}] ->
-                    handle_not_found_reply(VNode, BKey, Executor, State);
+                    handle_not_found_reply(VNode, BKey, Executor, State, Reply);
                 _ ->
                     Pending1 = Pending ++ Reply,
                     FSMs1 = update_counter(Executor, FSMs),
@@ -245,7 +245,7 @@ update_inputs(Id, VNode, BKey, MapperData) ->
         false -> throw(bad_mapper_props_no_id)
     end.
 
-handle_not_found_reply(VNode, BKey, Executor, #state{fsms=FSMs, mapper_data=MapperData, qterm=QTerm}=State) ->
+handle_not_found_reply(VNode, BKey, Executor, #state{fsms=FSMs, mapper_data=MapperData, qterm=QTerm, pending=Pending}=State, Reply) ->
     %% If the reply is not_found, then check if there are other
     %% preflist entries that can be tried before giving up.
 
@@ -272,9 +272,10 @@ handle_not_found_reply(VNode, BKey, Executor, #state{fsms=FSMs, mapper_data=Mapp
     catch
         exit:exhausted_preflist ->
             %% At this point the preflist has been exhausted
+            Pending1 = Pending ++ Reply,
             FSMs2 = update_counter(Executor, FSMs),
             MapperData2 = update_inputs(Executor, VNode, BKey, MapperData),
-            maybe_done(State#state{fsms=FSMs2, mapper_data=MapperData2})
+            maybe_done(State#state{fsms=FSMs2, mapper_data=MapperData2, pending=Pending1})
     end.
 
 
