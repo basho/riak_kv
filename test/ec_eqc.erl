@@ -60,7 +60,7 @@ gen_params() ->
             w = choose(1, 5)}.
             
 gen_req() ->
-    get.
+    elements([get, update]).
 
 gen_client_seeds() ->
     non_empty(list(#client{reqs = non_empty(list({nni(), gen_req()}))})).
@@ -167,7 +167,7 @@ deliver_msg(#state{pending_msgs = [#msg{to = {req, ReqId}} = Msg | Msgs],
                    history = H} = S) ->
     [C] = [C || #client{rid = ReqId0}=C <- Clients, ReqId0 == ReqId],
     Result = end_req(Msg, C),
-    UpdC = next_req(C),
+    UpdC = next_req(proplists:get_value(updc, Result, C)),
     NewH = proplists:get_value(history, Result, []),
     UpdClients = case UpdC of
                      #client{reqs = [], cid = Cid} ->
@@ -217,8 +217,8 @@ make_reqs(ReqSeeds, Params) ->
 make_reqs([], _Params, Acc) ->
     lists:reverse(Acc);
 make_reqs([ReqSeed | ReqSeeds], Params, Acc) ->
-    Req = make_req(ReqSeed, Params),
-    make_reqs(ReqSeeds, Params, [Req | Acc]).
+    Reqs = make_req(ReqSeed, Params),
+    make_reqs(ReqSeeds, Params, lists:reverse(Reqs) ++ Acc).
 
 
 %% Move the client on to the next request, setting priority if present
@@ -258,6 +258,13 @@ get_proc(Name, Procs) ->
 update_proc(P, Procs) ->
     lists:keyreplace(P#proc.name, #proc.name, Procs, P).
 
+%% Annotate a state record - returns a proplist by fieldname
+ann_state(R) ->
+    Elements = tuple_to_list(R),
+    Type = hd(Elements),
+    Fields = record_info(fields, state),
+    {Type, lists:zip(Fields, tl(Elements))}.
+    
 
 %% Make a value between min and max inclusive using the seed
 make_range(Seed, Min, Max) when Min =< Seed, Seed =< Max ->
@@ -269,10 +276,15 @@ make_range(Seed, Min, Max) ->
 
 %% Create a request for a client
 make_req({Pri, {ping, {node, NodeSeed}}}, #params{q = Q}) ->
-    {Pri, {ping, {node, make_range(NodeSeed, 1, Q)}}};
+    [{Pri, {ping, {node, make_range(NodeSeed, 1, Q)}}}];
 
 make_req({Pri, get}, #params{n = N}) ->
-    {Pri, {get, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}}.
+    [{Pri, {get, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}}];
+make_req({Pri, update}, #params{n = N}) ->
+    %% For an update, issue a get then a put.
+    %% TODO: Find a way to make the update priority different from the get
+    [{Pri, {get, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}},
+     {Pri, {put, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}}].
 
 
 
@@ -288,6 +300,22 @@ start_req({req, ReqId} = Name, #client{reqs = [{_Pri, {get, PL}} | _Reqs]} = C) 
     UpdC = C#client{clntst = {get, ReqId}},
     [{procs, NewProcs},
      {msgs, NewMsgs},
+     {updc, UpdC}];
+start_req({req, ReqId} = Name, #client{reqs = [{_Pri, {put, PL}} | _Reqs],
+                                       cid = Cid,
+                                       clntst = {{get, _PL}, GetResult}} = C) ->
+    Proc = put_fsm_proc(ReqId),
+    NewProcs = [Proc],
+    UpdObj = case GetResult of
+                 {error, notfound} ->
+                     {obj, Cid, ReqId};
+                 {ok, _Obj} ->
+                     {obj, Cid, ReqId} %%  Will be based on Obj
+             end,
+    NewMsgs = [#msg{from = Name, to = Proc#proc.name, c = {put, PL, UpdObj}}],
+    UpdC = C#client{clntst = {get, ReqId}},
+    [{procs, NewProcs},
+     {msgs, NewMsgs},
      {updc, UpdC}].
  
 %% end_req(#msg{from = Name, c = pong},
@@ -295,8 +323,9 @@ start_req({req, ReqId} = Name, #client{reqs = [{_Pri, {get, PL}} | _Reqs]} = C) 
 %%     [{history, [{Cid, ponged, Name}]},
 %%      done].
 end_req(#msg{c = R},
-        #client{cid = Cid, reqs = [{_Pri, Req}|_Reqs]}) ->
+        #client{cid = Cid, reqs = [{_Pri, Req}|_Reqs]} = C) ->
     [{history, [{Cid, Req, R}]},
+     {updc, C#client{clntst = {Req, R}}},
      done].
 
 
@@ -306,7 +335,9 @@ end_req(#msg{c = R},
                
 
 kv_vnode(#msg{from = From, c = get}, #proc{name = Name}) ->
-    [{msgs, [#msg{from = Name, to = From, c = {error, notfound}}]}].
+    [{msgs, [#msg{from = Name, to = From, c = {error, notfound}}]}];
+kv_vnode(#msg{from = From, c = put}, #proc{name = Name}) ->
+    [{msgs, [#msg{from = Name, to = From, c = {error, fail}}]}].
 
 -record(getfsmst, {reply_to,
                    expect, %% Number of replies expected
@@ -330,10 +361,26 @@ get_fsm(#msg{from = {kv_vnode, _, _}},
     %% Response from vnode
     [{updp, P#proc{procst = ProcSt#getfsmst{expect = Expect - 1}}}].
     
+-record(putfsmst, {reply_to,
+                   expect, %% Number of replies expected
+                   replies}).
+
+put_fsm_proc(ReqId) ->
+    #proc{name = {put_fsm, ReqId}, handler = put_fsm, procst = #putfsmst{}}.
+
+put_fsm(#msg{from = From, c = {put, PL, _Obj}},
+        #proc{name = Name, procst = ProcSt} = P) ->
+    %% Kick off requests to the vnodes
+    [{msgs, [#msg{from = Name, to = Vnode, c = put} || Vnode <- PL]},
+     {updp, P#proc{procst = ProcSt#putfsmst{reply_to = From, expect = length(PL)}}}];
+put_fsm(#msg{from = {kv_vnode, _, _}},
+        #proc{name = Name, procst = #putfsmst{expect = 1, reply_to = ReplyTo}}) ->
+    %% Final expected response from vnodes
+    %% TODO: Find a way to mark the process as stopped, can just build up for now.
+    [{msgs, [#msg{from = Name, to = ReplyTo, c = {error, notfound}}]}];
+put_fsm(#msg{from = {kv_vnode, _, _}},
+        #proc{procst = #putfsmst{expect = Expect} = ProcSt} = P) ->
+    %% Response from vnode
+    [{updp, P#proc{procst = ProcSt#putfsmst{expect = Expect - 1}}}].
     
-ann_state(R) ->
-    Elements = tuple_to_list(R),
-    Type = hd(Elements),
-    Fields = record_info(fields, state),
-    {Type, lists:zip(Fields, tl(Elements))}.
-    
+  
