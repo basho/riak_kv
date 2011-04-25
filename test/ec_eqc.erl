@@ -48,11 +48,14 @@ check() ->
                 next_rid = 1,
                 clients = [],     %% [#client]
                 procs = [],       %% {Name, State}
-                pending_msgs = [],
+                msgs = [],
                 history = []}).
 
 nni() ->
     ?LET(Xs, int(), abs(Xs)).
+
+gen_pris() ->
+    non_empty(resize(40, list(nni()))).
 
 gen_params() ->
     #params{n = choose(0, 10),
@@ -66,10 +69,12 @@ gen_client_seeds() ->
     non_empty(list(#client{reqs = non_empty(list({nni(), gen_req()}))})).
 
 prop() ->
-    ?FORALL({ClientSeeds,ParamsSeed},{gen_client_seeds(),gen_params()},
+    ?FORALL({Pris, ClientSeeds, ParamsSeed},
+            {gen_pris(), gen_client_seeds(),gen_params()},
             begin
+                io:format(user, "Pris: ~p\n", [Pris]),
+                set_pri(Pris),
                 Params = make_params(ParamsSeed),
-                io:format(user, "Params = ~p\n", [Params]),
                 %NodeProcs = make_nodes(Q),
                 VnodeProcs = make_vnodes(Params),
                 Initial = #state{params = Params, 
@@ -78,8 +83,9 @@ prop() ->
                 Start = Initial#state{clients = Clients},
                 case exec(Start) of
                     {ok, _Final} ->
-                        io:format("Params:\n~p\nHistory:\n~p\n",
-                                  [_Final#state.params,
+                        io:format("Params:\n~p\nClients:\n~p\nHistory:\n~p\n",
+                                  [Params,
+                                   Clients,
                                    _Final#state.history]),
                         true;
                     {What, Reason, Next, FailS} ->
@@ -116,7 +122,7 @@ status(_S, _Next) ->
 inc_step(#state{step = Step} = S) ->
     S#state{step = Step + 1}.
 
-next(#state{clients = Clients, pending_msgs = PendingMsgs}) ->
+next(#state{clients = Clients, msgs = Msgs}) ->
     %% Work out which client ids are active
     {ClientPri, Cid} = case lists:sort([C || C <- Clients, C#client.pri /= undefined]) of
                            [] ->
@@ -126,7 +132,7 @@ next(#state{clients = Clients, pending_msgs = PendingMsgs}) ->
                                C = hd(RCs),
                                {C#client.pri, C#client.cid}
                        end,
-    MsgPri = case PendingMsgs of
+    MsgPri = case Msgs of
                  [] ->
                      undefined;
                  [Msg|_] ->
@@ -149,20 +155,20 @@ next(#state{clients = Clients, pending_msgs = PendingMsgs}) ->
 
 %% Deliver next client request for Cid
 client_req(Cid, #state{next_rid = ReqId, clients = Clients, procs = Procs,
-                       pending_msgs = PendingMsgs} = S) ->
+                       msgs = Msgs} = S) ->
     C = get_client(Cid, Clients),
     true = (C#client.pri /= undefined), % paranoia - make sure this was scheduled right
     Result = start_req({req, ReqId}, C),
     NewProcs = proplists:get_value(procs, Result, []),
     NewMsgs = proplists:get_value(msgs, Result, []),
     UpdC = proplists:get_value(updc, Result, C),
-    S#state{next_rid = ReqId + 1,
-            clients = update_client(UpdC#client{rid = ReqId, pri = undefined}, Clients),
-            pending_msgs = PendingMsgs ++ NewMsgs,
-            procs = Procs ++ NewProcs}.
+    add_msgs(NewMsgs, Msgs, 
+             S#state{next_rid = ReqId + 1,
+                     clients = update_client(UpdC#client{rid = ReqId, pri = undefined}, Clients),
+                     procs = Procs ++ NewProcs}).
 
 %% Deliver next pending msg
-deliver_msg(#state{pending_msgs = [#msg{to = {req, ReqId}} = Msg | Msgs],
+deliver_msg(#state{msgs = [#msg{to = {req, ReqId}} = Msg | Msgs],
                    clients = Clients,
                    history = H} = S) ->
     [C] = [C || #client{rid = ReqId0}=C <- Clients, ReqId0 == ReqId],
@@ -176,22 +182,24 @@ deliver_msg(#state{pending_msgs = [#msg{to = {req, ReqId}} = Msg | Msgs],
                          update_client(UpdC, Clients)
                  end,
     S#state{clients = UpdClients,
-            pending_msgs = Msgs,
-            history = H ++ NewH};
+            msgs = Msgs,
+            history = H ++ [{deliver_msg, Msg} | NewH]};
 
-deliver_msg(#state{pending_msgs = [#msg{to = To} = Msg | Msgs],
+deliver_msg(#state{msgs = [#msg{to = To} = Msg | Msgs],
+                   history = History,
                    procs = Procs} = S) ->
     P = get_proc(To, Procs),
     Handler = P#proc.handler,
     Result = ?MODULE:Handler(Msg, P),
     NewMsgs = proplists:get_value(msgs, Result, []),
     UpdP = proplists:get_value(updp, Result, P),
-    S#state{pending_msgs = Msgs ++ NewMsgs,
-            procs = update_proc(UpdP, Procs)}.
+    add_msgs(NewMsgs, Msgs,
+             S#state{procs = update_proc(UpdP, Procs),
+                     history = History ++ [{deliver_msg, Msg}]}).
 
 make_params(#params{n = NSeed, r = R, w = W} = P) ->
-    MaxN = lists:max([R, W, R+W-1]),
-    P#params{n = make_range(R + W - NSeed, 1, MaxN)}. % Ensure R+W>N
+    MinN = lists:max([R, W]),
+    P#params{n = make_range(R + W - NSeed, MinN, R+W-1)}. % Ensure R >= N, W >= N and R+W>N
 
 %% make_nodes(Q) ->
 %%     [#proc{name={node, I}, procst=nostate} || I <- lists:seq(1, Q)].
@@ -287,6 +295,20 @@ make_req({Pri, update}, #params{n = N}) ->
      {Pri, {put, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}}].
 
 
+new_msg(From, To, Contents) ->
+    Pri = next_pri(),
+    #msg{pri = Pri, from = From, to = To, c = Contents}.
+
+add_msgs(NewMsgs, Msgs, S) ->
+    S#state{msgs = lists:merge(Msgs, lists:sort(NewMsgs))}.
+
+set_pri(Pris) ->
+    put(pri, Pris).
+
+next_pri() ->
+    [Next|Rest] = get(pri),
+    set_pri(Rest ++ [Next]),
+    Next.
 
 %% Start the next client request
 %% start_req(Name, #client{reqs = [{_Pri, {ping, NodeName}} | _Reqs]} = C) ->
@@ -296,7 +318,7 @@ make_req({Pri, update}, #params{n = N}) ->
 start_req({req, ReqId} = Name, #client{reqs = [{_Pri, {get, PL}} | _Reqs]} = C) ->
     Proc = get_fsm_proc(ReqId),
     NewProcs = [Proc],
-    NewMsgs = [#msg{from = Name, to = Proc#proc.name, c = {get, PL}}],
+    NewMsgs = [new_msg(Name, Proc#proc.name, {get, PL})],
     UpdC = C#client{clntst = {get, ReqId}},
     [{procs, NewProcs},
      {msgs, NewMsgs},
@@ -312,7 +334,7 @@ start_req({req, ReqId} = Name, #client{reqs = [{_Pri, {put, PL}} | _Reqs],
                  {ok, _Obj} ->
                      {obj, Cid, ReqId} %%  Will be based on Obj
              end,
-    NewMsgs = [#msg{from = Name, to = Proc#proc.name, c = {put, PL, UpdObj}}],
+    NewMsgs = [new_msg(Name, Proc#proc.name, {put, PL, UpdObj})],
     UpdC = C#client{clntst = {get, ReqId}},
     [{procs, NewProcs},
      {msgs, NewMsgs},
@@ -335,9 +357,9 @@ end_req(#msg{c = R},
                
 
 kv_vnode(#msg{from = From, c = get}, #proc{name = Name}) ->
-    [{msgs, [#msg{from = Name, to = From, c = {error, notfound}}]}];
+    [{msgs, [new_msg(Name, From, {error, notfound})]}];
 kv_vnode(#msg{from = From, c = put}, #proc{name = Name}) ->
-    [{msgs, [#msg{from = Name, to = From, c = {error, fail}}]}].
+    [{msgs, [new_msg(Name, From, {error, fail})]}].
 
 -record(getfsmst, {reply_to,
                    expect, %% Number of replies expected
@@ -349,13 +371,13 @@ get_fsm_proc(ReqId) ->
 get_fsm(#msg{from = From, c = {get, PL}},
         #proc{name = Name, procst = ProcSt} = P) ->
     %% Kick off requests to the vnodes
-    [{msgs, [#msg{from = Name, to = Vnode, c = get} || Vnode <- PL]},
+    [{msgs, [new_msg(Name, Vnode, get) || Vnode <- PL]},
      {updp, P#proc{procst = ProcSt#getfsmst{reply_to = From, expect = length(PL)}}}];
 get_fsm(#msg{from = {kv_vnode, _, _}},
         #proc{name = Name, procst = #getfsmst{expect = 1, reply_to = ReplyTo}}) ->
     %% Final expected response from vnodes
     %% TODO: Find a way to mark the process as stopped, can just build up for now.
-    [{msgs, [#msg{from = Name, to = ReplyTo, c = {error, notfound}}]}];
+    [{msgs, [new_msg(Name, ReplyTo, {error, notfound})]}];
 get_fsm(#msg{from = {kv_vnode, _, _}},
         #proc{procst = #getfsmst{expect = Expect} = ProcSt} = P) ->
     %% Response from vnode
@@ -371,13 +393,13 @@ put_fsm_proc(ReqId) ->
 put_fsm(#msg{from = From, c = {put, PL, _Obj}},
         #proc{name = Name, procst = ProcSt} = P) ->
     %% Kick off requests to the vnodes
-    [{msgs, [#msg{from = Name, to = Vnode, c = put} || Vnode <- PL]},
+    [{msgs, [new_msg(Name, Vnode, put) || Vnode <- PL]},
      {updp, P#proc{procst = ProcSt#putfsmst{reply_to = From, expect = length(PL)}}}];
 put_fsm(#msg{from = {kv_vnode, _, _}},
         #proc{name = Name, procst = #putfsmst{expect = 1, reply_to = ReplyTo}}) ->
     %% Final expected response from vnodes
     %% TODO: Find a way to mark the process as stopped, can just build up for now.
-    [{msgs, [#msg{from = Name, to = ReplyTo, c = {error, notfound}}]}];
+    [{msgs, [new_msg(Name, ReplyTo, {error, notfound})]}];
 put_fsm(#msg{from = {kv_vnode, _, _}},
         #proc{procst = #putfsmst{expect = Expect} = ProcSt} = P) ->
     %% Response from vnode
