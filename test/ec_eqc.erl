@@ -17,13 +17,15 @@ check() ->
 %% Client also gets to have it's own state.
 
 -record(client, { %% pri/id must be first two fields for next to work correctly
-          pri,    %% Priority for next request (undefined if req active)
           cid,    %% Client id
-          rid,    %% request id
-          reqs,   %% Requests to execute - {Pri,Req}
+          reqs,   %% Requests to execute [#req{}]
           clntst %% Client state
          }). 
                  
+-record(req, {    %% Request
+          pri,    %% Priority for next request (undefined if req active)
+          rid,    %% Request id
+          op}).     %% Operation
 
 -record(proc, {
           name,    %% Term to reference this process in from / to for messages
@@ -66,7 +68,7 @@ gen_req() ->
     elements([get, update]).
 
 gen_client_seeds() ->
-    non_empty(list(#client{reqs = non_empty(list({nni(), gen_req()}))})).
+    non_empty(list(#client{reqs = non_empty(list(gen_req()))})).
 
 prop() ->
     ?FORALL({Pris, ClientSeeds, ParamsSeed},
@@ -89,9 +91,9 @@ prop() ->
                                    _Final#state.history]),
                         true;
                     {What, Reason, Next, FailS} ->
-                        io:format(user, "FAILED: ~p: ~p\nNext: ~p\nInitial:\n~p\n"
+                        io:format(user, "FAILED: ~p: ~p\nNext: ~p\nStart:\n~p\n"
                                   "FailS:\n~p\n",
-                                  [What, Reason, Next, Initial, FailS]),
+                                  [What, Reason, Next, ann_state(Start), ann_state(FailS)]),
                         false
                 end
             end).
@@ -122,15 +124,17 @@ status(_S, _Next) ->
 inc_step(#state{step = Step} = S) ->
     S#state{step = Step + 1}.
 
-next(#state{clients = Clients, msgs = Msgs}) ->
+next(#state{clients = Clients, msgs = Msgs}=S) ->
     %% Work out which client ids are active
-    {ClientPri, Cid} = case lists:sort([C || C <- Clients, C#client.pri /= undefined]) of
+    ReadyCs = [{Pri, Cid} || #client{cid = Cid,
+                                     reqs = [#req{pri = Pri, 
+                                                  rid = undefined}|_]} <- Clients],
+    {ClientPri, Cid} = case lists:sort(ReadyCs) of
                            [] ->
                                %% No clients ready
                                {undefined, undefined};
                            RCs -> % ready clients
-                               C = hd(RCs),
-                               {C#client.pri, C#client.cid}
+                               hd(RCs)
                        end,
     MsgPri = case Msgs of
                  [] ->
@@ -144,7 +148,7 @@ next(#state{clients = Clients, msgs = Msgs}) ->
                 [] ->
                     done;
                 _ -> % oh no, there was client work to do, but we've run out of msgs
-                    stalled
+                    throw({stalled, S})
             end;
         ClientPri == undefined orelse MsgPri =< ClientPri ->
             deliver_msg;
@@ -157,21 +161,20 @@ next(#state{clients = Clients, msgs = Msgs}) ->
 client_req(Cid, #state{next_rid = ReqId, clients = Clients, procs = Procs,
                        msgs = Msgs} = S) ->
     C = get_client(Cid, Clients),
-    true = (C#client.pri /= undefined), % paranoia - make sure this was scheduled right
-    Result = start_req({req, ReqId}, C),
+    Result = start_req(ReqId, C),
     NewProcs = proplists:get_value(procs, Result, []),
     NewMsgs = proplists:get_value(msgs, Result, []),
     UpdC = proplists:get_value(updc, Result, C),
     add_msgs(NewMsgs, Msgs, 
              S#state{next_rid = ReqId + 1,
-                     clients = update_client(UpdC#client{rid = ReqId, pri = undefined}, Clients),
+                     clients = update_client(UpdC, Clients),
                      procs = Procs ++ NewProcs}).
 
 %% Deliver next pending msg
 deliver_msg(#state{msgs = [#msg{to = {req, ReqId}} = Msg | Msgs],
                    clients = Clients,
                    history = H} = S) ->
-    [C] = [C || #client{rid = ReqId0}=C <- Clients, ReqId0 == ReqId],
+    [C] = [C || #client{reqs = [#req{rid = ReqId0}|_]}=C <- Clients, ReqId0 == ReqId],
     Result = end_req(Msg, C),
     UpdC = next_req(proplists:get_value(updc, Result, C)),
     NewH = proplists:get_value(history, Result, []),
@@ -215,8 +218,7 @@ make_clients([], _Cid, _Params, Acc) ->
     lists:reverse(Acc);
 make_clients([#client{reqs = ReqSeeds} = CS | CSs], Cid, Params, Acc) ->
     Reqs = make_reqs(ReqSeeds, Params),
-    [{Pri, _}|_] = Reqs,
-    C = CS#client{cid = Cid, pri = Pri, reqs = Reqs},
+    C = CS#client{cid = Cid, reqs = Reqs},
     make_clients(CSs, Cid + 1, Params, [C | Acc]).
     
 make_reqs(ReqSeeds, Params) ->
@@ -231,12 +233,7 @@ make_reqs([ReqSeed | ReqSeeds], Params, Acc) ->
 
 %% Move the client on to the next request, setting priority if present
 next_req(#client{reqs = [_|Reqs]} = C) ->
-    case Reqs of
-        [] ->
-            C#client{reqs = []};
-        [{Pri,_} | _] ->
-            C#client{pri = Pri, reqs = Reqs}
-    end.
+    C#client{reqs = Reqs}.
 
 %% Get client by cid from list of clients - blow up if missing
 get_client(Cid, Clients) ->
@@ -283,21 +280,19 @@ make_range(Seed, Min, Max) ->
 
 
 %% Create a request for a client
-make_req({Pri, {ping, {node, NodeSeed}}}, #params{q = Q}) ->
-    [{Pri, {ping, {node, make_range(NodeSeed, 1, Q)}}}];
-
-make_req({Pri, get}, #params{n = N}) ->
-    [{Pri, {get, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}}];
-make_req({Pri, update}, #params{n = N}) ->
+make_req(get, #params{n = N}) ->
+    [new_req({get, [{kv_vnode, I, I} || I <- lists:seq(1, N)]})];
+make_req(update, #params{n = N}) ->
     %% For an update, issue a get then a put.
     %% TODO: Find a way to make the update priority different from the get
-    [{Pri, {get, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}},
-     {Pri, {put, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}}].
+    [new_req({get, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}),
+     new_req({put, [{kv_vnode, I, I} || I <- lists:seq(1, N)]})].
 
+new_req(Op) ->
+    #req{pri = next_pri(), op = Op}.
 
 new_msg(From, To, Contents) ->
-    Pri = next_pri(),
-    #msg{pri = Pri, from = From, to = To, c = Contents}.
+    #msg{pri = next_pri(), from = From, to = To, c = Contents}.
 
 add_msgs(NewMsgs, Msgs, S) ->
     S#state{msgs = lists:merge(Msgs, lists:sort(NewMsgs))}.
@@ -311,21 +306,28 @@ next_pri() ->
     Next.
 
 %% Start the next client request
-%% start_req(Name, #client{reqs = [{_Pri, {ping, NodeName}} | _Reqs]} = C) ->
-%%     NewMsgs = [#msg{from = Name, to = NodeName, c = ping}],
-%%     {NewMsgs, C#client{clntst = {pinged, NodeName}}}.
+start_req(ReqId, #client{reqs = [Req | Reqs]} = C) ->
+    UpdReq = Req#req{rid = ReqId},
+    UpdC = C#client{reqs = [UpdReq | Reqs]},
+    Result = client_req(UpdC),
+    %% If the result does not include an updated client record
+    %% use the one with the reqs updated.  Any original
+    %% updc entry will be never be retrieved.
+    [{updc, proplists:get_value(updc, Result, UpdC)} | Result].
+    
 
-start_req({req, ReqId} = Name, #client{reqs = [{_Pri, {get, PL}} | _Reqs]} = C) ->
+%% Start client requests - return a proplist of 
+%% [{procs, NewProcs},
+%%  {msgs, NewMsgs},
+%%  {updc, UpdC}];
+client_req(#client{reqs = [#req{op = {get, PL}, rid = ReqId} | _]}) ->
     Proc = get_fsm_proc(ReqId),
     NewProcs = [Proc],
-    NewMsgs = [new_msg(Name, Proc#proc.name, {get, PL})],
-    UpdC = C#client{clntst = {get, ReqId}},
+    NewMsgs = [new_msg({req, ReqId}, Proc#proc.name, {get, PL})],
     [{procs, NewProcs},
-     {msgs, NewMsgs},
-     {updc, UpdC}];
-start_req({req, ReqId} = Name, #client{reqs = [{_Pri, {put, PL}} | _Reqs],
-                                       cid = Cid,
-                                       clntst = {{get, _PL}, GetResult}} = C) ->
+     {msgs, NewMsgs}];
+client_req(#client{reqs = [#req{op = {put, PL}, rid = ReqId} | _],
+                   cid = Cid,  clntst = {#req{op={get, _PL}}, GetResult}}) ->
     Proc = put_fsm_proc(ReqId),
     NewProcs = [Proc],
     UpdObj = case GetResult of
@@ -334,20 +336,14 @@ start_req({req, ReqId} = Name, #client{reqs = [{_Pri, {put, PL}} | _Reqs],
                  {ok, _Obj} ->
                      {obj, Cid, ReqId} %%  Will be based on Obj
              end,
-    NewMsgs = [new_msg(Name, Proc#proc.name, {put, PL, UpdObj})],
-    UpdC = C#client{clntst = {get, ReqId}},
+    NewMsgs = [new_msg({req, ReqId}, Proc#proc.name, {put, PL, UpdObj})],
     [{procs, NewProcs},
-     {msgs, NewMsgs},
-     {updc, UpdC}].
- 
-%% end_req(#msg{from = Name, c = pong},
-%%         #client{cid = Cid, reqs = [{_Pri, {ping, Name}}|_Reqs]}) ->
-%%     [{history, [{Cid, ponged, Name}]},
-%%      done].
-end_req(#msg{c = R},
-        #client{cid = Cid, reqs = [{_Pri, Req}|_Reqs]} = C) ->
-    [{history, [{Cid, Req, R}]},
-     {updc, C#client{clntst = {Req, R}}},
+     {msgs, NewMsgs}].
+
+end_req(#msg{c = Result},
+        #client{cid = Cid, reqs = [Req |_Reqs]} = C) ->
+    [{history, [{Cid, Req, Result}]},
+     {updc, C#client{clntst = {Req, Result}}},
      done].
 
 
