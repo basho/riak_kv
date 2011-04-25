@@ -292,7 +292,12 @@ put(RObj) -> THIS:put(RObj, []).
 %%       {error, Err :: term(), details()}
 %% @doc Store RObj in the cluster.
 put(RObj, Options) when is_list(Options) ->
-    UpdObj = riak_object:increment_vclock(RObj, ClientId),
+    UpdObj = case ClientId of
+                 undefined ->
+                     RObj;
+                 _ ->
+                     riak_object:increment_vclock(RObj, ClientId)
+             end,
     Me = self(),
     ReqId = mk_reqid(),
     riak_kv_put_fsm_sup:start_put_fsm(Node, [{raw, ReqId, Me}, UpdObj, Options]),

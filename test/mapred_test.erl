@@ -37,6 +37,7 @@ dep_apps() ->
                      {ring_creation_size, 16},
                      {ring_state_dir, DataDir}],
     KV_Settings = [{storage_backend, riak_kv_memory_backend},
+                   {vnode_vclocks, true},
                    {pb_ip, "0.0.0.0"},
                    {pb_port, 48087}, % arbitrary #
                    {map_js_vm_count, 4},

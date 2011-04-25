@@ -232,6 +232,7 @@ dep_apps() ->
             %% part of release packaging.
             application:set_env(riak_core, ring_creation_size, 64),
             application:set_env(riak_kv, storage_backend, riak_kv_memory_backend),
+            application:set_env(riak_kv, vnode_vclocks, true),
 
             %% Start riak_kv
             timer:sleep(500);
