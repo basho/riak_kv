@@ -201,15 +201,12 @@ deliver_msg(#state{msgs = [#msg{to = To} = Msg | Msgs],
                      history = History ++ [{deliver_msg, Msg}]}).
 
 make_params(#params{n = NSeed, r = R, w = W} = P) ->
+    %% Ensure R >= N, W >= N and R+W>N
     MinN = lists:max([R, W]),
-    P#params{n = make_range(R + W - NSeed, MinN, R+W-1)}. % Ensure R >= N, W >= N and R+W>N
-
-%% make_nodes(Q) ->
-%%     [#proc{name={node, I}, procst=nostate} || I <- lists:seq(1, Q)].
+    P#params{n = make_range(R + W - NSeed, MinN, R+W-1)}. 
 
 make_vnodes(#params{n = N}) ->
     [#proc{name={kv_vnode, I, I}, handler=kv_vnode, procst=[]} || I <- lists:seq(1, N)].
-
 
 make_clients(ClientSeeds, Params) ->
     make_clients(ClientSeeds, 1, Params, []).
