@@ -371,7 +371,7 @@ syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId, StartTime) ->
         {ok, Val0} ->
             Obj0 = binary_to_term(Val0),
             ResObj = riak_object:syntactic_merge(
-                       Obj0,Obj1,term_to_binary(ReqId)), StartTime,
+                       Obj0,Obj1,term_to_binary(ReqId),StartTime),
             case riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
                 true -> {oldobj, ResObj};
                 false -> {newobj, ResObj}
