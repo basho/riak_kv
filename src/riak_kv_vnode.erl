@@ -29,6 +29,7 @@
 -export([test_vnode/1, put/7]).
 -export([start_vnode/1,
          get/3,
+         get_bin/3,
          mget/3,
          del/3,
          put/6,
@@ -89,6 +90,16 @@ test_vnode(I) ->
 
 get(Preflist, BKey, ReqId) ->
     Req = ?KV_GET_REQ{bkey=BKey,
+                      req_id=ReqId},
+    %% Assuming this function is called from a FSM process
+    %% so self() == FSM pid
+    riak_core_vnode_master:command(Preflist,
+                                   Req,
+                                   {fsm, undefined, self()},
+                                   riak_kv_vnode_master).
+
+get_bin(Preflist, BKey, ReqId) ->
+    Req = ?KV_GET_BINARY_REQ{bkey=BKey,
                       req_id=ReqId},
     %% Assuming this function is called from a FSM process
     %% so self() == FSM pid
@@ -175,6 +186,8 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
 
 handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
     do_get(Sender, BKey, ReqId, State);
+handle_command(?KV_GET_BINARY_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
+    do_binary_get(Sender, BKey, ReqId, State);
 handle_command(?KV_MGET_REQ{bkeys=BKeys, req_id=ReqId, from=From}, _Sender, State) ->
     do_mget(From, BKeys, ReqId, State);
 handle_command(#riak_kv_listkeys_req_v1{bucket=Bucket, req_id=ReqId}, _Sender,
@@ -404,6 +417,12 @@ do_get(_Sender, BKey, ReqID,
     Retval = do_get_term(BKey, Mod, ModState),
     riak_kv_stat:update(vnode_get),
     {reply, {r, Retval, Idx, ReqID}, State}.
+
+do_binary_get(_Sender, BKey, ReqID,
+       State=#state{idx=Idx,mod=Mod,modstate=ModState}) ->
+    Retval = do_get_binary(BKey, Mod, ModState),
+    riak_kv_stat:update(vnode_get),
+    {reply, {r_bin, Retval, Idx, ReqID}, State}.
 
 do_mget({fsm, Sender}, BKeys, ReqId, State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
     F = fun(BKey) ->
