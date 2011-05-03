@@ -124,13 +124,10 @@ list_bucket({Ref, _}, {filter, Bucket, Fun}) ->
     bitcask:fold_keys(Ref,
         fun(#bitcask_entry{key=BK},Acc) ->
                 {B,K} = binary_to_term(BK),
-                case B of
-                    Bucket ->
-                        case Fun(K) of
-                            true -> [K|Acc];
-                            false -> Acc
-                        end;
-                    _ ->
+		case (B =:= Bucket) andalso Fun(K) of
+		    true ->
+			[K|Acc];
+		    false ->
                         Acc
                 end
         end, []);
@@ -187,12 +184,7 @@ is_empty({Ref, _}) ->
     F = fun(_K, _Acc0) ->
                 throw(found_one_value)
         end,
-    case catch(bitcask:fold_keys(Ref, F, undefined)) of
-        found_one_value ->
-            false;
-        _ ->
-            true
-    end.
+    (catch bitcask:fold_keys(Ref, F, undefined)) /= found_one_value.
 
 callback({Ref, _}, Ref, {sync, SyncInterval}) when is_reference(Ref) ->
     bitcask:sync(Ref),
@@ -228,9 +220,9 @@ key_counts() ->
 %% Invoke bitcask:status/1 for a given directory
 status(Dir) ->
     Ref = bitcask:open(Dir),
-    Status = bitcask:status(Ref),
-    bitcask:close(Ref),
-    Status.
+    try bitcask:status(Ref)
+    after bitcask:close(Ref)
+    end.      
 
 %% @private
 %% Schedule sync (if necessary)
