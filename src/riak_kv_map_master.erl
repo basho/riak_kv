@@ -73,17 +73,24 @@ init([]) ->
 
 handle_call({new_mapper, VNode, {erlang, _}=QTerm, MapInputs, PhasePid}, _From, State) ->
     Id = make_id(),
-    {ok, _Pid} = riak_kv_mapper_sup:new_mapper(VNode, Id, QTerm, MapInputs, PhasePid),
-    {reply, {ok, Id}, State};
+    case riak_kv_mapper_sup:new_mapper(VNode, Id, QTerm, MapInputs, PhasePid) of
+        {ok, _Pid} ->         
+            {reply, {ok, Id}, State};
+        {error, Reason} ->
+            {reply, {error, Reason}, State}
+    end;
 
 handle_call({new_mapper, VNode, {javascript, _}=QTerm, MapInputs, PhasePid}, _From, State) ->
     case riak_kv_js_manager:pool_size(?JSPOOL_MAP) > 0 of
         true ->
             Id = make_id(),
-            {ok, Pid} = riak_kv_mapper_sup:new_mapper(VNode, Id, QTerm,
-                                                      MapInputs, PhasePid),
-            erlang:monitor(process, Pid),
-            {reply, {ok, Id}, State};
+            case riak_kv_mapper_sup:new_mapper(VNode, Id, QTerm, MapInputs, PhasePid) of
+                {ok, Pid} ->
+                    erlang:monitor(process, Pid),
+                    {reply, {ok, Id}, State};
+                {error, Reason} ->
+                    {reply, {error, Reason}, State}
+            end;
         false ->
             Id = defer_mapper(VNode, QTerm, MapInputs, PhasePid, State),
             {reply, {ok, {Id, node()}}, State}
