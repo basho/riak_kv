@@ -229,7 +229,7 @@ run_map(VNode, Id, {javascript, {map, _FunTerm, _Arg, _}}, KD, {{error, notfound
       Phase, VNode, BKey, [{not_found, BKey, KD}], Id);
 run_map(VNode, Id, {javascript, {map, FunTerm, Arg, _}}, KD, Obj, Phase, VM, CacheKey, CacheRef) ->
     BKey = {riak_object:bucket(Obj), riak_object:key(Obj)},
-    JSArgs = [riak_object:to_json(Obj), KD, Arg],
+    JSArgs = [riak_object_util:to_json(Obj), KD, Arg],
     JSCall = {map, FunTerm, JSArgs},
     case riak_kv_js_vm:batch_blocking_dispatch(VM, JSCall) of
         {ok, Result} ->
