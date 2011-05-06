@@ -34,6 +34,7 @@
 -record(state, {done=false, qterm, fsms=dict:new(), mapper_data=[], pending=[]}).
 
 init([QTerm]) ->
+    process_flag(trap_exit, true),
     {ok, #state{qterm=QTerm}}.
 
 handle_input(Inputs0, #state{fsms=FSMs0, qterm=QTerm, mapper_data=MapperData}=State, _Timeout) ->
@@ -58,7 +59,6 @@ handle_event({register_mapper, Id, MapperPid}, #state{mapper_data=MapperData}=St
         false -> MapperData
     end,
     MapperData1 = MapperData0 ++ [{MapperPid, Id}],
-    erlang:monitor(process, MapperPid),
     {no_output, State#state{mapper_data=MapperData1}};
 
 handle_event({mapexec_reply, VNode, BKey, Reply, Executor}, #state{fsms=FSMs, mapper_data=MapperData,
@@ -88,8 +88,8 @@ handle_event({mapexec_error, _Executor, Reply}, State) ->
 handle_event(_Event, State) ->
     {no_output, State}.
 
-handle_info({'DOWN', Ref, process, Pid, _Reason}, #state{mapper_data=MapperData, fsms=FSMs, qterm=QTerm}=State) ->
-    erlang:demonitor(Ref, [flush]),
+
+handle_info({'EXIT', Pid, _Reason}, #state{mapper_data=MapperData, fsms=FSMs, qterm=QTerm}=State) ->
     case lists:keyfind(Pid, 1, MapperData) of
         {Pid, Id} ->
             case lists:keyfind(Id, 1, MapperData) of
