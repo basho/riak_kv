@@ -44,17 +44,6 @@
 -export_type([options/0, option/0]).
 
 
--record(getcore, {n :: pos_integer(),
-                  r :: pos_integer(),
-                  fail_threshold :: pos_integer(),
-                  notfound_ok :: boolean(),
-                  allow_mult :: boolean(),
-                  results = [] :: list(),
-                  merged :: notfound | {tombstone, riak_object:riak_object()} | 
-                            riak_object:riak_object(),
-                  num_ok = 0 :: non_neg_integer(),
-                  num_notfound = 0 :: non_neg_integer(),
-                  num_fail = 0 :: non_neg_integer()}).
 
 -record(state, {from :: {raw, req_id(), pid()},
                 options=[] :: options(),
@@ -62,7 +51,7 @@
                 preflist2 :: riak_core_apl:preflist2(),
                 req_id :: non_neg_integer(),
                 starttime :: pos_integer(),
-                get_core :: #getcore{},
+                get_core :: riak_kv_get_core:getcore(),
                 timeout :: infinity | pos_integer(),
                 tref    :: reference(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
@@ -198,7 +187,8 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
             AllowMult = proplists:get_value(allow_mult,BucketProps),
             NFOk0 = get_option(notfound_ok, Options, false),
             NotFoundOk = riak_kv_util:expand_value(notfound_ok, NFOk0, BucketProps),
-            GetCore = initgc(N, R, FailThreshold, NotFoundOk, AllowMult),
+            GetCore = riak_kv_get_core:init(N, R, FailThreshold, 
+                                            NotFoundOk, AllowMult),
             {next_state, execute, StateData#state{get_core = GetCore,
                                                   timeout = Timeout,
                                                   req_id = ReqId}, 0}
@@ -216,10 +206,10 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
 
 %% @private
 waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = GetCore}) ->
-    UpdGetCore = add_result(Idx, VnodeResult, GetCore),
-    case enough(UpdGetCore) of
+    UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
+    case riak_kv_get_core:enough(UpdGetCore) of
         true ->
-            {Reply, UpdGetCore2} = response(UpdGetCore),
+            {Reply, UpdGetCore2} = riak_kv_get_core:response(UpdGetCore),
             NewStateData2 = update_timing(StateData#state{get_core = UpdGetCore2}),
             client_reply(Reply, NewStateData2),
             update_stats(NewStateData2),
@@ -235,7 +225,7 @@ waiting_vnode_r(request_timeout, StateData) ->
 %% @private
 waiting_read_repair({r, VnodeResult, Idx, _ReqId},
                     StateData = #state{get_core = GetCore}) ->
-    UpdGetCore = add_result(Idx, VnodeResult, GetCore),
+    UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
     maybe_finalize(StateData#state{get_core = UpdGetCore});
 waiting_read_repair(request_timeout, StateData) ->
     finalize(StateData).
@@ -262,166 +252,19 @@ terminate(Reason, _StateName, _State) ->
 %% @private
 code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 
-%% ====================================================================
-%% Get core functions
-%% ====================================================================
-
-initgc(N, R, FailThreshold, NotFoundOk, AllowMult) ->
-    #getcore{n = N,
-             r = R,
-             fail_threshold = FailThreshold,
-             notfound_ok = NotFoundOk,
-             allow_mult = AllowMult}.
-
-add_result(Idx, Result, GetCore = #getcore{results = Results}) ->
-    UpdResults = [{Idx, Result} | Results],
-    case Result of
-        {ok, _RObj} ->
-            GetCore#getcore{results = UpdResults, merged = undefined,
-                            num_ok = GetCore#getcore.num_ok + 1};
-        {error, notfound} when GetCore#getcore.notfound_ok == true ->
-            GetCore#getcore{results = UpdResults, merged = undefined,
-                            num_ok = GetCore#getcore.num_ok + 1};
-        {error, notfound} ->
-            GetCore#getcore{results = UpdResults, merged = undefined,
-                            num_notfound = GetCore#getcore.num_notfound + 1};
-        {error, _Reason} ->
-            GetCore#getcore{results = UpdResults, merged = undefined,
-                            num_fail = GetCore#getcore.num_fail + 1}
-    end.
-
-enough(#getcore{r = R, num_ok = NumOk,
-                num_notfound = NumNotFound,
-                num_fail = NumFail,
-                fail_threshold = FailThreshold}) ->
-    if
-        NumOk >= R ->
-            true;
-        NumNotFound + NumFail >= FailThreshold ->
-            true;
-        true ->
-            false
-    end.
-
-has_all_replies(#getcore{n = N, num_ok = NOk, 
-                         num_fail = NFail, num_notfound = NNF}) ->
-    NOk + NFail + NNF >= N.
-
-response(GetCore = #getcore{r = R, num_ok = NumOk, num_notfound = NumNotFound,
-                            results = Results, allow_mult = AllowMult}) ->
-    {ObjState, _MObj} = Merged = merge(Results, AllowMult),
-    Reply = case NumOk >= R of
-                true ->
-                    case ObjState of
-                        ok ->
-                            Merged; % {ok, MObj}
-                        _ -> % tombstone or notfound
-                            {error, notfound}
-                    end;
-                false ->
-                    DelObjs = length([xx || {_Idx, {ok, RObj}} <- Results,
-                                            riak_kv_util:is_x_deleted(RObj)]),
-                    Fails = [F || F = {_Idx, {error, Reason}} <- Results,
-                                  Reason /= notfound],
-                    fail_reply(R, NumOk, NumOk - DelObjs, 
-                               NumNotFound + DelObjs, Fails)
-            end,
-    {Reply, GetCore#getcore{merged = Merged}}.
-
-%% Decide on final actions
-%% nop - do nothing
-%% readrepair - send read repairs iff any vnode has ancestor data (including tombstones)
-%% delete - issue deletes if all vnodes returned tombstones.  This needs to be
-%%          supplemented with a check that the vnodes were all primaries.
-%% 
-final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
-                                allow_mult = AllowMult}) ->
-    Merged = case Merged0 of
-                 undefined ->
-                     merge(Results, AllowMult);
-                 _ ->
-                     Merged0
-             end,
-    {ObjState, MObj} = Merged,
-    ReadRepairs = case ObjState of
-                      notfound ->
-                          [];
-                      _ -> % ok or tombstone
-                          [Idx || {Idx, {ok, RObj}} <- Results, 
-                                  strict_descendant(MObj, RObj)] ++
-                              [Idx || {Idx, {error, notfound}} <- Results]
-                  end,
-    Action = case ReadRepairs of
-                 [] when ObjState == tombstone ->
-                     %% Allow delete if merge object is deleted,
-                     %% there are no read repairs pending and
-                     %% a value was received from all vnodes
-                     case riak_kv_util:is_x_deleted(MObj) andalso 
-                         length([xx || {_Idx, {ok, _RObj}} <- Results]) == N of
-                         true ->
-                             delete;
-                         _ ->
-                             nop
-                     end;
-                 [] ->
-                     nop;
-                 _ ->
-                     {read_repair, ReadRepairs, MObj}
-             end,
-    {Action, GetCore#getcore{merged = Merged}}.
-
-%% Return request info
-info(undefined) -> 
-    []; % make uninitialized case easier
-info(#getcore{num_ok = NumOks, num_fail = NumFail, results = Results}) ->
-    Oks = [{vnode_oks, NumOks}],
-    case NumFail of
-        0 ->
-            Oks;
-        _ ->
-            Errors = [Reason || {_Idx, {error, Reason}} <- Results,
-                                Reason /= undefined],
-            [{vnode_errors, Errors} | Oks]
-    end.
-
-strict_descendant(O1, O2) ->
-    vclock:descends(riak_object:vclock(O1),riak_object:vclock(O2)) andalso
-    not vclock:descends(riak_object:vclock(O2),riak_object:vclock(O1)).
-
-merge(Replies, AllowMult) ->
-    RObjs = [RObj || {_I, {ok, RObj}} <- Replies],
-    case RObjs of
-        [] ->
-            {notfound, undefined};
-        _ ->
-            Merged = riak_object:reconcile(RObjs, AllowMult), % include tombstones
-            case riak_kv_util:is_x_deleted(Merged) of
-                true ->
-                    {tombstone, Merged};
-                _ ->
-                    {ok, Merged}
-            end
-    end.
-
-fail_reply(_R, _NumR, 0, NumNotFound, []) when NumNotFound > 0 ->
-    {error, notfound};
-fail_reply(R, NumR, _NumNotDeleted, _NumNotFound, _Fails) ->
-    {error, {r_val_unsatisfied, R,  NumR}}.
-
-
     
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
 
 maybe_finalize(StateData=#state{get_core = GetCore}) ->
-    case has_all_replies(GetCore) of
+    case riak_kv_get_core:has_all_results(GetCore) of
         true -> finalize(StateData);
         false -> {next_state,waiting_read_repair,StateData}
     end.
 
 finalize(StateData=#state{get_core = GetCore}) ->
-    {Action, UpdGetCore} = final_action(GetCore),
+    {Action, UpdGetCore} = riak_kv_get_core:final_action(GetCore),
     UpdStateData = StateData#state{get_core = UpdGetCore},
     case Action of
         delete ->
@@ -494,7 +337,7 @@ client_info([], _StateData, Acc) ->
 client_info([timing | Rest], StateData = #state{get_usecs = GetUsecs}, Acc) ->
     client_info(Rest, StateData, [{duration, GetUsecs} | Acc]);
 client_info([vnodes | Rest], StateData = #state{get_core = GetCore}, Acc) ->
-    Info = info(GetCore),
+    Info = riak_kv_get_core:info(GetCore),
     client_info(Rest, StateData, Info ++ Acc);
 client_info([Unknown | Rest], StateData, Acc) ->
     client_info(Rest, StateData, [{Unknown, unknown_detail} | Acc]).
