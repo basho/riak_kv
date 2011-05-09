@@ -100,11 +100,11 @@ handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{reqid=ReqId,
         [] ->
             ok;
         Keys ->
-            gen_fsm:send_event(Caller, {ReqId, {kl, Idx, Keys}})
+            gen_fsm:send_event(Caller, {ReqId, {kl, {Idx, node()}, Keys}})
     end,
     {next_state, waiting, State};
 handle_info({ReqId, Idx, done}, waiting, #state{reqid=ReqId, caller=Caller}=State) ->
-    gen_fsm:send_event(Caller, {ReqId, Idx, done}),
+    gen_fsm:send_event(Caller, {ReqId, {Idx, node()}, done}),
     {next_state, waiting, State};
 handle_info({'DOWN', _MRef, _Type, Caller, _Info}, waiting, #state{caller=Caller}=State) ->
     {stop, normal, State};
