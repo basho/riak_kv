@@ -80,7 +80,7 @@ eqc_test_() ->
                                                             []}, 5)),
         %% Run the quickcheck tests
         {timeout, 60000, % do not trust the docs - timeout is in msec
-         ?_assertEqual(true, quickcheck(numtests(500, ?QC_OUT(prop_basic_put()))))}
+         ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop_basic_put()))))}
        ]
       }
      ]
@@ -188,12 +188,20 @@ nodestatus() ->
 
 %% Put FSM options
 %% 
+detail() ->
+    timing.
+
+details() ->
+    list(detail()).
+
 option() ->
     frequency([{1, returnbody},
                {1, {returnbody, bool()}},
                {1, update_last_modified},
-               {1, {update_last_modified, bool()}}]).
-
+               {1, {update_last_modified, bool()}},
+               {1, details},
+               {1, {details, details()}}]).
+    
 options() ->
     list(option()).
 
@@ -323,6 +331,24 @@ prop_basic_put() ->
         ExpectObject = expect_object(H, RealW, EffDW, AllowMult),
         {Expected, ExpectedPostCommits} = expect(H, N, PW, RealPW, W, RealW, DW, EffDW, Options,
                                                  Precommit, Postcommit, ExpectObject, PL2),
+
+        {RetResult, RetInfo} = case Res of 
+                                   timeout ->
+                                       {Res, undefined};
+                                   ok ->
+                                       {ok, undefined};
+                                   {ok, Info} when is_list(Info) ->
+                                       {ok, Info};
+                                   {ok, _RetObj} ->
+                                       {Res, undefined};
+                                   {error, _Reason} ->
+                                       {Res, undefined};
+                                   {ok, RetObj, Info0} ->
+                                       {{ok, RetObj}, Info0};
+                                   {error, Reason, Info0} ->
+                                       {{error, Reason}, Info0}
+                               end,                                                 
+
         ?WHENFAIL(
            begin
                io:format(user, "BucketProps: ~p\n", [BucketProps]),
@@ -339,9 +365,11 @@ prop_basic_put() ->
                %% io:format(user, "Expected Object Given Lineage: ~p\n", [ExpectObjectGivenLineage]),
                io:format(user, "History: ~p\n", [H]),
                io:format(user, "Expected: ~p Res: ~p\n", [Expected, Res]),
-               io:format(user, "PostCommits: ~p Got: ~p\n", [ExpectedPostCommits, PostCommits])
+               io:format(user, "PostCommits:\nExpected: ~p\nGot: ~p\n",
+                         [ExpectedPostCommits, PostCommits])
            end,
-           conjunction([{result, equals(Res, Expected)},
+           conjunction([{result, equals(RetResult, Expected)},
+                        {details, check_details(RetInfo, Options)},
                         {postcommit, equals(PostCommits, ExpectedPostCommits)}]))
     end).
 
@@ -748,6 +776,15 @@ precommit_should_fail([{Lang, precommit_nonobj} | _Rest], _DW) ->
 precommit_should_fail([_LangHook | Rest], DW) ->
     precommit_should_fail(Rest, DW).
 
+check_details(Info, Options) ->
+    case proplists:get_value(details, Options, false) of
+        false ->
+            equals(undefined, Info);
+        [] ->
+            equals(undefined, Info);
+        _ -> % some info being returned is good enough for now
+            true
+    end.
 %%====================================================================
 %% Javascript helpers 
 %%====================================================================
