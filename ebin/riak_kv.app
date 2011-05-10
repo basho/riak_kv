@@ -50,6 +50,7 @@
              riak_kv_pb_socket,
              riak_kv_pb_socket_sup,
              riak_kv_phase_proto,
+             riak_kv_put_core,
              riak_kv_put_fsm,
              riak_kv_put_fsm_sup,
              riak_kv_reduce_phase,

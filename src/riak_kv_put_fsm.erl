@@ -57,32 +57,6 @@
 
 -export_type([option/0, options/0, detail/0, detail_info/0]).
 
--type vput_result() :: any().
-
--type result() :: w |
-                  {dw, undefined} |
-                  {dw, riak_object:riak_object()} |
-                  {error, any()}.
-
--type reply() :: ok | 
-                 {ok, riak_object:riak_object()} |
-                 {error, notfound} |
-                 {error, any()}.
--type idxresult() :: {non_neg_integer(), result()}.
--record(putcore, {n :: pos_integer(),
-                  w :: pos_integer(),
-                  dw :: non_neg_integer(),
-                  w_fail_threshold :: pos_integer(),
-                  dw_fail_threshold :: pos_integer(),
-                  returnbody :: boolean(),
-                  allowmult :: boolean(),
-                  results = [] :: [idxresult()],
-                  final_obj :: undefined | riak_object:riak_object(),
-                  num_w = 0 :: non_neg_integer(),
-                  num_dw = 0 :: non_neg_integer(),
-                  num_fail = 0 :: non_neg_integer()}).
--opaque putcore() :: #putcore{}.
-
 -record(state, {from :: {raw, integer(), pid()},
                 robj :: riak_object:riak_object(),
                 options=[] :: options(),
@@ -101,13 +75,12 @@
                 precommit=[] :: list(),
                 postcommit=[] :: list(),
                 bucket_props:: list(),
-                putcore :: #putcore{},
+                putcore :: riak_kv_put_core:putcore(),
                 put_usecs :: undefined | non_neg_integer(),
                 timing = [] :: [{atom(), {non_neg_integer(), non_neg_integer(),
                                           non_neg_integer()}}],
                 reply % reply sent to client
                }).
-
 
 -define(DEFAULT_TIMEOUT, 60000).
 
@@ -149,87 +122,6 @@ test_link(From, Object, PutOptions, StateProps) ->
     gen_fsm:start_link(?MODULE, {test, [From, Object, PutOptions], StateProps}, []).
 
 -endif.
-
-%% ====================================================================
-%% put core logic
-%% ====================================================================
-
-
-init(N, W, DW, WFailThreshold, DWFailThreshold, AllowMult, ReturnBody) ->
-    #putcore{n = N, w = W, dw = DW,
-             w_fail_threshold = WFailThreshold,
-             dw_fail_threshold = DWFailThreshold,
-             allowmult = AllowMult,
-             returnbody = ReturnBody}.
-
--spec add_result(vput_result(), putcore()) -> putcore().
-add_result({w, Idx, _ReqId}, PutCore = #putcore{results = Results,
-                                                num_w = NumW}) ->
-    PutCore#putcore{results = [{Idx, w} | Results],
-                    num_w = NumW + 1};
-add_result({dw, Idx, _ReqId}, PutCore = #putcore{results = Results,
-                                                 num_dw = NumDW}) ->
-    PutCore#putcore{results = [{Idx, {dw, undefined}} | Results], 
-                    num_dw = NumDW + 1};
-add_result({dw, Idx, ResObj, _ReqId}, PutCore = #putcore{results = Results,
-                                                         num_dw = NumDW}) ->
-    PutCore#putcore{results = [{Idx, {dw, ResObj}} | Results],
-                    num_dw = NumDW + 1};
-add_result({fail, Idx, _ReqId}, PutCore = #putcore{results = Results,
-                                                   num_fail = NumFail}) ->
-    PutCore#putcore{results = [{Idx, {error, undefined}} | Results],
-                    num_fail = NumFail + 1};
-add_result(_Other, PutCore = #putcore{num_fail = NumFail}) ->
-    %% Treat unrecognized messages as failures - no index to store them against
-    PutCore#putcore{num_fail = NumFail + 1}.
-
-enough(#putcore{w = W, num_w = NumW, dw = DW, num_dw = NumDW, 
-                num_fail = NumFail, w_fail_threshold = WFailThreshold,
-                dw_fail_threshold = DWFailThreshold}) ->
-    (NumW >= W andalso NumDW >= DW) orelse
-        (NumW >= W andalso NumFail >= DWFailThreshold) orelse
-        (NumW < W andalso NumFail >= WFailThreshold).
-
--spec response(putcore()) -> {reply(), putcore()}.
-response(PutCore = #putcore{w = W, num_w = NumW, dw = DW, num_dw = NumDW,
-                            num_fail = NumFail,
-                            w_fail_threshold = WFailThreshold,
-                            dw_fail_threshold = DWFailThreshold}) ->
-    if
-        NumW >= W andalso NumDW >= DW ->
-            maybe_return_body(PutCore);
-        
-        NumW >= W andalso NumFail >= DWFailThreshold ->
-            {{error, too_many_fails}, PutCore};
-        
-       NumW < W andalso NumFail >= WFailThreshold ->
-            {{error, too_many_fails}, PutCore};
-        
-        true ->
-            {{error, {w_val_unsatisfied, NumW, NumDW, W, DW}}, PutCore}
-    end.
-
-final(PutCore = #putcore{final_obj = FinalObj, 
-                         results = Results, allowmult = AllowMult}) ->
-    case FinalObj of
-        undefined ->
-            RObjs = [RObj || {_Idx, {dw, RObj}} <- Results, RObj /= undefined],
-            ReplyObj = case RObjs of
-                           [] ->
-                               undefined;
-                           _ ->
-                               riak_object:reconcile(RObjs, AllowMult)
-                       end,
-            {ReplyObj, PutCore#putcore{final_obj = ReplyObj}};
-        _ ->
-            {FinalObj, PutCore}
-    end.
-    
-maybe_return_body(PutCore = #putcore{returnbody = false}) ->
-    {ok, PutCore};
-maybe_return_body(PutCore = #putcore{returnbody = true}) ->
-    {ReplyObj, UpdPutCore} = final(PutCore),
-    {{ok, ReplyObj}, UpdPutCore}.
 
 
 %% ====================================================================
@@ -362,9 +254,9 @@ execute(timeout, StateData0=#state{robj=RObj, req_id = ReqId,
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
     riak_kv_vnode:put(Preflist, BKey, RObj, ReqId, StartTime, VnodeOptions),
     StateData = StateData0#state{tref=TRef},
-    case enough(PutCore) of
+    case riak_kv_put_core:enough(PutCore) of
         true ->
-            {Reply, UpdPutCore} = response(PutCore),
+            {Reply, UpdPutCore} = riak_kv_put_core:response(PutCore),
             process_reply(Reply, StateData#state{putcore = UpdPutCore});
         false ->
             new_state(waiting_vnode, StateData)
@@ -374,10 +266,10 @@ execute(timeout, StateData0=#state{robj=RObj, req_id = ReqId,
 waiting_vnode(request_timeout, StateData) ->
     process_reply({error,timeout}, StateData);
 waiting_vnode(Result, StateData = #state{putcore = PutCore}) ->
-    UpdPutCore1 = add_result(Result, PutCore),
-    case enough(UpdPutCore1) of
+    UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
+    case riak_kv_put_core:enough(UpdPutCore1) of
         true ->
-            {Reply, UpdPutCore2} = response(UpdPutCore1),
+            {Reply, UpdPutCore2} = riak_kv_put_core:response(UpdPutCore1),
             process_reply(Reply, StateData#state{putcore = UpdPutCore2});
         false ->
             {next_state, waiting_vnode, StateData#state{putcore = UpdPutCore1}}
@@ -390,7 +282,7 @@ postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
                                        putcore = PutCore}) ->
     %% Process the next hook - gives sys:get_status messages a chance if hooks
     %% take a long time.  No checking error returns for postcommit hooks.
-    {ReplyObj, UpdPutCore} = final(PutCore),
+    {ReplyObj, UpdPutCore} =  riak_kv_put_core:final(PutCore),
     invoke_hook(Hook, ReplyObj),
     {next_state, postcommit, StateData#state{postcommit = Rest,
                                              putcore = UpdPutCore}, 0};
@@ -398,7 +290,7 @@ postcommit(request_timeout, StateData) -> % still process hooks even if request 
     {next_state, postcommit, StateData, 0};
 postcommit(Reply, StateData = #state{putcore = PutCore}) ->
     %% late responses - add to state.  *Does not* recompute finalobj
-    UpdPutCore = add_result(Reply, PutCore),
+    UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
     {next_state, postcommit, StateData#state{putcore = UpdPutCore}, 0}.
 
 finish(timeout, StateData = #state{timing = Timing, reply = Reply}) ->
@@ -414,7 +306,7 @@ finish(timeout, StateData = #state{timing = Timing, reply = Reply}) ->
     {stop, normal, StateData};
 finish(Reply, StateData = #state{putcore = PutCore}) ->
     %% late responses - add to state.  *Does not* recompute finalobj
-    UpdPutCore = add_result(Reply, PutCore),
+    UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
     {next_state, finish, StateData#state{putcore = UpdPutCore}, 0}.
 
 
@@ -457,13 +349,14 @@ new_state_timeout(StateName, StateData) ->
 process_reply(Reply, StateData = #state{postcommit = PostCommit,
                                         putcore = PutCore}) ->
     StateData1 = client_reply(Reply, StateData),
-    %% If postcommits defined, calculate final object before any replies
-    %% received after responding to the client for a consistent view.
     StateData2 = case PostCommit of
                      [] ->
                          StateData1;
                      _ ->
-                         {_, UpdPutCore} = final(PutCore),
+                         %% If postcommits defined, calculate final object 
+                         %% before any replies received after responding to
+                         %% the client for a consistent view.
+                         {_, UpdPutCore} = riak_kv_put_core:final(PutCore),
                          StateData1#state{putcore = UpdPutCore}
                  end,
     case Reply of
@@ -523,11 +416,11 @@ handle_options([{_,_}|T], State) -> handle_options(T, State).
 
 init_putcore(State = #state{n = N, w = W, dw = DW, allowmult = AllowMult,
                             returnbody = ReturnBody}) ->
-    PutCore = init(N, W, DW, 
-                   N-W+1,    % cannot ever get W replies
-                   N-DW+1,  % cannot ever get DW replies
-                   AllowMult,
-                   ReturnBody),
+    PutCore = riak_kv_put_core:init(N, W, DW, 
+                                    N-W+1,   % cannot ever get W replies
+                                    N-DW+1,  % cannot ever get DW replies
+                                    AllowMult,
+                                    ReturnBody),
     State#state{putcore = PutCore}.
 
 
