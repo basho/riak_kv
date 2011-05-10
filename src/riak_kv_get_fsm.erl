@@ -32,12 +32,20 @@
          handle_info/3, terminate/3, code_change/4]).
 -export([prepare/2,validate/2,execute/2,waiting_vnode_r/2,waiting_read_repair/2]).
 
+-type detail() :: timing |
+                  vnodes.
+-type details() :: [detail()].
+
 -type option() :: {r, pos_integer()} |         %% Minimum number of successful responses
                   {pr, non_neg_integer()} |    %% Minimum number of primary vnodes participating
                   {basic_quorum, boolean()} |  %% Whether to use basic quorum (return early 
                                                %% in some failure cases.
                   {notfound_ok, boolean()}  |  %% Count notfound reponses as successful.
-                  {timeout, pos_integer() | infinity}. %% Timeout for vnode responses
+                  {timeout, pos_integer() | infinity} | %% Timeout for vnode responses
+                  {details, details()} |       %% Return extra details as a 3rd element
+                  {details, true} |
+                  details.
+
 -type options() :: [option()].
 -type req_id() :: non_neg_integer().
 
