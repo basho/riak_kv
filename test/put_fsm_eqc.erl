@@ -339,7 +339,8 @@ prop_basic_put() ->
                %% io:format(user, "Expected Object Given Lineage: ~p\n", [ExpectObjectGivenLineage]),
                io:format(user, "History: ~p\n", [H]),
                io:format(user, "Expected: ~p Res: ~p\n", [Expected, Res]),
-               io:format(user, "PostCommits: ~p Got: ~p\n", [ExpectedPostCommits, PostCommits])
+               io:format(user, "PostCommits:\nExpected: ~p\nGot: ~p\n",
+                         [ExpectedPostCommits, PostCommits])
            end,
            conjunction([{result, equals(Res, Expected)},
                         {postcommit, equals(PostCommits, ExpectedPostCommits)}]))
