@@ -372,24 +372,15 @@ check_info([{vnode_errors, _Errors} | Rest], State) ->
     %% The first RealR errors from the vnode history
     check_info(Rest, State).
 
+%% Check the read repairs - no need to worry about delete objects, deletes can only
+%% happen when all read repairs are complete.
 
 check_repair(Objects, RepairH, H) ->
     Actual = [ Part || {Part, ?KV_PUT_REQ{}} <- RepairH ],
     Heads  = merge_heads([ Lineage || {_, {ok, Lineage}} <- H ]),
-    
-    AllDeleted = lists:all(fun({_, {ok, Lineage}}) ->
-                                Obj1 = proplists:get_value(Lineage, Objects),
-                                riak_kv_util:is_x_deleted(Obj1);
-                              (_) -> true
-                           end, H),
-    Expected = case AllDeleted of
-            false -> expected_repairs(H);
-            true  -> []  %% we don't expect read repair if everyone has a tombstone
-        end,
-
     RepairObject  = (catch build_merged_object(Heads, Objects)),
+    Expected =expected_repairs(H),
     RepairObjects = [ Obj || {_Idx, ?KV_PUT_REQ{object=Obj}} <- RepairH ],
-
     conjunction(
         [{puts, equals(lists:sort(Expected), lists:sort(Actual))},
          {sanity, equals(length(RepairObjects), length(Actual))},
@@ -403,27 +394,21 @@ check_repair(Objects, RepairH, H) ->
 check_delete(Objects, RepairH, H, PerfectPreflist) ->
     Deletes  = [ Part || {Part, ?KV_DELETE_REQ{}} <- RepairH ],
 
-    %% Used to have a check for for node() - no longer easy
-    %% with new core vnode code.  Not sure it is necessary.
-    AllDeleted = lists:all(fun({_Idx, {ok, Lineage}}) ->
-                                Obj = proplists:get_value(Lineage, Objects),
-                                Rc = riak_kv_util:is_x_deleted(Obj),
-                                Rc;
-                              ({_Idx, notfound}) -> true;
-                              ({_, error})    -> false;
-                              ({_, timeout})  -> false
-                           end, H),
-
-    HasOk = lists:any(fun({_, {ok, _}}) -> true;
-                         (_) -> false
-                      end, H),
-
-    Expected = case AllDeleted andalso HasOk andalso PerfectPreflist of
-        true  -> [ P || {P, _} <- H ];  %% send deletes to notfound nodes as well
-        false -> []
-    end,
-    ?WHENFAIL(io:format("Objects: ~p\nExpected: ~p\nDeletes: ~p\nAllDeleted: ~p\nHasOk: ~p\nH: ~p\n",
-                        [Objects, Expected, Deletes, AllDeleted, HasOk, H]),
+    %% Should get deleted if all vnodes returned the same object
+    %% and a perfect preflist and the object is deleted
+    RetLins = [Lineage || {_Idx, {ok, Lineage}} <- H],
+    URetLins = lists:usort(RetLins),
+    Expected = case PerfectPreflist andalso 
+                   length(RetLins) == length(H) andalso 
+                   length(URetLins) == 1 andalso
+                   riak_kv_util:is_x_deleted(proplists:get_value(hd(URetLins), Objects)) of
+                   true ->
+                       [P || {P, _} <- H];  %% send deletes to all nodes
+                   false ->
+                       []
+               end,
+    ?WHENFAIL(io:format("Objects: ~p\nExpected: ~p\nDeletes: ~p\nH: ~p\n",
+                        [Objects, Expected, Deletes, H]),
               equals(lists:sort(Expected), lists:sort(Deletes))).
 
 all_distinct(Xs) ->
