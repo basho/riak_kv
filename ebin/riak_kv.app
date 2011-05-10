@@ -22,6 +22,7 @@
              riak_kv_ets_backend,
              riak_kv_fs_backend,
              riak_kv_gb_trees_backend,
+             riak_kv_get_core,
              riak_kv_get_fsm,
              riak_kv_get_fsm_sup,
              riak_kv_js_manager,
