@@ -133,12 +133,13 @@ initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, fro
     NVal = proplists:get_value(n_val, BucketProps),
     AllPrefLists = riak_core_ring:all_preflists(Ring, NVal),
     PrefListsCount = length(AllPrefLists),
+    NodeCount = length(riak_core_ring:all_members(Ring)),
     %% Get the count of VNodes remaining after
     %% dividing by the bucket NVal. This will be
     %% used in calculating the set of keys to retain
     %% from the final VNode we request keys from.
     RemainderVNodeCount = PrefListsCount rem NVal,
-    %% Minimize the number of VNodes that we  
+    %% Minimize the number of VNodes that we
     %% need to request keys from by selecting every Nth
     %% preference list. If the the number of partitions
     %% is not evenly divisible by the bucket n-val then
@@ -153,7 +154,7 @@ initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, fro
     %% IndexVNodeTuples will contain a list of tuples where the
     %% first member is the ring index value between 0 and
     %% the number of ring partitions - 1 and the second
-    %% member is a VNode tuple. 
+    %% member is a VNode tuple.
     {IndexVNodeTuples, _} = lists:partition(PartitionFun,
                                lists:zip(lists:seq(0, (PrefListsCount-1)), AllPrefLists)),
     %% Reverse the IndexVNodeTuples list and separate the ring
@@ -168,11 +169,11 @@ initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, fro
     %%
     %% PrefListPositions is dictionary where the keys are
     %% VNodes and the values are either the atom all or
-    %% a list of integers representing positions in the 
+    %% a list of integers representing positions in the
     %% preference list.
-    %% 
-    %% PrefListRemainders is a dictionary where the keys 
-    %% are VNodes and the values are the preference list 
+    %%
+    %% PrefListRemainders is a dictionary where the keys
+    %% are VNodes and the values are the preference list
     %% entries that should be used if the key listing cannot
     %% be completed on the selected VNode.
     {NodeIndexes, PrefListPositions, PrefListRemainders} = prepare_for_keylisting(MinimalPrefLists, RemainderVNodeCount, NVal),
@@ -282,11 +283,13 @@ prepare_for_keylisting([], VNodes, VNodePrefListPositions, VNodePrefListMembers)
     %% communication required to complete the key listing.
     NodeIndexes = group_indexes_by_node(VNodes, []),
     {NodeIndexes, VNodePrefListPositions, VNodePrefListMembers};
-prepare_for_keylisting([{RemainderVNodeCount, NVal, [{Index, Node} | RestPrefList]} | RestPrefLists], VNodes, VNodePrefListPositions, VNodePrefListMembers) ->
+prepare_for_keylisting([{RemainderVNodeCount, NVal, [{Index, Node} | _RestPrefList]} | RestPrefLists], VNodes, VNodePrefListPositions, VNodePrefListMembers) ->
     VNodes1 = [{Index, Node} | VNodes],
     PositionList = lists:reverse(lists:seq(NVal, NVal-RemainderVNodeCount+1, -1)),
     VNodePrefListPositions1 = dict:store({Index, Node}, PositionList, VNodePrefListPositions),
-    VNodePrefListMembers1 = dict:store({Index, Node}, RestPrefList, VNodePrefListMembers),
+    %% TODO: Store appropriate entries for alternative VNodes to 
+    %% try if there is a problem listing keys on this VNode.
+    VNodePrefListMembers1 = dict:store({Index, Node}, [], VNodePrefListMembers),
     prepare_for_keylisting(RestPrefLists, VNodes1, VNodePrefListPositions1, VNodePrefListMembers1);
 prepare_for_keylisting([[{Index, Node} | RestPrefList] | RestPrefLists], VNodes, VNodePrefListPositions, VNodePrefListMembers) ->
     VNodes1 = [{Index, Node} | VNodes],
@@ -314,17 +317,24 @@ group_indexes_by_node([{Index, Node} | OtherVNodes], NodeIndexes) ->
     group_indexes_by_node(OtherVNodes, NodeIndexes1).
 
 %% @private
-start_keylisters(ReqId, Bucket, NodeIndexes, _PrefListPositions, _VNodePrefListMembers, Timeout) ->
+start_keylisters(ReqId, Input, NodeIndexes, PrefListPositions, PrefListRemainders, Timeout) ->
     %% Fold over the node indexes list to start
     %% keylister processes on each node and accumulate
     %% the successes and errors.
     StartListerFunc = fun({Node, Indexes}, {Successes, Errors}) ->
-                              case start_keylister(ReqId, Bucket, Node, Indexes, Timeout) of
-                                  {error, Reason} ->
-                                      error_logger:warning_msg("Unable to start a keylister process on ~p. Reason: ~p~n", [Node, Reason]),
-                                      {Successes, [Node | Errors]};
-                                  {ok, Pid} ->
-                                      {[{Node, Pid} | Successes], Errors}
+                              try
+                                  case start_keylister(ReqId, Input, Node, Indexes, Timeout) of
+                                      {error, Error} ->
+                                          error_logger:warning_msg("Unable to start a keylister process on ~p. Reason: ~p~n", [Node, Error]),
+                                          {Successes, [Node | Errors]};
+                                      {ok, Pid} ->
+                                          riak_kv_keylister:list_keys(Pid),
+                                          {[{Node, Pid} | Successes], Errors}
+                                  end
+                              catch
+                                  _:ThrowReason ->
+                                      error_logger:warning_msg("Unable to start a keylister process on ~p. Reason: ~p~n", [Node, ThrowReason]),
+                                      {Successes, [Node | Errors]}
                               end
                       end,
     {_KeyListerNodes, ErrorNodes} = lists:foldl(StartListerFunc, {[], []}, NodeIndexes),
@@ -337,31 +347,87 @@ start_keylisters(ReqId, Bucket, NodeIndexes, _PrefListPositions, _VNodePrefListM
             %% Update the NodexIndexes list for the nodes that
             %% had errors and send the key listing request to
             %% the next entry in the preference list or return
-            %% an error if all preference list entries have 
+            %% an error if all preference list entries have
             %% been exhausted.
 
-            %% TODO: Handling retry attempt on different VNode 
-            %% from pref list.
+            %% Retry the key listing on a different VNode from
+            %% the preference list for each VNode on each node
+            %% that had an error.
+            ErrorHandlingResult = handle_keylister_errors(ErrorNodes, ReqId, Input, NodeIndexes, PrefListPositions, PrefListRemainders, Timeout),
+            case ErrorHandlingResult of
+                {error, _} ->
+                    ErrorHandlingResult;
+                {ok, PrefListPositions1, PrefListRemainders1} ->
+                    {ok, PrefListPositions1, PrefListRemainders1}
+            end
+    end.
 
-            %% PrefListRemainder = proplists:get_value(ErrorNode, NodeIndexes),
-            %% case PrefListRemainder of
-            %%     [] ->
-            %%         %% The key listing cannot successfully complete
-            %%         {error, insufficient_nodes_available};
-            %%     [_ | RestPrefList] ->
-            %%         [{Node, [{Index, RestPrefList} | Indexes]} | proplists:delete(Node, NodeIndexes)]
-            %% end,
+%% @private
+start_keylister(ReqId, Input, Node, Indexes, Timeout) ->
+    VNodes = [{Index, Node} || Index <- Indexes],
+    riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Input, VNodes, Timeout]).
 
-            ok
+%% @private
+handle_keylister_errors(ErrorNodes, ReqId, Input, NodeIndexes, PrefListPositions, PrefListRemainders, Timeout) ->
+    %% Compile a list of  the VNode indexes for each error node
+    ErrorVNodes = get_error_vnodes(ErrorNodes, NodeIndexes),
+
+    %% TODO: Special handling for 'remainder' vnode. Right now if the
+    %% keylister process cannot be started on the physical node
+    %% of the 'remainder' vnode, the key listing will fail. Retries
+    %% for this vnode can be accomplished, but it will be more
+    %% complex.
+
+    %% Look up the preference list entries that remain for each
+    %% error VNode in PrefListRemainders and return an error if
+    %% the preference list has been exhausted for any VNode.
+    RemainderPrefLists = get_remainder_preflists(ErrorVNodes, PrefListPositions, PrefListRemainders),
+    case RemainderPrefLists of
+        {error, _} ->
+            %% All preference list entries have been exhausted
+            %% for a VNode so return the error.
+            RemainderPrefLists;
+        _ ->
+            %% Compose new data structures for start_keylisters
+            {NodeIndexes1, PrefListPositions1, PrefListRemainders1} = prepare_for_keylisting(RemainderPrefLists, [], PrefListPositions, PrefListRemainders),    
+            %% Call start_keylisters
+            Result = start_keylisters(ReqId, Input, NodeIndexes1, PrefListPositions1, PrefListRemainders1, Timeout),
+            case Result of
+                ok ->
+                    {ok, PrefListPositions1, PrefListRemainders1};
+                _ ->
+                    Result
+
+            end
+    end.
+
+%% @private
+get_error_vnodes(ErrorNodes, NodeIndexes) ->
+    %% Assemble the VNode tuples
+    VNodeAssemblerFunc = fun(ErrorNode) ->
+                        ErrorVNodeIndexes = proplists:get_value(ErrorNode, NodeIndexes),
+                        [{Index, ErrorNode} || Index <- ErrorVNodeIndexes]
+                end,
+    lists:flatten(lists:map(VNodeAssemblerFunc, ErrorNodes)).
+
+%% @private
+get_remainder_preflists(ErrorVNodes, _PrefListPositions, PrefListRemainders) ->
+    get_remainder_preflists(ErrorVNodes, _PrefListPositions, PrefListRemainders, []).
+
+%% @private
+get_remainder_preflists([], _PrefListPositions, _PrefListRemainders, RemainderPrefLists) ->
+    RemainderPrefLists;
+get_remainder_preflists([HeadErrorVNode | RestErrorVNodes], _PrefListPositions, PrefListRemainders, RemainderPrefLists) ->
+    PrefListRemainder = dict:fetch(HeadErrorVNode, PrefListRemainders),
+    case PrefListRemainder of
+        [] ->
+            {error, {vnode_preflist_exhausted, HeadErrorVNode}};
+        _ ->
+            get_remainder_preflists(RestErrorVNodes, _PrefListPositions, PrefListRemainders, [PrefListRemainder | RemainderPrefLists])
     end.
 
 
 %% @private
-start_keylister(ReqId, Bucket, Node, Indexes, Timeout) ->
-    VNodes = [{Index, Node} || Index <- Indexes],
-    riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Bucket, VNodes, Timeout]).
-
-%% @Private
 process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, UpNodes, PrefListPosition, From) ->
     process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, UpNodes, PrefListPosition, From, []).
 
@@ -379,8 +445,8 @@ process_keys(_, [], Bucket, ClientType, _, _, _, _, {raw,ReqId,ClientPid}, Acc) 
 process_keys(_VNode, [K|Rest], _Bucket, _ClientType, _Ring, _NVal, _UpNodes, all, _From, Acc) ->
     process_keys(_VNode, Rest, _Bucket, _ClientType, _Ring, _NVal, _UpNodes, all, _From, [K|Acc]);
 process_keys(VNode, [K|Rest], Bucket, ClientType, Ring, NVal, UpNodes, PrefListPosition, From, Acc) ->
-    %% Get the chash key for the bucket-key pair and 
-    %% use that to determine the preference list to 
+    %% Get the chash key for the bucket-key pair and
+    %% use that to determine the preference list to
     %% use in filtering the keys from this VNode.
     ChashKey = riak_core_util:chash_key({Bucket, K}),
     PrefList = riak_core_apl:get_apl_ann(ChashKey, NVal, Ring, UpNodes),
