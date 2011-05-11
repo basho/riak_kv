@@ -74,7 +74,8 @@
                   robj :: term(),
                   reqid :: non_neg_integer(),
                   bprops :: maybe_improper_list(),
-                  prunetime :: undefined | non_neg_integer()}).
+                  starttime :: non_neg_integer(),
+                  prunetime :: undefined| non_neg_integer()}).
 
 %% TODO: add -specs to all public API funcs, this module seems fragile?
 
@@ -288,6 +289,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        robj=RObj,
                        reqid=ReqID,
                        bprops=BProps,
+                       starttime=StartTime,
                        prunetime=PruneTime},
     Reply = perform_put(prepare_put(State, PutArgs), State, PutArgs),
     riak_core_vnode:reply(Sender, Reply),
@@ -299,8 +301,9 @@ prepare_put(#state{mod=Mod,modstate=ModState}, #putargs{bkey=BKey,
                                                         robj=RObj,
                                                         reqid=ReqID,
                                                         bprops=BProps,
+                                                        starttime=StartTime,
                                                         prunetime=PruneTime}) ->
-    case syntactic_put_merge(Mod, ModState, BKey, RObj, ReqID, PruneTime) of
+    case syntactic_put_merge(Mod, ModState, BKey, RObj, ReqID, StartTime) of
         {oldobj, OldObj} ->
             {false, OldObj};
         {newobj, NewObj} ->
