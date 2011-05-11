@@ -132,87 +132,40 @@ initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, fro
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     NVal = proplists:get_value(n_val, BucketProps),
     AllPrefLists = riak_core_ring:all_preflists(Ring, NVal),
-    PrefListsCount = length(AllPrefLists),
+    %% Determine the number of physical nodes
     NodeCount = length(riak_core_ring:all_members(Ring)),
-    %% Get the count of VNodes remaining after
-    %% dividing by the bucket NVal. This will be
-    %% used in calculating the set of keys to retain
-    %% from the final VNode we request keys from.
-    RemainderVNodeCount = PrefListsCount rem NVal,
-    %% Minimize the number of VNodes that we
-    %% need to request keys from by selecting every Nth
-    %% preference list. If the the number of partitions
-    %% is not evenly divisible by the bucket n-val then
-    %% a final preference list is selected to ensure complete
-    %% coverage of all keys. In this case the keys from
-    %% a VNode in this final preference list are filtered
-    %% to ensure that duplicates are not introduced.
-    PartitionFun = fun({A, _B}) ->
-                           (A rem NVal == 0 andalso (PrefListsCount - A) > NVal)
-                               orelse ((PrefListsCount - A) == RemainderVNodeCount)
-                   end,
-    %% IndexVNodeTuples will contain a list of tuples where the
-    %% first member is the ring index value between 0 and
-    %% the number of ring partitions - 1 and the second
-    %% member is a VNode tuple.
-    {IndexVNodeTuples, _} = lists:partition(PartitionFun,
-                               lists:zip(lists:seq(0, (PrefListsCount-1)), AllPrefLists)),
-    %% Reverse the IndexVNodeTuples list and separate the ring
-    %% indexes from the corresponding VNode tuples.
-    {_, MinimalPrefLists} = lists:unzip(lists:reverse(IndexVNodeTuples)),
-    RequiredResponseCount = length(MinimalPrefLists),
-    %% Organize the data structures required to start
-    %% the key listing processes and process the results.
-    %%
-    %% NodeIndexes is a dictionary where the keys are
-    %% nodes and the values are lists of VNode indexes.
-    %%
-    %% PrefListPositions is dictionary where the keys are
-    %% VNodes and the values are either the atom all or
-    %% a list of integers representing positions in the
-    %% preference list.
-    %%
-    %% PrefListRemainders is a dictionary where the keys
-    %% are VNodes and the values are the preference list
-    %% entries that should be used if the key listing cannot
-    %% be completed on the selected VNode.
-    {NodeIndexes, PrefListPositions, PrefListRemainders} = prepare_for_keylisting(MinimalPrefLists, RemainderVNodeCount, NVal),
-    %% Ensure that at least one node is available
+    %% Determine the minimum number of nodes
+    %% required for full coverage.
+    case NodeCount >= NVal of
+        true ->
+            NodeQuorum = 1;
+        false ->
+            NodeQuorum = NVal - (NVal - NodeCount)
+    end,
+    %% Determine the riak_kv nodes that are available
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    case UpNodes of
-        [] ->
-            finish({error, all_nodes_unavailable}, StateData0);
-        _ ->
-            %% The call to start_keylisters will start keylister
-            %% processes on each node that has a key in NodeIndexes.
-            %% The keylister process is given a list of VNodes that it
-            %% should list the keys for and those VNode lists are the
-            %% values stored in NodeIndexes.
-            Result = start_keylisters(ReqId, Input, NodeIndexes, PrefListPositions, PrefListRemainders, Timeout),
-            case Result of
-                ok ->
-                    StateData = StateData0#state{pls=MinimalPrefLists,
-                                                 pref_list_positions=PrefListPositions,
-                                                 pref_list_remainders=PrefListRemainders,
-                                                 upnodes=UpNodes,
-                                                 required_responses=RequiredResponseCount,
-                                                 n_val=NVal},
-                    {next_state, waiting_kl, StateData, Timeout};
-                {ok, PrefListPositions1, PrefListRemainders1} ->
-                    StateData = StateData0#state{pls=MinimalPrefLists,
-                                                 pref_list_positions=PrefListPositions1,
-                                                 pref_list_remainders=PrefListRemainders1,
-                                                 upnodes=UpNodes,
-                                                 required_responses=RequiredResponseCount,
-                                                 n_val=NVal},
-                    {next_state, waiting_kl, StateData, Timeout};
-                {error, _} ->
-                    %% Unable to get full key coverage so return
-                    %% an error to the client.
-                    finish(Result, StateData0)
-            end
+    case node_quorum_satisfied(NodeQuorum, UpNodes) of
+        true ->
+            %% Generate an coverage plan
+            CoveragePlanResult = create_coverage_plan(AllPrefLists, UpNodes, NodeCount, NVal, NodeQuorum, 0),
+            case CoveragePlanResult of
+                {error, _} ->                    
+                    %% Failed to create a coverage plan so return the error
+                    finish(CoveragePlanResult, StateData0);
+                {NodeIndexes, PrefListPositions} ->
+                    %% If successful start processes and execute
+                    RequiredResponseCount = dict:size(PrefListPositions),
+                    start_keylisters(ReqId, Input, NodeIndexes, PrefListPositions, Timeout),
+                    StateData = StateData0#state{
+                                  pref_list_positions=PrefListPositions,
+                                  upnodes=UpNodes,
+                                  required_responses=RequiredResponseCount,
+                                  n_val=NVal},
+                    {next_state, waiting_kl, StateData, Timeout}                    
+            end;
+        false ->
+            finish({error, insufficient_nodes_available}, StateData0)
     end.
-
 
 waiting_kl({ReqId, {kl, VNode, Keys}},
            StateData=#state{from=From={raw, ReqId, _},
@@ -270,33 +223,119 @@ finish(clean, StateData=#state{from={raw, ReqId, ClientPid}, client_type=ClientT
     end,
     {stop,normal,StateData}.
 
-prepare_for_keylisting(PrefLists, 0, _) ->
-    prepare_for_keylisting(PrefLists, [], dict:new(), dict:new());
-prepare_for_keylisting([HeadPrefList | RestPrefLists], RemainderVNodeCount, NVal) ->
-    prepare_for_keylisting([{RemainderVNodeCount, NVal, HeadPrefList} | RestPrefLists], [], dict:new(), dict:new()).
+node_quorum_satisfied(NodeQuorum, UpNodes) ->
+    if 
+        UpNodes == [] ->
+            false;
+        length(UpNodes) < NodeQuorum ->
+            false;
+        true ->
+            true
+    end.
 
-prepare_for_keylisting([], VNodes, VNodePrefListPositions, VNodePrefListMembers) ->
+create_coverage_plan(_AllPrefLists, _UpNodes, _NodeCount, NVal, _NodeQuorum, Offset) when Offset > NVal ->
+    {error, cannot_achieve_coverage};
+create_coverage_plan(AllPrefLists, UpNodes, _NodeCount, NVal, _NodeQuorum, Offset) ->
+    %% Rotate the list of preference lists
+    RotatedPrefLists = left_rotate(AllPrefLists, Offset),
+    %% Determine the minimal list of preference lists
+    %% required for full coverage.
+    MinimalPrefLists = get_minimal_preflists(RotatedPrefLists, NVal),
+    %% Assemble the data structures required for
+    %% executing the coverage operation.
+    %%
+    %% NodeIndexes is a dictionary where the keys are
+    %% nodes and the values are lists of VNode indexes.
+    %%
+    %% PrefListPositions is dictionary where the keys are
+    %% VNodes and the values are either the atom all or
+    %% a list of integers representing positions in the
+    %% preference list.    
+    {NodeIndexes, PrefListPositions} = assemble_coverage_structures(MinimalPrefLists, NVal),
+    case coverage_plan_valid(NodeIndexes, UpNodes) of
+        true ->
+            {NodeIndexes, PrefListPositions};
+        false ->
+            %% TODO: Recurse and try another plan
+            %% create_coverage_plan(AllPrefLists, UpNodes, NodeCount, NVal, NodeQuorum, Offset+1),
+            {NodeIndexes, PrefListPositions}
+    end.
+
+get_minimal_preflists(PrefLists, N) ->    
+    PrefListsCount = length(PrefLists),
+    %% Get the count of VNodes remaining after
+    %% dividing by N. This will be used in 
+    %% calculating the set of keys to retain
+    %% from the final VNode we request keys from.
+    RemainderVNodeCount = PrefListsCount rem N,
+    %% Minimize the number of VNodes that we
+    %% need to request keys from by selecting every Nth
+    %% preference list. If the the number of partitions
+    %% is not evenly divisible by the bucket n-val then
+    %% a final preference list is selected to ensure complete
+    %% coverage of all keys. In this case the keys from
+    %% a VNode in this final preference list are filtered
+    %% to ensure that duplicates are not introduced.
+    PartitionFun = fun({A, _B}) ->
+                           (A rem N == 0 andalso (PrefListsCount - A) > N)
+                               orelse ((PrefListsCount - A) == RemainderVNodeCount)
+                   end,
+    %% IndexVNodeTuples will contain a list of tuples where the
+    %% first member is the ring index value between 0 and
+    %% the number of ring partitions - 1 and the second
+    %% member is a VNode tuple.
+    {IndexVNodeTuples, _} = lists:partition(PartitionFun,
+                               lists:zip(lists:seq(0, (PrefListsCount-1)), PrefLists)),
+    %% Reverse the IndexVNodeTuples list and separate the ring
+    %% indexes from the corresponding VNode tuples.
+    {_, MinimalPrefLists} = lists:unzip(lists:reverse(IndexVNodeTuples)),
+    MinimalPrefLists.
+
+left_rotate(List, 0) ->
+    List;
+left_rotate([Head | Rest], Rotations) ->
+    RotatedList = lists:reverse([Head | lists:reverse(Rest)]),
+    left_rotate(RotatedList, Rotations-1).
+
+assemble_coverage_structures([HeadPrefList | RestPrefLists]=PrefLists, N) ->
+    %% Get the count of VNodes remaining after
+    %% dividing by N. This will be used in 
+    %% calculating the set of keys to retain
+    %% from the final VNode we request keys from.
+    RemainderVNodeCount = length(PrefLists) rem N,
+    case RemainderVNodeCount of
+        0 ->
+            assemble_coverage_structures(PrefLists, [], dict:new());
+        _ ->
+            assemble_coverage_structures([{RemainderVNodeCount, N, HeadPrefList} | RestPrefLists], [], dict:new())
+    end.
+
+assemble_coverage_structures([], VNodes, PrefListPositions) ->
     %% Create a proplist where the keys are nodes and
     %% the values are lists of VNode indexes. This is
     %% used to determine which nodes to start keylister
     %% processes on and to help minimize the inter-node
     %% communication required to complete the key listing.
     NodeIndexes = group_indexes_by_node(VNodes, []),
-    {NodeIndexes, VNodePrefListPositions, VNodePrefListMembers};
-prepare_for_keylisting([{RemainderVNodeCount, NVal, [{Index, Node} | _RestPrefList]} | RestPrefLists], VNodes, VNodePrefListPositions, VNodePrefListMembers) ->
+    {NodeIndexes, PrefListPositions};
+assemble_coverage_structures([{RemainderVNodeCount, NVal, [{Index, Node} | _RestPrefList]} | RestPrefLists], VNodes, PrefListPositions) ->
     VNodes1 = [{Index, Node} | VNodes],
     PositionList = lists:reverse(lists:seq(NVal, NVal-RemainderVNodeCount+1, -1)),
-    VNodePrefListPositions1 = dict:store({Index, Node}, PositionList, VNodePrefListPositions),
-    %% TODO: Store appropriate entries for alternative VNodes to 
-    %% try if there is a problem listing keys on this VNode.
-    VNodePrefListMembers1 = dict:store({Index, Node}, [], VNodePrefListMembers),
-    prepare_for_keylisting(RestPrefLists, VNodes1, VNodePrefListPositions1, VNodePrefListMembers1);
-prepare_for_keylisting([[{Index, Node} | RestPrefList] | RestPrefLists], VNodes, VNodePrefListPositions, VNodePrefListMembers) ->
+    PrefListPositions1 = dict:store({Index, Node}, PositionList, PrefListPositions),
+    assemble_coverage_structures(RestPrefLists, VNodes1, PrefListPositions1);
+assemble_coverage_structures([[{Index, Node} | _RestPrefList] | RestPrefLists], VNodes, PrefListPositions) ->
     VNodes1 = [{Index, Node} | VNodes],
-    VNodePrefListPositions1 = dict:store({Index, Node}, all, VNodePrefListPositions),
-    VNodePrefListMembers1 = dict:store({Index, Node}, RestPrefList, VNodePrefListMembers),
-    prepare_for_keylisting(RestPrefLists, VNodes1, VNodePrefListPositions1, VNodePrefListMembers1).
+    PrefListPositions1 = dict:store({Index, Node}, all, PrefListPositions),
+    assemble_coverage_structures(RestPrefLists, VNodes1, PrefListPositions1).
 
+coverage_plan_valid(NodeIndexes, UpNodes) ->
+    PotentialNodes = proplists:get_keys(NodeIndexes),
+    case PotentialNodes -- UpNodes of
+        [] ->
+            true;
+        _ ->
+            false
+    end.   
 
 %% @private
 group_indexes_by_node([], NodeIndexes) ->
@@ -317,7 +356,7 @@ group_indexes_by_node([{Index, Node} | OtherVNodes], NodeIndexes) ->
     group_indexes_by_node(OtherVNodes, NodeIndexes1).
 
 %% @private
-start_keylisters(ReqId, Input, NodeIndexes, PrefListPositions, PrefListRemainders, Timeout) ->
+start_keylisters(ReqId, Input, NodeIndexes, _PrefListPositions, Timeout) ->
     %% Fold over the node indexes list to start
     %% keylister processes on each node and accumulate
     %% the successes and errors.
@@ -353,79 +392,20 @@ start_keylisters(ReqId, Input, NodeIndexes, PrefListPositions, PrefListRemainder
             %% Retry the key listing on a different VNode from
             %% the preference list for each VNode on each node
             %% that had an error.
-            ErrorHandlingResult = handle_keylister_errors(ErrorNodes, ReqId, Input, NodeIndexes, PrefListPositions, PrefListRemainders, Timeout),
-            case ErrorHandlingResult of
-                {error, _} ->
-                    ErrorHandlingResult;
-                {ok, PrefListPositions1, PrefListRemainders1} ->
-                    {ok, PrefListPositions1, PrefListRemainders1}
-            end
+            %% ErrorHandlingResult = handle_keylister_errors(ErrorNodes, ReqId, Input, NodeIndexes, PrefListPositions, PrefListRemainders, Timeout),
+            %% case ErrorHandlingResult of
+            %%     {error, _} ->
+            %%         ErrorHandlingResult;
+            %%     {ok, PrefListPositions1, PrefListRemainders1} ->
+            %%         {ok, PrefListPositions1, PrefListRemainders1}
+            %% end
+            fuck
     end.
 
 %% @private
 start_keylister(ReqId, Input, Node, Indexes, Timeout) ->
     VNodes = [{Index, Node} || Index <- Indexes],
     riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Input, VNodes, Timeout]).
-
-%% @private
-handle_keylister_errors(ErrorNodes, ReqId, Input, NodeIndexes, PrefListPositions, PrefListRemainders, Timeout) ->
-    %% Compile a list of  the VNode indexes for each error node
-    ErrorVNodes = get_error_vnodes(ErrorNodes, NodeIndexes),
-
-    %% TODO: Special handling for 'remainder' vnode. Right now if the
-    %% keylister process cannot be started on the physical node
-    %% of the 'remainder' vnode, the key listing will fail. Retries
-    %% for this vnode can be accomplished, but it will be more
-    %% complex.
-
-    %% Look up the preference list entries that remain for each
-    %% error VNode in PrefListRemainders and return an error if
-    %% the preference list has been exhausted for any VNode.
-    RemainderPrefLists = get_remainder_preflists(ErrorVNodes, PrefListPositions, PrefListRemainders),
-    case RemainderPrefLists of
-        {error, _} ->
-            %% All preference list entries have been exhausted
-            %% for a VNode so return the error.
-            RemainderPrefLists;
-        _ ->
-            %% Compose new data structures for start_keylisters
-            {NodeIndexes1, PrefListPositions1, PrefListRemainders1} = prepare_for_keylisting(RemainderPrefLists, [], PrefListPositions, PrefListRemainders),    
-            %% Call start_keylisters
-            Result = start_keylisters(ReqId, Input, NodeIndexes1, PrefListPositions1, PrefListRemainders1, Timeout),
-            case Result of
-                ok ->
-                    {ok, PrefListPositions1, PrefListRemainders1};
-                _ ->
-                    Result
-
-            end
-    end.
-
-%% @private
-get_error_vnodes(ErrorNodes, NodeIndexes) ->
-    %% Assemble the VNode tuples
-    VNodeAssemblerFunc = fun(ErrorNode) ->
-                        ErrorVNodeIndexes = proplists:get_value(ErrorNode, NodeIndexes),
-                        [{Index, ErrorNode} || Index <- ErrorVNodeIndexes]
-                end,
-    lists:flatten(lists:map(VNodeAssemblerFunc, ErrorNodes)).
-
-%% @private
-get_remainder_preflists(ErrorVNodes, _PrefListPositions, PrefListRemainders) ->
-    get_remainder_preflists(ErrorVNodes, _PrefListPositions, PrefListRemainders, []).
-
-%% @private
-get_remainder_preflists([], _PrefListPositions, _PrefListRemainders, RemainderPrefLists) ->
-    RemainderPrefLists;
-get_remainder_preflists([HeadErrorVNode | RestErrorVNodes], _PrefListPositions, PrefListRemainders, RemainderPrefLists) ->
-    PrefListRemainder = dict:fetch(HeadErrorVNode, PrefListRemainders),
-    case PrefListRemainder of
-        [] ->
-            {error, {vnode_preflist_exhausted, HeadErrorVNode}};
-        _ ->
-            get_remainder_preflists(RestErrorVNodes, _PrefListPositions, PrefListRemainders, [PrefListRemainder | RemainderPrefLists])
-    end.
-
 
 %% @private
 process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, UpNodes, PrefListPosition, From) ->
