@@ -28,7 +28,11 @@
 %% API
 -export([start_link/3,
          start_link/5,
-         list_keys/2]).
+         list_keys/1,
+         list_keys/2,
+         augment_vnodes/2,
+         update_vnodes/2
+        ]).
 
 %% States
 -export([waiting/2]).
@@ -45,8 +49,9 @@
 
 -record(state, {reqid,
                 caller,
-                bucket,
-                filter}).
+                bucket,               
+                filter,
+                vnodes}).
 
 %% ===================================================================
 %% Public API
@@ -58,8 +63,17 @@ start_link(ReqId, Caller, Bucket) ->
 start_link(ReqId, Caller, Bucket, VNodes, Timeout) ->
     gen_fsm:start_link(?MODULE, [ReqId, Caller, Bucket, VNodes], [{timeout, Timeout}]).
 
+list_keys(ListerPid) ->
+    gen_fsm:send_event(ListerPid, start).
+    
 list_keys(ListerPid, VNode) ->    
-    gen_fsm:send_event(ListerPid, {lk, VNode}).
+    gen_fsm:send_event(ListerPid, {listkeys, VNode}).
+
+augment_vnodes(ListerPid, VNodes) ->
+    gen_fsm:send_event(ListerPid, {augment_vnodes, VNodes}).
+
+update_vnodes(ListerPid, VNodes) ->
+    gen_fsm:send_event(ListerPid, {update_vnodes, VNodes}).
 
 %% ===================================================================
 %% gen_fsm callbacks
@@ -68,13 +82,23 @@ list_keys(ListerPid, VNode) ->
 init([ReqId, Caller, Inputs, VNodes]) ->
     erlang:monitor(process, Caller),
     {Bucket, Filter} = build_filter(Inputs),    
-    riak_kv_vnode:list_keys(VNodes, ReqId, self(), Bucket),
     {ok, waiting, #state{reqid=ReqId, caller=Caller, bucket=Bucket,
-                         filter=Filter}}.
+                         filter=Filter, vnodes=VNodes}}.
 
-waiting({lk, VNode}, #state{reqid=ReqId, bucket=Bucket}=State) ->
+waiting(start, #state{reqid=ReqId, bucket=Bucket, vnodes=VNodes}=State) ->
+    riak_kv_vnode:list_keys(VNodes, ReqId, self(), Bucket),
+    {next_state, waiting, State};
+
+waiting({listkeys, VNode}, #state{reqid=ReqId, bucket=Bucket}=State) ->
     riak_kv_vnode:list_keys(VNode, ReqId, self(), Bucket),
-    {next_state, waiting, State}.
+    {next_state, waiting, State};
+
+waiting({augment_vnodes, NewVNodes}, #state{vnodes=VNodes}=State) ->
+    {next_state, waiting, State#state{vnodes=VNodes++NewVNodes}};
+
+waiting({update_vnodes, VNodes}, State) ->
+    {next_state, waiting, State#state{vnodes=VNodes}}.
+
 
 handle_event(_Event, StateName, State) ->
     {next_state, StateName, State}.
