@@ -13,6 +13,9 @@ test(N) ->
 check() ->
     check(prop(), current_counterexample()).
 
+-define(B, <<"b">>).
+-define(K, <<"k">>).
+
 %% Client requests must be processed in sequence.
 %% Client also gets to have it's own state.
 
@@ -42,7 +45,8 @@ check() ->
 -record(params, {q,
                  n,
                  r,
-                 w}).
+                 w,
+                 dw}).
 
 -record(state, {verbose = false,
                 step = 1, 
@@ -74,7 +78,7 @@ prop() ->
     ?FORALL({Pris, ClientSeeds, ParamsSeed},
             {gen_pris(), gen_client_seeds(),gen_params()},
             begin
-                io:format(user, "Pris: ~p\n", [Pris]),
+                %% io:format(user, "Pris: ~p\n", [Pris]),
                 set_pri(Pris),
                 Params = make_params(ParamsSeed),
                 %NodeProcs = make_nodes(Q),
@@ -84,12 +88,12 @@ prop() ->
                 Clients = make_clients(ClientSeeds, Params),
                 Start = Initial#state{clients = Clients},
                 case exec(Start) of
-                    {ok, _Final} ->
-                        io:format("Params:\n~p\nClients:\n~p\nHistory:\n~p\n",
-                                  [Params,
-                                   Clients,
-                                   _Final#state.history]),
-                        true;
+                    {ok, Final} ->
+                        %% io:format("Params:\n~p\nClients:\n~p\nHistory:\n~p\n",
+                        %%           [Params,
+                        %%            Clients,
+                        %%            Final#state.history]),
+                        check_final(Final);
                     {What, Reason, Next, FailS} ->
                         io:format(user, "FAILED: ~p: ~p\nNext: ~p\nStart:\n~p\n"
                                   "FailS:\n~p\n",
@@ -97,6 +101,15 @@ prop() ->
                         false
                 end
             end).
+
+check_final(#state{history = H}) ->
+    %% Go through the history and check for the expected values
+    %% For each get track the must value(s)
+    %% For each put move the must value(s) at get time to may and add the new must.
+    Results = [R || R = {result, _, _, _} <- H],
+    io:format(user, "Results:\n~p\n", [Results]),
+    true.
+
 
 exec(S) ->
     Next = next(S),
@@ -108,7 +121,7 @@ exec(S) ->
             deliver_msg ->
                 exec(inc_step(deliver_msg(S)));
             {client, Cid}->
-                exec(inc_step(client_req(Cid, S)))
+                exec(inc_step(deliver_req(Cid, S)))
         end
     catch
         What:Reason ->
@@ -158,10 +171,10 @@ next(#state{clients = Clients, msgs = Msgs}=S) ->
     end.
 
 %% Deliver next client request for Cid
-client_req(Cid, #state{next_rid = ReqId, clients = Clients, procs = Procs,
-                       msgs = Msgs} = S) ->
+deliver_req(Cid, #state{next_rid = ReqId, clients = Clients, procs = Procs,
+                       msgs = Msgs, params = Params} = S) ->
     C = get_client(Cid, Clients),
-    Result = start_req(ReqId, C),
+    Result = start_req(ReqId, C, Params),
     NewProcs = proplists:get_value(procs, Result, []),
     NewMsgs = proplists:get_value(msgs, Result, []),
     UpdC = proplists:get_value(updc, Result, C),
@@ -203,10 +216,10 @@ deliver_msg(#state{msgs = [#msg{to = To} = Msg | Msgs],
 make_params(#params{n = NSeed, r = R, w = W} = P) ->
     %% Ensure R >= N, W >= N and R+W>N
     MinN = lists:max([R, W]),
-    P#params{n = make_range(R + W - NSeed, MinN, R+W-1)}. 
+    P#params{n = make_range(R + W - NSeed, MinN, R+W-1), dw = W}. 
 
 make_vnodes(#params{n = N}) ->
-    [#proc{name={kv_vnode, I, I}, handler=kv_vnode, procst=[]} || I <- lists:seq(1, N)].
+    [#proc{name={kv_vnode, I, I}, handler=kv_vnode, procst=undefined} || I <- lists:seq(1, N)].
 
 make_clients(ClientSeeds, Params) ->
     make_clients(ClientSeeds, 1, Params, []).
@@ -303,10 +316,10 @@ next_pri() ->
     Next.
 
 %% Start the next client request
-start_req(ReqId, #client{reqs = [Req | Reqs]} = C) ->
+start_req(ReqId, #client{reqs = [Req | Reqs]} = C, Params) ->
     UpdReq = Req#req{rid = ReqId},
     UpdC = C#client{reqs = [UpdReq | Reqs]},
-    Result = client_req(UpdC),
+    Result = client_req(UpdC, Params),
     %% If the result does not include an updated client record
     %% use the one with the reqs updated.  Any original
     %% updc entry will be never be retrieved.
@@ -317,29 +330,32 @@ start_req(ReqId, #client{reqs = [Req | Reqs]} = C) ->
 %% [{procs, NewProcs},
 %%  {msgs, NewMsgs},
 %%  {updc, UpdC}];
-client_req(#client{reqs = [#req{op = {get, PL}, rid = ReqId} | _]}) ->
-    Proc = get_fsm_proc(ReqId),
+client_req(#client{reqs = [#req{op = {get, PL}, rid = ReqId} | _]}, Params) ->
+    Proc = get_fsm_proc(ReqId, Params),
     NewProcs = [Proc],
     NewMsgs = [new_msg({req, ReqId}, Proc#proc.name, {get, PL})],
     [{procs, NewProcs},
      {msgs, NewMsgs}];
 client_req(#client{reqs = [#req{op = {put, PL}, rid = ReqId} | _],
-                   cid = Cid,  clntst = {#req{op={get, _PL}}, GetResult}}) ->
-    Proc = put_fsm_proc(ReqId),
+                   cid = Cid,  clntst = {#req{op={get, _PL}}, GetResult}},
+           Params) ->
+    Proc = put_fsm_proc(ReqId, Params),
     NewProcs = [Proc],
+    UpdV = <<ReqId:32>>,
     UpdObj = case GetResult of
                  {error, notfound} ->
-                     {obj, Cid, ReqId};
-                 {ok, _Obj} ->
-                     {obj, Cid, ReqId} %%  Will be based on Obj
+                     riak_object:new(?B, ?K, UpdV);
+                 {ok, Obj} ->
+                     riak_object:apply_updates(riak_object:update_value(Obj, UpdV))
              end,
-    NewMsgs = [new_msg({req, ReqId}, Proc#proc.name, {put, PL, UpdObj})],
+    UpdObj2 = riak_object:increment_vclock(UpdObj, <<Cid:32>>),
+    NewMsgs = [new_msg({req, ReqId}, Proc#proc.name, {put, PL, UpdObj2})],
     [{procs, NewProcs},
      {msgs, NewMsgs}].
 
 end_req(#msg{c = Result},
         #client{cid = Cid, reqs = [Req |_Reqs]} = C) ->
-    [{history, [{Cid, Req, Result}]},
+    [{history, [{result, Cid, Req, Result}]},
      {updc, C#client{clntst = {Req, Result}}},
      done].
 
@@ -348,54 +364,99 @@ end_req(#msg{c = Result},
 %% node_proc(#msg{from = From, c = ping}, #proc{name = {node, _}=Name}) ->
 %%     [{msgs, [#msg{from = Name, to = From, c = pong}]}].
                
-
-kv_vnode(#msg{from = From, c = get}, #proc{name = Name}) ->
-    [{msgs, [new_msg(Name, From, {error, notfound})]}];
-kv_vnode(#msg{from = From, c = put}, #proc{name = Name}) ->
-    [{msgs, [new_msg(Name, From, {error, fail})]}].
-
 -record(getfsmst, {reply_to,
-                   expect, %% Number of replies expected
-                   replies}).
+                   responded = false,
+                   getcore}).
 
-get_fsm_proc(ReqId) ->
-    #proc{name = {get_fsm, ReqId}, handler = get_fsm, procst = #getfsmst{}}.
+get_fsm_proc(ReqId, #params{n = N, r = R}) ->
+    FailThreshold = (N div 2) + 1,
+    NotFoundOk = true,
+    AllowMult = true,
+    GetCore = riak_kv_get_core:init(N, R, FailThreshold, NotFoundOk, AllowMult),
+    #proc{name = {get_fsm, ReqId}, handler = get_fsm,
+          procst = #getfsmst{getcore = GetCore}}.
 
 get_fsm(#msg{from = From, c = {get, PL}},
-        #proc{name = Name, procst = ProcSt} = P) ->
+        #proc{name = {get_fsm, ReqId} = Name, procst = ProcSt} = P) ->
     %% Kick off requests to the vnodes
-    [{msgs, [new_msg(Name, Vnode, get) || Vnode <- PL]},
-     {updp, P#proc{procst = ProcSt#getfsmst{reply_to = From, expect = length(PL)}}}];
-get_fsm(#msg{from = {kv_vnode, _, _}},
-        #proc{name = Name, procst = #getfsmst{expect = 1, reply_to = ReplyTo}}) ->
-    %% Final expected response from vnodes
-    %% TODO: Find a way to mark the process as stopped, can just build up for now.
-    [{msgs, [new_msg(Name, ReplyTo, {error, notfound})]}];
-get_fsm(#msg{from = {kv_vnode, _, _}},
-        #proc{procst = #getfsmst{expect = Expect} = ProcSt} = P) ->
-    %% Response from vnode
-    [{updp, P#proc{procst = ProcSt#getfsmst{expect = Expect - 1}}}].
-    
+    [{msgs, [new_msg(Name, Vnode, {get, ReqId}) || Vnode <- PL]},
+     {updp, P#proc{procst = ProcSt#getfsmst{reply_to = From}}}];
+get_fsm(#msg{from = {kv_vnode, Idx, _}, c = {r, Result, Idx, _ReqId}},
+        #proc{name = Name, procst = #getfsmst{reply_to = ReplyTo,
+                                              responded = Responded,
+                                              getcore = GetCore} = ProcSt} = P) ->
+    UpdGetCore = riak_kv_get_core:add_result(Idx, Result, GetCore),
+    case riak_kv_get_core:enough(UpdGetCore) of
+        true when Responded == false ->
+            %% Worry about read repairs later
+            {Response, UpdGetCore2} = riak_kv_get_core:response(UpdGetCore),
+            [{msgs, [new_msg(Name, ReplyTo, Response)]},
+             {updp, P#proc{procst = ProcSt#getfsmst{responded = true, 
+                                                    getcore = UpdGetCore2}}}];
+        _ ->
+            %% Replied already or more to come, worry about timeout later.
+            [{updp, P#proc{procst = ProcSt#getfsmst{getcore = UpdGetCore}}}]
+    end.
+
 -record(putfsmst, {reply_to,
-                   expect, %% Number of replies expected
-                   replies}).
+                   responded = false,
+                   putcore}).
+put_fsm_proc(ReqId, #params{n = N, w = W, dw = DW}) ->
+    AllowMult = true,
+    ReturnBody = false,
+    PutCore = riak_kv_put_core:init(N, W, DW, 
+                                    N-W+1,   % cannot ever get W replies
+                                    N-DW+1,  % cannot ever get DW replies
+                                    AllowMult,
+                                    ReturnBody),
+    #proc{name = {put_fsm, ReqId}, handler = put_fsm, procst = #putfsmst{putcore = PutCore}}.
 
-put_fsm_proc(ReqId) ->
-    #proc{name = {put_fsm, ReqId}, handler = put_fsm, procst = #putfsmst{}}.
-
-put_fsm(#msg{from = From, c = {put, PL, _Obj}},
-        #proc{name = Name, procst = ProcSt} = P) ->
+put_fsm(#msg{from = From, c = {put, PL, Obj}},
+        #proc{name = {put_fsm, ReqId}= Name, procst = ProcSt} = P) ->
+    Ts = ReqId, % re-use ReqId for a timestamp to make them unique
     %% Kick off requests to the vnodes
-    [{msgs, [new_msg(Name, Vnode, put) || Vnode <- PL]},
-     {updp, P#proc{procst = ProcSt#putfsmst{reply_to = From, expect = length(PL)}}}];
-put_fsm(#msg{from = {kv_vnode, _, _}},
-        #proc{name = Name, procst = #putfsmst{expect = 1, reply_to = ReplyTo}}) ->
-    %% Final expected response from vnodes
-    %% TODO: Find a way to mark the process as stopped, can just build up for now.
-    [{msgs, [new_msg(Name, ReplyTo, {error, notfound})]}];
-put_fsm(#msg{from = {kv_vnode, _, _}},
-        #proc{procst = #putfsmst{expect = Expect} = ProcSt} = P) ->
-    %% Response from vnode
-    [{updp, P#proc{procst = ProcSt#putfsmst{expect = Expect - 1}}}].
-    
-  
+    [{msgs, [new_msg(Name, Vnode, {put, Obj, ReqId, Ts}) || Vnode <- PL]},
+     {updp, P#proc{procst = ProcSt#putfsmst{reply_to = From}}}];
+put_fsm(#msg{from = {kv_vnode, _, _}, c = Result},
+        #proc{name = Name, procst = #putfsmst{reply_to = ReplyTo,
+                                              responded = Responded,
+                                              putcore = PutCore} = ProcSt} = P) ->
+    UpdPutCore = riak_kv_put_core:add_result(Result, PutCore),
+    case riak_kv_put_core:enough(UpdPutCore) of
+        true when Responded == false ->
+            %% Worry about read repairs later
+            {Response, UpdPutCore2} = riak_kv_put_core:response(UpdPutCore),
+            [{msgs, [new_msg(Name, ReplyTo, Response)]},
+             {updp, P#proc{procst = ProcSt#putfsmst{responded = true,
+                                                    putcore = UpdPutCore2}}}];
+        _ ->
+            %% Already responded or more to come, worry about timeout later.
+            [{updp, P#proc{procst = ProcSt#putfsmst{putcore = UpdPutCore}}}]
+    end.
+
+kv_vnode(#msg{from = From, c = {get, ReqId}},
+         #proc{name = {kv_vnode, Idx, _Node} = Name, procst = CurObj}) ->
+    Result = case CurObj of
+                 undefined ->
+                     {error, notfound};
+                 _ ->
+                     {ok, CurObj}
+             end,
+    [{msgs, [new_msg(Name, From, {r, Result, Idx, ReqId})]}];
+kv_vnode(#msg{from = From, c = {put, NewObj, ReqId, Ts}},
+         #proc{name = {kv_vnode, Idx, _Node} = Name, procst = CurObj} = P) ->
+    UpdObj = case CurObj of
+                 undefined ->
+                     NewObj;
+                 _ ->
+                     ResObj = riak_object:syntactic_merge(CurObj, NewObj, ReqId, Ts),
+                     case riak_object:vclock(ResObj) =:= riak_object:vclock(CurObj) of
+                         true -> CurObj; %% {oldobj, ResObj};
+                         false -> ResObj %% {newobj, ResObj}
+                     end
+             end,
+    WMsg = new_msg(Name, From, {w, Idx, ReqId}),
+    DWMsg = new_msg(Name, From, {dw, Idx, ReqId}), % ignore returnbody for now
+    [{msgs, [WMsg, DWMsg]},
+     {updp, P#proc{procst = UpdObj}}].
+
