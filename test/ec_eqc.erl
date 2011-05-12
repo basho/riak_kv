@@ -224,8 +224,11 @@ make_vnodes(#params{n = N}) ->
 make_clients(ClientSeeds, Params) ->
     make_clients(ClientSeeds, 1, Params, []).
 
-make_clients([], _Cid, _Params, Acc) ->
-    lists:reverse(Acc);
+make_clients([], _Cid, #params{n = N}, Acc) ->
+    %% Make sure the last request is a get.
+    Req = new_req({get, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}),
+    LastC = #client{cid = 1000001, reqs = [Req#req{pri = 1000002}]},
+    lists:reverse([LastC | Acc]);
 make_clients([#client{reqs = ReqSeeds} = CS | CSs], Cid, Params, Acc) ->
     Reqs = make_reqs(ReqSeeds, Params),
     C = CS#client{cid = Cid, reqs = Reqs},
