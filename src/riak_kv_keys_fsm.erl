@@ -144,27 +144,16 @@ initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, fro
     end,
     %% Determine the riak_kv nodes that are available
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    case node_quorum_satisfied(NodeQuorum, UpNodes) of
-        true ->
-            %% Generate an coverage plan
-            CoveragePlanResult = create_coverage_plan(AllPrefLists, UpNodes, NodeCount, NVal, NodeQuorum, 0),
-            case CoveragePlanResult of
-                {error, _} ->                    
-                    %% Failed to create a coverage plan so return the error
-                    finish(CoveragePlanResult, StateData0);
-                {NodeIndexes, PrefListPositions} ->
-                    %% If successful start processes and execute
-                    RequiredResponseCount = dict:size(PrefListPositions),
-                    start_keylisters(ReqId, Input, NodeIndexes, PrefListPositions, Timeout),
-                    StateData = StateData0#state{
-                                  pref_list_positions=PrefListPositions,
-                                  upnodes=UpNodes,
-                                  required_responses=RequiredResponseCount,
-                                  n_val=NVal},
-                    {next_state, waiting_kl, StateData, Timeout}                    
-            end;
-        false ->
-            finish({error, insufficient_nodes_available}, StateData0)
+    case plan_and_execute(ReqId, Input, AllPrefLists, UpNodes, NodeCount, NVal, NodeQuorum, Timeout, 0) of
+        {ok, RequiredResponseCount, PrefListPositions} ->
+            StateData = StateData0#state{
+                          pref_list_positions=PrefListPositions,
+                          upnodes=UpNodes,
+                          required_responses=RequiredResponseCount,
+                          n_val=NVal},
+            {next_state, waiting_kl, StateData, Timeout};
+        {error, Reason} ->
+            finish({error, Reason}, StateData0)
     end.
 
 waiting_kl({ReqId, {kl, VNode, Keys}},
@@ -223,8 +212,32 @@ finish(clean, StateData=#state{from={raw, ReqId, ClientPid}, client_type=ClientT
     end,
     {stop,normal,StateData}.
 
+plan_and_execute(ReqId, Input, PrefLists, UpNodes, NodeCount, NVal, NodeQuorum, Timeout, Offset) ->
+    case node_quorum_satisfied(NodeQuorum, UpNodes) of
+        true ->
+            %% Generate a coverage plan
+            CoveragePlanResult = create_coverage_plan(PrefLists, UpNodes, NodeCount, NVal, NodeQuorum, Offset),
+            case CoveragePlanResult of
+                {error, _} ->
+                    %% Failed to create a coverage plan so return the error
+                    CoveragePlanResult;
+                {NodeIndexes, PrefListPositions} ->
+                    %% If successful start processes and execute
+                    RequiredResponseCount = dict:size(PrefListPositions),
+                    StartListerResult = start_keylisters(ReqId, Input, NodeIndexes, PrefListPositions, Timeout),
+                    case StartListerResult of
+                        ok ->
+                            {ok, RequiredResponseCount, PrefListPositions};
+                        _ ->
+                            StartListerResult
+                    end                                            
+            end;
+        false ->
+            {error, insufficient_nodes_available}
+    end.
+
 node_quorum_satisfied(NodeQuorum, UpNodes) ->
-    if 
+    if
         UpNodes == [] ->
             false;
         length(UpNodes) < NodeQuorum ->
@@ -250,7 +263,7 @@ create_coverage_plan(AllPrefLists, UpNodes, _NodeCount, NVal, _NodeQuorum, Offse
     %% PrefListPositions is dictionary where the keys are
     %% VNodes and the values are either the atom all or
     %% a list of integers representing positions in the
-    %% preference list.    
+    %% preference list.
     {NodeIndexes, PrefListPositions} = assemble_coverage_structures(MinimalPrefLists, NVal),
     case coverage_plan_valid(NodeIndexes, UpNodes) of
         true ->
@@ -261,10 +274,10 @@ create_coverage_plan(AllPrefLists, UpNodes, _NodeCount, NVal, _NodeQuorum, Offse
             {NodeIndexes, PrefListPositions}
     end.
 
-get_minimal_preflists(PrefLists, N) ->    
+get_minimal_preflists(PrefLists, N) ->
     PrefListsCount = length(PrefLists),
     %% Get the count of VNodes remaining after
-    %% dividing by N. This will be used in 
+    %% dividing by N. This will be used in
     %% calculating the set of keys to retain
     %% from the final VNode we request keys from.
     RemainderVNodeCount = PrefListsCount rem N,
@@ -299,7 +312,7 @@ left_rotate([Head | Rest], Rotations) ->
 
 assemble_coverage_structures([HeadPrefList | RestPrefLists]=PrefLists, N) ->
     %% Get the count of VNodes remaining after
-    %% dividing by N. This will be used in 
+    %% dividing by N. This will be used in
     %% calculating the set of keys to retain
     %% from the final VNode we request keys from.
     RemainderVNodeCount = length(PrefLists) rem N,
@@ -335,7 +348,7 @@ coverage_plan_valid(NodeIndexes, UpNodes) ->
             true;
         _ ->
             false
-    end.   
+    end.
 
 %% @private
 group_indexes_by_node([], NodeIndexes) ->
