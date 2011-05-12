@@ -89,11 +89,14 @@ prop() ->
                 Start = Initial#state{clients = Clients},
                 case exec(Start) of
                     {ok, Final} ->
-                        %% io:format("Params:\n~p\nClients:\n~p\nHistory:\n~p\n",
-                        %%           [Params,
-                        %%            Clients,
-                        %%            Final#state.history]),
-                        check_final(Final);
+                        ?WHENFAIL(
+                           begin
+                               io:format("Params:\n~p\nClients:\n~p\nHistory:\n~p\n",
+                                         [Params,
+                                          Clients,
+                                          Final#state.history])
+                           end,
+                           check_final(Final));
                     {What, Reason, Next, FailS} ->
                         io:format(user, "FAILED: ~p: ~p\nNext: ~p\nStart:\n~p\n"
                                   "FailS:\n~p\n",
@@ -108,7 +111,38 @@ check_final(#state{history = H}) ->
     %% For each put move the must value(s) at get time to may and add the new must.
     Results = [R || R = {result, _, _, _} <- H],
     io:format(user, "Results:\n~p\n", [Results]),
-    true.
+    check_final(Results, [], [], []).
+
+%% Todo, stop overloading Result
+
+check_final([{result, _, #req{op = {get, _PL}}, Result}], Must, May, _ClientView) ->
+    case Result of
+        {error, notfound} ->
+            equals(Must, []);
+        {ok, Obj} ->
+            Values = riak_object:get_values(Obj),
+            conjunction([{must, equals(Must -- Values, [])},
+                         {must_may, equals(Values -- (Must ++ May), [])}])
+    end;
+check_final([{result, Cid, #req{op = {get, _PL}}, _Result} | Results],
+            Must, May, ClientViews) ->
+    %% TODO: Check if _Result matches expected values
+    UpdClientViews = lists:keystore(Cid, 1, ClientViews, {Cid, Must, May}),
+    check_final(Results, Must, May, UpdClientViews);
+check_final([{result, Cid, #req{rid = ReqId, op = {put, _PL}}, Result} | Results],
+            Must, May, ClientViews) ->
+    {Cid, MustAtGet, MayAtGet} = lists:keyfind(Cid, 1, ClientViews),
+    {UpdMust, UpdMay} = case Result of
+                            ok ->
+                                V = <<ReqId:32>>,
+                                {[V | Must] -- MustAtGet,
+                                 lists:usort(May ++ MustAtGet ++ MayAtGet)};
+                            _  ->
+                                {Must, May}
+                        end,
+    UpdClientViews = lists:keydelete(Cid, 1, ClientViews),
+    check_final(Results, UpdMust, UpdMay, UpdClientViews).
+            
 
 
 exec(S) ->
