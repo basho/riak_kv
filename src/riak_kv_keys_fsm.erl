@@ -144,7 +144,7 @@ initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, fro
     end,
     %% Determine the riak_kv nodes that are available
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    case plan_and_execute(ReqId, Input, AllPrefLists, UpNodes, NodeCount, NVal, NodeQuorum, Timeout, 0) of
+    case plan_and_execute(ReqId, Input, AllPrefLists, UpNodes, [], NodeCount, NVal, NodeQuorum, Timeout, 0) of
         {ok, RequiredResponseCount, PrefListPositions} ->
             StateData = StateData0#state{
                           pref_list_positions=PrefListPositions,
@@ -170,8 +170,7 @@ waiting_kl({ReqId, {kl, VNode, Keys}},
     PrefListPosition = dict:fetch(VNode, PrefListPositions),
     process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, UpNodes, PrefListPosition, From),
     {next_state, waiting_kl, StateData, Timeout};
-waiting_kl({ReqId, _VNode, done}, StateData0=#state{pls=_PLS,
-                                                   from={raw, ReqId, _},
+waiting_kl({ReqId, _VNode, done}, StateData0=#state{from={raw, ReqId, _},
                                                    response_count=ResponseCount,
                                                    required_responses=RequiredResponses,
                                                    timeout=Timeout}) ->
@@ -212,7 +211,7 @@ finish(clean, StateData=#state{from={raw, ReqId, ClientPid}, client_type=ClientT
     end,
     {stop,normal,StateData}.
 
-plan_and_execute(ReqId, Input, PrefLists, UpNodes, NodeCount, NVal, NodeQuorum, Timeout, Offset) ->
+plan_and_execute(ReqId, Input, PrefLists, UpNodes, KeyListers, NodeCount, NVal, NodeQuorum, Timeout, Offset) ->
     case node_quorum_satisfied(NodeQuorum, UpNodes) of
         true ->
             %% Generate a coverage plan
@@ -224,13 +223,16 @@ plan_and_execute(ReqId, Input, PrefLists, UpNodes, NodeCount, NVal, NodeQuorum, 
                 {NodeIndexes, PrefListPositions} ->
                     %% If successful start processes and execute
                     RequiredResponseCount = dict:size(PrefListPositions),
-                    StartListerResult = start_keylisters(ReqId, Input, NodeIndexes, PrefListPositions, Timeout),
-                    case StartListerResult of
-                        ok ->
+                    {AggregateKeyListers, ErrorNodes} = start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Timeout),
+                    case ErrorNodes of
+                        [] ->
+                            %% Got a valid coverage plan so instruct the keylister
+                            %% processes to begin listing keys for their list of Vnodes.
+                            [riak_kv_keylister:list_keys(Pid) || {_, Pid} <- AggregateKeyListers],
                             {ok, RequiredResponseCount, PrefListPositions};
                         _ ->
-                            StartListerResult
-                    end                                            
+                            plan_and_execute(ReqId, Input, PrefLists, UpNodes--ErrorNodes, AggregateKeyListers, NodeCount, NVal, NodeQuorum, Timeout, Offset)
+                    end
             end;
         false ->
             {error, insufficient_nodes_available}
@@ -246,14 +248,32 @@ node_quorum_satisfied(NodeQuorum, UpNodes) ->
             true
     end.
 
-create_coverage_plan(_AllPrefLists, _UpNodes, _NodeCount, NVal, _NodeQuorum, Offset) when Offset > NVal ->
+create_coverage_plan(_PrefLists, _UpNodes, NodeCount, NVal, NodeQuorum, Offset) when Offset > NVal; NodeCount < NodeQuorum ->
     {error, cannot_achieve_coverage};
-create_coverage_plan(AllPrefLists, UpNodes, _NodeCount, NVal, _NodeQuorum, Offset) ->
+create_coverage_plan(PrefLists, UpNodes, NodeCount, NVal, _NodeQuorum, Offset) ->
     %% Rotate the list of preference lists
-    RotatedPrefLists = left_rotate(AllPrefLists, Offset),
+    io:format("Using rotation offset: ~p~n", [Offset]),
+    RotatedPrefLists = left_rotate(PrefLists, Offset),
+    UpNodeCount = length(UpNodes),
+    %% Determine the preference list positions to use
+    %% when filtering key listing responses from VNodes.
+    case (UpNodeCount < NodeCount) andalso (UpNodeCount > NVal) of
+        true ->
+            %% Try to use a subset of preference list positions
+            %% to create a minimal list of preference lists.
+            DefaultPositions = lists:seq(1, NVal - (NodeCount - UpNodeCount));
+        false ->
+            DefaultPositions = all
+    end,
     %% Determine the minimal list of preference lists
     %% required for full coverage.
-    MinimalPrefLists = get_minimal_preflists(RotatedPrefLists, NVal),
+    case (UpNodeCount < NodeCount) andalso (NVal > UpNodeCount) of
+        true ->
+            MinimalPrefLists = get_minimal_preflists(RotatedPrefLists, UpNodeCount);
+        false ->
+            MinimalPrefLists = get_minimal_preflists(RotatedPrefLists, NVal)
+    end,
+
     %% Assemble the data structures required for
     %% executing the coverage operation.
     %%
@@ -264,15 +284,16 @@ create_coverage_plan(AllPrefLists, UpNodes, _NodeCount, NVal, _NodeQuorum, Offse
     %% VNodes and the values are either the atom all or
     %% a list of integers representing positions in the
     %% preference list.
-    {NodeIndexes, PrefListPositions} = assemble_coverage_structures(MinimalPrefLists, NVal),
+    {NodeIndexes, PrefListPositions} = assemble_coverage_structures(MinimalPrefLists, NVal, DefaultPositions),
     case coverage_plan_valid(NodeIndexes, UpNodes) of
         true ->
             {NodeIndexes, PrefListPositions};
         false ->
-            %% TODO: Recurse and try another plan
-            %% create_coverage_plan(AllPrefLists, UpNodes, NodeCount, NVal, NodeQuorum, Offset+1),
-            {NodeIndexes, PrefListPositions}
+            %% The current plan will not work so try
+            %% to create another one.
+            create_coverage_plan(PrefLists, UpNodes, NodeCount, NVal, _NodeQuorum, Offset+1)
     end.
+
 
 get_minimal_preflists(PrefLists, N) ->
     PrefListsCount = length(PrefLists),
@@ -310,7 +331,7 @@ left_rotate([Head | Rest], Rotations) ->
     RotatedList = lists:reverse([Head | lists:reverse(Rest)]),
     left_rotate(RotatedList, Rotations-1).
 
-assemble_coverage_structures([HeadPrefList | RestPrefLists]=PrefLists, N) ->
+assemble_coverage_structures([HeadPrefList | RestPrefLists]=PrefLists, N, DefaultPositions) ->
     %% Get the count of VNodes remaining after
     %% dividing by N. This will be used in
     %% calculating the set of keys to retain
@@ -318,12 +339,12 @@ assemble_coverage_structures([HeadPrefList | RestPrefLists]=PrefLists, N) ->
     RemainderVNodeCount = length(PrefLists) rem N,
     case RemainderVNodeCount of
         0 ->
-            assemble_coverage_structures(PrefLists, [], dict:new());
+            assemble_coverage_structures(PrefLists, [], dict:new(), DefaultPositions);
         _ ->
-            assemble_coverage_structures([{RemainderVNodeCount, N, HeadPrefList} | RestPrefLists], [], dict:new())
+            assemble_coverage_structures([{RemainderVNodeCount, N, HeadPrefList} | RestPrefLists], [], dict:new(), DefaultPositions)
     end.
 
-assemble_coverage_structures([], VNodes, PrefListPositions) ->
+assemble_coverage_structures([], VNodes, PrefListPositions, _) ->
     %% Create a proplist where the keys are nodes and
     %% the values are lists of VNode indexes. This is
     %% used to determine which nodes to start keylister
@@ -331,15 +352,15 @@ assemble_coverage_structures([], VNodes, PrefListPositions) ->
     %% communication required to complete the key listing.
     NodeIndexes = group_indexes_by_node(VNodes, []),
     {NodeIndexes, PrefListPositions};
-assemble_coverage_structures([{RemainderVNodeCount, NVal, [{Index, Node} | _RestPrefList]} | RestPrefLists], VNodes, PrefListPositions) ->
+assemble_coverage_structures([{RemainderVNodeCount, NVal, [{Index, Node} | _RestPrefList]} | RestPrefLists], VNodes, PrefListPositions, _DefaultPositions) ->
     VNodes1 = [{Index, Node} | VNodes],
     PositionList = lists:reverse(lists:seq(NVal, NVal-RemainderVNodeCount+1, -1)),
     PrefListPositions1 = dict:store({Index, Node}, PositionList, PrefListPositions),
-    assemble_coverage_structures(RestPrefLists, VNodes1, PrefListPositions1);
-assemble_coverage_structures([[{Index, Node} | _RestPrefList] | RestPrefLists], VNodes, PrefListPositions) ->
+    assemble_coverage_structures(RestPrefLists, VNodes1, PrefListPositions1, _DefaultPositions);
+assemble_coverage_structures([[{Index, Node} | _RestPrefList] | RestPrefLists], VNodes, PrefListPositions, DefaultPositions) ->
     VNodes1 = [{Index, Node} | VNodes],
-    PrefListPositions1 = dict:store({Index, Node}, all, PrefListPositions),
-    assemble_coverage_structures(RestPrefLists, VNodes1, PrefListPositions1).
+    PrefListPositions1 = dict:store({Index, Node}, DefaultPositions, PrefListPositions),
+    assemble_coverage_structures(RestPrefLists, VNodes1, PrefListPositions1, DefaultPositions).
 
 coverage_plan_valid(NodeIndexes, UpNodes) ->
     PotentialNodes = proplists:get_keys(NodeIndexes),
@@ -369,56 +390,36 @@ group_indexes_by_node([{Index, Node} | OtherVNodes], NodeIndexes) ->
     group_indexes_by_node(OtherVNodes, NodeIndexes1).
 
 %% @private
-start_keylisters(ReqId, Input, NodeIndexes, _PrefListPositions, Timeout) ->
+start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Timeout) ->
     %% Fold over the node indexes list to start
     %% keylister processes on each node and accumulate
     %% the successes and errors.
     StartListerFunc = fun({Node, Indexes}, {Successes, Errors}) ->
-                              try
-                                  case start_keylister(ReqId, Input, Node, Indexes, Timeout) of
-                                      {error, Error} ->
-                                          error_logger:warning_msg("Unable to start a keylister process on ~p. Reason: ~p~n", [Node, Error]),
-                                          {Successes, [Node | Errors]};
-                                      {ok, Pid} ->
-                                          riak_kv_keylister:list_keys(Pid),
-                                          {[{Node, Pid} | Successes], Errors}
-                                  end
-                              catch
-                                  _:ThrowReason ->
-                                      error_logger:warning_msg("Unable to start a keylister process on ~p. Reason: ~p~n", [Node, ThrowReason]),
-                                      {Successes, [Node | Errors]}
+                              VNodes = [{Index, Node} || Index <- Indexes],
+                              case proplists:get_value(Node, Successes) of
+                                  undefined ->
+                                      try
+                                          io:format("Starting keylister on ~p~n", [Node]),
+                                          timer:sleep(6000),
+                                          case riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Input, VNodes, Timeout]) of
+                                              {error, Error} ->
+                                                  error_logger:warning_msg("Unable to start a keylister process on ~p. Reason: ~p~n", [Node, Error]),
+                                                  {Successes, [Node | Errors]};
+                                              {ok, Pid} ->
+                                                  {[{Node, Pid} | Successes], Errors}
+                                          end
+                                      catch
+                                          _:ThrowReason ->
+                                              error_logger:warning_msg("Unable to start a keylister process on ~p. Reason: ~p~n", [Node, ThrowReason]),
+                                              {Successes, [Node | Errors]}
+                                      end;
+                                  KeyListerPid ->
+                                      %% A keylister process is already running on the node
+                                      %% so just update the VNodes it should list keys for.
+                                      riak_kv_keylister:update_vnodes(KeyListerPid, VNodes)
                               end
                       end,
-    {_KeyListerNodes, ErrorNodes} = lists:foldl(StartListerFunc, {[], []}, NodeIndexes),
-    case ErrorNodes of
-        [] ->
-            %% All keylister processes started successfully
-            ok;
-        _ ->
-            %% One or more keylister processes failed to start.
-            %% Update the NodexIndexes list for the nodes that
-            %% had errors and send the key listing request to
-            %% the next entry in the preference list or return
-            %% an error if all preference list entries have
-            %% been exhausted.
-
-            %% Retry the key listing on a different VNode from
-            %% the preference list for each VNode on each node
-            %% that had an error.
-            %% ErrorHandlingResult = handle_keylister_errors(ErrorNodes, ReqId, Input, NodeIndexes, PrefListPositions, PrefListRemainders, Timeout),
-            %% case ErrorHandlingResult of
-            %%     {error, _} ->
-            %%         ErrorHandlingResult;
-            %%     {ok, PrefListPositions1, PrefListRemainders1} ->
-            %%         {ok, PrefListPositions1, PrefListRemainders1}
-            %% end
-            fuck
-    end.
-
-%% @private
-start_keylister(ReqId, Input, Node, Indexes, Timeout) ->
-    VNodes = [{Index, Node} || Index <- Indexes],
-    riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Input, VNodes, Timeout]).
+    lists:foldl(StartListerFunc, {KeyListers, []}, NodeIndexes).
 
 %% @private
 process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, UpNodes, PrefListPosition, From) ->
