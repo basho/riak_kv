@@ -28,18 +28,22 @@
 -include_lib("eunit/include/eunit.hrl").
 %-endif.
 
--export([start_link/6, delete/6]).
+-export([start_link/6, start_link/7, delete/7]).
 
 start_link(ReqId, Bucket, Key, RW, Timeout, Client) ->
     {ok, proc_lib:spawn_link(?MODULE, delete, [ReqId, Bucket, Key,
-                                               RW, Timeout, Client])}.
+                                               RW, Timeout, Client, undefined])}.
+
+start_link(ReqId, Bucket, Key, RW, Timeout, Client, ClientId) ->
+    {ok, proc_lib:spawn_link(?MODULE, delete, [ReqId, Bucket, Key,
+                                               RW, Timeout, Client, ClientId])}.
 
 %% @spec delete(ReqId :: binary(), riak_object:bucket(), riak_object:key(),
 %%             RW :: integer(), TimeoutMillisecs :: integer(), Client :: pid())
 %%           -> term()
 %% @doc Delete the object at Bucket/Key.  Direct return value is uninteresting,
 %%      see riak_client:delete/3 for expected gen_server replies to Client.
-delete(ReqId,Bucket,Key,RW0,Timeout,Client) ->           
+delete(ReqId,Bucket,Key,RW0,Timeout,Client, ClientId) ->
     RealStartTime = riak_core_util:moment(),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
@@ -48,7 +52,7 @@ delete(ReqId,Bucket,Key,RW0,Timeout,Client) ->
         error ->
             Client ! {ReqId, {error, {rw_val_violation, RW0}}};
         RW ->
-            {ok,C} = riak:local_client(),
+            {ok,C} = riak:local_client(ClientId),
             case C:get(Bucket,Key,RW,Timeout) of
                 {ok, OrigObj} ->
                     RemainingTime = Timeout - (riak_core_util:moment() - RealStartTime),
@@ -58,23 +62,17 @@ delete(ReqId,Bucket,Key,RW0,Timeout,Client) ->
                     Reply = C:put(NewObj, RW, RW, RemainingTime),
                     Client ! {ReqId, Reply},
                     case Reply of
-                        ok -> reap(Bucket,Key,RemainingTime);
+                        ok ->
+                            {ok, C2} = riak:local_client(),
+                            C2:get(Bucket, Key, N, RemainingTime);
                         _ -> nop
                     end;
                 {error, notfound} ->
                     Client ! {ReqId, {error, notfound}};
                 X ->
                     Client ! {ReqId, X}
-            end                     
+            end
     end.
-
-reap(Bucket, Key, Timeout) ->
-    {ok,C} = riak:local_client(),
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
-    N = proplists:get_value(n_val,BucketProps),
-    C:get(Bucket,Key,N,Timeout).
-
 
 %% ===================================================================
 %% EUnit tests
