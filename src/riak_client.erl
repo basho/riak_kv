@@ -379,7 +379,8 @@ delete(Bucket,Key,RW) -> delete(Bucket,Key,RW,?DEFAULT_TIMEOUT).
 delete(Bucket,Key,RW,Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, RW, Timeout, Me]),
+    riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, RW, Timeout,
+                                           Me, ClientId]),
     wait_for_reqid(ReqId, Timeout).
 
 %% @spec list_keys(riak_object:bucket()) ->
