@@ -223,6 +223,7 @@ get(Bucket, Key) ->
 %% @spec get(riak_object:bucket(), riak_object:key(), options()) ->
 %%       {ok, riak_object:riak_object()} |
 %%       {error, notfound} |
+%%       {error, {deleted, vclock()}} |
 %%       {error, timeout} |
 %%       {error, {n_val_violation, N::integer()}} |
 %%       {error, {r_val_unsatisfied, R::integer(), Replies::integer()}} |
