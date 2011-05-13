@@ -16,8 +16,8 @@ check() ->
 -define(B, <<"b">>).
 -define(K, <<"k">>).
 
-%-define(FINALDBG(Fmt,Args), io:format(Fmt, Args)).
--define(FINALDBG(_Fmt,_Args), ok).
+-define(FINALDBG(Fmt,Args), io:format("XXX" ++ Fmt, Args)).
+%-define(FINALDBG(_Fmt,_Args), ok).
 
 %% Client requests must be processed in sequence.
 %% Client also gets to have it's own state.
@@ -66,13 +66,17 @@ nni() ->
 gen_pris() ->
     non_empty(resize(40, list(nni()))).
 
+gen_pl_seed() -> %% Seed for preference lists
+    non_empty(list(int())).
+    
 gen_params() ->
     #params{n = choose(0, 10),
             r = choose(1, 5),
             w = choose(1, 5)}.
             
 gen_req() ->
-    elements([get, update]).
+    elements([{get, gen_pl_seed()},
+              {update, gen_pl_seed(), gen_pl_seed()}]).
 
 gen_client_seeds() ->
     non_empty(list(#client{reqs = non_empty(list(gen_req()))})).
@@ -127,11 +131,12 @@ check_final([{result, _, #req{op = {get, _PL}}, Result}], Must, _May, _ClientVie
                  {ok, Obj} ->
                      riak_object:get_values(Obj)
              end,
-    ?FINALDBG("Final GOT VALUES: ~p Must: ~p May: ~p\n", [Values, Must, May]),
-    %% ?WHENFAIL(io:format(user, "Must: ~p\nMay: ~p\nValues: ~p\n", [Must, May, Values]),
-    %%           conjunction([{must_leftover, equals(Must -- Values, [])},
-    %%                        {must_may_leftover, equals(Values -- (Must ++ May), [])}]))
-    equals(Must -- Values, []);
+    ?FINALDBG("Final GOT VALUES: ~p Must: ~p May: ~p\n", [Values, Must, _May]),
+    ?WHENFAIL(io:format(user, "Must: ~p\nMay: ~p\nValues: ~p\n", [Must, _May, Values]),
+              equals(Must -- Values, []));
+              %% conjunction([{must_leftover, equals(Must -- Values, [])},
+              %%              {must_may_leftover, equals(Values -- (Must ++ May), [])}]))
+
 check_final([{result, Cid, #req{op = {get, _PL}}, Result} | Results],
             Must, May, ClientViews) ->
     %% TODO: Check if _Result matches expected values
@@ -306,6 +311,14 @@ make_reqs([ReqSeed | ReqSeeds], Params, Acc) ->
     Reqs = make_req(ReqSeed, Params),
     make_reqs(ReqSeeds, Params, lists:reverse(Reqs) ++ Acc).
 
+make_pl(N, M, PLSeed) ->
+    make_pl(N, M, PLSeed, []).
+
+make_pl(0, _M, _PLSeed, PL) ->
+    PL;
+make_pl(Idx, M, [PLSeedH|PLSeedT], PL) ->
+    Node = (abs(Idx - 1 + PLSeedH) rem M) + 1, % Node between 1 and M
+    make_pl(Idx - 1, M, PLSeedT ++ [PLSeedH], [{kv_vnode, Idx, Node} | PL]).
 
 %% Move the client on to the next request, setting priority if present
 next_req(#client{reqs = [_|Reqs]} = C) ->
@@ -363,13 +376,13 @@ make_range(Seed, Min, Max) ->
 
 
 %% Create a request for a client
-make_req(get, #params{n = N}) ->
-    [new_req({get, [{kv_vnode, I, I} || I <- lists:seq(1, N)]})];
-make_req(update, #params{n = N}) ->
+make_req({get, PLSeed}, #params{n = N, m = M}) ->
+    [new_req({get, make_pl(N, M, PLSeed)})];
+make_req({update, PLSeed1, PLSeed2}, #params{n = N, m = M}) ->
     %% For an update, issue a get then a put.
     %% TODO: Find a way to make the update priority different from the get
-    [new_req({get, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}),
-     new_req({put, [{kv_vnode, I, I} || I <- lists:seq(1, N)]})];
+    [new_req({get, make_pl(N, M, PLSeed1)}),
+     new_req({put, make_pl(N, M, PLSeed2)})];
 make_req(handoff_fallbacks, _Params) ->
     [new_req(handoff_fallbacks)].
 
