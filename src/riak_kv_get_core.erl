@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_get_core).
--export([init/5, add_result/3, enough/1, response/1, 
+-export([init/6, add_result/3, enough/1, response/1,
          has_all_results/1, final_action/1, info/1]).
 -export_type([getcore/0, result/0, reply/0, final_action/0]).
 
@@ -40,6 +40,7 @@
                   fail_threshold :: pos_integer(),
                   notfound_ok :: boolean(),
                   allow_mult :: boolean(),
+                  deletedvclock :: boolean(),
                   results = [] :: [idxresult()],
                   merged :: {notfound | tombstone | ok,
                              riak_object:riak_object() | undefined},
@@ -53,14 +54,15 @@
 %% ====================================================================
 
 %% Initialize a get and return an opaque get core context
--spec init(pos_integer(), pos_integer(), pos_integer(), boolean(), boolean()) ->
-                  getcore().
-init(N, R, FailThreshold, NotFoundOk, AllowMult) ->
+-spec init(pos_integer(), pos_integer(), pos_integer(), boolean(), boolean(),
+           boolean()) -> getcore().
+init(N, R, FailThreshold, NotFoundOk, AllowMult, DeletedVClock) ->
     #getcore{n = N,
              r = R,
              fail_threshold = FailThreshold,
              notfound_ok = NotFoundOk,
-             allow_mult = AllowMult}.
+             allow_mult = AllowMult,
+             deletedvclock = DeletedVClock}.
 
 %% Add a result for a vnode index
 -spec add_result(non_neg_integer(), result(), getcore()) -> getcore().
@@ -102,13 +104,16 @@ enough(#getcore{r = R, num_ok = NumOk,
 %% Get success/fail response once enough results received
 -spec response(getcore()) -> {reply(), getcore()}.
 response(GetCore = #getcore{r = R, num_ok = NumOk, num_notfound = NumNotFound,
-                            results = Results, allow_mult = AllowMult}) ->
-    {ObjState, _MObj} = Merged = merge(Results, AllowMult),
+                            results = Results, allow_mult = AllowMult,
+                            deletedvclock = DeletedVClock}) ->
+    {ObjState, MObj} = Merged = merge(Results, AllowMult),
     Reply = case NumOk >= R of
                 true ->
                     case ObjState of
                         ok ->
                             Merged; % {ok, MObj}
+                        tombstone when DeletedVClock ->
+                            {error, {deleted, riak_object:vclock(MObj)}};
                         _ -> % tombstone or notfound
                             {error, notfound}
                     end;

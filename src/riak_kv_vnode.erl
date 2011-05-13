@@ -185,15 +185,23 @@ handle_command(?KV_LISTKEYS_REQ{bucket=Bucket, req_id=ReqId, caller=Caller}, _Se
                State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
     do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState),
     {noreply, State};
-
 handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender,
                State=#state{mod=Mod, modstate=ModState,
                             idx=Idx}) ->
-    riak_kv_mapred_cache:eject(BKey),
-    case Mod:delete(ModState, BKey) of
-        ok ->
-            {reply, {del, Idx, ReqId}, State};
-        {error, _Reason} ->
+    case do_get_term(BKey, Mod, ModState) of
+        {ok, Obj} ->
+            case riak_kv_util:obj_not_deleted(Obj) of
+                undefined ->
+                    %% object is a tombstone or all siblings are tombstones
+                    riak_kv_mapred_cache:eject(BKey),
+                    Res = do_delete(BKey, Mod, ModState),
+                    {reply, {Res, Idx, ReqId}, State};
+                _ ->
+                    %% not a tombstone or not all siblings are tombstones
+                    {reply, {fail, Idx, ReqId}, State}
+            end;
+        _ ->
+            %% does not exist in the backend
             {reply, {fail, Idx, ReqId}, State}
     end;
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
@@ -476,6 +484,15 @@ do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
             Caller ! {ReqId, {kl, Idx, Remainder}}
     end,
     Caller ! {ReqId, Idx, done}.
+
+%% @private
+do_delete(BKey, Mod, ModState) ->
+    case Mod:delete(ModState, BKey) of
+        ok ->
+            del;
+        {error, _Reason} ->
+            fail
+    end.
 
 %% @private
 process_keys(Caller, ReqId, Idx, '_', {Bucket, _K}, Acc) ->
