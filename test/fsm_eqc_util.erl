@@ -113,9 +113,10 @@ partvals() ->
 %% Generate 5 riak objects with the same bkey
 %% 
 riak_objects() ->
-    ?LET({{Bucket,Key},AncestorVclock,Tombstones}, 
+    ?LET({{Bucket,Key},AncestorVclock0,Tombstones}, 
          {noshrink(bkey()),vclock(),vector(5, maybe_tombstone())},
     begin
+        AncestorVclock = vclock:increment(<<"dad">>, AncestorVclock0),
         BrotherVclock  = vclock:increment(<<"bro!">>, AncestorVclock),
         OtherBroVclock = vclock:increment(<<"bro2">>, AncestorVclock),
         SisterVclock   = vclock:increment(<<"sis!">>, AncestorVclock),
