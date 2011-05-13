@@ -92,7 +92,7 @@ prop() ->
                         ?WHENFAIL(
                            begin
                                io:format("Params:\n~p\nClients:\n~p\nFinal:\n~p\nHistory:\n~p\n",
-                                         [Params,
+                                         [ann_params(Params),
                                           Clients,
                                           Final,
                                           Final#state.history])
@@ -118,16 +118,17 @@ check_final(#state{history = H}) ->
 %% Todo, stop overloading Result
 
 check_final([{result, _, #req{op = {get, _PL}}, Result}], Must, May, _ClientView) ->
-    case Result of
-        {error, notfound} ->
-            equals(Must, []);
-        {ok, Obj} ->
-            Values = riak_object:get_values(Obj),
-            %% ?WHENFAIL(io:format(user, "Must: ~p\nMay: ~p\nValues: ~p\n", [Must, May, Values]),
-            %%           conjunction([{must_leftover, equals(Must -- Values, [])},
-            %%                        {must_may_leftover, equals(Values -- (Must ++ May), [])}]))
-            equals(Must -- Values, [])
-    end;
+    Values = case Result of
+                 {error, notfound} ->
+                     [];
+                 {ok, Obj} ->
+                     riak_object:get_values(Obj)
+             end,
+    io:format("XXX Final GOT VALUES: ~p Must: ~p May: ~p\n", [Values, Must, May]),
+    %% ?WHENFAIL(io:format(user, "Must: ~p\nMay: ~p\nValues: ~p\n", [Must, May, Values]),
+    %%           conjunction([{must_leftover, equals(Must -- Values, [])},
+    %%                        {must_may_leftover, equals(Values -- (Must ++ May), [])}]))
+    equals(Must -- Values, []);
 check_final([{result, Cid, #req{op = {get, _PL}}, Result} | Results],
             Must, May, ClientViews) ->
     %% TODO: Check if _Result matches expected values
@@ -137,14 +138,13 @@ check_final([{result, Cid, #req{op = {get, _PL}}, Result} | Results],
                       {error, _} ->
                           []
                   end,
-    %% io:format("XXX Cid ~p GOT VALUES: ~p\n", [Cid, ValuesAtGet]),
+    io:format("XXX Cid ~p GOT VALUES: ~p\n", [Cid, ValuesAtGet]),
     UpdClientViews = lists:keystore(Cid, 1, ClientViews, {Cid, ValuesAtGet}),
     check_final(Results, Must, May, UpdClientViews);
 check_final([{result, Cid, #req{rid = ReqId, op = {put, _PL}}, Result} | Results],
             Must, May, ClientViews) ->
     V = <<ReqId:32>>,
     {Cid, ValuesAtGet} = lists:keyfind(Cid, 1, ClientViews),
-    %% io:format("XXX Cid ~p PUT ~p OVER VALUES: ~p\n", [Cid, V, ValuesAtGet]),
     ValNotInMay = not lists:member(V, May),
     {UpdMust, UpdMay} = case Result of
                             ok when ValNotInMay ->
@@ -153,8 +153,12 @@ check_final([{result, Cid, #req{rid = ReqId, op = {put, _PL}}, Result} | Results
                                 {[V | lists:usort(Must -- ValuesAtGet)],
                                  lists:usort(May ++ ValuesAtGet)};
                             _  ->
-                                {Must, May}
+                                %% This value has already been overwritten
+                                %% so the values that it overwrote should also be removed 
+                                %% from must.
+                                {Must -- ValuesAtGet, May}
                         end,
+    io:format("XXX Cid ~p PUT ~p OVER VALUES: ~p  MUST: ~p MAY: ~p\n", [Cid, V, ValuesAtGet, UpdMust, UpdMay]),
     UpdClientViews = lists:keydelete(Cid, 1, ClientViews),
     check_final(Results, UpdMust, UpdMay, UpdClientViews).
             
@@ -330,6 +334,13 @@ ann_state(R) ->
     Elements = tuple_to_list(R),
     Type = hd(Elements),
     Fields = record_info(fields, state),
+    {Type, lists:zip(Fields, tl(Elements))}.
+
+%% Annotate a parameters record - returns a proplist by fieldname
+ann_params(Params) ->
+    Elements = tuple_to_list(Params),
+    Type = hd(Elements),
+    Fields = record_info(fields, params),
     {Type, lists:zip(Fields, tl(Elements))}.
     
 
