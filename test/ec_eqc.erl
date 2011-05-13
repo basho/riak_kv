@@ -91,9 +91,10 @@ prop() ->
                     {ok, Final} ->
                         ?WHENFAIL(
                            begin
-                               io:format("Params:\n~p\nClients:\n~p\nHistory:\n~p\n",
+                               io:format("Params:\n~p\nClients:\n~p\nFinal:\n~p\nHistory:\n~p\n",
                                          [Params,
                                           Clients,
+                                          Final,
                                           Final#state.history])
                            end,
                            check_final(Final));
@@ -110,8 +111,9 @@ check_final(#state{history = H}) ->
     %% For each get track the must value(s)
     %% For each put move the must value(s) at get time to may and add the new must.
     Results = [R || R = {result, _, _, _} <- H],
-    io:format(user, "Results:\n~p\n", [Results]),
-    check_final(Results, [], [], []).
+    
+    ?WHENFAIL(io:format(user, "Results:\n~p\n", [Results]),
+              check_final(Results, [], [], [])).
 
 %% Todo, stop overloading Result
 
@@ -121,22 +123,35 @@ check_final([{result, _, #req{op = {get, _PL}}, Result}], Must, May, _ClientView
             equals(Must, []);
         {ok, Obj} ->
             Values = riak_object:get_values(Obj),
-            conjunction([{must, equals(Must -- Values, [])},
-                         {must_may, equals(Values -- (Must ++ May), [])}])
+            %% ?WHENFAIL(io:format(user, "Must: ~p\nMay: ~p\nValues: ~p\n", [Must, May, Values]),
+            %%           conjunction([{must_leftover, equals(Must -- Values, [])},
+            %%                        {must_may_leftover, equals(Values -- (Must ++ May), [])}]))
+            equals(Must -- Values, [])
     end;
-check_final([{result, Cid, #req{op = {get, _PL}}, _Result} | Results],
+check_final([{result, Cid, #req{op = {get, _PL}}, Result} | Results],
             Must, May, ClientViews) ->
     %% TODO: Check if _Result matches expected values
-    UpdClientViews = lists:keystore(Cid, 1, ClientViews, {Cid, Must, May}),
+    ValuesAtGet = case Result of
+                      {ok, Obj} ->
+                          riak_object:get_values(Obj);
+                      {error, _} ->
+                          []
+                  end,
+    %% io:format("XXX Cid ~p GOT VALUES: ~p\n", [Cid, ValuesAtGet]),
+    UpdClientViews = lists:keystore(Cid, 1, ClientViews, {Cid, ValuesAtGet}),
     check_final(Results, Must, May, UpdClientViews);
 check_final([{result, Cid, #req{rid = ReqId, op = {put, _PL}}, Result} | Results],
             Must, May, ClientViews) ->
-    {Cid, MustAtGet, MayAtGet} = lists:keyfind(Cid, 1, ClientViews),
+    V = <<ReqId:32>>,
+    {Cid, ValuesAtGet} = lists:keyfind(Cid, 1, ClientViews),
+    %% io:format("XXX Cid ~p PUT ~p OVER VALUES: ~p\n", [Cid, V, ValuesAtGet]),
+    ValNotInMay = not lists:member(V, May),
     {UpdMust, UpdMay} = case Result of
-                            ok ->
-                                V = <<ReqId:32>>,
-                                {[V | Must] -- MustAtGet,
-                                 lists:usort(May ++ MustAtGet ++ MayAtGet)};
+                            ok when ValNotInMay ->
+                                %% This put could have already been overwritten
+                                %% Only add to must if not in may
+                                {[V | lists:usort(Must -- ValuesAtGet)],
+                                 lists:usort(May ++ ValuesAtGet)};
                             _  ->
                                 {Must, May}
                         end,
