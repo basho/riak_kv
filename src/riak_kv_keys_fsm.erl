@@ -61,7 +61,9 @@
 -include_lib("riak_kv_vnode.hrl").
 
 -type req_id() :: non_neg_integer().
--type input() :: riak_object:bucket() | {riak_object:bucket(), riak_object:key()}.
+-type input() :: riak_object:bucket() |
+                 {riak_object:bucket(), fun()} |
+                 {filter, riak_object:bucket(), [mfa()]}.
 -type from() :: {raw, req_id(), pid()}.
 
 -record(state, {bucket :: riak_object:bucket(),
@@ -112,13 +114,13 @@ start_link(From, Bucket, Timeout, ClientType) ->
 %% bucket_props - bucket properties
 %% preflist2 - [{{Idx,Node},primary|fallback}] preference list
 %%
-test_link(ReqId,Bucket,_Key,R,Timeout,From,StateProps) ->
-    test_link({raw, ReqId, From}, Bucket, [{r, R}, {timeout, Timeout}], StateProps).
+test_link(ReqId, Input, _Key, R, Timeout, From, StateProps) ->
+    test_link({raw, ReqId, From}, Input, [{r, R}, {timeout, Timeout}], StateProps).
 
-test_link(From, Bucket, _Options, StateProps) ->
+test_link(From, Input, _Options, StateProps) ->
     Timeout = 60000,
     ClientType = plain,
-    gen_fsm:start_link(?MODULE, {test, [From, Bucket, Timeout, ClientType], StateProps}, []).
+    gen_fsm:start_link(?MODULE, {test, [From, Input, Timeout, ClientType], StateProps}, []).
 
 -endif.
 
@@ -130,13 +132,14 @@ test_link(From, Bucket, _Options, StateProps) ->
 init([From={raw, _, ClientPid}, Input, Timeout, ClientType]) ->
     process_flag(trap_exit, true),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    Bucket = case Input of
-                 {B, _} ->
-                     B;
-                 _ ->
-                     Input
-             end,
-    io:format("Bucket: ~p~n", [Bucket]),
+    case Input of
+        {filter, B, _} ->
+            Bucket = B;
+        {B, _} ->
+            Bucket = B;
+        _ ->
+            Bucket = Input
+    end,
     StateData = #state{client_type=ClientType, timeout=Timeout,
                        from=From, input=Input, bucket=Bucket, ring=Ring},
     case ClientType of
@@ -171,6 +174,7 @@ initialize(timeout, StateData0=#state{bucket=Bucket,
                                       ring=Ring,
                                       timeout=Timeout}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
+    io:format("Bucket: ~p~n", [Bucket]),
     NVal = proplists:get_value(n_val, BucketProps),
     AllPrefLists = riak_core_ring:all_preflists(Ring, NVal),
     %% Determine the number of physical nodes
@@ -466,7 +470,7 @@ group_indexes_by_node([{Index, Node} | OtherVNodes], NodeIndexes) ->
     group_indexes_by_node(OtherVNodes, NodeIndexes1).
 
 %% @private
-start_keylisters(ReqId, Bucket, KeyListers, NodeIndexes, Timeout) ->
+start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Timeout) ->
     %% Fold over the node indexes list to start
     %% keylister processes on each node and accumulate
     %% the successes and errors.
@@ -475,7 +479,7 @@ start_keylisters(ReqId, Bucket, KeyListers, NodeIndexes, Timeout) ->
                               case proplists:get_value(Node, Successes) of
                                   undefined ->
                                       try
-                                          case riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Bucket, VNodes, Timeout]) of
+                                          case riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Input, VNodes, Timeout]) of
                                               {error, Error} ->
                                                   error_logger:warning_msg("Unable to start a keylister process on ~p. Reason: ~p~n", [Node, Error]),
                                                   {Successes, [Node | Errors]};
