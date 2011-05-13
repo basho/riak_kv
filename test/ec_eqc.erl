@@ -106,9 +106,10 @@ prop() ->
                            end,
                            check_final(Final));
                     {What, Reason, Next, FailS} ->
-                        io:format(user, "FAILED: ~p: ~p\nNext: ~p\nStart:\n~p\n"
+                        io:format(user, "FAILED: ~p: ~p\nParams:\n~p\nNext: ~p\nStart:\n~p\n"
                                   "FailS:\n~p\n",
-                                  [What, Reason, Next, ann_state(Start), ann_state(FailS)]),
+                                  [What, Reason, ann_params(Params), Next,
+                                   ann_state(Start), ann_state(FailS)]),
                         false
                 end
             end).
@@ -124,20 +125,22 @@ check_final(#state{history = H}) ->
 
 %% Todo, stop overloading Result
 
-check_final([{result, _, #req{op = {get, _PL}}, Result}], Must, _May, _ClientView) ->
+check_final([{result, _, #req{op = {get, PL}}, Result}], Must, _May, _ClientView) ->
     Values = case Result of
                  {error, notfound} ->
                      [];
                  {ok, Obj} ->
                      riak_object:get_values(Obj)
              end,
-    ?FINALDBG("Final GOT VALUES: ~p Must: ~p May: ~p\n", [Values, Must, _May]),
+    Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
+    ?FINALDBG("Final GOT VALUES: ~p Must: ~p May: ~p Fallbacks: ~p\n",
+              [Values, Must, _May, Fallbacks]),
     ?WHENFAIL(io:format(user, "Must: ~p\nMay: ~p\nValues: ~p\n", [Must, _May, Values]),
               equals(Must -- Values, []));
               %% conjunction([{must_leftover, equals(Must -- Values, [])},
               %%              {must_may_leftover, equals(Values -- (Must ++ May), [])}]))
 
-check_final([{result, Cid, #req{op = {get, _PL}}, Result} | Results],
+check_final([{result, Cid, #req{op = {get, PL}}, Result} | Results],
             Must, May, ClientViews) ->
     %% TODO: Check if _Result matches expected values
     ValuesAtGet = case Result of
@@ -146,12 +149,13 @@ check_final([{result, Cid, #req{op = {get, _PL}}, Result} | Results],
                       {error, _} ->
                           []
                   end,
-    ?FINALDBG("Cid ~p GOT VALUES: ~p\n", [Cid, ValuesAtGet]),
+    Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
+    ?FINALDBG("Cid ~p GOT VALUES: ~p FALLBACKS: ~p\n",
+              [Cid, ValuesAtGet, Fallbacks]),
     UpdClientViews = lists:keystore(Cid, 1, ClientViews, {Cid, ValuesAtGet}),
     check_final(Results, Must, May, UpdClientViews);
-check_final([{result, Cid, #req{rid = ReqId, op = {put, _PL}}, Result} | Results],
+check_final([{result, Cid, #req{rid = _ReqId, op = {put, PL, V}}, Result} | Results],
             Must, May, ClientViews) ->
-    V = <<ReqId:32>>,
     {Cid, ValuesAtGet} = lists:keyfind(Cid, 1, ClientViews),
     ValNotInMay = not lists:member(V, May),
     UpdMust = case Result of
@@ -166,8 +170,9 @@ check_final([{result, Cid, #req{rid = ReqId, op = {put, _PL}}, Result} | Results
                       Must -- ValuesAtGet
               end,
     UpdMay = lists:usort(May ++ ValuesAtGet),
-    ?FINALDBG("Cid ~p PUT ~p OVER VALUES: ~p  MUST: ~p MAY: ~p\n",
-             [Cid, V, ValuesAtGet, UpdMust, UpdMay]),
+    Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
+    ?FINALDBG("Cid ~p PUT ~p OVER ~p MUST: ~p MAY: ~p FALLBACKS: ~p\n",
+             [Cid, V, ValuesAtGet, UpdMust, UpdMay, Fallbacks]),
     UpdClientViews = lists:keydelete(Cid, 1, ClientViews),
     check_final(Results, UpdMust, UpdMay, UpdClientViews);
 check_final([_ | Results], Must, May, ClientViews) ->
@@ -281,7 +286,14 @@ make_params(#params{n = NSeed, r = R, w = W} = P) ->
     %% Ensure R >= N, W >= N and R+W>N
     MinN = lists:max([R, W]),
     N = make_range(R + W - NSeed, MinN, R+W-1),
-    P#params{n = N, m = N, dw = W}. 
+    %% Force N to be odd while testing
+    {N1,R1} = case N rem 2 == 0 of
+                true ->
+                    {N + 1, R + 1};
+                false ->
+                    {N, R}
+        end,
+    P#params{n = N1, r = R1, m = N1, dw = W}. 
 
 make_vnodes(#params{n = N, m = M}) ->
     [#proc{name={kv_vnode, I, J}, handler=kv_vnode, procst=undefined} || I <- lists:seq(1, N),
@@ -298,18 +310,18 @@ make_clients([], _Cid, #params{n = N}, Acc) ->
                                            GetReq#req{pri = 1000002}]},
     lists:reverse([LastC | Acc]);
 make_clients([#client{reqs = ReqSeeds} = CS | CSs], Cid, Params, Acc) ->
-    Reqs = make_reqs(ReqSeeds, Params),
+    Reqs = make_reqs(ReqSeeds, Cid, Params),
     C = CS#client{cid = Cid, reqs = Reqs},
     make_clients(CSs, Cid + 1, Params, [C | Acc]).
     
-make_reqs(ReqSeeds, Params) ->
-    make_reqs(ReqSeeds, Params, []).
+make_reqs(ReqSeeds, Cid, Params) ->
+    make_reqs(ReqSeeds, Cid, Params, 1, []).
 
-make_reqs([], _Params, Acc) ->
+make_reqs([], _Cid, _Params, _CReqNum, Acc) ->
     lists:reverse(Acc);
-make_reqs([ReqSeed | ReqSeeds], Params, Acc) ->
-    Reqs = make_req(ReqSeed, Params),
-    make_reqs(ReqSeeds, Params, lists:reverse(Reqs) ++ Acc).
+make_reqs([ReqSeed | ReqSeeds], Cid, Params, CReqNum, Acc) ->
+    Reqs = make_req(ReqSeed, Cid, Params, CReqNum),
+    make_reqs(ReqSeeds, Cid, Params, CReqNum + 1, lists:reverse(Reqs) ++ Acc).
 
 %% Full EC test make_pl - create a pref list that shrinks to primaries as
 %% seed shrinks to [0]
@@ -394,14 +406,15 @@ make_range(Seed, Min, Max) ->
 
 
 %% Create a request for a client
-make_req({get, PLSeed}, #params{n = N, m = M}) ->
+make_req({get, PLSeed}, _Cid, #params{n = N, m = M}, _CReqNum) ->
     [new_req({get, make_pl(N, M, PLSeed)})];
-make_req({update, PLSeed1, PLSeed2}, #params{n = N, m = M}) ->
+make_req({update, PLSeed1, PLSeed2}, Cid, #params{n = N, m = M}, CReqNum) ->
     %% For an update, issue a get then a put.
     %% TODO: Find a way to make the update priority different from the get
+    Value = iolist_to_binary(io_lib:format("C~p-U~p", [Cid, CReqNum])),
     [new_req({get, make_pl(N, M, PLSeed1)}),
-     new_req({put, make_pl(N, M, PLSeed2)})];
-make_req(handoff_fallbacks, _Params) ->
+     new_req({put, make_pl(N, M, PLSeed2), Value})];
+make_req(handoff_fallbacks, _Cid, _Params, _CReqNum) ->
     [new_req(handoff_fallbacks)].
 
 new_req(Op) ->
@@ -442,12 +455,11 @@ client_req(#client{reqs = [#req{op = {get, PL}, rid = ReqId} | _]}, Params) ->
     NewMsgs = [new_msg({req, ReqId}, Proc#proc.name, {get, PL})],
     [{procs, NewProcs},
      {msgs, NewMsgs}];
-client_req(#client{reqs = [#req{op = {put, PL}, rid = ReqId} | _],
+client_req(#client{reqs = [#req{op = {put, PL, UpdV}, rid = ReqId} | _],
                    cid = Cid,  clntst = {#req{op={get, _PL}}, GetResult}},
            Params) ->
     Proc = put_fsm_proc(ReqId, Params),
     NewProcs = [Proc],
-    UpdV = <<ReqId:32>>,
     UpdObj = case GetResult of
                  {error, notfound} ->
                      riak_object:new(?B, ?K, UpdV);
