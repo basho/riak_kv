@@ -2,7 +2,7 @@
 %%
 %% riak_keys_fsm: listing of bucket keys
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -20,48 +20,86 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc listing of bucket keys
+%% @doc The keys fsm manages the listing of bucket keys.
+%%
+%%      The keys fsm creates a plan to achieve coverage
+%%      of all keys from the cluster using the minimum
+%%      possible number of VNodes, sends key listing
+%%      commands to each of those VNodes, and compiles the
+%%      responses.
+%%
+%%      The number of VNodes required for full
+%%      coverage is based on the number
+%%      of partitions, the number of available physical
+%%      nodes, and the bucket n_val.
 
 -module(riak_kv_keys_fsm).
+
 -behaviour(gen_fsm).
--include_lib("riak_kv_vnode.hrl").
+
+%% API
+-export([start_link/4,
+         start_link/5,
+         start_link/6]).
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+%% Test API
 -export([test_link/7, test_link/4]).
 -endif.
--export([start_link/6]).
--export([init/1, handle_event/3, handle_sync_event/4,
-         handle_info/3, terminate/3, code_change/4]).
--export([initialize/2,waiting_kl/2]).
+
+%% gen_fsm callbacks
+-export([init/1,
+         initialize/2,
+         waiting_kl/2,
+         handle_event/3,
+         handle_sync_event/4,
+         handle_info/3,
+         terminate/3,
+         code_change/4]).
+
+-include_lib("riak_kv_vnode.hrl").
 
 -type req_id() :: non_neg_integer().
+-type input() :: riak_object:bucket() | {riak_object:bucket(), riak_object:key()}.
+-type from() :: {raw, req_id(), pid()}.
 
--record(state, {from :: {raw, req_id(), pid()},
+-record(state, {bucket :: riak_object:bucket(),
                 client_type :: atom(),
-                pls :: [list()],
-                bucket :: riak_object:bucket(),
-                input,
-                timeout :: pos_integer(),
-                ring :: riak_core_ring:riak_core_ring(),
-                node_indexes :: [{atom(), list()}],
+                from :: from(),
+                input :: input(),
+                n_val :: pos_integer(),
                 pref_list_positions :: dict(),
                 pref_list_remainders :: dict(),
-                upnodes :: [node()],
-                response_count=0 :: non_neg_integer(),
                 required_responses :: pos_integer(),
-                n_val :: pos_integer()
+                response_count=0 :: non_neg_integer(),
+                ring :: riak_core_ring:riak_core_ring(),
+                timeout :: timeout(),
+                upnodes :: [node()]
                }).
 
 %% ===================================================================
 %% Public API
 %% ===================================================================
 
-start_link(ReqId,Bucket,Timeout,ClientType,ErrorTolerance,From) ->
-    start_link({raw, ReqId, From}, Bucket, Timeout, ClientType, ErrorTolerance).
+%% @doc Start a riak_kv_keys_fsm.
+%% @deprecated Only in place for backwards compatibility.
+%% Please use start_link/5.
+start_link(ReqId, Input, Timeout, ClientType, _ErrorTolerance, From) ->
+    start_link({raw, ReqId, From}, Input, Timeout, ClientType).
 
-start_link(From,Bucket,Timeout,ClientType,ErrorTolerance) ->
+%% @doc Start a riak_kv_keys_fsm.
+-spec start_link(req_id(), input(), timeout(), atom(), from()) ->
+                        {ok, pid()} | ignore | {error, term()}.
+start_link(ReqId, Input, Timeout, ClientType, From) ->
+    start_link({raw, ReqId, From}, Input, Timeout, ClientType).
+
+%% @doc Start a riak_kv_keys_fsm.
+-spec start_link(from(), input(), timeout(), atom()) ->
+                        {ok, pid()} | ignore | {error, term()}.
+start_link(From, Bucket, Timeout, ClientType) ->
     gen_fsm:start_link(?MODULE,
-                  [From,Bucket,Timeout,ClientType,ErrorTolerance], []).
+                  [From, Bucket, Timeout, ClientType], []).
 
 %% ===================================================================
 %% Test API
@@ -78,10 +116,9 @@ test_link(ReqId,Bucket,_Key,R,Timeout,From,StateProps) ->
     test_link({raw, ReqId, From}, Bucket, [{r, R}, {timeout, Timeout}], StateProps).
 
 test_link(From, Bucket, _Options, StateProps) ->
-    ErrorTolerance = 0.00003,
     Timeout = 60000,
     ClientType = plain,
-    gen_fsm:start_link(?MODULE, {test, [From, Bucket, Timeout, ClientType, ErrorTolerance], StateProps}, []).
+    gen_fsm:start_link(?MODULE, {test, [From, Bucket, Timeout, ClientType], StateProps}, []).
 
 -endif.
 
@@ -90,7 +127,7 @@ test_link(From, Bucket, _Options, StateProps) ->
 %% ====================================================================
 
 %% @private
-init([From={raw, _, ClientPid}, Input, Timeout, ClientType, _ErrorTolerance]) ->
+init([From={raw, _, ClientPid}, Input, Timeout, ClientType]) ->
     process_flag(trap_exit, true),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Bucket = case Input of
@@ -99,6 +136,7 @@ init([From={raw, _, ClientPid}, Input, Timeout, ClientType, _ErrorTolerance]) ->
                  _ ->
                      Input
              end,
+    io:format("Bucket: ~p~n", [Bucket]),
     StateData = #state{client_type=ClientType, timeout=Timeout,
                        from=From, input=Input, bucket=Bucket, ring=Ring},
     case ClientType of
@@ -126,9 +164,12 @@ init({test, Args, StateProps}) ->
     %% state of the rest of the system
     {ok, waiting_kl, TestStateData, 0}.
 
-
 %% @private
-initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, from={_, ReqId, _}, timeout=Timeout}) ->
+initialize(timeout, StateData0=#state{bucket=Bucket,
+                                      from={_, ReqId, _},
+                                      input=Input,
+                                      ring=Ring,
+                                      timeout=Timeout}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     NVal = proplists:get_value(n_val, BucketProps),
     AllPrefLists = riak_core_ring:all_preflists(Ring, NVal),
@@ -146,34 +187,34 @@ initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, fro
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     case plan_and_execute(ReqId, Input, AllPrefLists, UpNodes, [], NodeCount, NVal, NodeQuorum, Timeout, 0) of
         {ok, RequiredResponseCount, PrefListPositions} ->
-            StateData = StateData0#state{
-                          pref_list_positions=PrefListPositions,
-                          upnodes=UpNodes,
-                          required_responses=RequiredResponseCount,
-                          n_val=NVal},
+            StateData = StateData0#state{n_val=NVal,
+                                         pref_list_positions=PrefListPositions,
+                                         required_responses=RequiredResponseCount,
+                                         upnodes=UpNodes},
             {next_state, waiting_kl, StateData, Timeout};
         {error, Reason} ->
             finish({error, Reason}, StateData0)
     end.
 
+%% @private
 waiting_kl({ReqId, {kl, VNode, Keys}},
-           StateData=#state{from=From={raw, ReqId, _},
-                            timeout=Timeout,
-                            upnodes=UpNodes,
-                            pref_list_positions=PrefListPositions,
+           StateData=#state{bucket=Bucket,
+                            client_type=ClientType,
+                            from=From={raw, ReqId, _},
                             n_val=NVal,
+                            pref_list_positions=PrefListPositions,
                             ring=Ring,
-                            bucket=Bucket,
-                            client_type=ClientType}) ->
+                            timeout=Timeout,
+                            upnodes=UpNodes}) ->
     %% Look up the position in the preference list of the VNode
     %% that the keys are expected to be reported from.
     PrefListPosition = dict:fetch(VNode, PrefListPositions),
     process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, UpNodes, PrefListPosition, From),
     {next_state, waiting_kl, StateData, Timeout};
 waiting_kl({ReqId, _VNode, done}, StateData0=#state{from={raw, ReqId, _},
-                                                   response_count=ResponseCount,
-                                                   required_responses=RequiredResponses,
-                                                   timeout=Timeout}) ->
+                                                    required_responses=RequiredResponses,
+                                                    response_count=ResponseCount,
+                                                    timeout=Timeout}) ->
     ResponseCount1 = ResponseCount + 1,
     StateData = StateData0#state{response_count=ResponseCount1},
     case ResponseCount1 >= RequiredResponses of
@@ -183,11 +224,38 @@ waiting_kl({ReqId, _VNode, done}, StateData0=#state{from={raw, ReqId, _},
 waiting_kl(timeout, StateData) ->
     finish({error, timeout}, StateData).
 
+%% @private
+handle_event(_Event, _StateName, StateData) ->
+    {stop,badmsg,StateData}.
+
+%% @private
+handle_sync_event(_Event, _From, _StateName, StateData) ->
+    {stop,badmsg,StateData}.
+
+%% @private
+handle_info({'EXIT', Pid, Reason}, _StateName, #state{from={raw,_,Pid}}=StateData) ->
+    {stop,Reason,StateData};
+handle_info({_ReqId, {ok, _Pid}}, StateName, StateData=#state{timeout=Timeout}) ->
+    %% Received a message from a key lister node that
+    %% did not start up within the timeout. Just ignore
+    %% the message and move on.
+    {next_state, StateName, StateData, Timeout};
+handle_info(_Info, _StateName, StateData) ->
+    {stop,badmsg,StateData}.
+
+%% @private
+terminate(Reason, _StateName, _State) ->
+    Reason.
+
+%% @private
+code_change(_OldVsn, StateName, State, _Extra) ->
+    {ok, StateName, State}.
 
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
 
+%% @private
 finish({error, Error}, StateData=#state{from={raw, ReqId, ClientPid}, client_type=ClientType}) ->
     case ClientType of
         mapred ->
@@ -211,11 +279,14 @@ finish(clean, StateData=#state{from={raw, ReqId, ClientPid}, client_type=ClientT
     end,
     {stop,normal,StateData}.
 
-plan_and_execute(ReqId, Input, PrefLists, UpNodes, KeyListers, NodeCount, NVal, NodeQuorum, Timeout, Offset) ->
+%% @private
+plan_and_execute(ReqId, Input, PrefLists, UpNodes, KeyListers,
+                 NodeCount, NVal, NodeQuorum, Timeout, Offset) ->
     case node_quorum_satisfied(NodeQuorum, UpNodes) of
         true ->
             %% Generate a coverage plan
-            CoveragePlanResult = create_coverage_plan(PrefLists, UpNodes, NodeCount, NVal, NodeQuorum, Offset),
+            CoveragePlanResult =
+                create_coverage_plan(PrefLists, UpNodes, NodeCount, NVal, NodeQuorum, Offset),
             case CoveragePlanResult of
                 {error, _} ->
                     %% Failed to create a coverage plan so return the error
@@ -223,7 +294,8 @@ plan_and_execute(ReqId, Input, PrefLists, UpNodes, KeyListers, NodeCount, NVal, 
                 {NodeIndexes, PrefListPositions} ->
                     %% If successful start processes and execute
                     RequiredResponseCount = dict:size(PrefListPositions),
-                    {AggregateKeyListers, ErrorNodes} = start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Timeout),
+                    {AggregateKeyListers, ErrorNodes} =
+                        start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Timeout),
                     case ErrorNodes of
                         [] ->
                             %% Got a valid coverage plan so instruct the keylister
@@ -231,13 +303,16 @@ plan_and_execute(ReqId, Input, PrefLists, UpNodes, KeyListers, NodeCount, NVal, 
                             [riak_kv_keylister:list_keys(Pid) || {_, Pid} <- AggregateKeyListers],
                             {ok, RequiredResponseCount, PrefListPositions};
                         _ ->
-                            plan_and_execute(ReqId, Input, PrefLists, UpNodes--ErrorNodes, AggregateKeyListers, NodeCount, NVal, NodeQuorum, Timeout, Offset)
+                            plan_and_execute(ReqId, Input, PrefLists, UpNodes--ErrorNodes,
+                                             AggregateKeyListers, NodeCount, NVal, NodeQuorum,
+                                             Timeout, Offset)
                     end
             end;
         false ->
             {error, insufficient_nodes_available}
     end.
 
+%% @private
 node_quorum_satisfied(NodeQuorum, UpNodes) ->
     if
         UpNodes == [] ->
@@ -248,11 +323,11 @@ node_quorum_satisfied(NodeQuorum, UpNodes) ->
             true
     end.
 
+%% @private
 create_coverage_plan(_PrefLists, _UpNodes, NodeCount, NVal, NodeQuorum, Offset) when Offset > NVal; NodeCount < NodeQuorum ->
     {error, cannot_achieve_coverage};
 create_coverage_plan(PrefLists, UpNodes, NodeCount, NVal, _NodeQuorum, Offset) ->
     %% Rotate the list of preference lists
-    io:format("Using rotation offset: ~p~n", [Offset]),
     RotatedPrefLists = left_rotate(PrefLists, Offset),
     UpNodeCount = length(UpNodes),
     %% Determine the preference list positions to use
@@ -276,14 +351,6 @@ create_coverage_plan(PrefLists, UpNodes, NodeCount, NVal, _NodeQuorum, Offset) -
 
     %% Assemble the data structures required for
     %% executing the coverage operation.
-    %%
-    %% NodeIndexes is a dictionary where the keys are
-    %% nodes and the values are lists of VNode indexes.
-    %%
-    %% PrefListPositions is dictionary where the keys are
-    %% VNodes and the values are either the atom all or
-    %% a list of integers representing positions in the
-    %% preference list.
     {NodeIndexes, PrefListPositions} = assemble_coverage_structures(MinimalPrefLists, NVal, DefaultPositions),
     case coverage_plan_valid(NodeIndexes, UpNodes) of
         true ->
@@ -294,7 +361,7 @@ create_coverage_plan(PrefLists, UpNodes, NodeCount, NVal, _NodeQuorum, Offset) -
             create_coverage_plan(PrefLists, UpNodes, NodeCount, NVal, _NodeQuorum, Offset+1)
     end.
 
-
+%% @private
 get_minimal_preflists(PrefLists, N) ->
     PrefListsCount = length(PrefLists),
     %% Get the count of VNodes remaining after
@@ -305,7 +372,7 @@ get_minimal_preflists(PrefLists, N) ->
     %% Minimize the number of VNodes that we
     %% need to request keys from by selecting every Nth
     %% preference list. If the the number of partitions
-    %% is not evenly divisible by the bucket n-val then
+    %% is not evenly divisible by N then
     %% a final preference list is selected to ensure complete
     %% coverage of all keys. In this case the keys from
     %% a VNode in this final preference list are filtered
@@ -325,12 +392,14 @@ get_minimal_preflists(PrefLists, N) ->
     {_, MinimalPrefLists} = lists:unzip(lists:reverse(IndexVNodeTuples)),
     MinimalPrefLists.
 
+%% @private
 left_rotate(List, 0) ->
     List;
 left_rotate([Head | Rest], Rotations) ->
     RotatedList = lists:reverse([Head | lists:reverse(Rest)]),
     left_rotate(RotatedList, Rotations-1).
 
+%% @private
 assemble_coverage_structures([HeadPrefList | RestPrefLists]=PrefLists, N, DefaultPositions) ->
     %% Get the count of VNodes remaining after
     %% dividing by N. This will be used in
@@ -344,12 +413,18 @@ assemble_coverage_structures([HeadPrefList | RestPrefLists]=PrefLists, N, Defaul
             assemble_coverage_structures([{RemainderVNodeCount, N, HeadPrefList} | RestPrefLists], [], dict:new(), DefaultPositions)
     end.
 
+%% @private
 assemble_coverage_structures([], VNodes, PrefListPositions, _) ->
-    %% Create a proplist where the keys are nodes and
-    %% the values are lists of VNode indexes. This is
-    %% used to determine which nodes to start keylister
+    %% NodeIndexes is a dictionary where the keys are
+    %% nodes and the values are lists of VNode indexes.
+    %% This is used to determine which nodes to start keylister
     %% processes on and to help minimize the inter-node
     %% communication required to complete the key listing.
+    %%
+    %% PrefListPositions is dictionary where the keys are
+    %% VNodes and the values are either the atom all or
+    %% a list of integers representing positions in the
+    %% preference list.
     NodeIndexes = group_indexes_by_node(VNodes, []),
     {NodeIndexes, PrefListPositions};
 assemble_coverage_structures([{RemainderVNodeCount, NVal, [{Index, Node} | _RestPrefList]} | RestPrefLists], VNodes, PrefListPositions, _DefaultPositions) ->
@@ -362,6 +437,7 @@ assemble_coverage_structures([[{Index, Node} | _RestPrefList] | RestPrefLists], 
     PrefListPositions1 = dict:store({Index, Node}, DefaultPositions, PrefListPositions),
     assemble_coverage_structures(RestPrefLists, VNodes1, PrefListPositions1, DefaultPositions).
 
+%% @private
 coverage_plan_valid(NodeIndexes, UpNodes) ->
     PotentialNodes = proplists:get_keys(NodeIndexes),
     case PotentialNodes -- UpNodes of
@@ -390,7 +466,7 @@ group_indexes_by_node([{Index, Node} | OtherVNodes], NodeIndexes) ->
     group_indexes_by_node(OtherVNodes, NodeIndexes1).
 
 %% @private
-start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Timeout) ->
+start_keylisters(ReqId, Bucket, KeyListers, NodeIndexes, Timeout) ->
     %% Fold over the node indexes list to start
     %% keylister processes on each node and accumulate
     %% the successes and errors.
@@ -399,9 +475,7 @@ start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Timeout) ->
                               case proplists:get_value(Node, Successes) of
                                   undefined ->
                                       try
-                                          io:format("Starting keylister on ~p~n", [Node]),
-                                          timer:sleep(6000),
-                                          case riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Input, VNodes, Timeout]) of
+                                          case riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Bucket, VNodes, Timeout]) of
                                               {error, Error} ->
                                                   error_logger:warning_msg("Unable to start a keylister process on ~p. Reason: ~p~n", [Node, Error]),
                                                   {Successes, [Node | Errors]};
@@ -461,30 +535,3 @@ check_pref_list_positions([Position | RestPositions], VNode, PrefList) ->
         _ ->
             check_pref_list_positions(RestPositions, VNode, PrefList)
     end.
-
-%% @private
-handle_event(_Event, _StateName, StateData) ->
-    {stop,badmsg,StateData}.
-
-%% @private
-handle_sync_event(_Event, _From, _StateName, StateData) ->
-    {stop,badmsg,StateData}.
-
-%% @private
-handle_info({'EXIT', Pid, Reason}, _StateName, #state{from={raw,_,Pid}}=StateData) ->
-    {stop,Reason,StateData};
-handle_info({_ReqId, {ok, _Pid}}, StateName, StateData=#state{timeout=Timeout}) ->
-    %% Received a message from a key lister node that
-    %% did not start up within the timeout. Just ignore
-    %% the message and move on.
-    {next_state, StateName, StateData, Timeout};
-handle_info(_Info, _StateName, StateData) ->
-    {stop,badmsg,StateData}.
-
-%% @private
-terminate(Reason, _StateName, _State) ->
-    Reason.
-
-%% @private
-code_change(_OldVsn, StateName, State, _Extra) ->
-    {ok, StateName, State}.
