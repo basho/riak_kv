@@ -16,6 +16,9 @@ check() ->
 -define(B, <<"b">>).
 -define(K, <<"k">>).
 
+%-define(FINALDBG(Fmt,Args), io:format(Fmt, Args)).
+-define(FINALDBG(_Fmt,_Args), ok).
+
 %% Client requests must be processed in sequence.
 %% Client also gets to have it's own state.
 
@@ -42,8 +45,7 @@ check() ->
           to,      %% Receipient
           c}).     %% Contents
 
--record(params, {q,
-                 n,
+-record(params, {n,
                  r,
                  w,
                  dw}).
@@ -124,7 +126,7 @@ check_final([{result, _, #req{op = {get, _PL}}, Result}], Must, May, _ClientView
                  {ok, Obj} ->
                      riak_object:get_values(Obj)
              end,
-    io:format("XXX Final GOT VALUES: ~p Must: ~p May: ~p\n", [Values, Must, May]),
+    ?FINALDBG("Final GOT VALUES: ~p Must: ~p May: ~p\n", [Values, Must, May]),
     %% ?WHENFAIL(io:format(user, "Must: ~p\nMay: ~p\nValues: ~p\n", [Must, May, Values]),
     %%           conjunction([{must_leftover, equals(Must -- Values, [])},
     %%                        {must_may_leftover, equals(Values -- (Must ++ May), [])}]))
@@ -138,7 +140,7 @@ check_final([{result, Cid, #req{op = {get, _PL}}, Result} | Results],
                       {error, _} ->
                           []
                   end,
-    io:format("XXX Cid ~p GOT VALUES: ~p\n", [Cid, ValuesAtGet]),
+    ?FINALDBG("Cid ~p GOT VALUES: ~p\n", [Cid, ValuesAtGet]),
     UpdClientViews = lists:keystore(Cid, 1, ClientViews, {Cid, ValuesAtGet}),
     check_final(Results, Must, May, UpdClientViews);
 check_final([{result, Cid, #req{rid = ReqId, op = {put, _PL}}, Result} | Results],
@@ -146,19 +148,20 @@ check_final([{result, Cid, #req{rid = ReqId, op = {put, _PL}}, Result} | Results
     V = <<ReqId:32>>,
     {Cid, ValuesAtGet} = lists:keyfind(Cid, 1, ClientViews),
     ValNotInMay = not lists:member(V, May),
-    {UpdMust, UpdMay} = case Result of
-                            ok when ValNotInMay ->
-                                %% This put could have already been overwritten
-                                %% Only add to must if not in may
-                                {[V | lists:usort(Must -- ValuesAtGet)],
-                                 lists:usort(May ++ ValuesAtGet)};
-                            _  ->
-                                %% This value has already been overwritten
+    UpdMust = case Result of
+                  ok when ValNotInMay ->
+                      %% This put could have already been overwritten
+                      %% Only add to must if not in may
+                      [V | lists:usort(Must -- ValuesAtGet)];
+                  _  ->
+                      %% This value has already been overwritten
                                 %% so the values that it overwrote should also be removed 
-                                %% from must.
-                                {Must -- ValuesAtGet, May}
-                        end,
-    io:format("XXX Cid ~p PUT ~p OVER VALUES: ~p  MUST: ~p MAY: ~p\n", [Cid, V, ValuesAtGet, UpdMust, UpdMay]),
+                      %% from must.
+                      Must -- ValuesAtGet
+              end,
+    UpdMay = lists:usort(May ++ ValuesAtGet),
+    ?FINALDBG("Cid ~p PUT ~p OVER VALUES: ~p  MUST: ~p MAY: ~p\n",
+             [Cid, V, ValuesAtGet, UpdMust, UpdMay]),
     UpdClientViews = lists:keydelete(Cid, 1, ClientViews),
     check_final(Results, UpdMust, UpdMay, UpdClientViews).
             
