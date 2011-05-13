@@ -26,6 +26,7 @@
                 options,
                 notfound_is_ok,
                 basic_quorum,
+                deletedvclock,
                 exp_result,
                 num_oks = 0,
                 del_oks = 0,
@@ -158,6 +159,7 @@ bool_prop(Name) ->
 option() -> 
     frequency([{1, {details, details()}},
                {1, bool_prop(notfound_ok)},
+               {1, bool_prop(deletedvclock)},
                {1, bool_prop(basic_quorum)}]).
 
 options() ->
@@ -215,12 +217,13 @@ prop_basic_get() ->
                         || {Lin, Obj} <- Objects ],
         NotFoundIsOk = proplists:get_value(notfound_ok, Options, false),
         BasicQuorum = proplists:get_value(basic_quorum, Options, true),
+        DeletedVClock = proplists:get_value(deletedvclock, Options, false),
         NumPrimaries = length([xx || {_,primary} <- PL2]),
         State = expect(#state{n = N, r = R, real_r = RealR, pr = PR, real_pr = RealPR,
                               history = History,
                               objects = Objects, deleted = Deleted, options = Options,
                               notfound_is_ok = NotFoundIsOk, basic_quorum = BasicQuorum,
-                              num_primaries = NumPrimaries}),
+                              num_primaries = NumPrimaries, deletedvclock = DeletedVClock}),
         ExpResult = State#state.exp_result,
         ExpectedN = case ExpResult of
                         {error, {n_val_violation, _}} ->
@@ -434,12 +437,17 @@ expect(State = #state{n = N, real_pr = RealPR}) when RealPR > N ->
     State#state{exp_result = {error, {n_val_violation, N}}};
 expect(State = #state{real_pr = RealPR, num_primaries = NumPrimaries}) when RealPR > NumPrimaries ->
     State#state{exp_result = {error, {pr_val_unsatisfied, RealPR, NumPrimaries}}};
-expect(State = #state{history = History, objects = Objects}) ->
+expect(State = #state{history = History, objects = Objects,
+                      deletedvclock = DeletedVClock, deleted = _Deleted}) ->
     H = [ V || {_, V} <- History ],
     State1 = expect(H, State, 0, 0 , 0, 0, []),
     case State1#state.exp_result of
         {ok, Heads} ->
-            case riak_kv_util:obj_not_deleted(build_merged_object(Heads, Objects)) of
+            Object = build_merged_object(Heads, Objects),
+            case riak_kv_util:obj_not_deleted(Object) of
+                undefined when DeletedVClock ->
+                    State1#state{exp_result = {error, {deleted,
+                                 riak_object:vclock(Object)}}};
                 undefined -> State1#state{exp_result = {error, notfound}};
                 Obj       -> State1#state{exp_result = {ok, Obj}}
             end;
