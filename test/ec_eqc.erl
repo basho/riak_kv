@@ -45,7 +45,8 @@ check() ->
           to,      %% Receipient
           c}).     %% Contents
 
--record(params, {n,
+-record(params, {m, %% Number of nodes in the cluster
+                 n,
                  r,
                  w,
                  dw}).
@@ -119,7 +120,7 @@ check_final(#state{history = H}) ->
 
 %% Todo, stop overloading Result
 
-check_final([{result, _, #req{op = {get, _PL}}, Result}], Must, May, _ClientView) ->
+check_final([{result, _, #req{op = {get, _PL}}, Result}], Must, _May, _ClientView) ->
     Values = case Result of
                  {error, notfound} ->
                      [];
@@ -163,8 +164,10 @@ check_final([{result, Cid, #req{rid = ReqId, op = {put, _PL}}, Result} | Results
     ?FINALDBG("Cid ~p PUT ~p OVER VALUES: ~p  MUST: ~p MAY: ~p\n",
              [Cid, V, ValuesAtGet, UpdMust, UpdMay]),
     UpdClientViews = lists:keydelete(Cid, 1, ClientViews),
-    check_final(Results, UpdMust, UpdMay, UpdClientViews).
-            
+    check_final(Results, UpdMust, UpdMay, UpdClientViews);
+check_final([_ | Results], Must, May, ClientViews) ->
+    check_final(Results, Must, May, ClientViews).
+    
 
 
 exec(S) ->
@@ -272,18 +275,22 @@ deliver_msg(#state{msgs = [#msg{to = To} = Msg | Msgs],
 make_params(#params{n = NSeed, r = R, w = W} = P) ->
     %% Ensure R >= N, W >= N and R+W>N
     MinN = lists:max([R, W]),
-    P#params{n = make_range(R + W - NSeed, MinN, R+W-1), dw = W}. 
+    N = make_range(R + W - NSeed, MinN, R+W-1),
+    P#params{n = N, m = N, dw = W}. 
 
-make_vnodes(#params{n = N}) ->
-    [#proc{name={kv_vnode, I, I}, handler=kv_vnode, procst=undefined} || I <- lists:seq(1, N)].
+make_vnodes(#params{n = N, m = M}) ->
+    [#proc{name={kv_vnode, I, J}, handler=kv_vnode, procst=undefined} || I <- lists:seq(1, N),
+                                                                         J <- lists:seq(1, M)].
 
 make_clients(ClientSeeds, Params) ->
     make_clients(ClientSeeds, 1, Params, []).
 
 make_clients([], _Cid, #params{n = N}, Acc) ->
     %% Make sure the last request is a get.
-    Req = new_req({get, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}),
-    LastC = #client{cid = 1000001, reqs = [Req#req{pri = 1000002}]},
+    HandoffReq = new_req(handoff_fallbacks),
+    GetReq = new_req({get, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}),
+    LastC = #client{cid = 1000000, reqs = [HandoffReq#req{pri = 1000001},
+                                           GetReq#req{pri = 1000002}]},
     lists:reverse([LastC | Acc]);
 make_clients([#client{reqs = ReqSeeds} = CS | CSs], Cid, Params, Acc) ->
     Reqs = make_reqs(ReqSeeds, Params),
@@ -362,7 +369,9 @@ make_req(update, #params{n = N}) ->
     %% For an update, issue a get then a put.
     %% TODO: Find a way to make the update priority different from the get
     [new_req({get, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}),
-     new_req({put, [{kv_vnode, I, I} || I <- lists:seq(1, N)]})].
+     new_req({put, [{kv_vnode, I, I} || I <- lists:seq(1, N)]})];
+make_req(handoff_fallbacks, _Params) ->
+    [new_req(handoff_fallbacks)].
 
 new_req(Op) ->
     #req{pri = next_pri(), op = Op}.
@@ -417,7 +426,16 @@ client_req(#client{reqs = [#req{op = {put, PL}, rid = ReqId} | _],
     UpdObj2 = riak_object:increment_vclock(UpdObj, <<Cid:32>>),
     NewMsgs = [new_msg({req, ReqId}, Proc#proc.name, {put, PL, UpdObj2})],
     [{procs, NewProcs},
-     {msgs, NewMsgs}].
+     {msgs, NewMsgs}];
+client_req(#client{reqs = [#req{op = handoff_fallbacks, rid = ReqId} | _]},
+           #params{n = N, m = M}) ->
+    %% Send handoff_to messages to each fallback vnode
+    HandoffMsgs = [new_msg(undefined, {kv_vnode, I, J}, {handoff_to, {kv_vnode, I, I}}) || 
+                      I <- lists:seq(1, N),
+                      J <- lists:seq(1, M),
+                      I /= J],
+    ResponseMsg = new_msg(undefined, {req, ReqId}, handoffs_scheduled),
+    [{msgs, HandoffMsgs ++ [ResponseMsg]}].
 
 end_req(#msg{c = Result},
         #client{cid = Cid, reqs = [Req |_Reqs]} = C) ->
@@ -511,18 +529,41 @@ kv_vnode(#msg{from = From, c = {get, ReqId}},
     [{msgs, [new_msg(Name, From, {r, Result, Idx, ReqId})]}];
 kv_vnode(#msg{from = From, c = {put, NewObj, ReqId, Ts}},
          #proc{name = {kv_vnode, Idx, _Node} = Name, procst = CurObj} = P) ->
-    UpdObj = case CurObj of
-                 undefined ->
-                     NewObj;
-                 _ ->
-                     ResObj = riak_object:syntactic_merge(CurObj, NewObj, ReqId, Ts),
-                     case riak_object:vclock(ResObj) =:= riak_object:vclock(CurObj) of
-                         true -> CurObj; %% {oldobj, ResObj};
-                         false -> ResObj %% {newobj, ResObj}
-                     end
-             end,
+    UpdObj = syntactic_put_merge(CurObj, NewObj, ReqId, Ts),
     WMsg = new_msg(Name, From, {w, Idx, ReqId}),
     DWMsg = new_msg(Name, From, {dw, Idx, ReqId}), % ignore returnbody for now
     [{msgs, [WMsg, DWMsg]},
-     {updp, P#proc{procst = UpdObj}}].
+     {updp, P#proc{procst = UpdObj}}];
+kv_vnode(#msg{from = From, c = {handoff_to, To}},
+         #proc{procst = CurObj}) ->
+    %% Send current object to node if there is one
+    %% TODO: Schedule message to make this vnode reset itself if unchanged
+    NewMsgs = case CurObj of
+                  undefined ->
+                      [];
+                  _ ->
+                      [new_msg(From, To, {handoff_obj, CurObj})]
+              end,
+    [{msgs, NewMsgs}];
+kv_vnode(#msg{c = {handoff_obj, HandoffObj}},
+         #proc{procst = CurObj} = P) ->
+    %% Simulate a do_diffobj_put
+    ReqId = erlang:phash2(erlang:now()),
+    Ts = vclock:timestamp(),
+    UpdObj = syntactic_put_merge(CurObj, HandoffObj, ReqId, Ts),
+    %% Real syntactic put merge checks allow_mult here and applies, testing with 
+    %% allow_mult is true so leave object
+    [{updp, P#proc{procst = UpdObj}}].
 
+
+syntactic_put_merge(CurObj, UpdObj, ReqId, Ts) ->
+    case CurObj of
+        undefined ->
+            UpdObj;
+        _ ->
+            ResObj = riak_object:syntactic_merge(CurObj, UpdObj, ReqId, Ts),
+            case riak_object:vclock(ResObj) =:= riak_object:vclock(CurObj) of
+                true -> CurObj; %% {oldobj, ResObj};
+                false -> ResObj %% {newobj, ResObj}
+            end
+    end.
