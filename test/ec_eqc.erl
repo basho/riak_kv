@@ -311,15 +311,33 @@ make_reqs([ReqSeed | ReqSeeds], Params, Acc) ->
     Reqs = make_req(ReqSeed, Params),
     make_reqs(ReqSeeds, Params, lists:reverse(Reqs) ++ Acc).
 
+%% Full EC test make_pl - create a pref list that shrinks to primaries as
+%% seed shrinks to [0]
+%% make_pl(N, M, PLSeed) ->
+%%     make_pl(N, M, PLSeed, []).
+
+%% make_pl(0, _M, _PLSeed, PL) ->
+%%     PL;
+%% make_pl(Idx, M, [PLSeedH|PLSeedT], PL) ->
+%%     Node = (abs(Idx - 1 + PLSeedH) rem M) + 1, % Node between 1 and M
+%%     make_pl(Idx - 1, M, PLSeedT ++ [PLSeedH], [{kv_vnode, Idx, Node} | PL]).
+
+
+%% Use PLSeed to change one entry at random when N > 1
 make_pl(N, M, PLSeed) ->
-    make_pl(N, M, PLSeed, []).
-
-make_pl(0, _M, _PLSeed, PL) ->
-    PL;
-make_pl(Idx, M, [PLSeedH|PLSeedT], PL) ->
-    Node = (abs(Idx - 1 + PLSeedH) rem M) + 1, % Node between 1 and M
-    make_pl(Idx - 1, M, PLSeedT ++ [PLSeedH], [{kv_vnode, Idx, Node} | PL]).
-
+    PerfectPL = [{kv_vnode, Idx, Idx} || Idx <- lists:seq(1, N)],
+    case hd(PLSeed) of
+        0 ->
+            PerfectPL;
+        _IdxSeed when N == 1 ->
+            PerfectPL;
+        IdxSeed ->
+            Idx = (abs(IdxSeed) rem N) + 1,
+            PLSeedH = hd(tl(PLSeed) ++ [IdxSeed]),
+            Node = (abs(Idx - 1 + PLSeedH) rem M) + 1,
+            lists:keyreplace(Idx, 2, PerfectPL, {kv_vnode, Idx, Node})
+    end.
+        
 %% Move the client on to the next request, setting priority if present
 next_req(#client{reqs = [_|Reqs]} = C) ->
     C#client{reqs = Reqs}.
