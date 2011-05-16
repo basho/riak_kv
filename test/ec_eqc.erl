@@ -2,6 +2,11 @@
 -include_lib("eqc/include/eqc.hrl").
 -compile([export_all]).
 
+%% TODO: 
+%% Change put to use per-node vclock.
+%% Convert put core to require response from the coordinating node.
+
+
 %% FSM scheduler EQC test.
 
 test() ->
@@ -158,10 +163,13 @@ check_final([{result, Cid, #req{rid = _ReqId, op = {put, PL, V}}, Result} | Resu
             Must, May, ClientViews) ->
     {Cid, ValuesAtGet} = lists:keyfind(Cid, 1, ClientViews),
     ValNotInMay = not lists:member(V, May),
+    Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
     UpdMust = case Result of
-                  ok when ValNotInMay ->
+                  ok when ValNotInMay, Fallbacks == [] ->
                       %% This put could have already been overwritten
                       %% Only add to must if not in may
+                      %% Only add if writing against primaries, otherwise all bets are off
+                      %% until vclocks are changed
                       [V | lists:usort(Must -- ValuesAtGet)];
                   _  ->
                       %% This value has already been overwritten
@@ -170,7 +178,6 @@ check_final([{result, Cid, #req{rid = _ReqId, op = {put, PL, V}}, Result} | Resu
                       Must -- ValuesAtGet
               end,
     UpdMay = lists:usort(May ++ ValuesAtGet),
-    Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
     ?FINALDBG("Cid ~p PUT ~p OVER ~p MUST: ~p MAY: ~p FALLBACKS: ~p\n",
              [Cid, V, ValuesAtGet, UpdMust, UpdMay, Fallbacks]),
     UpdClientViews = lists:keydelete(Cid, 1, ClientViews),
@@ -325,30 +332,30 @@ make_reqs([ReqSeed | ReqSeeds], Cid, Params, CReqNum, Acc) ->
 
 %% Full EC test make_pl - create a pref list that shrinks to primaries as
 %% seed shrinks to [0]
-%% make_pl(N, M, PLSeed) ->
-%%     make_pl(N, M, PLSeed, []).
-
-%% make_pl(0, _M, _PLSeed, PL) ->
-%%     PL;
-%% make_pl(Idx, M, [PLSeedH|PLSeedT], PL) ->
-%%     Node = (abs(Idx - 1 + PLSeedH) rem M) + 1, % Node between 1 and M
-%%     make_pl(Idx - 1, M, PLSeedT ++ [PLSeedH], [{kv_vnode, Idx, Node} | PL]).
-
-
-%% Use PLSeed to change one entry at random when N > 1
 make_pl(N, M, PLSeed) ->
-    PerfectPL = [{kv_vnode, Idx, Idx} || Idx <- lists:seq(1, N)],
-    case hd(PLSeed) of
-        0 ->
-            PerfectPL;
-        _IdxSeed when N == 1 ->
-            PerfectPL;
-        IdxSeed ->
-            Idx = (abs(IdxSeed) rem N) + 1,
-            PLSeedH = hd(tl(PLSeed) ++ [IdxSeed]),
-            Node = (abs(Idx - 1 + PLSeedH) rem M) + 1,
-            lists:keyreplace(Idx, 2, PerfectPL, {kv_vnode, Idx, Node})
-    end.
+    make_pl(N, M, PLSeed, []).
+
+make_pl(0, _M, _PLSeed, PL) ->
+    PL;
+make_pl(Idx, M, [PLSeedH|PLSeedT], PL) ->
+    Node = (abs(Idx - 1 + PLSeedH) rem M) + 1, % Node between 1 and M
+    make_pl(Idx - 1, M, PLSeedT ++ [PLSeedH], [{kv_vnode, Idx, Node} | PL]).
+
+
+%% %% Use PLSeed to change one entry at random when N > 1
+%% make_pl(N, M, PLSeed) ->
+%%     PerfectPL = [{kv_vnode, Idx, Idx} || Idx <- lists:seq(1, N)],
+%%     case hd(PLSeed) of
+%%         0 ->
+%%             PerfectPL;
+%%         _IdxSeed when N == 1 ->
+%%             PerfectPL;
+%%         IdxSeed ->
+%%             Idx = (abs(IdxSeed) rem N) + 1,
+%%             PLSeedH = hd(tl(PLSeed) ++ [IdxSeed]),
+%%             Node = (abs(Idx - 1 + PLSeedH) rem M) + 1,
+%%             lists:keyreplace(Idx, 2, PerfectPL, {kv_vnode, Idx, Node})
+%%     end.
         
 %% Move the client on to the next request, setting priority if present
 next_req(#client{reqs = [_|Reqs]} = C) ->
@@ -572,11 +579,16 @@ kv_vnode(#msg{from = From, c = {get, ReqId}},
     [{msgs, [new_msg(Name, From, {r, Result, Idx, ReqId})]}];
 kv_vnode(#msg{from = From, c = {put, NewObj, ReqId, Ts}},
          #proc{name = {kv_vnode, Idx, _Node} = Name, procst = CurObj} = P) ->
-    UpdObj = syntactic_put_merge(CurObj, NewObj, ReqId, Ts),
     WMsg = new_msg(Name, From, {w, Idx, ReqId}),
-    DWMsg = new_msg(Name, From, {dw, Idx, ReqId}), % ignore returnbody for now
-    [{msgs, [WMsg, DWMsg]},
-     {updp, P#proc{procst = UpdObj}}];
+    case syntactic_put_merge(CurObj, NewObj, ReqId, Ts) of
+        keep ->
+            FailMsg = new_msg(Name, From, {fail, Idx, ReqId}),
+            [{msgs, [WMsg, FailMsg]}];
+        UpdObj ->
+            DWMsg = new_msg(Name, From, {dw, Idx, ReqId}), % ignore returnbody for now
+            [{msgs, [WMsg, DWMsg]},
+             {updp, P#proc{procst = UpdObj}}]
+    end;
 kv_vnode(#msg{from = From, c = {handoff_to, To}},
          #proc{procst = CurObj}) ->
     %% Send current object to node if there is one
@@ -593,10 +605,14 @@ kv_vnode(#msg{c = {handoff_obj, HandoffObj}},
     %% Simulate a do_diffobj_put
     ReqId = erlang:phash2(erlang:now()),
     Ts = vclock:timestamp(),
-    UpdObj = syntactic_put_merge(CurObj, HandoffObj, ReqId, Ts),
-    %% Real syntactic put merge checks allow_mult here and applies, testing with 
-    %% allow_mult is true so leave object
-    [{updp, P#proc{procst = UpdObj}}].
+    case syntactic_put_merge(CurObj, HandoffObj, ReqId, Ts) of
+        keep ->
+            [];
+        UpdObj ->
+            %% Real syntactic put merge checks allow_mult here and applies, testing with 
+            %% allow_mult is true so leave object
+            [{updp, P#proc{procst = UpdObj}}]
+    end.
 
 
 syntactic_put_merge(CurObj, UpdObj, ReqId, Ts) ->
@@ -606,7 +622,7 @@ syntactic_put_merge(CurObj, UpdObj, ReqId, Ts) ->
         _ ->
             ResObj = riak_object:syntactic_merge(CurObj, UpdObj, ReqId, Ts),
             case riak_object:vclock(ResObj) =:= riak_object:vclock(CurObj) of
-                true -> CurObj; %% {oldobj, ResObj};
+                true -> keep; %% {oldobj, ResObj};
                 false -> ResObj %% {newobj, ResObj}
             end
     end.
