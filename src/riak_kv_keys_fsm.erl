@@ -174,18 +174,45 @@ initialize(timeout, StateData0=#state{bucket=Bucket,
                                       ring=Ring,
                                       timeout=Timeout}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
-    io:format("Bucket: ~p~n", [Bucket]),
     NVal = proplists:get_value(n_val, BucketProps),
-    AllPrefLists = riak_core_ring:all_preflists(Ring, NVal),
+    %% Rotate the list of preflists to the right by 1 so
+    %% that the preference list that starts with index 0
+    %% is at the head of the list.
+    AllPrefLists = right_rotate(riak_core_ring:all_preflists(Ring, NVal), 1),
     %% Determine the number of physical nodes
     NodeCount = length(riak_core_ring:all_members(Ring)),
     %% Determine the minimum number of nodes
     %% required for full coverage.
-    case NodeCount >= NVal of
+    case NVal >= NodeCount of
         true ->
             NodeQuorum = 1;
         false ->
-            NodeQuorum = NVal - (NVal - NodeCount)
+            PartitionCount = length(AllPrefLists),
+            case NodeCount rem NVal of
+                0 ->
+                    %% The period of the node sequence is
+                    %% evenly divisible by the period of the
+                    %% bucket n_val sequence so the minimum number
+                    %% of nodes is the node count divided by the
+                    %% bucket n_val.
+                    NodeQuorum = NodeCount div NVal;
+                _ ->
+                    LCM = lcm(NVal, NodeCount),
+                    case LCM =< PartitionCount of
+                        true ->
+                            %% Use the least common multipler of the
+                            %% bucket n_val and the node count to determine the
+                            %% node quorum.
+                            NodeQuorum = LCM div NVal;
+                        false ->
+                            %% The least common multiplier of the bucket n_val
+                            %% the node count is greater than the partition count
+                            %% so the node quorum is the number of partitions
+                            %% divided by the bucket n_val plus one to account
+                            %% for the remainder.
+                            NodeQuorum = (PartitionCount div NVal) + 1
+                    end
+            end
     end,
     %% Determine the riak_kv nodes that are available
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
@@ -346,13 +373,12 @@ create_coverage_plan(PrefLists, UpNodes, NodeCount, NVal, _NodeQuorum, Offset) -
     end,
     %% Determine the minimal list of preference lists
     %% required for full coverage.
-    case (UpNodeCount < NodeCount) andalso (NVal > UpNodeCount) of
+    case (UpNodeCount < NodeCount) andalso (NVal > NodeCount) of
         true ->
             MinimalPrefLists = get_minimal_preflists(RotatedPrefLists, UpNodeCount);
         false ->
             MinimalPrefLists = get_minimal_preflists(RotatedPrefLists, NVal)
     end,
-
     %% Assemble the data structures required for
     %% executing the coverage operation.
     {NodeIndexes, PrefListPositions} = assemble_coverage_structures(MinimalPrefLists, NVal, DefaultPositions),
@@ -382,7 +408,7 @@ get_minimal_preflists(PrefLists, N) ->
     %% a VNode in this final preference list are filtered
     %% to ensure that duplicates are not introduced.
     PartitionFun = fun({A, _B}) ->
-                           (A rem N == 0 andalso (PrefListsCount - A) > N)
+                           (A rem N == 0 andalso (PrefListsCount - A) >= N)
                                orelse ((PrefListsCount - A) == RemainderVNodeCount)
                    end,
     %% IndexVNodeTuples will contain a list of tuples where the
@@ -395,13 +421,6 @@ get_minimal_preflists(PrefLists, N) ->
     %% indexes from the corresponding VNode tuples.
     {_, MinimalPrefLists} = lists:unzip(lists:reverse(IndexVNodeTuples)),
     MinimalPrefLists.
-
-%% @private
-left_rotate(List, 0) ->
-    List;
-left_rotate([Head | Rest], Rotations) ->
-    RotatedList = lists:reverse([Head | lists:reverse(Rest)]),
-    left_rotate(RotatedList, Rotations-1).
 
 %% @private
 assemble_coverage_structures([HeadPrefList | RestPrefLists]=PrefLists, N, DefaultPositions) ->
@@ -494,7 +513,8 @@ start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Timeout) ->
                                   KeyListerPid ->
                                       %% A keylister process is already running on the node
                                       %% so just update the VNodes it should list keys for.
-                                      riak_kv_keylister:update_vnodes(KeyListerPid, VNodes)
+                                      riak_kv_keylister:update_vnodes(KeyListerPid, VNodes),
+                                      {Successes, Errors}
                               end
                       end,
     lists:foldl(StartListerFunc, {KeyListers, []}, NodeIndexes).
@@ -539,3 +559,31 @@ check_pref_list_positions([Position | RestPositions], VNode, PrefList) ->
         _ ->
             check_pref_list_positions(RestPositions, VNode, PrefList)
     end.
+
+%% @private
+%% @doc Rotate a list to the left.
+left_rotate(List, 0) ->
+    List;
+left_rotate([Head | Rest], Rotations) ->
+    RotatedList = lists:reverse([Head | lists:reverse(Rest)]),
+    left_rotate(RotatedList, Rotations-1).
+
+%% @private
+%% @doc Rotate a list to the right.
+right_rotate(List, 0) ->
+    List;
+right_rotate(List, Rotations) ->
+    lists:reverse(left_rotate(lists:reverse(List), Rotations)).
+
+%% @private
+%% @doc Return the greatest common
+%% denominator of two integers.
+gcd(A, 0) ->
+    A;
+gcd(A, B) -> gcd(B, A rem B).
+
+%% @private
+%% @doc Return the least common
+%% multiple of two integers.
+lcm(A, B) ->
+    (A * B) div gcd(A, B).
