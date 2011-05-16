@@ -24,7 +24,6 @@
 -export([init/2,
          process/2,
          done/1]).
--export([partfun/1]).
 
 -include("riak_kv_vnode.hrl").
 
@@ -53,12 +52,6 @@ process(Input, #state{partition=Partition, fd=FittingDetails}=State) ->
 
 done(_State) ->
     ok.
-
-partfun(Bkey) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    DocIdx = riak_core_util:chash_key(Bkey),
-    [{Partition, _}|_] = riak_core_ring:preflist(DocIdx, Ring),
-    Partition.
 
 make_req_id() ->
     erlang:phash2(erlang:now()). % stolen from riak_client

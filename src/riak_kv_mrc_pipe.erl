@@ -56,34 +56,36 @@ mr2pipe_phase({link, Bucket, Tag, Keep}, I) ->
 map2pipe(FunSpec, Arg, Keep, I) ->
     [#fitting_spec{name={kvget_map,I},
                    module=riak_kv_pipe_get,
-                   partfun=fun riak_kv_pipe_get:partfun/1},
+                   %% TODO: perform bucket prop 'chash_keyfun' lookup at
+                   %% spec-translation time, not at each input send
+                   chashfun=fun riak_core_util:chash_key/1},
      #fitting_spec{name={xform_map,I},
                    module=riak_pipe_w_xform,
                    arg=map_xform_compat(FunSpec, Arg),
-                   partfun=follow}
+                   chashfun=follow}
      |[#fitting_spec{name=I,
                      module=riak_pipe_w_tee,
                      arg=sink,
-                     partfun=follow}
+                     chashfun=follow}
        ||Keep]].
 
 reduce2pipe(FunSpec, Arg, Keep, I) ->
     [#fitting_spec{name={xform_reduce,I},
                    module=riak_pipe_w_xform,
                    arg=fun reduce_add_key_compat/3,
-                   partfun=follow},
+                   chashfun=follow},
      #fitting_spec{name={reduce,I},
                    module=riak_pipe_w_reduce,
                    arg=reduce_compat(FunSpec, Arg),
-                   partfun=fun reduce_local_partfun/1},
+                   chashfun=fun reduce_local_chashfun/1},
      #fitting_spec{name={xform_reduce,I},
                    module=riak_pipe_w_xform,
                    arg=fun reduce_remove_key_compat/3,
-                   partfun=follow}
+                   chashfun=follow}
      |[#fitting_spec{name=I,
                      module=riak_pipe_w_tee,
                      arg=sink,
-                     partfun=follow}
+                     chashfun=follow}
        ||Keep]].
 
 link2pipe(Bucket, Tag, Keep, I) ->
@@ -137,9 +139,10 @@ reduce_compat({qfun, Fun}, Arg) ->
             {ok, Output}
     end.
 
-reduce_local_partfun(_) ->
+reduce_local_chashfun(_) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    hd(riak_core_ring:my_indices(Ring)).
+    riak_pipe_vnode:hash_for_partition(
+      hd(riak_core_ring:my_indices(Ring))).
 
 %% TODO: dynamic inputs, filters
 send_inputs(Fitting, BucketKeyList) when is_list(BucketKeyList) ->
