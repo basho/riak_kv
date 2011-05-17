@@ -61,12 +61,13 @@
 -include_lib("riak_kv_vnode.hrl").
 
 -type req_id() :: non_neg_integer().
--type input() :: riak_object:bucket() |
-                 {riak_object:bucket(), fun()} |
-                 {filter, riak_object:bucket(), [mfa()]}.
+-type bucket() :: binary().
+-type input() :: bucket() |
+                 {bucket(), fun()} |
+                 {filter, bucket(), [mfa()]}.
 -type from() :: {raw, req_id(), pid()}.
 
--record(state, {bucket :: riak_object:bucket(),
+-record(state, {bucket :: bucket(),
                 client_type :: atom(),
                 from :: from(),
                 input :: input(),
@@ -91,7 +92,7 @@ start_link(ReqId, Input, Timeout, ClientType, _ErrorTolerance, From) ->
     start_link({raw, ReqId, From}, Input, Timeout, ClientType).
 
 %% @doc Start a riak_kv_keys_fsm.
--spec start_link(req_id(), input(), timeout(), atom(), from()) ->
+-spec start_link(req_id(), input(), timeout(), atom(), pid()) ->
                         {ok, pid()} | ignore | {error, term()}.
 start_link(ReqId, Input, Timeout, ClientType, From) ->
     start_link({raw, ReqId, From}, Input, Timeout, ClientType).
@@ -570,8 +571,6 @@ left_rotate([Head | Rest], Rotations) ->
 
 %% @private
 %% @doc Rotate a list to the right.
-right_rotate(List, 0) ->
-    List;
 right_rotate(List, Rotations) ->
     lists:reverse(left_rotate(lists:reverse(List), Rotations)).
 
