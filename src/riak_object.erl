@@ -190,10 +190,29 @@ most_recent_content(AllContents) ->
     hd(lists:sort(fun compare_content_dates/2, AllContents)).
 
 compare_content_dates(C1,C2) ->
-    % true if C1 was modifed later than C2
-    riak_core_util:compare_dates(
-      dict:fetch(<<"X-Riak-Last-Modified">>, C1#r_content.metadata),
-      dict:fetch(<<"X-Riak-Last-Modified">>, C2#r_content.metadata)).
+    D1 = dict:fetch(<<"X-Riak-Last-Modified">>, C1#r_content.metadata),
+    D2 = dict:fetch(<<"X-Riak-Last-Modified">>, C2#r_content.metadata),
+    %% true if C1 was modifed later than C2
+    Cmp1 = riak_core_util:compare_dates(D1, D2),
+    %% true if C2 was modifed later than C1
+    Cmp2 = riak_core_util:compare_dates(D2, D1),
+    %% check for deleted objects
+    Del1 = dict:is_key(<<"X-Riak-Deleted">>, C1#r_content.metadata),
+    Del2 = dict:is_key(<<"X-Riak-Deleted">>, C2#r_content.metadata),
+
+    SameDate = (Cmp1 =:= Cmp2),
+    case {SameDate, Del1, Del2} of
+        {false, _, _} ->
+            Cmp1;
+        {true, true, false} ->
+            false;
+        {true, false, true} ->
+            true;
+        _ ->
+            %% Dates equal and either both present or both deleted, compare
+            %% by opaque contents.
+            C1 < C2
+    end.
 
 %% @spec merge(riak_object(), riak_object()) -> riak_object()
 %% @doc  Merge the contents and vclocks of OldObject and NewObject.
