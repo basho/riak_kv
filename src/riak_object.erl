@@ -629,34 +629,6 @@ date_reconcile_test() ->
     false = riak_object:equal(O2, O5),
     false = riak_object:equal(O4, O5).
 
-determinstic_most_recent_test() ->
-    MD = dict:store(<<"X-Riak-Last-Modified">>,
-                    httpd_util:rfc1123_date(),
-                    dict:new()),
-    O1 = riak_object:new(<<"test">>, <<"a">>, "value1", MD),
-    O2 = riak_object:new(<<"test">>, <<"a">>, "value2", MD),
-
-    C1 = hd(O1#r_object.contents),
-    C2 = hd(O2#r_object.contents),
-
-    C3 = most_recent_content([C1, C2]),
-    C4 = most_recent_content([C2, C1]),
-
-    ?assertEqual(C3, C4),
-    ?assertEqual(C1, C3),
-    ?assertEqual(C1, C4),
-
-    %% Mark O1 as deleted
-    MD2 = dict:store(<<"X-Riak-Deleted">>, true, MD),
-    O3 = riak_object:apply_updates(riak_object:update_metadata(O1, MD2)),
-
-    C5 = hd(O3#r_object.contents),
-    C6 = most_recent_content([C5, C2]),
-    C7 = most_recent_content([C2, C5]),
-
-    ?assertEqual(C2, C6),
-    ?assertEqual(C2, C7).
-
 get_update_value_test() ->
     O = riak_object:new(<<"test">>, <<"test">>, old_val),
     NewVal = new_val,
@@ -698,5 +670,61 @@ new_with_ctype_test() ->
 new_with_md_test() ->
     O = riak_object:new(<<"b">>, <<"k">>, <<"abc">>, dict:from_list([{?MD_CHARSET,"utf8"}])),
     ?assertEqual("utf8", dict:fetch(?MD_CHARSET, riak_object:get_metadata(O))).
+
+check_most_recent({V1, T1, D1}, {V2, T2, D2}) ->
+    MD1 = dict:store(<<"X-Riak-Last-Modified">>, T1, D1),
+    MD2 = dict:store(<<"X-Riak-Last-Modified">>, T2, D2),
+
+    O1 = riak_object:new(<<"test">>, <<"a">>, V1, MD1),
+    O2 = riak_object:new(<<"test">>, <<"a">>, V2, MD2),
+
+    C1 = hd(O1#r_object.contents),
+    C2 = hd(O2#r_object.contents),
+
+    C3 = most_recent_content([C1, C2]),
+    C4 = most_recent_content([C2, C1]),
+
+    ?assertEqual(C3, C4),
+
+    C3#r_content.value.
+
+determinstic_most_recent_test() ->
+    D = calendar:datetime_to_gregorian_seconds(
+          httpd_util:convert_request_date(
+            httpd_util:rfc1123_date())),
+
+    TNow = httpd_util:rfc1123_date(
+             calendar:gregorian_seconds_to_datetime(D)),
+    TPast = httpd_util:rfc1123_date(
+              calendar:gregorian_seconds_to_datetime(D-1)),
+
+    Available = dict:new(),
+    Deleted = dict:store(<<"X-Riak-Deleted">>, true, Available),
+
+    %% Test all cases with equal timestamps
+    ?assertEqual(<<"a">>, check_most_recent({<<"a">>, TNow, Available},
+                                            {<<"b">>, TNow, Available})),
+
+    ?assertEqual(<<"b">>, check_most_recent({<<"a">>, TNow, Deleted},
+                                            {<<"b">>, TNow, Available})),
+
+    ?assertEqual(<<"a">>, check_most_recent({<<"a">>, TNow, Available},
+                                            {<<"b">>, TNow, Deleted})),
+
+    ?assertEqual(<<"a">>, check_most_recent({<<"a">>, TNow, Deleted},
+                                            {<<"b">>, TNow, Deleted})),
+
+    %% Test all cases with different timestamp
+    ?assertEqual(<<"b">>, check_most_recent({<<"a">>, TPast, Available},
+                                            {<<"b">>, TNow, Available})),
+
+    ?assertEqual(<<"b">>, check_most_recent({<<"a">>, TPast, Deleted},
+                                            {<<"b">>, TNow, Available})),
+
+    ?assertEqual(<<"b">>, check_most_recent({<<"a">>, TPast, Available},
+                                            {<<"b">>, TNow, Deleted})),
+
+    ?assertEqual(<<"b">>, check_most_recent({<<"a">>, TPast, Deleted},
+                                            {<<"b">>, TNow, Deleted})).
 
 -endif.
