@@ -291,14 +291,13 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 finish({error, Error}, StateData=#state{from={raw, ReqId, ClientPid}, client_type=ClientType}) ->
     case ClientType of
         mapred ->
-            %% No nodes are available for key listing so all
-            %% we can do now is die so that the rest of the
+            %% An error occurred or the timeout interval elapsed
+            %% so all we can do now is die so that the rest of the
             %% MapReduce processes will also die and be cleaned up.
             exit(Error);
         plain ->
-            %%Notify the requesting client that the key
-            %% listing is complete or that no nodes are
-            %% available to fulfil the request.
+            %% Notify the requesting client that an error 
+            %% occurred or the timeout has elapsed.
             ClientPid ! {ReqId, Error}
     end,
     {stop,normal,StateData};
