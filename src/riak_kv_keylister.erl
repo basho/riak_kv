@@ -106,6 +106,11 @@ handle_event(_Event, StateName, State) ->
 handle_sync_event(_Event, _From, StateName, State) ->
     {reply, ignored, StateName, State}.
 
+handle_info({ReqId, {kl, Idx, Keys}}, waiting, #state{reqid=ReqId,
+                                                       filter=list_buckets, caller=Caller}=State) ->    
+    %% Skip the fold if listing buckets
+    gen_fsm:send_event(Caller, {ReqId, {kl, {Idx, node()}, lists:usort(Keys)}}),
+    {next_state, waiting, State};    
 handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{reqid=ReqId,
                                                        filter=Filter, caller=Caller}=State) ->    
     F = fun(Key, Acc) ->
@@ -146,7 +151,7 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %% ====================================================================
 
 build_filter('_') ->
-    {'_', []};
+    {'_', list_buckets};
 build_filter(Bucket) when is_binary(Bucket) ->
     {Bucket, []};
 build_filter({filter, Bucket, Fun}) when is_function(Fun) ->

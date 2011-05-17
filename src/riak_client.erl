@@ -494,7 +494,12 @@ list_buckets() ->
 %%      either adds the first key or removes the last remaining key from
 %%      a bucket.
 list_buckets(Timeout) ->
-    list_keys('_', Timeout).
+    case list_keys('_', Timeout) of
+        {ok, Buckets} ->
+            {ok, lists:usort(Buckets)};
+        Result ->
+            Result
+    end.
 
 %% @spec set_bucket(riak_object:bucket(), [BucketProp :: {atom(),term()}]) -> ok
 %% @doc Set the given properties for Bucket.
