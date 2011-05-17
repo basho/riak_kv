@@ -183,7 +183,7 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
             client_reply({error, {pr_val_unsatisfied, PR, NumPrimaries}}, StateData),
             {stop, normal, StateData};
         true ->
-            BQ0 = get_option(basic_quorum, Options, true),
+            BQ0 = get_option(basic_quorum, Options, default),
             FailThreshold = 
                 case riak_kv_util:expand_value(basic_quorum, BQ0, BucketProps) of
                     true ->
@@ -193,7 +193,7 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
                         N - R + 1 % cannot ever get R 'ok' replies
                 end,
             AllowMult = proplists:get_value(allow_mult,BucketProps),
-            NFOk0 = get_option(notfound_ok, Options, false),
+            NFOk0 = get_option(notfound_ok, Options, default),
             NotFoundOk = riak_kv_util:expand_value(notfound_ok, NFOk0, BucketProps),
             DeletedVClock = get_option(deletedvclock, Options, false),
             GetCore = riak_kv_get_core:init(N, R, FailThreshold, 

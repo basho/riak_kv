@@ -290,10 +290,17 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
             send_error("~p", [Reason], State)
     end;
 
-process_message(#rpbdelreq{bucket=B, key=K, rw=RW0}, 
+process_message(#rpbdelreq{bucket=B, key=K, rw=RW0, vclock=PbVc}, 
                 #state{client=C} = State) ->
     RW = normalize_rw_value(RW0),
-    case C:delete(B, K, default_if_undef(RW)) of
+    Result = case PbVc of
+        undefined ->
+            C:delete(B, K, default_if_undef(RW));
+        _ ->
+            VClock = erlify_rpbvc(PbVc),
+            C:delete_vclock(B, K, VClock, default_if_undef(RW))
+    end,
+    case Result of
         ok ->
             send_msg(rpbdelresp, State);
         {error, notfound} ->  %% delete succeeds if already deleted
