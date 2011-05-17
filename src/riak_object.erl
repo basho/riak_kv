@@ -148,7 +148,7 @@ reconcile(Objects, AllowMultiple) ->
     AllContents = lists:flatten([O#r_object.contents || O <- RObjs]),
     Contents = case AllowMultiple of
         false ->
-            [hd(lists:sort(fun compare_content_dates/2, AllContents))];
+            [most_recent_content(AllContents)];
         true ->
             AllContents
     end,
@@ -185,6 +185,9 @@ rem_dup_objs([O|Rest],Acc) ->
         [] -> rem_dup_objs(Rest,[O|Acc]);
         _ -> rem_dup_objs(Rest,Acc)
     end.
+
+most_recent_content(AllContents) ->
+    hd(lists:sort(fun compare_content_dates/2, AllContents)).
 
 compare_content_dates(C1,C2) ->
     % true if C1 was modifed later than C2
@@ -610,6 +613,34 @@ date_reconcile_test() ->
     O5 = riak_object:reconcile([O2,O4], false),
     false = riak_object:equal(O2, O5),
     false = riak_object:equal(O4, O5).
+
+determinstic_most_recent_test() ->
+    MD = dict:store(<<"X-Riak-Last-Modified">>,
+                    httpd_util:rfc1123_date(),
+                    dict:new()),
+    O1 = riak_object:new(<<"test">>, <<"a">>, "value1", MD),
+    O2 = riak_object:new(<<"test">>, <<"a">>, "value2", MD),
+
+    C1 = hd(O1#r_object.contents),
+    C2 = hd(O2#r_object.contents),
+
+    C3 = most_recent_content([C1, C2]),
+    C4 = most_recent_content([C2, C1]),
+
+    ?assertEqual(C3, C4),
+    ?assertEqual(C1, C3),
+    ?assertEqual(C1, C4),
+
+    %% Mark O1 as deleted
+    MD2 = dict:store(<<"X-Riak-Deleted">>, true, MD),
+    O3 = riak_object:apply_updates(riak_object:update_metadata(O1, MD2)),
+
+    C5 = hd(O3#r_object.contents),
+    C6 = most_recent_content([C5, C2]),
+    C7 = most_recent_content([C2, C5]),
+
+    ?assertEqual(C2, C6),
+    ?assertEqual(C2, C7).
 
 get_update_value_test() ->
     O = riak_object:new(<<"test">>, <<"test">>, old_val),
