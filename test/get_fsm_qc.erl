@@ -9,6 +9,8 @@
 -define(DEFAULT_BUCKET_PROPS,
         [{allow_mult, false},
          {chash_keyfun, {riak_core_util, chash_std_keyfun}},
+         {basic_quorum, true},
+         {notfound_ok, false},
          {r, quorum},
          {pr, 0}]).
 -define(QC_OUT(P),
