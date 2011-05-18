@@ -579,12 +579,9 @@ get_fsm(#msg{from = {kv_vnode, Idx, _}, c = {r, Result, Idx, _ReqId}},
                    remotevnodes, %% Messages to send to remove vnodes
                    responded = false,
                    putcore}).
-put_fsm_proc(ReqId, #params{n = N, w = _X_W, dw = _X_DW}) ->
+put_fsm_proc(ReqId, #params{n = N, w = W, dw = DW}) ->
     AllowMult = true,
     ReturnBody = false,
-    %% TEMPORARILY SET W=DW=N for now -- check if it fixes the EC problem
-    W = N,
-    DW = N,
     PutCore = riak_kv_put_core:init(N, W, DW, 
                                     N-W+1,   % cannot ever get W replies
                                     N-DW+1,  % cannot ever get DW replies
