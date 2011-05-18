@@ -50,33 +50,51 @@ start_link(ReqId, Bucket, Key, RW, Timeout, Client, ClientId, VClock) ->
 %%           -> term()
 %% @doc Delete the object at Bucket/Key.  Direct return value is uninteresting,
 %%      see riak_client:delete/3 for expected gen_server replies to Client.
-delete(ReqId,Bucket,Key,RW,Timeout,Client,ClientId,undefined) ->
-    RealStartTime = riak_core_util:moment(),
-    {ok,C} = riak:local_client(ClientId),
-    case C:get(Bucket,Key,RW,Timeout) of
-        {ok, OrigObj} ->
-            RemainingTime = Timeout - (riak_core_util:moment() - RealStartTime),
-            delete(ReqId,Bucket,Key,RW,RemainingTime,Client,ClientId,riak_object:vclock(OrigObj));
-        {error, notfound} ->
-            Client ! {ReqId, {error, notfound}};
-        X ->
-            Client ! {ReqId, X}
+delete(ReqId,Bucket,Key,RW0,Timeout,Client,ClientId,undefined) ->
+    case get_rw_val(Bucket, RW0) of
+        error ->
+            Client ! {ReqId, {error, {rw_val_violation, RW0}}};
+        RW ->
+            RealStartTime = riak_core_util:moment(),
+            {ok, C} = riak:local_client(),
+            case C:get(Bucket,Key,RW,Timeout) of
+                {ok, OrigObj} ->
+                    %?debugFmt("doing a delete of ~p~n", [OrigObj]),
+                    RemainingTime = Timeout - (riak_core_util:moment() - RealStartTime),
+                    delete(ReqId,Bucket,Key,RW,RemainingTime,Client,ClientId,riak_object:vclock(OrigObj));
+                {error, notfound} ->
+                    %?debugFmt("notfound ~n", []),
+                    Client ! {ReqId, {error, notfound}};
+                X ->
+                    %?debugFmt("error ~p ~n", [X]),
+                    Client ! {ReqId, X}
+            end
     end;
-delete(ReqId,Bucket,Key,RW,Timeout,Client,ClientId,VClock) ->
-    Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(<<"X-Riak-Deleted">>,
-            "true", dict:new())),
-    Tombstone = riak_object:set_vclock(Obj0, VClock),
-    {ok,C} = riak:local_client(ClientId),
-    Reply = C:put(Tombstone, RW, RW, Timeout),
-    Client ! {ReqId, Reply},
-    case Reply of
-        ok ->
-            {ok, C2} = riak:local_client(),
-            C2:get(Bucket, Key, all, Timeout);
-        _ -> nop
+delete(ReqId,Bucket,Key,RW0,Timeout,Client,ClientId,VClock) ->
+    case get_rw_val(Bucket, RW0) of
+        error ->
+            Client ! {ReqId, {error, {rw_val_violation, RW0}}};
+        RW ->
+
+            Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(<<"X-Riak-Deleted">>,
+                                                                 "true", dict:new())),
+            Tombstone = riak_object:set_vclock(Obj0, VClock),
+            {ok,C} = riak:local_client(ClientId),
+            Reply = C:put(Tombstone, RW, RW, Timeout),
+            Client ! {ReqId, Reply},
+            case Reply of
+                ok ->
+                    {ok, C2} = riak:local_client(),
+                    C2:get(Bucket, Key, all, Timeout);
+                _ -> nop
+            end
     end.
 
-
+get_rw_val(Bucket, RW0) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
+    N = proplists:get_value(n_val,BucketProps),
+    riak_kv_util:expand_rw_value(rw, RW0, BucketProps, N).
 
 
 %% ===================================================================
