@@ -21,8 +21,8 @@ check() ->
 -define(B, <<"b">>).
 -define(K, <<"k">>).
 
--define(FINALDBG(Fmt,Args), io:format("= " ++ Fmt, Args)).
-%-define(FINALDBG(_Fmt,_Args), ok).
+%-define(FINALDBG(Fmt,Args), io:format("= " ++ Fmt, Args)).
+-define(FINALDBG(_Fmt,_Args), ok).
 
 %% Client requests must be processed in sequence.
 %% Client also gets to have it's own state.
@@ -132,15 +132,15 @@ check_final(#state{history = H}) ->
 %% Todo, stop overloading Result
 
 check_final([{result, _, #req{op = {get, PL}}, Result}], Must, _May, _ClientView) ->
-    {Values, VClock} = case Result of
+    {Values, _VClock} = case Result of
                            {ok, Obj} ->
                                {riak_object:get_values(Obj), riak_object:vclock(Obj)};
                            {error, _} ->
                                {[], []}
                        end,
-    Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
+    _Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
     ?FINALDBG("Final GOT VALUES: ~p VC: ~w Must: ~p May: ~p Fallbacks: ~w\n",
-              [Values, VClock, Must, _May, Fallbacks]),
+              [Values, _VClock, Must, _May, _Fallbacks]),
     ?WHENFAIL(io:format(user, "Must: ~p\nMay: ~p\nValues: ~p\n", [Must, _May, Values]),
               equals(Must -- Values, []));
               %% conjunction([{must_leftover, equals(Must -- Values, [])},
@@ -149,22 +149,22 @@ check_final([{result, _, #req{op = {get, PL}}, Result}], Must, _May, _ClientView
 check_final([{result, Cid, #req{op = {get, PL}}, Result} | Results],
             Must, May, ClientViews) ->
     %% TODO: Check if _Result matches expected values
-    {ValuesAtGet, VClockAtGet} = case Result of
+    {ValuesAtGet, _VClockAtGet} = case Result of
                                      {ok, Obj} ->
                                          {riak_object:get_values(Obj), riak_object:vclock(Obj)};
                                      {error, _} ->
                                          {[], []}
                   end,
-    Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
+    _Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
     ?FINALDBG("Cid ~p GOT VALUES: ~p VC: ~w FALLBACKS: ~w\n",
-              [Cid, ValuesAtGet, VClockAtGet, Fallbacks]),
+              [Cid, ValuesAtGet, _VClockAtGet, _Fallbacks]),
     UpdClientViews = lists:keystore(Cid, 1, ClientViews, {Cid, ValuesAtGet}),
     check_final(Results, Must, May, UpdClientViews);
-check_final([{result, Cid, #req{rid = _ReqId, op = {put, PL, V}}, {Result, PutObj}} | Results],
+check_final([{result, Cid, #req{rid = _ReqId, op = {put, PL, V}}, {Result, _PutObj}} | Results],
             Must, May, ClientViews) ->
     {Cid, ValuesAtGet} = lists:keyfind(Cid, 1, ClientViews),
     ValNotInMay = not lists:member(V, May),
-    Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
+    _Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
     UpdMust = case Result of
                   ok when ValNotInMay -> %, Fallbacks == [] ->
                       %% This put could have already been overwritten
@@ -185,7 +185,7 @@ check_final([{result, Cid, #req{rid = _ReqId, op = {put, PL, V}}, {Result, PutOb
               end,
     UpdMay = lists:usort(May ++ ValuesAtGet),
     ?FINALDBG("Cid ~p PUT: ~p RESPONSE: ~p VC: ~w OVER ~p MUST: ~p MAY: ~p FALLBACKS: ~w\n",
-             [Cid, V, Result, riak_object:vclock(PutObj), ValuesAtGet, UpdMust, UpdMay, Fallbacks]),
+             [Cid, V, Result, riak_object:vclock(_PutObj), ValuesAtGet, UpdMust, UpdMay, _Fallbacks]),
     UpdClientViews = lists:keydelete(Cid, 1, ClientViews),
     check_final(Results, UpdMust, UpdMay, UpdClientViews);
 check_final([_ | Results], Must, May, ClientViews) ->
@@ -295,20 +295,20 @@ deliver_msg(#state{msgs = [#msg{to = To} = Msg | Msgs],
              S#state{procs = update_proc(UpdP, Procs),
                      history = History ++ [{deliver_msg, Msg}]}).
 
-%% make_params(#params{n = NSeed, r = R, w = W} = P) ->
-%%     %% Ensure R >= N, W >= N and R+W>N
-%%     MinN = lists:max([R, W]),
-%%     N = make_range(R + W - NSeed, MinN, R+W-1),
-%%     %% Force N to be odd while testing
-%%     {N1,R1} = case N rem 2 == 0 of
-%%                 true ->
-%%                     {N + 1, R + 1};
-%%                 false ->
-%%                     {N, R}
-%%         end,
-%%     P#params{n = N1, r = R1, m = N1, dw = W}. 
-make_params(#params{} = P) ->
-    P#params{n = 3, r = 2, m = 5, w = 3, dw = 3}.
+make_params(#params{n = NSeed, r = R, w = W} = P) ->
+    %% Ensure R >= N, W >= N and R+W>N
+    MinN = lists:max([R, W]),
+    N = make_range(R + W - NSeed, MinN, R+W-1),
+    %% Force N to be odd while testing
+    {N1,R1} = case N rem 2 == 0 of
+                true ->
+                    {N + 1, R + 1};
+                false ->
+                    {N, R}
+        end,
+    P#params{n = N1, r = R1, m = N1, dw = W}. 
+%% make_params(#params{} = P) ->
+%%     P#params{n = 3, r = 2, m = 5, w = 3, dw = 3}.
 
 
 make_vnodes(#params{n = N, m = M}) ->
@@ -611,13 +611,19 @@ put_fsm(#msg{from = From, c = {put, PL, Obj}},
     %% Kick off requests to the vnodes
     LocalMsg =  new_msg(Name, {kv_vnode, CoordIdx, Node}, {put, ReqId, UpdObj, NodeId}),
     RemotePL = [Entry || {kv_vnode, Idx0, _Node0} = Entry <- PL, Idx0 /= CoordIdx],
-    RemoteMsgs = [new_msg(Name, Vnode, {put, ReqId, UpdObj, NodeId}) || Vnode <- RemotePL],
+    RemoteMsgs = case RemotePL of
+                     [] ->
+                         undefined; %% If N=1, will be on the coord anyway
+                     _ ->
+                         [new_msg(Name, Vnode, {put, ReqId, UpdObj, NodeId}) || Vnode <- RemotePL]
+                 end,
     [{msgs, [LocalMsg]},
      {updp, P#proc{procst = ProcSt#putfsmst{putcore = riak_kv_put_core:coord_idx(CoordIdx, PutCore),
                                             remotevnodes = RemoteMsgs,
                                             putobj = UpdObj,
                                             reply_to = From}}}];
-put_fsm(#msg{from = {kv_vnode, _, _}, c = Result}, %% First response failed, abort
+%% Handle local vnode response 
+put_fsm(#msg{from = {kv_vnode, _, _}, c = Result}, 
         #proc{name = Name, procst = #putfsmst{reply_to = ReplyTo,
                                               putobj = PutObj,
                                               remotevnodes = RemoteVnodes,
