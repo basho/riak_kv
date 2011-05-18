@@ -176,48 +176,13 @@ initialize(timeout, StateData0=#state{bucket=Bucket,
                                       timeout=Timeout}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     NVal = proplists:get_value(n_val, BucketProps),
-    %% Rotate the list of preflists to the right by 1 so
-    %% that the preference list that starts with index 0
-    %% is at the head of the list.
-    AllPrefLists = right_rotate(riak_core_ring:all_preflists(Ring, NVal), 1),
-    %% Determine the number of physical nodes
-    NodeCount = length(riak_core_ring:all_members(Ring)),
-    %% Determine the minimum number of nodes
-    %% required for full coverage.
-    case NVal >= NodeCount of
-        true ->
-            NodeQuorum = 1;
-        false ->
-            PartitionCount = length(AllPrefLists),
-            case NodeCount rem NVal of
-                0 ->
-                    %% The period of the node sequence is
-                    %% evenly divisible by the period of the
-                    %% bucket n_val sequence so the minimum number
-                    %% of nodes is the node count divided by the
-                    %% bucket n_val.
-                    NodeQuorum = NodeCount div NVal;
-                _ ->
-                    LCM = lcm(NVal, NodeCount),
-                    case LCM =< PartitionCount of
-                        true ->
-                            %% Use the least common multipler of the
-                            %% bucket n_val and the node count to determine the
-                            %% node quorum.
-                            NodeQuorum = LCM div NVal;
-                        false ->
-                            %% The least common multiplier of the bucket n_val
-                            %% the node count is greater than the partition count
-                            %% so the node quorum is the number of partitions
-                            %% divided by the bucket n_val plus one to account
-                            %% for the remainder.
-                            NodeQuorum = (PartitionCount div NVal) + 1
-                    end
-            end
-    end,
+    VNodes = riak_core_ring:all_owners(Ring),
+    %% Create a proplist with ring positions as 
+    %% keys and VNodes as the values.
+    VNodePositions = lists:zip(lists:seq(0, length(VNodes)-1), VNodes),
     %% Determine the riak_kv nodes that are available
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    case plan_and_execute(ReqId, Input, AllPrefLists, UpNodes, [], NodeCount, NVal, NodeQuorum, Timeout, 0) of
+    case plan_and_execute(ReqId, Input, VNodePositions, NVal, Timeout, [], []) of
         {ok, RequiredResponseCount, PrefListPositions} ->
             StateData = StateData0#state{n_val=NVal,
                                          pref_list_positions=PrefListPositions,
@@ -240,7 +205,7 @@ waiting_kl({ReqId, {kl, VNode, Keys}},
                             upnodes=UpNodes}) ->
     %% Look up the position in the preference list of the VNode
     %% that the keys are expected to be reported from.
-    PrefListPosition = dict:fetch(VNode, PrefListPositions),
+    PrefListPosition = proplists:get_value(VNode, PrefListPositions),
     process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, UpNodes, PrefListPosition, From),
     {next_state, waiting_kl, StateData, Timeout};
 waiting_kl({ReqId, _VNode, done}, StateData0=#state{from={raw, ReqId, _},
@@ -311,133 +276,116 @@ finish(clean, StateData=#state{from={raw, ReqId, ClientPid}, client_type=ClientT
     {stop,normal,StateData}.
 
 %% @private
-plan_and_execute(ReqId, Input, PrefLists, UpNodes, KeyListers,
-                 NodeCount, NVal, NodeQuorum, Timeout, Offset) ->
-    case node_quorum_satisfied(NodeQuorum, UpNodes) of
-        true ->
-            %% Generate a coverage plan
-            CoveragePlanResult =
-                create_coverage_plan(PrefLists, UpNodes, NodeCount, NVal, NodeQuorum, Offset),
-            case CoveragePlanResult of
-                {error, _} ->
-                    %% Failed to create a coverage plan so return the error
-                    CoveragePlanResult;
-                {NodeIndexes, PrefListPositions} ->
-                    %% If successful start processes and execute
-                    RequiredResponseCount = dict:size(PrefListPositions),
-                    {AggregateKeyListers, ErrorNodes} =
-                        start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Timeout),
-                    case ErrorNodes of
-                        [] ->
-                            %% Got a valid coverage plan so instruct the keylister
-                            %% processes to begin listing keys for their list of Vnodes.
-                            [riak_kv_keylister:list_keys(Pid) || {_, Pid} <- AggregateKeyListers],
-                            {ok, RequiredResponseCount, PrefListPositions};
-                        _ ->
-                            plan_and_execute(ReqId, Input, PrefLists, UpNodes--ErrorNodes,
-                                             AggregateKeyListers, NodeCount, NVal, NodeQuorum,
-                                             Timeout, Offset)
-                    end
-            end;
-        false ->
-            {error, insufficient_nodes_available}
+plan_and_execute(ReqId, Input, VNodePositions, NVal, Timeout, KeyListers, DownNodes) ->
+    %% Generate a coverage plan
+    CoveragePlanResult =
+        create_coverage_plan(VNodePositions, NVal, DownNodes),
+    case CoveragePlanResult of
+        {error, _} ->
+            %% Failed to create a coverage plan so return the error
+            CoveragePlanResult;
+        {NodeIndexes, PrefListPositions} ->
+            %% If successful start processes and execute
+            RequiredResponseCount = length(PrefListPositions),
+            {AggregateKeyListers, ErrorNodes} =
+                start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Timeout),
+            case ErrorNodes of
+                [] ->
+                    %% Got a valid coverage plan so instruct the keylister
+                    %% processes to begin listing keys for their list of Vnodes.
+                    [riak_kv_keylister:list_keys(Pid) || {_, Pid} <- AggregateKeyListers],
+                    {ok, RequiredResponseCount, PrefListPositions};
+                _ ->
+                    plan_and_execute(ReqId, Input, VNodePositions,
+                                     NVal,
+                                     Timeout, AggregateKeyListers, ErrorNodes)
+            end
     end.
 
-%% @private
-node_quorum_satisfied(NodeQuorum, UpNodes) ->
+create_coverage_plan(VNodePositions, NVal, DownNodes) ->    
+    PartitionCount = length(VNodePositions),
+    %% AvailableVNodes = VNodes -- DownVNodes
+    %% Make list of which partitions each VNode covers
+    DownVNodeFilter = fun(X) ->
+                              %% Determine the node for the
+                              %% VNode at this ring position.
+                              {_, Node} = proplists:get_value(X, VNodePositions),
+                              not lists:member(Node, DownNodes)
+                      end,
+    KeySpace = lists:seq(0, PartitionCount - 1),
+    AvailableKeySpace = lists:filter(DownVNodeFilter, KeySpace),
+    Available = [{Vnode, n_keyspaces(Vnode, NVal, PartitionCount)} || Vnode <- AvailableKeySpace],
+    CoverageResult = find_coverage(ordsets:from_list(KeySpace), Available, NVal, []),
+    case CoverageResult of 
+        {ok, CoveragePlan} ->
+            %% Assemble the data structures required for
+            %% executing the coverage operation.
+            assemble_coverage_structures(CoveragePlan, NVal, VNodePositions);
+       {insufficient_vnodes_available, _}  ->
+            {error, insufficient_vnodes_available}
+    end.
+    
+%% Find the N key spaces for a VNode
+n_keyspaces(Vnode, N, Q) ->
+     ordsets:from_list([X rem Q || X <- lists:seq(Q + Vnode, Q + Vnode + (N-1))]).
+
+%% Find minimal set of covering vnodes
+find_coverage([], _, _, Coverage) ->
+    {ok, lists:sort(Coverage)};
+find_coverage(KeySpace, [], _, Coverage) ->
+    {insufficient_vnodes_available, KeySpace, lists:sort(Coverage)};    
+find_coverage(KeySpace, Available, NVal, Coverage) ->
+    case next_vnode(KeySpace, NVal, Available) of
+        {0, _} -> % out of vnodes
+            find_coverage(KeySpace, [], NVal, Coverage);
+        {_NumCovered, Vnode} ->
+            {value, {Vnode, Covers}, UpdAvailable} = lists:keytake(Vnode, 1, Available),            
+            UpdCoverage = [{Vnode, ordsets:intersection(KeySpace, Covers)} | Coverage],
+            UpdKeySpace = ordsets:subtract(KeySpace, Covers),
+            find_coverage(UpdKeySpace, UpdAvailable, NVal, UpdCoverage)
+    end.
+    
+%% Find the next vnode that covers the most of the remaining keyspace
+%% Use vnode id as tie breaker.
+next_vnode(KeySpace, NVal, Available) ->
+    CoverCount = [{covers(KeySpace, CoversKeys), VNode} || {VNode, CoversKeys} <- Available],
+    case length(KeySpace) >= NVal of
+        true ->
+            hd(lists:sort(fun compare_next_vnode/2, CoverCount));
+        false ->
+            hd(lists:sort(fun compare_final_vnode/2, CoverCount))
+    end.
+
+compare_next_vnode({CA,VA}, {CB, VB}) ->
     if
-        UpNodes == [] ->
+        CA > CB -> %% Descending sort on coverage
+            true;
+        CA < CB ->
             false;
-        length(UpNodes) < NodeQuorum ->
+        true ->
+            VA < VB %% If equal coverage choose the lower node.
+    end.
+
+compare_final_vnode({CA,VA}, {CB, VB}) ->
+    if
+        CA > CB -> %% Descending sort on coverage
+            true;
+        CA < CB ->
             false;
         true ->
-            true
+            VA > VB %% If equal coverage choose the upper node.
     end.
 
-%% @private
-create_coverage_plan(_PrefLists, _UpNodes, NodeCount, NVal, NodeQuorum, Offset) when Offset > NVal; NodeCount < NodeQuorum ->
-    {error, cannot_achieve_coverage};
-create_coverage_plan(PrefLists, UpNodes, NodeCount, NVal, _NodeQuorum, Offset) ->
-    %% Rotate the list of preference lists
-    RotatedPrefLists = left_rotate(PrefLists, Offset),
-    UpNodeCount = length(UpNodes),
-    %% Determine the preference list positions to use
-    %% when filtering key listing responses from VNodes.
-    case (UpNodeCount < NodeCount) andalso (UpNodeCount > NVal) of
-        true ->
-            %% Try to use a subset of preference list positions
-            %% to create a minimal list of preference lists.
-            DefaultPositions = lists:seq(1, NVal - (NodeCount - UpNodeCount));
-        false ->
-            DefaultPositions = all
-    end,
-    %% Determine the minimal list of preference lists
-    %% required for full coverage.
-    case (UpNodeCount < NodeCount) andalso (NVal > NodeCount) of
-        true ->
-            MinimalPrefLists = get_minimal_preflists(RotatedPrefLists, UpNodeCount);
-        false ->
-            MinimalPrefLists = get_minimal_preflists(RotatedPrefLists, NVal)
-    end,
-    %% Assemble the data structures required for
-    %% executing the coverage operation.
-    {NodeIndexes, PrefListPositions} = assemble_coverage_structures(MinimalPrefLists, NVal, DefaultPositions),
-    case coverage_plan_valid(NodeIndexes, UpNodes) of
-        true ->
-            {NodeIndexes, PrefListPositions};
-        false ->
-            %% The current plan will not work so try
-            %% to create another one.
-            create_coverage_plan(PrefLists, UpNodes, NodeCount, NVal, _NodeQuorum, Offset+1)
-    end.
+%% Count how many of CoversKeys appear in KeySpace
+covers(KeySpace, CoversKeys) ->
+    ordsets:size(ordsets:intersection(KeySpace, CoversKeys)).
 
 %% @private
-get_minimal_preflists(PrefLists, N) ->
-    PrefListsCount = length(PrefLists),
-    %% Get the count of VNodes remaining after
-    %% dividing by N. This will be used in
-    %% calculating the set of keys to retain
-    %% from the final VNode we request keys from.
-    RemainderVNodeCount = PrefListsCount rem N,
-    %% Minimize the number of VNodes that we
-    %% need to request keys from by selecting every Nth
-    %% preference list. If the the number of partitions
-    %% is not evenly divisible by N then
-    %% a final preference list is selected to ensure complete
-    %% coverage of all keys. In this case the keys from
-    %% a VNode in this final preference list are filtered
-    %% to ensure that duplicates are not introduced.
-    PartitionFun = fun({A, _B}) ->
-                           (A rem N == 0 andalso (PrefListsCount - A) >= N)
-                               orelse ((PrefListsCount - A) == RemainderVNodeCount)
-                   end,
-    %% IndexVNodeTuples will contain a list of tuples where the
-    %% first member is the ring index value between 0 and
-    %% the number of ring partitions - 1 and the second
-    %% member is a VNode tuple.
-    {IndexVNodeTuples, _} = lists:partition(PartitionFun,
-                               lists:zip(lists:seq(0, (PrefListsCount-1)), PrefLists)),
-    %% Reverse the IndexVNodeTuples list and separate the ring
-    %% indexes from the corresponding VNode tuples.
-    {_, MinimalPrefLists} = lists:unzip(lists:reverse(IndexVNodeTuples)),
-    MinimalPrefLists.
+assemble_coverage_structures(CoveragePlan, NVal, VNodeIndex) ->
+    assemble_coverage_structures(CoveragePlan, NVal, VNodeIndex, [], []).
 
 %% @private
-assemble_coverage_structures([HeadPrefList | RestPrefLists]=PrefLists, N, DefaultPositions) ->
-    %% Get the count of VNodes remaining after
-    %% dividing by N. This will be used in
-    %% calculating the set of keys to retain
-    %% from the final VNode we request keys from.
-    RemainderVNodeCount = length(PrefLists) rem N,
-    case RemainderVNodeCount of
-        0 ->
-            assemble_coverage_structures(PrefLists, [], dict:new(), DefaultPositions);
-        _ ->
-            assemble_coverage_structures([{RemainderVNodeCount, N, HeadPrefList} | RestPrefLists], [], dict:new(), DefaultPositions)
-    end.
-
-%% @private
-assemble_coverage_structures([], VNodes, PrefListPositions, _) ->
+assemble_coverage_structures([], _, _, CoverageVNodes, PrefListPositions) ->
     %% NodeIndexes is a dictionary where the keys are
     %% nodes and the values are lists of VNode indexes.
     %% This is used to determine which nodes to start keylister
@@ -448,27 +396,20 @@ assemble_coverage_structures([], VNodes, PrefListPositions, _) ->
     %% VNodes and the values are either the atom all or
     %% a list of integers representing positions in the
     %% preference list.
-    NodeIndexes = group_indexes_by_node(VNodes, []),
+    NodeIndexes = group_indexes_by_node(CoverageVNodes, []),
     {NodeIndexes, PrefListPositions};
-assemble_coverage_structures([{RemainderVNodeCount, NVal, [{Index, Node} | _RestPrefList]} | RestPrefLists], VNodes, PrefListPositions, _DefaultPositions) ->
-    VNodes1 = [{Index, Node} | VNodes],
-    PositionList = lists:reverse(lists:seq(NVal, NVal-RemainderVNodeCount+1, -1)),
-    PrefListPositions1 = dict:store({Index, Node}, PositionList, PrefListPositions),
-    assemble_coverage_structures(RestPrefLists, VNodes1, PrefListPositions1, _DefaultPositions);
-assemble_coverage_structures([[{Index, Node} | _RestPrefList] | RestPrefLists], VNodes, PrefListPositions, DefaultPositions) ->
-    VNodes1 = [{Index, Node} | VNodes],
-    PrefListPositions1 = dict:store({Index, Node}, DefaultPositions, PrefListPositions),
-    assemble_coverage_structures(RestPrefLists, VNodes1, PrefListPositions1, DefaultPositions).
-
-%% @private
-coverage_plan_valid(NodeIndexes, UpNodes) ->
-    PotentialNodes = proplists:get_keys(NodeIndexes),
-    case PotentialNodes -- UpNodes of
-        [] ->
-            true;
-        _ ->
-            false
-    end.
+assemble_coverage_structures([{RingPosition, RingPositionList} | RestCoveragePlan], NVal, VNodeIndex, CoverageVNodes, PrefListPositions) ->
+    %% Lookup the VNode index and node
+    {Index, Node} = proplists:get_value(RingPosition, VNodeIndex),
+    CoverageVNodes1 = [{Index, Node} | CoverageVNodes],
+    case length(RingPositionList) == NVal of
+        true ->
+            PrefListPositions1 = [{{Index, Node}, all} | PrefListPositions];
+        false ->
+            PositionList = lists:reverse([NVal-(X-RingPosition) || X <- RingPositionList]),
+            PrefListPositions1 = [{{Index, Node}, PositionList} | PrefListPositions]
+    end,
+    assemble_coverage_structures(RestCoveragePlan, NVal, VNodeIndex, CoverageVNodes1, PrefListPositions1).
 
 %% @private
 group_indexes_by_node([], NodeIndexes) ->
@@ -560,28 +501,3 @@ check_pref_list_positions([Position | RestPositions], VNode, PrefList) ->
             check_pref_list_positions(RestPositions, VNode, PrefList)
     end.
 
-%% @private
-%% @doc Rotate a list to the left.
-left_rotate(List, 0) ->
-    List;
-left_rotate([Head | Rest], Rotations) ->
-    RotatedList = lists:reverse([Head | lists:reverse(Rest)]),
-    left_rotate(RotatedList, Rotations-1).
-
-%% @private
-%% @doc Rotate a list to the right.
-right_rotate(List, Rotations) ->
-    lists:reverse(left_rotate(lists:reverse(List), Rotations)).
-
-%% @private
-%% @doc Return the greatest common
-%% denominator of two integers.
-gcd(A, 0) ->
-    A;
-gcd(A, B) -> gcd(B, A rem B).
-
-%% @private
-%% @doc Return the least common
-%% multiple of two integers.
-lcm(A, B) ->
-    (A * B) div gcd(A, B).
