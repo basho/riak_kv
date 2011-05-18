@@ -21,7 +21,7 @@ check() ->
 -define(B, <<"b">>).
 -define(K, <<"k">>).
 
--define(FINALDBG(Fmt,Args), io:format("XXX" ++ Fmt, Args)).
+-define(FINALDBG(Fmt,Args), io:format("= " ++ Fmt, Args)).
 %-define(FINALDBG(_Fmt,_Args), ok).
 
 %% Client requests must be processed in sequence.
@@ -71,8 +71,8 @@ nni() ->
 gen_pris() ->
     non_empty(resize(40, list(nni()))).
 
-gen_pl_seed() -> %% Seed for preference lists
-    non_empty(list(int())).
+gen_pl_seed() -> %% Seed for preference lists -- used as downed nodes
+    list(int()).
     
 gen_params() ->
     #params{n = choose(0, 10),
@@ -80,8 +80,9 @@ gen_params() ->
             w = choose(1, 5)}.
             
 gen_req() ->
-    elements([{get, gen_pl_seed()},
-              {update, gen_pl_seed(), gen_pl_seed()}]).
+    ?SHRINK(elements([{get, gen_pl_seed()},
+                      {update, gen_pl_seed(), gen_pl_seed()}]),
+            [{update, gen_pl_seed(), gen_pl_seed()}]).
 
 gen_client_seeds() ->
     non_empty(list(#client{reqs = non_empty(list(gen_req()))})).
@@ -131,15 +132,15 @@ check_final(#state{history = H}) ->
 %% Todo, stop overloading Result
 
 check_final([{result, _, #req{op = {get, PL}}, Result}], Must, _May, _ClientView) ->
-    Values = case Result of
-                 {error, notfound} ->
-                     [];
-                 {ok, Obj} ->
-                     riak_object:get_values(Obj)
-             end,
+    {Values, VClock} = case Result of
+                           {ok, Obj} ->
+                               {riak_object:get_values(Obj), riak_object:vclock(Obj)};
+                           {error, _} ->
+                               {[], []}
+                       end,
     Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
-    ?FINALDBG("Final GOT VALUES: ~p Must: ~p May: ~p Fallbacks: ~p\n",
-              [Values, Must, _May, Fallbacks]),
+    ?FINALDBG("Final GOT VALUES: ~p VC: ~w Must: ~p May: ~p Fallbacks: ~w\n",
+              [Values, VClock, Must, _May, Fallbacks]),
     ?WHENFAIL(io:format(user, "Must: ~p\nMay: ~p\nValues: ~p\n", [Must, _May, Values]),
               equals(Must -- Values, []));
               %% conjunction([{must_leftover, equals(Must -- Values, [])},
@@ -148,38 +149,43 @@ check_final([{result, _, #req{op = {get, PL}}, Result}], Must, _May, _ClientView
 check_final([{result, Cid, #req{op = {get, PL}}, Result} | Results],
             Must, May, ClientViews) ->
     %% TODO: Check if _Result matches expected values
-    ValuesAtGet = case Result of
-                      {ok, Obj} ->
-                          riak_object:get_values(Obj);
-                      {error, _} ->
-                          []
+    {ValuesAtGet, VClockAtGet} = case Result of
+                                     {ok, Obj} ->
+                                         {riak_object:get_values(Obj), riak_object:vclock(Obj)};
+                                     {error, _} ->
+                                         {[], []}
                   end,
     Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
-    ?FINALDBG("Cid ~p GOT VALUES: ~p FALLBACKS: ~p\n",
-              [Cid, ValuesAtGet, Fallbacks]),
+    ?FINALDBG("Cid ~p GOT VALUES: ~p VC: ~w FALLBACKS: ~w\n",
+              [Cid, ValuesAtGet, VClockAtGet, Fallbacks]),
     UpdClientViews = lists:keystore(Cid, 1, ClientViews, {Cid, ValuesAtGet}),
     check_final(Results, Must, May, UpdClientViews);
-check_final([{result, Cid, #req{rid = _ReqId, op = {put, PL, V}}, Result} | Results],
+check_final([{result, Cid, #req{rid = _ReqId, op = {put, PL, V}}, {Result, PutObj}} | Results],
             Must, May, ClientViews) ->
     {Cid, ValuesAtGet} = lists:keyfind(Cid, 1, ClientViews),
     ValNotInMay = not lists:member(V, May),
     Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
     UpdMust = case Result of
-                  ok when ValNotInMay, Fallbacks == [] ->
+                  ok when ValNotInMay -> %, Fallbacks == [] ->
                       %% This put could have already been overwritten
                       %% Only add to must if not in may
                       %% Only add if writing against primaries, otherwise all bets are off
                       %% until vclocks are changed
                       [V | lists:usort(Must -- ValuesAtGet)];
-                  _  ->
+                  ok  ->
                       %% This value has already been overwritten
-                                %% so the values that it overwrote should also be removed 
+                      %% so the values that it overwrote should also be removed 
                       %% from must.
-                      Must -- ValuesAtGet
+                      Must -- ValuesAtGet;
+                  
+                  _ ->
+                      %% Put failed, not sure what must be there for now
+                      %% TODO: Work out what should be here.
+                      []
               end,
     UpdMay = lists:usort(May ++ ValuesAtGet),
-    ?FINALDBG("Cid ~p PUT ~p OVER ~p MUST: ~p MAY: ~p FALLBACKS: ~p\n",
-             [Cid, V, ValuesAtGet, UpdMust, UpdMay, Fallbacks]),
+    ?FINALDBG("Cid ~p PUT: ~p RESPONSE: ~p VC: ~w OVER ~p MUST: ~p MAY: ~p FALLBACKS: ~w\n",
+             [Cid, V, Result, riak_object:vclock(PutObj), ValuesAtGet, UpdMust, UpdMay, Fallbacks]),
     UpdClientViews = lists:keydelete(Cid, 1, ClientViews),
     check_final(Results, UpdMust, UpdMay, UpdClientViews);
 check_final([_ | Results], Must, May, ClientViews) ->
@@ -289,18 +295,21 @@ deliver_msg(#state{msgs = [#msg{to = To} = Msg | Msgs],
              S#state{procs = update_proc(UpdP, Procs),
                      history = History ++ [{deliver_msg, Msg}]}).
 
-make_params(#params{n = NSeed, r = R, w = W} = P) ->
-    %% Ensure R >= N, W >= N and R+W>N
-    MinN = lists:max([R, W]),
-    N = make_range(R + W - NSeed, MinN, R+W-1),
-    %% Force N to be odd while testing
-    {N1,R1} = case N rem 2 == 0 of
-                true ->
-                    {N + 1, R + 1};
-                false ->
-                    {N, R}
-        end,
-    P#params{n = N1, r = R1, m = N1, dw = W}. 
+%% make_params(#params{n = NSeed, r = R, w = W} = P) ->
+%%     %% Ensure R >= N, W >= N and R+W>N
+%%     MinN = lists:max([R, W]),
+%%     N = make_range(R + W - NSeed, MinN, R+W-1),
+%%     %% Force N to be odd while testing
+%%     {N1,R1} = case N rem 2 == 0 of
+%%                 true ->
+%%                     {N + 1, R + 1};
+%%                 false ->
+%%                     {N, R}
+%%         end,
+%%     P#params{n = N1, r = R1, m = N1, dw = W}. 
+make_params(#params{} = P) ->
+    P#params{n = 3, r = 2, m = 5, w = 3, dw = 3}.
+
 
 make_vnodes(#params{n = N, m = M}) ->
     [#proc{name={kv_vnode, I, J}, handler=kv_vnode, procst=undefined} || I <- lists:seq(1, N),
@@ -330,16 +339,47 @@ make_reqs([ReqSeed | ReqSeeds], Cid, Params, CReqNum, Acc) ->
     Reqs = make_req(ReqSeed, Cid, Params, CReqNum),
     make_reqs(ReqSeeds, Cid, Params, CReqNum + 1, lists:reverse(Reqs) ++ Acc).
 
-%% Full EC test make_pl - create a pref list that shrinks to primaries as
-%% seed shrinks to [0]
-make_pl(N, M, PLSeed) ->
-    make_pl(N, M, PLSeed, []).
 
-make_pl(0, _M, _PLSeed, PL) ->
-    PL;
-make_pl(Idx, M, [PLSeedH|PLSeedT], PL) ->
-    Node = (abs(Idx - 1 + PLSeedH) rem M) + 1, % Node between 1 and M
-    make_pl(Idx - 1, M, PLSeedT ++ [PLSeedH], [{kv_vnode, Idx, Node} | PL]).
+%% Make a preference list for partitions 1..N from nodes 1..M.
+%% Owner for partition P == node P.
+%% Replace any downed nodes with fallbacks.  If all nodes are down, 
+%% generate default preflist.
+%% Pick the fallbacks by using non-primaries then fallback 
+%%
+make_pl(N, M, DownNodesSeed) ->
+    %% Convert seed to 1..M
+    DownNodes = [(abs(Seed - 1) rem M) + 1 || Seed <- DownNodesSeed],
+    %% Generate list of primaries and fallbacks
+    Primaries = lists:seq(1, N) -- DownNodes,
+    NonPrimaries = lists:seq(N+1, M) -- DownNodes,
+    Fallbacks = NonPrimaries ++ Primaries,
+    %% Work out which partitions need fallbacks
+    NeedFallbacks = lists:seq(1, N) -- Primaries,
+    case Fallbacks == [] andalso NeedFallbacks /= [] of 
+        true -> %% System unavailable, not a very interesting test so use a perfect one
+            [{kv_vnode, Idx, Idx} || Idx <- lists:seq(1, N)];
+        _ ->
+            make_pl_add_fallbacks(NeedFallbacks,
+                    Fallbacks,
+                    [{kv_vnode, Primary, Primary} || Primary <- lists:reverse(Primaries)])
+    end.
+
+make_pl_add_fallbacks([], _, PL) ->
+    lists:reverse(PL);
+make_pl_add_fallbacks([Idx | NeedFallbacks], [Node | Fallbacks], PL) ->
+    make_pl_add_fallbacks(NeedFallbacks, Fallbacks ++ [Node], [{kv_vnode, Idx, Node} | PL]).
+    
+
+%% %% Full EC test make_pl - create a pref list that shrinks to primaries as
+%% %% seed shrinks to [0]
+%% make_pl(N, M, PLSeed) ->
+%%     make_pl(N, M, PLSeed, []).
+
+%% make_pl(0, _M, _PLSeed, PL) ->
+%%     PL;
+%% make_pl(Idx, M, [PLSeedH|PLSeedT], PL) ->
+%%     Node = (abs(Idx - 1 + PLSeedH) rem M) + 1, % Node between 1 and M
+%%     make_pl(Idx - 1, M, PLSeedT ++ [PLSeedH], [{kv_vnode, Idx, Node} | PL]).
 
 
 %% %% Use PLSeed to change one entry at random when N > 1
@@ -428,10 +468,13 @@ new_req(Op) ->
     #req{pri = next_pri(), op = Op}.
 
 new_msg(From, To, Contents) ->
-    #msg{pri = next_pri(), from = From, to = To, c = Contents}.
+    new_msg(From, To, Contents, next_pri()).
+
+new_msg(From, To, Contents, Pri) ->
+    #msg{from = From, to = To, c = Contents, pri = Pri}.
 
 add_msgs(NewMsgs, Msgs, S) ->
-    S#state{msgs = lists:merge(Msgs, lists:sort(NewMsgs))}.
+    S#state{msgs = lists:keymerge(#msg.pri, Msgs, lists:keysort(#msg.pri, NewMsgs))}.
 
 set_pri(Pris) ->
     put(pri, Pris).
@@ -463,7 +506,7 @@ client_req(#client{reqs = [#req{op = {get, PL}, rid = ReqId} | _]}, Params) ->
     [{procs, NewProcs},
      {msgs, NewMsgs}];
 client_req(#client{reqs = [#req{op = {put, PL, UpdV}, rid = ReqId} | _],
-                   cid = Cid,  clntst = {#req{op={get, _PL}}, GetResult}},
+                   cid = _Cid,  clntst = {#req{op={get, _PL}}, GetResult}},
            Params) ->
     Proc = put_fsm_proc(ReqId, Params),
     NewProcs = [Proc],
@@ -473,8 +516,7 @@ client_req(#client{reqs = [#req{op = {put, PL, UpdV}, rid = ReqId} | _],
                  {ok, Obj} ->
                      riak_object:apply_updates(riak_object:update_value(Obj, UpdV))
              end,
-    UpdObj2 = riak_object:increment_vclock(UpdObj, <<Cid:32>>),
-    NewMsgs = [new_msg({req, ReqId}, Proc#proc.name, {put, PL, UpdObj2})],
+    NewMsgs = [new_msg({req, ReqId}, Proc#proc.name, {put, PL, UpdObj})],
     [{procs, NewProcs},
      {msgs, NewMsgs}];
 client_req(#client{reqs = [#req{op = handoff_fallbacks, rid = ReqId} | _]},
@@ -533,11 +575,15 @@ get_fsm(#msg{from = {kv_vnode, Idx, _}, c = {r, Result, Idx, _ReqId}},
     end.
 
 -record(putfsmst, {reply_to,
+                   putobj,
                    responded = false,
                    putcore}).
-put_fsm_proc(ReqId, #params{n = N, w = W, dw = DW}) ->
+put_fsm_proc(ReqId, #params{n = N, w = _X_W, dw = _X_DW}) ->
     AllowMult = true,
     ReturnBody = false,
+    %% TEMPORARILY SET W=DW=N for now -- check if it fixes the EC problem
+    W = N,
+    DW = N,
     PutCore = riak_kv_put_core:init(N, W, DW, 
                                     N-W+1,   % cannot ever get W replies
                                     N-DW+1,  % cannot ever get DW replies
@@ -546,13 +592,29 @@ put_fsm_proc(ReqId, #params{n = N, w = W, dw = DW}) ->
     #proc{name = {put_fsm, ReqId}, handler = put_fsm, procst = #putfsmst{putcore = PutCore}}.
 
 put_fsm(#msg{from = From, c = {put, PL, Obj}},
-        #proc{name = {put_fsm, ReqId}= Name, procst = ProcSt} = P) ->
-    Ts = ReqId, % re-use ReqId for a timestamp to make them unique
+        #proc{name = {put_fsm, ReqId}= Name, procst = #putfsmst{putcore = PutCore} = ProcSt} = P) ->
+    _Ts = ReqId, % re-use ReqId for a timestamp to make them unique
+    %% Decide on the coordinating vnode and require that as part of the response.
+    %% As indices are fixed, pick lowest index of primary node, falling back to 
+    %% lowest index secondary node
+    {_, CoordIdx, Node} = hd(lists:sort([{case Idx == Node of
+                                               true -> 1; 
+                                               false -> 2
+                                           end, Idx, Node} ||
+                                             {kv_vnode, Idx, Node} <- PL])),
+    NodeId = <<Node:32>>,
+    UpdObj = riak_object:increment_vclock(Obj, NodeId, ts),
+    %% TODO, find some way to make putcore wait on the response from the local vnode.
+    %% Temporarily set dw to all.
+
     %% Kick off requests to the vnodes
-    [{msgs, [new_msg(Name, Vnode, {put, Obj, ReqId, Ts}) || Vnode <- PL]},
-     {updp, P#proc{procst = ProcSt#putfsmst{reply_to = From}}}];
+    [{msgs, [new_msg(Name, Vnode, {put, ReqId, UpdObj, NodeId}) || Vnode <- PL]},
+     {updp, P#proc{procst = ProcSt#putfsmst{putcore = riak_kv_put_core:coord_idx(CoordIdx, PutCore),
+                                            putobj = UpdObj,
+                                            reply_to = From}}}];
 put_fsm(#msg{from = {kv_vnode, _, _}, c = Result},
         #proc{name = Name, procst = #putfsmst{reply_to = ReplyTo,
+                                              putobj = PutObj,
                                               responded = Responded,
                                               putcore = PutCore} = ProcSt} = P) ->
     UpdPutCore = riak_kv_put_core:add_result(Result, PutCore),
@@ -560,7 +622,7 @@ put_fsm(#msg{from = {kv_vnode, _, _}, c = Result},
         true when Responded == false ->
             %% Worry about read repairs later
             {Response, UpdPutCore2} = riak_kv_put_core:response(UpdPutCore),
-            [{msgs, [new_msg(Name, ReplyTo, Response)]},
+            [{msgs, [new_msg(Name, ReplyTo, {Response, PutObj})]},
              {updp, P#proc{procst = ProcSt#putfsmst{responded = true,
                                                     putcore = UpdPutCore2}}}];
         _ ->
@@ -577,20 +639,21 @@ kv_vnode(#msg{from = From, c = {get, ReqId}},
                      {ok, CurObj}
              end,
     [{msgs, [new_msg(Name, From, {r, Result, Idx, ReqId})]}];
-kv_vnode(#msg{from = From, c = {put, NewObj, ReqId, Ts}},
+kv_vnode(#msg{from = From, c = {put, ReqId, NewObj, CoordId}},
          #proc{name = {kv_vnode, Idx, _Node} = Name, procst = CurObj} = P) ->
-    WMsg = new_msg(Name, From, {w, Idx, ReqId}),
-    case syntactic_put_merge(CurObj, NewObj, ReqId, Ts) of
+    [Pri1, Pri2] = lists:sort([next_pri(), next_pri()]),
+    WMsg = new_msg(Name, From, {w, Idx, ReqId}, Pri1),
+    case coord_put_merge(CurObj, NewObj, CoordId) of
         keep ->
-            FailMsg = new_msg(Name, From, {fail, Idx, ReqId}),
+            FailMsg = new_msg(Name, From, {fail, Idx, ReqId}, Pri2),
             [{msgs, [WMsg, FailMsg]}];
         UpdObj ->
-            DWMsg = new_msg(Name, From, {dw, Idx, ReqId}), % ignore returnbody for now
+            DWMsg = new_msg(Name, From, {dw, Idx, ReqId}, Pri2), % ignore returnbody for now
             [{msgs, [WMsg, DWMsg]},
              {updp, P#proc{procst = UpdObj}}]
     end;
 kv_vnode(#msg{from = From, c = {handoff_to, To}},
-         #proc{procst = CurObj}) ->
+         #proc{procst = CurObj} = P) ->
     %% Send current object to node if there is one
     %% TODO: Schedule message to make this vnode reset itself if unchanged
     NewMsgs = case CurObj of
@@ -599,7 +662,8 @@ kv_vnode(#msg{from = From, c = {handoff_to, To}},
                   _ ->
                       [new_msg(From, To, {handoff_obj, CurObj})]
               end,
-    [{msgs, NewMsgs}];
+    [{msgs, NewMsgs},
+     {updp, P#proc{procst = undefined}}];
 kv_vnode(#msg{c = {handoff_obj, HandoffObj}},
          #proc{procst = CurObj} = P) ->
     %% Simulate a do_diffobj_put
@@ -626,3 +690,35 @@ syntactic_put_merge(CurObj, UpdObj, ReqId, Ts) ->
                 false -> ResObj %% {newobj, ResObj}
             end
     end.
+
+
+coord_put_merge(undefined, UpdObj, _CoordId) ->
+    UpdObj;
+coord_put_merge(CurObj, UpdObj, CoordId) ->
+    %% Make sure UpdObj descends from CurObj and that CoordId is greater
+    CurVC = riak_object:vclock(CurObj),
+    UpdVC = riak_object:vclock(UpdObj),
+    case get_counter(CoordId, UpdVC) > get_counter(CoordId, CurVC) of
+        true ->
+            %% Valid coord put replacing current object
+            case vclock:descends(CurVC, UpdVC) == false andalso 
+                vclock:descends(UpdVC, CurVC) == true of
+                true ->
+                    UpdObj;
+                false ->
+                    riak_object:merge(CurObj, UpdObj)
+            end;
+        false ->
+            keep
+    end.
+
+
+get_counter(Id, VC) ->            
+    case lists:keyfind(Id, 1, VC) of
+        false ->
+            0;
+        {Counter, _TS} ->
+            Counter
+    end.
+            
+    

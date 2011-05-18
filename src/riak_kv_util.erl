@@ -62,7 +62,7 @@ is_x_deleted(Obj) ->
 %%      are marked deleted, or the input Obj if any of them are not.
 obj_not_deleted(Obj) ->
     case [{M, V} || {M, V} <- riak_object:get_contents(Obj),
-                    dict:is_key(<<"X-Riak-Deleted">>, M) =:= false] of
+                    orddict:is_key(<<"X-Riak-Deleted">>, M) =:= false] of
         [] -> undefined;
         _ -> Obj
     end.
@@ -188,7 +188,7 @@ normalize_test() ->
 deleted_test() ->
     O = riak_object:new(<<"test">>, <<"k">>, "v"),
     false = is_x_deleted(O),
-    MD = dict:new(),
+    MD = orddict:new(),
     O1 = riak_object:apply_updates(
            riak_object:update_metadata(
              O, dict:store(<<"X-Riak-Deleted">>, true, MD))),
