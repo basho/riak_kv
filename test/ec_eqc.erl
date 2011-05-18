@@ -1,6 +1,18 @@
 -module(ec_eqc).
 -include_lib("eqc/include/eqc.hrl").
+-include_lib("eunit/include/eunit.hrl").
+
 -compile([export_all]).
+
+-define(QC_OUT(P),
+        eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
+
+%%====================================================================
+%% eunit test 
+%%====================================================================
+
+eqc_test_() ->
+    {timeout, 60000, ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop()))))}.
 
 %% TODO: 
 %% Change put to use per-node vclock.
@@ -102,6 +114,9 @@ prop() ->
                 Start = Initial#state{clients = Clients},
                 case exec(Start) of
                     {ok, Final} ->
+                        io:format("Params:\n~p\nHistory\n~p\n\n", 
+                                  [ann_params(Params),
+                                   Final#state.history]),
                         ?WHENFAIL(
                            begin
                                io:format("Params:\n~p\nClients:\n~p\nFinal:\n~p\nHistory:\n~p\n",
@@ -540,7 +555,8 @@ end_req(#msg{c = Result},
 %% node_proc(#msg{from = From, c = ping}, #proc{name = {node, _}=Name}) ->
 %%     [{msgs, [#msg{from = Name, to = From, c = pong}]}].
                
--record(getfsmst, {reply_to,
+-record(getfsmst, {pl,
+                   reply_to,
                    responded = false,
                    getcore}).
 
@@ -556,23 +572,47 @@ get_fsm(#msg{from = From, c = {get, PL}},
         #proc{name = {get_fsm, ReqId} = Name, procst = ProcSt} = P) ->
     %% Kick off requests to the vnodes
     [{msgs, [new_msg(Name, Vnode, {get, ReqId}) || Vnode <- PL]},
-     {updp, P#proc{procst = ProcSt#getfsmst{reply_to = From}}}];
+     {updp, P#proc{procst = ProcSt#getfsmst{pl = PL, reply_to = From}}}];
 get_fsm(#msg{from = {kv_vnode, Idx, _}, c = {r, Result, Idx, _ReqId}},
-        #proc{name = Name, procst = #getfsmst{reply_to = ReplyTo,
+        #proc{name = Name, procst = #getfsmst{pl = PL,
+                                              reply_to = ReplyTo,
                                               responded = Responded,
                                               getcore = GetCore} = ProcSt} = P) ->
-    UpdGetCore = riak_kv_get_core:add_result(Idx, Result, GetCore),
-    case riak_kv_get_core:enough(UpdGetCore) of
-        true when Responded == false ->
-            %% Worry about read repairs later
-            {Response, UpdGetCore2} = riak_kv_get_core:response(UpdGetCore),
-            [{msgs, [new_msg(Name, ReplyTo, Response)]},
-             {updp, P#proc{procst = ProcSt#getfsmst{responded = true, 
-                                                    getcore = UpdGetCore2}}}];
-        _ ->
-            %% Replied already or more to come, worry about timeout later.
-            [{updp, P#proc{procst = ProcSt#getfsmst{getcore = UpdGetCore}}}]
-    end.
+    UpdGetCore1 = riak_kv_get_core:add_result(Idx, Result, GetCore),
+    {ReplyMsgs, UpdGetCore3, UpdResponded} =
+        case riak_kv_get_core:enough(UpdGetCore1) of
+            true when Responded == false ->
+                %% Worry about read repairs later
+                {Response, UpdGetCore2} = riak_kv_get_core:response(UpdGetCore1),
+                {[new_msg(Name, ReplyTo, Response)], UpdGetCore2, true};
+            _ ->
+                %% Replied already or more to come, worry about timeout later.
+                {[], UpdGetCore1, Responded}
+        end,
+    %% If all results then trigger any final actions
+    {FinalMsgs, UpdGetCore} =
+        case riak_kv_get_core:has_all_results(UpdGetCore3) of
+            true ->
+                {Final, UpdGetCore4} = riak_kv_get_core:final_action(UpdGetCore3),
+                case Final of
+                    %% Treat read repairs as handoff puts for now - want 
+                    %% normal merging behavior.
+                    {read_repair, RepairIdx, MObj} ->
+                        {[new_msg(Name, To, {handoff_obj, MObj, read_repair}) ||
+                                     {kv_vnode, Idx0, _Node} = To <- PL,
+                                     lists:member(Idx0, RepairIdx)], 
+                         UpdGetCore4};
+                    _ -> %% Ignore deletes and nops for now
+                        {[], UpdGetCore4}
+                end;
+            false ->
+                {[], UpdGetCore3}
+        end,
+    [{msgs, ReplyMsgs ++ FinalMsgs},
+     {updp, P#proc{procst = ProcSt#getfsmst{responded = UpdResponded,
+                                            getcore = UpdGetCore}}}].
+    
+    
 
 -record(putfsmst, {reply_to,
                    putobj,
@@ -686,11 +726,11 @@ kv_vnode(#msg{from = From, c = {handoff_to, To}},
                   undefined ->
                       [];
                   _ ->
-                      [new_msg(From, To, {handoff_obj, CurObj})]
+                      [new_msg(From, To, {handoff_obj, CurObj, handoff})]
               end,
     [{msgs, NewMsgs},
      {updp, P#proc{procst = undefined}}];
-kv_vnode(#msg{c = {handoff_obj, HandoffObj}},
+kv_vnode(#msg{c = {handoff_obj, HandoffObj, _Why}},
          #proc{procst = CurObj} = P) ->
     %% Simulate a do_diffobj_put
     ReqId = erlang:phash2(erlang:now()),
