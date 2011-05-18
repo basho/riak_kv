@@ -576,6 +576,7 @@ get_fsm(#msg{from = {kv_vnode, Idx, _}, c = {r, Result, Idx, _ReqId}},
 
 -record(putfsmst, {reply_to,
                    putobj,
+                   remotevnodes, %% Messages to send to remove vnodes
                    responded = false,
                    putcore}).
 put_fsm_proc(ReqId, #params{n = N, w = _X_W, dw = _X_DW}) ->
@@ -608,10 +609,32 @@ put_fsm(#msg{from = From, c = {put, PL, Obj}},
     %% Temporarily set dw to all.
 
     %% Kick off requests to the vnodes
-    [{msgs, [new_msg(Name, Vnode, {put, ReqId, UpdObj, NodeId}) || Vnode <- PL]},
+    LocalMsg =  new_msg(Name, {kv_vnode, CoordIdx, Node}, {put, ReqId, UpdObj, NodeId}),
+    RemotePL = [Entry || {kv_vnode, Idx0, _Node0} = Entry <- PL, Idx0 /= CoordIdx],
+    RemoteMsgs = [new_msg(Name, Vnode, {put, ReqId, UpdObj, NodeId}) || Vnode <- RemotePL],
+    [{msgs, [LocalMsg]},
      {updp, P#proc{procst = ProcSt#putfsmst{putcore = riak_kv_put_core:coord_idx(CoordIdx, PutCore),
+                                            remotevnodes = RemoteMsgs,
                                             putobj = UpdObj,
                                             reply_to = From}}}];
+put_fsm(#msg{from = {kv_vnode, _, _}, c = Result}, %% First response failed, abort
+        #proc{name = Name, procst = #putfsmst{reply_to = ReplyTo,
+                                              putobj = PutObj,
+                                              remotevnodes = RemoteVnodes,
+                                              putcore = PutCore} = ProcSt} = P) when RemoteVnodes /= undefined ->
+    UpdPutCore = riak_kv_put_core:add_result(Result, PutCore),
+    case Result of
+        {fail, _, _} -> %% failed because out of date
+            [{msgs, [new_msg(Name, ReplyTo, {{error, out_of_date}, PutObj})]},
+             {updp, P#proc{procst = ProcSt#putfsmst{responded = true, putcore = UpdPutCore}}}];
+        {w, _, _} -> % W from coord, no excitement.
+            [{updp, P#proc{procst = ProcSt#putfsmst{putcore = UpdPutCore}}}];
+        {dw, _, _} -> % DW from coord, green light for the rest of the put
+            [{msgs, RemoteVnodes},
+             {updp, P#proc{procst = ProcSt#putfsmst{putcore = UpdPutCore,
+                                                    remotevnodes = undefined}}}]
+    end;
+%% Handle results from non-coordinator
 put_fsm(#msg{from = {kv_vnode, _, _}, c = Result},
         #proc{name = Name, procst = #putfsmst{reply_to = ReplyTo,
                                               putobj = PutObj,
