@@ -59,14 +59,11 @@ delete(ReqId,Bucket,Key,RW0,Timeout,Client,ClientId,undefined) ->
             {ok, C} = riak:local_client(),
             case C:get(Bucket,Key,RW,Timeout) of
                 {ok, OrigObj} ->
-                    %?debugFmt("doing a delete of ~p~n", [OrigObj]),
                     RemainingTime = Timeout - (riak_core_util:moment() - RealStartTime),
                     delete(ReqId,Bucket,Key,RW,RemainingTime,Client,ClientId,riak_object:vclock(OrigObj));
                 {error, notfound} ->
-                    %?debugFmt("notfound ~n", []),
                     Client ! {ReqId, {error, notfound}};
                 X ->
-                    %?debugFmt("error ~p ~n", [X]),
                     Client ! {ReqId, X}
             end
     end;
