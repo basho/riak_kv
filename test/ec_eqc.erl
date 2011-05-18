@@ -91,13 +91,24 @@ gen_params() ->
             r = choose(1, 5),
             w = choose(1, 5)}.
             
-gen_req() ->
+gen_regular_req() ->
     ?SHRINK(elements([{get, gen_pl_seed()},
                       {update, gen_pl_seed(), gen_pl_seed()}]),
             [{update, gen_pl_seed(), gen_pl_seed()}]).
 
+gen_handoff_req() ->
+    {trigger_handoff, int(), int()}. %% Generate a handoff request for index/node
+    
+gen_regular_client() ->
+    #client{reqs = non_empty(list(gen_regular_req()))}.
+
+gen_handoff_client() ->
+    #client{reqs = ?SHRINK(list(gen_handoff_req()), [])}.
+
 gen_client_seeds() ->
-    non_empty(list(#client{reqs = non_empty(list(gen_req()))})).
+    ?LET({Clients, Handoff}, 
+         {non_empty(list(gen_regular_client())), gen_handoff_client()},
+         [Handoff | Clients]).
 
 prop() ->
     ?FORALL({Pris, ClientSeeds, ParamsSeed},
@@ -331,15 +342,17 @@ make_vnodes(#params{n = N, m = M}) ->
                                                                          J <- lists:seq(1, M)].
 
 make_clients(ClientSeeds, Params) ->
-    make_clients(ClientSeeds, 1, Params, []).
+    make_clients(ClientSeeds, 0, Params, []). %% 0 will be handoff req
 
 make_clients([], _Cid, #params{n = N}, Acc) ->
     %% Make sure the last request is a get.
-    HandoffReq = new_req(handoff_fallbacks),
+    HandoffReq = new_req(final_handoffs),
     GetReq = new_req({get, [{kv_vnode, I, I} || I <- lists:seq(1, N)]}),
     LastC = #client{cid = 1000000, reqs = [HandoffReq#req{pri = 1000001},
                                            GetReq#req{pri = 1000002}]},
     lists:reverse([LastC | Acc]);
+make_clients([#client{reqs = []} | CSs], Cid, Params, Acc) -> % skip request-less clients
+    make_clients(CSs, Cid + 1, Params, Acc); % increment Cid, is probably handoff proc
 make_clients([#client{reqs = ReqSeeds} = CS | CSs], Cid, Params, Acc) ->
     Reqs = make_reqs(ReqSeeds, Cid, Params),
     C = CS#client{cid = Cid, reqs = Reqs},
@@ -476,8 +489,12 @@ make_req({update, PLSeed1, PLSeed2}, Cid, #params{n = N, m = M}, CReqNum) ->
     Value = iolist_to_binary(io_lib:format("C~p-U~p", [Cid, CReqNum])),
     [new_req({get, make_pl(N, M, PLSeed1)}),
      new_req({put, make_pl(N, M, PLSeed2), Value})];
-make_req(handoff_fallbacks, _Cid, _Params, _CReqNum) ->
-    [new_req(handoff_fallbacks)].
+make_req({trigger_handoff, IdxSeed, NodeSeed}, _Cid, #params{n = N, m = M}, _CReqNum) ->
+    Idx = make_range(IdxSeed, 1, N),
+    Node = make_range(NodeSeed, 1, M),
+    [new_req({trigger_handoff, Idx, Node})];
+make_req(final_handoffs, _Cid, _Params, _CReqNum) ->
+    [new_req(final_handoffs)].
 
 new_req(Op) ->
     #req{pri = next_pri(), op = Op}.
@@ -534,14 +551,19 @@ client_req(#client{reqs = [#req{op = {put, PL, UpdV}, rid = ReqId} | _],
     NewMsgs = [new_msg({req, ReqId}, Proc#proc.name, {put, PL, UpdObj})],
     [{procs, NewProcs},
      {msgs, NewMsgs}];
-client_req(#client{reqs = [#req{op = handoff_fallbacks, rid = ReqId} | _]},
+client_req(#client{reqs = [#req{op = {trigger_handoff, Idx, Node}, rid = ReqId} | _]}, _Params) ->
+    %% Send handoff_to messages to each fallback vnode
+    HandoffMsg = new_msg(undefined, {kv_vnode, Idx, Node}, {handoff_to, {kv_vnode, Idx, Idx}}),
+    ResponseMsg = new_msg(undefined, {req, ReqId}, handoff_scheduled),
+    [{msgs, [HandoffMsg, ResponseMsg]}];
+client_req(#client{reqs = [#req{op = final_handoffs, rid = ReqId} | _]},
            #params{n = N, m = M}) ->
     %% Send handoff_to messages to each fallback vnode
     HandoffMsgs = [new_msg(undefined, {kv_vnode, I, J}, {handoff_to, {kv_vnode, I, I}}) || 
                       I <- lists:seq(1, N),
                       J <- lists:seq(1, M),
                       I /= J],
-    ResponseMsg = new_msg(undefined, {req, ReqId}, handoffs_scheduled),
+    ResponseMsg = new_msg(undefined, {req, ReqId}, final_handoffs_scheduled),
     [{msgs, HandoffMsgs ++ [ResponseMsg]}].
 
 end_req(#msg{c = Result},
