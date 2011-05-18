@@ -1176,7 +1176,13 @@ ensure_doc(Ctx) -> Ctx.
 %% @spec delete_resource(reqdata(), context()) -> {true, reqdata(), context()}
 %% @doc Delete the document specified.
 delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C, rw=RW}) ->
-    case C:delete(B, K, RW) of
+    Result = case wrq:get_req_header(?HEAD_VCLOCK, RD) of
+        undefined -> 
+            C:delete(B,K,RW);
+        _ ->
+            C:delete_vclock(B,K,decode_vclock_header(RD),RW)
+    end,
+    case Result of
         {error, notfound} ->
             {{halt, 404},
              wrq:set_resp_header("Content-Type", "text/plain",
