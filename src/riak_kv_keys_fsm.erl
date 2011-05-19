@@ -77,8 +77,7 @@
                 required_responses :: pos_integer(),
                 response_count=0 :: non_neg_integer(),
                 ring :: riak_core_ring:riak_core_ring(),
-                timeout :: timeout(),
-                upnodes :: [node()]
+                timeout :: timeout()
                }).
 
 %% ===================================================================
@@ -180,14 +179,12 @@ initialize(timeout, StateData0=#state{bucket=Bucket,
     %% Create a proplist with ring positions as 
     %% keys and VNodes as the values.
     VNodePositions = lists:zip(lists:seq(0, length(VNodes)-1), VNodes),
-    %% Determine the riak_kv nodes that are available
-    UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    case plan_and_execute(ReqId, Input, VNodePositions, NVal, Timeout, [], []) of
+    case plan_and_execute(ReqId, Input, VNodePositions, NVal, length(VNodes), Timeout, [], []) of
         {ok, RequiredResponseCount, PrefListPositions} ->
             StateData = StateData0#state{n_val=NVal,
                                          pref_list_positions=PrefListPositions,
-                                         required_responses=RequiredResponseCount,
-                                         upnodes=UpNodes},
+                                         required_responses=RequiredResponseCount
+                                         },
             {next_state, waiting_kl, StateData, Timeout};
         {error, Reason} ->
             finish({error, Reason}, StateData0)
@@ -201,12 +198,12 @@ waiting_kl({ReqId, {kl, VNode, Keys}},
                             n_val=NVal,
                             pref_list_positions=PrefListPositions,
                             ring=Ring,
-                            timeout=Timeout,
-                            upnodes=UpNodes}) ->
+                            timeout=Timeout
+                            }) ->
     %% Look up the position in the preference list of the VNode
     %% that the keys are expected to be reported from.
     PrefListPosition = proplists:get_value(VNode, PrefListPositions),
-    process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, UpNodes, PrefListPosition, From),
+    process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, PrefListPosition, From),
     {next_state, waiting_kl, StateData, Timeout};
 waiting_kl({ReqId, _VNode, done}, StateData0=#state{from={raw, ReqId, _},
                                                     required_responses=RequiredResponses,
@@ -276,10 +273,10 @@ finish(clean, StateData=#state{from={raw, ReqId, ClientPid}, client_type=ClientT
     {stop,normal,StateData}.
 
 %% @private
-plan_and_execute(ReqId, Input, VNodePositions, NVal, Timeout, KeyListers, DownNodes) ->
+plan_and_execute(ReqId, Input, VNodePositions, NVal, PartitionCount, Timeout, KeyListers, DownNodes) ->
     %% Generate a coverage plan
     CoveragePlanResult =
-        create_coverage_plan(VNodePositions, NVal, DownNodes),
+        create_coverage_plan(VNodePositions, NVal, PartitionCount, DownNodes),
     case CoveragePlanResult of
         {error, _} ->
             %% Failed to create a coverage plan so return the error
@@ -297,12 +294,12 @@ plan_and_execute(ReqId, Input, VNodePositions, NVal, Timeout, KeyListers, DownNo
                     {ok, RequiredResponseCount, PrefListPositions};
                 _ ->
                     plan_and_execute(ReqId, Input, VNodePositions,
-                                     NVal,
+                                     NVal, PartitionCount,
                                      Timeout, AggregateKeyListers, ErrorNodes)
             end
     end.
 
-create_coverage_plan(VNodePositions, NVal, DownNodes) ->    
+create_coverage_plan(VNodePositions, NVal, PartitionCount, DownNodes) ->    
     PartitionCount = length(VNodePositions),
     %% AvailableVNodes = VNodes -- DownVNodes
     %% Make list of which partitions each VNode covers
@@ -320,7 +317,7 @@ create_coverage_plan(VNodePositions, NVal, DownNodes) ->
         {ok, CoveragePlan} ->
             %% Assemble the data structures required for
             %% executing the coverage operation.
-            assemble_coverage_structures(CoveragePlan, NVal, VNodePositions);
+            assemble_coverage_structures(CoveragePlan, NVal, PartitionCount, VNodePositions);
        {insufficient_vnodes_available, _}  ->
             {error, insufficient_vnodes_available}
     end.
@@ -381,11 +378,11 @@ covers(KeySpace, CoversKeys) ->
     ordsets:size(ordsets:intersection(KeySpace, CoversKeys)).
 
 %% @private
-assemble_coverage_structures(CoveragePlan, NVal, VNodeIndex) ->
-    assemble_coverage_structures(CoveragePlan, NVal, VNodeIndex, [], []).
+assemble_coverage_structures(CoveragePlan, NVal, PartitionCount, VNodeIndex) ->
+    assemble_coverage_structures(CoveragePlan, NVal, PartitionCount, VNodeIndex, [], []).
 
 %% @private
-assemble_coverage_structures([], _, _, CoverageVNodes, PrefListPositions) ->
+assemble_coverage_structures([], _, _, _, CoverageVNodes, PrefListPositions) ->
     %% NodeIndexes is a dictionary where the keys are
     %% nodes and the values are lists of VNode indexes.
     %% This is used to determine which nodes to start keylister
@@ -398,7 +395,7 @@ assemble_coverage_structures([], _, _, CoverageVNodes, PrefListPositions) ->
     %% preference list.
     NodeIndexes = group_indexes_by_node(CoverageVNodes, []),
     {NodeIndexes, PrefListPositions};
-assemble_coverage_structures([{RingPosition, RingPositionList} | RestCoveragePlan], NVal, VNodeIndex, CoverageVNodes, PrefListPositions) ->
+assemble_coverage_structures([{RingPosition, RingPositionList} | RestCoveragePlan], NVal, PartitionCount, VNodeIndex, CoverageVNodes, PrefListPositions) ->
     %% Lookup the VNode index and node
     {Index, Node} = proplists:get_value(RingPosition, VNodeIndex),
     CoverageVNodes1 = [{Index, Node} | CoverageVNodes],
@@ -406,10 +403,10 @@ assemble_coverage_structures([{RingPosition, RingPositionList} | RestCoveragePla
         true ->
             PrefListPositions1 = [{{Index, Node}, all} | PrefListPositions];
         false ->
-            PositionList = lists:reverse([NVal-(X-RingPosition) || X <- RingPositionList]),
+            PositionList = lists:reverse([NVal - (((X - RingPosition) + PartitionCount) rem PartitionCount) || X <- RingPositionList]),
             PrefListPositions1 = [{{Index, Node}, PositionList} | PrefListPositions]
     end,
-    assemble_coverage_structures(RestCoveragePlan, NVal, VNodeIndex, CoverageVNodes1, PrefListPositions1).
+    assemble_coverage_structures(RestCoveragePlan, NVal, PartitionCount, VNodeIndex, CoverageVNodes1, PrefListPositions1).
 
 %% @private
 group_indexes_by_node([], NodeIndexes) ->
@@ -461,11 +458,11 @@ start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Timeout) ->
     lists:foldl(StartListerFunc, {KeyListers, []}, NodeIndexes).
 
 %% @private
-process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, UpNodes, PrefListPosition, From) ->
-    process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, UpNodes, PrefListPosition, From, []).
+process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, PrefListPosition, From) ->
+    process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, PrefListPosition, From, []).
 
 %% @private
-process_keys(_, [], Bucket, ClientType, _, _, _, _, {raw,ReqId,ClientPid}, Acc) ->
+process_keys(_, [], Bucket, ClientType, _, _, _, {raw,ReqId,ClientPid}, Acc) ->
     case ClientType of
         mapred ->
             try
@@ -475,19 +472,19 @@ process_keys(_, [], Bucket, ClientType, _, _, _, _, {raw,ReqId,ClientPid}, Acc) 
             end;
         plain -> ClientPid ! {ReqId, {keys, Acc}}
     end;
-process_keys(_VNode, [K|Rest], _Bucket, _ClientType, _Ring, _NVal, _UpNodes, all, _From, Acc) ->
-    process_keys(_VNode, Rest, _Bucket, _ClientType, _Ring, _NVal, _UpNodes, all, _From, [K|Acc]);
-process_keys(VNode, [K|Rest], Bucket, ClientType, Ring, NVal, UpNodes, PrefListPosition, From, Acc) ->
+process_keys(_VNode, [K|Rest], _Bucket, _ClientType, _Ring, _NVal, all, _From, Acc) ->
+    process_keys(_VNode, Rest, _Bucket, _ClientType, _Ring, _NVal, all, _From, [K|Acc]);
+process_keys(VNode, [K|Rest], Bucket, ClientType, Ring, NVal, PrefListPosition, From, Acc) ->
     %% Get the chash key for the bucket-key pair and
     %% use that to determine the preference list to
     %% use in filtering the keys from this VNode.
     ChashKey = riak_core_util:chash_key({Bucket, K}),
-    PrefList = riak_core_apl:get_apl_ann(ChashKey, NVal, Ring, UpNodes),
+    PrefList = lists:sublist(riak_core_ring:preflist(ChashKey, Ring), NVal),
     case check_pref_list_positions(PrefListPosition, VNode, PrefList) of
         true ->
-            process_keys(VNode, Rest, Bucket, ClientType, Ring, NVal, UpNodes, PrefListPosition, From, [K|Acc]);
+            process_keys(VNode, Rest, Bucket, ClientType, Ring, NVal, PrefListPosition, From, [K|Acc]);
         false ->
-            process_keys(VNode, Rest, Bucket, ClientType, Ring, NVal, UpNodes, PrefListPosition, From, Acc)
+            process_keys(VNode, Rest, Bucket, ClientType, Ring, NVal, PrefListPosition, From, Acc)
     end.
 
 %% @private
@@ -495,7 +492,7 @@ check_pref_list_positions([], _, _) ->
     false;
 check_pref_list_positions([Position | RestPositions], VNode, PrefList) ->
     case lists:nth(Position, PrefList) of
-        {VNode, primary} ->
+        VNode ->       
             true;
         _ ->
             check_pref_list_positions(RestPositions, VNode, PrefList)
