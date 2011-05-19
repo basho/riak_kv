@@ -49,7 +49,8 @@
 -record(state, {reqid,
                 caller,
                 bucket,               
-                filter,
+                key_filter,
+                vnode_filter,
                 vnodes}).
 
 %% ===================================================================
@@ -77,9 +78,9 @@ update_vnodes(ListerPid, VNodes) ->
 
 init([ReqId, Caller, Inputs, VNodes]) ->
     erlang:monitor(process, Caller),
-    {Bucket, Filter} = build_filter(Inputs),    
+    {Bucket, KeyFilter} = build_key_filter(Inputs),    
     {ok, waiting, #state{reqid=ReqId, caller=Caller, bucket=Bucket,
-                         filter=Filter, vnodes=VNodes}}.
+                         key_filter=KeyFilter, vnodes=VNodes}}.
 
 waiting(start, #state{reqid=ReqId, bucket=Bucket, vnodes=VNodes}=State) ->
     riak_kv_vnode:list_keys(VNodes, ReqId, self(), Bucket),
@@ -103,25 +104,29 @@ handle_sync_event(_Event, _From, StateName, State) ->
     {reply, ignored, StateName, State}.
 
 handle_info({ReqId, {kl, Idx, Keys}}, waiting, #state{reqid=ReqId,
-                                                       filter=list_buckets, caller=Caller}=State) ->    
+                                                      key_filter=list_buckets,
+                                                      caller=Caller}=State) ->    
     %% Skip the fold if listing buckets
     gen_fsm:send_event(Caller, {ReqId, {kl, {Idx, node()}, lists:usort(Keys)}}),
-    {next_state, waiting, State};    
+    {next_state, waiting, State};
+handle_info({ReqId, {kl, Idx, Keys}}, waiting, #state{reqid=ReqId,
+                                                      key_filter=none,
+                                                      caller=Caller}=State) ->    
+    %% No need to filter so just return the keys
+    gen_fsm:send_event(Caller, {ReqId, {kl, {Idx, node()}, Keys}}),
+    {next_state, waiting, State};        
 handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{reqid=ReqId,
-                                                       filter=Filter, caller=Caller}=State) ->    
-    F = fun(Key, Acc) ->
-                case is_function(Filter) of
+                                                       key_filter=KeyFilter,
+                                                       caller=Caller}=State) ->    
+    FilterFun = fun(Key, Acc) ->
+                case KeyFilter(Key) of
                     true ->
-                        case Filter(Key) of
-                            true ->
-                                [Key|Acc];
-                            false ->
-                                Acc
-                        end;
+                        [Key|Acc];
                     false ->
-                        [Key|Acc]
-                end end,
-    case lists:foldl(F, [], Keys0) of
+                        Acc
+                end
+           end,
+    case lists:foldl(FilterFun, [], Keys0) of
         [] ->
             ok;
         Keys ->
@@ -146,13 +151,13 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %% Internal functions
 %% ====================================================================
 
-build_filter('_') ->
+build_key_filter('_') ->
     {'_', list_buckets};
-build_filter(Bucket) when is_binary(Bucket) ->
-    {Bucket, []};
-build_filter({filter, Bucket, Fun}) when is_function(Fun) ->
+build_key_filter(Bucket) when is_binary(Bucket) ->
+    {Bucket, none};
+build_key_filter({filter, Bucket, Fun}) when is_function(Fun) ->
     %% this is the representation used by riak_client:filter_keys
     {Bucket, Fun};
-build_filter({Bucket, Filters}) ->
+build_key_filter({Bucket, Filters}) ->
     FilterFun = riak_kv_mapred_filters:compose(Filters),
     {Bucket, FilterFun}.
