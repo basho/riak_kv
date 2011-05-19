@@ -125,9 +125,9 @@ prop() ->
                 Start = Initial#state{clients = Clients},
                 case exec(Start) of
                     {ok, Final} ->
-                        io:format("Params:\n~p\nHistory\n~p\n\n", 
-                                  [ann_params(Params),
-                                   Final#state.history]),
+                        %% io:format("Params:\n~p\nHistory\n~p\n\n", 
+                        %%           [ann_params(Params),
+                        %%            Final#state.history]),
                         ?WHENFAIL(
                            begin
                                io:format("Params:\n~p\nClients:\n~p\nFinal:\n~p\nHistory:\n~p\n",
@@ -351,12 +351,14 @@ make_clients([], _Cid, #params{n = N}, Acc) ->
     LastC = #client{cid = 1000000, reqs = [HandoffReq#req{pri = 1000001},
                                            GetReq#req{pri = 1000002}]},
     lists:reverse([LastC | Acc]);
-make_clients([#client{reqs = []} | CSs], Cid, Params, Acc) -> % skip request-less clients
-    make_clients(CSs, Cid + 1, Params, Acc); % increment Cid, is probably handoff proc
 make_clients([#client{reqs = ReqSeeds} = CS | CSs], Cid, Params, Acc) ->
-    Reqs = make_reqs(ReqSeeds, Cid, Params),
-    C = CS#client{cid = Cid, reqs = Reqs},
-    make_clients(CSs, Cid + 1, Params, [C | Acc]).
+    case make_reqs(ReqSeeds, Cid, Params) of
+        [] ->% skip request-less clients
+            make_clients(CSs, Cid + 1, Params, Acc); % increment Cid, is probably handoff proc
+        Reqs ->
+            C = CS#client{cid = Cid, reqs = Reqs},
+            make_clients(CSs, Cid + 1, Params, [C | Acc])
+    end.
     
 make_reqs(ReqSeeds, Cid, Params) ->
     make_reqs(ReqSeeds, Cid, Params, 1, []).
@@ -491,8 +493,12 @@ make_req({update, PLSeed1, PLSeed2}, Cid, #params{n = N, m = M}, CReqNum) ->
      new_req({put, make_pl(N, M, PLSeed2), Value})];
 make_req({trigger_handoff, IdxSeed, NodeSeed}, _Cid, #params{n = N, m = M}, _CReqNum) ->
     Idx = make_range(IdxSeed, 1, N),
-    Node = make_range(NodeSeed, 1, M),
-    [new_req({trigger_handoff, Idx, Node})];
+    case make_range(NodeSeed, 1, M) of
+        Idx ->
+            []; %% Cannot handoff to self
+        Node ->
+           [new_req({trigger_handoff, Idx, Node})]
+    end;
 make_req(final_handoffs, _Cid, _Params, _CReqNum) ->
     [new_req(final_handoffs)].
 
@@ -553,17 +559,17 @@ client_req(#client{reqs = [#req{op = {put, PL, UpdV}, rid = ReqId} | _],
      {msgs, NewMsgs}];
 client_req(#client{reqs = [#req{op = {trigger_handoff, Idx, Node}, rid = ReqId} | _]}, _Params) ->
     %% Send handoff_to messages to each fallback vnode
-    HandoffMsg = new_msg(undefined, {kv_vnode, Idx, Node}, {handoff_to, {kv_vnode, Idx, Idx}}),
-    ResponseMsg = new_msg(undefined, {req, ReqId}, handoff_scheduled),
+    HandoffMsg = new_msg(handoff, {kv_vnode, Idx, Node}, {handoff_to, {kv_vnode, Idx, Idx}}),
+    ResponseMsg = new_msg(handoff, {req, ReqId}, handoff_scheduled),
     [{msgs, [HandoffMsg, ResponseMsg]}];
 client_req(#client{reqs = [#req{op = final_handoffs, rid = ReqId} | _]},
            #params{n = N, m = M}) ->
     %% Send handoff_to messages to each fallback vnode
-    HandoffMsgs = [new_msg(undefined, {kv_vnode, I, J}, {handoff_to, {kv_vnode, I, I}}) || 
+    HandoffMsgs = [new_msg(final_handoff, {kv_vnode, I, J}, {handoff_to, {kv_vnode, I, I}}) || 
                       I <- lists:seq(1, N),
                       J <- lists:seq(1, M),
                       I /= J],
-    ResponseMsg = new_msg(undefined, {req, ReqId}, final_handoffs_scheduled),
+    ResponseMsg = new_msg(final_handoff, {req, ReqId}, final_handoffs_scheduled),
     [{msgs, HandoffMsgs ++ [ResponseMsg]}].
 
 end_req(#msg{c = Result},
@@ -740,31 +746,48 @@ kv_vnode(#msg{from = From, c = {put, ReqId, NewObj, CoordId}},
             [{msgs, [WMsg, DWMsg]},
              {updp, P#proc{procst = UpdObj}}]
     end;
-kv_vnode(#msg{from = From, c = {handoff_to, To}},
-         #proc{procst = CurObj} = P) ->
+kv_vnode(#msg{c = {handoff_to, To}},
+         #proc{name = Name, procst = CurObj}) ->
     %% Send current object to node if there is one
     %% TODO: Schedule message to make this vnode reset itself if unchanged
     NewMsgs = case CurObj of
                   undefined ->
                       [];
                   _ ->
-                      [new_msg(From, To, {handoff_obj, CurObj, handoff})]
+                      [new_msg(Name, To, {handoff_obj, CurObj, handoff})]
               end,
-    [{msgs, NewMsgs},
-     {updp, P#proc{procst = undefined}}];
-kv_vnode(#msg{c = {handoff_obj, HandoffObj, _Why}},
+    [{msgs, NewMsgs}];
+kv_vnode(#msg{c = {ack_handoff, HandoffObj}},
          #proc{procst = CurObj} = P) ->
+    case HandoffObj == CurObj of %% If ack is for current object, simulate vnode drop
+        true ->
+            [{updp, P#proc{procst = undefined}}];
+        false ->
+            []
+    end;
+kv_vnode(#msg{from = From, c = {handoff_obj, HandoffObj, Why}},
+         #proc{name = Name, procst = CurObj} = P) ->
     %% Simulate a do_diffobj_put
     ReqId = erlang:phash2(erlang:now()),
     Ts = vclock:timestamp(),
-    case syntactic_put_merge(CurObj, HandoffObj, ReqId, Ts) of
-        keep ->
-            [];
-        UpdObj ->
-            %% Real syntactic put merge checks allow_mult here and applies, testing with 
-            %% allow_mult is true so leave object
-            [{updp, P#proc{procst = UpdObj}}]
-    end.
+    UpdObj = case syntactic_put_merge(CurObj, HandoffObj, ReqId, Ts) of
+                 keep ->
+                     CurObj;
+                 UpdObj0 ->
+                     UpdObj0
+             end,
+    AckMsg = case {Why, From /= final_handoff} of
+                 {handoff, true} ->
+                     [new_msg(Name, From, {ack_handoff, HandoffObj})];
+                 _ ->
+                     []
+             end,
+    
+    %% Real syntactic put merge checks allow_mult here and applies, testing with 
+    %% allow_mult is true so leave object
+    [{msgs, AckMsg},
+     {updp, P#proc{procst = UpdObj}}].
+            
 
 
 syntactic_put_merge(CurObj, UpdObj, ReqId, Ts) ->
