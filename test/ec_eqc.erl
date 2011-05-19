@@ -33,7 +33,7 @@ check() ->
 -define(B, <<"b">>).
 -define(K, <<"k">>).
 
-%-define(FINALDBG(Fmt,Args), io:format("= " ++ Fmt, Args)).
+                                                %-define(FINALDBG(Fmt,Args), io:format("= " ++ Fmt, Args)).
 -define(FINALDBG(_Fmt,_Args), ok).
 
 %% Client requests must be processed in sequence.
@@ -44,7 +44,7 @@ check() ->
           reqs,   %% Requests to execute [#req{}]
           clntst %% Client state
          }). 
-                 
+
 -record(req, {    %% Request
           pri,    %% Priority for next request (undefined if req active)
           rid,    %% Request id
@@ -54,8 +54,8 @@ check() ->
           name,    %% Term to reference this process in from / to for messages
           handler, %% Handler function for messages
           procst   %% Process state
-          }).
-        
+         }).
+
 -record(msg, {
           pri = 0, %% Priority
           from,    %% Sender
@@ -85,12 +85,12 @@ gen_pris() ->
 
 gen_pl_seed() -> %% Seed for preference lists -- used as downed nodes
     list(int()).
-    
+
 gen_params() ->
     #params{n = choose(0, 10),
             r = choose(1, 5),
             w = choose(1, 5)}.
-            
+
 gen_regular_req() ->
     ?SHRINK(elements([{get, gen_pl_seed()},
                       {update, gen_pl_seed(), gen_pl_seed()}]),
@@ -98,7 +98,7 @@ gen_regular_req() ->
 
 gen_handoff_req() ->
     {trigger_handoff, int(), int()}. %% Generate a handoff request for index/node
-    
+
 gen_regular_client() ->
     #client{reqs = non_empty(list(gen_regular_req()))}.
 
@@ -117,7 +117,7 @@ prop() ->
                 %% io:format(user, "Pris: ~p\n", [Pris]),
                 set_pri(Pris),
                 Params = make_params(ParamsSeed),
-                %NodeProcs = make_nodes(Q),
+                                                %NodeProcs = make_nodes(Q),
                 VnodeProcs = make_vnodes(Params),
                 Initial = #state{params = Params, 
                                  procs = VnodeProcs},
@@ -151,7 +151,7 @@ check_final(#state{history = H}) ->
     %% For each get track the must value(s)
     %% For each put move the must value(s) at get time to may and add the new must.
     Results = [R || R = {result, _, _, _} <- H],
-    
+
     ?WHENFAIL(io:format(user, "Results:\n~p\n", [Results]),
               check_final(Results, [], [], [])).
 
@@ -159,34 +159,35 @@ check_final(#state{history = H}) ->
 
 check_final([{result, _, #req{op = {get, PL}}, Result}], Must, _May, _ClientView) ->
     {Values, _VClock} = case Result of
-                           {ok, Obj} ->
-                               {riak_object:get_values(Obj), riak_object:vclock(Obj)};
-                           {error, _} ->
-                               {[], []}
-                       end,
+                            {ok, Obj} ->
+                                {riak_object:get_values(Obj), riak_object:vclock(Obj)};
+                            {error, _} ->
+                                {[], []}
+                        end,
     _Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
     ?FINALDBG("Final GOT VALUES: ~p VC: ~w Must: ~p May: ~p Fallbacks: ~w\n",
               [Values, _VClock, Must, _May, _Fallbacks]),
     ?WHENFAIL(io:format(user, "Must: ~p\nMay: ~p\nValues: ~p\n", [Must, _May, Values]),
               equals(Must -- Values, []));
-              %% conjunction([{must_leftover, equals(Must -- Values, [])},
-              %%              {must_may_leftover, equals(Values -- (Must ++ May), [])}]))
+%% conjunction([{must_leftover, equals(Must -- Values, [])},
+%%              {must_may_leftover, equals(Values -- (Must ++ May), [])}]))
 
 check_final([{result, Cid, #req{op = {get, PL}}, Result} | Results],
             Must, May, ClientViews) ->
     %% TODO: Check if _Result matches expected values
     {ValuesAtGet, _VClockAtGet} = case Result of
-                                     {ok, Obj} ->
-                                         {riak_object:get_values(Obj), riak_object:vclock(Obj)};
-                                     {error, _} ->
-                                         {[], []}
-                  end,
+                                      {ok, Obj} ->
+                                          {riak_object:get_values(Obj), riak_object:vclock(Obj)};
+                                      {error, _} ->
+                                          {[], []}
+                                  end,
     _Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
     ?FINALDBG("Cid ~p GOT VALUES: ~p VC: ~w FALLBACKS: ~w\n",
               [Cid, ValuesAtGet, _VClockAtGet, _Fallbacks]),
     UpdClientViews = lists:keystore(Cid, 1, ClientViews, {Cid, ValuesAtGet}),
     check_final(Results, Must, May, UpdClientViews);
-check_final([{result, Cid, #req{rid = _ReqId, op = {put, PL, V}}, {Result, _PutObj}} | Results],
+check_final([{result, Cid, #req{rid = _ReqId, op = {put, PL, V}}, 
+              {Result, _PutObj, _UpdObj}} | Results],
             Must, May, ClientViews) ->
     {Cid, ValuesAtGet} = lists:keyfind(Cid, 1, ClientViews),
     ValNotInMay = not lists:member(V, May),
@@ -203,7 +204,7 @@ check_final([{result, Cid, #req{rid = _ReqId, op = {put, PL, V}}, {Result, _PutO
                       %% so the values that it overwrote should also be removed 
                       %% from must.
                       Must -- ValuesAtGet;
-                  
+
                   _ ->
                       %% Put failed, not sure what must be there for now
                       %% TODO: Work out what should be here.
@@ -211,12 +212,12 @@ check_final([{result, Cid, #req{rid = _ReqId, op = {put, PL, V}}, {Result, _PutO
               end,
     UpdMay = lists:usort(May ++ ValuesAtGet),
     ?FINALDBG("Cid ~p PUT: ~p RESPONSE: ~p VC: ~w OVER ~p MUST: ~p MAY: ~p FALLBACKS: ~w\n",
-             [Cid, V, Result, riak_object:vclock(_PutObj), ValuesAtGet, UpdMust, UpdMay, _Fallbacks]),
+              [Cid, V, Result, riak_object:vclock(_PutObj), ValuesAtGet, UpdMust, UpdMay, _Fallbacks]),
     UpdClientViews = lists:keydelete(Cid, 1, ClientViews),
     check_final(Results, UpdMust, UpdMay, UpdClientViews);
 check_final([_ | Results], Must, May, ClientViews) ->
     check_final(Results, Must, May, ClientViews).
-    
+
 
 
 exec(S) ->
@@ -273,14 +274,14 @@ next(#state{clients = Clients, msgs = Msgs}=S) ->
             end;
         ClientPri == undefined orelse MsgPri =< ClientPri ->
             deliver_msg;
-        
+
         true ->
             {client, Cid}
     end.
 
 %% Deliver next client request for Cid
 deliver_req(Cid, #state{next_rid = ReqId, clients = Clients, procs = Procs,
-                       msgs = Msgs, params = Params} = S) ->
+                        msgs = Msgs, params = Params} = S) ->
     C = get_client(Cid, Clients),
     Result = start_req(ReqId, C, Params),
     NewProcs = proplists:get_value(procs, Result, []),
@@ -327,11 +328,11 @@ make_params(#params{n = NSeed, r = R, w = W} = P) ->
     N = make_range(R + W - NSeed, MinN, R+W-1),
     %% Force N to be odd while testing
     {N1,R1} = case N rem 2 == 0 of
-                true ->
-                    {N + 1, R + 1};
-                false ->
-                    {N, R}
-        end,
+                  true ->
+                      {N + 1, R + 1};
+                  false ->
+                      {N, R}
+              end,
     P#params{n = N1, r = R1, m = N1, dw = W}. 
 %% make_params(#params{} = P) ->
 %%     P#params{n = 3, r = 2, m = 5, w = 3, dw = 3}.
@@ -359,7 +360,7 @@ make_clients([#client{reqs = ReqSeeds} = CS | CSs], Cid, Params, Acc) ->
             C = CS#client{cid = Cid, reqs = Reqs},
             make_clients(CSs, Cid + 1, Params, [C | Acc])
     end.
-    
+
 make_reqs(ReqSeeds, Cid, Params) ->
     make_reqs(ReqSeeds, Cid, Params, 1, []).
 
@@ -390,15 +391,15 @@ make_pl(N, M, DownNodesSeed) ->
             [{kv_vnode, Idx, Idx} || Idx <- lists:seq(1, N)];
         _ ->
             make_pl_add_fallbacks(NeedFallbacks,
-                    Fallbacks,
-                    [{kv_vnode, Primary, Primary} || Primary <- lists:reverse(Primaries)])
+                                  Fallbacks,
+                                  [{kv_vnode, Primary, Primary} || Primary <- lists:reverse(Primaries)])
     end.
 
 make_pl_add_fallbacks([], _, PL) ->
     lists:reverse(PL);
 make_pl_add_fallbacks([Idx | NeedFallbacks], [Node | Fallbacks], PL) ->
     make_pl_add_fallbacks(NeedFallbacks, Fallbacks ++ [Node], [{kv_vnode, Idx, Node} | PL]).
-    
+
 
 %% %% Full EC test make_pl - create a pref list that shrinks to primaries as
 %% %% seed shrinks to [0]
@@ -426,7 +427,7 @@ make_pl_add_fallbacks([Idx | NeedFallbacks], [Node | Fallbacks], PL) ->
 %%             Node = (abs(Idx - 1 + PLSeedH) rem M) + 1,
 %%             lists:keyreplace(Idx, 2, PerfectPL, {kv_vnode, Idx, Node})
 %%     end.
-        
+
 %% Move the client on to the next request, setting priority if present
 next_req(#client{reqs = [_|Reqs]} = C) ->
     C#client{reqs = Reqs}.
@@ -472,7 +473,7 @@ ann_params(Params) ->
     Type = hd(Elements),
     Fields = record_info(fields, params),
     {Type, lists:zip(Fields, tl(Elements))}.
-    
+
 
 %% Make a value between min and max inclusive using the seed
 make_range(Seed, Min, Max) when Min =< Seed, Seed =< Max ->
@@ -497,7 +498,7 @@ make_req({trigger_handoff, IdxSeed, NodeSeed}, _Cid, #params{n = N, m = M}, _CRe
         Idx ->
             []; %% Cannot handoff to self
         Node ->
-           [new_req({trigger_handoff, Idx, Node})]
+            [new_req({trigger_handoff, Idx, Node})]
     end;
 make_req(final_handoffs, _Cid, _Params, _CReqNum) ->
     [new_req(final_handoffs)].
@@ -531,7 +532,7 @@ start_req(ReqId, #client{reqs = [Req | Reqs]} = C, Params) ->
     %% use the one with the reqs updated.  Any original
     %% updc entry will be never be retrieved.
     [{updc, proplists:get_value(updc, Result, UpdC)} | Result].
-    
+
 
 %% Start client requests - return a proplist of 
 %% [{procs, NewProcs},
@@ -582,7 +583,7 @@ end_req(#msg{c = Result},
 %% Deliver a message to a process
 %% node_proc(#msg{from = From, c = ping}, #proc{name = {node, _}=Name}) ->
 %%     [{msgs, [#msg{from = Name, to = From, c = pong}]}].
-               
+
 -record(getfsmst, {pl,
                    reply_to,
                    responded = false,
@@ -627,8 +628,8 @@ get_fsm(#msg{from = {kv_vnode, Idx, _}, c = {r, Result, Idx, _ReqId}},
                     %% normal merging behavior.
                     {read_repair, RepairIdx, MObj} ->
                         {[new_msg(Name, To, {handoff_obj, MObj, read_repair}) ||
-                                     {kv_vnode, Idx0, _Node} = To <- PL,
-                                     lists:member(Idx0, RepairIdx)], 
+                             {kv_vnode, Idx0, _Node} = To <- PL,
+                             lists:member(Idx0, RepairIdx)], 
                          UpdGetCore4};
                     _ -> %% Ignore deletes and nops for now
                         {[], UpdGetCore4}
@@ -639,12 +640,13 @@ get_fsm(#msg{from = {kv_vnode, Idx, _}, c = {r, Result, Idx, _ReqId}},
     [{msgs, ReplyMsgs ++ FinalMsgs},
      {updp, P#proc{procst = ProcSt#getfsmst{responded = UpdResponded,
                                             getcore = UpdGetCore}}}].
-    
-    
+
+
 
 -record(putfsmst, {reply_to,
                    putobj,
-                   remotevnodes, %% Messages to send to remove vnodes
+                   updobj,
+                   remotepl, %% Preference list for remove vnodes
                    responded = false,
                    putcore}).
 put_fsm_proc(ReqId, #params{n = N, w = W, dw = DW}) ->
@@ -659,40 +661,40 @@ put_fsm_proc(ReqId, #params{n = N, w = W, dw = DW}) ->
 
 put_fsm(#msg{from = From, c = {put, PL, Obj}},
         #proc{name = {put_fsm, ReqId}= Name, procst = #putfsmst{putcore = PutCore} = ProcSt} = P) ->
-    _Ts = ReqId, % re-use ReqId for a timestamp to make them unique
+    Ts = ReqId, % re-use ReqId for a timestamp to make them unique
     %% Decide on the coordinating vnode and require that as part of the response.
     %% As indices are fixed, pick lowest index of primary node, falling back to 
     %% lowest index secondary node
     {_, CoordIdx, Node} = hd(lists:sort([{case Idx == Node of
-                                               true -> 1; 
-                                               false -> 2
-                                           end, Idx, Node} ||
-                                             {kv_vnode, Idx, Node} <- PL])),
+                                              true -> 1; 
+                                              false -> 2
+                                          end, Idx, Node} ||
+                                            {kv_vnode, Idx, Node} <- PL])),
     NodeId = <<Node:32>>,
     UpdObj = riak_object:increment_vclock(Obj, NodeId, ts),
     %% TODO, find some way to make putcore wait on the response from the local vnode.
     %% Temporarily set dw to all.
 
     %% Kick off requests to the vnodes
-    LocalMsg =  new_msg(Name, {kv_vnode, CoordIdx, Node}, {put, ReqId, UpdObj, NodeId}),
-    RemotePL = [Entry || {kv_vnode, Idx0, _Node0} = Entry <- PL, Idx0 /= CoordIdx],
-    RemoteMsgs = case RemotePL of
-                     [] ->
-                         undefined; %% If N=1, will be on the coord anyway
-                     _ ->
-                         [new_msg(Name, Vnode, {put, ReqId, UpdObj, NodeId}) || Vnode <- RemotePL]
-                 end,
+    LocalMsg =  new_msg(Name, {kv_vnode, CoordIdx, Node}, {coord_put, ReqId, UpdObj, NodeId, Ts}),
+    RemotePL = case [Entry || {kv_vnode, Idx0, _Node0} = Entry <- PL, Idx0 /= CoordIdx] of
+                   [] ->
+                       undefined;
+                   RemotePL0 ->
+                       RemotePL0
+               end,
     [{msgs, [LocalMsg]},
      {updp, P#proc{procst = ProcSt#putfsmst{putcore = riak_kv_put_core:coord_idx(CoordIdx, PutCore),
-                                            remotevnodes = RemoteMsgs,
+                                            remotepl = RemotePL,
                                             putobj = UpdObj,
                                             reply_to = From}}}];
 %% Handle local vnode response 
 put_fsm(#msg{from = {kv_vnode, _, _}, c = Result}, 
-        #proc{name = Name, procst = #putfsmst{reply_to = ReplyTo,
-                                              putobj = PutObj,
-                                              remotevnodes = RemoteVnodes,
-                                              putcore = PutCore} = ProcSt} = P) when RemoteVnodes /= undefined ->
+        #proc{name = {put_fsm, ReqId} = Name, 
+              procst = #putfsmst{reply_to = ReplyTo,
+                                 putobj = PutObj,
+                                 remotepl = RemotePL,
+                                 putcore = PutCore} = ProcSt} = P) when RemotePL /= undefined ->
     UpdPutCore = riak_kv_put_core:add_result(Result, PutCore),
     case Result of
         {fail, _, _} -> %% failed because out of date
@@ -700,15 +702,18 @@ put_fsm(#msg{from = {kv_vnode, _, _}, c = Result},
              {updp, P#proc{procst = ProcSt#putfsmst{responded = true, putcore = UpdPutCore}}}];
         {w, _, _} -> % W from coord, no excitement.
             [{updp, P#proc{procst = ProcSt#putfsmst{putcore = UpdPutCore}}}];
-        {dw, _, _} -> % DW from coord, green light for the rest of the put
-            [{msgs, RemoteVnodes},
+        {dw, _, _, UpdObj} -> % DW from coord, green light for the rest of the put
+            RemoteMsgs = [new_msg(Name, Vnode, {put, ReqId, UpdObj}) || Vnode <- RemotePL],
+            [{msgs, RemoteMsgs},
              {updp, P#proc{procst = ProcSt#putfsmst{putcore = UpdPutCore,
-                                                    remotevnodes = undefined}}}]
+                                                    updobj = UpdObj,
+                                                    remotepl = undefined}}}]
     end;
 %% Handle results from non-coordinator
 put_fsm(#msg{from = {kv_vnode, _, _}, c = Result},
         #proc{name = Name, procst = #putfsmst{reply_to = ReplyTo,
                                               putobj = PutObj,
+                                              updobj = UpdObj,
                                               responded = Responded,
                                               putcore = PutCore} = ProcSt} = P) ->
     UpdPutCore = riak_kv_put_core:add_result(Result, PutCore),
@@ -716,7 +721,7 @@ put_fsm(#msg{from = {kv_vnode, _, _}, c = Result},
         true when Responded == false ->
             %% Worry about read repairs later
             {Response, UpdPutCore2} = riak_kv_put_core:response(UpdPutCore),
-            [{msgs, [new_msg(Name, ReplyTo, {Response, PutObj})]},
+            [{msgs, [new_msg(Name, ReplyTo, {Response, PutObj, UpdObj})]},
              {updp, P#proc{procst = ProcSt#putfsmst{responded = true,
                                                     putcore = UpdPutCore2}}}];
         _ ->
@@ -733,11 +738,19 @@ kv_vnode(#msg{from = From, c = {get, ReqId}},
                      {ok, CurObj}
              end,
     [{msgs, [new_msg(Name, From, {r, Result, Idx, ReqId})]}];
-kv_vnode(#msg{from = From, c = {put, ReqId, NewObj, CoordId}},
+kv_vnode(#msg{from = From, c = {coord_put, ReqId, NewObj, CoordId, Timestamp}},
          #proc{name = {kv_vnode, Idx, _Node} = Name, procst = CurObj} = P) ->
     [Pri1, Pri2] = lists:sort([next_pri(), next_pri()]),
     WMsg = new_msg(Name, From, {w, Idx, ReqId}, Pri1),
-    case coord_put_merge(CurObj, NewObj, CoordId) of
+    UpdObj = coord_put_merge(CurObj, NewObj, CoordId, Timestamp),
+    DWMsg = new_msg(Name, From, {dw, Idx, ReqId, UpdObj}, Pri2), % ignore returnbody for now
+    [{msgs, [WMsg, DWMsg]},
+     {updp, P#proc{procst = UpdObj}}];
+kv_vnode(#msg{from = From, c = {put, ReqId, NewObj}},
+         #proc{name = {kv_vnode, Idx, _Node} = Name, procst = CurObj} = P) ->
+    [Pri1, Pri2] = lists:sort([next_pri(), next_pri()]),
+    WMsg = new_msg(Name, From, {w, Idx, ReqId}, Pri1),
+    case syntactic_put_merge(CurObj, NewObj) of
         keep ->
             FailMsg = new_msg(Name, From, {fail, Idx, ReqId}, Pri2),
             [{msgs, [WMsg, FailMsg]}];
@@ -768,9 +781,7 @@ kv_vnode(#msg{c = {ack_handoff, HandoffObj}},
 kv_vnode(#msg{from = From, c = {handoff_obj, HandoffObj, Why}},
          #proc{name = Name, procst = CurObj} = P) ->
     %% Simulate a do_diffobj_put
-    ReqId = erlang:phash2(erlang:now()),
-    Ts = vclock:timestamp(),
-    UpdObj = case syntactic_put_merge(CurObj, HandoffObj, ReqId, Ts) of
+    UpdObj = case syntactic_put_merge(CurObj, HandoffObj) of
                  keep ->
                      CurObj;
                  UpdObj0 ->
@@ -782,45 +793,43 @@ kv_vnode(#msg{from = From, c = {handoff_obj, HandoffObj, Why}},
                  _ ->
                      []
              end,
-    
+
     %% Real syntactic put merge checks allow_mult here and applies, testing with 
     %% allow_mult is true so leave object
     [{msgs, AckMsg},
      {updp, P#proc{procst = UpdObj}}].
-            
 
-
-syntactic_put_merge(CurObj, UpdObj, ReqId, Ts) ->
+syntactic_put_merge(CurObj, UpdObj) ->
     case CurObj of
         undefined ->
             UpdObj;
         _ ->
-            ResObj = riak_object:syntactic_merge(CurObj, UpdObj, ReqId, Ts),
-            case riak_object:vclock(ResObj) =:= riak_object:vclock(CurObj) of
-                true -> keep; %% {oldobj, ResObj};
-                false -> ResObj %% {newobj, ResObj}
+            case riak_object:ancestors([CurObj, UpdObj]) of
+                [UpdObj] ->
+                    keep;
+                [CurObj] ->
+                    UpdObj;
+                _ ->
+                    riak_object:merge(CurObj, UpdObj)
             end
     end.
 
 
-coord_put_merge(undefined, UpdObj, _CoordId) ->
+coord_put_merge(undefined, UpdObj, _CoordId, _Timestamp) ->
     UpdObj;
-coord_put_merge(CurObj, UpdObj, CoordId) ->
+coord_put_merge(CurObj, UpdObj, CoordId, Timestamp) ->
     %% Make sure UpdObj descends from CurObj and that CoordId is greater
     CurVC = riak_object:vclock(CurObj),
     UpdVC = riak_object:vclock(UpdObj),
-    case get_counter(CoordId, UpdVC) > get_counter(CoordId, CurVC) of
+
+    %% Valid coord put replacing current object
+    case get_counter(CoordId, UpdVC) > get_counter(CoordId, CurVC) andalso
+        vclock:descends(CurVC, UpdVC) == false andalso 
+        vclock:descends(UpdVC, CurVC) == true of
         true ->
-            %% Valid coord put replacing current object
-            case vclock:descends(CurVC, UpdVC) == false andalso 
-                vclock:descends(UpdVC, CurVC) == true of
-                true ->
-                    UpdObj;
-                false ->
-                    riak_object:merge(CurObj, UpdObj)
-            end;
+            UpdObj;
         false ->
-            keep
+            riak_object:increment_vclock(riak_object:merge(CurObj, UpdObj),CoordId, Timestamp)
     end.
 
 
@@ -831,5 +840,5 @@ get_counter(Id, VC) ->
         {Counter, _TS} ->
             Counter
     end.
-            
-    
+
+
