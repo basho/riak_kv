@@ -176,7 +176,7 @@ initialize(timeout, StateData0=#state{bucket=Bucket,
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     NVal = proplists:get_value(n_val, BucketProps),
     VNodes = riak_core_ring:all_owners(Ring),
-    %% Create a proplist with ring positions as 
+    %% Create a proplist with ring positions as
     %% keys and VNodes as the values.
     VNodePositions = lists:zip(lists:seq(0, length(VNodes)-1), VNodes),
     case plan_and_execute(ReqId, Input, VNodePositions, NVal, length(VNodes), Timeout, [], []) of
@@ -258,7 +258,7 @@ finish({error, Error}, StateData=#state{from={raw, ReqId, ClientPid}, client_typ
             %% MapReduce processes will also die and be cleaned up.
             exit(Error);
         plain ->
-            %% Notify the requesting client that an error 
+            %% Notify the requesting client that an error
             %% occurred or the timeout has elapsed.
             ClientPid ! {ReqId, Error}
     end,
@@ -299,7 +299,8 @@ plan_and_execute(ReqId, Input, VNodePositions, NVal, PartitionCount, Timeout, Ke
             end
     end.
 
-create_coverage_plan(VNodePositions, NVal, PartitionCount, DownNodes) ->    
+%% @private
+create_coverage_plan(VNodePositions, NVal, PartitionCount, DownNodes) ->
     PartitionCount = length(VNodePositions),
     %% AvailableVNodes = VNodes -- DownVNodes
     %% Make list of which partitions each VNode covers
@@ -313,7 +314,7 @@ create_coverage_plan(VNodePositions, NVal, PartitionCount, DownNodes) ->
     AvailableKeySpace = lists:filter(DownVNodeFilter, KeySpace),
     Available = [{Vnode, n_keyspaces(Vnode, NVal, PartitionCount)} || Vnode <- AvailableKeySpace],
     CoverageResult = find_coverage(ordsets:from_list(KeySpace), Available, NVal, []),
-    case CoverageResult of 
+    case CoverageResult of
         {ok, CoveragePlan} ->
             %% Assemble the data structures required for
             %% executing the coverage operation.
@@ -321,29 +322,32 @@ create_coverage_plan(VNodePositions, NVal, PartitionCount, DownNodes) ->
        {insufficient_vnodes_available, _}  ->
             {error, insufficient_vnodes_available}
     end.
-    
-%% Find the N key spaces for a VNode
+
+%% @private
+%% @doc Find the N key spaces for a VNode
 n_keyspaces(Vnode, N, Q) ->
      ordsets:from_list([X rem Q || X <- lists:seq(Q + Vnode, Q + Vnode + (N-1))]).
 
-%% Find minimal set of covering vnodes
+%% @private
+%% @doc Find minimal set of covering vnodes
 find_coverage([], _, _, Coverage) ->
     {ok, lists:sort(Coverage)};
 find_coverage(KeySpace, [], _, Coverage) ->
-    {insufficient_vnodes_available, KeySpace, lists:sort(Coverage)};    
+    {insufficient_vnodes_available, KeySpace, lists:sort(Coverage)};
 find_coverage(KeySpace, Available, NVal, Coverage) ->
     case next_vnode(KeySpace, NVal, Available) of
         {0, _} -> % out of vnodes
             find_coverage(KeySpace, [], NVal, Coverage);
         {_NumCovered, Vnode} ->
-            {value, {Vnode, Covers}, UpdAvailable} = lists:keytake(Vnode, 1, Available),            
+            {value, {Vnode, Covers}, UpdAvailable} = lists:keytake(Vnode, 1, Available),
             UpdCoverage = [{Vnode, ordsets:intersection(KeySpace, Covers)} | Coverage],
             UpdKeySpace = ordsets:subtract(KeySpace, Covers),
             find_coverage(UpdKeySpace, UpdAvailable, NVal, UpdCoverage)
     end.
-    
-%% Find the next vnode that covers the most of the remaining keyspace
-%% Use vnode id as tie breaker.
+
+%% @private
+%% @doc Find the next vnode that covers the most of the
+%% remaining keyspace. Use VNode id as tie breaker.
 next_vnode(KeySpace, NVal, Available) ->
     CoverCount = [{covers(KeySpace, CoversKeys), VNode} || {VNode, CoversKeys} <- Available],
     case length(KeySpace) >= NVal of
@@ -353,6 +357,7 @@ next_vnode(KeySpace, NVal, Available) ->
             hd(lists:sort(fun compare_final_vnode/2, CoverCount))
     end.
 
+%% @private
 compare_next_vnode({CA,VA}, {CB, VB}) ->
     if
         CA > CB -> %% Descending sort on coverage
@@ -363,6 +368,7 @@ compare_next_vnode({CA,VA}, {CB, VB}) ->
             VA < VB %% If equal coverage choose the lower node.
     end.
 
+%% @private
 compare_final_vnode({CA,VA}, {CB, VB}) ->
     if
         CA > CB -> %% Descending sort on coverage
@@ -373,7 +379,8 @@ compare_final_vnode({CA,VA}, {CB, VB}) ->
             VA > VB %% If equal coverage choose the upper node.
     end.
 
-%% Count how many of CoversKeys appear in KeySpace
+%% @private
+%% @doc Count how many of CoversKeys appear in KeySpace
 covers(KeySpace, CoversKeys) ->
     ordsets:size(ordsets:intersection(KeySpace, CoversKeys)).
 
@@ -492,7 +499,7 @@ check_pref_list_positions([], _, _) ->
     false;
 check_pref_list_positions([Position | RestPositions], VNode, PrefList) ->
     case lists:nth(Position, PrefList) of
-        VNode ->       
+        VNode ->
             true;
         _ ->
             check_pref_list_positions(RestPositions, VNode, PrefList)
