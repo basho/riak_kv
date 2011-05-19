@@ -30,7 +30,6 @@
          start_link/5,
          list_keys/1,
          list_keys/2,
-         augment_vnodes/2,
          update_vnodes/2
         ]).
 
@@ -68,9 +67,6 @@ list_keys(ListerPid) ->
     
 list_keys(ListerPid, VNode) ->    
     gen_fsm:send_event(ListerPid, {listkeys, VNode}).
-
-augment_vnodes(ListerPid, VNodes) ->
-    gen_fsm:send_event(ListerPid, {augment_vnodes, VNodes}).
 
 update_vnodes(ListerPid, VNodes) ->
     gen_fsm:send_event(ListerPid, {update_vnodes, VNodes}).
