@@ -180,8 +180,10 @@
                vnode_index_deletes_postings, vnode_index_deletes_postings_total,
                node_gets_total, node_puts_total,
                get_fsm_time,put_fsm_time,
-               pbc_connects,pbc_connects_total,pbc_active,read_repairs,
-               read_repairs_total, mapper_count, get_meter, put_meter, legacy}).
+               pbc_connects,pbc_connects_total,pbc_active,
+               read_repairs, read_repairs_total,
+               coord_redirs, coord_redirs_total, mapper_count, 
+               get_meter, put_meter, legacy}).
 
 %% @spec start_link() -> {ok,Pid} | ignore | {error,Error}
 %% @doc Start the server.  Also start the os_mon application, if it's
@@ -251,6 +253,8 @@ v2_init() ->
                 pbc_active=0,
                 read_repairs=make_meter(),
                 read_repairs_total=0,
+                coord_redirs=make_meter(),
+                coord_redirs_total=0,
                 mapper_count=0,
                 get_meter=make_meter(),
                 put_meter=make_meter(),
@@ -280,6 +284,7 @@ legacy_init() ->
                 pbc_active=0,
                 read_repairs=spiraltime:fresh(),
                 read_repairs_total=0,
+                coord_redirs_total=0,
                 mapper_count=0,
                 legacy=true}}.
 
@@ -309,6 +314,7 @@ handle_info(tick, State) ->
     tick(#state.vnode_index_deletes_postings, State),
     tick(#state.pbc_connects, State),
     tick(#state.read_repairs, State),
+    tick(#state.coord_redirs, State),
     {noreply, State};
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -356,6 +362,8 @@ update(pbc_disconnect, _Moment, State=#state{pbc_active=Active}) ->
     State#state{pbc_active=decrzero(Active)};
 update(read_repairs, Moment, State=#state{read_repairs_total=RRT}) ->
     spiral_incr(#state.read_repairs, Moment, State#state{read_repairs_total=RRT+1});
+update(coord_redir, _Moment, State=#state{coord_redirs_total=CRT}) ->
+    State#state{coord_redirs_total=CRT+1};
 update(mapper_start, _Moment, State=#state{mapper_count=Count0}) ->
     State#state{mapper_count=Count0 + 1};
 update(mapper_end, _Moment, State=#state{mapper_count=Count0}) ->
@@ -403,6 +411,8 @@ update1(pbc_disconnect, _, State=#state{pbc_active=Active}) ->
     State#state{pbc_active=decrzero(Active)};
 update1(read_repairs, _, State) ->
     update_metric(#state.read_repairs, 1, State);
+update1(coord_redir, _, State) ->
+    update_metric(#state.coord_redirs, 1, State);
 update1(mapper_start, _Moment, State=#state{mapper_count=Count0}) ->
     State#state{mapper_count=Count0+1};
 update1(mapper_end, _Moment, State=#state{mapper_count=Count0}) ->
@@ -515,6 +525,7 @@ vnode_stats(_, State=#state{legacy=false}) ->
     VID = metric_stats(State#state.vnode_index_deletes),
     VIDP = metric_stats(State#state.vnode_index_deletes_postings),
     RR = metric_stats(State#state.read_repairs),
+    CR = metric_stats(State#state.coord_redirs),
     [{vnode_gets, meter_minute(VG)},
      {vnode_puts, meter_minute(VP)},
      {vnode_index_reads, meter_minute(VIR)},
@@ -523,6 +534,7 @@ vnode_stats(_, State=#state{legacy=false}) ->
      {vnode_index_deletes, meter_minute(VID)},
      {vnode_index_deletes_postings, meter_minute(VIDP)},
      {read_repairs, meter_minute(RR)},
+     {coord_redirs, meter_minute(CR)},
      {vnode_gets_total, proplists:get_value(count, VG)},
      {vnode_puts_total, proplists:get_value(count, VP)},
      {vnode_index_reads_total, proplists:get_value(count, VIR)},
@@ -536,6 +548,7 @@ vnode_stats(_, State=#state{legacy=false}) ->
 node_stats(Moment, State=#state{node_gets_total=NGT,
                                 node_puts_total=NPT,
                                 read_repairs_total=RRT,
+                                coord_redirs_total=CRT,
                                 legacy=true}) ->
     {Gets, GetMean, {GetMedian, GetNF, GetNN, GetH}} =
         slide_minute(Moment, #state.get_fsm_time, State),
@@ -555,11 +568,13 @@ node_stats(Moment, State=#state{node_gets_total=NGT,
      {node_put_fsm_time_95, PutNF},
      {node_put_fsm_time_99, PutNN},
      {node_put_fsm_time_100, PutH},
-     {read_repairs_total, RRT}];
+     {read_repairs_total, RRT},
+     {coord_redirs_total, CRT}];
 node_stats(_, State=#state{legacy=false}) ->
     PutInfo = metric_stats(State#state.put_fsm_time),
     GetInfo = metric_stats(State#state.get_fsm_time),
     RRInfo =  metric_stats(State#state.read_repairs),
+    CRInfo =  metric_stats(State#state.coord_redirs),
     NodeGets = meter_minute(metric_stats(State#state.get_meter)),
     NodePuts = meter_minute(metric_stats(State#state.put_meter)),
     [{node_gets, NodeGets},
@@ -576,7 +591,8 @@ node_stats(_, State=#state{legacy=false}) ->
      {node_put_fsm_time_95, proplists:get_value(p95, PutInfo)},
      {node_put_fsm_time_99, proplists:get_value(p99, PutInfo)},
      {node_put_fsm_time_100, proplists:get_value(max, PutInfo)},
-     {read_repairs_total, proplists:get_value(count, RRInfo)}].
+     {read_repairs_total, proplists:get_value(count, RRInfo)},
+     {coord_redirs_total, proplists:get_value(count, CRInfo)}].
 
 
 %% @spec cpu_stats() -> proplist()

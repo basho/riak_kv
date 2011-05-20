@@ -143,7 +143,7 @@ reconcile(Objects, AllowMultiple) ->
                    false ->
                        [most_recent_content(AllContents)];
                    true ->
-                       AllContents
+                       lists:usort(AllContents)
                end,
     VClock = vclock:merge([O#r_object.vclock || O <- RObjs]),
     HdObj = hd(RObjs),
