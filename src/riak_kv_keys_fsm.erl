@@ -71,12 +71,8 @@
                 client_type :: atom(),
                 from :: from(),
                 input :: input(),
-                n_val :: pos_integer(),
-                pref_list_positions :: dict(),
-                pref_list_remainders :: dict(),
                 required_responses :: pos_integer(),
                 response_count=0 :: non_neg_integer(),
-                ring :: riak_core_ring:riak_core_ring(),
                 timeout :: timeout()
                }).
 
@@ -131,7 +127,6 @@ test_link(From, Input, _Options, StateProps) ->
 %% @private
 init([From={raw, _, ClientPid}, Input, Timeout, ClientType]) ->
     process_flag(trap_exit, true),
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     case Input of
         {filter, B, _} ->
             Bucket = B;
@@ -141,7 +136,7 @@ init([From={raw, _, ClientPid}, Input, Timeout, ClientType]) ->
             Bucket = Input
     end,
     StateData = #state{client_type=ClientType, timeout=Timeout,
-                       from=From, input=Input, bucket=Bucket, ring=Ring},
+                       from=From, input=Input, bucket=Bucket},
     case ClientType of
         %% Link to the mapred job so we die if the job dies
         mapred ->
@@ -171,8 +166,8 @@ init({test, Args, StateProps}) ->
 initialize(timeout, StateData0=#state{bucket=Bucket,
                                       from={_, ReqId, _},
                                       input=Input,
-                                      ring=Ring,
                                       timeout=Timeout}) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     NVal = proplists:get_value(n_val, BucketProps),
     VNodes = riak_core_ring:all_owners(Ring),
@@ -180,30 +175,20 @@ initialize(timeout, StateData0=#state{bucket=Bucket,
     %% keys and VNodes as the values.
     VNodePositions = lists:zip(lists:seq(0, length(VNodes)-1), VNodes),
     case plan_and_execute(ReqId, Input, VNodePositions, NVal, length(VNodes), Timeout, [], []) of
-        {ok, RequiredResponseCount, PrefListPositions} ->
-            StateData = StateData0#state{n_val=NVal,
-                                         pref_list_positions=PrefListPositions,
-                                         required_responses=RequiredResponseCount
-                                         },
+        {ok, RequiredResponseCount, _PrefListPositions} ->
+            StateData = StateData0#state{required_responses=RequiredResponseCount},
             {next_state, waiting_kl, StateData, Timeout};
         {error, Reason} ->
             finish({error, Reason}, StateData0)
     end.
 
 %% @private
-waiting_kl({ReqId, {kl, VNode, Keys}},
+waiting_kl({ReqId, {kl, _VNode, Keys}},
            StateData=#state{bucket=Bucket,
                             client_type=ClientType,
                             from=From={raw, ReqId, _},
-                            n_val=NVal,
-                            pref_list_positions=PrefListPositions,
-                            ring=Ring,
-                            timeout=Timeout
-                            }) ->
-    %% Look up the position in the preference list of the VNode
-    %% that the keys are expected to be reported from.
-    PrefListPosition = proplists:get_value(VNode, PrefListPositions),
-    process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, PrefListPosition, From),
+                            timeout=Timeout}) ->
+    process_keys(Keys, Bucket, ClientType, From),
     {next_state, waiting_kl, StateData, Timeout};
 waiting_kl({ReqId, _VNode, done}, StateData0=#state{from={raw, ReqId, _},
                                                     required_responses=RequiredResponses,
@@ -281,11 +266,10 @@ plan_and_execute(ReqId, Input, VNodePositions, NVal, PartitionCount, Timeout, Ke
         {error, _} ->
             %% Failed to create a coverage plan so return the error
             CoveragePlanResult;
-        {NodeIndexes, PrefListPositions} ->
+        {NodeIndexes, PrefListPositions, RequiredResponseCount} ->
             %% If successful start processes and execute
-            RequiredResponseCount = length(PrefListPositions),
             {AggregateKeyListers, ErrorNodes} =
-                start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Timeout),
+                start_keylisters(ReqId, Input, KeyListers, NodeIndexes, PrefListPositions, Timeout),
             case ErrorNodes of
                 [] ->
                     %% Got a valid coverage plan so instruct the keylister
@@ -390,28 +374,33 @@ assemble_coverage_structures(CoveragePlan, NVal, PartitionCount, VNodeIndex) ->
 
 %% @private
 assemble_coverage_structures([], _, _, _, CoverageVNodes, PrefListPositions) ->
-    %% NodeIndexes is a dictionary where the keys are
+    %% NodeIndexes is a proplist where the keys are
     %% nodes and the values are lists of VNode indexes.
     %% This is used to determine which nodes to start keylister
     %% processes on and to help minimize the inter-node
     %% communication required to complete the key listing.
     %%
-    %% PrefListPositions is dictionary where the keys are
-    %% VNodes and the values are either the atom all or
-    %% a list of integers representing positions in the
-    %% preference list.
+    %% PrefListPositions is a proplist where the keys are
+    %% nodes and the values are tuples with a VNode index
+    %% as the first tuple member and a list of preference
+    %% list positions for the VNode as the second tuple member.
     NodeIndexes = group_indexes_by_node(CoverageVNodes, []),
-    {NodeIndexes, PrefListPositions};
+    {NodeIndexes, PrefListPositions, length(CoverageVNodes)};
 assemble_coverage_structures([{RingPosition, RingPositionList} | RestCoveragePlan], NVal, PartitionCount, VNodeIndex, CoverageVNodes, PrefListPositions) ->
     %% Lookup the VNode index and node
     {Index, Node} = proplists:get_value(RingPosition, VNodeIndex),
     CoverageVNodes1 = [{Index, Node} | CoverageVNodes],
     case length(RingPositionList) == NVal of
         true ->
-            PrefListPositions1 = [{{Index, Node}, all} | PrefListPositions];
+            PrefListPositions1 = PrefListPositions;
         false ->
             PositionList = lists:reverse([NVal - (((X - RingPosition) + PartitionCount) rem PartitionCount) || X <- RingPositionList]),
-            PrefListPositions1 = [{{Index, Node}, PositionList} | PrefListPositions]
+            case proplists:get_value(Node, PrefListPositions) of
+                undefined ->
+                    PrefListPositions1 = [{Node, [{Index, PositionList}]} | PrefListPositions];
+                Positions ->
+                    PrefListPositions1 = [{Node, [{Index, PositionList} | Positions]} | proplists:delete(Node, PrefListPositions)]
+            end            
     end,
     assemble_coverage_structures(RestCoveragePlan, NVal, PartitionCount, VNodeIndex, CoverageVNodes1, PrefListPositions1).
 
@@ -434,16 +423,17 @@ group_indexes_by_node([{Index, Node} | OtherVNodes], NodeIndexes) ->
     group_indexes_by_node(OtherVNodes, NodeIndexes1).
 
 %% @private
-start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Timeout) ->
+start_keylisters(ReqId, Input, KeyListers, NodeIndexes, PrefListPositions, Timeout) ->
     %% Fold over the node indexes list to start
     %% keylister processes on each node and accumulate
     %% the successes and errors.
     StartListerFunc = fun({Node, Indexes}, {Successes, Errors}) ->
                               VNodes = [{Index, Node} || Index <- Indexes],
+                              FilterVNodes = proplists:get_value(Node, PrefListPositions),
                               case proplists:get_value(Node, Successes) of
                                   undefined ->
                                       try
-                                          case riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Input, VNodes, Timeout]) of
+                                          case riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Input, VNodes, FilterVNodes, Timeout]) of
                                               {error, Error} ->
                                                   error_logger:warning_msg("Unable to start a keylister process on ~p. Reason: ~p~n", [Node, Error]),
                                                   {Successes, [Node | Errors]};
@@ -465,43 +455,13 @@ start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Timeout) ->
     lists:foldl(StartListerFunc, {KeyListers, []}, NodeIndexes).
 
 %% @private
-process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, PrefListPosition, From) ->
-    process_keys(VNode, Keys, Bucket, ClientType, Ring, NVal, PrefListPosition, From, []).
-
-%% @private
-process_keys(_, [], Bucket, ClientType, _, _, _, {raw,ReqId,ClientPid}, Acc) ->
+process_keys(Keys, Bucket, ClientType, {raw, ReqId, ClientPid}) ->
     case ClientType of
         mapred ->
             try
-                luke_flow:add_inputs(ClientPid, [{Bucket,K} || K <- Acc])
+                luke_flow:add_inputs(ClientPid, [{Bucket,K} || K <- Keys])
             catch _:_ ->
                     exit(self(), normal)
             end;
-        plain -> ClientPid ! {ReqId, {keys, Acc}}
-    end;
-process_keys(_VNode, [K|Rest], _Bucket, _ClientType, _Ring, _NVal, all, _From, Acc) ->
-    process_keys(_VNode, Rest, _Bucket, _ClientType, _Ring, _NVal, all, _From, [K|Acc]);
-process_keys(VNode, [K|Rest], Bucket, ClientType, Ring, NVal, PrefListPosition, From, Acc) ->
-    %% Get the chash key for the bucket-key pair and
-    %% use that to determine the preference list to
-    %% use in filtering the keys from this VNode.
-    ChashKey = riak_core_util:chash_key({Bucket, K}),
-    PrefList = lists:sublist(riak_core_ring:preflist(ChashKey, Ring), NVal),
-    case check_pref_list_positions(PrefListPosition, VNode, PrefList) of
-        true ->
-            process_keys(VNode, Rest, Bucket, ClientType, Ring, NVal, PrefListPosition, From, [K|Acc]);
-        false ->
-            process_keys(VNode, Rest, Bucket, ClientType, Ring, NVal, PrefListPosition, From, Acc)
+        plain -> ClientPid ! {ReqId, {keys, Keys}}
     end.
-
-%% @private
-check_pref_list_positions([], _, _) ->
-    false;
-check_pref_list_positions([Position | RestPositions], VNode, PrefList) ->
-    case lists:nth(Position, PrefList) of
-        VNode ->
-            true;
-        _ ->
-            check_pref_list_positions(RestPositions, VNode, PrefList)
-    end.
-

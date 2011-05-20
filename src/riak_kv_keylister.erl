@@ -28,6 +28,7 @@
 %% API
 -export([start_link/3,
          start_link/5,
+         start_link/6,
          list_keys/1,
          list_keys/2,
          update_vnodes/2
@@ -37,7 +38,7 @@
 -export([waiting/2]).
 
 %% gen_fsm callbacks
--export([init/1, 
+-export([init/1,
          handle_event/3,
          handle_sync_event/4,
          handle_info/3,
@@ -48,9 +49,10 @@
 
 -record(state, {reqid,
                 caller,
-                bucket,               
+                bucket,
+                filter_vnodes,
                 key_filter,
-                vnode_filter,
+                preflist_fun,
                 vnodes}).
 
 %% ===================================================================
@@ -58,15 +60,18 @@
 %% ===================================================================
 
 start_link(ReqId, Caller, Bucket) ->
-    start_link(ReqId, Caller, Bucket, [], ?DEFAULT_TIMEOUT).
+    start_link(ReqId, Caller, Bucket, [], undefined, ?DEFAULT_TIMEOUT).
 
 start_link(ReqId, Caller, Bucket, VNodes, Timeout) ->
-    gen_fsm:start_link(?MODULE, [ReqId, Caller, Bucket, VNodes], [{timeout, Timeout}]).
+    start_link(ReqId, Caller, Bucket, VNodes, undefined, Timeout).
+
+start_link(ReqId, Caller, Bucket, VNodes, FilterVNodes, Timeout) ->
+    gen_fsm:start_link(?MODULE, [ReqId, Caller, Bucket, VNodes, FilterVNodes], [{timeout, Timeout}]).
 
 list_keys(ListerPid) ->
     gen_fsm:send_event(ListerPid, start).
-    
-list_keys(ListerPid, VNode) ->    
+
+list_keys(ListerPid, VNode) ->
     gen_fsm:send_event(ListerPid, {listkeys, VNode}).
 
 update_vnodes(ListerPid, VNodes) ->
@@ -76,11 +81,20 @@ update_vnodes(ListerPid, VNodes) ->
 %% gen_fsm callbacks
 %% ===================================================================
 
-init([ReqId, Caller, Inputs, VNodes]) ->
+init([ReqId, Caller, Inputs, VNodes, FilterVNodes]) ->
     erlang:monitor(process, Caller),
-    {Bucket, KeyFilter} = build_key_filter(Inputs),    
-    {ok, waiting, #state{reqid=ReqId, caller=Caller, bucket=Bucket,
-                         key_filter=KeyFilter, vnodes=VNodes}}.
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    {Bucket, KeyFilter} = build_key_filter(Inputs),
+    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
+    NVal = proplists:get_value(n_val, BucketProps),
+    PrefListFun = fun(X) -> get_preflist({Bucket, X}, Ring, NVal) end,
+    {ok, waiting, #state{bucket=Bucket,
+                         caller=Caller,
+                         filter_vnodes=FilterVNodes,
+                         key_filter=KeyFilter,
+                         preflist_fun=PrefListFun,
+                         reqid=ReqId,
+                         vnodes=VNodes}}.
 
 waiting(start, #state{reqid=ReqId, bucket=Bucket, vnodes=VNodes}=State) ->
     riak_kv_vnode:list_keys(VNodes, ReqId, self(), Bucket),
@@ -89,9 +103,6 @@ waiting(start, #state{reqid=ReqId, bucket=Bucket, vnodes=VNodes}=State) ->
 waiting({listkeys, VNode}, #state{reqid=ReqId, bucket=Bucket}=State) ->
     riak_kv_vnode:list_keys(VNode, ReqId, self(), Bucket),
     {next_state, waiting, State};
-
-waiting({augment_vnodes, NewVNodes}, #state{vnodes=VNodes}=State) ->
-    {next_state, waiting, State#state{vnodes=VNodes++NewVNodes}};
 
 waiting({update_vnodes, VNodes}, State) ->
     {next_state, waiting, State#state{vnodes=VNodes}}.
@@ -103,29 +114,97 @@ handle_event(_Event, StateName, State) ->
 handle_sync_event(_Event, _From, StateName, State) ->
     {reply, ignored, StateName, State}.
 
-handle_info({ReqId, {kl, Idx, Keys}}, waiting, #state{reqid=ReqId,
+handle_info({ReqId, {kl, Idx, Keys}}, waiting, #state{caller=Caller,
                                                       key_filter=list_buckets,
-                                                      caller=Caller}=State) ->    
+                                                      reqid=ReqId}=State) ->
     %% Skip the fold if listing buckets
     gen_fsm:send_event(Caller, {ReqId, {kl, {Idx, node()}, lists:usort(Keys)}}),
     {next_state, waiting, State};
-handle_info({ReqId, {kl, Idx, Keys}}, waiting, #state{reqid=ReqId,
+handle_info({ReqId, {kl, Idx, Keys}}, waiting, #state{caller=Caller,
+                                                      filter_vnodes=undefined,
                                                       key_filter=none,
-                                                      caller=Caller}=State) ->    
+                                                      reqid=ReqId}=State) ->
     %% No need to filter so just return the keys
     gen_fsm:send_event(Caller, {ReqId, {kl, {Idx, node()}, Keys}}),
-    {next_state, waiting, State};        
-handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{reqid=ReqId,
+    {next_state, waiting, State};
+handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{caller=Caller,
+                                                       filter_vnodes=undefined,
                                                        key_filter=KeyFilter,
-                                                       caller=Caller}=State) ->    
+                                                       reqid=ReqId}=State) ->
+    %% Key filtering fun!
     FilterFun = fun(Key, Acc) ->
-                case KeyFilter(Key) of
-                    true ->
-                        [Key|Acc];
-                    false ->
-                        Acc
-                end
-           end,
+                        case KeyFilter(Key) of
+                            true ->
+                                [Key|Acc];
+                            false ->
+                                Acc
+                        end
+                end,
+    %% Fold over the keys to perform the filtering
+    case lists:foldl(FilterFun, [], Keys0) of
+        [] ->
+            ok;
+        Keys ->
+            gen_fsm:send_event(Caller, {ReqId, {kl, {Idx, node()}, Keys}})
+    end,
+    {next_state, waiting, State};
+handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{caller=Caller,
+                                                       filter_vnodes=FilterVNodes,
+                                                       key_filter=none,
+                                                       preflist_fun=PrefListFun,
+                                                       reqid=ReqId}=State) ->
+    %% Create the VNode filtering fun
+    case proplists:get_value(Idx, FilterVNodes) of
+        undefined ->
+            VNodeFilter = fun(_) -> true end;
+        PositionList ->
+            VNodeFilter = fun(X) ->
+                                  PrefList = PrefListFun(X),
+                                  check_preflist_positions(PositionList, {Idx, node()}, PrefList)
+                          end
+    end,
+    %% Use the key and vnode filters to get the correct keys
+    FilterFun = fun(Key, Acc) ->
+                        case VNodeFilter(Key) of
+                            true ->
+                                [Key|Acc];
+                            false ->
+                                Acc
+                        end
+                end,
+    %% Fold over the keys to perform the filtering
+    case lists:foldl(FilterFun, [], Keys0) of
+        [] ->
+            ok;
+        Keys ->
+            gen_fsm:send_event(Caller, {ReqId, {kl, {Idx, node()}, Keys}})
+    end,
+    {next_state, waiting, State};
+handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{caller=Caller,
+                                                       filter_vnodes=FilterVNodes,
+                                                       key_filter=KeyFilter,
+                                                       preflist_fun=PrefListFun,
+                                                       reqid=ReqId}=State) ->
+    %% Create the VNode filtering fun
+    case proplists:get_value(Idx, FilterVNodes) of
+        undefined ->
+            VNodeFilter = fun(_) -> true end;
+        PositionList ->
+            VNodeFilter = fun(X) ->
+                                  PrefList = PrefListFun(X),
+                                  check_preflist_positions(PositionList, {Idx, node()}, PrefList)
+                          end
+    end,
+    %% Use the key and vnode filters to get the correct keys
+    FilterFun = fun(Key, Acc) ->
+                        case KeyFilter(Key) andalso VNodeFilter(Key) of
+                            true ->
+                                [Key|Acc];
+                            false ->
+                                Acc
+                        end
+                end,
+    %% Fold over the keys to perform the filtering
     case lists:foldl(FilterFun, [], Keys0) of
         [] ->
             ok;
@@ -151,6 +230,7 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %% Internal functions
 %% ====================================================================
 
+%% @private
 build_key_filter('_') ->
     {'_', list_buckets};
 build_key_filter(Bucket) when is_binary(Bucket) ->
@@ -161,3 +241,22 @@ build_key_filter({filter, Bucket, Fun}) when is_function(Fun) ->
 build_key_filter({Bucket, Filters}) ->
     FilterFun = riak_kv_mapred_filters:compose(Filters),
     {Bucket, FilterFun}.
+
+%% @private
+check_preflist_positions([], _, _) ->
+    false;
+check_preflist_positions([Position | RestPositions], VNode, PrefList) ->
+    case lists:nth(Position, PrefList) of
+        VNode ->
+            true;
+        _ ->
+            check_preflist_positions(RestPositions, VNode, PrefList)
+    end.
+
+%% @private
+get_preflist({Bucket, Key}, Ring, NVal) ->
+    %% Get the chash key for the bucket-key pair and
+    %% use that to determine the preference list to
+    %% use in filtering the keys from this VNode.
+    ChashKey = riak_core_util:chash_key({Bucket, Key}),
+    lists:sublist(riak_core_ring:preflist(ChashKey, Ring), NVal).
