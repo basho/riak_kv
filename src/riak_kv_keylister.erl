@@ -34,11 +34,9 @@
          update_vnodes/3
         ]).
 
-%% States
--export([waiting/2]).
-
 %% gen_fsm callbacks
 -export([init/1,
+         waiting/2,
          handle_event/3,
          handle_sync_event/4,
          handle_info/3,
