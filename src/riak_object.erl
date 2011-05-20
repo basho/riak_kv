@@ -46,7 +46,7 @@
           key :: key(),
           contents :: [#r_content{}],
           vclock = vclock:fresh() :: vclock:vclock(),
-          updatemetadata=orddict:store(clean, true, orddict:new()) :: dict(),
+          updatemetadata=dict:store(clean, true, dict:new()) :: dict(),
           updatevalue :: term()
          }).
 -opaque riak_object() :: #r_object{}.
@@ -71,7 +71,7 @@ new(B, K, V) when is_binary(B), is_binary(K) ->
 -spec new(Bucket::bucket(), Key::key(), Value::value(), 
           string() | dict() | no_initial_metadata) -> riak_object().
 new(B, K, V, C) when is_binary(B), is_binary(K), is_list(C) ->
-    new(B, K, V, orddict:from_list([{?MD_CTYPE, C}]));
+    new(B, K, V, dict:from_list([{?MD_CTYPE, C}]));
 
 %% @doc Constructor for new riak objects with an initial metadata dict.
 %%
@@ -84,7 +84,7 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
         false ->
             case MD of
                 no_initial_metadata ->
-                    Contents = [#r_content{metadata=orddict:new(), value=V}],
+                    Contents = [#r_content{metadata=dict:new(), value=V}],
                     #r_object{bucket=B,key=K,
                               contents=Contents,vclock=vclock:fresh()};
                 _ ->
@@ -115,8 +115,8 @@ equal1(Obj1,Obj2) ->
         true -> equal2(Obj1,Obj2)
     end.
 equal2(Obj1,Obj2) ->
-    UM1 = lists:sort(orddict:to_list(Obj1#r_object.updatemetadata)),
-    UM2 = lists:sort(orddict:to_list(Obj2#r_object.updatemetadata)),
+    UM1 = lists:sort(dict:to_list(Obj1#r_object.updatemetadata)),
+    UM2 = lists:sort(dict:to_list(Obj2#r_object.updatemetadata)),
     case UM1 =:= UM2 of
         false -> false;
         true ->
@@ -132,8 +132,8 @@ equal_contents([],[]) -> true;
 equal_contents(_,[]) -> false;
 equal_contents([],_) -> false;
 equal_contents([C1|R1],[C2|R2]) ->
-    MD1 = lists:sort(orddict:to_list(C1#r_content.metadata)),
-    MD2 = lists:sort(orddict:to_list(C2#r_content.metadata)),
+    MD1 = lists:sort(dict:to_list(C1#r_content.metadata)),
+    MD2 = lists:sort(dict:to_list(C2#r_content.metadata)),
     case MD1 =:= MD2 of
         false -> false;
         true ->
@@ -157,12 +157,12 @@ reconcile(Objects, AllowMultiple) ->
         false ->
             [hd(lists:sort(fun compare_content_dates/2, AllContents))];
         true ->
-            AllContents
+            lists:usort(AllContents)
     end,
     VClock = vclock:merge([O#r_object.vclock || O <- RObjs]),
     HdObj = hd(RObjs),
     HdObj#r_object{contents=Contents,vclock=VClock,
-                   updatemetadata=orddict:store(clean, true, orddict:new()),
+                   updatemetadata=dict:store(clean, true, dict:new()),
                    updatevalue=undefined}.
 
 %% @spec ancestors([riak_object()]) -> [riak_object()]
@@ -198,8 +198,8 @@ rem_dup_objs([O|Rest],Acc) ->
 compare_content_dates(C1,C2) ->
     % true if C1 was modifed later than C2
     riak_core_util:compare_dates(
-      orddict:fetch(<<"X-Riak-Last-Modified">>, C1#r_content.metadata),
-      orddict:fetch(<<"X-Riak-Last-Modified">>, C2#r_content.metadata)).
+      dict:fetch(<<"X-Riak-Last-Modified">>, C1#r_content.metadata),
+      dict:fetch(<<"X-Riak-Last-Modified">>, C2#r_content.metadata)).
 
 %% @spec merge(riak_object(), riak_object()) -> riak_object()
 %% @doc  Merge the contents and vclocks of OldObject and NewObject.
@@ -210,7 +210,7 @@ merge(OldObject, NewObject) ->
                                              lists:usort(OldObject#r_object.contents)),
                        vclock=vclock:merge([OldObject#r_object.vclock,
                           NewObj1#r_object.vclock]),
-                       updatemetadata=orddict:store(clean, true, orddict:new()),
+                       updatemetadata=dict:store(clean, true, dict:new()),
                        updatevalue=undefined}.
 
 %% @spec apply_updates(riak_object()) -> riak_object()
@@ -223,7 +223,7 @@ apply_updates(Object=#r_object{}) ->
              _ ->
                  [Object#r_object.updatevalue]
          end,
-    MD = case orddict:find(clean, Object#r_object.updatemetadata) of
+    MD = case dict:find(clean, Object#r_object.updatemetadata) of
              {ok,_} ->
                  MDs = [C#r_content.metadata || C <- Object#r_object.contents],
                  case Object#r_object.updatevalue of
@@ -231,11 +231,11 @@ apply_updates(Object=#r_object{}) ->
                      _ -> [hd(MDs)]
                  end;
              error ->
-                 [orddict:erase(clean,Object#r_object.updatemetadata) || _X <- VL]
+                 [dict:erase(clean,Object#r_object.updatemetadata) || _X <- VL]
          end,
     Contents = [#r_content{metadata=M,value=V} || {M,V} <- lists:zip(MD, VL)],
     Object#r_object{contents=Contents,
-                 updatemetadata=orddict:store(clean, true, orddict:new()),
+                 updatemetadata=dict:store(clean, true, dict:new()),
                  updatevalue=undefined}.
 
 %% @spec bucket(riak_object()) -> bucket()
@@ -291,7 +291,7 @@ get_value(Object=#r_object{}) ->
 %% @spec update_metadata(riak_object(), dict()) -> riak_object()
 %% @doc  Set the updated metadata of an object to M.
 update_metadata(Object=#r_object{}, M) ->
-    Object#r_object{updatemetadata=orddict:erase(clean, M)}.
+    Object#r_object{updatemetadata=dict:erase(clean, M)}.
 
 %% @spec update_value(riak_object(), value()) -> riak_object()
 %% @doc  Set the updated value of an object to V
@@ -367,7 +367,7 @@ jsonify_metadata(MD) ->
               ({Name, Value}) ->
                    {Name, Value}
            end,
-    {struct, lists:map(MDJS, orddict:to_list(MD))}.
+    {struct, lists:map(MDJS, dict:to_list(MD))}.
 
 %% @doc convert strings to binaries, and proplists to JSON objects
 jsonify_metadata_list([]) -> [];
@@ -412,11 +412,11 @@ dejsonify_values([{<<"metadata">>, {struct, MD0}},
                                       end}
                         end
                 end,
-    MD = orddict:from_list([Converter(KV) || KV <- MD0]),
+    MD = dict:from_list([Converter(KV) || KV <- MD0]),
     dejsonify_values(T, [{MD, D}|Accum]).
 
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
-    case orddict:find(clean, M) of
+    case dict:find(clean, M) of
         error -> true;
         {ok,_} ->
             case V of
@@ -528,8 +528,8 @@ merge5_test() ->
                  riak_object:syntactic_merge(O2, O1, syn_put_mrg, TS)).
 
 equality1_test() ->
-    MD0 = orddict:new(),
-    MD = orddict:store("X-Riak-Test", "value", MD0),
+    MD0 = dict:new(),
+    MD = dict:store("X-Riak-Test", "value", MD0),
     O1 = riak_object:new(<<"test">>, <<"a">>, "value"),
     O2 = riak_object:new(<<"test">>, <<"a">>, "value"),
     O3 = riak_object:increment_vclock(O1, self()),
@@ -555,7 +555,7 @@ inequality_metadata_test() ->
     O2 = riak_object:new(<<"test">>, <<"a">>, "value"),
     O1p = riak_object:apply_updates(
             riak_object:update_metadata(
-              O1, orddict:store(<<"X-Riak-Test">>, "value",
+              O1, dict:store(<<"X-Riak-Test">>, "value",
                              riak_object:get_metadata(O1)))),
     false = riak_object:equal(O1p, O2).
 
@@ -574,9 +574,9 @@ inequality_bucket_test() ->
     false = riak_object:equal(O1, O2).
 
 inequality_updatecontents_test() ->
-    MD1 = orddict:new(),
-    MD2 = orddict:store("X-Riak-Test", "value", MD1),
-    MD3 = orddict:store("X-Riak-Test", "value1", MD1),
+    MD1 = dict:new(),
+    MD2 = dict:store("X-Riak-Test", "value", MD1),
+    MD3 = dict:store("X-Riak-Test", "value1", MD1),
     O1 = riak_object:new(<<"test">>, <<"a">>, "value"),
     O2 = riak_object:new(<<"test">>, <<"a">>, "value"),
     O3 = riak_object:update_metadata(O1, MD2),
@@ -600,7 +600,7 @@ date_reconcile_test() ->
     O2 = apply_updates(
            riak_object:update_metadata(
              increment_vclock(O, date),
-             orddict:store(
+             dict:store(
                <<"X-Riak-Last-Modified">>,
                httpd_util:rfc1123_date(
                  calendar:gregorian_seconds_to_datetime(D)),
@@ -608,7 +608,7 @@ date_reconcile_test() ->
     O4 = apply_updates(
            riak_object:update_metadata(
              O3,
-             orddict:store(
+             dict:store(
                <<"X-Riak-Last-Modified">>,
                httpd_util:rfc1123_date(
                  calendar:gregorian_seconds_to_datetime(D+1)),
@@ -627,7 +627,7 @@ get_update_value_test() ->
 get_update_metadata_test() ->
     O = riak_object:new(<<"test">>, <<"test">>, val),
     OldMD = riak_object:get_metadata(O),
-    NewMD = orddict:store(<<"X-Riak-Test">>, "testval", OldMD),
+    NewMD = dict:store(<<"X-Riak-Test">>, "testval", OldMD),
     ?assertNot(NewMD =:= OldMD),
     ?assertEqual(NewMD,
                  riak_object:get_update_metadata(
@@ -637,7 +637,7 @@ is_updated_test() ->
     O = riak_object:new(<<"test">>, <<"test">>, test),
     ?assertNot(is_updated(O)),
     OMu = riak_object:update_metadata(
-            O, orddict:store(<<"X-Test-Update">>, "testupdate",
+            O, dict:store(<<"X-Test-Update">>, "testupdate",
                           riak_object:get_metadata(O))),
     ?assert(is_updated(OMu)),
     OVu = riak_object:update_value(O, testupdate),
@@ -653,10 +653,10 @@ remove_duplicates_test() ->
 
 new_with_ctype_test() ->
     O = riak_object:new(<<"b">>, <<"k">>, <<"{\"a\":1}">>, "application/json"),
-    ?assertEqual("application/json", orddict:fetch(?MD_CTYPE, riak_object:get_metadata(O))).
+    ?assertEqual("application/json", dict:fetch(?MD_CTYPE, riak_object:get_metadata(O))).
 
 new_with_md_test() ->
-    O = riak_object:new(<<"b">>, <<"k">>, <<"abc">>, orddict:from_list([{?MD_CHARSET,"utf8"}])),
-    ?assertEqual("utf8", orddict:fetch(?MD_CHARSET, riak_object:get_metadata(O))).
+    O = riak_object:new(<<"b">>, <<"k">>, <<"abc">>, dict:from_list([{?MD_CHARSET,"utf8"}])),
+    ?assertEqual("utf8", dict:fetch(?MD_CHARSET, riak_object:get_metadata(O))).
 
 -endif.

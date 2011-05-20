@@ -102,8 +102,9 @@ enough(#putcore{w = W, num_w = NumW, dw = DW, num_dw = NumDW,
         (NumW < W andalso NumFail >= WFailThreshold).
 
 %% True if coordinator result has been returned - anything other than w.
-coord_result(CoordIdx, Results) ->
-    [Result || {Idx, Result} <- Results, Idx == CoordIdx] -- [w] /= [].
+coord_result(_CoordIdx, _Results) ->
+    true.
+%    [Result || {Idx, Result} <- Results, Idx == CoordIdx] -- [w] /= [].
 
 %% Get success/fail response once enough results received
 -spec response(putcore()) -> {reply(), putcore()}.

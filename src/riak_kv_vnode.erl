@@ -32,6 +32,7 @@
          mget/3,
          del/3,
          put/6,
+         coord_put/6,
          readrepair/6,
          list_keys/4,
          fold/3,
@@ -128,6 +129,23 @@ put(Preflist, BKey, Obj, ReqId, StartTime, Options, Sender)
                                    Sender,
                                    riak_kv_vnode_master).
 
+%% Issue a put for the object to the preflist, expecting a reply
+%% to an FSM.
+coord_put(IndexNode, BKey, Obj, ReqId, StartTime, Options) when is_integer(StartTime) ->
+    coord_put(IndexNode, BKey, Obj, ReqId, StartTime, Options, {fsm, undefined, self()}).
+
+coord_put(IndexNode, BKey, Obj, ReqId, StartTime, Options, Sender)
+  when is_integer(StartTime) ->
+    riak_core_vnode_master:command(IndexNode,
+                                   ?KV_PUT_REQ{
+                                      bkey = BKey,
+                                      object = Obj,
+                                      req_id = ReqId,
+                                      start_time = StartTime,
+                                      options = [{coord, IndexNode} | Options]},
+                                   Sender,
+                                   riak_kv_vnode_master).
+
 %% Do a put without sending any replies
 readrepair(Preflist, BKey, Obj, ReqId, StartTime, Options) ->
     put(Preflist, BKey, Obj, ReqId, StartTime, [rr | Options], ignore).
@@ -170,7 +188,12 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
                Sender, State=#state{idx=Idx}) ->
     riak_kv_mapred_cache:eject(BKey),
     riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
-    do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
+    case proplists:get_value(coord, Options) of
+        undefined ->
+            do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State);
+        Coord ->
+            do_coord_put(Sender, BKey, Object, ReqId, StartTime, Coord, Options, State)
+    end,
     {noreply, State};
 
 handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
@@ -281,6 +304,52 @@ handle_exit(_Pid, _Reason, State) ->
     {stop, linked_process_crash, State}.
 
 %% old vnode helper functions
+
+%% Put for the coordinating vnode
+%% If returnbody is true or the vclock is incremented, return
+%% the updated object
+do_coord_put(Sender, BKey, UpdObj, ReqId, StartTime, {_CoordIdx, CoordNode}, Options,
+          #state{idx = Idx, mod = Mod, modstate = ModState}) ->
+    {Action, PutObj} = case Mod:get(ModState, BKey) of
+                           {error, notfound} ->
+                               {replace, UpdObj};
+                           {ok, CurObj} ->
+                               coord_put_merge(binary_to_term(CurObj), UpdObj, CoordNode, StartTime)
+                       end,
+    ReturnBody = proplists:get_value(returnbody, Options, false),
+    Result = case Mod:put(ModState, BKey, term_to_binary(PutObj)) of
+                 ok when ReturnBody; Action == return ->
+                     {dw, Idx, PutObj, ReqId};
+                 ok ->
+                     {dw, Idx, ReqId};
+                 {error, _Reason} ->
+                     {fail, Idx, ReqId}
+             end,
+    riak_core_vnode:reply(Sender, Result),
+    riak_kv_stat:update(vnode_put).
+
+coord_put_merge(CurObj, UpdObj, CoordId, Timestamp) ->
+    %% Make sure UpdObj descends from CurObj and that CoordId is greater
+    CurVC = riak_object:vclock(CurObj),
+    UpdVC = riak_object:vclock(UpdObj),
+
+    %% Valid coord put replacing current object
+    case get_counter(CoordId, UpdVC) > get_counter(CoordId, CurVC) andalso
+        vclock:descends(CurVC, UpdVC) == false andalso 
+        vclock:descends(UpdVC, CurVC) == true of
+        true ->
+            {replace, UpdObj};
+        false ->
+            {return, riak_object:increment_vclock(riak_object:merge(CurObj, UpdObj),CoordId, Timestamp)}
+    end.
+
+get_counter(Id, VC) ->            
+    case lists:keyfind(Id, 1, VC) of
+        false ->
+            0;
+        {Counter, _TS} ->
+            Counter
+    end.
 
 
 %store_call(State=#state{mod=Mod, modstate=ModState}, Msg) ->
