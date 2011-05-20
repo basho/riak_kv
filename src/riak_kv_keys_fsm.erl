@@ -448,7 +448,7 @@ start_keylisters(ReqId, Input, KeyListers, NodeIndexes, PrefListPositions, Timeo
                                   KeyListerPid ->
                                       %% A keylister process is already running on the node
                                       %% so just update the VNodes it should list keys for.
-                                      riak_kv_keylister:update_vnodes(KeyListerPid, VNodes),
+                                      riak_kv_keylister:update_vnodes(KeyListerPid, VNodes, FilterVNodes),
                                       {Successes, Errors}
                               end
                       end,
