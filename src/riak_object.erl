@@ -157,7 +157,7 @@ reconcile(Objects, AllowMultiple) ->
         false ->
             [hd(lists:sort(fun compare_content_dates/2, AllContents))];
         true ->
-            AllContents
+            lists:usort(AllContents)
     end,
     VClock = vclock:merge([O#r_object.vclock || O <- RObjs]),
     HdObj = hd(RObjs),

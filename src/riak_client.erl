@@ -292,10 +292,9 @@ put(RObj) -> THIS:put(RObj, []).
 %%       {error, Err :: term(), details()}
 %% @doc Store RObj in the cluster.
 put(RObj, Options) when is_list(Options) ->
-    UpdObj = riak_object:increment_vclock(RObj, ClientId),
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_put_fsm_sup:start_put_fsm(Node, [{raw, ReqId, Me}, UpdObj, Options]),
+    riak_kv_put_fsm_sup:start_put_fsm(Node, [{raw, ReqId, Me}, RObj, Options]),
     %% TODO: Investigate adding a monitor here and eliminating the timeout.
     Timeout = recv_timeout(Options),
     wait_for_reqid(ReqId, Timeout);
