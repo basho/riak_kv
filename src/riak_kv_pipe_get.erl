@@ -22,7 +22,7 @@
 -behaviour(riak_pipe_vnode_worker).
 
 -export([init/2,
-         process/2,
+         process/3,
          done/1]).
 
 -include("riak_kv_vnode.hrl").
@@ -32,7 +32,7 @@
 init(Partition, FittingDetails) ->
     {ok, #state{partition=Partition, fd=FittingDetails}}.
 
-process(Input, #state{partition=Partition, fd=FittingDetails}=State) ->
+process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
     ReqId = make_req_id(),
     riak_core_vnode_master:command(
       {Partition, node()}, %% assume local partfun was used
@@ -42,13 +42,13 @@ process(Input, #state{partition=Partition, fd=FittingDetails}=State) ->
     receive
         {ReqId, {r, {ok, Obj}, _, _}} ->
             riak_pipe_vnode_worker:send_output(
-              Obj, Partition, FittingDetails);
+              Obj, Partition, FittingDetails),
+            {ok, State};
         {ReqId, {r, {error, Error}, _, _}} ->
-            %%TODO: forward
-            riak_pipe_vnode_worker:send_output(
-              {error, Error, Input}, Partition, FittingDetails)
-    end,
-    {ok, State}.
+            if Last -> {{error, Error}, State};
+               true -> {forward_preflist, State}
+            end
+    end.
 
 done(_State) ->
     ok.

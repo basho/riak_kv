@@ -58,7 +58,8 @@ map2pipe(FunSpec, Arg, Keep, I) ->
                    module=riak_kv_pipe_get,
                    %% TODO: perform bucket prop 'chash_keyfun' lookup at
                    %% spec-translation time, not at each input send
-                   chashfun=fun riak_core_util:chash_key/1},
+                   chashfun=fun riak_core_util:chash_key/1,
+                   nval=fun bkey_nval/1},
      #fitting_spec{name={xform_map,I},
                    module=riak_pipe_w_xform,
                    arg=map_xform_compat(FunSpec, Arg),
@@ -143,6 +144,11 @@ reduce_local_chashfun(_) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     riak_pipe_vnode:hash_for_partition(
       hd(riak_core_ring:my_indices(Ring))).
+
+bkey_nval({Bucket, _Key}) ->
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    {n_val, NVal} = lists:keyfind(n_val, 1, BucketProps),
+    NVal.
 
 %% TODO: dynamic inputs, filters
 send_inputs(Fitting, BucketKeyList) when is_list(BucketKeyList) ->
