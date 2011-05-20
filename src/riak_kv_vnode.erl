@@ -32,6 +32,7 @@
          mget/3,
          del/3,
          put/6,
+         coord_put/6,
          readrepair/6,
          index_query/7,
          list_buckets/5,
@@ -141,6 +142,23 @@ put(Preflist, BKey, Obj, ReqId, StartTime, Options, Sender)
                                    Sender,
                                    riak_kv_vnode_master).
 
+%% Issue a put for the object to the preflist, expecting a reply
+%% to an FSM.
+coord_put(IndexNode, BKey, Obj, ReqId, StartTime, Options) when is_integer(StartTime) ->
+    coord_put(IndexNode, BKey, Obj, ReqId, StartTime, Options, {fsm, undefined, self()}).
+
+coord_put(IndexNode, BKey, Obj, ReqId, StartTime, Options, Sender)
+  when is_integer(StartTime) ->
+    riak_core_vnode_master:command(IndexNode,
+                                   ?KV_PUT_REQ{
+                                      bkey = BKey,
+                                      object = Obj,
+                                      req_id = ReqId,
+                                      start_time = StartTime,
+                                      options = [{coord, IndexNode} | Options]},
+                                   Sender,
+                                   riak_kv_vnode_master).
+
 %% Do a put without sending any replies
 readrepair(Preflist, BKey, Obj, ReqId, StartTime, Options) ->
     put(Preflist, BKey, Obj, ReqId, StartTime, [rr | Options], ignore).
@@ -214,7 +232,12 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
                Sender, State=#state{idx=Idx}) ->
     riak_kv_mapred_cache:eject(BKey),
     riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
-    UpdState = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
+    case proplists:get_value(coord, Options) of
+        undefined ->
+            UpdState = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State);
+        Coord ->
+            UpdState = do_coord_put(Sender, BKey, Object, ReqId, StartTime, Coord, Options, State)
+    end,
     {noreply, UpdState};
 
 handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
@@ -397,6 +420,56 @@ handle_exit(_Pid, Reason, State) ->
     lager:error("Linked process exited. Reason: ~p", [Reason]),
     {stop, linked_process_crash, State}.
 
+
+%% Put for the coordinating vnode
+%% If returnbody is true or the vclock is incremented, return
+%% the updated object
+do_coord_put(Sender, {Bucket, Key}, UpdObj, ReqId, StartTime, {_CoordIdx, CoordNode}, Options,
+          #state{idx = Idx, mod = Mod, modstate = ModState}) ->
+    {Action, PutObj, ModState1} = 
+        case Mod:get(Bucket, Key, ModState) of
+            {error, notfound, ModState0} ->
+                {replace, UpdObj, ModState0};
+            {ok, CurObj, ModState0} ->
+                {Action0, PutObj0} = coord_put_merge(binary_to_term(CurObj), UpdObj, 
+                                                     CoordNode, StartTime),
+                {Action0, PutObj0, ModState0}
+        end,
+    ReturnBody = proplists:get_value(returnbody, Options, false),
+    Result = case Mod:put(Bucket, Key, [], term_to_binary(PutObj), ModState1) of
+                 {ok, ModState2} when ReturnBody; Action == return ->
+                     {dw, Idx, PutObj, ReqId};
+                 {ok, ModState2} ->
+                     {dw, Idx, ReqId};
+                 {error, _Reason, ModState2} ->
+                     {fail, Idx, ReqId}
+             end,
+    riak_core_vnode:reply(Sender, Result),
+    riak_kv_stat:update(vnode_put),
+    ModState2.
+
+coord_put_merge(CurObj, UpdObj, CoordId, Timestamp) ->
+    %% Make sure UpdObj descends from CurObj and that CoordId is greater
+    CurVC = riak_object:vclock(CurObj),
+    UpdVC = riak_object:vclock(UpdObj),
+
+    %% Valid coord put replacing current object
+    case get_counter(CoordId, UpdVC) > get_counter(CoordId, CurVC) andalso
+        vclock:descends(CurVC, UpdVC) == false andalso 
+        vclock:descends(UpdVC, CurVC) == true of
+        true ->
+            {replace, UpdObj};
+        false ->
+            {return, riak_object:increment_vclock(riak_object:merge(CurObj, UpdObj),CoordId, Timestamp)}
+    end.
+
+get_counter(Id, VC) ->            
+    case lists:keyfind(Id, 1, VC) of
+        false ->
+            0;
+        {Counter, _TS} ->
+            Counter
+    end.
 %% @private
 %% upon receipt of a client-initiated put
 do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
