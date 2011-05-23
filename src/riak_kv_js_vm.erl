@@ -28,8 +28,6 @@
 
 -behaviour(gen_server).
 
--define(MAX_ANON_FUNS, 25).
-
 %% API
 -export([start_link/2, dispatch/4, blocking_dispatch/3, reload/1,
          batch_blocking_dispatch/2, start_batch/1, finish_batch/1, batch_dispatch/3]).
@@ -40,7 +38,7 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {manager, pool, ctx, next_funid=1, anon_funs=[], in_batch=false}).
+-record(state, {manager, pool, ctx, in_batch=false}).
 
 start_link(Manager, PoolName) ->
     gen_server:start_link(?MODULE, [Manager, PoolName], []).
@@ -237,16 +235,25 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% Internal functions
 define_invoke_anon_js(JS, Args, #state{ctx=Ctx}=State) ->
-    case define_anon_js(JS, State) of
-        {ok, FunName, NewState} ->
-            case invoke_js(Ctx, FunName, Args) of
-                {ok, R} ->
-                    {{ok, R}, NewState};
-                Error ->
-                    {Error, State}
+    JSFun =  define_anon_js(JS, Args),
+    case invoke_js(Ctx, JSFun) of
+        {ok, R} ->
+            {{ok, R}, State};
+        Error ->
+            {Error, State}
+    end.
+
+invoke_js(Ctx, JSFun) ->
+    case js:eval(Ctx, JSFun) of
+        {ok, {struct, R}} ->
+            case proplists:get_value(<<"lineno">>, R) of
+                undefined ->
+                    {ok, R};
+                _ ->
+                    {error, R}
             end;
-        {Error, undefined, NewState} ->
-            {Error, NewState}
+        R ->
+            R
     end.
 
 invoke_js(Ctx, Js, Args) ->
@@ -272,26 +279,18 @@ invoke_js(Ctx, Js, Args) ->
             {error, bad_encoding}
     end.
 
-define_anon_js(JS, #state{ctx=Ctx, anon_funs=AnonFuns, next_funid=NextFunId}=State) ->
-    Hash = erlang:phash2(JS),
-    case proplists:get_value(Hash, AnonFuns) of
-        undefined ->
-            FunId = case NextFunId > ?MAX_ANON_FUNS of
-                        true ->
-                            1;
-                        false ->
-                            NextFunId
-                    end,
-            FunName = list_to_binary("riakAnon" ++ integer_to_list(FunId)),
-            case js:define(Ctx, list_to_binary([<<"var ">>, FunName, <<"=">>, JS, <<";">>])) of
-                ok ->
-                    {ok, FunName, State#state{anon_funs=[{Hash, FunName}|AnonFuns], next_funid=NextFunId + 1}};
-                Error ->
-                    error_logger:warning_msg("Error defining anonymous Javascript function: ~p~n", [Error]),
-                    {Error, undefined, State}
-            end;
-        FunName ->
-            {ok, FunName, State}
+define_anon_js(JS, Args) ->
+    try
+        ArgList = build_arg_list(Args, []),
+        iolist_to_binary([JS, <<"(">>, ArgList, <<");">>])
+    catch
+        exit: {ucs, {bad_utf8_character_code}} ->
+            error_logger:error_msg("Error JSON encoding arguments: ~p~n", [Args]),
+            {error, bad_encoding};
+        exit: {json_encode, _} ->
+            {error, bad_json};
+        throw:invalid_utf8 ->
+            {error, bad_encoding}
     end.
 
 new_context(ThreadStack, HeapSize) ->
@@ -350,3 +349,11 @@ maybe_idle(#state{in_batch=false, pool=Pool}) ->
     riak_kv_js_manager:mark_idle(Pool);
 maybe_idle(#state{in_batch=true}) ->
     ok.
+
+build_arg_list([], Accum) ->
+    lists:reverse(Accum);
+build_arg_list([H|[]], Accum) ->
+    build_arg_list([], [js_mochijson2:encode(H)|Accum]);
+build_arg_list([H|T], Accum) ->
+    build_arg_list(T, [[js_mochijson2:encode(H), ","]|Accum]).
+
