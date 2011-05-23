@@ -232,7 +232,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% Internal functions
 define_invoke_anon_js(JS, Args, #state{ctx=Ctx}=State) ->
-    JSFun =  define_anon_js(JS, Args, State),
+    JSFun =  define_anon_js(JS, Args),
     case invoke_js(Ctx, JSFun) of
         {ok, R} ->
             {{ok, R}, State};
@@ -276,7 +276,7 @@ invoke_js(Ctx, Js, Args) ->
             {error, bad_encoding}
     end.
 
-define_anon_js(JS, Args, #state{ctx=_Ctx, anon_funs=_AnonFuns}=_State) ->
+define_anon_js(JS, Args) ->
     try
         ArgList = build_arg_list(Args, []),
         iolist_to_binary([JS, <<"(">>, ArgList, <<");">>])
