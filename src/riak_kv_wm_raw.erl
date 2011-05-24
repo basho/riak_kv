@@ -229,11 +229,11 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                client=C,
                bucket=case wrq:path_info(bucket, RD) of
                          undefined -> undefined;
-                         B -> list_to_binary(maybe_decode_uri(B))
+                         B -> list_to_binary(maybe_decode_uri(RD, B))
                       end,
                key=case wrq:path_info(key, RD) of
                        undefined -> undefined;
-                       K -> list_to_binary(maybe_decode_uri(K))
+                       K -> list_to_binary(maybe_decode_uri(RD, K))
                    end,
                vtag=wrq:get_qs_value(?Q_VTAG, RD)
               }};
@@ -246,12 +246,17 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
     end.
 
 %% @private
-maybe_decode_uri(Val) ->
+maybe_decode_uri(RD, Val) ->
     case application:get_env(riak_kv, http_url_encoding) of
         {ok, on} ->
             mochiweb_util:unquote(Val);
         _ ->
-            Val
+            case wrq:get_req_header("X-Riak-URL-Encoding", RD) of
+                "on" ->
+                    mochiweb_util:unquote(Val);
+                _ ->
+                    Val
+            end
     end.
 
 %% @spec get_riak_client(local|{node(),Cookie::atom()}, term()) ->
