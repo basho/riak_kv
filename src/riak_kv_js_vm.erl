@@ -38,7 +38,7 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {manager, pool, ctx, anon_funs=[], in_batch=false}).
+-record(state, {manager, pool, ctx, in_batch=false}).
 
 start_link(Manager, PoolName) ->
     gen_server:start_link(?MODULE, [Manager, PoolName], []).
