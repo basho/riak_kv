@@ -229,11 +229,11 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                client=C,
                bucket=case wrq:path_info(bucket, RD) of
                          undefined -> undefined;
-                         B -> list_to_binary(B)
+                         B -> list_to_binary(maybe_decode_uri(B))
                       end,
                key=case wrq:path_info(key, RD) of
                        undefined -> undefined;
-                       K -> list_to_binary(K)
+                       K -> list_to_binary(maybe_decode_uri(K))
                    end,
                vtag=wrq:get_qs_value(?Q_VTAG, RD)
               }};
@@ -243,6 +243,15 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                io_lib:format("Unable to connect to Riak: ~p~n", [Error]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx}
+    end.
+
+%% @private
+maybe_decode_uri(Val) ->
+    case application:get_env(riak_kv, http_url_encoding) of
+        {ok, on} ->
+            mochiweb_util:unquote(Val);
+        _ ->
+            Val
     end.
 
 %% @spec get_riak_client(local|{node(),Cookie::atom()}, term()) ->
