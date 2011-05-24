@@ -125,7 +125,21 @@ compat_encoding_case({URL, Node}) ->
                              " \"query\": [{\"link\": {\"keep\":true}}]"
                              "}"},
                       [], []),
-    ?assertEqual("[[\"rest1\",\"%40compat\",\"tag\"]]", Map2).
+    ?assertEqual("[[\"rest1\",\"%40compat\",\"tag\"]]", Map2),
+    
+    %% Test 'X-Riak-URL-Encoding' header.
+    httpc:request(put, {URL ++ "/riak/rest3/%40compat",
+                        [{"X-Riak-URL-Encoding", "on"}],
+                        "text/plain",
+                        "Test"},
+                  [], []),
+
+    %% Retrieve key list and check that the key was decoded.
+    {ok, {_, _, HBody}} =
+        httpc:request(get, {"http://localhost:8091/riak/rest3?keys=true",
+                            []}, [], []),
+    {struct, HProps} = mochijson2:decode(HBody),
+    ?assertMatch([<<"@compat">>], proplists:get_value(<<"keys">>, HProps)).
 
 sane_encoding_case({URL, Node}) ->
     %% Ensure the cluster is running in sane mode
