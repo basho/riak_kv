@@ -37,6 +37,7 @@
 
 -behaviour(gen_fsm).
 
+-compile(export_all).
 %% API
 -export([start_link/4,
          start_link/5,
@@ -75,6 +76,8 @@
                 response_count=0 :: non_neg_integer(),
                 timeout :: timeout()
                }).
+
+-define(RINGTOP, trunc(math:pow(2,160)-1)).  % SHA-1 space
 
 %% ===================================================================
 %% Public API
@@ -170,12 +173,9 @@ initialize(timeout, StateData0=#state{bucket=Bucket,
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     NVal = proplists:get_value(n_val, BucketProps),
-    VNodes = riak_core_ring:all_owners(Ring),
-    %% Create a proplist with ring positions as
-    %% keys and VNodes as the values.
-    VNodePositions = lists:zip(lists:seq(0, length(VNodes)-1), VNodes),
-    case plan_and_execute(ReqId, Input, VNodePositions, NVal, length(VNodes), Timeout, [], []) of
-        {ok, RequiredResponseCount, _PrefListPositions} ->
+    PartitionCount = riak_core_ring:num_partitions(Ring),
+    case plan_and_execute(ReqId, Input, NVal, PartitionCount, Ring, Timeout, [], []) of
+        {ok, RequiredResponseCount} ->
             StateData = StateData0#state{required_responses=RequiredResponseCount},
             {next_state, waiting_kl, StateData, Timeout};
         {error, Reason} ->
@@ -258,62 +258,83 @@ finish(clean, StateData=#state{from={raw, ReqId, ClientPid}, client_type=ClientT
     {stop,normal,StateData}.
 
 %% @private
-plan_and_execute(ReqId, Input, VNodePositions, NVal, PartitionCount, Timeout, KeyListers, DownNodes) ->
+plan_and_execute(ReqId, Input, NVal, PartitionCount, Ring, Timeout, KeyListers, DownNodes) ->
+    %% Get a list of the VNodes owned by any unavailble nodes
+    DownVNodes = [Index || {Index, Node} <- riak_core_ring:all_owners(Ring), lists:member(Node, DownNodes)],
     %% Generate a coverage plan
     CoveragePlanResult =
-        create_coverage_plan(VNodePositions, NVal, PartitionCount, DownNodes),
+        create_coverage_plan(NVal, PartitionCount, Ring, DownVNodes),
     case CoveragePlanResult of
         {error, _} ->
             %% Failed to create a coverage plan so return the error
             CoveragePlanResult;
-        {NodeIndexes, PrefListPositions, RequiredResponseCount} ->
+        {NodeIndexes, Filters, RequiredResponseCount} ->
             %% If successful start processes and execute
             {AggregateKeyListers, ErrorNodes} =
-                start_keylisters(ReqId, Input, KeyListers, NodeIndexes, PrefListPositions, Timeout),
+                start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Filters, Timeout),
             case ErrorNodes of
                 [] ->
                     %% Got a valid coverage plan so instruct the keylister
                     %% processes to begin listing keys for their list of Vnodes.
                     [riak_kv_keylister:list_keys(Pid) || {_, Pid} <- AggregateKeyListers],
-                    {ok, RequiredResponseCount, PrefListPositions};
+                    {ok, RequiredResponseCount};
                 _ ->
-                    plan_and_execute(ReqId, Input, VNodePositions,
-                                     NVal, PartitionCount,
+                    plan_and_execute(ReqId, Input,
+                                     NVal, PartitionCount, Ring,
                                      Timeout, AggregateKeyListers, ErrorNodes)
             end
     end.
 
 %% @private
-create_coverage_plan(VNodePositions, NVal, PartitionCount, DownNodes) ->
-    PartitionCount = length(VNodePositions),
-    %% AvailableVNodes = VNodes -- DownVNodes
-    %% Make list of which partitions each VNode covers
-    DownVNodeFilter = fun(X) ->
-                              %% Determine the node for the
-                              %% VNode at this ring position.
-                              {_, Node} = proplists:get_value(X, VNodePositions),
-                              not lists:member(Node, DownNodes)
-                      end,
-    KeySpace = lists:seq(0, PartitionCount - 1),
-    AvailableKeySpace = lists:filter(DownVNodeFilter, KeySpace),
-    Available = [{Vnode, n_keyspaces(Vnode, NVal, PartitionCount)} || Vnode <- AvailableKeySpace],
-    CoverageResult = find_coverage(ordsets:from_list(KeySpace), Available, NVal, []),
+create_coverage_plan(NVal, PartitionCount, Ring, DownVNodes) ->
+    RingIndexInc = ?RINGTOP div PartitionCount,
+    AllKeySpaces = lists:seq(0, PartitionCount - 1),
+    UnavailableKeySpaces = [(DownVNode div RingIndexInc) || DownVNode <- DownVNodes],
+    AvailableKeySpaces = [{Vnode, n_keyspaces(Vnode, NVal, PartitionCount)} 
+                          || Vnode <- (AllKeySpaces -- UnavailableKeySpaces)],
+    CoverageResult = find_coverage(ordsets:from_list(AllKeySpaces), AvailableKeySpaces, NVal, []),
     case CoverageResult of
         {ok, CoveragePlan} ->
             %% Assemble the data structures required for
             %% executing the coverage operation.
-            assemble_coverage_structures(CoveragePlan, NVal, PartitionCount, VNodePositions);
+            CoverageVNodeFun = fun({Position, KeySpaces}, Acc) ->
+                                       %% Calculate the VNode index using the
+                                       %% ring position and the increment of
+                                       %% ring index values.
+                                       VNodeIndex = Position * RingIndexInc,
+                                       Node = riak_core_ring:index_owner(Ring, VNodeIndex),
+                                       CoverageVNode = {VNodeIndex, Node},
+                                       case length(KeySpaces) < NVal of
+                                           true ->
+                                               %% Get the VNode index of each keyspace to
+                                               %% use to filter results from this VNode.
+                                               KeySpaceIndexes = [((KeySpaceIndex+1) * RingIndexInc) || KeySpaceIndex <- KeySpaces],
+                                               case proplists:get_value(Node, Acc) of
+                                                   undefined ->
+                                                       Acc1 = [{Node, [{VNodeIndex, KeySpaceIndexes}]} | Acc];
+                                                   FilterIndexes ->
+                                                       Acc1 = [{Node, [{VNodeIndex, KeySpaceIndexes} | FilterIndexes]} 
+                                                               | proplists:delete(Node, Acc)]
+                                               end,
+                                               {CoverageVNode, Acc1};
+                                           false ->
+                                               {CoverageVNode, Acc}
+                                       end
+                               end,
+            {CoverageVNodes, FilterVNodes} = lists:mapfoldl(CoverageVNodeFun, [], CoveragePlan),
+            NodeIndexes = group_indexes_by_node(CoverageVNodes, []),
+            {NodeIndexes, FilterVNodes, length(CoverageVNodes)};
        {insufficient_vnodes_available, _}  ->
             {error, insufficient_vnodes_available}
     end.
 
 %% @private
 %% @doc Find the N key spaces for a VNode
-n_keyspaces(Vnode, N, Q) ->
-     ordsets:from_list([X rem Q || X <- lists:seq(Q + Vnode, Q + Vnode + (N-1))]).
+n_keyspaces(VNode, N, Q) ->
+     ordsets:from_list([X rem Q || X <- lists:seq(Q + VNode - N, Q + VNode - 1)]).
 
 %% @private
-%% @doc Find minimal set of covering vnodes
+%% @doc Find a minimal set of covering VNodes
 find_coverage([], _, _, Coverage) ->
     {ok, lists:sort(Coverage)};
 find_coverage(KeySpace, [], _, Coverage) ->
@@ -369,42 +390,6 @@ covers(KeySpace, CoversKeys) ->
     ordsets:size(ordsets:intersection(KeySpace, CoversKeys)).
 
 %% @private
-assemble_coverage_structures(CoveragePlan, NVal, PartitionCount, VNodeIndex) ->
-    assemble_coverage_structures(CoveragePlan, NVal, PartitionCount, VNodeIndex, [], []).
-
-%% @private
-assemble_coverage_structures([], _, _, _, CoverageVNodes, PrefListPositions) ->
-    %% NodeIndexes is a proplist where the keys are
-    %% nodes and the values are lists of VNode indexes.
-    %% This is used to determine which nodes to start keylister
-    %% processes on and to help minimize the inter-node
-    %% communication required to complete the key listing.
-    %%
-    %% PrefListPositions is a proplist where the keys are
-    %% nodes and the values are tuples with a VNode index
-    %% as the first tuple member and a list of preference
-    %% list positions for the VNode as the second tuple member.
-    NodeIndexes = group_indexes_by_node(CoverageVNodes, []),
-    {NodeIndexes, PrefListPositions, length(CoverageVNodes)};
-assemble_coverage_structures([{RingPosition, RingPositionList} | RestCoveragePlan], NVal, PartitionCount, VNodeIndex, CoverageVNodes, PrefListPositions) ->
-    %% Lookup the VNode index and node
-    {Index, Node} = proplists:get_value(RingPosition, VNodeIndex),
-    CoverageVNodes1 = [{Index, Node} | CoverageVNodes],
-    case length(RingPositionList) == NVal of
-        true ->
-            PrefListPositions1 = PrefListPositions;
-        false ->
-            PositionList = lists:reverse([NVal - (((X - RingPosition) + PartitionCount) rem PartitionCount) || X <- RingPositionList]),
-            case proplists:get_value(Node, PrefListPositions) of
-                undefined ->
-                    PrefListPositions1 = [{Node, [{Index, PositionList}]} | PrefListPositions];
-                Positions ->
-                    PrefListPositions1 = [{Node, [{Index, PositionList} | Positions]} | proplists:delete(Node, PrefListPositions)]
-            end            
-    end,
-    assemble_coverage_structures(RestCoveragePlan, NVal, PartitionCount, VNodeIndex, CoverageVNodes1, PrefListPositions1).
-
-%% @private
 group_indexes_by_node([], NodeIndexes) ->
     NodeIndexes;
 group_indexes_by_node([{Index, Node} | OtherVNodes], NodeIndexes) ->
@@ -423,13 +408,13 @@ group_indexes_by_node([{Index, Node} | OtherVNodes], NodeIndexes) ->
     group_indexes_by_node(OtherVNodes, NodeIndexes1).
 
 %% @private
-start_keylisters(ReqId, Input, KeyListers, NodeIndexes, PrefListPositions, Timeout) ->
+start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Filters, Timeout) ->
     %% Fold over the node indexes list to start
     %% keylister processes on each node and accumulate
     %% the successes and errors.
     StartListerFunc = fun({Node, Indexes}, {Successes, Errors}) ->
                               VNodes = [{Index, Node} || Index <- Indexes],
-                              FilterVNodes = proplists:get_value(Node, PrefListPositions),
+                              FilterVNodes = proplists:get_value(Node, Filters),
                               case proplists:get_value(Node, Successes) of
                                   undefined ->
                                       try

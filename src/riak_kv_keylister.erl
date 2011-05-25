@@ -83,9 +83,7 @@ init([ReqId, Caller, Inputs, VNodes, FilterVNodes]) ->
     erlang:monitor(process, Caller),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     {Bucket, KeyFilter} = build_key_filter(Inputs),
-    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
-    NVal = proplists:get_value(n_val, BucketProps),
-    PrefListFun = fun(X) -> get_preflist({Bucket, X}, Ring, NVal) end,
+    PrefListFun = fun(X) -> get_first_preflist({Bucket, X}, Ring) end,
     {ok, waiting, #state{bucket=Bucket,
                          caller=Caller,
                          filter_vnodes=FilterVNodes,
@@ -156,10 +154,10 @@ handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{caller=Caller,
     case proplists:get_value(Idx, FilterVNodes) of
         undefined ->
             VNodeFilter = fun(_) -> true end;
-        PositionList ->
+        KeySpaceIndexes ->
             VNodeFilter = fun(X) ->
-                                  PrefList = PrefListFun(X),
-                                  check_preflist_positions(PositionList, {Idx, node()}, PrefList)
+                                  {PrefListIndex, _} = PrefListFun(X),
+                                  lists:member(PrefListIndex, KeySpaceIndexes)
                           end
     end,
     %% Use the key and vnode filters to get the correct keys
@@ -188,10 +186,10 @@ handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{caller=Caller,
     case proplists:get_value(Idx, FilterVNodes) of
         undefined ->
             VNodeFilter = fun(_) -> true end;
-        PositionList ->
+        KeySpaceIndexes ->
             VNodeFilter = fun(X) ->
-                                  PrefList = PrefListFun(X),
-                                  check_preflist_positions(PositionList, {Idx, node()}, PrefList)
+                                  FirstPrefList = PrefListFun(X),
+                                  lists:member(FirstPrefList, KeySpaceIndexes)
                           end
     end,
     %% Use the key and vnode filters to get the correct keys
@@ -242,20 +240,9 @@ build_key_filter({Bucket, Filters}) ->
     {Bucket, FilterFun}.
 
 %% @private
-check_preflist_positions([], _, _) ->
-    false;
-check_preflist_positions([Position | RestPositions], VNode, PrefList) ->
-    case lists:nth(Position, PrefList) of
-        VNode ->
-            true;
-        _ ->
-            check_preflist_positions(RestPositions, VNode, PrefList)
-    end.
-
-%% @private
-get_preflist({Bucket, Key}, Ring, NVal) ->
+get_first_preflist({Bucket, Key}, Ring) ->
     %% Get the chash key for the bucket-key pair and
     %% use that to determine the preference list to
     %% use in filtering the keys from this VNode.
     ChashKey = riak_core_util:chash_key({Bucket, Key}),
-    lists:sublist(riak_core_ring:preflist(ChashKey, Ring), NVal).
+    hd(riak_core_ring:preflist(ChashKey, Ring)).
