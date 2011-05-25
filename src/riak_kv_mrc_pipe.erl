@@ -72,18 +72,10 @@ map2pipe(FunSpec, Arg, Keep, I) ->
        ||Keep]].
 
 reduce2pipe(FunSpec, Arg, Keep, I) ->
-    [#fitting_spec{name={xform_reduce,I},
-                   module=riak_pipe_w_xform,
-                   arg=fun reduce_add_key_compat/3,
-                   chashfun=follow},
-     #fitting_spec{name={reduce,I},
-                   module=riak_pipe_w_reduce,
+    [#fitting_spec{name={reduce,I},
+                   module=riak_pipe_w_mrc_reduce,
                    arg=reduce_compat(FunSpec, Arg),
-                   chashfun=fun reduce_local_chashfun/1},
-     #fitting_spec{name={xform_reduce,I},
-                   module=riak_pipe_w_xform,
-                   arg=fun reduce_remove_key_compat/3,
-                   chashfun=follow}
+                   chashfun=fun reduce_local_chashfun/1}
      |[#fitting_spec{name=I,
                      module=riak_pipe_w_tee,
                      arg=sink,
@@ -120,16 +112,6 @@ map_xform_compat({qfun, Fun}, Arg) ->
               || R <- Results ],
             ok
     end.
-
-reduce_add_key_compat(Input, Partition, FittingDetails) ->
-    %% reduce fitting expects {Key, Input} form,
-    %% but the key is bogus for our reduce
-    riak_pipe_vnode_worker:send_output({1, Input}, Partition, FittingDetails).
-
-reduce_remove_key_compat({_Key, Input}, Partition, FittingDetails) ->
-    %% reduce fitting expects {Key, Input} form,
-    %% but the key is bogus for our reduce
-    riak_pipe_vnode_worker:send_output(Input, Partition, FittingDetails).
 
 reduce_compat({modfun, Module, Function}, Arg) ->
     reduce_compat({qfun, erlang:make_fun(Module, Function, 2)}, Arg);
