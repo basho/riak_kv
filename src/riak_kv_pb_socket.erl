@@ -345,6 +345,7 @@ process_message(#rpbsetbucketreq{bucket=B, props = PbProps},
 %% Start map/reduce job - results will be processed in handle_info
 process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req, 
                 #state{client=C} = State) ->
+    ResultTransformer = get_result_transformer(ContentType),
 
     case decode_mapred_query(MrReq, ContentType) of
         {error, Reason} ->
@@ -354,7 +355,7 @@ process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
             case is_binary(Inputs) orelse is_key_filter(Inputs) of
                 true ->
                     case C:mapred_bucket_stream(Inputs, Query, 
-                                                self(), Timeout) of
+                                                self(), ResultTransformer, Timeout) of
                         {stop, Error} ->
                             send_error("~p", [Error], State);
 
@@ -364,7 +365,7 @@ process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
                 false ->
                     case is_list(Inputs) of
                         true ->
-                            case C:mapred_stream(Query, self(), Timeout) of
+                            case C:mapred_stream(Query, self(), ResultTransformer, Timeout) of
                                 {stop, Error} ->
                                     send_error("~p", [Error], State);
                                 
@@ -382,7 +383,7 @@ process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
                                 is_atom(element(2, Inputs)) andalso
                                 is_atom(element(3, Inputs)) of
                                 true ->
-                                    case C:mapred_stream(Query, self(), Timeout) of
+                                    case C:mapred_stream(Query, self(), ResultTransformer, Timeout) of
                                         {stop, Error} ->
                                             send_error("~p", [Error], State);
                 
@@ -497,5 +498,12 @@ normalize_rw_value(?RIAKC_RW_QUORUM) -> quorum;
 normalize_rw_value(?RIAKC_RW_ALL) -> all;
 normalize_rw_value(?RIAKC_RW_DEFAULT) -> default;
 normalize_rw_value(V) -> V.
-    
-    
+
+%% get a result transformer for the content-type
+%% jsonify not_founds for application/json
+%% do nothing otherwise
+get_result_transformer(<<"application/json">>) ->
+    fun riak_kv_mapred_json:jsonify_not_found/1;
+get_result_transformer(_) ->
+    fun(X) ->
+            X end.
