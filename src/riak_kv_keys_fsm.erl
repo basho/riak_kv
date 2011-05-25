@@ -261,9 +261,13 @@ finish(clean, StateData=#state{from={raw, ReqId, ClientPid}, client_type=ClientT
 plan_and_execute(ReqId, Input, NVal, PartitionCount, Ring, Timeout, KeyListers, DownNodes) ->
     %% Get a list of the VNodes owned by any unavailble nodes
     DownVNodes = [Index || {Index, Node} <- riak_core_ring:all_owners(Ring), lists:member(Node, DownNodes)],
+    %% Calculate an offset based on the request id to offer
+    %% the possibility of different sets of VNodes being
+    %% used even when all nodes are available.
+    Offset = ReqId rem NVal,
     %% Generate a coverage plan
     CoveragePlanResult =
-        create_coverage_plan(NVal, PartitionCount, Ring, DownVNodes),
+        create_coverage_plan(NVal, PartitionCount, Ring, Offset, DownVNodes),
     case CoveragePlanResult of
         {error, _} ->
             %% Failed to create a coverage plan so return the error
@@ -286,11 +290,11 @@ plan_and_execute(ReqId, Input, NVal, PartitionCount, Ring, Timeout, KeyListers, 
     end.
 
 %% @private
-create_coverage_plan(NVal, PartitionCount, Ring, DownVNodes) ->
+create_coverage_plan(NVal, PartitionCount, Ring, Offset, DownVNodes) ->
     RingIndexInc = ?RINGTOP div PartitionCount,
     AllKeySpaces = lists:seq(0, PartitionCount - 1),
     UnavailableKeySpaces = [(DownVNode div RingIndexInc) || DownVNode <- DownVNodes],
-    AvailableKeySpaces = [{Vnode, n_keyspaces(Vnode, NVal, PartitionCount)} 
+    AvailableKeySpaces = [{Vnode, n_keyspaces(Vnode, NVal, PartitionCount)}
                           || Vnode <- (AllKeySpaces -- UnavailableKeySpaces)],
     CoverageResult = find_coverage(ordsets:from_list(AllKeySpaces), AvailableKeySpaces, NVal, []),
     case CoverageResult of
@@ -301,19 +305,21 @@ create_coverage_plan(NVal, PartitionCount, Ring, DownVNodes) ->
                                        %% Calculate the VNode index using the
                                        %% ring position and the increment of
                                        %% ring index values.
-                                       VNodeIndex = Position * RingIndexInc,
+                                       %% The offset value is used to distribute
+                                       %% work to different sets of VNodes.
+                                       VNodeIndex = ((Position + Offset) rem PartitionCount) * RingIndexInc,
                                        Node = riak_core_ring:index_owner(Ring, VNodeIndex),
                                        CoverageVNode = {VNodeIndex, Node},
                                        case length(KeySpaces) < NVal of
                                            true ->
                                                %% Get the VNode index of each keyspace to
                                                %% use to filter results from this VNode.
-                                               KeySpaceIndexes = [((KeySpaceIndex+1) * RingIndexInc) || KeySpaceIndex <- KeySpaces],
+                                               KeySpaceIndexes = [((KeySpaceIndex+Offset+1) * RingIndexInc) || KeySpaceIndex <- KeySpaces],
                                                case proplists:get_value(Node, Acc) of
                                                    undefined ->
                                                        Acc1 = [{Node, [{VNodeIndex, KeySpaceIndexes}]} | Acc];
                                                    FilterIndexes ->
-                                                       Acc1 = [{Node, [{VNodeIndex, KeySpaceIndexes} | FilterIndexes]} 
+                                                       Acc1 = [{Node, [{VNodeIndex, KeySpaceIndexes} | FilterIndexes]}
                                                                | proplists:delete(Node, Acc)]
                                                end,
                                                {CoverageVNode, Acc1};
