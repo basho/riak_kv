@@ -25,7 +25,8 @@
          mapred/2,
          mapred_stream/1
         ]).
--export([example/0, example_bucket/0, example_reduce/0]).
+-export([example/0, example_bucket/0, example_reduce/0,
+         example_setup/0, example_setup/1]).
 
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
@@ -212,3 +213,18 @@ example_reduce() ->
              none, true},
             {reduce, {qfun, fun(Inputs, _) -> [lists:sum(Inputs)] end},
              none, true}]).
+
+example_setup() ->
+    example_setup(5).
+
+example_setup(Num) when Num > 0 ->
+    {ok, C} = riak:local_client(),
+    [C:put(riak_object:new(<<"foo">>,
+                           list_to_binary("bar"++integer_to_list(X)),
+                           list_to_binary("bar val "++integer_to_list(X))))
+     || X <- lists:seq(1, Num)],
+    [C:put(riak_object:new(<<"foonum">>,
+                           list_to_binary("bar"++integer_to_list(X)),
+                           X)) ||
+        X <- lists:seq(1, Num)],
+    ok.
