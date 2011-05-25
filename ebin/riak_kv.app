@@ -90,6 +90,9 @@
          %% Secondary code paths
          {add_paths, []},
 
+         %% Disable Nagle on PB sockets
+         {disable_pb_nagle, true},
+
          %% Allow Erlang MapReduce functions to be specified as
          %% strings.
          %%
