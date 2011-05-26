@@ -513,7 +513,7 @@ decode_precommit({js, JSName, Result}) ->
         {ok, [{<<"fail">>, Message}]} ->
             {fail, Message};
         {ok, Json} ->
-            case catch riak_object:from_json(Json) of
+            case catch riak_object_util:from_json(Json) of
                 {'EXIT', _} ->
                     {fail, {invalid_return, {JSName, Json}}};
                 Obj ->

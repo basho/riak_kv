@@ -67,7 +67,8 @@
              riak_kv_wm_ping,
              riak_kv_wm_raw,
              riak_kv_wm_stats,
-             riak_object
+             riak_object,
+             riak_object_util
             ]},
   {applications, [
                   kernel,
