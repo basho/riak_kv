@@ -43,6 +43,8 @@ claim_keys([], [], _) ->
     exit(exhausted_preflist);
 claim_keys(_, ClaimList, []) ->
     ClaimList;
+claim_keys([], _, _) ->
+    exit(exhausted_preflist);
 claim_keys([H|T], ClaimList, Keys) ->
     {P, PKeys} = H,
     PKeys1 = lists:filter(fun(PK) ->
