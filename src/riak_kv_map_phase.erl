@@ -264,7 +264,7 @@ handle_not_found_reply(VNode, BKey, Executor, #state{fsms=FSMs, mapper_data=Mapp
     %% entries have been checked.
     try riak_kv_mapred_planner:plan_map(NewKeys) of
         ClaimLists ->
-            FSMs1 = update_counter(Executor, FSMs),
+            FSMs1 = dict:erase(Executor, FSMs),
             {NewFSMs, _ClaimLists1, FsmKeys} = schedule_input(NewKeys, ClaimLists, QTerm, FSMs1, State),
             MapperData1 = lists:keydelete(Executor, 1, MapperData ++ FsmKeys),
             maybe_done(State#state{mapper_data=MapperData1, fsms=NewFSMs})
