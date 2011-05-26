@@ -85,15 +85,16 @@ dep_apps() ->
      mochiweb,
      os_mon,
      fun(start) ->
+             net_kernel:start([mapred_test@localhost]),
+             timer:sleep(50),
+             Ring = riak_core_ring:fresh(16, node()),
+             riak_core_ring_manager:set_ring_global(Ring),
              _ = application:load(riak_kv),
              [begin
                   put({?MODULE,AppKey}, app_helper:get_env(riak_kv, AppKey)),
                   ok = application:set_env(riak_kv, AppKey, Val)
               end || {AppKey, Val} <- KV_Settings],
-             net_kernel:start([mapred_test@localhost]),
-             ok = application:start(riak_kv),
-             Ring = riak_core_ring:fresh(16,node()),
-             riak_core_ring_manager:set_ring_global(Ring);
+             ok = application:start(riak_kv);
         (stop) ->
              ok = application:stop(riak_kv),
              net_kernel:stop(),
@@ -130,52 +131,24 @@ teardown_runtime() ->
              timer:sleep(5)
      end.    
 
-basic_test_() ->
+setup_demo_test_() ->
     {foreach,
      prepare_runtime(),
      teardown_runtime(),
      [
       fun(_) ->
-              {"example()",
-               fun() ->
-                       Num = 5,
-                       {ok, C} = riak:local_client(), [ok = C:put(riak_object:new(<<"foo">>, list_to_binary("bar"++integer_to_list(X)), list_to_binary("bar val "++integer_to_list(X)))) || X <- lists:seq(1, Num)],
-                       [ok = C:put(riak_object:new(<<"foonum">>, list_to_binary("bar"++integer_to_list(X)), X)) || X <- lists:seq(1, Num)],
-                       ok
-               end}
-      end
-     ]
-    }.
-
-foo2_test_() ->
-    {foreach,
-     prepare_runtime(),
-     teardown_runtime(),
-     [
-      fun(_) ->
-              {"foo2 yo yo",
-               fun() ->
-                       Num = 5,
-                       {ok, C} = riak:local_client(), [ok = C:put(riak_object:new(<<"foo">>, list_to_binary("bar"++integer_to_list(X)), list_to_binary("bar val "++integer_to_list(X)))) || X <- lists:seq(1, Num)],
-                       [ok = C:put(riak_object:new(<<"foonum">>, list_to_binary("bar"++integer_to_list(X)), X)) || X <- lists:seq(1, Num)],
-                       ok
-               end}
-      end
-     ]
-    }.
-
-foo3_test_() ->
-    {foreach,
-     prepare_runtime(),
-     teardown_runtime(),
-     [
-      fun(_) ->
-              {"yo yo #3",
+              {"Setup demo test",
                fun() ->
                        Num = 5,
                        {ok, C} = riak:local_client(),
-                       [ok = C:put(riak_object:new(<<"foo">>, list_to_binary("bar"++integer_to_list(X)), list_to_binary("bar val "++integer_to_list(X)))) || X <- lists:seq(1, Num)],
-                       [ok = C:put(riak_object:new(<<"foonum">>, list_to_binary("bar"++integer_to_list(X)), X)) || X <- lists:seq(1, Num)],
+                       [ok = C:put(riak_object:new(
+                                     <<"foonum">>,
+                                     list_to_binary("bar"++integer_to_list(X)),
+                                     X)) 
+                        || X <- lists:seq(1, Num)],
+                       [{ok, _} = C:get(<<"foonum">>,
+                                      list_to_binary("bar"++integer_to_list(X)))
+                        || X <- lists:seq(1, Num)],
                        ok
                end}
       end
