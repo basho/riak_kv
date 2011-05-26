@@ -61,6 +61,7 @@
              riak_kv_test_util,
              riak_kv_util,
              riak_kv_vnode,
+             riak_kv_w_mapred,
              riak_kv_web,
              riak_kv_wm_link_walker,
              riak_kv_wm_mapred,

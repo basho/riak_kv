@@ -73,7 +73,7 @@ map2pipe(FunSpec, Arg, Keep, I) ->
 
 reduce2pipe(FunSpec, Arg, Keep, I) ->
     [#fitting_spec{name={reduce,I},
-                   module=riak_pipe_w_mrc_reduce,
+                   module=riak_kv_w_mapred,
                    arg=reduce_compat(FunSpec, Arg),
                    chashfun=fun reduce_local_chashfun/1}
      |[#fitting_spec{name=I,
@@ -201,6 +201,7 @@ example_setup() ->
 
 example_setup(Num) when Num > 0 ->
     {ok, C} = riak:local_client(),
+    C:put(riak_object:new(<<"foo">>, <<"bar">>, <<"what did you expect?">>)),
     [C:put(riak_object:new(<<"foo">>,
                            list_to_binary("bar"++integer_to_list(X)),
                            list_to_binary("bar val "++integer_to_list(X))))
