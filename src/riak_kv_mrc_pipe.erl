@@ -25,6 +25,7 @@
          mapred/2,
          mapred_stream/1
         ]).
+%% NOTE: Example functions are used by EUnit tests
 -export([example/0, example_bucket/0, example_reduce/0,
          example_setup/0, example_setup/1]).
 
@@ -35,17 +36,37 @@
 %% TODO: Timeout
 %% TODO: Streaming output
 mapred(Inputs, Query) ->
-    {ok, Head, Sink} = mapred_stream(Query),
+    {{ok, Head, Sink}, NumKeeps} = mapred_stream(Query),
     send_inputs(Head, Inputs),
-    collect_outputs(Sink).
+    collect_outputs(Sink, NumKeeps).
 
-mapred_stream(Query) ->
-    riak_pipe:exec(mr2pipe_phases(Query), []).
+mapred_stream(Query0) ->
+    Query = keep_ify_query(Query0),
+    NumKeeps = count_keeps_in_query(Query),
+    {riak_pipe:exec(mr2pipe_phases(Query), []), NumKeeps}.
 
+mr2pipe_phases([]) ->
+    [#fitting_spec{name=empty_pass,
+                   module=riak_pipe_w_pass,
+                   chashfun=follow}];
 mr2pipe_phases(Query) ->
     Numbered = lists:zip(Query, lists:seq(0, length(Query)-1)),
-    Fittings = lists:flatten([mr2pipe_phase(P,I) || {P,I} <- Numbered]),
-    fix_final_fitting(Fittings).
+    Fittings0 = lists:flatten([mr2pipe_phase(P,I) || {P,I} <- Numbered]),
+    Fs = fix_final_fitting(Fittings0),
+    case lists:last(Query) of
+        {_, _, _, false} ->
+            %% The default action is to send results down to the next
+            %% fitting in the pipe.  However, the last MapReduce query
+            %% doesn't want those results.  So, add a "black hole"
+            %% fitting that will stop all work items from getting to
+            %% the sink and thus polluting our expected results.
+            Fs ++ [#fitting_spec{name=black_hole,
+                                 module=riak_pipe_w_pass,
+                                 arg=black_hole,
+                                 chashfun=follow}];
+        _ ->
+            Fs
+    end.
 
 mr2pipe_phase({map, FunSpec, Arg, Keep}, I) ->
     map2pipe(FunSpec, Arg, Keep, I);
@@ -133,6 +154,24 @@ bkey_nval({Bucket, _Key}) ->
     {n_val, NVal} = lists:keyfind(n_val, 1, BucketProps),
     NVal.
 
+keep_ify_query([]) ->
+    [];
+keep_ify_query(Query) ->
+    case lists:all(fun({_, _, _, false}) -> true;
+                      (_)                -> false
+                   end, Query) of
+        true ->
+            {AllBut, [{A, B, C, _}]} = lists:split(length(Query) - 1, Query),
+            AllBut ++ [{A, B, C, true}];
+        false ->
+            Query
+    end.
+
+count_keeps_in_query(Query) ->
+    lists:foldl(fun({_, _, _, true}, Acc) -> Acc + 1;
+                   (_, Acc)                 -> Acc
+                end, 0, Query).
+
 %% TODO: dynamic inputs, filters
 send_inputs(Fitting, BucketKeyList) when is_list(BucketKeyList) ->
     [riak_pipe_vnode:queue_work(Fitting, BKey)
@@ -156,18 +195,18 @@ send_key_list(Fitting, Bucket, ReqId) ->
             ok
     end.
 
-collect_outputs(Sink) ->
+collect_outputs(Sink, NumKeeps) ->
     {Result, Outputs, []} = riak_pipe:collect_results(Sink),
     %%TODO: Outputs needs post-processing?
     case Result of
         eoi ->
             %% normal result
-            {ok, group_outputs(Outputs)};
+            {ok, group_outputs(Outputs, NumKeeps)};
         Other ->
             {error, {Other, Outputs}}
     end.
 
-group_outputs(Outputs) ->
+group_outputs(Outputs, NumKeeps) ->
     Merged = lists:foldl(fun({I,O}, Acc) when is_list(O) ->
                                  dict:append_list(I, O, Acc);
                             ({I,O}, Acc) ->
@@ -175,7 +214,12 @@ group_outputs(Outputs) ->
                          end,
                          dict:new(),
                          Outputs),
-    [ O || {_, O} <- lists:keysort(1, dict:to_list(Merged)) ].
+    if NumKeeps < 2 ->                          % 0 or 1
+            [{_, O}] = dict:to_list(Merged),
+            O;
+       true ->
+            [ O || {_, O} <- lists:keysort(1, dict:to_list(Merged)) ]
+    end.
 
 %%%
 
