@@ -160,83 +160,89 @@ compat_basic1_test_() ->
     IntsBucket = <<"foonum">>,
     ReduceSumFun = fun(Inputs, _) -> [lists:sum(Inputs)] end,
 
-    {foreach,    %% Why, oh why doesn't 'setup' work?
+    {setup,
      prepare_runtime(),
      teardown_runtime(),
-     [
-      fun(_) ->
-              {"Empty query",
-               fun() ->
-                       riak_kv_mrc_pipe:example_setup(),
-                       %% This will trigger a traversal of IntsBucket, but
-                       %% because the query is empty, the MapReduce will
-                       %% traverse the bucket and send BKeys down the pipe.
-                       %% AFAICT, the original Riak MapReduce will crash with
-                       %% luke_flow errors if the query list is empty.  This
-                       %% new implementation will pass the BKeys as-is.
-                       {ok, BKeys} =
-                           riak_kv_mrc_pipe:mapred(IntsBucket, []),
-                       5 = length(BKeys),
-                       {IntsBucket, <<"bar1">>} = hd(lists:sort(BKeys))
-               end}
-      end,
-      fun(_) ->
-              {"Basic compatibility: keep both stages",
-               fun() ->
-                       riak_kv_mrc_pipe:example_setup(),
-                       Spec = 
-                           [{map, {modfun, riak_kv_mapreduce, map_object_value},
-                             none, true},
-                            {reduce, {qfun, ReduceSumFun},
-                             none, true}],
-                       {ok, [MapRs, [15]]} =
-                           riak_kv_mrc_pipe:mapred(IntsBucket, Spec),
-                       5 = length(MapRs)
-               end}
-      end,
-      fun(_) ->
-              {"Basic compat: keep neither stages -> force keep last stage",
-               fun() ->
-                       riak_kv_mrc_pipe:example_setup(),
-                       Spec = 
-                           [{map, {modfun, riak_kv_mapreduce, map_object_value},
-                             none, false},
-                            {reduce, {qfun, ReduceSumFun},
-                             none, false}],
-                       %% "Crazy" semantics: if only 1 keeper stage, then
-                       %% return List instead of [List].
-                       {ok, [15]} = riak_kv_mrc_pipe:mapred(IntsBucket, Spec)
-               end}
-      end,
-      fun(_) ->
-              {"Basic compat: keep first stage only, want 'crazy' result",
-               fun() ->
-                       riak_kv_mrc_pipe:example_setup(),
-                       Spec = 
-                           [{map, {modfun, riak_kv_mapreduce, map_object_value},
-                             none, true},
-                            {reduce, {qfun, ReduceSumFun},
-                             none, false}],
-                       %% "Crazy" semantics: if only 1 keeper stage, then
-                       %% return List instead of [List].
-                       {ok, MapRs} = riak_kv_mrc_pipe:mapred(IntsBucket, Spec),
-                       5 = length(MapRs)
-               end}
-      end,
-      fun(_) ->
-              {"Basic compat: keep second stage only, want 'crazy' result",
-               fun() ->
-                       riak_kv_mrc_pipe:example_setup(),
-                       Spec = 
-                           [{map, {modfun, riak_kv_mapreduce, map_object_value},
-                             none, false},
-                            {reduce, {qfun, ReduceSumFun},
-                             none, true}],
-                       %% "Crazy" semantics: if only 1 keeper stage, then
-                       %% return List instead of [List].
-                       {ok, [15]} = riak_kv_mrc_pipe:mapred(IntsBucket, Spec)
-               end}
-      end
-     ]
-    }.
-
+     fun(_) ->
+         [?_test(
+             %% Empty query
+             begin
+                 riak_kv_mrc_pipe:example_setup(),
+                 %% This will trigger a traversal of IntsBucket, but
+                 %% because the query is empty, the MapReduce will
+                 %% traverse the bucket and send BKeys down the pipe.
+                 %% AFAICT, the original Riak MapReduce will crash with
+                 %% luke_flow errors if the query list is empty.  This
+                 %% new implementation will pass the BKeys as-is.
+                 {ok, BKeys} =
+                     riak_kv_mrc_pipe:mapred(IntsBucket, []),
+                 5 = length(BKeys),
+                 {IntsBucket, <<"bar1">>} = hd(lists:sort(BKeys))
+             end),
+          ?_test(
+             %% Basic compatibility: keep both stages
+             begin
+                 riak_kv_mrc_pipe:example_setup(),
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       none, true},
+                      {reduce, {qfun, ReduceSumFun},
+                       none, true}],
+                 {ok, [MapRs, [15]]} =
+                     riak_kv_mrc_pipe:mapred(IntsBucket, Spec),
+                 5 = length(MapRs)
+             end),
+          ?_test(
+             %% Basic compat: keep neither stages -> force keep last stage
+             begin
+                 riak_kv_mrc_pipe:example_setup(),
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       none, false},
+                      {reduce, {qfun, ReduceSumFun},
+                       none, false}],
+                 %% "Crazy" semantics: if only 1 keeper stage, then
+                 %% return List instead of [List].
+                 {ok, [15]} = riak_kv_mrc_pipe:mapred(IntsBucket, Spec)
+             end),
+          ?_test(
+             %% Basic compat: keep first stage only, want 'crazy' result",
+             begin
+                 riak_kv_mrc_pipe:example_setup(),
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       none, true},
+                      {reduce, {qfun, ReduceSumFun},
+                       none, false}],
+                 %% "Crazy" semantics: if only 1 keeper stage, then
+                 %% return List instead of [List].
+                 {ok, MapRs} = riak_kv_mrc_pipe:mapred(IntsBucket, Spec),
+                 5 = length(MapRs)
+             end),
+          ?_test(
+             %% Basic compat: keep second stage only, want 'crazy' result
+             begin
+                 riak_kv_mrc_pipe:example_setup(),
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       none, false},
+                      {reduce, {qfun, ReduceSumFun},
+                       none, true}],
+                 %% "Crazy" semantics: if only 1 keeper stage, then
+                 %% return List instead of [List].
+                 {ok, [15]} = riak_kv_mrc_pipe:mapred(IntsBucket, Spec)
+             end)
+          %% ?_test(
+          %%    %% Explicit rereduce
+          %%    begin
+          %%        riak_kv_mrc_pipe:example_setup(),
+          %%        Spec = 
+          %%            [{map, {modfun, riak_kv_mapreduce, map_object_value},
+          %%              none, true},
+          %%             {reduce, {qfun, ReduceSumFun}, none, true},
+          %%             {reduce, {qfun, ReduceSumFun}, none, true}],
+          %%        {ok, _, [15], [15]} =
+          %%            riak_kv_mrc_pipe:mapred(IntsBucket, Spec)
+          %%    end)
+          ]
+     end}.
