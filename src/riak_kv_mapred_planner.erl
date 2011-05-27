@@ -39,7 +39,7 @@ build_claim_list(InputData) ->
     PartList0 = lists:sort(F, InputData1),
     claim_keys(PartList0, [], Keys).
 
-claim_keys([], [], _) ->
+claim_keys([], _, _) ->
     exit(exhausted_preflist);
 claim_keys(_, ClaimList, []) ->
     ClaimList;
