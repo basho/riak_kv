@@ -164,10 +164,15 @@ compat_basic1_test_() ->
      prepare_runtime(),
      teardown_runtime(),
      fun(_) ->
-         [?_test(
+         [
+          ?_test(
+             %% The data created by this step is used by all/most of the
+             %% following tests.
+             ok = riak_kv_mrc_pipe:example_setup()
+            ),
+          ?_test(
              %% Empty query
              begin
-                 riak_kv_mrc_pipe:example_setup(),
                  %% This will trigger a traversal of IntsBucket, but
                  %% because the query is empty, the MapReduce will
                  %% traverse the bucket and send BKeys down the pipe.
@@ -182,7 +187,6 @@ compat_basic1_test_() ->
           ?_test(
              %% Basic compatibility: keep both stages
              begin
-                 riak_kv_mrc_pipe:example_setup(),
                  Spec = 
                      [{map, {modfun, riak_kv_mapreduce, map_object_value},
                        none, true},
@@ -195,7 +199,6 @@ compat_basic1_test_() ->
           ?_test(
              %% Basic compat: keep neither stages -> force keep last stage
              begin
-                 riak_kv_mrc_pipe:example_setup(),
                  Spec = 
                      [{map, {modfun, riak_kv_mapreduce, map_object_value},
                        none, false},
@@ -208,7 +211,6 @@ compat_basic1_test_() ->
           ?_test(
              %% Basic compat: keep first stage only, want 'crazy' result",
              begin
-                 riak_kv_mrc_pipe:example_setup(),
                  Spec = 
                      [{map, {modfun, riak_kv_mapreduce, map_object_value},
                        none, true},
@@ -222,7 +224,6 @@ compat_basic1_test_() ->
           ?_test(
              %% Basic compat: keep second stage only, want 'crazy' result
              begin
-                 riak_kv_mrc_pipe:example_setup(),
                  Spec = 
                      [{map, {modfun, riak_kv_mapreduce, map_object_value},
                        none, false},
@@ -231,18 +232,17 @@ compat_basic1_test_() ->
                  %% "Crazy" semantics: if only 1 keeper stage, then
                  %% return List instead of [List].
                  {ok, [15]} = riak_kv_mrc_pipe:mapred(IntsBucket, Spec)
+             end),
+          ?_test(
+             %% Explicit rereduce
+             begin
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       none, true},
+                      {reduce, {qfun, ReduceSumFun}, none, true},
+                      {reduce, {qfun, ReduceSumFun}, none, true}],
+                 {ok, _, [15], [15]} =
+                     riak_kv_mrc_pipe:mapred(IntsBucket, Spec)
              end)
-          %% ?_test(
-          %%    %% Explicit rereduce
-          %%    begin
-          %%        riak_kv_mrc_pipe:example_setup(),
-          %%        Spec = 
-          %%            [{map, {modfun, riak_kv_mapreduce, map_object_value},
-          %%              none, true},
-          %%             {reduce, {qfun, ReduceSumFun}, none, true},
-          %%             {reduce, {qfun, ReduceSumFun}, none, true}],
-          %%        {ok, _, [15], [15]} =
-          %%            riak_kv_mrc_pipe:mapred(IntsBucket, Spec)
-          %%    end)
           ]
      end}.
