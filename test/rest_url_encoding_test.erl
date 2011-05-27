@@ -53,9 +53,13 @@ compat_encoding_case({URL, Node}) ->
     ok = rpc:call(Node, application, set_env,
                   [riak_kv, http_url_encoding, compat]),
 
+    %% Write simple object for later link testing
+    httpc:request(put, {URL ++ "/riak/basic/obj", [], "text/plain", "Test"},
+                  [], []),
+
     %% Write URL encoded key
     httpc:request(put, {URL ++ "/riak/rest1/%40compat",
-                        [],
+                        [{"Link", "</riak/basic/obj>; riaktag=\"tag\""}],
                         "text/plain",
                         "Test"},
                   [], []),
@@ -106,6 +110,12 @@ compat_encoding_case({URL, Node}) ->
                       [], []),
     ?assert(string:str(LWalk2, "Location: /riak/rest1/%2540compat") /= 0),
 
+    %% Test that link walk starting at encoded key works.
+    {ok, {_, _, EWalk}} = 
+        httpc:request(get, {"http://localhost:8091/riak/rest1/%40compat/_,_,1",
+                            []}, [], []),
+    ?assert(string:str(EWalk, "Location: /riak/basic/obj") /= 0),
+
     %% Test map/reduce link walking behavior.
     {ok, {_, _, Map1}} =
         httpc:request(post, {URL ++ "/mapred",
@@ -146,9 +156,13 @@ sane_encoding_case({URL, Node}) ->
     ok = rpc:call(Node, application, set_env,
                   [riak_kv, http_url_encoding, on]),
 
+    %% Write simple object for later link testing
+    httpc:request(put, {URL ++ "/riak/basic/obj", [], "text/plain", "Test"},
+                  [], []),
+
     %% Write URL encoded key
     httpc:request(put, {URL ++ "/riak/rest2/%40sane",
-                        [],
+                        [{"Link", "</riak/basic/obj>; riaktag=\"tag\""}],
                         "text/plain",
                         "Test"},
                   [], []),
@@ -196,6 +210,12 @@ sane_encoding_case({URL, Node}) ->
         httpc:request(get, {URL ++ "/riak/rest_links/sane2/_,_,1", []},
                       [], []),
     ?assert(string:str(LWalk2, "Location: /riak/rest2/%2540sane") == 0),
+
+    %% Test that link walk starting at encoded key works.
+    {ok, {_, _, EWalk}} = 
+        httpc:request(get, {"http://localhost:8091/riak/rest2/%40sane/_,_,1",
+                            []}, [], []),
+    ?assert(string:str(EWalk, "Location: /riak/basic/obj") /= 0),
 
     %% Test map/reduce link walking behavior.
     {ok, {_, _, Map1}} =

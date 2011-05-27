@@ -170,6 +170,7 @@
          produce_sibling_message_body/2,
          produce_multipart_body/2,
          multiple_choices/2,
+         maybe_decode_uri/2,
          delete_resource/2
         ]).
 
@@ -245,7 +246,6 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
              Ctx}
     end.
 
-%% @private
 maybe_decode_uri(RD, Val) ->
     case application:get_env(riak_kv, http_url_encoding) of
         {ok, on} ->
