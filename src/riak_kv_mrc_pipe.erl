@@ -23,7 +23,9 @@
 
 -export([
          mapred/2,
-         mapred_stream/1
+         mapred_stream/1,
+         mapred_plan/1,
+         mapred_plan/2
         ]).
 %% NOTE: Example functions are used by EUnit tests
 -export([example/0, example_bucket/0, example_reduce/0,
@@ -44,6 +46,19 @@ mapred_stream(Query0) ->
     Query = keep_ify_query(Query0),
     NumKeeps = count_keeps_in_query(Query),
     {riak_pipe:exec(mr2pipe_phases(Query), []), NumKeeps}.
+
+mapred_plan(Query) ->
+    mr2pipe_phases(Query).
+
+mapred_plan(BucketOrList, Query) ->
+    BKeys = if is_list(BucketOrList) ->
+                    BucketOrList;
+               is_binary(BucketOrList) ->
+                    {ok, C} = riak:local_client(),
+                    {ok, Keys} = C:list_keys(BucketOrList),
+                    [{BucketOrList, Key} || Key <- Keys]
+            end,
+    [{bkeys, BKeys}|mapred_plan(Query)].
 
 mr2pipe_phases([]) ->
     [#fitting_spec{name=empty_pass,
