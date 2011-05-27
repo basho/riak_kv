@@ -39,10 +39,12 @@ build_claim_list(InputData) ->
     PartList0 = lists:sort(F, InputData1),
     claim_keys(PartList0, [], Keys).
 
-claim_keys([], _, _) ->
+claim_keys([], [], _) ->
     exit(exhausted_preflist);
 claim_keys(_, ClaimList, []) ->
     ClaimList;
+claim_keys([], _, _) ->
+    exit(exhausted_preflist);
 claim_keys([H|T], ClaimList, Keys) ->
     {P, PKeys} = H,
     PKeys1 = lists:filter(fun(PK) ->
