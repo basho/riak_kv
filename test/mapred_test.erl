@@ -238,10 +238,10 @@ compat_basic1_test_() ->
              begin
                  Spec = 
                      [{map, {modfun, riak_kv_mapreduce, map_object_value},
-                       none, true},
-                      {reduce, {qfun, ReduceSumFun}, none, true},
-                      {reduce, {qfun, ReduceSumFun}, none, true}],
-                 {ok, _, [15], [15]} =
+                       none, true}] ++
+                     lists:duplicate(
+                       5, {reduce, {qfun, ReduceSumFun}, none, true}),
+                 {ok, [_, [15],[15],[15],[15],[15]]} =
                      riak_kv_mrc_pipe:mapred(IntsBucket, Spec)
              end)
           ]

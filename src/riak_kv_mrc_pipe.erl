@@ -51,8 +51,10 @@ mr2pipe_phases([]) ->
                    chashfun=follow}];
 mr2pipe_phases(Query) ->
     Now = now(),
+    QueryType = list_to_tuple([Type || {Type, _, _, _} <- Query]),
     Numbered = lists:zip(Query, lists:seq(0, length(Query)-1)),
-    Fittings0 = lists:flatten([mr2pipe_phase(P,I,Now) || {P,I} <- Numbered]),
+    Fittings0 = lists:flatten([mr2pipe_phase(P,I,Now,QueryType) ||
+                                  {P,I} <- Numbered]),
     Fs = fix_final_fitting(Fittings0),
     case lists:last(Query) of
         {_, _, _, false} ->
@@ -69,11 +71,11 @@ mr2pipe_phases(Query) ->
             Fs
     end.
 
-mr2pipe_phase({map, FunSpec, Arg, Keep}, I, _ConstHashCookie) ->
+mr2pipe_phase({map, FunSpec, Arg, Keep}, I, _ConstHashCookie, _QueryType) ->
     map2pipe(FunSpec, Arg, Keep, I);
-mr2pipe_phase({reduce, FunSpec, Arg, Keep}, I, ConstHashCookie) ->
-    reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie);
-mr2pipe_phase({link, Bucket, Tag, Keep}, I, _ConstHashCookie) ->
+mr2pipe_phase({reduce, FunSpec, Arg, Keep}, I, ConstHashCookie, QueryType) ->
+    reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie, QueryType);
+mr2pipe_phase({link, Bucket, Tag, Keep}, I, _ConstHashCookie, _QueryType) ->
     link2pipe(Bucket, Tag, Keep, I).
 
 map2pipe(FunSpec, Arg, Keep, I) ->
@@ -93,11 +95,12 @@ map2pipe(FunSpec, Arg, Keep, I) ->
                      chashfun=follow}
        ||Keep]].
 
-reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie) ->
+reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie, QueryType) ->
+    PreviousIsReduceP = I > 0 andalso element(I, QueryType) == reduce,
     ConstantFun = fun(_) -> chash:key_of(ConstHashCookie) end,
     [#fitting_spec{name={reduce,I},
                    module=riak_kv_w_mapred,
-                   arg=reduce_compat(FunSpec, Arg),
+                   arg=reduce_compat(FunSpec, Arg, PreviousIsReduceP),
                    chashfun=ConstantFun}
      |[#fitting_spec{name=I,
                      module=riak_pipe_w_tee,
@@ -136,10 +139,17 @@ map_xform_compat({qfun, Fun}, Arg) ->
             ok
     end.
 
-reduce_compat({modfun, Module, Function}, Arg) ->
-    reduce_compat({qfun, erlang:make_fun(Module, Function, 2)}, Arg);
-reduce_compat({qfun, Fun}, Arg) ->
-    fun(_Key, Inputs, _Partition, _FittingDetails) ->
+reduce_compat({modfun, Module, Function}, Arg, PreviousIsReduceP) ->
+    reduce_compat({qfun, erlang:make_fun(Module, Function, 2)}, Arg,
+                  PreviousIsReduceP);
+reduce_compat({qfun, Fun}, Arg, PreviousIsReduceP) ->
+    fun(_Key, Inputs0, _Partition, _FittingDetails) ->
+            %% Concatenate reduce output lists, if previous stage was reduce
+            Inputs = if PreviousIsReduceP ->
+                             lists:append(Inputs0);
+                        true ->
+                             Inputs0
+                     end,
             ?T(_FittingDetails, [reduce], {reducing, length(Inputs)}),
             Output = Fun(Inputs, Arg),
             ?T(_FittingDetails, [reduce], {reduced, length(Output)}),
