@@ -59,7 +59,7 @@ process(Input, _Last, #state{acc=OldAcc}=State) ->
             %%TODO: forward
             error_logger:error_msg(
               "~p:~p reducing:~n   ~P~n   ~P",
-              [Type, Error, InAcc, 2, Trace, 5]),
+              [Type, Error, InAcc, 15, Trace, 15]),
             {ok, State}
     end.
 
