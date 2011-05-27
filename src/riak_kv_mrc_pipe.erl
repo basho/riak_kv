@@ -50,8 +50,9 @@ mr2pipe_phases([]) ->
                    module=riak_pipe_w_pass,
                    chashfun=follow}];
 mr2pipe_phases(Query) ->
+    Now = now(),
     Numbered = lists:zip(Query, lists:seq(0, length(Query)-1)),
-    Fittings0 = lists:flatten([mr2pipe_phase(P,I) || {P,I} <- Numbered]),
+    Fittings0 = lists:flatten([mr2pipe_phase(P,I,Now) || {P,I} <- Numbered]),
     Fs = fix_final_fitting(Fittings0),
     case lists:last(Query) of
         {_, _, _, false} ->
@@ -68,11 +69,11 @@ mr2pipe_phases(Query) ->
             Fs
     end.
 
-mr2pipe_phase({map, FunSpec, Arg, Keep}, I) ->
+mr2pipe_phase({map, FunSpec, Arg, Keep}, I, _ConstHashCookie) ->
     map2pipe(FunSpec, Arg, Keep, I);
-mr2pipe_phase({reduce, FunSpec, Arg, Keep}, I) ->
-    reduce2pipe(FunSpec, Arg, Keep, I);
-mr2pipe_phase({link, Bucket, Tag, Keep}, I) ->
+mr2pipe_phase({reduce, FunSpec, Arg, Keep}, I, ConstHashCookie) ->
+    reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie);
+mr2pipe_phase({link, Bucket, Tag, Keep}, I, _ConstHashCookie) ->
     link2pipe(Bucket, Tag, Keep, I).
 
 map2pipe(FunSpec, Arg, Keep, I) ->
@@ -92,11 +93,12 @@ map2pipe(FunSpec, Arg, Keep, I) ->
                      chashfun=follow}
        ||Keep]].
 
-reduce2pipe(FunSpec, Arg, Keep, I) ->
+reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie) ->
+    ConstantFun = fun(_) -> chash:key_of(ConstHashCookie) end,
     [#fitting_spec{name={reduce,I},
                    module=riak_kv_w_mapred,
                    arg=reduce_compat(FunSpec, Arg),
-                   chashfun=fun reduce_local_chashfun/1}
+                   chashfun=ConstantFun}
      |[#fitting_spec{name=I,
                      module=riak_pipe_w_tee,
                      arg=sink,
@@ -144,10 +146,11 @@ reduce_compat({qfun, Fun}, Arg) ->
             {ok, Output}
     end.
 
-reduce_local_chashfun(_) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    riak_pipe_vnode:hash_for_partition(
-      hd(riak_core_ring:my_indices(Ring))).
+%% chashfun for 0 or 1 reducer per node.
+%% reduce_local_chashfun(_) ->
+%%     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+%%     riak_pipe_vnode:hash_for_partition(
+%%       hd(riak_core_ring:my_indices(Ring))).
 
 bkey_nval({Bucket, _Key}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
