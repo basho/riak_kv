@@ -367,6 +367,8 @@ default_timeout() ->
 %% Convert a vector clock to erlang
 erlify_rpbvc(undefined) ->
     vclock:fresh();
+erlify_rpbvc(<<>>) ->
+    vclock:fresh();
 erlify_rpbvc(PbVc) ->
     binary_to_term(zlib:unzip(PbVc)).
 
