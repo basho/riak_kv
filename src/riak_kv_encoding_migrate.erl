@@ -1,30 +1,57 @@
+%% -------------------------------------------------------------------
+%%
+%% Copyright (c) 2011 Basho Technologies, Inc.
+%%
+%% This file is provided to you under the Apache License,
+%% Version 2.0 (the "License"); you may not use this file
+%% except in compliance with the License. You may obtain
+%% a copy of the License at
+%%
+%% http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing,
+%% software distributed under the License is distributed on an
+%% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+%% KIND, either express or implied. See the License for the
+%% specific language governing permissions and limitations
+%% under the License.
+%%
+%% -------------------------------------------------------------------
+
+%%
 %% Support code to help migrate clusters with URL encoded buckets/keys.
 %%
 %% Usage:
 %% 1. Attach to a running riak console.
 %%
-%% 2. Check if cluster needs migration:
-%%      1> riak_kv_encoding_migrate:check_cluster().
+%% 2. Check if cluster needs migration (message printed to console):
+%%      1> {_, Objs} = riak_kv_encoding_migrate:check_cluster().
 %%
 %% 3. If migration necessary and safe, migrate objects:
-%%      1> riak_kv_encoding_migrate:migrate_objects().
+%%      1> riak_kv_encoding_migrate:migrate_objects(Objs).
 %%
 %% 4. If all went well, delete migrated objects:
-%%      1> riak_kv_encoding_migrate:delete_migrated_objects().
+%%      1> riak_kv_encoding_migrate:delete_migrated_objects(Objs).
 %%
 %% This module also provides the post-commit function 'postcommit_rewrite'
 %% that can be installed on a bucket to perform live copying of inserted
 %% objects. This could be used to perfrom live migration of new objects
 %% while the above migration process is running in background copying
 %% existing objects.
+%%
+%% Alternatively, steps 2-4 can be repeated several times in order to
+%% identify and migrate new objects created during the previous migration
+%% process.
+%%
+
 
 -module(riak_kv_encoding_migrate).
--export([check_cluster/0, migrate_objects/0, delete_migrated_objects/0]).
--export([map_check/3, reduce_check/2, map_rewrite_unsafe/3,
-         postcommit_rewrite/1, map_delete_unsafe/3]).
+-export([check_cluster/0, migrate_objects/1, delete_migrated_objects/1]).
+-export([reduce_check_encoded/2, map_safe/3, map_rewrite_encoded/3,
+         postcommit_rewrite/1]).
 -export([test_migration/0]).
 
-%% Check if the cluster contains unsafe values that need to be migrated
+%% Check if the cluster contains encoded values that need to be migrated
 check_cluster() ->
     {ok, RC} = riak:local_client(),
     riak_kv_mapred_cache:clear(),
@@ -32,117 +59,136 @@ check_cluster() ->
     case Buckets of
         [] ->
             io:format("Cluster is empty. No migration needed.~n", []),
-            {ok, empty};
+            {empty, []};
         _ ->
-            MR = [RC:mapred(Bucket, [map_check(), reduce_check()])
-                  || Bucket <- Buckets],
-            {ok, [Res]} = lists:foldl(fun erlang:max/2, 0, MR),
-            case Res of
-                0 ->
-                    io:format("Cluster does not contain URL unsafe values. "
-                              "No migration needed.~n", []),
-                    {ok, not_needed};
-                1 ->
-                    io:format("Cluster contains URL unsafe values. "
-                              "Migration needed.~n", []),
-                    {ok, needed};
-                2 ->
-                    io:format("Cluster contains URL unsafe values. However,~n"
-                              "one or more bucket/key exists in both URL~n"
-                              "encoded and non-encoded form. Custom migration "
-                              "necessary.~n", []),
-                    {ok, custom}
-            end
+            EObjs = get_encoded_objects(RC),
+            check_cluster2(RC, EObjs)
     end.
 
-map_check() ->
-    {map, {modfun, ?MODULE, map_check}, none, false}.
-map_check(RO, _, _) ->
-    case check_object(RO) of
-        safe ->
-            [0];
-        {_, _, B2, K2} ->
-            {ok, RC} = riak:local_client(),
-            case RC:get(B2, K2) of
-                {error, notfound} ->
-                    [1];
-                _ ->
-                    [2]
-            end
+check_cluster2(_, []) ->
+    io:format("Cluster does not contain URL encoded values. "
+              "No migration needed.~n", []),
+    {not_needed, []};
+
+check_cluster2(RC, EObjs) ->
+    case {check_safe(RC, EObjs), check_double_encoding(EObjs)} of
+        {safe, false} ->
+            io:format("Cluster contains URL encoded values. "
+                      "Migration needed.~n", []),
+            {needed, EObjs};
+        {unsafe, _} ->
+            io:format("Cluster contains URL encoded values. However,~n"
+                      "one or more bucket/key exists in both URL~n"
+                      "encoded and non-encoded form. Custom migration "
+                      "necessary.~n", []),
+            {custom, []};
+        {_, true} ->
+            io:format("Cluster contains doubly encoded values. Custom "
+                      "migration necessary.~n", []),
+            {custom, []}
     end.
 
-reduce_check() ->    
-    {reduce, {modfun, ?MODULE, reduce_check}, none, true}.
-reduce_check(L, _) ->
-    [lists:foldl(fun erlang:max/2, 0, L)].
+%% Returns a list of URL encoded objects needing migration.
+get_encoded_objects(RC) ->
+    {ok, Buckets} = RC:list_buckets(),
+    EObjs = [begin
+                 {ok, Objs} = RC:mapred(Bucket, [reduce_check_encoded()]),
+                 Objs
+             end || Bucket <- Buckets],
+    lists:flatten(EObjs).
+
+reduce_check_encoded() ->
+    {reduce, {modfun, ?MODULE, reduce_check_encoded}, none, true}.
+reduce_check_encoded(L, _) ->
+    lists:foldl(fun check_objects/2, [], L).
+
+check_objects(Name={B1, K1}, Objs) ->
+    {B2, K2} = decode_name(Name),
+
+    case {B2, K2} of
+        {B1, K1} ->
+            Objs;
+        _ ->
+            [{B1, K1} | Objs]
+    end.
+
+%% Returns true if any value is double (or more) encoded.
+check_double_encoding(EObjs) ->
+    lists:any(fun(Name) ->
+                      Name2 = decode_name(Name),
+                      Name2 /= decode_name(Name2)
+              end, EObjs).
+
+%% Determine if it is safe to perform migration (no bucket/key conflicts).
+check_safe(RC, EObjs) ->
+    EObjs2 = [decode_name(Name) || Name <- EObjs],
+    MR = RC:mapred(EObjs2, [map_safe(),
+                            riak_kv_mapreduce:reduce_set_union(true)]),
+    case MR of
+        {ok, [unsafe]} ->
+            unsafe;
+        _ ->
+            safe
+    end.
+
+map_safe() ->
+    {map, {modfun, ?MODULE, map_safe}, none, false}.
+map_safe({error, notfound}, _, _) ->
+    [];
+map_safe(_, _, _) ->
+    [unsafe].
 
 %% Perform first phase of migration: copying encoded values to
 %% unencoded equivalents.
-migrate_objects() ->
+migrate_objects(EObjs) ->
     {ok, RC} = riak:local_client(),
     riak_kv_mapred_cache:clear(),
-    {ok, Buckets} = RC:list_buckets(),
-    [RC:mapred(Bucket, [map_rewrite_unsafe()]) || Bucket <- Buckets],
+    RC:mapred(EObjs, [map_rewrite_encoded()]),
     io:format("All objects with URL encoded buckets/keys have been copied to "
               "unencoded equivalents.~n", []).
 
-map_rewrite_unsafe() ->
-    {map, {modfun, ?MODULE, map_rewrite_unsafe}, none, true}.
-map_rewrite_unsafe(RO, _, _) ->
-    case check_object(RO) of
-        safe ->
-            [];
-        {_, _, B2, K2} ->
-            copy_object(RO, B2, K2),
-            []
-    end.
+map_rewrite_encoded() ->
+    {map, {modfun, ?MODULE, map_rewrite_encoded}, none, true}.
+map_rewrite_encoded({error, not_found}, _, _) ->
+    [];
+map_rewrite_encoded(RO, _, _) ->
+    {_, _, B2, K2} = decode_object(RO),
+    copy_object(RO, B2, K2),
+    [].
 
 %% Post-commit that can be installed to force live migration of newly
 %% inserted buckets/keys before cluster is switched over to proper
 %% behavior (eg. during migration).
 postcommit_rewrite(RO) ->
-    case check_object(RO) of
-        safe ->
+    {B1, K1, B2, K2} = decode_object(RO),
+    case {B2, K2} of
+        {B1, K1} ->
             ok;
-        {_, _, B2, K2} ->
+        _ ->
             copy_object(RO, B2, K2),
             ok
     end.
 
 %% Perform second phase of migration: delete objects with encoded buckets/keys.
-delete_migrated_objects() ->
+delete_migrated_objects(EObjs) ->
     {ok, RC} = riak:local_client(),
-    riak_kv_mapred_cache:clear(),
-    {ok, Buckets} = RC:list_buckets(),
-    [RC:mapred(Bucket, [map_delete_unsafe()]) || Bucket <- Buckets],
+    [RC:delete(B, K) || {B, K} <- EObjs],
     io:format("All objects with URL encoded buckets/keys have been "
               "deleted.~n", []).
 
-map_delete_unsafe() ->
-    {map, {modfun, ?MODULE, map_delete_unsafe}, none, true}.
-map_delete_unsafe(RO, _, _) ->
-    case check_object(RO) of
-        safe ->
-            [];
-        {B1, K1, _, _} ->
-            {ok, RC} = riak:local_client(),
-            RC:delete(B1, K1),
-            []
-    end.
+%% @private
+decode_name({B1, K1}) ->
+    B2 = list_to_binary(mochiweb_util:unquote(B1)),
+    K2 = list_to_binary(mochiweb_util:unquote(K1)),
+    {B2, K2}.
 
 %% @private
-check_object(RO) ->
+decode_object(RO) ->
     B1 = riak_object:bucket(RO),
     K1 = riak_object:key(RO),
     B2 = list_to_binary(mochiweb_util:unquote(B1)),
     K2 = list_to_binary(mochiweb_util:unquote(K1)),
-
-    case {B2, K2} of
-        {B1, K1} ->
-            safe;
-        _ ->
-            {B1, K1, B2, K2}
-    end.
+    {B1, K1, B2, K2}.
 
 %% @private
 copy_object(RO, B, K) ->
@@ -157,41 +203,49 @@ copy_object(RO, B, K) ->
 %% eunit test.
 test_migration() ->
     {ok, RC} = riak:local_client(),
-    {ok, empty} = riak_kv_encoding_migrate:check_cluster(),
+    {empty, []} = riak_kv_encoding_migrate:check_cluster(),
 
     O1 = riak_object:new(<<"bucket">>, <<"key">>, <<"val">>),
     RC:put(O1),
-    {ok, not_needed} = riak_kv_encoding_migrate:check_cluster(),
+    {not_needed, []} = riak_kv_encoding_migrate:check_cluster(),
 
     MD1 = dict:store(<<"X-MyTag">>, <<"A">>, dict:new()),
     O2 = riak_object:new(<<"me%40mine">>, <<"key">>, <<"A">>, MD1),
     RC:put(O2),
-    {ok, needed} = riak_kv_encoding_migrate:check_cluster(),
-    
+    {needed, [{<<"me%40mine">>, <<"key">>}]} =
+        riak_kv_encoding_migrate:check_cluster(),
+
     O3 = riak_object:new(<<"me@mine">>, <<"key">>, <<"A">>, MD1),
     RC:put(O3),
-    {ok, custom} = riak_kv_encoding_migrate:check_cluster(),
+    {custom, []} = riak_kv_encoding_migrate:check_cluster(),
 
     RC:delete(<<"me%40mine">>, <<"key">>),
-    {ok, not_needed} = riak_kv_encoding_migrate:check_cluster(),
+    {not_needed, []} = riak_kv_encoding_migrate:check_cluster(),
 
     MD2 = dict:store(<<"X-MyTag">>, <<"B">>, dict:new()),
     O4 = riak_object:new(<<"bucket">>, <<"key%40">>, <<"B">>, MD2),
     RC:put(O4),
-    {ok, needed} = riak_kv_encoding_migrate:check_cluster(),
+    {needed, [{<<"bucket">>, <<"key%40">>}]} =
+        riak_kv_encoding_migrate:check_cluster(),
     
     O5 = riak_object:new(<<"bucket">>, <<"key@">>, <<"B">>, MD2),
     RC:put(O5),
-    {ok, custom} = riak_kv_encoding_migrate:check_cluster(),
+    {custom, []} = riak_kv_encoding_migrate:check_cluster(),
 
     RC:delete(<<"me@mine">>, <<"key">>),
     RC:delete(<<"bucket">>, <<"key@">>),
     RC:put(O2),
-    {ok, needed} = riak_kv_encoding_migrate:check_cluster(),
 
-    riak_kv_encoding_migrate:migrate_objects(),
-    riak_kv_encoding_migrate:delete_migrated_objects(),
-    {ok, not_needed} = riak_kv_encoding_migrate:check_cluster(),
+    O6 = riak_object:new(<<"bdouble%2540">>, <<"bkey%2540">>, <<"C">>),
+    RC:put(O6),
+    {custom, []} = riak_kv_encoding_migrate:check_cluster(),
+
+    RC:delete(<<"bdouble%2540">>, <<"bkey%2540">>),
+    {needed, EObjs} = riak_kv_encoding_migrate:check_cluster(),
+
+    riak_kv_encoding_migrate:migrate_objects(EObjs),
+    riak_kv_encoding_migrate:delete_migrated_objects(EObjs),
+    {not_needed, []} = riak_kv_encoding_migrate:check_cluster(),
 
     C1 = riak_object:get_contents(O2),
     V1 = riak_object:vclock(O2),
