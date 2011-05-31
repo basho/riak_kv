@@ -354,6 +354,13 @@ malformed_request(RD, Ctx) ->
                                            io_lib:format("not found~n",[]),
                                            ResRD)),
                      DocCtx};
+                {error, {deleted, _VClock}} ->
+                    {{halt, 404},
+                      wrq:set_resp_header("Content-Type", "text/plain",
+                                         wrq:append_to_response_body(
+                                           io_lib:format("not found~n",[]),
+                                           encode_vclock_header(ResRD, DocCtx))),
+                     DocCtx};
                 {error, timeout} ->
                     {{halt, 503},
                      wrq:set_resp_header("Content-Type", "text/plain",
@@ -1129,15 +1136,20 @@ select_doc(#ctx{doc={ok, Doc}, vtag=Vtag}) ->
 %% @doc Add the X-Riak-Vclock header to the response.
 encode_vclock_header(RD, #ctx{doc={ok, Doc}}) ->
     {Head, Val} = vclock_header(Doc),
-    wrq:set_resp_header(Head, Val, RD).
+    wrq:set_resp_header(Head, Val, RD);
+encode_vclock_header(RD, #ctx{doc={error, {deleted, VClock}}}) ->
+    wrq:set_resp_header(?HEAD_VCLOCK, encode_vclock(VClock), RD).
+
 
 %% @spec vclock_header(riak_object()) -> {Name::string(), Value::string()}
 %% @doc Transform the Erlang representation of the document's vclock
 %%      into something suitable for an HTTP header
 vclock_header(Doc) ->
     {?HEAD_VCLOCK,
-     binary_to_list(
-       base64:encode(zlib:zip(term_to_binary(riak_object:vclock(Doc)))))}.
+        encode_vclock(riak_object:vclock(Doc))}.
+
+encode_vclock(VClock) ->
+    binary_to_list(base64:encode(zlib:zip(term_to_binary(VClock)))).
 
 %% @spec decode_vclock_header(reqdata()) -> vclock()
 %% @doc Translate the X-Riak-Vclock header value from the request into
@@ -1157,14 +1169,20 @@ decode_vclock_header(RD) ->
 %%      worry about the order of executing of those places.
 ensure_doc(Ctx=#ctx{doc=undefined, bucket=B, key=K, client=C, r=R,
         pr=PR, basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
-    Ctx#ctx{doc=C:get(B, K, [{r, R}, {pr, PR}, {basic_quorum, Quorum},
-                {notfound_ok, NotFoundOK}])};
+    Ctx#ctx{doc=C:get(B, K, [deletedvclock, {r, R}, {pr, PR},
+                {basic_quorum, Quorum}, {notfound_ok, NotFoundOK}])};
 ensure_doc(Ctx) -> Ctx.
 
 %% @spec delete_resource(reqdata(), context()) -> {true, reqdata(), context()}
 %% @doc Delete the document specified.
 delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C, rw=RW}) ->
-    case C:delete(B, K, RW) of
+    Result = case wrq:get_req_header(?HEAD_VCLOCK, RD) of
+        undefined -> 
+            C:delete(B,K,RW);
+        _ ->
+            C:delete_vclock(B,K,decode_vclock_header(RD),RW)
+    end,
+    case Result of
         {error, notfound} ->
             {{halt, 404},
              wrq:set_resp_header("Content-Type", "text/plain",

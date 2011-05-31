@@ -167,10 +167,12 @@ process_message(rpbgetserverinforeq, State) ->
 
 process_message(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                            basic_quorum=BQ, if_modified=VClock,
-                           head=Head}, #state{client=C} = State) ->
+                           head=Head, deletedvclock=DeletedVClock}, #state{client=C} = State) ->
     R = normalize_rw_value(R0),
     PR = normalize_rw_value(PR0),
-    case C:get(B, K, make_option(r, R) ++ make_option(pr, PR) ++
+    case C:get(B, K, make_option(deletedvclock, DeletedVClock) ++
+                     make_option(r, R) ++
+                     make_option(pr, PR) ++
                      make_option(notfound_ok, NFOk) ++
                      make_option(basic_quorum, BQ)) of
         {ok, O} ->
@@ -193,6 +195,10 @@ process_message(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                         vclock = pbify_rpbvc(riak_object:vclock(O))},
                     send_msg(GetResp, State)
             end;
+        {error, {deleted, TombstoneVClock}} ->
+            %% Found a tombstone - return its vector clock so it can
+            %% be properly overwritten
+            send_msg(#rpbgetresp{vclock = pbify_rpbvc(TombstoneVClock)}, State);
         {error, notfound} ->
             send_msg(#rpbgetresp{}, State);
         {error, Reason} ->
@@ -284,10 +290,17 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
             send_error("~p", [Reason], State)
     end;
 
-process_message(#rpbdelreq{bucket=B, key=K, rw=RW0}, 
+process_message(#rpbdelreq{bucket=B, key=K, rw=RW0, vclock=PbVc}, 
                 #state{client=C} = State) ->
     RW = normalize_rw_value(RW0),
-    case C:delete(B, K, default_if_undef(RW)) of
+    Result = case PbVc of
+        undefined ->
+            C:delete(B, K, default_if_undef(RW));
+        _ ->
+            VClock = erlify_rpbvc(PbVc),
+            C:delete_vclock(B, K, VClock, default_if_undef(RW))
+    end,
+    case Result of
         ok ->
             send_msg(rpbdelresp, State);
         {error, notfound} ->  %% delete succeeds if already deleted

@@ -67,30 +67,20 @@
                 bkey :: {riak_object:bucket(), riak_object:key()},
                 req_id :: pos_integer(),
                 starttime :: pos_integer(), % start time to send to vnodes
-                replied_w :: list(),
-                replied_dw :: list(),
-                replied_fail :: list(),
                 timeout :: pos_integer()|infinity,
                 tref    :: reference(),
                 vnode_options=[] :: list(),
                 returnbody :: boolean(),
-                resobjs=[] :: list(),
                 allowmult :: boolean(),
                 precommit=[] :: list(),
                 postcommit=[] :: list(),
                 bucket_props:: list(),
-                num_w = 0 :: non_neg_integer(),
-                num_dw = 0 :: non_neg_integer(),
-                num_fail = 0 :: non_neg_integer(),
-                w_fail_threshold :: undefined | non_neg_integer(),
-                dw_fail_threshold :: undefined | non_neg_integer(),
-                final_obj :: undefined | riak_object:riak_object(),
+                putcore :: riak_kv_put_core:putcore(),
                 put_usecs :: undefined | non_neg_integer(),
                 timing = [] :: [{atom(), {non_neg_integer(), non_neg_integer(),
                                           non_neg_integer()}}],
                 reply % reply sent to client
                }).
-
 
 -define(DEFAULT_TIMEOUT, 60000).
 
@@ -132,6 +122,7 @@ test_link(From, Object, PutOptions, StateProps) ->
     gen_fsm:start_link(?MODULE, {test, [From, Object, PutOptions], StateProps}, []).
 
 -endif.
+
 
 %% ====================================================================
 %% gen_fsm callbacks
@@ -229,7 +220,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
             Options = flatten_options(proplists:unfold(Options0 ++ ?DEFAULT_OPTS), []),
             StateData2 = handle_options(Options, StateData1),
             StateData3 = apply_updates(StateData2),
-            StateData = find_fail_threshold(StateData3),
+            StateData = init_putcore(StateData3),
             case Precommit of
                 [] -> % Nothing to run, spare the timing code
                     new_state_timeout(execute, StateData);
@@ -257,46 +248,50 @@ precommit(timeout, State = #state{precommit = [Hook | Rest], robj = RObj}) ->
 execute(timeout, StateData0=#state{robj=RObj, req_id = ReqId,
                                    timeout=Timeout, preflist2 = Preflist2, bkey=BKey,
                                    vnode_options=VnodeOptions,
+                                   putcore=PutCore,
                                    starttime = StartTime}) ->
     TRef = schedule_timeout(Timeout),
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
     riak_kv_vnode:put(Preflist, BKey, RObj, ReqId, StartTime, VnodeOptions),
-    StateData = StateData0#state{
-                  replied_w=[], replied_dw=[], replied_fail=[],
-                  tref=TRef},
-    case enough_results(StateData) of
-        {reply, Reply, StateData1} ->
-            process_reply(Reply, StateData1);
-        {false, StateData} ->
+    StateData = StateData0#state{tref=TRef},
+    case riak_kv_put_core:enough(PutCore) of
+        true ->
+            {Reply, UpdPutCore} = riak_kv_put_core:response(PutCore),
+            process_reply(Reply, StateData#state{putcore = UpdPutCore});
+        false ->
             new_state(waiting_vnode, StateData)
     end.
 
 %% @private
 waiting_vnode(request_timeout, StateData) ->
     process_reply({error,timeout}, StateData);
-waiting_vnode(Result, StateData) ->
-    StateData1 = add_vnode_result(Result, StateData),
-    case enough_results(StateData1) of
-        {reply, Reply, StateData2} ->
-            process_reply(Reply, StateData2);
-        {false, StateData2} ->
-            {next_state, waiting_vnode, StateData2}
+waiting_vnode(Result, StateData = #state{putcore = PutCore}) ->
+    UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
+    case riak_kv_put_core:enough(UpdPutCore1) of
+        true ->
+            {Reply, UpdPutCore2} = riak_kv_put_core:response(UpdPutCore1),
+            process_reply(Reply, StateData#state{putcore = UpdPutCore2});
+        false ->
+            {next_state, waiting_vnode, StateData#state{putcore = UpdPutCore1}}
     end.
 
 %% @private
 postcommit(timeout, StateData = #state{postcommit = []}) ->
     new_state_timeout(finish, StateData);
 postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
-                                       final_obj = ReplyObj}) ->
+                                       putcore = PutCore}) ->
     %% Process the next hook - gives sys:get_status messages a chance if hooks
     %% take a long time.  No checking error returns for postcommit hooks.
+    {ReplyObj, UpdPutCore} =  riak_kv_put_core:final(PutCore),
     invoke_hook(Hook, ReplyObj),
-    {next_state, postcommit, StateData#state{postcommit = Rest}, 0};
+    {next_state, postcommit, StateData#state{postcommit = Rest,
+                                             putcore = UpdPutCore}, 0};
 postcommit(request_timeout, StateData) -> % still process hooks even if request timed out
     {next_state, postcommit, StateData, 0};
-postcommit(Reply, StateData) -> % late responses - add to state
-    StateData1 = add_vnode_result(Reply, StateData),
-    {next_state, postcommit, StateData1, 0}.
+postcommit(Reply, StateData = #state{putcore = PutCore}) ->
+    %% late responses - add to state.  *Does not* recompute finalobj
+    UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
+    {next_state, postcommit, StateData#state{putcore = UpdPutCore}, 0}.
 
 finish(timeout, StateData = #state{timing = Timing, reply = Reply}) ->
     case Reply of
@@ -309,9 +304,11 @@ finish(timeout, StateData = #state{timing = Timing, reply = Reply}) ->
             riak_kv_stat:update({put_fsm_time, Duration})
     end,
     {stop, normal, StateData};
-finish(Reply, StateData) -> % late responses - add to state
-    StateData1 = add_vnode_result(Reply, StateData),
-    {next_state, finish, StateData1, 0}.
+finish(Reply, StateData = #state{putcore = PutCore}) ->
+    %% late responses - add to state.  *Does not* recompute finalobj
+    UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
+    {next_state, finish, StateData#state{putcore = UpdPutCore}, 0}.
+
 
 %% @private
 handle_event(_Event, _StateName, StateData) ->
@@ -349,15 +346,26 @@ new_state_timeout(StateName, StateData) ->
     {next_state, StateName, add_timing(StateName, StateData), 0}.
 
 %% What to do once enough responses from vnodes have been received to reply
-process_reply(Reply, StateData) ->
+process_reply(Reply, StateData = #state{postcommit = PostCommit,
+                                        putcore = PutCore}) ->
     StateData1 = client_reply(Reply, StateData),
+    StateData2 = case PostCommit of
+                     [] ->
+                         StateData1;
+                     _ ->
+                         %% If postcommits defined, calculate final object 
+                         %% before any replies received after responding to
+                         %% the client for a consistent view.
+                         {_, UpdPutCore} = riak_kv_put_core:final(PutCore),
+                         StateData1#state{putcore = UpdPutCore}
+                 end,
     case Reply of
         ok ->
-            new_state_timeout(postcommit, StateData1);
+            new_state_timeout(postcommit, StateData2);
         {ok, _} ->
-            new_state_timeout(postcommit, StateData1);
+            new_state_timeout(postcommit, StateData2);
         _ ->
-            new_state_timeout(finish, StateData1)
+            new_state_timeout(finish, StateData2)
     end.
 
 %%
@@ -406,59 +414,15 @@ handle_options([{returnbody, false}|T], State = #state{postcommit = Postcommit})
     end;
 handle_options([{_,_}|T], State) -> handle_options(T, State).
 
-find_fail_threshold(State = #state{n = N, w = W, dw = DW}) ->
-    State#state{ w_fail_threshold = N-W+1,    % cannot ever get W replies
-                 dw_fail_threshold = N-DW+1}. % cannot ever get DW replies
+init_putcore(State = #state{n = N, w = W, dw = DW, allowmult = AllowMult,
+                            returnbody = ReturnBody}) ->
+    PutCore = riak_kv_put_core:init(N, W, DW, 
+                                    N-W+1,   % cannot ever get W replies
+                                    N-DW+1,  % cannot ever get DW replies
+                                    AllowMult,
+                                    ReturnBody),
+    State#state{putcore = PutCore}.
 
-%% Add a vnode result to the state structure and update the counts
-add_vnode_result({w, Idx, _ReqId}, StateData = #state{replied_w = Replied,
-                                                      num_w = NumW}) ->
-    StateData#state{replied_w = [Idx | Replied], num_w = NumW + 1};
-add_vnode_result({dw, Idx, _ReqId}, StateData = #state{replied_dw = Replied,
-                                                       num_dw = NumDW}) ->
-    StateData#state{replied_dw = [Idx | Replied], num_dw = NumDW + 1};
-add_vnode_result({dw, Idx, ResObj, _ReqId}, StateData = #state{replied_dw = Replied,
-                                                               resobjs = ResObjs,
-                                                               num_dw = NumDW}) ->
-    StateData#state{replied_dw = [Idx | Replied],
-                    resobjs = [ResObj | ResObjs],
-                    num_dw = NumDW + 1};
-add_vnode_result({fail, Idx, _ReqId}, StateData = #state{replied_fail = Replied,
-                                                         num_fail = NumFail}) ->
-    StateData#state{replied_fail = [Idx | Replied],
-                    num_fail = NumFail + 1};
-add_vnode_result(_Other, StateData = #state{num_fail = NumFail}) ->
-    %% Treat unrecognized messages as failures
-    StateData#state{num_fail = NumFail + 1}.
-
-enough_results(StateData = #state{w = W, num_w = NumW, dw = DW, num_dw = NumDW,
-                                  num_fail = NumFail,
-                                  w_fail_threshold = WFailThreshold,
-                                  dw_fail_threshold = DWFailThreshold}) ->
-    if
-        NumW >= W andalso NumDW >= DW ->
-            maybe_return_body(StateData);
-        
-        NumW >= W andalso NumFail >= DWFailThreshold ->
-            {reply, {error,too_many_fails}, StateData};
-        
-        NumW < W andalso NumFail >= WFailThreshold ->
-            {reply, {error,too_many_fails}, StateData};
-        
-        true ->
-            {false, StateData}
-    end.
-
-maybe_return_body(StateData = #state{returnbody=false, postcommit=[]}) ->
-    {reply, ok, StateData};
-maybe_return_body(StateData = #state{resobjs = ResObjs, allowmult = AllowMult,
-                                     returnbody = ReturnBody}) ->
-    ReplyObj = merge_robjs(ResObjs, AllowMult),
-    Reply = case ReturnBody of
-                true  -> {ok, ReplyObj};
-                false -> ok
-            end,
-    {reply, Reply, StateData#state{final_obj = ReplyObj}}.
 
 %% Apply any pending updates to robj
 apply_updates(State = #state{robj = RObj}) ->
@@ -571,15 +535,7 @@ get_hooks(HookType, BucketProps) ->
         Hooks when is_list(Hooks) ->
             Hooks
     end.
-              
-merge_robjs(RObjs0,AllowMult) ->
-    RObjs1 = [X || X <- RObjs0,
-                   X /= undefined],
-    case RObjs1 of
-        [] -> {error, notfound};
-        _ -> riak_object:reconcile(RObjs1,AllowMult)
-    end.
-
+   
 get_option(Name, Options, Default) ->
     proplists:get_value(Name, Options, Default).
 

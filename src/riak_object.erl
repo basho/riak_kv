@@ -101,47 +101,29 @@ ensure_robject(Obj = #r_object{}) -> Obj.
 -spec equal(riak_object(), riak_object()) -> true | false.
 %% @doc Deep (expensive) comparison of Riak objects.
 equal(Obj1,Obj2) ->
-    case Obj1#r_object.bucket =:= Obj2#r_object.bucket of
-        false -> false;
-        true ->
-            case Obj1#r_object.key =:= Obj2#r_object.key of
-                false -> false;
-                true -> equal1(Obj1,Obj2)
-            end
-    end.
-equal1(Obj1,Obj2) ->
-    case vclock:equal(vclock(Obj1),vclock(Obj2)) of
-        false -> false;
-        true -> equal2(Obj1,Obj2)
-    end.
+    (Obj1#r_object.bucket =:= Obj2#r_object.bucket)
+        andalso (Obj1#r_object.key =:= Obj2#r_object.key)
+        andalso vclock:equal(vclock(Obj1),vclock(Obj2))
+        andalso equal2(Obj1,Obj2).
 equal2(Obj1,Obj2) ->
-    UM1 = lists:sort(dict:to_list(Obj1#r_object.updatemetadata)),
-    UM2 = lists:sort(dict:to_list(Obj2#r_object.updatemetadata)),
-    case UM1 =:= UM2 of
-        false -> false;
-        true ->
-            case Obj1#r_object.updatevalue =:= Obj2#r_object.updatevalue of
-                false -> false;
-                true ->
+    UM1 = lists:keysort(1, dict:to_list(Obj1#r_object.updatemetadata)),
+    UM2 = lists:keysort(1, dict:to_list(Obj2#r_object.updatemetadata)),
+    (UM1 =:= UM2)
+        andalso (Obj1#r_object.updatevalue =:= Obj2#r_object.updatevalue)
+        andalso begin
                     Cont1 = lists:sort(Obj1#r_object.contents),
                     Cont2 = lists:sort(Obj2#r_object.contents),
                     equal_contents(Cont1,Cont2)
-            end
-    end.
+                end.
 equal_contents([],[]) -> true;
 equal_contents(_,[]) -> false;
 equal_contents([],_) -> false;
 equal_contents([C1|R1],[C2|R2]) ->
-    MD1 = lists:sort(dict:to_list(C1#r_content.metadata)),
-    MD2 = lists:sort(dict:to_list(C2#r_content.metadata)),
-    case MD1 =:= MD2 of
-        false -> false;
-        true ->
-            case C1#r_content.value =:= C2#r_content.value of
-                false -> false;
-                true -> equal_contents(R1,R2)
-            end
-    end.
+    MD1 = lists:keysort(1, dict:to_list(C1#r_content.metadata)),
+    MD2 = lists:keysort(1, dict:to_list(C2#r_content.metadata)),
+    (MD1 =:= MD2)
+        andalso (C1#r_content.value =:= C2#r_content.value)
+        andalso equal_contents(R1,R2).
 
 %% @spec reconcile([riak_object()], boolean()) -> riak_object()
 %% @doc  Reconcile a list of riak objects.  If AllowMultiple is true,
@@ -155,7 +137,7 @@ reconcile(Objects, AllowMultiple) ->
     AllContents = lists:flatten([O#r_object.contents || O <- RObjs]),
     Contents = case AllowMultiple of
         false ->
-            [hd(lists:sort(fun compare_content_dates/2, AllContents))];
+            [most_recent_content(AllContents)];
         true ->
             AllContents
     end,
@@ -195,11 +177,33 @@ rem_dup_objs([O|Rest],Acc) ->
         _ -> rem_dup_objs(Rest,Acc)
     end.
 
+most_recent_content(AllContents) ->
+    hd(lists:sort(fun compare_content_dates/2, AllContents)).
+
 compare_content_dates(C1,C2) ->
-    % true if C1 was modifed later than C2
-    riak_core_util:compare_dates(
-      dict:fetch(<<"X-Riak-Last-Modified">>, C1#r_content.metadata),
-      dict:fetch(<<"X-Riak-Last-Modified">>, C2#r_content.metadata)).
+    D1 = dict:fetch(<<"X-Riak-Last-Modified">>, C1#r_content.metadata),
+    D2 = dict:fetch(<<"X-Riak-Last-Modified">>, C2#r_content.metadata),
+    %% true if C1 was modifed later than C2
+    Cmp1 = riak_core_util:compare_dates(D1, D2),
+    %% true if C2 was modifed later than C1
+    Cmp2 = riak_core_util:compare_dates(D2, D1),
+    %% check for deleted objects
+    Del1 = dict:is_key(<<"X-Riak-Deleted">>, C1#r_content.metadata),
+    Del2 = dict:is_key(<<"X-Riak-Deleted">>, C2#r_content.metadata),
+
+    SameDate = (Cmp1 =:= Cmp2),
+    case {SameDate, Del1, Del2} of
+        {false, _, _} ->
+            Cmp1;
+        {true, true, false} ->
+            false;
+        {true, false, true} ->
+            true;
+        _ ->
+            %% Dates equal and either both present or both deleted, compare
+            %% by opaque contents.
+            C1 < C2
+    end.
 
 %% @spec merge(riak_object(), riak_object()) -> riak_object()
 %% @doc  Merge the contents and vclocks of OldObject and NewObject.
@@ -658,5 +662,61 @@ new_with_ctype_test() ->
 new_with_md_test() ->
     O = riak_object:new(<<"b">>, <<"k">>, <<"abc">>, dict:from_list([{?MD_CHARSET,"utf8"}])),
     ?assertEqual("utf8", dict:fetch(?MD_CHARSET, riak_object:get_metadata(O))).
+
+check_most_recent({V1, T1, D1}, {V2, T2, D2}) ->
+    MD1 = dict:store(<<"X-Riak-Last-Modified">>, T1, D1),
+    MD2 = dict:store(<<"X-Riak-Last-Modified">>, T2, D2),
+
+    O1 = riak_object:new(<<"test">>, <<"a">>, V1, MD1),
+    O2 = riak_object:new(<<"test">>, <<"a">>, V2, MD2),
+
+    C1 = hd(O1#r_object.contents),
+    C2 = hd(O2#r_object.contents),
+
+    C3 = most_recent_content([C1, C2]),
+    C4 = most_recent_content([C2, C1]),
+
+    ?assertEqual(C3, C4),
+
+    C3#r_content.value.
+
+determinstic_most_recent_test() ->
+    D = calendar:datetime_to_gregorian_seconds(
+          httpd_util:convert_request_date(
+            httpd_util:rfc1123_date())),
+
+    TNow = httpd_util:rfc1123_date(
+             calendar:gregorian_seconds_to_datetime(D)),
+    TPast = httpd_util:rfc1123_date(
+              calendar:gregorian_seconds_to_datetime(D-1)),
+
+    Available = dict:new(),
+    Deleted = dict:store(<<"X-Riak-Deleted">>, true, Available),
+
+    %% Test all cases with equal timestamps
+    ?assertEqual(<<"a">>, check_most_recent({<<"a">>, TNow, Available},
+                                            {<<"b">>, TNow, Available})),
+
+    ?assertEqual(<<"b">>, check_most_recent({<<"a">>, TNow, Deleted},
+                                            {<<"b">>, TNow, Available})),
+
+    ?assertEqual(<<"a">>, check_most_recent({<<"a">>, TNow, Available},
+                                            {<<"b">>, TNow, Deleted})),
+
+    ?assertEqual(<<"a">>, check_most_recent({<<"a">>, TNow, Deleted},
+                                            {<<"b">>, TNow, Deleted})),
+
+    %% Test all cases with different timestamp
+    ?assertEqual(<<"b">>, check_most_recent({<<"a">>, TPast, Available},
+                                            {<<"b">>, TNow, Available})),
+
+    ?assertEqual(<<"b">>, check_most_recent({<<"a">>, TPast, Deleted},
+                                            {<<"b">>, TNow, Available})),
+
+    ?assertEqual(<<"b">>, check_most_recent({<<"a">>, TPast, Available},
+                                            {<<"b">>, TNow, Deleted})),
+
+    ?assertEqual(<<"b">>, check_most_recent({<<"a">>, TPast, Deleted},
+                                            {<<"b">>, TNow, Deleted})).
 
 -endif.

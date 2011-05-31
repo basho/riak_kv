@@ -32,35 +32,34 @@
          handle_info/3, terminate/3, code_change/4]).
 -export([prepare/2,validate/2,execute/2,waiting_vnode_r/2,waiting_read_repair/2]).
 
+-type detail() :: timing |
+                  vnodes.
+-type details() :: [detail()].
+
 -type option() :: {r, pos_integer()} |         %% Minimum number of successful responses
                   {pr, non_neg_integer()} |    %% Minimum number of primary vnodes participating
                   {basic_quorum, boolean()} |  %% Whether to use basic quorum (return early 
                                                %% in some failure cases.
                   {notfound_ok, boolean()}  |  %% Count notfound reponses as successful.
-                  {timeout, pos_integer() | infinity}. %% Timeout for vnode responses
+                  {timeout, pos_integer() | infinity} | %% Timeout for vnode responses
+                  {details, details()} |       %% Return extra details as a 3rd element
+                  {details, true} |
+                  details.
+
 -type options() :: [option()].
 -type req_id() :: non_neg_integer().
 
 -export_type([options/0, option/0]).
 
+
+
 -record(state, {from :: {raw, req_id(), pid()},
                 options=[] :: options(),
                 n :: pos_integer(),
-                r :: pos_integer(),
-                fail_threshold :: non_neg_integer(),
-                allowmult :: boolean(),
-                notfound_ok :: boolean(),
                 preflist2 :: riak_core_apl:preflist2(),
                 req_id :: non_neg_integer(),
                 starttime :: pos_integer(),
-                replied_r = [] :: list(),
-                replied_notfound = [] :: list(),
-                replied_fail = [] :: list(),
-                num_r = 0 :: non_neg_integer(),
-                num_notfound = 0 :: non_neg_integer(),
-                num_fail = 0 :: non_neg_integer(),
-                final_obj :: {ok, riak_object:riak_object()} |
-                             tombstone | {error, notfound},
+                get_core :: riak_kv_get_core:getcore(),
                 timeout :: infinity | pos_integer(),
                 tref    :: reference(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
@@ -184,7 +183,7 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
             client_reply({error, {pr_val_unsatisfied, PR, NumPrimaries}}, StateData),
             {stop, normal, StateData};
         true ->
-            BQ0 = get_option(basic_quorum, Options, true),
+            BQ0 = get_option(basic_quorum, Options, default),
             FailThreshold = 
                 case riak_kv_util:expand_value(basic_quorum, BQ0, BucketProps) of
                     true ->
@@ -194,13 +193,14 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
                         N - R + 1 % cannot ever get R 'ok' replies
                 end,
             AllowMult = proplists:get_value(allow_mult,BucketProps),
-            NFOk0 = get_option(notfound_ok, Options, false),
+            NFOk0 = get_option(notfound_ok, Options, default),
             NotFoundOk = riak_kv_util:expand_value(notfound_ok, NFOk0, BucketProps),
-            {next_state, execute, StateData#state{r = R,
-                                                  fail_threshold = FailThreshold,
+            DeletedVClock = get_option(deletedvclock, Options, false),
+            GetCore = riak_kv_get_core:init(N, R, FailThreshold, 
+                                            NotFoundOk, AllowMult,
+                                            DeletedVClock),
+            {next_state, execute, StateData#state{get_core = GetCore,
                                                   timeout = Timeout,
-                                                  allowmult = AllowMult,
-                                                  notfound_ok = NotFoundOk,
                                                   req_id = ReqId}, 0}
     end.
 
@@ -215,27 +215,30 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
     {next_state,waiting_vnode_r,StateData}.
 
 %% @private
-waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData) ->
-    NewStateData1 = add_vnode_result(Idx, VnodeResult, StateData),
-    case enough_results(NewStateData1) of
-        {reply, Reply, NewStateData2} ->
+waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = GetCore}) ->
+    UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
+    case riak_kv_get_core:enough(UpdGetCore) of
+        true ->
+            {Reply, UpdGetCore2} = riak_kv_get_core:response(UpdGetCore),
+            NewStateData2 = update_timing(StateData#state{get_core = UpdGetCore2}),
             client_reply(Reply, NewStateData2),
             update_stats(NewStateData2),
-            finalize(NewStateData2);
-        {false, NewStateData2} ->
-            {next_state, waiting_vnode_r, NewStateData2}
+            maybe_finalize(NewStateData2);
+        false ->
+            {next_state, waiting_vnode_r, StateData#state{get_core = UpdGetCore}}
     end;
-waiting_vnode_r(request_timeout, StateData=#state{replied_r=Replied,allowmult=AllowMult}) ->
+waiting_vnode_r(request_timeout, StateData) ->
     update_stats(StateData),
     client_reply({error,timeout}, StateData),
-    really_finalize(StateData#state{final_obj=merge(Replied, AllowMult)}).
+    finalize(StateData).
 
 %% @private
-waiting_read_repair({r, VnodeResult, Idx, _ReqId}, StateData) ->
-    NewStateData1 = add_vnode_result(Idx, VnodeResult, StateData),
-    finalize(NewStateData1#state{final_obj = undefined});
+waiting_read_repair({r, VnodeResult, Idx, _ReqId},
+                    StateData = #state{get_core = GetCore}) ->
+    UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
+    maybe_finalize(StateData#state{get_core = UpdGetCore});
 waiting_read_repair(request_timeout, StateData) ->
-    really_finalize(StateData).
+    finalize(StateData).
 
 %% @private
 handle_event(_Event, _StateName, StateData) ->
@@ -259,125 +262,55 @@ terminate(Reason, _StateName, _State) ->
 %% @private
 code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 
+    
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
 
-add_vnode_result(Idx, {ok, RObj}, StateData = #state{replied_r = Replied,
-                                                     num_r = NumR}) ->
-    StateData#state{replied_r = [{RObj, Idx} | Replied],
-                    num_r = NumR + 1};
-add_vnode_result(Idx, {error, notfound}, StateData = #state{replied_notfound = NotFound,
-                                                            num_notfound = NumNotFound,
-                                                            notfound_ok = false}) ->
-    StateData#state{replied_notfound = [Idx | NotFound],
-                    num_notfound = NumNotFound + 1};
-add_vnode_result(Idx, {error, notfound}, StateData = #state{replied_notfound = NotFound,
-                                                            num_r = NumR,
-                                                            notfound_ok = true}) ->
-    StateData#state{replied_notfound = [Idx | NotFound],
-                    num_r = NumR + 1};
-add_vnode_result(Idx, {error, Err}, StateData = #state{replied_fail = Fail,
-                                                       num_fail = NumFail}) ->
-    StateData#state{replied_fail = [{Err, Idx} | Fail],
-                   num_fail = NumFail + 1}.
-
-enough_results(StateData = #state{r = R, allowmult = AllowMult,
-                                  fail_threshold = FailThreshold,
-                                  replied_r = Replied, num_r = NumR,
-                                  num_notfound = NumNotFound,
-                                  replied_fail = Fails, num_fail = NumFail}) ->
-    if
-        NumR >= R ->
-            {Reply, Final} = respond(Replied, AllowMult),
-            {reply, Reply, update_timing(StateData#state{final_obj = Final})};
-        NumNotFound + NumFail >= FailThreshold ->
-            DelObjs = length([xx || {RObj, _Idx} <- Replied, riak_kv_util:is_x_deleted(RObj)]),
-            Reply = fail_reply(R, NumR, NumR - DelObjs, NumNotFound + DelObjs, Fails),
-            Final = merge(Replied, AllowMult),
-            {reply, Reply, update_timing(StateData#state{final_obj = Final})};
-        true ->
-            {false, StateData}
-    end.
-                    
-has_all_replies(#state{replied_r=R,replied_fail=F,replied_notfound=NF, n=N}) ->
-    length(R) + length(F) + length(NF) >= N.
-
-finalize(StateData=#state{replied_r=[]}) ->
-    case has_all_replies(StateData) of
-        true -> {stop,normal,StateData};
-        false -> {next_state,waiting_read_repair,StateData}
-    end;
-finalize(StateData) ->
-    case has_all_replies(StateData) of
-        true -> really_finalize(StateData);
+maybe_finalize(StateData=#state{get_core = GetCore}) ->
+    case riak_kv_get_core:has_all_results(GetCore) of
+        true -> finalize(StateData);
         false -> {next_state,waiting_read_repair,StateData}
     end.
 
-really_finalize(StateData=#state{allowmult = AllowMult,
-                                 final_obj = FinalObj,
-                                 preflist2=Sent,
-                                 replied_r=RepliedR,
-                                 bkey=BKey,
-                                 req_id=ReqId,
-                                 replied_notfound=NotFound,
-                                 starttime=StartTime,
-                                 bucket_props=BucketProps}) ->
-    Final = case FinalObj of
-                undefined -> %% Recompute if extra read repairs have arrived
-                    merge(RepliedR,AllowMult);
-                _ ->
-                    FinalObj
-            end,
-    case Final of
-        tombstone ->
-            maybe_finalize_delete(StateData);
-        {ok,_} ->
-            maybe_do_read_repair(Sent,Final,RepliedR,NotFound,BKey,
-                                 ReqId,StartTime,BucketProps);
-        _ -> nop
+finalize(StateData=#state{get_core = GetCore}) ->
+    {Action, UpdGetCore} = riak_kv_get_core:final_action(GetCore),
+    UpdStateData = StateData#state{get_core = UpdGetCore},
+    case Action of
+        delete ->
+            maybe_delete(UpdStateData);
+        {read_repair, Indices, RepairObj} ->
+            read_repair(Indices, RepairObj, UpdStateData);
+        _Nop ->
+            ok
     end,
     {stop,normal,StateData}.
 
-maybe_finalize_delete(_StateData=#state{replied_notfound=NotFound,n=N,
-                                        replied_r=RepliedR,
-                                        preflist2=Sent,req_id=ReqId,
-                                        bkey=BKey}) ->
-    IdealNodes = [{I,Node} || {{I,Node},primary} <- Sent],
-    case length(IdealNodes) of
-        N -> % this means we sent to a perfect preflist
-            case (length(RepliedR) + length(NotFound)) of
-                N -> % and we heard back from all nodes with non-failure
-                    case lists:all(fun(X) -> riak_kv_util:is_x_deleted(X) end,
-                                   [O || {O,_I} <- RepliedR]) of
-                        true -> % and every response was X-Deleted, go!
-                            riak_kv_vnode:del(IdealNodes, BKey, ReqId);
-                        _ -> nop
-                    end;
-                _ -> nop
-            end;
-        _ -> nop
-    end.
-
-maybe_do_read_repair(Sent,Final,RepliedR,NotFound,BKey,ReqId,StartTime,BucketProps) ->
-    Targets = ancestor_indices(Final, RepliedR) ++ NotFound,
-    {ok, FinalRObj} = Final,
-    case Targets of
-        [] -> nop;
+%% Maybe issue deletes if all primary nodes are available.
+%% Get core will only requestion deletion if all vnodes
+%% replies with the same value.
+maybe_delete(_StateData=#state{n = N, preflist2=Sent,
+                               req_id=ReqId, bkey=BKey}) ->
+    %% Check sent to a perfect preflist and we can delete
+    IdealNodes = [{I, Node} || {{I, Node}, primary} <- Sent],
+    case length(IdealNodes) == N of
+        true ->
+            riak_kv_vnode:del(IdealNodes, BKey, ReqId);
         _ ->
-            RepairPreflist = [{Idx, Node} || {{Idx,Node},_Type} <- Sent, 
-                                            lists:member(Idx, Targets)],
-            riak_kv_vnode:readrepair(RepairPreflist, BKey, FinalRObj, ReqId, 
-                                     StartTime, [{returnbody, false},
-                                                 {bucket_props, BucketProps}]),
-            riak_kv_stat:update(read_repairs)
+            nop
     end.
 
+%% Issue read repairs for any vnodes that are out of date
+read_repair(Indices, RepairObj,
+            #state{req_id = ReqId, starttime = StartTime,
+                   preflist2 = Sent, bkey = BKey, bucket_props = BucketProps}) ->
+    RepairPreflist = [{Idx, Node} || {{Idx, Node}, _Type} <- Sent, 
+                                     lists:member(Idx, Indices)],
+    riak_kv_vnode:readrepair(RepairPreflist, BKey, RepairObj, ReqId, 
+                             StartTime, [{returnbody, false},
+                                         {bucket_props, BucketProps}]),
+    riak_kv_stat:update(read_repairs).
 
-fail_reply(_R, _NumR, 0, NumNotFound, []) when NumNotFound > 0 ->
-    {error, notfound};
-fail_reply(R, NumR, _NumNotDeleted, _NumNotFound, _Fails) ->
-    {error, {r_val_unsatisfied, R,  NumR}}.
 
 get_option(Name, Options, Default) ->
     proplists:get_value(Name, Options, Default).
@@ -400,45 +333,6 @@ client_reply(Reply, StateData = #state{from = {raw, ReqId, Pid}, options = Optio
           end,
     Pid ! Msg. 
 
-respond(VResponses,AllowMult) ->
-    Merged = merge(VResponses, AllowMult),
-    case Merged of
-        tombstone ->
-            Reply = {error,notfound};
-        {error, notfound} ->
-            Reply = Merged;
-        {ok, Obj} ->
-            case riak_kv_util:is_x_deleted(Obj) of
-                true ->
-                    Reply = {error, notfound};
-                false ->
-                    Reply = {ok, Obj}
-            end
-    end,
-    {Reply, Merged}.
-
-merge(VResponses, AllowMult) ->
-   merge_robjs([R || {R,_I} <- VResponses],AllowMult).
-
-merge_robjs([], _) ->
-    {error, notfound};
-merge_robjs(RObjs0,AllowMult) ->
-    RObjs1 = [X || X <- [riak_kv_util:obj_not_deleted(O) ||
-                            O <- RObjs0], X /= undefined],
-    case RObjs1 of
-        [] -> tombstone;
-        _ ->
-            RObj = riak_object:reconcile(RObjs0,AllowMult),
-            {ok, RObj}
-    end.
-
-strict_descendant(O1, O2) ->
-    vclock:descends(riak_object:vclock(O1),riak_object:vclock(O2)) andalso
-    not vclock:descends(riak_object:vclock(O2),riak_object:vclock(O1)).
-
-ancestor_indices({ok, Final},AnnoObjects) ->
-    [Idx || {O,Idx} <- AnnoObjects, strict_descendant(Final, O)].
-
 update_timing(StateData = #state{startnow = StartNow}) ->
     EndNow = now(),
     StateData#state{get_usecs = timer:now_diff(EndNow, StartNow)}.
@@ -452,19 +346,12 @@ client_info([], _StateData, Acc) ->
     Acc;
 client_info([timing | Rest], StateData = #state{get_usecs = GetUsecs}, Acc) ->
     client_info(Rest, StateData, [{duration, GetUsecs} | Acc]);
-client_info([vnodes | Rest], StateData = #state{num_r = NumOks,
-                                                replied_fail = Fail}, Acc) ->
-    Oks = [{vnode_oks, NumOks}],
-    Info = case Fail of
-               [] ->
-                   Oks;
-               _ ->
-                   Errors = [Err || {Err, _Idx} <- Fail],
-                   [{vnode_errors, Errors} | Oks]
-           end,
+client_info([vnodes | Rest], StateData = #state{get_core = GetCore}, Acc) ->
+    Info = riak_kv_get_core:info(GetCore),
     client_info(Rest, StateData, Info ++ Acc);
 client_info([Unknown | Rest], StateData, Acc) ->
     client_info(Rest, StateData, [{Unknown, unknown_detail} | Acc]).
+
 
 details() ->
     [timing,
