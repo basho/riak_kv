@@ -1,3 +1,23 @@
+%% -------------------------------------------------------------------
+%%
+%% Copyright (c) 2011 Basho Technologies, Inc.
+%%
+%% This file is provided to you under the Apache License,
+%% Version 2.0 (the "License"); you may not use this file
+%% except in compliance with the License. You may obtain
+%% a copy of the License at
+%%
+%% http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing,
+%% software distributed under the License is distributed on an
+%% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+%% KIND, either express or implied. See the License for the
+%% specific language governing permissions and limitations
+%% under the License.
+%%
+%% -------------------------------------------------------------------
+
 %% Test proper URL decoding behavior over REST API.
 %%
 %% This test is designed to run against a running Riak node, and will be
@@ -66,7 +86,7 @@ compat_encoding_case({URL, Node}) ->
 
     %% Retrieve key list and check that the key was not decoded
     {ok, {_, _, Body}} =
-        httpc:request(get, {"http://localhost:8091/riak/rest1?keys=true",
+        httpc:request(get, {URL ++ "/riak/rest1?keys=true",
                             []}, [], []),
 
     {struct, Props} = mochijson2:decode(Body),
@@ -82,7 +102,7 @@ compat_encoding_case({URL, Node}) ->
     %% Retrieve link header and check that it is singly encoded, corresponding
     %% to a decoded internal link.
     {ok, {_, Headers, _}} = 
-        httpc:request(get, {"http://localhost:8091/riak/rest_links/compat",
+        httpc:request(get, {URL ++ "/riak/rest_links/compat",
                             []}, [], []),
 
 
@@ -112,7 +132,7 @@ compat_encoding_case({URL, Node}) ->
 
     %% Test that link walk starting at encoded key works.
     {ok, {_, _, EWalk}} = 
-        httpc:request(get, {"http://localhost:8091/riak/rest1/%40compat/_,_,1",
+        httpc:request(get, {URL ++ "/riak/rest1/%40compat/_,_,1",
                             []}, [], []),
     ?assert(string:str(EWalk, "Location: /riak/basic/obj") /= 0),
 
@@ -146,7 +166,7 @@ compat_encoding_case({URL, Node}) ->
 
     %% Retrieve key list and check that the key was decoded.
     {ok, {_, _, HBody}} =
-        httpc:request(get, {"http://localhost:8091/riak/rest3?keys=true",
+        httpc:request(get, {URL ++ "/riak/rest3?keys=true",
                             []}, [], []),
     {struct, HProps} = mochijson2:decode(HBody),
     ?assertMatch([<<"@compat">>], proplists:get_value(<<"keys">>, HProps)).
@@ -169,7 +189,7 @@ sane_encoding_case({URL, Node}) ->
 
     %% Retrieve key list and check that the key was decoded
     {ok, {_, _, Body}} =
-        httpc:request(get, {"http://localhost:8091/riak/rest2?keys=true",
+        httpc:request(get, {URL ++ "/riak/rest2?keys=true",
                             []}, [], []),
 
     {struct, Props} = mochijson2:decode(Body),
@@ -185,7 +205,7 @@ sane_encoding_case({URL, Node}) ->
     %% Retrieve link header and check that it is singly encoded, corresponding
     %% to a decoded internal link.
     {ok, {_, Headers, _}} = 
-        httpc:request(get, {"http://localhost:8091/riak/rest_links/sane",
+        httpc:request(get, {URL ++ "/riak/rest_links/sane",
                             []}, [], []),
 
     Links = proplists:get_value("link", Headers),
@@ -213,7 +233,7 @@ sane_encoding_case({URL, Node}) ->
 
     %% Test that link walk starting at encoded key works.
     {ok, {_, _, EWalk}} = 
-        httpc:request(get, {"http://localhost:8091/riak/rest2/%40sane/_,_,1",
+        httpc:request(get, {URL ++ "/riak/rest2/%40sane/_,_,1",
                             []}, [], []),
     ?assert(string:str(EWalk, "Location: /riak/basic/obj") /= 0),
 
