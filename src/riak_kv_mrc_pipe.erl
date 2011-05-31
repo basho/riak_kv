@@ -111,11 +111,11 @@ map2pipe(FunSpec, Arg, Keep, I) ->
        ||Keep]].
 
 reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie, QueryType) ->
-    PreviousIsReduceP = I > 0 andalso element(I, QueryType) == reduce,
+    PrevIsReduceP = I > 0 andalso element(I, QueryType) == reduce,
     ConstantFun = fun(_) -> chash:key_of(ConstHashCookie) end,
     [#fitting_spec{name={reduce,I},
                    module=riak_kv_w_mapred,
-                   arg=reduce_compat(FunSpec, Arg, PreviousIsReduceP),
+                   arg={rct, reduce_compat(FunSpec, Arg, PrevIsReduceP), Arg},
                    chashfun=ConstantFun}
      |[#fitting_spec{name=I,
                      module=riak_pipe_w_tee,

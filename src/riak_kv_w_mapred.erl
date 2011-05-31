@@ -35,6 +35,8 @@
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 
 -record(state, {acc :: list(),
+                delay :: integer(),
+                delay_max :: integer(),
                 p :: riak_pipe_vnode:partition(),
                 fd :: riak_pipe_fitting:details()}).
 -opaque state() :: #state{}.
@@ -45,28 +47,42 @@
            riak_pipe_fitting:details()) ->
          {ok, state()}.
 init(Partition, FittingDetails) ->
-    {ok, #state{acc=[], p=Partition, fd=FittingDetails}}.
+    {rct, _ReduceFun, ReduceArg} = FittingDetails#fitting_details.arg,
+    Props = case ReduceArg of
+                L when is_list(L) -> L;         % May or may not be a proplist
+                _                 -> []
+            end,
+    DelayMax = case proplists:get_value(reduce_phase_only_1, Props) of
+                   undefined ->
+                       proplists:get_value(reduce_phase_batch_size, Props, 1);
+                   true ->
+                       999999999999999999 % Ah, bignums
+               end,
+    {ok, #state{acc=[], delay=0, delay_max = DelayMax,
+                p=Partition, fd=FittingDetails}}.
 
 %% @doc Process looks up the previous result for the `Key', and then
 %%      evaluates the funtion on that with the new `Input'.
 -spec process(term(), boolean(), state()) -> {ok, state()}.
-process(Input, _Last, #state{acc=OldAcc}=State) ->
+process(Input, _Last,
+        #state{acc=OldAcc, delay=Delay, delay_max=DelayMax}=State) ->
     InAcc = [Input|OldAcc],
-    case reduce(InAcc, State) of
-        {ok, OutAcc} ->
-            {ok, State#state{acc=OutAcc}};
-        {error, {Type, Error, Trace}} ->
-            %%TODO: forward
-            error_logger:error_msg(
-              "~p:~p reducing:~n   ~P~n   ~P",
-              [Type, Error, InAcc, 15, Trace, 15]),
-            {ok, State}
+    if Delay + 1 >= DelayMax ->
+            OutAcc = reduce(InAcc, State, "reducing"),
+            {ok, State#state{acc=OutAcc, delay=0}};
+       true ->
+            {ok, State#state{acc=InAcc, delay=Delay + 1}}
     end.
 
 %% @doc Unless the aggregation function sends its own outputs, done/1
 %%      is where all outputs are sent.
 -spec done(state()) -> ok.
-done(#state{acc=Acc, p=Partition, fd=FittingDetails}) ->
+done(#state{acc=Acc0, delay=Delay, p=Partition, fd=FittingDetails} = S) ->
+    Acc = if Delay == 0 ->
+                  Acc0;
+             true ->
+                  reduce(Acc0, S, "done()")
+          end,
     riak_pipe_vnode_worker:send_output(Acc, Partition, FittingDetails),
     ok.
 
@@ -89,35 +105,35 @@ handoff(HandoffAcc, #state{acc=Acc}=State) ->
 -spec handoff_acc([term()], [term()], state()) -> [term()].
 handoff_acc(HandoffAcc, LocalAcc, State) ->
     InAcc = HandoffAcc++LocalAcc,
-    case reduce(InAcc, State) of
-        {ok, OutAcc} ->
-            OutAcc;
-        {error, {Type, Error, Trace}} ->
-                error_logger:error_msg(
-                  "~p:~p reducing handoff:~n   ~P~n   ~P",
-                  [Type, Error, InAcc, 2, Trace, 5]),
-            LocalAcc %% don't completely barf
-    end.
+    reduce(InAcc, State, "reducing handoff").
 
 %% @doc Actually evaluate the aggregation function.
--spec reduce([term()], state()) ->
+-spec reduce([term()], state(), string()) ->
          {ok, [term()]} | {error, {term(), term(), term()}}.
-reduce(InAcc, #state{p=Partition, fd=FittingDetails}) ->
-    Fun = FittingDetails#fitting_details.arg,
+reduce(InAcc, #state{p=Partition, fd=FittingDetails}, ErrString) ->
+    {rct, Fun, _} = FittingDetails#fitting_details.arg,
     try
         {ok, OutAcc} = Fun(bogus_key, InAcc, Partition, FittingDetails),
         true = is_list(OutAcc), %%TODO: nicer error
-        {ok, OutAcc}
+        OutAcc
     catch Type:Error ->
-            {error, {Type, Error, erlang:get_stacktrace()}}
+            %%TODO: forward
+            error_logger:error_msg(
+              "~p:~p ~s:~n   ~P~n   ~P",
+              [Type, Error, ErrString, InAcc, 15, erlang:get_stacktrace(), 15]),
+            InAcc
     end.
 
 %% @doc Check that the arg is a valid arity-4 function.  See {@link
 %%      riak_pipe_v:validate_function/3}.
--spec validate_arg(term()) -> ok | {error, iolist()}.
-validate_arg(Fun) when is_function(Fun) ->
+-spec validate_arg({rct, function(), term()}) -> ok | {error, iolist()}.
+
+validate_arg({rct, Fun, _FunArg}) when is_function(Fun) ->
+    validate_fun(Fun).
+
+validate_fun(Fun) when is_function(Fun) ->
     riak_pipe_v:validate_function("arg", 4, Fun);
-validate_arg(Fun) ->
+validate_fun(Fun) ->
     {error, io_lib:format("~p requires a function as argument, not a ~p",
                           [?MODULE, riak_pipe_v:type_of(Fun)])}.
 
@@ -126,3 +142,4 @@ validate_arg(Fun) ->
 -spec chashfun({term(), term()}) -> riak_pipe_vnode:chash().
 chashfun({Key,_}) ->
     chash:key_of(Key).
+

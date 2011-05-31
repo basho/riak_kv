@@ -246,3 +246,70 @@ compat_basic1_test_() ->
              end)
           ]
      end}.
+
+compat_buffer_test_() ->
+    IntsBucket = <<"foonum">>,
+    NumInts = 2000,
+    ReduceSumFun = fun(Inputs, _) -> [lists:sum(Inputs)] end,
+
+    {setup,
+     prepare_runtime(),
+     teardown_runtime(),
+     fun(_) ->
+         [
+          ?_test(
+             %% The data created by this step is used by all/most of the
+             %% following tests.
+             ok = riak_kv_mrc_pipe:example_setup(NumInts)
+            ),
+          ?_test(
+             %% Verify that example_setup/1 did what it was supposed to.
+             begin
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       none, true},
+                      {reduce, {qfun, ReduceSumFun},
+                       none, true}],
+                 {ok, [MapRs, [500500]]} =
+                     riak_kv_mrc_pipe:mapred(IntsBucket, Spec),
+                 NumInts = length(MapRs)
+             end),
+          ?_test(
+             %% Test the {reduce_phase_batch_size, int()} option
+             begin
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       none, true},
+                      {reduce, {qfun, ReduceSumFun},
+                       [{reduce_phase_batch_size, 10}], true}],
+                 {ok, [MapRs, [500500]]} =
+                     riak_kv_mrc_pipe:mapred(IntsBucket, Spec),
+                 NumInts = length(MapRs)
+             end),
+          ?_test(
+             %% Test degenerate {reduce_phase_batch_size, 0} option
+             begin
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       none, true},
+                      {reduce, {qfun, ReduceSumFun},
+                       [{reduce_phase_batch_size, 0}], true}],
+                 {ok, [MapRs, [500500]]} =
+                     riak_kv_mrc_pipe:mapred(IntsBucket, Spec),
+                 NumInts = length(MapRs)
+             end),
+          ?_test(
+             %% Test degenerate reduce_phase_only_1 option
+             begin
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       none, true},
+                      {reduce, {qfun, ReduceSumFun},
+                       [reduce_phase_only_1], true}],
+                 {ok, [MapRs, [500500]]} =
+                     riak_kv_mrc_pipe:mapred(IntsBucket, Spec),
+                 NumInts = length(MapRs)
+             end)
+         ]
+     end}.
+
