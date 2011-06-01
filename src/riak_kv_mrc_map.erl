@@ -50,8 +50,12 @@
         {modfun, Module :: atom(), Function :: atom()}
       | {qfun, fun( (Input :: term(),
                      KeyData :: term(),
-                     PhaseArg :: term()) -> [term()] )}.
-%% TODO: JS, etc.
+                     PhaseArg :: term()) -> [term()] )}
+      | {strfun, {Bucket :: binary(), Key :: binary()}}
+      | {strfun, Source :: binary()}
+      | {jsanon, {Bucket :: binary(), Key :: binary()}}
+      | {jsfun, Name :: binary()}
+      | {jsanon, Source :: binary()}.
 
 %% @doc Init just stashes everything for later.
 -spec init(riak_pipe_vnode:partition(), riak_pipe_fitting:details()) ->
@@ -70,14 +74,23 @@ process(Input, _Last,
     send_results(Results, State).
         
 %% @doc Evaluate the map function.
-%%      TODO: JavaScript, strfun, KV-stored funs
 -spec map(map_phase_spec(), term(), term()) -> [term()].
 map({modfun, Module, Function}, Arg, Input) ->
     %% TODO: keydata
     Module:Function(Input, undefined, Arg);
 map({qfun, Fun}, Arg, Input) ->
     %% TODO: keydata
-    Fun(Input, undefined, Arg).
+    Fun(Input, undefined, Arg);
+map({strfun, {Bucket, Key}}, _Arg, _Input) ->
+    exit({strfun, {Bucket, Key}});
+map({strfun, Source}, _Arg, _Input) ->
+    exit({strfun, Source});
+map({jsanon, {Bucket, Key}}, _Arg, _Input) ->
+    exit({jsanon, {Bucket, Key}});
+map({jsfun, Name}, _Arg, _Input) ->
+    exit({jsfun, Name});
+map({jsanon, Source}, _Arg, _Input) ->
+    exit({jsanon, Source}).
 
 %% @doc Send results to the next fitting.
 -spec send_results([term()], state()) -> {ok, state()}.
@@ -102,7 +115,16 @@ validate_arg({Phase, _Arg}) ->
               "PhaseSpec", 3, erlang:make_fun(Module, Function, 3));
         {qfun, Fun} ->
             riak_pipe_v:validate_function("PhaseSpec", 3, Fun);
-        %% TODO: JS, etc.
+        {strfun, {_Bucket, _Key}} ->
+            {error, "{strfun, {Bucket, Key}} is not yet implemented"};
+        {strfun, _Source} ->
+            {error, "{strfun, Source} is not yet implemented"};
+        {jsanon, {_Bucket, _Key}} ->
+            {error, "{jsanon, {Bucket, Key}} is not yet implemented"};
+        {jsfun, _Name} ->
+            {error, "{jsfun, Name} is not yet implemented"};
+        {jsanon, _Source} ->
+            {error, "{jsanon, Source} is not yet implemented"};
         _ ->
             {error, io_lib:format(
                       "The PhaseSpec part of the argument for ~p"
