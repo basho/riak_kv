@@ -18,7 +18,47 @@
 %%
 %% -------------------------------------------------------------------
 
-%% Riak KV MapReduce <-> Riak Pipe Compatibility
+%% @doc Riak KV MapReduce / Riak Pipe Compatibility
+%%
+%% == About reduce phase compatibility ==
+%%
+%% An Erlang map phase is defined by the tuple:
+%% `{reduce, Fun::function(2), Arg::term(), Keep::boolean()}'.
+%%
+%% <ul>
+%% <li> `Fun' takes the form of `Fun(InputList, Arg)' where `Arg' is
+%% the argument specified in the definition 4-tuple above.
+%% NOTE: Unlike a fold function (e.g., `lists:foldl/3'), the `Arg' argument
+%%       is constant for each iteration of the reduce function. </li>
+%% <li> The `Arg' may be any term, as the caller sees fit.  However, if
+%%      the caller wishes to have more control over the reduce phase,
+%%      then `Arg' must be a property list.  The control knobs that may
+%%      be specified are:
+%%      <ul>
+%%      <li> `reduce_phase_only_1' will buffer all inputs to the reduce
+%%           phase fitting and only call the reduce function once.
+%%           NOTE: Use with caution to avoid excessive memory use. </li>
+%%      <li> `{reduce_phase_batch_size, Max::integer()}' will buffer all
+%%           inputs to the reduce phase fitting and call the reduce function
+%%           after `Max' items have been buffered. </li>
+%%      </ul>
+%% If neither `reduce_phase_only_1' nor `{reduce_phase_batch_size, Max}'
+%% are present, then the batching size will default to the value of the
+%% application environment variable
+%% `mapred_reduce_phase_batch_size' in the `riak_kv' application.
+%%
+%% NOTE: This mixing of user argument data and MapReduce implementation
+%%       metadata is suboptimal, but to do separate the two types of
+%%       data would require a change that is incompatible with the current
+%%       Erlang MapReduce input specification, e.g., a 5-tuple such as
+%%       `{reduce, Fun, Arg, Keep, MetaData}' or else a custom wrapper
+%%       around the 3rd arg,
+%%       e.g. `{reduce, Fun, {magic_tag, Arg, Metadata}, Keep}'.
+%% </li>
+%% <li> If `Keep' is `true', then the output of this phase will be returned
+%%      to the caller (i.e. the output will be "kept"). </li>
+%% </ul>
+
 -module(riak_kv_mrc_pipe).
 
 -export([

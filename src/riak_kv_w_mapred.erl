@@ -52,9 +52,11 @@ init(Partition, FittingDetails) ->
                 L when is_list(L) -> L;         % May or may not be a proplist
                 _                 -> []
             end,
+    AppMax = app_helper:get_env(riak_kv, mapred_reduce_phase_batch_size, 1),
     DelayMax = case proplists:get_value(reduce_phase_only_1, Props) of
                    undefined ->
-                       proplists:get_value(reduce_phase_batch_size, Props, 1);
+                       proplists:get_value(reduce_phase_batch_size,
+                                           Props, AppMax);
                    true ->
                        999999999999999999 % Ah, bignums
                end,
