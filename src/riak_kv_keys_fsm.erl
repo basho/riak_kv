@@ -46,7 +46,7 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 %% Test API
--export([test_link/7, test_link/4]).
+-export([test_link/6, test_link/4]).
 -endif.
 
 %% gen_fsm callbacks
@@ -76,7 +76,6 @@
                 response_count=0 :: non_neg_integer(),
                 timeout :: timeout()
                }).
-
 -define(RINGTOP, trunc(math:pow(2,160)-1)).  % SHA-1 space
 
 %% ===================================================================
@@ -98,9 +97,9 @@ start_link(ReqId, Input, Timeout, ClientType, From) ->
 %% @doc Start a riak_kv_keys_fsm.
 -spec start_link(from(), input(), timeout(), atom()) ->
                         {ok, pid()} | ignore | {error, term()}.
-start_link(From, Bucket, Timeout, ClientType) ->
+start_link(From, Input, Timeout, ClientType) ->
     gen_fsm:start_link(?MODULE,
-                  [From, Bucket, Timeout, ClientType], []).
+                  [From, Input, Timeout, ClientType], []).
 
 %% ===================================================================
 %% Test API
@@ -113,7 +112,7 @@ start_link(From, Bucket, Timeout, ClientType) ->
 %% bucket_props - bucket properties
 %% preflist2 - [{{Idx,Node},primary|fallback}] preference list
 %%
-test_link(ReqId, Input, _Key, R, Timeout, From, StateProps) ->
+test_link(ReqId, Input, R, Timeout, From, StateProps) ->
     test_link({raw, ReqId, From}, Input, [{r, R}, {timeout, Timeout}], StateProps).
 
 test_link(From, Input, _Options, StateProps) ->
