@@ -229,12 +229,16 @@ malformed_request(RD, Ctx) ->
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
     case get_riak_client(RiakProps) of
         {ok, C} ->
+            CtxBucket =
+                riak_kv_wm_raw:maybe_decode_uri(RD, wrq:path_info(bucket, RD)),
+            CtxKey =
+                riak_kv_wm_raw:maybe_decode_uri(RD, wrq:path_info(key, RD)),
             {true,
              RD,
              Ctx#ctx{
                client=C,
-               bucket=list_to_binary(wrq:path_info(bucket, RD)),
-               key=list_to_binary(wrq:path_info(key, RD))
+               bucket=list_to_binary(CtxBucket),
+               key=list_to_binary(CtxKey)
               }};
         Error ->
             {false,
