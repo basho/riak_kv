@@ -67,6 +67,7 @@
              riak_kv_wm_ping,
              riak_kv_wm_raw,
              riak_kv_wm_stats,
+             riak_kv_encoding_migrate,
              riak_object
             ]},
   {applications, [
