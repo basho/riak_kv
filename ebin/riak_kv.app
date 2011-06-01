@@ -46,6 +46,7 @@
              riak_kv_mapred_query,
              riak_kv_mapred_term,
              riak_kv_mapreduce,
+             riak_kv_mrc_map,
              riak_kv_mrc_pipe,
              riak_kv_multi_backend,
              riak_kv_pb_listener,

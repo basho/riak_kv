@@ -61,8 +61,8 @@ map2pipe(FunSpec, Arg, Keep, I) ->
                    chashfun=fun riak_core_util:chash_key/1,
                    nval=fun bkey_nval/1},
      #fitting_spec{name={xform_map,I},
-                   module=riak_pipe_w_xform,
-                   arg=map_xform_compat(FunSpec, Arg),
+                   module=riak_kv_mrc_map,
+                   arg={FunSpec, Arg},
                    chashfun=follow}
      |[#fitting_spec{name=I,
                      module=riak_pipe_w_tee,
@@ -104,20 +104,6 @@ fix_final_fitting(Fittings) ->
           when is_integer(Int) ->
             %% fix final name so outputs look like old API
             lists:reverse([Final#fitting_spec{name=Int}|Rest])
-    end.
-
-%% TODO: JavaScript, strfun, KV-stored funs
-map_xform_compat({modfun, Module, Function}, Arg) ->
-    map_xform_compat({qfun, erlang:make_fun(Module, Function, 3)}, Arg);
-map_xform_compat({qfun, Fun}, Arg) ->
-    fun(Input, Partition, FittingDetails) ->
-            ?T(FittingDetails, [map], {mapping, Input}),
-            %%TODO: keydata
-            Results = Fun(Input, undefined, Arg),
-            ?T(FittingDetails, [map], {produced, Results}),
-            [ riak_pipe_vnode_worker:send_output(R, Partition, FittingDetails)
-              || R <- Results ],
-            ok
     end.
 
 reduce_add_key_compat(Input, Partition, FittingDetails) ->
