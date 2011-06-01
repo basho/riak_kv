@@ -38,6 +38,8 @@
          done/1,
          validate_arg/1]).
 
+-include_lib("riak_kv_js_pools.hrl").
+
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
 
@@ -57,6 +59,8 @@
       | {jsfun, Name :: binary()}
       | {jsanon, Source :: binary()}.
 
+-define(DEFAULT_JS_RESERVE_ATTEMPTS, 10).
+
 %% @doc Init just stashes everything for later.
 -spec init(riak_pipe_vnode:partition(), riak_pipe_fitting:details()) ->
          {ok, state()}.
@@ -65,22 +69,30 @@ init(Partition, #fitting_details{arg={Phase, Arg}}=FittingDetails) ->
 
 %% @doc Process evaluates the fitting's argument function, and sends
 %%      output downstream.
--spec process(term(), boolean(), state()) -> {ok, state()}.
+-spec process(term(), boolean(), state())
+         -> {ok | forward_preflist, state()}.
 process(Input, _Last,
         #state{fd=_FittingDetails, phase=Phase, arg=Arg}=State) ->
     ?T(_FittingDetails, [map], {mapping, Input}),
-    Results = map(Phase, Arg, Input),
-    ?T(_FittingDetails, [map], {produced, Results}),
-    send_results(Results, State).
+    case map(Phase, Arg, Input) of
+        {ok, Results} ->
+            ?T(_FittingDetails, [map], {produced, Results}),
+            send_results(Results, State),
+            {ok, State};
+        {forward_preflist, Reason} ->
+            ?T(_FittingDetails, [map], {forward_preflist, Reason}),
+            {forward_preflist, State}
+    end.
         
 %% @doc Evaluate the map function.
--spec map(map_phase_spec(), term(), term()) -> [term()].
+-spec map(map_phase_spec(), term(), term())
+         -> {ok, [term()]} | {forward_preflist, Reason :: term()}.
 map({modfun, Module, Function}, Arg, Input) ->
     %% TODO: keydata
-    Module:Function(Input, undefined, Arg);
+    {ok, Module:Function(Input, undefined, Arg)};
 map({qfun, Fun}, Arg, Input) ->
     %% TODO: keydata
-    Fun(Input, undefined, Arg);
+    {ok, Fun(Input, undefined, Arg)};
 map({strfun, {Bucket, Key}}, _Arg, _Input) ->
     exit({strfun, {Bucket, Key}});
 map({strfun, Source}, _Arg, _Input) ->
@@ -89,14 +101,21 @@ map({jsanon, {Bucket, Key}}, _Arg, _Input) ->
     exit({jsanon, {Bucket, Key}});
 map({jsfun, Name}, _Arg, _Input) ->
     exit({jsfun, Name});
-map({jsanon, Source}, _Arg, _Input) ->
-    exit({jsanon, Source}).
+map({jsanon, Source}, Arg, Input) ->
+    %% TODO: keydata
+    JSArgs = [riak_object:to_json(Input), <<"">>, Arg],
+    JSCall = {{jsanon, Source}, JSArgs},
+    case riak_kv_js_manager:blocking_dispatch(
+           ?JSPOOL_MAP, JSCall, ?DEFAULT_JS_RESERVE_ATTEMPTS) of
+        {ok, Results}   -> {ok, Results};
+        {error, no_vms} -> {forward_preflist, no_js_vms}
+    end.
 
 %% @doc Send results to the next fitting.
--spec send_results([term()], state()) -> {ok, state()}.
-send_results(Results, #state{p=P, fd=FD}=State) ->
+-spec send_results([term()], state()) -> ok.
+send_results(Results, #state{p=P, fd=FD}) ->
     [ riak_pipe_vnode_worker:send_output(R, P, FD) || R <- Results],
-    {ok, State}.
+    ok.
 
 %% @doc Unused.
 -spec done(state()) -> ok.
@@ -123,8 +142,14 @@ validate_arg({Phase, _Arg}) ->
             {error, "{jsanon, {Bucket, Key}} is not yet implemented"};
         {jsfun, _Name} ->
             {error, "{jsfun, Name} is not yet implemented"};
-        {jsanon, _Source} ->
-            {error, "{jsanon, Source} is not yet implemented"};
+        {jsanon, Source} ->
+            if is_binary(Source) -> ok; %% TODO: validate JS code somehow?
+               true ->
+                    {error, io_lib:format(
+                              "~p requires that the Source of a jsanon"
+                              " request be a binary, not a ~p",
+                              [?MODULE, riak_pipe_v:type_of(Source)])}
+            end;
         _ ->
             {error, io_lib:format(
                       "The PhaseSpec part of the argument for ~p"
