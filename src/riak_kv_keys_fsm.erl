@@ -173,7 +173,12 @@ initialize(timeout, StateData0=#state{bucket=Bucket,
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     NVal = proplists:get_value(n_val, BucketProps),
     PartitionCount = riak_core_ring:num_partitions(Ring),
-    case plan_and_execute(ReqId, Input, NVal, PartitionCount, Ring, Timeout, [], []) of
+    %% Get the list of all nodes and the list of available
+    %% nodes so we can have a list of unavailable nodes
+    %% while creating a coverage plan.
+    Nodes = riak_core_ring:all_members(),
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    case plan_and_execute(ReqId, Input, NVal, PartitionCount, Ring, Timeout, [], [Nodes -- UpNodes]) of
         {ok, RequiredResponseCount} ->
             StateData = StateData0#state{required_responses=RequiredResponseCount},
             {next_state, waiting_kl, StateData, Timeout};
