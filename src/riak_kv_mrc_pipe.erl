@@ -22,7 +22,7 @@
 %%
 %% == About reduce phase compatibility ==
 %%
-%% An Erlang map phase is defined by the tuple:
+%% An Erlang reduce phase is defined by the tuple:
 %% `{reduce, Fun::function(2), Arg::term(), Keep::boolean()}'.
 %%
 %% <ul>
@@ -83,9 +83,11 @@ mapred(Inputs, Query) ->
     collect_outputs(Sink, NumKeeps).
 
 mapred_stream(Query0) ->
-    Query = keep_ify_query(Query0),
+    Query = correct_keeps(Query0),
     NumKeeps = count_keeps_in_query(Query),
     {riak_pipe:exec(mr2pipe_phases(Query), []), NumKeeps}.
+
+%% The plan functions are useful for seeing equivalent (we hope) pipeline.
 
 mapred_plan(Query) ->
     mr2pipe_phases(Query).
@@ -133,6 +135,13 @@ mr2pipe_phase({reduce,FunSpec,Arg,Keep}, I, ConstHashCookie, QueryT) ->
 mr2pipe_phase({link,Bucket,Tag,Keep}, I, _ConstHashCookie, _QueryT)->
     link2pipe(Bucket, Tag, Keep, I).
 
+%% Prereduce logic: add pre_reduce fittings to the pipe line if
+%% the current item is a map (if you're calling this func, yes it is)
+%% and if the next item in the query is a reduce and if the map's arg
+%% or system config wants us to use prereduce.
+%% Remember: `I` starts counting at 0, but the element BIF starts at 1,
+%% so the element of the next item is I+2.
+
 map2pipe(FunSpec, Arg, Keep, I, QueryT) ->
     PrereduceP = I+2 =< size(QueryT) andalso
         query_type(I+2, QueryT) == reduce andalso
@@ -158,7 +167,9 @@ map2pipe(FunSpec, Arg, Keep, I, QueryT) ->
              [#fitting_spec{name={prereduce,I},
                             module=riak_kv_w_mapred,
                             arg={rct,
-                                 reduce_compat(R_FunSpec, R_Arg, false), Arg},
+                                 riak_kv_w_mapred:reduce_compat(R_FunSpec,
+                                                                R_Arg, false),
+                                 Arg},
                             chashfun=follow},
               %% The map_xform_compat innards does the job that we need of
               %% sending each individual X of the prereduce output list
@@ -189,10 +200,14 @@ identity(InputList, _Unused, _Arg) ->
 
 reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie, QueryT) ->
     PrevIsReduceP = I > 0 andalso query_type(I, QueryT) == reduce,
-    ConstantFun = fun(_) -> chash:key_of(ConstHashCookie) end,
+    Hash = chash:key_of(ConstHashCookie),
+    ConstantFun = fun(_) -> Hash end,
     [#fitting_spec{name={reduce,I},
                    module=riak_kv_w_mapred,
-                   arg={rct, reduce_compat(FunSpec, Arg, PrevIsReduceP), Arg},
+                   arg={rct,
+                        riak_kv_w_mapred:reduce_compat(FunSpec, Arg,
+                                                       PrevIsReduceP),
+                        Arg},
                    chashfun=ConstantFun}
      |[#fitting_spec{name=I,
                      module=riak_pipe_w_tee,
@@ -231,37 +246,14 @@ map_xform_compat({qfun, Fun}, Arg) ->
             ok
     end.
 
-reduce_compat({modfun, Module, Function}, Arg, PreviousIsReduceP) ->
-    reduce_compat({qfun, erlang:make_fun(Module, Function, 2)}, Arg,
-                  PreviousIsReduceP);
-reduce_compat({qfun, Fun}, Arg, PreviousIsReduceP) ->
-    fun(_Key, Inputs0, _Partition, _FittingDetails) ->
-            %% Concatenate reduce output lists, if previous stage was reduce
-            Inputs = if PreviousIsReduceP ->
-                             lists:append(Inputs0);
-                        true ->
-                             Inputs0
-                     end,
-            ?T(_FittingDetails, [reduce], {reducing, length(Inputs)}),
-            Output = Fun(Inputs, Arg),
-            ?T(_FittingDetails, [reduce], {reduced, length(Output)}),
-            {ok, Output}
-    end.
-
-%% chashfun for 0 or 1 reducer per node.
-%% reduce_local_chashfun(_) ->
-%%     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-%%     riak_pipe_vnode:hash_for_partition(
-%%       hd(riak_core_ring:my_indices(Ring))).
-
 bkey_nval({Bucket, _Key}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     {n_val, NVal} = lists:keyfind(n_val, 1, BucketProps),
     NVal.
 
-keep_ify_query([]) ->
+correct_keeps([]) ->
     [];
-keep_ify_query(Query) ->
+correct_keeps(Query) ->
     case lists:all(fun({_, _, _, false}) -> true;
                       (_)                -> false
                    end, Query) of

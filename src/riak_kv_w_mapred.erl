@@ -30,9 +30,10 @@
          archive/1,
          handoff/2,
          validate_arg/1]).
--export([chashfun/1]).
+-export([chashfun/1, reduce_compat/3]).
 
 -include_lib("riak_pipe/include/riak_pipe.hrl").
+-include_lib("riak_pipe/include/riak_pipe_log.hrl").
 
 -record(state, {acc :: list(),
                 delay :: integer(),
@@ -144,4 +145,24 @@ validate_fun(Fun) ->
 -spec chashfun({term(), term()}) -> riak_pipe_vnode:chash().
 chashfun({Key,_}) ->
     chash:key_of(Key).
+
+%% @doc Compatibility wrapper for an old-school Riak MR reduce function,
+%%      which is an arity-2 function `fun(InputList, SpecificationArg)'.
+
+reduce_compat({modfun, Module, Function}, Arg, PreviousIsReduceP) ->
+    reduce_compat({qfun, erlang:make_fun(Module, Function, 2)}, Arg,
+                  PreviousIsReduceP);
+reduce_compat({qfun, Fun}, Arg, PreviousIsReduceP) ->
+    fun(_Key, Inputs0, _Partition, _FittingDetails) ->
+            %% Concatenate reduce output lists, if previous stage was reduce
+            Inputs = if PreviousIsReduceP ->
+                             lists:append(Inputs0);
+                        true ->
+                             Inputs0
+                     end,
+            ?T(_FittingDetails, [reduce], {reducing, length(Inputs)}),
+            Output = Fun(Inputs, Arg),
+            ?T(_FittingDetails, [reduce], {reduced, length(Output)}),
+            {ok, Output}
+    end.
 
