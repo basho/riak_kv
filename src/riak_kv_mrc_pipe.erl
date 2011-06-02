@@ -106,9 +106,9 @@ mr2pipe_phases([]) ->
                    chashfun=follow}];
 mr2pipe_phases(Query) ->
     Now = now(),
-    QueryType = list_to_tuple([Type || {Type, _, _, _} <- Query]),
+    QueryT = list_to_tuple(Query),
     Numbered = lists:zip(Query, lists:seq(0, length(Query)-1)),
-    Fittings0 = lists:flatten([mr2pipe_phase(P,I,Now,QueryType) ||
+    Fittings0 = lists:flatten([mr2pipe_phase(P,I,Now,QueryT) ||
                                   {P,I} <- Numbered]),
     Fs = fix_final_fitting(Fittings0),
     case lists:last(Query) of
@@ -126,14 +126,17 @@ mr2pipe_phases(Query) ->
             Fs
     end.
 
-mr2pipe_phase({map, FunSpec, Arg, Keep}, I, _ConstHashCookie, _QueryType) ->
-    map2pipe(FunSpec, Arg, Keep, I);
-mr2pipe_phase({reduce, FunSpec, Arg, Keep}, I, ConstHashCookie, QueryType) ->
-    reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie, QueryType);
-mr2pipe_phase({link, Bucket, Tag, Keep}, I, _ConstHashCookie, _QueryType) ->
+mr2pipe_phase({map,FunSpec,Arg,Keep}, I, _ConstHashCookie, QueryT) ->
+    map2pipe(FunSpec, Arg, Keep, I, QueryT);
+mr2pipe_phase({reduce,FunSpec,Arg,Keep}, I, ConstHashCookie, QueryT) ->
+    reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie, QueryT);
+mr2pipe_phase({link,Bucket,Tag,Keep}, I, _ConstHashCookie, _QueryT)->
     link2pipe(Bucket, Tag, Keep, I).
 
-map2pipe(FunSpec, Arg, Keep, I) ->
+map2pipe(FunSpec, Arg, Keep, I, QueryT) ->
+    PrereduceP = I+2 =< size(QueryT) andalso
+        query_type(I+2, QueryT) == reduce andalso
+        want_prereduce_p(I+1, QueryT),
     [#fitting_spec{name={kvget_map,I},
                    module=riak_kv_pipe_get,
                    %% TODO: perform bucket prop 'chash_keyfun' lookup at
@@ -143,15 +146,49 @@ map2pipe(FunSpec, Arg, Keep, I) ->
      #fitting_spec{name={xform_map,I},
                    module=riak_pipe_w_xform,
                    arg=map_xform_compat(FunSpec, Arg),
-                   chashfun=follow}
-     |[#fitting_spec{name=I,
-                     module=riak_pipe_w_tee,
-                     arg=sink,
-                     chashfun=follow}
-       ||Keep]].
+                   chashfun=follow}]
+     ++
+     [#fitting_spec{name=I,
+                    module=riak_pipe_w_tee,
+                    arg=sink,
+                    chashfun=follow} || Keep]
+     ++
+     if PrereduceP ->
+             {reduce, R_FunSpec, R_Arg, _Keep} = element(I+2, QueryT),
+             [#fitting_spec{name={prereduce,I},
+                            module=riak_kv_w_mapred,
+                            arg={rct,
+                                 reduce_compat(R_FunSpec, R_Arg, false), Arg},
+                            chashfun=follow},
+              %% The map_xform_compat innards does the job that we need of
+              %% sending each individual X of the prereduce output list
+              %% [X1, X2, ...] downstream, so use identity transformation.
+              #fitting_spec{name={prereduce_foreach,I},
+                            module=riak_pipe_w_xform,
+                            arg=map_xform_compat({qfun, fun identity/3},
+                                                 unused),
+                            chashfun=follow}];
+        true ->
+             []
+     end.              
 
-reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie, QueryType) ->
-    PrevIsReduceP = I > 0 andalso element(I, QueryType) == reduce,
+want_prereduce_p(Idx, QueryT) ->
+    {map, _FuncSpec, Arg, _Keep} = element(Idx, QueryT),
+    Props = case Arg of
+                L when is_list(L) -> L;         % May or may not be a proplist
+                _                 -> []
+            end,
+    AppDefault = app_helper:get_env(riak_kv, mapred_always_prereduce, false),
+    proplists:get_value(do_prereduce, Props, AppDefault).
+
+query_type(Idx, QueryT) ->
+    element(1, element(Idx, QueryT)).
+
+identity(InputList, _Unused, _Arg) ->
+    InputList.
+
+reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie, QueryT) ->
+    PrevIsReduceP = I > 0 andalso query_type(I, QueryT) == reduce,
     ConstantFun = fun(_) -> chash:key_of(ConstHashCookie) end,
     [#fitting_spec{name={reduce,I},
                    module=riak_kv_w_mapred,

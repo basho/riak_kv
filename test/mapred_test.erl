@@ -247,9 +247,9 @@ compat_basic1_test_() ->
           ]
      end}.
 
-compat_buffer_test_() ->
+compat_buffer_and_prereduce_test_() ->
     IntsBucket = <<"foonum">>,
-    NumInts = 2000,
+    NumInts = 1000,
     ReduceSumFun = fun(Inputs, _) -> [lists:sum(Inputs)] end,
 
     {setup,
@@ -306,6 +306,19 @@ compat_buffer_test_() ->
                        none, true},
                       {reduce, {qfun, ReduceSumFun},
                        [reduce_phase_only_1], true}],
+                 {ok, [MapRs, [500500]]} =
+                     riak_kv_mrc_pipe:mapred(IntsBucket, Spec),
+                 NumInts = length(MapRs)
+             end),
+          ?_test(
+             %% Prereduce+reduce_phase_only_1 (combined happily!)
+             %% and then reduce batch size = 7.
+             begin
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       [do_prereduce, reduce_phase_only_1], true},
+                      {reduce, {qfun, ReduceSumFun},
+                       [{reduce_phase_batch_size, 7}], true}],
                  {ok, [MapRs, [500500]]} =
                      riak_kv_mrc_pipe:mapred(IntsBucket, Spec),
                  NumInts = length(MapRs)
