@@ -284,7 +284,7 @@ plan_and_execute(ReqId, Input, NVal, PartitionCount, Ring, Timeout, KeyListers, 
                 _ ->
                     plan_and_execute(ReqId, Input,
                                      NVal, PartitionCount, Ring,
-                                     Timeout, AggregateKeyListers, ErrorNodes)
+                                     Timeout, AggregateKeyListers, DownNodes ++ ErrorNodes)
             end
     end.
 
