@@ -243,6 +243,19 @@ compat_basic1_test_() ->
                        5, {reduce, {qfun, ReduceSumFun}, none, true}),
                  {ok, [_, [15],[15],[15],[15],[15]]} =
                      riak_kv_mrc_pipe:mapred(IntsBucket, Spec)
+             end),
+          ?_test(
+             %% Make certain that {error, not_found} goes down the pipe
+             %% from a map phase.
+             begin
+                 Inputs = [{<<"no-such-bucket">>, <<"no-such-key!">>}],
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       {struct,[{<<"sub">>,[<<"0">>]}]}, false},
+                      {reduce, {modfun, riak_kv_mapreduce,
+                                reduce_string_to_integer},none,false}],
+                 {ok, [0]} =
+                     riak_kv_mrc_pipe:mapred(Inputs, Spec)
              end)
           ]
      end}.

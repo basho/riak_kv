@@ -44,9 +44,13 @@ process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
             riak_pipe_vnode_worker:send_output(
               Obj, Partition, FittingDetails),
             {ok, State};
-        {ReqId, {r, {error, Error}, _, _}} ->
-            if Last -> {{error, Error}, State};
-               true -> {forward_preflist, State}
+        {ReqId, {r, {error, _} = Error, _, _}} ->
+            if Last ->
+                    riak_pipe_vnode_worker:send_output(
+                      Error, Partition, FittingDetails),
+                    {ok, State};
+               true ->
+                    {forward_preflist, State}
             end
     end.
 
