@@ -163,12 +163,12 @@ map2pipe(FunSpec, Arg, Keep, I, QueryT) ->
                     chashfun=follow} || Keep]
      ++
      if PrereduceP ->
-             {reduce, R_FunSpec, R_Arg, _Keep} = element(I+2, QueryT),
+             {reduce, R_FunSpec, _R_Arg, _Keep} = element(I+2, QueryT),
              [#fitting_spec{name={prereduce,I},
                             module=riak_kv_w_reduce,
                             arg={rct,
                                  riak_kv_w_reduce:reduce_compat(R_FunSpec,
-                                                                R_Arg, false),
+                                                                false),
                                  Arg},
                             chashfun=follow},
               %% The map_xform_compat innards does the job that we need of
@@ -205,8 +205,7 @@ reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie, QueryT) ->
     [#fitting_spec{name={reduce,I},
                    module=riak_kv_w_reduce,
                    arg={rct,
-                        riak_kv_w_reduce:reduce_compat(FunSpec, Arg,
-                                                       PrevIsReduceP),
+                        riak_kv_w_reduce:reduce_compat(FunSpec, PrevIsReduceP),
                         Arg},
                    chashfun=ConstantFun}
      |[#fitting_spec{name=I,

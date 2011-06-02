@@ -30,7 +30,7 @@
          archive/1,
          handoff/2,
          validate_arg/1]).
--export([chashfun/1, reduce_compat/3]).
+-export([chashfun/1, reduce_compat/2]).
 
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
@@ -101,19 +101,21 @@ handoff_acc(HandoffAcc, LocalAcc, State) ->
 %% @doc Actually evaluate the aggregation function.
 -spec reduce([term()], state(), string()) ->
          {ok, [term()]} | {error, {term(), term(), term()}}.
-reduce(InAcc, #state{p=Partition, fd=FittingDetails}, ErrString) ->
-    {rct, Fun, _Arg} = FittingDetails#fitting_details.arg,
+reduce(Inputs, #state{fd=FittingDetails}, ErrString) ->
+    {rct, Fun, Arg} = FittingDetails#fitting_details.arg,
     try
-        {ok, OutAcc} = Fun(bogus_key, InAcc, Partition, FittingDetails),
-        true = is_list(OutAcc), %%TODO: nicer error
-        OutAcc
+        ?T(FittingDetails, [reduce], {reducing, length(Inputs)}),
+        Outputs = Fun(Inputs, Arg),
+        true = is_list(Outputs), %%TODO: nicer error
+        ?T(FittingDetails, [reduce], {reduced, length(Outputs)}),
+        Outputs
     catch Type:Error ->
             %%TODO: forward
             ?T(FittingDetails, [reduce], {reduce_error, Type, Error}),
             error_logger:error_msg(
               "~p:~p ~s:~n   ~P~n   ~P",
-              [Type, Error, ErrString, InAcc, 15, erlang:get_stacktrace(), 15]),
-            InAcc
+              [Type, Error, ErrString, Inputs, 15, erlang:get_stacktrace(), 15]),
+            Inputs
     end.
 
 %% @doc Check that the arg is a valid arity-4 function.  See {@link
@@ -124,7 +126,7 @@ validate_arg({rct, Fun, _FunArg}) when is_function(Fun) ->
     validate_fun(Fun).
 
 validate_fun(Fun) when is_function(Fun) ->
-    riak_pipe_v:validate_function("arg", 4, Fun);
+    riak_pipe_v:validate_function("arg", 2, Fun);
 validate_fun(Fun) ->
     {error, io_lib:format("~p requires a function as argument, not a ~p",
                           [?MODULE, riak_pipe_v:type_of(Fun)])}.
@@ -138,22 +140,14 @@ chashfun({Key,_}) ->
 %% @doc Compatibility wrapper for an old-school Riak MR reduce function,
 %%      which is an arity-2 function `fun(InputList, SpecificationArg)'.
 
-reduce_compat({modfun, Module, Function}, Arg, PreviousIsReduceP) ->
-    reduce_compat({qfun, erlang:make_fun(Module, Function, 2)}, Arg,
+reduce_compat({modfun, Module, Function}, PreviousIsReduceP) ->
+    reduce_compat({qfun, erlang:make_fun(Module, Function, 2)}, 
                   PreviousIsReduceP);
-reduce_compat({qfun, Fun}, Arg, PreviousIsReduceP) ->
-    fun(_Key, Inputs0, _Partition, FittingDetails) ->
-            %% Concatenate reduce output lists, if previous stage was reduce
-            Inputs = if PreviousIsReduceP ->
-                             lists:append(Inputs0);
-                        true ->
-                             Inputs0
-                     end,
-            ?T(FittingDetails, [reduce], {reducing, length(Inputs)}),
-            Output = Fun(Inputs, Arg),
-            ?T(FittingDetails, [reduce], {reduced, length(Output)}),
-            {ok, Output}
-    end.
+reduce_compat({qfun, Fun}, true) ->
+    %% Previous stage was reduce, so concatenate its output lists
+    fun(Inputs, Arg) -> Fun(lists:append(Inputs), Arg) end;
+reduce_compat({qfun, Fun}, false) ->
+    Fun.
 
 calc_delay_max(#fitting_details{arg = {rct, _ReduceFun, ReduceArg}}) ->
     Props = case ReduceArg of
