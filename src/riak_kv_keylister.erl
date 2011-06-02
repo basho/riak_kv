@@ -30,7 +30,6 @@
          start_link/5,
          start_link/6,
          list_keys/1,
-         list_keys/2,
          update_vnodes/3
         ]).
 
@@ -69,9 +68,6 @@ start_link(ReqId, Caller, Bucket, VNodes, FilterVNodes, Timeout) ->
 list_keys(ListerPid) ->
     gen_fsm:send_event(ListerPid, start).
 
-list_keys(ListerPid, VNode) ->
-    gen_fsm:send_event(ListerPid, {listkeys, VNode}).
-
 update_vnodes(ListerPid, VNodes, FilterVNodes) ->
     gen_fsm:send_event(ListerPid, {update_vnodes, VNodes, FilterVNodes}).
 
@@ -94,10 +90,6 @@ init([ReqId, Caller, Inputs, VNodes, FilterVNodes]) ->
 
 waiting(start, #state{reqid=ReqId, bucket=Bucket, vnodes=VNodes}=State) ->
     riak_kv_vnode:list_keys(VNodes, ReqId, self(), Bucket),
-    {next_state, waiting, State};
-
-waiting({listkeys, VNode}, #state{reqid=ReqId, bucket=Bucket}=State) ->
-    riak_kv_vnode:list_keys(VNode, ReqId, self(), Bucket),
     {next_state, waiting, State};
 
 waiting({update_vnodes, VNodes, FilterVNodes}, State) ->
