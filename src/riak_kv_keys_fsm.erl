@@ -176,7 +176,7 @@ initialize(timeout, StateData0=#state{bucket=Bucket,
     %% Get the list of all nodes and the list of available
     %% nodes so we can have a list of unavailable nodes
     %% while creating a coverage plan.
-    Nodes = riak_core_ring:all_members(),
+    Nodes = riak_core_ring:all_members(Ring),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     case plan_and_execute(ReqId, Input, NVal, PartitionCount, Ring, Timeout, [], [Nodes -- UpNodes]) of
         {ok, RequiredResponseCount} ->
@@ -300,7 +300,7 @@ create_coverage_plan(NVal, PartitionCount, Ring, Offset, DownVNodes) ->
     UnavailableKeySpaces = [(DownVNode div RingIndexInc) || DownVNode <- DownVNodes],
     AvailableKeySpaces = [{Vnode, n_keyspaces(Vnode, NVal, PartitionCount)}
                           || Vnode <- (AllKeySpaces -- UnavailableKeySpaces)],
-    CoverageResult = find_coverage(ordsets:from_list(AllKeySpaces), AvailableKeySpaces, NVal, []),
+    CoverageResult = find_coverage(ordsets:from_list(AllKeySpaces), AvailableKeySpaces, NVal, PartitionCount, Offset, []),
     case CoverageResult of
         {ok, CoveragePlan} ->
             %% Assemble the data structures required for
@@ -311,14 +311,14 @@ create_coverage_plan(NVal, PartitionCount, Ring, Offset, DownVNodes) ->
                                        %% ring index values.
                                        %% The offset value is used to distribute
                                        %% work to different sets of VNodes.
-                                       VNodeIndex = ((Position + Offset) rem PartitionCount) * RingIndexInc,
+                                       VNodeIndex = (Position rem PartitionCount) * RingIndexInc,
                                        Node = riak_core_ring:index_owner(Ring, VNodeIndex),
                                        CoverageVNode = {VNodeIndex, Node},
                                        case length(KeySpaces) < NVal of
                                            true ->
                                                %% Get the VNode index of each keyspace to
                                                %% use to filter results from this VNode.
-                                               KeySpaceIndexes = [((KeySpaceIndex+Offset+1) * RingIndexInc) || KeySpaceIndex <- KeySpaces],
+                                               KeySpaceIndexes = [(((KeySpaceIndex+1) rem PartitionCount) * RingIndexInc) || KeySpaceIndex <- KeySpaces],
                                                case proplists:get_value(Node, Acc) of
                                                    undefined ->
                                                        Acc1 = [{Node, [{VNodeIndex, KeySpaceIndexes}]} | Acc];
@@ -345,53 +345,47 @@ n_keyspaces(VNode, N, Q) ->
 
 %% @private
 %% @doc Find a minimal set of covering VNodes
-find_coverage([], _, _, Coverage) ->
+find_coverage([], _, _, _, _, Coverage) ->
     {ok, lists:sort(Coverage)};
-find_coverage(KeySpace, [], _, Coverage) ->
+find_coverage(KeySpace, [], _, _, _, Coverage) ->
     {insufficient_vnodes_available, KeySpace, lists:sort(Coverage)};
-find_coverage(KeySpace, Available, NVal, Coverage) ->
-    case next_vnode(KeySpace, NVal, Available) of
-        {0, _} -> % out of vnodes
-            find_coverage(KeySpace, [], NVal, Coverage);
-        {_NumCovered, Vnode} ->
+find_coverage(KeySpace, Available, NVal, PartitionCount, Offset, Coverage) ->
+    Res = next_vnode(KeySpace, NVal, PartitionCount, Offset, Available),
+        case Res of
+        {0, _, _} -> % out of vnodes
+            find_coverage(KeySpace, [], NVal, PartitionCount, Offset, Coverage);
+        {_NumCovered, Vnode, _} ->
             {value, {Vnode, Covers}, UpdAvailable} = lists:keytake(Vnode, 1, Available),
             UpdCoverage = [{Vnode, ordsets:intersection(KeySpace, Covers)} | Coverage],
             UpdKeySpace = ordsets:subtract(KeySpace, Covers),
-            find_coverage(UpdKeySpace, UpdAvailable, NVal, UpdCoverage)
+            find_coverage(UpdKeySpace, UpdAvailable, NVal, PartitionCount, Offset, UpdCoverage)
     end.
 
 %% @private
 %% @doc Find the next vnode that covers the most of the
 %% remaining keyspace. Use VNode id as tie breaker.
-next_vnode(KeySpace, NVal, Available) ->
-    CoverCount = [{covers(KeySpace, CoversKeys), VNode} || {VNode, CoversKeys} <- Available],
-    case length(KeySpace) >= NVal of
-        true ->
-            hd(lists:sort(fun compare_next_vnode/2, CoverCount));
-        false ->
-            hd(lists:sort(fun compare_final_vnode/2, CoverCount))
-    end.
+next_vnode(KeySpace, NVal, PartitionCount, Offset, Available) ->
+    %% Create a tuple of data used by compare_next_vnode
+    %% to choose a node in the case that the coverage counts
+    %% are equal.
+    TieBreakerData = {(length(KeySpace) >= NVal), PartitionCount, Offset},
+    CoverCount = [{covers(KeySpace, CoversKeys), VNode, TieBreakerData} || {VNode, CoversKeys} <- Available],
+    hd(lists:sort(fun compare_next_vnode/2, CoverCount)).
 
 %% @private
-compare_next_vnode({CA,VA}, {CB, VB}) ->
+compare_next_vnode({CA, VA, {FinalVNode, PartitionCount, Offset}}, {CB, VB, _}) ->
     if
         CA > CB -> %% Descending sort on coverage
             true;
         CA < CB ->
             false;
         true ->
-            VA < VB %% If equal coverage choose the lower node.
-    end.
-
-%% @private
-compare_final_vnode({CA,VA}, {CB, VB}) ->
-    if
-        CA > CB -> %% Descending sort on coverage
-            true;
-        CA < CB ->
-            false;
-        true ->
-            VA > VB %% If equal coverage choose the upper node.
+            case FinalVNode of
+                true ->
+                    ((VA+Offset) rem PartitionCount) < ((VB+Offset) rem PartitionCount); %% If equal coverage choose the lower node.
+                false ->
+                    ((VA+Offset) rem PartitionCount) > ((VB+Offset) rem PartitionCount) %% If equal coverage choose the upper node.
+            end
     end.
 
 %% @private
