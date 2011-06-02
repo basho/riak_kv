@@ -159,6 +159,8 @@ setup_demo_test_() ->
 compat_basic1_test_() ->
     IntsBucket = <<"foonum">>,
     ReduceSumFun = fun(Inputs, _) -> [lists:sum(Inputs)] end,
+    LinkBucket = <<"link bucket">>,
+    LinkKey = <<"yo">>,
 
     {setup,
      prepare_runtime(),
@@ -168,7 +170,16 @@ compat_basic1_test_() ->
           ?_test(
              %% The data created by this step is used by all/most of the
              %% following tests.
-             ok = riak_kv_mrc_pipe:example_setup()
+             begin
+                 ok = riak_kv_mrc_pipe:example_setup(),
+                 {ok, C} = riak:local_client(),
+                 Obj = riak_object:new(LinkBucket, LinkKey, <<"link val">>),
+                 MD = dict:store(<<"Links">>,
+                                 [{{LinkBucket, <<"nokey-1">>}, <<"link 1">>},
+                                  {{LinkBucket, <<"nokey-2">>}, <<"link 2">>}],
+                                 dict:new()),
+                 ok = C:put(riak_object:update_metadata(Obj, MD))
+             end
             ),
           ?_test(
              %% Empty query
@@ -255,6 +266,15 @@ compat_basic1_test_() ->
                       {reduce, {modfun, riak_kv_mapreduce,
                                 reduce_string_to_integer},none,false}],
                  {ok, [0]} =
+                     riak_kv_mrc_pipe:mapred(Inputs, Spec)
+             end),
+          ?_test(
+             %% Basic link phase
+             begin
+                 %% Inputs = [{LinkBucket, LinkKey}],
+                 Inputs = LinkBucket,
+                 Spec = [{link, '_', <<"link 1">>, true}],
+                 {ok, [{LinkBucket, <<"nokey-1">>}]} =
                      riak_kv_mrc_pipe:mapred(Inputs, Spec)
              end)
           ]
