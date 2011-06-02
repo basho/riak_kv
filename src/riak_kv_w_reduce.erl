@@ -21,7 +21,7 @@
 %% @doc A "reduce"-like fitting (in the MapReduce sense) for Riak KV
 %%      MapReduce compatibility.  See riak_pipe_w_reduce.erl for more
 %%      docs: this module is a stripped-down version of that one.
--module(riak_kv_w_mapred).
+-module(riak_kv_w_reduce).
 -behaviour(riak_pipe_vnode_worker).
 
 -export([init/2,
@@ -48,19 +48,7 @@
            riak_pipe_fitting:details()) ->
          {ok, state()}.
 init(Partition, FittingDetails) ->
-    {rct, _ReduceFun, ReduceArg} = FittingDetails#fitting_details.arg,
-    Props = case ReduceArg of
-                L when is_list(L) -> L;         % May or may not be a proplist
-                _                 -> []
-            end,
-    AppMax = app_helper:get_env(riak_kv, mapred_reduce_phase_batch_size, 1),
-    DelayMax = case proplists:get_value(reduce_phase_only_1, Props) of
-                   undefined ->
-                       proplists:get_value(reduce_phase_batch_size,
-                                           Props, AppMax);
-                   true ->
-                       999999999999999999 % Ah, bignums
-               end,
+    DelayMax = calc_delay_max(FittingDetails),
     {ok, #state{acc=[], delay=0, delay_max = DelayMax,
                 p=Partition, fd=FittingDetails}}.
 
@@ -114,13 +102,14 @@ handoff_acc(HandoffAcc, LocalAcc, State) ->
 -spec reduce([term()], state(), string()) ->
          {ok, [term()]} | {error, {term(), term(), term()}}.
 reduce(InAcc, #state{p=Partition, fd=FittingDetails}, ErrString) ->
-    {rct, Fun, _} = FittingDetails#fitting_details.arg,
+    {rct, Fun, _Arg} = FittingDetails#fitting_details.arg,
     try
         {ok, OutAcc} = Fun(bogus_key, InAcc, Partition, FittingDetails),
         true = is_list(OutAcc), %%TODO: nicer error
         OutAcc
     catch Type:Error ->
             %%TODO: forward
+            ?T(FittingDetails, [reduce], {reduce_error, Type, Error}),
             error_logger:error_msg(
               "~p:~p ~s:~n   ~P~n   ~P",
               [Type, Error, ErrString, InAcc, 15, erlang:get_stacktrace(), 15]),
@@ -153,16 +142,29 @@ reduce_compat({modfun, Module, Function}, Arg, PreviousIsReduceP) ->
     reduce_compat({qfun, erlang:make_fun(Module, Function, 2)}, Arg,
                   PreviousIsReduceP);
 reduce_compat({qfun, Fun}, Arg, PreviousIsReduceP) ->
-    fun(_Key, Inputs0, _Partition, _FittingDetails) ->
+    fun(_Key, Inputs0, _Partition, FittingDetails) ->
             %% Concatenate reduce output lists, if previous stage was reduce
             Inputs = if PreviousIsReduceP ->
                              lists:append(Inputs0);
                         true ->
                              Inputs0
                      end,
-            ?T(_FittingDetails, [reduce], {reducing, length(Inputs)}),
+            ?T(FittingDetails, [reduce], {reducing, length(Inputs)}),
             Output = Fun(Inputs, Arg),
-            ?T(_FittingDetails, [reduce], {reduced, length(Output)}),
+            ?T(FittingDetails, [reduce], {reduced, length(Output)}),
             {ok, Output}
     end.
 
+calc_delay_max(#fitting_details{arg = {rct, _ReduceFun, ReduceArg}}) ->
+    Props = case ReduceArg of
+                L when is_list(L) -> L;         % May or may not be a proplist
+                _                 -> []
+            end,
+    AppMax = app_helper:get_env(riak_kv, mapred_reduce_phase_batch_size, 1),
+    case proplists:get_value(reduce_phase_only_1, Props) of
+        undefined ->
+            proplists:get_value(reduce_phase_batch_size,
+                                Props, AppMax);
+        true ->
+            an_atom_is_always_bigger_than_an_integer_so_make_1_huge_batch
+    end.
