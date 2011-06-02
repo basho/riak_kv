@@ -355,7 +355,7 @@ put(RObj, W, DW, Timeout, Options) ->
 %% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
 %%      nodes have responded with a value or error.
 %% @equiv delete(Bucket, Key, RW, default_timeout())
-delete(Bucket,Key) -> delete(Bucket,Key,default,?DEFAULT_TIMEOUT).
+delete(Bucket,Key) -> delete(Bucket,Key,[],?DEFAULT_TIMEOUT).
 
 %% @spec delete(riak_object:bucket(), riak_object:key(), RW :: integer()) ->
 %%        ok |
@@ -366,7 +366,10 @@ delete(Bucket,Key) -> delete(Bucket,Key,default,?DEFAULT_TIMEOUT).
 %% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
 %%      nodes have responded with a value or error.
 %% @equiv delete(Bucket, Key, RW, default_timeout())
-delete(Bucket,Key,RW) -> delete(Bucket,Key,RW,?DEFAULT_TIMEOUT).
+delete(Bucket,Key,Options) when is_list(Options) ->
+    delete(Bucket,Key,Options,?DEFAULT_TIMEOUT);
+delete(Bucket,Key,RW) ->
+    delete(Bucket,Key,[{rw, RW}],?DEFAULT_TIMEOUT).
 
 %% @spec delete(riak_object:bucket(), riak_object:key(), RW :: integer(),
 %%           TimeoutMillisecs :: integer()) ->
@@ -378,12 +381,14 @@ delete(Bucket,Key,RW) -> delete(Bucket,Key,RW,?DEFAULT_TIMEOUT).
 %%       {error, Err :: term()}
 %% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
-delete(Bucket,Key,RW,Timeout) ->
+delete(Bucket,Key,Options,Timeout) when is_list(Options) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, RW, Timeout,
+    riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, Options, Timeout,
                                            Me, ClientId]),
-    wait_for_reqid(ReqId, Timeout).
+    wait_for_reqid(ReqId, Timeout);
+delete(Bucket,Key,RW,Timeout) ->
+    delete(Bucket,Key,[{rw, RW}], Timeout).
 
 %% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock:vclock()) ->
 %%        ok |
@@ -394,7 +399,8 @@ delete(Bucket,Key,RW,Timeout) ->
 %% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
 %%      nodes have responded with a value or error.
 %% @equiv delete(Bucket, Key, RW, default_timeout())
-delete_vclock(Bucket,Key,VClock) -> delete_vclock(Bucket,Key,VClock,default,?DEFAULT_TIMEOUT).
+delete_vclock(Bucket,Key,VClock) ->
+    delete_vclock(Bucket,Key,VClock,[{rw,default}],?DEFAULT_TIMEOUT).
 
 %% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock::vclock(), RW :: integer()) ->
 %%        ok |
@@ -405,7 +411,10 @@ delete_vclock(Bucket,Key,VClock) -> delete_vclock(Bucket,Key,VClock,default,?DEF
 %% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
 %%      nodes have responded with a value or error.
 %% @equiv delete(Bucket, Key, RW, default_timeout())
-delete_vclock(Bucket,Key,VClock,RW) -> delete_vclock(Bucket,Key,VClock,RW,?DEFAULT_TIMEOUT).
+delete_vclock(Bucket,Key,VClock,Options) when is_list(Options) ->
+    delete_vclock(Bucket,Key,VClock,Options,?DEFAULT_TIMEOUT);
+delete_vclock(Bucket,Key,VClock,RW) ->
+    delete_vclock(Bucket,Key,VClock,[{rw, RW}],?DEFAULT_TIMEOUT).
 
 %% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock:vclock(), RW :: integer(),
 %%           TimeoutMillisecs :: integer()) ->
@@ -417,12 +426,14 @@ delete_vclock(Bucket,Key,VClock,RW) -> delete_vclock(Bucket,Key,VClock,RW,?DEFAU
 %%       {error, Err :: term()}
 %% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
-delete_vclock(Bucket,Key,VClock,RW,Timeout) ->
+delete_vclock(Bucket,Key,VClock,Options,Timeout) when is_list(Options) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, RW, Timeout,
+    riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, Options, Timeout,
                                            Me, ClientId, VClock]),
-    wait_for_reqid(ReqId, Timeout).
+    wait_for_reqid(ReqId, Timeout);
+delete_vclock(Bucket,Key,VClock,RW,Timeout) ->
+    delete_vclock(Bucket,Key,VClock,[{rw, RW}],Timeout).
 
 
 %% @spec list_keys(riak_object:bucket()) ->
