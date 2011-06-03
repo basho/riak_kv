@@ -216,15 +216,15 @@ handle_sync_event(_Event, _From, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
 %% @private
-handle_info({'EXIT', Pid, Reason}, _StateName, #state{from={raw,_,Pid}}=StateData) ->
-    {stop,Reason,StateData};
+handle_info({'EXIT', _Pid, Reason}, _StateName, StateData) ->
+    {stop, {node_failure, Reason}, StateData};
 handle_info({_ReqId, {ok, _Pid}}, StateName, StateData=#state{timeout=Timeout}) ->
     %% Received a message from a key lister node that
     %% did not start up within the timeout. Just ignore
     %% the message and move on.
     {next_state, StateName, StateData, Timeout};
 handle_info(_Info, _StateName, StateData) ->
-    {stop,badmsg,StateData}.
+    {stop, badmsg, StateData}.
 
 %% @private
 terminate(Reason, _StateName, _State) ->
@@ -319,7 +319,8 @@ create_coverage_plan(NVal, PartitionCount, Ring, Offset, DownVNodes) ->
                                            true ->
                                                %% Get the VNode index of each keyspace to
                                                %% use to filter results from this VNode.
-                                               KeySpaceIndexes = [(((KeySpaceIndex+1) rem PartitionCount) * RingIndexInc) || KeySpaceIndex <- KeySpaces],
+                                               KeySpaceIndexes = [(((KeySpaceIndex+1) rem PartitionCount) * RingIndexInc) 
+                                                                  || KeySpaceIndex <- KeySpaces],
                                                case proplists:get_value(Node, Acc) of
                                                    undefined ->
                                                        Acc1 = [{Node, [{VNodeIndex, KeySpaceIndexes}]} | Acc];
@@ -420,6 +421,28 @@ group_indexes_by_node([{Index, Node} | OtherVNodes], NodeIndexes) ->
 
 %% @private
 start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Filters, Timeout) ->
+    case KeyListers of 
+        [] ->
+            UpdatedKeyListers = KeyListers;
+        _ ->
+            %% Check for existing keylister processes whose
+            %% node does not have an entry in NodeIndexes. 
+            %% This would happen if a coverage plan fails 
+            %% for some reason and the subsequent plan does
+            %% not include any VNodes from a node where the
+            %% previous plan did.
+            KeyListerCleanup = 
+                fun({Node, Pid}=KeyLister, Acc) ->
+                        case proplists:is_defined(Node) of
+                            true ->
+                                [KeyLister | Acc];
+                            false ->
+                                riak_kv_keylister:update_vnodes(Pid, [], []),
+                                Acc
+                        end
+                end,
+            UpdatedKeyListers = lists:foldl(KeyListerCleanup, [], KeyListers)
+    end,
     %% Fold over the node indexes list to start
     %% keylister processes on each node and accumulate
     %% the successes and errors.
@@ -434,6 +457,7 @@ start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Filters, Timeout) ->
                                                   error_logger:warning_msg("Unable to start a keylister process on ~p. Reason: ~p~n", [Node, Error]),
                                                   {Successes, [Node | Errors]};
                                               {ok, Pid} ->
+                                                  erlang:link(Pid),
                                                   {[{Node, Pid} | Successes], Errors}
                                           end
                                       catch
@@ -448,7 +472,7 @@ start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Filters, Timeout) ->
                                       {Successes, Errors}
                               end
                       end,
-    lists:foldl(StartListerFunc, {KeyListers, []}, NodeIndexes).
+    lists:foldl(StartListerFunc, {UpdatedKeyListers, []}, NodeIndexes).
 
 %% @private
 process_keys(Keys, Bucket, ClientType, {raw, ReqId, ClientPid}) ->

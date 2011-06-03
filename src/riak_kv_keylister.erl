@@ -75,7 +75,7 @@ update_vnodes(ListerPid, VNodes, FilterVNodes) ->
 %% ===================================================================
 
 init([ReqId, Caller, Inputs, VNodes, FilterVNodes]) ->
-    erlang:monitor(process, Caller),
+    process_flag(trap_exit, true),
     {Bucket, Filters} = build_filters(Inputs, VNodes, FilterVNodes),
     {ok, waiting, #state{bucket=Bucket,
                          caller=Caller,
@@ -84,7 +84,12 @@ init([ReqId, Caller, Inputs, VNodes, FilterVNodes]) ->
                          reqid=ReqId,
                          vnodes=VNodes}}.
 
-waiting(start, #state{reqid=ReqId, bucket=Bucket, vnodes=VNodes}=State) ->
+waiting(start, #state{vnodes=[]}=State) ->
+    {next_state, waiting, State};
+
+waiting(start, #state{bucket=Bucket,
+                      reqid=ReqId,
+                      vnodes=VNodes}=State) ->
     riak_kv_vnode:list_keys(VNodes, ReqId, self(), Bucket),
     {next_state, waiting, State};
 
@@ -126,7 +131,7 @@ handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{caller=Caller,
 handle_info({ReqId, Idx, done}, waiting, #state{reqid=ReqId, caller=Caller}=State) ->
     gen_fsm:send_event(Caller, {ReqId, {Idx, node()}, done}),
     {next_state, waiting, State};
-handle_info({'DOWN', _MRef, _Type, Caller, _Info}, waiting, #state{caller=Caller}=State) ->
+handle_info({'EXIT', Caller, _Reason}, waiting, #state{caller=Caller}=State) ->
     {stop, normal, State};
 handle_info(_Info, StateName, State) ->
     {next_state, StateName, State}.
