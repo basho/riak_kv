@@ -99,12 +99,15 @@ map({strfun, Source}, _Arg, _Input) ->
     exit({strfun, Source});
 map({jsanon, {Bucket, Key}}, _Arg, _Input) ->
     exit({jsanon, {Bucket, Key}});
-map({jsfun, Name}, _Arg, _Input) ->
-    exit({jsfun, Name});
+map({jsfun, Name}, Arg, Input) ->
+    map_js({jsfun, Name}, Arg, Input);
 map({jsanon, Source}, Arg, Input) ->
+    map_js({jsanon, Source}, Arg, Input).
+
+map_js(JS, Arg, Input) ->
     %% TODO: keydata
     JSArgs = [riak_object:to_json(Input), <<"">>, Arg],
-    JSCall = {{jsanon, Source}, JSArgs},
+    JSCall = {JS, JSArgs},
     case riak_kv_js_manager:blocking_dispatch(
            ?JSPOOL_MAP, JSCall, ?DEFAULT_JS_RESERVE_ATTEMPTS) of
         {ok, Results}   -> {ok, Results};
@@ -140,8 +143,14 @@ validate_arg({Phase, _Arg}) ->
             {error, "{strfun, Source} is not yet implemented"};
         {jsanon, {_Bucket, _Key}} ->
             {error, "{jsanon, {Bucket, Key}} is not yet implemented"};
-        {jsfun, _Name} ->
-            {error, "{jsfun, Name} is not yet implemented"};
+        {jsfun, Name} ->
+            if is_binary(Name) -> ok; %% TODO: validate name somehow?
+               true ->
+                    {error, io_lib:format(
+                              "~p requires that the Name of a jsfun"
+                              " request be a binary, not a ~p",
+                              [?MODULE, riak_pipe_v:type_of(Name)])}
+            end;
         {jsanon, Source} ->
             if is_binary(Source) -> ok; %% TODO: validate JS code somehow?
                true ->
