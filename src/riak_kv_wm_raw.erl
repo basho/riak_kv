@@ -347,57 +347,8 @@ malformed_request(RD, Ctx) ->
         false ->
             DocCtx = ensure_doc(ResCtx),
             case DocCtx#ctx.doc of
-                {error, notfound} ->
-                    {{halt, 404},
-                     wrq:set_resp_header("Content-Type", "text/plain",
-                                         wrq:append_to_response_body(
-                                           io_lib:format("not found~n",[]),
-                                           ResRD)),
-                     DocCtx};
-                {error, {deleted, _VClock}} ->
-                    {{halt, 404},
-                      wrq:set_resp_header("Content-Type", "text/plain",
-                                         wrq:append_to_response_body(
-                                           io_lib:format("not found~n",[]),
-                                           encode_vclock_header(ResRD, DocCtx))),
-                     DocCtx};
-                {error, timeout} ->
-                    {{halt, 503},
-                     wrq:set_resp_header("Content-Type", "text/plain",
-                                      wrq:append_to_response_body(
-                                        io_lib:format("request timed out~n",[]),
-                                        ResRD)),
-                     DocCtx};
-                {error, {n_val_violation, _}} ->
-                    {{halt, 400},
-                     wrq:set_resp_header("Content-Type", "text/plain",
-                                  wrq:append_to_response_body(
-                                    io_lib:format("R-value unsatisfiable~n",[]),
-                                    ResRD)),
-                     DocCtx};
-                {error, {r_val_unsatisfied, Requested, Returned}} ->
-                    {{halt, 503},
-                     wrq:set_resp_header("Content-Type", "text/plain",
-                                  wrq:append_to_response_body(
-                                    io_lib:format("R-value unsatisfied: ~p/~p~n",
-                                        [Returned, Requested]),
-                                    ResRD)),
-                    DocCtx};
-                {error, {pr_val_unsatisfied, Requested, Returned}} ->
-                    {{halt, 503},
-                    wrq:set_resp_header("Content-Type", "text/plain",
-                                 wrq:append_to_response_body(
-                                   io_lib:format("PR-value unsatisfied: ~p/~p~n",
-                                        [Returned, Requested]),
-                                   ResRD)),
-                    DocCtx};
-                {error, Err} ->
-                    {{halt, 500},
-                     wrq:set_resp_header("Content-Type", "text/plain",
-                                  wrq:append_to_response_body(
-                                    io_lib:format("Error:~n~p~n",[Err]),
-                                    ResRD)),
-                     DocCtx};
+                {error, Reason} ->
+                    handle_common_error(Reason, ResRD, DocCtx);
                 _ ->
                     {false, ResRD, DocCtx}
             end
@@ -901,28 +852,8 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L}) ->
     Options = case wrq:get_qs_value(?Q_RETURNBODY, RD) of ?Q_TRUE -> [returnbody]; _ -> [] end,
     case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
                 Options]) of
-        {error, precommit_fail} ->
-            {{halt, 403}, send_precommit_error(RD, undefined), Ctx};
-        {error, {precommit_fail, Reason}} ->
-            {{halt, 403}, send_precommit_error(RD, Reason), Ctx};
-        {error, {n_val_violation, N}} ->
-            Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
-                                " n value of ~p~n", [N]),
-            {{halt, 400}, wrq:append_to_response_body(Msg, RD), Ctx};
-        {error, {pw_val_unsatisfied, Requested, Returned}} ->
-            Msg = io_lib:format("PW-value unsatisfied: ~p/~p~n", [Returned,
-                    Requested]),
-            {{halt, 503}, wrq:append_to_response_body(Msg, RD), Ctx};
-        {error, too_many_fails} ->
-            {{halt, 503}, wrq:append_to_response_body("Too Many write failures"
-                                                      " to satisfy W/DW\n", RD), Ctx};
-        {error, timeout} ->
-            {{halt, 503},
-             wrq:set_resp_header("Content-Type", "text/plain",
-                                 wrq:append_to_response_body(
-                                   io_lib:format("request timed out~n",[]),
-                                   RD)),
-                     Ctx};
+        {error, Reason} ->
+            handle_common_error(Reason, RD, Ctx);
         ok ->
             {true, RD, Ctx#ctx{doc={ok, Doc}}};
         {ok, RObj} ->
@@ -1175,24 +1106,18 @@ ensure_doc(Ctx) -> Ctx.
 
 %% @spec delete_resource(reqdata(), context()) -> {true, reqdata(), context()}
 %% @doc Delete the document specified.
-delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C, rw=RW}) ->
+delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C, rw=RW, r=R, w=W,
+        pr=PR, pw=PW}) ->
     Result = case wrq:get_req_header(?HEAD_VCLOCK, RD) of
         undefined -> 
-            C:delete(B,K,RW);
+            C:delete(B,K,[{rw, RW}, {r, R}, {w, W}, {pr, PR}, {pw, PW}]);
         _ ->
-            C:delete_vclock(B,K,decode_vclock_header(RD),RW)
+            C:delete_vclock(B,K,decode_vclock_header(RD),
+                [{rw, RW}, {r, R}, {w, W}, {pr, PR}, {pw, PW}])
     end,
     case Result of
-        {error, notfound} ->
-            {{halt, 404},
-             wrq:set_resp_header("Content-Type", "text/plain",
-                                 wrq:append_to_response_body(
-                                   io_lib:format("not found~n",[]),
-                                   RD)), Ctx};
-        {error, precommit_fail} ->
-            {{halt, 403}, send_precommit_error(RD, undefined), Ctx};
-        {error, {precommit_fail, Reason}} ->
-            {{halt, 403}, send_precommit_error(RD, Reason), Ctx};
+        {error, Reason} ->
+            handle_common_error(Reason, RD, Ctx);
         ok ->
             {true, RD, Ctx}
     end.
@@ -1359,3 +1284,68 @@ send_precommit_error(RD, Reason) ->
                     Reason
             end,
     wrq:append_to_response_body(Error, RD1).
+
+handle_common_error(Reason, RD, Ctx) ->
+    case {error, Reason} of
+        {error, precommit_fail} ->
+            {{halt, 403}, send_precommit_error(RD, undefined), Ctx};
+        {error, {precommit_fail, Reason}} ->
+            {{halt, 403}, send_precommit_error(RD, Reason), Ctx};
+        {error, {n_val_violation, N}} ->
+            Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
+                " n value of ~p~n", [N]),
+            {{halt, 400}, wrq:append_to_response_body(Msg, RD), Ctx};
+        {error, {pw_val_unsatisfied, Requested, Returned}} ->
+            Msg = io_lib:format("PW-value unsatisfied: ~p/~p~n", [Returned,
+                    Requested]),
+            {{halt, 503}, wrq:append_to_response_body(Msg, RD), Ctx};
+        {error, too_many_fails} ->
+            {{halt, 503}, wrq:append_to_response_body("Too Many write failures"
+                    " to satisfy W/DW\n", RD), Ctx};
+        {error, timeout} ->
+            {{halt, 503},
+                wrq:set_resp_header("Content-Type", "text/plain",
+                    wrq:append_to_response_body(
+                        io_lib:format("request timed out~n",[]),
+                        RD)),
+                Ctx};
+        {error, notfound} ->
+            {{halt, 404},
+                wrq:set_resp_header("Content-Type", "text/plain",
+                    wrq:append_to_response_body(
+                        io_lib:format("not found~n",[]),
+                        RD)),
+                Ctx};
+        {error, {deleted, _VClock}} ->
+            {{halt, 404},
+                wrq:set_resp_header("Content-Type", "text/plain",
+                    wrq:append_to_response_body(
+                        io_lib:format("not found~n",[]),
+                        encode_vclock_header(RD, Ctx))),
+                Ctx};
+        {error, {r_val_unsatisfied, Requested, Returned}} ->
+            {{halt, 503},
+                wrq:set_resp_header("Content-Type", "text/plain",
+                    wrq:append_to_response_body(
+                        io_lib:format("R-value unsatisfied: ~p/~p~n",
+                            [Returned, Requested]),
+                        RD)),
+                Ctx};
+        {error, {pr_val_unsatisfied, Requested, Returned}} ->
+            {{halt, 503},
+                wrq:set_resp_header("Content-Type", "text/plain",
+                    wrq:append_to_response_body(
+                        io_lib:format("PR-value unsatisfied: ~p/~p~n",
+                            [Returned, Requested]),
+                        RD)),
+                Ctx};
+        {error, Err} ->
+            {{halt, 500},
+                wrq:set_resp_header("Content-Type", "text/plain",
+                    wrq:append_to_response_body(
+                        io_lib:format("Error:~n~p~n",[Err]),
+                        RD)),
+                Ctx}
+    end.
+
+
