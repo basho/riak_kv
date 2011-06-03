@@ -199,9 +199,11 @@
               vtag,         %% string() - vtag the user asked for
               bucketprops,  %% proplist() - properties of the bucket
               links,        %% [link()] - links of the object
+              index_fields, %% [index_field()]
               method        %% atom() - HTTP method for the request
              }).
 %% @type link() = {{Bucket::binary(), Key::binary()}, Tag::binary()}
+%% @type index_field() = {Key::string(), Value::string()}
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
@@ -343,9 +345,15 @@ malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'POST'
                     {true, missing_content_type(RD), Ctx};
                 _ ->
                     case malformed_rw_params(RD, Ctx) of
-                        Result={true, _, _} -> Result;
+                        Result={true, _, _} -> 
+                            Result;
                         {false, RWRD, RWCtx} ->
-                            malformed_link_headers(RWRD, RWCtx)
+                            case malformed_link_headers(RWRD, RWCtx) of
+                                Result = {true, _, _} ->
+                                    Result;
+                                {false, RWLH, LHCtx} ->
+                                    malformed_index_headers(RWLH, LHCtx)
+                            end
                     end
             end
     end;
@@ -532,6 +540,37 @@ malformed_link_headers(RD, Ctx) ->
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx}
     end.
+
+%% @spec malformed_index_headers(reqdata(), context()) ->
+%%           {boolean(), reqdata(), context()}
+%%
+%% @doc Check that the Index headers (HTTP headers prefixed with index_") 
+%%      are valid. Store the parsed headers in context() if valid, 
+%%      or print an error in reqdata() if not.
+%%      An index field should be of the form "index_fieldname_type"
+malformed_index_headers(RD, Ctx) ->
+    %% Get a list of index_headers...
+    L1 = extract_index_headers(RD),
+
+    %% Remove the prefix...
+    PrefixSize = length(?HEAD_INDEX_PREFIX),
+    F = fun(X) -> element(2, lists:split(PrefixSize, X)) end,
+    L2 = [{F(K),V} || {K, V} <- L1],
+
+    %% TODO - Parse this based on data types.  For now, just store
+    %% this list in the context, and later store it in an object.
+    {false, RD, Ctx#ctx { index_fields=L2 }}.
+
+%% @spec extract_index_headers(reqdata()) -> proplist()
+%% @doc Extract headers prefixed by "index-" in the client's 
+%%      PUT request, to be indexed at write time.
+extract_index_headers(RD) ->
+    lists:filter(fun({K,_V}) ->
+                    lists:prefix(
+                        ?HEAD_INDEX_PREFIX,
+                        string:to_lower(any_to_list(K)))
+                end,
+                mochiweb_headers:to_list(wrq:req_headers(RD))).
 
 %% @spec content_types_provided(reqdata(), context()) ->
 %%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
@@ -891,7 +930,7 @@ process_post(RD, Ctx) -> accept_doc_body(RD, Ctx).
 %% @doc Store the data the client is PUTing in the document.
 %%      This function translates the headers and body of the HTTP request
 %%      into their final riak_object() form, and executes the Riak put.
-accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L}) ->
+accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L, index_fields=IF}) ->
     Doc0 = case Ctx#ctx.doc of
                {ok, D} -> D;
                _       -> riak_object:new(B, K, <<>>)
@@ -910,7 +949,8 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L}) ->
             end,
     LinkMD = dict:store(?MD_LINKS, L, EncMD),
     UserMetaMD = dict:store(?MD_USERMETA, UserMeta, LinkMD),
-    MDDoc = riak_object:update_metadata(VclockDoc, UserMetaMD),
+    IndexMD = dict:store(?MD_INDEX, IF, UserMetaMD),
+    MDDoc = riak_object:update_metadata(VclockDoc, IndexMD),
     Doc = riak_object:update_value(MDDoc, accept_value(CType, wrq:req_body(RD))),
     Options = case wrq:get_qs_value(?Q_RETURNBODY, RD) of ?Q_TRUE -> [returnbody]; _ -> [] end,
     case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
@@ -1016,11 +1056,12 @@ multiple_choices(RD, Ctx) ->
     {false, RD, Ctx}.
 
 %% @spec produce_doc_body(reqdata(), context()) -> {binary(), reqdata(), context()}
-%% @doc Extract the value of the document, and place it in the response
-%%      body of the request.  This function also adds the Link and X-Riak-Meta-
-%%      headers to the response.  One link will point to the bucket, with the
-%%      property "rel=container".  The rest of the links will be constructed
-%%      from the links of the document.
+%% @doc Extract the value of the document, and place it in the
+%%      response body of the request.  This function also adds the
+%%      Link, X-Riak-Meta- headers, and X-Riak-Index- headers to the
+%%      response.  One link will point to the bucket, with the
+%%      property "rel=container".  The rest of the links will be
+%%      constructed from the links of the document.
 produce_doc_body(RD, Ctx) ->
     case select_doc(Ctx) of
         {MD, Doc} ->
@@ -1042,7 +1083,15 @@ produce_doc_body(RD, Ctx) ->
                                         LinkRD, UserMeta);
                         error -> LinkRD
                     end,
-            {encode_value(Doc), encode_vclock_header(UserMetaRD, Ctx), Ctx};
+            IndexRD = case dict:find(?MD_INDEX, MD) of
+                          {ok, IndexMeta} ->
+                              lists:foldl(fun({K,V}, Acc) ->
+                                                  wrq:merge_resp_headers([{?HEAD_INDEX_PREFIX ++ K,V}], Acc)
+                                          end,
+                                          UserMetaRD, IndexMeta);
+                          error -> UserMetaRD
+                      end,
+            {encode_value(Doc), encode_vclock_header(IndexRD, Ctx), Ctx};
         multiple_choices ->
             throw({unexpected_code_path, ?MODULE, produce_doc_body, multiple_choices})
     end.
@@ -1116,6 +1165,12 @@ multipart_encode_body(Prefix, Bucket, {MD, V}) ->
                             [Acc|[Hdr,": ",Val,"\r\n"]]
                         end,
                         [], M);
+         error -> []
+     end,
+     "\r\n",
+     case dict:find(?MD_INDEX, MD) of
+         {ok, IF} ->
+             [[?HEAD_INDEX_PREFIX,Key,": ",Val,"\r\n"] || {Key,Val} <- IF];
          error -> []
      end,
      "\r\n",encode_value(V)].
