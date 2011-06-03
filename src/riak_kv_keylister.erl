@@ -153,11 +153,53 @@ build_filters(Inputs, VNodes, FilterVNodes) ->
 
     %% Handling the filtering here is awkward.
     %% Hopefully it will soon be moved to the vnode.
-    case KeyFilter of
+    if
         %% TODO: Refactor once coverage code is in riak_core.
-        list_buckets ->
+        (KeyFilter == list_buckets) ->
             Filters = list_buckets;
-        _ ->
+        (KeyFilter == none) andalso (FilterVNodes == undefined) -> % no filtering
+            Filters = [];
+        (KeyFilter == none) -> % only vnode filtering reuquired
+            %% TODO: Change this to use the upcoming addition to
+            %% riak_core_ring that will allow finding the index
+            %% responsible for a bkey pair without working out the
+            %% entire preflist.
+            PrefListFun = fun(X) -> get_first_preflist({Bucket, X}, Ring) end,
+            %% Create a function to check which VNodes should be filtered.
+            VNodeFilterCheck =
+                fun({Index, _}, Filters) ->
+                        case proplists:get_value(Index, FilterVNodes) of
+                            undefined ->  % No VNode-level filtering required
+                                Filters;
+                            KeySpaceIndexes -> % VNode-level filtering is required
+                                VNodeFilter = fun(X) ->
+                                                      {PrefListIndex, _} = PrefListFun(X),
+                                                      lists:member(PrefListIndex, KeySpaceIndexes)
+                                              end,
+                                Filter = fun(Key, Acc) ->
+                                                 case VNodeFilter(Key) of
+                                                     true ->
+                                                         [Key|Acc];
+                                                     false ->
+                                                         Acc
+                                                 end
+                                         end,
+                                [{Index, Filter} | Filters]
+                        end
+                end,
+            Filters = lists:foldl(VNodeFilterCheck, [], VNodes);
+        (FilterVNodes == undefined) -> % only key filtering
+            %% Create the function to do key filtering
+            Filter = fun(Key, Acc) ->
+                             case KeyFilter(Key) of
+                                 true ->
+                                     [Key|Acc];
+                                 false ->
+                                     Acc
+                             end
+                     end,
+            Filters = [{Index, Filter} || {Index, _} <- VNodes];
+        true -> % key and vnode filtering
             %% TODO: Change this to use the upcoming addition to
             %% riak_core_ring that will allow finding the index
             %% responsible for a bkey pair without working out the
