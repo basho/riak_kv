@@ -1107,13 +1107,13 @@ ensure_doc(Ctx) -> Ctx.
 %% @spec delete_resource(reqdata(), context()) -> {true, reqdata(), context()}
 %% @doc Delete the document specified.
 delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C, rw=RW, r=R, w=W,
-        pr=PR, pw=PW}) ->
+        pr=PR, pw=PW, dw=DW}) ->
     Result = case wrq:get_req_header(?HEAD_VCLOCK, RD) of
         undefined -> 
-            C:delete(B,K,[{rw, RW}, {r, R}, {w, W}, {pr, PR}, {pw, PW}]);
+            C:delete(B,K,[{rw, RW}, {r, R}, {w, W}, {pr, PR}, {pw, PW}, {dw, DW}]);
         _ ->
             C:delete_vclock(B,K,decode_vclock_header(RD),
-                [{rw, RW}, {r, R}, {w, W}, {pr, PR}, {pw, PW}])
+                [{rw, RW}, {r, R}, {w, W}, {pr, PR}, {pw, PW}, {dw, DW}])
     end,
     case Result of
         {error, Reason} ->

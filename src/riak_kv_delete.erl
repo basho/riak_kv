@@ -54,7 +54,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
     case get_rw_options(Bucket, Options) of
         {error, Reason} ->
             Client ! {ReqId, {error, Reason}};
-        {R, _W, PR, _PW} ->
+        {R, _W, PR, _PW, _DW} ->
             RealStartTime = riak_core_util:moment(),
             {ok, C} = riak:local_client(),
             case C:get(Bucket,Key,[{r,R},{pr,PR},{timeout,Timeout}]) of
@@ -71,12 +71,12 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
     case get_rw_options(Bucket, Options) of
         {error, Reason} ->
             Client ! {ReqId, {error, Reason}};
-        {_R, W, _PR, PW} ->
+        {_R, W, _PR, PW, DW} ->
             Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(<<"X-Riak-Deleted">>,
                                                                  "true", dict:new())),
             Tombstone = riak_object:set_vclock(Obj0, VClock),
             {ok,C} = riak:local_client(ClientId),
-            Reply = C:put(Tombstone, [{w,W},{pw,PW},{timeout,Timeout}]),
+            Reply = C:put(Tombstone, [{w,W},{pw,PW},{dw, DW},{timeout,Timeout}]),
             Client ! {ReqId, Reply},
             case Reply of
                 ok ->
@@ -126,7 +126,13 @@ get_rw_options(Bucket, Options) ->
                         error ->
                             {error, {pw_val_violation, PW0}};
                         PW ->
-                            {R, W, PR, PW}
+                            DW0 = proplists:get_value(dw, Options, default),
+                            case riak_kv_util:expand_rw_value(dw, DW0, BucketProps, N) of
+                                error ->
+                                    {error, {dw_val_violation, DW0}};
+                                DW ->
+                                    {R, W, PR, PW, DW}
+                            end
                     end
             end
     end.
