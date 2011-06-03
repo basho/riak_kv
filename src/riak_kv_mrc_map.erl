@@ -128,6 +128,8 @@ map({jsfun, Name}, Arg, Input) ->
 map({jsanon, Source}, Arg, Input) ->
     map_js({jsanon, Source}, Arg, Input).
 
+map_js(_JS, _Arg, {error, notfound}) ->
+    {ok, [{not_found, <<"TODO: Bkey">>, <<"TODO: KeyData">>}]};
 map_js(JS, Arg, Input) ->
     %% TODO: keydata
     JSArgs = [riak_object:to_json(Input), <<"">>, Arg],
