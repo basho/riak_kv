@@ -198,7 +198,10 @@ validate_arg({Phase, _Arg}) ->
                       "The PhaseSpec part of the argument for ~p"
                       " must be of one of the following forms:~n"
                       "   {modfun, Module :: atom(), Function :: atom()}~n"
-                      "   {qfun, Function :: function()}~n",
+                      "   {qfun, Function :: function()}~n"
+                      "   {jsanon, {Bucket :: binary(), Key :: binary()}}~n"
+                      "   {jsanon, Source :: binary()}~n"
+                      "   {jsfun, Name :: binary()}~n",
                       [?MODULE])}
     end;
 validate_arg(Other) ->
