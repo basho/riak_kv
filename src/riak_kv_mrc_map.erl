@@ -90,7 +90,7 @@ init_phase({jsanon, {Bucket, Key}}) ->
     end;
 init_phase(Other) ->
     %% other types need no initialization
-    Other.
+    {ok, Other}.
 
 %% @doc Process evaluates the fitting's argument function, and sends
 %%      output downstream.
