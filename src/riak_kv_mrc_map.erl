@@ -65,7 +65,32 @@
 -spec init(riak_pipe_vnode:partition(), riak_pipe_fitting:details()) ->
          {ok, state()}.
 init(Partition, #fitting_details{arg={Phase, Arg}}=FittingDetails) ->
-    {ok, #state{p=Partition, fd=FittingDetails, phase=Phase, arg=Arg}}.
+    case init_phase(Phase) of
+        {ok, LocalPhase} ->
+            {ok, #state{p=Partition, fd=FittingDetails,
+                        phase=LocalPhase, arg=Arg}};
+        {error, Error} ->
+            {error, Error}
+    end.
+
+init_phase({jsanon, {Bucket, Key}}) ->
+    %% lookup source for stored-js function only at fitting worker
+    %% startup, and convert to {jsanon, Source}
+    {ok, C} = riak:local_client(),
+    case C:get(Bucket, Key, 1) of
+        {ok, Object} ->
+            case riak_object:get_value(Object) of
+                Source when is_binary(Source) ->
+                    {ok, {jsanon, Source}};
+                Value ->
+                    {error, {jsanon, {invalid, Value}}}
+            end;
+        {error, notfound} ->
+            {error, {jsanon, {notfound, {Bucket, Key}}}}
+    end;
+init_phase(Other) ->
+    %% other types need no initialization
+    Other.
 
 %% @doc Process evaluates the fitting's argument function, and sends
 %%      output downstream.
@@ -97,8 +122,7 @@ map({strfun, {Bucket, Key}}, _Arg, _Input) ->
     exit({strfun, {Bucket, Key}});
 map({strfun, Source}, _Arg, _Input) ->
     exit({strfun, Source});
-map({jsanon, {Bucket, Key}}, _Arg, _Input) ->
-    exit({jsanon, {Bucket, Key}});
+%% {jsanon, {Bucket, Key}} is converted to {jsanon, Source} in init
 map({jsfun, Name}, Arg, Input) ->
     map_js({jsfun, Name}, Arg, Input);
 map({jsanon, Source}, Arg, Input) ->
@@ -141,8 +165,16 @@ validate_arg({Phase, _Arg}) ->
             {error, "{strfun, {Bucket, Key}} is not yet implemented"};
         {strfun, _Source} ->
             {error, "{strfun, Source} is not yet implemented"};
-        {jsanon, {_Bucket, _Key}} ->
-            {error, "{jsanon, {Bucket, Key}} is not yet implemented"};
+        {jsanon, {Bucket, Key}} ->
+            if is_binary(Bucket), is_binary(Key) -> ok;
+               true ->
+                    {error, io_lib:format(
+                              "~p requires that the {Bucket,Key} of a jsanon"
+                              " request be a {binary,binary}, not {~p,~p}",
+                              [?MODULE,
+                               riak_pipe_v:type_of(Bucket),
+                               riak_pipe_v:type_of(Key)])}
+            end;
         {jsfun, Name} ->
             if is_binary(Name) -> ok; %% TODO: validate name somehow?
                true ->
