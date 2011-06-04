@@ -433,7 +433,7 @@ start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Filters, Timeout) ->
             %% previous plan did.
             KeyListerCleanup = 
                 fun({Node, Pid}=KeyLister, Acc) ->
-                        case proplists:is_defined(Node) of
+                        case proplists:is_defined(Node, NodeIndexes) of
                             true ->
                                 [KeyLister | Acc];
                             false ->
