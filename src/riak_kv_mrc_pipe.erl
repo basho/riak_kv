@@ -296,8 +296,12 @@ group_outputs(Outputs, NumKeeps) ->
                          dict:new(),
                          Outputs),
     if NumKeeps < 2 ->                          % 0 or 1
-            [{_, O}] = dict:to_list(Merged),
-            O;
+            case dict:to_list(Merged) of
+                [{_, O}] ->
+                    O;
+                [] ->
+                    []
+            end;
        true ->
             [ O || {_, O} <- lists:keysort(1, dict:to_list(Merged)) ]
     end.
