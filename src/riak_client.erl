@@ -363,7 +363,7 @@ delete(Bucket,Key) -> delete(Bucket,Key,[],?DEFAULT_TIMEOUT).
 %%       {error, notfound} |
 %%       {error, timeout} |
 %%       {error, Err :: term()}
-%% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
+%% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error.
 %% @equiv delete(Bucket, Key, RW, default_timeout())
 delete(Bucket,Key,Options) when is_list(Options) ->
@@ -379,7 +379,7 @@ delete(Bucket,Key,RW) ->
 %%       {error, timeout} |
 %%       {error, {n_val_violation, N::integer()}} |
 %%       {error, Err :: term()}
-%% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
+%% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
 delete(Bucket,Key,Options,Timeout) when is_list(Options) ->
     Me = self(),
@@ -396,7 +396,7 @@ delete(Bucket,Key,RW,Timeout) ->
 %%       {error, notfound} |
 %%       {error, timeout} |
 %%       {error, Err :: term()}
-%% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
+%% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error.
 %% @equiv delete(Bucket, Key, RW, default_timeout())
 delete_vclock(Bucket,Key,VClock) ->
@@ -408,7 +408,7 @@ delete_vclock(Bucket,Key,VClock) ->
 %%       {error, notfound} |
 %%       {error, timeout} |
 %%       {error, Err :: term()}
-%% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
+%% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error.
 %% @equiv delete(Bucket, Key, RW, default_timeout())
 delete_vclock(Bucket,Key,VClock,Options) when is_list(Options) ->
@@ -424,7 +424,7 @@ delete_vclock(Bucket,Key,VClock,RW) ->
 %%       {error, timeout} |
 %%       {error, {n_val_violation, N::integer()}} |
 %%       {error, Err :: term()}
-%% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
+%% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
 delete_vclock(Bucket,Key,VClock,Options,Timeout) when is_list(Options) ->
     Me = self(),
