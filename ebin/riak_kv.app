@@ -9,6 +9,7 @@
              raw_link_walker,
              riak,
              riak_client,
+             riak_index,
              riak_kv_app,
              riak_kv_backup,
              riak_kv_backend,
