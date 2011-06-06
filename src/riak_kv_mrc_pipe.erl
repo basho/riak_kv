@@ -132,8 +132,8 @@ mr2pipe_phase({map,FunSpec,Arg,Keep}, I, _ConstHashCookie, QueryT) ->
     map2pipe(FunSpec, Arg, Keep, I, QueryT);
 mr2pipe_phase({reduce,FunSpec,Arg,Keep}, I, ConstHashCookie, QueryT) ->
     reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie, QueryT);
-mr2pipe_phase({link,Bucket,Tag,Keep}, I, _ConstHashCookie, _QueryT)->
-    link2pipe(Bucket, Tag, Keep, I).
+mr2pipe_phase({link,Bucket,Tag,Keep}, I, _ConstHashCookie, QueryT)->
+    link2pipe(Bucket, Tag, Keep, I, QueryT).
 
 %% Prereduce logic: add pre_reduce fittings to the pipe line if
 %% the current item is a map (if you're calling this func, yes it is)
@@ -195,6 +195,9 @@ want_prereduce_p(Idx, QueryT) ->
 query_type(Idx, QueryT) ->
     element(1, element(Idx, QueryT)).
 
+query_arg(Idx, QueryT) ->
+    element(3, element(Idx, QueryT)).
+
 identity(InputList, _Unused, _Arg) ->
     InputList.
 
@@ -214,8 +217,20 @@ reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie, QueryT) ->
                      chashfun=follow}
        ||Keep]].
 
-link2pipe(Bucket, Tag, Keep, I) ->
-    throw({todo, get, Bucket, get_link, make_map, Tag, map2pipe, Keep, I}).
+link2pipe(Bucket, Tag, Keep, I, QueryT) ->
+    Arg = query_arg(I+1, QueryT),
+    [#fitting_spec{name={kvget_map,I},
+                   module=riak_kv_pipe_get,
+                   chashfun=fun riak_core_util:chash_key/1,
+                   nval=fun bkey_nval/1},
+     #fitting_spec{name={xform_map,I},
+                   module=riak_pipe_w_xform,
+                   arg=link_xform_compat(Bucket, Tag, Arg),
+                   chashfun=follow}|
+     [#fitting_spec{name=I,
+                    module=riak_pipe_w_tee,
+                    arg=sink,
+                    chashfun=follow} || Keep]].
 
 fix_final_fitting(Fittings) ->
     case lists:reverse(Fittings) of
@@ -245,10 +260,29 @@ map_xform_compat({qfun, Fun}, Arg) ->
             ok
     end.
 
+
+link_xform_compat(Bucket, Tag, _Arg) ->
+    fun(Input, Partition, FittingDetails) ->
+            ?T(FittingDetails, [map], {mapping, Input}),
+            LinkFun = bucket_linkfun(Bucket),
+            Threes = LinkFun(Input, none, {Bucket, Tag}),
+            Results = [{B, K} || [B, K, _Tg] <- Threes],
+            ?T(FittingDetails, [map], {produced, Results}),
+            [ riak_pipe_vnode_worker:send_output(R, Partition,
+                                                 FittingDetails)
+              || R <- Results ],
+            ok
+    end.
+
 bkey_nval({Bucket, _Key}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     {n_val, NVal} = lists:keyfind(n_val, 1, BucketProps),
     NVal.
+
+bucket_linkfun(Bucket) ->
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    {_, {modfun, Module, Function}} = lists:keyfind(linkfun, 1, BucketProps),
+    erlang:make_fun(Module, Function, 3).
 
 correct_keeps([]) ->
     [];
@@ -311,8 +345,13 @@ group_outputs(Outputs, NumKeeps) ->
                          dict:new(),
                          Outputs),
     if NumKeeps < 2 ->                          % 0 or 1
-            [{_, O}] = dict:to_list(Merged),
-            O;
+            case dict:to_list(Merged) of
+                [{_, O}] ->
+                    O;
+                [] ->
+                    %% Shouldn't ever happen unless an error happened elsewhere
+                    []
+            end;
        true ->
             [ O || {_, O} <- lists:keysort(1, dict:to_list(Merged)) ]
     end.
