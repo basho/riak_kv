@@ -148,7 +148,6 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 
 %% @private
 build_filters(Inputs, VNodes, FilterVNodes) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     {Bucket, KeyFilter} = build_key_filter(Inputs),
 
     %% Handling the filtering here is awkward.
@@ -160,21 +159,64 @@ build_filters(Inputs, VNodes, FilterVNodes) ->
         (KeyFilter == none) andalso (FilterVNodes == undefined) -> % no filtering
             Filters = [];
         (FilterVNodes == undefined) -> % only key filtering
-            %% Build the filter function to do key filtering
-            Filter = build_filter(KeyFilter, none),
-            Filters = [{Index, Filter} || {Index, _} <- VNodes];
-        (KeyFilter == none) -> % only vnode filtering reuquired
+            %% Associate a key filtering function with each VNode
+            Filters = [{Index, build_filter(Index, KeyFilter)} || {Index, _} <- VNodes];
+        (KeyFilter == none) -> % only vnode filtering required
+            {ok, Ring} = riak_core_ring_manager:get_my_ring(),
             PrefListFun = build_preflist_fun(Bucket, Ring),
-            %% Create a function to check which VNodes should be filtered.
-            VNodeFilterCheck = build_vnode_filter_check(FilterVNodes, PrefListFun),
-            Filters = lists:foldl(VNodeFilterCheck, [], VNodes);
+            %% Create VNode filters only as necessary
+            Filters = [{Index, build_filter(proplists:get_value(Index, FilterVNodes), PrefListFun)} || {Index, _} <- VNodes, proplists:is_defined(Index, FilterVNodes)];
         true -> % key and vnode filtering
+            {ok, Ring} = riak_core_ring_manager:get_my_ring(),
             PrefListFun = build_preflist_fun(Bucket, Ring),
-            %% Create a function to check which VNodes should be filtered.
-            VNodeFilterCheck = build_vnode_filter_check(FilterVNodes, PrefListFun, KeyFilter),
-            Filters = lists:foldl(VNodeFilterCheck, [], VNodes)
+            %% Create a filter for each VNode
+            Filters = [{Index, build_filter(proplists:get_value(Index, FilterVNodes), PrefListFun, KeyFilter)} || {Index, _} <- VNodes]
     end,
     {Bucket, Filters}.
+
+%% @private
+build_filter(KeyFilter) ->
+    fun(Key, Acc) ->
+            case KeyFilter(Key) of
+                true ->
+                    [Key|Acc];
+                false ->
+                    Acc
+            end
+    end.
+
+build_filter(KeySpaceIndexes, PrefListFun) ->
+    VNodeFilter = build_vnode_filter(KeySpaceIndexes, PrefListFun),
+    fun(Key, Acc) ->
+            case VNodeFilter(Key) of
+                true ->
+                    [Key|Acc];
+                false ->
+                    Acc
+            end
+
+    end.
+
+build_filter(undefined, _, KeyFilter) ->
+    build_filter(KeyFilter);
+build_filter(KeySpaceIndexes, PrefListFun, KeyFilter) ->
+    VNodeFilter = build_vnode_filter(KeySpaceIndexes, PrefListFun),
+    fun(Key, Acc) ->
+            case KeyFilter(Key) andalso VNodeFilter(Key) of
+                true ->
+                    [Key|Acc];
+                false ->
+                    Acc
+            end
+
+    end.
+
+%% @private
+build_vnode_filter(KeySpaceIndexes, PrefListFun) ->
+    fun(X) ->
+            {PrefListIndex, _} = PrefListFun(X),
+            lists:member(PrefListIndex, KeySpaceIndexes)
+    end.
 
 %% @private
 build_key_filter('_') ->
@@ -194,8 +236,8 @@ build_preflist_fun(Bucket, Ring) ->
     %% riak_core_ring that will allow finding the index
     %% responsible for a bkey pair without working out the
     %% entire preflist.
-    fun(X) ->
-            get_first_preflist({Bucket, X}, Ring)
+    fun(Key) ->
+            get_first_preflist({Bucket, Key}, Ring)
     end.
 
 %% @private
@@ -205,70 +247,3 @@ get_first_preflist({Bucket, Key}, Ring) ->
     %% use in filtering the keys from this VNode.
     ChashKey = riak_core_util:chash_key({Bucket, Key}),
     hd(riak_core_ring:preflist(ChashKey, Ring)).
-
-%% @private
-build_vnode_filter_check(FilterVNodes, PrefListFun) ->
-    %% Create a function to check which VNodes should be filtered.
-    fun({Index, _}, Filters) ->
-            case proplists:get_value(Index, FilterVNodes) of
-                undefined ->  % No VNode-level filtering required
-                    Filters;
-                KeySpaceIndexes -> % VNode-level filtering is required
-                    VNodeFilter = fun(X) ->
-                                          {PrefListIndex, _} = PrefListFun(X),
-                                          lists:member(PrefListIndex, KeySpaceIndexes)
-                                  end,
-                    Filter = build_filter(none, VNodeFilter),
-                    [{Index, Filter} | Filters]
-            end
-    end.
-
-%% @private
-build_vnode_filter_check(FilterVNodes, PrefListFun, KeyFilter) ->
-    %% Create a function to check which VNodes should be filtered.
-    fun({Index, _}, Filters) ->
-            case proplists:get_value(Index, FilterVNodes) of
-                undefined ->  % No VNode-level filtering required
-                    Filter = build_filter(KeyFilter, none),
-                    [{Index, Filter} | Filters];
-                KeySpaceIndexes -> % VNode-level filtering is required
-                    VNodeFilter = fun(X) ->
-                                          {PrefListIndex, _} = PrefListFun(X),
-                                          lists:member(PrefListIndex, KeySpaceIndexes)
-                                  end,
-                    Filter = build_filter(KeyFilter, VNodeFilter),
-                    [{Index, Filter} | Filters]
-            end
-    end.
-
-%% @private
-build_filter(KeyFilter, none) ->
-    fun(Key, Acc) ->
-            case KeyFilter(Key) of
-                true ->
-                    [Key|Acc];
-                false ->
-                    Acc
-            end
-    end;
-build_filter(none, VNodeFilter) ->
-    fun(Key, Acc) ->
-            case VNodeFilter(Key) of
-                true ->
-                    [Key|Acc];
-                false ->
-                    Acc
-            end
-
-    end;
-build_filter(KeyFilter, VNodeFilter) ->
-    fun(Key, Acc) ->
-            case KeyFilter(Key) andalso VNodeFilter(Key) of
-                true ->
-                    [Key|Acc];
-                false ->
-                    Acc
-            end
-
-    end.
-
