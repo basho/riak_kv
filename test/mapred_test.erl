@@ -276,6 +276,14 @@ compat_basic1_test_() ->
                  Spec = [{link, '_', <<"link 1">>, true}],
                  {ok, [{LinkBucket, <<"nokey-1">>}]} =
                      riak_kv_mrc_pipe:mapred(Inputs, Spec)
+             end),
+          ?_test(
+             %% Link phase + notfound
+             begin
+                 Inputs = [{<<"no">>, K} || K <- [<<"no1">>, <<"no2">>]],
+                 Spec = [{link, '_', '_', true}],
+                 {ok, []} =
+                     riak_kv_mrc_pipe:mapred(Inputs, Spec)
              end)
           ]
      end}.

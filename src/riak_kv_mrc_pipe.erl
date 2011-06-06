@@ -262,10 +262,14 @@ map_xform_compat({qfun, Fun}, Arg) ->
 
 
 link_xform_compat(Bucket, Tag, _Arg) ->
+    Default = {modfun, riak_kv_wm_link_walker, mapreduce_linkfun},
+    {modfun, Module, Function} = app_helper:get_env(
+                                   riak_kv, riak_kv_wm_link_walker,
+                                   Default),
+    LinkFun = erlang:make_fun(Module, Function, 3),
     fun(Input, Partition, FittingDetails) ->
             ?T(FittingDetails, [map], {mapping, Input}),
-            Threes = riak_kv_wm_link_walker:mapreduce_linkfun(
-                       Input, none, {Bucket, Tag}),
+            Threes = LinkFun(Input, none, {Bucket, Tag}),
             Results = [{B, K} || [B, K, _Tg] <- Threes],
             ?T(FittingDetails, [map], {produced, Results}),
             [ riak_pipe_vnode_worker:send_output(R, Partition,
