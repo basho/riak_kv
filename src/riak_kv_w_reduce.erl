@@ -35,12 +35,16 @@
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
 
+-include("riak_kv_js_pools.hrl").
+
 -record(state, {acc :: list(),
                 delay :: integer(),
                 delay_max :: integer(),
                 p :: riak_pipe_vnode:partition(),
                 fd :: riak_pipe_fitting:details()}).
 -opaque state() :: #state{}.
+
+-define(DEFAULT_JS_RESERVE_ATTEMPTS, 10).
 
 %% @doc Setup creates an empty list accumulator and
 %%      stashes away the `Partition' and `FittingDetails' for later.
@@ -140,6 +144,18 @@ chashfun({Key,_}) ->
 %% @doc Compatibility wrapper for an old-school Riak MR reduce function,
 %%      which is an arity-2 function `fun(InputList, SpecificationArg)'.
 
+reduce_compat({jsanon, {Bucket, Key}}, PreviousIsReduceP)
+  when is_binary(Bucket), is_binary(Key) ->
+    reduce_compat({qfun, js_runner({jsanon, stored_js_source(Bucket, Key)})},
+                  PreviousIsReduceP);
+reduce_compat({jsanon, Source}, PreviousIsReduceP)
+  when is_binary(Source) ->
+    reduce_compat({qfun, js_runner({jsanon, Source})},
+                  PreviousIsReduceP);
+reduce_compat({jsfun, Name}, PreviousIsReduceP)
+  when is_binary(Name) ->
+    reduce_compat({qfun, js_runner({jsfun, Name})},
+                  PreviousIsReduceP);
 reduce_compat({modfun, Module, Function}, PreviousIsReduceP) ->
     reduce_compat({qfun, erlang:make_fun(Module, Function, 2)}, 
                   PreviousIsReduceP);
@@ -148,6 +164,25 @@ reduce_compat({qfun, Fun}, true) ->
     fun(Inputs, Arg) -> Fun(lists:append(Inputs), Arg) end;
 reduce_compat({qfun, Fun}, false) ->
     Fun.
+
+stored_js_source(Bucket, Key) ->
+    {ok, C} = riak:local_client(),
+    {ok, Object} = C:get(Bucket, Key, 1),
+    riak_object:get_value(Object).
+        
+js_runner(JS) ->
+    fun(Inputs, Arg) ->
+            JSInputs = [riak_kv_mapred_json:jsonify_not_found(I)
+                        || I <- Inputs],
+            JSCall = {JS, [JSInputs, Arg]},
+            case riak_kv_js_manager:blocking_dispatch(
+                   ?JSPOOL_REDUCE, JSCall, ?DEFAULT_JS_RESERVE_ATTEMPTS) of
+                {ok, Results0}  ->
+                    [riak_kv_mapred_json:dejsonify_not_found(R)
+                     || R <- Results0];
+                {error, no_vms} -> {forward_preflist, no_js_vms}
+            end
+    end.
 
 calc_delay_max(#fitting_details{arg = {rct, _ReduceFun, ReduceArg}}) ->
     Props = case ReduceArg of
