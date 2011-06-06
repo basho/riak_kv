@@ -178,7 +178,7 @@ initialize(timeout, StateData0=#state{bucket=Bucket,
     %% while creating a coverage plan.
     Nodes = riak_core_ring:all_members(Ring),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    case plan_and_execute(ReqId, Input, NVal, PartitionCount, Ring, Timeout, [], [Nodes -- UpNodes]) of
+    case plan_and_execute(ReqId, Input, NVal, PartitionCount, Ring, Timeout, [], Nodes -- UpNodes) of
         {ok, RequiredResponseCount} ->
             StateData = StateData0#state{required_responses=RequiredResponseCount},
             {next_state, waiting_kl, StateData, Timeout};
