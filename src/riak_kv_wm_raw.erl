@@ -557,9 +557,18 @@ malformed_index_headers(RD, Ctx) ->
     F = fun(X) -> element(2, lists:split(PrefixSize, X)) end,
     L2 = [{F(K),V} || {K, V} <- L1],
 
-    %% TODO - Parse this based on data types.  For now, just store
-    %% this list in the context, and later store it in an object.
-    {false, RD, Ctx#ctx { index_fields=L2 }}.
+    %% Validate the fields. If validation passes, then the index
+    %% headers are correctly formed.
+    case riak_index:validate_fields(L2) of
+        true ->
+            {false, RD, Ctx#ctx { index_fields=L2 }};
+        {false, Reasons} ->
+            {true,
+             wrq:append_to_resp_body(
+               [riak_index:format_failure_reason(X) || X <- Reasons],
+               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx}
+    end.
 
 %% @spec extract_index_headers(reqdata()) -> proplist()
 %% @doc Extract headers prefixed by "index-" in the client's 
