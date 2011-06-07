@@ -551,14 +551,13 @@ malformed_link_headers(RD, Ctx) ->
 malformed_index_headers(RD, Ctx) ->
     %% Get a list of index_headers...
     L = extract_index_headers(RD),
-    io:format("L: ~p~n", [L]),
 
     %% Validate the fields. If validation passes, then the index
     %% headers are correctly formed.
-    case riak_index:validate_fields(L) of
-        true ->
+    case riak_index:parse_fields(L) of
+        {ok, _} ->
             {false, RD, Ctx#ctx { index_fields=L }};
-        {false, Reasons} ->
+        {error, Reasons} ->
             {true,
              wrq:append_to_resp_body(
                [riak_index:format_failure_reason(X) || X <- Reasons],
@@ -567,21 +566,22 @@ malformed_index_headers(RD, Ctx) ->
     end.
 
 %% @spec extract_index_headers(reqdata()) -> proplist().
-%% @doc Extract headers prefixed by "index-" in the client's
+%%
+%% @doc Extract headers prefixed by "x-riak-index-" in the client's
 %%      PUT request, to be indexed at write time.
 extract_index_headers(RD) ->
-    lists:foldl(fun({K,_V}, Acc) ->
-                    LowerK = string:to_lower(any_to_list(K)),
-                    case lists:prefix(?HEAD_INDEX_PREFIX, LowerK) of
-                        true ->
-                            ?HEAD_INDEX_PREFIX ++ IndexField = K,
-                            [{IndexField, _V} | Acc];
-                        false ->
-                            Acc
-                    end
-                end,
-                [],
-                mochiweb_headers:to_list(wrq:req_headers(RD))).
+    PrefixSize = length(?HEAD_INDEX_PREFIX),
+    F = fun({K,V}, Acc) ->
+                KList = any_to_list(K),
+                case lists:prefix(?HEAD_INDEX_PREFIX, string:to_lower(KList)) of
+                    true ->
+                        IndexField = element(2, lists:split(PrefixSize, KList)),
+                        [{IndexField, V} | Acc];
+                    false ->
+                        Acc
+                end
+        end,
+    lists:foldl(F, [], mochiweb_headers:to_list(wrq:req_headers(RD))).
 
 %% @spec content_types_provided(reqdata(), context()) ->
 %%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
