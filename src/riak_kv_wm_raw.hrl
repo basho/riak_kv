@@ -22,6 +22,7 @@
 -define(MD_LINKS,    <<"Links">>).
 -define(MD_LASTMOD,  <<"X-Riak-Last-Modified">>).
 -define(MD_USERMETA, <<"X-Riak-Meta">>).
+-define(MD_INDEX,    <<"index">>).
 
 %% Names of HTTP header fields
 -define(HEAD_CTYPE,           "Content-Type").
@@ -30,6 +31,7 @@
 -define(HEAD_ENCODING,        "Content-Encoding").
 -define(HEAD_CLIENT,          "X-Riak-ClientId").
 -define(HEAD_USERMETA_PREFIX, "x-riak-meta-").
+-define(HEAD_INDEX_PREFIX,    "x-riak-index-").
 
 %% Names of JSON fields in bucket properties
 -define(JSON_PROPS,   <<"props">>).
