@@ -298,7 +298,7 @@ create_coverage_plan(NVal, PartitionCount, Ring, Offset, DownVNodes) ->
     RingIndexInc = ?RINGTOP div PartitionCount,
     AllKeySpaces = lists:seq(0, PartitionCount - 1),
     UnavailableKeySpaces = [(DownVNode div RingIndexInc) || DownVNode <- DownVNodes],
-    %% The offset value serves as a tiebreaker in the 
+    %% The offset value serves as a tiebreaker in the
     %% compare_next_vnode function and is used to distribute
     %% work to different sets of VNodes.
     AvailableKeySpaces = [{((VNode+Offset) rem PartitionCount), VNode, n_keyspaces(VNode, NVal, PartitionCount)}
@@ -319,15 +319,9 @@ create_coverage_plan(NVal, PartitionCount, Ring, Offset, DownVNodes) ->
                                            true ->
                                                %% Get the VNode index of each keyspace to
                                                %% use to filter results from this VNode.
-                                               KeySpaceIndexes = [(((KeySpaceIndex+1) rem PartitionCount) * RingIndexInc) 
+                                               KeySpaceIndexes = [(((KeySpaceIndex+1) rem PartitionCount) * RingIndexInc)
                                                                   || KeySpaceIndex <- KeySpaces],
-                                               case proplists:get_value(Node, Acc) of
-                                                   undefined ->
-                                                       Acc1 = [{Node, [{VNodeIndex, KeySpaceIndexes}]} | Acc];
-                                                   FilterIndexes ->
-                                                       Acc1 = [{Node, [{VNodeIndex, KeySpaceIndexes} | FilterIndexes]}
-                                                               | proplists:delete(Node, Acc)]
-                                               end,
+                                               Acc1 = orddict:append(Node, {VNodeIndex, KeySpaceIndexes}, Acc),
                                                {CoverageVNode, Acc1};
                                            false ->
                                                {CoverageVNode, Acc}
@@ -377,7 +371,7 @@ next_vnode(KeySpace, Available) ->
 %% regular intervals around the ring.
 %% The optimization is for the case
 %% when the partition count is not evenly divisible
-%% by the n_val and when the coverage counts of the 
+%% by the n_val and when the coverage counts of the
 %% two arguments are equal and a tiebreaker is
 %% required to determine the sort order. In this
 %% case, choosing the lower node for the final
@@ -405,33 +399,22 @@ covers(KeySpace, CoversKeys) ->
 group_indexes_by_node([], NodeIndexes) ->
     NodeIndexes;
 group_indexes_by_node([{Index, Node} | OtherVNodes], NodeIndexes) ->
-    %% Check if there is an entry for Node in NodeIndexes
-    case proplists:get_value(Node, NodeIndexes) of
-        undefined ->
-            %% This is the first vnode for this physical node
-            %% so add an entry for the node in NodeIndexList
-            NodeIndexes1 = [{Node, [Index]} | NodeIndexes];
-        Indexes ->
-            %% An entry for the physical node is already present
-            %% so just update the index information to the value
-            %% for the node.
-            NodeIndexes1 = [{Node, [Index | Indexes]} | proplists:delete(Node, NodeIndexes)]
-    end,
+    NodeIndexes1 = orddict:append(Node, Index, NodeIndexes),
     group_indexes_by_node(OtherVNodes, NodeIndexes1).
 
 %% @private
 start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Filters, Timeout) ->
-    case KeyListers of 
+    case KeyListers of
         [] ->
             UpdatedKeyListers = KeyListers;
         _ ->
             %% Check for existing keylister processes whose
-            %% node does not have an entry in NodeIndexes. 
-            %% This would happen if a coverage plan fails 
+            %% node does not have an entry in NodeIndexes.
+            %% This would happen if a coverage plan fails
             %% for some reason and the subsequent plan does
             %% not include any VNodes from a node where the
             %% previous plan did.
-            KeyListerCleanup = 
+            KeyListerCleanup =
                 fun({Node, Pid}=KeyLister, Acc) ->
                         case proplists:is_defined(Node, NodeIndexes) of
                             true ->
