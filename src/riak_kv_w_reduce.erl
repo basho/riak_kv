@@ -180,7 +180,9 @@ js_runner(JS) ->
                 {ok, Results0}  ->
                     [riak_kv_mapred_json:dejsonify_not_found(R)
                      || R <- Results0];
-                {error, no_vms} -> {forward_preflist, no_js_vms}
+                {error, no_vms} ->
+                    %% will be caught by process/3, or will blow up done/1
+                    throw(no_js_vms)
             end
     end.
 
