@@ -166,30 +166,27 @@ mapred_bucket_stream(Bucket, Query, ClientPid, Timeout) ->
     mapred_bucket_stream(Bucket, Query, ClientPid, undefined, Timeout).
 
 mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout) ->
-    mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout,
-                         0).
-
-mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout, _ErrorTolerance) ->
     {ok,{MR_ReqId,MR_FSM}} = mapred_stream(Query,ClientPid,ResultTransformer,Timeout),
     {ok,_Stream_ReqID} = stream_list_keys(Bucket, Timeout,
                                   MR_FSM, mapred),
     {ok,MR_ReqId}.
 
+
+%% @deprecated Only in place for backwards compatibility.
+mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout, _) ->
+    mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout).
+
 mapred_bucket(Bucket, Query) ->
     mapred_bucket(Bucket, Query, ?DEFAULT_TIMEOUT).
 
 mapred_bucket(Bucket, Query, Timeout) ->
-    mapred_bucket(Bucket, Query, undefined, Timeout, 0).
+    mapred_bucket(Bucket, Query, undefined, Timeout).
 
 mapred_bucket(Bucket, Query, ResultTransformer, Timeout) ->
-    mapred_bucket(Bucket, Query, ResultTransformer, Timeout, 0).
-
-mapred_bucket(Bucket, Query, ResultTransformer, Timeout, ErrorTolerance) ->
     Me = self(),
     {ok,MR_ReqId} = mapred_bucket_stream(Bucket, Query, Me,
-                                         ResultTransformer, Timeout, ErrorTolerance),
+                                         ResultTransformer, Timeout),
     luke_flow:collect_output(MR_ReqId, Timeout).
-
 
 -define(PRINT(Var), io:format("DEBUG: ~p:~p - ~p~n~n ~p~n~n", [?MODULE, ?LINE, ??Var, Var])).
 
