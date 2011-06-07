@@ -30,7 +30,6 @@
          format_failure_reason/1,
          timestamp/0
         ]).
-
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -200,18 +199,23 @@ parse_integer(Value) ->
 %%
 %% @doc Parse a string into a float value.
 parse_float(Value) when Value /= ""->
-    %% Erlang chokes on floats that start with a decimal point,
-    %% end with a decimal point, or don't contain a decimal point.
-    %% Normalize the incoming value for these conditions.
+    %% Erlang chokes on floats that start with a decimal point or
+    %% don't contain a decimal point.  Normalize the incoming value
+    %% for these conditions. We accept both decimal notation (3.14, 3,
+    %% .14) and scientific notation (3.14e5, 3.14E5).
     Value1 = "0" ++ Value,
     Value2 = case string:str(Value1, ".") of
-                 0 -> Value1 ++ ".";
-                 _ -> Value1
+                 0 ->
+                     %% If no decimal, then add one with a trailing
+                     %% zero.
+                     Value1 ++ ".0";
+                 _ -> 
+                     %% Otherwise nothing to do.
+                     Value1
              end,
-    Value3 = Value2 ++ "0",
     
     try
-        {ok, list_to_float(Value3)}
+        {ok, list_to_float(Value2)}
     catch
         _Type : Reason ->
             {error, Reason}
@@ -316,7 +320,12 @@ validate_field_float_test() ->
 
     ?assertMatch(
        {ok, 0.789},
-       F("field_float", ".789")).
+       F("field_float", ".789")),
+
+    ?assertMatch(
+       {ok, 1.0e5},
+       F("field_float", "1.0e5")).
+
 
 validate_unknown_field_type_test() ->
     %% Test error on unknown field types.
