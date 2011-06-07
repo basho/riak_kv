@@ -48,7 +48,6 @@
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
 -define(DEFAULT_TIMEOUT, 60000).
--define(DEFAULT_ERRTOL, 0.00003).
 
 -type riak_client() :: term().
 
@@ -168,11 +167,11 @@ mapred_bucket_stream(Bucket, Query, ClientPid, Timeout) ->
 
 mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout) ->
     mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout,
-                         ?DEFAULT_ERRTOL).
+                         0).
 
-mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout, ErrorTolerance) ->
+mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout, _ErrorTolerance) ->
     {ok,{MR_ReqId,MR_FSM}} = mapred_stream(Query,ClientPid,ResultTransformer,Timeout),
-    {ok,_Stream_ReqID} = stream_list_keys(Bucket, Timeout, ErrorTolerance,
+    {ok,_Stream_ReqID} = stream_list_keys(Bucket, Timeout,
                                   MR_FSM, mapred),
     {ok,MR_ReqId}.
 
@@ -180,10 +179,10 @@ mapred_bucket(Bucket, Query) ->
     mapred_bucket(Bucket, Query, ?DEFAULT_TIMEOUT).
 
 mapred_bucket(Bucket, Query, Timeout) ->
-    mapred_bucket(Bucket, Query, undefined, Timeout, ?DEFAULT_ERRTOL).
+    mapred_bucket(Bucket, Query, undefined, Timeout, 0).
 
 mapred_bucket(Bucket, Query, ResultTransformer, Timeout) ->
-    mapred_bucket(Bucket, Query, ResultTransformer, Timeout, ?DEFAULT_ERRTOL).
+    mapred_bucket(Bucket, Query, ResultTransformer, Timeout, 0).
 
 mapred_bucket(Bucket, Query, ResultTransformer, Timeout, ErrorTolerance) ->
     Me = self(),
@@ -401,30 +400,35 @@ list_keys(Bucket) ->
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 list_keys(Bucket, Timeout) ->
-    list_keys(Bucket, Timeout, ?DEFAULT_ERRTOL).
-list_keys(Bucket, Timeout, ErrorTolerance) ->
     Me = self(),
     ReqId = mk_reqid(),
     FSM_Timeout = trunc(Timeout / 8),
-    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [ReqId, Bucket, FSM_Timeout, plain, ErrorTolerance, Me]),
+    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [ReqId, Bucket, FSM_Timeout, plain, Me]),
     wait_for_listkeys(ReqId, Timeout).
+
+%% @deprecated Only in place for backwards compatibility.
+list_keys(Bucket, Timeout, _) ->
+    list_keys(Bucket, Timeout).
 
 stream_list_keys(Bucket) ->
     stream_list_keys(Bucket, ?DEFAULT_TIMEOUT).
 
 stream_list_keys(Bucket, Timeout) ->
-    stream_list_keys(Bucket, Timeout, ?DEFAULT_ERRTOL).
-
-stream_list_keys(Bucket, Timeout, ErrorTolerance) ->
     Me = self(),
-    stream_list_keys(Bucket, Timeout, ErrorTolerance, Me).
+    stream_list_keys(Bucket, Timeout, Me).
 
-stream_list_keys(Bucket, Timeout, ErrorTolerance, Client) ->
-    stream_list_keys(Bucket, Timeout, ErrorTolerance, Client, plain).
+stream_list_keys(Bucket, Timeout, Client) when is_pid(Client) ->
+    stream_list_keys(Bucket, Timeout, Client, plain);
+%% @deprecated Only in place for backwards compatibility.
+stream_list_keys(Bucket, Timeout, _) ->
+    stream_list_keys(Bucket, Timeout).
+
+%% @deprecated Only in place for backwards compatibility.
+stream_list_keys(Bucket0, Timeout, _, Client, ClientType) ->
+    stream_list_keys(Bucket0, Timeout, Client, ClientType).
 
 %% @spec stream_list_keys(riak_object:bucket(),
 %%                        TimeoutMillisecs :: integer(),
-%%                        ErrorTolerance :: float(),
 %%                        Client :: pid(),
 %%                        ClientType :: atom()) ->
 %%       {ok, ReqId :: term()}
@@ -438,15 +442,18 @@ stream_list_keys(Bucket, Timeout, ErrorTolerance, Client) ->
 %%      keys in Bucket on any single vnode.
 %%      If ClientType is set to 'mapred' instead of 'plain', then the
 %%      messages will be sent in the form of a MR input stream.
-stream_list_keys(Bucket0, Timeout, ErrorTolerance, Client, ClientType) ->
+stream_list_keys(Bucket, Timeout, Client, ClientType) when is_pid(Client) ->
     ReqId = mk_reqid(),
-    case build_filter(Bucket0) of
-        {ok, Filter} ->
-            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [ReqId, Filter, Timeout, ClientType, ErrorTolerance, Client]),
-            {ok, ReqId};
-        Error ->
-            Error
-    end.
+    case build_filter(Bucket) of
+        {error, _Error} ->
+            {error, _Error};
+        Input ->
+            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [ReqId, Input, Timeout, ClientType, Client]),
+            {ok, ReqId}
+    end;
+%% @deprecated Only in place for backwards compatibility.
+stream_list_keys(Bucket, Timeout, _, Client) ->
+    stream_list_keys(Bucket, Timeout, Client).
 
 %% @spec filter_keys(riak_object:bucket(), Fun :: function()) ->
 %%       {ok, [Key :: riak_object:key()]} |
@@ -582,15 +589,15 @@ is_key_filter({Bucket, Filters}) when is_binary(Bucket),
 is_key_filter(_) ->
     false.
 
+build_filter(Bucket) when is_binary(Bucket) ->
+    Bucket;
 build_filter({Bucket, Exprs}) ->
     case build_exprs(Exprs) of
         {ok, Filters} ->
-            {ok, {Bucket, Filters}};
+            {Bucket, Filters};
         Error ->
             Error
-    end;
-build_filter(Bucket) when is_binary(Bucket) ->
-    {ok, {Bucket, []}}.
+    end.
 
 build_exprs(Exprs) ->
     build_exprs(Exprs, []).
