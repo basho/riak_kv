@@ -246,7 +246,7 @@ fix_final_fitting(Fittings) ->
     end.
 
 link_xform_compat(Bucket, Tag, _Arg) ->
-    fun(Input, Partition, FittingDetails) ->
+    fun({ok, Input}, Partition, FittingDetails) ->
             ?T(FittingDetails, [map], {mapping, Input}),
             LinkFun = bucket_linkfun(Bucket),
             Threes = LinkFun(Input, none, {Bucket, Tag}),
@@ -255,6 +255,8 @@ link_xform_compat(Bucket, Tag, _Arg) ->
             [ riak_pipe_vnode_worker:send_output(R, Partition,
                                                  FittingDetails)
               || R <- Results ],
+            ok;
+       ({{error,_},_}, _Partition, _FittingDetails) ->
             ok
     end.
 

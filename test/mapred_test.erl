@@ -373,6 +373,7 @@ compat_javascript_test_() ->
     IntsBucket = <<"foonum">>,
     NumInts = 5,
     JSBucket = <<"jsfuns">>,
+    NotFoundBkey = {<<"does not">>, <<"exit">>},
 
     {setup,
      prepare_runtime(),
@@ -465,13 +466,12 @@ compat_javascript_test_() ->
                                    }">>},
                        <<>>, true}],
                  {ok, [[{not_found,
+                         NotFoundBkey,
                          %% explicitly matching stubbed results here,
                          %% so that the test gets fixed when the code does
-                         {<<"TODO: Bucket">>, <<"TODO: Key">>},
                          <<"TODO: KeyData">>}],
                        [{struct,[{<<"mapred_test_pass">>,1}]}]]} =
-                     riak_kv_mrc_pipe:mapred([{<<"does not">>, <<"exist">>}],
-                                             Spec)
+                     riak_kv_mrc_pipe:mapred([NotFoundBkey], Spec)
              end)
           ]
      end}.

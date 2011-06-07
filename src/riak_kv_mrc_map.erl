@@ -112,10 +112,12 @@ process(Input, _Last,
 %% @doc Evaluate the map function.
 -spec map(map_phase_spec(), term(), term())
          -> {ok, [term()]} | {forward_preflist, Reason :: term()}.
-map({modfun, Module, Function}, Arg, Input) ->
+map({modfun, Module, Function}, Arg, Input0) ->
+    Input = erlang_input(Input0),
     %% TODO: keydata
     {ok, Module:Function(Input, undefined, Arg)};
-map({qfun, Fun}, Arg, Input) ->
+map({qfun, Fun}, Arg, Input0) ->
+    Input = erlang_input(Input0),
     %% TODO: keydata
     {ok, Fun(Input, undefined, Arg)};
 map({strfun, {Bucket, Key}}, _Arg, _Input) ->
@@ -128,11 +130,15 @@ map({jsfun, Name}, Arg, Input) ->
 map({jsanon, Source}, Arg, Input) ->
     map_js({jsanon, Source}, Arg, Input).
 
-map_js(_JS, _Arg, {error, notfound}) ->
+%% select which bit of the input to hand to the map function
+erlang_input({ok, Input})          -> Input;
+erlang_input({{error,_}=Input, _}) -> Input.
+
+map_js(_JS, _Arg, {{error, notfound}, {Bucket, Key}}) ->
     {ok, [{not_found,
-           {<<"TODO: Bucket">>, <<"TODO: Key">>},
+           {Bucket, Key},
            <<"TODO: KeyData">>}]};
-map_js(JS, Arg, Input) ->
+map_js(JS, Arg, {ok, Input}) ->
     %% TODO: keydata
     JSArgs = [riak_object:to_json(Input), <<"">>, Arg],
     JSCall = {JS, JSArgs},
