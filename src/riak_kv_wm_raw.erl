@@ -545,23 +545,19 @@ malformed_link_headers(RD, Ctx) ->
 %%           {boolean(), reqdata(), context()}
 %%
 %% @doc Check that the Index headers (HTTP headers prefixed with index_") 
-%%      are valid. Store the parsed headers in context() if valid, 
+%%      are valid. Store the parsed headers in context() if valid,
 %%      or print an error in reqdata() if not.
 %%      An index field should be of the form "index_fieldname_type"
 malformed_index_headers(RD, Ctx) ->
     %% Get a list of index_headers...
-    L1 = extract_index_headers(RD),
-
-    %% Remove the prefix...
-    PrefixSize = length(?HEAD_INDEX_PREFIX),
-    F = fun(X) -> element(2, lists:split(PrefixSize, X)) end,
-    L2 = [{F(K),V} || {K, V} <- L1],
+    L = extract_index_headers(RD),
+    io:format("L: ~p~n", [L]),
 
     %% Validate the fields. If validation passes, then the index
     %% headers are correctly formed.
-    case riak_index:validate_fields(L2) of
+    case riak_index:validate_fields(L) of
         true ->
-            {false, RD, Ctx#ctx { index_fields=L2 }};
+            {false, RD, Ctx#ctx { index_fields=L }};
         {false, Reasons} ->
             {true,
              wrq:append_to_resp_body(
@@ -570,15 +566,21 @@ malformed_index_headers(RD, Ctx) ->
              Ctx}
     end.
 
-%% @spec extract_index_headers(reqdata()) -> proplist()
-%% @doc Extract headers prefixed by "index-" in the client's 
+%% @spec extract_index_headers(reqdata()) -> proplist().
+%% @doc Extract headers prefixed by "index-" in the client's
 %%      PUT request, to be indexed at write time.
 extract_index_headers(RD) ->
-    lists:filter(fun({K,_V}) ->
-                    lists:prefix(
-                        ?HEAD_INDEX_PREFIX,
-                        string:to_lower(any_to_list(K)))
+    lists:foldl(fun({K,_V}, Acc) ->
+                    LowerK = string:to_lower(any_to_list(K)),
+                    case lists:prefix(?HEAD_INDEX_PREFIX, LowerK) of
+                        true ->
+                            ?HEAD_INDEX_PREFIX ++ IndexField = K,
+                            [{IndexField, _V} | Acc];
+                        false ->
+                            Acc
+                    end
                 end,
+                [],
                 mochiweb_headers:to_list(wrq:req_headers(RD))).
 
 %% @spec content_types_provided(reqdata(), context()) ->
