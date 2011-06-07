@@ -160,7 +160,7 @@ build_filters(Inputs, VNodes, FilterVNodes) ->
             Filters = [];
         (FilterVNodes == undefined) -> % only key filtering
             %% Associate a key filtering function with each VNode
-            Filters = [{Index, build_filter(Index, KeyFilter)} || {Index, _} <- VNodes];
+            Filters = [{Index, build_filter(KeyFilter)} || {Index, _} <- VNodes];
         (KeyFilter == none) -> % only vnode filtering required
             {ok, Ring} = riak_core_ring_manager:get_my_ring(),
             PrefListFun = build_preflist_fun(Bucket, Ring),
