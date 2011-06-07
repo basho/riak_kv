@@ -39,7 +39,9 @@ dep_apps() ->
                      {ring_state_dir, DataDir}],
     KV_Settings = [{storage_backend, riak_kv_ets_backend},
                    {pb_ip, "0.0.0.0"},
-                   {pb_port, 48087}], % arbitrary #
+                   {pb_port, 48087}, % arbitrary #
+                   {map_js_vm_count, 4},
+                   {reduce_js_vm_count, 3}],
     [fun(start) ->
              _ = application:stop(sasl),
              _ = application:load(sasl),
@@ -367,3 +369,109 @@ compat_buffer_and_prereduce_test_() ->
          ]
      end}.
 
+compat_javascript_test_() ->
+    IntsBucket = <<"foonum">>,
+    NumInts = 5,
+    JSBucket = <<"jsfuns">>,
+
+    {setup,
+     prepare_runtime(),
+     teardown_runtime(),
+     fun(_) ->
+         [
+          ?_test(
+             %% The data created by this step is used by all/most of the
+             %% following tests.
+             ok = riak_kv_mrc_pipe:example_setup(NumInts)
+            ),
+          ?_test(
+             begin
+                 %% map & reduce with jsanon-Source
+                 Spec =
+                     [{map,
+                       {jsanon, <<"function(v) {
+                                      return [v.values[0].data];
+                                   }">>},
+                       <<>>, true},
+                      {reduce,
+                       {jsanon, <<"function(v) {
+                                      Sum = function(A, B) { return A+B; };
+                                      return [ v.reduce(Sum) ];
+                                   }">>},
+                       <<>>, true}],
+                 {ok, [MapRs, [15]]} =
+                     riak_kv_mrc_pipe:mapred(IntsBucket, Spec),
+                 5 = length(MapRs)
+             end),
+          ?_test(
+             begin
+                 %% map & reduce with jsanon-Bucket/Key
+                 {ok, C} = riak:local_client(),
+                 ok = C:put(riak_object:new(
+                              JSBucket, <<"map">>,
+                              <<"function(v) {
+                                    return [v.values[0].data];
+                                 }">>),
+                            1),
+                 ok = C:put(riak_object:new(
+                              JSBucket, <<"reduce">>,
+                              <<"function(v) {
+                                    Sum = function(A, B) { return A+B; };
+                                    return [ v.reduce(Sum) ];
+                                 }">>),
+                            1),
+                 Spec =
+                     [{map,
+                       {jsanon, {JSBucket, <<"map">>}},
+                       <<>>, true},
+                      {reduce,
+                       {jsanon, {JSBucket, <<"reduce">>}},
+                       <<>>, true}],
+                 {ok, [MapRs, [15]]} =
+                     riak_kv_mrc_pipe:mapred(IntsBucket, Spec),
+                 5 = length(MapRs)
+             end),
+          ?_test(
+             begin
+                 %% map & reduce with jsfun
+                 Spec =
+                     [{map,
+                       {jsfun, <<"Riak.mapValues">>},
+                       <<>>, true},
+                      {reduce,
+                       {jsfun, <<"Riak.reduceSum">>},
+                       <<>>, true}],
+                 {ok, [MapRs, [15]]} =
+                     riak_kv_mrc_pipe:mapred(IntsBucket, Spec),
+                 5 = length(MapRs)
+             end),
+          ?_test(
+             begin
+                 %% objects not found for JS map turn into
+                 %% {not_found, {Bucket, Key}, KeyData} tuples
+                 Spec =
+                     [{map, {jsfun, <<"Riak.mapValues">>}, <<>>, true},
+                      {reduce,
+                       {jsanon, <<"function(v) {
+                                      F = function(O) {
+                                             if ((O[\"not_found\"] &&
+                                                  O.not_found[\"bucket\"]) ||
+                                                 O[\"mapred_test_pass\"])
+                                                return {mapred_test_pass:1};
+                                             else
+                                                return O;
+                                          }
+                                      return v.map(F);
+                                   }">>},
+                       <<>>, true}],
+                 {ok, [[{not_found,
+                         %% explicitly matching stubbed results here,
+                         %% so that the test gets fixed when the code does
+                         {<<"TODO: Bucket">>, <<"TODO: Key">>},
+                         <<"TODO: KeyData">>}],
+                       [{struct,[{<<"mapred_test_pass">>,1}]}]]} =
+                     riak_kv_mrc_pipe:mapred([{<<"does not">>, <<"exist">>}],
+                                             Spec)
+             end)
+          ]
+     end}.
