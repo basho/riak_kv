@@ -290,15 +290,21 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
             send_error("~p", [Reason], State)
     end;
 
-process_message(#rpbdelreq{bucket=B, key=K, rw=RW0, vclock=PbVc}, 
+process_message(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
+                          r=R, w=W, pr=PR, pw=PW, dw=DW, rw=RW},
                 #state{client=C} = State) ->
-    RW = normalize_rw_value(RW0),
+    Options = make_option(r, R) ++
+              make_option(w, W) ++
+              make_option(rw, RW) ++
+              make_option(pr, PR) ++
+              make_option(pw, PW) ++
+              make_option(dw, DW),
     Result = case PbVc of
         undefined ->
-            C:delete(B, K, default_if_undef(RW));
+            C:delete(B, K, Options);
         _ ->
             VClock = erlify_rpbvc(PbVc),
-            C:delete_vclock(B, K, VClock, default_if_undef(RW))
+            C:delete_vclock(B, K, VClock, Options)
     end,
     case Result of
         ok ->
@@ -430,12 +436,6 @@ update_rpbcontent(O0, RpbContent) ->
 update_pbvc(O0, PbVc) ->
     Vclock = erlify_rpbvc(PbVc),
     riak_object:set_vclock(O0, Vclock).
-
-%% convert undefined to default so the option can be inherited from the bucket
-default_if_undef(undefined) ->
-    default;
-default_if_undef(V) ->
-    V.
 
 %% return a key/value tuple that we can ++ to other options so long as the
 %% value is not default or undefined -- those values are pulled from the
