@@ -24,25 +24,25 @@
 
 -module(riak_kv_delete).
 
-%-ifdef(TEST).
+-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
-%-endif.
+-endif.
 
 -export([start_link/6, start_link/7, start_link/8, delete/8]).
 
-start_link(ReqId, Bucket, Key, RW, Timeout, Client) ->
+start_link(ReqId, Bucket, Key, Options, Timeout, Client) ->
     {ok, proc_lib:spawn_link(?MODULE, delete, [ReqId, Bucket, Key,
-                                               RW, Timeout, Client, undefined,
+                                               Options, Timeout, Client, undefined,
                                                undefined])}.
 
-start_link(ReqId, Bucket, Key, RW, Timeout, Client, ClientId) ->
+start_link(ReqId, Bucket, Key, Options, Timeout, Client, ClientId) ->
     {ok, proc_lib:spawn_link(?MODULE, delete, [ReqId, Bucket, Key,
-                                               RW, Timeout, Client, ClientId,
+                                               Options, Timeout, Client, ClientId,
                                                undefined])}.
 
-start_link(ReqId, Bucket, Key, RW, Timeout, Client, ClientId, VClock) ->
+start_link(ReqId, Bucket, Key, Options, Timeout, Client, ClientId, VClock) ->
     {ok, proc_lib:spawn_link(?MODULE, delete, [ReqId, Bucket, Key,
-                                               RW, Timeout, Client, ClientId,
+                                               Options, Timeout, Client, ClientId,
                                                VClock])}.
 
 %% @spec delete(ReqId :: binary(), riak_object:bucket(), riak_object:key(),
@@ -50,34 +50,33 @@ start_link(ReqId, Bucket, Key, RW, Timeout, Client, ClientId, VClock) ->
 %%           -> term()
 %% @doc Delete the object at Bucket/Key.  Direct return value is uninteresting,
 %%      see riak_client:delete/3 for expected gen_server replies to Client.
-delete(ReqId,Bucket,Key,RW0,Timeout,Client,ClientId,undefined) ->
-    case get_rw_val(Bucket, RW0) of
-        error ->
-            Client ! {ReqId, {error, {rw_val_violation, RW0}}};
-        RW ->
+delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
+    case get_r_options(Bucket, Options) of
+        {error, Reason} ->
+            Client ! {ReqId, {error, Reason}};
+        {R, PR} ->
             RealStartTime = riak_core_util:moment(),
             {ok, C} = riak:local_client(),
-            case C:get(Bucket,Key,RW,Timeout) of
+            case C:get(Bucket,Key,[{r,R},{pr,PR},{timeout,Timeout}]) of
                 {ok, OrigObj} ->
                     RemainingTime = Timeout - (riak_core_util:moment() - RealStartTime),
-                    delete(ReqId,Bucket,Key,RW,RemainingTime,Client,ClientId,riak_object:vclock(OrigObj));
+                    delete(ReqId,Bucket,Key,Options,RemainingTime,Client,ClientId,riak_object:vclock(OrigObj));
                 {error, notfound} ->
                     Client ! {ReqId, {error, notfound}};
                 X ->
                     Client ! {ReqId, X}
             end
     end;
-delete(ReqId,Bucket,Key,RW0,Timeout,Client,ClientId,VClock) ->
-    case get_rw_val(Bucket, RW0) of
-        error ->
-            Client ! {ReqId, {error, {rw_val_violation, RW0}}};
-        RW ->
-
+delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
+    case get_w_options(Bucket, Options) of
+        {error, Reason} ->
+            Client ! {ReqId, {error, Reason}};
+        {W, PW, DW} ->
             Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(<<"X-Riak-Deleted">>,
                                                                  "true", dict:new())),
             Tombstone = riak_object:set_vclock(Obj0, VClock),
             {ok,C} = riak:local_client(ClientId),
-            Reply = C:put(Tombstone, RW, RW, Timeout),
+            Reply = C:put(Tombstone, [{w,W},{pw,PW},{dw, DW},{timeout,Timeout}]),
             Client ! {ReqId, Reply},
             case Reply of
                 ok ->
@@ -87,11 +86,89 @@ delete(ReqId,Bucket,Key,RW0,Timeout,Client,ClientId,VClock) ->
             end
     end.
 
-get_rw_val(Bucket, RW0) ->
+get_r_options(Bucket, Options) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     N = proplists:get_value(n_val,BucketProps),
-    riak_kv_util:expand_rw_value(rw, RW0, BucketProps, N).
+    %% specifying R/W AND RW together doesn't make sense, so check if R or W
+    %is defined first. If not, use RW or default.
+    R = case proplists:is_defined(r, Options) orelse proplists:is_defined(w, Options) of
+        true ->
+            HasRW = false,
+            R0 = proplists:get_value(r, Options, default),
+            R1 = riak_kv_util:expand_rw_value(r, R0, BucketProps, N),
+            R1;
+        false ->
+            HasRW = true,
+            RW0 = proplists:get_value(rw, Options, default),
+            RW = riak_kv_util:expand_rw_value(rw, RW0, BucketProps, N),
+            RW
+    end,
+    %% check for errors
+    case {R, HasRW} of
+        {error, false} ->
+            {error, {r_val_violation, proplists:get_value(r, Options)}};
+        {error, true} ->
+            {error, {rw_val_violation, proplists:get_value(rw, Options)}};
+        _ ->
+            %% ok, the R/W or the RW values were OK, get PR/PW values
+            PR0 = proplists:get_value(pr, Options, default),
+            case riak_kv_util:expand_rw_value(pr, PR0, BucketProps, N) of
+                error ->
+                    {error, {pr_val_violation, PR0}};
+                PR ->
+                    {R, PR}
+           end
+    end.
+
+get_w_options(Bucket, Options) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
+    N = proplists:get_value(n_val,BucketProps),
+    %% specifying R/W AND RW together doesn't make sense, so check if R or W
+    %is defined first. If not, use RW or default.
+    W = case proplists:is_defined(w, Options) of
+        true ->
+            HasRW = false,
+            W0 = proplists:get_value(w, Options, default),
+            W1 = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
+            W1;
+        false ->
+            HasRW = true,
+            RW0 = proplists:get_value(rw, Options, default),
+            RW = riak_kv_util:expand_rw_value(rw, RW0, BucketProps, N),
+            RW
+    end,
+    %% check for errors
+    case {W, HasRW} of
+        {error, false} ->
+            {error, {w_val_violation, proplists:get_value(w, Options)}};
+        {error, true} ->
+            {error, {rw_val_violation, proplists:get_value(rw, Options)}};
+        _ ->
+            PW0 = proplists:get_value(pw, Options, default),
+            case riak_kv_util:expand_rw_value(pw, PW0, BucketProps, N) of
+                error ->
+                    {error, {pw_val_violation, PW0}};
+                PW ->
+                    DW0 = proplists:get_value(dw, Options, default),
+                    case riak_kv_util:expand_rw_value(dw, DW0, BucketProps, N) of
+                        error ->
+                            {error, {dw_val_violation, DW0}};
+                        DW ->
+                            {W, PW, DW}
+                    end
+            end
+    end.
+
+
+
+
+
+
+
+
+
 
 
 %% ===================================================================
@@ -101,14 +178,17 @@ get_rw_val(Bucket, RW0) ->
 
 delete_test_() ->
     %% Execute the test cases
-    {spawn, [
     { foreach, 
       fun setup/0,
       fun cleanup/1,
       [
-       fun invalid_rw_delete/0
+          fun invalid_r_delete/0,
+          fun invalid_rw_delete/0,
+          fun invalid_w_delete/0,
+          fun invalid_pr_delete/0,
+          fun invalid_pw_delete/0
       ]
-    }]}.
+  }.
 
 invalid_rw_delete() ->
     RW = <<"abc">>,
@@ -117,7 +197,7 @@ invalid_rw_delete() ->
     Bucket = <<"testbucket">>,
     Key = <<"testkey">>,
     Timeout = 60000,
-    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, RW, Timeout, self()]),
+    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{rw,RW}], Timeout, self()]),
     %% Wait for error response
     receive
         {_RequestId, Result} ->
@@ -125,8 +205,78 @@ invalid_rw_delete() ->
     after
         5000 ->
             ?assert(false)
-    end.                
-    
+    end.
+
+invalid_r_delete() ->
+    R = <<"abc">>,
+    %% Start the gen_fsm process
+    RequestId = erlang:phash2(erlang:now()),
+    Bucket = <<"testbucket">>,
+    Key = <<"testkey">>,
+    Timeout = 60000,
+    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{r,R}], Timeout, self()]),
+    %% Wait for error response
+    receive
+        {_RequestId, Result} ->
+            ?assertEqual({error, {r_val_violation, <<"abc">>}}, Result)
+    after
+        5000 ->
+            ?assert(false)
+    end.
+
+invalid_w_delete() ->
+    W = <<"abc">>,
+    %% Start the gen_fsm process
+    RequestId = erlang:phash2(erlang:now()),
+    Bucket = <<"testbucket">>,
+    Key = <<"testkey">>,
+    Timeout = 60000,
+    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{w,W}],
+            Timeout, self(), undefined, vclock:fresh()]),
+    %% Wait for error response
+    receive
+        {_RequestId, Result} ->
+            ?assertEqual({error, {w_val_violation, <<"abc">>}}, Result)
+    after
+        5000 ->
+            ?assert(false)
+    end.
+
+invalid_pr_delete() ->
+    PR = <<"abc">>,
+    %% Start the gen_fsm process
+    RequestId = erlang:phash2(erlang:now()),
+    Bucket = <<"testbucket">>,
+    Key = <<"testkey">>,
+    Timeout = 60000,
+    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{pr,PR}], Timeout, self()]),
+    %% Wait for error response
+    receive
+        {_RequestId, Result} ->
+            ?assertEqual({error, {pr_val_violation, <<"abc">>}}, Result)
+    after
+        5000 ->
+            ?assert(false)
+    end.
+
+invalid_pw_delete() ->
+    PW = <<"abc">>,
+    %% Start the gen_fsm process
+    RequestId = erlang:phash2(erlang:now()),
+    Bucket = <<"testbucket">>,
+    Key = <<"testkey">>,
+    Timeout = 60000,
+    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key,
+            [{pw,PW}], Timeout, self(), undefined, vclock:fresh()]),
+    %% Wait for error response
+    receive
+        {_RequestId, Result} ->
+            ?assertEqual({error, {pw_val_violation, <<"abc">>}}, Result)
+    after
+        5000 ->
+            ?assert(false)
+    end.
+
 setup() ->
     %% Shut logging up - too noisy.
     application:load(sasl),
@@ -135,8 +285,9 @@ setup() ->
     error_logger:logfile({open, "riak_kv_delete_test.log"}),
     %% Start erlang node
     {ok, _} = net_kernel:start([testnode, shortnames]),
-    cleanup(unused_arg),
     do_dep_apps(start, dep_apps()),
+    application:set_env(riak_core, default_bucket_props, [{r, quorum},
+            {w, quorum}, {pr, 0}, {pw, 0}, {rw, quorum}, {n_val, 3}]),
     %% There's some weird interaction with the quickcheck tests in put_fsm_eqc
     %% that somehow makes the riak_kv_delete sup not be running if those tests
     %% run before these. I'm sick of trying to figure out what is not being
@@ -147,6 +298,7 @@ setup() ->
         _ ->
             ok
     end,
+    riak_kv_get_fsm_sup:start_link(),
     timer:sleep(500).
 
 cleanup(_Pid) ->
@@ -155,6 +307,9 @@ cleanup(_Pid) ->
     catch exit(whereis(riak_sysmon_filter), kill), %% Leaks occasionally
     net_kernel:stop(),
     %% Reset the riak_core vnode_modules
+    application:unset_env(riak_core, default_bucket_props),
+    application:unset_env(sasl, sasl_error_logger),
+    error_logger:tty(true),
     application:set_env(riak_core, vnode_modules, []).
 
 dep_apps() ->
