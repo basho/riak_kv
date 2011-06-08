@@ -36,6 +36,7 @@ behaviour_info(callbacks) ->
      {index, 2},       % (State, Postings)
      {delete, 2},      % (State, Postings)
      {lookup_sync, 4}, % (State, Index, Field, Term) 
+     {fold_index, 6},  % (State, Index, Query, SKFun, Acc, FinalFun)
      {drop,1},         % (State)
      {callback,3}];    % (State, Ref, Msg) ->
 behaviour_info(_Other) ->

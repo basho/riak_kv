@@ -38,8 +38,20 @@
 
 %% @type data_type_defs()  :: [data_type_def()].
 %% @type data_type_def()   :: {CompiledRegex::re:mp(), Module::module()}.
+
 %% @type failure_reason()  :: {unknown_field_type, Field :: string()}
 %%                          | {field_parsing_failed, {Field :: string(), Value :: string()}}.
+
+%% @type bucketname()      :: binary().
+%% @type index_field()     :: string().
+%% @type index_value()     :: binary() | string() | integer() | float().
+%% @type query_elements()  :: [query_element()].
+%% @type query_element()   :: {eq , index_field(), index_value()}
+%%                          | {gt , index_field(), index_value()}
+%%                          | {gte, index_field(), index_value()}
+%%                          | {lt , index_field(), index_value()}
+%%                          | {lte, index_field(), index_value()}.
+
 
 %% @spec validate_object_hook(riak_object:riak_object()) -> 
 %%         riak_object:riak_object() | {fail, [failure_reason()]}.
@@ -77,10 +89,17 @@ parse_object(RObj) ->
                         Acc
                 end
         end,
-    IndexFields = lists:foldl(F, [], riak_object:get_metadatas(RObj)),
+    IndexFields1 = lists:foldl(F, [], riak_object:get_metadatas(RObj)),
+    
+    %% Add the bucket and key to the list of postings...
+    IndexFields2 = [
+                    {"$bucket", riak_object:bucket(RObj)},
+                    {"$key", riak_object:key(RObj)}|
+                    IndexFields1
+                   ],
 
     %% Now parse the fields, returning the result.
-    parse_fields(IndexFields).
+    parse_fields(IndexFields2).
 
 
 %% @spec parse_fields([Field :: {Key:string(), Value :: string()}]) -> 
@@ -170,23 +189,34 @@ field_types() ->
         RE
     end,
     [
-     {F(".*_id"),    fun parse_id/1},
-     {F(".*_int"),   fun parse_integer/1},
-     {F(".*_float"), fun parse_float/1}
+     {F("\\$bucket"),  fun parse_binary/1},
+     {F("\\$key"),     fun parse_binary/1},
+     {F(".*_id"),      fun parse_id/1},
+     {F(".*_int"),     fun parse_integer/1},
+     {F(".*_float"),   fun parse_float/1}
     ].
+
+%% @private
+%% @spec parse_binary(string()) -> {ok, binary()}
+%%
+%% @doc Parse a primary key field. Transforms value to a binary.
+parse_binary(Value) when is_binary(Value) -> 
+    {ok, Value};
+parse_binary(Value) when is_list(Value) -> 
+    {ok, list_to_binary(Value)}.
 
 %% @private
 %% @spec parse_id(string()) -> {ok, string()}
 %%
 %% @doc Parse an 'id' field. Just return the field.
-parse_id(Value) -> 
+parse_id(Value) when is_list(Value) -> 
     {ok, Value}.
 
 %% @private
 %% @spec parse_integer(string()) -> {ok, integer()} | {error, Reason}
 %%
 %% @doc Parse a string into an integer value.
-parse_integer(Value) ->
+parse_integer(Value) when is_list(Value) ->
     try 
         {ok, list_to_integer(Value)}
     catch 
@@ -198,7 +228,7 @@ parse_integer(Value) ->
 %% @spec parse_float(string()) -> {ok, float()} | {error, Reason}
 %%
 %% @doc Parse a string into a float value.
-parse_float(Value) when Value /= ""->
+parse_float(Value) when is_list(Value) andalso Value /= ""  ->
     %% Erlang chokes on floats that start with a decimal point or
     %% don't contain a decimal point.  Normalize the incoming value
     %% for these conditions. We accept both decimal notation (3.14, 3,
@@ -233,6 +263,13 @@ parse_float("") ->
 
 -ifdef(TEST).
 
+parse_binary_test() ->
+    ?assertMatch({ok, <<"">>}, parse_binary("")),
+    ?assertMatch({ok, <<"A">>}, parse_binary("A")),
+    ?assertMatch({ok, <<"123">>}, parse_binary("123")),
+    ?assertMatch({ok, <<"4.56">>}, parse_binary("4.56")),
+    ?assertMatch({ok, <<".789">>}, parse_binary(".789")).
+
 parse_id_test() ->
     ?assertMatch({ok, ""}, parse_id("")),
     ?assertMatch({ok, "A"}, parse_id("A")),
@@ -253,6 +290,23 @@ parse_float_test() ->
     ?assertMatch({ok, 123.0}, parse_float("123")),
     ?assertMatch({ok, 4.56}, parse_float("4.56")),
     ?assertMatch({ok, 0.789}, parse_float(".789")).
+
+parse_field_key_test() ->
+    %% Test parsing of "$key" fields...
+    Types = field_types(),
+    F = fun(Key, Value) -> parse_field(Key, Value, Types) end,
+
+    ?assertMatch(
+       {ok, <<"">>}, 
+       F("$key", "")),
+
+    ?assertMatch(
+       {ok, <<"A">>}, 
+       F("$key", "A")),
+
+    ?assertMatch(
+       {ok, <<"123">>}, 
+       F("$key", "123")).
 
 parse_field_id_test() ->
     %% Test parsing of "*_id" fields...
@@ -336,6 +390,7 @@ validate_unknown_field_type_test() ->
        {error, {unknown_field_type, "unknowntype"}}, 
        F("unknowntype", "A")).
 
+
 validate_object_test() ->
     %% Helper function to create an object using a proplist of
     %% supplied data, and call validate_object on it.
@@ -382,6 +437,29 @@ validate_object_test() ->
           {"field_id", "A"},
           {"field_int", "A"},
           {"field_foo", "fail"},
+          {"field_float", "0.5"}
+         ])).
+
+
+parse_object_test() ->
+    %% Helper function to create an object using a proplist of
+    %% supplied data, and call validate_object on it.
+    F = fun(MetaDataList) ->
+                Obj = riak_object:new(<<"B">>, <<"K">>, <<"VAL">>, dict:from_list([{?MD_INDEX, MetaDataList}])),
+                parse_object(Obj)
+        end,
+
+    ?assertMatch(
+       {ok, [
+             {"$bucket", <<"B">>},
+             {"$key", <<"K">>},
+             {"field_id", "A"},
+             {"field_int", 1},
+             {"field_float", 0.5}
+       ]},
+       F([
+          {"field_id", "A"},
+          {"field_int", "1"},
           {"field_float", "0.5"}
          ])).
 

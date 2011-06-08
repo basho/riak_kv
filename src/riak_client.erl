@@ -40,6 +40,7 @@
          stream_list_keys/4,stream_list_keys/5]).
 -export([filter_keys/2,filter_keys/3]).
 -export([list_buckets/0,list_buckets/1]).
+-export([get_index/2]).
 -export([set_bucket/2,get_bucket/1]).
 -export([reload_all/1]).
 -export([remove_from_cluster/1]).
@@ -538,6 +539,16 @@ list_buckets() ->
 %%      a bucket.
 list_buckets(Timeout) ->
     list_keys('_', Timeout).
+
+%% @spec get_index(Bucket :: binary(), Query :: riak_index:query_def()) ->
+%%       {ok, [Key :: riak_object:key()]} |
+%%       {error, timeout} |
+%%       {error, Err :: term()}.
+%%
+%% @doc Run the provided index query.
+get_index(Bucket, Query) ->
+    FakeBucket = {index_query, Bucket, Query},
+    list_keys({FakeBucket, []}).
 
 %% @spec set_bucket(riak_object:bucket(), [BucketProp :: {atom(),term()}]) -> ok
 %% @doc Set the given properties for Bucket.
