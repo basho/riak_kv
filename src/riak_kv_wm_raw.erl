@@ -1291,14 +1291,6 @@ handle_common_error(Reason, RD, Ctx) ->
             {{halt, 403}, send_precommit_error(RD, undefined), Ctx};
         {error, {precommit_fail, Reason}} ->
             {{halt, 403}, send_precommit_error(RD, Reason), Ctx};
-        {error, {n_val_violation, N}} ->
-            Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
-                " n value of ~p~n", [N]),
-            {{halt, 400}, wrq:append_to_response_body(Msg, RD), Ctx};
-        {error, {pw_val_unsatisfied, Requested, Returned}} ->
-            Msg = io_lib:format("PW-value unsatisfied: ~p/~p~n", [Returned,
-                    Requested]),
-            {{halt, 503}, wrq:append_to_response_body(Msg, RD), Ctx};
         {error, too_many_fails} ->
             {{halt, 503}, wrq:append_to_response_body("Too Many write failures"
                     " to satisfy W/DW\n", RD), Ctx};
@@ -1323,11 +1315,23 @@ handle_common_error(Reason, RD, Ctx) ->
                         io_lib:format("not found~n",[]),
                         encode_vclock_header(RD, Ctx))),
                 Ctx};
+        {error, {n_val_violation, N}} ->
+            Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
+                " n value of ~p~n", [N]),
+            {{halt, 400}, wrq:append_to_response_body(Msg, RD), Ctx};
         {error, {r_val_unsatisfied, Requested, Returned}} ->
             {{halt, 503},
                 wrq:set_resp_header("Content-Type", "text/plain",
                     wrq:append_to_response_body(
                         io_lib:format("R-value unsatisfied: ~p/~p~n",
+                            [Returned, Requested]),
+                        RD)),
+                Ctx};
+        {error, {w_val_unsatisfied, Requested, Returned}} ->
+            {{halt, 503},
+                wrq:set_resp_header("Content-Type", "text/plain",
+                    wrq:append_to_response_body(
+                        io_lib:format("W-value unsatisfied: ~p/~p~n",
                             [Returned, Requested]),
                         RD)),
                 Ctx};
@@ -1339,6 +1343,10 @@ handle_common_error(Reason, RD, Ctx) ->
                             [Returned, Requested]),
                         RD)),
                 Ctx};
+        {error, {pw_val_unsatisfied, Requested, Returned}} ->
+            Msg = io_lib:format("PW-value unsatisfied: ~p/~p~n", [Returned,
+                    Requested]),
+            {{halt, 503}, wrq:append_to_response_body(Msg, RD), Ctx};
         {error, Err} ->
             {{halt, 500},
                 wrq:set_resp_header("Content-Type", "text/plain",
