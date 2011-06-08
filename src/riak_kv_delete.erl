@@ -51,10 +51,10 @@ start_link(ReqId, Bucket, Key, Options, Timeout, Client, ClientId, VClock) ->
 %% @doc Delete the object at Bucket/Key.  Direct return value is uninteresting,
 %%      see riak_client:delete/3 for expected gen_server replies to Client.
 delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
-    case get_rw_options(Bucket, Options) of
+    case get_r_options(Bucket, Options) of
         {error, Reason} ->
             Client ! {ReqId, {error, Reason}};
-        {R, _W, PR, _PW, _DW} ->
+        {R, PR} ->
             RealStartTime = riak_core_util:moment(),
             {ok, C} = riak:local_client(),
             case C:get(Bucket,Key,[{r,R},{pr,PR},{timeout,Timeout}]) of
@@ -68,10 +68,10 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
             end
     end;
 delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
-    case get_rw_options(Bucket, Options) of
+    case get_w_options(Bucket, Options) of
         {error, Reason} ->
             Client ! {ReqId, {error, Reason}};
-        {_R, W, _PR, PW, DW} ->
+        {W, PW, DW} ->
             Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(<<"X-Riak-Deleted">>,
                                                                  "true", dict:new())),
             Tombstone = riak_object:set_vclock(Obj0, VClock),
@@ -86,33 +86,29 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
             end
     end.
 
-get_rw_options(Bucket, Options) ->
+get_r_options(Bucket, Options) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     N = proplists:get_value(n_val,BucketProps),
     %% specifying R/W AND RW together doesn't make sense, so check if R or W
     %is defined first. If not, use RW or default.
-    {R, W} = case proplists:is_defined(r, Options) orelse proplists:is_defined(w, Options) of
+    R = case proplists:is_defined(r, Options) orelse proplists:is_defined(w, Options) of
         true ->
             HasRW = false,
             R0 = proplists:get_value(r, Options, default),
-            W0 = proplists:get_value(w, Options, default),
             R1 = riak_kv_util:expand_rw_value(r, R0, BucketProps, N),
-            W1 = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
-            {R1, W1};
+            R1;
         false ->
             HasRW = true,
             RW0 = proplists:get_value(rw, Options, default),
             RW = riak_kv_util:expand_rw_value(rw, RW0, BucketProps, N),
-            {RW, RW}
+            RW
     end,
     %% check for errors
-    case {R, W, HasRW} of
-        {error, _, false} ->
+    case {R, HasRW} of
+        {error, false} ->
             {error, {r_val_violation, proplists:get_value(r, Options)}};
-        {_, error, false} ->
-            {error, {w_val_violation, proplists:get_value(w, Options)}};
-        {error, error, true} ->
+        {error, true} ->
             {error, {rw_val_violation, proplists:get_value(rw, Options)}};
         _ ->
             %% ok, the R/W or the RW values were OK, get PR/PW values
@@ -121,21 +117,51 @@ get_rw_options(Bucket, Options) ->
                 error ->
                     {error, {pr_val_violation, PR0}};
                 PR ->
-                    PW0 = proplists:get_value(pw, Options, default),
-                    case riak_kv_util:expand_rw_value(pw, PW0, BucketProps, N) of
+                    {R, PR}
+           end
+    end.
+
+get_w_options(Bucket, Options) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
+    N = proplists:get_value(n_val,BucketProps),
+    %% specifying R/W AND RW together doesn't make sense, so check if R or W
+    %is defined first. If not, use RW or default.
+    W = case proplists:is_defined(w, Options) of
+        true ->
+            HasRW = false,
+            W0 = proplists:get_value(w, Options, default),
+            W1 = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
+            W1;
+        false ->
+            HasRW = true,
+            RW0 = proplists:get_value(rw, Options, default),
+            RW = riak_kv_util:expand_rw_value(rw, RW0, BucketProps, N),
+            RW
+    end,
+    %% check for errors
+    case {W, HasRW} of
+        {error, false} ->
+            {error, {w_val_violation, proplists:get_value(w, Options)}};
+        {error, true} ->
+            {error, {rw_val_violation, proplists:get_value(rw, Options)}};
+        _ ->
+            PW0 = proplists:get_value(pw, Options, default),
+            case riak_kv_util:expand_rw_value(pw, PW0, BucketProps, N) of
+                error ->
+                    {error, {pw_val_violation, PW0}};
+                PW ->
+                    DW0 = proplists:get_value(dw, Options, default),
+                    case riak_kv_util:expand_rw_value(dw, DW0, BucketProps, N) of
                         error ->
-                            {error, {pw_val_violation, PW0}};
-                        PW ->
-                            DW0 = proplists:get_value(dw, Options, default),
-                            case riak_kv_util:expand_rw_value(dw, DW0, BucketProps, N) of
-                                error ->
-                                    {error, {dw_val_violation, DW0}};
-                                DW ->
-                                    {R, W, PR, PW, DW}
-                            end
+                            {error, {dw_val_violation, DW0}};
+                        DW ->
+                            {W, PW, DW}
                     end
             end
     end.
+
+
 
 
 
@@ -205,7 +231,8 @@ invalid_w_delete() ->
     Bucket = <<"testbucket">>,
     Key = <<"testkey">>,
     Timeout = 60000,
-    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{w,W}], Timeout, self()]),
+    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{w,W}],
+            Timeout, self(), undefined, vclock:fresh()]),
     %% Wait for error response
     receive
         {_RequestId, Result} ->
@@ -239,7 +266,8 @@ invalid_pw_delete() ->
     Bucket = <<"testbucket">>,
     Key = <<"testkey">>,
     Timeout = 60000,
-    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{pw,PW}], Timeout, self()]),
+    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key,
+            [{pw,PW}], Timeout, self(), undefined, vclock:fresh()]),
     %% Wait for error response
     receive
         {_RequestId, Result} ->
