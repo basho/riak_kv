@@ -221,12 +221,12 @@ do_index_put(IndexMod, IndexState, BKey, Val) ->
     %% Get the old proxy object. If it exists, then delete all of its
     %% postings.
     {Bucket, Key} = BKey,
-    case IndexMod:lookup_sync(Bucket, "_proxy", Key, IndexState) of
+    case IndexMod:lookup_sync(IndexState, Bucket, "_proxy", Key) of
         [{Key, OldPostings}] ->
             TS1 = riak_index:timestamp(),
             OldPostings1 = [{Bucket, Field, Token, Key, TS1} || {Field, Token, _} <- OldPostings],
             %% io:format("DEBUG: Deleting old postings for ~p:~n~p~n", [BKey, OldPostings1]),
-            ok = IndexMod:delete(OldPostings1, IndexState);
+            ok = IndexMod:delete(IndexState, OldPostings1);
         _ ->
             skip
     end,
@@ -253,13 +253,14 @@ do_index_put(IndexMod, IndexState, BKey, Val) ->
     %% Key}. The DocID is also the Key, and the properties is a list
     %% of postings.
     TS2 = riak_index:timestamp(),
-    ok = IndexMod:index([{Bucket, "_proxy", Key, Key, IndexFields, TS2}], IndexState),
+    %% io:format("DEBUG: Indexing proxy object for ~p~n", [BKey]),
+    ok = IndexMod:index(IndexState, [{Bucket, "_proxy", Key, Key, IndexFields, TS2}]),
 
     %% Store the new postings...
     Postings = [{Bucket, Field, Token, Key, Props, TS2} || {Field, Token, Props} <- IndexFields],
     try 
         %% io:format("DEBUG: Indexing new postings for ~p:~n~p~n", [BKey, Postings]),
-        IndexMod:index(Postings, IndexState),
+        IndexMod:index(IndexState, Postings),
         ok
     catch 
         _Type : Reason ->
@@ -281,13 +282,13 @@ do_index_delete(IndexMod, IndexState, BKey) ->
     %% Look up the old proxy object. If it exists, then delete all of
     %% its postings.
     {Bucket, Key} = BKey,
-    case IndexMod:lookup_sync(Bucket, "_proxy", Key, IndexState) of
+    case IndexMod:lookup_sync(IndexState, Bucket, "_proxy", Key) of
         [{Key, OldPostings}] ->
             TS1 = riak_index:timestamp(),
             OldPostings1 = [{Bucket, Field, Token, Key, TS1} || {Field, Token, _} <- OldPostings],
             try
                 %% io:format("DEBUG: Deleting postings for ~p:~n~p~n", [BKey, OldPostings1]),
-                IndexMod:delete(OldPostings1, IndexState)
+                IndexMod:delete(IndexState, OldPostings1)
             catch _Type : Reason ->
                     {error, Reason}
             end;

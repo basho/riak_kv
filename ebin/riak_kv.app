@@ -10,6 +10,7 @@
              riak,
              riak_client,
              riak_index,
+             riak_index_backend,
              riak_index_mi_backend,
              riak_kv_app,
              riak_kv_backup,
