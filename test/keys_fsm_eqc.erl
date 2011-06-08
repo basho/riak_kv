@@ -24,22 +24,16 @@
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("riak_kv_vnode.hrl").
 
+-import(fsm_eqc_util, [non_blank_string/0]).
+
 -compile(export_all).
--define(DEFAULT_BUCKET_PROPS,
-        [{allow_mult, false},
-         {chash_keyfun, {riak_core_util, chash_std_keyfun}},
-         {r, quorum},
-         {pr, 0}]).
+
 -define(TEST_ITERATIONS, 100).
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
-
--record(state,{bucket,
-               object_count}).
 
 %%====================================================================
 %% eunit test
@@ -68,17 +62,9 @@ setup() ->
     %% Start erlang node
     {ok, _} = net_kernel:start([testnode, shortnames]),
     do_dep_apps(start, dep_apps()),
-
-    %% Create and store some objects
-    {ok, Client} = riak:local_client(),
-    [Client:put(riak_object:new(<<"bucket1">>, list_to_binary(integer_to_list(X)), <<"val">>)) || X <- lists:seq(1, 10)],
-    [Client:put(riak_object:new(<<"bucket2">>, list_to_binary(integer_to_list(X)), <<"val">>)) || X <- lists:seq(1, 100)],
-    [Client:put(riak_object:new(<<"bucket3">>, list_to_binary(integer_to_list(X)), <<"val">>)) || X <- lists:seq(1, 1000)],
     ok.
 
 cleanup(_) ->
-    %% fsm_eqc_util:cleanup_mock_servers(),
-    %% ok.
     do_dep_apps(stop, lists:reverse(dep_apps())),
     catch exit(whereis(riak_kv_vnode_master), kill), %% Leaks occasionally
     catch exit(whereis(riak_sysmon_filter), kill), %% Leaks occasionally
@@ -97,39 +83,42 @@ coverage_test() ->
 %% ====================================================================
 
 prop_basic_listkeys() ->
-    ?FORALL(Cmds, commands(?MODULE),
+    ?FORALL({ReqId, Bucket, NVal, ObjectCount, Timeout, ClientType},
+            {g_reqid(), g_bucket(), g_n_val(), g_object_count(), g_timeout(), g_client_type()},
         ?TRAPEXIT(
            begin
-               {_History, _State, Result} = run_commands(?MODULE, Cmds),
-               aggregate(command_names(Cmds), Result == ok)
+               {ok, Client} = riak:local_client(),
+               %% Make sure bucket is empty
+               {ok, OldKeys} = Client:list_keys(Bucket),
+               case (length(OldKeys) > 0) of
+                   true ->
+                       [Client:delete(Bucket, OldKey) || OldKey <- OldKeys];
+                   false ->
+                       ok
+               end,
+               %% Set bucket properties
+               BucketProps = riak_core_bucket:get_bucket(Bucket),
+               NewBucketProps = orddict:store(n_val, NVal, BucketProps),
+               riak_core_bucket:set_bucket(Bucket, NewBucketProps),
+               %% Create objects in bucket
+               ExpectedKeys = [list_to_binary(integer_to_list(X)) || X <- lists:seq(1, ObjectCount)],
+               [Client:put(riak_object:new(Bucket, Key, <<"val">>)) || Key <- ExpectedKeys],
+               %% Call start_link
+               Keys = start_link(ReqId, Bucket, Timeout, ClientType),
+               ?WHENFAIL(
+                  begin
+                      io:format("Bucket: ~p n_val: ~p~n", [Bucket, NVal]),
+                      io:format("Expected Key Count: ~p~nActual Key Count: ~p~n",
+                                [length(ExpectedKeys), length(Keys)]),
+                      io:format("Expected Keys: ~p~nActual Keys: ~p~n",
+                                [ExpectedKeys, Keys])
+                  end,
+                  conjunction(
+                    [{key_counts, equals(length(Keys), length(ExpectedKeys))},
+                     {keys, equals(lists:sort(Keys), lists:sort(ExpectedKeys))}
+                    ]))
            end
           )).
-
-%% ====================================================================
-%% eqc_statem callbacks
-%% ====================================================================
-
-initial_state() ->
-    #state{}.
-
-command(_State) ->
-    {call, ?MODULE, start_link, [g_reqid(), g_input(), g_timeout(), g_client_type()]}.
-
-next_state(State, _Result, {call,_,_,_}) -> State.
-
-precondition(_,_) ->
-    true.
-
-postcondition(_State, {call, _, start_link, [_, Input, _, _]}, Result) ->
-    case Input of
-        <<"bucket1">> ->
-            ok == ?assertEqual(10, length(Result));
-        <<"bucket2">> ->
-            ok == ?assertEqual(100, length(Result));
-        <<"bucket3">> ->
-            ok == ?assertEqual(1000, length(Result))
-    end;
-postcondition(_,_,_) -> true.
 
 %%====================================================================
 %% Wrappers
@@ -145,8 +134,18 @@ start_link(ReqId, Input, Timeout, ClientType) ->
 %% Generators
 %%====================================================================
 
-g_input() ->
-    elements([<<"bucket1">>, <<"bucket2">>, <<"bucket3">>]).
+g_bucket() ->
+    non_blank_string().
+
+g_client_type() ->
+    %% TODO: Incorporate mapred type
+    plain.
+
+g_n_val() ->
+    choose(1,5).
+
+g_object_count() ->
+    choose(10, 2000).
 
 g_reqid() ->
     ?LET(X, noshrink(largeint()), abs(X)).
@@ -154,14 +153,11 @@ g_reqid() ->
 g_timeout() ->
     choose(1000, 60000).
 
-g_client_type() ->
-    %% TODO: Incorporate mapred type
-    plain.
 
 %%====================================================================
 %% Helpers
 %%====================================================================
-
+ 
 prepare() ->
     application:load(sasl),
     error_logger:delete_report_handler(sasl_report_tty_h),
@@ -242,4 +238,4 @@ wait_for_replies(Sink, ReqId) ->
             ?debugFmt("Received keys for older run: ~p~n", [ORef])
     end.
 
--endif. % EQC
+ -endif. % EQC
