@@ -64,6 +64,8 @@
 -export([
          mapred/2,
          mapred_stream/1,
+         send_inputs/2,
+         collect_outputs/2,
          mapred_plan/1,
          mapred_plan/2
         ]).

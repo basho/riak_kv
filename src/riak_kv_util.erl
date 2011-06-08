@@ -30,7 +30,8 @@
          expand_value/3,
          expand_rw_value/4,
          normalize_rw_value/2,
-         make_request/2]).
+         make_request/2,
+         mapred_system/0]).
 
 -include_lib("riak_kv_vnode.hrl").
 
@@ -100,6 +101,16 @@ normalize_rw_value(one, _N) -> 1;
 normalize_rw_value(quorum, N) -> erlang:trunc((N/2)+1);
 normalize_rw_value(all, N) -> N;
 normalize_rw_value(_, _) -> error.
+
+%% @doc Find out which MapReduce system should be used.  Returns
+%%      `legacy' if `riak_client:mapred*' should be used.  Returns
+%%      `pipe' if `riak_kv_mrc_pipe:mapred*' should be used.
+%%
+%%      Depends on the `mapred_system' variable in the `riak_kv'
+%%      application's environment.
+-spec mapred_system() -> pipe | legacy.
+mapred_system() ->
+    app_helper:get_env(riak_kv, mapred_system, legacy).
 
 
 %% ===================================================================
