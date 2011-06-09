@@ -276,7 +276,7 @@ compat_basic1_test_() ->
                  %% Inputs = [{LinkBucket, LinkKey}],
                  Inputs = LinkBucket,
                  Spec = [{link, '_', <<"link 1">>, true}],
-                 {ok, [{LinkBucket, <<"nokey-1">>}]} =
+                 {ok, [ {{LinkBucket, <<"nokey-1">>}, <<"link 1">>} ]} =
                      riak_kv_mrc_pipe:mapred(Inputs, Spec)
              end),
           ?_test(

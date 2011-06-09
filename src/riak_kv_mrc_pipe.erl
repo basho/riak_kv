@@ -248,7 +248,7 @@ link_xform_compat(Bucket, Tag, _Arg) ->
             ?T(FittingDetails, [map], {mapping, Input}),
             LinkFun = bucket_linkfun(Bucket),
             Threes = LinkFun(Input, none, {Bucket, Tag}),
-            Results = [{B, K} || [B, K, _Tg] <- Threes],
+            Results = [ {{B, K}, Tg} || [B, K, Tg] <- Threes ],
             ?T(FittingDetails, [map], {produced, Results}),
             [ riak_pipe_vnode_worker:send_output(R, Partition,
                                                  FittingDetails)
