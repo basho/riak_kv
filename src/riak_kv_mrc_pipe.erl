@@ -218,7 +218,7 @@ link2pipe(Bucket, Tag, Keep, I, QueryT) ->
     Arg = query_arg(I+1, QueryT),
     [#fitting_spec{name={kvget_map,I},
                    module=riak_kv_pipe_get,
-                   chashfun=fun riak_core_util:chash_key/1,
+                   chashfun=fun bkey_chash/1,
                    nval=fun bkey_nval/1},
      #fitting_spec{name={xform_map,I},
                    module=riak_pipe_w_xform,
