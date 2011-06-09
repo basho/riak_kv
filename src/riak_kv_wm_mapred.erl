@@ -186,16 +186,10 @@ pipe_stream_mapred_results(RD, Sink,
                                   boundary=Boundary}=State) ->
     case riak_pipe:receive_result(Sink, Timeout) of
         {result, {PhaseId, Result}} ->
-            JSONResult = case is_reduce_phase(PhaseId, State) of
-                             true ->
-                                 [riak_kv_mapred_json:jsonify_not_found(R)
-                                  || R <- Result];
-                             false ->
-                                 %% map results come out of pipe one
-                                 %% at a time but they're supposed to
-                                 %% be in a list at the client end
-                                 [riak_kv_mapred_json:jsonify_not_found(Result)]
-                         end,
+            %% results come out of pipe one
+            %% at a time but they're supposed to
+            %% be in a list at the client end
+            JSONResult = [riak_kv_mapred_json:jsonify_not_found(Result)],
             Data = mochijson2:encode({struct, [{phase, PhaseId},
                                                {data, JSONResult}]}),
             Body = ["\r\n--", Boundary, "\r\n",
@@ -213,10 +207,6 @@ pipe_stream_mapred_results(RD, Sink,
             %% debugging
             pipe_stream_mapred_results(RD, Sink, State)
     end.
-
-is_reduce_phase(PhaseId, #state{mrquery=Query}) ->
-    %% lists:nth is 1-based, PhaseId is 0-based
-    reduce == element(1, lists:nth(PhaseId+1, Query)).
 
 %% LEGACY MAPRED
 

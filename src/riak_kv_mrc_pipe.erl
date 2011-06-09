@@ -132,8 +132,8 @@ mr2pipe_phases(Query) ->
 
 mr2pipe_phase({map,FunSpec,Arg,Keep}, I, _ConstHashCookie, QueryT) ->
     map2pipe(FunSpec, Arg, Keep, I, QueryT);
-mr2pipe_phase({reduce,FunSpec,Arg,Keep}, I, ConstHashCookie, QueryT) ->
-    reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie, QueryT);
+mr2pipe_phase({reduce,FunSpec,Arg,Keep}, I, ConstHashCookie, _QueryT) ->
+    reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie);
 mr2pipe_phase({link,Bucket,Tag,Keep}, I, _ConstHashCookie, QueryT)->
     link2pipe(Bucket, Tag, Keep, I, QueryT).
 
@@ -167,15 +167,8 @@ map2pipe(FunSpec, Arg, Keep, I, QueryT) ->
              [#fitting_spec{name={prereduce,I},
                             module=riak_kv_w_reduce,
                             arg={rct,
-                                 riak_kv_w_reduce:reduce_compat(R_FunSpec,
-                                                                false),
+                                 riak_kv_w_reduce:reduce_compat(R_FunSpec),
                                  Arg},
-                            chashfun=follow},
-              %% Have to send each element of the prereduce output list
-              %% [X1, X2, ...] downstream, instead of as one list
-              #fitting_spec{name={prereduce_foreach,I},
-                            module=riak_pipe_w_xform,
-                            arg=fun prereduce_components/3,
                             chashfun=follow}];
         true ->
              []
@@ -196,18 +189,13 @@ query_type(Idx, QueryT) ->
 query_arg(Idx, QueryT) ->
     element(3, element(Idx, QueryT)).
 
-prereduce_components(InputList, Partition, FittingDetails) ->
-    [ riak_pipe_vnode_worker:send_output(I, Partition, FittingDetails)
-      || I <- InputList].
-
-reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie, QueryT) ->
-    PrevIsReduceP = I > 0 andalso query_type(I, QueryT) == reduce,
+reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie) ->
     Hash = chash:key_of(ConstHashCookie),
     ConstantFun = fun(_) -> Hash end,
     [#fitting_spec{name={reduce,I},
                    module=riak_kv_w_reduce,
                    arg={rct,
-                        riak_kv_w_reduce:reduce_compat(FunSpec, PrevIsReduceP),
+                        riak_kv_w_reduce:reduce_compat(FunSpec),
                         Arg},
                    chashfun=ConstantFun}
      |[#fitting_spec{name=I,
@@ -327,9 +315,7 @@ collect_outputs(Sink, NumKeeps) ->
     end.
 
 group_outputs(Outputs, NumKeeps) ->
-    Merged = lists:foldl(fun({I,O}, Acc) when is_list(O) ->
-                                 dict:append_list(I, O, Acc);
-                            ({I,O}, Acc) ->
+    Merged = lists:foldl(fun({I,O}, Acc) ->
                                  dict:append(I, O, Acc)
                          end,
                          dict:new(),

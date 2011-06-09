@@ -30,7 +30,7 @@
          archive/1,
          handoff/2,
          validate_arg/1]).
--export([chashfun/1, reduce_compat/2]).
+-export([chashfun/1, reduce_compat/1]).
 
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
@@ -78,7 +78,8 @@ done(#state{acc=Acc0, delay=Delay, p=Partition, fd=FittingDetails} = S) ->
              true ->
                   reduce(Acc0, S, "done()")
           end,
-    riak_pipe_vnode_worker:send_output(Acc, Partition, FittingDetails),
+    [ riak_pipe_vnode_worker:send_output(O, Partition, FittingDetails)
+      || O <- Acc ],
     ok.
 
 %% @doc The archive is the accumulator.
@@ -144,25 +145,18 @@ chashfun({Key,_}) ->
 %% @doc Compatibility wrapper for an old-school Riak MR reduce function,
 %%      which is an arity-2 function `fun(InputList, SpecificationArg)'.
 
-reduce_compat({jsanon, {Bucket, Key}}, PreviousIsReduceP)
+reduce_compat({jsanon, {Bucket, Key}})
   when is_binary(Bucket), is_binary(Key) ->
-    reduce_compat({qfun, js_runner({jsanon, stored_js_source(Bucket, Key)})},
-                  PreviousIsReduceP);
-reduce_compat({jsanon, Source}, PreviousIsReduceP)
+    reduce_compat({qfun, js_runner({jsanon, stored_js_source(Bucket, Key)})});
+reduce_compat({jsanon, Source})
   when is_binary(Source) ->
-    reduce_compat({qfun, js_runner({jsanon, Source})},
-                  PreviousIsReduceP);
-reduce_compat({jsfun, Name}, PreviousIsReduceP)
+    reduce_compat({qfun, js_runner({jsanon, Source})});
+reduce_compat({jsfun, Name})
   when is_binary(Name) ->
-    reduce_compat({qfun, js_runner({jsfun, Name})},
-                  PreviousIsReduceP);
-reduce_compat({modfun, Module, Function}, PreviousIsReduceP) ->
-    reduce_compat({qfun, erlang:make_fun(Module, Function, 2)}, 
-                  PreviousIsReduceP);
-reduce_compat({qfun, Fun}, true) ->
-    %% Previous stage was reduce, so concatenate its output lists
-    fun(Inputs, Arg) -> Fun(lists:append(Inputs), Arg) end;
-reduce_compat({qfun, Fun}, false) ->
+    reduce_compat({qfun, js_runner({jsfun, Name})});
+reduce_compat({modfun, Module, Function}) ->
+    reduce_compat({qfun, erlang:make_fun(Module, Function, 2)});
+reduce_compat({qfun, Fun}) ->
     Fun.
 
 stored_js_source(Bucket, Key) ->
