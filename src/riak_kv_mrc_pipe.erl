@@ -148,9 +148,7 @@ map2pipe(FunSpec, Arg, Keep, I, QueryT) ->
         want_prereduce_p(I+1, QueryT),
     [#fitting_spec{name={kvget_map,I},
                    module=riak_kv_pipe_get,
-                   %% TODO: perform bucket prop 'chash_keyfun' lookup at
-                   %% spec-translation time, not at each input send
-                   chashfun=fun riak_core_util:chash_key/1,
+                   chashfun=fun bkey_chash/1,
                    nval=fun bkey_nval/1},
      #fitting_spec{name={xform_map,I},
                    module=riak_kv_mrc_map,
@@ -246,7 +244,7 @@ fix_final_fitting(Fittings) ->
     end.
 
 link_xform_compat(Bucket, Tag, _Arg) ->
-    fun({ok, Input}, Partition, FittingDetails) ->
+    fun({ok, Input, _Keydata}, Partition, FittingDetails) ->
             ?T(FittingDetails, [map], {mapping, Input}),
             LinkFun = bucket_linkfun(Bucket),
             Threes = LinkFun(Input, none, {Bucket, Tag}),
@@ -256,11 +254,15 @@ link_xform_compat(Bucket, Tag, _Arg) ->
                                                  FittingDetails)
               || R <- Results ],
             ok;
-       ({{error,_},_}, _Partition, _FittingDetails) ->
+       ({{error,_},_,_}, _Partition, _FittingDetails) ->
             ok
     end.
 
-bkey_nval({Bucket, _Key}) ->
+bkey_chash(Input) ->
+    riak_core_util:chash_key(riak_kv_pipe_get:bkey(Input)).
+
+bkey_nval(Input) ->
+    {Bucket,_} = riak_kv_pipe_get:bkey(Input),
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     {n_val, NVal} = lists:keyfind(n_val, 1, BucketProps),
     NVal.

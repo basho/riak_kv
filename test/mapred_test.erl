@@ -286,6 +286,33 @@ compat_basic1_test_() ->
                  Spec = [{link, '_', '_', true}],
                  {ok, []} =
                      riak_kv_mrc_pipe:mapred(Inputs, Spec)
+             end),
+          ?_test(
+             %% KeyData
+             begin
+                 UnMap = fun(O, undefined, _) ->
+                                 [{riak_object:bucket(O),
+                                   riak_object:key(O)}];
+                            (O, KeyData, _) ->
+                                 [{{riak_object:bucket(O),
+                                    riak_object:key(O)},
+                                   KeyData}]
+                         end,
+                 Normalize = fun({{B,K},D}) -> {{B,K},D};
+                                ({B,K})     -> {B,K};
+                                ([B,K])     -> {B,K};
+                                ([B,K,D])   -> {{B,K},D}
+                             end,
+                 Spec =
+                     [{map, {qfun, UnMap}, none, true}],
+                 Inputs = [{IntsBucket, <<"bar1">>},
+                           {{IntsBucket, <<"bar2">>}, <<"keydata works">>},
+                           [IntsBucket, <<"bar3">>],
+                           [IntsBucket, <<"bar4">>, <<"keydata still works">>]],
+                 {ok, Results} =
+                     riak_kv_mrc_pipe:mapred(Inputs, Spec),
+                 SortedNormal = lists:sort([ Normalize(I) || I <- Inputs ]),
+                 ?assertEqual(SortedNormal, lists:sort(Results))
              end)
           ]
      end}.
@@ -467,11 +494,40 @@ compat_javascript_test_() ->
                        <<>>, true}],
                  {ok, [[{not_found,
                          NotFoundBkey,
-                         %% explicitly matching stubbed results here,
-                         %% so that the test gets fixed when the code does
-                         <<"TODO: KeyData">>}],
+                         undefined}],
                        [{struct,[{<<"mapred_test_pass">>,1}]}]]} =
                      riak_kv_mrc_pipe:mapred([NotFoundBkey], Spec)
+             end),
+          ?_test(
+             %% KeyData
+             begin
+                 UnMap = <<"function(O, KD) {
+                               R = {b:O.bucket, k:O.key};
+                               if (KD != \"undefined\")
+                                  R.d = KD;
+                               return [R];
+                            }">>,
+                 Normalize = fun({{B,K},D}) -> {struct, [{<<"b">>, B},
+                                                         {<<"k">>, K},
+                                                         {<<"d">>, D}]};
+                                ({B,K})     -> {struct, [{<<"b">>, B},
+                                                         {<<"k">>, K}]};
+                                ([B,K])     -> {struct, [{<<"b">>, B},
+                                                         {<<"k">>, K}]};
+                                ([B,K,D])   -> {struct, [{<<"b">>, B},
+                                                         {<<"k">>, K},
+                                                         {<<"d">>, D}]}
+                             end,
+                 Spec =
+                     [{map, {jsanon, UnMap}, none, true}],
+                 Inputs = [{IntsBucket, <<"bar1">>},
+                           {{IntsBucket, <<"bar2">>}, <<"keydata works">>},
+                           [IntsBucket, <<"bar3">>],
+                           [IntsBucket, <<"bar4">>, <<"keydata still works">>]],
+                 {ok, Results} =
+                     riak_kv_mrc_pipe:mapred(Inputs, Spec),
+                 SortedNormal = lists:sort([ Normalize(I) || I <- Inputs ]),
+                 ?assertEqual(SortedNormal, lists:sort(Results))
              end)
           ]
      end}.

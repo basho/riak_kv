@@ -24,7 +24,10 @@
 %%      This module is intended as the second half of the emulation
 %%      layer for running Riak KV MapReduce on top of Riak Pipe.  An
 %%      upstream fitting should read the object out of Riak KV, and
-%%      then send it to this fitting.
+%%      then send it to this fitting as a 3-tuple of the form
+%%      `{ok, RiakObject, KeyData}'.  If there was an error reading
+%%      the object, that can be sent to this fitting as a 3-tuple of
+%%      the form `{{error, Reason}, {Bucket, Key}, KeyData}'.
 %%
 %%      This module expects a 2-tuple, `{PhaseSpec, PhaseArg}' as
 %%      argument.  Both elements come directly from the phase
@@ -114,12 +117,12 @@ process(Input, _Last,
          -> {ok, [term()]} | {forward_preflist, Reason :: term()}.
 map({modfun, Module, Function}, Arg, Input0) ->
     Input = erlang_input(Input0),
-    %% TODO: keydata
-    {ok, Module:Function(Input, undefined, Arg)};
+    KeyData = erlang_keydata(Input0),
+    {ok, Module:Function(Input, KeyData, Arg)};
 map({qfun, Fun}, Arg, Input0) ->
     Input = erlang_input(Input0),
-    %% TODO: keydata
-    {ok, Fun(Input, undefined, Arg)};
+    KeyData = erlang_keydata(Input0),
+    {ok, Fun(Input, KeyData, Arg)};
 map({strfun, {Bucket, Key}}, _Arg, _Input) ->
     exit({strfun, {Bucket, Key}});
 map({strfun, Source}, _Arg, _Input) ->
@@ -131,16 +134,18 @@ map({jsanon, Source}, Arg, Input) ->
     map_js({jsanon, Source}, Arg, Input).
 
 %% select which bit of the input to hand to the map function
-erlang_input({ok, Input})          -> Input;
-erlang_input({{error,_}=Input, _}) -> Input.
+erlang_input({ok, Input, _})          -> Input;
+erlang_input({{error,_}=Input, _, _}) -> Input.
 
-map_js(_JS, _Arg, {{error, notfound}, {Bucket, Key}}) ->
+%% extract keydata from the input
+erlang_keydata({_OkError, _Input, KeyData}) -> KeyData.
+
+map_js(_JS, _Arg, {{error, notfound}, {Bucket, Key}, KeyData}) ->
     {ok, [{not_found,
            {Bucket, Key},
-           <<"TODO: KeyData">>}]};
-map_js(JS, Arg, {ok, Input}) ->
-    %% TODO: keydata
-    JSArgs = [riak_object:to_json(Input), <<"">>, Arg],
+           KeyData}]};
+map_js(JS, Arg, {ok, Input, KeyData}) ->
+    JSArgs = [riak_object:to_json(Input), KeyData, Arg],
     JSCall = {JS, JSArgs},
     case riak_kv_js_manager:blocking_dispatch(
            ?JSPOOL_MAP, JSCall, ?DEFAULT_JS_RESERVE_ATTEMPTS) of
