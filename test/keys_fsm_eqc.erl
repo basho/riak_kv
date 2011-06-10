@@ -31,7 +31,7 @@
 
 -compile(export_all).
 
--define(TEST_ITERATIONS, 100).
+-define(TEST_ITERATIONS, 50).
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
@@ -83,15 +83,23 @@ coverage_test() ->
 %% ====================================================================
 
 prop_basic_listkeys() ->
-    ?FORALL({ReqId, Bucket, NVal, ObjectCount, Timeout, ClientType},
-            {g_reqid(), g_bucket(), g_n_val(), g_object_count(), g_timeout(), g_client_type()},
+    ?FORALL({ReqId, Input, NVal, ObjectCount, Timeout, ClientType},
+            {g_reqid(), g_input(), g_n_val(), g_object_count(), g_timeout(), g_client_type()},
         ?TRAPEXIT(
            begin
                {ok, Client} = riak:local_client(),
-               %% Make sure bucket is empty
-               {ok, OldKeys} = Client:list_keys(Bucket),
-               case (length(OldKeys) > 0) of
-                   true ->
+               {ok, Buckets} = Client:list_buckets(),
+               %% Check if a key filter is being used as input
+               case Input of
+                   {filter, Bucket, _} ->
+                       ok;
+                   Bucket ->
+                       ok
+               end,
+               case lists:member(Bucket, Buckets) of
+                   true -> % bucket has already been used
+                       %% Delete the existing keys in the bucket
+                       {ok, OldKeys} = Client:list_keys(Bucket),
                        [Client:delete(Bucket, OldKey) || OldKey <- OldKeys];
                    false ->
                        ok
@@ -101,14 +109,31 @@ prop_basic_listkeys() ->
                NewBucketProps = orddict:store(n_val, NVal, BucketProps),
                riak_core_bucket:set_bucket(Bucket, NewBucketProps),
                %% Create objects in bucket
-               ExpectedKeys = [list_to_binary(integer_to_list(X)) || X <- lists:seq(1, ObjectCount)],
-               [Client:put(riak_object:new(Bucket, Key, <<"val">>)) || Key <- ExpectedKeys],
+               GeneratedKeys = [list_to_binary(integer_to_list(X)) || X <- lists:seq(1, ObjectCount)],
+               [ok = Client:put(riak_object:new(Bucket, Key, <<"val">>)) || Key <- GeneratedKeys],
+               %% Set the expected output based on if a 
+               %% key filter is being used or not.
+               case Input of
+                   {filter, _, KeyFilter} ->
+                       ExpectedKeyFilter = 
+                           fun(K, Acc) ->
+                                   case KeyFilter(K) of
+                                       true ->
+                                           [K | Acc];
+                                       false ->
+                                           Acc
+                                   end
+                           end,
+                       ExpectedKeys = lists:foldl(ExpectedKeyFilter, [], GeneratedKeys);
+                   Bucket ->
+                       ExpectedKeys = GeneratedKeys
+               end,
                %% Call start_link
-               Keys = start_link(ReqId, Bucket, Timeout, ClientType),
+               Keys = start_link(ReqId, Input, Timeout, ClientType),
                ?WHENFAIL(
                   begin
                       io:format("Bucket: ~p n_val: ~p~n", [Bucket, NVal]),
-                      io:format("Expected Key Count: ~p~nActual Key Count: ~p~n",
+                      io:format("Expected Key Count: ~p Actual Key Count: ~p~n",
                                 [length(ExpectedKeys), length(Keys)]),
                       io:format("Expected Keys: ~p~nActual Keys: ~p~n",
                                 [ExpectedKeys, Keys])
@@ -117,6 +142,7 @@ prop_basic_listkeys() ->
                     [{key_counts, equals(length(Keys), length(ExpectedKeys))},
                      {keys, equals(lists:sort(Keys), lists:sort(ExpectedKeys))}
                     ]))
+
            end
           )).
 
@@ -134,8 +160,22 @@ start_link(ReqId, Input, Timeout, ClientType) ->
 %% Generators
 %%====================================================================
 
+g_input() ->
+    frequency([{5, g_bucket()}, {1, g_key_filter()}]).
+
 g_bucket() ->
     non_blank_string().
+
+g_key_filter() ->
+    %% Create a key filter function.
+    %% There will always be at least 10 keys
+    %% due to the lower bound of object count
+    %% generator. 
+    KeyFilter = 
+        fun(X) -> 
+                lists:member(X, lists:seq(1,10))
+        end,
+    {filter, non_blank_string(), KeyFilter}.
 
 g_client_type() ->
     %% TODO: Incorporate mapred type
@@ -151,8 +191,7 @@ g_reqid() ->
     ?LET(X, noshrink(largeint()), abs(X)).
 
 g_timeout() ->
-    choose(1000, 60000).
-
+    choose(10000, 60000).
 
 %%====================================================================
 %% Helpers
@@ -207,7 +246,8 @@ data_sink(ReqId, KeyList, Done) ->
             data_sink(ReqId, KeyList++Keys, false);
         {ReqId, done} ->
             data_sink(ReqId, KeyList, true);
-        {ReqId, _Error} ->
+        {ReqId, Error} ->
+            ?debugFmt("Error occurred: ~p~n", [Error]),
             data_sink(ReqId, [], true);
         {keys, From, ReqId} ->
             From ! {ok, ReqId, KeyList};
