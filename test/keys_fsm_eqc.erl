@@ -144,7 +144,7 @@ prop_basic_listkeys() ->
                                 [ExpectedKeys, Keys])
                   end,
                   conjunction(
-                    [{key_counts, equals(length(Keys), length(ExpectedKeys))},
+                    [
                      {keys, equals(lists:sort(Keys), lists:sort(ExpectedKeys))}
                     ]))
 
