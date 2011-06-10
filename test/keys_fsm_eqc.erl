@@ -59,8 +59,13 @@ setup() ->
     error_logger:tty(false),
     error_logger:logfile({open, "keys_fsm_eqc.log"}),
 
+    %% Cleanup in case a previous test did not
+    cleanup(setup),
+    %% Pause the make sure everything is cleaned up
+    timer:sleep(2000),
+    
     %% Start erlang node
-    {ok, _} = net_kernel:start([testnode, shortnames]),
+    net_kernel:start([testnode, shortnames]),
     do_dep_apps(start, dep_apps()),
     ok.
 
