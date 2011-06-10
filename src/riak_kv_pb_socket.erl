@@ -28,6 +28,7 @@
 -endif.
 -include_lib("riakc/include/riakclient_pb.hrl").
 -include_lib("riakc/include/riakc_pb.hrl").
+-include_lib("riak_pipe/include/riak_pipe.hrl").
 -behaviour(gen_server).
 
 -export([start_link/0, set_socket/2]).
@@ -94,7 +95,29 @@ handle_info({ReqId, {keys, []}}, State=#state{req=#rpblistkeysreq{}, req_ctx=Req
 handle_info({ReqId, {keys, Keys}}, State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     {noreply, send_msg(#rpblistkeysresp{keys = Keys}, State)};
 
-%% Handle response from mapred_stream/mapred_bucket_stream
+%% PIPE Handle response from mapred_stream
+handle_info(#pipe_eoi{ref=ReqId},
+            State=#state{sock = Socket, req=#rpbmapredreq{}, req_ctx=ReqId}) ->
+    NewState = send_msg(#rpbmapredresp{done = 1}, State),
+    inet:setopts(Socket, [{active, once}]),
+    {noreply, NewState#state{req = undefined, req_ctx = undefined}};
+
+handle_info(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
+            State=#state{sock=Socket,
+                         req=#rpbmapredreq{content_type = ContentType}, 
+                         req_ctx=ReqId}) ->
+    case encode_mapred_phase([Res], ContentType) of
+        {error, Reason} ->
+            NewState = send_error("~p", [Reason], State),
+            inet:setopts(Socket, [{active, once}]),
+            {noreply, NewState#state{req = undefined, req_ctx = undefined}};
+        Response ->
+            {noreply, send_msg(#rpbmapredresp{phase=PhaseId, 
+                                              response=Response}, State)}
+    end;
+%% ignore #pipe_log for now, since riak_kv_mrc_pipe does not enable it
+
+%% LEGACY Handle response from mapred_stream/mapred_bucket_stream
 handle_info({flow_results, ReqId, done},
             State=#state{sock = Socket, req=#rpbmapredreq{}, req_ctx=ReqId}) ->
     NewState = send_msg(#rpbmapredresp{done = 1}, State),
@@ -344,63 +367,94 @@ process_message(#rpbsetbucketreq{bucket=B, props = PbProps},
 %% TODO: refactor, cleanup
 %% Start map/reduce job - results will be processed in handle_info
 process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req, 
-                #state{client=C} = State) ->
+                State) ->
 
     case decode_mapred_query(MrReq, ContentType) of
         {error, Reason} ->
             send_error("~p", [Reason], State);
 
         {ok, Inputs, Query, Timeout} ->
-            case is_binary(Inputs) orelse is_key_filter(Inputs) of
+            case riak_kv_util:mapred_system() of
+                pipe ->
+                    pipe_mapreduce(Req, State, Inputs, Query, Timeout);
+                legacy ->
+                    legacy_mapreduce(Req, State, Inputs, Query, Timeout)
+            end
+    end.
+
+pipe_mapreduce(Req, State, Inputs, Query, _Timeout) ->
+    case valid_mapred_inputs(Inputs) of
+        true ->
+            {{ok, Head, Sink}, _NumKeeps} =
+                riak_kv_mrc_pipe:mapred_stream(Query),
+            riak_kv_mrc_pipe:send_inputs(Head, Inputs),
+            %% TODO: timeout
+            {pause, State#state{req=Req, req_ctx=Sink#fitting.ref}};
+        false ->
+            {error, bad_inputs}
+    end.
+
+valid_mapred_inputs(Inputs) ->
+    is_binary(Inputs) orelse         %% bucket
+        is_list(Inputs) orelse       %% bucket/key pairs (+/- keydata)
+        is_key_filter(Inputs) orelse %% key filter
+                                     %% dynamic inputs
+        (is_tuple(Inputs) andalso size(Inputs)==4 andalso
+         element(1, Inputs) == modfun andalso
+         is_atom(element(2, Inputs)) andalso
+         is_atom(element(3, Inputs))).
+        
+
+legacy_mapreduce(Req, #state{client=C}=State, Inputs, Query, Timeout) ->
+    case is_binary(Inputs) orelse is_key_filter(Inputs) of
+        true ->
+            case C:mapred_bucket_stream(Inputs, Query, 
+                                        self(), Timeout) of
+                {stop, Error} ->
+                    send_error("~p", [Error], State);
+
+                {ok, ReqId} ->
+                    {pause, State#state{req = Req, req_ctx = ReqId}}
+            end;
+        false ->
+            case is_list(Inputs) of
                 true ->
-                    case C:mapred_bucket_stream(Inputs, Query, 
-                                                self(), Timeout) of
+                    case C:mapred_stream(Query, self(), Timeout) of
                         {stop, Error} ->
                             send_error("~p", [Error], State);
 
-                        {ok, ReqId} ->
+                        {ok, {ReqId, FSM}} ->
+                            luke_flow:add_inputs(FSM, Inputs),
+                            luke_flow:finish_inputs(FSM),
+                            %% Pause incoming packets - map/reduce results
+                            %% will be processed by handle_info, it will 
+                            %% set socket active again on completion of streaming.
                             {pause, State#state{req = Req, req_ctx = ReqId}}
                     end;
                 false ->
-                    case is_list(Inputs) of
+                    case is_tuple(Inputs) andalso size(Inputs)==4 andalso
+                        element(1, Inputs) == modfun andalso
+                        is_atom(element(2, Inputs)) andalso
+                        is_atom(element(3, Inputs)) of
                         true ->
                             case C:mapred_stream(Query, self(), Timeout) of
                                 {stop, Error} ->
                                     send_error("~p", [Error], State);
-                                
+
                                 {ok, {ReqId, FSM}} ->
-                                    luke_flow:add_inputs(FSM, Inputs),
+                                    C:mapred_dynamic_inputs_stream(
+                                      FSM, Inputs, Timeout),
                                     luke_flow:finish_inputs(FSM),
                                     %% Pause incoming packets - map/reduce results
                                     %% will be processed by handle_info, it will 
                                     %% set socket active again on completion of streaming.
                                     {pause, State#state{req = Req, req_ctx = ReqId}}
                             end;
-                        false ->
-                            case is_tuple(Inputs) andalso size(Inputs)==4 andalso
-                                element(1, Inputs) == modfun andalso
-                                is_atom(element(2, Inputs)) andalso
-                                is_atom(element(3, Inputs)) of
-                                true ->
-                                    case C:mapred_stream(Query, self(), Timeout) of
-                                        {stop, Error} ->
-                                            send_error("~p", [Error], State);
-                
-                                        {ok, {ReqId, FSM}} ->
-                                            C:mapred_dynamic_inputs_stream(
-                                              FSM, Inputs, Timeout),
-                                            luke_flow:finish_inputs(FSM),
-                                            %% Pause incoming packets - map/reduce results
-                                            %% will be processed by handle_info, it will 
-                                            %% set socket active again on completion of streaming.
-                                            {pause, State#state{req = Req, req_ctx = ReqId}}
-                                    end;
-                                false -> 
-                                    {error, bad_mapred_inputs}
-                            end
-                        end
+                        false -> 
+                            {error, bad_mapred_inputs}
                     end
-            end.
+            end
+    end.
 
 %% Send a message to the client
 -spec send_msg(msg(), #state{}) -> #state{}.
