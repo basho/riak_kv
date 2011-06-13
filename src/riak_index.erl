@@ -37,8 +37,7 @@
 -include("riak_kv_wm_raw.hrl").
 
 %% @type data_type_defs()  :: [data_type_def()].
-%% @type data_type_def()   :: {CompiledRegex::re:mp(), Module::module()}.
-
+%% @type data_type_def()   :: {MatchFunction::function(), ParseFunction::function()}.
 %% @type failure_reason()  :: {unknown_field_type, Field :: string()}
 %%                          | {field_parsing_failed, {Field :: string(), Value :: string()}}.
 
@@ -142,17 +141,17 @@ parse_fields(IndexFields) ->
 parse_field(Key, Value, [Type|Types]) ->
     %% Run the regex to check if the key suffix matches this data
     %% type.
-    {RE, Function} = Type,
-    case re:run(Key, RE) of
-        {match, _} ->
+    {MatchFunction, ParseFunction} = Type,
+    case MatchFunction(Key) of
+        true ->
             %% We have a match. Parse the value.
-            case Function(Value) of
+            case ParseFunction(Value) of
                 {ok, ParsedValue} -> 
                     {ok, ParsedValue};
                 _ -> 
                     {error, {field_parsing_failed, {Key, Value}}}
             end;
-        nomatch ->
+        false ->
             %% Try the next data type.
             parse_field(Key, Value, Types)
     end;
@@ -181,19 +180,27 @@ timestamp() ->
 
 %% @spec field_types() -> data_type_defs().
 %%
-%% @doc Return a list of {Regex, Function} records that map a
-%%      field name to a field type. 
+%% @doc Return a list of {MatchFunction, ParseFunction} tuples that
+%%      map a field name to a field type.
 field_types() -> 
-    F = fun(S) -> 
-        {ok, RE} = re:compile(S),
-        RE
-    end,
+    %% Return a function that takes one argument, a Field Name, and
+    %% returns true if the Field Name matches the provided
+    %% suffix. 
+    F = fun(Suffix) ->
+                %% Since we are calling this multiple times, there may
+                %% be a faster way to do this. lists:suffix/2 calls
+                %% length/1 twice, then calls lists:nthtail/2. The
+                %% other approach is to reverse the incoming Field
+                %% Name and call lists:prefix/2. Going with the fewest
+                %% lines of user code until we benchmark.
+                fun(Field) -> lists:suffix(Suffix, Field) end
+        end,
     [
-     {F("\\$bucket"),  fun parse_binary/1},
-     {F("\\$key"),     fun parse_binary/1},
-     {F(".*_id"),      fun parse_id/1},
-     {F(".*_int"),     fun parse_integer/1},
-     {F(".*_float"),   fun parse_float/1}
+     {F("$bucket"), fun parse_binary/1},
+     {F("$key"),    fun parse_binary/1},
+     {F("_id"),     fun parse_id/1},
+     {F("_int"),    fun parse_integer/1},
+     {F("_float"),  fun parse_float/1}
     ].
 
 %% @private
