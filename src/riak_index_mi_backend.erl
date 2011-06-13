@@ -25,13 +25,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-%% MIN_VALUE and MAX_VALUE are used during range searches. MIN_VALUE
-%% is a number because floats sort smallest in Erlang. See
-%% http://www.erlang.org/doc/reference_manual/expressions.html. MAX_VALUE
-%% is undefined because merge_index understands undefined to mean no
-%% upper bound.
--define(MIN_VALUE, -9223372036854775808). %% -1 * (2^63)).
--define(MAX_VALUE, undefined).
+%% A size of 'all' tells merge_index to ignore the size parameter when
+%% performing a range query.
 -define(SIZE, all).
 
 %% @type state() = term().
@@ -138,7 +133,7 @@ fold_index(State, Index, Query, SKFun, Acc, FinalFun) ->
                       merge_index:range_sync(Pid, Index, Field, Term, undefined, ?SIZE, FilterFun);
 
                   _ -> 
-                      FinalFun({error, {unknown_query_element, Query}}, Acc)
+                      {error, {unknown_query_element, Query}}
               end,
     
     %% If Results is a list of results, then call SKFun to accumulate
