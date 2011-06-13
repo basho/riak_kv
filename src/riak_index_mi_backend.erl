@@ -116,7 +116,7 @@ lookup_sync(State, Index, Field, Term) ->
 %%                  SKFun :: function(), Acc :: term(), FinalFun :: function()) -> term().
 fold_index(State, Index, Query, SKFun, Acc, FinalFun) ->
     Pid = State#state.pid,
-    FilterFun = fun(Value, Props) -> true end,
+    FilterFun = fun(_Value, _Props) -> true end,
 
     %% Run a synchronous query against merge_index. In the future,
     %% this will run more complicated queries, and will run them
