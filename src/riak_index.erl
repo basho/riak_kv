@@ -24,93 +24,122 @@
 
 -module(riak_index).
 -export([
-         validate_object/1, 
-         validate_fields/1,
-         format_failure_reason/1
+         validate_object_hook/1,
+         parse_object/1,
+         parse_fields/1,
+         format_failure_reason/1,
+         timestamp/0
         ]).
-
-%% -ifdef(TEST).
+-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
-%% -endif.
+-endif.
 
 -include("riak_kv_wm_raw.hrl").
 
-%% @type data_type_defs() = [data_type_def()].
-%% @type data_type_def() = {CompiledRegex:re:mp(), Module:module()}.
+%% @type data_type_defs()  :: [data_type_def()].
+%% @type data_type_def()   :: {MatchFunction::function(), ParseFunction::function()}.
+%% @type failure_reason()  :: {unknown_field_type, Field :: string()}
+%%                          | {field_parsing_failed, {Field :: string(), Value :: string()}}.
 
-%% @spec validate_object(riak_object:riak_object()) -> 
-%%         riak_object:riak_object() | {fail, term()}.
+%% @spec validate_object_hook(riak_object:riak_object()) -> 
+%%         riak_object:riak_object() | {fail, [failure_reason()]}.
 %%
 %% @doc Validate the index fields stored in object metadata. Conforms
 %%      to the pre-commit hook interface. Return the unmodified object
 %%      if validation was successful, or {fail, [Reasons]} if validation
 %%      failed. Reason is either `{unknown_field_type, Field}` or
 %%      `{field_parsing_failed, {Field, Value}}.`
-validate_object(RObj) ->
-    %% Get the object metadata. This is only called during a write, so
-    %% we should never encounter more than object metadata.
-    MD = riak_object:get_metadata(RObj),
-    
-    %% Get the index fields.
-    IndexFields = case dict:find(?MD_INDEX, MD) of
-        {ok, IFs} -> IFs;
-        error -> []
-    end,
-
-    case validate_fields(IndexFields) of
-        true -> 
+validate_object_hook(RObj) ->
+    case parse_object(RObj) of
+        {ok, _} -> 
             RObj;
-        {false, Reasons} ->
+        {error, Reasons} ->
             {fail, Reasons}
     end.
 
-%% @spec validate_fields([Field :: {Key:string(), Value:string()}]) -> 
-%%       true | {false, [Reason :: {atom(), term()}]}.
+%% @spec parse_object(riak_object:riak_object()) -> {ok, [{Field::string(), Val :: term()}]}
+%%                                                | {error, [failure_reason()]}.
 %%
-%% @doc Validate the provided index fields. Returns 'true' if the
-%%      validation was successful, or {false, Reasons} if validation
+%% @doc Pull out index fields stored in the metadata of the provided
+%%      Riak Object. Parse the fields, and return {ok, [{Field,
+%%      Value}]} if successful, or {error, [Reasons]} on error. Reason
+%%      is either `{unknown_field_type, Field}` or
+%%      `{field_parsing_failed, {Field, Value}}.`
+parse_object(RObj) ->
+    %% For each object metadata, pull out any IndexFields. This could
+    %% be called on a write with siblings, so we need to examine *all*
+    %% metadatas.
+    F = fun(X, Acc) ->
+                case dict:find(?MD_INDEX, X) of
+                    {ok, IFs} ->
+                        IFs ++ Acc;
+                    error ->
+                        Acc
+                end
+        end,
+    IndexFields = lists:foldl(F, [], riak_object:get_metadatas(RObj)),
+
+    %% Now parse the fields, returning the result.
+    parse_fields(IndexFields).
+
+
+%% @spec parse_fields([Field :: {Key:string(), Value :: string()}]) -> 
+%%       {ok, [{Field :: string(), Value :: term()}]} | {error, [failure_reason()]}.
+%%
+%% @doc Parse the provided index fields. Returns {ok, Fields} if the
+%%      parsing was successful, or {error, Reasons} if parsing
 %%      failed. Reason is either `{unknown_field_type, Field}` or
 %%      `{field_parsing_failed, {Field, Value}}.`
-validate_fields(IndexFields) ->
-    %% Call validate_field on each field.
+parse_fields(IndexFields) ->
+    %% Call parse_field on each field, and accumulate in ResultAcc or
+    %% ErrorAcc, depending on whether the operation was successful.
     Types = field_types(),
-    Results = [validate_field(K,V, Types) || {K,V} <- IndexFields],
-    FailureReasons = [Reason || {false, Reason} <- Results],
-
+    F = fun({Field, Value}, {ResultAcc, ErrorAcc}) ->
+                case parse_field(Field, Value, Types) of
+                    {ok, ParsedValue} -> 
+                        NewResultAcc = [{Field, ParsedValue} | ResultAcc],
+                        {NewResultAcc, ErrorAcc};
+                    {error, Reason} -> 
+                        NewErrorAcc = [Reason | ErrorAcc],
+                        {ResultAcc, NewErrorAcc}
+                end
+        end,
+    {Results, FailureReasons} = lists:foldl(F, {[],[]}, IndexFields),
+                
     %% Return the object, or a list of Reasons.
     case FailureReasons == [] of
-        true  -> true;
-        false -> {false, FailureReasons}
+        true  -> {ok, lists:reverse(Results)};
+        false -> {error, lists:reverse(FailureReasons)}
     end.
 
 
-%% @spec validate_field(Key:string(), Value:string(), Types:data_type_defs()) -> 
-%%         true | {false, Reason}.
+%% @spec parse_field(Key::string(), Value::string(), Types::data_type_defs()) -> 
+%%         {ok, Value} | {error, Reason}.
 %%
-%% @doc Validate an index field. Return 'true' if validation is
-%%      successful, or {false, [Reasons]}. Reason is either
+%% @doc Parse an index field. Return {ok, Value} on success, or
+%%      {error, Reason} if there is a problem. Reason is either
 %%      `{unknown_field_type, Field}` or `{field_parsing_failed,
 %%      {Field, Value}}.`
-validate_field(Key, Value, [Type|Types]) ->
+parse_field(Key, Value, [Type|Types]) ->
     %% Run the regex to check if the key suffix matches this data
     %% type.
-    {RE, Function} = Type,
-    case re:run(Key, RE) of
-        {match, _} ->
+    {MatchFunction, ParseFunction} = Type,
+    case MatchFunction(Key) of
+        true ->
             %% We have a match. Parse the value.
-            case Function(Value) of
-                {ok, _} -> 
-                    true;
+            case ParseFunction(Value) of
+                {ok, ParsedValue} -> 
+                    {ok, ParsedValue};
                 _ -> 
-                    {false, {field_parsing_failed, {Key, Value}}}
+                    {error, {field_parsing_failed, {Key, Value}}}
             end;
-        nomatch ->
+        false ->
             %% Try the next data type.
-            validate_field(Key, Value, Types)
+            parse_field(Key, Value, Types)
     end;
-validate_field(Key, _Value, []) ->
+parse_field(Key, _Value, []) ->
     %% No matching data types, return an error.
-    {false, {unknown_field_type, Key}}.
+    {error, {unknown_field_type, Key}}.
 
 %% @spec format_failure_reason(FailureReason :: {atom(), term()}) -> string().
 %%
@@ -123,19 +152,35 @@ format_failure_reason(FailureReason) ->
             io_lib:format("Could not parse field '~s', value '~s'.~n", [Field, Value])
     end.
 
+%% @spec timestamp() -> integer().
+%%
+%% @doc Get a timestamp, the number of milliseconds returned by
+%%      erlang:now().
+timestamp() ->
+    {MegaSeconds,Seconds,MilliSeconds}=erlang:now(),
+    (MegaSeconds * 1000000000000) + (Seconds * 1000000) + MilliSeconds.
+
 %% @spec field_types() -> data_type_defs().
 %%
-%% @doc Return a list of {Regex, Function} records that map a
-%%      field name to a field type. 
+%% @doc Return a list of {MatchFunction, ParseFunction} tuples that
+%%      map a field name to a field type.
 field_types() -> 
-    F = fun(S) -> 
-        {ok, RE} = re:compile(S),
-        RE
-    end,
+    %% Return a function that takes one argument, a Field Name, and
+    %% returns true if the Field Name matches the provided
+    %% suffix. 
+    F = fun(Suffix) ->
+                %% Since we are calling this multiple times, there may
+                %% be a faster way to do this. lists:suffix/2 calls
+                %% length/1 twice, then calls lists:nthtail/2. The
+                %% other approach is to reverse the incoming Field
+                %% Name and call lists:prefix/2. Going with the fewest
+                %% lines of user code until we benchmark.
+                fun(Field) -> lists:suffix(Suffix, Field) end
+        end,
     [
-     {F(".*_id"),    fun parse_id/1},
-     {F(".*_int"),   fun parse_integer/1},
-     {F(".*_float"), fun parse_float/1}
+     {F("_id"),    fun parse_id/1},
+     {F("_int"),   fun parse_integer/1},
+     {F("_float"), fun parse_float/1}
     ].
 
 %% @private
@@ -162,18 +207,23 @@ parse_integer(Value) ->
 %%
 %% @doc Parse a string into a float value.
 parse_float(Value) when Value /= ""->
-    %% Erlang chokes on floats that start with a decimal point,
-    %% end with a decimal point, or don't contain a decimal point.
-    %% Normalize the incoming value for these conditions.
+    %% Erlang chokes on floats that start with a decimal point or
+    %% don't contain a decimal point.  Normalize the incoming value
+    %% for these conditions. We accept both decimal notation (3.14, 3,
+    %% .14) and scientific notation (3.14e5, 3.14E5).
     Value1 = "0" ++ Value,
     Value2 = case string:str(Value1, ".") of
-                 0 -> Value1 ++ ".";
-                 _ -> Value1
+                 0 ->
+                     %% If no decimal, then add one with a trailing
+                     %% zero.
+                     Value1 ++ ".0";
+                 _ -> 
+                     %% Otherwise nothing to do.
+                     Value1
              end,
-    Value3 = Value2 ++ "0",
     
     try
-        {ok, list_to_float(Value3)}
+        {ok, list_to_float(Value2)}
     catch
         _Type : Reason ->
             {error, Reason}
@@ -188,6 +238,8 @@ parse_float("") ->
 %% ====================
 %% TESTS
 %% ====================
+
+-ifdef(TEST).
 
 parse_id_test() ->
     ?assertMatch({ok, ""}, parse_id("")),
@@ -210,81 +262,86 @@ parse_float_test() ->
     ?assertMatch({ok, 4.56}, parse_float("4.56")),
     ?assertMatch({ok, 0.789}, parse_float(".789")).
 
-validate_id_test() ->
-    %% Test validation of "*_id" fields...
+parse_field_id_test() ->
+    %% Test parsing of "*_id" fields...
     Types = field_types(),
-    F = fun(Key, Value) -> validate_field(Key, Value, Types) end,
+    F = fun(Key, Value) -> parse_field(Key, Value, Types) end,
 
     ?assertMatch(
-       true, 
+       {ok, ""}, 
        F("field_id", "")),
 
     ?assertMatch(
-       true, 
+       {ok, "A"}, 
        F("field_id", "A")),
 
     ?assertMatch(
-       true, 
+       {ok, "123"}, 
        F("field_id", "123")).
 
-validate_integer_test() ->
-    %% Test validation of "*_int" fields...
+parse_field_integer_test() ->
+    %% Test parsing of "*_int" fields...
     Types = field_types(),
-    F = fun(Key, Value) -> validate_field(Key, Value, Types) end,
+    F = fun(Key, Value) -> parse_field(Key, Value, Types) end,
 
     ?assertMatch(
-       {false, {field_parsing_failed, {"field_int", ""}}}, 
+       {error, {field_parsing_failed, {"field_int", ""}}}, 
        F("field_int", "")),
 
     ?assertMatch(
-       {false, {field_parsing_failed, {"field_int", "A"}}}, 
+       {error, {field_parsing_failed, {"field_int", "A"}}}, 
        F("field_int", "A")),
 
     ?assertMatch(
-       true, 
+       {ok, 123},
        F("field_int", "123")),
 
     ?assertMatch(
-       {false, {field_parsing_failed, {"field_int", "4.56"}}}, 
+       {error, {field_parsing_failed, {"field_int", "4.56"}}}, 
        F("field_int", "4.56")),
 
     ?assertMatch(
-       {false, {field_parsing_failed, {"field_int", ".789"}}}, 
+       {error, {field_parsing_failed, {"field_int", ".789"}}}, 
        F("field_int", ".789")).
 
 
-validate_float_test() ->
-    %% Test validation of "*_int" fields...
+validate_field_float_test() ->
+    %% Test parsing of "*_float" fields...
     Types = field_types(),
-    F = fun(Key, Value) -> validate_field(Key, Value, Types) end,
+    F = fun(Key, Value) -> parse_field(Key, Value, Types) end,
 
     ?assertMatch(
-       {false, {field_parsing_failed, {"field_float", ""}}}, 
+       {error, {field_parsing_failed, {"field_float", ""}}}, 
        F("field_float", "")),
 
     ?assertMatch(
-       {false, {field_parsing_failed, {"field_float", "A"}}}, 
+       {error, {field_parsing_failed, {"field_float", "A"}}}, 
        F("field_float", "A")),
 
     ?assertMatch(
-       true, 
+       {ok, 123.0},
        F("field_float", "123")),
 
     ?assertMatch(
-       true, 
+       {ok, 4.56},
        F("field_float", "4.56")),
 
     ?assertMatch(
-       true, 
-       F("field_float", ".789")).
+       {ok, 0.789},
+       F("field_float", ".789")),
+
+    ?assertMatch(
+       {ok, 1.0e5},
+       F("field_float", "1.0e5")).
+
 
 validate_unknown_field_type_test() ->
     %% Test error on unknown field types.
     Types = field_types(),
-    F = fun(Key, Value) -> validate_field(Key, Value, Types) end,
+    F = fun(Key, Value) -> parse_field(Key, Value, Types) end,
 
     ?assertMatch(
-       {false, {unknown_field_type, "unknowntype"}}, 
+       {error, {unknown_field_type, "unknowntype"}}, 
        F("unknowntype", "A")).
 
 validate_object_test() ->
@@ -292,7 +349,7 @@ validate_object_test() ->
     %% supplied data, and call validate_object on it.
     F = fun(MetaDataList) ->
                 Obj = riak_object:new(<<"B">>, <<"K">>, <<"VAL">>, dict:from_list([{?MD_INDEX, MetaDataList}])),
-                validate_object(Obj)
+                validate_object_hook(Obj)
         end,
 
     ?assertMatch(
@@ -335,3 +392,5 @@ validate_object_test() ->
           {"field_foo", "fail"},
           {"field_float", "0.5"}
          ])).
+
+-endif.
