@@ -291,8 +291,15 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
     end;
 
 process_message(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
-                          r=R, w=W, pr=PR, pw=PW, dw=DW, rw=RW},
+                          r=R0, w=W0, pr=PR0, pw=PW0, dw=DW0, rw=RW0},
                 #state{client=C} = State) ->
+    W = normalize_rw_value(W0),
+    PW = normalize_rw_value(PW0),
+    DW = normalize_rw_value(DW0),
+    R = normalize_rw_value(R0),
+    PR = normalize_rw_value(PR0),
+    RW = normalize_rw_value(RW0),
+
     Options = make_option(r, R) ++
               make_option(w, W) ++
               make_option(rw, RW) ++
