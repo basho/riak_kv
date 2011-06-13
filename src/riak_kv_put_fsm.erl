@@ -83,7 +83,7 @@
                }).
 
 
--define(VALIDATE_INDEX_PRECOMMIT, {struct, [{<<"mod">>, <<"riak_index">>}, {<<"fun">>, <<"validate_object">>}]}).
+-define(VALIDATE_INDEX_PRECOMMIT, {struct, [{<<"mod">>, <<"riak_index">>}, {<<"fun">>, <<"validate_object_hook">>}]}).
 -define(DEFAULT_TIMEOUT, 60000).
 
 %% ===================================================================
