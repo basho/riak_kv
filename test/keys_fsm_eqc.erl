@@ -24,22 +24,16 @@
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("riak_kv_vnode.hrl").
 
+-import(fsm_eqc_util, [non_blank_string/0]).
+
 -compile(export_all).
--define(DEFAULT_BUCKET_PROPS,
-        [{allow_mult, false},
-         {chash_keyfun, {riak_core_util, chash_std_keyfun}},
-         {r, quorum},
-         {pr, 0}]).
--define(TEST_ITERATIONS, 100).
+
+-define(TEST_ITERATIONS, 50).
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
-
--record(state,{bucket,
-               object_count}).
 
 %%====================================================================
 %% eunit test
@@ -65,20 +59,17 @@ setup() ->
     error_logger:tty(false),
     error_logger:logfile({open, "keys_fsm_eqc.log"}),
 
+    %% Cleanup in case a previous test did not
+    cleanup(setup),
+    %% Pause the make sure everything is cleaned up
+    timer:sleep(2000),
+    
     %% Start erlang node
-    {ok, _} = net_kernel:start([testnode, shortnames]),
+    net_kernel:start([testnode, shortnames]),
     do_dep_apps(start, dep_apps()),
-
-    %% Create and store some objects
-    {ok, Client} = riak:local_client(),
-    [Client:put(riak_object:new(<<"bucket1">>, list_to_binary(integer_to_list(X)), <<"val">>)) || X <- lists:seq(1, 10)],
-    [Client:put(riak_object:new(<<"bucket2">>, list_to_binary(integer_to_list(X)), <<"val">>)) || X <- lists:seq(1, 100)],
-    [Client:put(riak_object:new(<<"bucket3">>, list_to_binary(integer_to_list(X)), <<"val">>)) || X <- lists:seq(1, 1000)],
     ok.
 
 cleanup(_) ->
-    %% fsm_eqc_util:cleanup_mock_servers(),
-    %% ok.
     do_dep_apps(stop, lists:reverse(dep_apps())),
     catch exit(whereis(riak_kv_vnode_master), kill), %% Leaks occasionally
     catch exit(whereis(riak_sysmon_filter), kill), %% Leaks occasionally
@@ -97,39 +88,68 @@ coverage_test() ->
 %% ====================================================================
 
 prop_basic_listkeys() ->
-    ?FORALL(Cmds, commands(?MODULE),
+    ?FORALL({ReqId, Input, NVal, ObjectCount, Timeout, ClientType},
+            {g_reqid(), g_input(), g_n_val(), g_object_count(), g_timeout(), g_client_type()},
         ?TRAPEXIT(
            begin
-               {_History, _State, Result} = run_commands(?MODULE, Cmds),
-               aggregate(command_names(Cmds), Result == ok)
+               {ok, Client} = riak:local_client(),
+               {ok, Buckets} = Client:list_buckets(),
+               %% Check if a key filter is being used as input
+               case Input of
+                   {filter, Bucket, _} ->
+                       ok;
+                   Bucket ->
+                       ok
+               end,
+               case lists:member(Bucket, Buckets) of
+                   true -> % bucket has already been used
+                       %% Delete the existing keys in the bucket
+                       {ok, OldKeys} = Client:list_keys(Bucket),
+                       [Client:delete(Bucket, OldKey) || OldKey <- OldKeys];
+                   false ->
+                       ok
+               end,
+               %% Set bucket properties
+               BucketProps = riak_core_bucket:get_bucket(Bucket),
+               NewBucketProps = orddict:store(n_val, NVal, BucketProps),
+               riak_core_bucket:set_bucket(Bucket, NewBucketProps),
+               %% Create objects in bucket
+               GeneratedKeys = [list_to_binary(integer_to_list(X)) || X <- lists:seq(1, ObjectCount)],
+               [ok = Client:put(riak_object:new(Bucket, Key, <<"val">>)) || Key <- GeneratedKeys],
+               %% Set the expected output based on if a 
+               %% key filter is being used or not.
+               case Input of
+                   {filter, _, KeyFilter} ->
+                       ExpectedKeyFilter = 
+                           fun(K, Acc) ->
+                                   case KeyFilter(K) of
+                                       true ->
+                                           [K | Acc];
+                                       false ->
+                                           Acc
+                                   end
+                           end,
+                       ExpectedKeys = lists:foldl(ExpectedKeyFilter, [], GeneratedKeys);
+                   Bucket ->
+                       ExpectedKeys = GeneratedKeys
+               end,
+               %% Call start_link
+               Keys = start_link(ReqId, Input, Timeout, ClientType),
+               ?WHENFAIL(
+                  begin
+                      io:format("Bucket: ~p n_val: ~p~n", [Bucket, NVal]),
+                      io:format("Expected Key Count: ~p Actual Key Count: ~p~n",
+                                [length(ExpectedKeys), length(Keys)]),
+                      io:format("Expected Keys: ~p~nActual Keys: ~p~n",
+                                [ExpectedKeys, Keys])
+                  end,
+                  conjunction(
+                    [
+                     {keys, equals(lists:sort(Keys), lists:sort(ExpectedKeys))}
+                    ]))
+
            end
           )).
-
-%% ====================================================================
-%% eqc_statem callbacks
-%% ====================================================================
-
-initial_state() ->
-    #state{}.
-
-command(_State) ->
-    {call, ?MODULE, start_link, [g_reqid(), g_input(), g_timeout(), g_client_type()]}.
-
-next_state(State, _Result, {call,_,_,_}) -> State.
-
-precondition(_,_) ->
-    true.
-
-postcondition(_State, {call, _, start_link, [_, Input, _, _]}, Result) ->
-    case Input of
-        <<"bucket1">> ->
-            ok == ?assertEqual(10, length(Result));
-        <<"bucket2">> ->
-            ok == ?assertEqual(100, length(Result));
-        <<"bucket3">> ->
-            ok == ?assertEqual(1000, length(Result))
-    end;
-postcondition(_,_,_) -> true.
 
 %%====================================================================
 %% Wrappers
@@ -146,22 +166,42 @@ start_link(ReqId, Input, Timeout, ClientType) ->
 %%====================================================================
 
 g_input() ->
-    elements([<<"bucket1">>, <<"bucket2">>, <<"bucket3">>]).
+    frequency([{5, g_bucket()}, {1, g_key_filter()}]).
 
-g_reqid() ->
-    ?LET(X, noshrink(largeint()), abs(X)).
+g_bucket() ->
+    non_blank_string().
 
-g_timeout() ->
-    choose(1000, 60000).
+g_key_filter() ->
+    %% Create a key filter function.
+    %% There will always be at least 10 keys
+    %% due to the lower bound of object count
+    %% generator. 
+    KeyFilter = 
+        fun(X) -> 
+                lists:member(X, lists:seq(1,10))
+        end,
+    {filter, non_blank_string(), KeyFilter}.
 
 g_client_type() ->
     %% TODO: Incorporate mapred type
     plain.
 
+g_n_val() ->
+    choose(1,5).
+
+g_object_count() ->
+    choose(10, 2000).
+
+g_reqid() ->
+    ?LET(X, noshrink(largeint()), abs(X)).
+
+g_timeout() ->
+    choose(10000, 60000).
+
 %%====================================================================
 %% Helpers
 %%====================================================================
-
+ 
 prepare() ->
     application:load(sasl),
     error_logger:delete_report_handler(sasl_report_tty_h),
@@ -211,7 +251,8 @@ data_sink(ReqId, KeyList, Done) ->
             data_sink(ReqId, KeyList++Keys, false);
         {ReqId, done} ->
             data_sink(ReqId, KeyList, true);
-        {ReqId, _Error} ->
+        {ReqId, Error} ->
+            ?debugFmt("Error occurred: ~p~n", [Error]),
             data_sink(ReqId, [], true);
         {keys, From, ReqId} ->
             From ! {ok, ReqId, KeyList};
@@ -242,4 +283,4 @@ wait_for_replies(Sink, ReqId) ->
             ?debugFmt("Received keys for older run: ~p~n", [ORef])
     end.
 
--endif. % EQC
+ -endif. % EQC
