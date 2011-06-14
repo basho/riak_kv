@@ -505,5 +505,4 @@ normalize_rw_value(V) -> V.
 get_result_transformer(<<"application/json">>) ->
     fun riak_kv_mapred_json:jsonify_not_found/1;
 get_result_transformer(_) ->
-    fun(X) ->
-            X end.
+    undefined.
