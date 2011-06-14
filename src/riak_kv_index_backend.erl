@@ -185,6 +185,9 @@ fold_keys(State, Fun, Extra) ->
 fold_bucket_keys(State, {index_query, Bucket, Query}, _Fun, _Extra) ->
     #state { index_mod = IndexMod, index_state = IndexState } = State,
 
+    %% Update riak_kv_stat...
+    riak_kv_stat:update(vnode_index_read),
+
     %% This is needs discussion. Our design notes call for results to
     %% feed into SKFun using {sk, SecondaryKey, PrimaryKey}, but this
     %% doesn't account for Properties. We also need to add a clause
@@ -259,7 +262,8 @@ do_index_put(IndexMod, IndexState, BKey, Val) ->
             TS1 = riak_index:timestamp(),
             OldPostings1 = [{Bucket, Field, Token, Key, TS1} || {Field, Token, _} <- OldPostings],
             %% io:format("DEBUG: Deleting old postings for ~p:~n~p~n", [BKey, OldPostings1]),
-            ok = IndexMod:delete(IndexState, OldPostings1);
+            ok = IndexMod:delete(IndexState, OldPostings1),
+            riak_kv_stat:update({vnode_index_delete, length(OldPostings1)});
         _ ->
             skip
     end,
@@ -294,6 +298,7 @@ do_index_put(IndexMod, IndexState, BKey, Val) ->
     try 
         %% io:format("DEBUG: Indexing new postings for ~p:~n~p~n", [BKey, Postings]),
         IndexMod:index(IndexState, Postings),
+        riak_kv_stat:update({vnode_index_write, length(Postings)}),
         ok
     catch 
         _Type : Reason ->
@@ -321,7 +326,9 @@ do_index_delete(IndexMod, IndexState, BKey) ->
             OldPostings1 = [{Bucket, Field, Token, Key, TS1} || {Field, Token, _} <- OldPostings],
             try
                 %% io:format("DEBUG: Deleting postings for ~p:~n~p~n", [BKey, OldPostings1]),
-                IndexMod:delete(IndexState, OldPostings1)
+                ok = IndexMod:delete(IndexState, OldPostings1),
+                riak_kv_stat:update({vnode_index_delete, length(OldPostings1)}),
+                ok
             catch _Type : Reason ->
                     {error, Reason}
             end;
