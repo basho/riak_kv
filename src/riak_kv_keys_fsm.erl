@@ -217,7 +217,7 @@ handle_sync_event(_Event, _From, _StateName, StateData) ->
 
 %% @private
 handle_info({'EXIT', _Pid, Reason}, _StateName, StateData) ->
-    {stop, {node_failure, Reason}, StateData};
+    finish({error, {node_failure, Reason}}, StateData);
 handle_info({_ReqId, {ok, _Pid}}, StateName, StateData=#state{timeout=Timeout}) ->
     %% Received a message from a key lister node that
     %% did not start up within the timeout. Just ignore
