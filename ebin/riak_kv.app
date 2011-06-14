@@ -29,7 +29,6 @@
              riak_kv_js_sup,
              riak_kv_js_vm,
              riak_kv_keylister,
-             riak_kv_keylister_master,
              riak_kv_keylister_sup,
              riak_kv_keys_fsm,
              riak_kv_keys_fsm_sup,
