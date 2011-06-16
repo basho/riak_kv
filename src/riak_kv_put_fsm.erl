@@ -290,10 +290,10 @@ waiting_local_vnode(request_timeout, StateData) ->
     process_reply({error,timeout}, StateData);
 waiting_local_vnode(Result, StateData = #state{putcore = PutCore}) ->
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
-    case riak_kv_put_core:enough(PutCore) of
+    case riak_kv_put_core:enough(UpdPutCore1) of
         true ->
-            {Reply, UpdPutCore} = riak_kv_put_core:response(PutCore),
-            process_reply(Reply, StateData#state{putcore = UpdPutCore});
+            {Reply, UpdPutCore2} = riak_kv_put_core:response(UpdPutCore1),
+            process_reply(Reply, StateData#state{putcore = UpdPutCore2});
         false ->
             case Result of
                 {fail, _Idx, _ReqId} ->
