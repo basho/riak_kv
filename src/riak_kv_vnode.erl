@@ -467,7 +467,7 @@ get_counter(Id, VC) ->
     case lists:keyfind(Id, 1, VC) of
         false ->
             0;
-        {Counter, _TS} ->
+        {_Id, {Counter, _TS}} ->
             Counter
     end.
 %% @private
