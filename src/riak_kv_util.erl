@@ -110,7 +110,19 @@ normalize_rw_value(_, _) -> error.
 %%      application's environment.
 -spec mapred_system() -> pipe | legacy.
 mapred_system() ->
-    app_helper:get_env(riak_kv, mapred_system, legacy).
+    case app_helper:get_env(riak_kv, mapred_system, legacy) of
+        pipe   -> pipe;
+        legacy -> legacy;
+        Other  ->
+            error_logger:warning_msg(
+              "Unknown value for riak_kv:mapred_system:~n   ~p~n"
+              "Defaulting to 'legacy'.",
+              [Other]),
+            %% override user's choice here so that warning doesn't
+            %% print repeatedly in the log
+            application:set_env(riak_kv, mapred_system, legacy),
+            legacy
+    end.
 
 
 %% ===================================================================
