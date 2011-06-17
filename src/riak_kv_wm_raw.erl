@@ -1122,12 +1122,13 @@ ensure_doc(Ctx) -> Ctx.
 %% @doc Delete the document specified.
 delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C, rw=RW, r=R, w=W,
         pr=PR, pw=PW, dw=DW}) ->
+    Options = lists:filter(fun({_, default}) -> false; (_) -> true end,
+        [{rw, RW}, {r, R}, {w, W}, {pr, PR}, {pw, PW}, {dw, DW}]),
     Result = case wrq:get_req_header(?HEAD_VCLOCK, RD) of
         undefined -> 
-            C:delete(B,K,[{rw, RW}, {r, R}, {w, W}, {pr, PR}, {pw, PW}, {dw, DW}]);
+            C:delete(B,K,Options);
         _ ->
-            C:delete_vclock(B,K,decode_vclock_header(RD),
-                [{rw, RW}, {r, R}, {w, W}, {pr, PR}, {pw, PW}, {dw, DW}])
+            C:delete_vclock(B,K,decode_vclock_header(RD),Options)
     end,
     case Result of
         {error, Reason} ->
