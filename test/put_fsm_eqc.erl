@@ -184,7 +184,7 @@ vputsecond() ->
 nodestatus() ->
     ?SHRINK(frequency([{16, primary},
                        {4, fallback},
-                       {1, down}]),
+                       {0, down}]),
             [primary]).
 
 %% Put FSM options
@@ -288,6 +288,7 @@ prop_basic_put() ->
                                              {timeout, 200} | Options0], []),
         VPutReplies = make_vput_replies(VPutResp, Objects, Options),
         PL2 = make_preflist2(VPutResp, 1, []),
+        [{CoordIdxNode,_}|_] = PL2,
 
         %% Prepare the mock vnode master
         ok = fsm_eqc_vnode:set_data(Objects, []),
@@ -309,7 +310,8 @@ prop_basic_put() ->
                                                  [{starttime, riak_core_util:moment()},
                                                   {n, N},
                                                   {bucket_props, BucketProps},
-                                                  {preflist2, PL2}]),
+                                                  {preflist2, PL2},
+                                                  {coord_idx_node, CoordIdxNode}]),
         ok = riak_kv_test_util:wait_for_pid(PutPid),
         ok = riak_kv_test_util:wait_for_children(PutPid),
         Res = fsm_eqc_util:wait_for_req_id(?REQ_ID, PutPid),
@@ -554,6 +556,10 @@ expect([DWReply|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit},
         false ->
             expect(Rest, S, Options)
     end;
+%% Fail on coordindating vnode - request fails
+expect([{fail, {1, _}, _}|_Rest], {_H, _N, _W, DW, _NumW, _NumDW, _NumFail, RObj, Precommit},
+       Options) ->
+    maybe_add_robj({error, too_many_fails}, RObj, Precommit, DW, Options);
 expect([{fail, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit},
        Options) ->
     S = {H, N, W, DW, NumW, NumDW, NumFail + 1, RObj, Precommit},
