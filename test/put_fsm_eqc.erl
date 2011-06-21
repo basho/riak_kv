@@ -70,7 +70,7 @@ eqc_test_() ->
        [%% Check networking/clients are set up 
         ?_assert(node() /= 'nonode@nohost'),
         ?_assertEqual(pong, net_adm:ping(node())),
-        ?_assertEqual(pang, net_adm:ping('nonode@nohost')),
+        {timeout, 60000, ?_assertEqual(pang, net_adm:ping('nonode@nohost'))},
         ?_assertMatch({ok,_C}, riak:local_client()),
         %% Check javascript is working
         ?_assertMatch({ok, 123}, 
@@ -183,7 +183,7 @@ vputsecond() ->
 nodestatus() ->
     ?SHRINK(frequency([{16, primary},
                        {4, fallback},
-                       {1, down}]),
+                       {0, down}]),
             [primary]).
 
 %% Put FSM options
@@ -286,6 +286,7 @@ prop_basic_put() ->
                                              {timeout, 200} | Options0], []),
         VPutReplies = make_vput_replies(VPutResp, Objects, Options),
         PL2 = make_preflist2(VPutResp, 1, []),
+        [{CoordIdxNode,_}|_] = PL2,
 
         %% Prepare the mock vnode master
         ok = fsm_eqc_vnode:set_data(Objects, []),
@@ -307,7 +308,8 @@ prop_basic_put() ->
                                                  [{starttime, riak_core_util:moment()},
                                                   {n, N},
                                                   {bucket_props, BucketProps},
-                                                  {preflist2, PL2}]),
+                                                  {preflist2, PL2},
+                                                  {coord_idx_node, CoordIdxNode}]),
         ok = riak_kv_test_util:wait_for_pid(PutPid),
         ok = riak_kv_test_util:wait_for_children(PutPid),
         Res = fsm_eqc_util:wait_for_req_id(?REQ_ID, PutPid),
@@ -545,6 +547,9 @@ expect([DWReply|Rest], {H, N, W, DW, NumW, NumDW, NumFail,
         false ->
             expect(Rest, S)
     end;
+%% Fail on coordindating vnode - request fails
+expect([{fail, {1, _}, _}|_Rest], {_H, _N, _W, DW, _NumW, _NumDW, _NumFail, RObj, Precommit}) ->
+    maybe_add_robj({error, too_many_fails}, RObj, Precommit, DW);
 expect([{fail, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit}) ->
     S = {H, N, W, DW, NumW, NumDW, NumFail + 1, RObj, Precommit},
     case enough_replies(S) of

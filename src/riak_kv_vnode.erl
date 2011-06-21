@@ -58,6 +58,7 @@
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-export([coord_put_merge/4]). %% For fsm_eqc_vnode
 -endif.
 
 -record(mrjob, {cachekey :: term(),
