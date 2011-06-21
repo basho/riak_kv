@@ -226,7 +226,7 @@ send_vput_extra([], {fsm, undefined, Pid} = _Sender, _ReqId, _Options, State) ->
 send_vput_extra([{LIdx, {dw, CurObj, _CurLin}} | Rest], Sender, ReqId, Options,
                 #state{lidx_map = LIdxMap} = State) ->
     {Idx, PutObj} = orddict:fetch(LIdx, LIdxMap),
-    Obj = put_merge(CurObj, PutObj, ReqId),
+    Obj = put_merge(CurObj, PutObj, Options, ReqId),
     NewState = case proplists:get_value(returnbody, Options, false) of
                    true ->
                        record_reply(Sender, {dw, Idx, Obj, ReqId}, State);
@@ -271,8 +271,15 @@ fail_on_bad_obj(LIdx, _Obj, VPutReplies) ->
 
 %% TODO: The riak_kv_vnode code should be refactored to expose this function
 %%       so we are close to testing the real thing.
-put_merge(notfound, NewObj, _ReqId) ->
-    NewObj;
-put_merge(CurObj, NewObj, ReqId) ->
-    riak_object:syntactic_merge(CurObj,NewObj, ReqId).
+put_merge(notfound, UpdObj, _Options, _ReqId) ->
+    UpdObj;
+put_merge(CurObj, UpdObj, Options, ReqId) ->
+    case proplists:get_value(coord, Options, undefined) of
+        undefined ->
+            riak_object:syntactic_merge(CurObj, UpdObj, ReqId);
+        CoordId ->
+            Ts = vclock:timestamp(),
+            {_, NewObj} = riak_kv_vnode:coord_put_merge(CurObj, UpdObj, CoordId, Ts),
+            NewObj
+    end.
 
