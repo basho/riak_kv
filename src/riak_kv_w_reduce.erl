@@ -31,6 +31,8 @@
          handoff/2,
          validate_arg/1]).
 -export([chashfun/1, reduce_compat/1]).
+%% Special export for riak_pipe_fitting
+-export([no_input_run_reduce_once/0]).
 
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
@@ -53,7 +55,8 @@
          {ok, state()}.
 init(Partition, FittingDetails) ->
     DelayMax = calc_delay_max(FittingDetails),
-    {ok, #state{acc=[], delay=0, delay_max = DelayMax,
+    Acc = reduce([], #state{fd=FittingDetails}, "riak_kv_w_reduce init"),
+    {ok, #state{acc=Acc, delay=0, delay_max = DelayMax,
                 p=Partition, fd=FittingDetails}}.
 
 %% @doc Process looks up the previous result for the `Key', and then
@@ -158,6 +161,9 @@ reduce_compat({modfun, Module, Function}) ->
     reduce_compat({qfun, erlang:make_fun(Module, Function, 2)});
 reduce_compat({qfun, Fun}) ->
     Fun.
+
+no_input_run_reduce_once() ->
+    true.
 
 stored_js_source(Bucket, Key) ->
     {ok, C} = riak:local_client(),
