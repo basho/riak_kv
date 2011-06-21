@@ -317,7 +317,7 @@ waiting_local_vnode(Result, StateData = #state{putcore = PutCore}) ->
             case Result of
                 {fail, _Idx, _ReqId} ->
                     %% Local vnode failure is enough to sink whole operation
-                    process_reply({error, fail}, StateData#state{putcore = UpdPutCore1});
+                    process_reply({error, too_many_fails}, StateData#state{putcore = UpdPutCore1});
                 {w, _Idx, _ReqId} ->
                     {next_state, waiting_local_vnode, StateData#state{putcore = UpdPutCore1}};
                 {dw, _Idx, PutObj, _ReqId} ->
