@@ -80,9 +80,9 @@
 %% TODO: Timeout
 %% TODO: Streaming output
 mapred(Inputs, Query) ->
-    {{ok, Head, Sink}, NumKeeps} = mapred_stream(Query),
-    send_inputs(Head, Inputs),
-    collect_outputs(Sink, NumKeeps).
+    {{ok, Pipe}, NumKeeps} = mapred_stream(Query),
+    send_inputs(Pipe, Inputs),
+    collect_outputs(Pipe, NumKeeps).
 
 mapred_stream(Query0) ->
     Query = correct_keeps(Query0),
@@ -280,30 +280,30 @@ count_keeps_in_query(Query) ->
                 end, 0, Query).
 
 %% TODO: dynamic inputs, filters
-send_inputs(Fitting, BucketKeyList) when is_list(BucketKeyList) ->
-    [riak_pipe_vnode:queue_work(Fitting, BKey)
+send_inputs(Pipe, BucketKeyList) when is_list(BucketKeyList) ->
+    [riak_pipe:queue_work(Pipe, BKey)
      || BKey <- BucketKeyList],
-    riak_pipe_fitting:eoi(Fitting),
+    riak_pipe:eoi(Pipe),
     ok;
-send_inputs(Fitting, Bucket) when is_binary(Bucket) ->
+send_inputs(Pipe, Bucket) when is_binary(Bucket) ->
     %% TODO: riak_kv_listkeys_pipe
     {ok, C} = riak:local_client(),
     {ok, ReqId} = C:stream_list_keys(Bucket),
-    send_key_list(Fitting, Bucket, ReqId).
+    send_key_list(Pipe, Bucket, ReqId).
 
-send_key_list(Fitting, Bucket, ReqId) ->
+send_key_list(Pipe, Bucket, ReqId) ->
     receive
         {ReqId, {keys, Keys}} ->
-            [riak_pipe_vnode:queue_work(Fitting, {Bucket, Key})
+            [riak_pipe:queue_work(Pipe, {Bucket, Key})
              || Key <- Keys],
-            send_key_list(Fitting, Bucket, ReqId);
+            send_key_list(Pipe, Bucket, ReqId);
         {ReqId, done} ->
-            riak_pipe_fitting:eoi(Fitting),
+            riak_pipe:eoi(Pipe),
             ok
     end.
 
-collect_outputs(Sink, NumKeeps) ->
-    {Result, Outputs, []} = riak_pipe:collect_results(Sink),
+collect_outputs(Pipe, NumKeeps) ->
+    {Result, Outputs, []} = riak_pipe:collect_results(Pipe),
     %%TODO: Outputs needs post-processing?
     case Result of
         eoi ->
