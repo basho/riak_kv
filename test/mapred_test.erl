@@ -198,6 +198,12 @@ compat_basic1_test_() ->
                  {IntsBucket, <<"bar1">>} = hd(lists:sort(BKeys))
              end),
           ?_test(
+             %% AZ 479: Reduce with zero inputs -> call reduce once w/empty list
+             begin
+                 Spec = [{reduce, {qfun, ReduceSumFun}, none, true}],
+                 {ok, [0]} = riak_kv_mrc_pipe:mapred([], Spec)
+             end),
+          ?_test(
              %% Basic compatibility: keep both stages
              begin
                  Spec = 

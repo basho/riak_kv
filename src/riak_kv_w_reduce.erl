@@ -31,6 +31,8 @@
          handoff/2,
          validate_arg/1]).
 -export([chashfun/1, reduce_compat/1]).
+%% Special export for riak_pipe_fitting
+-export([no_input_run_reduce_once/0]).
 
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
@@ -51,9 +53,18 @@
 -spec init(riak_pipe_vnode:partition(),
            riak_pipe_fitting:details()) ->
          {ok, state()}.
-init(Partition, FittingDetails) ->
+init(Partition, #fitting_details{options=Options} = FittingDetails) ->
     DelayMax = calc_delay_max(FittingDetails),
-    {ok, #state{acc=[], delay=0, delay_max = DelayMax,
+    Acc = case proplists:get_value(pipe_fitting_no_input, Options) of
+              true ->
+                  %% AZ 479: Riak KV Map/Reduce compatibility: call reduce
+                  %% function once when no input is received by fitting.
+                  %% Note that the partition number given to us is bogus.
+                  reduce([], #state{fd=FittingDetails},"riak_kv_w_reduce init");
+              _ ->
+                  []
+          end,
+    {ok, #state{acc=Acc, delay=0, delay_max = DelayMax,
                 p=Partition, fd=FittingDetails}}.
 
 %% @doc Process looks up the previous result for the `Key', and then
@@ -158,6 +169,9 @@ reduce_compat({modfun, Module, Function}) ->
     reduce_compat({qfun, erlang:make_fun(Module, Function, 2)});
 reduce_compat({qfun, Fun}) ->
     Fun.
+
+no_input_run_reduce_once() ->
+    true.
 
 stored_js_source(Bucket, Key) ->
     {ok, C} = riak:local_client(),
