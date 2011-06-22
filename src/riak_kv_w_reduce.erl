@@ -53,9 +53,17 @@
 -spec init(riak_pipe_vnode:partition(),
            riak_pipe_fitting:details()) ->
          {ok, state()}.
-init(Partition, FittingDetails) ->
+init(Partition, #fitting_details{options=Options} = FittingDetails) ->
     DelayMax = calc_delay_max(FittingDetails),
-    Acc = reduce([], #state{fd=FittingDetails}, "riak_kv_w_reduce init"),
+    Acc = case proplists:get_value(pipe_fitting_no_input, Options) of
+              true ->
+                  %% AZ 479: Riak KV Map/Reduce compatibility: call reduce
+                  %% function once when no input is received by fitting.
+                  %% Note that the partition number given to us is bogus.
+                  reduce([], #state{fd=FittingDetails},"riak_kv_w_reduce init");
+              _ ->
+                  []
+          end,
     {ok, #state{acc=Acc, delay=0, delay_max = DelayMax,
                 p=Partition, fd=FittingDetails}}.
 
