@@ -151,7 +151,7 @@ fold_bucket_keys(State, Bucket, Fun0, Acc0) ->
     F = fun({BK, _V}, Acc) ->
                 case binary_to_term(BK) of
                     {Bucket, Key} ->
-                        Fun0(Key, Acc);
+                        Fun0(Key, dummy_val, Acc);
                     _ ->
                         Acc
                 end
