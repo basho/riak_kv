@@ -33,7 +33,8 @@
          del/3,
          put/6,
          readrepair/6,
-         list_keys/4,
+         list_buckets/6,
+         list_keys/7,
          fold/3,
          get_vclocks/2]).
 
@@ -41,6 +42,7 @@
 -export([init/1,
          terminate/2,
          handle_command/3,
+         handle_coverage/2,
          is_empty/1,
          delete/1,
          handle_handoff_command/3,
@@ -133,14 +135,13 @@ put(Preflist, BKey, Obj, ReqId, StartTime, Options, Sender)
 readrepair(Preflist, BKey, Obj, ReqId, StartTime, Options) ->
     put(Preflist, BKey, Obj, ReqId, StartTime, [rr | Options], ignore).
 
-list_keys(Preflist, ReqId, Caller, Bucket) ->
-  riak_core_vnode_master:command(Preflist,
-                                 ?KV_LISTKEYS_REQ{
-                                    bucket=Bucket,
-                                    req_id=ReqId,
-                                    caller=Caller},
-                                 ignore,
-                                 riak_kv_vnode_master).
+%% list_keys(Preflist, ReqId, Caller, Bucket) ->
+%%   riak_core_vnode_master:coverage(?KV_LISTKEYS_REQ{
+%%                                     bucket=Bucket,
+%%                                     req_id=ReqId,
+%%                                     caller=Caller},
+%%                                  ignore,
+%%                                  riak_kv_vnode_master).
 
 fold(Preflist, Fun, Acc0) ->
     riak_core_vnode_master:sync_spawn_command(Preflist,
@@ -178,13 +179,6 @@ handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
     do_get(Sender, BKey, ReqId, State);
 handle_command(?KV_MGET_REQ{bkeys=BKeys, req_id=ReqId, from=From}, _Sender, State) ->
     do_mget(From, BKeys, ReqId, State);
-handle_command(#riak_kv_listkeys_req_v1{bucket=Bucket, req_id=ReqId}, _Sender,
-                State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
-    do_list_bucket(ReqId,Bucket,Mod,ModState,Idx,State);
-handle_command(?KV_LISTKEYS_REQ{bucket=Bucket, req_id=ReqId, caller=Caller}, _Sender,
-               State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
-    do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState),
-    {noreply, State};
 handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender,
                State=#state{mod=Mod, modstate=ModState,
                             idx=Idx}) ->
@@ -209,7 +203,17 @@ handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
 handle_command(?FOLD_REQ{foldfun=Fun, acc0=Acc},_Sender,State) ->
     Reply = do_fold(Fun, Acc, State),
     {reply, Reply, State};
-
+handle_command(?COVERAGE_REQ{args=Args,
+                              modfun={CoverageMod, CoverageFun}}=Req,
+               _Sender,
+               State=#state{mod=Mod, 
+                            modstate=ModState,
+                            idx=Idx}) ->
+    CoverageArgs0 = [element(X, Req) || {_, X} <- Args],
+    CoverageArgs = CoverageArgs0 ++ [Idx, Mod, ModState],
+    apply(CoverageMod, CoverageFun, CoverageArgs),
+    {noreply, State};
+ 
 %% Commands originating from inside this vnode
 handle_command({backend_callback, Ref, Msg}, _Sender,
                State=#state{mod=Mod, modstate=ModState}) ->
@@ -237,6 +241,18 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
                        State
                end,
     {noreply, NewState}.
+
+
+handle_coverage(?COVERAGE_REQ{args=Args,
+                              modfun={CoverageMod, CoverageFun}}=Req,
+               State=#state{mod=Mod, 
+                            modstate=ModState,
+                            idx=Idx}) ->
+    CoverageArgs0 = [element(X, Req) || {_, X} <- Args],
+    CoverageArgs = CoverageArgs0 ++ [Idx, Mod, ModState],
+    apply(CoverageMod, CoverageFun, CoverageArgs),
+    {noreply, State}.
+
 
 handle_handoff_command(Req=?FOLD_REQ{}, Sender, State) ->
     handle_command(Req, Sender, State);
@@ -443,12 +459,23 @@ do_get_binary(BKey, Mod, ModState) ->
 
 
 %% @private
-do_list_bucket(ReqID,Bucket,Mod,ModState,Idx,State) ->
-    RetVal = Mod:list_bucket(ModState,Bucket),
-    {reply, {kl, RetVal, Idx, ReqID}, State}.
+list_buckets(Caller, ReqId, Filter, Idx, Mod, ModState) ->
+    %% TODO: Decide if we want to continue to allow key filters
+    %% to be used to filter the list of buckets. I think it is
+    %% more useful to move all filtering out of the backend and 
+    %% not have to force all backends to fold over all keys
+    %% to generate a list of buckets.
+    Buckets = Mod:list_bucket(ModState, '_'),
+    case Filter of
+        none ->
+            gen_fsm:send_event(Caller, {ReqId, {results, Idx, Buckets}});
+        _ ->
+            FilteredBuckets = lists:foldl(Filter, [], Buckets),
+            gen_fsm:send_event(Caller, {ReqId, {results, Idx, FilteredBuckets}})
+    end.
 
 %% @private
-do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
+list_keys(Caller, ReqId, Bucket, Filter, Idx, Mod, ModState) ->
     F = fun({_, _} = BKey, _Val, Acc) ->
                 process_keys(Caller, ReqId, Idx, Bucket, BKey, Acc);
            (Key, _Val, Acc) when is_binary(Key) ->
@@ -472,18 +499,28 @@ do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
                        %% Older API for third-parties
                        Mod:fold(ModState, F, [])
                end],
-    Final = lists:foldl(fun(TryFun, try_next) ->
+    Keys = lists:foldl(fun(TryFun, try_next) ->
                                 try TryFun() catch error:undef -> try_next end;
                            (_TryFun, Res) ->
                                 Res
                         end, try_next, TryFuns),
-    case Final of
+    case Keys of
         [] ->
             ok;
-        Remainder when is_list(Remainder) ->
-            Caller ! {ReqId, {kl, Idx, Remainder}}
+        _ when is_list(Keys) ->
+            case Filter of
+                [] ->
+                    gen_fsm:send_event(Caller, {ReqId, {results, Idx, Keys}});
+                _ ->
+                    case lists:foldl(Filter, [], Keys) of
+                        [] ->
+                            ok;
+                        FilteredKeys ->
+                            gen_fsm:send_event(Caller, {ReqId, {results, Idx, FilteredKeys}})
+                    end
+            end
     end,
-    Caller ! {ReqId, Idx, done}.
+    gen_fsm:send_event(Caller, {ReqId, Idx, done}).
 
 %% @private
 do_delete(BKey, Mod, ModState) ->
@@ -498,15 +535,6 @@ do_delete(BKey, Mod, ModState) ->
 process_keys(Caller, ReqId, Idx, '_', {Bucket, _K}, Acc) ->
     %% Bucket='_' means "list buckets" instead of "list keys"
     buffer_key_result(Caller, ReqId, Idx, [Bucket|Acc]);
-process_keys(Caller, ReqId, Idx, {filter, Bucket, Fun}, {Bucket, K}, Acc) ->
-    %% Bucket={filter,Bucket,Fun} means "only include keys
-    %% in Bucket that make Fun(K) return 'true'"
-    case Fun(K) of
-        true ->
-            buffer_key_result(Caller, ReqId, Idx, [K|Acc]);
-        false ->
-            Acc
-    end;
 process_keys(Caller, ReqId, Idx, Bucket, {Bucket, K}, Acc) ->
     buffer_key_result(Caller, ReqId, Idx, [K|Acc]);
 process_keys(_Caller, _ReqId, _Idx, _Bucket, {_B, _K}, Acc) ->

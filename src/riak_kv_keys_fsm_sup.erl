@@ -42,7 +42,7 @@ start_link() ->
 %% @doc supervisor callback.
 init([]) ->
     KeysFsmSpec = {undefined,
-               {riak_kv_keys_fsm, start_link, []},
+               {riak_core_coverage_fsm, start_link, [riak_kv_keys_fsm]},
                temporary, 5000, worker, [riak_kv_keys_fsm]},
 
     {ok, {{simple_one_for_one, 10, 10}, [KeysFsmSpec]}}.

@@ -453,8 +453,8 @@ list_keys(Bucket) ->
 list_keys(Bucket, Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
-    FSM_Timeout = trunc(Timeout / 8),
-    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [ReqId, Bucket, FSM_Timeout, plain, Me]),
+    %% FSM_Timeout = trunc(Timeout / 8),
+    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [ReqId, Bucket, none, Timeout, plain, Me]),
     wait_for_listkeys(ReqId, Timeout).
 
 %% @deprecated Only in place for backwards compatibility.
