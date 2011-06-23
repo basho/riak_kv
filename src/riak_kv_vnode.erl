@@ -33,7 +33,9 @@
          del/3,
          put/6,
          readrepair/6,
+         list_buckets/4,
          list_keys/4,
+         list_keys/5,
          fold/3,
          get_vclocks/2]).
 
@@ -41,6 +43,7 @@
 -export([init/1,
          terminate/2,
          handle_command/3,
+         handle_coverage/4,
          is_empty/1,
          delete/1,
          handle_handoff_command/3,
@@ -135,7 +138,7 @@ readrepair(Preflist, BKey, Obj, ReqId, StartTime, Options) ->
 
 list_keys(Preflist, ReqId, Caller, Bucket) ->
   riak_core_vnode_master:command(Preflist,
-                                 ?KV_LISTKEYS_REQ{
+                                 #riak_kv_listkeys_req_v2{
                                     bucket=Bucket,
                                     req_id=ReqId,
                                     caller=Caller},
@@ -180,10 +183,10 @@ handle_command(?KV_MGET_REQ{bkeys=BKeys, req_id=ReqId, from=From}, _Sender, Stat
     do_mget(From, BKeys, ReqId, State);
 handle_command(#riak_kv_listkeys_req_v1{bucket=Bucket, req_id=ReqId}, _Sender,
                 State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
-    do_list_bucket(ReqId,Bucket,Mod,ModState,Idx,State);
-handle_command(?KV_LISTKEYS_REQ{bucket=Bucket, req_id=ReqId, caller=Caller}, _Sender,
+    do_legacy_list_bucket(ReqId,Bucket,Mod,ModState,Idx,State);
+handle_command(#riak_kv_listkeys_req_v2{bucket=Bucket, req_id=ReqId, caller=Caller}, _Sender,
                State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
-    do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState),
+    do_legacy_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState),
     {noreply, State};
 handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender,
                State=#state{mod=Mod, modstate=ModState,
@@ -238,6 +241,28 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
                end,
     {noreply, NewState}.
 
+handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
+                _FilterVNodes,
+                Sender,
+                State=#state{mod=Mod,
+                             modstate=ModState}) ->
+    %% Construct the filter function
+    Filter = riak_kv_coverage_filter:build_filter(all, ItemFilter, undefined),
+    list_buckets(Sender, Filter, Mod, ModState),
+    {noreply, State};
+handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
+                                  item_filter=ItemFilter},
+                FilterVNodes,
+                Sender,
+                State=#state{idx=Index,
+                             mod=Mod,
+                             modstate=ModState}) ->
+    %% Construct the filter function
+    FilterVNode = proplists:get_value(Index, FilterVNodes),
+    Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
+    list_keys(Sender, Bucket, Filter, Mod, ModState),
+    {noreply, State}.
+
 handle_handoff_command(Req=?FOLD_REQ{}, Sender, State) ->
     handle_command(Req, Sender, State);
 handle_handoff_command(Req={backend_callback, _Ref, _Msg}, Sender, State) ->
@@ -279,12 +304,12 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
-handle_exit(_Pid, _Reason, State) ->    
+handle_exit(_Pid, _Reason, State) ->
     %% A linked processes has died so the vnode
     %% process should take appropriate action here.
-    %% The default behavior is to crash the vnode 
+    %% The default behavior is to crash the vnode
     %% process so that it can be respawned
-    %% by riak_core_vnode_master to prevent 
+    %% by riak_core_vnode_master to prevent
     %% messages from stacking up on the process message
     %% queue and never being processed.
     {stop, linked_process_crash, State}.
@@ -402,7 +427,7 @@ syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId, StartTime) ->
         {ok, Val0} ->
             Obj0 = binary_to_term(Val0),
             ResObj = riak_object:syntactic_merge(
-                       Obj0,Obj1,term_to_binary(ReqId), StartTime), 
+                       Obj0,Obj1,term_to_binary(ReqId), StartTime),
             case riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
                 true -> {oldobj, ResObj};
                 false -> {newobj, ResObj}
@@ -443,23 +468,81 @@ do_get_binary(BKey, Mod, ModState) ->
 
 
 %% @private
-do_list_bucket(ReqID,Bucket,Mod,ModState,Idx,State) ->
-    RetVal = Mod:list_bucket(ModState,Bucket),
-    {reply, {kl, RetVal, Idx, ReqID}, State}.
+list_buckets(Sender, Filter, Mod, ModState) ->
+    %% TODO: Decide if we want to continue to allow key filters
+    %% to be used to filter the list of buckets. I think it is
+    %% more useful to move all filtering out of the backend and
+    %% not have to force all backends to fold over all keys
+    %% to generate a list of buckets.
+    Buckets = Mod:list_bucket(ModState, '_'),
+    case Filter of
+        none ->
+            riak_core_vnode:reply(Sender, {final_results, Buckets});
+        _ ->
+            FilteredBuckets = lists:foldl(Filter, [], Buckets),
+            riak_core_vnode:reply(Sender, {final_results, FilteredBuckets})
+    end.
 
 %% @private
-do_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
+list_keys(Sender, Bucket, Filter, Mod, ModState) ->
     F = fun({_, _} = BKey, _Val, Acc) ->
-                process_keys(Caller, ReqId, Idx, Bucket, BKey, Acc);
+                process_keys(Sender, Bucket, Filter, BKey, Acc);
            (Key, _Val, Acc) when is_binary(Key) ->
                 %% Backend's fold gives us keys only, so add bucket.
-                process_keys(Caller, ReqId, Idx, Bucket, {Bucket, Key}, Acc)
+                process_keys(Sender, Bucket, Filter, {Bucket, Key}, Acc)
         end,
     TryFuns = [fun() ->
                        %% Difficult to coordinate external backend API, so
                        %% we'll live with it for the moment/eternity.
                        F2 = fun(Key, Acc) ->
-                            process_keys(Caller, ReqId, Idx, Bucket,
+                            process_keys(Sender, Bucket,
+                                         Filter, {Bucket, Key}, Acc)
+                            end,
+                       Mod:fold_bucket_keys(ModState, Bucket, F2)
+               end,
+               fun() ->
+                       %% Newer backend API
+                       Mod:fold_bucket_keys(ModState, Bucket, F, [])
+               end,
+               fun() ->
+                       %% Older API for third-parties
+                       Mod:fold(ModState, F, [])
+               end],
+    Keys = lists:foldl(fun(TryFun, try_next) ->
+                                try TryFun() catch error:undef -> try_next end;
+                           (_TryFun, Res) ->
+                                Res
+                        end, try_next, TryFuns),
+    case Filter of
+        none ->
+            riak_core_vnode:reply(Sender, {final_results, {Bucket, Keys}});
+        _ ->
+            FilteredKeys = lists:foldl(Filter, [], Keys),
+            riak_core_vnode:reply(Sender, {final_results, {Bucket, FilteredKeys}})
+    end.
+
+%% @private
+%% @deprecated This function is only here to support
+%% rolling upgrades and will be removed.
+do_legacy_list_bucket(ReqID,Bucket,Mod,ModState,Idx,State) ->
+    RetVal = Mod:list_bucket(ModState,Bucket),
+    {reply, {kl, RetVal, Idx, ReqID}, State}.
+
+%% @private
+%% @deprecated This function is only here to support
+%% rolling upgrades and will be removed.
+do_legacy_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
+    F = fun({_, _} = BKey, _Val, Acc) ->
+                legacy_process_keys(Caller, ReqId, Idx, Bucket, BKey, Acc);
+           (Key, _Val, Acc) when is_binary(Key) ->
+                %% Backend's fold gives us keys only, so add bucket.
+                legacy_process_keys(Caller, ReqId, Idx, Bucket, {Bucket, Key}, Acc)
+        end,
+    TryFuns = [fun() ->
+                       %% Difficult to coordinate external backend API, so
+                       %% we'll live with it for the moment/eternity.
+                       F2 = fun(Key, Acc) ->
+                            legacy_process_keys(Caller, ReqId, Idx, Bucket,
                                          {Bucket, Key}, Acc)
                             end,
                        Mod:fold_bucket_keys(ModState, Bucket, F2)
@@ -495,24 +578,58 @@ do_delete(BKey, Mod, ModState) ->
     end.
 
 %% @private
-process_keys(Caller, ReqId, Idx, '_', {Bucket, _K}, Acc) ->
+process_keys(Sender, Bucket, Filter, {Bucket, Key}, Acc) ->
+       buffer_key_result(Sender, Bucket, Filter, [Key | Acc]);
+process_keys(_Sender, _Bucket, _Filter, {_B, _K}, Acc) ->
+    Acc.
+
+buffer_key_result(Sender, Bucket, Filter, Acc) ->
+    %% Use arbitrary fixed buffer size of 100. Not
+    %% sure there is a good 'why' for that number.
+    case length(Acc) >= 100 of
+        true ->
+            %% Filter the buffer keys as needed
+            case Filter of
+               none ->
+                    riak_core_vnode:reply(Sender, {results, {Bucket, Acc}});
+                _ ->
+                    FilteredKeys = lists:foldl(Filter, [], Acc),
+                    case FilteredKeys of
+                        [] ->
+                            ok;
+                        _ ->
+                            riak_core_vnode:reply(Sender, {results, {Bucket, FilteredKeys}})
+                    end
+            end,
+            %% Reset the buffer so that results are not duplicated
+            [];
+        false ->
+            Acc
+    end.
+
+%% @private
+%% @deprecated This function is only here to support
+%% rolling upgrades and will be removed.
+legacy_process_keys(Caller, ReqId, Idx, '_', {Bucket, _K}, Acc) ->
     %% Bucket='_' means "list buckets" instead of "list keys"
-    buffer_key_result(Caller, ReqId, Idx, [Bucket|Acc]);
-process_keys(Caller, ReqId, Idx, {filter, Bucket, Fun}, {Bucket, K}, Acc) ->
+    legacy_buffer_key_result(Caller, ReqId, Idx, [Bucket|Acc]);
+legacy_process_keys(Caller, ReqId, Idx, {filter, Bucket, Fun}, {Bucket, K}, Acc) ->
     %% Bucket={filter,Bucket,Fun} means "only include keys
     %% in Bucket that make Fun(K) return 'true'"
     case Fun(K) of
         true ->
-            buffer_key_result(Caller, ReqId, Idx, [K|Acc]);
+            legacy_buffer_key_result(Caller, ReqId, Idx, [K|Acc]);
         false ->
             Acc
     end;
-process_keys(Caller, ReqId, Idx, Bucket, {Bucket, K}, Acc) ->
-    buffer_key_result(Caller, ReqId, Idx, [K|Acc]);
-process_keys(_Caller, _ReqId, _Idx, _Bucket, {_B, _K}, Acc) ->
+legacy_process_keys(Caller, ReqId, Idx, Bucket, {Bucket, K}, Acc) ->
+    legacy_buffer_key_result(Caller, ReqId, Idx, [K|Acc]);
+legacy_process_keys(_Caller, _ReqId, _Idx, _Bucket, {_B, _K}, Acc) ->
     Acc.
 
-buffer_key_result(Caller, ReqId, Idx, Acc) ->
+%% @deprecated This function is only here to support
+%% rolling upgrades and will be removed.
+legacy_buffer_key_result(Caller, ReqId, Idx, Acc) ->
     case length(Acc) >= 100 of
         true ->
             Caller ! {ReqId, {kl, Idx, Acc}},
@@ -674,39 +791,30 @@ list_buckets_test_() ->
 
 list_buckets_test_i(BackendMod) ->
     {S, B, _K} = backend_with_known_key(BackendMod),
-    Caller = new_result_listener(),
-    handle_command(?KV_LISTKEYS_REQ{bucket='_',
-                                    req_id=124,
-                                    caller=Caller},
-                   {raw, 456, self()}, S),
+    Caller = new_result_listener(buckets),
+    handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=none}, [],
+                   {fsm, {456, {0, node()}}, Caller}, S),
     ?assertEqual({ok, [B]}, results_from_listener(Caller)),
     flush_msgs().
 
 filter_keys_test() ->
     {S, B, K} = backend_with_known_key(riak_kv_ets_backend),
-
-    Caller1 = new_result_listener(),
-    handle_command(?KV_LISTKEYS_REQ{
-                      bucket={filter,B,fun(_) -> true end},
-                      req_id=124,
-                      caller=Caller1},
-                   {raw, 456, self()}, S),
+    Caller1 = new_result_listener(keys),
+    handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
+                                     item_filter=fun(_) -> true end}, [],
+                   {fsm, {124, {0, node()}}, Caller1}, S),
     ?assertEqual({ok, [K]}, results_from_listener(Caller1)),
 
-    Caller2 = new_result_listener(),
-    handle_command(?KV_LISTKEYS_REQ{
-                      bucket={filter,B,fun(_) -> false end},
-                      req_id=125,
-                      caller=Caller2},
-                   {raw, 456, self()}, S),
+    Caller2 = new_result_listener(keys),
+    handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
+                                     item_filter=fun(_) -> false end}, [],
+                   {fsm, {125, {0, node()}}, Caller2}, S),
     ?assertEqual({ok, []}, results_from_listener(Caller2)),
 
-    Caller3 = new_result_listener(),
-    handle_command(?KV_LISTKEYS_REQ{
-                      bucket={filter,<<"g">>,fun(_) -> true end},
-                      req_id=126,
-                      caller=Caller3},
-                   {raw, 456, self()}, S),
+    Caller3 = new_result_listener(keys),
+    handle_coverage(?KV_LISTKEYS_REQ{bucket= <<"g">>,
+                                     item_filter=fun(_) -> true end}, [],
+                   {fsm, {126, {0, node()}}, Caller3}, S),
     ?assertEqual({ok, []}, results_from_listener(Caller3)),
 
     flush_msgs().
@@ -716,18 +824,31 @@ must_be_last_cleanup_stuff_test() ->
         {K, _V} <- application:get_all_env(riak_kv)],
     [application:set_env(riak_kv, K, V) || {K, V} <- erlang:get({?MODULE, kv})].
 
-new_result_listener() ->
-    spawn(fun result_listener/0).
+new_result_listener(Type) ->
+    case Type of
+        buckets ->
+            ResultFun = fun() -> result_listener_buckets([]) end;
+        keys ->
+            ResultFun = fun() -> result_listener_keys([]) end
+    end,
+    spawn(ResultFun).
 
-result_listener() ->
-    result_listener_keys([]).
+result_listener_buckets(Acc) ->
+    receive
+        {'$gen_event', {_,{results,Results}}} ->
+            result_listener_keys(Results ++ Acc);
+        {'$gen_event', {_,{final_results,Results}}} ->
+            result_listener_done(Results ++ Acc)
+    after 5000 ->
+            result_listener_done({timeout, Acc})
+    end.
 
 result_listener_keys(Acc) ->
     receive
-        {_,{kl,_,Keys}} ->
-            result_listener_keys(Keys++Acc);
-        {_, _, done} ->
-            result_listener_done(Acc)
+        {'$gen_event', {_,{results,{_Bucket, Results}}}} ->
+            result_listener_keys(Results ++ Acc);
+        {'$gen_event', {_,{final_results,{_Bucket, Results}}}} ->
+            result_listener_done(Results ++ Acc)
     after 5000 ->
             result_listener_done({timeout, Acc})
     end.

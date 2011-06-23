@@ -70,8 +70,15 @@ init([]) ->
     JSSup = {riak_kv_js_sup,
              {riak_kv_js_sup, start_link, []},
              permanent, infinity, supervisor, [riak_kv_js_sup]},
-    KLSup = {riak_kv_keylister_sup,
-             {riak_kv_keylister_sup, start_link, []},
+    %% @TODO This code is only here to support
+    %% rolling upgrades and will be removed.
+    KLMaster = {riak_kv_keylister_master,
+                 {riak_kv_keylister_master, start_link, []},
+                 permanent, 30000, worker, [riak_kv_keylister_master]},
+    %% @TODO This code is only here to support
+    %% rolling upgrades and will be removed.
+    KLSup = {riak_kv_keylister_legacy_sup,
+             {riak_kv_keylister_legacy_sup, start_link, []},
              permanent, infinity, supervisor, [riak_kv_keylister_sup]},
     MapCache = {riak_kv_mapred_cache,
                  {riak_kv_mapred_cache, start_link, []},
@@ -91,9 +98,17 @@ init([]) ->
     DeleteSup = {riak_kv_delete_sup,
                  {riak_kv_delete_sup, start_link, []},
                  permanent, infinity, supervisor, [riak_kv_delete_sup]},
+    BucketsFsmSup = {riak_kv_buckets_fsm_sup,
+                 {riak_kv_buckets_fsm_sup, start_link, []},
+                 permanent, infinity, supervisor, [riak_kv_buckets_fsm_sup]},
     KeysFsmSup = {riak_kv_keys_fsm_sup,
                  {riak_kv_keys_fsm_sup, start_link, []},
                  permanent, infinity, supervisor, [riak_kv_keys_fsm_sup]},
+    %% @TODO This code is only here to support
+    %% rolling upgrades and will be removed.
+    LegacyKeysFsmSup = {riak_kv_keys_fsm_legacy_sup,
+                 {riak_kv_keys_fsm_legacy_sup, start_link, []},
+                 permanent, infinity, supervisor, [riak_kv_keys_fsm_legacy_sup]},
 
     % Figure out which processes we should run...
     IsPbConfigured = (app_helper:get_env(riak_kv, pb_ip) /= undefined)
@@ -109,8 +124,11 @@ init([]) ->
         GetFsmSup,
         PutFsmSup,
         DeleteSup,
-        KeysFsmSup,                               
+        BucketsFsmSup,
+        KeysFsmSup,
+        LegacyKeysFsmSup,
         KLSup,
+        KLMaster,
         JSSup,
         MapJSPool,
         ReduceJSPool,
