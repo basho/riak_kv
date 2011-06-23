@@ -41,7 +41,8 @@
 -record(state, { ref,
                  data_root,
                  read_opts = [],
-                 write_opts = [] }).
+                 write_opts = [],
+                 fold_opts = [{fill_cache, false}]}).
 
 
 -ifdef(TEST).
@@ -60,6 +61,7 @@ start(Partition, Config) ->
     %% Get the data root directory
     DataDir = filename:join(config_value(data_root, Config),
                             integer_to_list(Partition)),
+    filelib:ensure_dir(filename:join(DataDir, "dummy")),
     case e_leveldb:open(DataDir, [{create_if_missing, true}]) of
         {ok, Ref} ->
             {ok, #state { ref = Ref,
@@ -105,7 +107,7 @@ list(State) ->
     %% Return a list of all keys in all buckets: [{bucket(), key()}]
     e_leveldb:fold(State#state.ref,
                    fun({BK, _V}, Acc) -> [binary_to_term(BK) | Acc] end,
-                   []).
+                   [], State#state.fold_opts).
 
 list_bucket(State, {filter, Bucket, Fun}) ->
     %% Return a filtered list keys within a bucket: [key()]
@@ -118,14 +120,14 @@ list_bucket(State, {filter, Bucket, Fun}) ->
                         Acc
                 end
         end,
-    e_leveldb:fold(State#state.ref, F, []);
+    e_leveldb:fold(State#state.ref, F, [], State#state.fold_opts);
 list_bucket(State, '_') ->
     %% Return a list of all unique buckets: [bucket()]
     F = fun({BK, _V}, Acc) ->
                 {B, _} = binary_to_term(BK),
                 ordsets:add_element(B, Acc)
         end,
-    e_leveldb:fold(State#state.ref, F, []);
+    e_leveldb:fold(State#state.ref, F, [], State#state.fold_opts);
 list_bucket(State, Bucket) ->
     %% Return a list of keys in a bucket: [key()]
     list_bucket(State, {filter, Bucket, fun(_) -> true end}).
@@ -135,14 +137,14 @@ fold(State, Fun0, Acc0) ->
     F = fun({BK, V}, Acc) ->
                 Fun0(binary_to_term(BK), V, Acc)
         end,
-    e_leveldb:fold(State#state.ref, F, Acc0).
+    e_leveldb:fold(State#state.ref, F, Acc0, State#state.fold_opts).
 
 fold_keys(State, Fun0, Acc0) ->
     %% Apply a fold across all buckets/keys (but NOT values)
     F = fun({BK, _V}, Acc) ->
                 Fun0(binary_to_term(BK), Acc)
         end,
-    e_leveldb:fold(State#state.ref, F, Acc0).
+    e_leveldb:fold(State#state.ref, F, Acc0, State#state.fold_opts).
 
 fold_bucket_keys(State, Bucket, Fun0, Acc0) ->
     %% Apply a fold across just the keys in a single bucket
@@ -154,7 +156,7 @@ fold_bucket_keys(State, Bucket, Fun0, Acc0) ->
                         Acc
                 end
         end,
-    e_leveldb:fold(State#state.ref, F, Acc0).
+    e_leveldb:fold(State#state.ref, F, Acc0, State#state.fold_opts).
 
 
 %% ===================================================================
