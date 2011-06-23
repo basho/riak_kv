@@ -509,7 +509,7 @@ list_keys(Caller, ReqId, Bucket, Filter, Idx, Mod, ModState) ->
             ok;
         _ when is_list(Keys) ->
             case Filter of
-                [] ->
+                none ->
                     gen_fsm:send_event(Caller, {ReqId, {results, Idx, Keys}});
                 _ ->
                     case lists:foldl(Filter, [], Keys) of
