@@ -33,7 +33,7 @@
          del/3,
          put/6,
          readrepair/6,
-         list_buckets/6,
+         list_buckets/7,
          list_keys/7,
          fold/3,
          get_vclocks/2]).
@@ -460,7 +460,7 @@ do_get_binary(BKey, Mod, ModState) ->
 
 
 %% @private
-list_buckets(Caller, ReqId, Filter, Idx, Mod, ModState) ->
+list_buckets(Caller, ReqId, _, Filter, Idx, Mod, ModState) ->
     %% TODO: Decide if we want to continue to allow key filters
     %% to be used to filter the list of buckets. I think it is
     %% more useful to move all filtering out of the backend and 
@@ -471,9 +471,10 @@ list_buckets(Caller, ReqId, Filter, Idx, Mod, ModState) ->
         none ->
             gen_fsm:send_event(Caller, {ReqId, {results, Idx, Buckets}});
         _ ->
-            FilteredBuckets = lists:foldl(Filter, [], Buckets),
-            gen_fsm:send_event(Caller, {ReqId, {results, Idx, FilteredBuckets}})
-    end.
+            %% FilteredBuckets = lists:foldl(Filter, [], Buckets),
+            gen_fsm:send_event(Caller, {ReqId, {results, Idx, Buckets}})
+    end,
+    gen_fsm:send_event(Caller, {ReqId, Idx, done}).
 
 %% @private
 list_keys(Caller, ReqId, Bucket, Filter, Idx, Mod, ModState) ->

@@ -538,9 +538,9 @@ filter_keys(Bucket, Fun, Timeout) ->
 %%      out of date if called immediately after any operation that
 %%      either adds the first key or removes the last remaining key from
 %%      a bucket.
-%% @equiv list_buckets(default_timeout()*8)
+%% @equiv list_buckets(default_timeout())
 list_buckets() ->
-    list_buckets(?DEFAULT_TIMEOUT*8).
+    list_buckets(?DEFAULT_TIMEOUT).
 
 %% @spec list_buckets(TimeoutMillisecs :: integer()) ->
 %%       {ok, [Bucket :: riak_object:bucket()]} |
@@ -552,12 +552,10 @@ list_buckets() ->
 %%      either adds the first key or removes the last remaining key from
 %%      a bucket.
 list_buckets(Timeout) ->
-    case list_keys('_', Timeout) of
-        {ok, Buckets} ->
-            {ok, lists:usort(Buckets)};
-        Result ->
-            Result
-    end.
+    Me = self(),
+    ReqId = mk_reqid(),
+    riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, [ReqId, all], none, Timeout, plain]),
+    wait_for_listbuckets(ReqId, Timeout).
 
 %% @spec set_bucket(riak_object:bucket(), [BucketProp :: {atom(),term()}]) -> ok
 %% @doc Set the given properties for Bucket.
@@ -620,6 +618,19 @@ wait_for_listkeys(ReqId,Timeout,Acc) ->
     receive
         {ReqId, done} -> {ok, lists:flatten(Acc)};
         {ReqId,{keys,Res}} -> wait_for_listkeys(ReqId,Timeout,[Res|Acc]);
+        {ReqId, Error} -> {error, Error}
+    after Timeout ->
+            {error, timeout, Acc}
+    end.
+
+%% @private
+wait_for_listbuckets(ReqId, Timeout) ->
+    wait_for_listbuckets(ReqId, Timeout, []).
+%% @private
+wait_for_listbuckets(ReqId, Timeout, Acc) ->
+    receive
+        {ReqId, done} -> {ok, lists:usort(lists:flatten(Acc))};
+        {ReqId,{buckets, Res}} -> wait_for_listbuckets(ReqId, Timeout, [Res | Acc]);
         {ReqId, Error} -> {error, Error}
     after Timeout ->
             {error, timeout, Acc}
