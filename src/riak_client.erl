@@ -451,14 +451,23 @@ list_keys(Bucket) ->
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 list_keys(Bucket, Timeout) ->
-    Me = self(),
-    ReqId = mk_reqid(),
-    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, Bucket, none, [], Timeout, plain]),
-    wait_for_listkeys(ReqId, Timeout).
+    list_keys(Bucket, none, Timeout).
 
 %% @deprecated Only in place for backwards compatibility.
-list_keys(Bucket, Timeout, _) ->
-    list_keys(Bucket, Timeout).
+list_keys(Bucket, Timeout, _) when is_integer(Timeout) ->
+    list_keys(Bucket, Timeout);
+%% @spec list_keys(riak_object:bucket(), TimeoutMillisecs :: integer()) ->
+%%       {ok, [Key :: riak_object:key()]} |
+%%       {error, timeout} |
+%%       {error, Err :: term()}
+%% @doc List the keys known to be present in Bucket.
+%%      Key lists are updated asynchronously, so this may be slightly
+%%      out of date if called immediately after a put or delete.
+list_keys(Bucket, Filter, Timeout) -> 
+    Me = self(),
+    ReqId = mk_reqid(),
+    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, Bucket, Filter, [], Timeout, plain]),
+    wait_for_listkeys(ReqId, Timeout).
 
 stream_list_keys(Bucket) ->
     stream_list_keys(Bucket, ?DEFAULT_TIMEOUT).
@@ -492,14 +501,18 @@ stream_list_keys(Bucket0, Timeout, _, Client, ClientType) ->
 %%      keys in Bucket on any single vnode.
 %%      If ClientType is set to 'mapred' instead of 'plain', then the
 %%      messages will be sent in the form of a MR input stream.
-stream_list_keys(Bucket, Timeout, Client, ClientType) when is_pid(Client) ->
+stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
     ReqId = mk_reqid(),
-    case build_filter(Bucket) of
-        {error, _Error} ->
-            {error, _Error};
-        Input ->
-            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [ReqId, Input, Timeout, ClientType, Client]),
-            {ok, ReqId}
+    case Input of
+        {Bucket, FilterInput} ->
+            case build_exprs(FilterInput) of
+                {error, _Error} ->
+                    {error, _Error};
+                {ok, FilterExprs} ->
+                    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Client}, Bucket, FilterExprs, [], Timeout, ClientType])
+            end;
+        Bucket ->
+            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Client}, Bucket, none, [], Timeout, ClientType])
     end;
 %% @deprecated Only in place for backwards compatibility.
 stream_list_keys(Bucket, Timeout, _, Client) ->
@@ -513,9 +526,9 @@ stream_list_keys(Bucket, Timeout, _, Client) ->
 %%      filtered at the vnode according to Fun, via lists:filter.
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
-%% @equiv filter_keys(Bucket, Fun, default_timeout()*8)
+%% @equiv filter_keys(Bucket, Fun, default_timeout())
 filter_keys(Bucket, Fun) ->
-    list_keys({filter, Bucket, Fun}, ?DEFAULT_TIMEOUT*8).
+    list_keys(Bucket, Fun, ?DEFAULT_TIMEOUT).
 
 %% @spec filter_keys(riak_object:bucket(), Fun :: function(), TimeoutMillisecs :: integer()) ->
 %%       {ok, [Key :: riak_object:key()]} |
@@ -526,7 +539,7 @@ filter_keys(Bucket, Fun) ->
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 filter_keys(Bucket, Fun, Timeout) ->
-    list_keys({filter, Bucket, Fun}, Timeout).
+    list_keys(Bucket, Fun, Timeout).
 
 %% @spec list_buckets() ->
 %%       {ok, [Bucket :: riak_object:bucket()]} |
@@ -649,16 +662,6 @@ is_key_filter({Bucket, Filters}) when is_binary(Bucket),
     true;
 is_key_filter(_) ->
     false.
-
-build_filter(Bucket) when is_binary(Bucket) ->
-    Bucket;
-build_filter({Bucket, Exprs}) ->
-    case build_exprs(Exprs) of
-        {ok, Filters} ->
-            {Bucket, Filters};
-        Error ->
-            Error
-    end.
 
 build_exprs(Exprs) ->
     build_exprs(Exprs, []).
