@@ -385,11 +385,12 @@ process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
 pipe_mapreduce(Req, State, Inputs, Query, _Timeout) ->
     case valid_mapred_inputs(Inputs) of
         true ->
-            {{ok, Head, Sink}, _NumKeeps} =
+            {{ok, Pipe}, _NumKeeps} =
                 riak_kv_mrc_pipe:mapred_stream(Query),
-            riak_kv_mrc_pipe:send_inputs(Head, Inputs),
+            riak_kv_mrc_pipe:send_inputs(Pipe, Inputs),
+            Ref = (Pipe#pipe.sink)#fitting.ref,
             %% TODO: timeout
-            {pause, State#state{req=Req, req_ctx=Sink#fitting.ref}};
+            {pause, State#state{req=Req, req_ctx=Ref}};
         false ->
             {error, bad_inputs}
     end.

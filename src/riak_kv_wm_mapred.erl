@@ -137,19 +137,19 @@ is_key_filter(_) ->
 pipe_mapred(RD,
             #state{inputs=Inputs,
                    mrquery=Query}=State) ->
-    {{ok, Head, Sink}, NumKeeps} =
+    {{ok, Pipe}, NumKeeps} =
         riak_kv_mrc_pipe:mapred_stream(Query),
-    ok = riak_kv_mrc_pipe:send_inputs(Head, Inputs),
+    ok = riak_kv_mrc_pipe:send_inputs(Pipe, Inputs),
     case wrq:get_qs_value("chunked", "false", RD) of
         "true" ->
-            pipe_mapred_chunked(RD, State, Sink);
+            pipe_mapred_chunked(RD, State, Pipe);
         _ ->
-            pipe_mapred_nonchunked(RD, State, Sink, NumKeeps)
+            pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps)
     end.
 
-pipe_mapred_nonchunked(RD, State, Sink, NumKeeps) ->
+pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps) ->
     %% TODO: timeout
-    case riak_kv_mrc_pipe:collect_outputs(Sink, NumKeeps) of
+    case riak_kv_mrc_pipe:collect_outputs(Pipe, NumKeeps) of
         {ok, Results} ->
             JSONResults = 
                 case NumKeeps < 2 of
@@ -168,7 +168,7 @@ pipe_mapred_nonchunked(RD, State, Sink, NumKeeps) ->
             {{halt, 500}, send_error(Error, RD), State}
     end.
 
-pipe_mapred_chunked(RD, State, Sink) ->
+pipe_mapred_chunked(RD, State, Pipe) ->
     Boundary = riak_core_util:unique_id_62(),
     CTypeRD = wrq:set_resp_header(
                 "Content-Type",
@@ -176,15 +176,15 @@ pipe_mapred_chunked(RD, State, Sink) ->
                 RD),
     BoundaryState = State#state{boundary=Boundary},
     Streamer = pipe_stream_mapred_results(
-                 CTypeRD, Sink, BoundaryState),
+                 CTypeRD, Pipe, BoundaryState),
     {true,
      wrq:set_resp_body({stream, Streamer}, CTypeRD),
      BoundaryState}.
 
-pipe_stream_mapred_results(RD, Sink,
+pipe_stream_mapred_results(RD, Pipe,
                            #state{timeout=Timeout,
                                   boundary=Boundary}=State) ->
-    case riak_pipe:receive_result(Sink, Timeout) of
+    case riak_pipe:receive_result(Pipe, Timeout) of
         {result, {PhaseId, Result}} ->
             %% results come out of pipe one
             %% at a time but they're supposed to
@@ -196,7 +196,7 @@ pipe_stream_mapred_results(RD, Sink,
                     "Content-Type: application/json\r\n\r\n",
                     Data],
             {iolist_to_binary(Body),
-             fun() -> pipe_stream_mapred_results(RD, Sink, State) end};
+             fun() -> pipe_stream_mapred_results(RD, Pipe, State) end};
         eoi ->
             {iolist_to_binary(["\r\n--", Boundary, "--\r\n"]), done};
         timeout ->
@@ -205,7 +205,7 @@ pipe_stream_mapred_results(RD, Sink,
             %% no logging is enabled in riak_kv_mrc_pipe, but the
             %% match is here just so this doesn't blow up during
             %% debugging
-            pipe_stream_mapred_results(RD, Sink, State)
+            pipe_stream_mapred_results(RD, Pipe, State)
     end.
 
 %% LEGACY MAPRED
