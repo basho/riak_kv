@@ -203,15 +203,17 @@ handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
 handle_command(?FOLD_REQ{foldfun=Fun, acc0=Acc},_Sender,State) ->
     Reply = do_fold(Fun, Acc, State),
     {reply, Reply, State};
-handle_command(?COVERAGE_REQ{args=Args,
-                              modfun={CoverageMod, CoverageFun}}=Req,
+handle_command(?COVERAGE_VNODE_REQ{args=Args,
+                                   module=CoverageMod,
+                                   function=CoverageFun,
+                                   filter=Filter},
                _Sender,
                State=#state{mod=Mod, 
                             modstate=ModState,
                             idx=Idx}) ->
-    CoverageArgs0 = [element(X, Req) || {_, X} <- Args],
-    CoverageArgs = CoverageArgs0 ++ [Idx, Mod, ModState],
-    apply(CoverageMod, CoverageFun, CoverageArgs),
+    %% CoverageArgs0 = [element(X, Req) || {_, X} <- Args],
+    %% CoverageArgs = CoverageArgs0 ++ [Idx, Mod, ModState]
+    apply(CoverageMod, CoverageFun, Args ++ [Filter, Idx, Mod, ModState]),
     {noreply, State};
  
 %% Commands originating from inside this vnode
@@ -252,7 +254,6 @@ handle_coverage(?COVERAGE_REQ{args=Args,
     CoverageArgs = CoverageArgs0 ++ [Idx, Mod, ModState],
     apply(CoverageMod, CoverageFun, CoverageArgs),
     {noreply, State}.
-
 
 handle_handoff_command(Req=?FOLD_REQ{}, Sender, State) ->
     handle_command(Req, Sender, State);
@@ -510,13 +511,13 @@ list_keys(Caller, ReqId, Bucket, Filter, Idx, Mod, ModState) ->
         _ when is_list(Keys) ->
             case Filter of
                 none ->
-                    gen_fsm:send_event(Caller, {ReqId, {results, Idx, Keys}});
+                    gen_fsm:send_event(Caller, {ReqId, {results, Idx, {Bucket, Keys}}});
                 _ ->
                     case lists:foldl(Filter, [], Keys) of
                         [] ->
                             ok;
                         FilteredKeys ->
-                            gen_fsm:send_event(Caller, {ReqId, {results, Idx, FilteredKeys}})
+                            gen_fsm:send_event(Caller, {ReqId, {results, Idx, {Bucket, FilteredKeys}}})
                     end
             end
     end,

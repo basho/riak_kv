@@ -37,19 +37,18 @@
 
 -behaviour(riak_core_coverage_fsm).
 
--export([init/0, process_results/4]).
+-export([init/0, process_results/3]).
 
 init() ->
-    Args = [{caller, 4}, {reqid, 8}, {bucket, 3}, {filter, 5}],
     %% Return a tuple containing the ModFun to call per vnode, 
-    %% a list of args for the function, and a coverage factor.
-    {ok, {riak_kv_vnode, list_keys}, Args, 1}.
+    %% and a coverage factor.
+    {ok, {riak_kv_vnode, list_keys}, 1, riak_kv_vnode_master}.
 
-process_results(Keys, Bucket, ClientType, {raw, ReqId, ClientPid}) ->
+process_results({Bucket, Keys}, ClientType, {raw, ReqId, ClientPid}) ->
     case ClientType of
         mapred ->
             try
-                luke_flow:add_inputs(ClientPid, [{Bucket,K} || K <- Keys])
+                luke_flow:add_inputs(ClientPid, [{Bucket, Key} || Key <- Keys])
             catch _:_ ->
                     exit(self(), normal)
             end;
