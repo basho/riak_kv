@@ -453,8 +453,7 @@ list_keys(Bucket) ->
 list_keys(Bucket, Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
-    %% FSM_Timeout = trunc(Timeout / 8),
-    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [ReqId, Bucket], none, Timeout, plain]),
+    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, Bucket, none, [], Timeout, plain]),
     wait_for_listkeys(ReqId, Timeout).
 
 %% @deprecated Only in place for backwards compatibility.
@@ -554,7 +553,7 @@ list_buckets() ->
 list_buckets(Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, [ReqId, all], none, Timeout, plain]),
+    riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, none, [], Timeout, plain]),
     wait_for_listbuckets(ReqId, Timeout).
 
 %% @spec set_bucket(riak_object:bucket(), [BucketProp :: {atom(),term()}]) -> ok
