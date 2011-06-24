@@ -471,8 +471,8 @@ list_buckets(Caller, ReqId, Filter, Idx, Mod, ModState) ->
         none ->
             gen_fsm:send_event(Caller, {ReqId, {results, Idx, Buckets}});
         _ ->
-            %% FilteredBuckets = lists:foldl(Filter, [], Buckets),
-            gen_fsm:send_event(Caller, {ReqId, {results, Idx, Buckets}})
+            FilteredBuckets = lists:foldl(Filter, [], Buckets),
+            gen_fsm:send_event(Caller, {ReqId, {results, Idx, FilteredBuckets}})
     end,
     gen_fsm:send_event(Caller, {ReqId, Idx, done}).
 
