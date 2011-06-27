@@ -319,6 +319,15 @@ compat_basic1_test_() ->
                      riak_kv_mrc_pipe:mapred(Inputs, Spec),
                  SortedNormal = lists:sort([ Normalize(I) || I <- Inputs ]),
                  ?assertEqual(SortedNormal, lists:sort(Results))
+             end),
+          ?_test(
+             %% Key Filters
+             begin
+                 %% filter sould match only "bar4" key
+                 Inputs = {IntsBucket, [[<<"ends_with">>, <<"r4">>]]},
+                 Spec = [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                          none, true}],
+                 {ok, [4]} = riak_kv_mrc_pipe:mapred(Inputs, Spec)
              end)
           ]
      end}.
