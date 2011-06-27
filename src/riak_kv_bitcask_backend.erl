@@ -41,7 +41,8 @@
          callback/3]).
 
 %% Helper API
--export([key_counts/0]).
+-export([key_counts/0,
+         key_counts/1]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -204,13 +205,16 @@ callback(_State, _Ref, _Msg) ->
 key_counts() ->
     case application:get_env(bitcask, data_root) of
         {ok, RootDir} ->
-            [begin
-                 {Keys, _} = status(filename:join(RootDir, Dir)),
-                 {Dir, Keys}
-             end || Dir <- element(2, file:list_dir(RootDir))];
+            key_counts(RootDir);
         undefined ->
             {error, data_root_not_set}
     end.
+
+key_counts(RootDir) ->
+    [begin
+         {Keys, _} = status(filename:join(RootDir, Dir)),
+         {Dir, Keys}
+     end || Dir <- element(2, file:list_dir(RootDir))];
 
 %% ===================================================================
 %% Internal functions
