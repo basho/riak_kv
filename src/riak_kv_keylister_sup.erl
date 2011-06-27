@@ -25,13 +25,13 @@
 
 %% API
 -export([start_link/0,
-         new_lister/3]).
+         start_keylister/2]).
 
 %% Supervisor callbacks
 -export([init/1]).
 
-new_lister(ReqId, Bucket, Caller) ->
-    start_child([ReqId, Bucket, Caller]).
+start_keylister(Node, Args) ->
+    supervisor:start_child({?MODULE, Node}, Args).
 
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
@@ -42,7 +42,3 @@ init([]) ->
                {riak_kv_keylister, start_link, []},
                temporary, brutal_kill, worker, dynamic},
     {ok, {SupFlags, [Process]}}.
-
-%% Internal functions
-start_child(Args) ->
-  supervisor:start_child(?MODULE, Args).
