@@ -404,12 +404,19 @@ pipe_mapreduce(Req, State, Inputs, Query, _Timeout) ->
         true ->
             {{ok, Pipe}, _NumKeeps} =
                 riak_kv_mrc_pipe:mapred_stream(Query),
-            riak_kv_mrc_pipe:send_inputs(Pipe, Inputs),
-            Ref = (Pipe#pipe.sink)#fitting.ref,
-            %% TODO: timeout
-            {pause, State#state{req=Req, req_ctx=Ref}};
+            case riak_kv_mrc_pipe:send_inputs(Pipe, Inputs) of
+                ok ->
+                    Ref = (Pipe#pipe.sink)#fitting.ref,
+                    %% TODO: timeout
+                    {pause, State#state{req=Req, req_ctx=Ref}};
+                _Error ->
+                    %% even if the structure looks right, it might name
+                    %% a non-existent key filter or something
+                    riak_pipe:eoi(Pipe),
+                    send_error("~p", [bad_mapred_inputs], State)
+            end;
         false ->
-            {error, bad_inputs}
+            send_error("~p", [bad_mapred_inputs], State)
     end.
 
 valid_mapred_inputs(Inputs) ->
@@ -471,7 +478,7 @@ legacy_mapreduce(#rpbmapredreq{content_type=ContentType}=Req,
                                     {pause, State#state{req = Req, req_ctx = ReqId}}
                             end;
                         false -> 
-                            {error, bad_mapred_inputs}
+                            send_error("~p", [bad_mapred_inputs], State)
                     end
             end
     end.

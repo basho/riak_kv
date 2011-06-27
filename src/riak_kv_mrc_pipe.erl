@@ -81,8 +81,13 @@
 %% TODO: Streaming output
 mapred(Inputs, Query) ->
     {{ok, Pipe}, NumKeeps} = mapred_stream(Query),
-    send_inputs(Pipe, Inputs),
-    collect_outputs(Pipe, NumKeeps).
+    case send_inputs(Pipe, Inputs) of
+        ok ->
+            collect_outputs(Pipe, NumKeeps);
+        Error ->
+            riak_pipe:eoi(Pipe),
+            {error, Error, collect_outputs(Pipe, NumKeeps)}
+    end.
 
 mapred_stream(Query0) ->
     Query = correct_keeps(Query0),
@@ -289,7 +294,13 @@ send_inputs(Pipe, Bucket) when is_binary(Bucket) ->
     %% TODO: riak_kv_listkeys_pipe
     {ok, C} = riak:local_client(),
     {ok, ReqId} = C:stream_list_keys(Bucket),
-    send_key_list(Pipe, Bucket, ReqId).
+    send_key_list(Pipe, Bucket, ReqId);
+send_inputs(Pipe, {Bucket, FilterExprs}) ->
+    {ok, C} = riak:local_client(),
+    case C:stream_list_keys({Bucket, FilterExprs}) of
+        {ok, ReqId} -> send_key_list(Pipe, Bucket, ReqId);
+        Error       -> Error
+    end.
 
 send_key_list(Pipe, Bucket, ReqId) ->
     receive

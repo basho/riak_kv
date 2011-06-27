@@ -139,12 +139,20 @@ pipe_mapred(RD,
                    mrquery=Query}=State) ->
     {{ok, Pipe}, NumKeeps} =
         riak_kv_mrc_pipe:mapred_stream(Query),
-    ok = riak_kv_mrc_pipe:send_inputs(Pipe, Inputs),
-    case wrq:get_qs_value("chunked", "false", RD) of
-        "true" ->
-            pipe_mapred_chunked(RD, State, Pipe);
-        _ ->
-            pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps)
+    case riak_kv_mrc_pipe:send_inputs(Pipe, Inputs) of
+        ok ->
+            case wrq:get_qs_value("chunked", "false", RD) of
+                "true" ->
+                    pipe_mapred_chunked(RD, State, Pipe);
+                _ ->
+                    pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps)
+            end;
+        {error, {bad_filter, _}} ->
+            riak_kv_pipe:eoi(Pipe),
+            {{halt, 500}, send_error({error, bad_mapred_filter}, RD), State};
+        Error ->
+            riak_kv_pipe:eoi(Pipe),
+            {{halt, 500}, send_error(Error, RD), State}
     end.
 
 pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps) ->
