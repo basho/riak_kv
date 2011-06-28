@@ -63,7 +63,7 @@ setup() ->
     cleanup(setup),
     %% Pause the make sure everything is cleaned up
     timer:sleep(2000),
-    
+
     %% Start erlang node
     net_kernel:start([testnode, shortnames]),
     do_dep_apps(start, dep_apps()),
@@ -81,26 +81,19 @@ cleanup(_) ->
 %% Call unused callback functions to clear them in the coverage
 %% checker so the real code stands out.
 coverage_test() ->
-    riak_kv_test_util:call_unused_fsm_funs(riak_kv_keys_fsm).
+    riak_kv_test_util:call_unused_fsm_funs(riak_core_coverage_fsm).
 
 %% ====================================================================
 %% eqc property
 %% ====================================================================
 
 prop_basic_listkeys() ->
-    ?FORALL({ReqId, Input, NVal, ObjectCount, Timeout, ClientType},
-            {g_reqid(), g_input(), g_n_val(), g_object_count(), g_timeout(), g_client_type()},
+    ?FORALL({ReqId, Bucket, KeyFilter, NVal, ObjectCount, Timeout, ClientType},
+            {g_reqid(), g_bucket(), g_key_filter(), g_n_val(), g_object_count(), g_timeout(), g_client_type()},
         ?TRAPEXIT(
            begin
                {ok, Client} = riak:local_client(),
                {ok, Buckets} = Client:list_buckets(),
-               %% Check if a key filter is being used as input
-               case Input of
-                   {filter, Bucket, _} ->
-                       ok;
-                   Bucket ->
-                       ok
-               end,
                case lists:member(Bucket, Buckets) of
                    true -> % bucket has already been used
                        %% Delete the existing keys in the bucket
@@ -116,11 +109,13 @@ prop_basic_listkeys() ->
                %% Create objects in bucket
                GeneratedKeys = [list_to_binary(integer_to_list(X)) || X <- lists:seq(1, ObjectCount)],
                [ok = Client:put(riak_object:new(Bucket, Key, <<"val">>)) || Key <- GeneratedKeys],
-               %% Set the expected output based on if a 
+               %% Set the expected output based on if a
                %% key filter is being used or not.
-               case Input of
-                   {filter, _, KeyFilter} ->
-                       ExpectedKeyFilter = 
+               case KeyFilter of
+                   none ->
+                       ExpectedKeys = GeneratedKeys;
+                   _ ->
+                       ExpectedKeyFilter =
                            fun(K, Acc) ->
                                    case KeyFilter(K) of
                                        true ->
@@ -129,12 +124,10 @@ prop_basic_listkeys() ->
                                            Acc
                                    end
                            end,
-                       ExpectedKeys = lists:foldl(ExpectedKeyFilter, [], GeneratedKeys);
-                   Bucket ->
-                       ExpectedKeys = GeneratedKeys
+                       ExpectedKeys = lists:foldl(ExpectedKeyFilter, [], GeneratedKeys)
                end,
                %% Call start_link
-               Keys = start_link(ReqId, Input, Timeout, ClientType),
+               Keys = start_link(ReqId, Bucket, KeyFilter, Timeout, ClientType),
                ?WHENFAIL(
                   begin
                       io:format("Bucket: ~p n_val: ~p~n", [Bucket, NVal]),
@@ -145,7 +138,7 @@ prop_basic_listkeys() ->
                   end,
                   conjunction(
                     [
-                     {keys, equals(lists:sort(Keys), lists:sort(ExpectedKeys))}
+                     {results, equals(lists:sort(Keys), lists:sort(ExpectedKeys))}
                     ]))
 
            end
@@ -155,18 +148,15 @@ prop_basic_listkeys() ->
 %% Wrappers
 %%====================================================================
 
-start_link(ReqId, Input, Timeout, ClientType) ->
+start_link(ReqId, Bucket, Filter, Timeout, ClientType) ->
     Sink = spawn(?MODULE, data_sink, [ReqId, [], false]),
     From = {raw, ReqId, Sink},
-    {ok, _FsmPid} = riak_kv_keys_fsm:start_link(From, Input, Timeout, ClientType),
+    {ok, _FsmPid} = riak_core_coverage_fsm:start_link(riak_kv_keys_fsm, From, Bucket, Filter, [], Timeout, ClientType),
     wait_for_replies(Sink, ReqId).
 
 %%====================================================================
 %% Generators
 %%====================================================================
-
-g_input() ->
-    frequency([{5, g_bucket()}, {1, g_key_filter()}]).
 
 g_bucket() ->
     non_blank_string().
@@ -175,12 +165,13 @@ g_key_filter() ->
     %% Create a key filter function.
     %% There will always be at least 10 keys
     %% due to the lower bound of object count
-    %% generator. 
-    KeyFilter = 
-        fun(X) -> 
-                lists:member(X, lists:seq(1,10))
+    %% generator.
+    MatchKeys = [list_to_binary(integer_to_list(X)) || X <- lists:seq(1,10)],
+    KeyFilter =
+        fun(X) ->
+                lists:member(X, MatchKeys)
         end,
-    {filter, non_blank_string(), KeyFilter}.
+    frequency([{5, none}, {2, KeyFilter}]).
 
 g_client_type() ->
     %% TODO: Incorporate mapred type
@@ -201,7 +192,7 @@ g_timeout() ->
 %%====================================================================
 %% Helpers
 %%====================================================================
- 
+
 prepare() ->
     application:load(sasl),
     error_logger:delete_report_handler(sasl_report_tty_h),
@@ -284,3 +275,4 @@ wait_for_replies(Sink, ReqId) ->
     end.
 
  -endif. % EQC
+
