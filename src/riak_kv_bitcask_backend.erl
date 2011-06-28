@@ -214,7 +214,7 @@ key_counts(RootDir) ->
     [begin
          {Keys, _} = status(filename:join(RootDir, Dir)),
          {Dir, Keys}
-     end || Dir <- element(2, file:list_dir(RootDir))];
+     end || Dir <- element(2, file:list_dir(RootDir))].
 
 %% ===================================================================
 %% Internal functions
