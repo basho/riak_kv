@@ -39,10 +39,12 @@
 
 -export([init/0, process_results/3]).
 
+%% @doc Return a tuple containing the ModFun to call per vnode, 
+%% the number of primary preflist vnodes the operation
+%% should cover, the service to use to check for available nodes,
+%% and the registered name to use to access the vnode master process.
 init() ->
-    %% Return a tuple containing the ModFun to call per vnode, 
-    %% and a coverage factor.
-    {ok, {riak_kv_vnode, list_keys}, 1, riak_kv_vnode_master}.
+    {ok, {riak_kv_vnode, list_keys}, 1, riak_kv, riak_kv_vnode_master}.
 
 process_results({Bucket, Keys}, ClientType, {raw, ReqId, ClientPid}) ->
     case ClientType of
