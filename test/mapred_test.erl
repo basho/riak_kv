@@ -134,6 +134,11 @@ teardown_runtime() ->
              timer:sleep(5)
      end.    
 
+inputs_gen_seq(Pipe, Max, _Timeout) ->
+    [riak_pipe:queue_work(Pipe, X) || X <- lists:seq(1, Max)],
+    riak_pipe:eoi(Pipe),
+    ok.
+
 setup_demo_test_() ->
     {foreach,
      prepare_runtime(),
@@ -328,6 +333,13 @@ compat_basic1_test_() ->
                  Spec = [{map, {modfun, riak_kv_mapreduce, map_object_value},
                           none, true}],
                  {ok, [4]} = riak_kv_mrc_pipe:mapred(Inputs, Spec)
+             end),
+          ?_test(
+             %% modfun for inputs generator
+             begin
+                 Inputs = {modfun, ?MODULE, inputs_gen_seq, 6},
+                 Spec = [{reduce, {qfun, ReduceSumFun},none,false}],
+                 {ok, [21]} = riak_kv_mrc_pipe:mapred(Inputs, Spec)
              end)
           ]
      end}.
