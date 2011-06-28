@@ -211,8 +211,6 @@ handle_command(?COVERAGE_VNODE_REQ{args=Args,
                State=#state{mod=Mod, 
                             modstate=ModState,
                             idx=Idx}) ->
-    %% CoverageArgs0 = [element(X, Req) || {_, X} <- Args],
-    %% CoverageArgs = CoverageArgs0 ++ [Idx, Mod, ModState]
     apply(CoverageMod, CoverageFun, Args ++ [Filter, Idx, Mod, ModState]),
     {noreply, State};
  
@@ -460,7 +458,7 @@ do_get_binary(BKey, Mod, ModState) ->
 
 
 %% @private
-list_buckets(Caller, ReqId, Filter, Idx, Mod, ModState) ->
+list_buckets(Caller, ReqId, Filter, Index, Mod, ModState) ->
     %% TODO: Decide if we want to continue to allow key filters
     %% to be used to filter the list of buckets. I think it is
     %% more useful to move all filtering out of the backend and 
@@ -469,27 +467,26 @@ list_buckets(Caller, ReqId, Filter, Idx, Mod, ModState) ->
     Buckets = Mod:list_bucket(ModState, '_'),
     case Filter of
         none ->
-            gen_fsm:send_event(Caller, {ReqId, {results, Idx, Buckets}});
+            gen_fsm:send_event(Caller, {ReqId, {final_results, {Index, node()}, Buckets}});
         _ ->
             FilteredBuckets = lists:foldl(Filter, [], Buckets),
-            gen_fsm:send_event(Caller, {ReqId, {results, Idx, FilteredBuckets}})
-    end,
-    gen_fsm:send_event(Caller, {ReqId, Idx, done}).
+            gen_fsm:send_event(Caller, {ReqId, {final_results, {Index, node()}, FilteredBuckets}})
+    end.
 
 %% @private
-list_keys(Caller, ReqId, Bucket, Filter, Idx, Mod, ModState) ->
+list_keys(Caller, ReqId, Bucket, Filter, Index, Mod, ModState) ->
     F = fun({_, _} = BKey, _Val, Acc) ->
-                process_keys(Caller, ReqId, Idx, Bucket, BKey, Acc);
+                process_keys(Caller, ReqId, Index, Bucket, Filter, BKey, Acc);
            (Key, _Val, Acc) when is_binary(Key) ->
                 %% Backend's fold gives us keys only, so add bucket.
-                process_keys(Caller, ReqId, Idx, Bucket, {Bucket, Key}, Acc)
+                process_keys(Caller, ReqId, Index, Bucket, Filter, {Bucket, Key}, Acc)
         end,
     TryFuns = [fun() ->
                        %% Difficult to coordinate external backend API, so
                        %% we'll live with it for the moment/eternity.
                        F2 = fun(Key, Acc) ->
-                            process_keys(Caller, ReqId, Idx, Bucket,
-                                         {Bucket, Key}, Acc)
+                            process_keys(Caller, ReqId, Index, Bucket,
+                                         Filter, {Bucket, Key}, Acc)
                             end,
                        Mod:fold_bucket_keys(ModState, Bucket, F2)
                end,
@@ -506,23 +503,13 @@ list_keys(Caller, ReqId, Bucket, Filter, Idx, Mod, ModState) ->
                            (_TryFun, Res) ->
                                 Res
                         end, try_next, TryFuns),
-    case Keys of
-        [] ->
-            ok;
-        _ when is_list(Keys) ->
-            case Filter of
-                none ->
-                    gen_fsm:send_event(Caller, {ReqId, {results, Idx, {Bucket, Keys}}});
-                _ ->
-                    case lists:foldl(Filter, [], Keys) of
-                        [] ->
-                            ok;
-                        FilteredKeys ->
-                            gen_fsm:send_event(Caller, {ReqId, {results, Idx, {Bucket, FilteredKeys}}})
-                    end
-            end
-    end,
-    gen_fsm:send_event(Caller, {ReqId, Idx, done}).
+    case Filter of
+        none ->
+            gen_fsm:send_event(Caller, {ReqId, {final_results, {Index, node()}, {Bucket, Keys}}});
+        _ ->
+            FilteredKeys = lists:foldl(Filter, [], Keys),
+            gen_fsm:send_event(Caller, {ReqId, {final_results, {Index, node()}, {Bucket, FilteredKeys}}})
+    end.
 
 %% @private
 do_delete(BKey, Mod, ModState) ->
@@ -534,18 +521,30 @@ do_delete(BKey, Mod, ModState) ->
     end.
 
 %% @private
-process_keys(Caller, ReqId, Idx, '_', {Bucket, _K}, Acc) ->
-    %% Bucket='_' means "list buckets" instead of "list keys"
-    buffer_key_result(Caller, ReqId, Idx, [Bucket|Acc]);
-process_keys(Caller, ReqId, Idx, Bucket, {Bucket, K}, Acc) ->
-    buffer_key_result(Caller, ReqId, Idx, [K|Acc]);
-process_keys(_Caller, _ReqId, _Idx, _Bucket, {_B, _K}, Acc) ->
+process_keys(Caller, ReqId, Index, Bucket, Filter, {Bucket, Key}, Acc) ->
+       buffer_key_result(Caller, ReqId, Bucket, Filter, Index, [Key | Acc]);
+process_keys(_Caller, _ReqId, _Index, _Bucket, _Filter, {_B, _K}, Acc) ->
     Acc.
 
-buffer_key_result(Caller, ReqId, Idx, Acc) ->
+buffer_key_result(Caller, ReqId, Bucket, Filter, Index, Acc) ->
+    %% Use arbitrary fixed buffer size of 100. Not 
+    %% sure there is a good 'why' for that number.
     case length(Acc) >= 100 of
         true ->
-            Caller ! {ReqId, {kl, Idx, Acc}},
+            %% Filter the buffer keys as needed
+            case Filter of
+                none ->
+                    gen_fsm:send_event(Caller, {ReqId, {results, {Index, node()}, {Bucket, Acc}}});    
+                _ ->
+                    FilteredKeys = lists:foldl(Filter, [], Acc),
+                    case FilteredKeys of
+                        [] ->
+                            ok;
+                        _ ->
+                            gen_fsm:send_event(Caller, {ReqId, {results, {Index, node()}, {Bucket, FilteredKeys}}})
+                    end
+            end,
+            %% Reset the buffer results are not duplicated
             [];
         false ->
             Acc
