@@ -139,6 +139,13 @@ inputs_gen_seq(Pipe, Max, _Timeout) ->
     riak_pipe:eoi(Pipe),
     ok.
 
+inputs_gen_bkeys_1(Pipe, {Bucket, Start, End}, _Timeout) ->
+    BKeys = [{Bucket, list_to_binary("bar"++integer_to_list(X))} ||
+                 X <- lists:seq(Start, End)],
+    [riak_pipe:queue_work(Pipe, BK) || BK <- BKeys],
+    riak_pipe:eoi(Pipe),
+    ok.
+
 setup_demo_test_() ->
     {foreach,
      prepare_runtime(),
@@ -340,6 +347,18 @@ compat_basic1_test_() ->
                  Inputs = {modfun, ?MODULE, inputs_gen_seq, 6},
                  Spec = [{reduce, {qfun, ReduceSumFun},none,false}],
                  {ok, [21]} = riak_kv_mrc_pipe:mapred(Inputs, Spec)
+             end),
+          ?_test(
+             %% modfun for inputs generator: make BKeys for conventional phases
+             begin
+                 Inputs = {modfun, ?MODULE, inputs_gen_bkeys_1,
+                           {IntsBucket, 1, 5}},
+                 Spec = [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                          none, false},
+                         {reduce, {modfun, riak_kv_mapreduce,
+                                   reduce_string_to_integer},none,false},
+                         {reduce, {qfun, ReduceSumFun},none,true}],
+                 {ok, [15]} = riak_kv_mrc_pipe:mapred(Inputs, Spec)
              end)
           ]
      end}.
