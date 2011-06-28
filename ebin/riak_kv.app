@@ -19,6 +19,7 @@
              riak_kv_delete,
              riak_kv_delete_sup,
              riak_kv_dets_backend,
+             riak_kv_eleveldb_backend,
              riak_kv_ets_backend,
              riak_kv_fs_backend,
              riak_kv_gb_trees_backend,
