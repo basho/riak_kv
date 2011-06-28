@@ -29,7 +29,7 @@
 
 join([NodeStr]) ->
     try
-        case riak:join(NodeStr) of
+        case riak_core:join(NodeStr) of
             ok ->
                 io:format("Sent join request to ~s\n", [NodeStr]),
                 ok;
@@ -58,22 +58,14 @@ remove([Node]) ->
 
 remove_node(Node) when is_atom(Node) ->
     try 
-        {ok, C} = riak:local_client(),
-        case C:remove_from_cluster(Node) of
-            {badrpc, RPCReason} ->
-                case RPCReason of
-                    {'EXIT', {badarg, [{erlang, hd, [[]]}|_]}} ->
-                        %% This is a workaround because
-                        %% riak_core_gossip:remove_from_cluster doesn't check if
-                        %% the result of subtracting the current node from the
-                        %% cluster member list results in the empty list. When
-                        %% that code gets refactored this can probably go away.
-                        io:format("Leave failed, this node is the only member.~n");
-                    _ ->
-                        log_to_riak_node("Leave failed ~p~n",
-                            [RPCReason]),
-                        io:format("Leave failed, see log for details~n")
-                end,
+        case catch(riak_core:remove_from_cluster(Node)) of
+            {'EXIT', {badarg, [{erlang, hd, [[]]}|_]}} ->
+                %% This is a workaround because
+                %% riak_core_gossip:remove_from_cluster doesn't check if
+                %% the result of subtracting the current node from the
+                %% cluster member list results in the empty list. When
+                %% that code gets refactored this can probably go away.
+                io:format("Leave failed, this node is the only member.~n"),
                 error;
             Res ->
                 io:format(" ~p\n", [Res])
@@ -138,7 +130,7 @@ reip([OldNode, NewNode]) ->
 -spec(ringready([]) -> ok | error).
 ringready([]) ->
     try
-        case riak_kv_status:ringready() of
+        case riak_core_status:ringready() of
             {ok, Nodes} ->
                 io:format("TRUE All nodes agree on the ring ~p\n", [Nodes]);
             {error, {different_owners, N1, N2}} ->
@@ -161,7 +153,7 @@ ringready([]) ->
 -spec(transfers([]) -> ok).
 transfers([]) ->
     try
-        {DownNodes, Pending} = riak_kv_status:transfers(),
+        {DownNodes, Pending} = riak_core_status:transfers(),
         case DownNodes of
             [] -> ok;
             _  -> io:format("Nodes ~p are currently down.\n", [DownNodes])
