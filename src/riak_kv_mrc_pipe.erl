@@ -20,6 +20,38 @@
 
 %% @doc Riak KV MapReduce / Riak Pipe Compatibility
 %%
+%% == About using `{modfun, Mod, Fun, Arg}' generator to a MapReduce job
+%%
+%% An uncommonly-used option for Riak KV MapReduce is the option to
+%% use a fourth method of specifying inputs to the beginning of the
+%% MapReduce workflow.  All four methods are:
+%%
+%% <ol>
+%% <li> Specify a bucket name (to emit all bucket/key pairs for that
+%%  bucket) </li>
+%% <li> Specify a bucket name and keyfilter spec, `{Bucket, KeyFilter}' </li>
+%% <li> Specify an explicit list of bucket/key pairs </li>
+%% <li> Specify `{modfun, Mod, Fun, Arg}' to generate the raw input data
+%% for the rest of the workflow </li>
+%% </ol>
+%%
+%% For the fourth method, "raw input data" means that the output of the
+%% function will be used as-is by the next item MapReduce workflow.
+%% If that next item is a map phase, then that item's input is
+%% expected to be a bucket/key pair.  If the next item is a reduce
+%% phase, then the input can be an arbitrary term.
+%%
+%% The type specification for a `{modfun, Mod, Fun, Arg}' generator
+%% function is:
+%% ```
+%% -spec generator_func(Pipe::riak_pipe:pipe(), Arg::term(), Timeout::integer() | 'infinity').
+%% '''
+%%
+%% This generator function is responsible for using
+%% `riak_pipe:queue_work()' to send any data to the pipe, and it is
+%% responsible for calling `riak_pipe:eoi()' to signal the end of
+%% input.
+%%
 %% == About reduce phase compatibility ==
 %%
 %% An Erlang reduce phase is defined by the tuple:
@@ -61,11 +93,17 @@
 
 -module(riak_kv_mrc_pipe).
 
+%% TODO: Stolen from old-style MapReduce interface, but is 60s a good idea?
+-define(DEFAULT_TIMEOUT, 60000).
+
 -export([
          mapred/2,
+         mapred/3,
          mapred_stream/1,
          send_inputs/2,
+         send_inputs/3,
          collect_outputs/2,
+         collect_outputs/3,
          mapred_plan/1,
          mapred_plan/2
         ]).
@@ -77,16 +115,19 @@
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
 
 %% ignoring ResultTransformer option
-%% TODO: Timeout
 %% TODO: Streaming output
+
 mapred(Inputs, Query) ->
+    mapred(Inputs, Query, ?DEFAULT_TIMEOUT).
+
+mapred(Inputs, Query, Timeout) ->
     {{ok, Pipe}, NumKeeps} = mapred_stream(Query),
-    case send_inputs(Pipe, Inputs) of
+    case send_inputs(Pipe, Inputs, Timeout) of
         ok ->
-            collect_outputs(Pipe, NumKeeps);
+            collect_outputs(Pipe, NumKeeps, Timeout);
         Error ->
             riak_pipe:eoi(Pipe),
-            {error, Error, collect_outputs(Pipe, NumKeeps)}
+            {error, Error, collect_outputs(Pipe, NumKeeps, Timeout)}
     end.
 
 mapred_stream(Query0) ->
@@ -285,21 +326,32 @@ count_keeps_in_query(Query) ->
                 end, 0, Query).
 
 %% TODO: dynamic inputs, filters
-send_inputs(Pipe, BucketKeyList) when is_list(BucketKeyList) ->
+send_inputs(Pipe, Arg) ->
+    send_inputs(Pipe, Arg, ?DEFAULT_TIMEOUT).
+
+send_inputs(Pipe, BucketKeyList, _Timeout) when is_list(BucketKeyList) ->
     [riak_pipe:queue_work(Pipe, BKey)
      || BKey <- BucketKeyList],
     riak_pipe:eoi(Pipe),
     ok;
-send_inputs(Pipe, Bucket) when is_binary(Bucket) ->
+send_inputs(Pipe, Bucket, _Timeout) when is_binary(Bucket) ->
     %% TODO: riak_kv_listkeys_pipe
     {ok, C} = riak:local_client(),
     {ok, ReqId} = C:stream_list_keys(Bucket),
     send_key_list(Pipe, Bucket, ReqId);
-send_inputs(Pipe, {Bucket, FilterExprs}) ->
+send_inputs(Pipe, {Bucket, FilterExprs}, _Timeout) ->
     {ok, C} = riak:local_client(),
     case C:stream_list_keys({Bucket, FilterExprs}) of
         {ok, ReqId} -> send_key_list(Pipe, Bucket, ReqId);
         Error       -> Error
+    end;
+send_inputs(Pipe, {modfun, Mod, Fun, Arg} = Modfun, Timeout) ->
+    try
+        Mod:Fun(Pipe, Arg, Timeout),
+        ok
+    catch
+        X:Y ->
+            {Modfun, X, Y, erlang:get_stacktrace()}
     end.
 
 send_key_list(Pipe, Bucket, ReqId) ->
@@ -314,7 +366,10 @@ send_key_list(Pipe, Bucket, ReqId) ->
     end.
 
 collect_outputs(Pipe, NumKeeps) ->
-    {Result, Outputs, []} = riak_pipe:collect_results(Pipe),
+    collect_outputs(Pipe, NumKeeps, ?DEFAULT_TIMEOUT).
+
+collect_outputs(Pipe, NumKeeps, Timeout) ->
+    {Result, Outputs, []} = riak_pipe:collect_results(Pipe, Timeout),
     %%TODO: Outputs needs post-processing?
     case Result of
         eoi ->
