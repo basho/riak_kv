@@ -23,18 +23,19 @@
 %% == About using `{modfun, Mod, Fun, Arg}' generator to a MapReduce job
 %%
 %% An uncommonly-used option for Riak KV MapReduce is the option to
-%% use third third method of specifying inputs to the beginning of the
-%% MapReduce workflow.  All three methods are:
+%% use a fourth method of specifying inputs to the beginning of the
+%% MapReduce workflow.  All four methods are:
 %%
 %% <ol>
 %% <li> Specify a bucket name (to emit all bucket/key pairs for that
-%%  bucket)</li>
+%%  bucket) </li>
+%% <li> Specify a bucket name and keyfilter spec, `{Bucket, KeyFilter}' </li>
 %% <li> Specify an explicit list of bucket/key pairs </li>
 %% <li> Specify `{modfun, Mod, Fun, Arg}' to generate the raw input data
-%% for the rest of the workflow
+%% for the rest of the workflow </li>
 %% </ol>
 %%
-%% For the third method, "raw input data" means that the output of the
+%% For the fourth method, "raw input data" means that the output of the
 %% function will be used as-is by the next item MapReduce workflow.
 %% If that next item is a map phase, then that item's input is
 %% expected to be a bucket/key pair.  If the next item is a reduce
