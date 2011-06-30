@@ -1,0 +1,187 @@
+%% -------------------------------------------------------------------
+%%
+%% riak_kv_wm_keylist - Webmachine resource for listing 
+%%                      the keys in a bucket.
+%%
+%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%%
+%% This file is provided to you under the Apache License,
+%% Version 2.0 (the "License"); you may not use this file
+%% except in compliance with the License.  You may obtain
+%% a copy of the License at
+%%
+%%   http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing,
+%% software distributed under the License is distributed on an
+%% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+%% KIND, either express or implied.  See the License for the
+%% specific language governing permissions and limitations
+%% under the License.
+%%
+%% -------------------------------------------------------------------
+
+%% @doc Resource for listing bucket keys over HTTP.
+%%
+%% Available operations:
+%%
+%% GET /buckets/Bucket/keys?keys=true|stream (NEW)
+%% GET /Prefix/Bucket?keys=true|stream (OLD)
+%%   Get the keys for a bucket. This is an expensive operation.
+%%
+%%   Keys are returned in JSON form: {"keys":[Key1,Key2,...]}.
+%%
+%%   If the "keys" param is set to "true", then keys are send back in
+%%   a single JSON structure. If set to "stream" then keys are
+%%   streamed in multiple JSON snippets. Otherwise, no keys are sent.
+%%   If the 'allow_props_param' context setting is 'true', then
+%%   the user can also specify a 'props=true' to include props in the 
+%%   JSON response. This provides backward compatibility with the 
+%%   old HTTP API.
+
+-module(riak_kv_wm_keylist).
+-author('Bryan Fink <bryan@basho.com>').
+
+%% webmachine resource exports
+-export([
+         init/1,
+         service_available/2,
+         content_types_provided/2,
+         encodings_provided/2,
+         produce_bucket_body/2
+        ]).
+
+-import(riak_kv_wm_utils, 
+        [
+         maybe_decode_uri/2,
+         get_riak_client/2,
+         get_client_id/1,
+         default_encodings/0,
+         add_link_head/5
+        ]).
+
+%% @type context() = term()
+-record(ctx, {bucket,       %% binary() - Bucket name (from uri)
+              client,       %% riak_client() - the store client
+              prefix,       %% string() - prefix for resource uris
+              riak,         %% local | {node(), atom()} - params for riak client
+              allow_props_param %% true if the user can also list props. (legacy API)
+             }).
+%% @type link() = {{Bucket::binary(), Key::binary()}, Tag::binary()}
+%% @type index_field() = {Key::string(), Value::string()}
+
+-include_lib("webmachine/include/webmachine.hrl").
+-include("riak_kv_wm_raw.hrl").
+
+%% @spec init(proplist()) -> {ok, context()}
+%% @doc Initialize this resource.  This function extracts the
+%%      'prefix' and 'riak' properties from the dispatch args.
+init(Props) ->
+    {ok, #ctx{prefix=proplists:get_value(prefix, Props),
+              riak=proplists:get_value(riak, Props),
+              allow_props_param=proplists:get_value(allow_props_param, Props)}}.
+
+%% @spec service_available(reqdata(), context()) ->
+%%          {boolean(), reqdata(), context()}
+%% @doc Determine whether or not a connection to Riak
+%%      can be established.  This function also takes this
+%%      opportunity to extract the 'bucket' and 'key' path
+%%      bindings from the dispatch, as well as any vtag
+%%      query parameter.
+service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
+    case get_riak_client(RiakProps, get_client_id(RD)) of
+        {ok, C} ->
+            {true,
+             RD,
+             Ctx#ctx{
+               client=C,
+               bucket=case wrq:path_info(bucket, RD) of
+                         undefined -> undefined;
+                         B -> list_to_binary(maybe_decode_uri(RD, B))
+                      end
+              }};
+        Error ->
+            {false,
+             wrq:set_resp_body(
+               io_lib:format("Unable to connect to Riak: ~p~n", [Error]),
+               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx}
+    end.
+
+
+
+%% @spec content_types_provided(reqdata(), context()) ->
+%%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
+%% @doc List the content types available for representing this resource.
+%%      "application/json" is the content-type for listing keys.
+content_types_provided(RD, Ctx) ->
+    %% bucket-level: JSON description only
+    {[{"application/json", produce_bucket_body}], RD, Ctx}.
+
+%% @spec encodings_provided(reqdata(), context()) ->
+%%          {[{Encoding::string(), Producer::function()}], reqdata(), context()}
+%% @doc List the encodings available for representing this resource.
+%%      "identity" and "gzip" are available for listing keys.
+encodings_provided(RD, Ctx) ->
+    %% identity and gzip for top-level and bucket-level requests
+    {default_encodings(), RD, Ctx}.
+
+%% @spec produce_bucket_body(reqdata(), context()) -> {binary(), reqdata(), context()}
+%% @doc Produce the JSON response to a bucket-level GET.
+%%      Includes the keys of the documents in the bucket unless the
+%%      "keys=false" query param is specified. If "keys=stream" query param
+%%      is specified, keys will be streamed back to the client in JSON chunks
+%%      like so: {"keys":[Key1, Key2,...]}.
+%%      A Link header will also be added to the response by this function
+%%      if the keys are included in the JSON object.  The Link header
+%%      will include links to all keys in the bucket, with the property
+%%      "rel=contained".
+produce_bucket_body(RD, Ctx) ->
+    Client = Ctx#ctx.client,
+    Bucket = Ctx#ctx.bucket,
+
+    IncludeBucketProps = (Ctx#ctx.allow_props_param == true) 
+        andalso (wrq:get_qs_value(?Q_PROPS, RD) /= ?Q_FALSE),
+    
+    BucketPropsJson = 
+        case IncludeBucketProps of
+            true ->
+                [riak_kv_wm_props:get_bucket_props_json(Client, Bucket)];
+            false ->
+                []
+        end,
+    
+    case wrq:get_qs_value(?Q_KEYS, RD) of
+        ?Q_STREAM ->
+            %% Start streaming the keys...
+            F = fun() ->
+                        {ok, ReqId} = Client:stream_list_keys(Bucket),
+                        stream_keys(ReqId)
+                end,
+            {{stream, {[], F}}, RD, Ctx};
+
+        ?Q_TRUE ->
+            %% Get the JSON response...
+            {ok, KeyList} = Client:list_keys(Bucket),
+            JsonKeys1 = [{?Q_KEYS, KeyList}] ++ BucketPropsJson,
+            JsonKeys2 = {struct, JsonKeys1},
+            JsonKeys3 = mochijson2:encode(JsonKeys2),
+
+            %% Create a new RD with link headers for each key...
+            F = fun(K, Acc) ->
+                        add_link_head(Bucket, K, "contained", Acc, Ctx#ctx.prefix)
+                end,
+            KeyListRD = lists:foldl(F, RD, KeyList),
+
+            {JsonKeys3, KeyListRD, Ctx};
+
+        _ -> 
+            {"", RD, Ctx}
+    end.
+
+stream_keys(ReqId) ->
+    receive
+        {ReqId, {keys, Keys}} ->
+            {mochijson2:encode({struct, [{<<"keys">>, Keys}]}), fun() -> stream_keys(ReqId) end};
+        {ReqId, done} -> {mochijson2:encode({struct, [{<<"keys">>, []}]}), done}
+    end.
