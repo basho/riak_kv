@@ -29,7 +29,6 @@
          get/2,
          put/3,
          delete/2,
-         list/1,
          list_bucket/2,
          fold/3,
          fold_keys/3,
@@ -90,27 +89,21 @@ get(State, BKey) ->
 
 put(State, BKey, Val) ->
     Key = sext:encode(BKey),
-    ok = eleveldb:put(State#state.ref, Key, Val,
-                       State#state.write_opts).
+    eleveldb:put(State#state.ref, Key, Val,
+                 State#state.write_opts).
 
 delete(State, BKey) ->
-    ok = eleveldb:delete(State#state.ref, sext:encode(BKey),
-                          State#state.write_opts).
+    eleveldb:delete(State#state.ref, sext:encode(BKey),
+                    State#state.write_opts).
 
 drop(State) ->
-    ok = eleveldb:destroy(State#state.data_root, []).
+    eleveldb:destroy(State#state.data_root, []).
 
 is_empty(State) ->
     eleveldb:is_empty(State#state.ref).
 
 callback(_State, _Ref, _Msg) ->
     ok.
-
-list(State) ->
-    %% Return a list of all keys in all buckets: [{bucket(), key()}]
-    eleveldb:fold_keys(State#state.ref,
-                        fun(BK, Acc) -> [sext:decode(BK) | Acc] end,
-                        [], State#state.fold_opts).
 
 list_bucket(State, {filter, Bucket, Fun}) ->
     %% Encode the initial bkey so we can start listing from that point
