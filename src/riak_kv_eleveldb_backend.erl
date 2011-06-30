@@ -29,6 +29,7 @@
          get/2,
          put/3,
          delete/2,
+         list/1,
          list_bucket/2,
          fold/3,
          fold_keys/3,
@@ -104,6 +105,12 @@ is_empty(State) ->
 
 callback(_State, _Ref, _Msg) ->
     ok.
+
+list(State) ->
+    %% Return a list of all keys in all buckets: [{bucket(), key()}]
+    eleveldb:fold_keys(State#state.ref,
+                        fun(BK, Acc) -> [sext:decode(BK) | Acc] end,
+                        [], State#state.fold_opts).
 
 list_bucket(State, {filter, Bucket, Fun}) ->
     %% Encode the initial bkey so we can start listing from that point
