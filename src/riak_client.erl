@@ -510,10 +510,12 @@ stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
                 {error, _Error} ->
                     {error, _Error};
                 {ok, FilterExprs} ->
-                    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Client}, Bucket, FilterExprs, [], Timeout, ClientType])
+                    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Client}, Bucket, FilterExprs, [], Timeout, ClientType]),
+                    {ok, ReqId}
             end;
         Bucket ->
-            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Client}, Bucket, none, [], Timeout, ClientType])
+            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Client}, Bucket, none, [], Timeout, ClientType]),
+            {ok, ReqId}
     end;
 %% @deprecated Only in place for backwards compatibility.
 stream_list_keys(Bucket, Timeout, _, Client) ->
