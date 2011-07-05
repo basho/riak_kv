@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_object: Webmachine resource for KV object level operations.
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -94,7 +94,6 @@
 %%   default rw-value of 2 will be used if none is specified.
 
 -module(riak_kv_wm_object).
--author('Bryan Fink <bryan@basho.com>').
 
 %% webmachine resource exports
 -export([

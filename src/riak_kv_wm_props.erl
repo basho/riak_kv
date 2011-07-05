@@ -2,7 +2,7 @@
 %%
 %% raw_http_resource: Webmachine resource for listing bucket properties.
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -46,7 +46,6 @@
 %%   a GET of the same resource.
 
 -module(riak_kv_wm_props).
--author('Bryan Fink <bryan@basho.com>').
 
 %% webmachine resource exports
 -export([

@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_buckets - Webmachine resource for listing buckets.
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -30,7 +30,6 @@
 %%   bucket list is expensive, so we require the "buckets=true" arg.
 
 -module(riak_kv_wm_buckets).
--author('Bryan Fink <bryan@basho.com>').
 
 %% webmachine resource exports
 -export([
