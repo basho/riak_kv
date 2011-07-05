@@ -381,7 +381,7 @@ extract_index_headers(RD) ->
                 KList = riak_kv_wm_utils:any_to_list(K),
                 case lists:prefix(?HEAD_INDEX_PREFIX, string:to_lower(KList)) of
                     true ->
-                        IndexField = element(2, lists:split(PrefixSize, KList)),
+                        IndexField = list_to_binary(element(2, lists:split(PrefixSize, KList))),
                         [{IndexField, V} | Acc];
                     false ->
                         Acc

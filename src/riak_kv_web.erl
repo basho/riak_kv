@@ -91,7 +91,10 @@ raw_dispatch(Name) ->
       riak_kv_wm_object, Props2},
 
      {["buckets", bucket, "keys", key, '*'],
-      riak_kv_wm_link_walker, Props2}
+      riak_kv_wm_link_walker, Props2},
+
+     {["buckets", bucket, "index", index, op, '*'],
+      riak_kv_wm_index, Props2}
     ].
 
 is_post(Req) ->
