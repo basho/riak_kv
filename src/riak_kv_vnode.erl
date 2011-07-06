@@ -42,7 +42,6 @@
 -export([init/1,
          terminate/2,
          handle_command/3,
-         handle_coverage/2,
          is_empty/1,
          delete/1,
          handle_handoff_command/3,
@@ -134,14 +133,6 @@ put(Preflist, BKey, Obj, ReqId, StartTime, Options, Sender)
 %% Do a put without sending any replies
 readrepair(Preflist, BKey, Obj, ReqId, StartTime, Options) ->
     put(Preflist, BKey, Obj, ReqId, StartTime, [rr | Options], ignore).
-
-%% list_keys(Preflist, ReqId, Caller, Bucket) ->
-%%   riak_core_vnode_master:coverage(?KV_LISTKEYS_REQ{
-%%                                     bucket=Bucket,
-%%                                     req_id=ReqId,
-%%                                     caller=Caller},
-%%                                  ignore,
-%%                                  riak_kv_vnode_master).
 
 fold(Preflist, Fun, Acc0) ->
     riak_core_vnode_master:sync_spawn_command(Preflist,
@@ -241,17 +232,6 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
                        State
                end,
     {noreply, NewState}.
-
-
-handle_coverage(?COVERAGE_REQ{args=Args,
-                              modfun={CoverageMod, CoverageFun}}=Req,
-               State=#state{mod=Mod, 
-                            modstate=ModState,
-                            idx=Idx}) ->
-    CoverageArgs0 = [element(X, Req) || {_, X} <- Args],
-    CoverageArgs = CoverageArgs0 ++ [Idx, Mod, ModState],
-    apply(CoverageMod, CoverageFun, CoverageArgs),
-    {noreply, State}.
 
 handle_handoff_command(Req=?FOLD_REQ{}, Sender, State) ->
     handle_command(Req, Sender, State);
@@ -532,8 +512,8 @@ buffer_key_result(Caller, ReqId, Bucket, Filter, Index, Acc) ->
     case length(Acc) >= 100 of
         true ->
             %% Filter the buffer keys as needed
-            case Filter of
-                none ->
+            case Filter of 
+               none ->
                     gen_fsm:send_event(Caller, {ReqId, {results, {Index, node()}, {Bucket, Acc}}});    
                 _ ->
                     FilteredKeys = lists:foldl(Filter, [], Acc),
@@ -703,39 +683,43 @@ list_buckets_test_() ->
 
 list_buckets_test_i(BackendMod) ->
     {S, B, _K} = backend_with_known_key(BackendMod),
-    Caller = new_result_listener(),
-    handle_command(?KV_LISTKEYS_REQ{bucket='_',
-                                    req_id=124,
-                                    caller=Caller},
-                   {raw, 456, self()}, S),
+    Caller = new_result_listener(buckets),
+    handle_command(?COVERAGE_VNODE_REQ{args=[Caller, 456],
+                                   module=riak_kv_vnode,
+                                   function=list_buckets,
+                                   filter=none},
+                   ignore, S),
     ?assertEqual({ok, [B]}, results_from_listener(Caller)),
     flush_msgs().
 
 filter_keys_test() ->
     {S, B, K} = backend_with_known_key(riak_kv_ets_backend),
 
-    Caller1 = new_result_listener(),
-    handle_command(?KV_LISTKEYS_REQ{
-                      bucket={filter,B,fun(_) -> true end},
-                      req_id=124,
-                      caller=Caller1},
-                   {raw, 456, self()}, S),
+    Caller1 = new_result_listener(keys),
+    handle_command(?COVERAGE_VNODE_REQ{args=[Caller1, 124, B],
+                                       filter=fun(Item, Acc) -> [Item | Acc] end,
+                                       module=riak_kv_vnode,
+                                       function=list_keys
+                                      },
+                   ignore, S),
     ?assertEqual({ok, [K]}, results_from_listener(Caller1)),
 
-    Caller2 = new_result_listener(),
-    handle_command(?KV_LISTKEYS_REQ{
-                      bucket={filter,B,fun(_) -> false end},
-                      req_id=125,
-                      caller=Caller2},
-                   {raw, 456, self()}, S),
+    Caller2 = new_result_listener(keys),
+    handle_command(?COVERAGE_VNODE_REQ{args=[Caller2, 125, B],
+                                       filter=fun(_, _) -> [] end,
+                                       module=riak_kv_vnode,
+                                       function=list_keys
+                                      },
+                   ignore, S),
     ?assertEqual({ok, []}, results_from_listener(Caller2)),
 
-    Caller3 = new_result_listener(),
-    handle_command(?KV_LISTKEYS_REQ{
-                      bucket={filter,<<"g">>,fun(_) -> true end},
-                      req_id=126,
-                      caller=Caller3},
-                   {raw, 456, self()}, S),
+    Caller3 = new_result_listener(keys),
+    handle_command(?COVERAGE_VNODE_REQ{args=[Caller3, 126, <<"g">>],
+                                       filter=fun(Item, Acc) -> [Item | Acc] end,
+                                       module=riak_kv_vnode,
+                                       function=list_keys
+                                      },
+                   ignore, S),
     ?assertEqual({ok, []}, results_from_listener(Caller3)),
 
     flush_msgs().
@@ -745,18 +729,31 @@ must_be_last_cleanup_stuff_test() ->
         {K, _V} <- application:get_all_env(riak_kv)],
     [application:set_env(riak_kv, K, V) || {K, V} <- erlang:get({?MODULE, kv})].
 
-new_result_listener() ->
-    spawn(fun result_listener/0).
+new_result_listener(Type) ->
+    case Type of
+        buckets ->
+            ResultFun = fun() -> result_listener_buckets([]) end;
+        keys ->
+            ResultFun = fun() -> result_listener_keys([]) end
+    end,
+    spawn(ResultFun).
 
-result_listener() ->
-    result_listener_keys([]).
+result_listener_buckets(Acc) ->
+    receive
+        {'$gen_event', {_,{results,_,Results}}} ->
+            result_listener_keys(Results ++ Acc);
+        {'$gen_event', {_,{final_results,_,Results}}} ->
+            result_listener_done(Results ++ Acc)
+    after 5000 ->
+            result_listener_done({timeout, Acc})
+    end.
 
 result_listener_keys(Acc) ->
     receive
-        {_,{kl,_,Keys}} ->
-            result_listener_keys(Keys++Acc);
-        {_, _, done} ->
-            result_listener_done(Acc)
+        {'$gen_event', {_,{results,_,{_Bucket, Results}}}} ->
+            result_listener_keys(Results ++ Acc);
+        {'$gen_event', {_,{final_results,_,{_Bucket, Results}}}} ->
+            result_listener_done(Results ++ Acc)
     after 5000 ->
             result_listener_done({timeout, Acc})
     end.
