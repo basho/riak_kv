@@ -40,16 +40,9 @@
          produce_bucket_list/2
         ]).
 
--import(riak_kv_wm_utils, 
-        [
-         get_riak_client/2,
-         get_client_id/1,
-         default_encodings/0,
-         add_bucket_link/3
-        ]).
-
 %% @type context() = term()
 -record(ctx, {
+          api_version,  %% integer() - Determine which version of the API to use.
           client,       %% riak_client() - the store client
           prefix,       %% string() - prefix for resource uris
           riak,         %% local | {node(), atom()} - params for riak client
@@ -64,6 +57,7 @@
 %%      'prefix' and 'riak' properties from the dispatch args.
 init(Props) ->
     {ok, #ctx{
+       api_version=proplists:get_value(api_version, Props),
        prefix=proplists:get_value(prefix, Props),
        riak=proplists:get_value(riak, Props)
       }}.
@@ -77,7 +71,7 @@ init(Props) ->
 %%      bindings from the dispatch, as well as any vtag
 %%      query parameter.
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
-    case get_riak_client(RiakProps, get_client_id(RD)) of
+    case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true, 
              RD,
@@ -107,21 +101,29 @@ content_types_provided(RD, Ctx) ->
 %% @doc List the encodings available for representing this resource.
 %%      "identity" and "gzip" are available for bucket lists.
 encodings_provided(RD, Ctx) ->
-    {default_encodings(), RD, Ctx}.
+    {riak_kv_wm_utils:default_encodings(), RD, Ctx}.
 
 
 %% @spec produce_bucket_list(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Produce the JSON response to a bucket-level GET.
 %%      Includes a list of known buckets if the "buckets=true" query
 %%      param is specified.
-produce_bucket_list(RD, Ctx=#ctx{client=C}) ->
+produce_bucket_list(RD, Ctx) ->
+    APIVersion = Ctx#ctx.api_version,
+    Client = Ctx#ctx.client,
+    Prefix = Ctx#ctx.prefix,
+
     {ListPart, LinkRD} =
         case wrq:get_qs_value(?Q_BUCKETS, RD) of
             ?Q_TRUE ->
-                {ok, Buckets} = C:list_buckets(),
-                {[{?JSON_BUCKETS, Buckets}],
-                 lists:foldl(fun(B, Acc) -> add_bucket_link(B,Acc,Ctx#ctx.prefix) end,
-                             RD, Buckets)};
+                %% Get the buckets.
+                {ok, Buckets} = Client:list_buckets(),
+
+                %% Add the bucket links.
+                Links1 = [{X, "contained"} || X <- Buckets],
+                Links2 = riak_kv_wm_utils:format_links(Links1, Prefix, APIVersion),
+                NewRD = wrq:merge_resp_headers(Links2, RD),
+                {[{?JSON_BUCKETS, Buckets}], NewRD};
             _ ->
                 {[], RD}
         end,

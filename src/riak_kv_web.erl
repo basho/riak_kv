@@ -52,45 +52,46 @@ raw_dispatch() ->
     end.
 
 raw_dispatch(Name) ->
-    Props = raw_props(Name),
+    Props1 = [{api_version, 1}|raw_props(Name)],
+    Props2 = [{api_version, 2}|raw_props(Name)],
     [
      %% OLD API
      {[Name],
-      riak_kv_wm_buckets, Props},
+      riak_kv_wm_buckets, Props1},
 
      {[Name, bucket], fun is_post/1,
-      riak_kv_wm_object, Props},
+      riak_kv_wm_object, Props1},
 
      {[Name, bucket], fun is_props/1,
-      riak_kv_wm_props, Props},
+      riak_kv_wm_props, Props1},
 
      {[Name, bucket], fun is_keylist/1,
-      riak_kv_wm_keylist, [{allow_props_param, true}|Props]},
+      riak_kv_wm_keylist, [{allow_props_param, true}|Props1]},
 
      {[Name, bucket, key],
-      riak_kv_wm_object, Props},
+      riak_kv_wm_object, Props1},
 
      {[Name, bucket, key, '*'],
-      riak_kv_wm_link_walker, Props},
+      riak_kv_wm_link_walker, Props1},
 
      %% NEW API
      {["buckets"],
-      riak_kv_wm_buckets, Props},
+      riak_kv_wm_buckets, Props2},
 
      {["buckets", bucket, "props"],
-      riak_kv_wm_props, Props},
+      riak_kv_wm_props, Props2},
 
      {["buckets", bucket, "keys"], fun is_post/1,
-      riak_kv_wm_object, Props},
+      riak_kv_wm_object, Props2},
 
      {["buckets", bucket, "keys"],
-      riak_kv_wm_keylist, Props},
+      riak_kv_wm_keylist, Props2},
 
      {["buckets", bucket, "keys", key],
-      riak_kv_wm_object, Props},
+      riak_kv_wm_object, Props2},
 
      {["buckets", bucket, "keys", key, '*'],
-      riak_kv_wm_link_walker, Props}
+      riak_kv_wm_link_walker, Props2}
     ].
 
 is_post(Req) ->

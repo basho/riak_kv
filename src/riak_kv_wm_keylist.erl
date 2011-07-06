@@ -50,17 +50,9 @@
          produce_bucket_body/2
         ]).
 
--import(riak_kv_wm_utils, 
-        [
-         maybe_decode_uri/2,
-         get_riak_client/2,
-         get_client_id/1,
-         default_encodings/0,
-         add_link_head/5
-        ]).
-
 %% @type context() = term()
--record(ctx, {bucket,       %% binary() - Bucket name (from uri)
+-record(ctx, {api_version,  %% integer() - Determine which version of the API to use.
+              bucket,       %% binary() - Bucket name (from uri)
               client,       %% riak_client() - the store client
               prefix,       %% string() - prefix for resource uris
               riak,         %% local | {node(), atom()} - params for riak client
@@ -76,7 +68,8 @@
 %% @doc Initialize this resource.  This function extracts the
 %%      'prefix' and 'riak' properties from the dispatch args.
 init(Props) ->
-    {ok, #ctx{prefix=proplists:get_value(prefix, Props),
+    {ok, #ctx{api_version=proplists:get_value(api_version, Props),
+              prefix=proplists:get_value(prefix, Props),
               riak=proplists:get_value(riak, Props),
               allow_props_param=proplists:get_value(allow_props_param, Props)}}.
 
@@ -88,7 +81,7 @@ init(Props) ->
 %%      bindings from the dispatch, as well as any vtag
 %%      query parameter.
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
-    case get_riak_client(RiakProps, get_client_id(RD)) of
+    case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true,
              RD,
@@ -96,7 +89,7 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                client=C,
                bucket=case wrq:path_info(bucket, RD) of
                          undefined -> undefined;
-                         B -> list_to_binary(maybe_decode_uri(RD, B))
+                         B -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, B))
                       end
               }};
         Error ->
@@ -123,7 +116,7 @@ content_types_provided(RD, Ctx) ->
 %%      "identity" and "gzip" are available for listing keys.
 encodings_provided(RD, Ctx) ->
     %% identity and gzip for top-level and bucket-level requests
-    {default_encodings(), RD, Ctx}.
+    {riak_kv_wm_utils:default_encodings(), RD, Ctx}.
 
 %% @spec produce_bucket_body(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Produce the JSON response to a bucket-level GET.
@@ -136,6 +129,8 @@ encodings_provided(RD, Ctx) ->
 %%      will include links to all keys in the bucket, with the property
 %%      "rel=contained".
 produce_bucket_body(RD, Ctx) ->
+    APIVersion = Ctx#ctx.api_version,
+    Prefix = Ctx#ctx.prefix,
     Client = Ctx#ctx.client,
     Bucket = Ctx#ctx.bucket,
 
@@ -167,13 +162,10 @@ produce_bucket_body(RD, Ctx) ->
             JsonKeys3 = mochijson2:encode(JsonKeys2),
 
             %% Create a new RD with link headers for each key...
-            F = fun(K, Acc) ->
-                        add_link_head(Bucket, K, "contained", Acc, Ctx#ctx.prefix)
-                end,
-            KeyListRD = lists:foldl(F, RD, KeyList),
-
-            {JsonKeys3, KeyListRD, Ctx};
-
+            Links1 = [{Bucket, X, "contained"} || X <- KeyList],
+            Links2 = riak_kv_wm_utils:format_links(Links1, Prefix, APIVersion),
+            NewRD = wrq:merge_resp_headers(Links2, RD),
+            {JsonKeys3, NewRD, Ctx};
         _ -> 
             {"", RD, Ctx}
     end.

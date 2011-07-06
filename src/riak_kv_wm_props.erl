@@ -61,15 +61,6 @@
          get_bucket_props_json/2
         ]).
 
--import(riak_kv_wm_utils, 
-        [
-         maybe_decode_uri/2,
-         get_riak_client/2,
-         get_client_id/1,
-         default_encodings/0,
-         any_to_bool/1
-        ]).
-
 %% @type context() = term()
 -record(ctx, {bucket,       %% binary() - Bucket name (from uri)
               client,       %% riak_client() - the store client
@@ -97,7 +88,7 @@ init(Props) ->
 %%      established.  This function also takes this opportunity to extract
 %%      the 'bucket' bindings from the dispatch.
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
-    case get_riak_client(RiakProps, get_client_id(RD)) of
+    case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true,
              RD,
@@ -106,7 +97,7 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                client=C,
                bucket=case wrq:path_info(bucket, RD) of
                          undefined -> undefined;
-                         B -> list_to_binary(maybe_decode_uri(RD, B))
+                         B -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, B))
                       end
               }};
         Error ->
@@ -174,7 +165,7 @@ content_types_provided(RD, Ctx) ->
 %% @doc List the encodings available for representing this resource.
 %%      "identity" and "gzip" are available for props requests.
 encodings_provided(RD, Ctx) ->
-    {default_encodings(), RD, Ctx}.
+    {riak_kv_wm_utils:default_encodings(), RD, Ctx}.
 
 %% @spec content_types_accepted(reqdata(), context()) ->
 %%          {[{ContentType::string(), Acceptor::atom()}],
@@ -281,6 +272,6 @@ erlify_bucket_prop({?JSON_CHASH, {struct, Props}}) ->
                       binary_to_list(
                         proplists:get_value(?JSON_FUN, Props)))}};
 erlify_bucket_prop({?JSON_ALLOW_MULT, Value}) ->
-    {allow_mult, any_to_bool(Value)};
+    {allow_mult, riak_kv_wm_utils:any_to_bool(Value)};
 erlify_bucket_prop({Prop, Value}) ->
     {list_to_existing_atom(binary_to_list(Prop)), Value}.

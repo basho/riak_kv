@@ -120,23 +120,9 @@
          delete_resource/2
         ]).
 
--import(riak_kv_wm_utils, 
-        [
-         maybe_decode_uri/2,
-         get_riak_client/2,
-         get_client_id/1,
-         default_encodings/0,
-         add_container_link/3,
-         add_link_head/5,
-         format_link/2,
-         format_link/4,
-         encode_value/1,
-         accept_value/2,
-         any_to_list/1
-        ]).
-
 %% @type context() = term()
--record(ctx, {bucket,       %% binary() - Bucket name (from uri)
+-record(ctx, {api_version,  %% integer() - Determine which version of the API to use.
+              bucket,       %% binary() - Bucket name (from uri)
               key,          %% binary() - Key (from uri)
               client,       %% riak_client() - the store client
               r,            %% integer() - r-value for reads
@@ -166,7 +152,8 @@
 %% @doc Initialize this resource.  This function extracts the
 %%      'prefix' and 'riak' properties from the dispatch args.
 init(Props) ->
-    {ok, #ctx{prefix=proplists:get_value(prefix, Props),
+    {ok, #ctx{api_version=proplists:get_value(api_version, Props),
+              prefix=proplists:get_value(prefix, Props),
               riak=proplists:get_value(riak, Props)}}.
 
 %% @spec service_available(reqdata(), context()) ->
@@ -177,7 +164,7 @@ init(Props) ->
 %%      bindings from the dispatch, as well as any vtag
 %%      query parameter.
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
-    case get_riak_client(RiakProps, get_client_id(RD)) of
+    case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true,
              RD,
@@ -186,11 +173,11 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                client=C,
                bucket=case wrq:path_info(bucket, RD) of
                          undefined -> undefined;
-                         B -> list_to_binary(maybe_decode_uri(RD, B))
+                         B -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, B))
                       end,
                key=case wrq:path_info(key, RD) of
                        undefined -> undefined;
-                       K -> list_to_binary(maybe_decode_uri(RD, K))
+                       K -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, K))
                    end,
                vtag=wrq:get_qs_value(?Q_VTAG, RD)
               }};
@@ -249,15 +236,10 @@ malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'POST'
             end
     end;
 malformed_request(RD, Ctx) ->
-    {ResBool, ResRD, ResCtx} = case malformed_rw_params(RD, Ctx) of
-        Result={true, _, _} -> Result;
-        {false, RWRD, RWCtx} ->
-            malformed_link_headers(RWRD, RWCtx)
-    end,
-    case ((ResBool == true) orelse (ResCtx#ctx.key == undefined)) of
-        true ->
-            {ResBool, ResRD, ResCtx};
-        false ->
+    case malformed_rw_params(RD, Ctx) of
+        Result = {true, _, _} ->
+            Result;
+        {false, ResRD, ResCtx} ->
             DocCtx = ensure_doc(ResCtx),
             case DocCtx#ctx.doc of
                 {error, notfound} ->
@@ -396,14 +378,22 @@ malformed_link_headers(RD, Ctx) ->
     case catch get_link_heads(RD, Ctx) of
         Links when is_list(Links) ->
             {false, RD, Ctx#ctx{links=Links}};
-        _Error ->
+        _Error when Ctx#ctx.api_version == 1->
             {true,
              wrq:append_to_resp_body(
                io_lib:format("Invalid Link header. Links must be of the form~n"
                              "</~s/BUCKET/KEY>; riaktag=\"TAG\"~n",
                              [Ctx#ctx.prefix]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        _Error when Ctx#ctx.api_version == 2 ->
+            {true,
+             wrq:append_to_resp_body(
+               io_lib:format("Invalid Link header. Links must be of the form~n"
+                             "</buckets/BUCKET/keys/KEY>; riaktag=\"TAG\"~n", []),
+               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx}
+
     end.
 
 %% @spec malformed_index_headers(reqdata(), context()) ->
@@ -437,7 +427,7 @@ malformed_index_headers(RD, Ctx) ->
 extract_index_headers(RD) ->
     PrefixSize = length(?HEAD_INDEX_PREFIX),
     F = fun({K,V}, Acc) ->
-                KList = any_to_list(K),
+                KList = riak_kv_wm_utils:any_to_list(K),
                 case lists:prefix(?HEAD_INDEX_PREFIX, string:to_lower(KList)) of
                     true ->
                         IndexField = element(2, lists:split(PrefixSize, KList)),
@@ -518,13 +508,13 @@ encodings_provided(RD, Ctx0) ->
                         {ok, Enc} ->
                             {[{Enc, fun(X) -> X end}], RD, DocCtx};
                         error ->
-                            {default_encodings(), RD, DocCtx}
+                            {riak_kv_wm_utils:default_encodings(), RD, DocCtx}
                     end;
                 multiple_choices ->
-                    {default_encodings(), RD, DocCtx}
+                    {riak_kv_wm_utils:default_encodings(), RD, DocCtx}
             end;
         {error, _} ->
-            {default_encodings(), RD, DocCtx}
+            {riak_kv_wm_utils:default_encodings(), RD, DocCtx}
     end.
 
 %% @spec content_types_accepted(reqdata(), context()) ->
@@ -638,7 +628,7 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L, index_fields=IF
     UserMetaMD = dict:store(?MD_USERMETA, UserMeta, LinkMD),
     IndexMD = dict:store(?MD_INDEX, IF, UserMetaMD),
     MDDoc = riak_object:update_metadata(VclockDoc, IndexMD),
-    Doc = riak_object:update_value(MDDoc, accept_value(CType, wrq:req_body(RD))),
+    Doc = riak_object:update_value(MDDoc, riak_kv_wm_utils:accept_value(CType, wrq:req_body(RD))),
     Options = case wrq:get_qs_value(?Q_RETURNBODY, RD) of ?Q_TRUE -> [returnbody]; _ -> [] end,
     case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
                 Options]) of
@@ -712,7 +702,7 @@ extract_user_meta(RD) ->
     lists:filter(fun({K,_V}) ->
                     lists:prefix(
                         ?HEAD_USERMETA_PREFIX,
-                        string:to_lower(any_to_list(K)))
+                        string:to_lower(riak_kv_wm_utils:any_to_list(K)))
                 end,
                 mochiweb_headers:to_list(wrq:req_headers(RD))).
 
@@ -747,18 +737,20 @@ multiple_choices(RD, Ctx) ->
 %%      property "rel=container".  The rest of the links will be
 %%      constructed from the links of the document.
 produce_doc_body(RD, Ctx) ->
+    Prefix = Ctx#ctx.prefix, 
+    Bucket = Ctx#ctx.bucket,
+    APIVersion = Ctx#ctx.api_version,
     case select_doc(Ctx) of
         {MD, Doc} ->
-            Links = case dict:find(?MD_LINKS, MD) of
+            %% Add links to response...
+            Links1 = case dict:find(?MD_LINKS, MD) of
                         {ok, L} -> L;
                         error -> []
                     end,
-            LinkRD = add_container_link(
-                       lists:foldl(fun({{B,K},T},Acc) ->
-                                           add_link_head(B,K,T,Acc,Ctx#ctx.prefix)
-                                   end,
-                                   RD, Links),
-                       Ctx#ctx.prefix, Ctx#ctx.bucket),
+            Links2 = riak_kv_wm_utils:format_links([{Bucket, "up"}|Links1], Prefix, APIVersion),
+            LinkRD = wrq:merge_resp_headers(Links2, RD),
+            
+            %% Add user metadata to response...
             UserMetaRD = case dict:find(?MD_USERMETA, MD) of
                         {ok, UserMeta} ->
                             lists:foldl(fun({K,V},Acc) ->
@@ -767,6 +759,8 @@ produce_doc_body(RD, Ctx) ->
                                         LinkRD, UserMeta);
                         error -> LinkRD
                     end,
+
+            %% Add index metadata to response...
             IndexRD = case dict:find(?MD_INDEX, MD) of
                           {ok, IndexMeta} ->
                               lists:foldl(fun({K,V}, Acc) ->
@@ -775,7 +769,7 @@ produce_doc_body(RD, Ctx) ->
                                           UserMetaRD, IndexMeta);
                           error -> UserMetaRD
                       end,
-            {encode_value(Doc), encode_vclock_header(IndexRD, Ctx), Ctx};
+            {riak_kv_wm_utils:encode_value(Doc), encode_vclock_header(IndexRD, Ctx), Ctx};
         multiple_choices ->
             throw({unexpected_code_path, ?MODULE, produce_doc_body, multiple_choices})
     end.
@@ -799,65 +793,16 @@ produce_sibling_message_body(RD, Ctx=#ctx{doc={ok, Doc}}) ->
 %%      values (siblings), each sibling being one part of the larger
 %%      document.
 produce_multipart_body(RD, Ctx=#ctx{doc={ok, Doc}, bucket=B, prefix=P}) ->
+    APIVersion = Ctx#ctx.api_version,
     Boundary = riak_core_util:unique_id_62(),
     {[[["\r\n--",Boundary,"\r\n",
-        multipart_encode_body(P, B, Content)]
+        riak_kv_wm_utils:multipart_encode_body(P, B, Content, APIVersion)]
        || Content <- riak_object:get_contents(Doc)],
       "\r\n--",Boundary,"--\r\n"],
      wrq:set_resp_header(?HEAD_CTYPE,
                          "multipart/mixed; boundary="++Boundary,
                          encode_vclock_header(RD, Ctx)),
      Ctx}.
-
-%% @spec multipart_encode_body(string(), binary(), {dict(), binary()}) -> iolist()
-%% @doc Produce one part of a multipart body, representing one sibling
-%%      of a multi-valued document.
-multipart_encode_body(Prefix, Bucket, {MD, V}) ->
-    [{LHead, Links}] =
-        mochiweb_headers:to_list(
-          mochiweb_headers:make(
-            [{?HEAD_LINK, format_link(Prefix,Bucket)}|
-             [{?HEAD_LINK, format_link(Prefix,B,K,T)}
-              || {{B,K},T} <- case dict:find(?MD_LINKS, MD) of
-                                  {ok, Ls} -> Ls;
-                                  error -> []
-                              end]])),
-    [?HEAD_CTYPE, ": ",get_ctype(MD,V),
-     case dict:find(?MD_CHARSET, MD) of
-         {ok, CS} -> ["; charset=",CS];
-         error -> []
-     end,
-     "\r\n",
-     case dict:find(?MD_ENCODING, MD) of
-         {ok, Enc} -> [?HEAD_ENCODING,": ",Enc,"\r\n"];
-         error -> []
-     end,
-     LHead,": ",Links,"\r\n",
-     "Etag: ",dict:fetch(?MD_VTAG, MD),"\r\n",
-     "Last-Modified: ",
-     case dict:fetch(?MD_LASTMOD, MD) of
-         Now={_,_,_} ->
-             httpd_util:rfc1123_date(
-               calendar:now_to_local_time(Now));
-         Rfc1123 when is_list(Rfc1123) ->
-             Rfc1123
-     end,
-     "\r\n",
-     case dict:find(?MD_USERMETA, MD) of
-         {ok, M} ->
-            lists:foldl(fun({Hdr,Val},Acc) ->
-                            [Acc|[Hdr,": ",Val,"\r\n"]]
-                        end,
-                        [], M);
-         error -> []
-     end,
-     "\r\n",
-     case dict:find(?MD_INDEX, MD) of
-         {ok, IF} ->
-             [[?HEAD_INDEX_PREFIX,Key,": ",Val,"\r\n"] || {Key,Val} <- IF];
-         error -> []
-     end,
-     "\r\n",encode_value(V)].
 
 
 %% @spec select_doc(context()) -> {metadata(), value()}|multiple_choices
@@ -988,23 +933,68 @@ last_modified(RD, Ctx) ->
 %% @doc Extract the list of links from the Link request header.
 %%      This function will die if an invalid link header format
 %%      is found.
-get_link_heads(RD, #ctx{prefix=Prefix, bucket=B}) ->
-    case wrq:get_req_header(?HEAD_LINK, RD) of
-        undefined -> [];
-        Heads ->
-            BucketLink = lists:flatten(format_link(Prefix, B)),
-            {ok, Re} = re:compile("</([^/]+)/([^/]+)/([^/]+)>; ?riaktag=\"([^\"]+)\""),
-            lists:map(
-              fun(L) ->
-                      {match,[InPrefix,Bucket,Key,Tag]} =
-                          re:run(L, Re, [{capture,[1,2,3,4],binary}]),
-                      Prefix = binary_to_list(InPrefix),
-                      {{list_to_binary(mochiweb_util:unquote(Bucket)),
-                        list_to_binary(mochiweb_util:unquote(Key))},
-                       list_to_binary(mochiweb_util:unquote(Tag))}
-              end,
-              lists:delete(BucketLink, [string:strip(T) || T<- string:tokens(Heads, ",")]))
+get_link_heads(RD, Ctx) ->
+    APIVersion = Ctx#ctx.api_version,
+    Prefix = Ctx#ctx.prefix,
+    Bucket = Ctx#ctx.bucket,
+
+    %% Get a list of link headers...
+    LinkHeaders1 = 
+        case wrq:get_req_header(?HEAD_LINK, RD) of
+            undefined -> [];
+            Heads -> string:tokens(Heads, ",")
+        end,
+
+    %% Decode the link headers. Throw an exception if we can't
+    %% properly parse any of the headers...
+    {BucketLinks, KeyLinks} = 
+        case APIVersion of
+            1 ->
+                {ok, BucketRegex} = re:compile("</" ++ Prefix ++ "/([^/]+)>; ?rel=\"([^\"]+)\""),
+                {ok, KeyRegex} = re:compile("</" ++ Prefix ++ "/([^/]+)/([^/]+)>; ?riaktag=\"([^\"]+)\""),
+                extract_links(LinkHeaders1, BucketRegex, KeyRegex);
+            2 ->
+                {ok, BucketRegex} = re:compile("</buckets/([^/]+)>; ?rel=\"([^\"]+)\""),
+                {ok, KeyRegex} = re:compile("</buckets/([^/]+)/keys/([^/]+)>; ?riaktag=\"([^\"]+)\""),
+                extract_links(LinkHeaders1, BucketRegex, KeyRegex)
+        end,
+
+    %% Validate that the only bucket header is pointing to the parent
+    %% bucket...
+    IsValid = (BucketLinks == []) orelse (BucketLinks == [{Bucket, <<"up">>}]),
+    case IsValid of
+        true -> 
+            KeyLinks;
+        false ->
+            throw({invalid_link_headers, LinkHeaders1})
     end.
+        
+%% Run each LinkHeader string() through the BucketRegex and
+%% KeyRegex. Return {BucketLinks, KeyLinks}.
+extract_links(LinkHeaders, BucketRegex, KeyRegex) ->
+    %% Run each regex against each string...
+    extract_links_1(LinkHeaders, BucketRegex, KeyRegex, [], []).
+extract_links_1([LinkHeader|Rest], BucketRegex, KeyRegex, BucketAcc, KeyAcc) ->
+    case re:run(LinkHeader, BucketRegex, [{capture, all_but_first, list}]) of
+        {match, [Bucket, Tag]} ->
+            Bucket1 = list_to_binary(mochiweb_util:unquote(Bucket)),
+            Tag1 = list_to_binary(mochiweb_util:unquote(Tag)),
+            NewBucketAcc = [{Bucket1, Tag1}|BucketAcc],
+            extract_links_1(Rest, BucketRegex, KeyRegex, NewBucketAcc, KeyAcc);
+        nomatch ->
+            case re:run(LinkHeader, KeyRegex, [{capture, all_but_first, list}]) of
+                {match, [Bucket, Key, Tag]} ->
+                    Bucket1 = list_to_binary(mochiweb_util:unquote(Bucket)),
+                    Key1 = list_to_binary(mochiweb_util:unquote(Key)),
+                    Tag1 = list_to_binary(mochiweb_util:unquote(Tag)),
+                    NewKeyAcc = [{{Bucket1, Key1}, Tag1}|KeyAcc],
+                    extract_links_1(Rest, BucketRegex, KeyRegex, BucketAcc, NewKeyAcc);
+                nomatch ->
+                    throw({invalid_link_header, LinkHeader})
+            end
+    end;
+extract_links_1([], _BucketRegex, _KeyRegex, BucketAcc, KeyAcc) ->
+    {BucketAcc, KeyAcc}.
 
 %% @spec get_ctype(dict(), term()) -> string()
 %% @doc Work out the content type for this object - use the metadata if provided

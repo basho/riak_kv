@@ -28,15 +28,15 @@
          get_riak_client/2,
          get_client_id/1,
          default_encodings/0,
-         multipart_encode_body/3,
+         multipart_encode_body/4,
          vclock_header/1,
          encode_vclock/1,
-         add_container_link/3,
-         add_bucket_link/3,
-         add_link_head/5,
-         format_link/2,
-         format_link/3,
-         format_link/4,
+         format_links/3,
+         %% add_container_link/3,
+         %% add_bucket_link/3,
+         %% add_link_head/5,
+         %% format_link/3,
+         %% format_link/4,
          encode_value/1,
          accept_value/2,
          any_to_list/1,
@@ -96,16 +96,15 @@ default_encodings() ->
 %% @spec multipart_encode_body(string(), binary(), {dict(), binary()}) -> iolist()
 %% @doc Produce one part of a multipart body, representing one sibling
 %%      of a multi-valued document.
-multipart_encode_body(Prefix, Bucket, {MD, V}) ->
-    [{LHead, Links}] =
-        mochiweb_headers:to_list(
-          mochiweb_headers:make(
-            [{?HEAD_LINK, format_link(Prefix,Bucket)}|
-             [{?HEAD_LINK, format_link(Prefix,B,K,T)}
-              || {{B,K},T} <- case dict:find(?MD_LINKS, MD) of
-                                  {ok, Ls} -> Ls;
-                                  error -> []
-                              end]])),
+multipart_encode_body(Prefix, Bucket, {MD, V}, APIVersion) ->
+    Links1 = case dict:find(?MD_LINKS, MD) of
+                 {ok, Ls} -> Ls;
+                 error -> []
+             end,
+    Links2 = format_links([{Bucket, "up"}|Links1], Prefix, APIVersion),
+    Links3 = mochiweb_headers:make(Links2),
+    [{?HEAD_LINK, Links4}] = mochiweb_headers:to_list(Links3),
+
     [?HEAD_CTYPE, ": ",get_ctype(MD,V),
      case dict:find(?MD_CHARSET, MD) of
          {ok, CS} -> ["; charset=",CS];
@@ -116,7 +115,7 @@ multipart_encode_body(Prefix, Bucket, {MD, V}) ->
          {ok, Enc} -> [?HEAD_ENCODING,": ",Enc,"\r\n"];
          error -> []
      end,
-     LHead,": ",Links,"\r\n",
+     ?HEAD_LINK,": ",Links4,"\r\n",
      "Etag: ",dict:fetch(?MD_VTAG, MD),"\r\n",
      "Last-Modified: ",
      case dict:fetch(?MD_LASTMOD, MD) of
@@ -135,13 +134,13 @@ multipart_encode_body(Prefix, Bucket, {MD, V}) ->
                         [], M);
          error -> []
      end,
-     "\r\n",
      case dict:find(?MD_INDEX, MD) of
          {ok, IF} ->
              [[?HEAD_INDEX_PREFIX,Key,": ",Val,"\r\n"] || {Key,Val} <- IF];
          error -> []
      end,
-     "\r\n",encode_value(V)].
+     "\r\n",
+     encode_value(V)].
 
 %% @spec vclock_header(riak_object()) -> {Name::string(), Value::string()}
 %% @doc Transform the Erlang representation of the document's vclock
@@ -153,47 +152,91 @@ vclock_header(Doc) ->
 encode_vclock(VClock) ->
     binary_to_list(base64:encode(zlib:zip(term_to_binary(VClock)))).
 
-%% @spec add_container_link(reqdata(), context()) -> reqdata()
-%% @doc Add the Link header specifying the containing bucket of
-%%      the document to the response.
-add_container_link(RD, Prefix, Bucket) -> %% #ctx{prefix=Prefix, bucket=Bucket}) ->
-    Val = format_link(Prefix, Bucket),
-    wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
+format_links(Links, Prefix, APIVersion) ->
+    format_links(Links, Prefix, APIVersion, []).
+format_links([{{Bucket,Key}, Tag}|Rest], Prefix, APIVersion, Acc) ->
+    format_links([{Bucket, Key, Tag}|Rest], Prefix, APIVersion, Acc);
+format_links([{Bucket, Tag}|Rest], Prefix, APIVersion, Acc) ->
+    Bucket1 = mochiweb_util:quote_plus(Bucket),
+    Tag1 = mochiweb_util:quote_plus(Tag),
+    Val = 
+        case APIVersion of
+            1 ->
+                io_lib:format("</~s/~s>; rel=\"~s\"",
+                              [Prefix, Bucket1, Tag1]);
+            2 -> 
+                io_lib:format("</buckets/~s>; rel=\"~s\"",
+                              [Bucket1, Tag1])
+        end,
+    format_links(Rest, Prefix, APIVersion, [{?HEAD_LINK, Val}|Acc]);
+format_links([{Bucket, Key, Tag}|Rest], Prefix, APIVersion, Acc) ->
+    Bucket1 = mochiweb_util:quote_plus(Bucket),
+    Key1 = mochiweb_util:quote_plus(Key),
+    Tag1 = mochiweb_util:quote_plus(Tag),
+    Val = 
+        case APIVersion of 
+            1 ->
+                io_lib:format("</~s/~s/~s>; riaktag=\"~s\"",
+                              [Prefix, Bucket1, Key1, Tag1]);
+            2 ->
+                io_lib:format("</buckets/~s/keys/~s>; riaktag=\"~s\"",
+                          [Bucket1, Key1, Tag1])
+        end,
+    format_links(Rest, Prefix, APIVersion, [{?HEAD_LINK, Val}|Acc]);
+format_links([], _Prefix, _APIVersion, Acc) ->
+    Acc.
 
-%% @spec add_bucket_link(binary(), reqdata(), context()) -> reqdata()
-%% @doc Add the Link header pointing to a bucket
-add_bucket_link(Bucket, RD, Prefix) -> %% #ctx{prefix=Prefix}) ->
-    Val = format_link(Prefix, Bucket, "contained"),
-    wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
+%% %% @spec add_container_link(reqdata(), context()) -> reqdata()
+%% %% @doc Add the Link header specifying the containing bucket of
+%% %%      the document to the response.
+%% add_container_link(RD, Prefix, Bucket) ->
+%%     Val = format_link(Prefix, Bucket),
+%%      wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
 
-%% @spec add_link_head(binary(), binary(), binary(), reqdata(), context()) ->
-%%          reqdata()
-%% @doc Add a Link header specifying the given Bucket and Key
-%%      with the given Tag to the response.
-add_link_head(Bucket, Key, Tag, RD, Prefix) -> %% #ctx{prefix=Prefix}) ->
-    Val = format_link(Prefix, Bucket, Key, Tag),
-    wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
+%% %% @spec add_bucket_link(binary(), reqdata(), context()) -> reqdata()
+%% %% @doc Add the Link header pointing to a bucket
+%% add_bucket_link(Bucket, RD, Prefix) ->
+%%     Val = format_link(Prefix, Bucket, "contained"),
+%%     wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
 
-%% @spec format_link(string(), binary()) -> string()
-%% @doc Produce the standard link header from an object up to its bucket.
-format_link(Prefix, Bucket) ->
-    format_link(Prefix, Bucket, "up").
+%% %% @spec add_link_head(binary(), binary(), binary(), reqdata(), context()) ->
+%% %%          reqdata()
+%% %% @doc Add a Link header specifying the given Bucket and Key
+%% %%      with the given Tag to the response.
+%% add_link_head(Bucket, Key, Tag, RD, Prefix) ->
+%%     Val = format_link(Prefix, Bucket, Key, Tag),
+%%     wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
 
-%% @spec format_link(string(), binary(), string()) -> string()
-%% @doc Format a Link header to a bucket.
-format_link(Prefix, Bucket, Tag) ->
-    io_lib:format("</~s/~s>; rel=\"~s\"",
-                  [Prefix,
-                   mochiweb_util:quote_plus(Bucket),
-                   Tag]).
+%% %% @spec format_link(string(), binary(), string()) -> string()
+%% %% @doc Format a Link header to a bucket.
+%% format_link(Prefix, Bucket, Tag, APIVersion) ->
+%%     Bucket1 = mochiweb_util:quote_plus(Bucket),
+%%     Tag1 = mochiweb_util:quote_plus(Tag),
+    
+%%     case APIVersion of
+%%         1 ->
+%%             io_lib:format("</~s/~s>; rel=\"~s\"",
+%%                           [Prefix, Bucket1, Tag1]);
+%%         2 -> 
+%%             io_lib:format("</buckets/~s>; rel=\"~s\"",
+%%                           [Bucket, Tag])
+%%     end.
 
-%% @spec format_link(string(), binary(), binary(), binary()) -> string()
-%% @doc Format a Link header to another document.
-format_link(Prefix, Bucket, Key, Tag) ->
-    io_lib:format("</~s/~s/~s>; riaktag=\"~s\"",
-                  [Prefix|
-                   [mochiweb_util:quote_plus(E) ||
-                       E <- [Bucket, Key, Tag] ]]).
+%% %% @spec format_link(string(), binary(), binary(), binary()) -> string()
+%% %% @doc Format a Link header to another document.
+%% format_link(Prefix, Bucket, Key, Tag, APIVersion) ->
+%%     Bucket1 = mochiweb_util:quote_plus(Bucket),
+%%     Key1 = mochiweb_util:quote_plus(Key),
+%%     Tag1 = mochiweb_util:quote_plus(Tag),
+
+%%     case APIVersion of 
+%%         1 ->
+%%             io_lib:format("</~s/~s/~s>; riaktag=\"~s\"",
+%%                           [Prefix, Bucket, Key, Tag]);
+%%         2 ->
+%%             io_lib:format("</buckets/~s/keys/~s>; riaktag=\"~s\"",
+%%                           [Bucket, Key, Tag])
+%%     end.
 
 %% @spec get_ctype(dict(), term()) -> string()
 %% @doc Work out the content type for this object - use the metadata if provided

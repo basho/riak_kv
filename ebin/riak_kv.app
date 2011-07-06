@@ -73,7 +73,6 @@
              riak_kv_wm_mapred,
              riak_kv_wm_ping,
              riak_kv_wm_props,
-             riak_kv_wm_raw,
              riak_kv_wm_stats,
              riak_kv_wm_utils,
              riak_kv_encoding_migrate,
