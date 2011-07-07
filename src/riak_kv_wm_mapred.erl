@@ -148,10 +148,10 @@ pipe_mapred(RD,
                     pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps)
             end;
         {error, {bad_filter, _}} ->
-            riak_kv_pipe:eoi(Pipe),
+            riak_pipe:eoi(Pipe),
             {{halt, 500}, send_error({error, bad_mapred_filter}, RD), State};
         Error ->
-            riak_kv_pipe:eoi(Pipe),
+            riak_pipe:eoi(Pipe),
             {{halt, 500}, send_error(Error, RD), State}
     end.
 
