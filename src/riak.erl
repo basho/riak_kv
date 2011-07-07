@@ -136,29 +136,8 @@ client_test(Node) ->
             error
     end.
 
-    
-%%
-%% @doc Join the ring found on the specified remote node
-%%
-join(NodeStr) when is_list(NodeStr) ->
-    join(riak_core_util:str_to_node(NodeStr));
-join(Node) when is_atom(Node) ->
-    {ok, OurRingSize} = application:get_env(riak_core, ring_creation_size),
-    case net_adm:ping(Node) of
-        pong ->
-            case rpc:call(Node,
-                          application,
-                          get_env, 
-                          [riak_core, ring_creation_size]) of
-                {ok, OurRingSize} ->
-                    riak_core_gossip:send_ring(Node, node());
-                _ -> 
-                    {error, different_ring_sizes}
-            end;
-        pang ->
-            {error, not_reachable}
-    end.
-
+join(Node) ->    
+    riak_core:join(Node).
 
 code_hash() ->
     {ok, AllMods0} = application:get_key(riak, modules),

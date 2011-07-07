@@ -50,7 +50,6 @@
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
 -define(DEFAULT_TIMEOUT, 60000).
--define(DEFAULT_ERRTOL, 0.00003).
 
 -type riak_client() :: term().
 
@@ -169,30 +168,27 @@ mapred_bucket_stream(Bucket, Query, ClientPid, Timeout) ->
     mapred_bucket_stream(Bucket, Query, ClientPid, undefined, Timeout).
 
 mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout) ->
-    mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout,
-                         ?DEFAULT_ERRTOL).
-
-mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout, ErrorTolerance) ->
     {ok,{MR_ReqId,MR_FSM}} = mapred_stream(Query,ClientPid,ResultTransformer,Timeout),
-    {ok,_Stream_ReqID} = stream_list_keys(Bucket, Timeout, ErrorTolerance,
+    {ok,_Stream_ReqID} = stream_list_keys(Bucket, Timeout,
                                   MR_FSM, mapred),
     {ok,MR_ReqId}.
+
+
+%% @deprecated Only in place for backwards compatibility.
+mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout, _) ->
+    mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout).
 
 mapred_bucket(Bucket, Query) ->
     mapred_bucket(Bucket, Query, ?DEFAULT_TIMEOUT).
 
 mapred_bucket(Bucket, Query, Timeout) ->
-    mapred_bucket(Bucket, Query, undefined, Timeout, ?DEFAULT_ERRTOL).
+    mapred_bucket(Bucket, Query, undefined, Timeout).
 
 mapred_bucket(Bucket, Query, ResultTransformer, Timeout) ->
-    mapred_bucket(Bucket, Query, ResultTransformer, Timeout, ?DEFAULT_ERRTOL).
-
-mapred_bucket(Bucket, Query, ResultTransformer, Timeout, ErrorTolerance) ->
     Me = self(),
     {ok,MR_ReqId} = mapred_bucket_stream(Bucket, Query, Me,
-                                         ResultTransformer, Timeout, ErrorTolerance),
+                                         ResultTransformer, Timeout),
     luke_flow:collect_output(MR_ReqId, Timeout).
-
 
 -define(PRINT(Var), io:format("DEBUG: ~p:~p - ~p~n~n ~p~n~n", [?MODULE, ?LINE, ??Var, Var])).
 
@@ -356,7 +352,7 @@ put(RObj, W, DW, Timeout, Options) ->
 %% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
 %%      nodes have responded with a value or error.
 %% @equiv delete(Bucket, Key, RW, default_timeout())
-delete(Bucket,Key) -> delete(Bucket,Key,default,?DEFAULT_TIMEOUT).
+delete(Bucket,Key) -> delete(Bucket,Key,[],?DEFAULT_TIMEOUT).
 
 %% @spec delete(riak_object:bucket(), riak_object:key(), RW :: integer()) ->
 %%        ok |
@@ -364,10 +360,13 @@ delete(Bucket,Key) -> delete(Bucket,Key,default,?DEFAULT_TIMEOUT).
 %%       {error, notfound} |
 %%       {error, timeout} |
 %%       {error, Err :: term()}
-%% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
+%% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error.
 %% @equiv delete(Bucket, Key, RW, default_timeout())
-delete(Bucket,Key,RW) -> delete(Bucket,Key,RW,?DEFAULT_TIMEOUT).
+delete(Bucket,Key,Options) when is_list(Options) ->
+    delete(Bucket,Key,Options,?DEFAULT_TIMEOUT);
+delete(Bucket,Key,RW) ->
+    delete(Bucket,Key,[{rw, RW}],?DEFAULT_TIMEOUT).
 
 %% @spec delete(riak_object:bucket(), riak_object:key(), RW :: integer(),
 %%           TimeoutMillisecs :: integer()) ->
@@ -377,14 +376,16 @@ delete(Bucket,Key,RW) -> delete(Bucket,Key,RW,?DEFAULT_TIMEOUT).
 %%       {error, timeout} |
 %%       {error, {n_val_violation, N::integer()}} |
 %%       {error, Err :: term()}
-%% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
+%% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
-delete(Bucket,Key,RW,Timeout) ->
+delete(Bucket,Key,Options,Timeout) when is_list(Options) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, RW, Timeout,
+    riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, Options, Timeout,
                                            Me, ClientId]),
-    wait_for_reqid(ReqId, Timeout).
+    wait_for_reqid(ReqId, Timeout);
+delete(Bucket,Key,RW,Timeout) ->
+    delete(Bucket,Key,[{rw, RW}], Timeout).
 
 %% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock:vclock()) ->
 %%        ok |
@@ -392,10 +393,11 @@ delete(Bucket,Key,RW,Timeout) ->
 %%       {error, notfound} |
 %%       {error, timeout} |
 %%       {error, Err :: term()}
-%% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
+%% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error.
 %% @equiv delete(Bucket, Key, RW, default_timeout())
-delete_vclock(Bucket,Key,VClock) -> delete_vclock(Bucket,Key,VClock,default,?DEFAULT_TIMEOUT).
+delete_vclock(Bucket,Key,VClock) ->
+    delete_vclock(Bucket,Key,VClock,[{rw,default}],?DEFAULT_TIMEOUT).
 
 %% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock::vclock(), RW :: integer()) ->
 %%        ok |
@@ -403,10 +405,13 @@ delete_vclock(Bucket,Key,VClock) -> delete_vclock(Bucket,Key,VClock,default,?DEF
 %%       {error, notfound} |
 %%       {error, timeout} |
 %%       {error, Err :: term()}
-%% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
+%% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error.
 %% @equiv delete(Bucket, Key, RW, default_timeout())
-delete_vclock(Bucket,Key,VClock,RW) -> delete_vclock(Bucket,Key,VClock,RW,?DEFAULT_TIMEOUT).
+delete_vclock(Bucket,Key,VClock,Options) when is_list(Options) ->
+    delete_vclock(Bucket,Key,VClock,Options,?DEFAULT_TIMEOUT);
+delete_vclock(Bucket,Key,VClock,RW) ->
+    delete_vclock(Bucket,Key,VClock,[{rw, RW}],?DEFAULT_TIMEOUT).
 
 %% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock:vclock(), RW :: integer(),
 %%           TimeoutMillisecs :: integer()) ->
@@ -416,14 +421,16 @@ delete_vclock(Bucket,Key,VClock,RW) -> delete_vclock(Bucket,Key,VClock,RW,?DEFAU
 %%       {error, timeout} |
 %%       {error, {n_val_violation, N::integer()}} |
 %%       {error, Err :: term()}
-%% @doc Delete the object at Bucket/Key.  Return a value as soon as RW
+%% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
-delete_vclock(Bucket,Key,VClock,RW,Timeout) ->
+delete_vclock(Bucket,Key,VClock,Options,Timeout) when is_list(Options) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, RW, Timeout,
+    riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, Options, Timeout,
                                            Me, ClientId, VClock]),
-    wait_for_reqid(ReqId, Timeout).
+    wait_for_reqid(ReqId, Timeout);
+delete_vclock(Bucket,Key,VClock,RW,Timeout) ->
+    delete_vclock(Bucket,Key,VClock,[{rw, RW}],Timeout).
 
 
 %% @spec list_keys(riak_object:bucket()) ->
@@ -445,30 +452,35 @@ list_keys(Bucket) ->
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 list_keys(Bucket, Timeout) ->
-    list_keys(Bucket, Timeout, ?DEFAULT_ERRTOL).
-list_keys(Bucket, Timeout, ErrorTolerance) ->
     Me = self(),
     ReqId = mk_reqid(),
     FSM_Timeout = trunc(Timeout / 8),
-    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [ReqId, Bucket, FSM_Timeout, plain, ErrorTolerance, Me]),
+    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [ReqId, Bucket, FSM_Timeout, plain, Me]),
     wait_for_listkeys(ReqId, Timeout).
+
+%% @deprecated Only in place for backwards compatibility.
+list_keys(Bucket, Timeout, _) ->
+    list_keys(Bucket, Timeout).
 
 stream_list_keys(Bucket) ->
     stream_list_keys(Bucket, ?DEFAULT_TIMEOUT).
 
 stream_list_keys(Bucket, Timeout) ->
-    stream_list_keys(Bucket, Timeout, ?DEFAULT_ERRTOL).
-
-stream_list_keys(Bucket, Timeout, ErrorTolerance) ->
     Me = self(),
-    stream_list_keys(Bucket, Timeout, ErrorTolerance, Me).
+    stream_list_keys(Bucket, Timeout, Me).
 
-stream_list_keys(Bucket, Timeout, ErrorTolerance, Client) ->
-    stream_list_keys(Bucket, Timeout, ErrorTolerance, Client, plain).
+stream_list_keys(Bucket, Timeout, Client) when is_pid(Client) ->
+    stream_list_keys(Bucket, Timeout, Client, plain);
+%% @deprecated Only in place for backwards compatibility.
+stream_list_keys(Bucket, Timeout, _) ->
+    stream_list_keys(Bucket, Timeout).
+
+%% @deprecated Only in place for backwards compatibility.
+stream_list_keys(Bucket0, Timeout, _, Client, ClientType) ->
+    stream_list_keys(Bucket0, Timeout, Client, ClientType).
 
 %% @spec stream_list_keys(riak_object:bucket(),
 %%                        TimeoutMillisecs :: integer(),
-%%                        ErrorTolerance :: float(),
 %%                        Client :: pid(),
 %%                        ClientType :: atom()) ->
 %%       {ok, ReqId :: term()}
@@ -482,15 +494,18 @@ stream_list_keys(Bucket, Timeout, ErrorTolerance, Client) ->
 %%      keys in Bucket on any single vnode.
 %%      If ClientType is set to 'mapred' instead of 'plain', then the
 %%      messages will be sent in the form of a MR input stream.
-stream_list_keys(Bucket0, Timeout, ErrorTolerance, Client, ClientType) ->
+stream_list_keys(Bucket, Timeout, Client, ClientType) when is_pid(Client) ->
     ReqId = mk_reqid(),
-    case build_filter(Bucket0) of
-        {ok, Filter} ->
-            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [ReqId, Filter, Timeout, ClientType, ErrorTolerance, Client]),
-            {ok, ReqId};
-        Error ->
-            Error
-    end.
+    case build_filter(Bucket) of
+        {error, _Error} ->
+            {error, _Error};
+        Input ->
+            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [ReqId, Input, Timeout, ClientType, Client]),
+            {ok, ReqId}
+    end;
+%% @deprecated Only in place for backwards compatibility.
+stream_list_keys(Bucket, Timeout, _, Client) ->
+    stream_list_keys(Bucket, Timeout, Client).
 
 %% @spec filter_keys(riak_object:bucket(), Fun :: function()) ->
 %%       {ok, [Key :: riak_object:key()]} |
@@ -538,7 +553,12 @@ list_buckets() ->
 %%      either adds the first key or removes the last remaining key from
 %%      a bucket.
 list_buckets(Timeout) ->
-    list_keys('_', Timeout).
+    case list_keys('_', Timeout) of
+        {ok, Buckets} ->
+            {ok, lists:usort(Buckets)};
+        Result ->
+            Result
+    end.
 
 %% @spec get_index(Bucket :: binary(), Query :: riak_index:query_def()) ->
 %%       {ok, [Key :: riak_object:key()]} |
@@ -631,15 +651,15 @@ is_key_filter({Bucket, Filters}) when is_binary(Bucket),
 is_key_filter(_) ->
     false.
 
+build_filter(Bucket) when is_binary(Bucket) ->
+    Bucket;
 build_filter({Bucket, Exprs}) ->
     case build_exprs(Exprs) of
         {ok, Filters} ->
-            {ok, {Bucket, Filters}};
+            {Bucket, Filters};
         Error ->
             Error
-    end;
-build_filter(Bucket) when is_binary(Bucket) ->
-    {ok, {Bucket, []}}.
+    end.
 
 build_exprs(Exprs) ->
     build_exprs(Exprs, []).

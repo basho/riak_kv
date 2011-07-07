@@ -27,43 +27,77 @@
 
 %% API
 -export([start_link/3,
-         list_keys/2]).
-
-%% States
--export([waiting/2]).
+         start_link/5,
+         start_link/6,
+         list_keys/1,
+         update_vnodes/3
+        ]).
 
 %% gen_fsm callbacks
--export([init/1, state_name/2, state_name/3, handle_event/3,
-         handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
+-export([init/1,
+         waiting/2,
+         handle_event/3,
+         handle_sync_event/4,
+         handle_info/3,
+         terminate/3,
+         code_change/4]).
+
+-define (DEFAULT_TIMEOUT, 60000).
 
 -record(state, {reqid,
-                caller,
                 bucket,
-                filter,
-                bloom}).
+                caller,
+                filters,
+                inputs,
+                vnodes}).
 
-list_keys(ListerPid, VNode) ->
-    gen_fsm:send_event(ListerPid, {lk, VNode}).
+%% ===================================================================
+%% Public API
+%% ===================================================================
 
 start_link(ReqId, Caller, Bucket) ->
-    gen_fsm:start_link(?MODULE, [ReqId, Caller, Bucket], []).
+    start_link(ReqId, Caller, Bucket, [], undefined, ?DEFAULT_TIMEOUT).
 
-init([ReqId, Caller, Inputs]) ->
-    erlang:monitor(process, Caller),
-    {ok, Bloom} = ebloom:new(10000000, 0.0001, crypto:rand_uniform(1, 5000)),
-    {Bucket, Filter} = build_filter(Inputs),
-    {ok, waiting, #state{reqid=ReqId, caller=Caller, bloom=Bloom, bucket=Bucket,
-                         filter=Filter}}.
+start_link(ReqId, Caller, Bucket, VNodes, Timeout) ->
+    start_link(ReqId, Caller, Bucket, VNodes, undefined, Timeout).
 
-waiting({lk, VNode}, #state{reqid=ReqId, bucket=Bucket}=State) ->
-    riak_kv_vnode:list_keys(VNode, ReqId, self(), Bucket),
-    {next_state, waiting, State}.
+start_link(ReqId, Caller, Bucket, VNodes, FilterVNodes, Timeout) ->
+    gen_fsm:start_link(?MODULE, [ReqId, Caller, Bucket, VNodes, FilterVNodes], [{timeout, Timeout}]).
 
-state_name(_Event, State) ->
-    {next_state, waiting, State}.
+list_keys(ListerPid) ->
+    gen_fsm:send_event(ListerPid, start).
 
-state_name(_Event, _From, State) ->
-    {reply, ignored, state_name, State}.
+update_vnodes(ListerPid, VNodes, FilterVNodes) ->
+    gen_fsm:send_event(ListerPid, {update_vnodes, VNodes, FilterVNodes}).
+
+%% ===================================================================
+%% gen_fsm callbacks
+%% ===================================================================
+
+init([ReqId, Caller, Inputs, VNodes, FilterVNodes]) ->
+    process_flag(trap_exit, true),
+    {Bucket, Filters} = build_filters(Inputs, VNodes, FilterVNodes),
+    {ok, waiting, #state{bucket=Bucket,
+                         caller=Caller,
+                         filters=Filters,
+                         inputs=Inputs,
+                         reqid=ReqId,
+                         vnodes=VNodes}}.
+
+waiting(start, #state{vnodes=[]}=State) ->
+    {next_state, waiting, State};
+
+waiting(start, #state{bucket=Bucket,
+                      reqid=ReqId,
+                      vnodes=VNodes}=State) ->
+    riak_kv_vnode:list_keys(VNodes, ReqId, self(), Bucket),
+    {next_state, waiting, State};
+
+waiting({update_vnodes, VNodes, FilterVNodes}, #state{inputs=Inputs}=State) ->
+    %% Update the vnodes and build new filters
+    {_, Filters} = build_filters(Inputs, VNodes, FilterVNodes),
+    {next_state, waiting, State#state{filters=Filters,
+                                      vnodes=VNodes}}.
 
 handle_event(_Event, StateName, State) ->
     {next_state, StateName, State}.
@@ -71,55 +105,145 @@ handle_event(_Event, StateName, State) ->
 handle_sync_event(_Event, _From, StateName, State) ->
     {reply, ignored, StateName, State}.
 
-handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{reqid=ReqId, bloom=Bloom,
-                                                       filter=Filter, caller=Caller}=State) ->
-    F = fun(Key, Acc) ->
-                case ebloom:contains(Bloom, Key) of
-                    true ->
-                        Acc;
-                    false ->
-                        case is_function(Filter) of
-                            true ->
-                                case Filter(Key) of
-                                    true ->
-                                        ebloom:insert(Bloom, Key),
-                                        [Key|Acc];
-                                    false ->
-                                        Acc
-                                end;
-                            false ->
-                                [Key|Acc]
-                        end end end,
-    case lists:foldl(F, [], Keys0) of
-        [] ->
-            ok;
-        Keys ->
-            gen_fsm:send_event(Caller, {ReqId, {kl, Idx, Keys}})
+handle_info({ReqId, {kl, Idx, Keys}}, waiting, #state{caller=Caller,
+                                                      filters=list_buckets,
+                                                      reqid=ReqId}=State) ->
+    %% Skip the fold if listing buckets
+    gen_fsm:send_event(Caller, {ReqId, {kl, {Idx, node()}, lists:usort(Keys)}}),
+    {next_state, waiting, State};
+handle_info({ReqId, {kl, Idx, Keys0}}, waiting, #state{caller=Caller,
+                                                       filters=Filters,
+                                                       reqid=ReqId}=State) ->
+    Filter = proplists:get_value(Idx, Filters),
+    case Filter of
+        undefined ->
+            %% No need to filter, just return the keys
+            gen_fsm:send_event(Caller, {ReqId, {kl, {Idx, node()}, Keys0}});
+        _ ->
+            case lists:foldl(Filter, [], Keys0) of
+                [] ->
+                    ok;
+                Keys ->
+                    gen_fsm:send_event(Caller, {ReqId, {kl, {Idx, node()}, Keys}})
+            end
     end,
     {next_state, waiting, State};
 handle_info({ReqId, Idx, done}, waiting, #state{reqid=ReqId, caller=Caller}=State) ->
-    gen_fsm:send_event(Caller, {ReqId, Idx, done}),
+    gen_fsm:send_event(Caller, {ReqId, {Idx, node()}, done}),
     {next_state, waiting, State};
-handle_info({'DOWN', _MRef, _Type, Caller, _Info}, waiting, #state{caller=Caller}=State) ->
+handle_info({'EXIT', Caller, _Reason}, waiting, #state{caller=Caller}=State) ->
     {stop, normal, State};
 handle_info(_Info, StateName, State) ->
     {next_state, StateName, State}.
 
-terminate(_Reason, _StateName, #state{bloom=Bloom}) ->
-    ebloom:clear(Bloom),
+terminate(_Reason, _StateName, _State) ->
     ok.
 
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
+%% ====================================================================
 %% Internal functions
-build_filter('_') ->
-    {'_', []};
-build_filter(Bucket) when is_binary(Bucket) ->
-    {Bucket, []};
-build_filter({filter, Bucket, Fun}) when is_function(Fun) ->
+%% ====================================================================
+
+%% @private
+build_filters(Inputs, VNodes, FilterVNodes) ->
+    {Bucket, KeyFilter} = build_key_filter(Inputs),
+
+    %% Handling the filtering here is awkward.
+    %% Hopefully it will soon be moved to the vnode.
+    if
+        %% TODO: Refactor once coverage code is in riak_core.
+        (KeyFilter == list_buckets) ->
+            Filters = list_buckets;
+        (KeyFilter == none) andalso (FilterVNodes == undefined) -> % no filtering
+            Filters = [];
+        (FilterVNodes == undefined) -> % only key filtering
+            %% Associate a key filtering function with each VNode
+            Filters = [{Index, build_filter(KeyFilter)} || {Index, _} <- VNodes];
+        (KeyFilter == none) -> % only vnode filtering required
+            {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+            PrefListFun = build_preflist_fun(Bucket, Ring),
+            %% Create VNode filters only as necessary
+            Filters = [{Index, build_filter(proplists:get_value(Index, FilterVNodes), PrefListFun)} || {Index, _} <- VNodes, proplists:is_defined(Index, FilterVNodes)];
+        true -> % key and vnode filtering
+            {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+            PrefListFun = build_preflist_fun(Bucket, Ring),
+            %% Create a filter for each VNode
+            Filters = [{Index, build_filter(proplists:get_value(Index, FilterVNodes), PrefListFun, KeyFilter)} || {Index, _} <- VNodes]
+    end,
+    {Bucket, Filters}.
+
+%% @private
+build_filter(KeyFilter) ->
+    fun(Key, Acc) ->
+            case KeyFilter(Key) of
+                true ->
+                    [Key|Acc];
+                false ->
+                    Acc
+            end
+    end.
+
+build_filter(KeySpaceIndexes, PrefListFun) ->
+    VNodeFilter = build_vnode_filter(KeySpaceIndexes, PrefListFun),
+    fun(Key, Acc) ->
+            case VNodeFilter(Key) of
+                true ->
+                    [Key|Acc];
+                false ->
+                    Acc
+            end
+
+    end.
+
+build_filter(undefined, _, KeyFilter) ->
+    build_filter(KeyFilter);
+build_filter(KeySpaceIndexes, PrefListFun, KeyFilter) ->
+    VNodeFilter = build_vnode_filter(KeySpaceIndexes, PrefListFun),
+    fun(Key, Acc) ->
+            case KeyFilter(Key) andalso VNodeFilter(Key) of
+                true ->
+                    [Key|Acc];
+                false ->
+                    Acc
+            end
+
+    end.
+
+%% @private
+build_vnode_filter(KeySpaceIndexes, PrefListFun) ->
+    fun(X) ->
+            {PrefListIndex, _} = PrefListFun(X),
+            lists:member(PrefListIndex, KeySpaceIndexes)
+    end.
+
+%% @private
+build_key_filter('_') ->
+    {'_', list_buckets};
+build_key_filter(Bucket) when is_binary(Bucket) ->
+    {Bucket, none};
+build_key_filter({filter, Bucket, Fun}) when is_function(Fun) ->
     %% this is the representation used by riak_client:filter_keys
     {Bucket, Fun};
-build_filter({Bucket, Filters}) ->
+build_key_filter({Bucket, Filters}) ->
     FilterFun = riak_kv_mapred_filters:compose(Filters),
     {Bucket, FilterFun}.
+
+%% @private
+build_preflist_fun(Bucket, Ring) ->
+    %% TODO: Change this to use the upcoming addition to
+    %% riak_core_ring that will allow finding the index
+    %% responsible for a bkey pair without working out the
+    %% entire preflist.
+    fun(Key) ->
+            get_first_preflist({Bucket, Key}, Ring)
+    end.
+
+%% @private
+get_first_preflist({Bucket, Key}, Ring) ->
+    %% Get the chash key for the bucket-key pair and
+    %% use that to determine the preference list to
+    %% use in filtering the keys from this VNode.
+    ChashKey = riak_core_util:chash_key({Bucket, Key}),
+    hd(riak_core_ring:preflist(ChashKey, Ring)).

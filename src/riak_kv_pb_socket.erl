@@ -93,6 +93,11 @@ handle_info({ReqId, {keys, []}}, State=#state{req=#rpblistkeysreq{}, req_ctx=Req
     {noreply, State}; % No keys - no need to send a message, will send done soon.
 handle_info({ReqId, {keys, Keys}}, State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     {noreply, send_msg(#rpblistkeysresp{keys = Keys}, State)};
+handle_info({ReqId, Error},
+            State=#state{sock = Socket, req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
+    NewState = send_error("~p", [Error], State),
+    inet:setopts(Socket, [{active, once}]),
+    {noreply, NewState#state{req = undefined, req_ctx = undefined}};
 
 %% Handle response from mapred_stream/mapred_bucket_stream
 handle_info({flow_results, ReqId, done},
@@ -290,15 +295,28 @@ process_message(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
             send_error("~p", [Reason], State)
     end;
 
-process_message(#rpbdelreq{bucket=B, key=K, rw=RW0, vclock=PbVc}, 
+process_message(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
+                          r=R0, w=W0, pr=PR0, pw=PW0, dw=DW0, rw=RW0},
                 #state{client=C} = State) ->
+    W = normalize_rw_value(W0),
+    PW = normalize_rw_value(PW0),
+    DW = normalize_rw_value(DW0),
+    R = normalize_rw_value(R0),
+    PR = normalize_rw_value(PR0),
     RW = normalize_rw_value(RW0),
+
+    Options = make_option(r, R) ++
+              make_option(w, W) ++
+              make_option(rw, RW) ++
+              make_option(pr, PR) ++
+              make_option(pw, PW) ++
+              make_option(dw, DW),
     Result = case PbVc of
         undefined ->
-            C:delete(B, K, default_if_undef(RW));
+            C:delete(B, K, Options);
         _ ->
             VClock = erlify_rpbvc(PbVc),
-            C:delete_vclock(B, K, VClock, default_if_undef(RW))
+            C:delete_vclock(B, K, VClock, Options)
     end,
     case Result of
         ok ->
@@ -345,6 +363,7 @@ process_message(#rpbsetbucketreq{bucket=B, props = PbProps},
 %% Start map/reduce job - results will be processed in handle_info
 process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req, 
                 #state{client=C} = State) ->
+    ResultTransformer = get_result_transformer(ContentType),
 
     case decode_mapred_query(MrReq, ContentType) of
         {error, Reason} ->
@@ -354,7 +373,7 @@ process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
             case is_binary(Inputs) orelse is_key_filter(Inputs) of
                 true ->
                     case C:mapred_bucket_stream(Inputs, Query, 
-                                                self(), Timeout) of
+                                                self(), ResultTransformer, Timeout) of
                         {stop, Error} ->
                             send_error("~p", [Error], State);
 
@@ -364,7 +383,7 @@ process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
                 false ->
                     case is_list(Inputs) of
                         true ->
-                            case C:mapred_stream(Query, self(), Timeout) of
+                            case C:mapred_stream(Query, self(), ResultTransformer, Timeout) of
                                 {stop, Error} ->
                                     send_error("~p", [Error], State);
                                 
@@ -382,7 +401,7 @@ process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
                                 is_atom(element(2, Inputs)) andalso
                                 is_atom(element(3, Inputs)) of
                                 true ->
-                                    case C:mapred_stream(Query, self(), Timeout) of
+                                    case C:mapred_stream(Query, self(), ResultTransformer, Timeout) of
                                         {stop, Error} ->
                                             send_error("~p", [Error], State);
                 
@@ -430,12 +449,6 @@ update_rpbcontent(O0, RpbContent) ->
 update_pbvc(O0, PbVc) ->
     Vclock = erlify_rpbvc(PbVc),
     riak_object:set_vclock(O0, Vclock).
-
-%% convert undefined to default so the option can be inherited from the bucket
-default_if_undef(undefined) ->
-    default;
-default_if_undef(V) ->
-    V.
 
 %% return a key/value tuple that we can ++ to other options so long as the
 %% value is not default or undefined -- those values are pulled from the
@@ -497,5 +510,11 @@ normalize_rw_value(?RIAKC_RW_QUORUM) -> quorum;
 normalize_rw_value(?RIAKC_RW_ALL) -> all;
 normalize_rw_value(?RIAKC_RW_DEFAULT) -> default;
 normalize_rw_value(V) -> V.
-    
-    
+
+%% get a result transformer for the content-type
+%% jsonify not_founds for application/json
+%% do nothing otherwise
+get_result_transformer(<<"application/json">>) ->
+    fun riak_kv_mapred_json:jsonify_not_found/1;
+get_result_transformer(_) ->
+    undefined.
