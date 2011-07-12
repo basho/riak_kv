@@ -26,22 +26,67 @@
 
 -behaviour(riak_core_coverage_fsm).
 
--export([init/0, process_results/3]).
+-include_lib("riak_kv_vnode.hrl").
+
+-export([init/2,
+         process_results/2,
+         finish/2]).
+
+-type from() :: {raw, req_id(), pid()}.
+-type req_id() :: non_neg_integer().
+
+-record(state, {buckets=[] :: [binary()],
+                client_type :: plain | mapred,
+                from :: from()}).
 
 %% @doc Return a tuple containing the ModFun to call per vnode, 
 %% the number of primary preflist vnodes the operation
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
-init() ->
-    {ok, {riak_kv_vnode, list_buckets}, 1, riak_kv, riak_kv_vnode_master}.
+init(From={raw, ReqId, ClientPid}, [ItemFilter, Timeout, ClientType]) ->
+    case ClientType of
+        %% Link to the mapred job so we die if the job dies
+        mapred ->
+            link(ClientPid);
+        _ ->
+            ok
+    end,
+    %% Construct the bucket listing request
+    Req = ?KV_LISTBUCKETS_REQ{caller={fsm, undefined, self()},
+                              item_filter=ItemFilter,
+                              req_id=ReqId},
+    {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
+     #state{client_type=ClientType, from=From}}.
 
-process_results(Buckets, ClientType, {raw, ReqId, ClientPid}) ->
+process_results(Buckets,
+                StateData=#state{buckets=BucketAcc}) ->
+    StateData#state{buckets=(Buckets ++ BucketAcc)}.
+
+finish({error, Error},
+       StateData=#state{client_type=ClientType,
+                        from={raw, ReqId, ClientPid}}) ->
     case ClientType of
         mapred ->
-            try
-                luke_flow:add_inputs(ClientPid, Buckets)
-            catch _:_ ->
-                    exit(self(), normal)
-            end;
-        plain -> ClientPid ! {ReqId, {buckets, Buckets}}
-    end.
+            %% An error occurred or the timeout interval elapsed
+            %% so all we can do now is die so that the rest of the
+            %% MapReduce processes will also die and be cleaned up.
+            exit(Error);
+        plain ->
+            %% Notify the requesting client that an error
+            %% occurred or the timeout has elapsed.
+            ClientPid ! {ReqId, Error}
+    end,
+    {stop, normal, StateData};
+finish(clean,
+       StateData=#state{buckets=Buckets,
+                        client_type=ClientType,
+                        from={raw, ReqId, ClientPid}}) ->
+    case ClientType of
+        mapred ->
+            luke_flow:add_inputs(Buckets),
+            luke_flow:finish_inputs(ClientPid);
+        plain ->
+            ClientPid ! {ReqId, {buckets, lists:usort(lists:flatten(Buckets))}},
+            ClientPid ! {ReqId, done}
+    end,
+    {stop, normal, StateData}.

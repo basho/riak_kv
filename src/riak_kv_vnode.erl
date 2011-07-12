@@ -194,15 +194,31 @@ handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
 handle_command(?FOLD_REQ{foldfun=Fun, acc0=Acc},_Sender,State) ->
     Reply = do_fold(Fun, Acc, State),
     {reply, Reply, State};
-handle_command(?COVERAGE_VNODE_REQ{args=Args,
-                                   module=CoverageMod,
-                                   function=CoverageFun,
-                                   filter=Filter},
+handle_command({?KV_LISTBUCKETS_REQ{caller=Caller,
+                                    item_filter=ItemFilter,
+                                    req_id=ReqId},
+                _FilterVNodes},
                _Sender,
                State=#state{mod=Mod, 
                             modstate=ModState,
-                            idx=Idx}) ->
-    apply(CoverageMod, CoverageFun, Args ++ [Filter, Idx, Mod, ModState]),
+                            idx=Index}) ->
+    %% Construct the filter function
+    Filter = riak_kv_coverage_filter:build_filter(all, ItemFilter, undefined),
+    list_buckets(Caller, ReqId, Filter, Index, Mod, ModState),
+    {noreply, State};
+handle_command({?KV_LISTKEYS_REQ{bucket=Bucket,
+                                 caller=Caller,
+                                 item_filter=ItemFilter,
+                                 req_id=ReqId},
+                FilterVNodes},
+               _Sender,
+               State=#state{mod=Mod, 
+                            modstate=ModState,
+                            idx=Index}) ->
+    %% Construct the filter function
+    FilterVNode = proplists:get_value(Index, FilterVNodes),
+    Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
+    list_keys(Caller, ReqId, Bucket, Filter, Index, Mod, ModState),
     {noreply, State};
  
 %% Commands originating from inside this vnode
@@ -232,6 +248,7 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
                        State
                end,
     {noreply, NewState}.
+
 
 handle_handoff_command(Req=?FOLD_REQ{}, Sender, State) ->
     handle_command(Req, Sender, State);
@@ -447,10 +464,10 @@ list_buckets(Caller, ReqId, Filter, Index, Mod, ModState) ->
     Buckets = Mod:list_bucket(ModState, '_'),
     case Filter of
         none ->
-            gen_fsm:send_event(Caller, {ReqId, {final_results, {Index, node()}, Buckets}});
+            riak_core_vnode:reply(Caller, {ReqId, {final_results, {Index, node()}, Buckets}});
         _ ->
             FilteredBuckets = lists:foldl(Filter, [], Buckets),
-            gen_fsm:send_event(Caller, {ReqId, {final_results, {Index, node()}, FilteredBuckets}})
+            riak_core_vnode:reply(Caller, {ReqId, {final_results, {Index, node()}, FilteredBuckets}})
     end.
 
 %% @private
@@ -485,10 +502,10 @@ list_keys(Caller, ReqId, Bucket, Filter, Index, Mod, ModState) ->
                         end, try_next, TryFuns),
     case Filter of
         none ->
-            gen_fsm:send_event(Caller, {ReqId, {final_results, {Index, node()}, {Bucket, Keys}}});
+            riak_core_vnode:reply(Caller, {ReqId, {final_results, {Index, node()}, {Bucket, Keys}}});
         _ ->
             FilteredKeys = lists:foldl(Filter, [], Keys),
-            gen_fsm:send_event(Caller, {ReqId, {final_results, {Index, node()}, {Bucket, FilteredKeys}}})
+            riak_core_vnode:reply(Caller, {ReqId, {final_results, {Index, node()}, {Bucket, FilteredKeys}}})
     end.
 
 %% @private
@@ -514,17 +531,17 @@ buffer_key_result(Caller, ReqId, Bucket, Filter, Index, Acc) ->
             %% Filter the buffer keys as needed
             case Filter of 
                none ->
-                    gen_fsm:send_event(Caller, {ReqId, {results, {Index, node()}, {Bucket, Acc}}});    
+                    riak_core_vnode:reply(Caller, {ReqId, {results, {Index, node()}, {Bucket, Acc}}});    
                 _ ->
                     FilteredKeys = lists:foldl(Filter, [], Acc),
                     case FilteredKeys of
                         [] ->
                             ok;
                         _ ->
-                            gen_fsm:send_event(Caller, {ReqId, {results, {Index, node()}, {Bucket, FilteredKeys}}})
+                            riak_core_vnode:reply(Caller, {ReqId, {results, {Index, node()}, {Bucket, FilteredKeys}}})
                     end
             end,
-            %% Reset the buffer results are not duplicated
+            %% Reset the buffer so that results are not duplicated
             [];
         false ->
             Acc

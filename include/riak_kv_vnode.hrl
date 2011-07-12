@@ -25,6 +25,17 @@
           req_id :: non_neg_integer(),
           caller :: pid()}).
 
+-record(riak_kv_listkeys_req_v3, {
+          bucket :: binary() | tuple(),
+          caller :: pid(),
+          item_filter :: function(),
+          req_id :: non_neg_integer()}).
+
+-record(riak_kv_listbuckets_req_v1, {
+          caller :: pid(),
+          item_filter :: function(),
+          req_id :: non_neg_integer()}).
+
 -record(riak_kv_delete_req_v1, {
           bkey :: {binary(), binary()},
           req_id :: non_neg_integer()}).
@@ -42,7 +53,8 @@
 -define(KV_PUT_REQ, #riak_kv_put_req_v1).
 -define(KV_GET_REQ, #riak_kv_get_req_v1).
 -define(KV_MGET_REQ, #riak_kv_mget_req_v1).
--define(KV_LISTKEYS_REQ, #riak_kv_listkeys_req_v2).
+-define(KV_LISTBUCKETS_REQ, #riak_kv_listbuckets_req_v1).
+-define(KV_LISTKEYS_REQ, #riak_kv_listkeys_req_v3).
 -define(KV_DELETE_REQ, #riak_kv_delete_req_v1).
 -define(KV_MAP_REQ, #riak_kv_map_req_v1).
 -define(KV_VCLOCK_REQ, #riak_kv_vclock_req_v1).

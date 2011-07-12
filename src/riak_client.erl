@@ -179,6 +179,7 @@ mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout, _) ->
     mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout).
 
 mapred_bucket(Bucket, Query) ->
+    io:format("Bucket: ~p Query: ~p~n", [Bucket, Query]),
     mapred_bucket(Bucket, Query, ?DEFAULT_TIMEOUT).
 
 mapred_bucket(Bucket, Query, Timeout) ->
@@ -467,7 +468,7 @@ list_keys(Bucket, Timeout, _) when is_integer(Timeout) ->
 list_keys(Bucket, Filter, Timeout) -> 
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, Bucket, Filter, [], Timeout, plain]),
+    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout, plain]]),
     wait_for_listkeys(ReqId, Timeout).
 
 stream_list_keys(Bucket) ->
@@ -510,11 +511,11 @@ stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
                 {error, _Error} ->
                     {error, _Error};
                 {ok, FilterExprs} ->
-                    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Client}, Bucket, FilterExprs, [], Timeout, ClientType]),
+                    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Client}, [Bucket, FilterExprs, Timeout, ClientType]]),
                     {ok, ReqId}
             end;
         Bucket ->
-            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Client}, Bucket, none, [], Timeout, ClientType]),
+            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Client}, [Bucket, none, Timeout, ClientType]]),
             {ok, ReqId}
     end;
 %% @deprecated Only in place for backwards compatibility.
@@ -569,7 +570,7 @@ list_buckets() ->
 list_buckets(Filter, Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, Filter, [], Timeout, plain]),
+    riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, [Filter, Timeout, plain]]),
     wait_for_listbuckets(ReqId, Timeout).
 
 %% @spec filter_buckets(Fun :: function()) ->
@@ -652,7 +653,7 @@ wait_for_listbuckets(ReqId, Timeout) ->
 %% @private
 wait_for_listbuckets(ReqId, Timeout, Acc) ->
     receive
-        {ReqId, done} -> {ok, lists:usort(lists:flatten(Acc))};
+        {ReqId, done} -> {ok, Acc};
         {ReqId,{buckets, Res}} -> wait_for_listbuckets(ReqId, Timeout, [Res | Acc]);
         {ReqId, Error} -> {error, Error}
     after Timeout ->
