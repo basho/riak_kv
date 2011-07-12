@@ -246,7 +246,7 @@ handle_call({fold, Fun0, Acc}, _From, State) ->
     Reply = do_fold(State, Keys, Fun0, Acc),
     {reply, Reply, State};
 handle_call(stop, _From, State) -> 
-    {reply, ok, State}.
+    {stop, normal, ok, State}.
 
 %% @private
 handle_cast(_, State) -> {noreply, State}.
