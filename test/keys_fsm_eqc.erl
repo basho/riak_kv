@@ -130,11 +130,11 @@ prop_basic_listkeys() ->
                Keys = start_link(ReqId, Bucket, KeyFilter, Timeout, ClientType),
                ?WHENFAIL(
                   begin
-                      io:format("Bucket: ~p n_val: ~p~n", [Bucket, NVal]),
+                      io:format("Bucket: ~p n_val: ~p ObjectCount: ~p KeyFilter: ~p~n", [Bucket, NVal, ObjectCount, KeyFilter]),
                       io:format("Expected Key Count: ~p Actual Key Count: ~p~n",
                                 [length(ExpectedKeys), length(Keys)]),
                       io:format("Expected Keys: ~p~nActual Keys: ~p~n",
-                                [ExpectedKeys, Keys])
+                                [ExpectedKeys, lists:sort(Keys)])
                   end,
                   conjunction(
                     [
@@ -151,7 +151,7 @@ prop_basic_listkeys() ->
 start_link(ReqId, Bucket, Filter, Timeout, ClientType) ->
     Sink = spawn(?MODULE, data_sink, [ReqId, [], false]),
     From = {raw, ReqId, Sink},
-    {ok, _FsmPid} = riak_core_coverage_fsm:start_link(riak_kv_keys_fsm, From, Bucket, Filter, [], Timeout, ClientType),
+    {ok, _FsmPid} = riak_core_coverage_fsm:start_link(riak_kv_keys_fsm, From, [Bucket, Filter, Timeout, ClientType]),
     wait_for_replies(Sink, ReqId).
 
 %%====================================================================
