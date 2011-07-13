@@ -701,10 +701,9 @@ list_buckets_test_() ->
 list_buckets_test_i(BackendMod) ->
     {S, B, _K} = backend_with_known_key(BackendMod),
     Caller = new_result_listener(buckets),
-    handle_command(?COVERAGE_VNODE_REQ{args=[Caller, 456],
-                                   module=riak_kv_vnode,
-                                   function=list_buckets,
-                                   filter=none},
+    handle_command({?KV_LISTBUCKETS_REQ{caller={fsm, undefined, Caller}, 
+                                       item_filter=none,
+                                       req_id=456}, []},
                    ignore, S),
     ?assertEqual({ok, [B]}, results_from_listener(Caller)),
     flush_msgs().
@@ -713,29 +712,26 @@ filter_keys_test() ->
     {S, B, K} = backend_with_known_key(riak_kv_ets_backend),
 
     Caller1 = new_result_listener(keys),
-    handle_command(?COVERAGE_VNODE_REQ{args=[Caller1, 124, B],
-                                       filter=fun(Item, Acc) -> [Item | Acc] end,
-                                       module=riak_kv_vnode,
-                                       function=list_keys
-                                      },
+    handle_command({?KV_LISTKEYS_REQ{bucket=B,
+                                    caller={fsm, undefined, Caller1},
+                                    item_filter=fun(_) -> true end,
+                                    req_id=124}, []},
                    ignore, S),
     ?assertEqual({ok, [K]}, results_from_listener(Caller1)),
 
     Caller2 = new_result_listener(keys),
-    handle_command(?COVERAGE_VNODE_REQ{args=[Caller2, 125, B],
-                                       filter=fun(_, _) -> [] end,
-                                       module=riak_kv_vnode,
-                                       function=list_keys
-                                      },
+    handle_command({?KV_LISTKEYS_REQ{bucket=B,
+                                    caller={fsm, undefined, Caller2},
+                                    item_filter=fun(_) -> false end,
+                                    req_id=125}, []},
                    ignore, S),
     ?assertEqual({ok, []}, results_from_listener(Caller2)),
 
     Caller3 = new_result_listener(keys),
-    handle_command(?COVERAGE_VNODE_REQ{args=[Caller3, 126, <<"g">>],
-                                       filter=fun(Item, Acc) -> [Item | Acc] end,
-                                       module=riak_kv_vnode,
-                                       function=list_keys
-                                      },
+    handle_command({?KV_LISTKEYS_REQ{bucket= <<"g">>,
+                                    caller={fsm, undefined, Caller3},
+                                    item_filter=fun(_) -> true end,
+                                    req_id=126}, []},
                    ignore, S),
     ?assertEqual({ok, []}, results_from_listener(Caller3)),
 
