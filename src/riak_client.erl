@@ -179,7 +179,6 @@ mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout, _) ->
     mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout).
 
 mapred_bucket(Bucket, Query) ->
-    io:format("Bucket: ~p Query: ~p~n", [Bucket, Query]),
     mapred_bucket(Bucket, Query, ?DEFAULT_TIMEOUT).
 
 mapred_bucket(Bucket, Query, Timeout) ->
@@ -649,15 +648,11 @@ wait_for_listkeys(ReqId,Timeout,Acc) ->
 
 %% @private
 wait_for_listbuckets(ReqId, Timeout) ->
-    wait_for_listbuckets(ReqId, Timeout, []).
-%% @private
-wait_for_listbuckets(ReqId, Timeout, Acc) ->
-    receive
-        {ReqId, done} -> {ok, Acc};
-        {ReqId,{buckets, Res}} -> wait_for_listbuckets(ReqId, Timeout, [Res | Acc]);
+    receive            
+        {ReqId,{buckets, Buckets}} -> {ok, Buckets};
         {ReqId, Error} -> {error, Error}
     after Timeout ->
-            {error, timeout, Acc}
+            {error, timeout}
     end.
 
 add_inputs(_FlowPid, []) ->

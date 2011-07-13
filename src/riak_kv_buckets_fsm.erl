@@ -86,7 +86,6 @@ finish(clean,
             luke_flow:add_inputs(Buckets),
             luke_flow:finish_inputs(ClientPid);
         plain ->
-            ClientPid ! {ReqId, {buckets, lists:usort(lists:flatten(Buckets))}},
-            ClientPid ! {ReqId, done}
+            ClientPid ! {ReqId, {buckets, lists:usort(lists:flatten(Buckets))}}
     end,
     {stop, normal, StateData}.
