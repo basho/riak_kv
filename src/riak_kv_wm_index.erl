@@ -82,15 +82,13 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
 malformed_request(RD, Ctx) ->
     %% Pull the params...
     Bucket = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(bucket, RD))),
-    IndexName = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(index, RD))),
+    IndexField = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(field, RD))),
     IndexOp = wrq:path_info(op, RD),
     Args1 = wrq:path_tokens(RD),
-    io:format("[~s:~p] DEBUG - Args1: ~p~n", [?MODULE, ?LINE, Args1]),
     Args2 = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
         
-    case to_index_query(IndexOp, IndexName, Args2) of
+    case to_index_query(IndexOp, IndexField, Args2) of
         {ok, Query} ->
-            io:format("[~s:~p] DEBUG - Query: ~p~n", [?MODULE, ?LINE, Query]),
             %% Request is valid.
             NewCtx = Ctx#ctx{ 
                        bucket = Bucket, 
@@ -145,16 +143,18 @@ produce_index_results(RD, Ctx) ->
 %%         {ok, [{atom(), binary(), list(binary())}]} | {error, Reasons}.
 %% @doc Given an IndexOp, IndexName, and Args, construct and return a
 %%      valid query, or a list of errors if the query is malformed.
-to_index_query(IndexOp, IndexName, Args) ->
-    io:format("[~s:~p] DEBUG - IndexOp: ~p~n", [?MODULE, ?LINE, IndexOp]),
-    io:format("[~s:~p] DEBUG - IndexName: ~p~n", [?MODULE, ?LINE, IndexName]),
+to_index_query(IndexOp, IndexField, Args) ->
     %% Validate the index operation...
     case list_to_index_op(IndexOp) of
         {IndexOp1, NumArgs} when length(Args) == NumArgs->
+            %% Normalize the index field...
+            IndexField1 = riak_index:normalize_index_field(IndexField),
+
             %% Validate the number of arguments..
-            case riak_index:parse_fields([{IndexName, X} || X <- Args]) of
-                {ok, _} -> 
-                    {ok, [{IndexOp1, IndexName, Args}]};
+            case riak_index:parse_fields([{IndexField1, X} || X <- Args]) of
+                {ok, ParsedFields} -> 
+                    Args1 = [X || {_,X} <- ParsedFields],
+                    {ok, [{IndexOp1, IndexField1, Args1}]};
                 {error, FailureReasons} ->
                     {error, FailureReasons}
             end;                                

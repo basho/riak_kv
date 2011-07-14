@@ -93,7 +93,7 @@ raw_dispatch(Name) ->
      {["buckets", bucket, "keys", key, '*'],
       riak_kv_wm_link_walker, Props2},
 
-     {["buckets", bucket, "index", index, op, '*'],
+     {["buckets", bucket, "index", field, op, '*'],
       riak_kv_wm_index, Props2}
     ].
 

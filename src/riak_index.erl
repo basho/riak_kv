@@ -24,10 +24,11 @@
 
 -module(riak_index).
 -export([
-         validate_object_hook/1,
+         parse_object_hook/1,
          parse_object/1,
          parse_fields/1,
          format_failure_reason/1,
+         normalize_index_field/1,
          timestamp/0
         ]).
 -ifdef(TEST).
@@ -52,18 +53,21 @@
 %%                          | {lte, index_field(), index_value()}.
 
 
-%% @spec validate_object_hook(riak_object:riak_object()) -> 
+%% @spec parse_object_hook(riak_object:riak_object()) -> 
 %%         riak_object:riak_object() | {fail, [failure_reason()]}.
 %%
-%% @doc Validate the index fields stored in object metadata. Conforms
-%%      to the pre-commit hook interface. Return the unmodified object
-%%      if validation was successful, or {fail, [Reasons]} if validation
-%%      failed. Reason is either `{unknown_field_type, Field}` or
+%% @doc Parse the index fields stored in object metadata. Conforms to
+%%      the pre-commit hook interface. Return the new object with
+%%      parsed fields stuffed into the matadata if validation was
+%%      successful, or {fail, [Reasons]} if validation failed. Reason
+%%      is either `{unknown_field_type, Field}` or
 %%      `{field_parsing_failed, {Field, Value}}.`
-validate_object_hook(RObj) ->
+parse_object_hook(RObj) ->
     case parse_object(RObj) of
-        {ok, _} -> 
-            RObj;
+        {ok, ParsedFields} -> 
+            MD1 = riak_object:get_metadata(RObj),
+            MD2 = dict:store(?MD_INDEX, ParsedFields, MD1),
+            riak_object:update_metadata(RObj, MD2);
         {error, Reasons} ->
             {fail, Reasons}
     end.
@@ -113,10 +117,10 @@ parse_fields(IndexFields) ->
     %% ErrorAcc, depending on whether the operation was successful.
     Types = field_types(),
     F = fun({Field, Value}, {ResultAcc, ErrorAcc}) ->
-                FieldBin = any_to_binary(Field),
-                case parse_field(FieldBin, Value, Types) of
+                Field1 = normalize_index_field(Field),
+                case parse_field(Field1, Value, Types) of
                     {ok, ParsedValue} -> 
-                        NewResultAcc = [{FieldBin, ParsedValue} | ResultAcc],
+                        NewResultAcc = [{Field1, ParsedValue} | ResultAcc],
                         {NewResultAcc, ErrorAcc};
                     {error, Reason} -> 
                         NewErrorAcc = [Reason | ErrorAcc],
@@ -225,6 +229,8 @@ parse_binary(Value) when is_list(Value) ->
 %% @spec parse_integer(string()) -> {ok, integer()} | {error, Reason}
 %%
 %% @doc Parse a string into an integer value.
+parse_integer(Value) when is_integer(Value) ->
+    {ok, Value};
 parse_integer(Value) when is_binary(Value) ->
     parse_integer(binary_to_list(Value));
 parse_integer(Value) when is_list(Value) ->
@@ -235,10 +241,10 @@ parse_integer(Value) when is_list(Value) ->
             {error, Reason}
     end.
 
-any_to_binary(V) when is_binary(V) ->
-    V;
-any_to_binary(V) when is_list(V) ->
-    list_to_binary(V).
+normalize_index_field(V) when is_binary(V) ->
+    normalize_index_field(binary_to_list(V));
+normalize_index_field(V) when is_list(V) ->
+    list_to_binary(string:to_lower(V)).
 
 
 %% ====================
@@ -317,7 +323,7 @@ validate_object_test() ->
     %% supplied data, and call validate_object on it.
     F = fun(MetaDataList) ->
                 Obj = riak_object:new(<<"B">>, <<"K">>, <<"VAL">>, dict:from_list([{?MD_INDEX, MetaDataList}])),
-                validate_object_hook(Obj)
+                parse_object_hook(Obj)
         end,
 
     ?assertMatch(

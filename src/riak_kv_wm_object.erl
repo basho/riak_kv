@@ -356,13 +356,13 @@ malformed_link_headers(RD, Ctx) ->
 %%      An index field should be of the form "index_fieldname_type"
 malformed_index_headers(RD, Ctx) ->
     %% Get a list of index_headers...
-    L = extract_index_headers(RD),
+    IndexFields1 = extract_index_fields(RD),
 
     %% Validate the fields. If validation passes, then the index
     %% headers are correctly formed.
-    case riak_index:parse_fields(L) of
-        {ok, _} ->
-            {false, RD, Ctx#ctx { index_fields=L }};
+    case riak_index:parse_fields(IndexFields1) of
+        {ok, IndexFields2} ->
+            {false, RD, Ctx#ctx { index_fields=IndexFields2 }};
         {error, Reasons} ->
             {true,
              wrq:append_to_resp_body(
@@ -371,11 +371,11 @@ malformed_index_headers(RD, Ctx) ->
              Ctx}
     end.
 
-%% @spec extract_index_headers(reqdata()) -> proplist().
+%% @spec extract_index_fields(reqdata()) -> proplist().
 %%
-%% @doc Extract headers prefixed by "x-riak-index-" in the client's
-%%      PUT request, to be indexed at write time.
-extract_index_headers(RD) ->
+%% @doc Extract fields from headers prefixed by "x-riak-index-" in the
+%%      client's PUT request, to be indexed at write time.
+extract_index_fields(RD) ->
     PrefixSize = length(?HEAD_INDEX_PREFIX),
     F = fun({K,V}, Acc) ->
                 KList = riak_kv_wm_utils:any_to_list(K),
@@ -695,7 +695,9 @@ produce_doc_body(RD, Ctx) ->
             IndexRD = case dict:find(?MD_INDEX, MD) of
                           {ok, IndexMeta} ->
                               lists:foldl(fun({K,V}, Acc) ->
-                                                  wrq:merge_resp_headers([{?HEAD_INDEX_PREFIX ++ K,V}], Acc)
+                                                  K1 = riak_kv_wm_utils:any_to_list(K),
+                                                  V1 = riak_kv_wm_utils:any_to_list(V),
+                                                  wrq:merge_resp_headers([{?HEAD_INDEX_PREFIX ++ K1, V1}], Acc)
                                           end,
                                           UserMetaRD, IndexMeta);
                           error -> UserMetaRD
