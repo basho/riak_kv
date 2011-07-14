@@ -69,7 +69,8 @@ init([Manager, PoolName]) ->
     StackSize = read_config(js_thread_stack, 8),
     %% Dialyzer: js_driver:new throws on failure- we can match on {ok,Ctx} here.
     {ok, Ctx} =  new_context(StackSize, HeapSize),
-    error_logger:info_msg("Spidermonkey VM (thread stack: ~pMB, max heap: ~pMB, pool: ~p) host starting (~p)~n", [StackSize, HeapSize, PoolName, self()]),
+    lager:info("Spidermonkey VM (thread stack: ~pMB, max heap: ~pMB, pool: ~p) host starting (~p)",
+        [StackSize, HeapSize, PoolName, self()]),
     riak_kv_js_manager:add_vm(PoolName),
     erlang:monitor(process, Manager),
     {ok, #state{manager=Manager, pool=PoolName, ctx=Ctx}}.
@@ -146,7 +147,7 @@ handle_call(Request, _From, State) ->
 
 handle_cast(reload, #state{ctx=Ctx, pool=Pool}=State) ->
     init_context(Ctx),
-    error_logger:info_msg("Spidermonkey VM (pool: ~p) host reloaded (~p)~n", [Pool, self()]),
+    lager:info("Spidermonkey VM (pool: ~p) host reloaded (~p)", [Pool, self()]),
     {noreply, State};
 
 %% Batch map phase with anonymous function
@@ -224,7 +225,7 @@ handle_info(_Info, State) ->
 
 terminate(_Reason, #state{pool=Pool, ctx=Ctx}) ->
     js_driver:destroy(Ctx),
-    error_logger:info_msg("Spidermonkey VM (pool: ~p) host stopping (~p)~n", [Pool, self()]),
+    lager:info("Spidermonkey VM (pool: ~p) host stopping (~p)", [Pool, self()]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -268,7 +269,7 @@ invoke_js(Ctx, Js, Args) ->
         end
     catch
         exit: {ucs, {bad_utf8_character_code}} ->
-            error_logger:error_msg("Error JSON encoding arguments: ~p~n", [Args]),
+            lager:error("Error JSON encoding arguments: ~p", [Args]),
             {error, bad_encoding};
         exit: {json_encode, _} ->
             {error, bad_json};
@@ -282,7 +283,7 @@ define_anon_js(JS, Args) ->
         iolist_to_binary([JS, <<"(">>, ArgList, <<");">>])
     catch
         exit: {ucs, {bad_utf8_character_code}} ->
-            error_logger:error_msg("Error JSON encoding arguments: ~p~n", [Args]),
+            lager:error("Error JSON encoding arguments: ~p", [Args]),
             {error, bad_encoding};
         exit: {json_encode, _} ->
             {error, bad_json};

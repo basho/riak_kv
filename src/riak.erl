@@ -43,7 +43,7 @@ stop() -> stop("riak stop requested").
 stop(Reason) ->
     % we never do an application:stop because that makes it very hard
     %  to really halt the runtime, which is what we need here.
-    error_logger:info_msg(io_lib:format("~p~n",[Reason])),
+    lager:info("~p",[Reason]),
     init:stop().
     
 %% @spec get_app_env() -> [{Key :: atom(), Value :: term()}]
@@ -121,18 +121,18 @@ client_test(Node) ->
                 {ok, Client} ->
                     case client_test_phase1(Client) of
                         ok ->
-                            error_logger:info_msg("Successfully completed 1 read/write cycle to ~p\n", [Node]),
+                            lager:info("Successfully completed 1 read/write cycle to ~p", [Node]),
                             ok;
                         error ->
                             error
                     end;
                 Error ->
-                    error_logger:error_msg("Error creating client connection to ~s: ~p\n",
+                    lager:error("Error creating client connection to ~s: ~p",
                                            [Node, Error]),
                     error
             end;
         pang ->
-            error_logger:error_msg("Node ~p is not reachable from ~p.\n", [Node, node()]),
+            lager:error("Node ~p is not reachable from ~p.", [Node, node()]),
             error
     end.
 
@@ -185,7 +185,7 @@ client_test_phase1(Client) ->
         {error, notfound} ->
             client_test_phase2(Client, riak_object:new(?CLIENT_TEST_BUCKET, ?CLIENT_TEST_KEY, undefined));
         Error ->
-            error_logger:error_msg("Failed to read test value: ~p\n", [Error]),
+            lager:error("Failed to read test value: ~p", [Error]),
             error
     end.
 
@@ -196,7 +196,7 @@ client_test_phase2(Client, Object0) ->
         ok ->
             client_test_phase3(Client, Now);
         Error ->
-            error_logger:error_msg("Failed to write test value: ~p\n", [Error]),
+            lager:error("Failed to write test value: ~p", [Error]),
             error
     end.
 
@@ -207,11 +207,13 @@ client_test_phase3(Client, WrittenValue) ->
                 true ->
                     ok;
                 false ->
-                    error_logger:error_msg("Failed to find test value in list of objects. Expected: ~p\Actual: ~p\n",
-                                           [WrittenValue, riak_object:get_values(Object)]),
+                    lager:error(
+                        "Failed to find test value in list of objects."
+                        " Expected: ~p Actual: ~p",
+                        [WrittenValue, riak_object:get_values(Object)]),
                     error
             end;
         Error ->
-            error_logger:error_msg("Failed to read test value: ~p\n", [Error]),
+            lager:error("Failed to read test value: ~p", [Error]),
             error
     end.

@@ -128,8 +128,8 @@ read_js_pool_size(Entry, PoolType) ->
     case app_helper:get_env(riak_kv, Entry, undefined) of
         undefined ->
             OldSize = app_helper:get_env(riak_kv, js_vm_count, 0),
-            error_logger:warning_msg("js_vm_count has been deprecated. " ++
-                                     "Please use ~p to configure the ~s pool.", [Entry, PoolType]),
+            lager:warning("js_vm_count has been deprecated. "
+                            "Please use ~p to configure the ~s pool.", [Entry, PoolType]),
             case OldSize > 8 of
                 true ->
                     OldSize div 3;

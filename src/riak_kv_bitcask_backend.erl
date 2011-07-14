@@ -74,7 +74,7 @@ start(Partition, Config) ->
         ok ->
             ok;
         {error, Reason} ->
-            error_logger:error_msg("Failed to create bitcask dir ~s: ~p\n",
+            lager:error("Failed to create bitcask dir ~s: ~p",
                                    [BitcaskRoot, Reason]),
             riak:stop("riak_kv_bitcask_backend failed to start.")
     end,
@@ -236,7 +236,7 @@ maybe_schedule_sync(Ref) when is_reference(Ref) ->
         {ok, none} ->
             ok;
         BadStrategy ->
-            error_logger:info_msg("Ignoring invalid bitcask sync strategy: ~p\n",
+            lager:info("Ignoring invalid bitcask sync strategy: ~p",
                                   [BadStrategy]),
             ok
     end.

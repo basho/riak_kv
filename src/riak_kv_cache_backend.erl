@@ -41,8 +41,6 @@
 -export([drop/1, is_empty/1, fold/3, callback/3]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--define(PRINT(Var), error_logger:info_msg("DEBUG: ~p:~p - ~p: ~p~n", [?MODULE, ?LINE, ??Var, Var])).
-
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
