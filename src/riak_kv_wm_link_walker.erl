@@ -130,14 +130,6 @@
          process_post/2
         ]).
 
--import(riak_kv_wm_utils,
-        [
-         maybe_decode_uri/2,
-         get_riak_client/2,
-         get_client_id/1,
-         vclock_header/1
-        ]).
-
 %% map/reduce link-syntax export
 -export([mapreduce_linkfun/3]).
 
@@ -237,12 +229,12 @@ malformed_request(RD, Ctx) ->
 %%      opportunity to extract the 'bucket' and 'key' path
 %%      bindings from the dispatch.
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
-    case get_riak_client(RiakProps, get_client_id(RD)) of
+    case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             CtxBucket =
-                maybe_decode_uri(RD, wrq:path_info(bucket, RD)),
+                riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(bucket, RD)),
             CtxKey =
-                maybe_decode_uri(RD, wrq:path_info(key, RD)),
+                riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(key, RD)),
             {true,
              RD,
              Ctx#ctx{
@@ -408,7 +400,7 @@ multipart_encode_body(RiakObject, Ctx) ->
     APIVersion = Ctx#ctx.api_version,
     Prefix = Ctx#ctx.prefix,
     [{MD, V}|Rest] = riak_object:get_contents(RiakObject),
-    {VHead, Vclock} = vclock_header(RiakObject),
+    {VHead, Vclock} = riak_kv_wm_utils:vclock_header(RiakObject),
     [VHead,": ",Vclock,"\r\n",
 
      case APIVersion of
