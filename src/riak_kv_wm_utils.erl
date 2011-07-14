@@ -32,11 +32,6 @@
          vclock_header/1,
          encode_vclock/1,
          format_links/3,
-         %% add_container_link/3,
-         %% add_bucket_link/3,
-         %% add_link_head/5,
-         %% format_link/3,
-         %% format_link/4,
          encode_value/1,
          accept_value/2,
          any_to_list/1,
@@ -185,58 +180,6 @@ format_links([{Bucket, Key, Tag}|Rest], Prefix, APIVersion, Acc) ->
     format_links(Rest, Prefix, APIVersion, [{?HEAD_LINK, Val}|Acc]);
 format_links([], _Prefix, _APIVersion, Acc) ->
     Acc.
-
-%% %% @spec add_container_link(reqdata(), context()) -> reqdata()
-%% %% @doc Add the Link header specifying the containing bucket of
-%% %%      the document to the response.
-%% add_container_link(RD, Prefix, Bucket) ->
-%%     Val = format_link(Prefix, Bucket),
-%%      wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
-
-%% %% @spec add_bucket_link(binary(), reqdata(), context()) -> reqdata()
-%% %% @doc Add the Link header pointing to a bucket
-%% add_bucket_link(Bucket, RD, Prefix) ->
-%%     Val = format_link(Prefix, Bucket, "contained"),
-%%     wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
-
-%% %% @spec add_link_head(binary(), binary(), binary(), reqdata(), context()) ->
-%% %%          reqdata()
-%% %% @doc Add a Link header specifying the given Bucket and Key
-%% %%      with the given Tag to the response.
-%% add_link_head(Bucket, Key, Tag, RD, Prefix) ->
-%%     Val = format_link(Prefix, Bucket, Key, Tag),
-%%     wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
-
-%% %% @spec format_link(string(), binary(), string()) -> string()
-%% %% @doc Format a Link header to a bucket.
-%% format_link(Prefix, Bucket, Tag, APIVersion) ->
-%%     Bucket1 = mochiweb_util:quote_plus(Bucket),
-%%     Tag1 = mochiweb_util:quote_plus(Tag),
-    
-%%     case APIVersion of
-%%         1 ->
-%%             io_lib:format("</~s/~s>; rel=\"~s\"",
-%%                           [Prefix, Bucket1, Tag1]);
-%%         2 -> 
-%%             io_lib:format("</buckets/~s>; rel=\"~s\"",
-%%                           [Bucket, Tag])
-%%     end.
-
-%% %% @spec format_link(string(), binary(), binary(), binary()) -> string()
-%% %% @doc Format a Link header to another document.
-%% format_link(Prefix, Bucket, Key, Tag, APIVersion) ->
-%%     Bucket1 = mochiweb_util:quote_plus(Bucket),
-%%     Key1 = mochiweb_util:quote_plus(Key),
-%%     Tag1 = mochiweb_util:quote_plus(Tag),
-
-%%     case APIVersion of 
-%%         1 ->
-%%             io_lib:format("</~s/~s/~s>; riaktag=\"~s\"",
-%%                           [Prefix, Bucket, Key, Tag]);
-%%         2 ->
-%%             io_lib:format("</buckets/~s/keys/~s>; riaktag=\"~s\"",
-%%                           [Bucket, Key, Tag])
-%%     end.
 
 %% @spec get_ctype(dict(), term()) -> string()
 %% @doc Work out the content type for this object - use the metadata if provided
