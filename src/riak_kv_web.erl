@@ -31,6 +31,7 @@
 -module(riak_kv_web).
 
 -export([dispatch_table/0]).
+-include("riak_kv_wm_raw.hrl").
 
 dispatch_table() ->
     MapredProps = mapred_props(),
@@ -51,11 +52,57 @@ raw_dispatch() ->
     end.
 
 raw_dispatch(Name) ->
-    Props = raw_props(Name),
-    [{[Name], riak_kv_wm_raw, Props},
-     {[Name, bucket], riak_kv_wm_raw, Props},
-     {[Name, bucket, key], riak_kv_wm_raw, Props},
-     {[Name, bucket, key, '*'], riak_kv_wm_link_walker, Props}].
+    Props1 = [{api_version, 1}|raw_props(Name)],
+    Props2 = [{api_version, 2}|raw_props(Name)],
+    [
+     %% OLD API
+     {[Name],
+      riak_kv_wm_buckets, Props1},
+
+     {[Name, bucket], fun is_post/1,
+      riak_kv_wm_object, Props1},
+
+     {[Name, bucket], fun is_props/1,
+      riak_kv_wm_props, Props1},
+
+     {[Name, bucket], fun is_keylist/1,
+      riak_kv_wm_keylist, [{allow_props_param, true}|Props1]},
+
+     {[Name, bucket, key],
+      riak_kv_wm_object, Props1},
+
+     {[Name, bucket, key, '*'],
+      riak_kv_wm_link_walker, Props1},
+
+     %% NEW API
+     {["buckets"],
+      riak_kv_wm_buckets, Props2},
+
+     {["buckets", bucket, "props"],
+      riak_kv_wm_props, Props2},
+
+     {["buckets", bucket, "keys"], fun is_post/1,
+      riak_kv_wm_object, Props2},
+
+     {["buckets", bucket, "keys"],
+      riak_kv_wm_keylist, Props2},
+
+     {["buckets", bucket, "keys", key],
+      riak_kv_wm_object, Props2},
+
+     {["buckets", bucket, "keys", key, '*'],
+      riak_kv_wm_link_walker, Props2}
+    ].
+
+is_post(Req) ->
+    wrq:method(Req) == 'POST'.
+
+is_props(Req) ->
+    (wrq:get_qs_value(?Q_PROPS, Req) /= ?Q_FALSE) andalso (not is_keylist(Req)).
+
+is_keylist(Req) ->
+    X = wrq:get_qs_value(?Q_KEYS, Req),
+    (X == ?Q_STREAM) orelse (X == ?Q_TRUE).
 
 raw_props(Prefix) ->
     [{prefix, Prefix}, {riak, local}].

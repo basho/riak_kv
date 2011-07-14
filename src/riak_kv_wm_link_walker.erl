@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_link_walker: HTTP access to Riak link traversal
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -23,7 +23,8 @@
 %% @doc Raw link walker resource provides an interface to riak object
 %%      linkwalking over HTTP.  The interface exposed is:
 %%
-%%      /riak/Bucket/Key[/b,t,acc]
+%%      /riak/Bucket/Key[/b,t,acc] (OLD)
+%%      /buckets/Bucket/keys/Key[/b,t,acc] (NEW)
 %%
 %%      where:
 %%
@@ -115,7 +116,6 @@
 %% Node with the specified Cookie.  The Expires header will be
 %% set 60 seconds in the future (default is 600 seconds).
 -module(riak_kv_wm_link_walker).
--author('Bryan Fink <bryan@basho.com>').
 
 %% webmachine resource exports
 -export([
@@ -137,14 +137,15 @@
 -include("riak_kv_wm_raw.hrl").
 
 %% @type context() = term()
--record(ctx, {prefix,     %% string() - prefix for resource urls
-              riak,       %% local | {node(), atom()} - params for riak client
-              bucket,     %% binary() - Bucket name (from uri)
-              key,        %% binary() - Key (from uri),
+-record(ctx, {api_version, %% integer() - Determine which version of the API to use.
+              prefix,      %% string() - prefix for resource urls
+              riak,        %% local | {node(), atom()} - params for riak client
+              bucket,      %% binary() - Bucket name (from uri)
+              key,         %% binary() - Key (from uri),
               linkquery,
-              start,      %% riak_object() - the starting point of the walk
-              cache_secs, %% integer() - number of seconds to add for expires header
-              client      %% riak_client() - the store client
+              start,       %% riak_object() - the starting point of the walk
+              cache_secs,  %% integer() - number of seconds to add for expires header
+              client       %% riak_client() - the store client
              }).
 
 %% @spec mapreduce_linkfun({error, notfound}|riak_object(), term(), {binary(), binary()}) ->
@@ -195,7 +196,8 @@ link_match_fun(Bucket, Tag) ->
 %% @doc Initialize the resource.  This function extacts the 'prefix',
 %%      'riak', and 'chache_secs' properties from the dispatch args.
 init(Props) ->
-    {ok, #ctx{prefix=proplists:get_value(prefix, Props),
+    {ok, #ctx{api_version=proplists:get_value(api_version, Props),
+              prefix=proplists:get_value(prefix, Props),
               riak=proplists:get_value(riak, Props),
               cache_secs=proplists:get_value(cache_secs, Props, 600)
              }}.
@@ -227,12 +229,12 @@ malformed_request(RD, Ctx) ->
 %%      opportunity to extract the 'bucket' and 'key' path
 %%      bindings from the dispatch.
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
-    case get_riak_client(RiakProps) of
+    case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             CtxBucket =
-                riak_kv_wm_raw:maybe_decode_uri(RD, wrq:path_info(bucket, RD)),
+                riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(bucket, RD)),
             CtxKey =
-                riak_kv_wm_raw:maybe_decode_uri(RD, wrq:path_info(key, RD)),
+                riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(key, RD)),
             {true,
              RD,
              Ctx#ctx{
@@ -247,15 +249,6 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx}
     end.
-
-%% @spec get_riak_client(local|{node(),Cookie::atom()}) ->
-%%          {ok, riak_client()} | error()
-%% @doc Get a riak_client.
-get_riak_client(local) ->
-    riak:local_client();
-get_riak_client({Node, Cookie}) ->
-    erlang:set_cookie(node(), Cookie),
-    riak:client_connect(Node).
 
 %% @spec allowed_methods(reqdata(), context()) ->
 %%          {[method()], reqdata(), context()}
@@ -394,7 +387,7 @@ multipart_mixed_encode(WalkResults, Boundary, Ctx) ->
      "\r\n--",Boundary,"--\r\n"].
 
 %% @spec multipart_encode_body(riak_object()|[riak_object()], context()) -> iolist()
-%% @doc Encode a riak object (as an HTTP response much like what riak_kv_wm_raw
+%% @doc Encode a riak object (as an HTTP response much like what riak_kv_wm_object
 %%      would produce) or a result list (as a multipart/mixed document).
 %%      Riak object body will include a Location header to describe where to find
 %%      the object.  An object with siblings will encode as one of the siblings
@@ -403,14 +396,30 @@ multipart_encode_body(NestedResults, Ctx) when is_list(NestedResults) ->
     Boundary = riak_core_util:unique_id_62(),
     [?HEAD_CTYPE, ": multipart/mixed; boundary=",Boundary,"\r\n",
      multipart_mixed_encode(NestedResults, Boundary, Ctx)];
-multipart_encode_body(RiakObject, #ctx{prefix=Prefix}) ->
+multipart_encode_body(RiakObject, Ctx) ->
+    APIVersion = Ctx#ctx.api_version,
+    Prefix = Ctx#ctx.prefix,
     [{MD, V}|Rest] = riak_object:get_contents(RiakObject),
-    {VHead, Vclock} = riak_kv_wm_raw:vclock_header(RiakObject),
+    {VHead, Vclock} = riak_kv_wm_utils:vclock_header(RiakObject),
     [VHead,": ",Vclock,"\r\n",
 
-     "Location: /",Prefix,"/",
-     mochiweb_util:quote_plus(riak_object:bucket(RiakObject)),"/",
-     mochiweb_util:quote_plus(riak_object:key(RiakObject)),
+     case APIVersion of
+         1 ->
+             [
+              "Location: /",Prefix,"/",
+              mochiweb_util:quote_plus(riak_object:bucket(RiakObject)),"/",
+              mochiweb_util:quote_plus(riak_object:key(RiakObject))
+             ];
+         2 ->
+             [
+              "Location: ",
+              "/buckets/",
+              mochiweb_util:quote_plus(riak_object:bucket(RiakObject)),
+              "/keys/",
+              mochiweb_util:quote_plus(riak_object:key(RiakObject))
+             ]
+     end,
+
      if Rest /= [] ->
              ["?",?Q_VTAG,"=",dict:fetch(?MD_VTAG, MD)];
         true ->
@@ -428,10 +437,10 @@ multipart_encode_body(RiakObject, #ctx{prefix=Prefix}) ->
         true ->
              []
      end|
-     riak_kv_wm_raw:multipart_encode_body(
+     riak_kv_wm_utils:multipart_encode_body(
        Prefix,
        riak_object:bucket(RiakObject),
-       {MD,V})].
+       {MD,V}, APIVersion)].
 
 send_malformed_error(RD) ->
     RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
