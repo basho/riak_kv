@@ -239,6 +239,8 @@ maybe_schedule_sync(Ref) when is_reference(Ref) ->
             %%                   {?MODULE, {sync, SyncIntervalMs}});
         {ok, none} ->
             ok;
+        {ok, o_sync} ->
+            ok;
         BadStrategy ->
             error_logger:info_msg("Ignoring invalid bitcask sync strategy: ~p\n",
                                   [BadStrategy]),
