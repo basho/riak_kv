@@ -27,14 +27,10 @@
 
 -record(riak_kv_listkeys_req_v3, {
           bucket :: binary() | tuple(),
-          caller :: pid(),
-          item_filter :: function(),
-          req_id :: non_neg_integer()}).
+          item_filter :: function()}).
 
 -record(riak_kv_listbuckets_req_v1, {
-          caller :: pid(),
-          item_filter :: function(),
-          req_id :: non_neg_integer()}).
+          item_filter :: function()}).
 
 -record(riak_kv_delete_req_v1, {
           bkey :: {binary(), binary()},

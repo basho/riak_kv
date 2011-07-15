@@ -66,10 +66,9 @@ init(From={raw, ReqId, ClientPid}, [Bucket, ItemFilter, Timeout, ClientType]) ->
     NVal = proplists:get_value(n_val, BucketProps),
     %% Construct the key listing request
     Req = ?KV_LISTKEYS_REQ{bucket=Bucket,
-                           caller={fsm, undefined, self()},
-                           item_filter=ItemFilter,
-                           req_id=ReqId},
-    {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
+                           item_filter=ItemFilter},
+    Sender = {fsm, ReqId, self()},
+    {Req, Sender, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
 process_results({Bucket, Keys},

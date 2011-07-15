@@ -33,8 +33,8 @@
          del/3,
          put/6,
          readrepair/6,
-         list_buckets/6,
-         list_keys/7,
+         list_buckets/5,
+         list_keys/6,
          fold/3,
          get_vclocks/2]).
 
@@ -194,31 +194,26 @@ handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
 handle_command(?FOLD_REQ{foldfun=Fun, acc0=Acc},_Sender,State) ->
     Reply = do_fold(Fun, Acc, State),
     {reply, Reply, State};
-handle_command({?KV_LISTBUCKETS_REQ{caller=Caller,
-                                    item_filter=ItemFilter,
-                                    req_id=ReqId},
-                _FilterVNodes},
-               _Sender,
+handle_command({?KV_LISTBUCKETS_REQ{item_filter=ItemFilter}, _FilterVNodes},
+               Sender,
                State=#state{mod=Mod, 
                             modstate=ModState,
                             idx=Index}) ->
     %% Construct the filter function
     Filter = riak_kv_coverage_filter:build_filter(all, ItemFilter, undefined),
-    list_buckets(Caller, ReqId, Filter, Index, Mod, ModState),
+    list_buckets(Sender, Filter, Index, Mod, ModState),
     {noreply, State};
 handle_command({?KV_LISTKEYS_REQ{bucket=Bucket,
-                                 caller=Caller,
-                                 item_filter=ItemFilter,
-                                 req_id=ReqId},
+                                 item_filter=ItemFilter},
                 FilterVNodes},
-               _Sender,
+               Sender,
                State=#state{mod=Mod, 
                             modstate=ModState,
                             idx=Index}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-    list_keys(Caller, ReqId, Bucket, Filter, Index, Mod, ModState),
+    list_keys(Sender, Bucket, Filter, Index, Mod, ModState),
     {noreply, State};
  
 %% Commands originating from inside this vnode
@@ -455,7 +450,7 @@ do_get_binary(BKey, Mod, ModState) ->
 
 
 %% @private
-list_buckets(Caller, ReqId, Filter, Index, Mod, ModState) ->
+list_buckets(Caller, Filter, Index, Mod, ModState) ->
     %% TODO: Decide if we want to continue to allow key filters
     %% to be used to filter the list of buckets. I think it is
     %% more useful to move all filtering out of the backend and 
@@ -464,25 +459,25 @@ list_buckets(Caller, ReqId, Filter, Index, Mod, ModState) ->
     Buckets = Mod:list_bucket(ModState, '_'),
     case Filter of
         none ->
-            riak_core_vnode:reply(Caller, {ReqId, {final_results, {Index, node()}, Buckets}});
+            riak_core_vnode:reply(Caller, {final_results, {Index, node()}, Buckets});
         _ ->
             FilteredBuckets = lists:foldl(Filter, [], Buckets),
-            riak_core_vnode:reply(Caller, {ReqId, {final_results, {Index, node()}, FilteredBuckets}})
+            riak_core_vnode:reply(Caller, {final_results, {Index, node()}, FilteredBuckets})
     end.
 
 %% @private
-list_keys(Caller, ReqId, Bucket, Filter, Index, Mod, ModState) ->
+list_keys(Caller, Bucket, Filter, Index, Mod, ModState) ->
     F = fun({_, _} = BKey, _Val, Acc) ->
-                process_keys(Caller, ReqId, Index, Bucket, Filter, BKey, Acc);
+                process_keys(Caller, Index, Bucket, Filter, BKey, Acc);
            (Key, _Val, Acc) when is_binary(Key) ->
                 %% Backend's fold gives us keys only, so add bucket.
-                process_keys(Caller, ReqId, Index, Bucket, Filter, {Bucket, Key}, Acc)
+                process_keys(Caller, Index, Bucket, Filter, {Bucket, Key}, Acc)
         end,
     TryFuns = [fun() ->
                        %% Difficult to coordinate external backend API, so
                        %% we'll live with it for the moment/eternity.
                        F2 = fun(Key, Acc) ->
-                            process_keys(Caller, ReqId, Index, Bucket,
+                            process_keys(Caller, Index, Bucket,
                                          Filter, {Bucket, Key}, Acc)
                             end,
                        Mod:fold_bucket_keys(ModState, Bucket, F2)
@@ -502,10 +497,10 @@ list_keys(Caller, ReqId, Bucket, Filter, Index, Mod, ModState) ->
                         end, try_next, TryFuns),
     case Filter of
         none ->
-            riak_core_vnode:reply(Caller, {ReqId, {final_results, {Index, node()}, {Bucket, Keys}}});
+            riak_core_vnode:reply(Caller, {final_results, {Index, node()}, {Bucket, Keys}});
         _ ->
             FilteredKeys = lists:foldl(Filter, [], Keys),
-            riak_core_vnode:reply(Caller, {ReqId, {final_results, {Index, node()}, {Bucket, FilteredKeys}}})
+            riak_core_vnode:reply(Caller, {final_results, {Index, node()}, {Bucket, FilteredKeys}})
     end.
 
 %% @private
@@ -518,12 +513,12 @@ do_delete(BKey, Mod, ModState) ->
     end.
 
 %% @private
-process_keys(Caller, ReqId, Index, Bucket, Filter, {Bucket, Key}, Acc) ->
-       buffer_key_result(Caller, ReqId, Bucket, Filter, Index, [Key | Acc]);
-process_keys(_Caller, _ReqId, _Index, _Bucket, _Filter, {_B, _K}, Acc) ->
+process_keys(Caller, Index, Bucket, Filter, {Bucket, Key}, Acc) ->
+       buffer_key_result(Caller, Bucket, Filter, Index, [Key | Acc]);
+process_keys(_Caller, _Index, _Bucket, _Filter, {_B, _K}, Acc) ->
     Acc.
 
-buffer_key_result(Caller, ReqId, Bucket, Filter, Index, Acc) ->
+buffer_key_result(Caller, Bucket, Filter, Index, Acc) ->
     %% Use arbitrary fixed buffer size of 100. Not 
     %% sure there is a good 'why' for that number.
     case length(Acc) >= 100 of
@@ -531,14 +526,14 @@ buffer_key_result(Caller, ReqId, Bucket, Filter, Index, Acc) ->
             %% Filter the buffer keys as needed
             case Filter of 
                none ->
-                    riak_core_vnode:reply(Caller, {ReqId, {results, {Index, node()}, {Bucket, Acc}}});    
+                    riak_core_vnode:reply(Caller, {results, {Index, node()}, {Bucket, Acc}});    
                 _ ->
                     FilteredKeys = lists:foldl(Filter, [], Acc),
                     case FilteredKeys of
                         [] ->
                             ok;
                         _ ->
-                            riak_core_vnode:reply(Caller, {ReqId, {results, {Index, node()}, {Bucket, FilteredKeys}}})
+                            riak_core_vnode:reply(Caller, {results, {Index, node()}, {Bucket, FilteredKeys}})
                     end
             end,
             %% Reset the buffer so that results are not duplicated
@@ -701,10 +696,8 @@ list_buckets_test_() ->
 list_buckets_test_i(BackendMod) ->
     {S, B, _K} = backend_with_known_key(BackendMod),
     Caller = new_result_listener(buckets),
-    handle_command({?KV_LISTBUCKETS_REQ{caller={fsm, undefined, Caller}, 
-                                       item_filter=none,
-                                       req_id=456}, []},
-                   ignore, S),
+    handle_command({?KV_LISTBUCKETS_REQ{item_filter=none}, []},
+                   {fsm, 456, Caller}, S),
     ?assertEqual({ok, [B]}, results_from_listener(Caller)),
     flush_msgs().
 
@@ -713,26 +706,20 @@ filter_keys_test() ->
 
     Caller1 = new_result_listener(keys),
     handle_command({?KV_LISTKEYS_REQ{bucket=B,
-                                    caller={fsm, undefined, Caller1},
-                                    item_filter=fun(_) -> true end,
-                                    req_id=124}, []},
-                   ignore, S),
+                                     item_filter=fun(_) -> true end}, []},
+                   {fsm, 124, Caller1}, S),
     ?assertEqual({ok, [K]}, results_from_listener(Caller1)),
 
     Caller2 = new_result_listener(keys),
     handle_command({?KV_LISTKEYS_REQ{bucket=B,
-                                    caller={fsm, undefined, Caller2},
-                                    item_filter=fun(_) -> false end,
-                                    req_id=125}, []},
-                   ignore, S),
+                                     item_filter=fun(_) -> false end}, []},
+                   {fsm, 125, Caller2}, S),
     ?assertEqual({ok, []}, results_from_listener(Caller2)),
 
     Caller3 = new_result_listener(keys),
     handle_command({?KV_LISTKEYS_REQ{bucket= <<"g">>,
-                                    caller={fsm, undefined, Caller3},
-                                    item_filter=fun(_) -> true end,
-                                    req_id=126}, []},
-                   ignore, S),
+                                     item_filter=fun(_) -> true end}, []},
+                   {fsm, 126, Caller3}, S),
     ?assertEqual({ok, []}, results_from_listener(Caller3)),
 
     flush_msgs().

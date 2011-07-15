@@ -52,10 +52,9 @@ init(From={raw, ReqId, ClientPid}, [ItemFilter, Timeout, ClientType]) ->
             ok
     end,
     %% Construct the bucket listing request
-    Req = ?KV_LISTBUCKETS_REQ{caller={fsm, undefined, self()},
-                              item_filter=ItemFilter,
-                              req_id=ReqId},
-    {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
+    Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
+    Sender = {fsm, ReqId, self()},
+    {Req, Sender, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
 process_results(Buckets,
