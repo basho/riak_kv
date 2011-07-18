@@ -91,7 +91,29 @@ process_results({results, VNode, {Bucket, Keys}},
                  % is not part of the coverage plan
             ignore
     end,
-    StateData.
+    StateData;
+process_results({final_results, VNode, {Bucket, Keys}},
+                CoverageVNodes,
+                StateData=#state{client_type=ClientType,
+                                 from={raw, ReqId, ClientPid}}) ->
+    case lists:member(VNode, CoverageVNodes) of
+        true -> % Received an expected response from a Vnode
+            case ClientType of
+                mapred ->
+                    try
+                        luke_flow:add_inputs(ClientPid, [{Bucket, Key} || Key <- Keys])
+                    catch _:_ ->
+                            exit(self(), normal)
+                    end;
+                plain -> ClientPid ! {ReqId, {keys, Keys}}
+            end,
+            %% Inform the coverage fsm that all results
+            %% are in for this vnode.
+            {done, VNode, StateData};
+        false -> % Ignore a response from a VNode that
+                 % is not part of the coverage plan
+            StateData
+    end.
 
 finish({error, Error},
        StateData=#state{from={raw, ReqId, ClientPid},
