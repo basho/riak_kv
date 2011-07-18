@@ -459,11 +459,12 @@ list_buckets(Caller, Filter, Index, Mod, ModState) ->
     Buckets = Mod:list_bucket(ModState, '_'),
     case Filter of
         none ->
-            riak_core_vnode:reply(Caller, {final_results, {Index, node()}, Buckets});
+            riak_core_vnode:reply(Caller, {results, {Index, node()}, Buckets});
         _ ->
             FilteredBuckets = lists:foldl(Filter, [], Buckets),
-            riak_core_vnode:reply(Caller, {final_results, {Index, node()}, FilteredBuckets})
-    end.
+            riak_core_vnode:reply(Caller, {results, {Index, node()}, FilteredBuckets})
+    end,
+    riak_core_vnode:reply(Caller, {done, {Index, node()}}).
 
 %% @private
 list_keys(Caller, Bucket, Filter, Index, Mod, ModState) ->
@@ -497,11 +498,12 @@ list_keys(Caller, Bucket, Filter, Index, Mod, ModState) ->
                         end, try_next, TryFuns),
     case Filter of
         none ->
-            riak_core_vnode:reply(Caller, {final_results, {Index, node()}, {Bucket, Keys}});
+            riak_core_vnode:reply(Caller, {results, {Index, node()}, {Bucket, Keys}});
         _ ->
             FilteredKeys = lists:foldl(Filter, [], Keys),
-            riak_core_vnode:reply(Caller, {final_results, {Index, node()}, {Bucket, FilteredKeys}})
-    end.
+            riak_core_vnode:reply(Caller, {results, {Index, node()}, {Bucket, FilteredKeys}})
+    end,
+    riak_core_vnode:reply(Caller, {done, {Index, node()}}).
 
 %% @private
 do_delete(BKey, Mod, ModState) ->
@@ -742,8 +744,8 @@ result_listener_buckets(Acc) ->
     receive
         {'$gen_event', {_,{results,_,Results}}} ->
             result_listener_keys(Results ++ Acc);
-        {'$gen_event', {_,{final_results,_,Results}}} ->
-            result_listener_done(Results ++ Acc)
+        {'$gen_event', {_,{done,_}}} ->
+            result_listener_done(Acc)
     after 5000 ->
             result_listener_done({timeout, Acc})
     end.
@@ -752,8 +754,8 @@ result_listener_keys(Acc) ->
     receive
         {'$gen_event', {_,{results,_,{_Bucket, Results}}}} ->
             result_listener_keys(Results ++ Acc);
-        {'$gen_event', {_,{final_results,_,{_Bucket, Results}}}} ->
-            result_listener_done(Results ++ Acc)
+        {'$gen_event', {_,{done,_}}} ->
+            result_listener_done(Acc)
     after 5000 ->
             result_listener_done({timeout, Acc})
     end.

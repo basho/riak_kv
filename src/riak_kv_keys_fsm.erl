@@ -40,7 +40,7 @@
 -include_lib("riak_kv_vnode.hrl").
 
 -export([init/2,
-         process_results/2,
+         process_results/3,
          finish/2]).
 
 -type from() :: {raw, req_id(), pid()}.
@@ -71,17 +71,25 @@ init(From={raw, ReqId, ClientPid}, [Bucket, ItemFilter, Timeout, ClientType]) ->
     {Req, Sender, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
-process_results({Bucket, Keys},
+process_results({results, VNode, {Bucket, Keys}},
+                CoverageVNodes,
                 StateData=#state{client_type=ClientType,
                                  from={raw, ReqId, ClientPid}}) ->
-    case ClientType of
-        mapred ->
-            try
-                luke_flow:add_inputs(ClientPid, [{Bucket, Key} || Key <- Keys])
-            catch _:_ ->
-                    exit(self(), normal)
+    case lists:member(VNode, CoverageVNodes) of
+        true ->
+             % Received an expected response from a Vnode
+            case ClientType of
+                mapred ->
+                    try
+                        luke_flow:add_inputs(ClientPid, [{Bucket, Key} || Key <- Keys])
+                    catch _:_ ->
+                            exit(self(), normal)
+                    end;
+                plain -> ClientPid ! {ReqId, {keys, Keys}}
             end;
-        plain -> ClientPid ! {ReqId, {keys, Keys}}
+        false -> % Ignore a response from a VNode that
+                 % is not part of the coverage plan
+            ignore
     end,
     StateData.
 

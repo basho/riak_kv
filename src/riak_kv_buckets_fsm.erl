@@ -29,7 +29,7 @@
 -include_lib("riak_kv_vnode.hrl").
 
 -export([init/2,
-         process_results/2,
+         process_results/3,
          finish/2]).
 
 -type from() :: {raw, req_id(), pid()}.
@@ -39,7 +39,7 @@
                 client_type :: plain | mapred,
                 from :: from()}).
 
-%% @doc Return a tuple containing the ModFun to call per vnode, 
+%% @doc Return a tuple containing the ModFun to call per vnode,
 %% the number of primary preflist vnodes the operation
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
@@ -57,9 +57,17 @@ init(From={raw, ReqId, ClientPid}, [ItemFilter, Timeout, ClientType]) ->
     {Req, Sender, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
-process_results(Buckets,
+process_results({results, VNode, Buckets},
+                CoverageVNodes,
                 StateData=#state{buckets=BucketAcc}) ->
-    StateData#state{buckets=(Buckets ++ BucketAcc)}.
+    case lists:member(VNode, CoverageVNodes) of
+        true ->
+                                                % Received an expected response from a Vnode
+            StateData#state{buckets=(Buckets ++ BucketAcc)};
+        false -> % Ignore a response from a VNode that
+                                                % is not part of the coverage plan
+            StateData
+    end.
 
 finish({error, Error},
        StateData=#state{client_type=ClientType,
