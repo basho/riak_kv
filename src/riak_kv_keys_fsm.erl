@@ -91,7 +91,7 @@ process_results({results, VNode, {Bucket, Keys}},
                  % is not part of the coverage plan
             ignore
     end,
-    StateData;
+    {ok, StateData};
 process_results({final_results, VNode, {Bucket, Keys}},
                 CoverageVNodes,
                 StateData=#state{client_type=ClientType,
@@ -112,7 +112,7 @@ process_results({final_results, VNode, {Bucket, Keys}},
             {done, VNode, StateData};
         false -> % Ignore a response from a VNode that
                  % is not part of the coverage plan
-            StateData
+            {ok, StateData}
     end.
 
 finish({error, Error},

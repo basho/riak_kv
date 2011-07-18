@@ -63,10 +63,10 @@ process_results({results, VNode, Buckets},
     case lists:member(VNode, CoverageVNodes) of
         true ->
                                                 % Received an expected response from a Vnode
-            StateData#state{buckets=(Buckets ++ BucketAcc)};
+            {ok, StateData#state{buckets=(Buckets ++ BucketAcc)}};
         false -> % Ignore a response from a VNode that
                                                 % is not part of the coverage plan
-            StateData
+            {ok, StateData}
     end;
 process_results({final_results, VNode, Buckets},
                 CoverageVNodes,
@@ -76,7 +76,7 @@ process_results({final_results, VNode, Buckets},
             {done, VNode, StateData#state{buckets=(Buckets ++ BucketAcc)}};
         false -> % Ignore a response from a VNode that
                                                 % is not part of the coverage plan
-            StateData
+            {ok, StateData}
     end.
 
 finish({error, Error},
