@@ -69,12 +69,10 @@ rewrite_cast({vnode_get, {Partition,_Node},
 %%     gen_fsm:send_event(Pid, {vnode_merkle, {RemoteVN,Merkle,ObjList}}),
 %%     {noreply, State};
 rewrite_cast({vnode_list_bucket, {Partition,_Node},
-              {FSM_pid, Bucket, ReqID}}) ->
+              {FSM_pid, _Bucket, ReqID}}) ->
     Req = riak_core_vnode_master:make_request(
-            #riak_kv_listkeys_req_v1{
-               bucket=Bucket,
-               req_id=ReqID},
-            {fsm, undefined, FSM_pid},
+            {?KV_LISTBUCKETS_REQ{item_filter=none}, []},
+            {fsm, ReqID, FSM_pid},
             Partition),
     {ok, Req}.
 %% rewrite_cast({add_exclusion, Partition}, State=#state{excl=Excl}) ->
@@ -184,7 +182,7 @@ legacy_kv_test_() ->
             send_0_11_0_cmd(vnode_list_bucket,{self(), Bucket, ReqID}),
             receive
                 Msg ->
-                    ?assertEqual({'$gen_event',{kl,[],0,789}}, Msg)
+                    ?assertEqual({'$gen_event',{ReqID, {final_results,{0, nonode@nohost},[<<"bucket">>]}}}, Msg)
             after
                 100 ->
                     ?assert(false)
