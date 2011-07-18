@@ -43,7 +43,7 @@ stop() -> stop("riak stop requested").
 stop(Reason) ->
     % we never do an application:stop because that makes it very hard
     %  to really halt the runtime, which is what we need here.
-    lager:info("~p",[Reason]),
+    lager:notice("~p",[Reason]),
     init:stop().
     
 %% @spec get_app_env() -> [{Key :: atom(), Value :: term()}]

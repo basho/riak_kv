@@ -229,7 +229,7 @@ mark_pending_reloads(VMPid, Master, Idle) ->
     mark_pending_reloads(ets:next(Master, VMPid), Master, Idle).
 
 dispatch(_Name, _JSCall, _MaxCount, 0) ->
-    lager:info("JS call failed: All VMs are busy."),
+    lager:notice("JS call failed: All VMs are busy."),
     {error, no_vms};
 dispatch(Name, JSCall, MaxCount, Count) ->
     case reserve_vm(Name) of
@@ -243,7 +243,7 @@ dispatch(Name, JSCall, MaxCount, Count) ->
     end.
 
 blocking_dispatch(_Name, _JSCall, _MaxCount, 0) ->
-    lager:info("JS call failed: All VMs are busy."),
+    lager:notice("JS call failed: All VMs are busy."),
     {error, no_vms};
 blocking_dispatch(Name, JSCall, MaxCount, Count) ->
     case reserve_vm(Name) of

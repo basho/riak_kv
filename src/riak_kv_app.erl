@@ -69,7 +69,7 @@ start(_Type, _StartArgs) ->
     StorageBackend = app_helper:get_env(riak_kv, storage_backend),
     case code:ensure_loaded(StorageBackend) of
         {error,nofile} ->
-            lager:error("storage_backend ~p is non-loadable.",
+            lager:critical("storage_backend ~p is non-loadable.",
                                    [StorageBackend]),
             throw({error, invalid_storage_backend});
         _ ->
