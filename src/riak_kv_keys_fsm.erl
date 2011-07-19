@@ -437,7 +437,7 @@ start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Filters, Timeout) ->
                                       try
                                           case riak_kv_keylister_sup:start_keylister(Node, [ReqId, self(), Input, VNodes, FilterVNodes, Timeout]) of
                                               {error, Error} ->
-                                                  lager:warning("Unable to start a keylister process on ~p. Reason: ~p", [Node, Error]),
+                                                  lager:warning("Unable to start a keylister process on ~p: ~p", [Node, Error]),
                                                   {Successes, [Node | Errors]};
                                               {ok, Pid} ->
                                                   erlang:link(Pid),
@@ -445,7 +445,7 @@ start_keylisters(ReqId, Input, KeyListers, NodeIndexes, Filters, Timeout) ->
                                           end
                                       catch
                                           _:ThrowReason ->
-                                              lager:warning("Unable to start a keylister process on ~p. Reason: ~p", [Node, ThrowReason]),
+                                              lager:warning("Unable to start a keylister process on ~p: ~p", [Node, ThrowReason]),
                                               {Successes, [Node | Errors]}
                                       end;
                                   KeyListerPid ->

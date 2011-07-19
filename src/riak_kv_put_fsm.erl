@@ -495,7 +495,7 @@ decode_precommit({erlang, {Mod, Fun}, Result}) ->
             {fail, _Reason} ->
                 Result;
             {'EXIT',  Mod, Fun, Class, Exception} ->
-                lager:error("problem invoking hook ~p:~p -> ~p:~p~n~p",
+                lager:error("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
                                        [Mod,Fun,Class,Exception,
                                         erlang:get_stacktrace()]),
                 {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
