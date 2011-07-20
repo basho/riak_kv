@@ -29,7 +29,7 @@
 -include_lib("riak_kv_vnode.hrl").
 
 -export([init/2,
-         process_results/3,
+         process_results/2,
          finish/2]).
 
 -type from() :: {raw, req_id(), pid()}.
@@ -57,27 +57,12 @@ init(From={raw, ReqId, ClientPid}, [ItemFilter, Timeout, ClientType]) ->
     {Req, Sender, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
-process_results({results, VNode, Buckets},
-                CoverageVNodes,
+process_results({results, Buckets},
                 StateData=#state{buckets=BucketAcc}) ->
-    case lists:member(VNode, CoverageVNodes) of
-        true ->
-                                                % Received an expected response from a Vnode
-            {ok, StateData#state{buckets=(Buckets ++ BucketAcc)}};
-        false -> % Ignore a response from a VNode that
-                                                % is not part of the coverage plan
-            {ok, StateData}
-    end;
-process_results({final_results, VNode, Buckets},
-                CoverageVNodes,
+    {ok, StateData#state{buckets=(Buckets ++ BucketAcc)}};
+process_results({final_results, Buckets},
                 StateData=#state{buckets=BucketAcc}) ->
-    case lists:member(VNode, CoverageVNodes) of
-        true -> % Received an expected response from a Vnode
-            {done, VNode, StateData#state{buckets=(Buckets ++ BucketAcc)}};
-        false -> % Ignore a response from a VNode that
-                                                % is not part of the coverage plan
-            {ok, StateData}
-    end.
+    {done, StateData#state{buckets=(Buckets ++ BucketAcc)}}.
 
 finish({error, Error},
        StateData=#state{client_type=ClientType,

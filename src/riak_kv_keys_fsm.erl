@@ -40,7 +40,7 @@
 -include_lib("riak_kv_vnode.hrl").
 
 -export([init/2,
-         process_results/3,
+         process_results/2,
          finish/2]).
 
 -type from() :: {raw, req_id(), pid()}.
@@ -71,49 +71,16 @@ init(From={raw, ReqId, ClientPid}, [Bucket, ItemFilter, Timeout, ClientType]) ->
     {Req, Sender, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
-process_results({results, VNode, {Bucket, Keys}},
-                CoverageVNodes,
+process_results({results, {Bucket, Keys}},
                 StateData=#state{client_type=ClientType,
                                  from={raw, ReqId, ClientPid}}) ->
-    case lists:member(VNode, CoverageVNodes) of
-        true ->
-             % Received an expected response from a Vnode
-            case ClientType of
-                mapred ->
-                    try
-                        luke_flow:add_inputs(ClientPid, [{Bucket, Key} || Key <- Keys])
-                    catch _:_ ->
-                            exit(self(), normal)
-                    end;
-                plain -> ClientPid ! {ReqId, {keys, Keys}}
-            end;
-        false -> % Ignore a response from a VNode that
-                 % is not part of the coverage plan
-            ignore
-    end,
+    process_keys(ClientType, Bucket, Keys, ReqId, ClientPid),
     {ok, StateData};
-process_results({final_results, VNode, {Bucket, Keys}},
-                CoverageVNodes,
+process_results({final_results, {Bucket, Keys}},
                 StateData=#state{client_type=ClientType,
                                  from={raw, ReqId, ClientPid}}) ->
-    case lists:member(VNode, CoverageVNodes) of
-        true -> % Received an expected response from a Vnode
-            case ClientType of
-                mapred ->
-                    try
-                        luke_flow:add_inputs(ClientPid, [{Bucket, Key} || Key <- Keys])
-                    catch _:_ ->
-                            exit(self(), normal)
-                    end;
-                plain -> ClientPid ! {ReqId, {keys, Keys}}
-            end,
-            %% Inform the coverage fsm that all results
-            %% are in for this vnode.
-            {done, VNode, StateData};
-        false -> % Ignore a response from a VNode that
-                 % is not part of the coverage plan
-            {ok, StateData}
-    end.
+    process_keys(ClientType, Bucket, Keys, ReqId, ClientPid),
+    {done, StateData}.
 
 finish({error, Error},
        StateData=#state{from={raw, ReqId, ClientPid},
@@ -140,3 +107,16 @@ finish(clean,
             ClientPid ! {ReqId, done}
     end,
     {stop, normal, StateData}.
+
+%% ===================================================================
+%% Internal functions
+%% ===================================================================
+
+process_keys(plain, _Bucket, Keys, ReqId, ClientPid) ->
+    ClientPid ! {ReqId, {keys, Keys}};
+process_keys(mapred, Bucket, Keys, _ReqId, ClientPid) ->
+    try
+        luke_flow:add_inputs(ClientPid, [{Bucket, Key} || Key <- Keys])
+    catch _:_ ->
+            exit(self(), normal)
+    end.

@@ -33,8 +33,8 @@
          del/3,
          put/6,
          readrepair/6,
-         list_buckets/5,
-         list_keys/6,
+         list_buckets/4,
+         list_keys/5,
          fold/3,
          get_vclocks/2]).
 
@@ -42,6 +42,7 @@
 -export([init/1,
          terminate/2,
          handle_command/3,
+         handle_coverage/4,
          is_empty/1,
          delete/1,
          handle_handoff_command/3,
@@ -194,27 +195,6 @@ handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
 handle_command(?FOLD_REQ{foldfun=Fun, acc0=Acc},_Sender,State) ->
     Reply = do_fold(Fun, Acc, State),
     {reply, Reply, State};
-handle_command({?KV_LISTBUCKETS_REQ{item_filter=ItemFilter}, _FilterVNodes},
-               Sender,
-               State=#state{mod=Mod,
-                            modstate=ModState,
-                            idx=Index}) ->
-    %% Construct the filter function
-    Filter = riak_kv_coverage_filter:build_filter(all, ItemFilter, undefined),
-    list_buckets(Sender, Filter, Index, Mod, ModState),
-    {noreply, State};
-handle_command({?KV_LISTKEYS_REQ{bucket=Bucket,
-                                 item_filter=ItemFilter},
-                FilterVNodes},
-               Sender,
-               State=#state{mod=Mod,
-                            modstate=ModState,
-                            idx=Index}) ->
-    %% Construct the filter function
-    FilterVNode = proplists:get_value(Index, FilterVNodes),
-    Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-    list_keys(Sender, Bucket, Filter, Index, Mod, ModState),
-    {noreply, State};
 
 %% Commands originating from inside this vnode
 handle_command({backend_callback, Ref, Msg}, _Sender,
@@ -244,6 +224,27 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
                end,
     {noreply, NewState}.
 
+handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
+                _FilterVNodes,
+                ReplyFun,
+                State=#state{mod=Mod,
+                             modstate=ModState}) ->
+    %% Construct the filter function
+    Filter = riak_kv_coverage_filter:build_filter(all, ItemFilter, undefined),
+    list_buckets(ReplyFun, Filter, Mod, ModState),
+    {noreply, State};
+handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
+                                  item_filter=ItemFilter},
+                FilterVNodes,
+                ReplyFun,
+                State=#state{idx=Index,
+                             mod=Mod,
+                             modstate=ModState}) ->
+    %% Construct the filter function
+    FilterVNode = proplists:get_value(Index, FilterVNodes),
+    Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
+    list_keys(ReplyFun, Bucket, Filter, Mod, ModState),
+    {noreply, State}.
 
 handle_handoff_command(Req=?FOLD_REQ{}, Sender, State) ->
     handle_command(Req, Sender, State);
@@ -450,7 +451,7 @@ do_get_binary(BKey, Mod, ModState) ->
 
 
 %% @private
-list_buckets(Caller, Filter, Index, Mod, ModState) ->
+list_buckets(ReplyFun, Filter, Mod, ModState) ->
     %% TODO: Decide if we want to continue to allow key filters
     %% to be used to filter the list of buckets. I think it is
     %% more useful to move all filtering out of the backend and
@@ -459,25 +460,25 @@ list_buckets(Caller, Filter, Index, Mod, ModState) ->
     Buckets = Mod:list_bucket(ModState, '_'),
     case Filter of
         none ->
-            riak_core_vnode:reply(Caller, {final_results, {Index, node()}, Buckets});
+            ReplyFun({final_results, Buckets});
         _ ->
             FilteredBuckets = lists:foldl(Filter, [], Buckets),
-            riak_core_vnode:reply(Caller, {final_results, {Index, node()}, FilteredBuckets})
+            ReplyFun({final_results, FilteredBuckets})
     end.
 
 %% @private
-list_keys(Caller, Bucket, Filter, Index, Mod, ModState) ->
+list_keys(ReplyFun, Bucket, Filter, Mod, ModState) ->
     F = fun({_, _} = BKey, _Val, Acc) ->
-                process_keys(Caller, Index, Bucket, Filter, BKey, Acc);
+                process_keys(ReplyFun, Bucket, Filter, BKey, Acc);
            (Key, _Val, Acc) when is_binary(Key) ->
                 %% Backend's fold gives us keys only, so add bucket.
-                process_keys(Caller, Index, Bucket, Filter, {Bucket, Key}, Acc)
+                process_keys(ReplyFun, Bucket, Filter, {Bucket, Key}, Acc)
         end,
     TryFuns = [fun() ->
                        %% Difficult to coordinate external backend API, so
                        %% we'll live with it for the moment/eternity.
                        F2 = fun(Key, Acc) ->
-                            process_keys(Caller, Index, Bucket,
+                            process_keys(ReplyFun, Bucket,
                                          Filter, {Bucket, Key}, Acc)
                             end,
                        Mod:fold_bucket_keys(ModState, Bucket, F2)
@@ -497,10 +498,10 @@ list_keys(Caller, Bucket, Filter, Index, Mod, ModState) ->
                         end, try_next, TryFuns),
     case Filter of
         none ->
-            riak_core_vnode:reply(Caller, {final_results, {Index, node()}, {Bucket, Keys}});
+            ReplyFun({final_results, {Bucket, Keys}});
         _ ->
             FilteredKeys = lists:foldl(Filter, [], Keys),
-            riak_core_vnode:reply(Caller, {final_results, {Index, node()}, {Bucket, FilteredKeys}})
+            ReplyFun({final_results, {Bucket, FilteredKeys}})
     end.
 
 %% @private
@@ -513,12 +514,12 @@ do_delete(BKey, Mod, ModState) ->
     end.
 
 %% @private
-process_keys(Caller, Index, Bucket, Filter, {Bucket, Key}, Acc) ->
-       buffer_key_result(Caller, Bucket, Filter, Index, [Key | Acc]);
-process_keys(_Caller, _Index, _Bucket, _Filter, {_B, _K}, Acc) ->
+process_keys(ReplyFun, Bucket, Filter, {Bucket, Key}, Acc) ->
+       buffer_key_result(ReplyFun, Bucket, Filter, [Key | Acc]);
+process_keys(_ReplyFun, _Bucket, _Filter, {_B, _K}, Acc) ->
     Acc.
 
-buffer_key_result(Caller, Bucket, Filter, Index, Acc) ->
+buffer_key_result(ReplyFun, Bucket, Filter, Acc) ->
     %% Use arbitrary fixed buffer size of 100. Not
     %% sure there is a good 'why' for that number.
     case length(Acc) >= 100 of
@@ -526,14 +527,14 @@ buffer_key_result(Caller, Bucket, Filter, Index, Acc) ->
             %% Filter the buffer keys as needed
             case Filter of
                none ->
-                    riak_core_vnode:reply(Caller, {results, {Index, node()}, {Bucket, Acc}});
+                    ReplyFun({results, {Bucket, Acc}});
                 _ ->
                     FilteredKeys = lists:foldl(Filter, [], Acc),
                     case FilteredKeys of
                         [] ->
                             ok;
                         _ ->
-                            riak_core_vnode:reply(Caller, {results, {Index, node()}, {Bucket, FilteredKeys}})
+                            ReplyFun({results, {Bucket, FilteredKeys}})
                     end
             end,
             %% Reset the buffer so that results are not duplicated
