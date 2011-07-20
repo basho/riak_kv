@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_index - Webmachine resource for running index queries.
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc Resource for listing Riak buckets over HTTP.
+%% @doc Resource for running queries on secondary indexes.
 %%
 %% Available operations:
 %%
