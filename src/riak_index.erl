@@ -37,6 +37,9 @@
 
 -include("riak_kv_wm_raw.hrl").
 
+-define(BUCKETFIELD, <<"$bucket">>).
+-define(KEYFIELD, <<"$key">>).
+
 %% @type data_type_defs()  :: [data_type_def()].
 %% @type data_type_def()   :: {MatchFunction::function(), ParseFunction::function()}.
 %% @type failure_reason()  :: {unknown_field_type, Field :: binary()}
@@ -53,7 +56,7 @@
 %%                          | {lte, index_field(), index_value()}.
 
 
-%% @spec parse_object_hook(riak_object:riak_object()) -> 
+%% @spec parse_object_hook(riak_object:riak_object()) ->
 %%         riak_object:riak_object() | {fail, [failure_reason()]}.
 %%
 %% @doc Parse the index fields stored in object metadata. Conforms to
@@ -64,7 +67,7 @@
 %%      `{field_parsing_failed, {Field, Value}}.`
 parse_object_hook(RObj) ->
     case parse_object(RObj) of
-        {ok, ParsedFields} -> 
+        {ok, ParsedFields} ->
             MD1 = riak_object:get_metadata(RObj),
             MD2 = dict:store(?MD_INDEX, ParsedFields, MD1),
             riak_object:update_metadata(RObj, MD2);
@@ -93,19 +96,23 @@ parse_object(RObj) ->
                 end
         end,
     IndexFields1 = lists:foldl(F, [], riak_object:get_metadatas(RObj)),
-    
+
+    %% Delete any special fields...
+    IndexFields2 = [{X, Y} || {X, Y} <- IndexFields1,
+                              X /= ?BUCKETFIELD,
+                              X /= ?KEYFIELD],
+
     %% Add the bucket and key to the list of postings...
-    IndexFields2 = [
-                    {<<"$bucket">>, riak_object:bucket(RObj)},
-                    {<<"$key">>, riak_object:key(RObj)}|
-                    IndexFields1
+    IndexFields3 = [
+                    {?BUCKETFIELD, riak_object:bucket(RObj)},
+                    {?KEYFIELD, riak_object:key(RObj)}|
+                    IndexFields2
                    ],
 
     %% Now parse the fields, returning the result.
-    parse_fields(IndexFields2).
+    parse_fields(IndexFields3).
 
-
-%% @spec parse_fields([Field :: {Key:binary(), Value :: binary()}]) -> 
+%% @spec parse_fields([Field :: {Key:binary(), Value :: binary()}]) ->
 %%       {ok, [{Field :: binary(), Value :: term()}]} | {error, [failure_reason()]}.
 %%
 %% @doc Parse the provided index fields. Returns {ok, Fields} if the
@@ -119,10 +126,10 @@ parse_fields(IndexFields) ->
     F = fun({Field, Value}, {ResultAcc, ErrorAcc}) ->
                 Field1 = normalize_index_field(Field),
                 case parse_field(Field1, Value, Types) of
-                    {ok, ParsedValue} -> 
+                    {ok, ParsedValue} ->
                         NewResultAcc = [{Field1, ParsedValue} | ResultAcc],
                         {NewResultAcc, ErrorAcc};
-                    {error, Reason} -> 
+                    {error, Reason} ->
                         NewErrorAcc = [Reason | ErrorAcc],
                         {ResultAcc, NewErrorAcc}
                 end
@@ -136,7 +143,7 @@ parse_fields(IndexFields) ->
     end.
 
 
-%% @spec parse_field(Key::binary(), Value::binary(), Types::data_type_defs()) -> 
+%% @spec parse_field(Key::binary(), Value::binary(), Types::data_type_defs()) ->
 %%         {ok, Value} | {error, Reason}.
 %%
 %% @doc Parse an index field. Return {ok, Value} on success, or
@@ -146,14 +153,29 @@ parse_fields(IndexFields) ->
 parse_field(Key, Value, [Type|Types]) ->
     %% Run the regex to check if the key suffix matches this data
     %% type.
-    {MatchFunction, ParseFunction} = Type,
-    case MatchFunction(Key) of
+    {Suffix, ParseFunction} = Type,
+    Offset = size(Key) - size(Suffix),
+
+    %% Check if the current field is the special field $bucket or
+    %% $key, or if the field matches the suffix for this type.
+    IsMatch =
+        (Offset == 0 andalso Key == ?BUCKETFIELD andalso Suffix == ?BUCKETFIELD) orelse
+        (Offset == 0 andalso Key == ?KEYFIELD andalso Suffix == ?KEYFIELD) orelse
+        (Offset > 0 andalso
+         Suffix /= ?BUCKETFIELD andalso Suffix /= ?KEYFIELD andalso
+         case Key of
+             <<_:Offset/binary, Suffix/binary>> -> true;
+             _ -> false
+         end),
+
+    %% If this is a match, then parse the field...
+    case IsMatch of
         true ->
             %% We have a match. Parse the value.
             case ParseFunction(Value) of
-                {ok, ParsedValue} -> 
+                {ok, ParsedValue} ->
                     {ok, ParsedValue};
-                _ -> 
+                _ ->
                     {error, {field_parsing_failed, {Key, Value}}}
             end;
         false ->
@@ -187,32 +209,12 @@ timestamp() ->
 %%
 %% @doc Return a list of {MatchFunction, ParseFunction} tuples that
 %%      map a field name to a field type.
-field_types() -> 
-    %% Return a function that takes one argument, a Field Name, and
-    %% returns true if the Field Name matches the provided
-    %% suffix. 
-    F = fun(Suffix) ->
-                %% Return a function.
-                fun(Field) ->
-                        %% Calculate the offset where the suffix should start.
-                        Offset = size(Field) - size(Suffix),
-                        case Offset >= 0 of
-                            true -> 
-                                %% Pattern match on the Suffix.
-                                case Field of
-                                    <<_:Offset/binary, Suffix/binary>> -> true;
-                                    _ -> false
-                                end;
-                            false ->
-                                false
-                        end
-                end
-        end,
+field_types() ->
     [
-     {F(<<"$bucket">>), fun parse_binary/1},
-     {F(<<"$key">>),    fun parse_binary/1},
-     {F(<<"_bin">>),    fun parse_binary/1},
-     {F(<<"_int">>),    fun parse_integer/1}
+     {?BUCKETFIELD, fun parse_binary/1},
+     {?KEYFIELD,    fun parse_binary/1},
+     {<<"_bin">>,    fun parse_binary/1},
+     {<<"_int">>,    fun parse_integer/1}
     ].
 
 
@@ -220,9 +222,9 @@ field_types() ->
 %% @spec parse_binary(string()) -> {ok, binary()}
 %%
 %% @doc Parse a primary key field. Transforms value to a binary.
-parse_binary(Value) when is_binary(Value) -> 
+parse_binary(Value) when is_binary(Value) ->
     {ok, Value};
-parse_binary(Value) when is_list(Value) -> 
+parse_binary(Value) when is_list(Value) ->
     {ok, list_to_binary(Value)}.
 
 %% @private
@@ -234,9 +236,9 @@ parse_integer(Value) when is_integer(Value) ->
 parse_integer(Value) when is_binary(Value) ->
     parse_integer(binary_to_list(Value));
 parse_integer(Value) when is_list(Value) ->
-    try 
+    try
         {ok, list_to_integer(Value)}
-    catch 
+    catch
         _Type : Reason ->
             {error, Reason}
     end.
@@ -273,15 +275,15 @@ parse_field_bin_test() ->
     F = fun(Key, Value) -> parse_field(Key, Value, Types) end,
 
     ?assertMatch(
-       {ok, <<"">>}, 
+       {ok, <<"">>},
        F(<<"field_bin">>, <<"">>)),
 
     ?assertMatch(
-       {ok, <<"A">>}, 
+       {ok, <<"A">>},
        F(<<"field_bin">>, <<"A">>)),
 
     ?assertMatch(
-       {ok, <<"123">>}, 
+       {ok, <<"123">>},
        F(<<"field_bin">>, <<"123">>)).
 
 parse_field_integer_test() ->
@@ -290,11 +292,11 @@ parse_field_integer_test() ->
     F = fun(Key, Value) -> parse_field(Key, Value, Types) end,
 
     ?assertMatch(
-       {error, {field_parsing_failed, {<<"field_int">>, <<"">>}}}, 
+       {error, {field_parsing_failed, {<<"field_int">>, <<"">>}}},
        F(<<"field_int">>, <<"">>)),
 
     ?assertMatch(
-       {error, {field_parsing_failed, {<<"field_int">>, <<"A">>}}}, 
+       {error, {field_parsing_failed, {<<"field_int">>, <<"A">>}}},
        F(<<"field_int">>, <<"A">>)),
 
     ?assertMatch(
@@ -302,11 +304,11 @@ parse_field_integer_test() ->
        F(<<"field_int">>, <<"123">>)),
 
     ?assertMatch(
-       {error, {field_parsing_failed, {<<"field_int">>, <<"4.56">>}}}, 
+       {error, {field_parsing_failed, {<<"field_int">>, <<"4.56">>}}},
        F(<<"field_int">>, <<"4.56">>)),
 
     ?assertMatch(
-       {error, {field_parsing_failed, {<<"field_int">>, <<".789">>}}}, 
+       {error, {field_parsing_failed, {<<"field_int">>, <<".789">>}}},
        F(<<"field_int">>, <<".789">>)).
 
 validate_unknown_field_type_test() ->
@@ -315,12 +317,29 @@ validate_unknown_field_type_test() ->
     F = fun(Key, Value) -> parse_field(Key, Value, Types) end,
 
     ?assertMatch(
-       {error, {unknown_field_type, <<"unknowntype">>}}, 
-       F(<<"unknowntype">>, <<"A">>)).
+       {error, {unknown_field_type, <<"unknowntype">>}},
+       F(<<"unknowntype">>, <<"A">>)),
 
-validate_object_test() ->
+    ?assertMatch(
+       {error, {unknown_field_type, <<"test_$bucket">>}},
+       F(<<"test_$bucket">>, <<"A">>)),
+
+    ?assertMatch(
+       {error, {unknown_field_type, <<"test_$key">>}},
+       F(<<"test_$key">>, <<"A">>)),
+
+    ?assertMatch(
+       {error, {unknown_field_type, <<"_int">>}},
+       F(<<"_int">>, <<"A">>)),
+
+    ?assertMatch(
+       {error, {unknown_field_type, <<"_bin">>}},
+       F(<<"_bin">>, <<"A">>)).
+
+
+parse_object_hook_test() ->
     %% Helper function to create an object using a proplist of
-    %% supplied data, and call validate_object on it.
+    %% supplied data, and call parse_object_hook on it.
     F = fun(MetaDataList) ->
                 Obj = riak_object:new(<<"B">>, <<"K">>, <<"VAL">>, dict:from_list([{?MD_INDEX, MetaDataList}])),
                 parse_object_hook(Obj)
@@ -372,14 +391,23 @@ parse_object_test() ->
 
     ?assertMatch(
        {ok, [
-             {<<"$bucket">>, <<"B">>},
-             {<<"$key">>, <<"K">>},
+             {?BUCKETFIELD, <<"B">>},
+             {?KEYFIELD, <<"K">>},
              {<<"field_bin">>, <<"A">>},
              {<<"field_int">>, 1}
        ]},
        F([
           {<<"field_bin">>, <<"A">>},
           {<<"field_int">>, <<"1">>}
-         ])).
+         ])),
 
+    ?assertMatch(
+       {ok, [
+             {?BUCKETFIELD, <<"B">>},
+             {?KEYFIELD, <<"K">>}
+       ]},
+       F([
+          {<<"$bucket">>, <<"ignored">>},
+          {<<"$key">>, <<"ignored">>}
+         ])).
 -endif.
