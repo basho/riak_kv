@@ -83,7 +83,7 @@
                }).
 
 
--define(VALIDATE_INDEX_PRECOMMIT, {struct, [{<<"mod">>, <<"riak_index">>}, {<<"fun">>, <<"validate_object_hook">>}]}).
+-define(PARSE_INDEX_PRECOMMIT, {struct, [{<<"mod">>, <<"riak_index">>}, {<<"fun">>, <<"parse_object_hook">>}]}).
 -define(DEFAULT_TIMEOUT, 60000).
 
 %% ===================================================================
@@ -213,7 +213,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
         true ->
             AllowMult = proplists:get_value(allow_mult,BucketProps),
             Precommit1 = get_hooks(precommit, BucketProps),
-            Precommit2 = [?VALIDATE_INDEX_PRECOMMIT|Precommit1],
+            Precommit2 = [?PARSE_INDEX_PRECOMMIT|Precommit1],
             Postcommit = get_hooks(postcommit, BucketProps),
             StateData1 = StateData0#state{n=N, w=W, dw=DW, allowmult=AllowMult,
                                           precommit = Precommit2,

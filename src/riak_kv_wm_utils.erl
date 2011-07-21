@@ -214,7 +214,9 @@ any_to_list(V) when is_list(V) ->
 any_to_list(V) when is_atom(V) ->
     atom_to_list(V);
 any_to_list(V) when is_binary(V) ->
-    binary_to_list(V).
+    binary_to_list(V);
+any_to_list(V) when is_integer(V) ->
+    integer_to_list(V).
 
 any_to_bool(V) when is_list(V) ->
     (V == "1") orelse (V == "true") orelse (V == "TRUE");
