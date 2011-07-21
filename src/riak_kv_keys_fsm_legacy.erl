@@ -271,7 +271,6 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %% @private
 start_listers(ReqId, Bucket, Timeout) ->
     Nodes = riak_core_node_watcher:nodes(riak_kv),
-    io:format("Attempting to start listers on ~p~n", [Nodes]),
     start_listers(Nodes, ReqId, Bucket, Timeout, []).
 
 start_listers([], _ReqId, _Bucket, _Timeout, Accum) ->
@@ -279,7 +278,6 @@ start_listers([], _ReqId, _Bucket, _Timeout, Accum) ->
 start_listers([H|T], ReqId, Bucket, Timeout, Accum) ->
     case riak_kv_keylister_master:start_keylist(H, ReqId, Bucket, Timeout) of
         {ok, Pid} ->
-            io:format("Started lister @  ~p~n", [Pid]),
             start_listers(T, ReqId, Bucket, Timeout, [{H, Pid}|Accum]);
          _Error ->
             start_listers(T, ReqId, Bucket, Timeout, Accum)

@@ -457,7 +457,6 @@ list_keys(Bucket, Timeout) ->
 
 %% @deprecated Only in place for backwards compatibility.
 list_keys(Bucket, Timeout, ErrorTolerance) when is_integer(Timeout) ->
-    io:format("Using legacy listkeys~n"),
     %% @TODO This code is only here to support
     %% rolling upgrades and will be removed.
     Me = self(),
