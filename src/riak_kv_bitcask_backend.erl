@@ -26,18 +26,18 @@
 -author('Dave Smith <dizzyd@basho.com>').
 
 %% KV Backend API
--export([start/2,
+-export([api_version/0,
+         start/2,
          stop/1,
-         get/2,
-         put/3,
-         delete/2,
-         list/1,
-         list_bucket/2,
-         fold/3,
-         fold_keys/3,
-         fold_bucket_keys/4,
+         get/3,
+         put/4,
+         delete/3,
          drop/1,
+         fold_buckets/3,
+         fold_keys/4,
+         fold_objects/4,
          is_empty/1,
+         status/1,
          callback/3]).
 
 %% Helper API
@@ -51,9 +51,35 @@
 -include_lib("bitcask/include/bitcask.hrl").
 
 -define(MERGE_CHECK_INTERVAL, timer:minutes(3)).
+-define(API_VERSION, 1).
+-define(CAPABILITIES, [api_version,
+                         start,
+                         stop,
+                         get,
+                         put,
+                         delete,
+                         drop,
+                         fold_buckets,
+                         fold_keys,
+                         fold_objects,
+                         is_empty,
+                         status,
+                         callback]).
 
+-record(state, {ref :: reference(),
+                root :: string()}).
+
+%% ===================================================================
+%% Public API
+%% ===================================================================
+
+%% @doc Return the major version of the 
+%% current API and a capabilities list.
+api_version() ->
+    {?API_VERSION, ?CAPABILITIES}.
+
+%% @doc Start the bitcask backend
 start(Partition, Config) ->
-
     %% Get the data root directory
     DataDir =
         case proplists:get_value(data_root, Config) of
@@ -85,92 +111,84 @@ start(Partition, Config) ->
         Ref when is_reference(Ref) ->
             schedule_merge(Ref),
             maybe_schedule_sync(Ref),
-            {ok, {Ref, BitcaskRoot}};
+            {ok, #state{ref=Ref, root=BitcaskRoot}};
         {error, Reason2} ->
             {error, Reason2}
     end.
 
 
-stop({Ref, _}) ->
+%% @doc Stop the bitcask backend
+stop(#state{ref=Ref}) ->
     bitcask:close(Ref).
 
-
-get({Ref, _}, BKey) ->
-    Key = term_to_binary(BKey),
-    case bitcask:get(Ref, Key) of
+%% @doc Retrieve an object from the bitcask backend
+get(Bucket, Key, #state{ref=Ref}=State) ->
+    BitcaskKey = term_to_binary({Bucket, Key}),
+    case bitcask:get(Ref, BitcaskKey) of
         {ok, Value} ->
-            {ok, Value};
+            {ok, Value, State};
         not_found  ->
-            {error, notfound};
+            {error, notfound, State};
         {error, Reason} ->
-            {error, Reason}
+            {error, Reason, State}
     end.
 
-put({Ref, _}, BKey, Val) ->
-    Key = term_to_binary(BKey),
-    ok =  bitcask:put(Ref, Key, Val).
-
-delete({Ref, _}, BKey) ->
-    ok = bitcask:delete(Ref, term_to_binary(BKey)).
-
-list({Ref, _}) ->
-    case bitcask:list_keys(Ref) of
-        KeyList when is_list(KeyList) ->
-            [binary_to_term(K) || K <- KeyList];
-        Other ->
-            Other
+%% @doc Insert an object into the bitcask backend
+put(Bucket, Key, Val, #state{ref=Ref}=State) ->
+    BitcaskKey = term_to_binary({Bucket, Key}),
+    case bitcask:put(Ref, BitcaskKey, Val) of
+        ok ->
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason, State}
     end.
 
-list_bucket({Ref, _}, {filter, Bucket, Fun}) ->
-    bitcask:fold_keys(Ref,
-        fun(#bitcask_entry{key=BK},Acc) ->
-                {B,K} = binary_to_term(BK),
-		case (B =:= Bucket) andalso Fun(K) of
-		    true ->
-			[K|Acc];
-		    false ->
-                        Acc
-                end
-        end, []);
-list_bucket({Ref, _}, '_') ->
-    bitcask:fold_keys(Ref,
-        fun(#bitcask_entry{key=BK},Acc) ->
-                {B,_K} = binary_to_term(BK),
-                case lists:member(B,Acc) of
-                    true -> Acc;
-                    false -> [B|Acc]
-                end
-        end, []);
-list_bucket({Ref, _}, Bucket) ->
-    bitcask:fold_keys(Ref,
-        fun(#bitcask_entry{key=BK},Acc) ->
-                {B,K} = binary_to_term(BK),
-                case B of
-                    Bucket -> [K|Acc];
-                    _ -> Acc
-                end
-        end, []).
+%% @doc Delete an object from the bitcask backend
+delete(Bucket, Key, #state{ref=Ref}=State) ->
+    BitcaskKey = term_to_binary({Bucket, Key}),
+    case bitcask:delete(Ref, BitcaskKey) of
+        ok ->
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
 
-fold({Ref, _}, Fun0, Acc0) ->
-    %% When folding across the bitcask, the bucket/key tuple must
-    %% be decoded. The intermediate binary_to_term call handles this
-    %% and yields the expected fun({B, K}, Value, Acc)
-    bitcask:fold(Ref,
-                 fun(K, V, Acc) ->
-                         Fun0(binary_to_term(K), V, Acc)
-                 end,
-                 Acc0).
+%% @doc Fold over all the buckets. If the fold
+%% function is `none' just list all of the buckets.
+fold_buckets(none, Acc, State) ->
+    list_buckets(Acc, State);
+fold_buckets(FoldBucketsFun, Acc, #state{ref=Ref}) ->
+    FoldFun = fun(#bitcask_entry{key=K}, Acc1) ->
+                {Bucket, _} = binary_to_term(K),
+                FoldBucketsFun(Bucket, Acc1) end,
+    bitcask:fold_keys(Ref, FoldFun, Acc).
 
-fold_keys({Ref, _}, Fun, Acc) ->
-    F = fun(#bitcask_entry{key=K}, Acc1) ->
-                Fun(binary_to_term(K), Acc1) end,
-    bitcask:fold_keys(Ref, F, Acc).
+%% @doc Fold over all the keys for a bucket. If the
+%% fold function is `none' just list all of the keys.
+fold_keys(none, _Acc, _Opts, State) ->
+    list_keys(State);
+fold_keys(FoldKeysFun, Acc, _Opts, #state{ref=Ref}) ->
+    FoldFun = fun(#bitcask_entry{key=K}, Acc1) ->
+                {Bucket, Key} = binary_to_term(K),
+                FoldKeysFun(Bucket, Key, Acc1) end,
+    bitcask:fold_keys(Ref, FoldFun, Acc).
 
-fold_bucket_keys(ModState, _Bucket, Fun, Acc) ->
-    fold_keys(ModState, fun(Key2, Acc2) -> Fun(Key2, dummy_val, Acc2) end, Acc).
+%% @doc Fold over all the objects for a bucket. If the
+%% fold function is `none' just list all of the objects.
+fold_objects(none, Acc, _Opts, #state{ref=Ref}) ->
+    FoldFun = fun(#bitcask_entry{key=K}, Val, Acc1) ->
+                {Bucket, Key} = binary_to_term(K),
+                [{{Bucket, Key}, Val} | Acc1] end,
+    bitcask:fold(Ref, FoldFun, Acc);
+fold_objects(FoldObjectsFun, Acc, _Opts, #state{ref=Ref}) ->
+    FoldFun = fun(#bitcask_entry{key=K}, Val, Acc1) ->
+                {Bucket, Key} = binary_to_term(K),
+                FoldObjectsFun(Bucket, Key, Val, Acc1) end,
+    bitcask:fold(Ref, FoldFun, Acc).
 
-drop({Ref, BitcaskRoot}) ->
-    %% todo: once bitcask has a more friendly drop function
+%% @doc Delete all objects from this bitcask backend
+drop(#state{ref=Ref, root=BitcaskRoot}) ->
+    %% @TODO once bitcask has a more friendly drop function
     %%  of its own, use that instead.
     bitcask:close(Ref),
     {ok, FNs} = file:list_dir(BitcaskRoot),
@@ -178,7 +196,9 @@ drop({Ref, BitcaskRoot}) ->
     file:del_dir(BitcaskRoot),
     ok.
 
-is_empty({Ref, _}) ->
+%% @doc Returns true if this bitcasks backend contains any 
+%% non-tombstone values; otherwise returns false.
+is_empty(#state{ref=Ref}) ->
     %% Determining if a bitcask is empty requires us to find at least
     %% one value that is NOT a tombstone. Accomplish this by doing a fold_keys
     %% that forcibly bails on the very first key encountered.
@@ -187,10 +207,11 @@ is_empty({Ref, _}) ->
         end,
     (catch bitcask:fold_keys(Ref, F, undefined)) /= found_one_value.
 
-callback({Ref, _}, Ref, {sync, SyncInterval}) when is_reference(Ref) ->
+%% @doc Register an asynchronous callback
+callback(Ref, {sync, SyncInterval}, #state{ref=Ref}) when is_reference(Ref) ->
     bitcask:sync(Ref),
     schedule_sync(Ref, SyncInterval);
-callback({Ref, BitcaskRoot}, Ref, merge_check) when is_reference(Ref) ->
+callback(Ref, merge_check, #state{ref=Ref, root=BitcaskRoot}) when is_reference(Ref) ->
     case bitcask:needs_merge(Ref) of
         {true, Files} ->
             bitcask_merge_worker:merge(BitcaskRoot, [], Files);
@@ -199,8 +220,17 @@ callback({Ref, BitcaskRoot}, Ref, merge_check) when is_reference(Ref) ->
     end,
     schedule_merge(Ref);
 %% Ignore callbacks for other backends so multi backend works
-callback(_State, _Ref, _Msg) ->
+callback(_Ref, _Msg, _State) ->
     ok.
+
+%% @doc Get the status information for this bitcask backend
+status(#state{ref=Ref}) ->
+    bitcask:status(Ref);
+status(Dir) ->
+    Ref = bitcask:open(Dir),
+    try bitcask:status(Ref)
+    after bitcask:close(Ref)
+    end.      
 
 key_counts() ->
     case application:get_env(bitcask, data_root) of
@@ -221,12 +251,55 @@ key_counts(RootDir) ->
 %% ===================================================================
 
 %% @private
-%% Invoke bitcask:status/1 for a given directory
-status(Dir) ->
-    Ref = bitcask:open(Dir),
-    try bitcask:status(Ref)
-    after bitcask:close(Ref)
-    end.      
+%% Filter the keys for a bucket on this backend
+%% filter_bucket_keys(Bucket, Fun, Acc, #state{ref=Ref}) ->
+%%     FoldFun = 
+%%         fun(#bitcask_entry{key=BK}) ->
+%%                 {B, K} = binary_to_term(BK),
+%% 		case (B =:= Bucket) andalso Fun(K) of
+%% 		    true ->
+%% 			[K | Acc];
+%% 		    false ->
+%%                         Acc
+%%                 end
+%%         end,
+%%     bitcask:fold_keys(Ref, FoldFun, []).
+
+%% @private
+%% List the buckets on this backend
+list_buckets(Acc, #state{ref=Ref}) ->
+    FoldFun = 
+        fun(#bitcask_entry{key=BK}) ->
+                {B, _} = binary_to_term(BK),
+                case lists:member(B, Acc) of
+                    true -> Acc;
+                    false -> [B | Acc]
+                end
+        end,
+    bitcask:fold_keys(Ref, FoldFun, []).
+
+%% @private
+%% List the keys for a bucket on this backend
+%% list_bucket_keys(Bucket, Acc, #state{ref=Ref}) ->
+%%     FoldFun = 
+%%         fun(#bitcask_entry{key=BK}) ->
+%%                 {B, K} = binary_to_term(BK),
+%%                 case B of
+%%                     Bucket -> [K | Acc];
+%%                     _ -> Acc
+%%                 end
+%%         end,
+%%     bitcask:fold_keys(Ref, FoldFun, []).
+
+%% @private
+%% List all keys stored by this backend
+list_keys(#state{ref=Ref}) ->
+    case bitcask:list_keys(Ref) of
+        KeyList when is_list(KeyList) ->
+            [binary_to_term(K) || K <- KeyList];
+        Other ->
+            Other
+    end.
 
 %% @private
 %% Schedule sync (if necessary)
