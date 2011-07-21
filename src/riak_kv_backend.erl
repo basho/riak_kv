@@ -30,17 +30,21 @@
 
 -spec behaviour_info(atom()) -> 'undefined' | [{atom(), arity()}].
 behaviour_info(callbacks) ->
-    [{start,2},       % (Partition, Config)
+    [{api_version,0},
+     {start,2},       % (Partition, Config)
      {stop,1},        % (State) 
-     {get,2},         % (State, BKey)
-     {put,3},         % (State, BKey, Val)
-     {list,1},        % (State)
-     {list_bucket,2}, % (State, Bucket)
-     {delete,2},      % (State, BKey)
+     {get,3},         % (State, Bucket, Key)
+     {put,4},         % (Bucket, Key, Val, State)
+     {delete,3},      % (Bucket, Key, State)
      {drop,1},        % (State)
-     {fold,3},        % (State, Folder, Acc), Folder({B,K},V,Acc)
+     {fold_buckets,3},% (FoldBucketsFun, Acc, State), FoldBucketsFun(Bucket, Acc)
+     {fold_keys,4},   % (FoldKeysFun, Acc, Opts, State), 
+                      %   FoldKeysFun(Bucket, Key, Acc)
+     {fold_objects,4},% (FoldObjectsFun, Acc, Opts, State), 
+                      %   FoldObjectsFun(Bucket, Key, Object, Acc)
      {is_empty,1},    % (State)
-     {callback,3}];   % (State, Ref, Msg) ->
+     {status,1},      % (State)
+     {callback,3}];   % (Ref, Msg, State) ->
 behaviour_info(_Other) ->
     undefined.
 
