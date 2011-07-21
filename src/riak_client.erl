@@ -50,6 +50,7 @@
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
 -define(DEFAULT_TIMEOUT, 60000).
+-define(DEFAULT_ERRTOL, 0.00003).
 
 -type riak_client() :: term().
 
@@ -455,8 +456,15 @@ list_keys(Bucket, Timeout) ->
     list_keys(Bucket, none, Timeout).
 
 %% @deprecated Only in place for backwards compatibility.
-list_keys(Bucket, Timeout, _) when is_integer(Timeout) ->
-    list_keys(Bucket, Timeout);
+list_keys(Bucket, Timeout, ErrorTolerance) when is_integer(Timeout) ->
+    io:format("Using legacy listkeys~n"),
+    %% @TODO This code is only here to support
+    %% rolling upgrades and will be removed.
+    Me = self(),
+    ReqId = mk_reqid(),
+    FSM_Timeout = trunc(Timeout / 8),
+    riak_kv_keys_fsm_legacy_sup:start_keys_fsm(Node, [ReqId, Bucket, FSM_Timeout, plain, ErrorTolerance, Me]),
+    wait_for_listkeys(ReqId, Timeout);
 %% @spec list_keys(riak_object:bucket(), TimeoutMillisecs :: integer()) ->
 %%       {ok, [Key :: riak_object:key()]} |
 %%       {error, timeout} |
@@ -465,10 +473,17 @@ list_keys(Bucket, Timeout, _) when is_integer(Timeout) ->
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 list_keys(Bucket, Filter, Timeout) -> 
-    Me = self(),
-    ReqId = mk_reqid(),
-    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout, plain]]),
-    wait_for_listkeys(ReqId, Timeout).
+    case app_helper:get_env(riak_kv, legacy_keylisting, false) of
+        true ->
+            %% @TODO This code is only here to support
+            %% rolling upgrades and will be removed.
+            list_keys(Bucket, Timeout, ?DEFAULT_ERRTOL);
+        false ->
+            Me = self(),
+            ReqId = mk_reqid(),
+            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout, plain]]),
+            wait_for_listkeys(ReqId, Timeout)
+    end.
 
 stream_list_keys(Bucket) ->
     stream_list_keys(Bucket, ?DEFAULT_TIMEOUT).
@@ -484,8 +499,15 @@ stream_list_keys(Bucket, Timeout, _) ->
     stream_list_keys(Bucket, Timeout).
 
 %% @deprecated Only in place for backwards compatibility.
-stream_list_keys(Bucket0, Timeout, _, Client, ClientType) ->
-    stream_list_keys(Bucket0, Timeout, Client, ClientType).
+stream_list_keys(Bucket0, Timeout, ErrorTolerance, Client, ClientType) ->
+    ReqId = mk_reqid(),
+    case build_filter(Bucket0) of
+        {ok, Filter} ->
+            riak_kv_keys_fsm_legacy_sup:start_keys_fsm(Node, [ReqId, Filter, Timeout, ClientType, ErrorTolerance, Client]),
+            {ok, ReqId};
+        Error ->
+            Error
+    end.
 
 %% @spec stream_list_keys(riak_object:bucket(),
 %%                        TimeoutMillisecs :: integer(),
@@ -503,23 +525,42 @@ stream_list_keys(Bucket0, Timeout, _, Client, ClientType) ->
 %%      If ClientType is set to 'mapred' instead of 'plain', then the
 %%      messages will be sent in the form of a MR input stream.
 stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
-    ReqId = mk_reqid(),
-    case Input of
-        {Bucket, FilterInput} ->
-            case build_exprs(FilterInput) of
-                {error, _Error} ->
-                    {error, _Error};
-                {ok, FilterExprs} ->
-                    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Client}, [Bucket, FilterExprs, Timeout, ClientType]]),
+    case app_helper:get_env(riak_kv, legacy_keylisting, false) of
+        true ->
+            %% @TODO This code is only here to support
+            %% rolling upgrades and will be removed.
+            stream_list_keys(Input, Timeout, ?DEFAULT_ERRTOL, Client, ClientType);
+        false ->
+            ReqId = mk_reqid(),
+            case Input of
+                {Bucket, FilterInput} ->
+                    case build_exprs(FilterInput) of
+                        {error, _Error} ->
+                            {error, _Error};
+                        {ok, FilterExprs} ->
+                            riak_kv_keys_fsm_sup:start_keys_fsm(Node, 
+                                                                [{raw, 
+                                                                  ReqId,
+                                                                  Client},
+                                                                 [Bucket, 
+                                                                  FilterExprs, 
+                                                                  Timeout, 
+                                                                  ClientType]]),
+                            {ok, ReqId}
+                    end;
+                Bucket ->
+                    riak_kv_keys_fsm_sup:start_keys_fsm(Node, 
+                                                        [{raw, ReqId, Client}, 
+                                                         [Bucket,
+                                                          none,
+                                                          Timeout,
+                                                          ClientType]]),
                     {ok, ReqId}
-            end;
-        Bucket ->
-            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Client}, [Bucket, none, Timeout, ClientType]]),
-            {ok, ReqId}
+            end
     end;
 %% @deprecated Only in place for backwards compatibility.
-stream_list_keys(Bucket, Timeout, _, Client) ->
-    stream_list_keys(Bucket, Timeout, Client).
+stream_list_keys(Bucket, Timeout, ErrorTolerance, Client) ->
+    stream_list_keys(Bucket, Timeout, ErrorTolerance, Client, plain).
 
 %% @spec filter_keys(riak_object:bucket(), Fun :: function()) ->
 %%       {ok, [Key :: riak_object:key()]} |
@@ -531,7 +572,14 @@ stream_list_keys(Bucket, Timeout, _, Client) ->
 %%      out of date if called immediately after a put or delete.
 %% @equiv filter_keys(Bucket, Fun, default_timeout())
 filter_keys(Bucket, Fun) ->
-    list_keys(Bucket, Fun, ?DEFAULT_TIMEOUT).
+    case app_helper:get_env(riak_kv, legacy_keylisting, false) of
+        true ->
+            %% @TODO This code is only here to support
+            %% rolling upgrades and will be removed.
+            list_keys({filter, Bucket, Fun}, ?DEFAULT_TIMEOUT*8);
+        false ->
+            list_keys(Bucket, Fun, ?DEFAULT_TIMEOUT)
+    end.
 
 %% @spec filter_keys(riak_object:bucket(), Fun :: function(), TimeoutMillisecs :: integer()) ->
 %%       {ok, [Key :: riak_object:key()]} |
@@ -542,7 +590,14 @@ filter_keys(Bucket, Fun) ->
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 filter_keys(Bucket, Fun, Timeout) ->
-    list_keys(Bucket, Fun, Timeout).
+    case app_helper:get_env(riak_kv, legacy_keylisting, false) of
+        true ->
+            %% @TODO This code is only here to support
+            %% rolling upgrades and will be removed.
+            list_keys({filter, Bucket, Fun}, Timeout);
+        false ->
+            list_keys(Bucket, Fun, Timeout)
+    end.
 
 %% @spec list_buckets() ->
 %%       {ok, [Bucket :: riak_object:bucket()]} |
@@ -567,10 +622,17 @@ list_buckets() ->
 %%      either adds the first key or removes the last remaining key from
 %%      a bucket.
 list_buckets(Filter, Timeout) ->
-    Me = self(),
-    ReqId = mk_reqid(),
-    riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, [Filter, Timeout, plain]]),
-    wait_for_listbuckets(ReqId, Timeout).
+    case app_helper:get_env(riak_kv, legacy_keylisting, false) of
+        true ->
+            %% @TODO This code is only here to support
+            %% rolling upgrades and will be removed.
+            list_keys('_', Timeout);
+        false ->
+            Me = self(),
+            ReqId = mk_reqid(),
+            riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, [Filter, Timeout, plain]]),
+            wait_for_listbuckets(ReqId, Timeout)
+    end.
 
 %% @spec filter_buckets(Fun :: function()) ->
 %%       {ok, [Bucket :: riak_object:bucket()]} |
@@ -578,7 +640,14 @@ list_buckets(Filter, Timeout) ->
 %%       {error, Err :: term()}
 %% @doc Return a list of filtered buckets.
 filter_buckets(Fun) ->
-    list_buckets(Fun, ?DEFAULT_TIMEOUT).
+    case app_helper:get_env(riak_kv, legacy_keylisting, false) of
+        true ->
+            %% @TODO This code is only here to support
+            %% rolling upgrades and will be removed.
+            list_keys('_', ?DEFAULT_TIMEOUT);
+        false ->
+            list_buckets(Fun, ?DEFAULT_TIMEOUT)
+    end.
 
 %% @spec set_bucket(riak_object:bucket(), [BucketProp :: {atom(),term()}]) -> ok
 %% @doc Set the given properties for Bucket.
@@ -669,6 +738,18 @@ is_key_filter({Bucket, Filters}) when is_binary(Bucket),
     true;
 is_key_filter(_) ->
     false.
+
+%% @deprecated This function is only here to support
+%% rolling upgrades and will be removed.
+build_filter({Bucket, Exprs}) ->
+    case build_exprs(Exprs) of
+        {ok, Filters} ->
+            {ok, {Bucket, Filters}};
+        Error ->
+            Error
+    end;
+build_filter(Bucket) when is_binary(Bucket) ->
+    {ok, {Bucket, []}}.
 
 build_exprs(Exprs) ->
     build_exprs(Exprs, []).

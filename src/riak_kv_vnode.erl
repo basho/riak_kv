@@ -34,6 +34,7 @@
          put/6,
          readrepair/6,
          list_buckets/4,
+         list_keys/4,
          list_keys/5,
          fold/3,
          get_vclocks/2]).
@@ -135,6 +136,15 @@ put(Preflist, BKey, Obj, ReqId, StartTime, Options, Sender)
 readrepair(Preflist, BKey, Obj, ReqId, StartTime, Options) ->
     put(Preflist, BKey, Obj, ReqId, StartTime, [rr | Options], ignore).
 
+list_keys(Preflist, ReqId, Caller, Bucket) ->
+  riak_core_vnode_master:command(Preflist,
+                                 #riak_kv_listkeys_req_v2{
+                                    bucket=Bucket,
+                                    req_id=ReqId,
+                                    caller=Caller},
+                                 ignore,
+                                 riak_kv_vnode_master).
+
 fold(Preflist, Fun, Acc0) ->
     riak_core_vnode_master:sync_spawn_command(Preflist,
                                               ?FOLD_REQ{
@@ -171,6 +181,13 @@ handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
     do_get(Sender, BKey, ReqId, State);
 handle_command(?KV_MGET_REQ{bkeys=BKeys, req_id=ReqId, from=From}, _Sender, State) ->
     do_mget(From, BKeys, ReqId, State);
+handle_command(#riak_kv_listkeys_req_v1{bucket=Bucket, req_id=ReqId}, _Sender,
+                State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
+    do_legacy_list_bucket(ReqId,Bucket,Mod,ModState,Idx,State);
+handle_command(#riak_kv_listkeys_req_v2{bucket=Bucket, req_id=ReqId, caller=Caller}, _Sender,
+               State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
+    do_legacy_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState),
+    {noreply, State};
 handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender,
                State=#state{mod=Mod, modstate=ModState,
                             idx=Idx}) ->
@@ -505,6 +522,53 @@ list_keys(ReplyFun, Bucket, Filter, Mod, ModState) ->
     end.
 
 %% @private
+%% @deprecated This function is only here to support
+%% rolling upgrades and will be removed.
+do_legacy_list_bucket(ReqID,Bucket,Mod,ModState,Idx,State) ->
+    RetVal = Mod:list_bucket(ModState,Bucket),
+    {reply, {kl, RetVal, Idx, ReqID}, State}.
+
+%% @private
+%% @deprecated This function is only here to support
+%% rolling upgrades and will be removed.
+do_legacy_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
+    F = fun({_, _} = BKey, _Val, Acc) ->
+                legacy_process_keys(Caller, ReqId, Idx, Bucket, BKey, Acc);
+           (Key, _Val, Acc) when is_binary(Key) ->
+                %% Backend's fold gives us keys only, so add bucket.
+                legacy_process_keys(Caller, ReqId, Idx, Bucket, {Bucket, Key}, Acc)
+        end,
+    TryFuns = [fun() ->
+                       %% Difficult to coordinate external backend API, so
+                       %% we'll live with it for the moment/eternity.
+                       F2 = fun(Key, Acc) ->
+                            legacy_process_keys(Caller, ReqId, Idx, Bucket,
+                                         {Bucket, Key}, Acc)
+                            end,
+                       Mod:fold_bucket_keys(ModState, Bucket, F2)
+               end,
+               fun() ->
+                       %% Newer backend API
+                       Mod:fold_bucket_keys(ModState, Bucket, F, [])
+               end,
+               fun() ->
+                       %% Older API for third-parties
+                       Mod:fold(ModState, F, [])
+               end],
+    Final = lists:foldl(fun(TryFun, try_next) ->
+                                try TryFun() catch error:undef -> try_next end;
+                           (_TryFun, Res) ->
+                                Res
+                        end, try_next, TryFuns),
+    case Final of
+        [] ->
+            ok;
+        Remainder when is_list(Remainder) ->
+            Caller ! {ReqId, {kl, Idx, Remainder}}
+    end,
+    Caller ! {ReqId, Idx, done}.
+
+%% @private
 do_delete(BKey, Mod, ModState) ->
     case Mod:delete(ModState, BKey) of
         ok ->
@@ -538,6 +602,37 @@ buffer_key_result(ReplyFun, Bucket, Filter, Acc) ->
                     end
             end,
             %% Reset the buffer so that results are not duplicated
+            [];
+        false ->
+            Acc
+    end.
+
+%% @private
+%% @deprecated This function is only here to support
+%% rolling upgrades and will be removed.
+legacy_process_keys(Caller, ReqId, Idx, '_', {Bucket, _K}, Acc) ->
+    %% Bucket='_' means "list buckets" instead of "list keys"
+    legacy_buffer_key_result(Caller, ReqId, Idx, [Bucket|Acc]);
+legacy_process_keys(Caller, ReqId, Idx, {filter, Bucket, Fun}, {Bucket, K}, Acc) ->
+    %% Bucket={filter,Bucket,Fun} means "only include keys
+    %% in Bucket that make Fun(K) return 'true'"
+    case Fun(K) of
+        true ->
+            legacy_buffer_key_result(Caller, ReqId, Idx, [K|Acc]);
+        false ->
+            Acc
+    end;
+legacy_process_keys(Caller, ReqId, Idx, Bucket, {Bucket, K}, Acc) ->
+    legacy_buffer_key_result(Caller, ReqId, Idx, [K|Acc]);
+legacy_process_keys(_Caller, _ReqId, _Idx, _Bucket, {_B, _K}, Acc) ->
+    Acc.
+
+%% @deprecated This function is only here to support
+%% rolling upgrades and will be removed.
+legacy_buffer_key_result(Caller, ReqId, Idx, Acc) ->
+    case length(Acc) >= 100 of
+        true ->
+            Caller ! {ReqId, {kl, Idx, Acc}},
             [];
         false ->
             Acc
