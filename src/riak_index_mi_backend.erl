@@ -117,20 +117,23 @@ fold_index(State, Index, Query, SKFun, Acc, FinalFun) ->
     %% this will run more complicated queries, and will run them
     %% asynchronously.
     Results = case Query of
-                  [{eq, Field, Term}] ->
+                  [{eq, Field, [Term]}] ->
                       merge_index:lookup_sync(Pid, Index, Field, Term, FilterFun);
 
-                  [{lt, Field, Term}] ->
+                  [{lt, Field, [Term]}] ->
                       merge_index:range_sync(Pid, Index, Field, undefined, inc(Term, -1), ?SIZE, FilterFun);
 
-                  [{gt, Field, Term}] ->
+                  [{gt, Field, [Term]}] ->
                       merge_index:range_sync(Pid, Index, Field, inc(Term, 1), undefined, ?SIZE, FilterFun);
 
-                  [{lte, Field, Term}] ->
+                  [{lte, Field, [Term]}] ->
                       merge_index:range_sync(Pid, Index, Field, undefined, Term, ?SIZE, FilterFun);
 
-                  [{gte, Field, Term}] ->
+                  [{gte, Field, [Term]}] ->
                       merge_index:range_sync(Pid, Index, Field, Term, undefined, ?SIZE, FilterFun);
+
+                  [{range, Field, [StartTerm, EndTerm]}] ->
+                      merge_index:range_sync(Pid, Index, Field, StartTerm, EndTerm, ?SIZE, FilterFun);
 
                   _ -> 
                       {error, {unknown_query_element, Query}}
