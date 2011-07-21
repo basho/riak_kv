@@ -154,22 +154,9 @@ parse_field(Key, Value, [Type|Types]) ->
     %% Run the regex to check if the key suffix matches this data
     %% type.
     {Suffix, ParseFunction} = Type,
-    Offset = size(Key) - size(Suffix),
-
-    %% Check if the current field is the special field $bucket or
-    %% $key, or if the field matches the suffix for this type.
-    IsMatch =
-        (Offset == 0 andalso Key == ?BUCKETFIELD andalso Suffix == ?BUCKETFIELD) orelse
-        (Offset == 0 andalso Key == ?KEYFIELD andalso Suffix == ?KEYFIELD) orelse
-        (Offset > 0 andalso
-         Suffix /= ?BUCKETFIELD andalso Suffix /= ?KEYFIELD andalso
-         case Key of
-             <<_:Offset/binary, Suffix/binary>> -> true;
-             _ -> false
-         end),
 
     %% If this is a match, then parse the field...
-    case IsMatch of
+    case is_field_match(Key, Suffix) of
         true ->
             %% We have a match. Parse the value.
             case ParseFunction(Value) of
@@ -185,6 +172,31 @@ parse_field(Key, Value, [Type|Types]) ->
 parse_field(Key, _Value, []) ->
     %% No matching data types, return an error.
     {error, {unknown_field_type, Key}}.
+
+
+%% @private
+%% @spec is_field_match(Key :: binary(), Suffix :: binary()) -> boolean().
+%% 
+%% @doc Return true if the Key matches the suffix. Special case for $bucket
+%% and $key.
+is_field_match(Key, ?BUCKETFIELD) ->
+    %% When Suffix equals $bucket, then Key must equal $bucket too.
+    Key == ?BUCKETFIELD;
+is_field_match(Key, ?KEYFIELD) ->
+    %% When Suffix equals $key, then Key must equal $key too.
+    Key == ?KEYFIELD;
+is_field_match(Key, Suffix) when size(Suffix) < size(Key) ->
+    %% Perform a pattern match to make sure the Key ends with the
+    %% suffix.
+    Offset = size(Key) - size(Suffix),
+    case Key of
+        <<_:Offset/binary, Suffix/binary>> -> 
+            true;
+        _ -> 
+            false
+    end;
+is_field_match(_, _) ->
+    false.
 
 %% @spec format_failure_reason(FailureReason :: {atom(), term()}) -> string().
 %%
