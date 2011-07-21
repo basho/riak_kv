@@ -33,10 +33,10 @@
          del/3,
          put/6,
          readrepair/6,
-         index_query/6,
-         list_buckets/4,
+         index_query/7,
+         list_buckets/5,
          list_keys/4,
-         list_keys/5,
+         list_keys/6,
          fold/3,
          get_vclocks/2]).
 
@@ -69,15 +69,23 @@
                 target :: pid()}).
 
 -record(state, {idx :: partition(),
+                index_backend :: boolean(),
                 mod :: module(),
                 modstate :: term(),
                 mrjobs :: term(),
+                bucket_buf_size :: pos_integer(),
+                index_buf_size :: pos_integer(),
+                key_buf_size :: pos_integer(),
                 in_handoff = false :: boolean()}).
+
+-type index_op() :: add | remove.
+-type index_value() :: integer() | binary().
 
 -record(putargs, {returnbody :: boolean(),
                   lww :: boolean(),
                   bkey :: {binary(), binary()},
                   robj :: term(),
+                  index_specs=[] :: [{index_op(), binary(), index_value()}],
                   reqid :: non_neg_integer(),
                   bprops :: maybe_improper_list(),
                   starttime :: non_neg_integer(),
@@ -138,18 +146,25 @@ readrepair(Preflist, BKey, Obj, ReqId, StartTime, Options) ->
     put(Preflist, BKey, Obj, ReqId, StartTime, [rr | Options], ignore).
 
 list_keys(Preflist, ReqId, Caller, Bucket) ->
-  riak_core_vnode_master:command(Preflist,
-                                 #riak_kv_listkeys_req_v2{
-                                    bucket=Bucket,
-                                    req_id=ReqId,
-                                    caller=Caller},
-                                 ignore,
-                                 riak_kv_vnode_master).
+    riak_core_vnode_master:command(Preflist,
+                                   #riak_kv_listkeys_req_v2{
+                                     bucket=Bucket,
+                                     req_id=ReqId,
+                                     caller=Caller},
+                                   ignore,
+                                   riak_kv_vnode_master).
 
 fold(Preflist, Fun, Acc0) ->
+    %% The function used for object folding expects the
+    %% bucket and key pair to be passed as the first parameter, but in
+    %% riak_kv the bucket and key have been separated. This function
+    %% wrapper is to address this mismatch.
+    FoldFun = fun(Bucket, Key, Value, Acc) ->
+                      Fun({Bucket, Key}, Value, Acc)
+              end,
     riak_core_vnode_master:sync_spawn_command(Preflist,
                                               ?FOLD_REQ{
-                                                 foldfun=Fun,
+                                                 foldfun=FoldFun,
                                                  acc0=Acc0},
                                               riak_kv_vnode_master).
 
@@ -163,9 +178,33 @@ get_vclocks(Preflist, BKeyList) ->
 init([Index]) ->
     Mod = app_helper:get_env(riak_kv, storage_backend),
     Configuration = app_helper:get_env(riak_kv),
-    {ok, ModState} = Mod:start(Index, Configuration),
+    BucketBufSize = app_helper:get_env(riak_kv, bucket_buffer_size, 1000),
+    IndexBufSize = app_helper:get_env(riak_kv, index_buffer_size, 100),
+    KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
 
-    {ok, #state{idx=Index, mod=Mod, modstate=ModState, mrjobs=dict:new()}}.
+    case catch Mod:start(Index, Configuration) of
+        {ok, ModState} ->
+            %% Get the backend capabilities
+            {_, Capabilities} = Mod:api_version(),
+            IndexBackend = lists:member(indexes, Capabilities),
+            {ok, #state{idx=Index,
+                        index_backend=IndexBackend,
+                        mod=Mod,
+                        modstate=ModState,
+                        bucket_buf_size=BucketBufSize,
+                        index_buf_size=IndexBufSize,
+                        key_buf_size=KeyBufSize,
+                        mrjobs=dict:new()}};
+        {error, Reason} ->
+            lager:error("Failed to start ~p Reason: ~p",
+                        [Mod, Reason]),
+            riak:stop("backend module failed to start.");
+        {'EXIT', Reason1} ->
+            lager:error("Failed to start ~p Reason: ~p",
+                        [Mod, Reason1]),
+            riak:stop("backend module failed to start.")
+    end.
+
 
 handle_command(?KV_PUT_REQ{bkey=BKey,
                            object=Object,
@@ -175,15 +214,15 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
                Sender, State=#state{idx=Idx}) ->
     riak_kv_mapred_cache:eject(BKey),
     riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
-    do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
-    {noreply, State};
+    UpdState = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
+    {noreply, UpdState};
 
 handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
     do_get(Sender, BKey, ReqId, State);
 handle_command(?KV_MGET_REQ{bkeys=BKeys, req_id=ReqId, from=From}, _Sender, State) ->
     do_mget(From, BKeys, ReqId, State);
 handle_command(#riak_kv_listkeys_req_v1{bucket=Bucket, req_id=ReqId}, _Sender,
-                State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
+               State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
     do_legacy_list_bucket(ReqId,Bucket,Mod,ModState,Idx,State);
 handle_command(#riak_kv_listkeys_req_v2{bucket=Bucket, req_id=ReqId, caller=Caller}, _Sender,
                State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
@@ -217,7 +256,7 @@ handle_command(?FOLD_REQ{foldfun=Fun, acc0=Acc},_Sender,State) ->
 %% Commands originating from inside this vnode
 handle_command({backend_callback, Ref, Msg}, _Sender,
                State=#state{mod=Mod, modstate=ModState}) ->
-    Mod:callback(ModState, Ref, Msg),
+    Mod:callback(Ref, Msg, ModState),
     {noreply, State};
 handle_command({mapexec_error_noretry, JobId, Err}, _Sender, #state{mrjobs=Jobs}=State) ->
     NewState = case dict:find(JobId, Jobs) of
@@ -242,7 +281,7 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
                end,
     {noreply, NewState}.
 
-%% @doc Handle a coverage request. 
+%% @doc Handle a coverage request.
 %% More information about the specification for the ItemFilter
 %% parameter can be found in the documentation for the
 %% {@link riak_kv_coverage_filter} module.
@@ -250,22 +289,24 @@ handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
                 _FilterVNodes,
                 Sender,
                 State=#state{mod=Mod,
-                             modstate=ModState}) ->
+                             modstate=ModState,
+                             bucket_buf_size=BucketBufSize}) ->
     %% Construct the filter function
     Filter = riak_kv_coverage_filter:build_filter(all, ItemFilter, undefined),
-    list_buckets(Sender, Filter, Mod, ModState),
+    list_buckets(Sender, Filter, Mod, ModState, BucketBufSize),
     {noreply, State};
 handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
-                                  item_filter=ItemFilter},
+                                 item_filter=ItemFilter},
                 FilterVNodes,
                 Sender,
                 State=#state{idx=Index,
                              mod=Mod,
-                             modstate=ModState}) ->
+                             modstate=ModState,
+                             key_buf_size=KeyBufSize}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-    list_keys(Sender, Bucket, Filter, Mod, ModState),
+    list_keys(Sender, Bucket, Filter, Mod, ModState, KeyBufSize),
     {noreply, State};
 handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                               item_filter=ItemFilter,
@@ -273,16 +314,31 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                 FilterVNodes,
                 Sender,
                 State=#state{idx=Index,
+                             index_backend=IndexBackend,
+                             index_buf_size=IndexBufSize,
                              mod=Mod,
                              modstate=ModState}) ->
-    %% Construct the filter function
-    FilterVNode = proplists:get_value(Index, FilterVNodes),
-    Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-    index_query(Sender, Bucket, Query, Filter, Mod, ModState),
+    case IndexBackend of
+        true ->
+            %% Construct the filter function
+            FilterVNode = proplists:get_value(Index, FilterVNodes),
+            Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
+            index_query(Sender, Bucket, Query, Filter, Mod, ModState, IndexBufSize);
+        false ->
+            riak_core_vnode:reply(Sender, {error, {indexes_not_supported, Mod}})
+    end,
     {noreply, State}.
 
-handle_handoff_command(Req=?FOLD_REQ{}, Sender, State) ->
-    handle_command(Req, Sender, State);
+handle_handoff_command(Req=?FOLD_REQ{foldfun=FoldFun}, Sender, State) ->
+    %% The function in riak_core used for object folding
+    %% during handoff expects the bucket and key pair to be
+    %% passed as the first parameter, but in riak_kv the bucket
+    %% and key have been separated. This function wrapper is
+    %% to address this mismatch.
+    HandoffFun = fun(Bucket, Key, Value, Acc) ->
+                         FoldFun({Bucket, Key}, Value, Acc)
+                 end,
+    handle_command(Req?FOLD_REQ{foldfun=HandoffFun}, Sender, State);
 handle_handoff_command(Req={backend_callback, _Ref, _Msg}, Sender, State) ->
     handle_command(Req, Sender, State);
 handle_handoff_command(_Req, _Sender, State) -> {forward, State}.
@@ -301,13 +357,15 @@ handle_handoff_data(BinObj, State) ->
     PBObj = riak_core_pb:decode_riakobject_pb(zlib:unzip(BinObj)),
     BKey = {PBObj#riakobject_pb.bucket,PBObj#riakobject_pb.key},
     case do_diffobj_put(BKey, binary_to_term(PBObj#riakobject_pb.val), State) of
-        ok ->
-            {reply, ok, State};
+        {ok, UpdModState} ->
+            {reply, ok, State#state{modstate=UpdModState}};
+        {error, Reason, UpdModState} ->
+            {reply, {error, Reason}, State#state{modstate=UpdModState}};
         Err ->
             {reply, {error, Err}, State}
     end.
 
-encode_handoff_item({B,K}, V) ->
+encode_handoff_item({B, K}, V) ->
     zlib:zip(riak_core_pb:encode_riakobject_pb(
                #riakobject_pb{bucket=B, key=K, val=V})).
 
@@ -315,14 +373,20 @@ is_empty(State=#state{mod=Mod, modstate=ModState}) ->
     {Mod:is_empty(ModState), State}.
 
 delete(State=#state{mod=Mod, modstate=ModState}) ->
-    ok = Mod:drop(ModState),
-    {ok, State}.
+    case Mod:drop(ModState) of
+        {ok, UpdModState} ->
+            ok;
+        {error, Reason, UpdModState} ->
+            lager:error("Failed to drop ~p. Reason: ~p~n", [Mod, Reason]),
+            ok
+    end,
+    {ok, State#state{modstate=UpdModState}}.
 
 terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
-handle_exit(_Pid, _Reason, State) ->
+handle_exit(_Pid, Reason, State) ->
     %% A linked processes has died so the vnode
     %% process should take appropriate action here.
     %% The default behavior is to crash the vnode
@@ -330,16 +394,11 @@ handle_exit(_Pid, _Reason, State) ->
     %% by riak_core_vnode_master to prevent
     %% messages from stacking up on the process message
     %% queue and never being processed.
+    lager:error("Linked process exited. Reason: ~p", [Reason]),
     {stop, linked_process_crash, State}.
 
-%% old vnode helper functions
-
-
-%store_call(State=#state{mod=Mod, modstate=ModState}, Msg) ->
-%    Mod:call(ModState, Msg).
-
 %% @private
-% upon receipt of a client-initiated put
+%% upon receipt of a client-initiated put
 do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     case proplists:get_value(bucket_props, Options) of
         undefined ->
@@ -362,52 +421,95 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        bprops=BProps,
                        starttime=StartTime,
                        prunetime=PruneTime},
-    Reply = perform_put(prepare_put(State, PutArgs), State, PutArgs),
+    {PrepPutRes, UpdPutArgs} = prepare_put(State, PutArgs),
+    {Reply, UpdState} = perform_put(PrepPutRes, State, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
-    riak_kv_stat:update(vnode_put).
+    riak_kv_stat:update(vnode_put),
+    UpdState.
 
-prepare_put(#state{}, #putargs{lww=true, robj=RObj}) ->
-    {true, RObj};
-prepare_put(#state{mod=Mod,modstate=ModState}, #putargs{bkey=BKey,
-                                                        robj=RObj,
-                                                        reqid=ReqID,
-                                                        bprops=BProps,
-                                                        starttime=StartTime,
-                                                        prunetime=PruneTime}) ->
-    case syntactic_put_merge(Mod, ModState, BKey, RObj, ReqID, StartTime) of
-        {oldobj, OldObj} ->
-            {false, OldObj};
-        {newobj, NewObj} ->
-            VC = riak_object:vclock(NewObj),
-            AMObj = enforce_allow_mult(NewObj, BProps),
-            case PruneTime of
-                undefined ->
-                    ObjToStore = AMObj;
-                _ ->
-                    ObjToStore = riak_object:set_vclock(
-                                   AMObj,
-                                   vclock:prune(VC,PruneTime,BProps)
-                                  )
+prepare_put(#state{index_backend=false}, PutArgs=#putargs{lww=true, robj=RObj}) ->
+    {{true, RObj}, PutArgs};
+prepare_put(#state{index_backend=IndexBackend,
+                   mod=Mod,
+                   modstate=ModState},
+            PutArgs=#putargs{bkey={Bucket, Key},
+                             robj=RObj,
+                             reqid=ReqID,
+                             bprops=BProps,
+                             lww=LWW,
+                             starttime=StartTime,
+                             prunetime=PruneTime}) ->
+    case Mod:get(Bucket, Key, ModState) of
+        {error, not_found, _UpdModState} ->
+            case IndexBackend of
+                true ->
+                    IndexSpecs = riak_object:index_specs(RObj);
+                false ->
+                    IndexSpecs = []
             end,
-            {true, ObjToStore}
+            {{true, RObj}, PutArgs#putargs{index_specs=IndexSpecs}};
+        {ok, Val, _UpdModState} ->
+            OldObj = binary_to_term(Val),
+            case syntactic_put_merge(OldObj, RObj, ReqID, LWW, StartTime) of
+                {oldobj, OldObj1} ->
+                    {{false, OldObj1}, PutArgs};
+                {newobj, NewObj} ->
+                    VC = riak_object:vclock(NewObj),
+                    AMObj = enforce_allow_mult(NewObj, BProps),
+                    case IndexBackend of
+                        true ->
+                            IndexSpecs =
+                                riak_object:diff_index_specs(AMObj,
+                                                             OldObj);
+                        false ->
+                            IndexSpecs = []
+                    end,
+                    case PruneTime of
+                        undefined ->
+                            ObjToStore = AMObj;
+                        _ ->
+                            ObjToStore =
+                                riak_object:set_vclock(AMObj,
+                                                       vclock:prune(VC,
+                                                                    PruneTime,
+                                                                    BProps))
+                    end,
+                    {{true, ObjToStore},
+                     PutArgs#putargs{index_specs=IndexSpecs}}
+            end
     end.
 
-perform_put({false, Obj},#state{idx=Idx},#putargs{returnbody=true,reqid=ReqID}) ->
-    {dw, Idx, Obj, ReqID};
-perform_put({false, _Obj}, #state{idx=Idx}, #putargs{returnbody=false,reqid=ReqId}) ->
-    {dw, Idx, ReqId};
-perform_put({true, Obj}, #state{idx=Idx,mod=Mod,modstate=ModState},
-            #putargs{returnbody=RB, bkey=BKey, reqid=ReqID}) ->
+perform_put({false, Obj},
+            #state{idx=Idx}=State,
+            #putargs{returnbody=true,
+                     reqid=ReqID}) ->
+    {{dw, Idx, Obj, ReqID}, State};
+perform_put({false, _Obj},
+            #state{idx=Idx}=State,
+            #putargs{returnbody=false,
+                     reqid=ReqId}) ->
+    {{dw, Idx, ReqId}, State};
+perform_put({true, Obj},
+            #state{idx=Idx,
+                   mod=Mod,
+                   modstate=ModState}=State,
+            #putargs{returnbody=RB,
+                     bkey={Bucket, Key},
+                     reqid=ReqID,
+                     index_specs=IndexSpecs}) ->
     Val = term_to_binary(Obj),
-    case Mod:put(ModState, BKey, Val) of
-        ok ->
+    case Mod:put(Bucket, Key, IndexSpecs, Val, ModState) of
+        {ok, UpdModState} ->
             case RB of
-                true -> {dw, Idx, Obj, ReqID};
-                false -> {dw, Idx, ReqID}
+                true ->
+                    Reply = {dw, Idx, Obj, ReqID};
+                false ->
+                    Reply = {dw, Idx, ReqID}
             end;
-        {error, _Reason} ->
-            {fail, Idx, ReqID}
-    end.
+        {error, _Reason, UpdModState} ->
+            Reply = {fail, Idx, ReqID}
+    end,
+    {Reply, State#state{modstate=UpdModState}}.
 
 %% @private
 %% enforce allow_mult bucket property so that no backend ever stores
@@ -436,20 +538,20 @@ select_newest_content(Mult) ->
          Mult)).
 
 %% @private
-syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId) ->
-    syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId, vclock:timestamp()).
+syntactic_put_merge(Obj0, Obj1, ReqId, LastWriteWins) ->
+    syntactic_put_merge(Obj0, Obj1, ReqId, LastWriteWins, vclock:timestamp()).
 
-syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId, StartTime) ->
-    case Mod:get(ModState, BKey) of
-        {error, notfound} -> {newobj, Obj1};
-        {ok, Val0} ->
-            Obj0 = binary_to_term(Val0),
-            ResObj = riak_object:syntactic_merge(
-                       Obj0,Obj1,term_to_binary(ReqId), StartTime),
-            case riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
-                true -> {oldobj, ResObj};
-                false -> {newobj, ResObj}
-            end
+syntactic_put_merge(Obj0, Obj1, ReqId, LastWriteWins, StartTime) ->
+    ResObj = riak_object:syntactic_merge(Obj0,
+                                         Obj1,
+                                         term_to_binary(ReqId),
+                                         StartTime),
+    case not LastWriteWins andalso
+        riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
+        true ->
+            {oldobj, ResObj};
+        false ->
+            {newobj, ResObj}
     end.
 
 %% @private
@@ -475,229 +577,293 @@ do_mget({fsm, Sender}, BKeys, ReqId, State=#state{idx=Idx, mod=Mod, modstate=Mod
 %% @private
 do_get_term(BKey, Mod, ModState) ->
     case do_get_binary(BKey, Mod, ModState) of
-        {ok, Bin} ->
+        {ok, Bin, _UpdModState} ->
             {ok, binary_to_term(Bin)};
+        %% @TODO Eventually it would be good to
+        %% make the use of not_found or notfound
+        %% consistent throughout the code.
+        {error, not_found, _UpdatedModstate} ->
+            {error, notfound};
+        {error, Reason, _UpdatedModstate} ->
+            {error, Reason};
         Err ->
             Err
     end.
 
-do_get_binary(BKey, Mod, ModState) ->
-    Mod:get(ModState,BKey).
+do_get_binary({Bucket, Key}, Mod, ModState) ->
+    Mod:get(Bucket, Key, ModState).
 
 
 %% @private
-list_buckets(Sender, Filter, Mod, ModState) ->
-    %% TODO: Decide if we want to continue to allow key filters
-    %% to be used to filter the list of buckets. I think it is
-    %% more useful to move all filtering out of the backend and
-    %% not have to force all backends to fold over all keys
-    %% to generate a list of buckets.
-    Buckets = Mod:list_bucket(ModState, '_'),
+list_buckets(Sender, Filter, Mod, ModState, BufferSize) ->
+    Buffer = riak_kv_fold_buffer:new(BufferSize, get_buffer_fun(false, Sender)),
     case Filter of
         none ->
-            riak_core_vnode:reply(Sender, {final_results, Buckets});
+            FoldBucketsFun =
+                fun(Bucket, Buf) ->
+                        riak_kv_fold_buffer:add(Bucket, Buf)
+                end;
         _ ->
-            FilteredBuckets = lists:foldl(Filter, [], Buckets),
-            riak_core_vnode:reply(Sender, {final_results, FilteredBuckets})
-    end.
-
-%% @private
-list_keys(Sender, Bucket, Filter, Mod, ModState) ->
-    F = fun({_, _} = BKey, _Val, Acc) ->
-                process_keys(Sender, Bucket, Filter, BKey, Acc);
-           (Key, _Val, Acc) when is_binary(Key) ->
-                %% Backend's fold gives us keys only, so add bucket.
-                process_keys(Sender, Bucket, Filter, {Bucket, Key}, Acc)
-        end,
-    TryFuns = [fun() ->
-                       %% Difficult to coordinate external backend API, so
-                       %% we'll live with it for the moment/eternity.
-                       F2 = fun(Key, Acc) ->
-                            process_keys(Sender, Bucket,
-                                         Filter, {Bucket, Key}, Acc)
-                            end,
-                       Mod:fold_bucket_keys(ModState, Bucket, F2)
-               end,
-               fun() ->
-                       %% Newer backend API
-                       Mod:fold_bucket_keys(ModState, Bucket, F, [])
-               end,
-               fun() ->
-                       %% Older API for third-parties
-                       Mod:fold(ModState, F, [])
-               end],
-    Keys = lists:foldl(fun(TryFun, try_next) ->
-                                try TryFun() catch error:undef -> try_next end;
-                           (_TryFun, Res) ->
-                                Res
-                        end, try_next, TryFuns),
-    case Filter of
-        none ->
-            riak_core_vnode:reply(Sender, {final_results, {Bucket, Keys}});
-        _ ->
-            FilteredKeys = lists:foldl(Filter, [], Keys),
-            riak_core_vnode:reply(Sender, {final_results, {Bucket, FilteredKeys}})
-    end.
-
-%% @private
-%% @deprecated This function is only here to support
-%% rolling upgrades and will be removed.
-do_legacy_list_bucket(ReqID,Bucket,Mod,ModState,Idx,State) ->
-    RetVal = Mod:list_bucket(ModState,Bucket),
-    {reply, {kl, RetVal, Idx, ReqID}, State}.
-
-%% @private
-%% @deprecated This function is only here to support
-%% rolling upgrades and will be removed.
-do_legacy_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
-    F = fun({_, _} = BKey, _Val, Acc) ->
-                legacy_process_keys(Caller, ReqId, Idx, Bucket, BKey, Acc);
-           (Key, _Val, Acc) when is_binary(Key) ->
-                %% Backend's fold gives us keys only, so add bucket.
-                legacy_process_keys(Caller, ReqId, Idx, Bucket, {Bucket, Key}, Acc)
-        end,
-    TryFuns = [fun() ->
-                       %% Difficult to coordinate external backend API, so
-                       %% we'll live with it for the moment/eternity.
-                       F2 = fun(Key, Acc) ->
-                            legacy_process_keys(Caller, ReqId, Idx, Bucket,
-                                         {Bucket, Key}, Acc)
-                            end,
-                       Mod:fold_bucket_keys(ModState, Bucket, F2)
-               end,
-               fun() ->
-                       %% Newer backend API
-                       Mod:fold_bucket_keys(ModState, Bucket, F, [])
-               end,
-               fun() ->
-                       %% Older API for third-parties
-                       Mod:fold(ModState, F, [])
-               end],
-    Final = lists:foldl(fun(TryFun, try_next) ->
-                                try TryFun() catch error:undef -> try_next end;
-                           (_TryFun, Res) ->
-                                Res
-                        end, try_next, TryFuns),
-    case Final of
-        [] ->
-            ok;
-        Remainder when is_list(Remainder) ->
-            Caller ! {ReqId, {kl, Idx, Remainder}}
+            FoldBucketsFun =
+                fun(Bucket, Buf) ->
+                        case Filter(Bucket) of
+                            true ->
+                                riak_kv_fold_buffer:add(Bucket, Buf);
+                            false ->
+                                Buf
+                        end
+                end
     end,
-    Caller ! {ReqId, Idx, done}.
-
-%% @private
-index_query(Sender, Bucket, Query, Filter, Mod, ModState) ->
-    %% @TODO Should probably add some buffering like the key listing uses.
-    QueryResults = Mod:fold_index(ModState, Bucket, Query),
-    case Filter of
-        none ->
-            riak_core_vnode:reply(Sender, {final_results, {Bucket, QueryResults}});
-        _ ->
-            FilteredResults = lists:foldl(Filter, [], QueryResults),
-            riak_core_vnode:reply(Sender, {final_results, {Bucket, FilteredResults}})
+    case Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState) of
+        {ok, Buffer1} ->
+            riak_kv_fold_buffer:flush(Buffer1, get_buffer_fun(true, Sender));
+        {error, Reason} ->
+            riak_core_vnode:reply(Sender, {error, Reason})
     end.
 
 %% @private
-do_delete(BKey, Mod, ModState) ->
-    case Mod:delete(ModState, BKey) of
-        ok ->
+list_keys(Sender, Bucket, Filter, Mod, ModState, BufferSize) ->
+    Buffer = riak_kv_fold_buffer:new(BufferSize,
+                                     get_buffer_fun({false, Bucket}, Sender)),
+    case Filter of
+        none ->
+            FoldKeysFun =
+                fun(_, Key, Buf) ->
+                        riak_kv_fold_buffer:add(Key, Buf)
+                end;
+        _ ->
+            FoldKeysFun =
+                fun(_, Key, Buf) ->
+                        case Filter(Key) of
+                            true ->
+                                riak_kv_fold_buffer:add(Key, Buf);
+                            false ->
+                                Buf
+                        end
+                end
+    end,
+    Opts = [{bucket, Bucket}],
+    case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
+        {ok, Buffer1} ->
+            riak_kv_fold_buffer:flush(Buffer1,
+                                      get_buffer_fun({true, Bucket}, Sender));
+        {error, Reason} ->
+            riak_core_vnode:reply(Sender, {error, Reason})
+    end.
+
+%% @private
+%% @deprecated This function is only here to support
+%% rolling upgrades and will be removed.
+do_legacy_list_bucket(ReqID,'_',Mod,ModState,Idx,State) ->
+    FoldBucketsFun =
+        fun(Bucket, Buf) ->
+                [Bucket | Buf]
+        end,
+    RetVal = Mod:fold_buckets(FoldBucketsFun, [], [], ModState),
+    {reply, {kl, RetVal, Idx, ReqID}, State};
+do_legacy_list_bucket(ReqID,Bucket,Mod,ModState,Idx,State) ->
+    FoldKeysFun =
+        fun(_, Key, Buf) ->
+                [Key | Buf]
+        end,
+    Opts = [{bucket, Bucket}],
+    case Mod:fold_keys(FoldKeysFun, [], Opts, ModState) of
+        {ok, RetVal} ->
+            {reply, {kl, RetVal, Idx, ReqID}, State};
+        {error, Reason} ->
+            {reply, {error, Reason, ReqID}, State}
+    end.
+
+%% @private
+%% @deprecated This function is only here to support
+%% rolling upgrades and will be removed.
+do_legacy_list_keys(Caller,ReqId,'_',Idx,Mod,ModState) ->
+    do_legacy_list_buckets(Caller,ReqId,Idx,Mod,ModState);
+do_legacy_list_keys(Caller,ReqId,Input,Idx,Mod,ModState) ->
+    case Input of
+        {filter, Bucket, Filter} ->
+            ok;
+        Bucket ->
+            Filter = none
+    end,
+    BufferSize = 100,
+    BufferFun = fun(Results) ->
+                        Caller ! {ReqId, {kl, Idx, Results}}
+                end,
+    Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
+    case Filter of
+        none ->
+            FoldKeysFun =
+                fun(_, Key, Buf) ->
+                        riak_kv_fold_buffer:add(Key, Buf)
+                end;
+        _ ->
+            FoldKeysFun =
+                fun(_, Key, Buf) ->
+                        case Filter(Key) of
+                            true ->
+                                riak_kv_fold_buffer:add(Key, Buf);
+                            false ->
+                                Buf
+                        end
+                end
+    end,
+    Opts = [{bucket, Bucket}],
+    case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
+        {ok, Buffer1} ->
+            FlushFun = fun(FinalResults) ->
+                               Caller ! {ReqId, {kl, Idx, FinalResults}},
+                               Caller ! {ReqId, Idx, done}
+                       end,
+            riak_kv_fold_buffer:flush(Buffer1, FlushFun);
+        {error, Reason} ->
+            Caller ! {ReqId, {error, Reason}}
+    end.
+
+%% @private
+%% @deprecated This function is only here to support
+%% rolling upgrades and will be removed.
+do_legacy_list_buckets(Caller,ReqId,Idx,Mod,ModState) ->
+    BufferSize = 1000,
+    BufferFun = fun(Results) ->
+                        UniqueResults = lists:usort(Results),
+                        Caller ! {ReqId, {kl, Idx, UniqueResults}}
+                end,
+    Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
+    FoldBucketsFun =
+        fun(Bucket, Buf) ->
+                riak_kv_fold_buffer:add(Bucket, Buf)
+        end,
+    case Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState) of
+        {ok, Buffer1} ->
+            FlushFun = fun(FinalResults) ->
+                               Caller ! {ReqId, {kl, Idx, FinalResults}},
+                               Caller ! {ReqId, Idx, done}
+                       end,
+            riak_kv_fold_buffer:flush(Buffer1, FlushFun);
+        {error, Reason} ->
+            Caller ! {ReqId, {error, Reason}}
+    end.
+
+%% @private
+index_query(Sender, Bucket, Query, Filter, Mod, ModState, BufferSize) ->
+    Buffer = riak_kv_fold_buffer:new(BufferSize,
+                                     get_buffer_fun({false, Bucket}, Sender)),
+    case Filter of
+        none ->
+            FoldKeysFun =
+                fun(_, Key, Buf) ->
+                        riak_kv_fold_buffer:add(Key, Buf)
+                end;
+        _ ->
+            FoldKeysFun =
+                fun(_, Key, Buf) ->
+                        case Filter(Key) of
+                            true ->
+                                riak_kv_fold_buffer:add(Key, Buf);
+                            false ->
+                                Buf
+                        end
+                end
+    end,
+    Opts = [{index, Bucket, Query}],
+    case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
+        {ok, Buffer1} ->
+            riak_kv_fold_buffer:flush(Buffer1,
+                                      get_buffer_fun({true, Bucket}, Sender));
+        {error, Reason} ->
+            riak_core_vnode:reply(Sender, {error, Reason})
+    end.
+
+%% @private
+get_buffer_fun(true, Sender) ->
+    fun(Results) ->
+            riak_core_vnode:reply(Sender,
+                                  {final_results, Results})
+    end;
+get_buffer_fun(false, Sender) ->
+    fun(Results) ->
+            riak_core_vnode:reply(Sender,
+                                  {results, Results})
+    end;
+get_buffer_fun({true, Bucket}, Sender) ->
+    fun(Results) ->
+            riak_core_vnode:reply(Sender,
+                                  {final_results, {Bucket, Results}})
+    end;
+get_buffer_fun({false, Bucket}, Sender) ->
+    fun(Results) ->
+            riak_core_vnode:reply(Sender,
+                                  {results, {Bucket, Results}})
+    end.
+
+%% @private
+do_delete({Bucket, Key}, Mod, ModState) ->
+    case Mod:delete(Bucket, Key, ModState) of
+        {ok, _UpdModState} ->
             del;
-        {error, _Reason} ->
+        {error, _Reason, _UpdModState} ->
             fail
     end.
 
 %% @private
-process_keys(Sender, Bucket, Filter, {Bucket, Key}, Acc) ->
-       buffer_key_result(Sender, Bucket, Filter, [Key | Acc]);
-process_keys(_Sender, _Bucket, _Filter, {_B, _K}, Acc) ->
-    Acc.
-
-buffer_key_result(Sender, Bucket, Filter, Acc) ->
-    %% Use arbitrary fixed buffer size of 100. Not
-    %% sure there is a good 'why' for that number.
-    case length(Acc) >= 100 of
-        true ->
-            %% Filter the buffer keys as needed
-            case Filter of
-               none ->
-                    riak_core_vnode:reply(Sender, {results, {Bucket, Acc}});
-                _ ->
-                    FilteredKeys = lists:foldl(Filter, [], Acc),
-                    case FilteredKeys of
-                        [] ->
-                            ok;
-                        _ ->
-                            riak_core_vnode:reply(Sender, {results, {Bucket, FilteredKeys}})
-                    end
-            end,
-            %% Reset the buffer so that results are not duplicated
-            [];
-        false ->
-            Acc
-    end.
-
-%% @private
-%% @deprecated This function is only here to support
-%% rolling upgrades and will be removed.
-legacy_process_keys(Caller, ReqId, Idx, '_', {Bucket, _K}, Acc) ->
-    %% Bucket='_' means "list buckets" instead of "list keys"
-    legacy_buffer_key_result(Caller, ReqId, Idx, [Bucket|Acc]);
-legacy_process_keys(Caller, ReqId, Idx, {filter, Bucket, Fun}, {Bucket, K}, Acc) ->
-    %% Bucket={filter,Bucket,Fun} means "only include keys
-    %% in Bucket that make Fun(K) return 'true'"
-    case Fun(K) of
-        true ->
-            legacy_buffer_key_result(Caller, ReqId, Idx, [K|Acc]);
-        false ->
-            Acc
-    end;
-legacy_process_keys(Caller, ReqId, Idx, Bucket, {Bucket, K}, Acc) ->
-    legacy_buffer_key_result(Caller, ReqId, Idx, [K|Acc]);
-legacy_process_keys(_Caller, _ReqId, _Idx, _Bucket, {_B, _K}, Acc) ->
-    Acc.
-
-%% @deprecated This function is only here to support
-%% rolling upgrades and will be removed.
-legacy_buffer_key_result(Caller, ReqId, Idx, Acc) ->
-    case length(Acc) >= 100 of
-        true ->
-            Caller ! {ReqId, {kl, Idx, Acc}},
-            [];
-        false ->
-            Acc
-    end.
-
-%% @private
 do_fold(Fun, Acc0, _State=#state{mod=Mod, modstate=ModState}) ->
-    Mod:fold(ModState, Fun, Acc0).
+    {ok, Objects} = Mod:fold_objects(Fun, Acc0, [], ModState),
+    Objects.
 
 %% @private
 do_get_vclocks(KeyList,_State=#state{mod=Mod,modstate=ModState}) ->
     [{BKey, do_get_vclock(BKey,Mod,ModState)} || BKey <- KeyList].
 %% @private
-do_get_vclock(BKey,Mod,ModState) ->
-    case Mod:get(ModState, BKey) of
-        {error, notfound} -> vclock:fresh();
-        {ok, Val} -> riak_object:vclock(binary_to_term(Val))
+do_get_vclock({Bucket, Key}, Mod, ModState) ->
+    case Mod:get(Bucket, Key, ModState) of
+        {error, not_found, _UpdModState} -> vclock:fresh();
+        {ok, Val, _UpdModState} -> riak_object:vclock(binary_to_term(Val))
     end.
 
 %% @private
-% upon receipt of a handoff datum, there is no client FSM
-do_diffobj_put(BKey={Bucket,_}, DiffObj,
-       _StateData=#state{mod=Mod,modstate=ModState}) ->
+%% upon receipt of a handoff datum, there is no client FSM
+do_diffobj_put({Bucket, Key}, DiffObj,
+               _StateData=#state{index_backend=IndexBackend,
+                                 mod=Mod,
+                                 modstate=ModState}) ->
     ReqID = erlang:phash2(erlang:now()),
-    case syntactic_put_merge(Mod, ModState, BKey, DiffObj, ReqID) of
-        {newobj, NewObj} ->
-            AMObj = enforce_allow_mult(NewObj, riak_core_bucket:get_bucket(Bucket)),
-            Val = term_to_binary(AMObj),
-            Res = Mod:put(ModState, BKey, Val),
+    case Mod:get(Bucket, Key, ModState) of
+        {error, not_found, _UpdModState} ->
+            case IndexBackend of
+                true ->
+                    IndexSpecs = riak_object:index_specs(DiffObj);
+                false ->
+                    IndexSpecs = []
+            end,
+            Val = term_to_binary(DiffObj),
+            Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
             case Res of
-                ok -> riak_kv_stat:update(vnode_put);
+                {ok, _UpdModState} -> riak_kv_stat:update(vnode_put);
                 _ -> nop
             end,
             Res;
-        _ -> ok
+        {ok, Val0, _UpdModState} ->
+            OldObj = binary_to_term(Val0),
+            case syntactic_put_merge(OldObj, DiffObj, ReqID, false) of
+                {oldobj, _} ->
+                    {ok, ModState};
+                {newobj, NewObj} ->
+                    AMObj = enforce_allow_mult(NewObj, riak_core_bucket:get_bucket(Bucket)),
+                    case IndexBackend of
+                        true ->
+                            IndexSpecs = riak_object:diff_index_specs(AMObj, OldObj);
+                        false ->
+                            IndexSpecs = []
+                    end,
+                    Val = term_to_binary(AMObj),
+                    Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
+                    case Res of
+                        {ok, _UpdModState} -> riak_kv_stat:update(vnode_put);
+                        _ -> nop
+                    end,
+                    Res
+            end
     end.
 
 %% @private
@@ -710,21 +876,18 @@ dummy_backend(BackendMod) ->
     application:set_env(riak_kv, storage_backend, BackendMod),
     application:set_env(riak_core, default_bucket_props, []),
     application:set_env(bitcask, data_root, bitcask_test_dir()),
-    application:set_env(riak_kv, riak_kv_dets_backend_root, dets_test_dir()),
-    application:set_env(riak_kv, riak_kv_fs_backend_root, fs_test_dir()),
-    application:set_env(riak_kv, multi_backend_default, multi_dummy_ets),
+    application:set_env(eleveldb, data_root, eleveldb_test_dir()),
+    application:set_env(riak_kv, multi_backend_default, multi_dummy_memory1),
     application:set_env(riak_kv, multi_backend,
-                        [{multi_dummy_ets, riak_kv_ets_backend, []},
-                         {multi_dummy_gb, riak_kv_gb_trees_backend, []}]).
+                        [{multi_dummy_memory1, riak_kv_memory_backend, []},
+                         {multi_dummy_memory2, riak_kv_memory_backend, []}]).
 
 bitcask_test_dir() ->
     "./test.bitcask-temp-data".
 
-dets_test_dir() ->
-    "./test.dets-temp-data".
+eleveldb_test_dir() ->
+    "./test.eleveldb-temp-data".
 
-fs_test_dir() ->
-    "./test.fs-temp-data".
 
 backend_with_known_key(BackendMod) ->
     dummy_backend(BackendMod),
@@ -743,108 +906,80 @@ backend_with_known_key(BackendMod) ->
 
 must_be_first_setup_stuff_test() ->
     application:start(sasl),
-    dets_server:stop(),
     erlang:put({?MODULE, kv}, application:get_all_env(riak_kv)).
 
 list_buckets_test_() ->
     {foreach,
-        fun() ->
-            application:start(sasl),
-            application:get_all_env(riak_kv)
-        end,
-        fun(Env) ->
-            application:stop(sasl),
-            [application:unset_env(riak_kv, K) ||
-            {K, _V} <- application:get_all_env(riak_kv)],
-            [application:set_env(riak_kv, K, V) || {K, V} <- Env]
-        end,
-        [
-        fun(_) ->
-            {"bitcask list buckets",
-                fun() ->
-                    list_buckets_test_i(riak_kv_bitcask_backend)
-                end
-            }
-        end,
-        fun(_) ->
-            {"cache list buckets",
-                fun() ->
-                    list_buckets_test_i(riak_kv_cache_backend)
-                end
-            }
-        end,
-        fun(_) ->
-            {"dets list buckets",
-                fun() ->
-                    dets_server:stop(),
-                    redbug:start({dets, apply_op}, [{msgs,100}, {print_file, "zoozoo"}]),
-                    os:cmd("rm -rf " ++ dets_test_dir()),
-                    list_buckets_test_i(riak_kv_dets_backend),
-                    redbug:stop()
-                end
-            }
-        end,
-        fun(_) ->
-            {"ets list buckets",
-                fun() ->
-                    list_buckets_test_i(riak_kv_ets_backend),
-                    ok
-                end
-            }
-        end,
-        fun(_) ->
-            {"fs list buckets",
-                fun() ->
-                    list_buckets_test_i(riak_kv_fs_backend),
-                    ok
-                end
-            }
-        end,
-        fun(_) ->
-            {"gb_trees list buckets",
-                fun() ->
-                    list_buckets_test_i(riak_kv_gb_trees_backend),
-                    ok
-                end
-            }
-        end,
-        fun(_) ->
-            {"multi list buckets",
-                fun() ->
-                    list_buckets_test_i(riak_kv_multi_backend),
-                    ok
-                end
-            }
-        end
-        ]
+     fun() ->
+             application:start(sasl),
+             application:get_all_env(riak_kv)
+     end,
+     fun(Env) ->
+             application:stop(sasl),
+             [application:unset_env(riak_kv, K) ||
+                 {K, _V} <- application:get_all_env(riak_kv)],
+             [application:set_env(riak_kv, K, V) || {K, V} <- Env]
+     end,
+     [
+      fun(_) ->
+              {"bitcask list buckets",
+               fun() ->
+                       list_buckets_test_i(riak_kv_bitcask_backend)
+               end
+              }
+      end,
+      fun(_) ->
+              {"eleveldb list buckets",
+               fun() ->
+                       list_buckets_test_i(riak_kv_eleveldb_backend)
+               end
+              }
+      end,
+      fun(_) ->
+              {"memory list buckets",
+               fun() ->
+                       list_buckets_test_i(riak_kv_memory_backend),
+                       ok
+               end
+              }
+      end,
+      fun(_) ->
+              {"multi list buckets",
+               fun() ->
+                       list_buckets_test_i(riak_kv_multi_backend),
+                       ok
+               end
+              }
+      end
+     ]
     }.
 
 list_buckets_test_i(BackendMod) ->
     {S, B, _K} = backend_with_known_key(BackendMod),
     Caller = new_result_listener(buckets),
     handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=none}, [],
-                   {fsm, {456, {0, node()}}, Caller}, S),
+                    {fsm, {456, {0, node()}}, Caller}, S),
     ?assertEqual({ok, [B]}, results_from_listener(Caller)),
     flush_msgs().
 
 filter_keys_test() ->
-    {S, B, K} = backend_with_known_key(riak_kv_ets_backend),
+    {S, B, K} = backend_with_known_key(riak_kv_memory_backend),
     Caller1 = new_result_listener(keys),
     handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
                                      item_filter=fun(_) -> true end}, [],
-                   {fsm, {124, {0, node()}}, Caller1}, S),
+                    {fsm, {124, {0, node()}}, Caller1}, S),
     ?assertEqual({ok, [K]}, results_from_listener(Caller1)),
 
     Caller2 = new_result_listener(keys),
     handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
                                      item_filter=fun(_) -> false end}, [],
-                   {fsm, {125, {0, node()}}, Caller2}, S),
+                    {fsm, {125, {0, node()}}, Caller2}, S),
     ?assertEqual({ok, []}, results_from_listener(Caller2)),
 
     Caller3 = new_result_listener(keys),
     handle_coverage(?KV_LISTKEYS_REQ{bucket= <<"g">>,
                                      item_filter=fun(_) -> true end}, [],
-                   {fsm, {126, {0, node()}}, Caller3}, S),
+                    {fsm, {126, {0, node()}}, Caller3}, S),
     ?assertEqual({ok, []}, results_from_listener(Caller3)),
 
     flush_msgs().
