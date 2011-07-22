@@ -243,24 +243,24 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
 
 handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
                 _FilterVNodes,
-                ReplyFun,
+                Sender,
                 State=#state{mod=Mod,
                              modstate=ModState}) ->
     %% Construct the filter function
     Filter = riak_kv_coverage_filter:build_filter(all, ItemFilter, undefined),
-    list_buckets(ReplyFun, Filter, Mod, ModState),
+    list_buckets(Sender, Filter, Mod, ModState),
     {noreply, State};
 handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
                                   item_filter=ItemFilter},
                 FilterVNodes,
-                ReplyFun,
+                Sender,
                 State=#state{idx=Index,
                              mod=Mod,
                              modstate=ModState}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-    list_keys(ReplyFun, Bucket, Filter, Mod, ModState),
+    list_keys(Sender, Bucket, Filter, Mod, ModState),
     {noreply, State}.
 
 handle_handoff_command(Req=?FOLD_REQ{}, Sender, State) ->
@@ -468,7 +468,7 @@ do_get_binary(BKey, Mod, ModState) ->
 
 
 %% @private
-list_buckets(ReplyFun, Filter, Mod, ModState) ->
+list_buckets(Sender, Filter, Mod, ModState) ->
     %% TODO: Decide if we want to continue to allow key filters
     %% to be used to filter the list of buckets. I think it is
     %% more useful to move all filtering out of the backend and
@@ -477,25 +477,25 @@ list_buckets(ReplyFun, Filter, Mod, ModState) ->
     Buckets = Mod:list_bucket(ModState, '_'),
     case Filter of
         none ->
-            ReplyFun({final_results, Buckets});
+            riak_core_vnode:reply(Sender, {final_results, Buckets});
         _ ->
             FilteredBuckets = lists:foldl(Filter, [], Buckets),
-            ReplyFun({final_results, FilteredBuckets})
+            riak_core_vnode:reply(Sender, {final_results, FilteredBuckets})
     end.
 
 %% @private
-list_keys(ReplyFun, Bucket, Filter, Mod, ModState) ->
+list_keys(Sender, Bucket, Filter, Mod, ModState) ->
     F = fun({_, _} = BKey, _Val, Acc) ->
-                process_keys(ReplyFun, Bucket, Filter, BKey, Acc);
+                process_keys(Sender, Bucket, Filter, BKey, Acc);
            (Key, _Val, Acc) when is_binary(Key) ->
                 %% Backend's fold gives us keys only, so add bucket.
-                process_keys(ReplyFun, Bucket, Filter, {Bucket, Key}, Acc)
+                process_keys(Sender, Bucket, Filter, {Bucket, Key}, Acc)
         end,
     TryFuns = [fun() ->
                        %% Difficult to coordinate external backend API, so
                        %% we'll live with it for the moment/eternity.
                        F2 = fun(Key, Acc) ->
-                            process_keys(ReplyFun, Bucket,
+                            process_keys(Sender, Bucket,
                                          Filter, {Bucket, Key}, Acc)
                             end,
                        Mod:fold_bucket_keys(ModState, Bucket, F2)
@@ -515,10 +515,10 @@ list_keys(ReplyFun, Bucket, Filter, Mod, ModState) ->
                         end, try_next, TryFuns),
     case Filter of
         none ->
-            ReplyFun({final_results, {Bucket, Keys}});
+            riak_core_vnode:reply(Sender, {final_results, {Bucket, Keys}});
         _ ->
             FilteredKeys = lists:foldl(Filter, [], Keys),
-            ReplyFun({final_results, {Bucket, FilteredKeys}})
+            riak_core_vnode:reply(Sender, {final_results, {Bucket, FilteredKeys}})
     end.
 
 %% @private
@@ -578,12 +578,12 @@ do_delete(BKey, Mod, ModState) ->
     end.
 
 %% @private
-process_keys(ReplyFun, Bucket, Filter, {Bucket, Key}, Acc) ->
-       buffer_key_result(ReplyFun, Bucket, Filter, [Key | Acc]);
-process_keys(_ReplyFun, _Bucket, _Filter, {_B, _K}, Acc) ->
+process_keys(Sender, Bucket, Filter, {Bucket, Key}, Acc) ->
+       buffer_key_result(Sender, Bucket, Filter, [Key | Acc]);
+process_keys(_Sender, _Bucket, _Filter, {_B, _K}, Acc) ->
     Acc.
 
-buffer_key_result(ReplyFun, Bucket, Filter, Acc) ->
+buffer_key_result(Sender, Bucket, Filter, Acc) ->
     %% Use arbitrary fixed buffer size of 100. Not
     %% sure there is a good 'why' for that number.
     case length(Acc) >= 100 of
@@ -591,14 +591,14 @@ buffer_key_result(ReplyFun, Bucket, Filter, Acc) ->
             %% Filter the buffer keys as needed
             case Filter of
                none ->
-                    ReplyFun({results, {Bucket, Acc}});
+                    riak_core_vnode:reply(Sender, {results, {Bucket, Acc}});
                 _ ->
                     FilteredKeys = lists:foldl(Filter, [], Acc),
                     case FilteredKeys of
                         [] ->
                             ok;
                         _ ->
-                            ReplyFun({results, {Bucket, FilteredKeys}})
+                            riak_core_vnode:reply(Sender, {results, {Bucket, FilteredKeys}})
                     end
             end,
             %% Reset the buffer so that results are not duplicated
@@ -792,30 +792,30 @@ list_buckets_test_() ->
 list_buckets_test_i(BackendMod) ->
     {S, B, _K} = backend_with_known_key(BackendMod),
     Caller = new_result_listener(buckets),
-    handle_command({?KV_LISTBUCKETS_REQ{item_filter=none}, []},
-                   {fsm, 456, Caller}, S),
+    handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=none}, [],
+                   {fsm, {456, {0, node()}}, Caller}, S),
     ?assertEqual({ok, [B]}, results_from_listener(Caller)),
     flush_msgs().
 
 filter_keys_test() ->
     {S, B, K} = backend_with_known_key(riak_kv_ets_backend),
-
+    ?debugFmt("State: ~p~n", [S]),
     Caller1 = new_result_listener(keys),
-    handle_command({?KV_LISTKEYS_REQ{bucket=B,
-                                     item_filter=fun(_) -> true end}, []},
-                   {fsm, 124, Caller1}, S),
+    handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
+                                     item_filter=fun(_) -> true end}, [],
+                   {fsm, {124, {0, node()}}, Caller1}, S),
     ?assertEqual({ok, [K]}, results_from_listener(Caller1)),
 
     Caller2 = new_result_listener(keys),
-    handle_command({?KV_LISTKEYS_REQ{bucket=B,
-                                     item_filter=fun(_) -> false end}, []},
-                   {fsm, 125, Caller2}, S),
+    handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
+                                     item_filter=fun(_) -> false end}, [],
+                   {fsm, {125, {0, node()}}, Caller2}, S),
     ?assertEqual({ok, []}, results_from_listener(Caller2)),
 
     Caller3 = new_result_listener(keys),
-    handle_command({?KV_LISTKEYS_REQ{bucket= <<"g">>,
-                                     item_filter=fun(_) -> true end}, []},
-                   {fsm, 126, Caller3}, S),
+    handle_coverage(?KV_LISTKEYS_REQ{bucket= <<"g">>,
+                                     item_filter=fun(_) -> true end}, [],
+                   {fsm, {126, {0, node()}}, Caller3}, S),
     ?assertEqual({ok, []}, results_from_listener(Caller3)),
 
     flush_msgs().
@@ -836,9 +836,9 @@ new_result_listener(Type) ->
 
 result_listener_buckets(Acc) ->
     receive
-        {'$gen_event', {_,{results,_,Results}}} ->
+        {'$gen_event', {_,{results,Results}}} ->
             result_listener_keys(Results ++ Acc);
-        {'$gen_event', {_,{final_results,_,Results}}} ->
+        {'$gen_event', {_,{final_results,Results}}} ->
             result_listener_done(Results ++ Acc)
     after 5000 ->
             result_listener_done({timeout, Acc})
@@ -846,9 +846,9 @@ result_listener_buckets(Acc) ->
 
 result_listener_keys(Acc) ->
     receive
-        {'$gen_event', {_,{results,_,{_Bucket, Results}}}} ->
+        {'$gen_event', {_,{results,{_Bucket, Results}}}} ->
             result_listener_keys(Results ++ Acc);
-        {'$gen_event', {_,{final_results,_,{_Bucket, Results}}}} ->
+        {'$gen_event', {_,{final_results,{_Bucket, Results}}}} ->
             result_listener_done(Results ++ Acc)
     after 5000 ->
             result_listener_done({timeout, Acc})
