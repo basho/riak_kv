@@ -43,7 +43,7 @@
          process_results/2,
          finish/2]).
 
--type from() :: {raw, req_id(), pid()}.
+-type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
 -record(state, {client_type :: plain | mapred,
@@ -53,7 +53,7 @@
 %% the number of primary preflist vnodes the operation
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
-init(From={raw, ReqId, ClientPid}, [Bucket, ItemFilter, Timeout, ClientType]) ->
+init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout, ClientType]) ->
     case ClientType of
         %% Link to the mapred job so we die if the job dies
         mapred ->
@@ -67,8 +67,7 @@ init(From={raw, ReqId, ClientPid}, [Bucket, ItemFilter, Timeout, ClientType]) ->
     %% Construct the key listing request
     Req = ?KV_LISTKEYS_REQ{bucket=Bucket,
                            item_filter=ItemFilter},
-    Sender = {fsm, ReqId, self()},
-    {Req, Sender, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
+    {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
 process_results({results, {Bucket, Keys}},

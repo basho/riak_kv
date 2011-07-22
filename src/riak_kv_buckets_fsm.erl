@@ -32,7 +32,7 @@
          process_results/2,
          finish/2]).
 
--type from() :: {raw, req_id(), pid()}.
+-type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
 -record(state, {buckets=[] :: [binary()],
@@ -43,7 +43,7 @@
 %% the number of primary preflist vnodes the operation
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
-init(From={raw, ReqId, ClientPid}, [ItemFilter, Timeout, ClientType]) ->
+init(From={_, _, ClientPid}, [ItemFilter, Timeout, ClientType]) ->
     case ClientType of
         %% Link to the mapred job so we die if the job dies
         mapred ->
@@ -53,8 +53,7 @@ init(From={raw, ReqId, ClientPid}, [ItemFilter, Timeout, ClientType]) ->
     end,
     %% Construct the bucket listing request
     Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
-    Sender = {fsm, ReqId, self()},
-    {Req, Sender, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
+    {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
 process_results({results, Buckets},
