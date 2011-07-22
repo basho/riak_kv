@@ -1,8 +1,8 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_ets_backend: storage engine based on ETS tables
+%% riak_memory_backend: storage engine using ETS tables
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -20,9 +20,10 @@
 %%
 %% -------------------------------------------------------------------
 
-% @doc riak_kv_ets_backend is a Riak storage backend using ets.
+%% @doc riak_kv_memory_backend is a Riak storage backend that uses ets
+%% tables to store all data in memory.
 
--module(riak_kv_ets_backend).
+-module(riak_kv_memory_backend).
 -behavior(riak_kv_backend).
 -behavior(gen_server).
 -ifdef(TEST).
