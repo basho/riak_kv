@@ -799,7 +799,6 @@ list_buckets_test_i(BackendMod) ->
 
 filter_keys_test() ->
     {S, B, K} = backend_with_known_key(riak_kv_ets_backend),
-    ?debugFmt("State: ~p~n", [S]),
     Caller1 = new_result_listener(keys),
     handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
                                      item_filter=fun(_) -> true end}, [],
