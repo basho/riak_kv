@@ -286,17 +286,27 @@ cluster_info([OutFile|Rest]) ->
 reload_code([]) ->
     case app_helper:get_env(riak_kv, add_paths) of
         List when is_list(List) ->
-            [ reload_path(Path) || Path <- List ],
+            [ reload_path(filename:absname(Path)) || Path <- List ],
             ok;
         _ -> ok
     end.
 
 reload_path(Path) ->
     {ok, Beams} = file:list_dir(Path),
-    [ begin
-          M = list_to_atom(filename:basename(Beam, ".beam")),
-          code:purge(M), code:load_file(M)
-      end || Beam <- Beams ].
+    [ reload_file(filename:absname(Beam, Path)) || Beam <- Beams, ".beam" == filename:extension(Beam) ].
+
+reload_file(Filename) ->
+    Mod = list_to_atom(filename:basename(Filename, ".beam")),
+    case code:is_loaded(Mod) of
+        {file, Filename} ->
+            code:purge(Mod),
+            code:load_file(Mod),
+            io:format("Reloaded module ~w from ~s.~n", [Mod, Filename]);
+        {file, Other} ->
+            io:format("CONFLICT: Module ~w originally loaded from ~s, won't reload from ~s.~n", [Mod, Other, Filename]);
+        _ ->
+            io:format("Module ~w not yet loaded, skipped.~n", [Mod])
+    end.
 
 format_stats([], Acc) ->
     lists:reverse(Acc);
