@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_keys_fsm_sup: supervise the riak_kv keys state machines.
+%% riak_kv_buckets_fsm_sup: supervise the riak_kv buckets state machines.
 %%
 %% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -20,17 +20,17 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc supervise the riak_kv keys state machines
+%% @doc supervise the riak_kv buckets state machines
 
--module(riak_kv_keys_fsm_sup).
+-module(riak_kv_buckets_fsm_sup).
 
 -behaviour(supervisor).
 
--export([start_keys_fsm/2]).
+-export([start_buckets_fsm/2]).
 -export([start_link/0]).
 -export([init/1]).
 
-start_keys_fsm(Node, Args) ->
+start_buckets_fsm(Node, Args) ->
     supervisor:start_child({?MODULE, Node}, Args).
 
 %% @spec start_link() -> ServerRet
@@ -41,8 +41,8 @@ start_link() ->
 %% @spec init([]) -> SupervisorTree
 %% @doc supervisor callback.
 init([]) ->
-    KeysFsmSpec = {undefined,
-               {riak_core_coverage_fsm, start_link, [riak_kv_keys_fsm]},
+    BucketsFsmSpec = {undefined,
+               {riak_core_coverage_fsm, start_link, [riak_kv_buckets_fsm]},
                temporary, 5000, worker, [riak_kv_keys_fsm]},
 
-    {ok, {{simple_one_for_one, 10, 10}, [KeysFsmSpec]}}.
+    {ok, {{simple_one_for_one, 10, 10}, [BucketsFsmSpec]}}.
