@@ -53,18 +53,18 @@
 -define(MERGE_CHECK_INTERVAL, timer:minutes(3)).
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [api_version,
-                         start,
-                         stop,
-                         get,
-                         put,
-                         delete,
-                         drop,
-                         fold_buckets,
-                         fold_keys,
-                         fold_objects,
-                         is_empty,
-                         status,
-                         callback]).
+                       start,
+                       stop,
+                       get,
+                       put,
+                       delete,
+                       drop,
+                       fold_buckets,
+                       fold_keys,
+                       fold_objects,
+                       is_empty,
+                       status,
+                       callback]).
 
 -record(state, {ref :: reference(),
                 root :: string()}).

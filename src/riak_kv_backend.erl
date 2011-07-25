@@ -33,7 +33,7 @@ behaviour_info(callbacks) ->
     [{api_version,0},
      {start,2},       % (Partition, Config)
      {stop,1},        % (State) 
-     {get,3},         % (State, Bucket, Key)
+     {get,3},         % (Bucket, Key, State)
      {put,4},         % (Bucket, Key, Val, State)
      {delete,3},      % (Bucket, Key, State)
      {drop,1},        % (State)

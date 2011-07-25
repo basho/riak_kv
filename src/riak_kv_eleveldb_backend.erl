@@ -24,42 +24,55 @@
 -behavior(riak_kv_backend).
 
 %% KV Backend API
--export([start/2,
+-export([api_version/0,
+         start/2,
          stop/1,
-         get/2,
-         put/3,
-         delete/2,
-         list/1,
-         list_bucket/2,
-         fold/3,
-         fold_keys/3,
-         fold_bucket_keys/4,
+         get/3,
+         put/4,
+         delete/3,
          drop/1,
+         fold_buckets/3,
+         fold_keys/4,
+         fold_objects/4,
          is_empty/1,
+         status/1,
          callback/3]).
-
--export([status/0,
-         status/1]).
-
--record(state, { ref,
-                 data_root,
-                 read_opts = [],
-                 write_opts = [],
-                 fold_opts = [{fill_cache, false}]}).
-
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-config_value(Key, Config) ->
-    case proplists:get_value(Key, Config) of
-        undefined ->
-            app_helper:get_env(eleveldb, Key);
-        Value ->
-            Value
-    end.
+-define(API_VERSION, 1).
+-define(CAPABILITIES, [api_version,
+                       start,
+                       stop,
+                       get,
+                       put,
+                       delete,
+                       drop,
+                       fold_buckets,
+                       fold_keys,
+                       fold_objects,
+                       is_empty,
+                       status,
+                       callback]).
 
+-record(state, {ref :: reference(),
+                data_root :: string(),
+                read_opts = [],
+                write_opts = [],
+                fold_opts = [{fill_cache, false}]}).
+
+%% ===================================================================
+%% Public API
+%% ===================================================================
+
+%% @doc Return the major version of the 
+%% current API and a capabilities list.
+api_version() ->
+    {?API_VERSION, ?CAPABILITIES}.
+
+%% @doc Start the eleveldb backend
 start(Partition, Config) ->
     %% Get the data root directory
     DataDir = filename:join(config_value(data_root, Config),
@@ -73,13 +86,15 @@ start(Partition, Config) ->
             {error, Reason}
     end.
 
+%% @doc Stop the eleveldb backend
 stop(_State) ->
     %% No-op; GC handles cleanup
     ok.
 
-get(State, BKey) ->
-    Key = sext:encode(BKey),
-    case eleveldb:get(State#state.ref, Key, State#state.read_opts) of
+%% @doc Retrieve an object from the eleveldb backend
+get(Bucket, Key, #state{ref=Ref}=State) ->
+    Key = sext:encode({Bucket, Key}),
+    case eleveldb:get(Ref, Key, State#state.read_opts) of
         {ok, Value} ->
             {ok, Value};
         not_found  ->
@@ -88,121 +103,153 @@ get(State, BKey) ->
             {error, Reason}
     end.
 
-put(State, BKey, Val) ->
-    Key = sext:encode(BKey),
-    eleveldb:put(State#state.ref, Key, Val,
+%% @doc Insert an object into the eleveldb backend
+put(Bucket, Key, Val, #state{ref=Ref}=State) ->
+    Key = sext:encode({Bucket, Key}),
+    eleveldb:put(Ref, Key, Val,
                  State#state.write_opts).
 
-delete(State, BKey) ->
-    eleveldb:delete(State#state.ref, sext:encode(BKey),
+%% @doc Delete an object from the eleveldb backend
+delete(Bucket, Key, #state{ref=Ref}=State) ->
+    eleveldb:delete(Ref, sext:encode({Bucket, Key}),
                     State#state.write_opts).
 
-drop(State) ->
-    eleveldb:destroy(State#state.data_root, []).
+%% @doc Fold over all the buckets. If the fold
+%% function is `none' just list all of the buckets.
+fold_buckets(none, Acc, #state{fold_opts=FoldOpts,
+                               ref=Ref}) ->
+    FoldFun = fun(BK, Acc1) ->
+                      {B, _} = sext:decode(BK),
+                      [B | Acc1]
+              end,
+    eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts);
+fold_buckets(FoldBucketsFun, Acc, #state{fold_opts=FoldOpts,
+                                         ref=Ref}) ->
+    %% Apply a fold across all buckets/keys and values
+    FoldFun = fun(BK, Acc1) ->
+                      {B, _} = sext:decode(BK),
+                      FoldBucketsFun(B, Acc1)
+              end,
+    eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts).
 
-is_empty(State) ->
-    eleveldb:is_empty(State#state.ref).
-
-callback(_State, _Ref, _Msg) ->
-    ok.
-
-list(State) ->
+%% @doc Fold over all the keys for a bucket. If the
+%% fold function is `none' just list all of the keys.
+fold_keys(none, _Acc, _Opts, State) ->
     %% Return a list of all keys in all buckets: [{bucket(), key()}]
     eleveldb:fold_keys(State#state.ref,
                         fun(BK, Acc) -> [sext:decode(BK) | Acc] end,
-                        [], State#state.fold_opts).
+                        [], State#state.fold_opts);
+fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
+                                         ref=Ref}) ->
+    %% Lookup the bucket name in the options list
+    case proplists:get_value(bucket, Opts) of
+        undefined ->
+            %% Apply a fold across the keys in all buckets
+            FoldFun = fun(BK, Acc1) ->
+                              {B, K} = sext:decode(BK),
+                              FoldKeysFun(B, K, Acc1)
+                      end,
+            FoldOpts1 = FoldOpts;
+        Bucket ->
+            %% Encode the initial bkey so we can start listing from that point
+            BKey0 = sext:encode({Bucket, <<>>}),
 
-list_bucket(State, {filter, Bucket, Fun}) ->
-    %% Encode the initial bkey so we can start listing from that point
-    BKey0 = sext:encode({Bucket, <<>>}),
-
-    %% Return a filtered list keys within a bucket: [key()]
-    F = fun(BK, Acc) ->
-                {B, K} = sext:decode(BK),
-                %% Take advantage of the fact that sext-encoding ensures all
-                %% keys in a bucket occur sequentially. Once we encounter a
-                %% different bucket, the fold is complete
-                if B =:= Bucket ->
-                        case Fun(K) of
-                            true ->
-                                [K | Acc];
-                            false ->
-                                Acc
-                        end;
-                   true ->
-                        throw({break, Acc})
-                end
-        end,
-
+            %% Apply a fold across just the keys in a single bucket
+            FoldFun = fun(BK, Acc1) ->
+                              {B, K} = sext:decode(BK),
+                              %% Take advantage of the fact that sext-encoding ensures all
+                              %% keys in a bucket occur sequentially. Once we encounter a
+                              %% different bucket, the fold is complete
+                              if B =:= Bucket ->
+                                      FoldKeysFun(B, K, Acc1);
+                                 true ->
+                                      throw({break, Acc1})
+                              end
+                      end,
+            FoldOpts1 =   [{first_key, BKey0} | FoldOpts]
+    end,
     try
-        eleveldb:fold_keys(State#state.ref, F, [],
-                            [{first_key, BKey0} | State#state.fold_opts])
-    catch
-        {break, AccFinal} ->
-            AccFinal
-    end;
-list_bucket(State, '_') ->
-    %% Return a list of all unique buckets: [bucket()]
-    F = fun(BK, Acc) ->
-                {B, _} = sext:decode(BK),
-                ordsets:add_element(B, Acc)
-        end,
-    eleveldb:fold_keys(State#state.ref, F, [], State#state.fold_opts);
-list_bucket(State, Bucket) ->
-    %% Return a list of keys in a bucket: [key()]
-    list_bucket(State, {filter, Bucket, fun(_) -> true end}).
-
-fold(State, Fun0, Acc0) ->
-    %% Apply a fold across all buckets/keys and values
-    F = fun({BK, V}, Acc) ->
-                Fun0(sext:decode(BK), V, Acc)
-        end,
-    eleveldb:fold(State#state.ref, F, Acc0, State#state.fold_opts).
-
-fold_keys(State, Fun0, Acc0) ->
-    %% Apply a fold across all buckets/keys (but NOT values)
-    F = fun(BK, Acc) ->
-                Fun0(sext:decode(BK), Acc)
-        end,
-    eleveldb:fold_keys(State#state.ref, F, Acc0, State#state.fold_opts).
-
-fold_bucket_keys(State, Bucket, Fun0, Acc0) ->
-    %% Encode the initial bkey so we can start listing from that point
-    BKey0 = sext:encode({Bucket, <<>>}),
-
-    %% Apply a fold across just the keys in a single bucket
-    F = fun(BK, Acc) ->
-                {B, K} = sext:decode(BK),
-                %% Take advantage of the fact that sext-encoding ensures all
-                %% keys in a bucket occur sequentially. Once we encounter a
-                %% different bucket, the fold is complete
-                if B =:= Bucket ->
-                        Fun0(K, dummy_val, Acc);
-                   true ->
-                        throw({break, Acc})
-                end
-        end,
-
-    try
-        eleveldb:fold_keys(State#state.ref, F, Acc0,
-                            [{first_key, BKey0} | State#state.fold_opts])
+        eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
     catch
         {break, AccFinal} ->
             AccFinal
     end.
 
+%% @doc Fold over all the objects for a bucket. If the
+%% fold function is `none' just list all of the objects.
+fold_objects(none, Acc, _Opts, #state{fold_opts=FoldOpts,
+                                      ref=Ref}) ->
+    %% List all keys and values for all buckets
+    FoldFun = fun({BK, Value}, Acc1) ->
+                      {Bucket, Key} = sext:decode(BK),
+                      [{{Bucket, Key}, Value} |  Acc1]
+              end,
+    eleveldb:fold(Ref, FoldFun, Acc, FoldOpts);
+fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
+                                               ref=Ref}) ->
+    %% Lookup the bucket name in the options list
+    case proplists:get_value(bucket, Opts) of
+        undefined ->
+            %% Apply a fold across the keys in all buckets
+            FoldFun = fun({BK, Value}, Acc1) ->
+                              {B, K} = sext:decode(BK),
+                              FoldObjectsFun(B, K, Value, Acc1)
+                      end,
+            FoldOpts1 = FoldOpts;
+        Bucket ->
+            %% Encode the initial bkey so we can start listing from that point
+            BKey0 = sext:encode({Bucket, <<>>}),
 
-status() ->
-    {ok, Root} = application:get_env(eleveldb, data_root),
-    status(Root).
+            %% Apply a fold across just the keys in a single bucket
+            FoldFun = fun({BK, Value}, Acc1) ->
+                              {B, K} = sext:decode(BK),
+                              %% Take advantage of the fact that sext-encoding ensures all
+                              %% keys in a bucket occur sequentially. Once we encounter a
+                              %% different bucket, the fold is complete
+                              if B =:= Bucket ->
+                                      FoldObjectsFun(B, K, Value, Acc1);
+                                 true ->
+                                      throw({break, Acc1})
+                              end
+                      end,
+            FoldOpts1 =   [{first_key, BKey0} | FoldOpts]
+    end,
+    try
+        eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
+    catch
+        {break, AccFinal} ->
+            AccFinal
+    end.
 
-status(RootDir) ->
-    [{Dir, get_status(filename:join(RootDir, Dir))} || Dir <- element(2, file:list_dir(RootDir))].
+%% @doc Delete all objects from this eleveldb backend
+drop(#state{data_root=DataRoot}) ->
+    eleveldb:destroy(DataRoot, []).
+
+%% @doc Returns true if this eleveldb backend contains any 
+%% non-tombstone values; otherwise returns false.
+is_empty(#state{ref=Ref}) ->
+    eleveldb:is_empty(Ref).
+
+%% @doc Register an asynchronous callback
+callback(_Ref, _Msg, _State) ->
+    ok.
+
+%% @doc Get the status information for this eleveldb backend
+status(#state{data_root=DataRoot}) ->
+    [{Dir, get_status(filename:join(DataRoot, Dir))} || Dir <- element(2, file:list_dir(DataRoot))].
 
 
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
+config_value(Key, Config) ->
+    case proplists:get_value(Key, Config) of
+        undefined ->
+            app_helper:get_env(eleveldb, Key);
+        Value ->
+            Value
+    end.
 
 get_status(Dir) ->
     case eleveldb:open(Dir, [{create_if_missing, true}]) of
