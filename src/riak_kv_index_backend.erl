@@ -35,6 +35,7 @@
          list/1,
          list_bucket/2,
          fold/3,
+         fold_index/3,
          fold_keys/3,
          fold_bucket_keys/4,
          drop/1,
@@ -177,41 +178,15 @@ fold_keys(State, Fun, Extra) ->
     #state { kv_mod = KVMod, kv_state = KVState } = State,
     KVMod:fold_keys(KVState, Fun, Extra).
 
-
-%% HACK - This is how we're funneling Riak Index queries until we add
-%% "covering cast" functionality to riak_core. For now, we're going to
-%% focus on getting the request to the Index backend with the correct
-%% arguments roughly in place and running basic queries.
-fold_bucket_keys(State, {index_query, Bucket, Query}, _Fun, _Extra) ->
-    #state { index_mod = IndexMod, index_state = IndexState } = State,
-
+%% @doc Pass the fold_index request through to the Index backend.
+fold_index(#state {index_mod = IndexMod, 
+                   index_state = IndexState},
+           Bucket, Query) ->
     %% Update riak_kv_stat...
-    riak_kv_stat:update(vnode_index_read),
+    riak_kv_stat:update(vnode_index_read),    
 
-    %% This is needs discussion. Our design notes call for results to
-    %% feed into SKFun using {sk, SecondaryKey, PrimaryKey}, but this
-    %% doesn't account for Properties. We also need to add a clause
-    %% for when we reach the limit.
-    SKFun = fun({results, Results}, Acc) ->
-                    {ok, Results ++ Acc};
-               ({error, Reason}, _Acc) ->
-                    {error, Reason};
-               (done, Acc) ->
-                    {ok, Acc}
-            end,
-
-    %% Also, for this round of changes, FinalFun is going to just
-    %% return the output of SKFun. Normally, this would call
-    %% riak_core_vnode:reply/N. Here, we just transform the list of
-    %% results from [{Key, Props}] to [Key].
-    FinalFun = fun({error, Reason}, _Acc) ->
-                       {error, Reason};
-                  (done, Acc) ->
-                       [K || {K, _} <- Acc]
-               end,
-
-    %% Pass the fold_index request through to the Index backend.
-    IndexMod:fold_index(IndexState, Bucket, Query, SKFun, [], FinalFun);
+    %% Call fold_index on the Index backend
+    IndexMod:fold_index(IndexState, Bucket, Query, []).
 
 %% @spec fold_bucket_keys(state(), binary(), function(), term()) -> [Key :: binary()].
 %%

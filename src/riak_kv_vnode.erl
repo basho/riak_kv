@@ -33,6 +33,7 @@
          del/3,
          put/6,
          readrepair/6,
+         index_query/6,
          list_buckets/4,
          list_keys/4,
          list_keys/5,
@@ -261,6 +262,19 @@ handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
     FilterVNode = proplists:get_value(Index, FilterVNodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
     list_keys(Sender, Bucket, Filter, Mod, ModState),
+    {noreply, State};
+handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
+                              item_filter=ItemFilter,
+                              qry=Query},
+                FilterVNodes,
+                Sender,
+                State=#state{idx=Index,
+                             mod=Mod,
+                             modstate=ModState}) ->
+    %% Construct the filter function
+    FilterVNode = proplists:get_value(Index, FilterVNodes),
+    Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
+    index_query(Sender, Bucket, Query, Filter, Mod, ModState),
     {noreply, State}.
 
 handle_handoff_command(Req=?FOLD_REQ{}, Sender, State) ->
@@ -567,6 +581,18 @@ do_legacy_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState) ->
             Caller ! {ReqId, {kl, Idx, Remainder}}
     end,
     Caller ! {ReqId, Idx, done}.
+
+%% @private
+index_query(Sender, Bucket, Query, Filter, Mod, ModState) ->
+    %% @TODO Should probably add some buffering like the key listing uses.
+    QueryResults = Mod:fold_index(ModState, Bucket, Query),
+    case Filter of
+        none ->
+            riak_core_vnode:reply(Sender, {final_results, {Bucket, QueryResults}});
+        _ ->
+            FilteredResults = lists:foldl(Filter, [], QueryResults),
+            riak_core_vnode:reply(Sender, {final_results, {Bucket, FilteredResults}})
+    end.    
 
 %% @private
 do_delete(BKey, Mod, ModState) ->

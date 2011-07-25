@@ -33,6 +33,8 @@
              riak_kv_get_fsm,
              riak_kv_get_fsm_sup,
              riak_kv_index_backend,
+             riak_kv_index_fsm,
+             riak_kv_index_fsm_sup,
              riak_kv_js_manager,
              riak_kv_js_sup,
              riak_kv_js_vm,

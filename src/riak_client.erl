@@ -41,7 +41,7 @@
 -export([filter_buckets/1]).
 -export([filter_keys/2,filter_keys/3]).
 -export([list_buckets/0,list_buckets/2]).
--export([get_index/2]).
+-export([get_index/3,get_index/2]).
 -export([set_bucket/2,get_bucket/1]).
 -export([reload_all/1]).
 -export([remove_from_cluster/1]).
@@ -649,15 +649,29 @@ filter_buckets(Fun) ->
             list_buckets(Fun, ?DEFAULT_TIMEOUT)
     end.
 
-%% @spec get_index(Bucket :: binary(), Query :: riak_index:query_def()) ->
+%% @spec get_index(Bucket :: binary(),
+%%                 Query :: riak_index:query_def()) ->
 %%       {ok, [Key :: riak_object:key()]} |
 %%       {error, timeout} |
 %%       {error, Err :: term()}.
 %%
 %% @doc Run the provided index query.
 get_index(Bucket, Query) ->
-    FakeBucket = {index_query, Bucket, Query},
-    list_keys({FakeBucket, []}).
+    get_index(Bucket, Query, ?DEFAULT_TIMEOUT).
+
+%% @spec get_index(Bucket :: binary(),
+%%                 Query :: riak_index:query_def(),
+%%                 TimeoutMillisecs :: integer()) ->
+%%       {ok, [Key :: riak_object:key()]} |
+%%       {error, timeout} |
+%%       {error, Err :: term()}.
+%%
+%% @doc Run the provided index query.
+get_index(Bucket, Query, Timeout) ->
+    Me = self(),
+    ReqId = mk_reqid(),
+    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, plain]]),
+    wait_for_query_results(ReqId, Timeout).
 
 %% @spec set_bucket(riak_object:bucket(), [BucketProp :: {atom(),term()}]) -> ok
 %% @doc Set the given properties for Bucket.
@@ -732,6 +746,19 @@ wait_for_listbuckets(ReqId, Timeout) ->
         {ReqId, Error} -> {error, Error}
     after Timeout ->
             {error, timeout}
+    end.
+
+%% @private
+wait_for_query_results(ReqId, Timeout) ->
+    wait_for_query_results(ReqId, Timeout, []).
+%% @private
+wait_for_query_results(ReqId, Timeout, Acc) ->
+    receive
+        {ReqId, done} -> {ok, lists:flatten(Acc)};
+        {ReqId,{results, Res}} -> wait_for_query_results(ReqId, Timeout, [Res | Acc]);
+        {ReqId, Error} -> {error, Error}
+    after Timeout ->
+            {error, timeout, Acc}
     end.
 
 add_inputs(_FlowPid, []) ->
