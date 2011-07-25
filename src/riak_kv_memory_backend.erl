@@ -115,36 +115,56 @@ delete(Bucket, Key, State) ->
 
 %% @doc Fold over all the buckets. If the fold
 %% function is `none' just list all of the buckets.
-fold_buckets(none, _Acc, #state{ref=_Ref}) ->
-    ok;
-fold_buckets(_FoldBucketsFun, _Acc, #state{ref=_Ref}) ->
-    ok.
+fold_buckets(none, Acc, State) ->
+    gen_server:call(State, {list_buckets, Acc});
+fold_buckets(FoldBucketsFun, Acc, State) ->
+    gen_server:call(State, {fold_buckets, FoldBucketsFun, Acc}).
 
 %% @doc Fold over all the keys for a bucket. If the
 %% fold function is `none' just list all of the keys.
-fold_keys(none, _Acc, _Opts, _State) ->
-    %% Return a list of all keys in all buckets: [{bucket(), key()}]
-    ok;
-fold_keys(_FoldKeysFun, _Acc, _Opts, #state{ref=_Ref}) ->
-    ok.
+fold_keys(none, Acc, Opts, State) ->
+    case proplists:get_value(bucket, Opts) of
+        undefined ->
+            %% Return a list of all keys in
+            %% all buckets: [{bucket(), key()}]
+            gen_server:call(State, {list_keys, Acc});
+        Bucket ->
+            %% Return a list of the keys in
+            %% the specified bucket: [{bucket(), key()}]
+            gen_server:call(State, {list_keys, Bucket, Acc})
+    end;
+fold_keys(FoldKeysFun, Acc, Opts, State) ->
+    case proplists:get_value(bucket, Opts) of
+        undefined ->
+            %% Fold across all keys in all buckets
+            gen_server:call(State, {fold_keys, FoldKeysFun, Acc});
+        Bucket ->
+            %% Fold across the keys in the specified bucket
+            gen_server:call(State, {fold_keys, FoldKeysFun, Bucket, Acc})
+    end.
 
 %% @doc Fold over all the objects for a bucket. If the
 %% fold function is `none' just list all of the objects.
-fold_objects(none, _Acc, _Opts, #state{ref=_Ref}) ->
-    ok;
-fold_objects(_FoldObjectsFun, _Acc, _Opts, #state{ref=_Ref}) ->
-    ok.
-
-
-% list(state()) -> [riak_object:bkey()]
-%% list(SrvRef) -> gen_server:call(SrvRef,list).
-
-%% list([],Acc) -> Acc;
-%% list([[K]|Rest],Acc) -> list(Rest,[K|Acc]).
-
-%% % list_bucket(term(), Bucket :: riak_object:bucket()) -> [Key :: binary()]
-%% list_bucket(SrvRef, Bucket) ->
-%%     gen_server:call(SrvRef,{list_bucket, Bucket}).
+fold_objects(none, Acc, Opts, State) ->
+    case proplists:get_value(bucket, Opts) of
+        undefined ->
+            %% Return a list of all objects in
+            %% all buckets.
+            gen_server:call(State, {list_objects, Acc});
+        Bucket ->
+            %% Return a list of the objects in
+            %% the specified bucket.
+            gen_server:call(State, {list_objects, Bucket, Acc})
+    end;
+fold_objects(FoldObjectsFun, Acc, Opts, State) ->
+    case proplists:get_value(bucket, Opts) of
+        undefined ->
+            %% Fold across all objects in all buckets
+            gen_server:call(State, {fold_objects, FoldObjectsFun, Acc});
+        Bucket ->
+            %% Fold across the objects in the specified bucket
+            gen_server:call(State, {fold_objects, FoldObjectsFun, Bucket, Acc})
+    end.
 
 %% @doc Returns true if this memory backend contains any 
 %% non-tombstone values; otherwise returns false.
@@ -155,11 +175,6 @@ is_empty(State) ->
 drop(State) ->
     gen_server:call(State, drop).
     
-%% fold(SrvRef, Fun, Acc0) -> gen_server:call(SrvRef, {fold, Fun, Acc0}, infinity).
-
-%% fold_bucket_keys(SrvRef, Bucket, Fun, Acc0) ->
-%%     gen_server:call(SrvRef, {fold_bucket_keys, Bucket, Fun, Acc0}, infinity).
-
 %% @doc Register an asynchronous callback
 callback(_Ref, _Msg, _State) ->
     ok.
@@ -185,24 +200,31 @@ handle_call({put, Bucket, Key, Val}, _From, #state{ref=Ref}=State) ->
     {reply, srv_put(Bucket, Key, Val, Ref), State};
 handle_call({delete, Bucket, Key}, _From, #state{ref=Ref}=State) ->
     {reply, srv_delete(Bucket, Key, Ref), State};
-%% handle_call(list,_From,State) ->
-%%     {reply, srv_list(State), State};
-%% handle_call({list_bucket, Bucket}, _From, #state{ref=Ref}=State) ->
-%%     {reply, srv_list_bucket(Bucket, Ref), State};
+handle_call({list_buckets, Acc}, _From, #state{ref=Ref}=State) ->
+    {reply, srv_list_buckets(Acc, Ref), State};
+handle_call({fold_buckets, FoldBucketsFun, Acc}, _From, #state{ref=Ref}=State) ->
+    {reply, srv_fold_buckets(FoldBucketsFun, Acc, Ref), State};
+handle_call({list_keys, Acc}, _From, #state{ref=Ref}=State) ->
+    {reply, srv_list_keys(Acc, Ref), State};
+handle_call({list_keys, Bucket, Acc}, _From, #state{ref=Ref}=State) ->
+    {reply, srv_list_keys(Bucket, Acc, Ref), State};
+handle_call({fold_keys, FoldKeysFun, Acc}, _From, #state{ref=Ref}=State) ->
+    {reply, srv_fold_keys(FoldKeysFun, Acc, Ref), State};
+handle_call({fold_keys, FoldKeysFun, Bucket, Acc}, _From, #state{ref=Ref}=State) ->
+    {reply, srv_fold_keys(FoldKeysFun, Bucket, Acc, Ref), State};
+handle_call({list_objects, Acc}, _From, #state{ref=Ref}=State) ->
+    {reply, srv_list_objects(Acc, Ref), State};
+handle_call({list_objects, Bucket, Acc}, _From, #state{ref=Ref}=State) ->
+    {reply, srv_list_objects(Bucket, Acc, Ref), State};
+handle_call({fold_objects, FoldObjectsFun, Acc}, _From, #state{ref=Ref}=State) ->
+    {reply, srv_fold_objects(FoldObjectsFun, Acc, Ref), State};
+handle_call({fold_objects, FoldObjectsFun, Bucket, Acc}, _From, #state{ref=Ref}=State) ->
+    {reply, srv_fold_objects(FoldObjectsFun, Bucket, Acc, Ref), State};
 handle_call(is_empty, _From, #state{ref=Ref}=State) ->
     {reply, ets:info(Ref, size) =:= 0, State};
 handle_call(drop, _From, #state{ref=Ref}=State) -> 
     ets:delete(Ref),
     {reply, ok, State}.
-%% handle_call({fold, Fun0, Acc}, _From, #state{ref=Ref}=State) ->
-%%     Fun = fun({{B,K}, V}, AccIn) -> Fun0({B,K}, V, AccIn) end,
-%%     Reply = ets:foldl(Fun, Acc, Ref),
-%%     {reply, Reply, State};
-%% handle_call({fold_bucket_keys, _Bucket, Fun0, Acc}, From, State) ->
-%%     %% We could do something with the Bucket arg, but for this backend
-%%     %% there isn't much point, so we'll do the same thing as the older
-%%     %% API fold.
-%%     handle_call({fold, Fun0, Acc}, From, State).
 
 %% @private
 handle_cast(_, State) -> {noreply, State}.
@@ -220,10 +242,16 @@ code_change(_OldVsn, State, _Extra) -> {ok, State}.
 %% Internal functions
 %% ===================================================================
 
+%% @TODO Some of these implementations may be suboptimal. 
+%% Need to do some measuring and testing to refine the
+%% implementations.
+
+%% @private
 srv_stop(Ref) ->
     catch ets:delete(Ref),
     ok.
 
+%% @private
 srv_get(Bucket, Key, Ref) ->
     case ets:lookup(Ref, {Bucket, Key}) of
         [] -> {error, notfound};
@@ -231,29 +259,82 @@ srv_get(Bucket, Key, Ref) ->
         Error -> {error, Error}
     end.
 
+%% @private
 srv_put(Bucket, Key, Val, Ref) ->
     true = ets:insert(Ref, {{Bucket, Key}, Val}),
     ok.
 
+%% @private
 srv_delete(Bucket, Key, Ref) ->
     true = ets:delete(Ref, {Bucket, Key}),
     ok.
 
-%% srv_list(Ref) ->
-%%     MList = ets:match(Ref, {'$1','_'}),
-%%     list(MList,[]).
+%% @private
+srv_list_buckets(_Acc, Ref) ->
+    BucketList = ets:match(Ref, {{'$1', '_'}, '_'}),
+    lists:usort(lists:flatten(BucketList)).
 
-%% srv_list_bucket({filter, Bucket, Fun}, Ref) ->
-%%     MList = lists:filter(Fun, ets:match(Ref, {{Bucket,'$1'},'_'})),
-%%     list(MList,[]);
-%% srv_list_bucket(State, Bucket) ->
-%%     case Bucket of
-%%         '_' -> MatchSpec = {{'$1','_'},'_'};
-%%         _ -> MatchSpec = {{Bucket,'$1'},'_'}
-%%     end,
-%%     MList = ets:match(Ref, MatchSpec),
-%%     list(MList,[]).
+%% @private
+srv_fold_buckets(FoldBucketsFun, Acc, Ref) ->
+    FoldFun = fun([Bucket], Acc1) ->
+                      case lists:member(Bucket, Acc1) of
+                          true ->
+                              Acc1;
+                          false ->
+                              FoldBucketsFun(Bucket, Acc1)
+                      end
+              end,
+    BucketList = ets:match(Ref, {{'$1', '_'}, '_'}),
+    lists:foldl(FoldFun, Acc, BucketList).
 
+%% @private
+srv_list_keys(_Acc, Ref) ->
+    KeyList = ets:match(Ref, {{'$1', '$2'}, '_'}),
+    lists:flatten(KeyList).
+
+%% @private
+srv_list_keys(Bucket, _Acc, Ref) ->
+    KeyList = ets:match(Ref, {{Bucket, '$1'}, '_'}),
+    lists:flatten(KeyList).
+
+%% @private
+srv_fold_keys(FoldKeysFun, Acc, Ref) ->
+    FoldFun = fun([Bucket, Key], Acc1) ->
+                      FoldKeysFun(Bucket, Key, Acc1)
+              end,
+    KeyList = ets:match(Ref, {{'$1', '_'}, '_'}),
+    lists:foldl(FoldFun, Acc, KeyList).
+
+%% @private
+srv_fold_keys(FoldKeysFun, Bucket, Acc, Ref) ->
+    FoldFun = fun([B, K], Acc1) ->
+                      FoldKeysFun(B, K, Acc1)
+              end,
+    KeyList = ets:match(Ref, {{Bucket, '_'}, '_'}),
+    lists:foldl(FoldFun, Acc, KeyList).
+
+%% @private
+srv_list_objects(_Acc, Ref) ->
+    ets:match_object(Ref, {{'_', '_'}, '_'}).
+
+%% @private
+srv_list_objects(Bucket, _Acc, Ref) ->
+    ets:match_object(Ref, {{Bucket, '_'}, '_'}).
+
+%% @private
+srv_fold_objects(FoldObjectsFun, Acc, Ref) ->
+    FoldFun = fun({{Bucket, Key}, Value}, Acc1) ->
+                      FoldObjectsFun(Bucket, Key, Value, Acc1)
+              end,
+    ets:foldl(FoldFun, Acc, Ref).
+
+%% @private
+srv_fold_objects(FoldObjectsFun, Bucket, Acc, Ref) ->
+    ObjectList = ets:match_object(Ref, {{Bucket, '_'}, '_'}),
+    FoldFun = fun({{B, Key}, Value}, Acc1) ->
+                      FoldObjectsFun(B, Key, Value, Acc1)
+              end,
+    lists:foldl(FoldFun, Acc, ObjectList).
 
 %% ===================================================================
 %% EUnit tests
