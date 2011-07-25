@@ -139,7 +139,7 @@ reconcile(Objects, AllowMultiple) ->
         false ->
             [most_recent_content(AllContents)];
         true ->
-            AllContents
+            lists:usort(AllContents)
     end,
     VClock = vclock:merge([O#r_object.vclock || O <- RObjs]),
     HdObj = hd(RObjs),
@@ -449,8 +449,8 @@ syntactic_merge(CurrentObject, NewObject, FromClientId, Timestamp) ->
                 true ->
                     NewObject;
                 false ->
-                    increment_vclock(
-                      merge(CurrentObject, NewObject), FromClientId, Timestamp)
+                    %%increment_vclock(
+                    merge(CurrentObject, NewObject) %, FromClientId, Timestamp)
             end
     end.
 

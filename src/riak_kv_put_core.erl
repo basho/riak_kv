@@ -20,8 +20,9 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_put_core).
--export([init/7, add_result/2, enough/1, response/1, 
+-export([init/7, coord_idx/2, add_result/2, enough/1, response/1, 
          final/1]).
+-export([coord_result/2]).%% DEBUG
 -export_type([putcore/0, result/0, reply/0]).
 
 -type vput_result() :: any().
@@ -43,6 +44,7 @@
                   dw_fail_threshold :: pos_integer(),
                   returnbody :: boolean(),
                   allowmult :: boolean(),
+                  coord_idx :: non_neg_integer(),
                   results = [] :: [idxresult()],
                   final_obj :: undefined | riak_object:riak_object(),
                   num_w = 0 :: non_neg_integer(),
@@ -64,6 +66,9 @@ init(N, W, DW, WFailThreshold, DWFailThreshold, AllowMult, ReturnBody) ->
              allowmult = AllowMult,
              returnbody = ReturnBody}.
 
+coord_idx(Idx, PutCore) ->
+    PutCore#putcore{coord_idx = Idx}.
+   
 %% Add a result from the vnode
 -spec add_result(vput_result(), putcore()) -> putcore().
 add_result({w, Idx, _ReqId}, PutCore = #putcore{results = Results,
@@ -90,10 +95,16 @@ add_result(_Other, PutCore = #putcore{num_fail = NumFail}) ->
 -spec enough(putcore()) -> boolean().
 enough(#putcore{w = W, num_w = NumW, dw = DW, num_dw = NumDW, 
                 num_fail = NumFail, w_fail_threshold = WFailThreshold,
-                dw_fail_threshold = DWFailThreshold}) ->
-    (NumW >= W andalso NumDW >= DW) orelse
+                dw_fail_threshold = DWFailThreshold,
+                coord_idx = CoordIdx, results = Results}) ->
+    (NumW >= W andalso NumDW >= DW andalso coord_result(CoordIdx, Results)) orelse
         (NumW >= W andalso NumFail >= DWFailThreshold) orelse
         (NumW < W andalso NumFail >= WFailThreshold).
+
+%% True if coordinator result has been returned - anything other than w.
+coord_result(_CoordIdx, _Results) ->
+    true.
+%    [Result || {Idx, Result} <- Results, Idx == CoordIdx] -- [w] /= [].
 
 %% Get success/fail response once enough results received
 -spec response(putcore()) -> {reply(), putcore()}.
