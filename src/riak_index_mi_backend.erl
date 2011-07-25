@@ -106,7 +106,6 @@ lookup_sync(State, Index, Field, Term) ->
     FilterFun = fun(_Value, _Props) -> true end,
     merge_index:lookup_sync(Pid, Index, Field, Term, FilterFun).
 
-
 %% @spec fold_index(State :: state(), Bucket :: binary(), Query :: riak_index:query_elements(),
 %%                  SKFun :: function(), Acc :: term(), FinalFun :: function()) -> term().
 fold_index(State, Index, Query, SKFun, Acc, FinalFun) ->

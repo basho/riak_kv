@@ -34,7 +34,7 @@
 -export([build_filter/3]).
 
 -type bucket() :: binary().
--type filter() :: none | fun().
+-type filter() :: none | fun((any()) -> boolean()) | [{atom(), atom(), [any()]}].
 -type index() :: non_neg_integer().
 
 %% ===================================================================
@@ -42,6 +42,16 @@
 %% ===================================================================
 
 %% @doc Build the list of filter functions for any required VNode indexes.
+%%
+%% The ItemFilterInput parameter can be the atom `none' to indicate
+%% no filtering based on the request items, a function that returns
+%% a boolean indicating whether or not the item should be included
+%% in the final results, or a list of tuples of the form 
+%% {Module, Function, Args}. The latter is the form used by 
+%% MapReduce filters such as those in the {@link riak_kv_mapred_filters}
+%% module. The list of tuples is composed into a function that is
+%% used to determine if an item should be included in the final 
+%% result set.
 -spec build_filter(bucket(), filter(), [index()]) -> filter().
 build_filter(Bucket, ItemFilterInput, FilterVNode) ->
     ItemFilter = build_item_filter(ItemFilterInput),
@@ -119,7 +129,7 @@ build_item_filter(none) ->
 build_item_filter(FilterInput) when is_function(FilterInput) ->
     FilterInput;
 build_item_filter(FilterInput) ->
-    %% FilterInput is a list of MFA tuples
+    %% FilterInput is a list of {Module, Fun, Args} tuples
     compose(FilterInput).
 
 
@@ -133,12 +143,18 @@ build_preflist_fun(Bucket, Ring) ->
 compose([]) ->
     none;
 compose(Filters) ->
-    compose(Filters, fun(V) -> V end).
+    compose(Filters, []).
 
-compose([], F0) -> F0;
-compose([Filter1|Filters], F0) ->
-    {FilterMod, FilterFun, Args} = Filter1,
-    Fun1 = FilterMod:FilterFun(Args),
-    F1 = fun(CArgs) -> Fun1(F0(CArgs)) end,
-    compose(Filters, F1).
+compose([], FilterFuns) ->
+    TruthFun =
+        fun(X) ->
+                X =:= true
+        end,
+    fun(Val) ->
+            lists:all(TruthFun, [FilterFun(Val) || FilterFun <- FilterFuns])
+    end;
+compose([Filter | RestFilters], FilterFuns) ->
+    {FilterMod, FilterFun, Args} = Filter,
+    Fun = FilterMod:FilterFun(Args),
+    compose(RestFilters, [Fun | FilterFuns]).
 
