@@ -44,6 +44,27 @@
 %%          in the last minute.
 %%</dd><dd> update(vnode_put)
 %%
+%%</dd><dt> vnode_index_read
+%%</dt><dd> The number of index reads handled by all vnodes on this node.
+%%          Each query counts as an index read.
+%%</dd><dd> update(index_read)
+%%
+%%</dd><dt> vnode_index_write
+%%</dt><dd> The number of batched writes handled by all vnodes on this node.
+%%</dd><dd> update({index_write, Postings})
+%%
+%%</dd><dt> vnode_index_write_postings
+%%</dt><dd> The number of postings written to all vnodes on this node.
+%%</dd><dd> update({index_write, Postings})
+%%
+%%</dd><dt> vnode_index_delete
+%%</dt><dd> The number of batched writes handled by all vnodes on this node.
+%%</dd><dd> update({index_delete, Postings})
+%%
+%%</dd><dt> vnode_index_delete_postings
+%%</dt><dd> The number of postings written to all vnodes on this node.
+%%</dd><dd> update({index_delete, Postings})
+%%
 %%</dd><dt> node_gets
 %%</dt><dd> Number of gets coordinated by this node in the last
 %%          minute.
@@ -152,6 +173,11 @@
          terminate/2, code_change/3]).
 
 -record(state,{vnode_gets,vnode_puts,vnode_gets_total,vnode_puts_total,
+               vnode_index_reads, vnode_index_reads_total,
+               vnode_index_writes, vnode_index_writes_total,
+               vnode_index_writes_postings, vnode_index_writes_postings_total,
+               vnode_index_deletes, vnode_index_deletes_total,
+               vnode_index_deletes_postings, vnode_index_deletes_postings_total,
                node_gets_total, node_puts_total,
                get_fsm_time,put_fsm_time,
                pbc_connects,pbc_connects_total,pbc_active,read_repairs,
@@ -189,6 +215,16 @@ init([]) ->
                 vnode_puts=spiraltime:fresh(),
                 vnode_gets_total=0,
                 vnode_puts_total=0,
+                vnode_index_reads=spiraltime:fresh(),
+                vnode_index_reads_total=0,
+                vnode_index_writes=spiraltime:fresh(),
+                vnode_index_writes_total=0,
+                vnode_index_writes_postings=spiraltime:fresh(),
+                vnode_index_writes_postings_total=0,
+                vnode_index_deletes=spiraltime:fresh(),
+                vnode_index_deletes_total=0,
+                vnode_index_deletes_postings=spiraltime:fresh(),
+                vnode_index_deletes_postings_total=0,
                 node_gets_total=0,
                 node_puts_total=0,
                 get_fsm_time=slide:fresh(),
@@ -236,6 +272,14 @@ update(vnode_get, Moment, State=#state{vnode_gets_total=VGT}) ->
     spiral_incr(#state.vnode_gets, Moment, State#state{vnode_gets_total=VGT+1});
 update(vnode_put, Moment, State=#state{vnode_puts_total=VPT}) ->
     spiral_incr(#state.vnode_puts, Moment, State#state{vnode_puts_total=VPT+1});
+update(vnode_index_read, Moment, State=#state{vnode_index_reads_total=VPT}) ->
+    spiral_incr(#state.vnode_index_reads, Moment, State#state{vnode_index_reads_total=VPT+1});
+update({vnode_index_write, Postings}, Moment, State=#state{vnode_index_writes_total=VIW, vnode_index_writes_postings_total=VIWP}) ->
+    NewState = spiral_incr(#state.vnode_index_writes, Moment, State#state{vnode_index_writes_total=VIW+1}),
+    spiral_incr(#state.vnode_index_writes_postings, Postings, Moment, NewState#state{vnode_index_writes_postings_total=VIWP+Postings});
+update({vnode_index_delete, Postings}, Moment, State=#state{vnode_index_deletes_total=VID, vnode_index_deletes_postings_total=VIDP}) ->
+    NewState = spiral_incr(#state.vnode_index_deletes, Moment, State#state{vnode_index_deletes_total=VID+1}),
+    spiral_incr(#state.vnode_index_deletes_postings, Postings, Moment, NewState#state{vnode_index_deletes_postings_total=VIDP+Postings});
 update({get_fsm_time, Microsecs}, Moment, State=#state{node_gets_total=NGT}) ->
     slide_incr(#state.get_fsm_time, Microsecs, Moment, State#state{node_gets_total=NGT+1});
 update({put_fsm_time, Microsecs}, Moment, State=#state{node_puts_total=NPT}) ->
@@ -266,6 +310,13 @@ decrzero(N) ->
 spiral_incr(Elt, Moment, State) ->
     setelement(Elt, State,
                spiraltime:incr(1, Moment, element(Elt, State))).
+
+%% @spec spiral_incr(integer(), integer(), integer(), state()) -> state()
+%% @doc Increment the value of a spiraltime structure at a given
+%%      position of the State tuple.
+spiral_incr(Elt, Amount, Moment, State) ->
+    setelement(Elt, State,
+               spiraltime:incr(Amount, Moment, element(Elt, State))).
 
 %% @spec slide_incr(integer(), term(), integer(), state()) -> state()
 %% @doc Update a slide structure at a given position in the
@@ -317,16 +368,24 @@ slide_minute(Moment, Elt, State) ->
 
 %% @spec vnode_stats(integer(), state()) -> proplist()
 %% @doc Get the vnode-sum stats proplist.
-vnode_stats(Moment, State=#state{vnode_gets_total=VGT, vnode_puts_total=VPT}) ->
+vnode_stats(Moment, State) ->
     lists:append(
       [{F, spiral_minute(Moment, Elt, State)}
        || {F, Elt} <- [{vnode_gets, #state.vnode_gets},
                        {vnode_puts, #state.vnode_puts},
+                       {vnode_index_reads, #state.vnode_index_reads},
+                       {vnode_index_writes, #state.vnode_index_writes},
+                       {vnode_index_writes_postings, #state.vnode_index_writes_postings},
+                       {vnode_index_deletes, #state.vnode_index_deletes},
+                       {vnode_index_deletes_postings, #state.vnode_index_deletes_postings},
                        {read_repairs,#state.read_repairs}]],
-      [{vnode_gets_total, VGT},
-       {vnode_puts_total, VPT}]).
-
-
+      [{vnode_gets_total, State#state.vnode_gets_total},
+       {vnode_puts_total, State#state.vnode_puts_total},
+       {vnode_index_reads_total, State#state.vnode_index_reads_total},
+       {vnode_index_writes_total, State#state.vnode_index_writes_total},
+       {vnode_index_writes_postings_total, State#state.vnode_index_writes_postings_total},
+       {vnode_index_deletes_total, State#state.vnode_index_deletes_total},
+       {vnode_index_deletes_postings_total, State#state.vnode_index_deletes_postings_total}]).
 
 %% @spec node_stats(integer(), state()) -> proplist()
 %% @doc Get the node stats proplist.
