@@ -22,14 +22,47 @@
 
 -module (riak_kv_multi_backend).
 -behavior(riak_kv_backend).
--export([start/2, stop/1,get/2,put/3,list/1,list_bucket/2,delete/2,is_empty/1,
-         drop/1,fold/3,fold_bucket_keys/4]).
--export([callback/3]).
+
+%% KV Backend API
+-export([api_version/0,
+         start/2,
+         stop/1,
+         get/3,
+         put/4,
+         delete/3,
+         drop/1,
+         fold_buckets/3,
+         fold_keys/4,
+         fold_objects/4,
+         is_empty/1,
+         status/1,
+         callback/3]).
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--record (state, {backends, default_backend}).
+-define(API_VERSION, 1).
+-define(CAPABILITIES, [api_version,
+                       start,
+                       stop,
+                       get,
+                       put,
+                       delete,
+                       drop,
+                       fold_buckets,
+                       fold_keys,
+                       fold_objects,
+                       is_empty,
+                       status,
+                       callback]).
+
+%% -export([start/2, stop/1,get/2,put/3,list/1,list_bucket/2,delete/2,is_empty/1,
+%%          drop/1,fold/3,fold_bucket_keys/4]).
+%% -export([callback/3]).
+
+-record (state, {backends :: {atom(), atom(), term()},
+                 default_backend :: atom()}).
 
 %% @doc riak_kv_multi_backend allows you to run multiple backends within a 
 %% single Riak instance. The 'backend' property of a bucket specifies
@@ -60,9 +93,18 @@
 %%
 %%
 
+%% ===================================================================
+%% Public API
+%% ===================================================================
 
-% @spec start(Partition :: integer(), Config :: integer()) ->
-%                        {ok, state()} | {{error, Reason :: term()}, state()}
+%% @doc Return the major version of the 
+%% current API and a capabilities list.
+api_version() ->
+    {?API_VERSION, ?CAPABILITIES}.
+
+%% @spec start(Partition :: integer(), Config :: integer()) ->
+%%                        {ok, state()} | {{error, Reason :: term()}, state()}
+%% @doc Start the backends
 start(Partition, Config) ->
     % Sanity checking...
     Defs = proplists:get_value(multi_backend, Config),
@@ -82,7 +124,8 @@ start(Partition, Config) ->
 
     {ok, #state { backends=Backends, default_backend=DefaultBackend}}.
 
-% @spec stop(state()) -> ok | {error, Reason :: term()}
+%% @spec stop(state()) -> ok | {error, Reason :: term()}
+%% @doc Stop the backends
 stop(State) -> 
     Backends = State#state.backends,
     Results = [Module:stop(SubState) || {_, Module, SubState} <- Backends],
@@ -92,89 +135,79 @@ stop(State) ->
         _ -> {error, ErrorResults}
     end.
 
-% get(state(), Key :: binary()) ->
-%   {ok, Val :: binary()} | {error, Reason :: term()}
-get(State, {Bucket, Key}) ->
+%% get(riak_object:bucket(), riak_object:key(), state()) ->
+%%   {ok, Val :: binary()} | {error, Reason :: term()}
+get(Bucket, Key, State) ->
     {_Name, Module, SubState} = get_backend(Bucket, State),
     Module:get(SubState, {Bucket, Key}).
 
-% put(state(), Key :: binary(), Val :: binary()) ->
-%   ok | {error, Reason :: term()}
-put(State, {Bucket, Key}, Value) -> 
+%% put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
+%%   ok | {error, Reason :: term()}
+put(Bucket, Key, Value, State) -> 
     {_Name, Module, SubState} = get_backend(Bucket, State),
     Module:put(SubState, {Bucket, Key}, Value).
 
-% delete(state(), Key :: binary()) ->
-%   ok | {error, Reason :: term()}
-delete(State, {Bucket, Key}) -> 
+%% delete(riak_object:bucket(), riak_object:key(), state()) ->
+%%   ok | {error, Reason :: term()}
+delete(Bucket, Key, State) -> 
     {_Name, Module, SubState} = get_backend(Bucket, State),
     Module:delete(SubState, {Bucket, Key}).
 
-% list(state()) -> [Key :: binary()]
-list(State) ->
-    F = fun({_, Module, SubState}, Acc) ->
-        Module:list(SubState) ++ Acc
-    end,
-    lists:foldl(F, [], State#state.backends).
+%% @doc Fold over all the buckets. 
+fold_buckets(FoldBucketsFun, Acc, #state{backends=Backends}) ->
+    FoldFun = fun({_, Module, SubState}, Acc1) ->
+                      Module:fold_buckets(FoldBucketsFun, Acc1, SubState)
+              end,
+    lists:foldl(FoldFun, Acc, Backends).
 
-% list_bucket(state(), '_') -> [Bucket :: binary()]
-list_bucket(State, '_') -> 
-    F = fun({_, Module, SubState}, Acc) ->
-        Module:list_bucket(SubState, '_') ++ Acc
-    end,
-    lists:foldl(F, [], State#state.backends);
-    
-% list_bucket(state(), {filter, Bucket :: binary(), F :: function()}) -> [Key :: binary()]   
-list_bucket(State, {filter, Bucket, FilterFun}) ->
-    F = fun({_, Module, SubState}, Acc) ->
-        Module:list_bucket(SubState, {filter, Bucket, FilterFun}) ++ Acc
-    end,
-    lists:foldl(F, [], State#state.backends);
-    
-list_bucket(State, Bucket) ->
-    {_Name, Module, SubState} = get_backend(Bucket, State),
-    Module:list_bucket(SubState, Bucket).
+%% @doc Fold over all the keys for a bucket or all keys for
+%% all buckets if no bucket is specified in Opts.
+fold_keys(FoldKeysFun, Acc, Opts, #state{backends=Backends}) ->
+    FoldFun = fun({_, Module, SubState}, Acc1) ->
+                      Module:fold_keys(FoldKeysFun, Acc1, Opts, SubState)
+              end,
+    lists:foldl(FoldFun, Acc, Backends).
 
-is_empty(State) ->
-    F = fun({_, Module, SubState}) ->
-        Module:is_empty(SubState)
-    end,
-    lists:all(F, State#state.backends).
+%% @doc Fold over all the objects for a bucket or all objects for
+%% all buckets if no bucket is specified in Opts.
+fold_objects(FoldObjectsFun, Acc, Opts, #state{backends=Backends}) ->
+    FoldFun = fun({_, Module, SubState}, Acc1) ->
+                      Module:fold_objects(FoldObjectsFun, Acc1, Opts, SubState)
+              end,
+    lists:foldl(FoldFun, Acc, Backends).
 
-drop(State) ->
-    F = fun({_, Module, SubState}) ->
+%% @doc Delete all objects from the different backends
+drop(#state{backends=Backends}) ->
+    Fun = fun({_, Module, SubState}) ->
         Module:drop(SubState)
     end,
-    [F(X) || X <- State#state.backends],
+    [Fun(Backend) || Backend <- Backends],
     ok.
 
-fold(State, Fun, Extra) ->    
-    lists:foldl(fun({_, Module, SubState}, Acc) ->
-                        Module:fold(SubState, Fun, Acc)
-                end, Extra, State#state.backends).
+%% @doc Returns true if the backend contains any 
+%% non-tombstone values; otherwise returns false.
+is_empty(#state{backends=Backends}) ->
+    Fun = fun({_, Module, SubState}) ->
+        Module:is_empty(SubState)
+    end,
+    lists:all(Fun, Backends).
 
-fold_bucket_keys(State, Bucket, Fun, Extra) ->
-    %% We have less work to do than fold/3 does because we're a
-    %% backend-aware manager.
-    %% Mimic riak_kv_vnode:do_list_keys() logic but with nested try/catch.
-    {_Name, Module, SubState} = get_backend(Bucket, State),
-    try
-        WrapFun = fun(K, Acc) -> Fun({Bucket, K}, unused_val, Acc) end,
-        Module:fold_bucket_keys(SubState, Bucket, WrapFun)
-    catch error:undef ->
-            try
-                Module:fold_bucket_keys(SubState, Bucket, Fun, Extra)
-            catch error:undef ->
-                    %% Backend doesn't support newer API, use older API
-                    Module:fold(SubState, Fun, Extra)
-            end
-    end.
-
-callback(State, Ref, Msg) ->
+%% @doc Register an asynchronous callback
+callback(Ref, Msg, #state{backends=Backends}) ->
     %% Pass the callback on to all submodules - their responsbility to
-    %% filter out if they neede it.
-    [Mod:callback(SS, Ref, Msg) || {_N, Mod, SS} <- State#state.backends],
+    %% filter out if they need it.
+    [Mod:callback(Ref, Msg, ModState) || {_N, Mod, ModState} <- Backends],
     ok.
+
+%% @doc Get the status information for this backend
+status(#state{backends=Backends}) ->
+    %% @TODO Reexamine how this is handled
+    [{N, Mod:status(ModState)} || {N, Mod, ModState} <- Backends].
+
+
+%% ===================================================================
+%% Internal functions
+%% ===================================================================
 
 % Given a Bucket name and the State, return the
 % backend definition. (ie: {Name, Module, SubState})
@@ -193,7 +226,11 @@ get_backend(Bucket, State) ->
 
 assert(true, _) -> ok;
 assert(false, Error) -> throw({?MODULE, Error}).    
-    
+
+
+%% ===================================================================
+%% EUnit tests
+%% ===================================================================    
 -ifdef(TEST).
 
 % @private
