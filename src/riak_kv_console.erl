@@ -213,8 +213,6 @@ cluster_info([OutFile|Rest]) ->
 
 format_stats([], Acc) ->
     lists:reverse(Acc);
-format_stats([{vnode_gets, V}|T], Acc) ->
-    format_stats(T, [io_lib:format("vnode gets : ~p~n", [V])|Acc]);
 format_stats([{Stat, V}|T], Acc) ->
     format_stats(T, [io_lib:format("~p : ~p~n", [Stat, V])|Acc]).
 
