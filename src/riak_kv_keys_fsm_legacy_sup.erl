@@ -1,8 +1,9 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_keylister_sup: Supervisor for starting keylister processes
+%% riak_kv_keys_fsm_legacy_sup: supervise the legacy riak_kv keys 
+%% state machines.
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -19,26 +20,30 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
--module(riak_kv_keylister_sup).
+
+%% @doc supervise the legacy riak_kv keys state machines
+
+-module(riak_kv_keys_fsm_legacy_sup).
 
 -behaviour(supervisor).
 
-%% API
--export([start_link/0,
-         start_keylister/2]).
-
-%% Supervisor callbacks
+-export([start_keys_fsm/2]).
+-export([start_link/0]).
 -export([init/1]).
 
-start_keylister(Node, Args) ->
+start_keys_fsm(Node, Args) ->
     supervisor:start_child({?MODULE, Node}, Args).
 
+%% @spec start_link() -> ServerRet
+%% @doc API for starting the supervisor.
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
+%% @spec init([]) -> SupervisorTree
+%% @doc supervisor callback.
 init([]) ->
-    SupFlags = {simple_one_for_one, 0, 1},
-    Process = {undefined,
-               {riak_kv_keylister, start_link, []},
-               temporary, brutal_kill, worker, dynamic},
-    {ok, {SupFlags, [Process]}}.
+    KeysFsmSpec = {undefined,
+               {riak_kv_keys_fsm_legacy, start_link, []},
+               temporary, 5000, worker, [riak_kv_keys_fsm_legacy]},
+
+    {ok, {{simple_one_for_one, 10, 10}, [KeysFsmSpec]}}.
