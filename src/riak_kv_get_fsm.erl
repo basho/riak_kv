@@ -189,7 +189,7 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
                     true ->
                         erlang:min((N div 2)+1, % basic quorum, or
                                    (N-R+1)); % cannot ever get R 'ok' replies
-                    false ->
+                    _ElseFalse ->
                         N - R + 1 % cannot ever get R 'ok' replies
                 end,
             AllowMult = proplists:get_value(allow_mult,BucketProps),

@@ -338,7 +338,12 @@ execute_segment(C, Start, Steps) ->
     MR = [{link, Bucket, Key, false} || {Bucket, Key, _} <- Steps]
         ++[riak_kv_mapreduce:reduce_set_union(false),
            riak_kv_mapreduce:map_identity(true)],
-    {ok, Objects} = C:mapred(Start, MR),
+    case riak_kv_util:mapred_system() of
+        pipe ->
+            {ok, Objects} = riak_kv_mrc_pipe:mapred(Start, MR);
+        legacy ->
+            {ok, Objects} = C:mapred(Start, MR)
+    end,
     %% remove notfounds and strip link tags from objects
     lists:reverse(
       lists:foldl(fun({error, notfound}, Acc) -> Acc;
