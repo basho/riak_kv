@@ -12,7 +12,7 @@
          index/2,
          delete/2,
          lookup_sync/4,
-         fold_index/4,
+         fold_index/6,
          drop/1,
          callback/3
         ]).
@@ -106,12 +106,9 @@ lookup_sync(State, Index, Field, Term) ->
     FilterFun = fun(_Value, _Props) -> true end,
     merge_index:lookup_sync(Pid, Index, Field, Term, FilterFun).
 
-
-%% @spec fold_index(State :: state(), 
-%%                  Bucket :: binary(),
-%%                  Query :: riak_index:query_elements(),
-%%                  Acc :: term()) -> term().
-fold_index(State, Index, Query, Acc) ->
+%% @spec fold_index(State :: state(), Bucket :: binary(), Query :: riak_index:query_elements(),
+%%                  SKFun :: function(), Acc :: term(), FinalFun :: function()) -> term().    
+fold_index(State, Index, Query, SKFun, Acc, FinalFun) ->
     Pid = State#state.pid,
     FilterFun = fun(_Value, _Props) -> true end,
 
@@ -140,28 +137,6 @@ fold_index(State, Index, Query, Acc) ->
                   _ -> 
                       {error, {unknown_query_element, Query}}
               end,
-
-    %% This is needs discussion. Our design notes call for results to
-    %% feed into SKFun using {sk, SecondaryKey, PrimaryKey}, but this
-    %% doesn't account for Properties. We also need to add a clause
-    %% for when we reach the limit.
-    SKFun = fun({results, Results1}, Acc1) ->
-                    {ok, Results1 ++ Acc1};
-               ({error, Reason}, _Acc1) ->
-                    {error, Reason};
-               (done, Acc1) ->
-                    {ok, Acc1}
-            end,
-
-    %% Also, for this round of changes, FinalFun is going to just
-    %% return the output of SKFun. Normally, this would call
-    %% riak_core_vnode:reply/N. Here, we just transform the list of
-    %% results from [{Key, Props}] to [Key].
-    FinalFun = fun({error, Reason}, _Acc1) ->
-                       {error, Reason};
-                  (done, Acc1) ->
-                       [K || {K, _} <- Acc1]
-               end,
 
     
     %% If Results is a list of results, then call SKFun to accumulate
