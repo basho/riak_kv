@@ -41,6 +41,7 @@
 -export([filter_buckets/1]).
 -export([filter_keys/2,filter_keys/3]).
 -export([list_buckets/0,list_buckets/2]).
+-export([get_index/2]).
 -export([set_bucket/2,get_bucket/1]).
 -export([reload_all/1]).
 -export([remove_from_cluster/1]).
@@ -647,6 +648,16 @@ filter_buckets(Fun) ->
         false ->
             list_buckets(Fun, ?DEFAULT_TIMEOUT)
     end.
+
+%% @spec get_index(Bucket :: binary(), Query :: riak_index:query_def()) ->
+%%       {ok, [Key :: riak_object:key()]} |
+%%       {error, timeout} |
+%%       {error, Err :: term()}.
+%%
+%% @doc Run the provided index query.
+get_index(Bucket, Query) ->
+    FakeBucket = {index_query, Bucket, Query},
+    list_keys({FakeBucket, []}).
 
 %% @spec set_bucket(riak_object:bucket(), [BucketProp :: {atom(),term()}]) -> ok
 %% @doc Set the given properties for Bucket.

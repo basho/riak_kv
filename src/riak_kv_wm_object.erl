@@ -1,8 +1,8 @@
 %% -------------------------------------------------------------------
 %%
-%% raw_http_resource: Webmachine resource for serving Riak data
+%% riak_kv_wm_object: Webmachine resource for KV object level operations.
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,41 +24,13 @@
 %%
 %% Available operations:
 %%
-%% GET /Prefix
-%%   Get information about available buckets.
-%%   Include the query param "buckets=true" to get a list of buckets.
-%%   The bucket list is excluded by default, because generating it is
-%%   expensive.
-%%
-%% GET /Prefix/Bucket
-%%   Get information about the named Bucket, in JSON form:
-%%     {"props":{Prop1:Val1,Prop2:Val2,...},
-%%      "keys":[Key1,Key2,...]}.
-%%   Each bucket property will be included in the "props" object.
-%%   "linkfun" and "chash_keyfun" properties will be encoded as
-%%   JSON objects of the form:
-%%     {"mod":ModuleName,
-%%      "fun":FunctionName}
-%%   Where ModuleName and FunctionName are each strings representing
-%%   a module and function.
-%%   Including the query param "props=false" will cause the "props"
-%%   field to be omitted from the response.
-%%   Including the query param "keys=false" will cause the "keys"
-%%   field to be omitted from the response.
-%%
-%% PUT /Prefix/Bucket
-%%   Modify bucket properties.
-%%   Content-type must be application/json, and the body must have
-%%   the form:
-%%     {"props":{Prop:Val}}
-%%   Where the "props" object takes the same form as returned from
-%%   a GET of the same resource.
-%%
-%% POST /Prefix/Bucket
+%% POST /buckets/Bucket/keys (NEW)
+%% POST /Prefix/Bucket (OLD)
 %%   Equivalent to "PUT /Prefix/Bucket/Key" where Key is chosen
 %%   by the server.
 %%
-%% GET /Prefix/Bucket/Key
+%% GET /buckets/Bucket/keys/Key (NEW)
+%% GET /Prefix/Bucket/Key (OLD)
 %%   Get the data stored in the named Bucket under the named Key.
 %%   Content-type of the response will be whatever incoming
 %%   Content-type was used in the request that stored the data.
@@ -82,7 +54,8 @@
 %%   sibling, include the query param "vtag=V", where V is the vtag
 %%   of the sibling you want.
 %%
-%% PUT /Prefix/Bucket/Key
+%% PUT /buckets/Bucket/keys/Key (NEW)
+%% PUT /Prefix/Bucket/Key (OLD)
 %%   Store new data in the named Bucket under the named Key.
 %%   A Content-type header *must* be included in the request.  The
 %%   value of this header will be used in the response to subsequent
@@ -108,42 +81,19 @@
 %%   to determine whether or not the resource exists). A default
 %%   r-value of 2 will be used if none is specified.
 %%
-%% POST /Prefix/Bucket/Key
+%% POST /buckets/Bucket/keys/Key (NEW)
+%% POST /Prefix/Bucket/Key (OLD)
 %%   Equivalent to "PUT /Prefix/Bucket/Key" (useful for clients that
 %%   do not support the PUT method).
 %%
-%% DELETE /Prefix/Bucket/Key
+%% DELETE /buckets/Bucket/keys/Key (NEW)
+%% DELETE /Prefix/Bucket/Key (OLD)
 %%   Delete the data stored in the named Bucket under the named Key.
 %%   Specifying the query param "rw=RW", where RW is an integer will
 %%   cause Riak to use RW as the rw-value for the delete request. A
 %%   default rw-value of 2 will be used if none is specified.
-%%
-%% Webmachine dispatch lines for this resource should look like:
-%%
-%%  {["riak"],
-%%   riak_kv_wm_raw,
-%%   [{prefix, "riak"},
-%%    {riak, local} %% or {riak, {'riak@127.0.0.1', riak_cookie}}
-%%   ]}.
-%%  {["riak", bucket],
-%%   riak_kv_wm_raw,
-%%   [{prefix, "riak"},
-%%    {riak, local} %% or {riak, {'riak@127.0.0.1', riak_cookie}}
-%%   ]}.
-%%  {["riak", bucket, key],
-%%   riak_kv_wm_raw,
-%%   [{prefix, "riak"},
-%%    {riak, local} %% or {riak, {'riak@127.0.0.1', riak_cookie}}
-%%   ]}.
-%%
-%% These example dispatch lines will expose this resource at /riak,
-%% /riak/Bucket, and /riak/Bucket/Key.  The resource will attempt to
-%% connect to Riak on the same Erlang node one which the resource
-%% is executing.  Using the alternate {riak, {Node, Cookie}} form
-%% will cause the resource to connect to riak on the specified
-%% Node with the specified Cookie.
--module(riak_kv_wm_raw).
--author('Bryan Fink <bryan@basho.com>').
+
+-module(riak_kv_wm_object).
 
 %% webmachine resource exports
 -export([
@@ -159,9 +109,6 @@
          charsets_provided/2,
          encodings_provided/2,
          content_types_accepted/2,
-         produce_toplevel_body/2,
-         produce_bucket_body/2,
-         accept_bucket_body/2,
          post_is_create/2,
          create_path/2,
          process_post/2,
@@ -170,19 +117,12 @@
          produce_sibling_message_body/2,
          produce_multipart_body/2,
          multiple_choices/2,
-         maybe_decode_uri/2,
          delete_resource/2
         ]).
 
-%% utility exports (used in raw_http_link_walker_resource)
--export([
-         vclock_header/1,
-         format_link/2, format_link/4,
-         multipart_encode_body/3
-        ]).
-
 %% @type context() = term()
--record(ctx, {bucket,       %% binary() - Bucket name (from uri)
+-record(ctx, {api_version,  %% integer() - Determine which version of the API to use.
+              bucket,       %% binary() - Bucket name (from uri)
               key,          %% binary() - Key (from uri)
               client,       %% riak_client() - the store client
               r,            %% integer() - r-value for reads
@@ -199,9 +139,11 @@
               vtag,         %% string() - vtag the user asked for
               bucketprops,  %% proplist() - properties of the bucket
               links,        %% [link()] - links of the object
+              index_fields, %% [index_field()]
               method        %% atom() - HTTP method for the request
              }).
 %% @type link() = {{Bucket::binary(), Key::binary()}, Tag::binary()}
+%% @type index_field() = {Key::string(), Value::string()}
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
@@ -210,7 +152,8 @@
 %% @doc Initialize this resource.  This function extracts the
 %%      'prefix' and 'riak' properties from the dispatch args.
 init(Props) ->
-    {ok, #ctx{prefix=proplists:get_value(prefix, Props),
+    {ok, #ctx{api_version=proplists:get_value(api_version, Props),
+              prefix=proplists:get_value(prefix, Props),
               riak=proplists:get_value(riak, Props)}}.
 
 %% @spec service_available(reqdata(), context()) ->
@@ -221,7 +164,7 @@ init(Props) ->
 %%      bindings from the dispatch, as well as any vtag
 %%      query parameter.
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
-    case get_riak_client(RiakProps, get_client_id(RD)) of
+    case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true,
              RD,
@@ -230,11 +173,11 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                client=C,
                bucket=case wrq:path_info(bucket, RD) of
                          undefined -> undefined;
-                         B -> list_to_binary(maybe_decode_uri(RD, B))
+                         B -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, B))
                       end,
                key=case wrq:path_info(key, RD) of
                        undefined -> undefined;
-                       K -> list_to_binary(maybe_decode_uri(RD, K))
+                       K -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, K))
                    end,
                vtag=wrq:get_qs_value(?Q_VTAG, RD)
               }};
@@ -246,60 +189,10 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
              Ctx}
     end.
 
-maybe_decode_uri(RD, Val) ->
-    case application:get_env(riak_kv, http_url_encoding) of
-        {ok, on} ->
-            mochiweb_util:unquote(Val);
-        _ ->
-            case wrq:get_req_header("X-Riak-URL-Encoding", RD) of
-                "on" ->
-                    mochiweb_util:unquote(Val);
-                _ ->
-                    Val
-            end
-    end.
-
-%% @spec get_riak_client(local|{node(),Cookie::atom()}, term()) ->
-%%          {ok, riak_client()} | error()
-%% @doc Get a riak_client.
-get_riak_client(local, ClientId) ->
-    riak:local_client(ClientId);
-get_riak_client({Node, Cookie}, ClientId) ->
-    erlang:set_cookie(node(), Cookie),
-    riak:client_connect(Node, ClientId).
-
-%% @spec get_client_id(reqdata()) -> term()
-%% @doc Extract the request's preferred client id from the
-%%      X-Riak-ClientId header.  Return value will be:
-%%        'undefined' if no header was found
-%%        32-bit binary() if the header could be base64-decoded
-%%           into a 32-bit binary
-%%        string() if the header could not be base64-decoded
-%%           into a 32-bit binary
-get_client_id(RD) ->
-    case wrq:get_req_header(?HEAD_CLIENT, RD) of
-        undefined -> undefined;
-        RawId ->
-            case catch base64:decode(RawId) of
-                ClientId= <<_:32>> -> ClientId;
-                _ -> RawId
-            end
-    end.
-
 %% @spec allowed_methods(reqdata(), context()) ->
 %%          {[method()], reqdata(), context()}
 %% @doc Get the list of methods this resource supports.
-%%      HEAD, GET, POST, and PUT are supported at both
-%%      the bucket and key levels.  DELETE is supported
-%%      at the key level only.
-allowed_methods(RD, Ctx=#ctx{bucket=undefined}) ->
-    %% top-level: no modification allowed
-    {['HEAD', 'GET'], RD, Ctx};
-allowed_methods(RD, Ctx=#ctx{key=undefined}) ->
-    %% bucket-level: no delete
-    {['HEAD', 'GET', 'POST', 'PUT'], RD, Ctx};
 allowed_methods(RD, Ctx) ->
-    %% key-level: just about anything
     {['HEAD', 'GET', 'POST', 'PUT', 'DELETE'], RD, Ctx}.
 
 %% @spec allow_missing_post(reqdata(), context()) ->
@@ -308,14 +201,6 @@ allowed_methods(RD, Ctx) ->
 %%      bucket entries.
 allow_missing_post(RD, Ctx) ->
     {true, RD, Ctx}.
-
-%% @spec is_bucket_put(reqdata(), context()) -> boolean()
-%% @doc Determine whether this request is of the form
-%%      PUT /Prefix/Bucket
-%%      This method expects the 'key' path binding to have
-%%      been set in the 'key' field of the context().
-is_bucket_put(RD, Ctx) ->
-    {undefined, 'PUT'} =:= {Ctx#ctx.key, wrq:method(RD)}.
 
 %% @spec malformed_request(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
@@ -334,31 +219,27 @@ is_bucket_put(RD, Ctx) ->
 %%      at this time.
 malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'POST'
                                 orelse Ctx#ctx.method =:= 'PUT' ->
-    case is_bucket_put(RD, Ctx) of
-        true ->
-            malformed_bucket_put(RD, Ctx);
-        false ->
-            case wrq:get_req_header("Content-Type", RD) of
-                undefined ->
-                    {true, missing_content_type(RD), Ctx};
-                _ ->
-                    case malformed_rw_params(RD, Ctx) of
-                        Result={true, _, _} -> Result;
-                        {false, RWRD, RWCtx} ->
-                            malformed_link_headers(RWRD, RWCtx)
+    case wrq:get_req_header("Content-Type", RD) of
+        undefined ->
+            {true, missing_content_type(RD), Ctx};
+        _ ->
+            case malformed_rw_params(RD, Ctx) of
+                Result={true, _, _} -> 
+                    Result;
+                {false, RWRD, RWCtx} ->
+                    case malformed_link_headers(RWRD, RWCtx) of
+                        Result = {true, _, _} ->
+                            Result;
+                        {false, RWLH, LHCtx} ->
+                            malformed_index_headers(RWLH, LHCtx)
                     end
             end
     end;
 malformed_request(RD, Ctx) ->
-    {ResBool, ResRD, ResCtx} = case malformed_rw_params(RD, Ctx) of
-        Result={true, _, _} -> Result;
-        {false, RWRD, RWCtx} ->
-            malformed_link_headers(RWRD, RWCtx)
-    end,
-    case ((ResBool == true) orelse (ResCtx#ctx.key == undefined)) of
-        true ->
-            {ResBool, ResRD, ResCtx};
-        false ->
+    case malformed_rw_params(RD, Ctx) of
+        Result = {true, _, _} ->
+            Result;
+        {false, ResRD, ResCtx} ->
             DocCtx = ensure_doc(ResCtx),
             case DocCtx#ctx.doc of
                 {error, Reason} ->
@@ -367,32 +248,6 @@ malformed_request(RD, Ctx) ->
                     {false, ResRD, DocCtx}
             end
     end.
-
-%% @spec malformed_bucket_put(reqdata(), context()) ->
-%%          {boolean(), reqdata(), context()}
-%% @doc Check the JSON format of a bucket-level PUT.
-%%      Must be a valid JSON object, containing a "props" object.
-malformed_bucket_put(RD, Ctx) ->
-    case catch mochijson2:decode(wrq:req_body(RD)) of
-        {struct, Fields} ->
-            case proplists:get_value(?JSON_PROPS, Fields) of
-                {struct, Props} ->
-                    {false, RD, Ctx#ctx{bucketprops=Props}};
-                _ ->
-                    {true, bucket_format_message(RD), Ctx}
-            end;
-        _ ->
-            {true, bucket_format_message(RD), Ctx}
-    end.
-
-%% @spec bucket_format_message(reqdata()) -> reqdata()
-%% @doc Put an error about the format of the bucket-PUT body
-%%      in the response body of the reqdata().
-bucket_format_message(RD) ->
-    wrq:append_to_resp_body(
-      ["bucket PUT must be a JSON object of the form:\n",
-       "{\"",?JSON_PROPS,"\":{...bucket properties...}}"],
-      wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)).
 
 %% @spec malformed_rw_params(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
@@ -474,28 +329,71 @@ malformed_link_headers(RD, Ctx) ->
     case catch get_link_heads(RD, Ctx) of
         Links when is_list(Links) ->
             {false, RD, Ctx#ctx{links=Links}};
-        _Error ->
+        _Error when Ctx#ctx.api_version == 1->
             {true,
              wrq:append_to_resp_body(
                io_lib:format("Invalid Link header. Links must be of the form~n"
                              "</~s/BUCKET/KEY>; riaktag=\"TAG\"~n",
                              [Ctx#ctx.prefix]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        _Error when Ctx#ctx.api_version == 2 ->
+            {true,
+             wrq:append_to_resp_body(
+               io_lib:format("Invalid Link header. Links must be of the form~n"
+                             "</buckets/BUCKET/keys/KEY>; riaktag=\"TAG\"~n", []),
+               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx}
+
+    end.
+
+%% @spec malformed_index_headers(reqdata(), context()) ->
+%%           {boolean(), reqdata(), context()}
+%%
+%% @doc Check that the Index headers (HTTP headers prefixed with index_") 
+%%      are valid. Store the parsed headers in context() if valid,
+%%      or print an error in reqdata() if not.
+%%      An index field should be of the form "index_fieldname_type"
+malformed_index_headers(RD, Ctx) ->
+    %% Get a list of index_headers...
+    IndexFields1 = extract_index_fields(RD),
+
+    %% Validate the fields. If validation passes, then the index
+    %% headers are correctly formed.
+    case riak_index:parse_fields(IndexFields1) of
+        {ok, IndexFields2} ->
+            {false, RD, Ctx#ctx { index_fields=IndexFields2 }};
+        {error, Reasons} ->
+            {true,
+             wrq:append_to_resp_body(
+               [riak_index:format_failure_reason(X) || X <- Reasons],
+               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx}
     end.
+
+%% @spec extract_index_fields(reqdata()) -> proplist().
+%%
+%% @doc Extract fields from headers prefixed by "x-riak-index-" in the
+%%      client's PUT request, to be indexed at write time.
+extract_index_fields(RD) ->
+    PrefixSize = length(?HEAD_INDEX_PREFIX),
+    F = fun({K,V}, Acc) ->
+                KList = riak_kv_wm_utils:any_to_list(K),
+                case lists:prefix(?HEAD_INDEX_PREFIX, string:to_lower(KList)) of
+                    true ->
+                        IndexField = list_to_binary(element(2, lists:split(PrefixSize, KList))),
+                        [{IndexField, V} | Acc];
+                    false ->
+                        Acc
+                end
+        end,
+    lists:foldl(F, [], mochiweb_headers:to_list(wrq:req_headers(RD))).
 
 %% @spec content_types_provided(reqdata(), context()) ->
 %%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
 %% @doc List the content types available for representing this resource.
-%%      "application/json" is the content-type for bucket-level GET requests
 %%      The content-type for a key-level request is the content-type that
 %%      was used in the PUT request that stored the document in Riak.
-content_types_provided(RD, Ctx=#ctx{bucket=undefined}) ->
-    %% top-level: JSON description only
-    {[{"application/json", produce_toplevel_body}], RD, Ctx};
-content_types_provided(RD, Ctx=#ctx{key=undefined}) ->
-    %% bucket-level: JSON description only
-    {[{"application/json", produce_bucket_body}], RD, Ctx};
 content_types_provided(RD, Ctx=#ctx{method=Method}=Ctx) when Method =:= 'PUT';
                                                              Method =:= 'POST' ->
     {ContentType, _} = extract_content_type(RD),
@@ -515,13 +413,9 @@ content_types_provided(RD, Ctx0) ->
 %%          {no_charset|[{Charset::string(), Producer::function()}],
 %%           reqdata(), context()}
 %% @doc List the charsets available for representing this resource.
-%%      No charset will be specified for a bucket-level request.
 %%      The charset for a key-level request is the charset that was used
 %%      in the PUT request that stored the document in Riak (none if
 %%      no charset was specified at PUT-time).
-charsets_provided(RD, Ctx=#ctx{key=undefined}) ->
-    %% default charset for top-level and bucket-level requests
-    {no_charset, RD, Ctx};
 charsets_provided(RD, #ctx{method=Method}=Ctx) when Method =:= 'PUT';
                                                     Method =:= 'POST' ->
     case extract_content_type(RD) of
@@ -530,7 +424,6 @@ charsets_provided(RD, #ctx{method=Method}=Ctx) when Method =:= 'PUT';
         {_, Charset} ->
             {[{Charset, fun(X) -> X end}], RD, Ctx}
     end;
-
 charsets_provided(RD, Ctx0) ->
     DocCtx = ensure_doc(Ctx0),
     case DocCtx#ctx.doc of
@@ -553,13 +446,9 @@ charsets_provided(RD, Ctx0) ->
 %% @spec encodings_provided(reqdata(), context()) ->
 %%          {[{Encoding::string(), Producer::function()}], reqdata(), context()}
 %% @doc List the encodings available for representing this resource.
-%%      "identity" and "gzip" are available for bucket-level requests.
 %%      The encoding for a key-level request is the encoding that was
 %%      used in the PUT request that stored the document in Riak, or
 %%      "identity" and "gzip" if no encoding was specified at PUT-time.
-encodings_provided(RD, Ctx=#ctx{key=undefined}) ->
-    %% identity and gzip for top-level and bucket-level requests
-    {default_encodings(), RD, Ctx};
 encodings_provided(RD, Ctx0) ->
     DocCtx = ensure_doc(Ctx0),
     case DocCtx#ctx.doc of
@@ -570,69 +459,52 @@ encodings_provided(RD, Ctx0) ->
                         {ok, Enc} ->
                             {[{Enc, fun(X) -> X end}], RD, DocCtx};
                         error ->
-                            {default_encodings(), RD, DocCtx}
+                            {riak_kv_wm_utils:default_encodings(), RD, DocCtx}
                     end;
                 multiple_choices ->
-                    {default_encodings(), RD, DocCtx}
+                    {riak_kv_wm_utils:default_encodings(), RD, DocCtx}
             end;
         {error, _} ->
-            {default_encodings(), RD, DocCtx}
+            {riak_kv_wm_utils:default_encodings(), RD, DocCtx}
     end.
-
-%% @spec default_encodings() -> [{Encoding::string(), Producer::function()}]
-%% @doc The default encodings available: identity and gzip.
-default_encodings() ->
-    [{"identity", fun(X) -> X end},
-     {"gzip", fun(X) -> zlib:gzip(X) end}].
 
 %% @spec content_types_accepted(reqdata(), context()) ->
 %%          {[{ContentType::string(), Acceptor::atom()}],
 %%           reqdata(), context()}
 %% @doc Get the list of content types this resource will accept.
-%%      "application/json" is the only type accepted for bucket-PUT.
 %%      Whatever content type is specified by the Content-Type header
 %%      of a key-level PUT request will be accepted by this resource.
 %%      (A key-level put *must* include a Content-Type header.)
 content_types_accepted(RD, Ctx) ->
-    case is_bucket_put(RD, Ctx) of
-        true ->
-            %% bucket-PUT: JSON only
-            {[{"application/json", accept_bucket_body}], RD, Ctx};
-        false ->
-            case wrq:get_req_header(?HEAD_CTYPE, RD) of
-                undefined ->
-                    %% user must specify content type of the data
-                    {[], RD, Ctx};
-                CType ->
-                    Media = hd(string:tokens(CType, ";")),
-                    case string:tokens(Media, "/") of
-                        [_Type, _Subtype] ->
-                            %% accept whatever the user says
-                            {[{Media, accept_doc_body}], RD, Ctx};
-                        _ ->
-                            {[],
-                             wrq:set_resp_header(
-                               ?HEAD_CTYPE,
-                               "text/plain",
-                               wrq:set_resp_body(
-                                 ["\"", Media, "\""
-                                  " is not a valid media type"
-                                  " for the Content-type header.\n"],
-                                 RD)),
-                             Ctx}
-                    end
+    case wrq:get_req_header(?HEAD_CTYPE, RD) of
+        undefined ->
+            %% user must specify content type of the data
+            {[], RD, Ctx};
+        CType ->
+            Media = hd(string:tokens(CType, ";")),
+            case string:tokens(Media, "/") of
+                [_Type, _Subtype] ->
+                    %% accept whatever the user says
+                    {[{Media, accept_doc_body}], RD, Ctx};
+                _ ->
+                    {[],
+                     wrq:set_resp_header(
+                       ?HEAD_CTYPE,
+                       "text/plain",
+                       wrq:set_resp_body(
+                         ["\"", Media, "\""
+                          " is not a valid media type"
+                          " for the Content-type header.\n"],
+                         RD)),
+                     Ctx}
             end
     end.
 
 %% @spec resource_exists(reqdata(), context()) -> {boolean(), reqdata(), context()}
 %% @doc Determine whether or not the requested item exists.
-%%      All buckets exists, whether they have data in them or not.
 %%      Documents exists if a read request to Riak returns {ok, riak_object()},
 %%      and either no vtag query parameter was specified, or the value of the
 %%      vtag param matches the vtag of some value of the Riak object.
-resource_exists(RD, Ctx=#ctx{key=undefined}) ->
-    %% top-level and all buckets exist
-    {true, RD, Ctx};
 resource_exists(RD, Ctx0) ->
     DocCtx = ensure_doc(Ctx0),
     case DocCtx#ctx.doc of
@@ -653,162 +525,6 @@ resource_exists(RD, Ctx0) ->
             %% conditions from ensure_doc are handled up in malformed_request.
             {false, RD, DocCtx}
     end.
-
-%% @spec produce_toplevel_body(reqdata(), context()) -> {binary(), reqdata(), context()}
-%% @doc Produce the JSON response to a bucket-level GET.
-%%      Includes a list of known buckets if the "buckets=true" query
-%%      param is specified.
-produce_toplevel_body(RD, Ctx=#ctx{client=C}) ->
-    {ListPart, LinkRD} =
-        case wrq:get_qs_value(?Q_BUCKETS, RD) of
-            ?Q_TRUE ->
-                {ok, Buckets} = C:list_buckets(),
-                {[{?JSON_BUCKETS, Buckets}],
-                 lists:foldl(fun(B, Acc) -> add_bucket_link(B,Acc,Ctx) end,
-                             RD, Buckets)};
-            _ ->
-                {[], RD}
-        end,
-    {mochijson2:encode({struct, ListPart}), LinkRD, Ctx}.
-
-%% @spec produce_bucket_body(reqdata(), context()) -> {binary(), reqdata(), context()}
-%% @doc Produce the JSON response to a bucket-level GET.
-%%      Includes the bucket props unless the "props=false" query param
-%%      is specified.
-%%      Includes the keys of the documents in the bucket unless the
-%%      "keys=false" query param is specified. If "keys=stream" query param
-%%      is specified, keys will be streamed back to the client in JSON chunks
-%%      like so: {"keys":[Key1, Key2,...]}.
-%%      A Link header will also be added to the response by this function
-%%      if the keys are included in the JSON object.  The Link header
-%%      will include links to all keys in the bucket, with the property
-%%      "rel=contained".
-produce_bucket_body(RD, Ctx=#ctx{bucket=B, client=C}) ->
-    SchemaPart =
-        case wrq:get_qs_value(?Q_PROPS, RD) of
-            ?Q_FALSE -> [];
-            _ ->
-                Props = C:get_bucket(B),
-                JsonProps = lists:map(fun jsonify_bucket_prop/1, Props),
-                [{?JSON_PROPS, {struct, JsonProps}}]
-        end,
-    {KeyPart, KeyRD} =
-        case wrq:get_qs_value(?Q_KEYS, RD) of
-            ?Q_STREAM -> {stream, RD};
-            ?Q_TRUE ->
-                {ok, KeyList} = C:list_keys(B),
-                {[{?Q_KEYS, KeyList}],
-                 lists:foldl(
-                   fun(K, Acc) ->
-                           add_link_head(B, K, "contained", Acc, Ctx)
-                   end,
-                   RD, KeyList)};
-            _ -> {[], RD}
-        end,
-    case KeyPart of
-        stream -> {{stream, {mochijson2:encode({struct, SchemaPart}),
-                             fun() ->
-                                     {ok, ReqId} = C:stream_list_keys(B),
-                                     stream_keys(ReqId)
-                             end}},
-                   KeyRD,
-                   Ctx};
-       _ ->
-            {mochijson2:encode({struct, SchemaPart++KeyPart}), KeyRD, Ctx}
-    end.
-
-stream_keys(ReqId) ->
-    receive
-        {ReqId, {keys, Keys}} ->
-            {mochijson2:encode({struct, [{<<"keys">>, Keys}]}), fun() -> stream_keys(ReqId) end};
-        {ReqId, done} -> {mochijson2:encode({struct, [{<<"keys">>, []}]}), done}
-    end.
-
-%% @spec accept_bucket_body(reqdata(), context()) -> {true, reqdata(), context()}
-%% @doc Modify the bucket properties according to the body of the
-%%      bucket-level PUT request.
-accept_bucket_body(RD, Ctx=#ctx{bucket=B, client=C, bucketprops=Props}) ->
-    ErlProps = lists:map(fun erlify_bucket_prop/1, Props),
-    C:set_bucket(B, ErlProps),
-    {true, RD, Ctx}.
-
-%% @spec jsonify_bucket_prop({Property::atom(), erlpropvalue()}) ->
-%%           {Property::binary(), jsonpropvalue()}
-%% @type erlpropvalue() = integer()|string()|boolean()|
-%%                        {modfun, atom(), atom()}|{atom(), atom()}
-%% @type jsonpropvalue() = integer()|string()|boolean()|{struct,[jsonmodfun()]}
-%% @type jsonmodfun() = {mod_binary(), binary()}|{fun_binary(), binary()}
-%% @doc Convert erlang bucket properties to JSON bucket properties.
-%%      Property names are converted from atoms to binaries.
-%%      Integer, string, and boolean property values are left as integer,
-%%      string, or boolean JSON values.
-%%      {modfun, Module, Function} or {Module, Function} values of the
-%%      linkfun and chash_keyfun properties are converted to JSON objects
-%%      of the form:
-%%        {"mod":ModuleNameAsString,
-%%         "fun":FunctionNameAsString}
-jsonify_bucket_prop({linkfun, {modfun, Module, Function}}) ->
-    {?JSON_LINKFUN, {struct, [{?JSON_MOD,
-                               list_to_binary(atom_to_list(Module))},
-                              {?JSON_FUN,
-                               list_to_binary(atom_to_list(Function))}]}};
-jsonify_bucket_prop({linkfun, {qfun, _}}) ->
-    {?JSON_LINKFUN, <<"qfun">>};
-jsonify_bucket_prop({linkfun, {jsfun, Name}}) ->
-    {?JSON_LINKFUN, {struct, [{?JSON_JSFUN, Name}]}};
-jsonify_bucket_prop({linkfun, {jsanon, {Bucket, Key}}}) ->
-    {?JSON_LINKFUN, {struct, [{?JSON_JSANON,
-                               {struct, [{?JSON_JSBUCKET, Bucket},
-                                         {?JSON_JSKEY, Key}]}}]}};
-jsonify_bucket_prop({linkfun, {jsanon, Source}}) ->
-    {?JSON_LINKFUN, {struct, [{?JSON_JSANON, Source}]}};
-jsonify_bucket_prop({chash_keyfun, {Module, Function}}) ->
-    {?JSON_CHASH, {struct, [{?JSON_MOD,
-                             list_to_binary(atom_to_list(Module))},
-                            {?JSON_FUN,
-                             list_to_binary(atom_to_list(Function))}]}};
-jsonify_bucket_prop({Prop, Value}) ->
-    {list_to_binary(atom_to_list(Prop)), Value}.
-
-%% @spec erlify_bucket_prop({Property::binary(), jsonpropvalue()}) ->
-%%          {Property::atom(), erlpropvalue()}
-%% @doc The reverse of jsonify_bucket_prop/1.  Converts JSON representation
-%%      of bucket properties to their Erlang form.
-erlify_bucket_prop({?JSON_LINKFUN, {struct, Props}}) ->
-    case {proplists:get_value(?JSON_MOD, Props),
-          proplists:get_value(?JSON_FUN, Props)} of
-        {Mod, Fun} when is_binary(Mod), is_binary(Fun) ->
-            {linkfun, {modfun,
-                       list_to_existing_atom(binary_to_list(Mod)),
-                       list_to_existing_atom(binary_to_list(Fun))}};
-        {undefined, undefined} ->
-            case proplists:get_value(?JSON_JSFUN, Props) of
-                Name when is_binary(Name) ->
-                    {linkfun, {jsfun, Name}};
-                undefined ->
-                    case proplists:get_value(?JSON_JSANON, Props) of
-                        {struct, Bkey} ->
-                            Bucket = proplists:get_value(?JSON_JSBUCKET, Bkey),
-                            Key = proplists:get_value(?JSON_JSKEY, Bkey),
-                            %% bomb if malformed
-                            true = is_binary(Bucket) andalso is_binary(Key),
-                            {linkfun, {jsanon, {Bucket, Key}}};
-                        Source when is_binary(Source) ->
-                            {linkfun, {jsanon, Source}}
-                    end
-            end
-    end;
-erlify_bucket_prop({?JSON_CHASH, {struct, Props}}) ->
-    {chash_keyfun, {list_to_existing_atom(
-                      binary_to_list(
-                        proplists:get_value(?JSON_MOD, Props))),
-                    list_to_existing_atom(
-                      binary_to_list(
-                        proplists:get_value(?JSON_FUN, Props)))}};
-erlify_bucket_prop({?JSON_ALLOW_MULT, Value}) ->
-    {allow_mult, any_to_bool(Value)};
-erlify_bucket_prop({Prop, Value}) ->
-    {list_to_existing_atom(binary_to_list(Prop)), Value}.
 
 %% @spec post_is_create(reqdata(), context()) -> {boolean(), reqdata(), context()}
 %% @doc POST is considered a document-creation operation for bucket-level
@@ -842,7 +558,7 @@ process_post(RD, Ctx) -> accept_doc_body(RD, Ctx).
 %% @doc Store the data the client is PUTing in the document.
 %%      This function translates the headers and body of the HTTP request
 %%      into their final riak_object() form, and executes the Riak put.
-accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L}) ->
+accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L, index_fields=IF}) ->
     Doc0 = case Ctx#ctx.doc of
                {ok, D} -> D;
                _       -> riak_object:new(B, K, <<>>)
@@ -861,8 +577,9 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L}) ->
             end,
     LinkMD = dict:store(?MD_LINKS, L, EncMD),
     UserMetaMD = dict:store(?MD_USERMETA, UserMeta, LinkMD),
-    MDDoc = riak_object:update_metadata(VclockDoc, UserMetaMD),
-    Doc = riak_object:update_value(MDDoc, accept_value(CType, wrq:req_body(RD))),
+    IndexMD = dict:store(?MD_INDEX, IF, UserMetaMD),
+    MDDoc = riak_object:update_metadata(VclockDoc, IndexMD),
+    Doc = riak_object:update_value(MDDoc, riak_kv_wm_utils:accept_value(CType, wrq:req_body(RD))),
     Options = case wrq:get_qs_value(?Q_RETURNBODY, RD) of ?Q_TRUE -> [returnbody]; _ -> [] end,
     case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
                 Options]) of
@@ -916,7 +633,7 @@ extract_user_meta(RD) ->
     lists:filter(fun({K,_V}) ->
                     lists:prefix(
                         ?HEAD_USERMETA_PREFIX,
-                        string:to_lower(any_to_list(K)))
+                        string:to_lower(riak_kv_wm_utils:any_to_list(K)))
                 end,
                 mochiweb_headers:to_list(wrq:req_headers(RD))).
 
@@ -927,9 +644,6 @@ extract_user_meta(RD) ->
 %%      have sibling versions.  This is a safe assumption, because
 %%      resource_exists will have filtered out requests earlier for
 %%      vtags that are invalid for this version of the document.
-multiple_choices(RD, Ctx=#ctx{key=undefined}) ->
-    %% top-level and bucket operations never have multiple choices
-    {false, RD, Ctx};
 multiple_choices(RD, Ctx=#ctx{vtag=undefined, doc={ok, Doc}}) ->
     %% user didn't specify a vtag, so there better not be siblings
     case riak_object:get_update_value(Doc) of
@@ -947,24 +661,27 @@ multiple_choices(RD, Ctx) ->
     {false, RD, Ctx}.
 
 %% @spec produce_doc_body(reqdata(), context()) -> {binary(), reqdata(), context()}
-%% @doc Extract the value of the document, and place it in the response
-%%      body of the request.  This function also adds the Link and X-Riak-Meta-
-%%      headers to the response.  One link will point to the bucket, with the
-%%      property "rel=container".  The rest of the links will be constructed
-%%      from the links of the document.
+%% @doc Extract the value of the document, and place it in the
+%%      response body of the request.  This function also adds the
+%%      Link, X-Riak-Meta- headers, and X-Riak-Index- headers to the
+%%      response.  One link will point to the bucket, with the
+%%      property "rel=container".  The rest of the links will be
+%%      constructed from the links of the document.
 produce_doc_body(RD, Ctx) ->
+    Prefix = Ctx#ctx.prefix, 
+    Bucket = Ctx#ctx.bucket,
+    APIVersion = Ctx#ctx.api_version,
     case select_doc(Ctx) of
         {MD, Doc} ->
-            Links = case dict:find(?MD_LINKS, MD) of
+            %% Add links to response...
+            Links1 = case dict:find(?MD_LINKS, MD) of
                         {ok, L} -> L;
                         error -> []
                     end,
-            LinkRD = add_container_link(
-                       lists:foldl(fun({{B,K},T},Acc) ->
-                                           add_link_head(B,K,T,Acc,Ctx)
-                                   end,
-                                   RD, Links),
-                       Ctx),
+            Links2 = riak_kv_wm_utils:format_links([{Bucket, "up"}|Links1], Prefix, APIVersion),
+            LinkRD = wrq:merge_resp_headers(Links2, RD),
+            
+            %% Add user metadata to response...
             UserMetaRD = case dict:find(?MD_USERMETA, MD) of
                         {ok, UserMeta} ->
                             lists:foldl(fun({K,V},Acc) ->
@@ -973,7 +690,19 @@ produce_doc_body(RD, Ctx) ->
                                         LinkRD, UserMeta);
                         error -> LinkRD
                     end,
-            {encode_value(Doc), encode_vclock_header(UserMetaRD, Ctx), Ctx};
+
+            %% Add index metadata to response...
+            IndexRD = case dict:find(?MD_INDEX, MD) of
+                          {ok, IndexMeta} ->
+                              lists:foldl(fun({K,V}, Acc) ->
+                                                  K1 = riak_kv_wm_utils:any_to_list(K),
+                                                  V1 = riak_kv_wm_utils:any_to_list(V),
+                                                  wrq:merge_resp_headers([{?HEAD_INDEX_PREFIX ++ K1, V1}], Acc)
+                                          end,
+                                          UserMetaRD, IndexMeta);
+                          error -> UserMetaRD
+                      end,
+            {riak_kv_wm_utils:encode_value(Doc), encode_vclock_header(IndexRD, Ctx), Ctx};
         multiple_choices ->
             throw({unexpected_code_path, ?MODULE, produce_doc_body, multiple_choices})
     end.
@@ -997,59 +726,16 @@ produce_sibling_message_body(RD, Ctx=#ctx{doc={ok, Doc}}) ->
 %%      values (siblings), each sibling being one part of the larger
 %%      document.
 produce_multipart_body(RD, Ctx=#ctx{doc={ok, Doc}, bucket=B, prefix=P}) ->
+    APIVersion = Ctx#ctx.api_version,
     Boundary = riak_core_util:unique_id_62(),
     {[[["\r\n--",Boundary,"\r\n",
-        multipart_encode_body(P, B, Content)]
+        riak_kv_wm_utils:multipart_encode_body(P, B, Content, APIVersion)]
        || Content <- riak_object:get_contents(Doc)],
       "\r\n--",Boundary,"--\r\n"],
      wrq:set_resp_header(?HEAD_CTYPE,
                          "multipart/mixed; boundary="++Boundary,
                          encode_vclock_header(RD, Ctx)),
      Ctx}.
-
-%% @spec multipart_encode_body(string(), binary(), {dict(), binary()}) -> iolist()
-%% @doc Produce one part of a multipart body, representing one sibling
-%%      of a multi-valued document.
-multipart_encode_body(Prefix, Bucket, {MD, V}) ->
-    [{LHead, Links}] =
-        mochiweb_headers:to_list(
-          mochiweb_headers:make(
-            [{?HEAD_LINK, format_link(Prefix,Bucket)}|
-             [{?HEAD_LINK, format_link(Prefix,B,K,T)}
-              || {{B,K},T} <- case dict:find(?MD_LINKS, MD) of
-                                  {ok, Ls} -> Ls;
-                                  error -> []
-                              end]])),
-    [?HEAD_CTYPE, ": ",get_ctype(MD,V),
-     case dict:find(?MD_CHARSET, MD) of
-         {ok, CS} -> ["; charset=",CS];
-         error -> []
-     end,
-     "\r\n",
-     case dict:find(?MD_ENCODING, MD) of
-         {ok, Enc} -> [?HEAD_ENCODING,": ",Enc,"\r\n"];
-         error -> []
-     end,
-     LHead,": ",Links,"\r\n",
-     "Etag: ",dict:fetch(?MD_VTAG, MD),"\r\n",
-     "Last-Modified: ",
-     case dict:fetch(?MD_LASTMOD, MD) of
-         Now={_,_,_} ->
-             httpd_util:rfc1123_date(
-               calendar:now_to_local_time(Now));
-         Rfc1123 when is_list(Rfc1123) ->
-             Rfc1123
-     end,
-     "\r\n",
-     case dict:find(?MD_USERMETA, MD) of
-         {ok, M} ->
-            lists:foldl(fun({Hdr,Val},Acc) ->
-                            [Acc|[Hdr,": ",Val,"\r\n"]]
-                        end,
-                        [], M);
-         error -> []
-     end,
-     "\r\n",encode_value(V)].
 
 
 %% @spec select_doc(context()) -> {metadata(), value()}|multiple_choices
@@ -1140,12 +826,9 @@ delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C, rw=RW, r=R, w=W,
 %% @spec generate_etag(reqdata(), context()) ->
 %%          {undefined|string(), reqdata(), context()}
 %% @doc Get the etag for this resource.
-%%      Top-level and Bucket requests will have no etag.
 %%      Documents will have an etag equal to their vtag.  No etag will be
 %%      given for documents with siblings, if no sibling was chosen with the
 %%      vtag query param.
-generate_etag(RD, Ctx=#ctx{key=undefined}) ->
-    {undefined, RD, Ctx};
 generate_etag(RD, Ctx) ->
     case select_doc(Ctx) of
         {MD, _} ->
@@ -1157,12 +840,9 @@ generate_etag(RD, Ctx) ->
 %% @spec last_modified(reqdata(), context()) ->
 %%          {undefined|datetime(), reqdata(), context()}
 %% @doc Get the last-modified time for this resource.
-%%      Top-level and Bucket requests will have no last-modified time.
 %%      Documents will have the last-modified time specified by the riak_object.
 %%      No last-modified time will be given for documents with siblings, if no
 %%      sibling was chosen with the vtag query param.
-last_modified(RD, Ctx=#ctx{key=undefined}) ->
-    {undefined, RD, Ctx};
 last_modified(RD, Ctx) ->
     case select_doc(Ctx) of
         {MD, _} ->
@@ -1177,69 +857,72 @@ last_modified(RD, Ctx) ->
             {undefined, RD, Ctx}
     end.
 
-%% @spec add_container_link(reqdata(), context()) -> reqdata()
-%% @doc Add the Link header specifying the containing bucket of
-%%      the document to the response.
-add_container_link(RD, #ctx{prefix=Prefix, bucket=Bucket}) ->
-    Val = format_link(Prefix, Bucket),
-    wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
-
-%% @spec add_bucket_link(binary(), reqdata(), context()) -> reqdata()
-%% @doc Add the Link header pointing to a bucket
-add_bucket_link(Bucket, RD, #ctx{prefix=Prefix}) ->
-    Val = format_link(Prefix, Bucket, "contained"),
-    wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
-
-%% @spec add_link_head(binary(), binary(), binary(), reqdata(), context()) ->
-%%          reqdata()
-%% @doc Add a Link header specifying the given Bucket and Key
-%%      with the given Tag to the response.
-add_link_head(Bucket, Key, Tag, RD, #ctx{prefix=Prefix}) ->
-    Val = format_link(Prefix, Bucket, Key, Tag),
-    wrq:merge_resp_headers([{?HEAD_LINK,Val}], RD).
-
-%% @spec format_link(string(), binary()) -> string()
-%% @doc Produce the standard link header from an object up to its bucket.
-format_link(Prefix, Bucket) ->
-    format_link(Prefix, Bucket, "up").
-
-%% @spec format_link(string(), binary(), string()) -> string()
-%% @doc Format a Link header to a bucket.
-format_link(Prefix, Bucket, Tag) ->
-    io_lib:format("</~s/~s>; rel=\"~s\"",
-                  [Prefix,
-                   mochiweb_util:quote_plus(Bucket),
-                   Tag]).
-
-%% @spec format_link(string(), binary(), binary(), binary()) -> string()
-%% @doc Format a Link header to another document.
-format_link(Prefix, Bucket, Key, Tag) ->
-    io_lib:format("</~s/~s/~s>; riaktag=\"~s\"",
-                  [Prefix|
-                   [mochiweb_util:quote_plus(E) ||
-                       E <- [Bucket, Key, Tag] ]]).
-
 %% @spec get_link_heads(reqdata(), context()) -> [link()]
 %% @doc Extract the list of links from the Link request header.
 %%      This function will die if an invalid link header format
 %%      is found.
-get_link_heads(RD, #ctx{prefix=Prefix, bucket=B}) ->
-    case wrq:get_req_header(?HEAD_LINK, RD) of
-        undefined -> [];
-        Heads ->
-            BucketLink = lists:flatten(format_link(Prefix, B)),
-            {ok, Re} = re:compile("</([^/]+)/([^/]+)/([^/]+)>; ?riaktag=\"([^\"]+)\""),
-            lists:map(
-              fun(L) ->
-                      {match,[InPrefix,Bucket,Key,Tag]} =
-                          re:run(L, Re, [{capture,[1,2,3,4],binary}]),
-                      Prefix = binary_to_list(InPrefix),
-                      {{list_to_binary(mochiweb_util:unquote(Bucket)),
-                        list_to_binary(mochiweb_util:unquote(Key))},
-                       list_to_binary(mochiweb_util:unquote(Tag))}
-              end,
-              lists:delete(BucketLink, [string:strip(T) || T<- string:tokens(Heads, ",")]))
+get_link_heads(RD, Ctx) ->
+    APIVersion = Ctx#ctx.api_version,
+    Prefix = Ctx#ctx.prefix,
+    Bucket = Ctx#ctx.bucket,
+
+    %% Get a list of link headers...
+    LinkHeaders1 = 
+        case wrq:get_req_header(?HEAD_LINK, RD) of
+            undefined -> [];
+            Heads -> string:tokens(Heads, ",")
+        end,
+
+    %% Decode the link headers. Throw an exception if we can't
+    %% properly parse any of the headers...
+    {BucketLinks, KeyLinks} = 
+        case APIVersion of
+            1 ->
+                {ok, BucketRegex} = re:compile("</" ++ Prefix ++ "/([^/]+)>; ?rel=\"([^\"]+)\""),
+                {ok, KeyRegex} = re:compile("</" ++ Prefix ++ "/([^/]+)/([^/]+)>; ?riaktag=\"([^\"]+)\""),
+                extract_links(LinkHeaders1, BucketRegex, KeyRegex);
+            2 ->
+                {ok, BucketRegex} = re:compile("</buckets/([^/]+)>; ?rel=\"([^\"]+)\""),
+                {ok, KeyRegex} = re:compile("</buckets/([^/]+)/keys/([^/]+)>; ?riaktag=\"([^\"]+)\""),
+                extract_links(LinkHeaders1, BucketRegex, KeyRegex)
+        end,
+
+    %% Validate that the only bucket header is pointing to the parent
+    %% bucket...
+    IsValid = (BucketLinks == []) orelse (BucketLinks == [{Bucket, <<"up">>}]),
+    case IsValid of
+        true -> 
+            KeyLinks;
+        false ->
+            throw({invalid_link_headers, LinkHeaders1})
     end.
+        
+%% Run each LinkHeader string() through the BucketRegex and
+%% KeyRegex. Return {BucketLinks, KeyLinks}.
+extract_links(LinkHeaders, BucketRegex, KeyRegex) ->
+    %% Run each regex against each string...
+    extract_links_1(LinkHeaders, BucketRegex, KeyRegex, [], []).
+extract_links_1([LinkHeader|Rest], BucketRegex, KeyRegex, BucketAcc, KeyAcc) ->
+    case re:run(LinkHeader, BucketRegex, [{capture, all_but_first, list}]) of
+        {match, [Bucket, Tag]} ->
+            Bucket1 = list_to_binary(mochiweb_util:unquote(Bucket)),
+            Tag1 = list_to_binary(mochiweb_util:unquote(Tag)),
+            NewBucketAcc = [{Bucket1, Tag1}|BucketAcc],
+            extract_links_1(Rest, BucketRegex, KeyRegex, NewBucketAcc, KeyAcc);
+        nomatch ->
+            case re:run(LinkHeader, KeyRegex, [{capture, all_but_first, list}]) of
+                {match, [Bucket, Key, Tag]} ->
+                    Bucket1 = list_to_binary(mochiweb_util:unquote(Bucket)),
+                    Key1 = list_to_binary(mochiweb_util:unquote(Key)),
+                    Tag1 = list_to_binary(mochiweb_util:unquote(Tag)),
+                    NewKeyAcc = [{{Bucket1, Key1}, Tag1}|KeyAcc],
+                    extract_links_1(Rest, BucketRegex, KeyRegex, BucketAcc, NewKeyAcc);
+                nomatch ->
+                    throw({invalid_link_header, LinkHeader})
+            end
+    end;
+extract_links_1([], _BucketRegex, _KeyRegex, BucketAcc, KeyAcc) ->
+    {BucketAcc, KeyAcc}.
 
 %% @spec get_ctype(dict(), term()) -> string()
 %% @doc Work out the content type for this object - use the metadata if provided
@@ -1252,38 +935,6 @@ get_ctype(MD,V) ->
         error ->
             "application/x-erlang-binary"
     end.
-
-%% @spec encode_value(term()) -> binary()
-%% @doc Encode the object value as a binary - content type can be used
-%%      to decode
-encode_value(V) when is_binary(V) ->
-    V;
-encode_value(V) ->
-    term_to_binary(V).
-    
-%% @spec accept_value(string(), binary()) -> term()
-%% @doc Accept the object value as a binary - content type can be used
-%%      to decode
-accept_value("application/x-erlang-binary",V) ->
-    binary_to_term(V);
-accept_value(_Ctype, V) ->
-    V.
-
-any_to_list(V) when is_list(V) ->
-    V;
-any_to_list(V) when is_atom(V) ->
-    atom_to_list(V);
-any_to_list(V) when is_binary(V) ->
-    binary_to_list(V).
-
-any_to_bool(V) when is_list(V) ->
-    (V == "1") orelse (V == "true") orelse (V == "TRUE");
-any_to_bool(V) when is_binary(V) ->
-    any_to_bool(binary_to_list(V));
-any_to_bool(V) when is_integer(V) ->
-    V /= 0;
-any_to_bool(V) when is_boolean(V) ->
-    V.
 
 missing_content_type(RD) ->
     RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
