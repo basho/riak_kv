@@ -69,7 +69,7 @@ start(_Type, _StartArgs) ->
     StorageBackend = app_helper:get_env(riak_kv, storage_backend),
     case code:ensure_loaded(StorageBackend) of
         {error,nofile} ->
-            error_logger:error_msg("storage_backend ~p is non-loadable.\n",
+            lager:critical("storage_backend ~p is non-loadable.",
                                    [StorageBackend]),
             throw({error, invalid_storage_backend});
         _ ->
@@ -118,8 +118,8 @@ check_epoch() ->
             ok;
         N ->
             Epoch = calendar:gregorian_seconds_to_datetime(N),
-            error_logger:error_msg("Riak expects your system's epoch to be Jan 1, 1970,~n"
-                                   "but your system says the epoch is ~p~n", [Epoch]),
+            lager:error("Riak expects your system's epoch to be Jan 1, 1970,"
+                "but your system says the epoch is ~p", [Epoch]),
             ok
     end.
 

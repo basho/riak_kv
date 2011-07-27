@@ -150,7 +150,7 @@ reduce_identity(List, _) ->
                 [[Bucket, Key]|Acc];
            (Other, _Acc) ->
                 %% Fail loudly on anything unexpected.
-                error_logger:error_msg("Unhandled entry: ~p~n", [Other]),
+                lager:error("Unhandled entry: ~p", [Other]),
                 throw({unhandled_entry, Other})
         end,
     lists:foldl(F, [], List).

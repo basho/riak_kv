@@ -43,7 +43,7 @@ join([NodeStr]) ->
         end
     catch
         Exception:Reason ->
-            log_to_riak_node("Join failed ~p:~p~n", [Exception,
+            lager:error("Join failed ~p:~p", [Exception,
                     Reason]),
             io:format("Join failed, see log for details~n"),
             error
@@ -72,7 +72,7 @@ remove_node(Node) when is_atom(Node) ->
         end
     catch
         Exception:Reason ->
-            log_to_riak_node("Leave failed ~p:~p~n", [Exception,
+            lager:error("Leave failed ~p:~p", [Exception,
                     Reason]),
             io:format("Leave failed, see log for details~n"),
             error
@@ -93,7 +93,7 @@ status([]) ->
         end
     catch
         Exception:Reason ->
-            log_to_riak_node("Status failed ~p:~p~n", [Exception,
+            lager:error("Status failed ~p:~p", [Exception,
                     Reason]),
             io:format("Status failed, see log for details~n"),
             error
@@ -120,7 +120,7 @@ reip([OldNode, NewNode]) ->
             [element(2, riak_core_ring_manager:find_latest_ringfile())])
     catch
         Exception:Reason ->
-            log_to_riak_node("Reip failed ~p:~p~n", [Exception,
+            lager:error("Reip failed ~p:~p", [Exception,
                     Reason]),
             io:format("Reip failed, see log for details~n"),
             error
@@ -142,7 +142,7 @@ ringready([]) ->
         end
     catch
         Exception:Reason ->
-            log_to_riak_node("Ringready failed ~p:~p~n", [Exception,
+            lager:error("Ringready failed ~p:~p", [Exception,
                     Reason]),
             io:format("Ringready failed, see log for details~n"),
             error
@@ -174,7 +174,7 @@ transfers([]) ->
         end
     catch
         Exception:Reason ->
-            log_to_riak_node("Transfers failed ~p:~p~n", [Exception,
+            lager:error("Transfers failed ~p:~p", [Exception,
                     Reason]),
             io:format("Transfers failed, see log for details~n"),
             error
@@ -197,7 +197,7 @@ cluster_info([OutFile|Rest]) ->
         error:{badmatch, {error, enotdir}} ->
             io:format("Cluster_info failed, not a directory ~p~n", [filename:dirname(OutFile)]);
         Exception:Reason ->
-            log_to_riak_node("Cluster_info failed ~p:~p~n",
+            lager:error("Cluster_info failed ~p:~p",
                 [Exception, Reason]),
             io:format("Cluster_info failed, see log for details~n"),
             error
@@ -219,15 +219,3 @@ atomify_nodestrs(Strs) ->
                                          Acc
                                      end
                 end, [], Strs).
-
-%% This function changes the group leader around a call to error_logger. The
-%% reason this code is needed is that when these functions are called via
-%% rpc:call, the group leader is on the node making the rpc call, in the case
-%% of riak-admin, this is nodetool running as an escript. Since nodetool has
-%% error logging configured, this makes sure that the log message ends up in
-%% riaks's log like we want.
-log_to_riak_node(Format, Args) ->
-    GL = erlang:group_leader(),
-    erlang:group_leader(whereis(user), self()),
-    error_logger:error_msg(Format, Args),
-    erlang:group_leader(GL, self()).

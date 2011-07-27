@@ -43,7 +43,7 @@ service_available(RD, State) ->
         {ok, Client} ->
             {true, RD, #state{client=Client}};
         Error ->
-            error_logger:error_report(Error),
+            lager:error("~s", Error),
             {false, RD, State}
     end.
 

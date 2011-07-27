@@ -495,7 +495,7 @@ decode_precommit({erlang, {Mod, Fun}, Result}) ->
             {fail, _Reason} ->
                 Result;
             {'EXIT',  Mod, Fun, Class, Exception} ->
-                error_logger:error_msg("problem invoking hook ~p:~p -> ~p:~p~n~p~n",
+                lager:error("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
                                        [Mod,Fun,Class,Exception,
                                         erlang:get_stacktrace()]),
                 {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
@@ -520,7 +520,7 @@ decode_precommit({js, JSName, Result}) ->
                     Obj
             end;
         {error, Error} ->
-            error_logger:error_msg("Error executing pre-commit hook: ~s",
+            lager:error("Error executing pre-commit hook: ~p",
                                    [Error]),
             fail
     end;
