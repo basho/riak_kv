@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_keys_fsm: listing of bucket keys
+%% riak_index_fsm: Manage secondary index queries.
 %%
 %% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -20,11 +20,11 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc The keys fsm manages the listing of bucket keys.
+%% @doc The index fsm manages the execution of secondary index queries.
 %%
-%%      The keys fsm creates a plan to achieve coverage
-%%      of all keys from the cluster using the minimum
-%%      possible number of VNodes, sends key listing
+%%      The index fsm creates a plan to achieve coverage
+%%      of the cluster using the minimum
+%%      possible number of VNodes, sends index query
 %%      commands to each of those VNodes, and compiles the
 %%      responses.
 %%
@@ -33,7 +33,7 @@
 %%      of partitions, the number of available physical
 %%      nodes, and the bucket n_val.
 
--module(riak_kv_keys_fsm).
+-module(riak_kv_index_fsm).
 
 -behaviour(riak_core_coverage_fsm).
 
@@ -53,7 +53,7 @@
 %% the number of primary preflist vnodes the operation
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
-init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout, ClientType]) ->
+init(From={_, _, ClientPid}, [Bucket, ItemFilter, Query, Timeout, ClientType]) ->
     case ClientType of
         %% Link to the mapred job so we die if the job dies
         mapred ->
@@ -65,20 +65,21 @@ init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout, ClientType]) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
     %% Construct the key listing request
-    Req = ?KV_LISTKEYS_REQ{bucket=Bucket,
-                           item_filter=ItemFilter},
+    Req = ?KV_INDEX_REQ{bucket=Bucket,
+                        item_filter=ItemFilter,
+                        qry=Query},
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
-process_results({results, {Bucket, Keys}},
+process_results({results, {Bucket, Results}},
                 StateData=#state{client_type=ClientType,
                                  from={raw, ReqId, ClientPid}}) ->
-    process_keys(ClientType, Bucket, Keys, ReqId, ClientPid),
+    process_query_results(ClientType, Bucket, Results, ReqId, ClientPid),
     {ok, StateData};
-process_results({final_results, {Bucket, Keys}},
+process_results({final_results, {Bucket, Results}},
                 StateData=#state{client_type=ClientType,
                                  from={raw, ReqId, ClientPid}}) ->
-    process_keys(ClientType, Bucket, Keys, ReqId, ClientPid),
+    process_query_results(ClientType, Bucket, Results, ReqId, ClientPid),
     {done, StateData}.
 
 finish({error, Error},
@@ -111,11 +112,11 @@ finish(clean,
 %% Internal functions
 %% ===================================================================
 
-process_keys(plain, _Bucket, Keys, ReqId, ClientPid) ->
-    ClientPid ! {ReqId, {keys, Keys}};
-process_keys(mapred, Bucket, Keys, _ReqId, ClientPid) ->
+process_query_results(plain, _Bucket, Results, ReqId, ClientPid) ->
+    ClientPid ! {ReqId, {results, Results}};
+process_query_results(mapred, Bucket, Results, _ReqId, ClientPid) ->
     try
-        luke_flow:add_inputs(ClientPid, [{Bucket, Key} || Key <- Keys])
+        luke_flow:add_inputs(ClientPid, [{Bucket, Result} || Result <- Results])
     catch _:_ ->
             exit(self(), normal)
     end.

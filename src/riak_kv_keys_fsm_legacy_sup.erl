@@ -1,6 +1,7 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_keys_fsm_sup: supervise the riak_kv keys state machines.
+%% riak_kv_keys_fsm_legacy_sup: supervise the legacy riak_kv keys 
+%% state machines.
 %%
 %% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -20,9 +21,9 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc supervise the riak_kv keys state machines
+%% @doc supervise the legacy riak_kv keys state machines
 
--module(riak_kv_keys_fsm_sup).
+-module(riak_kv_keys_fsm_legacy_sup).
 
 -behaviour(supervisor).
 
@@ -42,7 +43,7 @@ start_link() ->
 %% @doc supervisor callback.
 init([]) ->
     KeysFsmSpec = {undefined,
-               {riak_core_coverage_fsm, start_link, [riak_kv_keys_fsm]},
-               temporary, 5000, worker, [riak_kv_keys_fsm]},
+               {riak_kv_keys_fsm_legacy, start_link, []},
+               temporary, 5000, worker, [riak_kv_keys_fsm_legacy]},
 
     {ok, {{simple_one_for_one, 10, 10}, [KeysFsmSpec]}}.
