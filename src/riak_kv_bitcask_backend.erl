@@ -163,31 +163,17 @@ fold_buckets(FoldBucketsFun, Acc, #state{ref=Ref}) ->
                 FoldBucketsFun(Bucket, Acc1) end,
     bitcask:fold_keys(Ref, FoldFun, Acc).
 
-%% @doc Fold over all the keys for a bucket. If the
-%% fold function is `none' just list all of the keys.
-fold_keys(none, Acc, Opts, State) ->
-    case proplists:get_value(bucket, Opts) of
-        undefined ->
-            list_keys(State);
-        Bucket ->
-            list_keys(Bucket, Acc, State)
-    end;
+%% @doc Fold over all the keys for one or all buckets.
+%% If the fold function is `none' just list the keys.
 fold_keys(FoldKeysFun, Acc, Opts, #state{ref=Ref}) ->
-    case proplists:get_value(bucket, Opts) of
-        undefined ->
-            FoldFun = fun(#bitcask_entry{key=BK}, Acc1) ->
-                              {B, Key} = binary_to_term(BK),
-                              FoldKeysFun(B, Key, Acc1)
-                      end;
-        Bucket ->
-            FoldFun = fun(#bitcask_entry{key=BK}, Acc1) ->
-                              {B, Key} = binary_to_term(BK),
-                              if B =:= Bucket ->
-                                      FoldKeysFun(B, Key, Acc1);
-                                 true ->
-                                      Acc1
-                              end
-                      end
+    Bucket =  proplists:get_value(bucket, Opts),
+    BufferSize = proplists:get_value(buffer_size, Opts),
+    BufferFun = proplists:get_value(buffer_fun, Opts),
+    case FoldKeysFun of
+        none ->
+            FoldFun = list_keys_fun(Bucket, BufferSize, BufferFun);
+        _ ->
+            FoldFun = fold_keys_fun(FoldKeysFun, Bucket, BufferSize, BufferFun)
     end,
     bitcask:fold_keys(Ref, FoldFun, Acc).
 
@@ -295,54 +281,102 @@ key_counts(RootDir) ->
 %% ===================================================================
 
 %% @private
-%% Filter the keys for a bucket on this backend
-%% filter_bucket_keys(Bucket, Fun, Acc, #state{ref=Ref}) ->
-%%     FoldFun = 
-%%         fun(#bitcask_entry{key=BK}) ->
-%%                 {B, K} = binary_to_term(BK),
-%% 		case (B =:= Bucket) andalso Fun(K) of
-%% 		    true ->
-%% 			[K | Acc];
-%% 		    false ->
-%%                         Acc
-%%                 end
-%%         end,
-%%     bitcask:fold_keys(Ref, FoldFun, []).
-
-%% @private
 %% List the buckets on this backend
 list_buckets(Acc, #state{ref=Ref}) ->
     FoldFun = 
-        fun(#bitcask_entry{key=BK}) ->
+        fun(#bitcask_entry{key=BK}, Acc1) ->
                 {B, _} = binary_to_term(BK),
-                case lists:member(B, Acc) of
-                    true -> Acc;
-                    false -> [B | Acc]
+                case lists:member(B, Acc1) of
+                    true -> Acc1;
+                    false -> [B | Acc1]
                 end
         end,
-    bitcask:fold_keys(Ref, FoldFun, []).
+    bitcask:fold_keys(Ref, FoldFun, Acc).
 
 %% @private
-%% List the keys for a bucket on this backend
-list_keys(Bucket, Acc, #state{ref=Ref}) ->
-    FoldFun = 
-        fun(#bitcask_entry{key=BK}) ->
+%% Return a function to list keys on this backend
+list_keys_fun(undefined, undefined, _) ->
+    fun(#bitcask_entry{key=BK}, Acc1) ->
+            [binary_to_term(BK) | Acc1]
+    end;
+list_keys_fun(undefined, BufferSize, BufferFun) ->
+    fun(#bitcask_entry{key=BK}, Acc1) ->
+            Acc2 = [binary_to_term(BK) | Acc1],
+            if length(Acc2) =:= BufferSize ->
+                    BufferFun(Acc2),
+                    [];
+               true ->
+                    Acc2
+            end
+    end;
+list_keys_fun(Bucket, undefined, _) ->
+    fun(#bitcask_entry{key=BK}, Acc1) ->
+            {B, K} = binary_to_term(BK),
+            case B of
+                Bucket ->
+                    [K | Acc1];
+                _ ->
+                    Acc1
+            end
+    end;
+list_keys_fun(Bucket, BufferSize, BufferFun) ->
+        fun(#bitcask_entry{key=BK}, Acc1) ->
                 {B, K} = binary_to_term(BK),
                 case B of
-                    Bucket -> [K | Acc];
-                    _ -> Acc
+                    Bucket -> 
+                        Acc2 = [K | Acc1],
+                        if length(Acc2) =:= BufferSize ->
+                                BufferFun(Acc2),
+                                [];
+                           true ->
+                                Acc2
+                        end;
+                    _ ->
+                        Acc1
                 end
-        end,
-    bitcask:fold_keys(Ref, FoldFun, []).
+        end.
 
 %% @private
-%% List all keys stored by this backend
-list_keys(#state{ref=Ref}) ->
-    case bitcask:list_keys(Ref) of
-        KeyList when is_list(KeyList) ->
-            [binary_to_term(K) || K <- KeyList];
-        Other ->
-            Other
+%% Return a function to fold over keys on this backend
+fold_keys_fun(FoldKeysFun, undefined, undefined, _) ->
+    fun(#bitcask_entry{key=BK}, Acc1) ->
+            {B, Key} = binary_to_term(BK),
+            FoldKeysFun(B, Key, Acc1)
+    end;
+fold_keys_fun(FoldKeysFun, undefined, BufferSize, BufferFun) ->
+    fun(#bitcask_entry{key=BK}, Acc1) ->
+            {B, Key} = binary_to_term(BK),
+            Acc2 = FoldKeysFun(B, Key, Acc1),
+            if length(Acc2) =:= BufferSize ->
+                    BufferFun(Acc2),
+                    [];
+               true ->
+                    Acc2
+            end
+    end;
+fold_keys_fun(FoldKeysFun, Bucket, undefined, _) ->
+    fun(#bitcask_entry{key=BK}, Acc1) ->
+            {B, Key} = binary_to_term(BK),
+            if B =:= Bucket ->
+                    FoldKeysFun(B, Key, Acc1);                    
+               true ->
+                    Acc1
+            end
+    end;
+fold_keys_fun(FoldKeysFun, Bucket, BufferSize, BufferFun) ->
+    fun(#bitcask_entry{key=BK}, Acc1) ->
+            {B, Key} = binary_to_term(BK),
+            if B =:= Bucket ->
+                    Acc2 = FoldKeysFun(B, Key, Acc1),
+                    if length(Acc2) =:= BufferSize ->
+                            BufferFun(Acc2),
+                            [];
+                       true ->
+                            Acc2
+                    end;
+               true ->
+                    Acc1
+            end
     end.
 
 %% @private
