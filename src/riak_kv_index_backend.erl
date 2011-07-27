@@ -185,8 +185,30 @@ fold_index(#state {index_mod = IndexMod,
     %% Update riak_kv_stat...
     riak_kv_stat:update(vnode_index_read),    
 
+    %% This is needs discussion. Our design notes call for results to
+    %% feed into SKFun using {sk, SecondaryKey, PrimaryKey}, but this
+    %% doesn't account for Properties. We also need to add a clause
+    %% for when we reach the limit.
+    SKFun = fun({results, Results1}, Acc1) ->
+                    {ok, Results1 ++ Acc1};
+               ({error, Reason}, _Acc1) ->
+                    {error, Reason};
+               (done, Acc1) ->
+                    {ok, Acc1}
+            end,
+
+    %% Also, for this round of changes, FinalFun is going to just
+    %% return the output of SKFun. Normally, this would call
+    %% riak_core_vnode:reply/N. Here, we just transform the list of
+    %% results from [{Key, Props}] to [Key].
+    FinalFun = fun({error, Reason}, _Acc1) ->
+                       {error, Reason};
+                  (done, Acc1) ->
+                       [K || {K, _} <- Acc1]
+               end,
+
     %% Call fold_index on the Index backend
-    IndexMod:fold_index(IndexState, Bucket, Query, []).
+    IndexMod:fold_index(IndexState, Bucket, Query, SKFun, [], FinalFun).
 
 %% @spec fold_bucket_keys(state(), binary(), function(), term()) -> [Key :: binary()].
 %%
