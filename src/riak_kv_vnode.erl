@@ -489,7 +489,12 @@ do_get_binary({Bucket, Key}, Mod, ModState) ->
 
 %% @private
 list_buckets(Sender, Filter, Mod, ModState) ->
-    Buckets = Mod:fold_buckets(Filter, [], ModState),
+    BufferFun = fun(Results) ->
+                        riak_core_vnode:reply(Sender, {results, Results})
+                end,
+    Opts = [{buffer_size, 1000},
+            {buffer_fun, BufferFun}],
+    Buckets = Mod:fold_buckets(Filter, [], Opts, ModState),
     riak_core_vnode:reply(Sender, {final_results, Buckets}).
 
 %% @private
@@ -502,12 +507,12 @@ list_keys(Sender, Bucket, Filter, Mod, ModState) ->
                                   Filter(Key, Acc)
                           end
     end,
-    KeyBufferFun = fun(Keys) ->
-                           riak_core_vnode:reply(Sender, {results, {Bucket, Keys}})
-                   end,
+    BufferFun = fun(Results) ->
+                        riak_core_vnode:reply(Sender, {results, {Bucket, Results}})
+                end,
     Opts = [{bucket, Bucket},
             {buffer_size, 100},
-            {buffer_fun, KeyBufferFun}],
+            {buffer_fun, BufferFun}],
     Keys = Mod:fold_keys(FoldKeysFun,
                          [],
                          Opts,
