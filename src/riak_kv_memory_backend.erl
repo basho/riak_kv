@@ -174,15 +174,14 @@ is_empty(State) ->
 %% @doc Delete all objects from this memory backend
 drop(State) ->
     gen_server:call(State, drop).
+
+%% @doc Get the status information for this memory backend
+status(State) ->
+    gen_server:call(State, status).
     
 %% @doc Register an asynchronous callback
 callback(_Ref, _Msg, _State) ->
     ok.
-
-%% @doc Get the status information for this memory backend
-status(_State) ->
-    ok.
-
 
 %% gen_server API
 
@@ -220,11 +219,13 @@ handle_call({fold_objects, FoldObjectsFun, Acc}, _From, #state{ref=Ref}=State) -
     {reply, srv_fold_objects(FoldObjectsFun, Acc, Ref), State};
 handle_call({fold_objects, FoldObjectsFun, Bucket, Acc}, _From, #state{ref=Ref}=State) ->
     {reply, srv_fold_objects(FoldObjectsFun, Bucket, Acc, Ref), State};
-handle_call(is_empty, _From, #state{ref=Ref}=State) ->
-    {reply, ets:info(Ref, size) =:= 0, State};
 handle_call(drop, _From, #state{ref=Ref}=State) -> 
     ets:delete(Ref),
-    {reply, ok, State}.
+    {reply, ok, State};
+handle_call(is_empty, _From, #state{ref=Ref}=State) ->
+    {reply, ets:info(Ref, size) =:= 0, State};
+handle_call(status, _From, #state{ref=Ref}=State) ->
+    {reply, ets:info(Ref), State}.
 
 %% @private
 handle_cast(_, State) -> {noreply, State}.
