@@ -592,7 +592,7 @@ index_query(Sender, Bucket, Query, Filter, Mod, ModState) ->
         _ ->
             FilteredResults = lists:foldl(Filter, [], QueryResults),
             riak_core_vnode:reply(Sender, {final_results, {Bucket, FilteredResults}})
-    end.    
+    end.
 
 %% @private
 do_delete(BKey, Mod, ModState) ->
