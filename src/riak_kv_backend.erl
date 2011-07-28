@@ -37,7 +37,8 @@ behaviour_info(callbacks) ->
      {put,4},         % (Bucket, Key, Val, State)
      {delete,3},      % (Bucket, Key, State)
      {drop,1},        % (State)
-     {fold_buckets,3},% (FoldBucketsFun, Acc, State), FoldBucketsFun(Bucket, Acc)
+     {fold_buckets,4},% (FoldBucketsFun, Acc, Oopts, State), 
+                      %   FoldBucketsFun(Bucket, Acc)
      {fold_keys,4},   % (FoldKeysFun, Acc, Opts, State), 
                       %   FoldKeysFun(Bucket, Key, Acc)
      {fold_objects,4},% (FoldObjectsFun, Acc, Opts, State), 
