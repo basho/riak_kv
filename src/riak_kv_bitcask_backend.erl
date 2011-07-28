@@ -52,19 +52,6 @@
 
 -define(MERGE_CHECK_INTERVAL, timer:minutes(3)).
 -define(API_VERSION, 1).
--define(CAPABILITIES, [api_version,
-                       start,
-                       stop,
-                       get,
-                       put,
-                       delete,
-                       drop,
-                       fold_buckets,
-                       fold_keys,
-                       fold_objects,
-                       is_empty,
-                       status,
-                       callback]).
 
 -record(state, {ref :: reference(),
                 root :: string()}).
@@ -76,7 +63,7 @@
 %% @doc Return the major version of the
 %% current API and a capabilities list.
 api_version() ->
-    {?API_VERSION, ?CAPABILITIES}.
+    {?API_VERSION, riak_kv_backend:api_capabilities(?API_VERSION)}.
 
 %% @doc Start the bitcask backend
 start(Partition, Config) ->
