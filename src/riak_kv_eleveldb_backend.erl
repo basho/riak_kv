@@ -31,7 +31,7 @@
          put/4,
          delete/3,
          drop/1,
-         fold_buckets/3,
+         fold_buckets/4,
          fold_keys/4,
          fold_objects/4,
          is_empty/1,
@@ -43,19 +43,6 @@
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [api_version,
-                       start,
-                       stop,
-                       get,
-                       put,
-                       delete,
-                       drop,
-                       fold_buckets,
-                       fold_keys,
-                       fold_objects,
-                       is_empty,
-                       status,
-                       callback]).
 
 -record(state, {ref :: reference(),
                 data_root :: string(),
@@ -70,7 +57,7 @@
 %% @doc Return the major version of the 
 %% current API and a capabilities list.
 api_version() ->
-    {?API_VERSION, ?CAPABILITIES}.
+    {?API_VERSION, riak_kv_backend:api_capabilities(?API_VERSION)}.
 
 %% @doc Start the eleveldb backend
 start(Partition, Config) ->
@@ -116,156 +103,55 @@ delete(Bucket, Key, #state{ref=Ref}=State) ->
 
 %% @doc Fold over all the buckets. If the fold
 %% function is `none' just list all of the buckets.
-fold_buckets(none, Acc, #state{fold_opts=FoldOpts,
-                               ref=Ref}) ->
-    FoldFun = fun(BK, Acc1) ->
-                      {B, _} = sext:decode(BK),
-                      [B | Acc1]
-              end,
-    eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts);
-fold_buckets(FoldBucketsFun, Acc, #state{fold_opts=FoldOpts,
+fold_buckets(FoldBucketsFun, Acc, Opts, #state{fold_opts=FoldOpts,
                                          ref=Ref}) ->
-    %% Apply a fold across all buckets/keys and values
-    FoldFun = fun(BK, Acc1) ->
-                      {B, _} = sext:decode(BK),
-                      FoldBucketsFun(B, Acc1)
-              end,
+    BufferSize = proplists:get_value(buffer_size, Opts),
+    BufferFun = proplists:get_value(buffer_fun, Opts),
+    case FoldBucketsFun of
+        none ->
+            FoldFun = list_buckets_fun(BufferSize, BufferFun);
+        _ ->
+            FoldFun = fold_buckets_fun(FoldBucketsFun, BufferSize, BufferFun)
+    end,
     eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts).
 
-%% @doc Fold over all the keys for a bucket. If the
-%% fold function is `none' just list all of the keys.
-fold_keys(none, Acc, Opts, #state{fold_opts=FoldOpts,
-                                  ref=Ref}) ->
-    case proplists:get_value(bucket, Opts) of
-        undefined -> % Return a list of all keys in all buckets
-            FoldFun = fun(BK, Acc1) -> 
-                              [sext:decode(BK) | Acc1]
-                      end,
-            FoldOpts1 = FoldOpts;
-        Bucket -> % Return a list of all keys in the specified bucket
-            %% Encode the initial bkey so we can start listing from that point
-            BKey0 = sext:encode({Bucket, <<>>}),
-
-            FoldFun = fun(BK, Acc1) -> 
-                              {B, K} = sext:decode(BK),
-                              %% Take advantage of the fact that sext-encoding ensures all
-                              %% keys in a bucket occur sequentially. Once we encounter a
-                              %% different bucket, the fold is complete
-                              if B =:= Bucket ->
-                                      [{B, K} | Acc1];
-                                 true ->
-                                      throw({break, Acc1})
-                              end
-                      end,
-            FoldOpts1 = [{first_key, BKey0} | FoldOpts]
-    end,
-    try
-        eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
-    catch
-        {break, AccFinal} ->
-            AccFinal
-    end;
-fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
+%% @doc Fold over all the keys for one or all buckets.
+%% If the fold function is `none' just list the keys.
+fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
                                          ref=Ref}) ->
-    case proplists:get_value(bucket, Opts) of
-        undefined ->
-            %% Apply a fold across the keys in all buckets
-            FoldFun = fun(BK, Acc1) ->
-                              {B, K} = sext:decode(BK),
-                              FoldKeysFun(B, K, Acc1)
-                      end,
-            FoldOpts1 = FoldOpts;
-        Bucket ->
-            %% Encode the initial bkey so we can start listing from that point
-            BKey0 = sext:encode({Bucket, <<>>}),
-
-            %% Apply a fold across just the keys in a single bucket
-            FoldFun = fun(BK, Acc1) ->
-                              {B, K} = sext:decode(BK),
-                              %% Take advantage of the fact that sext-encoding ensures all
-                              %% keys in a bucket occur sequentially. Once we encounter a
-                              %% different bucket, the fold is complete
-                              if B =:= Bucket ->
-                                      FoldKeysFun(B, K, Acc1);
-                                 true ->
-                                      throw({break, Acc1})
-                              end
-                      end,
-            FoldOpts1 = [{first_key, BKey0} | FoldOpts]
+    Bucket =  proplists:get_value(bucket, Opts),
+    BufferSize = proplists:get_value(buffer_size, Opts),
+    BufferFun = proplists:get_value(buffer_fun, Opts),
+    FoldOpts = fold_opts(Bucket, FoldOpts1),
+    case FoldKeysFun of
+        none ->
+            FoldFun = list_keys_fun(Bucket, BufferSize, BufferFun);
+        _ ->
+            FoldFun = fold_keys_fun(FoldKeysFun, Bucket, BufferSize, BufferFun)
     end,
     try
-        eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
+        eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts)
     catch
         {break, AccFinal} ->
             AccFinal
     end.
 
-%% @doc Fold over all the objects for a bucket. If the
-%% fold function is `none' just list all of the objects.
-fold_objects(none, Acc, Opts, #state{fold_opts=FoldOpts,
-                                      ref=Ref}) ->
-    case proplists:get_value(bucket, Opts) of
-        undefined ->
-            %% List all keys and values for all buckets
-            FoldFun = fun({BK, Value}, Acc1) ->
-                              {Bucket, Key} = sext:decode(BK),
-                              [{{Bucket, Key}, Value} |  Acc1]
-                      end,
-            FoldOpts1 = FoldOpts;
-        Bucket ->
-            %% Encode the initial bkey so we can start listing from that point
-            BKey0 = sext:encode({Bucket, <<>>}),
-
-            %% Apply a fold across just the keys in a single bucket
-            FoldFun = fun({BK, Value}, Acc1) ->
-                              {B, K} = sext:decode(BK),
-                              %% Take advantage of the fact that sext-encoding ensures all
-                              %% keys in a bucket occur sequentially. Once we encounter a
-                              %% different bucket, the fold is complete
-                              if B =:= Bucket ->
-                                      [{{B, K}, Value} |  Acc1];
-                                 true ->
-                                      throw({break, Acc1})
-                              end
-                      end,
-            FoldOpts1 = [{first_key, BKey0} | FoldOpts]
-    end,
-    try
-        eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
-    catch
-        {break, AccFinal} ->
-            AccFinal
-    end;
-fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
+%% @doc Fold over all the objects for one or all buckets.
+%% If the fold function is `none' just list the objects.
+fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts1,
                                                ref=Ref}) ->
-    case proplists:get_value(bucket, Opts) of
-        undefined ->
-            %% Apply a fold across the keys in all buckets
-            FoldFun = fun({BK, Value}, Acc1) ->
-                              {B, K} = sext:decode(BK),
-                              FoldObjectsFun(B, K, Value, Acc1)
-                      end,
-            FoldOpts1 = FoldOpts;
-        Bucket ->
-            %% Encode the initial bkey so we can start listing from that point
-            BKey0 = sext:encode({Bucket, <<>>}),
-
-            %% Apply a fold across just the keys in a single bucket
-            FoldFun = fun({BK, Value}, Acc1) ->
-                              {B, K} = sext:decode(BK),
-                              %% Take advantage of the fact that sext-encoding ensures all
-                              %% keys in a bucket occur sequentially. Once we encounter a
-                              %% different bucket, the fold is complete
-                              if B =:= Bucket ->
-                                      FoldObjectsFun(B, K, Value, Acc1);
-                                 true ->
-                                      throw({break, Acc1})
-                              end
-                      end,
-            FoldOpts1 =   [{first_key, BKey0} | FoldOpts]
+    Bucket =  proplists:get_value(bucket, Opts),
+    BufferSize = proplists:get_value(buffer_size, Opts),
+    BufferFun = proplists:get_value(buffer_fun, Opts),
+    FoldOpts = fold_opts(Bucket, FoldOpts1),
+    case FoldObjectsFun of
+        none ->
+            FoldFun = list_objects_fun(Bucket, BufferSize, BufferFun);
+        _ ->
+            FoldFun = fold_objects_fun(FoldObjectsFun, Bucket, BufferSize, BufferFun)
     end,
     try
-        eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
+        eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts)
     catch
         {break, AccFinal} ->
             AccFinal
@@ -293,6 +179,7 @@ status(#state{data_root=DataRoot}) ->
 %% Internal functions
 %% ===================================================================
 
+%% @private
 config_value(Key, Config) ->
     case proplists:get_value(Key, Config) of
         undefined ->
@@ -301,6 +188,199 @@ config_value(Key, Config) ->
             Value
     end.
 
+%% @private
+%% Return a function to list the buckets on this backend
+list_buckets_fun(undefined, _) ->
+    fun(BK, Acc) ->
+            {Bucket, _} = sext:decode(BK),
+            lists:usort([Bucket | Acc])
+    end;
+list_buckets_fun(BufferSize, BufferFun) ->
+    fun(BK, Acc) ->
+            {Bucket, _} = sext:decode(BK),
+            Acc1 = lists:usort([Bucket | Acc]),
+            buffer(BufferSize, BufferFun, Acc1)
+    end.
+
+%% @private
+%% Return a function to fold over the buckets on this backend
+fold_buckets_fun(FoldBucketsFun, undefined, _) ->
+    fun(BK, Acc1) ->
+            {Bucket, _} = sext:decode(BK),
+            FoldBucketsFun(Bucket, Acc1)
+    end;
+fold_buckets_fun(FoldBucketsFun, BufferSize, BufferFun) ->
+    fun(BK, Acc) ->
+            {Bucket, _} = sext:decode(BK),
+            Acc1 = FoldBucketsFun(Bucket, Acc),
+            buffer(BufferSize, BufferFun, Acc1)
+    end.
+
+%% @private
+%% Return a function to list keys on this backend
+list_keys_fun(undefined, undefined, _) ->
+    fun(BK, Acc) -> 
+            [sext:decode(BK) | Acc]
+    end;
+list_keys_fun(undefined, BufferSize, BufferFun) ->
+    fun(BK, Acc) -> 
+            Acc1 = [sext:decode(BK) | Acc],
+            buffer(BufferSize, BufferFun, Acc1)
+    end;
+list_keys_fun(Bucket, undefined, _) ->
+    fun(BK, Acc) -> 
+            {B, K} = sext:decode(BK),
+            %% Take advantage of the fact that sext-encoding ensures all
+            %% keys in a bucket occur sequentially. Once we encounter a
+            %% different bucket, the fold is complete
+            if B =:= Bucket ->
+                    [{B, K} | Acc];
+               true ->
+                    throw({break, Acc})
+            end
+    end;
+list_keys_fun(Bucket, BufferSize, BufferFun) ->
+    fun(BK, Acc) -> 
+            {B, K} = sext:decode(BK),
+            %% Take advantage of the fact that sext-encoding ensures all
+            %% keys in a bucket occur sequentially. Once we encounter a
+            %% different bucket, the fold is complete
+            if B =:= Bucket ->
+                    Acc1 = [{B, K} | Acc],
+                    buffer(BufferSize, BufferFun, Acc1);
+               true ->
+                    throw({break, Acc})
+            end
+    end.
+
+%% @private
+%% Return a function to fold over keys on this backend
+fold_keys_fun(FoldKeysFun, undefined, undefined, _) ->
+    fun(BK, Acc) -> 
+            {Bucket, Key} = sext:decode(BK),
+            FoldKeysFun(Bucket, Key, Acc)
+    end;
+fold_keys_fun(FoldKeysFun, undefined, BufferSize, BufferFun) ->
+    fun(BK, Acc) -> 
+            {Bucket, Key} = sext:decode(BK),
+            Acc1 = FoldKeysFun(Bucket, Key, Acc),
+            buffer(BufferSize, BufferFun, Acc1)            
+    end;
+fold_keys_fun(FoldKeysFun, Bucket, undefined, _) ->
+    fun(BK, Acc) -> 
+            {B, Key} = sext:decode(BK),
+            if B =:= Bucket ->
+                    FoldKeysFun(B, Key, Acc);
+               true ->
+                    Acc
+            end
+    end;
+fold_keys_fun(FoldKeysFun, Bucket, BufferSize, BufferFun) ->
+    fun(BK, Acc) -> 
+            {B, Key} = sext:decode(BK),
+            if B =:= Bucket ->
+                    Acc1 = FoldKeysFun(B, Key, Acc),
+                    buffer(BufferSize, BufferFun, Acc1);
+               true ->
+                    Acc
+            end
+    end.
+
+%% @private
+%% Return a function to list the objects
+%% stored by this backend
+list_objects_fun(undefined, undefined, _) ->
+    fun({BK, Value}, Acc) ->
+            {Bucket, Key} = sext:decode(BK),
+            [{{Bucket, Key}, Value} | Acc]
+    end;
+list_objects_fun(undefined, BufferSize, BufferFun) ->
+    fun({BK, Value}, Acc) ->
+            {Bucket, Key} = sext:decode(BK),
+            Acc1 = [{{Bucket, Key}, Value} | Acc],
+            buffer(BufferSize, BufferFun, Acc1)
+    end;
+list_objects_fun(Bucket, undefined, _) ->
+    fun({BK, Value}, Acc) ->
+            {B, Key} = sext:decode(BK),
+            if B =:= Bucket ->
+                    [{{B, Key}, Value} | Acc];
+               true ->
+                    Acc
+            end
+    end;
+list_objects_fun(Bucket, BufferSize, BufferFun) ->
+    fun({BK, Value}, Acc) ->
+            {B, Key} = sext:decode(BK),
+            if B =:= Bucket ->
+                    Acc1 = [{{B, Key}, Value} | Acc],
+                    buffer(BufferSize, BufferFun, Acc1);
+               true ->
+                    Acc
+            end
+    end.
+
+%% @private
+%% Return a function to fold over keys on this backend
+fold_objects_fun(FoldObjectsFun, undefined, undefined, _) ->
+    fun({BK, Value}, Acc) ->
+            {Bucket, Key} = sext:decode(BK),
+            FoldObjectsFun(Bucket, Key, Value, Acc)
+    end;
+fold_objects_fun(FoldObjectsFun, undefined, BufferSize, BufferFun) ->
+    fun({BK, Value}, Acc) ->
+            {Bucket, Key} = sext:decode(BK),
+            Acc1 = FoldObjectsFun(Bucket, Key, Value, Acc),
+            buffer(BufferSize, BufferFun, Acc1)            
+    end;
+fold_objects_fun(FoldObjectsFun, Bucket, undefined, _) ->
+    fun({BK, Value}, Acc) ->
+            {B, Key} = sext:decode(BK),
+            %% Take advantage of the fact that sext-encoding ensures all
+            %% keys in a bucket occur sequentially. Once we encounter a
+            %% different bucket, the fold is complete
+            if B =:= Bucket ->
+                    FoldObjectsFun(B, Key, Value, Acc);
+               true ->
+                    throw({break, Acc})
+            end
+    end;
+fold_objects_fun(FoldObjectsFun, Bucket, BufferSize, BufferFun) ->
+    fun({BK, Value}, Acc) ->
+            {B, Key} = sext:decode(BK),
+            %% Take advantage of the fact that sext-encoding ensures all
+            %% keys in a bucket occur sequentially. Once we encounter a
+            %% different bucket, the fold is complete
+            if B =:= Bucket ->
+                    Acc1 = FoldObjectsFun(B, Key, Value, Acc),
+                    buffer(BufferSize, BufferFun, Acc1);
+               true ->
+                    throw({break, Acc})
+            end
+    end.
+
+%% @private
+%% Call the buffer function and reset the
+%% buffer if the size of Acc is equal to
+%% the specified buffer size.
+buffer(BufferSize, BufferFun, Acc) ->
+    if length(Acc) =:= BufferSize ->
+            BufferFun(Acc),
+            [];
+       true ->
+            Acc
+    end.
+
+%% @private
+%% Augment the fold options list if a 
+%% bucket is defined.
+fold_opts(undefined, FoldOpts) ->
+    FoldOpts;
+fold_opts(Bucket, FoldOpts) ->
+    BKey = sext:encode({Bucket, <<>>}),
+    [{first_key, BKey} | FoldOpts].
+
+%% @private
 get_status(Dir) ->
     case eleveldb:open(Dir, [{create_if_missing, true}]) of
         {ok, Ref} ->
