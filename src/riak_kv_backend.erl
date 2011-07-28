@@ -21,8 +21,11 @@
 %% -------------------------------------------------------------------
 
 -module(riak_kv_backend).
+
 -export([behaviour_info/1]).
+-export([api_capabilities/1]).
 -export([callback_after/3]).
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -export([standard_test/2]).
@@ -49,6 +52,27 @@ behaviour_info(callbacks) ->
 behaviour_info(_Other) ->
     undefined.
 
+-define(V1_CAPABILITIES, [api_version,
+                          start,
+                          stop,
+                          get,
+                          put,
+                          delete,
+                          drop,
+                          fold_buckets,
+                          fold_keys,
+                          fold_objects,
+                          is_empty,
+                          status,
+                          callback]).
+
+%% Return the list of capabilities for a given API version
+-spec api_capabilities(pos_integer() | undefined) -> [atom()].                              
+api_capabilities(1) ->
+    ?V1_CAPABILITIES;
+api_capabilities(_) ->
+    udefined.
+    
 %% Queue a callback for the backend after Time ms.
 -spec callback_after(integer(), reference(), term()) -> reference().
 callback_after(Time, Ref, Msg) when is_integer(Time), is_reference(Ref) ->
