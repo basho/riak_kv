@@ -55,6 +55,8 @@
         %% Minimum number of vnodes completing write
         {dw, non_neg_integer()} |
         {timeout, timeout()} |
+        %% Prevent precommit/postcommit hooks from running
+        disable_hooks |
         %% Request additional details about request added as extra
         %% element at the end of result tuplezd
         {details, detail()}.
@@ -218,11 +220,19 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                    need, MinVnodes}}, StateData0);
         true ->
             AllowMult = proplists:get_value(allow_mult,BucketProps),
-            Precommit1 = get_hooks(precommit, BucketProps),
-            Precommit2 = [?PARSE_INDEX_PRECOMMIT|Precommit1],
-            Postcommit = get_hooks(postcommit, BucketProps),
+            Disable = proplists:get_bool(disable_hooks, Options0),
+            Precommit =
+                if Disable -> [];
+                   true ->
+                        L = get_hooks(precommit, BucketProps),
+                        [?PARSE_INDEX_PRECOMMIT|L]
+                end,
+            Postcommit =
+                if Disable -> [];
+                   true -> get_hooks(postcommit, BucketProps)
+                end,
             StateData1 = StateData0#state{n=N, w=W, dw=DW, allowmult=AllowMult,
-                                          precommit = Precommit2,
+                                          precommit = Precommit,
                                           postcommit = Postcommit,
                                           req_id = ReqId,
                                           timeout = Timeout},
