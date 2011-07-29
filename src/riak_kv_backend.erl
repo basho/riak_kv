@@ -23,7 +23,7 @@
 -module(riak_kv_backend).
 
 -export([behaviour_info/1]).
--export([api_capabilities/1]).
+-export([buffer/3]).
 -export([callback_after/3]).
 
 -ifdef(TEST).
@@ -51,28 +51,20 @@ behaviour_info(callbacks) ->
      {callback,3}];   % (Ref, Msg, State) ->
 behaviour_info(_Other) ->
     undefined.
-
--define(V1_CAPABILITIES, [api_version,
-                          start,
-                          stop,
-                          get,
-                          put,
-                          delete,
-                          drop,
-                          fold_buckets,
-                          fold_keys,
-                          fold_objects,
-                          is_empty,
-                          status,
-                          callback]).
-
-%% Return the list of capabilities for a given API version
--spec api_capabilities(pos_integer() | undefined) -> [atom()].                              
-api_capabilities(1) ->
-    ?V1_CAPABILITIES;
-api_capabilities(_) ->
-    udefined.
     
+%% @doc Call the buffer function and reset the
+%% buffer if the size of Acc is equal to
+%% the specified buffer size. This function
+%% is used by the individual backend modules
+%% for intermediate buffering during folds.
+buffer(BufferSize, BufferFun, Acc) ->
+    if length(Acc) =:= BufferSize ->
+            BufferFun(Acc),
+            [];
+       true ->
+            Acc
+    end.
+
 %% Queue a callback for the backend after Time ms.
 -spec callback_after(integer(), reference(), term()) -> reference().
 callback_after(Time, Ref, Msg) when is_integer(Time), is_reference(Ref) ->

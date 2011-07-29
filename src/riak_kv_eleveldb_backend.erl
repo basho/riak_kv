@@ -43,6 +43,7 @@
 -endif.
 
 -define(API_VERSION, 1).
+-define(CAPABILITIES, []).
 
 -record(state, {ref :: reference(),
                 data_root :: string(),
@@ -54,10 +55,10 @@
 %% Public API
 %% ===================================================================
 
-%% @doc Return the major version of the 
+%% @doc Return the major version of the
 %% current API and a capabilities list.
 api_version() ->
-    {?API_VERSION, riak_kv_backend:api_capabilities(?API_VERSION)}.
+    {?API_VERSION, ?CAPABILITIES}.
 
 %% @doc Start the eleveldb backend
 start(Partition, Config) ->
@@ -161,7 +162,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts1,
 drop(#state{data_root=DataRoot}) ->
     eleveldb:destroy(DataRoot, []).
 
-%% @doc Returns true if this eleveldb backend contains any 
+%% @doc Returns true if this eleveldb backend contains any
 %% non-tombstone values; otherwise returns false.
 is_empty(#state{ref=Ref}) ->
     eleveldb:is_empty(Ref).
@@ -199,7 +200,7 @@ list_buckets_fun(BufferSize, BufferFun) ->
     fun(BK, Acc) ->
             {Bucket, _} = sext:decode(BK),
             Acc1 = lists:usort([Bucket | Acc]),
-            buffer(BufferSize, BufferFun, Acc1)
+            riak_kv_backend:buffer(BufferSize, BufferFun, Acc1)
     end.
 
 %% @private
@@ -213,22 +214,22 @@ fold_buckets_fun(FoldBucketsFun, BufferSize, BufferFun) ->
     fun(BK, Acc) ->
             {Bucket, _} = sext:decode(BK),
             Acc1 = FoldBucketsFun(Bucket, Acc),
-            buffer(BufferSize, BufferFun, Acc1)
+            riak_kv_backend:buffer(BufferSize, BufferFun, Acc1)
     end.
 
 %% @private
 %% Return a function to list keys on this backend
 list_keys_fun(undefined, undefined, _) ->
-    fun(BK, Acc) -> 
+    fun(BK, Acc) ->
             [sext:decode(BK) | Acc]
     end;
 list_keys_fun(undefined, BufferSize, BufferFun) ->
-    fun(BK, Acc) -> 
+    fun(BK, Acc) ->
             Acc1 = [sext:decode(BK) | Acc],
-            buffer(BufferSize, BufferFun, Acc1)
+            riak_kv_backend:buffer(BufferSize, BufferFun, Acc1)
     end;
 list_keys_fun(Bucket, undefined, _) ->
-    fun(BK, Acc) -> 
+    fun(BK, Acc) ->
             {B, K} = sext:decode(BK),
             %% Take advantage of the fact that sext-encoding ensures all
             %% keys in a bucket occur sequentially. Once we encounter a
@@ -240,14 +241,14 @@ list_keys_fun(Bucket, undefined, _) ->
             end
     end;
 list_keys_fun(Bucket, BufferSize, BufferFun) ->
-    fun(BK, Acc) -> 
+    fun(BK, Acc) ->
             {B, K} = sext:decode(BK),
             %% Take advantage of the fact that sext-encoding ensures all
             %% keys in a bucket occur sequentially. Once we encounter a
             %% different bucket, the fold is complete
             if B =:= Bucket ->
                     Acc1 = [{B, K} | Acc],
-                    buffer(BufferSize, BufferFun, Acc1);
+                    riak_kv_backend:buffer(BufferSize, BufferFun, Acc1);
                true ->
                     throw({break, Acc})
             end
@@ -256,18 +257,18 @@ list_keys_fun(Bucket, BufferSize, BufferFun) ->
 %% @private
 %% Return a function to fold over keys on this backend
 fold_keys_fun(FoldKeysFun, undefined, undefined, _) ->
-    fun(BK, Acc) -> 
+    fun(BK, Acc) ->
             {Bucket, Key} = sext:decode(BK),
             FoldKeysFun(Bucket, Key, Acc)
     end;
 fold_keys_fun(FoldKeysFun, undefined, BufferSize, BufferFun) ->
-    fun(BK, Acc) -> 
+    fun(BK, Acc) ->
             {Bucket, Key} = sext:decode(BK),
             Acc1 = FoldKeysFun(Bucket, Key, Acc),
-            buffer(BufferSize, BufferFun, Acc1)            
+            riak_kv_backend:buffer(BufferSize, BufferFun, Acc1)
     end;
 fold_keys_fun(FoldKeysFun, Bucket, undefined, _) ->
-    fun(BK, Acc) -> 
+    fun(BK, Acc) ->
             {B, Key} = sext:decode(BK),
             if B =:= Bucket ->
                     FoldKeysFun(B, Key, Acc);
@@ -276,11 +277,11 @@ fold_keys_fun(FoldKeysFun, Bucket, undefined, _) ->
             end
     end;
 fold_keys_fun(FoldKeysFun, Bucket, BufferSize, BufferFun) ->
-    fun(BK, Acc) -> 
+    fun(BK, Acc) ->
             {B, Key} = sext:decode(BK),
             if B =:= Bucket ->
                     Acc1 = FoldKeysFun(B, Key, Acc),
-                    buffer(BufferSize, BufferFun, Acc1);
+                    riak_kv_backend:buffer(BufferSize, BufferFun, Acc1);
                true ->
                     Acc
             end
@@ -298,7 +299,7 @@ list_objects_fun(undefined, BufferSize, BufferFun) ->
     fun({BK, Value}, Acc) ->
             {Bucket, Key} = sext:decode(BK),
             Acc1 = [{{Bucket, Key}, Value} | Acc],
-            buffer(BufferSize, BufferFun, Acc1)
+            riak_kv_backend:buffer(BufferSize, BufferFun, Acc1)
     end;
 list_objects_fun(Bucket, undefined, _) ->
     fun({BK, Value}, Acc) ->
@@ -314,7 +315,7 @@ list_objects_fun(Bucket, BufferSize, BufferFun) ->
             {B, Key} = sext:decode(BK),
             if B =:= Bucket ->
                     Acc1 = [{{B, Key}, Value} | Acc],
-                    buffer(BufferSize, BufferFun, Acc1);
+                    riak_kv_backend:buffer(BufferSize, BufferFun, Acc1);
                true ->
                     Acc
             end
@@ -331,7 +332,7 @@ fold_objects_fun(FoldObjectsFun, undefined, BufferSize, BufferFun) ->
     fun({BK, Value}, Acc) ->
             {Bucket, Key} = sext:decode(BK),
             Acc1 = FoldObjectsFun(Bucket, Key, Value, Acc),
-            buffer(BufferSize, BufferFun, Acc1)            
+            riak_kv_backend:buffer(BufferSize, BufferFun, Acc1)
     end;
 fold_objects_fun(FoldObjectsFun, Bucket, undefined, _) ->
     fun({BK, Value}, Acc) ->
@@ -353,26 +354,14 @@ fold_objects_fun(FoldObjectsFun, Bucket, BufferSize, BufferFun) ->
             %% different bucket, the fold is complete
             if B =:= Bucket ->
                     Acc1 = FoldObjectsFun(B, Key, Value, Acc),
-                    buffer(BufferSize, BufferFun, Acc1);
+                    riak_kv_backend:buffer(BufferSize, BufferFun, Acc1);
                true ->
                     throw({break, Acc})
             end
     end.
 
 %% @private
-%% Call the buffer function and reset the
-%% buffer if the size of Acc is equal to
-%% the specified buffer size.
-buffer(BufferSize, BufferFun, Acc) ->
-    if length(Acc) =:= BufferSize ->
-            BufferFun(Acc),
-            [];
-       true ->
-            Acc
-    end.
-
-%% @private
-%% Augment the fold options list if a 
+%% Augment the fold options list if a
 %% bucket is defined.
 fold_opts(undefined, FoldOpts) ->
     FoldOpts;

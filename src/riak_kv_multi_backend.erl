@@ -31,7 +31,7 @@
          put/4,
          delete/3,
          drop/1,
-         fold_buckets/3,
+         fold_buckets/4,
          fold_keys/4,
          fold_objects/4,
          is_empty/1,
@@ -43,23 +43,7 @@
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [api_version,
-                       start,
-                       stop,
-                       get,
-                       put,
-                       delete,
-                       drop,
-                       fold_buckets,
-                       fold_keys,
-                       fold_objects,
-                       is_empty,
-                       status,
-                       callback]).
-
-%% -export([start/2, stop/1,get/2,put/3,list/1,list_bucket/2,delete/2,is_empty/1,
-%%          drop/1,fold/3,fold_bucket_keys/4]).
-%% -export([callback/3]).
+-define(CAPABILITIES, []).
 
 -record (state, {backends :: {atom(), atom(), term()},
                  default_backend :: atom()}).
@@ -154,9 +138,9 @@ delete(Bucket, Key, State) ->
     Module:delete(SubState, {Bucket, Key}).
 
 %% @doc Fold over all the buckets. 
-fold_buckets(FoldBucketsFun, Acc, #state{backends=Backends}) ->
+fold_buckets(FoldBucketsFun, Acc, Opts, #state{backends=Backends}) ->
     FoldFun = fun({_, Module, SubState}, Acc1) ->
-                      Module:fold_buckets(FoldBucketsFun, Acc1, SubState)
+                      Module:fold_buckets(FoldBucketsFun, Acc1, Opts, SubState)
               end,
     lists:foldl(FoldFun, Acc, Backends).
 

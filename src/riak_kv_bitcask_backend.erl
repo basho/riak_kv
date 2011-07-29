@@ -52,6 +52,7 @@
 
 -define(MERGE_CHECK_INTERVAL, timer:minutes(3)).
 -define(API_VERSION, 1).
+-define(CAPABILITIES, []).
 
 -record(state, {ref :: reference(),
                 root :: string()}).
@@ -63,7 +64,7 @@
 %% @doc Return the major version of the
 %% current API and a capabilities list.
 api_version() ->
-    {?API_VERSION, riak_kv_backend:api_capabilities(?API_VERSION)}.
+    {?API_VERSION, ?CAPABILITIES}.
 
 %% @doc Start the bitcask backend
 start(Partition, Config) ->
@@ -256,7 +257,7 @@ list_buckets_fun(BufferSize, BufferFun) ->
     fun(#bitcask_entry{key=BK}, Acc1) ->
             {Bucket, _} = binary_to_term(BK),
             Acc2 = lists:usort([Bucket | Acc1]),
-            buffer(BufferSize, BufferFun, Acc2)
+            riak_kv_backend:buffer(BufferSize, BufferFun, Acc2)
     end.
 
 %% @private
@@ -270,7 +271,7 @@ fold_buckets_fun(FoldBucketsFun, BufferSize, BufferFun) ->
     fun(#bitcask_entry{key=BK}, Acc1) ->
             {Bucket, _} = binary_to_term(BK),
             Acc2 = FoldBucketsFun(Bucket, Acc1),
-            buffer(BufferSize, BufferFun, Acc2)
+            riak_kv_backend:buffer(BufferSize, BufferFun, Acc2)
     end.
 
 %% @private
@@ -282,7 +283,7 @@ list_keys_fun(undefined, undefined, _) ->
 list_keys_fun(undefined, BufferSize, BufferFun) ->
     fun(#bitcask_entry{key=BK}, Acc1) ->
             Acc2 = [binary_to_term(BK) | Acc1],
-            buffer(BufferSize, BufferFun, Acc2)
+            riak_kv_backend:buffer(BufferSize, BufferFun, Acc2)
     end;
 list_keys_fun(Bucket, undefined, _) ->
     fun(#bitcask_entry{key=BK}, Acc1) ->
@@ -300,7 +301,7 @@ list_keys_fun(Bucket, BufferSize, BufferFun) ->
             case B of
                 Bucket ->
                     Acc2 = [K | Acc1],
-                    buffer(BufferSize, BufferFun, Acc2);
+                    riak_kv_backend:buffer(BufferSize, BufferFun, Acc2);
                 _ ->
                     Acc1
             end
@@ -317,7 +318,7 @@ fold_keys_fun(FoldKeysFun, undefined, BufferSize, BufferFun) ->
     fun(#bitcask_entry{key=BK}, Acc1) ->
             {B, Key} = binary_to_term(BK),
             Acc2 = FoldKeysFun(B, Key, Acc1),
-            buffer(BufferSize, BufferFun, Acc2)
+            riak_kv_backend:buffer(BufferSize, BufferFun, Acc2)
     end;
 fold_keys_fun(FoldKeysFun, Bucket, undefined, _) ->
     fun(#bitcask_entry{key=BK}, Acc1) ->
@@ -333,7 +334,7 @@ fold_keys_fun(FoldKeysFun, Bucket, BufferSize, BufferFun) ->
             {B, Key} = binary_to_term(BK),
             if B =:= Bucket ->
                     Acc2 = FoldKeysFun(B, Key, Acc1),
-                    buffer(BufferSize, BufferFun, Acc2);
+                    riak_kv_backend:buffer(BufferSize, BufferFun, Acc2);
                true ->
                     Acc1
             end
@@ -351,7 +352,7 @@ list_objects_fun(undefined, BufferSize, BufferFun) ->
     fun(#bitcask_entry{key=BK}, Value, Acc1) ->
             {Bucket, Key} = binary_to_term(BK),
             Acc2 = [{{Bucket, Key}, Value} | Acc1],
-            buffer(BufferSize, BufferFun, Acc2)
+            riak_kv_backend:buffer(BufferSize, BufferFun, Acc2)
     end;
 list_objects_fun(Bucket, undefined, _) ->
     fun(#bitcask_entry{key=BK}, Value, Acc1) ->
@@ -367,7 +368,7 @@ list_objects_fun(Bucket, BufferSize, BufferFun) ->
             {B, Key} = binary_to_term(BK),
             if B =:= Bucket ->
                     Acc2 = [{{Bucket, Key}, Value} | Acc1],
-                    buffer(BufferSize, BufferFun, Acc2);
+                    riak_kv_backend:buffer(BufferSize, BufferFun, Acc2);
                true ->
                     Acc1
             end
@@ -384,7 +385,7 @@ fold_objects_fun(FoldObjectsFun, undefined, BufferSize, BufferFun) ->
     fun(#bitcask_entry{key=BK}, Value, Acc1) ->
             {B, Key} = binary_to_term(BK),
             Acc2 = FoldObjectsFun(B, Key, Value, Acc1),
-            buffer(BufferSize, BufferFun, Acc2)
+            riak_kv_backend:buffer(BufferSize, BufferFun, Acc2)
     end;
 fold_objects_fun(FoldObjectsFun, Bucket, undefined, _) ->
     fun(#bitcask_entry{key=BK}, Value, Acc1) ->
@@ -400,22 +401,10 @@ fold_objects_fun(FoldObjectsFun, Bucket, BufferSize, BufferFun) ->
             {B, Key} = binary_to_term(BK),
             if B =:= Bucket ->
                     Acc2 = FoldObjectsFun(B, Key, Value, Acc1),
-                    buffer(BufferSize, BufferFun, Acc2);
+                    riak_kv_backend:buffer(BufferSize, BufferFun, Acc2);
                true ->
                     Acc1
             end
-    end.
-
-%% @private
-%% Call the buffer function and reset the
-%% buffer if the size of Acc is equal to
-%% the specified buffer size.
-buffer(BufferSize, BufferFun, Acc) ->
-    if length(Acc) =:= BufferSize ->
-            BufferFun(Acc),
-            [];
-       true ->
-            Acc
     end.
 
 %% @private
