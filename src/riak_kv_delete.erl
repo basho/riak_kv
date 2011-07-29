@@ -81,7 +81,8 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
             case Reply of
                 ok ->
                     {ok, C2} = riak:local_client(),
-                    C2:get(Bucket, Key, all, Timeout);
+                    AsyncTimeout = 60*1000,     % Avoid client-specified value
+                    C2:get(Bucket, Key, all, AsyncTimeout);
                 _ -> nop
             end
     end.
