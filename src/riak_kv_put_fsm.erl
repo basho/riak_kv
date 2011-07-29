@@ -47,12 +47,18 @@
                   false |
                   [detail_info()].
 
--type option() :: {pw, non_neg_integer()} | %% Min number of primary (owner) vnodes participating
-                  {w,  non_neg_integer()} | %% Minimum number of vnodes receiving write
-                  {dw, non_neg_integer()} | %% Minimum number of vnodes completing write
-                  {timeout, timeout()} |
-                  {details, detail()}.      %% Request additional details about request
-                                            %% added as extra element at the end of result tuplezd 
+-type option() ::
+        %% Min number of primary (owner) vnodes participating
+        {pw, non_neg_integer()} |
+        %% Minimum number of vnodes receiving write
+        {w,  non_neg_integer()} |
+        %% Minimum number of vnodes completing write
+        {dw, non_neg_integer()} |
+        {timeout, timeout()} |
+        %% Request additional details about request added as extra
+        %% element at the end of result tuplezd
+        {details, detail()}.
+
 -type options() :: [option()].
 
 -export_type([option/0, options/0, detail/0, detail_info/0]).
