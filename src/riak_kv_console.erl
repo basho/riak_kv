@@ -36,9 +36,8 @@ join([NodeStr]) ->
             {error, not_reachable} ->
                 io:format("Node ~s is not reachable!\n", [NodeStr]),
                 error;
-            {error, different_ring_sizes} ->
-                io:format("Failed: ~s has a different ring_creation_size~n",
-                    [NodeStr]),
+            {error, _} ->
+                io:format("Join failed. Try again in a few moments.~n", []),
                 error
         end
     catch
@@ -51,32 +50,32 @@ join([NodeStr]) ->
 
 
 leave([]) ->
-    remove_node(node()).
+    riak_core:leave().
 
 remove([Node]) ->
-    remove_node(list_to_atom(Node)).
+    riak_core:remove(list_to_atom(Node)).
 
-remove_node(Node) when is_atom(Node) ->
-    try 
-        case catch(riak_core:remove_from_cluster(Node)) of
-            {'EXIT', {badarg, [{erlang, hd, [[]]}|_]}} ->
-                %% This is a workaround because
-                %% riak_core_gossip:remove_from_cluster doesn't check if
-                %% the result of subtracting the current node from the
-                %% cluster member list results in the empty list. When
-                %% that code gets refactored this can probably go away.
-                io:format("Leave failed, this node is the only member.~n"),
-                error;
-            Res ->
-                io:format(" ~p\n", [Res])
-        end
-    catch
-        Exception:Reason ->
-            lager:error("Leave failed ~p:~p", [Exception,
-                    Reason]),
-            io:format("Leave failed, see log for details~n"),
-            error
-    end.
+%% remove_node(Node) when is_atom(Node) ->
+%%     try 
+%%         case catch(riak_core:remove_from_cluster(Node)) of
+%%             {'EXIT', {badarg, [{erlang, hd, [[]]}|_]}} ->
+%%                 %% This is a workaround because
+%%                 %% riak_core_gossip:remove_from_cluster doesn't check if
+%%                 %% the result of subtracting the current node from the
+%%                 %% cluster member list results in the empty list. When
+%%                 %% that code gets refactored this can probably go away.
+%%                 io:format("Leave failed, this node is the only member.~n"),
+%%                 error;
+%%             Res ->
+%%                 io:format(" ~p\n", [Res])
+%%         end
+%%     catch
+%%         Exception:Reason ->
+%%             lager:error("Leave failed ~p:~p", [Exception,
+%%                     Reason]),
+%%             io:format("Leave failed, see log for details~n"),
+%%             error
+%%     end.
 
 
 -spec(status([]) -> ok).
