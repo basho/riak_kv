@@ -489,35 +489,66 @@ do_get_binary({Bucket, Key}, Mod, ModState) ->
 
 %% @private
 list_buckets(Sender, Filter, Mod, ModState) ->
+    BufferSize = 1000,
     BufferFun = fun(Results) ->
-                        riak_core_vnode:reply(Sender, {results, Results})
+                        UniqueResults = lists:usort(Results),
+                        riak_core_vnode:reply(Sender, {results, UniqueResults})
                 end,
-    Opts = [{buffer_size, 1000},
-            {buffer_fun, BufferFun}],
-    Buckets = Mod:fold_buckets(Filter, [], Opts, ModState),
-    riak_core_vnode:reply(Sender, {final_results, Buckets}).
+    Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
+    case Filter of
+        none ->
+            FoldBucketsFun =
+                fun(Bucket, Buf) ->
+                        riak_kv_fold_buffer:add(Bucket, Buf)
+                end;
+        _ ->
+            FoldBucketsFun =
+                fun(Bucket, Buf) ->
+                        case Filter(Bucket) of
+                            true ->
+                                riak_kv_fold_buffer:add(Bucket, Buf);
+                            false ->
+                                Buf
+                        end
+                end
+    end,
+    Buffer1 = Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState),
+    FlushFun = fun(FinalResults) ->
+                       UniqueResults = lists:usort(FinalResults),
+                       riak_core_vnode:reply(Sender, {final_results, UniqueResults})
+               end,
+    riak_kv_fold_buffer:flush(Buffer1, FlushFun).
 
 %% @private
 list_keys(Sender, Bucket, Filter, Mod, ModState) ->
-    case Filter of 
-        none ->
-            FoldKeysFun = none;
-        _ ->
-            FoldKeysFun = fun(_, Key, Acc) ->
-                                  Filter(Key, Acc)
-                          end
-    end,
+    BufferSize = 100,
     BufferFun = fun(Results) ->
                         riak_core_vnode:reply(Sender, {results, {Bucket, Results}})
                 end,
-    Opts = [{bucket, Bucket},
-            {buffer_size, 100},
-            {buffer_fun, BufferFun}],
-    Keys = Mod:fold_keys(FoldKeysFun,
-                         [],
-                         Opts,
-                         ModState),
-    riak_core_vnode:reply(Sender, {final_results, {Bucket, Keys}}).
+    Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
+    case Filter of
+        none ->
+            FoldKeysFun =
+                fun(_, Key, Buf) ->
+                        riak_kv_fold_buffer:add(Key, Buf)
+                end;
+        _ ->
+            FoldKeysFun =
+                fun(_, Key, Buf) ->
+                        case Filter(Key) of
+                            true ->
+                                riak_kv_fold_buffer:add(Key, Buf);
+                            false ->
+                                Buf
+                        end
+                end
+    end,
+    Opts = [{bucket, Bucket}],
+    Buffer1 = Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState),
+    FlushFun = fun(FinalResults) ->
+                       riak_core_vnode:reply(Sender, {final_results, {Bucket, FinalResults}})
+               end,
+    riak_kv_fold_buffer:flush(Buffer1, FlushFun).
 
 %% @private
 %% @deprecated This function is only here to support

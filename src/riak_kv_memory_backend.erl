@@ -100,43 +100,22 @@ delete(Bucket, Key, State) ->
 
 %% @doc Fold over all the buckets. If the fold
 %% function is `none' just list all of the buckets.
-fold_buckets(FoldBucketsFun, Acc, Opts, State) ->
-    BufferSize = proplists:get_value(buffer_size, Opts),
-    BufferFun = proplists:get_value(buffer_fun, Opts),
-    case FoldBucketsFun of
-        none ->
-            FoldFun = list_buckets_fun(BufferSize, BufferFun);
-        _ ->
-            FoldFun = fold_buckets_fun(FoldBucketsFun, BufferSize, BufferFun)
-    end,
+fold_buckets(FoldBucketsFun, Acc, _Opts, State) ->
+    FoldFun = fold_buckets_fun(FoldBucketsFun),
     gen_server:call(State, {fold_buckets, FoldFun, Acc}).
 
 %% @doc Fold over all the keys for a bucket. If the
 %% fold function is `none' just list all of the keys.
 fold_keys(FoldKeysFun, Acc, Opts, State) ->
     Bucket =  proplists:get_value(bucket, Opts),
-    BufferSize = proplists:get_value(buffer_size, Opts),
-    BufferFun = proplists:get_value(buffer_fun, Opts),
-    case FoldKeysFun of
-        none ->
-            FoldFun = list_keys_fun(Bucket, BufferSize, BufferFun);
-        _ ->
-            FoldFun = fold_keys_fun(FoldKeysFun, Bucket, BufferSize, BufferFun)
-    end,
+    FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
     gen_server:call(State, {fold_keys, FoldFun, Bucket, Acc}).
 
 %% @doc Fold over all the objects for a bucket. If the
 %% fold function is `none' just list all of the objects.
 fold_objects(FoldObjectsFun, Acc, Opts, State) ->
     Bucket =  proplists:get_value(bucket, Opts),
-    BufferSize = proplists:get_value(buffer_size, Opts),
-    BufferFun = proplists:get_value(buffer_fun, Opts),
-    case FoldObjectsFun of
-        none ->
-            FoldFun = list_objects_fun(Bucket, BufferSize, BufferFun);
-        _ ->
-            FoldFun = fold_objects_fun(FoldObjectsFun, Bucket, BufferSize, BufferFun)
-    end,
+    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
     gen_server:call(State, {fold_objects, FoldFun, Bucket, Acc}).
 
 %% @doc Returns true if this memory backend contains any
@@ -205,21 +184,10 @@ code_change(_OldVsn, State, _Extra) -> {ok, State}.
 %% @TODO Some of these implementations may be suboptimal.
 %% Need to do some measuring and testing to refine the
 %% implementations.
-%% @private
-%% Return a function to list the buckets on this backend
-list_buckets_fun(undefined, _) ->
-    fun([Bucket], Acc) ->
-            lists:usort([Bucket | Acc])
-    end;
-list_buckets_fun(BufferSize, BufferFun) ->
-    fun([Bucket], Acc) ->
-            Acc1 = lists:usort([Bucket | Acc]),
-            riak_kv_backend:buffer(BufferSize, BufferFun, Acc1)
-    end.
 
 %% @private
 %% Return a function to fold over the buckets on this backend
-fold_buckets_fun(FoldBucketsFun, undefined, _) ->
+fold_buckets_fun(FoldBucketsFun) ->
     fun([Bucket], Acc) ->
             case lists:member(Bucket, Acc) of
                 true ->
@@ -227,83 +195,23 @@ fold_buckets_fun(FoldBucketsFun, undefined, _) ->
                 false ->
                     FoldBucketsFun(Bucket, Acc)
             end
-    end;
-fold_buckets_fun(FoldBucketsFun, BufferSize, BufferFun) ->
-    fun([Bucket], Acc) ->
-            case lists:member(Bucket, Acc) of
-                true ->
-                    Acc;
-                false ->
-                    Acc1 = FoldBucketsFun(Bucket, Acc),
-                    riak_kv_backend:buffer(BufferSize, BufferFun, Acc1)
-            end
     end.
-
 %% @private
-%% Return a function to list keys on this backend
-list_keys_fun(undefined, undefined, _) ->
+%% Return a function to fold over keys on this backend
+fold_keys_fun(FoldKeysFun, undefined) ->
     fun([Bucket, Key], Acc) ->
-            [{Bucket, Key} | Acc]
+            FoldKeysFun(Bucket, Key, Acc)
     end;
-list_keys_fun(undefined, BufferSize, BufferFun) ->
-    fun([Bucket, Key], Acc) ->
-            Acc1 = [{Bucket, Key} | Acc],
-            riak_kv_backend:buffer(BufferSize, BufferFun, Acc1)
-    end;
-list_keys_fun(Bucket, undefined, _) ->
+fold_keys_fun(FoldKeysFun, Bucket) ->
     fun([Key], Acc) ->
-            [{Bucket, Key} | Acc]
-    end;
-list_keys_fun(Bucket, BufferSize, BufferFun) ->
-    fun([Key], Acc) ->
-            Acc1 = [{Bucket, Key} | Acc],
-            riak_kv_backend:buffer(BufferSize, BufferFun, Acc1)
+            FoldKeysFun(Bucket, Key, Acc)
     end.
 
 %% @private
 %% Return a function to fold over keys on this backend
-fold_keys_fun(FoldKeysFun, undefined, undefined, _) ->
-    fun([Bucket, Key], Acc) ->
-            FoldKeysFun(Bucket, Key, Acc)
-    end;
-fold_keys_fun(FoldKeysFun, undefined, BufferSize, BufferFun) ->
-    fun([Bucket, Key], Acc1) ->
-            Acc1 = FoldKeysFun(Bucket, Key, Acc1),
-            riak_kv_backend:buffer(BufferSize, BufferFun, Acc1)
-    end;
-fold_keys_fun(FoldKeysFun, Bucket, undefined, _) ->
-    fun([Key], Acc) ->
-            FoldKeysFun(Bucket, Key, Acc)
-    end;
-fold_keys_fun(FoldKeysFun, Bucket, BufferSize, BufferFun) ->
-    fun([Key], Acc) ->
-            Acc1 = FoldKeysFun(Bucket, Key, Acc),
-            riak_kv_backend:buffer(BufferSize, BufferFun, Acc1)
-    end.
-
-%% @private
-%% Return a function to list the objects
-%% stored by this backend
-list_objects_fun(_, undefined, _) ->
-    fun({{Bucket, Key}, Value}, Acc) ->
-            [{{Bucket, Key}, Value} | Acc]
-    end;
-list_objects_fun(undefined, BufferSize, BufferFun) ->
-    fun({{Bucket, Key}, Value}, Acc) ->
-            Acc1 = [{{Bucket, Key}, Value} | Acc],
-            riak_kv_backend:buffer(BufferSize, BufferFun, Acc1)
-    end.
-
-%% @private
-%% Return a function to fold over keys on this backend
-fold_objects_fun(FoldObjectsFun, _, undefined, _) ->
+fold_objects_fun(FoldObjectsFun, _) ->
     fun({{Bucket, Key}, Value}, Acc) ->
             FoldObjectsFun(Bucket, Key, Value, Acc)
-    end;
-fold_objects_fun(FoldObjectsFun, _, BufferSize, BufferFun) ->
-    fun({{Bucket, Key}, Value}, Acc) ->
-            Acc1 = FoldObjectsFun(Bucket, Key, Value, Acc),
-            riak_kv_backend:buffer(BufferSize, BufferFun, Acc1)
     end.
 
 %% @private

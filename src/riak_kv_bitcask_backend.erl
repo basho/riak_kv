@@ -143,43 +143,22 @@ delete(Bucket, Key, #state{ref=Ref}=State) ->
 
 %% @doc Fold over all the buckets. If the fold
 %% function is `none' just list all of the buckets.
-fold_buckets(FoldBucketsFun, Acc, Opts, #state{ref=Ref}) ->
-    BufferSize = proplists:get_value(buffer_size, Opts),
-    BufferFun = proplists:get_value(buffer_fun, Opts),
-    case FoldBucketsFun of
-        none ->
-            FoldFun = list_buckets_fun(BufferSize, BufferFun);
-        _ ->
-            FoldFun = fold_buckets_fun(FoldBucketsFun, BufferSize, BufferFun)
-    end,
+fold_buckets(FoldBucketsFun, Acc, _Opts, #state{ref=Ref}) ->
+    FoldFun = fold_buckets_fun(FoldBucketsFun),
     bitcask:fold_keys(Ref, FoldFun, Acc).
 
 %% @doc Fold over all the keys for one or all buckets.
 %% If the fold function is `none' just list the keys.
 fold_keys(FoldKeysFun, Acc, Opts, #state{ref=Ref}) ->
     Bucket =  proplists:get_value(bucket, Opts),
-    BufferSize = proplists:get_value(buffer_size, Opts),
-    BufferFun = proplists:get_value(buffer_fun, Opts),
-    case FoldKeysFun of
-        none ->
-            FoldFun = list_keys_fun(Bucket, BufferSize, BufferFun);
-        _ ->
-            FoldFun = fold_keys_fun(FoldKeysFun, Bucket, BufferSize, BufferFun)
-    end,
+    FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
     bitcask:fold_keys(Ref, FoldFun, Acc).
 
 %% @doc Fold over all the objects for one or all buckets.
 %% If the fold function is `none' just list the objects.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{ref=Ref}) ->
     Bucket =  proplists:get_value(bucket, Opts),
-    BufferSize = proplists:get_value(buffer_size, Opts),
-    BufferFun = proplists:get_value(buffer_fun, Opts),
-    case FoldObjectsFun of
-        none ->
-            FoldFun = list_objects_fun(Bucket, BufferSize, BufferFun);
-        _ ->
-            FoldFun = fold_objects_fun(FoldObjectsFun, Bucket, BufferSize, BufferFun)
-    end,
+    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
     bitcask:fold(Ref, FoldFun, Acc).
 
 %% @doc Delete all objects from this bitcask backend
@@ -247,163 +226,46 @@ key_counts(RootDir) ->
 %% ===================================================================
 
 %% @private
-%% Return a function to list the buckets on this backend
-list_buckets_fun(undefined, _) ->
-    fun(#bitcask_entry{key=BK}, Acc1) ->
-            {Bucket, _} = binary_to_term(BK),
-            lists:usort([Bucket | Acc1])
-    end;
-list_buckets_fun(BufferSize, BufferFun) ->
-    fun(#bitcask_entry{key=BK}, Acc1) ->
-            {Bucket, _} = binary_to_term(BK),
-            Acc2 = lists:usort([Bucket | Acc1]),
-            riak_kv_backend:buffer(BufferSize, BufferFun, Acc2)
-    end.
-
-%% @private
 %% Return a function to fold over the buckets on this backend
-fold_buckets_fun(FoldBucketsFun, undefined, _) ->
-    fun(#bitcask_entry{key=BK}, Acc1) ->
+fold_buckets_fun(FoldBucketsFun) ->
+    fun(#bitcask_entry{key=BK}, Acc) ->
             {Bucket, _} = binary_to_term(BK),
-            FoldBucketsFun(Bucket, Acc1)
-    end;
-fold_buckets_fun(FoldBucketsFun, BufferSize, BufferFun) ->
-    fun(#bitcask_entry{key=BK}, Acc1) ->
-            {Bucket, _} = binary_to_term(BK),
-            Acc2 = FoldBucketsFun(Bucket, Acc1),
-            riak_kv_backend:buffer(BufferSize, BufferFun, Acc2)
+            FoldBucketsFun(Bucket, Acc)
     end.
 
 %% @private
-%% Return a function to list keys on this backend
-list_keys_fun(undefined, undefined, _) ->
-    fun(#bitcask_entry{key=BK}, Acc1) ->
-            [binary_to_term(BK) | Acc1]
+%% Return a function to fold over keys on this backend
+fold_keys_fun(FoldKeysFun, undefined) ->
+    fun(#bitcask_entry{key=BK}, Acc) ->
+            {Bucket, Key} = binary_to_term(BK),
+            FoldKeysFun(Bucket, Key, Acc)
     end;
-list_keys_fun(undefined, BufferSize, BufferFun) ->
-    fun(#bitcask_entry{key=BK}, Acc1) ->
-            Acc2 = [binary_to_term(BK) | Acc1],
-            riak_kv_backend:buffer(BufferSize, BufferFun, Acc2)
-    end;
-list_keys_fun(Bucket, undefined, _) ->
-    fun(#bitcask_entry{key=BK}, Acc1) ->
-            {B, K} = binary_to_term(BK),
-            case B of
-                Bucket ->
-                    [K | Acc1];
-                _ ->
-                    Acc1
-            end
-    end;
-list_keys_fun(Bucket, BufferSize, BufferFun) ->
-    fun(#bitcask_entry{key=BK}, Acc1) ->
-            {B, K} = binary_to_term(BK),
-            case B of
-                Bucket ->
-                    Acc2 = [K | Acc1],
-                    riak_kv_backend:buffer(BufferSize, BufferFun, Acc2);
-                _ ->
-                    Acc1
+fold_keys_fun(FoldKeysFun, Bucket) ->
+    fun(#bitcask_entry{key=BK}, Acc) ->
+            {B, Key} = binary_to_term(BK),
+            case B =:= Bucket of
+                true ->
+                    FoldKeysFun(B, Key, Acc);
+                false ->
+                    Acc
             end
     end.
 
 %% @private
 %% Return a function to fold over keys on this backend
-fold_keys_fun(FoldKeysFun, undefined, undefined, _) ->
-    fun(#bitcask_entry{key=BK}, Acc1) ->
-            {B, Key} = binary_to_term(BK),
-            FoldKeysFun(B, Key, Acc1)
-    end;
-fold_keys_fun(FoldKeysFun, undefined, BufferSize, BufferFun) ->
-    fun(#bitcask_entry{key=BK}, Acc1) ->
-            {B, Key} = binary_to_term(BK),
-            Acc2 = FoldKeysFun(B, Key, Acc1),
-            riak_kv_backend:buffer(BufferSize, BufferFun, Acc2)
-    end;
-fold_keys_fun(FoldKeysFun, Bucket, undefined, _) ->
-    fun(#bitcask_entry{key=BK}, Acc1) ->
-            {B, Key} = binary_to_term(BK),
-            if B =:= Bucket ->
-                    FoldKeysFun(B, Key, Acc1);
-               true ->
-                    Acc1
-            end
-    end;
-fold_keys_fun(FoldKeysFun, Bucket, BufferSize, BufferFun) ->
-    fun(#bitcask_entry{key=BK}, Acc1) ->
-            {B, Key} = binary_to_term(BK),
-            if B =:= Bucket ->
-                    Acc2 = FoldKeysFun(B, Key, Acc1),
-                    riak_kv_backend:buffer(BufferSize, BufferFun, Acc2);
-               true ->
-                    Acc1
-            end
-    end.
-
-%% @private
-%% Return a function to list the objects
-%% stored by this backend
-list_objects_fun(undefined, undefined, _) ->
-    fun(#bitcask_entry{key=BK}, Value, Acc1) ->
+fold_objects_fun(FoldObjectsFun, undefined) ->
+    fun(#bitcask_entry{key=BK}, Value, Acc) ->
             {Bucket, Key} = binary_to_term(BK),
-            [{{Bucket, Key}, Value} | Acc1]
+            FoldObjectsFun(Bucket, Key, Value, Acc)
     end;
-list_objects_fun(undefined, BufferSize, BufferFun) ->
-    fun(#bitcask_entry{key=BK}, Value, Acc1) ->
-            {Bucket, Key} = binary_to_term(BK),
-            Acc2 = [{{Bucket, Key}, Value} | Acc1],
-            riak_kv_backend:buffer(BufferSize, BufferFun, Acc2)
-    end;
-list_objects_fun(Bucket, undefined, _) ->
-    fun(#bitcask_entry{key=BK}, Value, Acc1) ->
+fold_objects_fun(FoldObjectsFun, Bucket) ->
+    fun(#bitcask_entry{key=BK}, Value, Acc) ->
             {B, Key} = binary_to_term(BK),
-            if B =:= Bucket ->
-                    [{{Bucket, Key}, Value} | Acc1];
-               true ->
-                    Acc1
-            end
-    end;
-list_objects_fun(Bucket, BufferSize, BufferFun) ->
-    fun(#bitcask_entry{key=BK}, Value, Acc1) ->
-            {B, Key} = binary_to_term(BK),
-            if B =:= Bucket ->
-                    Acc2 = [{{Bucket, Key}, Value} | Acc1],
-                    riak_kv_backend:buffer(BufferSize, BufferFun, Acc2);
-               true ->
-                    Acc1
-            end
-    end.
-
-%% @private
-%% Return a function to fold over keys on this backend
-fold_objects_fun(FoldObjectsFun, undefined, undefined, _) ->
-    fun(#bitcask_entry{key=BK}, Value, Acc1) ->
-            {B, Key} = binary_to_term(BK),
-            FoldObjectsFun(B, Key, Value, Acc1)
-    end;
-fold_objects_fun(FoldObjectsFun, undefined, BufferSize, BufferFun) ->
-    fun(#bitcask_entry{key=BK}, Value, Acc1) ->
-            {B, Key} = binary_to_term(BK),
-            Acc2 = FoldObjectsFun(B, Key, Value, Acc1),
-            riak_kv_backend:buffer(BufferSize, BufferFun, Acc2)
-    end;
-fold_objects_fun(FoldObjectsFun, Bucket, undefined, _) ->
-    fun(#bitcask_entry{key=BK}, Value, Acc1) ->
-            {B, Key} = binary_to_term(BK),
-            if B =:= Bucket ->
-                    FoldObjectsFun(B, Key, Value, Acc1);
-               true ->
-                    Acc1
-            end
-    end;
-fold_objects_fun(FoldObjectsFun, Bucket, BufferSize, BufferFun) ->
-    fun(#bitcask_entry{key=BK}, Value, Acc1) ->
-            {B, Key} = binary_to_term(BK),
-            if B =:= Bucket ->
-                    Acc2 = FoldObjectsFun(B, Key, Value, Acc1),
-                    riak_kv_backend:buffer(BufferSize, BufferFun, Acc2);
-               true ->
-                    Acc1
+            case B =:= Bucket of 
+                true ->
+                    FoldObjectsFun(B, Key, Value, Acc);
+                false ->
+                    Acc
             end
     end.
 
