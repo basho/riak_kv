@@ -121,18 +121,18 @@ client_test(Node) ->
                 {ok, Client} ->
                     case client_test_phase1(Client) of
                         ok ->
-                            lager:info("Successfully completed 1 read/write cycle to ~p", [Node]),
+                            io:format("Successfully completed 1 read/write cycle to ~p\n", [Node]),
                             ok;
                         error ->
                             error
                     end;
                 Error ->
-                    lager:error("Error creating client connection to ~s: ~p",
-                                           [Node, Error]),
+                    io:format("Error creating client connection to ~s: ~p",
+                              [Node, Error]),
                     error
             end;
         pang ->
-            lager:error("Node ~p is not reachable from ~p.", [Node, node()]),
+            io:format("Node ~p is not reachable from ~p.", [Node, node()]),
             error
     end.
 
@@ -164,7 +164,7 @@ client_test_phase1(Client) ->
         {error, notfound} ->
             client_test_phase2(Client, riak_object:new(?CLIENT_TEST_BUCKET, ?CLIENT_TEST_KEY, undefined));
         Error ->
-            lager:error("Failed to read test value: ~p", [Error]),
+            io:format("Failed to read test value: ~p", [Error]),
             error
     end.
 
@@ -175,7 +175,7 @@ client_test_phase2(Client, Object0) ->
         ok ->
             client_test_phase3(Client, Now);
         Error ->
-            lager:error("Failed to write test value: ~p", [Error]),
+            io:format("Failed to write test value: ~p", [Error]),
             error
     end.
 
@@ -186,13 +186,13 @@ client_test_phase3(Client, WrittenValue) ->
                 true ->
                     ok;
                 false ->
-                    lager:error(
+                    io:format(
                         "Failed to find test value in list of objects."
                         " Expected: ~p Actual: ~p",
                         [WrittenValue, riak_object:get_values(Object)]),
                     error
             end;
         Error ->
-            lager:error("Failed to read test value: ~p", [Error]),
+            io:format("Failed to read test value: ~p", [Error]),
             error
     end.
