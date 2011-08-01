@@ -71,48 +71,60 @@ api_version() ->
     {?API_VERSION, ?CAPABILITIES}.
 
 %% @doc Start the memory backend
-% @spec start(Partition :: integer(), Config :: proplist()) ->
-%                        {ok, state()} | {{error, Reason :: term()}, state()}
+%% @spec start(Partition :: integer(), Config :: proplist()) ->
+%%                        {ok, state()} | {{error, Reason :: term()}, state()}
 start(Partition, _Config) ->
     gen_server:start_link(?MODULE, [Partition], []).
 
-% @spec stop(state()) -> ok | {error, Reason :: term()}
+%% @spec stop(state()) -> ok | {error, Reason :: term()}
 stop(State) ->
     gen_server:call(State, stop).
 
-% get(riak_object:bucket(), riak_object:key(), state()) ->
-%   {ok, Val :: binary()} | {error, Reason :: term()}
-% key must be 160b
+%% get(riak_object:bucket(), riak_object:key(), state()) ->
+%%   {ok, Val :: binary()} | {error, Reason :: term()}
+%% key must be 160b
 get(Bucket, Key, State) ->
-    gen_server:call(State, {get, Bucket, Key}).
+    case gen_server:call(State, {get, Bucket, Key}) of
+        {ok, Value} ->
+            {ok, Value, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
 
-% put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
-%   ok | {error, Reason :: term()}
-% key must be 160b
+%% put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
+%%   ok | {error, Reason :: term()}
+%% key must be 160b
 put(Bucket, Key, Val, State) ->
-    gen_server:call(State, {put, Bucket, Key, Val}).
+    case gen_server:call(State, {put, Bucket, Key, Val}) of
+        ok ->
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
 
-% delete(riak_object:bucket(), riak_object:key(), state()) ->
-%   ok | {error, Reason :: term()}
-% key must be 160b
+%% delete(riak_object:bucket(), riak_object:key(), state()) ->
+%%   ok | {error, Reason :: term()}
+%% key must be 160b
 delete(Bucket, Key, State) ->
-    gen_server:call(State, {delete, Bucket, Key}).
+    case gen_server:call(State, {delete, Bucket, Key}) of
+        ok ->
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
 
-%% @doc Fold over all the buckets. If the fold
-%% function is `none' just list all of the buckets.
+%% @doc Fold over all the buckets.
 fold_buckets(FoldBucketsFun, Acc, _Opts, State) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     gen_server:call(State, {fold_buckets, FoldFun, Acc}).
 
-%% @doc Fold over all the keys for a bucket. If the
-%% fold function is `none' just list all of the keys.
+%% @doc Fold over all the keys for a bucket.
 fold_keys(FoldKeysFun, Acc, Opts, State) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
     gen_server:call(State, {fold_keys, FoldFun, Bucket, Acc}).
 
-%% @doc Fold over all the objects for a bucket. If the
-%% fold function is `none' just list all of the objects.
+%% @doc Fold over all the objects for a bucket.
 fold_objects(FoldObjectsFun, Acc, Opts, State) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
@@ -189,13 +201,9 @@ code_change(_OldVsn, State, _Extra) -> {ok, State}.
 %% Return a function to fold over the buckets on this backend
 fold_buckets_fun(FoldBucketsFun) ->
     fun([Bucket], Acc) ->
-            case lists:member(Bucket, Acc) of
-                true ->
-                    Acc;
-                false ->
-                    FoldBucketsFun(Bucket, Acc)
-            end
+            FoldBucketsFun(Bucket, Acc)
     end.
+
 %% @private
 %% Return a function to fold over keys on this backend
 fold_keys_fun(FoldKeysFun, undefined) ->

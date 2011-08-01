@@ -261,7 +261,7 @@ fold_objects_fun(FoldObjectsFun, undefined) ->
 fold_objects_fun(FoldObjectsFun, Bucket) ->
     fun(#bitcask_entry{key=BK}, Value, Acc) ->
             {B, Key} = binary_to_term(BK),
-            case B =:= Bucket of 
+            case B =:= Bucket of
                 true ->
                     FoldObjectsFun(B, Key, Value, Acc);
                 false ->

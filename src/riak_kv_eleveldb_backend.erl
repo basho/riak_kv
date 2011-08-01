@@ -80,37 +80,47 @@ stop(_State) ->
     ok.
 
 %% @doc Retrieve an object from the eleveldb backend
-get(Bucket, Key, #state{ref=Ref}=State) ->
-    Key = sext:encode({Bucket, Key}),
-    case eleveldb:get(Ref, Key, State#state.read_opts) of
+get(Bucket, Key, #state{read_opts=ReadOpts,
+                        ref=Ref}=State) ->
+    StorageKey = sext:encode({Bucket, Key}),
+    case eleveldb:get(Ref, StorageKey, ReadOpts) of
         {ok, Value} ->
-            {ok, Value};
+            {ok, Value, State};
         not_found  ->
-            {error, notfound};
+            {error, notfound, State};
         {error, Reason} ->
-            {error, Reason}
+            {error, Reason, State}
     end.
 
 %% @doc Insert an object into the eleveldb backend
-put(Bucket, Key, Val, #state{ref=Ref}=State) ->
-    Key = sext:encode({Bucket, Key}),
-    eleveldb:put(Ref, Key, Val,
-                 State#state.write_opts).
+put(Bucket, Key, Val, #state{ref=Ref,
+                             write_opts=WriteOpts}=State) ->
+    StorageKey = sext:encode({Bucket, Key}),
+    case eleveldb:put(Ref, StorageKey, Val, WriteOpts) of
+        ok ->
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
 
 %% @doc Delete an object from the eleveldb backend
-delete(Bucket, Key, #state{ref=Ref}=State) ->
-    eleveldb:delete(Ref, sext:encode({Bucket, Key}),
-                    State#state.write_opts).
+delete(Bucket, Key, #state{ref=Ref,
+                           write_opts=WriteOpts}=State) ->
+    StorageKey = sext:encode({Bucket, Key}),
+    case eleveldb:delete(Ref, StorageKey, WriteOpts) of
+        ok ->
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
 
-%% @doc Fold over all the buckets. If the fold
-%% function is `none' just list all of the buckets.
+%% @doc Fold over all the buckets
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{fold_opts=FoldOpts,
                                                 ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts).
 
 %% @doc Fold over all the keys for one or all buckets.
-%% If the fold function is `none' just list the keys.
 fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
                                          ref=Ref}) ->
     Bucket =  proplists:get_value(bucket, Opts),
@@ -124,12 +134,11 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
     end.
 
 %% @doc Fold over all the objects for one or all buckets.
-%% If the fold function is `none' just list the objects.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts1,
                                                ref=Ref}) ->
     Bucket = proplists:get_value(bucket, Opts),
     FoldOpts = fold_opts(Bucket, FoldOpts1),
-    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),   
+    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
     try
         eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts)
     catch
@@ -152,7 +161,7 @@ callback(_Ref, _Msg, _State) ->
 
 %% @doc Get the status information for this eleveldb backend
 status(#state{data_root=DataRoot}) ->
-    [{Dir, get_status(filename:join(DataRoot, Dir))} || 
+    [{Dir, get_status(filename:join(DataRoot, Dir))} ||
         Dir <- element(2, file:list_dir(DataRoot))].
 
 
