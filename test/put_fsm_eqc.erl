@@ -200,7 +200,8 @@ option() ->
                {1, update_last_modified},
                {1, {update_last_modified, bool()}},
                {1, details},
-               {1, {details, details()}}]).
+               {1, {details, details()}},
+               {1, disable_hooks}]).
     
 options() ->
     list(option()).
@@ -292,7 +293,8 @@ prop_basic_put() ->
         ok = fsm_eqc_vnode:set_vput_replies(VPutReplies),
         
         %% Transform the hook test atoms into the arcane hook config
-        BucketProps = make_bucket_props(N, AllowMult, Precommit, Postcommit),
+        BucketProps = make_bucket_props(N, AllowMult, Precommit, Postcommit,
+                                        Options),
 
         %% Needed for riak_kv_util get_default_rw_val
         application:set_env(riak_core,
@@ -479,6 +481,7 @@ expect(H, N, PW, RealPW, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Ob
                     false ->
                         noreply
                 end,
+    Disable = proplists:get_bool(disable_hooks, Options),
     NumPrimaries = length([xx || {_,primary} <- PL2]),
     UpNodes =  length(PL2),
     MinNodes = erlang:max(1, erlang:max(RealW, EffDW)),
@@ -504,7 +507,9 @@ expect(H, N, PW, RealPW, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Ob
            
            true ->
                 HNoTimeout = filter_timeouts(H),
-                expect(HNoTimeout, {H, N, RealW, EffDW, 0, 0, 0, ReturnObj, Precommit})
+                expect(HNoTimeout,
+                       {H, N, RealW, EffDW, 0, 0, 0, ReturnObj, Precommit},
+                       Options)
         end,
     ExpectPostcommit = case {ExpectResult, Postcommit} of
                            {{error, _}, _} ->
@@ -513,48 +518,53 @@ expect(H, N, PW, RealPW, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Ob
                                [];
                            {_, []} ->
                                [];
+                           {_, _} when Disable ->
+                               [];
                            {_, _} ->
                                %% Postcommit should be called for each ok hook registered.
                                [Object || Hook <- Postcommit, Hook =:= {erlang, postcommit_ok}]
                        end,
     {ExpectResult, ExpectPostcommit}.
 
-expect([], {_H, _N, _W, DW, _NumW, _NumDW, _NumFail, RObj, Precommit}=S) ->
+expect([], {_H, _N, _W, DW, _NumW, _NumDW, _NumFail, RObj, Precommit}=S,
+      Options) ->
     case enough_replies(S) of % this handles W=0 case
         {true, Expect} ->
-            maybe_add_robj(Expect, RObj, Precommit, DW);
+            maybe_add_robj(Expect, RObj, Precommit, DW, Options);
         false ->
-            maybe_add_robj({error, timeout}, RObj, Precommit, DW)
+            maybe_add_robj({error, timeout}, RObj, Precommit, DW, Options)
     end;
-expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit}) ->
+expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit},
+      Options) ->
     S = {H, N, W, DW, NumW + 1, NumDW, NumFail, RObj, Precommit},
 
     case enough_replies(S) of
         {true, Expect} ->
-            maybe_add_robj(Expect, RObj, Precommit, DW);
+            maybe_add_robj(Expect, RObj, Precommit, DW, Options);
         
         false ->
-            expect(Rest, S)
+            expect(Rest, S, Options)
     end;
-expect([DWReply|Rest], {H, N, W, DW, NumW, NumDW, NumFail,
-                        RObj, Precommit}) when element(1, DWReply) == dw->
+expect([DWReply|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit},
+       Options) when element(1, DWReply) == dw->
     S = {H, N, W, DW, NumW, NumDW + 1, NumFail, RObj, Precommit},
     case enough_replies(S) of
         {true, Expect} ->
-            maybe_add_robj(Expect, RObj, Precommit, DW);
+            maybe_add_robj(Expect, RObj, Precommit, DW, Options);
         false ->
-            expect(Rest, S)
+            expect(Rest, S, Options)
     end;
-expect([{fail, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit}) ->
+expect([{fail, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit},
+       Options) ->
     S = {H, N, W, DW, NumW, NumDW, NumFail + 1, RObj, Precommit},
     case enough_replies(S) of
         {true, Expect} ->
-            maybe_add_robj(Expect, RObj, Precommit, DW);
+            maybe_add_robj(Expect, RObj, Precommit, DW, Options);
         false ->
-            expect(Rest, S)
+            expect(Rest, S, Options)
     end;
-expect([{{timeout,_Stage}, _, _}|Rest], S) ->
-    expect(Rest, S).
+expect([{{timeout,_Stage}, _, _}|Rest], S, Options) ->
+    expect(Rest, S, Options).
 
 expect_object(H, W, DW, AllowMult) ->
     expect_object(filter_timeouts(H), W, DW, AllowMult, 0, 0, []).
@@ -625,8 +635,11 @@ get_effective_dw(DW, Options, PostCommit) ->
                      false ->
                          0
                  end,
+    Disable = proplists:get_bool(disable_hooks, Options),
     PostCommitDW = case PostCommit of
                        [] ->
+                           0;
+                       _ when Disable ->
                            0;
                        _ ->
                            1
@@ -657,8 +670,8 @@ enough_replies({_H, N, W, DW, NumW, NumDW, NumFail, _RObj, _Precommit}) ->
             false
     end.
  
-maybe_add_robj(ok, RObj, Precommit, DW) ->
-    case precommit_should_fail(Precommit, DW) of
+maybe_add_robj(ok, RObj, Precommit, DW, Options) ->
+    case precommit_should_fail(Precommit, DW, Options) of
         {true, Expect} ->
             Expect;
         
@@ -670,11 +683,11 @@ maybe_add_robj(ok, RObj, Precommit, DW) ->
                     {ok, RObj}
             end
     end;
-maybe_add_robj({error, timeout}, _Robj, Precommit, DW) ->
+maybe_add_robj({error, timeout}, _Robj, Precommit, DW, Options) ->
     %% Catch cases where it would fail before sending to vnodes, otherwise
     %% timeout rather than receive an {error, too_many_fails} message - it 
     %% will never come if the put FSM times out.
-    case precommit_should_fail(Precommit, DW) of
+    case precommit_should_fail(Precommit, DW, Options) of
         {true, {error, precommit_fail}} ->
             {error, precommit_fail};
         {true, {error, {precommit_fail, Why}}} ->
@@ -686,7 +699,7 @@ maybe_add_robj({error, timeout}, _Robj, Precommit, DW) ->
         false ->
             {error, timeout}
     end;
-maybe_add_robj(Expect, _Robj, _Precommit, _DW) ->
+maybe_add_robj(Expect, _Robj, _Precommit, _DW, _Options) ->
     Expect.
 
 %%====================================================================
@@ -744,6 +757,12 @@ apply_precommit(Object, [{_, precommit_append_value} | Rest]) ->
     apply_precommit(UpdObj, Rest);
 apply_precommit(Object, [_ | Rest]) ->
     apply_precommit(Object, Rest).
+
+precommit_should_fail(Precommit, DW, Options) ->
+    case proplists:get_bool(disable_hooks, Options) of
+        true -> false;
+        false -> precommit_should_fail(Precommit, DW)
+    end.
 
 precommit_should_fail([], _DW) ->
     false;
