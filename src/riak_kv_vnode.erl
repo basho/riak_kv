@@ -242,6 +242,10 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
                end,
     {noreply, NewState}.
 
+%% @doc Handle a coverage request. 
+%% More information about the specification for the ItemFilter
+%% parameter can be found in the documentation for the
+%% {@link riak_kv_coverage_filter} module.
 handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
                 _FilterVNodes,
                 Sender,
