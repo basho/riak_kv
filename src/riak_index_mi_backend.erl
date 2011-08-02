@@ -32,7 +32,7 @@
 %% @type state() = term().
 -record(state, {partition, pid}).
 
-%% @type posting() :: {Index::binary(), Field::term(), Term::term(), 
+%% @type posting() :: {Index::binary(), Field::term(), Term::term(),
 %%                     Value::term(), Properties::term(), Timestamp::Integer}.
 
 %% @spec start(Partition :: integer(), Config :: proplist()) ->
@@ -41,13 +41,13 @@
 %% @doc Start this backend.
 start(Partition, Config) ->
     %% Get the data root directory
-    DataRoot = 
+    DataRoot =
         case proplists:get_value(data_root, Config) of
             undefined ->
                 case application:get_env(merge_index, data_root) of
                     {ok, Dir} ->
                         Dir;
-                    _ -> 
+                    _ ->
                         riak:stop("riak_index data_root unset, failing.")
                 end;
             Value ->
@@ -84,7 +84,7 @@ index(State, Postings) ->
 %%
 %% @doc Delete the specified postings in the index. Postings are a
 %%      6-tuple of the form {Index, Field, Term, Value, Properties,
-%%      Timestamp}. 
+%%      Timestamp}.
 delete(State, Postings) ->
     Pid = State#state.pid,
     %% Merge_index deletes a posting when you send it into the system
@@ -96,7 +96,7 @@ delete(State, Postings) ->
     merge_index:index(Pid, Postings1).
 
 
-%% @spec lookup_sync(State :: state(), Index::term(), Field::term(), Term::term()) -> 
+%% @spec lookup_sync(State :: state(), Index::term(), Field::term(), Term::term()) ->
 %%           [{Value::term(), Props::term()}].
 %%
 %% @doc Return a list of matching values stored under the provided
@@ -105,7 +105,6 @@ lookup_sync(State, Index, Field, Term) ->
     Pid = State#state.pid,
     FilterFun = fun(_Value, _Props) -> true end,
     merge_index:lookup_sync(Pid, Index, Field, Term, FilterFun).
-
 
 %% @spec fold_index(State :: state(), Bucket :: binary(), Query :: riak_index:query_elements(),
 %%                  SKFun :: function(), Acc :: term(), FinalFun :: function()) -> term().
@@ -135,10 +134,11 @@ fold_index(State, Index, Query, SKFun, Acc, FinalFun) ->
                   [{range, Field, [StartTerm, EndTerm]}] ->
                       merge_index:range_sync(Pid, Index, Field, StartTerm, EndTerm, ?SIZE, FilterFun);
 
-                  _ -> 
+                  _ ->
                       {error, {unknown_query_element, Query}}
               end,
-    
+
+
     %% If Results is a list of results, then call SKFun to accumulate
     %% the results.
     Results1 = case is_list(Results) of
@@ -172,7 +172,7 @@ callback(_State, _Ref, _Msg) ->
 
 %% @private
 %% @spec inc(term(), Amt :: integer()) -> term().
-%% 
+%%
 %% @doc Increments or decrements an Erlang data type by one
 %%      position. Used during construction of exclusive range searches.
 inc(Term, Amt)  when is_integer(Term) ->
