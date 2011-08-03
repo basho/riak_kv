@@ -143,12 +143,14 @@ build_preflist_fun(Bucket, Ring) ->
 compose([]) ->
     none;
 compose(Filters) ->
-    compose(Filters, fun(V) -> V end).
+    compose(Filters, fun(_X) -> true end).
 
 compose([], F0) -> F0;
 compose([Filter1|Filters], F0) ->
     {FilterMod, FilterFun, Args} = Filter1,
     Fun1 = FilterMod:FilterFun(Args),
-    F1 = fun(CArgs) -> Fun1(F0(CArgs)) end,
+    F1 = fun(CArgs) -> 
+                 io:format("CArgs: ~p~n", [CArgs]),
+                 Fun1(CArgs) andalso F0(CArgs) end,
     compose(Filters, F1).
 
