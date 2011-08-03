@@ -48,7 +48,7 @@ start(Partition, Config) ->
                     {ok, Dir} ->
                         Dir;
                     _ ->
-                        riak:stop("riak_index data_root_2i unset, failing.")
+                        riak:stop("merge_index data_root_2i unset, failing.")
                 end;
             Value ->
                 Value
