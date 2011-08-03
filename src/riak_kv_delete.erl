@@ -331,7 +331,7 @@ dep_apps() ->
         end,
     XX = fun(_) -> error_logger:info_msg("Registered: ~w\n", [lists:sort(registered())]) end,
     [sasl, crypto, riak_sysmon, webmachine, XX, riak_core, XX, luke, erlang_js,
-     mochiweb, os_mon, SetupFun, riak_kv].
+     inets, mochiweb, os_mon, SetupFun, riak_kv].
 
 do_dep_apps(StartStop, Apps) ->
     lists:map(fun(A) when is_atom(A) -> application:StartStop(A);
