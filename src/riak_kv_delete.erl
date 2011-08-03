@@ -81,7 +81,8 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
             case Reply of
                 ok ->
                     {ok, C2} = riak:local_client(),
-                    C2:get(Bucket, Key, all, Timeout);
+                    AsyncTimeout = 60*1000,     % Avoid client-specified value
+                    C2:get(Bucket, Key, all, AsyncTimeout);
                 _ -> nop
             end
     end.
@@ -330,7 +331,7 @@ dep_apps() ->
         end,
     XX = fun(_) -> error_logger:info_msg("Registered: ~w\n", [lists:sort(registered())]) end,
     [sasl, crypto, riak_sysmon, webmachine, XX, riak_core, XX, luke, erlang_js,
-     mochiweb, os_mon, SetupFun, riak_kv].
+     inets, mochiweb, os_mon, SetupFun, riak_kv].
 
 do_dep_apps(StartStop, Apps) ->
     lists:map(fun(A) when is_atom(A) -> application:StartStop(A);
