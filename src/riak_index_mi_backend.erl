@@ -42,13 +42,13 @@
 start(Partition, Config) ->
     %% Get the data root directory
     DataRoot =
-        case proplists:get_value(data_root, Config) of
+        case proplists:get_value(data_root_2i, Config) of
             undefined ->
                 case application:get_env(merge_index, data_root_2i) of
                     {ok, Dir} ->
                         Dir;
                     _ ->
-                        riak:stop("riak_index data_root unset, failing.")
+                        riak:stop("riak_index data_root_2i unset, failing.")
                 end;
             Value ->
                 Value
@@ -199,14 +199,14 @@ inc(Term, _) ->
 simple_test() ->
     ?assertCmd("rm -rf test/mi-backend"),
     application:start(merge_index),
-    application:set_env(merge_index, data_root, "test/mi-backend"),
+    application:set_env(merge_index, data_root_2i, "test/mi-backend"),
     riak_index_backend:standard_test(?MODULE, []),
     ok.
 
 custom_config_test() ->
     ?assertCmd("rm -rf test/mi-backend"),
     application:start(merge_index),
-    application:set_env(merge_index, data_root, ""),
-    riak_index_backend:standard_test(?MODULE, [{data_root, "test/mi-backend"}]).
+    application:set_env(merge_index, data_root_2i, ""),
+    riak_index_backend:standard_test(?MODULE, [{data_root_2i, "test/mi-backend"}]).
 
 -endif.
