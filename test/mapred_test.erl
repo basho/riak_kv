@@ -85,6 +85,7 @@ dep_apps() ->
      riak_pipe,
      luke,
      erlang_js,
+     inets,
      mochiweb,
      os_mon,
      fun(start) ->
