@@ -36,6 +36,9 @@ join([NodeStr]) ->
             {error, not_reachable} ->
                 io:format("Node ~s is not reachable!\n", [NodeStr]),
                 error;
+            {error, different_ring_sizes} ->
+                io:format("Failed: ~s has a different ring_creation_size~n",
+                          [NodeStr]);
             {error, _} ->
                 io:format("Join failed. Try again in a few moments.~n", []),
                 error
