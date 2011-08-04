@@ -244,6 +244,9 @@ multi_backend_test_() ->
 
                         % Check the default...
                         {second_backend, riak_kv_ets_backend, _} = get_backend(<<"b3">>, State),
+                            
+                        % Stop the backend
+                        stop(State),
                         ok
                     end
                 }
@@ -310,6 +313,7 @@ extra_callback_test() ->
                 {gb_trees, riak_kv_gb_trees_backend, []}]}],
     {ok, State} = start(0, Config),
     callback(State, make_ref(), ignore_me),
+    stop(State),
     application:unload(bitcask).
     
            
