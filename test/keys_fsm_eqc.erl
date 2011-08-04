@@ -65,7 +65,8 @@ setup() ->
     timer:sleep(2000),
 
     %% Start erlang node
-    net_kernel:start([testnode, shortnames]),
+    TestNode = list_to_atom("testnode" ++ integer_to_list(element(3, now()))),
+    net_kernel:start([TestNode, shortnames]),
     do_dep_apps(start, dep_apps()),
     ok.
 
@@ -198,6 +199,8 @@ prepare() ->
     error_logger:delete_report_handler(sasl_report_tty_h),
     error_logger:delete_report_handler(error_logger_tty_h),
 
+    TestNode = list_to_atom("testnode" ++ integer_to_list(element(3, now())) ++
+                                "@localhost"),
     {ok, _} = net_kernel:start([testnode, longnames]),
     do_dep_apps(start, dep_apps()),
     ok.

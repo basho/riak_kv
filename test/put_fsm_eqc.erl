@@ -96,7 +96,8 @@ setup() ->
                     %% not been run from the commandline.
                     os:cmd("epmd -daemon"),
                     timer:sleep(100),
-                    {ok, _Pid} = net_kernel:start(['putfsmeqc@localhost', shortnames]),
+                    TestNode = list_to_atom("putfsmeqc" ++ integer_to_list(element(3, now()))),
+                    {ok, _Pid} = net_kernel:start([TestNode, shortnames]),
                     started
             end,
     %% Shut logging up - too noisy.
