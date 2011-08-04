@@ -293,8 +293,7 @@ prop_basic_put() ->
         ok = fsm_eqc_vnode:set_vput_replies(VPutReplies),
         
         %% Transform the hook test atoms into the arcane hook config
-        BucketProps = make_bucket_props(N, AllowMult, Precommit, Postcommit,
-                                        Options),
+        BucketProps = make_bucket_props(N, AllowMult, Precommit, Postcommit),
 
         %% Needed for riak_kv_util get_default_rw_val
         application:set_env(riak_core,
