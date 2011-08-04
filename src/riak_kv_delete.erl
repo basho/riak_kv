@@ -285,7 +285,12 @@ setup() ->
     error_logger:tty(false),
     error_logger:logfile({open, "riak_kv_delete_test.log"}),
     %% Start erlang node
-    {ok, _} = net_kernel:start([testnode, shortnames]),
+    case net_kernel:start([testnode, shortnames]) of
+        {ok, _} ->
+            ok;
+        {error, {already_started, _}} ->
+            ok
+    end,
     do_dep_apps(start, dep_apps()),
     application:set_env(riak_core, default_bucket_props, [{r, quorum},
             {w, quorum}, {pr, 0}, {pw, 0}, {rw, quorum}, {n_val, 3}]),
@@ -306,6 +311,10 @@ cleanup(_Pid) ->
     do_dep_apps(stop, lists:reverse(dep_apps())),
     catch exit(whereis(riak_kv_vnode_master), kill), %% Leaks occasionally
     catch exit(whereis(riak_sysmon_filter), kill), %% Leaks occasionally
+    unlink(whereis(riak_kv_get_fsm_sup)),
+    unlink(whereis(riak_kv_delete_sup)),
+    catch exit(whereis(riak_kv_get_fsm_sup), kill), %% Leaks occasionally
+    catch exit(whereis(riak_kv_delete_sup), kill), %% Leaks occasionally
     net_kernel:stop(),
     %% Reset the riak_core vnode_modules
     application:unset_env(riak_core, default_bucket_props),
