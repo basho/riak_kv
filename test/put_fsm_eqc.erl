@@ -70,7 +70,7 @@ eqc_test_() ->
        [%% Check networking/clients are set up 
         ?_assert(node() /= 'nonode@nohost'),
         ?_assertEqual(pong, net_adm:ping(node())),
-        ?_assertEqual(pang, net_adm:ping('nonode@nohost')),
+        {timeout, 60, [?_assertEqual(pang, net_adm:ping('nonode@nohost'))]},
         ?_assertMatch({ok,_C}, riak:local_client()),
         %% Check javascript is working
         ?_assertMatch({ok, 123}, 
