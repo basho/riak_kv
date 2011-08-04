@@ -150,7 +150,6 @@ compose([Filter1|Filters], F0) ->
     {FilterMod, FilterFun, Args} = Filter1,
     Fun1 = FilterMod:FilterFun(Args),
     F1 = fun(CArgs) -> 
-                 io:format("CArgs: ~p~n", [CArgs]),
                  Fun1(CArgs) andalso F0(CArgs) end,
     compose(Filters, F1).
 
