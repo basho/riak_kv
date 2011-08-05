@@ -143,13 +143,23 @@ build_preflist_fun(Bucket, Ring) ->
 compose([]) ->
     none;
 compose(Filters) ->
-    compose(Filters, fun(_X) -> true end).
+    compose(Filters, []).
 
-compose([], F0) -> F0;
-compose([Filter1|Filters], F0) ->
-    {FilterMod, FilterFun, Args} = Filter1,
-    Fun1 = FilterMod:FilterFun(Args),
-    F1 = fun(CArgs) -> 
-                 Fun1(CArgs) andalso F0(CArgs) end,
-    compose(Filters, F1).
+compose([], FilterFuns) ->
+    TruthFun =
+        fun(X) ->
+                case X of
+                    true ->
+                        true;
+                    _ ->
+                        false
+                end
+        end,
+    fun(Val) ->
+            lists:all(TruthFun, [FilterFun(Val) || FilterFun <- FilterFuns])
+    end;
+compose([Filter | RestFilters], FilterFuns) ->
+    {FilterMod, FilterFun, Args} = Filter,
+    Fun = FilterMod:FilterFun(Args),
+    compose(RestFilters, [Fun | FilterFuns]).
 
