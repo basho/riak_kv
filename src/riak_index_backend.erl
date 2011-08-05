@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_index_backend: Riak Index backend behaviour 
+%% riak_index_backend: Riak Index backend behaviour
 %%
 %% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -32,10 +32,10 @@
 -spec behaviour_info(atom()) -> 'undefined' | [{atom(), arity()}].
 behaviour_info(callbacks) ->
     [{start,2},        % (Partition, Config)
-     {stop,1},         % (State) 
+     {stop,1},         % (State)
      {index, 2},       % (State, Postings)
      {delete, 2},      % (State, Postings)
-     {lookup_sync, 4}, % (State, Index, Field, Term) 
+     {lookup_sync, 4}, % (State, Index, Field, Term)
      {fold_index, 6},  % (State, Index, Query, SKFun, Acc, FinalFun)
      {drop,1},         % (State)
      {callback,3}];    % (State, Ref, Msg) ->
@@ -76,7 +76,7 @@ standard_test(BackendMod, Config) ->
                  {<<"bucket">>, "field", "term2", "value_f", [], 1}
                 ],
     BackendMod:index(State, Postings2),
-    
+
     %% Retrieve what we just indexed...
     Results2 = [
                 {"value_d", [{"field", "term2"}]},
@@ -84,7 +84,7 @@ standard_test(BackendMod, Config) ->
                 {"value_f", [{"field", "term2"}]}
                ],
     ?assertEqual(Results2, BackendMod:lookup_sync(State, <<"bucket">>, "field", "term2")),
-    
+
     %% Delete some postings...
     Postings3 = [
                  {<<"bucket">>, "field", "term1", "value_a", [], 2},

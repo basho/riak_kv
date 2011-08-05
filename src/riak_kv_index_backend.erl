@@ -35,6 +35,7 @@
          list/1,
          list_bucket/2,
          fold/3,
+         fold_index/3,
          fold_keys/3,
          fold_bucket_keys/4,
          drop/1,
@@ -67,7 +68,7 @@ start(Partition, Config) ->
     {ok, IndexState} = IndexMod:start(Partition, Config),
 
     %% Create the state and return...
-    State = #state { 
+    State = #state {
       kv_mod = KVMod,
       kv_state = KVState,
       index_mod = IndexMod,
@@ -78,7 +79,7 @@ start(Partition, Config) ->
 %% @spec stop(state()) -> ok | {error, Reason :: term()}.
 %%
 %% @doc Stop backends, bubble up any errors.
-stop(State) -> 
+stop(State) ->
     #state { kv_mod = KVMod, kv_state = KVState, index_mod = IndexMod, index_state = IndexState } = State,
     KVResult = KVMod:stop(KVState),
     IndexResult = IndexMod:stop(IndexState),
@@ -90,7 +91,7 @@ stop(State) ->
     end.
 
 %% @spec get(state(), Key :: binary()) -> {ok, Val :: binary()} | {error, Reason :: term()}.
-%% 
+%%
 %% @doc Pass a get request through to the KV backend.
 get(State, BKey) ->
     #state { kv_mod = KVMod, kv_state = KVState } = State,
@@ -100,7 +101,7 @@ get(State, BKey) ->
 %%
 %% @doc Index the Riak object using fields stored in metadata under
 %%       <<"index">>, then store the object in the KV backend.
-put(State, BKey, Val) -> 
+put(State, BKey, Val) ->
     #state { kv_mod = KVMod, kv_state = KVState, index_mod = IndexMod, index_state = IndexState } = State,
 
     %% Since the two backends are separate, we can't have a true
@@ -115,9 +116,9 @@ put(State, BKey, Val) ->
     end.
 
 %% @spec delete(state(), Key :: binary()) -> ok | {error, Reason :: term()}.
-%% 
+%%
 %% @doc Delete the object from the Index backend and the KV backend.
-delete(State, BKey) -> 
+delete(State, BKey) ->
     #state { kv_mod = KVMod, kv_state = KVState, index_mod = IndexMod, index_state = IndexState } = State,
 
     %% Since the two backends are separate, we can't have a true
@@ -139,7 +140,7 @@ list(State) ->
     KVMod:list(KVState).
 
 %% @spec list_bucket(state(), list_bucket_def()) -> [Key :: binary()].
-%% @type list_bucket_def() -> Bucket :: binary() 
+%% @type list_bucket_def() -> Bucket :: binary()
 %%                          | Any :: '_'
 %%                          | Filter :: {filter, Bucket::binary(), FilterFun :: function()}
 %%
@@ -166,25 +167,21 @@ drop(State) ->
 %% @spec fold(state(), function(), term()) -> [Key :: binary()].
 %%
 %% @doc Pass fold requests through to the KV backend.
-fold(State, Fun, Extra) ->    
+fold(State, Fun, Extra) ->
     #state { kv_mod = KVMod, kv_state = KVState } = State,
     KVMod:fold(KVState, Fun, Extra).
 
 %% @spec fold_keys(state(), function(), term()) -> [Key :: binary()].
-%% 
+%%
 %% @doc Pass fold_keys requests through to the KV backend.
 fold_keys(State, Fun, Extra) ->
     #state { kv_mod = KVMod, kv_state = KVState } = State,
     KVMod:fold_keys(KVState, Fun, Extra).
 
-
-%% HACK - This is how we're funneling Riak Index queries until we add
-%% "covering cast" functionality to riak_core. For now, we're going to
-%% focus on getting the request to the Index backend with the correct
-%% arguments roughly in place and running basic queries.
-fold_bucket_keys(State, {index_query, Bucket, Query}, _Fun, _Extra) ->
-    #state { index_mod = IndexMod, index_state = IndexState } = State,
-
+%% @doc Pass the fold_index request through to the Index backend.
+fold_index(#state {index_mod = IndexMod,
+                   index_state = IndexState},
+           Bucket, Query) ->
     %% Update riak_kv_stat...
     riak_kv_stat:update(vnode_index_read),
 
@@ -192,26 +189,26 @@ fold_bucket_keys(State, {index_query, Bucket, Query}, _Fun, _Extra) ->
     %% feed into SKFun using {sk, SecondaryKey, PrimaryKey}, but this
     %% doesn't account for Properties. We also need to add a clause
     %% for when we reach the limit.
-    SKFun = fun({results, Results}, Acc) ->
-                    {ok, Results ++ Acc};
-               ({error, Reason}, _Acc) ->
+    SKFun = fun({results, Results1}, Acc1) ->
+                    {ok, Results1 ++ Acc1};
+               ({error, Reason}, _Acc1) ->
                     {error, Reason};
-               (done, Acc) ->
-                    {ok, Acc}
+               (done, Acc1) ->
+                    {ok, Acc1}
             end,
 
     %% Also, for this round of changes, FinalFun is going to just
     %% return the output of SKFun. Normally, this would call
     %% riak_core_vnode:reply/N. Here, we just transform the list of
     %% results from [{Key, Props}] to [Key].
-    FinalFun = fun({error, Reason}, _Acc) ->
+    FinalFun = fun({error, Reason}, _Acc1) ->
                        {error, Reason};
-                  (done, Acc) ->
-                       [K || {K, _} <- Acc]
+                  (done, Acc1) ->
+                       [K || {K, _} <- Acc1]
                end,
 
-    %% Pass the fold_index request through to the Index backend.
-    IndexMod:fold_index(IndexState, Bucket, Query, SKFun, [], FinalFun);
+    %% Call fold_index on the Index backend
+    IndexMod:fold_index(IndexState, Bucket, Query, SKFun, [], FinalFun).
 
 %% @spec fold_bucket_keys(state(), binary(), function(), term()) -> [Key :: binary()].
 %%
@@ -235,7 +232,7 @@ fold_bucket_keys(State, Bucket, Fun, Extra) ->
 
 %% @spec callback(state(), ref(), term()) -> ok.
 %%
-%% @doc Pass any callbacks through to the KV backend. 
+%% @doc Pass any callbacks through to the KV backend.
 callback(State, Ref, Msg) ->
     %% Callbacks are handled using the same method as multi-backend:
     %% call the callback function on each backend, don't check for any
@@ -249,9 +246,9 @@ callback(State, Ref, Msg) ->
 %%% PRIVATE FUNCTIONS %%%
 
 
-%% @private 
+%% @private
 %% @spec do_index_put(IndexMod :: module(), IndexState :: term(), BKey :: riak_object:bkey(), Val :: binary()) -> ok.
-%%       
+%%
 %% @doc Index the BKey/Value in the Index backend.
 do_index_put(IndexMod, IndexState, BKey, Val) ->
     %% Get the old proxy object. If it exists, then delete all of its
@@ -277,11 +274,11 @@ do_index_put(IndexMod, IndexState, BKey, Val) ->
     %% get anything back except for {ok, IndexFields} then fail
     %% loudly, as it's an unanticipated code path.
     IndexFields = case riak_index:parse_object(Obj) of
-                      {ok, IFs} -> 
+                      {ok, IFs} ->
                           %% No properties for now. This is here for future planning.
                           EmptyProps = [],
                           [{Field, Value, EmptyProps} || {Field, Value} <- IFs];
-                      {error, Reasons} -> 
+                      {error, Reasons} ->
                           throw({error_parsing_index_fields, Reasons})
                   end,
 
@@ -295,24 +292,24 @@ do_index_put(IndexMod, IndexState, BKey, Val) ->
 
     %% Store the new postings...
     Postings = [{Bucket, Field, Token, Key, Props, TS2} || {Field, Token, Props} <- IndexFields],
-    try 
+    try
         %% io:format("DEBUG: Indexing new postings for ~p:~n~p~n", [BKey, Postings]),
         IndexMod:index(IndexState, Postings),
         riak_kv_stat:update({vnode_index_write, length(Postings)}),
         ok
-    catch 
+    catch
         _Type : Reason ->
             {error, Reason}
     end.
 
-%% @private 
+%% @private
 %% @spec do_kv_put(KVMod :: module(), KVState :: term(), BKey :: riak_object:bkey(), Val :: binary()) -> ok.
-%% 
+%%
 %% @doc Store the BKey/Value in the KV backend.
 do_kv_put(KVMod, KVState, BKey, Val) ->
     KVMod:put(KVState, BKey, Val).
 
-%% @private 
+%% @private
 %% @spec do_index_delete(IndexMod :: module(), IndexState :: term(), BKey :: riak_object:bkey()) -> ok | {error, Reason}
 %%
 %% @doc Delete the BKey from the Index backend.
@@ -336,9 +333,9 @@ do_index_delete(IndexMod, IndexState, BKey) ->
             ok
     end.
 
-%% @private 
+%% @private
 %% @spec do_kv_delete(KVMod :: module(), KVState :: term(), BKey :: riak_object:bkey()) -> ok.
-%% 
+%%
 %% @doc Delete the BKey from the KV backend.
 do_kv_delete(KVMod, KVState, BKey) ->
     KVMod:delete(KVState, BKey).
