@@ -152,8 +152,11 @@ produce_bucket_body(RD, Ctx) ->
                         {ok, ReqId} = Client:stream_list_keys(Bucket),
                         stream_keys(ReqId)
                 end,
-            {{stream, {[], F}}, RD, Ctx};
-
+            %% Some clients have problems without an empty struct as
+            %% the first result, so include mochijson2:encode({struct,
+            %% []}). Still investigating why.
+            {{stream, {mochijson2:encode({struct, []}), F}}, RD, Ctx};
+ 
         ?Q_TRUE ->
             %% Get the JSON response...
             {ok, KeyList} = Client:list_keys(Bucket),
