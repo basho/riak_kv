@@ -148,12 +148,7 @@ compose(Filters) ->
 compose([], FilterFuns) ->
     TruthFun =
         fun(X) ->
-                case X of
-                    true ->
-                        true;
-                    _ ->
-                        false
-                end
+                X =:= true
         end,
     fun(Val) ->
             lists:all(TruthFun, [FilterFun(Val) || FilterFun <- FilterFuns])
