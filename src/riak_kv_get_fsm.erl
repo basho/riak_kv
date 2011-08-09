@@ -394,8 +394,6 @@ setup() ->
     ok.
 
 cleanup(_) ->
-    application:unload(riak_kv),
-    application:unload(riak_core),
     dbg:stop_clear().
 
 happy_path_case() ->
