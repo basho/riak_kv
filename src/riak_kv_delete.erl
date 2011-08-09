@@ -285,7 +285,9 @@ setup() ->
     error_logger:tty(false),
     error_logger:logfile({open, "riak_kv_delete_test.log"}),
     %% Start erlang node
-    case net_kernel:start([testnode, shortnames]) of
+    TestNode = list_to_atom("testnode" ++ integer_to_list(element(3, now())) ++
+                                integer_to_list(element(2, now()))),
+    case net_kernel:start([TestNode, shortnames]) of
         {ok, _} ->
             ok;
         {error, {already_started, _}} ->
