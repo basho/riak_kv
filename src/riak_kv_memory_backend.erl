@@ -170,12 +170,13 @@ handle_call({fold_keys, FoldFun, Bucket, Acc}, _From, #state{ref=Ref}=State) ->
 handle_call({fold_objects, FoldFun, Bucket, Acc}, _From, #state{ref=Ref}=State) ->
     {reply, srv_fold_objects(FoldFun, Bucket, Acc, Ref), State};
 handle_call(drop, _From, #state{ref=Ref}=State) ->
-    ets:delete(Ref),
-    {reply, ok, State};
+    ets:delete_all_objects(Ref),
+    {reply, {ok, self()}, State};
 handle_call(is_empty, _From, #state{ref=Ref}=State) ->
     {reply, ets:info(Ref, size) =:= 0, State};
 handle_call(status, _From, #state{ref=Ref}=State) ->
     {reply, ets:info(Ref), State}.
+
 
 %% @private
 handle_cast(_, State) -> {noreply, State}.
@@ -279,8 +280,29 @@ simple_test() ->
     riak_kv_backend:standard_test(?MODULE, []).
 
 -ifdef(EQC).
-eqc_test() ->
-    ?assertEqual(true, backend_eqc:test(?MODULE, true)).
+%% eqc_test() ->
+%%     ?assertEqual(true, backend_eqc:test(?MODULE, true)).
+eqc_test_() ->
+    {spawn,
+     [{inorder,
+     [{setup,
+       fun setup/0,
+       fun cleanup/1,
+       [
+        {timeout, 60000,
+         [?_assertEqual(true,
+                       backend_eqc:test(?MODULE, true))]}
+       ]}]}]}.
+
+setup() ->
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_memory_backend_eqc_sasl.log"}),
+    error_logger:tty(false),
+    error_logger:logfile({open, "riak_kv_memory_backend_eqc.log"}),
+    ok.
+
+cleanup(_) ->
+    ok.
 
 -endif. % EQC
 -endif. % TEST
