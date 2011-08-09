@@ -12,17 +12,18 @@
          precondition/4, 
          postcondition/5]).
 
--export([stopped/3,
-         running/3,
-         init_backend/2,
-         fold/2]).
+-export([stopped/2,
+         running/2,
+         init_backend/3
+        ]).
 -export([test/1, test/2, test/3, test/4, test/5]).
 -export([prop_backend/4]).
 
--record(qcst, {c,  % Backend config
+-record(qcst, {backend, % Backend module under test
+               c,  % Backend config
                s,  % Module state returned by Backend:start
                olds=sets:new(), % Old states after a stop
-               d}).% Orddict of values stored
+               d=[]}).% Orddict of values stored
 
 test(Backend) ->
     test(Backend, false).
@@ -41,20 +42,22 @@ test(Backend, Volatile, Config, Cleanup, NumTests) ->
                                 prop_backend(Backend, Volatile, Config, Cleanup))).
 
 prop_backend(Backend, Volatile, Config, Cleanup) ->
-    ?FORALL(Cmds, commands(?MODULE, {{stopped, Backend, Volatile}, initial_state_data(Config)}),
+    ?FORALL(Cmds, commands(?MODULE, {{stopped, Volatile}, initial_state_data(Backend, Config)}),
             aggregate(command_names(Cmds),
                       begin
                           {H,{_F,S},Res} = run_commands(?MODULE, Cmds),
                           Cleanup(S#qcst.s, sets:to_list(S#qcst.olds)),
                           ?WHENFAIL(
                              begin
-                                 io:format("History: ~p\n", [H]),
-                                 io:format("BE Config: ~p\nBE State: ~p\nD: ~p\n",
-                                           [S#qcst.c, S#qcst.s, orddict:to_list(S#qcst.d)]),
-                                 io:format("Result: ~p\n", [Res])
+                                 ?debugFmt("Cmds: ~p~n", [Cmds]),
+                                 ?debugFmt("Result: ~p~n", [Res]),
+                                 ?debugFmt("History: ~p~n", [H]),
+                                 ?debugFmt("BE Config: ~p~nBE State: ~p~nD: ~p~n",
+                                           [S#qcst.c, S#qcst.s, orddict:to_list(S#qcst.d)])
                              end,
-                             Res == ok)
-                      end)).
+                             equals(ok, Res))
+                      end
+                     )).
 
 
 bucket() ->
@@ -63,95 +66,113 @@ bucket() ->
 key() ->
     elements([<<"k1">>,<<"k2">>,<<"k3">>,<<"k4">>]).
 
-bkey() ->
-    {bucket(),key()}.
-
 val() ->
     binary().
 
+fold_buckets_fun() ->
+    fun(Bucket, Acc) ->
+            [Bucket | Acc]
+    end.
+
+fold_keys_fun() ->
+    fun(Bucket, Key, Acc) ->
+            [{Bucket, Key} | Acc]
+    end.
+
+fold_objects_fun() ->
+    fun(Bucket, Key, Value, Acc) ->
+            [{{Bucket, Key}, Value} | Acc]
+    end.
+    
 initial_state() ->
-    {stopped, riak_kv_ets_backend, true}.
+    {stopped, true}.
 
 initial_state_data() ->
     #qcst{d = orddict:new()}.
 
-initial_state_data(Config) ->
-    #qcst{c = Config, d = orddict:new()}.
+initial_state_data(Backend, Config) ->
+    #qcst{backend=Backend, c = Config, d = orddict:new()}.
 
-next_state_data({running,Backend,Volatile},{stopped,Backend,Volatile},S,_R,
+next_state_data({running,Volatile},{stopped,Volatile},S,_R,
                 {call,_M,stop,_}) ->
-    S1 = S#qcst{s = undefined, olds = sets:add_element(S#qcst.s, S#qcst.olds)},
-    case Volatile of
-        true ->
-            S1#qcst{d = orddict:new()};
-        false ->
-            S1
-    end;
-next_state_data({running,Backend,Volatile},{stopped,Backend,Volatile},S,_R,
-                {call,_M,drop,_}) ->
-    S#qcst{s=undefined, olds=sets:add_element(S#qcst.s, S#qcst.olds),
-           d=orddict:new()};
+    S#qcst{d=orddict:new(), olds = sets:add_element(S#qcst.s, S#qcst.olds)};
 next_state_data(_From,_To,S,BeState,{call,_M,init_backend,_}) ->
-    S#qcst{s = BeState};
-next_state_data(_From,_To,S,_R,{call,_M,put,[_S, Key, Val]}) ->
-    S#qcst{d = orddict:store(Key, Val, S#qcst.d)};
-next_state_data(_From,_To,S,_R,{call,_M,delete,[_S, Key]}) ->
-    S#qcst{d = orddict:erase(Key, S#qcst.d)};
+    S#qcst{s=BeState};
+next_state_data(_From,_To,S,_R,{call,_M,put,[Bucket, Key, Val, _]}) ->
+    S#qcst{d = orddict:store({Bucket, Key}, Val, S#qcst.d)};    
+next_state_data(_From,_To,S,_R,{call,_M,delete,[Bucket, Key, _]}) ->
+    S#qcst{d = orddict:erase({Bucket, Key}, S#qcst.d)};
+next_state_data(_From,_To,S,R,{call,_M,drop,[_]}) ->
+    case R of
+        {ok, BeState} ->
+            S#qcst{d=orddict:new(), s=BeState};
+        {error, _, _} ->
+            S;
+        _ ->
+            S
+    end;
 next_state_data(_From,_To,S,_R,_C) ->
     S.
 
-stopped(Backend, Volatile, S) ->
-    [{{running, Backend, Volatile}, {call,?MODULE,init_backend,[Backend,S#qcst.c]}}].
+stopped(Volatile, S) ->
+    [{{running, Volatile}, {call,?MODULE,init_backend,[S#qcst.backend, Volatile, S#qcst.c]}}].
 
-running(Backend, Volatile, S) ->
-    [{history, {call,Backend,put,[S#qcst.s,bkey(),val()]}},
-     {history, {call,Backend,get,[S#qcst.s,bkey()]}},
-     {history, {call,Backend,delete,[S#qcst.s,bkey()]}},
-     {history, {call,Backend,list,[S#qcst.s]}},
-     {history, {call,?MODULE,fold,[Backend,S#qcst.s]}},
-     {history, {call,Backend,is_empty,[S#qcst.s]}},
-     {history, {call,Backend,list_bucket,[S#qcst.s,bucket()]}},
-     {{stopped, Backend, Volatile}, {call,Backend,drop,[S#qcst.s]}},
-     {{stopped, Backend, Volatile}, {call,Backend,stop,[S#qcst.s]}}
+running(Volatile, #qcst{backend=Backend, s=State}) ->
+    [
+     {history, {call,Backend,put,[bucket(),key(),val(),State]}},
+     {history, {call,Backend,get,[bucket(),key(),State]}},
+     {history, {call,Backend,delete,[bucket(),key(),State]}},
+     {history, {call, Backend, fold_buckets, [fold_buckets_fun(), [], [], State]}},
+     {history, {call, Backend, fold_keys, [fold_keys_fun(), [], [], State]}},
+     {history, {call, Backend, fold_objects, [fold_objects_fun(), [], [], State]}},
+     {history, {call,Backend,is_empty,[State]}},
+     {history, {call,Backend,drop,[State]}},
+     {{stopped, Volatile}, {call,Backend,stop,[State]}}
     ].
-
 
 precondition(_From,_To,_S,_C) ->
     true.
 
-postcondition(_From,_To,S,_C={call,_M,get,[_BeState, Key]},R) ->
+postcondition(_From,_To,S,_C={call,_M,get,[Bucket, Key, _BeState]},R) ->
     case R of
-        {error, notfound} ->
-            not orddict:is_key(Key, S#qcst.d);
-        {ok, Val} ->
-            {ok, Val} =:= orddict:find(Key, S#qcst.d)
+        {error, notfound, _} ->
+            not orddict:is_key({Bucket, Key}, S#qcst.d);
+        {ok, Val, _} ->
+            Res = orddict:find({Bucket, Key}, S#qcst.d),
+            {ok, Val} =:= Res 
     end;
-postcondition(_From,_To,_S,_C={call,_M,put,[_BeState, _Key, _Val]},R) ->
+postcondition(_From,_To,_S,_C={call,_M,put,[_Bucket, _Key, _Val, _BeState]},{R, _RState}) ->
+    R =:= ok orelse R =:= already_exists;
+postcondition(_From,_To,_S,_C={call,_M,delete,[_Bucket, _Key, _BeState]},{R, _RState}) ->
     R =:= ok;
-postcondition(_From,_To,_S,_C={call,_M,delete,[_BeState, _Key]},R) ->
-    R =:= ok;
-postcondition(_From,_To,S,_C={call,_M,list,[_BeState]},R) ->
-    lists:sort(orddict:fetch_keys(S#qcst.d)) =:= lists:sort(R);
-postcondition(_From,_To,S,_C={call,_M,fold,[_Backend,_BeState]},R) ->
-    lists:sort(orddict:to_list(S#qcst.d)) =:= lists:sort(R);
+postcondition(_From,_To,S,_C={call,_M,fold_buckets,[_FoldFun, _Acc, _Opts, _BeState]},R) ->
+    ExpectedEntries = orddict:to_list(S#qcst.d),
+    Buckets = [Bucket || {{Bucket, _}, _} <- ExpectedEntries],
+    lists:sort(Buckets) =:= lists:sort(R);
+postcondition(_From,_To,S,_C={call,_M,fold_keys,[_FoldFun, _Acc, _Opts, _BeState]},R) ->
+    ExpectedEntries = orddict:to_list(S#qcst.d),
+    Keys = [{Bucket, Key} || {{Bucket, Key}, _} <- ExpectedEntries],
+    lists:sort(Keys) =:= lists:sort(R);
+postcondition(_From,_To,S,_C={call,_M,fold_objects,[_FoldFun, _Acc, _Opts, _BeState]},R) ->
+    ExpectedEntries = orddict:to_list(S#qcst.d),
+    Objects = [Object || Object <- ExpectedEntries],
+    lists:sort(Objects) =:= lists:sort(R);
 postcondition(_From,_To,S,_C={call,_M,is_empty,[_BeState]},R) ->
     R =:= (orddict:size(S#qcst.d) =:= 0);
-postcondition(_From,_To,S,_C={call,_M,list_bucket,[_BeState,Bucket]},R) ->
-    AllKeys = orddict:fetch_keys(S#qcst.d),
-    lists:sort(R) =:= lists:sort([K || {B,K} <- AllKeys, B =:= Bucket]);
 postcondition(_From,_To,_S,_C,_R) ->
     true.
 
 
-init_backend(Backend, Config) ->
+init_backend(Backend, Volatile, Config) ->
     {ok, S} = Backend:start(42, Config),
-    S.
-
-fold_fun(K,V,Acc) ->
-    [{K,V}|Acc].
-
-fold(Backend, BeState) ->
-    Backend:fold(BeState, fun fold_fun/3, []).
+    case Volatile of
+        true ->
+            S;
+        false ->
+            %% Drop the backend
+            {ok, S1} = Backend:drop(S),
+            S1
+    end.
 
 -endif.
     
