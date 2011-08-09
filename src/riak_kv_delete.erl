@@ -285,7 +285,8 @@ setup() ->
     error_logger:tty(false),
     error_logger:logfile({open, "riak_kv_delete_test.log"}),
     %% Start erlang node
-    TestNode = list_to_atom("testnode" ++ integer_to_list(element(3, now()))),
+    TestNode = list_to_atom("testnode" ++ integer_to_list(element(3, now())) ++
+                                integer_to_list(element(2, now()))),
     {ok, _} = net_kernel:start([TestNode, shortnames]),
     do_dep_apps(start, dep_apps()),
     application:set_env(riak_core, default_bucket_props, [{r, quorum},
