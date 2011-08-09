@@ -43,6 +43,8 @@ dep_apps() ->
                    {map_js_vm_count, 4},
                    {reduce_js_vm_count, 3}],
     [fun(start) ->
+             net_kernel:start([mapred_test@localhost]),
+             timer:sleep(50),
              _ = application:stop(sasl),
              _ = application:load(sasl),
              put(old_sasl_l, app_helper:get_env(sasl, sasl_error_logger)),
@@ -89,8 +91,6 @@ dep_apps() ->
      mochiweb,
      os_mon,
      fun(start) ->
-             net_kernel:start([mapred_test@localhost]),
-             timer:sleep(50),
              Ring = riak_core_ring:fresh(16, node()),
              riak_core_ring_manager:set_ring_global(Ring),
              _ = application:load(riak_kv),
