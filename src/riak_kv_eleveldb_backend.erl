@@ -51,16 +51,21 @@
                 write_opts = [],
                 fold_opts = [{fill_cache, false}]}).
 
+-opaque(state() :: #state{}).
+-type config() :: [{atom(), term()}].
+
 %% ===================================================================
 %% Public API
 %% ===================================================================
 
 %% @doc Return the major version of the
 %% current API and a capabilities list.
+-spec api_version() -> {integer(), [atom()]}.
 api_version() ->
     {?API_VERSION, ?CAPABILITIES}.
 
 %% @doc Start the eleveldb backend
+-spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% Get the data root directory
     DataDir = filename:join(config_value(data_root, Config),
@@ -75,11 +80,16 @@ start(Partition, Config) ->
     end.
 
 %% @doc Stop the eleveldb backend
+-spec stop(state()) -> ok.
 stop(_State) ->
     %% No-op; GC handles cleanup
     ok.
 
 %% @doc Retrieve an object from the eleveldb backend
+-spec get(riak_object:bucket(), riak_object:key(), state()) ->
+                 {ok, any(), state()} |
+                 {ok, not_found, state()} |
+                 {error, term(), state()}.
 get(Bucket, Key, #state{read_opts=ReadOpts,
                         ref=Ref}=State) ->
     StorageKey = sext:encode({Bucket, Key}),
@@ -93,6 +103,9 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
     end.
 
 %% @doc Insert an object into the eleveldb backend
+-spec put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
+                 {ok, state()} |
+                 {error, term(), state()}.
 put(Bucket, Key, Val, #state{ref=Ref,
                              write_opts=WriteOpts}=State) ->
     StorageKey = sext:encode({Bucket, Key}),
@@ -104,6 +117,9 @@ put(Bucket, Key, Val, #state{ref=Ref,
     end.
 
 %% @doc Delete an object from the eleveldb backend
+-spec delete(riak_object:bucket(), riak_object:key(), state()) ->
+                    {ok, state()} |
+                    {error, term(), state()}.
 delete(Bucket, Key, #state{ref=Ref,
                            write_opts=WriteOpts}=State) ->
     StorageKey = sext:encode({Bucket, Key}),
@@ -115,12 +131,20 @@ delete(Bucket, Key, #state{ref=Ref,
     end.
 
 %% @doc Fold over all the buckets
+-spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
+                   any(),
+                   [],
+                   state()) -> {ok, any()} | {error, term()}.
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{fold_opts=FoldOpts,
                                                 ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts).
 
 %% @doc Fold over all the keys for one or all buckets.
+-spec fold_keys(riak_kv_backend:fold_keys_fun(),
+                any(),
+                [{atom(), term()}],
+                state()) -> {ok, term()} | {error, term()}.
 fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
                                          ref=Ref}) ->
     Bucket =  proplists:get_value(bucket, Opts),
@@ -134,36 +158,55 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
     end.
 
 %% @doc Fold over all the objects for one or all buckets.
+-spec fold_objects(riak_kv_backend:fold_objects_fun(),
+                   any(),
+                   [{atom(), term()}],
+                   state()) -> {ok, any()} | {error, term()}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts1,
                                                ref=Ref}) ->
     Bucket = proplists:get_value(bucket, Opts),
     FoldOpts = fold_opts(Bucket, FoldOpts1),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
     try
-        eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts)
+        eleveldb:fold(Ref, FoldFun, Acc, FoldOpts)
     catch
         {break, AccFinal} ->
             AccFinal
     end.
 
 %% @doc Delete all objects from this eleveldb backend
-drop(#state{data_root=DataRoot}) ->
-    eleveldb:destroy(DataRoot, []).
+%% and return a fresh reference.
+-spec drop(state()) -> {ok, state()} | {error, term(), state()}.
+drop(#state{data_root=DataRoot}=State) ->
+    case eleveldb:destroy(DataRoot, []) of
+        ok ->
+            filelib:ensure_dir(filename:join(DataRoot, "dummy")),
+            case eleveldb:open(DataRoot, [{create_if_missing, true}]) of
+                {ok, Ref} ->
+                    {ok, State#state{ref = Ref}};
+                {error, Reason} ->
+                    {error, Reason, State}
+            end;
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
 
 %% @doc Returns true if this eleveldb backend contains any
 %% non-tombstone values; otherwise returns false.
+-spec is_empty(state()) -> boolean() | {error, term()}.
 is_empty(#state{ref=Ref}) ->
     eleveldb:is_empty(Ref).
 
-%% @doc Register an asynchronous callback
-callback(_Ref, _Msg, _State) ->
-    ok.
-
 %% @doc Get the status information for this eleveldb backend
+-spec status(state()) -> [{atom(), term()}].
 status(#state{data_root=DataRoot}) ->
     [{Dir, get_status(filename:join(DataRoot, Dir))} ||
         Dir <- element(2, file:list_dir(DataRoot))].
 
+%% @doc Register an asynchronous callback
+-spec callback(reference(), any(), state()) -> {ok, state()}.
+callback(_Ref, _Msg, State) ->
+    {ok, State}.
 
 %% ===================================================================
 %% Internal functions
@@ -256,5 +299,34 @@ custom_config_test() ->
     ?assertCmd("rm -rf test/leveldb-backend"),
     application:set_env(eleveldb, data_root, ""),
     riak_kv_backend:standard_test(?MODULE, [{data_root, "test/leveldb-backend"}]).
+
+-ifdef(EQC).
+
+eqc_test_() ->
+    {spawn,
+     [{inorder,
+       [{setup,
+         fun setup/0,
+         fun cleanup/1,
+         [
+          {timeout, 60000,
+           [?_assertEqual(true,
+                          backend_eqc:test(?MODULE, false,
+                                           [{data_root,
+                                             "test/eleveldb-backend"}]))]}
+         ]}]}]}.
+
+setup() ->
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_eleveldb_backend_eqc_sasl.log"}),
+    error_logger:tty(false),
+    error_logger:logfile({open, "riak_kv_eleveldb_backend_eqc.log"}),
+
+    ok.
+
+cleanup(_) ->
+    ?_assertCmd("rm -rf test/eleveldb-backend").
+
+-endif. % EQC
 
 -endif.
