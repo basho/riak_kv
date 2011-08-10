@@ -29,9 +29,8 @@ dep_apps() ->
     DataDir = "./EUnit-datadir",
     os:cmd("mkdir " ++ DataDir),
     KillDamnFilterProc = fun() ->
-                                 timer:sleep(5),
                                  catch exit(whereis(riak_sysmon_filter), kill),
-                                 timer:sleep(5)
+                                 wait_until_dead(whereis(riak_sysmon_filter))
                          end,                                 
     Core_Settings = [{handoff_ip, "0.0.0.0"},
                      {handoff_port, 9183},
@@ -123,16 +122,16 @@ do_dep_apps(StartStop) ->
 prepare_runtime() ->
      fun() ->
              do_dep_apps(fullstop),
-             timer:sleep(5),
+             timer:sleep(50),
              do_dep_apps(start),
-             timer:sleep(5),
+             timer:sleep(50),
              [foo1, foo2]
      end.
 
 teardown_runtime() ->
      fun(_PrepareThingie) ->
              do_dep_apps(stop),
-             timer:sleep(5)
+             timer:sleep(50)
      end.    
 
 inputs_gen_seq(Pipe, Max, _Timeout) ->
@@ -578,3 +577,14 @@ compat_javascript_test_() ->
              end)
           ]
      end}.
+
+wait_until_dead(Pid) when is_pid(Pid) ->
+    Ref = monitor(process, Pid),
+    receive
+        {'DOWN', Ref, process, _Obj, Info} ->
+            Info
+    after 10*1000 ->
+            exit({timeout_waiting_for, Pid})
+    end;
+wait_until_dead(_) ->
+    ok.
