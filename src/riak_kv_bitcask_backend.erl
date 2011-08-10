@@ -76,43 +76,35 @@ api_version() ->
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% Get the data root directory
-    DataDir =
-        case proplists:get_value(data_root, Config) of
-            undefined ->
-                case application:get_env(bitcask, data_root) of
-                    {ok, Dir} ->
-                        Dir;
-                    _ ->
-                        riak:stop("bitcask data_root unset, failing")
-                end;
-            Value ->
-                Value
-        end,
+    DataDir = config_value(data_root, Config),
 
-    %% Setup actual bitcask dir for this partition
-    BitcaskRoot = filename:join([DataDir,
-                                 integer_to_list(Partition)]),
-    case filelib:ensure_dir(BitcaskRoot) of
-        ok ->
-            ok;
-        {error, Reason} ->
-            lager:critical("Failed to create bitcask dir ~s: ~p",
-                                   [BitcaskRoot, Reason]),
-            riak:stop("riak_kv_bitcask_backend failed to start.")
-    end,
-
-    BitcaskOpts = [{read_write, true}|Config],
-    case bitcask:open(BitcaskRoot, BitcaskOpts) of
-        Ref when is_reference(Ref) ->
-            schedule_merge(Ref),
-            maybe_schedule_sync(Ref),
-            {ok, #state{ref=Ref,
-                        root=BitcaskRoot,
-                        opts=BitcaskOpts}};
-        {error, Reason2} ->
-            {error, Reason2}
+    case DataDir of
+        undefined ->
+            error_logger:error_msg("Failed to create bitcask dir: data_root is not set\n"),
+            {error, data_root_unset};
+        _ ->
+            %% Setup actual bitcask dir for this partition
+            BitcaskRoot = filename:join([DataDir,
+                                         integer_to_list(Partition)]),   
+            case filelib:ensure_dir(BitcaskRoot) of
+                ok ->
+                    BitcaskOpts = [{read_write, true}|Config],
+                    case bitcask:open(BitcaskRoot, BitcaskOpts) of
+                        Ref when is_reference(Ref) ->
+                            schedule_merge(Ref),
+                            maybe_schedule_sync(Ref),
+                            {ok, #state{ref=Ref,
+                                        root=BitcaskRoot,
+                                        opts=BitcaskOpts}};
+                        {error, Reason} ->
+                            {error, Reason}
+                    end;
+                {error, Reason1} ->
+                    error_logger:error_msg("Failed to create bitcask dir ~s: ~p\n",
+                                           [BitcaskRoot, Reason1]),
+                    {error, Reason1}
+            end
     end.
-
 
 %% @doc Stop the bitcask backend
 -spec stop(state()) -> ok.
@@ -351,6 +343,15 @@ schedule_sync(Ref, SyncIntervalMs) when is_reference(Ref) ->
 
 schedule_merge(Ref) when is_reference(Ref) ->
     riak_kv_backend:callback_after(?MERGE_CHECK_INTERVAL, Ref, merge_check).
+
+%% @private
+config_value(Key, Config) ->
+    case proplists:get_value(Key, Config) of
+        undefined ->
+            app_helper:get_env(bitcask, Key);
+        Value ->
+            Value
+    end.
 
 %% ===================================================================
 %% EUnit tests
