@@ -163,9 +163,20 @@ get_vclocks(Preflist, BKeyList) ->
 init([Index]) ->
     Mod = app_helper:get_env(riak_kv, storage_backend),
     Configuration = app_helper:get_env(riak_kv),
-    {ok, ModState} = Mod:start(Index, Configuration),
 
-    {ok, #state{idx=Index, mod=Mod, modstate=ModState, mrjobs=dict:new()}}.
+    case Mod:start(Index, Configuration) of
+        {ok, ModState} ->
+            {ok, #state{idx=Index,
+                        mod=Mod,
+                        modstate=ModState,
+                        mrjobs=dict:new()}};
+        {error, Reason} ->
+            
+            error_logger:error_msg("Failed to start ~p Reason: ~p\n",
+                                   [Mod, Reason]),
+            riak:stop("backend module failed to start.")
+    end.
+
 
 handle_command(?KV_PUT_REQ{bkey=BKey,
                            object=Object,
