@@ -106,7 +106,9 @@ start(Partition, Config) ->
         Ref when is_reference(Ref) ->
             schedule_merge(Ref),
             maybe_schedule_sync(Ref),
-            {ok, #state{ref=Ref, root=BitcaskRoot}};
+            {ok, #state{ref=Ref,
+                        root=BitcaskRoot,
+                        opts=BitcaskOpts}};
         {error, Reason2} ->
             {error, Reason2}
     end.
@@ -114,9 +116,8 @@ start(Partition, Config) ->
 
 %% @doc Stop the bitcask backend
 -spec stop(state()) -> ok.
-stop(#state{ref=Ref, root=BitcaskRoot}) ->
-    bitcask:close(Ref),
-    file:delete(BitcaskRoot).
+stop(#state{ref=Ref}) ->
+    bitcask:close(Ref).
 
 %% @doc Retrieve an object from the bitcask backend
 -spec get(riak_object:bucket(), riak_object:key(), state()) ->
@@ -193,14 +194,30 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{ref=Ref}) ->
 
 %% @doc Delete all objects from this bitcask backend
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
-drop(#state{partition=Partition, ref=Ref, root=BitcaskRoot, opts=BitcaskOpts}=State) ->
+drop(#state{ref=Ref, root=BitcaskRoot, opts=BitcaskOpts}=State) ->
     %% @TODO once bitcask has a more friendly drop function
     %%  of its own, use that instead.
+
+    %% Close the bitcask reference
     bitcask:close(Ref),
     {ok, FNs} = file:list_dir(BitcaskRoot),
     [file:delete(filename:join(BitcaskRoot, FN)) || FN <- FNs],
     file:del_dir(BitcaskRoot),
-    ok.
+    %% Ensure the directory is in place
+    case filelib:ensure_dir(BitcaskRoot) of
+        ok ->
+            %% Get a new bitcask reference
+            case bitcask:open(BitcaskRoot, BitcaskOpts) of
+                Ref1 when is_reference(Ref1) ->
+                    {ok, State#state{ref=Ref1}};
+                {error, Reason1} ->
+                    {error, Reason1, State}
+            end;
+        {error, Reason} ->
+            error_logger:error_msg("Failed to create bitcask dir ~s: ~p\n",
+                                   [BitcaskRoot, Reason]),
+            {error, Reason, State}
+    end.
 
 %% @doc Returns true if this bitcasks backend contains any
 %% non-tombstone values; otherwise returns false.
@@ -217,12 +234,9 @@ is_empty(#state{ref=Ref}) ->
 %% @doc Get the status information for this bitcask backend
 -spec status(state()) -> [{atom(), term()}].
 status(#state{ref=Ref}) ->
-    bitcask:status(Ref);
-status(Dir) ->
-    Ref = bitcask:open(Dir),
-    try bitcask:status(Ref)
-    after bitcask:close(Ref)
-    end.
+    {KeyCount, Status} = bitcask:status(Ref),
+    [{key_count, KeyCount}, {status, Status}].
+
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
@@ -261,7 +275,7 @@ key_counts() ->
 -spec key_counts(string()) -> [{string(), non_neg_integer()}].
 key_counts(RootDir) ->
     [begin
-         {Keys, _} = status(filename:join(RootDir, Dir)),
+         [{key_count, Keys} | _] = status(#state{root=filename:join(RootDir, Dir)}),
          {Dir, Keys}
      end || Dir <- element(2, file:list_dir(RootDir))].
 
@@ -345,8 +359,8 @@ schedule_merge(Ref) when is_reference(Ref) ->
 
 simple_test() ->
     ?assertCmd("rm -rf test/bitcask-backend"),
-    application:set_env(bitcask, data_root, "test/bitcask-backend"),
-    riak_kv_backend:standard_test(?MODULE, []).
+    application:set_env(bitcask, data_root, ""),
+    riak_kv_backend:standard_test(?MODULE, [{data_root, "test/bitcask-backend"}]).
 
 custom_config_test() ->
     ?assertCmd("rm -rf test/bitcask-backend"),
