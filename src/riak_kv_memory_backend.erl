@@ -56,9 +56,11 @@
 
 -define(API_VERSION, 1).
 -define(CAPABILITIES, []).
+-define (DEFAULT_TTL, timer:hours(1)).
 
--record(server_state, {ref :: integer() | atom()}).
-
+-record(server_state, {ref :: integer() | atom(),
+                       expiry_enabled=false :: boolean(),
+                       ttl :: integer()}).
 -type state() :: pid().
 -type config() :: [].
 
@@ -76,8 +78,8 @@ api_version() ->
 
 %% @doc Start the memory backend
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
-start(Partition, _Config) ->
-    case gen_server:start_link(?MODULE, [Partition], []) of
+start(Partition, Config) ->
+    case gen_server:start_link(?MODULE, [Partition, Config], []) of
         {ok, Pid} ->
             {ok, Pid};
         {error, Reason} ->
@@ -181,15 +183,43 @@ callback(_Ref, _Msg, State) ->
 %% gen_server API
 
 %% @private
-init([Partition]) ->
-    TableRef = ets:new(list_to_atom(integer_to_list(Partition)),[]),
-    {ok, #server_state{ref=TableRef}}.
+init([Partition, Config]) ->
+    TableRef = ets:new(list_to_atom(integer_to_list(Partition)), []),
+    case config_value(object_expiry_enabled, Config) of
+        true ->
+            TTL = config_value(ttl, Config, ?DEFAULT_TTL),
+            {ok, #server_state{expiry_enabled=true,
+                               ttl=TTL,
+                               ref=TableRef}};
+        _ ->
+            {ok, #server_state{ref=TableRef}}
+    end.
 
 %% @private
 handle_call(stop, _From, #server_state{ref=Ref}=State) ->
     {reply, srv_stop(Ref), State};
+handle_call({get, Bucket, Key}, _From, #server_state{expiry_enabled=true,
+                                                     ttl=TTL,
+                                                     ref=Ref}=State) ->
+    Result = srv_get(Bucket, Key, Ref),
+    case Result of
+        {ok, {{ts, Timestamp}, Val}} ->
+            case exceeds_ttl(Timestamp, TTL) of
+                true ->
+                    srv_delete(Bucket, Key, Ref),
+                    Reply = {error, not_found};
+                false ->
+                    Reply = {ok, Val}
+            end;
+        _ ->
+            Reply = Result
+    end,
+    {reply, Reply, State};
 handle_call({get, Bucket, Key}, _From, #server_state{ref=Ref}=State) ->
     {reply, srv_get(Bucket, Key, Ref), State};
+handle_call({put, Bucket, Key, Val}, _From, #server_state{expiry_enabled=true,
+                                                          ref=Ref}=State) ->
+    {reply, srv_put(Bucket, Key, {{ts, now()}, Val}, Ref), State};
 handle_call({put, Bucket, Key, Val}, _From, #server_state{ref=Ref}=State) ->
     {reply, srv_put(Bucket, Key, Val, Ref), State};
 handle_call({delete, Bucket, Key}, _From, #server_state{ref=Ref}=State) ->
@@ -268,7 +298,7 @@ srv_stop(Ref) ->
 %% @private
 srv_get(Bucket, Key, Ref) ->
     case ets:lookup(Ref, {Bucket, Key}) of
-        [] -> {error, notfound};
+        [] -> {error, not_found};
         [{{Bucket, Key}, Val}] -> {ok, Val};
         Error -> {error, Error}
     end.
@@ -308,6 +338,29 @@ srv_fold_objects(FoldFun, Bucket, Acc, Ref) ->
     end,
     lists:foldl(FoldFun, Acc, ObjectList).
 
+%% @private
+config_value(Key, Config) ->
+    case proplists:get_value(Key, Config) of
+        undefined ->
+            app_helper:get_env(memory_backend, Key);
+        Value ->
+            Value
+    end.
+
+%% @private
+config_value(Key, Config, Default) ->
+    case proplists:get_value(Key, Config) of
+        undefined ->
+            app_helper:get_env(memory_backend, Key, Default);
+        Value ->
+            Value
+    end.
+
+%% Check if this timestamp is past the ttl setting.
+exceeds_ttl(Timestamp, TTL) ->
+    Diff = (timer:now_diff(now(), Timestamp) / 1000 / 1000),
+    Diff > TTL.
+
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
@@ -316,6 +369,31 @@ srv_fold_objects(FoldFun, Bucket, Acc, Ref) ->
 
 simple_test() ->
     riak_kv_backend:standard_test(?MODULE, []).
+
+ttl_test_() ->
+    Config = [{object_expiry_enabled, true},
+              {ttl, 15}],
+    {ok, State} = start(42, Config),
+
+    Bucket = <<"Bucket">>,
+    Key = <<"Key">>,
+    Value = <<"Value">>,
+
+    {spawn,
+     [
+      %% Put an object...
+      ?_assertEqual({ok, State}, put(Bucket, Key, Value, State)),
+      %% Wait 1 second to access it
+      ?_assertEqual(ok, timer:sleep(1000)),
+      ?_assertEqual({ok, Value, State}, get(Bucket, Key, State)),
+      %% Wait 3 seconds and access it again
+      ?_assertEqual(ok, timer:sleep(3000)),
+      ?_assertEqual({ok, Value, State}, get(Bucket, Key, State)),
+      %% Wait 15 seconds and it should expire
+      {timeout, 30000, ?_assertEqual(ok, timer:sleep(15000))},
+      %% This time it should be gone
+      ?_assertEqual({error, not_found, State}, get(Bucket, Key, State))
+     ]}.
 
 -ifdef(EQC).
 
@@ -342,4 +420,5 @@ cleanup(_) ->
     ok.
 
 -endif. % EQC
+
 -endif. % TEST
