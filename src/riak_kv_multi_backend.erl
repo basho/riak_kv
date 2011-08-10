@@ -213,8 +213,11 @@ multi_backend_test_() ->
             crypto:stop(),
             unlink(P1),
             unlink(P2),
-            catch exit(P1, kill),
-            catch exit(P2, kill)
+            [begin
+                 catch exit(Proc, kill),
+                 wait_until_dead(Proc)
+             end || Proc <- [P1, P2, whereis(riak_core_ring_events),
+                             whereis(riak_core_ring_manager)]]
         end,
         [
             fun(_) ->
@@ -333,4 +336,16 @@ sample_config() ->
             {second_backend, riak_kv_ets_backend, []}
         ]}
     ].
+
+wait_until_dead(Pid) when is_pid(Pid) ->
+    Ref = monitor(process, Pid),
+    receive
+        {'DOWN', Ref, process, _Obj, Info} ->
+            Info
+    after 10*1000 ->
+            exit({timeout_waiting_for, Pid})
+    end;
+wait_until_dead(_) ->
+    ok.
+
 -endif.
