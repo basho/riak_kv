@@ -61,12 +61,6 @@
 
 -type state() :: pid().
 -type config() :: [].
--type fold_buckets_fun() :: fun((binary(), any()) -> any() | no_return()).
--type fold_keys_fun() :: fun((binary(), binary(), any()) -> any() |
-                                                            no_return()).
--type fold_objects_fun() :: fun((binary(), binary(), term(), any()) ->
-                                       any() |
-                                       no_return()).
 
 %% ===================================================================
 %% Public API
@@ -135,30 +129,38 @@ delete(Bucket, Key, State) ->
     end.
 
 %% @doc Fold over all the buckets.
--spec fold_buckets(fold_buckets_fun(), any(), [], state()) ->
-                          {ok, any()} |
-                          {error, term()}.
+-spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
+                   any(),
+                   [],
+                   state()) -> {ok, any()} | {error, term()}.
 fold_buckets(FoldBucketsFun, Acc, _Opts, State) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     gen_server:call(State, {fold_buckets, FoldFun, Acc}).
 
 %% @doc Fold over all the keys for one or all buckets.
--spec fold_keys(fold_keys_fun(), any(), [{atom(), term()}], state()) ->
-                       {ok, term()} |
-                       {error, term()}.
+-spec fold_keys(riak_kv_backend:fold_keys_fun(),
+                any(),
+                [{atom(), term()}],
+                state()) -> {ok, term()} | {error, term()}.
 fold_keys(FoldKeysFun, Acc, Opts, State) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
     gen_server:call(State, {fold_keys, FoldFun, Bucket, Acc}).
 
 %% @doc Fold over all the objects for one or all buckets.
--spec fold_objects(fold_objects_fun(), any(), [{atom(), term()}], state()) ->
-                          {ok, any()} |
-                          {error, term()}.
+-spec fold_objects(riak_kv_backend:fold_objects_fun(),
+                   any(),
+                   [{atom(), term()}],
+                   state()) -> {ok, any()} | {error, term()}.
 fold_objects(FoldObjectsFun, Acc, Opts, State) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
     gen_server:call(State, {fold_objects, FoldFun, Bucket, Acc}).
+
+%% @doc Delete all objects from this memory backend
+-spec drop(state()) -> {ok, state()} | {error, term(), state()}.
+drop(State) ->
+    gen_server:call(State, drop).
 
 %% @doc Returns true if this memory backend contains any
 %% non-tombstone values; otherwise returns false.
@@ -166,19 +168,13 @@ fold_objects(FoldObjectsFun, Acc, Opts, State) ->
 is_empty(State) ->
     gen_server:call(State, is_empty).
 
-%% @doc Delete all objects from this memory backend
--spec drop(state()) -> {ok, state()} | {error, term(), state()}.
-drop(State) ->
-    gen_server:call(State, drop).
-
 %% @doc Get the status information for this memory backend
 -spec status(state()) -> [{atom(), term()}].
 status(State) ->
     gen_server:call(State, status).
 
 %% @doc Register an asynchronous callback
--spec callback(reference(), any(), state()) ->
-                      {ok, state()}.
+-spec callback(reference(), any(), state()) -> {ok, state()}.
 callback(_Ref, _Msg, State) ->
     {ok, State}.
 
