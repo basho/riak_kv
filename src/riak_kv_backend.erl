@@ -74,7 +74,7 @@ standard_test(BackendMod, Config) ->
     ?assertMatch({ok, _}, BackendMod:put(<<"b1">>,<<"k1">>,<<"v1">>,S)),
     ?assertMatch({ok, _}, BackendMod:put(<<"b2">>,<<"k2">>,<<"v2">>,S)),
     ?assertMatch({ok,<<"v2">>, _}, BackendMod:get(<<"b2">>,<<"k2">>,S)),
-    ?assertMatch({error, notfound, _}, BackendMod:get(<<"b1">>,<<"k3">>,S)),
+    ?assertMatch({error, not_found, _}, BackendMod:get(<<"b1">>,<<"k3">>,S)),
     FoldBucketsFun =
         fun(Bucket, Acc) ->
                 [Bucket | Acc]
@@ -133,7 +133,7 @@ standard_test(BackendMod, Config) ->
     ?assertEqual([],
                  BackendMod:fold_keys(FoldKeysFun3, [], [{bucket, <<"b1">>}], S)),
     ?assertMatch({ok, _}, BackendMod:delete(<<"b2">>,<<"k2">>,S)),
-    ?assertMatch({error, notfound, _}, BackendMod:get(<<"b2">>, <<"k2">>, S)),
+    ?assertMatch({error, not_found, _}, BackendMod:get(<<"b2">>, <<"k2">>, S)),
     ?assertEqual([{<<"b1">>, <<"k1">>}],
                  lists:sort(BackendMod:fold_keys(FoldKeysFun, [], [], S))),
     ?assertEqual([{{<<"b1">>,<<"k1">>},<<"v1">>}],

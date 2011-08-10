@@ -97,7 +97,7 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
         {ok, Value} ->
             {ok, Value, State};
         not_found  ->
-            {error, notfound, State};
+            {error, not_found, State};
         {error, Reason} ->
             {error, Reason, State}
     end.

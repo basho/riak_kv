@@ -217,7 +217,7 @@ precondition(_From,_To,_S,_C) ->
 
 postcondition(_From, _To, S, _C={call, _M, get, [Bucket, Key, _BeState]}, R) ->
     case R of
-        {error, notfound, _} ->
+        {error, not_found, _} ->
             not orddict:is_key({Bucket, Key}, S#qcst.d);
         {ok, Val, _} ->
             Res = orddict:find({Bucket, Key}, S#qcst.d),

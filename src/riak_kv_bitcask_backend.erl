@@ -130,9 +130,9 @@ get(Bucket, Key, #state{ref=Ref}=State) ->
         {ok, Value} ->
             {ok, Value, State};
         not_found  ->
-            {error, notfound, State};
+            {error, not_found, State};
         {error, nofile}  ->
-            {error, notfound, State};
+            {error, not_found, State};
         {error, Reason} ->
             {error, Reason, State}
     end.
