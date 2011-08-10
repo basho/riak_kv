@@ -343,31 +343,31 @@ schedule_merge(Ref) when is_reference(Ref) ->
 %% ===================================================================
 -ifdef(TEST).
 
-%% simple_test() ->
-%%     ?assertCmd("rm -rf test/bitcask-backend"),
-%%     application:set_env(bitcask, data_root, "test/bitcask-backend"),
-%%     riak_kv_backend:standard_test(?MODULE, []).
+simple_test() ->
+    ?assertCmd("rm -rf test/bitcask-backend"),
+    application:set_env(bitcask, data_root, "test/bitcask-backend"),
+    riak_kv_backend:standard_test(?MODULE, []).
 
-%% custom_config_test() ->
-%%     ?assertCmd("rm -rf test/bitcask-backend"),
-%%     application:set_env(bitcask, data_root, ""),
-%%     riak_kv_backend:standard_test(?MODULE, [{data_root, "test/bitcask-backend"}]).
+custom_config_test() ->
+    ?assertCmd("rm -rf test/bitcask-backend"),
+    application:set_env(bitcask, data_root, ""),
+    riak_kv_backend:standard_test(?MODULE, [{data_root, "test/bitcask-backend"}]).
 
 -ifdef(EQC).
 
 eqc_test_() ->
     {spawn,
      [{inorder,
-     [{setup,
-       fun setup/0,
-       fun cleanup/1,
-       [
-        {timeout, 60000,
-         [?_assertEqual(true,
-                       backend_eqc:test(?MODULE, false,
-                                        [{data_root,
-                                          "test/bitcask-backend"}]))]}
-       ]}]}]}.
+       [{setup,
+         fun setup/0,
+         fun cleanup/1,
+         [
+          {timeout, 60000,
+           [?_assertEqual(true,
+                          backend_eqc:test(?MODULE, false,
+                                           [{data_root,
+                                             "test/bitcask-backend"}]))]}
+         ]}]}]}.
 
 setup() ->
     application:load(sasl),
@@ -378,11 +378,9 @@ setup() ->
     application:load(bitcask),
     application:set_env(bitcask, merge_window, never),
     ok.
-    %% ?assertCmd("rm -rf test/bitcask-backend").
 
 cleanup(_) ->
-    ok.
-    %% ?_assertCmd("rm -rf test/bitcask-backend").
+    ?_assertCmd("rm -rf test/bitcask-backend").
 
 -endif. % EQC
 -endif.
