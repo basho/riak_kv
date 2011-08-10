@@ -54,8 +54,13 @@
 -define(API_VERSION, 1).
 -define(CAPABILITIES, []).
 
--record(state, {ref :: reference(),
+-record(state, {partition :: integer(),
+                ref :: reference(),
+                opts :: [{atom(), term()}],
                 root :: string()}).
+
+-opaque(state() :: #state{}).
+-type config() :: [{atom(), term()}].
 
 %% ===================================================================
 %% Public API
@@ -63,10 +68,12 @@
 
 %% @doc Return the major version of the
 %% current API and a capabilities list.
+-spec api_version() -> {integer(), [atom()]}.
 api_version() ->
     {?API_VERSION, ?CAPABILITIES}.
 
 %% @doc Start the bitcask backend
+-spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% Get the data root directory
     DataDir =
@@ -106,10 +113,16 @@ start(Partition, Config) ->
 
 
 %% @doc Stop the bitcask backend
-stop(#state{ref=Ref}) ->
-    bitcask:close(Ref).
+-spec stop(state()) -> ok.
+stop(#state{ref=Ref, root=BitcaskRoot}) ->
+    bitcask:close(Ref),
+    file:delete(BitcaskRoot).
 
 %% @doc Retrieve an object from the bitcask backend
+-spec get(riak_object:bucket(), riak_object:key(), state()) ->
+                 {ok, any(), state()} |
+                 {ok, not_found, state()} |
+                 {error, term(), state()}.
 get(Bucket, Key, #state{ref=Ref}=State) ->
     BitcaskKey = term_to_binary({Bucket, Key}),
     case bitcask:get(Ref, BitcaskKey) of
@@ -117,11 +130,16 @@ get(Bucket, Key, #state{ref=Ref}=State) ->
             {ok, Value, State};
         not_found  ->
             {error, notfound, State};
+        {error, nofile}  ->
+            {error, notfound, State};
         {error, Reason} ->
             {error, Reason, State}
     end.
 
 %% @doc Insert an object into the bitcask backend
+-spec put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
+                 {ok, state()} |
+                 {error, term(), state()}.
 put(Bucket, Key, Val, #state{ref=Ref}=State) ->
     BitcaskKey = term_to_binary({Bucket, Key}),
     case bitcask:put(Ref, BitcaskKey, Val) of
@@ -132,6 +150,9 @@ put(Bucket, Key, Val, #state{ref=Ref}=State) ->
     end.
 
 %% @doc Delete an object from the bitcask backend
+-spec delete(riak_object:bucket(), riak_object:key(), state()) ->
+                    {ok, state()} |
+                    {error, term(), state()}.
 delete(Bucket, Key, #state{ref=Ref}=State) ->
     BitcaskKey = term_to_binary({Bucket, Key}),
     case bitcask:delete(Ref, BitcaskKey) of
@@ -141,28 +162,38 @@ delete(Bucket, Key, #state{ref=Ref}=State) ->
             {error, Reason, State}
     end.
 
-%% @doc Fold over all the buckets. If the fold
-%% function is `none' just list all of the buckets.
+%% @doc Fold over all the buckets.
+-spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
+                   any(),
+                   [],
+                   state()) -> {ok, any()} | {error, term()}.
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     bitcask:fold_keys(Ref, FoldFun, Acc).
 
 %% @doc Fold over all the keys for one or all buckets.
-%% If the fold function is `none' just list the keys.
+-spec fold_keys(riak_kv_backend:fold_keys_fun(),
+                any(),
+                [{atom(), term()}],
+                state()) -> {ok, term()} | {error, term()}.
 fold_keys(FoldKeysFun, Acc, Opts, #state{ref=Ref}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
     bitcask:fold_keys(Ref, FoldFun, Acc).
 
 %% @doc Fold over all the objects for one or all buckets.
-%% If the fold function is `none' just list the objects.
+-spec fold_objects(riak_kv_backend:fold_objects_fun(),
+                   any(),
+                   [{atom(), term()}],
+                   state()) -> {ok, any()} | {error, term()}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{ref=Ref}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
     bitcask:fold(Ref, FoldFun, Acc).
 
 %% @doc Delete all objects from this bitcask backend
-drop(#state{ref=Ref, root=BitcaskRoot}) ->
+-spec drop(state()) -> {ok, state()} | {error, term(), state()}.
+drop(#state{partition=Partition, ref=Ref, root=BitcaskRoot, opts=BitcaskOpts}=State) ->
     %% @TODO once bitcask has a more friendly drop function
     %%  of its own, use that instead.
     bitcask:close(Ref),
@@ -173,6 +204,7 @@ drop(#state{ref=Ref, root=BitcaskRoot}) ->
 
 %% @doc Returns true if this bitcasks backend contains any
 %% non-tombstone values; otherwise returns false.
+-spec is_empty(state()) -> boolean().
 is_empty(#state{ref=Ref}) ->
     %% Determining if a bitcask is empty requires us to find at least
     %% one value that is NOT a tombstone. Accomplish this by doing a fold_keys
@@ -182,23 +214,8 @@ is_empty(#state{ref=Ref}) ->
         end,
     (catch bitcask:fold_keys(Ref, F, undefined)) /= found_one_value.
 
-%% @doc Register an asynchronous callback
-callback(Ref, {sync, SyncInterval}, #state{ref=Ref}) when is_reference(Ref) ->
-    bitcask:sync(Ref),
-    schedule_sync(Ref, SyncInterval);
-callback(Ref, merge_check, #state{ref=Ref, root=BitcaskRoot}) when is_reference(Ref) ->
-    case bitcask:needs_merge(Ref) of
-        {true, Files} ->
-            bitcask_merge_worker:merge(BitcaskRoot, [], Files);
-        false ->
-            ok
-    end,
-    schedule_merge(Ref);
-%% Ignore callbacks for other backends so multi backend works
-callback(_Ref, _Msg, _State) ->
-    ok.
-
 %% @doc Get the status information for this bitcask backend
+-spec status(state()) -> [{atom(), term()}].
 status(#state{ref=Ref}) ->
     bitcask:status(Ref);
 status(Dir) ->
@@ -207,6 +224,32 @@ status(Dir) ->
     after bitcask:close(Ref)
     end.
 
+%% @doc Register an asynchronous callback
+-spec callback(reference(), any(), state()) -> {ok, state()}.
+callback(Ref,
+         {sync, SyncInterval},
+         #state{ref=Ref}=State) when is_reference(Ref) ->
+    bitcask:sync(Ref),
+    schedule_sync(Ref, SyncInterval),
+    {ok, State};
+callback(Ref,
+         merge_check,
+         #state{ref=Ref,
+                root=BitcaskRoot}=State) when is_reference(Ref) ->
+    case bitcask:needs_merge(Ref) of
+        {true, Files} ->
+            bitcask_merge_worker:merge(BitcaskRoot, [], Files);
+        false ->
+            ok
+    end,
+    schedule_merge(Ref),
+    {ok, State};
+%% Ignore callbacks for other backends so multi backend works
+callback(_Ref, _Msg, State) ->
+    {ok, State}.
+
+-spec key_counts() -> [{string(), non_neg_integer()}] |
+                      {error, data_root_not_set}.
 key_counts() ->
     case application:get_env(bitcask, data_root) of
         {ok, RootDir} ->
@@ -215,6 +258,7 @@ key_counts() ->
             {error, data_root_not_set}
     end.
 
+-spec key_counts(string()) -> [{string(), non_neg_integer()}].
 key_counts(RootDir) ->
     [begin
          {Keys, _} = status(filename:join(RootDir, Dir)),
@@ -254,12 +298,12 @@ fold_keys_fun(FoldKeysFun, Bucket) ->
 %% @private
 %% Return a function to fold over keys on this backend
 fold_objects_fun(FoldObjectsFun, undefined) ->
-    fun(#bitcask_entry{key=BK}, Value, Acc) ->
+    fun(BK, Value, Acc) ->
             {Bucket, Key} = binary_to_term(BK),
             FoldObjectsFun(Bucket, Key, Value, Acc)
     end;
 fold_objects_fun(FoldObjectsFun, Bucket) ->
-    fun(#bitcask_entry{key=BK}, Value, Acc) ->
+    fun(BK, Value, Acc) ->
             {B, Key} = binary_to_term(BK),
             case B =:= Bucket of
                 true ->
@@ -299,14 +343,46 @@ schedule_merge(Ref) when is_reference(Ref) ->
 %% ===================================================================
 -ifdef(TEST).
 
-simple_test() ->
-    ?assertCmd("rm -rf test/bitcask-backend"),
-    application:set_env(bitcask, data_root, "test/bitcask-backend"),
-    riak_kv_backend:standard_test(?MODULE, []).
+%% simple_test() ->
+%%     ?assertCmd("rm -rf test/bitcask-backend"),
+%%     application:set_env(bitcask, data_root, "test/bitcask-backend"),
+%%     riak_kv_backend:standard_test(?MODULE, []).
 
-custom_config_test() ->
-    ?assertCmd("rm -rf test/bitcask-backend"),
-    application:set_env(bitcask, data_root, ""),
-    riak_kv_backend:standard_test(?MODULE, [{data_root, "test/bitcask-backend"}]).
+%% custom_config_test() ->
+%%     ?assertCmd("rm -rf test/bitcask-backend"),
+%%     application:set_env(bitcask, data_root, ""),
+%%     riak_kv_backend:standard_test(?MODULE, [{data_root, "test/bitcask-backend"}]).
 
+-ifdef(EQC).
+
+eqc_test_() ->
+    {spawn,
+     [{inorder,
+     [{setup,
+       fun setup/0,
+       fun cleanup/1,
+       [
+        {timeout, 60000,
+         [?_assertEqual(true,
+                       backend_eqc:test(?MODULE, false,
+                                        [{data_root,
+                                          "test/bitcask-backend"}]))]}
+       ]}]}]}.
+
+setup() ->
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_bitcask_backend_eqc_sasl.log"}),
+    error_logger:tty(false),
+    error_logger:logfile({open, "riak_kv_bitcask_backend_eqc.log"}),
+
+    application:load(bitcask),
+    application:set_env(bitcask, merge_window, never),
+    ok.
+    %% ?assertCmd("rm -rf test/bitcask-backend").
+
+cleanup(_) ->
+    ok.
+    %% ?_assertCmd("rm -rf test/bitcask-backend").
+
+-endif. % EQC
 -endif.
