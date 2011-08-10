@@ -45,7 +45,7 @@
 -define(API_VERSION, 1).
 -define(CAPABILITIES, []).
 
--record (state, {backends :: {atom(), atom(), term()},
+-record (state, {backends :: [{atom(), atom(), term()}],
                  default_backend :: atom()}).
 
 -opaque(state() :: #state{}).
@@ -93,34 +93,43 @@ api_version() ->
 %% @doc Start the backends
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
-                                                % Sanity checking...
+    %% Sanity checking
     Defs = proplists:get_value(multi_backend, Config),
-    assert(is_list(Defs), {invalid_config_setting, multi_backend, list_expected}),
-    assert(length(Defs) > 0, {invalid_config_setting, multi_backend, list_is_empty}),
-    {First, _, _} = hd(Defs),
+    if not is_list(Defs) ->
+            {error, {invalid_config_setting,
+                     multi_backend,
+                     list_expected}};
+       length(Defs) =< 0 ->
+            {error, {invalid_config_setting,
+                     multi_backend,
+                     list_is_empty}};
+       true ->
+            {First, _, _} = hd(Defs),
 
-                                                % Get the default...
-    DefaultBackend = proplists:get_value(multi_backend_default, Config, First),
-    assert(lists:keymember(DefaultBackend, 1, Defs), {invalid_config_setting, multi_backend_default, backend_not_found}),
-
-                                                % Start the backends...
-    Backends = [begin
-                    {ok, State} = Module:start(Partition, SubConfig),
-                    {Name, Module, State}
-                end || {Name, Module, SubConfig} <- Defs],
-
-    {ok, #state { backends=Backends, default_backend=DefaultBackend}}.
+            %% Get the default
+            DefaultBackend = proplists:get_value(multi_backend_default, Config, First),
+            case lists:keymember(DefaultBackend, 1, Defs) of
+                true ->
+                    %% Start the backends
+                    Backends = [begin
+                                    {ok, State} = Module:start(Partition, SubConfig),
+                                    {Name, Module, State}
+                                end || {Name, Module, SubConfig} <- Defs],
+                    {ok, #state{backends=Backends,
+                                default_backend=DefaultBackend}};
+                false ->
+                    {error, {invalid_config_setting,
+                             multi_backend_default,
+                             backend_not_found}}
+            end
+    end.
 
 %% @doc Stop the backends
 -spec stop(state()) -> ok.
 stop(State) ->
     Backends = State#state.backends,
-    Results = [Module:stop(SubState) || {_, Module, SubState} <- Backends],
-    ErrorResults = [X || X <- Results, X /= ok],
-    case ErrorResults of
-        [] -> ok;
-        _ -> {error, ErrorResults}
-    end.
+    [Module:stop(SubState) || {_, Module, SubState} <- Backends],
+    ok.
 
 %% @doc Retrieve an object from the backend
 -spec get(riak_object:bucket(), riak_object:key(), state()) ->
@@ -182,12 +191,23 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{backends=Backends}) ->
 
 %% @doc Delete all objects from the different backends
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
-drop(#state{backends=Backends}) ->
-    Fun = fun({_, Module, SubState}) ->
-                  Module:drop(SubState)
+drop(#state{backends=Backends}=State) ->
+    Fun = fun({Name, Module, SubState}) ->
+                  case Module:drop(SubState) of
+                      {ok, NewSubState} ->
+                          {Name, Module, NewSubState};
+                      {error, Reason, NewSubState} ->
+                          {error, Reason, NewSubState}
+                  end
           end,
-    [Fun(Backend) || Backend <- Backends],
-    ok.
+    DropResults = [Fun(Backend) || Backend <- Backends],
+    {Errors, UpdBackends} = lists:splitwith(fun error_filter/1, DropResults),
+    case Errors of
+        [] ->
+            {ok, State#state{backends=UpdBackends}};
+        _ ->
+            {error, Errors, State#state{backends=UpdBackends}}
+    end.
 
 %% @doc Returns true if the backend contains any
 %% non-tombstone values; otherwise returns false.
@@ -216,6 +236,7 @@ callback(Ref, Msg, #state{backends=Backends}=State) ->
 %% Internal functions
 %% ===================================================================
 
+%% @private
 %% Given a Bucket name and the State, return the
 %% backend definition. (ie: {Name, Module, SubState})
 get_backend(Bucket, State) ->
@@ -230,9 +251,14 @@ get_backend(Bucket, State) ->
         Backend -> Backend
     end.
 
-assert(true, _) -> ok;
-assert(false, Error) -> throw({?MODULE, Error}).
-
+%% @private
+%% @doc Function to filter error results when
+%% calling a function on the entire list of
+%% backends composing this multi backend.
+error_filter({error, _, _}) ->
+    true;
+error_filter(_) ->
+    false.
 
 %% ===================================================================
 %% EUnit tests
@@ -260,7 +286,6 @@ multi_backend_test_() ->
      end,
      fun([P1, P2]) ->
              crypto:stop(),
-             application:unload(bitcask),
              ?assertCmd("rm -rf test/bitcask-backend"),
              unlink(P1),
              unlink(P2),
@@ -303,8 +328,8 @@ multi_backend_test_() ->
     }.
 
 -ifdef(EQC).
-%% @private
 
+%% @private
 eqc_test() ->
     %% Start the ring manager...
     crypto:start(),
@@ -317,19 +342,12 @@ eqc_test() ->
     riak_core_bucket:set_bucket(<<"b1">>, [{backend, first_backend}]),
     riak_core_bucket:set_bucket(<<"b2">>, [{backend, second_backend}]),
 
-    %% @TODO Get this to work with bitcask
-    %% %% Have to do some prep for bitcask
-    %% application:load(bitcask),
-    %% ?assertCmd("rm -rf test/bitcask-backend"),
-    %% application:set_env(bitcask, data_root, "test/bitcask-backend"),
-
     %% Run the standard backend test
     Config = sample_config(),
     ?assertEqual(true, backend_eqc:test(?MODULE, true, Config)),
 
     %% cleanup
     crypto:stop(),
-    application:unload(riak_core),
 
     unlink(P1),
     unlink(P2),
@@ -358,16 +376,12 @@ extra_callback_test() ->
                 {memory, riak_kv_memory_backend, []},
                 {eleveldb, riak_kv_eleveldb_backend, []}]}],
     {ok, State} = start(0, Config),
-    callback(make_ref(), ignore_me, State),
-    application:unload(bitcask),
-    application:unload(eleveldb).
+    callback(make_ref(), ignore_me, State).
 
 
 bad_config_test() ->
-    %% {invalid_config_setting, multi_backend_default, backend_not_found}
-    ?assertThrow({riak_kv_multi_backend,
-                  {invalid_config_setting,multi_backend,list_expected}},
-                 start(0, [])).
+    ErrorReason = {invalid_config_setting, multi_backend, list_expected},
+    ?assertEqual({error, ErrorReason}, start(0, [])).
 
 
 sample_config() ->
