@@ -57,7 +57,16 @@
 -define(API_VERSION, 1).
 -define(CAPABILITIES, []).
 
--record(state, {ref :: integer() | atom()}).
+-record(server_state, {ref :: integer() | atom()}).
+
+-type state() :: pid().
+-type config() :: [].
+-type fold_buckets_fun() :: fun((binary(), any()) -> any() | no_return()).
+-type fold_keys_fun() :: fun((binary(), binary(), any()) -> any() |
+                                                            no_return()).
+-type fold_objects_fun() :: fun((binary(), binary(), term(), any()) ->
+                                       any() |
+                                       no_return()).
 
 %% ===================================================================
 %% Public API
@@ -67,22 +76,32 @@
 
 %% @doc Return the major version of the
 %% current API and a capabilities list.
+-spec api_version() -> {integer(), [atom()]}.
 api_version() ->
     {?API_VERSION, ?CAPABILITIES}.
 
 %% @doc Start the memory backend
-%% @spec start(Partition :: integer(), Config :: proplist()) ->
-%%                        {ok, state()} | {{error, Reason :: term()}, state()}
+-spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, _Config) ->
-    gen_server:start_link(?MODULE, [Partition], []).
+    case gen_server:start_link(?MODULE, [Partition], []) of
+        {ok, Pid} ->
+            {ok, Pid};
+        {error, Reason} ->
+            {error, Reason};
+        ignore ->
+            {error, ignore}
+    end.
 
-%% @spec stop(state()) -> ok | {error, Reason :: term()}
+%% @doc Stop the memory backend
+-spec stop(state()) -> ok.
 stop(State) ->
     gen_server:call(State, stop).
 
-%% get(riak_object:bucket(), riak_object:key(), state()) ->
-%%   {ok, Val :: binary()} | {error, Reason :: term()}
-%% key must be 160b
+%% @doc Retrieve an object from the memory backend
+-spec get(riak_object:bucket(), riak_object:key(), state()) ->
+                 {ok, any(), state()} |
+                 {ok, not_found, state()} |
+                 {error, term(), state()}.
 get(Bucket, Key, State) ->
     case gen_server:call(State, {get, Bucket, Key}) of
         {ok, Value} ->
@@ -91,9 +110,10 @@ get(Bucket, Key, State) ->
             {error, Reason, State}
     end.
 
-%% put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
-%%   ok | {error, Reason :: term()}
-%% key must be 160b
+%% @doc Insert an object into the memory backend
+-spec put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
+                 {ok, state()} |
+                 {error, term(), state()}.
 put(Bucket, Key, Val, State) ->
     case gen_server:call(State, {put, Bucket, Key, Val}) of
         ok ->
@@ -102,9 +122,10 @@ put(Bucket, Key, Val, State) ->
             {error, Reason, State}
     end.
 
-%% delete(riak_object:bucket(), riak_object:key(), state()) ->
-%%   ok | {error, Reason :: term()}
-%% key must be 160b
+%% @doc Delete an object from the memory backend
+-spec delete(riak_object:bucket(), riak_object:key(), state()) ->
+                    {ok, state()} |
+                    {error, term(), state()}.
 delete(Bucket, Key, State) ->
     case gen_server:call(State, {delete, Bucket, Key}) of
         ok ->
@@ -114,17 +135,26 @@ delete(Bucket, Key, State) ->
     end.
 
 %% @doc Fold over all the buckets.
+-spec fold_buckets(fold_buckets_fun(), any(), [], state()) ->
+                          {ok, any()} |
+                          {error, term()}.
 fold_buckets(FoldBucketsFun, Acc, _Opts, State) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     gen_server:call(State, {fold_buckets, FoldFun, Acc}).
 
-%% @doc Fold over all the keys for a bucket.
+%% @doc Fold over all the keys for one or all buckets.
+-spec fold_keys(fold_keys_fun(), any(), [{atom(), term()}], state()) ->
+                       {ok, term()} |
+                       {error, term()}.
 fold_keys(FoldKeysFun, Acc, Opts, State) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
     gen_server:call(State, {fold_keys, FoldFun, Bucket, Acc}).
 
-%% @doc Fold over all the objects for a bucket.
+%% @doc Fold over all the objects for one or all buckets.
+-spec fold_objects(fold_objects_fun(), any(), [{atom(), term()}], state()) ->
+                          {ok, any()} |
+                          {error, term()}.
 fold_objects(FoldObjectsFun, Acc, Opts, State) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
@@ -132,49 +162,60 @@ fold_objects(FoldObjectsFun, Acc, Opts, State) ->
 
 %% @doc Returns true if this memory backend contains any
 %% non-tombstone values; otherwise returns false.
+-spec is_empty(state()) -> boolean() | {error, term()}.
 is_empty(State) ->
     gen_server:call(State, is_empty).
 
 %% @doc Delete all objects from this memory backend
+-spec drop(state()) -> {ok, state()} | {error, term(), state()}.
 drop(State) ->
     gen_server:call(State, drop).
 
 %% @doc Get the status information for this memory backend
+-spec status(state()) -> [{atom(), term()}].
 status(State) ->
     gen_server:call(State, status).
 
 %% @doc Register an asynchronous callback
-callback(_Ref, _Msg, _State) ->
-    ok.
+-spec callback(reference(), any(), state()) ->
+                      {ok, state()}.
+callback(_Ref, _Msg, State) ->
+    {ok, State}.
 
 %% gen_server API
 
 %% @private
 init([Partition]) ->
     TableRef = ets:new(list_to_atom(integer_to_list(Partition)),[]),
-    {ok, #state{ref=TableRef}}.
+    {ok, #server_state{ref=TableRef}}.
 
 %% @private
-handle_call(stop, _From, #state{ref=Ref}=State) ->
+handle_call(stop, _From, #server_state{ref=Ref}=State) ->
     {reply, srv_stop(Ref), State};
-handle_call({get, Bucket, Key}, _From, #state{ref=Ref}=State) ->
+handle_call({get, Bucket, Key}, _From, #server_state{ref=Ref}=State) ->
     {reply, srv_get(Bucket, Key, Ref), State};
-handle_call({put, Bucket, Key, Val}, _From, #state{ref=Ref}=State) ->
+handle_call({put, Bucket, Key, Val}, _From, #server_state{ref=Ref}=State) ->
     {reply, srv_put(Bucket, Key, Val, Ref), State};
-handle_call({delete, Bucket, Key}, _From, #state{ref=Ref}=State) ->
+handle_call({delete, Bucket, Key}, _From, #server_state{ref=Ref}=State) ->
     {reply, srv_delete(Bucket, Key, Ref), State};
-handle_call({fold_buckets, FoldFun, Acc}, _From, #state{ref=Ref}=State) ->
+handle_call({fold_buckets, FoldFun, Acc},
+            _From,
+            #server_state{ref=Ref}=State) ->
     {reply, srv_fold_buckets(FoldFun, Acc, Ref), State};
-handle_call({fold_keys, FoldFun, Bucket, Acc}, _From, #state{ref=Ref}=State) ->
+handle_call({fold_keys, FoldFun, Bucket, Acc},
+            _From,
+            #server_state{ref=Ref}=State) ->
     {reply, srv_fold_keys(FoldFun, Bucket, Acc, Ref), State};
-handle_call({fold_objects, FoldFun, Bucket, Acc}, _From, #state{ref=Ref}=State) ->
+handle_call({fold_objects, FoldFun, Bucket, Acc},
+            _From,
+            #server_state{ref=Ref}=State) ->
     {reply, srv_fold_objects(FoldFun, Bucket, Acc, Ref), State};
-handle_call(drop, _From, #state{ref=Ref}=State) ->
+handle_call(drop, _From, #server_state{ref=Ref}=State) ->
     ets:delete_all_objects(Ref),
     {reply, {ok, self()}, State};
-handle_call(is_empty, _From, #state{ref=Ref}=State) ->
+handle_call(is_empty, _From, #server_state{ref=Ref}=State) ->
     {reply, ets:info(Ref, size) =:= 0, State};
-handle_call(status, _From, #state{ref=Ref}=State) ->
+handle_call(status, _From, #server_state{ref=Ref}=State) ->
     {reply, ets:info(Ref), State}.
 
 
@@ -274,25 +315,25 @@ srv_fold_objects(FoldFun, Bucket, Acc, Ref) ->
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
+
 -ifdef(TEST).
 
 simple_test() ->
     riak_kv_backend:standard_test(?MODULE, []).
 
 -ifdef(EQC).
-%% eqc_test() ->
-%%     ?assertEqual(true, backend_eqc:test(?MODULE, true)).
+
 eqc_test_() ->
     {spawn,
      [{inorder,
-     [{setup,
-       fun setup/0,
-       fun cleanup/1,
-       [
-        {timeout, 60000,
-         [?_assertEqual(true,
-                       backend_eqc:test(?MODULE, true))]}
-       ]}]}]}.
+       [{setup,
+         fun setup/0,
+         fun cleanup/1,
+         [
+          {timeout, 60000,
+           [?_assertEqual(true,
+                          backend_eqc:test(?MODULE, true))]}
+         ]}]}]}.
 
 setup() ->
     application:load(sasl),
