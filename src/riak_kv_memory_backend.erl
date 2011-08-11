@@ -57,9 +57,14 @@
 -define(API_VERSION, 1).
 -define(CAPABILITIES, []).
 -define (DEFAULT_TTL, timer:hours(1)).
+-define (DEFAULT_MEMORY,  100).  % 100MB
 
--record(server_state, {ref :: integer() | atom(),
-                       expiry_enabled=false :: boolean(),
+-record(server_state, {data_ref :: integer() | atom(),
+                       time_ref :: integer() | atom(),
+                       expiry_enabled :: boolean(),
+                       memory_cap_enabled :: boolean(),
+                       max_memory :: undefined | integer(),
+                       used_memory=0 :: integer(),
                        ttl :: integer()}).
 -type state() :: pid().
 -type config() :: [].
@@ -184,23 +189,34 @@ callback(_Ref, _Msg, State) ->
 
 %% @private
 init([Partition, Config]) ->
-    TableRef = ets:new(list_to_atom(integer_to_list(Partition)), []),
-    case config_value(object_expiry_enabled, Config) of
+    ExpiryEnabled = config_value(object_expiry_enabled, Config, false),
+    TTL = config_value(ttl, Config, ?DEFAULT_TTL),
+    MemoryCapEnabled = config_value(memory_cap_enabled, Config, false),
+    MaxMemory = config_value(max_memory, Config, ?DEFAULT_MEMORY),
+    case MemoryCapEnabled of
         true ->
-            TTL = config_value(ttl, Config, ?DEFAULT_TTL),
-            {ok, #server_state{expiry_enabled=true,
-                               ttl=TTL,
-                               ref=TableRef}};
-        _ ->
-            {ok, #server_state{ref=TableRef}}
-    end.
+            TimeRef = ets:new(list_to_atom(integer_to_list(Partition)), [ordered_set]);
+        false ->
+            TimeRef = undefined
+    end,
+    DataRef = ets:new(list_to_atom(integer_to_list(Partition)), []),
+    {ok, #server_state{data_ref=DataRef,
+                       expiry_enabled=ExpiryEnabled,
+                       max_memory=MaxMemory * 1024 * 1024,
+                       memory_cap_enabled=MemoryCapEnabled,
+                       time_ref=TimeRef,
+                       ttl=TTL}}.
 
 %% @private
-handle_call(stop, _From, #server_state{ref=Ref}=State) ->
+handle_call(stop, _From, #server_state{data_ref=Ref}=State) ->
     {reply, srv_stop(Ref), State};
-handle_call({get, Bucket, Key}, _From, #server_state{expiry_enabled=true,
-                                                     ttl=TTL,
-                                                     ref=Ref}=State) ->
+handle_call({get, Bucket, Key},
+            _From,
+            #server_state{expiry_enabled=ExpiryEnabled,
+                          memory_cap_enabled=MemoryCapEnabled,
+                          ttl=TTL,
+                          data_ref=Ref}=State) when ExpiryEnabled =:= true;
+                                                    MemoryCapEnabled =:= true ->
     Result = srv_get(Bucket, Key, Ref),
     case Result of
         {ok, {{ts, Timestamp}, Val}} ->
@@ -215,33 +231,58 @@ handle_call({get, Bucket, Key}, _From, #server_state{expiry_enabled=true,
             Reply = Result
     end,
     {reply, Reply, State};
-handle_call({get, Bucket, Key}, _From, #server_state{ref=Ref}=State) ->
+handle_call({get, Bucket, Key}, _From, #server_state{data_ref=Ref}=State) ->
     {reply, srv_get(Bucket, Key, Ref), State};
-handle_call({put, Bucket, Key, Val}, _From, #server_state{expiry_enabled=true,
-                                                          ref=Ref}=State) ->
-    {reply, srv_put(Bucket, Key, {{ts, now()}, Val}, Ref), State};
-handle_call({put, Bucket, Key, Val}, _From, #server_state{ref=Ref}=State) ->
-    {reply, srv_put(Bucket, Key, Val, Ref), State};
-handle_call({delete, Bucket, Key}, _From, #server_state{ref=Ref}=State) ->
+handle_call({put, Bucket, Key, Val},
+            _From,
+            #server_state{data_ref=DataRef,
+                          expiry_enabled=ExpiryEnabled,
+                          max_memory=MaxMemory,
+                          memory_cap_enabled=MemoryCapEnabled,
+                          time_ref=TimeRef,
+                          used_memory=UsedMemory}=State) when ExpiryEnabled =:= true;
+                                                              MemoryCapEnabled =:= true ->
+    Now = now(),
+    {Reply, Size} = srv_put(Bucket, Key, {{ts, Now}, Val}, DataRef),
+
+    %% If the memory cap is enabled update timestamp table
+    %% and check if the memory usage is over the cap.
+    case MemoryCapEnabled of
+        true ->
+            time_entry(Bucket, Key, Now, TimeRef),
+            Freed = trim_data_table(MaxMemory,
+                                    UsedMemory + Size,
+                                    DataRef,
+                                    TimeRef,
+                                    0),
+            UsedMemory1 = UsedMemory + Size - Freed;
+        false ->
+            UsedMemory1 = UsedMemory
+    end,
+    {reply, Reply, State#server_state{used_memory=UsedMemory1}};
+handle_call({put, Bucket, Key, Val}, _From, #server_state{data_ref=Ref}=State) ->
+    {Reply, _} = srv_put(Bucket, Key, Val, Ref),
+    {reply, Reply, State};
+handle_call({delete, Bucket, Key}, _From, #server_state{data_ref=Ref}=State) ->
     {reply, srv_delete(Bucket, Key, Ref), State};
 handle_call({fold_buckets, FoldFun, Acc},
             _From,
-            #server_state{ref=Ref}=State) ->
+            #server_state{data_ref=Ref}=State) ->
     {reply, srv_fold_buckets(FoldFun, Acc, Ref), State};
 handle_call({fold_keys, FoldFun, Bucket, Acc},
             _From,
-            #server_state{ref=Ref}=State) ->
+            #server_state{data_ref=Ref}=State) ->
     {reply, srv_fold_keys(FoldFun, Bucket, Acc, Ref), State};
 handle_call({fold_objects, FoldFun, Bucket, Acc},
             _From,
-            #server_state{ref=Ref}=State) ->
+            #server_state{data_ref=Ref}=State) ->
     {reply, srv_fold_objects(FoldFun, Bucket, Acc, Ref), State};
-handle_call(drop, _From, #server_state{ref=Ref}=State) ->
+handle_call(drop, _From, #server_state{data_ref=Ref}=State) ->
     ets:delete_all_objects(Ref),
     {reply, {ok, self()}, State};
-handle_call(is_empty, _From, #server_state{ref=Ref}=State) ->
+handle_call(is_empty, _From, #server_state{data_ref=Ref}=State) ->
     {reply, ets:info(Ref, size) =:= 0, State};
-handle_call(status, _From, #server_state{ref=Ref}=State) ->
+handle_call(status, _From, #server_state{data_ref=Ref}=State) ->
     {reply, ets:info(Ref), State}.
 
 
@@ -305,8 +346,9 @@ srv_get(Bucket, Key, Ref) ->
 
 %% @private
 srv_put(Bucket, Key, Val, Ref) ->
-    true = ets:insert(Ref, {{Bucket, Key}, Val}),
-    ok.
+    Object = {{Bucket, Key}, Val},
+    true = ets:insert(Ref, Object),
+    {ok, object_size(Object)}.
 
 %% @private
 srv_delete(Bucket, Key, Ref) ->
@@ -339,15 +381,6 @@ srv_fold_objects(FoldFun, Bucket, Acc, Ref) ->
     lists:foldl(FoldFun, Acc, ObjectList).
 
 %% @private
-config_value(Key, Config) ->
-    case proplists:get_value(Key, Config) of
-        undefined ->
-            app_helper:get_env(memory_backend, Key);
-        Value ->
-            Value
-    end.
-
-%% @private
 config_value(Key, Config, Default) ->
     case proplists:get_value(Key, Config) of
         undefined ->
@@ -360,6 +393,53 @@ config_value(Key, Config, Default) ->
 exceeds_ttl(Timestamp, TTL) ->
     Diff = (timer:now_diff(now(), Timestamp) / 1000 / 1000),
     Diff > TTL.
+
+%% @private
+time_entry(Bucket, Key, Now, TimeRef) ->
+    ets:insert(TimeRef, {Now, {Bucket, Key}}).
+
+%% @private
+%% @doc Dump some entries if the max memory size has
+%% been breached.
+trim_data_table(MaxMemory, UsedMemory, _, _, Freed) when
+      (UsedMemory - Freed) =< MaxMemory ->
+    Freed;
+trim_data_table(MaxMemory, UsedMemory, DataRef, TimeRef, Freed) ->
+    %% Delete the oldest object
+    OldestSize = delete_oldest(DataRef, TimeRef),
+    trim_data_table(MaxMemory,
+                    UsedMemory,
+                    DataRef,
+                    TimeRef,
+                    Freed + OldestSize).
+
+%% @private
+delete_oldest(DataRef, TimeRef) ->
+    OldestTime = ets:first(TimeRef),
+    case OldestTime of
+        '$end_of_table' ->
+            0;
+        _ ->
+            OldestKey = ets:lookup_element(TimeRef, OldestTime, 2),
+            ets:delete(TimeRef, OldestTime),
+            case ets:lookup(DataRef, OldestKey) of
+                [] ->
+                    delete_oldest(DataRef, TimeRef);
+                [Object] ->
+                    ets:delete(DataRef, OldestKey),
+                    object_size(Object)
+            end
+    end.
+
+%% @private
+object_size(Object) ->
+    case Object of
+        {{Bucket, Key}, {{ts, _}, Val}} ->
+            ok;
+        {{Bucket, Key}, Val} ->
+            ok
+    end,
+    size(Bucket) + size(Key) + size(Val).
 
 %% ===================================================================
 %% EUnit tests
@@ -381,7 +461,7 @@ ttl_test_() ->
 
     {spawn,
      [
-      %% Put an object...
+      %% Put an object
       ?_assertEqual({ok, State}, put(Bucket, Key, Value, State)),
       %% Wait 1 second to access it
       ?_assertEqual(ok, timer:sleep(1000)),
@@ -393,6 +473,35 @@ ttl_test_() ->
       {timeout, 30000, ?_assertEqual(ok, timer:sleep(15000))},
       %% This time it should be gone
       ?_assertEqual({error, not_found, State}, get(Bucket, Key, State))
+     ]}.
+
+%% @private
+max_memory_test_() ->
+    %% Set max size to 1.5kb
+    Config = [{max_memory, 1.5 * (1 / 1024)},
+              {memory_cap_enabled, true}],
+    {ok, State} = start(42, Config),
+
+    Bucket = <<"Bucket">>,
+    Key1 = <<"Key1">>,
+    Value1 = list_to_binary(string:copies("1", 1024)),
+    Key2 = <<"Key2">>,
+    Value2 = list_to_binary(string:copies("2", 1024)),
+
+    {spawn,
+     [
+      %% Write Key1 to the datastore
+      ?_assertEqual({ok, State}, put(Bucket, Key1, Value1, State)),
+      %% Fetch it
+      ?_assertEqual({ok, Value1, State}, get(Bucket, Key1, State)),
+      %% Pause for a second to let clocks increment
+      ?_assertEqual(ok, timer:sleep(timer:seconds(1))),
+      %% Write Key2 to the datastore
+      ?_assertEqual({ok, State}, put(Bucket, Key2, Value2, State)),
+      %% Key1 should be kicked out
+      ?_assertEqual({error, not_found, State}, get(Bucket, Key1, State)),
+      %% Key2 should still be present
+      ?_assertEqual({ok, Value2, State}, get(Bucket, Key2, State))
      ]}.
 
 -ifdef(EQC).
