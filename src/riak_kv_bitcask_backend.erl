@@ -216,7 +216,12 @@ drop(#state{ref=Ref,
             %% Move the link to point to the new data file
             file:delete(LinkPath),
             file:make_symlink(NewDataFile, LinkPath),
-            %% Spawn a process to cleanup the old data files
+            %% Spawn a process to cleanup the old data files.
+            %% The use of spawn is intentional. We do not
+            %% care if this process dies since any lingering 
+            %% files will be cleaned up on the next drop.
+            %% The worst case is that the files hang
+            %% around and take up some disk space.
             spawn(drop_data_cleanup(DataRoot, LinkFile, NewDataFile)),
 
             %% Now open the bitcask and return an updated state
