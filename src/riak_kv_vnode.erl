@@ -488,6 +488,11 @@ do_get_term(BKey, Mod, ModState) ->
     case do_get_binary(BKey, Mod, ModState) of
         {ok, Bin, _UpdModState} ->
             {ok, binary_to_term(Bin)};
+        %% @TODO Eventually it would be good to
+        %% make the use of not_found or notfound
+        %% consistent throughout the code.
+        {error, not_found, _UpdatedModstate} ->
+            {error, notfound};
         {error, Reason, _UpdatedModstate} ->
             {error, Reason};
         Err ->
