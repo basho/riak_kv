@@ -291,14 +291,14 @@ get_status(Dir) ->
 -ifdef(TEST).
 
 simple_test() ->
-    ?assertCmd("rm -rf test/leveldb-backend"),
-    application:set_env(eleveldb, data_root, "test/leveldb-backend"),
+    ?assertCmd("rm -rf test/eleveldb-backend"),
+    application:set_env(eleveldb, data_root, "test/eleveldb-backend"),
     riak_kv_backend:standard_test(?MODULE, []).
 
 custom_config_test() ->
-    ?assertCmd("rm -rf test/leveldb-backend"),
+    ?assertCmd("rm -rf test/eleveldb-backend"),
     application:set_env(eleveldb, data_root, ""),
-    riak_kv_backend:standard_test(?MODULE, [{data_root, "test/leveldb-backend"}]).
+    riak_kv_backend:standard_test(?MODULE, [{data_root, "test/eleveldb-backend"}]).
 
 -ifdef(EQC).
 
