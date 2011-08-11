@@ -49,7 +49,6 @@
 %% Public API
 %% ===================================================================
 
-
 %% @doc Returns a new buffer with the specified
 %% maximum size and buffer function.
 -spec new(pos_integer(), fun(([any()]) -> any())) -> buffer().
