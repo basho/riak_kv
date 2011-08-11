@@ -54,8 +54,9 @@
 -define(API_VERSION, 1).
 -define(CAPABILITIES, []).
 
--record(state, {partition :: integer(),
-                ref :: reference(),
+-record(state, {ref :: reference(),
+                link_file :: string(),
+                link_path :: string(),
                 opts :: [{atom(), term()}],
                 root :: string()}).
 
@@ -76,54 +77,38 @@ api_version() ->
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% Get the data root directory
-    DataDir = config_value(data_root, Config),
+    case config_value(data_root, Config) of
+        undefined ->
+            error_logger:error_msg("Failed to create bitcask dir: data_root is not set\n"),
+            {error, data_root_unset};
+        DataRoot ->
+            LinkFile = integer_to_list(Partition),
+            LinkPath = filename:join([DataRoot, LinkFile]),
 
-    %% Get current timestamp
-    {MegaSecs, Secs, MicroSecs} = erlang:now(),
-    %% Setup actual bitcask dir for this partition
-    BitcaskRoot = filename:join([DataDir,
-                                 integer_to_list(Partition)]),
-    BitcaskRoot2 = filename:join([DataDir, [integer_to_list(Partition),
-                                            "-",
-                                            integer_to_list(MegaSecs),
-                                            integer_to_list(Secs),
-                                            integer_to_list(MicroSecs)]]),
-    %% BitcaskFile1 = integer_to_list(Partition),
-    BitcaskFile2 = [integer_to_list(Partition),
-                    "-",
-                    integer_to_list(MegaSecs),
-                    integer_to_list(Secs),
-                    integer_to_list(MicroSecs)],
-    case filelib:ensure_dir(BitcaskRoot2) of
-        ok ->
-            ok;
-        {error, Reason} ->
-            error_logger:error_msg("Failed to create bitcask dir ~s: ~p\n",
-                                   [BitcaskRoot2, Reason]),
-            riak:stop("riak_kv_bitcask_backend failed to start.")
-    end,
-
-    %% Make symlink to BitcaskRoot
-    case file:read_link(BitcaskRoot) of
-        {ok, _} ->
-            ok;
-        %% {error, einval} ->
-        %%     file:make_symlink(BitcaskRoot2, BitcaskRoot);
-        {error, enoent} ->
-            file:make_symlink(BitcaskFile2, BitcaskRoot);
-        {error, Reason3} ->
-            error_logger:error_msg("Failed to create symlink for bitcask dir ~s: ~p\n",
-                                   [BitcaskRoot, Reason3]),
-            riak:stop("riak_kv_bitcask_backend failed to start.")
-    end,
-    BitcaskOpts = [{read_write, true}|Config],
-    case bitcask:open(BitcaskRoot2, BitcaskOpts) of
-        Ref when is_reference(Ref) ->
-            schedule_merge(Ref),
-            maybe_schedule_sync(Ref),
-            {ok, #state{partition=Partition, ref=Ref, root=BitcaskRoot, opts=BitcaskOpts}};
-        {error, Reason2} ->
-            {error, Reason2}
+            %% Create a new symlink or get the filename of
+            %% of the file linked to by the existing link.
+            case check_symlink(DataRoot, LinkFile) of
+                {ok, DataFile} ->
+                    BitcaskOpts = [{read_write, true} | Config],
+                    case bitcask:open(DataFile, BitcaskOpts) of
+                        Ref when is_reference(Ref) ->
+                            schedule_merge(Ref),
+                            maybe_schedule_sync(Ref),
+                            {ok, #state{ref=Ref,
+                                        link_file=LinkFile,
+                                        link_path=LinkPath,
+                                        root=DataRoot,
+                                        opts=BitcaskOpts}};
+                        {error, Reason1} ->
+                            error_logger:error_msg("Failed to start bitcask backend: ~p\n",
+                                                   [Reason1]),
+                            {error, Reason1}
+                    end;
+                {error, Reason} ->
+                    error_logger:error_msg("Failed to start bitcask backend: ~p\n",
+                                           [Reason]),
+                    {error, Reason}
+            end
     end.
 
 %% @doc Stop the bitcask backend
@@ -205,78 +190,46 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{ref=Ref}) ->
     bitcask:fold(Ref, FoldFun, Acc).
 
 %% @doc Delete all objects from this bitcask backend
+%% @TODO once bitcask has a more friendly drop function
+%%  of its own, use that instead.
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
-drop(#state{ref=Ref, root=BitcaskRoot, opts=BitcaskOpts}=State) ->
-    %% @TODO once bitcask has a more friendly drop function
-    %%  of its own, use that instead.
-
+drop(#state{ref=Ref,
+            link_file=LinkFile,
+            link_path=LinkPath,
+            root=DataRoot,
+            opts=BitcaskOpts}=State) ->
     %% Close the bitcask reference
     bitcask:close(Ref),
 
-    %% Get current timestamp
     {MegaSecs, Secs, MicroSecs} = erlang:now(),
 
     %% Setup new bitcask dir for this partition
-    NewFile = [integer_to_list(Partition),
-               "-",
-               integer_to_list(MegaSecs),
-               integer_to_list(Secs),
-               integer_to_list(MicroSecs)],
-    NewRoot = filename:join(["test/bitcask-backend", NewFile]),
+    NewDataFile = lists:flatten([LinkFile,
+                                 "-",
+                                 integer_to_list(MegaSecs),
+                                 integer_to_list(Secs),
+                                 integer_to_list(MicroSecs)]),
+    NewDataPath = filename:join([DataRoot, NewDataFile]),
 
-    case filelib:ensure_dir(NewRoot) of
+    case filelib:ensure_dir(NewDataPath) of
         ok ->
-            ok;
-        {error, Reason4} ->
-            error_logger:error_msg("Failed to create bitcask dir ~s: ~p\n",
-                                   [NewRoot, Reason4]),
-            riak:stop("riak_kv_bitcask_backend failed to start.")
-    end,
-    case file:read_link(BitcaskRoot) of
-        {ok, RealFile} ->
-            RealRoot = filename:join(["test/bitcask-backend", RealFile]),
-            file:delete(BitcaskRoot),
-            file:make_symlink(NewFile, BitcaskRoot),
-            %% Cleanup the old files
-            %% @TODO Could do this async in separate process
-            {ok, FNs} = file:list_dir(RealRoot),
-            %% [?debugFmt("~p~n", [filename:join(RealRoot, FN)]) || FN <- FNs],
-            [ok = file:delete(filename:join(RealRoot, FN)) || FN <- FNs],
-            {ok, Dirs} = file:list_dir("test/bitcask-backend"),
-            PartitionStr = integer_to_list(Partition),
-            CleanupFun = fun(X) ->
-                                 case X of
-                                     NewFile ->
-                                         ignore;
-                                     PartitionStr ->
-                                         ignore;
-                                     _ ->
-                                         file:del_dir(filename:join(["test/bitcask-backend", X]))
-                                 end
-                         end,
-            [CleanupFun(Dir) || Dir <- Dirs];
-        {error, _} ->
-            error
-    end,
+            %% Move the link to point to the new data file
+            file:delete(LinkPath),
+            file:make_symlink(NewDataFile, LinkPath),
+            %% Spawn a process to cleanup the old data files
+            spawn(drop_data_cleanup(DataRoot, LinkFile, NewDataFile)),
 
-    %% ?debugFmt("~p~n", [os:cmd("lsof | grep bitcask")]),
-
-    %% %% ?debugFmt("Post Delete Key Counts: ~p~n", [key_counts(Ref)]),
-    %% case filelib:ensure_dir(NewRoot) of
-    %%     ok ->
-    %%         ok;
-    %%     {error, Reason} ->
-    %%         error_logger:error_msg("Failed to create bitcask dir ~s: ~p\n",
-    %%                                [BitcaskRoot, Reason]),
-    %%         riak:stop("riak_kv_bitcask_backend failed to start.")
-    %% end,
-    %% ?debugFmt("Pre Open Key Counts: ~p~n", [key_counts(Ref)]),
-    %% Now reopen the bitcask and return an updated state
-    %% so this backend can continue processing.
-    case bitcask:open(NewRoot, BitcaskOpts) of
-        Ref1 when is_reference(Ref1) ->
-            {ok, State#state{ref=Ref1}};
+            %% Now open the bitcask and return an updated state
+            %% so this backend can continue processing.
+            case bitcask:open(NewDataPath, BitcaskOpts) of
+                Ref1 when is_reference(Ref1) ->
+                    {ok, State#state{ref=Ref1}};
+                {error, Reason} ->
+                    {error, Reason, State}
+            end;
         {error, Reason1} ->
+            error_logger:error_msg("Failed to create bitcask dir ~s: ~p\n",
+                                   [NewDataPath, Reason1]),
             {error, Reason1, State}
     end.
 
@@ -422,6 +375,62 @@ config_value(Key, Config) ->
             Value
     end.
 
+%% @private
+check_symlink(DataRoot, LinkFile) ->
+    LinkPath = filename:join([DataRoot, LinkFile]),
+    case file:read_link(LinkPath) of
+        {ok, DataFile} ->
+            {ok, DataFile};
+        {error, enoent} ->
+            {MegaSecs, Secs, MicroSecs} = erlang:now(),
+            DataFile = lists:flatten([LinkFile,
+                                      "-",
+                                      integer_to_list(MegaSecs),
+                                      integer_to_list(Secs),
+                                      integer_to_list(MicroSecs)]),
+            DataPath = filename:join([DataRoot, DataFile]),
+            case filelib:ensure_dir(DataPath) of
+                ok ->
+                    case file:make_symlink(DataFile, LinkPath) of
+                        ok ->
+                            {ok, DataFile};
+                        Error2 ->
+                            Error2
+                    end;
+                Error1 ->
+                    Error1
+            end;
+        Error ->
+            Error
+    end.
+
+drop_data_cleanup(DataRoot, LinkFile, DataFile) ->
+    fun() ->
+            %% List all the directories in data root
+            case file:list_dir(DataRoot) of
+                {ok, Dirs} ->
+                    %% Delete the contents of each directory and
+                    %% the directory itself excluding the
+                    %% current data directory and the symlink
+                    %% pointing to it.
+                    [data_directory_cleanup(filename:join(DataRoot, Dir)) ||
+                        Dir <- Dirs,
+                        Dir /= DataFile,
+                        Dir /= LinkFile];
+                {error, _} ->
+                    ignore
+            end
+    end.
+
+data_directory_cleanup(DirPath) ->
+    case file:list_dir(DirPath) of
+        {ok, Files} ->
+            [file:delete(filename:join([DirPath, File])) || File <- Files],
+            file:del_dir(DirPath);
+        _ ->
+            ignore
+    end.
+
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
@@ -467,4 +476,5 @@ cleanup(_) ->
     ?_assertCmd("rm -rf test/bitcask-backend").
 
 -endif. % EQC
+
 -endif.
