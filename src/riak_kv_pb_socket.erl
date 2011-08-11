@@ -409,10 +409,11 @@ pipe_mapreduce(Req, State, Inputs, Query, _Timeout) ->
                     Ref = (Pipe#pipe.sink)#fitting.ref,
                     %% TODO: timeout
                     {pause, State#state{req=Req, req_ctx=Ref}};
-                _Error ->
+                Error ->
                     %% even if the structure looks right, it might name
                     %% a non-existent key filter or something
                     riak_pipe:eoi(Pipe),
+                    lager:error("Error sending inputs: ~p", [Error]),
                     send_error("~p", [bad_mapred_inputs], State)
             end;
         false ->
