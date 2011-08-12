@@ -497,8 +497,8 @@ merge2_test() ->
     O1 = riak_object:increment_vclock(object_test(), node1),
     O2 = riak_object:increment_vclock(riak_object:new(B,K,V), node2),
     O3 = riak_object:syntactic_merge(O1, O2, other_node),
-    [other_node, node1, node2] = [N || {N,_} <- riak_object:vclock(O3)],
-    2 = riak_object:value_count(O3).
+    ?assertEqual([node1, node2], [N || {N,_} <- riak_object:vclock(O3)]),
+    ?assertEqual(2, riak_object:value_count(O3)).
 
 merge3_test() ->
     O0 = riak_object:new(<<"test">>, <<"test">>, hi),
