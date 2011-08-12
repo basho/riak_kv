@@ -31,53 +31,72 @@ join([NodeStr]) ->
     try
         case riak_core:join(NodeStr) of
             ok ->
-                io:format("Sent join request to ~s\n", [NodeStr]),
+                io:format("Sent join request to ~s~n", [NodeStr]),
                 ok;
             {error, not_reachable} ->
-                io:format("Node ~s is not reachable!\n", [NodeStr]),
+                io:format("Node ~s is not reachable!~n", [NodeStr]),
                 error;
             {error, different_ring_sizes} ->
                 io:format("Failed: ~s has a different ring_creation_size~n",
-                    [NodeStr]),
+                          [NodeStr]);
+            {error, _} ->
+                io:format("Join failed. Try again in a few moments.~n", []),
                 error
         end
     catch
         Exception:Reason ->
-            lager:error("Join failed ~p:~p", [Exception,
-                    Reason]),
+            lager:error("Join failed ~p:~p", [Exception, Reason]),
             io:format("Join failed, see log for details~n"),
             error
     end.
 
 
 leave([]) ->
-    remove_node(node()).
-
-remove([Node]) ->
-    remove_node(list_to_atom(Node)).
-
-remove_node(Node) when is_atom(Node) ->
-    try 
-        case catch(riak_core:remove_from_cluster(Node)) of
-            {'EXIT', {badarg, [{erlang, hd, [[]]}|_]}} ->
-                %% This is a workaround because
-                %% riak_core_gossip:remove_from_cluster doesn't check if
-                %% the result of subtracting the current node from the
-                %% cluster member list results in the empty list. When
-                %% that code gets refactored this can probably go away.
-                io:format("Leave failed, this node is the only member.~n"),
+    try
+        case riak_core:leave() of
+            ok ->
+                io:format("Success: ~p will shutdown after handing off "
+                          "its data~n", [node()]),
+                ok;
+            {error, already_leaving} ->
+                io:format("~p is already in the process of leaving the "
+                          "cluster.~n", [node()]),
+                ok;
+            {error, not_member} ->
+                io:format("Failed: ~p is not a member of the cluster.~n",
+                          [node()]),
                 error;
-            Res ->
-                io:format(" ~p\n", [Res])
+            {error, only_member} ->
+                io:format("Failed: ~p is the only member.~n", [node()]),
+                error
         end
     catch
         Exception:Reason ->
-            lager:error("Leave failed ~p:~p", [Exception,
-                    Reason]),
+            lager:error("Leave failed ~p:~p", [Exception, Reason]),
             io:format("Leave failed, see log for details~n"),
             error
     end.
 
+remove([Node]) ->
+    try
+        case riak_core:remove(list_to_atom(Node)) of
+            ok ->
+                io:format("Success: ~p removed from the cluster~n", [Node]),
+                ok;
+            {error, not_member} ->
+                io:format("Failed: ~p is not a member of the cluster.~n",
+                          [node()]),
+                error;
+            {error, only_member} ->
+                io:format("Failed: ~p is the only member.~n", [Node]),
+                error
+        end
+    catch
+        Exception:Reason ->
+            lager:error("Remove failed ~p:~p", [Exception, Reason]),
+            io:format("Remove failed, see log for details~n"),
+            error
+    end.
 
 -spec(status([]) -> ok).
 status([]) ->
