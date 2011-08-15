@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_wm_keylist - Webmachine resource for listing 
+%% riak_kv_wm_keylist - Webmachine resource for listing
 %%                      the keys in a bucket.
 %%
 %% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
@@ -35,8 +35,8 @@
 %%   a single JSON structure. If set to "stream" then keys are
 %%   streamed in multiple JSON snippets. Otherwise, no keys are sent.
 %%   If the 'allow_props_param' context setting is 'true', then
-%%   the user can also specify a 'props=true' to include props in the 
-%%   JSON response. This provides backward compatibility with the 
+%%   the user can also specify a 'props=true' to include props in the
+%%   JSON response. This provides backward compatibility with the
 %%   old HTTP API.
 
 -module(riak_kv_wm_keylist).
@@ -134,17 +134,17 @@ produce_bucket_body(RD, Ctx) ->
     Client = Ctx#ctx.client,
     Bucket = Ctx#ctx.bucket,
 
-    IncludeBucketProps = (Ctx#ctx.allow_props_param == true) 
+    IncludeBucketProps = (Ctx#ctx.allow_props_param == true)
         andalso (wrq:get_qs_value(?Q_PROPS, RD) /= ?Q_FALSE),
-    
-    BucketPropsJson = 
+
+    BucketPropsJson =
         case IncludeBucketProps of
             true ->
                 [riak_kv_wm_props:get_bucket_props_json(Client, Bucket)];
             false ->
                 []
         end,
-    
+
     case wrq:get_qs_value(?Q_KEYS, RD) of
         ?Q_STREAM ->
             %% Start streaming the keys...
@@ -152,12 +152,23 @@ produce_bucket_body(RD, Ctx) ->
                         {ok, ReqId} = Client:stream_list_keys(Bucket),
                         stream_keys(ReqId)
                 end,
-            {{stream, {[], F}}, RD, Ctx};
+
+            %% For API Version 1, send back the BucketPropsJson first
+            %% (if defined) or an empty resultset. For API Version 2,
+            %% use an empty list, which doesn't send an resultset.
+            FirstResult =
+                case Ctx#ctx.api_version of
+                    1 ->
+                        mochijson2:encode({struct, BucketPropsJson});
+                    2 ->
+                        []
+                end,
+            {{stream, {FirstResult, F}}, RD, Ctx};
 
         ?Q_TRUE ->
             %% Get the JSON response...
             {ok, KeyList} = Client:list_keys(Bucket),
-            JsonKeys1 = [{?Q_KEYS, KeyList}] ++ BucketPropsJson,
+            JsonKeys1 = BucketPropsJson ++ [{?Q_KEYS, KeyList}],
             JsonKeys2 = {struct, JsonKeys1},
             JsonKeys3 = mochijson2:encode(JsonKeys2),
 
@@ -166,8 +177,9 @@ produce_bucket_body(RD, Ctx) ->
             Links2 = riak_kv_wm_utils:format_links(Links1, Prefix, APIVersion),
             NewRD = wrq:merge_resp_headers(Links2, RD),
             {JsonKeys3, NewRD, Ctx};
-        _ -> 
-            {"", RD, Ctx}
+        _ ->
+            JsonProps = mochijson2:encode({struct, BucketPropsJson}),
+            {JsonProps, RD, Ctx}
     end.
 
 stream_keys(ReqId) ->
