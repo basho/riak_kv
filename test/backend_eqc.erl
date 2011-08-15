@@ -121,7 +121,14 @@ key() ->
     elements([<<"k1">>,<<"k2">>,<<"k3">>,<<"k4">>]).
 
 val() ->
-    binary().
+    %% The creation of the riak object and the call
+    %% to term_to_binary are to facilitate testing
+    %% of riak_kv_index_backend. It does not matter
+    %% that the bucket and key in the object may 
+    %% differ since at this point in the processing
+    %% pipeline the information has already been 
+    %% extracted.
+    term_to_binary(riak_object:new(<<"b1">>, <<"k1">>, binary())).
 
 %%====================================================================
 %% Helpers
