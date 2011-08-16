@@ -201,7 +201,7 @@ prepare() ->
 
     TestNode = list_to_atom("testnode" ++ integer_to_list(element(3, now())) ++
                                 "@localhost"),
-    {ok, _} = net_kernel:start([testnode, longnames]),
+    {ok, _} = net_kernel:start([TestNode, longnames]),
     do_dep_apps(start, dep_apps()),
     ok.
 
