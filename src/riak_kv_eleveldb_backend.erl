@@ -245,7 +245,7 @@ fold_keys_fun(FoldKeysFun, Bucket) ->
             if B =:= Bucket ->
                     FoldKeysFun(B, Key, Acc);
                true ->
-                    Acc
+                    throw({break, Acc})
             end
     end.
 
