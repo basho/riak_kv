@@ -171,7 +171,7 @@ init([Index]) ->
                         modstate=ModState,
                         mrjobs=dict:new()}};
         {error, Reason} ->
-            
+
             error_logger:error_msg("Failed to start ~p Reason: ~p\n",
                                    [Mod, Reason]),
             riak:stop("backend module failed to start.")
@@ -253,7 +253,7 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
                end,
     {noreply, NewState}.
 
-%% @doc Handle a coverage request. 
+%% @doc Handle a coverage request.
 %% More information about the specification for the ItemFilter
 %% parameter can be found in the documentation for the
 %% {@link riak_kv_coverage_filter} module.
@@ -528,18 +528,26 @@ list_buckets(Sender, Filter, Mod, ModState) ->
                         end
                 end
     end,
-    Buffer1 = Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState),
-    FlushFun = fun(FinalResults) ->
-                       UniqueResults = lists:usort(FinalResults),
-                       riak_core_vnode:reply(Sender, {final_results, UniqueResults})
-               end,
-    riak_kv_fold_buffer:flush(Buffer1, FlushFun).
+
+        case Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState) of
+            {ok, Buffer1} ->
+                FlushFun = fun(FinalResults) ->
+                                   UniqueResults = lists:usort(FinalResults),
+                                   riak_core_vnode:reply(Sender,
+                                                         {final_results,
+                                                          UniqueResults})
+                           end,
+                riak_kv_fold_buffer:flush(Buffer1, FlushFun);
+            {error, Reason} ->
+                riak_core_vnode:reply(Sender, {error, Reason})
+        end.
 
 %% @private
 list_keys(Sender, Bucket, Filter, Mod, ModState) ->
     BufferSize = 100,
     BufferFun = fun(Results) ->
-                        riak_core_vnode:reply(Sender, {results, {Bucket, Results}})
+                        riak_core_vnode:reply(Sender,
+                                              {results, {Bucket, Results}})
                 end,
     Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
     case Filter of
@@ -560,11 +568,18 @@ list_keys(Sender, Bucket, Filter, Mod, ModState) ->
                 end
     end,
     Opts = [{bucket, Bucket}],
-    Buffer1 = Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState),
-    FlushFun = fun(FinalResults) ->
-                       riak_core_vnode:reply(Sender, {final_results, {Bucket, FinalResults}})
-               end,
-    riak_kv_fold_buffer:flush(Buffer1, FlushFun).
+    case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
+        {ok, Buffer1} ->
+            FlushFun = fun(FinalResults) ->
+                               riak_core_vnode:reply(Sender,
+                                                     {final_results,
+                                                      {Bucket,
+                                                       FinalResults}})
+                       end,
+            riak_kv_fold_buffer:flush(Buffer1, FlushFun);
+        {error, Reason} ->
+            riak_core_vnode:reply(Sender, {error, Reason})
+    end.
 
 %% @private
 %% @deprecated This function is only here to support
@@ -582,8 +597,12 @@ do_legacy_list_bucket(ReqID,Bucket,Mod,ModState,Idx,State) ->
                 [Key | Buf]
         end,
     Opts = [{bucket, Bucket}],
-    RetVal = Mod:fold_keys(FoldKeysFun, [], Opts, ModState),
-    {reply, {kl, RetVal, Idx, ReqID}, State}.
+    case Mod:fold_keys(FoldKeysFun, [], Opts, ModState) of
+        {ok, RetVal} ->
+            {reply, {kl, RetVal, Idx, ReqID}, State};
+        {error, Reason} ->
+            {reply, {error, Reason, ReqID}, State}
+    end.
 
 %% @private
 %% @deprecated This function is only here to support
@@ -620,12 +639,16 @@ do_legacy_list_keys(Caller,ReqId,Input,Idx,Mod,ModState) ->
                 end
     end,
     Opts = [{bucket, Bucket}],
-    Buffer1 = Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState),
-    FlushFun = fun(FinalResults) ->
-                       Caller ! {ReqId, {kl, Idx, FinalResults}},
-                       Caller ! {ReqId, Idx, done}
-               end,
-    riak_kv_fold_buffer:flush(Buffer1, FlushFun).
+    case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
+        {ok, Buffer1} ->
+            FlushFun = fun(FinalResults) ->
+                               Caller ! {ReqId, {kl, Idx, FinalResults}},
+                               Caller ! {ReqId, Idx, done}
+                       end,
+            riak_kv_fold_buffer:flush(Buffer1, FlushFun);
+        {error, Reason} ->
+            Caller ! {ReqId, {error, Reason}}
+    end.
 
 %% @private
 %% @deprecated This function is only here to support
@@ -641,12 +664,16 @@ do_legacy_list_buckets(Caller,ReqId,Idx,Mod,ModState) ->
         fun(Bucket, Buf) ->
                 riak_kv_fold_buffer:add(Bucket, Buf)
         end,
-    Buffer1 = Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState),
-    FlushFun = fun(FinalResults) ->
-                       Caller ! {ReqId, {kl, Idx, FinalResults}},
-                       Caller ! {ReqId, Idx, done}
-               end,
-    riak_kv_fold_buffer:flush(Buffer1, FlushFun).
+    case Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState) of
+        {ok, Buffer1} ->
+            FlushFun = fun(FinalResults) ->
+                               Caller ! {ReqId, {kl, Idx, FinalResults}},
+                               Caller ! {ReqId, Idx, done}
+                       end,
+            riak_kv_fold_buffer:flush(Buffer1, FlushFun);
+        {error, Reason} ->
+            Caller ! {ReqId, {error, Reason}}
+    end.
 
 %% @private
 index_query(Sender, Bucket, Query, Filter, Mod, ModState) ->

@@ -140,16 +140,21 @@ get(Bucket, Key, #state{kv_mod = KVMod,
 put(Bucket, Key, Val, #state{kv_mod = KVMod,
                              kv_state = KVState,
                              index_mod = IndexMod,
-                             index_state = IndexState}) ->
+                             index_state = IndexState}=State) ->
     %% Since the two backends are separate, we can't have a true
     %% transaction. The best we can do for now is perform the index
     %% (which is the newer and more complicated code) and if that
     %% works, then perform the KV put.
     case do_index_put(Bucket, Key, Val, IndexMod, IndexState) of
         ok ->
-            do_kv_put(Bucket, Key, Val, KVMod, KVState);
-        Other ->
-            Other
+            case do_kv_put(Bucket, Key, Val, KVMod, KVState) of
+                {ok, UpdKVState} ->
+                    {ok, State#state{kv_state=UpdKVState}};
+                {error, Reason, UpdKVState} ->
+                    {error, Reason, State#state{kv_state=UpdKVState}}
+            end;
+        {error, Reason1} ->
+            {error, Reason1, State}
     end.
 
 %% @doc Delete the object from the Index backend and the KV backend.
@@ -159,16 +164,21 @@ put(Bucket, Key, Val, #state{kv_mod = KVMod,
 delete(Bucket, Key, #state{kv_mod = KVMod,
                            kv_state = KVState,
                            index_mod = IndexMod,
-                           index_state = IndexState}) ->
+                           index_state = IndexState}=State) ->
     %% Since the two backends are separate, we can't have a true
     %% transaction. The best we can do for now is delete from the index
     %% (which is the newer and more complicated code) and if that
     %% works, then delete from KV.
     case do_index_delete(Bucket, Key, IndexMod, IndexState) of
         ok ->
-            do_kv_delete(Bucket, Key, KVMod, KVState);
-        Other ->
-            Other
+            case do_kv_delete(Bucket, Key, KVMod, KVState) of
+                {ok, UpdKVState} ->
+                    {ok, State#state{kv_state=UpdKVState}};
+                {error, Reason, UpdKVState} ->
+                    {error, Reason, State#state{kv_state=UpdKVState}}
+            end;
+        {error, Reason1} ->
+            {error, Reason1, State}
     end.
 
 %% @doc Fold over all the buckets.
@@ -244,7 +254,7 @@ status(#state{kv_mod = KVMod,
               index_state = IndexState}) ->
     KVStatus = {KVMod, KVMod:status(KVState)},
     IndexStatus = {IndexMod, IndexMod:status(IndexState)},
-    {KVStatus, IndexStatus}.
+    [{KVMod, KVStatus},  {IndexMod, IndexStatus}].
 
 %% @spec callback(state(), ref(), term()) -> ok.
 %%
@@ -307,7 +317,7 @@ fold_index(#state{index_mod = IndexMod,
                    riak_object:key(),
                    binary(),
                    module(),
-                   term()) -> ok.
+                   term()) -> ok | {error, term()}.
 do_index_put(Bucket, Key, Val, IndexMod, IndexState) ->
     %% Get the old proxy object. If it exists, then delete all of its
     %% postings.
@@ -362,7 +372,7 @@ do_index_put(Bucket, Key, Val, IndexMod, IndexState) ->
                 riak_object:key(),
                 binary(),
                 module(),
-                term()) -> ok.
+                term()) -> {ok, term()} | {error, term(), term()}.
 do_kv_put(Bucket, Key, Val, KVMod, KVState) ->
     KVMod:put(Bucket, Key, Val, KVState).
 
@@ -395,7 +405,7 @@ do_index_delete(Bucket, Key, IndexMod, IndexState) ->
 -spec do_kv_delete(riak_object:bucket(),
                    riak_object:key(),
                    module(),
-                   term()) -> ok.
+                   term()) -> {ok, term()} | {error, term(), term()}.
 do_kv_delete(Bucket, Key, KVMod, KVState) ->
     KVMod:delete(Bucket, Key, KVState).
 

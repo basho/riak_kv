@@ -358,7 +358,8 @@ srv_delete(Bucket, Key, Ref) ->
 %% @private
 srv_fold_buckets(FoldFun, Acc, Ref) ->
     BucketList = ets:match(Ref, {{'$1', '_'}, '_'}),
-    lists:foldl(FoldFun, Acc, BucketList).
+    Acc0 = lists:foldl(FoldFun, Acc, BucketList),
+    {ok, Acc0}.
 
 %% @private
 srv_fold_keys(FoldFun, Bucket, Acc, Ref) ->
@@ -368,7 +369,8 @@ srv_fold_keys(FoldFun, Bucket, Acc, Ref) ->
         _ ->
             KeyList = ets:match(Ref, {{Bucket, '$1'}, '_'})
     end,
-    lists:foldl(FoldFun, Acc, KeyList).
+    Acc0 = lists:foldl(FoldFun, Acc, KeyList),
+    {ok, Acc0}.
 
 %% @private
 srv_fold_objects(FoldFun, Bucket, Acc, Ref) ->
@@ -378,7 +380,8 @@ srv_fold_objects(FoldFun, Bucket, Acc, Ref) ->
         _ ->
             ObjectList = ets:match_object(Ref, {{Bucket, '_'}, '_'})
     end,
-    lists:foldl(FoldFun, Acc, ObjectList).
+    Acc0 = lists:foldl(FoldFun, Acc, ObjectList),
+    {ok, Acc0}.
 
 %% @private
 config_value(Key, Config, Default) ->

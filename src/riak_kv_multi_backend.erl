@@ -163,9 +163,25 @@ delete(Bucket, Key, State) ->
                    state()) -> {ok, any()} | {error, term()}.
 fold_buckets(FoldBucketsFun, Acc, Opts, #state{backends=Backends}) ->
     FoldFun = fun({_, Module, SubState}, Acc1) ->
-                      Module:fold_buckets(FoldBucketsFun, Acc1, Opts, SubState)
+                      Result = Module:fold_buckets(FoldBucketsFun,
+                                                   Acc1,
+                                                   Opts,
+                                                   SubState),
+                      case Result of
+                          {ok, Acc2} ->
+                              Acc2;
+                          {error, Reason} ->
+                              throw({error, {Module, Reason}})
+                      end
               end,
-    lists:foldl(FoldFun, Acc, Backends).
+    try
+        Acc0 = lists:foldl(FoldFun, Acc, Backends),
+        {ok, Acc0}
+    catch
+        Error ->
+            Error
+    end.
+
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
@@ -174,9 +190,24 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{backends=Backends}) ->
                 state()) -> {ok, term()} | {error, term()}.
 fold_keys(FoldKeysFun, Acc, Opts, #state{backends=Backends}) ->
     FoldFun = fun({_, Module, SubState}, Acc1) ->
-                      Module:fold_keys(FoldKeysFun, Acc1, Opts, SubState)
+                      Result = Module:fold_keys(FoldKeysFun,
+                                                Acc1,
+                                                Opts,
+                                                SubState),
+                      case Result of
+                          {ok, Acc2} ->
+                              Acc2;
+                          {error, Reason} ->
+                              throw({error, {Module, Reason}})
+                      end
               end,
-    lists:foldl(FoldFun, Acc, Backends).
+    try
+        Acc0 = lists:foldl(FoldFun, Acc, Backends),
+        {ok, Acc0}
+    catch
+        Error ->
+            Error
+    end.
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
@@ -185,9 +216,24 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{backends=Backends}) ->
                    state()) -> {ok, any()} | {error, term()}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{backends=Backends}) ->
     FoldFun = fun({_, Module, SubState}, Acc1) ->
-                      Module:fold_objects(FoldObjectsFun, Acc1, Opts, SubState)
+                      Result = Module:fold_objects(FoldObjectsFun,
+                                                   Acc1,
+                                                   Opts,
+                                                   SubState),
+                      case Result of
+                          {ok, Acc2} ->
+                              Acc2;
+                          {error, Reason} ->
+                              throw({error, {Module, Reason}})
+                      end
               end,
-    lists:foldl(FoldFun, Acc, Backends).
+    try
+        Acc0 = lists:foldl(FoldFun, Acc, Backends),
+        {ok, Acc0}
+    catch
+        Error ->
+            Error
+    end.
 
 %% @doc Delete all objects from the different backends
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.

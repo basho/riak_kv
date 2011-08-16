@@ -134,44 +134,47 @@ delete(Bucket, Key, #state{ref=Ref,
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
                    any(),
                    [],
-                   state()) -> {ok, any()} | {error, term()}.
+                   state()) -> {ok, any()}.
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{fold_opts=FoldOpts,
                                                 ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts).
+    Acc0 = eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts),
+    {ok, Acc0}.
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
-                state()) -> {ok, term()} | {error, term()}.
+                state()) -> {ok, term()}.
 fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
                                          ref=Ref}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldOpts = fold_opts(Bucket, FoldOpts1),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
     try
-        eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts)
+        Acc0 = eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts),
+        {ok, Acc0}
     catch
         {break, AccFinal} ->
-            AccFinal
+            {ok, AccFinal}
     end.
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
-                   state()) -> {ok, any()} | {error, term()}.
+                   state()) -> {ok, any()}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts1,
                                                ref=Ref}) ->
     Bucket = proplists:get_value(bucket, Opts),
     FoldOpts = fold_opts(Bucket, FoldOpts1),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
     try
-        eleveldb:fold(Ref, FoldFun, Acc, FoldOpts)
+        Acc0 = eleveldb:fold(Ref, FoldFun, Acc, FoldOpts),
+        {ok, Acc0}
     catch
         {break, AccFinal} ->
-            AccFinal
+            {ok, AccFinal}
     end.
 
 %% @doc Delete all objects from this eleveldb backend

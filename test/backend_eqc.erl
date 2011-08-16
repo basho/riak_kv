@@ -124,9 +124,9 @@ val() ->
     %% The creation of the riak object and the call
     %% to term_to_binary are to facilitate testing
     %% of riak_kv_index_backend. It does not matter
-    %% that the bucket and key in the object may 
+    %% that the bucket and key in the object may
     %% differ since at this point in the processing
-    %% pipeline the information has already been 
+    %% pipeline the information has already been
     %% extracted.
     term_to_binary(riak_object:new(<<"b1">>, <<"k1">>, binary())).
 
@@ -237,17 +237,17 @@ postcondition(_From, _To, _S,
               {call, _M, delete,[_Bucket, _Key, _BeState]}, {R, _RState}) ->
     R =:= ok;
 postcondition(_From, _To, S,
-              {call, _M, fold_buckets, [_FoldFun, _Acc, _Opts, _BeState]}, R) ->
+              {call, _M, fold_buckets, [_FoldFun, _Acc, _Opts, _BeState]}, {ok, R}) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Buckets = [Bucket || {{Bucket, _}, _} <- ExpectedEntries],
     lists:sort(Buckets) =:= lists:sort(R);
 postcondition(_From, _To, S,
-              {call, _M, fold_keys, [_FoldFun, _Acc, _Opts, _BeState]}, R) ->
+              {call, _M, fold_keys, [_FoldFun, _Acc, _Opts, _BeState]}, {ok, R}) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Keys = [{Bucket, Key} || {{Bucket, Key}, _} <- ExpectedEntries],
     lists:sort(Keys) =:= lists:sort(R);
 postcondition(_From, _To, S,
-              {call, _M, fold_objects, [_FoldFun, _Acc, _Opts, _BeState]}, R) ->
+              {call, _M, fold_objects, [_FoldFun, _Acc, _Opts, _BeState]}, {ok, R}) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Objects = [Object || Object <- ExpectedEntries],
     lists:sort(Objects) =:= lists:sort(R);

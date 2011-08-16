@@ -167,7 +167,13 @@ delete(Bucket, Key, #state{ref=Ref}=State) ->
                    state()) -> {ok, any()} | {error, term()}.
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    bitcask:fold_keys(Ref, FoldFun, Acc).
+    FoldResult = bitcask:fold_keys(Ref, FoldFun, Acc),
+    case FoldResult of
+        {error, _} ->
+            FoldResult;
+        _ ->
+            {ok, FoldResult}
+    end.
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
@@ -177,7 +183,13 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{ref=Ref}) ->
 fold_keys(FoldKeysFun, Acc, Opts, #state{ref=Ref}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-    bitcask:fold_keys(Ref, FoldFun, Acc).
+    FoldResult = bitcask:fold_keys(Ref, FoldFun, Acc),
+    case FoldResult of
+        {error, _} ->
+            FoldResult;
+        _ ->
+            {ok, FoldResult}
+    end.
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
@@ -187,7 +199,13 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{ref=Ref}) ->
 fold_objects(FoldObjectsFun, Acc, Opts, #state{ref=Ref}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
-    bitcask:fold(Ref, FoldFun, Acc).
+    FoldResult = bitcask:fold(Ref, FoldFun, Acc),
+    case FoldResult of
+        {error, _} ->
+            FoldResult;
+        _ ->
+            {ok, FoldResult}
+    end.
 
 %% @doc Delete all objects from this bitcask backend
 %% @TODO once bitcask has a more friendly drop function
@@ -218,7 +236,7 @@ drop(#state{ref=Ref,
             file:make_symlink(NewDataFile, LinkPath),
             %% Spawn a process to cleanup the old data files.
             %% The use of spawn is intentional. We do not
-            %% care if this process dies since any lingering 
+            %% care if this process dies since any lingering
             %% files will be cleaned up on the next drop.
             %% The worst case is that the files hang
             %% around and take up some disk space.
@@ -361,7 +379,7 @@ maybe_schedule_sync(Ref) when is_reference(Ref) ->
             ok;
         BadStrategy ->
             lager:notice("Ignoring invalid bitcask sync strategy: ~p",
-                                  [BadStrategy]),
+                         [BadStrategy]),
             ok
     end.
 
@@ -444,12 +462,14 @@ data_directory_cleanup(DirPath) ->
 simple_test() ->
     ?assertCmd("rm -rf test/bitcask-backend"),
     application:set_env(bitcask, data_root, ""),
-    riak_kv_backend:standard_test(?MODULE, [{data_root, "test/bitcask-backend"}]).
+    riak_kv_backend:standard_test(?MODULE,
+                                  [{data_root, "test/bitcask-backend"}]).
 
 custom_config_test() ->
     ?assertCmd("rm -rf test/bitcask-backend"),
     application:set_env(bitcask, data_root, ""),
-    riak_kv_backend:standard_test(?MODULE, [{data_root, "test/bitcask-backend"}]).
+    riak_kv_backend:standard_test(?MODULE,
+                                  [{data_root, "test/bitcask-backend"}]).
 
 -ifdef(EQC).
 
@@ -469,7 +489,8 @@ eqc_test_() ->
 
 setup() ->
     application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_bitcask_backend_eqc_sasl.log"}),
+    application:set_env(sasl, sasl_error_logger,
+                        {file, "riak_kv_bitcask_backend_eqc_sasl.log"}),
     error_logger:tty(false),
     error_logger:logfile({open, "riak_kv_bitcask_backend_eqc.log"}),
 
