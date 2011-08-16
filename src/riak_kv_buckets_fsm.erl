@@ -61,7 +61,9 @@ process_results({results, Buckets},
     {ok, StateData#state{buckets=(Buckets ++ BucketAcc)}};
 process_results({final_results, Buckets},
                 StateData=#state{buckets=BucketAcc}) ->
-    {done, StateData#state{buckets=(Buckets ++ BucketAcc)}}.
+    {done, StateData#state{buckets=(Buckets ++ BucketAcc)}};
+process_results({error, Reason}, _State) ->
+    {error, Reason}.
 
 finish({error, Error},
        StateData=#state{client_type=ClientType,
