@@ -152,7 +152,7 @@ produce_bucket_body(RD, Ctx) ->
                         {ok, ReqId} = Client:stream_list_keys(Bucket),
                         stream_keys(ReqId)
                 end,
-            {{stream, {[], F}}, RD, Ctx};
+            {{stream, {mochijson2:encode({struct, BucketPropsJson}), F}}, RD, Ctx};
 
         ?Q_TRUE ->
             %% Get the JSON response...
