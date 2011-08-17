@@ -61,7 +61,7 @@ wait_for_pid(Pid) ->
             ok
     after
         5000 ->
-            {error, didnotexit}
+            {error, didnotexit, Pid, erlang:process_info(Pid)}
     end.
 
 %% Wait for children that were spawned with proc_lib.
