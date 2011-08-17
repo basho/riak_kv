@@ -81,39 +81,22 @@ build_filter(Bucket, ItemFilterInput, FilterVNode) ->
 
 %% @private
 compose_filter(ItemFilter) ->
-    fun(Item, Acc) ->
-            case ItemFilter(Item) of
-                true ->
-                    [Item | Acc];
-                false ->
-                    Acc
-            end
+    fun(Item) ->
+            ItemFilter(Item)
     end.
 
 compose_filter(KeySpaceIndexes, PrefListFun) ->
     VNodeFilter = build_vnode_filter(KeySpaceIndexes, PrefListFun),
-    fun(Key, Acc) ->
-            case VNodeFilter(Key) of
-                true ->
-                    [Key|Acc];
-                false ->
-                    Acc
-            end
-
+    fun(Item) ->
+            VNodeFilter(Item)
     end.
 
 compose_filter(undefined, _, ItemFilter) ->
     compose_filter(ItemFilter);
 compose_filter(KeySpaceIndexes, PrefListFun, ItemFilter) ->
     VNodeFilter = build_vnode_filter(KeySpaceIndexes, PrefListFun),
-    fun(Item, Acc) ->
-            case ItemFilter(Item) andalso VNodeFilter(Item) of
-                true ->
-                    [Item | Acc];
-                false ->
-                    Acc
-            end
-
+    fun(Item) ->
+            ItemFilter(Item) andalso VNodeFilter(Item)
     end.
 
 %% @private
