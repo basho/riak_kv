@@ -79,7 +79,7 @@ start(Partition, Config) ->
     %% Get the data root directory
     case config_value(data_root, Config) of
         undefined ->
-            error_logger:error_msg("Failed to create bitcask dir: data_root is not set\n"),
+            lager:error("Failed to create bitcask dir: data_root is not set"),
             {error, data_root_unset};
         DataRoot ->
             LinkFile = integer_to_list(Partition),
@@ -100,12 +100,12 @@ start(Partition, Config) ->
                                         root=DataRoot,
                                         opts=BitcaskOpts}};
                         {error, Reason1} ->
-                            error_logger:error_msg("Failed to start bitcask backend: ~p\n",
+                            lager:error("Failed to start bitcask backend: ~p\n",
                                                    [Reason1]),
                             {error, Reason1}
                     end;
                 {error, Reason} ->
-                    error_logger:error_msg("Failed to start bitcask backend: ~p\n",
+                    lager:error("Failed to start bitcask backend: ~p\n",
                                            [Reason]),
                     {error, Reason}
             end
@@ -251,7 +251,7 @@ drop(#state{ref=Ref,
                     {error, Reason, State}
             end;
         {error, Reason1} ->
-            error_logger:error_msg("Failed to create bitcask dir ~s: ~p\n",
+            lager:error("Failed to create bitcask dir ~s: ~p\n",
                                    [NewDataPath, Reason1]),
             {error, Reason1, State}
     end.
