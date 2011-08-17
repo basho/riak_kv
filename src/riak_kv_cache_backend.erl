@@ -42,6 +42,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -ifdef(TEST).
+-export([clock_advance/2]).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -52,7 +53,8 @@
 % obj_tree two levels of gb_tree
 %   - first level is buckets
 %   - second level is keys
--record (state, {ttl, max_ttl, max_memory, used_memory, obj_tree, time_tree}).
+-record (state, {ttl, max_ttl, max_memory, used_memory, obj_tree, time_tree,
+                 clock_advance}).
 -record (entry, {bucket, key, value, tref, created, now}).
 
 %%% RIAK BACKEND INTERFACE %%%
@@ -93,6 +95,11 @@ callback(_State, _Ref, _Msg) ->
 stop(State) -> 
     gen_server:call(State, stop).
 
+-ifdef(TEST).
+clock_advance(State, USec) -> 
+    gen_server:call(State, {clock_advance, USec}).
+-endif.
+
 
 %%% GEN_SERVER %%%
 
@@ -103,7 +110,8 @@ init([Config]) ->
     Memory = proplists:get_value(riak_kv_cache_backend_memory, Config, ?DEFAULT_MEMORY),
     {ok, #state { 
         ttl=TTL, max_ttl=MaxTTL, max_memory=Memory * 1024 * 1024, used_memory=0,
-        obj_tree=gb_trees:empty(), time_tree=gb_trees:empty()
+        obj_tree=gb_trees:empty(), time_tree=gb_trees:empty(),
+        clock_advance = 0
     }}.
 
 
@@ -115,7 +123,7 @@ handle_call({get, {Bucket, Key}}, _From, State) ->
             % If we have exceeded the max_ttl for this object, then 
             % delete the object and return {error, notfound}.
             % Otherwise, renew the lease and return the object.
-            case exceeds_max_ttl(Entry, State#state.max_ttl) of
+            case exceeds_max_ttl(Entry, State) of
                 true -> 
                     {_, ok, NewState} = handle_call({delete, {Bucket, Key}}, _From, State),
                     {reply, {error, notfound}, NewState};
@@ -244,7 +252,9 @@ handle_call({fold, Fun0, Acc}, _From, State) ->
     Reply = do_fold(State, Keys, Fun0, Acc),
     {reply, Reply, State};
 handle_call(stop, _From, State) -> 
-    {stop, normal, ok, State}.
+    {stop, normal, ok, State};
+handle_call({clock_advance, USec}, _From, #state{clock_advance=Old} = State) -> 
+    {reply, Old, State#state{clock_advance = Old + USec}}.
 
 %% @private
 handle_cast(_, State) -> {noreply, State}.
@@ -332,9 +342,10 @@ time_delete(Entry, State) ->
 
 % Check if this object is past the max_ttl setting.
 % Returns 'true' or 'false'.
-exceeds_max_ttl(Entry, MaxTTL) ->
+exceeds_max_ttl(Entry, #state{max_ttl = MaxTTL, clock_advance = USec}) ->
     Created = Entry#entry.created,
-    Diff = (timer:now_diff(now(), Created) / 1000 / 1000),
+    {A, B, C} = now(),
+    Diff = (timer:now_diff({A, B, C + USec}, Created) / 1000 / 1000),
     Diff > MaxTTL.
 
 
@@ -408,7 +419,8 @@ eqc_test() ->
 % @private
 ttl_test() ->
     % Set TTL to 0.02 seconds...
-    Config = [{riak_kv_cache_backend_ttl, 0.02}, {riak_kv_cache_backend_max_ttl, 0.04}],
+    Max = 10.0,
+    Config = [{riak_kv_cache_backend_ttl, 0.02}, {riak_kv_cache_backend_max_ttl, Max}],
     {ok, State} = start(42, Config),
 
     Bucket = <<"Bucket">>, 
@@ -423,8 +435,8 @@ ttl_test() ->
     {ok, Value} = get(State, {Bucket, Key}),
     {ok, Value} = get(State, {Bucket, Key}),
     
-    % Wait 0.05 seconds, object should be cleared from cache...
-    timer:sleep(50),
+    % "sleep" past Max
+    clock_advance(State, trunc((Max + 1.0) * 1000 * 1000)),
     
     % Get the object again, it should be missing...
     {error, notfound} = get(State, {Bucket, Key}),
@@ -433,8 +445,8 @@ ttl_test() ->
     
 max_ttl_test() ->
     % Set TTL to 0.04 seconds...
-    % Set Max TTL to 0.9 seconds...
-    Config = [{riak_kv_cache_backend_ttl, 0.04}, {riak_kv_cache_backend_max_ttl, 0.09}],
+    Max = 10.0,
+    Config = [{riak_kv_cache_backend_ttl, 0.04}, {riak_kv_cache_backend_max_ttl, Max}],
     {ok, State} = start(42, Config),
 
     Bucket = <<"Bucket">>, 
@@ -452,8 +464,8 @@ max_ttl_test() ->
     timer:sleep(30),
     {ok, Value} = get(State, {Bucket, Key}),
     
-    % Wait 0.05 seconds, it should expire...
-    timer:sleep(50),
+    % "sleep" past Max
+    clock_advance(State, trunc((Max + 1.0) * 1000 * 1000)),
     
     % This time it should be gone...
     {error, notfound} = get(State, {Bucket, Key}),
