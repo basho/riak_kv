@@ -35,6 +35,8 @@
          flush/2,
          size/1]).
 
+-export_type([buffer/0]).
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -43,7 +45,7 @@
                  buffer_fun :: function(),
                  max_size :: pos_integer(),
                  size=0 :: non_neg_integer()}).
--opaque buffer() :: #buffer{}.
+-type buffer() :: #buffer{}.
 
 %% ===================================================================
 %% Public API

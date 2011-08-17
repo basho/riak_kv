@@ -48,13 +48,14 @@
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [indexes]).
+-define(CAPABILITIES, [async_fold, indexes]).
 
 -record(state, {ref :: reference(),
                 data_root :: string(),
                 read_opts = [],
                 write_opts = [],
-                fold_opts = [{fill_cache, false}]}).
+                fold_opts = [{fill_cache, false}],
+                async_folds :: boolean()}).
 
 -type state() :: #state{}.
 -type config() :: [{atom(), term()}].
@@ -76,10 +77,12 @@ start(Partition, Config) ->
     DataDir = filename:join(config_value(data_root, Config),
                             integer_to_list(Partition)),
     filelib:ensure_dir(filename:join(DataDir, "dummy")),
+    AsyncFolds = config_value(async_folds, Config, true),
     case eleveldb:open(DataDir, [{create_if_missing, true}]) of
         {ok, Ref} ->
-            {ok, #state { ref = Ref,
-                          data_root = DataDir }};
+            {ok, #state {ref = Ref,
+                         data_root = DataDir,
+                         async_folds=AsyncFolds}};
         {error, Reason} ->
             {error, Reason}
     end.
@@ -163,27 +166,50 @@ delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref,
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
                    any(),
                    [],
-                   state()) -> {ok, any()}.
+                   state()) -> {ok, any()} | {async, fun()}.
+fold_buckets(FoldBucketsFun, Acc, _Opts, #state{fold_opts=FoldOpts1,
+                                                ref=Ref,
+                                                async_folds=true}) ->
+    FoldFun = fold_buckets_fun(FoldBucketsFun),
+    FirstKey = to_first_key(undefined),
+    FoldOpts2 = [{first_key, FirstKey} | FoldOpts1],
+    BucketFolder = eleveldb:key_folder(Ref, FoldFun, {Acc, []}, FoldOpts2),
+    {async, BucketFolder};
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{fold_opts=FoldOpts1,
                                                 ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     FirstKey = to_first_key(undefined),
     FoldOpts2 = [{first_key, FirstKey} | FoldOpts1],
-    try
-        {Acc0, _} = eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts2),
-        {ok, Acc0}
-    catch
-        {break, AccFinal} ->
-            {ok, AccFinal}
-    end.
+    {Acc0, _LastBucket} =
+        eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts2),
+    {ok, Acc0}.
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
-                [tuple()],
-                state()) -> {ok, term()}.
+                [{atom(), term()}],
+                state()) -> {ok, term()} | {async, fun()}.
 fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
-                                         ref=Ref}) ->
+                                         ref=Ref,
+                                         async_folds=true}) ->
+    %% Figure out how we should limit the fold: by bucket, by
+    %% secondary index, or neither (fold across everything.)
+    Bucket = lists:keyfind(bucket, 1, Opts),
+    Index = lists:keyfind(index, 1, Opts),
+    Limiter =
+        if Bucket /= false -> Bucket;
+           Index /= false  -> Index;
+           true            -> undefined
+        end,
+
+    %% Set up the fold...
+    FirstKey = to_first_key(Limiter),
+    FoldFun = fold_keys_fun(FoldKeysFun, Limiter),
+    FoldOpts2 = [{first_key, FirstKey} | FoldOpts1],
+    KeyFolder = eleveldb:key_folder(Ref, FoldFun, Acc, FoldOpts2),
+    {async, KeyFolder};
+fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
+                                         ref=Ref}) ->            
     %% Figure out how we should limit the fold: by bucket, by
     %% secondary index, or neither (fold across everything.)
     Bucket = lists:keyfind(bucket, 1, Opts),
@@ -208,12 +234,19 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
             {ok, AccFinal}
     end.
 
-
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
-                   state()) -> {ok, any()}.
+                   state()) -> {ok, any()} | {async, fun()}.
+fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts1,
+                                               ref=Ref,
+                                               async_folds=true}) ->
+    Bucket =  proplists:get_value(bucket, Opts),
+    FoldOpts = fold_opts(Bucket, FoldOpts1),
+    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
+    ObjectFolder = eleveldb:folder(Ref, FoldFun, Acc, FoldOpts),
+    {async, ObjectFolder};
 fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts1,
                                                ref=Ref}) ->
 
@@ -279,9 +312,13 @@ callback(_Ref, _Msg, State) ->
 
 %% @private
 config_value(Key, Config) ->
+    config_value(Key, Config, undefined).
+
+%% @private
+config_value(Key, Config, Default) ->
     case proplists:get_value(Key, Config) of
         undefined ->
-            app_helper:get_env(eleveldb, Key);
+            app_helper:get_env(eleveldb, Key, Default);
         Value ->
             Value
     end.
@@ -374,6 +411,15 @@ fold_objects_fun(FoldObjectsFun, FilterBucket) ->
     end.
 
 %% @private
+%% Augment the fold options list if a
+%% bucket is defined.
+fold_opts(undefined, FoldOpts) ->    
+    FoldOpts;
+fold_opts(Bucket, FoldOpts) ->
+    BKey = sext:encode({Bucket, <<>>}),
+    [{first_key, BKey} | FoldOpts].
+
+%% @private
 get_status(Dir) ->
     case eleveldb:open(Dir, [{create_if_missing, true}]) of
         {ok, Ref} ->
@@ -457,6 +503,11 @@ eqc_test_() ->
          [
           {timeout, 60000,
            [?_assertEqual(true,
+                          backend_eqc:test(?MODULE, false,
+                                           [{data_root,
+                                             "test/eleveldb-backend"},
+                                            {async_folds, false}])),
+            ?_assertEqual(true,
                           backend_eqc:test(?MODULE, false,
                                            [{data_root,
                                              "test/eleveldb-backend"}]))]}

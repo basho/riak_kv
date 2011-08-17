@@ -60,6 +60,7 @@
                c,  % Backend config
                s,  % Module state returned by Backend:start
                olds=sets:new(), % Old states after a stop
+               worker_pool, % PID of worker pool for async folds
                d=[]}).% Orddict of values stored
 
 %% ====================================================================
@@ -136,17 +137,17 @@ val() ->
 
 fold_buckets_fun() ->
     fun(Bucket, Acc) ->
-            [Bucket | Acc]
+            riak_kv_fold_buffer:add(Bucket, Acc)
     end.
 
 fold_keys_fun() ->
     fun(Bucket, Key, Acc) ->
-            [{Bucket, Key} | Acc]
+            riak_kv_fold_buffer:add({Bucket, Key}, Acc)
     end.
 
 fold_objects_fun() ->
     fun(Bucket, Key, Value, Acc) ->
-            [{{Bucket, Key}, Value} | Acc]
+            riak_kv_fold_buffer:add({{Bucket, Key}, Value}, Acc)
     end.
 
 init_backend(Backend, Volatile, Config) ->
@@ -168,6 +169,27 @@ drop(Backend, State) ->
             NewState
     end.
 
+get_fold_buffer() ->
+    riak_kv_fold_buffer:new(100,
+                            get_fold_buffer_fun({raw, foldid, self()})).
+
+get_fold_buffer_fun(From) ->
+    fun(Results) ->
+            riak_core_vnode:reply(From,
+                                  {results, Results})
+    end.
+
+receive_fold_results(Acc) ->
+    receive
+        {_, {results, Results}} ->
+            receive_fold_results(Acc++Results);
+        {_, {final_results, Results}} ->
+            Acc++Results;
+        {_, Error} ->
+            ?debugFmt("Error occurred: ~p~n", [Error]),
+            []
+    end.
+
 %%====================================================================
 %% eqc_fsm callbacks
 %%====================================================================
@@ -179,10 +201,17 @@ initial_state_data() ->
     #qcst{d = orddict:new()}.
 
 initial_state_data(Backend, Volatile, Config) ->
+    {ok, PoolPid} =
+        riak_core_vnode_worker_pool:start_link(riak_kv_fold_worker,
+                                               2,
+                                               42,
+                                               [],
+                                               worker_props),
     #qcst{backend=Backend,
           c=Config,
           d=orddict:new(),
-          volatile=Volatile}.
+          volatile=Volatile,
+          worker_pool=PoolPid}.
 
 next_state_data(running, stopped, S, _R,
                 {call, _M, stop, _}) ->
@@ -211,9 +240,9 @@ running(#qcst{backend=Backend,
      {history, {call, Backend, put, [bucket(), key(), [], val(), State]}},
      {history, {call, Backend, get, [bucket(), key(), State]}},
      {history, {call, Backend, delete, [bucket(), key(), [], State]}},
-     {history, {call, Backend, fold_buckets, [fold_buckets_fun(), [], [], State]}},
-     {history, {call, Backend, fold_keys, [fold_keys_fun(), [], [], State]}},
-     {history, {call, Backend, fold_objects, [fold_objects_fun(), [], [], State]}},
+     {history, {call, Backend, fold_buckets, [fold_buckets_fun(), get_fold_buffer(), [], State]}},
+     {history, {call, Backend, fold_keys, [fold_keys_fun(), get_fold_buffer(), [], State]}},
+     {history, {call, Backend, fold_objects, [fold_objects_fun(), get_fold_buffer(), [], State]}},
      {history, {call, Backend, is_empty, [State]}},
      {history, {call, ?MODULE, drop, [Backend, State]}},
      {stopped, {call, Backend, stop, [State]}}
@@ -236,20 +265,44 @@ postcondition(_From, _To, _S,
 postcondition(_From, _To, _S,
               {call, _M, delete,[_Bucket, _Key, _IndexEntries, _BeState]}, {R, _RState}) ->
     R =:= ok;
-postcondition(_From, _To, S,
-              {call, _M, fold_buckets, [_FoldFun, _Acc, _Opts, _BeState]}, {ok, R}) ->
+postcondition(_From, _To, S=#qcst{worker_pool=Pool},
+              {call, _M, fold_buckets, [_FoldFun, _Acc, _Opts, _BeState]}, FoldRes) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Buckets = [Bucket || {{Bucket, _}, _} <- ExpectedEntries],
+    From = {raw, foldid, self()},
+    case riak_kv_fold_util:finish_fold(FoldRes, From) of
+        {async, Work} ->
+            riak_core_vnode_worker_pool:handle_work(Pool, Work, From);
+        _ ->
+            ok
+    end,
+    R = receive_fold_results([]),
     lists:usort(Buckets) =:= lists:sort(R);
-postcondition(_From, _To, S,
-              {call, _M, fold_keys, [_FoldFun, _Acc, _Opts, _BeState]}, {ok, R}) ->
+postcondition(_From, _To, S=#qcst{worker_pool=Pool},
+              {call, _M, fold_keys, [_FoldFun, _Acc, _Opts, _BeState]}, FoldRes) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Keys = [{Bucket, Key} || {{Bucket, Key}, _} <- ExpectedEntries],
+    From = {raw, foldid, self()},
+    case riak_kv_fold_util:finish_fold(FoldRes, From) of
+        {async, Work} ->
+            riak_core_vnode_worker_pool:handle_work(Pool, Work, From);
+        _ ->
+            ok
+    end,
+    R = receive_fold_results([]),
     lists:sort(Keys) =:= lists:sort(R);
-postcondition(_From, _To, S,
-              {call, _M, fold_objects, [_FoldFun, _Acc, _Opts, _BeState]}, {ok, R}) ->
+postcondition(_From, _To, S=#qcst{worker_pool=Pool},
+              {call, _M, fold_objects, [_FoldFun, _Acc, _Opts, _BeState]}, FoldRes) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Objects = [Object || Object <- ExpectedEntries],
+    From = {raw, foldid, self()},
+    case riak_kv_fold_util:finish_fold(FoldRes, From) of
+        {async, Work} ->
+            riak_core_vnode_worker_pool:handle_work(Pool, Work, From);
+        _ ->
+            ok
+    end,
+    R = receive_fold_results([]),
     lists:sort(Objects) =:= lists:sort(R);
 postcondition(_From, _To, S,{call, _M, is_empty, [_BeState]}, R) ->
     R =:= (orddict:size(S#qcst.d) =:= 0);
