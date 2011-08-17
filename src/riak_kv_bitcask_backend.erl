@@ -56,7 +56,6 @@
 
 -record(state, {ref :: reference(),
                 link_file :: string(),
-                link_path :: string(),
                 opts :: [{atom(), term()}],
                 root :: string()}).
 
@@ -82,12 +81,10 @@ start(Partition, Config) ->
             lager:error("Failed to create bitcask dir: data_root is not set"),
             {error, data_root_unset};
         DataRoot ->
-            LinkFile = integer_to_list(Partition),
-            LinkPath = filename:join([DataRoot, LinkFile]),
-
+            LinkFile = filename:join([DataRoot, integer_to_list(Partition)]),
             %% Create a new symlink or get the filename of
             %% of the file linked to by the existing link.
-            case check_symlink(DataRoot, LinkFile) of
+            case check_symlink(LinkFile, false) of
                 {ok, DataFile} ->
                     BitcaskOpts = [{read_write, true} | Config],
                     case bitcask:open(DataFile, BitcaskOpts) of
@@ -96,7 +93,6 @@ start(Partition, Config) ->
                             maybe_schedule_sync(Ref),
                             {ok, #state{ref=Ref,
                                         link_file=LinkFile,
-                                        link_path=LinkPath,
                                         root=DataRoot,
                                         opts=BitcaskOpts}};
                         {error, Reason1} ->
@@ -213,46 +209,30 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{ref=Ref}) ->
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
 drop(#state{ref=Ref,
             link_file=LinkFile,
-            link_path=LinkPath,
             root=DataRoot,
             opts=BitcaskOpts}=State) ->
     %% Close the bitcask reference
     bitcask:close(Ref),
 
-    {MegaSecs, Secs, MicroSecs} = erlang:now(),
-
-    %% Setup new bitcask dir for this partition
-    NewDataFile = lists:flatten([LinkFile,
-                                 "-",
-                                 integer_to_list(MegaSecs),
-                                 integer_to_list(Secs),
-                                 integer_to_list(MicroSecs)]),
-    NewDataPath = filename:join([DataRoot, NewDataFile]),
-
-    case filelib:ensure_dir(NewDataPath) of
-        ok ->
-            %% Move the link to point to the new data file
-            file:delete(LinkPath),
-            file:make_symlink(NewDataFile, LinkPath),
+    case check_symlink(LinkFile, true) of
+        {ok, DataFile} ->
             %% Spawn a process to cleanup the old data files.
             %% The use of spawn is intentional. We do not
             %% care if this process dies since any lingering
             %% files will be cleaned up on the next drop.
             %% The worst case is that the files hang
             %% around and take up some disk space.
-            spawn(drop_data_cleanup(DataRoot, LinkFile, NewDataFile)),
+            spawn(drop_data_cleanup(DataRoot, LinkFile, DataFile)),
 
             %% Now open the bitcask and return an updated state
             %% so this backend can continue processing.
-            case bitcask:open(NewDataPath, BitcaskOpts) of
+            case bitcask:open(DataFile, BitcaskOpts) of
                 Ref1 when is_reference(Ref1) ->
                     {ok, State#state{ref=Ref1}};
                 {error, Reason} ->
                     {error, Reason, State}
             end;
         {error, Reason1} ->
-            lager:error("Failed to create bitcask dir ~s: ~p\n",
-                                   [NewDataPath, Reason1]),
             {error, Reason1, State}
     end.
 
@@ -399,34 +379,48 @@ config_value(Key, Config) ->
     end.
 
 %% @private
-check_symlink(DataRoot, LinkFile) ->
-    LinkPath = filename:join([DataRoot, LinkFile]),
-    case file:read_link(LinkPath) of
+check_symlink(LinkFile, DeleteExisting) ->
+    case file:read_link(LinkFile) of
         {ok, DataFile} ->
-            {ok, DataFile};
-        {error, enoent} ->
-            {MegaSecs, Secs, MicroSecs} = erlang:now(),
-            DataFile = lists:flatten([LinkFile,
-                                      "-",
-                                      integer_to_list(MegaSecs),
-                                      integer_to_list(Secs),
-                                      integer_to_list(MicroSecs)]),
-            DataPath = filename:join([DataRoot, DataFile]),
-            case filelib:ensure_dir(DataPath) of
-                ok ->
-                    case file:make_symlink(DataFile, LinkPath) of
-                        ok ->
-                            {ok, DataFile};
-                        Error2 ->
-                            Error2
-                    end;
-                Error1 ->
-                    Error1
+            case DeleteExisting of
+                true ->
+                    file:delete(LinkFile),
+                    make_symlink(LinkFile);
+                false ->
+                    {ok, DataFile}
             end;
+        {error, enoent} ->
+            make_symlink(LinkFile);
         Error ->
             Error
     end.
 
+%% @private
+make_symlink(LinkFile) ->
+    {MegaSecs, Secs, MicroSecs} = erlang:now(),
+    DataFile = filename:join([filename:dirname(LinkFile),
+                              [filename:basename(LinkFile),
+                               "-",
+                               integer_to_list(MegaSecs),
+                               integer_to_list(Secs),
+                               integer_to_list(MicroSecs)]]),
+    case filelib:ensure_dir(DataFile) of
+        ok ->
+            case file:make_symlink(filename:absname(DataFile), filename:absname(LinkFile)) of
+                ok ->
+                    {ok, DataFile};
+                {error, Reason} ->
+                    lager:error("Failed to create bitcask dir ~s: ~p\n",
+                                [DataFile, Reason]),
+                    {error, Reason}
+            end;
+        {error, Reason1} ->
+            lager:error("Failed to create bitcask dir ~s: ~p\n",
+                                   [DataFile, Reason1]),
+            {error, Reason1}
+    end.
+
+%% @private
 drop_data_cleanup(DataRoot, LinkFile, DataFile) ->
     fun() ->
             %% List all the directories in data root
@@ -438,13 +432,14 @@ drop_data_cleanup(DataRoot, LinkFile, DataFile) ->
                     %% pointing to it.
                     [data_directory_cleanup(filename:join(DataRoot, Dir)) ||
                         Dir <- Dirs,
-                        Dir /= DataFile,
-                        Dir /= LinkFile];
+                        Dir /= filename:basename(DataFile),
+                        Dir /= filename:basename(LinkFile)];
                 {error, _} ->
                     ignore
             end
     end.
 
+%% @private
 data_directory_cleanup(DirPath) ->
     case file:list_dir(DirPath) of
         {ok, Files} ->
