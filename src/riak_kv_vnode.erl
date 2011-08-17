@@ -647,6 +647,25 @@ list_keys(Sender, Bucket, Filter, Mod, ModState, BufferSize) ->
         {ok, Buffer1} ->
             riak_kv_fold_buffer:flush(Buffer1,
                                       get_buffer_fun({true, Bucket}, Sender));
+        {async, FoldFun} ->
+            io:format("Async key fold~n"),
+            Buffer1 =
+                try 
+                    FoldFun()
+                catch
+                    {break, BufferFinal} ->
+                        BufferFinal
+                end,
+            FlushFun = fun(FinalResults) ->
+                               riak_core_vnode:reply(Sender,
+                                                     {final_results,
+                                                      {Bucket,
+                                                       FinalResults}})
+                       end,
+            riak_kv_fold_buffer:flush(Buffer1, FlushFun);
+            %%     {error, Reason} ->
+            %%         riak_core_vnode:reply(Sender, {error, Reason})
+            %% end;
         {error, Reason} ->
             riak_core_vnode:reply(Sender, {error, Reason})
     end.

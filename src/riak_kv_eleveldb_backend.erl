@@ -43,7 +43,7 @@
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, []).
+-define(CAPABILITIES, [async_fold]).
 
 -record(state, {ref :: reference(),
                 data_root :: string(),
@@ -157,13 +157,17 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
     Bucket =  proplists:get_value(bucket, Opts),
     FoldOpts = fold_opts(Bucket, FoldOpts1),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-    try
-        Acc0 = eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts),
-        {ok, Acc0}
-    catch
-        {break, AccFinal} ->
-            {ok, AccFinal}
-    end.
+
+    %% try
+    %%     Acc0 = eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts),
+    %%     {ok, Acc0}
+    %% catch
+    %%     {break, AccFinal} ->
+    %%         {ok, AccFinal}
+    %% end.
+    KeyFolder = eleveldb:key_folder(Ref, FoldFun, Acc, FoldOpts),
+    {async, KeyFolder}.
+
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
