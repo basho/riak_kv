@@ -112,7 +112,7 @@ start(Partition, Config) ->
             {error, Reason}
     end.
 
-%% @doc Stop backends, bubble up any errors.
+%% @doc Stop the backends
 -spec stop(state()) -> ok.
 stop(State) ->
     #state{kv_mod = KVMod,
