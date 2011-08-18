@@ -118,7 +118,6 @@ between(Args) ->
     end.
 
 matches([MS|_]) ->
-    io:format("[~s:~p] DEBUG - MS: ~p~n", [?MODULE, ?LINE, MS]),
     {ok, CMS} = re:compile(MS),
     fun(V) ->
         case re:run(V, CMS) of
