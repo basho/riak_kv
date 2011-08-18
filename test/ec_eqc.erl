@@ -12,7 +12,7 @@
 %%====================================================================
 
 eqc_test_() ->
-    {timeout, 60000, ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop()))))}.
+    {timeout, 300000, ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop()))))}.
 
 %% TODO: 
 %% Change put to use per-node vclock.
@@ -97,8 +97,8 @@ gen_regular_req() ->
             [{update, gen_pl_seed(), gen_pl_seed()}]).
 
 gen_handoff_req() ->
-    {trigger_handoff, int(), int()}. %% Generate a handoff request for index/node
-
+    %% Generate a handoff request for index/srcnode/dstnode
+    {trigger_handoff, int(), int(), int()}. 
 gen_regular_client() ->
     #client{reqs = non_empty(list(gen_regular_req()))}.
 
@@ -123,14 +123,15 @@ prop() ->
                                  procs = VnodeProcs},
                 Clients = make_clients(ClientSeeds, Params),
                 Start = Initial#state{clients = Clients},
+                io:format(user, "=== Start ===\nParams:\n~p\nState: ~p\n",
+                          [ann_params(Params), Start]),
                 case exec(Start) of
                     {ok, Final} ->
-                        %% io:format("Params:\n~p\nHistory\n~p\n\n", 
-                        %%           [ann_params(Params),
-                        %%            Final#state.history]),
+                        io:format(user, "=== Final ===\nHistory\n~p\n\n", 
+                                  [Final#state.history]),
                         ?WHENFAIL(
                            begin
-                               io:format("Params:\n~p\nClients:\n~p\nFinal:\n~p\nHistory:\n~p\n",
+                               io:format(user, "Params:\n~p\nClients:\n~p\nFinal:\n~p\nHistory:\n~p\n",
                                          [ann_params(Params),
                                           Clients,
                                           Final,
@@ -322,20 +323,22 @@ deliver_msg(#state{msgs = [#msg{to = To} = Msg | Msgs],
              S#state{procs = update_proc(UpdP, Procs),
                      history = History ++ [{deliver_msg, Msg}]}).
 
-make_params(#params{n = NSeed, r = R, w = W} = P) ->
-    %% Ensure R >= N, W >= N and R+W>N
-    MinN = lists:max([R, W]),
-    N = make_range(R + W - NSeed, MinN, R+W-1),
-    %% Force N to be odd while testing
-    {N1,R1} = case N rem 2 == 0 of
-                  true ->
-                      {N + 1, R + 1};
-                  false ->
-                      {N, R}
-              end,
-    P#params{n = N1, r = R1, m = N1, dw = W}. 
+%% make_params(#params{n = NSeed, r = R, w = W} = P) ->
+%%     %% Ensure R >= N, W >= N and R+W>N
+%%     MinN = lists:max([R, W]),
+%%     N = make_range(R + W - NSeed, MinN, R+W-1),
+%%     %% Force N to be odd while testing
+%%     {N1,R1} = case N rem 2 == 0 of
+%%                   true ->
+%%                       {N + 1, R + 1};
+%%                   false ->
+%%                       {N, R}
+%%               end,
+%%     P#params{n = N1, r = R1, m = N1, dw = W}. 
 %% make_params(#params{} = P) ->
-%%     P#params{n = 3, r = 2, m = 5, w = 3, dw = 3}.
+%%     P#params{n = 3, r = 2, m = 5, w = 2, dw = 2}.
+make_params(#params{} = P) ->
+    P#params{n = 1, r = 1, m = 2, w = 1, dw = 1}.
 
 
 make_vnodes(#params{n = N, m = M}) ->
@@ -492,13 +495,16 @@ make_req({update, PLSeed1, PLSeed2}, Cid, #params{n = N, m = M}, CReqNum) ->
     Value = iolist_to_binary(io_lib:format("C~p-U~p", [Cid, CReqNum])),
     [new_req({get, make_pl(N, M, PLSeed1)}),
      new_req({put, make_pl(N, M, PLSeed2), Value})];
-make_req({trigger_handoff, IdxSeed, NodeSeed}, _Cid, #params{n = N, m = M}, _CReqNum) ->
+make_req({trigger_handoff, IdxSeed, SrcNodeSeed, DstNodeSeed},
+         _Cid, #params{n = N, m = M}, _CReqNum) ->
     Idx = make_range(IdxSeed, 1, N),
-    case make_range(NodeSeed, 1, M) of
-        Idx ->
+    SrcNode = make_range(SrcNodeSeed, 1, M),
+    DstNode = make_range(Idx + DstNodeSeed, 1, M), % as DstNodeSeed shrinks, go to owner
+    case DstNode of
+        SrcNode ->
             []; %% Cannot handoff to self
-        Node ->
-            [new_req({trigger_handoff, Idx, Node})]
+        _ ->
+            [new_req({trigger_handoff, Idx, SrcNode, DstNode})]
     end;
 make_req(final_handoffs, _Cid, _Params, _CReqNum) ->
     [new_req(final_handoffs)].
@@ -558,9 +564,10 @@ client_req(#client{reqs = [#req{op = {put, PL, UpdV}, rid = ReqId} | _],
     NewMsgs = [new_msg({req, ReqId}, Proc#proc.name, {put, PL, UpdObj})],
     [{procs, NewProcs},
      {msgs, NewMsgs}];
-client_req(#client{reqs = [#req{op = {trigger_handoff, Idx, Node}, rid = ReqId} | _]}, _Params) ->
+client_req(#client{reqs = [#req{op = {trigger_handoff, Idx, SrcNode, DstNode}, rid = ReqId} | _]},
+           _Params) ->
     %% Send handoff_to messages to each fallback vnode
-    HandoffMsg = new_msg(handoff, {kv_vnode, Idx, Node}, {handoff_to, {kv_vnode, Idx, Idx}}),
+    HandoffMsg = new_msg(handoff, {kv_vnode, Idx, SrcNode}, {handoff_to, {kv_vnode, Idx, DstNode}}),
     ResponseMsg = new_msg(handoff, {req, ReqId}, handoff_scheduled),
     [{msgs, [HandoffMsg, ResponseMsg]}];
 client_req(#client{reqs = [#req{op = final_handoffs, rid = ReqId} | _]},
@@ -762,7 +769,6 @@ kv_vnode(#msg{from = From, c = {put, ReqId, NewObj}},
 kv_vnode(#msg{c = {handoff_to, To}},
          #proc{name = Name, procst = CurObj}) ->
     %% Send current object to node if there is one
-    %% TODO: Schedule message to make this vnode reset itself if unchanged
     NewMsgs = case CurObj of
                   undefined ->
                       [];
