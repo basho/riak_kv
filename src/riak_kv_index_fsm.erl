@@ -82,7 +82,7 @@ process_results({final_results, {Bucket, Results}},
     process_query_results(ClientType, Bucket, Results, ReqId, ClientPid),
     {done, StateData};
 process_results({error, Reason}, _State) ->
-    Reason.
+    {error, Reason}.
 
 finish({error, Error},
        StateData=#state{from={raw, ReqId, ClientPid},
