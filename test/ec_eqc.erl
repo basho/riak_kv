@@ -77,6 +77,9 @@ check() ->
                 msgs = [],
                 history = []}).
 
+-record(kvvnodest, {is_owner = false,
+                    object}).
+
 nni() ->
     ?LET(Xs, int(), abs(Xs)).
 
@@ -123,8 +126,8 @@ prop() ->
                                  procs = VnodeProcs},
                 Clients = make_clients(ClientSeeds, Params),
                 Start = Initial#state{clients = Clients},
-                io:format(user, "=== Start ===\nParams:\n~p\nClientSeeds\n~p\nState: ~p\n",
-                          [ann_params(Params), ClientSeeds, Start]),
+                %% io:format(user, "=== Start ===\nParams:\n~p\nClientSeeds\n~p\nState: ~p\n",
+                %%           [ann_params(Params), ClientSeeds, Start]),
                 case exec(Start) of
                     {ok, Final} ->
                         ?WHENFAIL(
@@ -340,8 +343,9 @@ make_params(#params{} = P) ->
 
 
 make_vnodes(#params{n = N, m = M}) ->
-    [#proc{name={kv_vnode, I, J}, handler=kv_vnode, procst=undefined} || I <- lists:seq(1, N),
-                                                                         J <- lists:seq(1, M)].
+    [#proc{name={kv_vnode, I, J}, 
+           handler=kv_vnode, 
+           procst=#kvvnodest{is_owner = (I == J)}} || I <- lists:seq(1, N), J <- lists:seq(1, M)].
 
 make_clients(ClientSeeds, Params) ->
     make_clients(ClientSeeds, 0, Params, []). %% 0 will be handoff req
@@ -680,8 +684,8 @@ put_fsm(#msg{from = From, c = {put, PL, Obj}},
                                               false -> 2
                                           end, Idx, Node} ||
                                             {kv_vnode, Idx, Node} <- PL])),
-    Gen = dict:fetch(gen, riak_object:get_metadata(Obj)),
-    NodeId = {vc, Gen, Node},
+    _Gen = dict:fetch(gen, riak_object:get_metadata(Obj)),
+    NodeId = {vn, Node}, %%{vc, Gen, Node},
     UpdObj = riak_object:increment_vclock(Obj, NodeId, ReqId),
     %% TODO, find some way to make putcore wait on the response from the local vnode.
     %% Temporarily set dw to all.
@@ -741,7 +745,8 @@ put_fsm(#msg{from = {kv_vnode, _, _}, c = Result},
     end.
 
 kv_vnode(#msg{from = From, c = {get, ReqId}},
-         #proc{name = {kv_vnode, Idx, _Node} = Name, procst = CurObj}) ->
+         #proc{name = {kv_vnode, Idx, _Node} = Name,
+               procst = #kvvnodest{object = CurObj}}) ->
     Result = case CurObj of
                  undefined ->
                      {error, notfound};
@@ -750,15 +755,17 @@ kv_vnode(#msg{from = From, c = {get, ReqId}},
              end,
     [{msgs, [new_msg(Name, From, {r, Result, Idx, ReqId})]}];
 kv_vnode(#msg{from = From, c = {coord_put, ReqId, NewObj, CoordId, Timestamp}},
-         #proc{name = {kv_vnode, Idx, _Node} = Name, procst = CurObj} = P) ->
+         #proc{name = {kv_vnode, Idx, _Node} = Name, 
+               procst = #kvvnodest{object = CurObj}} = P) ->
     [Pri1, Pri2] = lists:sort([next_pri(), next_pri()]),
     WMsg = new_msg(Name, From, {w, Idx, ReqId}, Pri1),
     UpdObj = coord_put_merge(CurObj, NewObj, CoordId, Timestamp),
     DWMsg = new_msg(Name, From, {dw, Idx, ReqId, UpdObj}, Pri2), % ignore returnbody for now
     [{msgs, [WMsg, DWMsg]},
-     {updp, P#proc{procst = UpdObj}}];
+     {updp, P#proc{procst = #kvvnodest{object = UpdObj}}}];
 kv_vnode(#msg{from = From, c = {put, ReqId, NewObj}},
-         #proc{name = {kv_vnode, Idx, _Node} = Name, procst = CurObj} = P) ->
+         #proc{name = {kv_vnode, Idx, _Node} = Name, 
+               procst = #kvvnodest{object = CurObj}} = P) ->
     [Pri1, Pri2] = lists:sort([next_pri(), next_pri()]),
     WMsg = new_msg(Name, From, {w, Idx, ReqId}, Pri1),
     case syntactic_put_merge(CurObj, NewObj) of
@@ -768,10 +775,10 @@ kv_vnode(#msg{from = From, c = {put, ReqId, NewObj}},
         UpdObj ->
             DWMsg = new_msg(Name, From, {dw, Idx, ReqId}, Pri2), % ignore returnbody for now
             [{msgs, [WMsg, DWMsg]},
-             {updp, P#proc{procst = UpdObj}}]
+             {updp, P#proc{procst = #kvvnodest{object = UpdObj}}}]
     end;
 kv_vnode(#msg{c = {handoff_to, To}},
-         #proc{name = Name, procst = CurObj}) ->
+         #proc{name = Name, procst = #kvvnodest{object = CurObj}}) ->
     %% Send current object to node if there is one
     NewMsgs = case CurObj of
                   undefined ->
@@ -781,15 +788,15 @@ kv_vnode(#msg{c = {handoff_to, To}},
               end,
     [{msgs, NewMsgs}];
 kv_vnode(#msg{c = {ack_handoff, HandoffObj}, to = To},
-         #proc{procst = CurObj} = P) ->
+         #proc{procst = #kvvnodest{object = CurObj}} = P) ->
     case {HandoffObj == CurObj, To} of  %% If ack is for current object, simulate vnode drop
         {true, {kv_vnode, Idx, Node}} when Idx /= Node -> %% and not the owner
-            [{updp, P#proc{procst = undefined}}];
+            [{updp, P#proc{procst = #kvvnodest{object = undefined}}}];
         _ ->
             []
     end;
 kv_vnode(#msg{from = From, c = {handoff_obj, HandoffObj, Why}},
-         #proc{name = Name, procst = CurObj} = P) ->
+         #proc{name = Name, procst = #kvvnodest{object = CurObj}} = P) ->
     %% Simulate a do_diffobj_put
     UpdObj = case syntactic_put_merge(CurObj, HandoffObj) of
                  keep ->
@@ -807,7 +814,7 @@ kv_vnode(#msg{from = From, c = {handoff_obj, HandoffObj, Why}},
     %% Real syntactic put merge checks allow_mult here and applies, testing with 
     %% allow_mult is true so leave object
     [{msgs, AckMsg},
-     {updp, P#proc{procst = UpdObj}}].
+     {updp, P#proc{procst = #kvvnodest{object = UpdObj}}}].
 
 syntactic_put_merge(CurObj, UpdObj) ->
     case CurObj of
