@@ -123,19 +123,17 @@ prop() ->
                                  procs = VnodeProcs},
                 Clients = make_clients(ClientSeeds, Params),
                 Start = Initial#state{clients = Clients},
-                io:format(user, "=== Start ===\nParams:\n~p\nState: ~p\n",
-                          [ann_params(Params), Start]),
+                io:format(user, "=== Start ===\nParams:\n~p\nClientSeeds\n~p\nState: ~p\n",
+                          [ann_params(Params), ClientSeeds, Start]),
                 case exec(Start) of
                     {ok, Final} ->
-                        io:format(user, "=== Final ===\nHistory\n~p\n\n", 
-                                  [Final#state.history]),
                         ?WHENFAIL(
                            begin
-                               io:format(user, "Params:\n~p\nClients:\n~p\nFinal:\n~p\nHistory:\n~p\n",
+                               io:format(user, "Params:\n~p\nClients:\n~p\nFinal:\n~p\nHistory\n",
                                          [ann_params(Params),
                                           Clients,
-                                          Final,
-                                          Final#state.history])
+                                          Final]),
+                               pretty_history(Final#state.history)
                            end,
                            check_final(Final));
                     {What, Reason, Next, FailS} ->
@@ -555,12 +553,17 @@ client_req(#client{reqs = [#req{op = {put, PL, UpdV}, rid = ReqId} | _],
            Params) ->
     Proc = put_fsm_proc(ReqId, Params),
     NewProcs = [Proc],
-    UpdObj = case GetResult of
-                 {error, notfound} ->
-                     riak_object:new(?B, ?K, UpdV);
-                 {ok, Obj} ->
-                     riak_object:apply_updates(riak_object:update_value(Obj, UpdV))
-             end,
+    UpdObj = riak_object:apply_updates(
+               case GetResult of
+                   {error, notfound} ->
+                       riak_object:new(?B, ?K, UpdV, dict:from_list([{gen, ReqId}]));
+                   {ok, Obj} ->
+                       Gen = lists:max([dict:fetch(gen, MD0) ||
+                                           MD0 <- riak_object:get_metadatas(Obj)]),
+                       MD = hd(riak_object:get_metadatas(Obj)),
+                       UpdMD = dict:store(gen, Gen, MD),
+                       riak_object:update_metadata(riak_object:update_value(Obj, UpdV), UpdMD)
+               end),
     NewMsgs = [new_msg({req, ReqId}, Proc#proc.name, {put, PL, UpdObj})],
     [{procs, NewProcs},
      {msgs, NewMsgs}];
@@ -677,8 +680,9 @@ put_fsm(#msg{from = From, c = {put, PL, Obj}},
                                               false -> 2
                                           end, Idx, Node} ||
                                             {kv_vnode, Idx, Node} <- PL])),
-    NodeId = <<Node:32>>,
-    UpdObj = riak_object:increment_vclock(Obj, NodeId, ts),
+    Gen = dict:fetch(gen, riak_object:get_metadata(Obj)),
+    NodeId = {vc, Gen, Node},
+    UpdObj = riak_object:increment_vclock(Obj, NodeId, ReqId),
     %% TODO, find some way to make putcore wait on the response from the local vnode.
     %% Temporarily set dw to all.
 
@@ -776,12 +780,12 @@ kv_vnode(#msg{c = {handoff_to, To}},
                       [new_msg(Name, To, {handoff_obj, CurObj, handoff})]
               end,
     [{msgs, NewMsgs}];
-kv_vnode(#msg{c = {ack_handoff, HandoffObj}},
+kv_vnode(#msg{c = {ack_handoff, HandoffObj}, to = To},
          #proc{procst = CurObj} = P) ->
-    case HandoffObj == CurObj of %% If ack is for current object, simulate vnode drop
-        true ->
+    case {HandoffObj == CurObj, To} of  %% If ack is for current object, simulate vnode drop
+        {true, {kv_vnode, Idx, Node}} when Idx /= Node -> %% and not the owner
             [{updp, P#proc{procst = undefined}}];
-        false ->
+        _ ->
             []
     end;
 kv_vnode(#msg{from = From, c = {handoff_obj, HandoffObj, Why}},
@@ -848,3 +852,57 @@ get_counter(Id, VC) ->
     end.
 
 
+pretty_history([]) ->
+    ok;
+pretty_history([Event | Rest]) ->
+    pretty_history_event(Event),
+    pretty_history(Rest).
+
+pretty_history_event({deliver_msg, #msg{to = {kv_vnode, Idx, N}, from = From, c = C}}) ->
+    case C of
+        {get, ReqId} ->
+            io:format(user, "Vnode Req {~p,~p} from=~p get reqId=~p\n", [Idx, N, From, ReqId]);
+        {coord_put, ReqId, Obj, NodeId, Ts} ->
+            io:format(user, "Vnode Req {~p,~p} from=~p coord_put reqId=~p v=~p nid=~p ts=~p\n",
+                      [Idx, N, From, ReqId, riak_object:get_values(Obj), NodeId, Ts]);
+        _ ->
+            io:format(user, "Vnode Req {~p,~p} from=~p C=~p)\n", [Idx, N, From, C])
+    end;
+pretty_history_event({deliver_msg, #msg{from = {kv_vnode, Idx, N}, to = To, c = C}}) ->
+    case C of
+        {w,_,_} ->
+            io:format(user, "Vnode Res {~p,~p} to=~p put W\n",
+                      [Idx, N, To]);
+        {dw,_,_,Obj} ->
+            io:format(user, "Vnode Res {~p,~p} to=~p put DW v=~p\n",
+                      [Idx, N, To, riak_object:get_values(Obj)]);
+        _ ->
+            io:format(user, "Vnode Res {~p,~p} to=~p C=~p)\n", [Idx, N, To, C])
+    end;
+pretty_history_event({deliver_msg, #msg{to = {req, _ReqId}}}) ->
+    ok; % The result should output instead
+pretty_history_event({deliver_msg, #msg{}} = Msg) ->
+    io:format(user, "Msg: ~p\n", [Msg]);
+pretty_history_event({result, Cid, {req, Seq, _, {get,PL}}, Result}) ->
+    case Result of
+        {ok, Obj} ->
+            io:format(user, "C~p get~p(~p) -> ~p\n", [Cid, Seq, PL, riak_object:get_values(Obj)]);
+        ER ->
+            io:format(user, "C~p get~p(~p) -> ~p\n", [Cid, Seq, PL, ER])
+    end;
+pretty_history_event({result, Cid, {req, Seq, _, {put,PL,Val}}, Result}) ->
+    case Result of
+        {ok, Obj, _} ->
+            io:format(user, "C~p put~p(~p, ~p) -> ~p\n", [Cid, Seq, PL, Val, riak_object:get_values(Obj)]);
+        ER ->
+            io:format(user, "C~p put~p(~p, ~p) -> ~p\n", [Cid, Seq, PL, Val, ER])
+    end;
+pretty_history_event({result, Cid, Req, Result}) ->
+    io:format(user, "Result: Cid=~p Req=~p Result=~p\n", [Cid, Req, Result]);
+pretty_history_event(Event) ->
+    io:format(user, "Event: ~p\n", [Event]).
+
+    
+    
+
+    
