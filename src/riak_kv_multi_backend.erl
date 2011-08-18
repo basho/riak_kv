@@ -111,12 +111,25 @@ start(Partition, Config) ->
             case lists:keymember(DefaultBackend, 1, Defs) of
                 true ->
                     %% Start the backends
-                    Backends = [begin
-                                    {ok, State} = Module:start(Partition, SubConfig),
-                                    {Name, Module, State}
-                                end || {Name, Module, SubConfig} <- Defs],
-                    {ok, #state{backends=Backends,
-                                default_backend=DefaultBackend}};
+                    BackendFun = 
+                        fun({Name, Module, SubConfig}, {Backends, Errors}) ->
+                             case Module:start(Partition, SubConfig) of
+                                 {ok, State} ->
+                                     Backend = {Name, Module, State},
+                                     {[Backend | Backends], Errors};
+                                 {error, Reason} ->
+                                     {Backends, [Reason | Errors]}
+                             end
+                        end,
+                    {Backends, Errors} = 
+                        lists:foldl(BackendFun, {[], []}, Defs),
+                    case Errors of
+                        [] ->
+                            {ok, #state{backends=Backends,
+                                        default_backend=DefaultBackend}};
+                        _ ->
+                            {error, Errors}
+                    end;
                 false ->
                     {error, {invalid_config_setting,
                              multi_backend_default,
