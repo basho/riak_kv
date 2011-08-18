@@ -50,11 +50,11 @@ behaviour_info(callbacks) ->
      {delete,3},      % (Bucket, Key, State)
      {drop,1},        % (State)
      {fold_buckets,4},% (FoldBucketsFun, Acc, Opts, State),
-                                                %   FoldBucketsFun(Bucket, Acc)
+                      %   FoldBucketsFun(Bucket, Acc)
      {fold_keys,4},   % (FoldKeysFun, Acc, Opts, State),
-                                                %   FoldKeysFun(Bucket, Key, Acc)
+                      %   FoldKeysFun(Bucket, Key, Acc)
      {fold_objects,4},% (FoldObjectsFun, Acc, Opts, State),
-                                                %   FoldObjectsFun(Bucket, Key, Object, Acc)
+                      %   FoldObjectsFun(Bucket, Key, Object, Acc)
      {is_empty,1},    % (State)
      {status,1},      % (State)
      {callback,3}];   % (Ref, Msg, State) ->
@@ -69,12 +69,9 @@ callback_after(Time, Ref, Msg) when is_integer(Time), is_reference(Ref) ->
 -ifdef(TEST).
 
 standard_test(BackendMod, Config) ->
-
+    %% Start the backend
     {ok, S} = BackendMod:start(42, Config),
-    ?assertMatch({ok, _}, BackendMod:put(<<"b1">>,<<"k1">>,<<"v1">>,S)),
-    ?assertMatch({ok, _}, BackendMod:put(<<"b2">>,<<"k2">>,<<"v2">>,S)),
-    ?assertMatch({ok,<<"v2">>, _}, BackendMod:get(<<"b2">>,<<"k2">>,S)),
-    ?assertMatch({error, not_found, _}, BackendMod:get(<<"b1">>,<<"k3">>,S)),
+    %% Create some fold functions to test with
     FoldBucketsFun =
         fun(Bucket, Acc) ->
                 [Bucket | Acc]
@@ -109,47 +106,63 @@ standard_test(BackendMod, Config) ->
         fun(Bucket, Key, Value, Acc) ->
                 [{{Bucket, Key}, Value} | Acc]
         end,
+    %% Execute some backend operation
     {ok, Buckets1} = BackendMod:fold_buckets(FoldBucketsFun, [], [], S),
-    ?assertEqual([<<"b1">>, <<"b2">>],
-                 lists:sort(Buckets1)),
     {ok, Keys1} = BackendMod:fold_keys(FoldKeysFun, [], [], S),
-    ?assertEqual([{<<"b1">>, <<"k1">>}, {<<"b2">>, <<"k2">>}],
-                 lists:sort(Keys1)),
     {ok, Keys2} = BackendMod:fold_keys(FoldKeysFun1,
                                        [],
                                        [{bucket, <<"b1">>}],
                                        S),
-    ?assertEqual([<<"k1">>],
-                 lists:sort(Keys2)),
     {ok, Keys3} = BackendMod:fold_keys(FoldKeysFun1,
                                        [],
                                        [{bucket, <<"b2">>}],
                                        S),
-    ?assertEqual([<<"k2">>],
-                 lists:sort(Keys3)),
     {ok, Keys4} = BackendMod:fold_keys(FoldKeysFun2, [], [], S),
-    ?assertEqual([<<"k1">>], Keys4),
     {ok, Keys5} = BackendMod:fold_keys(FoldKeysFun2, [], [{bucket, <<"b1">>}], S),
-    ?assertEqual([<<"k1">>], Keys5),
     {ok, Keys6} = BackendMod:fold_keys(FoldKeysFun3, [], [], S),
-    ?assertEqual([<<"k2">>], Keys6),
     {ok, Keys7} = BackendMod:fold_keys(FoldKeysFun3, [], [{bucket, <<"b1">>}], S),
-    ?assertEqual([], Keys7),
-    ?assertMatch({ok, _}, BackendMod:delete(<<"b2">>,<<"k2">>,S)),
-    ?assertMatch({error, not_found, _}, BackendMod:get(<<"b2">>, <<"k2">>, S)),
     {ok, Keys8} = BackendMod:fold_keys(FoldKeysFun, [], [], S),
-    ?assertEqual([{<<"b1">>, <<"k1">>}], lists:sort(Keys8)),
     {ok, Objects1} = BackendMod:fold_objects(FoldObjectsFun, [], [], S),
-    ?assertEqual([{{<<"b1">>,<<"k1">>}, <<"v1">>}], lists:sort(Objects1)),
-    ?assertMatch({ok, _}, BackendMod:put(<<"b3">>,<<"k3">>,<<"v3">>,S)),
     {ok, Objects2} = BackendMod:fold_objects(FoldObjectsFun, [], [], S),
-    ?assertEqual([{{<<"b1">>,<<"k1">>},<<"v1">>},
-                  {{<<"b3">>,<<"k3">>},<<"v3">>}],
-                 lists:sort(Objects2)),
-    ?assertEqual(false, BackendMod:is_empty(S)),
-    ?assertMatch({ok, _}, BackendMod:delete(<<"b1">>,<<"k1">>,S)),
-    ?assertMatch({ok, _}, BackendMod:delete(<<"b3">>,<<"k3">>,S)),
-    ?assertEqual(true, BackendMod:is_empty(S)),
-    ok = BackendMod:stop(S).
+    %% Stop the backend
+    ok = BackendMod:stop(S),
+
+    %% Check the test results
+    {spawn,
+     [{setup,
+       fun() -> ok end,
+       [
+        ?_assertMatch({ok, _}, BackendMod:put(<<"b1">>,<<"k1">>,<<"v1">>,S)),
+        ?_assertMatch({ok, _}, BackendMod:put(<<"b2">>,<<"k2">>,<<"v2">>,S)),
+        ?_assertMatch({ok,<<"v2">>, _}, BackendMod:get(<<"b2">>,<<"k2">>,S)),
+        ?_assertMatch({error, not_found, _}, BackendMod:get(<<"b1">>,<<"k3">>,S)),
+        ?_assertEqual([<<"b1">>, <<"b2">>],
+                      lists:sort(Buckets1)),
+        ?_assertEqual([{<<"b1">>, <<"k1">>}, {<<"b2">>, <<"k2">>}],
+                      lists:sort(Keys1)),
+        ?_assertEqual([<<"k1">>],
+                      lists:sort(Keys2)),
+        ?_assertEqual([<<"k2">>],
+                      lists:sort(Keys3)),
+        ?_assertEqual([<<"k1">>], Keys4),
+        ?_assertEqual([<<"k1">>], Keys5),
+        ?_assertEqual([<<"k2">>], Keys6),
+        ?_assertEqual([], Keys7),
+        ?_assertMatch({ok, _}, BackendMod:delete(<<"b2">>,<<"k2">>,S)),
+        ?_assertMatch({error, not_found, _}, BackendMod:get(<<"b2">>, <<"k2">>, S)),
+
+        ?_assertEqual([{<<"b1">>, <<"k1">>}], lists:sort(Keys8)),
+
+        ?_assertEqual([{{<<"b1">>,<<"k1">>}, <<"v1">>}], lists:sort(Objects1)),
+        ?_assertMatch({ok, _}, BackendMod:put(<<"b3">>,<<"k3">>,<<"v3">>,S)),
+
+        ?_assertEqual([{{<<"b1">>,<<"k1">>},<<"v1">>},
+                       {{<<"b3">>,<<"k3">>},<<"v3">>}],
+                      lists:sort(Objects2)),
+        ?_assertEqual(false, BackendMod:is_empty(S)),
+        ?_assertMatch({ok, _}, BackendMod:delete(<<"b1">>,<<"k1">>,S)),
+        ?_assertMatch({ok, _}, BackendMod:delete(<<"b3">>,<<"k3">>,S)),
+        ?_assertEqual(true, BackendMod:is_empty(S))
+       ]}]}.
 
 -endif. % TEST
