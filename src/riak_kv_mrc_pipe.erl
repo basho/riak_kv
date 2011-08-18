@@ -346,9 +346,11 @@ send_inputs(Pipe, {Bucket, FilterExprs}, _Timeout) ->
         Error       -> Error
     end;
 send_inputs(Pipe, {modfun, Mod, Fun, Arg} = Modfun, Timeout) ->
-    try
-        Mod:Fun(Pipe, Arg, Timeout),
-        ok
+    try Mod:Fun(Pipe, Arg, Timeout) of
+        {ok, Bucket, ReqId} ->
+            send_key_list(Pipe, Bucket, ReqId);
+        Other ->
+            Other
     catch
         X:Y ->
             {Modfun, X, Y, erlang:get_stacktrace()}
@@ -357,10 +359,25 @@ send_inputs(Pipe, {modfun, Mod, Fun, Arg} = Modfun, Timeout) ->
 send_key_list(Pipe, Bucket, ReqId) ->
     receive
         {ReqId, {keys, Keys}} ->
+            %% Get results from list keys operation.
             [riak_pipe:queue_work(Pipe, {Bucket, Key})
              || Key <- Keys],
             send_key_list(Pipe, Bucket, ReqId);
+
+        {ReqId, {results, Results}} ->
+            %% Get results from 2i operation. Handle both [Keys] and [{Key,
+            %% Props}] formats. If props exists, use it as keydata.
+            F = fun
+                    ({Key, Props}) ->
+                        riak_pipe:queue_work(Pipe, {{Bucket, Key}, Props});
+                    (Key) ->
+                        riak_pipe:queue_work(Pipe, {Bucket, Key})
+                end,
+            [F(X) || X <- Results],
+            send_key_list(Pipe, Bucket, ReqId);
+
         {ReqId, done} ->
+            %% Operation has finished.
             riak_pipe:eoi(Pipe),
             ok
     end.
