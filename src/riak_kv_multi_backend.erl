@@ -113,13 +113,21 @@ start(Partition, Config) ->
                     %% Start the backends
                     BackendFun = 
                         fun({Name, Module, SubConfig}, {Backends, Errors}) ->
-                             case Module:start(Partition, SubConfig) of
-                                 {ok, State} ->
-                                     Backend = {Name, Module, State},
-                                     {[Backend | Backends], Errors};
-                                 {error, Reason} ->
-                                     {Backends, [Reason | Errors]}
-                             end
+                                try
+                                    case Module:start(Partition, SubConfig) of
+                                        {ok, State} ->
+                                            Backend = {Name, Module, State},
+                                            {[Backend | Backends], Errors};
+                                        {error, Reason} ->
+                                            {Backends, 
+                                             [{Module, Reason} | Errors]}
+                                    end
+                                catch
+                                    _:Reason1 ->
+                                        {Backends,
+                                         [{Module, Reason1} | Errors]}
+                                end
+                                         
                         end,
                     {Backends, Errors} = 
                         lists:foldl(BackendFun, {[], []}, Defs),
@@ -358,7 +366,7 @@ multi_backend_test_() ->
                        riak_core_bucket:set_bucket(<<"b1">>, [{backend, first_backend}]),
                        riak_core_bucket:set_bucket(<<"b2">>, [{backend, second_backend}]),
 
-                                                % Run the standard backend test...
+                       %% Run the standard backend test...
                        Config = sample_config(),
                        riak_kv_backend:standard_test(?MODULE, Config)
                end
@@ -380,6 +388,16 @@ multi_backend_test_() ->
                        %% Check the default...
                        {second_backend, riak_kv_memory_backend, _} = get_backend(<<"b3">>, State),
                        ok
+               end
+              }
+      end,
+      fun(_) ->
+              {"start error with invalid backend test",
+               fun() ->
+                       %% Attempt to start the backend with a 
+                       %% nonexistent backend specified
+                       ?assertEqual({error, [{riak_kv_devnull_backend, undef}]},
+                                    start(42, bad_backend_config()))
                end
               }
       end
@@ -447,8 +465,18 @@ sample_config() ->
     [
      {storage_backend, riak_kv_multi_backend},
      {multi_backend_default, second_backend},
-     {multi_backend, [
+      {multi_backend, [
                       {first_backend, riak_kv_memory_backend, []},
+                      {second_backend, riak_kv_memory_backend, []}
+                     ]}
+    ].
+
+bad_backend_config() ->
+    [
+     {storage_backend, riak_kv_multi_backend},
+     {multi_backend_default, second_backend},
+      {multi_backend, [
+                      {first_backend, riak_kv_devnull_backend, []},
                       {second_backend, riak_kv_memory_backend, []}
                      ]}
     ].
