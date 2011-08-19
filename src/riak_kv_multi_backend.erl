@@ -111,7 +111,7 @@ start(Partition, Config) ->
             case lists:keymember(DefaultBackend, 1, Defs) of
                 true ->
                     %% Start the backends
-                    BackendFun = 
+                    BackendFun =
                         fun({Name, Module, SubConfig}, {Backends, Errors}) ->
                                 try
                                     case Module:start(Partition, SubConfig) of
@@ -119,7 +119,7 @@ start(Partition, Config) ->
                                             Backend = {Name, Module, State},
                                             {[Backend | Backends], Errors};
                                         {error, Reason} ->
-                                            {Backends, 
+                                            {Backends,
                                              [{Module, Reason} | Errors]}
                                     end
                                 catch
@@ -127,9 +127,8 @@ start(Partition, Config) ->
                                         {Backends,
                                          [{Module, Reason1} | Errors]}
                                 end
-                                         
                         end,
-                    {Backends, Errors} = 
+                    {Backends, Errors} =
                         lists:foldl(BackendFun, {[], []}, Defs),
                     case Errors of
                         [] ->
@@ -394,7 +393,7 @@ multi_backend_test_() ->
       fun(_) ->
               {"start error with invalid backend test",
                fun() ->
-                       %% Attempt to start the backend with a 
+                       %% Attempt to start the backend with a
                        %% nonexistent backend specified
                        ?assertEqual({error, [{riak_kv_devnull_backend, undef}]},
                                     start(42, bad_backend_config()))
