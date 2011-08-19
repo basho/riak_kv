@@ -24,6 +24,8 @@
 
 -module(riak_index).
 -export([
+         mapred_index/2,
+         mapred_index/3,
          parse_object_hook/1,
          parse_object/1,
          parse_fields/1,
@@ -36,7 +38,7 @@
 -endif.
 
 -include("riak_kv_wm_raw.hrl").
-
+-define(TIMEOUT, 30000).
 -define(BUCKETFIELD, <<"$bucket">>).
 -define(KEYFIELD, <<"$key">>).
 
@@ -55,6 +57,16 @@
 %%                          | {lt , index_field(), index_value()}
 %%                          | {lte, index_field(), index_value()}.
 
+
+mapred_index(Dest, Args) ->
+    mapred_index(Dest, Args, ?TIMEOUT).
+mapred_index(FlowPid, [_Bucket, _Query], _Timeout)
+  when is_pid(FlowPid) ->
+    throw({not_supported, mapred_index, FlowPid});
+mapred_index(_Pipe, [Bucket, Query], Timeout) ->
+    {ok, C} = riak:local_client(),
+    {ok, ReqId} = C:stream_get_index(Bucket, Query, Timeout),
+    {ok, Bucket, ReqId}.
 
 %% @spec parse_object_hook(riak_object:riak_object()) ->
 %%         riak_object:riak_object() | {fail, [failure_reason()]}.

@@ -42,6 +42,7 @@
 -export([filter_keys/2,filter_keys/3]).
 -export([list_buckets/0,list_buckets/2]).
 -export([get_index/3,get_index/2]).
+-export([stream_get_index/3,stream_get_index/2]).
 -export([set_bucket/2,get_bucket/1]).
 -export([reload_all/1]).
 -export([remove_from_cluster/1]).
@@ -672,6 +673,30 @@ get_index(Bucket, Query, Timeout) ->
     ReqId = mk_reqid(),
     riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, plain]]),
     wait_for_query_results(ReqId, Timeout).
+
+%% @spec stream_get_index(Bucket :: binary(),
+%%                        Query :: riak_index:query_def()) ->
+%%       {ok, pid()} |
+%%       {error, timeout} |
+%%       {error, Err :: term()}.
+%%
+%% @doc Run the provided index query, return a stream handle.
+stream_get_index(Bucket, Query) ->
+    stream_get_index(Bucket, Query, ?DEFAULT_TIMEOUT).
+
+%% @spec stream_get_index(Bucket :: binary(),
+%%                        Query :: riak_index:query_def(),
+%%                        TimeoutMillisecs :: integer()) ->
+%%       {ok, pid()} |
+%%       {error, timeout} |
+%%       {error, Err :: term()}.
+%%
+%% @doc Run the provided index query, return a stream handle.
+stream_get_index(Bucket, Query, Timeout) ->
+    Me = self(),
+    ReqId = mk_reqid(),
+    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, plain]]),
+    {ok, ReqId}.
 
 %% @spec set_bucket(riak_object:bucket(), [BucketProp :: {atom(),term()}]) -> ok
 %% @doc Set the given properties for Bucket.
