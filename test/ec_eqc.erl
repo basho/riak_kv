@@ -77,7 +77,8 @@ check() ->
                 msgs = [],
                 history = []}).
 
--record(kvvnodest, {is_owner = false,
+-record(kvvnodest, {owner,
+                    start,
                     object}).
 
 nni() ->
@@ -100,8 +101,10 @@ gen_regular_req() ->
             [{update, gen_pl_seed(), gen_pl_seed()}]).
 
 gen_handoff_req() ->
-    %% Generate a handoff request for index/srcnode/dstnode
-    {trigger_handoff, int(), int(), int()}. 
+    %% Generate a handoff request for index/node
+    elements([{trigger_handoff, int(), int()},
+              {set_owner, int(), int()}]).
+
 gen_regular_client() ->
     #client{reqs = non_empty(list(gen_regular_req()))}.
 
@@ -345,7 +348,7 @@ make_params(#params{} = P) ->
 make_vnodes(#params{n = N, m = M}) ->
     [#proc{name={kv_vnode, I, J}, 
            handler=kv_vnode, 
-           procst=#kvvnodest{is_owner = (I == J)}} || I <- lists:seq(1, N), J <- lists:seq(1, M)].
+           procst=#kvvnodest{owner = I}} || I <- lists:seq(1, N), J <- lists:seq(1, M)].
 
 make_clients(ClientSeeds, Params) ->
     make_clients(ClientSeeds, 0, Params, []). %% 0 will be handoff req
@@ -497,16 +500,20 @@ make_req({update, PLSeed1, PLSeed2}, Cid, #params{n = N, m = M}, CReqNum) ->
     Value = iolist_to_binary(io_lib:format("C~p-U~p", [Cid, CReqNum])),
     [new_req({get, make_pl(N, M, PLSeed1)}),
      new_req({put, make_pl(N, M, PLSeed2), Value})];
-make_req({trigger_handoff, IdxSeed, SrcNodeSeed, DstNodeSeed},
+make_req({set_owner, IdxSeed, NodeSeed},
          _Cid, #params{n = N, m = M}, _CReqNum) ->
     Idx = make_range(IdxSeed, 1, N),
-    SrcNode = make_range(SrcNodeSeed, 1, M),
-    DstNode = make_range(Idx + DstNodeSeed, 1, M), % as DstNodeSeed shrinks, go to owner
-    case DstNode of
-        SrcNode ->
+    Node = make_range(NodeSeed, 1, M),
+    [new_req({set_owner, Idx, Node})];
+make_req({trigger_handoff, IdxSeed, NodeSeed},
+         _Cid, #params{n = N, m = M}, _CReqNum) ->
+    Idx = make_range(IdxSeed, 1, N),
+    Node = make_range(NodeSeed, 1, M),
+    case Idx of
+        Node ->
             []; %% Cannot handoff to self
         _ ->
-            [new_req({trigger_handoff, Idx, SrcNode, DstNode})]
+            [new_req({trigger_handoff, Idx, Node})]
     end;
 make_req(final_handoffs, _Cid, _Params, _CReqNum) ->
     [new_req(final_handoffs)].
@@ -571,21 +578,33 @@ client_req(#client{reqs = [#req{op = {put, PL, UpdV}, rid = ReqId} | _],
     NewMsgs = [new_msg({req, ReqId}, Proc#proc.name, {put, PL, UpdObj})],
     [{procs, NewProcs},
      {msgs, NewMsgs}];
-client_req(#client{reqs = [#req{op = {trigger_handoff, Idx, SrcNode, DstNode}, rid = ReqId} | _]},
+client_req(#client{reqs = [#req{op = {set_owner, Idx, Node}, rid = ReqId} | _]},
+           #params{m = M}) ->
+    %% Send set owner messages to each node for the index - they may not be delivered
+    %% at the same time so there will be periods of inconsistency
+    SetOwnerMsgs = [new_msg(set_owner, {kv_vnode, Idx, J}, {set_owner, Node}) || 
+                       J <- lists:seq(1, M)],
+    ResponseMsg = new_msg(set_owner, {req, ReqId}, set_owner_scheduled),
+    [{msgs, SetOwnerMsgs ++ [ResponseMsg]}];
+client_req(#client{reqs = [#req{op = {trigger_handoff, Idx, Node}, rid = ReqId} | _]},
            _Params) ->
     %% Send handoff_to messages to each fallback vnode
-    HandoffMsg = new_msg(handoff, {kv_vnode, Idx, SrcNode}, {handoff_to, {kv_vnode, Idx, DstNode}}),
+    HandoffMsg = new_msg(handoff, {kv_vnode, Idx, Node}, handoff),
     ResponseMsg = new_msg(handoff, {req, ReqId}, handoff_scheduled),
     [{msgs, [HandoffMsg, ResponseMsg]}];
 client_req(#client{reqs = [#req{op = final_handoffs, rid = ReqId} | _]},
            #params{n = N, m = M}) ->
+    %% Reset the owner for partition I to node I.
+    SetOwnerMsgs = [new_msg(final_handoff, {kv_vnode, I, J}, {set_owner, I}, 0) || 
+                      I <- lists:seq(1, N),
+                      J <- lists:seq(1, M)],
     %% Send handoff_to messages to each fallback vnode
-    HandoffMsgs = [new_msg(final_handoff, {kv_vnode, I, J}, {handoff_to, {kv_vnode, I, I}}) || 
+    HandoffMsgs = [new_msg(final_handoff, {kv_vnode, I, J}, handoff, 0) || 
                       I <- lists:seq(1, N),
                       J <- lists:seq(1, M),
                       I /= J],
-    ResponseMsg = new_msg(final_handoff, {req, ReqId}, final_handoffs_scheduled),
-    [{msgs, HandoffMsgs ++ [ResponseMsg]}].
+    ResponseMsg = new_msg(final_handoff, {req, ReqId}, final_handoffs_scheduled, 0),
+    [{msgs, SetOwnerMsgs ++ HandoffMsgs ++ [ResponseMsg]}].
 
 end_req(#msg{c = Result},
         #client{cid = Cid, reqs = [Req |_Reqs]} = C) ->
@@ -685,7 +704,7 @@ put_fsm(#msg{from = From, c = {put, PL, Obj}},
                                           end, Idx, Node} ||
                                             {kv_vnode, Idx, Node} <- PL])),
     _Gen = dict:fetch(gen, riak_object:get_metadata(Obj)),
-    NodeId = {vn, Node}, %%{vc, Gen, Node},
+    NodeId = {vc, CoordIdx, Node},
     UpdObj = riak_object:increment_vclock(Obj, NodeId, ReqId),
     %% TODO, find some way to make putcore wait on the response from the local vnode.
     %% Temporarily set dw to all.
@@ -756,16 +775,16 @@ kv_vnode(#msg{from = From, c = {get, ReqId}},
     [{msgs, [new_msg(Name, From, {r, Result, Idx, ReqId})]}];
 kv_vnode(#msg{from = From, c = {coord_put, ReqId, NewObj, CoordId, Timestamp}},
          #proc{name = {kv_vnode, Idx, _Node} = Name, 
-               procst = #kvvnodest{object = CurObj}} = P) ->
+               procst = #kvvnodest{object = CurObj} = PS} = P) ->
     [Pri1, Pri2] = lists:sort([next_pri(), next_pri()]),
     WMsg = new_msg(Name, From, {w, Idx, ReqId}, Pri1),
     UpdObj = coord_put_merge(CurObj, NewObj, CoordId, Timestamp),
     DWMsg = new_msg(Name, From, {dw, Idx, ReqId, UpdObj}, Pri2), % ignore returnbody for now
     [{msgs, [WMsg, DWMsg]},
-     {updp, P#proc{procst = #kvvnodest{object = UpdObj}}}];
+     {updp, P#proc{procst = PS#kvvnodest{object = UpdObj}}}];
 kv_vnode(#msg{from = From, c = {put, ReqId, NewObj}},
          #proc{name = {kv_vnode, Idx, _Node} = Name, 
-               procst = #kvvnodest{object = CurObj}} = P) ->
+               procst = #kvvnodest{object = CurObj} = PS} = P) ->
     [Pri1, Pri2] = lists:sort([next_pri(), next_pri()]),
     WMsg = new_msg(Name, From, {w, Idx, ReqId}, Pri1),
     case syntactic_put_merge(CurObj, NewObj) of
@@ -775,28 +794,27 @@ kv_vnode(#msg{from = From, c = {put, ReqId, NewObj}},
         UpdObj ->
             DWMsg = new_msg(Name, From, {dw, Idx, ReqId}, Pri2), % ignore returnbody for now
             [{msgs, [WMsg, DWMsg]},
-             {updp, P#proc{procst = #kvvnodest{object = UpdObj}}}]
+             {updp, P#proc{procst = PS#kvvnodest{object = UpdObj}}}]
     end;
-kv_vnode(#msg{c = {handoff_to, To}},
-         #proc{name = Name, procst = #kvvnodest{object = CurObj}}) ->
-    %% Send current object to node if there is one
-    NewMsgs = case CurObj of
-                  undefined ->
+kv_vnode(#msg{c = {set_owner, Owner}},
+         #proc{procst = PS} = P) ->
+    [{updp, P#proc{procst = PS#kvvnodest{owner = Owner}}}];
+kv_vnode(#msg{c = handoff},
+         #proc{name = {kv_vnode, Idx, Node} = Name, 
+               procst = #kvvnodest{owner = Owner, object = CurObj}}) ->
+    %% Send current object back to the owner if there is one
+    NewMsgs = case {CurObj, Owner} of
+                  {undefined, _} -> %% Nothing to handoff
+                      [];
+                  {_, Node} -> %% Do not handoff to self
                       [];
                   _ ->
-                      [new_msg(Name, To, {handoff_obj, CurObj, handoff})]
+                      To = {kv_vnode, Idx, Owner},
+                      [new_msg(Name, To, {handoff_obj, CurObj})]
               end,
     [{msgs, NewMsgs}];
-kv_vnode(#msg{c = {ack_handoff, HandoffObj}, to = To},
-         #proc{procst = #kvvnodest{object = CurObj}} = P) ->
-    case {HandoffObj == CurObj, To} of  %% If ack is for current object, simulate vnode drop
-        {true, {kv_vnode, Idx, Node}} when Idx /= Node -> %% and not the owner
-            [{updp, P#proc{procst = #kvvnodest{object = undefined}}}];
-        _ ->
-            []
-    end;
-kv_vnode(#msg{from = From, c = {handoff_obj, HandoffObj, Why}},
-         #proc{name = Name, procst = #kvvnodest{object = CurObj}} = P) ->
+kv_vnode(#msg{from = From, c = {handoff_obj, HandoffObj}},
+         #proc{name = Name, procst = #kvvnodest{object = CurObj} = PS} = P) ->
     %% Simulate a do_diffobj_put
     UpdObj = case syntactic_put_merge(CurObj, HandoffObj) of
                  keep ->
@@ -804,8 +822,8 @@ kv_vnode(#msg{from = From, c = {handoff_obj, HandoffObj, Why}},
                  UpdObj0 ->
                      UpdObj0
              end,
-    AckMsg = case {Why, From /= final_handoff} of
-                 {handoff, true} ->
+    AckMsg = case From /= final_handoff of
+                 true ->
                      [new_msg(Name, From, {ack_handoff, HandoffObj})];
                  _ ->
                      []
@@ -814,7 +832,19 @@ kv_vnode(#msg{from = From, c = {handoff_obj, HandoffObj, Why}},
     %% Real syntactic put merge checks allow_mult here and applies, testing with 
     %% allow_mult is true so leave object
     [{msgs, AckMsg},
-     {updp, P#proc{procst = #kvvnodest{object = UpdObj}}}].
+     {updp, P#proc{procst = PS#kvvnodest{object = UpdObj}}}];
+kv_vnode(#msg{c = {ack_handoff, HandoffObj}},
+         #proc{name = {kv_vnode, _Idx, Node},
+               procst = #kvvnodest{owner = Owner, object = CurObj} = PS} = P) ->
+    case {HandoffObj == CurObj, Owner == Node} of 
+        %% If ack is for current object and this node is not the owner
+        {true, false} ->
+            [{updp, P#proc{procst = PS#kvvnodest{object = undefined}}}];
+        _ ->
+            []
+    end.
+
+
 
 syntactic_put_merge(CurObj, UpdObj) ->
     case CurObj of
