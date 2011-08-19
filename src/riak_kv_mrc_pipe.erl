@@ -345,6 +345,20 @@ send_inputs(Pipe, {Bucket, FilterExprs}, _Timeout) ->
         {ok, ReqId} -> send_key_list(Pipe, Bucket, ReqId);
         Error       -> Error
     end;
+send_inputs(Pipe, {index, Bucket, Index, Key}, Timeout) ->
+    Query = [{eq, Index, [Key]}],
+    NewInput = {modfun, riak_index, mapred_index, [Bucket, Query]},
+    send_inputs(Pipe, NewInput, Timeout);
+send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey}, Timeout) ->
+    Query = [{range, Index, [StartKey, EndKey]}],
+    NewInput = {modfun, riak_index, mapred_index, [Bucket, Query]},
+    send_inputs(Pipe, NewInput, Timeout);
+send_inputs(Pipe, {search, Bucket, Query}, Timeout) ->
+    NewInput = {modfun, riak_search, mapred_search, [Bucket, Query, []]},
+    send_inputs(Pipe, NewInput, Timeout);
+send_inputs(Pipe, {search, Bucket, Query, Filter}, Timeout) ->
+    NewInput = {modfun, riak_search, mapred_search, [Bucket, Query, Filter]},
+    send_inputs(Pipe, NewInput, Timeout);
 send_inputs(Pipe, {modfun, Mod, Fun, Arg} = Modfun, Timeout) ->
     try Mod:Fun(Pipe, Arg, Timeout) of
         {ok, Bucket, ReqId} ->

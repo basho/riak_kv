@@ -178,7 +178,7 @@ parse_search_input(Inputs) ->
     Bucket = proplists:get_value(<<"bucket">>, Inputs),
     Query = proplists:get_value(<<"query">>, Inputs),
     Filter = proplists:get_value(<<"filter">>, Inputs, []),
-    {ok, {modfun, riak_search, mapred_search, [Bucket, Query, Filter]}}.
+    {ok, {search, Bucket, Query, Filter}}.
 
 %% Allowed forms:
 %% {"input":{"bucket":BucketName, "index":IndexName, "key":SecondaryKey},
@@ -200,7 +200,7 @@ is_index_input(Inputs) when is_list(Inputs)->
 
     HasBucket andalso
       ((HasIndex andalso HasKey) orelse
-       (HasIndex andalso (HasStartKey orelse HasEndKey)));
+       (HasIndex andalso (HasStartKey andalso HasEndKey)));
 is_index_input(_) -> false.
 
 parse_index_input(Inputs) ->
@@ -212,11 +212,9 @@ parse_index_input(Inputs) ->
 
     if
         Key /= undefined ->
-            Query = [{eq, Index, [Key]}],
-            {ok, {modfun, riak_index, mapred_index, [Bucket, Query]}};
+            {ok, {index, Bucket, Index, Key}};
         StartKey /= undefined andalso EndKey /= undefined ->
-            Query = [{range, Index, [StartKey, EndKey]}],
-            {ok, {modfun, riak_index, mapred_index, [Bucket, Query]}};
+            {ok, {index, Bucket, Index, StartKey, EndKey}};
         true ->
             invalid_input_error(Inputs)
     end.
@@ -474,30 +472,26 @@ modfun_input_test() ->
 
 search_input_test() ->
     JSON1 = <<"{\"bucket\":\"mybucket\",\"query\":\"foo bar\"}">>,
-    Expected1 = {ok, {modfun, riak_search, mapred_search, [<<"mybucket">>, <<"foo bar">>, []]}},
+    Expected1 = {ok, {search, <<"mybucket">>, <<"foo bar">>, []}},
     ?assertEqual(Expected1, parse_inputs(mochijson2:decode(JSON1))),
 
     JSON2 = <<"{\"bucket\":\"mybucket\",\"query\":\"foo bar\", \"filter\":\"baz\"}">>,
-    Expected2 = {ok, {modfun, riak_search, mapred_search, [<<"mybucket">>, <<"foo bar">>, <<"baz">>]}},
+    Expected2 = {ok, {search, <<"mybucket">>, <<"foo bar">>, <<"baz">>}},
     ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))).
 
 index_input_test() ->
     JSON1 = <<"{\"bucket\":\"mybucket\",\"index\":\"myindex\", \"key\":\"mykey\"}">>,
-    Expected1 = {ok, {modfun, riak_index, mapred_index, [<<"mybucket">>, [{eq, <<"myindex">>, [<<"mykey">>]}]]}},
+    Expected1 = {ok, {index, <<"mybucket">>, <<"myindex">>, <<"mykey">>}},
     ?assertEqual(Expected1, parse_inputs(mochijson2:decode(JSON1))),
 
     JSON2 = <<"{\"bucket\":\"mybucket\",\"index\":\"myindex\", \"start\":\"mystart\", \"end\":\"myend\"}">>,
-    Expected2 = {ok, {modfun, riak_index, mapred_index, [<<"mybucket">>, [{range, <<"myindex">>, [<<"mystart">>, <<"myend">>]}]]}},
+    Expected2 = {ok, {index, <<"mybucket">>, <<"myindex">>, <<"mystart">>, <<"myend">>}},
     ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))).
 
 keyfilter_input_test() ->
-    JSON1 = <<"{\"bucket\":\"mybucket\",\"key_filters\":[[\"match\", \"key.*\"]]}">>,
-    Expected1 = {ok, {<<"mybucket">>, [[<<"match">>, <<"key.*">>]]}},
-    ?assertEqual(Expected1, parse_inputs(mochijson2:decode(JSON1))),
-
-    JSON2 = <<"{\"bucket\":\"mybucket\",\"index\":\"myindex\", \"start\":\"mystart\", \"end\":\"myend\"}">>,
-    Expected2 = {ok, {modfun, riak_index, mapred_index, [<<"mybucket">>, [{range, <<"myindex">>, [<<"mystart">>, <<"myend">>]}]]}},
-    ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))).
+    JSON = <<"{\"bucket\":\"mybucket\",\"key_filters\":[[\"match\", \"key.*\"]]}">>,
+    Expected = {ok, {<<"mybucket">>, [[<<"match">>, <<"key.*">>]]}},
+    ?assertEqual(Expected, parse_inputs(mochijson2:decode(JSON))).
 
 -define(DISCRETE_ERLANG_JOB, <<"{\"inputs\": [[\"foo\", \"bar\"]], \"query\":[{\"map\":{\"language\":\"erlang\","
                               "\"module\":\"foo\", \"function\":\"bar\", \"keep\": false}}]}">>).
