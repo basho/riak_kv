@@ -31,6 +31,7 @@
          stop/1,
          get/3,
          put/4,
+         put/5,
          delete/3,
          drop/1,
          fold_buckets/4,
@@ -136,6 +137,21 @@ get(Bucket, Key, #state{ref=Ref}=State) ->
                  {error, term(), state()}.
 put(Bucket, Key, Val, #state{ref=Ref}=State) ->
     BitcaskKey = term_to_binary({Bucket, Key}),
+    case bitcask:put(Ref, BitcaskKey, Val) of
+        ok ->
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
+
+%% @doc Insert an object with secondary index 
+%% information into the bitcask backend
+-type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
+-spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
+                 {ok, state()} |
+                 {error, term(), state()}.
+put(Bucket, PrimaryKey, _IndexSpecs, Val, #state{ref=Ref}=State) ->
+    BitcaskKey = term_to_binary({Bucket, PrimaryKey}),
     case bitcask:put(Ref, BitcaskKey, Val) of
         ok ->
             {ok, State};

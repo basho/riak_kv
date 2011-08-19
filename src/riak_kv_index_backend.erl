@@ -32,6 +32,7 @@
          stop/1,
          get/3,
          put/4,
+         put/5,
          delete/3,
          drop/1,
          fold_buckets/4,
@@ -49,7 +50,7 @@
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, []).
+-define(CAPABILITIES, [indexes]).
 
 -record(state, {
           kv_mod,       % The KV backend module.
@@ -60,6 +61,7 @@
 
 -opaque(state() :: #state{}).
 -type config() :: [{atom(), term()}].
+-type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
 
 %% ===================================================================
 %% Public API
@@ -132,22 +134,36 @@ get(Bucket, Key, #state{kv_mod = KVMod,
                         kv_state = KVState}) ->
     KVMod:get(Bucket, Key, KVState).
 
-%% @doc Index the Riak object using fields stored in metadata under
-%%       <<"index">>, then store the object in the KV backend.
+%% @doc Just store the object in the KV backend.
 -spec put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
 put(Bucket, Key, Val, #state{kv_mod = KVMod,
-                             kv_state = KVState,
-                             index_mod = IndexMod,
-                             index_state = IndexState}=State) ->
+                             kv_state = KVState}=State) ->
+    case do_kv_put(Bucket, Key, Val, KVMod, KVState) of
+        {ok, UpdKVState} ->
+            {ok, State#state{kv_state=UpdKVState}};
+        {error, Reason, UpdKVState} ->
+            {error, Reason, State#state{kv_state=UpdKVState}}
+    end.
+
+%% @doc Insert an object with secondary index 
+%% information into the bitcask backend
+-spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
+                 {ok, state()} |
+                 {error, term(), state()}.
+put(Bucket, PrimaryKey, IndexSpecs, Val, State=
+        #state{kv_mod = KVMod,
+               kv_state = KVState,
+               index_mod = IndexMod,
+               index_state = IndexState}) ->
     %% Since the two backends are separate, we can't have a true
     %% transaction. The best we can do for now is perform the index
     %% (which is the newer and more complicated code) and if that
     %% works, then perform the KV put.
-    case do_index_put(Bucket, Key, Val, IndexMod, IndexState) of
+    case do_index_put(Bucket, PrimaryKey, IndexSpecs, Val, IndexMod, IndexState) of
         ok ->
-            case do_kv_put(Bucket, Key, Val, KVMod, KVState) of
+            case do_kv_put(Bucket, PrimaryKey, Val, KVMod, KVState) of
                 {ok, UpdKVState} ->
                     {ok, State#state{kv_state=UpdKVState}};
                 {error, Reason, UpdKVState} ->
@@ -156,6 +172,7 @@ put(Bucket, Key, Val, #state{kv_mod = KVMod,
         {error, Reason1} ->
             {error, Reason1, State}
     end.
+
 
 %% @doc Delete the object from the Index backend and the KV backend.
 -spec delete(riak_object:bucket(), riak_object:key(), state()) ->
@@ -313,22 +330,11 @@ fold_index(#state{index_mod = IndexMod,
 %% @doc Index the BKey/Value in the Index backend.
 -spec do_index_put(riak_object:bucket(),
                    riak_object:key(),
+                   [index_spec()],
                    binary(),
                    module(),
                    term()) -> ok | {error, term()}.
-do_index_put(Bucket, Key, Val, IndexMod, IndexState) ->
-    %% Get the old proxy object. If it exists, then delete all of its
-    %% postings.
-    case IndexMod:lookup_sync(IndexState, Bucket, "_proxy", Key) of
-        [{Key, OldPostings}] ->
-            TS1 = riak_index:timestamp(),
-            OldPostings1 = [{Bucket, Field, Token, Key, TS1} || {Field, Token, _} <- OldPostings],
-            ok = IndexMod:delete(IndexState, OldPostings1),
-            riak_kv_stat:update({vnode_index_delete, length(OldPostings1)});
-        _ ->
-            skip
-    end,
-
+do_index_put(Bucket, PrimaryKey, IndexSpecs, Val, IndexMod, IndexState) ->
     %% We need the unserialized Riak Object in order to index. This is
     %% extra overhead.
     Obj = binary_to_term(Val),
@@ -337,24 +343,24 @@ do_index_put(Bucket, Key, Val, IndexMod, IndexState) ->
     %% already validated that the object parses correctly, so if we
     %% get anything back except for {ok, IndexFields} then fail
     %% loudly, as it's an unanticipated code path.
-    IndexFields = case riak_index:parse_object(Obj) of
+    ExistingIndexes = case riak_index:parse_object(Obj) of
                       {ok, IFs} ->
-                          %% No properties for now. This is here for future planning.
-                          EmptyProps = [],
-                          [{Field, Value, EmptyProps} || {Field, Value} <- IFs];
+                          [{remove, Field, Value} || {Field, Value} <- IFs];
                       {error, Reasons} ->
                           throw({error_parsing_index_fields, Reasons})
                   end,
-
-    %% Store the new proxy object. This is a single entry written to
-    %% merge_index under {Index, Field, Term} of {Bucket, "_proxy",
-    %% Key}. The DocID is also the Key, and the properties is a list
-    %% of postings.
-    TS2 = riak_index:timestamp(),
-    ok = IndexMod:index(IndexState, [{Bucket, "_proxy", Key, Key, IndexFields, TS2}]),
-
-    %% Store the new postings...
-    Postings = [{Bucket, Field, Token, Key, Props, TS2} || {Field, Token, Props} <- IndexFields],
+    AssemblePostings = 
+        fun({Op, Index, SecondaryKey}) ->
+                TS = riak_index:timestamp(),
+                case Op of
+                    add ->
+                        {Bucket, Index, SecondaryKey, PrimaryKey, [], TS};
+                    remove ->
+                        {Bucket, Index, SecondaryKey, PrimaryKey, undefined, TS}
+                end
+        end,
+    Postings = [AssemblePostings(IndexSpec) || 
+                   IndexSpec <- IndexSpecs ++ ExistingIndexes],
     try
         IndexMod:index(IndexState, Postings),
         riak_kv_stat:update({vnode_index_write, length(Postings)}),
@@ -363,7 +369,7 @@ do_index_put(Bucket, Key, Val, IndexMod, IndexState) ->
         _Type : Reason ->
             {error, Reason}
     end.
-
+                       
 %% @private
 %% @doc Store the BKey/Value in the KV backend.
 -spec do_kv_put(riak_object:bucket(),

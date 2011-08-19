@@ -48,6 +48,7 @@ behaviour_info(callbacks) ->
      {stop,1},        % (State)
      {get,3},         % (Bucket, Key, State)
      {put,4},         % (Bucket, Key, Val, State)
+     {put,5},         % (Bucket, Key, IndexSpecs, Val, State)
      {delete,3},      % (Bucket, Key, State)
      {drop,1},        % (State)
      {fold_buckets,4},% (FoldBucketsFun, Acc, Opts, State),
