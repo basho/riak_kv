@@ -450,7 +450,7 @@ object_size(Object) ->
 
 -ifdef(TEST).
 
-simple_test() ->
+simple_test_() ->
     riak_kv_backend:standard_test(?MODULE, []).
 
 ttl_test_() ->

@@ -293,12 +293,12 @@ get_status(Dir) ->
 %% ===================================================================
 -ifdef(TEST).
 
-simple_test() ->
+simple_test_() ->
     ?assertCmd("rm -rf test/eleveldb-backend"),
     application:set_env(eleveldb, data_root, "test/eleveldb-backend"),
     riak_kv_backend:standard_test(?MODULE, []).
 
-custom_config_test() ->
+custom_config_test_() ->
     ?assertCmd("rm -rf test/eleveldb-backend"),
     application:set_env(eleveldb, data_root, ""),
     riak_kv_backend:standard_test(?MODULE, [{data_root, "test/eleveldb-backend"}]).

@@ -454,13 +454,13 @@ data_directory_cleanup(DirPath) ->
 %% ===================================================================
 -ifdef(TEST).
 
-simple_test() ->
+simple_test_() ->
     ?assertCmd("rm -rf test/bitcask-backend"),
     application:set_env(bitcask, data_root, ""),
     riak_kv_backend:standard_test(?MODULE,
                                   [{data_root, "test/bitcask-backend"}]).
 
-custom_config_test() ->
+custom_config_test_() ->
     ?assertCmd("rm -rf test/bitcask-backend"),
     application:set_env(bitcask, data_root, ""),
     riak_kv_backend:standard_test(?MODULE,
