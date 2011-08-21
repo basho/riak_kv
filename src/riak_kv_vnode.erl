@@ -75,6 +75,7 @@
                 mod :: module(),
                 modstate :: term(),
                 mrjobs :: term(),
+                vnode_epoch :: undefined | integer(),
                 bucket_buf_size :: pos_integer(),
                 index_buf_size :: pos_integer(),
                 key_buf_size :: pos_integer(),
@@ -156,7 +157,7 @@ coord_put(IndexNode, BKey, Obj, ReqId, StartTime, Options, Sender)
                                       object = Obj,
                                       req_id = ReqId,
                                       start_time = StartTime,
-                                      options = [{coord, IndexNode} | Options]},
+                                      options = [coord | Options]},
                                    Sender,
                                    riak_kv_vnode_master).
 
@@ -200,6 +201,7 @@ init([Index]) ->
     BucketBufSize = app_helper:get_env(riak_kv, bucket_buffer_size, 1000),
     IndexBufSize = app_helper:get_env(riak_kv, index_buffer_size, 100),
     KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
+    {ok, VE} = get_vnode_epoch(Index),
 
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
@@ -210,6 +212,7 @@ init([Index]) ->
                         index_backend=IndexBackend,
                         mod=Mod,
                         modstate=ModState,
+                        vnode_epoch=VE
                         bucket_buf_size=BucketBufSize,
                         index_buf_size=IndexBufSize,
                         key_buf_size=KeyBufSize,
@@ -236,8 +239,8 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
     case proplists:get_value(coord, Options) of
         undefined ->
             UpdState = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State);
-        Coord ->
-            UpdState = do_coord_put(Sender, BKey, Object, ReqId, StartTime, Coord, Options, State)
+        true ->
+            UpdState = do_coord_put(Sender, BKey, Object, ReqId, StartTime, Options, State)
     end,
     {noreply, UpdState};
 
@@ -397,6 +400,8 @@ is_empty(State=#state{mod=Mod, modstate=ModState}) ->
     {Mod:is_empty(ModState), State}.
 
 delete(State=#state{mod=Mod, modstate=ModState}) ->
+    VnodeStatus = vnode_status_filename(Index),
+    ok = delete_vnode_status(VnodeStatus),
     case Mod:drop(ModState) of
         {ok, UpdModState} ->
             ok;
@@ -425,23 +430,24 @@ handle_exit(_Pid, Reason, State) ->
 %% Put for the coordinating vnode
 %% If returnbody is true or the vclock is incremented, return
 %% the updated object
-do_coord_put(Sender, {Bucket, Key}, UpdObj, ReqId, StartTime, {_CoordIdx, CoordNode}, Options,
+do_coord_put(Sender, {Bucket, Key}, UpdObj, ReqId, StartTime, _Options,
           #state{idx = Idx, mod = Mod, modstate = ModState}) ->
-    {Action, PutObj, ModState1} = 
+                    vnode_epoch = VE}) ->
+    CoordNode = {vc, node(), VE},
+    UpdObj1 = riak_object:increment_vclock(UpdObj, CoordNode, StartTime),
+    {PutObj, ModState1} = 
         case Mod:get(Bucket, Key, ModState) of
             {error, notfound, ModState0} ->
-                {replace, UpdObj, ModState0};
+                {UpdObj, ModState0};
             {ok, CurObj, ModState0} ->
-                {Action0, PutObj0} = coord_put_merge(binary_to_term(CurObj), UpdObj, 
+                {PutObj0 = coord_put_merge(binary_to_term(CurObj), UpdObj1, 
                                                      CoordNode, StartTime),
-                {Action0, PutObj0, ModState0}
+                {PutObj0, ModState0}
         end,
-    ReturnBody = proplists:get_value(returnbody, Options, false),
+    %ReturnBody = proplists:get_value(returnbody, Options, false),
     Result = case Mod:put(Bucket, Key, [], term_to_binary(PutObj), ModState1) of
-                 {ok, ModState2} when ReturnBody; Action == return ->
-                     {dw, Idx, PutObj, ReqId};
                  {ok, ModState2} ->
-                     {dw, Idx, ReqId};
+                     {dw, Idx, PutObj, ReqId};
                  {error, _Reason, ModState2} ->
                      {fail, Idx, ReqId}
              end,
@@ -459,9 +465,10 @@ coord_put_merge(CurObj, UpdObj, CoordId, Timestamp) ->
         vclock:descends(CurVC, UpdVC) == false andalso 
         vclock:descends(UpdVC, CurVC) == true of
         true ->
-            {replace, UpdObj};
+            UpdObj;
         false ->
-            {return, riak_object:increment_vclock(riak_object:merge(CurObj, UpdObj),CoordId, Timestamp)}
+            riak_object:increment_vclock(riak_object:merge(CurObj, UpdObj),
+                                         CoordId, Timestamp)
     end.
 
 get_counter(Id, VC) ->            
@@ -941,6 +948,45 @@ do_diffobj_put({Bucket, Key}, DiffObj,
     end.
 
 %% @private
+get_vnode_epoch(Index) ->
+    VnodeFile = vnode_status_filename(Index),
+    ok = filelib:ensure_dir(VnodeFile),
+    case read_vnode_status(VnodeFile) of
+        {ok, Status} ->
+            {ok, proplists:get_value(epoch, Status)};
+        {error, enoent} ->
+            create_vnode_status(VnodeFile);
+        ER ->
+            ER
+    end.
+
+vnode_status_filename(Index) ->
+    VnodeStatusDir = app_helper:get_env(riak_kv, vnode_status, "data/kv_vnode"),
+    filename:join(VnodeStatusDir, integer_to_list(Index)).
+    
+read_vnode_status(File) ->
+    case file:consult(File) of
+        {ok, [Status]} when is_list(Status) ->
+            {ok, Status};
+        ER ->
+            ER
+    end.
+
+create_vnode_status(File) -> 
+    {Mega, Sec, _Micro} = now(),
+    VE = 1000000*Mega + Sec,
+    Status = [{version, 1}, {epoch, VE}],
+    case file:write_file(File, io_lib:format("~p.", [Status])) of
+        ok ->
+            {ok, VE};
+        ER ->
+            ER
+    end.
+
+delete_vnode_status(File) ->
+    file:delete(File).
+
+
 
 -ifdef(TEST).
 
