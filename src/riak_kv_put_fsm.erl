@@ -267,13 +267,13 @@ precommit(timeout, State = #state{precommit = [Hook | Rest], robj = RObj}) ->
                                                 precommit = Rest}, 0}
     end.
 
-execute_local(timeout, StateData0=#state{robj=RObj0, req_id = ReqId,
+execute_local(timeout, StateData0=#state{robj=RObj, req_id = ReqId,
                                          timeout=Timeout, bkey=BKey,
-                                         coord_idx_node = {_Index, Node} = CoordIndexNode,
+                                         coord_idx_node = {_Index, _Node} = CoordIndexNode,
                                          vnode_options=VnodeOptions,
                                          putcore=PutCore,
                                          starttime = StartTime}) ->
-    RObj = riak_object:increment_vclock(RObj0, Node, StartTime),
+    %RObj = riak_object:increment_vclock(RObj0, Node, StartTime),
     TRef = schedule_timeout(Timeout),
     riak_kv_vnode:coord_put(CoordIndexNode, BKey, RObj, ReqId, StartTime, VnodeOptions),
     StateData = StateData0#state{robj = RObj, tref = TRef},

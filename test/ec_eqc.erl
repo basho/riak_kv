@@ -327,22 +327,22 @@ deliver_msg(#state{msgs = [#msg{to = To} = Msg | Msgs],
              S#state{procs = update_proc(UpdP, Procs),
                      history = History ++ [{deliver_msg, Msg}]}).
 
-%% make_params(#params{n = NSeed, r = R, w = W} = P) ->
-%%     %% Ensure R >= N, W >= N and R+W>N
-%%     MinN = lists:max([R, W]),
-%%     N = make_range(R + W - NSeed, MinN, R+W-1),
-%%     %% Force N to be odd while testing
-%%     {N1,R1} = case N rem 2 == 0 of
-%%                   true ->
-%%                       {N + 1, R + 1};
-%%                   false ->
-%%                       {N, R}
-%%               end,
-%%     P#params{n = N1, r = R1, m = N1, dw = W}. 
+make_params(#params{n = NSeed, r = R, w = W} = P) ->
+    %% Ensure R >= N, W >= N and R+W>N
+    MinN = lists:max([R, W]),
+    N = make_range(R + W - NSeed, MinN, R+W-1),
+    %% Force N to be odd while testing
+    {N1,R1} = case N rem 2 == 0 of
+                  true ->
+                      {N + 1, R + 1};
+                  false ->
+                      {N, R}
+              end,
+    P#params{n = N1, r = R1, m = N1, dw = W}. 
 %% make_params(#params{} = P) ->
 %%     P#params{n = 3, r = 2, m = 5, w = 2, dw = 2}.
-make_params(#params{} = P) ->
-    P#params{n = 1, r = 1, m = 2, w = 1, dw = 1}.
+%% make_params(#params{} = P) ->
+%%     P#params{n = 1, r = 1, m = 2, w = 1, dw = 1}.
 
 
 make_vnodes(#params{n = N, m = M}) ->
@@ -698,19 +698,13 @@ put_fsm(#msg{from = From, c = {put, PL, Obj}},
     %% Decide on the coordinating vnode and require that as part of the response.
     %% As indices are fixed, pick lowest index of primary node, falling back to 
     %% lowest index secondary node
-    {_, CoordIdx, Node} = hd(lists:sort([{case Idx == Node of
-                                              true -> 1; 
-                                              false -> 2
-                                          end, Idx, Node} ||
-                                            {kv_vnode, Idx, Node} <- PL])),
-    _Gen = dict:fetch(gen, riak_object:get_metadata(Obj)),
-    NodeId = {vc, CoordIdx, Node},
-    UpdObj = riak_object:increment_vclock(Obj, NodeId, ReqId),
+    {kv_vnode, CoordIdx, Node} = hd(PL),
+
     %% TODO, find some way to make putcore wait on the response from the local vnode.
     %% Temporarily set dw to all.
 
     %% Kick off requests to the vnodes
-    LocalMsg =  new_msg(Name, {kv_vnode, CoordIdx, Node}, {coord_put, ReqId, UpdObj, NodeId, Ts}),
+    LocalMsg =  new_msg(Name, {kv_vnode, CoordIdx, Node}, {coord_put, ReqId, Obj, Ts}),
     RemotePL = case [Entry || {kv_vnode, Idx0, _Node0} = Entry <- PL, Idx0 /= CoordIdx] of
                    [] ->
                        undefined;
@@ -720,7 +714,7 @@ put_fsm(#msg{from = From, c = {put, PL, Obj}},
     [{msgs, [LocalMsg]},
      {updp, P#proc{procst = ProcSt#putfsmst{putcore = riak_kv_put_core:coord_idx(CoordIdx, PutCore),
                                             remotepl = RemotePL,
-                                            putobj = UpdObj,
+                                            putobj = Obj,
                                             reply_to = From}}}];
 %% Handle local vnode response 
 put_fsm(#msg{from = {kv_vnode, _, _}, c = Result}, 
@@ -773,15 +767,24 @@ kv_vnode(#msg{from = From, c = {get, ReqId}},
                      {ok, CurObj}
              end,
     [{msgs, [new_msg(Name, From, {r, Result, Idx, ReqId})]}];
-kv_vnode(#msg{from = From, c = {coord_put, ReqId, NewObj, CoordId, Timestamp}},
-         #proc{name = {kv_vnode, Idx, _Node} = Name, 
-               procst = #kvvnodest{object = CurObj} = PS} = P) ->
+kv_vnode(#msg{from = From, c = {coord_put, ReqId, NewObj, Timestamp}},
+         #proc{name = {kv_vnode, Idx, Node} = Name, 
+               procst = #kvvnodest{start = Start0, object = CurObj} = PS} = P) ->
+    %% Change start when data written for the first time
+    Start = case CurObj of
+                undefined ->
+                    ReqId;
+                _ ->
+                    Start0
+            end,
     [Pri1, Pri2] = lists:sort([next_pri(), next_pri()]),
     WMsg = new_msg(Name, From, {w, Idx, ReqId}, Pri1),
-    UpdObj = coord_put_merge(CurObj, NewObj, CoordId, Timestamp),
+    NodeId = {vc, Start, Node},
+    NewObj1 = riak_object:increment_vclock(NewObj, NodeId, ReqId),
+    UpdObj = coord_put_merge(CurObj, NewObj1, NodeId, Timestamp),
     DWMsg = new_msg(Name, From, {dw, Idx, ReqId, UpdObj}, Pri2), % ignore returnbody for now
     [{msgs, [WMsg, DWMsg]},
-     {updp, P#proc{procst = PS#kvvnodest{object = UpdObj}}}];
+     {updp, P#proc{procst = PS#kvvnodest{start = Start, object = UpdObj}}}];
 kv_vnode(#msg{from = From, c = {put, ReqId, NewObj}},
          #proc{name = {kv_vnode, Idx, _Node} = Name, 
                procst = #kvvnodest{object = CurObj} = PS} = P) ->
@@ -799,7 +802,7 @@ kv_vnode(#msg{from = From, c = {put, ReqId, NewObj}},
 kv_vnode(#msg{c = {set_owner, Owner}},
          #proc{procst = PS} = P) ->
     [{updp, P#proc{procst = PS#kvvnodest{owner = Owner}}}];
-kv_vnode(#msg{c = handoff},
+kv_vnode(#msg{from = From, c = handoff},
          #proc{name = {kv_vnode, Idx, Node} = Name, 
                procst = #kvvnodest{owner = Owner, object = CurObj}}) ->
     %% Send current object back to the owner if there is one
@@ -810,10 +813,16 @@ kv_vnode(#msg{c = handoff},
                       [];
                   _ ->
                       To = {kv_vnode, Idx, Owner},
-                      [new_msg(Name, To, {handoff_obj, CurObj})]
+                      Reason = case From of
+                                   final_handoff ->
+                                       final_handoff;
+                                   _ ->
+                                       handoff
+                               end,
+                      [new_msg(Name, To, {handoff_obj, CurObj, Reason})]
               end,
     [{msgs, NewMsgs}];
-kv_vnode(#msg{from = From, c = {handoff_obj, HandoffObj}},
+kv_vnode(#msg{from = From, c = {handoff_obj, HandoffObj, Reason}},
          #proc{name = Name, procst = #kvvnodest{object = CurObj} = PS} = P) ->
     %% Simulate a do_diffobj_put
     UpdObj = case syntactic_put_merge(CurObj, HandoffObj) of
@@ -822,8 +831,8 @@ kv_vnode(#msg{from = From, c = {handoff_obj, HandoffObj}},
                  UpdObj0 ->
                      UpdObj0
              end,
-    AckMsg = case From /= final_handoff of
-                 true ->
+    AckMsg = case Reason of
+                 handoff ->
                      [new_msg(Name, From, {ack_handoff, HandoffObj})];
                  _ ->
                      []
@@ -862,21 +871,21 @@ syntactic_put_merge(CurObj, UpdObj) ->
     end.
 
 
-coord_put_merge(undefined, UpdObj, _CoordId, _Timestamp) ->
+coord_put_merge(undefined, UpdObj, _NodeId, _Timestamp) ->
     UpdObj;
-coord_put_merge(CurObj, UpdObj, CoordId, Timestamp) ->
-    %% Make sure UpdObj descends from CurObj and that CoordId is greater
+coord_put_merge(CurObj, UpdObj, NodeId, Timestamp) ->
+    %% Make sure UpdObj descends from CurObj and that NodeId is greater
     CurVC = riak_object:vclock(CurObj),
     UpdVC = riak_object:vclock(UpdObj),
 
     %% Valid coord put replacing current object
-    case get_counter(CoordId, UpdVC) > get_counter(CoordId, CurVC) andalso
+    case get_counter(NodeId, UpdVC) > get_counter(NodeId, CurVC) andalso
         vclock:descends(CurVC, UpdVC) == false andalso 
         vclock:descends(UpdVC, CurVC) == true of
         true ->
             UpdObj;
         false ->
-            riak_object:increment_vclock(riak_object:merge(CurObj, UpdObj),CoordId, Timestamp)
+            riak_object:increment_vclock(riak_object:merge(CurObj, UpdObj),NodeId, Timestamp)
     end.
 
 
