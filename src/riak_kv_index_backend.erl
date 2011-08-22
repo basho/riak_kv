@@ -333,21 +333,7 @@ fold_index(#state{index_mod = IndexMod,
                    binary(),
                    module(),
                    term()) -> ok | {error, term()}.
-do_index_put(Bucket, PrimaryKey, IndexSpecs, Val, IndexMod, IndexState) ->
-    %% We need the unserialized Riak Object in order to index. This is
-    %% extra overhead.
-    Obj = binary_to_term(Val),
-
-    %% Pull the IndexFields from the object. At this point, we've
-    %% already validated that the object parses correctly, so if we
-    %% get anything back except for {ok, IndexFields} then fail
-    %% loudly, as it's an unanticipated code path.
-    ExistingIndexes = case riak_index:parse_object(Obj) of
-                      {ok, IFs} ->
-                          [{remove, Field, Value} || {Field, Value} <- IFs];
-                      {error, Reasons} ->
-                          throw({error_parsing_index_fields, Reasons})
-                  end,
+do_index_put(Bucket, PrimaryKey, IndexSpecs, _Val, IndexMod, IndexState) ->
     AssemblePostings = 
         fun({Op, Index, SecondaryKey}) ->
                 TS = riak_index:timestamp(),
@@ -358,8 +344,7 @@ do_index_put(Bucket, PrimaryKey, IndexSpecs, Val, IndexMod, IndexState) ->
                         {Bucket, Index, SecondaryKey, PrimaryKey, undefined, TS}
                 end
         end,
-    Postings = [AssemblePostings(IndexSpec) || 
-                   IndexSpec <- IndexSpecs ++ ExistingIndexes],
+    Postings = [AssemblePostings(IndexSpec) || IndexSpec <- IndexSpecs],
     try
         IndexMod:index(IndexState, Postings),
         riak_kv_stat:update({vnode_index_write, length(Postings)}),
