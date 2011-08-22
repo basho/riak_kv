@@ -76,10 +76,14 @@
                 key_buf_size :: pos_integer(),
                 in_handoff = false :: boolean()}).
 
+-type index_op() :: add | remove.
+-type index_value() :: integer() | binary().
+
 -record(putargs, {returnbody :: boolean(),
                   lww :: boolean(),
                   bkey :: {binary(), binary()},
                   robj :: term(),
+                  index_specs=[] :: [{index_op(), binary(), index_value()}],
                   reqid :: non_neg_integer(),
                   bprops :: maybe_improper_list(),
                   starttime :: non_neg_integer(),
@@ -408,22 +412,25 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        bprops=BProps,
                        starttime=StartTime,
                        prunetime=PruneTime},
-    Reply = perform_put(prepare_put(State, PutArgs), State, PutArgs),
+    {PrepPutRes, UpdPutArgs} = prepare_put(State, PutArgs),
+    Reply = perform_put(PrepPutRes, State, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
     riak_kv_stat:update(vnode_put).
 
-prepare_put(#state{}, #putargs{lww=true, robj=RObj}) ->
-    {true, RObj};
-prepare_put(#state{mod=Mod,modstate=ModState}, #putargs{bkey=BKey,
-                                                        robj=RObj,
-                                                        reqid=ReqID,
-                                                        bprops=BProps,
-                                                        starttime=StartTime,
-                                                        prunetime=PruneTime}) ->
+prepare_put(#state{}, PutArgs=#putargs{lww=true, robj=RObj}) ->
+    %% @TODO Check for and merge indexes
+    {{true, RObj}, PutArgs};
+prepare_put(#state{mod=Mod,modstate=ModState},
+            PutArgs=#putargs{bkey=BKey,
+                             robj=RObj,
+                             reqid=ReqID,
+                             bprops=BProps,
+                             starttime=StartTime,
+                             prunetime=PruneTime}) ->
     case syntactic_put_merge(Mod, ModState, BKey, RObj, ReqID, StartTime) of
-        {oldobj, OldObj} ->
-            {false, OldObj};
-        {newobj, NewObj} ->
+        {oldobj, OldObj, IndexSpecs} ->
+            {{false, OldObj}, PutArgs#putargs{index_specs=IndexSpecs}};
+        {newobj, NewObj, IndexSpecs} ->
             VC = riak_object:vclock(NewObj),
             AMObj = enforce_allow_mult(NewObj, BProps),
             case PruneTime of
@@ -435,17 +442,41 @@ prepare_put(#state{mod=Mod,modstate=ModState}, #putargs{bkey=BKey,
                                    vclock:prune(VC,PruneTime,BProps)
                                   )
             end,
-            {true, ObjToStore}
+            {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs}}
     end.
 
 perform_put({false, Obj},#state{idx=Idx},#putargs{returnbody=true,reqid=ReqID}) ->
     {dw, Idx, Obj, ReqID};
 perform_put({false, _Obj}, #state{idx=Idx}, #putargs{returnbody=false,reqid=ReqId}) ->
     {dw, Idx, ReqId};
-perform_put({true, Obj}, #state{idx=Idx,mod=Mod,modstate=ModState},
-            #putargs{returnbody=RB, bkey={Bucket, Key}, reqid=ReqID}) ->
+perform_put({true, Obj},
+            #state{idx=Idx,
+                   mod=Mod,
+                   modstate=ModState},
+            #putargs{returnbody=RB,
+                     bkey={Bucket, Key},
+                     reqid=ReqID,
+                     index_specs=[]}) ->
     Val = term_to_binary(Obj),
     case Mod:put(Bucket, Key, Val, ModState) of
+        {ok, _UpdModstate} ->
+            case RB of
+                true -> {dw, Idx, Obj, ReqID};
+                false -> {dw, Idx, ReqID}
+            end;
+        {error, _Reason, _UpdModState} ->
+            {fail, Idx, ReqID}
+    end;
+perform_put({true, Obj},
+            #state{idx=Idx,
+                   mod=Mod,
+                   modstate=ModState},
+            #putargs{returnbody=RB,
+                     bkey={Bucket, Key},
+                     reqid=ReqID,
+                     index_specs=IndexSpecs}) ->
+    Val = term_to_binary(Obj),
+    case Mod:put(Bucket, Key, IndexSpecs, Val, ModState) of
         {ok, _UpdModstate} ->
             case RB of
                 true -> {dw, Idx, Obj, ReqID};
@@ -486,15 +517,19 @@ syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId) ->
     syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId, vclock:timestamp()).
 
 syntactic_put_merge(Mod, ModState, {Bucket, Key}, Obj1, ReqId, StartTime) ->
+    NewIndexSpecs = riak_object:get_index_specs(Obj1, add),
     case Mod:get(Bucket, Key, ModState) of
-        {error, not_found, _UpdModState} -> {newobj, Obj1};
+        {error, not_found, _UpdModState} ->
+            {newobj, Obj1, NewIndexSpecs};
         {ok, Val0, _UpdModState} ->
             Obj0 = binary_to_term(Val0),
+            OldIndexSpecs = riak_object:get_index_specs(Obj1, remove),
+            IndexSpecs = OldIndexSpecs ++ NewIndexSpecs,
             ResObj = riak_object:syntactic_merge(
                        Obj0,Obj1,term_to_binary(ReqId), StartTime),
             case riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
-                true -> {oldobj, ResObj};
-                false -> {newobj, ResObj}
+                true -> {oldobj, ResObj, IndexSpecs};
+                false -> {newobj, ResObj, IndexSpecs}
             end
     end.
 
@@ -711,6 +746,8 @@ index_query(Sender, Bucket, Query, Filter, Mod, ModState) ->
     QueryResults = Mod:fold_index(ModState, Bucket, Query),
     case Filter of
         none ->
+            riak_core_vnode:reply(Sender, {final_results, {Bucket, QueryResults}});
+        _ when QueryResults =:= [] ->
             riak_core_vnode:reply(Sender, {final_results, {Bucket, QueryResults}});
         _ ->
             FilteredResults = lists:foldl(Filter, [], QueryResults),
