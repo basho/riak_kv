@@ -284,9 +284,8 @@ callback(Ref, Msg, #state{kv_mod = KVMod,
     %% response, no error handling, return 'ok'.
 
     {ok, UpdKVState} = KVMod:callback(Ref, Msg, KVState),
-    {ok, UpdIndexState} = IndexMod:callback(Ref, Msg, IndexState),
-    {ok, State#state{kv_state=UpdKVState,
-                     index_state=UpdIndexState}}.
+    ok = IndexMod:callback(Ref, Msg, IndexState),
+    {ok, State#state{kv_state=UpdKVState}}.
 
 %% @doc Pass the fold_index request through to the Index backend.
 %% @TODO This function is temporary and will be removed in the next
