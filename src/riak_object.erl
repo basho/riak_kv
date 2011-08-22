@@ -51,6 +51,9 @@
          }).
 -opaque riak_object() :: #r_object{}.
 
+-type index_op() :: add | remove.
+-type index_value() :: integer() | binary().
+
 -define(MAX_KEY_SIZE, 65536).
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
@@ -60,6 +63,7 @@
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([merge/2, apply_updates/1, syntactic_merge/3, syntactic_merge/4]).
 -export([to_json/1, from_json/1]).
+-export([get_index_specs/2]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 
 %% @doc Constructor for new riak objects.
@@ -322,6 +326,20 @@ increment_vclock(Object=#r_object{}, ClientId) ->
 -spec increment_vclock(riak_object(), vclock:vclock_node(), vclock:timestamp()) -> riak_object().
 increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
     Object#r_object{vclock=vclock:increment(ClientId, Timestamp, Object#r_object.vclock)}.
+
+%% @doc Prepare a list of index specifications
+%% to pass to the backend.
+-spec get_index_specs(riak_object(), index_op()) ->
+                             [{index_op(), binary(), index_value()}].
+get_index_specs(RObj, IndexOp) ->
+    MD = riak_object:get_metadata(RObj),
+    case dict:is_key(?MD_INDEX, MD) of
+        true ->
+            Indexes = dict:fetch(?MD_INDEX, MD),
+            [{IndexOp, Index, Value} || {Index, Value} <- Indexes]; 
+        false ->
+            []
+    end.
 
 %% @spec set_contents(riak_object(), [{dict(), value()}]) -> riak_object()
 %% @doc  INTERNAL USE ONLY.  Set the contents of riak_object to the
