@@ -69,6 +69,7 @@
                 target :: pid()}).
 
 -record(state, {idx :: partition(),
+                index_backend :: boolean(),
                 mod :: module(),
                 modstate :: term(),
                 mrjobs :: term(),
@@ -181,7 +182,11 @@ init([Index]) ->
 
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
+            %% Get the backend capabilities
+            {_, Capabilities} = Mod:api_version(),
+            IndexBackend = lists:member(indexes, Capabilities),
             {ok, #state{idx=Index,
+                        index_backend=IndexBackend,
                         mod=Mod,
                         modstate=ModState,
                         bucket_buf_size=BucketBufSize,
@@ -417,19 +422,44 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     riak_core_vnode:reply(Sender, Reply),
     riak_kv_stat:update(vnode_put).
 
-prepare_put(#state{}, PutArgs=#putargs{lww=true, robj=RObj}) ->
-    %% @TODO Check for and merge indexes
+prepare_put(#state{index_backend=false}, PutArgs=#putargs{lww=true, robj=RObj}) ->
     {{true, RObj}, PutArgs};
-prepare_put(#state{mod=Mod,modstate=ModState},
+prepare_put(#state{index_backend=true,
+                   mod=Mod,
+                   modstate=ModState},
+            PutArgs=#putargs{bkey=BKey,
+                             lww=true,
+                             robj=RObj}) ->
+    %% Check for and merge indexes
+    IndexSpecs = get_index_specs(Mod, ModState, BKey, RObj),
+    {{true, RObj}, PutArgs#putargs{index_specs=IndexSpecs}};
+prepare_put(#state{index_backend=IndexBackend,
+                   mod=Mod,
+                   modstate=ModState},
             PutArgs=#putargs{bkey=BKey,
                              robj=RObj,
                              reqid=ReqID,
                              bprops=BProps,
                              starttime=StartTime,
                              prunetime=PruneTime}) ->
-    case syntactic_put_merge(Mod, ModState, BKey, RObj, ReqID, StartTime) of
+    case syntactic_put_merge(Mod, ModState, BKey, RObj, ReqID, IndexBackend, StartTime) of
+        {oldobj, OldObj} ->
+            {{false, OldObj}, PutArgs};
         {oldobj, OldObj, IndexSpecs} ->
             {{false, OldObj}, PutArgs#putargs{index_specs=IndexSpecs}};
+        {newobj, NewObj} ->
+            VC = riak_object:vclock(NewObj),
+            AMObj = enforce_allow_mult(NewObj, BProps),
+            case PruneTime of
+                undefined ->
+                    ObjToStore = AMObj;
+                _ ->
+                    ObjToStore = riak_object:set_vclock(
+                                   AMObj,
+                                   vclock:prune(VC,PruneTime,BProps)
+                                  )
+            end,
+            {{true, ObjToStore}, PutArgs};
         {newobj, NewObj, IndexSpecs} ->
             VC = riak_object:vclock(NewObj),
             AMObj = enforce_allow_mult(NewObj, BProps),
@@ -451,12 +481,12 @@ perform_put({false, _Obj}, #state{idx=Idx}, #putargs{returnbody=false,reqid=ReqI
     {dw, Idx, ReqId};
 perform_put({true, Obj},
             #state{idx=Idx,
+                   index_backend=false,
                    mod=Mod,
                    modstate=ModState},
             #putargs{returnbody=RB,
                      bkey={Bucket, Key},
-                     reqid=ReqID,
-                     index_specs=[]}) ->
+                     reqid=ReqID}) ->
     Val = term_to_binary(Obj),
     case Mod:put(Bucket, Key, Val, ModState) of
         {ok, _UpdModstate} ->
@@ -513,17 +543,30 @@ select_newest_content(Mult) ->
          Mult)).
 
 %% @private
-syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId) ->
-    syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId, vclock:timestamp()).
+syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId, IndexBackend) ->
+    syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId, IndexBackend, vclock:timestamp()).
 
-syntactic_put_merge(Mod, ModState, {Bucket, Key}, Obj1, ReqId, StartTime) ->
+syntactic_put_merge(Mod, ModState, {Bucket, Key}, Obj1, ReqId, false, StartTime) ->
+    case Mod:get(Bucket, Key, ModState) of
+        {error, not_found, _UpdModState} ->
+            {newobj, Obj1};
+        {ok, Val0, _UpdModState} ->
+            Obj0 = binary_to_term(Val0),
+            ResObj = riak_object:syntactic_merge(
+                       Obj0,Obj1,term_to_binary(ReqId), StartTime),
+            case riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
+                true -> {oldobj, ResObj};
+                false -> {newobj, ResObj}
+            end
+    end;
+syntactic_put_merge(Mod, ModState, {Bucket, Key}, Obj1, ReqId, true, StartTime) ->
     NewIndexSpecs = riak_object:get_index_specs(Obj1, add),
     case Mod:get(Bucket, Key, ModState) of
         {error, not_found, _UpdModState} ->
             {newobj, Obj1, NewIndexSpecs};
         {ok, Val0, _UpdModState} ->
             Obj0 = binary_to_term(Val0),
-            OldIndexSpecs = riak_object:get_index_specs(Obj1, remove),
+            OldIndexSpecs = riak_object:get_index_specs(Obj0, remove),
             IndexSpecs = OldIndexSpecs ++ NewIndexSpecs,
             ResObj = riak_object:syntactic_merge(
                        Obj0,Obj1,term_to_binary(ReqId), StartTime),
@@ -531,6 +574,18 @@ syntactic_put_merge(Mod, ModState, {Bucket, Key}, Obj1, ReqId, StartTime) ->
                 true -> {oldobj, ResObj, IndexSpecs};
                 false -> {newobj, ResObj, IndexSpecs}
             end
+    end.
+
+%% @private
+get_index_specs(Mod, ModState, {Bucket, Key}, Obj1) ->
+    NewIndexSpecs = riak_object:get_index_specs(Obj1, add),
+    case Mod:get(Bucket, Key, ModState) of
+        {error, not_found, _UpdModState} ->
+            NewIndexSpecs;
+        {ok, Val0, _UpdModState} ->
+            Obj0 = binary_to_term(Val0),
+            OldIndexSpecs = riak_object:get_index_specs(Obj0, remove),
+            OldIndexSpecs ++ NewIndexSpecs
     end.
 
 %% @private
@@ -781,9 +836,11 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
 %% @private
 % upon receipt of a handoff datum, there is no client FSM
 do_diffobj_put(BKey={Bucket, Key}, DiffObj,
-       _StateData=#state{mod=Mod,modstate=ModState}) ->
+       _StateData=#state{index_backend=IndexBackend,
+                         mod=Mod,
+                         modstate=ModState}) ->
     ReqID = erlang:phash2(erlang:now()),
-    case syntactic_put_merge(Mod, ModState, BKey, DiffObj, ReqID) of
+    case syntactic_put_merge(Mod, ModState, BKey, DiffObj, ReqID, IndexBackend) of
         {newobj, NewObj} ->
             AMObj = enforce_allow_mult(NewObj, riak_core_bucket:get_bucket(Bucket)),
             Val = term_to_binary(AMObj),
