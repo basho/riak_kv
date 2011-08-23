@@ -72,7 +72,7 @@ new(B, K, V) when is_binary(B), is_binary(K) ->
     new(B, K, V, no_initial_metadata).
 
 %% @doc Constructor for new riak objects with an initial content-type.
--spec new(Bucket::bucket(), Key::key(), Value::value(), 
+-spec new(Bucket::bucket(), Key::key(), Value::value(),
           string() | dict() | no_initial_metadata) -> riak_object().
 new(B, K, V, C) when is_binary(B), is_binary(K), is_list(C) ->
     new(B, K, V, dict:from_list([{?MD_CTYPE, C}]));
@@ -332,14 +332,13 @@ increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
 -spec get_index_specs(riak_object(), index_op()) ->
                              [{index_op(), binary(), index_value()}].
 get_index_specs(RObj, IndexOp) ->
-    MD = riak_object:get_metadata(RObj),
-    case dict:is_key(?MD_INDEX, MD) of
-        true ->
-            Indexes = dict:fetch(?MD_INDEX, MD),
-            [{IndexOp, Index, Value} || {Index, Value} <- Indexes]; 
-        false ->
-            []
-    end.
+    MetaDatas = get_metadatas(RObj),
+    IndexSpecs = 
+        [begin
+             Indexes = dict:fetch(?MD_INDEX, MD),
+             [{IndexOp, Index, Value} || {Index, Value} <- Indexes]
+         end || MD <- MetaDatas, dict:is_key(?MD_INDEX, MD)],
+    lists:flatten(IndexSpecs).
 
 %% @spec set_contents(riak_object(), [{dict(), value()}]) -> riak_object()
 %% @doc  INTERNAL USE ONLY.  Set the contents of riak_object to the
