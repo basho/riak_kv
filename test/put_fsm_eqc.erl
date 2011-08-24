@@ -823,7 +823,6 @@ start_javascript() ->
 
 cleanup_javascript() ->
     application:stop(erlang_js),
-    application:unload(erlang_js),
     application:stop(sasl).
 
 -endif. % EQC

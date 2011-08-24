@@ -180,8 +180,7 @@ start_mock_servers() ->
             riak_kv_test_util:wait_for_pid(Pid2)
     end,
     {ok, _Pid3} = fsm_eqc_vnode:start_link(),
-    application:unload(riak_core),
-    ok = application:load(riak_core),
+    application:load(riak_core),
     application:start(crypto),
     riak_core_ring_events:start_link(),
     riak_core_node_watcher_events:start_link(),
@@ -190,7 +189,7 @@ start_mock_servers() ->
     ok.
 
 cleanup_mock_servers() ->
-    application:unload(riak_core).
+    application:stop(riak_core).
 
 make_options([], Options) ->
     Options;

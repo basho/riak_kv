@@ -278,7 +278,7 @@ eqc_test() ->
 
     %% cleanup
     crypto:stop(),
-    application:unload(riak_core),
+    application:stop(riak_core),
     unlink(P1),
     unlink(P2),
     catch exit(P1, kill),
@@ -317,7 +317,7 @@ extra_callback_test() ->
     {ok, State} = start(0, Config),
     callback(State, make_ref(), ignore_me),
     stop(State),
-    application:unload(bitcask).
+    application:stop(bitcask).
     
            
 bad_config_test() ->     
