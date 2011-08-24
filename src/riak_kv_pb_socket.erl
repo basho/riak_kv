@@ -400,36 +400,20 @@ process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
     end.
 
 pipe_mapreduce(Req, State, Inputs, Query, _Timeout) ->
-    case valid_mapred_inputs(Inputs) of
-        true ->
-            {{ok, Pipe}, _NumKeeps} =
-                riak_kv_mrc_pipe:mapred_stream(Query),
-            case riak_kv_mrc_pipe:send_inputs(Pipe, Inputs) of
-                ok ->
-                    Ref = (Pipe#pipe.sink)#fitting.ref,
-                    %% TODO: timeout
-                    {pause, State#state{req=Req, req_ctx=Ref}};
-                Error ->
-                    %% even if the structure looks right, it might name
-                    %% a non-existent key filter or something
-                    riak_pipe:eoi(Pipe),
-                    lager:error("Error sending inputs: ~p", [Error]),
-                    send_error("~p", [bad_mapred_inputs], State)
-            end;
-        false ->
+    {{ok, Pipe}, _NumKeeps} =
+        riak_kv_mrc_pipe:mapred_stream(Query),
+    case riak_kv_mrc_pipe:send_inputs(Pipe, Inputs) of
+        ok ->
+            Ref = (Pipe#pipe.sink)#fitting.ref,
+            %% TODO: timeout
+            {pause, State#state{req=Req, req_ctx=Ref}};
+        Error ->
+            %% even if the structure looks right, it might name
+            %% a non-existent key filter or something
+            riak_pipe:eoi(Pipe),
+            lager:error("Error sending inputs: ~p", [Error]),
             send_error("~p", [bad_mapred_inputs], State)
     end.
-
-valid_mapred_inputs(Inputs) ->
-    is_binary(Inputs) orelse         %% bucket
-        is_list(Inputs) orelse       %% bucket/key pairs (+/- keydata)
-        is_key_filter(Inputs) orelse %% key filter
-                                     %% dynamic inputs
-        (is_tuple(Inputs) andalso size(Inputs)==4 andalso
-         element(1, Inputs) == modfun andalso
-         is_atom(element(2, Inputs)) andalso
-         is_atom(element(3, Inputs))).
-        
 
 legacy_mapreduce(#rpbmapredreq{content_type=ContentType}=Req,
                  #state{client=C}=State, Inputs, Query, Timeout) ->

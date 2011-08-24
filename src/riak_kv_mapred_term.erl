@@ -24,7 +24,7 @@
 
 -module(riak_kv_mapred_term).
 
--export([parse_request/1]).
+-export([parse_request/1, valid_inputs/1]).
 
 -define(DEFAULT_TIMEOUT, 60000).
 
@@ -60,17 +60,25 @@ parse_request(BinReq) ->
 %%                        |bucket()
 %%                        |{bucket(), list()}
 %%                        |{modfun, atom(), atom(), list()}
-valid_inputs(Bucket) when is_binary(Bucket) ->    
+valid_inputs(Bucket) when is_binary(Bucket) ->
     ok;
 valid_inputs(Targets) when is_list(Targets) ->
     valid_input_targets(Targets);
 valid_inputs({modfun, Module, Function, _Options})
   when is_atom(Module), is_atom(Function) ->
     ok;
+valid_inputs({index, _Bucket, _Index, _Key}) ->
+    ok;
+valid_inputs({index, _Bucket, _Index, _StartKey, _EndKey}) ->
+    ok;
+valid_inputs({search, _Bucket, _Query}) ->
+    ok;
+valid_inputs({search, _Bucket, _Query, _Filter}) ->
+    ok;
 valid_inputs({Bucket, Filters}) when is_binary(Bucket), is_list(Filters) ->
     ok;
 valid_inputs(Invalid) ->
-    {error, {"Inputs must be a binary bucket, a tuple of bucket and key-filters, a list of target tuples, or a modfun tuple:", Invalid}}.
+    {error, {"Inputs must be a binary bucket, a tuple of bucket and key-filters, a list of target tuples, or a search, index, or modfun tuple:", Invalid}}.
 
 %% @type bucket_key() = {binary(), binary()}
 %%                     |{{binary(), binary()}, term()}
