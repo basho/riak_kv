@@ -144,8 +144,10 @@ put(Bucket, Key, Val, #state{ref=Ref}=State) ->
             {error, Reason, State}
     end.
 
-%% @doc Insert an object with secondary index 
-%% information into the bitcask backend
+%% @doc Insert an object into the bitcask backend.
+%% NOTE: The bitcask backend does not currently support
+%% secondary indexing. This function is only here
+%% to conform to the backend API specification.
 -type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
 -spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
                  {ok, state()} |
