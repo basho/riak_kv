@@ -145,13 +145,13 @@ readrepair(Preflist, BKey, Obj, ReqId, StartTime, Options) ->
     put(Preflist, BKey, Obj, ReqId, StartTime, [rr | Options], ignore).
 
 list_keys(Preflist, ReqId, Caller, Bucket) ->
-  riak_core_vnode_master:command(Preflist,
-                                 #riak_kv_listkeys_req_v2{
-                                    bucket=Bucket,
-                                    req_id=ReqId,
-                                    caller=Caller},
-                                 ignore,
-                                 riak_kv_vnode_master).
+    riak_core_vnode_master:command(Preflist,
+                                   #riak_kv_listkeys_req_v2{
+                                     bucket=Bucket,
+                                     req_id=ReqId,
+                                     caller=Caller},
+                                   ignore,
+                                   riak_kv_vnode_master).
 
 fold(Preflist, Fun, Acc0) ->
     %% The function used for object folding expects the
@@ -219,7 +219,7 @@ handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
 handle_command(?KV_MGET_REQ{bkeys=BKeys, req_id=ReqId, from=From}, _Sender, State) ->
     do_mget(From, BKeys, ReqId, State);
 handle_command(#riak_kv_listkeys_req_v1{bucket=Bucket, req_id=ReqId}, _Sender,
-                State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
+               State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
     do_legacy_list_bucket(ReqId,Bucket,Mod,ModState,Idx,State);
 handle_command(#riak_kv_listkeys_req_v2{bucket=Bucket, req_id=ReqId, caller=Caller}, _Sender,
                State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
@@ -293,7 +293,7 @@ handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
     list_buckets(Sender, Filter, Mod, ModState, BucketBufSize),
     {noreply, State};
 handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
-                                  item_filter=ItemFilter},
+                                 item_filter=ItemFilter},
                 FilterVNodes,
                 Sender,
                 State=#state{idx=Index,
@@ -396,11 +396,11 @@ handle_exit(_Pid, Reason, State) ->
 %% old vnode helper functions
 
 
-%store_call(State=#state{mod=Mod, modstate=ModState}, Msg) ->
-%    Mod:call(ModState, Msg).
+                                                %store_call(State=#state{mod=Mod, modstate=ModState}, Msg) ->
+                                                %    Mod:call(ModState, Msg).
 
 %% @private
-% upon receipt of a client-initiated put
+                                                % upon receipt of a client-initiated put
 do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     case proplists:get_value(bucket_props, Options) of
         undefined ->
@@ -449,23 +449,8 @@ prepare_put(#state{index_backend=IndexBackend,
                              starttime=StartTime,
                              prunetime=PruneTime}) ->
     case syntactic_put_merge(Mod, ModState, BKey, RObj, ReqID, IndexBackend, StartTime) of
-        {oldobj, OldObj} ->
-            {{false, OldObj}, PutArgs};
         {oldobj, OldObj, IndexSpecs} ->
             {{false, OldObj}, PutArgs#putargs{index_specs=IndexSpecs}};
-        {newobj, NewObj} ->
-            VC = riak_object:vclock(NewObj),
-            AMObj = enforce_allow_mult(NewObj, BProps),
-            case PruneTime of
-                undefined ->
-                    ObjToStore = AMObj;
-                _ ->
-                    ObjToStore = riak_object:set_vclock(
-                                   AMObj,
-                                   vclock:prune(VC,PruneTime,BProps)
-                                  )
-            end,
-            {{true, ObjToStore}, PutArgs};
         {newobj, NewObj, IndexSpecs} ->
             VC = riak_object:vclock(NewObj),
             AMObj = enforce_allow_mult(NewObj, BProps),
@@ -487,24 +472,6 @@ perform_put({false, _Obj}, #state{idx=Idx}, #putargs{returnbody=false,reqid=ReqI
     {dw, Idx, ReqId};
 perform_put({true, Obj},
             #state{idx=Idx,
-                   index_backend=false,
-                   mod=Mod,
-                   modstate=ModState},
-            #putargs{returnbody=RB,
-                     bkey={Bucket, Key},
-                     reqid=ReqID}) ->
-    Val = term_to_binary(Obj),
-    case Mod:put(Bucket, Key, Val, ModState) of
-        {ok, _UpdModstate} ->
-            case RB of
-                true -> {dw, Idx, Obj, ReqID};
-                false -> {dw, Idx, ReqID}
-            end;
-        {error, _Reason, _UpdModState} ->
-            {fail, Idx, ReqID}
-    end;
-perform_put({true, Obj},
-            #state{idx=Idx,
                    mod=Mod,
                    modstate=ModState},
             #putargs{returnbody=RB,
@@ -512,7 +479,7 @@ perform_put({true, Obj},
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
     Val = term_to_binary(Obj),
-    case Mod:put(Bucket, Key, IndexSpecs ++ [{add,<<"field2_int">>,1003}], Val, ModState) of
+    case Mod:put(Bucket, Key, IndexSpecs, Val, ModState) of
         {ok, _UpdModstate} ->
             case RB of
                 true -> {dw, Idx, Obj, ReqID};
@@ -552,33 +519,33 @@ select_newest_content(Mult) ->
 syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId, IndexBackend) ->
     syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId, IndexBackend, vclock:timestamp()).
 
-syntactic_put_merge(Mod, ModState, {Bucket, Key}, Obj1, ReqId, false, StartTime) ->
+syntactic_put_merge(Mod, ModState, {Bucket, Key}, Obj1, ReqId, IndexBackend, StartTime) ->
     case Mod:get(Bucket, Key, ModState) of
         {error, not_found, _UpdModState} ->
-            {newobj, Obj1};
+            case IndexBackend of
+                true ->
+                    NewIndexSpecs = riak_object:get_index_specs(Obj1, add),
+                    {newobj, Obj1, NewIndexSpecs};
+                false ->
+                    {newobj, Obj1, []}
+            end;
         {ok, Val0, _UpdModState} ->
             Obj0 = binary_to_term(Val0),
-            ResObj = riak_object:syntactic_merge(
-                       Obj0,Obj1,term_to_binary(ReqId), StartTime),
+            case IndexBackend of
+                true ->
+                    IndexSpecs = riak_object:resolve_index_specs(Obj0, Obj1);
+                false ->
+                    IndexSpecs = []
+            end,
+            ResObj = riak_object:syntactic_merge(Obj0,
+                                                 Obj1,
+                                                 term_to_binary(ReqId),
+                                                 StartTime),
             case riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
-                true -> {oldobj, ResObj};
-                false -> {newobj, ResObj}
-            end
-    end;
-syntactic_put_merge(Mod, ModState, {Bucket, Key}, Obj1, ReqId, true, StartTime) ->
-    NewIndexSpecs = riak_object:get_index_specs(Obj1, add),
-    case Mod:get(Bucket, Key, ModState) of
-        {error, not_found, _UpdModState} ->
-            {newobj, Obj1, NewIndexSpecs};
-        {ok, Val0, _UpdModState} ->
-            Obj0 = binary_to_term(Val0),
-            OldIndexSpecs = riak_object:get_index_specs(Obj0, remove),
-            IndexSpecs = OldIndexSpecs ++ NewIndexSpecs,
-            ResObj = riak_object:syntactic_merge(
-                       Obj0,Obj1,term_to_binary(ReqId), StartTime),
-            case riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
-                true -> {oldobj, ResObj, IndexSpecs};
-                false -> {newobj, ResObj, IndexSpecs}
+                true ->
+                    {oldobj, ResObj, IndexSpecs};
+                false ->
+                    {newobj, ResObj, IndexSpecs}
             end
     end.
 
@@ -734,7 +701,7 @@ do_legacy_list_bucket(ReqID,Bucket,Mod,ModState,Idx,State) ->
 %% @deprecated This function is only here to support
 %% rolling upgrades and will be removed.
 do_legacy_list_keys(Caller,ReqId,'_',Idx,Mod,ModState) ->
-            do_legacy_list_buckets(Caller,ReqId,Idx,Mod,ModState);
+    do_legacy_list_buckets(Caller,ReqId,Idx,Mod,ModState);
 do_legacy_list_keys(Caller,ReqId,Input,Idx,Mod,ModState) ->
     case Input of
         {filter, Bucket, Filter} ->
@@ -866,17 +833,17 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
     end.
 
 %% @private
-% upon receipt of a handoff datum, there is no client FSM
+                                                % upon receipt of a handoff datum, there is no client FSM
 do_diffobj_put(BKey={Bucket, Key}, DiffObj,
-       _StateData=#state{index_backend=IndexBackend,
-                         mod=Mod,
-                         modstate=ModState}) ->
+               _StateData=#state{index_backend=IndexBackend,
+                                 mod=Mod,
+                                 modstate=ModState}) ->
     ReqID = erlang:phash2(erlang:now()),
     case syntactic_put_merge(Mod, ModState, BKey, DiffObj, ReqID, IndexBackend) of
-        {newobj, NewObj} ->
+        {newobj, NewObj, IndexSpecs} ->
             AMObj = enforce_allow_mult(NewObj, riak_core_bucket:get_bucket(Bucket)),
             Val = term_to_binary(AMObj),
-            Res = Mod:put(Bucket, Key, Val, ModState),
+            Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
             case Res of
                 {ok, _UpdModState} -> riak_kv_stat:update(vnode_put);
                 _ -> nop
@@ -929,55 +896,55 @@ must_be_first_setup_stuff_test() ->
 
 list_buckets_test_() ->
     {foreach,
-        fun() ->
-            application:start(sasl),
-            application:get_all_env(riak_kv)
-        end,
-        fun(Env) ->
-            application:stop(sasl),
-            [application:unset_env(riak_kv, K) ||
-            {K, _V} <- application:get_all_env(riak_kv)],
-            [application:set_env(riak_kv, K, V) || {K, V} <- Env]
-        end,
-        [
-        fun(_) ->
-            {"bitcask list buckets",
-                fun() ->
-                    list_buckets_test_i(riak_kv_bitcask_backend)
-                end
-            }
-        end,
-        fun(_) ->
-            {"eleveldb list buckets",
-                fun() ->
-                    list_buckets_test_i(riak_kv_eleveldb_backend)
-                end
-            }
-        end,
-        fun(_) ->
-            {"memory list buckets",
-                fun() ->
-                    list_buckets_test_i(riak_kv_memory_backend),
-                    ok
-                end
-            }
-        end,
-        fun(_) ->
-            {"multi list buckets",
-                fun() ->
-                    list_buckets_test_i(riak_kv_multi_backend),
-                    ok
-                end
-            }
-        end
-        ]
+     fun() ->
+             application:start(sasl),
+             application:get_all_env(riak_kv)
+     end,
+     fun(Env) ->
+             application:stop(sasl),
+             [application:unset_env(riak_kv, K) ||
+                 {K, _V} <- application:get_all_env(riak_kv)],
+             [application:set_env(riak_kv, K, V) || {K, V} <- Env]
+     end,
+     [
+      fun(_) ->
+              {"bitcask list buckets",
+               fun() ->
+                       list_buckets_test_i(riak_kv_bitcask_backend)
+               end
+              }
+      end,
+      fun(_) ->
+              {"eleveldb list buckets",
+               fun() ->
+                       list_buckets_test_i(riak_kv_eleveldb_backend)
+               end
+              }
+      end,
+      fun(_) ->
+              {"memory list buckets",
+               fun() ->
+                       list_buckets_test_i(riak_kv_memory_backend),
+                       ok
+               end
+              }
+      end,
+      fun(_) ->
+              {"multi list buckets",
+               fun() ->
+                       list_buckets_test_i(riak_kv_multi_backend),
+                       ok
+               end
+              }
+      end
+     ]
     }.
 
 list_buckets_test_i(BackendMod) ->
     {S, B, _K} = backend_with_known_key(BackendMod),
     Caller = new_result_listener(buckets),
     handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=none}, [],
-                   {fsm, {456, {0, node()}}, Caller}, S),
+                    {fsm, {456, {0, node()}}, Caller}, S),
     ?assertEqual({ok, [B]}, results_from_listener(Caller)),
     flush_msgs().
 
@@ -986,19 +953,19 @@ filter_keys_test() ->
     Caller1 = new_result_listener(keys),
     handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
                                      item_filter=fun(_) -> true end}, [],
-                   {fsm, {124, {0, node()}}, Caller1}, S),
+                    {fsm, {124, {0, node()}}, Caller1}, S),
     ?assertEqual({ok, [K]}, results_from_listener(Caller1)),
 
     Caller2 = new_result_listener(keys),
     handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
                                      item_filter=fun(_) -> false end}, [],
-                   {fsm, {125, {0, node()}}, Caller2}, S),
+                    {fsm, {125, {0, node()}}, Caller2}, S),
     ?assertEqual({ok, []}, results_from_listener(Caller2)),
 
     Caller3 = new_result_listener(keys),
     handle_coverage(?KV_LISTKEYS_REQ{bucket= <<"g">>,
                                      item_filter=fun(_) -> true end}, [],
-                   {fsm, {126, {0, node()}}, Caller3}, S),
+                    {fsm, {126, {0, node()}}, Caller3}, S),
     ?assertEqual({ok, []}, results_from_listener(Caller3)),
 
     flush_msgs().

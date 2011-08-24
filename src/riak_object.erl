@@ -63,7 +63,7 @@
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([merge/2, apply_updates/1, syntactic_merge/3, syntactic_merge/4]).
 -export([to_json/1, from_json/1]).
--export([get_index_specs/2]).
+-export([get_index_specs/2, resolve_index_specs/2]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 
 %% @doc Constructor for new riak objects.
@@ -332,13 +332,79 @@ increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
 -spec get_index_specs(riak_object(), index_op()) ->
                              [{index_op(), binary(), index_value()}].
 get_index_specs(RObj, IndexOp) ->
-    MetaDatas = get_metadatas(RObj),
-    IndexSpecs = 
-        [begin
-             Indexes = dict:fetch(?MD_INDEX, MD),
-             [{IndexOp, Index, Value} || {Index, Value} <- Indexes]
-         end || MD <- MetaDatas, dict:is_key(?MD_INDEX, MD)],
-    lists:flatten(IndexSpecs).
+    case value_count(RObj) > 1 of
+        true ->
+            MetaDatas = get_metadatas(RObj),
+            IndexSpecs = 
+                [begin
+                     Indexes = dict:fetch(?MD_INDEX, MD),
+                     [{IndexOp, Index, Value} || {Index, Value} <- Indexes]
+                 end || MD <- MetaDatas, dict:is_key(?MD_INDEX, MD)],
+            lists:flatten(IndexSpecs);
+        false ->
+            MD = get_metadata(RObj),
+            case dict:is_key(?MD_INDEX, MD) of
+                true ->
+                    Indexes = dict:fetch(?MD_INDEX, MD),
+                    [{IndexOp, Index, Value} || {Index, Value} <- Indexes];
+                false ->
+                    []
+            end
+    end.
+
+%% @doc Prepare a list of index specifications
+%% to pass to the backend including the resolution
+%% of any conflicting index specifications among
+%% the object's siblings.
+-spec resolve_index_specs(riak_object(), riak_object()) ->
+                             [{index_op(), binary(), index_value()}].
+resolve_index_specs(CurrentObj, NewObj) ->
+    case value_count(CurrentObj) > 1 of
+        true ->
+            NewMD = get_metadata(NewObj),
+            case dict:is_key(?MD_INDEX, NewMD) of
+                true ->
+                    NewIndexes = dict:fetch(?MD_INDEX, NewMD),
+                    MetaDatas = get_metadatas(CurrentObj),
+                    CurrentIndexes = 
+                        lists:flatten(
+                          [begin
+                               dict:fetch(?MD_INDEX, MD)
+                           end || MD <- MetaDatas, dict:is_key(?MD_INDEX, MD)]
+                         ),
+                    IndexResolver = 
+                        fun({Index, Value}, Acc) ->
+                             case orddict:is_key(Index, CurrentIndexes) of
+                                 true ->
+                                     CurrentValue =
+                                         orddict:fetch(Index, CurrentIndexes),
+                                     case Value < CurrentValue of
+                                         true ->
+                                             [{remove, Index, CurrentValue},
+                                              {add, Index, Value}]  ++ Acc;
+                                         false ->
+                                             Acc
+                                     end;
+                                 false ->
+                                     [{add, Index, Value} | Acc]
+                             end
+                         end,
+                    lists:foldl(IndexResolver, [], NewIndexes);
+                false ->
+                    %% Since the current object has siblings we
+                    %% preserve all existing indexes rather than
+                    %% purge them all as is the case when there
+                    %% are no siblings.
+                    []
+            end;
+        false ->
+            %% Current object has no siblings so we replace
+            %% the current indexes with the indexes from the
+            %% new object.
+            CurrentIndexes = get_index_specs(CurrentObj, remove),
+            NewIndexes = get_index_specs(NewObj, add),
+            CurrentIndexes ++ NewIndexes
+    end.
 
 %% @spec set_contents(riak_object(), [{dict(), value()}]) -> riak_object()
 %% @doc  INTERNAL USE ONLY.  Set the contents of riak_object to the
