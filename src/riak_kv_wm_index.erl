@@ -152,9 +152,22 @@ to_index_query(IndexOp, IndexField, Args) ->
 
             %% Validate the number of arguments..
             case riak_index:parse_fields([{IndexField1, X} || X <- Args]) of
-                {ok, ParsedFields} -> 
-                    Args1 = [X || {_,X} <- ParsedFields],
-                    {ok, [{IndexOp1, IndexField1, Args1}]};
+                {ok, ParsedFields} ->                    
+                    case IndexOp1 of
+                        range ->
+                            %% Validate the specified range
+                            [{_, LowerBound}, {_, UpperBound}] = ParsedFields,
+                            case UpperBound > LowerBound of
+                                true ->
+                                    {ok, [{gte, IndexField1, LowerBound},
+                                          {lte, IndexField1, UpperBound}]};
+                                false ->
+                                    {error, {invalid_range, Args}}
+                            end;
+                        _ ->
+                            [{_, IndexValue}] = ParsedFields,
+                            {ok, [{IndexOp1, IndexField1, IndexValue}]}
+                    end;
                 {error, FailureReasons} ->
                     {error, FailureReasons}
             end;                                
@@ -165,7 +178,7 @@ to_index_query(IndexOp, IndexField, Args) ->
         undefined ->
             {error, {unknown_operation, IndexOp}}
     end.
-
+        
 %% @private
 %% @spec list_to_index_op(binary()) -> atom().
 %% @doc Convert a binary into an atom representing an index

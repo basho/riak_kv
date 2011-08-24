@@ -311,12 +311,18 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                 FilterVNodes,
                 Sender,
                 State=#state{idx=Index,
+                             index_backend=IndexBackend,
                              mod=Mod,
                              modstate=ModState}) ->
-    %% Construct the filter function
-    FilterVNode = proplists:get_value(Index, FilterVNodes),
-    Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-    index_query(Sender, Bucket, Query, Filter, Mod, ModState),
+    case IndexBackend of
+        true ->
+            %% Construct the filter function
+            FilterVNode = proplists:get_value(Index, FilterVNodes),
+            Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
+            index_query(Sender, Bucket, Query, Filter, Mod, ModState);
+        false ->
+            riak_core_vnode:reply(Sender, {error, {indexes_not_supported, Mod}})
+    end,
     {noreply, State}.
 
 handle_handoff_command(Req=?FOLD_REQ{foldfun=FoldFun}, Sender, State) ->
@@ -506,7 +512,7 @@ perform_put({true, Obj},
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
     Val = term_to_binary(Obj),
-    case Mod:put(Bucket, Key, IndexSpecs, Val, ModState) of
+    case Mod:put(Bucket, Key, IndexSpecs ++ [{add,<<"field2_int">>,1003}], Val, ModState) of
         {ok, _UpdModstate} ->
             case RB of
                 true -> {dw, Idx, Obj, ReqID};
@@ -797,17 +803,43 @@ do_legacy_list_buckets(Caller,ReqId,Idx,Mod,ModState) ->
 
 %% @private
 index_query(Sender, Bucket, Query, Filter, Mod, ModState) ->
-    %% @TODO Should probably add some buffering like the key listing uses.
-    QueryResults = Mod:fold_index(ModState, Bucket, Query),
+    BufferSize = 100,
+    BufferFun = fun(Results) ->
+                        riak_core_vnode:reply(Sender,
+                                              {results, {Bucket, Results}})
+                end,
+    Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
     case Filter of
         none ->
-            riak_core_vnode:reply(Sender, {final_results, {Bucket, QueryResults}});
-        _ when QueryResults =:= [] ->
-            riak_core_vnode:reply(Sender, {final_results, {Bucket, QueryResults}});
+            FoldKeysFun =
+                fun(_, Key, Buf) ->
+                        riak_kv_fold_buffer:add(Key, Buf)
+                end;
         _ ->
-            FilteredResults = lists:foldl(Filter, [], QueryResults),
-            riak_core_vnode:reply(Sender, {final_results, {Bucket, FilteredResults}})
+            FoldKeysFun =
+                fun(_, Key, Buf) ->
+                        case Filter(Key) of
+                            true ->
+                                riak_kv_fold_buffer:add(Key, Buf);
+                            false ->
+                                Buf
+                        end
+                end
+    end,
+    Opts = [{index, Bucket, Query}],
+    case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
+        {ok, Buffer1} ->
+            FlushFun = fun(FinalResults) ->
+                               riak_core_vnode:reply(Sender,
+                                                     {final_results,
+                                                      {Bucket,
+                                                       FinalResults}})
+                       end,
+            riak_kv_fold_buffer:flush(Buffer1, FlushFun);
+        {error, Reason} ->
+            riak_core_vnode:reply(Sender, {error, Reason})
     end.
+
 
 %% @private
 do_delete({Bucket, Key}, Mod, ModState) ->
