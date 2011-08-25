@@ -304,6 +304,8 @@ callback(Ref, Msg, #state{kv_mod = KVMod,
                    binary(),
                    module(),
                    term()) -> ok | {error, term()}.
+do_index_put(_, _, [], _, _, _) ->
+    ok;
 do_index_put(Bucket, PrimaryKey, IndexSpecs, _Val, IndexMod, IndexState) ->
     AssemblePostings = 
         fun({Op, Index, SecondaryKey}) ->
