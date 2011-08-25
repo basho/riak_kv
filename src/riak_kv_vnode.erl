@@ -75,7 +75,7 @@
                 mod :: module(),
                 modstate :: term(),
                 mrjobs :: term(),
-                vnode_epoch :: undefined | integer(),
+                vnodeid :: undefined | binary(),
                 bucket_buf_size :: pos_integer(),
                 index_buf_size :: pos_integer(),
                 key_buf_size :: pos_integer(),
@@ -201,7 +201,7 @@ init([Index]) ->
     BucketBufSize = app_helper:get_env(riak_kv, bucket_buffer_size, 1000),
     IndexBufSize = app_helper:get_env(riak_kv, index_buffer_size, 100),
     KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
-    {ok, VE} = get_vnode_epoch(Index),
+    {ok, VId} = get_vnodeid(Index),
 
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
@@ -212,7 +212,7 @@ init([Index]) ->
                         index_backend=IndexBackend,
                         mod=Mod,
                         modstate=ModState,
-                        vnode_epoch=VE
+                        vnodeid=VId,
                         bucket_buf_size=BucketBufSize,
                         index_buf_size=IndexBufSize,
                         key_buf_size=KeyBufSize,
@@ -409,7 +409,7 @@ delete(State=#state{mod=Mod, modstate=ModState}) ->
             lager:error("Failed to drop ~p. Reason: ~p~n", [Mod, Reason]),
             ok
     end,
-    {ok, State#state{modstate=UpdModState}}.
+    {ok, State#state{modstate=UpdModState,vnodeid=undefined}}.
 
 terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
@@ -432,16 +432,15 @@ handle_exit(_Pid, Reason, State) ->
 %% the updated object
 do_coord_put(Sender, {Bucket, Key}, UpdObj, ReqId, StartTime, _Options,
           #state{idx = Idx, mod = Mod, modstate = ModState}) ->
-                    vnode_epoch = VE}) ->
-    CoordNode = {vc, node(), VE},
-    UpdObj1 = riak_object:increment_vclock(UpdObj, CoordNode, StartTime),
+                 vnodeid = VId}) ->
+    UpdObj1 = riak_object:increment_vclock(UpdObj, VId, StartTime),
     {PutObj, ModState1} = 
         case Mod:get(Bucket, Key, ModState) of
             {error, notfound, ModState0} ->
                 {UpdObj, ModState0};
             {ok, CurObj, ModState0} ->
                 {PutObj0 = coord_put_merge(binary_to_term(CurObj), UpdObj1, 
-                                                     CoordNode, StartTime),
+                                                     VId, StartTime),
                 {PutObj0, ModState0}
         end,
     %ReturnBody = proplists:get_value(returnbody, Options, false),
@@ -455,29 +454,22 @@ do_coord_put(Sender, {Bucket, Key}, UpdObj, ReqId, StartTime, _Options,
     riak_kv_stat:update(vnode_put),
     ModState2.
 
-coord_put_merge(CurObj, UpdObj, CoordId, Timestamp) ->
-    %% Make sure UpdObj descends from CurObj and that CoordId is greater
+coord_put_merge(CurObj, UpdObj, VId, Timestamp) ->
+    %% Make sure UpdObj descends from CurObj and that VId is greater
     CurVC = riak_object:vclock(CurObj),
     UpdVC = riak_object:vclock(UpdObj),
 
     %% Valid coord put replacing current object
-    case get_counter(CoordId, UpdVC) > get_counter(CoordId, CurVC) andalso
+    case vclock:get_counter(VId, UpdVC) > vclock:get_counter(VId, CurVC) andalso
         vclock:descends(CurVC, UpdVC) == false andalso 
         vclock:descends(UpdVC, CurVC) == true of
         true ->
             UpdObj;
         false ->
             riak_object:increment_vclock(riak_object:merge(CurObj, UpdObj),
-                                         CoordId, Timestamp)
+                                         VId, Timestamp)
     end.
 
-get_counter(Id, VC) ->            
-    case lists:keyfind(Id, 1, VC) of
-        false ->
-            0;
-        {_Id, {Counter, _TS}} ->
-            Counter
-    end.
 %% @private
 %% upon receipt of a client-initiated put
 do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
@@ -948,18 +940,66 @@ do_diffobj_put({Bucket, Key}, DiffObj,
     end.
 
 %% @private
-get_vnode_epoch(Index) ->
+
+%% Get the vnodeid, assigning and storing if necessary
+get_vnodeid(Index) ->
+    F = fun(Status) ->
+                case proplists:get_value(vnodeid, Status, undefined) of
+                    undefined ->
+                        assign_vnodeid(os:timestamp(), 
+                                       riak_core_nodeid:get(),
+                                       Status);
+                    VnodeId ->
+                        {VnodeId, Status}
+                end
+        end,
+    update_vnode_status(F, Index). % Returns {ok, VnodeId} | {error, Reason}
+
+%% Assign a unique vnodeid, making sure the timestamp is unique by incrementing
+%% into the future if necessary.
+assign_vnodeid(Now, NodeId, Status) ->
+    {Mega, Sec, _Micro} = Now,
+    NowEpoch = 1000000*Mega + Sec,
+    LastVnodeEpoch = proplists:get_value(last_epoch, Status, 0),
+    VnodeEpoch = erlang:max(NowEpoch, LastVnodeEpoch+1),
+    VnodeId = <<NodeId/binary, VnodeEpoch:32/integer>>,
+    UpdStatus = [{vnodeid, VnodeId}, {last_epoch, VnodeEpoch} | 
+                 proplists:delete(vnodeid, 
+                   proplists:delete(last_epoch, Status))],
+    {VnodeId, UpdStatus}.
+                
+%% Clear the vnodeid - returns {ok, cleared}
+clear_vnodeid(Index) ->
+    F = fun(Status) ->
+                {cleared, proplists:delete(vnodeid, Status)}
+        end,
+    update_vnode_status(F, Index). % Returns {ok, VnodeId} | {error, Reason}
+
+update_vnode_status(F, Index) ->
     VnodeFile = vnode_status_filename(Index),
     ok = filelib:ensure_dir(VnodeFile),
     case read_vnode_status(VnodeFile) of
         {ok, Status} ->
-            {ok, proplists:get_value(epoch, Status)};
+            update_vnode_status2(F, Status, VnodeFile);
         {error, enoent} ->
-            create_vnode_status(VnodeFile);
+            update_vnode_status2(F, [], VnodeFile);
         ER ->
             ER
     end.
 
+update_vnode_status2(F, Status, VnodeFile) ->
+    case F(Status) of
+        {Ret, Status} -> % No change
+            {ok, Ret};
+        {Ret, UpdStatus} ->
+            case write_vnode_status(UpdStatus, VnodeFile) of
+                ok ->
+                    {ok, Ret};
+                ER ->
+                    ER
+            end
+    end.
+ 
 vnode_status_filename(Index) ->
     VnodeStatusDir = app_helper:get_env(riak_kv, vnode_status, "data/kv_vnode"),
     filename:join(VnodeStatusDir, integer_to_list(Index)).
@@ -967,28 +1007,115 @@ vnode_status_filename(Index) ->
 read_vnode_status(File) ->
     case file:consult(File) of
         {ok, [Status]} when is_list(Status) ->
-            {ok, Status};
+            {ok, proplists:delete(version, Status)};
         ER ->
             ER
     end.
 
-create_vnode_status(File) -> 
-    {Mega, Sec, _Micro} = now(),
-    VE = 1000000*Mega + Sec,
-    Status = [{version, 1}, {epoch, VE}],
-    case file:write_file(File, io_lib:format("~p.", [Status])) of
+write_vnode_status(Status, File) ->
+    VersionedStatus = [{version, 1} | proplists:delete(version, Status)],
+    TmpFile = File ++ "~",
+    case file:write_file(TmpFile, io_lib:format("~p.", [VersionedStatus])) of
         ok ->
-            {ok, VE};
+            file:rename(TmpFile, File);
         ER ->
             ER
     end.
-
-delete_vnode_status(File) ->
-    file:delete(File).
-
-
 
 -ifdef(TEST).
+
+%% Check assigning a vnodeid twice in the same second
+assign_vnodeid_restart_same_ts_test() ->
+    Now1 = {1314,224520,343446}, %% TS=1314224520
+    Now2 = {1314,224520,345865}, %% as unsigned net-order int <<78,85,121,136>>
+    NodeId = <<1, 2, 3, 4>>,
+    {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
+    ?assertEqual(<<1, 2, 3, 4, 78, 85, 121, 136>>, Vid1),
+    %% Simulate clear
+    Status2 = proplists:delete(vnodeid, Status1),
+    %% Reassign
+    {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
+    ?assertEqual(<<1, 2, 3, 4, 78, 85, 121, 137>>, Vid2).
+
+%% Check assigning a vnodeid with a later date
+assign_vnodeid_restart_later_ts_test() ->
+    Now1 = {1000,000000,0}, %% <<59,154,202,0>>
+    Now2 = {2000,000000,0}, %% <<119,53,148,0>>
+    NodeId = <<1, 2, 3, 4>>,
+    {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
+    ?assertEqual(<<1, 2, 3, 4, 59,154,202,0>>, Vid1),
+    %% Simulate clear
+    Status2 = proplists:delete(vnodeid, Status1),
+    %% Reassign
+    {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
+    ?assertEqual(<<1, 2, 3, 4, 119,53,148,0>>, Vid2).
+
+%% Check assigning a vnodeid with a later date - just in case of clock skew
+assign_vnodeid_restart_earlier_ts_test() ->
+    Now1 = {2000,000000,0}, %% <<119,53,148,0>>
+    Now2 = {1000,000000,0}, %% <<59,154,202,0>>
+    NodeId = <<1, 2, 3, 4>>,
+    {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
+    ?assertEqual(<<1, 2, 3, 4, 119,53,148,0>>, Vid1),
+    %% Simulate clear
+    Status2 = proplists:delete(vnodeid, Status1),
+    %% Reassign
+    %% Should be greater than last offered - which is the 2mil timestamp
+    {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
+    ?assertEqual(<<1, 2, 3, 4, 119,53,148,1>>, Vid2).
+        
+%% Test 
+vnode_status_test_() ->
+    {setup,
+     fun() ->
+             os:cmd("chmod u+rwx kv_vnode_status_test"),
+             os:cmd("rm -rf kv_vnode_status_test"),
+             application:set_env(riak_kv, vnode_status, "kv_vnode_status_test"),
+             ok
+     end,
+     fun(_) ->
+             application:unset_env(riak_kv, vnode_status),
+             ?cmd("chmod u+rwx kv_vnode_status_test"),
+             ?cmd("rm -rf kv_vnode_status_test"),
+             ok
+     end,
+     [?_test(begin % initial create failure
+                 ?cmd("rm -rf kv_vnode_status_test || true"),
+                 ?cmd("mkdir kv_vnode_status_test"),
+                 ?cmd("chmod -w kv_vnode_status_test"),
+                 F = fun([]) ->
+                             {shouldfail, [badperm]}
+                     end,
+                 Index = 0,
+                 ?assertEqual({error, eacces},  update_vnode_status(F, Index))
+             end),
+      ?_test(begin % create successfully
+                 ?cmd("chmod +w kv_vnode_status_test"),
+
+                 F = fun([]) ->
+                             {created, [created]}
+                     end,
+                 Index = 0,
+                 ?assertEqual({ok, created}, update_vnode_status(F, Index))
+             end),
+      ?_test(begin % update successfully
+                 F = fun([created]) ->
+                             {updated, [updated]}
+                     end,
+                 Index = 0,
+                 ?assertEqual({ok, updated}, update_vnode_status(F, Index))
+             end),
+      ?_test(begin % update failure
+                 ?cmd("chmod 000 kv_vnode_status_test/0"),
+                 ?cmd("chmod 500 kv_vnode_status_test"),
+                 F = fun([updated]) ->
+                             {shouldfail, [updatedagain]}
+                     end,
+                 Index = 0,
+                 ?assertEqual({error, eacces},  update_vnode_status(F, Index))
+            end)
+
+     ]}.
 
 dummy_backend(BackendMod) ->
     Ring = riak_core_ring:fresh(16,node()),
