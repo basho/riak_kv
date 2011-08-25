@@ -40,8 +40,9 @@
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
 -export([prepare/2, validate/2, precommit/2,
-         execute_local/2, waiting_local_vnode/2,
-         execute_remote/2, waiting_remote_vnode/2,
+         execute_local/2,
+         waiting_local_vnode/2,
+         waiting_remote_vnode/2,
          postcommit/2, finish/2]).
 
 
@@ -219,10 +220,12 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
     DW1 = riak_kv_util:expand_rw_value(dw, DW0, BucketProps, N),
     %% If no error occurred expanding DW also ensure that DW <= W
     case DW1 of
-         error ->
-             DW = error;
-         _ ->
-             DW = erlang:min(DW1, W)
+        error ->
+            DW = error;
+        _ ->
+            %% DW must always be 1 with node-based vclocks.
+            %% The coord vnode is responsible for incrementing the vclock
+            DW = erlang:min(DW1, erlang:max(1, W))
     end,
     NumPrimaries = length([x || {_,primary} <- Preflist2]),
     NumVnodes = length(Preflist2),
@@ -290,64 +293,34 @@ execute_local(timeout, StateData0=#state{robj=RObj, req_id = ReqId,
                                          timeout=Timeout, bkey=BKey,
                                          coord_idx_node = {_Index, _Node} = CoordIndexNode,
                                          vnode_options=VnodeOptions,
-                                         putcore=PutCore,
                                          starttime = StartTime}) ->
     %RObj = riak_object:increment_vclock(RObj0, Node, StartTime),
     TRef = schedule_timeout(Timeout),
     riak_kv_vnode:coord_put(CoordIndexNode, BKey, RObj, ReqId, StartTime, VnodeOptions),
     StateData = StateData0#state{robj = RObj, tref = TRef},
-    case riak_kv_put_core:enough(PutCore) of
-        true ->
-            {Reply, UpdPutCore} = riak_kv_put_core:response(PutCore),
-            process_reply(Reply, StateData#state{putcore = UpdPutCore});
-        false ->
-            new_state(waiting_local_vnode, StateData)
-    end.
+    %% Must always wait for local vnode - it contains the object with updated vclock
+    %% to use for the remotes. (Ignore optimization for N=1 case for now).
+    new_state(waiting_local_vnode, StateData).
 
 %% @private
 waiting_local_vnode(request_timeout, StateData) ->
     process_reply({error,timeout}, StateData);
 waiting_local_vnode(Result, StateData = #state{putcore = PutCore}) ->
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
-    case riak_kv_put_core:enough(UpdPutCore1) of
-        true ->
-            {Reply, UpdPutCore2} = riak_kv_put_core:response(UpdPutCore1),
-            process_reply(Reply, StateData#state{putcore = UpdPutCore2});
-        false ->
-            case Result of
-                {fail, _Idx, _ReqId} ->
-                    %% Local vnode failure is enough to sink whole operation
-                    process_reply({error, too_many_fails}, StateData#state{putcore = UpdPutCore1});
-                {w, _Idx, _ReqId} ->
-                    {next_state, waiting_local_vnode, StateData#state{putcore = UpdPutCore1}};
-                {dw, _Idx, PutObj, _ReqId} ->
-                    %% Either returnbody is true or coord put merged with the existing
-                    %% object and bumped the vclock.  Either way use the returned
-                    %% object for the remote vnode
-                    new_state_timeout(execute_remote, StateData#state{robj = PutObj,
-                                                                      putcore = UpdPutCore1});
-                {dw, _Idx, _ReqId} ->
-                    %% Write succeeded without changes to vclock required and returnbody false
-                    new_state_timeout(execute_remote, StateData#state{putcore = UpdPutCore1})
-            end
-    end.
-
-%% @private
-execute_remote(timeout, StateData=#state{robj=RObj, req_id = ReqId,
-                                         preflist2 = Preflist2, bkey=BKey,
-                                         coord_idx_node = CoordIndexNode,
-                                         vnode_options=VnodeOptions,
-                                         putcore=PutCore,
-                                         starttime = StartTime}) ->
-    Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2,
-                             IndexNode /= CoordIndexNode],
-    riak_kv_vnode:put(Preflist, BKey, RObj, ReqId, StartTime, VnodeOptions),
-    case riak_kv_put_core:enough(PutCore) of
-        true ->
-            {Reply, UpdPutCore} = riak_kv_put_core:response(PutCore),
-            process_reply(Reply, StateData#state{putcore = UpdPutCore});
-        false ->
-            new_state(waiting_remote_vnode, StateData)
+    case Result of
+        {fail, _Idx, _ReqId} ->
+            %% Local vnode failure is enough to sink whole operation
+            process_reply({error, local_put_failed}, StateData#state{putcore = UpdPutCore1});
+        {w, _Idx, _ReqId} ->
+            {next_state, waiting_local_vnode, StateData#state{putcore = UpdPutCore1}};
+        {dw, _Idx, PutObj, _ReqId} ->
+            %% Either returnbody is true or coord put merged with the existing
+            %% object and bumped the vclock.  Either way use the returned
+            %% object for the remote vnode
+            execute_remote(StateData#state{robj = PutObj, putcore = UpdPutCore1});
+        {dw, _Idx, _ReqId} ->
+            %% Write succeeded without changes to vclock required and returnbody false
+            execute_remote(StateData#state{putcore = UpdPutCore1})
     end.
 
 %% @private
@@ -454,6 +427,27 @@ process_reply(Reply, StateData = #state{postcommit = PostCommit,
             new_state_timeout(postcommit, StateData2);
         _ ->
             new_state_timeout(finish, StateData2)
+    end.
+
+
+%% @private
+%% Send the put requests to any remote nodes if necessary and decided if 
+%% enough responses have been received yet (i.e. if W/DW=1)
+execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
+                                preflist2 = Preflist2, bkey=BKey,
+                                coord_idx_node = CoordIndexNode,
+                                vnode_options=VnodeOptions,
+                                putcore=PutCore,
+                                starttime = StartTime}) ->
+    Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2,
+                             IndexNode /= CoordIndexNode],
+    riak_kv_vnode:put(Preflist, BKey, RObj, ReqId, StartTime, VnodeOptions),
+    case riak_kv_put_core:enough(PutCore) of
+        true ->
+            {Reply, UpdPutCore} = riak_kv_put_core:response(PutCore),
+            process_reply(Reply, StateData#state{putcore = UpdPutCore});
+        false ->
+            new_state(waiting_remote_vnode, StateData)
     end.
 
 %%
