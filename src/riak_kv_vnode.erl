@@ -524,7 +524,7 @@ syntactic_put_merge(Mod, ModState, {Bucket, Key}, Obj1, ReqId, IndexBackend, Sta
         {error, not_found, _UpdModState} ->
             case IndexBackend of
                 true ->
-                    NewIndexSpecs = riak_object:get_index_specs(Obj1, add),
+                    NewIndexSpecs = riak_object:get_index_specs(Obj1, add, true),
                     {newobj, Obj1, NewIndexSpecs};
                 false ->
                     {newobj, Obj1, []}
@@ -551,11 +551,11 @@ syntactic_put_merge(Mod, ModState, {Bucket, Key}, Obj1, ReqId, IndexBackend, Sta
 
 %% @private
 get_index_specs(Mod, ModState, {Bucket, Key}, Obj1) ->
-    NewIndexSpecs = riak_object:get_index_specs(Obj1, add),
     case Mod:get(Bucket, Key, ModState) of
         {error, not_found, _UpdModState} ->
-            NewIndexSpecs;
+            riak_object:get_index_specs(Obj1, add, true);
         {ok, Val0, _UpdModState} ->
+            NewIndexSpecs = riak_object:get_index_specs(Obj1, add, false),
             Obj0 = binary_to_term(Val0),
             OldIndexSpecs = riak_object:get_index_specs(Obj0, remove),
             OldIndexSpecs ++ NewIndexSpecs
@@ -833,7 +833,7 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
     end.
 
 %% @private
-                                                % upon receipt of a handoff datum, there is no client FSM
+%% upon receipt of a handoff datum, there is no client FSM
 do_diffobj_put(BKey={Bucket, Key}, DiffObj,
                _StateData=#state{index_backend=IndexBackend,
                                  mod=Mod,

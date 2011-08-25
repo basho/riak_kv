@@ -170,7 +170,6 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=
             {error, Reason1, State}
     end.
 
-
 %% @doc Delete the object from the Index backend and the KV backend.
 -spec delete(riak_object:bucket(), riak_object:key(), state()) ->
                     {ok, state()} |
@@ -178,7 +177,8 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=
 delete(Bucket, Key, #state{kv_mod = KVMod,
                            kv_state = KVState,
                            index_mod = IndexMod,
-                           index_state = IndexState}=State) ->
+                           index_state = IndexState
+                          }=State) ->
     %% Since the two backends are separate, we can't have a true
     %% transaction. The best we can do for now is delete from the index
     %% (which is the newer and more complicated code) and if that
