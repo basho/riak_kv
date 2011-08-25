@@ -71,6 +71,11 @@ dep_apps() ->
      webmachine,
      fun(start) ->
              _ = application:load(riak_core),
+             %% riak_core_handoff_listener uses {reusaddr, true}, but
+             %% sometimes we just restart too quickly and hit an
+             %% eaddrinuse when restarting riak_core?
+             timer:sleep(1000),
+             io:format(user, "DEBUGG: ~s\n", [os:cmd("netstat -na | egrep -vi 'stream|dgram'")]),
              [begin
                   put({?MODULE,AppKey}, app_helper:get_env(riak_core, AppKey)),
                   ok = application:set_env(riak_core, AppKey, Val)
