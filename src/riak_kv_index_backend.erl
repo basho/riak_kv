@@ -183,7 +183,7 @@ delete(Bucket, Key, #state{kv_mod = KVMod,
     %% transaction. The best we can do for now is delete from the index
     %% (which is the newer and more complicated code) and if that
     %% works, then delete from KV.
-    case do_index_delete(Bucket, Key, IndexMod, IndexState) of
+    case do_index_delete(Bucket, Key, KVMod, KVState, IndexMod, IndexState) of
         ok ->
             case do_kv_delete(Bucket, Key, KVMod, KVState) of
                 {ok, UpdKVState} ->
@@ -342,23 +342,26 @@ do_kv_put(Bucket, Key, Val, KVMod, KVState) ->
 -spec do_index_delete(riak_object:bucket(),
                       riak_object:key(),
                       module(),
+                      term(),
+                      module(),
                       term()) -> ok | {error, term()}.
-do_index_delete(Bucket, Key, IndexMod, IndexState) ->
-    %% Look up the old proxy object. If it exists, then delete all of
-    %% its postings.
-    case IndexMod:lookup_sync(IndexState, Bucket, "_proxy", Key) of
-        [{Key, OldPostings}] ->
-            TS1 = riak_index:timestamp(),
-            OldPostings1 = [{Bucket, Field, Token, Key, TS1} || {Field, Token, _} <- OldPostings],
-            try
-                ok = IndexMod:delete(IndexState, OldPostings1),
-                riak_kv_stat:update({vnode_index_delete, length(OldPostings1)}),
-                ok
-            catch _Type : Reason ->
-                    {error, Reason}
-            end;
-        _ ->
-            ok
+do_index_delete(Bucket, PrimaryKey, KVMod, KVState, IndexMod, IndexState) ->
+    case KVMod:get(Bucket, PrimaryKey, KVState) of
+        {error, not_found, _UpdModState} ->
+            ok;
+        {ok, Val, _UpdModState} ->
+            Obj = binary_to_term(Val),
+            IndexSpecs = riak_object:get_index_specs(Obj, remove),
+            case IndexSpecs of
+                [] ->
+                    ok;
+                _ ->
+                    TS = riak_index:timestamp(),
+                    Postings = [{Bucket, Index, SecondaryKey, PrimaryKey, TS} 
+                                || {_, Index, SecondaryKey} <- IndexSpecs],
+                    riak_kv_stat:update({vnode_index_delete, length(Postings)}),
+                    IndexMod:delete(IndexState, Postings)
+            end
     end.
 
 %% @private
