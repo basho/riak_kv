@@ -252,6 +252,7 @@ w_dw_seed() ->
                {10, one},
                {10, all},
                {10, fsm_eqc_util:largenat()},
+               { 5, 0},
                { 1, garbage}]).
 
 %%====================================================================
@@ -272,6 +273,8 @@ prop_basic_put() ->
         {PW, RealPW} = pw_val(N, 1000000, PWSeed),
         {W, RealW} = w_dw_val(N, 1000000, WSeed),
         {DW, RealDW}  = w_dw_val(N, RealW, DWSeed),
+
+        io:format(user, "N=~p PW=~p W=~p DW=~p\n", [N, PW, W, DW]),
 
         %% {Q, _Ring, NodeStatus} = fsm_eqc_util:mock_ring(N + NQdiff, NodeStatus0), 
 
@@ -374,7 +377,8 @@ prop_basic_put() ->
            end,
            conjunction([{result, equals(RetResult, Expected)},
                         {details, check_details(RetInfo, Options)},
-                        {postcommit, equals(PostCommits, ExpectedPostCommits)}]))
+                        {postcommit, equals(PostCommits, ExpectedPostCommits)},
+                        {puts_sent, check_puts_sent(N, H)}]))
     end).
 
 make_options([], Options) ->
@@ -810,6 +814,20 @@ check_details(Info, Options) ->
         _ -> % some info being returned is good enough for now
             true
     end.
+
+
+%% Check a 'w' message was sent for each planned response.
+%% i.e. make sure that the put FSM really sent N 
+check_puts_sent(N, VPutResp) ->
+    Requests = [normal || {w,_,_} <- VPutResp] ++
+        [timeout || {{timeout, 1},_,_} <- VPutResp],
+    NumPutReqs = length(Requests),
+    ?WHENFAIL(begin
+                  io:format(user, "VPutResp:\n~p\n", [VPutResp]),
+                  io:format(user, "Requests: ~p = ~p\n", [Requests, NumPutReqs])
+              end,
+              equals(N, NumPutReqs)).
+
 %%====================================================================
 %% Javascript helpers 
 %%====================================================================
