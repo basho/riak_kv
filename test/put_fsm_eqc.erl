@@ -336,8 +336,9 @@ prop_basic_put() ->
         %% and returned to the client.
         EffDW = get_effective_dw(RealDW, Options, Postcommit),
         ExpectObject = expect_object(H, RealW, EffDW, AllowMult),
-        {Expected, ExpectedPostCommits} = expect(H, N, PW, RealPW, W, RealW, DW, EffDW, Options,
-                                                 Precommit, Postcommit, ExpectObject, PL2),
+        {Expected, ExpectedPostCommits, ExpectedVnodePuts} = 
+            expect(VPutResp, H, N, PW, RealPW, W, RealW, DW, EffDW, Options,
+                   Precommit, Postcommit, ExpectObject, PL2),
 
         {RetResult, RetInfo} = case Res of 
                                    timeout ->
@@ -359,6 +360,7 @@ prop_basic_put() ->
         ?WHENFAIL(
            begin
                io:format(user, "BucketProps: ~p\n", [BucketProps]),
+               io:format(user, "VPutResp = ~p\n", [VPutResp]),
                io:format(user, "VPutReplies = ~p\n", [VPutReplies]),
                io:format(user, "PrefList2: ~p\n", [PL2]),
                io:format(user, "N: ~p PW: ~p RealPW: ~p W:~p RealW: ~p DW: ~p RealDW: ~p EffDW: ~p"
@@ -378,7 +380,7 @@ prop_basic_put() ->
            conjunction([{result, equals(RetResult, Expected)},
                         {details, check_details(RetInfo, Options)},
                         {postcommit, equals(PostCommits, ExpectedPostCommits)},
-                        {puts_sent, check_puts_sent(N, H)}]))
+                        {puts_sent, check_puts_sent(ExpectedVnodePuts, H)}]))
     end).
 
 make_options([], Options) ->
@@ -415,16 +417,19 @@ make_vput_replies(VPutResp, Objects, Options) ->
     make_vput_replies(VPutResp, Objects, Options, 1, []).
     
 make_vput_replies([], _Objects, _Options, _LIdx, SeqReplies) ->
-    {_Seqs, Replies} = lists:unzip(lists:sort(SeqReplies)),
-    Replies;
+    %% Randomize the order of replies - make sure the first vnode
+    %% is handled before the others to simulate local/remote vnodes
+    [{_Seq1, Local1}, {_Seq2, Local2} | SeqRemotes] = lists:reverse(SeqReplies),
+    {_Seqs, Replies} = lists:unzip(lists:sort(SeqRemotes)),
+    [Local1, Local2 | Replies];
 make_vput_replies([{_CurObj, _First, _FirstSeq, _Second, _SecondSeq, down} | Rest],
                   Objects, Options, LIdx, Replies) ->
     make_vput_replies(Rest, Objects, Options, LIdx, Replies); 
 make_vput_replies([{_CurObj, {timeout, 1}, FirstSeq, _Second, SecondSeq, _NodeStatus} | Rest],
                   Objects, Options, LIdx, Replies) ->
     make_vput_replies(Rest, Objects, Options, LIdx + 1, 
-                     [{FirstSeq, {LIdx, {timeout, 1}}},
-                      {FirstSeq+SecondSeq+1, {LIdx, {timeout, 2}}} | Replies]);
+                     [{FirstSeq+SecondSeq+1, {LIdx, {timeout, 2}}}, 
+                      {FirstSeq, {LIdx, {timeout, 1}}} | Replies]);
 make_vput_replies([{CurPartVal, First, FirstSeq, dw, SecondSeq, _NodeStatus} | Rest],
                   Objects, Options, LIdx, Replies) ->
     %% Lookup the lineage for the current object and prepare it for
@@ -436,13 +441,13 @@ make_vput_replies([{CurPartVal, First, FirstSeq, dw, SecondSeq, _NodeStatus} | R
                             {proplists:get_value(PartValLin, Objects), PartValLin}
                      end,
     make_vput_replies(Rest, Objects, Options, LIdx + 1,
-                      [{FirstSeq, {LIdx, First}},
-                       {FirstSeq+SecondSeq+1, {LIdx, {dw, Obj, CurLin}}} | Replies]);
+                      [{FirstSeq+SecondSeq+1, {LIdx, {dw, Obj, CurLin}}},
+                       {FirstSeq, {LIdx, First}} | Replies]);
 make_vput_replies([{_CurObj, First, FirstSeq, Second, SecondSeq, _NodeStatus} | Rest],
                   Objects, Options, LIdx, Replies) ->
     make_vput_replies(Rest, Objects, Options, LIdx + 1,
-                     [{FirstSeq, {LIdx, First}},
-                      {FirstSeq+SecondSeq+1, {LIdx, Second}} | Replies]).
+                     [{FirstSeq+SecondSeq+1, {LIdx, Second}},
+                      {FirstSeq, {LIdx, First}} | Replies]).
 
 
 make_bucket_props(N, AllowMult, Precommit, Postcommit) ->
@@ -480,7 +485,8 @@ make_bucket_props(N, AllowMult, Precommit, Postcommit) ->
 %%====================================================================
 
 %% Work out the expected return value from the FSM and the expected postcommit log.
-expect(H, N, PW, RealPW, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Object, PL2) ->
+expect(VPutResp, H, N, PW, RealPW, W, RealW, DW, EffDW, Options, 
+       Precommit, Postcommit, Object, PL2) ->
     ReturnObj = case proplists:get_value(returnbody, Options, false) of
                     true ->
                         Object;
@@ -491,31 +497,48 @@ expect(H, N, PW, RealPW, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Ob
     NumPrimaries = length([xx || {_,primary} <- PL2]),
     UpNodes =  length(PL2),
     MinNodes = erlang:max(1, erlang:max(RealW, EffDW)),
-    ExpectResult = 
+    {ExpectResult, ExpectVnodePuts} = 
         if
             PW =:= garbage ->
-                {error, {pw_val_violation, garbage}};
+                {{error, {pw_val_violation, garbage}}, 0};
 
             W =:= garbage ->
-                {error, {w_val_violation, garbage}};
+                {{error, {w_val_violation, garbage}}, 0};
 
             DW =:= garbage ->
-                {error, {dw_val_violation, garbage}};
+                {{error, {dw_val_violation, garbage}}, 0};
 
             RealW > N orelse EffDW > N orelse RealPW > N ->
-                {error, {n_val_violation, N}};
+                {{error, {n_val_violation, N}}, 0};
 
             RealPW > NumPrimaries ->
-                {error, {pw_val_unsatisfied, RealPW, NumPrimaries}};
+                {{error, {pw_val_unsatisfied, RealPW, NumPrimaries}}, 0};
 
             UpNodes < MinNodes ->
-                {error,{insufficient_vnodes,UpNodes,need,MinNodes}};
+                {{error,{insufficient_vnodes,UpNodes,need,MinNodes}}, 0};
            
            true ->
                 HNoTimeout = filter_timeouts(H),
-                expect(HNoTimeout,
-                       {H, N, RealW, EffDW, 0, 0, 0, ReturnObj, Precommit},
-                       Options)
+                VPuts = case precommit_should_fail(Precommit, Options) of
+                            false ->
+                                %% If the first local W/DW times out, 
+                                %% the remote ones will not be sent.
+                                case hd(VPutResp) of
+                                    {_,w,_,dw,_,_} ->
+                                        N;
+                                    _ ->
+                                        1
+                                end;
+                            _ ->
+                                0
+                        end,
+                case H of
+                    [{w, _, _}, {fail, _, _} | _] ->
+                        {maybe_add_robj({error, local_put_failed}, ReturnObj, Precommit, Options), VPuts};
+                    _ ->
+                        {expect(HNoTimeout, {H, N, RealW, EffDW, 0, 0, 0, ReturnObj, Precommit}, Options), 
+                         VPuts}
+                end
         end,
     ExpectPostcommit = case {ExpectResult, Postcommit} of
                            {{error, _}, _} ->
@@ -530,15 +553,15 @@ expect(H, N, PW, RealPW, W, RealW, DW, EffDW, Options, Precommit, Postcommit, Ob
                                %% Postcommit should be called for each ok hook registered.
                                [Object || Hook <- Postcommit, Hook =:= {erlang, postcommit_ok}]
                        end,
-    {ExpectResult, ExpectPostcommit}.
+    {ExpectResult, ExpectPostcommit, ExpectVnodePuts}.
 
-expect([], {_H, _N, _W, DW, _NumW, _NumDW, _NumFail, RObj, Precommit}=S,
+expect([], {_H, _N, _W, _DW, _NumW, _NumDW, _NumFail, RObj, Precommit}=S,
       Options) ->
     case enough_replies(S) of % this handles W=0 case
         {true, Expect} ->
-            maybe_add_robj(Expect, RObj, Precommit, DW, Options);
+            maybe_add_robj(Expect, RObj, Precommit, Options);
         false ->
-            maybe_add_robj({error, timeout}, RObj, Precommit, DW, Options)
+            maybe_add_robj({error, timeout}, RObj, Precommit, Options)
     end;
 expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit},
       Options) ->
@@ -546,7 +569,7 @@ expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit},
 
     case enough_replies(S) of
         {true, Expect} ->
-            maybe_add_robj(Expect, RObj, Precommit, DW, Options);
+            maybe_add_robj(Expect, RObj, Precommit, Options);
         
         false ->
             expect(Rest, S, Options)
@@ -556,20 +579,20 @@ expect([DWReply|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit},
     S = {H, N, W, DW, NumW, NumDW + 1, NumFail, RObj, Precommit},
     case enough_replies(S) of
         {true, Expect} ->
-            maybe_add_robj(Expect, RObj, Precommit, DW, Options);
+            maybe_add_robj(Expect, RObj, Precommit, Options);
         false ->
             expect(Rest, S, Options)
     end;
 %% Fail on coordindating vnode - request fails
-expect([{fail, {1, _}, _}|_Rest], {_H, _N, _W, DW, _NumW, _NumDW, _NumFail, RObj, Precommit},
+expect([{fail, {1, _}, _}|_Rest], {_H, _N, _W, _DW, _NumW, _NumDW, _NumFail, RObj, Precommit},
        Options) ->
-    maybe_add_robj({error, too_many_fails}, RObj, Precommit, DW, Options);
+    maybe_add_robj({error, too_many_fails}, RObj, Precommit, Options);
 expect([{fail, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit},
        Options) ->
     S = {H, N, W, DW, NumW, NumDW, NumFail + 1, RObj, Precommit},
     case enough_replies(S) of
         {true, Expect} ->
-            maybe_add_robj(Expect, RObj, Precommit, DW, Options);
+            maybe_add_robj(Expect, RObj, Precommit, Options);
         false ->
             expect(Rest, S, Options)
     end;
@@ -606,7 +629,7 @@ w_dw_val(_N, _Min, garbage) ->
     {garbage, 1000000};
 w_dw_val(N, Min, Seed) when is_number(Seed) ->
     Val = Seed rem (N + 2),
-    {Val, erlang:min(Min, Val)};
+    {Val, erlang:max(1, erlang:min(Min, Val))};
 w_dw_val(N, Min, Seed) ->
     Val = case Seed of
               one -> 1;
@@ -614,7 +637,7 @@ w_dw_val(N, Min, Seed) ->
               X when X == quorum; X == default; X == missing -> (N div 2) + 1;
               _ -> Seed
           end,
-    {Seed, erlang:min(Min, Val)}.
+    {Seed, erlang:max(1, erlang:min(Min, Val))}.
 
 %% Work out W and DW given a seed.
 %% Generate a value from 0..N+1
@@ -680,8 +703,8 @@ enough_replies({_H, N, W, DW, NumW, NumDW, NumFail, _RObj, _Precommit}) ->
             false
     end.
  
-maybe_add_robj(ok, RObj, Precommit, DW, Options) ->
-    case precommit_should_fail(Precommit, DW, Options) of
+maybe_add_robj(ok, RObj, Precommit, Options) ->
+    case precommit_should_fail(Precommit, Options) of
         {true, Expect} ->
             Expect;
         
@@ -693,11 +716,11 @@ maybe_add_robj(ok, RObj, Precommit, DW, Options) ->
                     {ok, RObj}
             end
     end;
-maybe_add_robj({error, timeout}, _Robj, Precommit, DW, Options) ->
+maybe_add_robj({error, timeout}, _Robj, Precommit, Options) ->
     %% Catch cases where it would fail before sending to vnodes, otherwise
     %% timeout rather than receive an {error, too_many_fails} message - it 
     %% will never come if the put FSM times out.
-    case precommit_should_fail(Precommit, DW, Options) of
+    case precommit_should_fail(Precommit, Options) of
         {true, {error, precommit_fail}} ->
             {error, precommit_fail};
         {true, {error, {precommit_fail, Why}}} ->
@@ -709,7 +732,7 @@ maybe_add_robj({error, timeout}, _Robj, Precommit, DW, Options) ->
         false ->
             {error, timeout}
     end;
-maybe_add_robj(Expect, _Robj, _Precommit, _DW, _Options) ->
+maybe_add_robj(Expect, _Robj, _Precommit, _Options) ->
     Expect.
 
 %%====================================================================
@@ -768,32 +791,32 @@ apply_precommit(Object, [{_, precommit_append_value} | Rest]) ->
 apply_precommit(Object, [_ | Rest]) ->
     apply_precommit(Object, Rest).
 
-precommit_should_fail(Precommit, DW, Options) ->
+precommit_should_fail(Precommit, Options) ->
     case proplists:get_bool(disable_hooks, Options) of
         true -> false;
-        false -> precommit_should_fail(Precommit, DW)
+        false -> precommit_should_fail(Precommit)
     end.
 
-precommit_should_fail([], _DW) ->
+precommit_should_fail([]) ->
     false;
-precommit_should_fail([{garbage, garbage} | _Rest], _DW) ->
+precommit_should_fail([{garbage, garbage} | _Rest]) ->
     {true, {error, {precommit_fail, {invalid_hook_def, not_a_hook_def}}}};
-precommit_should_fail([{garbage, empty} | _Rest], _DW) ->
+precommit_should_fail([{garbage, empty} | _Rest]) ->
     {true, {error, {precommit_fail, {invalid_hook_def, no_hook}}}};
-precommit_should_fail([{erlang,precommit_undefined} | _Rest], _DW) ->
+precommit_should_fail([{erlang,precommit_undefined} | _Rest]) ->
     {true, {error, {precommit_fail, 
                     {hook_crashed,{put_fsm_eqc,precommit_undefined,error,undef}}}}};
-precommit_should_fail([{erlang,precommit_crash} | _Rest], _DW) ->
+precommit_should_fail([{erlang,precommit_crash} | _Rest]) ->
     {true, {error, {precommit_fail, 
                     {hook_crashed,{put_fsm_eqc,precommit_crash,
                                    error,{badmatch,precommit_crash}}}}}};
-precommit_should_fail([{_Lang,Hook} | _Rest], _DW) when Hook =:= precommit_fail;
-                                                        Hook =:= precommit_crash;
-                                                        Hook =:= precommit_undefined ->
+precommit_should_fail([{_Lang,Hook} | _Rest]) when Hook =:= precommit_fail;
+                                                   Hook =:= precommit_crash;
+                                                   Hook =:= precommit_undefined ->
     {true, {error, precommit_fail}};
-precommit_should_fail([{_Lang,precommit_fail_reason}| _Rest], _DW) ->
+precommit_should_fail([{_Lang,precommit_fail_reason}| _Rest]) ->
     {true, {error, {precommit_fail, ?HOOK_SAYS_NO}}};
-precommit_should_fail([{Lang, precommit_nonobj} | _Rest], _DW) ->
+precommit_should_fail([{Lang, precommit_nonobj} | _Rest]) ->
     %% Javascript precommit returning a non-object crashes the JS VM.
     Details = case Lang of
                   js ->
@@ -802,8 +825,8 @@ precommit_should_fail([{Lang, precommit_nonobj} | _Rest], _DW) ->
                       {?MODULE, precommit_nonobj, not_an_obj}
               end,
     {true, {error, {precommit_fail, {invalid_return, Details}}}};
-precommit_should_fail([_LangHook | Rest], DW) ->
-    precommit_should_fail(Rest, DW).
+precommit_should_fail([_LangHook | Rest]) ->
+    precommit_should_fail(Rest).
 
 check_details(Info, Options) ->
     case proplists:get_value(details, Options, false) of
@@ -818,7 +841,7 @@ check_details(Info, Options) ->
 
 %% Check a 'w' message was sent for each planned response.
 %% i.e. make sure that the put FSM really sent N 
-check_puts_sent(N, VPutResp) ->
+check_puts_sent(ExpectedPuts, VPutResp) ->
     Requests = [normal || {w,_,_} <- VPutResp] ++
         [timeout || {{timeout, 1},_,_} <- VPutResp],
     NumPutReqs = length(Requests),
@@ -826,7 +849,7 @@ check_puts_sent(N, VPutResp) ->
                   io:format(user, "VPutResp:\n~p\n", [VPutResp]),
                   io:format(user, "Requests: ~p = ~p\n", [Requests, NumPutReqs])
               end,
-              equals(N, NumPutReqs)).
+              equals(ExpectedPuts, NumPutReqs)).
 
 %%====================================================================
 %% Javascript helpers 
