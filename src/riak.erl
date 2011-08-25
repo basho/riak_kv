@@ -102,7 +102,18 @@ client_connect(Node, ClientId= <<_:32>>) ->
     % Make sure we can reach this node...
     case net_adm:ping(Node) of
         pang -> {error, {could_not_reach_node, Node}};
-        pong -> {ok, riak_client:new(Node, ClientId)}
+        pong -> 
+            %% Check if the original client id based vclocks
+            %% or the new vnode based vclocks should be used.
+            case rpc:call(Node, app_helper, get_env,
+                          [riak_kv, vnode_vclocks, false]) of
+                {badrpc, _Reason} ->
+                    {error, {could_not_reach_node, Node}};
+                true ->
+                    {ok, riak_client:new(Node, undefined)};
+                _ ->
+                    {ok, riak_client:new(Node, ClientId)}
+            end
     end;
 client_connect(Node, undefined) ->
     client_connect(Node, riak_core_util:mkclientid(Node));
