@@ -708,7 +708,7 @@ do_delete({Bucket, Key}, Mod, ModState) ->
 
 %% @private
 do_fold(Fun, Acc0, _State=#state{mod=Mod, modstate=ModState}) ->
-    Mod:fold(ModState, Fun, Acc0).
+    Mod:fold_objects(Fun, Acc0, ModState).
 
 %% @private
 do_get_vclocks(KeyList,_State=#state{mod=Mod,modstate=ModState}) ->
