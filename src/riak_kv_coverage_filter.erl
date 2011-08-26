@@ -82,10 +82,10 @@ build_filter(Bucket, ItemFilterInput, FilterVNode) ->
 %% @private
 compose_filter(KeySpaceIndexes, PrefListFun) ->
     VNodeFilter = build_vnode_filter(KeySpaceIndexes, PrefListFun),
-    VNodeFilter(Item).
+    VNodeFilter.
 
 compose_filter(undefined, _, ItemFilter) ->
-    compose_filter(ItemFilter);
+    ItemFilter;
 compose_filter(KeySpaceIndexes, PrefListFun, ItemFilter) ->
     VNodeFilter = build_vnode_filter(KeySpaceIndexes, PrefListFun),
     fun(Item) ->
