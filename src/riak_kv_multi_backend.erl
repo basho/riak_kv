@@ -208,51 +208,73 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{backends=Backends}) ->
                 any(),
                 [{atom(), term()}],
                 state()) -> {ok, term()} | {error, term()}.
-fold_keys(FoldKeysFun, Acc, Opts, #state{backends=Backends}) ->
-    FoldFun = fun({_, Module, SubState}, Acc1) ->
-                      Result = Module:fold_keys(FoldKeysFun,
-                                                Acc1,
-                                                Opts,
-                                                SubState),
-                      case Result of
-                          {ok, Acc2} ->
-                              Acc2;
-                          {error, Reason} ->
-                              throw({error, {Module, Reason}})
-                      end
-              end,
-    try
-        Acc0 = lists:foldl(FoldFun, Acc, Backends),
-        {ok, Acc0}
-    catch
-        Error ->
-            Error
-    end.
+fold_keys(FoldKeysFun, Acc, Opts, State=#state{backends=Backends}) ->
+    Bucket =  proplists:get_value(bucket, Opts),
+    case Bucket of
+        undefined ->
+            FoldFun =
+                fun({_, Module, SubState}, Acc1) ->
+                        Result = Module:fold_keys(FoldKeysFun,
+                                                  Acc1,
+                                                  Opts,
+                                                  SubState),
+                        case Result of
+                            {ok, Acc2} ->
+                                Acc2;
+                            {error, Reason} ->
+                                throw({error, {Module, Reason}})
+                        end
+                end,
+            try
+                Acc0 = lists:foldl(FoldFun, Acc, Backends),
+                {ok, Acc0}
+            catch
+                Error ->
+                    Error
+            end;
+        _ ->
+            {_Name, Module, SubState} = get_backend(Bucket, State),
+            Module:fold_keys(FoldKeysFun,
+                             Acc,
+                             Opts,
+                             SubState)
+    end.            
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {error, term()}.
-fold_objects(FoldObjectsFun, Acc, Opts, #state{backends=Backends}) ->
-    FoldFun = fun({_, Module, SubState}, Acc1) ->
-                      Result = Module:fold_objects(FoldObjectsFun,
-                                                   Acc1,
-                                                   Opts,
-                                                   SubState),
-                      case Result of
-                          {ok, Acc2} ->
-                              Acc2;
-                          {error, Reason} ->
-                              throw({error, {Module, Reason}})
-                      end
-              end,
-    try
-        Acc0 = lists:foldl(FoldFun, Acc, Backends),
-        {ok, Acc0}
-    catch
-        Error ->
-            Error
+fold_objects(FoldObjectsFun, Acc, Opts, State=#state{backends=Backends}) ->
+    Bucket =  proplists:get_value(bucket, Opts),
+    case Bucket of
+        undefined ->
+            FoldFun =
+                fun({_, Module, SubState}, Acc1) ->
+                        Result = Module:fold_objects(FoldObjectsFun,
+                                                     Acc1,
+                                                     Opts,
+                                                     SubState),
+                        case Result of
+                            {ok, Acc2} ->
+                                Acc2;
+                            {error, Reason} ->
+                                throw({error, {Module, Reason}})
+                        end
+                end,
+            try
+                Acc0 = lists:foldl(FoldFun, Acc, Backends),
+                {ok, Acc0}
+            catch
+                Error ->
+                    Error
+            end;
+        _ ->
+            {_Name, Module, SubState} = get_backend(Bucket, State),
+            Module:fold_objects(FoldObjectsFun,
+                                Acc,
+                                Opts,
+                                SubState)
     end.
 
 %% @doc Delete all objects from the different backends
