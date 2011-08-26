@@ -329,8 +329,14 @@ is_empty(State=#state{mod=Mod, modstate=ModState}) ->
     {Mod:is_empty(ModState), State}.
 
 delete(State=#state{mod=Mod, modstate=ModState}) ->
-    ok = Mod:drop(ModState),
-    {ok, State}.
+    case Mod:drop(ModState) of
+        {ok, UpdModState} ->
+            ok;
+        {error, Reason, UpdModState} ->
+            lager:error("Failed to drop ~p. Reason: ~p~n", [Mod, Reason]),
+            ok
+    end,
+    {ok, State#state{modstate=UpdModState}}.
 
 terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
