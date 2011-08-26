@@ -62,7 +62,7 @@ build_filter(Bucket, ItemFilterInput, FilterVNode) ->
             none;
         (FilterVNode == undefined) -> % only key filtering
             %% Compose a key filtering function for the VNode
-            compose_filter(ItemFilter);
+            ItemFilter;
         (ItemFilter == none) -> % only vnode filtering required
             {ok, Ring} = riak_core_ring_manager:get_my_ring(),
             PrefListFun = build_preflist_fun(Bucket, Ring),
@@ -80,16 +80,9 @@ build_filter(Bucket, ItemFilterInput, FilterVNode) ->
 %% ====================================================================
 
 %% @private
-compose_filter(ItemFilter) ->
-    fun(Item) ->
-            ItemFilter(Item)
-    end.
-
 compose_filter(KeySpaceIndexes, PrefListFun) ->
     VNodeFilter = build_vnode_filter(KeySpaceIndexes, PrefListFun),
-    fun(Item) ->
-            VNodeFilter(Item)
-    end.
+    VNodeFilter(Item).
 
 compose_filter(undefined, _, ItemFilter) ->
     compose_filter(ItemFilter);
