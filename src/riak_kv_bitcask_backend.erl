@@ -406,7 +406,8 @@ make_symlink(LinkFile) ->
                                integer_to_list(MicroSecs)]]),
     case filelib:ensure_dir(DataFile) of
         ok ->
-            case file:make_symlink(filename:absname(DataFile), filename:absname(LinkFile)) of
+            case file:make_symlink(filename:basename(DataFile),
+                                   filename:absname(LinkFile)) of
                 ok ->
                     {ok, DataFile};
                 {error, Reason} ->
