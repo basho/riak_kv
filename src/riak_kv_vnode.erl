@@ -164,16 +164,19 @@ init([Index]) ->
     Mod = app_helper:get_env(riak_kv, storage_backend),
     Configuration = app_helper:get_env(riak_kv),
 
-    case Mod:start(Index, Configuration) of
+    case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             {ok, #state{idx=Index,
                         mod=Mod,
                         modstate=ModState,
                         mrjobs=dict:new()}};
         {error, Reason} ->
-
-            error_logger:error_msg("Failed to start ~p Reason: ~p\n",
+            lager:error("Failed to start ~p Reason: ~p",
                                    [Mod, Reason]),
+            riak:stop("backend module failed to start.");
+        {'EXIT', Reason1} ->
+            lager:error("Failed to start ~p Reason: ~p",
+                                   [Mod, Reason1]),
             riak:stop("backend module failed to start.")
     end.
 
@@ -333,7 +336,7 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
-handle_exit(_Pid, _Reason, State) ->
+handle_exit(_Pid, Reason, State) ->
     %% A linked processes has died so the vnode
     %% process should take appropriate action here.
     %% The default behavior is to crash the vnode
@@ -341,6 +344,7 @@ handle_exit(_Pid, _Reason, State) ->
     %% by riak_core_vnode_master to prevent
     %% messages from stacking up on the process message
     %% queue and never being processed.
+    lager:error("Linked process exited. Reason: ~p", [Reason]),
     {stop, linked_process_crash, State}.
 
 %% old vnode helper functions
