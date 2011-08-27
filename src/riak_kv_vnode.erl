@@ -517,8 +517,7 @@ do_get_binary({Bucket, Key}, Mod, ModState) ->
 list_buckets(Sender, Filter, Mod, ModState) ->
     BufferSize = 1000,
     BufferFun = fun(Results) ->
-                        UniqueResults = lists:usort(Results),
-                        riak_core_vnode:reply(Sender, {results, UniqueResults})
+                        riak_core_vnode:reply(Sender, {results, Results})
                 end,
     Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
     case Filter of
@@ -538,19 +537,17 @@ list_buckets(Sender, Filter, Mod, ModState) ->
                         end
                 end
     end,
-
-        case Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState) of
-            {ok, Buffer1} ->
-                FlushFun = fun(FinalResults) ->
-                                   UniqueResults = lists:usort(FinalResults),
-                                   riak_core_vnode:reply(Sender,
-                                                         {final_results,
-                                                          UniqueResults})
-                           end,
-                riak_kv_fold_buffer:flush(Buffer1, FlushFun);
-            {error, Reason} ->
-                riak_core_vnode:reply(Sender, {error, Reason})
-        end.
+    case Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState) of
+        {ok, Buffer1} ->
+            FlushFun = fun(FinalResults) ->
+                               riak_core_vnode:reply(Sender,
+                                                     {final_results,
+                                                      FinalResults})
+                       end,
+            riak_kv_fold_buffer:flush(Buffer1, FlushFun);
+        {error, Reason} ->
+            riak_core_vnode:reply(Sender, {error, Reason})
+    end.
 
 %% @private
 list_keys(Sender, Bucket, Filter, Mod, ModState) ->

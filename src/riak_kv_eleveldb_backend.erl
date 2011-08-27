@@ -138,7 +138,8 @@ delete(Bucket, Key, #state{ref=Ref,
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{fold_opts=FoldOpts,
                                                 ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    Acc0 = eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts),
+    {Acc0, _LastBucket} =
+        eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts),
     {ok, Acc0}.
 
 %% @doc Fold over all the keys for one or all buckets.
@@ -227,9 +228,13 @@ config_value(Key, Config) ->
 %% @private
 %% Return a function to fold over the buckets on this backend
 fold_buckets_fun(FoldBucketsFun) ->
-    fun(BK, Acc) ->
-            {Bucket, _} = sext:decode(BK),
-            FoldBucketsFun(Bucket, Acc)
+    fun(BK, {Acc, LastBucket}) ->
+            case sext:decode(BK) of
+                {LastBucket, _} ->
+                    {Acc, LastBucket};
+                {Bucket, _} ->
+                    {FoldBucketsFun(Bucket, Acc), Bucket}
+            end
     end.
 
 %% @private

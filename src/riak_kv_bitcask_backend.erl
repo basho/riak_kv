@@ -163,7 +163,8 @@ delete(Bucket, Key, #state{ref=Ref}=State) ->
                    state()) -> {ok, any()} | {error, term()}.
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    FoldResult = bitcask:fold_keys(Ref, FoldFun, Acc),
+    {FoldResult, _Bucketset} =
+        bitcask:fold_keys(Ref, FoldFun, {Acc, ordsets:new()}),
     case FoldResult of
         {error, _} ->
             FoldResult;
@@ -303,9 +304,15 @@ key_counts(RootDir) ->
 %% @private
 %% Return a function to fold over the buckets on this backend
 fold_buckets_fun(FoldBucketsFun) ->
-    fun(#bitcask_entry{key=BK}, Acc) ->
+    fun(#bitcask_entry{key=BK}, {Acc, BucketSet}) ->
             {Bucket, _} = binary_to_term(BK),
-            FoldBucketsFun(Bucket, Acc)
+            case ordsets:is_element(Bucket, BucketSet) of
+                true ->
+                    {Acc, BucketSet};
+                false ->
+                    {FoldBucketsFun(Bucket, Acc),
+                     ordsets:add_element(Bucket, BucketSet)}
+            end
     end.
 
 %% @private
