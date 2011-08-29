@@ -106,7 +106,7 @@ lookup_sync(State, Index, Field, Term) ->
     FilterFun = fun(_Value, _Props) -> true end,
     merge_index:lookup_sync(Pid, Index, Field, Term, FilterFun).
 
-%% @spec fold_index(State :: state(), Bucket :: binary(), Query :: riak_index:query_elements(),
+%% @spec fold_index(State :: state(), Bucket :: binary(), Query :: riak_index:query_element(),
 %%                  SKFun :: function(), Acc :: term(), FinalFun :: function()) -> term().
 fold_index(State, Index, Query, SKFun, Acc, FinalFun) ->
     Pid = State#state.pid,
@@ -116,22 +116,10 @@ fold_index(State, Index, Query, SKFun, Acc, FinalFun) ->
     %% this will run more complicated queries, and will run them
     %% asynchronously.
     Results = case Query of
-                  [{eq, Field, [Term]}] ->
-                      merge_index:lookup_sync(Pid, Index, Field, Term, FilterFun);
+                  {eq, Field, [Term]} ->
+                     merge_index:lookup_sync(Pid, Index, Field, Term, FilterFun);
 
-                  [{lt, Field, [Term]}] ->
-                      merge_index:range_sync(Pid, Index, Field, undefined, inc(Term, -1), ?SIZE, FilterFun);
-
-                  [{gt, Field, [Term]}] ->
-                      merge_index:range_sync(Pid, Index, Field, inc(Term, 1), undefined, ?SIZE, FilterFun);
-
-                  [{lte, Field, [Term]}] ->
-                      merge_index:range_sync(Pid, Index, Field, undefined, Term, ?SIZE, FilterFun);
-
-                  [{gte, Field, [Term]}] ->
-                      merge_index:range_sync(Pid, Index, Field, Term, undefined, ?SIZE, FilterFun);
-
-                  [{range, Field, [StartTerm, EndTerm]}] ->
+                  {range, Field, [StartTerm, EndTerm]} ->
                       merge_index:range_sync(Pid, Index, Field, StartTerm, EndTerm, ?SIZE, FilterFun);
 
                   _ ->
@@ -167,28 +155,6 @@ drop(State) ->
 %% Ignore callbacks for other backends so multi backend works
 callback(_State, _Ref, _Msg) ->
     ok.
-
-
-%% @private
-%% @spec inc(term(), Amt :: integer()) -> term().
-%%
-%% @doc Increments or decrements an Erlang data type by one
-%%      position. Used during construction of exclusive range searches.
-inc(Term, Amt)  when is_integer(Term) ->
-    Term + Amt;
-inc(Term, _Amt) when is_float(Term) ->
-    Term; %% Doesn't make sense to have exclusive range on floats.
-inc(Term, Amt)  when is_list(Term) ->
-    NewTerm = inc(list_to_binary(Term), Amt),
-    binary_to_list(NewTerm);
-inc(Term, Amt)  when is_binary(Term) ->
-    Bits = size(Term) * 8,
-    <<Int:Bits/integer>> = Term,
-    NewInt = inc(Int, Amt),
-    <<NewInt:Bits/integer>>;
-inc(Term, _) ->
-    throw({unhandled_type, binary_inc, Term}).
-
 
 %% ===================================================================
 %% EUnit tests
