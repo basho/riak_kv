@@ -51,7 +51,7 @@
 -include("riak_kv_wm_raw.hrl").
 
 %% @spec init(proplist()) -> {ok, context()}
-%% @doc Initialize this resource.  
+%% @doc Initialize this resource.
 init(Props) ->
     {ok, #ctx{
        riak=proplists:get_value(riak, Props)
@@ -76,22 +76,21 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
 
 %% @spec malformed_request(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
-%% @doc Determine whether query parameters are badly-formed. 
+%% @doc Determine whether query parameters are badly-formed.
 %%      Specifically, we check that the index operation is of
 %%      a known type.
 malformed_request(RD, Ctx) ->
     %% Pull the params...
     Bucket = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(bucket, RD))),
     IndexField = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(field, RD))),
-    IndexOp = wrq:path_info(op, RD),
     Args1 = wrq:path_tokens(RD),
     Args2 = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
-        
-    case to_index_query(IndexOp, IndexField, Args2) of
+
+    case to_index_query(IndexField, Args2) of
         {ok, Query} ->
             %% Request is valid.
-            NewCtx = Ctx#ctx{ 
-                       bucket = Bucket, 
+            NewCtx = Ctx#ctx{
+                       bucket = Bucket,
                        index_query = Query
                       },
             {false, RD, NewCtx};
@@ -102,7 +101,7 @@ malformed_request(RD, Ctx) ->
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx}
     end.
-            
+
 
 
 %% @spec content_types_provided(reqdata(), context()) ->
@@ -139,41 +138,30 @@ produce_index_results(RD, Ctx) ->
 
 
 %% @private
-%% @spec to_index_op_query(binary(), binary(), [binary()]) -> 
-%%         {ok, [{atom(), binary(), list(binary())}]} | {error, Reasons}.
+%% @spec to_index_op_query(binary(), [binary()]) ->
+%%         {ok, {atom(), binary(), list(binary())}} | {error, Reasons}.
 %% @doc Given an IndexOp, IndexName, and Args, construct and return a
 %%      valid query, or a list of errors if the query is malformed.
-to_index_query(IndexOp, IndexField, Args) ->
-    %% Validate the index operation...
-    case list_to_index_op(IndexOp) of
-        {IndexOp1, NumArgs} when length(Args) == NumArgs->
-            %% Normalize the index field...
-            IndexField1 = riak_index:normalize_index_field(IndexField),
+to_index_query(IndexField, Args) ->
+    %% Normalize the index field...
+    IndexField1 = riak_index:normalize_index_field(IndexField),
 
-            %% Validate the number of arguments..
-            case riak_index:parse_fields([{IndexField1, X} || X <- Args]) of
-                {ok, ParsedFields} -> 
-                    Args1 = [X || {_,X} <- ParsedFields],
-                    {ok, [{IndexOp1, IndexField1, Args1}]};
-                {error, FailureReasons} ->
-                    {error, FailureReasons}
-            end;                                
-        {_IndexOp1, NumArgs} when length(Args) < NumArgs ->
+    %% Normalize the arguments...
+    case riak_index:parse_fields([{IndexField1, X} || X <- Args]) of
+        {ok, []} ->
             {error, {too_few_arguments, Args}};
-        {_IndexOp1, NumArgs} when length(Args) > NumArgs ->
-            {error, {too_many_arguments, Args}};
-        undefined ->
-            {error, {unknown_operation, IndexOp}}
-    end.
 
-%% @private
-%% @spec list_to_index_op(binary()) -> atom().
-%% @doc Convert a binary into an atom representing an index
-%%      operation. If the operation is known, then return undefined.
-list_to_index_op("eq") -> {eq, 1};
-list_to_index_op("lt") -> {lt, 1};
-list_to_index_op("gt") -> {gt, 1};
-list_to_index_op("lte") -> {lte, 1};
-list_to_index_op("gte") -> {gte, 1};
-list_to_index_op("range") -> {range, 2};
-list_to_index_op(_) -> undefined.
+        {ok, [{_, Value}]} ->
+            %% One argument == exact match query
+            {ok, {eq, IndexField1, [Value]}};
+
+        {ok, [{_, Start}, {_, End}]} ->
+            %% Two arguments == range query
+            {ok, {range, IndexField1, [Start, End]}};
+
+        {ok, _} ->
+            {error, {too_many_arguments, Args}};
+
+        {error, FailureReasons} ->
+            {error, FailureReasons}
+    end.
