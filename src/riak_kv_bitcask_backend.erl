@@ -87,7 +87,7 @@ start(Partition, Config) ->
             case check_symlink(LinkFile, false) of
                 {ok, DataFile} ->
                     BitcaskOpts = [{read_write, true} | Config],
-                    case bitcask:open(DataFile, BitcaskOpts) of
+                    case bitcask:open(filename:join(DataRoot, DataFile), BitcaskOpts) of
                         Ref when is_reference(Ref) ->
                             schedule_merge(Ref),
                             maybe_schedule_sync(Ref),
@@ -97,12 +97,12 @@ start(Partition, Config) ->
                                         opts=BitcaskOpts}};
                         {error, Reason1} ->
                             lager:error("Failed to start bitcask backend: ~p\n",
-                                                   [Reason1]),
+                                        [Reason1]),
                             {error, Reason1}
                     end;
                 {error, Reason} ->
                     lager:error("Failed to start bitcask backend: ~p\n",
-                                           [Reason]),
+                                [Reason]),
                     {error, Reason}
             end
     end.
@@ -227,7 +227,7 @@ drop(#state{ref=Ref,
 
             %% Now open the bitcask and return an updated state
             %% so this backend can continue processing.
-            case bitcask:open(DataFile, BitcaskOpts) of
+            case bitcask:open(filename:join(DataRoot, DataFile), BitcaskOpts) of
                 Ref1 when is_reference(Ref1) ->
                     {ok, State#state{ref=Ref1}};
                 {error, Reason} ->
@@ -405,26 +405,26 @@ check_symlink(LinkFile, DeleteExisting) ->
 %% @private
 make_symlink(LinkFile) ->
     {MegaSecs, Secs, MicroSecs} = erlang:now(),
-    DataFile = filename:join([filename:dirname(LinkFile),
-                              [filename:basename(LinkFile),
-                               "-",
-                               integer_to_list(MegaSecs),
-                               integer_to_list(Secs),
-                               integer_to_list(MicroSecs)]]),
-    case filelib:ensure_dir(DataFile) of
+    LinkAbsPath = filename:absname(LinkFile),
+    DataFile = [filename:basename(LinkFile),
+                "-",
+                integer_to_list(MegaSecs),
+                integer_to_list(Secs),
+                integer_to_list(MicroSecs)],
+    case filelib:ensure_dir(LinkAbsPath) of
         ok ->
-            case file:make_symlink(filename:basename(DataFile),
-                                   filename:absname(LinkFile)) of
+            case file:make_symlink(DataFile,
+                                   LinkAbsPath) of
                 ok ->
                     {ok, DataFile};
                 {error, Reason} ->
-                    lager:error("Failed to create bitcask dir ~s: ~p\n",
+                    lager:error("Failed to create bitcask dir ~s: ~p",
                                 [DataFile, Reason]),
                     {error, Reason}
             end;
         {error, Reason1} ->
-            lager:error("Failed to create bitcask dir ~s: ~p\n",
-                                   [DataFile, Reason1]),
+            lager:error("Failed to create bitcask dir ~s: ~p",
+                        [DataFile, Reason1]),
             {error, Reason1}
     end.
 
@@ -434,14 +434,16 @@ drop_data_cleanup(DataRoot, LinkFile, DataFile) ->
             %% List all the directories in data root
             case file:list_dir(DataRoot) of
                 {ok, Dirs} ->
+                    LinkBase = filename:basename(LinkFile),
                     %% Delete the contents of each directory and
                     %% the directory itself excluding the
                     %% current data directory and the symlink
                     %% pointing to it.
                     [data_directory_cleanup(filename:join(DataRoot, Dir)) ||
                         Dir <- Dirs,
-                        Dir /= filename:basename(DataFile),
-                        Dir /= filename:basename(LinkFile)];
+                        Dir /= lists:flatten(DataFile),
+                        Dir /= LinkBase,
+                        string:str(Dir, LinkBase) > 0];
                 {error, _} ->
                     ignore
             end
