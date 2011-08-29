@@ -295,8 +295,16 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
     index_query(Sender, Bucket, Query, Filter, Mod, ModState),
     {noreply, State}.
 
-handle_handoff_command(Req=?FOLD_REQ{}, Sender, State) ->
-    handle_command(Req, Sender, State);
+handle_handoff_command(Req=?FOLD_REQ{foldfun=FoldFun}, Sender, State) ->
+    %% The function in riak_core used for object folding
+    %% during handoff expects the bucket and key pair to be
+    %% passed as the first paramter, but in riak_kv the bucket
+    %% and key have been separated. This function wrapper is
+    %% to address this mismatch.
+    HandoffFun = fun(Bucket, Key, Value, Acc) ->
+                         FoldFun({Bucket, Key}, Value, Acc)
+                 end,
+    handle_command(Req?FOLD_REQ{foldfun=HandoffFun}, Sender, State);
 handle_handoff_command(Req={backend_callback, _Ref, _Msg}, Sender, State) ->
     handle_command(Req, Sender, State);
 handle_handoff_command(_Req, _Sender, State) -> {forward, State}.
@@ -315,13 +323,15 @@ handle_handoff_data(BinObj, State) ->
     PBObj = riak_core_pb:decode_riakobject_pb(zlib:unzip(BinObj)),
     BKey = {PBObj#riakobject_pb.bucket,PBObj#riakobject_pb.key},
     case do_diffobj_put(BKey, binary_to_term(PBObj#riakobject_pb.val), State) of
-        ok ->
-            {reply, ok, State};
+        {ok, UpdModState} ->
+            {reply, ok, State#state{modstate=UpdModState}};
+        {error, Reason, UpdModState} ->
+            {reply, {error, Reason}, State#state{modstate=UpdModState}};
         Err ->
             {reply, {error, Err}, State}
     end.
 
-encode_handoff_item({B,K}, V) ->
+encode_handoff_item({B, K}, V) ->
     zlib:zip(riak_core_pb:encode_riakobject_pb(
                #riakobject_pb{bucket=B, key=K, val=V})).
 
@@ -705,7 +715,8 @@ do_delete({Bucket, Key}, Mod, ModState) ->
 
 %% @private
 do_fold(Fun, Acc0, _State=#state{mod=Mod, modstate=ModState}) ->
-    Mod:fold_objects(Fun, Acc0, ModState).
+    {ok, Objects} = Mod:fold_objects(Fun, Acc0, [], ModState),
+    Objects.
 
 %% @private
 do_get_vclocks(KeyList,_State=#state{mod=Mod,modstate=ModState}) ->
