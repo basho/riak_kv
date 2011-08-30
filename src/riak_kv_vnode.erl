@@ -528,23 +528,28 @@ syntactic_put_merge(Mod, ModState, {Bucket, Key}, Obj1, ReqId, IndexBackend, Sta
         {error, not_found, _UpdModState} ->
             case IndexBackend of
                 true ->
-                    NewIndexSpecs = riak_object:get_index_specs(Obj1, add, true),
+                    NewIndexSpecs = riak_object:get_index_specs(Obj1),
                     {newobj, Obj1, NewIndexSpecs};
                 false ->
                     {newobj, Obj1, []}
             end;
         {ok, Val0, _UpdModState} ->
             Obj0 = binary_to_term(Val0),
-            case IndexBackend of
-                true ->
-                    IndexSpecs = riak_object:resolve_index_specs(Obj0, Obj1);
-                false ->
-                    IndexSpecs = []
-            end,
             ResObj = riak_object:syntactic_merge(Obj0,
                                                  Obj1,
                                                  term_to_binary(ReqId),
                                                  StartTime),
+            case IndexBackend of
+                true ->
+                    case riak_object:value_count(ResObj) of
+                        1 ->
+                            IndexSpecs = riak_object:get_index_specs(Obj0, Obj1);
+                        _ ->
+                            IndexSpecs = riak_object:resolve_index_specs(Obj0, Obj1)
+                    end;
+                false ->
+                    IndexSpecs = []
+            end,
             case riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
                 true ->
                     {oldobj, ResObj, IndexSpecs};
@@ -557,12 +562,10 @@ syntactic_put_merge(Mod, ModState, {Bucket, Key}, Obj1, ReqId, IndexBackend, Sta
 get_index_specs(Mod, ModState, {Bucket, Key}, Obj1) ->
     case Mod:get(Bucket, Key, ModState) of
         {error, not_found, _UpdModState} ->
-            riak_object:get_index_specs(Obj1, add, true);
+            riak_object:get_index_specs(Obj1);
         {ok, Val0, _UpdModState} ->
-            NewIndexSpecs = riak_object:get_index_specs(Obj1, add, false),
             Obj0 = binary_to_term(Val0),
-            OldIndexSpecs = riak_object:get_index_specs(Obj0, remove),
-            OldIndexSpecs ++ NewIndexSpecs
+            riak_object:get_index_specs(Obj0, Obj1)
     end.
 
 %% @private
