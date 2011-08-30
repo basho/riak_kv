@@ -213,8 +213,9 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{index_mod = IndexMod,
                                          index_state = IndexState,
                                          kv_mod = KVMod,
                                          kv_state = KVState}) ->
-    case lists:keymember(bucket, 1, Opts) orelse 
-        lists:keymember(index, 1, Opts) of
+    case lists:keymember(index, 1, Opts) orelse 
+        (lists:keymember(bucket, 1, Opts) andalso 
+         tuple_size(lists:keyfind(bucket, 1, Opts)) =:= 3) of
         true ->
             IndexMod:fold_index(FoldKeysFun, Acc, Opts, IndexState);
         false ->
