@@ -128,19 +128,6 @@ fold_index(FoldFun, Acc, Opts, State) ->
     Results = case Query of
                   [{eq, Field, Term}] ->
                       merge_index:lookup_sync(Pid, Bucket, Field, Term, FilterFun);
-
-                  [{lt, Field, Term}] ->
-                      merge_index:range_sync(Pid, Bucket, Field, undefined, inc(Term, -1), ?SIZE, FilterFun);
-
-                  [{gt, Field, Term}] ->
-                      merge_index:range_sync(Pid, Bucket, Field, inc(Term, 1), undefined, ?SIZE, FilterFun);
-
-                  [{lte, Field, Term}] ->
-                      merge_index:range_sync(Pid, Bucket, Field, undefined, Term, ?SIZE, FilterFun);
-
-                  [{gte, Field, Term}] ->
-                      merge_index:range_sync(Pid, Bucket, Field, Term, undefined, ?SIZE, FilterFun);
-
                   [{gte, Field, StartTerm}, {lte, Field, EndTerm}] ->
                       merge_index:range_sync(Pid, Bucket, Field, StartTerm, EndTerm, ?SIZE, FilterFun);
                   [{all, _Field}] ->
