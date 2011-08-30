@@ -22,6 +22,29 @@
 
 %% @doc riak_kv_memory_backend is a Riak storage backend that uses ets
 %% tables to store all data in memory.
+%% 
+%% === Configuration Options ===
+%%
+%% The following configuration options are available for the memory backend.
+%% The options should be specified in the `memory_backend' section of your
+%% app.config file. 
+%% 
+%% <ul>
+%% <li>`object_expiry_enabled' - Boolean option to enable time-based object
+%%    expiration. Defaults to `false'.</li>
+%% <li>`ttl' - The time in seconds that an object should live before being expired.
+%%    Default is 3600 seconds or 1 hour. This option is ignored unless 
+%%    `object_expiry_enabled' is `true'.</li>
+%% <li>`memory_cap_enabled' - Boolean option to enable a cap on the amount
+%%    of data that can be stored by the memory backend. When the memory
+%%    limit is reached, the objects that have been least recently accessed
+%%    are expunged until the amount of memory used is under the limit.
+%%    Default is `false'.</li>
+%% <li>`max_memory' - The amount of memory in megabytes to limit the backend to.
+%%    Default is 100 MB. This option is ignored unless 
+%%    `memory_cap_enabled' is `true'.</li>
+%% </ul>
+%%
 
 -module(riak_kv_memory_backend).
 -behavior(riak_kv_backend).
@@ -56,7 +79,7 @@
 
 -define(API_VERSION, 1).
 -define(CAPABILITIES, []).
--define (DEFAULT_TTL, timer:hours(1)).
+-define (DEFAULT_TTL, 3600). % 1 hour
 -define (DEFAULT_MEMORY,  100).  % 100MB
 
 -record(server_state, {data_ref :: integer() | atom(),
