@@ -240,7 +240,7 @@ postcondition(_From, _To, S,
               {call, _M, fold_buckets, [_FoldFun, _Acc, _Opts, _BeState]}, {ok, R}) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Buckets = [Bucket || {{Bucket, _}, _} <- ExpectedEntries],
-    lists:sort(Buckets) =:= lists:sort(R);
+    lists:usort(Buckets) =:= lists:sort(R);
 postcondition(_From, _To, S,
               {call, _M, fold_keys, [_FoldFun, _Acc, _Opts, _BeState]}, {ok, R}) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
