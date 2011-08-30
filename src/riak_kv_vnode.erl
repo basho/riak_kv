@@ -33,7 +33,7 @@
          del/3,
          put/6,
          readrepair/6,
-         index_query/6,
+         index_query/7,
          list_buckets/5,
          list_keys/4,
          list_keys/6,
@@ -74,6 +74,7 @@
                 modstate :: term(),
                 mrjobs :: term(),
                 bucket_buf_size :: pos_integer(),
+                index_buf_size :: pos_integer(),
                 key_buf_size :: pos_integer(),
                 in_handoff = false :: boolean()}).
 
@@ -178,6 +179,7 @@ init([Index]) ->
     Mod = app_helper:get_env(riak_kv, storage_backend),
     Configuration = app_helper:get_env(riak_kv),
     BucketBufSize = app_helper:get_env(riak_kv, bucket_buffer_size, 1000),
+    IndexBufSize = app_helper:get_env(riak_kv, index_buffer_size, 100),
     KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
 
     case catch Mod:start(Index, Configuration) of
@@ -190,6 +192,7 @@ init([Index]) ->
                         mod=Mod,
                         modstate=ModState,
                         bucket_buf_size=BucketBufSize,
+                        index_buf_size=IndexBufSize,
                         key_buf_size=KeyBufSize,
                         mrjobs=dict:new()}};
         {error, Reason} ->
@@ -312,6 +315,7 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                 Sender,
                 State=#state{idx=Index,
                              index_backend=IndexBackend,
+                             index_buf_size=IndexBufSize,
                              mod=Mod,
                              modstate=ModState}) ->
     case IndexBackend of
@@ -319,7 +323,7 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
             %% Construct the filter function
             FilterVNode = proplists:get_value(Index, FilterVNodes),
             Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-            index_query(Sender, Bucket, Query, Filter, Mod, ModState);
+            index_query(Sender, Bucket, Query, Filter, Mod, ModState, IndexBufSize);
         false ->
             riak_core_vnode:reply(Sender, {error, {indexes_not_supported, Mod}})
     end,
@@ -769,8 +773,7 @@ do_legacy_list_buckets(Caller,ReqId,Idx,Mod,ModState) ->
     end.
 
 %% @private
-index_query(Sender, Bucket, Query, Filter, Mod, ModState) ->
-    BufferSize = 100,
+index_query(Sender, Bucket, Query, Filter, Mod, ModState, BufferSize) ->
     BufferFun = fun(Results) ->
                         riak_core_vnode:reply(Sender,
                                               {results, {Bucket, Results}})
