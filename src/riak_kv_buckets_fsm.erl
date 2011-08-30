@@ -58,10 +58,12 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, ClientType]) ->
 
 process_results({results, Buckets},
                 StateData=#state{buckets=BucketAcc}) ->
-    {ok, StateData#state{buckets=ordsets:union(Buckets, BucketAcc)}};
+    {ok, StateData#state{buckets=ordsets:union(ordsets:from_list(Buckets),
+                                               BucketAcc)}};
 process_results({final_results, Buckets},
                 StateData=#state{buckets=BucketAcc}) ->
-    {done, StateData#state{buckets=ordsets:union(Buckets, BucketAcc)}}.
+    {done, StateData#state{buckets=ordsets:union(ordsets:from_list(Buckets),
+                                                 BucketAcc)}}.
 
 finish({error, Error},
        StateData=#state{client_type=ClientType,
