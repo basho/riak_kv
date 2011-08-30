@@ -149,9 +149,16 @@ list_keys(Preflist, ReqId, Caller, Bucket) ->
                                  riak_kv_vnode_master).
 
 fold(Preflist, Fun, Acc0) ->
+    %% The function used for object folding expects the
+    %% bucket and key pair to be passed as the first parameter, but in
+    %% riak_kv the bucket and key have been separated. This function
+    %% wrapper is to address this mismatch.
+    FoldFun = fun(Bucket, Key, Value, Acc) ->
+                         Fun({Bucket, Key}, Value, Acc)
+                 end,
     riak_core_vnode_master:sync_spawn_command(Preflist,
                                               ?FOLD_REQ{
-                                                 foldfun=Fun,
+                                                 foldfun=FoldFun,
                                                  acc0=Acc0},
                                               riak_kv_vnode_master).
 
@@ -306,7 +313,7 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
 handle_handoff_command(Req=?FOLD_REQ{foldfun=FoldFun}, Sender, State) ->
     %% The function in riak_core used for object folding
     %% during handoff expects the bucket and key pair to be
-    %% passed as the first paramter, but in riak_kv the bucket
+    %% passed as the first parameter, but in riak_kv the bucket
     %% and key have been separated. This function wrapper is
     %% to address this mismatch.
     HandoffFun = fun(Bucket, Key, Value, Acc) ->
