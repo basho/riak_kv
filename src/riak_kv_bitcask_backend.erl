@@ -443,7 +443,7 @@ drop_data_cleanup(DataRoot, LinkFile, DataFile) ->
                         Dir <- Dirs,
                         Dir /= lists:flatten(DataFile),
                         Dir /= LinkBase,
-                        string:str(Dir, LinkBase) > 0];
+                        string:left(Dir, length(LinkBase) + 1) =:= (LinkBase ++ "-")];
                 {error, _} ->
                     ignore
             end
