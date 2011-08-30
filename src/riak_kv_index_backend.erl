@@ -256,8 +256,6 @@ status(#state{kv_mod = KVMod,
     IndexStatus = {IndexMod, IndexMod:status(IndexState)},
     [{KVMod, KVStatus},  {IndexMod, IndexStatus}].
 
-%% @spec callback(state(), ref(), term()) -> ok.
-%%
 %% @doc Pass any callbacks through to the KV backend.
 -spec callback(reference(), any(), state()) -> {ok, state()}.
 callback(Ref, Msg, #state{kv_mod = KVMod,
