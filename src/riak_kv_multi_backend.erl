@@ -272,7 +272,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, State=#state{backends=Backends}) ->
     case Bucket of
         undefined ->
             FoldFun =
-                fun({Name, Module, SubState}, Acc1) ->
+                fun({_Name, Module, SubState}, Acc1) ->
                         Result = Module:fold_objects(FoldObjectsFun,
                                                      Acc1,
                                                      Opts,
