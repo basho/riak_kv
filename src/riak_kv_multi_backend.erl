@@ -157,24 +157,46 @@ stop(State) ->
                  {ok, not_found, state()} |
                  {error, term(), state()}.
 get(Bucket, Key, State) ->
-    {_Name, Module, SubState} = get_backend(Bucket, State),
-    Module:get(Bucket, Key, SubState).
+    {Name, Module, SubState} = get_backend(Bucket, State),
+    case Module:get(Bucket, Key, SubState) of
+        {ok, Value, NewSubState} ->
+            NewState = update_backend_state(Name, Module, NewSubState, State),
+            {ok, Value, NewState};
+        {error, Reason, NewSubState} ->
+            NewState = update_backend_state(Name, Module, NewSubState, State),
+            {error, Reason, NewState}
+    end.
 
 %% @doc Insert an object into the eleveldb backend
 -spec put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
 put(Bucket, Key, Value, State) ->
-    {_Name, Module, SubState} = get_backend(Bucket, State),
-    Module:put(Bucket, Key, Value, SubState).
+    {Name, Module, SubState} = get_backend(Bucket, State),
+    case Module:put(Bucket, Key, Value, SubState) of
+        {ok, NewSubState} ->
+            NewState = update_backend_state(Name, Module, NewSubState, State),
+            {ok, NewState};
+        {error, Reason, NewSubState} ->
+            NewState = update_backend_state(Name, Module, NewSubState, State),
+            {error, Reason, NewState}
+    end.
+
 
 %% @doc Delete an object from the backend
 -spec delete(riak_object:bucket(), riak_object:key(), state()) ->
                     {ok, state()} |
                     {error, term(), state()}.
 delete(Bucket, Key, State) ->
-    {_Name, Module, SubState} = get_backend(Bucket, State),
-    Module:delete(Bucket, Key, SubState).
+    {Name, Module, SubState} = get_backend(Bucket, State),
+    case Module:delete(Bucket, Key, SubState) of
+        {ok, NewSubState} ->
+            NewState = update_backend_state(Name, Module, NewSubState, State),
+            {ok, NewState};
+        {error, Reason, NewSubState} ->
+            NewState = update_backend_state(Name, Module, NewSubState, State),
+            {error, Reason, NewState}
+    end.
 
 %% @doc Fold over all the buckets
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
@@ -238,7 +260,7 @@ fold_keys(FoldKeysFun, Acc, Opts, State=#state{backends=Backends}) ->
                              Acc,
                              Opts,
                              SubState)
-    end.            
+    end.
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
@@ -246,11 +268,11 @@ fold_keys(FoldKeysFun, Acc, Opts, State=#state{backends=Backends}) ->
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {error, term()}.
 fold_objects(FoldObjectsFun, Acc, Opts, State=#state{backends=Backends}) ->
-    Bucket =  proplists:get_value(bucket, Opts),
+    Bucket = proplists:get_value(bucket, Opts),
     case Bucket of
         undefined ->
             FoldFun =
-                fun({_, Module, SubState}, Acc1) ->
+                fun({Name, Module, SubState}, Acc1) ->
                         Result = Module:fold_objects(FoldObjectsFun,
                                                      Acc1,
                                                      Opts,
@@ -338,6 +360,17 @@ get_backend(Bucket, State) ->
         false -> throw({?MODULE, undefined_backend, BackendName});
         Backend -> Backend
     end.
+
+%% @private
+%% @doc Update the state for one of the
+%% composing backends of this multi backend.
+update_backend_state(Backend, Module, ModState, State) ->
+    Backends = State#state.backends,
+    NewBackends = lists:keyreplace(Backend,
+                                   1,
+                                   Backends,
+                                   {Backend, Module, ModState}),
+    State#state{backends=NewBackends}.
 
 %% @private
 %% @doc Function to filter error results when

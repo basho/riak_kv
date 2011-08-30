@@ -756,7 +756,7 @@ do_diffobj_put(BKey={Bucket, Key}, DiffObj,
                 _ -> nop
             end,
             Res;
-        _ -> ok
+        _ -> {ok, ModState}
     end.
 
 %% @private
