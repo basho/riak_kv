@@ -34,9 +34,9 @@
          put/6,
          readrepair/6,
          index_query/6,
-         list_buckets/4,
+         list_buckets/5,
          list_keys/4,
-         list_keys/5,
+         list_keys/6,
          fold/3,
          get_vclocks/2]).
 
@@ -72,6 +72,8 @@
                 mod :: module(),
                 modstate :: term(),
                 mrjobs :: term(),
+                bucket_buf_size :: pos_integer(),
+                key_buf_size :: pos_integer(),
                 in_handoff = false :: boolean()}).
 
 -record(putargs, {returnbody :: boolean(),
@@ -163,12 +165,16 @@ get_vclocks(Preflist, BKeyList) ->
 init([Index]) ->
     Mod = app_helper:get_env(riak_kv, storage_backend),
     Configuration = app_helper:get_env(riak_kv),
+    BucketBufSize = app_helper:get_env(riak_kv, bucket_buffer_size, 1000),
+    KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
 
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             {ok, #state{idx=Index,
                         mod=Mod,
                         modstate=ModState,
+                        bucket_buf_size=BucketBufSize,
+                        key_buf_size=KeyBufSize,
                         mrjobs=dict:new()}};
         {error, Reason} ->
             lager:error("Failed to start ~p Reason: ~p",
@@ -264,10 +270,11 @@ handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
                 _FilterVNodes,
                 Sender,
                 State=#state{mod=Mod,
-                             modstate=ModState}) ->
+                             modstate=ModState,
+                             bucket_buf_size=BucketBufSize}) ->
     %% Construct the filter function
     Filter = riak_kv_coverage_filter:build_filter(all, ItemFilter, undefined),
-    list_buckets(Sender, Filter, Mod, ModState),
+    list_buckets(Sender, Filter, Mod, ModState, BucketBufSize),
     {noreply, State};
 handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
                                   item_filter=ItemFilter},
@@ -275,11 +282,12 @@ handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
                 Sender,
                 State=#state{idx=Index,
                              mod=Mod,
-                             modstate=ModState}) ->
+                             modstate=ModState,
+                             key_buf_size=KeyBufSize}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-    list_keys(Sender, Bucket, Filter, Mod, ModState),
+    list_keys(Sender, Bucket, Filter, Mod, ModState, KeyBufSize),
     {noreply, State};
 handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                               item_filter=ItemFilter,
@@ -524,8 +532,7 @@ do_get_binary({Bucket, Key}, Mod, ModState) ->
 
 
 %% @private
-list_buckets(Sender, Filter, Mod, ModState) ->
-    BufferSize = 1000,
+list_buckets(Sender, Filter, Mod, ModState, BufferSize) ->
     BufferFun = fun(Results) ->
                         riak_core_vnode:reply(Sender, {results, Results})
                 end,
@@ -560,8 +567,7 @@ list_buckets(Sender, Filter, Mod, ModState) ->
     end.
 
 %% @private
-list_keys(Sender, Bucket, Filter, Mod, ModState) ->
-    BufferSize = 100,
+list_keys(Sender, Bucket, Filter, Mod, ModState, BufferSize) ->
     BufferFun = fun(Results) ->
                         riak_core_vnode:reply(Sender,
                                               {results, {Bucket, Results}})
