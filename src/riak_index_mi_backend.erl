@@ -168,28 +168,6 @@ drop(State) ->
 callback(_State, _Ref, _Msg) ->
     ok.
 
-
-%% @private
-%% @spec inc(term(), Amt :: integer()) -> term().
-%%
-%% @doc Increments or decrements an Erlang data type by one
-%%      position. Used during construction of exclusive range searches.
-inc(Term, Amt)  when is_integer(Term) ->
-    Term + Amt;
-inc(Term, _Amt) when is_float(Term) ->
-    Term; %% Doesn't make sense to have exclusive range on floats.
-inc(Term, Amt)  when is_list(Term) ->
-    NewTerm = inc(list_to_binary(Term), Amt),
-    binary_to_list(NewTerm);
-inc(Term, Amt)  when is_binary(Term) ->
-    Bits = size(Term) * 8,
-    <<Int:Bits/integer>> = Term,
-    NewInt = inc(Int, Amt),
-    <<NewInt:Bits/integer>>;
-inc(Term, _) ->
-    throw({unhandled_type, binary_inc, Term}).
-
-
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
