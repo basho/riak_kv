@@ -336,25 +336,13 @@ increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
 -spec get_index_specs(riak_object(), index_op(), boolean()) ->
                              [{index_op(), binary(), index_value()}].
 get_index_specs(RObj, IndexOp, WithSpecialFields) ->
-    case value_count(RObj) > 1 of
-        true ->
-            MetaDatas = get_metadatas(RObj),
-            IndexSpecs = 
-                [begin
-                     Indexes = dict:fetch(?MD_INDEX, MD),
-                     assemble_index_specs(Indexes, IndexOp, WithSpecialFields)
-                 end || MD <- MetaDatas, dict:is_key(?MD_INDEX, MD)],
-            lists:flatten(IndexSpecs);
-        false ->
-            MD = get_metadata(RObj),
-            case dict:is_key(?MD_INDEX, MD) of
-                true ->
-                    Indexes = dict:fetch(?MD_INDEX, MD),
-                    assemble_index_specs(Indexes, IndexOp, WithSpecialFields);
-                false ->
-                    []
-            end
-    end.
+    MetaDatas = get_metadatas(RObj),
+    IndexSpecs = 
+        [begin
+             Indexes = dict:fetch(?MD_INDEX, MD),
+             assemble_index_specs(Indexes, IndexOp, WithSpecialFields)
+         end || MD <- MetaDatas, dict:is_key(?MD_INDEX, MD)],
+    lists:flatten(IndexSpecs).
 
 %% @doc Assemble a list of index specs in the
 %% form of triplets of the form
