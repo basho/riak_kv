@@ -550,12 +550,7 @@ syntactic_put_merge(Mod, ModState, {Bucket, Key}, Obj1, ReqId, IndexBackend, Sta
                                                  StartTime),
             case IndexBackend of
                 true ->
-                    case riak_object:value_count(ResObj) of
-                        1 ->
-                            IndexSpecs = riak_object:get_index_specs(Obj0, Obj1);
-                        _ ->
-                            IndexSpecs = riak_object:resolve_index_specs(Obj0, Obj1)
-                    end;
+                    IndexSpecs = riak_object:get_index_specs(Obj0, Obj1, ResObj);
                 false ->
                     IndexSpecs = []
             end,

@@ -65,7 +65,7 @@
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([merge/2, apply_updates/1, syntactic_merge/3, syntactic_merge/4]).
 -export([to_json/1, from_json/1]).
--export([get_index_specs/1, get_index_specs/2, resolve_index_specs/2]).
+-export([get_index_specs/1, get_index_specs/3]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 
 %% @doc Constructor for new riak objects.
@@ -338,31 +338,33 @@ increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
                              [{index_op(), binary(), index_value()}].
 get_index_specs(Obj) ->
     Indexes = get_index_data(Obj),
-    assemble_index_specs(Indexes, add, true).
+    assemble_index_specs(Indexes, add).
 
-%% @doc Prepare a list of index specifications
-%% to pass to the backend. This function assumes
-%% that the object passed as the first parameter
-%% does not have siblings and will assemble specs
-%% to replace all of its indexes with the indexes
-%% specified in the object passed as the second
-%% parameter.
--spec get_index_specs(riak_object(), riak_object()) ->
+%% @doc Prepare a list of index specifications to pass to the
+%% backend. If the object passed as the first parameter does not have
+%% siblings, the function will assemble specs to replace all of its
+%% indexes with the indexes specified in the object passed as the
+%% second parameter. If there are siblings only the unique indexes new
+%% indexes are added.
+-spec get_index_specs(riak_object(), riak_object(), riak_object()) ->
                              [{index_op(), binary(), index_value()}].
-get_index_specs(OldObj, NewObj) ->
+get_index_specs(OldObj, NewObj, MergedObj) ->    
     OldIndexes = get_index_data(OldObj),
+    OldIndexSet = ordsets:from_list(OldIndexes),
     NewIndexes = get_index_data(NewObj),
     NewIndexSet = ordsets:from_list(NewIndexes),
-    OldIndexSet = ordsets:from_list(OldIndexes),
+    AllIndexes = get_index_data(MergedObj),
+    AllIndexSet = ordsets:from_list(AllIndexes),
+    RemoveIndexSet = ordsets:subtract(
+                       ordsets:subtract(OldIndexSet, NewIndexSet),
+                       AllIndexSet),
     NewIndexSpecs =
         assemble_index_specs(ordsets:subtract(NewIndexSet, OldIndexSet),
-                             add,
-                             false),
-    OldIndexSpecs =
-        assemble_index_specs(ordsets:subtract(OldIndexSet, NewIndexSet),
-                             remove,
-                             false),
-    NewIndexSpecs ++ OldIndexSpecs.
+                             add),
+    RemoveIndexSpecs =
+        assemble_index_specs(RemoveIndexSet,
+                             remove),
+    NewIndexSpecs ++ RemoveIndexSpecs.
 
 %% @doc Get a list of {Index, Value} tuples from the
 %% metadata of an object.
@@ -370,55 +372,16 @@ get_index_specs(OldObj, NewObj) ->
 get_index_data(Obj) ->
     MetaDatas = get_metadatas(Obj),
     lists:flatten([dict:fetch(?MD_INDEX, MD)
-                   || MD <- MetaDatas, dict:is_key(?MD_INDEX, MD)]).
+                   || MD <- MetaDatas,
+                      dict:is_key(?MD_INDEX, MD)]).
 
 %% @doc Assemble a list of index specs in the
 %% form of triplets of the form
 %% {IndexOperation, IndexField, IndexValue}.
--spec assemble_index_specs([{binary(), binary()}], index_op(), boolean()) ->
+-spec assemble_index_specs([{binary(), binary()}], index_op()) ->
                                   [{index_op(), binary(), binary()}].
-assemble_index_specs(Indexes, IndexOp, true) ->
-    [{IndexOp, Index, Value} || {Index, Value} <- Indexes];
-assemble_index_specs(Indexes, IndexOp, false) ->
-    [{IndexOp, Index, Value} || {Index, Value} <- Indexes,
-                                Index /= ?BUCKETFIELD,
-                                Index /= ?KEYFIELD].
-
-%% @doc Prepare a list of index specifications
-%% to pass to the backend including the resolution
-%% of any conflicting index specifications among
-%% the object's siblings.
--spec resolve_index_specs(riak_object(), riak_object()) ->
-                             [{index_op(), binary(), index_value()}].
-resolve_index_specs(OldObj, NewObj) ->
-    OldIndexes = get_index_data(OldObj),
-    NewIndexes = get_index_data(NewObj),
-    IndexResolver =
-        fun({Index, Value}, Acc) ->
-                case orddict:is_key(Index, OldIndexes) of
-                    true ->
-                        CurrentValue =
-                            orddict:fetch(Index, OldIndexes),
-                        case Value /= CurrentValue of
-                            true ->
-                                [{add, Index, Value} | Acc];
-                            false ->
-                                Acc
-                        end;
-                    false ->
-                        [{add, Index, Value} | Acc]
-                end
-        end,
-    case NewIndexes of
-        [] ->
-            %% Since the current object has siblings we
-            %% preserve all existing indexes rather than
-            %% purge them all as is the case when there
-            %% are no siblings.
-            [];
-        _ ->
-            lists:foldl(IndexResolver, [], NewIndexes)
-    end.
+assemble_index_specs(Indexes, IndexOp) ->
+    [{IndexOp, Index, Value} || {Index, Value} <- Indexes].
 
 %% @spec set_contents(riak_object(), [{dict(), value()}]) -> riak_object()
 %% @doc  INTERNAL USE ONLY.  Set the contents of riak_object to the
