@@ -214,8 +214,8 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
                Sender, State=#state{idx=Idx}) ->
     riak_kv_mapred_cache:eject(BKey),
     riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
-    do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
-    {noreply, State};
+    UpdState = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
+    {noreply, UpdState};
 
 handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
     do_get(Sender, BKey, ReqId, State);
@@ -399,12 +399,11 @@ handle_exit(_Pid, Reason, State) ->
 
 %% old vnode helper functions
 
-
-                                                %store_call(State=#state{mod=Mod, modstate=ModState}, Msg) ->
-                                                %    Mod:call(ModState, Msg).
+%% store_call(State=#state{mod=Mod, modstate=ModState}, Msg) ->
+%% Mod:call(ModState, Msg).
 
 %% @private
-                                                % upon receipt of a client-initiated put
+%% upon receipt of a client-initiated put
 do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     case proplists:get_value(bucket_props, Options) of
         undefined ->
@@ -428,9 +427,10 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        starttime=StartTime,
                        prunetime=PruneTime},
     {PrepPutRes, UpdPutArgs} = prepare_put(State, PutArgs),
-    Reply = perform_put(PrepPutRes, State, UpdPutArgs),
+    {Reply, UpdState} = perform_put(PrepPutRes, State, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
-    riak_kv_stat:update(vnode_put).
+    riak_kv_stat:update(vnode_put),
+    UpdState.
 
 prepare_put(#state{index_backend=false}, PutArgs=#putargs{lww=true, robj=RObj}) ->
     {{true, RObj}, PutArgs};
@@ -470,28 +470,37 @@ prepare_put(#state{index_backend=IndexBackend,
             {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs}}
     end.
 
-perform_put({false, Obj},#state{idx=Idx},#putargs{returnbody=true,reqid=ReqID}) ->
-    {dw, Idx, Obj, ReqID};
-perform_put({false, _Obj}, #state{idx=Idx}, #putargs{returnbody=false,reqid=ReqId}) ->
-    {dw, Idx, ReqId};
+perform_put({false, Obj},
+            #state{idx=Idx}=State,
+            #putargs{returnbody=true,
+                     reqid=ReqID}) ->
+    {{dw, Idx, Obj, ReqID}, State};
+perform_put({false, _Obj},
+            #state{idx=Idx}=State,
+            #putargs{returnbody=false,
+                     reqid=ReqId}) ->
+    {{dw, Idx, ReqId}, State};
 perform_put({true, Obj},
             #state{idx=Idx,
                    mod=Mod,
-                   modstate=ModState},
+                   modstate=ModState}=State,
             #putargs{returnbody=RB,
                      bkey={Bucket, Key},
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
     Val = term_to_binary(Obj),
     case Mod:put(Bucket, Key, IndexSpecs, Val, ModState) of
-        {ok, _UpdModstate} ->
+        {ok, UpdModState} ->
             case RB of
-                true -> {dw, Idx, Obj, ReqID};
-                false -> {dw, Idx, ReqID}
+                true -> 
+                    Reply = {dw, Idx, Obj, ReqID};
+                false ->
+                    Reply = {dw, Idx, ReqID}
             end;
-        {error, _Reason, _UpdModState} ->
-            {fail, Idx, ReqID}
-    end.
+        {error, _Reason, UpdModState} ->
+            Reply = {fail, Idx, ReqID}
+    end,
+    {Reply, State#state{modstate=UpdModState}}.
 
 %% @private
 %% enforce allow_mult bucket property so that no backend ever stores
