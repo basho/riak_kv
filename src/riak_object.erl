@@ -65,7 +65,7 @@
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([merge/2, apply_updates/1, syntactic_merge/3, syntactic_merge/4]).
 -export([to_json/1, from_json/1]).
--export([get_index_specs/1, get_index_specs/3]).
+-export([get_index_specs/1, get_index_specs/2]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 
 %% @doc Constructor for new riak objects.
@@ -344,20 +344,26 @@ get_index_specs(Obj) ->
 %% backend. If the object passed as the first parameter does not have
 %% siblings, the function will assemble specs to replace all of its
 %% indexes with the indexes specified in the object passed as the
-%% second parameter. If there are siblings only the unique indexes new
+%% second parameter. If there are siblings only the unique new
 %% indexes are added.
--spec get_index_specs(riak_object(), riak_object(), riak_object()) ->
+-spec get_index_specs(riak_object(), riak_object()) ->
                              [{index_op(), binary(), index_value()}].
-get_index_specs(OldObj, NewObj, MergedObj) ->    
+get_index_specs(Obj, OldObj) ->
     OldIndexes = get_index_data(OldObj),
     OldIndexSet = ordsets:from_list(OldIndexes),
-    NewIndexes = get_index_data(NewObj),
-    NewIndexSet = ordsets:from_list(NewIndexes),
-    AllIndexes = get_index_data(MergedObj),
-    AllIndexSet = ordsets:from_list(AllIndexes),
-    RemoveIndexSet = ordsets:subtract(
-                       ordsets:subtract(OldIndexSet, NewIndexSet),
-                       AllIndexSet),
+    case riak_object:value_count(Obj) > 1 of
+        true ->
+            AllIndexes = get_index_data(Obj),
+            AllIndexSet = ordsets:from_list(AllIndexes),
+            NewIndexSet = ordsets:subtract(AllIndexSet, OldIndexSet);
+        false ->
+            NewIndexes = get_index_data(Obj),
+            NewIndexSet = ordsets:from_list(NewIndexes),
+            AllIndexSet = NewIndexSet
+    end,
+   RemoveIndexSet = ordsets:subtract(
+                      ordsets:subtract(OldIndexSet, AllIndexSet),
+                      NewIndexSet),
     NewIndexSpecs =
         assemble_index_specs(ordsets:subtract(NewIndexSet, OldIndexSet),
                              add),
