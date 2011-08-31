@@ -75,7 +75,7 @@
                 n :: pos_integer(),
                 w :: non_neg_integer(),
                 dw :: non_neg_integer(),
-                coord_idx_node,
+                coord_pl_entry :: {integer(), atom()},
                 preflist2 :: riak_core_apl:preflist2(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
                 req_id :: pos_integer(),
@@ -191,13 +191,13 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                 {error, Reason} ->
                     process_reply({error, {coord_handoff_failed, Reason}}, StateData0)
             end;
-        [CoordIdxNode|_] ->
+        [CoordPLEntry|_] ->
             %% This node is in the preference list, continue
             StartTime = riak_core_util:moment(),
             StateData = StateData0#state{n = N,
                                          bkey = BKey,
                                          bucket_props = BucketProps,
-                                         coord_idx_node = CoordIdxNode,
+                                         coord_pl_entry = CoordPLEntry,
                                          preflist2 = Preflist2,
                                          starttime = StartTime},
             new_state_timeout(validate, StateData)
@@ -291,12 +291,11 @@ precommit(timeout, State = #state{precommit = [Hook | Rest], robj = RObj}) ->
 
 execute_local(timeout, StateData0=#state{robj=RObj, req_id = ReqId,
                                          timeout=Timeout, bkey=BKey,
-                                         coord_idx_node = {_Index, _Node} = CoordIndexNode,
+                                         coord_pl_entry = {_Index, _Node} = CoordPLEntry,
                                          vnode_options=VnodeOptions,
                                          starttime = StartTime}) ->
-    %RObj = riak_object:increment_vclock(RObj0, Node, StartTime),
     TRef = schedule_timeout(Timeout),
-    riak_kv_vnode:coord_put(CoordIndexNode, BKey, RObj, ReqId, StartTime, VnodeOptions),
+    riak_kv_vnode:coord_put(CoordPLEntry, BKey, RObj, ReqId, StartTime, VnodeOptions),
     StateData = StateData0#state{robj = RObj, tref = TRef},
     %% Must always wait for local vnode - it contains the object with updated vclock
     %% to use for the remotes. (Ignore optimization for N=1 case for now).
@@ -435,12 +434,12 @@ process_reply(Reply, StateData = #state{postcommit = PostCommit,
 %% enough responses have been received yet (i.e. if W/DW=1)
 execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
                                 preflist2 = Preflist2, bkey=BKey,
-                                coord_idx_node = CoordIndexNode,
+                                coord_pl_entry = CoordPLEntry,
                                 vnode_options=VnodeOptions,
                                 putcore=PutCore,
                                 starttime = StartTime}) ->
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2,
-                             IndexNode /= CoordIndexNode],
+                             IndexNode /= CoordPLEntry],
     riak_kv_vnode:put(Preflist, BKey, RObj, ReqId, StartTime, VnodeOptions),
     case riak_kv_put_core:enough(PutCore) of
         true ->
