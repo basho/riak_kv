@@ -57,7 +57,7 @@
 %% ===================================================================
 %% Public API
 %% ===================================================================
-n
+
 %% @doc Return the major version of the
 %% current API and a capabilities list.
 -spec api_version() -> {integer(), [atom()]}.
