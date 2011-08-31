@@ -73,7 +73,7 @@ handle_info({tcp_closed, Socket}, State=#state{sock=Socket}) ->
     {stop, normal, State};
 handle_info({tcp_error, Socket, _Reason}, State=#state{sock=Socket}) ->
     {stop, normal, State};
-handle_info({tcp, _Sock, Data}, State=#state{sock=Socket}) ->
+handle_info({tcp, _Sock, Data}, State=#state{sock=Socket, req=undefined}) ->
     [MsgCode|MsgData] = Data,
     Msg = riakc_pb:decode(MsgCode, MsgData),
     case process_message(Msg, State) of
@@ -83,6 +83,12 @@ handle_info({tcp, _Sock, Data}, State=#state{sock=Socket}) ->
             inet:setopts(Socket, [{active, once}])
     end,
     {noreply, NewState};
+handle_info({tcp, _Sock, _Data}, State) ->
+    %% req =/= undefined: received a new request while another was in
+    %% progress -> Error
+    lager:error("Received a new PB socket request"
+                " while another was in progress"),
+    {stop, normal, State};
 
 %% Handle responses from stream_list_keys 
 handle_info({ReqId, done},
@@ -102,19 +108,16 @@ handle_info({ReqId, Error},
 
 %% PIPE Handle response from mapred_stream
 handle_info(#pipe_eoi{ref=ReqId},
-            State=#state{sock = Socket, req=#rpbmapredreq{}, req_ctx=ReqId}) ->
+            State=#state{req=#rpbmapredreq{}, req_ctx=ReqId}) ->
     NewState = send_msg(#rpbmapredresp{done = 1}, State),
-    inet:setopts(Socket, [{active, once}]),
     {noreply, NewState#state{req = undefined, req_ctx = undefined}};
 
 handle_info(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
-            State=#state{sock=Socket,
-                         req=#rpbmapredreq{content_type = ContentType}, 
+            State=#state{req=#rpbmapredreq{content_type = ContentType}, 
                          req_ctx=ReqId}) ->
     case encode_mapred_phase([Res], ContentType) of
         {error, Reason} ->
             NewState = send_error("~p", [Reason], State),
-            inet:setopts(Socket, [{active, once}]),
             {noreply, NewState#state{req = undefined, req_ctx = undefined}};
         Response ->
             {noreply, send_msg(#rpbmapredresp{phase=PhaseId, 
@@ -408,7 +411,7 @@ pipe_mapreduce(Req, State, Inputs, Query, _Timeout) ->
                 ok ->
                     Ref = (Pipe#pipe.sink)#fitting.ref,
                     %% TODO: timeout
-                    {pause, State#state{req=Req, req_ctx=Ref}};
+                    State#state{req=Req, req_ctx=Ref};
                 Error ->
                     %% even if the structure looks right, it might name
                     %% a non-existent key filter or something
