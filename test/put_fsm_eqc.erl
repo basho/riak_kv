@@ -312,7 +312,7 @@ prop_basic_put() ->
                                                   {n, N},
                                                   {bucket_props, BucketProps},
                                                   {preflist2, PL2},
-                                                  {coord_idx_node, CoordIdxNode}]),
+                                                  {coord_pl_entry, CoordIdxNode}]),
         ok = riak_kv_test_util:wait_for_pid(PutPid),
         ok = riak_kv_test_util:wait_for_children(PutPid),
         Res = fsm_eqc_util:wait_for_req_id(?REQ_ID, PutPid),
