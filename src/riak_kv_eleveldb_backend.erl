@@ -57,7 +57,7 @@
 %% ===================================================================
 %% Public API
 %% ===================================================================
-
+n
 %% @doc Return the major version of the
 %% current API and a capabilities list.
 -spec api_version() -> {integer(), [atom()]}.
@@ -143,9 +143,8 @@ delete(Bucket, Key, #state{ref=Ref,
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{fold_opts=FoldOpts,
                                                 ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    {Acc0, _LastBucket} =
-        eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts),
-    {ok, Acc0}.
+    BucketFolder = eleveldb:key_folder(Ref, FoldFun, {Acc, []}, FoldOpts),
+    {async, BucketFolder}.
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
@@ -157,17 +156,8 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
     Bucket =  proplists:get_value(bucket, Opts),
     FoldOpts = fold_opts(Bucket, FoldOpts1),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-
-    %% try
-    %%     Acc0 = eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts),
-    %%     {ok, Acc0}
-    %% catch
-    %%     {break, AccFinal} ->
-    %%         {ok, AccFinal}
-    %% end.
     KeyFolder = eleveldb:key_folder(Ref, FoldFun, Acc, FoldOpts),
     {async, KeyFolder}.
-
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),

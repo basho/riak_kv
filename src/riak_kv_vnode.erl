@@ -76,7 +76,7 @@
                 bucket_buf_size :: pos_integer(),
                 index_buf_size :: pos_integer(),
                 key_buf_size :: pos_integer(),
-                async_fold :: boolean(),
+                async_backend :: boolean(),
                 in_handoff = false :: boolean()}).
 
 -type index_op() :: add | remove.
@@ -188,17 +188,17 @@ init([Index]) ->
             %% Get the backend capabilities
             {_, Capabilities} = Mod:api_version(),
             IndexBackend = lists:member(indexes, Capabilities),
-            AsyncFold = lists:member(async_fold, Capabilities),
+            AsyncBackend = lists:member(async_fold, Capabilities),
             %% Create worker pool initialization tuple
-            KeyFoldWorkerPool = {pool, riak_kv_fold_keys_worker, 10, []},
+            KeyFoldWorkerPool = {pool, riak_kv_fold_worker, 10, []},
             {ok, #state{idx=Index,
+                        async_backend=AsyncBackend,
                         index_backend=IndexBackend,
                         mod=Mod,
                         modstate=ModState,
                         bucket_buf_size=BucketBufSize,
                         index_buf_size=IndexBufSize,
                         key_buf_size=KeyBufSize,
-                        async_fold=AsyncFold,
                         mrjobs=dict:new()}, [KeyFoldWorkerPool]};
         {error, Reason} ->
             lager:error("Failed to start ~p Reason: ~p",
@@ -293,31 +293,39 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
 handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
                 _FilterVNodes,
                 Sender,
-                State=#state{mod=Mod,
-                             modstate=ModState,
-                             bucket_buf_size=BucketBufSize}) ->
+                State=#state{async_backend=AsyncBackend,
+                             bucket_buf_size=BucketBufSize,
+                             mod=Mod,
+                             modstate=ModState}) ->
     %% Construct the filter function
     Filter = riak_kv_coverage_filter:build_filter(all, ItemFilter, undefined),
-    list_buckets(Sender, Filter, Mod, ModState, BucketBufSize),
-    {noreply, State};
+    case AsyncBackend of
+        true ->
+            AsyncWork =
+                async_list_buckets(Sender, Filter, Mod, ModState, BucketBufSize),
+            {async, AsyncWork, Sender, State};
+        false ->
+            list_buckets(Sender, Filter, Mod, ModState, BucketBufSize),
+            {noreply, State}
+    end;
 handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
                                  item_filter=ItemFilter},
                 FilterVNodes,
                 Sender,
-                State=#state{async_fold=AsyncFold,
+                State=#state{async_backend=AsyncBackend,
                              idx=Index,
+                             key_buf_size=KeyBufSize,
                              mod=Mod,
-                             modstate=ModState,
-                             key_buf_size=KeyBufSize}) ->
+                             modstate=ModState}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-    case AsyncFold of
+    case AsyncBackend of
         true ->
-            AsyncWork = async_list_keys(Sender, Bucket, Filter, Mod, ModState),
+            AsyncWork = async_list_keys(Sender, Bucket, Filter, Mod, ModState, KeyBufSize),
             {async, AsyncWork, Sender, State};
         false ->
-            list_keys(Sender, Bucket, Filter, Mod, ModState),
+            list_keys(Sender, Bucket, Filter, Mod, ModState, KeyBufSize),
             {noreply, State}
     end;
 handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
@@ -664,8 +672,37 @@ list_keys(Sender, Bucket, Filter, Mod, ModState, BufferSize) ->
     end.
 
 %% @private
-async_list_keys(Sender, Bucket, Filter, Mod, ModState) ->
-    BufferSize = 100,
+async_list_buckets(Sender, Filter, Mod, ModState, BufferSize) ->
+    BufferFun = fun(Results) ->
+                        riak_core_vnode:reply(Sender, {results, Results})
+                end,
+    Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
+    case Filter of
+        none ->
+            FoldBucketsFun =
+                fun(Bucket, Buf) ->
+                        riak_kv_fold_buffer:add(Bucket, Buf)
+                end;
+        _ ->
+            FoldBucketsFun =
+                fun(Bucket, Buf) ->
+                        case Filter(Bucket) of
+                            true ->
+                                riak_kv_fold_buffer:add(Bucket, Buf);
+                            false ->
+                                Buf
+                        end
+                end
+    end,
+    case Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState) of
+        {async, FoldFun} ->
+            FoldFun;
+        {error, Reason} ->
+            riak_core_vnode:reply(Sender, {error, Reason})
+    end.
+
+%% @private
+async_list_keys(Sender, Bucket, Filter, Mod, ModState, BufferSize) ->
     BufferFun = fun(Results) ->
                         riak_core_vnode:reply(Sender,
                                               {results, {Bucket, Results}})
@@ -691,19 +728,7 @@ async_list_keys(Sender, Bucket, Filter, Mod, ModState) ->
     Opts = [{bucket, Bucket}],
     case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
         {async, FoldFun} ->
-            io:format("Async key fold~n"),
             {Bucket, FoldFun};
-            %% Buffer1 = FoldFun(),
-            %% FlushFun = fun(FinalResults) ->
-            %%                    riak_core_vnode:reply(Sender,
-            %%                                          {final_results,
-            %%                                           {Bucket,
-            %%                                            FinalResults}})
-            %%            end,
-            %% riak_kv_fold_buffer:flush(Buffer1, FlushFun);
-            %%     {error, Reason} ->
-            %%         riak_core_vnode:reply(Sender, {error, Reason})
-            %% end;
         {error, Reason} ->
             riak_core_vnode:reply(Sender, {error, Reason})
     end.
