@@ -63,7 +63,7 @@ init(N, W, DW, WFailThreshold, DWFailThreshold, AllowMult, ReturnBody) ->
              dw_fail_threshold = DWFailThreshold,
              allowmult = AllowMult,
              returnbody = ReturnBody}.
-
+   
 %% Add a result from the vnode
 -spec add_result(vput_result(), putcore()) -> putcore().
 add_result({w, Idx, _ReqId}, PutCore = #putcore{results = Results,

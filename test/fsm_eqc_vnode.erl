@@ -209,7 +209,7 @@ send_vput_replies([{LIdx, FirstResp} | Rest], Idx, Sender, ReqId, PutObj, Option
                #state{lidx_map = LIdxMap} = State) ->
     %% Check have not seen this logical index before and store it
     error = orddict:find(LIdx, LIdxMap),
-    NewState1 = State#state{lidx_map = orddict:store(LIdx, {Idx, PutObj}, LIdxMap)},
+    NewState1 = State#state{lidx_map = orddict:store(LIdx, {Idx, PutObj, Options}, LIdxMap)},
     Reply = case FirstResp of
                 w ->
                     {w, Idx, ReqId};
@@ -218,33 +218,35 @@ send_vput_replies([{LIdx, FirstResp} | Rest], Idx, Sender, ReqId, PutObj, Option
             end,
     NewState2 = record_reply(Sender, Reply, NewState1),
     Rest2 = fail_on_bad_obj(LIdx, PutObj, Rest),
-    send_vput_extra(Rest2, Sender, ReqId, Options, NewState2).
+                    
+    send_vput_extra(Rest2, Sender, ReqId, NewState2).
 
-send_vput_extra([], {fsm, undefined, Pid} = _Sender, _ReqId, _Options, State) ->
+send_vput_extra([], {fsm, undefined, Pid} = _Sender, _ReqId, State) ->
     Pid ! request_timeout, % speed things along by sending the request timeout
     State#state{vput_replies = []};
-send_vput_extra([{LIdx, {dw, CurObj, _CurLin}} | Rest], Sender, ReqId, Options,
+send_vput_extra([{LIdx, {dw, CurObj, _CurLin}} | Rest], Sender, ReqId,
                 #state{lidx_map = LIdxMap} = State) ->
-    {Idx, PutObj} = orddict:fetch(LIdx, LIdxMap),
-    Obj = put_merge(CurObj, PutObj, ReqId),
-    NewState = case proplists:get_value(returnbody, Options, false) of
+    {Idx, PutObj, Options} = orddict:fetch(LIdx, LIdxMap),
+    Obj = put_merge(CurObj, PutObj, Options, ReqId),
+    NewState = case (proplists:get_value(returnbody, Options, false) orelse
+                     proplists:get_value(coord, Options, false)) of
                    true ->
                        record_reply(Sender, {dw, Idx, Obj, ReqId}, State);
                    false ->
                        record_reply(Sender, {dw, Idx, ReqId}, State)
                end,
-    send_vput_extra(Rest, Sender, ReqId, Options, NewState);
-send_vput_extra([{LIdx, fail} | Rest], Sender, ReqId, Options,
+    send_vput_extra(Rest, Sender, ReqId, NewState);
+send_vput_extra([{LIdx, fail} | Rest], Sender, ReqId,
                 #state{lidx_map = LIdxMap} = State) ->
-    Idx = orddict:fetch(LIdx, LIdxMap),
+    {Idx, _PutObj, _Options} = orddict:fetch(LIdx, LIdxMap),
     NewState = record_reply(Sender, {fail, Idx, ReqId}, State),
-    send_vput_extra(Rest, Sender, ReqId, Options, NewState);
-send_vput_extra([{LIdx, {timeout, 2}} | Rest], Sender, ReqId, Options,
+    send_vput_extra(Rest, Sender, ReqId, NewState);
+send_vput_extra([{LIdx, {timeout, 2}} | Rest], Sender, ReqId,
                 #state{lidx_map = LIdxMap} = State) ->
-    Idx = orddict:fetch(LIdx, LIdxMap),
+    {Idx, _PutObj, _Options} = orddict:fetch(LIdx, LIdxMap),
     NewState = record_reply(Sender, {{timeout, 2}, Idx, ReqId}, State),
-    send_vput_extra(Rest, Sender, ReqId, Options, NewState);
-send_vput_extra(VPutReplies, _Sender, _ReqId, _Options, State) ->
+    send_vput_extra(Rest, Sender, ReqId, NewState);
+send_vput_extra(VPutReplies, _Sender, _ReqId, State) ->
     State#state{vput_replies = VPutReplies}.
 
 record_reply(Sender, Reply, #state{reply_history = H} = State) ->
@@ -271,8 +273,22 @@ fail_on_bad_obj(LIdx, _Obj, VPutReplies) ->
 
 %% TODO: The riak_kv_vnode code should be refactored to expose this function
 %%       so we are close to testing the real thing.
-put_merge(notfound, NewObj, _ReqId) ->
-    NewObj;
-put_merge(CurObj, NewObj, ReqId) ->
-    riak_object:syntactic_merge(CurObj,NewObj, ReqId).
+put_merge(notfound, UpdObj, Options, _ReqId) ->
+    case proplists:get_value(coord, Options, true) of
+        true ->
+            VnodeId = <<1, 1, 1, 1, 1, 1, 1, 1>>,
+            Ts = vclock:timestamp(),
+            riak_object:increment_vclock(UpdObj, VnodeId, Ts);
+        false ->
+            UpdObj
+    end;                
+put_merge(CurObj, UpdObj, Options, ReqId) ->
+    case proplists:get_value(coord, Options, true) of
+        true ->
+            VnodeId = <<1, 1, 1, 1, 1, 1, 1, 1>>,
+            Ts = vclock:timestamp(),
+            riak_kv_vnode:coord_put_merge(CurObj, UpdObj, VnodeId, Ts);
+        _ ->
+            riak_object:syntactic_merge(CurObj, UpdObj, ReqId)
+    end.
 

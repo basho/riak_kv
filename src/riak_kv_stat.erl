@@ -158,6 +158,10 @@
 %%</dd><dt> pbc_active
 %%</dt><dd> Number of active pb socket connections
 %%
+%%</dd><dt> coord_redirs_total
+%%</dt><dd> Number of puts forwarded to be coordinated on a node
+%%          in the preflist.
+%%
 %%</dd></dl>
 %%
 %%
@@ -181,7 +185,7 @@
                node_gets_total, node_puts_total,
                get_fsm_time,put_fsm_time,
                pbc_connects,pbc_connects_total,pbc_active,read_repairs,
-               read_repairs_total, mapper_count}).
+               read_repairs_total, mapper_count, coord_redirs_total}).
 
 %% @spec start_link() -> {ok,Pid} | ignore | {error,Error}
 %% @doc Start the server.  Also start the os_mon application, if it's
@@ -234,7 +238,8 @@ init([]) ->
                 pbc_active=0,
                 read_repairs=spiraltime:fresh(),
                 read_repairs_total=0,
-                mapper_count=0}}.
+                mapper_count=0,
+                coord_redirs_total=0}}.
 
 %% @private
 handle_call({get_stats, Moment}, _From, State) ->
@@ -295,6 +300,8 @@ update(mapper_start, _Moment, State=#state{mapper_count=Count0}) ->
     State#state{mapper_count=Count0 + 1};
 update(mapper_end, _Moment, State=#state{mapper_count=Count0}) ->
     State#state{mapper_count=decrzero(Count0)};
+update(coord_redir, _Moment, State=#state{coord_redirs_total=CRT}) ->
+    State#state{coord_redirs_total=CRT+1};
 update(_, _, State) ->
     State.
 
@@ -391,7 +398,8 @@ vnode_stats(Moment, State) ->
 %% @doc Get the node stats proplist.
 node_stats(Moment, State=#state{node_gets_total=NGT,
                                 node_puts_total=NPT,
-                                read_repairs_total=RRT}) ->
+                                read_repairs_total=RRT,
+                                coord_redirs_total=CRT}) ->
     {Gets, GetMean, {GetMedian, GetNF, GetNN, GetH}} =
         slide_minute(Moment, #state.get_fsm_time, State),
     {Puts, PutMean, {PutMedian, PutNF, PutNN, PutH}} =
@@ -410,7 +418,8 @@ node_stats(Moment, State=#state{node_gets_total=NGT,
      {node_put_fsm_time_95, PutNF},
      {node_put_fsm_time_99, PutNN},
      {node_put_fsm_time_100, PutH},
-     {read_repairs_total, RRT}].
+     {read_repairs_total, RRT},
+     {coord_redirs_total, CRT}].
 
 %% @spec cpu_stats() -> proplist()
 %% @doc Get stats on the cpu, as given by the cpu_sup module
