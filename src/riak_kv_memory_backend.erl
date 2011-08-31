@@ -58,7 +58,7 @@
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, []).
+-define(CAPABILITIES, [async_fold]).
 
 -record(state, {data_ref :: integer() | atom(),
                        time_ref :: integer() | atom(),
@@ -215,17 +215,44 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{data_ref=DataRef}) ->
     {Acc0, _} = ets:foldl(FoldFun, {Acc, ordsets:new()}, DataRef),
     {ok, Acc0}.
 
+    Folder = fun() ->
+                     BucketList = ets:match(DataRef, {{'$1', '_'}, '_'}),
+                     lists:foldl(FoldFun, {Acc, ordsets:new()}, BucketList)
+             end,
+    {async, Folder}.
+
+
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
-                state()) -> {ok, term()}.
+                state()) -> {ok, term()} | {async, fun()}.
 fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
     Acc0 = ets:foldl(FoldFun, Acc, DataRef),
     {ok, Acc0}.
 
+
+
+fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef}) ->
+    Bucket =  proplists:get_value(bucket, Opts),
+    FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
+    case Bucket of
+        undefined ->
+            Folder = 
+                fun() ->
+                        KeyList = ets:match(DataRef, {{'$1', '$2'}, '_'}),
+                        lists:foldl(FoldFun, Acc, KeyList)
+                end;
+        _ ->
+            Folder = 
+                fun() ->
+                        KeyList = ets:match(DataRef, {{Bucket, '$1'}, '_'}),
+                        lists:foldl(FoldFun, Acc, KeyList)
+                end
+    end,
+    {async, Folder}.
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
