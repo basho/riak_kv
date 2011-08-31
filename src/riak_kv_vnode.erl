@@ -333,7 +333,8 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                               qry=Query},
                 FilterVNodes,
                 Sender,
-                State=#state{idx=Index,
+                State=#state{async_backend=AsyncBackend,
+                             idx=Index,
                              index_backend=IndexBackend,
                              index_buf_size=IndexBufSize,
                              mod=Mod,
@@ -343,11 +344,17 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
             %% Construct the filter function
             FilterVNode = proplists:get_value(Index, FilterVNodes),
             Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-            index_query(Sender, Bucket, Query, Filter, Mod, ModState, IndexBufSize);
+            case AsyncBackend of
+                true ->
+                    AsyncWork = async_index_query(Sender, Bucket, Query, Filter, Mod, ModState, IndexBufSize),
+                    {async, AsyncWork, Sender, State};
+                false ->
+                    index_query(Sender, Bucket, Query, Filter, Mod, ModState, IndexBufSize),
+                    {noreply, State}
+            end;        
         false ->
             riak_core_vnode:reply(Sender, {error, {indexes_not_supported, Mod}})
-    end,
-    {noreply, State}.
+    end.
 
 handle_handoff_command(Req=?FOLD_REQ{foldfun=FoldFun}, Sender, State) ->
     %% The function in riak_core used for object folding
@@ -831,6 +838,13 @@ do_legacy_list_buckets(Caller,ReqId,Idx,Mod,ModState) ->
 index_query(Sender, Bucket, Query, Filter, Mod, ModState, BufferSize) ->
     Buffer = riak_kv_fold_buffer:new(BufferSize,
                                      get_buffer_fun({false, Bucket}, Sender)),
+
+async_index_query(Sender, Bucket, Query, Filter, Mod, ModState, BufferSize) ->
+    BufferFun = fun(Results) ->
+                        riak_core_vnode:reply(Sender,
+                                              {results, {Bucket, Results}})
+                end,
+    Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
     case Filter of
         none ->
             FoldKeysFun =
@@ -850,9 +864,8 @@ index_query(Sender, Bucket, Query, Filter, Mod, ModState, BufferSize) ->
     end,
     Opts = [{index, Bucket, Query}],
     case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
-        {ok, Buffer1} ->
-            riak_kv_fold_buffer:flush(Buffer1,
-                                      get_buffer_fun({true, Bucket}, Sender));
+        {async, FoldFun} ->
+            FoldFun;
         {error, Reason} ->
             riak_core_vnode:reply(Sender, {error, Reason})
     end.
@@ -877,6 +890,36 @@ get_buffer_fun({false, Bucket}, Sender) ->
     fun(Results) ->
             riak_core_vnode:reply(Sender,
                                   {results, {Bucket, Results}})
+
+index_query(Sender, Bucket, Query, Filter, Mod, ModState, BufferSize) ->
+    BufferFun = fun(Results) ->
+                        riak_core_vnode:reply(Sender,
+                                              {results, {Bucket, Results}})
+                end,
+    Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
+    case Filter of
+        none ->
+            FoldKeysFun =
+                fun(_, Key, Buf) ->
+                        riak_kv_fold_buffer:add(Key, Buf)
+                end;
+        _ ->
+            FoldKeysFun =
+                fun(_, Key, Buf) ->
+                        case Filter(Key) of
+                            true ->
+                                riak_kv_fold_buffer:add(Key, Buf);
+                            false ->
+                                Buf
+                        end
+                end
+    end,
+    Opts = [{index, Bucket, Query}],
+    case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
+        {async, FoldFun} ->
+            {Bucket, FoldFun};
+        {error, Reason} ->
+            riak_core_vnode:reply(Sender, {error, Reason})
     end.
 
 %% @private
