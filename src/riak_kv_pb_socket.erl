@@ -42,6 +42,9 @@
                 req,       % current request (for multi-message requests like list keys)
                 req_ctx}). % context to go along with request (partial results, request ids etc)
 
+-record(pipe_ctx, {pipe,     % pipe handling mapred request
+                   ref,      % easier-access ref/reqid
+                   sender}). % {pid(), monitor()} of process sending inputs
 
 -define(PROTO_MAJOR, 1).
 -define(PROTO_MINOR, 0).
@@ -108,13 +111,14 @@ handle_info({ReqId, Error},
 
 %% PIPE Handle response from mapred_stream
 handle_info(#pipe_eoi{ref=ReqId},
-            State=#state{req=#rpbmapredreq{}, req_ctx=ReqId}) ->
+            State=#state{req=#rpbmapredreq{},
+                         req_ctx=#pipe_ctx{ref=ReqId}}) ->
     NewState = send_msg(#rpbmapredresp{done = 1}, State),
     {noreply, NewState#state{req = undefined, req_ctx = undefined}};
 
 handle_info(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
             State=#state{req=#rpbmapredreq{content_type = ContentType}, 
-                         req_ctx=ReqId}) ->
+                         req_ctx=#pipe_ctx{ref=ReqId}}) ->
     case encode_mapred_phase([Res], ContentType) of
         {error, Reason} ->
             NewState = send_error("~p", [Reason], State),
@@ -122,6 +126,23 @@ handle_info(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
         Response ->
             {noreply, send_msg(#rpbmapredresp{phase=PhaseId, 
                                               response=Response}, State)}
+    end;
+handle_info({'DOWN', Ref, process, Pid, Reason},
+            State=#state{req=#rpbmapredreq{},
+                         req_ctx=#pipe_ctx{sender={Pid, Ref},
+                                           pipe=Pipe}}) ->
+    %% the async input sender exited
+    if Reason == normal ->
+            %% just reached the end of the input sending - all is
+            %% well, continue processing
+            {noreply, State};
+       true ->
+            %% something went wrong sending inputs - tell the client
+            %% about it, and shutdown the pipe
+            riak_pipe:eoi(Pipe),
+            lager:error("Error sending inputs: ~p", [Reason]),
+            NewState = send_error("~p", [bad_mapred_inputs], State),
+            NewState#state{req=undefined, req_ctx=undefined}
     end;
 %% ignore #pipe_log for now, since riak_kv_mrc_pipe does not enable it
 
@@ -407,18 +428,12 @@ pipe_mapreduce(Req, State, Inputs, Query, _Timeout) ->
         true ->
             {{ok, Pipe}, _NumKeeps} =
                 riak_kv_mrc_pipe:mapred_stream(Query),
-            case riak_kv_mrc_pipe:send_inputs(Pipe, Inputs) of
-                ok ->
-                    Ref = (Pipe#pipe.sink)#fitting.ref,
-                    %% TODO: timeout
-                    State#state{req=Req, req_ctx=Ref};
-                Error ->
-                    %% even if the structure looks right, it might name
-                    %% a non-existent key filter or something
-                    riak_pipe:eoi(Pipe),
-                    lager:error("Error sending inputs: ~p", [Error]),
-                    send_error("~p", [bad_mapred_inputs], State)
-            end;
+            {InputSender, SenderMonitor} =
+                riak_kv_mrc_pipe:send_inputs_async(Pipe, Inputs),
+            Ctx = #pipe_ctx{pipe=Pipe,
+                            ref=(Pipe#pipe.sink)#fitting.ref,
+                            sender={InputSender, SenderMonitor}},
+            State#state{req=Req, req_ctx=Ctx};
         false ->
             send_error("~p", [bad_mapred_inputs], State)
     end.

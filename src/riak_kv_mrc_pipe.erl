@@ -102,6 +102,8 @@
          mapred_stream/1,
          send_inputs/2,
          send_inputs/3,
+         send_inputs_async/2,
+         send_inputs_async/3,
          collect_outputs/2,
          collect_outputs/3,
          mapred_plan/1,
@@ -326,6 +328,23 @@ count_keeps_in_query(Query) ->
                 end, 0, Query).
 
 %% TODO: dynamic inputs, filters
+send_inputs_async(Pipe, Arg) ->
+    send_inputs_async(Pipe, Arg, ?DEFAULT_TIMEOUT).
+
+send_inputs_async(Pipe, Arg, Timeout) ->
+    spawn_monitor(
+      fun() ->
+              case send_inputs(Pipe, Arg, Timeout) of
+                  ok ->
+                      %% monitoring process sees a 'normal' exit
+                      ok;
+                  Error ->
+                      %% monitoring process sees an 'error' exit
+                      exit(Error)
+              end
+      end).
+                      
+
 send_inputs(Pipe, Arg) ->
     send_inputs(Pipe, Arg, ?DEFAULT_TIMEOUT).
 
