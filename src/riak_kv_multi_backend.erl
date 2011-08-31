@@ -183,16 +183,22 @@ put(Bucket, Key, Value, State) ->
             {error, Reason, NewState}
     end.
 
-
-%% @doc Insert an object with secondary index 
+%% @doc Insert an object with secondary index
 %% information into the kv backend
 -type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
 -spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
 put(Bucket, PrimaryKey, IndexSpecs, Value, State) ->
-    {_Name, Module, SubState} = get_backend(Bucket, State),
-    Module:put(Bucket, PrimaryKey, IndexSpecs, Value, SubState).
+    {Name, Module, SubState} = get_backend(Bucket, State),
+    case Module:put(Bucket, PrimaryKey, IndexSpecs, Value, SubState) of
+        {ok, NewSubState} ->
+            NewState = update_backend_state(Name, Module, NewSubState, State),
+            {ok, NewState};
+        {error, Reason, NewSubState} ->
+            NewState = update_backend_state(Name, Module, NewSubState, State),
+            {error, Reason, NewState}
+    end.
 
 %% @doc Delete an object from the backend
 -spec delete(riak_object:bucket(), riak_object:key(), state()) ->
