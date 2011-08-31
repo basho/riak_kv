@@ -160,8 +160,8 @@ fold(Preflist, Fun, Acc0) ->
     %% riak_kv the bucket and key have been separated. This function
     %% wrapper is to address this mismatch.
     FoldFun = fun(Bucket, Key, Value, Acc) ->
-                         Fun({Bucket, Key}, Value, Acc)
-                 end,
+                      Fun({Bucket, Key}, Value, Acc)
+              end,
     riak_core_vnode_master:sync_spawn_command(Preflist,
                                               ?FOLD_REQ{
                                                  foldfun=FoldFun,
@@ -197,11 +197,11 @@ init([Index]) ->
                         mrjobs=dict:new()}};
         {error, Reason} ->
             lager:error("Failed to start ~p Reason: ~p",
-                                   [Mod, Reason]),
+                        [Mod, Reason]),
             riak:stop("backend module failed to start.");
         {'EXIT', Reason1} ->
             lager:error("Failed to start ~p Reason: ~p",
-                                   [Mod, Reason1]),
+                        [Mod, Reason1]),
             riak:stop("backend module failed to start.")
     end.
 
@@ -446,34 +446,46 @@ prepare_put(#state{index_backend=true,
 prepare_put(#state{index_backend=IndexBackend,
                    mod=Mod,
                    modstate=ModState},
-            PutArgs=#putargs{bkey=BKey,
+            PutArgs=#putargs{bkey={Bucket, Key},
                              robj=RObj,
                              reqid=ReqID,
                              bprops=BProps,
                              starttime=StartTime,
                              prunetime=PruneTime}) ->
-    case syntactic_put_merge(Mod, ModState, BKey, RObj, ReqID, IndexBackend, StartTime) of
-        {oldobj, OldObj, IndexSpecs} ->
-            {{false, OldObj}, PutArgs#putargs{index_specs=IndexSpecs}};
-        {newobj, NewObj, IndexSpecs} ->
-            VC = riak_object:vclock(NewObj),
-            AMObj = enforce_allow_mult(NewObj, BProps),
+    case Mod:get(Bucket, Key, ModState) of
+        {error, not_found, _UpdModState} ->
             case IndexBackend of
                 true ->
-                    IndexSpecs1 = riak_object:get_index_specs(AMObj, NewObj);
+                    IndexSpecs = riak_object:get_index_specs(RObj);
                 false ->
-                    IndexSpecs1 = []
+                    IndexSpecs = []
             end,
-            case PruneTime of
-                undefined ->
-                    ObjToStore = AMObj;
-                _ ->
-                    ObjToStore = riak_object:set_vclock(
-                                   AMObj,
-                                   vclock:prune(VC,PruneTime,BProps)
-                                  )
-            end,
-            {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs++IndexSpecs1}}
+            {{true, RObj}, PutArgs#putargs{index_specs=IndexSpecs}};
+        {ok, Val0, _UpdModState} ->
+            OldObj = binary_to_term(Val0),
+            case syntactic_put_merge(OldObj, RObj, ReqID, StartTime) of
+                {oldobj, OldObj1} ->
+                    {{false, OldObj1}, PutArgs};
+                {newobj, NewObj} ->
+                    VC = riak_object:vclock(NewObj),
+                    AMObj = enforce_allow_mult(NewObj, BProps),
+                    case IndexBackend of
+                        true ->
+                            IndexSpecs = riak_object:get_index_specs(AMObj, OldObj);
+                        false ->
+                            IndexSpecs = []
+                    end,
+                    case PruneTime of
+                        undefined ->
+                            ObjToStore = AMObj;
+                        _ ->
+                            ObjToStore = riak_object:set_vclock(
+                                           AMObj,
+                                           vclock:prune(VC,PruneTime,BProps)
+                                          )
+                    end,
+                    {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs}}
+            end
     end.
 
 perform_put({false, Obj},
@@ -535,37 +547,19 @@ select_newest_content(Mult) ->
          Mult)).
 
 %% @private
-syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId, IndexBackend) ->
-    syntactic_put_merge(Mod, ModState, BKey, Obj1, ReqId, IndexBackend, vclock:timestamp()).
+syntactic_put_merge(Obj0, Obj1, ReqId) ->
+    syntactic_put_merge(Obj0, Obj1, ReqId, vclock:timestamp()).
 
-syntactic_put_merge(Mod, ModState, {Bucket, Key}, Obj1, ReqId, IndexBackend, StartTime) ->
-    case Mod:get(Bucket, Key, ModState) of
-        {error, not_found, _UpdModState} ->
-            case IndexBackend of
-                true ->
-                    NewIndexSpecs = riak_object:get_index_specs(Obj1),
-                    {newobj, Obj1, NewIndexSpecs};
-                false ->
-                    {newobj, Obj1, []}
-            end;
-        {ok, Val0, _UpdModState} ->
-            Obj0 = binary_to_term(Val0),
-            ResObj = riak_object:syntactic_merge(Obj0,
-                                                 Obj1,
-                                                 term_to_binary(ReqId),
-                                                 StartTime),
-            case IndexBackend of
-                true ->
-                    IndexSpecs = riak_object:get_index_specs(ResObj, Obj0);
-                false ->
-                    IndexSpecs = []
-            end,
-            case riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
-                true ->
-                    {oldobj, ResObj, IndexSpecs};
-                false ->
-                    {newobj, ResObj, IndexSpecs}
-            end
+syntactic_put_merge(Obj0, Obj1, ReqId, StartTime) ->
+    ResObj = riak_object:syntactic_merge(Obj0,
+                                         Obj1,
+                                         term_to_binary(ReqId),
+                                         StartTime),
+    case riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
+        true ->
+            {oldobj, ResObj};
+        false ->
+            {newobj, ResObj}
     end.
 
 %% @private
@@ -850,28 +844,47 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
 
 %% @private
 %% upon receipt of a handoff datum, there is no client FSM
-do_diffobj_put(BKey={Bucket, Key}, DiffObj,
+do_diffobj_put({Bucket, Key}, DiffObj,
                _StateData=#state{index_backend=IndexBackend,
                                  mod=Mod,
                                  modstate=ModState}) ->
     ReqID = erlang:phash2(erlang:now()),
-    case syntactic_put_merge(Mod, ModState, BKey, DiffObj, ReqID, IndexBackend) of
-        {newobj, NewObj, IndexSpecs} ->
-            AMObj = enforce_allow_mult(NewObj, riak_core_bucket:get_bucket(Bucket)),
+    case Mod:get(Bucket, Key, ModState) of
+        {error, not_found, _UpdModState} ->
             case IndexBackend of
                 true ->
-                    IndexSpecs1 = riak_object:get_index_specs(AMObj, NewObj);
+                    IndexSpecs = riak_object:get_index_specs(DiffObj);
                 false ->
-                    IndexSpecs1 = []
+                    IndexSpecs = []
             end,
-            Val = term_to_binary(AMObj),
-            Res = Mod:put(Bucket, Key, IndexSpecs++IndexSpecs1, Val, ModState),
+            Val = term_to_binary(DiffObj),
+            Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
             case Res of
                 {ok, _UpdModState} -> riak_kv_stat:update(vnode_put);
                 _ -> nop
             end,
             Res;
-        _ -> {ok, ModState}
+        {ok, Val0, _UpdModState} ->
+            OldObj = binary_to_term(Val0),
+            case syntactic_put_merge(OldObj, DiffObj, ReqID) of
+                {oldobj, _} ->
+                    {ok, ModState};
+                {newobj, NewObj} ->
+                    AMObj = enforce_allow_mult(NewObj, riak_core_bucket:get_bucket(Bucket)),
+                    case IndexBackend of
+                        true ->
+                            IndexSpecs = riak_object:get_index_specs(AMObj, OldObj);
+                        false ->
+                            IndexSpecs = []
+                    end,
+                    Val = term_to_binary(AMObj),
+                    Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
+                    case Res of
+                        {ok, _UpdModState} -> riak_kv_stat:update(vnode_put);
+                        _ -> nop
+                    end,
+                    Res
+            end
     end.
 
 %% @private
