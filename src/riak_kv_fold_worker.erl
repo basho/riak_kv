@@ -21,9 +21,8 @@
 %% @doc This module uses the riak_core_vnode_worker behavior to perform 
 %% different riak_kv fold tasks asynchronously.
 
--author('Kelly McLaughlin <kelly@basho.com>').
-
 -module(riak_kv_fold_worker).
+-author('Kelly McLaughlin <kelly@basho.com>').
 
 -behaviour(riak_core_vnode_worker).
 
@@ -33,7 +32,6 @@
 -include_lib("riak_kv_vnode.hrl").
 
 -record(state, {index :: partition()}).
-
 
 %% ===================================================================
 %% Public API
