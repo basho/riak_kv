@@ -626,7 +626,9 @@ get_fsm_proc(ReqId, #params{n = N, r = R}) ->
     FailThreshold = (N div 2) + 1,
     NotFoundOk = true,
     AllowMult = true,
-    GetCore = riak_kv_get_core:init(N, R, FailThreshold, NotFoundOk, AllowMult),
+    DeletedVclock = true,
+    GetCore = riak_kv_get_core:init(N, R, FailThreshold, NotFoundOk, 
+                                    AllowMult, DeletedVclock),
     #proc{name = {get_fsm, ReqId}, handler = get_fsm,
           procst = #getfsmst{getcore = GetCore}}.
 
@@ -693,7 +695,7 @@ put_fsm_proc(ReqId, #params{n = N, w = W, dw = DW}) ->
     #proc{name = {put_fsm, ReqId}, handler = put_fsm, procst = #putfsmst{putcore = PutCore}}.
 
 put_fsm(#msg{from = From, c = {put, PL, Obj}},
-        #proc{name = {put_fsm, ReqId}= Name, procst = #putfsmst{putcore = PutCore} = ProcSt} = P) ->
+        #proc{name = {put_fsm, ReqId}= Name, procst = ProcSt} = P) ->
     Ts = ReqId, % re-use ReqId for a timestamp to make them unique
     %% Decide on the coordinating vnode and require that as part of the response.
     %% As indices are fixed, pick lowest index of primary node, falling back to 
@@ -712,8 +714,7 @@ put_fsm(#msg{from = From, c = {put, PL, Obj}},
                        RemotePL0
                end,
     [{msgs, [LocalMsg]},
-     {updp, P#proc{procst = ProcSt#putfsmst{putcore = riak_kv_put_core:coord_idx(CoordIdx, PutCore),
-                                            remotepl = RemotePL,
+     {updp, P#proc{procst = ProcSt#putfsmst{remotepl = RemotePL,
                                             putobj = Obj,
                                             reply_to = From}}}];
 %% Handle local vnode response 
