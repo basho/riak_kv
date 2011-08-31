@@ -158,6 +158,10 @@
 %%</dd><dt> pbc_active
 %%</dt><dd> Number of active pb socket connections
 %%
+%%</dd><dt> coord_redirs_total
+%%</dt><dd> Number of puts forwarded to be coordinated on a node
+%%          in the preflist.
+%%
 %%</dd></dl>
 %%
 %%

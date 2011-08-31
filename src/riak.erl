@@ -105,6 +105,8 @@ client_connect(Node, ClientId= <<_:32>>) ->
         pong -> 
             %% Check if the original client id based vclocks
             %% or the new vnode based vclocks should be used.
+            %% N.B. all nodes must be upgraded to 1.0 before
+            %% this can be enabled.
             case rpc:call(Node, app_helper, get_env,
                           [riak_kv, vnode_vclocks, false]) of
                 {badrpc, _Reason} ->

@@ -274,8 +274,6 @@ prop_basic_put() ->
         {W, RealW} = w_dw_val(N, 1000000, WSeed),
         {DW, RealDW}  = w_dw_val(N, RealW, DWSeed),
 
-        io:format(user, "N=~p PW=~p W=~p DW=~p\n", [N, PW, W, DW]),
-
         %% {Q, _Ring, NodeStatus} = fsm_eqc_util:mock_ring(N + NQdiff, NodeStatus0), 
 
         %% Pick the object to put - as ObjectIdxSeed shrinks, it should go
