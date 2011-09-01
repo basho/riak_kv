@@ -142,7 +142,7 @@ handle_info({'DOWN', Ref, process, Pid, Reason},
             riak_pipe:eoi(Pipe),
             lager:error("Error sending inputs: ~p", [Reason]),
             NewState = send_error("~p", [bad_mapred_inputs], State),
-            NewState#state{req=undefined, req_ctx=undefined}
+            {noreply, NewState#state{req=undefined, req_ctx=undefined}}
     end;
 %% ignore #pipe_log for now, since riak_kv_mrc_pipe does not enable it
 
