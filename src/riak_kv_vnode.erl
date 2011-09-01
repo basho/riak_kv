@@ -190,7 +190,7 @@ init([Index]) ->
             IndexBackend = lists:member(indexes, Capabilities),
             AsyncBackend = lists:member(async_fold, Capabilities),
             %% Create worker pool initialization tuple
-            KeyFoldWorkerPool = {pool, riak_kv_fold_worker, 10, []},
+            FoldWorkerPool = {pool, riak_kv_fold_worker, 10, []},
             {ok, #state{idx=Index,
                         async_backend=AsyncBackend,
                         index_backend=IndexBackend,
@@ -199,7 +199,7 @@ init([Index]) ->
                         bucket_buf_size=BucketBufSize,
                         index_buf_size=IndexBufSize,
                         key_buf_size=KeyBufSize,
-                        mrjobs=dict:new()}, [KeyFoldWorkerPool]};
+                        mrjobs=dict:new()}, [FoldWorkerPool]};
         {error, Reason} ->
             lager:error("Failed to start ~p Reason: ~p",
                         [Mod, Reason]),
