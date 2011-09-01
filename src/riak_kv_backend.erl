@@ -91,9 +91,9 @@ basic_store_and_fetch({Backend, State}) ->
      fun() ->
              [
               ?_assertMatch({ok, _},
-                            Backend:put(<<"b1">>, <<"k1">>, <<"v1">>, State)),
+                            Backend:put(<<"b1">>, <<"k1">>, [], <<"v1">>, State)),
               ?_assertMatch({ok, _},
-                            Backend:put(<<"b2">>, <<"k2">>, <<"v2">>, State)),
+                            Backend:put(<<"b2">>, <<"k2">>, [], <<"v2">>, State)),
               ?_assertMatch({ok,<<"v2">>, _},
                             Backend:get(<<"b2">>, <<"k2">>, State)),
               ?_assertMatch({error, not_found, _},
@@ -232,7 +232,7 @@ fold_objects({Backend, State}) ->
                                 lists:sort(Objects1)
                             end),
               ?_assertMatch({ok, _},
-                            Backend:put(<<"b3">>,<<"k3">>,<<"v3">>, State)),
+                            Backend:put(<<"b3">>, <<"k3">>, [], <<"v3">>, State)),
               ?_assertEqual([{{<<"b1">>,<<"k1">>},<<"v1">>},
                              {{<<"b3">>,<<"k3">>},<<"v3">>}],
                             begin

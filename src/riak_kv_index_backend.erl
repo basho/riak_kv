@@ -322,7 +322,7 @@ do_index_put(Bucket, PrimaryKey, IndexSpecs, _Val, IndexMod, IndexState) ->
                 module(),
                 term()) -> {ok, term()} | {error, term(), term()}.
 do_kv_put(Bucket, Key, Val, KVMod, KVState) ->
-    KVMod:put(Bucket, Key, Val, KVState).
+    KVMod:put(Bucket, Key, [], Val, KVState).
 
 %% @private
 %% @doc Delete the BKey from the Index backend.
