@@ -31,7 +31,6 @@
          start/2,
          stop/1,
          get/3,
-         put/4,
          put/5,
          delete/3,
          drop/1,
@@ -56,7 +55,7 @@
           index_state   % The Index backend state.
          }).
 
--opaque(state() :: #state{}).
+-type state() :: #state{}.
 -type config() :: [{atom(), term()}].
 -type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
 
@@ -130,19 +129,6 @@ stop(State) ->
 get(Bucket, Key, #state{kv_mod = KVMod,
                         kv_state = KVState}) ->
     KVMod:get(Bucket, Key, KVState).
-
-%% @doc Just store the object in the KV backend.
--spec put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
-                 {ok, state()} |
-                 {error, term(), state()}.
-put(Bucket, Key, Val, #state{kv_mod = KVMod,
-                             kv_state = KVState}=State) ->
-    case do_kv_put(Bucket, Key, Val, KVMod, KVState) of
-        {ok, UpdKVState} ->
-            {ok, State#state{kv_state=UpdKVState}};
-        {error, Reason, UpdKVState} ->
-            {error, Reason, State#state{kv_state=UpdKVState}}
-    end.
 
 %% @doc Insert an object with secondary index 
 %% information into the bitcask backend

@@ -47,7 +47,6 @@ behaviour_info(callbacks) ->
      {start,2},       % (Partition, Config)
      {stop,1},        % (State)
      {get,3},         % (Bucket, Key, State)
-     {put,4},         % (Bucket, Key, Val, State)
      {put,5},         % (Bucket, Key, IndexSpecs, Val, State)
      {delete,3},      % (Bucket, Key, State)
      {drop,1},        % (State)

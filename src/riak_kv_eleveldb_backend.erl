@@ -28,7 +28,6 @@
          start/2,
          stop/1,
          get/3,
-         put/4,
          put/5,
          delete/3,
          drop/1,
@@ -52,7 +51,7 @@
                 write_opts = [],
                 fold_opts = [{fill_cache, false}]}).
 
--opaque(state() :: #state{}).
+-type state() :: #state{}.
 -type config() :: [{atom(), term()}].
 
 %% ===================================================================
@@ -99,20 +98,6 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
             {ok, Value, State};
         not_found  ->
             {error, not_found, State};
-        {error, Reason} ->
-            {error, Reason, State}
-    end.
-
-%% @doc Insert an object into the eleveldb backend
--spec put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
-                 {ok, state()} |
-                 {error, term(), state()}.
-put(Bucket, Key, Val, #state{ref=Ref,
-                             write_opts=WriteOpts}=State) ->
-    StorageKey = sext:encode({Bucket, Key}),
-    case eleveldb:put(Ref, StorageKey, Val, WriteOpts) of
-        ok ->
-            {ok, State};
         {error, Reason} ->
             {error, Reason, State}
     end.

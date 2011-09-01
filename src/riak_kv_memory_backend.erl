@@ -54,7 +54,6 @@
          start/2,
          stop/1,
          get/3,
-         put/4,
          put/5,
          delete/3,
          drop/1,
@@ -82,7 +81,7 @@
                        used_memory=0 :: integer(),
                        ttl :: integer()}).
 
--opaque(state() :: #state{}).
+-type state() :: #state{}.
 -type config() :: [].
 
 %% ===================================================================
@@ -98,7 +97,7 @@ api_version() ->
     {?API_VERSION, ?CAPABILITIES}.
 
 %% @doc Start the memory backend
--spec start(integer(), config()) -> {ok, state()} | {error, term()}.
+-spec start(integer(), config()) -> {ok, state()}.
 start(Partition, Config) ->
     ExpiryEnabled = config_value(object_expiry_enabled, Config, false),
     TTL = config_value(ttl, Config, ?DEFAULT_TTL),
@@ -155,16 +154,20 @@ get(Bucket, Key, State=#state{data_ref=DataRef,
             {error, Error, State}
     end.
 
-%% @doc Insert an object into the memory backend
--spec put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
+%% @doc Insert an object into the memory backend.
+%% NOTE: The memory backend does not currently support
+%% secondary indexing. This function is only here
+%% to conform to the backend API specification.
+-type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
+-spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
-put(Bucket, Key, Val, State=#state{data_ref=DataRef,
-                                   expiry_enabled=ExpiryEnabled,
-                                   max_memory=MaxMemory,
-                                   memory_cap_enabled=MemoryCapEnabled,
-                                   time_ref=TimeRef,
-                                   used_memory=UsedMemory}) ->
+put(Bucket, PrimaryKey, _, Val, State=#state{data_ref=DataRef,
+                                             expiry_enabled=ExpiryEnabled,
+                                             max_memory=MaxMemory,
+                                             memory_cap_enabled=MemoryCapEnabled,
+                                             time_ref=TimeRef,
+                                             used_memory=UsedMemory}) ->
     Now = now(),
     case ExpiryEnabled of
         true ->
@@ -172,13 +175,13 @@ put(Bucket, Key, Val, State=#state{data_ref=DataRef,
         false ->
             Val1 = Val
     end,
-    case do_put(Bucket, Key, Val1, DataRef) of
+    case do_put(Bucket, PrimaryKey, Val1, DataRef) of
         {ok, Size} ->
             %% If the memory cap is enabled update timestamp table
             %% and check if the memory usage is over the cap.
             case MemoryCapEnabled of
                 true ->
-                    time_entry(Bucket, Key, Now, TimeRef),
+                    time_entry(Bucket, PrimaryKey, Now, TimeRef),
                     Freed = trim_data_table(MaxMemory,
                                             UsedMemory + Size,
                                             DataRef,
@@ -193,17 +196,6 @@ put(Bucket, Key, Val, State=#state{data_ref=DataRef,
             {error, Reason, State}
     end.
 
-%% @doc Insert an object into the memory backend.
-%% NOTE: The memory backend does not currently support
-%% secondary indexing. This function is only here
-%% to conform to the backend API specification.
--type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
--spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
-                 {ok, state()} |
-                 {error, term(), state()}.
-put(Bucket, PrimaryKey, _IndexSpecs, Val, State) ->
-    put(Bucket, PrimaryKey, Val, State).
-
 %% @doc Delete an object from the memory backend
 -spec delete(riak_object:bucket(), riak_object:key(), state()) ->
                     {ok, state()} |
@@ -213,14 +205,14 @@ delete(Bucket, Key, State=#state{data_ref=DataRef}) ->
         true ->
             {ok, State};
         _ ->
-            {error, ets_delte_failed, State}
+            {error, ets_delete_failed, State}
     end.
 
 %% @doc Fold over all the buckets.
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
                    any(),
                    [],
-                   state()) -> {ok, any()} | {error, term()}.
+                   state()) -> {ok, any()}.
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{data_ref=DataRef}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     BucketList = ets:match(DataRef, {{'$1', '_'}, '_'}),
@@ -231,7 +223,7 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{data_ref=DataRef}) ->
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
-                state()) -> {ok, term()} | {error, term()}.
+                state()) -> {ok, term()}.
 fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
@@ -249,7 +241,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef}) ->
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
-                   state()) -> {ok, any()} | {error, term()}.
+                   state()) -> {ok, any()}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),

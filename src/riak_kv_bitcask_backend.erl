@@ -30,7 +30,6 @@
          start/2,
          stop/1,
          get/3,
-         put/4,
          put/5,
          delete/3,
          drop/1,
@@ -60,7 +59,7 @@
                 opts :: [{atom(), term()}],
                 root :: string()}).
 
--opaque(state() :: #state{}).
+-type state() :: #state{}.
 -type config() :: [{atom(), term()}].
 
 %% ===================================================================
@@ -127,19 +126,6 @@ get(Bucket, Key, #state{ref=Ref}=State) ->
             {error, not_found, State};
         {error, nofile}  ->
             {error, not_found, State};
-        {error, Reason} ->
-            {error, Reason, State}
-    end.
-
-%% @doc Insert an object into the bitcask backend
--spec put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
-                 {ok, state()} |
-                 {error, term(), state()}.
-put(Bucket, Key, Val, #state{ref=Ref}=State) ->
-    BitcaskKey = term_to_binary({Bucket, Key}),
-    case bitcask:put(Ref, BitcaskKey, Val) of
-        ok ->
-            {ok, State};
         {error, Reason} ->
             {error, Reason, State}
     end.

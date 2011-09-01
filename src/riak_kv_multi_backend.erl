@@ -28,7 +28,6 @@
          start/2,
          stop/1,
          get/3,
-         put/4,
          put/5,
          delete/3,
          drop/1,
@@ -49,7 +48,7 @@
 -record (state, {backends :: [{atom(), atom(), term()}],
                  default_backend :: atom()}).
 
--opaque(state() :: #state{}).
+-type state() :: #state{}.
 -type config() :: [{atom(), term()}].
 
 %% @doc riak_kv_multi_backend allows you to run multiple backends within a
@@ -163,21 +162,6 @@ get(Bucket, Key, State) ->
         {ok, Value, NewSubState} ->
             NewState = update_backend_state(Name, Module, NewSubState, State),
             {ok, Value, NewState};
-        {error, Reason, NewSubState} ->
-            NewState = update_backend_state(Name, Module, NewSubState, State),
-            {error, Reason, NewState}
-    end.
-
-%% @doc Insert an object into the eleveldb backend
--spec put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
-                 {ok, state()} |
-                 {error, term(), state()}.
-put(Bucket, Key, Value, State) ->
-    {Name, Module, SubState} = get_backend(Bucket, State),
-    case Module:put(Bucket, Key, Value, SubState) of
-        {ok, NewSubState} ->
-            NewState = update_backend_state(Name, Module, NewSubState, State),
-            {ok, NewState};
         {error, Reason, NewSubState} ->
             NewState = update_backend_state(Name, Module, NewSubState, State),
             {error, Reason, NewState}
