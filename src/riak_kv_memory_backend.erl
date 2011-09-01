@@ -30,19 +30,8 @@
 %% app.config file.
 %%
 %% <ul>
-%% <li>`object_expiry_enabled' - Boolean option to enable time-based object
-%%    expiration. Defaults to `false'.</li>
-%% <li>`ttl' - The time in seconds that an object should live before being expired.
-%%    Default is 3600 seconds or 1 hour. This option is ignored unless
-%%    `object_expiry_enabled' is `true'.</li>
-%% <li>`memory_cap_enabled' - Boolean option to enable a cap on the amount
-%%    of data that can be stored by the memory backend. When the memory
-%%    limit is reached, the objects that have been least recently accessed
-%%    are expunged until the amount of memory used is under the limit.
-%%    Default is `false'.</li>
-%% <li>`max_memory' - The amount of memory in megabytes to limit the backend to.
-%%    Default is 100 MB. This option is ignored unless
-%%    `memory_cap_enabled' is `true'.</li>
+%% <li>`ttl' - The time in seconds that an object should live before being expired.</li>
+%% <li>`max_memory' - The amount of memory in megabytes to limit the backend to.</li>
 %% </ul>
 %%
 
@@ -70,8 +59,6 @@
 
 -define(API_VERSION, 1).
 -define(CAPABILITIES, []).
--define (DEFAULT_TTL, 3600). % 1 hour
--define (DEFAULT_MEMORY,  100).  % 100MB
 
 -record(state, {data_ref :: integer() | atom(),
                        time_ref :: integer() | atom(),
@@ -99,35 +86,33 @@ api_version() ->
 %% @doc Start the memory backend
 -spec start(integer(), config()) -> {ok, state()}.
 start(Partition, Config) ->
-    ExpiryEnabled = config_value(object_expiry_enabled, Config, false),
-    TTL = config_value(ttl, Config, ?DEFAULT_TTL),
-    MemoryCapEnabled = config_value(memory_cap_enabled, Config, false),
-    MaxMemory = config_value(max_memory, Config, ?DEFAULT_MEMORY),
-    case MemoryCapEnabled of
-        true ->
-            TimeRef = ets:new(list_to_atom(integer_to_list(Partition)), [ordered_set]);
-        false ->
-            TimeRef = undefined
+    TTL = config_value(ttl, Config),
+    MemoryMB = config_value(max_memory, Config),
+    case MemoryMB of
+        undefined ->
+            MaxMemory = undefined,
+            TimeRef = undefined;
+        _ ->
+            MaxMemory = MemoryMB * 1024 * 1024,
+            TimeRef = ets:new(list_to_atom(integer_to_list(Partition)), [ordered_set])
     end,
     DataRef = ets:new(list_to_atom(integer_to_list(Partition)), []),
     {ok, #state{data_ref=DataRef,
-                expiry_enabled=ExpiryEnabled,
-                max_memory=MaxMemory * 1024 * 1024,
-                memory_cap_enabled=MemoryCapEnabled,
+                max_memory=MaxMemory,
                 time_ref=TimeRef,
                 ttl=TTL}}.
 
 %% @doc Stop the memory backend
 -spec stop(state()) -> ok.
 stop(#state{data_ref=DataRef,
-                  memory_cap_enabled=MemoryCapEnabled,
-                  time_ref=TimeRef}) ->
+            max_memory=MaxMemory,
+            time_ref=TimeRef}) ->
     catch ets:delete(DataRef),
-    case MemoryCapEnabled of
-        true ->
-            catch ets:delete(TimeRef);
-        false ->
-            ok
+    case MaxMemory of
+        undefined ->
+            ok;
+        _ ->
+            catch ets:delete(TimeRef)
     end,
     ok.
 
@@ -163,33 +148,32 @@ get(Bucket, Key, State=#state{data_ref=DataRef,
                  {ok, state()} |
                  {error, term(), state()}.
 put(Bucket, PrimaryKey, _, Val, State=#state{data_ref=DataRef,
-                                             expiry_enabled=ExpiryEnabled,
                                              max_memory=MaxMemory,
-                                             memory_cap_enabled=MemoryCapEnabled,
                                              time_ref=TimeRef,
+                                             ttl=TTL,
                                              used_memory=UsedMemory}) ->
     Now = now(),
-    case ExpiryEnabled of
-        true ->
-            Val1 = {{ts, Now}, Val};
-        false ->
-            Val1 = Val
+    case TTL of
+        undefined ->
+            Val1 = Val;
+        _ ->
+            Val1 = {{ts, Now}, Val}
     end,
     case do_put(Bucket, PrimaryKey, Val1, DataRef) of
         {ok, Size} ->
-            %% If the memory cap is enabled update timestamp table
+            %% If the memory is capped update timestamp table
             %% and check if the memory usage is over the cap.
-            case MemoryCapEnabled of
-                true ->
+            case MaxMemory of
+                undefined ->
+                    UsedMemory1 = UsedMemory;
+                _ ->
                     time_entry(Bucket, PrimaryKey, Now, TimeRef),
                     Freed = trim_data_table(MaxMemory,
                                             UsedMemory + Size,
                                             DataRef,
                                             TimeRef,
                                             0),
-                    UsedMemory1 = UsedMemory + Size - Freed;
-                false ->
-                    UsedMemory1 = UsedMemory
+                    UsedMemory1 = UsedMemory + Size - Freed
             end,
             {ok, State#state{used_memory=UsedMemory1}};
         {error, Reason} ->
@@ -198,8 +182,7 @@ put(Bucket, PrimaryKey, _, Val, State=#state{data_ref=DataRef,
 
 %% @doc Delete an object from the memory backend
 -spec delete(riak_object:bucket(), riak_object:key(), state()) ->
-                    {ok, state()} |
-                    {error, term(), state()}.
+                    {ok, state()}.
 delete(Bucket, Key, State=#state{data_ref=DataRef,
                                  time_ref=TimeRef,
                                  used_memory=UsedMemory}) ->
@@ -207,21 +190,20 @@ delete(Bucket, Key, State=#state{data_ref=DataRef,
         undefined ->
             UsedMemory1 = UsedMemory;
         _ ->
-            Object = ets:lookup(DataRef, {Bucket, Key}),
+            %% Lookup the object so we can delete its
+            %% entry from the time table and account 
+            %% for the memory used.
+            [Object] = ets:lookup(DataRef, {Bucket, Key}),
             case Object of
-                [{_, {{ts, Timestamp}, _}}] ->
+                {_, {{ts, Timestamp}, _}} ->
                     ets:delete(TimeRef, Timestamp),
                     UsedMemory1 = UsedMemory - object_size(Object);
                 _ ->
                     UsedMemory1 = UsedMemory
             end
     end,
-    case ets:delete(DataRef, {Bucket, Key}) of
-        true ->
-            {ok, State#state{used_memory=UsedMemory1}};
-        _ ->
-            {error, ets_delete_failed, State}
-    end.
+    ets:delete(DataRef, {Bucket, Key}),
+    {ok, State#state{used_memory=UsedMemory1}}.
 
 %% @doc Fold over all the buckets.
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
@@ -354,10 +336,10 @@ do_put(Bucket, Key, Val, Ref) ->
     {ok, object_size(Object)}.
 
 %% @private
-config_value(Key, Config, Default) ->
+config_value(Key, Config) ->
     case proplists:get_value(Key, Config) of
         undefined ->
-            app_helper:get_env(memory_backend, Key, Default);
+            app_helper:get_env(memory_backend, Key);
         Value ->
             Value
     end.
@@ -424,8 +406,7 @@ simple_test_() ->
     riak_kv_backend:standard_test(?MODULE, []).
 
 ttl_test_() ->
-    Config = [{object_expiry_enabled, true},
-              {ttl, 15}],
+    Config = [{ttl, 15}],
     {ok, State} = start(42, Config),
 
     Bucket = <<"Bucket">>,
@@ -450,8 +431,7 @@ ttl_test_() ->
 %% @private
 max_memory_test_() ->
     %% Set max size to 1.5kb
-    Config = [{max_memory, 1.5 * (1 / 1024)},
-              {memory_cap_enabled, true}],
+    Config = [{max_memory, 1.5 * (1 / 1024)}],
     {ok, State} = start(42, Config),
 
     Bucket = <<"Bucket">>,
