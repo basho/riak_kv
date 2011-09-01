@@ -182,13 +182,17 @@ init([Index]) ->
     BucketBufSize = app_helper:get_env(riak_kv, bucket_buffer_size, 1000),
     IndexBufSize = app_helper:get_env(riak_kv, index_buffer_size, 100),
     KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
+    AsyncFolding = app_helper:get_env(riak_kv, async_folds, true),
 
-    case catch Mod:start(Index, Configuration) of
+    case catch Mod:start(Index, [{async_folds, AsyncFolding},
+                                 Configuration]) of
         {ok, ModState} ->
             %% Get the backend capabilities
             {_, Capabilities} = Mod:api_version(),
             IndexBackend = lists:member(indexes, Capabilities),
-            AsyncBackend = lists:member(async_fold, Capabilities),
+            AsyncBackend = AsyncFolding andalso
+                lists:member(async_fold, Capabilities),
+            io:format("AsyncBackend: ~p~n", [AsyncBackend]),
             %% Create worker pool initialization tuple
             FoldWorkerPool = {pool, riak_kv_fold_worker, 10, []},
             {ok, #state{idx=Index,
