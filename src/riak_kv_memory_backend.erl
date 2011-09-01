@@ -215,8 +215,7 @@ delete(Bucket, Key, State=#state{data_ref=DataRef}) ->
                    state()) -> {ok, any()}.
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{data_ref=DataRef}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    BucketList = ets:match(DataRef, {{'$1', '_'}, '_'}),
-    {Acc0, _} = lists:foldl(FoldFun, {Acc, ordsets:new()}, BucketList),
+    {Acc0, _} = ets:foldl(FoldFun, {Acc, ordsets:new()}, DataRef),
     {ok, Acc0}.
 
 %% @doc Fold over all the keys for one or all buckets.
@@ -227,13 +226,7 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{data_ref=DataRef}) ->
 fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-    case Bucket of
-        undefined ->
-            KeyList = ets:match(DataRef, {{'$1', '$2'}, '_'});
-        _ ->
-            KeyList = ets:match(DataRef, {{Bucket, '$1'}, '_'})
-    end,
-    Acc0 = lists:foldl(FoldFun, Acc, KeyList),
+    Acc0 = ets:foldl(FoldFun, Acc, DataRef),
     {ok, Acc0}.
 
 
@@ -245,13 +238,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef}) ->
 fold_objects(FoldObjectsFun, Acc, Opts, #state{data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
-    case Bucket of
-        undefined ->
-            ObjectList = ets:match_object(DataRef, {{'_', '_'}, '_'});
-        _ ->
-            ObjectList = ets:match_object(DataRef, {{Bucket, '_'}, '_'})
-    end,
-    Acc0 = lists:foldl(FoldFun, Acc, ObjectList),
+    Acc0 = ets:foldl(FoldFun, Acc, DataRef),
     {ok, Acc0}.
 
 %% @doc Delete all objects from this memory backend
@@ -287,7 +274,7 @@ callback(_Ref, _Msg, State) ->
 %% @private
 %% Return a function to fold over the buckets on this backend
 fold_buckets_fun(FoldBucketsFun) ->
-    fun([Bucket], {Acc, BucketSet}) ->
+    fun({{Bucket, _}, _}, {Acc, BucketSet}) ->
             case ordsets:is_element(Bucket, BucketSet) of
                 true ->
                     {Acc, BucketSet};
@@ -300,19 +287,33 @@ fold_buckets_fun(FoldBucketsFun) ->
 %% @private
 %% Return a function to fold over keys on this backend
 fold_keys_fun(FoldKeysFun, undefined) ->
-    fun([Bucket, Key], Acc) ->
+    fun({{Bucket, Key}, _}, Acc) ->
             FoldKeysFun(Bucket, Key, Acc)
     end;
 fold_keys_fun(FoldKeysFun, Bucket) ->
-    fun([Key], Acc) ->
-            FoldKeysFun(Bucket, Key, Acc)
+    fun({{B, Key}, _}, Acc) ->
+            case B =:= Bucket of
+                true ->
+                    FoldKeysFun(Bucket, Key, Acc);
+                false ->
+                    Acc
+            end
     end.
 
 %% @private
 %% Return a function to fold over keys on this backend
-fold_objects_fun(FoldObjectsFun, _) ->
+fold_objects_fun(FoldObjectsFun, undefined) ->
     fun({{Bucket, Key}, Value}, Acc) ->
             FoldObjectsFun(Bucket, Key, Value, Acc)
+    end;
+fold_objects_fun(FoldObjectsFun, Bucket) ->
+    fun({{B, Key}, Value}, Acc) ->
+            case B =:= Bucket of
+                true ->
+                    FoldObjectsFun(Bucket, Key, Value, Acc);
+                false ->
+                    Acc
+            end
     end.
 
 %% @private
@@ -402,10 +403,10 @@ ttl_test_() ->
 
     [
      %% Put an object
-     ?_assertEqual({ok, State}, put(Bucket, Key, Value, State)),
+     ?_assertEqual({ok, State}, put(Bucket, Key, [], Value, State)),
      %% Wait 1 second to access it
      ?_assertEqual(ok, timer:sleep(1000)),
-     ?_assertEqual({ok, Value, State}, get(Bucket, Key, State)),
+     ?_assertEqual({ok, Value, State}, get(Bucket, [], Key, State)),
      %% Wait 3 seconds and access it again
      ?_assertEqual(ok, timer:sleep(3000)),
      ?_assertEqual({ok, Value, State}, get(Bucket, Key, State)),
@@ -429,12 +430,12 @@ max_memory_test_() ->
     Value2 = list_to_binary(string:copies("2", 1024)),
 
     %% Write Key1 to the datastore
-    {ok, State1} = put(Bucket, Key1, Value1, State), 
+    {ok, State1} = put(Bucket, Key1, [], Value1, State),
     timer:sleep(timer:seconds(1)),
     %% Write Key2 to the datastore
-    {ok, State2} = put(Bucket, Key2, Value2, State1),
+    {ok, State2} = put(Bucket, Key2, [], Value2, State1),
 
-    [    
+    [
      %% Key1 should be kicked out
      ?_assertEqual({error, not_found, State2}, get(Bucket, Key1, State2)),
      %% Key2 should still be present
