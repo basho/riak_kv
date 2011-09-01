@@ -49,7 +49,8 @@
                 data_root :: string(),
                 read_opts = [],
                 write_opts = [],
-                fold_opts = [{fill_cache, false}]}).
+                fold_opts = [{fill_cache, false}],
+                async_folds :: boolean()}).
 
 -type state() :: #state{}.
 -type config() :: [{atom(), term()}].
@@ -71,10 +72,12 @@ start(Partition, Config) ->
     DataDir = filename:join(config_value(data_root, Config),
                             integer_to_list(Partition)),
     filelib:ensure_dir(filename:join(DataDir, "dummy")),
+    AsyncFolds = config_value(async_folds, Config, true),
     case eleveldb:open(DataDir, [{create_if_missing, true}]) of
         {ok, Ref} ->
-            {ok, #state { ref = Ref,
-                          data_root = DataDir }};
+            {ok, #state {ref = Ref,
+                         data_root = DataDir,
+                         async_folds=AsyncFolds}};
         {error, Reason} ->
             {error, Reason}
     end.
@@ -139,25 +142,46 @@ delete(Bucket, Key, #state{ref=Ref,
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
                    any(),
                    [],
-                   state()) -> {ok, any()}.
+                   state()) -> {ok, any()} | {async, fun()}.
+fold_buckets(FoldBucketsFun, Acc, _Opts, #state{fold_opts=FoldOpts,
+                                                ref=Ref,
+                                                async_folds=true}) ->
+    FoldFun = fold_buckets_fun(FoldBucketsFun),
+    BucketFolder = eleveldb:key_folder(Ref, FoldFun, {Acc, []}, FoldOpts),
+    {async, BucketFolder};
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{fold_opts=FoldOpts,
                                                 ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    BucketFolder = eleveldb:key_folder(Ref, FoldFun, {Acc, []}, FoldOpts),
-    {async, BucketFolder}.
+    {Acc0, _LastBucket} =
+        eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts),
+    {ok, Acc0}.
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
-                state()) -> {ok, term()}.
+                state()) -> {ok, term()} | {async, fun()}.
+fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
+                                         ref=Ref,
+                                         async_folds=true}) ->
+    Bucket =  proplists:get_value(bucket, Opts),
+    FoldOpts = fold_opts(Bucket, FoldOpts1),
+    FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
+    KeyFolder = eleveldb:key_folder(Ref, FoldFun, Acc, FoldOpts),
+    {async, KeyFolder};
 fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
                                          ref=Ref}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldOpts = fold_opts(Bucket, FoldOpts1),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-    KeyFolder = eleveldb:key_folder(Ref, FoldFun, Acc, FoldOpts),
-    {async, KeyFolder}.
+        try
+            Acc0 = eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts),
+                    {ok, Acc0}
+    catch
+        {break, AccFinal} ->
+            
+            {ok, AccFinal}
+    end.
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
@@ -217,9 +241,13 @@ callback(_Ref, _Msg, State) ->
 
 %% @private
 config_value(Key, Config) ->
+    config_value(Key, Config, undefined).
+
+%% @private
+config_value(Key, Config, Default) ->
     case proplists:get_value(Key, Config) of
         undefined ->
-            app_helper:get_env(eleveldb, Key);
+            app_helper:get_env(eleveldb, Key, Default);
         Value ->
             Value
     end.

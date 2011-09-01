@@ -60,13 +60,12 @@
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold]).
 
--record(state, {data_ref :: integer() | atom(),
-                       time_ref :: integer() | atom(),
-                       expiry_enabled :: boolean(),
-                       memory_cap_enabled :: boolean(),
-                       max_memory :: undefined | integer(),
-                       used_memory=0 :: integer(),
-                       ttl :: integer()}).
+-record(state, {async_folds :: boolean(),
+                data_ref :: integer() | atom(),
+                time_ref :: integer() | atom(),
+                max_memory :: undefined | integer(),
+                used_memory=0 :: integer(),
+                ttl :: integer()}).
 
 -type state() :: #state{}.
 -type config() :: [].
@@ -88,6 +87,7 @@ api_version() ->
 start(Partition, Config) ->
     TTL = config_value(ttl, Config),
     MemoryMB = config_value(max_memory, Config),
+    AsyncFolds = config_value(async_folds, Config, true),
     case MemoryMB of
         undefined ->
             MaxMemory = undefined,
@@ -97,7 +97,8 @@ start(Partition, Config) ->
             TimeRef = ets:new(list_to_atom(integer_to_list(Partition)), [ordered_set])
     end,
     DataRef = ets:new(list_to_atom(integer_to_list(Partition)), []),
-    {ok, #state{data_ref=DataRef,
+    {ok, #state{async_folds=AsyncFolds,
+                data_ref=DataRef,
                 max_memory=MaxMemory,
                 time_ref=TimeRef,
                 ttl=TTL}}.
@@ -210,49 +211,38 @@ delete(Bucket, Key, State=#state{data_ref=DataRef,
                    any(),
                    [],
                    state()) -> {ok, any()}.
+
+fold_buckets(FoldBucketsFun, Acc, _Opts, #state{async_folds=true,
+                                                data_ref=DataRef}) ->
+    FoldFun = fold_buckets_fun(FoldBucketsFun),
+    Folder = fun() ->
+                     ets:foldl(FoldFun, {Acc, ordsets:new()}, DataRef)
+             end,
+    {async, Folder};
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{data_ref=DataRef}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     {Acc0, _} = ets:foldl(FoldFun, {Acc, ordsets:new()}, DataRef),
     {ok, Acc0}.
-
-    Folder = fun() ->
-                     BucketList = ets:match(DataRef, {{'$1', '_'}, '_'}),
-                     lists:foldl(FoldFun, {Acc, ordsets:new()}, BucketList)
-             end,
-    {async, Folder}.
-
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
                 state()) -> {ok, term()} | {async, fun()}.
+fold_keys(FoldKeysFun, Acc, Opts, #state{async_folds=true,
+                                         data_ref=DataRef}) ->
+    Bucket =  proplists:get_value(bucket, Opts),
+    FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
+    Folder = 
+        fun() ->
+                ets:foldl(FoldFun, Acc, DataRef)
+        end,
+    {async, Folder};
 fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
     Acc0 = ets:foldl(FoldFun, Acc, DataRef),
     {ok, Acc0}.
-
-
-
-fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef}) ->
-    Bucket =  proplists:get_value(bucket, Opts),
-    FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-    case Bucket of
-        undefined ->
-            Folder = 
-                fun() ->
-                        KeyList = ets:match(DataRef, {{'$1', '$2'}, '_'}),
-                        lists:foldl(FoldFun, Acc, KeyList)
-                end;
-        _ ->
-            Folder = 
-                fun() ->
-                        KeyList = ets:match(DataRef, {{Bucket, '$1'}, '_'}),
-                        lists:foldl(FoldFun, Acc, KeyList)
-                end
-    end,
-    {async, Folder}.
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
@@ -364,9 +354,13 @@ do_put(Bucket, Key, Val, Ref) ->
 
 %% @private
 config_value(Key, Config) ->
+    config_value(Key, Config, undefined).
+
+%% @private
+config_value(Key, Config, Default) ->
     case proplists:get_value(Key, Config) of
         undefined ->
-            app_helper:get_env(memory_backend, Key);
+            app_helper:get_env(memory_backend, Key, Default);
         Value ->
             Value
     end.

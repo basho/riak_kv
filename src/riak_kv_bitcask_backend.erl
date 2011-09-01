@@ -224,7 +224,6 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{opts=BitcaskOpts,
     ReadOpts = [{read_only, true} | Config],
     KeyFolder =
         fun() ->
-                ?debugFmt("DataFile: ~p~n", [DataFile]),
                 case bitcask:open(filename:join(DataRoot, DataFile),
                                   ReadOpts) of
                     Ref when is_reference(Ref) ->
@@ -451,13 +450,10 @@ config_value(Key, Config, Default) ->
 check_symlink(LinkFile, DeleteExisting) ->
     case file:read_link(LinkFile) of
         {ok, DataFile} ->
-            ?debugFmt("Check syn datafile: ~p~n", [DataFile]),
             case DeleteExisting of
                 true ->
                     file:delete(LinkFile),
-                    R = make_symlink(LinkFile),
-                    ?debugFmt("New link file: ~p~n", [file:read_link(LinkFile)]),
-                    R;
+                    make_symlink(LinkFile);
                 false ->
                     {ok, DataFile}
             end;
