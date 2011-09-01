@@ -335,12 +335,19 @@ send_inputs_async(Pipe, Arg) ->
 send_inputs_async(Pipe, Arg, Timeout) ->
     spawn_monitor(
       fun() ->
+              %% tear this process down if the pipeline goes away;
+              %% also automatically tears down the pipeline if feeding
+              %% it inputs fails (which is what the users of this
+              %% function, riak_kv_pb_socket and riak_kv_wm_mapred, want)
+              erlang:link(Pipe#pipe.builder),
               case send_inputs(Pipe, Arg, Timeout) of
                   ok ->
                       %% monitoring process sees a 'normal' exit
+                      %% (and linked builder is left alone)
                       ok;
                   Error ->
                       %% monitoring process sees an 'error' exit
+                      %% (and linked builder dies)
                       exit(Error)
               end
       end).

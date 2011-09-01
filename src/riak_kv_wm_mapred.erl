@@ -173,12 +173,12 @@ pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender) ->
              wrq:set_resp_body(mochijson2:encode(JSONResults), RD),
              State};
         {error, {sender_error, Error}} ->
-            riak_pipe:destroy(Pipe),
+            %% the sender links to the builder, so the builder has
+            %% already been torn down
             {{halt, 500}, send_error(Error, RD), State};
         {error, timeout} ->
+            %% destroying the pipe will tear down the linked sender
             riak_pipe:destroy(Pipe),
-            {SenderPid, _} = Sender,
-            erlang:exit(SenderPid, kill),
             {{halt, 500}, send_error({error, timeout}, RD), State}
     end.
 

@@ -125,13 +125,8 @@ handle_info(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
     case encode_mapred_phase([Res], ContentType) of
         {error, Reason} ->
             erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
+            %% destroying the pipe will automatically kill the sender
             riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
-            case PipeCtx#pipe_ctx.sender of
-                {SenderPid, _} ->
-                    erlang:exit(SenderPid, kill);
-                undefined ->
-                    ok
-            end,
             NewState = send_error("~p", [Reason], State),
             {noreply, NewState#state{req = undefined, req_ctx = undefined}};
         Response ->
@@ -159,16 +154,10 @@ handle_info({'DOWN', Ref, process, Pid, Reason},
 handle_info({pipe_timeout, Ref},
             State=#state{req=#rpbmapredreq{},
                          req_ctx=#pipe_ctx{ref=Ref,
-                                           sender=Sender,
                                            pipe=Pipe}}) ->
     NewState = send_error("timeout", [], State),
+    %% destroying the pipe will automatically kill the sender
     riak_pipe:destroy(Pipe),
-    case Sender of
-        {SenderPid, _} ->
-            erlang:exit(SenderPid, kill);
-        undefined ->
-            ok
-    end,
     {noreply, NewState#state{req=undefined, req_ctx=undefined}};
 %% ignore #pipe_log for now, since riak_kv_mrc_pipe does not enable it
 
