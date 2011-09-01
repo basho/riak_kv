@@ -143,7 +143,7 @@ get(Bucket, Key, State=#state{data_ref=DataRef,
         [{{Bucket, Key}, {{ts, Timestamp}, Val}}] ->
             case exceeds_ttl(Timestamp, TTL) of
                 true ->
-                    ets:delete(DataRef, {Bucket, Key}),
+                    delete(Bucket, Key, State),
                     {error, not_found, State};
                 false ->
                     {ok, Val, State}
@@ -200,10 +200,25 @@ put(Bucket, PrimaryKey, _, Val, State=#state{data_ref=DataRef,
 -spec delete(riak_object:bucket(), riak_object:key(), state()) ->
                     {ok, state()} |
                     {error, term(), state()}.
-delete(Bucket, Key, State=#state{data_ref=DataRef}) ->
+delete(Bucket, Key, State=#state{data_ref=DataRef,
+                                 time_ref=TimeRef,
+                                 used_memory=UsedMemory}) ->
+    case TimeRef of
+        undefined ->
+            UsedMemory1 = UsedMemory;
+        _ ->
+            Object = ets:lookup(DataRef, {Bucket, Key}),
+            case Object of
+                [{_, {{ts, Timestamp}, _}}] ->
+                    ets:delete(TimeRef, Timestamp),
+                    UsedMemory1 = UsedMemory - object_size(Object);
+                _ ->
+                    UsedMemory1 = UsedMemory
+            end
+    end,
     case ets:delete(DataRef, {Bucket, Key}) of
         true ->
-            {ok, State};
+            {ok, State#state{used_memory=UsedMemory1}};
         _ ->
             {error, ets_delete_failed, State}
     end.
@@ -243,8 +258,15 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{data_ref=DataRef}) ->
 
 %% @doc Delete all objects from this memory backend
 -spec drop(state()) -> {ok, state()}.
-drop(State=#state{data_ref=DataRef}) ->
+drop(State=#state{data_ref=DataRef,
+                  time_ref=TimeRef}) ->
     ets:delete_all_objects(DataRef),
+    case TimeRef of
+        undefined ->
+            ok;
+        _ ->
+            ets:delete_all_objects(TimeRef)
+    end,
     {ok, State}.
 
 %% @doc Returns true if this memory backend contains any
@@ -255,8 +277,17 @@ is_empty(#state{data_ref=DataRef}) ->
 
 %% @doc Get the status information for this memory backend
 -spec status(state()) -> [{atom(), term()}].
-status(#state{data_ref=DataRef}) ->
-    ets:info(DataRef).
+status(#state{data_ref=DataRef,
+              time_ref=TimeRef}) ->
+    DataStatus = ets:info(DataRef),
+    case TimeRef of
+        undefined ->
+            [{data_table_status, DataStatus}];
+        _ ->
+            TimeStatus = ets:info(TimeRef),
+            [{data_table_status, DataStatus},
+            {time_table_status, TimeStatus}]
+    end.
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
@@ -406,7 +437,7 @@ ttl_test_() ->
      ?_assertEqual({ok, State}, put(Bucket, Key, [], Value, State)),
      %% Wait 1 second to access it
      ?_assertEqual(ok, timer:sleep(1000)),
-     ?_assertEqual({ok, Value, State}, get(Bucket, [], Key, State)),
+     ?_assertEqual({ok, Value, State}, get(Bucket, Key, State)),
      %% Wait 3 seconds and access it again
      ?_assertEqual(ok, timer:sleep(3000)),
      ?_assertEqual({ok, Value, State}, get(Bucket, Key, State)),
