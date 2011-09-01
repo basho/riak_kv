@@ -50,12 +50,8 @@
 %% @type bucketname()      :: binary().
 %% @type index_field()     :: binary().
 %% @type index_value()     :: binary() | integer().
-%% @type query_elements()  :: [query_element()].
-%% @type query_element()   :: {eq , index_field(), index_value()}
-%%                          | {gt , index_field(), index_value()}
-%%                          | {gte, index_field(), index_value()}
-%%                          | {lt , index_field(), index_value()}
-%%                          | {lte, index_field(), index_value()}.
+%% @type query_element()   :: {eq,    index_field(), [index_value()]},
+%%                         :: {range, index_field(), [index_value(), index_value()}
 
 
 mapred_index(Dest, Args) ->
