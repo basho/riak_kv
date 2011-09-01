@@ -106,6 +106,7 @@
          send_inputs_async/3,
          collect_outputs/2,
          collect_outputs/3,
+         group_outputs/2,
          mapred_plan/1,
          mapred_plan/2
         ]).
