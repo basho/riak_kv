@@ -44,6 +44,7 @@
 
 -record(pipe_ctx, {pipe,     % pipe handling mapred request
                    ref,      % easier-access ref/reqid
+                   timer,    % ref() for timeout send_after
                    sender}). % {pid(), monitor()} of process sending inputs
 
 -define(PROTO_MAJOR, 1).
@@ -112,8 +113,10 @@ handle_info({ReqId, Error},
 %% PIPE Handle response from mapred_stream
 handle_info(#pipe_eoi{ref=ReqId},
             State=#state{req=#rpbmapredreq{},
-                         req_ctx=#pipe_ctx{ref=ReqId}}) ->
+                         req_ctx=#pipe_ctx{ref=ReqId,
+                                           timer=Timer}}) ->
     NewState = send_msg(#rpbmapredresp{done = 1}, State),
+    erlang:cancel_timer(Timer),
     {noreply, NewState#state{req = undefined, req_ctx = undefined}};
 
 handle_info(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
@@ -121,6 +124,7 @@ handle_info(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
                          req_ctx=#pipe_ctx{ref=ReqId}=PipeCtx}) ->
     case encode_mapred_phase([Res], ContentType) of
         {error, Reason} ->
+            erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
             riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
             case PipeCtx#pipe_ctx.sender of
                 {SenderPid, _} ->
@@ -146,11 +150,26 @@ handle_info({'DOWN', Ref, process, Pid, Reason},
        true ->
             %% something went wrong sending inputs - tell the client
             %% about it, and shutdown the pipe
+            erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
             riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
             lager:error("Error sending inputs: ~p", [Reason]),
             NewState = send_error("~p", [bad_mapred_inputs], State),
             {noreply, NewState#state{req=undefined, req_ctx=undefined}}
     end;
+handle_info({pipe_timeout, Ref},
+            State=#state{req=#rpbmapredreq{},
+                         req_ctx=#pipe_ctx{ref=Ref,
+                                           sender=Sender,
+                                           pipe=Pipe}}) ->
+    NewState = send_error("timeout", [], State),
+    riak_pipe:destroy(Pipe),
+    case Sender of
+        {SenderPid, _} ->
+            erlang:exit(SenderPid, kill);
+        undefined ->
+            ok
+    end,
+    {noreply, NewState#state{req=undefined, req_ctx=undefined}};
 %% ignore #pipe_log for now, since riak_kv_mrc_pipe does not enable it
 
 %% LEGACY Handle response from mapred_stream/mapred_bucket_stream
@@ -430,15 +449,19 @@ process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
             end
     end.
 
-pipe_mapreduce(Req, State, Inputs, Query, _Timeout) ->
+pipe_mapreduce(Req, State, Inputs, Query, Timeout) ->
     case valid_mapred_inputs(Inputs) of
         true ->
             {{ok, Pipe}, _NumKeeps} =
                 riak_kv_mrc_pipe:mapred_stream(Query),
+            PipeRef = (Pipe#pipe.sink)#fitting.ref,
+            Timer = erlang:send_after(Timeout, self(),
+                                      {pipe_timeout, PipeRef}),
             {InputSender, SenderMonitor} =
                 riak_kv_mrc_pipe:send_inputs_async(Pipe, Inputs),
             Ctx = #pipe_ctx{pipe=Pipe,
-                            ref=(Pipe#pipe.sink)#fitting.ref,
+                            ref=PipeRef,
+                            timer=Timer,
                             sender={InputSender, SenderMonitor}},
             State#state{req=Req, req_ctx=Ctx};
         false ->
