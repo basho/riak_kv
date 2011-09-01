@@ -338,7 +338,7 @@ do_index_delete(Bucket, PrimaryKey, KVMod, KVState, IndexMod, IndexState) ->
             ok;
         {ok, Val, _UpdModState} ->
             Obj = binary_to_term(Val),
-            IndexSpecs = riak_object:get_index_specs(Obj),
+            IndexSpecs = riak_object:index_specs(Obj),
             case IndexSpecs of
                 [] ->
                     ok;
