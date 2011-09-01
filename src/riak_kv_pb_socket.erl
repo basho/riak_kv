@@ -118,9 +118,16 @@ handle_info(#pipe_eoi{ref=ReqId},
 
 handle_info(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
             State=#state{req=#rpbmapredreq{content_type = ContentType}, 
-                         req_ctx=#pipe_ctx{ref=ReqId}}) ->
+                         req_ctx=#pipe_ctx{ref=ReqId}=PipeCtx}) ->
     case encode_mapred_phase([Res], ContentType) of
         {error, Reason} ->
+            riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
+            case PipeCtx#pipe_ctx.sender of
+                {SenderPid, _} ->
+                    erlang:exit(SenderPid, kill);
+                undefined ->
+                    ok
+            end,
             NewState = send_error("~p", [Reason], State),
             {noreply, NewState#state{req = undefined, req_ctx = undefined}};
         Response ->
@@ -129,17 +136,17 @@ handle_info(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
     end;
 handle_info({'DOWN', Ref, process, Pid, Reason},
             State=#state{req=#rpbmapredreq{},
-                         req_ctx=#pipe_ctx{sender={Pid, Ref},
-                                           pipe=Pipe}}) ->
+                         req_ctx=#pipe_ctx{sender={Pid, Ref}}=PipeCtx}) ->
     %% the async input sender exited
     if Reason == normal ->
             %% just reached the end of the input sending - all is
             %% well, continue processing
-            {noreply, State};
+            NewPipeCtx = PipeCtx#pipe_ctx{sender=undefined},
+            {noreply, State#state{req_ctx=NewPipeCtx}};
        true ->
             %% something went wrong sending inputs - tell the client
             %% about it, and shutdown the pipe
-            riak_pipe:eoi(Pipe),
+            riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
             lager:error("Error sending inputs: ~p", [Reason]),
             NewState = send_error("~p", [bad_mapred_inputs], State),
             {noreply, NewState#state{req=undefined, req_ctx=undefined}}
