@@ -638,7 +638,7 @@ list_buckets(Sender, Filter, Mod, ModState, BufferSize) ->
         {ok, Buffer1} ->
             riak_kv_fold_buffer:flush(Buffer1, get_buffer_fun(true, Sender));
         {async, FoldFun} ->
-            FoldFun;
+            {async, FoldFun};
         {error, Reason} ->
             riak_core_vnode:reply(Sender, {error, Reason})
     end.
