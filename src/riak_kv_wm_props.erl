@@ -233,6 +233,32 @@ jsonify_bucket_prop({chash_keyfun, {Module, Function}}) ->
                              list_to_binary(atom_to_list(Module))},
                             {?JSON_FUN,
                              list_to_binary(atom_to_list(Function))}]}};
+%% TODO Remove Legacy extractor prop in future version
+jsonify_bucket_prop({rs_extractfun, {modfun, M, F}}) ->
+    {?JSON_EXTRACT_LEGACY, {struct, [{?JSON_MOD,
+                                      list_to_binary(atom_to_list(M))},
+                                     {?JSON_FUN,
+                                      list_to_binary(atom_to_list(F))}]}};
+jsonify_bucket_prop({rs_extractfun, {{modfun, M, F}, Arg}}) ->
+    {?JSON_EXTRACT_LEGACY, {struct, [{?JSON_MOD,
+                                      list_to_binary(atom_to_list(M))},
+                                     {?JSON_FUN,
+                                      list_to_binary(atom_to_list(F))},
+                                     {?JSON_ARG, Arg}]}};
+jsonify_bucket_prop({search_extractor, {struct, _}=S}) ->
+    {?JSON_EXTRACT, S};
+jsonify_bucket_prop({search_extractor, {M, F}}) ->
+    {?JSON_EXTRACT, {struct, [{?JSON_MOD,
+                             list_to_binary(atom_to_list(M))},
+                              {?JSON_FUN,
+                               list_to_binary(atom_to_list(F))}]}};
+jsonify_bucket_prop({search_extractor, {M, F, Arg}}) ->
+    {?JSON_EXTRACT, {struct, [{?JSON_MOD,
+                               list_to_binary(atom_to_list(M))},
+                              {?JSON_FUN,
+                               list_to_binary(atom_to_list(F))},
+                              {?JSON_ARG, Arg}]}};
+
 jsonify_bucket_prop({Prop, Value}) ->
     {list_to_binary(atom_to_list(Prop)), Value}.
 

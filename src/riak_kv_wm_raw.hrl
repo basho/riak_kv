@@ -40,12 +40,16 @@
 -define(JSON_LINKFUN, <<"linkfun">>).
 -define(JSON_MOD,     <<"mod">>).
 -define(JSON_FUN,     <<"fun">>).
+-define(JSON_ARG,     <<"arg">>).
 -define(JSON_CHASH,   <<"chash_keyfun">>).
 -define(JSON_JSFUN,    <<"jsfun">>).
 -define(JSON_JSANON,   <<"jsanon">>).
 -define(JSON_JSBUCKET, <<"bucket">>).
 -define(JSON_JSKEY,    <<"key">>).
 -define(JSON_ALLOW_MULT, <<"allow_mult">>).
+-define(JSON_EXTRACT, <<"search_extractor">>).
+-define(JSON_EXTRACT_LEGACY, <<"rs_extractfun">>).
+
 
 
 %% Names of HTTP query parameters
