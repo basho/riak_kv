@@ -429,15 +429,6 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
 
 prepare_put(#state{index_backend=false}, PutArgs=#putargs{lww=true, robj=RObj}) ->
     {{true, RObj}, PutArgs};
-prepare_put(#state{index_backend=true,
-                   mod=Mod,
-                   modstate=ModState},
-            PutArgs=#putargs{bkey=BKey,
-                             lww=true,
-                             robj=RObj}) ->
-    %% Check for and merge indexes
-    IndexSpecs = get_index_specs(Mod, ModState, BKey, RObj),
-    {{true, RObj}, PutArgs#putargs{index_specs=IndexSpecs}};
 prepare_put(#state{index_backend=IndexBackend,
                    mod=Mod,
                    modstate=ModState},
@@ -445,20 +436,21 @@ prepare_put(#state{index_backend=IndexBackend,
                              robj=RObj,
                              reqid=ReqID,
                              bprops=BProps,
+                             lww=LWW,
                              starttime=StartTime,
                              prunetime=PruneTime}) ->
     case Mod:get(Bucket, Key, ModState) of
         {error, not_found, _UpdModState} ->
             case IndexBackend of
                 true ->
-                    IndexSpecs = riak_object:get_index_specs(RObj);
+                    IndexSpecs = riak_object:index_specs(RObj);
                 false ->
                     IndexSpecs = []
             end,
             {{true, RObj}, PutArgs#putargs{index_specs=IndexSpecs}};
-        {ok, Val0, _UpdModState} ->
-            OldObj = binary_to_term(Val0),
-            case syntactic_put_merge(OldObj, RObj, ReqID, StartTime) of
+        {ok, Val, _UpdModState} ->
+            OldObj = binary_to_term(Val),
+            case syntactic_put_merge(OldObj, RObj, ReqID, LWW, StartTime) of
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs};
                 {newobj, NewObj} ->
@@ -466,7 +458,9 @@ prepare_put(#state{index_backend=IndexBackend,
                     AMObj = enforce_allow_mult(NewObj, BProps),
                     case IndexBackend of
                         true ->
-                            IndexSpecs = riak_object:get_index_specs(AMObj, OldObj);
+                            IndexSpecs =
+                                riak_object:diff_index_specs(AMObj,
+                                                             OldObj);
                         false ->
                             IndexSpecs = []
                     end,
@@ -474,12 +468,14 @@ prepare_put(#state{index_backend=IndexBackend,
                         undefined ->
                             ObjToStore = AMObj;
                         _ ->
-                            ObjToStore = riak_object:set_vclock(
-                                           AMObj,
-                                           vclock:prune(VC,PruneTime,BProps)
-                                          )
+                            ObjToStore =
+                                riak_object:set_vclock(AMObj,
+                                                       vclock:prune(VC,
+                                                                    PruneTime,
+                                                                    BProps))
                     end,
-                    {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs}}
+                    {{true, ObjToStore},
+                     PutArgs#putargs{index_specs=IndexSpecs}}
             end
     end.
 
@@ -542,29 +538,20 @@ select_newest_content(Mult) ->
          Mult)).
 
 %% @private
-syntactic_put_merge(Obj0, Obj1, ReqId) ->
-    syntactic_put_merge(Obj0, Obj1, ReqId, vclock:timestamp()).
+syntactic_put_merge(Obj0, Obj1, ReqId, LastWriteWins) ->
+    syntactic_put_merge(Obj0, Obj1, ReqId, LastWriteWins, vclock:timestamp()).
 
-syntactic_put_merge(Obj0, Obj1, ReqId, StartTime) ->
+syntactic_put_merge(Obj0, Obj1, ReqId, LastWriteWins, StartTime) ->
     ResObj = riak_object:syntactic_merge(Obj0,
                                          Obj1,
                                          term_to_binary(ReqId),
                                          StartTime),
-    case riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
+    case not LastWriteWins andalso
+        riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
         true ->
             {oldobj, ResObj};
         false ->
             {newobj, ResObj}
-    end.
-
-%% @private
-get_index_specs(Mod, ModState, {Bucket, Key}, Obj1) ->
-    case Mod:get(Bucket, Key, ModState) of
-        {error, not_found, _UpdModState} ->
-            riak_object:get_index_specs(Obj1);
-        {ok, Val0, _UpdModState} ->
-            Obj0 = binary_to_term(Val0),
-            riak_object:get_index_specs(Obj1, Obj0)
     end.
 
 %% @private
@@ -609,10 +596,7 @@ do_get_binary({Bucket, Key}, Mod, ModState) ->
 
 %% @private
 list_buckets(Sender, Filter, Mod, ModState, BufferSize) ->
-    BufferFun = fun(Results) ->
-                        riak_core_vnode:reply(Sender, {results, Results})
-                end,
-    Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
+    Buffer = riak_kv_fold_buffer:new(BufferSize, get_buffer_fun(false, Sender)),
     case Filter of
         none ->
             FoldBucketsFun =
@@ -632,23 +616,15 @@ list_buckets(Sender, Filter, Mod, ModState, BufferSize) ->
     end,
     case Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState) of
         {ok, Buffer1} ->
-            FlushFun = fun(FinalResults) ->
-                               riak_core_vnode:reply(Sender,
-                                                     {final_results,
-                                                      FinalResults})
-                       end,
-            riak_kv_fold_buffer:flush(Buffer1, FlushFun);
+            riak_kv_fold_buffer:flush(Buffer1, get_buffer_fun(true, Sender));
         {error, Reason} ->
             riak_core_vnode:reply(Sender, {error, Reason})
     end.
 
 %% @private
 list_keys(Sender, Bucket, Filter, Mod, ModState, BufferSize) ->
-    BufferFun = fun(Results) ->
-                        riak_core_vnode:reply(Sender,
-                                              {results, {Bucket, Results}})
-                end,
-    Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
+    Buffer = riak_kv_fold_buffer:new(BufferSize,
+                                     get_buffer_fun({false, Bucket}, Sender)),
     case Filter of
         none ->
             FoldKeysFun =
@@ -669,13 +645,8 @@ list_keys(Sender, Bucket, Filter, Mod, ModState, BufferSize) ->
     Opts = [{bucket, Bucket}],
     case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
         {ok, Buffer1} ->
-            FlushFun = fun(FinalResults) ->
-                               riak_core_vnode:reply(Sender,
-                                                     {final_results,
-                                                      {Bucket,
-                                                       FinalResults}})
-                       end,
-            riak_kv_fold_buffer:flush(Buffer1, FlushFun);
+            riak_kv_fold_buffer:flush(Buffer1,
+                                      get_buffer_fun({true, Bucket}, Sender));
         {error, Reason} ->
             riak_core_vnode:reply(Sender, {error, Reason})
     end.
@@ -776,11 +747,8 @@ do_legacy_list_buckets(Caller,ReqId,Idx,Mod,ModState) ->
 
 %% @private
 index_query(Sender, Bucket, Query, Filter, Mod, ModState, BufferSize) ->
-    BufferFun = fun(Results) ->
-                        riak_core_vnode:reply(Sender,
-                                              {results, {Bucket, Results}})
-                end,
-    Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
+    Buffer = riak_kv_fold_buffer:new(BufferSize,
+                                     get_buffer_fun({false, Bucket}, Sender)),
     case Filter of
         none ->
             FoldKeysFun =
@@ -801,17 +769,33 @@ index_query(Sender, Bucket, Query, Filter, Mod, ModState, BufferSize) ->
     Opts = [{index, Bucket, Query}],
     case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
         {ok, Buffer1} ->
-            FlushFun = fun(FinalResults) ->
-                               riak_core_vnode:reply(Sender,
-                                                     {final_results,
-                                                      {Bucket,
-                                                       FinalResults}})
-                       end,
-            riak_kv_fold_buffer:flush(Buffer1, FlushFun);
+            riak_kv_fold_buffer:flush(Buffer1,
+                                      get_buffer_fun({true, Bucket}, Sender));
         {error, Reason} ->
             riak_core_vnode:reply(Sender, {error, Reason})
     end.
 
+%% @private
+get_buffer_fun(true, Sender) ->
+    fun(Results) ->
+            riak_core_vnode:reply(Sender,
+                                  {final_results, Results})
+    end;
+get_buffer_fun(false, Sender) ->
+    fun(Results) ->
+            riak_core_vnode:reply(Sender,
+                                  {results, Results})
+    end;
+get_buffer_fun({true, Bucket}, Sender) ->
+    fun(Results) ->
+            riak_core_vnode:reply(Sender,
+                                  {final_results, {Bucket, Results}})
+    end;
+get_buffer_fun({false, Bucket}, Sender) ->
+    fun(Results) ->
+            riak_core_vnode:reply(Sender,
+                                  {results, {Bucket, Results}})
+    end.
 
 %% @private
 do_delete({Bucket, Key}, Mod, ModState) ->
@@ -848,7 +832,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
         {error, not_found, _UpdModState} ->
             case IndexBackend of
                 true ->
-                    IndexSpecs = riak_object:get_index_specs(DiffObj);
+                    IndexSpecs = riak_object:index_specs(DiffObj);
                 false ->
                     IndexSpecs = []
             end,
@@ -861,14 +845,14 @@ do_diffobj_put({Bucket, Key}, DiffObj,
             Res;
         {ok, Val0, _UpdModState} ->
             OldObj = binary_to_term(Val0),
-            case syntactic_put_merge(OldObj, DiffObj, ReqID) of
+            case syntactic_put_merge(OldObj, DiffObj, ReqID, false) of
                 {oldobj, _} ->
                     {ok, ModState};
                 {newobj, NewObj} ->
                     AMObj = enforce_allow_mult(NewObj, riak_core_bucket:get_bucket(Bucket)),
                     case IndexBackend of
                         true ->
-                            IndexSpecs = riak_object:get_index_specs(AMObj, OldObj);
+                            IndexSpecs = riak_object:diff_index_specs(AMObj, OldObj);
                         false ->
                             IndexSpecs = []
                     end,
