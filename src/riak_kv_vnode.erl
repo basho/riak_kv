@@ -397,11 +397,6 @@ handle_exit(_Pid, Reason, State) ->
     lager:error("Linked process exited. Reason: ~p", [Reason]),
     {stop, linked_process_crash, State}.
 
-%% old vnode helper functions
-
-%% store_call(State=#state{mod=Mod, modstate=ModState}, Msg) ->
-%% Mod:call(ModState, Msg).
-
 %% @private
 %% upon receipt of a client-initiated put
 do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
