@@ -248,7 +248,31 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{ref=Ref}) ->
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
-                   state()) -> {ok, any()} | {error, term()}.
+                   state()) -> {ok, any()} | {async, fun()} | {error, term()}.
+fold_objects(FoldObjectsFun, Acc, Opts, #state{opts=BitcaskOpts,
+                                               data_file=DataFile,
+                                               root=DataRoot,
+                                               async_folds=true}) ->
+    Bucket =  proplists:get_value(bucket, Opts),
+    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
+    case BitcaskOpts of
+        [{read_write, _} | Config] ->
+            ok;
+        Config ->
+            ok
+    end,
+    ReadOpts = [{read_only, true} | Config],
+    ObjectFolder =
+        fun() ->
+                case bitcask:open(filename:join(DataRoot, DataFile),
+                                  ReadOpts) of
+                    Ref when is_reference(Ref) ->
+                        bitcask:fold(Ref, FoldFun, Acc);
+                    {error, Reason} ->
+                        {error, Reason}
+                end
+        end,
+    {async, ObjectFolder};
 fold_objects(FoldObjectsFun, Acc, Opts, #state{ref=Ref}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),

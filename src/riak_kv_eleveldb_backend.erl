@@ -187,7 +187,15 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
-                   state()) -> {ok, any()}.
+                   state()) -> {ok, any()} | {async, fun()}.
+fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts1,
+                                               ref=Ref,
+                                               async_folds=true}) ->
+    Bucket =  proplists:get_value(bucket, Opts),
+    FoldOpts = fold_opts(Bucket, FoldOpts1),
+    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
+    ObjectFolder = eleveldb:folder(Ref, FoldFun, Acc, FoldOpts),
+    {async, ObjectFolder};
 fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts1,
                                                ref=Ref}) ->
     Bucket = proplists:get_value(bucket, Opts),
@@ -346,6 +354,11 @@ eqc_test_() ->
          [
           {timeout, 60000,
            [?_assertEqual(true,
+                          backend_eqc:test(?MODULE, false,
+                                           [{data_root,
+                                             "test/eleveldb-backend"},
+                                            {async_folds, false}])),
+           ?_assertEqual(true,
                           backend_eqc:test(?MODULE, false,
                                            [{data_root,
                                              "test/eleveldb-backend"}]))]}

@@ -211,14 +211,10 @@ delete(Bucket, Key, State=#state{data_ref=DataRef,
                    any(),
                    [],
                    state()) -> {ok, any()}.
-
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{async_folds=true,
                                                 data_ref=DataRef}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    Folder = fun() ->
-                     ets:foldl(FoldFun, {Acc, ordsets:new()}, DataRef)
-             end,
-    {async, Folder};
+    {async, get_folder(FoldFun, {Acc, ordsets:new()}, DataRef)};
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{data_ref=DataRef}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     {Acc0, _} = ets:foldl(FoldFun, {Acc, ordsets:new()}, DataRef),
@@ -233,11 +229,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{async_folds=true,
                                          data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-    Folder = 
-        fun() ->
-                ets:foldl(FoldFun, Acc, DataRef)
-        end,
-    {async, Folder};
+    {async, get_folder(FoldFun, Acc, DataRef)};
 fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
@@ -248,7 +240,12 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef}) ->
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
-                   state()) -> {ok, any()}.
+                   state()) -> {ok, any()} | {async, fun()}.
+fold_objects(FoldObjectsFun, Acc, Opts, #state{async_folds=true,
+                                               data_ref=DataRef}) ->
+    Bucket =  proplists:get_value(bucket, Opts),
+    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
+    {async, get_folder(FoldFun, Acc, DataRef)};
 fold_objects(FoldObjectsFun, Acc, Opts, #state{data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
@@ -345,6 +342,12 @@ fold_objects_fun(FoldObjectsFun, Bucket) ->
                     Acc
             end
     end.
+
+%% @private
+get_folder(FoldFun, Acc, DataRef) ->
+        fun() ->
+                ets:foldl(FoldFun, Acc, DataRef)
+        end.
 
 %% @private
 do_put(Bucket, Key, Val, Ref) ->
@@ -485,6 +488,9 @@ eqc_test_() ->
          [
           {timeout, 60000,
            [?_assertEqual(true,
+                          backend_eqc:test(?MODULE, true,
+                                           [{async_folds, false}])),
+           ?_assertEqual(true,
                           backend_eqc:test(?MODULE, true))]}
          ]}]}]}.
 
