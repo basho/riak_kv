@@ -140,18 +140,18 @@ get(Bucket, Key, State=#state{data_ref=DataRef,
     end.
 
 %% @doc Insert an object into the memory backend.
-%% NOTE: The memory backend does not currently support
-%% secondary indexing. This function is only here
-%% to conform to the backend API specification.
+%% NOTE: The memory backend does not currently
+%% support secondary indexing and the _IndexSpecs
+%% parameter is ignored.
 -type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
 -spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
-put(Bucket, PrimaryKey, _, Val, State=#state{data_ref=DataRef,
-                                             max_memory=MaxMemory,
-                                             time_ref=TimeRef,
-                                             ttl=TTL,
-                                             used_memory=UsedMemory}) ->
+put(Bucket, PrimaryKey, _IndexSpecs, Val, State=#state{data_ref=DataRef,
+                                                       max_memory=MaxMemory,
+                                                       time_ref=TimeRef,
+                                                       ttl=TTL,
+                                                       used_memory=UsedMemory}) ->
     Now = now(),
     case TTL of
         undefined ->

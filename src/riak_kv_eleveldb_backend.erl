@@ -103,9 +103,9 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
     end.
 
 %% @doc Insert an object into the eleveldb backend.
-%% NOTE: The eleveldb backend does not currently support
-%% secondary indexing. This function is only here
-%% to conform to the backend API specification.
+%% NOTE: The eleveldb backend does not currently
+%% support secondary indexing and the _IndexSpecs
+%% parameter is ignored.
 -type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
 -spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
                  {ok, state()} |
