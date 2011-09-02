@@ -103,22 +103,10 @@ parse_object(RObj) ->
                         Acc
                 end
         end,
-    IndexFields1 = lists:foldl(F, [], riak_object:get_metadatas(RObj)),
-
-    %% Delete any special fields...
-    IndexFields2 = [{X, Y} || {X, Y} <- IndexFields1,
-                              X /= ?BUCKETFIELD,
-                              X /= ?KEYFIELD],
-
-    %% Add the bucket and key to the list of postings...
-    IndexFields3 = [
-                    {?BUCKETFIELD, riak_object:bucket(RObj)},
-                    {?KEYFIELD, riak_object:key(RObj)}|
-                    IndexFields2
-                   ],
+    IndexFields = lists:foldl(F, [], riak_object:get_metadatas(RObj)),
 
     %% Now parse the fields, returning the result.
-    parse_fields(IndexFields3).
+    parse_fields(IndexFields).
 
 %% @spec parse_fields([Field :: {Key:binary(), Value :: binary()}]) ->
 %%       {ok, [{Field :: binary(), Value :: term()}]} | {error, [failure_reason()]}.
@@ -411,8 +399,6 @@ parse_object_test() ->
 
     ?assertMatch(
        {ok, [
-             {?BUCKETFIELD, <<"B">>},
-             {?KEYFIELD, <<"K">>},
              {<<"field_bin">>, <<"A">>},
              {<<"field_int">>, 1}
        ]},

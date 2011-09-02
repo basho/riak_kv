@@ -55,8 +55,6 @@
 -type index_value() :: integer() | binary().
 
 -define(MAX_KEY_SIZE, 65536).
--define(BUCKETFIELD, <<"$bucket">>).
--define(KEYFIELD, <<"$key">>).
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
