@@ -76,21 +76,37 @@ init(Partition, #fitting_details{arg={Phase, Arg}}=FittingDetails) ->
             {error, Error}
     end.
 
-init_phase({jsanon, {Bucket, Key}}) ->
+init_phase({Anon, {Bucket, Key}})
+  when Anon =:= jsanon; Anon =:= strfun ->
     %% lookup source for stored-js function only at fitting worker
     %% startup, and convert to {jsanon, Source}
     {ok, C} = riak:local_client(),
     case C:get(Bucket, Key, 1) of
         {ok, Object} ->
             case riak_object:get_value(Object) of
-                Source when is_binary(Source) ->
+                Source when Anon =:= jsanon, is_binary(Source) ->
                     {ok, {jsanon, Source}};
+                Source when Anon =:= strfun,
+                            (is_binary(Source) orelse is_list(Source)) ->
+                    init_phase({strfun, Source});
                 Value ->
-                    {error, {jsanon, {invalid, Value}}}
+                    {error, {Anon, {invalid, Value}}}
             end;
         {error, notfound} ->
-            {error, {jsanon, {notfound, {Bucket, Key}}}}
+            {error, {Anon, {notfound, {Bucket, Key}}}}
     end;
+init_phase({strfun, Source}) ->
+    case app_helper:get_env(riak_kv, allow_strfun, false) of
+        true ->
+            case riak_kv_mrc_pipe:compile_string(Source) of
+                {ok, Fun} when is_function(Fun, 3) ->
+                    {ok, {qfun, Fun}};
+                Error ->
+                    {error, {strfun, {compile_error, Error}}}
+            end;
+        _ ->
+            {error, {strfun, not_allowed}}
+    end;        
 init_phase(Other) ->
     %% other types need no initialization
     {ok, Other}.
@@ -123,10 +139,8 @@ map({qfun, Fun}, Arg, Input0) ->
     Input = erlang_input(Input0),
     KeyData = erlang_keydata(Input0),
     {ok, Fun(Input, KeyData, Arg)};
-map({strfun, {Bucket, Key}}, _Arg, _Input) ->
-    exit({strfun, {Bucket, Key}});
-map({strfun, Source}, _Arg, _Input) ->
-    exit({strfun, Source});
+%% {strfun, Source} is converted to {qfun, Fun} in init
+%% {strfun, {Bucket, Key}} is converted to {qfun, Fun} in init
 %% {jsanon, {Bucket, Key}} is converted to {jsanon, Source} in init
 map({jsfun, Name}, Arg, Input) ->
     map_js({jsfun, Name}, Arg, Input);
@@ -176,17 +190,22 @@ validate_arg({Phase, _Arg}) ->
               "PhaseSpec", 3, erlang:make_fun(Module, Function, 3));
         {qfun, Fun} ->
             riak_pipe_v:validate_function("PhaseSpec", 3, Fun);
-        {strfun, {_Bucket, _Key}} ->
-            {error, "{strfun, {Bucket, Key}} is not yet implemented"};
-        {strfun, _Source} ->
-            {error, "{strfun, Source} is not yet implemented"};
-        {jsanon, {Bucket, Key}} ->
+        {strfun, Source} ->
+            if is_binary(Source); is_list(Source) ->
+                    ok;
+               true ->
+                    {error, io_lib:format(
+                              "~p requires that the Source of a strfun"
+                              " request be a binary or list, not a ~p",
+                              [?MODULE, riak_pipe_v:type_of(Source)])}
+            end;
+        {Anon, {Bucket, Key}} when Anon =:= jsanon; Anon =:= strfun->
             if is_binary(Bucket), is_binary(Key) -> ok;
                true ->
                     {error, io_lib:format(
-                              "~p requires that the {Bucket,Key} of a jsanon"
+                              "~p requires that the {Bucket,Key} of a ~p"
                               " request be a {binary,binary}, not {~p,~p}",
-                              [?MODULE,
+                              [?MODULE, Anon,
                                riak_pipe_v:type_of(Bucket),
                                riak_pipe_v:type_of(Key)])}
             end;
