@@ -304,7 +304,7 @@ fold_buckets_fun(FoldBucketsFun) ->
 %% @private
 %% Return a function to fold over keys on this backend
 fold_keys_fun(FoldKeysFun, undefined) ->
-    %% Fold across a specific bucket...
+    %% Fold across everything...
     fun(StorageKey, Acc) ->
             case from_object_key(StorageKey) of
                 {Bucket, Key} ->

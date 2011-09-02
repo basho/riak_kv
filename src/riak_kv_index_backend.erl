@@ -32,7 +32,7 @@
          stop/1,
          get/3,
          put/5,
-         delete/3,
+         delete/4,
          drop/1,
          fold_buckets/4,
          fold_keys/4,
@@ -157,10 +157,10 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=
     end.
 
 %% @doc Delete the object from the Index backend and the KV backend.
--spec delete(riak_object:bucket(), riak_object:key(), state()) ->
+-spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
                     {ok, state()} |
                     {error, term(), state()}.
-delete(Bucket, Key, #state{kv_mod = KVMod,
+delete(Bucket, Key, IndexSpecs, #state{kv_mod = KVMod,
                            kv_state = KVState,
                            index_mod = IndexMod,
                            index_state = IndexState
@@ -171,7 +171,7 @@ delete(Bucket, Key, #state{kv_mod = KVMod,
     %% works, then delete from KV.
     case do_index_delete(Bucket, Key, KVMod, KVState, IndexMod, IndexState) of
         ok ->
-            case do_kv_delete(Bucket, Key, KVMod, KVState) of
+            case do_kv_delete(Bucket, Key, IndexSpecs, KVMod, KVState) of
                 {ok, UpdKVState} ->
                     {ok, State#state{kv_state=UpdKVState}};
                 {error, Reason, UpdKVState} ->
@@ -355,10 +355,11 @@ do_index_delete(Bucket, PrimaryKey, KVMod, KVState, IndexMod, IndexState) ->
 %% @doc Delete the {Bucket, Key} from the KV backend.
 -spec do_kv_delete(riak_object:bucket(),
                    riak_object:key(),
+                   [index_spec()],
                    module(),
                    term()) -> {ok, term()} | {error, term(), term()}.
-do_kv_delete(Bucket, Key, KVMod, KVState) ->
-    KVMod:delete(Bucket, Key, KVState).
+do_kv_delete(Bucket, Key, Indexes, KVMod, KVState) ->
+    KVMod:delete(Bucket, Key, Indexes, KVState).
 
 %% ===================================================================
 %% EUnit tests
