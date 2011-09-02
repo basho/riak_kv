@@ -105,7 +105,8 @@
          collect_outputs/2,
          collect_outputs/3,
          mapred_plan/1,
-         mapred_plan/2
+         mapred_plan/2,
+         compile_string/1
         ]).
 %% NOTE: Example functions are used by EUnit tests
 -export([example/0, example_bucket/0, example_reduce/0,
@@ -426,6 +427,18 @@ group_outputs(Outputs, NumKeeps) ->
             end;
        true ->
             [ O || {_, O} <- lists:keysort(1, dict:to_list(Merged)) ]
+    end.
+
+compile_string(Binary) when is_binary(Binary) ->
+    compile_string(binary_to_list(Binary));
+compile_string(String) when is_list(String) ->
+    try
+        {ok, Tokens, _} = erl_scan:string(String),
+        {ok, [Form]} = erl_parse:parse_exprs(Tokens),
+        {value, Value, _} = erl_eval:expr(Form, erl_eval:new_bindings()),
+        {ok, Value}
+    catch Type:Error ->
+            {Type, Error}
     end.
 
 %%%
