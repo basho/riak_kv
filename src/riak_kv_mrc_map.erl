@@ -190,15 +190,6 @@ validate_arg({Phase, _Arg}) ->
               "PhaseSpec", 3, erlang:make_fun(Module, Function, 3));
         {qfun, Fun} ->
             riak_pipe_v:validate_function("PhaseSpec", 3, Fun);
-        {strfun, Source} ->
-            if is_binary(Source); is_list(Source) ->
-                    ok;
-               true ->
-                    {error, io_lib:format(
-                              "~p requires that the Source of a strfun"
-                              " request be a binary or list, not a ~p",
-                              [?MODULE, riak_pipe_v:type_of(Source)])}
-            end;
         {Anon, {Bucket, Key}} when Anon =:= jsanon; Anon =:= strfun->
             if is_binary(Bucket), is_binary(Key) -> ok;
                true ->
@@ -223,6 +214,15 @@ validate_arg({Phase, _Arg}) ->
                     {error, io_lib:format(
                               "~p requires that the Source of a jsanon"
                               " request be a binary, not a ~p",
+                              [?MODULE, riak_pipe_v:type_of(Source)])}
+            end;
+        {strfun, Source} ->
+            if is_binary(Source); is_list(Source) ->
+                    ok;
+               true ->
+                    {error, io_lib:format(
+                              "~p requires that the Source of a strfun"
+                              " request be a binary or list, not a ~p",
                               [?MODULE, riak_pipe_v:type_of(Source)])}
             end;
         _ ->
