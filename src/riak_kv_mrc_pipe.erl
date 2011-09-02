@@ -102,8 +102,11 @@
          mapred_stream/1,
          send_inputs/2,
          send_inputs/3,
+         send_inputs_async/2,
+         send_inputs_async/3,
          collect_outputs/2,
          collect_outputs/3,
+         group_outputs/2,
          mapred_plan/1,
          mapred_plan/2,
          compile_string/1
@@ -327,6 +330,30 @@ count_keeps_in_query(Query) ->
                 end, 0, Query).
 
 %% TODO: dynamic inputs, filters
+send_inputs_async(Pipe, Arg) ->
+    send_inputs_async(Pipe, Arg, ?DEFAULT_TIMEOUT).
+
+send_inputs_async(Pipe, Arg, Timeout) ->
+    spawn_monitor(
+      fun() ->
+              %% tear this process down if the pipeline goes away;
+              %% also automatically tears down the pipeline if feeding
+              %% it inputs fails (which is what the users of this
+              %% function, riak_kv_pb_socket and riak_kv_wm_mapred, want)
+              erlang:link(Pipe#pipe.builder),
+              case send_inputs(Pipe, Arg, Timeout) of
+                  ok ->
+                      %% monitoring process sees a 'normal' exit
+                      %% (and linked builder is left alone)
+                      ok;
+                  Error ->
+                      %% monitoring process sees an 'error' exit
+                      %% (and linked builder dies)
+                      exit(Error)
+              end
+      end).
+                      
+
 send_inputs(Pipe, Arg) ->
     send_inputs(Pipe, Arg, ?DEFAULT_TIMEOUT).
 

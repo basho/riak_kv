@@ -29,6 +29,7 @@
 -export([nop/2]).
 
 -include_lib("webmachine/include/webmachine.hrl").
+-include_lib("riak_pipe/include/riak_pipe.hrl").
 
 -define(DEFAULT_TIMEOUT, 60000).
 
@@ -89,6 +90,8 @@ send_error(Error, RD)  ->
 format_error({error, Message}=Error) when is_atom(Message);
                                           is_binary(Message) ->
     mochijson2:encode({struct, [Error]});
+format_error({error, {_,_}=Error}) ->
+    mochijson2:encode({struct, [Error]});
 format_error({error, Error}) when is_list(Error) ->
     mochijson2:encode({struct, Error});
 format_error(_Error) ->
@@ -136,28 +139,25 @@ is_key_filter(_) ->
 
 pipe_mapred(RD,
             #state{inputs=Inputs,
-                   mrquery=Query}=State) ->
+                   mrquery=Query,
+                   timeout=Timeout}=State) ->
     {{ok, Pipe}, NumKeeps} =
         riak_kv_mrc_pipe:mapred_stream(Query),
-    case riak_kv_mrc_pipe:send_inputs(Pipe, Inputs) of
-        ok ->
-            case wrq:get_qs_value("chunked", "false", RD) of
-                "true" ->
-                    pipe_mapred_chunked(RD, State, Pipe);
-                _ ->
-                    pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps)
-            end;
-        {error, {bad_filter, _}} ->
-            riak_pipe:eoi(Pipe),
-            {{halt, 500}, send_error({error, bad_mapred_filter}, RD), State};
-        Error ->
-            riak_pipe:eoi(Pipe),
-            {{halt, 500}, send_error(Error, RD), State}
+    PipeRef = (Pipe#pipe.sink)#fitting.ref,
+    erlang:send_after(Timeout, self(), {pipe_timeout, PipeRef}),
+    {InputSender, SenderMonitor} =
+        riak_kv_mrc_pipe:send_inputs_async(Pipe, Inputs),
+    case wrq:get_qs_value("chunked", "false", RD) of
+        "true" ->
+            pipe_mapred_chunked(RD, State, Pipe,
+                                {InputSender, SenderMonitor});
+        _ ->
+            pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps,
+                                   {InputSender, SenderMonitor})
     end.
 
-pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps) ->
-    %% TODO: timeout
-    case riak_kv_mrc_pipe:collect_outputs(Pipe, NumKeeps) of
+pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender) ->
+    case pipe_collect_outputs(Pipe, NumKeeps, Sender) of
         {ok, Results} ->
             JSONResults = 
                 case NumKeeps < 2 of
@@ -172,11 +172,50 @@ pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps) ->
             {true,
              wrq:set_resp_body(mochijson2:encode(JSONResults), RD),
              State};
-        {error, _}=Error ->
-            {{halt, 500}, send_error(Error, RD), State}
+        {error, {sender_error, Error}} ->
+            %% the sender links to the builder, so the builder has
+            %% already been torn down
+            {{halt, 500}, send_error(Error, RD), State};
+        {error, timeout} ->
+            %% destroying the pipe will tear down the linked sender
+            riak_pipe:destroy(Pipe),
+            {{halt, 500}, send_error({error, timeout}, RD), State}
     end.
 
-pipe_mapred_chunked(RD, State, Pipe) ->
+pipe_collect_outputs(Pipe, NumKeeps, Sender) ->
+    Ref = (Pipe#pipe.sink)#fitting.ref,
+    case pipe_collect_outputs1(Ref, Sender, []) of
+        {ok, Outputs} ->
+            {ok, riak_kv_mrc_pipe:group_outputs(Outputs, NumKeeps)};
+        Error ->
+            Error
+    end.
+
+pipe_collect_outputs1(Ref, Sender, Acc) ->
+    case pipe_receive_output(Ref, Sender) of
+        {ok, Output} -> pipe_collect_outputs1(Ref, Sender, [Output|Acc]);
+        eoi          -> {ok, Acc};
+        Error        -> Error
+    end.
+
+pipe_receive_output(Ref, {SenderPid, SenderRef}) ->
+    receive
+        #pipe_eoi{ref=Ref} ->
+            eoi;
+        #pipe_result{ref=Ref, from=From, result=Result} ->
+            {ok, {From, Result}};
+        {'DOWN', SenderRef, process, SenderPid, Reason} ->
+            if Reason == normal ->
+                    %% just done sending inputs, nothing to worry about
+                    pipe_receive_output(Ref, {SenderPid, SenderRef});
+               true ->
+                    {error, {sender_error, Reason}}
+            end;
+        {pipe_timeout, Ref} ->
+            {error, timeout}
+    end.
+
+pipe_mapred_chunked(RD, State, Pipe, Sender) ->
     Boundary = riak_core_util:unique_id_62(),
     CTypeRD = wrq:set_resp_header(
                 "Content-Type",
@@ -184,16 +223,16 @@ pipe_mapred_chunked(RD, State, Pipe) ->
                 RD),
     BoundaryState = State#state{boundary=Boundary},
     Streamer = pipe_stream_mapred_results(
-                 CTypeRD, Pipe, BoundaryState),
+                 CTypeRD, Pipe, BoundaryState, Sender),
     {true,
      wrq:set_resp_body({stream, Streamer}, CTypeRD),
      BoundaryState}.
 
 pipe_stream_mapred_results(RD, Pipe,
-                           #state{timeout=Timeout,
-                                  boundary=Boundary}=State) ->
-    case riak_pipe:receive_result(Pipe, Timeout) of
-        {result, {PhaseId, Result}} ->
+                           #state{boundary=Boundary}=State, 
+                           Sender) ->
+    case pipe_receive_output((Pipe#pipe.sink)#fitting.ref, Sender) of
+        {ok, {PhaseId, Result}} ->
             %% results come out of pipe one
             %% at a time but they're supposed to
             %% be in a list at the client end
@@ -204,16 +243,14 @@ pipe_stream_mapred_results(RD, Pipe,
                     "Content-Type: application/json\r\n\r\n",
                     Data],
             {iolist_to_binary(Body),
-             fun() -> pipe_stream_mapred_results(RD, Pipe, State) end};
+             fun() -> pipe_stream_mapred_results(RD, Pipe, State, Sender) end};
         eoi ->
             {iolist_to_binary(["\r\n--", Boundary, "--\r\n"]), done};
-        timeout ->
+        {error, timeout} ->
+            riak_pipe:destroy(Pipe),
             {format_error({error, timeout}), done};
-        {log, {_,_}} ->
-            %% no logging is enabled in riak_kv_mrc_pipe, but the
-            %% match is here just so this doesn't blow up during
-            %% debugging
-            pipe_stream_mapred_results(RD, Pipe, State)
+        {error, {sender_error, Error}} ->
+            {format_error(Error), done}
     end.
 
 %% LEGACY MAPRED

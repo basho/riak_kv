@@ -42,6 +42,10 @@
                 req,       % current request (for multi-message requests like list keys)
                 req_ctx}). % context to go along with request (partial results, request ids etc)
 
+-record(pipe_ctx, {pipe,     % pipe handling mapred request
+                   ref,      % easier-access ref/reqid
+                   timer,    % ref() for timeout send_after
+                   sender}). % {pid(), monitor()} of process sending inputs
 
 -define(PROTO_MAJOR, 1).
 -define(PROTO_MINOR, 0).
@@ -73,7 +77,7 @@ handle_info({tcp_closed, Socket}, State=#state{sock=Socket}) ->
     {stop, normal, State};
 handle_info({tcp_error, Socket, _Reason}, State=#state{sock=Socket}) ->
     {stop, normal, State};
-handle_info({tcp, _Sock, Data}, State=#state{sock=Socket}) ->
+handle_info({tcp, _Sock, Data}, State=#state{sock=Socket, req=undefined}) ->
     [MsgCode|MsgData] = Data,
     Msg = riakc_pb:decode(MsgCode, MsgData),
     case process_message(Msg, State) of
@@ -83,6 +87,12 @@ handle_info({tcp, _Sock, Data}, State=#state{sock=Socket}) ->
             inet:setopts(Socket, [{active, once}])
     end,
     {noreply, NewState};
+handle_info({tcp, _Sock, _Data}, State) ->
+    %% req =/= undefined: received a new request while another was in
+    %% progress -> Error
+    lager:error("Received a new PB socket request"
+                " while another was in progress"),
+    {stop, normal, State};
 
 %% Handle responses from stream_list_keys 
 handle_info({ReqId, done},
@@ -102,24 +112,53 @@ handle_info({ReqId, Error},
 
 %% PIPE Handle response from mapred_stream
 handle_info(#pipe_eoi{ref=ReqId},
-            State=#state{sock = Socket, req=#rpbmapredreq{}, req_ctx=ReqId}) ->
+            State=#state{req=#rpbmapredreq{},
+                         req_ctx=#pipe_ctx{ref=ReqId,
+                                           timer=Timer}}) ->
     NewState = send_msg(#rpbmapredresp{done = 1}, State),
-    inet:setopts(Socket, [{active, once}]),
+    erlang:cancel_timer(Timer),
     {noreply, NewState#state{req = undefined, req_ctx = undefined}};
 
 handle_info(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
-            State=#state{sock=Socket,
-                         req=#rpbmapredreq{content_type = ContentType}, 
-                         req_ctx=ReqId}) ->
+            State=#state{req=#rpbmapredreq{content_type = ContentType}, 
+                         req_ctx=#pipe_ctx{ref=ReqId}=PipeCtx}) ->
     case encode_mapred_phase([Res], ContentType) of
         {error, Reason} ->
+            erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
+            %% destroying the pipe will automatically kill the sender
+            riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
             NewState = send_error("~p", [Reason], State),
-            inet:setopts(Socket, [{active, once}]),
             {noreply, NewState#state{req = undefined, req_ctx = undefined}};
         Response ->
             {noreply, send_msg(#rpbmapredresp{phase=PhaseId, 
                                               response=Response}, State)}
     end;
+handle_info({'DOWN', Ref, process, Pid, Reason},
+            State=#state{req=#rpbmapredreq{},
+                         req_ctx=#pipe_ctx{sender={Pid, Ref}}=PipeCtx}) ->
+    %% the async input sender exited
+    if Reason == normal ->
+            %% just reached the end of the input sending - all is
+            %% well, continue processing
+            NewPipeCtx = PipeCtx#pipe_ctx{sender=undefined},
+            {noreply, State#state{req_ctx=NewPipeCtx}};
+       true ->
+            %% something went wrong sending inputs - tell the client
+            %% about it, and shutdown the pipe
+            erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
+            riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
+            lager:error("Error sending inputs: ~p", [Reason]),
+            NewState = send_error("~p", [bad_mapred_inputs], State),
+            {noreply, NewState#state{req=undefined, req_ctx=undefined}}
+    end;
+handle_info({pipe_timeout, Ref},
+            State=#state{req=#rpbmapredreq{},
+                         req_ctx=#pipe_ctx{ref=Ref,
+                                           pipe=Pipe}}) ->
+    NewState = send_error("timeout", [], State),
+    %% destroying the pipe will automatically kill the sender
+    riak_pipe:destroy(Pipe),
+    {noreply, NewState#state{req=undefined, req_ctx=undefined}};
 %% ignore #pipe_log for now, since riak_kv_mrc_pipe does not enable it
 
 %% LEGACY Handle response from mapred_stream/mapred_bucket_stream
@@ -399,21 +438,19 @@ process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
             end
     end.
 
-pipe_mapreduce(Req, State, Inputs, Query, _Timeout) ->
+pipe_mapreduce(Req, State, Inputs, Query, Timeout) ->
     {{ok, Pipe}, _NumKeeps} =
         riak_kv_mrc_pipe:mapred_stream(Query),
-    case riak_kv_mrc_pipe:send_inputs(Pipe, Inputs) of
-        ok ->
-            Ref = (Pipe#pipe.sink)#fitting.ref,
-            %% TODO: timeout
-            {pause, State#state{req=Req, req_ctx=Ref}};
-        Error ->
-            %% even if the structure looks right, it might name
-            %% a non-existent key filter or something
-            riak_pipe:eoi(Pipe),
-            lager:error("Error sending inputs: ~p", [Error]),
-            send_error("~p", [bad_mapred_inputs], State)
-    end.
+    PipeRef = (Pipe#pipe.sink)#fitting.ref,
+    Timer = erlang:send_after(Timeout, self(),
+                              {pipe_timeout, PipeRef}),
+    {InputSender, SenderMonitor} =
+        riak_kv_mrc_pipe:send_inputs_async(Pipe, Inputs),
+    Ctx = #pipe_ctx{pipe=Pipe,
+                    ref=PipeRef,
+                    timer=Timer,
+                    sender={InputSender, SenderMonitor}},
+    State#state{req=Req, req_ctx=Ctx}.
 
 legacy_mapreduce(#rpbmapredreq{content_type=ContentType}=Req,
                  #state{client=C}=State, Inputs, Query, Timeout) ->
