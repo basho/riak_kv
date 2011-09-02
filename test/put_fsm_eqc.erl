@@ -289,7 +289,7 @@ prop_basic_put() ->
                                              {timeout, 200} | Options0], []),
         VPutReplies = make_vput_replies(VPutResp, Objects, Options),
         PL2 = make_preflist2(VPutResp, 1, []),
-        [{CoordIdxNode,_}|_] = PL2,
+        [{CoordPLEntry,_}|_] = PL2,
 
         %% Prepare the mock vnode master
         ok = fsm_eqc_vnode:set_data(Objects, []),
@@ -312,7 +312,7 @@ prop_basic_put() ->
                                                   {n, N},
                                                   {bucket_props, BucketProps},
                                                   {preflist2, PL2},
-                                                  {coord_idx_node, CoordIdxNode}]),
+                                                  {coord_pl_entry, CoordPLEntry}]),
         ok = riak_kv_test_util:wait_for_pid(PutPid),
         ok = riak_kv_test_util:wait_for_children(PutPid),
         Res = fsm_eqc_util:wait_for_req_id(?REQ_ID, PutPid),
