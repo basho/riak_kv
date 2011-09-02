@@ -3,7 +3,7 @@
 %% riak_kv_index_backend: joins bitcask and merge_index to create an
 %%                        indexing backend.
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -27,24 +27,26 @@
 -define(PRINT(Var), io:format("DEBUG: ~p:~p - ~p~n~n ~p~n~n", [?MODULE, ?LINE, ??Var, Var])).
 
 %% KV Backend API
--export([start/2,
+-export([api_version/0,
+         start/2,
          stop/1,
-         get/2,
-         put/3,
-         delete/2,
-         list/1,
-         list_bucket/2,
-         fold/3,
-         fold_index/3,
-         fold_keys/3,
-         fold_bucket_keys/4,
+         get/3,
+         put/5,
+         delete/3,
          drop/1,
+         fold_buckets/4,
+         fold_keys/4,
+         fold_objects/4,
          is_empty/1,
+         status/1,
          callback/3]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
+
+-define(API_VERSION, 1).
+-define(CAPABILITIES, [indexes]).
 
 -record(state, {
           kv_mod,       % The KV backend module.
@@ -53,247 +55,257 @@
           index_state   % The Index backend state.
          }).
 
-%% @spec start(Partition :: integer(), Config :: integer()) ->
-%%                        {ok, state()} | {{error, Reason :: term()}, state()}.
-%%
+-type state() :: #state{}.
+-type config() :: [{atom(), term()}].
+-type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
+
+%% ===================================================================
+%% Public API
+%% ===================================================================
+
+%% @doc Return the major version of the
+%% current API and a capabilities list.
+-spec api_version() -> {integer(), [atom()]}.
+api_version() ->
+    {?API_VERSION, ?CAPABILITIES}.
+
 %% @doc Start an instance of riak_kv_bitcask_backend and riak_index_mi_backend.
+-spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% For now, just use bitcask and merge_index. In the future, make
     %% this configurable.
     KVMod = riak_kv_bitcask_backend,
     IndexMod = riak_index_mi_backend,
 
+    %% Check for module-specific configs
+    case proplists:get_value(bitcask, Config) of
+        undefined ->
+            KVConfig = [];
+        KVConfig ->
+            ok
+    end,
+    case proplists:get_value(merge_index, Config) of
+        undefined ->
+            IndexConfig = [];
+        IndexConfig ->
+            ok
+    end,
     %% Fire up the backends...
-    {ok, KVState} = KVMod:start(Partition, Config),
-    {ok, IndexState} = IndexMod:start(Partition, Config),
-
-    %% Create the state and return...
-    State = #state {
-      kv_mod = KVMod,
-      kv_state = KVState,
-      index_mod = IndexMod,
-      index_state = IndexState
-     },
-    {ok, State}.
-
-%% @spec stop(state()) -> ok | {error, Reason :: term()}.
-%%
-%% @doc Stop backends, bubble up any errors.
-stop(State) ->
-    #state { kv_mod = KVMod, kv_state = KVState, index_mod = IndexMod, index_state = IndexState } = State,
-    KVResult = KVMod:stop(KVState),
-    IndexResult = IndexMod:stop(IndexState),
-    Results = [KVResult, IndexResult],
-    ErrorResults = [X || X <- Results, X /= ok],
-    case ErrorResults of
-        [] -> ok;
-        _ -> {error, ErrorResults}
+    case KVMod:start(Partition, KVConfig) of
+        {ok, KVState} ->
+            case IndexMod:start(Partition, IndexConfig) of
+                {ok, IndexState} ->
+                    %% Create the state and return...
+                    State = #state{
+                      kv_mod = KVMod,
+                      kv_state = KVState,
+                      index_mod = IndexMod,
+                      index_state = IndexState
+                     },
+                    {ok, State};
+                {error, Reason1} ->
+                    {error, Reason1}
+            end;
+        {error, Reason} ->
+            {error, Reason}
     end.
 
-%% @spec get(state(), Key :: binary()) -> {ok, Val :: binary()} | {error, Reason :: term()}.
-%%
+%% @doc Stop the backends
+-spec stop(state()) -> ok.
+stop(State) ->
+    #state{kv_mod = KVMod,
+           kv_state = KVState,
+           index_mod = IndexMod,
+           index_state = IndexState}=State,
+    KVMod:stop(KVState),
+    IndexMod:stop(IndexState),
+    ok.
+
 %% @doc Pass a get request through to the KV backend.
-get(State, BKey) ->
-    #state { kv_mod = KVMod, kv_state = KVState } = State,
-    KVMod:get(KVState, BKey).
+-spec get(riak_object:bucket(), riak_object:key(), state()) ->
+                 {ok, any(), state()} |
+                 {ok, not_found, state()} |
+                 {error, term(), state()}.
+get(Bucket, Key, #state{kv_mod = KVMod,
+                        kv_state = KVState}) ->
+    KVMod:get(Bucket, Key, KVState).
 
-%% @spec put(state(), Key :: binary(), Val :: binary()) -> ok | {error, Reason :: term()}.
-%%
-%% @doc Index the Riak object using fields stored in metadata under
-%%       <<"index">>, then store the object in the KV backend.
-put(State, BKey, Val) ->
-    #state { kv_mod = KVMod, kv_state = KVState, index_mod = IndexMod, index_state = IndexState } = State,
-
+%% @doc Insert an object with secondary index 
+%% information into the bitcask backend
+-spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
+                 {ok, state()} |
+                 {error, term(), state()}.
+put(Bucket, PrimaryKey, IndexSpecs, Val, State=
+        #state{kv_mod = KVMod,
+               kv_state = KVState,
+               index_mod = IndexMod,
+               index_state = IndexState}) ->
     %% Since the two backends are separate, we can't have a true
     %% transaction. The best we can do for now is perform the index
     %% (which is the newer and more complicated code) and if that
     %% works, then perform the KV put.
-    case do_index_put(IndexMod, IndexState, BKey, Val) of
+    case do_index_put(Bucket, PrimaryKey, IndexSpecs, Val, IndexMod, IndexState) of
         ok ->
-            do_kv_put(KVMod, KVState, BKey, Val);
-        Other ->
-            Other
+            case do_kv_put(Bucket, PrimaryKey, Val, KVMod, KVState) of
+                {ok, UpdKVState} ->
+                    {ok, State#state{kv_state=UpdKVState}};
+                {error, Reason, UpdKVState} ->
+                    {error, Reason, State#state{kv_state=UpdKVState}}
+            end;
+        {error, Reason1} ->
+            {error, Reason1, State}
     end.
 
-%% @spec delete(state(), Key :: binary()) -> ok | {error, Reason :: term()}.
-%%
 %% @doc Delete the object from the Index backend and the KV backend.
-delete(State, BKey) ->
-    #state { kv_mod = KVMod, kv_state = KVState, index_mod = IndexMod, index_state = IndexState } = State,
-
+-spec delete(riak_object:bucket(), riak_object:key(), state()) ->
+                    {ok, state()} |
+                    {error, term(), state()}.
+delete(Bucket, Key, #state{kv_mod = KVMod,
+                           kv_state = KVState,
+                           index_mod = IndexMod,
+                           index_state = IndexState
+                          }=State) ->
     %% Since the two backends are separate, we can't have a true
     %% transaction. The best we can do for now is delete from the index
     %% (which is the newer and more complicated code) and if that
     %% works, then delete from KV.
-    case do_index_delete(IndexMod, IndexState, BKey) of
+    case do_index_delete(Bucket, Key, KVMod, KVState, IndexMod, IndexState) of
         ok ->
-            do_kv_delete(KVMod, KVState, BKey);
-        Other ->
-            Other
+            case do_kv_delete(Bucket, Key, KVMod, KVState) of
+                {ok, UpdKVState} ->
+                    {ok, State#state{kv_state=UpdKVState}};
+                {error, Reason, UpdKVState} ->
+                    {error, Reason, State#state{kv_state=UpdKVState}}
+            end;
+        {error, Reason1} ->
+            {error, Reason1, State}
     end.
 
-%% @spec list(state()) -> [Key :: binary()]
-%%
-%% @doc Pass a list request through to the KV backend.
-list(State) ->
-    #state { kv_mod = KVMod, kv_state = KVState } = State,
-    KVMod:list(KVState).
+%% @doc Fold over all the buckets.
+-spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
+                   any(),
+                   [],
+                   state())-> {ok, any()} | {error, term()}.
+fold_buckets(FoldBucketsFun, Acc, Opts, #state{kv_mod = KVMod,
+                                               kv_state = KVState}) ->
+    KVMod:fold_buckets(FoldBucketsFun, Acc, Opts, KVState).
 
-%% @spec list_bucket(state(), list_bucket_def()) -> [Key :: binary()].
-%% @type list_bucket_def() -> Bucket :: binary()
-%%                          | Any :: '_'
-%%                          | Filter :: {filter, Bucket::binary(), FilterFun :: function()}
-%%
-%% @doc Pass list_bucket requests through to the KV backend.
-list_bucket(State, Bucket) ->
-    #state { kv_mod = KVMod, kv_state = KVState } = State,
-    KVMod:list_bucket(KVState, Bucket).
+%% @doc Fold over all the keys for one or all buckets.
+-spec fold_keys(riak_kv_backend:fold_keys_fun(),
+                any(),
+                [{atom(), term()}],
+                state()) -> {ok, term()} | {error, term()}.
+fold_keys(FoldKeysFun, Acc, Opts, #state{index_mod = IndexMod,
+                                         index_state = IndexState,
+                                         kv_mod = KVMod,
+                                         kv_state = KVState}) ->
+    case lists:keymember(index, 1, Opts) orelse 
+        (lists:keymember(bucket, 1, Opts) andalso 
+         tuple_size(lists:keyfind(bucket, 1, Opts)) =:= 3) of
+        true ->
+            IndexMod:fold_index(FoldKeysFun, Acc, Opts, IndexState);
+        false ->
+            KVMod:fold_keys(FoldKeysFun, Acc, Opts, KVState)
+    end.
 
-%% @spec is_empty(state()) -> boolean().
-%%
-%% @doc Pass is_empty requests through to the KV backend.
-is_empty(State) ->
-    #state { kv_mod = KVMod, kv_state = KVState } = State,
+%% @doc Fold over all the objects for one or all buckets.
+-spec fold_objects(riak_kv_backend:fold_objects_fun(),
+                   any(),
+                   [{atom(), term()}],
+                   state()) -> {ok, any()} | {error, term()}.
+fold_objects(FoldObjectsFun, Acc, Opts, #state{kv_mod = KVMod,
+                                               kv_state = KVState}) ->
+    KVMod:fold_objects(FoldObjectsFun, Acc, Opts, KVState).
+
+%% @doc Drop all data from the Index and KV backends.
+-spec drop(state()) -> {ok, state()} | {error, term(), state()}.
+drop(#state{kv_mod = KVMod,
+            kv_state = KVState,
+            index_mod = IndexMod,
+            index_state = IndexState}=State) ->
+    case KVMod:drop(KVState) of
+        {ok, UpdKVState} ->
+            KVError = none;
+        {error, KVError, UpdKVState} ->
+            ok
+    end,
+    case IndexMod:drop(IndexState) of
+        ok ->
+            UpdIndexState = IndexState,
+            IndexError = none;
+        {ok, UpdIndexState} ->
+            IndexError = none;
+        {error, IndexError, UpdIndexState} ->
+            ok
+    end,
+    Errors = [KVError, IndexError],
+    case Errors of
+        [none, none] ->
+            {ok, State#state{kv_state=UpdKVState,
+                             index_state=UpdIndexState}};
+        _ ->
+            {error, Errors, State#state{kv_state=UpdKVState,
+                                        index_state=UpdIndexState}}
+    end.
+
+%% @doc Returns true if the kv backend contains any
+%% non-tombstone values; otherwise returns false.
+-spec is_empty(state()) -> boolean().
+is_empty(#state{kv_mod = KVMod,
+                kv_state = KVState}) ->
     KVMod:is_empty(KVState).
 
-%% @spec drop(state()) -> ok.
-%%
-%% @doc Drop all data from the Index and KV backends.
-drop(State) ->
-    #state { kv_mod = KVMod, kv_state = KVState, index_mod = IndexMod, index_state = IndexState } = State,
-    IndexMod:drop(IndexState),
-    KVMod:drop(KVState).
+%% @doc Get the status information for the backends
+-spec status(state()) -> [{atom(), term()}].
+status(#state{kv_mod = KVMod,
+              kv_state = KVState,
+              index_mod = IndexMod,
+              index_state = IndexState}) ->
+    KVStatus = {KVMod, KVMod:status(KVState)},
+    IndexStatus = {IndexMod, IndexMod:status(IndexState)},
+    [{KVMod, KVStatus},  {IndexMod, IndexStatus}].
 
-%% @spec fold(state(), function(), term()) -> [Key :: binary()].
-%%
-%% @doc Pass fold requests through to the KV backend.
-fold(State, Fun, Extra) ->
-    #state { kv_mod = KVMod, kv_state = KVState } = State,
-    KVMod:fold(KVState, Fun, Extra).
-
-%% @spec fold_keys(state(), function(), term()) -> [Key :: binary()].
-%%
-%% @doc Pass fold_keys requests through to the KV backend.
-fold_keys(State, Fun, Extra) ->
-    #state { kv_mod = KVMod, kv_state = KVState } = State,
-    KVMod:fold_keys(KVState, Fun, Extra).
-
-%% @doc Pass the fold_index request through to the Index backend.
-fold_index(#state {index_mod = IndexMod,
-                   index_state = IndexState},
-           Bucket, Query) ->
-    %% Update riak_kv_stat...
-    riak_kv_stat:update(vnode_index_read),
-
-    %% This is needs discussion. Our design notes call for results to
-    %% feed into SKFun using {sk, SecondaryKey, PrimaryKey}, but this
-    %% doesn't account for Properties. We also need to add a clause
-    %% for when we reach the limit.
-    SKFun = fun({results, Results1}, Acc1) ->
-                    {ok, Results1 ++ Acc1};
-               ({error, Reason}, _Acc1) ->
-                    {error, Reason};
-               (done, Acc1) ->
-                    {ok, Acc1}
-            end,
-
-    %% Also, for this round of changes, FinalFun is going to just
-    %% return the output of SKFun. Normally, this would call
-    %% riak_core_vnode:reply/N. Here, we just transform the list of
-    %% results from [{Key, Props}] to [Key].
-    FinalFun = fun({error, Reason}, _Acc1) ->
-                       {error, Reason};
-                  (done, Acc1) ->
-                       [K || {K, _} <- Acc1]
-               end,
-
-    %% Call fold_index on the Index backend
-    IndexMod:fold_index(IndexState, Bucket, Query, SKFun, [], FinalFun).
-
-%% @spec fold_bucket_keys(state(), binary(), function(), term()) -> [Key :: binary()].
-%%
-%% @doc Pass fold_bucket_keys requests through to the KV backend.
-fold_bucket_keys(State, Bucket, Fun, Extra) ->
-    #state { kv_mod = KVMod, kv_state = KVState } = State,
-
-    %% Pass fold_bucket_keys request to the KV backend using the
-    %% latest known interface, falling back as appropriate.
-    try
-        WrapFun = fun(K, Acc) -> Fun({Bucket, K}, unused_val, Acc) end,
-        KVMod:fold_bucket_keys(KVState, Bucket, WrapFun)
-    catch error:undef ->
-            try
-                KVMod:fold_bucket_keys(KVState, Bucket, Fun, Extra)
-            catch error:undef ->
-                    %% Backend doesn't support newer API, use older API
-                    KVMod:fold(KVState, Fun, Extra)
-            end
-    end.
-
-%% @spec callback(state(), ref(), term()) -> ok.
-%%
 %% @doc Pass any callbacks through to the KV backend.
-callback(State, Ref, Msg) ->
+-spec callback(reference(), any(), state()) -> {ok, state()}.
+callback(Ref, Msg, #state{kv_mod = KVMod,
+                          kv_state = KVState,
+                          index_mod = IndexMod,
+                          index_state = IndexState}=State) ->
     %% Callbacks are handled using the same method as multi-backend:
     %% call the callback function on each backend, don't check for any
     %% response, no error handling, return 'ok'.
-    #state { kv_mod = KVMod, kv_state = KVState, index_mod = IndexMod, index_state = IndexState } = State,
-    KVMod:callback(KVState, Ref, Msg),
-    IndexMod:callback(IndexState, Ref, Msg),
-    ok.
 
+    {ok, UpdKVState} = KVMod:callback(Ref, Msg, KVState),
+    ok = IndexMod:callback(Ref, Msg, IndexState),
+    {ok, State#state{kv_state=UpdKVState}}.
 
-%%% PRIVATE FUNCTIONS %%%
-
+%% ===================================================================
+%% Internal functions
+%% ===================================================================
 
 %% @private
-%% @spec do_index_put(IndexMod :: module(), IndexState :: term(), BKey :: riak_object:bkey(), Val :: binary()) -> ok.
-%%
 %% @doc Index the BKey/Value in the Index backend.
-do_index_put(IndexMod, IndexState, BKey, Val) ->
-    %% Get the old proxy object. If it exists, then delete all of its
-    %% postings.
-    {Bucket, Key} = BKey,
-    case IndexMod:lookup_sync(IndexState, Bucket, "_proxy", Key) of
-        [{Key, OldPostings}] ->
-            TS1 = riak_index:timestamp(),
-            OldPostings1 = [{Bucket, Field, Token, Key, TS1} || {Field, Token, _} <- OldPostings],
-            %% io:format("DEBUG: Deleting old postings for ~p:~n~p~n", [BKey, OldPostings1]),
-            ok = IndexMod:delete(IndexState, OldPostings1),
-            riak_kv_stat:update({vnode_index_delete, length(OldPostings1)});
-        _ ->
-            skip
-    end,
-
-    %% We need the unserialized Riak Object in order to index. This is
-    %% extra overhead.
-    Obj = binary_to_term(Val),
-
-    %% Pull the IndexFields from the object. At this point, we've
-    %% already validated that the object parses correctly, so if we
-    %% get anything back except for {ok, IndexFields} then fail
-    %% loudly, as it's an unanticipated code path.
-    IndexFields = case riak_index:parse_object(Obj) of
-                      {ok, IFs} ->
-                          %% No properties for now. This is here for future planning.
-                          EmptyProps = [],
-                          [{Field, Value, EmptyProps} || {Field, Value} <- IFs];
-                      {error, Reasons} ->
-                          throw({error_parsing_index_fields, Reasons})
-                  end,
-
-    %% Store the new proxy object. This is a single entry written to
-    %% merge_index under {Index, Field, Term} of {Bucket, "_proxy",
-    %% Key}. The DocID is also the Key, and the properties is a list
-    %% of postings.
-    TS2 = riak_index:timestamp(),
-    %% io:format("DEBUG: Indexing proxy object for ~p~n", [BKey]),
-    ok = IndexMod:index(IndexState, [{Bucket, "_proxy", Key, Key, IndexFields, TS2}]),
-
-    %% Store the new postings...
-    Postings = [{Bucket, Field, Token, Key, Props, TS2} || {Field, Token, Props} <- IndexFields],
+-spec do_index_put(riak_object:bucket(),
+                   riak_object:key(),
+                   [index_spec()],
+                   binary(),
+                   module(),
+                   term()) -> ok | {error, term()}.
+do_index_put(_, _, [], _, _, _) ->
+    ok;
+do_index_put(Bucket, PrimaryKey, IndexSpecs, _Val, IndexMod, IndexState) ->
+    AssemblePostings = 
+        fun({Op, Index, SecondaryKey}) ->
+                TS = riak_index:timestamp(),
+                case Op of
+                    add ->
+                        {Bucket, Index, SecondaryKey, PrimaryKey, [], TS};
+                    remove ->
+                        {Bucket, Index, SecondaryKey, PrimaryKey, undefined, TS}
+                end
+        end,
+    Postings = [AssemblePostings(IndexSpec) || IndexSpec <- IndexSpecs],
     try
-        %% io:format("DEBUG: Indexing new postings for ~p:~n~p~n", [BKey, Postings]),
         IndexMod:index(IndexState, Postings),
         riak_kv_stat:update({vnode_index_write, length(Postings)}),
         ok
@@ -301,41 +313,92 @@ do_index_put(IndexMod, IndexState, BKey, Val) ->
         _Type : Reason ->
             {error, Reason}
     end.
-
+                       
 %% @private
-%% @spec do_kv_put(KVMod :: module(), KVState :: term(), BKey :: riak_object:bkey(), Val :: binary()) -> ok.
-%%
 %% @doc Store the BKey/Value in the KV backend.
-do_kv_put(KVMod, KVState, BKey, Val) ->
-    KVMod:put(KVState, BKey, Val).
+-spec do_kv_put(riak_object:bucket(),
+                riak_object:key(),
+                binary(),
+                module(),
+                term()) -> {ok, term()} | {error, term(), term()}.
+do_kv_put(Bucket, Key, Val, KVMod, KVState) ->
+    KVMod:put(Bucket, Key, [], Val, KVState).
 
 %% @private
-%% @spec do_index_delete(IndexMod :: module(), IndexState :: term(), BKey :: riak_object:bkey()) -> ok | {error, Reason}
-%%
 %% @doc Delete the BKey from the Index backend.
-do_index_delete(IndexMod, IndexState, BKey) ->
-    %% Look up the old proxy object. If it exists, then delete all of
-    %% its postings.
-    {Bucket, Key} = BKey,
-    case IndexMod:lookup_sync(IndexState, Bucket, "_proxy", Key) of
-        [{Key, OldPostings}] ->
-            TS1 = riak_index:timestamp(),
-            OldPostings1 = [{Bucket, Field, Token, Key, TS1} || {Field, Token, _} <- OldPostings],
-            try
-                %% io:format("DEBUG: Deleting postings for ~p:~n~p~n", [BKey, OldPostings1]),
-                ok = IndexMod:delete(IndexState, OldPostings1),
-                riak_kv_stat:update({vnode_index_delete, length(OldPostings1)}),
-                ok
-            catch _Type : Reason ->
-                    {error, Reason}
-            end;
-        _ ->
-            ok
+-spec do_index_delete(riak_object:bucket(),
+                      riak_object:key(),
+                      module(),
+                      term(),
+                      module(),
+                      term()) -> ok | {error, term()}.
+do_index_delete(Bucket, PrimaryKey, KVMod, KVState, IndexMod, IndexState) ->
+    case KVMod:get(Bucket, PrimaryKey, KVState) of
+        {error, not_found, _UpdModState} ->
+            ok;
+        {ok, Val, _UpdModState} ->
+            Obj = binary_to_term(Val),
+            IndexSpecs = riak_object:index_specs(Obj),
+            case IndexSpecs of
+                [] ->
+                    ok;
+                _ ->
+                    TS = riak_index:timestamp(),
+                    Postings = [{Bucket, Index, SecondaryKey, PrimaryKey, TS} 
+                                || {_, Index, SecondaryKey} <- IndexSpecs],
+                    riak_kv_stat:update({vnode_index_delete, length(Postings)}),
+                    IndexMod:delete(IndexState, Postings)
+            end
     end.
 
 %% @private
-%% @spec do_kv_delete(KVMod :: module(), KVState :: term(), BKey :: riak_object:bkey()) -> ok.
-%%
-%% @doc Delete the BKey from the KV backend.
-do_kv_delete(KVMod, KVState, BKey) ->
-    KVMod:delete(KVState, BKey).
+%% @doc Delete the {Bucket, Key} from the KV backend.
+-spec do_kv_delete(riak_object:bucket(),
+                   riak_object:key(),
+                   module(),
+                   term()) -> {ok, term()} | {error, term(), term()}.
+do_kv_delete(Bucket, Key, KVMod, KVState) ->
+    KVMod:delete(Bucket, Key, KVState).
+
+%% ===================================================================
+%% EUnit tests
+%% ===================================================================
+-ifdef(TEST).
+
+-ifdef(EQC).
+
+eqc_test_() ->
+    {spawn,
+     [{inorder,
+       [{setup,
+         fun setup/0,
+         fun cleanup/1,
+         [
+          {timeout, 60000,
+           [?_assertEqual(true,
+                          backend_eqc:test(?MODULE, false,
+                                           [{bitcask, [{data_root, "test/bitcask-backend"}]},
+                                            {merge_index,
+                                             [{data_root_2i, "test/merge_index-backend"}]}]))]}
+         ]}]}]}.
+
+setup() ->
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_index_backend_eqc_sasl.log"}),
+    error_logger:tty(false),
+    error_logger:logfile({open, "riak_kv_index_backend_eqc.log"}),
+
+    application:load(bitcask),
+    application:set_env(bitcask, merge_window, never),
+    application:load(merge_index),
+    application:set_env(merge_index, buffer_delayed_write_size, 1024),
+    application:set_env(merge_index, buffer_delayed_write_ms, 100),
+    ok.
+
+cleanup(_) ->
+    os:cmd("rm -rf test/bitcask-backend"),
+    os:cmd("rm -rf test/merge_index-backend").
+
+-endif. % EQC
+
+-endif.

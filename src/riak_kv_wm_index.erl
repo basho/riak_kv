@@ -157,7 +157,12 @@ to_index_query(IndexField, Args) ->
 
         {ok, [{_, Start}, {_, End}]} ->
             %% Two arguments == range query
-            {ok, {range, IndexField1, [Start, End]}};
+            case End > Start of
+                true ->
+                    {ok, {range, IndexField1, [Start, End]}};            
+                false ->
+                    {error, {invalid_range, Args}}
+            end;
 
         {ok, _} ->
             {error, {too_many_arguments, Args}};
