@@ -62,7 +62,7 @@
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--export([coord_put_merge/4]). %% For fsm_eqc_vnode
+-export([put_merge/6]). %% For fsm_eqc_vnode
 -endif.
 
 -record(mrjob, {cachekey :: term(),
@@ -85,6 +85,7 @@
 -type index_value() :: integer() | binary().
 
 -record(putargs, {returnbody :: boolean(),
+                  coord:: boolean(),
                   lww :: boolean(),
                   bkey :: {binary(), binary()},
                   robj :: term(),
@@ -236,12 +237,7 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
                Sender, State=#state{idx=Idx}) ->
     riak_kv_mapred_cache:eject(BKey),
     riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
-    case proplists:get_value(coord, Options) of
-        undefined ->
-            UpdState = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State);
-        true ->
-            UpdState = do_coord_put(Sender, BKey, Object, ReqId, StartTime, Options, State)
-    end,
+    UpdState = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
     {noreply, UpdState};
 
 handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
@@ -411,48 +407,6 @@ handle_exit(_Pid, Reason, State) ->
     {stop, linked_process_crash, State}.
 
 
-%% Put for the coordinating vnode
-%% If returnbody is true or the vclock is incremented, return
-%% the updated object
-do_coord_put(Sender, {Bucket, Key}, UpdObj, ReqId, StartTime, _Options,
-          #state{idx = Idx, mod = Mod, modstate = ModState,
-                 vnodeid = VId}) ->
-    UpdObj1 = riak_object:increment_vclock(UpdObj, VId, StartTime),
-    {PutObj, ModState1} = 
-        case Mod:get(Bucket, Key, ModState) of
-            {error, notfound, ModState0} ->
-                {UpdObj, ModState0};
-            {ok, CurObj, ModState0} ->
-                PutObj0 = coord_put_merge(binary_to_term(CurObj), UpdObj1, 
-                                          VId, StartTime),
-                {PutObj0, ModState0}
-        end,
-    Result = case Mod:put(Bucket, Key, [], term_to_binary(PutObj), ModState1) of
-                 {ok, ModState2} ->
-                     {dw, Idx, PutObj, ReqId};
-                 {error, _Reason, ModState2} ->
-                     {fail, Idx, ReqId}
-             end,
-    riak_core_vnode:reply(Sender, Result),
-    riak_kv_stat:update(vnode_put),
-    ModState2.
-
-coord_put_merge(CurObj, UpdObj, VId, Timestamp) ->
-    %% Make sure UpdObj descends from CurObj and that VId is greater
-    CurVC = riak_object:vclock(CurObj),
-    UpdVC = riak_object:vclock(UpdObj),
-
-    %% Valid coord put replacing current object
-    case vclock:get_counter(VId, UpdVC) > vclock:get_counter(VId, CurVC) andalso
-        vclock:descends(CurVC, UpdVC) == false andalso 
-        vclock:descends(UpdVC, CurVC) == true of
-        true ->
-            UpdObj;
-        false ->
-            riak_object:increment_vclock(riak_object:merge(CurObj, UpdObj),
-                                         VId, Timestamp)
-    end.
-
 %% @private
 %% upon receipt of a client-initiated put
 do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
@@ -470,6 +424,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
             PruneTime = StartTime
     end,
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false),
+                       coord=proplists:get_value(coord, Options, false),
                        lww=proplists:get_value(last_write_wins, BProps, false),
                        bkey=BKey,
                        robj=RObj,
@@ -486,12 +441,13 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
 prepare_put(#state{index_backend=false}, PutArgs=#putargs{lww=true, robj=RObj}) ->
     {{true, RObj}, PutArgs};
 prepare_put(#state{index_backend=IndexBackend,
+                   vnodeid=VId,
                    mod=Mod,
                    modstate=ModState},
             PutArgs=#putargs{bkey={Bucket, Key},
                              robj=RObj,
-                             reqid=ReqID,
                              bprops=BProps,
+                             coord=Coord,
                              lww=LWW,
                              starttime=StartTime,
                              prunetime=PruneTime}) ->
@@ -503,10 +459,16 @@ prepare_put(#state{index_backend=IndexBackend,
                 false ->
                     IndexSpecs = []
             end,
-            {{true, RObj}, PutArgs#putargs{index_specs=IndexSpecs}};
+            ObjToStore = case Coord of
+                             true ->
+                                 riak_object:increment_vclock(RObj, VId, StartTime);
+                             false ->
+                                 RObj
+                         end,
+            {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs}};
         {ok, Val, _UpdModState} ->
             OldObj = binary_to_term(Val),
-            case syntactic_put_merge(OldObj, RObj, ReqID, LWW, StartTime) of
+            case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs};
                 {newobj, NewObj} ->
@@ -594,20 +556,33 @@ select_newest_content(Mult) ->
          Mult)).
 
 %% @private
-syntactic_put_merge(Obj0, Obj1, ReqId, LastWriteWins) ->
-    syntactic_put_merge(Obj0, Obj1, ReqId, LastWriteWins, vclock:timestamp()).
-
-syntactic_put_merge(Obj0, Obj1, ReqId, LastWriteWins, StartTime) ->
-    ResObj = riak_object:syntactic_merge(Obj0,
-                                         Obj1,
-                                         term_to_binary(ReqId),
-                                         StartTime),
-    case not LastWriteWins andalso
-        riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
+put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
+    {newobj, UpdObj};
+put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
+    ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
+    case ResObj =:= CurObj of
         true ->
-            {oldobj, ResObj};
+            {oldobj, CurObj};
         false ->
             {newobj, ResObj}
+    end;
+put_merge(true, true, _CurObj, UpdObj, VId, StartTime) -> % coord=false, LWW=true
+    {newobj, riak_object:increment_vclock(UpdObj, VId, StartTime)};
+put_merge(true, false, CurObj, UpdObj, VId, StartTime) -> 
+    UpdObj1 = riak_object:increment_vclock(UpdObj, VId, StartTime),
+    UpdVC = riak_object:vclock(UpdObj1),
+    CurVC = riak_object:vclock(CurObj),
+
+    %% Check the coord put will replace the existing object
+    case vclock:get_counter(VId, UpdVC) > vclock:get_counter(VId, CurVC) andalso
+        vclock:descends(CurVC, UpdVC) == false andalso 
+        vclock:descends(UpdVC, CurVC) == true of
+        true ->
+            {newobj, UpdObj1};
+        false ->
+            %% If not, make sure it does
+            {newobj, riak_object:increment_vclock(
+                       riak_object:merge(CurObj, UpdObj1), VId, StartTime)}
     end.
 
 %% @private
@@ -911,7 +886,6 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                _StateData=#state{index_backend=IndexBackend,
                                  mod=Mod,
                                  modstate=ModState}) ->
-    ReqID = erlang:phash2(erlang:now()),
     case Mod:get(Bucket, Key, ModState) of
         {error, not_found, _UpdModState} ->
             case IndexBackend of
@@ -929,7 +903,10 @@ do_diffobj_put({Bucket, Key}, DiffObj,
             Res;
         {ok, Val0, _UpdModState} ->
             OldObj = binary_to_term(Val0),
-            case syntactic_put_merge(OldObj, DiffObj, ReqID, false) of
+            %% Merge handoff values with the current - possibly discarding
+            %% if out of date.  Ok to set VId/Starttime undefined as
+            %% they are not used for non-coordinating puts.
+            case put_merge(false, false, OldObj, DiffObj, undefined, undefined) of
                 {oldobj, _} ->
                     {ok, ModState};
                 {newobj, NewObj} ->
