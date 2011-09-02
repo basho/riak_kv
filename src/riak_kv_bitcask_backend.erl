@@ -88,7 +88,7 @@ start(Partition, Config) ->
             %% of the file linked to by the existing link.
             case check_symlink(LinkFile, false) of
                 {ok, DataFile} ->
-                    BitcaskOpts = [{read_write, true} | Config],
+                    BitcaskOpts = set_mode(read_write, Config),
                     case bitcask:open(filename:join(DataRoot, DataFile), BitcaskOpts) of
                         Ref when is_reference(Ref) ->
                             schedule_merge(Ref),
@@ -175,13 +175,7 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{opts=BitcaskOpts,
                                                 root=DataRoot,
                                                 async_folds=true}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    case BitcaskOpts of
-        [{read_write, _} | Config] ->
-            ok;
-        Config ->
-            ok
-    end,
-    ReadOpts = [{read_only, true} | Config],
+    ReadOpts = set_mode(read_only, BitcaskOpts),
     BucketFolder =
         fun() ->
                 case bitcask:open(filename:join(DataRoot, DataFile),
@@ -215,13 +209,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{opts=BitcaskOpts,
                                          async_folds=true}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-    case BitcaskOpts of
-        [{read_write, _} | Config] ->
-            ok;
-        Config ->
-            ok
-    end,
-    ReadOpts = [{read_only, true} | Config],
+    ReadOpts = set_mode(read_only, BitcaskOpts),
     KeyFolder =
         fun() ->
                 case bitcask:open(filename:join(DataRoot, DataFile),
@@ -255,13 +243,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{opts=BitcaskOpts,
                                                async_folds=true}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
-    case BitcaskOpts of
-        [{read_write, _} | Config] ->
-            ok;
-        Config ->
-            ok
-    end,
-    ReadOpts = [{read_only, true} | Config],
+    ReadOpts = set_mode(read_only, BitcaskOpts),
     ObjectFolder =
         fun() ->
                 case bitcask:open(filename:join(DataRoot, DataFile),
@@ -543,6 +525,14 @@ data_directory_cleanup(DirPath) ->
         _ ->
             ignore
     end.
+
+%% @private
+set_mode(read_only, Config) ->
+    Config1 = lists:keystore(read_only, 1, Config, {read_only, true}),
+    lists:keydelete(read_write, 1, Config1);
+set_mode(read_write, Config) ->
+    Config1 = lists:keystore(read_write, 1, Config, {read_write, true}),
+    lists:keydelete(read_only, 1, Config1).
 
 %% ===================================================================
 %% EUnit tests
