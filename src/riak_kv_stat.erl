@@ -181,7 +181,7 @@
                node_gets_total, node_puts_total,
                get_fsm_time,put_fsm_time,
                pbc_connects,pbc_connects_total,pbc_active,read_repairs,
-               read_repairs_total, mapper_count}).
+               read_repairs_total, mapper_count, get_meter, put_meter, legacy}).
 
 %% @spec start_link() -> {ok,Pid} | ignore | {error,Error}
 %% @doc Start the server.  Also start the os_mon application, if it's
@@ -211,6 +211,52 @@ update(Stat) ->
 init([]) ->
     process_flag(trap_exit, true),
     remove_slide_private_dirs(),
+    case application:get_env(riak_kv, legacy_stats) of
+        {ok, true} ->
+            legacy_init();
+        _ ->
+            v2_init()
+    end.
+
+make_meter() ->
+    {ok, M} = basho_metrics_nifs:meter_new(),
+    {meter, M}.
+
+make_histogram() ->
+    {ok, H} = basho_metrics_nifs:histogram_new(),
+    {histogram, H}.
+
+v2_init() ->
+    timer:send_interval(5000, tick),
+    {ok, #state{vnode_gets=make_meter(),
+                vnode_puts=make_meter(),
+                vnode_gets_total=0,
+                vnode_puts_total=0,
+                vnode_index_reads=make_meter(),
+                vnode_index_reads_total=0,
+                vnode_index_writes=make_meter(),
+                vnode_index_writes_total=0,
+                vnode_index_writes_postings=make_meter(),
+                vnode_index_writes_postings_total=0,
+                vnode_index_deletes=make_meter(),
+                vnode_index_deletes_total=0,
+                vnode_index_deletes_postings=make_meter(),
+                vnode_index_deletes_postings_total=0,
+                node_gets_total=0,
+                node_puts_total=0,
+                get_fsm_time=make_histogram(),
+                put_fsm_time=make_histogram(),
+                pbc_connects=make_meter(),
+                pbc_connects_total=0,
+                pbc_active=0,
+                read_repairs=make_meter(),
+                read_repairs_total=0,
+                mapper_count=0,
+                get_meter=make_meter(),
+                put_meter=make_meter(),
+                legacy=false}}.
+
+legacy_init() ->
     {ok, #state{vnode_gets=spiraltime:fresh(),
                 vnode_puts=spiraltime:fresh(),
                 vnode_gets_total=0,
@@ -234,7 +280,8 @@ init([]) ->
                 pbc_active=0,
                 read_repairs=spiraltime:fresh(),
                 read_repairs_total=0,
-                mapper_count=0}}.
+                mapper_count=0,
+                legacy=true}}.
 
 %% @private
 handle_call({get_stats, Moment}, _From, State) ->
@@ -245,11 +292,24 @@ handle_call(_Request, _From, State) ->
 
 %% @private
 handle_cast({update, Stat, Moment}, State) ->
-    {noreply, update(Stat, Moment, State)};
+    {noreply, update(Stat, Moment, State, State#state.legacy)};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
 %% @private
+handle_info(tick, State) ->
+    tick(#state.get_meter, State),
+    tick(#state.put_meter, State),
+    tick(#state.vnode_gets, State),
+    tick(#state.vnode_puts, State),
+    tick(#state.vnode_index_reads, State),
+    tick(#state.vnode_index_writes, State),
+    tick(#state.vnode_index_writes_postings, State),
+    tick(#state.vnode_index_deletes, State),
+    tick(#state.vnode_index_deletes_postings, State),
+    tick(#state.pbc_connects, State),
+    tick(#state.read_repairs, State),
+    {noreply, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -265,6 +325,11 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
+
+update(Stat, Moment, State, true) ->
+    update(Stat, Moment, State);
+update(Stat, Moment, State, false) ->
+    update1(Stat, Moment, State).
 
 %% @spec update(Stat::term(), integer(), state()) -> state()
 %% @doc Update the given stat in State, returning a new State.
@@ -296,6 +361,53 @@ update(mapper_start, _Moment, State=#state{mapper_count=Count0}) ->
 update(mapper_end, _Moment, State=#state{mapper_count=Count0}) ->
     State#state{mapper_count=decrzero(Count0)};
 update(_, _, State) ->
+    State.
+
+tick(Field, State) ->
+    basho_metrics_nifs:meter_tick(element(2, element(Field, State))).
+
+update_metric(Field, Value, State) ->
+    case element(Field, State) of
+        {meter, M} ->
+            basho_metrics_nifs:meter_update(M, Value);
+        {histogram, H} ->
+            basho_metrics_nifs:histogram_update(H, Value)
+    end,
+    State.
+
+%% @spec update(Stat::term(), integer(), state()) -> state()
+%% @doc Update the given stat in State, returning a new State.
+update1(vnode_get, _, State) -> 
+    update_metric(#state.vnode_gets, 1, State);
+update1(vnode_put, _, State) -> 
+    update_metric(#state.vnode_puts, 1, State);
+update1(vnode_index_read, _, State) -> 
+    update_metric(#state.vnode_index_reads, 1, State);
+update1({vnode_index_write, Postings}, _, State) ->
+    update_metric(#state.vnode_index_writes_postings,
+                  Postings, 
+                  update_metric(#state.vnode_index_writes, 1, State));
+update1({vnode_index_delete, Postings}, _, State) ->
+    update_metric(#state.vnode_index_deletes_postings,
+                  Postings, 
+                  update_metric(#state.vnode_index_deletes, 1, State));
+update1({get_fsm_time, Microsecs}, _, State) ->
+    update_metric(#state.get_meter, 1, 
+                  update_metric(#state.get_fsm_time, Microsecs, State));
+update1({put_fsm_time, Microsecs}, _, State) ->
+    update_metric(#state.put_meter, 1, 
+                  update_metric(#state.put_fsm_time, Microsecs, State));
+update1(pbc_connect, _, State=#state{pbc_active=Active}) ->
+    update_metric(#state.pbc_connects, 1, State#state{pbc_active=Active+1});
+update1(pbc_disconnect, _, State=#state{pbc_active=Active}) ->
+    State#state{pbc_active=decrzero(Active)};
+update1(read_repairs, _, State) ->
+    update_metric(#state.read_repairs, 1, State);
+update1(mapper_start, _Moment, State=#state{mapper_count=Count0}) ->
+    State#state{mapper_count=Count0+1};
+update1(mapper_end, _Moment, State=#state{mapper_count=Count0}) ->
+    State#state{mapper_count=decrzero(Count0)};
+update1(_, _, State) ->
     State.
 
 %% @doc decrement down to zero - do not go negative
@@ -366,9 +478,17 @@ slide_minute(Moment, Elt, State) ->
     {Count, Mean, Nines} = slide:mean_and_nines(element(Elt, State), Moment),
     {Count, Mean, Nines}.
 
+metric_stats({meter, M}) ->
+    basho_metrics_nifs:meter_stats(M);
+metric_stats({histogram, H}) ->
+    basho_metrics_nifs:histogram_stats(H).
+
+meter_minute(Stats) ->
+    trunc(proplists:get_value(one, Stats)).
+
 %% @spec vnode_stats(integer(), state()) -> proplist()
 %% @doc Get the vnode-sum stats proplist.
-vnode_stats(Moment, State) ->
+vnode_stats(Moment, State=#state{legacy=true}) ->
     lists:append(
       [{F, spiral_minute(Moment, Elt, State)}
        || {F, Elt} <- [{vnode_gets, #state.vnode_gets},
@@ -385,13 +505,38 @@ vnode_stats(Moment, State) ->
        {vnode_index_writes_total, State#state.vnode_index_writes_total},
        {vnode_index_writes_postings_total, State#state.vnode_index_writes_postings_total},
        {vnode_index_deletes_total, State#state.vnode_index_deletes_total},
-       {vnode_index_deletes_postings_total, State#state.vnode_index_deletes_postings_total}]).
+       {vnode_index_deletes_postings_total, State#state.vnode_index_deletes_postings_total}]);
+vnode_stats(_, State=#state{legacy=false}) ->
+    VG = metric_stats(State#state.vnode_gets),
+    VP = metric_stats(State#state.vnode_puts),
+    VIR = metric_stats(State#state.vnode_index_reads),
+    VIW = metric_stats(State#state.vnode_index_writes),
+    VIWP = metric_stats(State#state.vnode_index_writes_postings),
+    VID = metric_stats(State#state.vnode_index_deletes),
+    VIDP = metric_stats(State#state.vnode_index_deletes_postings),
+    RR = metric_stats(State#state.read_repairs),
+    [{vnode_gets, meter_minute(VG)},
+     {vnode_puts, meter_minute(VP)},
+     {vnode_index_reads, meter_minute(VIR)},
+     {vnode_index_writes, meter_minute(VIW)},
+     {vnode_index_writes_postings, meter_minute(VIWP)},
+     {vnode_index_deletes, meter_minute(VID)},
+     {vnode_index_deletes_postings, meter_minute(VIDP)},
+     {read_repairs, meter_minute(RR)},
+     {vnode_gets_total, proplists:get_value(count, VG)},
+     {vnode_puts_total, proplists:get_value(count, VP)},
+     {vnode_index_reads_total, proplists:get_value(count, VIR)},
+     {vnode_index_writes_total, proplists:get_value(count, VIW)},
+     {vnode_index_writes_postings_total, proplists:get_value(count, VIWP)},
+     {vnode_index_deletes_total, proplists:get_value(count, VID)},
+     {vnode_index_deletes_postings_total, proplists:get_value(count, VIDP)}].
 
 %% @spec node_stats(integer(), state()) -> proplist()
 %% @doc Get the node stats proplist.
 node_stats(Moment, State=#state{node_gets_total=NGT,
                                 node_puts_total=NPT,
-                                read_repairs_total=RRT}) ->
+                                read_repairs_total=RRT,
+                                legacy=true}) ->
     {Gets, GetMean, {GetMedian, GetNF, GetNN, GetH}} =
         slide_minute(Moment, #state.get_fsm_time, State),
     {Puts, PutMean, {PutMedian, PutNF, PutNN, PutH}} =
@@ -410,7 +555,29 @@ node_stats(Moment, State=#state{node_gets_total=NGT,
      {node_put_fsm_time_95, PutNF},
      {node_put_fsm_time_99, PutNN},
      {node_put_fsm_time_100, PutH},
-     {read_repairs_total, RRT}].
+     {read_repairs_total, RRT}];
+node_stats(_, State=#state{legacy=false}) ->
+    PutInfo = metric_stats(State#state.put_fsm_time),
+    GetInfo = metric_stats(State#state.get_fsm_time),
+    RRInfo =  metric_stats(State#state.read_repairs),
+    NodeGets = meter_minute(metric_stats(State#state.get_meter)),
+    NodePuts = meter_minute(metric_stats(State#state.put_meter)),
+    [{node_gets, NodeGets},
+     {node_gets_total, proplists:get_value(count, GetInfo)},
+     {node_get_fsm_time_mean, proplists:get_value(mean, GetInfo)},
+     {node_get_fsm_time_median, proplists:get_value(p50, GetInfo)},
+     {node_get_fsm_time_95, proplists:get_value(p95, GetInfo)},
+     {node_get_fsm_time_99, proplists:get_value(p99, GetInfo)},
+     {node_get_fsm_time_100, proplists:get_value(max, GetInfo)},
+     {node_puts, NodePuts},
+     {node_puts_total, proplists:get_value(count, PutInfo)},
+     {node_put_fsm_time_mean, proplists:get_value(mean, PutInfo)},
+     {node_put_fsm_time_median, proplists:get_value(p50, PutInfo)},
+     {node_put_fsm_time_95, proplists:get_value(p95, PutInfo)},
+     {node_put_fsm_time_99, proplists:get_value(p99, PutInfo)},
+     {node_put_fsm_time_100, proplists:get_value(max, PutInfo)},
+     {read_repairs_total, proplists:get_value(count, RRInfo)}].
+
 
 %% @spec cpu_stats() -> proplist()
 %% @doc Get stats on the cpu, as given by the cpu_sup module
@@ -483,14 +650,23 @@ mapper_stats(#state{mapper_count=Count}) ->
 %% @spec pbc_stats(integer(), state()) -> proplist()
 %% @doc Get stats on the disk, as given by the disksup module
 %%      of the os_mon application.
-pbc_stats(Moment, State=#state{pbc_connects_total=NCT, pbc_active=Active}) ->
+pbc_stats(Moment, State=#state{pbc_connects_total=NCT, pbc_active=Active, legacy=true}) ->
     case whereis(riak_kv_pb_socket_sup) of
         undefined ->
             [];
         _ -> [{pbc_connects_total, NCT},
               {pbc_connects, spiral_minute(Moment, #state.pbc_connects, State)},
               {pbc_active, Active}]
-    end.
+    end;
+pbc_stats(_, _State=#state{pbc_connects_total=NCT, pbc_active=Active, legacy=false}) ->
+    case whereis(riak_kv_pb_socket_sup) of
+        undefined ->
+            [];
+        _ -> [{pbc_connects_total, NCT},
+%%              {pbc_connects, spiral_minute(Moment, #state.pbc_connects, State)},
+              {pbc_active, Active}]
+    end.    
+
 
 remove_slide_private_dirs() ->
     os:cmd("rm -rf " ++ slide:private_dir()).
