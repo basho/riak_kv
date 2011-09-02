@@ -346,11 +346,11 @@ send_inputs(Pipe, {Bucket, FilterExprs}, _Timeout) ->
         Error       -> Error
     end;
 send_inputs(Pipe, {index, Bucket, Index, Key}, Timeout) ->
-    Query = [{eq, Index, [Key]}],
+    Query = {eq, Index, Key},
     NewInput = {modfun, riak_index, mapred_index, [Bucket, Query]},
     send_inputs(Pipe, NewInput, Timeout);
 send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey}, Timeout) ->
-    Query = [{range, Index, [StartKey, EndKey]}],
+    Query = {range, Index, StartKey, EndKey},
     NewInput = {modfun, riak_index, mapred_index, [Bucket, Query]},
     send_inputs(Pipe, NewInput, Timeout);
 send_inputs(Pipe, {search, Bucket, Query}, Timeout) ->

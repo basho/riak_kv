@@ -153,13 +153,13 @@ to_index_query(IndexField, Args) ->
 
         {ok, [{_, Value}]} ->
             %% One argument == exact match query
-            {ok, {eq, IndexField1, [Value]}};
+            {ok, {eq, IndexField1, Value}};
 
         {ok, [{_, Start}, {_, End}]} ->
             %% Two arguments == range query
             case End > Start of
                 true ->
-                    {ok, {range, IndexField1, [Start, End]}};            
+                    {ok, {range, IndexField1, Start, End}};
                 false ->
                     {error, {invalid_range, Args}}
             end;

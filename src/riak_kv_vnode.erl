@@ -228,25 +228,8 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Bucket, req_id=ReqId, caller=Call
                State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
     do_legacy_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState),
     {noreply, State};
-handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender,
-               State=#state{mod=Mod, modstate=ModState,
-                            idx=Idx}) ->
-    case do_get_term(BKey, Mod, ModState) of
-        {ok, Obj} ->
-            case riak_kv_util:obj_not_deleted(Obj) of
-                undefined ->
-                    %% object is a tombstone or all siblings are tombstones
-                    riak_kv_mapred_cache:eject(BKey),
-                    Res = do_delete(BKey, Mod, ModState),
-                    {reply, {Res, Idx, ReqId}, State};
-                _ ->
-                    %% not a tombstone or not all siblings are tombstones
-                    {reply, {fail, Idx, ReqId}, State}
-            end;
-        _ ->
-            %% does not exist in the backend
-            {reply, {fail, Idx, ReqId}, State}
-    end;
+handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender, State) ->
+    do_delete(BKey, ReqId, State);
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
     {reply, do_get_vclocks(BKeys, State), State};
 handle_command(?FOLD_REQ{foldfun=Fun, acc0=Acc},_Sender,State) ->
@@ -798,12 +781,40 @@ get_buffer_fun({false, Bucket}, Sender) ->
     end.
 
 %% @private
-do_delete({Bucket, Key}, Mod, ModState) ->
-    case Mod:delete(Bucket, Key, ModState) of
-        {ok, _UpdModState} ->
-            del;
-        {error, _Reason, _UpdModState} ->
-            fail
+do_delete(BKey, ReqId, State) ->
+    Mod = State#state.mod,
+    ModState = State#state.modstate,
+    Idx = State#state.idx,
+
+    %% Get the existing object.
+    case do_get_term(BKey, Mod, ModState) of
+        {ok, RObj} ->
+            %% Object exists, check if it should be deleted.
+            case riak_kv_util:obj_not_deleted(RObj) of
+                undefined ->
+                    %% object is a tombstone or all siblings are tombstones
+                    riak_kv_mapred_cache:eject(BKey),
+
+                    %% Calculate the index specs to remove...
+                    IndexSpecs = riak_object:diff_index_specs(undefined, RObj),
+
+                    %% Do the delete...
+                    {Bucket, Key} = BKey,
+                    case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
+                        {ok, UpdModState} ->
+                            UpdState = State#state {modstate = UpdModState },
+                            {reply, {del, Idx, ReqId}, UpdState};
+                        {error, _Reason, UpdModState} ->
+                            UpdState = State#state {modstate = UpdModState },
+                            {reply, {fail, Idx, ReqId}, UpdState}
+                    end;
+                _ ->
+                    %% not a tombstone or not all siblings are tombstones
+                    {reply, {fail, Idx, ReqId}, State}
+            end;
+        _ ->
+            %% does not exist in the backend
+            {reply, {fail, Idx, ReqId}, State}
     end.
 
 %% @private

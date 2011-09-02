@@ -29,7 +29,7 @@
          stop/1,
          get/3,
          put/5,
-         delete/3,
+         delete/4,
          drop/1,
          fold_buckets/4,
          fold_keys/4,
@@ -185,12 +185,12 @@ put(Bucket, PrimaryKey, IndexSpecs, Value, State) ->
     end.
 
 %% @doc Delete an object from the backend
--spec delete(riak_object:bucket(), riak_object:key(), state()) ->
+-spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
                     {ok, state()} |
                     {error, term(), state()}.
-delete(Bucket, Key, State) ->
+delete(Bucket, Key, IndexSpecs, State) ->
     {Name, Module, SubState} = get_backend(Bucket, State),
-    case Module:delete(Bucket, Key, SubState) of
+    case Module:delete(Bucket, Key, IndexSpecs, SubState) of
         {ok, NewSubState} ->
             NewState = update_backend_state(Name, Module, NewSubState, State),
             {ok, NewState};

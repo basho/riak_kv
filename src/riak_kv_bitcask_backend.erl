@@ -31,7 +31,7 @@
          stop/1,
          get/3,
          put/5,
-         delete/3,
+         delete/4,
          drop/1,
          fold_buckets/4,
          fold_keys/4,
@@ -148,10 +148,13 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val, #state{ref=Ref}=State) ->
     end.
 
 %% @doc Delete an object from the bitcask backend
--spec delete(riak_object:bucket(), riak_object:key(), state()) ->
+%% NOTE: The bitcask backend does not currently support
+%% secondary indexing and the_IndexSpecs parameter
+%% is ignored.
+-spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
                     {ok, state()} |
                     {error, term(), state()}.
-delete(Bucket, Key, #state{ref=Ref}=State) ->
+delete(Bucket, Key, _IndexSpecs, #state{ref=Ref}=State) ->
     BitcaskKey = term_to_binary({Bucket, Key}),
     case bitcask:delete(Ref, BitcaskKey) of
         ok ->

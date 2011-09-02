@@ -55,8 +55,6 @@
 -type index_value() :: integer() | binary().
 
 -define(MAX_KEY_SIZE, 65536).
--define(BUCKETFIELD, <<"$bucket">>).
--define(KEYFIELD, <<"$key">>).
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
@@ -354,7 +352,7 @@ diff_index_specs(Obj, OldObj) ->
     AllIndexes = index_data(Obj),
     AllIndexSet = ordsets:from_list(AllIndexes),
     NewIndexSet = ordsets:subtract(AllIndexSet, OldIndexSet),
-    RemoveIndexSet = 
+    RemoveIndexSet =
         ordsets:subtract(OldIndexSet, AllIndexSet),
     NewIndexSpecs =
         assemble_index_specs(ordsets:subtract(NewIndexSet, OldIndexSet),
@@ -367,6 +365,8 @@ diff_index_specs(Obj, OldObj) ->
 %% @doc Get a list of {Index, Value} tuples from the
 %% metadata of an object.
 -spec index_data(riak_object()) -> [{binary(), index_value()}].
+index_data(undefined) ->
+    [];
 index_data(Obj) ->
     MetaDatas = get_metadatas(Obj),
     lists:flatten([dict:fetch(?MD_INDEX, MD)
