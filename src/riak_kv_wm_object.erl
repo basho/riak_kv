@@ -377,12 +377,21 @@ malformed_index_headers(RD, Ctx) ->
 %%      client's PUT request, to be indexed at write time.
 extract_index_fields(RD) ->
     PrefixSize = length(?HEAD_INDEX_PREFIX),
+    {ok, RE} = re:compile(",\\s"),
     F = fun({K,V}, Acc) ->
                 KList = riak_kv_wm_utils:any_to_list(K),
                 case lists:prefix(?HEAD_INDEX_PREFIX, string:to_lower(KList)) of
                     true ->
+                        %% Isolate the name of the index field.
                         IndexField = list_to_binary(element(2, lists:split(PrefixSize, KList))),
-                        [{IndexField, V} | Acc];
+
+                        %% HACK ALERT: Split values on comma. The HTTP
+                        %% spec allows for comma separated tokens
+                        %% where the tokens can be quoted strings. We
+                        %% don't currently support quoted strings.
+                        %% (http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html)
+                        Values = re:split(V, RE, [{return, binary}]),
+                        [{IndexField, X} || X <- Values] ++ Acc;
                     false ->
                         Acc
                 end
