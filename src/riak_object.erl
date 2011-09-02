@@ -354,9 +354,8 @@ diff_index_specs(Obj, OldObj) ->
     AllIndexes = index_data(Obj),
     AllIndexSet = ordsets:from_list(AllIndexes),
     NewIndexSet = ordsets:subtract(AllIndexSet, OldIndexSet),
-    RemoveIndexSet = ordsets:subtract(
-                       ordsets:subtract(OldIndexSet, AllIndexSet),
-                       NewIndexSet),
+    RemoveIndexSet = 
+        ordsets:subtract(OldIndexSet, AllIndexSet),
     NewIndexSpecs =
         assemble_index_specs(ordsets:subtract(NewIndexSet, OldIndexSet),
                              add),
