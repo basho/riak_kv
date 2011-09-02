@@ -174,12 +174,11 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
     Bucket =  proplists:get_value(bucket, Opts),
     FoldOpts = fold_opts(Bucket, FoldOpts1),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-        try
-            Acc0 = eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts),
-                    {ok, Acc0}
+    try
+        Acc0 = eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts),
+        {ok, Acc0}
     catch
         {break, AccFinal} ->
-            
             {ok, AccFinal}
     end.
 
@@ -358,7 +357,7 @@ eqc_test_() ->
                                            [{data_root,
                                              "test/eleveldb-backend"},
                                             {async_folds, false}])),
-           ?_assertEqual(true,
+            ?_assertEqual(true,
                           backend_eqc:test(?MODULE, false,
                                            [{data_root,
                                              "test/eleveldb-backend"}]))]}
