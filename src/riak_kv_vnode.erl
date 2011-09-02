@@ -399,9 +399,10 @@ encode_handoff_item({B, K}, V) ->
 is_empty(State=#state{mod=Mod, modstate=ModState}) ->
     {Mod:is_empty(ModState), State}.
 
-delete(State=#state{mod=Mod, modstate=ModState}) ->
-    VnodeStatus = vnode_status_filename(Index),
-    ok = delete_vnode_status(VnodeStatus),
+delete(State=#state{idx=Index,mod=Mod, modstate=ModState}) ->
+    %% clear vnodeid first, if drop removes data but fails
+    %% want to err on the side of creating a new vnodeid
+    {ok, cleared} = clear_vnodeid(Index),
     case Mod:drop(ModState) of
         {ok, UpdModState} ->
             ok;
@@ -431,7 +432,7 @@ handle_exit(_Pid, Reason, State) ->
 %% If returnbody is true or the vclock is incremented, return
 %% the updated object
 do_coord_put(Sender, {Bucket, Key}, UpdObj, ReqId, StartTime, _Options,
-          #state{idx = Idx, mod = Mod, modstate = ModState}) ->
+          #state{idx = Idx, mod = Mod, modstate = ModState,
                  vnodeid = VId}) ->
     UpdObj1 = riak_object:increment_vclock(UpdObj, VId, StartTime),
     {PutObj, ModState1} = 
@@ -439,11 +440,10 @@ do_coord_put(Sender, {Bucket, Key}, UpdObj, ReqId, StartTime, _Options,
             {error, notfound, ModState0} ->
                 {UpdObj, ModState0};
             {ok, CurObj, ModState0} ->
-                {PutObj0 = coord_put_merge(binary_to_term(CurObj), UpdObj1, 
-                                                     VId, StartTime),
+                PutObj0 = coord_put_merge(binary_to_term(CurObj), UpdObj1, 
+                                          VId, StartTime),
                 {PutObj0, ModState0}
         end,
-    %ReturnBody = proplists:get_value(returnbody, Options, false),
     Result = case Mod:put(Bucket, Key, [], term_to_binary(PutObj), ModState1) of
                  {ok, ModState2} ->
                      {dw, Idx, PutObj, ReqId};
