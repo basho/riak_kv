@@ -28,7 +28,7 @@
          start/2,
          stop/1,
          get/3,
-         put/4,
+         put/5,
          delete/3,
          drop/1,
          fold_buckets/4,
@@ -51,7 +51,7 @@
                 write_opts = [],
                 fold_opts = [{fill_cache, false}]}).
 
--opaque(state() :: #state{}).
+-type state() :: #state{}.
 -type config() :: [{atom(), term()}].
 
 %% ===================================================================
@@ -102,19 +102,24 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
             {error, Reason, State}
     end.
 
-%% @doc Insert an object into the eleveldb backend
--spec put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
+%% @doc Insert an object into the eleveldb backend.
+%% NOTE: The eleveldb backend does not currently
+%% support secondary indexing and the _IndexSpecs
+%% parameter is ignored.
+-type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
+-spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
-put(Bucket, Key, Val, #state{ref=Ref,
-                             write_opts=WriteOpts}=State) ->
-    StorageKey = sext:encode({Bucket, Key}),
+put(Bucket, PrimaryKey, _IndexSpecs, Val, #state{ref=Ref,
+                                                 write_opts=WriteOpts}=State) ->
+    StorageKey = sext:encode({Bucket, PrimaryKey}),
     case eleveldb:put(Ref, StorageKey, Val, WriteOpts) of
         ok ->
             {ok, State};
         {error, Reason} ->
             {error, Reason, State}
     end.
+
 
 %% @doc Delete an object from the eleveldb backend
 -spec delete(riak_object:bucket(), riak_object:key(), state()) ->

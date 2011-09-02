@@ -30,7 +30,7 @@
          start/2,
          stop/1,
          get/3,
-         put/4,
+         put/5,
          delete/3,
          drop/1,
          fold_buckets/4,
@@ -59,7 +59,7 @@
                 opts :: [{atom(), term()}],
                 root :: string()}).
 
--opaque(state() :: #state{}).
+-type state() :: #state{}.
 -type config() :: [{atom(), term()}].
 
 %% ===================================================================
@@ -130,12 +130,16 @@ get(Bucket, Key, #state{ref=Ref}=State) ->
             {error, Reason, State}
     end.
 
-%% @doc Insert an object into the bitcask backend
--spec put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
+%% @doc Insert an object into the bitcask backend.
+%% NOTE: The bitcask backend does not currently support
+%% secondary indexing and the_IndexSpecs parameter
+%% is ignored.
+-type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
+-spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
-put(Bucket, Key, Val, #state{ref=Ref}=State) ->
-    BitcaskKey = term_to_binary({Bucket, Key}),
+put(Bucket, PrimaryKey, _IndexSpecs, Val, #state{ref=Ref}=State) ->
+    BitcaskKey = term_to_binary({Bucket, PrimaryKey}),
     case bitcask:put(Ref, BitcaskKey, Val) of
         ok ->
             {ok, State};

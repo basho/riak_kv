@@ -28,7 +28,7 @@
          start/2,
          stop/1,
          get/3,
-         put/4,
+         put/5,
          delete/3,
          drop/1,
          fold_buckets/4,
@@ -48,7 +48,7 @@
 -record (state, {backends :: [{atom(), atom(), term()}],
                  default_backend :: atom()}).
 
--opaque(state() :: #state{}).
+-type state() :: #state{}.
 -type config() :: [{atom(), term()}].
 
 %% @doc riak_kv_multi_backend allows you to run multiple backends within a
@@ -167,13 +167,15 @@ get(Bucket, Key, State) ->
             {error, Reason, NewState}
     end.
 
-%% @doc Insert an object into the eleveldb backend
--spec put(riak_object:bucket(), riak_object:key(), binary(), state()) ->
+%% @doc Insert an object with secondary index
+%% information into the kv backend
+-type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
+-spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
-put(Bucket, Key, Value, State) ->
+put(Bucket, PrimaryKey, IndexSpecs, Value, State) ->
     {Name, Module, SubState} = get_backend(Bucket, State),
-    case Module:put(Bucket, Key, Value, SubState) of
+    case Module:put(Bucket, PrimaryKey, IndexSpecs, Value, SubState) of
         {ok, NewSubState} ->
             NewState = update_backend_state(Name, Module, NewSubState, State),
             {ok, NewState};
@@ -181,7 +183,6 @@ put(Bucket, Key, Value, State) ->
             NewState = update_backend_state(Name, Module, NewSubState, State),
             {error, Reason, NewState}
     end.
-
 
 %% @doc Delete an object from the backend
 -spec delete(riak_object:bucket(), riak_object:key(), state()) ->

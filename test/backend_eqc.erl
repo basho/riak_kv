@@ -190,7 +190,7 @@ next_state_data(running, stopped, S, _R,
            olds = sets:add_element(S#qcst.s, S#qcst.olds)};
 next_state_data(_From, _To, S, R, {call, _M, init_backend, _}) ->
     S#qcst{s=R};
-next_state_data(_From, _To, S, _R, {call, _M, put, [Bucket, Key, Val, _]}) ->
+next_state_data(_From, _To, S, _R, {call, _M, put, [Bucket, Key, [], Val, _]}) ->
     S#qcst{d = orddict:store({Bucket, Key}, Val, S#qcst.d)};
 next_state_data(_From, _To, S, _R, {call, _M, delete, [Bucket, Key, _]}) ->
     S#qcst{d = orddict:erase({Bucket, Key}, S#qcst.d)};
@@ -208,7 +208,7 @@ stopped(#qcst{backend=Backend,
 running(#qcst{backend=Backend,
               s=State}) ->
     [
-     {history, {call, Backend, put, [bucket(), key(), val(), State]}},
+     {history, {call, Backend, put, [bucket(), key(), [], val(), State]}},
      {history, {call, Backend, get, [bucket(), key(), State]}},
      {history, {call, Backend, delete, [bucket(), key(), State]}},
      {history, {call, Backend, fold_buckets, [fold_buckets_fun(), [], [], State]}},
@@ -240,7 +240,7 @@ postcondition(_From, _To, S,
               {call, _M, fold_buckets, [_FoldFun, _Acc, _Opts, _BeState]}, {ok, R}) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Buckets = [Bucket || {{Bucket, _}, _} <- ExpectedEntries],
-    lists:sort(Buckets) =:= lists:sort(R);
+    lists:usort(Buckets) =:= lists:sort(R);
 postcondition(_From, _To, S,
               {call, _M, fold_keys, [_FoldFun, _Acc, _Opts, _BeState]}, {ok, R}) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),

@@ -51,7 +51,12 @@
          }).
 -opaque riak_object() :: #r_object{}.
 
+-type index_op() :: add | remove.
+-type index_value() :: integer() | binary().
+
 -define(MAX_KEY_SIZE, 65536).
+-define(BUCKETFIELD, <<"$bucket">>).
+-define(KEYFIELD, <<"$key">>).
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
@@ -60,6 +65,7 @@
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([merge/2, apply_updates/1, syntactic_merge/3, syntactic_merge/4]).
 -export([to_json/1, from_json/1]).
+-export([index_specs/1, diff_index_specs/2]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 
 %% @doc Constructor for new riak objects.
@@ -68,7 +74,7 @@ new(B, K, V) when is_binary(B), is_binary(K) ->
     new(B, K, V, no_initial_metadata).
 
 %% @doc Constructor for new riak objects with an initial content-type.
--spec new(Bucket::bucket(), Key::key(), Value::value(), 
+-spec new(Bucket::bucket(), Key::key(), Value::value(),
           string() | dict() | no_initial_metadata) -> riak_object().
 new(B, K, V, C) when is_binary(B), is_binary(K), is_list(C) ->
     new(B, K, V, dict:from_list([{?MD_CTYPE, C}]));
@@ -136,11 +142,11 @@ reconcile(Objects, AllowMultiple) ->
     RObjs = reconcile(Objects),
     AllContents = lists:flatten([O#r_object.contents || O <- RObjs]),
     Contents = case AllowMultiple of
-        false ->
-            [most_recent_content(AllContents)];
-        true ->
-            AllContents
-    end,
+                   false ->
+                       [most_recent_content(AllContents)];
+                   true ->
+                       AllContents
+               end,
     VClock = vclock:merge([O#r_object.vclock || O <- RObjs]),
     HdObj = hd(RObjs),
     HdObj#r_object{contents=Contents,vclock=VClock,
@@ -157,8 +163,8 @@ ancestors(pure_baloney_to_fool_dialyzer) ->
     [#r_object{vclock = vclock:fresh()}];
 ancestors(Objects) ->
     ToRemove = [[O2 || O2 <- Objects,
-     vclock:descends(O1#r_object.vclock,O2#r_object.vclock),
-     (vclock:descends(O2#r_object.vclock,O1#r_object.vclock) == false)]
+                       vclock:descends(O1#r_object.vclock,O2#r_object.vclock),
+                       (vclock:descends(O2#r_object.vclock,O1#r_object.vclock) == false)]
                 || O1 <- Objects],
     lists:flatten(ToRemove).
 
@@ -213,7 +219,7 @@ merge(OldObject, NewObject) ->
     OldObject#r_object{contents=lists:umerge(lists:usort(NewObject#r_object.contents),
                                              lists:usort(OldObject#r_object.contents)),
                        vclock=vclock:merge([OldObject#r_object.vclock,
-                          NewObj1#r_object.vclock]),
+                                            NewObj1#r_object.vclock]),
                        updatemetadata=dict:store(clean, true, dict:new()),
                        updatevalue=undefined}.
 
@@ -239,8 +245,8 @@ apply_updates(Object=#r_object{}) ->
          end,
     Contents = [#r_content{metadata=M,value=V} || {M,V} <- lists:zip(MD, VL)],
     Object#r_object{contents=Contents,
-                 updatemetadata=dict:store(clean, true, dict:new()),
-                 updatevalue=undefined}.
+                    updatemetadata=dict:store(clean, true, dict:new()),
+                    updatevalue=undefined}.
 
 %% @spec bucket(riak_object()) -> bucket()
 %% @doc Return the containing bucket for this riak_object.
@@ -270,7 +276,7 @@ get_contents(#r_object{contents=Contents}) ->
 %%       metadata.  This function will fail with a badmatch error if the
 %%       object has siblings (value_count() > 1).
 get_metadata(O=#r_object{}) ->
-    % this blows up intentionally (badmatch) if more than one content value!
+                                                % this blows up intentionally (badmatch) if more than one content value!
     [{Metadata,_V}] = get_contents(O),
     Metadata.
 
@@ -288,7 +294,7 @@ get_values(#r_object{contents=C}) -> [Content#r_content.value || Content <- C].
 %%       value.  This function will fail with a badmatch error if the object
 %%       has siblings (value_count() > 1).
 get_value(Object=#r_object{}) ->
-    % this blows up intentionally (badmatch) if more than one content value!
+                                                % this blows up intentionally (badmatch) if more than one content value!
     [{_M,Value}] = get_contents(Object),
     Value.
 
@@ -323,6 +329,58 @@ increment_vclock(Object=#r_object{}, ClientId) ->
 increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
     Object#r_object{vclock=vclock:increment(ClientId, Timestamp, Object#r_object.vclock)}.
 
+%% @doc Prepare a list of index specifications
+%% to pass to the backend. This function is for
+%% the case where there is no existing object
+%% stored for a key and therefore no existing
+%% index data.
+-spec index_specs(riak_object()) ->
+                         [{index_op(), binary(), index_value()}].
+index_specs(Obj) ->
+    Indexes = index_data(Obj),
+    assemble_index_specs(Indexes, add).
+
+%% @doc Prepare a list of index specifications to pass to the
+%% backend. If the object passed as the first parameter does not have
+%% siblings, the function will assemble specs to replace all of its
+%% indexes with the indexes specified in the object passed as the
+%% second parameter. If there are siblings only the unique new
+%% indexes are added.
+-spec diff_index_specs(riak_object(), riak_object()) ->
+                              [{index_op(), binary(), index_value()}].
+diff_index_specs(Obj, OldObj) ->
+    OldIndexes = index_data(OldObj),
+    OldIndexSet = ordsets:from_list(OldIndexes),
+    AllIndexes = index_data(Obj),
+    AllIndexSet = ordsets:from_list(AllIndexes),
+    NewIndexSet = ordsets:subtract(AllIndexSet, OldIndexSet),
+    RemoveIndexSet = 
+        ordsets:subtract(OldIndexSet, AllIndexSet),
+    NewIndexSpecs =
+        assemble_index_specs(ordsets:subtract(NewIndexSet, OldIndexSet),
+                             add),
+    RemoveIndexSpecs =
+        assemble_index_specs(RemoveIndexSet,
+                             remove),
+    NewIndexSpecs ++ RemoveIndexSpecs.
+
+%% @doc Get a list of {Index, Value} tuples from the
+%% metadata of an object.
+-spec index_data(riak_object()) -> [{binary(), index_value()}].
+index_data(Obj) ->
+    MetaDatas = get_metadatas(Obj),
+    lists:flatten([dict:fetch(?MD_INDEX, MD)
+                   || MD <- MetaDatas,
+                      dict:is_key(?MD_INDEX, MD)]).
+
+%% @doc Assemble a list of index specs in the
+%% form of triplets of the form
+%% {IndexOperation, IndexField, IndexValue}.
+-spec assemble_index_specs([{binary(), binary()}], index_op()) ->
+                                  [{index_op(), binary(), binary()}].
+assemble_index_specs(Indexes, IndexOp) ->
+    [{IndexOp, Index, Value} || {Index, Value} <- Indexes].
+
 %% @spec set_contents(riak_object(), [{dict(), value()}]) -> riak_object()
 %% @doc  INTERNAL USE ONLY.  Set the contents of riak_object to the
 %%       {Metadata, Value} pairs in MVs. Normal clients should use the
@@ -343,7 +401,7 @@ to_json(Obj=#r_object{}) ->
                  [{<<"metadata">>, jsonify_metadata(MD)},
                   {<<"data">>, V}]}
                 || {MD, V} <- riak_object:get_contents(Obj)
-                      ]}]}.
+               ]}]}.
 
 -spec from_json(any()) -> riak_object().
 from_json({struct, Obj}) ->
@@ -360,7 +418,7 @@ from_json(Obj) ->
 
 jsonify_metadata(MD) ->
     MDJS = fun({LastMod, Now={_,_,_}}) ->
-                   % convert Now to JS-readable time string
+                                                % convert Now to JS-readable time string
                    {LastMod, list_to_binary(
                                httpd_util:rfc1123_date(
                                  calendar:now_to_local_time(Now)))};
@@ -400,7 +458,7 @@ jsonify_metadata_list(List) ->
 dejsonify_values([], Accum) ->
     lists:reverse(Accum);
 dejsonify_values([{<<"metadata">>, {struct, MD0}},
-                   {<<"data">>, D}|T], Accum) ->
+                  {<<"data">>, D}|T], Accum) ->
     Converter = fun({Key, Val}) ->
                         case Key of
                             <<"Links">> ->
@@ -437,9 +495,9 @@ syntactic_merge(CurrentObject, NewObject, FromClientId, Timestamp) ->
     case ancestors([CurrentObject, NewObject]) of
         [OlderObject] ->
             WinObject = case vclock(OlderObject) =:= vclock(CurrentObject) of
-                true -> NewObject;
-                false -> CurrentObject
-            end,
+                            true -> NewObject;
+                            false -> CurrentObject
+                        end,
             case is_updated(WinObject) of
                 true -> increment_vclock(apply_updates(WinObject), FromClientId, Timestamp);
                 false -> WinObject
