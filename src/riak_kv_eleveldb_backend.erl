@@ -29,7 +29,7 @@
          stop/1,
          get/3,
          put/5,
-         delete/3,
+         delete/4,
          drop/1,
          fold_buckets/4,
          fold_keys/4,
@@ -38,12 +38,17 @@
          status/1,
          callback/3]).
 
+-compile({inline, [
+                   to_object_key/2, from_object_key/1,
+                   to_index_key/4, from_index_key/1
+                  ]}).
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, []).
+-define(CAPABILITIES, [indexes]).
 
 -record(state, {ref :: reference(),
                 data_root :: string(),
@@ -92,7 +97,7 @@ stop(_State) ->
                  {error, term(), state()}.
 get(Bucket, Key, #state{read_opts=ReadOpts,
                         ref=Ref}=State) ->
-    StorageKey = sext:encode({Bucket, Key}),
+    StorageKey = to_object_key(Bucket, Key),
     case eleveldb:get(Ref, StorageKey, ReadOpts) of
         {ok, Value} ->
             {ok, Value, State};
@@ -103,17 +108,26 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
     end.
 
 %% @doc Insert an object into the eleveldb backend.
-%% NOTE: The eleveldb backend does not currently
-%% support secondary indexing and the _IndexSpecs
-%% parameter is ignored.
 -type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
 -spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
-put(Bucket, PrimaryKey, _IndexSpecs, Val, #state{ref=Ref,
+put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
                                                  write_opts=WriteOpts}=State) ->
-    StorageKey = sext:encode({Bucket, PrimaryKey}),
-    case eleveldb:put(Ref, StorageKey, Val, WriteOpts) of
+    %% Create the KV update...
+    StorageKey = to_object_key(Bucket, PrimaryKey),
+    Updates1 = [{put, StorageKey, Val}],
+
+    %% Convert IndexSpecs to index updates...
+    F = fun({add, Field, Value}) ->
+                {put, to_index_key(Bucket, PrimaryKey, Field, Value), <<>>};
+           ({remove, Field, Value}) ->
+                {delete, to_index_key(Bucket, PrimaryKey, Field, Value)}
+        end,
+    Updates2 = [F(X) || X <- IndexSpecs],
+
+    %% Perform the write...
+    case eleveldb:write(Ref, Updates1 ++ Updates2, WriteOpts) of
         ok ->
             {ok, State};
         {error, Reason} ->
@@ -122,13 +136,23 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val, #state{ref=Ref,
 
 
 %% @doc Delete an object from the eleveldb backend
--spec delete(riak_object:bucket(), riak_object:key(), state()) ->
+-spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
                     {ok, state()} |
                     {error, term(), state()}.
-delete(Bucket, Key, #state{ref=Ref,
+delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref,
                            write_opts=WriteOpts}=State) ->
-    StorageKey = sext:encode({Bucket, Key}),
-    case eleveldb:delete(Ref, StorageKey, WriteOpts) of
+
+    %% Create the KV delete...
+    StorageKey = to_object_key(Bucket, PrimaryKey),
+    Updates1 = [{delete, StorageKey}],
+
+    %% Convert IndexSpecs to index deletes...
+    F = fun({remove, Field, Value}) ->
+                {delete, to_index_key(Bucket, PrimaryKey, Field, Value)}
+        end,
+    Updates2 = [F(X) || X <- IndexSpecs],
+
+    case eleveldb:write(Ref, Updates1 ++ Updates2, WriteOpts) of
         ok ->
             {ok, State};
         {error, Reason} ->
@@ -140,30 +164,50 @@ delete(Bucket, Key, #state{ref=Ref,
                    any(),
                    [],
                    state()) -> {ok, any()}.
-fold_buckets(FoldBucketsFun, Acc, _Opts, #state{fold_opts=FoldOpts,
+fold_buckets(FoldBucketsFun, Acc, _Opts, #state{fold_opts=FoldOpts1,
                                                 ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    {Acc0, _LastBucket} =
-        eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts),
-    {ok, Acc0}.
-
-%% @doc Fold over all the keys for one or all buckets.
--spec fold_keys(riak_kv_backend:fold_keys_fun(),
-                any(),
-                [{atom(), term()}],
-                state()) -> {ok, term()}.
-fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
-                                         ref=Ref}) ->
-    Bucket =  proplists:get_value(bucket, Opts),
-    FoldOpts = fold_opts(Bucket, FoldOpts1),
-    FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
+    FirstKey = to_first_key(undefined),
+    FoldOpts2 = [{first_key, FirstKey} | FoldOpts1],
     try
-        Acc0 = eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts),
+        {Acc0, _} = eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts2),
         {ok, Acc0}
     catch
         {break, AccFinal} ->
             {ok, AccFinal}
     end.
+
+%% @doc Fold over all the keys for one or all buckets.
+-spec fold_keys(riak_kv_backend:fold_keys_fun(),
+                any(),
+                [tuple()],
+                state()) -> {ok, term()}.
+fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
+                                         ref=Ref}) ->
+    %% Figure out how we should limit the fold: by bucket, by
+    %% secondary index, or neither (fold across everything.)
+    Bucket = lists:keyfind(bucket, 1, Opts),
+    Index = lists:keyfind(index, 1, Opts),
+    Limiter =
+        if Bucket /= false -> Bucket;
+           Index /= false  -> Index;
+           true            -> undefined
+        end,
+
+    %% Set up the fold...
+    FirstKey = to_first_key(Limiter),
+    FoldFun = fold_keys_fun(FoldKeysFun, Limiter),
+    FoldOpts2 = [{first_key, FirstKey} | FoldOpts1],
+
+    %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
+    try
+        Acc0 = eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts2),
+        {ok, Acc0}
+    catch
+        {break, AccFinal} ->
+            {ok, AccFinal}
+    end.
+
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
@@ -172,11 +216,23 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
                    state()) -> {ok, any()}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts1,
                                                ref=Ref}) ->
-    Bucket = proplists:get_value(bucket, Opts),
-    FoldOpts = fold_opts(Bucket, FoldOpts1),
-    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
+
+
+    %% Figure out how we should limit the fold: by bucket, by
+    %% secondary index, or neither (fold across everything.)
+    Bucket = lists:keyfind(bucket, 1, Opts),
+    Limiter =
+        if Bucket /= false -> Bucket;
+           true            -> undefined
+        end,
+
+    %% Set up the fold...
+    FirstKey = to_first_key(Limiter),
+    FoldFun = fold_objects_fun(FoldObjectsFun, Limiter),
+    FoldOpts2 = [{first_key, FirstKey} | FoldOpts1],
+
     try
-        Acc0 = eleveldb:fold(Ref, FoldFun, Acc, FoldOpts),
+        Acc0 = eleveldb:fold(Ref, FoldFun, Acc, FoldOpts2),
         {ok, Acc0}
     catch
         {break, AccFinal} ->
@@ -234,59 +290,88 @@ config_value(Key, Config) ->
 %% Return a function to fold over the buckets on this backend
 fold_buckets_fun(FoldBucketsFun) ->
     fun(BK, {Acc, LastBucket}) ->
-            case sext:decode(BK) of
+            case from_object_key(BK) of
                 {LastBucket, _} ->
                     {Acc, LastBucket};
                 {Bucket, _} ->
-                    {FoldBucketsFun(Bucket, Acc), Bucket}
+                    {FoldBucketsFun(Bucket, Acc), Bucket};
+                _ ->
+                    throw({break, Acc})
             end
     end.
+
 
 %% @private
 %% Return a function to fold over keys on this backend
 fold_keys_fun(FoldKeysFun, undefined) ->
-    fun(BK, Acc) ->
-            {Bucket, Key} = sext:decode(BK),
-            FoldKeysFun(Bucket, Key, Acc)
-    end;
-fold_keys_fun(FoldKeysFun, Bucket) ->
-    fun(BK, Acc) ->
-            {B, Key} = sext:decode(BK),
-            if B =:= Bucket ->
-                    FoldKeysFun(B, Key, Acc);
-               true ->
+    %% Fold across everything...
+    fun(StorageKey, Acc) ->
+            case from_object_key(StorageKey) of
+                {Bucket, Key} ->
+                    FoldKeysFun(Bucket, Key, Acc);
+                _ ->
                     throw({break, Acc})
             end
-    end.
+    end;
+fold_keys_fun(FoldKeysFun, {bucket, FilterBucket}) ->
+    %% Fold across a specific bucket...
+    fun(StorageKey, Acc) ->
+            case from_object_key(StorageKey) of
+                {Bucket, Key} when Bucket == FilterBucket ->
+                    FoldKeysFun(Bucket, Key, Acc);
+                _ ->
+                    throw({break, Acc})
+            end
+    end;
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, {eq, <<"$bucket">>, _}}) ->
+    %% 2I exact match query on special $bucket field...
+    fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, {eq, FilterField, FilterTerm}}) ->
+    %% Rewrite 2I exact match query as a range...
+    NewQuery = {range, FilterField, FilterTerm, FilterTerm},
+    fold_keys_fun(FoldKeysFun, {index, FilterBucket, NewQuery});
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, <<"$key">>, StartKey, EndKey}}) ->
+    %% 2I range query on special $key field...
+    fun(StorageKey, Acc) ->
+            case from_object_key(StorageKey) of
+                {Bucket, Key} when FilterBucket == Bucket,
+                                   StartKey =< Key,
+                                   EndKey >= Key ->
+                    FoldKeysFun(Bucket, Key, Acc);
+                _ ->
+                    throw({break, Acc})
+            end
+    end;
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, FilterField, StartTerm, EndTerm}}) ->
+    %% 2I range query...
+    fun(StorageKey, Acc) ->
+            case from_index_key(StorageKey) of
+                {Bucket, Key, Field, Term} when FilterBucket == Bucket,
+                                                FilterField == Field,
+                                                StartTerm =< Term,
+                                                EndTerm >= Term ->
+                    FoldKeysFun(Bucket, Key, Acc);
+                _ ->
+                    throw({break, Acc})
+            end
+    end;
+fold_keys_fun(_FoldKeysFun, Other) ->
+    throw({unknown_limiter, Other}).
 
 %% @private
 %% Return a function to fold over the objects on this backend
-fold_objects_fun(FoldObjectsFun, undefined) ->
-    fun({BK, Value}, Acc) ->
-            {Bucket, Key} = sext:decode(BK),
-            FoldObjectsFun(Bucket, Key, Value, Acc)
-    end;
-fold_objects_fun(FoldObjectsFun, Bucket) ->
-    fun({BK, Value}, Acc) ->
-            {B, Key} = sext:decode(BK),
-            %% Take advantage of the fact that sext-encoding ensures all
-            %% keys in a bucket occur sequentially. Once we encounter a
-            %% different bucket, the fold is complete
-            if B =:= Bucket ->
-                    FoldObjectsFun(B, Key, Value, Acc);
-               true ->
+fold_objects_fun(FoldObjectsFun, FilterBucket) ->
+    %% 2I does not support fold objects at this time, so this is much
+    %% simpler than fold_keys_fun.
+    fun({StorageKey, Value}, Acc) ->
+            case from_object_key(StorageKey) of
+                {Bucket, Key} when FilterBucket == undefined;
+                                   Bucket == FilterBucket ->
+                    FoldObjectsFun(Bucket, Key, Value, Acc);
+                _ ->
                     throw({break, Acc})
             end
     end.
-
-%% @private
-%% Augment the fold options list if a
-%% bucket is defined.
-fold_opts(undefined, FoldOpts) ->
-    FoldOpts;
-fold_opts(Bucket, FoldOpts) ->
-    BKey = sext:encode({Bucket, <<>>}),
-    [{first_key, BKey} | FoldOpts].
 
 %% @private
 get_status(Dir) ->
@@ -296,6 +381,54 @@ get_status(Dir) ->
             Status;
         {error, Reason} ->
             {error, Reason}
+    end.
+
+%% @private Given a scope limiter, use sext to encode an expression
+%% that represents the starting key for the scope. For example, since
+%% we store objects under {o, Bucket, Key}, the first key for the
+%% bucket "foo" would be `sext:encode({o, <<"foo">>, <<>>}).`
+to_first_key(undefined) ->
+    %% Start at the first object in LevelDB...
+    to_object_key(<<>>, <<>>);
+to_first_key({bucket, Bucket}) ->
+    %% Start at the first object for a given bucket...
+    to_object_key(Bucket, <<>>);
+to_first_key({index, Bucket, {eq, <<"$bucket">>, _Term}}) ->
+    %% 2I exact match query on special $bucket field...
+    to_first_key({bucket, Bucket});
+to_first_key({index, Bucket, {eq, Field, Term}}) ->
+    %% Rewrite 2I exact match query as a range...
+    to_first_key({index, Bucket, {range, Field, Term, Term}});
+to_first_key({index, Bucket, {range, <<"$key">>, StartTerm, _EndTerm}}) ->
+    %% 2I range query on special $key field...
+    to_object_key(Bucket, StartTerm);
+to_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm}}) ->
+    %% 2I range query...
+    to_index_key(Bucket, <<>>, Field, StartTerm);
+to_first_key(Other) ->
+    erlang:throw({unknown_limiter, Other}).
+
+
+to_object_key(Bucket, Key) ->
+    sext:encode({o, Bucket, Key}).
+
+from_object_key(LKey) ->
+    case sext:decode(LKey) of
+        {o, Bucket, Key} ->
+            {Bucket, Key};
+        _ ->
+            undefined
+    end.
+
+to_index_key(Bucket, Key, Field, Term) ->
+    sext:encode({i, Bucket, Field, Term, Key}).
+
+from_index_key(LKey) ->
+    case sext:decode(LKey) of
+        {i, Bucket, Field, Term, Key} ->
+            {Bucket, Key, Field, Term};
+        _ ->
+            undefined
     end.
 
 %% ===================================================================

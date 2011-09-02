@@ -44,7 +44,7 @@
          stop/1,
          get/3,
          put/5,
-         delete/3,
+         delete/4,
          drop/1,
          fold_buckets/4,
          fold_keys/4,
@@ -128,7 +128,7 @@ get(Bucket, Key, State=#state{data_ref=DataRef,
         [{{Bucket, Key}, {{ts, Timestamp}, Val}}] ->
             case exceeds_ttl(Timestamp, TTL) of
                 true ->
-                    delete(Bucket, Key, State),
+                    delete(Bucket, Key, undefined, State),
                     {error, not_found, State};
                 false ->
                     {ok, Val, State}
@@ -181,9 +181,12 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val, State=#state{data_ref=DataRef,
     end.
 
 %% @doc Delete an object from the memory backend
--spec delete(riak_object:bucket(), riak_object:key(), state()) ->
+%% NOTE: The memory backend does not currently
+%% support secondary indexing and the _IndexSpecs
+%% parameter is ignored.
+-spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
                     {ok, state()}.
-delete(Bucket, Key, State=#state{data_ref=DataRef,
+delete(Bucket, Key, _IndexSpecs, State=#state{data_ref=DataRef,
                                  time_ref=TimeRef,
                                  used_memory=UsedMemory}) ->
     case TimeRef of
