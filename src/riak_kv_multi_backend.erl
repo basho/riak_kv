@@ -94,8 +94,10 @@ api_version() ->
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% Sanity checking
-    Defs = proplists:get_value(multi_backend, Config),
-    if not is_list(Defs) ->
+    Defs =  config_value(multi_backend, Config),
+    if Defs =:= undefined ->
+            {error, multi_backend_config_unset};
+       not is_list(Defs) ->
             {error, {invalid_config_setting,
                      multi_backend,
                      list_expected}};
@@ -106,15 +108,19 @@ start(Partition, Config) ->
        true ->
             {First, _, _} = hd(Defs),
 
+            %% Check if async folds have been disabled
+            AsyncFolds = config_value(async_folds, Config, true),
             %% Get the default
-            DefaultBackend = proplists:get_value(multi_backend_default, Config, First),
+            DefaultBackend = config_value(multi_backend_default, Config, First),
             case lists:keymember(DefaultBackend, 1, Defs) of
                 true ->
                     %% Start the backends
                     BackendFun =
                         fun({Name, Module, SubConfig}, {Backends, Errors}) ->
                                 try
-                                    case Module:start(Partition, SubConfig) of
+                                    case Module:start(Partition,
+                                                      [{async_folds, AsyncFolds}
+                                                       | SubConfig]) of
                                         {ok, State} ->
                                             Backend = {Name, Module, State},
                                             {[Backend | Backends], Errors};
@@ -203,23 +209,25 @@ delete(Bucket, Key, State) ->
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
                    any(),
                    [],
-                   state()) -> {ok, any()} | {error, term()}.
+                   state()) -> {ok, {any(), any()}} | {error, term()}.
 fold_buckets(FoldBucketsFun, Acc, Opts, #state{backends=Backends}) ->
-    FoldFun = fun({_, Module, SubState}, Acc1) ->
+    FoldFun = fun({_, Module, SubState}, {Acc1, SyncResults, AsyncWork}) ->
                       Result = Module:fold_buckets(FoldBucketsFun,
                                                    Acc1,
                                                    Opts,
                                                    SubState),
                       case Result of
                           {ok, Acc2} ->
-                              Acc2;
+                              {Acc1, [Acc2 | SyncResults], AsyncWork};
+                          {async, Work} ->
+                              {Acc1, SyncResults, [Work | AsyncWork]};
                           {error, Reason} ->
                               throw({error, {Module, Reason}})
                       end
               end,
     try
-        Acc0 = lists:foldl(FoldFun, Acc, Backends),
-        {ok, Acc0}
+        {_, SyncResults, AsyncWork} = lists:foldl(FoldFun, {Acc, [], []}, Backends), 
+        {{sync, SyncResults}, {async, AsyncWork}}
     catch
         Error ->
             Error
@@ -382,6 +390,19 @@ error_filter({error, _, _}) ->
 error_filter(_) ->
     false.
 
+%% @private
+config_value(Key, Config) ->
+    config_value(Key, Config, undefined).
+
+%% @private
+config_value(Key, Config, Default) ->
+    case proplists:get_value(Key, Config) of
+        undefined ->
+            app_helper:get_env(riak_kv, Key, Default);
+        Value ->
+            Value
+    end.
+
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
@@ -502,7 +523,8 @@ extra_callback_test() ->
     application:set_env(eleveldb, data_root, "test/eleveldb-backend"),
 
     %% Start up multi backend
-    Config = [{storage_backend, riak_kv_multi_backend},
+    Config = [{async_folds, false},
+              {storage_backend, riak_kv_multi_backend},
               {multi_backend_default, memory},
               {multi_backend,
                [{bitcask, riak_kv_bitcask_backend, []},
@@ -514,11 +536,12 @@ extra_callback_test() ->
     application:stop(bitcask).    
 
 bad_config_test() ->
-    ErrorReason = {invalid_config_setting, multi_backend, list_expected},
+    ErrorReason = multi_backend_config_unset,
     ?assertEqual({error, ErrorReason}, start(0, [])).
 
 sample_config() ->
     [
+     {async_folds, false},
      {storage_backend, riak_kv_multi_backend},
      {multi_backend_default, second_backend},
       {multi_backend, [

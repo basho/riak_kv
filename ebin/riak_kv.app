@@ -24,6 +24,7 @@
              riak_kv_delete_sup,
              riak_kv_eleveldb_backend,
              riak_kv_fold_buffer,
+             riak_kv_fold_worker,
              riak_kv_get_core,
              riak_kv_get_fsm,
              riak_kv_get_fsm_sup,

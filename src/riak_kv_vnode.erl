@@ -76,6 +76,7 @@
                 bucket_buf_size :: pos_integer(),
                 index_buf_size :: pos_integer(),
                 key_buf_size :: pos_integer(),
+                async_backend :: boolean(),
                 in_handoff = false :: boolean()}).
 
 -type index_op() :: add | remove.
@@ -181,20 +182,27 @@ init([Index]) ->
     BucketBufSize = app_helper:get_env(riak_kv, bucket_buffer_size, 1000),
     IndexBufSize = app_helper:get_env(riak_kv, index_buffer_size, 100),
     KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
+    AsyncFolding = app_helper:get_env(riak_kv, async_folds, true),
 
-    case catch Mod:start(Index, Configuration) of
+    case catch Mod:start(Index, [{async_folds, AsyncFolding},
+                                 Configuration]) of
         {ok, ModState} ->
             %% Get the backend capabilities
             {_, Capabilities} = Mod:api_version(),
             IndexBackend = lists:member(indexes, Capabilities),
+            AsyncBackend = AsyncFolding andalso
+                lists:member(async_fold, Capabilities),
+            %% Create worker pool initialization tuple
+            FoldWorkerPool = {pool, riak_kv_fold_worker, 10, []},
             {ok, #state{idx=Index,
+                        async_backend=AsyncBackend,
                         index_backend=IndexBackend,
                         mod=Mod,
                         modstate=ModState,
                         bucket_buf_size=BucketBufSize,
                         index_buf_size=IndexBufSize,
                         key_buf_size=KeyBufSize,
-                        mrjobs=dict:new()}};
+                        mrjobs=dict:new()}, [FoldWorkerPool]};
         {error, Reason} ->
             lager:error("Failed to start ~p Reason: ~p",
                         [Mod, Reason]),
@@ -288,26 +296,34 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
 handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
                 _FilterVNodes,
                 Sender,
-                State=#state{mod=Mod,
-                             modstate=ModState,
-                             bucket_buf_size=BucketBufSize}) ->
+                State=#state{bucket_buf_size=BucketBufSize,
+                             mod=Mod,
+                             modstate=ModState}) ->
     %% Construct the filter function
     Filter = riak_kv_coverage_filter:build_filter(all, ItemFilter, undefined),
-    list_buckets(Sender, Filter, Mod, ModState, BucketBufSize),
-    {noreply, State};
+    case list_buckets(Sender, Filter, Mod, ModState, BucketBufSize) of
+        {async, AsyncWork} ->
+            {async, AsyncWork, Sender, State};
+        _ ->
+            {noreply, State}
+    end;
 handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
                                  item_filter=ItemFilter},
                 FilterVNodes,
                 Sender,
                 State=#state{idx=Index,
+                             key_buf_size=KeyBufSize,
                              mod=Mod,
-                             modstate=ModState,
-                             key_buf_size=KeyBufSize}) ->
+                             modstate=ModState}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-    list_keys(Sender, Bucket, Filter, Mod, ModState, KeyBufSize),
-    {noreply, State};
+    case list_keys(Sender, Bucket, Filter, Mod, ModState, KeyBufSize) of
+        {async, AsyncWork} ->
+            {async, AsyncWork, Sender, State};
+        _ ->
+            {noreply, State}
+    end;
 handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                               item_filter=ItemFilter,
                               qry=Query},
@@ -323,11 +339,15 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
             %% Construct the filter function
             FilterVNode = proplists:get_value(Index, FilterVNodes),
             Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-            index_query(Sender, Bucket, Query, Filter, Mod, ModState, IndexBufSize);
+            case index_query(Sender, Bucket, Query, Filter, Mod, ModState, IndexBufSize) of
+                {async, AsyncWork} ->
+                    {async, AsyncWork, Sender, State};
+                _ ->
+                    {noreply, State}
+            end;
         false ->
             riak_core_vnode:reply(Sender, {error, {indexes_not_supported, Mod}})
-    end,
-    {noreply, State}.
+    end.
 
 handle_handoff_command(Req=?FOLD_REQ{foldfun=FoldFun}, Sender, State) ->
     %% The function in riak_core used for object folding
@@ -615,8 +635,20 @@ list_buckets(Sender, Filter, Mod, ModState, BufferSize) ->
                 end
     end,
     case Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState) of
+        {{sync, [FirstSyncResult | RestSyncResults]}, {async, []}} ->
+            [riak_kv_fold_buffer:flush(SyncBuf, get_buffer_fun(false, Sender))
+             || SyncBuf <- RestSyncResults],
+            riak_kv_fold_buffer:flush(FirstSyncResult,
+                                      get_buffer_fun(true, Sender));
+        {{sync, SyncResults}, {async, AsyncWork}} ->
+            [riak_kv_fold_buffer:flush(SyncBuf, get_buffer_fun(false, Sender))
+             || SyncBuf <- SyncResults],
+            {async, AsyncWork};
+
         {ok, Buffer1} ->
             riak_kv_fold_buffer:flush(Buffer1, get_buffer_fun(true, Sender));
+        {async, FoldFun} ->
+            {async, FoldFun};
         {error, Reason} ->
             riak_core_vnode:reply(Sender, {error, Reason})
     end.
@@ -644,9 +676,22 @@ list_keys(Sender, Bucket, Filter, Mod, ModState, BufferSize) ->
     end,
     Opts = [{bucket, Bucket}],
     case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
+        {{sync, [FirstSyncResult | RestSyncResults]}, {async, []}} ->
+            [riak_kv_fold_buffer:flush(SyncBuf,
+                                       get_buffer_fun({false, Bucket}, Sender))
+             || SyncBuf <- RestSyncResults],
+            riak_kv_fold_buffer:flush(FirstSyncResult,
+                                      get_buffer_fun({true, Bucket}, Sender));
+        {{sync, SyncResults}, {async, AsyncWork}} ->
+            [riak_kv_fold_buffer:flush(SyncBuf,
+                                       get_buffer_fun({false, Bucket}, Sender))
+             || SyncBuf <- SyncResults],
+            {async, {Bucket, AsyncWork}};
         {ok, Buffer1} ->
             riak_kv_fold_buffer:flush(Buffer1,
                                       get_buffer_fun({true, Bucket}, Sender));
+        {async, FoldFun} ->
+            {async, {Bucket, FoldFun}};
         {error, Reason} ->
             riak_core_vnode:reply(Sender, {error, Reason})
     end.
@@ -768,9 +813,22 @@ index_query(Sender, Bucket, Query, Filter, Mod, ModState, BufferSize) ->
     end,
     Opts = [{index, Bucket, Query}],
     case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
+        {{sync, [FirstSyncResult | RestSyncResults]}, {async, []}} ->
+            [riak_kv_fold_buffer:flush(SyncBuf,
+                                       get_buffer_fun({false, Bucket}, Sender))
+             || SyncBuf <- RestSyncResults],
+            riak_kv_fold_buffer:flush(FirstSyncResult,
+                                      get_buffer_fun({true, Bucket}, Sender));
+        {{sync, SyncResults}, {async, AsyncWork}} ->
+            [riak_kv_fold_buffer:flush(SyncBuf,
+                                       get_buffer_fun({false, Bucket}, Sender))
+             || SyncBuf <- SyncResults],
+            {async, {Bucket, AsyncWork}};
         {ok, Buffer1} ->
             riak_kv_fold_buffer:flush(Buffer1,
                                       get_buffer_fun({true, Bucket}, Sender));
+        {async, FoldFun} ->
+            {async, {Bucket, FoldFun}};
         {error, Reason} ->
             riak_core_vnode:reply(Sender, {error, Reason})
     end.
@@ -873,6 +931,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
 dummy_backend(BackendMod) ->
     Ring = riak_core_ring:fresh(16,node()),
     riak_core_ring_manager:set_ring_global(Ring),
+    application:set_env(riak_kv, async_folds, false),
     application:set_env(riak_kv, storage_backend, BackendMod),
     application:set_env(riak_core, default_bucket_props, []),
     application:set_env(bitcask, data_root, bitcask_test_dir()),
@@ -891,7 +950,7 @@ eleveldb_test_dir() ->
 
 backend_with_known_key(BackendMod) ->
     dummy_backend(BackendMod),
-    {ok, S1} = init([0]),
+    {ok, S1, _} = init([0]),
     B = <<"f">>,
     K = <<"b">>,
     O = riak_object:new(B, K, <<"z">>),
@@ -1001,7 +1060,7 @@ new_result_listener(Type) ->
 result_listener_buckets(Acc) ->
     receive
         {'$gen_event', {_,{results,Results}}} ->
-            result_listener_keys(Results ++ Acc);
+            result_listener_buckets(Results ++ Acc);
         {'$gen_event', {_,{final_results,Results}}} ->
             result_listener_done(Results ++ Acc)
     after 5000 ->

@@ -125,6 +125,7 @@ start_servers() ->
     %% dbgh:trace(riak_kv_vnode),
     %% dbgh:trace(?MODULE),
     application:set_env(riak_kv, storage_backend, riak_kv_memory_backend),
+    application:set_env(riak_kv, async_folds, false),
     application:set_env(riak_core, default_bucket_props, []),
     Ring = riak_core_ring:fresh(16, node()),
     mochiglobal:put(?RING_KEY, Ring),

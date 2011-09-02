@@ -52,12 +52,14 @@
 
 -define(MERGE_CHECK_INTERVAL, timer:minutes(3)).
 -define(API_VERSION, 1).
--define(CAPABILITIES, []).
+-define(CAPABILITIES, [async_fold]).
 
 -record(state, {ref :: reference(),
                 link_file :: string(),
+                data_file :: string(),
                 opts :: [{atom(), term()}],
-                root :: string()}).
+                root :: string(),
+                async_folds :: boolean()}).
 
 -type state() :: #state{}.
 -type config() :: [{atom(), term()}].
@@ -91,10 +93,13 @@ start(Partition, Config) ->
                         Ref when is_reference(Ref) ->
                             schedule_merge(Ref),
                             maybe_schedule_sync(Ref),
+                            AsyncFolds = config_value(async_folds, Config, true),
                             {ok, #state{ref=Ref,
+                                        data_file=DataFile,
                                         link_file=LinkFile,
                                         root=DataRoot,
-                                        opts=BitcaskOpts}};
+                                        opts=BitcaskOpts,
+                                        async_folds=AsyncFolds}};
                         {error, Reason1} ->
                             lager:error("Failed to start bitcask backend: ~p\n",
                                         [Reason1]),
@@ -164,7 +169,30 @@ delete(Bucket, Key, #state{ref=Ref}=State) ->
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
                    any(),
                    [],
-                   state()) -> {ok, any()} | {error, term()}.
+                   state()) -> {ok, any()} | {async, fun()} | {error, term()}.
+fold_buckets(FoldBucketsFun, Acc, _Opts, #state{opts=BitcaskOpts,
+                                                data_file=DataFile,
+                                                root=DataRoot,
+                                                async_folds=true}) ->
+    FoldFun = fold_buckets_fun(FoldBucketsFun),
+    case BitcaskOpts of
+        [{read_write, _} | Config] ->
+            ok;
+        Config ->
+            ok
+    end,
+    ReadOpts = [{read_only, true} | Config],
+    BucketFolder =
+        fun() ->
+                case bitcask:open(filename:join(DataRoot, DataFile),
+                                  ReadOpts) of
+                    Ref when is_reference(Ref) ->
+                        bitcask:fold_keys(Ref, FoldFun, {Acc, ordsets:new()});
+                    {error, Reason} ->
+                        {error, Reason}
+                end
+        end,
+    {async, BucketFolder};
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     {FoldResult, _Bucketset} =
@@ -180,7 +208,31 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{ref=Ref}) ->
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
-                state()) -> {ok, term()} | {error, term()}.
+                state()) -> {ok, term()} | {async, fun()} | {error, term()}.
+fold_keys(FoldKeysFun, Acc, Opts, #state{opts=BitcaskOpts,
+                                         data_file=DataFile,
+                                         root=DataRoot,
+                                         async_folds=true}) ->
+    Bucket =  proplists:get_value(bucket, Opts),
+    FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
+    case BitcaskOpts of
+        [{read_write, _} | Config] ->
+            ok;
+        Config ->
+            ok
+    end,
+    ReadOpts = [{read_only, true} | Config],
+    KeyFolder =
+        fun() ->
+                case bitcask:open(filename:join(DataRoot, DataFile),
+                                  ReadOpts) of
+                    Ref when is_reference(Ref) ->
+                        bitcask:fold_keys(Ref, FoldFun, Acc);
+                    {error, Reason} ->
+                        {error, Reason}
+                end
+        end,
+    {async, KeyFolder};
 fold_keys(FoldKeysFun, Acc, Opts, #state{ref=Ref}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
@@ -196,7 +248,31 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{ref=Ref}) ->
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
-                   state()) -> {ok, any()} | {error, term()}.
+                   state()) -> {ok, any()} | {async, fun()} | {error, term()}.
+fold_objects(FoldObjectsFun, Acc, Opts, #state{opts=BitcaskOpts,
+                                               data_file=DataFile,
+                                               root=DataRoot,
+                                               async_folds=true}) ->
+    Bucket =  proplists:get_value(bucket, Opts),
+    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
+    case BitcaskOpts of
+        [{read_write, _} | Config] ->
+            ok;
+        Config ->
+            ok
+    end,
+    ReadOpts = [{read_only, true} | Config],
+    ObjectFolder =
+        fun() ->
+                case bitcask:open(filename:join(DataRoot, DataFile),
+                                  ReadOpts) of
+                    Ref when is_reference(Ref) ->
+                        bitcask:fold(Ref, FoldFun, Acc);
+                    {error, Reason} ->
+                        {error, Reason}
+                end
+        end,
+    {async, ObjectFolder};
 fold_objects(FoldObjectsFun, Acc, Opts, #state{ref=Ref}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
@@ -233,9 +309,10 @@ drop(#state{ref=Ref,
             %% so this backend can continue processing.
             case bitcask:open(filename:join(DataRoot, DataFile), BitcaskOpts) of
                 Ref1 when is_reference(Ref1) ->
-                    {ok, State#state{ref=Ref1}};
+                    {ok, State#state{data_file=DataFile,
+                                     ref=Ref1}};
                 {error, Reason} ->
-                    {error, Reason, State}
+                    {error, Reason, State#state{data_file=DataFile}}
             end;
         {error, Reason1} ->
             {error, Reason1, State}
@@ -382,9 +459,13 @@ schedule_merge(Ref) when is_reference(Ref) ->
 
 %% @private
 config_value(Key, Config) ->
+    config_value(Key, Config, undefined).
+
+%% @private
+config_value(Key, Config, Default) ->
     case proplists:get_value(Key, Config) of
         undefined ->
-            app_helper:get_env(bitcask, Key);
+            app_helper:get_env(bitcask, Key, Default);
         Value ->
             Value
     end.
@@ -491,6 +572,11 @@ eqc_test_() ->
          [
           {timeout, 60000,
            [?_assertEqual(true,
+                          backend_eqc:test(?MODULE, false,
+                                           [{data_root,
+                                             "test/bitcask-backend"},
+                                            {async_folds, false}])),
+            ?_assertEqual(true,
                           backend_eqc:test(?MODULE, false,
                                            [{data_root,
                                              "test/bitcask-backend"}]))]}
