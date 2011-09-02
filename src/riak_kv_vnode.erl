@@ -438,8 +438,9 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     riak_kv_stat:update(vnode_put),
     UpdState.
 
-prepare_put(#state{index_backend=false}, PutArgs=#putargs{lww=true, robj=RObj}) ->
-    {{true, RObj}, PutArgs};
+prepare_put(#state{index_backend=false, vnodeid=VId}, 
+            PutArgs=#putargs{lww=true, robj=RObj, starttime=StartTime}) ->
+    {{true, riak_object:increment_vclock(RObj, VId, StartTime)}, PutArgs};
 prepare_put(#state{index_backend=IndexBackend,
                    vnodeid=VId,
                    mod=Mod,
