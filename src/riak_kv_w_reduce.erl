@@ -158,13 +158,22 @@ chashfun({Key,_}) ->
 
 reduce_compat({jsanon, {Bucket, Key}})
   when is_binary(Bucket), is_binary(Key) ->
-    reduce_compat({qfun, js_runner({jsanon, stored_js_source(Bucket, Key)})});
+    reduce_compat({qfun, js_runner({jsanon, stored_source(Bucket, Key)})});
 reduce_compat({jsanon, Source})
   when is_binary(Source) ->
     reduce_compat({qfun, js_runner({jsanon, Source})});
 reduce_compat({jsfun, Name})
   when is_binary(Name) ->
     reduce_compat({qfun, js_runner({jsfun, Name})});
+reduce_compat({strfun, {Bucket, Key}})
+  when is_binary(Bucket), is_binary(Key) ->
+    reduce_compat({strfun, stored_source(Bucket, Key)});
+reduce_compat({strfun, Source}) ->
+    {allow_strfun, true} = {allow_strfun,
+                            app_helper:get_env(riak_kv, allow_strfun)},
+    {ok, Fun} = riak_kv_mrc_pipe:compile_string(Source),
+    true = is_function(Fun, 2),
+    reduce_compat({qfun, Fun});
 reduce_compat({modfun, Module, Function}) ->
     reduce_compat({qfun, erlang:make_fun(Module, Function, 2)});
 reduce_compat({qfun, Fun}) ->
@@ -173,7 +182,7 @@ reduce_compat({qfun, Fun}) ->
 no_input_run_reduce_once() ->
     true.
 
-stored_js_source(Bucket, Key) ->
+stored_source(Bucket, Key) ->
     {ok, C} = riak:local_client(),
     {ok, Object} = C:get(Bucket, Key, 1),
     riak_object:get_value(Object).
