@@ -63,7 +63,7 @@
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([vclock/1, update_value/2, update_metadata/2, bucket/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
--export([merge/2, apply_updates/1, syntactic_merge/3, syntactic_merge/4]).
+-export([merge/2, apply_updates/1, syntactic_merge/2]).
 -export([to_json/1, from_json/1]).
 -export([index_specs/1, diff_index_specs/2]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
@@ -488,26 +488,26 @@ is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
     end.
 
 
-syntactic_merge(CurrentObject, NewObject, FromClientId) ->
-    syntactic_merge(CurrentObject, NewObject, FromClientId, vclock:timestamp()).
-
-syntactic_merge(CurrentObject, NewObject, FromClientId, Timestamp) ->
-    case ancestors([CurrentObject, NewObject]) of
-        [OlderObject] ->
-            WinObject = case vclock(OlderObject) =:= vclock(CurrentObject) of
-                            true -> NewObject;
-                            false -> CurrentObject
-                        end,
-            case is_updated(WinObject) of
-                true -> increment_vclock(apply_updates(WinObject), FromClientId, Timestamp);
-                false -> WinObject
-            end;
-        [] ->
-            case riak_object:equal(CurrentObject, NewObject) of
-                true ->
-                    NewObject;
-                false ->
-                    merge(CurrentObject, NewObject)
+syntactic_merge(CurrentObject, NewObject) ->
+    %% Paranoia in case objects were incorrectly stored
+    %% with update information.  Vclock is not updated
+    %% but since no data is lost the objects will be
+    %% fixed if rewritten.
+    UpdatedNew = case is_updated(NewObject) of
+                     true  -> apply_updates(NewObject);
+                     false -> NewObject
+                 end,
+    UpdatedCurr = case is_updated(CurrentObject) of
+                      true  -> apply_updates(CurrentObject);
+                      false -> CurrentObject
+                  end,
+    
+    case ancestors([UpdatedCurr, UpdatedNew]) of
+        [] -> merge(UpdatedCurr, UpdatedNew);
+        [Ancestor] ->
+            case equal(Ancestor, UpdatedCurr) of
+                true  -> UpdatedNew;
+                false -> UpdatedCurr
             end
     end.
 
@@ -548,7 +548,7 @@ reconcile_test() ->
 
 merge1_test() ->
     {O,O3} = reconcile_test(),
-    O3 = riak_object:syntactic_merge(O,O3,node_does_not_matter_here),
+    O3 = riak_object:syntactic_merge(O,O3),
     {O,O3}.
 
 merge2_test() ->
@@ -557,24 +557,24 @@ merge2_test() ->
     V = <<"testvalue2">>,
     O1 = riak_object:increment_vclock(object_test(), node1),
     O2 = riak_object:increment_vclock(riak_object:new(B,K,V), node2),
-    O3 = riak_object:syntactic_merge(O1, O2, other_node),
+    O3 = riak_object:syntactic_merge(O1, O2),
     [node1, node2] = [N || {N,_} <- riak_object:vclock(O3)],
     2 = riak_object:value_count(O3).
 
 merge3_test() ->
     O0 = riak_object:new(<<"test">>, <<"test">>, hi),
     O1 = riak_object:increment_vclock(O0, x),
-    ?assertEqual(O1, riak_object:syntactic_merge(O1, O1, z)).
+    ?assertEqual(O1, riak_object:syntactic_merge(O1, O1)).
 
 merge4_test() ->
     O0 = riak_object:new(<<"test">>, <<"test">>, hi),
     O1 = riak_object:increment_vclock(
            riak_object:update_value(O0, bye), x),
-    OM = riak_object:syntactic_merge(O0, O1, y),
+    OM = riak_object:syntactic_merge(O0, O1),
     ?assertNot(O0 =:= OM),
     ?assertNot(O1 =:= OM), %% vclock should have updated
     ?assertEqual(bye, riak_object:get_value(OM)),
-    OMp = riak_object:syntactic_merge(O1, O0, y),
+    OMp = riak_object:syntactic_merge(O1, O0),
     ?assertEqual(OM, OMp), %% merge should be symmetric here
     {O0, O1}.
 
@@ -584,9 +584,8 @@ merge5_test() ->
     V = <<"testvalue2">>,
     O1 = riak_object:increment_vclock(object_test(), node1),
     O2 = riak_object:increment_vclock(riak_object:new(B,K,V), node2),
-    TS = vclock:timestamp(),
-    ?assertEqual(riak_object:syntactic_merge(O1, O2, syn_put_mrg, TS),
-                 riak_object:syntactic_merge(O2, O1, syn_put_mrg, TS)).
+    ?assertEqual(riak_object:syntactic_merge(O1, O2),
+                 riak_object:syntactic_merge(O2, O1)).
 
 equality1_test() ->
     MD0 = dict:new(),

@@ -227,7 +227,7 @@ send_vput_extra([], {fsm, undefined, Pid} = _Sender, _ReqId, State) ->
 send_vput_extra([{LIdx, {dw, CurObj, _CurLin}} | Rest], Sender, ReqId,
                 #state{lidx_map = LIdxMap} = State) ->
     {Idx, PutObj, Options} = orddict:fetch(LIdx, LIdxMap),
-    Obj = put_merge(CurObj, PutObj, Options, ReqId),
+    Obj = put_merge(CurObj, PutObj, Options),
     NewState = case (proplists:get_value(returnbody, Options, false) orelse
                      proplists:get_value(coord, Options, false)) of
                    true ->
@@ -273,8 +273,8 @@ fail_on_bad_obj(LIdx, _Obj, VPutReplies) ->
 
 %% TODO: The riak_kv_vnode code should be refactored to expose this function
 %%       so we are close to testing the real thing.
-put_merge(notfound, UpdObj, Options, _ReqId) ->
-    case proplists:get_value(coord, Options, true) of
+put_merge(notfound, UpdObj, Options) ->
+    case proplists:get_value(coord, Options, false) of
         true ->
             VnodeId = <<1, 1, 1, 1, 1, 1, 1, 1>>,
             Ts = vclock:timestamp(),
@@ -282,13 +282,9 @@ put_merge(notfound, UpdObj, Options, _ReqId) ->
         false ->
             UpdObj
     end;                
-put_merge(CurObj, UpdObj, Options, ReqId) ->
-    case proplists:get_value(coord, Options, true) of
-        true ->
-            VnodeId = <<1, 1, 1, 1, 1, 1, 1, 1>>,
-            Ts = vclock:timestamp(),
-            riak_kv_vnode:coord_put_merge(CurObj, UpdObj, VnodeId, Ts);
-        _ ->
-            riak_object:syntactic_merge(CurObj, UpdObj, ReqId)
-    end.
-
+put_merge(CurObj, UpdObj, Options) ->
+    Coord = proplists:get_value(coord, Options, false),
+    VnodeId = <<1, 1, 1, 1, 1, 1, 1, 1>>,
+    Ts = vclock:timestamp(),
+    {_, ResObj} = riak_kv_vnode:put_merge(Coord, false, CurObj, UpdObj, VnodeId, Ts),
+    ResObj.
