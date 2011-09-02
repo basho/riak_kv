@@ -29,7 +29,7 @@
          stop/1,
          get/3,
          put/5,
-         delete/3,
+         delete/4,
          drop/1,
          fold_buckets/4,
          fold_keys/4,
@@ -136,14 +136,23 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
 
 
 %% @doc Delete an object from the eleveldb backend
--spec delete(riak_object:bucket(), riak_object:key(), state()) ->
+-spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
                     {ok, state()} |
                     {error, term(), state()}.
-delete(Bucket, Key, #state{ref=Ref,
+delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref,
                            write_opts=WriteOpts}=State) ->
-    %% TODO - Update riak_kv_vnode for IndexSpecs...
-    StorageKey = to_object_key(Bucket, Key),
-    case eleveldb:delete(Ref, StorageKey, WriteOpts) of
+
+    %% Create the KV delete...
+    StorageKey = to_object_key(Bucket, PrimaryKey),
+    Updates1 = [{delete, StorageKey}],
+
+    %% Convert IndexSpecs to index deletes...
+    F = fun({remove, Field, Value}) ->
+                {delete, to_index_key(Bucket, PrimaryKey, Field, Value)}
+        end,
+    Updates2 = [F(X) || X <- IndexSpecs],
+
+    case eleveldb:write(Ref, Updates1 ++ Updates2, WriteOpts) of
         ok ->
             {ok, State};
         {error, Reason} ->

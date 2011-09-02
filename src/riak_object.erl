@@ -352,7 +352,7 @@ diff_index_specs(Obj, OldObj) ->
     AllIndexes = index_data(Obj),
     AllIndexSet = ordsets:from_list(AllIndexes),
     NewIndexSet = ordsets:subtract(AllIndexSet, OldIndexSet),
-    RemoveIndexSet = 
+    RemoveIndexSet =
         ordsets:subtract(OldIndexSet, AllIndexSet),
     NewIndexSpecs =
         assemble_index_specs(ordsets:subtract(NewIndexSet, OldIndexSet),
@@ -365,6 +365,8 @@ diff_index_specs(Obj, OldObj) ->
 %% @doc Get a list of {Index, Value} tuples from the
 %% metadata of an object.
 -spec index_data(riak_object()) -> [{binary(), index_value()}].
+index_data(undefined) ->
+    [];
 index_data(Obj) ->
     MetaDatas = get_metadatas(Obj),
     lists:flatten([dict:fetch(?MD_INDEX, MD)
