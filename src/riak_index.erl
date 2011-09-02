@@ -134,8 +134,8 @@ parse_fields(IndexFields) ->
 
     %% Return the object, or a list of Reasons.
     case FailureReasons == [] of
-        true  -> {ok, lists:reverse(Results)};
-        false -> {error, lists:reverse(FailureReasons)}
+        true  -> {ok, lists:usort(Results)};
+        false -> {error, lists:usort(FailureReasons)}
     end.
 
 
