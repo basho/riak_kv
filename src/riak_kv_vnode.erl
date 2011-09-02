@@ -304,7 +304,7 @@ handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
     case list_buckets(Sender, Filter, Mod, ModState, BucketBufSize) of
         {async, AsyncWork} ->
             {async, AsyncWork, Sender, State};
-        false ->
+        _ ->
             {noreply, State}
     end;
 handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
@@ -342,7 +342,7 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
             case index_query(Sender, Bucket, Query, Filter, Mod, ModState, IndexBufSize) of
                 {async, AsyncWork} ->
                     {async, AsyncWork, Sender, State};
-                false ->
+                _ ->
                     {noreply, State}
             end;
         false ->
@@ -635,10 +635,16 @@ list_buckets(Sender, Filter, Mod, ModState, BufferSize) ->
                 end
     end,
     case Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState) of
+        {{sync, [FirstSyncResult | RestSyncResults]}, {async, []}} ->
+            [riak_kv_fold_buffer:flush(SyncBuf, get_buffer_fun(false, Sender))
+             || SyncBuf <- RestSyncResults],
+            riak_kv_fold_buffer:flush(FirstSyncResult,
+                                      get_buffer_fun(true, Sender));
         {{sync, SyncResults}, {async, AsyncWork}} ->
             [riak_kv_fold_buffer:flush(SyncBuf, get_buffer_fun(false, Sender))
              || SyncBuf <- SyncResults],
             {async, AsyncWork};
+
         {ok, Buffer1} ->
             riak_kv_fold_buffer:flush(Buffer1, get_buffer_fun(true, Sender));
         {async, FoldFun} ->
@@ -670,6 +676,12 @@ list_keys(Sender, Bucket, Filter, Mod, ModState, BufferSize) ->
     end,
     Opts = [{bucket, Bucket}],
     case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
+        {{sync, [FirstSyncResult | RestSyncResults]}, {async, []}} ->
+            [riak_kv_fold_buffer:flush(SyncBuf,
+                                       get_buffer_fun({false, Bucket}, Sender))
+             || SyncBuf <- RestSyncResults],
+            riak_kv_fold_buffer:flush(FirstSyncResult,
+                                      get_buffer_fun({true, Bucket}, Sender));
         {{sync, SyncResults}, {async, AsyncWork}} ->
             [riak_kv_fold_buffer:flush(SyncBuf,
                                        get_buffer_fun({false, Bucket}, Sender))
@@ -801,6 +813,12 @@ index_query(Sender, Bucket, Query, Filter, Mod, ModState, BufferSize) ->
     end,
     Opts = [{index, Bucket, Query}],
     case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
+        {{sync, [FirstSyncResult | RestSyncResults]}, {async, []}} ->
+            [riak_kv_fold_buffer:flush(SyncBuf,
+                                       get_buffer_fun({false, Bucket}, Sender))
+             || SyncBuf <- RestSyncResults],
+            riak_kv_fold_buffer:flush(FirstSyncResult,
+                                      get_buffer_fun({true, Bucket}, Sender));
         {{sync, SyncResults}, {async, AsyncWork}} ->
             [riak_kv_fold_buffer:flush(SyncBuf,
                                        get_buffer_fun({false, Bucket}, Sender))
@@ -913,6 +931,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
 dummy_backend(BackendMod) ->
     Ring = riak_core_ring:fresh(16,node()),
     riak_core_ring_manager:set_ring_global(Ring),
+    application:set_env(riak_kv, async_folds, false),
     application:set_env(riak_kv, storage_backend, BackendMod),
     application:set_env(riak_core, default_bucket_props, []),
     application:set_env(bitcask, data_root, bitcask_test_dir()),
@@ -931,7 +950,7 @@ eleveldb_test_dir() ->
 
 backend_with_known_key(BackendMod) ->
     dummy_backend(BackendMod),
-    {ok, S1} = init([0]),
+    {ok, S1, _} = init([0]),
     B = <<"f">>,
     K = <<"b">>,
     O = riak_object:new(B, K, <<"z">>),
@@ -1041,7 +1060,7 @@ new_result_listener(Type) ->
 result_listener_buckets(Acc) ->
     receive
         {'$gen_event', {_,{results,Results}}} ->
-            result_listener_keys(Results ++ Acc);
+            result_listener_buckets(Results ++ Acc);
         {'$gen_event', {_,{final_results,Results}}} ->
             result_listener_done(Results ++ Acc)
     after 5000 ->
