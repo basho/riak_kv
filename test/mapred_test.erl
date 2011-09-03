@@ -49,7 +49,8 @@ dep_apps() ->
              put(old_sasl_l, app_helper:get_env(sasl, sasl_error_logger)),
              ok = application:set_env(sasl, sasl_error_logger, {file, DelMe}),
              ok = application:start(sasl),
-             error_logger:tty(false);
+             %%error_logger:tty(false);
+             error_logger:tty(true);
         (stop) ->
              ok = application:stop(sasl),
              ok = application:set_env(sasl, sasl_error_logger, erase(old_sasl_l));
