@@ -192,9 +192,7 @@ init([Index]) ->
             IndexBackend = lists:member(indexes, Capabilities),
             AsyncBackend = AsyncFolding andalso
                 lists:member(async_fold, Capabilities),
-            %% Create worker pool initialization tuple
-            FoldWorkerPool = {pool, riak_kv_fold_worker, 10, []},
-            {ok, #state{idx=Index,
+            State = #state{idx=Index,
                         async_backend=AsyncBackend,
                         index_backend=IndexBackend,
                         mod=Mod,
@@ -202,7 +200,15 @@ init([Index]) ->
                         bucket_buf_size=BucketBufSize,
                         index_buf_size=IndexBufSize,
                         key_buf_size=KeyBufSize,
-                        mrjobs=dict:new()}, [FoldWorkerPool]};
+                        mrjobs=dict:new()},
+            case AsyncBackend of
+                true ->
+                    %% Create worker pool initialization tuple
+                    FoldWorkerPool = {pool, riak_kv_fold_worker, 10, []},
+                    {ok, State, [FoldWorkerPool]};
+                false ->
+                    {ok, State}
+            end;
         {error, Reason} ->
             lager:error("Failed to start ~p Reason: ~p",
                         [Mod, Reason]),
@@ -950,7 +956,7 @@ eleveldb_test_dir() ->
 
 backend_with_known_key(BackendMod) ->
     dummy_backend(BackendMod),
-    {ok, S1, _} = init([0]),
+    {ok, S1} = init([0]),
     B = <<"f">>,
     K = <<"b">>,
     O = riak_object:new(B, K, <<"z">>),
