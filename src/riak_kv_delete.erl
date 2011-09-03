@@ -178,6 +178,7 @@ get_w_options(Bucket, Options) ->
 -ifdef(TEST).
 
 delete_test_() ->
+    cleanup(ignored_arg),
     %% Execute the test cases
     { foreach, 
       fun setup/0,
@@ -313,8 +314,8 @@ cleanup(_Pid) ->
     do_dep_apps(stop, lists:reverse(dep_apps())),
     catch exit(whereis(riak_kv_vnode_master), kill), %% Leaks occasionally
     catch exit(whereis(riak_sysmon_filter), kill), %% Leaks occasionally
-    unlink(whereis(riak_kv_get_fsm_sup)),
-    unlink(whereis(riak_kv_delete_sup)),
+    catch unlink(whereis(riak_kv_get_fsm_sup)),
+    catch unlink(whereis(riak_kv_delete_sup)),
     catch exit(whereis(riak_kv_get_fsm_sup), kill), %% Leaks occasionally
     catch exit(whereis(riak_kv_delete_sup), kill), %% Leaks occasionally
     net_kernel:stop(),

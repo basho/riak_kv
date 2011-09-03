@@ -41,7 +41,8 @@ dep_apps() ->
                    {pb_port, 48087}, % arbitrary #
                    {map_js_vm_count, 4},
                    {reduce_js_vm_count, 3}],
-    [fun(start) ->
+    [
+     fun(start) ->
              net_kernel:start([mapred_test@localhost]),
              timer:sleep(50),
              _ = application:stop(sasl),
@@ -70,6 +71,7 @@ dep_apps() ->
              KillDamnFilterProc()
      end,
      webmachine,
+     os_mon,
      fun(start) ->
              _ = application:load(riak_core),
              %% riak_core_handoff_listener uses {reusaddr, true}, but
@@ -94,7 +96,6 @@ dep_apps() ->
      erlang_js,
      inets,
      mochiweb,
-     os_mon,
      fun(start) ->
              Ring = riak_core_ring:fresh(16, node()),
              riak_core_ring_manager:set_ring_global(Ring),
