@@ -33,7 +33,7 @@ check() ->
 -define(B, <<"b">>).
 -define(K, <<"k">>).
 
-                                                %-define(FINALDBG(Fmt,Args), io:format("= " ++ Fmt, Args)).
+%%-define(FINALDBG(Fmt,Args), io:format("= " ++ Fmt, Args)).
 -define(FINALDBG(_Fmt,_Args), ok).
 
 %% Client requests must be processed in sequence.
