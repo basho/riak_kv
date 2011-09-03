@@ -440,8 +440,9 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
         false ->
             PruneTime = StartTime
     end,
-    PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false),
-                       coord=proplists:get_value(coord, Options, false),
+    Coord = proplists:get_value(coord, Options, false),
+    PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
+                       coord=Coord,
                        lww=proplists:get_value(last_write_wins, BProps, false),
                        bkey=BKey,
                        robj=RObj,
