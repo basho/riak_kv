@@ -183,12 +183,13 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
             %% This node is not in the preference list
             %% forward on to the first node
             [{{_Idx, CoordNode},_Type}|_] = Preflist2,
-            %% io:format(user, "Forwarding ~p to coordinator on ~p\n", [BKey, CoordNode]),
             case riak_kv_put_fsm_sup:start_put_fsm(CoordNode, [From, RObj, Options]) of
                 {ok, _Pid} ->
                     riak_kv_stat:update(coord_redir),
                     {stop, normal, StateData0};
                 {error, Reason} ->
+                    lager:error("Unable to forward put for ~p to ~p - ~p\n",
+                                [BKey, CoordNode, Reason]),
                     process_reply({error, {coord_handoff_failed, Reason}}, StateData0)
             end;
         [CoordPLEntry|_] ->
