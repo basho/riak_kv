@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -18,7 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc This module uses the riak_core_vnode_worker behavior to perform 
+%% @doc This module uses the riak_core_vnode_worker behavior to perform
 %% different riak_kv fold tasks asynchronously.
 
 -module(riak_kv_fold_worker).
@@ -50,7 +50,7 @@ handle_work({Bucket, [FoldFun | RestFoldFuns]}, From, State) ->
                       {break, AccFinal} ->
                           AccFinal
                   end,
-    case FoldResults of 
+    case FoldResults of
         {Acc, _} ->
             ok;
         Acc ->
@@ -58,12 +58,10 @@ handle_work({Bucket, [FoldFun | RestFoldFuns]}, From, State) ->
     end,
     case RestFoldFuns of
         [] ->
-            riak_kv_fold_buffer:flush(Acc,
-                                      get_buffer_fun({true, Bucket}, From)),
+            riak_kv_fold_util:finish_fold({ok, Acc}, Bucket, From),
             {noreply, State};
         _ ->
-            riak_kv_fold_buffer:flush(Acc,
-                                      get_buffer_fun({false, Bucket}, From)),
+            riak_kv_fold_util:flush_buffer(Acc, Bucket, From),
             handle_work({Bucket, RestFoldFuns}, From, State)
     end;
 handle_work({Bucket, FoldFun}, From, State) ->
@@ -73,8 +71,7 @@ handle_work({Bucket, FoldFun}, From, State) ->
               {break, AccFinal} ->
                   AccFinal
           end,
-    riak_kv_fold_buffer:flush(Acc,
-                              get_buffer_fun({true, Bucket}, From)),
+    riak_kv_fold_util:finish_fold({ok, Acc}, Bucket, From),
     {noreply, State};
 handle_work([FoldFun | RestFoldFuns], From, State) ->
     FoldResults = try
@@ -83,7 +80,7 @@ handle_work([FoldFun | RestFoldFuns], From, State) ->
                       {break, AccFinal} ->
                           AccFinal
                   end,
-    case FoldResults of 
+    case FoldResults of
         {Acc, _} ->
             ok;
         Acc ->
@@ -91,10 +88,10 @@ handle_work([FoldFun | RestFoldFuns], From, State) ->
     end,
     case RestFoldFuns of
         [] ->
-            riak_kv_fold_buffer:flush(Acc, get_buffer_fun(true, From)),
+            riak_kv_fold_util:finish_fold({ok, Acc}, From),
             {noreply, State};
         _ ->
-            riak_kv_fold_buffer:flush(Acc, get_buffer_fun(false, From)),
+            riak_kv_fold_util:flush_buffer(Acc, From),
             handle_work(RestFoldFuns, From, State)
     end;
 handle_work(FoldFun, From, State) ->
@@ -104,37 +101,11 @@ handle_work(FoldFun, From, State) ->
                       {break, AccFinal} ->
                           AccFinal
                   end,
-    case FoldResults of 
+    case FoldResults of
         {Acc, _} ->
             ok;
         Acc ->
             ok
     end,
-    riak_kv_fold_buffer:flush(Acc, get_buffer_fun(true, From)),
+    riak_kv_fold_util:finish_fold({ok, Acc}, From),
     {noreply, State}.
-
-%% ===================================================================
-%% Internal functions
-%% ===================================================================
-    
-%% @private
-get_buffer_fun(true, Sender) ->
-    fun(Results) ->
-            riak_core_vnode:reply(Sender,
-                                  {final_results, Results})
-    end;
-get_buffer_fun(false, Sender) ->
-    fun(Results) ->
-            riak_core_vnode:reply(Sender,
-                                  {results, Results})
-    end;
-get_buffer_fun({true, Bucket}, Sender) ->
-    fun(Results) ->
-            riak_core_vnode:reply(Sender,
-                                  {final_results, {Bucket, Results}})
-    end;
-get_buffer_fun({false, Bucket}, Sender) ->
-    fun(Results) ->
-            riak_core_vnode:reply(Sender,
-                                  {results, {Bucket, Results}})
-    end.
