@@ -194,7 +194,7 @@ pipe_collect_outputs(Pipe, NumKeeps, Sender) ->
 pipe_collect_outputs1(Ref, Sender, Acc) ->
     case pipe_receive_output(Ref, Sender) of
         {ok, Output} -> pipe_collect_outputs1(Ref, Sender, [Output|Acc]);
-        eoi          -> {ok, Acc};
+        eoi          -> {ok, lists:reverse(Acc)};
         Error        -> Error
     end.
 
