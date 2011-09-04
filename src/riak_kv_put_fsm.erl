@@ -40,7 +40,6 @@
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
 -export([prepare/2, validate/2, precommit/2,
-         execute_local/2,
          waiting_local_vnode/2,
          waiting_remote_vnode/2,
          postcommit/2, finish/2]).
@@ -62,8 +61,11 @@
         %% Prevent precommit/postcommit hooks from running
         disable_hooks |
         %% Request additional details about request added as extra
-        %% element at the end of result tuplezd
-        {details, detail()}.
+        %% element at the end of result tuple
+        {details, detail()} |
+        %% Put the value as-is, do not increment the vclocks
+        %% to make the value a frontier.
+        asis.
 
 -type options() :: [option()].
 
@@ -177,9 +179,11 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
     %% Check if this node is in the preference list so it can coordinate
-    case ([IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
-                        Node == node()]) of
-        [] ->
+    LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
+                        Node == node()],
+    Must = (get_option(asis, Options, false) /= true),
+    case (LocalPL =:= [] andalso Must == true) of
+        true ->
             %% This node is not in the preference list
             %% forward on to the first node
             [{{_Idx, CoordNode},_Type}|_] = Preflist2,
@@ -192,7 +196,13 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                 [BKey, CoordNode, Reason]),
                     process_reply({error, {coord_handoff_failed, Reason}}, StateData0)
             end;
-        [CoordPLEntry|_] ->
+        _ ->
+            CoordPLEntry = case Must of
+                               true ->
+                                   hd(LocalPL);
+                               _ ->
+                                   undefined
+                           end,
             %% This node is in the preference list, continue
             StartTime = riak_core_util:moment(),
             StateData = StateData0#state{n = N,
@@ -269,7 +279,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
             StateData = init_putcore(StateData3),
             case Precommit of
                 [] -> % Nothing to run, spare the timing code
-                    new_state_timeout(execute_local, StateData);
+                    execute(StateData);
                 _ ->
                     new_state_timeout(precommit, StateData)
             end
@@ -277,7 +287,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
 
 %% Run the precommit hooks
 precommit(timeout, State = #state{precommit = []}) ->
-    new_state_timeout(execute_local, State);
+    execute(State);
 precommit(timeout, State = #state{precommit = [Hook | Rest], robj = RObj}) ->
     Result = decode_precommit(invoke_hook(Hook, RObj)),
     case Result of
@@ -290,17 +300,31 @@ precommit(timeout, State = #state{precommit = [Hook | Rest], robj = RObj}) ->
                                                 precommit = Rest}, 0}
     end.
 
-execute_local(timeout, StateData0=#state{robj=RObj, req_id = ReqId,
-                                         timeout=Timeout, bkey=BKey,
-                                         coord_pl_entry = {_Index, _Node} = CoordPLEntry,
-                                         vnode_options=VnodeOptions,
-                                         starttime = StartTime}) ->
+%% @private
+execute(State=#state{coord_pl_entry = CPL}) ->
+    case CPL of
+        undefined ->
+            execute_remote(State);
+        _ ->
+            execute_local(State)
+    end.
+
+%% @private
+%% Send the put coordinating put requests to the local vnode - the returned object
+%% will guarantee a frontier object.
+%% N.B. Not actually a state - here in the source to make reading the flow easier
+execute_local(StateData=#state{robj=RObj, req_id = ReqId,
+                                timeout=Timeout, bkey=BKey,
+                                coord_pl_entry = {_Index, _Node} = CoordPLEntry,
+                                vnode_options=VnodeOptions,
+                                starttime = StartTime}) ->
+    StateData1 = add_timing(execute_local, StateData),
     TRef = schedule_timeout(Timeout),
     riak_kv_vnode:coord_put(CoordPLEntry, BKey, RObj, ReqId, StartTime, VnodeOptions),
-    StateData = StateData0#state{robj = RObj, tref = TRef},
+    StateData2 = StateData1#state{robj = RObj, tref = TRef},
     %% Must always wait for local vnode - it contains the object with updated vclock
     %% to use for the remotes. (Ignore optimization for N=1 case for now).
-    new_state(waiting_local_vnode, StateData).
+    new_state(waiting_local_vnode, StateData2).
 
 %% @private
 waiting_local_vnode(request_timeout, StateData) ->
@@ -322,6 +346,29 @@ waiting_local_vnode(Result, StateData = #state{putcore = PutCore}) ->
             %% Write succeeded without changes to vclock required and returnbody false
             execute_remote(StateData#state{putcore = UpdPutCore1})
     end.
+
+%% @private
+%% Send the put requests to any remote nodes if necessary and decided if 
+%% enough responses have been received yet (i.e. if W/DW=1)
+%% N.B. Not actually a state - here in the source to make reading the flow easier
+execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
+                                preflist2 = Preflist2, bkey=BKey,
+                                coord_pl_entry = CoordPLEntry,
+                                vnode_options=VnodeOptions,
+                                putcore=PutCore,
+                                starttime = StartTime}) ->
+    StateData1 = add_timing(execute_remote, StateData),
+    Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2,
+                             IndexNode /= CoordPLEntry],
+    riak_kv_vnode:put(Preflist, BKey, RObj, ReqId, StartTime, VnodeOptions),
+    case riak_kv_put_core:enough(PutCore) of
+        true ->
+            {Reply, UpdPutCore} = riak_kv_put_core:response(PutCore),
+            process_reply(Reply, StateData#state{putcore = UpdPutCore});
+        false ->
+            new_state(waiting_remote_vnode, StateData1)
+    end.
+
 
 %% @private
 waiting_remote_vnode(request_timeout, StateData) ->
@@ -429,26 +476,6 @@ process_reply(Reply, StateData = #state{postcommit = PostCommit,
             new_state_timeout(finish, StateData2)
     end.
 
-
-%% @private
-%% Send the put requests to any remote nodes if necessary and decided if 
-%% enough responses have been received yet (i.e. if W/DW=1)
-execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
-                                preflist2 = Preflist2, bkey=BKey,
-                                coord_pl_entry = CoordPLEntry,
-                                vnode_options=VnodeOptions,
-                                putcore=PutCore,
-                                starttime = StartTime}) ->
-    Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2,
-                             IndexNode /= CoordPLEntry],
-    riak_kv_vnode:put(Preflist, BKey, RObj, ReqId, StartTime, VnodeOptions),
-    case riak_kv_put_core:enough(PutCore) of
-        true ->
-            {Reply, UpdPutCore} = riak_kv_put_core:response(PutCore),
-            process_reply(Reply, StateData#state{putcore = UpdPutCore});
-        false ->
-            new_state(waiting_remote_vnode, StateData)
-    end.
 
 %%
 %% Given an expanded proplist of options, take the first entry for any given key
