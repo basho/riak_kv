@@ -68,6 +68,16 @@ setup() ->
     TestNode = list_to_atom("testnode" ++ integer_to_list(element(3, now()))),
     net_kernel:start([TestNode, shortnames]),
     do_dep_apps(start, dep_apps()),
+
+    %% Create a fresh ring for the test
+    riak_core_ring_manager:ring_trans(
+      fun(R0, _Args) ->
+              R1 = riak_core_ring:add_member(node(), R0, node()),
+              R2 = lists:foldl(fun({I, _OldNode}, RAcc) ->
+                                       riak_core_ring:transfer_node(I, node(), RAcc)
+                               end, R1, riak_core_ring:all_owners(R0)),
+              {new_ring, R2}
+      end, undefined),
     ok.
 
 cleanup(_) ->
@@ -110,6 +120,7 @@ prop_basic_listkeys() ->
                %% Create objects in bucket
                GeneratedKeys = [list_to_binary(integer_to_list(X)) || X <- lists:seq(1, ObjectCount)],
                [ok = Client:put(riak_object:new(Bucket, Key, <<"val">>)) || Key <- GeneratedKeys],
+
                %% Set the expected output based on if a
                %% key filter is being used or not.
                case KeyFilter of
@@ -129,7 +140,7 @@ prop_basic_listkeys() ->
                end,
                %% Call start_link
                Keys = start_link(ReqId, Bucket, KeyFilter, Timeout, ClientType),
-               ?WHENFAIL(
+              ?WHENFAIL(
                   begin
                       io:format("Bucket: ~p n_val: ~p ObjectCount: ~p KeyFilter: ~p~n", [Bucket, NVal, ObjectCount, KeyFilter]),
                       io:format("Expected Key Count: ~p Actual Key Count: ~p~n",
@@ -221,9 +232,6 @@ dep_apps() ->
             %% part of release packaging.
             application:set_env(riak_core, ring_creation_size, 64),
             application:set_env(riak_kv, storage_backend, riak_kv_memory_backend),
-            %% Create a fresh ring for the test
-            Ring = riak_core_ring:fresh(),
-            riak_core_ring_manager:set_ring_global(Ring),
 
             %% Start riak_kv
             timer:sleep(500);
