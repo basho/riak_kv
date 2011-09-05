@@ -145,7 +145,7 @@ read_and_restore_function(Client, BinTerm) ->
     Obj1 = make_binary_bucket(Bucket, Key, Obj),
 
     %% Store the object; be sure to tell the FSM not to update last modified!
-    Response = Client:put(Obj1,1,1,1200000, [{update_last_modified, false}]),
+    Response = Client:put(Obj1,1,1,1200000, [asis,{update_last_modified, false}]),
     {continue, Response}.
    
 %%% DATA CLEANING %%% 

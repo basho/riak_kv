@@ -32,6 +32,7 @@
          mget/3,
          del/3,
          put/6,
+         coord_put/6,
          readrepair/6,
          index_query/7,
          list_buckets/5,
@@ -61,6 +62,7 @@
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-export([put_merge/6]). %% For fsm_eqc_vnode
 -endif.
 
 -record(mrjob, {cachekey :: term(),
@@ -73,6 +75,7 @@
                 mod :: module(),
                 modstate :: term(),
                 mrjobs :: term(),
+                vnodeid :: undefined | binary(),
                 bucket_buf_size :: pos_integer(),
                 index_buf_size :: pos_integer(),
                 key_buf_size :: pos_integer(),
@@ -82,6 +85,7 @@
 -type index_value() :: integer() | binary().
 
 -record(putargs, {returnbody :: boolean(),
+                  coord:: boolean(),
                   lww :: boolean(),
                   bkey :: {binary(), binary()},
                   robj :: term(),
@@ -141,6 +145,23 @@ put(Preflist, BKey, Obj, ReqId, StartTime, Options, Sender)
                                    Sender,
                                    riak_kv_vnode_master).
 
+%% Issue a put for the object to the preflist, expecting a reply
+%% to an FSM.
+coord_put(IndexNode, BKey, Obj, ReqId, StartTime, Options) when is_integer(StartTime) ->
+    coord_put(IndexNode, BKey, Obj, ReqId, StartTime, Options, {fsm, undefined, self()}).
+
+coord_put(IndexNode, BKey, Obj, ReqId, StartTime, Options, Sender)
+  when is_integer(StartTime) ->
+    riak_core_vnode_master:command(IndexNode,
+                                   ?KV_PUT_REQ{
+                                      bkey = BKey,
+                                      object = Obj,
+                                      req_id = ReqId,
+                                      start_time = StartTime,
+                                      options = [coord | Options]},
+                                   Sender,
+                                   riak_kv_vnode_master).
+
 %% Do a put without sending any replies
 readrepair(Preflist, BKey, Obj, ReqId, StartTime, Options) ->
     put(Preflist, BKey, Obj, ReqId, StartTime, [rr | Options], ignore).
@@ -181,6 +202,7 @@ init([Index]) ->
     BucketBufSize = app_helper:get_env(riak_kv, bucket_buffer_size, 1000),
     IndexBufSize = app_helper:get_env(riak_kv, index_buffer_size, 100),
     KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
+    {ok, VId} = get_vnodeid(Index),
 
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
@@ -191,6 +213,7 @@ init([Index]) ->
                         index_backend=IndexBackend,
                         mod=Mod,
                         modstate=ModState,
+                        vnodeid=VId,
                         bucket_buf_size=BucketBufSize,
                         index_buf_size=IndexBufSize,
                         key_buf_size=KeyBufSize,
@@ -355,7 +378,10 @@ encode_handoff_item({B, K}, V) ->
 is_empty(State=#state{mod=Mod, modstate=ModState}) ->
     {Mod:is_empty(ModState), State}.
 
-delete(State=#state{mod=Mod, modstate=ModState}) ->
+delete(State=#state{idx=Index,mod=Mod, modstate=ModState}) ->
+    %% clear vnodeid first, if drop removes data but fails
+    %% want to err on the side of creating a new vnodeid
+    {ok, cleared} = clear_vnodeid(Index),
     case Mod:drop(ModState) of
         {ok, UpdModState} ->
             ok;
@@ -363,7 +389,7 @@ delete(State=#state{mod=Mod, modstate=ModState}) ->
             lager:error("Failed to drop ~p. Reason: ~p~n", [Mod, Reason]),
             ok
     end,
-    {ok, State#state{modstate=UpdModState}}.
+    {ok, State#state{modstate=UpdModState,vnodeid=undefined}}.
 
 terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
@@ -379,6 +405,7 @@ handle_exit(_Pid, Reason, State) ->
     %% queue and never being processed.
     lager:error("Linked process exited. Reason: ~p", [Reason]),
     {stop, linked_process_crash, State}.
+
 
 %% @private
 %% upon receipt of a client-initiated put
@@ -396,7 +423,9 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
         false ->
             PruneTime = StartTime
     end,
-    PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false),
+    Coord = proplists:get_value(coord, Options, false),
+    PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
+                       coord=Coord,
                        lww=proplists:get_value(last_write_wins, BProps, false),
                        bkey=BKey,
                        robj=RObj,
@@ -410,15 +439,17 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     riak_kv_stat:update(vnode_put),
     UpdState.
 
-prepare_put(#state{index_backend=false}, PutArgs=#putargs{lww=true, robj=RObj}) ->
-    {{true, RObj}, PutArgs};
+prepare_put(#state{index_backend=false, vnodeid=VId}, 
+            PutArgs=#putargs{lww=true, robj=RObj, starttime=StartTime}) ->
+    {{true, riak_object:increment_vclock(RObj, VId, StartTime)}, PutArgs};
 prepare_put(#state{index_backend=IndexBackend,
+                   vnodeid=VId,
                    mod=Mod,
                    modstate=ModState},
             PutArgs=#putargs{bkey={Bucket, Key},
                              robj=RObj,
-                             reqid=ReqID,
                              bprops=BProps,
+                             coord=Coord,
                              lww=LWW,
                              starttime=StartTime,
                              prunetime=PruneTime}) ->
@@ -430,10 +461,16 @@ prepare_put(#state{index_backend=IndexBackend,
                 false ->
                     IndexSpecs = []
             end,
-            {{true, RObj}, PutArgs#putargs{index_specs=IndexSpecs}};
+            ObjToStore = case Coord of
+                             true ->
+                                 riak_object:increment_vclock(RObj, VId, StartTime);
+                             false ->
+                                 RObj
+                         end,
+            {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs}};
         {ok, Val, _UpdModState} ->
             OldObj = binary_to_term(Val),
-            case syntactic_put_merge(OldObj, RObj, ReqID, LWW, StartTime) of
+            case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs};
                 {newobj, NewObj} ->
@@ -521,20 +558,33 @@ select_newest_content(Mult) ->
          Mult)).
 
 %% @private
-syntactic_put_merge(Obj0, Obj1, ReqId, LastWriteWins) ->
-    syntactic_put_merge(Obj0, Obj1, ReqId, LastWriteWins, vclock:timestamp()).
-
-syntactic_put_merge(Obj0, Obj1, ReqId, LastWriteWins, StartTime) ->
-    ResObj = riak_object:syntactic_merge(Obj0,
-                                         Obj1,
-                                         term_to_binary(ReqId),
-                                         StartTime),
-    case not LastWriteWins andalso
-        riak_object:vclock(ResObj) =:= riak_object:vclock(Obj0) of
+put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
+    {newobj, UpdObj};
+put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
+    ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
+    case ResObj =:= CurObj of
         true ->
-            {oldobj, ResObj};
+            {oldobj, CurObj};
         false ->
             {newobj, ResObj}
+    end;
+put_merge(true, true, _CurObj, UpdObj, VId, StartTime) -> % coord=false, LWW=true
+    {newobj, riak_object:increment_vclock(UpdObj, VId, StartTime)};
+put_merge(true, false, CurObj, UpdObj, VId, StartTime) -> 
+    UpdObj1 = riak_object:increment_vclock(UpdObj, VId, StartTime),
+    UpdVC = riak_object:vclock(UpdObj1),
+    CurVC = riak_object:vclock(CurObj),
+
+    %% Check the coord put will replace the existing object
+    case vclock:get_counter(VId, UpdVC) > vclock:get_counter(VId, CurVC) andalso
+        vclock:descends(CurVC, UpdVC) == false andalso 
+        vclock:descends(UpdVC, CurVC) == true of
+        true ->
+            {newobj, UpdObj1};
+        false ->
+            %% If not, make sure it does
+            {newobj, riak_object:increment_vclock(
+                       riak_object:merge(CurObj, UpdObj1), VId, StartTime)}
     end.
 
 %% @private
@@ -838,7 +888,6 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                _StateData=#state{index_backend=IndexBackend,
                                  mod=Mod,
                                  modstate=ModState}) ->
-    ReqID = erlang:phash2(erlang:now()),
     case Mod:get(Bucket, Key, ModState) of
         {error, not_found, _UpdModState} ->
             case IndexBackend of
@@ -856,7 +905,10 @@ do_diffobj_put({Bucket, Key}, DiffObj,
             Res;
         {ok, Val0, _UpdModState} ->
             OldObj = binary_to_term(Val0),
-            case syntactic_put_merge(OldObj, DiffObj, ReqID, false) of
+            %% Merge handoff values with the current - possibly discarding
+            %% if out of date.  Ok to set VId/Starttime undefined as
+            %% they are not used for non-coordinating puts.
+            case put_merge(false, false, OldObj, DiffObj, undefined, undefined) of
                 {oldobj, _} ->
                     {ok, ModState};
                 {newobj, NewObj} ->
@@ -879,7 +931,181 @@ do_diffobj_put({Bucket, Key}, DiffObj,
 
 %% @private
 
+%% Get the vnodeid, assigning and storing if necessary
+get_vnodeid(Index) ->
+    F = fun(Status) ->
+                case proplists:get_value(vnodeid, Status, undefined) of
+                    undefined ->
+                        assign_vnodeid(os:timestamp(), 
+                                       riak_core_nodeid:get(),
+                                       Status);
+                    VnodeId ->
+                        {VnodeId, Status}
+                end
+        end,
+    update_vnode_status(F, Index). % Returns {ok, VnodeId} | {error, Reason}
+
+%% Assign a unique vnodeid, making sure the timestamp is unique by incrementing
+%% into the future if necessary.
+assign_vnodeid(Now, NodeId, Status) ->
+    {Mega, Sec, _Micro} = Now,
+    NowEpoch = 1000000*Mega + Sec,
+    LastVnodeEpoch = proplists:get_value(last_epoch, Status, 0),
+    VnodeEpoch = erlang:max(NowEpoch, LastVnodeEpoch+1),
+    VnodeId = <<NodeId/binary, VnodeEpoch:32/integer>>,
+    UpdStatus = [{vnodeid, VnodeId}, {last_epoch, VnodeEpoch} | 
+                 proplists:delete(vnodeid, 
+                   proplists:delete(last_epoch, Status))],
+    {VnodeId, UpdStatus}.
+                
+%% Clear the vnodeid - returns {ok, cleared}
+clear_vnodeid(Index) ->
+    F = fun(Status) ->
+                {cleared, proplists:delete(vnodeid, Status)}
+        end,
+    update_vnode_status(F, Index). % Returns {ok, VnodeId} | {error, Reason}
+
+update_vnode_status(F, Index) ->
+    VnodeFile = vnode_status_filename(Index),
+    ok = filelib:ensure_dir(VnodeFile),
+    case read_vnode_status(VnodeFile) of
+        {ok, Status} ->
+            update_vnode_status2(F, Status, VnodeFile);
+        {error, enoent} ->
+            update_vnode_status2(F, [], VnodeFile);
+        ER ->
+            ER
+    end.
+
+update_vnode_status2(F, Status, VnodeFile) ->
+    case F(Status) of
+        {Ret, Status} -> % No change
+            {ok, Ret};
+        {Ret, UpdStatus} ->
+            case write_vnode_status(UpdStatus, VnodeFile) of
+                ok ->
+                    {ok, Ret};
+                ER ->
+                    ER
+            end
+    end.
+ 
+vnode_status_filename(Index) ->
+    VnodeStatusDir = app_helper:get_env(riak_kv, vnode_status, "data/kv_vnode"),
+    filename:join(VnodeStatusDir, integer_to_list(Index)).
+    
+read_vnode_status(File) ->
+    case file:consult(File) of
+        {ok, [Status]} when is_list(Status) ->
+            {ok, proplists:delete(version, Status)};
+        ER ->
+            ER
+    end.
+
+write_vnode_status(Status, File) ->
+    VersionedStatus = [{version, 1} | proplists:delete(version, Status)],
+    TmpFile = File ++ "~",
+    case file:write_file(TmpFile, io_lib:format("~p.", [VersionedStatus])) of
+        ok ->
+            file:rename(TmpFile, File);
+        ER ->
+            ER
+    end.
+
 -ifdef(TEST).
+
+%% Check assigning a vnodeid twice in the same second
+assign_vnodeid_restart_same_ts_test() ->
+    Now1 = {1314,224520,343446}, %% TS=1314224520
+    Now2 = {1314,224520,345865}, %% as unsigned net-order int <<78,85,121,136>>
+    NodeId = <<1, 2, 3, 4>>,
+    {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
+    ?assertEqual(<<1, 2, 3, 4, 78, 85, 121, 136>>, Vid1),
+    %% Simulate clear
+    Status2 = proplists:delete(vnodeid, Status1),
+    %% Reassign
+    {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
+    ?assertEqual(<<1, 2, 3, 4, 78, 85, 121, 137>>, Vid2).
+
+%% Check assigning a vnodeid with a later date
+assign_vnodeid_restart_later_ts_test() ->
+    Now1 = {1000,000000,0}, %% <<59,154,202,0>>
+    Now2 = {2000,000000,0}, %% <<119,53,148,0>>
+    NodeId = <<1, 2, 3, 4>>,
+    {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
+    ?assertEqual(<<1, 2, 3, 4, 59,154,202,0>>, Vid1),
+    %% Simulate clear
+    Status2 = proplists:delete(vnodeid, Status1),
+    %% Reassign
+    {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
+    ?assertEqual(<<1, 2, 3, 4, 119,53,148,0>>, Vid2).
+
+%% Check assigning a vnodeid with a later date - just in case of clock skew
+assign_vnodeid_restart_earlier_ts_test() ->
+    Now1 = {2000,000000,0}, %% <<119,53,148,0>>
+    Now2 = {1000,000000,0}, %% <<59,154,202,0>>
+    NodeId = <<1, 2, 3, 4>>,
+    {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
+    ?assertEqual(<<1, 2, 3, 4, 119,53,148,0>>, Vid1),
+    %% Simulate clear
+    Status2 = proplists:delete(vnodeid, Status1),
+    %% Reassign
+    %% Should be greater than last offered - which is the 2mil timestamp
+    {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
+    ?assertEqual(<<1, 2, 3, 4, 119,53,148,1>>, Vid2).
+        
+%% Test 
+vnode_status_test_() ->
+    {setup,
+     fun() ->
+             os:cmd("chmod u+rwx kv_vnode_status_test"),
+             os:cmd("rm -rf kv_vnode_status_test"),
+             application:set_env(riak_kv, vnode_status, "kv_vnode_status_test"),
+             ok
+     end,
+     fun(_) ->
+             application:unset_env(riak_kv, vnode_status),
+             ?cmd("chmod u+rwx kv_vnode_status_test"),
+             ?cmd("rm -rf kv_vnode_status_test"),
+             ok
+     end,
+     [?_test(begin % initial create failure
+                 ?cmd("rm -rf kv_vnode_status_test || true"),
+                 ?cmd("mkdir kv_vnode_status_test"),
+                 ?cmd("chmod -w kv_vnode_status_test"),
+                 F = fun([]) ->
+                             {shouldfail, [badperm]}
+                     end,
+                 Index = 0,
+                 ?assertEqual({error, eacces},  update_vnode_status(F, Index))
+             end),
+      ?_test(begin % create successfully
+                 ?cmd("chmod +w kv_vnode_status_test"),
+
+                 F = fun([]) ->
+                             {created, [created]}
+                     end,
+                 Index = 0,
+                 ?assertEqual({ok, created}, update_vnode_status(F, Index))
+             end),
+      ?_test(begin % update successfully
+                 F = fun([created]) ->
+                             {updated, [updated]}
+                     end,
+                 Index = 0,
+                 ?assertEqual({ok, updated}, update_vnode_status(F, Index))
+             end),
+      ?_test(begin % update failure
+                 ?cmd("chmod 000 kv_vnode_status_test/0"),
+                 ?cmd("chmod 500 kv_vnode_status_test"),
+                 F = fun([updated]) ->
+                             {shouldfail, [updatedagain]}
+                     end,
+                 Index = 0,
+                 ?assertEqual({error, eacces},  update_vnode_status(F, Index))
+            end)
+
+     ]}.
 
 dummy_backend(BackendMod) ->
     Ring = riak_core_ring:fresh(16,node()),
