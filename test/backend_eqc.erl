@@ -192,7 +192,7 @@ next_state_data(_From, _To, S, R, {call, _M, init_backend, _}) ->
     S#qcst{s=R};
 next_state_data(_From, _To, S, _R, {call, _M, put, [Bucket, Key, [], Val, _]}) ->
     S#qcst{d = orddict:store({Bucket, Key}, Val, S#qcst.d)};
-next_state_data(_From, _To, S, _R, {call, _M, delete, [Bucket, Key, _]}) ->
+next_state_data(_From, _To, S, _R, {call, _M, delete, [Bucket, Key, [], _]}) ->
     S#qcst{d = orddict:erase({Bucket, Key}, S#qcst.d)};
 next_state_data(_From, _To, S, R, {call, ?MODULE, drop, _}) ->
     S#qcst{d=orddict:new(), s=R};
@@ -210,7 +210,7 @@ running(#qcst{backend=Backend,
     [
      {history, {call, Backend, put, [bucket(), key(), [], val(), State]}},
      {history, {call, Backend, get, [bucket(), key(), State]}},
-     {history, {call, Backend, delete, [bucket(), key(), State]}},
+     {history, {call, Backend, delete, [bucket(), key(), [], State]}},
      {history, {call, Backend, fold_buckets, [fold_buckets_fun(), [], [], State]}},
      {history, {call, Backend, fold_keys, [fold_keys_fun(), [], [], State]}},
      {history, {call, Backend, fold_objects, [fold_objects_fun(), [], [], State]}},
@@ -231,10 +231,10 @@ postcondition(_From, _To, S, _C={call, _M, get, [Bucket, Key, _BeState]}, R) ->
             {ok, Val} =:= Res
     end;
 postcondition(_From, _To, _S,
-              {call, _M, put, [_Bucket, _Key, _Val, _BeState]}, {R, _RState}) ->
+              {call, _M, put, [_Bucket, _Key, _IndexEntries, _Val, _BeState]}, {R, _RState}) ->
     R =:= ok orelse R =:= already_exists;
 postcondition(_From, _To, _S,
-              {call, _M, delete,[_Bucket, _Key, _BeState]}, {R, _RState}) ->
+              {call, _M, delete,[_Bucket, _Key, _IndexEntries, _BeState]}, {R, _RState}) ->
     R =:= ok;
 postcondition(_From, _To, S,
               {call, _M, fold_buckets, [_FoldFun, _Acc, _Opts, _BeState]}, {ok, R}) ->
