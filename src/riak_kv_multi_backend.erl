@@ -110,7 +110,7 @@ start(Partition, Config) ->
             {First, _, _} = hd(Defs),
 
             %% Check if async folds have been disabled
-            AsyncFolds = config_value(async_folds, Config, true),
+            AsyncFolds = false,
             %% Get the default
             DefaultBackend = config_value(multi_backend_default, Config, First),
             case lists:keymember(DefaultBackend, 1, Defs) of

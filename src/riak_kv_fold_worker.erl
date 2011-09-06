@@ -53,42 +53,40 @@ handle_work({fold, FoldFun}, _From, State) ->
     {reply, Acc, State};
 handle_work({fold, SyncResults, []}, _From, State) ->
     SyncFoldFun = 
-        fun(SyncResult, Acc0) ->
-                Acc0 ++ SyncResult
+        fun(SyncResult, _) ->
+                SyncResult
         end,
     Acc = lists:foldl(SyncFoldFun, [], SyncResults),
     {reply, Acc, State};
 handle_work({fold, [], AsyncWork}, _From, State) ->
     AsyncFoldFun =
-        fun(FoldFun, Acc0) ->
-                FoldResults = try
-                                  FoldFun()
-                              catch
-                                  {break, AccFinal} ->
-                                      AccFinal
-                              end,
-                Acc0 ++ FoldResults
+        fun(FoldFun, _) ->
+                try
+                    FoldFun()
+                catch
+                    {break, AccFinal} ->
+                        AccFinal
+                end
         end,
     Acc = lists:foldl(AsyncFoldFun, [], AsyncWork),
     {reply, Acc, State};
 handle_work({fold, SyncResults, AsyncWork}, _From, State) ->
     SyncFoldFun = 
-        fun(SyncResult, Acc0) ->
-                Acc0 ++ SyncResult
+        fun(SyncResult,_) ->
+                SyncResult
         end,
     AsyncFoldFun =
-        fun(FoldFun, Acc0) ->
-                FoldResults = try
-                                  FoldFun()
-                              catch
-                                  {break, AccFinal} ->
-                                      AccFinal
-                              end,
-                Acc0 ++ FoldResults
+        fun(FoldFun, _) ->
+                try
+                    FoldFun()
+                catch
+                    {break, AccFinal} ->
+                        AccFinal
+                end
         end,
     Acc1 = lists:foldl(SyncFoldFun, [], SyncResults),
-    Acc = lists:foldl(AsyncFoldFun, Acc1, AsyncWork),
-    {reply, Acc, State};
+    lists:foldl(AsyncFoldFun, [], AsyncWork),
+    {reply, Acc1, State};
 handle_work({Bucket, [FoldFun | RestFoldFuns]}, From, State) ->
     FoldResults = try
                       FoldFun()
