@@ -802,6 +802,8 @@ do_fold(Fun, Acc0, Sender, State = #state{mod=Mod, modstate=ModState}) ->
             {reply, Acc, State};
         {async, Work} ->
             {async, {fold, Work}, Sender, State};
+        {{sync, SyncResults}, {async, Work}} ->
+            {async, {fold, SyncResults, Work}, Sender, State};
         ER ->
             {reply, ER, State}
     end.
