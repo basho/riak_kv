@@ -182,8 +182,10 @@ init([Index]) ->
     BucketBufSize = app_helper:get_env(riak_kv, bucket_buffer_size, 1000),
     IndexBufSize = app_helper:get_env(riak_kv, index_buffer_size, 100),
     KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
-    AsyncFolding = app_helper:get_env(riak_kv, async_folds, true),
-
+    LegacyKeyListing = app_helper:get_env(riak_kv, legacy_keylisting, false),
+    AsyncFolding = app_helper:get_env(riak_kv, async_folds, true)
+        andalso
+        not LegacyKeyListing,   
     case catch Mod:start(Index, [{async_folds, AsyncFolding},
                                  Configuration]) of
         {ok, ModState} ->
