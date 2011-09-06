@@ -28,7 +28,6 @@
          fold_buffer/3,
          finish_fold/2,
          finish_fold/3,
-         finish_handoff_fold/2,
          flush_buffer/2,
          flush_buffer/3]).
 
@@ -117,27 +116,6 @@ finish_fold(FoldResult, Bucket, Sender) ->
                                       get_buffer_fun({true, Bucket}, Sender));
         {async, FoldFun} ->
             {async, {Bucket, FoldFun}};
-        {error, Reason} ->
-            riak_core_vnode:reply(Sender, {error, Reason})
-    end.
-
-%% @doc Take the appropriate action to finalize a fold operation for
-%% handoff. Handoff folding currently requires some special handling
-%% and does not use any intermediate buffering.
--spec finish_handoff_fold(fold_result(), from()) -> term().
-finish_handoff_fold(FoldResult, Sender) ->   
-    case FoldResult of
-        {{sync, SyncResults}, {async, []}} ->
-            [riak_core_vnode:reply(Sender, SyncBuf)
-                || SyncBuf <- SyncResults];                       
-        {{sync, SyncResults}, {async, AsyncWork}} ->
-            [riak_core_vnode:reply(Sender, SyncBuf)
-                || SyncBuf <- SyncResults],
-            {async, AsyncWork};
-        {ok, Buffer} ->
-            riak_core_vnode:reply(Sender, Buffer);
-        {async, FoldFun} ->
-            {async, FoldFun};
         {error, Reason} ->
             riak_core_vnode:reply(Sender, {error, Reason})
     end.
