@@ -266,8 +266,7 @@ handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender,
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
     {reply, do_get_vclocks(BKeys, State), State};
 handle_command(?FOLD_REQ{foldfun=Fun, acc0=Acc}, Sender, State) ->
-    do_fold(Fun, Acc, Sender, State),
-    {noreply, State};
+    do_fold(Fun, Acc, Sender, State);
 
 %% Commands originating from inside this vnode
 handle_command({backend_callback, Ref, Msg}, _Sender,
@@ -797,9 +796,15 @@ do_delete({Bucket, Key}, Mod, ModState) ->
     end.
 
 %% @private
-do_fold(Fun, Acc0, Sender, #state{mod=Mod, modstate=ModState}) ->
-    FoldResult = Mod:fold_objects(Fun, Acc0, [], ModState),
-    riak_kv_fold_util:finish_handoff_fold(FoldResult, Sender).
+do_fold(Fun, Acc0, Sender, State = #state{mod=Mod, modstate=ModState}) ->
+    case Mod:fold_objects(Fun, Acc0, [], ModState) of
+        {ok, Acc} ->
+            {reply, Acc, State};
+        {async, Work} ->
+            {async, {fold, Work}, Sender, State};
+        ER ->
+            {reply, ER, State}
+    end.
 
 %% @private
 do_get_vclocks(KeyList,_State=#state{mod=Mod,modstate=ModState}) ->

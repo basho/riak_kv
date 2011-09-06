@@ -43,6 +43,14 @@ init_worker(VNodeIndex, _Args, _Props) ->
     {ok, #state{index=VNodeIndex}}.
 
 %% @doc Perform the asynchronous fold operation.
+handle_work({fold, FoldFun}, _From, State) ->
+    Acc = try
+              FoldFun()
+          catch
+              {break, AccFinal} ->
+                  AccFinal
+          end,
+    {reply, Acc, State};
 handle_work({Bucket, [FoldFun | RestFoldFuns]}, From, State) ->
     FoldResults = try
                       FoldFun()
