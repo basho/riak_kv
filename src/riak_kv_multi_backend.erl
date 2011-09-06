@@ -43,7 +43,7 @@
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, []).
+-define(CAPABILITIES, [async_fold]).
 
 -record (state, {backends :: [{atom(), atom(), term()}],
                  default_backend :: atom()}).
