@@ -134,8 +134,7 @@ mapred(Inputs, Query, Timeout) ->
             {error, Error, collect_outputs(Pipe, NumKeeps, Timeout)}
     end.
 
-mapred_stream(Query0) ->
-    Query = correct_keeps(Query0),
+mapred_stream(Query) ->
     NumKeeps = count_keeps_in_query(Query),
     {riak_pipe:exec(mr2pipe_phases(Query), []), NumKeeps}.
 
@@ -310,19 +309,6 @@ bucket_linkfun(Bucket) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     {_, {modfun, Module, Function}} = lists:keyfind(linkfun, 1, BucketProps),
     erlang:make_fun(Module, Function, 3).
-
-correct_keeps([]) ->
-    [];
-correct_keeps(Query) ->
-    case lists:all(fun({_, _, _, false}) -> true;
-                      (_)                -> false
-                   end, Query) of
-        true ->
-            {AllBut, [{A, B, C, _}]} = lists:split(length(Query) - 1, Query),
-            AllBut ++ [{A, B, C, true}];
-        false ->
-            Query
-    end.
 
 count_keeps_in_query(Query) ->
     lists:foldl(fun({_, _, _, true}, Acc) -> Acc + 1;
