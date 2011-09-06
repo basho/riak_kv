@@ -125,7 +125,10 @@ process(Input, _Last,
             {ok, State};
         {forward_preflist, Reason} ->
             ?T(_FittingDetails, [map], {forward_preflist, Reason}),
-            {forward_preflist, State}
+            {forward_preflist, State};
+        {error, Error} ->
+            ?T(_FittingDetails, [map, error], {error, {Error, Input}}),
+            {ok, State}
     end.
         
 %% @doc Evaluate the map function.
@@ -164,7 +167,8 @@ map_js(JS, Arg, {ok, Input, KeyData}) ->
     case riak_kv_js_manager:blocking_dispatch(
            ?JSPOOL_MAP, JSCall, ?DEFAULT_JS_RESERVE_ATTEMPTS) of
         {ok, Results}   -> {ok, Results};
-        {error, no_vms} -> {forward_preflist, no_js_vms}
+        {error, no_vms} -> {forward_preflist, no_js_vms};
+        {error, Error}  -> {error, Error}
     end.
 
 %% @doc Send results to the next fitting.

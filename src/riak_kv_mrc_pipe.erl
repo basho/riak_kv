@@ -136,7 +136,8 @@ mapred(Inputs, Query, Timeout) ->
 
 mapred_stream(Query) ->
     NumKeeps = count_keeps_in_query(Query),
-    {riak_pipe:exec(mr2pipe_phases(Query), []), NumKeeps}.
+    {riak_pipe:exec(mr2pipe_phases(Query), [{log, sink},{trace,[error]}]),
+     NumKeeps}.
 
 %% The plan functions are useful for seeing equivalent (we hope) pipeline.
 

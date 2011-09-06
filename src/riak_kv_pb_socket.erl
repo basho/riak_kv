@@ -133,6 +133,19 @@ handle_info(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
             {noreply, send_msg(#rpbmapredresp{phase=PhaseId, 
                                               response=Response}, State)}
     end;
+handle_info(#pipe_log{ref=ReqId, msg=Msg},
+            State=#state{req=#rpbmapredreq{},
+                         req_ctx=#pipe_ctx{ref=ReqId}=PipeCtx}) ->
+    case Msg of
+        {trace, [error], {error, {Error, _Input}}} ->
+            erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
+            %% destroying the pipe will automatically kill the sender
+            riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
+            NewState = send_error("~p", [{error, Error}], State),
+            {noreply, NewState#state{req = undefined, req_ctx = undefined}};
+        _ ->
+            {noreply, State}
+    end;
 handle_info({'DOWN', Ref, process, Pid, Reason},
             State=#state{req=#rpbmapredreq{},
                          req_ctx=#pipe_ctx{sender={Pid, Ref}}=PipeCtx}) ->
