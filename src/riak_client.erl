@@ -479,12 +479,12 @@ list_keys(Bucket, Timeout, ErrorTolerance) when is_integer(Timeout) ->
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 list_keys(Bucket, Filter, Timeout) -> 
-    case app_helper:get_env(riak_kv, legacy_keylisting, false) of
+    case app_helper:get_env(riak_kv, legacy_keylisting) of
         true ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
             list_keys(Bucket, Timeout, ?DEFAULT_ERRTOL);
-        false ->
+        _ ->
             Me = self(),
             ReqId = mk_reqid(),
             riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout, plain]]),
@@ -531,12 +531,12 @@ stream_list_keys(Bucket0, Timeout, ErrorTolerance, Client, ClientType) ->
 %%      If ClientType is set to 'mapred' instead of 'plain', then the
 %%      messages will be sent in the form of a MR input stream.
 stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
-    case app_helper:get_env(riak_kv, legacy_keylisting, false) of
+    case app_helper:get_env(riak_kv, legacy_keylisting) of
         true ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
             stream_list_keys(Input, Timeout, ?DEFAULT_ERRTOL, Client, ClientType);
-        false ->
+        _ ->
             ReqId = mk_reqid(),
             case Input of
                 {Bucket, FilterInput} ->
@@ -578,12 +578,12 @@ stream_list_keys(Bucket, Timeout, ErrorTolerance, Client) ->
 %%      out of date if called immediately after a put or delete.
 %% @equiv filter_keys(Bucket, Fun, default_timeout())
 filter_keys(Bucket, Fun) ->
-    case app_helper:get_env(riak_kv, legacy_keylisting, false) of
+    case app_helper:get_env(riak_kv, legacy_keylisting) of
         true ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
             list_keys({filter, Bucket, Fun}, ?DEFAULT_TIMEOUT*8);
-        false ->
+        _ ->
             list_keys(Bucket, Fun, ?DEFAULT_TIMEOUT)
     end.
 
@@ -596,12 +596,12 @@ filter_keys(Bucket, Fun) ->
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 filter_keys(Bucket, Fun, Timeout) ->
-    case app_helper:get_env(riak_kv, legacy_keylisting, false) of
+    case app_helper:get_env(riak_kv, legacy_keylisting) of
         true ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
             list_keys({filter, Bucket, Fun}, Timeout);
-        false ->
+        _ ->
             list_keys(Bucket, Fun, Timeout)
     end.
 
@@ -628,12 +628,12 @@ list_buckets() ->
 %%      either adds the first key or removes the last remaining key from
 %%      a bucket.
 list_buckets(Filter, Timeout) ->
-    case app_helper:get_env(riak_kv, legacy_keylisting, false) of
+    case app_helper:get_env(riak_kv, legacy_keylisting) of
         true ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
             list_keys('_', Timeout);
-        false ->
+        _ ->
             Me = self(),
             ReqId = mk_reqid(),
             riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, [Filter, Timeout, plain]]),
@@ -646,12 +646,12 @@ list_buckets(Filter, Timeout) ->
 %%       {error, Err :: term()}
 %% @doc Return a list of filtered buckets.
 filter_buckets(Fun) ->
-    case app_helper:get_env(riak_kv, legacy_keylisting, false) of
+    case app_helper:get_env(riak_kv, legacy_keylisting) of
         true ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
             list_keys('_', ?DEFAULT_TIMEOUT);
-        false ->
+        _ ->
             list_buckets(Fun, ?DEFAULT_TIMEOUT)
     end.
 
