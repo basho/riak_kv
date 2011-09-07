@@ -484,7 +484,7 @@ list_keys(Bucket, Filter, Timeout) ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
             list_keys(Bucket, Timeout, ?DEFAULT_ERRTOL);
-        false ->
+        _ ->
             Me = self(),
             ReqId = mk_reqid(),
             riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout, plain]]),
@@ -536,7 +536,7 @@ stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
             stream_list_keys(Input, Timeout, ?DEFAULT_ERRTOL, Client, ClientType);
-        false ->
+        _ ->
             ReqId = mk_reqid(),
             case Input of
                 {Bucket, FilterInput} ->
@@ -583,7 +583,7 @@ filter_keys(Bucket, Fun) ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
             list_keys({filter, Bucket, Fun}, ?DEFAULT_TIMEOUT*8);
-        false ->
+        _ ->
             list_keys(Bucket, Fun, ?DEFAULT_TIMEOUT)
     end.
 
@@ -601,7 +601,7 @@ filter_keys(Bucket, Fun, Timeout) ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
             list_keys({filter, Bucket, Fun}, Timeout);
-        false ->
+        _ ->
             list_keys(Bucket, Fun, Timeout)
     end.
 
@@ -633,7 +633,7 @@ list_buckets(Filter, Timeout) ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
             list_keys('_', Timeout);
-        false ->
+        _ ->
             Me = self(),
             ReqId = mk_reqid(),
             riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, [Filter, Timeout, plain]]),
@@ -651,7 +651,7 @@ filter_buckets(Fun) ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
             list_keys('_', ?DEFAULT_TIMEOUT);
-        false ->
+        _ ->
             list_buckets(Fun, ?DEFAULT_TIMEOUT)
     end.
 
