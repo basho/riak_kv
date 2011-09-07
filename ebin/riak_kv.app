@@ -110,6 +110,13 @@
          %% Secondary code paths
          {add_paths, []},
 
+         %% This option enables compatability of bucket and key listing
+         %% with 0.14 and earlier versions. Once a rolling upgrade to
+         %% a version > 0.14 is completed for a cluster, this should be
+         %% set to false for improved performance for bucket and key
+         %% listing operations.
+         {legacy_keylisting, true},
+
          %% Allow Erlang MapReduce functions to be specified as
          %% strings.
          %%
