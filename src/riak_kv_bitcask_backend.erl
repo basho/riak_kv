@@ -89,7 +89,7 @@ start(Partition, Config) ->
                     BitcaskOpts = [{read_write, true} | Config],
                     case bitcask:open(filename:join(DataRoot, DataFile), BitcaskOpts) of
                         Ref when is_reference(Ref) ->
-			    check_fcntl(),
+                            check_fcntl(),
                             schedule_merge(Ref),
                             maybe_schedule_sync(Ref),
                             {ok, #state{ref=Ref,
@@ -316,16 +316,16 @@ check_fcntl() ->
     Logged=application:get_env(riak_kv,o_sync_warning_logged),
     Strategy=application:get_env(bitcask,sync_strategy),
     case {Logged,Strategy} of
-	{undefined,{ok,o_sync}} ->
-	    case riak_core_util:is_arch(linux) of
-		true ->
-		    lager:warning("{sync_strategy,o_sync} not implemented on Linux"),
-		    application:set_env(riak_kv,o_sync_warning_logged,true);
-		_ ->
-		    ok
-	    end;
-	_ ->
-	    ok
+        {undefined,{ok,o_sync}} ->
+            case riak_core_util:is_arch(linux) of
+                true ->
+                    lager:warning("{sync_strategy,o_sync} not implemented on Linux"),
+                    application:set_env(riak_kv,o_sync_warning_logged,true);
+                _ ->
+                    ok
+            end;
+        _ ->
+            ok
     end.
 
 %% @private
