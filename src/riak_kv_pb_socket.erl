@@ -37,10 +37,11 @@
 
 -type msg() ::  atom() | tuple().
 
--record(state, {sock,      % protocol buffers socket
-                client,    % local client
-                req,       % current request (for multi-message requests like list keys)
-                req_ctx}). % context to go along with request (partial results, request ids etc)
+-record(state, {sock,        % protocol buffers socket
+                client,      % local client
+                req,         % current request (for multi-message requests like list keys)
+                req_ctx,     % context to go along with request (partial results, request ids etc)
+                client_id= <<0,0,0,0>>}). % legacy client compatability
 
 -record(pipe_ctx, {pipe,     % pipe handling mapred request
                    ref,      % easier-access ref/reqid
@@ -232,13 +233,12 @@ code_change(_OldVsn, State, _Extra) -> {ok, State}.
 process_message(rpbpingreq, State) ->
     send_msg(rpbpingresp, State);
 
-process_message(rpbgetclientidreq, #state{client=C} = State) ->
-    Resp = #rpbgetclientidresp{client_id = C:get_client_id()},
+process_message(rpbgetclientidreq, #state{client_id=ClientId} = State) ->
+    Resp = #rpbgetclientidresp{client_id = ClientId},
     send_msg(Resp, State);
 
 process_message(#rpbsetclientidreq{client_id = ClientId}, State) ->
-    {ok, C} = riak:local_client(ClientId),
-    send_msg(rpbsetclientidresp, State#state{client = C});
+    send_msg(rpbsetclientidresp, State#state{client_id = ClientId});
 
 process_message(rpbgetserverinforeq, State) ->
     Resp = #rpbgetserverinforesp{node = riakc_pb:to_binary(node()), 
