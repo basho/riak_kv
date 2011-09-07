@@ -179,7 +179,11 @@ pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender) ->
         {error, timeout} ->
             %% destroying the pipe will tear down the linked sender
             riak_pipe:destroy(Pipe),
-            {{halt, 500}, send_error({error, timeout}, RD), State}
+            {{halt, 500}, send_error({error, timeout}, RD), State};
+        {error, {Error, _Input}} ->
+            %% TODO: jsonify Input for error message
+            riak_pipe:destroy(Pipe),
+            {{halt, 500}, send_error({error, Error}, RD), State}
     end.
 
 pipe_collect_outputs(Pipe, NumKeeps, Sender) ->
@@ -194,7 +198,7 @@ pipe_collect_outputs(Pipe, NumKeeps, Sender) ->
 pipe_collect_outputs1(Ref, Sender, Acc) ->
     case pipe_receive_output(Ref, Sender) of
         {ok, Output} -> pipe_collect_outputs1(Ref, Sender, [Output|Acc]);
-        eoi          -> {ok, Acc};
+        eoi          -> {ok, lists:reverse(Acc)};
         Error        -> Error
     end.
 
@@ -204,6 +208,14 @@ pipe_receive_output(Ref, {SenderPid, SenderRef}) ->
             eoi;
         #pipe_result{ref=Ref, from=From, result=Result} ->
             {ok, {From, Result}};
+        #pipe_log{ref=Ref, msg=Msg} ->
+            case Msg of
+                {trace, [error], {error, {Error, Input}}} ->
+                    {error, {Error, Input}};
+                _ ->
+                    %% not a log message we're interested in
+                    pipe_receive_output(Ref, {SenderPid, SenderRef})
+            end;
         {'DOWN', SenderRef, process, SenderPid, Reason} ->
             if Reason == normal ->
                     %% just done sending inputs, nothing to worry about
@@ -250,7 +262,10 @@ pipe_stream_mapred_results(RD, Pipe,
             riak_pipe:destroy(Pipe),
             {format_error({error, timeout}), done};
         {error, {sender_error, Error}} ->
-            {format_error(Error), done}
+            {format_error(Error), done};
+        {error, {Error, _Input}} ->
+            riak_pipe:destroy(Pipe),
+            {format_error({error, Error}), done}
     end.
 
 %% LEGACY MAPRED
