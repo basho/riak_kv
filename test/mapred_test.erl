@@ -236,7 +236,7 @@ compat_basic1_test_() ->
                  5 = length(MapRs)
              end),
           ?_test(
-             %% Basic compat: keep neither stages -> force keep last stage
+             %% Basic compat: keep neither stages -> no output
              begin
                  Spec = 
                      [{map, {modfun, riak_kv_mapreduce, map_object_value},
@@ -245,7 +245,7 @@ compat_basic1_test_() ->
                        none, false}],
                  %% "Crazy" semantics: if only 1 keeper stage, then
                  %% return List instead of [List].
-                 {ok, [15]} = riak_kv_mrc_pipe:mapred(IntsBucket, Spec)
+                 {ok, []} = riak_kv_mrc_pipe:mapred(IntsBucket, Spec)
              end),
           ?_test(
              %% Basic compat: keep first stage only, want 'crazy' result",
@@ -292,7 +292,7 @@ compat_basic1_test_() ->
                      [{map, {modfun, riak_kv_mapreduce, map_object_value},
                        {struct,[{<<"sub">>,[<<"0">>]}]}, false},
                       {reduce, {modfun, riak_kv_mapreduce,
-                                reduce_string_to_integer},none,false}],
+                                reduce_string_to_integer},none,true}],
                  {ok, [0]} =
                      riak_kv_mrc_pipe:mapred(Inputs, Spec)
              end),
@@ -353,7 +353,7 @@ compat_basic1_test_() ->
              %% modfun for inputs generator
              begin
                  Inputs = {modfun, ?MODULE, inputs_gen_seq, 6},
-                 Spec = [{reduce, {qfun, ReduceSumFun},none,false}],
+                 Spec = [{reduce, {qfun, ReduceSumFun},none,true}],
                  {ok, [21]} = riak_kv_mrc_pipe:mapred(Inputs, Spec)
              end),
           ?_test(
