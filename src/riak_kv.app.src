@@ -3,7 +3,11 @@
 {application, riak_kv,
  [
   {description, "Riak Key/Value Store"},
+<<<<<<< HEAD
   {vsn, "1.0.0"},
+=======
+  {vsn, "0.14.0"},
+>>>>>>> Use .app.src to avoid manually updating module list
   {applications, [
                   kernel,
                   stdlib,
