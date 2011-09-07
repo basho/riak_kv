@@ -91,6 +91,7 @@ start(Partition, Config) ->
                     BitcaskOpts = set_mode(read_write, Config),
                     case bitcask:open(filename:join(DataRoot, DataFile), BitcaskOpts) of
                         Ref when is_reference(Ref) ->
+                            check_fcntl(),
                             schedule_merge(Ref),
                             maybe_schedule_sync(Ref),
                             AsyncFolds = config_value(async_folds, Config, true),
@@ -366,6 +367,25 @@ key_counts(RootDir) ->
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
+%% @private
+%% On linux there is a kernel bug that won't allow fcntl to add O_SYNC
+%% to an already open file descriptor.
+check_fcntl() ->
+    Logged=application:get_env(riak_kv,o_sync_warning_logged),
+    Strategy=application:get_env(bitcask,sync_strategy),
+    case {Logged,Strategy} of
+        {undefined,{ok,o_sync}} ->
+            case riak_core_util:is_arch(linux) of
+                true ->
+                    lager:warning("{sync_strategy,o_sync} not implemented on Linux"),
+                    application:set_env(riak_kv,o_sync_warning_logged,true);
+                _ ->
+                    ok
+            end;
+        _ ->
+            ok
+    end.
 
 %% @private
 %% Return a function to fold over the buckets on this backend
