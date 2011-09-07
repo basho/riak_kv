@@ -1,0 +1,38 @@
+%% -*- tab-width: 4;erlang-indent-level: 4;indent-tabs-mode: nil -*-
+%% ex: ts=4 sw=4 et
+{application, riak_kv,
+ [
+  {description, "Riak Key/Value Store"},
+  {vsn, "0.14.0"},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  sasl,
+                  crypto,
+                  riak_core,
+                  luke,
+                  erlang_js,
+                  mochiweb,
+                  webmachine,
+                  os_mon,
+                  riak_pipe
+                 ]},
+  {registered, []},
+  {mod, {riak_kv_app, []}},
+  {env, [
+         %% Endpoint for system stats HTTP provider
+         {stats_urlpath, "stats"},
+
+         %% Secondary code paths
+         {add_paths, []},
+
+         %% Allow Erlang MapReduce functions to be specified as
+         %% strings.
+         %%
+         %% !!!WARNING!!!
+         %% This will allow arbitrary Erlang code to be submitted
+         %% through the REST and Protocol Buffers interfaces. This
+         %% should only be used for development purposes.
+         {allow_strfun, false}
+        ]}
+ ]}.
