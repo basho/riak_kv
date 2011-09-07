@@ -136,9 +136,6 @@ produce_index_results(RD, Ctx) ->
             JsonKeys2 = mochijson2:encode(JsonKeys1),
             {JsonKeys2, RD, Ctx};
         {error, Reason} ->
-            %% RD1 = wrq:set_response_code(500, RD),
-            %% RD2 = wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD1),
-            %% Msg = io_lib:format("Invalid query: ~p~n", [Reason]),
             {{error, Reason}, RD, Ctx}
     end.
 
