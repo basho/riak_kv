@@ -129,12 +129,18 @@ produce_index_results(RD, Ctx) ->
     Query = Ctx#ctx.index_query,
 
     %% Do the index lookup...
-    {ok, Results} = Client:get_index(Bucket, Query),
-
-    %% JSONify the results...
-    JsonKeys1 = {struct, [{?Q_KEYS, Results}]},
-    JsonKeys2 = mochijson2:encode(JsonKeys1),
-    {JsonKeys2, RD, Ctx}.
+    case Client:get_index(Bucket, Query) of
+        {ok, Results} ->
+            %% JSONify the results...
+            JsonKeys1 = {struct, [{?Q_KEYS, Results}]},
+            JsonKeys2 = mochijson2:encode(JsonKeys1),
+            {JsonKeys2, RD, Ctx};
+        {error, Reason} ->
+            RD1 = wrq:set_response_code(500, RD),
+            RD2 = wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD1),
+            Msg = io_lib:format("Invalid query: ~p~n", [Reason]),
+            {Msg, RD2, Ctx}
+    end.
 
 
 %% @private

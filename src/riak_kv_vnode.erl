@@ -359,7 +359,7 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                     {noreply, State}
             end;
         false ->
-            riak_core_vnode:reply(Sender, {error, {indexes_not_supported, Mod}})
+            {reply, {error, {indexes_not_supported, Mod}}, State}
     end.
 
 handle_handoff_command(Req=?FOLD_REQ{foldfun=FoldFun}, Sender, State) ->
