@@ -319,7 +319,7 @@ check_fcntl() ->
 	{undefined,{ok,o_sync}} ->
 	    case riak_core_util:is_arch(linux) of
 		true ->
-		    lager:warning("fcntl(f,F_SETFL,O_SYNC) fails on Linux."),
+		    lager:warning("{sync_strategy,o_sync} fails on Linux"),
 		    application:set_env(riak_kv,o_sync_warning_logged,true);
 		_ ->
 		    ok
