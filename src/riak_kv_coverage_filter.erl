@@ -121,13 +121,11 @@ compose([]) ->
 compose(Filters) ->
     compose(Filters, []).
 
-compose([], FilterFuns) ->
-    TruthFun =
-        fun(X) ->
-                X =:= true
-        end,
+compose([], RevFilterFuns) ->
     fun(Val) ->
-            lists:all(TruthFun, [FilterFun(Val) || FilterFun <- FilterFuns])
+            true =:= lists:foldl(fun(Fun, Acc) -> Fun(Acc) end,
+                                 Val,
+                                 lists:reverse(RevFilterFuns))
     end;
 compose([Filter | RestFilters], FilterFuns) ->
     {FilterMod, FilterFun, Args} = Filter,
