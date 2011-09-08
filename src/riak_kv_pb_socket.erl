@@ -40,7 +40,8 @@
 -record(state, {sock,      % protocol buffers socket
                 client,    % local client
                 req,       % current request (for multi-message requests like list keys)
-                req_ctx}). % context to go along with request (partial results, request ids etc)
+                req_ctx,   % context to go along with request (partial results, request ids etc)
+                client_id = <<0,0,0,0>> }). % emulate legacy API when vnode_vclocks is true
 
 -record(pipe_ctx, {pipe,     % pipe handling mapred request
                    ref,      % easier-access ref/reqid
@@ -232,13 +233,22 @@ code_change(_OldVsn, State, _Extra) -> {ok, State}.
 process_message(rpbpingreq, State) ->
     send_msg(rpbpingresp, State);
 
-process_message(rpbgetclientidreq, #state{client=C} = State) ->
-    Resp = #rpbgetclientidresp{client_id = C:get_client_id()},
+process_message(rpbgetclientidreq, #state{client=C, client_id=CID} = State) ->
+    ClientId = case app_helper:get_env(riak_kv, vnode_vclocks, false) of
+                   true -> CID;
+                   false -> C:get_client_id()
+               end,
+    Resp = #rpbgetclientidresp{client_id = ClientId},
     send_msg(Resp, State);
 
 process_message(#rpbsetclientidreq{client_id = ClientId}, State) ->
-    {ok, C} = riak:local_client(ClientId),
-    send_msg(rpbsetclientidresp, State#state{client = C});
+    NewState = case app_helper:get_env(riak_kv, vnode_vclocks, false) of
+                   true -> State#state{client_id=ClientId};
+                   false ->
+                       {ok, C} = riak:local_client(ClientId),
+                       State#state{client = C}
+               end,
+    send_msg(rpbsetclientidresp, NewState);
 
 process_message(rpbgetserverinforeq, State) ->
     Resp = #rpbgetserverinforesp{node = riakc_pb:to_binary(node()), 
