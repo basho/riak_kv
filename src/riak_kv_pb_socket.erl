@@ -234,7 +234,7 @@ process_message(rpbpingreq, State) ->
     send_msg(rpbpingresp, State);
 
 process_message(rpbgetclientidreq, #state{client=C, client_id=CID} = State) ->
-    ClientId = case app_helper:get_env(riak_kv, vnode_vclocks) of
+    ClientId = case app_helper:get_env(riak_kv, vnode_vclocks, false) of
                    true -> CID;
                    false -> C:get_client_id()
                end,
@@ -242,7 +242,7 @@ process_message(rpbgetclientidreq, #state{client=C, client_id=CID} = State) ->
     send_msg(Resp, State);
 
 process_message(#rpbsetclientidreq{client_id = ClientId}, State) ->
-    NewState = case app_helper:get_env(riak_kv, vnode_vclocks) of
+    NewState = case app_helper:get_env(riak_kv, vnode_vclocks, false) of
                    true -> State#state{client_id=ClientId};
                    false ->
                        {ok, C} = riak:local_client(ClientId),
