@@ -55,7 +55,6 @@
                 read_opts = [],
                 write_opts = [],
                 fold_opts = [{fill_cache, false}],
-                async_folds :: boolean(),
                 write_buffer_size :: integer()}).
 
 -type state() :: #state{}.
@@ -78,7 +77,6 @@ start(Partition, Config) ->
     DataDir = filename:join(config_value(data_root, Config),
                             integer_to_list(Partition)),
     filelib:ensure_dir(filename:join(DataDir, "dummy")),
-    AsyncFolds = config_value(async_folds, Config, true),
 
     %% Use a variable write buffer size in order to reduce the number
     %% of vnodes that try to kick off compaction at the same time
@@ -98,7 +96,6 @@ start(Partition, Config) ->
         {ok, Ref} ->
             {ok, #state {ref = Ref,
                          data_root = DataDir,
-                         async_folds = AsyncFolds,
                          write_buffer_size = WriteBufferSize }};
         {error, Reason} ->
             {error, Reason}
@@ -133,7 +130,7 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
                  {ok, state()} |
                  {error, term(), state()}.
 put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
-                                                 write_opts=WriteOpts}=State) ->
+                                                write_opts=WriteOpts}=State) ->
     %% Create the KV update...
     StorageKey = to_object_key(Bucket, PrimaryKey),
     Updates1 = [{put, StorageKey, Val}],
@@ -160,7 +157,7 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
                     {ok, state()} |
                     {error, term(), state()}.
 delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref,
-                           write_opts=WriteOpts}=State) ->
+                                              write_opts=WriteOpts}=State) ->
 
     %% Create the KV delete...
     StorageKey = to_object_key(Bucket, PrimaryKey),
@@ -184,48 +181,30 @@ delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref,
                    any(),
                    [],
                    state()) -> {ok, any()} | {async, fun()}.
-fold_buckets(FoldBucketsFun, Acc, _Opts, #state{fold_opts=FoldOpts1,
-                                                ref=Ref,
-                                                async_folds=true}) ->
+fold_buckets(FoldBucketsFun, Acc, Opts, #state{fold_opts=FoldOpts,
+                                               ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     FirstKey = to_first_key(undefined),
-    FoldOpts2 = [{first_key, FirstKey} | FoldOpts1],
-    BucketFolder = eleveldb:key_folder(Ref, FoldFun, {Acc, []}, FoldOpts2),
-    {async, BucketFolder};
-fold_buckets(FoldBucketsFun, Acc, _Opts, #state{fold_opts=FoldOpts1,
-                                                ref=Ref}) ->
-    FoldFun = fold_buckets_fun(FoldBucketsFun),
-    FirstKey = to_first_key(undefined),
-    FoldOpts2 = [{first_key, FirstKey} | FoldOpts1],
-    {Acc0, _LastBucket} =
-        eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts2),
-    {ok, Acc0}.
+    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    BucketFolder =
+        fun() ->
+                {FoldResult, _} =
+                    eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts1),
+                FoldResult
+        end,
+    case lists:member(async_fold, Opts) of
+        true ->
+            {async, BucketFolder};
+        false ->
+            {ok, BucketFolder()}
+    end.
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
                 state()) -> {ok, term()} | {async, fun()}.
-fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
-                                         ref=Ref,
-                                         async_folds=true}) ->
-    %% Figure out how we should limit the fold: by bucket, by
-    %% secondary index, or neither (fold across everything.)
-    Bucket = lists:keyfind(bucket, 1, Opts),
-    Index = lists:keyfind(index, 1, Opts),
-    Limiter =
-        if Bucket /= false -> Bucket;
-           Index /= false  -> Index;
-           true            -> undefined
-        end,
-
-    %% Set up the fold...
-    FirstKey = to_first_key(Limiter),
-    FoldFun = fold_keys_fun(FoldKeysFun, Limiter),
-    FoldOpts2 = [{first_key, FirstKey} | FoldOpts1],
-    KeyFolder = eleveldb:key_folder(Ref, FoldFun, Acc, FoldOpts2),
-    {async, KeyFolder};
-fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
+fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
                                          ref=Ref}) ->
     %% Figure out how we should limit the fold: by bucket, by
     %% secondary index, or neither (fold across everything.)
@@ -240,15 +219,22 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
     %% Set up the fold...
     FirstKey = to_first_key(Limiter),
     FoldFun = fold_keys_fun(FoldKeysFun, Limiter),
-    FoldOpts2 = [{first_key, FirstKey} | FoldOpts1],
-
-    %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
-    try
-        Acc0 = eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts2),
-        {ok, Acc0}
-    catch
-        {break, AccFinal} ->
-            {ok, AccFinal}
+    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    KeyFolder =
+        fun() ->
+                %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
+                try
+                    eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
+                catch
+                    {break, AccFinal} ->
+                        AccFinal
+                end
+        end,
+    case lists:member(async_fold, Opts) of
+        true ->
+            {async, KeyFolder};
+        false ->
+            {ok, KeyFolder()}
     end.
 
 %% @doc Fold over all the objects for one or all buckets.
@@ -256,37 +242,25 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
                    any(),
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()}.
-fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts1,
-                                               ref=Ref,
-                                               async_folds=true}) ->
-    Bucket =  proplists:get_value(bucket, Opts),
-    FoldOpts = fold_opts(Bucket, FoldOpts1),
-    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
-    ObjectFolder = eleveldb:folder(Ref, FoldFun, Acc, FoldOpts),
-    {async, ObjectFolder};
-fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts1,
+fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
                                                ref=Ref}) ->
-
-
-    %% Figure out how we should limit the fold: by bucket, by
-    %% secondary index, or neither (fold across everything.)
-    Bucket = lists:keyfind(bucket, 1, Opts),
-    Limiter =
-        if Bucket /= false -> Bucket;
-           true            -> undefined
+    Bucket =  proplists:get_value(bucket, Opts),
+    FoldOpts1 = fold_opts(Bucket, FoldOpts),
+    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
+    ObjectFolder =
+        fun() ->
+                try
+                    eleveldb:fold(Ref, FoldFun, Acc, FoldOpts1)
+                catch
+                    {break, AccFinal} ->
+                        AccFinal
+                end
         end,
-
-    %% Set up the fold...
-    FirstKey = to_first_key(Limiter),
-    FoldFun = fold_objects_fun(FoldObjectsFun, Limiter),
-    FoldOpts2 = [{first_key, FirstKey} | FoldOpts1],
-
-    try
-        Acc0 = eleveldb:fold(Ref, FoldFun, Acc, FoldOpts2),
-        {ok, Acc0}
-    catch
-        {break, AccFinal} ->
-            {ok, AccFinal}
+    case lists:member(async_fold, Opts) of
+        true ->
+            {async, ObjectFolder};
+        false ->
+            {ok, ObjectFolder()}
     end.
 
 %% @doc Delete all objects from this eleveldb backend

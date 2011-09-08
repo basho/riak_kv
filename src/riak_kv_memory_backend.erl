@@ -60,8 +60,7 @@
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold]).
 
--record(state, {async_folds :: boolean(),
-                data_ref :: integer() | atom(),
+-record(state, {data_ref :: integer() | atom(),
                 time_ref :: integer() | atom(),
                 max_memory :: undefined | integer(),
                 used_memory=0 :: integer(),
@@ -87,7 +86,6 @@ api_version() ->
 start(Partition, Config) ->
     TTL = config_value(ttl, Config),
     MemoryMB = config_value(max_memory, Config),
-    AsyncFolds = config_value(async_folds, Config, true),
     case MemoryMB of
         undefined ->
             MaxMemory = undefined,
@@ -97,8 +95,7 @@ start(Partition, Config) ->
             TimeRef = ets:new(list_to_atom(integer_to_list(Partition)), [ordered_set])
     end,
     DataRef = ets:new(list_to_atom(integer_to_list(Partition)), []),
-    {ok, #state{async_folds=AsyncFolds,
-                data_ref=DataRef,
+    {ok, #state{data_ref=DataRef,
                 max_memory=MaxMemory,
                 time_ref=TimeRef,
                 ttl=TTL}}.
@@ -188,14 +185,14 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val, State=#state{data_ref=DataRef,
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
                     {ok, state()}.
 delete(Bucket, Key, _IndexSpecs, State=#state{data_ref=DataRef,
-                                 time_ref=TimeRef,
-                                 used_memory=UsedMemory}) ->
+                                              time_ref=TimeRef,
+                                              used_memory=UsedMemory}) ->
     case TimeRef of
         undefined ->
             UsedMemory1 = UsedMemory;
         _ ->
             %% Lookup the object so we can delete its
-            %% entry from the time table and account 
+            %% entry from the time table and account
             %% for the memory used.
             [Object] = ets:lookup(DataRef, {Bucket, Key}),
             case Object of
@@ -214,46 +211,52 @@ delete(Bucket, Key, _IndexSpecs, State=#state{data_ref=DataRef,
                    any(),
                    [],
                    state()) -> {ok, any()}.
-fold_buckets(FoldBucketsFun, Acc, _Opts, #state{async_folds=true,
-                                                data_ref=DataRef}) ->
+fold_buckets(FoldBucketsFun, Acc, Opts, #state{data_ref=DataRef}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    {async, get_folder(FoldFun, {Acc, ordsets:new()}, DataRef)};
-fold_buckets(FoldBucketsFun, Acc, _Opts, #state{data_ref=DataRef}) ->
-    FoldFun = fold_buckets_fun(FoldBucketsFun),
-    {Acc0, _} = ets:foldl(FoldFun, {Acc, ordsets:new()}, DataRef),
-    {ok, Acc0}.
+    case lists:member(async_fold, Opts) of
+        true ->
+            BucketFolder =
+                fun() ->
+                        {Acc0, _} = ets:foldl(FoldFun, {Acc, sets:new()}, DataRef),
+                        Acc0
+                end,
+            {async, BucketFolder};
+        false ->
+            {Acc0, _} = ets:foldl(FoldFun, {Acc, sets:new()}, DataRef),
+            {ok, Acc0}
+    end.
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
                 state()) -> {ok, term()} | {async, fun()}.
-fold_keys(FoldKeysFun, Acc, Opts, #state{async_folds=true,
-                                         data_ref=DataRef}) ->
-    Bucket =  proplists:get_value(bucket, Opts),
-    FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-    {async, get_folder(FoldFun, Acc, DataRef)};
 fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-    Acc0 = ets:foldl(FoldFun, Acc, DataRef),
-    {ok, Acc0}.
+    case lists:member(async_fold, Opts) of
+        true ->
+            {async, get_folder(FoldFun, Acc, DataRef)};
+        false ->
+            Acc0 = ets:foldl(FoldFun, Acc, DataRef),
+            {ok, Acc0}
+    end.
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()}.
-fold_objects(FoldObjectsFun, Acc, Opts, #state{async_folds=true,
-                                               data_ref=DataRef}) ->
-    Bucket =  proplists:get_value(bucket, Opts),
-    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
-    {async, get_folder(FoldFun, Acc, DataRef)};
 fold_objects(FoldObjectsFun, Acc, Opts, #state{data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
-    Acc0 = ets:foldl(FoldFun, Acc, DataRef),
-    {ok, Acc0}.
+    case lists:member(async_fold, Opts) of
+        true ->
+            {async, get_folder(FoldFun, Acc, DataRef)};
+        false ->
+            Acc0 = ets:foldl(FoldFun, Acc, DataRef),
+            {ok, Acc0}
+    end.
 
 %% @doc Delete all objects from this memory backend
 -spec drop(state()) -> {ok, state()}.
@@ -285,7 +288,7 @@ status(#state{data_ref=DataRef,
         _ ->
             TimeStatus = ets:info(TimeRef),
             [{data_table_status, DataStatus},
-            {time_table_status, TimeStatus}]
+             {time_table_status, TimeStatus}]
     end.
 
 %% @doc Register an asynchronous callback
@@ -305,12 +308,12 @@ callback(_Ref, _Msg, State) ->
 %% Return a function to fold over the buckets on this backend
 fold_buckets_fun(FoldBucketsFun) ->
     fun({{Bucket, _}, _}, {Acc, BucketSet}) ->
-            case ordsets:is_element(Bucket, BucketSet) of
+            case sets:is_element(Bucket, BucketSet) of
                 true ->
                     {Acc, BucketSet};
                 false ->
                     {FoldBucketsFun(Bucket, Acc),
-                     ordsets:add_element(Bucket, BucketSet)}
+                     sets:add_element(Bucket, BucketSet)}
             end
     end.
 
@@ -348,9 +351,9 @@ fold_objects_fun(FoldObjectsFun, Bucket) ->
 
 %% @private
 get_folder(FoldFun, Acc, DataRef) ->
-        fun() ->
-                ets:foldl(FoldFun, Acc, DataRef)
-        end.
+    fun() ->
+            ets:foldl(FoldFun, Acc, DataRef)
+    end.
 
 %% @private
 do_put(Bucket, Key, Val, Ref) ->
@@ -491,11 +494,8 @@ eqc_test_() ->
          [
           {timeout, 60000,
            [?_assertEqual(true,
-                          backend_eqc:test(?MODULE, true,
-                                           [{async_folds, false}])),
-           ?_assertEqual(true,
-                          backend_eqc:test(?MODULE, true))]}
-         ]}]}]}.
+                         backend_eqc:test(?MODULE, true))]}
+        ]}]}]}.
 
 setup() ->
     application:load(sasl),

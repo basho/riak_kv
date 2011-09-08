@@ -35,7 +35,7 @@
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
--record(state, {buckets=ordsets:new() :: [term()],
+-record(state, {buckets=sets:new() :: [term()],
                 client_type :: plain | mapred,
                 from :: from()}).
 
@@ -56,14 +56,12 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, ClientType]) ->
     {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
-process_results({results, Buckets},
+process_results(done, StateData) ->
+    {done, StateData};
+process_results(Buckets,
                 StateData=#state{buckets=BucketAcc}) ->
-    {ok, StateData#state{buckets=ordsets:union(ordsets:from_list(Buckets),
+    {ok, StateData#state{buckets=sets:union(sets:from_list(Buckets),
                                                BucketAcc)}};
-process_results({final_results, Buckets},
-                StateData=#state{buckets=BucketAcc}) ->
-    {done, StateData#state{buckets=ordsets:union(ordsets:from_list(Buckets),
-                                                 BucketAcc)}};
 process_results({error, Reason}, _State) ->
     {error, Reason}.
 
@@ -91,6 +89,6 @@ finish(clean,
             luke_flow:add_inputs(Buckets),
             luke_flow:finish_inputs(ClientPid);
         plain ->
-            ClientPid ! {ReqId, {buckets, ordsets:to_list(Buckets)}}
+            ClientPid ! {ReqId, {buckets, sets:to_list(Buckets)}}
     end,
     {stop, normal, StateData}.

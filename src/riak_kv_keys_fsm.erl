@@ -70,15 +70,12 @@ init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout, ClientType]) ->
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
-process_results({results, {Bucket, Keys}},
+process_results({Bucket, Keys},
                 StateData=#state{client_type=ClientType,
                                  from={raw, ReqId, ClientPid}}) ->
     process_keys(ClientType, Bucket, Keys, ReqId, ClientPid),
     {ok, StateData};
-process_results({final_results, {Bucket, Keys}},
-                StateData=#state{client_type=ClientType,
-                                 from={raw, ReqId, ClientPid}}) ->
-    process_keys(ClientType, Bucket, Keys, ReqId, ClientPid),
+process_results(done, StateData) ->
     {done, StateData};
 process_results({error, Reason}, _State) ->
     {error, Reason}.
