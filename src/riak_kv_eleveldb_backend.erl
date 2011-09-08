@@ -55,7 +55,8 @@
                 read_opts = [],
                 write_opts = [],
                 fold_opts = [{fill_cache, false}],
-                async_folds :: boolean()}).
+                async_folds :: boolean(),
+                write_buffer_size :: integer()}).
 
 -type state() :: #state{}.
 -type config() :: [{atom(), term()}].
@@ -78,11 +79,27 @@ start(Partition, Config) ->
                             integer_to_list(Partition)),
     filelib:ensure_dir(filename:join(DataDir, "dummy")),
     AsyncFolds = config_value(async_folds, Config, true),
-    case eleveldb:open(DataDir, [{create_if_missing, true}]) of
+
+    %% Use a variable write buffer size in order to reduce the number
+    %% of vnodes that try to kick off compaction at the same time
+    %% under heavy uniform load...
+    WriteBufferMin = config_value(write_buffer_size_min, Config, 3 * 1024 * 1024),
+    WriteBufferMax = config_value(write_buffer_size_max, Config, 6 * 1024 * 1024),
+    random:seed(now()),
+    WriteBufferSize = WriteBufferMin + random:uniform(WriteBufferMax - WriteBufferMin),
+
+    %% Assemble options...
+    Options = [
+               {create_if_missing, true},
+               {write_buffer_size, WriteBufferSize}
+              ],
+
+    case eleveldb:open(DataDir, Options) of
         {ok, Ref} ->
             {ok, #state {ref = Ref,
                          data_root = DataDir,
-                         async_folds=AsyncFolds}};
+                         async_folds = AsyncFolds,
+                         write_buffer_size = WriteBufferSize }};
         {error, Reason} ->
             {error, Reason}
     end.
@@ -209,7 +226,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
     KeyFolder = eleveldb:key_folder(Ref, FoldFun, Acc, FoldOpts2),
     {async, KeyFolder};
 fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts1,
-                                         ref=Ref}) ->            
+                                         ref=Ref}) ->
     %% Figure out how we should limit the fold: by bucket, by
     %% secondary index, or neither (fold across everything.)
     Bucket = lists:keyfind(bucket, 1, Opts),
@@ -279,7 +296,11 @@ drop(#state{data_root=DataRoot}=State) ->
     case eleveldb:destroy(DataRoot, []) of
         ok ->
             filelib:ensure_dir(filename:join(DataRoot, "dummy")),
-            case eleveldb:open(DataRoot, [{create_if_missing, true}]) of
+            Options = [
+                       {create_if_missing, true},
+                       {write_buffer_size, State#state.write_buffer_size}
+                      ],
+            case eleveldb:open(DataRoot, Options) of
                 {ok, Ref} ->
                     {ok, State#state{ref = Ref}};
                 {error, Reason} ->
@@ -297,8 +318,8 @@ is_empty(#state{ref=Ref}) ->
 
 %% @doc Get the status information for this eleveldb backend
 -spec status(state()) -> [{atom(), term()}].
-status(#state{data_root=DataRoot}) ->
-    [{Dir, get_status(filename:join(DataRoot, Dir))} ||
+status(#state{data_root=DataRoot} = State) ->
+    [{Dir, get_status(filename:join(DataRoot, Dir), State)} ||
         Dir <- element(2, file:list_dir(DataRoot))].
 
 %% @doc Register an asynchronous callback
@@ -413,15 +434,19 @@ fold_objects_fun(FoldObjectsFun, FilterBucket) ->
 %% @private
 %% Augment the fold options list if a
 %% bucket is defined.
-fold_opts(undefined, FoldOpts) ->    
+fold_opts(undefined, FoldOpts) ->
     FoldOpts;
 fold_opts(Bucket, FoldOpts) ->
     BKey = sext:encode({Bucket, <<>>}),
     [{first_key, BKey} | FoldOpts].
 
 %% @private
-get_status(Dir) ->
-    case eleveldb:open(Dir, [{create_if_missing, true}]) of
+get_status(Dir, State) ->
+    Options = [
+               {create_if_missing, true},
+               {write_buffer_size, State#state.write_buffer_size}
+              ],
+    case eleveldb:open(Dir, Options) of
         {ok, Ref} ->
             {ok, Status} = eleveldb:status(Ref, <<"leveldb.stats">>),
             Status;
