@@ -34,10 +34,7 @@
          put/6,
          coord_put/6,
          readrepair/6,
-         index_query/7,
-         list_buckets/5,
          list_keys/4,
-         list_keys/6,
          fold/3,
          get_vclocks/2]).
 
@@ -204,10 +201,7 @@ init([Index]) ->
     IndexBufSize = app_helper:get_env(riak_kv, index_buffer_size, 100),
     KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
     {ok, VId} = get_vnodeid(Index),
-    LegacyKeyListing = app_helper:get_env(riak_kv, legacy_keylisting, false),
-    AsyncFolding = app_helper:get_env(riak_kv, async_folds, true)
-        andalso
-        not LegacyKeyListing,   
+    AsyncFolding = app_helper:get_env(riak_kv, async_folds, true),
     case catch Mod:start(Index, [{async_folds, AsyncFolding},
                                  Configuration]) of
         {ok, ModState} ->
@@ -217,19 +211,19 @@ init([Index]) ->
             AsyncBackend = AsyncFolding andalso
                 lists:member(async_fold, Capabilities),
             State = #state{idx=Index,
-                        async_backend=AsyncBackend,
-                        index_backend=IndexBackend,
-                        mod=Mod,
-                        modstate=ModState,
-                        vnodeid=VId,
-                        bucket_buf_size=BucketBufSize,
-                        index_buf_size=IndexBufSize,
-                        key_buf_size=KeyBufSize,
-                        mrjobs=dict:new()},
+                           async_backend=AsyncBackend,
+                           index_backend=IndexBackend,
+                           mod=Mod,
+                           modstate=ModState,
+                           vnodeid=VId,
+                           bucket_buf_size=BucketBufSize,
+                           index_buf_size=IndexBufSize,
+                           key_buf_size=KeyBufSize,
+                           mrjobs=dict:new()},
             case AsyncBackend of
                 true ->
                     %% Create worker pool initialization tuple
-                    FoldWorkerPool = {pool, riak_kv_fold_worker, 10, []},
+                    FoldWorkerPool = {pool, riak_kv_worker, 10, []},
                     {ok, State, [FoldWorkerPool]};
                 false ->
                     {ok, State}
@@ -263,10 +257,60 @@ handle_command(?KV_MGET_REQ{bkeys=BKeys, req_id=ReqId, from=From}, _Sender, Stat
 handle_command(#riak_kv_listkeys_req_v1{bucket=Bucket, req_id=ReqId}, _Sender,
                State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
     do_legacy_list_bucket(ReqId,Bucket,Mod,ModState,Idx,State);
-handle_command(#riak_kv_listkeys_req_v2{bucket=Bucket, req_id=ReqId, caller=Caller}, _Sender,
-               State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
-    do_legacy_list_keys(Caller,ReqId,Bucket,Idx,Mod,ModState),
-    {noreply, State};
+handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Caller}, _Sender,
+               State=#state{async_backend=AsyncBackend,
+                            key_buf_size=BufferSize,
+                            mod=Mod,
+                            modstate=ModState,
+                            idx=Idx}) ->
+    case Input of
+        {filter, Bucket, Filter} ->
+            ok;
+        Bucket ->
+            Filter = none
+    end,
+    BufferMod = riak_kv_fold_buffer,
+    case Bucket of
+        '_' ->
+            case AsyncBackend of
+                true ->
+                    Opts = [async_fold];
+                false ->
+                    Opts = []
+            end,
+            BufferFun =
+                fun(Results) ->
+                        UniqueResults = lists:usort(Results),
+                        Caller ! {ReqId, {kl, Idx, UniqueResults}}
+                end,
+            FoldFun = fold_fun(buckets, BufferMod, Filter),
+            ModFun = fold_buckets;
+        _ ->
+            case AsyncBackend of
+                true ->
+                    Opts = [async_fold, {bucket, Bucket}];
+                false ->
+                    Opts = [{bucket, Bucket}]
+            end,
+            BufferFun =
+                fun(Results) ->
+                        Caller ! {ReqId, {kl, Idx, Results}}
+                end,
+            FoldFun = fold_fun(keys, BufferMod, Filter),
+            ModFun = fold_keys
+    end,
+    Buffer = BufferMod:new(BufferSize, BufferFun),
+    FinishFun =
+        fun(Buffer1) ->
+                riak_kv_fold_buffer:flush(Buffer1),
+                Caller ! {ReqId, Idx, done}
+        end,
+    case list(FoldFun, FinishFun, Mod, ModFun, ModState, Opts, Buffer) of
+        {async, AsyncWork} ->
+            {async, {fold, AsyncWork, FinishFun}, Caller, State};
+        _ ->
+            {noreply, State}
+    end;
 handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender, State) ->
     do_delete(BKey, ReqId, State);
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
@@ -309,14 +353,25 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
 handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
                 _FilterVNodes,
                 Sender,
-                State=#state{bucket_buf_size=BucketBufSize,
+                State=#state{async_backend=AsyncBackend,
+                             bucket_buf_size=BufferSize,
                              mod=Mod,
                              modstate=ModState}) ->
     %% Construct the filter function
     Filter = riak_kv_coverage_filter:build_filter(all, ItemFilter, undefined),
-    case list_buckets(Sender, Filter, Mod, ModState, BucketBufSize) of
+    BufferMod = riak_kv_fold_buffer,
+    Buffer = BufferMod:new(BufferSize, result_fun(Sender)),
+    FoldFun = fold_fun(buckets, BufferMod, Filter),
+    FinishFun = finish_fun(BufferMod, Sender),
+    case AsyncBackend of
+        true ->
+            Opts = [async_fold];
+        false ->
+            Opts = []
+    end,
+    case list(FoldFun, FinishFun, Mod, fold_buckets, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
-            {async, AsyncWork, Sender, State};
+            {async, {fold, AsyncWork, FinishFun}, Sender, State};
         _ ->
             {noreply, State}
     end;
@@ -324,16 +379,27 @@ handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
                                  item_filter=ItemFilter},
                 FilterVNodes,
                 Sender,
-                State=#state{idx=Index,
-                             key_buf_size=KeyBufSize,
+                State=#state{async_backend=AsyncBackend,
+                             idx=Index,
+                             key_buf_size=BufferSize,
                              mod=Mod,
                              modstate=ModState}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-    case list_keys(Sender, Bucket, Filter, Mod, ModState, KeyBufSize) of
+    BufferMod = riak_kv_fold_buffer,
+    Buffer = BufferMod:new(BufferSize, result_fun(Bucket, Sender)),
+    FoldFun = fold_fun(keys, BufferMod, Filter),
+    FinishFun = finish_fun(BufferMod, Sender),
+    case AsyncBackend of
+        true ->
+            Opts = [async_fold, {bucket, Bucket}];
+        false ->
+            Opts = [{bucket, Bucket}]
+    end,
+    case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
-            {async, AsyncWork, Sender, State};
+            {async, {fold, AsyncWork, FinishFun}, Sender, State};
         _ ->
             {noreply, State}
     end;
@@ -342,9 +408,10 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                               qry=Query},
                 FilterVNodes,
                 Sender,
-                State=#state{idx=Index,
+                State=#state{async_backend=AsyncBackend,
+                             idx=Index,
                              index_backend=IndexBackend,
-                             index_buf_size=IndexBufSize,
+                             index_buf_size=BufferSize,
                              mod=Mod,
                              modstate=ModState}) ->
     case IndexBackend of
@@ -352,9 +419,19 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
             %% Construct the filter function
             FilterVNode = proplists:get_value(Index, FilterVNodes),
             Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-            case index_query(Sender, Bucket, Query, Filter, Mod, ModState, IndexBufSize) of
+            BufferMod = riak_kv_fold_buffer,
+            Buffer = BufferMod:new(BufferSize, result_fun(Bucket, Sender)),
+            FoldFun = fold_fun(keys, BufferMod, Filter),
+            FinishFun = finish_fun(BufferMod, Sender),
+            case AsyncBackend of
+                true ->
+                    Opts = [async_fold, {index, Bucket, Query}];
+                false ->
+                    Opts = [{index, Bucket, Query}]
+            end,
+            case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, Buffer) of
                 {async, AsyncWork} ->
-                    {async, AsyncWork, Sender, State};
+                    {async, {fold, AsyncWork, FinishFun}, Sender, State};
                 _ ->
                     {noreply, State}
             end;
@@ -466,7 +543,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     riak_kv_stat:update(vnode_put),
     UpdState.
 
-prepare_put(#state{index_backend=false, vnodeid=VId}, 
+prepare_put(#state{index_backend=false, vnodeid=VId},
             PutArgs=#putargs{lww=true, robj=RObj, starttime=StartTime}) ->
     {{true, riak_object:increment_vclock(RObj, VId, StartTime)}, PutArgs};
 prepare_put(#state{index_backend=IndexBackend,
@@ -597,14 +674,14 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
     end;
 put_merge(true, true, _CurObj, UpdObj, VId, StartTime) -> % coord=false, LWW=true
     {newobj, riak_object:increment_vclock(UpdObj, VId, StartTime)};
-put_merge(true, false, CurObj, UpdObj, VId, StartTime) -> 
+put_merge(true, false, CurObj, UpdObj, VId, StartTime) ->
     UpdObj1 = riak_object:increment_vclock(UpdObj, VId, StartTime),
     UpdVC = riak_object:vclock(UpdObj1),
     CurVC = riak_object:vclock(CurObj),
 
     %% Check the coord put will replace the existing object
     case vclock:get_counter(VId, UpdVC) > vclock:get_counter(VId, CurVC) andalso
-        vclock:descends(CurVC, UpdVC) == false andalso 
+        vclock:descends(CurVC, UpdVC) == false andalso
         vclock:descends(UpdVC, CurVC) == true of
         true ->
             {newobj, UpdObj1};
@@ -653,53 +730,68 @@ do_get_term(BKey, Mod, ModState) ->
 do_get_binary({Bucket, Key}, Mod, ModState) ->
     Mod:get(Bucket, Key, ModState).
 
+%% @private
+%% @doc This is a generic function for operations that involve
+%% listing things from the backend. Examples are listing buckets,
+%% listing keys, or doing secondary index queries.
+list(FoldFun, FinishFun, Mod, ModFun, ModState, Opts, Buffer) ->
+    case Mod:ModFun(FoldFun, Buffer, Opts, ModState) of
+        {ok, Acc} ->
+            FinishFun(Acc);
+        {async, AsyncWork} ->
+            {async, AsyncWork}
+    end.
 
 %% @private
-list_buckets(Sender, Filter, Mod, ModState, BufferSize) ->
-    Buffer = riak_kv_fold_util:fold_buffer(BufferSize, Sender),
-    case Filter of
-        none ->
-            FoldBucketsFun =
-                fun(Bucket, Buf) ->
-                        riak_kv_fold_buffer:add(Bucket, Buf)
-                end;
-        _ ->
-            FoldBucketsFun =
-                fun(Bucket, Buf) ->
-                        case Filter(Bucket) of
-                            true ->
-                                riak_kv_fold_buffer:add(Bucket, Buf);
-                            false ->
-                                Buf
-                        end
-                end
-    end,
-    FoldResult = Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState),
-    riak_kv_fold_util:finish_fold(FoldResult, Sender).
+fold_fun(buckets, BufferMod, none) ->
+    fun(Bucket, Buffer) ->
+            BufferMod:add(Bucket, Buffer)
+    end;
+fold_fun(buckets, BufferMod, Filter) ->
+    fun(Bucket, Buffer) ->
+            case Filter(Bucket) of
+                true ->
+                    BufferMod:add(Bucket, Buffer);
+                false ->
+                    Buffer
+            end
+    end;
+fold_fun(keys, BufferMod, none) ->
+    fun(_, Key, Buffer) ->
+            BufferMod:add(Key, Buffer)
+    end;
+fold_fun(keys, BufferMod, Filter) ->
+    fun(_, Key, Buffer) ->
+            case Filter(Key) of
+                true ->
+                    BufferMod:add(Key, Buffer);
+                false ->
+                    Buffer
+            end
+    end.
 
 %% @private
-list_keys(Sender, Bucket, Filter, Mod, ModState, BufferSize) ->
-    Buffer = riak_kv_fold_util:fold_buffer(BufferSize, Bucket, Sender),
-    case Filter of
-        none ->
-            FoldKeysFun =
-                fun(_, Key, Buf) ->
-                        riak_kv_fold_buffer:add(Key, Buf)
-                end;
-        _ ->
-            FoldKeysFun =
-                fun(_, Key, Buf) ->
-                        case Filter(Key) of
-                            true ->
-                                riak_kv_fold_buffer:add(Key, Buf);
-                            false ->
-                                Buf
-                        end
-                end
-    end,
-    Opts = [{bucket, Bucket}],
-    FoldResult = Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState),
-    riak_kv_fold_util:finish_fold(FoldResult, Bucket, Sender).
+result_fun(Sender) ->
+    fun(Items) ->
+            riak_core_vnode:reply(Sender, Items)
+    end.
+
+%% @private
+result_fun(Bucket, Sender) ->
+    fun(Items) ->
+            riak_core_vnode:reply(Sender, {Bucket, Items})
+    end.
+
+%% @private
+finish_fun(BufferMod, Sender) ->
+    fun(Buffer) ->
+            finish_fold(BufferMod, Buffer, Sender)
+    end.
+
+%% @private
+finish_fold(BufferMod, Buffer, Sender) ->
+    BufferMod:flush(Buffer),
+    riak_core_vnode:reply(Sender, done).
 
 %% @private
 %% @deprecated This function is only here to support
@@ -723,101 +815,6 @@ do_legacy_list_bucket(ReqID,Bucket,Mod,ModState,Idx,State) ->
         {error, Reason} ->
             {reply, {error, Reason, ReqID}, State}
     end.
-
-%% @private
-%% @deprecated This function is only here to support
-%% rolling upgrades and will be removed.
-do_legacy_list_keys(Caller,ReqId,'_',Idx,Mod,ModState) ->
-    do_legacy_list_buckets(Caller,ReqId,Idx,Mod,ModState);
-do_legacy_list_keys(Caller,ReqId,Input,Idx,Mod,ModState) ->
-    case Input of
-        {filter, Bucket, Filter} ->
-            ok;
-        Bucket ->
-            Filter = none
-    end,
-    BufferSize = 100,
-    BufferFun = fun(Results) ->
-                        Caller ! {ReqId, {kl, Idx, Results}}
-                end,
-    Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
-    case Filter of
-        none ->
-            FoldKeysFun =
-                fun(_, Key, Buf) ->
-                        riak_kv_fold_buffer:add(Key, Buf)
-                end;
-        _ ->
-            FoldKeysFun =
-                fun(_, Key, Buf) ->
-                        case Filter(Key) of
-                            true ->
-                                riak_kv_fold_buffer:add(Key, Buf);
-                            false ->
-                                Buf
-                        end
-                end
-    end,
-    Opts = [{bucket, Bucket}],
-    case Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState) of
-        {ok, Buffer1} ->
-            FlushFun = fun(FinalResults) ->
-                               Caller ! {ReqId, {kl, Idx, FinalResults}},
-                               Caller ! {ReqId, Idx, done}
-                       end,
-            riak_kv_fold_buffer:flush(Buffer1, FlushFun);
-        {error, Reason} ->
-            Caller ! {ReqId, {error, Reason}}
-    end.
-
-%% @private
-%% @deprecated This function is only here to support
-%% rolling upgrades and will be removed.
-do_legacy_list_buckets(Caller,ReqId,Idx,Mod,ModState) ->
-    BufferSize = 1000,
-    BufferFun = fun(Results) ->
-                        UniqueResults = lists:usort(Results),
-                        Caller ! {ReqId, {kl, Idx, UniqueResults}}
-                end,
-    Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
-    FoldBucketsFun =
-        fun(Bucket, Buf) ->
-                riak_kv_fold_buffer:add(Bucket, Buf)
-        end,
-    case Mod:fold_buckets(FoldBucketsFun, Buffer, [], ModState) of
-        {ok, Buffer1} ->
-            FlushFun = fun(FinalResults) ->
-                               Caller ! {ReqId, {kl, Idx, FinalResults}},
-                               Caller ! {ReqId, Idx, done}
-                       end,
-            riak_kv_fold_buffer:flush(Buffer1, FlushFun);
-        {error, Reason} ->
-            Caller ! {ReqId, {error, Reason}}
-    end.
-
-%% @private
-index_query(Sender, Bucket, Query, Filter, Mod, ModState, BufferSize) ->
-    Buffer = riak_kv_fold_util:fold_buffer(BufferSize, Bucket, Sender),
-    case Filter of
-        none ->
-            FoldKeysFun =
-                fun(_, Key, Buf) ->
-                        riak_kv_fold_buffer:add(Key, Buf)
-                end;
-        _ ->
-            FoldKeysFun =
-                fun(_, Key, Buf) ->
-                        case Filter(Key) of
-                            true ->
-                                riak_kv_fold_buffer:add(Key, Buf);
-                            false ->
-                                Buf
-                        end
-                end
-    end,
-    Opts = [{index, Bucket, Query}],
-    FoldResult = Mod:fold_keys(FoldKeysFun, Buffer, Opts, ModState),
-    riak_kv_fold_util:finish_fold(FoldResult, Bucket, Sender).
 
 %% @private
 do_delete(BKey, ReqId, State) ->
@@ -857,14 +854,24 @@ do_delete(BKey, ReqId, State) ->
     end.
 
 %% @private
-do_fold(Fun, Acc0, Sender, State = #state{mod=Mod, modstate=ModState}) ->
-    case Mod:fold_objects(Fun, Acc0, [], ModState) of
+do_fold(Fun, Acc0, Sender, State=#state{async_backend=AsyncBackend,
+                                        mod=Mod,
+                                        modstate=ModState}) ->
+    case AsyncBackend of
+        true ->
+            Opts = [async_fold];
+        false ->
+            Opts = []
+    end,
+    case Mod:fold_objects(Fun, Acc0, Opts, ModState) of
         {ok, Acc} ->
             {reply, Acc, State};
         {async, Work} ->
-            {async, {fold, Work}, Sender, State};
-        {{sync, SyncResults}, {async, Work}} ->
-            {async, {fold, SyncResults, Work}, Sender, State};
+            FinishFun =
+                fun(Acc) ->
+                        riak_core_vnode:reply(Sender, Acc)
+                end,
+            {async, {fold, Work, FinishFun}, Sender, State};
         ER ->
             {reply, ER, State}
     end.
@@ -933,7 +940,7 @@ get_vnodeid(Index) ->
     F = fun(Status) ->
                 case proplists:get_value(vnodeid, Status, undefined) of
                     undefined ->
-                        assign_vnodeid(os:timestamp(), 
+                        assign_vnodeid(os:timestamp(),
                                        riak_core_nodeid:get(),
                                        Status);
                     VnodeId ->
@@ -950,11 +957,11 @@ assign_vnodeid(Now, NodeId, Status) ->
     LastVnodeEpoch = proplists:get_value(last_epoch, Status, 0),
     VnodeEpoch = erlang:max(NowEpoch, LastVnodeEpoch+1),
     VnodeId = <<NodeId/binary, VnodeEpoch:32/integer>>,
-    UpdStatus = [{vnodeid, VnodeId}, {last_epoch, VnodeEpoch} | 
-                 proplists:delete(vnodeid, 
-                   proplists:delete(last_epoch, Status))],
+    UpdStatus = [{vnodeid, VnodeId}, {last_epoch, VnodeEpoch} |
+                 proplists:delete(vnodeid,
+                                  proplists:delete(last_epoch, Status))],
     {VnodeId, UpdStatus}.
-                
+
 %% Clear the vnodeid - returns {ok, cleared}
 clear_vnodeid(Index) ->
     F = fun(Status) ->
@@ -986,13 +993,13 @@ update_vnode_status2(F, Status, VnodeFile) ->
                     ER
             end
     end.
- 
+
 vnode_status_filename(Index) ->
     P_DataDir = app_helper:get_env(riak_core, platform_data_dir),
     VnodeStatusDir = app_helper:get_env(riak_kv, vnode_status,
                                         filename:join(P_DataDir, "kv_vnode")),
     filename:join(VnodeStatusDir, integer_to_list(Index)).
-    
+
 read_vnode_status(File) ->
     case file:consult(File) of
         {ok, [Status]} when is_list(Status) ->
@@ -1052,8 +1059,8 @@ assign_vnodeid_restart_earlier_ts_test() ->
     %% Should be greater than last offered - which is the 2mil timestamp
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
     ?assertEqual(<<1, 2, 3, 4, 119,53,148,1>>, Vid2).
-        
-%% Test 
+
+%% Test
 vnode_status_test_() ->
     {setup,
      fun() ->
@@ -1102,7 +1109,7 @@ vnode_status_test_() ->
                      end,
                  Index = 0,
                  ?assertEqual({error, eacces},  update_vnode_status(F, Index))
-            end)
+             end)
 
      ]}.
 
@@ -1237,20 +1244,21 @@ new_result_listener(Type) ->
 
 result_listener_buckets(Acc) ->
     receive
-        {'$gen_event', {_,{results,Results}}} ->
-            result_listener_buckets(Results ++ Acc);
-        {'$gen_event', {_,{final_results,Results}}} ->
-            result_listener_done(Results ++ Acc)
+        {'$gen_event', {_, done}} ->
+            result_listener_done(Acc);
+        {'$gen_event', {_, Results}} ->
+            result_listener_buckets(Results ++ Acc)
+
     after 5000 ->
             result_listener_done({timeout, Acc})
     end.
 
 result_listener_keys(Acc) ->
     receive
-        {'$gen_event', {_,{results,{_Bucket, Results}}}} ->
-            result_listener_keys(Results ++ Acc);
-        {'$gen_event', {_,{final_results,{_Bucket, Results}}}} ->
-            result_listener_done(Results ++ Acc)
+        {'$gen_event', {_, done}} ->
+            result_listener_done(Acc);
+        {'$gen_event', {_, {_Bucket, Results}}} ->
+            result_listener_keys(Results ++ Acc)
     after 5000 ->
             result_listener_done({timeout, Acc})
     end.
