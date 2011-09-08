@@ -56,14 +56,12 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, ClientType]) ->
     {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
-process_results({results, Buckets},
+process_results(done, StateData) ->
+    {done, StateData};
+process_results(Buckets,
                 StateData=#state{buckets=BucketAcc}) ->
     {ok, StateData#state{buckets=ordsets:union(ordsets:from_list(Buckets),
                                                BucketAcc)}};
-process_results({final_results, Buckets},
-                StateData=#state{buckets=BucketAcc}) ->
-    {done, StateData#state{buckets=ordsets:union(ordsets:from_list(Buckets),
-                                                 BucketAcc)}};
 process_results({error, Reason}, _State) ->
     {error, Reason}.
 
