@@ -242,22 +242,21 @@ ensure_dir(Dir) ->
 
 init_data_dir() ->
     %% There are some upgrade situations where the mapred_queue_dir, is not
-    %% specified and as such we'll wind up using the default data/mr_queue,
-    %% relative to current working dir. This causes problems in a packaged env
-    %% (such as rpm/deb) where the current working dir is NOT writable. To
-    %% accomodate these situations, we fallback to creating the mr_queue in
-    %% /tmp.
-    {ok, Cwd} = file:get_cwd(),
+    %% specified and as such we'll wind up using the mr_queue dir,
+    %% relative to platform_data_dir.
+    %% We fallback to creating the mr_queue in /tmp.
+    P_DataDir = app_helper:get_env(riak_core, platform_data_dir),
     DataDir0 = app_helper:get_env(riak_kv, mapred_queue_dir,
-                                  filename:join(Cwd, "data/mr_queue")),
+                                  filename:join(P_DataDir, "mr_queue")),
     case ensure_dir(DataDir0) of
         ok ->
             DataDir0;
         {error, Reason} ->
+            TmpDir = "/tmp/mr_queue",
             lager:warning("Failed to create ~p for mapred_queue_dir "
-                                     "defaulting to /tmp/mr_queue : ~p",
-                                     [DataDir0, Reason]),
-            ok = ensure_dir("/tmp/mr_queue"),
-            "/tmp/mr_queue"
+                                     "defaulting to %s: ~p",
+                                     [DataDir0, TmpDir, Reason]),
+            ok = ensure_dir(TmpDir),
+            TmpDir
     end.
 

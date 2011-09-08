@@ -988,9 +988,10 @@ update_vnode_status2(F, Status, VnodeFile) ->
     end.
  
 vnode_status_filename(Index) ->
-    DataDir = app_helper:get_env(riak_core, platform_data_dir, "data"),
-    Default_KV_VnodeDir = filename:join(DataDir, "kv_vnode"),
-    VnodeStatusDir = app_helper:get_env(riak_kv, vnode_status, Default_KV_VnodeDir),
+    VnodeStatusDir = app_helper:get_env(riak_kv, vnode_status, "data/kv_vnode"),
+    P_DataDir = app_helper:get_env(riak_core, platform_data_dir),
+    VnodeStatusDir = app_helper:get_env(riak_kv, vnode_status,
+                                        filename:join(P_DataDir, "kv_vnode")),
     filename:join(VnodeStatusDir, integer_to_list(Index)).
     
 read_vnode_status(File) ->
