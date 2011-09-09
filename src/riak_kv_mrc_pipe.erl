@@ -126,6 +126,7 @@
 -export([example/0, example_bucket/0, example_reduce/0,
          example_setup/0, example_setup/1]).
 
+-include("riak_kv_vnode.hrl").
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
 
@@ -532,6 +533,32 @@ send_inputs_async(Pipe, Inputs, Timeout) ->
               end
       end).
 
+kvlistkeys_xform({cover, FilterVnodes, {Bucket, ItemFilter}},
+                 Partition, FittingDetails) ->
+    ReqId = erlang:phash2(erlang:now()), % stolen from riak_client
+    riak_core_vnode_master:coverage(
+      ?KV_LISTKEYS_REQ{bucket=Bucket,
+                       item_filter=ItemFilter},
+      {Partition, node()},
+      FilterVnodes,
+      {raw, ReqId, self()},
+      riak_kv_vnode_master),
+    kvlistkeys_xform_loop(ReqId, Partition, FittingDetails).
+
+kvlistkeys_xform_loop(ReqId, Partition, FittingDetails) ->
+    receive
+        {ReqId, {Bucket, Keys}} ->
+            kvlistkeys_xform_send(Bucket, Keys, Partition, FittingDetails),
+            kvlistkeys_xform_loop(ReqId, Partition, FittingDetails);
+        {ReqId, done} ->
+            ok
+    end.
+
+kvlistkeys_xform_send(Bucket, Keys, Partition, FittingDetails) ->
+    [ riak_pipe_vnode_worker:send_output(
+         {Bucket, Key}, Partition, FittingDetails)
+      || Key <- Keys ].
+
 %% @equiv send_inputs(Pipe, Inputs, 60000)
 send_inputs(Pipe, Inputs) ->
     send_inputs(Pipe, Inputs, ?DEFAULT_TIMEOUT).
@@ -548,10 +575,29 @@ send_inputs(Pipe, BucketKeyList, _Timeout) when is_list(BucketKeyList) ->
     riak_pipe:eoi(Pipe),
     ok;
 send_inputs(Pipe, Bucket, _Timeout) when is_binary(Bucket) ->
-    %% TODO: riak_kv_listkeys_pipe
-    {ok, C} = riak:local_client(),
-    {ok, ReqId} = C:stream_list_keys(Bucket),
-    send_key_list(Pipe, Bucket, ReqId);
+    %% start a new short pipe in order to use a coverage-enqueue
+    %% that will trigger pipe workers to list keys from their twin
+    %% kv vnodes, and then enqueue those keys in the MR pipe
+    [{_Name, Head}|_] = Pipe#pipe.fittings,
+    {ok, LKP} = riak_pipe:exec([#fitting_spec{name=listkeys,
+                                              module=riak_pipe_w_xform,
+                                              arg=fun kvlistkeys_xform/3,
+                                              nval=1}],
+                               [{sink, Head}]),
+    ReqId = erlang:phash2(erlang:now()), %% stolen from riak_client
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    NVal = proplists:get_value(n_val, BucketProps),
+    {ok, Sender} = riak_pipe_qcover_sup:start_qcover_fsm(
+                     [{raw, ReqId, self()},
+                      [LKP, {Bucket, []}, NVal]]),
+    erlang:link(Sender),
+    receive
+        {ReqId, done} ->
+            riak_pipe:eoi(LKP),
+            ok;
+        {ReqId, Error} ->
+            Error
+    end;
 send_inputs(Pipe, {Bucket, FilterExprs}, _Timeout) ->
     {ok, C} = riak:local_client(),
     case C:stream_list_keys({Bucket, FilterExprs}) of
