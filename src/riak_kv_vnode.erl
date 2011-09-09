@@ -863,9 +863,11 @@ do_fold(Fun, Acc0, Sender, State = #state{mod=Mod, modstate=ModState}) ->
         {ok, Acc} ->
             {reply, Acc, State};
         {async, Work} ->
-            {async, {fold, Work}, Sender, State};
-        {{sync, SyncResults}, {async, Work}} ->
-            {async, {fold, SyncResults, Work}, Sender, State};
+            FinishFun = 
+                fun(Acc) ->
+                        riak_core_vnode:reply(Sender, Acc)
+                end,            
+            {async, Work, FinishFun, State};
         ER ->
             {reply, ER, State}
     end.
