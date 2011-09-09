@@ -86,7 +86,7 @@ start(Partition, Config) ->
     WriteBufferMin = config_value(write_buffer_size_min, Config, 3 * 1024 * 1024),
     WriteBufferMax = config_value(write_buffer_size_max, Config, 6 * 1024 * 1024),
     random:seed(now()),
-    WriteBufferSize = WriteBufferMin + random:uniform(WriteBufferMax - WriteBufferMin),
+    WriteBufferSize = WriteBufferMin + random:uniform(1 + WriteBufferMax - WriteBufferMin),
 
     %% Assemble options...
     Options = [
