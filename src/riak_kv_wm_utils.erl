@@ -122,7 +122,7 @@ multipart_encode_body(Prefix, Bucket, {MD, V}, APIVersion) ->
      end,
      "\r\n",
      case dict:find(?MD_USERMETA, MD) of
-         {ok, M} ->
+         {ok, M} -> 
             lists:foldl(fun({Hdr,Val},Acc) ->
                             [Acc|[Hdr,": ",encode_2i_value(Val),"\r\n"]]
                         end,
