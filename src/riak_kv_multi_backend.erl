@@ -251,166 +251,26 @@ delete(Bucket, Key, IndexSpecs, State) ->
                    any(),
                    [],
                    state()) -> fold_result().
-fold_buckets(FoldBucketsFun, Acc, Opts, #state{async_backends=AsyncBackends,
-                                               sync_backends=SyncBackends}) ->
-    FoldFun = fun({_, Module, SubState}, FoldAcc) ->
-                      Result = Module:fold_buckets(FoldBucketsFun,
-                                                   FoldAcc,
-                                                   Opts,
-                                                   SubState),
-                      case Result of
-                          {ok, FoldAcc1} ->
-                              FoldAcc1;
-                          {async, AsyncWork} ->
-                              AsyncWork();
-                          {error, Reason} ->
-                              throw({error, {Module, Reason}})
-                      end
-              end,
-    try
-        case SyncBackends of 
-            [] ->
-                Acc0 = Acc;
-            _ ->
-                Acc0 = lists:foldl(FoldFun, Acc, SyncBackends)
-        end,
-        %% We have now accumulated the results for all of the
-        %% synchronous backends. The next step is to wrap the
-        %% asynchronous work in a function that passes the accumulator
-        %% to each successive piece of asynchronous work.
-        case AsyncBackends of
-            [] ->
-                %% Just return the synchronous results
-                {ok, Acc0};
-            _ ->
-                AsyncWork =
-                    fun() ->
-                            lists:foldl(FoldFun, Acc0, AsyncBackends)
-                    end,
-                {async, AsyncWork}
-        end
-    catch
-        Error ->
-            Error
-    end.
+fold_buckets(FoldBucketsFun, Acc, Opts, State) ->
+    fold(undefined, fold_buckets, FoldBucketsFun, Acc, Opts, State).
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
                 state()) -> fold_result().
-fold_keys(FoldKeysFun, Acc, Opts, State=#state{async_backends=AsyncBackends,
-                                               sync_backends=SyncBackends}) ->
+fold_keys(FoldKeysFun, Acc, Opts, State) ->
     Bucket = proplists:get_value(bucket, Opts),
-    case Bucket of
-        undefined ->
-            FoldFun =
-                fun({_, Module, SubState}, FoldAcc) ->
-                        Result = Module:fold_keys(FoldKeysFun,
-                                                  FoldAcc,
-                                                  Opts,
-                                                  SubState),
-                      case Result of
-                          {ok, FoldAcc1} ->
-                              FoldAcc1;
-                          {async, AsyncWork} ->
-                              AsyncWork();
-                          {error, Reason} ->
-                              throw({error, {Module, Reason}})
-                      end
-                end,
-            try
-                case SyncBackends of 
-                    [] ->
-                        Acc0 = Acc;
-                    _ ->
-                        Acc0 = lists:foldl(FoldFun, Acc, SyncBackends)
-                end,
-                %% We have now accumulated the results for all of the
-                %% synchronous backends. The next step is to wrap the
-                %% asynchronous work in a function that passes the accumulator
-                %% to each successive piece of asynchronous work.
-                case AsyncBackends of
-                    [] ->
-                        %% Just return the synchronous results
-                        {ok, Acc0};
-                    _ ->
-                        AsyncWork =
-                            fun() ->
-                                    lists:foldl(FoldFun, Acc0, AsyncBackends)
-                            end,
-                        {async, AsyncWork}
-                end
-            catch
-                Error ->
-                    Error
-            end;
-        _ ->
-            {_Name, Module, SubState} = get_backend(Bucket, State),
-            Module:fold_keys(FoldKeysFun,
-                             Acc,
-                             Opts,
-                             SubState)
-    end.
+    fold(Bucket, fold_keys, FoldKeysFun, Acc, Opts, State).
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
                    state()) -> fold_result().
-fold_objects(FoldObjectsFun, Acc, Opts, State=#state{async_backends=AsyncBackends,
-                                                     sync_backends=SyncBackends}) ->
+fold_objects(FoldObjectsFun, Acc, Opts, State) ->
     Bucket = proplists:get_value(bucket, Opts),
-    case Bucket of
-        undefined ->
-            FoldFun =
-                fun({_, Module, SubState}, FoldAcc) ->
-                        Result = Module:fold_objects(FoldObjectsFun,
-                                                     FoldAcc,
-                                                     Opts,
-                                                     SubState),
-                      case Result of
-                          {ok, FoldAcc1} ->
-                              FoldAcc1;
-                          {async, AsyncWork} ->
-                              AsyncWork();
-                          {error, Reason} ->
-                              throw({error, {Module, Reason}})
-                      end
-                end,
-            try
-                case SyncBackends of 
-                    [] ->
-                        Acc0 = Acc;
-                    _ ->
-                        Acc0 = lists:foldl(FoldFun, Acc, SyncBackends)
-                end,
-                %% We have now accumulated the results for all of the
-                %% synchronous backends. The next step is to wrap the
-                %% asynchronous work in a function that passes the accumulator
-                %% to each successive piece of asynchronous work.
-                case AsyncBackends of
-                    [] ->
-                        %% Just return the synchronous results
-                        {ok, Acc0};
-                    _ ->
-                        AsyncWork =
-                            fun() ->
-                                    lists:foldl(FoldFun, Acc0, AsyncBackends)
-                            end,
-                        {async, AsyncWork}
-                end
-            catch
-                Error ->
-                    Error
-            end;
-        _ ->
-            {_Name, Module, SubState} = get_backend(Bucket, State),
-            Module:fold_objects(FoldObjectsFun,
-                                Acc,
-                                Opts,
-                                SubState)
-    end.
+    fold(Bucket, fold_objects, FoldObjectsFun, Acc, Opts, State).
 
 %% @doc Delete all objects from the different backends
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
@@ -506,6 +366,61 @@ update_backend_state(Backend, Module, ModState, State) ->
                                                SyncBackends,
                                                {Backend, Module, ModState}),
             State#state{sync_backends=NewSyncBackends}
+    end.
+
+%% @private
+%% @doc Shared code used by all the backend fold functions.
+fold(Bucket, ModFun, FoldFun, Acc, Opts, State=#state{async_backends=AsyncBackends,
+                                                      sync_backends=SyncBackends}) ->
+    case Bucket of
+        undefined ->
+            BackendFoldFun =
+                fun({_, Module, SubState}, FoldAcc) ->
+                        Result = Module:ModFun(FoldFun,
+                                               FoldAcc,
+                                               Opts,
+                                               SubState),
+                        case Result of
+                            {ok, FoldAcc1} ->
+                                FoldAcc1;
+                            {async, AsyncWork} ->
+                                AsyncWork();
+                            {error, Reason} ->
+                                throw({error, {Module, Reason}})
+                        end
+                end,
+            try
+                case SyncBackends of 
+                    [] ->
+                        Acc0 = Acc;
+                    _ ->
+                        Acc0 = lists:foldl(BackendFoldFun, Acc, SyncBackends)
+                end,
+                %% We have now accumulated the results for all of the
+                %% synchronous backends. The next step is to wrap the
+                %% asynchronous work in a function that passes the accumulator
+                %% to each successive piece of asynchronous work.
+                case AsyncBackends of
+                    [] ->
+                        %% Just return the synchronous results
+                        {ok, Acc0};
+                    _ ->
+                        AsyncWork =
+                            fun() ->
+                                    lists:foldl(BackendFoldFun, Acc0, AsyncBackends)
+                            end,
+                        {async, AsyncWork}
+                end
+            catch
+                Error ->
+                    Error
+            end;
+        _ ->
+            {_Name, Module, SubState} = get_backend(Bucket, State),
+            Module:ModFun(FoldFun,
+                          Acc,
+                          Opts,
+                          SubState)
     end.
 
 %% @private
