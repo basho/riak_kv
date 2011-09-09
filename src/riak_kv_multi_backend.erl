@@ -536,6 +536,28 @@ cleanup({P1, P2}) ->
     catch exit(P1, kill),
     catch exit(P2, kill).
 
+async_fold_config() ->
+    [
+     {storage_backend, riak_kv_multi_backend},
+     {multi_backend_default, second_backend},
+      {multi_backend, [
+                      {first_backend, riak_kv_memory_backend, []},
+                      {second_backend, riak_kv_memory_backend, []}
+                     ]}
+    ].
+
+sync_and_async_fold_config() ->
+    [
+     {storage_backend, riak_kv_multi_backend},
+     {multi_backend_default, second_backend},
+      {multi_backend, [
+                      {first_backend, riak_kv_memory_backend, []},
+                      {second_backend,
+                       riak_kv_memory_backend,
+                       [{async_folds, false}]}
+                     ]}
+    ].
+
 -endif. % EQC
 
 %% Check extra callback messages are ignored by backends
@@ -575,28 +597,6 @@ sample_config() ->
       {multi_backend, [
                       {first_backend, riak_kv_memory_backend, []},
                       {second_backend, riak_kv_memory_backend, []}
-                     ]}
-    ].
-
-async_fold_config() ->
-    [
-     {storage_backend, riak_kv_multi_backend},
-     {multi_backend_default, second_backend},
-      {multi_backend, [
-                      {first_backend, riak_kv_memory_backend, []},
-                      {second_backend, riak_kv_memory_backend, []}
-                     ]}
-    ].
-
-sync_and_async_fold_config() ->
-    [
-     {storage_backend, riak_kv_multi_backend},
-     {multi_backend_default, second_backend},
-      {multi_backend, [
-                      {first_backend, riak_kv_memory_backend, []},
-                      {second_backend,
-                       riak_kv_memory_backend,
-                       [{async_folds, false}]}
                      ]}
     ].
 
