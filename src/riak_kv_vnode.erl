@@ -705,7 +705,6 @@ do_get_binary({Bucket, Key}, Mod, ModState) ->
 %% listing things from the backend. Examples are listing buckets,
 %% listing keys, or doing secondary index queries.
 list(FoldFun, FinishFun, Mod, ModFun, ModState, Opts, Buffer) ->
-    io:format("Calling list for ~p:~p~n", [Mod, ModFun]),
     case Mod:ModFun(FoldFun, Buffer, Opts, ModState) of
         {ok, Acc} ->
             FinishFun(Acc);
