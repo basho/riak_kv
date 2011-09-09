@@ -176,7 +176,7 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{fold_opts=FoldOpts,
     BucketFolder =
         fun() ->
                 {FoldResult, _} =
-                    eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1),
+                    eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts1),
                 FoldResult
         end,
     {async, BucketFolder};
