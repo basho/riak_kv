@@ -176,18 +176,29 @@ get_fold_buffer() ->
 get_fold_buffer_fun(From) ->
     fun(Results) ->
             riak_core_vnode:reply(From,
-                                  {results, Results})
+                                  Results)
     end.
+
+%% @private
+finish_fun(Sender) ->
+    fun(Buffer) ->
+            finish_fold(Buffer, Sender)
+    end.
+
+%% @private
+finish_fold(Buffer, Sender) ->
+    riak_kv_fold_buffer:flush(Buffer),
+    riak_core_vnode:reply(Sender, done).
 
 receive_fold_results(Acc) ->
     receive
-        {_, {results, Results}} ->
-            receive_fold_results(Acc++Results);
-        {_, {final_results, Results}} ->
-            Acc++Results;
-        {_, Error} ->
+        {_, done} ->
+            Acc;
+        {error, Error} ->
             ?debugFmt("Error occurred: ~p~n", [Error]),
-            []
+            [];
+        {_, Results} ->
+            receive_fold_results(Acc++Results)
     end.
 
 %%====================================================================
@@ -270,11 +281,12 @@ postcondition(_From, _To, S=#qcst{worker_pool=Pool},
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Buckets = [Bucket || {{Bucket, _}, _} <- ExpectedEntries],
     From = {raw, foldid, self()},
-    case riak_kv_fold_util:finish_fold(FoldRes, From) of
+    case FoldRes of
         {async, Work} ->
-            riak_core_vnode_worker_pool:handle_work(Pool, Work, From);
-        _ ->
-            ok
+            FinishFun = finish_fun(From),
+            riak_core_vnode_worker_pool:handle_work(Pool, Work, FinishFun);
+        {ok, Buffer} ->
+            finish_fold(Buffer, From)
     end,
     R = receive_fold_results([]),
     lists:usort(Buckets) =:= lists:sort(R);
@@ -283,11 +295,12 @@ postcondition(_From, _To, S=#qcst{worker_pool=Pool},
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Keys = [{Bucket, Key} || {{Bucket, Key}, _} <- ExpectedEntries],
     From = {raw, foldid, self()},
-    case riak_kv_fold_util:finish_fold(FoldRes, From) of
+    case FoldRes of
         {async, Work} ->
-            riak_core_vnode_worker_pool:handle_work(Pool, Work, From);
-        _ ->
-            ok
+            FinishFun = finish_fun(From),
+            riak_core_vnode_worker_pool:handle_work(Pool, Work, FinishFun);
+        {ok, Buffer} ->
+            finish_fold(Buffer, From)
     end,
     R = receive_fold_results([]),
     lists:sort(Keys) =:= lists:sort(R);
@@ -296,11 +309,12 @@ postcondition(_From, _To, S=#qcst{worker_pool=Pool},
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Objects = [Object || Object <- ExpectedEntries],
     From = {raw, foldid, self()},
-    case riak_kv_fold_util:finish_fold(FoldRes, From) of
+    case FoldRes of
         {async, Work} ->
-            riak_core_vnode_worker_pool:handle_work(Pool, Work, From);
-        _ ->
-            ok
+            FinishFun = finish_fun(From),
+            riak_core_vnode_worker_pool:handle_work(Pool, Work, FinishFun);
+        {ok, Buffer} ->
+            finish_fold(Buffer, From)
     end,
     R = receive_fold_results([]),
     lists:sort(Objects) =:= lists:sort(R);
