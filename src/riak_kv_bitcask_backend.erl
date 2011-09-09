@@ -85,7 +85,7 @@ start(Partition, Config) ->
         DataRoot ->
             PartitionDir = filename:join([DataRoot, integer_to_list(Partition)]),
             %% Check if a directory exists for the partition
-            case get_data_dir(DataRoot, PartitionDir) of
+            case get_data_dir(PartitionDir) of
                 {ok, DataDir} ->
                     BitcaskOpts = set_mode(read_write, Config),
                     case bitcask:open(filename:join(DataRoot, DataDir), BitcaskOpts) of
@@ -476,7 +476,7 @@ config_value(Key, Config, Default) ->
     end.
 
 %% @private
-get_data_dir(DataRoot, PartitionDir) ->
+get_data_dir(PartitionDir) ->
     case filelib:is_dir(PartitionDir) of
         true ->
             {ok, PartitionDir};
@@ -484,30 +484,15 @@ get_data_dir(DataRoot, PartitionDir) ->
             %% Check for any existing directories for the partition
             %% and select the most recent as the active data directory
             %% if any exist.
-            case file:list_dir(DataRoot) of
-                {ok, []} ->
+            case filelib:wildcard(PartitionDir ++ "-*") of
+                [] ->
                     make_data_dir(PartitionDir);
-                {ok, Dirs} ->
-                    PartitionStr = filename:basename(PartitionDir),
-                    PartitionDirs =
-                        lists:sort(
-                          [Dir ||
-                              Dir <- Dirs,
-                              string:left(Dir, length(PartitionStr) + 1) =:=
-                                  (PartitionStr ++ "-")]
-                         ),
-                    case PartitionDirs of
-                        [] ->
-                            make_data_dir(PartitionDir);
-                        _ ->
-                            [DataDir | RestPartitionDirs] =
-                                lists:reverse(PartitionDirs),
-                            log_unused_partition_dirs(PartitionStr,
-                                                      RestPartitionDirs),
-                            {ok, DataDir}
-                    end;
-                {error, _} ->
-                    make_data_dir(PartitionDir)
+                PartitionDirs ->
+                    [DataDir | RestPartitionDirs] =
+                        lists:reverse(PartitionDirs),
+                    log_unused_partition_dirs(filename:basename(PartitionDir),
+                                              RestPartitionDirs),
+                    {ok, DataDir}
             end
     end.
 
