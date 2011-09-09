@@ -83,9 +83,8 @@ start(Partition, Config) ->
             lager:error("Failed to create bitcask dir: data_root is not set"),
             {error, data_root_unset};
         DataRoot ->
-            PartitionDir = filename:join([DataRoot, integer_to_list(Partition)]),
             %% Check if a directory exists for the partition
-            case get_data_dir(PartitionDir) of
+            case get_data_dir(DataRoot, Partition) of
                 {ok, DataDir} ->
                     BitcaskOpts = set_mode(read_write, Config),
                     case bitcask:open(filename:join(DataRoot, DataDir), BitcaskOpts) of
@@ -476,23 +475,24 @@ config_value(Key, Config, Default) ->
     end.
 
 %% @private
-get_data_dir(PartitionDir) ->
-    case filelib:is_dir(PartitionDir) of
+get_data_dir(DataRoot, Partition) ->
+    PartitionPath = filename:join([DataRoot, integer_to_list(Partition)]),
+    case filelib:is_dir(PartitionPath) of
         true ->
-            {ok, PartitionDir};
+            {ok, Partition};
         false ->
             %% Check for any existing directories for the partition
             %% and select the most recent as the active data directory
             %% if any exist.
-            case filelib:wildcard(PartitionDir ++ "-*") of
+            case filelib:wildcard(PartitionPath ++ "-*") of
                 [] ->
-                    make_data_dir(PartitionDir);
+                    make_data_dir(PartitionPath);
                 PartitionDirs ->
                     [DataDir | RestPartitionDirs] =
                         lists:reverse(PartitionDirs),
-                    log_unused_partition_dirs(filename:basename(PartitionDir),
+                    log_unused_partition_dirs(Partition,
                                               RestPartitionDirs),
-                    {ok, DataDir}
+                    {ok, filename:basename(DataDir)}
             end
     end.
 
