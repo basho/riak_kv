@@ -225,7 +225,7 @@ init([Index]) ->
             case AsyncBackend of
                 true ->
                     %% Create worker pool initialization tuple
-                    FoldWorkerPool = {pool, riak_kv_fold_worker, 10, []},
+                    FoldWorkerPool = {pool, riak_kv_worker, 10, []},
                     {ok, State, [FoldWorkerPool]};
                 false ->
                     {ok, State}

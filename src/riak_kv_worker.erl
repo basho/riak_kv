@@ -19,9 +19,9 @@
 %% -------------------------------------------------------------------
 
 %% @doc This module uses the riak_core_vnode_worker behavior to perform
-%% different riak_kv fold tasks asynchronously.
+%% different riak_kv tasks asynchronously.
 
--module(riak_kv_fold_worker).
+-module(riak_kv_worker).
 -author('Kelly McLaughlin <kelly@basho.com>').
 
 -behaviour(riak_core_vnode_worker).
