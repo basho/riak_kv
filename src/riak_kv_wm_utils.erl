@@ -124,14 +124,14 @@ multipart_encode_body(Prefix, Bucket, {MD, V}, APIVersion) ->
      case dict:find(?MD_USERMETA, MD) of
          {ok, M} ->
             lists:foldl(fun({Hdr,Val},Acc) ->
-                            [Acc|[Hdr,": ",Val,"\r\n"]]
+                            [Acc|[Hdr,": ",encode_value(Val),"\r\n"]]
                         end,
                         [], M);
          error -> []
      end,
      case dict:find(?MD_INDEX, MD) of
          {ok, IF} ->
-             [[?HEAD_INDEX_PREFIX,Key,": ",Val,"\r\n"] || {Key,Val} <- IF];
+             [[?HEAD_INDEX_PREFIX,Key,": ",encode_value(Val),"\r\n"] || {Key,Val} <- IF];
          error -> []
      end,
      "\r\n",
