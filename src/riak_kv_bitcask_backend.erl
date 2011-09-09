@@ -518,7 +518,7 @@ log_unused_partition_dirs(Partition, PartitionDirs) ->
             ok;
         _ ->
             %% Inform the user in case they want to do some cleanup.
-            lager:info("Unused data directories exist for partition ~p: ~p",
+            lager:notice("Unused data directories exist for partition ~p: ~p",
                        [Partition, PartitionDirs])
     end.
 
