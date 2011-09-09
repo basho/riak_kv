@@ -32,7 +32,6 @@
 -export([new/2,
          add/2,
          flush/1,
-         flush/2,
          size/1]).
 
 -export_type([buffer/0]).
@@ -82,14 +81,6 @@ add(Item, #buffer{acc=Acc,
 -spec flush(buffer()) -> buffer().
 flush(#buffer{acc=Acc,
               buffer_fun=Fun}=Buffer) ->
-    Fun(Acc),
-    Buffer#buffer{acc=[],
-                  size=0}.
-
-%% @doc Call the specified buffer function on the
-%% remaining items and then reset the buffer.
--spec flush(buffer(), function()) -> buffer().
-flush(#buffer{acc=Acc}=Buffer, Fun) ->
     Fun(Acc),
     Buffer#buffer{acc=[],
                   size=0}.

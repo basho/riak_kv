@@ -185,7 +185,11 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{opts=BitcaskOpts,
                 case bitcask:open(filename:join(DataRoot, DataFile),
                                   ReadOpts) of
                     Ref when is_reference(Ref) ->
-                        bitcask:fold_keys(Ref, FoldFun, {Acc, ordsets:new()});
+                        {Acc1, _} =
+                            bitcask:fold_keys(Ref,
+                                              FoldFun,
+                                              {Acc, ordsets:new()}),
+                        Acc1;
                     {error, Reason} ->
                         {error, Reason}
                 end
