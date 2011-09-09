@@ -475,8 +475,9 @@ config_value(Key, Config, Default) ->
     end.
 
 %% @private
-get_data_dir(DataRoot, Partition) ->
-    PartitionPath = filename:join([DataRoot, integer_to_list(Partition)]),
+get_data_dir(DataRoot, PartitionI) ->
+    Partition = integer_to_list(PartitionI),
+    PartitionPath = filename:join([DataRoot, Partition]),
     case filelib:is_dir(PartitionPath) of
         true ->
             {ok, Partition};
