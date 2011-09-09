@@ -129,12 +129,15 @@ produce_index_results(RD, Ctx) ->
     Query = Ctx#ctx.index_query,
 
     %% Do the index lookup...
-    {ok, Results} = Client:get_index(Bucket, Query),
-
-    %% JSONify the results...
-    JsonKeys1 = {struct, [{?Q_KEYS, Results}]},
-    JsonKeys2 = mochijson2:encode(JsonKeys1),
-    {JsonKeys2, RD, Ctx}.
+    case Client:get_index(Bucket, Query) of
+        {ok, Results} ->
+            %% JSONify the results...
+            JsonKeys1 = {struct, [{?Q_KEYS, Results}]},
+            JsonKeys2 = mochijson2:encode(JsonKeys1),
+            {JsonKeys2, RD, Ctx};
+        {error, Reason} ->
+            {{error, Reason}, RD, Ctx}
+    end.
 
 
 %% @private
