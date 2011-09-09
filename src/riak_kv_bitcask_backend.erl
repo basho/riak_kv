@@ -55,9 +55,9 @@
 -define(CAPABILITIES, [async_fold]).
 
 -record(state, {ref :: reference(),
-                link_file :: string(),
-                data_file :: string(),
+                data_dir :: string(),
                 opts :: [{atom(), term()}],
+                partition :: integer(),
                 root :: string(),
                 async_folds :: boolean()}).
 
@@ -83,23 +83,21 @@ start(Partition, Config) ->
             lager:error("Failed to create bitcask dir: data_root is not set"),
             {error, data_root_unset};
         DataRoot ->
-            LinkFile = filename:join([DataRoot, integer_to_list(Partition)]),
-            %% Create a new symlink or get the filename of
-            %% of the file linked to by the existing link.
-            case check_symlink(LinkFile, false) of
-                {ok, DataFile} ->
+            %% Check if a directory exists for the partition
+            case get_data_dir(DataRoot, Partition) of
+                {ok, DataDir} ->
                     BitcaskOpts = set_mode(read_write, Config),
-                    case bitcask:open(filename:join(DataRoot, DataFile), BitcaskOpts) of
+                    case bitcask:open(filename:join(DataRoot, DataDir), BitcaskOpts) of
                         Ref when is_reference(Ref) ->
                             check_fcntl(),
                             schedule_merge(Ref),
                             maybe_schedule_sync(Ref),
                             AsyncFolds = config_value(async_folds, Config, true),
                             {ok, #state{ref=Ref,
-                                        data_file=DataFile,
-                                        link_file=LinkFile,
+                                        data_dir=DataDir,
                                         root=DataRoot,
                                         opts=BitcaskOpts,
+                                        partition=Partition,
                                         async_folds=AsyncFolds}};
                         {error, Reason1} ->
                             lager:error("Failed to start bitcask backend: ~p\n",
@@ -175,7 +173,7 @@ delete(Bucket, Key, _IndexSpecs, #state{ref=Ref}=State) ->
                    [],
                    state()) -> {ok, any()} | {async, fun()} | {error, term()}.
 fold_buckets(FoldBucketsFun, Acc, _Opts, #state{opts=BitcaskOpts,
-                                                data_file=DataFile,
+                                                data_dir=DataFile,
                                                 root=DataRoot,
                                                 async_folds=true}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
@@ -208,7 +206,7 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{ref=Ref}) ->
                 [{atom(), term()}],
                 state()) -> {ok, term()} | {async, fun()} | {error, term()}.
 fold_keys(FoldKeysFun, Acc, Opts, #state{opts=BitcaskOpts,
-                                         data_file=DataFile,
+                                         data_dir=DataFile,
                                          root=DataRoot,
                                          async_folds=true}) ->
     Bucket =  proplists:get_value(bucket, Opts),
@@ -242,7 +240,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{ref=Ref}) ->
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()} | {error, term()}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{opts=BitcaskOpts,
-                                               data_file=DataFile,
+                                               data_dir=DataFile,
                                                root=DataRoot,
                                                async_folds=true}) ->
     Bucket =  proplists:get_value(bucket, Opts),
@@ -275,30 +273,31 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{ref=Ref}) ->
 %%  of its own, use that instead.
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
 drop(#state{ref=Ref,
-            link_file=LinkFile,
+            partition=Partition,
             root=DataRoot,
             opts=BitcaskOpts}=State) ->
     %% Close the bitcask reference
     bitcask:close(Ref),
 
-    case check_symlink(LinkFile, true) of
-        {ok, DataFile} ->
+    case make_data_dir(filename:join([DataRoot,
+                                      integer_to_list(Partition)])) of
+        {ok, DataDir} ->
             %% Spawn a process to cleanup the old data files.
             %% The use of spawn is intentional. We do not
             %% care if this process dies since any lingering
             %% files will be cleaned up on the next drop.
             %% The worst case is that the files hang
             %% around and take up some disk space.
-            spawn(drop_data_cleanup(DataRoot, LinkFile, DataFile)),
+            spawn(drop_data_cleanup(DataRoot, Partition, DataDir)),
 
             %% Now open the bitcask and return an updated state
             %% so this backend can continue processing.
-            case bitcask:open(filename:join(DataRoot, DataFile), BitcaskOpts) of
+            case bitcask:open(filename:join(DataRoot, DataDir), BitcaskOpts) of
                 Ref1 when is_reference(Ref1) ->
-                    {ok, State#state{data_file=DataFile,
+                    {ok, State#state{data_dir=DataDir,
                                      ref=Ref1}};
                 {error, Reason} ->
-                    {error, Reason, State#state{data_file=DataFile}}
+                    {error, Reason, State#state{data_dir=DataDir}}
             end;
         {error, Reason1} ->
             {error, Reason1, State}
@@ -476,64 +475,71 @@ config_value(Key, Config, Default) ->
     end.
 
 %% @private
-check_symlink(LinkFile, DeleteExisting) ->
-    case file:read_link(LinkFile) of
-        {ok, DataFile} ->
-            case DeleteExisting of
-                true ->
-                    file:delete(LinkFile),
-                    make_symlink(LinkFile);
-                false ->
-                    {ok, DataFile}
-            end;
-        {error, enoent} ->
-            make_symlink(LinkFile);
-        Error ->
-            Error
+get_data_dir(DataRoot, PartitionI) ->
+    Partition = integer_to_list(PartitionI),
+    PartitionPath = filename:join([DataRoot, Partition]),
+    case filelib:is_dir(PartitionPath) of
+        true ->
+            {ok, Partition};
+        false ->
+            %% Check for any existing directories for the partition
+            %% and select the most recent as the active data directory
+            %% if any exist.
+            case filelib:wildcard(PartitionPath ++ "-*") of
+                [] ->
+                    make_data_dir(PartitionPath);
+                PartitionDirs ->
+                    [DataDir | RestPartitionDirs] =
+                        lists:reverse(PartitionDirs),
+                    log_unused_partition_dirs(Partition,
+                                              RestPartitionDirs),
+                    {ok, filename:basename(DataDir)}
+            end
     end.
 
 %% @private
-make_symlink(LinkFile) ->
+log_unused_partition_dirs(Partition, PartitionDirs) ->
+    case PartitionDirs of
+        [] ->
+            ok;
+        _ ->
+            %% Inform the user in case they want to do some cleanup.
+            lager:notice("Unused data directories exist for partition ~p: ~p",
+                       [Partition, PartitionDirs])
+    end.
+
+%% @private
+make_data_dir(PartitionFile) ->
     {MegaSecs, Secs, MicroSecs} = erlang:now(),
-    LinkAbsPath = filename:absname(LinkFile),
-    DataFile = [filename:basename(LinkFile),
-                "-",
-                integer_to_list(MegaSecs),
-                integer_to_list(Secs),
-                integer_to_list(MicroSecs)],
-    case filelib:ensure_dir(LinkAbsPath) of
+    AbsPath = filename:absname(PartitionFile),
+    DataDir = [filename:basename(PartitionFile),
+               "-",
+               integer_to_list(MegaSecs),
+               integer_to_list(Secs),
+               integer_to_list(MicroSecs)],
+    case filelib:ensure_dir([AbsPath, DataDir]) of
         ok ->
-            case file:make_symlink(DataFile,
-                                   LinkAbsPath) of
-                ok ->
-                    {ok, DataFile};
-                {error, Reason} ->
-                    lager:error("Failed to create bitcask dir ~s: ~p",
-                                [DataFile, Reason]),
-                    {error, Reason}
-            end;
-        {error, Reason1} ->
+            {ok, DataDir};
+        {error, Reason} ->
             lager:error("Failed to create bitcask dir ~s: ~p",
-                        [DataFile, Reason1]),
-            {error, Reason1}
+                        [DataDir, Reason]),
+            {error, Reason}
     end.
 
 %% @private
-drop_data_cleanup(DataRoot, LinkFile, DataFile) ->
+drop_data_cleanup(DataRoot, Partition, DataDir) ->
     fun() ->
             %% List all the directories in data root
             case file:list_dir(DataRoot) of
                 {ok, Dirs} ->
-                    LinkBase = filename:basename(LinkFile),
+                    PartitionStr = integer_to_list(Partition),
                     %% Delete the contents of each directory and
                     %% the directory itself excluding the
-                    %% current data directory and the symlink
-                    %% pointing to it.
+                    %% current data directory.
                     [data_directory_cleanup(filename:join(DataRoot, Dir)) ||
                         Dir <- Dirs,
-                        Dir /= lists:flatten(DataFile),
-                        Dir /= LinkBase,
-                        string:left(Dir, length(LinkBase) + 1) =:= (LinkBase ++ "-")];
+                        Dir /= lists:flatten(DataDir),
+                        string:left(Dir, length(PartitionStr) + 1) =:= (PartitionStr ++ "-")];
                 {error, _} ->
                     ignore
             end
