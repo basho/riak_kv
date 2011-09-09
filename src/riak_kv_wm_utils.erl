@@ -124,14 +124,14 @@ multipart_encode_body(Prefix, Bucket, {MD, V}, APIVersion) ->
      case dict:find(?MD_USERMETA, MD) of
          {ok, M} ->
             lists:foldl(fun({Hdr,Val},Acc) ->
-                            [Acc|[Hdr,": ",encode_response_value(Val),"\r\n"]]
+                            [Acc|[Hdr,": ",Val,"\r\n"]]
                         end,
                         [], M);
          error -> []
      end,
      case dict:find(?MD_INDEX, MD) of
          {ok, IF} ->
-             [[?HEAD_INDEX_PREFIX,Key,": ",encode_response_value(Val),"\r\n"] || {Key,Val} <- IF];
+             [[?HEAD_INDEX_PREFIX,Key,": ",any_to_list(Val),"\r\n"] || {Key,Val} <- IF];
          error -> []
      end,
      "\r\n",
@@ -200,15 +200,6 @@ encode_value(V) when is_binary(V) ->
     V;
 encode_value(V) ->
     term_to_binary(V).
-
-%% @spec encode_2i_value(term()) -> binary()
-%% @doc Encode the 2i value as a binary
-encode_response_value(V) when is_integer(V) ->
-    list_to_binary(erlang:integer_to_list(V));
-encode_response_value(S) when is_list(S) orelse is_binary(S) ->
-    S;
-encode_response_value(X) ->
-    erlang:term_to_binary(X).
 
 %% @spec accept_value(string(), binary()) -> term()
 %% @doc Accept the object value as a binary - content type can be used
