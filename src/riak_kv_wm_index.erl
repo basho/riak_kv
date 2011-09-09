@@ -84,7 +84,7 @@ malformed_request(RD, Ctx) ->
     Bucket = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(bucket, RD))),
     IndexField = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(field, RD))),
     Args1 = wrq:path_tokens(RD),
-    Args2 = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
+    [_IndexOp | Args2] = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
 
     case to_index_query(IndexField, Args2) of
         {ok, Query} ->
