@@ -138,12 +138,13 @@ start(Partition, Config) ->
 %% @private
 start_backend_fun(Partition, AsyncFolds) ->
     fun({Name, Module, ModConfig}, {AsyncBackends, SyncBackends, Errors}) ->
-            {_, Capabilities} = Module:api_version(),
-            case AsyncFolds andalso
-                lists:member(async_fold, Capabilities) of
-                true ->
-                    ModConfig1 = [{async_folds, true}
-                                  | ModConfig],
+            try
+                {_, Capabilities} = Module:api_version(),
+                case AsyncFolds andalso
+                    lists:member(async_fold, Capabilities) of
+                    true ->
+                        ModConfig1 = [{async_folds, true}
+                                      | ModConfig],
                         case start_backend(Name,
                                            Module,
                                            Partition,
@@ -157,22 +158,27 @@ start_backend_fun(Partition, AsyncFolds) ->
                                  SyncBackends,
                                  Errors}
                         end;
-                false ->
-                    ModConfig1 = [{async_folds, false}
-                                  | ModConfig],
-                    case start_backend(Name,
-                                       Module,
-                                       Partition,
-                                       ModConfig1) of
-                        {Module, Reason} ->
-                            {AsyncBackends,
-                             SyncBackends,
-                             [{Module, Reason} | Errors]};
-                        SyncBackend ->
-                            {AsyncBackends,
-                             [SyncBackend | SyncBackends],
-                             Errors}
-                    end
+                    false ->
+                        ModConfig1 = [{async_folds, false}
+                                      | ModConfig],
+                        case start_backend(Name,
+                                           Module,
+                                           Partition,
+                                           ModConfig1) of
+                            {Module, Reason} ->
+                                {AsyncBackends,
+                                 SyncBackends,
+                                 [{Module, Reason} | Errors]};
+                            SyncBackend ->
+                                {AsyncBackends,
+                                 [SyncBackend | SyncBackends],
+                                 Errors}
+                        end
+                end
+            catch _:Error ->
+                    {AsyncBackends,
+                     SyncBackends, 
+                     [{Module, Error} | Errors]}
             end
     end.
 
