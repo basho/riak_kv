@@ -479,7 +479,6 @@ config_value(Key, Config, Default) ->
 get_data_dir(DataRoot, PartitionDir) ->
     case filelib:is_dir(PartitionDir) of
         true ->
-            io:format("Existing parition: ~p~n", [PartitionDir]),
             {ok, PartitionDir};
         false ->
             %% Check for any existing directories for the partition
@@ -534,7 +533,6 @@ make_data_dir(PartitionFile) ->
                integer_to_list(MicroSecs)],
     case filelib:ensure_dir([AbsPath, DataDir]) of
         ok ->
-            io:format("Made datadir: ~p~n", [DataDir]),
             {ok, DataDir};
         {error, Reason} ->
             lager:error("Failed to create bitcask dir ~s: ~p",
