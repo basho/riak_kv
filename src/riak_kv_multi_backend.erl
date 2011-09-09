@@ -51,7 +51,6 @@
 
 -type state() :: #state{}.
 -type config() :: [{atom(), term()}].
--type fold_result() :: {{sync, [term()]}, {async, [fun()]}} | {error, term()}.
 
 %% @doc riak_kv_multi_backend allows you to run multiple backends within a
 %% single Riak instance. The 'backend' property of a bucket specifies
@@ -256,7 +255,7 @@ delete(Bucket, Key, IndexSpecs, State) ->
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
                    any(),
                    [],
-                   state()) -> fold_result().
+                   state()) -> {ok, any()} | {async, fun()} | {error, term()}.
 fold_buckets(FoldBucketsFun, Acc, Opts, State) ->
     fold(undefined, fold_buckets, FoldBucketsFun, Acc, Opts, State).
 
@@ -264,7 +263,7 @@ fold_buckets(FoldBucketsFun, Acc, Opts, State) ->
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
-                state()) -> fold_result().
+                state()) -> {ok, any()} | {async, fun()} | {error, term()}.
 fold_keys(FoldKeysFun, Acc, Opts, State) ->
     Bucket = proplists:get_value(bucket, Opts),
     fold(Bucket, fold_keys, FoldKeysFun, Acc, Opts, State).
@@ -273,7 +272,7 @@ fold_keys(FoldKeysFun, Acc, Opts, State) ->
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
-                   state()) -> fold_result().
+                   state()) -> {ok, any()} | {async, fun()} | {error, term()}.
 fold_objects(FoldObjectsFun, Acc, Opts, State) ->
     Bucket = proplists:get_value(bucket, Opts),
     fold(Bucket, fold_objects, FoldObjectsFun, Acc, Opts, State).
