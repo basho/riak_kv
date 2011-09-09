@@ -1,4 +1,7 @@
 -module(ec_eqc).
+
+-ifdef(EQC).
+
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -949,7 +952,4 @@ pretty_history_event({result, Cid, Req, Result}) ->
 pretty_history_event(Event) ->
     io:format(user, "Event: ~p\n", [Event]).
 
-    
-    
-
-    
+-endif.
