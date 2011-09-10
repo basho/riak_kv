@@ -126,7 +126,6 @@
 -export([example/0, example_bucket/0, example_reduce/0,
          example_setup/0, example_setup/1]).
 
--include("riak_kv_vnode.hrl").
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
 
@@ -533,32 +532,6 @@ send_inputs_async(Pipe, Inputs, Timeout) ->
               end
       end).
 
-kvlistkeys_xform({cover, FilterVnodes, {Bucket, ItemFilter}},
-                 Partition, FittingDetails) ->
-    ReqId = erlang:phash2(erlang:now()), % stolen from riak_client
-    riak_core_vnode_master:coverage(
-      ?KV_LISTKEYS_REQ{bucket=Bucket,
-                       item_filter=ItemFilter},
-      {Partition, node()},
-      FilterVnodes,
-      {raw, ReqId, self()},
-      riak_kv_vnode_master),
-    kvlistkeys_xform_loop(ReqId, Partition, FittingDetails).
-
-kvlistkeys_xform_loop(ReqId, Partition, FittingDetails) ->
-    receive
-        {ReqId, {Bucket, Keys}} ->
-            kvlistkeys_xform_send(Bucket, Keys, Partition, FittingDetails),
-            kvlistkeys_xform_loop(ReqId, Partition, FittingDetails);
-        {ReqId, done} ->
-            ok
-    end.
-
-kvlistkeys_xform_send(Bucket, Keys, Partition, FittingDetails) ->
-    [ riak_pipe_vnode_worker:send_output(
-         {Bucket, Key}, Partition, FittingDetails)
-      || Key <- Keys ].
-
 %% @equiv send_inputs(Pipe, Inputs, 60000)
 send_inputs(Pipe, Inputs) ->
     send_inputs(Pipe, Inputs, ?DEFAULT_TIMEOUT).
@@ -574,35 +547,15 @@ send_inputs(Pipe, BucketKeyList, _Timeout) when is_list(BucketKeyList) ->
      || BKey <- BucketKeyList],
     riak_pipe:eoi(Pipe),
     ok;
-send_inputs(Pipe, Bucket, _Timeout) when is_binary(Bucket) ->
-    %% start a new short pipe in order to use a coverage-enqueue
-    %% that will trigger pipe workers to list keys from their twin
-    %% kv vnodes, and then enqueue those keys in the MR pipe
-    [{_Name, Head}|_] = Pipe#pipe.fittings,
-    {ok, LKP} = riak_pipe:exec([#fitting_spec{name=listkeys,
-                                              module=riak_pipe_w_xform,
-                                              arg=fun kvlistkeys_xform/3,
-                                              nval=1}],
-                               [{sink, Head}]),
-    ReqId = erlang:phash2(erlang:now()), %% stolen from riak_client
-    BucketProps = riak_core_bucket:get_bucket(Bucket),
-    NVal = proplists:get_value(n_val, BucketProps),
-    {ok, Sender} = riak_pipe_qcover_sup:start_qcover_fsm(
-                     [{raw, ReqId, self()},
-                      [LKP, {Bucket, []}, NVal]]),
-    erlang:link(Sender),
-    receive
-        {ReqId, done} ->
-            riak_pipe:eoi(LKP),
-            ok;
-        {ReqId, Error} ->
+send_inputs(Pipe, Bucket, Timeout) when is_binary(Bucket) ->
+    riak_kv_pipe_listkeys:queue_existing_pipe(Pipe, Bucket, Timeout);
+send_inputs(Pipe, {Bucket, FilterExprs}, Timeout) ->
+    case build_key_filter(FilterExprs) of
+        {ok, Filters} ->
+            riak_kv_pipe_listkeys:queue_existing_pipe(
+              Pipe, {Bucket, Filters}, Timeout);
+        Error ->
             Error
-    end;
-send_inputs(Pipe, {Bucket, FilterExprs}, _Timeout) ->
-    {ok, C} = riak:local_client(),
-    case C:stream_list_keys({Bucket, FilterExprs}) of
-        {ok, ReqId} -> send_key_list(Pipe, Bucket, ReqId);
-        Error       -> Error
     end;
 send_inputs(Pipe, {index, Bucket, Index, Key}, Timeout) ->
     Query = {eq, Index, Key},
@@ -660,6 +613,20 @@ send_key_list(Pipe, Bucket, ReqId) ->
             %% Operation has finished.
             riak_pipe:eoi(Pipe),
             ok
+    end.
+
+build_key_filter(Exprs) ->
+    build_key_filter(Exprs, []).
+
+build_key_filter([], Accum) ->
+    {ok, lists:reverse(Accum)};
+build_key_filter([[FunName|Args]|T], Accum) ->
+    case riak_kv_mapred_filters:resolve_name(FunName) of
+        error ->
+            {error, {bad_filter, FunName}};
+        Fun ->
+            build_key_filter(
+              T, [{riak_kv_mapred_filters, Fun, Args}|Accum])
     end.
 
 %% @equiv collect_outpus(Pipe, NumKeeps, 60000)
