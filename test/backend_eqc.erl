@@ -131,6 +131,9 @@ val() ->
     %% extracted.
     term_to_binary(riak_object:new(<<"b1">>, <<"k1">>, binary())).
 
+g_opts() ->
+    frequency([{5, [async_fold]}, {2, []}]).
+
 %%====================================================================
 %% Helpers
 %%====================================================================
@@ -251,9 +254,9 @@ running(#qcst{backend=Backend,
      {history, {call, Backend, put, [bucket(), key(), [], val(), State]}},
      {history, {call, Backend, get, [bucket(), key(), State]}},
      {history, {call, Backend, delete, [bucket(), key(), [], State]}},
-     {history, {call, Backend, fold_buckets, [fold_buckets_fun(), get_fold_buffer(), [], State]}},
-     {history, {call, Backend, fold_keys, [fold_keys_fun(), get_fold_buffer(), [], State]}},
-     {history, {call, Backend, fold_objects, [fold_objects_fun(), get_fold_buffer(), [], State]}},
+     {history, {call, Backend, fold_buckets, [fold_buckets_fun(), get_fold_buffer(), g_opts(), State]}},
+     {history, {call, Backend, fold_keys, [fold_keys_fun(), get_fold_buffer(), g_opts(), State]}},
+     {history, {call, Backend, fold_objects, [fold_objects_fun(), get_fold_buffer(), g_opts(), State]}},
      {history, {call, Backend, is_empty, [State]}},
      {history, {call, ?MODULE, drop, [Backend, State]}},
      {stopped, {call, Backend, stop, [State]}}
