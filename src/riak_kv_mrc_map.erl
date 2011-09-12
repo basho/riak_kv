@@ -18,8 +18,8 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc Apply a function to a Riak object, and send its results
-%% downstream.
+%% @doc A pipe fitting that applies a function to a Riak object, and
+%% sends its results downstream.
 %%
 %% This module is intended as the second half of the emulation layer
 %% for running Riak KV MapReduce on top of Riak Pipe.  An upstream
