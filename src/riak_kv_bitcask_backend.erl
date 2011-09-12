@@ -58,8 +58,7 @@
                 data_dir :: string(),
                 opts :: [{atom(), term()}],
                 partition :: integer(),
-                root :: string(),
-                async_folds :: boolean()}).
+                root :: string()}).
 
 -type state() :: #state{}.
 -type config() :: [{atom(), term()}].
@@ -92,13 +91,11 @@ start(Partition, Config) ->
                             check_fcntl(),
                             schedule_merge(Ref),
                             maybe_schedule_sync(Ref),
-                            AsyncFolds = config_value(async_folds, Config, true),
                             {ok, #state{ref=Ref,
                                         data_dir=DataDir,
                                         root=DataRoot,
                                         opts=BitcaskOpts,
-                                        partition=Partition,
-                                        async_folds=AsyncFolds}};
+                                        partition=Partition}};
                         {error, Reason1} ->
                             lager:error("Failed to start bitcask backend: ~p\n",
                                         [Reason1]),
@@ -172,14 +169,14 @@ delete(Bucket, Key, _IndexSpecs, #state{ref=Ref}=State) ->
                    any(),
                    [],
                    state()) -> {ok, any()} | {async, fun()} | {error, term()}.
-fold_buckets(FoldBucketsFun, Acc, _Opts, #state{opts=BitcaskOpts,
-                                                data_dir=DataFile,
-                                                ref=Ref,
-                                                root=DataRoot,
-                                                async_folds=AsyncFolds}) ->
+fold_buckets(FoldBucketsFun, Acc, Opts, #state{opts=BitcaskOpts,
+                                               data_dir=DataFile,
+                                               ref=Ref,
+                                               root=DataRoot}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    case AsyncFolds of
+    case lists:member(async_fold, Opts) of
         true ->
+            io:format("Async fold~n"),
             ReadOpts = set_mode(read_only, BitcaskOpts),
             BucketFolder =
                 fun() ->
@@ -197,6 +194,7 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{opts=BitcaskOpts,
                 end,
             {async, BucketFolder};
         false ->
+            io:format("Sync fold~n"),
             {FoldResult, _Bucketset} =
                 bitcask:fold_keys(Ref, FoldFun, {Acc, sets:new()}),
             case FoldResult of
@@ -215,11 +213,10 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{opts=BitcaskOpts,
 fold_keys(FoldKeysFun, Acc, Opts, #state{opts=BitcaskOpts,
                                          data_dir=DataFile,
                                          ref=Ref,
-                                         root=DataRoot,
-                                         async_folds=AsyncFolds}) ->
+                                         root=DataRoot}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-    case AsyncFolds of
+    case lists:member(async_fold, Opts) of
         true ->
             ReadOpts = set_mode(read_only, BitcaskOpts),
             KeyFolder =
@@ -251,11 +248,10 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{opts=BitcaskOpts,
 fold_objects(FoldObjectsFun, Acc, Opts, #state{opts=BitcaskOpts,
                                                data_dir=DataFile,
                                                ref=Ref,
-                                               root=DataRoot,
-                                               async_folds=AsyncFolds}) ->
+                                               root=DataRoot}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
-    case AsyncFolds of
+    case lists:member(async_fold, Opts) of
         true ->
             ReadOpts = set_mode(read_only, BitcaskOpts),
             ObjectFolder =
@@ -516,7 +512,7 @@ log_unused_partition_dirs(Partition, PartitionDirs) ->
         _ ->
             %% Inform the user in case they want to do some cleanup.
             lager:notice("Unused data directories exist for partition ~p: ~p",
-                       [Partition, PartitionDirs])
+                         [Partition, PartitionDirs])
     end.
 
 %% @private
@@ -602,11 +598,6 @@ eqc_test_() ->
          [
           {timeout, 60000,
            [?_assertEqual(true,
-                          backend_eqc:test(?MODULE, false,
-                                           [{data_root,
-                                             "test/bitcask-backend"},
-                                            {async_folds, false}])),
-            ?_assertEqual(true,
                           backend_eqc:test(?MODULE, false,
                                            [{data_root,
                                              "test/bitcask-backend"}]))]}

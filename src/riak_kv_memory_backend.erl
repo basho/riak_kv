@@ -60,8 +60,7 @@
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold]).
 
--record(state, {async_folds :: boolean(),
-                data_ref :: integer() | atom(),
+-record(state, {data_ref :: integer() | atom(),
                 time_ref :: integer() | atom(),
                 max_memory :: undefined | integer(),
                 used_memory=0 :: integer(),
@@ -87,7 +86,6 @@ api_version() ->
 start(Partition, Config) ->
     TTL = config_value(ttl, Config),
     MemoryMB = config_value(max_memory, Config),
-    AsyncFolds = config_value(async_folds, Config, true),
     case MemoryMB of
         undefined ->
             MaxMemory = undefined,
@@ -97,8 +95,7 @@ start(Partition, Config) ->
             TimeRef = ets:new(list_to_atom(integer_to_list(Partition)), [ordered_set])
     end,
     DataRef = ets:new(list_to_atom(integer_to_list(Partition)), []),
-    {ok, #state{async_folds=AsyncFolds,
-                data_ref=DataRef,
+    {ok, #state{data_ref=DataRef,
                 max_memory=MaxMemory,
                 time_ref=TimeRef,
                 ttl=TTL}}.
@@ -188,8 +185,8 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val, State=#state{data_ref=DataRef,
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
                     {ok, state()}.
 delete(Bucket, Key, _IndexSpecs, State=#state{data_ref=DataRef,
-                                 time_ref=TimeRef,
-                                 used_memory=UsedMemory}) ->
+                                              time_ref=TimeRef,
+                                              used_memory=UsedMemory}) ->
     case TimeRef of
         undefined ->
             UsedMemory1 = UsedMemory;
@@ -214,10 +211,9 @@ delete(Bucket, Key, _IndexSpecs, State=#state{data_ref=DataRef,
                    any(),
                    [],
                    state()) -> {ok, any()}.
-fold_buckets(FoldBucketsFun, Acc, _Opts, #state{async_folds=AsyncFolds,
-                                                data_ref=DataRef}) ->
+fold_buckets(FoldBucketsFun, Acc, Opts, #state{data_ref=DataRef}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    case AsyncFolds of
+    case lists:member(async_fold, Opts) of
         true ->
             BucketFolder =
                 fun() ->
@@ -235,11 +231,10 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{async_folds=AsyncFolds,
                 any(),
                 [{atom(), term()}],
                 state()) -> {ok, term()} | {async, fun()}.
-fold_keys(FoldKeysFun, Acc, Opts, #state{async_folds=AsyncFolds,
-                                         data_ref=DataRef}) ->
+fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-    case AsyncFolds of
+    case lists:member(async_fold, Opts) of
         true ->
             {async, get_folder(FoldFun, Acc, DataRef)};
         false ->
@@ -252,11 +247,10 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{async_folds=AsyncFolds,
                    any(),
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()}.
-fold_objects(FoldObjectsFun, Acc, Opts, #state{async_folds=AsyncFolds,
-                                               data_ref=DataRef}) ->
+fold_objects(FoldObjectsFun, Acc, Opts, #state{data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
-    case AsyncFolds of
+    case lists:member(async_fold, Opts) of
         true ->
             {async, get_folder(FoldFun, Acc, DataRef)};
         false ->
@@ -294,7 +288,7 @@ status(#state{data_ref=DataRef,
         _ ->
             TimeStatus = ets:info(TimeRef),
             [{data_table_status, DataStatus},
-            {time_table_status, TimeStatus}]
+             {time_table_status, TimeStatus}]
     end.
 
 %% @doc Register an asynchronous callback
@@ -500,11 +494,8 @@ eqc_test_() ->
          [
           {timeout, 60000,
            [?_assertEqual(true,
-                          backend_eqc:test(?MODULE, true,
-                                           [{async_folds, false}])),
-           ?_assertEqual(true,
-                          backend_eqc:test(?MODULE, true))]}
-         ]}]}]}.
+                         backend_eqc:test(?MODULE, true))]}
+        ]}]}]}.
 
 setup() ->
     application:load(sasl),

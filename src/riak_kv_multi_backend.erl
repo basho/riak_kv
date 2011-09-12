@@ -109,20 +109,17 @@ start(Partition, Config) ->
        true ->
             {First, _, _} = hd(Defs),
 
-            %% Check if async folds have been disabled
-            AsyncFolds = config_value(async_folds, Config, true),
             %% Get the default
             DefaultBackend = config_value(multi_backend_default, Config, First),
             case lists:keymember(DefaultBackend, 1, Defs) of
                 true ->
                     %% Start the backends
-                    BackendFun = start_backend_fun(Partition, AsyncFolds),
+                    BackendFun = start_backend_fun(Partition),
                     {Backends, Errors} =
                         lists:foldl(BackendFun, {[], []}, Defs),
                     case Errors of
                         [] ->
-                            {ok, #state{async_folds=AsyncFolds,
-                                        backends=Backends,
+                            {ok, #state{backends=Backends,
                                         default_backend=DefaultBackend}};
                         _ ->
                             {error, Errors}
@@ -135,23 +132,13 @@ start(Partition, Config) ->
     end.
 
 %% @private
-start_backend_fun(Partition, AsyncFolds) ->
+start_backend_fun(Partition) ->
     fun({Name, Module, ModConfig}, {Backends, Errors}) ->
             try
-                {_, Capabilities} = Module:api_version(),
-                case AsyncFolds andalso
-                    lists:member(async_fold, Capabilities) of
-                    true ->
-                        ModConfig1 = [{async_folds, true}
-                                      | ModConfig];
-                    false ->
-                        ModConfig1 = [{async_folds, false}
-                                      | ModConfig]
-                end,
                 case start_backend(Name,
                                    Module,
                                    Partition,
-                                   ModConfig1) of
+                                   ModConfig) of
                     {Module, Reason} ->
                         {Backends,
                          [{Module, Reason} | Errors]};
@@ -335,42 +322,18 @@ update_backend_state(Backend,
 
 %% @private
 %% @doc Shared code used by all the backend fold functions.
-fold(Bucket, ModFun, FoldFun, Acc, Opts, State=#state{async_folds=AsyncFolds,
-                                                      backends=Backends}) ->
+fold(Bucket, ModFun, FoldFun, Acc, Opts, State=#state{backends=Backends}) ->
     case Bucket of
         undefined ->
-            BackendFoldFun =
-                fun({_, Module, SubState}, {FoldAcc, WorkList}) ->
-                        %% Get the backend capabilities to determine
-                        %% if it supports asynchronous folding.
-                        {_, ModCaps} = Module:api_version(),
-                        case AsyncFolds andalso
-                            lists:member(async_fold, ModCaps) of
-                            true ->
-                                AsyncWork = 
-                                    fun(FoldAcc1) -> 
-                                            Module:ModFun(FoldFun,
-                                                          FoldAcc1,
-                                                          Opts,
-                                                          SubState)
-                                    end,
-                                {FoldAcc, [AsyncWork | WorkList]};
-                            false ->
-                                Result = Module:ModFun(FoldFun,
-                                                       FoldAcc,
-                                                       Opts,
-                                                       SubState),
-                                case Result of
-                                    {ok, FoldAcc1} ->
-                                        {FoldAcc1, WorkList};
-                                    {error, Reason} ->
-                                        throw({error, {Module, Reason}})
-                                end
-                        end
-                end,
             try
+                AsyncFold = lists:member(async_fold, Opts),
                 {Acc0, AsyncWorkList} =
-                    lists:foldl(BackendFoldFun, {Acc, []}, Backends),
+                    lists:foldl(backend_fold_fun(ModFun,
+                                                 FoldFun,
+                                                 Opts,
+                                                 AsyncFold),
+                                {Acc, []},
+                                Backends),
 
                 %% We have now accumulated the results for all of the
                 %% synchronous backends. The next step is to wrap the
@@ -381,20 +344,9 @@ fold(Bucket, ModFun, FoldFun, Acc, Opts, State=#state{async_folds=AsyncFolds,
                         %% Just return the synchronous results
                         {ok, Acc0};
                     _ ->
-                        AsyncFoldFun = 
-                            fun(Work, Acc1) ->
-                                    case Work(Acc1) of
-                                        {ok, Acc2} ->
-                                            Acc2;
-                                        {async, AsyncFun} ->
-                                            AsyncFun();
-                                        {error, Reason} ->
-                                            throw({error, Reason})
-                                    end
-                            end,
                         AsyncWork =
                             fun() ->
-                                    lists:foldl(AsyncFoldFun, Acc0, AsyncWorkList)
+                                    lists:foldl(async_fold_fun(), Acc0, AsyncWorkList)
                             end,
                         {async, AsyncWork}
                 end
@@ -408,6 +360,49 @@ fold(Bucket, ModFun, FoldFun, Acc, Opts, State=#state{async_folds=AsyncFolds,
                           Acc,
                           Opts,
                           SubState)
+    end.
+
+%% @private
+backend_fold_fun(ModFun, FoldFun, Opts, AsyncFold) ->
+    fun({_, Module, SubState}, {Acc, WorkList}) ->
+            %% Get the backend capabilities to determine
+            %% if it supports asynchronous folding.
+            {_, ModCaps} = Module:api_version(),
+            case AsyncFold andalso
+                lists:member(async_fold, ModCaps) of
+                true ->
+                    AsyncWork =
+                        fun(Acc1) ->
+                                Module:ModFun(FoldFun,
+                                              Acc1,
+                                              Opts,
+                                              SubState)
+                        end,
+                    {Acc, [AsyncWork | WorkList]};
+                false ->
+                    Result = Module:ModFun(FoldFun,
+                                           Acc,
+                                           Opts,
+                                           SubState),
+                    case Result of
+                        {ok, Acc1} ->
+                            {Acc1, WorkList};
+                        {error, Reason} ->
+                            throw({error, {Module, Reason}})
+                    end
+            end
+    end.
+
+async_fold_fun() ->
+    fun(AsyncWork, Acc) ->
+            case AsyncWork(Acc) of
+                {ok, Acc1} ->
+                    Acc1;
+                {async, AsyncFun} ->
+                    AsyncFun();
+                {error, Reason} ->
+                    throw({error, Reason})
+            end
     end.
 
 %% @private

@@ -342,7 +342,8 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
 handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
                 _FilterVNodes,
                 Sender,
-                State=#state{bucket_buf_size=BufferSize,
+                State=#state{async_backend=AsyncBackend,
+                             bucket_buf_size=BufferSize,
                              mod=Mod,
                              modstate=ModState}) ->
     %% Construct the filter function
@@ -351,7 +352,13 @@ handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
     Buffer = BufferMod:new(BufferSize, result_fun(Sender)),
     FoldFun = fold_fun(buckets, BufferMod, Filter),
     FinishFun = finish_fun(BufferMod, Sender),
-    case list(FoldFun, FinishFun, Mod, fold_buckets, ModState, [], Buffer) of
+    case AsyncBackend of
+        true ->
+            Opts = [async_fold];
+        false ->
+            Opts = []
+    end,
+    case list(FoldFun, FinishFun, Mod, fold_buckets, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
         _ ->
@@ -361,7 +368,8 @@ handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
                                  item_filter=ItemFilter},
                 FilterVNodes,
                 Sender,
-                State=#state{idx=Index,
+                State=#state{async_backend=AsyncBackend,
+                             idx=Index,
                              key_buf_size=BufferSize,
                              mod=Mod,
                              modstate=ModState}) ->
@@ -372,7 +380,12 @@ handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
     Buffer = BufferMod:new(BufferSize, result_fun(Bucket, Sender)),
     FoldFun = fold_fun(keys, BufferMod, Filter),
     FinishFun = finish_fun(BufferMod, Sender),
-    Opts = [{bucket, Bucket}],
+    case AsyncBackend of
+        true ->
+            Opts = [async_fold, {bucket, Bucket}];
+        false ->
+            Opts = [{bucket, Bucket}]
+    end,
     case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
@@ -384,7 +397,8 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                               qry=Query},
                 FilterVNodes,
                 Sender,
-                State=#state{idx=Index,
+                State=#state{async_backend=AsyncBackend,
+                             idx=Index,
                              index_backend=IndexBackend,
                              index_buf_size=BufferSize,
                              mod=Mod,
@@ -398,7 +412,12 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
             Buffer = BufferMod:new(BufferSize, result_fun(Bucket, Sender)),
             FoldFun = fold_fun(keys, BufferMod, Filter),
             FinishFun = finish_fun(BufferMod, Sender),
-            Opts = [{index, Bucket, Query}],
+            case AsyncBackend of
+                true ->
+                    Opts = [async_fold, {index, Bucket, Query}];
+                false ->
+                    Opts = [{index, Bucket, Query}]
+            end,
             case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, Buffer) of
                 {async, AsyncWork} ->
                     {async, {fold, AsyncWork, FinishFun}, Sender, State};
