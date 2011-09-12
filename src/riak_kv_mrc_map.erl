@@ -18,21 +18,35 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc Apply a function to a Riak object, and send its results
-%%      downstream.
+%% @doc A pipe fitting that applies a function to a Riak object, and
+%% sends its results downstream.
 %%
-%%      This module is intended as the second half of the emulation
-%%      layer for running Riak KV MapReduce on top of Riak Pipe.  An
-%%      upstream fitting should read the object out of Riak KV, and
-%%      then send it to this fitting as a 3-tuple of the form
-%%      `{ok, RiakObject, KeyData}'.  If there was an error reading
-%%      the object, that can be sent to this fitting as a 3-tuple of
-%%      the form `{{error, Reason}, {Bucket, Key}, KeyData}'.
+%% This module is intended as the second half of the emulation layer
+%% for running Riak KV MapReduce on top of Riak Pipe.  An upstream
+%% fitting should read the object out of Riak KV, and then send it to
+%% this fitting as a 3-tuple of the form `{ok, RiakObject, KeyData}'.
+%% If there was an error reading the object, that can be sent to this
+%% fitting as a 3-tuple of the form `{{error, Reason}, {Bucket, Key},
+%% KeyData}'.  (The {@link riak_kv_pipe_get} fitting conforms to this
+%% interface.)
 %%
-%%      This module expects a 2-tuple, `{PhaseSpec, PhaseArg}' as
-%%      argument.  Both elements come directly from the phase
-%%      definition in the MapReduce query: `{map, PhaseSpec, PhaseArg,
-%%      Keep}'.
+%% This module expects a 2-tuple, `{PhaseSpec, PhaseArg}' as argument.
+%% Both elements come directly from the phase definition in the
+%% MapReduce query: `{map, PhaseSpec, PhaseArg, Keep}'.
+%%
+%% When an `ok' input arrives, the function defined by `PhaseSpec' is
+%% evalutated as, in pseudocode: `PhaseSpec(RiakObject, KeyData,
+%% PhaseArg)'.  The result of the function is expected to be a list.
+%% Each element of the result list is sent downstream as an output.
+%%
+%% When an `error' input arrives, the behavior of this fitting depends
+%% on whether `PhaseSpec' specifies an Erlang function or a Javascript
+%% function.  In the case of an Erlang function, `PhaseSpec' will be
+%% evaluated as `PhaseSpec({error, Reason}, KeyData, PhaseArg)'.  In
+%% the case of a Javascript function, if the `Reason' is `not_found',
+%% then the output `{not_found, {Bucket, Key}, KeyData}' is sent
+%% downstream as output.  Other error reasons cause Javascript
+%% evaluation to fail.
 -module(riak_kv_mrc_map).
 -behaviour(riak_pipe_vnode_worker).
 
@@ -48,25 +62,17 @@
 
 -record(state, {p :: riak_pipe_vnode:partition(),
                 fd :: riak_pipe_fitting:details(),
-                phase :: map_phase_spec(),
+                phase :: riak_kv_mrc_pipe:map_query_fun(),
                 arg :: term()}).
 -opaque state() :: #state{}.
--type map_phase_spec() ::
-        {modfun, Module :: atom(), Function :: atom()}
-      | {qfun, fun( (Input :: term(),
-                     KeyData :: term(),
-                     PhaseArg :: term()) -> [term()] )}
-      | {strfun, {Bucket :: binary(), Key :: binary()}}
-      | {strfun, Source :: binary()}
-      | {jsanon, {Bucket :: binary(), Key :: binary()}}
-      | {jsfun, Name :: binary()}
-      | {jsanon, Source :: binary()}.
 
 -define(DEFAULT_JS_RESERVE_ATTEMPTS, 10).
 
-%% @doc Init just stashes everything for later.
+%% @doc Init verifies the phase spec, and then stashes it away with
+%% `Partition' and the rest of `FittingDetails' for use during
+%% processing.
 -spec init(riak_pipe_vnode:partition(), riak_pipe_fitting:details()) ->
-         {ok, state()}.
+         {ok, state()} | {error, Reason :: term()}.
 init(Partition, #fitting_details{arg={Phase, Arg}}=FittingDetails) ->
     case init_phase(Phase) of
         {ok, LocalPhase} ->
@@ -76,10 +82,22 @@ init(Partition, #fitting_details{arg={Phase, Arg}}=FittingDetails) ->
             {error, Error}
     end.
 
+%% @doc Perform any one-time initialization of the phase that's
+%% possible/needed.  This currently includes looking up functions from
+%% Riak KV (for `{jsanon, {Bucket, Key}}' and `{strfun, {Bucket,
+%% Key}}', as well as compiling `strfun' specs to Erlang functions.
+%%
+%% <ul>
+%%   <li>`{jsanon, {Bucket, Key}}' is converted to `{jsanon, Source}'</li>
+%%
+%%   <li>`{strfun, {Bucket, Key}}' and `{strfun, Source}' are both
+%%   converted to `{qfun, Fun}' after compiling</li>
+%% </ul>
+-spec init_phase(PhaseSpec :: term()) ->
+         {ok, PhaseSpec :: term()} | {error, Reason :: term()}.
 init_phase({Anon, {Bucket, Key}})
   when Anon =:= jsanon; Anon =:= strfun ->
-    %% lookup source for stored-js function only at fitting worker
-    %% startup, and convert to {jsanon, Source}
+    %% lookup source for stored functions only at fitting worker startup
     {ok, C} = riak:local_client(),
     case C:get(Bucket, Key, 1) of
         {ok, Object} ->
@@ -132,8 +150,10 @@ process(Input, _Last,
     end.
         
 %% @doc Evaluate the map function.
--spec map(map_phase_spec(), term(), term())
-         -> {ok, [term()]} | {forward_preflist, Reason :: term()}.
+-spec map(riak_kv_mrc_pipe:map_query_fun(), term(), term())
+         -> {ok, [term()]}
+          | {forward_preflist, Reason :: term()}
+          | {error, Reason :: term()}.
 map({modfun, Module, Function}, Arg, Input0) ->
     Input = erlang_input(Input0),
     KeyData = erlang_keydata(Input0),
@@ -157,6 +177,7 @@ erlang_input({{error,_}=Input, _, _}) -> Input.
 %% extract keydata from the input
 erlang_keydata({_OkError, _Input, KeyData}) -> KeyData.
 
+%% @doc Evaluate Javascript map functions ... if the input is ok.
 map_js(_JS, _Arg, {{error, notfound}, {Bucket, Key}, KeyData}) ->
     {ok, [{not_found,
            {Bucket, Key},
@@ -237,7 +258,9 @@ validate_arg({Phase, _Arg}) ->
                       "   {qfun, Function :: function()}~n"
                       "   {jsanon, {Bucket :: binary(), Key :: binary()}}~n"
                       "   {jsanon, Source :: binary()}~n"
-                      "   {jsfun, Name :: binary()}~n",
+                      "   {jsfun, Name :: binary()}~n"
+                      "   {strfun, Source :: string()}~n"
+                      "   {strfun, {Bucket :: binary(), Key :: binary()}}~n",
                       [?MODULE])}
     end;
 validate_arg(Other) ->

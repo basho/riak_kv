@@ -20,22 +20,27 @@
 
 %% @doc Riak KV MapReduce / Riak Pipe Compatibility
 %%
-%% == About using `{modfun, Mod, Fun, Arg}' generator to a MapReduce job
+%% == About using `{modfun, Mod, Fun, Arg}' generator to a MapReduce job ==
 %%
-%% An uncommonly-used option for Riak KV MapReduce is the option to
-%% use a fourth method of specifying inputs to the beginning of the
-%% MapReduce workflow.  All four methods are:
+%% The four methods of specifying input for a MapReduce job are:
 %%
 %% <ol>
 %% <li> Specify a bucket name (to emit all bucket/key pairs for that
-%%  bucket) </li>
-%% <li> Specify a bucket name and keyfilter spec, `{Bucket, KeyFilter}' </li>
+%%      bucket) </li>
+%% <li> Specify a bucket name and keyfilter spec, `{Bucket,
+%%      KeyFilter}' </li>
 %% <li> Specify an explicit list of bucket/key pairs </li>
-%% <li> Specify `{modfun, Mod, Fun, Arg}' to generate the raw input data
-%% for the rest of the workflow </li>
+%% <li> Specify `{index, Bucket, Index, Key}' or `{index, Bucket,
+%%      Index, StartKey, EndKey}' to query secondary indexes and send
+%%      matching keys into the MR as inputs. </li>
+%% <li> Specify `{search, Bucket, Query}' or `{search, Bucket, Query,
+%%      Filter}' to query Riak Search and send matching keys into the
+%%      MR as inputs. </li>
+%% <li> Specify `{modfun, Mod, Fun, Arg}' to generate the raw input
+%%      data for the rest of the workflow </li>
 %% </ol>
 %%
-%% For the fourth method, "raw input data" means that the output of the
+%% For the final method, "raw input data" means that the output of the
 %% function will be used as-is by the next item MapReduce workflow.
 %% If that next item is a map phase, then that item's input is
 %% expected to be a bucket/key pair.  If the next item is a reduce
@@ -44,13 +49,15 @@
 %% The type specification for a `{modfun, Mod, Fun, Arg}' generator
 %% function is:
 %% ```
-%% -spec generator_func(Pipe::riak_pipe:pipe(), Arg::term(), Timeout::integer() | 'infinity').
+%% -spec generator_func(Pipe::riak_pipe:pipe(),
+%%                      Arg::term(),
+%%                      Timeout::integer() | 'infinity').
 %% '''
 %%
-%% This generator function is responsible for using
-%% `riak_pipe:queue_work()' to send any data to the pipe, and it is
-%% responsible for calling `riak_pipe:eoi()' to signal the end of
-%% input.
+%% This generator function is responsible for using {@link
+%% riak_pipe:queue_work/2} to send any data to the pipe, and it is
+%% responsible for calling {@link riak_pipe:eoi/2} to signal the end
+%% of input.
 %%
 %% == About reduce phase compatibility ==
 %%
@@ -59,9 +66,11 @@
 %%
 %% <ul>
 %% <li> `Fun' takes the form of `Fun(InputList, Arg)' where `Arg' is
-%% the argument specified in the definition 4-tuple above.
-%% NOTE: Unlike a fold function (e.g., `lists:foldl/3'), the `Arg' argument
-%%       is constant for each iteration of the reduce function. </li>
+%%       the argument specified in the definition 4-tuple above.
+%%
+%%       NOTE: Unlike a fold function (e.g., `lists:foldl/3'), the
+%%       `Arg' argument is constant for each iteration of the reduce
+%%       function. </li>
 %% <li> The `Arg' may be any term, as the caller sees fit.  However, if
 %%      the caller wishes to have more control over the reduce phase,
 %%      then `Arg' must be a property list.  The control knobs that may
@@ -69,23 +78,25 @@
 %%      <ul>
 %%      <li> `reduce_phase_only_1' will buffer all inputs to the reduce
 %%           phase fitting and only call the reduce function once.
+%%
 %%           NOTE: Use with caution to avoid excessive memory use. </li>
 %%      <li> `{reduce_phase_batch_size, Max::integer()}' will buffer all
 %%           inputs to the reduce phase fitting and call the reduce function
 %%           after `Max' items have been buffered. </li>
 %%      </ul>
-%% If neither `reduce_phase_only_1' nor `{reduce_phase_batch_size, Max}'
-%% are present, then the batching size will default to the value of the
-%% application environment variable
-%% `mapred_reduce_phase_batch_size' in the `riak_kv' application.
+%%      If neither `reduce_phase_only_1' nor
+%%      `{reduce_phase_batch_size, Max}' are present, then the
+%%      batching size will default to the value of the application
+%%      environment variable `mapred_reduce_phase_batch_size' in the
+%%      `riak_kv' application.
 %%
-%% NOTE: This mixing of user argument data and MapReduce implementation
-%%       metadata is suboptimal, but to do separate the two types of
-%%       data would require a change that is incompatible with the current
-%%       Erlang MapReduce input specification, e.g., a 5-tuple such as
-%%       `{reduce, Fun, Arg, Keep, MetaData}' or else a custom wrapper
-%%       around the 3rd arg,
-%%       e.g. `{reduce, Fun, {magic_tag, Arg, Metadata}, Keep}'.
+%%      NOTE: This mixing of user argument data and MapReduce
+%%      implementation metadata is suboptimal, but to separate the two
+%%      types of data would require a change that is incompatible with
+%%      the current Erlang MapReduce input specification, e.g., a
+%%      5-tuple such as `{reduce, Fun, Arg, Keep, MetaData}' or else a
+%%      custom wrapper around the 3rd arg, e.g. `{reduce, Fun,
+%%      {magic_tag, Arg, Metadata}, Keep}'.
 %% </li>
 %% <li> If `Keep' is `true', then the output of this phase will be returned
 %%      to the caller (i.e. the output will be "kept"). </li>
@@ -118,12 +129,72 @@
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
 
-%% ignoring ResultTransformer option
-%% TODO: Streaming output
+-export_type([map_query_fun/0,
+              reduce_query_fun/0]).
 
+%% All of the types of Input allowed for a MapReduce
+-type input() :: [key_input()]
+               | bucket_input()
+               | index_input()
+               | search_input()
+               | modfun_input().
+-type key_input() :: riak_kv_pipe_get:input().
+-type bucket_input() :: binary()
+                      | {Bucket :: binary(), KeyFilter :: [keyfilter()]}.
+-type keyfilter() :: [string()].
+-type index_input() :: {index, Bucket :: binary(), Index :: binary(),
+                        Key :: term()}
+                     | {index, Bucket :: binary(), Index :: binary(),
+                        Start :: term(), End :: term()}.
+-type search_input() :: {search, Bucket :: binary(), Query :: binary()}
+                      | {search, Bucket :: binary(), Query :: binary(),
+                         Filter :: [keyfilter()]}.
+-type modfun_input() :: {modfun, Module :: atom(), Function :: atom(),
+                         Arg :: term()}.
+
+%% All of the Query syntax allowed
+-type query_part() :: {map, map_query_fun(),
+                       Arg :: term(), Keep :: boolean()}
+                    | {reduce, reduce_query_fun(),
+                       Arg :: term(), Keep :: boolean()}
+                    | {link,
+                       BucketMatch :: link_match(),
+                       TagMatch :: link_match(),
+                       Keep :: boolean()}.
+-type map_query_fun() ::
+        {qfun, fun( (Input :: term(),
+                     KeyData :: term(),
+                     PhaseArg :: term()) -> [term()] )}
+      | query_fun().
+-type reduce_query_fun() ::
+        {qfun, fun( (Input :: [term()],
+                     PhaseArg :: term()) -> [term()] )}
+      | query_fun().
+-type query_fun() ::
+        {modfun, Module :: atom(), Function :: atom()}
+      | {strfun, {Bucket :: binary(), Key :: binary()}}
+      | {strfun, Source :: string()}
+      | {jsanon, {Bucket :: binary(), Key :: binary()}}
+      | {jsfun, Name :: binary()}
+      | {jsanon, Source :: binary()}.
+-type link_match() :: binary() | '_'.
+
+%% The output of collect_outputs/2,3 and group_outputs/2
+-type ungrouped_results() :: [{From :: non_neg_integer(), Result :: term()}].
+-type grouped_results() :: [Results :: list()]
+                         | list().
+
+%% @equiv mapred(Inputs, Query, 60000)
 mapred(Inputs, Query) ->
     mapred(Inputs, Query, ?DEFAULT_TIMEOUT).
 
+%% @doc Perform a MapReduce `Query' over `Inputs' and return the
+%% result.  `Timeout' here is the maximum time to wait between the
+%% delivery of each output, not an overall timeout.
+-spec mapred(input(), [query_part()], timeout()) ->
+         {ok, grouped_results()} | {error, Reason :: term()}
+        |{error, Reason :: term(),
+          {ok, grouped_results()} | {error, Reason :: term()}}.
 mapred(Inputs, Query, Timeout) ->
     {{ok, Pipe}, NumKeeps} = mapred_stream(Query),
     case send_inputs(Pipe, Inputs, Timeout) of
@@ -134,6 +205,16 @@ mapred(Inputs, Query, Timeout) ->
             {error, Error, collect_outputs(Pipe, NumKeeps, Timeout)}
     end.
 
+%% @doc Setup the MapReduce plumbing, preparted to receive inputs.
+%% The caller should then use {@link send_inputs/2} or {@link
+%% send_inputs/3} to give the query inputs to process.
+%%
+%% The second element of the return tuple is the number of phases that
+%% requested to keep their inputs, and will need to be passed to
+%% {@link collect_outputs/3} or {@link group_outputs/2} to get labels
+%% compatible with HTTP and PB interface results.
+-spec mapred_stream([query_part()]) ->
+         {{ok, riak_pipe:pipe()}, NumKeeps :: integer()}.
 mapred_stream(Query) ->
     NumKeeps = count_keeps_in_query(Query),
     {riak_pipe:exec(mr2pipe_phases(Query), [{log, sink},{trace,[error]}]),
@@ -141,9 +222,19 @@ mapred_stream(Query) ->
 
 %% The plan functions are useful for seeing equivalent (we hope) pipeline.
 
+%% @doc Produce the pipe spec that will implement the given MapReduce
+%% query.  <strong>Intended for debugging only.</strong>
+-spec mapred_plan([query_part()]) -> [ riak_pipe:fitting_spec() ].
 mapred_plan(Query) ->
     mr2pipe_phases(Query).
 
+%% @doc Produce the pipe spec that will implement the given MapReduce
+%% query, and prepend a tuple of the form `{bkeys, [key_input()]}'.
+%% If `BucketOrList' is a binary bucket name, this function will list
+%% the keys in the bucket to return in this tuple.  <strong>Intended
+%% for debugging only.</strong>
+-spec mapred_plan([key_input()]|binary(), [query_part()]) ->
+         [{bkeys, [key_input()]} | riak_pipe:fitting_spec() ].
 mapred_plan(BucketOrList, Query) ->
     BKeys = if is_list(BucketOrList) ->
                     BucketOrList;
@@ -154,16 +245,24 @@ mapred_plan(BucketOrList, Query) ->
             end,
     [{bkeys, BKeys}|mapred_plan(Query)].
 
+%% @doc Convert a MapReduce query into a list of Pipe fitting specs.
+-spec mr2pipe_phases([query_part()]) -> [ riak_pipe:fitting_spec() ].
 mr2pipe_phases([]) ->
     [#fitting_spec{name=empty_pass,
                    module=riak_pipe_w_pass,
                    chashfun=follow}];
 mr2pipe_phases(Query) ->
+    %% now() is used as a random hash to choose which vnode to collect
+    %% the reduce inputs
     Now = now(),
+
+    %% first convert phase
     QueryT = list_to_tuple(Query),
     Numbered = lists:zip(Query, lists:seq(0, length(Query)-1)),
     Fittings0 = lists:flatten([mr2pipe_phase(P,I,Now,QueryT) ||
                                   {P,I} <- Numbered]),
+
+    %% clean up naive 'keep' translationg
     Fs = fix_final_fitting(Fittings0),
     case lists:last(Query) of
         {_, _, _, false} ->
@@ -180,6 +279,11 @@ mr2pipe_phases(Query) ->
             Fs
     end.
 
+-spec mr2pipe_phase(query_part(),
+                    Index :: integer(),
+                    ConstantHashSeed :: term(),
+                    Query :: tuple()) ->
+         [ riak_pipe:fitting_spec() ].
 mr2pipe_phase({map,FunSpec,Arg,Keep}, I, _ConstHashCookie, QueryT) ->
     map2pipe(FunSpec, Arg, Keep, I, QueryT);
 mr2pipe_phase({reduce,FunSpec,Arg,Keep}, I, ConstHashCookie, _QueryT) ->
@@ -187,13 +291,28 @@ mr2pipe_phase({reduce,FunSpec,Arg,Keep}, I, ConstHashCookie, _QueryT) ->
 mr2pipe_phase({link,Bucket,Tag,Keep}, I, _ConstHashCookie, QueryT)->
     link2pipe(Bucket, Tag, Keep, I, QueryT).
 
-%% Prereduce logic: add pre_reduce fittings to the pipe line if
-%% the current item is a map (if you're calling this func, yes it is)
-%% and if the next item in the query is a reduce and if the map's arg
-%% or system config wants us to use prereduce.
-%% Remember: `I` starts counting at 0, but the element BIF starts at 1,
-%% so the element of the next item is I+2.
-
+%% @doc Covert a map phase to its pipe fitting specs.
+%%
+%% Map converts to:
+%% <ol>
+%%    <li>A required {@link riak_kv_pipe_get} to fetch the data for
+%%    the input key.</li>
+%%    <li>A required {@link riak_kv_mrc_map} to run the given query
+%%    function on that data.</li>
+%%    <li>An optional {@link riak_pipe_w_tee} if `keep=true'.</li>
+%%    <li>An optional {@link riak_kv_w_reduce} if it is determined
+%%    that results should be prereduced before being sent on.</li>
+%% </ol>
+%%
+%% Prereduce logic: add pre_reduce fittings to the pipe line if the
+%% current item is a map (if you're calling this func, yes it is) and
+%% if the next item in the query is a reduce and if the map's arg or
+%% system config wants us to use prereduce.  Remember: `I' starts
+%% counting at 0, but the element BIF starts at 1, so the element of
+%% the next item is I+2.
+-spec map2pipe(map_query_fun(), term(), boolean(),
+               Index :: integer(), Query :: tuple()) ->
+         [ riak_pipe:fitting_spec() ].
 map2pipe(FunSpec, Arg, Keep, I, QueryT) ->
     PrereduceP = I+2 =< size(QueryT) andalso
         query_type(I+2, QueryT) == reduce andalso
@@ -224,6 +343,10 @@ map2pipe(FunSpec, Arg, Keep, I, QueryT) ->
              []
      end.              
 
+%% @doc Examine query and application options to determine if
+%% prereduce is appropriate.
+-spec want_prereduce_p(Index :: integer(), Query :: tuple()) ->
+         boolean().
 want_prereduce_p(Idx, QueryT) ->
     {map, _FuncSpec, Arg, _Keep} = element(Idx, QueryT),
     Props = case Arg of
@@ -233,12 +356,28 @@ want_prereduce_p(Idx, QueryT) ->
     AppDefault = app_helper:get_env(riak_kv, mapred_always_prereduce, false),
     proplists:get_value(do_prereduce, Props, AppDefault).
 
+-spec query_type(integer(), tuple()) -> map | reduce | link.
 query_type(Idx, QueryT) ->
     element(1, element(Idx, QueryT)).
 
+-spec query_arg(integer(), tuple()) -> term().
 query_arg(Idx, QueryT) ->
     element(3, element(Idx, QueryT)).
 
+%% @doc Convert a reduce phase to its equivalent pipe fittings.
+%%
+%% Reduce converts to:
+%% <ol>
+%%    <li>A required {@link riak_kv_w_reduce} to run the given query
+%%    function on the input data.</li>
+%%    <li>An optional {@link riak_pipe_w_tee} if `keep=true'.</li>
+%% </ol>
+%%
+%% A constant has is used to get all of the inputs for the reduce to
+%% the same vnode, without caring about which specific vnode that is.
+-spec reduce2pipe(reduce_query_fun(), term(), boolean(),
+                  Index :: integer(), ConstantHashSeed :: term()) ->
+         [ riak_pipe:fitting_spec() ].
 reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie) ->
     Hash = chash:key_of(ConstHashCookie),
     ConstantFun = fun(_) -> Hash end,
@@ -254,6 +393,20 @@ reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie) ->
                      chashfun=follow}
        ||Keep]].
 
+%% @doc Convert a link phase to its equivalent pipe fittings.
+%%
+%% Link converts to:
+%% Map converts to:
+%% <ol>
+%%    <li>A required {@link riak_kv_pipe_get} to fetch the data for
+%%    the input key.</li>
+%%    <li>A required {@link riak_pipe_w_xform} to perform the link
+%%    extraction</li>
+%%    <li>An optional {@link riak_pipe_w_tee} if `keep=true'.</li>
+%% </ol>
+-spec link2pipe(link_match(), link_match(), boolean(),
+                Index :: integer(), Query :: tuple()) ->
+         [ riak_pipe:fitting_spec() ].
 link2pipe(Bucket, Tag, Keep, I, QueryT) ->
     Arg = query_arg(I+1, QueryT),
     [#fitting_spec{name={kvget_map,I},
@@ -269,6 +422,10 @@ link2pipe(Bucket, Tag, Keep, I, QueryT) ->
                     arg=sink,
                     chashfun=follow} || Keep]].
 
+%% @doc Strip extra 'tee' fittings, and correct fitting names used by
+%% the naive converters.
+-spec fix_final_fitting([ riak_pipe:fitting_spec() ]) ->
+         [ riak_pipe:fitting_spec() ].
 fix_final_fitting(Fittings) ->
     case lists:reverse(Fittings) of
         [#fitting_spec{module=riak_pipe_w_tee,
@@ -283,6 +440,14 @@ fix_final_fitting(Fittings) ->
             lists:reverse([Final#fitting_spec{name=Int}|Rest])
     end.
 
+%% @doc Produce a function (closure over the bucket and tag match) to
+%% do link extraction via {@link riak_pipe_w_xform}.  The function
+%% produced will extract all links matching Bucket and Tag from on
+%% input object, and send them as fitting output.
+-spec link_xform_compat(link_match(), link_match(), term()) ->
+         fun( (Input :: term(),
+               riak_pipe_vnode:partition(),
+               riak_pipe_fitting:details()) -> ok ).
 link_xform_compat(Bucket, Tag, _Arg) ->
     fun({ok, Input, _Keydata}, Partition, FittingDetails) ->
             ?T(FittingDetails, [map], {mapping, Input}),
@@ -297,30 +462,57 @@ link_xform_compat(Bucket, Tag, _Arg) ->
             ok
     end.
 
+%% @doc Compute the KV hash of the input.
+-spec bkey_chash(key_input()) -> chash:index().
 bkey_chash(Input) ->
     riak_core_util:chash_key(riak_kv_pipe_get:bkey(Input)).
 
+%% @doc Find the N value for the bucket of the input.
+-spec bkey_nval(key_input()) -> integer().
 bkey_nval(Input) ->
     {Bucket,_} = riak_kv_pipe_get:bkey(Input),
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     {n_val, NVal} = lists:keyfind(n_val, 1, BucketProps),
     NVal.
 
+%% @doc Find the link-extraction function for the bucket.
+-spec bucket_linkfun(binary()) ->
+        fun( (Object::term(), KeyData::term(),
+              {Bucket::link_match(), Tag::link_match()}) -> [key_input()] ).
 bucket_linkfun(Bucket) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     {_, {modfun, Module, Function}} = lists:keyfind(linkfun, 1, BucketProps),
     erlang:make_fun(Module, Function, 3).
 
+%% @doc How many phases have `keep=true'?
+-spec count_keeps_in_query([query_part()]) -> non_neg_integer().
 count_keeps_in_query(Query) ->
     lists:foldl(fun({_, _, _, true}, Acc) -> Acc + 1;
                    (_, Acc)                 -> Acc
                 end, 0, Query).
 
-%% TODO: dynamic inputs, filters
-send_inputs_async(Pipe, Arg) ->
-    send_inputs_async(Pipe, Arg, ?DEFAULT_TIMEOUT).
+%% @equiv send_inputs_async(Pipe, Inputs, 60000)
+send_inputs_async(Pipe, Inputs) ->
+    send_inputs_async(Pipe, Inputs, ?DEFAULT_TIMEOUT).
 
-send_inputs_async(Pipe, Arg, Timeout) ->
+%% @doc Spawn a process to send inputs to the MapReduce pipe.  If
+%% sending completes without error, the process will exit normally.
+%% If errors occur, the process exits with the error as its reason.
+%%
+%% The process links itself to the pipeline (via the builder), so if
+%% the pipeline shutsdown before sending inputs finishes, the process
+%% will be torn down automatically.  This also means that an error
+%% sending inputs will automatically tear down the pipe (because the
+%% process will exit abnormally).
+%%
+%% It's a good idea to prefer sending inputs and receiving outputs in
+%% different processes, especially if you're both sending a large
+%% number of inputs (a large bucket list, for instance) and expecting
+%% to receive a large number of outputs.  The mailbox for a process
+%% doing both is likely to be a point of contention, otherwise.
+-spec send_inputs_async(riak_pipe:pipe(), input(), timeout()) ->
+         {Sender::pid(), MonitorRef::reference()}.
+send_inputs_async(Pipe, Inputs, Timeout) ->
     spawn_monitor(
       fun() ->
               %% tear this process down if the pipeline goes away;
@@ -328,7 +520,7 @@ send_inputs_async(Pipe, Arg, Timeout) ->
               %% it inputs fails (which is what the users of this
               %% function, riak_kv_pb_socket and riak_kv_wm_mapred, want)
               erlang:link(Pipe#pipe.builder),
-              case send_inputs(Pipe, Arg, Timeout) of
+              case send_inputs(Pipe, Inputs, Timeout) of
                   ok ->
                       %% monitoring process sees a 'normal' exit
                       %% (and linked builder is left alone)
@@ -339,11 +531,17 @@ send_inputs_async(Pipe, Arg, Timeout) ->
                       exit(Error)
               end
       end).
-                      
 
-send_inputs(Pipe, Arg) ->
-    send_inputs(Pipe, Arg, ?DEFAULT_TIMEOUT).
+%% @equiv send_inputs(Pipe, Inputs, 60000)
+send_inputs(Pipe, Inputs) ->
+    send_inputs(Pipe, Inputs, ?DEFAULT_TIMEOUT).
 
+%% @doc Send inputs into the MapReduce pipe.  This function handles
+%% setting up the bucket-listing, index-querying, searching, or
+%% modfun-evaluating needed to produce keys, if the input is not just
+%% a list of keys.
+-spec send_inputs(riak_pipe:pipe(), input(), timeout()) ->
+         ok | term().
 send_inputs(Pipe, BucketKeyList, _Timeout) when is_list(BucketKeyList) ->
     [riak_pipe:queue_work(Pipe, BKey)
      || BKey <- BucketKeyList],
@@ -385,6 +583,13 @@ send_inputs(Pipe, {modfun, Mod, Fun, Arg} = Modfun, Timeout) ->
             {Modfun, X, Y, erlang:get_stacktrace()}
     end.
 
+%% @doc Helper function used to redirect the results of
+%% index/search/etc. queries into the MapReduce pipe.  The function
+%% expects to receive zero or more messages of the form `{ReqId,
+%% {keys, Keys}}' or `{ReqId, {results, Results}}', followed by one
+%% message of the form `{ReqId, done}'.
+-spec send_key_list(riak_pipe:pipe(), binary(), term()) ->
+         ok | term().
 send_key_list(Pipe, Bucket, ReqId) ->
     receive
         {ReqId, {keys, Keys}} ->
@@ -411,12 +616,18 @@ send_key_list(Pipe, Bucket, ReqId) ->
             ok
     end.
 
+%% @equiv collect_outpus(Pipe, NumKeeps, 60000)
 collect_outputs(Pipe, NumKeeps) ->
     collect_outputs(Pipe, NumKeeps, ?DEFAULT_TIMEOUT).
 
+%% @doc Receive the results produced by the MapReduce pipe, grouped by
+%% the phase they came from.  See {@link group_outputs/2} for details
+%% on that grouping.
+-spec collect_outputs(riak_pipe:pipe(), non_neg_integer(), timeout()) ->
+         {ok, grouped_results()}
+       | {error, {Reason :: term(), Outputs :: ungrouped_results()}}.
 collect_outputs(Pipe, NumKeeps, Timeout) ->
     {Result, Outputs, []} = riak_pipe:collect_results(Pipe, Timeout),
-    %%TODO: Outputs needs post-processing?
     case Result of
         eoi ->
             %% normal result
@@ -425,6 +636,14 @@ collect_outputs(Pipe, NumKeeps, Timeout) ->
             {error, {Other, Outputs}}
     end.
 
+%% @doc Group the outputs of the MapReduce pipe by the phase that
+%% produced them.  If `NumKeeps' is 2 or more, the return value is a
+%% list of result lists, `[Results :: list()]', in the same order as
+%% the phases that produced them.  If `NumKeeps' is less than 2, the
+%% return value is just a list (possibly empty) of results, `Results
+%% :: list()'.
+-spec group_outputs(ungrouped_results(), non_neg_integer()) ->
+         grouped_results().
 group_outputs(Outputs, NumKeeps) ->
     Merged = lists:foldl(fun({I,O}, Acc) ->
                                  dict:append(I, O, Acc)
@@ -436,13 +655,19 @@ group_outputs(Outputs, NumKeeps) ->
                 [{_, O}] ->
                     O;
                 [] ->
-                    %% Shouldn't ever happen unless an error happened elsewhere
+                    %% an MR query is not required to produce output
                     []
             end;
        true ->
             [ O || {_, O} <- lists:keysort(1, dict:to_list(Merged)) ]
     end.
 
+%% @doc Produce an Erlang term from a string containing Erlang code.
+%% This is used by {@link riak_kv_mrc_map} and {@link
+%% riak_kv_w_reduce} to compile functions specified as `{strfun,
+%% Source}'.
+-spec compile_string(string()) -> {ok, term()}
+                                | {ErrorType :: term, Reason :: term}.
 compile_string(Binary) when is_binary(Binary) ->
     compile_string(binary_to_list(Binary));
 compile_string(String) when is_list(String) ->
@@ -457,16 +682,38 @@ compile_string(String) when is_list(String) ->
 
 %%%
 
+%% @doc Use a MapReduce query to get the value of the `foo/bar'
+%% object.  See {@link example_setup/1} for details of what should be
+%% in `foo/bar'.
+-spec example() -> {ok, [binary()]}
+                 | {error, term()} | {error, term(), term()}.
 example() ->
     mapred([{<<"foo">>, <<"bar">>}],
            [{map, {modfun, riak_kv_mapreduce, map_object_value},
              none, true}]).
 
+%% @doc Use a MapReduce query to get the values of the objects in the
+%% `foo' bucket.  See {@link example_setup/1} for details of what
+%% should be in `foo/*'.
+-spec example_bucket() -> {ok, [binary()]}
+                        | {error, term()} | {error, term(), term()}.
 example_bucket() ->
     mapred(<<"foo">>,
            [{map, {modfun, riak_kv_mapreduce, map_object_value},
              none, true}]).
 
+%% @doc Use a MapReduce query to sum the values of the objects in the
+%% `foonum' bucket.  See {@link example_setup/1} for details of what
+%% should be in `foonum/*'.
+%%
+%% This function asks to keep the results of both the map phase and
+%% the reduce phase, so the output should be a list containing two
+%% lists.  The first sublist should contain all of the values of the
+%% objects in the bucket.  The second sublist should contain only one
+%% element, equal to the sum of the elements in the first sublist.
+%% For example, `[[1,2,3,4,5],[15]]'.
+-spec example_reduce() -> {ok, [[integer()]]}
+                        | {error, term()} | {error, term(), term()}.
 example_reduce() ->
     mapred(<<"foonum">>,
            [{map, {modfun, riak_kv_mapreduce, map_object_value},
@@ -474,9 +721,24 @@ example_reduce() ->
             {reduce, {qfun, fun(Inputs, _) -> [lists:sum(Inputs)] end},
              none, true}]).
 
+%% @equiv example_setup(5)
 example_setup() ->
     example_setup(5).
 
+%% @doc Store some example data for the other example functions.
+%%
+%% Objects stored:
+%% <dl>
+%%   <dt>`foo/bar'</dt>
+%%   <dd>Stores the string "what did you expect?"</dd>
+%%
+%%   <dt>`foo/bar1' .. `foo/barNum'</dt>
+%%   <dd>Each stores the string "bar val INDEX"</dd>
+%%
+%%   <dt>`foonum/bar1' .. `foo/barNum'</dt>
+%%   <dd>Each stores its index as an integer</dd>
+%%</dl>
+-spec example_setup(pos_integer()) -> ok.
 example_setup(Num) when Num > 0 ->
     {ok, C} = riak:local_client(),
     C:put(riak_object:new(<<"foo">>, <<"bar">>, <<"what did you expect?">>)),
