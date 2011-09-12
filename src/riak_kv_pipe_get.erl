@@ -18,6 +18,30 @@
 %%
 %% -------------------------------------------------------------------
 
+%% @doc Riak Pipe fitting that reads objects from Riak KV.  The
+%% primary purpose of this fitting is to serve as the first half of a
+%% 'map' MapReduce phase.
+%%
+%% This fitting accepts bucket/key pairs as inputs, which may be
+%% represented as either a 2-tuple of `{Bucket, Key}' or a 2-element
+%% list of `[Bucket, Key]' (`Bucket' and `Key' should each be a
+%% binary).  An optional third argument, `KeyData' may be specified as
+%% well, as `{{Bucket, Key}, KeyData}' or `[Bucket, Key, KeyData]'.
+%% `KeyData' is an opaque term that will be passed with the object to
+%% the next fitting.
+%%
+%% The fitting reads the object from the KV vnode hosting the same
+%% partition number as the Pipe vnode owning this worker.  For this
+%% reason, it is important to use a `chashfun' for this fitting that
+%% gives the same answer as the consistent hashing function for the KV
+%% object.
+%%
+%% If the object is found, the tuple `{ok, Object, Keydata}' is sent
+%% as output.  If an error occurs looking up the object, and the
+%% preflist has been exhausted, the tuple `{Error, {Bucket, Key},
+%% KeyData}' is sent as output (where `Error' is usually `not_found').
+%% The atom `undefined' is used as `KeyData' if none is specified.
+
 -module(riak_kv_pipe_get).
 -behaviour(riak_pipe_vnode_worker).
 
@@ -29,15 +53,33 @@
 
 -include("riak_kv_vnode.hrl").
 
--record(state, {partition, fd}).
+-export_type([input/0]).
 
+-record(state, {partition, fd}).
+-opaque state() :: #state{}.
+
+-type input() :: {Bucket :: binary(), Key :: binary()}
+               | {{Bucket :: binary(), Key :: binary()}, KeyData :: term()}
+                     %% unfortunate type spec: this list should be
+                     %% either 2 or three elements in length, exactly
+                     %% like the tuples above
+               | [BucketKeyKeyData :: term()].
+
+%% @doc Stashes `Partition' and `FittingDetails' away for use while
+%% processing inputs.
+-spec init(riak_pipe_vnode:partition(), riak_pipe_fitting:details()) ->
+         {ok, state()}.
 init(Partition, FittingDetails) ->
     {ok, #state{partition=Partition, fd=FittingDetails}}.
 
+%% @doc Lookup the bucket/key pair on the Riak KV vnode, and send it
+%% downstream.
+-spec process(riak_kv_mrc_pipe:key_input(), boolean(), state())
+         -> {ok | forward_preflist, state()}.
 process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
     ReqId = make_req_id(),
     riak_core_vnode_master:command(
-      {Partition, node()}, %% assume local partfun was used
+      {Partition, node()}, %% assume local chashfun was used
       ?KV_GET_REQ{bkey=bkey(Input), req_id=ReqId},
       {raw, ReqId, self()},
       riak_kv_vnode_master),
@@ -57,6 +99,8 @@ process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
             end
     end.
 
+%% @doc Not used.
+-spec done(state()) -> ok.
 done(_State) ->
     ok.
 
@@ -65,9 +109,6 @@ make_req_id() ->
 
 %% useful utilities
 
--type input() :: {Bucket :: binary(), Key :: binary()}
-               | {{Bucket :: binary(), Key :: binary()}, KeyData :: term()}
-               | [BucketKeyKeyData :: term()].
 %% @doc Convert a valid pipe_get input into a standard bkey.
 %%      Valid inputs are:
 %%      - `{Bucket, Key}'
