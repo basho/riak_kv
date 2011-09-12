@@ -221,12 +221,12 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{async_folds=AsyncFolds,
         true ->
             BucketFolder =
                 fun() ->
-                        {Acc0, _} = ets:foldl(FoldFun, {Acc, ordsets:new()}, DataRef),
+                        {Acc0, _} = ets:foldl(FoldFun, {Acc, sets:new()}, DataRef),
                         Acc0
                 end,
             {async, BucketFolder};
         false ->
-            {Acc0, _} = ets:foldl(FoldFun, {Acc, ordsets:new()}, DataRef),
+            {Acc0, _} = ets:foldl(FoldFun, {Acc, sets:new()}, DataRef),
             {ok, Acc0}
     end.
 
@@ -314,12 +314,12 @@ callback(_Ref, _Msg, State) ->
 %% Return a function to fold over the buckets on this backend
 fold_buckets_fun(FoldBucketsFun) ->
     fun({{Bucket, _}, _}, {Acc, BucketSet}) ->
-            case ordsets:is_element(Bucket, BucketSet) of
+            case sets:is_element(Bucket, BucketSet) of
                 true ->
                     {Acc, BucketSet};
                 false ->
                     {FoldBucketsFun(Bucket, Acc),
-                     ordsets:add_element(Bucket, BucketSet)}
+                     sets:add_element(Bucket, BucketSet)}
             end
     end.
 

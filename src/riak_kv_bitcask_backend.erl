@@ -189,7 +189,7 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{opts=BitcaskOpts,
                                 {Acc1, _} =
                                     bitcask:fold_keys(Ref1,
                                                       FoldFun,
-                                                      {Acc, ordsets:new()}),
+                                                      {Acc, sets:new()}),
                                 Acc1;
                             {error, Reason} ->
                                 {error, Reason}
@@ -198,7 +198,7 @@ fold_buckets(FoldBucketsFun, Acc, _Opts, #state{opts=BitcaskOpts,
             {async, BucketFolder};
         false ->
             {FoldResult, _Bucketset} =
-                bitcask:fold_keys(Ref, FoldFun, {Acc, ordsets:new()}),
+                bitcask:fold_keys(Ref, FoldFun, {Acc, sets:new()}),
             case FoldResult of
                 {error, _} ->
                     FoldResult;
@@ -402,12 +402,12 @@ check_fcntl() ->
 fold_buckets_fun(FoldBucketsFun) ->
     fun(#bitcask_entry{key=BK}, {Acc, BucketSet}) ->
             {Bucket, _} = binary_to_term(BK),
-            case ordsets:is_element(Bucket, BucketSet) of
+            case sets:is_element(Bucket, BucketSet) of
                 true ->
                     {Acc, BucketSet};
                 false ->
                     {FoldBucketsFun(Bucket, Acc),
-                     ordsets:add_element(Bucket, BucketSet)}
+                     sets:add_element(Bucket, BucketSet)}
             end
     end.
 
