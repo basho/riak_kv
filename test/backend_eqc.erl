@@ -213,7 +213,7 @@ initial_state_data() ->
 
 initial_state_data(Backend, Volatile, Config) ->
     {ok, PoolPid} =
-        riak_core_vnode_worker_pool:start_link(riak_kv_fold_worker,
+        riak_core_vnode_worker_pool:start_link(riak_kv_worker,
                                                2,
                                                42,
                                                [],
@@ -284,7 +284,7 @@ postcondition(_From, _To, S=#qcst{worker_pool=Pool},
     case FoldRes of
         {async, Work} ->
             FinishFun = finish_fun(From),
-            riak_core_vnode_worker_pool:handle_work(Pool, Work, FinishFun);
+            riak_core_vnode_worker_pool:handle_work(Pool, {fold, Work, FinishFun}, From);
         {ok, Buffer} ->
             finish_fold(Buffer, From)
     end,
@@ -298,7 +298,7 @@ postcondition(_From, _To, S=#qcst{worker_pool=Pool},
     case FoldRes of
         {async, Work} ->
             FinishFun = finish_fun(From),
-            riak_core_vnode_worker_pool:handle_work(Pool, Work, FinishFun);
+            riak_core_vnode_worker_pool:handle_work(Pool, {fold, Work, FinishFun}, From);
         {ok, Buffer} ->
             finish_fold(Buffer, From)
     end,
@@ -312,7 +312,7 @@ postcondition(_From, _To, S=#qcst{worker_pool=Pool},
     case FoldRes of
         {async, Work} ->
             FinishFun = finish_fun(From),
-            riak_core_vnode_worker_pool:handle_work(Pool, Work, FinishFun);
+            riak_core_vnode_worker_pool:handle_work(Pool, {fold, Work, FinishFun}, From);
         {ok, Buffer} ->
             finish_fold(Buffer, From)
     end,
