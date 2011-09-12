@@ -195,7 +195,7 @@ delete(Bucket, Key, _IndexSpecs, State=#state{data_ref=DataRef,
             UsedMemory1 = UsedMemory;
         _ ->
             %% Lookup the object so we can delete its
-            %% entry from the time table and account 
+            %% entry from the time table and account
             %% for the memory used.
             [Object] = ets:lookup(DataRef, {Bucket, Key}),
             case Object of
@@ -214,46 +214,55 @@ delete(Bucket, Key, _IndexSpecs, State=#state{data_ref=DataRef,
                    any(),
                    [],
                    state()) -> {ok, any()}.
-fold_buckets(FoldBucketsFun, Acc, _Opts, #state{async_folds=true,
+fold_buckets(FoldBucketsFun, Acc, _Opts, #state{async_folds=AsyncFolds,
                                                 data_ref=DataRef}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    {async, get_folder(FoldFun, {Acc, ordsets:new()}, DataRef)};
-fold_buckets(FoldBucketsFun, Acc, _Opts, #state{data_ref=DataRef}) ->
-    FoldFun = fold_buckets_fun(FoldBucketsFun),
-    {Acc0, _} = ets:foldl(FoldFun, {Acc, ordsets:new()}, DataRef),
-    {ok, Acc0}.
+    case AsyncFolds of
+        true ->
+            BucketFolder =
+                fun() ->
+                        {Acc0, _} = ets:foldl(FoldFun, {Acc, ordsets:new()}, DataRef),
+                        Acc0
+                end,
+            {async, BucketFolder};
+        false ->
+            {Acc0, _} = ets:foldl(FoldFun, {Acc, ordsets:new()}, DataRef),
+            {ok, Acc0}
+    end.
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
                 state()) -> {ok, term()} | {async, fun()}.
-fold_keys(FoldKeysFun, Acc, Opts, #state{async_folds=true,
+fold_keys(FoldKeysFun, Acc, Opts, #state{async_folds=AsyncFolds,
                                          data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-    {async, get_folder(FoldFun, Acc, DataRef)};
-fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef}) ->
-    Bucket =  proplists:get_value(bucket, Opts),
-    FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-    Acc0 = ets:foldl(FoldFun, Acc, DataRef),
-    {ok, Acc0}.
+    case AsyncFolds of
+        true ->
+            {async, get_folder(FoldFun, Acc, DataRef)};
+        false ->
+            Acc0 = ets:foldl(FoldFun, Acc, DataRef),
+            {ok, Acc0}
+    end.
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()}.
-fold_objects(FoldObjectsFun, Acc, Opts, #state{async_folds=true,
+fold_objects(FoldObjectsFun, Acc, Opts, #state{async_folds=AsyncFolds,
                                                data_ref=DataRef}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
-    {async, get_folder(FoldFun, Acc, DataRef)};
-fold_objects(FoldObjectsFun, Acc, Opts, #state{data_ref=DataRef}) ->
-    Bucket =  proplists:get_value(bucket, Opts),
-    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
-    Acc0 = ets:foldl(FoldFun, Acc, DataRef),
-    {ok, Acc0}.
+    case AsyncFolds of
+        true ->
+            {async, get_folder(FoldFun, Acc, DataRef)};
+        false ->
+            Acc0 = ets:foldl(FoldFun, Acc, DataRef),
+            {ok, Acc0}
+    end.
 
 %% @doc Delete all objects from this memory backend
 -spec drop(state()) -> {ok, state()}.
