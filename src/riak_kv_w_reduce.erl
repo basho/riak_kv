@@ -18,9 +18,66 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc A "reduce"-like fitting (in the MapReduce sense) for Riak KV
-%%      MapReduce compatibility.  See riak_pipe_w_reduce.erl for more
-%%      docs: this module is a stripped-down version of that one.
+%% @doc A pipe fitting that applies a function to a list of inputs,
+%% and sends the accumulated results downstream.  This module is
+%% intended to be used as the emulation of 'reduce' phases in Riak KV
+%% MapReduce.
+%%
+%% Upstream fittings should send each of their outputs separately.
+%% This worker will assemble them into a list and apply the function
+%% to that list.
+%%
+%% This fitting expects a 3-tuple of `{rct, Fun, Arg}'.  The `Fun'
+%% should be a function expecting two arguments: `Inputs :: list()'
+%% and `Arg'.  The fun should return a list as its result.  The
+%% function {@link reduce_compat/1} should be used to transform the
+%% usual MapReduce phase spec (`{modfun, ...}', '{jsanon, ...}', etc.)
+%% into the variety of function expected here.
+%%
+%% The default behavior is to apply the reduce function to the first
+%% input, and then to apply the Fun to that result with the next input
+%% received cons'd on the front, and repeat this re-running untill
+%% finished.  For example, if the inputs A, B, and C were received,
+%% evaluation would look something like:
+%% ```
+%% X = Fun([A], Arg),
+%% Y = Fun([B,X], Arg),
+%% Z = Fun([C,Y], Arg)
+%% '''
+%%
+%% Two knobs exist to change this behavior.  The first is
+%% `reduce_phase_batch_size'.  The property may be set by specifying
+%% `Arg' as a proplist, and providing a positive integer.  For
+%% example, setting `Arg=[{reduce_phase_batch_size, 2}]' with the
+%% inputs from the previous example would cause evaulation to look
+%% more like:
+%% ```
+%% X = Fun([B,A], Arg),
+%% Y = Fun([C,X], Arg)
+%% '''
+%% The maximum batch size allowed is controlled by the riak_kv
+%% application environment variable `mapred_reduce_phase_batch_size'
+%%
+%% The other knob to control batching behavior is known as
+%% `reduce_phase_only_1'.  If this option is set in the `Arg'
+%% proplist, the reduce function will be evaluated at most once.  That
+%% is, the example set of inputs from above would evaulate as:
+%% ```
+%% X = Fun([C,B,A], Arg)
+%% '''
+%%
+%% The exception to the batching controls is handoff.  Whenever a
+%% worker receives handoff from another worker, it immediately reduces
+%% the concatenation of the two inputs.
+%%
+%% If no inputs are received before eoi, this fitting evaluated the
+%% function once, with an empty list as `Inputs'.
+%%
+%% For Riak KV MapReduce reduce phase compatibility, a chashfun that
+%% directs all inputs to the same partition should be used.  Multiple
+%% workers will reduce only parts of the input set, and produce
+%% multiple independent outputs, otherwise (note that this may be
+%% desirable in a "pre-reduce" phase).
 -module(riak_kv_w_reduce).
 -behaviour(riak_pipe_vnode_worker).
 
@@ -30,8 +87,7 @@
          archive/1,
          handoff/2,
          validate_arg/1]).
--export([chashfun/1, reduce_compat/1]).
-%% Special export for riak_pipe_fitting
+-export([reduce_compat/1]).
 -export([no_input_run_reduce_once/0]).
 
 -include_lib("riak_pipe/include/riak_pipe.hrl").
@@ -67,8 +123,7 @@ init(Partition, #fitting_details{options=Options} = FittingDetails) ->
     {ok, #state{acc=Acc, delay=0, delay_max = DelayMax,
                 p=Partition, fd=FittingDetails}}.
 
-%% @doc Process looks up the previous result for the `Key', and then
-%%      evaluates the funtion on that with the new `Input'.
+%% @doc Evaluate the function if the batch is ready.
 -spec process(term(), boolean(), state()) -> {ok, state()}.
 process(Input, _Last,
         #state{acc=OldAcc, delay=Delay, delay_max=DelayMax}=State) ->
@@ -80,8 +135,7 @@ process(Input, _Last,
             {ok, State#state{acc=InAcc, delay=Delay + 1}}
     end.
 
-%% @doc Unless the aggregation function sends its own outputs, done/1
-%%      is where all outputs are sent.
+%% @doc Reduce any unreduced inputs, and then send on the outputs.
 -spec done(state()) -> ok.
 done(#state{acc=Acc0, delay=Delay, p=Partition, fd=FittingDetails} = S) ->
     Acc = if Delay == 0 ->
@@ -99,10 +153,9 @@ archive(#state{acc=Acc}) ->
     %% just send state of reduce so far
     {ok, Acc}.
 
-%% @doc The handoff merge is simply an accumulator list.  The reduce
-%%      function is also re-evaluated for the key, such that {@link
-%%      done/1} still has the correct value to send, even if no more
-%%      inputs arrive.
+%% @doc Handoff simply concatenates the accumulator from the remote
+%% worker with the accumulator from this worker, and immediately
+%% reduces the list.
 -spec handoff(list(), state()) -> {ok, state()}.
 handoff(HandoffAcc, #state{acc=Acc}=State) ->
     %% for each Acc, add to local accs;
@@ -126,7 +179,10 @@ reduce(Inputs, #state{fd=FittingDetails}, ErrString) ->
         ?T(FittingDetails, [reduce], {reduced, length(Outputs)}),
         Outputs
     catch Type:Error ->
-            %%TODO: forward
+            %% attempting to be helpful here by catching the error and
+            %% preserving the inputs, in case trying the input again
+            %% later (when a new input or eoi arrives) will be
+            %% successful
             ?T(FittingDetails, [reduce], {reduce_error, Type, Error}),
             error_logger:error_msg(
               "~p:~p ~s:~n   ~P~n   ~P",
@@ -134,7 +190,7 @@ reduce(Inputs, #state{fd=FittingDetails}, ErrString) ->
             Inputs
     end.
 
-%% @doc Check that the arg is a valid arity-4 function.  See {@link
+%% @doc Check that the arg is a valid arity-2 function.  See {@link
 %%      riak_pipe_v:validate_function/3}.
 -spec validate_arg({rct, function(), term()}) -> ok | {error, iolist()}.
 
@@ -147,15 +203,9 @@ validate_fun(Fun) ->
     {error, io_lib:format("~p requires a function as argument, not a ~p",
                           [?MODULE, riak_pipe_v:type_of(Fun)])}.
 
-%% @doc The preferred hashing function.  Chooses a partition based
-%%      on the hash of the `Key'.
--spec chashfun({term(), term()}) -> riak_pipe_vnode:chash().
-chashfun({Key,_}) ->
-    chash:key_of(Key).
-
 %% @doc Compatibility wrapper for an old-school Riak MR reduce function,
 %%      which is an arity-2 function `fun(InputList, SpecificationArg)'.
-
+-spec reduce_compat(riak_kv_mrc_pipe:reduce_query_fun()) -> fun().
 reduce_compat({jsanon, {Bucket, Key}})
   when is_binary(Bucket), is_binary(Key) ->
     reduce_compat({qfun, js_runner({jsanon, stored_source(Bucket, Key)})});
@@ -179,14 +229,23 @@ reduce_compat({modfun, Module, Function}) ->
 reduce_compat({qfun, Fun}) ->
     Fun.
 
+%% @doc True; this fitting should be started and stopped, even if
+%% no inputs were received (no normal workers were started).
 no_input_run_reduce_once() ->
     true.
 
+%% @doc Fetch source code for the reduce function stored in a Riak KV
+%% object.
+-spec stored_source(binary(), binary()) -> string().
 stored_source(Bucket, Key) ->
     {ok, C} = riak:local_client(),
     {ok, Object} = C:get(Bucket, Key, 1),
     riak_object:get_value(Object).
-        
+
+%% @doc Produce a function suitable for this fitting's `Arg' that will
+%% evaluate the given piece of Javascript.
+-spec js_runner({jsanon | jsfun, binary()}) ->
+         fun( (list(), term()) -> list() ).
 js_runner(JS) ->
     fun(Inputs, Arg) ->
             JSInputs = [riak_kv_mapred_json:jsonify_not_found(I)
@@ -203,6 +262,15 @@ js_runner(JS) ->
             end
     end.
 
+%% @doc Determine what batch size should be used for this fitting.
+%% Default is 1, but may be overridden by the `Arg' props
+%% `reduce_phase_only_1' and `reduce_phase_batch_size', or the riak_kv
+%% application environment variable `mapred_reduce_pahse_batch_size'.
+%%
+%% NOTE: An atom is used when the reduce should be run only once,
+%% since atoms always compare greater than integers.
+-spec calc_delay_max(riak_pipe_fitting:details()) ->
+         integer() | atom().
 calc_delay_max(#fitting_details{arg = {rct, _ReduceFun, ReduceArg}}) ->
     Props = case ReduceArg of
                 L when is_list(L) -> L;         % May or may not be a proplist

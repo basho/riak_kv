@@ -173,7 +173,7 @@
 -type query_fun() ::
         {modfun, Module :: atom(), Function :: atom()}
       | {strfun, {Bucket :: binary(), Key :: binary()}}
-      | {strfun, Source :: binary()}
+      | {strfun, Source :: string()}
       | {jsanon, {Bucket :: binary(), Key :: binary()}}
       | {jsfun, Name :: binary()}
       | {jsanon, Source :: binary()}.
