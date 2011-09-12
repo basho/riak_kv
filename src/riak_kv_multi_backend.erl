@@ -45,8 +45,8 @@
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold]).
 
--record (state, {async_backends :: [{atom(), atom(), term()}],
-                 sync_backends :: [{atom(), atom(), term()}],
+-record (state, {async_folds :: boolean(),
+                 backends :: [{atom(), atom(), term()}],
                  default_backend :: atom()}).
 
 -type state() :: #state{}.
@@ -117,12 +117,12 @@ start(Partition, Config) ->
                 true ->
                     %% Start the backends
                     BackendFun = start_backend_fun(Partition, AsyncFolds),
-                    {AsyncBackends, SyncBackends, Errors} =
-                        lists:foldl(BackendFun, {[], [], []}, Defs),
+                    {Backends, Errors} =
+                        lists:foldl(BackendFun, {[], []}, Defs),
                     case Errors of
                         [] ->
-                            {ok, #state{async_backends=AsyncBackends,
-                                        sync_backends=SyncBackends,
+                            {ok, #state{async_folds=AsyncFolds,
+                                        backends=Backends,
                                         default_backend=DefaultBackend}};
                         _ ->
                             {error, Errors}
@@ -136,47 +136,31 @@ start(Partition, Config) ->
 
 %% @private
 start_backend_fun(Partition, AsyncFolds) ->
-    fun({Name, Module, ModConfig}, {AsyncBackends, SyncBackends, Errors}) ->
+    fun({Name, Module, ModConfig}, {Backends, Errors}) ->
             try
                 {_, Capabilities} = Module:api_version(),
                 case AsyncFolds andalso
                     lists:member(async_fold, Capabilities) of
                     true ->
                         ModConfig1 = [{async_folds, true}
-                                      | ModConfig],
-                        case start_backend(Name,
-                                           Module,
-                                           Partition,
-                                           ModConfig1) of
-                            {Module, Reason} ->
-                                {AsyncBackends,
-                                 SyncBackends,
-                                 [{Module, Reason} | Errors]};
-                            AsyncBackend ->
-                                {[AsyncBackend | AsyncBackends],
-                                 SyncBackends,
-                                 Errors}
-                        end;
+                                      | ModConfig];
                     false ->
                         ModConfig1 = [{async_folds, false}
-                                      | ModConfig],
-                        case start_backend(Name,
-                                           Module,
-                                           Partition,
-                                           ModConfig1) of
-                            {Module, Reason} ->
-                                {AsyncBackends,
-                                 SyncBackends,
-                                 [{Module, Reason} | Errors]};
-                            SyncBackend ->
-                                {AsyncBackends,
-                                 [SyncBackend | SyncBackends],
-                                 Errors}
-                        end
+                                      | ModConfig]
+                end,
+                case start_backend(Name,
+                                   Module,
+                                   Partition,
+                                   ModConfig1) of
+                    {Module, Reason} ->
+                        {Backends,
+                         [{Module, Reason} | Errors]};
+                    Backend ->
+                        {[Backend | Backends],
+                         Errors}
                 end
             catch _:Error ->
-                    {AsyncBackends,
-                     SyncBackends, 
+                    {Backends,
                      [{Module, Error} | Errors]}
             end
     end.
@@ -197,9 +181,7 @@ start_backend(Name, Module, Partition, Config) ->
 
 %% @doc Stop the backends
 -spec stop(state()) -> ok.
-stop(#state{async_backends=AsyncBackends,
-            sync_backends=SyncBackends}) ->
-    Backends = AsyncBackends ++ SyncBackends,
+stop(#state{backends=Backends}) ->
     [Module:stop(SubState) || {_, Module, SubState} <- Backends],
     ok.
 
@@ -254,7 +236,7 @@ delete(Bucket, Key, IndexSpecs, State) ->
 %% @doc Fold over all the buckets
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
                    any(),
-                   [],
+                   [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()} | {error, term()}.
 fold_buckets(FoldBucketsFun, Acc, Opts, State) ->
     fold(undefined, fold_buckets, FoldBucketsFun, Acc, Opts, State).
@@ -279,8 +261,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, State) ->
 
 %% @doc Delete all objects from the different backends
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
-drop(#state{async_backends=AsyncBackends,
-            sync_backends=SyncBackends}=State) ->
+drop(#state{backends=Backends}=State) ->
     Fun = fun({Name, Module, SubState}) ->
                   case Module:drop(SubState) of
                       {ok, NewSubState} ->
@@ -289,46 +270,36 @@ drop(#state{async_backends=AsyncBackends,
                           {error, Reason, NewSubState}
                   end
           end,
-    AsyncDropResults = [Fun(Backend) || Backend <- AsyncBackends],
-    SyncDropResults = [Fun(Backend) || Backend <- SyncBackends],
-    {Errors, UpdAsyncBackends} =
-        lists:splitwith(fun error_filter/1, AsyncDropResults),
-    {Errors, UpdSyncBackends} =
-        lists:splitwith(fun error_filter/1, SyncDropResults),
+    DropResults = [Fun(Backend) || Backend <- Backends],
+    {Errors, UpdBackends} =
+        lists:splitwith(fun error_filter/1, DropResults),
     case Errors of
         [] ->
-            {ok, State#state{async_backends=UpdAsyncBackends,
-                             sync_backends=UpdSyncBackends}};
+            {ok, State#state{backends=UpdBackends}};
         _ ->
-            {error, Errors, State#state{async_backends=UpdAsyncBackends,
-                                        sync_backends=UpdSyncBackends}}
+            {error, Errors, State#state{backends=UpdBackends}}
     end.
 
 %% @doc Returns true if the backend contains any
 %% non-tombstone values; otherwise returns false.
 -spec is_empty(state()) -> boolean().
-is_empty(#state{async_backends=AsyncBackends,
-                sync_backends=SyncBackends}) ->
+is_empty(#state{backends=Backends}) ->
     Fun = fun({_, Module, SubState}) ->
                   Module:is_empty(SubState)
           end,
-    lists:all(Fun, AsyncBackends ++ SyncBackends).
+    lists:all(Fun, Backends).
 
 %% @doc Get the status information for this backend
 -spec status(state()) -> [{atom(), term()}].
-status(#state{async_backends=AsyncBackends,
-              sync_backends=SyncBackends}) ->
+status(#state{backends=Backends}) ->
     %% @TODO Reexamine how this is handled
-    Backends = AsyncBackends ++ SyncBackends,
     [{N, Mod:status(ModState)} || {N, Mod, ModState} <- Backends].
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
-callback(Ref, Msg, #state{async_backends=AsyncBackends,
-                          sync_backends=SyncBackends}=State) ->
+callback(Ref, Msg, #state{backends=Backends}=State) ->
     %% Pass the callback on to all submodules - their responsbility to
     %% filter out if they need it.
-    Backends = AsyncBackends ++ SyncBackends,
     [Mod:callback(Ref, Msg, ModState) || {_N, Mod, ModState} <- Backends],
     {ok, State}.
 
@@ -339,13 +310,11 @@ callback(Ref, Msg, #state{async_backends=AsyncBackends,
 %% @private
 %% Given a Bucket name and the State, return the
 %% backend definition. (ie: {Name, Module, SubState})
-get_backend(Bucket, #state{async_backends=AsyncBackends,
-                           sync_backends=SyncBackends,
+get_backend(Bucket, #state{backends=Backends,
                            default_backend=DefaultBackend}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     BackendName = proplists:get_value(backend, BucketProps, DefaultBackend),
     %% Ensure that a backend by that name exists...
-    Backends = AsyncBackends ++ SyncBackends,
     case lists:keyfind(BackendName, 1, Backends) of
         false -> throw({?MODULE, undefined_backend, BackendName});
         Backend -> Backend
@@ -354,65 +323,78 @@ get_backend(Bucket, #state{async_backends=AsyncBackends,
 %% @private
 %% @doc Update the state for one of the
 %% composing backends of this multi backend.
-update_backend_state(Backend, Module, ModState, State) ->
-    AsyncBackends = State#state.async_backends,
-
-    case lists:keymember(Backend, 1, AsyncBackends) of
-        true ->
-            NewAsyncBackends = lists:keyreplace(Backend,
-                                                1,
-                                                AsyncBackends,
-                                                {Backend, Module, ModState}),
-            State#state{async_backends=NewAsyncBackends};
-        false ->
-            SyncBackends = State#state.sync_backends,
-            NewSyncBackends = lists:keyreplace(Backend,
-                                               1,
-                                               SyncBackends,
-                                               {Backend, Module, ModState}),
-            State#state{sync_backends=NewSyncBackends}
-    end.
+update_backend_state(Backend,
+                     Module,
+                     ModState,
+                     State=#state{backends=Backends}) ->
+    NewBackends = lists:keyreplace(Backend,
+                                   1,
+                                   Backends,
+                                   {Backend, Module, ModState}),
+    State#state{backends=NewBackends}.
 
 %% @private
 %% @doc Shared code used by all the backend fold functions.
-fold(Bucket, ModFun, FoldFun, Acc, Opts, State=#state{async_backends=AsyncBackends,
-                                                      sync_backends=SyncBackends}) ->
+fold(Bucket, ModFun, FoldFun, Acc, Opts, State=#state{async_folds=AsyncFolds,
+                                                      backends=Backends}) ->
     case Bucket of
         undefined ->
             BackendFoldFun =
-                fun({_, Module, SubState}, FoldAcc) ->
-                        Result = Module:ModFun(FoldFun,
-                                               FoldAcc,
-                                               Opts,
-                                               SubState),
-                        case Result of
-                            {ok, FoldAcc1} ->
-                                FoldAcc1;
-                            {async, AsyncWork} ->
-                                AsyncWork();
-                            {error, Reason} ->
-                                throw({error, {Module, Reason}})
+                fun({_, Module, SubState}, {FoldAcc, WorkList}) ->
+                        %% Get the backend capabilities to determine
+                        %% if it supports asynchronous folding.
+                        {_, ModCaps} = Module:api_version(),
+                        case AsyncFolds andalso
+                            lists:member(async_fold, ModCaps) of
+                            true ->
+                                AsyncWork = 
+                                    fun(FoldAcc1) -> 
+                                            Module:ModFun(FoldFun,
+                                                          FoldAcc1,
+                                                          Opts,
+                                                          SubState)
+                                    end,
+                                {FoldAcc, [AsyncWork | WorkList]};
+                            false ->
+                                Result = Module:ModFun(FoldFun,
+                                                       FoldAcc,
+                                                       Opts,
+                                                       SubState),
+                                case Result of
+                                    {ok, FoldAcc1} ->
+                                        {FoldAcc1, WorkList};
+                                    {error, Reason} ->
+                                        throw({error, {Module, Reason}})
+                                end
                         end
                 end,
             try
-                case SyncBackends of 
-                    [] ->
-                        Acc0 = Acc;
-                    _ ->
-                        Acc0 = lists:foldl(BackendFoldFun, Acc, SyncBackends)
-                end,
+                {Acc0, AsyncWorkList} =
+                    lists:foldl(BackendFoldFun, {Acc, []}, Backends),
+
                 %% We have now accumulated the results for all of the
                 %% synchronous backends. The next step is to wrap the
                 %% asynchronous work in a function that passes the accumulator
                 %% to each successive piece of asynchronous work.
-                case AsyncBackends of
+                case AsyncWorkList of
                     [] ->
                         %% Just return the synchronous results
                         {ok, Acc0};
                     _ ->
+                        AsyncFoldFun = 
+                            fun(Work, Acc1) ->
+                                    case Work(Acc1) of
+                                        {ok, Acc2} ->
+                                            Acc2;
+                                        {async, AsyncFun} ->
+                                            AsyncFun();
+                                        {error, Reason} ->
+                                            throw({error, Reason})
+                                    end
+                            end,
                         AsyncWork =
                             fun() ->
-                                    lists:foldl(BackendFoldFun, Acc0, AsyncBackends)
+                                    lists:foldl(AsyncFoldFun, Acc0, AsyncWorkList)
                             end,
                         {async, AsyncWork}
                 end
