@@ -48,19 +48,9 @@
 
 -record(state, {p :: riak_pipe_vnode:partition(),
                 fd :: riak_pipe_fitting:details(),
-                phase :: map_phase_spec(),
+                phase :: riak_kv_mrc_pipe:map_query_fun(),
                 arg :: term()}).
 -opaque state() :: #state{}.
--type map_phase_spec() ::
-        {modfun, Module :: atom(), Function :: atom()}
-      | {qfun, fun( (Input :: term(),
-                     KeyData :: term(),
-                     PhaseArg :: term()) -> [term()] )}
-      | {strfun, {Bucket :: binary(), Key :: binary()}}
-      | {strfun, Source :: binary()}
-      | {jsanon, {Bucket :: binary(), Key :: binary()}}
-      | {jsfun, Name :: binary()}
-      | {jsanon, Source :: binary()}.
 
 -define(DEFAULT_JS_RESERVE_ATTEMPTS, 10).
 
@@ -132,7 +122,7 @@ process(Input, _Last,
     end.
         
 %% @doc Evaluate the map function.
--spec map(map_phase_spec(), term(), term())
+-spec map(riak_kv_mrc_pipe:map_query_fun(), term(), term())
          -> {ok, [term()]} | {forward_preflist, Reason :: term()}.
 map({modfun, Module, Function}, Arg, Input0) ->
     Input = erlang_input(Input0),
