@@ -258,7 +258,8 @@ handle_command(#riak_kv_listkeys_req_v1{bucket=Bucket, req_id=ReqId}, _Sender,
                State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
     do_legacy_list_bucket(ReqId,Bucket,Mod,ModState,Idx,State);
 handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Caller}, _Sender,
-               State=#state{key_buf_size=BufferSize,
+               State=#state{async_backend=AsyncBackend,
+                            key_buf_size=BufferSize,
                             mod=Mod,
                             modstate=ModState,
                             idx=Idx}) ->
@@ -271,7 +272,12 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
     BufferMod = riak_kv_fold_buffer,
     case Bucket of
         '_' ->
-            Opts = [],
+            case AsyncBackend of
+                true ->
+                    Opts = [async_fold];
+                false ->
+                    Opts = []
+            end,
             BufferFun =
                 fun(Results) ->
                         UniqueResults = lists:usort(Results),
@@ -280,7 +286,12 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
             FoldFun = fold_fun(buckets, BufferMod, Filter),
             ModFun = fold_buckets;
         _ ->
-            Opts = [{bucket, Bucket}],
+            case AsyncBackend of
+                true ->
+                    Opts = [async_fold, {bucket, Bucket}];
+                false ->
+                    Opts = [{bucket, Bucket}]
+            end,
             BufferFun =
                 fun(Results) ->
                         Caller ! {ReqId, {kl, Idx, Results}}
