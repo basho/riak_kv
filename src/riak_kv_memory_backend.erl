@@ -349,12 +349,7 @@ fold_objects_fun(FoldObjectsFun, Bucket) ->
 %% @private
 get_folder(FoldFun, Acc, DataRef) ->
     fun() ->
-            case ets:foldl(FoldFun, Acc, DataRef) of
-                {Acc1, _} ->
-                    Acc1;
-                Acc1 ->
-                    Acc1
-            end
+            ets:foldl(FoldFun, Acc, DataRef)
     end.
 
 %% @private
