@@ -138,13 +138,7 @@
                | index_input()
                | search_input()
                | modfun_input().
--type key_input() :: {Bucket :: binary(), Key :: binary()}
-                   | {{Bucket :: binary(), Key :: binary()},
-                      KeyData :: term()}
-                     %% unfortunate type spec: this list should be
-                     %% either 2 or three elements in length, exactly
-                     %% like the tuples above
-                   | [BucketKeyKeydata :: binary()].
+-type key_input() :: riak_kv_pipe_get:input().
 -type bucket_input() :: binary()
                       | {Bucket :: binary(), KeyFilter :: [keyfilter()]}.
 -type keyfilter() :: [string()].
