@@ -43,7 +43,7 @@ init_worker(VNodeIndex, _Args, _Props) ->
     {ok, #state{index=VNodeIndex}}.
 
 %% @doc Perform the asynchronous fold operation.
-handle_work(FoldFun, FinishFun, State) ->
+handle_work({fold, FoldFun, FinishFun}, _Sender, State) ->
     FoldResults =
         try
             FoldFun()

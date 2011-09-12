@@ -296,7 +296,7 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
         end,
     case list(FoldFun, FinishFun, Mod, ModFun, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
-            {async, AsyncWork, FinishFun, State};
+            {async, {fold, AsyncWork, FinishFun}, Caller, State};
         _ ->
             {noreply, State}
     end;
@@ -353,7 +353,7 @@ handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
     FinishFun = finish_fun(BufferMod, Sender),
     case list(FoldFun, FinishFun, Mod, fold_buckets, ModState, [], Buffer) of
         {async, AsyncWork} ->
-            {async, AsyncWork, FinishFun, State};
+            {async, {fold, AsyncWork, FinishFun}, Sender, State};
         _ ->
             {noreply, State}
     end;
@@ -375,7 +375,7 @@ handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
     Opts = [{bucket, Bucket}],
     case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
-            {async, AsyncWork, FinishFun, State};
+            {async, {fold, AsyncWork, FinishFun}, Sender, State};
         _ ->
             {noreply, State}
     end;
@@ -401,7 +401,7 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
             Opts = [{index, Bucket, Query}],
             case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, Buffer) of
                 {async, AsyncWork} ->
-                    {async, AsyncWork, FinishFun, State};
+                    {async, {fold, AsyncWork, FinishFun}, Sender, State};
                 _ ->
                     {noreply, State}
             end;
@@ -833,7 +833,7 @@ do_fold(Fun, Acc0, Sender, State = #state{mod=Mod, modstate=ModState}) ->
                 fun(Acc) ->
                         riak_core_vnode:reply(Sender, Acc)
                 end,
-            {async, Work, FinishFun, State};
+            {async, {fold, Work, FinishFun}, Sender, State};
         ER ->
             {reply, ER, State}
     end.
