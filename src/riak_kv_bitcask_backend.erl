@@ -176,7 +176,6 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{opts=BitcaskOpts,
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     case lists:member(async_fold, Opts) of
         true ->
-            io:format("Async fold~n"),
             ReadOpts = set_mode(read_only, BitcaskOpts),
             BucketFolder =
                 fun() ->
@@ -194,7 +193,6 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{opts=BitcaskOpts,
                 end,
             {async, BucketFolder};
         false ->
-            io:format("Sync fold~n"),
             {FoldResult, _Bucketset} =
                 bitcask:fold_keys(Ref, FoldFun, {Acc, sets:new()}),
             case FoldResult of
