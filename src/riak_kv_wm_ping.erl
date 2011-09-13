@@ -28,13 +28,32 @@
 %% webmachine resource exports
 -export([
          init/1,
+         service_available/2,
          to_html/2
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
+-include("riak_kv_wm_raw.hrl").
 
 init([]) ->
     {ok, undefined}.
+
+%% @spec service_available(reqdata(), context()) ->
+%%          {boolean(), reqdata(), context()}
+%% @doc Determine the status of the local node. Unless the node is in the 
+%%      'valid' state this resource will return 501
+service_available(ReqData, Ctx) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    case riak_core_ring:member_status(Ring, node()) of
+        valid ->
+            {true, ReqData, Ctx};
+        Status ->
+            {false,
+             wrq:set_resp_body(
+                io_lib:format("~w~n", [Status]),
+                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", ReqData)),
+             Ctx}
+    end.
 
 to_html(ReqData, Ctx) ->
     {"OK", ReqData, Ctx}.
