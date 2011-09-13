@@ -855,7 +855,8 @@ do_delete(BKey, ReqId, State) ->
 
 %% @private
 do_fold(Fun, Acc0, Sender, State = #state{mod=Mod, modstate=ModState}) ->
-    case Mod:fold_objects(Fun, Acc0, [], ModState) of
+    Opts = [async_fold],
+    case Mod:fold_objects(Fun, Acc0, Opts, ModState) of
         {ok, Acc} ->
             {reply, Acc, State};
         {async, Work} ->
