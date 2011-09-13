@@ -45,8 +45,7 @@
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold]).
 
--record (state, {async_folds :: boolean(),
-                 backends :: [{atom(), atom(), term()}],
+-record (state, {backends :: [{atom(), atom(), term()}],
                  default_backend :: atom()}).
 
 -type state() :: #state{}.
@@ -516,11 +515,7 @@ eqc_test_() ->
          [?_assertEqual(true,
                         backend_eqc:test(?MODULE, true, sample_config())),
           ?_assertEqual(true,
-                        backend_eqc:test(?MODULE, true, async_fold_config())),
-          ?_assertEqual(true,
-                        backend_eqc:test(?MODULE,
-                                         true,
-                                         sync_and_async_fold_config()))
+                        backend_eqc:test(?MODULE, true, async_fold_config()))
          ]}]}]}.
 
 setup() ->
@@ -556,18 +551,6 @@ async_fold_config() ->
                      ]}
     ].
 
-sync_and_async_fold_config() ->
-    [
-     {storage_backend, riak_kv_multi_backend},
-     {multi_backend_default, second_backend},
-      {multi_backend, [
-                      {first_backend, riak_kv_memory_backend, []},
-                      {second_backend,
-                       riak_kv_memory_backend,
-                       [{async_folds, false}]}
-                     ]}
-    ].
-
 -endif. % EQC
 
 %% Check extra callback messages are ignored by backends
@@ -583,8 +566,7 @@ extra_callback_test() ->
     application:set_env(eleveldb, data_root, "test/eleveldb-backend"),
 
     %% Start up multi backend
-    Config = [{async_folds, false},
-              {storage_backend, riak_kv_multi_backend},
+    Config = [{storage_backend, riak_kv_multi_backend},
               {multi_backend_default, memory},
               {multi_backend,
                [{bitcask, riak_kv_bitcask_backend, []},
@@ -601,7 +583,6 @@ bad_config_test() ->
 
 sample_config() ->
     [
-     {async_folds, false},
      {storage_backend, riak_kv_multi_backend},
      {multi_backend_default, second_backend},
       {multi_backend, [
