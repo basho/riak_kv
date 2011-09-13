@@ -456,7 +456,9 @@ multi_backend_test_() ->
              unlink(P1),
              unlink(P2),
              catch exit(P1, kill),
-             catch exit(P2, kill)
+             catch exit(P2, kill),
+             wait_until_dead(P1),
+             wait_until_dead(P2)
      end,
      [
       fun(_) ->
@@ -539,7 +541,9 @@ cleanup({P1, P2}) ->
     unlink(P1),
     unlink(P2),
     catch exit(P1, kill),
-    catch exit(P2, kill).
+    catch exit(P2, kill),
+    wait_until_dead(P1),
+    wait_until_dead(P2).
 
 async_fold_config() ->
     [
@@ -600,5 +604,17 @@ bad_backend_config() ->
                       {second_backend, riak_kv_memory_backend, []}
                      ]}
     ].
+
+%% Minor sin of cut-and-paste....
+wait_until_dead(Pid) when is_pid(Pid) ->
+    Ref = monitor(process, Pid),
+    receive
+        {'DOWN', Ref, process, _Obj, Info} ->
+            Info
+    after 10*1000 ->
+            exit({timeout_waiting_for, Pid})
+    end;
+wait_until_dead(_) ->
+    ok.
 
 -endif.
