@@ -44,12 +44,5 @@ init_worker(VNodeIndex, _Args, _Props) ->
 
 %% @doc Perform the asynchronous fold operation.
 handle_work({fold, FoldFun, FinishFun}, _Sender, State) ->
-    FoldResults = FoldFun(),
-    case FoldResults of
-        {Acc, _} ->
-            ok;
-        Acc ->
-            ok
-    end,
-    FinishFun(Acc),
+    FinishFun(FoldFun()),
     {noreply, State}.
