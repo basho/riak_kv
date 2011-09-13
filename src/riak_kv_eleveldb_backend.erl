@@ -186,18 +186,17 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{fold_opts=FoldOpts,
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     FirstKey = to_first_key(undefined),
     FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    BucketFolder =
+        fun() ->
+                {FoldResult, _} =
+                    eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts1),
+                FoldResult
+        end,
     case lists:member(async_fold, Opts) of
         true ->
-            BucketFolder =
-                fun() ->
-                        {FoldResult, _} =
-                            eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts1),
-                        FoldResult
-                end,
             {async, BucketFolder};
         false ->
-            {Acc0, _LastBucket} =
-                eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts1),
+            {Acc0, _LastBucket} = BucketFolder(),
             {ok, Acc0}
     end.
 
@@ -222,22 +221,21 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     FirstKey = to_first_key(Limiter),
     FoldFun = fold_keys_fun(FoldKeysFun, Limiter),
     FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    KeyFolder =
+        fun() ->
+                %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
+                try
+                    eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
+                catch
+                    {break, AccFinal} ->
+                        AccFinal
+                end
+        end,
     case lists:member(async_fold, Opts) of
         true ->
-            KeyFolder =
-                fun() ->
-                        eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
-                end,
             {async, KeyFolder};
         false ->
-            %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
-            try
-                Acc0 = eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1),
-                {ok, Acc0}
-            catch
-                {break, AccFinal} ->
-                    {ok, AccFinal}
-            end
+            {ok, KeyFolder()}
     end.
 
 %% @doc Fold over all the objects for one or all buckets.
@@ -250,21 +248,20 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
     Bucket =  proplists:get_value(bucket, Opts),
     FoldOpts1 = fold_opts(Bucket, FoldOpts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
+    ObjectFolder =
+        fun() ->
+                try
+                    eleveldb:fold(Ref, FoldFun, Acc, FoldOpts1)
+                catch
+                    {break, AccFinal} ->
+                        AccFinal
+                end
+        end,
     case lists:member(async_fold, Opts) of
         true ->
-            ObjectFolder =
-                fun() ->
-                        eleveldb:fold(Ref, FoldFun, Acc, FoldOpts1)
-                end,
             {async, ObjectFolder};
         false ->
-            try
-                Acc0 = eleveldb:fold(Ref, FoldFun, Acc, FoldOpts1),
-                {ok, Acc0}
-            catch
-                {break, AccFinal} ->
-                    {ok, AccFinal}
-            end
+            {ok, ObjectFolder()}
     end.
 
 %% @doc Delete all objects from this eleveldb backend
