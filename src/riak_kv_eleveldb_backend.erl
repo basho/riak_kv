@@ -196,8 +196,7 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{fold_opts=FoldOpts,
         true ->
             {async, BucketFolder};
         false ->
-            {Acc0, _LastBucket} = BucketFolder(),
-            {ok, Acc0}
+            {ok, BucketFolder()}
     end.
 
 %% @doc Fold over all the keys for one or all buckets.
