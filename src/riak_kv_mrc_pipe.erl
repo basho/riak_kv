@@ -22,7 +22,7 @@
 %%
 %% == About using `{modfun, Mod, Fun, Arg}' generator to a MapReduce job ==
 %%
-%% The four methods of specifying input for a MapReduce job are:
+%% The six methods of specifying input for a MapReduce job are:
 %%
 %% <ol>
 %% <li> Specify a bucket name (to emit all bucket/key pairs for that
