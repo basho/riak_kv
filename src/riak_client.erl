@@ -540,7 +540,7 @@ stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
             ReqId = mk_reqid(),
             case Input of
                 {Bucket, FilterInput} ->
-                    case build_exprs(FilterInput) of
+                    case riak_kv_mapred_filter:build_filter(FilterInput) of
                         {error, _Error} ->
                             {error, _Error};
                         {ok, FilterExprs} ->
@@ -809,7 +809,7 @@ is_key_filter(_) ->
 %% @deprecated This function is only here to support
 %% rolling upgrades and will be removed.
 build_filter({Bucket, Exprs}) ->
-    case build_exprs(Exprs) of
+    case riak_kv_mapred_filters:build_filter(Exprs) of
         {ok, Filters} ->
             {ok, {Bucket, Filters}};
         Error ->
@@ -817,19 +817,6 @@ build_filter({Bucket, Exprs}) ->
     end;
 build_filter(Bucket) when is_binary(Bucket) ->
     {ok, {Bucket, []}}.
-
-build_exprs(Exprs) ->
-    build_exprs(Exprs, []).
-
-build_exprs([], Accum) ->
-    {ok, lists:reverse(Accum)};
-build_exprs([[FunName|Args]|T], Accum) ->
-    case riak_kv_mapred_filters:resolve_name(FunName) of
-        error ->
-            {error, {bad_filter, FunName}};
-        Fun ->
-            build_exprs(T, [{riak_kv_mapred_filters, Fun, Args}|Accum])
-    end.
 
 recv_timeout(Options) ->
     case proplists:get_value(recv_timeout, Options) of
