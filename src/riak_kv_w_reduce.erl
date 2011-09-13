@@ -276,7 +276,7 @@ calc_delay_max(#fitting_details{arg = {rct, _ReduceFun, ReduceArg}}) ->
                 L when is_list(L) -> L;         % May or may not be a proplist
                 _                 -> []
             end,
-    AppMax = app_helper:get_env(riak_kv, mapred_reduce_phase_batch_size, 1),
+    AppMax = app_helper:get_env(riak_kv, mapred_reduce_phase_batch_size, 20),
     case proplists:get_value(reduce_phase_only_1, Props) of
         undefined ->
             proplists:get_value(reduce_phase_batch_size,
