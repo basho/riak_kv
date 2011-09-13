@@ -210,9 +210,9 @@ calc_delay_max(#fitting_details{arg = {rct, _ReduceFun, ReduceArg}}) ->
             end,
     AppMax = app_helper:get_env(riak_kv, mapred_reduce_phase_batch_size, 1),
     case proplists:get_value(reduce_phase_only_1, Props) of
-        undefined ->
-            proplists:get_value(reduce_phase_batch_size,
-                                Props, AppMax);
         true ->
-            an_atom_is_always_bigger_than_an_integer_so_make_1_huge_batch
+            an_atom_is_always_bigger_than_an_integer_so_make_1_huge_batch;
+        _ ->
+            proplists:get_value(reduce_phase_batch_size,
+                                Props, AppMax)
     end.
