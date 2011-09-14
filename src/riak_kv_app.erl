@@ -60,9 +60,8 @@ start(_Type, _StartArgs) ->
        {pw, 0},
        {dw, quorum},
        {rw, quorum},
-       {pr, 0},
-       {basic_quorum, true},
-       {notfound_ok, false}
+       {basic_quorum, false},
+       {notfound_ok, true}
    ]),
 
     %% Check the storage backend
