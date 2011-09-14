@@ -547,16 +547,15 @@ send_inputs(Pipe, BucketKeyList, _Timeout) when is_list(BucketKeyList) ->
      || BKey <- BucketKeyList],
     riak_pipe:eoi(Pipe),
     ok;
-send_inputs(Pipe, Bucket, _Timeout) when is_binary(Bucket) ->
-    %% TODO: riak_kv_listkeys_pipe
-    {ok, C} = riak:local_client(),
-    {ok, ReqId} = C:stream_list_keys(Bucket),
-    send_key_list(Pipe, Bucket, ReqId);
-send_inputs(Pipe, {Bucket, FilterExprs}, _Timeout) ->
-    {ok, C} = riak:local_client(),
-    case C:stream_list_keys({Bucket, FilterExprs}) of
-        {ok, ReqId} -> send_key_list(Pipe, Bucket, ReqId);
-        Error       -> Error
+send_inputs(Pipe, Bucket, Timeout) when is_binary(Bucket) ->
+    riak_kv_pipe_listkeys:queue_existing_pipe(Pipe, Bucket, Timeout);
+send_inputs(Pipe, {Bucket, FilterExprs}, Timeout) ->
+    case riak_kv_mapred_filters:build_filter(FilterExprs) of
+        {ok, Filters} ->
+            riak_kv_pipe_listkeys:queue_existing_pipe(
+              Pipe, {Bucket, Filters}, Timeout);
+        Error ->
+            Error
     end;
 send_inputs(Pipe, {index, Bucket, Index, Key}, Timeout) ->
     Query = {eq, Index, Key},
@@ -616,7 +615,7 @@ send_key_list(Pipe, Bucket, ReqId) ->
             ok
     end.
 
-%% @equiv collect_outpus(Pipe, NumKeeps, 60000)
+%% @equiv collect_outputs(Pipe, NumKeeps, 60000)
 collect_outputs(Pipe, NumKeeps) ->
     collect_outputs(Pipe, NumKeeps, ?DEFAULT_TIMEOUT).
 

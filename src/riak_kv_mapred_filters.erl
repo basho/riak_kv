@@ -26,6 +26,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+-export([build_filter/1]).
+
 -export([int_to_string/1,
          string_to_int/1,
          float_to_string/1,
@@ -55,6 +57,23 @@
 -export([compose/1, resolve_name/1, build_exprs/1]).
 
 -export([to_string/1, levenshtein/2]).
+
+%% @doc Convert a list of Filter expressions into a list of MFA tuples.
+-spec build_filter([[string()]]) ->
+         {ok, [{Module::atom(), Function::atom(), Args::list()}]}
+        |{error, {bad_filter, string()}}.
+build_filter(Exprs) ->
+    build_filter(Exprs, []).
+
+build_filter([], Accum) ->
+    {ok, lists:reverse(Accum)};
+build_filter([[FunName|Args]|T], Accum) ->
+    case resolve_name(FunName) of
+        error ->
+            {error, {bad_filter, FunName}};
+        Fun ->
+            build_filter(T, [{?MODULE, Fun, Args}|Accum])
+    end.
 
 %% Transform functions
 
