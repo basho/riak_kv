@@ -113,7 +113,7 @@ done(_State) ->
 %%      given pipe.  This starts a new pipe with one fitting
 %%      (`riak_kv_pipe_listkeys'), with its sink pointed at the
 %%      destination pipe.  The `riak_pipe_qcover_fsm' module is used
-%%      to triger keylisting on the appropriate vnodes.  The `eoi'
+%%      to trigger keylisting on the appropriate vnodes.  The `eoi'
 %%      message is sent to the pipe as soon as it is confirmed that
 %%      all keylisting processes have started.
 -spec queue_existing_pipe(riak_pipe:pipe(),
