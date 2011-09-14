@@ -35,27 +35,27 @@
 %% into the variety of function expected here.
 %%
 %% The default behavior is to apply the reduce function to the first
-%% input, and then to apply the Fun to that result with the next input
-%% received cons'd on the front, and repeat this re-running untill
-%% finished.  For example, if the inputs A, B, and C were received,
-%% evaluation would look something like:
+%% 20 inputs, and then apply the Fun to that result with the next 20
+%% inputs received cons'd on the front, and repeat this re-running
+%% untill finished.  Two knobs exist to change this behavior.  The
+%% first is `reduce_phase_batch_size'.  The property may be set by
+%% specifying `Arg' as a proplist, and providing a positive integer.
+%% For example, setting `Arg=[{reduce_phase_batch_size, 1}]', if the
+%% inputs A, B, and C were received, evaluation would look something
+%% like:
 %% ```
 %% X = Fun([A], Arg),
 %% Y = Fun([B,X], Arg),
 %% Z = Fun([C,Y], Arg)
 %% '''
 %%
-%% Two knobs exist to change this behavior.  The first is
-%% `reduce_phase_batch_size'.  The property may be set by specifying
-%% `Arg' as a proplist, and providing a positive integer.  For
-%% example, setting `Arg=[{reduce_phase_batch_size, 2}]' with the
-%% inputs from the previous example would cause evaulation to look
-%% more like:
+%% Setting `Arg=[{reduce_phase_batch_size, 2}]'instead, with the same
+%% inputs would cause evaulation to look more like:
 %% ```
 %% X = Fun([B,A], Arg),
 %% Y = Fun([C,X], Arg)
 %% '''
-%% The maximum batch size allowed is controlled by the riak_kv
+%% The default batch size allowed is controlled by the riak_kv
 %% application environment variable `mapred_reduce_phase_batch_size'
 %%
 %% The other knob to control batching behavior is known as
@@ -263,7 +263,7 @@ js_runner(JS) ->
     end.
 
 %% @doc Determine what batch size should be used for this fitting.
-%% Default is 1, but may be overridden by the `Arg' props
+%% Default is 20, but may be overridden by the `Arg' props
 %% `reduce_phase_only_1' and `reduce_phase_batch_size', or the riak_kv
 %% application environment variable `mapred_reduce_pahse_batch_size'.
 %%
@@ -276,7 +276,7 @@ calc_delay_max(#fitting_details{arg = {rct, _ReduceFun, ReduceArg}}) ->
                 L when is_list(L) -> L;         % May or may not be a proplist
                 _                 -> []
             end,
-    AppMax = app_helper:get_env(riak_kv, mapred_reduce_phase_batch_size, 1),
+    AppMax = app_helper:get_env(riak_kv, mapred_reduce_phase_batch_size, 20),
     case proplists:get_value(reduce_phase_only_1, Props) of
         undefined ->
             proplists:get_value(reduce_phase_batch_size,
