@@ -615,7 +615,7 @@ send_key_list(Pipe, Bucket, ReqId) ->
             ok
     end.
 
-%% @equiv collect_outpus(Pipe, NumKeeps, 60000)
+%% @equiv collect_outputs(Pipe, NumKeeps, 60000)
 collect_outputs(Pipe, NumKeeps) ->
     collect_outputs(Pipe, NumKeeps, ?DEFAULT_TIMEOUT).
 
