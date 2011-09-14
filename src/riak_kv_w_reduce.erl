@@ -96,6 +96,7 @@
 -include("riak_kv_js_pools.hrl").
 
 -record(state, {acc :: list(),
+                inacc :: list(),
                 delay :: integer(),
                 delay_max :: integer(),
                 p :: riak_pipe_vnode:partition(),
@@ -120,28 +121,28 @@ init(Partition, #fitting_details{options=Options} = FittingDetails) ->
               _ ->
                   []
           end,
-    {ok, #state{acc=Acc, delay=0, delay_max = DelayMax,
+    {ok, #state{acc=Acc, inacc=[], delay=0, delay_max = DelayMax,
                 p=Partition, fd=FittingDetails}}.
 
 %% @doc Evaluate the function if the batch is ready.
 -spec process(term(), boolean(), state()) -> {ok, state()}.
 process(Input, _Last,
-        #state{acc=OldAcc, delay=Delay, delay_max=DelayMax}=State) ->
-    InAcc = [Input|OldAcc],
+        #state{acc=PrevAcc, inacc=OldInAcc, delay=Delay, delay_max=DelayMax}=State) ->
+    InAcc = [Input|OldInAcc],
     if Delay + 1 >= DelayMax ->
-            OutAcc = reduce(InAcc, State, "reducing"),
-            {ok, State#state{acc=OutAcc, delay=0}};
+            OutAcc = reduce(PrevAcc ++ lists:reverse(InAcc), State, "reducing"),
+            {ok, State#state{acc=OutAcc, inacc=[], delay=0}};
        true ->
-            {ok, State#state{acc=InAcc, delay=Delay + 1}}
+            {ok, State#state{inacc=InAcc, delay=Delay + 1}}
     end.
 
 %% @doc Reduce any unreduced inputs, and then send on the outputs.
 -spec done(state()) -> ok.
-done(#state{acc=Acc0, delay=Delay, p=Partition, fd=FittingDetails} = S) ->
+done(#state{acc=Acc0, inacc=InAcc, delay=Delay, p=Partition, fd=FittingDetails} = S) ->
     Acc = if Delay == 0 ->
                   Acc0;
              true ->
-                  reduce(Acc0, S, "done()")
+                  reduce(Acc0 ++ lists:reverse(InAcc), S, "done()")
           end,
     [ riak_pipe_vnode_worker:send_output(O, Partition, FittingDetails)
       || O <- Acc ],
@@ -149,9 +150,9 @@ done(#state{acc=Acc0, delay=Delay, p=Partition, fd=FittingDetails} = S) ->
 
 %% @doc The archive is the accumulator.
 -spec archive(state()) -> {ok, list()}.
-archive(#state{acc=Acc}) ->
+archive(#state{acc=Acc, inacc=InAcc}) ->
     %% just send state of reduce so far
-    {ok, Acc}.
+    {ok, Acc ++ lists:reverse(InAcc)}.
 
 %% @doc Handoff simply concatenates the accumulator from the remote
 %% worker with the accumulator from this worker, and immediately
@@ -164,7 +165,7 @@ handoff(HandoffAcc, #state{acc=Acc}=State) ->
 
 -spec handoff_acc([term()], [term()], state()) -> [term()].
 handoff_acc(HandoffAcc, LocalAcc, State) ->
-    InAcc = HandoffAcc++LocalAcc,
+    InAcc = LocalAcc++HandoffAcc,
     reduce(InAcc, State, "reducing handoff").
 
 %% @doc Actually evaluate the aggregation function.
