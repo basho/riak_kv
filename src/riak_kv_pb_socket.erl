@@ -162,7 +162,7 @@ handle_info({'DOWN', Ref, process, Pid, Reason},
             erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
             riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
             lager:error("Error sending inputs: ~p", [Reason]),
-            NewState = send_error("~p", [bad_mapred_inputs], State),
+            NewState = send_error("Error sending inputs: ~p", [Reason], State),
             {noreply, NewState#state{req=undefined, req_ctx=undefined}}
     end;
 handle_info({pipe_timeout, Ref},
