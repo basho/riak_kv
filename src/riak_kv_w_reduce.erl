@@ -322,16 +322,14 @@ calc_delay_max(#fitting_details{arg = {rct, _ReduceFun, ReduceArg}}) ->
 %% atoms, since the HTTP interface has no way to send atoms natively
 -spec delay_props_from_json(list()) -> [{atom(), term()}].
 delay_props_from_json(JsonProps) ->
-    Only1 = case lists:keyfind(<<"reduce_phase_only_1">>, 1, JsonProps) of
-                {_, Only1V} ->
-                    [{reduce_phase_only_1, Only1V}];
-                false ->
-                    []
-            end,
-    Batch = case lists:keyfind(<<"reduce_phase_batch_size">>, 1, JsonProps) of
-                {_, BatchV} ->
-                    [{reduce_phase_batch_size, BatchV}];
-                false ->
-                    []
-            end,
+    Only1 = extract_json_prop(reduce_phase_only_1, JsonProps),
+    Batch = extract_json_prop(reduce_phase_batch_size, JsonProps),
     Only1 ++ Batch.
+
+extract_json_prop (Key, JsonProps) ->
+    case lists:keyfind(atom_to_binary(Key, latin1), 1, JsonProps) of
+        {_,Value} ->
+            [{Key,Value}];
+        false ->
+            []
+    end.
