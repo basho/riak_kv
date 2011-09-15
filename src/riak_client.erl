@@ -43,6 +43,7 @@
 -export([list_buckets/0,list_buckets/2]).
 -export([get_index/3,get_index/2]).
 -export([stream_get_index/3,stream_get_index/2]).
+-export([backend_status/0, backend_status/1]).
 -export([set_bucket/2,get_bucket/1]).
 -export([reload_all/1]).
 -export([remove_from_cluster/1]).
@@ -218,7 +219,7 @@ mapred_dynamic_inputs_stream(FSMPid, InputDef, Timeout) ->
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as the default
 %%      R-value for the nodes have responded with a value or error.
 %% @equiv get(Bucket, Key, R, default_timeout())
-get(Bucket, Key) -> 
+get(Bucket, Key) ->
     get(Bucket, Key, []).
 
 %% @spec get(riak_object:bucket(), riak_object:key(), options()) ->
@@ -249,7 +250,7 @@ get(Bucket, Key, Options) when is_list(Options) ->
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as R
 %%      nodes have responded with a value or error.
 %% @equiv get(Bucket, Key, R, default_timeout())
-get(Bucket, Key, R) -> 
+get(Bucket, Key, R) ->
     get(Bucket, Key, [{r, R}]).
 
 %% @spec get(riak_object:bucket(), riak_object:key(), R :: integer(),
@@ -478,7 +479,7 @@ list_keys(Bucket, Timeout, ErrorTolerance) when is_integer(Timeout) ->
 %% @doc List the keys known to be present in Bucket.
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
-list_keys(Bucket, Filter, Timeout) -> 
+list_keys(Bucket, Filter, Timeout) ->
     case app_helper:get_env(riak_kv, legacy_keylisting) of
         true ->
             %% @TODO This code is only here to support
@@ -544,19 +545,19 @@ stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
                         {error, _Error} ->
                             {error, _Error};
                         {ok, FilterExprs} ->
-                            riak_kv_keys_fsm_sup:start_keys_fsm(Node, 
-                                                                [{raw, 
+                            riak_kv_keys_fsm_sup:start_keys_fsm(Node,
+                                                                [{raw,
                                                                   ReqId,
                                                                   Client},
-                                                                 [Bucket, 
-                                                                  FilterExprs, 
-                                                                  Timeout, 
+                                                                 [Bucket,
+                                                                  FilterExprs,
+                                                                  Timeout,
                                                                   ClientType]]),
                             {ok, ReqId}
                     end;
                 Bucket ->
-                    riak_kv_keys_fsm_sup:start_keys_fsm(Node, 
-                                                        [{raw, ReqId, Client}, 
+                    riak_kv_keys_fsm_sup:start_keys_fsm(Node,
+                                                        [{raw, ReqId, Client},
                                                          [Bucket,
                                                           none,
                                                           Timeout,
@@ -703,6 +704,33 @@ stream_get_index(Bucket, Query, Timeout) ->
     riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, plain]]),
     {ok, ReqId}.
 
+%% @spec backend_status() ->
+%%       {ok, [{partition(), atom(), term()}]} |
+%%       {error, timeout} |
+%%       {error, Err :: term()}
+%% @doc Query the status of the backend for each vnode and
+%% return those statuses as a list of triplets where the
+%% first element is the partition, the second element is
+%% the backend module, and the third element is the status
+%% results from the backend.
+backend_status() ->
+    backend_status(?DEFAULT_TIMEOUT).
+
+%% @spec backend_status(TimeoutMillisecs :: integer()) ->
+%%       {ok, [{partition(), atom(), term()}]} |
+%%       {error, timeout} |
+%%       {error, Err :: term()}
+%% @doc Query the status of the backend for each vnode and
+%% return those statuses as a list of triplets where the
+%% first element is the partition, the second element is
+%% the backend module, and the third element is the status
+%% results from the backend.
+backend_status(Timeout) ->
+    Me = self(),
+    ReqId = mk_reqid(),
+    riak_kv_backend_status_fsm_sup:start_backend_status_fsm(Node, [{raw, ReqId, Me}, Timeout]),
+    wait_for_statuses(ReqId, Timeout).
+
 %% @spec set_bucket(riak_object:bucket(), [BucketProp :: {atom(),term()}]) -> ok
 %% @doc Set the given properties for Bucket.
 %%      This is generally best if done at application start time,
@@ -771,7 +799,7 @@ wait_for_listkeys(ReqId,Timeout,Acc) ->
 
 %% @private
 wait_for_listbuckets(ReqId, Timeout) ->
-    receive            
+    receive
         {ReqId,{buckets, Buckets}} -> {ok, Buckets};
         {ReqId, Error} -> {error, Error}
     after Timeout ->
@@ -789,6 +817,15 @@ wait_for_query_results(ReqId, Timeout, Acc) ->
         {ReqId, Error} -> {error, Error}
     after Timeout ->
             {error, timeout, Acc}
+    end.
+
+%% @private
+wait_for_statuses(ReqId, Timeout) ->
+    receive
+        {ReqId,{statuses, Statuses}} -> {ok, Statuses};
+        {ReqId, Error} -> {error, Error}
+    after Timeout ->
+            {error, timeout}
     end.
 
 add_inputs(_FlowPid, []) ->
