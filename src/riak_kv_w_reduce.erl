@@ -66,6 +66,24 @@
 %% X = Fun([C,B,A], Arg)
 %% '''
 %%
+%% To use `reduce_phase_only_1' and `reduce_phase_batch_size' over the
+%% HTTP interface, specify a JSON structure as the function's
+%% argument, as in:
+%% ```
+%% {...,"query":[...,{"reduce":{...,"arg":{"reduce_phase_batch_size":100}}}]}
+%% '''
+%% Or:
+%% ```
+%% {...,"query":[...,{"reduce":{...,"arg":{"reduce_phase_only1":true}}}]}
+%% '''
+%% The HTTP interface will translate that argument into a mochijson2
+%% structure (e.g. `{struct, [{<<"reduce_phase_only_1">>, true}]}'),
+%% which this fitting will understand.  This also provides a safe way
+%% to pass these arguments when using a reduce phase implemented in
+%% Javascript over the Protocol Buffer or native interfaces.
+%% Mochijson2 conversion will fail on the bare proplist, but will
+%% succeed at encoding this form.
+%%
 %% The exception to the batching controls is handoff.  Whenever a
 %% worker receives handoff from another worker, it immediately reduces
 %% the concatenation of the two inputs.
@@ -249,9 +267,10 @@ stored_source(Bucket, Key) ->
          fun( (list(), term()) -> list() ).
 js_runner(JS) ->
     fun(Inputs, Arg) ->
+            SafeArg = remove_batch_props(Arg),
             JSInputs = [riak_kv_mapred_json:jsonify_not_found(I)
                         || I <- Inputs],
-            JSCall = {JS, [JSInputs, Arg]},
+            JSCall = {JS, [JSInputs, SafeArg]},
             case riak_kv_js_manager:blocking_dispatch(
                    ?JSPOOL_REDUCE, JSCall, ?DEFAULT_JS_RESERVE_ATTEMPTS) of
                 {ok, Results0}  ->
@@ -262,6 +281,18 @@ js_runner(JS) ->
                     throw(no_js_vms)
             end
     end.
+
+%% @doc Remove reduce batch size knobs from the `Arg' list, so
+%% mochijson2 doesn't blow up when trying to encode them.
+remove_batch_props(Arg) when is_list(Arg) ->
+    lists:filter(fun(reduce_phase_only_1)         -> false;
+                    ({reduce_phase_only_1,_})     -> false;
+                    ({reduce_phase_batch_size,_}) -> false;
+                    (_)                           -> true
+                 end,
+                 Arg);
+remove_batch_props(Arg) ->
+    Arg.
 
 %% @doc Determine what batch size should be used for this fitting.
 %% Default is 20, but may be overridden by the `Arg' props
@@ -275,6 +306,7 @@ js_runner(JS) ->
 calc_delay_max(#fitting_details{arg = {rct, _ReduceFun, ReduceArg}}) ->
     Props = case ReduceArg of
                 L when is_list(L) -> L;         % May or may not be a proplist
+                {struct, L} -> delay_props_from_json(L);
                 _                 -> []
             end,
     AppMax = app_helper:get_env(riak_kv, mapred_reduce_phase_batch_size, 20),
@@ -284,4 +316,20 @@ calc_delay_max(#fitting_details{arg = {rct, _ReduceFun, ReduceArg}}) ->
         _ ->
             proplists:get_value(reduce_phase_batch_size,
                                 Props, AppMax)
+    end.
+
+%% @doc convert JSON struct properties with similar names to Erlang
+%% atoms, since the HTTP interface has no way to send atoms natively
+-spec delay_props_from_json(list()) -> [{atom(), term()}].
+delay_props_from_json(JsonProps) ->
+    Only1 = extract_json_prop(reduce_phase_only_1, JsonProps),
+    Batch = extract_json_prop(reduce_phase_batch_size, JsonProps),
+    Only1 ++ Batch.
+
+extract_json_prop (Key, JsonProps) ->
+    case lists:keyfind(atom_to_binary(Key, latin1), 1, JsonProps) of
+        {_,Value} ->
+            [{Key,Value}];
+        false ->
+            []
     end.
