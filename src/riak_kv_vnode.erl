@@ -437,7 +437,14 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
             end;
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
-    end.
+    end;
+handle_coverage(?KV_BACKEND_STATUS_REQ{},
+                _FilterVNodes,
+                _Sender,
+                State=#state{mod=Mod,
+                             modstate=ModState,
+                             idx=Index}) ->
+    {reply, {Index, Mod, Mod:status(ModState)}, State}.
 
 handle_handoff_command(Req=?FOLD_REQ{foldfun=FoldFun}, Sender, State) ->
     %% The function in riak_core used for object folding
