@@ -103,10 +103,12 @@ verify_body(Body, State) ->
             {true, [], State#state{inputs=ParsedInputs,
                                    mrquery=ParsedQuery,
                                    timeout=Timeout}};
-        {error, {'query', Message}} ->
+        {error, {'query', Reason}} ->
+            Message = lists:flatten(io_lib:format("~p", [Reason])),
             {false, ["An error occurred parsing the \"query\" field.\n",
                      Message], State};
-        {error, {inputs, Message}} ->
+        {error, {inputs, Reason}} ->
+            Message = lists:flatten(io_lib:format("~p", [Reason])),
             {false, ["An error occurred parsing the \"inputs\" field.\n",
                      Message], State};
         {error, missing_field} ->
@@ -159,7 +161,7 @@ pipe_mapred(RD,
 pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender) ->
     case pipe_collect_outputs(Pipe, NumKeeps, Sender) of
         {ok, Results} ->
-            JSONResults = 
+            JSONResults =
                 case NumKeeps < 2 of
                     true ->
                         [riak_kv_mapred_json:jsonify_not_found(R)
