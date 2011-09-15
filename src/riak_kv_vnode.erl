@@ -440,12 +440,11 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
     end;
 handle_coverage(?KV_BACKEND_STATUS_REQ{},
                 _FilterVNodes,
-                Sender,
+                _Sender,
                 State=#state{mod=Mod,
                              modstate=ModState,
                              idx=Index}) ->
-    backend_status(result_fun(Sender), Index, Mod, ModState),
-    {noreply, State}.
+    {reply, {Index, Mod, Mod:status(ModState)}, State}.
 
 handle_handoff_command(Req=?FOLD_REQ{foldfun=FoldFun}, Sender, State) ->
     %% The function in riak_core used for object folding
@@ -737,13 +736,6 @@ do_get_term(BKey, Mod, ModState) ->
 
 do_get_binary({Bucket, Key}, Mod, ModState) ->
     Mod:get(Bucket, Key, ModState).
-
-%% @private
-%% @doc Get the status of the backend associated with this vnode.
--spec backend_status(fun(), partition(), atom(), term()) -> true.
-backend_status(ResultFun, Index, Mod, ModState) ->
-    Status = Mod:status(ModState),
-    ResultFun({Index, Mod, Status}).
 
 %% @private
 %% @doc This is a generic function for operations that involve
