@@ -36,7 +36,8 @@
          readrepair/6,
          list_keys/4,
          fold/3,
-         get_vclocks/2]).
+         get_vclocks/2,
+         vnode_status/1]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -192,6 +193,17 @@ get_vclocks(Preflist, BKeyList) ->
                                               ?KV_VCLOCK_REQ{bkeys=BKeyList},
                                               riak_kv_vnode_master).
 
+%% @doc Get status information about the node local vnodes.
+-spec vnode_status([{partition(), pid()}]) -> [{atom(), term()}].
+vnode_status(PrefLists) ->
+    ReqId = erlang:phash2(erlang:now()),
+    %% Get the status of each vnode
+    riak_core_vnode_master:command(PrefLists,
+                                   ?KV_VNODE_STATUS_REQ{},
+                                   {raw, ReqId, self()},
+                                   riak_kv_vnode_master),
+    wait_for_vnode_status_results(PrefLists, ReqId, []).
+
 %% VNode callbacks
 
 init([Index]) ->
@@ -344,7 +356,15 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
                    error ->
                        State
                end,
-    {noreply, NewState}.
+    {noreply, NewState};
+handle_command(?KV_VNODE_STATUS_REQ{},
+               _Sender,
+               State=#state{idx=Index,
+                            mod=Mod,
+                            modstate=ModState}) ->
+    BackendStatus = {backend_status, Mod, Mod:status(ModState)},
+    VNodeStatus = [BackendStatus],
+    {reply, {vnode_status, Index, VNodeStatus}, State}.
 
 %% @doc Handle a coverage request.
 %% More information about the specification for the ItemFilter
@@ -1016,6 +1036,20 @@ write_vnode_status(Status, File) ->
             file:rename(TmpFile, File);
         ER ->
             ER
+    end.
+
+%% @private
+wait_for_vnode_status_results([], _ReqId, Acc) ->
+    Acc;
+wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
+    receive
+        {ReqId, {vnode_status, Index, Status}} ->
+            UpdPrefLists = proplists:delete(Index, PrefLists),
+            wait_for_vnode_status_results(UpdPrefLists,
+                                          ReqId,
+                                          [{Index, Status} | Acc]);
+         _ ->
+            wait_for_vnode_status_results(PrefLists, ReqId, Acc)
     end.
 
 -ifdef(TEST).
