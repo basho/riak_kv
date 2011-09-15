@@ -267,9 +267,10 @@ stored_source(Bucket, Key) ->
          fun( (list(), term()) -> list() ).
 js_runner(JS) ->
     fun(Inputs, Arg) ->
+            SafeArg = remove_batch_props(Arg),
             JSInputs = [riak_kv_mapred_json:jsonify_not_found(I)
                         || I <- Inputs],
-            JSCall = {JS, [JSInputs, Arg]},
+            JSCall = {JS, [JSInputs, SafeArg]},
             case riak_kv_js_manager:blocking_dispatch(
                    ?JSPOOL_REDUCE, JSCall, ?DEFAULT_JS_RESERVE_ATTEMPTS) of
                 {ok, Results0}  ->
@@ -280,6 +281,18 @@ js_runner(JS) ->
                     throw(no_js_vms)
             end
     end.
+
+%% @doc Remove reduce batch size knobs from the `Arg' list, so
+%% mochijson2 doesn't blow up when trying to encode them.
+remove_batch_props(Arg) when is_list(Arg) ->
+    lists:filter(fun(reduce_phase_only_1)         -> false;
+                    ({reduce_phase_only_1,_})     -> false;
+                    ({reduce_phase_batch_size,_}) -> false;
+                    (_)                           -> true
+                 end,
+                 Arg);
+remove_batch_props(Arg) ->
+    Arg.
 
 %% @doc Determine what batch size should be used for this fitting.
 %% Default is 20, but may be overridden by the `Arg' props
