@@ -462,18 +462,22 @@ process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
     end.
 
 pipe_mapreduce(Req, State, Inputs, Query, Timeout) ->
-    {{ok, Pipe}, _NumKeeps} =
-        riak_kv_mrc_pipe:mapred_stream(Query),
-    PipeRef = (Pipe#pipe.sink)#fitting.ref,
-    Timer = erlang:send_after(Timeout, self(),
-                              {pipe_timeout, PipeRef}),
-    {InputSender, SenderMonitor} =
-        riak_kv_mrc_pipe:send_inputs_async(Pipe, Inputs),
-    Ctx = #pipe_ctx{pipe=Pipe,
-                    ref=PipeRef,
-                    timer=Timer,
-                    sender={InputSender, SenderMonitor}},
-    State#state{req=Req, req_ctx=Ctx}.
+    try riak_kv_mrc_pipe:mapred_stream(Query) of
+        {{ok, Pipe}, _NumKeeps} ->
+            PipeRef = (Pipe#pipe.sink)#fitting.ref,
+            Timer = erlang:send_after(Timeout, self(),
+                                      {pipe_timeout, PipeRef}),
+            {InputSender, SenderMonitor} =
+                riak_kv_mrc_pipe:send_inputs_async(Pipe, Inputs),
+            Ctx = #pipe_ctx{pipe=Pipe,
+                            ref=PipeRef,
+                            timer=Timer,
+                            sender={InputSender, SenderMonitor}},
+            State#state{req=Req, req_ctx=Ctx}
+    catch throw:{badarg, Fitting, Reason} ->
+            send_error("Phase ~p: ~s", [Fitting, Reason], State),
+            State
+    end.
 
 legacy_mapreduce(#rpbmapredreq{content_type=ContentType}=Req,
                  #state{client=C}=State, Inputs, Query, Timeout) ->
