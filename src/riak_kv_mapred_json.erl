@@ -490,12 +490,12 @@ search_input_test() ->
     ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))).
 
 index_input_test() ->
-    JSON1 = <<"{\"bucket\":\"mybucket\",\"index\":\"myindex\", \"key\":\"mykey\"}">>,
-    Expected1 = {ok, {index, <<"mybucket">>, <<"myindex">>, <<"mykey">>}},
+    JSON1 = <<"{\"bucket\":\"mybucket\",\"index\":\"myindex_bin\", \"key\":\"mykey\"}">>,
+    Expected1 = {ok, {index, <<"mybucket">>, <<"myindex_bin">>, <<"mykey">>}},
     ?assertEqual(Expected1, parse_inputs(mochijson2:decode(JSON1))),
 
-    JSON2 = <<"{\"bucket\":\"mybucket\",\"index\":\"myindex\", \"start\":\"mystart\", \"end\":\"myend\"}">>,
-    Expected2 = {ok, {index, <<"mybucket">>, <<"myindex">>, <<"mystart">>, <<"myend">>}},
+    JSON2 = <<"{\"bucket\":\"mybucket\",\"index\":\"myindex_bin\", \"start\":\"vala\", \"end\":\"valb\"}">>,
+    Expected2 = {ok, {index, <<"mybucket">>, <<"myindex_bin">>, <<"vala">>, <<"valb">>}},
     ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))).
 
 keyfilter_input_test() ->
