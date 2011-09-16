@@ -24,7 +24,7 @@
 
 -module(riak_kv_mapred_term).
 
--export([parse_request/1, valid_inputs/1]).
+-export([parse_request/1]).
 
 -define(DEFAULT_TIMEOUT, 60000).
 
@@ -42,13 +42,16 @@ parse_request(BinReq) ->
         Inputs = proplists:get_value(inputs, Req, undefined),
         Query = proplists:get_value('query', Req, undefined),
 
-        case {valid_inputs(Inputs), valid_query(Query)} of
-            {ok, ok} ->
-                {ok, Inputs, Query, Timeout};
-            {{error, Reason}, _} ->
-                {error, {'inputs', Reason}};
-            {_, {error, Reason}} ->
-                {error, {'query', Reason}}
+        case parse_inputs(Inputs) of
+            {ok, Inputs1} ->
+                case parse_query(Query) of
+                    {ok, Query1} ->
+                        {ok, Inputs1, Query1, Timeout};
+                    {error, Reason} ->
+                        {error, {'query', Reason}}
+                end;
+            {error, Reason} ->
+                {error, {'inputs', Reason}}
         end
     catch
         _:Error ->
@@ -60,24 +63,37 @@ parse_request(BinReq) ->
 %%                        |bucket()
 %%                        |{bucket(), list()}
 %%                        |{modfun, atom(), atom(), list()}
-valid_inputs(Bucket) when is_binary(Bucket) ->
-    ok;
-valid_inputs(Targets) when is_list(Targets) ->
-    valid_input_targets(Targets);
-valid_inputs({modfun, Module, Function, _Options})
+parse_inputs(Bucket) when is_binary(Bucket) ->
+    {ok, Bucket};
+parse_inputs(Targets) when is_list(Targets) ->
+    case valid_input_targets(Targets) of
+        ok -> {ok, Targets};
+        {error, Reason} -> {error, Reason}
+    end;
+parse_inputs(Inputs = {modfun, Module, Function, _Options})
   when is_atom(Module), is_atom(Function) ->
-    ok;
-valid_inputs({index, _Bucket, _Index, _Key}) ->
-    ok;
-valid_inputs({index, _Bucket, _Index, _StartKey, _EndKey}) ->
-    ok;
-valid_inputs({search, _Bucket, _Query}) ->
-    ok;
-valid_inputs({search, _Bucket, _Query, _Filter}) ->
-    ok;
-valid_inputs({Bucket, Filters}) when is_binary(Bucket), is_list(Filters) ->
-    ok;
-valid_inputs(Invalid) ->
+    {ok, Inputs};
+parse_inputs({index, Bucket, Index, Key}) ->
+    case riak_index:parse_fields([{Index, Key}]) of
+        {ok, [{Index1, Key1}]} ->
+            {ok, {index, Bucket, Index1, Key1}};
+        {error, Reasons} ->
+            {error, Reasons}
+    end;
+parse_inputs({index, Bucket, Index, StartKey, EndKey}) ->
+    case riak_index:parse_fields([{Index, StartKey}, {Index, EndKey}]) of
+        {ok, [{Index1, StartKey1}, {Index1, EndKey1}]} ->
+            {ok, {index, Bucket, Index1, StartKey1, EndKey1}};
+        {error, Reasons} ->
+            {error, Reasons}
+    end;
+parse_inputs(Inputs = {search, _Bucket, _Query}) ->
+    {ok, Inputs};
+parse_inputs(Inputs = {search, _Bucket, _Query, _Filter}) ->
+    {ok, Inputs};
+parse_inputs(Inputs = {Bucket, Filters}) when is_binary(Bucket), is_list(Filters) ->
+    {ok, Inputs};
+parse_inputs(Invalid) ->
     {error, {"Inputs must be a binary bucket, a tuple of bucket and key-filters, a list of target tuples, or a search, index, or modfun tuple:", Invalid}}.
 
 %% @type bucket_key() = {binary(), binary()}
@@ -89,11 +105,11 @@ valid_input_targets([{B,K}|Rest]) when is_binary(B), is_binary(K) ->
 valid_input_targets([{{B,K},_KeyData}|Rest]) when is_binary(B), is_binary(K) ->
     valid_input_targets(Rest);
 valid_input_targets(Invalid) ->
-     {error, {"Inputs target tuples must be {B,K} or {{B,K},KeyData}:", Invalid}}.
+    {error, {"Inputs target tuples must be {B,K} or {{B,K},KeyData}:", Invalid}}.
 
 %% Return ok if query are valid, {error, Reason} if not.  Not very strong validation
 %% done here as riak_kv_mapred_query will check this.
-valid_query(Query) when is_list(Query) ->
-    ok;
-valid_query(Invalid) ->
+parse_query(Query) when is_list(Query) ->
+    {ok, Query};
+parse_query(Invalid) ->
     {error, {"Query takes a list of step tuples", Invalid}}.
