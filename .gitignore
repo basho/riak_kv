@@ -5,3 +5,4 @@ priv/*
 *.beam
 doc
 test.*-temp-data
+ebin

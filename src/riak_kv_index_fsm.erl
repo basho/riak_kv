@@ -71,15 +71,15 @@ init(From={_, _, ClientPid}, [Bucket, ItemFilter, Query, Timeout, ClientType]) -
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
+process_results({error, Reason}, _State) ->
+    {error, Reason};
 process_results({Bucket, Results},
                 StateData=#state{client_type=ClientType,
                                  from={raw, ReqId, ClientPid}}) ->
     process_query_results(ClientType, Bucket, Results, ReqId, ClientPid),
     {ok, StateData};
 process_results(done, StateData) ->
-    {done, StateData};
-process_results({error, Reason}, _State) ->
-    {error, Reason}.
+    {done, StateData}.
 
 finish({error, Error},
        StateData=#state{from={raw, ReqId, ClientPid},
@@ -93,7 +93,7 @@ finish({error, Error},
         plain ->
             %% Notify the requesting client that an error
             %% occurred or the timeout has elapsed.
-            ClientPid ! {ReqId, Error}
+            ClientPid ! {ReqId, {error, Error}}
     end,
     {stop, normal, StateData};
 finish(clean,

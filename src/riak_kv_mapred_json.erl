@@ -55,11 +55,11 @@ parse_request(Req) ->
                             case riak_kv_mapred_json:parse_query(Query) of
                                 {ok, ParsedQuery} ->
                                     {ok, ParsedInputs, ParsedQuery, Timeout};
-                                {error, Message} ->
-                                    {error, {'query', Message}}
+                                {error, Reason} ->
+                                    {error, {'query', Reason}}
                             end;
-                        {error, Message} ->
-                            {error, {inputs, Message}}
+                        {error, Reason} ->
+                            {error, {inputs, Reason}}
                     end;
                 false ->
                     {error, missing_field}
@@ -212,9 +212,19 @@ parse_index_input(Inputs) ->
 
     if
         Key /= undefined ->
-            {ok, {index, Bucket, Index, Key}};
+            case riak_index:parse_fields([{Index, Key}]) of
+                {ok, [{Index1, Key1}]} ->
+                    {ok, {index, Bucket, Index1, Key1}};
+                {error, Reasons} ->
+                    {error, Reasons}
+            end;
         StartKey /= undefined andalso EndKey /= undefined ->
-            {ok, {index, Bucket, Index, StartKey, EndKey}};
+            case riak_index:parse_fields([{Index, StartKey}, {Index, EndKey}]) of
+                {ok, [{Index1, StartKey1}, {Index1, EndKey1}]} ->
+                    {ok, {index, Bucket, Index1, StartKey1, EndKey1}};
+                {error, Reasons} ->
+                    {error, Reasons}
+            end;
         true ->
             invalid_input_error(Inputs)
     end.

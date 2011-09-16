@@ -609,6 +609,9 @@ send_key_list(Pipe, Bucket, ReqId) ->
             [F(X) || X <- Results],
             send_key_list(Pipe, Bucket, ReqId);
 
+        {ReqId, {error, Reason}} ->
+            {error, Reason};
+
         {ReqId, done} ->
             %% Operation has finished.
             riak_pipe:eoi(Pipe),
