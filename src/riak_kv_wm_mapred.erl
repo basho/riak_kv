@@ -143,19 +143,25 @@ pipe_mapred(RD,
             #state{inputs=Inputs,
                    mrquery=Query,
                    timeout=Timeout}=State) ->
-    {{ok, Pipe}, NumKeeps} =
-        riak_kv_mrc_pipe:mapred_stream(Query),
-    PipeRef = (Pipe#pipe.sink)#fitting.ref,
-    erlang:send_after(Timeout, self(), {pipe_timeout, PipeRef}),
-    {InputSender, SenderMonitor} =
-        riak_kv_mrc_pipe:send_inputs_async(Pipe, Inputs),
-    case wrq:get_qs_value("chunked", "false", RD) of
-        "true" ->
-            pipe_mapred_chunked(RD, State, Pipe,
-                                {InputSender, SenderMonitor});
-        _ ->
-            pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps,
-                                   {InputSender, SenderMonitor})
+    try riak_kv_mrc_pipe:mapred_stream(Query) of
+        {{ok, Pipe}, NumKeeps} ->
+            PipeRef = (Pipe#pipe.sink)#fitting.ref,
+            erlang:send_after(Timeout, self(), {pipe_timeout, PipeRef}),
+            {InputSender, SenderMonitor} =
+                riak_kv_mrc_pipe:send_inputs_async(Pipe, Inputs),
+            case wrq:get_qs_value("chunked", "false", RD) of
+                "true" ->
+                    pipe_mapred_chunked(RD, State, Pipe,
+                                        {InputSender, SenderMonitor});
+                _ ->
+                    pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps,
+                                           {InputSender, SenderMonitor})
+            end
+    catch throw:{badarg, Fitting, Reason} ->
+            {{halt, 400}, 
+             send_error({error, [{phase, Fitting},
+                                 {error, iolist_to_binary(Reason)}]}, RD),
+             State}
     end.
 
 pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender) ->
