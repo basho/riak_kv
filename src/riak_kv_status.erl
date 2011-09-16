@@ -23,7 +23,10 @@
 
 -export([statistics/0,
          ringready/0,
-         transfers/0]).
+         transfers/0,
+         vnode_status/0]).
+
+-include("riak_kv_vnode.hrl").
 
 %% ===================================================================
 %% Public API
@@ -43,3 +46,34 @@ ringready() ->
 
 transfers() ->
     riak_core_status:transfers().
+
+%% @doc Get status information about the node local vnodes.
+-spec vnode_status() -> [{atom(), term()}].
+vnode_status() ->
+    %% Get the kv vnode indexes and the associated pids for the node.
+    IndexPids = riak_core_vnode_master:all_index_pid(riak_kv_vnode),
+    %% Get the status of each vnode
+    [riak_core_vnode_master:command({Index, Pid},
+                                    ?KV_VNODE_STATUS_REQ{},
+                                    {raw, Index, self()},
+                                    riak_kv_vnode_master) ||
+        {Index, Pid} <- IndexPids],
+    wait_for_vnode_status_results(IndexPids, []).
+
+%% ===================================================================
+%% Internal functions
+%% ===================================================================
+
+%% @private
+wait_for_vnode_status_results([], Acc) ->
+    Acc;
+wait_for_vnode_status_results(IndexPids, Acc) ->
+    receive
+        {Index, {vnode_status, Status}} ->
+            UpdIndexPids = proplists:delete(Index, IndexPids),
+            wait_for_vnode_status_results(UpdIndexPids, [{Index, Status} | Acc]);
+         _ ->
+            wait_for_vnode_status_results(IndexPids, Acc)
+    end.
+
+
