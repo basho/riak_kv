@@ -35,7 +35,7 @@
 -compile(export_all).
 
 url_encoding_test_() ->
-    Envs = ["RIAK_TEST_HOST", "RIAK_TEST_HTTP_PORT", "RIAK_TEST_NODE",
+    Envs = ["RIAK_TEST_HOST_1", "RIAK_TEST_HTTP_1", "RIAK_TEST_NODE_1",
             "RIAK_TEST_COOKIE", "RIAK_EUNIT_NODE"],
     Vals = [os:getenv(Env) || Env <- Envs],
     case lists:member(false, Vals) of
