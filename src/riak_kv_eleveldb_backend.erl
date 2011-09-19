@@ -188,9 +188,14 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{fold_opts=FoldOpts,
     FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
     BucketFolder =
         fun() ->
-                {FoldResult, _} =
-                    eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts1),
-                FoldResult
+                try
+                    {FoldResult, _} =
+                        eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts1),
+                    FoldResult
+                catch
+                    {break, AccFinal} ->
+                        AccFinal
+                end
         end,
     case lists:member(async_fold, Opts) of
         true ->
