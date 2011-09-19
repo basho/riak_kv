@@ -347,11 +347,12 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
     {noreply, NewState};
 handle_command(?KV_VNODE_STATUS_REQ{},
                _Sender,
-               State=#state{mod=Mod,
+               State=#state{idx=Index,
+                            mod=Mod,
                             modstate=ModState}) ->
     BackendStatus = {backend_status, Mod, Mod:status(ModState)},
     VNodeStatus = [BackendStatus],
-    {reply, {vnode_status, VNodeStatus}, State}.
+    {reply, {vnode_status, Index, VNodeStatus}, State}.
 
 %% @doc Handle a coverage request.
 %% More information about the specification for the ItemFilter

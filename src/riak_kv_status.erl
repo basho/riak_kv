@@ -51,29 +51,32 @@ transfers() ->
 -spec vnode_status() -> [{atom(), term()}].
 vnode_status() ->
     %% Get the kv vnode indexes and the associated pids for the node.
-    IndexPids = riak_core_vnode_master:all_index_pid(riak_kv_vnode),
+    PrefLists = riak_core_vnode_master:all_index_pid(riak_kv_vnode),
+    ReqId = erlang:phash2(erlang:now()),
     %% Get the status of each vnode
-    [riak_core_vnode_master:command({Index, Pid},
+    [riak_core_vnode_master:command(PrefList,
                                     ?KV_VNODE_STATUS_REQ{},
-                                    {raw, Index, self()},
+                                    {raw, ReqId, self()},
                                     riak_kv_vnode_master) ||
-        {Index, Pid} <- IndexPids],
-    wait_for_vnode_status_results(IndexPids, []).
+        PrefList <- PrefLists],
+    wait_for_vnode_status_results(PrefLists, ReqId, []).
 
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
 
 %% @private
-wait_for_vnode_status_results([], Acc) ->
+wait_for_vnode_status_results([], _ReqId, Acc) ->
     Acc;
-wait_for_vnode_status_results(IndexPids, Acc) ->
+wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
     receive
-        {Index, {vnode_status, Status}} ->
-            UpdIndexPids = proplists:delete(Index, IndexPids),
-            wait_for_vnode_status_results(UpdIndexPids, [{Index, Status} | Acc]);
+        {ReqId, {vnode_status, Index, Status}} ->
+            UpdPrefLists = proplists:delete(Index, PrefLists),
+            wait_for_vnode_status_results(UpdPrefLists,
+                                          ReqId,
+                                          [{Index, Status} | Acc]);
          _ ->
-            wait_for_vnode_status_results(IndexPids, Acc)
+            wait_for_vnode_status_results(PrefLists, ReqId, Acc)
     end.
 
 
