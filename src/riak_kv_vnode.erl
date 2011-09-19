@@ -36,7 +36,8 @@
          readrepair/6,
          list_keys/4,
          fold/3,
-         get_vclocks/2]).
+         get_vclocks/2,
+         vnode_status/0]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -191,6 +192,20 @@ get_vclocks(Preflist, BKeyList) ->
     riak_core_vnode_master:sync_spawn_command(Preflist,
                                               ?KV_VCLOCK_REQ{bkeys=BKeyList},
                                               riak_kv_vnode_master).
+
+%% @doc Get status information about the node local vnodes.
+-spec vnode_status() -> [{atom(), term()}].
+vnode_status() ->
+    %% Get the kv vnode indexes and the associated pids for the node.
+    PrefLists = riak_core_vnode_master:all_index_pid(riak_kv_vnode),
+    ReqId = erlang:phash2(erlang:now()),
+    %% Get the status of each vnode
+    [riak_core_vnode_master:command(PrefList,
+                                    ?KV_VNODE_STATUS_REQ{},
+                                    {raw, ReqId, self()},
+                                    riak_kv_vnode_master) ||
+        PrefList <- PrefLists],
+    wait_for_vnode_status_results(PrefLists, ReqId, []).
 
 %% VNode callbacks
 
@@ -1024,6 +1039,20 @@ write_vnode_status(Status, File) ->
             file:rename(TmpFile, File);
         ER ->
             ER
+    end.
+
+%% @private
+wait_for_vnode_status_results([], _ReqId, Acc) ->
+    Acc;
+wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
+    receive
+        {ReqId, {vnode_status, Index, Status}} ->
+            UpdPrefLists = proplists:delete(Index, PrefLists),
+            wait_for_vnode_status_results(UpdPrefLists,
+                                          ReqId,
+                                          [{Index, Status} | Acc]);
+         _ ->
+            wait_for_vnode_status_results(PrefLists, ReqId, Acc)
     end.
 
 -ifdef(TEST).

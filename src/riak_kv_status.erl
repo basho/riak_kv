@@ -23,8 +23,7 @@
 
 -export([statistics/0,
          ringready/0,
-         transfers/0,
-         vnode_status/0]).
+         transfers/0]).
 
 -include("riak_kv_vnode.hrl").
 
@@ -47,36 +46,5 @@ ringready() ->
 transfers() ->
     riak_core_status:transfers().
 
-%% @doc Get status information about the node local vnodes.
--spec vnode_status() -> [{atom(), term()}].
-vnode_status() ->
-    %% Get the kv vnode indexes and the associated pids for the node.
-    PrefLists = riak_core_vnode_master:all_index_pid(riak_kv_vnode),
-    ReqId = erlang:phash2(erlang:now()),
-    %% Get the status of each vnode
-    [riak_core_vnode_master:command(PrefList,
-                                    ?KV_VNODE_STATUS_REQ{},
-                                    {raw, ReqId, self()},
-                                    riak_kv_vnode_master) ||
-        PrefList <- PrefLists],
-    wait_for_vnode_status_results(PrefLists, ReqId, []).
-
-%% ===================================================================
-%% Internal functions
-%% ===================================================================
-
-%% @private
-wait_for_vnode_status_results([], _ReqId, Acc) ->
-    Acc;
-wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
-    receive
-        {ReqId, {vnode_status, Index, Status}} ->
-            UpdPrefLists = proplists:delete(Index, PrefLists),
-            wait_for_vnode_status_results(UpdPrefLists,
-                                          ReqId,
-                                          [{Index, Status} | Acc]);
-         _ ->
-            wait_for_vnode_status_results(PrefLists, ReqId, Acc)
-    end.
 
 

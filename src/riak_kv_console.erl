@@ -164,7 +164,7 @@ status([]) ->
 -spec(vnode_status([]) -> ok).
 vnode_status([]) ->
     try
-        case riak_kv_status:vnode_status() of
+        case riak_kv_vnode:vnode_status() of
             [] ->
                 io:format("There are no active vnodes.~n");
             Statuses ->
