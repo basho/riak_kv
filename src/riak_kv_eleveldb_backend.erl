@@ -298,8 +298,7 @@ is_empty(#state{ref=Ref}) ->
 %% @doc Get the status information for this eleveldb backend
 -spec status(state()) -> [{atom(), term()}].
 status(#state{data_root=DataRoot} = State) ->
-    [{Dir, get_status(filename:join(DataRoot, Dir), State)} ||
-        Dir <- element(2, file:list_dir(DataRoot))].
+    get_status(DataRoot, State).
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.

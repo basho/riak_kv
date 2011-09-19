@@ -23,7 +23,10 @@
 
 -export([statistics/0,
          ringready/0,
-         transfers/0]).
+         transfers/0,
+         vnode_status/0]).
+
+-include("riak_kv_vnode.hrl").
 
 %% ===================================================================
 %% Public API
@@ -43,3 +46,10 @@ ringready() ->
 
 transfers() ->
     riak_core_status:transfers().
+
+%% @doc Get status information about the node local vnodes.
+-spec vnode_status() -> [{atom(), term()}].
+vnode_status() ->
+    %% Get the kv vnode indexes and the associated pids for the node.
+    PrefLists = riak_core_vnode_master:all_index_pid(riak_kv_vnode),
+    riak_kv_vnode:vnode_status(PrefLists).
