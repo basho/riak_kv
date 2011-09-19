@@ -198,11 +198,10 @@ get_vclocks(Preflist, BKeyList) ->
 vnode_status(PrefLists) ->
     ReqId = erlang:phash2(erlang:now()),
     %% Get the status of each vnode
-    [riak_core_vnode_master:command(PrefList,
-                                    ?KV_VNODE_STATUS_REQ{},
-                                    {raw, ReqId, self()},
-                                    riak_kv_vnode_master) ||
-        PrefList <- PrefLists],
+    riak_core_vnode_master:command(PrefLists,
+                                   ?KV_VNODE_STATUS_REQ{},
+                                   {raw, ReqId, self()},
+                                   riak_kv_vnode_master),
     wait_for_vnode_status_results(PrefLists, ReqId, []).
 
 %% VNode callbacks
