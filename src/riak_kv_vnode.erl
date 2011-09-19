@@ -37,7 +37,7 @@
          list_keys/4,
          fold/3,
          get_vclocks/2,
-         vnode_status/0]).
+         vnode_status/1]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -194,10 +194,8 @@ get_vclocks(Preflist, BKeyList) ->
                                               riak_kv_vnode_master).
 
 %% @doc Get status information about the node local vnodes.
--spec vnode_status() -> [{atom(), term()}].
-vnode_status() ->
-    %% Get the kv vnode indexes and the associated pids for the node.
-    PrefLists = riak_core_vnode_master:all_index_pid(riak_kv_vnode),
+-spec vnode_status([{partition(), pid()}]) -> [{atom(), term()}].
+vnode_status(PrefLists) ->
     ReqId = erlang:phash2(erlang:now()),
     %% Get the status of each vnode
     [riak_core_vnode_master:command(PrefList,
