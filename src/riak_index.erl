@@ -74,13 +74,27 @@ mapred_index(_Pipe, [Bucket, Query], Timeout) ->
 %%      is either `{unknown_field_type, Field}` or
 %%      `{field_parsing_failed, {Field, Value}}.`
 parse_object_hook(RObj) ->
-    case parse_object(RObj) of
-        {ok, ParsedFields} ->
-            MD1 = riak_object:get_metadata(RObj),
-            MD2 = dict:store(?MD_INDEX, ParsedFields, MD1),
-            riak_object:update_metadata(RObj, MD2);
-        {error, Reasons} ->
-            {fail, Reasons}
+    %% Ensure that the object only has a single metadata, or fail
+    %% loudly.
+    case riak_object:value_count(RObj) == 1 of
+        true ->
+            %% Parse the object and update the metadata...
+            case parse_object(RObj) of
+                {ok, ParsedFields} ->
+                    MD1 = riak_object:get_metadata(RObj),
+                    MD2 = dict:store(?MD_INDEX, ParsedFields, MD1),
+                    riak_object:update_metadata(RObj, MD2);
+                {error, Reasons} ->
+                    {fail, Reasons}
+            end;
+        false ->
+            %% The object has siblings. This can only happen when a
+            %% put is initated through the riak_client:put/N function.
+            %% Any operation that occurs through the HTTP or PB
+            %% interface is forced to resolve siblings and send back a
+            %% single update.
+            lager:error("Siblings not allowed: ~p", [RObj]),
+            {fail, {siblings_not_allowed, RObj}}
     end.
 
 %% @spec parse_object(riak_object:riak_object()) -> {ok, [{Field::binary(), Val :: term()}]}
