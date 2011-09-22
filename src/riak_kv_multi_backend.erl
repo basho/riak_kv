@@ -94,7 +94,7 @@ api_version() ->
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% Sanity checking
-    Defs =  config_value(multi_backend, Config),
+    Defs =  app_helper:get_prop_or_env(multi_backend, Config, riak_kv),
     if Defs =:= undefined ->
             {error, multi_backend_config_unset};
        not is_list(Defs) ->
@@ -109,7 +109,7 @@ start(Partition, Config) ->
             {First, _, _} = hd(Defs),
 
             %% Get the default
-            DefaultBackend = config_value(multi_backend_default, Config, First),
+            DefaultBackend = app_helper:get_prop_or_env(multi_backend_default, Config, riak_kv, First),
             case lists:keymember(DefaultBackend, 1, Defs) of
                 true ->
                     %% Start the backends
@@ -412,19 +412,6 @@ error_filter({error, _, _}) ->
     true;
 error_filter(_) ->
     false.
-
-%% @private
-config_value(Key, Config) ->
-    config_value(Key, Config, undefined).
-
-%% @private
-config_value(Key, Config, Default) ->
-    case proplists:get_value(Key, Config) of
-        undefined ->
-            app_helper:get_env(riak_kv, Key, Default);
-        Value ->
-            Value
-    end.
 
 %% ===================================================================
 %% EUnit tests

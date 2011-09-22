@@ -84,8 +84,8 @@ api_version() ->
 %% @doc Start the memory backend
 -spec start(integer(), config()) -> {ok, state()}.
 start(Partition, Config) ->
-    TTL = config_value(ttl, Config),
-    MemoryMB = config_value(max_memory, Config),
+    TTL = app_helper:get_prop_or_env(ttl, Config, memory_backend),
+    MemoryMB = app_helper:get_prop_or_env(max_memory, Config, memory_backend),
     case MemoryMB of
         undefined ->
             MaxMemory = undefined,
@@ -360,19 +360,6 @@ do_put(Bucket, Key, Val, Ref) ->
     Object = {{Bucket, Key}, Val},
     true = ets:insert(Ref, Object),
     {ok, object_size(Object)}.
-
-%% @private
-config_value(Key, Config) ->
-    config_value(Key, Config, undefined).
-
-%% @private
-config_value(Key, Config, Default) ->
-    case proplists:get_value(Key, Config) of
-        undefined ->
-            app_helper:get_env(memory_backend, Key, Default);
-        Value ->
-            Value
-    end.
 
 %% Check if this timestamp is past the ttl setting.
 exceeds_ttl(Timestamp, TTL) ->
