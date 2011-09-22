@@ -228,9 +228,10 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
             {next_state, waiting_vnode_r, StateData#state{get_core = UpdGetCore}}
     end;
 waiting_vnode_r(request_timeout, StateData) ->
-    update_stats(StateData),
-    client_reply({error,timeout}, StateData),
-    finalize(StateData).
+    S2 = update_timing(StateData),
+    update_stats(S2),
+    client_reply({error,timeout}, S2),
+    finalize(S2).
 
 %% @private
 waiting_read_repair({r, VnodeResult, Idx, _ReqId},
