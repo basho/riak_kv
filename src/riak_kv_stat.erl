@@ -678,13 +678,16 @@ pbc_stats(Moment, State=#state{pbc_connects_total=NCT, pbc_active=Active, legacy
               {pbc_connects, spiral_minute(Moment, #state.pbc_connects, State)},
               {pbc_active, Active}]
     end;
-pbc_stats(_, _State=#state{pbc_connects_total=NCT, pbc_active=Active, legacy=false}) ->
+pbc_stats(_, State=#state{pbc_connects_total=NCT, 
+                          pbc_active=Active, legacy=false}) ->
     case whereis(riak_kv_pb_socket_sup) of
         undefined ->
             [];
-        _ -> [{pbc_connects_total, NCT},
-%%              {pbc_connects, spiral_minute(Moment, #state.pbc_connects, State)},
-              {pbc_active, Active}]
+        _ ->
+            NC = metric_stats(State#state.pbc_connects),
+            [{pbc_connects_total, NCT},
+             {pbc_connects, meter_minute(NC)},
+             {pbc_active, Active}]
     end.    
 
 
