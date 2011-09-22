@@ -165,6 +165,7 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
     PR0 = get_option(pr, Options, ?DEFAULT_PR),
     R = riak_kv_util:expand_rw_value(r, R0, BucketProps, N),
     PR = riak_kv_util:expand_rw_value(pr, PR0, BucketProps, N),
+    NumVnodes = length(PL2),
     NumPrimaries = length([x || {_,primary} <- PL2]),
     if
         R =:= error ->
@@ -181,6 +182,9 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
             {stop, normal, StateData};
         PR > NumPrimaries ->
             client_reply({error, {pr_val_unsatisfied, PR, NumPrimaries}}, StateData),
+            {stop, normal, StateData};
+        R > NumVnodes ->
+            client_reply({error, {insufficient_vnodes, NumVnodes, need, R}}, StateData),
             {stop, normal, StateData};
         true ->
             BQ0 = get_option(basic_quorum, Options, default),

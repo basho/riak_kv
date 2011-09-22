@@ -182,8 +182,11 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
     LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
                         Node == node()],
     Must = (get_option(asis, Options, false) /= true),
-    case (LocalPL =:= [] andalso Must == true) of
-        true ->
+    case {Preflist2, LocalPL =:= [] andalso Must == true} of
+        {[], _} ->
+            %% Empty preflist
+            process_reply({error, all_nodes_down}, StateData0);
+        {_, true} ->
             %% This node is not in the preference list
             %% forward on to the first node
             [{{_Idx, CoordNode},_Type}|_] = Preflist2,
@@ -197,6 +200,8 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                     process_reply({error, {coord_handoff_failed, Reason}}, StateData0)
             end;
         _ ->
+            %% Putting asis, no need to handle locally on a node in the
+            %% preflist, can coordinate from anywhere
             CoordPLEntry = case Must of
                                true ->
                                    hd(LocalPL);
