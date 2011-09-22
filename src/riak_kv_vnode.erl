@@ -175,16 +175,9 @@ list_keys(Preflist, ReqId, Caller, Bucket) ->
                                    riak_kv_vnode_master).
 
 fold(Preflist, Fun, Acc0) ->
-    %% The function used for object folding expects the
-    %% bucket and key pair to be passed as the first parameter, but in
-    %% riak_kv the bucket and key have been separated. This function
-    %% wrapper is to address this mismatch.
-    FoldFun = fun(Bucket, Key, Value, Acc) ->
-                      Fun({Bucket, Key}, Value, Acc)
-              end,
     riak_core_vnode_master:sync_spawn_command(Preflist,
                                               ?FOLD_REQ{
-                                                 foldfun=FoldFun,
+                                                 foldfun=Fun,
                                                  acc0=Acc0},
                                               riak_kv_vnode_master).
 
@@ -327,8 +320,16 @@ handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender, State) ->
     do_delete(BKey, ReqId, State);
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
     {reply, do_get_vclocks(BKeys, State), State};
-handle_command(?FOLD_REQ{foldfun=Fun, acc0=Acc}, Sender, State) ->
-    do_fold(Fun, Acc, Sender, State);
+handle_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0}, Sender, State) ->
+    %% The function in riak_core used for object folding
+    %% during handoff expects the bucket and key pair to be
+    %% passed as the first parameter, but in riak_kv the bucket
+    %% and key have been separated. This function wrapper is
+    %% to address this mismatch.
+    HandoffFun = fun(Bucket, Key, Value, Acc) ->
+                         FoldFun({Bucket, Key}, Value, Acc)
+                 end,
+    do_fold(HandoffFun, Acc0, Sender, State);
 
 %% Commands originating from inside this vnode
 handle_command({backend_callback, Ref, Msg}, _Sender,
@@ -459,16 +460,8 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
             {reply, {error, {indexes_not_supported, Mod}}, State}
     end.
 
-handle_handoff_command(Req=?FOLD_REQ{foldfun=FoldFun}, Sender, State) ->
-    %% The function in riak_core used for object folding
-    %% during handoff expects the bucket and key pair to be
-    %% passed as the first parameter, but in riak_kv the bucket
-    %% and key have been separated. This function wrapper is
-    %% to address this mismatch.
-    HandoffFun = fun(Bucket, Key, Value, Acc) ->
-                         FoldFun({Bucket, Key}, Value, Acc)
-                 end,
-    handle_command(Req?FOLD_REQ{foldfun=HandoffFun}, Sender, State);
+handle_handoff_command(Req=?FOLD_REQ{}, Sender, State) ->
+    handle_command(Req, Sender, State);
 handle_handoff_command(Req={backend_callback, _Ref, _Msg}, Sender, State) ->
     handle_command(Req, Sender, State);
 handle_handoff_command(_Req, _Sender, State) -> {forward, State}.
