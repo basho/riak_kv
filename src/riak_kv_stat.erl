@@ -378,13 +378,16 @@ update(_, _, State) ->
 tick(Field, State) ->
     basho_metrics_nifs:meter_tick(element(2, element(Field, State))).
 
-update_metric(Field, Value, State) ->
+update_metric(Field, Value, State) when is_integer(Value) ->
     case element(Field, State) of
         {meter, M} ->
             basho_metrics_nifs:meter_update(M, Value);
         {histogram, H} ->
             basho_metrics_nifs:histogram_update(H, Value)
     end,
+    State;
+update_metric(Field, Value, State) ->
+    lager:error("Ignoring non-integer stats update for field ~p, value ~p", [Field, Value]),
     State.
 
 %% @spec update(Stat::term(), integer(), state()) -> state()
