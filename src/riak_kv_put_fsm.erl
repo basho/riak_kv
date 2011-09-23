@@ -262,7 +262,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                 if Disable -> [];
                    true ->
                         L = get_hooks(precommit, BucketProps),
-                        [?PARSE_INDEX_PRECOMMIT|L]
+                        L ++ [?PARSE_INDEX_PRECOMMIT]
                 end,
             Postcommit =
                 if Disable -> [];
