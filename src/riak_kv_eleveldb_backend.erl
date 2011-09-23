@@ -74,15 +74,15 @@ api_version() ->
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% Get the data root directory
-    DataDir = filename:join(config_value(data_root, Config),
+    DataDir = filename:join(app_helper:get_prop_or_env(data_root, Config, eleveldb),
                             integer_to_list(Partition)),
     filelib:ensure_dir(filename:join(DataDir, "dummy")),
 
     %% Use a variable write buffer size in order to reduce the number
     %% of vnodes that try to kick off compaction at the same time
     %% under heavy uniform load...
-    WriteBufferMin = config_value(write_buffer_size_min, Config, 3 * 1024 * 1024),
-    WriteBufferMax = config_value(write_buffer_size_max, Config, 6 * 1024 * 1024),
+    WriteBufferMin = app_helper:get_prop_or_env(write_buffer_size_min, Config, eleveldb, 3 * 1024 * 1024),
+    WriteBufferMax = app_helper:get_prop_or_env(write_buffer_size_max, Config, eleveldb, 6 * 1024 * 1024),
     random:seed(now()),
     WriteBufferSize = WriteBufferMin + random:uniform(1 + WriteBufferMax - WriteBufferMin),
 
@@ -308,19 +308,6 @@ callback(_Ref, _Msg, State) ->
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
-
-%% @private
-config_value(Key, Config) ->
-    config_value(Key, Config, undefined).
-
-%% @private
-config_value(Key, Config, Default) ->
-    case proplists:get_value(Key, Config) of
-        undefined ->
-            app_helper:get_env(eleveldb, Key, Default);
-        Value ->
-            Value
-    end.
 
 %% @private
 %% Return a function to fold over the buckets on this backend

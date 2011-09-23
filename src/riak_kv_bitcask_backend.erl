@@ -77,7 +77,7 @@ api_version() ->
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% Get the data root directory
-    case config_value(data_root, Config) of
+    case app_helper:get_prop_or_env(data_root, Config, bitcask) of
         undefined ->
             lager:error("Failed to create bitcask dir: data_root is not set"),
             {error, data_root_unset};
@@ -467,19 +467,6 @@ schedule_sync(Ref, SyncIntervalMs) when is_reference(Ref) ->
 
 schedule_merge(Ref) when is_reference(Ref) ->
     riak_kv_backend:callback_after(?MERGE_CHECK_INTERVAL, Ref, merge_check).
-
-%% @private
-config_value(Key, Config) ->
-    config_value(Key, Config, undefined).
-
-%% @private
-config_value(Key, Config, Default) ->
-    case proplists:get_value(Key, Config) of
-        undefined ->
-            app_helper:get_env(bitcask, Key, Default);
-        Value ->
-            Value
-    end.
 
 %% @private
 get_data_dir(DataRoot, PartitionI) ->
