@@ -459,7 +459,15 @@ process_message(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
                 legacy ->
                     legacy_mapreduce(Req, State, Inputs, Query, Timeout)
             end
-    end.
+    end;
+
+%% Return the stats for the node
+process_message(rpbstatsreq, State) ->
+    Stats = proplists:delete(disk, riak_kv_stat:get_stats()),
+    Stats2 = mochijson2:encode({struct,Stats}),
+    Resp = #rpbstatsresp{node = riakc_pb:to_binary(node()), 
+                         stats = riakc_pb:to_binary(Stats2)},
+    send_msg(Resp, State).
 
 pipe_mapreduce(Req, State, Inputs, Query, Timeout) ->
     try riak_kv_mrc_pipe:mapred_stream(Query) of
