@@ -286,6 +286,12 @@ pipe_stream_mapred_results(RD, Pipe,
 %% This is used to workaround an issue in mochiweb, where the loop
 %% waiting for new TCP data receives a latent pipe message instead,
 %% and blows up, sending a 400 to the requester.
+%%
+%% WARNING: This uses an undocumented feature of mochiweb that exists
+%% in 1.5.1 (the version planned to ship with Riak 1.0).  The feature
+%% appears to still exist in mochiweb 2.2.1, but it may go away in
+%% future mochiweb releases.
+%%
 %% See [https://issues.basho.com/1222] for more details.
 prevent_keepalive() ->
     erlang:put(mochiweb_request_force_close, true).
