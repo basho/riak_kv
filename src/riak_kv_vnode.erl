@@ -459,11 +459,20 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
             {reply, {error, {indexes_not_supported, Mod}}, State}
     end.
 
-handle_handoff_command(Req=?FOLD_REQ{}, Sender, State) ->
-    handle_command(Req, Sender, State);
-handle_handoff_command(Req={backend_callback, _Ref, _Msg}, Sender, State) ->
-    handle_command(Req, Sender, State);
-handle_handoff_command(_Req, _Sender, State) -> {forward, State}.
+%% While in handoff, vnodes have the option of returning {forward, State}
+%% which will cause riak_core to forward the request to the handoff target
+%% node. For riak_kv, we issue a put locally as well as forward it in case
+%% the vnode has already handed off the previous version. All other requests
+%% are handled locally and not forwarded since the relevant data may not have
+%% yet been handed off to the target node. Since we do not forward deletes it
+%% is possible that we do not clear a tombstone that was already handed off.
+%% This is benign as the tombstone will eventually be re-deleted.
+handle_handoff_command(Req=?KV_PUT_REQ{}, Sender, State) ->
+    {noreply, NewState} = handle_command(Req, Sender, State),
+    {forward, NewState};
+%% Handle all unspecified cases locally without forwarding
+handle_handoff_command(Req, Sender, State) ->
+    handle_command(Req, Sender, State).
 
 
 handoff_starting(_TargetNode, State) ->
