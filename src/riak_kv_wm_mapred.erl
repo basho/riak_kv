@@ -183,14 +183,17 @@ pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender) ->
         {error, {sender_error, Error}} ->
             %% the sender links to the builder, so the builder has
             %% already been torn down
+            prevent_keepalive(),
             {{halt, 500}, send_error(Error, RD), State};
         {error, timeout} ->
             %% destroying the pipe will tear down the linked sender
             riak_pipe:destroy(Pipe),
+            prevent_keepalive(),
             {{halt, 500}, send_error({error, timeout}, RD), State};
         {error, {Error, _Input}} ->
             %% TODO: jsonify Input for error message
             riak_pipe:destroy(Pipe),
+            prevent_keepalive(),
             {{halt, 500}, send_error({error, Error}, RD), State}
     end.
 
@@ -268,13 +271,30 @@ pipe_stream_mapred_results(RD, Pipe,
             {iolist_to_binary(["\r\n--", Boundary, "--\r\n"]), done};
         {error, timeout} ->
             riak_pipe:destroy(Pipe),
+            prevent_keepalive(),
             {format_error({error, timeout}), done};
         {error, {sender_error, Error}} ->
+            prevent_keepalive(),
             {format_error(Error), done};
         {error, {Error, _Input}} ->
             riak_pipe:destroy(Pipe),
+            prevent_keepalive(),
             {format_error({error, Error}), done}
     end.
+
+%% @doc Prevent this socket from being used for another HTTP request.
+%% This is used to workaround an issue in mochiweb, where the loop
+%% waiting for new TCP data receives a latent pipe message instead,
+%% and blows up, sending a 400 to the requester.
+%%
+%% WARNING: This uses an undocumented feature of mochiweb that exists
+%% in 1.5.1 (the version planned to ship with Riak 1.0).  The feature
+%% appears to still exist in mochiweb 2.2.1, but it may go away in
+%% future mochiweb releases.
+%%
+%% See [https://issues.basho.com/1222] for more details.
+prevent_keepalive() ->
+    erlang:put(mochiweb_request_force_close, true).
 
 %% LEGACY MAPRED
 
