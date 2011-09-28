@@ -565,13 +565,21 @@ update_last_modified(RObj) ->
                _ ->
                   riak_object:get_update_metadata(RObj)
           end,
-    NewMD = dict:store(?MD_VTAG, make_vtag(RObj),
-                       dict:store(?MD_LASTMOD, erlang:now(),
-                                  MD0)),
+    %% Post-0.14.2 changed vtags to be generated from node/now rather the vclocks.
+    %% The vclock has not been updated at this point.  Vtags/etags should really
+    %% be an external interface concern and are only used for sibling selection
+    %% and if-modified type tests so they could be generated on retrieval instead.
+    %% This changes from being a hash on the value to a likely-to-be-unique value
+    %% which should serve the same purpose.  It was possible to generate two 
+    %% objects with the same vclock on 0.14.2 if the same clientid was used in
+    %% the same second.  It can be revisited post-1.0.0.
+    Now = erlang:now(),
+    NewMD = dict:store(?MD_VTAG, make_vtag(Now),
+                       dict:store(?MD_LASTMOD, Now, MD0)),
     riak_object:update_metadata(RObj, NewMD).
 
-make_vtag(RObj) ->
-    <<HashAsNum:128/integer>> = crypto:md5(term_to_binary(riak_object:vclock(RObj))),
+make_vtag(Now) ->
+    <<HashAsNum:128/integer>> = crypto:md5(term_to_binary({node(), Now})),
     riak_core_util:integer_to_list(HashAsNum,62).
 
 %% Invokes the hook and returns a tuple of
@@ -727,8 +735,7 @@ calc_timing([{Stage, StageStart} | Rest], StageEnd, ReplyNow, Stages) ->
 
 make_vtag_test() ->
     crypto:start(),
-    Obj = riak_object:new(<<"b">>,<<"k">>,<<"v1">>),
-    ?assertNot(make_vtag(Obj) =:=
-               make_vtag(riak_object:increment_vclock(Obj,<<"client_id">>))).
+    ?assertNot(make_vtag(now()) =:=
+               make_vtag(now())).
 
 -endif.
