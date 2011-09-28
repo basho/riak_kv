@@ -736,6 +736,6 @@ calc_timing([{Stage, StageStart} | Rest], StageEnd, ReplyNow, Stages) ->
 make_vtag_test() ->
     crypto:start(),
     ?assertNot(make_vtag(now()) =:=
-               make_vtag(riak_object:increment_vclock(now()))).
+               make_vtag(now())).
 
 -endif.
