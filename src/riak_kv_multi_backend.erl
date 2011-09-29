@@ -38,6 +38,9 @@
          status/1,
          callback/3]).
 
+%% Special multi_backend API
+-export([is_index_backend/2]).
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -412,6 +415,15 @@ error_filter({error, _, _}) ->
     true;
 error_filter(_) ->
     false.
+
+%% 
+%% Say if the backend with given Bucket/State is an index backend
+%%
+is_index_backend(Bucket,State) ->
+    {_, Module, _} = get_backend(Bucket,State),
+    {_, Capabilities} = Module:api_version(),
+    lists:member(indexes, Capabilities).
+    
 
 %% ===================================================================
 %% EUnit tests

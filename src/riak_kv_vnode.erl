@@ -438,7 +438,7 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                              index_buf_size=BufferSize,
                              mod=Mod,
                              modstate=ModState}) ->
-    case IndexBackend of
+    case is_index_backend(Mod,Bucket,ModState,IndexBackend) of
         true ->
             %% Construct the filter function
             FilterVNode = proplists:get_value(Index, FilterVNodes),
@@ -620,7 +620,7 @@ prepare_put(#state{index_backend=IndexBackend,
                              prunetime=PruneTime}) ->
     case Mod:get(Bucket, Key, ModState) of
         {error, not_found, _UpdModState} ->
-            case IndexBackend of
+            case is_index_backend(Mod,Bucket,ModState,IndexBackend) of
                 true ->
                     IndexSpecs = riak_object:index_specs(RObj);
                 false ->
@@ -641,7 +641,7 @@ prepare_put(#state{index_backend=IndexBackend,
                 {newobj, NewObj} ->
                     VC = riak_object:vclock(NewObj),
                     AMObj = enforce_allow_mult(NewObj, BProps),
-                    case IndexBackend of
+                    case is_index_backend(Mod,Bucket,ModState,IndexBackend) of
                         true ->
                             IndexSpecs =
                                 riak_object:diff_index_specs(AMObj,
@@ -955,7 +955,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                                  modstate=ModState}) ->
     case Mod:get(Bucket, Key, ModState) of
         {error, not_found, _UpdModState} ->
-            case IndexBackend of
+            case is_index_backend(Mod,Bucket,ModState,IndexBackend) of
                 true ->
                     IndexSpecs = riak_object:index_specs(DiffObj);
                 false ->
@@ -978,7 +978,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                     {ok, ModState};
                 {newobj, NewObj} ->
                     AMObj = enforce_allow_mult(NewObj, riak_core_bucket:get_bucket(Bucket)),
-                    case IndexBackend of
+                    case is_index_backend(Mod,Bucket,ModState,IndexBackend) of
                         true ->
                             IndexSpecs = riak_object:diff_index_specs(AMObj, OldObj);
                         false ->
@@ -1092,6 +1092,14 @@ wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
          _ ->
             wait_for_vnode_status_results(PrefLists, ReqId, Acc)
     end.
+
+
+is_index_backend(riak_kv_multi_backend,Bucket,ModState,_) ->
+    riak_kv_multi_backend:is_index_backend(Bucket,ModState);
+is_index_backend(_,_,_,IndexBackend) ->
+    IndexBackend.
+
+
 
 -ifdef(TEST).
 
