@@ -52,7 +52,8 @@
          handoff_finished/2,
          handle_handoff_data/2,
          encode_handoff_item/2,
-         handle_exit/3]).
+         handle_exit/3,
+         handle_info/2]).
 
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_map_phase.hrl").
@@ -74,11 +75,12 @@
                 modstate :: term(),
                 mrjobs :: term(),
                 vnodeid :: undefined | binary(),
+                delete_mode :: keep | immediate | pos_integer(),
                 bucket_buf_size :: pos_integer(),
                 index_buf_size :: pos_integer(),
                 key_buf_size :: pos_integer(),
                 async_backend :: boolean(),
-                in_handoff = false :: boolean()}).
+                in_handoff = false :: boolean() }).
 
 -type index_op() :: add | remove.
 -type index_value() :: integer() | binary().
@@ -206,6 +208,7 @@ init([Index]) ->
     IndexBufSize = app_helper:get_env(riak_kv, index_buffer_size, 100),
     KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
     {ok, VId} = get_vnodeid(Index),
+    DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
     AsyncFolding = app_helper:get_env(riak_kv, async_folds, true),
     case catch Mod:start(Index, [{async_folds, AsyncFolding},
                                  Configuration]) of
@@ -221,6 +224,7 @@ init([Index]) ->
                            mod=Mod,
                            modstate=ModState,
                            vnodeid=VId,
+                           delete_mode=DeleteMode,
                            bucket_buf_size=BucketBufSize,
                            index_buf_size=IndexBufSize,
                            key_buf_size=KeyBufSize,
@@ -520,6 +524,20 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
+handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=ModState}) ->
+    UpdState = case do_get_term(BKey, Mod, ModState) of
+                   {ok, RObj} ->
+                       case delete_hash(RObj) of
+                           RObjHash ->
+                               do_backend_delete(BKey, RObj, State);
+                         _ ->
+                               State
+                       end;
+                   _ ->
+                       State
+               end,
+    {ok, UpdState}.
+
 handle_exit(_Pid, Reason, State) ->
     %% A linked processes has died so the vnode
     %% process should take appropriate action here.
@@ -563,6 +581,28 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     riak_core_vnode:reply(Sender, Reply),
     riak_kv_stat:update(vnode_put),
     UpdState.
+
+do_backend_delete(BKey, RObj, State = #state{mod = Mod, modstate = ModState}) ->
+    %% object is a tombstone or all siblings are tombstones
+    riak_kv_mapred_cache:eject(BKey),
+
+    %% Calculate the index specs to remove...  
+    %% JDM: This should just be a tombstone by this point, but better
+    %% safe than sorry.
+    IndexSpecs = riak_object:diff_index_specs(undefined, RObj),
+    
+    %% Do the delete...
+    {Bucket, Key} = BKey,
+    case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
+        {ok, UpdModState} ->
+            State#state{modstate = UpdModState};
+        {error, _Reason, UpdModState} ->
+            State#state{modstate = UpdModState}
+    end.
+
+%% Compute a hash of the deleted object
+delete_hash(RObj) ->
+    erlang:phash2(RObj, 4294967296).
 
 prepare_put(#state{index_backend=false, vnodeid=VId},
             PutArgs=#putargs{lww=true, robj=RObj, starttime=StartTime}) ->
@@ -842,6 +882,7 @@ do_delete(BKey, ReqId, State) ->
     Mod = State#state.mod,
     ModState = State#state.modstate,
     Idx = State#state.idx,
+    DeleteMode = State#state.delete_mode,
 
     %% Get the existing object.
     case do_get_term(BKey, Mod, ModState) of
@@ -849,21 +890,20 @@ do_delete(BKey, ReqId, State) ->
             %% Object exists, check if it should be deleted.
             case riak_kv_util:obj_not_deleted(RObj) of
                 undefined ->
-                    %% object is a tombstone or all siblings are tombstones
-                    riak_kv_mapred_cache:eject(BKey),
-
-                    %% Calculate the index specs to remove...
-                    IndexSpecs = riak_object:diff_index_specs(undefined, RObj),
-
-                    %% Do the delete...
-                    {Bucket, Key} = BKey,
-                    case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
-                        {ok, UpdModState} ->
-                            UpdState = State#state {modstate = UpdModState },
+                    case DeleteMode of
+                        keep ->
+                            %% keep tombstones indefinitely
+                            {reply, {fail, Idx, ReqId}, State};
+                        immediate ->
+                            UpdState = do_backend_delete(BKey, RObj, State),
                             {reply, {del, Idx, ReqId}, UpdState};
-                        {error, _Reason, UpdModState} ->
-                            UpdState = State#state {modstate = UpdModState },
-                            {reply, {fail, Idx, ReqId}, UpdState}
+                        Delay when is_integer(Delay) ->
+                            erlang:send_after(Delay, self(), 
+                                              {final_delete, BKey,
+                                               delete_hash(RObj)}),
+                            %% Nothing checks these messages - will just reply
+                            %% del for now until we can refactor.
+                            {reply, {del, Idx, ReqId}, State}
                     end;
                 _ ->
                     %% not a tombstone or not all siblings are tombstones
