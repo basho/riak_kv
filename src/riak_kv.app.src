@@ -33,6 +33,9 @@
          %% listing operations.
          {legacy_keylisting, true},
 
+         %% use the legacy routines for tracking kv stats
+         {legacy_stats, true},
+
          %% Allow Erlang MapReduce functions to be specified as
          %% strings.
          %%
