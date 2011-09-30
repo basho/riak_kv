@@ -230,13 +230,24 @@ delete(Bucket, Key, IndexSpecs, State) ->
 fold_buckets(FoldBucketsFun, Acc, Opts, State) ->
     fold(undefined, fold_buckets, FoldBucketsFun, Acc, Opts, State).
 
+%% @doc Given `FoldOptions', determine bucket (if any) that it is constrained to.
+get_fold_bucket([]) ->
+    undefined;
+get_fold_bucket([{bucket, Bucket}|_]) ->
+    Bucket;
+get_fold_bucket([{index, Bucket, _}|_]) ->
+    Bucket;
+get_fold_bucket([_|T]) ->
+    get_fold_bucket(T).
+
+
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
                 state()) -> {ok, any()} | {async, fun()} | {error, term()}.
 fold_keys(FoldKeysFun, Acc, Opts, State) ->
-    Bucket = proplists:get_value(bucket, Opts),
+    Bucket = get_fold_bucket(Opts),
     fold(Bucket, fold_keys, FoldKeysFun, Acc, Opts, State).
 
 %% @doc Fold over all the objects for one or all buckets.
@@ -245,7 +256,7 @@ fold_keys(FoldKeysFun, Acc, Opts, State) ->
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()} | {error, term()}.
 fold_objects(FoldObjectsFun, Acc, Opts, State) ->
-    Bucket = proplists:get_value(bucket, Opts),
+    Bucket = get_fold_bucket(Opts),
     fold(Bucket, fold_objects, FoldObjectsFun, Acc, Opts, State).
 
 %% @doc Delete all objects from the different backends
