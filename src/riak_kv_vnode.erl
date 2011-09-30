@@ -449,9 +449,9 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
             FinishFun = finish_fun(BufferMod, Sender),
             case AsyncBackend of
                 true ->
-                    Opts = [async_fold, {bucket, Bucket}, {index, Bucket, Query}];
+                    Opts = [async_fold, {index, Bucket, Query}];
                 false ->
-                    Opts = [{bucket, Bucket}, {index, Bucket, Query}]
+                    Opts = [{index, Bucket, Query}]
             end,
             case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, Buffer) of
                 {async, AsyncWork} ->
