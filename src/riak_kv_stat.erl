@@ -412,8 +412,9 @@ update1({get_fsm_time, Microsecs}, _, State) ->
 update1({put_fsm_time, Microsecs}, _, State) ->
     update_metric(#state.put_meter, 1, 
                   update_metric(#state.put_fsm_time, Microsecs, State));
-update1(pbc_connect, _, State=#state{pbc_active=Active}) ->
-    update_metric(#state.pbc_connects, 1, State#state{pbc_active=Active+1});
+update1(pbc_connect, _, State=#state{pbc_connects_total=Total,pbc_active=Active}) ->
+    update_metric(#state.pbc_connects, 1, State#state{pbc_connects_total=Total+1,
+                                                      pbc_active=Active+1});
 update1(pbc_disconnect, _, State=#state{pbc_active=Active}) ->
     State#state{pbc_active=decrzero(Active)};
 update1(read_repairs, _, State) ->
