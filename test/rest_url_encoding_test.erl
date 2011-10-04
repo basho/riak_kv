@@ -51,6 +51,7 @@ url_encoding_test_() ->
 
             {spawn, [{setup,
                       fun() ->
+                              os:cmd("epmd -daemon"),
                               net_kernel:start([ENode]),
                               erlang:set_cookie(node(), Cookie),
                               inets:start(),
