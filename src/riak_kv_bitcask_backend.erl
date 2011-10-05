@@ -186,6 +186,7 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{opts=BitcaskOpts,
                                     bitcask:fold_keys(Ref1,
                                                       FoldFun,
                                                       {Acc, sets:new()}),
+                                bitcask:close(Ref1),
                                 Acc1;
                             {error, Reason} ->
                                 {error, Reason}
@@ -222,7 +223,11 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{opts=BitcaskOpts,
                         case bitcask:open(filename:join(DataRoot, DataFile),
                                           ReadOpts) of
                             Ref1 when is_reference(Ref1) ->
-                                bitcask:fold_keys(Ref1, FoldFun, Acc);
+                                FoldResults =
+                                    bitcask:fold_keys(Ref1, FoldFun, Acc),
+                                io:format("Closing Ref1~n"),
+                                bitcask:close(Ref1),
+                                FoldResults;
                             {error, Reason} ->
                                 {error, Reason}
                         end
@@ -257,7 +262,10 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{opts=BitcaskOpts,
                         case bitcask:open(filename:join(DataRoot, DataFile),
                                           ReadOpts) of
                             Ref1 when is_reference(Ref1) ->
-                                bitcask:fold(Ref1, FoldFun, Acc);
+                                FoldResults =
+                                    bitcask:fold(Ref1, FoldFun, Acc),
+                                bitcask:close(Ref1),
+                                FoldResults;
                             {error, Reason} ->
                                 {error, Reason}
                         end
