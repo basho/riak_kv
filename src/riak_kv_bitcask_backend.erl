@@ -225,7 +225,6 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{opts=BitcaskOpts,
                             Ref1 when is_reference(Ref1) ->
                                 FoldResults =
                                     bitcask:fold_keys(Ref1, FoldFun, Acc),
-                                io:format("Closing Ref1~n"),
                                 bitcask:close(Ref1),
                                 FoldResults;
                             {error, Reason} ->
