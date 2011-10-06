@@ -365,10 +365,13 @@ want_prereduce_p(Idx, QueryT) ->
     {map, _FuncSpec, Arg, _Keep} = element(Idx, QueryT),
     Props = case Arg of
                 L when is_list(L) -> L;         % May or may not be a proplist
+                {struct, L}       -> L;         % mochijson form
                 _                 -> []
             end,
     AppDefault = app_helper:get_env(riak_kv, mapred_always_prereduce, false),
-    proplists:get_value(do_prereduce, Props, AppDefault).
+    true =:= proplists:get_value(
+               <<"do_prereduce">>, Props,       % mochijson form
+               proplists:get_value(do_prereduce, Props, AppDefault)).
 
 -spec query_type(integer(), tuple()) -> map | reduce | link.
 query_type(Idx, QueryT) ->
