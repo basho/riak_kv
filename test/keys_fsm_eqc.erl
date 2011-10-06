@@ -233,6 +233,8 @@ dep_apps() ->
             application:set_env(riak_core, ring_creation_size, 64),
             application:set_env(riak_kv, storage_backend, riak_kv_memory_backend),
             application:set_env(riak_kv, vnode_vclocks, true),
+            application:set_env(riak_kv, delete_mode, immediate),
+            application:set_env(riak_kv, legacy_keylisting, false),
 
             %% Start riak_kv
             timer:sleep(500);
@@ -242,7 +244,7 @@ dep_apps() ->
     XX = fun(_) -> error_logger:info_msg("Registered: ~w\n", [lists:sort(registered())]) end,
     [sasl, crypto, riak_sysmon, webmachine, XX, os_mon,
      riak_core, XX, luke, erlang_js,
-     inets, mochiweb, riak_pipe, SetupFun, riak_kv].
+     inets, mochiweb, riak_pipe, SetupFun, riak_kv, SetupFun].
 
 do_dep_apps(StartStop, Apps) ->
     lists:map(fun(A) when is_atom(A) -> application:StartStop(A);
