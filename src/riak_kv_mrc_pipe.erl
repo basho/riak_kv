@@ -317,13 +317,27 @@ map2pipe(FunSpec, Arg, Keep, I, QueryT) ->
     PrereduceP = I+2 =< size(QueryT) andalso
         query_type(I+2, QueryT) == reduce andalso
         want_prereduce_p(I+1, QueryT),
+    SafeArg = case FunSpec of
+                  {JS, _} when (JS == jsfun orelse JS == jsanon),
+                               is_list(Arg) ->
+                      %% mochijson cannot encode these properties,
+                      %% so remove them from the argument list
+                      lists:filter(
+                        fun(do_prereduce)     -> false;
+                           ({do_prereduce,_}) -> false;
+                           (_)                -> true
+                        end,
+                        Arg);
+                  _ ->
+                      Arg
+              end,
     [#fitting_spec{name={kvget_map,I},
                    module=riak_kv_pipe_get,
                    chashfun=fun bkey_chash/1,
                    nval=fun bkey_nval/1},
      #fitting_spec{name={xform_map,I},
                    module=riak_kv_mrc_map,
-                   arg={FunSpec, Arg},
+                   arg={FunSpec, SafeArg},
                    chashfun=follow}]
      ++
      [#fitting_spec{name=I,
