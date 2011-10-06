@@ -198,6 +198,11 @@ handoff({HandoffInAcc, HandoffAcc}, #state{inacc=OldInAcc}=State) ->
     %%             InAcc = [9,8,7] ++ [6,5,4] ++ [3,2,1]
     InAcc = OldInAcc ++ HandoffInAcc ++ lists:reverse(HandoffAcc),
     maybe_reduce(State#state{inacc=InAcc, delay=length(InAcc)},
+                 "reducing handoff");
+handoff(HandoffAcc, #state{inacc=OldInAcc}=State) when is_list(HandoffAcc) ->
+    %% Riak 1.0.0 handoff format
+    InAcc = OldInAcc++HandoffAcc,
+    maybe_reduce(State#state{inacc=InAcc, delay=length(InAcc)},
                  "reducing handoff").
 
 %% @doc Actually evaluate the aggregation function.
