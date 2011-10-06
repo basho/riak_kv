@@ -173,17 +173,16 @@ done(#state{acc=Acc0, inacc=InAcc, delay=Delay, p=Partition, fd=FittingDetails} 
     ok.
 
 %% @doc The archive is the accumulator.
--spec archive(state()) -> {ok, {list(), list()}}.
+-spec archive(state()) -> {ok, list()}.
 archive(#state{acc=Acc, inacc=InAcc}) ->
-    %% send the new inputs and already reduced inputs separately for a
-    %% chance at getting ordering right to help sort-reduce phases
-    {ok, {InAcc, Acc}}.
+    %% just send state of reduce so far
+    {ok, Acc ++ lists:reverse(InAcc)}.
 
 %% @doc Handoff simply concatenates the accumulators from the remote
 %% worker with the accumulator from this worker, and then reduces if
 %% the resulting accumulator crosses the batch size threshold.
 -spec handoff(list(), state()) -> {ok, state()}.
-handoff({HandoffInAcc, HandoffAcc}, #state{inacc=OldInAcc}=State) ->
+handoff(HandoffAcc, #state{inacc=OldInAcc}=State) ->
     %% assume that inputs received by the vnode that was archived were
     %% meant to arrive before any inputs received here (because the
     %% typical handoff case is that this is a new node taking over)
@@ -192,16 +191,10 @@ handoff({HandoffInAcc, HandoffAcc}, #state{inacc=OldInAcc}=State) ->
     %% then put all reduced inputs reversed after that. this has the
     %% best chance of producing the correct order for a reduce phase
     %% that was sorting inputs
-    %%   Example:  HandoffInAcc = [6,5,4]
-    %%             HandoffAcc = [1,2,3]
+    %%   Example:  HandoffAcc = Acc ++ InAcc = [1,2,3] ++ [4,5,6]
     %%             OldInAcc = [9,8,7]
     %%             InAcc = [9,8,7] ++ [6,5,4] ++ [3,2,1]
-    InAcc = OldInAcc ++ HandoffInAcc ++ lists:reverse(HandoffAcc),
-    maybe_reduce(State#state{inacc=InAcc, delay=length(InAcc)},
-                 "reducing handoff");
-handoff(HandoffAcc, #state{inacc=OldInAcc}=State) when is_list(HandoffAcc) ->
-    %% Riak 1.0.0 handoff format
-    InAcc = OldInAcc++HandoffAcc,
+    InAcc = OldInAcc ++ lists:reverse(HandoffAcc),
     maybe_reduce(State#state{inacc=InAcc, delay=length(InAcc)},
                  "reducing handoff").
 
