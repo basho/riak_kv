@@ -169,6 +169,8 @@
 
 -behaviour(gen_server2).
 
+-define(FORCE_LEGACY_STATS, yes).
+
 %% API
 -export([start_link/0, get_stats/0, get_stats/1, update/1]).
 
@@ -221,9 +223,12 @@ init([]) ->
         {ok, true} ->
             legacy_init();
         _ ->
-            v2_init()
+            lager:warning("Overriding user-setting and using legacy stats."),
+            legacy_init()
+            %v2_init()
     end.
 
+-ifdef(not_defined).
 make_meter() ->
     {ok, M} = basho_metrics_nifs:meter_new(),
     {meter, M}.
@@ -263,6 +268,7 @@ v2_init() ->
                 get_meter=make_meter(),
                 put_meter=make_meter(),
                 legacy=false}}.
+-endif.
 
 legacy_init() ->
     {ok, #state{vnode_gets=spiraltime:fresh(),
