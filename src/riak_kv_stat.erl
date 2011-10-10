@@ -169,8 +169,6 @@
 
 -behaviour(gen_server2).
 
--define(FORCE_LEGACY_STATS, yes).
-
 %% API
 -export([start_link/0, get_stats/0, get_stats/1, update/1]).
 
