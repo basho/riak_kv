@@ -219,12 +219,11 @@ init([]) ->
     remove_slide_private_dirs(),
     case application:get_env(riak_kv, legacy_stats) of
         {ok, false} ->
-            lager:warning("Overriding user-setting and using legacy stats. Set {legacy_stats,true} to remove this message."),
-            legacy_init();
-            %v2_init();
+            lager:warning("Overriding user-setting and using legacy stats. Set {legacy_stats,true} to remove this message.");
         _ ->
-            legacy_init()
-    end.
+            ok
+    end,
+    legacy_init().
 
 -ifdef(not_defined).
 make_meter() ->
