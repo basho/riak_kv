@@ -218,12 +218,14 @@ init([]) ->
     process_flag(trap_exit, true),
     remove_slide_private_dirs(),
     case application:get_env(riak_kv, legacy_stats) of
-        {ok, true} ->
-            legacy_init();
+        {ok, false} ->
+            lager:warning("Overriding user-setting and using legacy stats. Set {legacy_stats,true} to remove this message.");
         _ ->
-            v2_init()
-    end.
+            ok
+    end,
+    legacy_init().
 
+-ifdef(not_defined).
 make_meter() ->
     {ok, M} = basho_metrics_nifs:meter_new(),
     {meter, M}.
@@ -263,6 +265,7 @@ v2_init() ->
                 get_meter=make_meter(),
                 put_meter=make_meter(),
                 legacy=false}}.
+-endif.
 
 legacy_init() ->
     {ok, #state{vnode_gets=spiraltime:fresh(),
