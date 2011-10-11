@@ -218,12 +218,12 @@ init([]) ->
     process_flag(trap_exit, true),
     remove_slide_private_dirs(),
     case application:get_env(riak_kv, legacy_stats) of
-        {ok, true} ->
+        {ok, false} ->
+            lager:warning("Overriding user-setting and using legacy stats. Set {legacy_stats,true} to remove this message."),
             legacy_init();
+            %v2_init();
         _ ->
-            lager:warning("Overriding user-setting and using legacy stats."),
             legacy_init()
-            %v2_init()
     end.
 
 -ifdef(not_defined).
