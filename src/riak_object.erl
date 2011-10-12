@@ -497,9 +497,9 @@ dejsonify_meta_value({struct, PList}) ->
     lists:foldl(fun({Key, List}, Acc) when is_list(List) ->
                         %% This reverses the {k,v},{k,v2} pattern that
                         %% is possible in multi-valued indexes.
-                        [{Key, L} || L <- List] ++ Acc;
+                        [{Key, dejsonify_meta_value(L)} || L <- List] ++ Acc;
                     ({Key, V}, Acc) ->
-                        [{Key,V}|Acc]
+                        [{Key, dejsonify_meta_value(V)}|Acc]
                 end, [], PList);
 dejsonify_meta_value(Value) -> Value.
                                
