@@ -807,6 +807,8 @@ decode_vclock_header(RD) ->
 %%      convenience for memoizing the result of a get so it can be
 %%      used in multiple places in this resource, without having to
 %%      worry about the order of executing of those places.
+ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
+    Ctx#ctx{doc={error, notfound}};
 ensure_doc(Ctx=#ctx{doc=undefined, bucket=B, key=K, client=C, r=R,
         pr=PR, basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
     Ctx#ctx{doc=C:get(B, K, [deletedvclock, {r, R}, {pr, PR},
