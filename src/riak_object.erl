@@ -444,16 +444,31 @@ jsonify_metadata_list(List) ->
                          array
                  end,
     case lists:foldl(Classifier, undefined, List) of
-        struct -> {struct, [ {if is_list(Key) -> list_to_binary(Key);
-                                 true         -> Key
-                              end,
-                              if is_list(Value) -> jsonify_metadata_list(Value);
-                                 true           -> Value
-                              end}
-                             || {Key, Value} <- List]};
+        struct -> {struct, jsonify_proplist(List)};
         string -> list_to_binary(List);
         array -> List
     end.
+
+%% @doc converts a proplist with potentially multiple values for the
+%%    same key into a JSON object with single or multi-valued keys.
+jsonify_proplist([]) -> [];
+jsonify_proplist(List) ->
+    dict:to_list(lists:foldl(fun({Key, Value}, Dict) ->
+                                     JSONKey = if is_list(Key) -> list_to_binary(Key);
+                                                  true -> Key
+                                               end,
+                                     JSONVal = if is_list(Value) -> jsonify_metadata_list(Value);
+                                                  true -> Value
+                                               end,
+                                     case dict:find(JSONKey, Dict) of
+                                         {ok, ListVal} when is_list(ListVal) ->
+                                             dict:append(JSONKey, JSONVal, Dict);
+                                         {ok, Other} ->
+                                             dict:store(JSONKey, [Other,JSONVal], Dict);
+                                         _ ->
+                                             dict:store(JSONKey, JSONVal, Dict)
+                                     end
+                             end, dict:new(), List)).
 
 dejsonify_values([], Accum) ->
     lists:reverse(Accum);
@@ -470,12 +485,24 @@ dejsonify_values([{<<"metadata">>, {struct, MD0}},
                                           is_binary(Val) ->
                                               binary_to_list(Val);
                                           true ->
-                                              Val
+                                              dejsonify_meta_value(Val)
                                       end}
                         end
                 end,
     MD = dict:from_list([Converter(KV) || KV <- MD0]),
     dejsonify_values(T, [{MD, D}|Accum]).
+
+%% @doc convert structs back into proplists
+dejsonify_meta_value({struct, PList}) ->
+    lists:foldl(fun({Key, List}, Acc) when is_list(List) ->
+                        %% This reverses the {k,v},{k,v2} pattern that
+                        %% is possible in multi-valued indexes.
+                        [{Key, dejsonify_meta_value(L)} || L <- List] ++ Acc;
+                    ({Key, V}, Acc) ->
+                        [{Key, dejsonify_meta_value(V)}|Acc]
+                end, [], PList);
+dejsonify_meta_value(Value) -> Value.
+                               
 
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
     case dict:find(clean, M) of
@@ -719,6 +746,34 @@ new_with_md_test() ->
     O = riak_object:new(<<"b">>, <<"k">>, <<"abc">>, dict:from_list([{?MD_CHARSET,"utf8"}])),
     ?assertEqual("utf8", dict:fetch(?MD_CHARSET, riak_object:get_metadata(O))).
 
+jsonify_multivalued_indexes_test() ->
+    Indexes = [{<<"test_bin">>, <<"one">>},
+               {<<"test_bin">>, <<"two">>},
+               {<<"test2_int">>, 4}],
+    ?assertEqual({struct, [{<<"test2_int">>,4},{<<"test_bin">>,[<<"one">>,<<"two">>]}]},
+                 jsonify_metadata_list(Indexes)).
+
+jsonify_round_trip_test() ->
+    Links = [{{<<"b">>,<<"k2">>},<<"tag">>},
+             {{<<"b2">>,<<"k2">>},<<"tag2">>}],
+    Indexes = [{<<"test_bin">>, <<"one">>},
+               {<<"test_bin">>, <<"two">>},
+               {<<"test2_int">>, 4}],
+    Meta = [{<<"foo">>, <<"bar">>}, {<<"baz">>, <<"quux">>}],
+    MD = dict:from_list([{?MD_USERMETA, Meta},
+                         {?MD_CTYPE, "application/json"},
+                         {?MD_INDEX, Indexes},
+                         {?MD_LINKS, Links}]),
+    O = riak_object:new(<<"b">>, <<"k">>, <<"{\"a\":1}">>, MD),
+    O2 = from_json(to_json(O)),
+    ?assertEqual(bucket(O), bucket(O2)),
+    ?assertEqual(key(O), key(O2)),
+    ?assert(vclock:equal(vclock(O), vclock(O2))),
+    ?assertEqual(lists:sort(Meta), lists:sort(dict:fetch(?MD_USERMETA, get_metadata(O2)))),
+    ?assertEqual(Links, dict:fetch(?MD_LINKS, get_metadata(O2))),
+    ?assertEqual(lists:sort(Indexes), lists:sort(index_data(O2))),
+    ?assertEqual(get_contents(O), get_contents(O2)).
+
 check_most_recent({V1, T1, D1}, {V2, T2, D2}) ->
     MD1 = dict:store(<<"X-Riak-Last-Modified">>, T1, D1),
     MD2 = dict:store(<<"X-Riak-Last-Modified">>, T2, D2),
@@ -735,6 +790,7 @@ check_most_recent({V1, T1, D1}, {V2, T2, D2}) ->
     ?assertEqual(C3, C4),
 
     C3#r_content.value.
+    
 
 determinstic_most_recent_test() ->
     D = calendar:datetime_to_gregorian_seconds(
