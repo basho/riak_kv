@@ -40,7 +40,7 @@ backup(EntryNode, BaseFilename, Mode) ->
     ensure_connected(EntryNode),
 
     % Get a list of nodes...
-    {ok, Ring} = rpc:call(EntryNode, riak_core_ring_manager, get_my_ring, []),
+    {ok, Ring} = rpc:call(EntryNode, riak_core_ring_manager, get_raw_ring, []),
     Members = riak_core_ring:all_members(Ring),
 
     FileName = 
@@ -177,7 +177,7 @@ ensure_connected(Node) ->
 %% throw exception on failure.
 ensure_synchronized(Ring, Members) ->
     F = fun(Node) ->
-        {ok, Ring2} = rpc:call(Node, riak_core_ring_manager, get_my_ring, []),
+        {ok, Ring2} = rpc:call(Node, riak_core_ring_manager, get_raw_ring, []),
         riak_core_ring:equal_rings(Ring, Ring2)
     end,
     case lists:all(F, Members) of
