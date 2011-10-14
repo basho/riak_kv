@@ -540,7 +540,8 @@ drop_data_cleanup(DataRoot, Partition, DataDir) ->
                     [data_directory_cleanup(filename:join(DataRoot, Dir)) ||
                         Dir <- Dirs,
                         Dir /= lists:flatten(DataDir),
-                        string:left(Dir, length(PartitionStr) + 1) =:= (PartitionStr ++ "-")];
+                        (Dir =:= PartitionStr) or
+                        (string:left(Dir, length(PartitionStr) + 1) =:= (PartitionStr ++ "-"))];
                 {error, _} ->
                     ignore
             end
