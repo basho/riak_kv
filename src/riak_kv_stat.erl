@@ -44,31 +44,39 @@
 %%          in the last minute.
 %%</dd><dd> update(vnode_put)
 %%
-%%</dd><dt> vnode_index_read
+%%</dd><dt> vnode_index_reads
 %%</dt><dd> The number of index reads handled by all vnodes on this node.
 %%          Each query counts as an index read.
-%%</dd><dd> update(index_read)
+%%</dd><dd> update(index_reads)
 %%
-%%</dd><dt> vnode_index_write
+%%</dd><dt> vnode_index_writes
 %%</dt><dd> The number of batched writes handled by all vnodes on this node.
-%%</dd><dd> update({index_write, Postings})
+%%</dd><dd> update({index_writes, Postings})
 %%
-%%</dd><dt> vnode_index_write_postings
+%%</dd><dt> vnode_index_writes_postings
 %%</dt><dd> The number of postings written to all vnodes on this node.
-%%</dd><dd> update({index_write, Postings})
+%%</dd><dd> update({index_writes, Postings})
 %%
-%%</dd><dt> vnode_index_delete
+%%</dd><dt> vnode_index_deletes
 %%</dt><dd> The number of batched writes handled by all vnodes on this node.
-%%</dd><dd> update({index_delete, Postings})
+%%</dd><dd> update({index_deletes, Postings})
 %%
-%%</dd><dt> vnode_index_delete_postings
+%%</dd><dt> vnode_index_deletes_postings
 %%</dt><dd> The number of postings written to all vnodes on this node.
-%%</dd><dd> update({index_delete, Postings})
+%%</dd><dd> update({index_deletes, Postings})
 %%
 %%</dd><dt> node_gets
 %%</dt><dd> Number of gets coordinated by this node in the last
 %%          minute.
 %%</dd><dd> update({get_fsm_time, Microseconds})
+%%
+%%</dd><dt> node_get_fsm_siblings
+%%</dt><dd> Stats about number of siblings per object in the last minute.
+%%</dd><dd> update({node_get_fsm_siblings, NumSiblings})
+%%
+%%</dd><dt> node_get_fsm_objsize
+%%</dt><dd> Stats about object size over the last minute.
+%%</dd><dd> update({node_get_fsm_objsize, ObjSize)
 %%
 %%</dd><dt> node_get_fsm_time_mean
 %%</dt><dd> Mean time, in microseconds, between when a riak_kv_get_fsm is
@@ -169,6 +177,10 @@
 
 -behaviour(gen_server2).
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 %% API
 -export([start_link/0, get_stats/0, get_stats/1, update/1]).
 
@@ -183,11 +195,13 @@
                vnode_index_deletes, vnode_index_deletes_total,
                vnode_index_deletes_postings, vnode_index_deletes_postings_total,
                node_gets_total, node_puts_total,
+               node_get_fsm_siblings, node_get_fsm_objsize,
                get_fsm_time,put_fsm_time,
                pbc_connects,pbc_connects_total,pbc_active,
                read_repairs, read_repairs_total,
                coord_redirs, coord_redirs_total, mapper_count, 
                get_meter, put_meter, legacy}).
+
 
 %% @spec start_link() -> {ok,Pid} | ignore | {error,Error}
 %% @doc Start the server.  Also start the os_mon application, if it's
@@ -252,6 +266,7 @@ v2_init() ->
                 vnode_index_deletes_postings_total=0,
                 node_gets_total=0,
                 node_puts_total=0,
+                %% REMEMBER TO ADD LOGIC FOR node_get_fsm_siblings and node_get_fsm_objsize
                 get_fsm_time=make_histogram(),
                 put_fsm_time=make_histogram(),
                 pbc_connects=make_meter(),
@@ -284,6 +299,8 @@ legacy_init() ->
                 vnode_index_deletes_postings_total=0,
                 node_gets_total=0,
                 node_puts_total=0,
+                node_get_fsm_siblings=slide:fresh(),
+                node_get_fsm_objsize=slide:fresh(),
                 get_fsm_time=slide:fresh(),
                 put_fsm_time=slide:fresh(),
                 pbc_connects=spiraltime:fresh(),
@@ -332,7 +349,106 @@ terminate(_Reason, _State) ->
     ok.
 
 %% @private
-code_change(_OldVsn, State, _Extra) ->
+code_change({up, siblings_and_objsize_stats},
+            {state,
+             VNodeGets, VNodePuts,
+             VNodeGetsTotal, VNodePutsTotal,
+             VNodeIndexReads, VNodeIndexReadsTotal,
+             VNodeIndexWrites, VNodeIndexWritesTotal,
+             VNodeIndexWritesPostings, VNodeIndexWritesPostingsTotal,
+             VNodeIndexDeletes, VNodeIndexDeletesTotal,
+             VNodeIndexDeletesPostings, VNodeIndexDeletesPostingsTotal,
+             NodeGetsTotal, NodePutsTotal,
+             GetFSMTime, PutFSMTime,
+             PBCConnects, PBCConnectsTotal, PBCActive,
+             ReadRepairs, ReadRepairsTotal,
+             CoordRedirs, CoordRedirsTotal, MapperCount,
+             GetMeter, PutMeter, Legacy},
+            _Extra) ->
+
+    %% Upgrade from the previous version of riak_kv_stat.
+    io:format("~nAdding siblings and objsize stats to riak_kv_stat process.~n~n"),
+    {ok, #state{
+       vnode_gets=VNodeGets,
+       vnode_gets_total=VNodeGetsTotal,
+       vnode_puts=VNodePuts,
+       vnode_puts_total=VNodePutsTotal,
+       vnode_index_reads=VNodeIndexReads,
+       vnode_index_reads_total=VNodeIndexReadsTotal,
+       vnode_index_writes=VNodeIndexWrites,
+       vnode_index_writes_total=VNodeIndexWritesTotal,
+       vnode_index_writes_postings=VNodeIndexWritesPostings,
+       vnode_index_writes_postings_total=VNodeIndexWritesPostingsTotal,
+       vnode_index_deletes=VNodeIndexDeletes,
+       vnode_index_deletes_total=VNodeIndexDeletesTotal,
+       vnode_index_deletes_postings=VNodeIndexDeletesPostings,
+       vnode_index_deletes_postings_total=VNodeIndexDeletesPostingsTotal,
+       node_gets_total=NodeGetsTotal,
+       node_puts_total=NodePutsTotal,
+       node_get_fsm_siblings=slide:fresh(),
+       node_get_fsm_objsize=slide:fresh(),
+       get_fsm_time=GetFSMTime,
+       put_fsm_time=PutFSMTime,
+       pbc_connects=PBCConnects,
+       pbc_connects_total=PBCConnectsTotal,
+       pbc_active=PBCActive,
+       read_repairs=ReadRepairs,
+       read_repairs_total=ReadRepairsTotal,
+       coord_redirs=CoordRedirs,
+       coord_redirs_total=CoordRedirsTotal,
+       mapper_count=MapperCount,
+       get_meter=GetMeter,
+       put_meter=PutMeter,
+       legacy=Legacy}};
+code_change({down, siblings_and_objsize_stats},
+            State = #state {}, _Extra) ->
+    io:format("~nCODE CHANGE: Removing siblings and objsize stats from riak_kv_stat process.~n~n"),
+    #state {
+            vnode_gets=VNodeGets,
+            vnode_gets_total=VNodeGetsTotal,
+            vnode_puts=VNodePuts,
+            vnode_puts_total=VNodePutsTotal,
+            vnode_index_reads=VNodeIndexReads,
+            vnode_index_reads_total=VNodeIndexReadsTotal,
+            vnode_index_writes=VNodeIndexWrites,
+            vnode_index_writes_total=VNodeIndexWritesTotal,
+            vnode_index_writes_postings=VNodeIndexWritesPostings,
+            vnode_index_writes_postings_total=VNodeIndexWritesPostingsTotal,
+            vnode_index_deletes=VNodeIndexDeletes,
+            vnode_index_deletes_total=VNodeIndexDeletesTotal,
+            vnode_index_deletes_postings=VNodeIndexDeletesPostings,
+            vnode_index_deletes_postings_total=VNodeIndexDeletesPostingsTotal,
+            node_gets_total=NodeGetsTotal,
+            node_puts_total=NodePutsTotal,
+            get_fsm_time=GetFSMTime,
+            put_fsm_time=PutFSMTime,
+            pbc_connects=PBCConnects,
+            pbc_connects_total=PBCConnectsTotal,
+            pbc_active=PBCActive,
+            read_repairs=ReadRepairs,
+            read_repairs_total=ReadRepairsTotal,
+            coord_redirs=CoordRedirs,
+            coord_redirs_total=CoordRedirsTotal,
+            mapper_count=MapperCount,
+            get_meter=GetMeter,
+            put_meter=PutMeter,
+            legacy=Legacy} = State,
+    {ok, {state,
+          VNodeGets, VNodePuts,
+          VNodeGetsTotal, VNodePutsTotal,
+          VNodeIndexReads, VNodeIndexReadsTotal,
+          VNodeIndexWrites, VNodeIndexWritesTotal,
+          VNodeIndexWritesPostings, VNodeIndexWritesPostingsTotal,
+          VNodeIndexDeletes, VNodeIndexDeletesTotal,
+          VNodeIndexDeletesPostings, VNodeIndexDeletesPostingsTotal,
+          NodeGetsTotal, NodePutsTotal,
+          GetFSMTime, PutFSMTime,
+          PBCConnects, PBCConnectsTotal, PBCActive,
+          ReadRepairs, ReadRepairsTotal,
+          CoordRedirs, CoordRedirsTotal, MapperCount,
+          GetMeter, PutMeter, Legacy}};
+code_change(Version, State, _Extra) ->
+    lager:error("Unknown code_change/3 version: ~p~n", [Version]),
     {ok, State}.
 
 %%--------------------------------------------------------------------
@@ -358,6 +474,13 @@ update({vnode_index_write, Postings}, Moment, State=#state{vnode_index_writes_to
 update({vnode_index_delete, Postings}, Moment, State=#state{vnode_index_deletes_total=VID, vnode_index_deletes_postings_total=VIDP}) ->
     NewState = spiral_incr(#state.vnode_index_deletes, Moment, State#state{vnode_index_deletes_total=VID+1}),
     spiral_incr(#state.vnode_index_deletes_postings, Postings, Moment, NewState#state{vnode_index_deletes_postings_total=VIDP+Postings});
+update({get_fsm, _Bucket, Microsecs, NumSiblings, ObjSize}, Moment, State) ->
+    NGT = State#state.node_gets_total,
+    NewState1 = State#state { node_gets_total=NGT+1 },
+    NewState2 = slide_incr(#state.get_fsm_time, Microsecs, Moment, NewState1),
+    NewState3 = slide_incr(#state.node_get_fsm_siblings, NumSiblings, Moment, NewState2),
+    NewState4 = slide_incr(#state.node_get_fsm_objsize, ObjSize, Moment, NewState3),
+    NewState4;
 update({get_fsm_time, Microsecs}, Moment, State=#state{node_gets_total=NGT}) ->
     slide_incr(#state.get_fsm_time, Microsecs, Moment, State#state{node_gets_total=NGT+1});
 update({put_fsm_time, Microsecs}, Moment, State=#state{node_puts_total=NPT}) ->
@@ -409,6 +532,8 @@ update1({vnode_index_delete, Postings}, _, State) ->
     update_metric(#state.vnode_index_deletes_postings,
                   Postings, 
                   update_metric(#state.vnode_index_deletes, 1, State));
+update1({get_fsm, _Bucket, Microsecs, _NumSiblings, _ObjSize}, Moment, State) ->
+    update1({get_fsm_time, Microsecs}, Moment, State);
 update1({get_fsm_time, Microsecs}, _, State) ->
     update_metric(#state.get_meter, 1, 
                   update_metric(#state.get_fsm_time, Microsecs, State));
@@ -498,6 +623,10 @@ slide_minute(Moment, Elt, State) ->
     {Count, Mean, Nines} = slide:mean_and_nines(element(Elt, State), Moment),
     {Count, Mean, Nines}.
 
+slide_sum(Moment, Elt, State) ->
+    {_Count, Total} = slide:sum(element(Elt, State), Moment),
+    Total.
+
 metric_stats({meter, M}) ->
     basho_metrics_nifs:meter_stats(M);
 metric_stats({histogram, H}) ->
@@ -564,6 +693,12 @@ node_stats(Moment, State=#state{node_gets_total=NGT,
         slide_minute(Moment, #state.get_fsm_time, State),
     {Puts, PutMean, {PutMedian, PutNF, PutNN, PutH}} =
         slide_minute(Moment, #state.put_fsm_time, State),
+    {_Siblings, SiblingsMean, {SiblingsMedian, SiblingsNF, SiblingsNN, SiblingsH}} =
+        slide_minute(Moment, #state.node_get_fsm_siblings, State),
+    {_ObjSize, ObjSizeMean, {ObjSizeMedian, ObjSizeNF, ObjSizeNN, ObjSizeH}} =
+        slide_minute(Moment, #state.node_get_fsm_objsize, State),
+    SiblingsTotal = slide_sum(Moment, #state.node_get_fsm_siblings, State),
+    ObjSizeTotal  = slide_sum(Moment, #state.node_get_fsm_objsize, State),
     [{node_gets, Gets},
      {node_gets_total, NGT},
      {node_get_fsm_time_mean, GetMean},
@@ -578,6 +713,18 @@ node_stats(Moment, State=#state{node_gets_total=NGT,
      {node_put_fsm_time_95, PutNF},
      {node_put_fsm_time_99, PutNN},
      {node_put_fsm_time_100, PutH},
+     {node_get_fsm_siblings_total, SiblingsTotal},
+     {node_get_fsm_siblings_mean, SiblingsMean},
+     {node_get_fsm_siblings_median, SiblingsMedian},
+     {node_get_fsm_siblings_95, SiblingsNF},
+     {node_get_fsm_siblings_99, SiblingsNN},
+     {node_get_fsm_siblings_100, SiblingsH},
+     {node_get_fsm_objsize_total, ObjSizeTotal},
+     {node_get_fsm_objsize_mean, ObjSizeMean},
+     {node_get_fsm_objsize_median, ObjSizeMedian},
+     {node_get_fsm_objsize_95, ObjSizeNF},
+     {node_get_fsm_objsize_99, ObjSizeNN},
+     {node_get_fsm_objsize_100, ObjSizeH},
      {read_repairs_total, RRT},
      {coord_redirs_total, CRT}];
 node_stats(_, State=#state{legacy=false}) ->
@@ -699,3 +846,58 @@ pbc_stats(_, State=#state{pbc_connects_total=NCT,
 
 remove_slide_private_dirs() ->
     os:cmd("rm -rf " ++ slide:private_dir()).
+
+-ifdef(TEST).
+
+%% Test that we can change from current state to old state and back
+%% without any problems.
+code_change_test() ->
+    State = #state{
+      vnode_gets=1,
+      vnode_puts=2,
+      vnode_gets_total=3,
+      vnode_puts_total=4,
+      vnode_index_reads=5,
+      vnode_index_reads_total=6,
+      vnode_index_writes=7,
+      vnode_index_writes_total=8,
+      vnode_index_writes_postings=9,
+      vnode_index_writes_postings_total=10,
+      vnode_index_deletes=11,
+      vnode_index_deletes_total=12,
+      vnode_index_deletes_postings=13,
+      vnode_index_deletes_postings_total=14,
+      node_gets_total=15,
+      node_puts_total=16,
+      node_get_fsm_siblings=slide:fresh(),
+      node_get_fsm_objsize=slide:fresh(),
+      get_fsm_time=19,
+      put_fsm_time=20,
+      pbc_connects=21,
+      pbc_connects_total=22,
+      pbc_active=23,
+      read_repairs=24,
+      read_repairs_total=25,
+      coord_redirs=26,
+      coord_redirs_total=27,
+      mapper_count=28,
+      get_meter=29,
+      put_meter=30,
+      legacy=31},
+
+    %% Check that we can upgrade and downgrade the State multiple
+    %% times and still get the same result.
+    {ok, NewState1} = code_change({down, foo}, State, ignored),
+    {ok, NewState2} = code_change(foo, NewState1, ignore),
+    {ok, NewState3} = code_change({down, foo}, NewState2, ignored),
+    {ok, NewState4} = code_change(foo, NewState3, ignore),
+
+    %% The `fsm_siblings` and `fsm_objsize` fields are reset to
+    %% `slide:fresh()` when we upgrade, so ignore those because they
+    %% will be different.
+    ?assertEqual(
+       State#state     { node_get_fsm_siblings=undefined, node_get_fsm_objsize=undefined },
+       NewState4#state { node_get_fsm_siblings=undefined, node_get_fsm_objsize=undefined }),
+    ok.
+
+-endif.
