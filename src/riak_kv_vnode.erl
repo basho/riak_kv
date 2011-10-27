@@ -233,11 +233,11 @@ init([Index]) ->
                     {ok, State}
             end;
         {error, Reason} ->
-            lager:error("Failed to start ~p Reason: ~p",
+            lager:error([{vnode, Index}], "Failed to start ~p Reason: ~p",
                         [Mod, Reason]),
             riak:stop("backend module failed to start.");
         {'EXIT', Reason1} ->
-            lager:error("Failed to start ~p Reason: ~p",
+            lager:error([{vnode, Index}], "Failed to start ~p Reason: ~p",
                         [Mod, Reason1]),
             riak:stop("backend module failed to start.")
     end.
@@ -541,7 +541,7 @@ delete(State=#state{idx=Index,mod=Mod, modstate=ModState}) ->
         {ok, UpdModState} ->
             ok;
         {error, Reason, UpdModState} ->
-            lager:error("Failed to drop ~p. Reason: ~p~n", [Mod, Reason]),
+            lager:error([{vnode, Index}], "Failed to drop ~p. Reason: ~p~n", [Mod, Reason]),
             ok
     end,
     {ok, State#state{modstate=UpdModState,vnodeid=undefined}}.
@@ -564,7 +564,7 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
                end,
     {ok, UpdState}.
 
-handle_exit(_Pid, Reason, State) ->
+handle_exit(_Pid, Reason, State = #state{idx=Idx}) ->
     %% A linked processes has died so the vnode
     %% process should take appropriate action here.
     %% The default behavior is to crash the vnode
@@ -572,13 +572,17 @@ handle_exit(_Pid, Reason, State) ->
     %% by riak_core_vnode_master to prevent
     %% messages from stacking up on the process message
     %% queue and never being processed.
-    lager:error("Linked process exited. Reason: ~p", [Reason]),
+    lager:error([{vnode, Idx}], "Linked process exited. Reason: ~p", [Reason]),
     {stop, linked_process_crash, State}.
 
 
 %% @private
 %% upon receipt of a client-initiated put
-do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
+do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options,
+    State = #state{idx=Idx}) ->
+    lager:debug([{reqid, ReqID}, {bkey, BKey},{vnode, Idx}],
+        "Put request ~p for ~p on vnode ~p",
+        [ReqID, BKey, Idx]),
     case proplists:get_value(bucket_props, Options) of
         undefined ->
             {ok,Ring} = riak_core_ring_manager:get_my_ring(),
@@ -801,12 +805,18 @@ put_merge(true, false, CurObj, UpdObj, VId, StartTime) ->
 %% @private
 do_get(_Sender, BKey, ReqID,
        State=#state{idx=Idx,mod=Mod,modstate=ModState}) ->
+    lager:debug([{reqid, ReqID}, {bkey, BKey},{vnode, Idx}],
+        "Get request ~p for ~p on vnode ~p",
+        [ReqID, BKey, Idx]),
     Retval = do_get_term(BKey, Mod, ModState),
     riak_kv_stat:update(vnode_get),
     {reply, {r, Retval, Idx, ReqID}, State}.
 
 do_mget({fsm, Sender}, BKeys, ReqId, State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
     F = fun(BKey) ->
+            lager:debug([{reqid, ReqId}, {bkey, BKey},{vnode, Idx}],
+                "Mget request ~p for ~p on vnode ~p",
+                [ReqId, BKey, Idx]),
                 R = do_get_term(BKey, Mod, ModState),
                 case R of
                     {ok, Obj} ->

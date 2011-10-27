@@ -171,9 +171,13 @@ init({test, Args, StateProps}) ->
 %% @private
 prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                      options = Options}) ->
+    {raw, ReqId, _Pid} = From,
+    BKey = {riak_object:bucket(RObj), riak_object:key(RObj)},
+    put(bkey, BKey),
+    lager:debug([{reqid, ReqId},{bkey,BKey}], "Preparing put request ~p for ~p",
+        [ReqId, BKey]),
     {ok,Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj), Ring),
-    BKey = {riak_object:bucket(RObj), riak_object:key(RObj)},
     DocIdx = riak_core_util:chash_key(BKey),
     N = proplists:get_value(n_val,BucketProps),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
@@ -195,8 +199,9 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                     riak_kv_stat:update(coord_redir),
                     {stop, normal, StateData0};
                 {error, Reason} ->
-                    lager:error("Unable to forward put for ~p to ~p - ~p\n",
-                                [BKey, CoordNode, Reason]),
+                    lager:error([{reqid,ReqId},{bkey,BKey}],
+                            "Unable to forward put for ~p to ~p - ~p\n",
+                            [BKey, CoordNode, Reason]),
                     process_reply({error, {coord_handoff_failed, Reason}}, StateData0)
             end;
         _ ->
@@ -223,7 +228,10 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
 validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                       options = Options0,
                                       n=N, bucket_props = BucketProps,
+                                      bkey=BKey,
                                       preflist2 = Preflist2}) ->
+    lager:debug([{reqid, ReqId},{bkey,BKey}], "Validating put request ~p for ~p",
+        [ReqId, BKey]),
     Timeout = get_option(timeout, Options0, ?DEFAULT_TIMEOUT),
     PW0 = get_option(pw, Options0, default),
     W0 = get_option(w, Options0, default),
@@ -293,14 +301,28 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
 %% Run the precommit hooks
 precommit(timeout, State = #state{precommit = []}) ->
     execute(State);
-precommit(timeout, State = #state{precommit = [Hook | Rest], robj = RObj}) ->
+precommit(timeout, State = #state{precommit = [Hook | Rest], bkey=BKey,
+        req_id=ReqId, robj = RObj}) ->
+    lager:debug([{reqid, ReqId},{bkey,BKey}],
+        "Running precommit hook ~s:~s on get request ~p for ~p",
+        [proplists:get_value(<<"mod">>, element(2, Hook)),
+            proplists:get_value(<<"fun">>, element(2, Hook)), ReqId, BKey]),
     Result = decode_precommit(invoke_hook(Hook, RObj)),
     case Result of
         fail ->
+            lager:debug([{reqid, ReqId},{bkey,BKey}],
+                "Precommit hook failed on get request ~p for ~p",
+                [ReqId, BKey]),
             process_reply({error, precommit_fail}, State);
         {fail, Reason} ->
+            lager:debug([{reqid, ReqId},{bkey,BKey}],
+                "Precommit hook failed on get request ~p for ~p: ~p",
+                [ReqId, BKey, Reason]),
             process_reply({error, {precommit_fail, Reason}}, State);
         Result ->
+            lager:debug([{reqid, ReqId},{bkey,BKey}],
+                "Precommit hook succeeded on get request ~p for ~p",
+                [ReqId, BKey]),
             {next_state, precommit, State#state{robj = riak_object:apply_updates(Result),
                                                 precommit = Rest}, 0}
     end.
@@ -320,9 +342,12 @@ execute(State=#state{coord_pl_entry = CPL}) ->
 %% N.B. Not actually a state - here in the source to make reading the flow easier
 execute_local(StateData=#state{robj=RObj, req_id = ReqId,
                                 timeout=Timeout, bkey=BKey,
-                                coord_pl_entry = {_Index, _Node} = CoordPLEntry,
+                                coord_pl_entry = {Index, _Node} = CoordPLEntry,
                                 vnode_options=VnodeOptions,
                                 starttime = StartTime}) ->
+    lager:debug([{reqid, ReqId},{vnode,Index},{bkey,BKey}],
+        "Coordinating put request ~p on vnode ~p for ~p",
+        [ReqId, Index, BKey]),
     StateData1 = add_timing(execute_local, StateData),
     TRef = schedule_timeout(Timeout),
     riak_kv_vnode:coord_put(CoordPLEntry, BKey, RObj, ReqId, StartTime, VnodeOptions),
@@ -334,7 +359,10 @@ execute_local(StateData=#state{robj=RObj, req_id = ReqId,
 %% @private
 waiting_local_vnode(request_timeout, StateData) ->
     process_reply({error,timeout}, StateData);
-waiting_local_vnode(Result, StateData = #state{putcore = PutCore}) ->
+waiting_local_vnode(Result, StateData = #state{putcore = PutCore, bkey=BKey,
+        req_id=ReqId}) ->
+    lager:debug([{reqid, ReqId},{bkey,BKey}], "Local put request ~p for ~p",
+        [ReqId, BKey]),
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
     case Result of
         {fail, _Idx, _ReqId} ->
@@ -365,6 +393,8 @@ execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
     StateData1 = add_timing(execute_remote, StateData),
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2,
                              IndexNode /= CoordPLEntry],
+    lager:debug([{reqid, ReqId},{bkey,BKey}], "Remote put request ~p for ~p",
+        [ReqId, BKey]),
     riak_kv_vnode:put(Preflist, BKey, RObj, ReqId, StartTime, VnodeOptions),
     case riak_kv_put_core:enough(PutCore) of
         true ->
@@ -376,12 +406,20 @@ execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
 
 
 %% @private
-waiting_remote_vnode(request_timeout, StateData) ->
+waiting_remote_vnode(request_timeout, StateData =
+    #state{req_id=ReqId, bkey=BKey}) ->
+    lager:debug([{reqid, ReqId},{bkey,BKey}],
+        "Request ~p timed out waiting for remote put response for ~p",
+        [ReqId, BKey]),
     process_reply({error,timeout}, StateData);
-waiting_remote_vnode(Result, StateData = #state{putcore = PutCore}) ->
+waiting_remote_vnode(Result, StateData = #state{putcore = PutCore,
+        req_id=ReqId, bkey=BKey}) ->
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
     case riak_kv_put_core:enough(UpdPutCore1) of
         true ->
+            lager:debug([{reqid, ReqId},{bkey,BKey}],
+                "Enough responses received for request ~p for ~p",
+                [ReqId, BKey]),
             {Reply, UpdPutCore2} = riak_kv_put_core:response(UpdPutCore1),
             process_reply(Reply, StateData#state{putcore = UpdPutCore2});
         false ->
@@ -392,17 +430,26 @@ waiting_remote_vnode(Result, StateData = #state{putcore = PutCore}) ->
 postcommit(timeout, StateData = #state{postcommit = []}) ->
     new_state_timeout(finish, StateData);
 postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
-                                       putcore = PutCore}) ->
+                                       putcore = PutCore, req_id=ReqId,
+                                       bkey=BKey}) ->
     %% Process the next hook - gives sys:get_status messages a chance if hooks
     %% take a long time.  No checking error returns for postcommit hooks.
+    lager:debug([{reqid, ReqId},{bkey,BKey}],
+        "Running postcommit hook ~s:~s on get request ~p for ~p",
+        [proplists:get_value(<<"mod">>, element(2, Hook)),
+            proplists:get_value(<<"fun">>, element(2, Hook)), ReqId, BKey]),
     {ReplyObj, UpdPutCore} =  riak_kv_put_core:final(PutCore),
     invoke_hook(Hook, ReplyObj),
     {next_state, postcommit, StateData#state{postcommit = Rest,
                                              putcore = UpdPutCore}, 0};
 postcommit(request_timeout, StateData) -> % still process hooks even if request timed out
     {next_state, postcommit, StateData, 0};
-postcommit(Reply, StateData = #state{putcore = PutCore}) ->
+postcommit(Reply, StateData = #state{putcore = PutCore, req_id=ReqId,
+        bkey=BKey}) ->
     %% late responses - add to state.  *Does not* recompute finalobj
+    lager:debug([{reqid, ReqId},{bkey,BKey}],
+        "Request ~p got late remote put response from vnode for ~p",
+        [ReqId, BKey]),
     UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
     {next_state, postcommit, StateData#state{putcore = UpdPutCore}, 0}.
 
@@ -417,8 +464,11 @@ finish(timeout, StateData = #state{timing = Timing, reply = Reply}) ->
             riak_kv_stat:update({put_fsm_time, Duration})
     end,
     {stop, normal, StateData};
-finish(Reply, StateData = #state{putcore = PutCore}) ->
+finish(Reply, StateData = #state{putcore = PutCore, req_id=ReqId, bkey=BKey}) ->
     %% late responses - add to state.  *Does not* recompute finalobj
+    lager:debug([{reqid, ReqId},{bkey,BKey}],
+        "Request ~p got late remote put response from vnode for ~p",
+        [ReqId, BKey]),
     UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
     {next_state, finish, StateData#state{putcore = UpdPutCore}, 0}.
 

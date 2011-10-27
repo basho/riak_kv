@@ -234,10 +234,27 @@ get(Bucket, Key) ->
 get(Bucket, Key, Options) when is_list(Options) ->
     Me = self(),
     ReqId = mk_reqid(),
+    case proplists:get_value(trace, Options, false) of
+        true ->
+            {ok, Trace} = lager:trace_file("log/request.log", [{reqid, ReqId}]);
+        File when is_list(File) ->
+            {ok, Trace} = lager:trace_file(File, [{reqid, ReqId}]);
+        _ ->
+            Trace = undefined,
+            ok
+    end,
     riak_kv_get_fsm_sup:start_get_fsm(Node, [{raw, ReqId, Me}, Bucket, Key, Options]),
     %% TODO: Investigate adding a monitor here and eliminating the timeout.
     Timeout = recv_timeout(Options),
-    wait_for_reqid(ReqId, Timeout);
+    Res = wait_for_reqid(ReqId, Timeout),
+    %% remove the trace
+    case Trace of
+        undefined ->
+            Res;
+        TraceExpr ->
+            lager:stop_trace(TraceExpr),
+            Res
+    end;
 
 %% @spec get(riak_object:bucket(), riak_object:key(), R :: integer()) ->
 %%       {ok, riak_object:riak_object()} |
@@ -294,6 +311,15 @@ put(RObj) -> THIS:put(RObj, []).
 put(RObj, Options) when is_list(Options) ->
     Me = self(),
     ReqId = mk_reqid(),
+    case proplists:get_value(trace, Options, false) of
+        true ->
+            {ok, Trace} = lager:trace_file("log/request.log", [{reqid, ReqId}]);
+        File when is_list(File) ->
+            {ok, Trace} = lager:trace_file(File, [{reqid, ReqId}]);
+        _ ->
+            Trace = undefined,
+            ok
+    end,
     case ClientId of
         undefined ->
             riak_kv_put_fsm_sup:start_put_fsm(Node, [{raw, ReqId, Me}, RObj, Options]);
@@ -303,7 +329,16 @@ put(RObj, Options) when is_list(Options) ->
     end,
     %% TODO: Investigate adding a monitor here and eliminating the timeout.
     Timeout = recv_timeout(Options),
-    wait_for_reqid(ReqId, Timeout);
+    Res = wait_for_reqid(ReqId, Timeout),
+    %% remove the trace
+    case Trace of
+        undefined ->
+            Res;
+        TraceExpr ->
+            lager:stop_trace(TraceExpr),
+            Res
+    end;
+
 
 %% @spec put(RObj :: riak_object:riak_object(), W :: integer()) ->
 %%        ok |

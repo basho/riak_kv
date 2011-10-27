@@ -66,20 +66,32 @@ init(N, W, DW, WFailThreshold, DWFailThreshold, AllowMult, ReturnBody) ->
    
 %% Add a result from the vnode
 -spec add_result(vput_result(), putcore()) -> putcore().
-add_result({w, Idx, _ReqId}, PutCore = #putcore{results = Results,
+add_result({w, Idx, ReqId}, PutCore = #putcore{results = Results,
                                                 num_w = NumW}) ->
+    lager:debug([{reqid, ReqId},{vnode,Idx},{bkey,get(bkey)}],
+        "Completed W put request ~p on vnode ~p for ~p",
+        [ReqId, Idx, get(bkey)]),
     PutCore#putcore{results = [{Idx, w} | Results],
                     num_w = NumW + 1};
-add_result({dw, Idx, _ReqId}, PutCore = #putcore{results = Results,
+add_result({dw, Idx, ReqId}, PutCore = #putcore{results = Results,
                                                  num_dw = NumDW}) ->
+    lager:debug([{reqid, ReqId},{vnode,Idx},{bkey,get(bkey)}],
+        "Completed DW put request ~p on vnode ~p for ~p",
+        [ReqId, Idx, get(bkey)]),
     PutCore#putcore{results = [{Idx, {dw, undefined}} | Results], 
                     num_dw = NumDW + 1};
-add_result({dw, Idx, ResObj, _ReqId}, PutCore = #putcore{results = Results,
+add_result({dw, Idx, ResObj, ReqId}, PutCore = #putcore{results = Results,
                                                          num_dw = NumDW}) ->
+     lager:debug([{reqid, ReqId},{vnode,Idx},{bkey,get(bkey)}],
+            "Completed DW put request ~p on vnode ~p for ~p",
+            [ReqId, Idx, get(bkey)]),
     PutCore#putcore{results = [{Idx, {dw, ResObj}} | Results],
                     num_dw = NumDW + 1};
-add_result({fail, Idx, _ReqId}, PutCore = #putcore{results = Results,
+add_result({fail, Idx, ReqId}, PutCore = #putcore{results = Results,
                                                    num_fail = NumFail}) ->
+    lager:debug([{reqid, ReqId},{vnode,Idx},{bkey,get(bkey)}],
+        "Request ~p failed to do put on vnode ~p for ~p",
+        [ReqId, Idx, get(bkey)]),
     PutCore#putcore{results = [{Idx, {error, undefined}} | Results],
                     num_fail = NumFail + 1};
 add_result(_Other, PutCore = #putcore{num_fail = NumFail}) ->
