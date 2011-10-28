@@ -371,6 +371,10 @@ update({vnode_index_write, Postings}, Moment, State=#state{vnode_index_writes_to
 update({vnode_index_delete, Postings}, Moment, State=#state{vnode_index_deletes_total=VID, vnode_index_deletes_postings_total=VIDP}) ->
     NewState = spiral_incr(#state.vnode_index_deletes, Moment, State#state{vnode_index_deletes_total=VID+1}),
     spiral_incr(#state.vnode_index_deletes_postings, Postings, Moment, NewState#state{vnode_index_deletes_postings_total=VIDP+Postings});
+update({get_fsm, _Bucket, Microsecs, undefined, undefined}, Moment, State) ->
+    NGT = State#state.node_gets_total,
+    NewState = State#state { node_gets_total=NGT+1 },
+    slide_incr(#state.get_fsm_time, Microsecs, Moment, NewState);
 update({get_fsm, _Bucket, Microsecs, NumSiblings, ObjSize}, Moment, State) ->
     NGT = State#state.node_gets_total,
     NewState1 = State#state { node_gets_total=NGT+1 },
@@ -378,8 +382,8 @@ update({get_fsm, _Bucket, Microsecs, NumSiblings, ObjSize}, Moment, State) ->
     NewState3 = slide_incr(#state.node_get_fsm_siblings, NumSiblings, Moment, NewState2),
     NewState4 = slide_incr(#state.node_get_fsm_objsize, ObjSize, Moment, NewState3),
     NewState4;
-update({get_fsm_time, Microsecs}, Moment, State=#state{node_gets_total=NGT}) ->
-    slide_incr(#state.get_fsm_time, Microsecs, Moment, State#state{node_gets_total=NGT+1});
+update({get_fsm_time, Microsecs}, Moment, State) ->
+    update({get_fsm, undefined, Microsecs, undefined, undefined}, Moment, State);
 update({put_fsm_time, Microsecs}, Moment, State=#state{node_puts_total=NPT}) ->
     slide_incr(#state.put_fsm_time, Microsecs, Moment, State#state{node_puts_total=NPT+1});
 update(pbc_connect, Moment, State=#state{pbc_connects_total=NCT, pbc_active=Active}) ->

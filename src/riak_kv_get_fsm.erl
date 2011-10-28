@@ -357,7 +357,7 @@ update_stats({ok, Obj}, #state{get_usecs = GetUsecs}) ->
         lists:sum([size(term_to_binary(MD)) + size(Value) || {MD, Value} <- Contents]),
     riak_kv_stat:update({get_fsm, undefined, GetUsecs, NumSiblings, ObjSize});
 update_stats(_, #state{get_usecs = GetUsecs}) ->
-    riak_kv_stat:update({get_fsm, undefined, GetUsecs, 0, 0}).
+    riak_kv_stat:update({get_fsm, undefined, GetUsecs, undefined, undefined}).
 
 client_info(true, StateData, Acc) ->
     client_info(details(), StateData, Acc);
