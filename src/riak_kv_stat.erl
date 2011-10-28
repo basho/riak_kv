@@ -177,10 +177,6 @@
 
 -behaviour(gen_server2).
 
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
--endif.
-
 %% API
 -export([start_link/0, get_stats/0, get_stats/1, update/1]).
 
@@ -747,58 +743,3 @@ pbc_stats(_, State=#state{pbc_connects_total=NCT,
 
 remove_slide_private_dirs() ->
     os:cmd("rm -rf " ++ slide:private_dir()).
-
--ifdef(TEST).
-
-%% Test that we can change from current state to old state and back
-%% without any problems.
-code_change_test() ->
-    State = #state{
-      vnode_gets=1,
-      vnode_puts=2,
-      vnode_gets_total=3,
-      vnode_puts_total=4,
-      vnode_index_reads=5,
-      vnode_index_reads_total=6,
-      vnode_index_writes=7,
-      vnode_index_writes_total=8,
-      vnode_index_writes_postings=9,
-      vnode_index_writes_postings_total=10,
-      vnode_index_deletes=11,
-      vnode_index_deletes_total=12,
-      vnode_index_deletes_postings=13,
-      vnode_index_deletes_postings_total=14,
-      node_gets_total=15,
-      node_puts_total=16,
-      node_get_fsm_siblings=slide:fresh(),
-      node_get_fsm_objsize=slide:fresh(),
-      get_fsm_time=19,
-      put_fsm_time=20,
-      pbc_connects=21,
-      pbc_connects_total=22,
-      pbc_active=23,
-      read_repairs=24,
-      read_repairs_total=25,
-      coord_redirs=26,
-      coord_redirs_total=27,
-      mapper_count=28,
-      get_meter=29,
-      put_meter=30,
-      legacy=31},
-
-    %% Check that we can upgrade and downgrade the State multiple
-    %% times and still get the same result.
-    {ok, NewState1} = code_change({down, foo}, State, ignored),
-    {ok, NewState2} = code_change(foo, NewState1, ignore),
-    {ok, NewState3} = code_change({down, foo}, NewState2, ignored),
-    {ok, NewState4} = code_change(foo, NewState3, ignore),
-
-    %% The `fsm_siblings` and `fsm_objsize` fields are reset to
-    %% `slide:fresh()` when we upgrade, so ignore those because they
-    %% will be different.
-    ?assertEqual(
-       State#state     { node_get_fsm_siblings=undefined, node_get_fsm_objsize=undefined },
-       NewState4#state { node_get_fsm_siblings=undefined, node_get_fsm_objsize=undefined }),
-    ok.
-
--endif.
