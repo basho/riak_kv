@@ -226,14 +226,14 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
             {Reply, UpdGetCore2} = riak_kv_get_core:response(UpdGetCore),
             NewStateData2 = update_timing(StateData#state{get_core = UpdGetCore2}),
             client_reply(Reply, NewStateData2),
-            update_stats(NewStateData2),
+            update_stats(Reply, NewStateData2),
             maybe_finalize(NewStateData2);
         false ->
             {next_state, waiting_vnode_r, StateData#state{get_core = UpdGetCore}}
     end;
 waiting_vnode_r(request_timeout, StateData) ->
     S2 = update_timing(StateData),
-    update_stats(S2),
+    update_stats(timeout, S2),
     client_reply({error,timeout}, S2),
     finalize(S2).
 
@@ -342,8 +342,22 @@ update_timing(StateData = #state{startnow = StartNow}) ->
     EndNow = now(),
     StateData#state{get_usecs = timer:now_diff(EndNow, StartNow)}.
 
-update_stats(#state{get_usecs = GetUsecs}) ->
-    riak_kv_stat:update({get_fsm_time, GetUsecs}).    
+update_stats({ok, Obj}, #state{get_usecs = GetUsecs}) ->
+    %% Get the number of siblings and the object size. For object
+    %% size, get an approximation by adding together the bucket, key,
+    %% vectorclock, and all of the siblings. This is more complex than
+    %% calling term_to_binary/1, but it should be easier on memory,
+    %% especially for objects with large values.
+    NumSiblings = riak_object:value_count(Obj),
+    Contents = riak_object:get_contents(Obj),
+    ObjSize =
+        size(riak_object:bucket(Obj)) +
+        size(riak_object:key(Obj)) +
+        size(term_to_binary(riak_object:vclock(Obj))) +
+        lists:sum([size(term_to_binary(MD)) + size(Value) || {MD, Value} <- Contents]),
+    riak_kv_stat:update({get_fsm, undefined, GetUsecs, NumSiblings, ObjSize});
+update_stats(_, #state{get_usecs = GetUsecs}) ->
+    riak_kv_stat:update({get_fsm, undefined, GetUsecs, undefined, undefined}).
 
 client_info(true, StateData, Acc) ->
     client_info(details(), StateData, Acc);
