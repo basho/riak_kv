@@ -516,17 +516,9 @@ spiral_minute(_Moment, Elt, State) ->
 %%      element of the state tuple.
 %%      If Count is 0, then all other elements will be the atom
 %%      'undefined'.
-slide_minute(Moment, Elt, State, Min, Max, Bins) ->
-    {Count, Mean, {Median, NF, NN, H}} = slide:mean_and_nines(element(Elt, State), Moment, Min, Max, Bins),
-
-    %% Massage the stats so that we never return a Median, 95th, or
-    %% 99th percentile that's higher than the max.
-    {Count, Mean, {
-              lists:min([Median, H]),
-              lists:min([NF, H]),
-              lists:min([NN, H]),
-              H
-             }}.
+slide_minute(Moment, Elt, State, Min, Max, Bins, RoundingMode) ->
+    {Count, Mean, Nines} = slide:mean_and_nines(element(Elt, State), Moment, Min, Max, Bins, RoundingMode),
+    {Count, Mean, Nines}.
 
 metric_stats({meter, M}) ->
     basho_metrics_nifs:meter_stats(M);
@@ -591,13 +583,13 @@ node_stats(Moment, State=#state{node_gets_total=NGT,
                                 coord_redirs_total=CRT,
                                 legacy=true}) ->
     {Gets, GetMean, {GetMedian, GetNF, GetNN, GetH}} =
-        slide_minute(Moment, #state.get_fsm_time, State, 0, 5000000, 20000),
+        slide_minute(Moment, #state.get_fsm_time, State, 0, 5000000, 20000, down),
     {Puts, PutMean, {PutMedian, PutNF, PutNN, PutH}} =
-        slide_minute(Moment, #state.put_fsm_time, State, 0, 5000000, 20000),
+        slide_minute(Moment, #state.put_fsm_time, State, 0, 5000000, 20000, down),
     {_Siblings, SiblingsMean, {SiblingsMedian, SiblingsNF, SiblingsNN, SiblingsH}} =
-        slide_minute(Moment, #state.node_get_fsm_siblings, State, 0, 1000, 1000),
+        slide_minute(Moment, #state.node_get_fsm_siblings, State, 0, 1000, 1000, up),
     {_ObjSize, ObjSizeMean, {ObjSizeMedian, ObjSizeNF, ObjSizeNN, ObjSizeH}} =
-        slide_minute(Moment, #state.node_get_fsm_objsize, State, 0, 16 * 1024 * 1024, 16 * 1024),
+        slide_minute(Moment, #state.node_get_fsm_objsize, State, 0, 16 * 1024 * 1024, 16 * 1024, down),
     [{node_gets, Gets},
      {node_gets_total, NGT},
      {node_get_fsm_time_mean, GetMean},
