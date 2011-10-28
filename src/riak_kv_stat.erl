@@ -68,15 +68,18 @@
 %%</dd><dt> node_gets
 %%</dt><dd> Number of gets coordinated by this node in the last
 %%          minute.
-%%</dd><dd> update({get_fsm_time, Microseconds})
+%%</dd><dd> update({get_fsm, _Bucket, Microseconds, NumSiblings, ObjSize})
 %%
 %%</dd><dt> node_get_fsm_siblings
 %%</dt><dd> Stats about number of siblings per object in the last minute.
-%%</dd><dd> update({node_get_fsm_siblings, NumSiblings})
+%%</dd><dd> Updated via node_gets.
 %%
 %%</dd><dt> node_get_fsm_objsize
-%%</dt><dd> Stats about object size over the last minute.
-%%</dd><dd> update({node_get_fsm_objsize, ObjSize)
+%%</dt><dd> Stats about object size over the last minute. The object
+%%          size is an estimate calculated by summing the size of the
+%%          bucket name, key name, and serialized vector clock, plus
+%%          the value and serialized metadata of each sibling.
+%%</dd><dd> Updated via node_gets.
 %%
 %%</dd><dt> node_get_fsm_time_mean
 %%</dt><dd> Mean time, in microseconds, between when a riak_kv_get_fsm is
