@@ -349,106 +349,7 @@ terminate(_Reason, _State) ->
     ok.
 
 %% @private
-code_change({up, siblings_and_objsize_stats},
-            {state,
-             VNodeGets, VNodePuts,
-             VNodeGetsTotal, VNodePutsTotal,
-             VNodeIndexReads, VNodeIndexReadsTotal,
-             VNodeIndexWrites, VNodeIndexWritesTotal,
-             VNodeIndexWritesPostings, VNodeIndexWritesPostingsTotal,
-             VNodeIndexDeletes, VNodeIndexDeletesTotal,
-             VNodeIndexDeletesPostings, VNodeIndexDeletesPostingsTotal,
-             NodeGetsTotal, NodePutsTotal,
-             GetFSMTime, PutFSMTime,
-             PBCConnects, PBCConnectsTotal, PBCActive,
-             ReadRepairs, ReadRepairsTotal,
-             CoordRedirs, CoordRedirsTotal, MapperCount,
-             GetMeter, PutMeter, Legacy},
-            _Extra) ->
-
-    %% Upgrade from the previous version of riak_kv_stat.
-    io:format("~nAdding siblings and objsize stats to riak_kv_stat process.~n~n"),
-    {ok, #state{
-       vnode_gets=VNodeGets,
-       vnode_gets_total=VNodeGetsTotal,
-       vnode_puts=VNodePuts,
-       vnode_puts_total=VNodePutsTotal,
-       vnode_index_reads=VNodeIndexReads,
-       vnode_index_reads_total=VNodeIndexReadsTotal,
-       vnode_index_writes=VNodeIndexWrites,
-       vnode_index_writes_total=VNodeIndexWritesTotal,
-       vnode_index_writes_postings=VNodeIndexWritesPostings,
-       vnode_index_writes_postings_total=VNodeIndexWritesPostingsTotal,
-       vnode_index_deletes=VNodeIndexDeletes,
-       vnode_index_deletes_total=VNodeIndexDeletesTotal,
-       vnode_index_deletes_postings=VNodeIndexDeletesPostings,
-       vnode_index_deletes_postings_total=VNodeIndexDeletesPostingsTotal,
-       node_gets_total=NodeGetsTotal,
-       node_puts_total=NodePutsTotal,
-       node_get_fsm_siblings=slide:fresh(),
-       node_get_fsm_objsize=slide:fresh(),
-       get_fsm_time=GetFSMTime,
-       put_fsm_time=PutFSMTime,
-       pbc_connects=PBCConnects,
-       pbc_connects_total=PBCConnectsTotal,
-       pbc_active=PBCActive,
-       read_repairs=ReadRepairs,
-       read_repairs_total=ReadRepairsTotal,
-       coord_redirs=CoordRedirs,
-       coord_redirs_total=CoordRedirsTotal,
-       mapper_count=MapperCount,
-       get_meter=GetMeter,
-       put_meter=PutMeter,
-       legacy=Legacy}};
-code_change({down, siblings_and_objsize_stats},
-            State = #state {}, _Extra) ->
-    io:format("~nCODE CHANGE: Removing siblings and objsize stats from riak_kv_stat process.~n~n"),
-    #state {
-            vnode_gets=VNodeGets,
-            vnode_gets_total=VNodeGetsTotal,
-            vnode_puts=VNodePuts,
-            vnode_puts_total=VNodePutsTotal,
-            vnode_index_reads=VNodeIndexReads,
-            vnode_index_reads_total=VNodeIndexReadsTotal,
-            vnode_index_writes=VNodeIndexWrites,
-            vnode_index_writes_total=VNodeIndexWritesTotal,
-            vnode_index_writes_postings=VNodeIndexWritesPostings,
-            vnode_index_writes_postings_total=VNodeIndexWritesPostingsTotal,
-            vnode_index_deletes=VNodeIndexDeletes,
-            vnode_index_deletes_total=VNodeIndexDeletesTotal,
-            vnode_index_deletes_postings=VNodeIndexDeletesPostings,
-            vnode_index_deletes_postings_total=VNodeIndexDeletesPostingsTotal,
-            node_gets_total=NodeGetsTotal,
-            node_puts_total=NodePutsTotal,
-            get_fsm_time=GetFSMTime,
-            put_fsm_time=PutFSMTime,
-            pbc_connects=PBCConnects,
-            pbc_connects_total=PBCConnectsTotal,
-            pbc_active=PBCActive,
-            read_repairs=ReadRepairs,
-            read_repairs_total=ReadRepairsTotal,
-            coord_redirs=CoordRedirs,
-            coord_redirs_total=CoordRedirsTotal,
-            mapper_count=MapperCount,
-            get_meter=GetMeter,
-            put_meter=PutMeter,
-            legacy=Legacy} = State,
-    {ok, {state,
-          VNodeGets, VNodePuts,
-          VNodeGetsTotal, VNodePutsTotal,
-          VNodeIndexReads, VNodeIndexReadsTotal,
-          VNodeIndexWrites, VNodeIndexWritesTotal,
-          VNodeIndexWritesPostings, VNodeIndexWritesPostingsTotal,
-          VNodeIndexDeletes, VNodeIndexDeletesTotal,
-          VNodeIndexDeletesPostings, VNodeIndexDeletesPostingsTotal,
-          NodeGetsTotal, NodePutsTotal,
-          GetFSMTime, PutFSMTime,
-          PBCConnects, PBCConnectsTotal, PBCActive,
-          ReadRepairs, ReadRepairsTotal,
-          CoordRedirs, CoordRedirsTotal, MapperCount,
-          GetMeter, PutMeter, Legacy}};
-code_change(Version, State, _Extra) ->
-    lager:error("Unknown code_change/3 version: ~p~n", [Version]),
+code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %%--------------------------------------------------------------------
@@ -619,13 +520,17 @@ spiral_minute(_Moment, Elt, State) ->
 %%      element of the state tuple.
 %%      If Count is 0, then all other elements will be the atom
 %%      'undefined'.
-slide_minute(Moment, Elt, State) ->
-    {Count, Mean, Nines} = slide:mean_and_nines(element(Elt, State), Moment),
-    {Count, Mean, Nines}.
+slide_minute(Moment, Elt, State, Min, Max, Bins) ->
+    {Count, Mean, {Median, NF, NN, H}} = slide:mean_and_nines(element(Elt, State), Moment, Min, Max, Bins),
 
-slide_sum(Moment, Elt, State) ->
-    {_Count, Total} = slide:sum(element(Elt, State), Moment),
-    Total.
+    %% Massage the stats so that we never return a Median, 95th, or
+    %% 99th percentile that's higher than the max.
+    {Count, Mean, {
+              lists:min([Median, H]),
+              lists:min([NF, H]),
+              lists:min([NN, H]),
+              H
+             }}.
 
 metric_stats({meter, M}) ->
     basho_metrics_nifs:meter_stats(M);
@@ -690,15 +595,13 @@ node_stats(Moment, State=#state{node_gets_total=NGT,
                                 coord_redirs_total=CRT,
                                 legacy=true}) ->
     {Gets, GetMean, {GetMedian, GetNF, GetNN, GetH}} =
-        slide_minute(Moment, #state.get_fsm_time, State),
+        slide_minute(Moment, #state.get_fsm_time, State, 0, 5000000, 20000),
     {Puts, PutMean, {PutMedian, PutNF, PutNN, PutH}} =
-        slide_minute(Moment, #state.put_fsm_time, State),
+        slide_minute(Moment, #state.put_fsm_time, State, 0, 5000000, 20000),
     {_Siblings, SiblingsMean, {SiblingsMedian, SiblingsNF, SiblingsNN, SiblingsH}} =
-        slide_minute(Moment, #state.node_get_fsm_siblings, State),
+        slide_minute(Moment, #state.node_get_fsm_siblings, State, 0, 1000, 1000),
     {_ObjSize, ObjSizeMean, {ObjSizeMedian, ObjSizeNF, ObjSizeNN, ObjSizeH}} =
-        slide_minute(Moment, #state.node_get_fsm_objsize, State),
-    SiblingsTotal = slide_sum(Moment, #state.node_get_fsm_siblings, State),
-    ObjSizeTotal  = slide_sum(Moment, #state.node_get_fsm_objsize, State),
+        slide_minute(Moment, #state.node_get_fsm_objsize, State, 0, 16 * 1024 * 1024, 16 * 1024),
     [{node_gets, Gets},
      {node_gets_total, NGT},
      {node_get_fsm_time_mean, GetMean},
@@ -713,13 +616,11 @@ node_stats(Moment, State=#state{node_gets_total=NGT,
      {node_put_fsm_time_95, PutNF},
      {node_put_fsm_time_99, PutNN},
      {node_put_fsm_time_100, PutH},
-     {node_get_fsm_siblings_total, SiblingsTotal},
      {node_get_fsm_siblings_mean, SiblingsMean},
      {node_get_fsm_siblings_median, SiblingsMedian},
      {node_get_fsm_siblings_95, SiblingsNF},
      {node_get_fsm_siblings_99, SiblingsNN},
      {node_get_fsm_siblings_100, SiblingsH},
-     {node_get_fsm_objsize_total, ObjSizeTotal},
      {node_get_fsm_objsize_mean, ObjSizeMean},
      {node_get_fsm_objsize_median, ObjSizeMedian},
      {node_get_fsm_objsize_95, ObjSizeNF},
