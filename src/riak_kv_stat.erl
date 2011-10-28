@@ -44,31 +44,42 @@
 %%          in the last minute.
 %%</dd><dd> update(vnode_put)
 %%
-%%</dd><dt> vnode_index_read
+%%</dd><dt> vnode_index_reads
 %%</dt><dd> The number of index reads handled by all vnodes on this node.
 %%          Each query counts as an index read.
-%%</dd><dd> update(index_read)
+%%</dd><dd> update(index_reads)
 %%
-%%</dd><dt> vnode_index_write
+%%</dd><dt> vnode_index_writes
 %%</dt><dd> The number of batched writes handled by all vnodes on this node.
-%%</dd><dd> update({index_write, Postings})
+%%</dd><dd> update({index_writes, Postings})
 %%
-%%</dd><dt> vnode_index_write_postings
+%%</dd><dt> vnode_index_writes_postings
 %%</dt><dd> The number of postings written to all vnodes on this node.
-%%</dd><dd> update({index_write, Postings})
+%%</dd><dd> update({index_writes, Postings})
 %%
-%%</dd><dt> vnode_index_delete
+%%</dd><dt> vnode_index_deletes
 %%</dt><dd> The number of batched writes handled by all vnodes on this node.
-%%</dd><dd> update({index_delete, Postings})
+%%</dd><dd> update({index_deletes, Postings})
 %%
-%%</dd><dt> vnode_index_delete_postings
+%%</dd><dt> vnode_index_deletes_postings
 %%</dt><dd> The number of postings written to all vnodes on this node.
-%%</dd><dd> update({index_delete, Postings})
+%%</dd><dd> update({index_deletes, Postings})
 %%
 %%</dd><dt> node_gets
 %%</dt><dd> Number of gets coordinated by this node in the last
 %%          minute.
-%%</dd><dd> update({get_fsm_time, Microseconds})
+%%</dd><dd> update({get_fsm, _Bucket, Microseconds, NumSiblings, ObjSize})
+%%
+%%</dd><dt> node_get_fsm_siblings
+%%</dt><dd> Stats about number of siblings per object in the last minute.
+%%</dd><dd> Updated via node_gets.
+%%
+%%</dd><dt> node_get_fsm_objsize
+%%</dt><dd> Stats about object size over the last minute. The object
+%%          size is an estimate calculated by summing the size of the
+%%          bucket name, key name, and serialized vector clock, plus
+%%          the value and serialized metadata of each sibling.
+%%</dd><dd> Updated via node_gets.
 %%
 %%</dd><dt> node_get_fsm_time_mean
 %%</dt><dd> Mean time, in microseconds, between when a riak_kv_get_fsm is
@@ -183,11 +194,13 @@
                vnode_index_deletes, vnode_index_deletes_total,
                vnode_index_deletes_postings, vnode_index_deletes_postings_total,
                node_gets_total, node_puts_total,
+               node_get_fsm_siblings, node_get_fsm_objsize,
                get_fsm_time,put_fsm_time,
                pbc_connects,pbc_connects_total,pbc_active,
                read_repairs, read_repairs_total,
                coord_redirs, coord_redirs_total, mapper_count, 
                get_meter, put_meter, legacy}).
+
 
 %% @spec start_link() -> {ok,Pid} | ignore | {error,Error}
 %% @doc Start the server.  Also start the os_mon application, if it's
@@ -252,6 +265,7 @@ v2_init() ->
                 vnode_index_deletes_postings_total=0,
                 node_gets_total=0,
                 node_puts_total=0,
+                %% REMEMBER TO ADD LOGIC FOR node_get_fsm_siblings and node_get_fsm_objsize
                 get_fsm_time=make_histogram(),
                 put_fsm_time=make_histogram(),
                 pbc_connects=make_meter(),
@@ -284,6 +298,8 @@ legacy_init() ->
                 vnode_index_deletes_postings_total=0,
                 node_gets_total=0,
                 node_puts_total=0,
+                node_get_fsm_siblings=slide:fresh(),
+                node_get_fsm_objsize=slide:fresh(),
                 get_fsm_time=slide:fresh(),
                 put_fsm_time=slide:fresh(),
                 pbc_connects=spiraltime:fresh(),
@@ -358,8 +374,19 @@ update({vnode_index_write, Postings}, Moment, State=#state{vnode_index_writes_to
 update({vnode_index_delete, Postings}, Moment, State=#state{vnode_index_deletes_total=VID, vnode_index_deletes_postings_total=VIDP}) ->
     NewState = spiral_incr(#state.vnode_index_deletes, Moment, State#state{vnode_index_deletes_total=VID+1}),
     spiral_incr(#state.vnode_index_deletes_postings, Postings, Moment, NewState#state{vnode_index_deletes_postings_total=VIDP+Postings});
-update({get_fsm_time, Microsecs}, Moment, State=#state{node_gets_total=NGT}) ->
-    slide_incr(#state.get_fsm_time, Microsecs, Moment, State#state{node_gets_total=NGT+1});
+update({get_fsm, _Bucket, Microsecs, undefined, undefined}, Moment, State) ->
+    NGT = State#state.node_gets_total,
+    NewState = State#state { node_gets_total=NGT+1 },
+    slide_incr(#state.get_fsm_time, Microsecs, Moment, NewState);
+update({get_fsm, _Bucket, Microsecs, NumSiblings, ObjSize}, Moment, State) ->
+    NGT = State#state.node_gets_total,
+    NewState1 = State#state { node_gets_total=NGT+1 },
+    NewState2 = slide_incr(#state.get_fsm_time, Microsecs, Moment, NewState1),
+    NewState3 = slide_incr(#state.node_get_fsm_siblings, NumSiblings, Moment, NewState2),
+    NewState4 = slide_incr(#state.node_get_fsm_objsize, ObjSize, Moment, NewState3),
+    NewState4;
+update({get_fsm_time, Microsecs}, Moment, State) ->
+    update({get_fsm, undefined, Microsecs, undefined, undefined}, Moment, State);
 update({put_fsm_time, Microsecs}, Moment, State=#state{node_puts_total=NPT}) ->
     slide_incr(#state.put_fsm_time, Microsecs, Moment, State#state{node_puts_total=NPT+1});
 update(pbc_connect, Moment, State=#state{pbc_connects_total=NCT, pbc_active=Active}) ->
@@ -409,6 +436,8 @@ update1({vnode_index_delete, Postings}, _, State) ->
     update_metric(#state.vnode_index_deletes_postings,
                   Postings, 
                   update_metric(#state.vnode_index_deletes, 1, State));
+update1({get_fsm, _Bucket, Microsecs, _NumSiblings, _ObjSize}, Moment, State) ->
+    update1({get_fsm_time, Microsecs}, Moment, State);
 update1({get_fsm_time, Microsecs}, _, State) ->
     update_metric(#state.get_meter, 1, 
                   update_metric(#state.get_fsm_time, Microsecs, State));
@@ -494,8 +523,8 @@ spiral_minute(_Moment, Elt, State) ->
 %%      element of the state tuple.
 %%      If Count is 0, then all other elements will be the atom
 %%      'undefined'.
-slide_minute(Moment, Elt, State) ->
-    {Count, Mean, Nines} = slide:mean_and_nines(element(Elt, State), Moment),
+slide_minute(Moment, Elt, State, Min, Max, Bins, RoundingMode) ->
+    {Count, Mean, Nines} = slide:mean_and_nines(element(Elt, State), Moment, Min, Max, Bins, RoundingMode),
     {Count, Mean, Nines}.
 
 metric_stats({meter, M}) ->
@@ -561,9 +590,13 @@ node_stats(Moment, State=#state{node_gets_total=NGT,
                                 coord_redirs_total=CRT,
                                 legacy=true}) ->
     {Gets, GetMean, {GetMedian, GetNF, GetNN, GetH}} =
-        slide_minute(Moment, #state.get_fsm_time, State),
+        slide_minute(Moment, #state.get_fsm_time, State, 0, 5000000, 20000, down),
     {Puts, PutMean, {PutMedian, PutNF, PutNN, PutH}} =
-        slide_minute(Moment, #state.put_fsm_time, State),
+        slide_minute(Moment, #state.put_fsm_time, State, 0, 5000000, 20000, down),
+    {_Siblings, SiblingsMean, {SiblingsMedian, SiblingsNF, SiblingsNN, SiblingsH}} =
+        slide_minute(Moment, #state.node_get_fsm_siblings, State, 0, 1000, 1000, up),
+    {_ObjSize, ObjSizeMean, {ObjSizeMedian, ObjSizeNF, ObjSizeNN, ObjSizeH}} =
+        slide_minute(Moment, #state.node_get_fsm_objsize, State, 0, 16 * 1024 * 1024, 16 * 1024, down),
     [{node_gets, Gets},
      {node_gets_total, NGT},
      {node_get_fsm_time_mean, GetMean},
@@ -578,6 +611,16 @@ node_stats(Moment, State=#state{node_gets_total=NGT,
      {node_put_fsm_time_95, PutNF},
      {node_put_fsm_time_99, PutNN},
      {node_put_fsm_time_100, PutH},
+     {node_get_fsm_siblings_mean, SiblingsMean},
+     {node_get_fsm_siblings_median, SiblingsMedian},
+     {node_get_fsm_siblings_95, SiblingsNF},
+     {node_get_fsm_siblings_99, SiblingsNN},
+     {node_get_fsm_siblings_100, SiblingsH},
+     {node_get_fsm_objsize_mean, ObjSizeMean},
+     {node_get_fsm_objsize_median, ObjSizeMedian},
+     {node_get_fsm_objsize_95, ObjSizeNF},
+     {node_get_fsm_objsize_99, ObjSizeNN},
+     {node_get_fsm_objsize_100, ObjSizeH},
      {read_repairs_total, RRT},
      {coord_redirs_total, CRT}];
 node_stats(_, State=#state{legacy=false}) ->
