@@ -52,10 +52,12 @@
 
 -record(state, {ref :: reference(),
                 data_root :: string(),
+                config :: config(),
                 read_opts = [],
                 write_opts = [],
-                fold_opts = [{fill_cache, false}],
-                write_buffer_size :: integer()}).
+                fold_opts = [{fill_cache, false}]
+               }).
+
 
 -type state() :: #state{}.
 -type config() :: [{atom(), term()}].
@@ -73,30 +75,17 @@ api_version() ->
 %% @doc Start the eleveldb backend
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
+    %% Initialize random seed
+    random:seed(now()),
+
     %% Get the data root directory
     DataDir = filename:join(config_value(data_root, Config),
                             integer_to_list(Partition)),
-    filelib:ensure_dir(filename:join(DataDir, "dummy")),
-
-    %% Use a variable write buffer size in order to reduce the number
-    %% of vnodes that try to kick off compaction at the same time
-    %% under heavy uniform load...
-    WriteBufferMin = config_value(write_buffer_size_min, Config, 3 * 1024 * 1024),
-    WriteBufferMax = config_value(write_buffer_size_max, Config, 6 * 1024 * 1024),
-    random:seed(now()),
-    WriteBufferSize = WriteBufferMin + random:uniform(1 + WriteBufferMax - WriteBufferMin),
-
-    %% Assemble options...
-    Options = [
-               {create_if_missing, true},
-               {write_buffer_size, WriteBufferSize}
-              ],
-
-    case eleveldb:open(DataDir, Options) of
+    case open_db(DataDir, Config) of
         {ok, Ref} ->
-            {ok, #state {ref = Ref,
-                         data_root = DataDir,
-                         write_buffer_size = WriteBufferSize }};
+            {ok, #state { ref = Ref,
+                          data_root = DataDir,
+                          config = Config }};
         {error, Reason} ->
             {error, Reason}
     end.
@@ -274,14 +263,9 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
 drop(#state{data_root=DataRoot}=State) ->
     case eleveldb:destroy(DataRoot, []) of
         ok ->
-            filelib:ensure_dir(filename:join(DataRoot, "dummy")),
-            Options = [
-                       {create_if_missing, true},
-                       {write_buffer_size, State#state.write_buffer_size}
-                      ],
-            case eleveldb:open(DataRoot, Options) of
+            case open_db(DataRoot, State#state.config) of
                 {ok, Ref} ->
-                    {ok, State#state{ref = Ref}};
+                    {ok, State#state { ref = Ref }};
                 {error, Reason} ->
                     {error, Reason, State}
             end;
@@ -297,8 +281,9 @@ is_empty(#state{ref=Ref}) ->
 
 %% @doc Get the status information for this eleveldb backend
 -spec status(state()) -> [{atom(), term()}].
-status(#state{data_root=DataRoot} = State) ->
-    get_status(DataRoot, State).
+status(State) ->
+    {ok, Stats} = eleveldb:status(State#state.ref, <<"leveldb.stats">>),
+    [{stats, Stats}].
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
@@ -308,6 +293,32 @@ callback(_Ref, _Msg, State) ->
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
+%% @private
+open_db(DataRoot, Config) ->
+    %% Get the data root directory
+    filelib:ensure_dir(filename:join(DataRoot, "dummy")),
+
+    %% Use a variable write buffer size in order to reduce the number
+    %% of vnodes that try to kick off compaction at the same time
+    %% under heavy uniform load...
+    WriteBufferMin = config_value(write_buffer_size_min, Config, 3 * 1024 * 1024),
+    WriteBufferMax = config_value(write_buffer_size_max, Config, 6 * 1024 * 1024),
+    random:seed(now()),
+    WriteBufferSize = WriteBufferMin + random:uniform(1 + WriteBufferMax - WriteBufferMin),
+
+    %% Assemble options...
+    Options = [
+               {create_if_missing, true},
+               {write_buffer_size, WriteBufferSize},
+               {max_open_files, config_value(max_open_files, Config)},
+               {cache_size, config_value(cache_size, Config)},
+               {paranoid_checks, config_value(paranoid_checks, Config)}
+              ],
+
+    lager:debug("Opening LevelDB in ~s with options: ~p\n", [DataRoot, Options]),
+    eleveldb:open(DataRoot, Options).
+
 
 %% @private
 config_value(Key, Config) ->
@@ -418,19 +429,6 @@ fold_opts(Bucket, FoldOpts) ->
     BKey = sext:encode({Bucket, <<>>}),
     [{first_key, BKey} | FoldOpts].
 
-%% @private
-get_status(Dir, State) ->
-    Options = [
-               {create_if_missing, true},
-               {write_buffer_size, State#state.write_buffer_size}
-              ],
-    case eleveldb:open(Dir, Options) of
-        {ok, Ref} ->
-            {ok, Status} = eleveldb:status(Ref, <<"leveldb.stats">>),
-            Status;
-        {error, Reason} ->
-            {error, Reason}
-    end.
 
 %% @private Given a scope limiter, use sext to encode an expression
 %% that represents the starting key for the scope. For example, since
