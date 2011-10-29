@@ -85,6 +85,8 @@ start(Partition, Config) ->
         {ok, Ref} ->
             {ok, #state { ref = Ref,
                           data_root = DataDir,
+                          read_opts = config_value(read_options, Config, []),
+                          write_opts = config_value(write_options, Config, []),
                           config = Config }};
         {error, Reason} ->
             {error, Reason}
