@@ -3,7 +3,7 @@
 {application, riak_kv,
  [
   {description, "Riak Key/Value Store"},
-  {vsn, "0.14.2-trifork"},
+  {vsn, "0.14.3-trifork"},
   {modules, [
              lk,
              raw_link_walker,
