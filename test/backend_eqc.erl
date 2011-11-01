@@ -29,6 +29,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% Public API
+-compile(export_all).
 -export([test/1,
          test/2,
          test/3,
@@ -60,7 +61,6 @@
                c,  % Backend config
                s,  % Module state returned by Backend:start
                olds=sets:new(), % Old states after a stop
-               worker_pool, % PID of worker pool for async folds
                d=[]}).% Orddict of values stored
 
 %% ====================================================================
@@ -88,9 +88,10 @@ test(Backend, Volatile, Config, Cleanup, NumTests) ->
 %% ====================================================================
 
 prop_backend(Backend, Volatile, Config, Cleanup) ->
-    ?FORALL(Cmds, commands(?MODULE,
-                           {stopped,
-                            initial_state_data(Backend, Volatile, Config)}),
+    ?FORALL(Cmds,
+            commands(?MODULE,
+                     {stopped,
+                      initial_state_data(Backend, Volatile, Config)}),
             begin
                 {H,{_F,S},Res} = run_commands(?MODULE, Cmds),
                 Cleanup(S#qcst.s, sets:to_list(S#qcst.olds)),
@@ -153,16 +154,42 @@ fold_objects_fun() ->
             riak_kv_fold_buffer:add({{Bucket, Key}, Value}, Acc)
     end.
 
-init_backend(Backend, Volatile, Config) ->
-    {ok, S} = Backend:start(42, Config),
-    case Volatile of
-        true ->
-            S;
-        false ->
-            %% Drop the backend
-            {ok, S1} = Backend:drop(S),
-            S1
+get_partition() ->
+    {MegaSecs, Secs, MicroSecs} = erlang:now(),
+    Partition = integer_to_list(MegaSecs) ++
+        integer_to_list(Secs) ++
+        integer_to_list(MicroSecs),
+    case erlang:get(Partition) of
+        undefined ->
+            erlang:put(Partition, ok),
+            list_to_integer(Partition);
+        _ ->
+            get_partition()
     end.
+
+%% @TODO Volatile is unused now so remove it. Will require
+%% updating each backend module as well.
+init_backend(Backend, _Volatile, Config) ->
+    Partition = get_partition(),
+    %% Start an async worker pool
+    {ok, PoolPid} =
+        riak_core_vnode_worker_pool:start_link(riak_kv_worker,
+                                               2,
+                                               Partition,
+                                               [],
+                                               worker_props),
+    %% Shutdown any previous running worker pool
+    case erlang:get(worker_pool) of
+        undefined ->
+            ok;
+        OldPoolPid ->
+            riak_core_vnode_worker_pool:stop(OldPoolPid, normal)
+    end,
+    %% Store the info about the worker pool
+    erlang:put(worker_pool, PoolPid),
+    %% Start the backend
+    {ok, S} = Backend:start(Partition, Config),
+    S.
 
 drop(Backend, State) ->
     case Backend:drop(State) of
@@ -215,23 +242,16 @@ initial_state_data() ->
     #qcst{d = orddict:new()}.
 
 initial_state_data(Backend, Volatile, Config) ->
-    {ok, PoolPid} =
-        riak_core_vnode_worker_pool:start_link(riak_kv_worker,
-                                               2,
-                                               42,
-                                               [],
-                                               worker_props),
     #qcst{backend=Backend,
           c=Config,
           d=orddict:new(),
-          volatile=Volatile,
-          worker_pool=PoolPid}.
+          volatile=Volatile}.
 
 next_state_data(running, stopped, S, _R,
                 {call, _M, stop, _}) ->
     S#qcst{d=orddict:new(),
            olds = sets:add_element(S#qcst.s, S#qcst.olds)};
-next_state_data(_From, _To, S, R, {call, _M, init_backend, _}) ->
+next_state_data(stopped, running, S, R, {call, _M, init_backend, _}) ->
     S#qcst{s=R};
 next_state_data(_From, _To, S, _R, {call, _M, put, [Bucket, Key, [], Val, _]}) ->
     S#qcst{d = orddict:store({Bucket, Key}, Val, S#qcst.d)};
@@ -279,13 +299,14 @@ postcondition(_From, _To, _S,
 postcondition(_From, _To, _S,
               {call, _M, delete,[_Bucket, _Key, _IndexEntries, _BeState]}, {R, _RState}) ->
     R =:= ok;
-postcondition(_From, _To, S=#qcst{worker_pool=Pool},
+postcondition(_From, _To, S,
               {call, _M, fold_buckets, [_FoldFun, _Acc, _Opts, _BeState]}, FoldRes) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Buckets = [Bucket || {{Bucket, _}, _} <- ExpectedEntries],
     From = {raw, foldid, self()},
     case FoldRes of
         {async, Work} ->
+            Pool = erlang:get(worker_pool),
             FinishFun = finish_fun(From),
             riak_core_vnode_worker_pool:handle_work(Pool, {fold, Work, FinishFun}, From);
         {ok, Buffer} ->
@@ -293,13 +314,14 @@ postcondition(_From, _To, S=#qcst{worker_pool=Pool},
     end,
     R = receive_fold_results([]),
     lists:usort(Buckets) =:= lists:sort(R);
-postcondition(_From, _To, S=#qcst{worker_pool=Pool},
+postcondition(_From, _To, S,
               {call, _M, fold_keys, [_FoldFun, _Acc, _Opts, _BeState]}, FoldRes) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Keys = [{Bucket, Key} || {{Bucket, Key}, _} <- ExpectedEntries],
     From = {raw, foldid, self()},
     case FoldRes of
         {async, Work} ->
+            Pool = erlang:get(worker_pool),
             FinishFun = finish_fun(From),
             riak_core_vnode_worker_pool:handle_work(Pool, {fold, Work, FinishFun}, From);
         {ok, Buffer} ->
@@ -307,13 +329,14 @@ postcondition(_From, _To, S=#qcst{worker_pool=Pool},
     end,
     R = receive_fold_results([]),
     lists:sort(Keys) =:= lists:sort(R);
-postcondition(_From, _To, S=#qcst{worker_pool=Pool},
+postcondition(_From, _To, S,
               {call, _M, fold_objects, [_FoldFun, _Acc, _Opts, _BeState]}, FoldRes) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Objects = [Object || Object <- ExpectedEntries],
     From = {raw, foldid, self()},
     case FoldRes of
         {async, Work} ->
+            Pool = erlang:get(worker_pool),
             FinishFun = finish_fun(From),
             riak_core_vnode_worker_pool:handle_work(Pool, {fold, Work, FinishFun}, From);
         {ok, Buffer} ->
