@@ -53,6 +53,7 @@
 -export([init/2,
          process/3,
          done/1,
+         link_phase/3,
          validate_arg/1]).
 
 -include_lib("riak_kv_js_pools.hrl").
@@ -191,6 +192,34 @@ map_js(JS, Arg, {ok, Input, KeyData}) ->
         {error, no_vms} -> {forward_preflist, no_js_vms};
         {error, Error}  -> {error, Error}
     end.
+
+%% @doc Function to do link extraction via this module.  The function
+%% will extract all links matching Bucket and Tag from an input
+%% object, and send them as fitting output.
+%%
+%% Note: This function was added in Riak 1.0.2, but is not used there.
+%% It is intended to smooth the transition from 1.0.2 to 1.1.0.
+-spec link_phase(Object::term(), KeyData::term(),
+                 {Bucket::riak_kv_mrc_pipe:link_match(),
+                  Tag::riak_kv_mrc_pipe:link_match()})
+         -> [riak_kv_mrc_pipe:key_input()].
+link_phase({error, notfound}, _, _) ->
+    [];
+link_phase(Input, _KeyData, {Bucket, Tag}) ->
+    LinkFun = bucket_linkfun(riak_object:bucket(Input)),
+    Results = LinkFun(Input, none, {Bucket, Tag}),
+    Results.
+
+%% @doc Find the link-extraction function for the bucket.
+-spec bucket_linkfun(binary()) ->
+         fun( (Object::term(), KeyData::term(),
+               {Bucket::riak_kv_mrc_pipe:link_match(),
+                Tag::riak_kv_mrc_pipe:link_match()})
+            -> [riak_kv_mrc_pipe:key_input()] ).
+bucket_linkfun(Bucket) ->
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    {_, {modfun, Module, Function}} = lists:keyfind(linkfun, 1, BucketProps),
+    erlang:make_fun(Module, Function, 3).
 
 %% @doc Send results to the next fitting.
 -spec send_results([term()], state()) -> ok.
