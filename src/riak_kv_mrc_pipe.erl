@@ -120,7 +120,8 @@
          group_outputs/2,
          mapred_plan/1,
          mapred_plan/2,
-         compile_string/1
+         compile_string/1,
+         compat_fun/1
         ]).
 %% NOTE: Example functions are used by EUnit tests
 -export([example/0, example_bucket/0, example_reduce/0,
@@ -333,8 +334,8 @@ map2pipe(FunSpec, Arg, Keep, I, QueryT) ->
               end,
     [#fitting_spec{name={kvget_map,I},
                    module=riak_kv_pipe_get,
-                   chashfun=fun bkey_chash/1,
-                   nval=fun bkey_nval/1},
+                   chashfun={riak_kv_pipe_get, bkey_chash},
+                   nval={riak_kv_pipe_get, bkey_nval}},
      #fitting_spec{name={xform_map,I},
                    module=riak_kv_mrc_map,
                    arg={FunSpec, SafeArg},
@@ -377,10 +378,6 @@ want_prereduce_p(Idx, QueryT) ->
 query_type(Idx, QueryT) ->
     element(1, element(Idx, QueryT)).
 
--spec query_arg(integer(), tuple()) -> term().
-query_arg(Idx, QueryT) ->
-    element(3, element(Idx, QueryT)).
-
 %% @doc Convert a reduce phase to its equivalent pipe fittings.
 %%
 %% Reduce converts to:
@@ -397,13 +394,12 @@ query_arg(Idx, QueryT) ->
          [ riak_pipe:fitting_spec() ].
 reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie) ->
     Hash = chash:key_of(ConstHashCookie),
-    ConstantFun = fun(_) -> Hash end,
     [#fitting_spec{name={reduce,I},
                    module=riak_kv_w_reduce,
                    arg={rct,
                         riak_kv_w_reduce:reduce_compat(FunSpec),
                         Arg},
-                   chashfun=ConstantFun}
+                   chashfun=Hash}
      |[#fitting_spec{name=I,
                      module=riak_pipe_w_tee,
                      arg=sink,
@@ -424,15 +420,15 @@ reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie) ->
 -spec link2pipe(link_match(), link_match(), boolean(),
                 Index :: integer(), Query :: tuple()) ->
          [ riak_pipe:fitting_spec() ].
-link2pipe(Bucket, Tag, Keep, I, QueryT) ->
-    Arg = query_arg(I+1, QueryT),
+link2pipe(Bucket, Tag, Keep, I, _QueryT) ->
     [#fitting_spec{name={kvget_map,I},
                    module=riak_kv_pipe_get,
-                   chashfun=fun bkey_chash/1,
-                   nval=fun bkey_nval/1},
+                   chashfun={riak_kv_pipe_get, bkey_chash},
+                   nval={riak_kv_pipe_get, bkey_nval}},
      #fitting_spec{name={xform_map,I},
-                   module=riak_pipe_w_xform,
-                   arg=link_xform_compat(Bucket, Tag, Arg),
+                   module=riak_kv_mrc_map,
+                   arg={{modfun, riak_kv_mrc_map, link_phase},
+                        {Bucket, Tag}},
                    chashfun=follow}|
      [#fitting_spec{name=I,
                     module=riak_pipe_w_tee,
@@ -456,50 +452,6 @@ fix_final_fitting(Fittings) ->
             %% fix final name so outputs look like old API
             lists:reverse([Final#fitting_spec{name=Int}|Rest])
     end.
-
-%% @doc Produce a function (closure over the bucket and tag match) to
-%% do link extraction via {@link riak_pipe_w_xform}.  The function
-%% produced will extract all links matching Bucket and Tag from on
-%% input object, and send them as fitting output.
--spec link_xform_compat(link_match(), link_match(), term()) ->
-         fun( (Input :: term(),
-               riak_pipe_vnode:partition(),
-               riak_pipe_fitting:details()) -> ok ).
-link_xform_compat(Bucket, Tag, _Arg) ->
-    fun({ok, Input, _Keydata}, Partition, FittingDetails) ->
-            ?T(FittingDetails, [map], {mapping, Input}),
-            LinkFun = bucket_linkfun(Bucket),
-            Results = LinkFun(Input, none, {Bucket, Tag}),
-            ?T(FittingDetails, [map], {produced, Results}),
-            [ riak_pipe_vnode_worker:send_output(R, Partition,
-                                                 FittingDetails)
-              || R <- Results ],
-            ok;
-       ({{error,_},_,_}, _Partition, _FittingDetails) ->
-            ok
-    end.
-
-%% @doc Compute the KV hash of the input.
--spec bkey_chash(key_input()) -> chash:index().
-bkey_chash(Input) ->
-    riak_core_util:chash_key(riak_kv_pipe_get:bkey(Input)).
-
-%% @doc Find the N value for the bucket of the input.
--spec bkey_nval(key_input()) -> integer().
-bkey_nval(Input) ->
-    {Bucket,_} = riak_kv_pipe_get:bkey(Input),
-    BucketProps = riak_core_bucket:get_bucket(Bucket),
-    {n_val, NVal} = lists:keyfind(n_val, 1, BucketProps),
-    NVal.
-
-%% @doc Find the link-extraction function for the bucket.
--spec bucket_linkfun(binary()) ->
-        fun( (Object::term(), KeyData::term(),
-              {Bucket::link_match(), Tag::link_match()}) -> [key_input()] ).
-bucket_linkfun(Bucket) ->
-    BucketProps = riak_core_bucket:get_bucket(Bucket),
-    {_, {modfun, Module, Function}} = lists:keyfind(linkfun, 1, BucketProps),
-    erlang:make_fun(Module, Function, 3).
 
 %% @doc How many phases have `keep=true'?
 -spec count_keeps_in_query([query_part()]) -> non_neg_integer().
@@ -770,3 +722,55 @@ example_setup(Num) when Num > 0 ->
                            X)) ||
         X <- lists:seq(1, Num)],
     ok.
+
+%% @doc For Riak 1.0 compatibility, provide a translation from old
+%% anonymous functions to new ones.  This function should have a
+%% limited-use lifetime: it will only be evaluated while a cluster is
+%% in the middle of a rolling-upgrade from 1.0.x to 1.1.
+%%
+%% Yes, the return value is a new anonymous function.  This shouldn't
+%% be a problem with a future upgrade, though, as no one should be
+%% running a cluster that includes three Riak versions.  Therefore, the
+%% node that spread this old Fun around the cluster should have been
+%% stopped, along with the pipe defined by the old fun before this new
+%% fun would itself be considered old.
+compat_fun(Fun) ->
+    {uniq, Uniq} = erlang:fun_info(Fun, uniq),
+    {index, I} = erlang:fun_info(Fun, index),
+    compat_fun(Uniq, I, Fun).
+
+%% Riak 1.0.1 and 1.0.2 funs
+compat_fun(120571329, 1, _Fun) ->
+    %% chash used for kv_get in map
+    {ok, fun riak_kv_pipe_get:bkey_chash/1};
+compat_fun(112900629, 2, _Fun) ->
+    %% nval used for kv_get in map
+    {ok, fun riak_kv_pipe_get:bkey_nval/1};
+compat_fun(19126064, 3, Fun) ->
+    %% constant chash used for reduce
+    {env, [Hash]} = erlang:fun_info(Fun, env),
+    {ok, fun(_) -> Hash end};
+compat_fun(29992360, 4, _Fun) ->
+    %% chash used for kv_get in link
+    {ok, fun riak_kv_pipe_get:bkey_chash/1};
+compat_fun(22321692, 5, _Fun) ->
+    %% nval used for kv_get in link
+    {ok, fun riak_kv_pipe_get:bkey_nval/1};
+compat_fun(66856669, 6, Fun) ->
+    %% link extraction function
+    %% Yes, the env really does have bucket and tag the reverse of the spec
+    {env, [Tag, Bucket]} = erlang:fun_info(Fun, env),
+    {ok, fun({ok, Input, _Keydata}, Partition, FittingDetails) ->
+                 Results = riak_kv_mrc_map:link_phase(
+                             Input, undefined, {Bucket, Tag}),
+                 [ riak_pipe_vnode_worker:send_output(
+                     R, Partition, FittingDetails)
+                   || R <- Results ],
+                 ok;
+            ({{error, _},_,_}, _, _) ->
+                 ok
+         end};
+
+%% dunno
+compat_fun(_, _, _) ->
+    error.
