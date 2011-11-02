@@ -730,8 +730,8 @@ example_setup(Num) when Num > 0 ->
 %%
 %% Yes, the return value is a new anonymous function.  This shouldn't
 %% be a problem with a future upgrade, though, as no one should be
-%% running a cluster that includes three Riak versions.  Therefor, the
-%% node the spread this old Fun around the cluster should have been
+%% running a cluster that includes three Riak versions.  Therefore, the
+%% node that spread this old Fun around the cluster should have been
 %% stopped, along with the pipe defined by the old fun before this new
 %% fun would itself be considered old.
 compat_fun(Fun) ->
