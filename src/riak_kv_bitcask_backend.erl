@@ -83,7 +83,8 @@ start(Partition, Config) ->
             {error, data_root_unset};
         DataRoot ->
             %% Check if a directory exists for the partition
-            case get_data_dir(DataRoot, Partition) of
+            PartitionStr = integer_to_list(Partition),
+            case get_data_dir(DataRoot, PartitionStr) of
                 {ok, DataDir} ->
                     BitcaskOpts = set_mode(read_write, Config),
                     case bitcask:open(filename:join(DataRoot, DataDir), BitcaskOpts) of
@@ -182,12 +183,15 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{opts=BitcaskOpts,
                         case bitcask:open(filename:join(DataRoot, DataFile),
                                           ReadOpts) of
                             Ref1 when is_reference(Ref1) ->
-                                {Acc1, _} =
-                                    bitcask:fold_keys(Ref1,
-                                                      FoldFun,
-                                                      {Acc, sets:new()}),
-                                bitcask:close(Ref1),
-                                Acc1;
+                                try
+                                    {Acc1, _} =
+                                        bitcask:fold_keys(Ref1,
+                                                          FoldFun,
+                                                          {Acc, sets:new()}),
+                                        Acc1
+                                after
+                                    bitcask:close(Ref1)
+                                end;
                             {error, Reason} ->
                                 {error, Reason}
                         end
@@ -223,10 +227,11 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{opts=BitcaskOpts,
                         case bitcask:open(filename:join(DataRoot, DataFile),
                                           ReadOpts) of
                             Ref1 when is_reference(Ref1) ->
-                                FoldResults =
-                                    bitcask:fold_keys(Ref1, FoldFun, Acc),
-                                bitcask:close(Ref1),
-                                FoldResults;
+                                try
+                                    bitcask:fold_keys(Ref1, FoldFun, Acc)
+                                after
+                                    bitcask:close(Ref1)
+                                end;
                             {error, Reason} ->
                                 {error, Reason}
                         end
@@ -261,10 +266,11 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{opts=BitcaskOpts,
                         case bitcask:open(filename:join(DataRoot, DataFile),
                                           ReadOpts) of
                             Ref1 when is_reference(Ref1) ->
-                                FoldResults =
-                                    bitcask:fold(Ref1, FoldFun, Acc),
-                                bitcask:close(Ref1),
-                                FoldResults;
+                                try
+                                    bitcask:fold(Ref1, FoldFun, Acc)
+                                after
+                                    bitcask:close(Ref1)
+                                end;
                             {error, Reason} ->
                                 {error, Reason}
                         end
@@ -291,8 +297,23 @@ drop(#state{ref=Ref,
     %% Close the bitcask reference
     bitcask:close(Ref),
 
+    PartitionStr = integer_to_list(Partition),
+    PartitionDir = filename:join([DataRoot, PartitionStr]),
+    %% Check for any existing directories for the partition
+    %% and select the most recent as the active data directory
+    %% if any exist.
+    PartitionDirs = existing_partition_dirs(PartitionDir),
+
+    %% Move the older data directories to an automatic cleanup
+    %% directory and log their existence.
+    CleanupDir = check_for_cleanup_dir(DataRoot, auto),
+    move_unused_dirs(CleanupDir, PartitionDirs),
+
+    %% Make sure the data directory is now empty
+    data_directory_cleanup(PartitionDir),
+
     case make_data_dir(filename:join([DataRoot,
-                                      integer_to_list(Partition)])) of
+                                      PartitionStr])) of
         {ok, DataDir} ->
             %% Spawn a process to cleanup the old data files.
             %% The use of spawn is intentional. We do not
@@ -300,7 +321,7 @@ drop(#state{ref=Ref,
             %% files will be cleaned up on the next drop.
             %% The worst case is that the files hang
             %% around and take up some disk space.
-            spawn(drop_data_cleanup(DataRoot, Partition, DataDir)),
+            spawn(drop_data_cleanup(PartitionStr, CleanupDir)),
 
             %% Now open the bitcask and return an updated state
             %% so this backend can continue processing.
@@ -476,26 +497,116 @@ schedule_merge(Ref) when is_reference(Ref) ->
     riak_kv_backend:callback_after(?MERGE_CHECK_INTERVAL, Ref, merge_check).
 
 %% @private
-get_data_dir(DataRoot, PartitionI) ->
-    Partition = integer_to_list(PartitionI),
-    PartitionPath = filename:join([DataRoot, Partition]),
-    case filelib:is_dir(PartitionPath) of
+get_data_dir(DataRoot, Partition) ->
+    PartitionDir = filename:join([DataRoot, Partition]),
+    %% Check for any existing directories for the partition
+    %% and select the most recent as the active data directory
+    %% if any exist.
+    ExistingPartitionDirs = existing_partition_dirs(PartitionDir),
+    case ExistingPartitionDirs of
+        [] ->
+            make_data_dir(PartitionDir);
+        PartitionDirs ->
+            %% Sort the existing data directories
+            [MostRecentDataDir | RestDataDirs] = sort_data_dirs(PartitionDirs),
+
+            %% Move the older data directories to a manual cleanup directory and
+            %% log their existence. These will not be automatically cleaned up to
+            %% avoid data loss in the rare case where the heuristic for selecting
+            %% the most recent data directory fails.
+            CleanupDir = check_for_cleanup_dir(DataRoot, manual),
+
+            move_unused_dirs(CleanupDir, RestDataDirs),
+            log_unused_partition_dirs(Partition, RestDataDirs),
+
+            %% Rename the most recent data directory to the bare
+            %% partition name if it is not already so named.
+            case MostRecentDataDir == PartitionDir of
+                true ->
+                    ok;
+                false ->
+                    file:rename(MostRecentDataDir, PartitionDir)
+            end,
+            {ok, filename:basename(PartitionDir)}
+    end.
+
+%% @private
+existing_partition_dirs(PartitionDir) ->
+    ExistingDataDirs = filelib:wildcard(PartitionDir ++ "-*"),
+    case filelib:is_dir(PartitionDir) of
         true ->
-            {ok, Partition};
+            [PartitionDir | ExistingDataDirs];
         false ->
-            %% Check for any existing directories for the partition
-            %% and select the most recent as the active data directory
-            %% if any exist.
-            case filelib:wildcard(PartitionPath ++ "-*") of
-                [] ->
-                    make_data_dir(PartitionPath);
-                PartitionDirs ->
-                    [DataDir | RestPartitionDirs] =
-                        lists:reverse(PartitionDirs),
-                    log_unused_partition_dirs(Partition,
-                                              RestPartitionDirs),
-                    {ok, filename:basename(DataDir)}
-            end
+            ExistingDataDirs
+    end.
+
+%% @private
+sort_data_dirs(PartitionDirs) ->
+    LastModSortFun =
+        fun(Dir1, Dir2) ->
+                Dir1LastMod = filelib:last_modified(Dir1),
+                Dir2LastMod = filelib:last_modified(Dir2),
+                case Dir1LastMod == Dir2LastMod of
+                    true ->
+                        try
+                            [_ | [Dir1TS]] =
+                                string:tokens(filename:basename(Dir1), "-"),
+                            [_ | [Dir2TS]] =
+                                string:tokens(filename:basename(Dir2), "-"),
+                            if Dir1TS == [] ->
+                                    true;
+                               Dir2TS == [] ->
+                                    false;
+                               true ->
+                                    list_to_integer(Dir1TS) <
+                                        list_to_integer(Dir2TS)
+                            end
+                        catch _:_ ->
+                                Dir1 < Dir2
+                        end;
+                    false ->
+                        Dir1LastMod < Dir2LastMod
+                end
+        end,
+    LastModSortResults = lists:reverse(lists:sort(LastModSortFun, PartitionDirs)),
+    TimestampSortResults = lists:reverse(lists:sort(PartitionDirs)),
+    %% Check if the head of the last-modified sort results
+    %% is the same as the head of the timestamp sort results.
+    %% This is to achieve a better correlation that the most
+    %% recent data directory has been found. In the case that they
+    %% do no match the head of the last-modified sort is chosen
+    %% and a warning is logged.
+    case hd(LastModSortResults) == hd(TimestampSortResults) of
+        true ->
+            ok;
+        false ->
+            %% Log the mismatch
+            lager:warning("The most recently modified data directory is not the \
+same as the data directory with the most recent timestamp appended. The most \
+recently modified directory has been selected, but the other data directories\
+ have been preserved in the manual_cleanup directory.")
+    end,
+    LastModSortResults.
+
+%% @private
+check_for_cleanup_dir(PartitionDir, Type) ->
+    CleanupDir = filename:join([PartitionDir, atom_to_list(Type) ++ "_cleanup"]),
+    filelib:ensure_dir(filename:join([CleanupDir, dummy])),
+    CleanupDir.
+
+%% @private
+move_unused_dirs(_, []) ->
+    ok;
+move_unused_dirs(DestinationDir, [PartitionDir | RestPartitionDirs]) ->
+    case file:rename(PartitionDir,
+                     filename:join([DestinationDir,
+                                    filename:basename(PartitionDir)])) of
+        ok ->
+            move_unused_dirs(DestinationDir, RestPartitionDirs);
+        {error, Reason} ->
+            lager:error("Failed to move unused data directory ~p. Reason: ~p",
+                        [PartitionDir, Reason]),
+            move_unused_dirs(DestinationDir, RestPartitionDirs)
     end.
 
 %% @private
@@ -511,14 +622,9 @@ log_unused_partition_dirs(Partition, PartitionDirs) ->
 
 %% @private
 make_data_dir(PartitionFile) ->
-    {MegaSecs, Secs, MicroSecs} = erlang:now(),
     AbsPath = filename:absname(PartitionFile),
-    DataDir = [filename:basename(PartitionFile),
-               "-",
-               integer_to_list(MegaSecs),
-               integer_to_list(Secs),
-               integer_to_list(MicroSecs)],
-    case filelib:ensure_dir([AbsPath, DataDir]) of
+    DataDir = filename:basename(PartitionFile),
+    case filelib:ensure_dir(filename:join([AbsPath, dummy])) of
         ok ->
             {ok, DataDir};
         {error, Reason} ->
@@ -528,20 +634,18 @@ make_data_dir(PartitionFile) ->
     end.
 
 %% @private
-drop_data_cleanup(DataRoot, Partition, DataDir) ->
+drop_data_cleanup(Partition, CleanupDir) ->
     fun() ->
-            %% List all the directories in data root
-            case file:list_dir(DataRoot) of
+            %% List all the directories in the cleanup directory
+            case file:list_dir(CleanupDir) of
                 {ok, Dirs} ->
-                    PartitionStr = integer_to_list(Partition),
                     %% Delete the contents of each directory and
                     %% the directory itself excluding the
                     %% current data directory.
-                    [data_directory_cleanup(filename:join(DataRoot, Dir)) ||
+                    [data_directory_cleanup(filename:join(CleanupDir, Dir)) ||
                         Dir <- Dirs,
-                        Dir /= lists:flatten(DataDir),
-                        (Dir =:= PartitionStr) or
-                        (string:left(Dir, length(PartitionStr) + 1) =:= (PartitionStr ++ "-"))];
+                        (Dir =:= Partition) or
+                        (string:left(Dir, length(Partition) + 1) =:= (Partition ++ "-"))];
                 {error, _} ->
                     ignore
             end
@@ -574,13 +678,96 @@ simple_test_() ->
     ?assertCmd("rm -rf test/bitcask-backend"),
     application:set_env(bitcask, data_root, ""),
     riak_kv_backend:standard_test(?MODULE,
-                                  [{data_root, "test/bitcask-backend"}]).
+                                        [{data_root, "test/bitcask-backend"}]).
 
 custom_config_test_() ->
     ?assertCmd("rm -rf test/bitcask-backend"),
     application:set_env(bitcask, data_root, ""),
     riak_kv_backend:standard_test(?MODULE,
-                                  [{data_root, "test/bitcask-backend"}]).
+                                        [{data_root, "test/bitcask-backend"}]).
+
+startup_data_dir_test() ->
+    os:cmd("rm -rf test/bitcask-backend/*"),
+    Path = "test/bitcask-backend",
+    Config = [{data_root, Path}],
+    %% Create a set of timestamped partition directories
+    TSPartitionDirs =
+        [filename:join(["42-" ++ integer_to_list(X)]) ||
+                          X <- lists:seq(1, 10)],
+    [begin
+         filelib:ensure_dir(filename:join([Path, Dir, dummy]))
+     end || Dir <- TSPartitionDirs],
+    %% Start the backend
+    {ok, State} = start(42, Config),
+    %% Stop the backend
+    ok = stop(State),
+    %% Ensure the timestamped directories have been moved
+    {ok, DataDirs} = file:list_dir(Path),
+    {ok, RemovalDirs} = file:list_dir(filename:join([Path, "manual_cleanup"])),
+    [_ | RemovalPartitionDirs] = lists:reverse(TSPartitionDirs),
+    os:cmd("rm -rf test/bitcask-backend/*"),
+    ?assertEqual(["42", "manual_cleanup"], lists:sort(DataDirs)),
+    ?assertEqual(RemovalPartitionDirs, RemovalDirs).
+
+drop_test() ->
+    os:cmd("rm -rf test/bitcask-backend/*"),
+    Path = "test/bitcask-backend",
+    Config = [{data_root, Path}],
+    %% Start the backend
+    {ok, State} = start(42, Config),
+    %% Drop the backend
+    {ok, State1} = drop(State),
+    %% Ensure the timestamped directories have been moved
+    {ok, DataDirs} = file:list_dir(Path),
+    {ok, RemovalDirs} = file:list_dir(filename:join([Path, "auto_cleanup"])),
+    %% RemovalPartitionDirs = lists:reverse(TSPartitionDirs),
+    %% Stop the backend
+    ok = stop(State1),
+    os:cmd("rm -rf test/bitcask-backend/*"),
+    ?assertEqual(["42", "auto_cleanup"], lists:sort(DataDirs)),
+    %% The drop cleanup happens in a separate process so
+    %% there is no guarantee it has happened yet when
+    %% this test runs.
+    case RemovalDirs of
+        [] ->
+            ?assert(true);
+        ["42"] ->
+            ?assert(true);
+        _ ->
+            ?assert(false)
+    end.
+
+get_data_dir_test() ->
+    %% Cleanup
+    os:cmd("rm -rf test/bitcask-backend/*"),
+    Path = "test/bitcask-backend",
+    %% Create a set of timestamped partition directories
+    %% plus some base directories for other partitions
+    TSPartitionDirs =
+        [filename:join(["21-" ++ integer_to_list(X)]) ||
+                          X <- lists:seq(1, 10)],
+    OtherPartitionDirs = [integer_to_list(X) || X <- lists:seq(1,10)],
+    [filelib:ensure_dir(filename:join([Path, Dir, dummy]))
+     || Dir <- TSPartitionDirs ++ OtherPartitionDirs],
+    %% Check the results
+    ?assertEqual({ok, "21"}, get_data_dir(Path, "21")).
+
+existing_partition_dirs_test() ->
+    %% Cleanup
+    os:cmd("rm -rf test/bitcask-backend/*"),
+    Path = "test/bitcask-backend",
+    %% Create a set of timestamped partition directories
+    %% plus some base directories for other partitions
+    TSPartitionDirs =
+        [filename:join([Path, "21-" ++ integer_to_list(X)]) ||
+                          X <- lists:seq(1, 10)],
+    OtherPartitionDirs = [integer_to_list(X) || X <- [2, 23, 210]],
+    [filelib:ensure_dir(filename:join([Dir, dummy]))
+     || Dir <- TSPartitionDirs ++ OtherPartitionDirs],
+    %% Check the results
+    ?assertEqual(lists:sort(TSPartitionDirs),
+                 existing_partition_dirs(filename:join([Path, "21"]))).
+
 
 -ifdef(EQC).
 
@@ -593,7 +780,8 @@ eqc_test_() ->
          [
           {timeout, 60000,
            [?_assertEqual(true,
-                          backend_eqc:test(?MODULE, false,
+                          backend_eqc:test(?MODULE,
+                                           false,
                                            [{data_root,
                                              "test/bitcask-backend"}]))]}
          ]}]}]}.
@@ -610,7 +798,7 @@ setup() ->
     ok.
 
 cleanup(_) ->
-    ?_assertCmd("rm -rf test/bitcask-backend").
+    os:cmd("rm -rf test/bitcask-backend/*").
 
 -endif. % EQC
 
