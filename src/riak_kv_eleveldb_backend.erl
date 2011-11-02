@@ -87,6 +87,7 @@ start(Partition, Config) ->
                           data_root = DataDir,
                           read_opts = config_value(read_options, Config, []),
                           write_opts = config_value(write_options, Config, []),
+                          fold_opts = config_value(fold_options, Config, [{fill_cache, false}]),
                           config = Config }};
         {error, Reason} ->
             {error, Reason}
@@ -306,7 +307,6 @@ open_db(DataRoot, Config) ->
     %% under heavy uniform load...
     WriteBufferMin = config_value(write_buffer_size_min, Config, 3 * 1024 * 1024),
     WriteBufferMax = config_value(write_buffer_size_max, Config, 6 * 1024 * 1024),
-    random:seed(now()),
     WriteBufferSize = WriteBufferMin + random:uniform(1 + WriteBufferMax - WriteBufferMin),
 
     %% Assemble options...
