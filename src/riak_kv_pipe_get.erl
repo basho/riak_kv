@@ -49,7 +49,9 @@
          process/3,
          done/1]).
 -export([bkey/1,
-         keydata/1]).
+         keydata/1,
+         bkey_chash/1,
+         bkey_nval/1]).
 
 -include("riak_kv_vnode.hrl").
 
@@ -128,3 +130,16 @@ keydata({{_,_},KeyData}) -> KeyData;
 keydata({_,_})           -> undefined;
 keydata([_,_])           -> undefined;
 keydata([_,_,KeyData])   -> KeyData.
+
+%% @doc Compute the KV hash of the input.
+-spec bkey_chash(riak_kv_mrc_pipe:key_input()) -> chash:index().
+bkey_chash(Input) ->
+    riak_core_util:chash_key(bkey(Input)).
+
+%% @doc Find the N value for the bucket of the input.
+-spec bkey_nval(riak_kv_mrc_pipe:key_input()) -> integer().
+bkey_nval(Input) ->
+    {Bucket,_} = bkey(Input),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    {n_val, NVal} = lists:keyfind(n_val, 1, BucketProps),
+    NVal.
