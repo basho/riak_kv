@@ -720,7 +720,7 @@ startup_data_dir_test() ->
     [_ | RemovalPartitionDirs] = lists:reverse(TSPartitionDirs),
     os:cmd("rm -rf test/bitcask-backend/*"),
     ?assertEqual(["42", "manual_cleanup"], lists:sort(DataDirs)),
-    ?assertEqual(RemovalPartitionDirs, RemovalDirs).
+    ?assertEqual(RemovalPartitionDirs, lists:reverse(lists:sort(RemovalDirs))).
 
 drop_test() ->
     os:cmd("rm -rf test/bitcask-backend/*"),
