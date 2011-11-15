@@ -43,6 +43,8 @@ start_link() ->
 init([]) ->
     [ webmachine_router:add_route(R)
       || R <- lists:reverse(riak_kv_web:dispatch_table()) ],
+    [ webmachine_router:add_route(R)
+      || R <- lists:reverse(app_helper:get_env(riak_kv, routes, [])) ],
     VMaster = {riak_kv_vnode_master,
                {riak_core_vnode_master, start_link,
                 [riak_kv_vnode, riak_kv_legacy_vnode]},
