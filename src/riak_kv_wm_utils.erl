@@ -121,6 +121,12 @@ multipart_encode_body(Prefix, Bucket, {MD, V}, APIVersion) ->
              Rfc1123
      end,
      "\r\n",
+     case dict:find(?MD_DELETED, MD) of
+         {ok, "true"} ->
+             [?HEAD_DELETED, ": true\r\n"];
+         error ->
+             []
+     end,
      case dict:find(?MD_USERMETA, MD) of
          {ok, M} ->
             lists:foldl(fun({Hdr,Val},Acc) ->
