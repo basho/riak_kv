@@ -528,12 +528,26 @@ send_inputs(Pipe, {Bucket, FilterExprs}, Timeout) ->
     end;
 send_inputs(Pipe, {index, Bucket, Index, Key}, Timeout) ->
     Query = {eq, Index, Key},
-    NewInput = {modfun, riak_index, mapred_index, [Bucket, Query]},
-    send_inputs(Pipe, NewInput, Timeout);
+    case app_helper:get_env(riak_kv, mapred_2i_pipe, false) of
+        true ->
+            riak_kv_pipe_index:queue_existing_pipe(
+              Pipe, Bucket, Query, Timeout);
+        _ ->
+            %% must use modfun form if there are 1.0 nodes in the cluster,
+            %% because they do not have the riak_kv_pipe_index module
+            NewInput = {modfun, riak_index, mapred_index, [Bucket, Query]},
+            send_inputs(Pipe, NewInput, Timeout)
+    end;
 send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey}, Timeout) ->
     Query = {range, Index, StartKey, EndKey},
-    NewInput = {modfun, riak_index, mapred_index, [Bucket, Query]},
-    send_inputs(Pipe, NewInput, Timeout);
+    case app_helper:get_env(riak_kv, mapred_2i_pipe, false) of
+        true ->
+            riak_kv_pipe_index:queue_existing_pipe(
+              Pipe, Bucket, Query, Timeout);
+        _ ->
+            NewInput = {modfun, riak_index, mapred_index, [Bucket, Query]},
+            send_inputs(Pipe, NewInput, Timeout)
+    end;
 send_inputs(Pipe, {search, Bucket, Query}, Timeout) ->
     NewInput = {modfun, riak_search, mapred_search, [Bucket, Query, []]},
     send_inputs(Pipe, NewInput, Timeout);
