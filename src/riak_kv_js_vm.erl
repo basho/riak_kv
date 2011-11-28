@@ -233,10 +233,14 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% Internal functions
 define_invoke_anon_js(JS, Args, #state{ctx=Ctx}=State) ->
-    JSFun =  define_anon_js(JS, Args),
-    case invoke_js(Ctx, JSFun) of
-        {ok, R} ->
-            {{ok, R}, State};
+    case define_anon_js(JS, Args) of
+        {ok, JSFun} ->
+            case invoke_js(Ctx, JSFun) of
+                {ok, R} ->
+                    {{ok, R}, State};
+                Error ->
+                    {Error, State}
+            end;
         Error ->
             {Error, State}
     end.
@@ -280,7 +284,7 @@ invoke_js(Ctx, Js, Args) ->
 define_anon_js(JS, Args) ->
     try
         ArgList = build_arg_list(Args, []),
-        iolist_to_binary([JS, <<"(">>, ArgList, <<");">>])
+        {ok, iolist_to_binary([JS, <<"(">>, ArgList, <<");">>])}
     catch
         exit: {ucs, {bad_utf8_character_code}} ->
             lager:error("Error JSON encoding arguments: ~p", [Args]),
