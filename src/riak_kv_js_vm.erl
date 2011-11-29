@@ -274,11 +274,11 @@ invoke_js(Ctx, Js, Args) ->
     catch
         exit: {ucs, {bad_utf8_character_code}} ->
             lager:error("Error JSON encoding arguments: ~p", [Args]),
-            {error, bad_encoding};
+            {error, bad_utf8_character_code};
         exit: {json_encode, _} ->
             {error, bad_json};
         throw:invalid_utf8 ->
-            {error, bad_encoding}
+            {error, bad_utf8_character_code}
     end.
 
 define_anon_js(JS, Args) ->
@@ -288,11 +288,11 @@ define_anon_js(JS, Args) ->
     catch
         exit: {ucs, {bad_utf8_character_code}} ->
             lager:error("Error JSON encoding arguments: ~p", [Args]),
-            {error, bad_encoding};
+            {error, bad_utf8_character_code};
         exit: {json_encode, _} ->
             {error, bad_json};
         throw:invalid_utf8 ->
-            {error, bad_encoding}
+            {error, bad_utf8_character_code}
     end.
 
 new_context(ThreadStack, HeapSize) ->
