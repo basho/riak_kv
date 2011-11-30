@@ -198,7 +198,7 @@
                get_fsm_time,put_fsm_time,
                pbc_connects,pbc_connects_total,pbc_active,
                read_repairs, read_repairs_total,
-               coord_redirs, coord_redirs_total, mapper_count, 
+               coord_redirs, coord_redirs_total, mapper_count,
                get_meter, put_meter, legacy}).
 
 
@@ -422,27 +422,27 @@ update_metric(Field, Value, State) ->
 
 %% @spec update(Stat::term(), integer(), state()) -> state()
 %% @doc Update the given stat in State, returning a new State.
-update1(vnode_get, _, State) -> 
+update1(vnode_get, _, State) ->
     update_metric(#state.vnode_gets, 1, State);
-update1(vnode_put, _, State) -> 
+update1(vnode_put, _, State) ->
     update_metric(#state.vnode_puts, 1, State);
-update1(vnode_index_read, _, State) -> 
+update1(vnode_index_read, _, State) ->
     update_metric(#state.vnode_index_reads, 1, State);
 update1({vnode_index_write, Postings}, _, State) ->
     update_metric(#state.vnode_index_writes_postings,
-                  Postings, 
+                  Postings,
                   update_metric(#state.vnode_index_writes, 1, State));
 update1({vnode_index_delete, Postings}, _, State) ->
     update_metric(#state.vnode_index_deletes_postings,
-                  Postings, 
+                  Postings,
                   update_metric(#state.vnode_index_deletes, 1, State));
 update1({get_fsm, _Bucket, Microsecs, _NumSiblings, _ObjSize}, Moment, State) ->
     update1({get_fsm_time, Microsecs}, Moment, State);
 update1({get_fsm_time, Microsecs}, _, State) ->
-    update_metric(#state.get_meter, 1, 
+    update_metric(#state.get_meter, 1,
                   update_metric(#state.get_fsm_time, Microsecs, State));
 update1({put_fsm_time, Microsecs}, _, State) ->
-    update_metric(#state.put_meter, 1, 
+    update_metric(#state.put_meter, 1,
                   update_metric(#state.put_fsm_time, Microsecs, State));
 update1(pbc_connect, _, State=#state{pbc_active=Active}) ->
     update_metric(#state.pbc_connects, 1, State#state{pbc_active=Active+1});
@@ -692,7 +692,21 @@ app_stats() ->
      || {A,_,V} <- application:which_applications()].
 
 memory_stats() ->
-    [{list_to_atom("memory_" ++ atom_to_list(K)), V} || {K,V} <- erlang:memory()].
+    SystemMem=memsup:get_system_memory_data(),
+    ErlangMem=erlang:memory(),
+    TotalSystemMemory=proplists:get_value(total_memory,SystemMem),
+    FreeSystemMemory=proplists:get_value(free_memory,SystemMem),
+    TotalErlangMemory=proplists:get_value(total,ErlangMem),
+    PctUsed=1.0 - (FreeSystemMemory/TotalSystemMemory),
+    PctUsedByErlang=TotalErlangMemory/TotalSystemMemory,
+
+    %% add a couple useful "watermark" ish stats
+    GlobalMem=[{pct_used,round(100 * (PctUsed + 0.005))},
+               {pct_used_by_erlang,round(100 * (PctUsedByErlang + 0.005))}|
+               ErlangMem],
+
+    %% identify memory stats with a "memory_" prefix
+    [{list_to_atom("memory_" ++ atom_to_list(K)), V} || {K,V} <- GlobalMem].
 
 ring_stats() ->
     {ok, R} = riak_core_ring_manager:get_my_ring(),
@@ -727,7 +741,7 @@ pbc_stats(Moment, State=#state{pbc_connects_total=NCT, pbc_active=Active, legacy
               {pbc_connects, spiral_minute(Moment, #state.pbc_connects, State)},
               {pbc_active, Active}]
     end;
-pbc_stats(_, State=#state{pbc_connects_total=NCT, 
+pbc_stats(_, State=#state{pbc_connects_total=NCT,
                           pbc_active=Active, legacy=false}) ->
     case whereis(riak_kv_pb_socket_sup) of
         undefined ->
@@ -737,7 +751,7 @@ pbc_stats(_, State=#state{pbc_connects_total=NCT,
             [{pbc_connects_total, NCT},
              {pbc_connects, meter_minute(NC)},
              {pbc_active, Active}]
-    end.    
+    end.
 
 
 remove_slide_private_dirs() ->
