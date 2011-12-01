@@ -203,23 +203,11 @@ handoff(HandoffAcc, #state{inacc=OldInAcc}=State) ->
          {ok, [term()]} | {error, {term(), term(), term()}}.
 reduce(Inputs, #state{fd=FittingDetails}, ErrString) ->
     {rct, Fun, Arg} = FittingDetails#fitting_details.arg,
-    try
-        ?T(FittingDetails, [reduce], {reducing, length(Inputs)}),
-        Outputs = Fun(Inputs, Arg),
-        true = is_list(Outputs), %%TODO: nicer error
-        ?T(FittingDetails, [reduce], {reduced, length(Outputs)}),
-        Outputs
-    catch Type:Error ->
-            %% attempting to be helpful here by catching the error and
-            %% preserving the inputs, in case trying the input again
-            %% later (when a new input or eoi arrives) will be
-            %% successful
-            ?T(FittingDetails, [reduce], {reduce_error, Type, Error}),
-            error_logger:error_msg(
-              "~p:~p ~s:~n   ~P~n   ~P",
-              [Type, Error, ErrString, Inputs, 15, erlang:get_stacktrace(), 15]),
-            Inputs
-    end.
+    ?T(FittingDetails, [reduce], {reducing, ErrString, length(Inputs)}),
+    Outputs = Fun(Inputs, Arg),
+    true = is_list(Outputs), %%TODO: nicer error
+    ?T(FittingDetails, [reduce], {reduced, ErrString, length(Outputs)}),
+    Outputs.
 
 %% @doc Check that the arg is a valid arity-2 function.  See {@link
 %%      riak_pipe_v:validate_function/3}.
