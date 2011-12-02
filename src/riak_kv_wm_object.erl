@@ -837,35 +837,45 @@ delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C, rw=RW, r=R, w=W,
 %% @spec generate_etag(reqdata(), context()) ->
 %%          {undefined|string(), reqdata(), context()}
 %% @doc Get the etag for this resource.
-%%      Documents will have an etag equal to their vtag.  No etag will be
-%%      given for documents with siblings, if no sibling was chosen with the
-%%      vtag query param.
+%%      Documents will have an etag equal to their vtag. For documents with
+%%      siblings when no vtag is specified, this will be an etag derived from
+%%      the vector clock.
 generate_etag(RD, Ctx) ->
     case select_doc(Ctx) of
         {MD, _} ->
             {dict:fetch(?MD_VTAG, MD), RD, Ctx};
         multiple_choices ->
-            {undefined, RD, Ctx}
+            {ok, Doc} = Ctx#ctx.doc,
+            <<ETag:128/integer>> = crypto:md5(term_to_binary(riak_object:vclock(Doc))),
+            {riak_core_util:integer_to_list(ETag, 62), RD, Ctx}
     end.
 
 %% @spec last_modified(reqdata(), context()) ->
 %%          {undefined|datetime(), reqdata(), context()}
 %% @doc Get the last-modified time for this resource.
 %%      Documents will have the last-modified time specified by the riak_object.
-%%      No last-modified time will be given for documents with siblings, if no
-%%      sibling was chosen with the vtag query param.
+%%      For documents with siblings, this is the last-modified time of the latest
+%%      sibling.
 last_modified(RD, Ctx) ->
     case select_doc(Ctx) of
         {MD, _} ->
-            {case dict:fetch(?MD_LASTMOD, MD) of
-                 Now={_,_,_} ->
-                     calendar:now_to_universal_time(Now);
-                 Rfc1123 when is_list(Rfc1123) ->
-                     httpd_util:convert_request_date(Rfc1123)
-             end,
-             RD, Ctx};
+            {normalize_last_modified(MD),RD, Ctx};
         multiple_choices ->
-            {undefined, RD, Ctx}
+            {ok, Doc} = Ctx#ctx.doc,
+            LMDates = [ normalize_last_modified(MD) ||
+                          MD <- riak_object:get_metadatas(Doc) ],            
+            {lists:max(LMDates), RD, Ctx}
+    end.
+
+%% @spec normalize_last_modified(dict()) -> calendar:datetime()
+%% @doc Extract and convert the Last-Modified metadata into a normalized form
+%%      for use in the last_modified/2 callback.
+normalize_last_modified(MD) ->
+    case dict:fetch(?MD_LASTMOD, MD) of
+        Now={_,_,_} ->
+            calendar:now_to_universal_time(Now);
+        Rfc1123 when is_list(Rfc1123) ->
+            httpd_util:convert_request_date(Rfc1123)
     end.
 
 %% @spec get_link_heads(reqdata(), context()) -> [link()]
