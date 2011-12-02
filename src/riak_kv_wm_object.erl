@@ -605,7 +605,8 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L, index_fields=IF
 %% Handle the no-sibling case. Just send the object.
 send_returnbody(RD, DocCtx, _HasSiblings = false) ->
     {Body, DocRD, DocCtx2} = produce_doc_body(RD, DocCtx),
-    {true, wrq:append_to_response_body(Body, DocRD), DocCtx2};
+    {DocRD2, DocCtx3} = add_conditional_headers(DocRD, DocCtx2),
+    {true, wrq:append_to_response_body(Body, DocRD2), DocCtx3};
 
 %% Handle the sibling case. Send either the sibling message body, or a
 %% multipart body, depending on what the client accepts.
@@ -614,11 +615,24 @@ send_returnbody(RD, DocCtx, _HasSiblings = true) ->
     case webmachine_util:choose_media_type(["multipart/mixed", "text/plain"], AcceptHdr) of
         "multipart/mixed"  ->
             {Body, DocRD, DocCtx2} = produce_multipart_body(RD, DocCtx),
-            {true, wrq:append_to_response_body(Body, DocRD), DocCtx2};
+            {DocRD2, DocCtx3} = add_conditional_headers(DocRD, DocCtx2),
+            {true, wrq:append_to_response_body(Body, DocRD2), DocCtx3};
         _ ->
             {Body, DocRD, DocCtx2} = produce_sibling_message_body(RD, DocCtx),
-            {true, wrq:append_to_response_body(Body, DocRD), DocCtx2}
+            {DocRD2, DocCtx3} = add_conditional_headers(DocRD, DocCtx2),
+            {true, wrq:append_to_response_body(Body, DocRD2), DocCtx3}
     end.
+
+%% Add ETag and Last-Modified headers to responses that might not
+%% necessarily include them, specifically when the client requests
+%% returnbody on a PUT or POST.
+add_conditional_headers(RD, Ctx) ->
+    {ETag, RD2, Ctx2} = generate_etag(RD, Ctx),
+    {LM, RD3, Ctx3} = last_modified(RD2, Ctx2),
+    RD4 = wrq:set_resp_header("ETag", webmachine_util:quoted_string(ETag), RD3),
+    RD5 = wrq:set_resp_header("Last-Modified",
+                              httpd_util:rfc1123_date(calendar:universal_time_to_local_time(LM)), RD4),
+    {RD5,Ctx3}.
 
 %% @spec extract_content_type(reqdata()) ->
 %%          {ContentType::string(), Charset::string()|undefined}
