@@ -281,9 +281,8 @@ js_runner(JS) ->
                      || R <- Results0];
                 {ok, NonlistResults} ->
                     NonlistResults; %% will blow up in reduce/3
-                {error, no_vms} ->
-                    %% will be caught by process/3, or will blow up done/1
-                    throw(no_js_vms)
+                {error, Error} ->
+                    exit(Error)
             end
     end.
 
