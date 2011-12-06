@@ -204,10 +204,13 @@ handoff(HandoffAcc, #state{inacc=OldInAcc}=State) ->
 reduce(Inputs, #state{fd=FittingDetails}, ErrString) ->
     {rct, Fun, Arg} = FittingDetails#fitting_details.arg,
     ?T(FittingDetails, [reduce], {reducing, ErrString, length(Inputs)}),
-    Outputs = Fun(Inputs, Arg),
-    true = is_list(Outputs), %%TODO: nicer error
-    ?T(FittingDetails, [reduce], {reduced, ErrString, length(Outputs)}),
-    Outputs.
+    case Fun(Inputs, Arg) of
+        Outputs when is_list(Outputs) ->
+            ?T(FittingDetails, [reduce], {reduced, ErrString, length(Outputs)}),
+            Outputs;
+        _NonListOutputs ->
+            exit(non_list_result)
+    end.
 
 %% @doc Check that the arg is a valid arity-2 function.  See {@link
 %%      riak_pipe_v:validate_function/3}.
@@ -273,9 +276,11 @@ js_runner(JS) ->
             JSCall = {JS, [JSInputs, SafeArg]},
             case riak_kv_js_manager:blocking_dispatch(
                    ?JSPOOL_REDUCE, JSCall, ?DEFAULT_JS_RESERVE_ATTEMPTS) of
-                {ok, Results0}  ->
+                {ok, Results0} when is_list(Results0) ->
                     [riak_kv_mapred_json:dejsonify_not_found(R)
                      || R <- Results0];
+                {ok, NonlistResults} ->
+                    NonlistResults; %% will blow up in reduce/3
                 {error, no_vms} ->
                     %% will be caught by process/3, or will blow up done/1
                     throw(no_js_vms)

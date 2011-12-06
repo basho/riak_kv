@@ -284,9 +284,8 @@ pipe_error_type(Elist) ->
     pipe_error_field(type, Elist).
 
 pipe_error_error(Elist) ->
-    %% translate common errors?
-    %% e.g. bad json
-    pipe_error_trunc_print(error, Elist).
+    pipe_error_field(error, Elist, fun trunc_print/1,
+                     pipe_error_trunc_print(reason, Elist)).
 
 pipe_error_input(Elist) ->
     %% translate common inputs?
