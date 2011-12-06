@@ -82,6 +82,8 @@ parse_inputs({index, Bucket, Index, Key}) ->
     end;
 parse_inputs({index, Bucket, Index, StartKey, EndKey}) ->
     case riak_index:parse_fields([{Index, StartKey}, {Index, EndKey}]) of
+        {ok, [{Index1, Key1}]} ->
+            {ok, {index, Bucket, Index1, Key1}};
         {ok, [{Index1, StartKey1}, {Index1, EndKey1}]} ->
             {ok, {index, Bucket, Index1, StartKey1, EndKey1}};
         {error, Reasons} ->
