@@ -46,7 +46,8 @@
 -record(pipe_ctx, {pipe,     % pipe handling mapred request
                    ref,      % easier-access ref/reqid
                    timer,    % ref() for timeout send_after
-                   sender}). % {pid(), monitor()} of process sending inputs
+                   sender,   % {pid(), monitor()} of process sending inputs
+                   has_mr_query}). % true if the request contains a query.
 
 -define(PROTO_MAJOR, 1).
 -define(PROTO_MINOR, 0).
@@ -122,8 +123,8 @@ handle_info(#pipe_eoi{ref=ReqId},
 
 handle_info(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
             State=#state{req=#rpbmapredreq{content_type = ContentType}, 
-                         req_ctx=#pipe_ctx{ref=ReqId}=PipeCtx}) ->
-    case encode_mapred_phase([Res], ContentType) of
+                         req_ctx=#pipe_ctx{ref=ReqId, has_mr_query=HasMRQuery}=PipeCtx}) ->
+    case encode_mapred_phase([Res], ContentType, HasMRQuery) of
         {error, Reason} ->
             erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
             %% destroying the pipe will automatically kill the sender
@@ -192,7 +193,7 @@ handle_info({flow_results, PhaseId, ReqId, Res},
             State=#state{sock=Socket,
                          req=#rpbmapredreq{content_type = ContentType}, 
                          req_ctx=ReqId}) ->
-    case encode_mapred_phase(Res, ContentType) of
+    case encode_mapred_phase(Res, ContentType, true) of
         {error, Reason} ->
             NewState = send_error("~p", [Reason], State),
             inet:setopts(Socket, [{active, once}]),
@@ -472,7 +473,8 @@ pipe_mapreduce(Req, State, Inputs, Query, Timeout) ->
             Ctx = #pipe_ctx{pipe=Pipe,
                             ref=PipeRef,
                             timer=Timer,
-                            sender={InputSender, SenderMonitor}},
+                            sender={InputSender, SenderMonitor},
+                            has_mr_query = (Query /= [])},
             State#state{req=Req, req_ctx=Ctx}
     catch throw:{badarg, Fitting, Reason} ->
             send_error("Phase ~p: ~s", [Fitting, Reason], State),
@@ -609,11 +611,12 @@ is_key_filter(_) ->
     false.
 
 %% Convert a map/reduce phase to the encoding requested
-encode_mapred_phase(Res, <<"application/json">>) ->
-    mochijson2:encode(Res);
-encode_mapred_phase(Res, <<"application/x-erlang-binary">>) ->
+encode_mapred_phase(Res, <<"application/json">>, HasMRQuery) ->
+    Res1 = riak_kv_mapred_json:jsonify_bkeys(Res, HasMRQuery),
+    mochijson2:encode(Res1);
+encode_mapred_phase(Res, <<"application/x-erlang-binary">>, _) ->
     term_to_binary(Res);
-encode_mapred_phase(_Res, ContentType) ->
+encode_mapred_phase(_Res, ContentType, _) ->
     {error, {unknown_content_type, ContentType}}.
 
 normalize_rw_value(?RIAKC_RW_ONE) -> one;
