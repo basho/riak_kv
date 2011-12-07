@@ -441,8 +441,12 @@ process_message(#rpbgetbucketreq{bucket=B},
 process_message(#rpbsetbucketreq{bucket=B, props = PbProps}, 
                 #state{client=C} = State) ->
     Props = riakc_pb:erlify_rpbbucketprops(PbProps),
-    ok = C:set_bucket(B, Props),
-    send_msg(rpbsetbucketresp, State);
+    case C:set_bucket(B, Props) of
+        ok ->
+            send_msg(rpbsetbucketresp, State);
+        {error, Details} ->
+            send_error("Invalid bucket properties: ~p", [Details], State)
+    end;
 
 %% TODO: refactor, cleanup
 %% Start map/reduce job - results will be processed in handle_info

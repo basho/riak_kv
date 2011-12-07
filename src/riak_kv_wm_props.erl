@@ -195,8 +195,14 @@ get_bucket_props_json(Client, Bucket) ->
 %%      bucket-level PUT request.
 accept_bucket_body(RD, Ctx=#ctx{bucket=B, client=C, bucketprops=Props}) ->
     ErlProps = lists:map(fun erlify_bucket_prop/1, Props),
-    C:set_bucket(B, ErlProps),
-    {true, RD, Ctx}.
+    case C:set_bucket(B, ErlProps) of
+        ok ->
+            {true, RD, Ctx};
+        {error, Details} ->
+            JSON = mochijson2:encode(Details),
+            RD2 = wrq:append_to_resp_body(JSON, RD),
+            {{halt, 400}, RD2, Ctx}
+    end.
 
 %% @spec jsonify_bucket_prop({Property::atom(), erlpropvalue()}) ->
 %%           {Property::binary(), jsonpropvalue()}

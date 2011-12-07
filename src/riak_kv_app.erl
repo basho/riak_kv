@@ -79,6 +79,9 @@ start(_Type, _StartArgs) ->
     %% the app is missing or packaging is broken.
     catch cluster_info:register_app(riak_kv_cinfo),
 
+    %% Register the bucket validation fun
+     riak_core:register([{bucket_validator, riak_kv_bucket}]),
+
     %% Spin up supervisor
     case riak_kv_sup:start_link() of
         {ok, Pid} ->
