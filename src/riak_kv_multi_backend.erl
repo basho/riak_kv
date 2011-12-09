@@ -101,7 +101,7 @@ capabilities(State) ->
     F = fun({_, Mod, ModState}, Acc) ->
                 {ok, S1} = Mod:capabilities(ModState),
                 S2 = ordsets:from_list(S1),
-                ordsets:union(Acc, S2)
+                ordsets:intersection(Acc, S2)
         end,
     Caps1 = lists:foldl(F, ordsets:new(), State#state.backends),
     Caps2 = ordsets:to_list(Caps1),
