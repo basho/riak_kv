@@ -138,9 +138,13 @@ process(Input, _Last,
         #state{fd=_FittingDetails, phase=Phase, arg=Arg}=State) ->
     ?T(_FittingDetails, [map], {mapping, Input}),
     case map(Phase, Arg, Input) of
-        {ok, Results} ->
+        {ok, Results} when is_list(Results) ->
             ?T(_FittingDetails, [map], {produced, Results}),
             send_results(Results, State),
+            {ok, State};
+        {ok, _NonListResults} ->
+            ?T(_FittingDetails, [map, error],
+               {error, {non_list_result, Input}}),
             {ok, State};
         {forward_preflist, Reason} ->
             ?T(_FittingDetails, [map], {forward_preflist, Reason}),
