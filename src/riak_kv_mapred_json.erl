@@ -30,6 +30,7 @@
 
 -export([parse_request/1, parse_inputs/1, parse_query/1]).
 -export([jsonify_not_found/1, dejsonify_not_found/1]).
+-export([jsonify_bkeys/2]).
 
 -define(QUERY_TOKEN, <<"query">>).
 -define(INPUTS_TOKEN, <<"inputs">>).
@@ -220,6 +221,8 @@ parse_index_input(Inputs) ->
             end;
         StartKey /= undefined andalso EndKey /= undefined ->
             case riak_index:parse_fields([{Index, StartKey}, {Index, EndKey}]) of
+                {ok, [{Index1, Key1}]} ->
+                    {ok, {index, Bucket, Index1, Key1}};
                 {ok, [{Index1, StartKey1}, {Index1, EndKey1}]} ->
                     {ok, {index, Bucket, Index1, StartKey1, EndKey1}};
                 {error, Reasons} ->
@@ -250,12 +253,7 @@ parse_query(Query) ->
     parse_query(Query, []).
 
 parse_query([], Accum) ->
-    if
-        length(Accum) > 0 ->
-            {ok, lists:reverse(Accum)};
-        true ->
-            {error, "No query phases were given\n"}
-    end;
+    {ok, lists:reverse(Accum)};
 parse_query([{struct, [{Type, {struct, StepDef}}]}|T], Accum)
   when Type =:= <<"map">>; Type =:= <<"reduce">>; Type =:= <<"link">> ->
     StepType = case Type of
@@ -318,6 +316,19 @@ jsonify_not_found({not_found, {Bucket, Key}, KeyData}) ->
                                     {<<"keydata">>, KeyData}]}}]};
 jsonify_not_found(Data) ->
     Data.
+
+jsonify_bkeys(Results, HasMRQuery) when HasMRQuery == true ->
+    Results;
+jsonify_bkeys(Results, HasMRQuery) when HasMRQuery == false ->
+    jsonify_bkeys_1(Results, []).
+jsonify_bkeys_1([{{B, K},D}|Rest], Acc) ->
+    jsonify_bkeys_1(Rest, [[B,K,D]|Acc]);
+jsonify_bkeys_1([{B, K}|Rest], Acc) ->
+    jsonify_bkeys_1(Rest, [[B,K]|Acc]);
+jsonify_bkeys_1([], Acc) ->
+    lists:reverse(Acc).
+
+
 
 parse_link_step(StepDef) ->
     Bucket = proplists:get_value(<<"bucket">>, StepDef, <<"_">>),
