@@ -249,7 +249,7 @@ mapred_plan(BucketOrList, Query) ->
 %% @doc Convert a MapReduce query into a list of Pipe fitting specs.
 -spec mr2pipe_phases([query_part()]) -> [ riak_pipe:fitting_spec() ].
 mr2pipe_phases([]) ->
-    [#fitting_spec{name=empty_pass,
+    [#fitting_spec{name=0,
                    module=riak_pipe_w_pass,
                    chashfun=follow}];
 mr2pipe_phases(Query) ->
