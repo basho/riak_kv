@@ -966,8 +966,8 @@ handle_common_error(Reason, RD, Ctx) ->
     case {error, Reason} of
         {error, precommit_fail} ->
             {{halt, 403}, send_precommit_error(RD, undefined), Ctx};
-        {error, {precommit_fail, Reason}} ->
-            {{halt, 403}, send_precommit_error(RD, Reason), Ctx};
+        {error, {precommit_fail, Message}} ->
+            {{halt, 403}, send_precommit_error(RD, Message), Ctx};
         {error, too_many_fails} ->
             {{halt, 503}, wrq:append_to_response_body("Too Many write failures"
                     " to satisfy W/DW\n", RD), Ctx};
