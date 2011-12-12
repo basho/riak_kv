@@ -219,18 +219,9 @@ pipe_receive_output(Ref, {SenderPid, SenderRef}) ->
             {ok, {From, Result}};
         #pipe_log{ref=Ref, from=From, msg=Msg} ->
             case Msg of
-                {trace, [error], {error, {Error, Input}}} ->
-                    %% map function returned error tuple
-                    {error, [{phase, pipe_phase_index(From)},
-                             {error, trunc_print(Error)},
-                             {input, trunc_print(Input)}]};
-                {trace, [error], {error, Elist}} when is_list(Elist) ->
-                    %% generic pipe fitting error
-                    {error, [{phase, pipe_error_phase(Elist)},
-                             {error, pipe_error_error(Elist)},
-                             {input, pipe_error_input(Elist)},
-                             {type, pipe_error_type(Elist)},
-                             {stack, pipe_error_stack(Elist)}]};
+                {trace, [error], {error, Info}} ->
+                    {error, riak_kv_mapred_json:jsonify_pipe_error(
+                              From, Info)};
                 _ ->
                     %% not a log message we're interested in
                     pipe_receive_output(Ref, {SenderPid, SenderRef})
@@ -245,56 +236,6 @@ pipe_receive_output(Ref, {SenderPid, SenderRef}) ->
         {pipe_timeout, Ref} ->
             {error, timeout}
     end.
-
-%% @doc Turn the pipe fitting name into a MapReduce phase index.
--spec pipe_phase_index(integer()|{term(),integer()}) -> integer().
-pipe_phase_index({_Type, I}) -> I;
-pipe_phase_index(I)          -> I.
-
-%% @doc convenience for formatting ~500chars of a term as a
-%% human-readable string
--spec trunc_print(term()) -> binary().
-trunc_print(Term) ->
-    {Msg, _Len} = lager_trunc_io:print(Term, 500),
-    iolist_to_binary(Msg).
-
-%% @doc Pull a field out of a proplist, and possibly transform it.
-pipe_error_field(Field, Proplist) ->
-    pipe_error_field(Field, Proplist, fun(X) -> X end).
-pipe_error_field(Field, Proplist, TrueFun) ->
-    pipe_error_field(Field, Proplist, TrueFun, null).
-pipe_error_field(Field, Proplist, TrueFun, FalseVal) ->
-    case lists:keyfind(Field, 1, Proplist) of
-        {Field, Value} -> TrueFun(Value);
-        false          -> FalseVal
-    end.
-
-%% @doc Pull a field out of a proplist, and format it as a reasonably
-%% short binary if available.
-pipe_error_trunc_print(Field, Elist) ->
-    pipe_error_field(Field, Elist, fun trunc_print/1).
-
-%% @doc Determine the phase that this error came from.
-pipe_error_phase(Elist) ->
-    Details = pipe_error_field(details, Elist, fun(X) -> X end, []),
-    pipe_error_field(name, Details, fun pipe_phase_index/1).
-
-pipe_error_type(Elist) ->
-    %% is this really useful?
-    pipe_error_field(type, Elist).
-
-pipe_error_error(Elist) ->
-    pipe_error_field(error, Elist, fun trunc_print/1,
-                     pipe_error_trunc_print(reason, Elist)).
-
-pipe_error_input(Elist) ->
-    %% translate common inputs?
-    %% e.g. strip 'ok' tuple from map input
-    pipe_error_trunc_print(input, Elist).
-
-pipe_error_stack(Elist) ->
-    %% truncate stacks to "important" part?
-    pipe_error_trunc_print(stack, Elist).
 
 pipe_mapred_chunked(RD, State, Pipe, Sender) ->
     Boundary = riak_core_util:unique_id_62(),

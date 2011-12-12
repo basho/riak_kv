@@ -134,15 +134,17 @@ handle_info(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
             {noreply, send_msg(#rpbmapredresp{phase=PhaseId, 
                                               response=Response}, State)}
     end;
-handle_info(#pipe_log{ref=ReqId, msg=Msg},
+handle_info(#pipe_log{ref=ReqId, from=From, msg=Msg},
             State=#state{req=#rpbmapredreq{},
                          req_ctx=#pipe_ctx{ref=ReqId}=PipeCtx}) ->
     case Msg of
-        {trace, [error], {error, {Error, _Input}}} ->
+        {trace, [error], {error, Info}} ->
             erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
             %% destroying the pipe will automatically kill the sender
             riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
-            NewState = send_error("~p", [{error, Error}], State),
+            JsonInfo = {struct, riak_kv_mapred_json:jsonify_pipe_error(
+                                  From, Info)},
+            NewState = send_error(mochijson2:encode(JsonInfo), [], State),
             {noreply, NewState#state{req = undefined, req_ctx = undefined}};
         _ ->
             {noreply, State}
