@@ -203,22 +203,13 @@ handoff(HandoffAcc, #state{inacc=OldInAcc}=State) ->
          {ok, [term()]} | {error, {term(), term(), term()}}.
 reduce(Inputs, #state{fd=FittingDetails}, ErrString) ->
     {rct, Fun, Arg} = FittingDetails#fitting_details.arg,
-    try
-        ?T(FittingDetails, [reduce], {reducing, length(Inputs)}),
-        Outputs = Fun(Inputs, Arg),
-        true = is_list(Outputs), %%TODO: nicer error
-        ?T(FittingDetails, [reduce], {reduced, length(Outputs)}),
-        Outputs
-    catch Type:Error ->
-            %% attempting to be helpful here by catching the error and
-            %% preserving the inputs, in case trying the input again
-            %% later (when a new input or eoi arrives) will be
-            %% successful
-            ?T(FittingDetails, [reduce], {reduce_error, Type, Error}),
-            error_logger:error_msg(
-              "~p:~p ~s:~n   ~P~n   ~P",
-              [Type, Error, ErrString, Inputs, 15, erlang:get_stacktrace(), 15]),
-            Inputs
+    ?T(FittingDetails, [reduce], {reducing, ErrString, length(Inputs)}),
+    case Fun(Inputs, Arg) of
+        Outputs when is_list(Outputs) ->
+            ?T(FittingDetails, [reduce], {reduced, ErrString, length(Outputs)}),
+            Outputs;
+        _NonListOutputs ->
+            exit(non_list_result)
     end.
 
 %% @doc Check that the arg is a valid arity-2 function.  See {@link
@@ -285,12 +276,13 @@ js_runner(JS) ->
             JSCall = {JS, [JSInputs, SafeArg]},
             case riak_kv_js_manager:blocking_dispatch(
                    ?JSPOOL_REDUCE, JSCall, ?DEFAULT_JS_RESERVE_ATTEMPTS) of
-                {ok, Results0}  ->
+                {ok, Results0} when is_list(Results0) ->
                     [riak_kv_mapred_json:dejsonify_not_found(R)
                      || R <- Results0];
-                {error, no_vms} ->
-                    %% will be caught by process/3, or will blow up done/1
-                    throw(no_js_vms)
+                {ok, NonlistResults} ->
+                    NonlistResults; %% will blow up in reduce/3
+                {error, Error} ->
+                    exit(Error)
             end
     end.
 

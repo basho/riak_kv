@@ -82,7 +82,6 @@ process_post(RD, State) ->
             legacy_mapred(RD, State)
     end.
 
-
 %% Internal functions
 send_error(Error, RD)  ->
     wrq:set_resp_body(format_error(Error), RD).
@@ -192,8 +191,7 @@ pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender) ->
             riak_pipe:destroy(Pipe),
             prevent_keepalive(),
             {{halt, 500}, send_error({error, timeout}, RD), State};
-        {error, {Error, _Input}} ->
-            %% TODO: jsonify Input for error message
+        {error, Error} ->
             riak_pipe:destroy(Pipe),
             prevent_keepalive(),
             {{halt, 500}, send_error({error, Error}, RD), State}
@@ -221,10 +219,11 @@ pipe_receive_output(Ref, {SenderPid, SenderRef}) ->
             eoi;
         #pipe_result{ref=Ref, from=From, result=Result} ->
             {ok, {From, Result}};
-        #pipe_log{ref=Ref, msg=Msg} ->
+        #pipe_log{ref=Ref, from=From, msg=Msg} ->
             case Msg of
-                {trace, [error], {error, {Error, Input}}} ->
-                    {error, {Error, Input}};
+                {trace, [error], {error, Info}} ->
+                    {error, riak_kv_mapred_json:jsonify_pipe_error(
+                              From, Info)};
                 _ ->
                     %% not a log message we're interested in
                     pipe_receive_output(Ref, {SenderPid, SenderRef})
