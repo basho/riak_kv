@@ -34,6 +34,9 @@ fsm(Bucket) ->
 
 gather_fsm_results(ReqId, Count) ->
     receive
+        {ReqId, From, {keys, Keys}} ->
+            riak_kv_keys_fsm:ack_keys(From),
+            gather_fsm_results(ReqId, Count + length(Keys));
         {ReqId, {keys, Keys}} ->
             gather_fsm_results(ReqId, Count + length(Keys));
         {ReqId, done} ->

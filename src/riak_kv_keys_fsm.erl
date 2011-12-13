@@ -43,7 +43,8 @@
          process_results/2,
          finish/2]).
 -export([use_ack_backpressure/0,
-         req/2]).
+         req/2,
+         ack_keys/1]).
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
@@ -137,8 +138,27 @@ finish(clean,
 %% Internal functions
 %% ===================================================================
 
+%% @doc If a listkeys request sends a result of `{ReqId, From, {keys,
+%% Items}}', that means it wants acknowledgement of those items before
+%% it will send more.  Call this function with that `From' to trigger
+%% the next batch.
+-spec ack_keys(From::{pid(), reference()}) -> term().
+ack_keys({Pid, Ref}) ->
+    Pid ! {Ref, ok}.
+
 process_keys(plain, _Bucket, Keys, ReqId, ClientPid) ->
-    ClientPid ! {ReqId, {keys, Keys}};
+    case use_ack_backpressure() of
+        true ->
+            Monitor = erlang:monitor(process, ClientPid),
+            ClientPid ! {ReqId, {self(), Monitor}, {keys, Keys}},
+            receive
+                {Monitor, ok} -> ok;
+                {'DOWN', Monitor, process, _Pid, _Reason} ->
+                    exit(self(), normal)
+            end;
+        false ->
+            ClientPid ! {ReqId, {keys, Keys}}
+    end;
 process_keys(mapred, Bucket, Keys, _ReqId, ClientPid) ->
     try
         luke_flow:add_inputs(ClientPid, [{Bucket, Key} || Key <- Keys])
