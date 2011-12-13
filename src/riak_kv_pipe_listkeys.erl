@@ -45,7 +45,6 @@
          done/1,
          queue_existing_pipe/3]).
 
--include("riak_kv_vnode.hrl").
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
 
@@ -76,8 +75,7 @@ process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
     end,
     ReqId = erlang:phash2(erlang:now()), % stolen from riak_client
     riak_core_vnode_master:coverage(
-      ?KV_LISTKEYS_REQ{bucket=Bucket,
-                       item_filter=Filters},
+      riak_kv_keys_fsm:req(Bucket, Filters),
       {Partition, node()},
       FilterVNodes,
       {raw, ReqId, self()},
@@ -87,6 +85,10 @@ process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
 
 keysend_loop(ReqId, Partition, FittingDetails) ->
     receive
+        {ReqId, {From, Bucket, Keys}} ->
+            keysend(Bucket, Keys, Partition, FittingDetails),
+            riak_kv_vnode:ack_keys(From),
+            keysend_loop(ReqId, Partition, FittingDetails);
         {ReqId, {Bucket, Keys}} ->
             keysend(Bucket, Keys, Partition, FittingDetails),
             keysend_loop(ReqId, Partition, FittingDetails);
