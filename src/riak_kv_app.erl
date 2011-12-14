@@ -86,7 +86,7 @@ start(_Type, _StartArgs) ->
             %% The riak_core_ring_handler blocks until all vnodes have been started
             %% synchronously.
             riak_core:register_vnode_module(riak_kv_vnode),
-            riak_core_node_watcher:service_up(riak_kv, self()),
+            riak_core_ring_events:force_sync_update(),
             {ok, Pid};
         {error, Reason} ->
             {error, Reason}
