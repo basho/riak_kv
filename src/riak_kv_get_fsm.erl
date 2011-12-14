@@ -350,17 +350,17 @@ update_stats({ok, Obj}, #state{get_usecs = GetUsecs}) ->
     %% especially for objects with large values.
     NumSiblings = riak_object:value_count(Obj),
     Contents = riak_object:get_contents(Obj),
-    ValueSize = fun (Value) when is_binary(Value) -> size(Value);
-                    (Value) -> size(term_to_binary(Value))
-                end,
     ObjSize =
         size(riak_object:bucket(Obj)) +
         size(riak_object:key(Obj)) +
         size(term_to_binary(riak_object:vclock(Obj))) +
-        lists:sum([size(term_to_binary(MD)) + ValueSize(Value) || {MD, Value} <- Contents]),
+        lists:sum([size(term_to_binary(MD)) + value_size(Value) || {MD, Value} <- Contents]),
     riak_kv_stat:update({get_fsm, undefined, GetUsecs, NumSiblings, ObjSize});
 update_stats(_, #state{get_usecs = GetUsecs}) ->
     riak_kv_stat:update({get_fsm, undefined, GetUsecs, undefined, undefined}).
+
+value_size(Value) when is_binary(Value) -> size(Value);
+value_size(Value) -> size(term_to_binary(Value)).
 
 client_info(true, StateData, Acc) ->
     client_info(details(), StateData, Acc);
