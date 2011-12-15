@@ -85,8 +85,9 @@ start(_Type, _StartArgs) ->
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
             %% synchronously.
-            riak_core:register_vnode_module(riak_kv_vnode),
-            riak_core_ring_events:force_sync_update(),
+            riak_core:register(riak_kv, [
+                {vnode_module, riak_kv_vnode}
+            ]),
             {ok, Pid};
         {error, Reason} ->
             {error, Reason}
