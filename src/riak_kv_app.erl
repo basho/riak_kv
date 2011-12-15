@@ -88,6 +88,10 @@ start(_Type, _StartArgs) ->
             riak_core:register(riak_kv, [
                 {vnode_module, riak_kv_vnode}
             ]),
+
+            %% Add routes to webmachine
+            [ webmachine_router:add_route(R)
+              || R <- lists:reverse(riak_kv_web:dispatch_table()) ],
             {ok, Pid};
         {error, Reason} ->
             {error, Reason}
