@@ -27,6 +27,7 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
+-include("riak_kv_wm_raw.hrl").
 
 -export([start_link/6, start_link/7, start_link/8, delete/8]).
 
@@ -72,7 +73,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
         {error, Reason} ->
             Client ! {ReqId, {error, Reason}};
         {W, PW, DW} ->
-            Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(<<"X-Riak-Deleted">>,
+            Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(?MD_DELETED,
                                                                  "true", dict:new())),
             Tombstone = riak_object:set_vclock(Obj0, VClock),
             {ok,C} = riak:local_client(ClientId),
