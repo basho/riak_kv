@@ -152,7 +152,8 @@ process_keys(plain, _Bucket, Keys, ReqId, ClientPid) ->
             Monitor = erlang:monitor(process, ClientPid),
             ClientPid ! {ReqId, {self(), Monitor}, {keys, Keys}},
             receive
-                {Monitor, ok} -> ok;
+                {Monitor, ok} ->
+                    erlang:demonitor(Monitor, [flush]);
                 {'DOWN', Monitor, process, _Pid, _Reason} ->
                     exit(self(), normal)
             end;
