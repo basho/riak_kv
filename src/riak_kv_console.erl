@@ -33,7 +33,8 @@
          ringready/1,
          transfers/1,
          cluster_info/1,
-         down/1]).
+         down/1,
+         reload_code/1]).
 
 join([NodeStr]) ->
     try
@@ -299,7 +300,7 @@ reload_file(Filename) ->
     Mod = list_to_atom(filename:basename(Filename, ".beam")),
     case code:is_loaded(Mod) of
         {file, Filename} ->
-            code:purge(Mod),
+            code:soft_purge(Mod),
             code:load_file(Mod),
             io:format("Reloaded module ~w from ~s.~n", [Mod, Filename]);
         {file, Other} ->
