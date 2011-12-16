@@ -283,6 +283,21 @@ cluster_info([OutFile|Rest]) ->
             error
     end.
 
+reload_code([]) ->
+    case app_helper:get_env(riak_kv, add_paths) of
+        List when is_list(List) ->
+            [ reload_path(Path) || Path <- List ],
+            ok;
+        _ -> ok
+    end.
+
+reload_path(Path) ->
+    {ok, Beams} = file:list_dir(Path),
+    [ begin
+          M = list_to_atom(filename:basename(Beam, ".beam")),
+          code:purge(M), code:load_file(M)
+      end || Beam <- Beams ].
+
 format_stats([], Acc) ->
     lists:reverse(Acc);
 format_stats([{vnode_gets, V}|T], Acc) ->
