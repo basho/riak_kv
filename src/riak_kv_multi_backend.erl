@@ -25,6 +25,8 @@
 
 %% KV Backend API
 -export([api_version/0,
+         capabilities/1,
+         capabilities/2,
          start/2,
          stop/1,
          get/3,
@@ -85,10 +87,35 @@
 %% ===================================================================
 
 %% @doc Return the major version of the
-%% current API and a capabilities list.
--spec api_version() -> {integer(), [atom()]}.
+%% current API.
+-spec api_version() -> {ok, integer()}.
 api_version() ->
-    {?API_VERSION, ?CAPABILITIES}.
+    {ok, ?API_VERSION}.
+
+%% @doc Return the capabilities of the backend.
+-spec capabilities(state()) -> {ok, [atom()]}.
+capabilities(State) ->
+    %% Expose ?CAPABILITIES plus the intersection of all child
+    %% backends. (This backend creates a shim for any backends that
+    %% don't support async_fold.)
+    F = fun({_, Mod, ModState}, Acc) ->
+                {ok, S1} = Mod:capabilities(ModState),
+                S2 = ordsets:from_list(S1),
+                ordsets:intersection(Acc, S2)
+        end,
+    Caps1 = lists:foldl(F, ordsets:new(), State#state.backends),
+    Caps2 = ordsets:to_list(Caps1),
+
+    Capabilities = lists:usort(?CAPABILITIES ++ Caps2),
+    {ok, Capabilities}.
+
+%% @doc Return the capabilities of the backend.
+-spec capabilities(riak_object:bucket(), state()) -> {ok, [atom()]}.
+capabilities(Bucket, State) when is_binary(Bucket) ->
+    {_Name, Mod, ModState} = get_backend(Bucket, State),
+    Mod:capabilities(ModState);
+capabilities(_Bucket, State) ->
+    capabilities(State).
 
 %% @doc Start the backends
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
@@ -225,7 +252,7 @@ delete(Bucket, Key, IndexSpecs, State) ->
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()} | {error, term()}.
 fold_buckets(FoldBucketsFun, Acc, Opts, State) ->
-    fold(undefined, fold_buckets, FoldBucketsFun, Acc, Opts, State).
+    fold_all(fold_buckets, FoldBucketsFun, Acc, Opts, State).
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
@@ -233,8 +260,12 @@ fold_buckets(FoldBucketsFun, Acc, Opts, State) ->
                 [{atom(), term()}],
                 state()) -> {ok, any()} | {async, fun()} | {error, term()}.
 fold_keys(FoldKeysFun, Acc, Opts, State) ->
-    Bucket = proplists:get_value(bucket, Opts),
-    fold(Bucket, fold_keys, FoldKeysFun, Acc, Opts, State).
+    case proplists:get_value(bucket, Opts) of
+        undefined ->
+            fold_all(fold_keys, FoldKeysFun, Acc, Opts, State);
+        Bucket ->
+            fold_in_bucket(Bucket, fold_keys, FoldKeysFun, Acc, Opts, State)
+    end.
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
@@ -242,8 +273,12 @@ fold_keys(FoldKeysFun, Acc, Opts, State) ->
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()} | {error, term()}.
 fold_objects(FoldObjectsFun, Acc, Opts, State) ->
-    Bucket = proplists:get_value(bucket, Opts),
-    fold(Bucket, fold_objects, FoldObjectsFun, Acc, Opts, State).
+    case proplists:get_value(bucket, Opts) of
+        undefined ->
+            fold_all(fold_objects, FoldObjectsFun, Acc, Opts, State);
+        Bucket ->
+            fold_in_bucket(Bucket, fold_objects, FoldObjectsFun, Acc, Opts, State)
+    end.
 
 %% @doc Delete all objects from the different backends
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
@@ -321,52 +356,51 @@ update_backend_state(Backend,
 
 %% @private
 %% @doc Shared code used by all the backend fold functions.
-fold(Bucket, ModFun, FoldFun, Acc, Opts, State=#state{backends=Backends}) ->
-    case Bucket of
-        undefined ->
-            try
-                AsyncFold = lists:member(async_fold, Opts),
-                {Acc0, AsyncWorkList} =
-                    lists:foldl(backend_fold_fun(ModFun,
-                                                 FoldFun,
-                                                 Opts,
-                                                 AsyncFold),
-                                {Acc, []},
-                                Backends),
+fold_all(ModFun, FoldFun, Acc, Opts, State) ->
+    Backends = State#state.backends,
+    try
+        AsyncFold = lists:member(async_fold, Opts),
+        {Acc0, AsyncWorkList} =
+            lists:foldl(backend_fold_fun(ModFun,
+                                         FoldFun,
+                                         Opts,
+                                         AsyncFold),
+                        {Acc, []},
+                        Backends),
 
-                %% We have now accumulated the results for all of the
-                %% synchronous backends. The next step is to wrap the
-                %% asynchronous work in a function that passes the accumulator
-                %% to each successive piece of asynchronous work.
-                case AsyncWorkList of
-                    [] ->
-                        %% Just return the synchronous results
-                        {ok, Acc0};
-                    _ ->
-                        AsyncWork =
-                            fun() ->
-                                    lists:foldl(async_fold_fun(), Acc0, AsyncWorkList)
-                            end,
-                        {async, AsyncWork}
-                end
-            catch
-                Error ->
-                    Error
-            end;
-        _ ->
-            {_Name, Module, SubState} = get_backend(Bucket, State),
-            Module:ModFun(FoldFun,
-                          Acc,
-                          Opts,
-                          SubState)
+        %% We have now accumulated the results for all of the
+        %% synchronous backends. The next step is to wrap the
+        %% asynchronous work in a function that passes the accumulator
+        %% to each successive piece of asynchronous work.
+        case AsyncWorkList of
+            [] ->
+                %% Just return the synchronous results
+                {ok, Acc0};
+            _ ->
+                AsyncWork =
+                    fun() ->
+                            lists:foldl(async_fold_fun(), Acc0, AsyncWorkList)
+                    end,
+                {async, AsyncWork}
+        end
+    catch
+        Error ->
+            Error
     end.
+
+fold_in_bucket(Bucket, ModFun, FoldFun, Acc, Opts, State) ->
+    {_Name, Module, SubState} = get_backend(Bucket, State),
+    Module:ModFun(FoldFun,
+                  Acc,
+                  Opts,
+                  SubState).
 
 %% @private
 backend_fold_fun(ModFun, FoldFun, Opts, AsyncFold) ->
     fun({_, Module, SubState}, {Acc, WorkList}) ->
             %% Get the backend capabilities to determine
             %% if it supports asynchronous folding.
-            {_, ModCaps} = Module:api_version(),
+            {ok, ModCaps} = Module:capabilities(SubState),
             case AsyncFold andalso
                 lists:member(async_fold, ModCaps) of
                 true ->

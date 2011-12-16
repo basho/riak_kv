@@ -25,6 +25,8 @@
 
 %% KV Backend API
 -export([api_version/0,
+         capabilities/1,
+         capabilities/2,
          start/2,
          stop/1,
          get/3,
@@ -67,10 +69,20 @@
 %% ===================================================================
 
 %% @doc Return the major version of the
-%% current API and a capabilities list.
--spec api_version() -> {integer(), [atom()]}.
+%% current API.
+-spec api_version() -> {ok, integer()}.
 api_version() ->
-    {?API_VERSION, ?CAPABILITIES}.
+    {ok, ?API_VERSION}.
+
+%% @doc Return the capabilities of the backend.
+-spec capabilities(state()) -> {ok, [atom()]}.
+capabilities(_) ->
+    {ok, ?CAPABILITIES}.
+
+%% @doc Return the capabilities of the backend.
+-spec capabilities(riak_object:bucket(), state()) -> {ok, [atom()]}.
+capabilities(_, _) ->
+    {ok, ?CAPABILITIES}.
 
 %% @doc Start the eleveldb backend
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
@@ -207,9 +219,11 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     %% secondary index, or neither (fold across everything.)
     Bucket = lists:keyfind(bucket, 1, Opts),
     Index = lists:keyfind(index, 1, Opts),
+
+    %% Multiple limiters may exist. Take the most specific limiter.
     Limiter =
-        if Bucket /= false -> Bucket;
-           Index /= false  -> Index;
+        if Index /= false  -> Index;
+           Bucket /= false -> Bucket;
            true            -> undefined
         end,
 
