@@ -42,12 +42,35 @@
 -export([init/2,
          process_results/2,
          finish/2]).
+-export([use_ack_backpressure/0,
+         req/2,
+         ack_keys/1]).
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
 -record(state, {client_type :: plain | mapred,
                 from :: from()}).
+
+%% @doc Returns `true' if the new ack-based backpressure listkeys
+%% protocol should be used.  This decision is based on the
+%% `listkeys_backpressure' setting in `riak_kv''s application
+%% environment.
+-spec use_ack_backpressure() -> boolean().
+use_ack_backpressure() ->
+    app_helper:get_env(riak_kv, listkeys_backpressure) == true.
+
+%% @doc Construct the correct listkeys command record.
+-spec req(binary(), term()) -> term().
+req(Bucket, ItemFilter) ->
+    case use_ack_backpressure() of
+        true ->
+            ?KV_LISTKEYS_REQ{bucket=Bucket,
+                             item_filter=ItemFilter};
+        false ->
+            #riak_kv_listkeys_req_v3{bucket=Bucket,
+                                     item_filter=ItemFilter}
+    end.
 
 %% @doc Return a tuple containing the ModFun to call per vnode,
 %% the number of primary preflist vnodes the operation
@@ -65,11 +88,16 @@ init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout, ClientType]) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
     %% Construct the key listing request
-    Req = ?KV_LISTKEYS_REQ{bucket=Bucket,
-                           item_filter=ItemFilter},
+    Req = req(Bucket, ItemFilter),
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
+process_results({From, Bucket, Keys},
+                StateData=#state{client_type=ClientType,
+                                 from={raw, ReqId, ClientPid}}) ->
+    process_keys(ClientType, Bucket, Keys, ReqId, ClientPid),
+    riak_kv_vnode:ack_keys(From), % tell that vnode we're ready for more
+    {ok, StateData};
 process_results({Bucket, Keys},
                 StateData=#state{client_type=ClientType,
                                  from={raw, ReqId, ClientPid}}) ->
@@ -110,8 +138,28 @@ finish(clean,
 %% Internal functions
 %% ===================================================================
 
+%% @doc If a listkeys request sends a result of `{ReqId, From, {keys,
+%% Items}}', that means it wants acknowledgement of those items before
+%% it will send more.  Call this function with that `From' to trigger
+%% the next batch.
+-spec ack_keys(From::{pid(), reference()}) -> term().
+ack_keys({Pid, Ref}) ->
+    Pid ! {Ref, ok}.
+
 process_keys(plain, _Bucket, Keys, ReqId, ClientPid) ->
-    ClientPid ! {ReqId, {keys, Keys}};
+    case use_ack_backpressure() of
+        true ->
+            Monitor = erlang:monitor(process, ClientPid),
+            ClientPid ! {ReqId, {self(), Monitor}, {keys, Keys}},
+            receive
+                {Monitor, ok} ->
+                    erlang:demonitor(Monitor, [flush]);
+                {'DOWN', Monitor, process, _Pid, _Reason} ->
+                    exit(self(), normal)
+            end;
+        false ->
+            ClientPid ! {ReqId, {keys, Keys}}
+    end;
 process_keys(mapred, Bucket, Keys, _ReqId, ClientPid) ->
     try
         luke_flow:add_inputs(ClientPid, [{Bucket, Key} || Key <- Keys])

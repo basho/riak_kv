@@ -763,6 +763,9 @@ wait_for_listkeys(ReqId, Timeout) ->
 wait_for_listkeys(ReqId,Timeout,Acc) ->
     receive
         {ReqId, done} -> {ok, lists:flatten(Acc)};
+        {ReqId, From, {keys, Res}} ->
+            riak_kv_keys_fsm:ack_keys(From),
+            wait_for_listkeys(ReqId, Timeout, [Res|Acc]);
         {ReqId,{keys,Res}} -> wait_for_listkeys(ReqId,Timeout,[Res|Acc]);
         {ReqId, Error} -> {error, Error}
     after Timeout ->
