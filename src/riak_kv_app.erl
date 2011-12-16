@@ -79,9 +79,6 @@ start(_Type, _StartArgs) ->
     %% the app is missing or packaging is broken.
     catch cluster_info:register_app(riak_kv_cinfo),
 
-    %% Register the bucket validation fun
-     riak_core:register([{bucket_validator, riak_kv_bucket}]),
-
     %% Spin up supervisor
     case riak_kv_sup:start_link() of
         {ok, Pid} ->
@@ -89,7 +86,8 @@ start(_Type, _StartArgs) ->
             %% The riak_core_ring_handler blocks until all vnodes have been started
             %% synchronously.
             riak_core:register(riak_kv, [
-                {vnode_module, riak_kv_vnode}
+                {vnode_module, riak_kv_vnode},
+                {bucket_validator, riak_kv_bucket}
             ]),
 
             %% Add routes to webmachine
