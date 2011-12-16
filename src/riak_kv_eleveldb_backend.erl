@@ -220,7 +220,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     Bucket = lists:keyfind(bucket, 1, Opts),
     Index = lists:keyfind(index, 1, Opts),
 
-    %% Multiple limiters make exist. Take the most specific limiter.
+    %% Multiple limiters may exist. Take the most specific limiter.
     Limiter =
         if Index /= false  -> Index;
            Bucket /= false -> Bucket;
