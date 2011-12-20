@@ -47,23 +47,23 @@
 %%</dd><dt> vnode_index_reads
 %%</dt><dd> The number of index reads handled by all vnodes on this node.
 %%          Each query counts as an index read.
-%%</dd><dd> update(index_reads)
+%%</dd><dd> update(vnode_index_read)
 %%
 %%</dd><dt> vnode_index_writes
 %%</dt><dd> The number of batched writes handled by all vnodes on this node.
-%%</dd><dd> update({index_writes, Postings})
+%%</dd><dd> update({vnode_index_write, PostingsAdded, PostingsRemoved})
 %%
 %%</dd><dt> vnode_index_writes_postings
 %%</dt><dd> The number of postings written to all vnodes on this node.
-%%</dd><dd> update({index_writes, Postings})
+%%</dd><dd> update({vnode_index_write, PostingsAdded, PostingsRemoved})
 %%
 %%</dd><dt> vnode_index_deletes
 %%</dt><dd> The number of batched writes handled by all vnodes on this node.
-%%</dd><dd> update({index_deletes, Postings})
+%%</dd><dd> update({vnode_index_delete, PostingsRemoved})
 %%
 %%</dd><dt> vnode_index_deletes_postings
 %%</dt><dd> The number of postings written to all vnodes on this node.
-%%</dd><dd> update({index_deletes, Postings})
+%%</dd><dd> update({vnode_index_delete, PostingsRemoved})
 %%
 %%</dd><dt> node_gets
 %%</dt><dd> Number of gets coordinated by this node in the last
@@ -368,9 +368,13 @@ update(vnode_put, Moment, State=#state{vnode_puts_total=VPT}) ->
     spiral_incr(#state.vnode_puts, Moment, State#state{vnode_puts_total=VPT+1});
 update(vnode_index_read, Moment, State=#state{vnode_index_reads_total=VPT}) ->
     spiral_incr(#state.vnode_index_reads, Moment, State#state{vnode_index_reads_total=VPT+1});
-update({vnode_index_write, Postings}, Moment, State=#state{vnode_index_writes_total=VIW, vnode_index_writes_postings_total=VIWP}) ->
-    NewState = spiral_incr(#state.vnode_index_writes, Moment, State#state{vnode_index_writes_total=VIW+1}),
-    spiral_incr(#state.vnode_index_writes_postings, Postings, Moment, NewState#state{vnode_index_writes_postings_total=VIWP+Postings});
+update({vnode_index_write, PostingsAdded, PostingsRemoved}, Moment, State=#state{vnode_index_writes_total=VIW, 
+                                                                                 vnode_index_writes_postings_total=VIWP,
+                                                                                 vnode_index_deletes_postings_total=VIDP}) ->
+    NewState1 = spiral_incr(#state.vnode_index_writes, Moment, State#state{vnode_index_writes_total=VIW+1}),
+    NewState2 = spiral_incr(#state.vnode_index_writes_postings, PostingsAdded, Moment, NewState1#state{vnode_index_writes_postings_total=VIWP+PostingsAdded}),
+    NewState3 = spiral_incr(#state.vnode_index_deletes_postings, PostingsRemoved, Moment, NewState2#state{vnode_index_deletes_postings_total=VIDP+PostingsRemoved}),
+    NewState3;
 update({vnode_index_delete, Postings}, Moment, State=#state{vnode_index_deletes_total=VID, vnode_index_deletes_postings_total=VIDP}) ->
     NewState = spiral_incr(#state.vnode_index_deletes, Moment, State#state{vnode_index_deletes_total=VID+1}),
     spiral_incr(#state.vnode_index_deletes_postings, Postings, Moment, NewState#state{vnode_index_deletes_postings_total=VIDP+Postings});
@@ -428,14 +432,15 @@ update1(vnode_put, _, State) ->
     update_metric(#state.vnode_puts, 1, State);
 update1(vnode_index_read, _, State) -> 
     update_metric(#state.vnode_index_reads, 1, State);
-update1({vnode_index_write, Postings}, _, State) ->
-    update_metric(#state.vnode_index_writes_postings,
-                  Postings, 
-                  update_metric(#state.vnode_index_writes, 1, State));
-update1({vnode_index_delete, Postings}, _, State) ->
-    update_metric(#state.vnode_index_deletes_postings,
-                  Postings, 
-                  update_metric(#state.vnode_index_deletes, 1, State));
+update1({vnode_index_write, PostingsAdded, PostingsRemoved}, _, State) ->
+    State1 = update_metric(#state.vnode_index_writes, 1, State),
+    State2 = update_metric(#state.vnode_index_writes_postings, PostingsAdded, State1),
+    State3 = update_metric(#state.vnode_index_deletes_postings, PostingsRemoved, State2),
+    State3;
+update1({vnode_index_delete, PostingsRemoved}, _, State) ->
+    State1 = update_metric(#state.vnode_index_deletes, 1, State),
+    State2 = update_metric(#state.vnode_index_deletes_postings, PostingsRemoved, State1),
+    State2;
 update1({get_fsm, _Bucket, Microsecs, _NumSiblings, _ObjSize}, Moment, State) ->
     update1({get_fsm_time, Microsecs}, Moment, State);
 update1({get_fsm_time, Microsecs}, _, State) ->
