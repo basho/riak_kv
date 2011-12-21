@@ -591,7 +591,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     {Reply, UpdState} = perform_put(PrepPutRes, State, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
 
-    update_index_write_stats(PutArgs#putargs.index_specs),
+    update_index_write_stats(UpdPutArgs#putargs.index_specs),
     riak_kv_stat:update(vnode_put),
     UpdState.
 
@@ -716,7 +716,6 @@ perform_put({true, Obj},
     Val = term_to_binary(Obj),
     case Mod:put(Bucket, Key, IndexSpecs, Val, ModState) of
         {ok, UpdModState} ->
-            update_index_write_stats(IndexSpecs),
             case RB of
                 true ->
                     Reply = {dw, Idx, Obj, ReqID};
