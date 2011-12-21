@@ -445,6 +445,9 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
     AsyncBackend = lists:member(async_fold, Capabilities),
     case IndexBackend of
         true ->
+            %% Update stats...
+            riak_kv_stat:update(vnode_index_read),
+
             %% Construct the filter function
             FilterVNode = proplists:get_value(Index, FilterVNodes),
             Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
@@ -587,6 +590,8 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     {PrepPutRes, UpdPutArgs} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
+
+    update_index_write_stats(UpdPutArgs#putargs.index_specs),
     riak_kv_stat:update(vnode_put),
     UpdState.
 
@@ -598,11 +603,12 @@ do_backend_delete(BKey, RObj, State = #state{mod = Mod, modstate = ModState}) ->
     %% JDM: This should just be a tombstone by this point, but better
     %% safe than sorry.
     IndexSpecs = riak_object:diff_index_specs(undefined, RObj),
-    
+
     %% Do the delete...
     {Bucket, Key} = BKey,
     case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
         {ok, UpdModState} ->
+            update_index_delete_stats(IndexSpecs),
             State#state{modstate = UpdModState};
         {error, _Reason, UpdModState} ->
             State#state{modstate = UpdModState}
@@ -992,7 +998,9 @@ do_diffobj_put({Bucket, Key}, DiffObj,
             Val = term_to_binary(DiffObj),
             Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
             case Res of
-                {ok, _UpdModState} -> riak_kv_stat:update(vnode_put);
+                {ok, _UpdModState} ->
+                    update_index_write_stats(IndexSpecs),
+                    riak_kv_stat:update(vnode_put);
                 _ -> nop
             end,
             Res;
@@ -1015,8 +1023,11 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                     Val = term_to_binary(AMObj),
                     Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
                     case Res of
-                        {ok, _UpdModState} -> riak_kv_stat:update(vnode_put);
-                        _ -> nop
+                        {ok, _UpdModState} ->
+                            update_index_write_stats(IndexSpecs),
+                            riak_kv_stat:update(vnode_put);
+                        _ ->
+                            nop
                     end,
                     Res
             end
@@ -1120,6 +1131,30 @@ wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
          _ ->
             wait_for_vnode_status_results(PrefLists, ReqId, Acc)
     end.
+
+
+%% @private
+update_index_write_stats(IndexSpecs) ->
+    {Added, Removed} = count_index_specs(IndexSpecs),
+    riak_kv_stat:update({vnode_index_write, Added, Removed}).
+
+%% @private
+update_index_delete_stats(IndexSpecs) ->
+    {_Added, Removed} = count_index_specs(IndexSpecs),
+    riak_kv_stat:update({vnode_index_delete, Removed}).
+
+%% @private
+%% @doc Given a list of index specs, return the number to add and
+%% remove.
+count_index_specs(IndexSpecs) ->
+    %% Count index specs...
+    F = fun({add, _, _}, {AddAcc, RemoveAcc}) ->
+                {AddAcc + 1, RemoveAcc};
+           ({remove, _, _}, {AddAcc, RemoveAcc}) ->
+                {AddAcc, RemoveAcc + 1}
+        end,
+    lists:foldl(F, {0, 0}, IndexSpecs).
+
 
 -ifdef(TEST).
 
