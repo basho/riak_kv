@@ -184,6 +184,9 @@ produce_bucket_body(RD, Ctx) ->
 
 stream_keys(ReqId) ->
     receive
+        {ReqId, From, {keys, Keys}} ->
+            riak_kv_keys_fsm:ack_keys(From),
+            {mochijson2:encode({struct, [{<<"keys">>, Keys}]}), fun() -> stream_keys(ReqId) end};
         {ReqId, {keys, Keys}} ->
             {mochijson2:encode({struct, [{<<"keys">>, Keys}]}), fun() -> stream_keys(ReqId) end};
         {ReqId, done} -> {mochijson2:encode({struct, [{<<"keys">>, []}]}), done}

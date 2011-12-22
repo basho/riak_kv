@@ -33,6 +33,13 @@
          %% listing operations.
          {legacy_keylisting, true},
 
+         %% This option toggles compatibility of keylisting with 1.0
+         %% and earlier versions.  Once a rolling upgrade to a version
+         %% > 1.0 is completed for a cluster, this should be set to
+         %% true for better control of memory usage during key listing
+         %% operations
+         {listkeys_backpressure, false},
+
          %% use the legacy routines for tracking kv stats
          {legacy_stats, true},
 

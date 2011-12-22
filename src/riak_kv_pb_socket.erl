@@ -102,8 +102,14 @@ handle_info({ReqId, done},
     NewState = send_msg(#rpblistkeysresp{done = 1}, State),
     inet:setopts(Socket, [{active, once}]),
     {noreply, NewState#state{req = undefined, req_ctx = undefined}};
+handle_info({ReqId, From, {keys, []}}, State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
+    riak_kv_keys_fsm:ack_keys(From),
+    {noreply, State}; % No keys - no need to send a message, will send done soon.
 handle_info({ReqId, {keys, []}}, State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     {noreply, State}; % No keys - no need to send a message, will send done soon.
+handle_info({ReqId, From, {keys, Keys}}, State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
+    riak_kv_keys_fsm:ack_keys(From),
+    {noreply, send_msg(#rpblistkeysresp{keys = Keys}, State)};
 handle_info({ReqId, {keys, Keys}}, State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     {noreply, send_msg(#rpblistkeysresp{keys = Keys}, State)};
 handle_info({ReqId, Error},

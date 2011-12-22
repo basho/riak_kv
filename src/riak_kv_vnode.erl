@@ -37,7 +37,8 @@
          list_keys/4,
          fold/3,
          get_vclocks/2,
-         vnode_status/1]).
+         vnode_status/1,
+         ack_keys/1]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -399,36 +400,20 @@ handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
         _ ->
             {noreply, State}
     end;
+handle_coverage(#riak_kv_listkeys_req_v3{bucket=Bucket,
+                                         item_filter=ItemFilter},
+                FilterVNodes, Sender, State) ->
+    %% v3 == no backpressure
+    ResultFun = result_fun(Bucket, Sender),
+    handle_coverage_listkeys(Bucket, ItemFilter, ResultFun,
+                             FilterVNodes, Sender, State);
 handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
                                  item_filter=ItemFilter},
-                FilterVNodes,
-                Sender,
-                State=#state{async_folding=AsyncFolding,
-                             idx=Index,
-                             key_buf_size=BufferSize,
-                             mod=Mod,
-                             modstate=ModState}) ->
-    %% Construct the filter function
-    FilterVNode = proplists:get_value(Index, FilterVNodes),
-    Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-    BufferMod = riak_kv_fold_buffer,
-    Buffer = BufferMod:new(BufferSize, result_fun(Bucket, Sender)),
-    FoldFun = fold_fun(keys, BufferMod, Filter),
-    FinishFun = finish_fun(BufferMod, Sender),
-    {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
-    AsyncBackend = lists:member(async_fold, Capabilities),
-    case AsyncFolding andalso AsyncBackend of
-        true ->
-            Opts = [async_fold, {bucket, Bucket}];
-        false ->
-            Opts = [{bucket, Bucket}]
-    end,
-    case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, Buffer) of
-        {async, AsyncWork} ->
-            {async, {fold, AsyncWork, FinishFun}, Sender, State};
-        _ ->
-            {noreply, State}
-    end;
+                FilterVNodes, Sender, State) ->
+    %% v4 == ack-based backpressure
+    ResultFun = result_fun_ack(Bucket, Sender),
+    handle_coverage_listkeys(Bucket, ItemFilter, ResultFun,
+                             FilterVNodes, Sender, State);
 handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                               item_filter=ItemFilter,
                               qry=Query},
@@ -472,6 +457,36 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
             end;
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
+    end.
+
+%% Convenience for handling both v3 and v4 coverage-based listkeys
+handle_coverage_listkeys(Bucket, ItemFilter, ResultFun,
+                         FilterVNodes, Sender,
+                         State=#state{async_folding=AsyncFolding,
+                             idx=Index,
+                             key_buf_size=BufferSize,
+                             mod=Mod,
+                             modstate=ModState}) ->
+    %% Construct the filter function
+    FilterVNode = proplists:get_value(Index, FilterVNodes),
+    Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
+    BufferMod = riak_kv_fold_buffer,
+    Buffer = BufferMod:new(BufferSize, ResultFun),
+    FoldFun = fold_fun(keys, BufferMod, Filter),
+    FinishFun = finish_fun(BufferMod, Sender),
+    {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
+    AsyncBackend = lists:member(async_fold, Capabilities),
+    case AsyncFolding andalso AsyncBackend of
+        true ->
+            Opts = [async_fold, {bucket, Bucket}];
+        false ->
+            Opts = [{bucket, Bucket}]
+    end,
+    case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, Buffer) of
+        {async, AsyncWork} ->
+            {async, {fold, AsyncWork, FinishFun}, Sender, State};
+        _ ->
+            {noreply, State}
     end.
 
 %% While in handoff, vnodes have the option of returning {forward, State}
@@ -873,6 +888,29 @@ result_fun(Bucket, Sender) ->
     fun(Items) ->
             riak_core_vnode:reply(Sender, {Bucket, Items})
     end.
+
+%% wait for acknowledgement that results were received before
+%% continuing, as a way of providing backpressure for processes that
+%% can't handle results as fast as we can send them
+result_fun_ack(Bucket, Sender) ->
+    fun(Items) ->
+            Monitor = riak_core_vnode:monitor(Sender),
+            riak_core_vnode:reply(Sender, {{self(), Monitor}, Bucket, Items}),
+            receive
+                {Monitor, ok} ->
+                    erlang:demonitor(Monitor, [flush]);
+                {'DOWN', Monitor, process, _Pid, _Reason} ->
+                    throw(receiver_down)
+            end
+    end.
+
+%% @doc If a listkeys request sends a result of `{From, Bucket,
+%% Items}', that means it wants acknowledgement of those items before
+%% it will send more.  Call this function with that `From' to trigger
+%% the next batch.
+-spec ack_keys(From::{pid(), reference()}) -> term().
+ack_keys({Pid, Ref}) ->
+    Pid ! {Ref, ok}.
 
 %% @private
 finish_fun(BufferMod, Sender) ->
@@ -1396,6 +1434,9 @@ result_listener_keys(Acc) ->
         {'$gen_event', {_, done}} ->
             result_listener_done(Acc);
         {'$gen_event', {_, {_Bucket, Results}}} ->
+            result_listener_keys(Results ++ Acc);
+        {'$gen_event', {_, {From, _Bucket, Results}}} ->
+            riak_kv_vnode:ack_keys(From),
             result_listener_keys(Results ++ Acc)
     after 5000 ->
             result_listener_done({timeout, Acc})
