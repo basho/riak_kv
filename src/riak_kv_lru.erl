@@ -183,12 +183,12 @@ clear_internal(#kv_lru{age_idx=Idx, cache=Cache}) ->
     ok.
 
 clear_bkey_internal(#kv_lru{bucket_idx=BucketIdx}=LRU, BKey) ->
-    R = ets:match(BucketIdx, {BKey, '$1'}),
-     case R of
+     case ets:lookup(BucketIdx, BKey) of
         [] ->
             ok;
-        Keys ->
-            [remove_internal(LRU, BKey, Key) || [Key] <- Keys],
+        BK_Ks ->
+            [remove_internal(LRU, BKey, Key) || {_BKey, Keys} <- BK_Ks,
+                                                [Key] <- Keys],
             ok
     end.
 
