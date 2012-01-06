@@ -57,7 +57,8 @@ dep_apps() ->
              ok = application:stop(sasl),
              ok = application:set_env(sasl, sasl_error_logger, erase(old_sasl_l));
         (fullstop) ->
-             _ = application:stop(sasl)
+             _ = application:stop(sasl),
+             _ = application:unload(sasl)
      end,
      %% public_key and ssl are not needed here but started by others so
      %% stop them when we're done.
@@ -69,7 +70,8 @@ dep_apps() ->
              KillDamnFilterProc();
         (fullstop) ->
              _ = application:stop(riak_sysmon),
-             KillDamnFilterProc()
+             KillDamnFilterProc(),
+             _ = application:unload(riak_sysmon)
      end,
      webmachine,
      os_mon,
@@ -90,7 +92,8 @@ dep_apps() ->
              [ok = application:set_env(riak_core, AppKey, get({?MODULE, AppKey}))
               || {AppKey, _Val} <- Core_Settings];
         (fullstop) ->
-             _ = application:stop(riak_core)
+             _ = application:stop(riak_core),
+             _ = application:unload(riak_core)
      end,
      riak_pipe,
      luke,
@@ -112,11 +115,13 @@ dep_apps() ->
              [ok = application:set_env(riak_kv, AppKey, get({?MODULE, AppKey}))
               || {AppKey, _Val} <- KV_Settings];
         (fullstop) ->
-             _ = application:stop(riak_kv)
+             _ = application:stop(riak_kv),
+             _ = application:unload(riak_kv)
      end].
 
 do_dep_apps(fullstop) ->
-    lists:map(fun(A) when is_atom(A) -> _ = application:stop(A);
+    lists:map(fun(A) when is_atom(A) -> _ = application:stop(A),
+                                        _ = application:unload(A);
                  (F)                 -> F(fullstop)
               end, lists:reverse(dep_apps()));
 do_dep_apps(StartStop) ->
@@ -133,6 +138,8 @@ prepare_runtime() ->
              timer:sleep(50),
              do_dep_apps(start),
              timer:sleep(50),
+             riak_core:wait_for_service(riak_kv),
+             riak_core:wait_for_service(riak_pipe),
              [foo1, foo2]
      end.
 
