@@ -187,8 +187,7 @@ clear_bkey_internal(#kv_lru{bucket_idx=BucketIdx}=LRU, BKey) ->
         [] ->
             ok;
         BK_Ks ->
-            [remove_internal(LRU, BKey, Key) || {_BKey, Keys} <- BK_Ks,
-                                                [Key] <- Keys],
+            [remove_internal(LRU, BKey, Key) || {_BKey, Key} <- BK_Ks],
             ok
     end.
 
