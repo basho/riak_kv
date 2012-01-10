@@ -654,9 +654,12 @@ decode_precommit({error, Reason}) ->
 
 decode_postcommit({erlang, {M,F}, Res}) ->
     case Res of
-        fail -> lager:error("Post-commit hook failed, no resaon given");
+        fail ->
+            lager:error("Post-commit hook ~p:~p failed, no reason given",
+                       [M, F]);
         {fail, Reason} ->
-            lager:error("Post-commit hook failed with reason ~p", [Reason]);
+            lager:error("Post-commit hook ~p:~p failed with reason ~p",
+                        [M, F, Reason]);
         {'EXIT', _, _, Class, Ex} ->
             Stack = erlang:get_stacktrace(),
             lager:error("Problem invoking post-commit hook ~p:~p -> ~p:~p~n~p",
