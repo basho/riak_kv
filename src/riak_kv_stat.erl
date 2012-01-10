@@ -199,7 +199,9 @@
                pbc_connects,pbc_connects_total,pbc_active,
                read_repairs, read_repairs_total,
                coord_redirs, coord_redirs_total, mapper_count, 
-               get_meter, put_meter, legacy}).
+               get_meter, put_meter,
+               precommit_fail, postcommit_fail,
+               legacy}).
 
 
 %% @spec start_link() -> {ok,Pid} | ignore | {error,Error}
@@ -278,6 +280,8 @@ v2_init() ->
                 mapper_count=0,
                 get_meter=make_meter(),
                 put_meter=make_meter(),
+                precommit_fail=0,
+                postcommit_fail=0,
                 legacy=false}}.
 -endif.
 
@@ -309,6 +313,8 @@ legacy_init() ->
                 read_repairs_total=0,
                 coord_redirs_total=0,
                 mapper_count=0,
+                precommit_fail=0,
+                postcommit_fail=0,
                 legacy=true}}.
 
 %% @private
@@ -402,6 +408,10 @@ update(mapper_start, _Moment, State=#state{mapper_count=Count0}) ->
     State#state{mapper_count=Count0 + 1};
 update(mapper_end, _Moment, State=#state{mapper_count=Count0}) ->
     State#state{mapper_count=decrzero(Count0)};
+update(precommit_fail, _Moment, State=#state{precommit_fail=Count0}) ->
+    State#state{precommit_fail=Count0+1};
+update(postcommit_fail, _Moment, State=#state{postcommit_fail=Count0}) ->
+    State#state{postcommit_fail=Count0+1};
 update(_, _, State) ->
     State.
 
@@ -456,6 +466,10 @@ update1(mapper_start, _Moment, State=#state{mapper_count=Count0}) ->
     State#state{mapper_count=Count0+1};
 update1(mapper_end, _Moment, State=#state{mapper_count=Count0}) ->
     State#state{mapper_count=decrzero(Count0)};
+update1(precommit_fail, _Moment, State=#state{precommit_fail=Count0}) ->
+    State#state{precommit_fail=Count0+1};
+update1(postcommit_fail, _Moment, State=#state{postcommit_fail=Count0}) ->
+    State#state{postcommit_fail=Count0+1};
 update1(_, _, State) ->
     State.
 
@@ -588,6 +602,8 @@ node_stats(Moment, State=#state{node_gets_total=NGT,
                                 node_puts_total=NPT,
                                 read_repairs_total=RRT,
                                 coord_redirs_total=CRT,
+                                precommit_fail=PreF,
+                                postcommit_fail=PostF,
                                 legacy=true}) ->
     {Gets, GetMean, {GetMedian, GetNF, GetNN, GetH}} =
         slide_minute(Moment, #state.get_fsm_time, State, 0, 5000000, 20000, down),
@@ -622,7 +638,9 @@ node_stats(Moment, State=#state{node_gets_total=NGT,
      {node_get_fsm_objsize_99, ObjSizeNN},
      {node_get_fsm_objsize_100, ObjSizeH},
      {read_repairs_total, RRT},
-     {coord_redirs_total, CRT}];
+     {coord_redirs_total, CRT},
+     {precommit_fail, PreF},
+     {postcommit_fail, PostF}];
 node_stats(_, State=#state{legacy=false}) ->
     PutInfo = metric_stats(State#state.put_fsm_time),
     GetInfo = metric_stats(State#state.get_fsm_time),
@@ -630,6 +648,8 @@ node_stats(_, State=#state{legacy=false}) ->
     CRInfo =  metric_stats(State#state.coord_redirs),
     NodeGets = meter_minute(metric_stats(State#state.get_meter)),
     NodePuts = meter_minute(metric_stats(State#state.put_meter)),
+    PreF = State#state.precommit_fail,
+    PostF = State#state.postcommit_fail,
     [{node_gets, NodeGets},
      {node_gets_total, proplists:get_value(count, GetInfo)},
      {node_get_fsm_time_mean, proplists:get_value(mean, GetInfo)},
@@ -645,7 +665,9 @@ node_stats(_, State=#state{legacy=false}) ->
      {node_put_fsm_time_99, proplists:get_value(p99, PutInfo)},
      {node_put_fsm_time_100, proplists:get_value(max, PutInfo)},
      {read_repairs_total, proplists:get_value(count, RRInfo)},
-     {coord_redirs_total, proplists:get_value(count, CRInfo)}].
+     {coord_redirs_total, proplists:get_value(count, CRInfo)},
+     {precommit_fail, PreF},
+     {postcommit_fail, PostF}].
 
 
 %% @spec cpu_stats() -> proplist()

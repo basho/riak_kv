@@ -620,9 +620,9 @@ decode_precommit({erlang, {Mod, Fun}, Result}) ->
             {fail, _Reason} ->
                 Result;
             {'EXIT',  Mod, Fun, Class, Exception} ->
-                lager:error("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
-                                       [Mod,Fun,Class,Exception,
-                                        erlang:get_stacktrace()]),
+                riak_kv_stat:update(precommit_fail),
+                lager:debug("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
+                            [Mod,Fun,Class,Exception, erlang:get_stacktrace()]),
                 {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
             Obj ->
                 riak_object:ensure_robject(Obj)
@@ -645,8 +645,8 @@ decode_precommit({js, JSName, Result}) ->
                     Obj
             end;
         {error, Error} ->
-            lager:error("Error executing pre-commit hook: ~p",
-                                   [Error]),
+            riak_kv_stat:update(precommit_fail),
+            lager:debug("Error executing pre-commit hook: ~p", [Error]),
             fail
     end;
 decode_precommit({error, Reason}) ->
@@ -655,20 +655,24 @@ decode_precommit({error, Reason}) ->
 decode_postcommit({erlang, {M,F}, Res}) ->
     case Res of
         fail ->
-            lager:error("Post-commit hook ~p:~p failed, no reason given",
+            riak_kv_stat:update(postcommit_fail),
+            lager:debug("Post-commit hook ~p:~p failed, no reason given",
                        [M, F]);
         {fail, Reason} ->
-            lager:error("Post-commit hook ~p:~p failed with reason ~p",
+            riak_kv_stat:update(postcommit_fail),
+            lager:debug("Post-commit hook ~p:~p failed with reason ~p",
                         [M, F, Reason]);
         {'EXIT', _, _, Class, Ex} ->
+            riak_kv_stat:update(postcommit_fail),
             Stack = erlang:get_stacktrace(),
-            lager:error("Problem invoking post-commit hook ~p:~p -> ~p:~p~n~p",
+            lager:debug("Problem invoking post-commit hook ~p:~p -> ~p:~p~n~p",
                         [M, F, Class, Ex, Stack]),
             ok;
         _ -> ok
     end;
 decode_postcommit({error, {invalid_hook_def, Def}}) ->
-    lager:error("Invalid post-commit hook definition ~p", [Def]).
+    riak_kv_stat:update(postcommit_fail),
+    lager:debug("Invalid post-commit hook definition ~p", [Def]).
 
 
 get_hooks(HookType, BucketProps) ->
