@@ -613,29 +613,36 @@ invoke_hook(_, _, _, _) ->
 
 -spec decode_precommit(any()) -> fail | {fail, any()} | riak_object:riak_object().
 decode_precommit({erlang, {Mod, Fun}, Result}) ->
-    try
-        case Result of
-            fail ->
-                fail;
-            {fail, _Reason} ->
+    case Result of
+        fail ->
+            riak_kv_stat:update(precommit_fail),
+            lager:debug("Pre-commit hook ~p:~p failed, no reason given",
+                        [Mod, Fun]),
+            fail;
+        {fail, Reason} ->
+            riak_kv_stat:update(precommit_fail),
+            lager:debug("Pre-commit hook ~p:~p failed with reason ~p",
+                        [Mod, Fun, Reason]),
                 Result;
-            {'EXIT',  Mod, Fun, Class, Exception} ->
-                riak_kv_stat:update(precommit_fail),
-                lager:debug("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
-                            [Mod,Fun,Class,Exception, erlang:get_stacktrace()]),
-                {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
-            Obj ->
-                riak_object:ensure_robject(Obj)
-        end
-    catch
-        _:_ ->
-            {fail, {invalid_return, {Mod, Fun, Result}}}
+        {'EXIT',  Mod, Fun, Class, Exception} ->
+            riak_kv_stat:update(precommit_fail),
+            lager:debug("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
+                        [Mod,Fun,Class,Exception, erlang:get_stacktrace()]),
+            {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
+        Obj ->
+            riak_object:ensure_robject(Obj)
     end;
 decode_precommit({js, JSName, Result}) ->
     case Result of
         {ok, <<"fail">>} ->
+            riak_kv_stat:update(precommit_fail),
+            lager:debug("Pre-commit hook ~p failed, no reason given",
+                        [JSName]),
             fail;
         {ok, [{<<"fail">>, Message}]} ->
+            riak_kv_stat:update(precommit_fail),
+            lager:debug("Pre-commit hook ~p failed with reason ~p",
+                        [JSName, Message]),
             {fail, Message};
         {ok, Json} ->
             case catch riak_object:from_json(Json) of
@@ -646,10 +653,12 @@ decode_precommit({js, JSName, Result}) ->
             end;
         {error, Error} ->
             riak_kv_stat:update(precommit_fail),
-            lager:debug("Error executing pre-commit hook: ~p", [Error]),
+            lager:debug("Problem invoking pre-commit hook: ~p", [Error]),
             fail
     end;
 decode_precommit({error, Reason}) ->
+    riak_kv_stat:update(precommit_fail),
+    lager:debug("Problem invoking pre-commit hook: ~p", [Reason]),
     {fail, Reason}.
 
 decode_postcommit({erlang, {M,F}, Res}) ->
