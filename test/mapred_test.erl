@@ -99,7 +99,6 @@ dep_apps() ->
      inets,
      mochiweb,
      fun(start) ->
-             riak_core_ring:fresh(16, node()),
              _ = application:load(riak_kv),
              [begin
                   put({?MODULE,AppKey}, app_helper:get_env(riak_kv, AppKey)),
