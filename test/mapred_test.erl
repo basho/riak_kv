@@ -105,7 +105,8 @@ dep_apps() ->
                   put({?MODULE,AppKey}, app_helper:get_env(riak_kv, AppKey)),
                   ok = application:set_env(riak_kv, AppKey, Val)
               end || {AppKey, Val} <- KV_Settings],
-             ok = application:start(riak_kv);
+             ok = application:start(riak_kv),
+	     riak_core:wait_for_service(riak_kv);
         (stop) ->
              ok = application:stop(riak_kv),
              net_kernel:stop(),
