@@ -27,6 +27,7 @@
 dep_apps() ->
     DelMe = "./EUnit-SASL.log",
     DataDir = "./EUnit-datadir",
+    os:cmd("rm -rf " ++ DataDir),
     os:cmd("mkdir " ++ DataDir),
     KillDamnFilterProc = fun() ->
                                  catch exit(whereis(riak_sysmon_filter), kill),
@@ -44,7 +45,7 @@ dep_apps() ->
                    {reduce_js_vm_count, 3}],
     [
      fun(start) ->
-             net_kernel:start([mapred_test@localhost]),
+             net_kernel:start([mapred_test@localhost, shortnames]),
              timer:sleep(50),
              _ = application:stop(sasl),
              _ = application:load(sasl),
@@ -57,8 +58,7 @@ dep_apps() ->
              ok = application:stop(sasl),
              ok = application:set_env(sasl, sasl_error_logger, erase(old_sasl_l));
         (fullstop) ->
-             _ = application:stop(sasl),
-             _ = application:unload(sasl)
+             _ = application:stop(sasl)
      end,
      %% public_key and ssl are not needed here but started by others so
      %% stop them when we're done.
@@ -70,8 +70,7 @@ dep_apps() ->
              KillDamnFilterProc();
         (fullstop) ->
              _ = application:stop(riak_sysmon),
-             KillDamnFilterProc(),
-             _ = application:unload(riak_sysmon)
+             KillDamnFilterProc()
      end,
      webmachine,
      os_mon,
@@ -81,7 +80,7 @@ dep_apps() ->
              %% sometimes we just restart too quickly and hit an
              %% eaddrinuse when restarting riak_core?
              timer:sleep(1000),
-             io:format(user, "DEBUGG: ~s\n", [os:cmd("netstat -na | egrep -vi 'stream|dgram'")]),
+             %% io:format(user, "DEBUGG: ~s\n", [os:cmd("netstat -na | egrep -vi 'stream|dgram'")]),
              [begin
                   put({?MODULE,AppKey}, app_helper:get_env(riak_core, AppKey)),
                   ok = application:set_env(riak_core, AppKey, Val)
@@ -92,8 +91,7 @@ dep_apps() ->
              [ok = application:set_env(riak_core, AppKey, get({?MODULE, AppKey}))
               || {AppKey, _Val} <- Core_Settings];
         (fullstop) ->
-             _ = application:stop(riak_core),
-             _ = application:unload(riak_core)
+             _ = application:stop(riak_core)
      end,
      riak_pipe,
      luke,
@@ -101,8 +99,7 @@ dep_apps() ->
      inets,
      mochiweb,
      fun(start) ->
-             Ring = riak_core_ring:fresh(16, node()),
-             riak_core_ring_manager:set_ring_global(Ring),
+             riak_core_ring:fresh(16, node()),
              _ = application:load(riak_kv),
              [begin
                   put({?MODULE,AppKey}, app_helper:get_env(riak_kv, AppKey)),
@@ -115,13 +112,11 @@ dep_apps() ->
              [ok = application:set_env(riak_kv, AppKey, get({?MODULE, AppKey}))
               || {AppKey, _Val} <- KV_Settings];
         (fullstop) ->
-             _ = application:stop(riak_kv),
-             _ = application:unload(riak_kv)
+             _ = application:stop(riak_kv)
      end].
 
 do_dep_apps(fullstop) ->
-    lists:map(fun(A) when is_atom(A) -> _ = application:stop(A),
-                                        _ = application:unload(A);
+    lists:map(fun(A) when is_atom(A) -> _ = application:stop(A);
                  (F)                 -> F(fullstop)
               end, lists:reverse(dep_apps()));
 do_dep_apps(StartStop) ->
