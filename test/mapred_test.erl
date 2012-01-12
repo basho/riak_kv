@@ -27,6 +27,7 @@
 dep_apps() ->
     DelMe = "./EUnit-SASL.log",
     DataDir = "./EUnit-datadir",
+    os:cmd("rm -rf " ++ DataDir),
     os:cmd("mkdir " ++ DataDir),
     KillDamnFilterProc = fun() ->
                                  catch exit(whereis(riak_sysmon_filter), kill),
@@ -44,7 +45,7 @@ dep_apps() ->
                    {reduce_js_vm_count, 3}],
     [
      fun(start) ->
-             net_kernel:start([mapred_test@localhost]),
+             net_kernel:start([mapred_test@localhost, shortnames]),
              timer:sleep(50),
              _ = application:stop(sasl),
              _ = application:load(sasl),
@@ -79,7 +80,7 @@ dep_apps() ->
              %% sometimes we just restart too quickly and hit an
              %% eaddrinuse when restarting riak_core?
              timer:sleep(1000),
-             io:format(user, "DEBUGG: ~s\n", [os:cmd("netstat -na | egrep -vi 'stream|dgram'")]),
+             %% io:format(user, "DEBUGG: ~s\n", [os:cmd("netstat -na | egrep -vi 'stream|dgram'")]),
              [begin
                   put({?MODULE,AppKey}, app_helper:get_env(riak_core, AppKey)),
                   ok = application:set_env(riak_core, AppKey, Val)
@@ -98,8 +99,6 @@ dep_apps() ->
      inets,
      mochiweb,
      fun(start) ->
-             Ring = riak_core_ring:fresh(16, node()),
-             riak_core_ring_manager:set_ring_global(Ring),
              _ = application:load(riak_kv),
              [begin
                   put({?MODULE,AppKey}, app_helper:get_env(riak_kv, AppKey)),
@@ -133,6 +132,8 @@ prepare_runtime() ->
              timer:sleep(50),
              do_dep_apps(start),
              timer:sleep(50),
+             riak_core:wait_for_service(riak_kv),
+             riak_core:wait_for_service(riak_pipe),
              [foo1, foo2]
      end.
 
