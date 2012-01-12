@@ -623,14 +623,23 @@ decode_precommit({erlang, {Mod, Fun}, Result}) ->
             riak_kv_stat:update(precommit_fail),
             lager:debug("Pre-commit hook ~p:~p failed with reason ~p",
                         [Mod, Fun, Reason]),
-                Result;
+            Result;
         {'EXIT',  Mod, Fun, Class, Exception} ->
             riak_kv_stat:update(precommit_fail),
             lager:debug("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
                         [Mod,Fun,Class,Exception, erlang:get_stacktrace()]),
             {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
         Obj ->
-            riak_object:ensure_robject(Obj)
+            try
+                riak_object:ensure_robject(Obj)
+            catch _:_ ->
+                    riak_kv_stat:update(precommit_fail),
+                    lager:debug("Problem invoking pre-commit hook ~p:~p,"
+                                " invalid return ~p",
+                                [Mod, Fun, Result]),
+                    {fail, {invalid_return, {Mod, Fun, Result}}}
+
+            end
     end;
 decode_precommit({js, JSName, Result}) ->
     case Result of
