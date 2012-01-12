@@ -394,9 +394,9 @@ postcommit(timeout, StateData = #state{postcommit = []}) ->
 postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
                                        putcore = PutCore}) ->
     %% Process the next hook - gives sys:get_status messages a chance if hooks
-    %% take a long time.  No checking error returns for postcommit hooks.
+    %% take a long time.
     {ReplyObj, UpdPutCore} =  riak_kv_put_core:final(PutCore),
-    invoke_hook(Hook, ReplyObj),
+    decode_postcommit(invoke_hook(Hook, ReplyObj)),
     {next_state, postcommit, StateData#state{postcommit = Rest,
                                              putcore = UpdPutCore}, 0};
 postcommit(request_timeout, StateData) -> % still process hooks even if request timed out
@@ -586,11 +586,14 @@ make_vtag(Now) ->
 %% {Lang, Called, Result}
 %% Where Called = {Mod, Fun} if Lang = erlang
 %%       Called = JSName if Lang = javascript
-invoke_hook({struct, Hook}, RObj) ->
+invoke_hook({struct, Hook}=HookDef, RObj) ->
     Mod = proplists:get_value(<<"mod">>, Hook),
     Fun = proplists:get_value(<<"fun">>, Hook),
     JSName = proplists:get_value(<<"name">>, Hook),
-    invoke_hook(Mod, Fun, JSName, RObj);
+    if (Mod == undefined orelse Fun == undefined) andalso JSName == undefined ->
+            {error, {invalid_hook_def, HookDef}};
+       true -> invoke_hook(Mod, Fun, JSName, RObj)
+    end;
 invoke_hook(HookDef, _RObj) ->
     {error, {invalid_hook_def, HookDef}}.
 
@@ -648,6 +651,25 @@ decode_precommit({js, JSName, Result}) ->
     end;
 decode_precommit({error, Reason}) ->
     {fail, Reason}.
+
+decode_postcommit({erlang, {M,F}, Res}) ->
+    case Res of
+        fail ->
+            lager:error("Post-commit hook ~p:~p failed, no reason given",
+                       [M, F]);
+        {fail, Reason} ->
+            lager:error("Post-commit hook ~p:~p failed with reason ~p",
+                        [M, F, Reason]);
+        {'EXIT', _, _, Class, Ex} ->
+            Stack = erlang:get_stacktrace(),
+            lager:error("Problem invoking post-commit hook ~p:~p -> ~p:~p~n~p",
+                        [M, F, Class, Ex, Stack]),
+            ok;
+        _ -> ok
+    end;
+decode_postcommit({error, {invalid_hook_def, Def}}) ->
+    lager:error("Invalid post-commit hook definition ~p", [Def]).
+
 
 get_hooks(HookType, BucketProps) ->
     Hooks = proplists:get_value(HookType, BucketProps, []),
