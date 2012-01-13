@@ -394,9 +394,9 @@ postcommit(timeout, StateData = #state{postcommit = []}) ->
 postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
                                        putcore = PutCore}) ->
     %% Process the next hook - gives sys:get_status messages a chance if hooks
-    %% take a long time.  No checking error returns for postcommit hooks.
+    %% take a long time.
     {ReplyObj, UpdPutCore} =  riak_kv_put_core:final(PutCore),
-    invoke_hook(Hook, ReplyObj),
+    decode_postcommit(invoke_hook(Hook, ReplyObj)),
     {next_state, postcommit, StateData#state{postcommit = Rest,
                                              putcore = UpdPutCore}, 0};
 postcommit(request_timeout, StateData) -> % still process hooks even if request timed out
@@ -586,11 +586,14 @@ make_vtag(Now) ->
 %% {Lang, Called, Result}
 %% Where Called = {Mod, Fun} if Lang = erlang
 %%       Called = JSName if Lang = javascript
-invoke_hook({struct, Hook}, RObj) ->
+invoke_hook({struct, Hook}=HookDef, RObj) ->
     Mod = proplists:get_value(<<"mod">>, Hook),
     Fun = proplists:get_value(<<"fun">>, Hook),
     JSName = proplists:get_value(<<"name">>, Hook),
-    invoke_hook(Mod, Fun, JSName, RObj);
+    if (Mod == undefined orelse Fun == undefined) andalso JSName == undefined ->
+            {error, {invalid_hook_def, HookDef}};
+       true -> invoke_hook(Mod, Fun, JSName, RObj)
+    end;
 invoke_hook(HookDef, _RObj) ->
     {error, {invalid_hook_def, HookDef}}.
 
@@ -610,29 +613,45 @@ invoke_hook(_, _, _, _) ->
 
 -spec decode_precommit(any()) -> fail | {fail, any()} | riak_object:riak_object().
 decode_precommit({erlang, {Mod, Fun}, Result}) ->
-    try
-        case Result of
-            fail ->
-                fail;
-            {fail, _Reason} ->
-                Result;
-            {'EXIT',  Mod, Fun, Class, Exception} ->
-                lager:error("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
-                                       [Mod,Fun,Class,Exception,
-                                        erlang:get_stacktrace()]),
-                {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
-            Obj ->
+    case Result of
+        fail ->
+            riak_kv_stat:update(precommit_fail),
+            lager:debug("Pre-commit hook ~p:~p failed, no reason given",
+                        [Mod, Fun]),
+            fail;
+        {fail, Reason} ->
+            riak_kv_stat:update(precommit_fail),
+            lager:debug("Pre-commit hook ~p:~p failed with reason ~p",
+                        [Mod, Fun, Reason]),
+            Result;
+        {'EXIT',  Mod, Fun, Class, Exception} ->
+            riak_kv_stat:update(precommit_fail),
+            lager:debug("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
+                        [Mod,Fun,Class,Exception, erlang:get_stacktrace()]),
+            {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
+        Obj ->
+            try
                 riak_object:ensure_robject(Obj)
-        end
-    catch
-        _:_ ->
-            {fail, {invalid_return, {Mod, Fun, Result}}}
+            catch _:_ ->
+                    riak_kv_stat:update(precommit_fail),
+                    lager:debug("Problem invoking pre-commit hook ~p:~p,"
+                                " invalid return ~p",
+                                [Mod, Fun, Result]),
+                    {fail, {invalid_return, {Mod, Fun, Result}}}
+
+            end
     end;
 decode_precommit({js, JSName, Result}) ->
     case Result of
         {ok, <<"fail">>} ->
+            riak_kv_stat:update(precommit_fail),
+            lager:debug("Pre-commit hook ~p failed, no reason given",
+                        [JSName]),
             fail;
         {ok, [{<<"fail">>, Message}]} ->
+            riak_kv_stat:update(precommit_fail),
+            lager:debug("Pre-commit hook ~p failed with reason ~p",
+                        [JSName, Message]),
             {fail, Message};
         {ok, Json} ->
             case catch riak_object:from_json(Json) of
@@ -642,12 +661,37 @@ decode_precommit({js, JSName, Result}) ->
                     Obj
             end;
         {error, Error} ->
-            lager:error("Error executing pre-commit hook: ~p",
-                                   [Error]),
+            riak_kv_stat:update(precommit_fail),
+            lager:debug("Problem invoking pre-commit hook: ~p", [Error]),
             fail
     end;
 decode_precommit({error, Reason}) ->
+    riak_kv_stat:update(precommit_fail),
+    lager:debug("Problem invoking pre-commit hook: ~p", [Reason]),
     {fail, Reason}.
+
+decode_postcommit({erlang, {M,F}, Res}) ->
+    case Res of
+        fail ->
+            riak_kv_stat:update(postcommit_fail),
+            lager:debug("Post-commit hook ~p:~p failed, no reason given",
+                       [M, F]);
+        {fail, Reason} ->
+            riak_kv_stat:update(postcommit_fail),
+            lager:debug("Post-commit hook ~p:~p failed with reason ~p",
+                        [M, F, Reason]);
+        {'EXIT', _, _, Class, Ex} ->
+            riak_kv_stat:update(postcommit_fail),
+            Stack = erlang:get_stacktrace(),
+            lager:debug("Problem invoking post-commit hook ~p:~p -> ~p:~p~n~p",
+                        [M, F, Class, Ex, Stack]),
+            ok;
+        _ -> ok
+    end;
+decode_postcommit({error, {invalid_hook_def, Def}}) ->
+    riak_kv_stat:update(postcommit_fail),
+    lager:debug("Invalid post-commit hook definition ~p", [Def]).
+
 
 get_hooks(HookType, BucketProps) ->
     Hooks = proplists:get_value(HookType, BucketProps, []),

@@ -800,7 +800,7 @@ precommit_should_fail([]) ->
 precommit_should_fail([{garbage, garbage} | _Rest]) ->
     {true, {error, {precommit_fail, {invalid_hook_def, not_a_hook_def}}}};
 precommit_should_fail([{garbage, empty} | _Rest]) ->
-    {true, {error, {precommit_fail, {invalid_hook_def, no_hook}}}};
+    {true, {error, {precommit_fail, {invalid_hook_def, {struct, []}}}}};
 precommit_should_fail([{erlang,precommit_undefined} | _Rest]) ->
     {true, {error, {precommit_fail, 
                     {hook_crashed,{put_fsm_eqc,precommit_undefined,error,undef}}}}};
