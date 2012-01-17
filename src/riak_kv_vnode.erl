@@ -1409,6 +1409,27 @@ must_be_last_cleanup_stuff_test() ->
         {K, _V} <- application:get_all_env(riak_kv)],
     [application:set_env(riak_kv, K, V) || {K, V} <- erlang:get({?MODULE, kv})].
 
+%% include bitcask.hrl for HEADER_SIZE macro
+-include_lib("bitcask/include/bitcask.hrl").
+
+%% Bad CRC's prevent objects from being writable
+bitcask_badcrc_test() ->
+    {S, B, K} = backend_with_known_key(riak_kv_bitcask_backend),
+    DataDir = filename:join(bitcask_test_dir(), "0"),
+    [DataFile] = filelib:wildcard(DataDir ++ "/*.data"),
+    {ok, Fh} = file:open(DataFile, [read, write]),
+    ok = file:pwrite(Fh, ?HEADER_SIZE, <<0>>),
+    file:close(Fh),
+    O = riak_object:new(B, K, <<"y">>),
+    {noreply, _} = handle_command(?KV_PUT_REQ{bkey={B,K},
+                                               object=O,
+                                               req_id=123,
+                                               start_time=riak_core_util:moment(),
+                                               options=[]},
+                                   {raw, 456, self()},
+                                   S),
+    flush_msgs().
+
 new_result_listener(Type) ->
     case Type of
         buckets ->
