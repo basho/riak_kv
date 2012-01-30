@@ -239,6 +239,8 @@ precommit_hooks() ->
 postcommit_hook() ->
     frequency([{9, {erlang, postcommit_ok}},
                {1,  {erlang, postcommit_crash}},
+               {1,  {erlang, postcommit_fail}},
+               {1,  {erlang, postcommit_fail_reason}},
                {1,  {garbage, garbage}}]).
  
 postcommit_hooks() ->
@@ -777,6 +779,12 @@ postcommit_ok(Obj) ->
 postcommit_crash(_Obj) ->
     Ok = ok,
     Ok = postcommit_crash.
+
+postcommit_fail(_Obj) ->
+    fail.
+
+postcommit_fail_reason(_Obj) ->
+    {fail, ?HOOK_SAYS_NO}.
 
 apply_precommit(Object, []) ->
     Object;
