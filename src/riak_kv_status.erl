@@ -51,5 +51,5 @@ transfers() ->
 -spec vnode_status() -> [{atom(), term()}].
 vnode_status() ->
     %% Get the kv vnode indexes and the associated pids for the node.
-    PrefLists = riak_core_vnode_master:all_index_pid(riak_kv_vnode),
+    PrefLists = riak_core_vnode_manager:all_index_pid(riak_kv_vnode),
     riak_kv_vnode:vnode_status(PrefLists).
