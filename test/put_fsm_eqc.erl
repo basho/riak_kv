@@ -55,6 +55,7 @@
          {w, quorum},
          {dw, quorum}]).
 -define(HOOK_SAYS_NO, <<"the hook says no">>).
+-define(LAGER_LOGFILE, "put_fsm_eqc_lager.log").
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
@@ -106,12 +107,20 @@ setup() ->
     error_logger:tty(false),
     error_logger:logfile({open, "put_fsm_eqc.log"}),
 
+    application:stop(lager),
+    application:load(lager),
+    application:set_env(lager, handlers,
+                        [{lager_file_backend, [{?LAGER_LOGFILE, info, 10485760,"$D0",5}]}]),
+    ok = application:start(lager),
+
     %% Start up mock servers and dependencies
     fsm_eqc_util:start_mock_servers(),
     start_javascript(),
     State.
 
 cleanup(running) ->
+    application:stop(lager),
+    application:unload(lager),
     cleanup_javascript(),
     fsm_eqc_util:cleanup_mock_servers(),
     %% Cleanup the JS manager process
@@ -265,12 +274,16 @@ prop_basic_put() ->
     ?FORALL({PWSeed, WSeed, DWSeed,
              Objects, ObjectIdxSeed,
              VPutResp,
-             Options0, AllowMult, Precommit, Postcommit}, 
+             Options0, AllowMult, Precommit, Postcommit,
+             LogLevel}, 
             {w_dw_seed(), w_dw_seed(), w_dw_seed(),
              fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
              vnodeputresps(),
-             options(),bool(), precommit_hooks(), postcommit_hooks()},
+             options(),bool(), precommit_hooks(), postcommit_hooks(),
+             oneof([info, debug])},
     begin
+        lager:set_loglevel(lager_file_backend, ?LAGER_LOGFILE, LogLevel),
+
         N = length(VPutResp),
         {PW, RealPW} = pw_val(N, 1000000, PWSeed),
         {W, RealW} = w_dw_val(N, 1000000, WSeed),
