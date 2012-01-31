@@ -523,8 +523,9 @@ eqc_test_() ->
                           backend_eqc:test(?MODULE, false,
                                            [{data_root,
                                              "test/eleveldb-backend"},
-                                            {async_folds, false}])),
-            ?_assertEqual(true,
+                                         {async_folds, false}]))]},
+          {timeout, 60000,
+            [?_assertEqual(true,
                           backend_eqc:test(?MODULE, false,
                                            [{data_root,
                                              "test/eleveldb-backend"}]))]}
