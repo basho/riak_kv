@@ -74,6 +74,7 @@ dep_apps() ->
      end,
      webmachine,
      os_mon,
+     lager,
      fun(start) ->
              _ = application:load(riak_core),
              %% riak_core_handoff_listener uses {reusaddr, true}, but

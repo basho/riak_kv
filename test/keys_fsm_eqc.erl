@@ -243,7 +243,7 @@ dep_apps() ->
         end,
     XX = fun(_) -> error_logger:info_msg("Registered: ~w\n", [lists:sort(registered())]) end,
     [sasl, crypto, riak_sysmon, webmachine, XX, os_mon,
-     riak_core, XX, luke, erlang_js,
+     lager, riak_core, XX, luke, erlang_js,
      inets, mochiweb, riak_pipe, SetupFun, riak_kv, SetupFun].
 
 do_dep_apps(StartStop, Apps) ->
