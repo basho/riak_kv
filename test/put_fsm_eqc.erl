@@ -41,9 +41,9 @@
 
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include_lib("riak_kv_vnode.hrl").
--include_lib("riak_kv_js_pools.hrl").
--include_lib("riak_kv/src/riak_kv_wm_raw.hrl").
+-include("riak_kv_vnode.hrl").
+-include("riak_kv_js_pools.hrl").
+-include("../src/riak_kv_wm_raw.hrl").
 
 -compile(export_all).
 -export([postcommit_ok/1]).
