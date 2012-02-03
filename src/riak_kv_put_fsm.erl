@@ -626,7 +626,7 @@ decode_precommit({erlang, {Mod, Fun}, Result}) ->
             Result;
         {'EXIT',  Mod, Fun, Class, Exception} ->
             riak_kv_stat:update(precommit_fail),
-            lager:debug("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
+            lager:error("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
                         [Mod,Fun,Class,Exception, erlang:get_stacktrace()]),
             {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
         Obj ->
@@ -634,7 +634,7 @@ decode_precommit({erlang, {Mod, Fun}, Result}) ->
                 riak_object:ensure_robject(Obj)
             catch _:_ ->
                     riak_kv_stat:update(precommit_fail),
-                    lager:debug("Problem invoking pre-commit hook ~p:~p,"
+                    lager:error("Problem invoking pre-commit hook ~p:~p,"
                                 " invalid return ~p",
                                 [Mod, Fun, Result]),
                     {fail, {invalid_return, {Mod, Fun, Result}}}
@@ -662,12 +662,12 @@ decode_precommit({js, JSName, Result}) ->
             end;
         {error, Error} ->
             riak_kv_stat:update(precommit_fail),
-            lager:debug("Problem invoking pre-commit hook: ~p", [Error]),
+            lager:error("Problem invoking pre-commit hook: ~p", [Error]),
             fail
     end;
 decode_precommit({error, Reason}) ->
     riak_kv_stat:update(precommit_fail),
-    lager:debug("Problem invoking pre-commit hook: ~p", [Reason]),
+    lager:error("Problem invoking pre-commit hook: ~p", [Reason]),
     {fail, Reason}.
 
 decode_postcommit({erlang, {M,F}, Res}) ->
@@ -683,7 +683,7 @@ decode_postcommit({erlang, {M,F}, Res}) ->
         {'EXIT', _, _, Class, Ex} ->
             riak_kv_stat:update(postcommit_fail),
             Stack = erlang:get_stacktrace(),
-            lager:debug("Problem invoking post-commit hook ~p:~p -> ~p:~p~n~p",
+            lager:error("Problem invoking post-commit hook ~p:~p -> ~p:~p~n~p",
                         [M, F, Class, Ex, Stack]),
             ok;
         _ -> ok
