@@ -53,7 +53,7 @@ start(_Type, _StartArgs) ->
        {old_vclock, 86400},
        {young_vclock, 20},
        {big_vclock, 50},
-       {small_vclock, 10},
+       {small_vclock, 50},
        {pr, 0},
        {r, quorum},
        {w, quorum},

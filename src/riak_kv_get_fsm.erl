@@ -523,7 +523,7 @@ bucket_props(Bucket, Nval) -> % riak_core_bucket:get_bucket(Bucket).
      {precommit,[]},
      {r,quorum},
      {rw,quorum},
-     {small_vclock,10},
+     {small_vclock,50},
      {w,quorum},
      {young_vclock,20}].
  
