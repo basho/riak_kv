@@ -92,7 +92,7 @@ blocking_dispatch(Name, JSCall, Tries) ->
     blocking_dispatch(Name, JSCall, Tries, Tries).
 
 reserve_vm(Name) ->
-    gen_server:call(Name, reserve_vm, infinity).
+    gen_server:call(Name, {reserve_vm, self()}, infinity).
 
 reserve_batch_vm(Name, Tries) ->
     reserve_batch_vm(Name, Tries, Tries).
@@ -128,8 +128,8 @@ handle_call(reload_vms, _From, #state{master=Master, idle=Idle}=State) ->
     end,
     {reply, ok, State};
 
-handle_call(reserve_batch_vm, _From, State) ->
-    {Reply, State1} = case handle_call(reserve_vm, _From, State) of
+handle_call({reserve_batch_vm, Owner}, _From, State) ->
+    {Reply, State1} = case handle_call({reserve_vm, Owner}, _From, State) of
                           {reply, {ok, VM}, NewState} ->
                               riak_kv_js_vm:start_batch(VM),
                               {{ok, VM}, NewState};
@@ -138,12 +138,13 @@ handle_call(reserve_batch_vm, _From, State) ->
                       end,
     {reply, Reply, State1};
 
-handle_call(reserve_vm, _From, #state{idle=Idle}=State) ->
+handle_call({reserve_vm, Owner}, _From, #state{idle=Idle}=State) ->
     Reply = case ets:first(Idle) of
                 '$end_of_table' ->
                     {error, no_vms};
                 VM ->
                     ets:delete(Idle, VM),
+                    riak_kv_js_vm:checkout_to(VM, Owner),
                     {ok, VM}
             end,
     {reply, Reply, State};
@@ -258,7 +259,7 @@ blocking_dispatch(Name, JSCall, MaxCount, Count) ->
 reserve_batch_vm(_Name, _MaxCount, 0) ->
     {error, no_vms};
 reserve_batch_vm(Name, MaxCount, Count) ->
-    case gen_server:call(Name, reserve_batch_vm) of
+    case gen_server:call(Name, {reserve_batch_vm, self()}) of
         {error, no_vms} ->
             back_off(MaxCount, Count),
             reserve_batch_vm(Name, MaxCount, Count - 1);
