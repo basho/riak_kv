@@ -51,6 +51,10 @@
 %%   - Anything non-zero would trigger read-repair, which could be useful
 %%     for some simulations.
 %% * Is there a need for simulations for get to return different vclocks?
+%% * Add variable latency before responding.  This callback API is
+%%   synchronous, but adding constant- & uniform- & pareto-distributed
+%%   delays would simulate disk I/O latencies because all other backend
+%%   APIs are also synchronous.
 
 -module(riak_kv_yessir_backend).
 -behavior(riak_kv_backend).
