@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_fs_backend: storage engine based on basic filesystem access
+%% riak_kv_yessir_backend: simulation backend for Riak
 %%
 %% Copyright (c) 2012 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -210,6 +210,7 @@ get_binsize(_, Val) ->
 %%
 %% Test
 %%
+-ifdef(USE_BROKEN_TESTS).
 -ifdef(TEST).
 simple_test() ->
    Config = [],
@@ -222,3 +223,4 @@ eqc_test() ->
     ?assertEqual(true, backend_eqc:test(?MODULE, false, Config, Cleanup)).
 -endif. % EQC
 -endif. % TEST
+-endif. % USE_BROKEN_TESTS
