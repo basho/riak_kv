@@ -86,9 +86,14 @@ process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
 keysend_loop(ReqId, Partition, FittingDetails) ->
     receive
         {ReqId, {From, Bucket, Keys}} ->
-            keysend(Bucket, Keys, Partition, FittingDetails),
-            riak_kv_vnode:ack_keys(From),
-            keysend_loop(ReqId, Partition, FittingDetails);
+            case keysend(Bucket, Keys, Partition, FittingDetails) of
+                ok ->
+                    riak_kv_vnode:ack_keys(From),
+                    keysend_loop(ReqId, Partition, FittingDetails);
+                _Error ->
+                    lager:info("Stopping pipe keylisting due to"
+                               " repeated errors")
+            end;
         {ReqId, {Bucket, Keys}} ->
             keysend(Bucket, Keys, Partition, FittingDetails),
             keysend_loop(ReqId, Partition, FittingDetails);
@@ -97,10 +102,17 @@ keysend_loop(ReqId, Partition, FittingDetails) ->
     end.
 
 keysend(Bucket, Keys, Partition, FittingDetails) ->
-    [ riak_pipe_vnode_worker:send_output(
-         {Bucket, Key}, Partition, FittingDetails)
-      || Key <- Keys ],
-    ok.
+    Res = [ riak_pipe_vnode_worker:send_output(
+              {Bucket, Key}, Partition, FittingDetails)
+            || Key <- Keys ],
+    case [ ok || ok <- Res ] of
+        [] when Keys /= [] ->
+            %% none of the output sending succeeded, meaning we're
+            %% likely in full-on failure
+            {error, Res};
+        _ ->
+            ok
+    end.
 
 %% @doc Unused.
 -spec done(state()) -> ok.
