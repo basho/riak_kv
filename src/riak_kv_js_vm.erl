@@ -30,6 +30,7 @@
 
 %% API
 -export([start_link/2, dispatch/4, blocking_dispatch/3, reload/1,
+         checkout_to/2,
          batch_blocking_dispatch/2, start_batch/1, finish_batch/1, batch_dispatch/3]).
 
 %% gen_server callbacks
@@ -38,7 +39,7 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {manager, pool, ctx, in_batch=false}).
+-record(state, {manager, pool, ctx, in_batch=false, owner}).
 
 start_link(Manager, PoolName) ->
     gen_server:start_link(?MODULE, [Manager, PoolName], []).
@@ -48,6 +49,9 @@ start_batch(VMPid) ->
 
 finish_batch(VMPid) ->
     gen_server:call(VMPid, finish_batch, infinity).
+
+checkout_to(VMPid, Owner) ->
+    gen_server:cast(VMPid, {checkout_to, Owner}).
 
 dispatch(VMPid, Requestor, JobId, JSCall) ->
     gen_server:cast(VMPid, {dispatch, Requestor, JobId, JSCall}).
@@ -145,6 +149,9 @@ handle_call(Request, _From, State) ->
     io:format("Request: ~p~n", [Request]),
     {reply, ignore, State}.
 
+handle_cast({checkout_to, Owner}, State) ->
+    Ref = erlang:monitor(process, Owner),
+    {noreply, State#state{owner={Ref, Owner}}};
 handle_cast(reload, #state{ctx=Ctx, pool=Pool}=State) ->
     init_context(Ctx),
     lager:info("Spidermonkey VM (pool: ~p) host reloaded (~p)", [Pool, self()]),
@@ -218,6 +225,10 @@ handle_cast({dispatch, _Requestor, JobId, {Sender, {map, {jsfun, JS}, Arg, _Acc}
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+handle_info({'DOWN', Ref, process, Owner, _Info},
+            #state{owner={Ref, Owner}}=State) ->
+    maybe_idle(State#state{in_batch=false}),
+    {noreply, State#state{in_batch=false, owner=undefined}};
 handle_info({'DOWN', _MRef, _Type, Manager, _Info}, #state{manager=Manager}=State) ->
     {stop, normal, State#state{manager=undefined}};
 handle_info(_Info, State) ->
@@ -347,7 +358,12 @@ read_config(Param, Default) ->
             Default
     end.
 
-maybe_idle(#state{in_batch=false, pool=Pool}) ->
+maybe_idle(#state{in_batch=false, pool=Pool, owner=Owner}) ->
+    case Owner of
+        {Ref,_} ->
+            erlang:demonitor(Ref, [flush]);
+        _ -> ok
+    end,
     riak_kv_js_manager:mark_idle(Pool);
 maybe_idle(#state{in_batch=true}) ->
     ok.
