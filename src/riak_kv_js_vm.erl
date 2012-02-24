@@ -51,7 +51,7 @@ finish_batch(VMPid) ->
     gen_server:call(VMPid, finish_batch, infinity).
 
 checkout_to(VMPid, Owner) ->
-    gen_server:cast(VMPid, {checkout_to, Owner}).
+    gen_server:call(VMPid, {checkout_to, Owner}, 1000).
 
 dispatch(VMPid, Requestor, JobId, JSCall) ->
     gen_server:cast(VMPid, {dispatch, Requestor, JobId, JSCall}).
@@ -79,6 +79,10 @@ init([Manager, PoolName]) ->
     erlang:monitor(process, Manager),
     {ok, #state{manager=Manager, pool=PoolName, ctx=Ctx}}.
 
+
+handle_call({checkout_to, Owner}, _From, State) ->
+    Ref = erlang:monitor(process, Owner),
+    {reply, ok, State#state{owner={Ref, Owner}}};
 
 handle_call(start_batch, _From, State) ->
     {reply, ok, State#state{in_batch=true}};
@@ -149,9 +153,6 @@ handle_call(Request, _From, State) ->
     io:format("Request: ~p~n", [Request]),
     {reply, ignore, State}.
 
-handle_cast({checkout_to, Owner}, State) ->
-    Ref = erlang:monitor(process, Owner),
-    {noreply, State#state{owner={Ref, Owner}}};
 handle_cast(reload, #state{ctx=Ctx, pool=Pool}=State) ->
     init_context(Ctx),
     lager:info("Spidermonkey VM (pool: ~p) host reloaded (~p)", [Pool, self()]),
