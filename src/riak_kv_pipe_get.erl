@@ -54,6 +54,8 @@
          bkey_nval/1]).
 
 -include("riak_kv_vnode.hrl").
+-include_lib("riak_pipe/include/riak_pipe.hrl").
+-include_lib("riak_pipe/include/riak_pipe_log.hrl").
 
 -export_type([input/0]).
 
@@ -87,15 +89,27 @@ process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
       riak_kv_vnode_master),
     receive
         {ReqId, {r, {ok, Obj}, _, _}} ->
-            riak_pipe_vnode_worker:send_output(
-              {ok, Obj, keydata(Input)}, Partition, FittingDetails),
-            {ok, State};
+            case riak_pipe_vnode_worker:send_output(
+                   {ok, Obj, keydata(Input)}, Partition, FittingDetails) of
+                ok ->
+                    ?T(FittingDetails, [kvget], {got, Input}),
+                    {ok, State};
+                ER ->
+                    ?T(FittingDetails, [kvget], ER),
+                    {ER, State}
+            end;
         {ReqId, {r, {error, _} = Error, _, _}} ->
             if Last ->
-                    riak_pipe_vnode_worker:send_output(
-                      {Error, bkey(Input), keydata(Input)},
-                      Partition, FittingDetails),
-                    {ok, State};
+                    case riak_pipe_vnode_worker:send_output(
+                           {Error, bkey(Input), keydata(Input)},
+                           Partition, FittingDetails) of
+                        ok ->
+                            ?T(FittingDetails, [kvget], {notfound, Input}),
+                            {ok, State};
+                        ER ->
+                            ?T(FittingDetails, [kvget], ER),
+                            {ER, State}
+                    end;
                true ->
                     {forward_preflist, State}
             end

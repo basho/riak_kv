@@ -140,8 +140,7 @@ process(Input, _Last,
     case map(Phase, Arg, Input) of
         {ok, Results} when is_list(Results) ->
             ?T(_FittingDetails, [map], {produced, Results}),
-            send_results(Results, State),
-            {ok, State};
+            send_results(Results, State);
         {ok, _NonListResults} ->
             ?T(_FittingDetails, [map, error],
                {error, {non_list_result, Input}}),
@@ -227,9 +226,15 @@ bucket_linkfun(Bucket) ->
 
 %% @doc Send results to the next fitting.
 -spec send_results([term()], state()) -> ok.
-send_results(Results, #state{p=P, fd=FD}) ->
-    [ riak_pipe_vnode_worker:send_output(R, P, FD) || R <- Results],
-    ok.
+send_results([], State) ->
+    {ok, State};
+send_results([Result | Results], #state{p=P, fd=FD} = State) ->
+    case riak_pipe_vnode_worker:send_output(Result, P, FD) of
+        ok ->
+            send_results(Results, State);
+        ER ->
+            {ER, State}
+    end.
 
 %% @doc Unused.
 -spec done(state()) -> ok.
