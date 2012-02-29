@@ -54,6 +54,8 @@
          bkey_nval/1]).
 
 -include("riak_kv_vnode.hrl").
+-include_lib("riak_pipe/include/riak_pipe.hrl").
+-include_lib("riak_pipe/include/riak_pipe_log.hrl").
 
 -export_type([input/0]).
 
@@ -77,7 +79,7 @@ init(Partition, FittingDetails) ->
 %% @doc Lookup the bucket/key pair on the Riak KV vnode, and send it
 %% downstream.
 -spec process(riak_kv_mrc_pipe:key_input(), boolean(), state())
-         -> {ok | forward_preflist, state()}.
+         -> {ok | forward_preflist | {error, term()}, state()}.
 process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
     ReqId = make_req_id(),
     riak_core_vnode_master:command(
@@ -87,15 +89,23 @@ process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
       riak_kv_vnode_master),
     receive
         {ReqId, {r, {ok, Obj}, _, _}} ->
-            riak_pipe_vnode_worker:send_output(
-              {ok, Obj, keydata(Input)}, Partition, FittingDetails),
-            {ok, State};
+            case riak_pipe_vnode_worker:send_output(
+                   {ok, Obj, keydata(Input)}, Partition, FittingDetails) of
+                ok ->
+                    {ok, State};
+                ER ->
+                    {ER, State}
+            end;
         {ReqId, {r, {error, _} = Error, _, _}} ->
             if Last ->
-                    riak_pipe_vnode_worker:send_output(
-                      {Error, bkey(Input), keydata(Input)},
-                      Partition, FittingDetails),
-                    {ok, State};
+                    case riak_pipe_vnode_worker:send_output(
+                           {Error, bkey(Input), keydata(Input)},
+                           Partition, FittingDetails) of
+                        ok ->
+                            {ok, State};
+                        ER ->
+                            {ER, State}
+                    end;
                true ->
                     {forward_preflist, State}
             end
