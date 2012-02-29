@@ -225,7 +225,7 @@ bucket_linkfun(Bucket) ->
     erlang:make_fun(Module, Function, 3).
 
 %% @doc Send results to the next fitting.
--spec send_results([term()], state()) -> ok.
+-spec send_results([term()], state()) -> {ok | {error, term()}, state()}.
 send_results([], State) ->
     {ok, State};
 send_results([Result | Results], #state{p=P, fd=FD} = State) ->

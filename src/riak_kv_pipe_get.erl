@@ -79,7 +79,7 @@ init(Partition, FittingDetails) ->
 %% @doc Lookup the bucket/key pair on the Riak KV vnode, and send it
 %% downstream.
 -spec process(riak_kv_mrc_pipe:key_input(), boolean(), state())
-         -> {ok | forward_preflist, state()}.
+         -> {ok | forward_preflist | {error, term()}, state()}.
 process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
     ReqId = make_req_id(),
     riak_core_vnode_master:command(
@@ -92,10 +92,8 @@ process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
             case riak_pipe_vnode_worker:send_output(
                    {ok, Obj, keydata(Input)}, Partition, FittingDetails) of
                 ok ->
-                    ?T(FittingDetails, [kvget], {got, Input}),
                     {ok, State};
                 ER ->
-                    ?T(FittingDetails, [kvget], ER),
                     {ER, State}
             end;
         {ReqId, {r, {error, _} = Error, _, _}} ->
@@ -104,10 +102,8 @@ process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
                            {Error, bkey(Input), keydata(Input)},
                            Partition, FittingDetails) of
                         ok ->
-                            ?T(FittingDetails, [kvget], {notfound, Input}),
                             {ok, State};
                         ER ->
-                            ?T(FittingDetails, [kvget], ER),
                             {ER, State}
                     end;
                true ->
