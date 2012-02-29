@@ -81,6 +81,8 @@ process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
 
 keysend_loop(ReqId, Partition, FittingDetails) ->
     receive
+        {ReqId, {error, _Reason} = ER} ->
+            ER;
         {ReqId, {Bucket, Keys}} ->
             case keysend(Bucket, Keys, Partition, FittingDetails) of
                 ok ->
@@ -132,7 +134,9 @@ queue_existing_pipe(Pipe, Bucket, Query, Timeout) ->
     {ok, LKP} = riak_pipe:exec([#fitting_spec{name=index,
                                               module=?MODULE,
                                               nval=1}],
-                               [{sink, Head}]),
+                               [{sink, Head},
+                                {trace, [error]},
+                                {log, {sink, Pipe#pipe.sink}}]),
 
     %% setup the cover operation
     ReqId = erlang:phash2(erlang:now()), %% stolen from riak_client
