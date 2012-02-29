@@ -60,7 +60,7 @@ init(Partition, FittingDetails) ->
 
 %% @doc Process queries indexes on the KV vnode, according to the
 %% input bucket and query.
--spec process(term(), boolean(), state()) -> {ok, state()}.
+-spec process(term(), boolean(), state()) -> {ok | {error, term()}, state()}.
 process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
     case Input of
         {cover, FilterVNodes, {Bucket, Query}} ->
@@ -77,23 +77,31 @@ process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
       FilterVNodes,
       {raw, ReqId, self()},
       riak_kv_vnode_master),
-    keysend_loop(ReqId, Partition, FittingDetails),
-    {ok, State}.
+    {keysend_loop(ReqId, Partition, FittingDetails), State}.
 
 keysend_loop(ReqId, Partition, FittingDetails) ->
     receive
         {ReqId, {Bucket, Keys}} ->
-            keysend(Bucket, Keys, Partition, FittingDetails),
-            keysend_loop(ReqId, Partition, FittingDetails);
+            case keysend(Bucket, Keys, Partition, FittingDetails) of
+                ok ->
+                    keysend_loop(ReqId, Partition, FittingDetails);
+                ER ->
+                    ER
+            end;
         {ReqId, done} ->
             ok
     end.
 
-keysend(Bucket, Keys, Partition, FittingDetails) ->
-    [ riak_pipe_vnode_worker:send_output(
-         {Bucket, Key}, Partition, FittingDetails)
-      || Key <- Keys ],
-    ok.
+keysend(_Bucket, [], _Partition, _FittingDetails) ->
+    ok;
+keysend(Bucket, [Key | Keys], Partition, FittingDetails) ->
+    case riak_pipe_vnode_worker:send_output(
+           {Bucket, Key}, Partition, FittingDetails) of
+        ok ->
+            keysend(Bucket, Keys, Partition, FittingDetails);
+        ER ->
+            ER
+    end.
 
 %% @doc Unused.
 -spec done(state()) -> ok.
