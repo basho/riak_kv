@@ -60,7 +60,7 @@ init(Partition, FittingDetails) ->
 
 %% @doc Process lists keys from the KV vnode, according to the input
 %%      bucket +/- filter.
--spec process(term(), boolean(), state()) -> {ok, state()}.
+-spec process(term(), boolean(), state()) -> {ok | {error, term()}, state()}.
 process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
     case Input of
         {cover, FilterVNodes, {Bucket, Filters}} ->
@@ -80,27 +80,42 @@ process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
       FilterVNodes,
       {raw, ReqId, self()},
       riak_kv_vnode_master),
-    keysend_loop(ReqId, Partition, FittingDetails),
-    {ok, State}.
+    Result = keysend_loop(ReqId, Partition, FittingDetails),
+    {Result, State}.
 
 keysend_loop(ReqId, Partition, FittingDetails) ->
     receive
         {ReqId, {From, Bucket, Keys}} ->
-            keysend(Bucket, Keys, Partition, FittingDetails),
-            riak_kv_vnode:ack_keys(From),
-            keysend_loop(ReqId, Partition, FittingDetails);
+            Result = keysend(Bucket, Keys, Partition, FittingDetails),
+            case Result of
+                ok ->
+                    riak_kv_vnode:ack_keys(From),
+                    keysend_loop(ReqId, Partition, FittingDetails);
+                Error ->
+                    Error
+            end;
         {ReqId, {Bucket, Keys}} ->
-            keysend(Bucket, Keys, Partition, FittingDetails),
-            keysend_loop(ReqId, Partition, FittingDetails);
+            Result = keysend(Bucket, Keys, Partition, FittingDetails),
+            case Result of
+                ok ->
+                    keysend_loop(ReqId, Partition, FittingDetails);
+                Error ->
+                    Error
+            end;
         {ReqId, done} ->
             ok
     end.
 
-keysend(Bucket, Keys, Partition, FittingDetails) ->
-    [ riak_pipe_vnode_worker:send_output(
-         {Bucket, Key}, Partition, FittingDetails)
-      || Key <- Keys ],
-    ok.
+keysend(_Bucket, [], _Partition, _FittingDetails) ->
+    ok;
+keysend(Bucket, [Key | Keys], Partition, FittingDetails) ->
+    case riak_pipe_vnode_worker:send_output(
+           {Bucket, Key}, Partition, FittingDetails) of
+        ok ->
+            keysend(Bucket, Keys, Partition, FittingDetails);
+        ER ->
+            ER
+    end.
 
 %% @doc Unused.
 -spec done(state()) -> ok.
@@ -128,7 +143,9 @@ queue_existing_pipe(Pipe, Bucket, Timeout) ->
     {ok, LKP} = riak_pipe:exec([#fitting_spec{name=listkeys,
                                               module=?MODULE,
                                               nval=1}],
-                               [{sink, Head}]),
+                               [{sink, Head},
+                                {trace, [error]},
+                                {log, {sink, Pipe#pipe.sink}}]),
 
     %% setup the cover operation
     ReqId = erlang:phash2(erlang:now()), %% stolen from riak_client
