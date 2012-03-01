@@ -60,7 +60,7 @@ init(Partition, FittingDetails) ->
 
 %% @doc Process lists keys from the KV vnode, according to the input
 %%      bucket +/- filter.
--spec process(term(), boolean(), state()) -> {ok, state()}.
+-spec process(term(), boolean(), state()) -> {ok | {error, term()}, state()}.
 process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
     case Input of
         {cover, FilterVNodes, {Bucket, Filters}} ->
