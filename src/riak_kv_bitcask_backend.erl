@@ -129,7 +129,7 @@ stop(#state{ref=Ref}) ->
 %% @doc Retrieve an object from the bitcask backend
 -spec get(riak_object:bucket(), riak_object:key(), state()) ->
                  {ok, any(), state()} |
-                 {ok, not_found, state()} |
+                 {error, not_found, state()} |
                  {error, term(), state()}.
 get(Bucket, Key, #state{ref=Ref}=State) ->
     BitcaskKey = term_to_binary({Bucket, Key}),
