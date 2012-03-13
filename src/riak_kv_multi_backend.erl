@@ -48,6 +48,7 @@
 -define(CAPABILITIES, [async_fold]).
 
 -record (state, {backends :: [{atom(), atom(), term()}],
+                 bprefix_list :: [{binary(), atom()}],
                  default_backend :: atom()}).
 
 -type state() :: #state{}.
@@ -59,10 +60,27 @@
 %% is specified, then the 'multi_backend_default' setting is used.
 %% If this is unset, then the first defined backend is used.
 %%
+%% If the 'multi_backend_prefix_list' list is defined and is non-empty,
+%% that list determines bucket name prefixes -> backend names.  For
+%% example:
+%%
+%%     {multi_backend_prefix_list, [{<<"c">>, be_1}, {<<"p">>, be_2}]},
+%%
+%% ... would use the backend named 'be_1' for all buckets that begin
+%% with the prefix "c", and use the backend named 'be_2' for all
+%% backends that begin with the prefix "p".
+%%
+%% NOTE: The 'multi_backend_prefix_list' is checked *prior* to
+%%       checking the bucket-specific configuration in Core's ring.
+%%       (By definition, bucket-specific configuration must match the
+%%       entire bucket name.)
+%%
 %% === Configuration ===
 %%
 %%     {storage_backend, riak_kv_multi_backend},
 %%     {multi_backend_default, first_backend},
+%%     %% format for PrefixTuples: {<<"bucket_prefix_string">>, backend_name}
+%%     {multi_backend_prefix_list, [PrefixTuples]},
 %%     {multi_backend, [
 %%       % format: {name, module, [Configs]}
 %%       {first_backend, riak_xxx_backend, [
@@ -121,6 +139,8 @@ capabilities(_Bucket, State) ->
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% Sanity checking
+    BPrefixList =  app_helper:get_prop_or_env(multi_backend_prefix_list, Config,
+                                              riak_kv, []),
     Defs =  app_helper:get_prop_or_env(multi_backend, Config, riak_kv),
     if Defs =:= undefined ->
             {error, multi_backend_config_unset};
@@ -143,11 +163,14 @@ start(Partition, Config) ->
                     BackendFun = start_backend_fun(Partition),
                     {Backends, Errors} =
                         lists:foldl(BackendFun, {[], []}, Defs),
-                    case Errors of
-                        [] ->
+                    case {Errors, bprefix_sanity_check(Backends,BPrefixList)} of
+                        {[], ok} ->
                             {ok, #state{backends=Backends,
+                                        bprefix_list=BPrefixList,
                                         default_backend=DefaultBackend}};
-                        _ ->
+                        {[], BPrefixErrors} ->
+                            {error, BPrefixErrors};
+                        {_, _} ->
                             {error, Errors}
                     end;
                 false ->
@@ -332,7 +355,17 @@ callback(Ref, Msg, #state{backends=Backends}=State) ->
 %% Given a Bucket name and the State, return the
 %% backend definition. (ie: {Name, Module, SubState})
 get_backend(Bucket, #state{backends=Backends,
-                           default_backend=DefaultBackend}) ->
+                           bprefix_list=BPrefixList} = State) ->
+    case match_bucket_prefix(Bucket, BPrefixList) of
+        undefined ->
+            get_backend_bucketprops(Bucket, State);
+        BackendName ->
+            %% Sanity check at start() => keyfind will always succeed
+            lists:keyfind(BackendName, 1, Backends)
+    end.
+
+get_backend_bucketprops(Bucket, #state{backends=Backends,
+                                       default_backend=DefaultBackend}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     BackendName = proplists:get_value(backend, BucketProps, DefaultBackend),
     %% Ensure that a backend by that name exists...
@@ -446,6 +479,35 @@ error_filter({error, _, _}) ->
     true;
 error_filter(_) ->
     false.
+
+%% @private
+%% @edoc Check sanity of the BPrefixList against the backends we've started.
+bprefix_sanity_check(Backends, BPrefixList) ->
+    BackendNames = [Name || {Name, _Mod, _St} <- Backends],
+    MyNames = [Name || {_BPrefix, Name} <- BPrefixList],
+    case MyNames -- BackendNames of
+        [] ->
+            ok;
+        UnknownNames ->
+            {unknown_backend_names, UnknownNames}
+    end.
+
+%% @private
+%% @edoc Check BucketName against a list of prefixes
+match_bucket_prefix(_Bucket, []) ->
+    undefined;
+%% match_bucket_prefix(Bucket, [{Prefix, _Name}|BPrefixList])
+%%   when size(Bucket) < size(Prefix) ->
+%%     match_bucket_prefix(Bucket, BPrefixList);
+match_bucket_prefix(Bucket, [{Prefix, Name}|BPrefixList]) ->
+    PrefixSize = size(Prefix),
+    case Bucket of
+        <<Prefix:PrefixSize/binary, _/binary>> ->
+            Name;
+        _ ->
+            match_bucket_prefix(Bucket, BPrefixList)
+    end.
+
 
 %% ===================================================================
 %% EUnit tests
