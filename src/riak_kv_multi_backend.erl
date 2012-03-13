@@ -61,13 +61,13 @@
 %% If this is unset, then the first defined backend is used.
 %%
 %% If the 'multi_backend_prefix_list' list is defined and is non-empty,
-%% that list determines bucket name prefixes -> backend names.  For
-%% example:
+%% that list determines bucket name prefixes -> backend names.  (Default
+%% value = empty list.)  For example:
 %%
 %%     {multi_backend_prefix_list, [{<<"c">>, be_1}, {<<"p">>, be_2}]},
 %%
 %% ... would use the backend named 'be_1' for all buckets that begin
-%% with the prefix "c", and use the backend named 'be_2' for all
+%% with the prefix "c" and use the backend named 'be_2' for all
 %% backends that begin with the prefix "p".
 %%
 %% NOTE: The 'multi_backend_prefix_list' is checked *prior* to
