@@ -50,9 +50,6 @@ init([]) ->
                {riak_kv_pb_listener, {riak_kv_pb_listener, start_link, []},
                permanent, 5000, worker, [riak_kv_pb_listener]}
               ],
-    RiakStat = {riak_kv_stat,
-                {riak_kv_stat, start_link, []},
-                permanent, 5000, worker, [riak_kv_stat]},
     MapJSPool = {?JSPOOL_MAP,
                  {riak_kv_js_manager, start_link,
                   [?JSPOOL_MAP, read_js_pool_size(map_js_vm_count, "map")]},
@@ -115,13 +112,11 @@ init([]) ->
     IsPbConfigured = (app_helper:get_env(riak_kv, pb_ip) /= undefined)
         andalso (app_helper:get_env(riak_kv, pb_port) /= undefined),
     HasStorageBackend = (app_helper:get_env(riak_kv, storage_backend) /= undefined),
-    IsStatEnabled = (app_helper:get_env(riak_kv, riak_kv_stat) == true),
 
     % Build the process list...
     Processes = lists:flatten([
         ?IF(HasStorageBackend, VMaster, []),
         ?IF(IsPbConfigured, RiakPb, []),
-        ?IF(IsStatEnabled, RiakStat, []),
         GetFsmSup,
         PutFsmSup,
         DeleteSup,

@@ -82,13 +82,20 @@ start(_Type, _StartArgs) ->
     %% Spin up supervisor
     case riak_kv_sup:start_link() of
         {ok, Pid} ->
+            IsStatEnabled = (app_helper:get_env(riak_kv, riak_kv_stat) == true),
+            RegMods0 = [
+                        {vnode_module, riak_kv_vnode},
+                        {bucket_validator, riak_kv_bucket}
+                       ],
+
+            RegMods = if IsStatEnabled ->
+                              [{stat_specs, riak_kv_stat}|RegMods0];
+                         true -> RegMods0
+                      end,
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
             %% synchronously.
-            riak_core:register(riak_kv, [
-                {vnode_module, riak_kv_vnode},
-                {bucket_validator, riak_kv_bucket}
-            ]),
+            riak_core:register(riak_kv, RegMods),
 
             %% Add routes to webmachine
             [ webmachine_router:add_route(R)
