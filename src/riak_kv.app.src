@@ -3,7 +3,7 @@
 {application, riak_kv,
  [
   {description, "Riak Key/Value Store"},
-  {vsn, "1.1.1"},
+  {vsn, "1.1.2"},
   {applications, [
                   kernel,
                   stdlib,
