@@ -284,7 +284,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef,
                      get_index_folder(FoldFun, Acc, Index, DataRef, IndexRef);
                  Bucket /= false ->
                      FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-                     get_folder(FoldFun, Acc, DataRef);
+                     get_index_folder(FoldFun, Acc, {index, Bucket, {eq, <<"$bucket">>, Bucket}}, DataRef, IndexRef);
                  true ->
                      FoldFun = fold_keys_fun(FoldKeysFun, undefined),
                      get_folder(FoldFun, Acc, DataRef)
