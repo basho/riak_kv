@@ -353,8 +353,7 @@ update_stats({ok, Obj}, #state{get_usecs = GetUsecs}) ->
     ObjSize =
         size(riak_object:bucket(Obj)) +
         size(riak_object:key(Obj)) +
-        size(term_to_binary(riak_object:vclock(Obj))) +
-        lists:sum([size(term_to_binary(MD)) + value_size(Value) || {MD, Value} <- Contents]),
+        lists:sum([size(term_to_binary(MD)) + value_size(Value) + size(term_to_binary(Clock)) || {MD, Value, Clock} <- Contents]),
     riak_kv_stat:update({get_fsm, undefined, GetUsecs, NumSiblings, ObjSize});
 update_stats(_, #state{get_usecs = GetUsecs}) ->
     riak_kv_stat:update({get_fsm, undefined, GetUsecs, undefined, undefined}).

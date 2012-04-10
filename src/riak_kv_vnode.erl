@@ -595,7 +595,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
             PruneTime = StartTime
     end,
     Coord = proplists:get_value(coord, Options, false),
-    PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
+    PutArgs = #putargs{returnbody=Coord orelse proplists:get_value(returnbody,Options,false),
                        coord=Coord,
                        lww=proplists:get_value(last_write_wins, BProps, false),
                        bkey=BKey,
@@ -664,7 +664,7 @@ prepare_put(#state{vnodeid=VId,
                              coord=Coord,
                              lww=LWW,
                              starttime=StartTime,
-                             prunetime=PruneTime},
+                             prunetime=_PruneTime},
             IndexBackend) ->
     case Mod:get(Bucket, Key, ModState) of
         {error, not_found, _UpdModState} ->
@@ -687,7 +687,7 @@ prepare_put(#state{vnodeid=VId,
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs};
                 {newobj, NewObj} ->
-                    VC = riak_object:vclock(NewObj),
+%                    VC = riak_object:vclock(NewObj),
                     AMObj = enforce_allow_mult(NewObj, BProps),
                     case IndexBackend of
                         true ->
@@ -697,17 +697,17 @@ prepare_put(#state{vnodeid=VId,
                         false ->
                             IndexSpecs = []
                     end,
-                    case PruneTime of
-                        undefined ->
-                            ObjToStore = AMObj;
-                        _ ->
-                            ObjToStore =
-                                riak_object:set_vclock(AMObj,
-                                                       vclock:prune(VC,
-                                                                    PruneTime,
-                                                                    BProps))
-                    end,
-                    {{true, ObjToStore},
+%                    case PruneTime of
+%                        undefined ->
+%                            ObjToStore = AMObj;
+%                        _ ->
+%                            ObjToStore =
+%                                riak_object:set_vclock(AMObj,
+%                                                       vclock:prune(VC,
+%                                                                    PruneTime,
+%                                                                    BProps))
+%                    end,
+                    {{true, AMObj},
                      PutArgs#putargs{index_specs=IndexSpecs}}
             end
     end.
@@ -754,8 +754,10 @@ enforce_allow_mult(Obj, BProps) ->
             case riak_object:get_contents(Obj) of
                 [_] -> Obj;
                 Mult ->
-                    {MD, V} = select_newest_content(Mult),
-                    riak_object:set_contents(Obj, [{MD, V}])
+                    Clocks = [C || {_,_,C} <- Mult],
+                    Clock = dottedvv:merge(Clocks),
+                    {MD, V, _VC} = select_newest_content(Mult),
+                    riak_object:set_contents(Obj, [{MD, V, Clock}])
             end
     end.
 
@@ -763,7 +765,7 @@ enforce_allow_mult(Obj, BProps) ->
 %% choose the latest content to store for the allow_mult=false case
 select_newest_content(Mult) ->
     hd(lists:sort(
-         fun({MD0, _}, {MD1, _}) ->
+         fun({MD0, _, _}, {MD1, _, _}) ->
                  riak_core_util:compare_dates(
                    dict:fetch(<<"X-Riak-Last-Modified">>, MD0),
                    dict:fetch(<<"X-Riak-Last-Modified">>, MD1))
@@ -775,7 +777,8 @@ put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
     {newobj, UpdObj};
 put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
     ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
-    case ResObj =:= CurObj of
+%    case ResObj =:= CurObj of
+    case dottedvv:equal(riak_object:vclock(ResObj), riak_object:vclock(CurObj)) of
         true ->
             {oldobj, CurObj};
         false ->
@@ -783,22 +786,24 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
     end;
 put_merge(true, true, _CurObj, UpdObj, VId, StartTime) -> % coord=false, LWW=true
     {newobj, riak_object:increment_vclock(UpdObj, VId, StartTime)};
-put_merge(true, false, CurObj, UpdObj, VId, StartTime) ->
-    UpdObj1 = riak_object:increment_vclock(UpdObj, VId, StartTime),
-    UpdVC = riak_object:vclock(UpdObj1),
-    CurVC = riak_object:vclock(CurObj),
-
-    %% Check the coord put will replace the existing object
-    case vclock:get_counter(VId, UpdVC) > vclock:get_counter(VId, CurVC) andalso
-        vclock:descends(CurVC, UpdVC) == false andalso
-        vclock:descends(UpdVC, CurVC) == true of
-        true ->
-            {newobj, UpdObj1};
-        false ->
-            %% If not, make sure it does
-            {newobj, riak_object:increment_vclock(
-                       riak_object:merge(CurObj, UpdObj1), VId, StartTime)}
-    end.
+put_merge(true, false, CurObj, UpdObj, VId, _StartTime) ->
+    UpdObj1 = riak_object:update_vclock(UpdObj, CurObj, VId),
+    ResObj = riak_object:syntactic_merge(CurObj, UpdObj1),
+    {newobj, ResObj}.
+%    UpdVC = riak_object:vclock(UpdObj1),
+%    CurVC = riak_object:vclock(CurObj),
+%
+%    %% Check the coord put will replace the existing object
+%    case vclock:get_counter(VId, UpdVC) > vclock:get_counter(VId, CurVC) andalso
+%        vclock:descends(CurVC, UpdVC) == false andalso
+%        vclock:descends(UpdVC, CurVC) == true of
+%        true ->
+%            {newobj, UpdObj1};
+%        false ->
+%            %% If not, make sure it does
+%            {newobj, riak_object:increment_vclock(
+%                       riak_object:merge(CurObj, UpdObj1), VId, StartTime)}
+%    end.
 
 %% @private
 do_get(_Sender, BKey, ReqID,

@@ -757,14 +757,16 @@ select_doc(#ctx{doc={ok, Doc}, vtag=Vtag}) ->
     case riak_object:get_update_value(Doc) of
         undefined ->
             case riak_object:get_contents(Doc) of
-                [Single] -> Single;
+                [Single] -> {MD,V,_Clock} = Single,
+                            {MD,V};
                 Mult ->
                     case lists:dropwhile(
-                           fun({M,_}) ->
+                           fun({M,_,_}) ->
                                    dict:fetch(?MD_VTAG, M) /= Vtag
                            end,
                            Mult) of
-                        [Match|_] -> Match;
+                        [Match|_] -> {MD,V,_Clock} = Match,
+                                      {MD,V};
                         [] -> multiple_choices
                     end
             end;
@@ -797,7 +799,7 @@ encode_vclock(VClock) ->
 %%      vclock is returned.
 decode_vclock_header(RD) ->
     case wrq:get_req_header(?HEAD_VCLOCK, RD) of
-        undefined -> vclock:fresh();
+        undefined -> dottedvv:fresh();
         Head      -> binary_to_term(zlib:unzip(base64:decode(Head)))
     end.
 

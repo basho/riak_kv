@@ -91,7 +91,7 @@ default_encodings() ->
 %% @spec multipart_encode_body(string(), binary(), {dict(), binary()}) -> iolist()
 %% @doc Produce one part of a multipart body, representing one sibling
 %%      of a multi-valued document.
-multipart_encode_body(Prefix, Bucket, {MD, V}, APIVersion) ->
+multipart_encode_body(Prefix, Bucket, {MD, V, Clock}, APIVersion) ->
     Links1 = case dict:find(?MD_LINKS, MD) of
                  {ok, Ls} -> Ls;
                  error -> []
@@ -121,6 +121,7 @@ multipart_encode_body(Prefix, Bucket, {MD, V}, APIVersion) ->
              Rfc1123
      end,
      "\r\n",
+     "VClock: ",encode_vclock(Clock),"\r\n",
      case dict:find(?MD_DELETED, MD) of
          {ok, "true"} ->
              [?HEAD_DELETED, ": true\r\n"];
