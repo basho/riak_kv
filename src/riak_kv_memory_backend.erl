@@ -66,16 +66,6 @@
 -define(CAPABILITIES, [async_fold, indexes]).
 
 %% Macros for working with indexes
--define(SELECT_BATCH_SIZE, 100).
--define(EQ_MS(B,I,V), [{{{B,I,V,'_'},'_'},[],['$_']}]).
--define(KEY_RANGE_MS(B,L,H), [{{{B,'$1'},'_'},
-                               [{'>=', '$1', L},
-                                {'=<', '$1', H}],
-                               ['$_']}]).
--define(RANGE_MS(B,I,L,H), [{{{B,I,'$1','$2'}, '_'},
-                             [{'>=','$1',L},
-                              {'=<','$1',H}],
-                             ['$_']}]).
 -define(DELETE_PTN(B,K), {{B,'_','_',K},'_'}).
 
 %% ETS table name macros so we can break encapsulation for testing
@@ -123,9 +113,9 @@ start(Partition, Config) ->
     MemoryMB = app_helper:get_prop_or_env(max_memory, Config, memory_backend),
     TableOpts = case app_helper:get_prop_or_env(test, Config, memory_backend) of
                     true ->
-                        [public, named_table];
+                        [ordered_set, public, named_table];
                     _ ->
-                        []
+                        [ordered_set]
                 end,
     case MemoryMB of
         undefined ->
@@ -133,9 +123,9 @@ start(Partition, Config) ->
             TimeRef = undefined;
         _ ->
             MaxMemory = MemoryMB * 1024 * 1024,
-            TimeRef = ets:new(?TNAME(Partition), [ordered_set|TableOpts])
+            TimeRef = ets:new(?TNAME(Partition), TableOpts)
     end,
-    IndexRef = ets:new(?INAME(Partition), [ordered_set|TableOpts]),
+    IndexRef = ets:new(?INAME(Partition), TableOpts),
     DataRef = ets:new(?DNAME(Partition), TableOpts),
     {ok, #state{data_ref=DataRef,
                 index_ref=IndexRef,
@@ -465,40 +455,66 @@ get_folder(FoldFun, Acc, DataRef) ->
     end.
 
 %% @private
-get_index_folder(Folder, Acc0, {index, _Bucket, {eq, <<"$bucket">>, _}}, DataRef, _) ->
+get_index_folder(Folder, Acc0, {index, Bucket, {eq, <<"$bucket">>, _}}, DataRef, _) ->
     %% For the special $bucket index, turn it into a fold over the
     %% data table.
-    get_folder(Folder, Acc0, DataRef);
-get_index_folder(Folder, Acc0, {index, Bucket, {range, <<"$key">>, Low, High}}, DataRef, _) ->
-    %% For the special range lookup on the $key index, turn it into a
-    %% select on the data table.
     fun() ->
-            index_folder(ets:select(DataRef,
-                                    ?KEY_RANGE_MS(Bucket, Low, High),
-                                    ?SELECT_BATCH_SIZE),
-                         Folder, Acc0)
+            key_range_folder(Folder, Acc0, DataRef, {Bucket, undefined}, Bucket)
+    end;
+get_index_folder(Folder, Acc0, {index, Bucket, {range, <<"$key">>, Min, Max}}, DataRef, _) ->
+    %% For the special range lookup on the $key index, turn it into a
+    %% fold on the data table
+    fun() ->
+            key_range_folder(Folder, Acc0, DataRef, {Bucket, Min}, {Bucket, Min, Max})
     end;
 get_index_folder(Folder, Acc0, {index, Bucket, {eq, Field, Term}}, _, IndexRef) ->
     fun() ->
-            index_folder(ets:select(IndexRef,
-                                    ?EQ_MS(Bucket, Field, Term),
-                                    ?SELECT_BATCH_SIZE),
-                         Folder, Acc0)
+            index_range_folder(Folder, Acc0, IndexRef, {Bucket, Field, Term, undefined}, {Bucket, Field, Term, Term})
     end;
-get_index_folder(Folder, Acc0, {index, Bucket, {range, Field, Low, High}}, _, IndexRef) ->
+get_index_folder(Folder, Acc0, {index, Bucket, {range, Field, Min, Max}}, _, IndexRef) ->
     fun() ->
-            index_folder(ets:select(IndexRef,
-                                    ?RANGE_MS(Bucket, Field, Low, High),
-                                    ?SELECT_BATCH_SIZE),
-                         Folder, Acc0)
+            index_range_folder(Folder, Acc0, IndexRef, {Bucket, Field, Min, undefined}, {Bucket, Field, Min, Max})
     end.
 
 
-index_folder('$end_of_table', _Folder, Acc0) ->
-    Acc0;
-index_folder({Matches, Cont}, Folder, Acc0) ->
-    Acc = lists:foldl(Folder, Acc0, Matches),
-    index_folder(ets:select(Cont), Folder, Acc).
+%% Iterates over a range of keys, for the special $key and $bucket
+%% indexes.
+%% @private
+-spec key_range_folder(function(), term(), ets:tid(), {riak_object:bucket(), riak_object:key()}, binary() | {riak_object:bucket(), term(), term()}) -> term().
+key_range_folder(Folder, Acc0, DataRef, {B,_}=DataKey, B) ->
+    case ets:lookup(DataRef, DataKey) of
+        [] ->
+            key_range_folder(Folder, Acc0, DataRef, ets:next(DataRef, DataKey), B);
+        [Object] ->
+            Acc = Folder(Object, Acc0),
+            key_range_folder(Folder, Acc, DataRef, ets:next(DataRef, DataKey), B)
+    end;
+key_range_folder(Folder, Acc0, DataRef, {B,K}=DataKey, {B, Min, Max}=Query) when K >= Min, K =< Max ->
+    case ets:lookup(DataRef, DataKey) of
+        [] ->
+            key_range_folder(Folder, Acc0, DataRef, ets:next(DataRef, DataKey), Query);
+        [Object] ->
+            Acc = Folder(Object, Acc0),
+            key_range_folder(Folder, Acc, DataRef, ets:next(DataRef, DataKey), Query)
+    end;
+key_range_folder(_Folder, Acc, _DataRef, _DataKey, _Query) ->
+    Acc.
+
+%% Iterates over a range of index postings
+index_range_folder(Folder, Acc0, IndexRef, {B, I, V, _K}=IndexKey, {B, I, Min, Max}=Query) when V >= Min, V =< Max ->
+    case ets:lookup(IndexRef, IndexKey) of
+        [] ->
+            %% This will happen on the first iteration, where the key
+            %% does not exist. In all other cases, ETS will give us a
+            %% real key from next/2.
+            index_range_folder(Folder, Acc0, IndexRef, ets:next(IndexRef, IndexKey), Query);
+        [Posting] ->
+            Acc = Folder(Posting, Acc0),
+            index_range_folder(Folder, Acc, IndexRef, ets:next(IndexRef, IndexKey), Query)
+    end;
+index_range_folder(_Folder, Acc, _IndexRef, _IndexKey, _Query) ->
+    Acc.
+
 
 %% @private
 do_put(Bucket, Key, Val, IndexSpecs, DataRef, IndexRef) ->
@@ -512,6 +528,8 @@ exceeds_ttl(Timestamp, TTL) ->
     Diff = (timer:now_diff(now(), Timestamp) / 1000 / 1000),
     Diff > TTL.
 
+update_indexes(_Bucket, _Key, undefined, _IndexRef) ->
+    ok;
 update_indexes(_Bucket, _Key, [], _IndexRef) ->
     ok;
 update_indexes(Bucket, Key, [{remove, Field, Value}|Rest], IndexRef) ->
