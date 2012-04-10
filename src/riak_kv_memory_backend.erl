@@ -364,11 +364,7 @@ callback(_Ref, _Msg, State) ->
 reset() ->
     reset(app_helper:get_env(riak_kv, memory_backend), app_helper:get_env(riak_kv, storage_backend)).
 
-reset(undefined, _) ->
-    {error, reset_disabled};
-reset([], _) ->
-    {error, reset_disabled};
-reset(Props, ?MODULE) when is_list(Props) ->
+reset([_|_]=Props, ?MODULE) ->
     case proplists:get_value(test, Props) of
         true ->
             {ok, Ring} = riak_core_ring_manager:get_my_ring(),
