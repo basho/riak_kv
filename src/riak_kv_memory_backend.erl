@@ -56,7 +56,7 @@
          callback/3]).
 
 %% "Testing" backend API
-%% -export([reset/0]).
+-export([reset/0]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -77,6 +77,12 @@
                               {'=<','$1',H}],
                              ['$_']}]).
 -define(DELETE_PTN(B,K), {{B,'_','_',K},'_'}).
+
+%% ETS table name macros so we can break encapsulation for testing
+%% mode
+-define(DNAME(P), list_to_atom("riak_kv_"++integer_to_list(P))).
+-define(INAME(P), list_to_atom("riak_kv_"++integer_to_list(P)++"_i")).
+-define(TNAME(P), list_to_atom("riak_kv_"++integer_to_list(P)++"_t")).
 
 -record(state, {data_ref :: ets:tid(),
                 index_ref :: ets:tid(),
@@ -115,17 +121,22 @@ capabilities(_, _) ->
 start(Partition, Config) ->
     TTL = app_helper:get_prop_or_env(ttl, Config, memory_backend),
     MemoryMB = app_helper:get_prop_or_env(max_memory, Config, memory_backend),
-    TName = list_to_atom(integer_to_list(Partition)),
+    TableOpts = case app_helper:get_prop_or_env(test, Config, memory_backend) of
+                    true ->
+                        [public, named_table];
+                    _ ->
+                        []
+                end,
     case MemoryMB of
         undefined ->
             MaxMemory = undefined,
             TimeRef = undefined;
         _ ->
             MaxMemory = MemoryMB * 1024 * 1024,
-            TimeRef = ets:new(TName, [ordered_set])
+            TimeRef = ets:new(?TNAME(Partition), [ordered_set|TableOpts])
     end,
-    IndexRef = ets:new(TName, [ordered_set]),
-    DataRef = ets:new(TName, []),
+    IndexRef = ets:new(?INAME(Partition), [ordered_set|TableOpts]),
+    DataRef = ets:new(?DNAME(Partition), TableOpts),
     {ok, #state{data_ref=DataRef,
                 index_ref=IndexRef,
                 max_memory=MaxMemory,
@@ -355,6 +366,33 @@ status(#state{data_ref=DataRef,
 -spec callback(reference(), any(), state()) -> {ok, state()}.
 callback(_Ref, _Msg, State) ->
     {ok, State}.
+
+%% @doc Resets state of all running memory backends on the local
+%% node. The `riak_kv' environment variable `memory_backend' must
+%% contain the `test' property, set to `true' for this to work.
+-spec reset() -> ok | {error, reset_disabled}.
+reset() ->
+    reset(app_helper:get_env(riak_kv, memory_backend), app_helper:get_env(riak_kv, storage_backend)).
+
+reset(undefined, _) ->
+    {error, reset_disabled};
+reset([], _) ->
+    {error, reset_disabled};
+reset(Props, ?MODULE) when is_list(Props) ->
+    case proplists:get_value(test, Props) of
+        true ->
+            {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+            [ begin
+                  catch ets:delete_all_objects(?TNAME(I)),
+                  catch ets:delete_all_objects(?INAME(I)),
+                  catch ets:delete_all_objects(?DNAME(I))
+              end || I <- riak_core_ring:my_indices(Ring) ],
+            ok;
+        _ ->
+            {error, reset_disabled}
+    end;
+reset(_, _) ->
+    {error, reset_disabled}.
 
 %% ===================================================================
 %% Internal functions
