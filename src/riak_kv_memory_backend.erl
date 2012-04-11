@@ -32,6 +32,7 @@
 %% <ul>
 %% <li>`ttl' - The time in seconds that an object should live before being expired.</li>
 %% <li>`max_memory' - The amount of memory in megabytes to limit the backend to.</li>
+%% <li>`test' - When true, allow public access to ETS tables so they can be cleared efficiently.</li>
 %% </ul>
 %%
 
@@ -153,14 +154,20 @@ stop(#state{data_ref=DataRef,
                  {ok, not_found, state()} |
                  {error, term(), state()}.
 get(Bucket, Key, State=#state{data_ref=DataRef,
+                              index_ref=IndexRef,
+                              used_memory=UsedMemory,
                               ttl=TTL}) ->
     case ets:lookup(DataRef, {Bucket, Key}) of
         [] -> {error, not_found, State};
-        [{{Bucket, Key}, {{ts, Timestamp}, Val}}] ->
+        [{{Bucket, Key}, {{ts, Timestamp}, Val}}=Object] ->
             case exceeds_ttl(Timestamp, TTL) of
                 true ->
-                    delete(Bucket, Key, undefined, State),
-                    {error, not_found, State};
+                    %% Because we do not have the IndexSpecs, we must
+                    %% delete the object directly and all index
+                    %% entries blindly using match_delete.
+                    ets:delete(DataRef, {Bucket, Key}),
+                    ets:match_delete(IndexRef, ?DELETE_PTN(Bucket, Key)),
+                    {error, not_found, State#state{used_memory=UsedMemory - object_size(Object)}};
                 false ->
                     {ok, Val, State}
             end;
@@ -171,13 +178,9 @@ get(Bucket, Key, State=#state{data_ref=DataRef,
     end.
 
 %% @doc Insert an object into the memory backend.
-%% NOTE: The memory backend does not currently
-%% support secondary indexing and the _IndexSpecs
-%% parameter is ignored.
 -type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
 -spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
-                 {ok, state()} |
-                 {error, term(), state()}.
+                 {ok, state()}.
 put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
                                                       index_ref=IndexRef,
                                                       max_memory=MaxMemory,
@@ -191,32 +194,23 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
         _ ->
             Val1 = {{ts, Now}, Val}
     end,
-    case do_put(Bucket, PrimaryKey, Val1, IndexSpecs, DataRef, IndexRef) of
-        {ok, Size} ->
-            %% If the memory is capped update timestamp table
-            %% and check if the memory usage is over the cap.
-            case MaxMemory of
-                undefined ->
-                    UsedMemory1 = UsedMemory;
-                _ ->
-                    time_entry(Bucket, PrimaryKey, Now, TimeRef),
-                    Freed = trim_data_table(MaxMemory,
-                                            UsedMemory + Size,
-                                            DataRef,
-                                            TimeRef,
-                                            IndexRef,
-                                            0),
-                    UsedMemory1 = UsedMemory + Size - Freed
-            end,
-            {ok, State#state{used_memory=UsedMemory1}};
-        {error, Reason} ->
-            {error, Reason, State}
-    end.
+    {ok, Size} = do_put(Bucket, PrimaryKey, Val1, IndexSpecs, DataRef, IndexRef),
+    case MaxMemory of
+        undefined ->
+            UsedMemory1 = UsedMemory;
+        _ ->
+            time_entry(Bucket, PrimaryKey, Now, TimeRef),
+            Freed = trim_data_table(MaxMemory,
+                                    UsedMemory + Size,
+                                    DataRef,
+                                    TimeRef,
+                                    IndexRef,
+                                    0),
+            UsedMemory1 = UsedMemory + Size - Freed
+    end,
+    {ok, State#state{used_memory=UsedMemory1}}.
 
 %% @doc Delete an object from the memory backend
-%% NOTE: The memory backend does not currently
-%% support secondary indexing and the _IndexSpecs
-%% parameter is ignored.
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
                     {ok, state()}.
 delete(Bucket, Key, IndexSpecs, State=#state{data_ref=DataRef,
