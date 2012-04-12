@@ -615,7 +615,7 @@ do_backend_delete(BKey, RObj, State = #state{mod = Mod, modstate = ModState}) ->
     %% object is a tombstone or all siblings are tombstones
     riak_kv_mapred_cache:eject(BKey),
 
-    %% Calculate the index specs to remove...  
+    %% Calculate the index specs to remove...
     %% JDM: This should just be a tombstone by this point, but better
     %% safe than sorry.
     IndexSpecs = riak_object:diff_index_specs(undefined, RObj),
@@ -968,7 +968,7 @@ do_delete(BKey, ReqId, State) ->
                             UpdState = do_backend_delete(BKey, RObj, State),
                             {reply, {del, Idx, ReqId}, UpdState};
                         Delay when is_integer(Delay) ->
-                            erlang:send_after(Delay, self(), 
+                            erlang:send_after(Delay, self(),
                                               {final_delete, BKey,
                                                delete_hash(RObj)}),
                             %% Nothing checks these messages - will just reply
