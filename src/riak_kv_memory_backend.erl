@@ -156,6 +156,7 @@ stop(#state{data_ref=DataRef,
 get(Bucket, Key, State=#state{data_ref=DataRef,
                               index_ref=IndexRef,
                               used_memory=UsedMemory,
+                              max_memory=MaxMemory,
                               ttl=TTL}) ->
     case ets:lookup(DataRef, {Bucket, Key}) of
         [] -> {error, not_found, State};
@@ -167,7 +168,13 @@ get(Bucket, Key, State=#state{data_ref=DataRef,
                     %% entries blindly using match_delete.
                     ets:delete(DataRef, {Bucket, Key}),
                     ets:match_delete(IndexRef, ?DELETE_PTN(Bucket, Key)),
-                    {error, not_found, State#state{used_memory=UsedMemory - object_size(Object)}};
+                    case MaxMemory of
+                        undefined ->
+                            UsedMemory1 = UsedMemory;
+                        _ ->
+                            UsedMemory1 = UsedMemory - object_size(Object)
+                    end,
+                    {error, not_found, State#state{used_memory=UsedMemory1}};
                 false ->
                     {ok, Val, State}
             end;
