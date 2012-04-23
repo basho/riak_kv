@@ -40,6 +40,7 @@
 -export([initial_state/0,
          initial_state_data/0,
          next_state_data/5,
+         dynamic_precondition/4,
          precondition/4,
          postcondition/5]).
 
@@ -52,6 +53,7 @@
 
 %% Helpers
 -export([drop/2,
+         delete/5,
          init_backend/3]).
 
 -define(TEST_ITERATIONS, 50).
@@ -253,6 +255,17 @@ drop(Backend, State) ->
             NewState
     end.
 
+delete(Bucket, Key, Backend, BackendState, Indexes) ->
+    IndexSpecs = [{remove, Idx, SKey} || {B,Idx,SKey,K} <- Indexes,
+                                         B == Bucket,
+                                         K == Key],
+    case Backend:delete(Bucket, Key, IndexSpecs, BackendState) of
+        {ok, NewState} ->
+            {ok, NewState};
+        {error, Reason, _NewState} ->
+            {error, Reason}
+    end.
+
 get_fold_buffer() ->
     riak_kv_fold_buffer:new(100,
                             get_fold_buffer_fun({raw, foldid, self()})).
@@ -332,7 +345,7 @@ next_state_data(stopped, running, S, R, {call, _M, init_backend, _}) ->
 next_state_data(_From, _To, S, _R, {call, _M, put, [Bucket, Key, IndexSpecs, Val, _]}) ->
     S#qcst{d = orddict:store({Bucket, Key}, Val, S#qcst.d),
            i = update_indexes(Bucket, Key, IndexSpecs, S#qcst.i)};
-next_state_data(_From, _To, S, _R, {call, _M, delete, [Bucket, Key, _IndexSpecs, _]}) ->
+next_state_data(_From, _To, S, _R, {call, _M, delete, [Bucket, Key|_]}) ->
     S#qcst{d = orddict:erase({Bucket, Key}, S#qcst.d),
            i = remove_indexes(Bucket, Key, S#qcst.i)};
 next_state_data(_From, _To, S, R, {call, ?MODULE, drop, _}) ->
@@ -349,11 +362,12 @@ stopped(#qcst{backend=Backend,
       {call, ?MODULE, init_backend, [Backend, Volatile, Config]}}].
 
 running(#qcst{backend=Backend,
-              s=State}) ->
+              s=State,
+              i=Indexes}) ->
     [
      {history, {call, Backend, put, [bucket(), key(), index_specs(), val(), State]}},
      {history, {call, Backend, get, [bucket(), key(), State]}},
-     {history, {call, Backend, delete, [bucket(), key(), [], State]}},
+     {history, {call, ?MODULE, delete, [bucket(), key(), Backend, State, Indexes]}},
      {history, {call, Backend, fold_buckets, [fold_buckets_fun(), get_fold_buffer(), g_opts(), State]}},
      {history, {call, Backend, fold_keys, [fold_keys_fun(), get_fold_buffer(), fold_keys_opts(), State]}},
      {history, {call, Backend, fold_objects, [fold_objects_fun(), get_fold_buffer(), g_opts(), State]}},
@@ -362,9 +376,12 @@ running(#qcst{backend=Backend,
      {stopped, {call, Backend, stop, [State]}}
     ].
 
-precondition(_From,_To,#qcst{backend=Backend},{call, _M, fold_keys, [_FoldFun, _Acc, [{index, Bucket, _}], BeState]}) ->
+dynamic_precondition(_From,_To,#qcst{backend=Backend},{call, _M, fold_keys, [_FoldFun, _Acc, [{index, Bucket, _}], BeState]}) ->
     {ok, Capabilities} = Backend:capabilities(Bucket, BeState),
     lists:member(indexes, Capabilities);
+dynamic_precondition(_From,_To,_S,_C) ->
+    true.
+
 precondition(_From,_To,_S,_C) ->
     true.
 
@@ -380,7 +397,7 @@ postcondition(_From, _To, _S,
               {call, _M, put, [_Bucket, _Key, _IndexEntries, _Val, _BeState]}, {R, _RState}) ->
     R =:= ok orelse R =:= already_exists;
 postcondition(_From, _To, _S,
-              {call, _M, delete,[_Bucket, _Key, _IndexEntries, _BeState]}, {R, _RState}) ->
+              {call, _M, delete, _}, {R, _RState}) ->
     R =:= ok;
 postcondition(_From, _To, S,
               {call, _M, fold_buckets, [_FoldFun, _Acc, _Opts, _BeState]}, FoldRes) ->
