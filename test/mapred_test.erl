@@ -74,6 +74,8 @@ dep_apps() ->
      end,
      webmachine,
      os_mon,
+     compiler,
+     syntax_tools,
      lager,
      fun(start) ->
              _ = application:load(riak_core),
