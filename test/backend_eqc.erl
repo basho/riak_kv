@@ -40,6 +40,7 @@
 -export([initial_state/0,
          initial_state_data/0,
          next_state_data/5,
+         dynamic_precondition/4,
          precondition/4,
          postcondition/5]).
 
@@ -52,16 +53,18 @@
 
 %% Helpers
 -export([drop/2,
+         delete/5,
          init_backend/3]).
 
--define(TEST_ITERATIONS, 50).
+-define(TEST_ITERATIONS, 250).
 
 -record(qcst, {backend, % Backend module under test
                volatile, % Indicates if backend is volatile
                c,  % Backend config
                s,  % Module state returned by Backend:start
                olds=sets:new(), % Old states after a stop
-               d=[]}).% Orddict of values stored
+               d=[], % Orddict of values stored
+               i=ordsets:new()}). % List of indexes
 
 %% ====================================================================
 %% Public API
@@ -74,7 +77,8 @@ test(Backend, Volatile) ->
     test(Backend, Volatile, []).
 
 test(Backend, Volatile, Config) ->
-    test(Backend, Volatile, Config, fun(_BeState,_Olds) -> ok end).
+    test(Backend, Volatile, Config, fun(BeState,_Olds) ->
+                catch(Backend:stop(BeState)) end).
 
 test(Backend, Volatile, Config, Cleanup) ->
     test(Backend, Volatile, Config, Cleanup, ?TEST_ITERATIONS).
@@ -103,10 +107,11 @@ prop_backend(Backend, Volatile, Config, Cleanup) ->
                                                 command_names(Cmds))]),
                                  ?debugFmt("Result: ~p~n", [Res]),
                                  ?debugFmt("History: ~p~n", [H]),
-                                 ?debugFmt("BE Config: ~p~nBE State: ~p~nD: ~p~n",
+                                 ?debugFmt("BE Config: ~p~nBE State: ~p~nD: ~p~nI: ~p~n",
                                            [S#qcst.c,
                                             S#qcst.s,
-                                            orddict:to_list(S#qcst.d)])
+                                            orddict:to_list(S#qcst.d),
+                                            ordsets:to_list(S#qcst.i)])
                              end,
                              equals(ok, Res)))
             end
@@ -130,10 +135,62 @@ val() ->
     %% differ since at this point in the processing
     %% pipeline the information has already been
     %% extracted.
-    term_to_binary(riak_object:new(<<"b1">>, <<"k1">>, binary())).
+    term_to_binary(riak_object:new(<<"b1">>, <<"k1">>, <<"v1">>)).
 
 g_opts() ->
     frequency([{5, [async_fold]}, {2, []}]).
+
+fold_keys_opts() ->
+    frequency([{5, [async_fold]}, {2, []}, {2, [{index, bucket(), index_query()}]}, {2, [{bucket, bucket()}]}]).
+
+index_specs() ->
+    ?LET(L, list(index_spec()), lists:usort(L)).
+
+index_spec() ->
+    oneof([
+           {add, bin_index(), bin_posting()},
+           {remove, bin_index(), bin_posting()},
+           {add, int_index(), int_posting()},
+           {remove, int_index(), int_posting()}
+          ]).
+
+index_query() ->
+    oneof([
+           {eq, <<"$bucket">>, bucket()}, %% the bucket() in this query is ignored/transformed
+           range_query(<<"$key">>, key(), key()),
+           eq_query(),
+           range_query()
+          ]).
+
+eq_query() ->
+    oneof([
+           {eq, bin_index(), bin_posting()},
+           {eq, int_index(), int_posting()}
+          ]).
+
+range_query() ->
+    oneof([
+           range_query(bin_index(), bin_posting(), bin_posting()),
+           range_query(int_index(), int_posting(), int_posting())
+          ]).
+
+range_query(Idx, Min0, Max0) ->
+    ?LET({Min, Max}, {Min0, Max0},
+         if Min > Max ->
+                 {range, Idx, Max, Min};
+            true ->
+                 {range, Idx, Min, Max}
+         end).
+
+bin_index() -> elements([<<"x_bin">>, <<"y_bin">>, <<"z_bin">>]).
+bin_posting() ->
+    elements([ <<C>> || C <- lists:seq($a, $z) ]).
+
+int_index() -> elements([<<"i_int">>, <<"j_int">>, <<"k_int">>]).
+int_posting() ->
+    int().
+
+
 
 %%====================================================================
 %% Helpers
@@ -199,6 +256,17 @@ drop(Backend, State) ->
             NewState
     end.
 
+delete(Bucket, Key, Backend, BackendState, Indexes) ->
+    IndexSpecs = [{remove, Idx, SKey} || {B,Idx,SKey,K} <- Indexes,
+                                         B == Bucket,
+                                         K == Key],
+    case Backend:delete(Bucket, Key, IndexSpecs, BackendState) of
+        {ok, NewState} ->
+            {ok, NewState};
+        {error, Reason, _NewState} ->
+            {error, Reason}
+    end.
+
 get_fold_buffer() ->
     riak_kv_fold_buffer:new(100,
                             get_fold_buffer_fun({raw, foldid, self()})).
@@ -231,6 +299,27 @@ receive_fold_results(Acc) ->
             receive_fold_results(Acc++Results)
     end.
 
+-type index_list() :: ordsets:ordset({riak_object:bucket(), binary(), binary() | integer(), riak_object:key()}).
+-spec update_indexes(Bucket, Key, IndexSpecs, Indexes) -> Indexes1 when
+      Bucket :: riak_object:bucket(),
+      Key :: riak_object:key(),
+      IndexSpecs :: [ {add, binary(), binary() | integer()} | {remove, binary(), binary() | integer()} ],
+      Indexes :: index_list(),
+      Indexes1 :: index_list().
+update_indexes(_Bucket, _Key, [], Indexes) ->
+    Indexes;
+update_indexes(Bucket, Key, [{add, Index, SKey}|T], Indexes) ->
+    PostingKey = {Bucket, Index, SKey, Key},
+    update_indexes(Bucket, Key, T, ordsets:add_element(PostingKey, Indexes));
+update_indexes(Bucket, Key, [{remove, Index, SKey}|T], Indexes) ->
+    PostingKey = {Bucket, Index, SKey, Key},
+    update_indexes(Bucket, Key, T, ordsets:del_element(PostingKey,Indexes)).
+
+remove_indexes(Bucket, Key, Indexes) ->
+    ordsets:filter(fun({B,_,_,K}) ->
+                           B /= Bucket orelse K /= Key
+                   end, Indexes).
+
 %%====================================================================
 %% eqc_fsm callbacks
 %%====================================================================
@@ -250,15 +339,20 @@ initial_state_data(Backend, Volatile, Config) ->
 next_state_data(running, stopped, S, _R,
                 {call, _M, stop, _}) ->
     S#qcst{d=orddict:new(),
-           olds = sets:add_element(S#qcst.s, S#qcst.olds)};
+           olds = sets:add_element(S#qcst.s, S#qcst.olds),
+           i= ordsets:new()};
 next_state_data(stopped, running, S, R, {call, _M, init_backend, _}) ->
     S#qcst{s=R};
-next_state_data(_From, _To, S, _R, {call, _M, put, [Bucket, Key, [], Val, _]}) ->
-    S#qcst{d = orddict:store({Bucket, Key}, Val, S#qcst.d)};
-next_state_data(_From, _To, S, _R, {call, _M, delete, [Bucket, Key, [], _]}) ->
-    S#qcst{d = orddict:erase({Bucket, Key}, S#qcst.d)};
+next_state_data(_From, _To, S, _R, {call, _M, put, [Bucket, Key, IndexSpecs, Val, _]}) ->
+    S#qcst{d = orddict:store({Bucket, Key}, Val, S#qcst.d),
+           i = update_indexes(Bucket, Key, IndexSpecs, S#qcst.i)};
+next_state_data(_From, _To, S, _R, {call, _M, delete, [Bucket, Key|_]}) ->
+    S#qcst{d = orddict:erase({Bucket, Key}, S#qcst.d),
+           i = remove_indexes(Bucket, Key, S#qcst.i)};
 next_state_data(_From, _To, S, R, {call, ?MODULE, drop, _}) ->
-    S#qcst{d=orddict:new(), s=R};
+    S#qcst{d=orddict:new(),
+           s=R,
+           i=ordsets:new()};
 next_state_data(_From, _To, S, _R, _C) ->
     S.
 
@@ -269,18 +363,25 @@ stopped(#qcst{backend=Backend,
       {call, ?MODULE, init_backend, [Backend, Volatile, Config]}}].
 
 running(#qcst{backend=Backend,
-              s=State}) ->
+              s=State,
+              i=Indexes}) ->
     [
-     {history, {call, Backend, put, [bucket(), key(), [], val(), State]}},
+     {history, {call, Backend, put, [bucket(), key(), index_specs(), val(), State]}},
      {history, {call, Backend, get, [bucket(), key(), State]}},
-     {history, {call, Backend, delete, [bucket(), key(), [], State]}},
+     {history, {call, ?MODULE, delete, [bucket(), key(), Backend, State, Indexes]}},
      {history, {call, Backend, fold_buckets, [fold_buckets_fun(), get_fold_buffer(), g_opts(), State]}},
-     {history, {call, Backend, fold_keys, [fold_keys_fun(), get_fold_buffer(), g_opts(), State]}},
+     {history, {call, Backend, fold_keys, [fold_keys_fun(), get_fold_buffer(), fold_keys_opts(), State]}},
      {history, {call, Backend, fold_objects, [fold_objects_fun(), get_fold_buffer(), g_opts(), State]}},
      {history, {call, Backend, is_empty, [State]}},
      {history, {call, ?MODULE, drop, [Backend, State]}},
      {stopped, {call, Backend, stop, [State]}}
     ].
+
+dynamic_precondition(_From,_To,#qcst{backend=Backend},{call, _M, fold_keys, [_FoldFun, _Acc, [{index, Bucket, _}], BeState]}) ->
+    {ok, Capabilities} = Backend:capabilities(Bucket, BeState),
+    lists:member(indexes, Capabilities);
+dynamic_precondition(_From,_To,_S,_C) ->
+    true.
 
 precondition(_From,_To,_S,_C) ->
     true.
@@ -297,7 +398,7 @@ postcondition(_From, _To, _S,
               {call, _M, put, [_Bucket, _Key, _IndexEntries, _Val, _BeState]}, {R, _RState}) ->
     R =:= ok orelse R =:= already_exists;
 postcondition(_From, _To, _S,
-              {call, _M, delete,[_Bucket, _Key, _IndexEntries, _BeState]}, {R, _RState}) ->
+              {call, _M, delete, _}, {R, _RState}) ->
     R =:= ok;
 postcondition(_From, _To, S,
               {call, _M, fold_buckets, [_FoldFun, _Acc, _Opts, _BeState]}, FoldRes) ->
@@ -315,6 +416,98 @@ postcondition(_From, _To, S,
     R = receive_fold_results([]),
     lists:usort(Buckets) =:= lists:sort(R);
 postcondition(_From, _To, S,
+              {call, _M, fold_keys, [_FoldFun, _Acc, [{index, Bucket,{eq, <<"$bucket">>, _}}], _BeState]}, FoldRes) ->
+    ExpectedEntries = orddict:to_list(S#qcst.d),
+    Keys = [{B, Key} || {{B, Key}, _} <- ExpectedEntries, B == Bucket],
+    From = {raw, foldid, self()},
+    case FoldRes of
+        {async, Work} ->
+            Pool = erlang:get(worker_pool),
+            FinishFun = finish_fun(From),
+            riak_core_vnode_worker_pool:handle_work(Pool, {fold, Work, FinishFun}, From);
+        {ok, Buffer} ->
+            finish_fold(Buffer, From)
+    end,
+    R = receive_fold_results([]),
+    lists:sort(Keys) =:= lists:sort(R);
+postcondition(_From, _To, S,
+              {call, _M, fold_keys, [_FoldFun, _Acc, [{index, Bucket,{range, <<"$key">>, Min, Max}}], _BeState]}, FoldRes) ->
+    ExpectedEntries = orddict:to_list(S#qcst.d),
+    Keys = [{B, Key} || {{B, Key}, _} <- ExpectedEntries,
+                        B == Bucket, Key =< Max, Key >= Min],
+    From = {raw, foldid, self()},
+    case FoldRes of
+        {async, Work} ->
+            Pool = erlang:get(worker_pool),
+            FinishFun = finish_fun(From),
+            riak_core_vnode_worker_pool:handle_work(Pool, {fold, Work, FinishFun}, From);
+        {ok, Buffer} ->
+            finish_fold(Buffer, From)
+    end,
+    R = receive_fold_results([]),
+    case lists:sort(Keys) =:= lists:sort(R) of
+        true -> true;
+        _ ->
+            [{expected, Keys},{received, R}]
+    end;
+postcondition(_From, _To, S,
+              {call, _M, fold_keys, [_FoldFun, _Acc, [{index, Bucket, {eq, Idx, SKey}}], _BeState]}, FoldRes) ->
+    Keys = [ {B,K} || {B, I, V, K} <- ordsets:to_list(S#qcst.i),
+                      B == Bucket, I == Idx, V == SKey],
+    From = {raw, foldid, self()},
+    case FoldRes of
+        {async, Work} ->
+            Pool = erlang:get(worker_pool),
+            FinishFun = finish_fun(From),
+            riak_core_vnode_worker_pool:handle_work(Pool, {fold, Work, FinishFun}, From);
+        {ok, Buffer} ->
+            finish_fold(Buffer, From)
+    end,
+    R = receive_fold_results([]),
+    case lists:sort(Keys) =:= lists:sort(R) of
+        true -> true;
+        _ ->
+            [{expected, Keys},{received, R}]
+    end;
+postcondition(_From, _To, S,
+              {call, _M, fold_keys, [_FoldFun, _Acc, [{index, Bucket, {range, Idx, Min, Max}}], _BeState]}, FoldRes) ->
+    Keys = [ {B, K} || {B, I, V, K} <- ordsets:to_list(S#qcst.i),
+                       B == Bucket, I == Idx, V =< Max, V >= Min ],
+    From = {raw, foldid, self()},
+    case FoldRes of
+        {async, Work} ->
+            Pool = erlang:get(worker_pool),
+            FinishFun = finish_fun(From),
+            riak_core_vnode_worker_pool:handle_work(Pool, {fold, Work, FinishFun}, From);
+        {ok, Buffer} ->
+            finish_fold(Buffer, From)
+    end,
+    R = receive_fold_results([]),
+    case lists:sort(Keys) =:= lists:sort(R) of
+        true -> true;
+        _ ->
+            [{expected, Keys},{received, R}]
+    end;
+postcondition(_From, _To, S,
+              {call, _M, fold_keys, [_FoldFun, _Acc, [{bucket, B}], _BeState]}, FoldRes) ->
+    ExpectedEntries = orddict:to_list(S#qcst.d),
+    Keys = [{Bucket, Key} || {{Bucket, Key}, _} <- ExpectedEntries, Bucket == B],
+    From = {raw, foldid, self()},
+    case FoldRes of
+        {async, Work} ->
+            Pool = erlang:get(worker_pool),
+            FinishFun = finish_fun(From),
+            riak_core_vnode_worker_pool:handle_work(Pool, {fold, Work, FinishFun}, From);
+        {ok, Buffer} ->
+            finish_fold(Buffer, From)
+    end,
+    R = receive_fold_results([]),
+    case lists:sort(Keys) =:= lists:sort(R) of
+        true -> true;
+        _ ->
+            [{expected, Keys},{received, R}]
+    end;
+postcondition(_From, _To, S,
               {call, _M, fold_keys, [_FoldFun, _Acc, _Opts, _BeState]}, FoldRes) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Keys = [{Bucket, Key} || {{Bucket, Key}, _} <- ExpectedEntries],
@@ -328,7 +521,11 @@ postcondition(_From, _To, S,
             finish_fold(Buffer, From)
     end,
     R = receive_fold_results([]),
-    lists:sort(Keys) =:= lists:sort(R);
+    case lists:sort(Keys) =:= lists:sort(R) of
+        true -> true;
+        _ ->
+            [{expected, Keys},{received, R}]
+    end;
 postcondition(_From, _To, S,
               {call, _M, fold_objects, [_FoldFun, _Acc, _Opts, _BeState]}, FoldRes) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
