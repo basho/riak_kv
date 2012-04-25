@@ -77,7 +77,8 @@ test(Backend, Volatile) ->
     test(Backend, Volatile, []).
 
 test(Backend, Volatile, Config) ->
-    test(Backend, Volatile, Config, fun(_BeState,_Olds) -> ok end).
+    test(Backend, Volatile, Config, fun(BeState,_Olds) ->
+                catch(Backend:stop(BeState)) end).
 
 test(Backend, Volatile, Config, Cleanup) ->
     test(Backend, Volatile, Config, Cleanup, ?TEST_ITERATIONS).
