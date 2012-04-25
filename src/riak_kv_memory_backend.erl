@@ -137,9 +137,11 @@ start(Partition, Config) ->
 %% @doc Stop the memory backend
 -spec stop(state()) -> ok.
 stop(#state{data_ref=DataRef,
+            index_ref=IndexRef,
             max_memory=MaxMemory,
             time_ref=TimeRef}) ->
     catch ets:delete(DataRef),
+    catch ets:delete(IndexRef),
     case MaxMemory of
         undefined ->
             ok;
