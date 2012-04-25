@@ -535,10 +535,10 @@ eqc_test_() ->
        [{setup,
          fun setup/0,
          fun cleanup/1,
-         [?_assertEqual(true,
-                        backend_eqc:test(?MODULE, true, sample_config())),
-          ?_assertEqual(true,
-                        backend_eqc:test(?MODULE, true, async_fold_config()))
+         [{timeout, 60000, [?_assertEqual(true,
+                        backend_eqc:test(?MODULE, true, sample_config()))]},
+          {timeout, 60000, [?_assertEqual(true,
+                        backend_eqc:test(?MODULE, true, async_fold_config()))]}
          ]}]}]}.
 
 setup() ->
