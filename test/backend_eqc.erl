@@ -56,7 +56,7 @@
          delete/5,
          init_backend/3]).
 
--define(TEST_ITERATIONS, 50).
+-define(TEST_ITERATIONS, 250).
 
 -record(qcst, {backend, % Backend module under test
                volatile, % Indicates if backend is volatile
@@ -316,7 +316,7 @@ update_indexes(Bucket, Key, [{remove, Index, SKey}|T], Indexes) ->
 
 remove_indexes(Bucket, Key, Indexes) ->
     ordsets:filter(fun({B,_,_,K}) ->
-                           B /= Bucket andalso K /= Key
+                           B /= Bucket orelse K /= Key
                    end, Indexes).
 
 %%====================================================================
