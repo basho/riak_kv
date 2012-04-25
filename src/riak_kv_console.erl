@@ -36,6 +36,10 @@
          down/1,
          reload_code/1]).
 
+%% Arrow is 24 chars wide
+-define(ARROW, "=======================>").
+
+
 join([NodeStr]) ->
     try
         case riak_core:join(NodeStr) of
@@ -259,8 +263,45 @@ transfers([]) ->
                     Reason]),
             io:format("Transfers failed, see log for details~n"),
             error
-    end.
+    end,
 
+    %% Now display active transfers
+    {Xfers, Down} = riak_core_status:all_active_transfers(),
+
+    DisplayXfer =
+        fun({{Mod, Partition}, Node, outbound, active, _Status}) ->
+                print_v1_status(Mod, Partition, Node);
+
+           ({status_v2, Status}) ->
+                %% Display base status
+                Type = proplists:get_value(type, Status),
+                Mod = proplists:get_value(mod, Status),
+                Partition = proplists:get_value(partition, Status),
+                StartTS = proplists:get_value(start_ts, Status),
+                SrcNode = proplists:get_value(src_node, Status),
+                TargetNode = proplists:get_value(target_node, Status),
+
+                print_v2_status(Type, Mod, Partition, StartTS),
+
+                %% Get info about stats if there is any yet
+                Stats = proplists:get_value(stats, Status),
+
+                print_stats(SrcNode, TargetNode, Stats),
+                io:format("~n");
+
+           (_) ->
+                ignore
+        end,
+    DisplayDown =
+        fun(Node) ->
+                io:format("Node ~p could not be contacted~n", [Node])
+        end,
+
+    io:format("~nActive Transfers:~n~n", []),
+    [DisplayXfer(Xfer) || Xfer <- lists:flatten(Xfers)],
+
+    io:format("~n"),
+    [DisplayDown(Node) || Node <- Down].
 
 cluster_info([OutFile|Rest]) ->
     try
@@ -308,6 +349,16 @@ reload_file(Filename) ->
         _ ->
             io:format("Module ~w not yet loaded, skipped.~n", [Mod])
     end.
+
+%%%===================================================================
+%%% Private
+%%%===================================================================
+
+datetime_str({_Mega, _Secs, _Micro}=Now) ->
+    datetime_str(calendar:now_to_datetime(Now));
+datetime_str({{Year, Month, Day}, {Hour, Min, Sec}}) ->
+    riak_core_format:fmt("~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B",
+                         [Year,Month,Day,Hour,Min,Sec]).
 
 format_stats([], Acc) ->
     lists:reverse(Acc);
@@ -357,3 +408,48 @@ print_vnode_status([StatusItem | RestStatusItems]) ->
             io:format("Status: ~n~p~n", [StatusItem])
     end,
     print_vnode_status(RestStatusItems).
+
+print_v2_status(Type, Mod, Partition, StartTS) ->
+    StartTSStr = datetime_str(StartTS),
+    Running = timer:now_diff(now(), StartTS),
+    RunningStr = riak_core_format:human_time_fmt("~.2f", Running),
+
+    io:format("transfer type: ~s~n", [Type]),
+    io:format("vnode type: ~p~n", [Mod]),
+    io:format("partition: ~p~n", [Partition]),
+    io:format("started: ~s [~s ago]~n", [StartTSStr, RunningStr]).
+
+print_v1_status(Mod, Partition, Node) ->
+    io:format("vnode type: ~p~n", [Mod]),
+    io:format("partition: ~p~n", [Partition]),
+    io:format("target node: ~p~n~n", [Node]).
+
+print_stats(SrcNode, TargetNode, no_stats) ->
+    ToFrom = riak_core_format:fmt("~16s ~s ~16s",
+                                  [SrcNode, ?ARROW, TargetNode]),
+    Width = length(ToFrom),
+
+    io:format("last update: no updates seen~n"),
+    io:format("objects transferred: unknown~n~n"),
+    io:format("~s~n", [string:centre("unknown", Width)]),
+    io:format("~s~n", [ToFrom]),
+    io:format("~s~n", [string:centre("unknown", Width)]);
+print_stats(SrcNode, TargetNode, Stats) ->
+    ObjsS = proplists:get_value(objs_per_s, Stats),
+    BytesS = proplists:get_value(bytes_per_s, Stats),
+    LastUpdate = proplists:get_value(last_update, Stats),
+    Diff = timer:now_diff(now(), LastUpdate),
+    DiffStr = riak_core_format:human_time_fmt("~.2f", Diff),
+    Objs = proplists:get_value(objs_total, Stats),
+    ObjsSStr = riak_core_format:fmt("~p Objs/s", [ObjsS]),
+    ByteStr = riak_core_format:human_size_fmt("~.2f", BytesS) ++ "/s",
+    TS = datetime_str(LastUpdate),
+    ToFrom = riak_core_format:fmt("~16s ~s ~16s",
+                                  [SrcNode, ?ARROW, TargetNode]),
+    Width = length(ToFrom),
+
+    io:format("last update: ~s [~s ago]~n", [TS, DiffStr]),
+    io:format("objects transferred: ~p~n~n", [Objs]),
+    io:format("~s~n", [string:centre(ObjsSStr, Width)]),
+    io:format("~s~n", [ToFrom]),
+    io:format("~s~n", [string:centre(ByteStr, Width)]).
