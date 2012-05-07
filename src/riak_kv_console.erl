@@ -276,12 +276,13 @@ transfers([]) ->
                 %% Display base status
                 Type = proplists:get_value(type, Status),
                 Mod = proplists:get_value(mod, Status),
-                Partition = proplists:get_value(partition, Status),
+                SrcPartition = proplists:get_value(src_partition, Status),
+                TargetPartition = proplists:get_value(target_partition, Status),
                 StartTS = proplists:get_value(start_ts, Status),
                 SrcNode = proplists:get_value(src_node, Status),
                 TargetNode = proplists:get_value(target_node, Status),
 
-                print_v2_status(Type, Mod, Partition, StartTS),
+                print_v2_status(Type, Mod, {SrcPartition, TargetPartition}, StartTS),
 
                 %% Get info about stats if there is any yet
                 Stats = proplists:get_value(stats, Status),
@@ -407,14 +408,20 @@ print_vnode_status([StatusItem | RestStatusItems]) ->
     end,
     print_vnode_status(RestStatusItems).
 
-print_v2_status(Type, Mod, Partition, StartTS) ->
+print_v2_status(Type, Mod, {SrcPartition, TargetPartition}, StartTS) ->
     StartTSStr = datetime_str(StartTS),
     Running = timer:now_diff(now(), StartTS),
     RunningStr = riak_core_format:human_time_fmt("~.2f", Running),
 
     io:format("transfer type: ~s~n", [Type]),
     io:format("vnode type: ~p~n", [Mod]),
-    io:format("partition: ~p~n", [Partition]),
+    case Type of
+        repair ->
+            io:format("source partition: ~p~n", [SrcPartition]),
+            io:format("target partition: ~p~n", [TargetPartition]);
+        _ ->
+            io:format("partition: ~p~n", [TargetPartition])
+    end,
     io:format("started: ~s [~s ago]~n", [StartTSStr, RunningStr]).
 
 print_v1_status(Mod, Partition, Node) ->
