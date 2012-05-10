@@ -45,11 +45,6 @@ init([]) ->
                {riak_core_vnode_master, start_link,
                 [riak_kv_vnode, riak_kv_legacy_vnode, riak_kv]},
                permanent, 5000, worker, [riak_core_vnode_master]},
-    RiakPb = [ {riak_kv_pb_socket_sup, {riak_kv_pb_socket_sup, start_link, []},
-                permanent, infinity, supervisor, [riak_kv_pb_socket_sup]},
-               {riak_kv_pb_listener, {riak_kv_pb_listener, start_link, []},
-               permanent, 5000, worker, [riak_kv_pb_listener]}
-              ],
     MapJSPool = {?JSPOOL_MAP,
                  {riak_kv_js_manager, start_link,
                   [?JSPOOL_MAP, read_js_pool_size(map_js_vm_count, "map")]},
@@ -116,7 +111,6 @@ init([]) ->
     % Build the process list...
     Processes = lists:flatten([
         ?IF(HasStorageBackend, VMaster, []),
-        ?IF(IsPbConfigured, RiakPb, []),
         GetFsmSup,
         PutFsmSup,
         DeleteSup,

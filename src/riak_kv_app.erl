@@ -129,6 +129,9 @@ start(_Type, _StartArgs) ->
                 {bucket_validator, riak_kv_bucket}
             ]),
 
+            ok = riak_api_pb_service:register(riak_kv_pb_service, 3, 6), %% ClientID stuff
+            ok = riak_api_pb_service:register(riak_kv_pb_service, 9, 24), %% Regular requests
+
             %% Add routes to webmachine
             [ webmachine_router:add_route(R)
               || R <- lists:reverse(riak_kv_web:dispatch_table()) ],
