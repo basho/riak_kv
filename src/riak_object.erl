@@ -391,6 +391,15 @@ set_contents(Object=#r_object{}, MVs) when is_list(MVs) ->
 
 %% @spec to_json(riak_object()) -> {struct, list(any())}
 %% @doc Converts a riak_object into its JSON equivalent
+to_json({{error, notfound}, {Bucket, Key}}) ->
+    {struct, [{<<"bucket">>, Bucket},
+              {<<"key">>, Key},    
+              {<<"vclock">>, <<"">>},
+              {<<"values">>,
+               [{struct,
+                 [{<<"data">>, <<"{\"error\":\"notfound\"}">>}]
+                }]
+              }]};
 to_json(Obj=#r_object{}) ->
     {_,Vclock} = riak_kv_wm_utils:vclock_header(Obj),
     {struct, [{<<"bucket">>, riak_object:bucket(Obj)},
