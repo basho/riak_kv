@@ -64,10 +64,10 @@ init() ->
     ?state{client=C}.
 
 decode(Code, Bin) ->
-    riakc_pb:decode(Code, Bin).
+    {ok, riakc_pb:decode(Code, Bin)}.
 
 encode(Message) ->
-    riakc_pb:encode(Message).
+    {ok, riakc_pb:encode(Message)}.
 
 %% Start map/reduce job - results will be processed in handle_info
 process(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
