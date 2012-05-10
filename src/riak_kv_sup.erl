@@ -104,8 +104,6 @@ init([]) ->
                  permanent, infinity, supervisor, [riak_kv_keys_fsm_legacy_sup]},
 
     % Figure out which processes we should run...
-    IsPbConfigured = (app_helper:get_env(riak_kv, pb_ip) /= undefined)
-        andalso (app_helper:get_env(riak_kv, pb_port) /= undefined),
     HasStorageBackend = (app_helper:get_env(riak_kv, storage_backend) /= undefined),
 
     % Build the process list...

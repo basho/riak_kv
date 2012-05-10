@@ -129,8 +129,10 @@ start(_Type, _StartArgs) ->
                 {bucket_validator, riak_kv_bucket}
             ]),
 
-            ok = riak_api_pb_service:register(riak_kv_pb_service, 3, 6), %% ClientID stuff
-            ok = riak_api_pb_service:register(riak_kv_pb_service, 9, 24), %% Regular requests
+            ok = riak_api_pb_service:register([{riak_kv_pb_object, 3, 6}, %% ClientID stuff
+                                               {riak_kv_pb_object, 9, 14}, %% Object requests
+                                               {riak_kv_pb_bucket, 15, 22}, %% Bucket requests
+                                               {riak_kv_pb_mapred, 23, 24}]), %% MapReduce requests
 
             %% Add routes to webmachine
             [ webmachine_router:add_route(R)
