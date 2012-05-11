@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_get_core).
--export([init/6, add_result/3, enough/1, response/1,
+-export([init/6, add_result/3, result_shortcode/1, enough/1, response/1,
          has_all_results/1, final_action/1, info/1]).
 -export_type([getcore/0, result/0, reply/0, final_action/0]).
 
@@ -85,6 +85,10 @@ add_result(Idx, Result, GetCore = #getcore{results = Results}) ->
             GetCore#getcore{results = UpdResults, merged = undefined,
                             num_fail = GetCore#getcore.num_fail + 1}
     end.
+
+result_shortcode({ok, _RObj})       -> 1;
+result_shortcode({error, notfound}) -> 0;
+result_shortcode(_)                 -> -1.
 
 %% Check if enough results have been added to respond 
 -spec enough(getcore()) -> boolean().
