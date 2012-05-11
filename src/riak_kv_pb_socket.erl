@@ -264,6 +264,11 @@ process_message(rpbgetserverinforeq, State) ->
                                  server_version = get_riak_version()},
     send_msg(Resp, State);
 
+process_message(rpbstatusreq, State) ->
+    Resp = #rpbstatusresp{status = term_to_binary(
+                                     riak_kv_status:statistics())},
+    send_msg(Resp, State);
+
 process_message(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                            basic_quorum=BQ, if_modified=VClock,
                            head=Head, deletedvclock=DeletedVClock}, #state{client=C} = State) ->
