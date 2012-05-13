@@ -155,7 +155,15 @@ init([From, RObj, Options]) ->
                                            options = Options}),
     dtrace_put_tag(iolist_to_binary([Bucket, $,, Key])),
     riak_core_dtrace:put_tag([Bucket, $,, Key]),
-    ?DTRACE(?C_PUT_FSM_INIT, [], ["init"]),
+    case riak_kv_util:is_x_deleted(RObj) of
+        true  ->
+            TombNum = 1,
+            TombStr = <<"tombstone">>;
+        false ->
+            TombNum = 0,
+            TombStr = <<>>
+    end,
+    ?DTRACE(?C_PUT_FSM_INIT, [TombNum], ["init", TombStr]),
     {ok, prepare, StateData, 0};
 init({test, Args, StateProps}) ->
     %% Call normal init
