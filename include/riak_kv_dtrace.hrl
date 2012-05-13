@@ -23,16 +23,16 @@
 -define(C_PUT_FSM_INIT,               520).
 -define(C_PUT_FSM_PREPARE,            521).
 -define(C_PUT_FSM_VALIDATE,           522).
--define(C_PUT_FSM_EXECUTE,            523).
--define(C_PUT_FSM_PREFLIST,           524).
--define(C_PUT_FSM_WAITING_R,          525).
--define(C_PUT_FSM_WAITING_R_TIMEOUT,  526).
--define(C_PUT_FSM_CLIENT_REPLY,       527).
--define(C_PUT_FSM_FINALIZE,           528).
--define(C_PUT_FSM_MAYBE_DELETE,       529).
--define(C_PUT_FSM_RR,                 530).
--define(C_PUT_FSM_WAITING_RR,         531).
--define(C_PUT_FSM_WAITING_RR_TIMEOUT, 532).
+-define(C_PUT_FSM_PRECOMMIT,          523).
+-define(C_PUT_FSM_EXECUTE_LOCAL,      524).
+-define(C_PUT_FSM_WAITING_LOCAL_VNODE, 525).
+-define(C_PUT_FSM_EXECUTE_REMOTE,     526).
+-define(C_PUT_FSM_WAITING_REMOTE_VNODE, 527).
+-define(C_PUT_FSM_PROCESS_REPLY,      528).
+-define(C_PUT_FSM_POSTCOMMIT,         529).
+-define(C_PUT_FSM_FINISH,             530).
+-define(C_PUT_FSM_DECODE_PRECOMMIT,   531).     % errors only
+-define(C_PUT_FSM_DECODE_POSTCOMMIT,  532).     % errors only
 
 %% Other
 -define(DTRACE_TAG_KEY, '**DTRACE*TAG*KEY**').

@@ -28,6 +28,7 @@
 %-endif.
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_js_pools.hrl").
+-include_lib("riak_kv_dtrace.hrl").
 -include("riak_kv_wm_raw.hrl").
 
 -behaviour(gen_fsm).
@@ -147,9 +148,14 @@ test_link(From, Object, PutOptions, StateProps) ->
 
 %% @private
 init([From, RObj, Options]) ->
+    BKey = {Bucket, Key} = {riak_object:bucket(RObj), riak_object:key(RObj)},
     StateData = add_timing(prepare, #state{from = From,
                                            robj = RObj,
+                                           bkey = BKey,
                                            options = Options}),
+    dtrace_put_tag(iolist_to_binary([Bucket, $,, Key])),
+    riak_core_dtrace:put_tag([Bucket, $,, Key]),
+    ?DTRACE(?C_PUT_FSM_INIT, [], ["init"]),
     {ok, prepare, StateData, 0};
 init({test, Args, StateProps}) ->
     %% Call normal init
@@ -170,10 +176,10 @@ init({test, Args, StateProps}) ->
 
 %% @private
 prepare(timeout, StateData0 = #state{from = From, robj = RObj,
+                                     bkey = BKey,
                                      options = Options}) ->
     {ok,Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj), Ring),
-    BKey = {riak_object:bucket(RObj), riak_object:key(RObj)},
     DocIdx = riak_core_util:chash_key(BKey),
     N = proplists:get_value(n_val,BucketProps),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
@@ -185,17 +191,24 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
     case {Preflist2, LocalPL =:= [] andalso Must == true} of
         {[], _} ->
             %% Empty preflist
+            ?DTRACE(?C_PUT_FSM_PREPARE, [-1], ["prepare",<<"all nodes down">>]),
             process_reply({error, all_nodes_down}, StateData0);
         {_, true} ->
             %% This node is not in the preference list
             %% forward on to the first node
             [{{_Idx, CoordNode},_Type}|_] = Preflist2,
             Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
+            ?DTRACE(?C_PUT_FSM_PREPARE, [1],
+                    ["prepare", atom_to_list(CoordNode)]),
             case rpc:call(CoordNode,riak_kv_put_fsm_sup,start_put_fsm,[CoordNode,[From,RObj,Options]],Timeout) of
                 {ok, _Pid} ->
+                    ?DTRACE(?C_PUT_FSM_PREPARE, [2],
+                            ["prepare", atom_to_list(CoordNode)]),
                     riak_kv_stat:update(coord_redir),
                     {stop, normal, StateData0};
                 {_, Reason} -> % {error,_} or {badrpc,_}
+                    ?DTRACE(?C_PUT_FSM_PREPARE, [-2],
+                            ["prepare", dtrace_errstr(Reason)]),
                     lager:error("Unable to forward put for ~p to ~p - ~p\n",
                                 [BKey, CoordNode, Reason]),
                     process_reply({error, {coord_handoff_failed, Reason}}, StateData0)
@@ -209,14 +222,18 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                _ ->
                                    undefined
                            end,
+            CoordPlNode = case CoordPLEntry of 
+                              undefined  -> undefined;
+                              {_Idx, Nd} -> atom_to_list(Nd)
+                          end,
             %% This node is in the preference list, continue
             StartTime = riak_core_util:moment(),
             StateData = StateData0#state{n = N,
-                                         bkey = BKey,
                                          bucket_props = BucketProps,
                                          coord_pl_entry = CoordPLEntry,
                                          preflist2 = Preflist2,
                                          starttime = StartTime},
+            ?DTRACE(?C_PUT_FSM_PREPARE, [0], ["prepare", CoordPlNode]),
             new_state_timeout(validate, StateData)
     end.
 
@@ -283,6 +300,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
             StateData2 = handle_options(Options, StateData1),
             StateData3 = apply_updates(StateData2),
             StateData = init_putcore(StateData3),
+            ?DTRACE(?C_PUT_FSM_VALIDATE, [N, W, PW, DW], []),
             case Precommit of
                 [] -> % Nothing to run, spare the timing code
                     execute(StateData);
@@ -298,10 +316,13 @@ precommit(timeout, State = #state{precommit = [Hook | Rest], robj = RObj}) ->
     Result = decode_precommit(invoke_hook(Hook, RObj)),
     case Result of
         fail ->
+            ?DTRACE(?C_PUT_FSM_PRECOMMIT, [-1], []),
             process_reply({error, precommit_fail}, State);
         {fail, Reason} ->
+            ?DTRACE(?C_PUT_FSM_PRECOMMIT, [-1], [dtrace_errstr(Reason)]),
             process_reply({error, {precommit_fail, Reason}}, State);
         Result ->
+            ?DTRACE(?C_PUT_FSM_PRECOMMIT, [0], []),
             {next_state, precommit, State#state{robj = riak_object:apply_updates(Result),
                                                 precommit = Rest}, 0}
     end.
@@ -321,9 +342,10 @@ execute(State=#state{coord_pl_entry = CPL}) ->
 %% N.B. Not actually a state - here in the source to make reading the flow easier
 execute_local(StateData=#state{robj=RObj, req_id = ReqId,
                                 timeout=Timeout, bkey=BKey,
-                                coord_pl_entry = {_Index, _Node} = CoordPLEntry,
+                                coord_pl_entry = {_Index, Node} = CoordPLEntry,
                                 vnode_options=VnodeOptions,
                                 starttime = StartTime}) ->
+    ?DTRACE(?C_PUT_FSM_EXECUTE_LOCAL, [], [atom_to_list(Node)]),
     StateData1 = add_timing(execute_local, StateData),
     TRef = schedule_timeout(Timeout),
     riak_kv_vnode:coord_put(CoordPLEntry, BKey, RObj, ReqId, StartTime, VnodeOptions),
@@ -334,22 +356,31 @@ execute_local(StateData=#state{robj=RObj, req_id = ReqId,
 
 %% @private
 waiting_local_vnode(request_timeout, StateData) ->
+    ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [-1], []),
     process_reply({error,timeout}, StateData);
 waiting_local_vnode(Result, StateData = #state{putcore = PutCore}) ->
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
     case Result of
-        {fail, _Idx, _ReqId} ->
+        {fail, Idx, _ReqId} ->
+            ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [-1],
+                    [integer_to_list(Idx)]),
             %% Local vnode failure is enough to sink whole operation
             process_reply({error, local_put_failed}, StateData#state{putcore = UpdPutCore1});
-        {w, _Idx, _ReqId} ->
+        {w, Idx, _ReqId} ->
+            ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [1],
+                    [integer_to_list(Idx)]),
             {next_state, waiting_local_vnode, StateData#state{putcore = UpdPutCore1}};
-        {dw, _Idx, PutObj, _ReqId} ->
+        {dw, Idx, PutObj, _ReqId} ->
             %% Either returnbody is true or coord put merged with the existing
             %% object and bumped the vclock.  Either way use the returned
             %% object for the remote vnode
+            ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [2],
+                    [integer_to_list(Idx)]),
             execute_remote(StateData#state{robj = PutObj, putcore = UpdPutCore1});
-        {dw, _Idx, _ReqId} ->
+        {dw, Idx, _ReqId} ->
             %% Write succeeded without changes to vclock required and returnbody false
+            ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [2],
+                    [integer_to_list(Idx)]),
             execute_remote(StateData#state{putcore = UpdPutCore1})
     end.
 
@@ -366,6 +397,9 @@ execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
     StateData1 = add_timing(execute_remote, StateData),
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2,
                              IndexNode /= CoordPLEntry],
+    Ps = [[atom_to_list(Nd), $,, integer_to_list(Idx)] ||
+             {Idx, Nd} <- lists:sublist(Preflist, 4)],
+    ?DTRACE(?C_PUT_FSM_EXECUTE_REMOTE, [], [Ps]),
     riak_kv_vnode:put(Preflist, BKey, RObj, ReqId, StartTime, VnodeOptions),
     case riak_kv_put_core:enough(PutCore) of
         true ->
@@ -378,8 +412,12 @@ execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
 
 %% @private
 waiting_remote_vnode(request_timeout, StateData) ->
+    ?DTRACE(?C_PUT_FSM_WAITING_REMOTE_VNODE, [-1], []),
     process_reply({error,timeout}, StateData);
 waiting_remote_vnode(Result, StateData = #state{putcore = PutCore}) ->
+    ShortCode = riak_kv_put_core:result_shortcode(Result),
+    IdxStr = integer_to_list(riak_kv_put_core:result_idx(Result)),
+    ?DTRACE(?C_PUT_FSM_WAITING_REMOTE_VNODE, [ShortCode], [IdxStr]),
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
     case riak_kv_put_core:enough(UpdPutCore1) of
         true ->
@@ -391,9 +429,11 @@ waiting_remote_vnode(Result, StateData = #state{putcore = PutCore}) ->
 
 %% @private
 postcommit(timeout, StateData = #state{postcommit = []}) ->
+    ?DTRACE(?C_PUT_FSM_POSTCOMMIT, [0], []),
     new_state_timeout(finish, StateData);
 postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
                                        putcore = PutCore}) ->
+    ?DTRACE(?C_PUT_FSM_POSTCOMMIT, [-2], []),
     %% Process the next hook - gives sys:get_status messages a chance if hooks
     %% take a long time.
     {ReplyObj, UpdPutCore} =  riak_kv_put_core:final(PutCore),
@@ -401,8 +441,12 @@ postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
     {next_state, postcommit, StateData#state{postcommit = Rest,
                                              putcore = UpdPutCore}, 0};
 postcommit(request_timeout, StateData) -> % still process hooks even if request timed out
+    ?DTRACE(?C_PUT_FSM_POSTCOMMIT, [-3], []),
     {next_state, postcommit, StateData, 0};
 postcommit(Reply, StateData = #state{putcore = PutCore}) ->
+    ShortCode = riak_kv_put_core:result_shortcode(Reply),
+    IdxStr = integer_to_list(riak_kv_put_core:result_idx(Reply)),
+    ?DTRACE(?C_PUT_FSM_POSTCOMMIT, [0, ShortCode], [IdxStr]),
     %% late responses - add to state.  *Does not* recompute finalobj
     UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
     {next_state, postcommit, StateData#state{putcore = UpdPutCore}, 0}.
@@ -410,15 +454,20 @@ postcommit(Reply, StateData = #state{putcore = PutCore}) ->
 finish(timeout, StateData = #state{timing = Timing, reply = Reply}) ->
     case Reply of
         {error, _} ->
+            ?DTRACE(?C_PUT_FSM_FINISH, [-1], []),
             ok;
         _Ok ->
             %% TODO: Improve reporting of timing
             %% For now can add debug tracers to view the return from calc_timing
             {Duration, _Stages} = calc_timing(Timing),
+            ?DTRACE(?C_PUT_FSM_FINISH, [0, Duration], []),
             riak_kv_stat:update({put_fsm_time, Duration})
     end,
     {stop, normal, StateData};
 finish(Reply, StateData = #state{putcore = PutCore}) ->
+    ShortCode = riak_kv_put_core:result_shortcode(Reply),
+    IdxStr = integer_to_list(riak_kv_put_core:result_idx(Reply)),
+    ?DTRACE(?C_PUT_FSM_FINISH, [1, ShortCode], [IdxStr]),
     %% late responses - add to state.  *Does not* recompute finalobj
     UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
     {next_state, finish, StateData#state{putcore = UpdPutCore}, 0}.
@@ -461,7 +510,9 @@ new_state_timeout(StateName, StateData) ->
 
 %% What to do once enough responses from vnodes have been received to reply
 process_reply(Reply, StateData = #state{postcommit = PostCommit,
-                                        putcore = PutCore}) ->
+                                        putcore = PutCore,
+                                        robj = RObj,
+                                        bkey = {Bucket, Key}}) ->
     StateData1 = client_reply(Reply, StateData),
     StateData2 = case PostCommit of
                      [] ->
@@ -475,10 +526,18 @@ process_reply(Reply, StateData = #state{postcommit = PostCommit,
                  end,
     case Reply of
         ok ->
+            ?DTRACE(?C_PUT_FSM_PROCESS_REPLY, [0], []),
             new_state_timeout(postcommit, StateData2);
         {ok, _} ->
+            Values = riak_object:get_values(RObj),
+            %% TODO: more accurate sizing method
+            ApproxBytes = size(Bucket) + size(Key) +
+                lists:sum([size(V) || V <- Values]),
+            NumSibs = length(Values),
+            ?DTRACE(?C_PUT_FSM_PROCESS_REPLY, [1, ApproxBytes, NumSibs], []),
             new_state_timeout(postcommit, StateData2);
         _ ->
+            ?DTRACE(?C_PUT_FSM_PROCESS_REPLY, [-1], []),
             new_state_timeout(finish, StateData2)
     end.
 
@@ -614,18 +673,25 @@ invoke_hook(_, _, _, _) ->
 
 -spec decode_precommit(any()) -> fail | {fail, any()} | riak_object:riak_object().
 decode_precommit({erlang, {Mod, Fun}, Result}) ->
+    %% TODO: For DTrace things, we will err on the side of taking the
+    %%       time to format the error results into strings to pass to
+    %%       the probes.  If this ends up being too slow, then revisit.
     case Result of
         fail ->
+            ?DTRACE(?C_PUT_FSM_DECODE_PRECOMMIT, [-1], []),
             riak_kv_stat:update(precommit_fail),
             lager:debug("Pre-commit hook ~p:~p failed, no reason given",
                         [Mod, Fun]),
             fail;
         {fail, Reason} ->
+            ?DTRACE(?C_PUT_FSM_DECODE_PRECOMMIT, [-2], [dtrace_errstr(Reason)]),
             riak_kv_stat:update(precommit_fail),
             lager:debug("Pre-commit hook ~p:~p failed with reason ~p",
                         [Mod, Fun, Reason]),
             Result;
         {'EXIT',  Mod, Fun, Class, Exception} ->
+            ?DTRACE(?C_PUT_FSM_DECODE_PRECOMMIT, [-3],
+                    [dtrace_errstr({Mod, Fun, Class, Exception})]),
             riak_kv_stat:update(precommit_fail),
             lager:debug("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
                         [Mod,Fun,Class,Exception, erlang:get_stacktrace()]),
@@ -633,7 +699,9 @@ decode_precommit({erlang, {Mod, Fun}, Result}) ->
         Obj ->
             try
                 riak_object:ensure_robject(Obj)
-            catch _:_ ->
+            catch X:Y ->
+                    ?DTRACE(?C_PUT_FSM_DECODE_PRECOMMIT, [-4],
+                            [dtrace_errstr({Mod, Fun, X, Y})]),
                     riak_kv_stat:update(precommit_fail),
                     lager:debug("Problem invoking pre-commit hook ~p:~p,"
                                 " invalid return ~p",
@@ -645,11 +713,13 @@ decode_precommit({erlang, {Mod, Fun}, Result}) ->
 decode_precommit({js, JSName, Result}) ->
     case Result of
         {ok, <<"fail">>} ->
+            ?DTRACE(?C_PUT_FSM_DECODE_PRECOMMIT, [-5], []),
             riak_kv_stat:update(precommit_fail),
             lager:debug("Pre-commit hook ~p failed, no reason given",
                         [JSName]),
             fail;
         {ok, [{<<"fail">>, Message}]} ->
+            ?DTRACE(?C_PUT_FSM_DECODE_PRECOMMIT, [-6],[dtrace_errstr(Message)]),
             riak_kv_stat:update(precommit_fail),
             lager:debug("Pre-commit hook ~p failed with reason ~p",
                         [JSName, Message]),
@@ -657,16 +727,19 @@ decode_precommit({js, JSName, Result}) ->
         {ok, Json} ->
             case catch riak_object:from_json(Json) of
                 {'EXIT', _} ->
+                    ?DTRACE(?C_PUT_FSM_DECODE_PRECOMMIT, [-7], []),
                     {fail, {invalid_return, {JSName, Json}}};
                 Obj ->
                     Obj
             end;
         {error, Error} ->
             riak_kv_stat:update(precommit_fail),
+            ?DTRACE(?C_PUT_FSM_DECODE_PRECOMMIT, [-7], [dtrace_errstr(Error)]),
             lager:debug("Problem invoking pre-commit hook: ~p", [Error]),
             fail
     end;
 decode_precommit({error, Reason}) ->
+    ?DTRACE(?C_PUT_FSM_DECODE_PRECOMMIT, [-8], [dtrace_errstr(Reason)]),
     riak_kv_stat:update(precommit_fail),
     lager:debug("Problem invoking pre-commit hook: ~p", [Reason]),
     {fail, Reason}.
@@ -674,22 +747,28 @@ decode_precommit({error, Reason}) ->
 decode_postcommit({erlang, {M,F}, Res}) ->
     case Res of
         fail ->
+            ?DTRACE(?C_PUT_FSM_DECODE_POSTCOMMIT, [-1], []),
             riak_kv_stat:update(postcommit_fail),
             lager:debug("Post-commit hook ~p:~p failed, no reason given",
                        [M, F]);
         {fail, Reason} ->
+            ?DTRACE(?C_PUT_FSM_DECODE_POSTCOMMIT, [-2],[dtrace_errstr(Reason)]),
             riak_kv_stat:update(postcommit_fail),
             lager:debug("Post-commit hook ~p:~p failed with reason ~p",
                         [M, F, Reason]);
         {'EXIT', _, _, Class, Ex} ->
+            ?DTRACE(?C_PUT_FSM_DECODE_POSTCOMMIT, [-3],
+                    [dtrace_errstr({M, F, Class, Ex})]),
             riak_kv_stat:update(postcommit_fail),
             Stack = erlang:get_stacktrace(),
             lager:debug("Problem invoking post-commit hook ~p:~p -> ~p:~p~n~p",
                         [M, F, Class, Ex, Stack]),
             ok;
-        _ -> ok
+        _ ->
+            ok
     end;
 decode_postcommit({error, {invalid_hook_def, Def}}) ->
+    ?DTRACE(?C_PUT_FSM_DECODE_POSTCOMMIT, [-4], [dtrace_errstr(Def)]),
     riak_kv_stat:update(postcommit_fail),
     lager:debug("Invalid post-commit hook definition ~p", [Def]).
 
@@ -772,6 +851,25 @@ calc_timing([{reply, ReplyNow}|_]=Timing, StageEnd, undefined, Stages) ->
 calc_timing([{Stage, StageStart} | Rest], StageEnd, ReplyNow, Stages) ->
     calc_timing(Rest, StageStart, ReplyNow,
                 [{Stage, timer:now_diff(StageEnd, StageStart)} | Stages]).
+
+dtrace_put_tag(Tag) ->
+    put(?DTRACE_TAG_KEY, Tag),
+    riak_core_dtrace:put_tag(Tag).
+
+%% Erlang tracing-related funnel functions for DTrace/SystemTap.
+%% When using Redbug or other Erlang tracing framework, trace these
+%% functions.
+
+dtrace(_BKey, Category, Ints, Strings) ->
+    riak_core_dtrace:dtrace(Category, Ints, Strings).
+
+%% Internal functions, not so interesting for Erlang tracing.
+
+dtrace_int(Category, Ints, Strings) ->
+    dtrace(get(?DTRACE_TAG_KEY), Category, Ints, Strings).
+
+dtrace_errstr(Term) ->
+    io_lib:format("~P", [Term, 12]).
 
 %% ===================================================================
 %% EUnit tests
