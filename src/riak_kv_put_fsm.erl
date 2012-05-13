@@ -154,7 +154,6 @@ init([From, RObj, Options]) ->
                                            bkey = BKey,
                                            options = Options}),
     dtrace_put_tag(iolist_to_binary([Bucket, $,, Key])),
-    riak_core_dtrace:put_tag([Bucket, $,, Key]),
     case riak_kv_util:is_x_deleted(RObj) of
         true  ->
             TombNum = 1,
