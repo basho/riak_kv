@@ -131,7 +131,6 @@ init([From, Bucket, Key, Options]) ->
                        bkey = {Bucket, Key},
                        startnow = StartNow},
     dtrace_put_tag([Bucket, $,, Key]),
-    riak_core_dtrace:put_tag([Bucket, $,, Key]),
     ?DTRACE(?C_GET_FSM_INIT, [], ["init"]),
     {ok, prepare, StateData, 0};
 init({test, Args, StateProps}) ->
