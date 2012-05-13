@@ -73,9 +73,6 @@
 -define(DEFAULT_R, default).
 -define(DEFAULT_PR, 0).
 
--define(DTRACE(Category, Ints, Strings),
-        dtrace_int(Category, Ints, Strings)).
-
 %% ===================================================================
 %% Public API
 %% ===================================================================

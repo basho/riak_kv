@@ -1,4 +1,10 @@
 
+%% Main wrapper macro for DTrace/SystemTap probe annotations
+%% NOTE: We assume there will be per-module dtrace_int() and dtrace() funcs!
+
+-define(DTRACE(Category, Ints, Strings),
+        dtrace_int(Category, Ints, Strings)).
+
 %% Probe categories
 -define(C_GET_FSM_INIT,               500).
 -define(C_GET_FSM_PREPARE,            501).
