@@ -222,8 +222,11 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
     %% TODO: We can see entire preflist (more than 4 nodes) if we concatenate
     %%       all info into a single string.
-    Ps = [[atom_to_list(Nd), $,, integer_to_list(Idx)] ||
-             {Idx, Nd} <- lists:sublist(Preflist, 4)],
+    Ps = [if is_atom(Nd) ->
+                  [atom_to_list(Nd), $,, integer_to_list(Idx)];
+             true ->
+                  <<>>                          % eunit test
+          end || {Idx, Nd} <- lists:sublist(Preflist, 4)],
     ?DTRACE(?C_GET_FSM_PREFLIST, [], Ps),
     riak_kv_vnode:get(Preflist, BKey, ReqId),
     StateData = StateData0#state{tref=TRef},
