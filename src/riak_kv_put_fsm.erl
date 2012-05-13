@@ -199,11 +199,11 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
             [{{_Idx, CoordNode},_Type}|_] = Preflist2,
             Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
             ?DTRACE(?C_PUT_FSM_PREPARE, [1],
-                    ["prepare", atom_to_list(CoordNode)]),
+                    ["prepare", atom2list(CoordNode)]),
             case rpc:call(CoordNode,riak_kv_put_fsm_sup,start_put_fsm,[CoordNode,[From,RObj,Options]],Timeout) of
                 {ok, _Pid} ->
                     ?DTRACE(?C_PUT_FSM_PREPARE, [2],
-                            ["prepare", atom_to_list(CoordNode)]),
+                            ["prepare", atom2list(CoordNode)]),
                     riak_kv_stat:update(coord_redir),
                     {stop, normal, StateData0};
                 {_, Reason} -> % {error,_} or {badrpc,_}
@@ -224,7 +224,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                            end,
             CoordPlNode = case CoordPLEntry of 
                               undefined  -> undefined;
-                              {_Idx, Nd} -> atom_to_list(Nd)
+                              {_Idx, Nd} -> atom2list(Nd)
                           end,
             %% This node is in the preference list, continue
             StartTime = riak_core_util:moment(),
@@ -345,7 +345,7 @@ execute_local(StateData=#state{robj=RObj, req_id = ReqId,
                                 coord_pl_entry = {_Index, Node} = CoordPLEntry,
                                 vnode_options=VnodeOptions,
                                 starttime = StartTime}) ->
-    ?DTRACE(?C_PUT_FSM_EXECUTE_LOCAL, [], [atom_to_list(Node)]),
+    ?DTRACE(?C_PUT_FSM_EXECUTE_LOCAL, [], [atom2list(Node)]),
     StateData1 = add_timing(execute_local, StateData),
     TRef = schedule_timeout(Timeout),
     riak_kv_vnode:coord_put(CoordPLEntry, BKey, RObj, ReqId, StartTime, VnodeOptions),
@@ -397,7 +397,7 @@ execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
     StateData1 = add_timing(execute_remote, StateData),
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2,
                              IndexNode /= CoordPLEntry],
-    Ps = [[atom_to_list(Nd), $,, integer_to_list(Idx)] ||
+    Ps = [[atom2list(Nd), $,, integer_to_list(Idx)] ||
              {Idx, Nd} <- lists:sublist(Preflist, 4)],
     ?DTRACE(?C_PUT_FSM_EXECUTE_REMOTE, [], [Ps]),
     riak_kv_vnode:put(Preflist, BKey, RObj, ReqId, StartTime, VnodeOptions),
@@ -851,6 +851,11 @@ calc_timing([{reply, ReplyNow}|_]=Timing, StageEnd, undefined, Stages) ->
 calc_timing([{Stage, StageStart} | Rest], StageEnd, ReplyNow, Stages) ->
     calc_timing(Rest, StageStart, ReplyNow,
                 [{Stage, timer:now_diff(StageEnd, StageStart)} | Stages]).
+
+atom2list(A) when is_atom(A) ->
+    atom_to_list(A);
+atom2list(P) when is_pid(P)->
+    pid_to_list(P).                             % eunit tests
 
 dtrace_put_tag(Tag) ->
     put(?DTRACE_TAG_KEY, Tag),

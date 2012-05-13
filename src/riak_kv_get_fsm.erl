@@ -223,7 +223,7 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
     %% TODO: We can see entire preflist (more than 4 nodes) if we concatenate
     %%       all info into a single string.
     Ps = [if is_atom(Nd) ->
-                  [atom_to_list(Nd), $,, integer_to_list(Idx)];
+                  [atom2list(Nd), $,, integer_to_list(Idx)];
              true ->
                   <<>>                          % eunit test
           end || {Idx, Nd} <- lists:sublist(Preflist, 4)],
@@ -340,7 +340,7 @@ read_repair(Indices, RepairObj,
                    preflist2 = Sent, bkey = BKey, bucket_props = BucketProps}) ->
     RepairPreflist = [{Idx, Node} || {{Idx, Node}, _Type} <- Sent, 
                                      lists:member(Idx, Indices)],
-    Ps = [[atom_to_list(Nd), $,, integer_to_list(Idx)] ||
+    Ps = [[atom2list(Nd), $,, integer_to_list(Idx)] ||
              {Idx, Nd} <- lists:sublist(RepairPreflist, 4)],
     ?DTRACE(?C_GET_FSM_RR, [], Ps),
     riak_kv_vnode:readrepair(RepairPreflist, BKey, RepairObj, ReqId, 
@@ -414,6 +414,11 @@ client_info([Unknown | Rest], StateData, Acc) ->
 details() ->
     [timing,
      vnodes].
+
+atom2list(A) when is_atom(A) ->
+    atom_to_list(A);
+atom2list(P) when is_pid(P)->
+    pid_to_list(P).                             % eunit tests
 
 dtrace_put_tag(Tag) ->
     put(?DTRACE_TAG_KEY, Tag),
