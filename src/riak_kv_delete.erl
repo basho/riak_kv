@@ -53,7 +53,7 @@ start_link(ReqId, Bucket, Key, Options, Timeout, Client, ClientId, VClock) ->
 %% @doc Delete the object at Bucket/Key.  Direct return value is uninteresting,
 %%      see riak_client:delete/3 for expected gen_server replies to Client.
 delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
-    dtrace_put_tag(iolist_to_binary([Bucket, $,, Key])),
+    riak_core_dtrace:put_tag([Bucket, $,, Key]),
     ?DTRACE(?C_DELETE_INIT1, [0], []),
     case get_r_options(Bucket, Options) of
         {error, Reason} ->
@@ -75,7 +75,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
             end
     end;
 delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
-    dtrace_put_tag(iolist_to_binary([Bucket, $,, Key])),
+    riak_core_dtrace:put_tag([Bucket, $,, Key]),
     ?DTRACE(?C_DELETE_INIT2, [0], []),
     case get_w_options(Bucket, Options) of
         {error, Reason} ->
@@ -176,10 +176,6 @@ get_w_options(Bucket, Options) ->
                     end
             end
     end.
-
-dtrace_put_tag(Tag) ->
-    put(?DTRACE_TAG_KEY, Tag),
-    riak_core_dtrace:put_tag(Tag).
 
 %% Erlang tracing-related funnel functions for DTrace/SystemTap.
 %% When using Redbug or other Erlang tracing framework, trace these

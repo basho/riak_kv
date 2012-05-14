@@ -127,7 +127,7 @@ init([From, Bucket, Key, Options]) ->
                        options = Options,
                        bkey = {Bucket, Key},
                        startnow = StartNow},
-    dtrace_put_tag(iolist_to_binary([Bucket, $,, Key])),
+    riak_core_dtrace:put_tag([Bucket, $,, Key]),
     ?DTRACE(?C_GET_FSM_INIT, [], ["init"]),
     {ok, prepare, StateData, 0};
 init({test, Args, StateProps}) ->
@@ -419,10 +419,6 @@ atom2list(A) when is_atom(A) ->
     atom_to_list(A);
 atom2list(P) when is_pid(P)->
     pid_to_list(P).                             % eunit tests
-
-dtrace_put_tag(Tag) ->
-    put(?DTRACE_TAG_KEY, Tag),
-    riak_core_dtrace:put_tag(Tag).
 
 %% Erlang tracing-related funnel functions for DTrace/SystemTap.
 %% When using Redbug or other Erlang tracing framework, trace these

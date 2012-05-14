@@ -43,5 +43,6 @@
 -define(C_BUCKETS_FINISH,             542).
 
 %% Other
+%% NOTE: Coordinate ?DTRACE_TAG_KEY with riak_core_dtrace.erl
 -define(DTRACE_TAG_KEY, '**DTRACE*TAG*KEY**').
 

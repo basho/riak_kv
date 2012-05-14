@@ -153,7 +153,7 @@ init([From, RObj, Options]) ->
                                            robj = RObj,
                                            bkey = BKey,
                                            options = Options}),
-    dtrace_put_tag(iolist_to_binary([Bucket, $,, Key])),
+    riak_core_dtrace:put_tag([Bucket, $,, Key]),
     case riak_kv_util:is_x_deleted(RObj) of
         true  ->
             TombNum = 1,
@@ -863,10 +863,6 @@ atom2list(A) when is_atom(A) ->
     atom_to_list(A);
 atom2list(P) when is_pid(P)->
     pid_to_list(P).                             % eunit tests
-
-dtrace_put_tag(Tag) ->
-    put(?DTRACE_TAG_KEY, Tag),
-    riak_core_dtrace:put_tag(Tag).
 
 %% Erlang tracing-related funnel functions for DTrace/SystemTap.
 %% When using Redbug or other Erlang tracing framework, trace these
