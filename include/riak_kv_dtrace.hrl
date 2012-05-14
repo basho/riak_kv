@@ -42,6 +42,10 @@
 -define(C_BUCKETS_PROCESS_RESULTS,    541).
 -define(C_BUCKETS_FINISH,             542).
 
+-define(C_KEYS_INIT,                  545).
+-define(C_KEYS_PROCESS_RESULTS,       546).
+-define(C_KEYS_FINISH,                547).
+
 %% Other
 %% NOTE: Coordinate ?DTRACE_TAG_KEY with riak_core_dtrace.erl
 -define(DTRACE_TAG_KEY, '**DTRACE*TAG*KEY**').

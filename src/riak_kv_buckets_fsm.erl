@@ -73,6 +73,7 @@ process_results(Buckets,
     {ok, StateData#state{buckets=sets:union(sets:from_list(Buckets),
                                                BucketAcc)}};
 process_results({error, Reason}, _State) ->
+    ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [-1], []),
     {error, Reason}.
 
 finish({error, Error},
