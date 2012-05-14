@@ -34,6 +34,10 @@
 -define(C_PUT_FSM_DECODE_PRECOMMIT,   531).     % errors only
 -define(C_PUT_FSM_DECODE_POSTCOMMIT,  532).     % errors only
 
+-define(C_DELETE_INIT1,               535).
+-define(C_DELETE_INIT2,               536).
+-define(C_DELETE_REAPER_GET_DONE,     537).
+
 %% Other
 -define(DTRACE_TAG_KEY, '**DTRACE*TAG*KEY**').
 
