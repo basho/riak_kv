@@ -38,6 +38,10 @@
 -define(C_DELETE_INIT2,               536).
 -define(C_DELETE_REAPER_GET_DONE,     537).
 
+-define(C_BUCKETS_INIT,               540).
+-define(C_BUCKETS_PROCESS_RESULTS,    541).
+-define(C_BUCKETS_FINISH,             542).
+
 %% Other
 -define(DTRACE_TAG_KEY, '**DTRACE*TAG*KEY**').
 
