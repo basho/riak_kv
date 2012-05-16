@@ -94,13 +94,15 @@ start(Partition, Config) ->
     DataDir = filename:join(app_helper:get_prop_or_env(data_root, Config, eleveldb),
                             integer_to_list(Partition)),
     case open_db(DataDir, Config) of
-        {ok, Ref} ->
-            {ok, #state { ref = Ref,
-                          data_root = DataDir,
-                          read_opts = config_value(read_options, Config, []),
-                          write_opts = config_value(write_options, Config, []),
-                          fold_opts = config_value(fold_options, Config, [{fill_cache, false}]),
-                          config = Config }};
+        {ok, Ref, FinalConfig} ->
+            S = #state { ref = Ref,
+                         data_root = DataDir,
+                         read_opts = config_value(read_options, FinalConfig, []),
+                         write_opts = config_value(write_options, FinalConfig, []),
+                         fold_opts = config_value(fold_options, FinalConfig, [{fill_cache, false}]),
+                         config = FinalConfig },
+            lager:debug("Partition ~p has initial state: ~p\n", [Partition, S]),
+            {ok, S};
         {error, Reason} ->
             {error, Reason}
     end.
@@ -281,8 +283,8 @@ drop(#state{data_root=DataRoot}=State) ->
     case eleveldb:destroy(DataRoot, []) of
         ok ->
             case open_db(DataRoot, State#state.config) of
-                {ok, Ref} ->
-                    {ok, State#state { ref = Ref }};
+                {ok, Ref, FinalConfig} ->
+                    {ok, State#state { ref = Ref, config = FinalConfig }};
                 {error, Reason} ->
                     {error, Reason, State}
             end;
@@ -316,36 +318,63 @@ open_db(DataRoot, Config) ->
     %% Get the data root directory
     filelib:ensure_dir(filename:join(DataRoot, "dummy")),
 
+    %% Merge the proplist passed in from Config with any values specified by the
+    %% eleveldb app level; precedence is given to the Config.
+    MergedConfig = orddict:merge(fun(_K, VLocal, _VGlobal) -> VLocal end,
+                                 orddict:from_list(Config), % Local
+                                 orddict:from_list(application:get_all_env(eleveldb))), % Global
+
     %% Use a variable write buffer size in order to reduce the number
     %% of vnodes that try to kick off compaction at the same time
     %% under heavy uniform load...
-    WriteBufferMin = config_value(write_buffer_size_min, Config, 3 * 1024 * 1024),
-    WriteBufferMax = config_value(write_buffer_size_max, Config, 6 * 1024 * 1024),
+    WriteBufferMin = config_value(write_buffer_size_min, MergedConfig, 3 * 1024 * 1024),
+    WriteBufferMax = config_value(write_buffer_size_max, MergedConfig, 6 * 1024 * 1024),
     WriteBufferSize = WriteBufferMin + random:uniform(1 + WriteBufferMax - WriteBufferMin),
 
-    %% Assemble options...
-    Options = [
-               {create_if_missing, true},
-               {write_buffer_size, WriteBufferSize},
-               {max_open_files, config_value(max_open_files, Config)},
-               {cache_size, config_value(cache_size, Config)},
-               {paranoid_checks, config_value(paranoid_checks, Config)}
-              ],
+    %% Update the write buffer size in the merged config
+    FinalConfig0 = orddict:store(write_buffer_size, WriteBufferSize, MergedConfig),
 
-    lager:debug("Opening LevelDB in ~s with options: ~p\n", [DataRoot, Options]),
-    eleveldb:open(DataRoot, Options).
+    %% Make sure create_if_missing is set to true and filter out any unknown options
+    FinalConfig = filter_allowable_options(orddict:store(create_if_missing, true, FinalConfig0)),
 
+    %% Open up the DB
+    lager:debug("Opening LevelDB in ~s with options: ~p\n", [DataRoot, FinalConfig]),
+    case eleveldb:open(DataRoot, FinalConfig) of
+        {ok, Ref} ->
+            {ok, Ref, FinalConfig};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 %% @private
-config_value(Key, Config) ->
-    config_value(Key, Config, undefined).
+%% Remove all unknown options from a ELevelDB config
+filter_allowable_options(Config) ->
+    Options = [%% Base config options
+               create_if_missing,
+               error_if_exists,
+               write_buffer_size,
+               max_open_files,
+               block_size,
+               block_restart_interval,
+               cache_size,
+               paranoid_checks,
+               compression,
+               use_bloomfilter,
+               verify_checksums,
+               fill_cache,
+               sync,
+               %% Additional configs specific to Riak
+               read_options,
+               write_options,
+               fold_options],
+    lists:filter(fun({K, _V}) -> lists:member(K, Options) end, Config).
 
 %% @private
 config_value(Key, Config, Default) ->
-    case proplists:get_value(Key, Config) of
-        undefined ->
-            app_helper:get_env(eleveldb, Key, Default);
-        Value ->
+    case orddict:find(Key, Config) of
+        error ->
+            Default;
+        {ok, Value} ->
             Value
     end.
 
