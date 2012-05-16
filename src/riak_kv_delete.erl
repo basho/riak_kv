@@ -27,10 +27,11 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
--include("riak_kv_dtrace.hrl").
 -include("riak_kv_wm_raw.hrl").
 
 -export([start_link/6, start_link/7, start_link/8, delete/8]).
+
+-include("riak_kv_dtrace.hrl").
 
 start_link(ReqId, Bucket, Key, Options, Timeout, Client) ->
     {ok, proc_lib:spawn_link(?MODULE, delete, [ReqId, Bucket, Key,
@@ -176,18 +177,6 @@ get_w_options(Bucket, Options) ->
                     end
             end
     end.
-
-%% Erlang tracing-related funnel functions for DTrace/SystemTap.
-%% When using Redbug or other Erlang tracing framework, trace these
-%% functions.
-
-dtrace(_BKey, Category, Ints, Strings) ->
-    riak_core_dtrace:dtrace(Category, Ints, Strings).
-
-%% Internal functions, not so interesting for Erlang tracing.
-
-dtrace_int(Category, Ints, Strings) ->
-    dtrace(get(?DTRACE_TAG_KEY), Category, Ints, Strings).
 
 
 %% ===================================================================
