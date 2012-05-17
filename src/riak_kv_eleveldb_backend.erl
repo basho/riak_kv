@@ -54,6 +54,7 @@
 
 -record(state, {ref :: reference(),
                 data_root :: string(),
+                open_opts = [],
                 config :: config(),
                 read_opts = [],
                 write_opts = [],
@@ -93,16 +94,12 @@ start(Partition, Config) ->
     %% Get the data root directory
     DataDir = filename:join(app_helper:get_prop_or_env(data_root, Config, eleveldb),
                             integer_to_list(Partition)),
-    case open_db(DataDir, Config) of
-        {ok, Ref, FinalConfig} ->
-            S = #state { ref = Ref,
-                         data_root = DataDir,
-                         read_opts = config_value(read_options, FinalConfig, []),
-                         write_opts = config_value(write_options, FinalConfig, []),
-                         fold_opts = config_value(fold_options, FinalConfig, [{fill_cache, false}]),
-                         config = FinalConfig },
-            lager:debug("Partition ~p has initial state: ~p\n", [Partition, S]),
-            {ok, S};
+
+    %% Initialize state
+    S0 = init_state(DataDir, Config),
+    case open_db(S0) of
+        {ok, State} ->
+            {ok, State};
         {error, Reason} ->
             {error, Reason}
     end.
@@ -279,17 +276,17 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
 %% @doc Delete all objects from this eleveldb backend
 %% and return a fresh reference.
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
-drop(#state{data_root=DataRoot}=State) ->
-    case eleveldb:destroy(DataRoot, []) of
+drop(State0) ->
+    case eleveldb:destroy(State0#state.data_root, []) of
         ok ->
-            case open_db(DataRoot, State#state.config) of
-                {ok, Ref, FinalConfig} ->
-                    {ok, State#state { ref = Ref, config = FinalConfig }};
+            case open_db(State0) of
+                {ok, State} ->
+                    {ok, State};
                 {error, Reason} ->
-                    {error, Reason, State}
+                    {error, Reason, State0}
             end;
         {error, Reason} ->
-            {error, Reason, State}
+            {error, Reason, State0}
     end.
 
 %% @doc Returns true if this eleveldb backend contains any
@@ -314,7 +311,7 @@ callback(_Ref, _Msg, State) ->
 %% ===================================================================
 
 %% @private
-open_db(DataRoot, Config) ->
+init_state(DataRoot, Config) ->
     %% Get the data root directory
     filelib:ensure_dir(filename:join(DataRoot, "dummy")),
 
@@ -331,43 +328,37 @@ open_db(DataRoot, Config) ->
     WriteBufferMax = config_value(write_buffer_size_max, MergedConfig, 6 * 1024 * 1024),
     WriteBufferSize = WriteBufferMin + random:uniform(1 + WriteBufferMax - WriteBufferMin),
 
-    %% Update the write buffer size in the merged config
-    FinalConfig0 = orddict:store(write_buffer_size, WriteBufferSize, MergedConfig),
+    %% Update the write buffer size in the merged config and make sure create_if_missing is set
+    %% to true
+    FinalConfig = orddict:store(write_buffer_size, WriteBufferSize,
+                                orddict:store(create_if_missing, true, MergedConfig)),
 
-    %% Make sure create_if_missing is set to true and filter out any unknown options
-    FinalConfig = filter_allowable_options(orddict:store(create_if_missing, true, FinalConfig0)),
+    %% Parse out the open/read/write options
+    {OpenOpts, _BadOpenOpts} = eleveldb:validate_options(open, FinalConfig),
+    {ReadOpts, _BadReadOpts} = eleveldb:validate_options(read, FinalConfig),
+    {WriteOpts, _BadWriteOpts} = eleveldb:validate_options(write, FinalConfig),
 
-    %% Open up the DB
-    lager:debug("Opening LevelDB in ~s with options: ~p\n", [DataRoot, FinalConfig]),
-    case eleveldb:open(DataRoot, FinalConfig) of
+    %% Use read options for folding, but FORCE fill_cache to false
+    FoldOpts = lists:keystore(fill_cache, 1, ReadOpts, {fill_cache, false}),
+
+    %% Generate a debug message with the options we'll use for each operation
+    lager:debug("Datadir ~s options for LevelDB: ~p\n",
+                [DataRoot, [{open, OpenOpts}, {read, ReadOpts}, {write, WriteOpts}, {fold, FoldOpts}]]),
+    #state { data_root = DataRoot,
+             open_opts = OpenOpts,
+             read_opts = ReadOpts,
+             write_opts = WriteOpts,
+             fold_opts = FoldOpts,
+             config = FinalConfig }.
+
+%% @private
+open_db(State0) ->
+    case eleveldb:open(State0#state.data_root, State0#state.open_opts) of
         {ok, Ref} ->
-            {ok, Ref, FinalConfig};
+            {ok, State0#state { ref = Ref }};
         {error, Reason} ->
             {error, Reason}
     end.
-
-%% @private
-%% Remove all unknown options from a ELevelDB config
-filter_allowable_options(Config) ->
-    Options = [%% Base config options
-               create_if_missing,
-               error_if_exists,
-               write_buffer_size,
-               max_open_files,
-               block_size,
-               block_restart_interval,
-               cache_size,
-               paranoid_checks,
-               compression,
-               use_bloomfilter,
-               verify_checksums,
-               fill_cache,
-               sync,
-               %% Additional configs specific to Riak
-               read_options,
-               write_options,
-               fold_options],
-    lists:filter(fun({K, _V}) -> lists:member(K, Options) end, Config).
 
 %% @private
 config_value(Key, Config, Default) ->
