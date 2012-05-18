@@ -31,7 +31,8 @@
          parse_fields/1,
          format_failure_reason/1,
          normalize_index_field/1,
-         timestamp/0
+         timestamp/0,
+         to_index_query/2
         ]).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -226,6 +227,40 @@ format_failure_reason(FailureReason) ->
 timestamp() ->
     {MegaSeconds,Seconds,MilliSeconds}=erlang:now(),
     (MegaSeconds * 1000000000000) + (Seconds * 1000000) + MilliSeconds.
+
+%% @spec to_index_op_query(binary(), [binary()]) ->
+%%         {ok, {atom(), binary(), list(binary())}} | {error, Reasons}.
+%% @doc Given an IndexOp, IndexName, and Args, construct and return a
+%%      valid query, or a list of errors if the query is malformed.
+to_index_query(IndexField, Args) ->
+    %% Normalize the index field...
+    IndexField1 = riak_index:normalize_index_field(IndexField),
+
+    %% Normalize the arguments...
+    case riak_index:parse_fields([{IndexField1, X} || X <- Args]) of
+        {ok, []} ->
+            {error, {too_few_arguments, Args}};
+
+        {ok, [{_, Value}]} ->
+            %% One argument == exact match query
+            {ok, {eq, IndexField1, Value}};
+
+        {ok, [{_, Start}, {_, End}]} ->
+            %% Two arguments == range query
+            case End > Start of
+                true ->
+                    {ok, {range, IndexField1, Start, End}};
+                false ->
+                    {error, {invalid_range, Args}}
+            end;
+
+        {ok, _} ->
+            {error, {too_many_arguments, Args}};
+
+        {error, FailureReasons} ->
+            {error, FailureReasons}
+    end.
+
 
 %% @spec field_types() -> data_type_defs().
 %%
