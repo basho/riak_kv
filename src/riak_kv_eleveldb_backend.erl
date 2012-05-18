@@ -342,8 +342,8 @@ init_state(DataRoot, Config) ->
     FoldOpts = lists:keystore(fill_cache, 1, ReadOpts, {fill_cache, false}),
 
     %% Generate a debug message with the options we'll use for each operation
-    lager:info("~s options for LevelDB: ~p\n",
-               [DataRoot, [{open, OpenOpts}, {read, ReadOpts}, {write, WriteOpts}, {fold, FoldOpts}]]),
+    lager:debug("Datadir ~s options for LevelDB: ~p\n",
+                [DataRoot, [{open, OpenOpts}, {read, ReadOpts}, {write, WriteOpts}, {fold, FoldOpts}]]),
     #state { data_root = DataRoot,
              open_opts = OpenOpts,
              read_opts = ReadOpts,
