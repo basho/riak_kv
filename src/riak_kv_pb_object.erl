@@ -163,7 +163,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
         {error, notfound} when NotMod ->
             {error, "notfound", State};
         {error, Reason} ->
-            {error, io_lib:format("~p", [Reason]), State}
+            {error, {format, Reason}, State}
     end;
 
 process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,

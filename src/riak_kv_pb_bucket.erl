@@ -107,7 +107,7 @@ process(#rpbsetbucketreq{bucket=B, props = PbProps},
         ok ->
             {reply, rpbsetbucketresp, State};
         {error, Details} ->
-            {error, io_lib:format("Invalid bucket properties: ~p", [Details]), State}
+            {error, {format, "Invalid bucket properties: ~p", [Details]}, State}
     end.
 
 %% @doc process_stream/3 callback. Handles streaming keys messages.
