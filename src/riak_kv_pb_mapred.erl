@@ -36,8 +36,7 @@
 
 -module(riak_kv_pb_mapred).
 
--include_lib("riakc/include/riakclient_pb.hrl").
--include_lib("riakc/include/riakc_pb.hrl").
+-include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 
 -behaviour(riak_api_pb_service).
@@ -64,10 +63,10 @@ init() ->
     ?state{client=C}.
 
 decode(Code, Bin) ->
-    {ok, riakc_pb:decode(Code, Bin)}.
+    {ok, riak_pb_codec:decode(Code, Bin)}.
 
 encode(Message) ->
-    {ok, riakc_pb:encode(Message)}.
+    {ok, riak_pb_codec:encode(Message)}.
 
 %% Start map/reduce job - results will be processed in handle_info
 process(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,

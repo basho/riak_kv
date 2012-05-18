@@ -47,8 +47,8 @@
 
 -module(riak_kv_pb_object).
 
--include_lib("riakc/include/riakclient_pb.hrl").
--include_lib("riakc/include/riakc_pb.hrl").
+-include_lib("riak_pb/include/riak_kv_pb.hrl").
+-include_lib("riak_pb/include/riak_pb_kv_codec.hrl").
 
 -behaviour(riak_api_pb_service).
 
@@ -57,6 +57,8 @@
          encode/1,
          process/2,
          process_stream/3]).
+
+-import(riak_pb_kv_codec, [decode_quorum/1]).
 
 -record(?MODULE, {client,    % local client
                   req,       % current request (for multi-message requests like list keys)
@@ -75,14 +77,12 @@ init() ->
     ?state{client=C}.
 
 %% @doc decode/2 callback. Decodes an incoming message.
-%% @todo Factor this out of riakc_pb to remove the dependency.
 decode(Code, Bin) ->
-    {ok, riakc_pb:decode(Code, Bin)}.
+    {ok, riak_pb_codec:decode(Code, Bin)}.
 
 %% @doc encode/1 callback. Encodes an outgoing response message.
-%% @todo Factor this out of riakc_pb to remove the dependency.
 encode(Message) ->
-    {ok, riakc_pb:encode(Message)}.
+    {ok, riak_pb_codec:encode(Message)}.
 
 %% @doc process/2 callback. Handles an incoming request message.
 process(rpbgetclientidreq, ?state{client=C, client_id=CID} = State) ->
@@ -105,8 +105,8 @@ process(#rpbsetclientidreq{client_id = ClientId}, State) ->
 process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    basic_quorum=BQ, if_modified=VClock,
                    head=Head, deletedvclock=DeletedVClock}, ?state{client=C} = State) ->
-    R = normalize_rw_value(R0),
-    PR = normalize_rw_value(PR0),
+    R = decode_quorum(R0),
+    PR = decode_quorum(PR0),
     case C:get(B, K, make_option(deletedvclock, DeletedVClock) ++
                    make_option(r, R) ++
                    make_option(pr, PR) ++
@@ -124,9 +124,9 @@ process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                                         %% This is a rough equivalent of a REST HEAD
                                         %% request
                                         BlankContents = [{MD, <<>>} || {MD, _} <- Contents],
-                                        riakc_pb:pbify_rpbcontents(BlankContents, []);
+                                        riak_pb_kv_codec:encode_contents(BlankContents);
                                     _ ->
-                                        riakc_pb:pbify_rpbcontents(Contents, [])
+                                        riak_pb_kv_codec:encode_contents(Contents)
                                 end,
                     {reply, #rpbgetresp{content = PbContent,
                                         vclock = pbify_rpbvc(riak_object:vclock(O))}, State}
@@ -185,9 +185,9 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
     O1 = update_rpbcontent(O0, RpbContent),
     O  = update_pbvc(O1, PbVC),
     %% erlang_protobuffs encodes as 1/0/undefined
-    W = normalize_rw_value(W0),
-    DW = normalize_rw_value(DW0),
-    PW = normalize_rw_value(PW0),
+    W = decode_quorum(W0),
+    DW = decode_quorum(DW0),
+    PW = decode_quorum(PW0),
     Options = case ReturnBody of
                   1 -> [returnbody];
                   true -> [returnbody];
@@ -212,9 +212,9 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                                  %% This is a rough equivalent of a REST HEAD
                                  %% request
                                  BlankContents = [{MD, <<>>} || {MD, _} <- Contents],
-                                 riakc_pb:pbify_rpbcontents(BlankContents, []);
+                                 riak_pb_kv_codec:encode_contents(BlankContents);
                              _ ->
-                                 riakc_pb:pbify_rpbcontents(Contents, [])
+                                 riak_pb_kv_codec:encode_contents(Contents)
                          end,
             PutResp = #rpbputresp{content = PbContents,
                                   vclock = pbify_rpbvc(riak_object:vclock(Obj)),
@@ -230,12 +230,12 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
 process(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
                    r=R0, w=W0, pr=PR0, pw=PW0, dw=DW0, rw=RW0},
         ?state{client=C} = State) ->
-    W = normalize_rw_value(W0),
-    PW = normalize_rw_value(PW0),
-    DW = normalize_rw_value(DW0),
-    R = normalize_rw_value(R0),
-    PR = normalize_rw_value(PR0),
-    RW = normalize_rw_value(RW0),
+    W = decode_quorum(W0),
+    PW = decode_quorum(PW0),
+    DW = decode_quorum(DW0),
+    R = decode_quorum(R0),
+    PR = decode_quorum(PR0),
+    RW = decode_quorum(RW0),
 
     Options = make_option(r, R) ++
         make_option(w, W) ++
@@ -270,7 +270,7 @@ process_stream(_,_,State) ->
 
 %% Update riak_object with the pbcontent provided
 update_rpbcontent(O0, RpbContent) ->
-    {MetaData, Value} = riakc_pb:erlify_rpbcontent(RpbContent),
+    {MetaData, Value} = riak_pb_kv_codec:decode_content(RpbContent),
     O1 = riak_object:update_metadata(O0, MetaData),
     riak_object:update_value(O1, Value).
 
@@ -300,12 +300,6 @@ erlify_rpbvc(PbVc) ->
 %% Convert a vector clock to protocol buffers
 pbify_rpbvc(Vc) ->
     zlib:zip(term_to_binary(Vc)).
-
-normalize_rw_value(?RIAKC_RW_ONE) -> one;
-normalize_rw_value(?RIAKC_RW_QUORUM) -> quorum;
-normalize_rw_value(?RIAKC_RW_ALL) -> all;
-normalize_rw_value(?RIAKC_RW_DEFAULT) -> default;
-normalize_rw_value(V) -> V.
 
 default_timeout() ->
     ?DEFAULT_TIMEOUT.

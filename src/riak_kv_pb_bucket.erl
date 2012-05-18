@@ -45,8 +45,7 @@
 
 -module(riak_kv_pb_bucket).
 
--include_lib("riakc/include/riakclient_pb.hrl").
--include_lib("riakc/include/riakc_pb.hrl").
+-include_lib("riak_pb/include/riak_kv_pb.hrl").
 
 -behaviour(riak_api_pb_service).
 
@@ -70,14 +69,12 @@ init() ->
     ?state{client=C}.
 
 %% @doc decode/2 callback. Decodes an incoming message.
-%% @todo Factor this out of riakc_pb to remove the dependency.
 decode(Code, Bin) ->
-    {ok, riakc_pb:decode(Code, Bin)}.
+    {ok, riak_pb_codec:decode(Code, Bin)}.
 
 %% @doc encode/1 callback. Encodes an outgoing response message.
-%% @todo Factor this out of riakc_pb to remove the dependency.
 encode(Message) ->
-    {ok, riakc_pb:encode(Message)}.
+    {ok, riak_pb_codec:encode(Message)}.
 
 %% @doc process/2 callback. Handles an incoming request message.
 process(rpblistbucketsreq,
@@ -99,13 +96,13 @@ process(#rpblistkeysreq{bucket=B}=Req, ?state{client=C} = State) ->
 process(#rpbgetbucketreq{bucket=B},
         ?state{client=C} = State) ->
     Props = C:get_bucket(B),
-    PbProps = riakc_pb:pbify_rpbbucketprops(Props),
+    PbProps = riak_pb_kv_codec:encode_bucket_props(Props),
     {reply, #rpbgetbucketresp{props = PbProps}, State};
 
 %% Set bucket properties
 process(#rpbsetbucketreq{bucket=B, props = PbProps},
         ?state{client=C} = State) ->
-    Props = riakc_pb:erlify_rpbbucketprops(PbProps),
+    Props = riak_pb_kv_codec:decode_bucket_props(PbProps),
     case C:set_bucket(B, Props) of
         ok ->
             {reply, rpbsetbucketresp, State};
