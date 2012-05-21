@@ -167,7 +167,7 @@ reconcile(Objects) ->
     AllClocks = lists:flatten([vclock(O) || O <- Objects]),
     SyncClocks = dottedvv:sync(AllClocks),
     Objs =
-        [[Obj || Obj <- Objects, (dottedvv:equal(vclock(Obj), C) orelse dottedvv:descends(vclock(Obj), C))]
+        [[Obj || Obj <- Objects, dottedvv:descends(vclock(Obj), C)]
                 || C <- SyncClocks],
     remove_duplicate_objects(lists:flatten(Objs)).
 
