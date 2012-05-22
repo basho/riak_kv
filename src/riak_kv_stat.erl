@@ -296,6 +296,10 @@ backwards_compat(Name, meter, Stats) ->
     Base = un_namespace(Name),
     [{Base, trunc(proplists:get_value(one, Stats))},
      {join(Base, total), proplists:get_value(count, Stats)}];
+backwards_compat(riak_kv_mapper_count, counter, Stats) ->
+    {executing_mappers, Stats};
+backwards_compat(riak_kv_pbc_connects_active, counter, Stats) ->
+    {pbc_active, Stats};
 backwards_compat(Name, counter, Stats) ->
     {un_namespace(Name), Stats};
 backwards_compat(riak_kv_node_get_fsm_time, histogram, Stats) ->
