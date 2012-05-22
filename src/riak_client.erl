@@ -540,7 +540,7 @@ stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
             ReqId = mk_reqid(),
             case Input of
                 {Bucket, FilterInput} ->
-                    case riak_kv_mapred_filter:build_filter(FilterInput) of
+                    case riak_kv_mapred_filters:build_filter(FilterInput) of
                         {error, _Error} ->
                             {error, _Error};
                         {ok, FilterExprs} ->
