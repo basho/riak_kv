@@ -94,7 +94,9 @@
                   reqid :: non_neg_integer(),
                   bprops :: maybe_improper_list(),
                   starttime :: non_neg_integer(),
-                  prunetime :: undefined| non_neg_integer()}).
+                  prunetime :: undefined| non_neg_integer(),
+                  is_index=false :: boolean() %% set if the b/end supports indexes
+                 }).
 
 %% TODO: add -specs to all public API funcs, this module seems fragile?
 
@@ -607,7 +609,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     {Reply, UpdState} = perform_put(PrepPutRes, State, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
 
-    update_index_write_stats(UpdPutArgs#putargs.index_specs),
+    update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
     riak_kv_stat:update(vnode_put),
     UpdState.
 
@@ -650,7 +652,7 @@ prepare_put(State=#state{vnodeid=VId,
     case LWW andalso not IndexBackend of
         true ->
             ObjToStore = riak_object:increment_vclock(RObj, VId, StartTime),
-            {{true, ObjToStore}, PutArgs};
+            {{true, ObjToStore}, PutArgs#putargs{is_index = false}};
         false ->
             prepare_put(State, PutArgs, IndexBackend)
     end.
@@ -679,7 +681,7 @@ prepare_put(#state{vnodeid=VId,
                              false ->
                                  RObj
                          end,
-            {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs}};
+            {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
         {ok, Val, _UpdModState} ->
             OldObj = binary_to_term(Val),
             case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
@@ -707,7 +709,7 @@ prepare_put(#state{vnodeid=VId,
                                                                     BProps))
                     end,
                     {{true, ObjToStore},
-                     PutArgs#putargs{index_specs=IndexSpecs}}
+                     PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}}
             end
     end.
 
@@ -1038,7 +1040,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
             Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
             case Res of
                 {ok, _UpdModState} ->
-                    update_index_write_stats(IndexSpecs),
+                    update_index_write_stats(IndexBackend, IndexSpecs),
                     riak_kv_stat:update(vnode_put);
                 _ -> nop
             end,
@@ -1063,7 +1065,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                     Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
                     case Res of
                         {ok, _UpdModState} ->
-                            update_index_write_stats(IndexSpecs),
+                            update_index_write_stats(IndexBackend, IndexSpecs),
                             riak_kv_stat:update(vnode_put);
                         _ ->
                             nop
@@ -1173,7 +1175,9 @@ wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
 
 
 %% @private
-update_index_write_stats(IndexSpecs) ->
+update_index_write_stats(false, _IndexSpecs) ->
+    ok;
+update_index_write_stats(true, IndexSpecs) ->
     {Added, Removed} = count_index_specs(IndexSpecs),
     riak_kv_stat:update({vnode_index_write, Added, Removed}).
 
