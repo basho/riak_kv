@@ -164,8 +164,8 @@ reconcile(Objects, AllowMultiple) ->
 
 %% @spec reconcile([riak_object()]) -> [riak_object()]
 reconcile(Objects) ->
-    AllClocks = lists:flatten([vclock(O) || O <- Objects]),
-    SyncClocks = dottedvv:sync(AllClocks),
+    AllClocks = [vclock(O) || O <- Objects],
+    SyncClocks = lists:foldl(fun(X,Y) -> dottedvv:sync(X,Y) end, dottedvv:fresh(), AllClocks),
     Objs =
         [[Obj || Obj <- Objects, dottedvv:descends(vclock(Obj), C)]
                 || C <- SyncClocks],
