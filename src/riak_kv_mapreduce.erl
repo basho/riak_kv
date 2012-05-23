@@ -25,6 +25,8 @@
 
 %% phase spec producers
 -export([map_identity/1,
+         map_object_key/1,
+         map_object_bucket_key/1,
          map_object_value/1,
          map_object_value_list/1]).
 -export([reduce_identity/1,
@@ -37,6 +39,8 @@
 
 %% phase function definitions
 -export([map_identity/3,
+         map_object_key/3,
+         map_object_bucket_key/3,
          map_object_value/3,
          map_object_value_list/3]).
 -export([reduce_identity/2,
@@ -67,6 +71,66 @@ map_identity(Acc) ->
 %%                   [riak_object:riak_object()]
 %% @doc map phase function for map_identity/1
 map_identity(RiakObject, _, _) -> [RiakObject].
+
+%% @spec map_object_key(boolean()) -> map_phase_spec()
+%% @doc Produces a spec for a map phase that simply returns
+%%      the keys of the objects from the input to the phase.
+%%      That is:
+%%      Client:mapred(BucketKeys, [map_object_key(true)]).
+%%      Would return a list that contains the key of each
+%%      object named by BucketKeys.
+map_object_key(Acc) ->
+    {map, {modfun, riak_kv_mapreduce, map_object_key}, none, Acc}.
+
+%% @spec map_object_key(riak_object:riak_object(), term(), term()) -> [term()]
+%% @doc map phase function for map_object_key/1
+%%      If the RiakObject is the tuple {error, notfound}, the
+%%      behavior of this function is defined by the Action argument.
+%%      Values for Action are:
+%%        `<<"filter_notfound">>' : produce no output (literally [])
+%%        `<<"include_notfound">>' : produce the not-found as the result
+%%                                   (literally [{error, notfound}])
+%%        `<<"include_keydata">>' : produce the keydata as the result
+%%                                  (literally [KD])
+%%        `{struct,[{<<"sub">>,term()}]}' : produce term() as the result
+%%                                          (literally term())
+%%      The last form has a strange stucture, in order to allow
+%%      its specification over the HTTP interface
+%%      (as JSON like ..."arg":{"sub":1234}...).
+map_object_key({error, notfound}=NF, KD, Action) ->
+    notfound_map_action(NF, KD, Action);
+map_object_key(RiakObject, _, _) ->
+    [riak_object:key(RiakObject)].
+
+%% @spec map_object_bucket_key(boolean()) -> map_phase_spec()
+%% @doc Produces a spec for a map phase that simply returns
+%%      the {bucket, keys}s of the objects from the input to the phase.
+%%      That is:
+%%      Client:mapred(BucketKeys, [map_object_bucket_key(true)]).
+%%      Would return a list that contains a tuple with the bucket and the key
+%%      of each object named by BucketKeys.
+map_object_bucket_key(Acc) ->
+    {map, {modfun, riak_kv_mapreduce, map_object_bucket_key}, none, Acc}.
+
+%% @spec map_object_bucket_key(riak_object:riak_object(), term(), term()) -> [term()]
+%% @doc map phase function for map_object_bucket_key/1
+%%      If the RiakObject is the tuple {error, notfound}, the
+%%      behavior of this function is defined by the Action argument.
+%%      Values for Action are:
+%%        `<<"filter_notfound">>' : produce no output (literally [])
+%%        `<<"include_notfound">>' : produce the not-found as the result
+%%                                   (literally [{error, notfound}])
+%%        `<<"include_bucket_keydata">>' : produce the keydata as the result
+%%                                  (literally [KD])
+%%        `{struct,[{<<"sub">>,term()}]}' : produce term() as the result
+%%                                          (literally term())
+%%      The last form has a strange stucture, in order to allow
+%%      its specification over the HTTP interface
+%%      (as JSON like ..."arg":{"sub":1234}...).
+map_object_bucket_key({error, notfound}=NF, KD, Action) ->
+    notfound_map_action(NF, KD, Action);
+map_object_bucket_key(RiakObject, _, _) ->
+    [{riak_object:bucket(RiakObject), riak_object:key(RiakObject)}].
 
 %% @spec map_object_value(boolean()) -> map_phase_spec()
 %% @doc Produces a spec for a map phase that simply returns
