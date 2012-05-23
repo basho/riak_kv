@@ -40,8 +40,10 @@ init([QTerm]) ->
 handle_input(Inputs0, #state{fsms=FSMs0, qterm=QTerm, mapper_data=MapperData}=State, _Timeout) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Inputs1 = [build_input(I, Ring) || I <- Inputs0],
-    case length(Inputs1) > 0 of
-        true ->
+    case Inputs1 of
+        [] ->
+            {no_output, State};
+        _ ->
             ClaimLists = riak_kv_mapred_planner:plan_map(Inputs1),
             case schedule_input(Inputs1, ClaimLists, QTerm, FSMs0, State) of
                 {NewFSMs, _ClaimLists1, FsmKeys} ->
@@ -49,9 +51,7 @@ handle_input(Inputs0, #state{fsms=FSMs0, qterm=QTerm, mapper_data=MapperData}=St
                     {no_output, State#state{fsms=NewFSMs, mapper_data=MapperData1}};
                 {error, exhausted_preflist} ->
                     {stop, {error, {no_candidate_nodes, exhausted_prefist, erlang:get_stacktrace(), MapperData}}, State}
-            end;
-        false ->
-            {no_output, State}
+            end
     end.
 
 handle_input_done(State) ->
