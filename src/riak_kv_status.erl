@@ -34,7 +34,7 @@
 
 -spec(statistics() -> [any()]).
 statistics() ->
-    case whereis(riak_kv_stat) of
+    case app_helper:get_env(riak_kv, riak_kv_stat)  of
         undefined ->
             [];
         _ ->

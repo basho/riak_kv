@@ -20,17 +20,21 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc riak_kv_stat is a long-lived gen_server process for aggregating
-%%      stats about the Riak node on which it is runing.
+%% @doc riak_kv_stat provides stat_specs to the riak_core_metric stat
+%%      system for aggregating stats about the Riak node on which it
+%%      is running.
 %%
 %%      Update each stat with the exported function update/1.  Modify
-%%      the internal function update/3 to add storage for new stats.
+%%      the function stat_specs/0 to add processes for new stats.
 %%
 %%      Get the latest aggregation of stats with the exported function
 %%      get_stats/0.  Modify the internal function produce_stats/1 to
-%%      change how stats are represented.
+%%      change which stats are represented. Modify the 'display' entry
+%%      in a stat_spec args proplist to modify how that stat is
+%%      displayed.
 %%
-%%      Riak will start riak_kv_stat for you, if you have specified
+%%      Riak will start a process per stat in
+%%      riak_kv_stat:stat_specs/0 for you, if you have specified
 %%      {riak_kv_stat, true} in your config .erlenv file.
 %%
 %%      Current stats:
@@ -178,502 +182,153 @@
 %%
 -module(riak_kv_stat).
 
--behaviour(gen_server2).
-
 %% API
--export([start_link/0, get_stats/0, get_stats/1, update/1]).
+-export([get_stats/0, update/1]).
 
-%% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+%% stats
+-export([stat_specs/0]).
 
--record(state,{vnode_gets,vnode_puts,vnode_gets_total,vnode_puts_total,
-               vnode_index_reads, vnode_index_reads_total,
-               vnode_index_writes, vnode_index_writes_total,
-               vnode_index_writes_postings, vnode_index_writes_postings_total,
-               vnode_index_deletes, vnode_index_deletes_total,
-               vnode_index_deletes_postings, vnode_index_deletes_postings_total,
-               node_gets_total, node_puts_total,
-               node_get_fsm_siblings, node_get_fsm_objsize,
-               get_fsm_time,put_fsm_time,
-               pbc_connects,pbc_connects_total,pbc_active,
-               read_repairs, read_repairs_total,
-               coord_redirs, coord_redirs_total, mapper_count, 
-               get_meter, put_meter,
-               precommit_fail, postcommit_fail,
-               legacy}).
+-define(APP, riak_kv).
 
-
-%% @spec start_link() -> {ok,Pid} | ignore | {error,Error}
-%% @doc Start the server.  Also start the os_mon application, if it's
-%%      not already running.
-start_link() ->
-    case application:start(os_mon) of
-        ok -> ok;
-        {error, {already_started, os_mon}} -> ok
-    %% die if os_mon doesn't start
-    end,
-    gen_server2:start_link({local, ?MODULE}, ?MODULE, [], []).
+-spec stat_specs() -> riak_core_metric:stat_specs().
+stat_specs() ->
+    [{vnode_gets, [{type, meter}, {group, vnode}]},
+     {vnode_puts, [{type, meter}, {group, vnode}]},
+     {vnode_gets_total, [{type, counter}, {group, vnode}]},
+     {vnode_puts_total, [{type, counter}, {group, vnode}]},
+     {vnode_index_reads, [{type, meter}, {group, vnode}]},
+     {vnode_index_reads_total, [{type, counter}, {group, vnode}]},
+     {vnode_index_writes, [{type, meter}, {group, vnode}]},
+     {vnode_index_writes_total, [{type, counter}, {group, vnode}]},
+     {vnode_index_writes_postings, [{type, meter}, {group, vnode}]},
+     {vnode_index_writes_postings_total, [{type, counter}, {group, vnode}]},
+     {vnode_index_deletes, [{type, meter}, {group, vnode}]},
+     {vnode_index_deletes_total, [{type, counter}, {group, vnode}]},
+     {vnode_index_deletes_postings, [{type, meter}, {group, vnode}]},
+     {vnode_index_deletes_postings_total, [{type, counter}, {group, vnode}]},
+     {node_gets_total, [{type, counter}, {group, node}]},
+     {node_puts_total, [{type, counter}, {group, node}]},
+     {node_get_fsm_siblings, [{type, histogram}, {group, node},
+                              {presentation,
+                               [{legacy, [{args, {0, 1000, 1000, up}},
+                                          {fields,[mean, median, '95', '99', '100']}]}]}]},
+     {node_get_fsm_objsize, [{type, histogram}, {group, node},
+                             {presentation,
+                              [{legacy, [{args, { 0, 16 * 1024 * 1024, 16 * 1024, down}},
+                                         {fields,[mean, median, '95', '99', '100']}]}]}]},
+     {get_fsm_time, [{type, histogram}, {group, node},
+                     {presentation,
+                      [{legacy, [{args, {0, 5000000, 20000, down}},
+                                 {fields,[{count, node_gets}, mean, median, '95', '99', '100']},
+                                 {prefix, node}]}]}]},
+     {put_fsm_time, [{type, histogram}, {group, node},
+                     {presentation,
+                      [{legacy, [{args, {0, 5000000, 20000, down}},
+                                 {fields,[{count, node_puts}, mean, median, '95', '99', '100']},
+                                 {prefix, node}]}]}]},
+     {pbc_connects, [{type, meter}, {group, pbc}]},
+     {pbc_connects_total, [{type, counter}, {group, pbc}]},
+     {pbc_active, [{type, counter}, {group, pbc}]},
+     {read_repairs, [{type, meter}, {group, node}]},
+     {read_repairs_total, [{type, counter}, {group, node}]},
+     {coord_redirs_total, [{type, counter}, {group, node}]},
+     {mapper_count, [{type, counter}, {group, mapper},
+                    {presentation,
+                    [{legacy, {display_name, executing_mappers}}]}]},
+     {precommit_fail, [{type, counter}, {group, node}]},
+     {postcommit_fail, [{type, counter}, {group, node}]}
+    ].
 
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
 get_stats() ->
-    get_stats(slide:moment()).
-
-get_stats(Moment) ->
-    gen_server2:call(?MODULE, {get_stats, Moment}, infinity).
+   produce_stats(legacy).
 
 %% @spec update(term()) -> ok
 %% @doc Update the given stat.
 update(Stat) ->
-    gen_server2:cast(?MODULE, {update, Stat, slide:moment()}).
-
-%% @private
-init([]) ->
-    process_flag(trap_exit, true),
-    remove_slide_private_dirs(),
-    case application:get_env(riak_kv, legacy_stats) of
-        {ok, false} ->
-            lager:warning("Overriding user-setting and using legacy stats. Set {legacy_stats,true} to remove this message.");
-        _ ->
-            ok
-    end,
-    legacy_init().
-
--ifdef(not_defined).
-make_meter() ->
-    {ok, M} = basho_metrics_nifs:meter_new(),
-    {meter, M}.
-
-make_histogram() ->
-    {ok, H} = basho_metrics_nifs:histogram_new(),
-    {histogram, H}.
-
-v2_init() ->
-    timer:send_interval(5000, tick),
-    {ok, #state{vnode_gets=make_meter(),
-                vnode_puts=make_meter(),
-                vnode_gets_total=0,
-                vnode_puts_total=0,
-                vnode_index_reads=make_meter(),
-                vnode_index_reads_total=0,
-                vnode_index_writes=make_meter(),
-                vnode_index_writes_total=0,
-                vnode_index_writes_postings=make_meter(),
-                vnode_index_writes_postings_total=0,
-                vnode_index_deletes=make_meter(),
-                vnode_index_deletes_total=0,
-                vnode_index_deletes_postings=make_meter(),
-                vnode_index_deletes_postings_total=0,
-                node_gets_total=0,
-                node_puts_total=0,
-                %% REMEMBER TO ADD LOGIC FOR node_get_fsm_siblings and node_get_fsm_objsize
-                get_fsm_time=make_histogram(),
-                put_fsm_time=make_histogram(),
-                pbc_connects=make_meter(),
-                pbc_connects_total=0,
-                pbc_active=0,
-                read_repairs=make_meter(),
-                read_repairs_total=0,
-                coord_redirs=make_meter(),
-                coord_redirs_total=0,
-                mapper_count=0,
-                get_meter=make_meter(),
-                put_meter=make_meter(),
-                precommit_fail=0,
-                postcommit_fail=0,
-                legacy=false}}.
--endif.
-
-legacy_init() ->
-    {ok, #state{vnode_gets=spiraltime:fresh(),
-                vnode_puts=spiraltime:fresh(),
-                vnode_gets_total=0,
-                vnode_puts_total=0,
-                vnode_index_reads=spiraltime:fresh(),
-                vnode_index_reads_total=0,
-                vnode_index_writes=spiraltime:fresh(),
-                vnode_index_writes_total=0,
-                vnode_index_writes_postings=spiraltime:fresh(),
-                vnode_index_writes_postings_total=0,
-                vnode_index_deletes=spiraltime:fresh(),
-                vnode_index_deletes_total=0,
-                vnode_index_deletes_postings=spiraltime:fresh(),
-                vnode_index_deletes_postings_total=0,
-                node_gets_total=0,
-                node_puts_total=0,
-                node_get_fsm_siblings=slide:fresh(),
-                node_get_fsm_objsize=slide:fresh(),
-                get_fsm_time=slide:fresh(),
-                put_fsm_time=slide:fresh(),
-                pbc_connects=spiraltime:fresh(),
-                pbc_connects_total=0,
-                pbc_active=0,
-                read_repairs=spiraltime:fresh(),
-                read_repairs_total=0,
-                coord_redirs_total=0,
-                mapper_count=0,
-                precommit_fail=0,
-                postcommit_fail=0,
-                legacy=true}}.
-
-%% @private
-handle_call({get_stats, Moment}, _From, State) ->
-    {reply, produce_stats(State, Moment), State};
-handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
-
-%% @private
-handle_cast({update, Stat, Moment}, State) ->
-    {noreply, update(Stat, Moment, State, State#state.legacy)};
-handle_cast(_Msg, State) ->
-    {noreply, State}.
-
-%% @private
-handle_info(tick, State) ->
-    tick(#state.get_meter, State),
-    tick(#state.put_meter, State),
-    tick(#state.vnode_gets, State),
-    tick(#state.vnode_puts, State),
-    tick(#state.vnode_index_reads, State),
-    tick(#state.vnode_index_writes, State),
-    tick(#state.vnode_index_writes_postings, State),
-    tick(#state.vnode_index_deletes, State),
-    tick(#state.vnode_index_deletes_postings, State),
-    tick(#state.pbc_connects, State),
-    tick(#state.read_repairs, State),
-    tick(#state.coord_redirs, State),
-    {noreply, State};
-handle_info(_Info, State) ->
-    {noreply, State}.
-
-%% @private
-terminate(_Reason, _State) ->
-    remove_slide_private_dirs(),
-    ok.
-
-%% @private
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
+    update(Stat, slide:moment()).
 
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
 
-update(Stat, Moment, State, true) ->
-    update(Stat, Moment, State);
-update(Stat, Moment, State, false) ->
-    update1(Stat, Moment, State).
-
 %% @spec update(Stat::term(), integer(), state()) -> state()
 %% @doc Update the given stat in State, returning a new State.
-update(vnode_get, Moment, State=#state{vnode_gets_total=VGT}) ->
-    spiral_incr(#state.vnode_gets, Moment, State#state{vnode_gets_total=VGT+1});
-update(vnode_put, Moment, State=#state{vnode_puts_total=VPT}) ->
-    spiral_incr(#state.vnode_puts, Moment, State#state{vnode_puts_total=VPT+1});
-update(vnode_index_read, Moment, State=#state{vnode_index_reads_total=VPT}) ->
-    spiral_incr(#state.vnode_index_reads, Moment, State#state{vnode_index_reads_total=VPT+1});
-update({vnode_index_write, PostingsAdded, PostingsRemoved}, Moment, State=#state{vnode_index_writes_total=VIW, 
-                                                                                 vnode_index_writes_postings_total=VIWP,
-                                                                                 vnode_index_deletes_postings_total=VIDP}) ->
-    NewState1 = spiral_incr(#state.vnode_index_writes, Moment, State#state{vnode_index_writes_total=VIW+1}),
-    NewState2 = spiral_incr(#state.vnode_index_writes_postings, PostingsAdded, Moment, NewState1#state{vnode_index_writes_postings_total=VIWP+PostingsAdded}),
-    NewState3 = spiral_incr(#state.vnode_index_deletes_postings, PostingsRemoved, Moment, NewState2#state{vnode_index_deletes_postings_total=VIDP+PostingsRemoved}),
-    NewState3;
-update({vnode_index_delete, Postings}, Moment, State=#state{vnode_index_deletes_total=VID, vnode_index_deletes_postings_total=VIDP}) ->
-    NewState = spiral_incr(#state.vnode_index_deletes, Moment, State#state{vnode_index_deletes_total=VID+1}),
-    spiral_incr(#state.vnode_index_deletes_postings, Postings, Moment, NewState#state{vnode_index_deletes_postings_total=VIDP+Postings});
-update({get_fsm, _Bucket, Microsecs, undefined, undefined}, Moment, State) ->
-    NGT = State#state.node_gets_total,
-    NewState = State#state { node_gets_total=NGT+1 },
-    slide_incr(#state.get_fsm_time, Microsecs, Moment, NewState);
-update({get_fsm, _Bucket, Microsecs, NumSiblings, ObjSize}, Moment, State) ->
-    NGT = State#state.node_gets_total,
-    NewState1 = State#state { node_gets_total=NGT+1 },
-    NewState2 = slide_incr(#state.get_fsm_time, Microsecs, Moment, NewState1),
-    NewState3 = slide_incr(#state.node_get_fsm_siblings, NumSiblings, Moment, NewState2),
-    NewState4 = slide_incr(#state.node_get_fsm_objsize, ObjSize, Moment, NewState3),
-    NewState4;
-update({get_fsm_time, Microsecs}, Moment, State) ->
-    update({get_fsm, undefined, Microsecs, undefined, undefined}, Moment, State);
-update({put_fsm_time, Microsecs}, Moment, State=#state{node_puts_total=NPT}) ->
-    slide_incr(#state.put_fsm_time, Microsecs, Moment, State#state{node_puts_total=NPT+1});
-update(pbc_connect, Moment, State=#state{pbc_connects_total=NCT, pbc_active=Active}) ->
-    spiral_incr(#state.pbc_connects, Moment, State#state{pbc_connects_total=NCT+1,
-                                                         pbc_active=Active+1});
-update(pbc_disconnect, _Moment, State=#state{pbc_active=Active}) ->
-    State#state{pbc_active=decrzero(Active)};
-update(read_repairs, Moment, State=#state{read_repairs_total=RRT}) ->
-    spiral_incr(#state.read_repairs, Moment, State#state{read_repairs_total=RRT+1});
-update(coord_redir, _Moment, State=#state{coord_redirs_total=CRT}) ->
-    State#state{coord_redirs_total=CRT+1};
-update(mapper_start, _Moment, State=#state{mapper_count=Count0}) ->
-    State#state{mapper_count=Count0 + 1};
-update(mapper_end, _Moment, State=#state{mapper_count=Count0}) ->
-    State#state{mapper_count=decrzero(Count0)};
-update(precommit_fail, _Moment, State=#state{precommit_fail=Count0}) ->
-    State#state{precommit_fail=Count0+1};
-update(postcommit_fail, _Moment, State=#state{postcommit_fail=Count0}) ->
-    State#state{postcommit_fail=Count0+1};
-update(_, _, State) ->
-    State.
+update(vnode_get, Moment) ->
+    riak_core_metric_meter:increment(?APP, vnode_gets, Moment),
+    riak_core_metric_counter:increment(?APP, vnode_gets_total);
+update(vnode_put, Moment) ->
+    riak_core_metric_meter:increment(?APP, vnode_puts, Moment),
+    riak_core_metric_counter:increment(?APP, vnode_puts_total);
+update(vnode_index_read, Moment) ->
+    riak_core_metric_meter:increment(?APP, vnode_index_reads, Moment),
+    riak_core_metric_counter:increment(?APP, vnode_index_reads_total);
+update({vnode_index_write, PostingsAdded, PostingsRemoved}, Moment) ->
+    riak_core_metric_meter:increment(?APP, vnode_index_writes, Moment),
+    riak_core_metric_counter:increment(?APP, vnode_index_writes_total),
+    riak_core_metric_meter:increment(?APP, vnode_index_writes_postings, PostingsAdded, Moment),
+    riak_core_metric_counter:increment(?APP, vnode_index_writes_postings_total, PostingsAdded),
+    riak_core_metric_meter:increment(?APP, vnode_index_deletes_postings, PostingsRemoved, Moment),
+    riak_core_metric_counter:increment(?APP, vnode_index_deletes_postings_total, PostingsRemoved);
+update({vnode_index_delete, Postings}, Moment) ->
+    riak_core_metric_meter:increment(?APP, vnode_index_deletes, Moment),
+    riak_core_metric_counter:increment(?APP, vnode_index_deletes_total),
+    riak_core_metric_meter:increment(?APP, vnode_index_deletes_postings, Postings, Moment),
+    riak_core_metric_counter:increment(?APP, vnode_index_deletes_postings_total, Postings);
+update({get_fsm, _Bucket, Microsecs, undefined, undefined}, Moment) ->
+    riak_core_metric_histogram:increment(?APP, get_fsm_time, Microsecs,  Moment),
+    riak_core_metric_counter:increment(?APP, node_gets_total);
+update({get_fsm, _Bucket, Microsecs, NumSiblings, ObjSize}, Moment) ->
+    riak_core_metric_histogram:increment(?APP, get_fsm_time, Microsecs,  Moment),
+    riak_core_metric_counter:increment(?APP, node_gets_total),
+    riak_core_metric_histogram:increment(?APP, node_get_fsm_siblings, NumSiblings, Moment),
+    riak_core_metric_histogram:increment(?APP, node_get_fsm_objsize, ObjSize, Moment);
+update({get_fsm_time, Microsecs}, Moment) ->
+    update({get_fsm, undefined, Microsecs, undefined, undefined}, Moment);
+update({put_fsm_time, Microsecs}, Moment) ->
+    riak_core_metric_histogram:increment(?APP, put_fsm_time, Microsecs, Moment),
+    riak_core_metric_counter:increment(?APP, node_puts_total);
+update(pbc_connect, Moment) ->
+    riak_core_metric_meter:increment(?APP, pbc_connects, Moment),
+    riak_core_metric_counter:increment(?APP, pbc_connects_total),
+    riak_core_metric_counter:increment(?APP, pbc_active);
+update(pbc_disconnect, _Moment) ->
+    riak_core_metric_counter:decrement(?APP, pbc_active);
+update(read_repairs, Moment) ->
+    riak_core_metric_meter:increment(?APP, read_repairs, Moment),
+    riak_core_metric_counter:increment(?APP, read_repairs_total);
+update(coord_redir, _Moment) ->
+    riak_core_metric_counter:increment(?APP, coord_redirs_total);
+update(mapper_start, _Moment) ->
+    riak_core_metric_counter:increment(?APP, mapper_count);
+update(mapper_end, _Moment) ->
+    riak_core_metric_counter:decrement(?APP, mapper_count);
+update(precommit_fail, _Moment) ->
+    riak_core_metric_counter:increment(?APP, precommit_fail);
+update(postcommit_fail, _Moment) ->
+    riak_core_metric_counter:increment(?APP, postcommit_fail);
+update(Stat, _) ->
+    lager:warning("Update called for unkown stat: ~p", [Stat]).
 
-tick(Field, State) ->
-    basho_metrics_nifs:meter_tick(element(2, element(Field, State))).
-
-update_metric(Field, Value, State) when is_integer(Value) ->
-    case element(Field, State) of
-        {meter, M} ->
-            basho_metrics_nifs:meter_update(M, Value);
-        {histogram, H} ->
-            basho_metrics_nifs:histogram_update(H, Value)
-    end,
-    State;
-update_metric(Field, Value, State) ->
-    lager:error("Ignoring non-integer stats update for field ~p, value ~p", [Field, Value]),
-    State.
-
-%% @spec update(Stat::term(), integer(), state()) -> state()
-%% @doc Update the given stat in State, returning a new State.
-update1(vnode_get, _, State) -> 
-    update_metric(#state.vnode_gets, 1, State);
-update1(vnode_put, _, State) -> 
-    update_metric(#state.vnode_puts, 1, State);
-update1(vnode_index_read, _, State) -> 
-    update_metric(#state.vnode_index_reads, 1, State);
-update1({vnode_index_write, PostingsAdded, PostingsRemoved}, _, State) ->
-    State1 = update_metric(#state.vnode_index_writes, 1, State),
-    State2 = update_metric(#state.vnode_index_writes_postings, PostingsAdded, State1),
-    State3 = update_metric(#state.vnode_index_deletes_postings, PostingsRemoved, State2),
-    State3;
-update1({vnode_index_delete, PostingsRemoved}, _, State) ->
-    State1 = update_metric(#state.vnode_index_deletes, 1, State),
-    State2 = update_metric(#state.vnode_index_deletes_postings, PostingsRemoved, State1),
-    State2;
-update1({get_fsm, _Bucket, Microsecs, _NumSiblings, _ObjSize}, Moment, State) ->
-    update1({get_fsm_time, Microsecs}, Moment, State);
-update1({get_fsm_time, Microsecs}, _, State) ->
-    update_metric(#state.get_meter, 1, 
-                  update_metric(#state.get_fsm_time, Microsecs, State));
-update1({put_fsm_time, Microsecs}, _, State) ->
-    update_metric(#state.put_meter, 1, 
-                  update_metric(#state.put_fsm_time, Microsecs, State));
-update1(pbc_connect, _, State=#state{pbc_active=Active}) ->
-    update_metric(#state.pbc_connects, 1, State#state{pbc_active=Active+1});
-update1(pbc_disconnect, _, State=#state{pbc_active=Active}) ->
-    State#state{pbc_active=decrzero(Active)};
-update1(read_repairs, _, State) ->
-    update_metric(#state.read_repairs, 1, State);
-update1(coord_redir, _, State) ->
-    update_metric(#state.coord_redirs, 1, State);
-update1(mapper_start, _Moment, State=#state{mapper_count=Count0}) ->
-    State#state{mapper_count=Count0+1};
-update1(mapper_end, _Moment, State=#state{mapper_count=Count0}) ->
-    State#state{mapper_count=decrzero(Count0)};
-update1(precommit_fail, _Moment, State=#state{precommit_fail=Count0}) ->
-    State#state{precommit_fail=Count0+1};
-update1(postcommit_fail, _Moment, State=#state{postcommit_fail=Count0}) ->
-    State#state{postcommit_fail=Count0+1};
-update1(_, _, State) ->
-    State.
-
-%% @doc decrement down to zero - do not go negative
-decrzero(0) ->
-    0;
-decrzero(N) ->
-    N-1.
-
-%% @spec spiral_incr(integer(), integer(), state()) -> state()
-%% @doc Increment the value of a spiraltime structure at a given
-%%      position of the State tuple.
-spiral_incr(Elt, Moment, State) ->
-    setelement(Elt, State,
-               spiraltime:incr(1, Moment, element(Elt, State))).
-
-%% @spec spiral_incr(integer(), integer(), integer(), state()) -> state()
-%% @doc Increment the value of a spiraltime structure at a given
-%%      position of the State tuple.
-spiral_incr(Elt, Amount, Moment, State) ->
-    setelement(Elt, State,
-               spiraltime:incr(Amount, Moment, element(Elt, State))).
-
-%% @spec slide_incr(integer(), term(), integer(), state()) -> state()
-%% @doc Update a slide structure at a given position in the
-%%      STate tuple.
-slide_incr(Elt, Reading, Moment, State) ->
-    setelement(Elt, State,
-               slide:update(element(Elt, State), Reading, Moment)).
-
-%% @spec produce_stats(state(), integer()) -> proplist()
+%% @spec produce_stats(integer()) -> proplist()
 %% @doc Produce a proplist-formatted view of the current aggregation
 %%      of stats.
-produce_stats(State, Moment) ->
+produce_stats(Presentation) ->
     lists:append(
-      [vnode_stats(Moment, State),
-       node_stats(Moment, State),
+      [produce_stats(Presentation, vnode),
+       produce_stats(Presentation, node),
        cpu_stats(),
        mem_stats(),
        disk_stats(),
        system_stats(),
        ring_stats(),
        config_stats(),
-       pbc_stats(Moment, State),
+       pbc_stats(Presentation),
        app_stats(),
-       mapper_stats(State),
+       produce_stats(Presentation, mapper),
        memory_stats()
       ]).
-
-%% @spec spiral_minute(integer(), integer(), state()) -> integer()
-%% @doc Get the count of events in the last minute from the spiraltime
-%%      structure at the given element of the state tuple.
-spiral_minute(_Moment, Elt, State) ->
-    {_,Count} = spiraltime:rep_minute(element(Elt, State)),
-    Count.
-
-%% @spec slide_minute(integer(), integer(), state()) ->
-%%         {Count::integer(), Mean::ustat(),
-%%          {Median::ustat(), NinetyFive::ustat(),
-%%           NinetyNine::ustat(), Max::ustat()}}
-%% @type ustat() = undefined | number()
-%% @doc Get the Count of readings, the Mean of those readings, and the
-%%      Median, 95th percentile, 99th percentile, and Maximum readings
-%%      for the last minute from the slide structure at the given
-%%      element of the state tuple.
-%%      If Count is 0, then all other elements will be the atom
-%%      'undefined'.
-slide_minute(Moment, Elt, State, Min, Max, Bins, RoundingMode) ->
-    {Count, Mean, Nines} = slide:mean_and_nines(element(Elt, State), Moment, Min, Max, Bins, RoundingMode),
-    {Count, Mean, Nines}.
-
-metric_stats({meter, M}) ->
-    basho_metrics_nifs:meter_stats(M);
-metric_stats({histogram, H}) ->
-    basho_metrics_nifs:histogram_stats(H).
-
-meter_minute(Stats) ->
-    trunc(proplists:get_value(one, Stats)).
-
-%% @spec vnode_stats(integer(), state()) -> proplist()
-%% @doc Get the vnode-sum stats proplist.
-vnode_stats(Moment, State=#state{legacy=true}) ->
-    lists:append(
-      [{F, spiral_minute(Moment, Elt, State)}
-       || {F, Elt} <- [{vnode_gets, #state.vnode_gets},
-                       {vnode_puts, #state.vnode_puts},
-                       {vnode_index_reads, #state.vnode_index_reads},
-                       {vnode_index_writes, #state.vnode_index_writes},
-                       {vnode_index_writes_postings, #state.vnode_index_writes_postings},
-                       {vnode_index_deletes, #state.vnode_index_deletes},
-                       {vnode_index_deletes_postings, #state.vnode_index_deletes_postings},
-                       {read_repairs,#state.read_repairs}]],
-      [{vnode_gets_total, State#state.vnode_gets_total},
-       {vnode_puts_total, State#state.vnode_puts_total},
-       {vnode_index_reads_total, State#state.vnode_index_reads_total},
-       {vnode_index_writes_total, State#state.vnode_index_writes_total},
-       {vnode_index_writes_postings_total, State#state.vnode_index_writes_postings_total},
-       {vnode_index_deletes_total, State#state.vnode_index_deletes_total},
-       {vnode_index_deletes_postings_total, State#state.vnode_index_deletes_postings_total}]);
-vnode_stats(_, State=#state{legacy=false}) ->
-    VG = metric_stats(State#state.vnode_gets),
-    VP = metric_stats(State#state.vnode_puts),
-    VIR = metric_stats(State#state.vnode_index_reads),
-    VIW = metric_stats(State#state.vnode_index_writes),
-    VIWP = metric_stats(State#state.vnode_index_writes_postings),
-    VID = metric_stats(State#state.vnode_index_deletes),
-    VIDP = metric_stats(State#state.vnode_index_deletes_postings),
-    RR = metric_stats(State#state.read_repairs),
-    CR = metric_stats(State#state.coord_redirs),
-    [{vnode_gets, meter_minute(VG)},
-     {vnode_puts, meter_minute(VP)},
-     {vnode_index_reads, meter_minute(VIR)},
-     {vnode_index_writes, meter_minute(VIW)},
-     {vnode_index_writes_postings, meter_minute(VIWP)},
-     {vnode_index_deletes, meter_minute(VID)},
-     {vnode_index_deletes_postings, meter_minute(VIDP)},
-     {read_repairs, meter_minute(RR)},
-     {coord_redirs, meter_minute(CR)},
-     {vnode_gets_total, proplists:get_value(count, VG)},
-     {vnode_puts_total, proplists:get_value(count, VP)},
-     {vnode_index_reads_total, proplists:get_value(count, VIR)},
-     {vnode_index_writes_total, proplists:get_value(count, VIW)},
-     {vnode_index_writes_postings_total, proplists:get_value(count, VIWP)},
-     {vnode_index_deletes_total, proplists:get_value(count, VID)},
-     {vnode_index_deletes_postings_total, proplists:get_value(count, VIDP)}].
-
-%% @spec node_stats(integer(), state()) -> proplist()
-%% @doc Get the node stats proplist.
-node_stats(Moment, State=#state{node_gets_total=NGT,
-                                node_puts_total=NPT,
-                                read_repairs_total=RRT,
-                                coord_redirs_total=CRT,
-                                precommit_fail=PreF,
-                                postcommit_fail=PostF,
-                                legacy=true}) ->
-    {Gets, GetMean, {GetMedian, GetNF, GetNN, GetH}} =
-        slide_minute(Moment, #state.get_fsm_time, State, 0, 5000000, 20000, down),
-    {Puts, PutMean, {PutMedian, PutNF, PutNN, PutH}} =
-        slide_minute(Moment, #state.put_fsm_time, State, 0, 5000000, 20000, down),
-    {_Siblings, SiblingsMean, {SiblingsMedian, SiblingsNF, SiblingsNN, SiblingsH}} =
-        slide_minute(Moment, #state.node_get_fsm_siblings, State, 0, 1000, 1000, up),
-    {_ObjSize, ObjSizeMean, {ObjSizeMedian, ObjSizeNF, ObjSizeNN, ObjSizeH}} =
-        slide_minute(Moment, #state.node_get_fsm_objsize, State, 0, 16 * 1024 * 1024, 16 * 1024, down),
-    [{node_gets, Gets},
-     {node_gets_total, NGT},
-     {node_get_fsm_time_mean, GetMean},
-     {node_get_fsm_time_median, GetMedian},
-     {node_get_fsm_time_95, GetNF},
-     {node_get_fsm_time_99, GetNN},
-     {node_get_fsm_time_100, GetH},
-     {node_puts, Puts},
-     {node_puts_total, NPT},
-     {node_put_fsm_time_mean, PutMean},
-     {node_put_fsm_time_median, PutMedian},
-     {node_put_fsm_time_95, PutNF},
-     {node_put_fsm_time_99, PutNN},
-     {node_put_fsm_time_100, PutH},
-     {node_get_fsm_siblings_mean, SiblingsMean},
-     {node_get_fsm_siblings_median, SiblingsMedian},
-     {node_get_fsm_siblings_95, SiblingsNF},
-     {node_get_fsm_siblings_99, SiblingsNN},
-     {node_get_fsm_siblings_100, SiblingsH},
-     {node_get_fsm_objsize_mean, ObjSizeMean},
-     {node_get_fsm_objsize_median, ObjSizeMedian},
-     {node_get_fsm_objsize_95, ObjSizeNF},
-     {node_get_fsm_objsize_99, ObjSizeNN},
-     {node_get_fsm_objsize_100, ObjSizeH},
-     {read_repairs_total, RRT},
-     {coord_redirs_total, CRT},
-     {precommit_fail, PreF},
-     {postcommit_fail, PostF}];
-node_stats(_, State=#state{legacy=false}) ->
-    PutInfo = metric_stats(State#state.put_fsm_time),
-    GetInfo = metric_stats(State#state.get_fsm_time),
-    RRInfo =  metric_stats(State#state.read_repairs),
-    CRInfo =  metric_stats(State#state.coord_redirs),
-    NodeGets = meter_minute(metric_stats(State#state.get_meter)),
-    NodePuts = meter_minute(metric_stats(State#state.put_meter)),
-    PreF = State#state.precommit_fail,
-    PostF = State#state.postcommit_fail,
-    [{node_gets, NodeGets},
-     {node_gets_total, proplists:get_value(count, GetInfo)},
-     {node_get_fsm_time_mean, proplists:get_value(mean, GetInfo)},
-     {node_get_fsm_time_median, proplists:get_value(p50, GetInfo)},
-     {node_get_fsm_time_95, proplists:get_value(p95, GetInfo)},
-     {node_get_fsm_time_99, proplists:get_value(p99, GetInfo)},
-     {node_get_fsm_time_100, proplists:get_value(max, GetInfo)},
-     {node_puts, NodePuts},
-     {node_puts_total, proplists:get_value(count, PutInfo)},
-     {node_put_fsm_time_mean, proplists:get_value(mean, PutInfo)},
-     {node_put_fsm_time_median, proplists:get_value(p50, PutInfo)},
-     {node_put_fsm_time_95, proplists:get_value(p95, PutInfo)},
-     {node_put_fsm_time_99, proplists:get_value(p99, PutInfo)},
-     {node_put_fsm_time_100, proplists:get_value(max, PutInfo)},
-     {read_repairs_total, proplists:get_value(count, RRInfo)},
-     {coord_redirs_total, proplists:get_value(count, CRInfo)},
-     {precommit_fail, PreF},
-     {postcommit_fail, PostF}].
-
 
 %% @spec cpu_stats() -> proplist()
 %% @doc Get stats on the cpu, as given by the cpu_sup module
@@ -740,32 +395,19 @@ config_stats() ->
     [{ring_creation_size, app_helper:get_env(riak_core, ring_creation_size)},
      {storage_backend, app_helper:get_env(riak_kv, storage_backend)}].
 
-mapper_stats(#state{mapper_count=Count}) ->
-    [{executing_mappers, Count}].
-
 %% @spec pbc_stats(integer(), state()) -> proplist()
 %% @doc Get stats on the disk, as given by the disksup module
 %%      of the os_mon application.
-pbc_stats(Moment, State=#state{pbc_connects_total=NCT, pbc_active=Active, legacy=true}) ->
+pbc_stats(Presentation) ->
     case whereis(riak_kv_pb_socket_sup) of
         undefined ->
             [];
-        _ -> [{pbc_connects_total, NCT},
-              {pbc_connects, spiral_minute(Moment, #state.pbc_connects, State)},
-              {pbc_active, Active}]
-    end;
-pbc_stats(_, State=#state{pbc_connects_total=NCT, 
-                          pbc_active=Active, legacy=false}) ->
-    case whereis(riak_kv_pb_socket_sup) of
-        undefined ->
-            [];
-        _ ->
-            NC = metric_stats(State#state.pbc_connects),
-            [{pbc_connects_total, NCT},
-             {pbc_connects, meter_minute(NC)},
-             {pbc_active, Active}]
-    end.    
+        _ ->  produce_stats(Presentation, pbc)
+    end.
 
-
-remove_slide_private_dirs() ->
-    os:cmd("rm -rf " ++ slide:private_dir()).
+%% @doc produce a proplist for the given Group of stats,
+%% formatted for the Given Presentation.
+-spec produce_stats(atom(), atom()) -> [{atom(), integer()}].
+produce_stats(Presentation, Group) when is_atom(Presentation), is_atom(Group) ->
+    Stats = [riak_core_metric_proc:value(?APP, Name, Presentation) || {Name, Spec} <- stat_specs(), lists:keyfind(Group, 2, Spec) /= false],
+    lists:flatten(Stats).
