@@ -82,6 +82,9 @@ start(_Type, _StartArgs) ->
     %% Spin up supervisor
     case riak_kv_sup:start_link() of
         {ok, Pid} ->
+            %% register stats
+            riak_kv_stat:register_stats(),
+           
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
             %% synchronously.
