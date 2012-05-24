@@ -181,7 +181,7 @@
 %% API
 -export([get_stats/0, update/1, register_stats/0]).
 
--define(APP_NAME, "riak_kv_").
+-define(APP, riak_kv).
 
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
@@ -189,53 +189,53 @@ get_stats() ->
     produce_stats().
 
 register_stats() ->
-    [register_stat(Stat) || Stat <- stats()].
+    [register_stat({?APP, Name}, Type) || {Name, Type} <- stats()].
 
 %% @doc Update the given stat
 update(vnode_get) ->
-    folsom_metrics:notify_existing_metric(riak_kv_vnode_gets, 1, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_gets}, 1, meter);
 update(vnode_put) ->
-    folsom_metrics:notify_existing_metric(riak_kv_vnode_puts, 1, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_puts}, 1, meter);
 update(vnode_index_read) ->
-    folsom_metrics:notify_existing_metric(riak_kv_vnode_index_reads, 1, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_reads}, 1, meter);
 update({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
-    folsom_metrics:notify_existing_metric(riak_kv_vnode_index_writes, 1, meter),
-    folsom_metrics:notify_existing_metric(riak_kv_vnode_index_writes_postings, PostingsAdded, meter),
-    folsom_metrics:notify_existing_metric(riak_kv_vnode_index_deletes_postings, PostingsRemoved, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_writes}, 1, meter),
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_writes_postings}, PostingsAdded, meter),
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, PostingsRemoved, meter);
 update({vnode_index_delete, Postings}) ->
-    folsom_metrics:notify_existing_metric(riak_kv_vnode_index_deletes, Postings, meter),
-    folsom_metrics:notify_existing_metric(riak_kv_vnode_index_deletes_postings, Postings, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes}, Postings, meter),
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, Postings, meter);
 update({get_fsm, Bucket, Microsecs, undefined, undefined, PerBucket}) ->
-    folsom_metrics:notify_existing_metric(riak_kv_node_gets_total, {inc, 1}, counter),
-    folsom_metrics:notify_existing_metric(riak_kv_node_get_fsm_time, Microsecs, histogram),
+    folsom_metrics:notify_existing_metric({?APP, node_gets_total}, {inc, 1}, counter),
+    folsom_metrics:notify_existing_metric({?APP, node_get_fsm_time}, Microsecs, histogram),
     do_get_bucket(PerBucket, {Bucket, Microsecs, undefined, undefined});
 update({get_fsm, Bucket, Microsecs, NumSiblings, ObjSize, PerBucket}) ->
-    folsom_metrics:notify_existing_metric(riak_kv_node_gets_total, {inc, 1}, counter),
-    folsom_metrics:notify_existing_metric(riak_kv_node_get_fsm_time, Microsecs, histogram),
-    folsom_metrics:notify_existing_metric(riak_kv_node_get_fsm_siblings, NumSiblings, histogram),
-    folsom_metrics:notify_existing_metric(riak_kv_node_get_fsm_objsize, ObjSize, histogram),
+    folsom_metrics:notify_existing_metric({?APP, node_gets_total}, {inc, 1}, counter),
+    folsom_metrics:notify_existing_metric({?APP, node_get_fsm_time}, Microsecs, histogram),
+    folsom_metrics:notify_existing_metric({?APP, node_get_fsm_siblings}, NumSiblings, histogram),
+    folsom_metrics:notify_existing_metric({?APP, node_get_fsm_objsize}, ObjSize, histogram),
     do_get_bucket(PerBucket, {Bucket, Microsecs, NumSiblings, ObjSize});
 update({put_fsm_time, Bucket,  Microsecs, PerBucket}) ->
-    folsom_metrics:notify_existing_metric(riak_kv_node_puts_total, {inc, 1}, counter),
-    folsom_metrics:notify_existing_metric(riak_kv_node_put_fsm_time, Microsecs, histogram),
+    folsom_metrics:notify_existing_metric({?APP, node_puts_total}, {inc, 1}, counter),
+    folsom_metrics:notify_existing_metric({?APP, node_put_fsm_time}, Microsecs, histogram),
     do_put_bucket(PerBucket, {Bucket, Microsecs});
 update(pbc_connect) ->
-    folsom_metrics:notify_existing_metric(riak_kv_pbc_connects_active, {inc, 1}, counter),
-    folsom_metrics:notify_existing_metric(riak_kv_pbc_connects, 1, meter);
+    folsom_metrics:notify_existing_metric({?APP, pbc_connects_active}, {inc, 1}, counter),
+    folsom_metrics:notify_existing_metric({?APP, pbc_connects}, 1, meter);
 update(pbc_disconnect) ->
-    folsom_metrics:notify_existing_metric(riak_kv_pbc_connects_active, {dec, 1}, counter);
+    folsom_metrics:notify_existing_metric({?APP, pbc_connects_active}, {dec, 1}, counter);
 update(read_repairs) ->
-    folsom_metrics:notify_existing_metric(riak_kv_read_repairs, 1, meter);
+    folsom_metrics:notify_existing_metric({?APP, read_repairs}, 1, meter);
 update(coord_redir) ->
-    folsom_metrics:notify_existing_metric(riak_kv_coord_redirs_total, {inc, 1}, counter);
+    folsom_metrics:notify_existing_metric({?APP, coord_redirs_total}, {inc, 1}, counter);
 update(mapper_start) ->
-    folsom_metrics:notify_existing_metric(riak_kv_mapper_count, {inc, 1}, counter);
+    folsom_metrics:notify_existing_metric({?APP, mapper_count}, {inc, 1}, counter);
 update(mapper_end) ->
-    folsom_metrics:notify_existing_metric(riak_kv_mapper_count, {dec, 1}, counter);
+    folsom_metrics:notify_existing_metric({?APP, mapper_count}, {dec, 1}, counter);
 update(precommit_fail) ->
-    folsom_metrics:notify_existing_metric(riak_kv_precommit_fail, {inc, 1}, counter);
+    folsom_metrics:notify_existing_metric({?APP, precommit_fail}, {inc, 1}, counter);
 update(postcommit_fail) ->
-    folsom_metrics:notify_existing_metric(riak_kv_postcommit_fail, {inc, 1}, counter).
+    folsom_metrics:notify_existing_metric({?APP, postcommit_fail}, {inc, 1}, counter).
 
 %% private
 %%  per bucket get_fsm stats
@@ -243,17 +243,17 @@ do_get_bucket(false, _) ->
     ok;
 do_get_bucket(true, {Bucket, Microsecs, NumSiblings, ObjSize}=Args) ->
     BucketAtom = binary_to_atom(Bucket, latin1),
-    case (catch folsom_metrics:notify_existing_metric(join(riak_kv_node_gets_total, BucketAtom), {inc, 1}, counter)) of
+    case (catch folsom_metrics:notify_existing_metric({?APP, join(node_gets_total, BucketAtom)}, {inc, 1}, counter)) of
         ok ->
-            [folsom_metrics:notify_existing_metric(join(Stat, BucketAtom), Arg, histogram)
-             || {Stat, Arg} <- [{riak_kv_node_get_fsm_time, Microsecs},
-                                {riak_kv_node_get_fsm_siblings, NumSiblings},
-                                {riak_kv_node_get_fsm_objsize, ObjSize}], Arg /= undefined];
+            [folsom_metrics:notify_existing_metric({?APP, join(Stat, BucketAtom)}, Arg, histogram)
+             || {Stat, Arg} <- [{node_get_fsm_time, Microsecs},
+                                {node_get_fsm_siblings, NumSiblings},
+                                {node_get_fsm_objsize, ObjSize}], Arg /= undefined];
         {'EXIT', _} ->
-            folsom_metrics:new_counter(join(riak_kv_node_gets_total, BucketAtom)),
-            [register_stat({join(Stat, BucketAtom), histogram}) || Stat <- [riak_kv_node_get_fsm_time,
-                                                                            riak_kv_node_get_fsm_siblings,
-                                                                            riak_kv_node_get_fsm_objsize]],
+            folsom_metrics:new_counter({?APP, join(node_gets_total, BucketAtom)}),
+            [register_stat({?APP, join(Stat, BucketAtom)}, histogram) || Stat <- [node_get_fsm_time,
+                                                                                  node_get_fsm_siblings,
+                                                                                  node_get_fsm_objsize]],
             do_get_bucket(true, Args)
     end.
 
@@ -262,12 +262,12 @@ do_put_bucket(false, _) ->
     ok;
 do_put_bucket(true, {Bucket, Microsecs}=Args) ->
     BucketAtom = binary_to_atom(Bucket, latin1),
-    case (catch folsom_metrics:notify_existing_metric(join(riak_kv_node_puts_total, BucketAtom), {inc, 1}, counter)) of
+    case (catch folsom_metrics:notify_existing_metric({?APP, join(node_puts_total, BucketAtom)}, {inc, 1}, counter)) of
         ok ->
-            folsom_metrics:notify_existing_metric(join(riak_kv_node_put_fsm_time, BucketAtom), Microsecs, histogram);
+            folsom_metrics:notify_existing_metric({?APP, join(node_put_fsm_time, BucketAtom)}, Microsecs, histogram);
         {'EXIT', _} ->
-            register_stat({join(riak_kv_node_puts_total, BucketAtom), counter}),
-            register_stat({join(riak_kv_node_put_fsm_time, BucketAtom), histogram}),
+            register_stat({?APP, join(node_puts_total, BucketAtom)}, counter),
+            register_stat({?APP, join(node_put_fsm_time, BucketAtom)}, histogram),
             do_put_bucket(true, Args)
     end.
 
@@ -276,7 +276,7 @@ do_put_bucket(true, {Bucket, Microsecs}=Args) ->
 %%      of stats.
 produce_stats() ->
     lists:append(
-      [lists:flatten([backwards_compat(Name, Type, get_stat(Stat)) || {Name, Type}=Stat <- stats()]),
+      [lists:flatten([backwards_compat(Name, Type, get_stat({?APP, Name}, Type)) || {Name, Type} <- stats()]),
        cpu_stats(),
        mem_stats(),
        disk_stats(),
@@ -287,43 +287,38 @@ produce_stats() ->
        memory_stats()
       ]).
 
-get_stat({Name, histogram}) ->
+get_stat(Name, histogram) ->
     folsom_metrics:get_histogram_statistics(Name);
-get_stat({Name, _Type}) ->
+get_stat(Name, _Type) ->
     folsom_metrics:get_metric_value(Name).
 
 backwards_compat(Name, meter, Stats) ->
-    Base = un_namespace(Name),
-    [{Base, trunc(proplists:get_value(one, Stats))},
-     {join(Base, total), proplists:get_value(count, Stats)}];
-backwards_compat(riak_kv_mapper_count, counter, Stats) ->
+    [{Name, trunc(proplists:get_value(one, Stats))},
+     {join(Name, total), proplists:get_value(count, Stats)}];
+backwards_compat(mapper_count, counter, Stats) ->
     {executing_mappers, Stats};
-backwards_compat(riak_kv_pbc_connects_active, counter, Stats) ->
+backwards_compat(pbc_connects_active, counter, Stats) ->
     {pbc_active, Stats};
 backwards_compat(Name, counter, Stats) ->
-    {un_namespace(Name), Stats};
-backwards_compat(riak_kv_node_get_fsm_time, histogram, Stats) ->
+    {Name, Stats};
+backwards_compat(node_get_fsm_time, histogram, Stats) ->
     Histogram = proplists:get_value(histogram, Stats),
     Cnt = lists:foldl(fun({_Bin, Val}, Sum) -> Sum + Val end, 0, Histogram),
-    [{node_gets, Cnt} | backwards_compat_histo(riak_kv_node_get_fsm_time, Stats)];
-backwards_compat(riak_kv_node_put_fsm_time, histogram, Stats) ->
+    [{node_gets, Cnt} | backwards_compat_histo(node_get_fsm_time, Stats)];
+backwards_compat(node_put_fsm_time, histogram, Stats) ->
     Histogram = proplists:get_value(histogram, Stats),
     Cnt = lists:foldl(fun({_Bin, Val}, Sum) -> Sum + Val end, 0, Histogram),
-    [{node_puts, Cnt} | backwards_compat_histo(riak_kv_node_put_fsm_time, Stats)];
+    [{node_puts, Cnt} | backwards_compat_histo(node_put_fsm_time, Stats)];
 backwards_compat(Name, histogram, Stats) ->
     backwards_compat_histo(Name, Stats).
 
 backwards_compat_histo(Name, Stats) ->
-    Base = un_namespace(Name),
     Percentiles = proplists:get_value(percentile, Stats),
-    [{join(Base, mean), trunc(proplists:get_value(arithmetic_mean, Stats))},
-     {join(Base, median), trunc(proplists:get_value(median, Stats))},
-     {join(Base, '95'), trunc(proplists:get_value(95, Percentiles))},
-     {join(Base, '99'), trunc(proplists:get_value(99, Percentiles))},
-     {join(Base, '100'), trunc(proplists:get_value(max, Stats))}].
-
-un_namespace(Name) ->
-    list_to_atom(lists:subtract(atom_to_list(Name), ?APP_NAME)).
+    [{join(Name, mean), trunc(proplists:get_value(arithmetic_mean, Stats))},
+     {join(Name, median), trunc(proplists:get_value(median, Stats))},
+     {join(Name, '95'), trunc(proplists:get_value(95, Percentiles))},
+     {join(Name, '99'), trunc(proplists:get_value(99, Percentiles))},
+     {join(Name, '100'), trunc(proplists:get_value(max, Stats))}].
 
 join(Atom1, Atom2) ->
     Bin1 = atom_to_binary(Atom1, latin1),
@@ -331,32 +326,32 @@ join(Atom1, Atom2) ->
     binary_to_atom(<<Bin1/binary, $_, Bin2/binary>>, latin1).
 
 stats() ->
-    [{riak_kv_vnode_gets, meter},
-     {riak_kv_vnode_puts, meter},
-     {riak_kv_vnode_index_reads, meter},
-     {riak_kv_vnode_index_writes, meter},
-     {riak_kv_vnode_index_writes_postings, meter},
-     {riak_kv_vnode_index_deletes, meter},
-     {riak_kv_vnode_index_deletes_postings, meter},
-     {riak_kv_node_gets_total, counter},
-     {riak_kv_node_get_fsm_siblings, histogram},
-     {riak_kv_node_get_fsm_objsize, histogram},
-     {riak_kv_node_get_fsm_time, histogram},
-     {riak_kv_node_puts_total, counter},
-     {riak_kv_node_put_fsm_time, histogram},
-     {riak_kv_pbc_connects, meter},
-     {riak_kv_pbc_connects_active, counter},
-     {riak_kv_read_repairs, meter},
-     {riak_kv_coord_redirs_total, counter},
-     {riak_kv_mapper_count, counter},
-     {riak_kv_precommit_fail, counter},
-     {riak_kv_postcommit_fail, counter}].
+    [{vnode_gets, meter},
+     {vnode_puts, meter},
+     {vnode_index_reads, meter},
+     {vnode_index_writes, meter},
+     {vnode_index_writes_postings, meter},
+     {vnode_index_deletes, meter},
+     {vnode_index_deletes_postings, meter},
+     {node_gets_total, counter},
+     {node_get_fsm_siblings, histogram},
+     {node_get_fsm_objsize, histogram},
+     {node_get_fsm_time, histogram},
+     {node_puts_total, counter},
+     {node_put_fsm_time, histogram},
+     {pbc_connects, meter},
+     {pbc_connects_active, counter},
+     {read_repairs, meter},
+     {coord_redirs_total, counter},
+     {mapper_count, counter},
+     {precommit_fail, counter},
+     {postcommit_fail, counter}].
 
-register_stat({Name, meter}) ->
+register_stat(Name, meter) ->
     folsom_metrics:new_meter(Name);
-register_stat({Name, counter}) ->
+register_stat(Name, counter) ->
     folsom_metrics:new_counter(Name);
-register_stat({Name, histogram}) ->
+register_stat(Name, histogram) ->
     %% get the global default histo type
     {SampleType, SampleArgs} = get_sample_type(Name),
     folsom_metrics:new_histogram(Name, SampleType, SampleArgs).
