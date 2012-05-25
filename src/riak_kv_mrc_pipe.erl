@@ -636,15 +636,19 @@ group_outputs(Outputs, NumKeeps) when NumKeeps < 2 -> % 0 or 1
     %% when length(Outputs) is large
     [ O || {_, O} <- Outputs ];
 group_outputs(Outputs, _NumKeeps) ->
-    Merged = lists:foldl(fun({I,O}, Acc) ->
-                                 dict:append(I, O, Acc)
-                         end,
-                         dict:new(),
-                         Outputs),
-    %% though this looks very similar to the other group_outputs/2
-    %% clause, note that each O is a *list* of outputs here, while
-    %% each O was *an* output there
-    [ O || {_, O} <- lists:keysort(1, dict:to_list(Merged)) ].
+    Group = fun({I,O}, Acc) ->
+                    %% it is assumed that the number of phases
+                    %% producing outputs is small, so a linear search
+                    %% through phases we've seen is not too taxing
+                    case lists:keytake(I, 1, Acc) of
+                        {value, {I, IAcc}, RAcc} ->
+                            [{I,[O|IAcc]}|RAcc];
+                        false ->
+                            [{I,[O]}|Acc]
+                    end
+            end,
+    Merged = lists:foldl(Group, [], Outputs),
+    [ lists:reverse(O) || {_, O} <- lists:keysort(1, Merged) ].
 
 %% @doc Produce an Erlang term from a string containing Erlang code.
 %% This is used by {@link riak_kv_mrc_map} and {@link
