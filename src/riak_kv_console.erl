@@ -25,6 +25,7 @@
 -module(riak_kv_console).
 
 -export([join/1,
+         staged_join/1,
          leave/1,
          remove/1,
          status/1,
@@ -41,8 +42,14 @@
 
 
 join([NodeStr]) ->
+    join(NodeStr, fun riak_core:join/1).
+
+staged_join([NodeStr]) ->
+    join(NodeStr, fun riak_core:staged_join/1).
+
+join(NodeStr, JoinFn) ->
     try
-        case riak_core:join(NodeStr) of
+        case JoinFn(NodeStr) of
             ok ->
                 io:format("Sent join request to ~s~n", [NodeStr]),
                 ok;
