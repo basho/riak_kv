@@ -90,7 +90,7 @@ process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
       riak_kv_vnode_master),
     receive
         {ReqId, {r, {ok, Obj}, _, _}} ->
-            ?T(FittingDetails, [kv_get], [{ok, timer:now_diff(erlang:now(), Start)}]),
+            ?T(FittingDetails, [kv_get], [{kv_get_latency, {r, timer:now_diff(erlang:now(), Start)}}]),
             case riak_pipe_vnode_worker:send_output(
                    {ok, Obj, keydata(Input)}, Partition, FittingDetails) of
                 ok ->
@@ -99,7 +99,7 @@ process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
                     {ER, State}
             end;
         {ReqId, {r, {error, _} = Error, _, _}} ->
-            ?T(FittingDetails, [kv_get], [{Error, timer:now_diff(erlang:now(), Start)}]),
+            ?T(FittingDetails, [kv_get], [{kv_get_latency, {Error, timer:now_diff(erlang:now(), Start)}}]),
             if Last ->
                     case riak_pipe_vnode_worker:send_output(
                            {Error, bkey(Input), keydata(Input)},
