@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_pb_object: Expose KV functionality to Protocol Buffers
+%% riak_kv_pb_index: Expose secondary index queries to Protocol Buffers
 %%
 %% Copyright (c) 2012 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -46,15 +46,14 @@
          process/2,
          process_stream/3]).
 
--record(?MODULE, {client}).
--define(state, #?MODULE).
+-record(state, {client}).
 
 %% @doc init/0 callback. Returns the service internal start
 %% state.
 -spec init() -> any().
 init() ->
     {ok, C} = riak:local_client(),
-    ?state{client=C}.
+    #state{client=C}.
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) ->
@@ -71,7 +70,7 @@ process(#rpbindexreq{qtype=eq, key=SKey}, State)
 process(#rpbindexreq{qtype=range, range_min=Min, range_max=Max}, State)
   when not (is_binary(Min) andalso is_binary(Max)) ->
     {error, {format, "Invalid range query: ~p -> ~p", [Min, Max]}, State};
-process(#rpbindexreq{bucket=Bucket, index=Index, qtype=eq, key=SKey}, ?state{client=Client}=State) ->
+process(#rpbindexreq{bucket=Bucket, index=Index, qtype=eq, key=SKey}, #state{client=Client}=State) ->
     case riak_index:to_index_query(Index, [SKey]) of
         {ok, Query} ->
             case Client:get_index(Bucket, Query) of
@@ -84,7 +83,7 @@ process(#rpbindexreq{bucket=Bucket, index=Index, qtype=eq, key=SKey}, ?state{cli
             {error, {format, Reason}, State}
     end;
 process(#rpbindexreq{bucket=Bucket, index=Index, qtype=range,
-                     range_min=Min, range_max=Max}, ?state{client=Client}=State) ->
+                     range_min=Min, range_max=Max}, #state{client=Client}=State) ->
     case riak_index:to_index_query(Index, [Min, Max]) of
         {ok, Query} ->
             case Client:get_index(Bucket, Query) of
