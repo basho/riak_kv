@@ -82,7 +82,7 @@ init(Partition, FittingDetails) ->
          -> {ok | forward_preflist | {error, term()}, state()}.
 process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
     ReqId = make_req_id(),
-    Start = erlang:now(),
+    Start = os:timestamp(),
     riak_core_vnode_master:command(
       {Partition, node()}, %% assume local chashfun was used
       ?KV_GET_REQ{bkey=bkey(Input), req_id=ReqId},
@@ -90,7 +90,7 @@ process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
       riak_kv_vnode_master),
     receive
         {ReqId, {r, {ok, Obj}, _, _}} ->
-            ?T(FittingDetails, [kv_get], [{kv_get_latency, {r, timer:now_diff(erlang:now(), Start)}}]),
+            ?T(FittingDetails, [kv_get], [{kv_get_latency, {r, timer:now_diff(os:timestamp(), Start)}}]),
             case riak_pipe_vnode_worker:send_output(
                    {ok, Obj, keydata(Input)}, Partition, FittingDetails) of
                 ok ->
@@ -99,7 +99,7 @@ process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
                     {ER, State}
             end;
         {ReqId, {r, {error, _} = Error, _, _}} ->
-            ?T(FittingDetails, [kv_get], [{kv_get_latency, {Error, timer:now_diff(erlang:now(), Start)}}]),
+            ?T(FittingDetails, [kv_get], [{kv_get_latency, {Error, timer:now_diff(os:timestamp(), Start)}}]),
             if Last ->
                     case riak_pipe_vnode_worker:send_output(
                            {Error, bkey(Input), keydata(Input)},
