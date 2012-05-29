@@ -228,7 +228,7 @@ timestamp() ->
     {MegaSeconds,Seconds,MilliSeconds}=erlang:now(),
     (MegaSeconds * 1000000000000) + (Seconds * 1000000) + MilliSeconds.
 
-%% @spec to_index_op_query(binary(), [binary()]) ->
+%% @spec to_index_query(binary(), [binary()]) ->
 %%         {ok, {atom(), binary(), list(binary())}} | {error, Reasons}.
 %% @doc Given an IndexOp, IndexName, and Args, construct and return a
 %%      valid query, or a list of errors if the query is malformed.
