@@ -82,6 +82,42 @@ start(_Type, _StartArgs) ->
     %% Spin up supervisor
     case riak_kv_sup:start_link() of
         {ok, Pid} ->
+            %% Register capabilities
+            riak_core_capability:register({riak_kv, vnode_vclocks},
+                                          [true, false],
+                                          false,
+                                          {riak_kv,
+                                           vnode_vclocks,
+                                           [{true, true}, {false, false}]}),
+
+            riak_core_capability:register({riak_kv, legacy_keylisting},
+                                          [false, true],
+                                          true,
+                                          {riak_kv,
+                                           legacy_keylisting,
+                                           [{true, true}, {false, false}]}),
+
+            riak_core_capability:register({riak_kv, listkeys_backpressure},
+                                          [true, false],
+                                          false,
+                                          {riak_kv,
+                                           listkeys_backpressure,
+                                           [{true, true}, {false, false}]}),
+
+            riak_core_capability:register({riak_kv, mapred_system},
+                                          [pipe, legacy],
+                                          legacy,
+                                          {riak_kv,
+                                           mapred_system,
+                                           [{pipe, pipe}, {legacy, legacy}]}),
+
+            riak_core_capability:register({riak_kv, mapred_2i_pipe},
+                                          [true, false],
+                                          false,
+                                          {riak_kv,
+                                           mapred_2i_pipe,
+                                           [{true, true}, {false, false}]}),
+
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
             %% synchronously.
