@@ -629,23 +629,22 @@ collect_outputs(Pipe, NumKeeps, Timeout) ->
 %% :: list()'.
 -spec group_outputs(ungrouped_results(), non_neg_integer()) ->
          grouped_results().
-group_outputs(Outputs, NumKeeps) ->
+group_outputs(Outputs, NumKeeps) when NumKeeps < 2 -> % 0 or 1
+    %% this path trusts that outputs are from only one phase;
+    %% if NumKeeps lies, all phases will be grouped together;
+    %% this is much faster than using dict:append/3 for a single key
+    %% when length(Outputs) is large
+    [ O || {_, O} <- Outputs ];
+group_outputs(Outputs, _NumKeeps) ->
     Merged = lists:foldl(fun({I,O}, Acc) ->
                                  dict:append(I, O, Acc)
                          end,
                          dict:new(),
                          Outputs),
-    if NumKeeps < 2 ->                          % 0 or 1
-            case dict:to_list(Merged) of
-                [{_, O}] ->
-                    O;
-                [] ->
-                    %% an MR query is not required to produce output
-                    []
-            end;
-       true ->
-            [ O || {_, O} <- lists:keysort(1, dict:to_list(Merged)) ]
-    end.
+    %% though this looks very similar to the other group_outputs/2
+    %% clause, note that each O is a *list* of outputs here, while
+    %% each O was *an* output there
+    [ O || {_, O} <- lists:keysort(1, dict:to_list(Merged)) ].
 
 %% @doc Produce an Erlang term from a string containing Erlang code.
 %% This is used by {@link riak_kv_mrc_map} and {@link
