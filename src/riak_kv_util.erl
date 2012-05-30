@@ -153,7 +153,7 @@ normalize_rw_value(_, _) -> error.
 %%      application's environment.
 -spec mapred_system() -> pipe | legacy.
 mapred_system() ->
-    riak_core_capability:get({riak_kv, mapred_system}).
+    riak_core_capability:get({riak_kv, mapred_system}, legacy).
 
 
 %% ===================================================================

@@ -528,7 +528,7 @@ send_inputs(Pipe, {Bucket, FilterExprs}, Timeout) ->
     end;
 send_inputs(Pipe, {index, Bucket, Index, Key}, Timeout) ->
     Query = {eq, Index, Key},
-    case riak_core_capability:get({riak_kv, mapred_2i_pipe}) of
+    case riak_core_capability:get({riak_kv, mapred_2i_pipe}, false) of
         true ->
             riak_kv_pipe_index:queue_existing_pipe(
               Pipe, Bucket, Query, Timeout);
@@ -540,7 +540,7 @@ send_inputs(Pipe, {index, Bucket, Index, Key}, Timeout) ->
     end;
 send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey}, Timeout) ->
     Query = {range, Index, StartKey, EndKey},
-    case riak_core_capability:get({riak_kv, mapred_2i_pipe}) of
+    case riak_core_capability:get({riak_kv, mapred_2i_pipe}, false) of
         true ->
             riak_kv_pipe_index:queue_existing_pipe(
               Pipe, Bucket, Query, Timeout);

@@ -58,7 +58,7 @@
 %% environment.
 -spec use_ack_backpressure() -> boolean().
 use_ack_backpressure() ->
-    riak_core_capability:get({riak_kv, listkeys_backpressure}) == true.
+    riak_core_capability:get({riak_kv, listkeys_backpressure}, false) == true.
 
 %% @doc Construct the correct listkeys command record.
 -spec req(binary(), term()) -> term().

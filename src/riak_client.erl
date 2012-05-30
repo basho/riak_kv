@@ -479,7 +479,7 @@ list_keys(Bucket, Timeout, ErrorTolerance) when is_integer(Timeout) ->
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 list_keys(Bucket, Filter, Timeout) -> 
-    case riak_core_capability:get({riak_kv, legacy_keylisting}) of
+    case riak_core_capability:get({riak_kv, legacy_keylisting}, true) of
         true ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
@@ -531,7 +531,7 @@ stream_list_keys(Bucket0, Timeout, ErrorTolerance, Client, ClientType) ->
 %%      If ClientType is set to 'mapred' instead of 'plain', then the
 %%      messages will be sent in the form of a MR input stream.
 stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
-    case riak_core_capability:get({riak_kv, legacy_keylisting}) of
+    case riak_core_capability:get({riak_kv, legacy_keylisting}, true) of
         true ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
@@ -578,7 +578,7 @@ stream_list_keys(Bucket, Timeout, ErrorTolerance, Client) ->
 %%      out of date if called immediately after a put or delete.
 %% @equiv filter_keys(Bucket, Fun, default_timeout())
 filter_keys(Bucket, Fun) ->
-    case riak_core_capability:get({riak_kv, legacy_keylisting}) of
+    case riak_core_capability:get({riak_kv, legacy_keylisting}, true) of
         true ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
@@ -596,7 +596,7 @@ filter_keys(Bucket, Fun) ->
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 filter_keys(Bucket, Fun, Timeout) ->
-    case riak_core_capability:get({riak_kv, legacy_keylisting}) of
+    case riak_core_capability:get({riak_kv, legacy_keylisting}, true) of
         true ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
@@ -628,7 +628,7 @@ list_buckets() ->
 %%      either adds the first key or removes the last remaining key from
 %%      a bucket.
 list_buckets(Filter, Timeout) ->
-    case riak_core_capability:get({riak_kv, legacy_keylisting}) of
+    case riak_core_capability:get({riak_kv, legacy_keylisting}, true) of
         true ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
@@ -646,7 +646,7 @@ list_buckets(Filter, Timeout) ->
 %%       {error, Err :: term()}
 %% @doc Return a list of filtered buckets.
 filter_buckets(Fun) ->
-    case riak_core_capability:get({riak_kv, legacy_keylisting}) of
+    case riak_core_capability:get({riak_kv, legacy_keylisting}, true) of
         true ->
             %% @TODO This code is only here to support
             %% rolling upgrades and will be removed.
