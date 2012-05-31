@@ -21,7 +21,7 @@
 %% -------------------------------------------------------------------
 -module(riak_kv_put_core).
 -export([init/7, add_result/2, enough/1, response/1, 
-         final/1]).
+         final/1, result_shortcode/1, result_idx/1]).
 -export_type([putcore/0, result/0, reply/0]).
 
 -type vput_result() :: any().
@@ -133,6 +133,16 @@ final(PutCore = #putcore{final_obj = FinalObj,
         _ ->
             {FinalObj, PutCore}
     end.
+
+result_shortcode({w, _, _})     -> 1;
+result_shortcode({dw, _, _})    -> 2;
+result_shortcode({dw, _, _, _}) -> 2;
+result_shortcode({fail, _, _})  -> -1;
+result_shortcode(_)             -> -2.
+
+result_idx({_, Idx, _})    -> Idx;
+result_idx({_, Idx, _, _}) -> Idx;
+result_idx(_)              -> -1.
 
 %% ====================================================================
 %% Internal functions
