@@ -1,3 +1,4 @@
+-include_lib("riak_core/include/riak_core_dtrace.hrl").
 
 %% Main wrapper macro for DTrace/SystemTap probe annotations
 %% NOTE: We assume there will be per-module dtrace_int() and dtrace() funcs!
@@ -45,8 +46,3 @@
 -define(C_KEYS_INIT,                  545).
 -define(C_KEYS_PROCESS_RESULTS,       546).
 -define(C_KEYS_FINISH,                547).
-
-%% Other
-%% NOTE: Coordinate ?DTRACE_TAG_KEY with riak_core_dtrace.erl
--define(DTRACE_TAG_KEY, '**DTRACE*TAG*KEY**').
-

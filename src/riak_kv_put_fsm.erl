@@ -28,7 +28,6 @@
 %-endif.
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_js_pools.hrl").
--include_lib("riak_kv_dtrace.hrl").
 -include("riak_kv_wm_raw.hrl").
 
 -behaviour(gen_fsm).
@@ -44,7 +43,6 @@
          waiting_local_vnode/2,
          waiting_remote_vnode/2,
          postcommit/2, finish/2]).
-
 
 -type detail_info() :: timing.
 -type detail() :: true |
@@ -98,6 +96,7 @@
                 reply % reply sent to client
                }).
 
+-include("riak_kv_dtrace.hrl").
 
 -define(PARSE_INDEX_PRECOMMIT, {struct, [{<<"mod">>, <<"riak_index">>}, {<<"fun">>, <<"parse_object_hook">>}]}).
 -define(DEFAULT_TIMEOUT, 60000).
@@ -863,18 +862,6 @@ atom2list(A) when is_atom(A) ->
     atom_to_list(A);
 atom2list(P) when is_pid(P)->
     pid_to_list(P).                             % eunit tests
-
-%% Erlang tracing-related funnel functions for DTrace/SystemTap.
-%% When using Redbug or other Erlang tracing framework, trace these
-%% functions.
-
-dtrace(_BKey, Category, Ints, Strings) ->
-    riak_core_dtrace:dtrace(Category, Ints, Strings).
-
-%% Internal functions, not so interesting for Erlang tracing.
-
-dtrace_int(Category, Ints, Strings) ->
-    dtrace(get(?DTRACE_TAG_KEY), Category, Ints, Strings).
 
 dtrace_errstr(Term) ->
     io_lib:format("~P", [Term, 12]).

@@ -37,7 +37,6 @@
 
 -behaviour(riak_core_coverage_fsm).
 
--include_lib("riak_kv_dtrace.hrl").
 -include_lib("riak_kv_vnode.hrl").
 
 -export([init/2,
@@ -52,6 +51,8 @@
 
 -record(state, {client_type :: plain | mapred,
                 from :: from()}).
+
+-include("riak_kv_dtrace.hrl").
 
 %% @doc Returns `true' if the new ack-based backpressure listkeys
 %% protocol should be used.  This decision is based on the
@@ -149,18 +150,6 @@ finish(clean,
     end,
     ?DTRACE(?C_KEYS_FINISH, [-1], []),
     {stop, normal, StateData}.
-
-%% Erlang tracing-related funnel functions for DTrace/SystemTap.
-%% When using Redbug or other Erlang tracing framework, trace these
-%% functions.
-
-dtrace(_BKey, Category, Ints, Strings) ->
-    riak_core_dtrace:dtrace(Category, Ints, Strings).
-
-%% Internal functions, not so interesting for Erlang tracing.
-
-dtrace_int(Category, Ints, Strings) ->
-    dtrace(get(?DTRACE_TAG_KEY), Category, Ints, Strings).
 
 %% ===================================================================
 %% Internal functions

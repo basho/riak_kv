@@ -22,7 +22,6 @@
 
 -module(riak_kv_get_fsm).
 -behaviour(gen_fsm).
--include_lib("riak_kv_dtrace.hrl").
 -include_lib("riak_kv_vnode.hrl").
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -68,6 +67,8 @@
                 startnow :: {non_neg_integer(), non_neg_integer(), non_neg_integer()},
                 get_usecs :: non_neg_integer()
                }).
+
+-include("riak_kv_dtrace.hrl").
 
 -define(DEFAULT_TIMEOUT, 60000).
 -define(DEFAULT_R, default).
@@ -419,18 +420,6 @@ atom2list(A) when is_atom(A) ->
     atom_to_list(A);
 atom2list(P) when is_pid(P)->
     pid_to_list(P).                             % eunit tests
-
-%% Erlang tracing-related funnel functions for DTrace/SystemTap.
-%% When using Redbug or other Erlang tracing framework, trace these
-%% functions.
-
-dtrace(_BKey, Category, Ints, Strings) ->
-    riak_core_dtrace:dtrace(Category, Ints, Strings).
-
-%% Internal functions, not so interesting for Erlang tracing.
-
-dtrace_int(Category, Ints, Strings) ->
-    dtrace(get(?DTRACE_TAG_KEY), Category, Ints, Strings).
 
 -ifdef(TEST).
 -define(expect_msg(Exp,Timeout), 
