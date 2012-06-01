@@ -94,7 +94,8 @@
                 put_usecs :: undefined | non_neg_integer(),
                 timing = [] :: [{atom(), {non_neg_integer(), non_neg_integer(),
                                           non_neg_integer()}}],
-                reply % reply sent to client
+                reply, % reply sent to client
+                tracked_bucket=false :: boolean() %% tracke per bucket stats
                }).
 
 
@@ -176,6 +177,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
     BKey = {riak_object:bucket(RObj), riak_object:key(RObj)},
     DocIdx = riak_core_util:chash_key(BKey),
     N = proplists:get_value(n_val,BucketProps),
+    StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
     %% Check if this node is in the preference list so it can coordinate
@@ -216,7 +218,8 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                          bucket_props = BucketProps,
                                          coord_pl_entry = CoordPLEntry,
                                          preflist2 = Preflist2,
-                                         starttime = StartTime},
+                                         starttime = StartTime,
+                                         tracked_bucket = StatTracked},
             new_state_timeout(validate, StateData)
     end.
 
@@ -407,7 +410,9 @@ postcommit(Reply, StateData = #state{putcore = PutCore}) ->
     UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
     {next_state, postcommit, StateData#state{putcore = UpdPutCore}, 0}.
 
-finish(timeout, StateData = #state{timing = Timing, reply = Reply}) ->
+finish(timeout, StateData = #state{timing = Timing, reply = Reply,
+                                   bkey = {Bucket, _Key},
+                                   tracked_bucket = StatTracked}) ->
     case Reply of
         {error, _} ->
             ok;
@@ -415,7 +420,7 @@ finish(timeout, StateData = #state{timing = Timing, reply = Reply}) ->
             %% TODO: Improve reporting of timing
             %% For now can add debug tracers to view the return from calc_timing
             {Duration, _Stages} = calc_timing(Timing),
-            riak_kv_stat:update({put_fsm_time, Duration})
+            riak_kv_stat:update({put_fsm_time, Bucket, Duration, StatTracked})
     end,
     {stop, normal, StateData};
 finish(Reply, StateData = #state{putcore = PutCore}) ->

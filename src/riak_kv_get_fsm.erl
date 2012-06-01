@@ -65,7 +65,8 @@
                 bkey :: {riak_object:bucket(), riak_object:key()},
                 bucket_props,
                 startnow :: {non_neg_integer(), non_neg_integer(), non_neg_integer()},
-                get_usecs :: non_neg_integer()
+                get_usecs :: non_neg_integer(),
+                tracked_bucket=false :: boolean() %% is per bucket stats enabled for this bucket
                }).
 
 -define(DEFAULT_TIMEOUT, 60000).
@@ -150,12 +151,14 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     DocIdx = riak_core_util:chash_key(BKey),
     N = proplists:get_value(n_val,BucketProps),
+    StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
     {next_state, validate, StateData#state{starttime=riak_core_util:moment(),
                                           n = N,
                                           bucket_props=BucketProps,
-                                          preflist2 = Preflist2}, 0}.
+                                          preflist2 = Preflist2,
+                                          tracked_bucket = StatTracked}, 0}.
 
 %% @private
 validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
@@ -342,7 +345,7 @@ update_timing(StateData = #state{startnow = StartNow}) ->
     EndNow = now(),
     StateData#state{get_usecs = timer:now_diff(EndNow, StartNow)}.
 
-update_stats({ok, Obj}, #state{get_usecs = GetUsecs}) ->
+update_stats({ok, Obj}, #state{get_usecs = GetUsecs, tracked_bucket = StatTracked}) ->
     %% Get the number of siblings and the object size. For object
     %% size, get an approximation by adding together the bucket, key,
     %% vectorclock, and all of the siblings. This is more complex than
@@ -350,14 +353,15 @@ update_stats({ok, Obj}, #state{get_usecs = GetUsecs}) ->
     %% especially for objects with large values.
     NumSiblings = riak_object:value_count(Obj),
     Contents = riak_object:get_contents(Obj),
+    Bucket = riak_object:bucket(Obj),
     ObjSize =
-        size(riak_object:bucket(Obj)) +
+        size(Bucket) +
         size(riak_object:key(Obj)) +
         size(term_to_binary(riak_object:vclock(Obj))) +
         lists:sum([size(term_to_binary(MD)) + value_size(Value) || {MD, Value} <- Contents]),
-    riak_kv_stat:update({get_fsm, undefined, GetUsecs, NumSiblings, ObjSize});
-update_stats(_, #state{get_usecs = GetUsecs}) ->
-    riak_kv_stat:update({get_fsm, undefined, GetUsecs, undefined, undefined}).
+    riak_kv_stat:update({get_fsm, Bucket, GetUsecs, NumSiblings, ObjSize, StatTracked});
+update_stats(_, #state{get_usecs = GetUsecs, bkey = {Bucket, _}, tracked_bucket = StatTracked}) ->
+    riak_kv_stat:update({get_fsm, Bucket, GetUsecs, undefined, undefined, StatTracked}).
 
 value_size(Value) when is_binary(Value) -> size(Value);
 value_size(Value) -> size(term_to_binary(Value)).
