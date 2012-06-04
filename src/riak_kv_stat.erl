@@ -20,18 +20,15 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc riak_kv_stat is a long-lived gen_server process for aggregating
+%% @doc riak_kv_stat is a module for aggregating
 %%      stats about the Riak node on which it is runing.
 %%
-%%      Update each stat with the exported function update/1.  Modify
-%%      the internal function update/3 to add storage for new stats.
+%%      Update each stat with the exported function update/1. Add
+%%      a new stat to the internal stats/0 func to register a new stat with
+%%      folsom.
 %%
 %%      Get the latest aggregation of stats with the exported function
-%%      get_stats/0.  Modify the internal function produce_stats/1 to
-%%      change how stats are represented.
-%%
-%%      Riak will start riak_kv_stat for you, if you have specified
-%%      {riak_kv_stat, true} in your config .erlenv file.
+%%      get_stats/0. Or use folsom_metrics:get_metric_value/1
 %%
 %%      Current stats:
 %%<dl><dt>  vnode_gets
