@@ -60,13 +60,11 @@
 
 -import(riak_pb_kv_codec, [decode_quorum/1]).
 
--record(?MODULE, {client,    % local client
-                  req,       % current request (for multi-message requests like list keys)
-                  req_ctx,   % context to go along with request (partial results, request ids etc)
-                  client_id = <<0,0,0,0>> }). % emulate legacy API when vnode_vclocks is true
+-record(state, {client,    % local client
+                req,       % current request (for multi-message requests like list keys)
+                req_ctx,   % context to go along with request (partial results, request ids etc)
+                client_id = <<0,0,0,0>> }). % emulate legacy API when vnode_vclocks is true
 
-
--define(state, #?MODULE).
 -define(DEFAULT_TIMEOUT, 60000).
 
 %% @doc init/0 callback. Returns the service internal start
@@ -74,7 +72,7 @@
 -spec init() -> any().
 init() ->
     {ok, C} = riak:local_client(),
-    ?state{client=C}.
+    #state{client=C}.
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) ->
@@ -85,7 +83,7 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(rpbgetclientidreq, ?state{client=C, client_id=CID} = State) ->
+process(rpbgetclientidreq, #state{client=C, client_id=CID} = State) ->
     ClientId = case app_helper:get_env(riak_kv, vnode_vclocks, false) of
                    true -> CID;
                    false -> C:get_client_id()
@@ -95,16 +93,16 @@ process(rpbgetclientidreq, ?state{client=C, client_id=CID} = State) ->
 
 process(#rpbsetclientidreq{client_id = ClientId}, State) ->
     NewState = case app_helper:get_env(riak_kv, vnode_vclocks, false) of
-                   true -> State?state{client_id=ClientId};
+                   true -> State#state{client_id=ClientId};
                    false ->
                        {ok, C} = riak:local_client(ClientId),
-                       State?state{client = C}
+                       State#state{client = C}
                end,
     {reply, rpbsetclientidresp, NewState};
 
 process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    basic_quorum=BQ, if_modified=VClock,
-                   head=Head, deletedvclock=DeletedVClock}, ?state{client=C} = State) ->
+                   head=Head, deletedvclock=DeletedVClock}, #state{client=C} = State) ->
     R = decode_quorum(R0),
     PR = decode_quorum(PR0),
     case C:get(B, K, make_option(deletedvclock, DeletedVClock) ++
@@ -143,7 +141,7 @@ process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
 
 process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
                    if_not_modified=NotMod, if_none_match=NoneMatch} = Req,
-        ?state{client=C} = State) when NotMod; NoneMatch ->
+        #state{client=C} = State) when NotMod; NoneMatch ->
     case C:get(B, K) of
         {ok, _} when NoneMatch ->
             {error, "match_found", State};
@@ -169,7 +167,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
 process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                    w=W0, dw=DW0, pw=PW0, return_body=ReturnBody,
                    return_head=ReturnHead},
-        ?state{client=C} = State) ->
+        #state{client=C} = State) ->
 
     case K of
         undefined ->
@@ -229,7 +227,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
 
 process(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
                    r=R0, w=W0, pr=PR0, pw=PW0, dw=DW0, rw=RW0},
-        ?state{client=C} = State) ->
+        #state{client=C} = State) ->
     W = decode_quorum(W0),
     PW = decode_quorum(PW0),
     DW = decode_quorum(DW0),
