@@ -145,16 +145,16 @@ pipe_mapred(RD,
     try riak_kv_mrc_pipe:mapred_stream(Query) of
         {{ok, Pipe}, NumKeeps} ->
             PipeRef = (Pipe#pipe.sink)#fitting.ref,
-            erlang:send_after(Timeout, self(), {pipe_timeout, PipeRef}),
+            Tref = erlang:send_after(Timeout, self(), {pipe_timeout, PipeRef}),
             {InputSender, SenderMonitor} =
                 riak_kv_mrc_pipe:send_inputs_async(Pipe, Inputs),
             case wrq:get_qs_value("chunked", "false", RD) of
                 "true" ->
                     pipe_mapred_chunked(RD, State, Pipe,
-                                        {InputSender, SenderMonitor});
+                                        {InputSender, SenderMonitor}, {Tref, PipeRef});
                 _ ->
                     pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps,
-                                           {InputSender, SenderMonitor})
+                                           {InputSender, SenderMonitor}, {Tref, PipeRef})
             end
     catch throw:{badarg, Fitting, Reason} ->
             {{halt, 400}, 
@@ -163,7 +163,20 @@ pipe_mapred(RD,
              State}
     end.
 
-pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender) ->
+cleanup_timer({Tref, PipeRef}) ->
+    case erlang:cancel_timer(Tref) of
+        false ->
+            receive
+                {pipe_timeout, PipeRef} ->
+                    ok
+            after 0 ->
+                    ok
+            end;
+        _ ->
+            ok
+    end.
+
+pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender, PipeTref) ->
     case pipe_collect_outputs(Pipe, NumKeeps, Sender) of
         {ok, Results} ->
             JSONResults =
@@ -178,12 +191,14 @@ pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender) ->
                 end,
             HasMRQuery = State#state.mrquery /= [],
             JSONResults1 = riak_kv_mapred_json:jsonify_bkeys(JSONResults, HasMRQuery),
+            cleanup_timer(PipeTref),
             {true,
              wrq:set_resp_body(mochijson2:encode(JSONResults1), RD),
              State};
         {error, {sender_error, Error}} ->
             %% the sender links to the builder, so the builder has
             %% already been torn down
+            cleanup_timer(PipeTref),
             prevent_keepalive(),
             {{halt, 500}, send_error(Error, RD), State};
         {error, timeout} ->
@@ -192,6 +207,7 @@ pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender) ->
             prevent_keepalive(),
             {{halt, 500}, send_error({error, timeout}, RD), State};
         {error, Error} ->
+            cleanup_timer(PipeTref),
             riak_pipe:destroy(Pipe),
             prevent_keepalive(),
             {{halt, 500}, send_error({error, Error}, RD), State}
@@ -239,7 +255,7 @@ pipe_receive_output(Ref, {SenderPid, SenderRef}) ->
             {error, timeout}
     end.
 
-pipe_mapred_chunked(RD, State, Pipe, Sender) ->
+pipe_mapred_chunked(RD, State, Pipe, Sender, PipeTref) ->
     Boundary = riak_core_util:unique_id_62(),
     CTypeRD = wrq:set_resp_header(
                 "Content-Type",
@@ -247,14 +263,14 @@ pipe_mapred_chunked(RD, State, Pipe, Sender) ->
                 RD),
     BoundaryState = State#state{boundary=Boundary},
     Streamer = pipe_stream_mapred_results(
-                 CTypeRD, Pipe, BoundaryState, Sender),
+                 CTypeRD, Pipe, BoundaryState, Sender, PipeTref),
     {true,
      wrq:set_resp_body({stream, Streamer}, CTypeRD),
      BoundaryState}.
 
 pipe_stream_mapred_results(RD, Pipe,
                            #state{boundary=Boundary}=State, 
-                           Sender) ->
+                           Sender, PipeTref) ->
     case pipe_receive_output((Pipe#pipe.sink)#fitting.ref, Sender) of
         {ok, {PhaseId, Result}} ->
             %% results come out of pipe one
@@ -269,17 +285,20 @@ pipe_stream_mapred_results(RD, Pipe,
                     "Content-Type: application/json\r\n\r\n",
                     Data],
             {iolist_to_binary(Body),
-             fun() -> pipe_stream_mapred_results(RD, Pipe, State, Sender) end};
+             fun() -> pipe_stream_mapred_results(RD, Pipe, State, Sender, PipeTref) end};
         eoi ->
+            cleanup_timer(PipeTref),
             {iolist_to_binary(["\r\n--", Boundary, "--\r\n"]), done};
         {error, timeout} ->
             riak_pipe:destroy(Pipe),
             prevent_keepalive(),
             {format_error({error, timeout}), done};
         {error, {sender_error, Error}} ->
+            cleanup_timer(PipeTref),
             prevent_keepalive(),
             {format_error(Error), done};
         {error, {Error, _Input}} ->
+            cleanup_timer(PipeTref),
             riak_pipe:destroy(Pipe),
             prevent_keepalive(),
             {format_error({error, Error}), done}
