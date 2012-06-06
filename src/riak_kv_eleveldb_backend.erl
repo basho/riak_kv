@@ -324,8 +324,8 @@ init_state(DataRoot, Config) ->
     %% Use a variable write buffer size in order to reduce the number
     %% of vnodes that try to kick off compaction at the same time
     %% under heavy uniform load...
-    WriteBufferMin = config_value(write_buffer_size_min, MergedConfig, 3 * 1024 * 1024),
-    WriteBufferMax = config_value(write_buffer_size_max, MergedConfig, 6 * 1024 * 1024),
+    WriteBufferMin = config_value(write_buffer_size_min, MergedConfig, 30 * 1024 * 1024),
+    WriteBufferMax = config_value(write_buffer_size_max, MergedConfig, 60 * 1024 * 1024),
     WriteBufferSize = WriteBufferMin + random:uniform(1 + WriteBufferMax - WriteBufferMin),
 
     %% Update the write buffer size in the merged config and make sure create_if_missing is set
