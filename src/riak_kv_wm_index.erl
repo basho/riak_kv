@@ -86,7 +86,7 @@ malformed_request(RD, Ctx) ->
     Args1 = wrq:path_tokens(RD),
     Args2 = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
 
-    case to_index_query(IndexField, Args2) of
+    case riak_index:to_index_query(IndexField, Args2) of
         {ok, Query} ->
             %% Request is valid.
             NewCtx = Ctx#ctx{
@@ -139,37 +139,3 @@ produce_index_results(RD, Ctx) ->
             {{error, Reason}, RD, Ctx}
     end.
 
-
-%% @private
-%% @spec to_index_op_query(binary(), [binary()]) ->
-%%         {ok, {atom(), binary(), list(binary())}} | {error, Reasons}.
-%% @doc Given an IndexOp, IndexName, and Args, construct and return a
-%%      valid query, or a list of errors if the query is malformed.
-to_index_query(IndexField, Args) ->
-    %% Normalize the index field...
-    IndexField1 = riak_index:normalize_index_field(IndexField),
-
-    %% Normalize the arguments...
-    case riak_index:parse_fields([{IndexField1, X} || X <- Args]) of
-        {ok, []} ->
-            {error, {too_few_arguments, Args}};
-
-        {ok, [{_, Value}]} ->
-            %% One argument == exact match query
-            {ok, {eq, IndexField1, Value}};
-
-        {ok, [{_, Start}, {_, End}]} ->
-            %% Two arguments == range query
-            case End > Start of
-                true ->
-                    {ok, {range, IndexField1, Start, End}};
-                false ->
-                    {error, {invalid_range, Args}}
-            end;
-
-        {ok, _} ->
-            {error, {too_many_arguments, Args}};
-
-        {error, FailureReasons} ->
-            {error, FailureReasons}
-    end.
