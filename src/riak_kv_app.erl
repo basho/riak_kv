@@ -132,7 +132,9 @@ start(_Type, _StartArgs) ->
             ok = riak_api_pb_service:register([{riak_kv_pb_object, 3, 6}, %% ClientID stuff
                                                {riak_kv_pb_object, 9, 14}, %% Object requests
                                                {riak_kv_pb_bucket, 15, 22}, %% Bucket requests
-                                               {riak_kv_pb_mapred, 23, 24}]), %% MapReduce requests
+                                               {riak_kv_pb_mapred, 23, 24}, %% MapReduce requests
+                                               {riak_kv_pb_index, 25, 26} %% Secondary index requests
+                                               ]),
 
             %% Add routes to webmachine
             [ webmachine_router:add_route(R)
