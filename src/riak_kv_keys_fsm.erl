@@ -148,7 +148,7 @@ finish(clean,
         plain ->
             ClientPid ! {ReqId, done}
     end,
-    ?DTRACE(?C_KEYS_FINISH, [-1], []),
+    ?DTRACE(?C_KEYS_FINISH, [0], []),
     {stop, normal, StateData}.
 
 %% ===================================================================
