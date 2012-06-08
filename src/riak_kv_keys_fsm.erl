@@ -79,7 +79,7 @@ req(Bucket, ItemFilter) ->
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
 init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout, ClientType]) ->
-    riak_core_dtrace:put_tag(Bucket),
+    riak_core_dtrace:put_tag(io_lib:format("~p", [Bucket])),
     ClientNode = atom_to_list(node(ClientPid)),
     PidStr = pid_to_list(ClientPid),
     FilterX = if ItemFilter == none -> 0;

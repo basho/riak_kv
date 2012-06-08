@@ -152,7 +152,7 @@ init([From, RObj, Options]) ->
                                            robj = RObj,
                                            bkey = BKey,
                                            options = Options}),
-    riak_core_dtrace:put_tag([Bucket, $,, Key]),
+    riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
     case riak_kv_util:is_x_deleted(RObj) of
         true  ->
             TombNum = 1,
