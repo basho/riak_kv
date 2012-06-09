@@ -222,12 +222,11 @@ repair_status(Partition) ->
 -spec repair_filter(partition()) -> Filter::function().
 repair_filter(Target) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    CH = element(4, Ring),
     NValMap = [{riak_core_bucket:name(B), riak_core_bucket:n_val(B)} ||
                   B <- riak_core_bucket:get_buckets(Ring)],
-    RangeMap = riak_core_repair:gen_range_map(Target, CH, NValMap),
+    RangeMap = riak_core_repair:gen_range_map(Target, Ring, NValMap),
     DefaultN = riak_core_bucket:n_val(riak_core_config:default_bucket_props()),
-    Default = riak_core_repair:gen_range(Target, CH, DefaultN),
+    Default = riak_core_repair:gen_range(Target, Ring, DefaultN),
     RangeFun = riak_core_repair:gen_range_fun(RangeMap, Default),
     fun({Bucket, _Key}=BKey) ->
             Hash = riak_core_util:chash_key(BKey),
