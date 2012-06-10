@@ -31,6 +31,8 @@
 
 -export([start_link/6, start_link/7, start_link/8, delete/8]).
 
+-include("riak_kv_dtrace.hrl").
+
 start_link(ReqId, Bucket, Key, Options, Timeout, Client) ->
     {ok, proc_lib:spawn_link(?MODULE, delete, [ReqId, Bucket, Key,
                                                Options, Timeout, Client, undefined,
@@ -52,8 +54,11 @@ start_link(ReqId, Bucket, Key, Options, Timeout, Client, ClientId, VClock) ->
 %% @doc Delete the object at Bucket/Key.  Direct return value is uninteresting,
 %%      see riak_client:delete/3 for expected gen_server replies to Client.
 delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
+    riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
+    ?DTRACE(?C_DELETE_INIT1, [0], []),
     case get_r_options(Bucket, Options) of
         {error, Reason} ->
+            ?DTRACE(?C_DELETE_INIT1, [-1], []),
             Client ! {ReqId, {error, Reason}};
         {R, PR} ->
             RealStartTime = riak_core_util:moment(),
@@ -63,14 +68,19 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
                     RemainingTime = Timeout - (riak_core_util:moment() - RealStartTime),
                     delete(ReqId,Bucket,Key,Options,RemainingTime,Client,ClientId,riak_object:vclock(OrigObj));
                 {error, notfound} ->
+                    ?DTRACE(?C_DELETE_INIT1, [-2], []),
                     Client ! {ReqId, {error, notfound}};
                 X ->
+                    ?DTRACE(?C_DELETE_INIT1, [-3], []),
                     Client ! {ReqId, X}
             end
     end;
 delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
+    riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
+    ?DTRACE(?C_DELETE_INIT2, [0], []),
     case get_w_options(Bucket, Options) of
         {error, Reason} ->
+            ?DTRACE(?C_DELETE_INIT2, [-1], []),
             Client ! {ReqId, {error, Reason}};
         {W, PW, DW} ->
             Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(?MD_DELETED,
@@ -81,10 +91,15 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
             Client ! {ReqId, Reply},
             case Reply of
                 ok ->
+                    ?DTRACE(?C_DELETE_INIT2, [1], [<<"reap">>]),
                     {ok, C2} = riak:local_client(),
                     AsyncTimeout = 60*1000,     % Avoid client-specified value
-                    C2:get(Bucket, Key, all, AsyncTimeout);
-                _ -> nop
+                    Res = C2:get(Bucket, Key, all, AsyncTimeout),
+                    ?DTRACE(?C_DELETE_REAPER_GET_DONE, [1], [<<"reap">>]),
+                    Res;
+                _ ->
+                    ?DTRACE(?C_DELETE_INIT2, [2], [<<"nop">>]),
+                    nop
             end
     end.
 
@@ -162,15 +177,6 @@ get_w_options(Bucket, Options) ->
                     end
             end
     end.
-
-
-
-
-
-
-
-
-
 
 
 %% ===================================================================

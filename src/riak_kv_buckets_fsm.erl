@@ -39,17 +39,27 @@
                 client_type :: plain | mapred,
                 from :: from()}).
 
+-include("riak_kv_dtrace.hrl").
+
 %% @doc Return a tuple containing the ModFun to call per vnode,
 %% the number of primary preflist vnodes the operation
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
 init(From={_, _, ClientPid}, [ItemFilter, Timeout, ClientType]) ->
+    ClientNode = atom_to_list(node(ClientPid)),
+    PidStr = pid_to_list(ClientPid),
+    FilterX = if ItemFilter == none -> 0;
+                 true               -> 1
+              end,
     case ClientType of
         %% Link to the mapred job so we die if the job dies
         mapred ->
+            ?DTRACE(?C_BUCKETS_INIT, [1, FilterX],
+                    [<<"mapred">>, ClientNode, PidStr]),
             link(ClientPid);
         _ ->
-            ok
+            ?DTRACE(?C_BUCKETS_INIT, [2, FilterX],
+                    [<<"other">>, ClientNode, PidStr])
     end,
     %% Construct the bucket listing request
     Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
@@ -60,14 +70,17 @@ process_results(done, StateData) ->
     {done, StateData};
 process_results(Buckets,
                 StateData=#state{buckets=BucketAcc}) ->
+    ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [length(Buckets)], []),
     {ok, StateData#state{buckets=sets:union(sets:from_list(Buckets),
                                                BucketAcc)}};
 process_results({error, Reason}, _State) ->
+    ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [-1], []),
     {error, Reason}.
 
 finish({error, Error},
        StateData=#state{client_type=ClientType,
                         from={raw, ReqId, ClientPid}}) ->
+    ?DTRACE(?C_BUCKETS_FINISH, [-1], []),
     case ClientType of
         mapred ->
             %% An error occurred or the timeout interval elapsed
@@ -91,4 +104,5 @@ finish(clean,
         plain ->
             ClientPid ! {ReqId, {buckets, sets:to_list(Buckets)}}
     end,
+    ?DTRACE(?C_BUCKETS_FINISH, [0], []),
     {stop, normal, StateData}.

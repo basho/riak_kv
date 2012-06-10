@@ -52,6 +52,8 @@
 -record(state, {client_type :: plain | mapred,
                 from :: from()}).
 
+-include("riak_kv_dtrace.hrl").
+
 %% @doc Returns `true' if the new ack-based backpressure listkeys
 %% protocol should be used.  This decision is based on the
 %% `listkeys_backpressure' setting in `riak_kv''s application
@@ -77,12 +79,21 @@ req(Bucket, ItemFilter) ->
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
 init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout, ClientType]) ->
+    riak_core_dtrace:put_tag(io_lib:format("~p", [Bucket])),
+    ClientNode = atom_to_list(node(ClientPid)),
+    PidStr = pid_to_list(ClientPid),
+    FilterX = if ItemFilter == none -> 0;
+                 true               -> 1
+              end,
     case ClientType of
         %% Link to the mapred job so we die if the job dies
         mapred ->
+            ?DTRACE(?C_KEYS_INIT, [1, FilterX],
+                    [<<"mapred">>, ClientNode, PidStr]),
             link(ClientPid);
         _ ->
-            ok
+            ?DTRACE(?C_KEYS_INIT, [2, FilterX],
+                    [<<"other">>, ClientNode, PidStr])
     end,
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
@@ -95,22 +106,27 @@ init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout, ClientType]) ->
 process_results({From, Bucket, Keys},
                 StateData=#state{client_type=ClientType,
                                  from={raw, ReqId, ClientPid}}) ->
+    %% TODO: have caller give us the Idx number.
+    ?DTRACE(?C_KEYS_PROCESS_RESULTS, [length(Keys)], []),
     process_keys(ClientType, Bucket, Keys, ReqId, ClientPid),
     riak_kv_vnode:ack_keys(From), % tell that vnode we're ready for more
     {ok, StateData};
 process_results({Bucket, Keys},
                 StateData=#state{client_type=ClientType,
                                  from={raw, ReqId, ClientPid}}) ->
+    ?DTRACE(?C_KEYS_PROCESS_RESULTS, [length(Keys)], []),
     process_keys(ClientType, Bucket, Keys, ReqId, ClientPid),
     {ok, StateData};
 process_results(done, StateData) ->
     {done, StateData};
 process_results({error, Reason}, _State) ->
+    ?DTRACE(?C_KEYS_PROCESS_RESULTS, [-1], []),
     {error, Reason}.
 
 finish({error, Error},
        StateData=#state{from={raw, ReqId, ClientPid},
                         client_type=ClientType}) ->
+    ?DTRACE(?C_KEYS_FINISH, [-1], []),
     case ClientType of
         mapred ->
             %% An error occurred or the timeout interval elapsed
@@ -132,6 +148,7 @@ finish(clean,
         plain ->
             ClientPid ! {ReqId, done}
     end,
+    ?DTRACE(?C_KEYS_FINISH, [0], []),
     {stop, normal, StateData}.
 
 %% ===================================================================

@@ -41,6 +41,8 @@ start_link() ->
 %% @spec init([]) -> SupervisorTree
 %% @doc supervisor callback.
 init([]) ->
+    catch dtrace:init(),                   % NIF load trigger (R14B04)
+    catch dyntrace:p(),                    % NIF load trigger (R15B01+)
     VMaster = {riak_kv_vnode_master,
                {riak_core_vnode_master, start_link,
                 [riak_kv_vnode, riak_kv_legacy_vnode, riak_kv]},
