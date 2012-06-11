@@ -25,6 +25,7 @@
 -module(riak_kv_console).
 
 -export([join/1,
+         staged_join/1,
          leave/1,
          remove/1,
          status/1,
@@ -41,10 +42,19 @@
 
 
 join([NodeStr]) ->
+    join(NodeStr, fun riak_core:join/1,
+         "Sent join request to ~s~n", [NodeStr]).
+
+staged_join([NodeStr]) ->
+    Node = list_to_atom(NodeStr),
+    join(NodeStr, fun riak_core:staged_join/1,
+         "Success: staged join request for ~p to ~p~n", [node(), Node]).
+
+join(NodeStr, JoinFn, SuccessFmt, SuccessArgs) ->
     try
-        case riak_core:join(NodeStr) of
+        case JoinFn(NodeStr) of
             ok ->
-                io:format("Sent join request to ~s~n", [NodeStr]),
+                io:format(SuccessFmt, SuccessArgs),
                 ok;
             {error, not_reachable} ->
                 io:format("Node ~s is not reachable!~n", [NodeStr]),
