@@ -222,21 +222,11 @@ repair_status(Partition) ->
 -spec repair_filter(partition()) -> Filter::function().
 repair_filter(Target) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    NValMap = [{riak_core_bucket:name(B), riak_core_bucket:n_val(B)} ||
-                  B <- riak_core_bucket:get_buckets(Ring)],
-    RangeMap = riak_core_repair:gen_range_map(Target, Ring, NValMap),
-    DefaultN = riak_core_bucket:n_val(riak_core_config:default_bucket_props()),
-    Default = riak_core_repair:gen_range(Target, Ring, DefaultN),
-    RangeFun = riak_core_repair:gen_range_fun(RangeMap, Default),
-    fun({Bucket, _Key}=BKey) ->
-            Hash = riak_core_util:chash_key(BKey),
-            case RangeFun(Bucket) of
-                {nowrap, GTE, LTE} ->
-                    Hash >= GTE andalso Hash =< LTE;
-                {wrap, GTE, LTE} ->
-                    Hash >= GTE orelse Hash =< LTE
-            end
-    end.
+    riak_core_repair:gen_filter(Target,
+                                Ring,
+                                bucket_nval_map(Ring),
+                                default_object_nval(),
+                                fun object_info/1).
 
 
 %% VNode callbacks
@@ -1235,6 +1225,20 @@ count_index_specs(IndexSpecs) ->
                 {AddAcc, RemoveAcc + 1}
         end,
     lists:foldl(F, {0, 0}, IndexSpecs).
+
+%% @private
+bucket_nval_map(Ring) ->
+    [{riak_core_bucket:name(B), riak_core_bucket:n_val(B)} ||
+        B <- riak_core_bucket:get_buckets(Ring)].
+
+%% @private
+default_object_nval() ->
+    riak_core_bucket:n_val(riak_core_config:default_bucket_props()).
+
+%% @private
+object_info({Bucket, _Key}=BKey) ->
+    Hash = riak_core_util:chash_key(BKey),
+    {Bucket, Hash}.
 
 
 -ifdef(TEST).
