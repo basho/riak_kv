@@ -379,11 +379,12 @@ callback(Ref,
          merge_check,
          #state{ref=Ref,
                 data_dir=DataDir,
+                opts=BitcaskOpts,
                 root=DataRoot}=State) when is_reference(Ref) ->
     case bitcask:needs_merge(Ref) of
         {true, Files} ->
             BitcaskRoot = filename:join(DataRoot, DataDir),
-            bitcask_merge_worker:merge(BitcaskRoot, [], Files);
+            bitcask_merge_worker:merge(BitcaskRoot, BitcaskOpts, Files);
         false ->
             ok
     end,
