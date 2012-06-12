@@ -354,7 +354,7 @@ register_stat(Name, histogram) ->
     folsom_metrics:new_histogram(Name, SampleType, SampleArgs).
 
 get_sample_type(Name) ->
-    SampleType0 = app_helper:get_env(riak_kv, stat_sample_type, {slide_uniform, {60, 1028}}),
+    SampleType0 = app_helper:get_env(riak_kv, stat_sample_type, {slide, 60}),
     app_helper:get_env(riak_kv, Name, SampleType0).
 
 %% @spec cpu_stats() -> proplist()
