@@ -92,7 +92,14 @@ handle_ctype_ok(true, RD, State) ->
     check_body(RD, State).
 
 ctype_ok(RD) ->
-    valid_ctype(wrq:get_req_header("content-type", RD)).
+    valid_ctype(get_base_ctype(RD)).
+
+%% Return the "base" content-type, that
+%% is, not including the subtype parameters
+get_base_ctype(RD) ->
+    CType = wrq:get_req_header("content-type", RD),
+    {BaseType, _SubTypeParameters} = mochiweb_util:parse_header(CType),
+    BaseType.
 
 valid_ctype(?MAPRED_CTYPE) -> true;
 valid_ctype(_Ctype) -> false.
