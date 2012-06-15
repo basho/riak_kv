@@ -36,6 +36,7 @@
 
 
 -record(state, {client, inputs, timeout, mrquery, boundary}).
+-type state() :: #state{}.
 
 init(_) ->
     {ok, undefined}.
@@ -83,24 +84,48 @@ format_error({error, Error}) when is_list(Error) ->
 format_error(_Error) ->
     mochijson2:encode({struct, [{error, map_reduce_error}]}).
 
+-spec check_ctype_and_verify_body(wrq:reqdata(), state()) ->
+    {term(), wrq:reqdata(), state()}.
+%% @doc First check that the content-type is
+%% application/json, if it's not, halt the request
+%% and return 415. If it's correct, verify the body
+%% of the request is correct. If it's not, return
+%% an appropriate error message.
 check_ctype_and_verify_body(RD, State) ->
     handle_ctype_ok(ctype_ok(RD), RD, State).
 
+-spec handle_ctype_ok(boolean(), wrq:reqdata(), state()) ->
+    {term(), wrq:reqdata(), state()}.
+%% @doc Handle whether the content-type
+%% is appropriate for this request or not.
+%% If is appropriate, check the body. If it's
+%% not, bail out earlier with a 415 return status.
 handle_ctype_ok(false, RD, State) ->
     {{halt, 415}, RD, State};
 handle_ctype_ok(true, RD, State) ->
     check_body(RD, State).
 
+-spec ctype_ok(wrq:reqdata()) -> boolean().
+%% @doc Return true if the content type from
+%% this request is appropriate.
 ctype_ok(RD) ->
     valid_ctype(get_base_ctype(RD)).
 
-%% Return the "base" content-type, that
+-spec get_base_ctype(wrq:reqdata()) -> string().
+%% @doc Return the "base" content-type, that
 %% is, not including the subtype parameters
 get_base_ctype(RD) ->
-    CType = wrq:get_req_header("content-type", RD),
+    base_type(wrq:get_req_header("content-type", RD)).
+
+-spec base_type(string()) -> string().
+%% @doc Return the base media type
+base_type(CType) ->
     {BaseType, _SubTypeParameters} = mochiweb_util:parse_header(CType),
     BaseType.
 
+-spec valid_ctype(string()) -> boolean().
+%% @doc Return true if the base content type
+%% is equivalent to ?MAPRED_CTYPE
 valid_ctype(?MAPRED_CTYPE) -> true;
 valid_ctype(_Ctype) -> false.
 
