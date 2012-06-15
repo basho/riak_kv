@@ -31,6 +31,7 @@
 -include_lib("webmachine/include/webmachine.hrl").
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 
+-define(MAPRED_CTYPE, "application/json").
 -define(DEFAULT_TIMEOUT, 60000).
 
 
@@ -52,21 +53,7 @@ allowed_methods(RD, State) ->
     {['GET','HEAD','POST'], RD, State}.
 
 malformed_request(RD, State) ->
-    {Verified, Message, NewState} =
-        case {wrq:method(RD), wrq:req_body(RD)} of
-            {'POST', Body} when Body /= undefined ->
-                verify_body(Body, State);
-            _ ->
-                {false, usage(), State}
-        end,
-    {not Verified,
-     if Verified -> RD;
-        true ->
-             wrq:set_resp_header(
-               "Content-Type", "text/plain",
-               wrq:set_resp_body(Message, RD))
-     end,
-     NewState}.
+    check_ctype_and_verify_body(RD, State).
 
 content_types_provided(RD, State) ->
     {[{"application/json", nop}], RD, State}.
@@ -95,6 +82,37 @@ format_error({error, Error}) when is_list(Error) ->
     mochijson2:encode({struct, Error});
 format_error(_Error) ->
     mochijson2:encode({struct, [{error, map_reduce_error}]}).
+
+check_ctype_and_verify_body(RD, State) ->
+    handle_ctype_ok(ctype_ok(RD), RD, State).
+
+handle_ctype_ok(false, RD, State) ->
+    {{halt, 415}, RD, State};
+handle_ctype_ok(true, RD, State) ->
+    check_body(RD, State).
+
+ctype_ok(RD) ->
+    valid_ctype(wrq:get_req_header("content-type", RD)).
+
+valid_ctype(?MAPRED_CTYPE) -> true;
+valid_ctype(_Ctype) -> false.
+
+check_body(RD, State) ->
+    {Verified, Message, NewState} =
+        case {wrq:method(RD), wrq:req_body(RD)} of
+            {'POST', Body} when Body /= undefined ->
+                verify_body(Body, State);
+            _ ->
+                {false, usage(), State}
+        end,
+    {not Verified,
+     if Verified -> RD;
+        true ->
+             wrq:set_resp_header(
+               "Content-Type", "text/plain",
+               wrq:set_resp_body(Message, RD))
+     end,
+     NewState}.
 
 verify_body(Body, State) ->
     case riak_kv_mapred_json:parse_request(Body) of
