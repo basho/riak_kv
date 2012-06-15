@@ -24,7 +24,7 @@
 
 -module(riak_kv_wm_mapred).
 
--export([init/1, service_available/2, allowed_methods/2]).
+-export([init/1, service_available/2, allowed_methods/2, known_content_type/2]).
 -export([malformed_request/2, process_post/2, content_types_provided/2]).
 -export([nop/2]).
 
@@ -53,8 +53,13 @@ service_available(RD, State) ->
 allowed_methods(RD, State) ->
     {['GET','HEAD','POST'], RD, State}.
 
+-spec known_content_type(wrq:reqdata(), state()) ->
+    {boolean(), wrq:reqdata(), state()}.
+known_content_type(RD, State) ->
+    {ctype_ok(RD), RD, State}.
+
 malformed_request(RD, State) ->
-    check_ctype_and_verify_body(RD, State).
+    check_body(RD, State).
 
 content_types_provided(RD, State) ->
     {[{"application/json", nop}], RD, State}.
@@ -83,27 +88,6 @@ format_error({error, Error}) when is_list(Error) ->
     mochijson2:encode({struct, Error});
 format_error(_Error) ->
     mochijson2:encode({struct, [{error, map_reduce_error}]}).
-
--spec check_ctype_and_verify_body(wrq:reqdata(), state()) ->
-    {term(), wrq:reqdata(), state()}.
-%% @doc First check that the content-type is
-%% application/json, if it's not, halt the request
-%% and return 415. If it's correct, verify the body
-%% of the request is correct. If it's not, return
-%% an appropriate error message.
-check_ctype_and_verify_body(RD, State) ->
-    handle_ctype_ok(ctype_ok(RD), RD, State).
-
--spec handle_ctype_ok(boolean(), wrq:reqdata(), state()) ->
-    {term(), wrq:reqdata(), state()}.
-%% @doc Handle whether the content-type
-%% is appropriate for this request or not.
-%% If is appropriate, check the body. If it's
-%% not, bail out earlier with a 415 return status.
-handle_ctype_ok(false, RD, State) ->
-    {{halt, 415}, RD, State};
-handle_ctype_ok(true, RD, State) ->
-    check_body(RD, State).
 
 -spec ctype_ok(wrq:reqdata()) -> boolean().
 %% @doc Return true if the content type from
