@@ -24,17 +24,19 @@
 
 -module(riak_kv_wm_mapred).
 
--export([init/1, service_available/2, allowed_methods/2]).
+-export([init/1, service_available/2, allowed_methods/2, known_content_type/2]).
 -export([malformed_request/2, process_post/2, content_types_provided/2]).
 -export([nop/2]).
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 
+-define(MAPRED_CTYPE, "application/json").
 -define(DEFAULT_TIMEOUT, 60000).
 
 
 -record(state, {client, inputs, timeout, mrquery, boundary}).
+-type state() :: #state{}.
 
 init(_) ->
     {ok, undefined}.
@@ -51,22 +53,13 @@ service_available(RD, State) ->
 allowed_methods(RD, State) ->
     {['GET','HEAD','POST'], RD, State}.
 
+-spec known_content_type(wrq:reqdata(), state()) ->
+    {boolean(), wrq:reqdata(), state()}.
+known_content_type(RD, State) ->
+    {ctype_ok(RD), RD, State}.
+
 malformed_request(RD, State) ->
-    {Verified, Message, NewState} =
-        case {wrq:method(RD), wrq:req_body(RD)} of
-            {'POST', Body} when Body /= undefined ->
-                verify_body(Body, State);
-            _ ->
-                {false, usage(), State}
-        end,
-    {not Verified,
-     if Verified -> RD;
-        true ->
-             wrq:set_resp_header(
-               "Content-Type", "text/plain",
-               wrq:set_resp_body(Message, RD))
-     end,
-     NewState}.
+    check_body(RD, State).
 
 content_types_provided(RD, State) ->
     {[{"application/json", nop}], RD, State}.
@@ -95,6 +88,47 @@ format_error({error, Error}) when is_list(Error) ->
     mochijson2:encode({struct, Error});
 format_error(_Error) ->
     mochijson2:encode({struct, [{error, map_reduce_error}]}).
+
+-spec ctype_ok(wrq:reqdata()) -> boolean().
+%% @doc Return true if the content type from
+%% this request is appropriate.
+ctype_ok(RD) ->
+    valid_ctype(get_base_ctype(RD)).
+
+-spec get_base_ctype(wrq:reqdata()) -> string().
+%% @doc Return the "base" content-type, that
+%% is, not including the subtype parameters
+get_base_ctype(RD) ->
+    base_type(wrq:get_req_header("content-type", RD)).
+
+-spec base_type(string()) -> string().
+%% @doc Return the base media type
+base_type(CType) ->
+    {BaseType, _SubTypeParameters} = mochiweb_util:parse_header(CType),
+    BaseType.
+
+-spec valid_ctype(string()) -> boolean().
+%% @doc Return true if the base content type
+%% is equivalent to ?MAPRED_CTYPE
+valid_ctype(?MAPRED_CTYPE) -> true;
+valid_ctype(_Ctype) -> false.
+
+check_body(RD, State) ->
+    {Verified, Message, NewState} =
+        case {wrq:method(RD), wrq:req_body(RD)} of
+            {'POST', Body} when Body /= undefined ->
+                verify_body(Body, State);
+            _ ->
+                {false, usage(), State}
+        end,
+    {not Verified,
+     if Verified -> RD;
+        true ->
+             wrq:set_resp_header(
+               "Content-Type", "text/plain",
+               wrq:set_resp_body(Message, RD))
+     end,
+     NewState}.
 
 verify_body(Body, State) ->
     case riak_kv_mapred_json:parse_request(Body) of
