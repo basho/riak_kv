@@ -37,8 +37,8 @@
 %%   previously-put keys or to correlate get values with previously-put
 %%   values.
 %%   - Get operation keys that are formatted in with the convention
-%%     <<"integer.anything">> will use integer as the returned binary's
-%%     Size.
+%%     <<"yessir.{integer}.anything">> will use integer (interpreted in
+%%     base 10) as the returned binary's Size.
 %%
 %% This backend is the Riak storage manager equivalent of:
 %%
@@ -201,8 +201,8 @@ callback(_Ref, _Whatever, S) ->
 %% Internal functions
 %% ===================================================================
 
-get_binsize(<<X:8, _/binary>> = Bin) when $0 =< X, X =< $9->
-    get_binsize(Bin, 0);
+get_binsize(<<"yessir.", Rest/binary>>) ->
+    get_binsize(Rest, 0);
 get_binsize(_) ->
     undefined.
 
