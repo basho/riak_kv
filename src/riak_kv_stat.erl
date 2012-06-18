@@ -175,63 +175,105 @@
 %%
 -module(riak_kv_stat).
 
-%% API
--export([get_stats/0, update/1, register_stats/0]).
+-behaviour(gen_server).
 
+%% API
+-export([start_link/0, get_stats/0,
+         update/1, register_stats/0, produce_stats/0]).
+
+%% gen_server callbacks
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2,
+         terminate/2, code_change/3]).
+
+-define(SERVER, ?MODULE).
 -define(APP, riak_kv).
+
+start_link() ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+register_stats() ->
+    [register_stat({?APP, Name}, Type) || {Name, Type} <- stats()],
+    riak_core_stat_cache:register_app(?APP, {?MODULE, produce_stats, []}).
 
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
 get_stats() ->
-    produce_stats().
+    case riak_core_stat_cache:get_stats(?APP) of
+        {ok, Stats, _TS} ->
+            Stats;
+        Error -> Error
+    end.
 
-register_stats() ->
-    [register_stat({?APP, Name}, Type) || {Name, Type} <- stats()].
+update(Arg) ->
+    gen_server:cast(?SERVER, {update, Arg}).
+
+%% gen_server
+
+init([]) ->
+    {ok, ok}.
+
+handle_call(_Req, _From, State) ->
+    {reply, ok, State}.
+
+handle_cast({update, Arg}, State) ->
+    update1(Arg),
+    {noreply, State};
+handle_cast(_Req, State) ->
+    {noreply, State}.
+
+handle_info(_Info, State) ->
+    {noreply, State}.
+
+terminate(_Reason, _State) ->
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% @doc Update the given stat
-update(vnode_get) ->
+update1(vnode_get) ->
     folsom_metrics:notify_existing_metric({?APP, vnode_gets}, 1, meter);
-update(vnode_put) ->
+update1(vnode_put) ->
     folsom_metrics:notify_existing_metric({?APP, vnode_puts}, 1, meter);
-update(vnode_index_read) ->
+update1(vnode_index_read) ->
     folsom_metrics:notify_existing_metric({?APP, vnode_index_reads}, 1, meter);
-update({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
+update1({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
     folsom_metrics:notify_existing_metric({?APP, vnode_index_writes}, 1, meter),
     folsom_metrics:notify_existing_metric({?APP, vnode_index_writes_postings}, PostingsAdded, meter),
     folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, PostingsRemoved, meter);
-update({vnode_index_delete, Postings}) ->
+update1({vnode_index_delete, Postings}) ->
     folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes}, Postings, meter),
     folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, Postings, meter);
-update({get_fsm, Bucket, Microsecs, undefined, undefined, PerBucket}) ->
+update1({get_fsm, Bucket, Microsecs, undefined, undefined, PerBucket}) ->
     folsom_metrics:notify_existing_metric({?APP, node_gets_total}, {inc, 1}, counter),
     folsom_metrics:notify_existing_metric({?APP, node_get_fsm_time}, Microsecs, histogram),
     do_get_bucket(PerBucket, {Bucket, Microsecs, undefined, undefined});
-update({get_fsm, Bucket, Microsecs, NumSiblings, ObjSize, PerBucket}) ->
+update1({get_fsm, Bucket, Microsecs, NumSiblings, ObjSize, PerBucket}) ->
     folsom_metrics:notify_existing_metric({?APP, node_gets_total}, {inc, 1}, counter),
     folsom_metrics:notify_existing_metric({?APP, node_get_fsm_time}, Microsecs, histogram),
     folsom_metrics:notify_existing_metric({?APP, node_get_fsm_siblings}, NumSiblings, histogram),
     folsom_metrics:notify_existing_metric({?APP, node_get_fsm_objsize}, ObjSize, histogram),
     do_get_bucket(PerBucket, {Bucket, Microsecs, NumSiblings, ObjSize});
-update({put_fsm_time, Bucket,  Microsecs, PerBucket}) ->
+update1({put_fsm_time, Bucket,  Microsecs, PerBucket}) ->
     folsom_metrics:notify_existing_metric({?APP, node_puts_total}, {inc, 1}, counter),
     folsom_metrics:notify_existing_metric({?APP, node_put_fsm_time}, Microsecs, histogram),
     do_put_bucket(PerBucket, {Bucket, Microsecs});
-update(pbc_connect) ->
+update1(pbc_connect) ->
     folsom_metrics:notify_existing_metric({?APP, pbc_connects_active}, {inc, 1}, counter),
     folsom_metrics:notify_existing_metric({?APP, pbc_connects}, 1, meter);
-update(pbc_disconnect) ->
+update1(pbc_disconnect) ->
     folsom_metrics:notify_existing_metric({?APP, pbc_connects_active}, {dec, 1}, counter);
-update(read_repairs) ->
+update1(read_repairs) ->
     folsom_metrics:notify_existing_metric({?APP, read_repairs}, 1, meter);
-update(coord_redir) ->
+update1(coord_redir) ->
     folsom_metrics:notify_existing_metric({?APP, coord_redirs_total}, {inc, 1}, counter);
-update(mapper_start) ->
+update1(mapper_start) ->
     folsom_metrics:notify_existing_metric({?APP, mapper_count}, {inc, 1}, counter);
-update(mapper_end) ->
+update1(mapper_end) ->
     folsom_metrics:notify_existing_metric({?APP, mapper_count}, {dec, 1}, counter);
-update(precommit_fail) ->
+update1(precommit_fail) ->
     folsom_metrics:notify_existing_metric({?APP, precommit_fail}, {inc, 1}, counter);
-update(postcommit_fail) ->
+update1(postcommit_fail) ->
     folsom_metrics:notify_existing_metric({?APP, postcommit_fail}, {inc, 1}, counter).
 
 %% private
