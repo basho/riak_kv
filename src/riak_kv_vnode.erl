@@ -38,7 +38,10 @@
          fold/3,
          get_vclocks/2,
          vnode_status/1,
-         ack_keys/1]).
+         ack_keys/1,
+         repair/1,
+         repair_status/1,
+         repair_filter/1]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -97,8 +100,6 @@
                   prunetime :: undefined| non_neg_integer(),
                   is_index=false :: boolean() %% set if the b/end supports indexes
                  }).
-
-%% TODO: add -specs to all public API funcs, this module seems fragile?
 
 %% API
 start_vnode(I) ->
@@ -200,6 +201,33 @@ vnode_status(PrefLists) ->
                                    {raw, ReqId, self()},
                                    riak_kv_vnode_master),
     wait_for_vnode_status_results(PrefLists, ReqId, []).
+
+%% @doc Repair the given `Partition'.
+-spec repair(partition()) ->
+                    {ok, Pairs::[{partition(), node()}]} |
+                    {down, Down::[{partition(), node()}]}.
+repair(Partition) ->
+    Service = riak_kv,
+    MP = {riak_kv_vnode, Partition},
+    FilterModFun = {?MODULE, repair_filter},
+    riak_core_vnode_manager:repair(Service, MP, FilterModFun).
+
+%% @doc Get the status of the repair process for the given `Partition'.
+-spec repair_status(partition()) -> no_repair | repair_in_progress.
+repair_status(Partition) ->
+    riak_core_vnode_manager:repair_status({riak_kv_vnode, Partition}).
+
+%% @doc Given a `Target' partition generate a `Filter' fun to use
+%%      during partition repair.
+-spec repair_filter(partition()) -> Filter::function().
+repair_filter(Target) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    riak_core_repair:gen_filter(Target,
+                                Ring,
+                                bucket_nval_map(Ring),
+                                default_object_nval(),
+                                fun object_info/1).
+
 
 %% VNode callbacks
 
@@ -1197,6 +1225,20 @@ count_index_specs(IndexSpecs) ->
                 {AddAcc, RemoveAcc + 1}
         end,
     lists:foldl(F, {0, 0}, IndexSpecs).
+
+%% @private
+bucket_nval_map(Ring) ->
+    [{riak_core_bucket:name(B), riak_core_bucket:n_val(B)} ||
+        B <- riak_core_bucket:get_buckets(Ring)].
+
+%% @private
+default_object_nval() ->
+    riak_core_bucket:n_val(riak_core_config:default_bucket_props()).
+
+%% @private
+object_info({Bucket, _Key}=BKey) ->
+    Hash = riak_core_util:chash_key(BKey),
+    {Bucket, Hash}.
 
 
 -ifdef(TEST).
