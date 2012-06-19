@@ -29,6 +29,7 @@
          encodings_provided/2,
          content_types_provided/2,
          service_available/2,
+         forbidden/2,
          produce_body/2,
          pretty_print/2
         ]).
@@ -74,6 +75,9 @@ service_available(ReqData, Ctx) ->
         true ->
             {true, ReqData, Ctx}
     end.
+
+forbidden(RD, Ctx) ->
+    {not riak_kv_wm_utils:is_valid_referer(RD), RD, Ctx}.
 
 produce_body(ReqData, Ctx) ->
     Body = mochijson2:encode({struct, get_stats()}),
