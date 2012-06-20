@@ -182,6 +182,8 @@ start_mock_servers() ->
     {ok, _Pid3} = fsm_eqc_vnode:start_link(),
     application:load(riak_core),
     application:start(crypto),
+    application:start(folsom),
+    riak_kv_stat:register_stats(),
     riak_core_ring_events:start_link(),
     riak_core_node_watcher_events:start_link(),
     riak_core_node_watcher:start_link(),
@@ -189,6 +191,7 @@ start_mock_servers() ->
     ok.
 
 cleanup_mock_servers() ->
+    application:stop(folsom),
     application:stop(riak_core).
 
 make_options([], Options) ->
