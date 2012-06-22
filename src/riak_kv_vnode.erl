@@ -1379,7 +1379,9 @@ list_buckets_test_() ->
     {foreach,
      fun() ->
              application:start(sasl),
-             application:get_all_env(riak_kv)
+             application:get_all_env(riak_kv),
+             application:start(folsom),
+             riak_kv_stat:register_stats()
      end,
      fun(Env) ->
              application:stop(sasl),
