@@ -299,7 +299,7 @@ is_empty(#state{ref=Ref}) ->
 -spec status(state()) -> [{atom(), term()}].
 status(State) ->
     {ok, Stats} = eleveldb:status(State#state.ref, <<"leveldb.stats">>),
-    [{stats, Stats}].
+    Stats.
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
