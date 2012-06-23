@@ -175,23 +175,60 @@
 %%
 -module(riak_kv_stat).
 
-%% API
--export([get_stats/0, update/1, register_stats/0, produce_stats/0]).
+-behaviour(gen_server).
 
+%% API
+-export([start_link/0, get_stats/0,
+         update/1, register_stats/0, produce_stats/0]).
+
+%% gen_server callbacks
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2,
+         terminate/2, code_change/3]).
+
+-define(SERVER, ?MODULE).
 -define(APP, riak_kv).
 
-%% @spec get_stats() -> proplist()
-%% @doc Get the current aggregation of stats.
-get_stats() ->
-    riak_core_stat_cache:get_stats(?APP).
+start_link() ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 register_stats() ->
     [register_stat({?APP, Name}, Type) || {Name, Type} <- stats()],
     riak_core_stat_cache:register_app(?APP, {?MODULE, produce_stats, []}).
 
+%% @spec get_stats() -> proplist()
+%% @doc Get the current aggregation of stats.
+get_stats() ->
+    case riak_core_stat_cache:get_stats(?APP) of
+        {ok, Stats, _TS} ->
+            Stats;
+        Error -> Error
+    end.
+
 update(Arg) ->
-    spawn(fun() ->
-                  update1(Arg) end).
+    gen_server:cast(?SERVER, {update, Arg}).
+
+%% gen_server
+
+init([]) ->
+    {ok, ok}.
+
+handle_call(_Req, _From, State) ->
+    {reply, ok, State}.
+
+handle_cast({update, Arg}, State) ->
+    update1(Arg),
+    {noreply, State};
+handle_cast(_Req, State) ->
+    {noreply, State}.
+
+handle_info(_Info, State) ->
+    {noreply, State}.
+
+terminate(_Reason, _State) ->
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %% @doc Update the given stat
 update1(vnode_get) ->
