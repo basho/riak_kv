@@ -129,7 +129,7 @@ start(_Type, _StartArgs) ->
                 {bucket_validator, riak_kv_bucket}
             ]),
 
-            riak_api_pb_service:register([{riak_kv_pb_object, 3, 6}, %% ClientID stuff
+            ok = riak_api_pb_service:register([{riak_kv_pb_object, 3, 6}, %% ClientID stuff
                                                {riak_kv_pb_object, 9, 14}, %% Object requests
                                                {riak_kv_pb_bucket, 15, 22}, %% Bucket requests
                                                {riak_kv_pb_mapred, 23, 24}, %% MapReduce requests
