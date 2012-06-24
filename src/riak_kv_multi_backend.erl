@@ -472,6 +472,7 @@ multi_backend_test_() ->
              [P1, P2]
      end,
      fun([P1, P2]) ->
+             application:stop(bitcask),
              crypto:stop(),
              ?assertCmd("rm -rf test/bitcask-backend"),
              unlink(P1),

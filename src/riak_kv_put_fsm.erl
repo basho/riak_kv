@@ -879,6 +879,7 @@ dtrace_errstr(Term) ->
 make_vtag_test() ->
     crypto:start(),
     ?assertNot(make_vtag(now()) =:=
-               make_vtag(now())).
+               make_vtag(now())),
+    crypto:stop().
 
 -endif.
