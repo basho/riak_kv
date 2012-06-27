@@ -1,0 +1,10 @@
+language: erlang
+notifications:
+  email: eng@basho.com
+before_script:
+  - "ulimit -n 4096"
+otp_release:
+  - R15B01
+  - R15B
+  - R14B04
+  - R14B03
