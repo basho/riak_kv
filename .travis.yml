@@ -1,6 +1,7 @@
 language: erlang
 notifications:
   email: eng@basho.com
+
 otp_release:
   - R15B01
   - R15B
