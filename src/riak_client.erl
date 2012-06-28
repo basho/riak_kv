@@ -43,7 +43,7 @@
 -export([list_buckets/0,list_buckets/2]).
 -export([get_index/3,get_index/2]).
 -export([stream_get_index/3,stream_get_index/2]).
--export([set_bucket/2,get_bucket/1]).
+-export([set_bucket/2,get_bucket/1,clear_bucket/1]).
 -export([reload_all/1]).
 -export([remove_from_cluster/1]).
 -export([get_stats/1]).
@@ -715,6 +715,11 @@ set_bucket(BucketName,BucketProps) ->
 %% See riak_core_bucket for expected useful properties.
 get_bucket(BucketName) ->
     rpc:call(Node,riak_core_bucket,get_bucket,[BucketName]).
+%% @spec clear_bucket(riak_object:bucket()) -> [BucketProp :: {atom(),term()}]
+%% @doc Clear properties for Bucket.
+%% See riak_core_bucket for expected useful properties.
+clear_bucket(BucketName) ->
+    rpc:call(Node,riak_core_bucket,clear_bucket,[BucketName]).
 %% @spec reload_all(Module :: atom()) -> term()
 %% @doc Force all Riak nodes to reload Module.
 %%      This is used when loading new modules for map/reduce functionality.
