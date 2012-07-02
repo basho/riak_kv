@@ -1,5 +1,6 @@
 language: erlang
 notifications:
+  webhooks: http://basho-engbot.herokuapp.com/travis?key=ad9a6e51d706903e1fd0963c7b8e064b93e85b56
   email: eng@basho.com
 before_script:
   - "ulimit -n 4096"
