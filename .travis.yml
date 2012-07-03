@@ -6,6 +6,6 @@ before_script:
   - "ulimit -n 4096"
 otp_release:
   - R15B01
-  # - R15B
-  # - R14B04
-  # - R14B03
+  - R15B
+  - R14B04
+  - R14B03
