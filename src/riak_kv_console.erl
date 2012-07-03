@@ -166,7 +166,7 @@ status([]) ->
                 StatString = format_stats(Stats,
                     ["-------------------------------------------\n",
                         io_lib:format("1-minute stats for ~p~n",[node()])]),
-                io:format("~s\n", [StatString])
+                io:format("~s", [StatString])
         end
     catch
         Exception:Reason ->
