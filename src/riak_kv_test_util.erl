@@ -197,7 +197,7 @@ dep_apps(Test, Extra) ->
                                                                 {Test ++ "/log/debug.log", debug, 10485760, "$D0", 5}]}]),
                         application:set_env(lager, crash_log, Test ++ "/log/crash.log");
                     _ ->
-                        application:set_env(lager, handlers [{lager_console_backend, info}])
+                        application:set_env(lager, handlers, [{lager_console_backend, info}])
                 end;
            (unload) ->
                 %% TODO: Remove this when the deregistration PR gets merged
