@@ -53,40 +53,37 @@ eqc_test_() ->
     }.
 
 setup() ->
-    %% Shut logging up - too noisy.
-    application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, "keys_fsm_eqc_sasl.log"}),
-    error_logger:tty(false),
-    error_logger:logfile({open, "keys_fsm_eqc.log"}),
-
     %% Cleanup in case a previous test did not
     cleanup(setup),
-    %% Pause the make sure everything is cleaned up
-    timer:sleep(2000),
+
+    %% Load application environments
+    do_dep_apps(load, dep_apps()),
 
     %% Start erlang node
-    TestNode = list_to_atom("testnode" ++ integer_to_list(element(3, now()))),
-    net_kernel:start([TestNode, shortnames]),
+    {ok, Hostname} = inet:gethostname(),
+    TestNode = list_to_atom("keys_fsm_eqc@" ++ Hostname),
+    net_kernel:start([TestNode, longnames]),
+
+    %% Start dependent applications
     do_dep_apps(start, dep_apps()),
 
-    %% Create a fresh ring for the test
-    riak_core_ring_manager:ring_trans(
-      fun(R0, _Args) ->
-              R1 = riak_core_ring:add_member(node(), R0, node()),
-              R2 = lists:foldl(fun({I, _OldNode}, RAcc) ->
-                                       riak_core_ring:transfer_node(I, node(), RAcc)
-                               end, R1, riak_core_ring:all_owners(R0)),
-              {new_ring, R2}
-      end, undefined),
+    %% Wait for KV to be ready
+    riak_core:wait_for_application(riak_kv),
+    riak_core:wait_for_service(riak_kv),
     ok.
 
+cleanup(setup) ->
+    os:cmd("rm -rf keys_fsm_eqc/ring"),
+    cleanup(ok);
 cleanup(_) ->
     do_dep_apps(stop, lists:reverse(dep_apps())),
     catch exit(whereis(riak_kv_vnode_master), kill), %% Leaks occasionally
     catch exit(whereis(riak_sysmon_filter), kill), %% Leaks occasionally
+    catch riak_core_stat_cache:stop(),
     net_kernel:stop(),
     %% Reset the riak_core vnode_modules
     application:set_env(riak_core, vnode_modules, []),
+    do_dep_apps(unload, lists:reverse(dep_apps())),
     ok.
 
 %% Call unused callback functions to clear them in the coverage
@@ -101,60 +98,51 @@ coverage_test() ->
 prop_basic_listkeys() ->
     ?FORALL({ReqId, Bucket, KeyFilter, NVal, ObjectCount, Timeout, ClientType},
             {g_reqid(), g_bucket(), g_key_filter(), g_n_val(), g_object_count(), g_timeout(), g_client_type()},
-        ?TRAPEXIT(
-           begin
-               {ok, Client} = riak:local_client(),
-               {ok, Buckets} = Client:list_buckets(),
-               case lists:member(Bucket, Buckets) of
-                   true -> % bucket has already been used
-                       %% Delete the existing keys in the bucket
-                       {ok, OldKeys} = Client:list_keys(Bucket),
-                       [Client:delete(Bucket, OldKey) || OldKey <- OldKeys];
-                   false ->
-                       ok
-               end,
-               %% Set bucket properties
-               BucketProps = riak_core_bucket:get_bucket(Bucket),
-               NewBucketProps = orddict:store(n_val, NVal, BucketProps),
-               riak_core_bucket:set_bucket(Bucket, NewBucketProps),
-               %% Create objects in bucket
-               GeneratedKeys = [list_to_binary(integer_to_list(X)) || X <- lists:seq(1, ObjectCount)],
-               [ok = Client:put(riak_object:new(Bucket, Key, <<"val">>)) || Key <- GeneratedKeys],
+            ?TRAPEXIT(
+               begin
+                   riak_kv_memory_backend:reset(),
+                   {ok, Client} = riak:local_client(),
+                   BucketProps = riak_core_bucket:get_bucket(Bucket),
+                   NewBucketProps = orddict:store(n_val, NVal, BucketProps),
+                   riak_core_bucket:set_bucket(Bucket, NewBucketProps),
+                   %% Create objects in bucket
+                   GeneratedKeys = [list_to_binary(integer_to_list(X)) || X <- lists:seq(1, ObjectCount)],
+                   [ok = Client:put(riak_object:new(Bucket, Key, <<"val">>)) || Key <- GeneratedKeys],
 
-               %% Set the expected output based on if a
-               %% key filter is being used or not.
-               case KeyFilter of
-                   none ->
-                       ExpectedKeys = GeneratedKeys;
-                   _ ->
-                       ExpectedKeyFilter =
-                           fun(K, Acc) ->
-                                   case KeyFilter(K) of
-                                       true ->
-                                           [K | Acc];
-                                       false ->
-                                           Acc
-                                   end
-                           end,
-                       ExpectedKeys = lists:foldl(ExpectedKeyFilter, [], GeneratedKeys)
-               end,
-               %% Call start_link
-               Keys = start_link(ReqId, Bucket, KeyFilter, Timeout, ClientType),
-              ?WHENFAIL(
-                  begin
-                      io:format("Bucket: ~p n_val: ~p ObjectCount: ~p KeyFilter: ~p~n", [Bucket, NVal, ObjectCount, KeyFilter]),
-                      io:format("Expected Key Count: ~p Actual Key Count: ~p~n",
-                                [length(ExpectedKeys), length(Keys)]),
-                      io:format("Expected Keys: ~p~nActual Keys: ~p~n",
-                                [ExpectedKeys, lists:sort(Keys)])
-                  end,
-                  conjunction(
-                    [
-                     {results, equals(lists:sort(Keys), lists:sort(ExpectedKeys))}
-                    ]))
+                   %% Set the expected output based on if a
+                   %% key filter is being used or not.
+                   case KeyFilter of
+                       none ->
+                           ExpectedKeys = GeneratedKeys;
+                       _ ->
+                           ExpectedKeyFilter =
+                               fun(K, Acc) ->
+                                       case KeyFilter(K) of
+                                           true ->
+                                               [K | Acc];
+                                           false ->
+                                               Acc
+                                       end
+                               end,
+                           ExpectedKeys = lists:foldl(ExpectedKeyFilter, [], GeneratedKeys)
+                   end,
+                   %% Call start_link
+                   Keys = start_link(ReqId, Bucket, KeyFilter, Timeout, ClientType),
+                   ?WHENFAIL(
+                      begin
+                          io:format("Bucket: ~p n_val: ~p ObjectCount: ~p KeyFilter: ~p~n", [Bucket, NVal, ObjectCount, KeyFilter]),
+                          io:format("Expected Key Count: ~p Actual Key Count: ~p~n",
+                                    [length(ExpectedKeys), length(Keys)]),
+                          io:format("Expected Keys: ~p~nActual Keys: ~p~n",
+                                    [ExpectedKeys, lists:sort(Keys)])
+                      end,
+                      conjunction(
+                        [
+                         {results, equals(lists:sort(Keys), lists:sort(ExpectedKeys))}
+                        ]))
 
-           end
-          )).
+               end
+              )).
 
 %%====================================================================
 %% Wrappers
@@ -205,17 +193,6 @@ g_timeout() ->
 %% Helpers
 %%====================================================================
 
-prepare() ->
-    application:load(sasl),
-    error_logger:delete_report_handler(sasl_report_tty_h),
-    error_logger:delete_report_handler(error_logger_tty_h),
-
-    TestNode = list_to_atom("testnode" ++ integer_to_list(element(3, now())) ++
-                                "@localhost"),
-    {ok, _} = net_kernel:start([TestNode, longnames]),
-    do_dep_apps(start, dep_apps()),
-    ok.
-
 test() ->
     test(100).
 
@@ -226,25 +203,37 @@ check() ->
     check(prop_basic_listkeys(), current_counterexample()).
 
 dep_apps() ->
-    SetupFun =
-        fun(start) ->
-            %% Set some missing env vars that are normally
-            %% part of release packaging.
-            application:set_env(riak_core, ring_creation_size, 64),
-            application:set_env(riak_kv, storage_backend, riak_kv_memory_backend),
-            application:set_env(riak_kv, vnode_vclocks, true),
-            application:set_env(riak_kv, delete_mode, immediate),
-            application:set_env(riak_kv, legacy_keylisting, false),
+    Silencer = fun(load) ->
+                       %% Silence logging junk
+                       application:set_env(kernel, error_logger, silent),
+                       filelib:ensure_dir("keys_fsm_eqc/log/sasl.log"),
+                       application:set_env(sasl, sasl_error_logger, {file, "keys_fsm_eqc/log/sasl.log"}),
+                       error_logger:tty(false);
+                  (_) -> ok
+               end,
 
-            %% Start riak_kv
-            timer:sleep(500);
-           (stop) ->
-            ok
+    SetupFun =
+        fun(load) ->
+                %% Set some missing env vars that are normally
+                %% part of release packaging.
+                application:set_env(riak_core, ring_creation_size, 64),
+                application:set_env(riak_core, ring_state_dir, "keys_fsm_eqc/ring"),
+                application:set_env(riak_core, platform_data_dir, "keys_fsm_eqc/data"),
+                application:set_env(riak_kv, storage_backend, riak_kv_memory_backend),
+                application:set_env(riak_kv, test, true),
+                application:set_env(riak_kv, vnode_vclocks, true),
+                application:set_env(riak_kv, delete_mode, immediate),
+                application:set_env(riak_kv, legacy_keylisting, false),
+                application:set_env(lager, handlers, [{lager_file_backend, [{"keys_fsm_eqc/log/debug.log", debug, 10485760, "$D0", 5}]}]),
+                application:set_env(lager, crash_log, "keys_fsm_eqc/log/crash.log");
+           (_) -> ok
         end,
-    XX = fun(_) -> error_logger:info_msg("Registered: ~w\n", [lists:sort(registered())]) end,
-    [sasl, crypto, riak_sysmon, webmachine, XX, os_mon,
-     compiler, syntax_tools, lager, riak_core, XX, luke, erlang_js,
-     inets, mochiweb, riak_pipe, SetupFun, riak_kv, SetupFun].
+
+    [sasl, Silencer, crypto, public_key, ssl, riak_sysmon, os_mon,
+     runtime_tools, erlang_js, inets, mochiweb, webmachine, luke,
+     basho_stats, bitcask, compiler, syntax_tools, lager, folsom,
+     riak_core, riak_pipe, riak_kv, SetupFun].
+
 
 do_dep_apps(StartStop, Apps) ->
     lists:map(fun(A) when is_atom(A) -> application:StartStop(A);
@@ -253,6 +242,9 @@ do_dep_apps(StartStop, Apps) ->
 
 data_sink(ReqId, KeyList, Done) ->
     receive
+        {ReqId, From={_Pid,_Ref}, {keys, Keys}} ->
+            riak_kv_keys_fsm:ack_keys(From),
+            data_sink(ReqId, KeyList++Keys, false);
         {ReqId, {keys, Keys}} ->
             data_sink(ReqId, KeyList++Keys, false);
         {ReqId, done} ->
@@ -289,5 +281,5 @@ wait_for_replies(Sink, ReqId) ->
             ?debugFmt("Received keys for older run: ~p~n", [ORef])
     end.
 
- -endif. % EQC
+-endif. % EQC
 
