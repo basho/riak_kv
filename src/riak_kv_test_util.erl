@@ -194,6 +194,14 @@ dep_apps(Test, Extra) ->
                                                        [
                                                         {Test ++ "/log/debug.log", debug, 10485760, "$D0", 5}]}]),
                 application:set_env(lager, crash_log, Test ++ "/log/crash.log");
+           (unload) ->
+                %% TODO: Remove this when the deregistration PR gets merged
+                Services = riak_api_pb_service:dispatch_table(),
+                NewServices = lists:foldl(
+                                fun dict:erase/2,
+                                Services,
+                                lists:flatten([lists:seq(3,6), lists:seq(9,26)])),
+                application:set_env(riak_api, services, NewServices);
            (_) -> ok
         end,
 
