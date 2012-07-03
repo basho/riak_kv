@@ -1287,8 +1287,9 @@ assign_vnodeid_restart_earlier_ts_test() ->
 vnode_status_test_() ->
     {setup,
      fun() ->
-             os:cmd("chmod u+rwx kv_vnode_status_test"),
-             os:cmd("rm -rf kv_vnode_status_test"),
+             filelib:ensure_dir("kv_vnode_status_test/.test"),
+             ?cmd("chmod u+rwx kv_vnode_status_test"),
+             ?cmd("rm -rf kv_vnode_status_test"),
              application:set_env(riak_kv, vnode_status, "kv_vnode_status_test"),
              ok
      end,
