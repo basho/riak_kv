@@ -21,130 +21,34 @@
 -module(mapred_test).
 
 -include_lib("eunit/include/eunit.hrl").
-
 -compile(export_all).
 
-dep_apps() ->
-    DelMe = "./EUnit-SASL.log",
-    DataDir = "./EUnit-datadir",
-    os:cmd("rm -rf " ++ DataDir),
-    os:cmd("mkdir " ++ DataDir),
-    KillDamnFilterProc = fun() ->
-                                 catch exit(whereis(riak_sysmon_filter), kill),
-                                 wait_until_dead(whereis(riak_sysmon_filter))
-                         end,                                 
-    Core_Settings = [{handoff_ip, "0.0.0.0"},
+setup() ->
+    riak_kv_test_util:common_setup(?MODULE, fun configure/1).
+
+cleanup() ->
+    riak_kv_test_util:common_cleanup(?MODULE, fun configure/1).
+
+configure(load) ->
+    KVSettings = [{storage_backend, riak_kv_memory_backend},
+                  {test, true},
+                  {vnode_vclocks, true},
+                  {pb_ip, "0.0.0.0"},
+                  {pb_port, 48087}, % arbitrary #
+                  {map_js_vm_count, 4},
+                  {reduce_js_vm_count, 3}],
+    CoreSettings = [{handoff_ip, "0.0.0.0"},
                      {handoff_port, 9183},
-                     {ring_creation_size, 16},
-                     {ring_state_dir, DataDir}],
-    KV_Settings = [{storage_backend, riak_kv_memory_backend},
-                   {vnode_vclocks, true},
-                   {pb_ip, "0.0.0.0"},
-                   {pb_port, 48087}, % arbitrary #
-                   {map_js_vm_count, 4},
-                   {reduce_js_vm_count, 3}],
-    [
-     fun(start) ->
-             net_kernel:start([mapred_test@localhost, shortnames]),
-             timer:sleep(50),
-             _ = application:stop(sasl),
-             _ = application:load(sasl),
-             put(old_sasl_l, app_helper:get_env(sasl, sasl_error_logger)),
-             ok = application:set_env(sasl, sasl_error_logger, {file, DelMe}),
-             ok = application:start(sasl),
-             %%error_logger:tty(false);
-             error_logger:tty(true);
-        (stop) ->
-             ok = application:stop(sasl),
-             ok = application:set_env(sasl, sasl_error_logger, erase(old_sasl_l));
-        (fullstop) ->
-             _ = application:stop(sasl)
-     end,
-     %% public_key and ssl are not needed here but started by others so
-     %% stop them when we're done.
-     crypto, public_key, ssl,
-     fun(start) ->
-             ok = application:start(riak_sysmon);
-        (stop) ->
-             ok = application:stop(riak_sysmon),
-             KillDamnFilterProc();
-        (fullstop) ->
-             _ = application:stop(riak_sysmon),
-             KillDamnFilterProc()
-     end,
-     webmachine,
-     os_mon,
-     compiler,
-     syntax_tools,
-     lager,
-     fun(start) ->
-             _ = application:load(riak_core),
-             %% riak_core_handoff_listener uses {reusaddr, true}, but
-             %% sometimes we just restart too quickly and hit an
-             %% eaddrinuse when restarting riak_core?
-             timer:sleep(1000),
-             %% io:format(user, "DEBUGG: ~s\n", [os:cmd("netstat -na | egrep -vi 'stream|dgram'")]),
-             [begin
-                  put({?MODULE,AppKey}, app_helper:get_env(riak_core, AppKey)),
-                  ok = application:set_env(riak_core, AppKey, Val)
-              end || {AppKey, Val} <- Core_Settings],
-             ok = application:start(riak_core);
-        (stop) ->
-             ok = application:stop(riak_core),
-             [ok = application:set_env(riak_core, AppKey, get({?MODULE, AppKey}))
-              || {AppKey, _Val} <- Core_Settings];
-        (fullstop) ->
-             _ = application:stop(riak_core)
-     end,
-     riak_pipe,
-     luke,
-     erlang_js,
-     inets,
-     mochiweb,
-     fun(start) ->
-             _ = application:load(riak_kv),
-             [begin
-                  put({?MODULE,AppKey}, app_helper:get_env(riak_kv, AppKey)),
-                  ok = application:set_env(riak_kv, AppKey, Val)
-              end || {AppKey, Val} <- KV_Settings],
-             ok = application:start(riak_kv);
-        (stop) ->
-             ok = application:stop(riak_kv),
-             net_kernel:stop(),
-             [ok = application:set_env(riak_kv, AppKey, get({?MODULE, AppKey}))
-              || {AppKey, _Val} <- KV_Settings];
-        (fullstop) ->
-             _ = application:stop(riak_kv)
-     end].
-
-do_dep_apps(fullstop) ->
-    lists:map(fun(A) when is_atom(A) -> _ = application:stop(A);
-                 (F)                 -> F(fullstop)
-              end, lists:reverse(dep_apps()));
-do_dep_apps(StartStop) ->
-    Apps = if StartStop == start -> dep_apps();
-              StartStop == stop  -> lists:reverse(dep_apps())
-           end,
-    lists:map(fun(A) when is_atom(A) -> ok = application:StartStop(A);
-                 (F)                 -> F(StartStop)
-              end, Apps).
-
-prepare_runtime() ->
-     fun() ->
-             do_dep_apps(fullstop),
-             timer:sleep(50),
-             do_dep_apps(start),
-             timer:sleep(50),
-             riak_core:wait_for_service(riak_kv),
-             riak_core:wait_for_service(riak_pipe),
-             [foo1, foo2]
-     end.
-
-teardown_runtime() ->
-     fun(_PrepareThingie) ->
-             do_dep_apps(stop),
-             timer:sleep(50)
-     end.    
+                     {ring_creation_size, 16}],
+    [ application:set_env(riak_core, K, V) || {K,V} <- CoreSettings ],
+    [ application:set_env(riak_kv, K, V) || {K,V} <- KVSettings ],
+    ok;
+configure(unload) ->
+    application:set_env(riak_api, services, dict:new());
+configure(start) ->
+    riak_core:wait_for_service(riak_pipe);
+configure(_) ->
+    ok.
 
 inputs_gen_seq(Pipe, Max, _Timeout) ->
     [riak_pipe:queue_work(Pipe, X) || X <- lists:seq(1, Max)],
@@ -158,30 +62,6 @@ inputs_gen_bkeys_1(Pipe, {Bucket, Start, End}, _Timeout) ->
     riak_pipe:eoi(Pipe),
     ok.
 
-setup_demo_test_() ->
-    {foreach,
-     prepare_runtime(),
-     teardown_runtime(),
-     [
-      fun(_) ->
-              {"Setup demo test",
-               fun() ->
-                       Num = 5,
-                       {ok, C} = riak:local_client(),
-                       [ok = C:put(riak_object:new(
-                                     <<"foonum">>,
-                                     list_to_binary("bar"++integer_to_list(X)),
-                                     X)) 
-                        || X <- lists:seq(1, Num)],
-                       [{ok, _} = C:get(<<"foonum">>,
-                                      list_to_binary("bar"++integer_to_list(X)))
-                        || X <- lists:seq(1, Num)],
-                       ok
-               end}
-      end
-     ]
-    }.
-
 compat_basic1_test_() ->
     IntsBucket = <<"foonum">>,
     ReduceSumFun = fun(Inputs, _) -> [lists:sum(Inputs)] end,
@@ -189,8 +69,8 @@ compat_basic1_test_() ->
     LinkKey = <<"yo">>,
 
     {setup,
-     prepare_runtime(),
-     teardown_runtime(),
+     setup(),
+     cleanup(),
      fun(_) ->
          [
           ?_test(
@@ -381,8 +261,8 @@ compat_buffer_and_prereduce_test_() ->
     ReduceSumFun = fun(Inputs, _) -> [lists:sum(Inputs)] end,
 
     {setup,
-     prepare_runtime(),
-     teardown_runtime(),
+     setup(),
+     cleanup(),
      fun(_) ->
          [
           ?_test(
@@ -461,8 +341,8 @@ compat_javascript_test_() ->
     NotFoundBkey = {<<"does not">>, <<"exit">>},
 
     {setup,
-     prepare_runtime(),
-     teardown_runtime(),
+     setup(),
+     cleanup(),
      fun(_) ->
          [
           ?_test(
