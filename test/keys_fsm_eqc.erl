@@ -42,8 +42,8 @@
 eqc_test_() ->
     {spawn,
      [{setup,
-       fun setup/0,
-       fun cleanup/1,
+       riak_kv_test_util:common_setup(?MODULE, fun configure/1),
+       riak_kv_test_util:common_cleanup(?MODULE, fun configure/1),
        [%% Run the quickcheck tests
         {timeout, 60000, % timeout is in msec
          ?_assertEqual(true, quickcheck(numtests(?TEST_ITERATIONS, ?QC_OUT(prop_basic_listkeys()))))}
@@ -51,40 +51,6 @@ eqc_test_() ->
       }
      ]
     }.
-
-setup() ->
-    %% Cleanup in case a previous test did not
-    cleanup(setup),
-
-    %% Load application environments
-    do_dep_apps(load, dep_apps()),
-
-    %% Start erlang node
-    {ok, Hostname} = inet:gethostname(),
-    TestNode = list_to_atom("keys_fsm_eqc@" ++ Hostname),
-    net_kernel:start([TestNode, longnames]),
-
-    %% Start dependent applications
-    do_dep_apps(start, dep_apps()),
-
-    %% Wait for KV to be ready
-    riak_core:wait_for_application(riak_kv),
-    riak_core:wait_for_service(riak_kv),
-    ok.
-
-cleanup(setup) ->
-    os:cmd("rm -rf keys_fsm_eqc/ring"),
-    cleanup(ok);
-cleanup(_) ->
-    do_dep_apps(stop, lists:reverse(dep_apps())),
-    catch exit(whereis(riak_kv_vnode_master), kill), %% Leaks occasionally
-    catch exit(whereis(riak_sysmon_filter), kill), %% Leaks occasionally
-    catch riak_core_stat_cache:stop(),
-    net_kernel:stop(),
-    %% Reset the riak_core vnode_modules
-    application:set_env(riak_core, vnode_modules, []),
-    do_dep_apps(unload, lists:reverse(dep_apps())),
-    ok.
 
 %% Call unused callback functions to clear them in the coverage
 %% checker so the real code stands out.
@@ -193,6 +159,15 @@ g_timeout() ->
 %% Helpers
 %%====================================================================
 
+configure(load) ->
+    application:set_env(riak_kv, storage_backend, riak_kv_memory_backend),
+    application:set_env(riak_kv, test, true),
+    application:set_env(riak_kv, vnode_vclocks, true),
+    application:set_env(riak_kv, delete_mode, immediate),
+    application:set_env(riak_kv, legacy_keylisting, false);
+configure(_) ->
+    ok.
+
 test() ->
     test(100).
 
@@ -201,44 +176,6 @@ test(N) ->
 
 check() ->
     check(prop_basic_listkeys(), current_counterexample()).
-
-dep_apps() ->
-    Silencer = fun(load) ->
-                       %% Silence logging junk
-                       application:set_env(kernel, error_logger, silent),
-                       filelib:ensure_dir("keys_fsm_eqc/log/sasl.log"),
-                       application:set_env(sasl, sasl_error_logger, {file, "keys_fsm_eqc/log/sasl.log"}),
-                       error_logger:tty(false);
-                  (_) -> ok
-               end,
-
-    SetupFun =
-        fun(load) ->
-                %% Set some missing env vars that are normally
-                %% part of release packaging.
-                application:set_env(riak_core, ring_creation_size, 64),
-                application:set_env(riak_core, ring_state_dir, "keys_fsm_eqc/ring"),
-                application:set_env(riak_core, platform_data_dir, "keys_fsm_eqc/data"),
-                application:set_env(riak_kv, storage_backend, riak_kv_memory_backend),
-                application:set_env(riak_kv, test, true),
-                application:set_env(riak_kv, vnode_vclocks, true),
-                application:set_env(riak_kv, delete_mode, immediate),
-                application:set_env(riak_kv, legacy_keylisting, false),
-                application:set_env(lager, handlers, [{lager_file_backend, [{"keys_fsm_eqc/log/debug.log", debug, 10485760, "$D0", 5}]}]),
-                application:set_env(lager, crash_log, "keys_fsm_eqc/log/crash.log");
-           (_) -> ok
-        end,
-
-    [sasl, Silencer, crypto, public_key, ssl, riak_sysmon, os_mon,
-     runtime_tools, erlang_js, inets, mochiweb, webmachine, luke,
-     basho_stats, bitcask, compiler, syntax_tools, lager, folsom,
-     riak_core, riak_pipe, riak_kv, SetupFun].
-
-
-do_dep_apps(StartStop, Apps) ->
-    lists:map(fun(A) when is_atom(A) -> application:StartStop(A);
-                 (F)                 -> F(StartStop)
-              end, Apps).
 
 data_sink(ReqId, KeyList, Done) ->
     receive
