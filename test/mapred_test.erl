@@ -34,17 +34,16 @@ configure(load) ->
                   {test, true},
                   {vnode_vclocks, true},
                   {pb_ip, "0.0.0.0"},
-                  {pb_port, 48087}, % arbitrary #
+                  {pb_port, 0}, % arbitrary #
                   {map_js_vm_count, 4},
                   {reduce_js_vm_count, 3}],
     CoreSettings = [{handoff_ip, "0.0.0.0"},
-                     {handoff_port, 9183},
+                     {handoff_port, 0},
                      {ring_creation_size, 16}],
     [ application:set_env(riak_core, K, V) || {K,V} <- CoreSettings ],
     [ application:set_env(riak_kv, K, V) || {K,V} <- KVSettings ],
     ok;
-configure(unload) ->
-    application:set_env(riak_api, services, dict:new());
+
 configure(start) ->
     riak_core:wait_for_service(riak_pipe);
 configure(_) ->
