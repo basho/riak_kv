@@ -232,18 +232,18 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% @doc Update the given stat
 update1(vnode_get) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_gets}, 1, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_gets}, 1, spiral);
 update1(vnode_put) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_puts}, 1, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_puts}, 1, spiral);
 update1(vnode_index_read) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_reads}, 1, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_reads}, 1, spiral);
 update1({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_writes}, 1, meter),
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_writes_postings}, PostingsAdded, meter),
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, PostingsRemoved, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_writes}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_writes_postings}, PostingsAdded, spiral),
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, PostingsRemoved, spiral);
 update1({vnode_index_delete, Postings}) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes}, Postings, meter),
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, Postings, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes}, Postings, spiral),
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, Postings, spiral);
 update1({get_fsm, Bucket, Microsecs, undefined, undefined, PerBucket}) ->
     folsom_metrics:notify_existing_metric({?APP, node_gets_total}, {inc, 1}, counter),
     folsom_metrics:notify_existing_metric({?APP, node_get_fsm_time}, Microsecs, histogram),
@@ -260,11 +260,11 @@ update1({put_fsm_time, Bucket,  Microsecs, PerBucket}) ->
     do_put_bucket(PerBucket, {Bucket, Microsecs});
 update1(pbc_connect) ->
     folsom_metrics:notify_existing_metric({?APP, pbc_connects_active}, {inc, 1}, counter),
-    folsom_metrics:notify_existing_metric({?APP, pbc_connects}, 1, meter);
+    folsom_metrics:notify_existing_metric({?APP, pbc_connects}, 1, spiral);
 update1(pbc_disconnect) ->
     folsom_metrics:notify_existing_metric({?APP, pbc_connects_active}, {dec, 1}, counter);
 update1(read_repairs) ->
-    folsom_metrics:notify_existing_metric({?APP, read_repairs}, 1, meter);
+    folsom_metrics:notify_existing_metric({?APP, read_repairs}, 1, spiral);
 update1(coord_redir) ->
     folsom_metrics:notify_existing_metric({?APP, coord_redirs_total}, {inc, 1}, counter);
 update1(mapper_start) ->
@@ -331,7 +331,7 @@ get_stat(Name, histogram) ->
 get_stat(Name, _Type) ->
     folsom_metrics:get_metric_value(Name).
 
-backwards_compat(Name, meter, Stats) ->
+backwards_compat(Name, spiral, Stats) ->
     [{Name, trunc(proplists:get_value(one, Stats))},
      {join(Name, total), proplists:get_value(count, Stats)}];
 backwards_compat(mapper_count, counter, Stats) ->
@@ -365,29 +365,29 @@ join(Atom1, Atom2) ->
     binary_to_atom(<<Bin1/binary, $_, Bin2/binary>>, latin1).
 
 stats() ->
-    [{vnode_gets, meter},
-     {vnode_puts, meter},
-     {vnode_index_reads, meter},
-     {vnode_index_writes, meter},
-     {vnode_index_writes_postings, meter},
-     {vnode_index_deletes, meter},
-     {vnode_index_deletes_postings, meter},
+    [{vnode_gets, spiral},
+     {vnode_puts, spiral},
+     {vnode_index_reads, spiral},
+     {vnode_index_writes, spiral},
+     {vnode_index_writes_postings, spiral},
+     {vnode_index_deletes, spiral},
+     {vnode_index_deletes_postings, spiral},
      {node_gets_total, counter},
      {node_get_fsm_siblings, histogram},
      {node_get_fsm_objsize, histogram},
      {node_get_fsm_time, histogram},
      {node_puts_total, counter},
      {node_put_fsm_time, histogram},
-     {pbc_connects, meter},
+     {pbc_connects, spiral},
      {pbc_connects_active, counter},
-     {read_repairs, meter},
+     {read_repairs, spiral},
      {coord_redirs_total, counter},
      {mapper_count, counter},
      {precommit_fail, counter},
      {postcommit_fail, counter}].
 
-register_stat(Name, meter) ->
-    folsom_metrics:new_meter(Name);
+register_stat(Name, spiral) ->
+    folsom_metrics:new_spiral(Name);
 register_stat(Name, counter) ->
     folsom_metrics:new_counter(Name);
 register_stat(Name, histogram) ->
