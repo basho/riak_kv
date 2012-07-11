@@ -51,7 +51,7 @@ service_available(RD, State) ->
     end.
 
 forbidden(RD, State) ->
-    {not riak_kv_wm_utils:is_valid_referer(RD), RD, State}.
+    {riak_kv_wm_utils:is_forbidden(RD), RD, State}.
 
 allowed_methods(RD, State) ->
     {['GET','HEAD','POST'], RD, State}.
