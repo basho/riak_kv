@@ -258,11 +258,6 @@ update1({put_fsm_time, Bucket,  Microsecs, PerBucket}) ->
     folsom_metrics:notify_existing_metric({?APP, node_puts}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node_put_fsm_time}, Microsecs, histogram),
     do_put_bucket(PerBucket, {Bucket, Microsecs});
-update1(pbc_connect) ->
-    folsom_metrics:notify_existing_metric({?APP, pbc_connects_active}, {inc, 1}, counter),
-    folsom_metrics:notify_existing_metric({?APP, pbc_connects}, 1, spiral);
-update1(pbc_disconnect) ->
-    folsom_metrics:notify_existing_metric({?APP, pbc_connects_active}, {dec, 1}, counter);
 update1(read_repairs) ->
     folsom_metrics:notify_existing_metric({?APP, read_repairs}, 1, spiral);
 update1(coord_redir) ->
@@ -316,6 +311,7 @@ do_put_bucket(true, {Bucket, Microsecs}=Args) ->
 produce_stats() ->
     lists:append(
       [lists:flatten([backwards_compat(Name, Type, get_stat({?APP, Name}, Type)) || {Name, Type} <- stats()]),
+       backwards_compat_pb(riak_api_stat:produce_stats()),
        cpu_stats(),
        mem_stats(),
        disk_stats(),
@@ -330,6 +326,10 @@ get_stat(Name, histogram) ->
     folsom_metrics:get_histogram_statistics(Name);
 get_stat(Name, _Type) ->
     folsom_metrics:get_metric_value(Name).
+
+backwards_compat_pb({riak_api, Stats}) ->
+    [{pbc_active, proplists:get_value(pbc_connects_active, Stats)} |
+     backwards_compat(pbc_connects, spiral, proplists:get_value(pbc_connects, Stats))].
 
 backwards_compat(Name, spiral, Stats) ->
     [{Name, trunc(proplists:get_value(one, Stats))},
@@ -370,8 +370,6 @@ stats() ->
      {node_get_fsm_time, histogram},
      {node_puts, spiral},
      {node_put_fsm_time, histogram},
-     {pbc_connects, spiral},
-     {pbc_connects_active, counter},
      {read_repairs, spiral},
      {coord_redirs_total, counter},
      {mapper_count, counter},
