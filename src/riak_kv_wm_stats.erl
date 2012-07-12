@@ -91,7 +91,7 @@ pretty_print(RD1, C1=#ctx{}) ->
     {json_pp:print(binary_to_list(list_to_binary(Json))), RD2, C2}.
 
 get_stats() ->
-    proplists:delete(disk, riak_kv_stat:get_stats()) ++
-        riak_core_stat:get_stats().
-
-
+    D = riak_kv_stat:get_stats(),
+    Disk = proplists:get_value(disk, D),
+    DiskFlat = lists:flatmap(fun(X) -> {Ad,Bd,Cd} = X,  [[ list_to_binary(Ad), Bd, Cd]] end, Disk),
+    lists:append([proplists:delete(disk, D), [{disk, DiskFlat}], riak_core_stat:get_stats()]).
