@@ -77,7 +77,7 @@ service_available(ReqData, Ctx) ->
     end.
 
 forbidden(RD, Ctx) ->
-    {not riak_kv_wm_utils:is_valid_referer(RD), RD, Ctx}.
+    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
 
 produce_body(ReqData, Ctx) ->
     Body = mochijson2:encode({struct, get_stats()}),

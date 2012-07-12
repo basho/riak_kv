@@ -110,7 +110,7 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
     end.
 
 forbidden(RD, Ctx) ->
-    {not riak_kv_wm_utils:is_valid_referer(RD), RD, Ctx}.
+    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
 
 %% @spec allowed_methods(reqdata(), context()) ->
 %%          {[method()], reqdata(), context()}

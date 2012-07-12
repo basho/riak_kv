@@ -36,7 +36,7 @@
          accept_value/2,
          any_to_list/1,
          any_to_bool/1,
-         is_valid_referer/1
+         is_forbidden/1
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -234,7 +234,18 @@ any_to_bool(V) when is_integer(V) ->
 any_to_bool(V) when is_boolean(V) ->
     V.
 
+is_forbidden(RD) ->
+    is_null_origin(RD) or not is_valid_referer(RD).
 
+%% @doc Check if the Origin header is "null". This is useful to look for attempts
+%%      at CSRF, but is not a complete answer to the problem.
+is_null_origin(RD) ->
+    case wrq:get_req_header("Origin", RD) of
+        "null" ->
+            true;
+        _ ->
+            false
+    end.
 
 %% @doc Validate that the Referer matches up with scheme, host and port of the
 %%      machine that received the request.
