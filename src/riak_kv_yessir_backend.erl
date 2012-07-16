@@ -135,7 +135,10 @@ get(Bucket, Key, #state{op_get = Gets} = S) ->
               undefined    -> S#state.default_get;
               N            -> <<42:(N*8)>>
           end,
-    O = riak_object:increment_vclock(riak_object:new(Bucket, Key, Bin),
+    O = riak_object:increment_vclock(riak_object:new(Bucket, Key, Bin,
+                                                     dict:store(<<"X-Riak-Last-Modified">>,
+                                                                erlang:now(),
+                                                                dict:new())),
                                      <<"yessir!">>, 1),
     {ok, term_to_binary(O), S#state{op_get = Gets + 1}}.
 
