@@ -57,12 +57,12 @@
 %% === Configuration Options ===
 %%
 %% The following configuration options are available for the yessir backend.
-%% The options should be specified in the `yessir_backend' section of your
+%% The options should be specified in the `riak_kv' section of your
 %% app.config file.
 %%
 %% <ul>
-%% <li>`default_size' - The number of bytes of generated data for the value.</li>
-%% <li>`key_count'    - The number of keys that will be folded over, e.g. list_keys().</li>
+%% <li>`yessir_default_size' - The number of bytes of generated data for the value.</li>
+%% <li>`yessir_key_count'    - The number of keys that will be folded over, e.g. list_keys().</li>
 %% </ul>
 %%
 %% TODO list:
@@ -138,12 +138,12 @@ capabilities(_, _) ->
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(_Partition, Config) ->
     DefaultLen = case app_helper:get_prop_or_env(
-                        default_size, Config, yessir_backend) of
+                        yessir_default_size, Config, yessir_backend) of
                      undefined -> 1024;
                      Len       -> Len
                  end,
     KeyCount = case app_helper:get_prop_or_env(
-                      key_count, Config, yessir_backend) of
+                      yessir_key_count, Config, yessir_backend) of
                    undefined -> 1024;
                    Count     -> Count
                end,
