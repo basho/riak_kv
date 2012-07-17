@@ -54,9 +54,16 @@
 %% * cat > /dev/null
 %% * cat < /dev/zero
 %%
-%% Configuration file parameters:
-%%   default_size - The number of bytes of generated data for the value
-%%   key_count    - The number of keys that will be folded over, e.g. list_keys()
+%% === Configuration Options ===
+%%
+%% The following configuration options are available for the yessir backend.
+%% The options should be specified in the `yessir_backend' section of your
+%% app.config file.
+%%
+%% <ul>
+%% <li>`default_size' - The number of bytes of generated data for the value.</li>
+%% <li>`key_count'    - The number of keys that will be folded over, e.g. list_keys().</li>
+%% </ul>
 %%
 %% TODO list:
 %%
