@@ -40,10 +40,23 @@
 %%     <<"yessir.{integer}.anything">> will use integer (interpreted in
 %%     base 10) as the returned binary's Size.
 %%
+%% fold_keys and fold_objects are implemented for both sync and async.
+%% Each will return the same deterministic set of results for every call,
+%% given the same set of configuration parameters. The size of the object
+%% folded over is controlled by the "default_size" config var. The number
+%% of keys folded over is controlled by the "key_count" config var. Folding
+%% over the keys and objects will each return the same set of keys, so if
+%% you fold over the keys and collect the list; and then you fold over the
+%% objects and collect the list of keys again, the two lists will match.
+%%
 %% This backend is the Riak storage manager equivalent of:
 %%
 %% * cat > /dev/null
 %% * cat < /dev/zero
+%%
+%% Configuration file parameters:
+%%   default_size - The number of bytes of generated data for the value
+%%   key_count    - The number of keys that will be folded over, e.g. list_keys()
 %%
 %% TODO list:
 %%
@@ -85,6 +98,8 @@
 
 -record(state, {
           default_get = <<>>,
+          default_size = 0,
+          key_count = 0,
           op_get = 0,
           op_put = 0,
           op_delete = 0
@@ -118,9 +133,16 @@ start(_Partition, Config) ->
     DefaultLen = case app_helper:get_prop_or_env(
                         default_size, Config, yessir_backend) of
                      undefined -> 1024;
-                     N         -> N
+                     Len       -> Len
                  end,
-    {ok, #state{default_get = <<42:(DefaultLen*8)>>}}.
+    KeyCount = case app_helper:get_prop_or_env(
+                      key_count, Config, yessir_backend) of
+                   undefined -> 1024;
+                   Count     -> Count
+               end,
+    {ok, #state{default_get = <<42:(DefaultLen*8)>>,
+                default_size = DefaultLen,
+                key_count = KeyCount}}.
 
 %% @doc Stop this backend, yes, sir!
 -spec stop(state()) -> ok.
@@ -135,7 +157,10 @@ get(Bucket, Key, #state{op_get = Gets} = S) ->
               undefined    -> S#state.default_get;
               N            -> <<42:(N*8)>>
           end,
-    O = riak_object:increment_vclock(riak_object:new(Bucket, Key, Bin),
+    Meta = dict:new(),
+    Meta1 = dict:store(<<"X-Riak-Last-Modified">>, erlang:now(), Meta),
+    Meta2 = dict:store(<<"X-Riak-VTag">>, make_vtag(erlang:now()), Meta1),
+    O = riak_object:increment_vclock(riak_object:new(Bucket, Key, Bin, Meta2),
                                      <<"yessir!">>, 1),
     {ok, term_to_binary(O), S#state{op_get = Gets + 1}}.
 
@@ -165,16 +190,47 @@ fold_buckets(_FoldBucketsFun, Acc, _Opts, _S) ->
                 any(),
                 [{atom(), term()}],
                 state()) -> {ok, term()}.
-fold_keys(_FoldKeysFun, Acc, _Opts, _S) ->
-    {ok, Acc}.
+fold_keys(FoldKeysFun, Accum, Opts, State) ->
+    KeyCount = State#state.key_count,
+    BucketOpt = lists:keyfind(bucket, 1, Opts),
+    Folder = case BucketOpt of
+                 {bucket, Bucket} ->
+                     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
+                     get_folder(FoldFun, Accum, KeyCount);
+                 _ ->
+                     FoldFun = fold_keys_fun(FoldKeysFun, <<"all">>),
+                     get_folder(FoldFun, Accum, KeyCount)
+             end,
+    case lists:member(async_fold, Opts) of
+        true ->
+            {async, Folder};
+        false ->
+            {ok, Folder()}
+    end.
 
 %% @doc Fold over all the objects for one or all buckets, yes, sir!
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
-                   state()) -> {ok, any()}.
-fold_objects(_FoldObjectsFun, Acc, _Opts, _S) ->
-    {ok, Acc}.
+                   state()) -> {ok, any()} | {async, fun()}.
+fold_objects(FoldObjectsFun, Accum, Opts, State) ->
+    KeyCount = State#state.key_count,
+    ValueSize = State#state.default_size,
+    BucketOpt = lists:keyfind(bucket, 1, Opts),
+    Folder = case BucketOpt of
+                 {bucket, Bucket} ->
+                     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket, ValueSize),
+                     get_folder(FoldFun, Accum, KeyCount);
+                 _ ->
+                     FoldFun = fold_objects_fun(FoldObjectsFun, <<"all">>, ValueSize),
+                     get_folder(FoldFun, Accum, KeyCount)
+             end,
+    case lists:member(async_fold, Opts) of
+        true ->
+            {async, Folder};
+        false ->
+            {ok, Folder()}
+    end.
 
 %% @doc Delete all objects from this backend, yes, sir!
 -spec drop(state()) -> {ok, state()}.
@@ -200,6 +256,58 @@ callback(_Ref, _Whatever, S) ->
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
+get_folder(FoldFun, Acc, KeyCount) ->
+    fun() ->
+            fold_anything_fun(FoldFun, Acc, KeyCount)
+    end.
+
+key_of_integer(Range, State) ->
+    {N, S} = random:uniform_s(Range, State),
+    Key = integer_to_list(N) ++ ".1000", %% e.g. "10.1000"
+    BKey = list_to_binary(Key),          %% e.g. <<"10.1000">>
+    {BKey, S}.
+
+value_for_random(VR, Size) ->
+    <<VR:(Size*8)>>.
+
+fold_anything_fun(FoldFunc, Acc, KeyCount) ->
+    Range = 1000000,
+    KeyState = random:seed0(),
+    ValueState = random:seed0(),
+    all_keys_folder(FoldFunc, Acc, Range, {KeyState, ValueState}, KeyCount).
+
+all_keys_folder(FoldFunc, Acc, _Range, _S, 0) ->
+    FoldFunc(undefined, 0, Acc);
+all_keys_folder(FoldFunc, Acc, Range, {KS,VS}, N) ->
+    {Key,KSS} = key_of_integer(Range, KS),
+    {VR,VSS} = random:uniform_s(255,VS),
+    Acc1 = FoldFunc(Key, VR, Acc),
+    all_keys_folder(FoldFunc, Acc1, Range, {KSS,VSS}, N-1).
+
+%% @private
+%% Return a function to fold over keys on this backend
+fold_keys_fun(FoldKeysFun, Bucket) ->
+    fun(Key, _VR, Acc) when Key /= undefined ->
+            FoldKeysFun(Bucket, Key, Acc);
+       (_, _, Acc) ->
+            Acc
+    end.
+
+%% @private
+%% Return a function to fold over keys on this backend
+fold_objects_fun(FoldObjectsFun, Bucket, Size) ->
+    fun(Key, VR, Acc) when Key /= undefined ->
+            Value = value_for_random(VR, Size),
+            FoldObjectsFun(Bucket, Key, Value, Acc);
+       (_, _, Acc) ->
+            Acc
+    end.
+
+%% borrowed from kv get_fsm...
+make_vtag(Now) ->
+    <<HashAsNum:128/integer>> = crypto:md5(term_to_binary({node(), Now})),
+    riak_core_util:integer_to_list(HashAsNum,62).
 
 get_binsize(<<"yessir.", Rest/binary>>) ->
     get_binsize(Rest, 0);
