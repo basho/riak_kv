@@ -118,15 +118,13 @@ start(_Type, _StartArgs) ->
                                            mapred_2i_pipe,
                                            [{true, true}, {false, false}]}),
 
-            %% register stats
-            riak_kv_stat:register_stats(),
-
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
             %% synchronously.
             riak_core:register(riak_kv, [
                 {vnode_module, riak_kv_vnode},
-                {bucket_validator, riak_kv_bucket}
+                {bucket_validator, riak_kv_bucket},
+                {stat_mod, riak_kv_stat}
             ]),
 
             ok = riak_api_pb_service:register([{riak_kv_pb_object, 3, 6}, %% ClientID stuff

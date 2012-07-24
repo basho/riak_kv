@@ -277,6 +277,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
 %% and return a fresh reference.
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
 drop(State0) ->
+    eleveldb:close(State0#state.ref),
     case eleveldb:destroy(State0#state.data_root, []) of
         ok ->
             case open_db(State0) of
