@@ -106,8 +106,8 @@ start(Partition, Config) ->
 
 %% @doc Stop the eleveldb backend
 -spec stop(state()) -> ok.
-stop(_State) ->
-    %% No-op; GC handles cleanup
+stop(State) ->
+    eleveldb:close(State#state.ref),
     ok.
 
 %% @doc Retrieve an object from the eleveldb backend
