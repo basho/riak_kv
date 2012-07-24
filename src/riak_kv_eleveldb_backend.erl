@@ -106,8 +106,13 @@ start(Partition, Config) ->
 
 %% @doc Stop the eleveldb backend
 -spec stop(state()) -> ok.
-stop(_State) ->
-    %% No-op; GC handles cleanup
+stop(State) ->
+    case State#state.ref of
+        undefined ->
+            ok;
+        _ ->
+            eleveldb:close(State#state.ref)
+    end,
     ok.
 
 %% @doc Retrieve an object from the eleveldb backend
@@ -280,12 +285,7 @@ drop(State0) ->
     eleveldb:close(State0#state.ref),
     case eleveldb:destroy(State0#state.data_root, []) of
         ok ->
-            case open_db(State0) of
-                {ok, State} ->
-                    {ok, State};
-                {error, Reason} ->
-                    {error, Reason, State0}
-            end;
+            {ok, State0#state{ref = undefined}};
         {error, Reason} ->
             {error, Reason, State0}
     end.
