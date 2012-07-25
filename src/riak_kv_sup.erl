@@ -47,9 +47,6 @@ init([]) ->
                {riak_core_vnode_master, start_link,
                 [riak_kv_vnode, riak_kv_legacy_vnode, riak_kv]},
                permanent, 5000, worker, [riak_core_vnode_master]},
-    RiakStat = {riak_kv_stat,
-                {riak_kv_stat, start_link, []},
-                permanent, 5000, worker, [riak_kv_stat]},
     MapJSPool = {?JSPOOL_MAP,
                  {riak_kv_js_manager, start_link,
                   [?JSPOOL_MAP, read_js_pool_size(map_js_vm_count, "map")]},
@@ -114,7 +111,6 @@ init([]) ->
     % Build the process list...
     Processes = lists:flatten([
         ?IF(HasStorageBackend, VMaster, []),
-        RiakStat,
         GetFsmSup,
         PutFsmSup,
         DeleteSup,
