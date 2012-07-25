@@ -68,13 +68,7 @@ content_types_provided(ReqData, Context) ->
 
 
 service_available(ReqData, Ctx) ->
-    case app_helper:get_env(riak_kv, riak_kv_stat, false) of
-        false ->
-            {false, wrq:append_to_response_body("riak_kv_stat is disabled on this node.\n", ReqData),
-             Ctx};
-        true ->
-            {true, ReqData, Ctx}
-    end.
+    {true, ReqData, Ctx}.
 
 forbidden(RD, Ctx) ->
     {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
@@ -93,5 +87,3 @@ pretty_print(RD1, C1=#ctx{}) ->
 get_stats() ->
     proplists:delete(disk, riak_kv_stat:get_stats()) ++
         riak_core_stat:get_stats().
-
-
