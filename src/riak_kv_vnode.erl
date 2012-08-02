@@ -240,7 +240,7 @@ init([Index]) ->
     {ok, VId} = get_vnodeid(Index),
     DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
     AsyncFolding = app_helper:get_env(riak_kv, async_folds, true) == true,
-    case catch Mod:start(Index, [{async_folds, AsyncFolding}|Configuration]) of
+    case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
             State = #state{idx=Index,
