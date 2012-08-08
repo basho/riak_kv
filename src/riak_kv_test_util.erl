@@ -39,31 +39,39 @@
 
 -define(SETUPTHUNK, fun(_) -> ok end).
 
-%% Creates a setup function for tests that need Riak KV stood
+%% @doc Creates a setup function for tests that need Riak KV stood
 %% up in an isolated fashion.
+%% @see setup/3
+-spec common_setup(TestName::atom() | string()) -> fun().
 common_setup(T) when is_atom(T) ->
     common_setup(atom_to_list(T));
 common_setup(TestName) ->
     common_setup(TestName, ?SETUPTHUNK).
 
+-spec common_setup(atom() | string(), SetupFun::fun((load|start|stop) -> any()) -> fun().
 common_setup(T, S) when is_atom(T) ->
     common_setup(atom_to_list(T), S);
 common_setup(TestName, Setup) ->
     fun() -> setup(TestName, Setup) end.
 
-%% Creates a cleanup function for tests that need Riak KV stood up in
+%% @doc Creates a cleanup function for tests that need Riak KV stood up in
 %% an isolated fashion.
+%% @see cleanup/3
+-spec common_cleanup(TestName::atom() | string()) -> fun().
 common_cleanup(T) when is_atom(T) ->
     common_cleanup(atom_to_list(T));
 common_cleanup(TestName) ->
     common_cleanup(TestName, ?SETUPTHUNK).
 
+-spec common_cleanup(TestName::atom() | string(), CleanupFun::fun((stop) -> any())) -> fun().
 common_cleanup(T, C) when is_atom(T) ->
     common_cleanup(atom_to_list(T), C);
 common_cleanup(TestName, Cleanup) ->
     fun(X) -> cleanup(TestName, Cleanup, X) end.
 
-%% Calls gen_fsm functions that might not have been touched by a test
+%% @doc Calls gen_fsm functions that might not have been touched by a
+%% test
+-spec call_unused_fsm_funs(module()) -> any().
 call_unused_fsm_funs(Mod) ->
     Mod:handle_event(event, statename, state),
     Mod:handle_sync_event(event, from, stateneame, state),
@@ -71,8 +79,7 @@ call_unused_fsm_funs(Mod) ->
     Mod:terminate(reason, statename, state),
     Mod:code_change(oldvsn, statename, state, extra).
 
-%% Stop a running pid - unlink and exit(kill) the process
-%%
+%% @doc Stop a running pid - unlink and exit(kill) the process
 stop_process(undefined) ->
     ok;
 stop_process(RegName) when is_atom(RegName) ->
@@ -82,7 +89,7 @@ stop_process(Pid) when is_pid(Pid) ->
     exit(Pid, shutdown),
     ok = wait_for_pid(Pid).
 
-%% Wait for a pid to exit
+%% @doc Wait for a pid to exit
 wait_for_pid(Pid) ->
     Mref = erlang:monitor(process, Pid),
     receive
@@ -125,7 +132,22 @@ wait_for_children(PPid) ->
             ok
     end.
 
-%% Performs setup for a test
+%% @doc Performs generic, riak_kv-specific and test-specific setup
+%% when used within a test fixture. This includes cleaning up any
+%% leaky state from previous tests (internally calling `cleanup/3'),
+%% loading dependent applications, starting distributed Erlang,
+%% starting dependent applications, and waiting for riak_kv to become
+%% available.
+%%
+%% The given `SetupFun' will be called first with the argument `stop'
+%% before other applications are stopped (to cleanup leaky test
+%% state), `load' after all other applications are loaded, and then
+%% `start' after all other applications are started. It is generally
+%% good practice to use the same function in the `SetupFun' as the
+%% `CleanupFun' given to `cleanup/3'.
+%%
+%% @see common_setup/2, dep_apps/2, do_dep_apps/2
+-spec setup(TestName::string(), fun((load|start|stop) -> any()) -> ok.
 setup(TestName, SetupFun) ->
     %% Cleanup in case a previous test did not
     cleanup(TestName, SetupFun, setup),
@@ -147,6 +169,14 @@ setup(TestName, SetupFun) ->
     riak_core:wait_for_service(riak_kv),
     ok.
 
+%% @doc Performs generic, riak_kv-specific and test-specific cleanup
+%% when used within a test fixture. This includes stopping dependent
+%% applications, stopping distributed Erlang, and killing pernicious
+%% processes. The given `CleanupFun' will be called with the argument
+%% `stop' before other components are stopped.
+%%
+%% @see common_cleanup/2, dep_apps/2, do_dep_apps/2
+-spec cleanup(Test::string(), CleanupFun::fun((stop) -> any()), SetupResult::setup | atom()) -> ok.
 cleanup(Test, CleanupFun, setup) ->
     %% Remove existing ring files so we have a fresh ring
     os:cmd("rm -rf " ++ Test ++ "/ring"),
@@ -167,11 +197,26 @@ cleanup(Test, CleanupFun, _) ->
 
     %% Reset the riak_core vnode_modules
     application:set_env(riak_core, vnode_modules, []),
-
-    %% Unload the dependent applications
-    do_dep_apps(unload, Deps),
     ok.
 
+%% @doc Calculates a list of dependent applications and functions that
+%% can be passed to do_deps_apps/2 to perform the lifecycle phase on
+%% them all at once. This ensures that applications start and stop in
+%% the correct order and the test also has a chance to inject its own
+%% setup and teardown code. Included in the sequence are two default
+%% setup functions, one that silences SASL logging and redirects it to
+%% a file, and one that configures some settings for riak_core and
+%% lager.
+%%
+%% By passing the `Test' argument, the test's data and logging state
+%% is also isolated to its own directory so as not to clobber other
+%% tests.
+%%
+%% The `Extra' function takes an atom which represents the phase of
+%% application lifecycle, one of `load', `start' or `stop'.
+%%
+%% @see common_setup/2, common_cleanup/2
+-spec dep_apps(Test::string(), Extra:fun((load | start | stop) -> any())) -> [ atom() | fun() ].
 dep_apps(Test, Extra) ->
     Silencer = fun(load) ->
                        %% Silence logging junk
@@ -200,8 +245,12 @@ dep_apps(Test, Extra) ->
                     _ ->
                         application:set_env(lager, handlers, [{lager_console_backend, debug}])
                 end;
-           (unload) ->
-                %% TODO: Remove this when the deregistration PR gets merged
+           (stop) ->
+                %% TODO: Remove this when the deregistration PR gets
+                %% merged. The list of codes being erased from the
+                %% dispatch table are the ones registered by calling
+                %% riak_api_pb_service:register/1 in
+                %% riak_kv_app:start/2.
                 Services = riak_api_pb_service:dispatch_table(),
                 NewServices = lists:foldl(
                                 fun dict:erase/2,
@@ -217,9 +266,26 @@ dep_apps(Test, Extra) ->
      riak_core, riak_pipe, riak_kv, DefaultSetupFun, Extra].
 
 
+%% @doc Runs the application-lifecycle phase across all of the given
+%% applications and functions.
+%% @see dep_apps/2
+-spec do_dep_apps(load | start | stop, [ atom() | fun() ]) -> [ any() ].
 do_dep_apps(StartStop, Apps) ->
-    lists:map(fun(A) when is_atom(A) -> application:StartStop(A);
+    lists:map(fun(A) when is_atom(A) ->
+                      case include_app_phase(StartStop, A) of
+                          true -> application:StartStop(A);
+                          _ -> ok
+                      end;
                  (F)                 -> F(StartStop)
               end, Apps).
+
+%% @doc Determines whether a given application should be modified in
+%% the given phase. If this returns false, the application will not be
+%% loaded, started, or stopped by `do_dep_apps/2'.
+-spec include_app_phase(Phase::load | start | stop, Application::atom()) -> true | false.
+include_app_phase(stop, crypto) -> false;
+include_app_phase(start, folsom) -> false;
+include_app_phase(_Phase, _App) -> true.
+
 
 -endif. % TEST
