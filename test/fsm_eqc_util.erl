@@ -192,6 +192,7 @@ start_mock_servers() ->
 
 cleanup_mock_servers() ->
     application:stop(folsom),
+    application:stop(crypto),
     application:stop(riak_core).
 
 make_options([], Options) ->

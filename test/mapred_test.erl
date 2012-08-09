@@ -72,11 +72,14 @@ dep_apps() ->
              _ = application:stop(riak_sysmon),
              KillDamnFilterProc()
      end,
+     inets,
+     mochiweb,
      webmachine,
      os_mon,
      compiler,
      syntax_tools,
      lager,
+     folsom,
      fun(start) ->
              _ = application:load(riak_core),
              %% riak_core_handoff_listener uses {reusaddr, true}, but
@@ -99,8 +102,6 @@ dep_apps() ->
      riak_pipe,
      luke,
      erlang_js,
-     inets,
-     mochiweb,
      fun(start) ->
              _ = application:load(riak_kv),
              [begin

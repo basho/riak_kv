@@ -1458,6 +1458,9 @@ filter_keys_test() ->
     flush_msgs().
 
 must_be_last_cleanup_stuff_test() ->
+    %% Thess gets started by the tests, so we should stop them.
+    application:stop(bitcask),
+    application:stop(folsom),
     [application:unset_env(riak_kv, K) ||
         {K, _V} <- application:get_all_env(riak_kv)],
     [application:set_env(riak_kv, K, V) || {K, V} <- erlang:get({?MODULE, kv})].
