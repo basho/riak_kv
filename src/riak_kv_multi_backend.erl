@@ -603,6 +603,7 @@ extra_callback_test() ->
     application:stop(bitcask).
 
 bad_config_test() ->
+    application:unset_env(riak_kv, multi_backend),
     ErrorReason = multi_backend_config_unset,
     ?assertEqual({error, ErrorReason}, start(0, [])).
 
