@@ -48,7 +48,7 @@ common_setup(T) when is_atom(T) ->
 common_setup(TestName) ->
     common_setup(TestName, ?SETUPTHUNK).
 
--spec common_setup(atom() | string(), SetupFun::fun((load|start|stop) -> any()) -> fun().
+-spec common_setup(atom() | string(), SetupFun::fun((load|start|stop) -> any())) -> fun().
 common_setup(T, S) when is_atom(T) ->
     common_setup(atom_to_list(T), S);
 common_setup(TestName, Setup) ->
@@ -147,7 +147,7 @@ wait_for_children(PPid) ->
 %% `CleanupFun' given to `cleanup/3'.
 %%
 %% @see common_setup/2, dep_apps/2, do_dep_apps/2
--spec setup(TestName::string(), fun((load|start|stop) -> any()) -> ok.
+-spec setup(TestName::string(), fun((load|start|stop) -> any())) -> ok.
 setup(TestName, SetupFun) ->
     %% Cleanup in case a previous test did not
     cleanup(TestName, SetupFun, setup),
@@ -216,7 +216,7 @@ cleanup(Test, CleanupFun, _) ->
 %% application lifecycle, one of `load', `start' or `stop'.
 %%
 %% @see common_setup/2, common_cleanup/2
--spec dep_apps(Test::string(), Extra:fun((load | start | stop) -> any())) -> [ atom() | fun() ].
+-spec dep_apps(Test::string(), Extra::fun((load | start | stop) -> any())) -> [ atom() | fun() ].
 dep_apps(Test, Extra) ->
     Silencer = fun(load) ->
                        %% Silence logging junk
