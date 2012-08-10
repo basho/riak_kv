@@ -183,6 +183,7 @@ start_mock_servers() ->
     application:load(riak_core),
     application:start(crypto),
     application:start(folsom),
+    riak_core_stat_cache:start_link(),
     riak_kv_stat:register_stats(),
     riak_core_ring_events:start_link(),
     riak_core_node_watcher_events:start_link(),

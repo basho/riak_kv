@@ -1287,8 +1287,9 @@ assign_vnodeid_restart_earlier_ts_test() ->
 vnode_status_test_() ->
     {setup,
      fun() ->
-             os:cmd("chmod u+rwx kv_vnode_status_test"),
-             os:cmd("rm -rf kv_vnode_status_test"),
+             filelib:ensure_dir("kv_vnode_status_test/.test"),
+             ?cmd("chmod u+rwx kv_vnode_status_test"),
+             ?cmd("rm -rf kv_vnode_status_test"),
              application:set_env(riak_kv, vnode_status, "kv_vnode_status_test"),
              ok
      end,
@@ -1371,19 +1372,15 @@ backend_with_known_key(BackendMod) ->
                                    S1),
     {S2, B, K}.
 
-must_be_first_setup_stuff_test() ->
-    application:start(sasl),
-    erlang:put({?MODULE, kv}, application:get_all_env(riak_kv)).
-
 list_buckets_test_() ->
     {foreach,
      fun() ->
              application:start(sasl),
+             Env = application:get_all_env(riak_kv),
              application:start(folsom),
              riak_core_stat_cache:start_link(),
              riak_kv_stat:register_stats(),
-             application:get_all_env(riak_kv)
-
+             Env
      end,
      fun(Env) ->
              riak_core_stat_cache:stop(),
@@ -1456,11 +1453,6 @@ filter_keys_test() ->
     ?assertEqual({ok, []}, results_from_listener(Caller3)),
 
     flush_msgs().
-
-must_be_last_cleanup_stuff_test() ->
-    [application:unset_env(riak_kv, K) ||
-        {K, _V} <- application:get_all_env(riak_kv)],
-    [application:set_env(riak_kv, K, V) || {K, V} <- erlang:get({?MODULE, kv})].
 
 new_result_listener(Type) ->
     case Type of
