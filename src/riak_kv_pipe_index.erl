@@ -147,7 +147,23 @@ queue_existing_pipe(Pipe, Bucket, Query, Timeout) ->
                       [LKP, {Bucket, Query}, NVal]]),
 
     %% wait for cover to hit everything
-    erlang:link(Sender),
+    {RealTO, TOReason} =
+        try erlang:link(Sender) of
+            true ->
+                %% Sender was alive - wait as expected
+                {Timeout, timeout}
+        catch error:noproc ->
+                %% Sender finished early; it's always spawned locally,
+                %% so we'll get a noproc exit, instead of an exit signal
+
+                %% messages had better already be in our mailbox,
+                %% don't wait any extra time for them
+                {0,
+                 %% we'll have no idea what its failure was, unless it
+                 %% sent us an error message
+                 index_coverage_failure}
+        end,
+
     receive
         {ReqId, done} ->
             %% this eoi will flow into the other pipe
@@ -157,8 +173,8 @@ queue_existing_pipe(Pipe, Bucket, Query, Timeout) ->
             %% this destroy should not harm the other pipe
             riak_pipe:destroy(LKP),
             Error
-    after Timeout ->
+    after RealTO ->
             %% this destroy should not harm the other pipe
             riak_pipe:destroy(LKP),
-            {error, timeout}
+            {error, TOReason}
     end.
