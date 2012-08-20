@@ -86,8 +86,10 @@ process(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
 process_stream(#pipe_eoi{ref=ReqId}, ReqId,
                State=#state{req=#rpbmapredreq{},
                             req_ctx=#pipe_ctx{ref=ReqId,
-                                              timer=Timer}}) ->
+                                              timer=Timer,
+                                              pipe=Pipe}}) ->
     erlang:cancel_timer(Timer),
+    drain_pipe_messages(Pipe),
     {done, #rpbmapredresp{done = 1}, State#state{req = undefined, req_ctx = undefined}};
 
 process_stream(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
@@ -96,9 +98,7 @@ process_stream(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
                             req_ctx=#pipe_ctx{ref=ReqId, has_mr_query=HasMRQuery}=PipeCtx}) ->
     case encode_mapred_phase([Res], ContentType, HasMRQuery) of
         {error, Reason} ->
-            erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
-            %% destroying the pipe will automatically kill the sender
-            riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
+            close_pipe(PipeCtx),
             {error, Reason, State#state{req = undefined, req_ctx = undefined}};
         Response ->
             {reply, #rpbmapredresp{phase=PhaseId, response=Response}, State}
@@ -110,9 +110,7 @@ process_stream(#pipe_log{ref=ReqId, from=From, msg=Msg},
                             req_ctx=#pipe_ctx{ref=ReqId}=PipeCtx}) ->
     case Msg of
         {trace, [error], {error, Info}} ->
-            erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
-            %% destroying the pipe will automatically kill the sender
-            riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
+            close_pipe(PipeCtx),
             JsonInfo = {struct, riak_kv_mapred_json:jsonify_pipe_error(
                                   From, Info)},
             {error, mochijson2:encode(JsonInfo), State#state{req = undefined, req_ctx = undefined}};
@@ -132,8 +130,7 @@ process_stream({'DOWN', Ref, process, Pid, Reason}, Ref,
        true ->
             %% something went wrong sending inputs - tell the client
             %% about it, and shutdown the pipe
-            erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
-            riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
+            close_pipe(PipeCtx),
             lager:error("Error sending inputs: ~p", [Reason]),
             {error, {format, "Error sending inputs: ~p", [Reason]},
              State#state{req=undefined, req_ctx=undefined}}
@@ -141,9 +138,8 @@ process_stream({'DOWN', Ref, process, Pid, Reason}, Ref,
 
 process_stream({pipe_timeout, Ref}, Ref,
                State=#state{req=#rpbmapredreq{},
-                            req_ctx=#pipe_ctx{ref=Ref,pipe=Pipe}}) ->
-    %% destroying the pipe will automatically kill the sender
-    riak_pipe:destroy(Pipe),
+                            req_ctx=#pipe_ctx{ref=Ref}=PipeCtx}) ->
+    close_pipe(PipeCtx),
     {error, "timeout", State#state{req=undefined, req_ctx=undefined}};
 
 %% LEGACY Handle response from mapred_stream/mapred_bucket_stream
@@ -241,6 +237,20 @@ legacy_mapreduce(#rpbmapredreq{content_type=ContentType}=Req,
                             {error, {format, bad_mapred_inputs}, State}
                     end
             end
+    end.
+
+%% @doc Shuts down a pipe query, cancels the timeout timer and drains
+%% any lingering pipe messages from the mailbox.
+close_pipe(#pipe_ctx{pipe=Pipe,timer=Timer}) ->
+    erlang:cancel_timer(Timer),
+    riak_pipe:destroy(Pipe),
+    drain_pipe_messages(Pipe).
+
+%% @doc Drains any lingering pipe messages from the mailbox.
+drain_pipe_messages(Pipe) ->
+    case riak_pipe:receive_result(Pipe, 0) of
+        timeout -> ok;
+        _Ignore -> drain_pipe_messages(Pipe)
     end.
 
 %% Decode a mapred query
