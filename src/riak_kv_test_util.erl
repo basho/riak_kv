@@ -236,15 +236,10 @@ dep_apps(Test, Extra) ->
                 application:set_env(riak_core, ring_state_dir, Test ++ "/ring"),
                 application:set_env(riak_core, platform_data_dir, Test ++ "/data"),
                 application:set_env(riak_core, handoff_port, 0), %% pick a random handoff port
-                case os:getenv("TRAVIS") of
-                    false ->
-                        application:set_env(lager, handlers, [{lager_file_backend,
-                                                               [
-                                                                {Test ++ "/log/debug.log", debug, 10485760, "$D0", 5}]}]),
-                        application:set_env(lager, crash_log, Test ++ "/log/crash.log");
-                    _ ->
-                        application:set_env(lager, handlers, [{lager_console_backend, debug}])
-                end;
+                application:set_env(lager, handlers, [{lager_file_backend,
+                                                       [
+                                                        {Test ++ "/log/debug.log", debug, 10485760, "$D0", 5}]}]),
+                application:set_env(lager, crash_log, Test ++ "/log/crash.log");
            (stop) ->
                 %% TODO: Remove this when the deregistration PR gets
                 %% merged. The list of codes being erased from the
