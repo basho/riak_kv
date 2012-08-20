@@ -9,6 +9,7 @@
                   stdlib,
                   sasl,
                   crypto,
+                  riak_api,
                   riak_core,
                   luke,
                   erlang_js,
