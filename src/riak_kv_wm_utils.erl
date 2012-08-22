@@ -250,7 +250,7 @@ is_null_origin(RD) ->
 %% @doc Validate that the Referer matches up with scheme, host and port of the
 %%      machine that received the request.
 is_valid_referer(RD) ->
-    OriginTuple = {wrq:scheme(RD), string:join(lists:reverse(wrq:host_tokens(RD)), "."), wrq:port(RD)},
+    OriginTuple = {wrq:scheme(RD), string:join(wrq:host_tokens(RD), "."), wrq:port(RD)},
     case referer_tuple(RD) of
         undefined ->
             true;
