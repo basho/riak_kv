@@ -23,7 +23,7 @@
 -module(riak_kv_map_master).
 -include_lib("riak_kv_js_pools.hrl").
 
--behaviour(gen_server2).
+-behaviour(riak_core_gen_server).
 
 %% API
 -export([start_link/0,
@@ -47,17 +47,18 @@
                 next}).
 
 new_mapper({_, Node}=VNode, QTerm, MapInputs, PhasePid) ->
-    gen_server2:pcall({?SERVER, Node}, 5, {new_mapper, VNode,
-                                           QTerm, MapInputs, PhasePid}, infinity).
+    riak_core_gen_server:pcall({?SERVER, Node}, 5,
+                               {new_mapper, VNode, QTerm, MapInputs, PhasePid},
+                               infinity).
 
 queue_depth() ->
     Nodes = [node()|nodes()],
-    [{Node, gen_server2:pcall({?SERVER, Node}, 0, queue_depth,
-                              infinity)} || Node <- Nodes].
+    [{Node, riak_core_gen_server:pcall({?SERVER, Node}, 0, queue_depth,
+                                       infinity)} || Node <- Nodes].
 
 
 start_link() ->
-    gen_server2:start_link({local, ?SERVER}, ?MODULE, [], []).
+    riak_core_gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 init([]) ->
     process_flag(trap_exit, true),
