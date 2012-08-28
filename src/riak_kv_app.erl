@@ -25,6 +25,13 @@
 -behaviour(application).
 -export([start/2,stop/1]).
 
+-define(SERVICES, [{riak_kv_pb_object, 3, 6}, %% ClientID stuff
+                   {riak_kv_pb_object, 9, 14}, %% Object requests
+                   {riak_kv_pb_bucket, 15, 22}, %% Bucket requests
+                   {riak_kv_pb_mapred, 23, 24}, %% MapReduce requests
+                   {riak_kv_pb_index, 25, 26} %% Secondary index requests
+                  ]).
+
 %% @spec start(Type :: term(), StartArgs :: term()) ->
 %%          {ok,Pid} | ignore | {error,Error}
 %% @doc The application:start callback for riak.
@@ -118,23 +125,16 @@ start(_Type, _StartArgs) ->
                                            mapred_2i_pipe,
                                            [{true, true}, {false, false}]}),
 
-            %% register stats
-            riak_kv_stat:register_stats(),
-
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
             %% synchronously.
             riak_core:register(riak_kv, [
                 {vnode_module, riak_kv_vnode},
-                {bucket_validator, riak_kv_bucket}
+                {bucket_validator, riak_kv_bucket},
+                {stat_mod, riak_kv_stat}
             ]),
 
-            ok = riak_api_pb_service:register([{riak_kv_pb_object, 3, 6}, %% ClientID stuff
-                                               {riak_kv_pb_object, 9, 14}, %% Object requests
-                                               {riak_kv_pb_bucket, 15, 22}, %% Bucket requests
-                                               {riak_kv_pb_mapred, 23, 24}, %% MapReduce requests
-                                               {riak_kv_pb_index, 25, 26} %% Secondary index requests
-                                               ]),
+            ok = riak_api_pb_service:register(?SERVICES),
 
             %% Add routes to webmachine
             [ webmachine_router:add_route(R)
@@ -147,6 +147,7 @@ start(_Type, _StartArgs) ->
 %% @spec stop(State :: term()) -> ok
 %% @doc The application:stop callback for riak.
 stop(_State) ->
+    ok = riak_api_pb_service:deregister(?SERVICES),
     ok.
 
 %% 719528 days from Jan 1, 0 to Jan 1, 1970

@@ -3,12 +3,13 @@
 {application, riak_kv,
  [
   {description, "Riak Key/Value Store"},
-  {vsn, "1.1.2"},
+  {vsn, "1.2.0"},
   {applications, [
                   kernel,
                   stdlib,
                   sasl,
                   crypto,
+                  riak_api,
                   riak_core,
                   luke,
                   erlang_js,

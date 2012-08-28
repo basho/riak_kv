@@ -106,8 +106,13 @@ start(Partition, Config) ->
 
 %% @doc Stop the eleveldb backend
 -spec stop(state()) -> ok.
-stop(_State) ->
-    %% No-op; GC handles cleanup
+stop(State) ->
+    case State#state.ref of
+        undefined ->
+            ok;
+        _ ->
+            eleveldb:close(State#state.ref)
+    end,
     ok.
 
 %% @doc Retrieve an object from the eleveldb backend
@@ -277,14 +282,10 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
 %% and return a fresh reference.
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
 drop(State0) ->
+    eleveldb:close(State0#state.ref),
     case eleveldb:destroy(State0#state.data_root, []) of
         ok ->
-            case open_db(State0) of
-                {ok, State} ->
-                    {ok, State};
-                {error, Reason} ->
-                    {error, Reason, State0}
-            end;
+            {ok, State0#state{ref = undefined}};
         {error, Reason} ->
             {error, Reason, State0}
     end.
@@ -340,6 +341,21 @@ init_state(DataRoot, Config) ->
 
     %% Use read options for folding, but FORCE fill_cache to false
     FoldOpts = lists:keystore(fill_cache, 1, ReadOpts, {fill_cache, false}),
+
+    %% Warn if block_size is set
+    SSTBS = proplists:get_value(sst_block_size, OpenOpts, false),
+    BS = proplists:get_value(block_size, OpenOpts, false),
+    case BS /= false andalso SSTBS == false of
+        true ->
+            lager:warning("eleveldb block_size has been renamed sst_block_size "
+                          "and the current setting of ~p is being ignored.  "
+                          "Changing sst_block_size is strongly cautioned "
+                          "against unless you know what you are doing.  Remove "
+                          "block_size from app.config to get rid of this "
+                          "message.\n", [BS]);
+        _ ->
+            ok
+    end,
 
     %% Generate a debug message with the options we'll use for each operation
     lager:debug("Datadir ~s options for LevelDB: ~p\n",
@@ -542,8 +558,7 @@ eqc_test_() ->
            [?_assertEqual(true,
                           backend_eqc:test(?MODULE, false,
                                            [{data_root,
-                                             "test/eleveldb-backend"},
-                                         {async_folds, false}]))]},
+                                             "test/eleveldb-backend"}]))]},
           {timeout, 60000,
             [?_assertEqual(true,
                           backend_eqc:test(?MODULE, false,

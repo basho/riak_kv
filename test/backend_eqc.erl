@@ -249,12 +249,13 @@ init_backend(Backend, _Volatile, Config) ->
     S.
 
 drop(Backend, State) ->
-    case Backend:drop(State) of
-        {ok, NewState} ->
-            NewState;
-        {error, _, NewState} ->
-            NewState
-    end.
+    State1 = case Backend:drop(State) of
+                 {ok, NewState} ->
+                     NewState;
+                 {error, _, NewState} ->
+                     NewState
+             end,
+    Backend:stop(State1).
 
 delete(Bucket, Key, Backend, BackendState, Indexes) ->
     IndexSpecs = [{remove, Idx, SKey} || {B,Idx,SKey,K} <- Indexes,
@@ -349,9 +350,10 @@ next_state_data(_From, _To, S, _R, {call, _M, put, [Bucket, Key, IndexSpecs, Val
 next_state_data(_From, _To, S, _R, {call, _M, delete, [Bucket, Key|_]}) ->
     S#qcst{d = orddict:erase({Bucket, Key}, S#qcst.d),
            i = remove_indexes(Bucket, Key, S#qcst.i)};
-next_state_data(_From, _To, S, R, {call, ?MODULE, drop, _}) ->
+next_state_data(_From, _To, S, _R, {call, ?MODULE, drop, _}) ->
+    
     S#qcst{d=orddict:new(),
-           s=R,
+           s=undefined,
            i=ordsets:new()};
 next_state_data(_From, _To, S, _R, _C) ->
     S.
@@ -373,7 +375,7 @@ running(#qcst{backend=Backend,
      {history, {call, Backend, fold_keys, [fold_keys_fun(), get_fold_buffer(), fold_keys_opts(), State]}},
      {history, {call, Backend, fold_objects, [fold_objects_fun(), get_fold_buffer(), g_opts(), State]}},
      {history, {call, Backend, is_empty, [State]}},
-     {history, {call, ?MODULE, drop, [Backend, State]}},
+     {stopped, {call, ?MODULE, drop, [Backend, State]}},
      {stopped, {call, Backend, stop, [State]}}
     ].
 

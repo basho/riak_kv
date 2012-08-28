@@ -796,7 +796,7 @@ wait_for_query_results(ReqId, Timeout, Acc) ->
         {ReqId,{results, Res}} -> wait_for_query_results(ReqId, Timeout, [Res | Acc]);
         {ReqId, Error} -> {error, Error}
     after Timeout ->
-            {error, timeout, Acc}
+            {error, timeout}
     end.
 
 add_inputs(_FlowPid, []) ->

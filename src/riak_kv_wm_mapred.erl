@@ -24,7 +24,7 @@
 
 -module(riak_kv_wm_mapred).
 
--export([init/1, service_available/2, allowed_methods/2, known_content_type/2]).
+-export([init/1, service_available/2, allowed_methods/2, known_content_type/2, forbidden/2]).
 -export([malformed_request/2, process_post/2, content_types_provided/2]).
 -export([nop/2]).
 
@@ -49,6 +49,9 @@ service_available(RD, State) ->
             lager:error("~s", Error),
             {false, RD, State}
     end.
+
+forbidden(RD, State) ->
+    {riak_kv_wm_utils:is_forbidden(RD), RD, State}.
 
 allowed_methods(RD, State) ->
     {['GET','HEAD','POST'], RD, State}.

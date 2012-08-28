@@ -192,6 +192,7 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 register_stats() ->
+    [(catch folsom_metrics:delete_metric({?APP, Name})) || {Name, _Type} <- stats()],
     [register_stat({?APP, Name}, Type) || {Name, Type} <- stats()],
     riak_core_stat_cache:register_app(?APP, {?MODULE, produce_stats, []}).
 
@@ -210,6 +211,7 @@ update(Arg) ->
 %% gen_server
 
 init([]) ->
+    register_stats(),
     {ok, ok}.
 
 handle_call(_Req, _From, State) ->
@@ -232,39 +234,34 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% @doc Update the given stat
 update1(vnode_get) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_gets}, 1, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_gets}, 1, spiral);
 update1(vnode_put) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_puts}, 1, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_puts}, 1, spiral);
 update1(vnode_index_read) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_reads}, 1, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_reads}, 1, spiral);
 update1({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_writes}, 1, meter),
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_writes_postings}, PostingsAdded, meter),
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, PostingsRemoved, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_writes}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_writes_postings}, PostingsAdded, spiral),
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, PostingsRemoved, spiral);
 update1({vnode_index_delete, Postings}) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes}, Postings, meter),
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, Postings, meter);
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes}, Postings, spiral),
+    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, Postings, spiral);
 update1({get_fsm, Bucket, Microsecs, undefined, undefined, PerBucket}) ->
-    folsom_metrics:notify_existing_metric({?APP, node_gets_total}, {inc, 1}, counter),
+    folsom_metrics:notify_existing_metric({?APP, node_gets}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node_get_fsm_time}, Microsecs, histogram),
     do_get_bucket(PerBucket, {Bucket, Microsecs, undefined, undefined});
 update1({get_fsm, Bucket, Microsecs, NumSiblings, ObjSize, PerBucket}) ->
-    folsom_metrics:notify_existing_metric({?APP, node_gets_total}, {inc, 1}, counter),
+    folsom_metrics:notify_existing_metric({?APP, node_gets}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node_get_fsm_time}, Microsecs, histogram),
     folsom_metrics:notify_existing_metric({?APP, node_get_fsm_siblings}, NumSiblings, histogram),
     folsom_metrics:notify_existing_metric({?APP, node_get_fsm_objsize}, ObjSize, histogram),
     do_get_bucket(PerBucket, {Bucket, Microsecs, NumSiblings, ObjSize});
 update1({put_fsm_time, Bucket,  Microsecs, PerBucket}) ->
-    folsom_metrics:notify_existing_metric({?APP, node_puts_total}, {inc, 1}, counter),
+    folsom_metrics:notify_existing_metric({?APP, node_puts}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node_put_fsm_time}, Microsecs, histogram),
     do_put_bucket(PerBucket, {Bucket, Microsecs});
-update1(pbc_connect) ->
-    folsom_metrics:notify_existing_metric({?APP, pbc_connects_active}, {inc, 1}, counter),
-    folsom_metrics:notify_existing_metric({?APP, pbc_connects}, 1, meter);
-update1(pbc_disconnect) ->
-    folsom_metrics:notify_existing_metric({?APP, pbc_connects_active}, {dec, 1}, counter);
 update1(read_repairs) ->
-    folsom_metrics:notify_existing_metric({?APP, read_repairs}, 1, meter);
+    folsom_metrics:notify_existing_metric({?APP, read_repairs}, 1, spiral);
 update1(coord_redir) ->
     folsom_metrics:notify_existing_metric({?APP, coord_redirs_total}, {inc, 1}, counter);
 update1(mapper_start) ->
@@ -282,14 +279,14 @@ do_get_bucket(false, _) ->
     ok;
 do_get_bucket(true, {Bucket, Microsecs, NumSiblings, ObjSize}=Args) ->
     BucketAtom = binary_to_atom(Bucket, latin1),
-    case (catch folsom_metrics:notify_existing_metric({?APP, join(node_gets_total, BucketAtom)}, {inc, 1}, counter)) of
+    case (catch folsom_metrics:notify_existing_metric({?APP, join(node_gets, BucketAtom)}, 1, spiral)) of
         ok ->
             [folsom_metrics:notify_existing_metric({?APP, join(Stat, BucketAtom)}, Arg, histogram)
              || {Stat, Arg} <- [{node_get_fsm_time, Microsecs},
                                 {node_get_fsm_siblings, NumSiblings},
                                 {node_get_fsm_objsize, ObjSize}], Arg /= undefined];
         {'EXIT', _} ->
-            folsom_metrics:new_counter({?APP, join(node_gets_total, BucketAtom)}),
+            folsom_metrics:new_spiral({?APP, join(node_gets, BucketAtom)}),
             [register_stat({?APP, join(Stat, BucketAtom)}, histogram) || Stat <- [node_get_fsm_time,
                                                                                   node_get_fsm_siblings,
                                                                                   node_get_fsm_objsize]],
@@ -301,11 +298,11 @@ do_put_bucket(false, _) ->
     ok;
 do_put_bucket(true, {Bucket, Microsecs}=Args) ->
     BucketAtom = binary_to_atom(Bucket, latin1),
-    case (catch folsom_metrics:notify_existing_metric({?APP, join(node_puts_total, BucketAtom)}, {inc, 1}, counter)) of
+    case (catch folsom_metrics:notify_existing_metric({?APP, join(node_puts, BucketAtom)}, 1, spiral)) of
         ok ->
             folsom_metrics:notify_existing_metric({?APP, join(node_put_fsm_time, BucketAtom)}, Microsecs, histogram);
         {'EXIT', _} ->
-            register_stat({?APP, join(node_puts_total, BucketAtom)}, counter),
+            register_stat({?APP, join(node_puts, BucketAtom)}, spiral),
             register_stat({?APP, join(node_put_fsm_time, BucketAtom)}, histogram),
             do_put_bucket(true, Args)
     end.
@@ -316,6 +313,7 @@ do_put_bucket(true, {Bucket, Microsecs}=Args) ->
 produce_stats() ->
     lists:append(
       [lists:flatten([backwards_compat(Name, Type, get_stat({?APP, Name}, Type)) || {Name, Type} <- stats()]),
+       backwards_compat_pb(riak_api_stat:produce_stats()),
        cpu_stats(),
        mem_stats(),
        disk_stats(),
@@ -331,7 +329,11 @@ get_stat(Name, histogram) ->
 get_stat(Name, _Type) ->
     folsom_metrics:get_metric_value(Name).
 
-backwards_compat(Name, meter, Stats) ->
+backwards_compat_pb({riak_api, Stats}) ->
+    [{pbc_active, proplists:get_value(pbc_connects_active, Stats)} |
+     backwards_compat(pbc_connects, spiral, proplists:get_value(pbc_connects, Stats))].
+
+backwards_compat(Name, spiral, Stats) ->
     [{Name, trunc(proplists:get_value(one, Stats))},
      {join(Name, total), proplists:get_value(count, Stats)}];
 backwards_compat(mapper_count, counter, Stats) ->
@@ -340,14 +342,6 @@ backwards_compat(pbc_connects_active, counter, Stats) ->
     {pbc_active, Stats};
 backwards_compat(Name, counter, Stats) ->
     {Name, Stats};
-backwards_compat(node_get_fsm_time, histogram, Stats) ->
-    Histogram = proplists:get_value(histogram, Stats),
-    Cnt = lists:foldl(fun({_Bin, Val}, Sum) -> Sum + Val end, 0, Histogram),
-    [{node_gets, Cnt} | backwards_compat_histo(node_get_fsm_time, Stats)];
-backwards_compat(node_put_fsm_time, histogram, Stats) ->
-    Histogram = proplists:get_value(histogram, Stats),
-    Cnt = lists:foldl(fun({_Bin, Val}, Sum) -> Sum + Val end, 0, Histogram),
-    [{node_puts, Cnt} | backwards_compat_histo(node_put_fsm_time, Stats)];
 backwards_compat(Name, histogram, Stats) ->
     backwards_compat_histo(Name, Stats).
 
@@ -365,29 +359,27 @@ join(Atom1, Atom2) ->
     binary_to_atom(<<Bin1/binary, $_, Bin2/binary>>, latin1).
 
 stats() ->
-    [{vnode_gets, meter},
-     {vnode_puts, meter},
-     {vnode_index_reads, meter},
-     {vnode_index_writes, meter},
-     {vnode_index_writes_postings, meter},
-     {vnode_index_deletes, meter},
-     {vnode_index_deletes_postings, meter},
-     {node_gets_total, counter},
+    [{vnode_gets, spiral},
+     {vnode_puts, spiral},
+     {vnode_index_reads, spiral},
+     {vnode_index_writes, spiral},
+     {vnode_index_writes_postings, spiral},
+     {vnode_index_deletes, spiral},
+     {vnode_index_deletes_postings, spiral},
+     {node_gets, spiral},
      {node_get_fsm_siblings, histogram},
      {node_get_fsm_objsize, histogram},
      {node_get_fsm_time, histogram},
-     {node_puts_total, counter},
+     {node_puts, spiral},
      {node_put_fsm_time, histogram},
-     {pbc_connects, meter},
-     {pbc_connects_active, counter},
-     {read_repairs, meter},
+     {read_repairs, spiral},
      {coord_redirs_total, counter},
      {mapper_count, counter},
      {precommit_fail, counter},
      {postcommit_fail, counter}].
 
-register_stat(Name, meter) ->
-    folsom_metrics:new_meter(Name);
+register_stat(Name, spiral) ->
+    folsom_metrics:new_spiral(Name);
 register_stat(Name, counter) ->
     folsom_metrics:new_counter(Name);
 register_stat(Name, histogram) ->

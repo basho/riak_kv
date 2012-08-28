@@ -55,6 +55,7 @@
 -export([
          init/1,
          service_available/2,
+         forbidden/2,
          allowed_methods/2,
          malformed_request/2,
          content_types_provided/2,
@@ -112,6 +113,9 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx}
     end.
+
+forbidden(RD, Ctx) ->
+    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
 
 %% @spec allowed_methods(reqdata(), context()) ->
 %%          {[method()], reqdata(), context()}

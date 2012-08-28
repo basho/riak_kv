@@ -35,7 +35,8 @@
          encode_value/1,
          accept_value/2,
          any_to_list/1,
-         any_to_bool/1
+         any_to_bool/1,
+         is_forbidden/1
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -232,3 +233,48 @@ any_to_bool(V) when is_integer(V) ->
     V /= 0;
 any_to_bool(V) when is_boolean(V) ->
     V.
+
+is_forbidden(RD) ->
+    is_null_origin(RD) or not is_valid_referer(RD).
+
+%% @doc Check if the Origin header is "null". This is useful to look for attempts
+%%      at CSRF, but is not a complete answer to the problem.
+is_null_origin(RD) ->
+    case wrq:get_req_header("Origin", RD) of
+        "null" ->
+            true;
+        _ ->
+            false
+    end.
+
+%% @doc Validate that the Referer matches up with scheme, host and port of the
+%%      machine that received the request.
+is_valid_referer(RD) ->
+    OriginTuple = {wrq:scheme(RD), string:join(wrq:host_tokens(RD), "."), wrq:port(RD)},
+    case referer_tuple(RD) of
+        undefined ->
+            true;
+        {invalid, Url} ->
+            lager:debug("WM unparsable referer: ~s\n", [Url]),
+            false;
+        OriginTuple ->
+            true;
+        RefererTuple ->
+            lager:debug("WM referrer not origin.  Origin ~p != Referer ~p\n", [OriginTuple, RefererTuple]),
+            false
+    end.
+
+referer_tuple(RD) ->
+    case wrq:get_req_header("Referer", RD) of
+        undefined ->
+            undefined;
+        Url ->
+            case http_uri:parse(Url) of
+                {ok, {Scheme, _, Host, Port, _, _}} -> %R15+
+                    {Scheme, Host, Port};
+                {Scheme, _, Host, Port, _, _} -> % R14 and below
+                    {Scheme, Host, Port};
+                {error, _} ->
+                    {invalid, Url}
+            end
+    end.
