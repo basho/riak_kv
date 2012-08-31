@@ -1032,12 +1032,12 @@ handle_common_error(Reason, RD, Ctx) ->
                             [Returned, Requested]),
                         RD)),
                 Ctx};
-        {error, {w_val_unsatisfied, Requested, Returned}} ->
+        {error, {w_val_unsatisfied, NumW, NumDW, W, DW}} ->
             {{halt, 503},
                 wrq:set_resp_header("Content-Type", "text/plain",
                     wrq:append_to_response_body(
-                        io_lib:format("W-value unsatisfied: ~p/~p~n",
-                            [Returned, Requested]),
+                        io_lib:format("W/DW-value unsatisfied: w=~p/~p dw=~p/~p~n",
+                            [NumW, W, NumDW, DW]),
                         RD)),
                 Ctx};
         {error, {pr_val_unsatisfied, Requested, Returned}} ->
