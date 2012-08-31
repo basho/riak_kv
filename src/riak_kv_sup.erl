@@ -72,15 +72,6 @@ init([]) ->
     KLSup = {riak_kv_keylister_legacy_sup,
              {riak_kv_keylister_legacy_sup, start_link, []},
              permanent, infinity, supervisor, [riak_kv_keylister_sup]},
-    MapCache = {riak_kv_mapred_cache,
-                 {riak_kv_mapred_cache, start_link, []},
-                 permanent, 30000, worker, [riak_kv_mapred_cache]},
-    MapMaster = {riak_kv_map_master,
-                 {riak_kv_map_master, start_link, []},
-                 permanent, 30000, worker, [riak_kv_map_master]},
-    MapperSup = {riak_kv_mapper_sup,
-                 {riak_kv_mapper_sup, start_link, []},
-                 permanent, infinity, supervisor, [riak_kv_mapper_sup]},
     GetFsmSup = {riak_kv_get_fsm_sup,
                  {riak_kv_get_fsm_sup, start_link, []},
                  permanent, infinity, supervisor, [riak_kv_get_fsm_sup]},
@@ -127,10 +118,7 @@ init([]) ->
         JSSup,
         MapJSPool,
         ReduceJSPool,
-        HookJSPool,
-        MapperSup,
-        MapMaster,
-        MapCache
+        HookJSPool
     ]),
 
     % Run the proesses...

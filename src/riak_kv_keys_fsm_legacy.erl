@@ -25,13 +25,12 @@
 -module(riak_kv_keys_fsm_legacy).
 -behaviour(gen_fsm).
 -include_lib("riak_kv_vnode.hrl").
--export([start_link/6]).
+-export([start_link/5]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
 -export([initialize/2,waiting_kl/2]).
 
 -record(state, {client :: pid(),
-                client_type :: atom(),
                 bloom :: term(),
                 pls :: [list()],
                 wait_pls :: [term()],
@@ -45,12 +44,12 @@
                 listers :: [{atom(), pid()}]
                }).
 
-start_link(ReqId,Bucket,Timeout,ClientType,ErrorTolerance,From) ->
+start_link(ReqId,Bucket,Timeout,ErrorTolerance,From) ->
     gen_fsm:start_link(?MODULE,
-                  [ReqId,Bucket,Timeout,ClientType,ErrorTolerance,From], []).
+                  [ReqId,Bucket,Timeout,ErrorTolerance,From], []).
 
 %% @private
-init([ReqId,Input,Timeout,ClientType,ErrorTolerance,Client]) ->
+init([ReqId,Input,Timeout,ErrorTolerance,Client]) ->
     process_flag(trap_exit, true),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     {ok, Bloom} = ebloom:new(10000000,ErrorTolerance,ReqId),
@@ -60,15 +59,8 @@ init([ReqId,Input,Timeout,ClientType,ErrorTolerance,Client]) ->
                  _ ->
                      Input
              end,
-    StateData = #state{client=Client, client_type=ClientType, timeout=Timeout,
+    StateData = #state{client=Client, timeout=Timeout,
                        bloom=Bloom, req_id=ReqId, input=Input, bucket=Bucket, ring=Ring},
-    case ClientType of
-        %% Link to the mapred job so we die if the job dies
-        mapred ->
-            link(Client);
-        _ ->
-            ok
-    end,
     {ok,initialize,StateData,0}.
 
 %% @private
@@ -98,9 +90,8 @@ initialize(timeout, StateData0=#state{input=Input, bucket=Bucket, ring=Ring, req
 
 waiting_kl({ReqId, {kl, _Idx, Keys}},
            StateData=#state{bloom=Bloom,
-                            req_id=ReqId,client=Client,timeout=Timeout,
-                            bucket=Bucket,client_type=ClientType}) ->
-    process_keys(Keys,Bucket,ClientType,Bloom,ReqId,Client),
+                            req_id=ReqId,client=Client,timeout=Timeout}) ->
+    process_keys(Keys,Bloom,ReqId,Client),
     {next_state, waiting_kl, StateData, Timeout};
 
 waiting_kl({ReqId, Idx, done}, StateData0=#state{wait_pls=WPL0,vns=VNS0,pls=PLS,
@@ -127,27 +118,14 @@ waiting_kl(timeout, StateData=#state{pls=PLS,wait_pls=WPL}) ->
     NewPLS = lists:append(PLS, [W_PL || {_W_Idx,_W_Node,W_PL} <- WPL]),
     reduce_pls(StateData#state{pls=NewPLS,wait_pls=[]}).
 
-finish(StateData=#state{req_id=ReqId,client=Client,client_type=ClientType, listers=[]}) ->
-    case ClientType of
-        mapred -> 
-            %% No nodes are available for key listing so all
-            %% we can do now is die so that the rest of the
-            %% MapReduce processes will also die and be cleaned up.
-            exit(all_nodes_unavailable);
-        plain -> 
-            %%Notify the requesting client that the key 
-            %% listing is complete or that no nodes are 
-            %% available to fulfil the request.
-            Client ! {ReqId, all_nodes_unavailable}
-    end,
+finish(StateData=#state{req_id=ReqId,client=Client,listers=[]}) ->
+    %%Notify the requesting client that the key 
+    %% listing is complete or that no nodes are 
+    %% available to fulfil the request.
+    Client ! {ReqId, all_nodes_unavailable},
     {stop,normal,StateData};
-finish(StateData=#state{req_id=ReqId,client=Client,client_type=ClientType}) ->
-    case ClientType of
-        mapred ->
-            luke_flow:finish_inputs(Client);
-        plain -> 
-            Client ! {ReqId, done}
-    end,
+finish(StateData=#state{req_id=ReqId,client=Client}) ->
+    Client ! {ReqId, done},
     {stop,normal,StateData}.
 
 reduce_pls(StateData0=#state{timeout=Timeout, wait_pls=WPL,
@@ -215,29 +193,19 @@ check_pl(PL,VNS,WPL) ->
     end.
 
 %% @private
-process_keys(Keys,Bucket,ClientType,Bloom,ReqId,Client) ->
-    process_keys(Keys,Bucket,ClientType,Bloom,ReqId,Client,[]).
+process_keys(Keys,Bloom,ReqId,Client) ->
+    process_keys(Keys,Bloom,ReqId,Client,[]).
 %% @private
-process_keys([],Bucket,ClientType,_Bloom,ReqId,Client,Acc) ->
-    case ClientType of
-        mapred ->
-            try
-                luke_flow:add_inputs(Client, [{Bucket,K} || K <- Acc])
-            catch _:_ ->
-                    exit(self(), normal)
-            end;
-        plain -> Client ! {ReqId, {keys, Acc}}
-    end,
+process_keys([],_Bloom,ReqId,Client,Acc) ->
+    Client ! {ReqId, {keys, Acc}},
     ok;
-process_keys([K|Rest],Bucket,ClientType,Bloom,ReqId,Client,Acc) ->
+process_keys([K|Rest],Bloom,ReqId,Client,Acc) ->
     case ebloom:contains(Bloom,K) of
         true ->
-            process_keys(Rest,Bucket,ClientType,
-                         Bloom,ReqId,Client,Acc);
+            process_keys(Rest,Bloom,ReqId,Client,Acc);
         false ->
             ebloom:insert(Bloom,K),
-            process_keys(Rest,Bucket,ClientType,
-                         Bloom,ReqId,Client,[K|Acc])
+            process_keys(Rest,Bloom,ReqId,Client,[K|Acc])
     end.
 
 %% @private

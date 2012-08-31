@@ -93,9 +93,6 @@ compat_basic1_test_() ->
                  %% This will trigger a traversal of IntsBucket, but
                  %% because the query is empty, the MapReduce will
                  %% traverse the bucket and send BKeys down the pipe.
-                 %% AFAICT, the original Riak MapReduce will crash with
-                 %% luke_flow errors if the query list is empty.  This
-                 %% new implementation will pass the BKeys as-is.
                  {ok, BKeys} =
                      riak_kv_mrc_pipe:mapred(IntsBucket, []),
                  5 = length(BKeys),

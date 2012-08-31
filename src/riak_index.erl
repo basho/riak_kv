@@ -57,9 +57,6 @@
 
 mapred_index(Dest, Args) ->
     mapred_index(Dest, Args, ?TIMEOUT).
-mapred_index(FlowPid, [_Bucket, _Query], _Timeout)
-  when is_pid(FlowPid) ->
-    throw({not_supported, mapred_index, FlowPid});
 mapred_index(_Pipe, [Bucket, Query], Timeout) ->
     {ok, C} = riak:local_client(),
     {ok, ReqId} = C:stream_get_index(Bucket, Query, Timeout),
