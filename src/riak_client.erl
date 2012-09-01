@@ -234,7 +234,7 @@ get(Bucket, Key) ->
 get(Bucket, Key, Options) when is_list(Options) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_get_fsm_sup:start_get_fsm(Node, [{raw, ReqId, Me}, Bucket, Key, Options]),
+    riak_kv_get_fsm:start_link({raw, ReqId, Me}, Bucket, Key, Options),
     %% TODO: Investigate adding a monitor here and eliminating the timeout.
     Timeout = recv_timeout(Options),
     wait_for_reqid(ReqId, Timeout);
@@ -296,10 +296,10 @@ put(RObj, Options) when is_list(Options) ->
     ReqId = mk_reqid(),
     case ClientId of
         undefined ->
-            riak_kv_put_fsm_sup:start_put_fsm(Node, [{raw, ReqId, Me}, RObj, Options]);
+            riak_kv_put_fsm:start_link({raw, ReqId, Me}, RObj, Options);
         _ ->
             UpdObj = riak_object:increment_vclock(RObj, ClientId),
-            riak_kv_put_fsm_sup:start_put_fsm(Node, [{raw, ReqId, Me}, UpdObj, [asis|Options]])
+            riak_kv_put_fsm:start_link({raw, ReqId, Me}, UpdObj, [asis|Options])
     end,
     %% TODO: Investigate adding a monitor here and eliminating the timeout.
     Timeout = recv_timeout(Options),
