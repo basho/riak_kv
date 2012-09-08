@@ -120,7 +120,7 @@ done(_State) ->
     ok.
 
 make_req_id() ->
-    erlang:phash2(erlang:now()). % stolen from riak_client
+    erlang:phash2({self(), os:timestamp()}). % stolen from riak_client
 
 %% useful utilities
 

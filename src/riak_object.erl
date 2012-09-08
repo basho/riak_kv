@@ -482,7 +482,7 @@ dejsonify_values([{<<"metadata">>, {struct, MD0}},
                             <<"Links">> ->
                                 {Key, [{{B, K}, Tag} || [B, K, Tag] <- Val]};
                             <<"X-Riak-Last-Modified">> ->
-                                {Key, erlang:now()};
+                                {Key, os:timestamp()};
                             _ ->
                                 {Key, if
                                           is_binary(Val) ->

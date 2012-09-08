@@ -63,7 +63,7 @@ init([VNode, Id, QTerm0, MapInputs, PhasePid]) ->
     erlang:link(PhasePid),
     gen_fsm:send_event(PhasePid, {register_mapper, Id, self()}),
     QTermFun = xform_link_walk(QTerm0),
-    {_, _, ReqId} = erlang:now(),
+    ReqId = erlang:phash2({self(), os:timestamp()}),
     riak_kv_stat:update(mapper_start),
     {ok, CacheRef} = riak_kv_mapred_cache:cache_ref(),
     CacheKeyBase = generate_cache_key_base(QTermFun(undefined)),
