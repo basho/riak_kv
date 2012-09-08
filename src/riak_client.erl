@@ -746,7 +746,8 @@ for_dialyzer_only_ignore(X, Y) ->
     ?MODULE:new(X, Y).
 
 %% @private
-mk_reqid() -> erlang:phash2(erlang:now()). % only has to be unique per-pid
+mk_reqid() ->
+    erlang:phash2({self(), os:timestamp()}). % only has to be unique per-pid
 
 %% @private
 wait_for_reqid(ReqId, Timeout) ->
