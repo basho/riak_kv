@@ -314,28 +314,6 @@ transfers([]) ->
     io:format("~n"),
     [DisplayDown(Node) || Node <- Down].
 
-cluster_info([OutFile|Rest]) ->
-    try
-        case lists:reverse(atomify_nodestrs(Rest)) of
-            [] ->
-                cluster_info:dump_all_connected(OutFile);
-            Nodes ->
-                cluster_info:dump_nodes(Nodes, OutFile)
-        end
-    catch
-        error:{badmatch, {error, eacces}} ->
-            io:format("Cluster_info failed, permission denied writing to ~p~n", [OutFile]);
-        error:{badmatch, {error, enoent}} ->
-            io:format("Cluster_info failed, no such directory ~p~n", [filename:dirname(OutFile)]);
-        error:{badmatch, {error, enotdir}} ->
-            io:format("Cluster_info failed, not a directory ~p~n", [filename:dirname(OutFile)]);
-        Exception:Reason ->
-            lager:error("Cluster_info failed ~p:~p",
-                [Exception, Reason]),
-            io:format("Cluster_info failed, see log for details~n"),
-            error
-    end.
-
 reload_code([]) ->
     case app_helper:get_env(riak_kv, add_paths) of
         List when is_list(List) ->

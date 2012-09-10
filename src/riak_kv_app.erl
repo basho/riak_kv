@@ -82,10 +82,6 @@ start(_Type, _StartArgs) ->
             ok
     end,
 
-    %% Register our cluster_info app callback modules, with catch if
-    %% the app is missing or packaging is broken.
-    catch cluster_info:register_app(riak_kv_cinfo),
-
     %% Spin up supervisor
     case riak_kv_sup:start_link() of
         {ok, Pid} ->
