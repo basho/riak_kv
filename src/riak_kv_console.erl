@@ -33,7 +33,6 @@
          reip/1,
          ringready/1,
          transfers/1,
-         cluster_info/1,
          down/1,
          reload_code/1]).
 
@@ -353,16 +352,6 @@ format_stats([], Acc) ->
     lists:reverse(Acc);
 format_stats([{Stat, V}|T], Acc) ->
     format_stats(T, [io_lib:format("~p : ~p~n", [Stat, V])|Acc]).
-
-atomify_nodestrs(Strs) ->
-    lists:foldl(fun("local", Acc) -> [node()|Acc];
-                   (NodeStr, Acc) -> try
-                                         [list_to_existing_atom(NodeStr)|Acc]
-                                     catch error:badarg ->
-                                         io:format("Bad node: ~s\n", [NodeStr]),
-                                         Acc
-                                     end
-                end, [], Strs).
 
 print_vnode_statuses([]) ->
     ok;
