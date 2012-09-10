@@ -21,8 +21,6 @@
 %% -------------------------------------------------------------------
 
 -module(riak_kv_map_phase).
--author('Kevin Smith <kevin@basho.com>').
--author('John Muellerleile <johnm@basho.com>').
 
 -include("riak_kv_map_phase.hrl").
 

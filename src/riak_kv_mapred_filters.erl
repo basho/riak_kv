@@ -20,7 +20,6 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_mapred_filters).
--author('John Muellerleile <johnm@basho.com>').
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

@@ -28,7 +28,6 @@
 %%      VNode.
 
 -module(riak_kv_coverage_filter).
--author('Kelly McLaughlin <kelly@basho.com>').
 
 %% API
 -export([build_filter/3]).

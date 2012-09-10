@@ -22,8 +22,6 @@
 
 -module(riak_kv_bitcask_backend).
 -behavior(riak_kv_backend).
--author('Andy Gross <andy@basho.com>').
--author('Dave Smith <dizzyd@basho.com>').
 
 %% KV Backend API
 -export([api_version/0,

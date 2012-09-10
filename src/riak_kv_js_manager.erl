@@ -22,8 +22,6 @@
 
 %% @doc dispatch work to JavaScript VMs
 -module(riak_kv_js_manager).
--author('Kevin Smith <kevin@basho.com>').
--author('John Muellerleile <johnm@basho.com>').
 
 -behaviour(gen_server).
 

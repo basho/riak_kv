@@ -21,8 +21,6 @@
 %% -------------------------------------------------------------------
 
 -module(riak_kv_mapred_planner).
--author('John Muellerleile <johnm@basho.com>').
--author('Kevin Smith <kevin@basho.com>').
 
 -include("riak_kv_map_phase.hrl").
 

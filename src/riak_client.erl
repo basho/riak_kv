@@ -23,7 +23,6 @@
 %% @doc object used for access into the riak system
 
 -module(riak_client, [Node,ClientId]).
--author('Justin Sheehy <justin@basho.com>').
 
 -export([mapred/2,mapred/3,mapred/4]).
 -export([mapred_stream/2,mapred_stream/3,mapred_stream/4]).
