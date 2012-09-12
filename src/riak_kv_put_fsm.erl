@@ -212,7 +212,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
             ?DTRACE(?C_PUT_FSM_PREPARE, [1],
                     ["prepare", atom2list(CoordNode)]),
             try
-                 proc_lib:spawn(CoordNode,riak_kv_put_fsm,start,[From,RObj,Options]),
+                 proc_lib:spawn(CoordNode,riak_kv_put_fsm,start_link,[From,RObj,Options]),
                  ?DTRACE(?C_PUT_FSM_PREPARE, [2],
                             ["prepare", atom2list(CoordNode)]),
                  riak_kv_stat:update(coord_redir),
