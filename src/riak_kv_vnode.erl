@@ -194,7 +194,7 @@ get_vclocks(Preflist, BKeyList) ->
 %% @doc Get status information about the node local vnodes.
 -spec vnode_status([{partition(), pid()}]) -> [{atom(), term()}].
 vnode_status(PrefLists) ->
-    ReqId = erlang:phash2(erlang:now()),
+    ReqId = erlang:phash2({self(), os:timestamp()}),
     %% Get the status of each vnode
     riak_core_vnode_master:command(PrefLists,
                                    ?KV_VNODE_STATUS_REQ{},

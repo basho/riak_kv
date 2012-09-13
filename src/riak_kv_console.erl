@@ -420,7 +420,7 @@ print_vnode_status([StatusItem | RestStatusItems]) ->
 
 print_v2_status(Type, Mod, {SrcPartition, TargetPartition}, StartTS) ->
     StartTSStr = datetime_str(StartTS),
-    Running = timer:now_diff(now(), StartTS),
+    Running = timer:now_diff(os:timestamp(), StartTS),
     RunningStr = riak_core_format:human_time_fmt("~.2f", Running),
 
     io:format("transfer type: ~s~n", [Type]),
@@ -453,7 +453,7 @@ print_stats(SrcNode, TargetNode, Stats) ->
     ObjsS = proplists:get_value(objs_per_s, Stats),
     BytesS = proplists:get_value(bytes_per_s, Stats),
     LastUpdate = proplists:get_value(last_update, Stats),
-    Diff = timer:now_diff(now(), LastUpdate),
+    Diff = timer:now_diff(os:timestamp(), LastUpdate),
     DiffStr = riak_core_format:human_time_fmt("~.2f", Diff),
     Objs = proplists:get_value(objs_total, Stats),
     ObjsSStr = riak_core_format:fmt("~p Objs/s", [ObjsS]),

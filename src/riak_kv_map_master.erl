@@ -135,8 +135,8 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% Internal functions
 make_id() ->
-    {_, _, T3} = erlang:now(),
-    {T3, node()}.
+    ID = erlang:phash2({self(), os:timestamp()}),
+    {ID, node()}.
 
 dequeue_mapper(State) ->
     case are_mappers_waiting(State) of
