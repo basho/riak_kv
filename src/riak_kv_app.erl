@@ -23,7 +23,7 @@
 -module(riak_kv_app).
 
 -behaviour(application).
--export([start/2,stop/1]).
+-export([start/2, prep_stop/1, stop/1]).
 
 %% @spec start(Type :: term(), StartArgs :: term()) ->
 %%          {ok,Pid} | ignore | {error,Error}
@@ -142,9 +142,21 @@ start(_Type, _StartArgs) ->
             {error, Reason}
     end.
 
+prep_stop(_State) ->
+    lager:info("Stopping application riak_kv - marked service down\n", []),
+    riak_core_node_watcher:service_down(riak_kv),
+
+    %%% TODO: Gracefully unregister riak_kv webmachine endpoints.
+    %% Cannot do this currently as it calls application:set_env while this function
+    %% is itself inside of application controller.  webmachine really needs it's own
+    %% ETS table for dispatch information.
+    %[ webmachine_router:remove_route(R) || R <- riak_kv_web:dispatch_table() ],
+    stopping.
+
 %% @spec stop(State :: term()) -> ok
 %% @doc The application:stop callback for riak.
 stop(_State) ->
+    lager:info("Stopped  application riak_kv\n", []),
     ok.
 
 %% 719528 days from Jan 1, 0 to Jan 1, 1970
