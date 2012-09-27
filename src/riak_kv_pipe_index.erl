@@ -83,9 +83,10 @@ keysend_loop(ReqId, Partition, FittingDetails) ->
     receive
         {ReqId, {error, _Reason} = ER} ->
             ER;
-        {ReqId, {Bucket, Keys}} ->
+        {ReqId, {From, Bucket, Keys}} ->
             case keysend(Bucket, Keys, Partition, FittingDetails) of
                 ok ->
+                    riak_kv_vnode:ack_keys(From),
                     keysend_loop(ReqId, Partition, FittingDetails);
                 ER ->
                     ER
