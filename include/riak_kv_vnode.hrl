@@ -42,6 +42,12 @@
           item_filter :: function(),
           qry :: riak_index:query_def()}).
 
+%% same as _v1, but triggers ack-based backpressure
+-record(riak_kv_index_req_v2, {
+          bucket :: binary() | tuple(),
+          item_filter :: function(),
+          qry :: riak_index:query_def()}).
+
 -record(riak_kv_vnode_status_req_v1, {}).
 
 -record(riak_kv_delete_req_v1, {
@@ -63,7 +69,7 @@
 -define(KV_MGET_REQ, #riak_kv_mget_req_v1).
 -define(KV_LISTBUCKETS_REQ, #riak_kv_listbuckets_req_v1).
 -define(KV_LISTKEYS_REQ, #riak_kv_listkeys_req_v4).
--define(KV_INDEX_REQ, #riak_kv_index_req_v1).
+-define(KV_INDEX_REQ, #riak_kv_index_req_v2).
 -define(KV_VNODE_STATUS_REQ, #riak_kv_vnode_status_req_v1).
 -define(KV_DELETE_REQ, #riak_kv_delete_req_v1).
 -define(KV_MAP_REQ, #riak_kv_map_req_v1).

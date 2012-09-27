@@ -104,6 +104,10 @@ start(_Type, _StartArgs) ->
                                            listkeys_backpressure,
                                            [{true, true}, {false, false}]}),
 
+            riak_core_capability:register({riak_kv, index_backpressure},
+                                          [true, false],
+                                          false),
+
             riak_core_capability:register({riak_kv, mapred_system},
                                           [pipe, legacy],
                                           legacy,

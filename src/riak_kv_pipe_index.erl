@@ -70,9 +70,7 @@ process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
     end,
     ReqId = erlang:phash2({self(), os:timestamp()}), % stolen from riak_client
     riak_core_vnode_master:coverage(
-      ?KV_INDEX_REQ{bucket=Bucket,
-                    item_filter=none, %% riak_client uses nothing else?
-                    qry=Query},
+      riak_kv_index_fsm:req(Bucket, none, Query),
       {Partition, node()},
       FilterVNodes,
       {raw, ReqId, self()},
@@ -87,6 +85,13 @@ keysend_loop(ReqId, Partition, FittingDetails) ->
             case keysend(Bucket, Keys, Partition, FittingDetails) of
                 ok ->
                     riak_kv_vnode:ack_keys(From),
+                    keysend_loop(ReqId, Partition, FittingDetails);
+                ER ->
+                    ER
+            end;
+        {ReqId, {Bucket, Keys}} ->
+            case keysend(Bucket, Keys, Partition, FittingDetails) of
+                ok ->
                     keysend_loop(ReqId, Partition, FittingDetails);
                 ER ->
                     ER

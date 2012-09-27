@@ -447,13 +447,26 @@ handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
     Opts = [{bucket, Bucket}],
     handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
                             FilterVNodes, Sender, Opts, State);
+handle_coverage(#riak_kv_index_req_v1{bucket=Bucket,
+                              item_filter=ItemFilter,
+                              qry=Query},
+                FilterVNodes, Sender, State) ->
+    %% v1 == no backpressure
+    handle_coverage_index(Bucket, ItemFilter, Query,
+                          FilterVNodes, Sender, State, fun result_fun/2);
 handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                               item_filter=ItemFilter,
                               qry=Query},
-                FilterVNodes,
-                Sender,
-                State=#state{mod=Mod,
-                             modstate=ModState}) ->
+                FilterVNodes, Sender, State) ->
+    %% v2 = ack-based backpressure
+    handle_coverage_index(Bucket, ItemFilter, Query,
+                          FilterVNodes, Sender, State, fun result_fun_ack/2).
+
+handle_coverage_index(Bucket, ItemFilter, Query,
+                      FilterVNodes, Sender,
+                      State=#state{mod=Mod,
+                                   modstate=ModState},
+                      ResultFunFun) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
     case IndexBackend of
@@ -461,7 +474,7 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
             %% Update stats...
             riak_kv_stat:update(vnode_index_read),
 
-            ResultFun = result_fun_ack(Bucket, Sender),
+            ResultFun = ResultFunFun(Bucket, Sender),
             Opts = [{index, Bucket, Query},
                     {bucket, Bucket}],
             handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
