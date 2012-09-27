@@ -289,9 +289,6 @@ handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
     do_get(Sender, BKey, ReqId, State);
 handle_command(?KV_MGET_REQ{bkeys=BKeys, req_id=ReqId, from=From}, _Sender, State) ->
     do_mget(From, BKeys, ReqId, State);
-handle_command(#riak_kv_listkeys_req_v1{bucket=Bucket, req_id=ReqId}, _Sender,
-               State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
-    do_legacy_list_bucket(ReqId,Bucket,Mod,ModState,Idx,State);
 handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Caller}, _Sender,
                State=#state{async_folding=AsyncFolding,
                             key_buf_size=BufferSize,
@@ -945,29 +942,6 @@ finish_fun(BufferMod, Sender) ->
 finish_fold(BufferMod, Buffer, Sender) ->
     BufferMod:flush(Buffer),
     riak_core_vnode:reply(Sender, done).
-
-%% @private
-%% @deprecated This function is only here to support
-%% rolling upgrades and will be removed.
-do_legacy_list_bucket(ReqID,'_',Mod,ModState,Idx,State) ->
-    FoldBucketsFun =
-        fun(Bucket, Buf) ->
-                [Bucket | Buf]
-        end,
-    RetVal = Mod:fold_buckets(FoldBucketsFun, [], [], ModState),
-    {reply, {kl, RetVal, Idx, ReqID}, State};
-do_legacy_list_bucket(ReqID,Bucket,Mod,ModState,Idx,State) ->
-    FoldKeysFun =
-        fun(_, Key, Buf) ->
-                [Key | Buf]
-        end,
-    Opts = [{bucket, Bucket}],
-    case Mod:fold_keys(FoldKeysFun, [], Opts, ModState) of
-        {ok, RetVal} ->
-            {reply, {kl, RetVal, Idx, ReqID}, State};
-        {error, Reason} ->
-            {reply, {error, Reason, ReqID}, State}
-    end.
 
 %% @private
 do_delete(BKey, ReqId, State) ->
