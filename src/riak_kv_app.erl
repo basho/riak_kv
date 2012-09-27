@@ -97,13 +97,6 @@ start(_Type, _StartArgs) ->
                                            vnode_vclocks,
                                            [{true, true}, {false, false}]}),
 
-            riak_core_capability:register({riak_kv, legacy_keylisting},
-                                          [false, true],
-                                          true,
-                                          {riak_kv,
-                                           legacy_keylisting,
-                                           [{true, true}, {false, false}]}),
-
             riak_core_capability:register({riak_kv, listkeys_backpressure},
                                           [true, false],
                                           false,
@@ -178,4 +171,3 @@ check_epoch() ->
                 "but your system says the epoch is ~p", [Epoch]),
             ok
     end.
-
