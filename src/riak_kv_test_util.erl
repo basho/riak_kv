@@ -241,16 +241,11 @@ dep_apps(Test, Extra) ->
                                                         {Test ++ "/log/debug.log", debug, 10485760, "$D0", 5}]}]),
                 application:set_env(lager, crash_log, Test ++ "/log/crash.log");
            (stop) ->
-                %% TODO: Remove this when the deregistration PR gets
-                %% merged. The list of codes being erased from the
-                %% dispatch table are the ones registered by calling
-                %% riak_api_pb_service:register/1 in
-                %% riak_kv_app:start/2.
+                %% TODO: This cleanup is just a quick fix to run the whole test.
+                %% Defining API dispatcher by application:set_env/3 may cause
+                %% race conditions of mis-deregistering and application stop.
                 Services = riak_api_pb_service:dispatch_table(),
-                NewServices = lists:foldl(
-                                fun dict:erase/2,
-                                Services,
-                                lists:flatten([lists:seq(3,6), lists:seq(9,26)])),
+                NewServices = lists:foldl(fun dict:erase/2, Services, lists:seq(1,26)),
                 application:set_env(riak_api, services, NewServices);
            (_) -> ok
         end,
@@ -258,7 +253,7 @@ dep_apps(Test, Extra) ->
     [sasl, Silencer, crypto, public_key, ssl, riak_sysmon, os_mon,
      runtime_tools, erlang_js, inets, mochiweb, webmachine, luke,
      basho_stats, bitcask, compiler, syntax_tools, lager, folsom,
-     riak_core, riak_pipe, riak_kv, DefaultSetupFun, Extra].
+     riak_core, riak_pipe, riak_api, riak_kv, DefaultSetupFun, Extra].
 
 
 %% @doc Runs the application-lifecycle phase across all of the given
