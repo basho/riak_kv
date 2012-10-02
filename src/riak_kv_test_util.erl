@@ -242,14 +242,11 @@ dep_apps(Test, Extra) ->
                 application:set_env(lager, crash_log, Test ++ "/log/crash.log");
            (stop) ->
                 %% TODO: This cleanup is just a quick fix to run the whole test.
-		%% Defining API dispatcher by application:set_env/3 may cause
-		%% race conditions of mis-deregistering and application stop.
-		Services = riak_api_pb_service:dispatch_table(),
-		NewServices = lists:foldl(
-				fun dict:erase/2,
-				Services,
-				lists:seq(1,26)),
-		application:set_env(riak_api, services, NewServices);
+                %% Defining API dispatcher by application:set_env/3 may cause
+                %% race conditions of mis-deregistering and application stop.
+                Services = riak_api_pb_service:dispatch_table(),
+                NewServices = lists:foldl(fun dict:erase/2, Services, lists:seq(1,26)),
+                application:set_env(riak_api, services, NewServices);
            (_) -> ok
         end,
 
