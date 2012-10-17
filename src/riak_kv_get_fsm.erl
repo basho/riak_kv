@@ -124,7 +124,7 @@ test_link(From, Bucket, Key, GetOptions, StateProps) ->
 
 %% @private
 init([From, Bucket, Key, Options]) ->
-    StartNow = now(),
+    StartNow = os:timestamp(),
     StateData = #state{from = From,
                        options = Options,
                        bkey = {Bucket, Key},
@@ -379,7 +379,7 @@ client_reply(Reply, StateData = #state{from = {raw, ReqId, Pid},
     ?DTRACE(?C_GET_FSM_CLIENT_REPLY, [ShortCode, GetUSecs], ["client_reply"]).
 
 update_timing(StateData = #state{startnow = StartNow}) ->
-    EndNow = now(),
+    EndNow = os:timestamp(),
     StateData#state{get_usecs = timer:now_diff(EndNow, StartNow)}.
 
 update_stats({ok, Obj}, #state{get_usecs = GetUsecs, tracked_bucket = StatTracked}) ->
