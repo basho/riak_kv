@@ -104,6 +104,10 @@ start(_Type, _StartArgs) ->
                                            listkeys_backpressure,
                                            [{true, true}, {false, false}]}),
 
+            riak_core_capability:register({riak_kv, index_backpressure},
+                                          [true, false],
+                                          false),
+
             riak_core_capability:register({riak_kv, mapred_system},
                                           [pipe, legacy],
                                           legacy,
@@ -157,7 +161,7 @@ check_epoch() ->
     %% doc for erlang:now/0 says return value is platform-dependent
     %% -> let's emit an error if this platform doesn't think the epoch
     %%    is Jan 1, 1970
-    {MSec, Sec, _} = erlang:now(),
+    {MSec, Sec, _} = os:timestamp(),
     GSec = calendar:datetime_to_gregorian_seconds(
              calendar:universal_time()),
     case GSec - ((MSec*1000000)+Sec) of

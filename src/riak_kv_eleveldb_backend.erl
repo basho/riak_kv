@@ -368,10 +368,31 @@ init_state(DataRoot, Config) ->
              config = FinalConfig }.
 
 %% @private
-open_db(State0) ->
+open_db(State) ->
+    RetriesLeft = app_helper:get_env(riak_kv, eleveldb_open_retries, 30),
+    open_db(State, max(1, RetriesLeft), undefined).
+
+open_db(_State0, 0, LastError) ->
+    {error, LastError};
+open_db(State0, RetriesLeft, _) ->
     case eleveldb:open(State0#state.data_root, State0#state.open_opts) of
         {ok, Ref} ->
             {ok, State0#state { ref = Ref }};
+        %% Check specifically for lock error, this can be caused if
+        %% a crashed vnode takes some time to flush leveldb information
+        %% out to disk.  The process is gone, but the NIF resource cleanup
+        %% may not have completed.
+        {error, {db_open, OpenErr}=Reason} ->
+            case lists:prefix("IO error: lock ", OpenErr) of
+                true ->
+                    SleepFor = app_helper:get_env(riak_kv, eleveldb_open_retry_delay, 2000),
+                    lager:debug("Leveldb backend retrying ~p in ~p ms after error ~s\n",
+                                [State0#state.data_root, SleepFor, OpenErr]),
+                    timer:sleep(SleepFor),
+                    open_db(State0, RetriesLeft - 1, Reason);
+                false ->
+                    {error, Reason}
+            end;
         {error, Reason} ->
             {error, Reason}
     end.
@@ -544,6 +565,100 @@ custom_config_test_() ->
     ?assertCmd("rm -rf test/eleveldb-backend"),
     application:set_env(eleveldb, data_root, ""),
     riak_kv_backend:standard_test(?MODULE, [{data_root, "test/eleveldb-backend"}]).
+
+retry_test() ->
+    Root = "/tmp/eleveldb_retry_test",
+    try
+        {ok, State1} = start(42, [{data_root, Root}]),
+        Me = self(),
+        Pid1 = spawn_link(fun() ->
+                                  receive
+                                      stop ->
+                                          Me ! {1, stop(State1)}
+                                  end
+                          end),
+        _Pid2 = spawn_link(
+                 fun() ->
+                         Me ! {2, running},
+                         Me ! {2, start(42, [{data_root, Root}])}
+                 end),
+        %% Ensure Pid2 is runnng and  give it 10ms to get into the open
+        %% so we know it has a lock clash
+        receive
+            {2, running} ->
+                timer:sleep(10);
+            X ->
+                throw({unexpected, X})
+        after
+            5000 ->
+                throw(timeout1)
+        end,
+        %% Tell Pid1 to shut it down
+        Pid1 ! stop,
+        receive
+            {1, ok} ->
+                ok;
+            X2 ->
+                throw({unexpected, X2})
+        after
+            5000 ->
+                throw(timeout2)
+        end,
+        %% Wait for Pid2
+        receive
+            {2, {ok, _State2}} ->
+                ok;
+            {2, Res} ->
+                throw({notok, Res});
+            X3 ->
+                throw({unexpected, X3})
+        end
+    after
+        os:cmd("rm -rf " ++ Root)
+    end.
+
+retry_fail_test() ->
+    Root = "/tmp/eleveldb_fail_retry_test",
+    try
+        application:set_env(riak_kv, eleveldb_open_retries, 3), % 3 times, 1ms a time
+        application:set_env(riak_kv, eleveldb_open_retry_delay, 1),
+        {ok, State1} = start(42, [{data_root, Root}]),
+        Me = self(),
+        spawn_link(
+          fun() ->
+                  Me ! {2, running},
+                  Me ! {2, start(42, [{data_root, Root}])}
+          end),
+        %% Ensure Pid2 is runnng and  give it 10ms to get into the open
+        %% so we know it has a lock clash
+        receive
+            {2, running} ->
+                ok;
+            X ->
+                throw({unexpected, X})
+        after
+            5000 ->
+                throw(timeout1)
+        end,
+        %% Wait for Pid2 to fail
+        receive
+            {2, {error, {db_open, _Why}}} ->
+                ok;
+            {2, Res} ->
+                throw({expect_fail, Res});
+            X3 ->
+                throw({unexpected, X3})
+        end,
+        %% Then close and reopen, just for kicks to prove it was the locking
+        ok = stop(State1),
+        {ok, State2} = start(42, [{data_root, Root}]),
+        ok = stop(State2)
+    after
+        os:cmd("rm -rf " ++ Root),
+        application:unset_env(riak_kv, eleveldb_open_retries), 
+        application:unset_env(riak_kv, eleveldb_open_retry_delay)
+    end.
+
 
 -ifdef(EQC).
 

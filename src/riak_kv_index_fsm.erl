@@ -42,12 +42,36 @@
 -export([init/2,
          process_results/2,
          finish/2]).
+-export([use_ack_backpressure/0,
+         req/3]).
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
 -record(state, {client_type :: plain | mapred,
                 from :: from()}).
+
+%% @doc Returns `true' if the new ack-based backpressure index
+%% protocol should be used.  This decision is based on the
+%% `index_backpressure' setting in `riak_kv''s application
+%% environment.
+-spec use_ack_backpressure() -> boolean().
+use_ack_backpressure() ->
+    riak_core_capability:get({riak_kv, index_backpressure}, false) == true.
+
+%% @doc Construct the correct index command record.
+-spec req(binary(), term(), term()) -> term().
+req(Bucket, ItemFilter, Query) ->
+    case use_ack_backpressure() of
+        true ->
+            ?KV_INDEX_REQ{bucket=Bucket,
+                          item_filter=ItemFilter,
+                          qry=Query};
+        false ->
+            #riak_kv_index_req_v1{bucket=Bucket,
+                                  item_filter=ItemFilter,
+                                  qry=Query}
+    end.
 
 %% @doc Return a tuple containing the ModFun to call per vnode,
 %% the number of primary preflist vnodes the operation
@@ -65,14 +89,18 @@ init(From={_, _, ClientPid}, [Bucket, ItemFilter, Query, Timeout, ClientType]) -
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
     %% Construct the key listing request
-    Req = ?KV_INDEX_REQ{bucket=Bucket,
-                        item_filter=ItemFilter,
-                        qry=Query},
+    Req = req(Bucket, ItemFilter, Query),
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{client_type=ClientType, from=From}}.
 
 process_results({error, Reason}, _State) ->
     {error, Reason};
+process_results({From, Bucket, Results},
+                StateData=#state{client_type=ClientType,
+                                 from={raw, ReqId, ClientPid}}) ->
+    process_query_results(ClientType, Bucket, Results, ReqId, ClientPid),
+    riak_kv_vnode:ack_keys(From), % tell that vnode we're ready for more
+    {ok, StateData};
 process_results({Bucket, Results},
                 StateData=#state{client_type=ClientType,
                                  from={raw, ReqId, ClientPid}}) ->

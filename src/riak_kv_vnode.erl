@@ -194,7 +194,7 @@ get_vclocks(Preflist, BKeyList) ->
 %% @doc Get status information about the node local vnodes.
 -spec vnode_status([{partition(), pid()}]) -> [{atom(), term()}].
 vnode_status(PrefLists) ->
-    ReqId = erlang:phash2(erlang:now()),
+    ReqId = erlang:phash2({self(), os:timestamp()}),
     %% Get the status of each vnode
     riak_core_vnode_master:command(PrefLists,
                                    ?KV_VNODE_STATUS_REQ{},
@@ -436,68 +436,61 @@ handle_coverage(#riak_kv_listkeys_req_v3{bucket=Bucket,
                 FilterVNodes, Sender, State) ->
     %% v3 == no backpressure
     ResultFun = result_fun(Bucket, Sender),
-    handle_coverage_listkeys(Bucket, ItemFilter, ResultFun,
-                             FilterVNodes, Sender, State);
+    Opts = [{bucket, Bucket}],
+    handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
+                            FilterVNodes, Sender, Opts, State);
 handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
                                  item_filter=ItemFilter},
                 FilterVNodes, Sender, State) ->
     %% v4 == ack-based backpressure
     ResultFun = result_fun_ack(Bucket, Sender),
-    handle_coverage_listkeys(Bucket, ItemFilter, ResultFun,
-                             FilterVNodes, Sender, State);
+    Opts = [{bucket, Bucket}],
+    handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
+                            FilterVNodes, Sender, Opts, State);
+handle_coverage(#riak_kv_index_req_v1{bucket=Bucket,
+                              item_filter=ItemFilter,
+                              qry=Query},
+                FilterVNodes, Sender, State) ->
+    %% v1 == no backpressure
+    handle_coverage_index(Bucket, ItemFilter, Query,
+                          FilterVNodes, Sender, State, fun result_fun/2);
 handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                               item_filter=ItemFilter,
                               qry=Query},
-                FilterVNodes,
-                Sender,
-                State=#state{async_folding=AsyncFolding,
-                             idx=Index,
-                             index_buf_size=BufferSize,
-                             mod=Mod,
-                             modstate=ModState}) ->
+                FilterVNodes, Sender, State) ->
+    %% v2 = ack-based backpressure
+    handle_coverage_index(Bucket, ItemFilter, Query,
+                          FilterVNodes, Sender, State, fun result_fun_ack/2).
 
+handle_coverage_index(Bucket, ItemFilter, Query,
+                      FilterVNodes, Sender,
+                      State=#state{mod=Mod,
+                                   modstate=ModState},
+                      ResultFunFun) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
-    AsyncBackend = lists:member(async_fold, Capabilities),
     case IndexBackend of
         true ->
             %% Update stats...
             riak_kv_stat:update(vnode_index_read),
 
-            %% Construct the filter function
-            FilterVNode = proplists:get_value(Index, FilterVNodes),
-            Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
-            BufferMod = riak_kv_fold_buffer,
-            Buffer = BufferMod:new(BufferSize, result_fun(Bucket, Sender)),
-            FoldFun = fold_fun(keys, BufferMod, Filter),
-            FinishFun = finish_fun(BufferMod, Sender),
-            case AsyncFolding andalso AsyncBackend of
-                true ->
-                    Opts = [async_fold,
-                            {index, Bucket, Query},
-                            {bucket, Bucket}];
-                false ->
-                    Opts = [{index, Bucket, Query},
-                            {bucket, Bucket}]
-            end,
-            case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, Buffer) of
-                {async, AsyncWork} ->
-                    {async, {fold, AsyncWork, FinishFun}, Sender, State};
-                _ ->
-                    {noreply, State}
-            end;
+            ResultFun = ResultFunFun(Bucket, Sender),
+            Opts = [{index, Bucket, Query},
+                    {bucket, Bucket}],
+            handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
+                                    FilterVNodes, Sender, Opts, State);
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
     end.
 
-%% Convenience for handling both v3 and v4 coverage-based listkeys
-handle_coverage_listkeys(Bucket, ItemFilter, ResultFun,
-                         FilterVNodes, Sender,
-                         State=#state{async_folding=AsyncFolding,
-                             idx=Index,
-                             key_buf_size=BufferSize,
-                             mod=Mod,
-                             modstate=ModState}) ->
+%% Convenience for handling both v3 and v4 coverage-based key fold operations
+handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
+                        FilterVNodes, Sender, Opts0,
+                        State=#state{async_folding=AsyncFolding,
+                                     idx=Index,
+                                     key_buf_size=BufferSize,
+                                     mod=Mod,
+                                     modstate=ModState}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
@@ -509,9 +502,9 @@ handle_coverage_listkeys(Bucket, ItemFilter, ResultFun,
     AsyncBackend = lists:member(async_fold, Capabilities),
     case AsyncFolding andalso AsyncBackend of
         true ->
-            Opts = [async_fold, {bucket, Bucket}];
+            Opts = [async_fold | Opts0];
         false ->
-            Opts = [{bucket, Bucket}]
+            Opts = Opts0
     end,
     case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, Buffer) of
         {async, AsyncWork} ->

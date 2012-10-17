@@ -648,7 +648,7 @@ update_last_modified(RObj) ->
     %% which should serve the same purpose.  It was possible to generate two
     %% objects with the same vclock on 0.14.2 if the same clientid was used in
     %% the same second.  It can be revisited post-1.0.0.
-    Now = erlang:now(),
+    Now = os:timestamp(),
     NewMD = dict:store(?MD_VTAG, make_vtag(Now),
                        dict:store(?MD_LASTMOD, Now, MD0)),
     riak_object:update_metadata(RObj, NewMD).
