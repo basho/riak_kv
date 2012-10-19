@@ -111,6 +111,7 @@
          mapred/2,
          mapred/3,
          mapred_stream/1,
+         mapred_stream/2,
          send_inputs/2,
          send_inputs/3,
          send_inputs_async/2,
@@ -118,6 +119,7 @@
          collect_outputs/2,
          collect_outputs/3,
          group_outputs/2,
+         error_exists/1,
          mapred_plan/1,
          mapred_plan/2,
          compile_string/1,
@@ -206,6 +208,12 @@ mapred(Inputs, Query, Timeout) ->
             {error, Error, collect_outputs(Pipe, NumKeeps, Timeout)}
     end.
 
+%% @equiv mapred_stream(Query, self())
+-spec mapred_stream([query_part()]) ->
+         {{ok, riak_pipe:pipe()}, NumKeeps :: integer()}.
+mapred_stream(Query) ->
+    mapred_stream(Query, self()).
+
 %% @doc Setup the MapReduce plumbing, preparted to receive inputs.
 %% The caller should then use {@link send_inputs/2} or {@link
 %% send_inputs/3} to give the query inputs to process.
@@ -214,11 +222,13 @@ mapred(Inputs, Query, Timeout) ->
 %% requested to keep their inputs, and will need to be passed to
 %% {@link collect_outputs/3} or {@link group_outputs/2} to get labels
 %% compatible with HTTP and PB interface results.
--spec mapred_stream([query_part()]) ->
+-spec mapred_stream([query_part()], pid()) ->
          {{ok, riak_pipe:pipe()}, NumKeeps :: integer()}.
-mapred_stream(Query) ->
+mapred_stream(Query, Target) when is_pid(Target) ->
     NumKeeps = count_keeps_in_query(Query),
-    {riak_pipe:exec(mr2pipe_phases(Query), [{log, sink},{trace,[error]}]),
+    {riak_pipe:exec(mr2pipe_phases(Query),
+                    [{sink, #fitting{pid=Target}},
+                     {log, sink},{trace,[error]}]),
      NumKeeps}.
 
 %% The plan functions are useful for seeing equivalent (we hope) pipeline.
@@ -649,6 +659,20 @@ group_outputs(Outputs, _NumKeeps) ->
             end,
     Merged = lists:foldl(Group, [], Outputs),
     [ lists:reverse(O) || {_, O} <- lists:keysort(1, Merged) ].
+
+%% @doc Look through the logs the pipe produced, and determine if any
+%% of them signal an error. Return the details about the first error
+%% found.
+%%
+%% Each log should be of the form: `{#pipe_log.from, #pipe_log.msg}'
+-spec error_exists(list()) -> {true, term(), term()} | false.
+error_exists(Logs) ->
+    case [ {F, I} || {F, {trace, [error], {error, I}}} <- Logs ] of
+        [{From, Info}|_] ->
+            {true, From, Info};
+        [] ->
+            false
+    end.
 
 %% @doc Produce an Erlang term from a string containing Erlang code.
 %% This is used by {@link riak_kv_mrc_map} and {@link

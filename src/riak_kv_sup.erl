@@ -99,6 +99,9 @@ init([]) ->
     IndexFsmSup = {riak_kv_index_fsm_sup,
                    {riak_kv_index_fsm_sup, start_link, []},
                    permanent, infinity, supervisor, [riak_kv_index_fsm_sup]},
+    SinkFsmSup = {riak_kv_mrc_sink_sup,
+                  {riak_kv_mrc_sink_sup, start_link, []},
+                  permanent, infinity, supervisor, [riak_kv_mrc_sink_sup]},
     %% @TODO This code is only here to support
     %% rolling upgrades and will be removed.
     LegacyKeysFsmSup = {riak_kv_keys_fsm_legacy_sup,
@@ -114,6 +117,7 @@ init([]) ->
         GetFsmSup,
         PutFsmSup,
         DeleteSup,
+        SinkFsmSup,
         BucketsFsmSup,
         KeysFsmSup,
         IndexFsmSup,
