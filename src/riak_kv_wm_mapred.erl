@@ -30,6 +30,7 @@
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include_lib("riak_pipe/include/riak_pipe.hrl").
+-include("riak_kv_mrc_sink.hrl").
 
 -define(MAPRED_CTYPE, "application/json").
 -define(DEFAULT_TIMEOUT, 60000).
@@ -179,8 +180,13 @@ pipe_mapred(RD,
             #state{inputs=Inputs,
                    mrquery=Query,
                    timeout=Timeout}=State) ->
-    try riak_kv_mrc_pipe:mapred_stream(Query) of
+    {ok, Sink} = riak_kv_mrc_sink:start(self()),
+    try riak_kv_mrc_pipe:mapred_stream(Query, Sink) of
         {{ok, Pipe}, NumKeeps} ->
+            SinkMon = erlang:monitor(process, Sink),
+            %% catch just in case the pipe or sink has already died
+            %% for any reason - we'll get the DOWN later
+            catch riak_kv_mrc_sink:use_pipe(Sink, Pipe),
             PipeRef = (Pipe#pipe.sink)#fitting.ref,
             Tref = erlang:send_after(Timeout, self(), {pipe_timeout, PipeRef}),
             {InputSender, SenderMonitor} =
@@ -188,17 +194,30 @@ pipe_mapred(RD,
             case wrq:get_qs_value("chunked", "false", RD) of
                 "true" ->
                     pipe_mapred_chunked(RD, State, Pipe,
-                                        {InputSender, SenderMonitor}, {Tref, PipeRef});
+                                        {InputSender, SenderMonitor},
+                                        {Tref, PipeRef},
+                                        {Sink, SinkMon});
                 _ ->
                     pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps,
-                                           {InputSender, SenderMonitor}, {Tref, PipeRef})
+                                           {InputSender, SenderMonitor},
+                                           {Tref, PipeRef},
+                                           {Sink, SinkMon})
             end
     catch throw:{badarg, Fitting, Reason} ->
+            riak_kv_mrc_sink:stop(Sink),
             {{halt, 400}, 
              send_error({error, [{phase, Fitting},
                                  {error, iolist_to_binary(Reason)}]}, RD),
              State}
     end.
+
+cleanup_pipe({Sink,SinkMon}, Timer) ->
+    erlang:demonitor(SinkMon, [flush]),
+    %% killing the sink should tear down the pipe
+    riak_kv_mrc_sink:stop(Sink),
+    %% receive just in case the sink had sent us one last response
+    receive #kv_mrc_sink{} -> ok after 0 -> ok end,
+    cleanup_timer(Timer).
 
 cleanup_timer({Tref, PipeRef}) ->
     case erlang:cancel_timer(Tref) of
@@ -213,8 +232,8 @@ cleanup_timer({Tref, PipeRef}) ->
             ok
     end.
 
-pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender, PipeTref) ->
-    case pipe_collect_outputs(Pipe, NumKeeps, Sender) of
+pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender, PipeTref, Sink) ->
+    case pipe_collect_outputs(Pipe, NumKeeps, Sender, Sink) of
         {ok, Results} ->
             JSONResults =
                 case NumKeeps < 2 of
@@ -228,71 +247,90 @@ pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender, PipeTref) ->
                 end,
             HasMRQuery = State#state.mrquery /= [],
             JSONResults1 = riak_kv_mapred_json:jsonify_bkeys(JSONResults, HasMRQuery),
-            cleanup_timer(PipeTref),
+            cleanup_pipe(Sink, PipeTref),
             {true,
              wrq:set_resp_body(mochijson2:encode(JSONResults1), RD),
              State};
         {error, {sender_error, Error}} ->
             %% the sender links to the builder, so the builder has
             %% already been torn down
-            cleanup_timer(PipeTref),
-            prevent_keepalive(),
+            cleanup_pipe(Sink, PipeTref),
             {{halt, 500}, send_error(Error, RD), State};
         {error, timeout} ->
             %% destroying the pipe will tear down the linked sender
+            cleanup_pipe(Sink, PipeTref),
             riak_pipe:destroy(Pipe),
-            prevent_keepalive(),
             {{halt, 500}, send_error({error, timeout}, RD), State};
         {error, Error} ->
-            cleanup_timer(PipeTref),
+            cleanup_pipe(Sink, PipeTref),
             riak_pipe:destroy(Pipe),
-            prevent_keepalive(),
             {{halt, 500}, send_error({error, Error}, RD), State}
     end.
 
-pipe_collect_outputs(Pipe, NumKeeps, Sender) ->
+pipe_collect_outputs(Pipe, NumKeeps, Sender, Sink) ->
     Ref = (Pipe#pipe.sink)#fitting.ref,
-    case pipe_collect_outputs1(Ref, Sender, []) of
+    case pipe_collect_outputs1(Ref, Sender, Sink, []) of
+        {ok, [{_,Outputs}]} when NumKeeps < 2 ->
+            {ok, Outputs};
         {ok, Outputs} ->
-            {ok, riak_kv_mrc_pipe:group_outputs(Outputs, NumKeeps)};
+            {ok, [ O || {_, O} <- Outputs]};
         Error ->
             Error
     end.
 
-pipe_collect_outputs1(Ref, Sender, Acc) ->
-    case pipe_receive_output(Ref, Sender) of
-        {ok, Output} -> pipe_collect_outputs1(Ref, Sender, [Output|Acc]);
-        eoi          -> {ok, lists:reverse(Acc)};
+pipe_collect_outputs1(Ref, Sender, Sink, Acc) ->
+    case pipe_receive_output(Ref, Sender, Sink) of
+        {ok, false, Output} ->
+            pipe_collect_outputs1(Ref, Sender, Sink, [Output|Acc]);
+        {ok, true, Output} ->
+            {ok, resort_collected_outputs([Output|Acc])};
         Error        -> Error
     end.
 
-pipe_receive_output(Ref, {SenderPid, SenderRef}) ->
+%% Outputs are collected as a list of orddicts, with the first being
+%% the most recently received. What we really want is one orddict.
+%%
+%% That is, for one keep, our input should look like:
+%%    [ [{0, [G,H,I]}], [{0, [D,E,F]}], [{0, [A,B,C]}] ]
+%% And we want it to come out as:
+%%    [{0, [A,B,C,D,E,F,G,H,I]}]
+-spec resort_collected_outputs([ [{integer(), list()}] ]) ->
+          [{integer(), list()}].
+resort_collected_outputs(Acc) ->
+    %% each orddict has its outputs in oldest->newest; since we're
+    %% iterating from newest->oldest overall, we can just tack the
+    %% next list onto the front of the accumulator
+    DM = fun(_K, O, A) -> O++A end,
+    lists:foldl(fun(O, A) -> orddict:merge(DM, O, A) end, [], Acc).
+
+pipe_receive_output(Ref, {SenderPid, SenderRef}, {SinkPid, SinkMon}) ->
+    riak_kv_mrc_sink:next(SinkPid),
     receive
-        #pipe_eoi{ref=Ref} ->
-            eoi;
-        #pipe_result{ref=Ref, from=From, result=Result} ->
-            {ok, {From, Result}};
-        #pipe_log{ref=Ref, from=From, msg=Msg} ->
-            case Msg of
-                {trace, [error], {error, Info}} ->
+        #kv_mrc_sink{ref=Ref, results=Results, logs=Logs, done=Done} ->
+            case riak_kv_mrc_pipe:error_exists(Logs) of
+                {true, From, Info} ->
                     {error, riak_kv_mapred_json:jsonify_pipe_error(
                               From, Info)};
-                _ ->
-                    %% not a log message we're interested in
-                    pipe_receive_output(Ref, {SenderPid, SenderRef})
+                false ->
+                    {ok, Done, Results}
             end;
         {'DOWN', SenderRef, process, SenderPid, Reason} ->
             if Reason == normal ->
                     %% just done sending inputs, nothing to worry about
-                    pipe_receive_output(Ref, {SenderPid, SenderRef});
+                    pipe_receive_output(
+                      Ref, {SenderPid, SenderRef}, {SinkPid, SinkMon});
                true ->
                     {error, {sender_error, Reason}}
             end;
+        {'DOWN', SinkMon, process, SinkPid, Reason} ->
+            %% we should never receive the sink's DOWN before its
+            %% final message to us
+            {error, {sink_error, Reason}};
         {pipe_timeout, Ref} ->
             {error, timeout}
     end.
 
-pipe_mapred_chunked(RD, State, Pipe, Sender, PipeTref) ->
+pipe_mapred_chunked(RD, State, Pipe, Sender, PipeTref, Sink) ->
     Boundary = riak_core_util:unique_id_62(),
     CTypeRD = wrq:set_resp_header(
                 "Content-Type",
@@ -300,60 +338,61 @@ pipe_mapred_chunked(RD, State, Pipe, Sender, PipeTref) ->
                 RD),
     BoundaryState = State#state{boundary=Boundary},
     Streamer = pipe_stream_mapred_results(
-                 CTypeRD, Pipe, BoundaryState, Sender, PipeTref),
+                 CTypeRD, Pipe, BoundaryState, Sender, PipeTref, Sink),
     {true,
      wrq:set_resp_body({stream, Streamer}, CTypeRD),
      BoundaryState}.
 
 pipe_stream_mapred_results(RD, Pipe,
                            #state{boundary=Boundary}=State, 
-                           Sender, PipeTref) ->
-    case pipe_receive_output((Pipe#pipe.sink)#fitting.ref, Sender) of
-        {ok, {PhaseId, Result}} ->
-            %% results come out of pipe one
-            %% at a time but they're supposed to
-            %% be in a list at the client end
-            JSONResults = [riak_kv_mapred_json:jsonify_not_found(Result)],
-            HasMRQuery = State#state.mrquery /= [],
-            JSONResults1 = riak_kv_mapred_json:jsonify_bkeys(JSONResults, HasMRQuery),
-            Data = mochijson2:encode({struct, [{phase, PhaseId},
-                                               {data, JSONResults1}]}),
-            Body = ["\r\n--", Boundary, "\r\n",
-                    "Content-Type: application/json\r\n\r\n",
-                    Data],
-            {iolist_to_binary(Body),
-             fun() -> pipe_stream_mapred_results(RD, Pipe, State, Sender, PipeTref) end};
-        eoi ->
-            cleanup_timer(PipeTref),
-            {iolist_to_binary(["\r\n--", Boundary, "--\r\n"]), done};
+                           Sender, PipeTref, Sink) ->
+    case pipe_receive_output((Pipe#pipe.sink)#fitting.ref, Sender, Sink) of
+        {ok, Done, Outputs} ->
+            BodyA = case Outputs of
+                        [] ->
+                            [];
+                        _ ->
+                            HasMRQuery = State#state.mrquery /= [],
+                            [ result_part(O, HasMRQuery, Boundary)
+                              || O <- Outputs ]
+                    end,
+            {BodyB,Next} = case Done of
+                               true ->
+                                   cleanup_pipe(Sink, PipeTref),
+                                   {iolist_to_binary(
+                                      ["\r\n--", Boundary, "--\r\n"]),
+                                    done};
+                               false ->
+                                   {[],
+                                    fun() -> pipe_stream_mapred_results(
+                                               RD, Pipe, State,
+                                               Sender, PipeTref, Sink)
+                                    end}
+                           end,
+            {iolist_to_binary([BodyA,BodyB]), Next};
         {error, timeout} ->
+            cleanup_pipe(Sink, PipeTref),
             riak_pipe:destroy(Pipe),
-            prevent_keepalive(),
             {format_error({error, timeout}), done};
         {error, {sender_error, Error}} ->
-            cleanup_timer(PipeTref),
-            prevent_keepalive(),
+            cleanup_pipe(Sink, PipeTref),
             {format_error(Error), done};
         {error, {Error, _Input}} ->
-            cleanup_timer(PipeTref),
+            cleanup_pipe(Sink, PipeTref),
             riak_pipe:destroy(Pipe),
-            prevent_keepalive(),
             {format_error({error, Error}), done}
     end.
 
-%% @doc Prevent this socket from being used for another HTTP request.
-%% This is used to workaround an issue in mochiweb, where the loop
-%% waiting for new TCP data receives a latent pipe message instead,
-%% and blows up, sending a 400 to the requester.
-%%
-%% WARNING: This uses an undocumented feature of mochiweb that exists
-%% in 1.5.1 (the version planned to ship with Riak 1.0).  The feature
-%% appears to still exist in mochiweb 2.2.1, but it may go away in
-%% future mochiweb releases.
-%%
-%% See [https://issues.basho.com/1222] for more details.
-prevent_keepalive() ->
-    erlang:put(mochiweb_request_force_close, true).
+result_part({PhaseId, Results}, HasMRQuery, Boundary) ->
+    Data = [ riak_kv_mapred_json:jsonify_bkeys(
+               riak_kv_mapred_json:jsonify_not_found(R),
+               HasMRQuery)
+             || R <- Results ],
+    JSON = {struct, [{phase, PhaseId},
+                     {data, Data}]},
+    ["\r\n--", Boundary, "\r\n",
+     "Content-Type: application/json\r\n\r\n",
+     mochijson2:encode(JSON)].
 
 %% LEGACY MAPRED
 
