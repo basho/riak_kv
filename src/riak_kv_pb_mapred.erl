@@ -97,8 +97,8 @@ process_stream(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
     case encode_mapred_phase([Res], ContentType, HasMRQuery) of
         {error, Reason} ->
             erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
-            %% destroying the pipe will automatically kill the sender
             riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
+            cleanup_sender(PipeCtx),
             {error, Reason, State#state{req = undefined, req_ctx = undefined}};
         Response ->
             {reply, #rpbmapredresp{phase=PhaseId, response=Response}, State}
@@ -111,8 +111,8 @@ process_stream(#pipe_log{ref=ReqId, from=From, msg=Msg},
     case Msg of
         {trace, [error], {error, Info}} ->
             erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
-            %% destroying the pipe will automatically kill the sender
             riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
+            cleanup_sender(PipeCtx),
             JsonInfo = {struct, riak_kv_mapred_json:jsonify_pipe_error(
                                   From, Info)},
             {error, mochijson2:encode(JsonInfo), State#state{req = undefined, req_ctx = undefined}};
@@ -141,9 +141,9 @@ process_stream({'DOWN', Ref, process, Pid, Reason}, Ref,
 
 process_stream({pipe_timeout, Ref}, Ref,
                State=#state{req=#rpbmapredreq{},
-                            req_ctx=#pipe_ctx{ref=Ref,pipe=Pipe}}) ->
-    %% destroying the pipe will automatically kill the sender
+                            req_ctx=#pipe_ctx{ref=Ref,pipe=Pipe}=PipeCtx}) ->
     riak_pipe:destroy(Pipe),
+    cleanup_sender(PipeCtx),
     {error, "timeout", State#state{req=undefined, req_ctx=undefined}};
 
 %% LEGACY Handle response from mapred_stream/mapred_bucket_stream
@@ -177,6 +177,18 @@ process_stream(_,_,State) -> % Ignore any late replies from gen_servers/messages
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
+%% Destroying the pipe via riak_pipe_builder:destroy/1 does not kill
+%% the sender immediately, because it causes the builder to exit with
+%% reason `normal', so no exit signal is sent. The sender will
+%% eventually receive `worker_startup_error's from vnodes that can no
+%% longer find the fittings, but to help the process along, we kill
+%% them immediately here.
+cleanup_sender(#pipe_ctx{sender={SenderPid, SenderRef}}) ->
+    erlang:demonitor(SenderRef, [flush]),
+    exit(SenderPid, kill);
+cleanup_sender(_) ->
+    ok.
 
 pipe_mapreduce(Req, State, Inputs, Query, Timeout) ->
     try riak_kv_mrc_pipe:mapred_stream(Query) of

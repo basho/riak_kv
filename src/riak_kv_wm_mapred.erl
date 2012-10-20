@@ -200,6 +200,16 @@ pipe_mapred(RD,
              State}
     end.
 
+%% Destroying the pipe via riak_pipe_builder:destroy/1 does not kill
+%% the sender immediately, because it causes the builder to exit with
+%% reason `normal', so no exit signal is sent. The sender will
+%% eventually receive `worker_startup_error's from vnodes that can no
+%% longer find the fittings, but to help the process along, we kill
+%% them immediately here.
+cleanup_sender({SenderPid, SenderRef}) ->
+    erlang:demonitor(SenderRef, [flush]),
+    exit(SenderPid, kill).
+
 cleanup_timer({Tref, PipeRef}) ->
     case erlang:cancel_timer(Tref) of
         false ->
@@ -239,13 +249,14 @@ pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender, PipeTref) ->
             prevent_keepalive(),
             {{halt, 500}, send_error(Error, RD), State};
         {error, timeout} ->
-            %% destroying the pipe will tear down the linked sender
             riak_pipe:destroy(Pipe),
+            cleanup_sender(Sender),
             prevent_keepalive(),
             {{halt, 500}, send_error({error, timeout}, RD), State};
         {error, Error} ->
             cleanup_timer(PipeTref),
             riak_pipe:destroy(Pipe),
+            cleanup_sender(Sender),
             prevent_keepalive(),
             {{halt, 500}, send_error({error, Error}, RD), State}
     end.
@@ -328,6 +339,7 @@ pipe_stream_mapred_results(RD, Pipe,
             {iolist_to_binary(["\r\n--", Boundary, "--\r\n"]), done};
         {error, timeout} ->
             riak_pipe:destroy(Pipe),
+            cleanup_sender(Sender),
             prevent_keepalive(),
             {format_error({error, timeout}), done};
         {error, {sender_error, Error}} ->
@@ -337,6 +349,7 @@ pipe_stream_mapred_results(RD, Pipe,
         {error, {Error, _Input}} ->
             cleanup_timer(PipeTref),
             riak_pipe:destroy(Pipe),
+            cleanup_sender(Sender),
             prevent_keepalive(),
             {format_error({error, Error}), done}
     end.
