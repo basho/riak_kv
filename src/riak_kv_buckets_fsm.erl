@@ -99,7 +99,7 @@ finish(clean,
                         from={raw, ReqId, ClientPid}}) ->
     case ClientType of
         mapred ->
-            luke_flow:add_inputs(Buckets),
+            luke_flow:add_inputs(ClientPid, Buckets),
             luke_flow:finish_inputs(ClientPid);
         plain ->
             ClientPid ! {ReqId, {buckets, sets:to_list(Buckets)}}
