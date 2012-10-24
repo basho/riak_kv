@@ -230,7 +230,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                _ ->
                                    undefined
                            end,
-            CoordPlNode = case CoordPLEntry of 
+            CoordPlNode = case CoordPLEntry of
                               undefined  -> undefined;
                               {_Idx, Nd} -> atom2list(Nd)
                           end,
@@ -470,8 +470,8 @@ finish(timeout, StateData = #state{timing = Timing, reply = Reply,
         _Ok ->
             %% TODO: Improve reporting of timing
             %% For now can add debug tracers to view the return from calc_timing
-            {Duration, _Stages} = calc_timing(Timing),
-            riak_kv_stat:update({put_fsm_time, Bucket, Duration, StatTracked}),
+            {Duration, Stages} = riak_kv_fsm_util:calc_timing(Timing),
+            riak_kv_stat:update({put_fsm_time, Bucket, Duration, Stages, StatTracked}),
             ?DTRACE(?C_PUT_FSM_FINISH, [0, Duration], [])
     end,
     {stop, normal, StateData};
@@ -829,7 +829,7 @@ client_info([], _StateData, Info) ->
     Info;
 client_info([timing | Rest], StateData = #state{timing = Timing}, Info) ->
     %% Duration is time from receiving request to responding
-    {ResponseUsecs, Stages} = calc_timing(Timing),
+    {ResponseUsecs, Stages} = riak_kv_fsm_util:calc_timing(Timing),
     client_info(Rest, StateData, [{response_usecs, ResponseUsecs},
                                   {stages, Stages} | Info]).
 
@@ -839,29 +839,7 @@ default_details() ->
 
 %% Add timing information to the state
 add_timing(Stage, State = #state{timing = Timing}) ->
-    State#state{timing = [{Stage, os:timestamp()} | Timing]}.
-
-%% Calc timing information - stored as {Stage, StageStart} in reverse order.
-%% ResponseUsecs is calculated as time from reply to start.
-calc_timing([{Stage, Now} | Timing]) ->
-    ReplyNow = case Stage of
-                   reply ->
-                       Now;
-                   _ ->
-                       undefined
-               end,
-    calc_timing(Timing, Now, ReplyNow, []).
-
-%% Each timing stage has start time.
-calc_timing([], StageEnd, ReplyNow, Stages) ->
-    %% StageEnd is prepare time
-    {timer:now_diff(ReplyNow, StageEnd), Stages};
-calc_timing([{reply, ReplyNow}|_]=Timing, StageEnd, undefined, Stages) ->
-    %% Populate ReplyNow then handle normally.
-    calc_timing(Timing, StageEnd, ReplyNow, Stages);
-calc_timing([{Stage, StageStart} | Rest], StageEnd, ReplyNow, Stages) ->
-    calc_timing(Rest, StageStart, ReplyNow,
-                [{Stage, timer:now_diff(StageEnd, StageStart)} | Stages]).
+    State#state{timing = riak_kv_fsm_util:add_timing(Stage, Timing)}.
 
 atom2list(A) when is_atom(A) ->
     atom_to_list(A);

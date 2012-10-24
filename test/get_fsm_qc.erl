@@ -33,14 +33,14 @@
                 num_oks = 0,
                 del_oks = 0,
                 num_errs = 0}).
-                
+
 
 %%====================================================================
-%% eunit test 
+%% eunit test
 %%====================================================================
 
 eqc_test_() ->
-    {spawn, 
+    {spawn,
      [{setup,
        fun setup/0,
        fun cleanup/1,
@@ -73,12 +73,12 @@ coverage_test() ->
     riak_kv_test_util:call_unused_fsm_funs(riak_kv_get_fsm).
 
 %%====================================================================
-%% Shell helpers 
+%% Shell helpers
 %%====================================================================
 
 prepare() ->
     fsm_eqc_util:start_mock_servers().
-    
+
 test() ->
     test(100).
 
@@ -148,17 +148,17 @@ r_seed() ->
 detail() -> frequency([{1, timing},
                        {1, vnodes},
                        {1, not_a_detail}]).
-    
+
 details() -> frequency([{10, true}, %% All details requested
                         {10, list(detail())},
                         { 1, false}]).
-    
+
 bool_prop(Name) ->
     frequency([{4, {Name, true}},
                {1, Name},
                {5, {Name, false}}]).
 
-option() -> 
+option() ->
     frequency([{1, {details, details()}},
                {1, bool_prop(notfound_ok)},
                {1, bool_prop(deletedvclock)},
@@ -186,9 +186,9 @@ prop_basic_get() ->
         application:set_env(riak_core,
                             default_bucket_props,
                             BucketProps),
-        
+
         [{_,Object}|_] = Objects,
-        
+
         Options = fsm_eqc_util:make_options([{r, R}, {pr, PR}], [{timeout, 200} | Options0]),
 
         {ok, GetPid} = riak_kv_get_fsm:test_link({raw, ReqId, self()},
@@ -244,9 +244,9 @@ prop_basic_get() ->
         PerfectPreflist = lists:all(fun({{_Idx,_Node},primary}) -> true;
                                        ({{_Idx,_Node},fallback}) -> false
                                     end, PL2),
-        
 
-        {RetResult, RetInfo} = case Res of 
+
+        {RetResult, RetInfo} = case Res of
                                    timeout ->
                                        {Res, undefined};
                                    {ok, _RetObj} ->
@@ -257,7 +257,7 @@ prop_basic_get() ->
                                        {{ok, RetObj}, Info0};
                                    {error, Reason, Info0} ->
                                        {{error, Reason}, Info0}
-                               end,                                                 
+                               end,
         ?WHENFAIL(
             begin
                 io:format("Res: ~p\n", [Res]),
@@ -287,7 +287,7 @@ prop_basic_get() ->
 make_preflist2([], _Index, PL2) ->
     lists:reverse(PL2);
 make_preflist2([{_PartVal, PrimaryFallback} | Rest], Index, PL2) ->
-    make_preflist2(Rest, Index + 1, 
+    make_preflist2(Rest, Index + 1,
                    [{{Index, whereis(fsm_eqc_vnode)}, PrimaryFallback} | PL2]).
 
 %% Make responses
@@ -295,7 +295,7 @@ make_partvals([], PartVals) ->
     lists:reverse(PartVals);
 make_partvals([{PartVal, _PrimaryFallback} | Rest], PartVals) ->
     make_partvals(Rest, [PartVal | PartVals]).
- 
+
 
 %% Work out R given a seed.
 %% Generate a value from 0..N+1
@@ -363,7 +363,9 @@ check_info([], _State) ->
     true;
 check_info([{not_a_detail, unknown_detail} | Rest], State) ->
     check_info(Rest, State);
-check_info([{duration, _} | Rest], State) ->
+check_info([{response_usecs, _} | Rest], State) ->
+    check_info(Rest, State);
+check_info([{stages, _} | Rest], State) ->
     check_info(Rest, State);
 check_info([{vnode_oks, VnodeOks} | Rest], State = #state{num_oks = NumOks}) ->
     %% How many Ok's in first RealR responses received by FSM.
@@ -403,8 +405,8 @@ check_delete(Objects, RepairH, H, PerfectPreflist) ->
     %% and a perfect preflist and the object is deleted
     RetLins = [Lineage || {_Idx, {ok, Lineage}} <- H],
     URetLins = lists:usort(RetLins),
-    Expected = case PerfectPreflist andalso 
-                   length(RetLins) == length(H) andalso 
+    Expected = case PerfectPreflist andalso
+                   length(RetLins) == length(H) andalso
                    length(URetLins) == 1 andalso
                    riak_kv_util:is_x_deleted(proplists:get_value(hd(URetLins), Objects)) of
                    true ->
@@ -418,7 +420,7 @@ check_delete(Objects, RepairH, H, PerfectPreflist) ->
 
 all_distinct(Xs) ->
     equals(lists:sort(Xs),lists:usort(Xs)).
-   
+
 build_merged_object([], _Objects) ->
     undefined;
 build_merged_object(Heads, Objects) ->
@@ -504,6 +506,6 @@ expect(H, State = #state{n = N, real_r = R, deleted = Deleted, notfound_is_ok = 
             end
     end.
 
-    
-    
+
+
 -endif. % EQC
