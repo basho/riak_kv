@@ -362,8 +362,7 @@ read_repair(Indices, RepairObj,
                    preflist2 = Sent, bkey = BKey, bucket_props = BucketProps}) ->
     RepairPreflist = [{Idx, Node} || {{Idx, Node}, _Type} <- Sent,
                                      lists:member(Idx, Indices)],
-    Ps = [[atom2list(Nd), $,, integer_to_list(Idx)] ||
-             {Idx, Nd} <- lists:sublist(RepairPreflist, 4)],
+    Ps = preflist_for_tracing(RepairPreflist),
     ?DTRACE(?C_GET_FSM_RR, [], Ps),
     riak_kv_vnode:readrepair(RepairPreflist, BKey, RepairObj, ReqId,
                              StartTime, [{returnbody, false},
