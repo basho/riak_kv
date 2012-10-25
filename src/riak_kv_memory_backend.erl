@@ -61,6 +61,7 @@
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-compile([export_all]).
 -endif.
 
 -define(API_VERSION, 1).
@@ -638,6 +639,33 @@ max_memory_test_() ->
      ?_assertEqual({error, not_found, State2}, get(Bucket, Key1, State2)),
      %% Key2 should still be present
      ?_assertEqual({ok, Value2, State2}, get(Bucket, Key2, State2))
+    ].
+
+regression_367_key_range_test_() ->
+    {ok, State} = start(142, []),
+    Keys = [begin
+                Bin = list_to_binary(integer_to_list(I)),
+                if I < 10 ->
+                        <<"obj0", Bin/binary>>;
+                   true -> <<"obj", Bin/binary>>
+                end
+            end || I <- lists:seq(1,30) ],
+    Bucket = <<"keyrange">>,
+    Value = <<"foobarbaz">>,
+    State1 = lists:foldl(fun(Key, IState) ->
+                                 {ok, NewState} = put(Bucket, Key, [], Value, IState),
+                                 NewState
+                         end, State, Keys),
+    Folder = fun(_B, K, Acc) ->
+                     Acc ++ [K]
+             end,
+    [
+     ?_assertEqual({ok, [<<"obj01">>]}, fold_keys(Folder, [], [{index, Bucket, {range, <<"$key">>, <<"obj01">>, <<"obj01">>}}], State1)),
+     ?_assertEqual({ok, [<<"obj10">>,<<"obj11">>]}, fold_keys(Folder, [], [{index, Bucket, {range, <<"$key">>, <<"obj10">>, <<"obj11">>}}], State1)),
+     ?_assertEqual({ok, [<<"obj01">>]}, fold_keys(Folder, [], [{index, Bucket, {range, <<"$key">>, <<"obj00">>, <<"obj01">>}}], State1)),
+     ?_assertEqual({ok, lists:sort(Keys)}, fold_keys(Folder, [], [{index, Bucket, {range, <<"$key">>, <<"obj0">>, <<"obj31">>}}], State1)),
+     ?_assertEqual({ok, []}, fold_keys(Folder, [], [{index, Bucket, {range, <<"$key">>, <<"obj31">>, <<"obj32">>}}], State1)),
+     ?_assertEqual(ok, stop(State1))
     ].
 
 -ifdef(EQC).
