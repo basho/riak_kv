@@ -21,6 +21,7 @@
 -module(mapred_test).
 
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("riak_pipe/include/riak_pipe.hrl").
 -compile(export_all).
 
 setup() ->
@@ -468,6 +469,73 @@ compat_javascript_test_() ->
              end)
           ]
      end}.
+
+dead_pipe_test_() ->
+    {setup,
+     setup(),
+     cleanup(),
+     fun(_) ->
+         [
+          ?_test(
+             %% Verify that sending inputs to a pipe that has already
+             %% stopped raises an error (synchronous send)
+             begin
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       none, true}],
+                 {{ok, Pipe}, _NumKeeps} =
+                     riak_kv_mrc_pipe:mapred_stream(Spec),
+                 riak_pipe:destroy(Pipe),
+                 {error, Reason} = riak_kv_mrc_pipe:send_inputs(
+                                     Pipe, [{<<"foo">>, <<"bar">>}]),
+                 %% Each vnode should have received the input, but
+                 %% being unable to find the fitting process, returned
+                 %% `worker_startup_failed` (and probably also printed
+                 %% "fitting was gone before startup")
+                 ?assert(lists:member(worker_startup_failed, Reason))
+             end),
+          ?_test(
+             %% Verify that sending inputs to a pipe that has already
+             %% stopped raises an error (async send)
+             begin
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       none, true}],
+                 {{ok, Pipe}, _NumKeeps} =
+                     riak_kv_mrc_pipe:mapred_stream(Spec),
+                 riak_pipe:destroy(Pipe),
+                 %% this is a hack to make sure that the async sender
+                 %% doesn't die immediately upon linking to the
+                 %% already-dead builder
+                 PipeB = Pipe#pipe{builder=spawn(fake_builder(self()))},
+                 {Sender, SenderRef} =
+                     riak_kv_mrc_pipe:send_inputs_async(
+                       PipeB, [{<<"foo">>, <<"bar">>}]),
+                 receive
+                     {'DOWN', SenderRef, process, Sender, Error} ->
+                         {error, Reason} = Error
+                 end,
+                 %% let the fake builder shut down now
+                 PipeB#pipe.builder ! test_over,
+                 %% Each vnode should have received the input, but
+                 %% being unable to find the fitting process, returned
+                 %% `worker_startup_failed` (and probably also printed
+                 %% "fitting was gone before startup")
+                 ?assert(lists:member(worker_startup_failed, Reason))
+             end)
+         ]
+     end}.
+
+fake_builder(TestProc) ->
+    fun() ->
+            Ref = erlang:monitor(process, TestProc),
+            receive
+                test_over ->
+                    ok;
+                {'DOWN',Ref,process,TestProc,_} ->
+                    ok
+            end
+    end.
 
 wait_until_dead(Pid) when is_pid(Pid) ->
     Ref = monitor(process, Pid),
