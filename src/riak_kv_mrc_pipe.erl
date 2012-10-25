@@ -512,10 +512,14 @@ send_inputs(Pipe, Inputs) ->
 -spec send_inputs(riak_pipe:pipe(), input(), timeout()) ->
          ok | term().
 send_inputs(Pipe, BucketKeyList, _Timeout) when is_list(BucketKeyList) ->
-    [riak_pipe:queue_work(Pipe, BKey)
-     || BKey <- BucketKeyList],
-    riak_pipe:eoi(Pipe),
-    ok;
+    try [ok = riak_pipe:queue_work(Pipe, BKey)
+         || BKey <- BucketKeyList] of
+        _ ->
+            riak_pipe:eoi(Pipe),
+            ok
+    catch error:{badmatch,{error,_}=Error} ->
+            Error
+    end;
 send_inputs(Pipe, Bucket, Timeout) when is_binary(Bucket) ->
     riak_kv_pipe_listkeys:queue_existing_pipe(Pipe, Bucket, Timeout);
 send_inputs(Pipe, {Bucket, FilterExprs}, Timeout) ->
@@ -576,9 +580,13 @@ send_key_list(Pipe, Bucket, ReqId) ->
     receive
         {ReqId, {keys, Keys}} ->
             %% Get results from list keys operation.
-            [riak_pipe:queue_work(Pipe, {Bucket, Key})
-             || Key <- Keys],
-            send_key_list(Pipe, Bucket, ReqId);
+            try [ok = riak_pipe:queue_work(Pipe, {Bucket, Key})
+                 || Key <- Keys] of
+                _ ->
+                    send_key_list(Pipe, Bucket, ReqId)
+            catch error:{badmatch,{error,_}=Error} ->
+                    Error
+            end;
 
         {ReqId, {results, Results}} ->
             %% Get results from 2i operation. Handle both [Keys] and [{Key,
@@ -589,8 +597,12 @@ send_key_list(Pipe, Bucket, ReqId) ->
                     (Key) ->
                         riak_pipe:queue_work(Pipe, {Bucket, Key})
                 end,
-            [F(X) || X <- Results],
-            send_key_list(Pipe, Bucket, ReqId);
+            try [ok = F(X) || X <- Results] of
+                _ ->
+                    send_key_list(Pipe, Bucket, ReqId)
+            catch error:{badmatch,{error,_}=Error} ->
+                    Error
+            end;
 
         {ReqId, {error, Reason}} ->
             {error, Reason};
