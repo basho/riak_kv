@@ -420,6 +420,9 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, {eq, <<"$bucket">>, _}}) ->
 fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, <<"$key">>, _, _}}) ->
     %% 2I range query on special $key field...
     fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, {eq, <<"$key">>, _}}) ->
+    %% 2I eq query on special $key field...
+    fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
 fold_keys_fun(FoldKeysFun, {index, _FilterBucket, _Query}) ->
     fun({{Bucket, _FilterField, _FilterTerm, Key}, _}, Acc) ->
             FoldKeysFun(Bucket, Key, Acc);
@@ -462,6 +465,8 @@ get_index_folder(Folder, Acc0, {index, Bucket, {range, <<"$key">>, Min, Max}}, D
     fun() ->
             key_range_folder(Folder, Acc0, DataRef, {Bucket, Min}, {Bucket, Min, Max})
     end;
+get_index_folder(Folder, Acc0, {index, Bucket, {eq, <<"$key">>, Val}}, DataRef, IndexRef) ->
+    get_index_folder(Folder, Acc0, {index, Bucket, {range, <<"$key">>, Val, Val}}, DataRef, IndexRef);
 get_index_folder(Folder, Acc0, {index, Bucket, {eq, Field, Term}}, _, IndexRef) ->
     fun() ->
             index_range_folder(Folder, Acc0, IndexRef, {Bucket, Field, Term, undefined}, {Bucket, Field, Term, Term})
@@ -665,6 +670,7 @@ regression_367_key_range_test_() ->
      ?_assertEqual({ok, [<<"obj01">>]}, fold_keys(Folder, [], [{index, Bucket, {range, <<"$key">>, <<"obj00">>, <<"obj01">>}}], State1)),
      ?_assertEqual({ok, lists:sort(Keys)}, fold_keys(Folder, [], [{index, Bucket, {range, <<"$key">>, <<"obj0">>, <<"obj31">>}}], State1)),
      ?_assertEqual({ok, []}, fold_keys(Folder, [], [{index, Bucket, {range, <<"$key">>, <<"obj31">>, <<"obj32">>}}], State1)),
+     ?_assertEqual({ok, [<<"obj01">>]}, fold_keys(Folder, [], [{index, Bucket, {eq, <<"$key">>, <<"obj01">>}}], State1)),
      ?_assertEqual(ok, stop(State1))
     ].
 
