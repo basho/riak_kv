@@ -158,6 +158,7 @@ index_query() ->
     oneof([
            {eq, <<"$bucket">>, bucket()}, %% the bucket() in this query is ignored/transformed
            range_query(<<"$key">>, key(), key()),
+           {eq, <<"$key">>, key()},
            eq_query(),
            range_query()
           ]).
@@ -351,7 +352,7 @@ next_state_data(_From, _To, S, _R, {call, _M, delete, [Bucket, Key|_]}) ->
     S#qcst{d = orddict:erase({Bucket, Key}, S#qcst.d),
            i = remove_indexes(Bucket, Key, S#qcst.i)};
 next_state_data(_From, _To, S, _R, {call, ?MODULE, drop, _}) ->
-    
+
     S#qcst{d=orddict:new(),
            s=undefined,
            i=ordsets:new()};
@@ -432,6 +433,9 @@ postcondition(_From, _To, S,
     end,
     R = receive_fold_results([]),
     lists:sort(Keys) =:= lists:sort(R);
+postcondition(From, To, S, {call, _M, fold_keys, [FoldFun, Acc, [{index, Bucket, {eq, <<"$key">>, Val}}], BeState]}, FoldRes) ->
+    %% Equality query on $key should be the same as a range with equal endpoints.
+    postcondition(From, To, S, {call, _M, fold_keys, [FoldFun, Acc, [{index, Bucket, {range, <<"$key">>, Val, Val}}], BeState]}, FoldRes);
 postcondition(_From, _To, S,
               {call, _M, fold_keys, [_FoldFun, _Acc, [{index, Bucket,{range, <<"$key">>, Min, Max}}], _BeState]}, FoldRes) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
@@ -549,4 +553,3 @@ postcondition(_From, _To, _S, _C, _R) ->
     true.
 
 -endif.
-
