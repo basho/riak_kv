@@ -361,13 +361,13 @@ read_repair(Indices, RepairObj,
             #state{req_id = ReqId, starttime = StartTime,
                    preflist2 = Sent, bkey = BKey, bucket_props = BucketProps}) ->
     RepairPreflist = [{Idx, Node} || {{Idx, Node}, _Type} <- Sent,
-                                     lists:member(Idx, Indices)],
+                                     proplists:get_value(Idx, Indices) /= undefined],
     Ps = preflist_for_tracing(RepairPreflist),
     ?DTRACE(?C_GET_FSM_RR, [], Ps),
     riak_kv_vnode:readrepair(RepairPreflist, BKey, RepairObj, ReqId,
                              StartTime, [{returnbody, false},
                                          {bucket_props, BucketProps}]),
-    riak_kv_stat:update(read_repairs).
+    riak_kv_stat:update({read_repairs, Indices, Sent}).
 
 
 get_option(Name, Options, Default) ->

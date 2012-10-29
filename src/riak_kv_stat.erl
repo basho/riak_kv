@@ -264,8 +264,9 @@ update1({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket}) ->
     folsom_metrics:notify_existing_metric({?APP, node_put_fsm_time}, Microsecs, histogram),
     do_stages([?APP, node_put_fsm, time], Stages),
     do_put_bucket(PerBucket, {Bucket, Microsecs, Stages});
-update1(read_repairs) ->
-    folsom_metrics:notify_existing_metric({?APP, read_repairs}, 1, spiral);
+update1({read_repairs, Indices, Preflist}) ->
+    folsom_metrics:notify_existing_metric({?APP, read_repairs}, 1, spiral),
+    do_repairs(Indices, Preflist);
 update1(coord_redir) ->
     folsom_metrics:notify_existing_metric({?APP, coord_redirs_total}, {inc, 1}, counter);
 update1(mapper_start) ->
@@ -325,6 +326,20 @@ do_stages(_Path, []) ->
 do_stages(Path, [{Stage, Time}|Stages]) ->
     create_or_update(list_to_tuple(Path ++ [Stage]), Time, histogram),
     do_stages(Path, Stages).
+
+%% create dimensioned stats for read repairs.
+%% The indexes are from get core [{Index, Reason::notfound|outofdate}]
+%% preflist is a preflist of [{{Index, Node}, Type::primary|fallback}]
+do_repairs(Indices, Preflist) ->
+    lists:foreach(fun({{Idx, Node}, Type}) ->
+                          case proplists:get_value(Idx, Indices) of
+                              undefined ->
+                                  ok;
+                              Reason ->
+                                  create_or_update({?APP, read_repairs, Node, Type, Reason}, 1, spiral)
+                          end
+                  end,
+                  Preflist).
 
 create_or_update(Name, UpdateVal, Type) ->
     case (catch folsom_metrics:notify_existing_metric(Name, UpdateVal, Type)) of
