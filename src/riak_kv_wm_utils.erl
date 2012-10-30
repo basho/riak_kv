@@ -235,8 +235,8 @@ any_to_bool(V) when is_boolean(V) ->
     V.
 
 is_forbidden(RD) ->
-    is_null_origin(RD) or 
-    (app_helper:get_env(riak_kv,secure_referer_check,true) and not is_valid_referer(RD)).
+    is_null_origin(RD) orelse 
+    (app_helper:get_env(riak_kv,secure_referer_check,true) andalso not is_valid_referer(RD)).
 
 %% @doc Check if the Origin header is "null". This is useful to look for attempts
 %%      at CSRF, but is not a complete answer to the problem.
