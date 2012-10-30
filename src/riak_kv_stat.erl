@@ -234,10 +234,14 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %% @doc Update the given stat
-update1(vnode_get) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_gets}, 1, spiral);
-update1(vnode_put) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_puts}, 1, spiral);
+update1({vnode_get, Idx, USecs}) ->
+    folsom_metrics:notify_existing_metric({?APP, vnode_gets}, 1, spiral),
+    create_or_update({?APP, vnode_gets, time}, USecs, histogram),
+    do_per_index(vnode_gets, Idx, USecs);
+update1({vnode_put, Idx, USecs}) ->
+    folsom_metrics:notify_existing_metric({?APP, vnode_puts}, 1, spiral),
+    create_or_update({?APP, vnode_puts, time}, USecs, histogram),
+    do_per_index(vnode_puts, Idx, USecs);
 update1(vnode_index_read) ->
     folsom_metrics:notify_existing_metric({?APP, vnode_index_reads}, 1, spiral);
 update1({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
@@ -279,6 +283,12 @@ update1(postcommit_fail) ->
     folsom_metrics:notify_existing_metric({?APP, postcommit_fail}, {inc, 1}, counter).
 
 %% private
+%% Per index stats (by op)
+do_per_index(Op, Idx, USecs) ->
+    IdxAtom = list_to_atom(integer_to_list(Idx)),
+    create_or_update({?APP, Op, IdxAtom}, 1, spiral),
+    create_or_update({?APP, Op, time, IdxAtom}, USecs, histogram).
+
 %%  per bucket get_fsm stats
 do_get_bucket(false, _) ->
     ok;
@@ -341,6 +351,8 @@ do_repairs(Indices, Preflist) ->
                   end,
                   Preflist).
 
+%% for dynamically created / dimensioned stats
+%% that can't be registered at start up
 create_or_update(Name, UpdateVal, Type) ->
     case (catch folsom_metrics:notify_existing_metric(Name, UpdateVal, Type)) of
         ok ->
