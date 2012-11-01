@@ -237,6 +237,7 @@ init([Index]) ->
     BucketBufSize = app_helper:get_env(riak_kv, bucket_buffer_size, 1000),
     IndexBufSize = app_helper:get_env(riak_kv, index_buffer_size, 100),
     KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
+    WorkerPoolSize = app_helper:get_env(riak_kv, worker_pool_size, 10),
     {ok, VId} = get_vnodeid(Index),
     DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
     AsyncFolding = app_helper:get_env(riak_kv, async_folds, true) == true,
@@ -256,7 +257,7 @@ init([Index]) ->
             case AsyncFolding of
                 true ->
                     %% Create worker pool initialization tuple
-                    FoldWorkerPool = {pool, riak_kv_worker, 10, []},
+                    FoldWorkerPool = {pool, riak_kv_worker, WorkerPoolSize, []},
                     {ok, State, [FoldWorkerPool]};
                 false ->
                     {ok, State}
