@@ -36,7 +36,7 @@
 %%   Where ModuleName and FunctionName are each strings representing
 %%   a module and function.
 %%
-%% GET /buckets/Bucket/props
+%% PUT /buckets/Bucket/props
 %% PUT /Prefix/Bucket (OLD)
 %%   Modify bucket properties.
 %%   Content-type must be application/json, and the body must have
@@ -44,6 +44,10 @@
 %%     {"props":{Prop:Val}}
 %%   Where the "props" object takes the same form as returned from
 %%   a GET of the same resource.
+%%
+%% DELETE /buckets/Bucket/props
+%% DELETE /Prefix/Bucket (OLD)
+%%   Clear bucket properties.
 
 -module(riak_kv_wm_props).
 
@@ -59,6 +63,7 @@
          content_types_accepted/2,
          produce_bucket_body/2,
          accept_bucket_body/2,
+         delete_resource/2,
          get_bucket_props_json/2
         ]).
 
@@ -117,7 +122,7 @@ forbidden(RD, Ctx) ->
 %% @doc Get the list of methods this resource supports.
 %%      Properties allows HEAD, GET, and PUT.
 allowed_methods(RD, Ctx) ->
-    {['HEAD', 'GET', 'PUT'], RD, Ctx}.
+    {['HEAD', 'GET', 'PUT', 'DELETE'], RD, Ctx}.
 
 %% @spec malformed_request(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
@@ -200,6 +205,18 @@ get_bucket_props_json(Client, Bucket) ->
 accept_bucket_body(RD, Ctx=#ctx{bucket=B, client=C, bucketprops=Props}) ->
     ErlProps = lists:map(fun erlify_bucket_prop/1, Props),
     case C:set_bucket(B, ErlProps) of
+        ok ->
+            {true, RD, Ctx};
+        {error, Details} ->
+            JSON = mochijson2:encode(Details),
+            RD2 = wrq:append_to_resp_body(JSON, RD),
+            {{halt, 400}, RD2, Ctx}
+    end.
+
+%% @spec delete_resource(reqdata(), context()) -> {true, reqdata(), context()}
+%% @doc Delete the bucket properties.
+delete_resource(RD, Ctx=#ctx{bucket=B, client=C}) ->
+    case C:clear_bucket(B) of
         ok ->
             {true, RD, Ctx};
         {error, Details} ->
