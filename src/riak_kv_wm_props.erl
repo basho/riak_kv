@@ -44,6 +44,10 @@
 %%     {"props":{Prop:Val}}
 %%   Where the "props" object takes the same form as returned from
 %%   a GET of the same resource.
+%% 
+%% DELETE /buckets/Bucket/props
+%%   Reset bucket properties back to the default settings
+%%   not supporteed by the OLD API
 
 -module(riak_kv_wm_props).
 
@@ -59,7 +63,8 @@
          content_types_accepted/2,
          produce_bucket_body/2,
          accept_bucket_body/2,
-         get_bucket_props_json/2
+         get_bucket_props_json/2,
+         delete_resource/2
         ]).
 
 %% @type context() = term()
@@ -68,7 +73,8 @@
               prefix,       %% string() - prefix for resource uris
               riak,         %% local | {node(), atom()} - params for riak client
               bucketprops,  %% proplist() - properties of the bucket
-              method        %% atom() - HTTP method for the request
+              method,       %% atom() - HTTP method for the request
+              api_version   %% non_neg_integer() - old or new http api
              }).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -80,7 +86,8 @@
 init(Props) ->
     {ok, #ctx{
        prefix=proplists:get_value(prefix, Props),
-       riak=proplists:get_value(riak, Props)
+       riak=proplists:get_value(riak, Props),
+       api_version=proplists:get_value(api_version,Props)
       }}.
 
 %% @spec service_available(reqdata(), context()) ->
@@ -116,8 +123,10 @@ forbidden(RD, Ctx) ->
 %%          {[method()], reqdata(), context()}
 %% @doc Get the list of methods this resource supports.
 %%      Properties allows HEAD, GET, and PUT.
-allowed_methods(RD, Ctx) ->
-    {['HEAD', 'GET', 'PUT'], RD, Ctx}.
+allowed_methods(RD, Ctx) when Ctx#ctx.api_version =:= 1 ->
+    {['HEAD', 'GET', 'PUT'], RD, Ctx};
+allowed_methods(RD, Ctx) when Ctx#ctx.api_version =:= 2 ->
+    {['HEAD', 'GET', 'PUT', 'DELETE'], RD, Ctx}.
 
 %% @spec malformed_request(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
@@ -207,6 +216,12 @@ accept_bucket_body(RD, Ctx=#ctx{bucket=B, client=C, bucketprops=Props}) ->
             RD2 = wrq:append_to_resp_body(JSON, RD),
             {{halt, 400}, RD2, Ctx}
     end.
+
+%% @spec delete_resource(reqdata(), context()) -> {boolean, reqdata(), context()}
+%% @doc Reset the bucket properties back to the default values
+delete_resource(RD, Ctx=#ctx{bucket=B, client=C}) ->
+    C:reset_bucket(B),
+    {true, RD, Ctx}.
 
 %% @spec jsonify_bucket_prop({Property::atom(), erlpropvalue()}) ->
 %%           {Property::binary(), jsonpropvalue()}
