@@ -28,6 +28,17 @@
 %% This FSM will speak both `raw' and `fsm_sync' sink types (it
 %% answers appropriately to each, without parameterization).
 
+%% The FSM enforces a soft cap on the number of results and logs
+%% accumulated when receiving `fsm_sync' sink type messages. When the
+%% number of results+logs that have been delivered exceeds the cap
+%% between calls to {@link next/1}, the sink stops delivering result
+%% acks to workers. The value of this cap can be specified by
+%% including a `buffer' property in the `Options' parameter of {@link
+%% start/2}, or by setting the `mrc_sink_buffer' environment variable
+%% in the `riak_kv' application. If neither settings is specified, or
+%% they are not specified as non-negative integers, the default
+%% (currently 1000) is used.
+
 %% Messages are delivered to the owners as an erlang message that is a
 %% `#kv_mrc_pipe{}' record. The `logs' field is a list of log messages
 %% received, ordered oldest to youngest, each having the form
@@ -66,8 +77,8 @@
 -module(riak_kv_mrc_sink).
 
 -export([
-         start/1,
-         start_link/1,
+         start/2,
+         start_link/2,
          use_pipe/2,
          next/1,
          stop/1,
@@ -84,23 +95,32 @@
 
 -behaviour(gen_fsm).
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include("riak_kv_mrc_sink.hrl").
+
+-define(BUFFER_SIZE_DEFAULT, 1000).
 
 -record(state, {
           owner :: pid(),
           builder :: pid(),
           ref :: reference(),
           results=[] :: [{PhaseId::term(), Results::list()}],
+          delayed_acks=[] :: list(),
           logs=[] :: list(),
-          done=false :: boolean()
+          done=false :: boolean(),
+          buffer_max :: integer(),
+          buffer_left :: integer()
          }).
 
-start(OwnerPid) ->
-    riak_kv_mrc_sink_sup:start_sink(OwnerPid).
+start(OwnerPid, Options) ->
+    riak_kv_mrc_sink_sup:start_sink(OwnerPid, Options).
 
-start_link(OwnerPid) ->
-    gen_fsm:start_link(?MODULE, [OwnerPid], []).
+start_link(OwnerPid, Options) ->
+    gen_fsm:start_link(?MODULE, [OwnerPid, Options], []).
 
 use_pipe(Sink, Pipe) ->
     gen_fsm:sync_send_event(Sink, {use_pipe, Pipe}).
@@ -114,9 +134,12 @@ stop(Sink) ->
 
 %% gen_fsm exports
 
-init([OwnerPid]) ->
+init([OwnerPid, Options]) ->
     erlang:monitor(process, OwnerPid),
-    {ok, which_pipe, #state{owner=OwnerPid}}.
+    Buffer = buffer_size(Options),
+    {ok, which_pipe, #state{owner=OwnerPid,
+                            buffer_max=Buffer,
+                            buffer_left=Buffer}}.
 
 %%% which_pipe: waiting to find out what pipe we're listening to
 
@@ -151,9 +174,19 @@ collect_output(next, State) ->
 collect_output(_, State) ->
     {next_state, collect_output, State}.
 collect_output(#pipe_result{ref=Ref, from=PhaseId, result=Res},
-               _From, #state{ref=Ref, results=Acc}=State) ->
+               From,
+               #state{ref=Ref, results=Acc, buffer_left=Left}=State) ->
     NewAcc = add_result(PhaseId, Res, Acc),
-    {reply, ok, collect_output, State#state{results=NewAcc}};
+    if Left > 0 ->
+            %% there's room for more, tell the worker it can continue
+            {reply, ok, collect_output,
+             State#state{results=NewAcc, buffer_left=Left-1}};
+       true ->
+            %% there's no more room, hold up the worker
+            {next_state, collect_output,
+             State#state{results=NewAcc, buffer_left=Left-1,
+                         delayed_acks=[From|State#state.delayed_acks]}}
+    end;
 collect_output(_, _, State) ->
     {next_state, collect_output, State}.
 
@@ -177,13 +210,22 @@ handle_event(_, StateName, State) ->
 handle_sync_event(_, _, StateName, State) ->
     {next_state, StateName, State}.
 
+%% Clusters containing nodes running Riak version 1.2 and previous
+%% will send raw results, regardless of sink type.  We can't block
+%% these worker sending raw results, but we can still track these
+%% additions, and block other workers because of them.
 handle_info(#pipe_result{ref=Ref, from=PhaseId, result=Res},
-            StateName, #state{ref=Ref, results=Acc}=State) ->
+            StateName,
+            #state{ref=Ref, results=Acc, buffer_left=Left}=State) ->
     NewAcc = add_result(PhaseId, Res, Acc),
-    info_response(StateName, State#state{results=NewAcc});
+    info_response(StateName,
+                  State#state{results=NewAcc, buffer_left=Left-1});
 handle_info(#pipe_log{ref=Ref, from=PhaseId, msg=Msg},
-            StateName, #state{ref=Ref, logs=Acc}=State) ->
-    info_response(StateName, State#state{logs=[{PhaseId, Msg}|Acc]});
+            StateName,
+            #state{ref=Ref, logs=Acc, buffer_left=Left}=State) ->
+    info_response(StateName,
+                  State#state{logs=[{PhaseId, Msg}|Acc],
+                              buffer_left=Left-1});
 handle_info(#pipe_eoi{ref=Ref},
             StateName, #state{ref=Ref}=State) ->
     info_response(StateName, State#state{done=true});
@@ -225,12 +267,15 @@ has_output(_) ->
 
 %% also clears buffers
 send_to_owner(#state{owner=Owner, ref=Ref,
-                     results=Results, logs=Logs, done=Done}=State) ->
+                     results=Results, logs=Logs, done=Done,
+                     buffer_max=Max, delayed_acks=Delayed}=State) ->
     Owner ! #kv_mrc_sink{ref=Ref,
                          results=finish_results(Results),
                          logs=lists:reverse(Logs),
                          done=Done},
-    State#state{results=[], logs=[]}.
+    [ gen_fsm:reply(From, ok) || From <- Delayed ],
+    State#state{results=[], logs=[],
+                buffer_left=Max, delayed_acks=[]}.
 
 %% results are kept as lists in a proplist
 add_result(PhaseId, Result, Acc) ->
@@ -244,3 +289,93 @@ add_result(PhaseId, Result, Acc) ->
 %% transform the proplist buffers into orddicts time-ordered
 finish_results(Results) ->
     [{I, lists:reverse(R)} || {I, R} <- lists:keysort(1, Results)].
+
+%% choose buffer size, given Options, app env, default
+-spec buffer_size(list()) -> non_neg_integer().
+buffer_size(Options) ->
+    case buffer_size_options(Options) of
+        {ok, Size} -> Size;
+        false ->
+            case buffer_size_app_env() of
+                {ok, Size} -> Size;
+                false ->
+                    ?BUFFER_SIZE_DEFAULT
+            end
+    end.
+
+-spec buffer_size_options(list()) -> non_neg_integer().
+buffer_size_options(Options) ->
+    case lists:keyfind(buffer, 1, Options) of
+        {buffer, Size} when is_integer(Size), Size >= 0 ->
+            {ok, Size};
+        _ ->
+            false
+    end.
+
+-spec buffer_size_app_env() -> non_neg_integer().
+buffer_size_app_env() ->
+    case application:get_env(riak_kv, mrc_sink_buffer) of
+        {ok, Size} when is_integer(Size), Size >= 0 ->
+            {ok, Size};
+        _ ->
+            false
+    end.
+
+%% TEST
+
+-ifdef(TEST).
+
+buffer_size_test_() ->
+    Tests = [ {"buffer option", 5, [{buffer, 5}], []},
+              {"buffer app env", 5, [], [{mrc_sink_buffer, 5}]},
+              {"buffer default", ?BUFFER_SIZE_DEFAULT, [], []} ],
+    {foreach,
+     fun() -> application:load(riak_kv) end,
+     fun(_) -> application:unload(riak_kv) end,
+     [buffer_size_test_helper(Name, Size, Options, AppEnv)
+      || {Name, Size, Options, AppEnv} <- Tests]}.
+
+buffer_size_test_helper(Name, Size, Options, AppEnv) ->
+    {Name,
+     fun() ->
+            application:load(riak_kv),
+            [ application:set_env(riak_kv, K, V) || {K, V} <- AppEnv ],
+            
+            %% start up our sink
+            {ok, Sink} = ?MODULE:start_link(self(), Options),
+            Ref = make_ref(),
+            Pipe = #pipe{builder=self(),
+                         sink=#fitting{pid=Sink, ref=Ref}},
+            ?MODULE:use_pipe(Sink, Pipe),
+
+            %% fill its buffer
+            [ ok = gen_fsm:sync_send_event(
+                     Sink,
+                     #pipe_result{from=tester, ref=Ref, result=I},
+                     1000)
+              || I <- lists:seq(1, Size) ],
+            
+            %% ensure extra result will block
+            {'EXIT',{timeout,{gen_fsm,sync_send_event,_}}} =
+                (catch gen_fsm:sync_send_event(
+                         Sink,
+                         #pipe_result{from=tester, ref=Ref, result=Size+1},
+                         1000)),
+            
+            %% now drain what's there
+            ?MODULE:next(Sink),
+
+            %% make sure that all results were received, including
+            %% blocked one
+            receive
+                #kv_mrc_sink{ref=Ref, results=[{tester,R}]} ->
+                    ?assertEqual(Size+1, length(R))
+            end,
+            %% make sure that the delayed ack was received
+            receive
+                {GenFsmRef, ok} when is_reference(GenFsmRef) ->
+                    ok
+            end
+     end}.
+
+-endif.
