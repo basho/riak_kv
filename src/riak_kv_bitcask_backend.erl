@@ -341,13 +341,11 @@ drop(#state{ref=Ref,
 %% non-tombstone values; otherwise returns false.
 -spec is_empty(state()) -> boolean().
 is_empty(#state{ref=Ref}) ->
-    %% Determining if a bitcask is empty requires us to find at least
-    %% one value that is NOT a tombstone. Accomplish this by doing a fold_keys
-    %% that forcibly bails on the very first key encountered.
-    F = fun(_K, _Acc0) ->
-                throw(found_one_value)
-        end,
-    (catch bitcask:fold_keys(Ref, F, undefined)) /= found_one_value.
+    %% Estimate if we are empty or not as determining for certain
+    %% requires a fold over the keyspace that may block. The estimate may
+    %% return false when this bitcask is actually empty, but it will never
+    %% return true when the bitcask has data.
+    bitcask:is_empty_estimate(Ref).
 
 %% @doc Get the status information for this bitcask backend
 -spec status(state()) -> [{atom(), term()}].
