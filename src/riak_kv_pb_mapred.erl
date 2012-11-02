@@ -231,7 +231,8 @@ destroy_pipe(#pipe_ctx{pipe=Pipe}=PipeCtx) ->
 
 pipe_mapreduce(Req, State, Inputs, Query, Timeout) ->
     {ok, Sink} = riak_kv_mrc_sink:start(self()),
-    try riak_kv_mrc_pipe:mapred_stream(Query, Sink) of
+    Opts = [{sink_type, {fsm_sync, infinity}}],
+    try riak_kv_mrc_pipe:mapred_stream(Query, Sink, Opts) of
         {{ok, Pipe}, _NumKeeps} ->
             SinkMon = erlang:monitor(process, Sink),
             %% catch just in case the pipe or sink has already died

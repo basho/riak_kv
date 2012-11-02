@@ -25,6 +25,9 @@
 %% messages received from the pipe, until it is asked to send them to
 %% its owner. The owner is whatever process started this FSM.
 
+%% This FSM will speak both `raw' and `fsm_sync' sink types (it
+%% answers appropriately to each, without parameterization).
+
 %% Messages are delivered to the owners as an erlang message that is a
 %% `#kv_mrc_pipe{}' record. The `logs' field is a list of log messages
 %% received, ordered oldest to youngest, each having the form
@@ -147,6 +150,10 @@ collect_output(next, State) ->
     end;
 collect_output(_, State) ->
     {next_state, collect_output, State}.
+collect_output(#pipe_result{ref=Ref, from=PhaseId, result=Res},
+               _From, #state{ref=Ref, results=Acc}=State) ->
+    NewAcc = add_result(PhaseId, Res, Acc),
+    {reply, ok, collect_output, State#state{results=NewAcc}};
 collect_output(_, _, State) ->
     {next_state, collect_output, State}.
 
@@ -156,6 +163,11 @@ collect_output(_, _, State) ->
 %% all work for send_output is done in handle_info
 send_output(_, State) ->
     {next_state, send_output, State}.
+send_output(#pipe_result{ref=Ref, from=PhaseId, result=Res},
+            _From, #state{ref=Ref, results=Acc}=State) ->
+    NewAcc = add_result(PhaseId, Res, Acc),
+    NewState = send_to_owner(State#state{results=NewAcc}),
+    {reply, ok, collect_output, NewState};
 send_output(_, _, State) ->
     {next_state, send_output, State}.
 
