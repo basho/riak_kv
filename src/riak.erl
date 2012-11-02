@@ -21,9 +21,6 @@
 %% -------------------------------------------------------------------
 
 -module(riak).
--author('Andy Gross <andy@basho.com>').
--author('Justin Sheehy <justin@basho.com>').
--author('Bryan Fink <bryan@basho.com>').
 -export([stop/0, stop/1]).
 -export([get_app_env/0, get_app_env/1,get_app_env/2]).
 -export([client_connect/1,client_connect/2,

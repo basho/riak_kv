@@ -22,7 +22,6 @@
 %% different riak_kv tasks asynchronously.
 
 -module(riak_kv_worker).
--author('Kelly McLaughlin <kelly@basho.com>').
 
 -behaviour(riak_core_vnode_worker).
 
