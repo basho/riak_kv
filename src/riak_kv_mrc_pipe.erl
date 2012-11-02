@@ -112,6 +112,7 @@
          mapred/3,
          mapred_stream/1,
          mapred_stream/2,
+         mapred_stream/3,
          send_inputs/2,
          send_inputs/3,
          send_inputs_async/2,
@@ -214,6 +215,12 @@ mapred(Inputs, Query, Timeout) ->
 mapred_stream(Query) ->
     mapred_stream(Query, self()).
 
+%% @equiv mapred_stream(Query, Target, [])
+-spec mapred_stream([query_part()], pid()) ->
+         {{ok, riak_pipe:pipe()}, NumKeeps :: integer()}.
+mapred_stream(Query, Target) ->
+    mapred_stream(Query, Target, []).
+
 %% @doc Setup the MapReduce plumbing, preparted to receive inputs.
 %% The caller should then use {@link send_inputs/2} or {@link
 %% send_inputs/3} to give the query inputs to process.
@@ -222,13 +229,14 @@ mapred_stream(Query) ->
 %% requested to keep their inputs, and will need to be passed to
 %% {@link collect_outputs/3} or {@link group_outputs/2} to get labels
 %% compatible with HTTP and PB interface results.
--spec mapred_stream([query_part()], pid()) ->
+-spec mapred_stream([query_part()], pid(), list()) ->
          {{ok, riak_pipe:pipe()}, NumKeeps :: integer()}.
-mapred_stream(Query, Target) when is_pid(Target) ->
+mapred_stream(Query, Target, Opts) when is_pid(Target), is_list(Opts) ->
     NumKeeps = count_keeps_in_query(Query),
     {riak_pipe:exec(mr2pipe_phases(Query),
                     [{sink, #fitting{pid=Target}},
-                     {log, sink},{trace,[error]}]),
+                     {log, sink},{trace,[error]}
+                     |Opts]),
      NumKeeps}.
 
 %% The plan functions are useful for seeing equivalent (we hope) pipeline.
