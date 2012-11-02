@@ -26,7 +26,7 @@
 
 %% API
 -export([start_link/0]).
--export([start_sink/1,
+-export([start_sink/2,
          terminate_sink/1]).
 
 %% Supervisor callbacks
@@ -42,9 +42,9 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 %% @doc Start a new worker under the supervisor.
--spec start_sink(pid()) -> {ok, pid()}.
-start_sink(Owner) ->
-    supervisor:start_child(?MODULE, [Owner]).
+-spec start_sink(pid(), list()) -> {ok, pid()}.
+start_sink(Owner, Options) ->
+    supervisor:start_child(?MODULE, [Owner, Options]).
 
 %% @doc Stop a worker immediately
 -spec terminate_sink(pid()) -> ok | {error, term()}.

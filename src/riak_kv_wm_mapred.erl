@@ -180,7 +180,7 @@ pipe_mapred(RD,
             #state{inputs=Inputs,
                    mrquery=Query,
                    timeout=Timeout}=State) ->
-    {ok, Sink} = riak_kv_mrc_sink:start(self()),
+    {ok, Sink} = riak_kv_mrc_sink:start(self(), []),
     Opts = [{sink_type, {fsm_sync, infinity}}],
     try riak_kv_mrc_pipe:mapred_stream(Query, Sink, Opts) of
         {{ok, Pipe}, NumKeeps} ->

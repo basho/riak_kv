@@ -238,7 +238,7 @@ destroy_pipe(#pipe_ctx{pipe=Pipe}=PipeCtx) ->
     cleanup_sender(PipeCtx).
 
 pipe_mapreduce(Req, State, Inputs, Query, Timeout) ->
-    {ok, Sink} = riak_kv_mrc_sink:start(self()),
+    {ok, Sink} = riak_kv_mrc_sink:start(self(), []),
     Opts = [{sink_type, {fsm_sync, infinity}}],
     try riak_kv_mrc_pipe:mapred_stream(Query, Sink, Opts) of
         {{ok, Pipe}, _NumKeeps} ->
