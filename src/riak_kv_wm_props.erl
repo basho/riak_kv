@@ -47,7 +47,7 @@
 %% 
 %% DELETE /buckets/Bucket/props
 %%   Reset bucket properties back to the default settings
-%%   not supporteed by the OLD API
+%%   not supported by the OLD API
 
 -module(riak_kv_wm_props).
 
