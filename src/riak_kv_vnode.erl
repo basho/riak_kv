@@ -1,3 +1,4 @@
+
 %% -------------------------------------------------------------------
 %%
 %% riak_kv_vnode: VNode Implementation
@@ -32,6 +33,9 @@
          mget/3,
          del/3,
          put/6,
+         local_get/2,
+         local_put/2,
+         local_put/3,
          coord_put/6,
          readrepair/6,
          list_keys/4,
@@ -41,7 +45,9 @@
          ack_keys/1,
          repair/1,
          repair_status/1,
-         repair_filter/1]).
+         repair_filter/1,
+         hashtree_pid/1,
+         exchange_remote/2]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -83,10 +89,14 @@
                 index_buf_size :: pos_integer(),
                 key_buf_size :: pos_integer(),
                 async_folding :: boolean(),
-                in_handoff = false :: boolean() }).
+                in_handoff = false :: boolean(),
+                hashtrees :: pid() }).
 
 -type index_op() :: add | remove.
 -type index_value() :: integer() | binary().
+-type index() :: non_neg_integer().
+-type index_n() :: {index(), pos_integer()}.
+-type state() :: #state{}.
 
 -record(putargs, {returnbody :: boolean(),
                   coord:: boolean(),
@@ -101,6 +111,25 @@
                   is_index=false :: boolean() %% set if the b/end supports indexes
                  }).
 
+-spec maybe_create_hashtrees(state()) -> state().
+maybe_create_hashtrees(State) ->
+    maybe_create_hashtrees(riak_kv_entropy_manager:enabled(), State).
+
+-spec maybe_create_hashtrees(boolean(), state()) -> state().
+maybe_create_hashtrees(false, State) ->
+    State;
+maybe_create_hashtrees(true, State=#state{idx=Index}) ->
+    %% Only maintain a hashtree if a primary vnode
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    case riak_core_ring:index_owner(Ring, Index) == node() of
+        false ->
+            State;
+        true ->
+            RP = riak_kv_util:responsible_preflists(Index),
+            {ok, Trees} = riak_kv_index_hashtree:start_link(Index, RP),
+            State#state{hashtrees=Trees}
+    end.
+
 %% API
 start_vnode(I) ->
     riak_core_vnode_master:get_vnode_pid(I, riak_kv_vnode).
@@ -109,13 +138,16 @@ test_vnode(I) ->
     riak_core_vnode:start_link(riak_kv_vnode, I, infinity).
 
 get(Preflist, BKey, ReqId) ->
-    Req = ?KV_GET_REQ{bkey=BKey,
-                      req_id=ReqId},
     %% Assuming this function is called from a FSM process
     %% so self() == FSM pid
+    get(Preflist, BKey, ReqId, {fsm, undefined, self()}).
+
+get(Preflist, BKey, ReqId, Sender) ->
+    Req = ?KV_GET_REQ{bkey=BKey,
+                      req_id=ReqId},
     riak_core_vnode_master:command(Preflist,
                                    Req,
-                                   {fsm, undefined, self()},
+                                   Sender,
                                    riak_kv_vnode_master).
 
 mget(Preflist, BKeys, ReqId) ->
@@ -148,6 +180,33 @@ put(Preflist, BKey, Obj, ReqId, StartTime, Options, Sender)
                                       options = Options},
                                    Sender,
                                    riak_kv_vnode_master).
+
+local_put(Index, Obj) ->
+    local_put(Index, Obj, []).
+
+local_put(Index, Obj, Options) ->
+    BKey = {riak_object:bucket(Obj), riak_object:key(Obj)},
+    Ref = make_ref(),
+    ReqId = erlang:phash2(erlang:now()),
+    StartTime = riak_core_util:moment(),
+    Sender = {raw, Ref, self()},
+    put({Index, node()}, BKey, Obj, ReqId, StartTime, Options, Sender),
+    receive
+        {Ref, Reply} ->
+            Reply
+    end.
+
+local_get(Index, BKey) ->
+    Ref = make_ref(),
+    ReqId = erlang:phash2(erlang:now()),
+    Sender = {raw, Ref, self()},
+    get({Index,node()}, BKey, ReqId, Sender),
+    receive
+        {Ref, {r, Result, Index, ReqId}} ->
+            Result;
+        {Ref, Reply} ->
+            {error, Reply}
+    end.
 
 %% Issue a put for the object to the preflist, expecting a reply
 %% to an FSM.
@@ -213,7 +272,7 @@ repair(Partition) ->
     riak_core_vnode_manager:repair(Service, MP, FilterModFun).
 
 %% @doc Get the status of the repair process for the given `Partition'.
--spec repair_status(partition()) -> no_repair | repair_in_progress.
+-spec repair_status(partition()) -> not_found | in_progress.
 repair_status(Partition) ->
     riak_core_vnode_manager:repair_status({riak_kv_vnode, Partition}).
 
@@ -228,6 +287,21 @@ repair_filter(Target) ->
                                 default_object_nval(),
                                 fun object_info/1).
 
+-spec hashtree_pid(index()) -> {ok, pid()}.
+hashtree_pid(Partition) ->
+    riak_core_vnode_master:sync_command({Partition, node()},
+                                        {hashtree_pid, node()},
+                                        riak_kv_vnode_master,
+                                        infinity).
+
+-spec exchange_remote({index(), node()}, index_n()) -> ok.
+exchange_remote(VNode, IndexN) ->
+    {_, RemoteNode} = VNode,
+    Sender = {fsm, undefined, self()},
+    riak_core_vnode_master:command(VNode,
+                                   {start_exchange_remote, self(), RemoteNode, IndexN},
+                                   Sender,
+                                   riak_kv_vnode_master).
 
 %% VNode callbacks
 
@@ -258,7 +332,8 @@ init([Index]) ->
                 true ->
                     %% Create worker pool initialization tuple
                     FoldWorkerPool = {pool, riak_kv_worker, WorkerPoolSize, []},
-                    {ok, State, [FoldWorkerPool]};
+                    State2 = maybe_create_hashtrees(State),
+                    {ok, State2, [FoldWorkerPool]};
                 false ->
                     {ok, State}
             end;
@@ -364,6 +439,26 @@ handle_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0}, Sender, State) ->
                           FoldFun({Bucket, Key}, Value, Acc)
                   end,
     do_fold(FoldWrapper, Acc0, Sender, State);
+
+%% entropy exchange commands
+handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
+    %% Handle riak_core request forwarding during ownership handoff.
+    case node() of
+        Node ->
+            {reply, {ok, HT}, State};
+        _ ->
+            {reply, {error, wrong_node}, State}
+    end;
+handle_command({start_exchange_remote, FsmPid, Node, IndexN}, Sender, State) ->
+    %% Handle riak_core request forwarding during ownership handoff.
+    case node() of
+        Node ->
+            do_start_exchange_remote(State#state.hashtrees, FsmPid,
+                                     IndexN, Sender);
+        _ ->
+            riak_core_vnode:reply(Sender, {remote_exchange, wrong_node})
+    end,
+    {noreply, State};
 
 %% Commands originating from inside this vnode
 handle_command({backend_callback, Ref, Msg}, _Sender,
@@ -569,6 +664,12 @@ delete(State=#state{idx=Index,mod=Mod, modstate=ModState}) ->
             lager:error("Failed to drop ~p. Reason: ~p~n", [Mod, Reason]),
             ok
     end,
+    case State#state.hashtrees of
+        undefined ->
+            ok;
+        HT ->
+            riak_kv_index_hashtree:destroy(HT)
+    end,
     {ok, State#state{modstate=UpdModState,vnodeid=undefined}}.
 
 terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
@@ -600,6 +701,25 @@ handle_exit(_Pid, Reason, State) ->
     lager:error("Linked process exited. Reason: ~p", [Reason]),
     {stop, linked_process_crash, State}.
 
+
+do_start_exchange_remote(undefined, _FsmPid, _IndexN, Sender) ->
+    %% Can happen if AAE is disabled on this node or if request is
+    %% accidently sent to secondary vnode during ownership change.
+    case riak_kv_entropy_manager:enabled() of
+        true ->
+            riak_core_vnode:reply(Sender,
+                                  {remote_exchange, not_built});
+        false ->
+            riak_core_vnode:reply(Sender,
+                                  {remote_exchange, anti_entropy_disabled})
+    end;
+do_start_exchange_remote(HT, FsmPid, IndexN, Sender) ->
+    case riak_kv_index_hashtree:start_exchange_remote(FsmPid, IndexN, HT) of
+        ok ->
+            riak_core_vnode:reply(Sender, {remote_exchange, HT});
+        Error ->
+            riak_core_vnode:reply(Sender, {remote_exchange, Error})
+    end.
 
 %% @private
 %% upon receipt of a client-initiated put
@@ -648,6 +768,7 @@ do_backend_delete(BKey, RObj, State = #state{mod = Mod, modstate = ModState}) ->
     {Bucket, Key} = BKey,
     case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
         {ok, UpdModState} ->
+            riak_kv_index_hashtree:delete(BKey, State#state.hashtrees),
             update_index_delete_stats(IndexSpecs),
             State#state{modstate = UpdModState};
         {error, _Reason, UpdModState} ->
@@ -756,6 +877,7 @@ perform_put({true, Obj},
     Val = term_to_binary(Obj),
     case Mod:put(Bucket, Key, IndexSpecs, Val, ModState) of
         {ok, UpdModState} ->
+            update_hashtree(Bucket, Key, Val, State),
             case RB of
                 true ->
                     Reply = {dw, Idx, Obj, ReqID};
@@ -1046,8 +1168,8 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
 %% @private
 %% upon receipt of a handoff datum, there is no client FSM
 do_diffobj_put({Bucket, Key}, DiffObj,
-               _StateData=#state{mod=Mod,
-                                 modstate=ModState}) ->
+               StateData=#state{mod=Mod,
+                                modstate=ModState}) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
     case Mod:get(Bucket, Key, ModState) of
@@ -1062,6 +1184,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
             Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
             case Res of
                 {ok, _UpdModState} ->
+                    update_hashtree(Bucket, Key, Val, StateData),
                     update_index_write_stats(IndexBackend, IndexSpecs),
                     riak_kv_stat:update(vnode_put);
                 _ -> nop
@@ -1087,6 +1210,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                     Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
                     case Res of
                         {ok, _UpdModState} ->
+                            update_hashtree(Bucket, Key, Val, StateData),
                             update_index_write_stats(IndexBackend, IndexSpecs),
                             riak_kv_stat:update(vnode_put);
                         _ ->
@@ -1095,6 +1219,10 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                     Res
             end
     end.
+
+-spec update_hashtree(binary(), binary(), binary(), state()) -> ok.
+update_hashtree(Bucket, Key, Val, #state{hashtrees=Trees}) ->
+    riak_kv_index_hashtree:insert_object({Bucket, Key}, Val, Trees).
 
 %% @private
 
