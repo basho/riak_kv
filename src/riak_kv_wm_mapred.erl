@@ -180,14 +180,9 @@ pipe_mapred(RD,
             #state{inputs=Inputs,
                    mrquery=Query,
                    timeout=Timeout}=State) ->
-    {ok, Sink} = riak_kv_mrc_sink:start(self(), []),
-    Opts = [{sink_type, {fsm_sync, infinity}}],
-    try riak_kv_mrc_pipe:mapred_stream(Query, Sink, Opts) of
-        {{ok, Pipe}, NumKeeps} ->
+    case riak_kv_mrc_pipe:mapred_stream(Query) of
+        {ok, Pipe, Sink, NumKeeps} ->
             SinkMon = erlang:monitor(process, Sink),
-            %% catch just in case the pipe or sink has already died
-            %% for any reason - we'll get the DOWN later
-            catch riak_kv_mrc_sink:use_pipe(Sink, Pipe),
             PipeRef = (Pipe#pipe.sink)#fitting.ref,
             Tref = erlang:send_after(Timeout, self(), {pipe_timeout, PipeRef}),
             {InputSender, SenderMonitor} =
@@ -203,9 +198,8 @@ pipe_mapred(RD,
                                            {InputSender, SenderMonitor},
                                            {Tref, PipeRef},
                                            {Sink, SinkMon})
-            end
-    catch throw:{badarg, Fitting, Reason} ->
-            riak_kv_mrc_sink:stop(Sink),
+            end;
+        {error, {Fitting, Reason}} ->
             {{halt, 400}, 
              send_error({error, [{phase, Fitting},
                                  {error, iolist_to_binary(Reason)}]}, RD),
@@ -295,25 +289,9 @@ pipe_collect_outputs1(Ref, Sender, Sink, Acc) ->
         {ok, false, Output} ->
             pipe_collect_outputs1(Ref, Sender, Sink, [Output|Acc]);
         {ok, true, Output} ->
-            {ok, resort_collected_outputs([Output|Acc])};
+            {ok, riak_kv_mrc_sink:merge_outputs([Output|Acc])};
         Error        -> Error
     end.
-
-%% Outputs are collected as a list of orddicts, with the first being
-%% the most recently received. What we really want is one orddict.
-%%
-%% That is, for one keep, our input should look like:
-%%    [ [{0, [G,H,I]}], [{0, [D,E,F]}], [{0, [A,B,C]}] ]
-%% And we want it to come out as:
-%%    [{0, [A,B,C,D,E,F,G,H,I]}]
--spec resort_collected_outputs([ [{integer(), list()}] ]) ->
-          [{integer(), list()}].
-resort_collected_outputs(Acc) ->
-    %% each orddict has its outputs in oldest->newest; since we're
-    %% iterating from newest->oldest overall, we can just tack the
-    %% next list onto the front of the accumulator
-    DM = fun(_K, O, A) -> O++A end,
-    lists:foldl(fun(O, A) -> orddict:merge(DM, O, A) end, [], Acc).
 
 pipe_receive_output(Ref, {SenderPid, SenderRef}, {SinkPid, SinkMon}) ->
     riak_kv_mrc_sink:next(SinkPid),

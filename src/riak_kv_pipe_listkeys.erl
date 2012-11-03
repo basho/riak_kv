@@ -133,6 +133,9 @@ done(_State) ->
 %%      to trigger keylisting on the appropriate vnodes.  The `eoi'
 %%      message is sent to the pipe as soon as it is confirmed that
 %%      all keylisting processes have started.
+%%
+%%      Note that log/trace messages are sent to the sink of the
+%%      original pipe. It is expected that that sink is an `fsm_sync' type.
 -spec queue_existing_pipe(riak_pipe:pipe(),
                           bucket_or_filter(),
                           timeout()) ->
@@ -145,7 +148,8 @@ queue_existing_pipe(Pipe, Bucket, Timeout) ->
                                               nval=1}],
                                [{sink, Head},
                                 {trace, [error]},
-                                {log, {sink, Pipe#pipe.sink}}]),
+                                {log, {sink, Pipe#pipe.sink}},
+                                {sink_type, {fsm_sync, infinity}}]),
 
     %% setup the cover operation
     ReqId = erlang:phash2({self(), os:timestamp()}), %% stolen from riak_client
