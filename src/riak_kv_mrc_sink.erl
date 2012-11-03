@@ -82,6 +82,7 @@
          use_pipe/2,
          next/1,
          stop/1,
+         merge_outputs/1,
          init/1,
          which_pipe/2, which_pipe/3,
          collect_output/2, collect_output/3,
@@ -132,6 +133,22 @@ next(Sink) ->
 stop(Sink) ->
     riak_kv_mrc_sink_sup:terminate_sink(Sink).
 
+%% @doc Convenience: If outputs are collected as a list of orddicts,
+%% with the first being the most recently received, merge them into
+%% one orddict.
+%%
+%% That is, for one keep, our input should look like:
+%%    [ [{0, [G,H,I]}], [{0, [D,E,F]}], [{0, [A,B,C]}] ]
+%% And we want it to come out as:
+%%    [{0, [A,B,C,D,E,F,G,H,I]}]
+-spec merge_outputs([ [{integer(), list()}] ]) -> [{integer(), list()}].
+merge_outputs(Acc) ->
+    %% each orddict has its outputs in oldest->newest; since we're
+    %% iterating from newest->oldest overall, we can just tack the
+    %% next list onto the front of the accumulator
+    DM = fun(_K, O, A) -> O++A end,
+    lists:foldl(fun(O, A) -> orddict:merge(DM, O, A) end, [], Acc).
+
 %% gen_fsm exports
 
 init([OwnerPid, Options]) ->
@@ -175,25 +192,32 @@ collect_output(_, State) ->
     {next_state, collect_output, State}.
 collect_output(#pipe_result{ref=Ref, from=PhaseId, result=Res},
                From,
-               #state{ref=Ref, results=Acc, buffer_left=Left}=State) ->
+               #state{ref=Ref, results=Acc}=State) ->
     NewAcc = add_result(PhaseId, Res, Acc),
-    if Left > 0 ->
-            %% there's room for more, tell the worker it can continue
-            {reply, ok, collect_output,
-             State#state{results=NewAcc, buffer_left=Left-1}};
-       true ->
-            %% there's no more room, hold up the worker
-            {next_state, collect_output,
-             State#state{results=NewAcc, buffer_left=Left-1,
-                         delayed_acks=[From|State#state.delayed_acks]}}
-    end;
+    maybe_ack(From, State#state{results=NewAcc});
+collect_output(#pipe_log{ref=Ref, from=PhaseId, msg=Msg},
+               From,
+               #state{ref=Ref, logs=Acc}=State) ->
+    NewAcc = add_result(PhaseId, Msg, Acc),
+    maybe_ack(From, State#state{logs=NewAcc});
+collect_output(#pipe_eoi{ref=Ref}, _From, #state{ref=Ref}=State) ->
+    {reply, ok, collect_output, State#state{done=true}};
 collect_output(_, _, State) ->
     {next_state, collect_output, State}.
+
+maybe_ack(_From, #state{buffer_left=Left}=State) when Left > 0 ->
+    %% there's room for more, tell the worker it can continue
+    {reply, ok, collect_output, State#state{buffer_left=Left-1}};
+maybe_ack(From, #state{buffer_left=Left, delayed_acks=Delayed}=State) ->
+    %% there's no more room, hold up the worker
+    %% not actually necessary to update buffer_left, but it could make
+    %% for interesting stats
+    {next_state, collect_output,
+     State#state{buffer_left=Left-1, delayed_acks=[From|Delayed]}}.
 
 %% send_output: waiting for output to send, after having been asked
 %% for some while there wasn't any
 
-%% all work for send_output is done in handle_info
 send_output(_, State) ->
     {next_state, send_output, State}.
 send_output(#pipe_result{ref=Ref, from=PhaseId, result=Res},
@@ -201,6 +225,14 @@ send_output(#pipe_result{ref=Ref, from=PhaseId, result=Res},
     NewAcc = add_result(PhaseId, Res, Acc),
     NewState = send_to_owner(State#state{results=NewAcc}),
     {reply, ok, collect_output, NewState};
+send_output(#pipe_log{ref=Ref, from=PhaseId, msg=Msg},
+            _From, #state{ref=Ref, logs=Acc}=State) ->
+    NewAcc = add_result(PhaseId, Msg, Acc),
+    NewState = send_to_owner(State#state{logs=NewAcc}),
+    {reply, ok, collect_output, NewState};
+send_output(#pipe_eoi{ref=Ref}, _From, #state{ref=Ref}=State) ->
+    NewState = send_to_owner(State#state{done=true}),
+    {stop, normal, ok, NewState};
 send_output(_, _, State) ->
     {next_state, send_output, State}.
 
