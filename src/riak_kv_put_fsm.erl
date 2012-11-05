@@ -208,7 +208,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
             %% This node is not in the preference list
             %% forward on to a random node
             ListPos = crypto:rand_uniform(1, length(Preflist2)),
-            {{_Idx, CoordNode},_Type} = lists:nth(ListPos),
+            {{_Idx, CoordNode},_Type} = lists:nth(ListPos, Preflist2),
             _Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
             ?DTRACE(?C_PUT_FSM_PREPARE, [1],
                     ["prepare", atom2list(CoordNode)]),
