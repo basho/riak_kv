@@ -179,7 +179,7 @@
       | {jsanon, Source :: binary()}.
 -type link_match() :: binary() | '_'.
 
-%% The output of collect_outputs/2,3 and group_outputs/2
+%% The output of collect_outputs/5
 -type ungrouped_results() :: [{From :: non_neg_integer(), Result :: term()}].
 -type grouped_results() :: [Results :: list()]
                          | list().
@@ -207,14 +207,17 @@ mapred(Inputs, Query, Timeout) ->
              collect_outputs(Pipe, Sink, SinkMon, NumKeeps, Timeout)}
     end.
 
-%% @doc Setup the MapReduce plumbing, preparted to receive inputs.
+%% @doc Setup the MapReduce plumbing, prepared to receive inputs.
 %% The caller should then use {@link send_inputs/2} or {@link
 %% send_inputs/3} to give the query inputs to process.
 %%
-%% The second element of the return tuple is the number of phases that
+%% The third element of the return tuple is the pid of a
+%% `riak_kv_mrc_sink' process that will act as the sink for the pipe.
+%%
+%% The fourth element of the return tuple is the number of phases that
 %% requested to keep their inputs, and will need to be passed to
-%% {@link collect_outputs/3} or {@link group_outputs/2} to get labels
-%% compatible with HTTP and PB interface results.
+%% {@link collect_outputs/5} to get labels compatible with HTTP and PB
+%% interface results.
 -spec mapred_stream([query_part()]) ->
          {ok, riak_pipe:pipe(), Sink :: pid(), NumKeeps :: integer()}.
 mapred_stream(Query) ->
@@ -627,8 +630,11 @@ send_key_list(Pipe, Bucket, ReqId) ->
     end.
 
 %% @doc Receive the results produced by the MapReduce pipe, grouped by
-%% the phase they came from.  See {@link group_outputs/2} for details
-%% on that grouping.
+%% the phase they came from. If `NumKeeps' is 2 or more, the return
+%% value is a list of result lists, `[Results :: list()]', in the same
+%% order as the phases that produced them.  If `NumKeeps' is less than
+%% 2, the return value is just a list (possibly empty) of results,
+%% `Results :: list()'.
 -spec collect_outputs(riak_pipe:pipe(), pid(), reference(),
                       non_neg_integer(), timeout()) ->
          {ok, grouped_results()}
