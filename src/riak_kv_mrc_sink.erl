@@ -198,8 +198,7 @@ collect_output(#pipe_result{ref=Ref, from=PhaseId, result=Res},
 collect_output(#pipe_log{ref=Ref, from=PhaseId, msg=Msg},
                From,
                #state{ref=Ref, logs=Acc}=State) ->
-    NewAcc = add_result(PhaseId, Msg, Acc),
-    maybe_ack(From, State#state{logs=NewAcc});
+    maybe_ack(From, State#state{logs=[{PhaseId, Msg}|Acc]});
 collect_output(#pipe_eoi{ref=Ref}, _From, #state{ref=Ref}=State) ->
     {reply, ok, collect_output, State#state{done=true}};
 collect_output(_, _, State) ->
@@ -227,8 +226,7 @@ send_output(#pipe_result{ref=Ref, from=PhaseId, result=Res},
     {reply, ok, collect_output, NewState};
 send_output(#pipe_log{ref=Ref, from=PhaseId, msg=Msg},
             _From, #state{ref=Ref, logs=Acc}=State) ->
-    NewAcc = add_result(PhaseId, Msg, Acc),
-    NewState = send_to_owner(State#state{logs=NewAcc}),
+    NewState = send_to_owner(State#state{logs=[{PhaseId, Msg}|Acc]}),
     {reply, ok, collect_output, NewState};
 send_output(#pipe_eoi{ref=Ref}, _From, #state{ref=Ref}=State) ->
     NewState = send_to_owner(State#state{done=true}),
