@@ -175,10 +175,10 @@ handle_info(#pipe_log{ref=Ref, from=PhaseId, msg=Msg},
 handle_info(#pipe_eoi{ref=Ref},
             StateName, #state{ref=Ref}=State) ->
     info_response(StateName, State#state{done=true});
-handle_info({'DOWN', _, process, Pid, Reason}, _,
+handle_info({'DOWN', _, process, Pid, _Reason}, _,
             #state{owner=Pid}=State) ->
     %% exit as soon as the owner dies
-    {stop, Reason, State};
+    {stop, normal, State};
 handle_info({'DOWN', _, process, Pid, Reason}, _,
             #state{builder=Pid}=State) when Reason /= normal ->
     %% don't stop when the builder exits 'normal', because that's
