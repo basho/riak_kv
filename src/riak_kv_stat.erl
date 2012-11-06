@@ -28,151 +28,10 @@
 %%      folsom.
 %%
 %%      Get the latest aggregation of stats with the exported function
-%%      get_stats/0. Or use folsom_metrics:get_metric_value/1
+%%      get_stats/0. Or use folsom_metrics:get_metric_value/1,
+%%      or riak_core_stat_q:get_stats/1.
 %%
-%%      Current stats:
-%%<dl><dt>  vnode_gets
-%%</dt><dd> Total number of gets handled by all vnodes on this node
-%%          in the last minute.
-%%</dd><dd> update(vnode_get)
-%%
-%%</dd><dt> vnode_puts
-%%</dt><dd> Total number of puts handled by all vnodes on this node
-%%          in the last minute.
-%%</dd><dd> update(vnode_put)
-%%
-%%</dd><dt> vnode_index_reads
-%%</dt><dd> The number of index reads handled by all vnodes on this node.
-%%          Each query counts as an index read.
-%%</dd><dd> update(vnode_index_read)
-%%
-%%</dd><dt> vnode_index_writes
-%%</dt><dd> The number of batched writes handled by all vnodes on this node.
-%%</dd><dd> update({vnode_index_write, PostingsAdded, PostingsRemoved})
-%%
-%%</dd><dt> vnode_index_writes_postings
-%%</dt><dd> The number of postings written to all vnodes on this node.
-%%</dd><dd> update({vnode_index_write, PostingsAdded, PostingsRemoved})
-%%
-%%</dd><dt> vnode_index_deletes
-%%</dt><dd> The number of batched writes handled by all vnodes on this node.
-%%</dd><dd> update({vnode_index_delete, PostingsRemoved})
-%%
-%%</dd><dt> vnode_index_deletes_postings
-%%</dt><dd> The number of postings written to all vnodes on this node.
-%%</dd><dd> update({vnode_index_delete, PostingsRemoved})
-%%
-%%</dd><dt> node_gets
-%%</dt><dd> Number of gets coordinated by this node in the last
-%%          minute.
-%%</dd><dd> update({get_fsm, _Bucket, Microseconds, NumSiblings, ObjSize})
-%%
-%%</dd><dt> node_get_fsm_siblings
-%%</dt><dd> Stats about number of siblings per object in the last minute.
-%%</dd><dd> Updated via node_gets.
-%%
-%%</dd><dt> node_get_fsm_objsize
-%%</dt><dd> Stats about object size over the last minute. The object
-%%          size is an estimate calculated by summing the size of the
-%%          bucket name, key name, and serialized vector clock, plus
-%%          the value and serialized metadata of each sibling.
-%%</dd><dd> Updated via node_gets.
-%%
-%%</dd><dt> node_get_fsm_time_mean
-%%</dt><dd> Mean time, in microseconds, between when a riak_kv_get_fsm is
-%%          started and when it sends a reply to the client, for the
-%%          last minute.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_get_fsm_time_median
-%%</dt><dd> Median time, in microseconds, between when a riak_kv_get_fsm
-%%          is started and when it sends a reply to the client, for
-%%          the last minute.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_get_fsm_time_95
-%%</dt><dd> Response time, in microseconds, met or beaten by 95% of
-%%          riak_kv_get_fsm executions.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_get_fsm_time_99
-%%</dt><dd> Response time, in microseconds, met or beaten by 99% of
-%%          riak_kv_get_fsm executions.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_get_fsm_time_100
-%%</dt><dd> Response time, in microseconds, met or beaten by 100% of
-%%          riak_kv_get_fsm executions.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_puts
-%%</dt><dd> Number of puts coordinated by this node in the last
-%%          minute.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_put_fsm_time_mean
-%%</dt><dd> Mean time, in microseconds, between when a riak_kv_put_fsm is
-%%          started and when it sends a reply to the client, for the
-%%          last minute.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_put_fsm_time_median
-%%</dt><dd> Median time, in microseconds, between when a riak_kv_put_fsm
-%%          is started and when it sends a reply to the client, for
-%%          the last minute.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_put_fsm_time_95
-%%</dt><dd> Response time, in microseconds, met or beaten by 95% of
-%%          riak_kv_put_fsm executions.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_put_fsm_time_99
-%%</dt><dd> Response time, in microseconds, met or beaten by 99% of
-%%          riak_kv_put_fsm executions.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_put_fsm_time_100
-%%</dt><dd> Response time, in microseconds, met or beaten by 100% of
-%%          riak_kv_put_fsm executions.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
-%%</dd><dt> cpu_nprocs
-%%</dt><dd> Value returned by {@link cpu_sup:nprocs/0}.
-%%
-%%</dd><dt> cpu_avg1
-%%</dt><dd> Value returned by {@link cpu_sup:avg1/0}.
-%%
-%%</dd><dt> cpu_avg5
-%%</dt><dd> Value returned by {@link cpu_sup:avg5/0}.
-%%
-%%</dd><dt> cpu_avg15
-%%</dt><dd> Value returned by {@link cpu_sup:avg15/0}.
-%%
-%%</dd><dt> mem_total
-%%</dt><dd> The first element of the tuple returned by
-%%          {@link memsup:get_memory_data/0}.
-%%
-%%</dd><dt> mem_allocated
-%%</dt><dd> The second element of the tuple returned by
-%%          {@link memsup:get_memory_data/0}.
-%%
-%%</dd><dt> disk
-%%</dt><dd> Value returned by {@link disksup:get_disk_data/0}.
-%%
-%%</dd><dt> pbc_connects_total
-%%</dt><dd> Total number of pb socket connections since start
-%%
-%%</dd><dt> pbc_active
-%%</dt><dd> Number of active pb socket connections
-%%
-%%</dd><dt> coord_redirs_total
-%%</dt><dd> Number of puts forwarded to be coordinated on a node
-%%          in the preflist.
-%%
-%%</dd></dl>
-%%
-%%
+
 -module(riak_kv_stat).
 
 -behaviour(gen_server).
@@ -219,7 +78,7 @@ handle_call(_Req, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({update, Arg}, State) ->
-    update1(Arg),
+    do_update(Arg),
     {noreply, State};
 handle_cast(_Req, State) ->
     {noreply, State}.
@@ -234,52 +93,52 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %% @doc Update the given stat
-update1({vnode_get, Idx, USecs}) ->
+do_update({vnode_get, Idx, USecs}) ->
     folsom_metrics:notify_existing_metric({?APP, vnode, gets}, 1, spiral),
     create_or_update({?APP, vnode, gets, time}, USecs, histogram),
     do_per_index(gets, Idx, USecs);
-update1({vnode_put, Idx, USecs}) ->
+do_update({vnode_put, Idx, USecs}) ->
     folsom_metrics:notify_existing_metric({?APP, vnode, puts}, 1, spiral),
     create_or_update({?APP, vnode, puts, time}, USecs, histogram),
     do_per_index(puts, Idx, USecs);
-update1(vnode_index_read) ->
+do_update(vnode_index_read) ->
     folsom_metrics:notify_existing_metric({?APP, vnode, index, reads}, 1, spiral);
-update1({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
+do_update({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
     folsom_metrics:notify_existing_metric({?APP, vnode, index, writes}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, vnode, index, writes, postings}, PostingsAdded, spiral),
     folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes, postings}, PostingsRemoved, spiral);
-update1({vnode_index_delete, Postings}) ->
+do_update({vnode_index_delete, Postings}) ->
     folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes}, Postings, spiral),
     folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes, postings}, Postings, spiral);
-update1({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket}) ->
+do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket}) ->
     folsom_metrics:notify_existing_metric({?APP, node, gets}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node, gets, time}, Microsecs, histogram),
     do_stages([?APP, node, gets, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined});
-update1({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket}) ->
+do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket}) ->
     folsom_metrics:notify_existing_metric({?APP, node, gets}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node, gets, time}, Microsecs, histogram),
     folsom_metrics:notify_existing_metric({?APP, node, gets, siblings}, NumSiblings, histogram),
     folsom_metrics:notify_existing_metric({?APP, node, gets, objsize}, ObjSize, histogram),
     do_stages([?APP, node, gets, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize});
-update1({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket}) ->
+do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket}) ->
     folsom_metrics:notify_existing_metric({?APP, node, puts}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node, puts, time}, Microsecs, histogram),
     do_stages([?APP, node, puts, time], Stages),
     do_put_bucket(PerBucket, {Bucket, Microsecs, Stages});
-update1({read_repairs, Indices, Preflist}) ->
+do_update({read_repairs, Indices, Preflist}) ->
     folsom_metrics:notify_existing_metric({?APP, node, gets, read_repairs}, 1, spiral),
     do_repairs(Indices, Preflist);
-update1(coord_redir) ->
+do_update(coord_redir) ->
     folsom_metrics:notify_existing_metric({?APP, node, puts, coord_redirs}, {inc, 1}, counter);
-update1(mapper_start) ->
+do_update(mapper_start) ->
     folsom_metrics:notify_existing_metric({?APP, mapper_count}, {inc, 1}, counter);
-update1(mapper_end) ->
+do_update(mapper_end) ->
     folsom_metrics:notify_existing_metric({?APP, mapper_count}, {dec, 1}, counter);
-update1(precommit_fail) ->
+do_update(precommit_fail) ->
     folsom_metrics:notify_existing_metric({?APP, precommit_fail}, {inc, 1}, counter);
-update1(postcommit_fail) ->
+do_update(postcommit_fail) ->
     folsom_metrics:notify_existing_metric({?APP, postcommit_fail}, {inc, 1}, counter).
 
 %% private
@@ -362,12 +221,16 @@ create_or_update(Name, UpdateVal, Type) ->
             create_or_update(Name, UpdateVal, Type)
     end.
 
-
+%% Stats are namespaced by APP in folsom
+%% so that we don't need to co-ordinate on naming
+%% between apps.
 stat_name(Name) when is_list(Name) ->
     list_to_tuple([?APP] ++ Name);
 stat_name(Name) when is_atom(Name) ->
     {?APP, Name}.
 
+%% @doc list of {Name, Type} for static
+%% stats that we can register at start up
 stats() ->
     [{[vnode, gets], spiral},
      {[vnode, gets, time], histogram},
@@ -390,6 +253,7 @@ stats() ->
      {precommit_fail, counter},
      {postcommit_fail, counter}].
 
+%% @doc register a stat with folsom
 register_stat(Name, spiral) ->
     folsom_metrics:new_spiral(Name);
 register_stat(Name, counter) ->
@@ -399,9 +263,16 @@ register_stat(Name, histogram) ->
     {SampleType, SampleArgs} = get_sample_type(Name),
     folsom_metrics:new_histogram(Name, SampleType, SampleArgs).
 
+%% @doc the histogram sample type may be set in app.config
+%% use key `stat_sample_type` in the `riak_kv` section. Or the
+%% name of an `histogram` stat.
+%% Check the folsom homepage for available types.
+%% Defaults to `{slide_uniform, {60, 1028}}` (a uniform sliding window
+%% of 60 seconds, with a uniform sample of at most 1028 entries)
 get_sample_type(Name) ->
     SampleType0 = app_helper:get_env(riak_kv, stat_sample_type, {slide_uniform, {60, 1028}}),
     app_helper:get_env(riak_kv, Name, SampleType0).
 
+%% @doc produce the legacy blob of stats for display.
 produce_stats() ->
     riak_kv_stat_bc:produce_stats().

@@ -24,116 +24,80 @@
 %% @doc riak_kv_stat_bc is a module that maps the new riak_kv_stats metrics
 %% to the old set of stats. It exists to maintain backwards compatibility for
 %% those using the `/stats` endpoint and `riak-admin status`. This module
-%% should be considered deprecated and temporary. A new `/metrics` endpoint
-%% and `riak-admin metrics` command should be used from now onwards.
+%% should be considered soon to be deprecated and temporary.
 %%
-%%      Current stats:
+%%      Legacy stats:
 %%<dl><dt>  vnode_gets
 %%</dt><dd> Total number of gets handled by all vnodes on this node
 %%          in the last minute.
-%%</dd><dd> update(vnode_get)
-%%
-%%</dd><dt> vnode_puts
+%%</dd>
+%%<dt> vnode_puts
 %%</dt><dd> Total number of puts handled by all vnodes on this node
 %%          in the last minute.
-%%</dd><dd> update(vnode_put)
-%%
-%%</dd><dt> vnode_index_reads
+%%</dd>
+%%<dt> vnode_index_reads
 %%</dt><dd> The number of index reads handled by all vnodes on this node.
 %%          Each query counts as an index read.
-%%</dd><dd> update(vnode_index_read)
-%%
-%%</dd><dt> vnode_index_writes
+%%</dd><
+%%<dt> vnode_index_writes
 %%</dt><dd> The number of batched writes handled by all vnodes on this node.
-%%</dd><dd> update({vnode_index_write, PostingsAdded, PostingsRemoved})
-%%
-%%</dd><dt> vnode_index_writes_postings
+%%</dd>
+%%<dt> vnode_index_writes_postings
 %%</dt><dd> The number of postings written to all vnodes on this node.
-%%</dd><dd> update({vnode_index_write, PostingsAdded, PostingsRemoved})
-%%
-%%</dd><dt> vnode_index_deletes
+%%</dd>
+%%<dt> vnode_index_deletes
 %%</dt><dd> The number of batched writes handled by all vnodes on this node.
 %%</dd><dd> update({vnode_index_delete, PostingsRemoved})
 %%
 %%</dd><dt> vnode_index_deletes_postings
 %%</dt><dd> The number of postings written to all vnodes on this node.
-%%</dd><dd> update({vnode_index_delete, PostingsRemoved})
-%%
 %%</dd><dt> node_gets
 %%</dt><dd> Number of gets coordinated by this node in the last
 %%          minute.
-%%</dd><dd> update({get_fsm, _Bucket, Microseconds, NumSiblings, ObjSize})
-%%
 %%</dd><dt> node_get_fsm_siblings
 %%</dt><dd> Stats about number of siblings per object in the last minute.
-%%</dd><dd> Updated via node_gets.
-%%
 %%</dd><dt> node_get_fsm_objsize
 %%</dt><dd> Stats about object size over the last minute. The object
 %%          size is an estimate calculated by summing the size of the
 %%          bucket name, key name, and serialized vector clock, plus
 %%          the value and serialized metadata of each sibling.
-%%</dd><dd> Updated via node_gets.
-%%
 %%</dd><dt> node_get_fsm_time_mean
 %%</dt><dd> Mean time, in microseconds, between when a riak_kv_get_fsm is
 %%          started and when it sends a reply to the client, for the
 %%          last minute.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
 %%</dd><dt> node_get_fsm_time_median
 %%</dt><dd> Median time, in microseconds, between when a riak_kv_get_fsm
 %%          is started and when it sends a reply to the client, for
 %%          the last minute.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
 %%</dd><dt> node_get_fsm_time_95
 %%</dt><dd> Response time, in microseconds, met or beaten by 95% of
 %%          riak_kv_get_fsm executions.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
 %%</dd><dt> node_get_fsm_time_99
 %%</dt><dd> Response time, in microseconds, met or beaten by 99% of
 %%          riak_kv_get_fsm executions.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
 %%</dd><dt> node_get_fsm_time_100
 %%</dt><dd> Response time, in microseconds, met or beaten by 100% of
 %%          riak_kv_get_fsm executions.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
 %%</dd><dt> node_puts
 %%</dt><dd> Number of puts coordinated by this node in the last
 %%          minute.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
 %%</dd><dt> node_put_fsm_time_mean
 %%</dt><dd> Mean time, in microseconds, between when a riak_kv_put_fsm is
 %%          started and when it sends a reply to the client, for the
 %%          last minute.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
 %%</dd><dt> node_put_fsm_time_median
 %%</dt><dd> Median time, in microseconds, between when a riak_kv_put_fsm
 %%          is started and when it sends a reply to the client, for
 %%          the last minute.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
 %%</dd><dt> node_put_fsm_time_95
 %%</dt><dd> Response time, in microseconds, met or beaten by 95% of
 %%          riak_kv_put_fsm executions.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
 %%</dd><dt> node_put_fsm_time_99
 %%</dt><dd> Response time, in microseconds, met or beaten by 99% of
 %%          riak_kv_put_fsm executions.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
 %%</dd><dt> node_put_fsm_time_100
 %%</dt><dd> Response time, in microseconds, met or beaten by 100% of
 %%          riak_kv_put_fsm executions.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
 %%</dd><dt> cpu_nprocs
 %%</dt><dd> Value returned by {@link cpu_sup:nprocs/0}.
 %%
@@ -181,6 +145,7 @@ produce_stats() ->
     lists:append(
       [lists:flatten(backwards_compat(riak_core_stat_q:get_stats([riak_kv]))),
        backwards_compat_pb(riak_core_stat_q:get_stats([riak_api])),
+       read_repair_stats(),
        cpu_stats(),
        mem_stats(),
        disk_stats(),
@@ -191,6 +156,11 @@ produce_stats() ->
        memory_stats()
       ]).
 
+%% Stats in folsom are stored with tuples as keys, the
+%% tuples mimic an hierarchical structure. To be free of legacy
+%% naming constraints the new names are not simply the old names
+%% with commas for underscores. Uses legacy_stat_map to generate
+%% legacys stats from the new list of stats.
 backwards_compat(Stats) ->
     [bc_stat(Old, New, Type, Stats) || {Old, New, Type} <- legacy_stat_map()].
 
@@ -211,7 +181,11 @@ bc_stat(Old, New, counter, Stats) ->
     Stat = proplists:get_value(New, Stats),
     {Old, Stat}.
 
+
 %% hard coded mapping of stats to legacy format
+%% There was a enough variation in the old names that a simple
+%% concatenation of the elements in the new  stat key would not suffice
+%% applications depend on these exact legacy names.
 legacy_stat_map() ->
     [{vnode_gets, {{riak_kv, vnode, gets}, one}, spiral},
      {vnode_gets_total, {{riak_kv, vnode, gets}, count}, spiral},
@@ -259,6 +233,8 @@ legacy_stat_map() ->
      {postcommit_fail, {riak_kv, postcommit_fail}, counter}
     ].
 
+%% PB stats are now under riak_api. In the past they were part of riak_kv.
+%% This function maps those new values to the old names.
 backwards_compat_pb(Stats) ->
     [bc_stat(Old, New, Type, Stats) || {Old, New, Type} <-
                                      [{pbc_active, {riak_api, pbc_connects, active}, counter},
@@ -329,3 +305,57 @@ ring_stats() ->
 config_stats() ->
     [{ring_creation_size, app_helper:get_env(riak_core, ring_creation_size)},
      {storage_backend, app_helper:get_env(riak_kv, storage_backend)}].
+
+%% Read repair stats are a new edition to the legacy blob.
+%% Added to the blob since the stat query interface was not ready for the 1.3
+%% release.
+%% The read repair stats are stored as dimensions with
+%% the key {riak_kv, node, gets, read_repairs, Node, Type, Reason}.
+%% The CSEs are only interested in aggregations of Type and Reason
+%% which are elements 6 and 7 in the key.
+read_repair_stats() ->
+    aggregate(read_repairs, [riak_kv, node, gets, read_repairs, '_', '_', '_'], [6,7]).
+
+%% TODO generalise for riak_core_stat_q
+aggregate(BaseName, Query, Fields) ->
+    Stats = riak_core_stat_q:get_stats(Query),
+    Aggregates = do_aggregate(Stats, Fields),
+    recursive_join(BaseName, Aggregates).
+
+do_aggregate(Stats, Fields) ->
+    lists:foldl(fun({Name, [{count, C0}, {one, O0}]}, Acc) ->
+                        Key = key_from_fields(Name, Fields),
+                        [{count, C}, {one, O}] = case orddict:find(Key, Acc) of
+                                                     error -> [{count, 0}, {one, 0}];
+                                                     {ok, V} -> V
+                                                 end,
+                        orddict:store(Key, [{count, C+C0}, {one, O+O0}], Acc)
+                end,
+                orddict:new(),
+                Stats).
+
+key_from_fields(Name, Fields) ->
+    Key = [element(N, Name) || N <- Fields],
+    join(Key).
+
+recursive_join(BaseName, Aggregates) ->
+    L = orddict:fold(fun(K, V, Acc) when not is_list(V) ->
+                             [{join([BaseName, K], <<>>), V}|Acc];
+                        (K, V, Acc)  ->
+                             [recursive_join(join([BaseName, K], <<>>), V)|Acc]
+                     end,
+                     [],
+                     Aggregates),
+    lists:flatten(L).
+
+join(L) ->
+    join(L, <<>>).
+
+join([], Bin) ->
+    binary_to_atom(Bin, latin1);
+join([Atom|Rest], <<>>) ->
+    Bin2 = atom_to_binary(Atom, latin1),
+    join(Rest, <<Bin2/binary>>);
+join([Atom|Rest], Bin) ->
+    Bin2 = atom_to_binary(Atom, latin1),
+    join(Rest, <<Bin/binary, $_, Bin2/binary>>).
