@@ -230,13 +230,9 @@ destroy_pipe(#pipe_ctx{pipe=Pipe}=PipeCtx) ->
     cleanup_sender(PipeCtx).
 
 pipe_mapreduce(Req, State, Inputs, Query, Timeout) ->
-    {ok, Sink} = riak_kv_mrc_sink:start(self()),
-    try riak_kv_mrc_pipe:mapred_stream(Query, Sink) of
-        {{ok, Pipe}, _NumKeeps} ->
+    case riak_kv_mrc_pipe:mapred_stream(Query) of
+        {ok, Pipe, Sink, _NumKeeps} ->
             SinkMon = erlang:monitor(process, Sink),
-            %% catch just in case the pipe or sink has already died
-            %% for any reason - we'll get the DOWN later
-            catch riak_kv_mrc_sink:use_pipe(Sink, Pipe),
             PipeRef = (Pipe#pipe.sink)#fitting.ref,
             Timer = erlang:send_after(Timeout, self(),
                                       {pipe_timeout, PipeRef}),
@@ -249,9 +245,8 @@ pipe_mapreduce(Req, State, Inputs, Query, Timeout) ->
                             timer=Timer,
                             sender={InputSender, SenderMonitor},
                             has_mr_query = (Query /= [])},
-            {reply, {stream, PipeRef}, State#state{req=Req, req_ctx=Ctx}}
-    catch throw:{badarg, Fitting, Reason} ->
-            riak_kv_mrc_sink:stop(Sink),
+            {reply, {stream, PipeRef}, State#state{req=Req, req_ctx=Ctx}};
+        {error, {Fitting, Reason}} ->
             {error, {format, "Phase ~p: ~s", [Fitting, Reason]}, State}
     end.
 
