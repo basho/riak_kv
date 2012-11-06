@@ -184,7 +184,7 @@ handle_info({'DOWN', _, process, Pid, Reason}, _,
     %% don't stop when the builder exits 'normal', because that's
     %% probably just the pipe shutting down normally - wait for the
     %% owner to ask for the last outputs
-    {stop, Reason, State};
+    {stop, normal, State};
 handle_info(_, StateName, State) ->
     {next_state, StateName, State}.
 
