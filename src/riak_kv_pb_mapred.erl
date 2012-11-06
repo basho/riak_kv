@@ -143,21 +143,13 @@ process_stream({'DOWN', Ref, process, Pid, Reason}, Ref,
 process_stream({'DOWN', Mon, process, Pid, Reason}, _,
                State=#state{req=#rpbmapredreq{},
                             req_ctx=#pipe_ctx{sink={Pid, Mon}}=PipeCtx}) ->
-    if Reason == normal ->
-            %% the sink exited normally, which means it sent us a
-            %% message with multiple phases in it, and we're chugging
-            %% through them now, but our messages to ourself are
-            %% behind this DOWN message in the mailbox
-            {ignore, State};
-       true ->
-            %% the sink died, which it shouldn't be able to do before
-            %% delivering our final results
-            destroy_pipe(PipeCtx),
-            lager:error("Error receiving outputs: ~p", [Reason]),
-            {error,
-             {format, "Error receiving outputs: ~p", [Reason]},
-             clear_state_req(State)}
-    end;
+    %% the sink died, which it shouldn't be able to do before
+    %% delivering our final results
+    destroy_pipe(PipeCtx),
+    lager:error("Error receiving outputs: ~p", [Reason]),
+    {error,
+     {format, "Error receiving outputs: ~p", [Reason]},
+     clear_state_req(State)};
 process_stream({pipe_timeout, Ref}, Ref,
                State=#state{req=#rpbmapredreq{},
                             req_ctx=#pipe_ctx{ref=Ref}=PipeCtx}) ->
