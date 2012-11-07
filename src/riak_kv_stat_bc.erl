@@ -146,6 +146,7 @@ produce_stats() ->
       [lists:flatten(backwards_compat(riak_core_stat_q:get_stats([riak_kv]))),
        backwards_compat_pb(riak_core_stat_q:get_stats([riak_api])),
        read_repair_stats(),
+       pipe_stats(),
        cpu_stats(),
        mem_stats(),
        disk_stats(),
@@ -306,6 +307,28 @@ config_stats() ->
     [{ring_creation_size, app_helper:get_env(riak_core, ring_creation_size)},
      {storage_backend, app_helper:get_env(riak_kv, storage_backend)}].
 
+%% @doc add the pipe stats to the blob in a style consistent
+%% with those stats already in the blob
+pipe_stats() ->
+    Stats = riak_core_stat_q:get_stats([riak_pipe]),
+    lists:flatten([bc_stat(Name, Val) || {Name, Val} <- Stats]).
+
+%% old style blob stats don't have the app name
+%% and they have underscores, not commas
+bc_stat(Name, Val) ->
+    StatName = join(tl(tuple_to_list(Name))),
+    bc_stat_val(StatName, Val).
+
+%% Old style stats don't have tuple lists as values
+%% they have an entry per element in the complex stats tuple list
+%% so a spiral with both a count and a one minute reading
+%% would be two stats, of NAME_count and NAME_one
+%% let's do that
+bc_stat_val(StatName, Val) when is_list(Val) ->
+    [{join([StatName, ValName]), ValVal} || {ValName, ValVal} <- Val];
+bc_stat_val(StatName, Val) ->
+    {StatName, Val}.
+
 %% Read repair stats are a new edition to the legacy blob.
 %% Added to the blob since the stat query interface was not ready for the 1.3
 %% release.
@@ -340,9 +363,9 @@ key_from_fields(Name, Fields) ->
 
 recursive_join(BaseName, Aggregates) ->
     L = orddict:fold(fun(K, V, Acc) when not is_list(V) ->
-                             [{join([BaseName, K], <<>>), V}|Acc];
+                             [{join([BaseName, K]), V}|Acc];
                         (K, V, Acc)  ->
-                             [recursive_join(join([BaseName, K], <<>>), V)|Acc]
+                             [recursive_join(join([BaseName, K]), V)|Acc]
                      end,
                      [],
                      Aggregates),
