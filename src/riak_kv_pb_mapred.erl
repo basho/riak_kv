@@ -52,9 +52,8 @@
                 req_ctx,
                 client}).
 
--record(pipe_ctx, {pipe,     % pipe handling mapred request
-                   ref,      % easier-access ref/reqid
-                   timer,    % ref() for timeout send_after
+-record(pipe_ctx, {ref,      % easier-access ref/reqid
+                   mrc,      % #mrc_ctx{}
                    sender,   % {pid(), monitor()} of process sending inputs
                    sink,     % {pid(), monitor()} of process collecting outputs
                    has_mr_query}). % true if the request contains a query.
@@ -91,7 +90,7 @@ process_stream(#kv_mrc_sink{ref=ReqId,
                ReqId,
                State=#state{req=#rpbmapredreq{},
                             req_ctx=#pipe_ctx{ref=ReqId,
-                                              sink={Sink,_}}=PipeCtx}) ->
+                                              mrc=Mrc}=PipeCtx}) ->
     case riak_kv_mrc_pipe:error_exists(Logs) of
         false ->
             case msgs_for_results(Results, State) of
@@ -107,6 +106,7 @@ process_stream(#kv_mrc_sink{ref=ReqId,
                              Msgs++[#rpbmapredresp{done=1}],
                              clear_state_req(State)};
                        true ->
+                            {Sink, _} = Mrc#mrc_ctx.sink,
                             riak_kv_mrc_sink:next(Sink),
                             {reply, Msgs, State}
                     end;
@@ -191,59 +191,24 @@ process_stream(_,_,State) -> % Ignore any late replies from gen_servers/messages
 clear_state_req(State) ->
      State#state{req=undefined, req_ctx=undefined}.
 
-cleanup_pipe(#pipe_ctx{sink={Sink,SinkMon},timer=Timer,ref=Ref}) ->
-    erlang:demonitor(SinkMon, [flush]),
-    %% killing the sink should tear down the pipe
-    riak_kv_mrc_sink:stop(Sink),
-    %% receive just in case the sink had sent us one last response
-    receive #kv_mrc_sink{} -> ok after 0 -> ok end,
-    cleanup_timer(Timer, Ref).
+destroy_pipe(#pipe_ctx{mrc=Mrc}) ->
+    riak_kv_mrc_pipe:destroy_sink(Mrc).
 
-cleanup_timer(Timer, PipeRef) ->
-    case erlang:cancel_timer(Timer) of
-        false ->
-            receive
-                {pipe_timeout, PipeRef} ->
-                    ok
-            after 0 ->
-                    ok
-            end;
-        _ ->
-            ok
-    end.
-
-%% Destroying the pipe via riak_pipe_builder:destroy/1 does not kill
-%% the sender immediately, because it causes the builder to exit with
-%% reason `normal', so no exit signal is sent. The sender will
-%% eventually receive `worker_startup_error's from vnodes that can no
-%% longer find the fittings, but to help the process along, we kill
-%% them immediately here.
-cleanup_sender(#pipe_ctx{sender={SenderPid, SenderRef}}) ->
-    erlang:demonitor(SenderRef, [flush]),
-    exit(SenderPid, kill);
-cleanup_sender(_) ->
-    ok.
-
-destroy_pipe(#pipe_ctx{pipe=Pipe}=PipeCtx) ->
-    cleanup_pipe(PipeCtx),
-    riak_pipe:destroy(Pipe),
-    cleanup_sender(PipeCtx).
+cleanup_pipe(#pipe_ctx{mrc=Mrc}) ->
+    riak_kv_mrc_pipe:cleanup_sink(Mrc).
 
 pipe_mapreduce(Req, State, Inputs, Query, Timeout) ->
-    case riak_kv_mrc_pipe:mapred_stream(Query) of
-        {ok, Pipe, Sink, _NumKeeps} ->
-            SinkMon = erlang:monitor(process, Sink),
-            PipeRef = (Pipe#pipe.sink)#fitting.ref,
-            Timer = erlang:send_after(Timeout, self(),
-                                      {pipe_timeout, PipeRef}),
-            {InputSender, SenderMonitor} =
-                riak_kv_mrc_pipe:send_inputs_async(Pipe, Inputs),
+    case riak_kv_mrc_pipe:mapred_stream_sink(Inputs, Query, Timeout) of
+        {ok, #mrc_ctx{ref=PipeRef,
+                      sink={Sink,SinkMon},
+                      sender={Sender,SenderMon}}=Mrc} ->
             riak_kv_mrc_sink:next(Sink),
-            Ctx = #pipe_ctx{pipe=Pipe,
-                            sink={Sink, SinkMon},
-                            ref=PipeRef,
-                            timer=Timer,
-                            sender={InputSender, SenderMonitor},
+            %% pulling ref, sink, and sender out to make matches less
+            %% nested in process callbacks
+            Ctx = #pipe_ctx{ref=PipeRef,
+                            mrc=Mrc,
+                            sink={Sink,SinkMon},
+                            sender={Sender,SenderMon},
                             has_mr_query = (Query /= [])},
             {reply, {stream, PipeRef}, State#state{req=Req, req_ctx=Ctx}};
         {error, {Fitting, Reason}} ->

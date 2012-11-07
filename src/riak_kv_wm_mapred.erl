@@ -180,24 +180,13 @@ pipe_mapred(RD,
             #state{inputs=Inputs,
                    mrquery=Query,
                    timeout=Timeout}=State) ->
-    case riak_kv_mrc_pipe:mapred_stream(Query) of
-        {ok, Pipe, Sink, NumKeeps} ->
-            SinkMon = erlang:monitor(process, Sink),
-            PipeRef = (Pipe#pipe.sink)#fitting.ref,
-            Tref = erlang:send_after(Timeout, self(), {pipe_timeout, PipeRef}),
-            {InputSender, SenderMonitor} =
-                riak_kv_mrc_pipe:send_inputs_async(Pipe, Inputs),
+    case riak_kv_mrc_pipe:mapred_stream_sink(Inputs, Query, Timeout) of
+        {ok, Mrc} ->
             case wrq:get_qs_value("chunked", "false", RD) of
                 "true" ->
-                    pipe_mapred_chunked(RD, State, Pipe,
-                                        {InputSender, SenderMonitor},
-                                        {Tref, PipeRef},
-                                        {Sink, SinkMon});
+                    pipe_mapred_chunked(RD, State, Mrc);
                 _ ->
-                    pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps,
-                                           {InputSender, SenderMonitor},
-                                           {Tref, PipeRef},
-                                           {Sink, SinkMon})
+                    pipe_mapred_nonchunked(RD, State, Mrc)
             end;
         {error, {Fitting, Reason}} ->
             {{halt, 400}, 
@@ -206,42 +195,12 @@ pipe_mapred(RD,
              State}
     end.
 
-%% Destroying the pipe via riak_pipe_builder:destroy/1 does not kill
-%% the sender immediately, because it causes the builder to exit with
-%% reason `normal', so no exit signal is sent. The sender will
-%% eventually receive `worker_startup_error's from vnodes that can no
-%% longer find the fittings, but to help the process along, we kill
-%% them immediately here.
-cleanup_sender({SenderPid, SenderRef}) ->
-    erlang:demonitor(SenderRef, [flush]),
-    exit(SenderPid, kill).
 
-cleanup_pipe({Sink,SinkMon}, Timer) ->
-    erlang:demonitor(SinkMon, [flush]),
-    %% killing the sink should tear down the pipe
-    riak_kv_mrc_sink:stop(Sink),
-    %% receive just in case the sink had sent us one last response
-    receive #kv_mrc_sink{} -> ok after 0 -> ok end,
-    cleanup_timer(Timer).
-
-cleanup_timer({Tref, PipeRef}) ->
-    case erlang:cancel_timer(Tref) of
-        false ->
-            receive
-                {pipe_timeout, PipeRef} ->
-                    ok
-            after 0 ->
-                    ok
-            end;
-        _ ->
-            ok
-    end.
-
-pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender, PipeTref, Sink) ->
-    case pipe_collect_outputs(Pipe, NumKeeps, Sender, Sink) of
+pipe_mapred_nonchunked(RD, State, Mrc) ->
+    case riak_kv_mrc_pipe:collect_sink(Mrc) of
         {ok, Results} ->
             JSONResults =
-                case NumKeeps < 2 of
+                case Mrc#mrc_ctx.keeps < 2 of
                     true ->
                         [riak_kv_mapred_json:jsonify_not_found(R)
                          || R <- Results];
@@ -252,75 +211,29 @@ pipe_mapred_nonchunked(RD, State, Pipe, NumKeeps, Sender, PipeTref, Sink) ->
                 end,
             HasMRQuery = State#state.mrquery /= [],
             JSONResults1 = riak_kv_mapred_json:jsonify_bkeys(JSONResults, HasMRQuery),
-            cleanup_pipe(Sink, PipeTref),
+            riak_kv_mrc_pipe:cleanup_sink(Mrc),
             {true,
              wrq:set_resp_body(mochijson2:encode(JSONResults1), RD),
              State};
-        {error, {sender_error, Error}} ->
+        {error, {sender_died, Error}} ->
             %% the sender links to the builder, so the builder has
             %% already been torn down
-            cleanup_pipe(Sink, PipeTref),
+            riak_kv_mrc_pipe:cleanup_sink(Mrc),
+            {{halt, 500}, send_error(Error, RD), State};
+        {error, {sink_died, Error}} ->
+            %% pipe monitors the sink, so the sink death has already
+            %% detroyed the pipe
+            riak_kv_mrc_pipe:cleanup_sink(Mrc),
             {{halt, 500}, send_error(Error, RD), State};
         {error, timeout} ->
-            cleanup_pipe(Sink, PipeTref),
-            riak_pipe:destroy(Pipe),
-            cleanup_sender(Sender),
+            riak_kv_mrc_pipe:destroy_sink(Mrc),
             {{halt, 500}, send_error({error, timeout}, RD), State};
-        {error, Error} ->
-            cleanup_pipe(Sink, PipeTref),
-            riak_pipe:destroy(Pipe),
-            cleanup_sender(Sender),
+        {error, {_From, {Error, _Input}}} ->
+            riak_kv_mrc_pipe:destroy_sink(Mrc),
             {{halt, 500}, send_error({error, Error}, RD), State}
     end.
 
-pipe_collect_outputs(Pipe, NumKeeps, Sender, Sink) ->
-    Ref = (Pipe#pipe.sink)#fitting.ref,
-    case pipe_collect_outputs1(Ref, Sender, Sink, []) of
-        {ok, [{_,Outputs}]} when NumKeeps < 2 ->
-            {ok, Outputs};
-        {ok, Outputs} ->
-            {ok, [ O || {_, O} <- Outputs]};
-        Error ->
-            Error
-    end.
-
-pipe_collect_outputs1(Ref, Sender, Sink, Acc) ->
-    case pipe_receive_output(Ref, Sender, Sink) of
-        {ok, false, Output} ->
-            pipe_collect_outputs1(Ref, Sender, Sink, [Output|Acc]);
-        {ok, true, Output} ->
-            {ok, riak_kv_mrc_sink:merge_outputs([Output|Acc])};
-        Error        -> Error
-    end.
-
-pipe_receive_output(Ref, {SenderPid, SenderRef}, {SinkPid, SinkMon}) ->
-    riak_kv_mrc_sink:next(SinkPid),
-    receive
-        #kv_mrc_sink{ref=Ref, results=Results, logs=Logs, done=Done} ->
-            case riak_kv_mrc_pipe:error_exists(Logs) of
-                {true, From, Info} ->
-                    {error, riak_kv_mapred_json:jsonify_pipe_error(
-                              From, Info)};
-                false ->
-                    {ok, Done, Results}
-            end;
-        {'DOWN', SenderRef, process, SenderPid, Reason} ->
-            if Reason == normal ->
-                    %% just done sending inputs, nothing to worry about
-                    pipe_receive_output(
-                      Ref, {SenderPid, SenderRef}, {SinkPid, SinkMon});
-               true ->
-                    {error, {sender_error, Reason}}
-            end;
-        {'DOWN', SinkMon, process, SinkPid, Reason} ->
-            %% we should never receive the sink's DOWN before its
-            %% final message to us
-            {error, {sink_error, Reason}};
-        {pipe_timeout, Ref} ->
-            {error, timeout}
-    end.
-
-pipe_mapred_chunked(RD, State, Pipe, Sender, PipeTref, Sink) ->
+pipe_mapred_chunked(RD, State, Mrc) ->
     Boundary = riak_core_util:unique_id_62(),
     CTypeRD = wrq:set_resp_header(
                 "Content-Type",
@@ -328,15 +241,15 @@ pipe_mapred_chunked(RD, State, Pipe, Sender, PipeTref, Sink) ->
                 RD),
     BoundaryState = State#state{boundary=Boundary},
     Streamer = pipe_stream_mapred_results(
-                 CTypeRD, Pipe, BoundaryState, Sender, PipeTref, Sink),
+                 CTypeRD, BoundaryState, Mrc),
     {true,
      wrq:set_resp_body({stream, Streamer}, CTypeRD),
      BoundaryState}.
 
-pipe_stream_mapred_results(RD, Pipe,
+pipe_stream_mapred_results(RD,
                            #state{boundary=Boundary}=State, 
-                           Sender, PipeTref, Sink) ->
-    case pipe_receive_output((Pipe#pipe.sink)#fitting.ref, Sender, Sink) of
+                           Mrc) ->
+    case riak_kv_mrc_pipe:receive_sink(Mrc) of
         {ok, Done, Outputs} ->
             BodyA = case Outputs of
                         [] ->
@@ -348,30 +261,32 @@ pipe_stream_mapred_results(RD, Pipe,
                     end,
             {BodyB,Next} = case Done of
                                true ->
-                                   cleanup_pipe(Sink, PipeTref),
+                                   riak_kv_mrc_pipe:cleanup_sink(Mrc),
                                    {iolist_to_binary(
                                       ["\r\n--", Boundary, "--\r\n"]),
                                     done};
                                false ->
                                    {[],
                                     fun() -> pipe_stream_mapred_results(
-                                               RD, Pipe, State,
-                                               Sender, PipeTref, Sink)
+                                               RD, State, Mrc)
                                     end}
                            end,
             {iolist_to_binary([BodyA,BodyB]), Next};
-        {error, timeout} ->
-            cleanup_pipe(Sink, PipeTref),
-            riak_pipe:destroy(Pipe),
-            cleanup_sender(Sender),
+        {error, timeout, _} ->
+            riak_kv_mrc_pipe:destroy_sink(Mrc),
             {format_error({error, timeout}), done};
-        {error, {sender_error, Error}} ->
-            cleanup_pipe(Sink, PipeTref),
+        {error, {sender_died, Error}, _} ->
+            %% sender links to the builder, so the builder death has
+            %% already destroyed the pipe
+            riak_kv_mrc_pipe:cleanup_sink(Mrc),
             {format_error(Error), done};
-        {error, {Error, _Input}} ->
-            cleanup_pipe(Sink, PipeTref),
-            riak_pipe:destroy(Pipe),
-            cleanup_sender(Sender),
+        {error, {sink_died, Error}, _} ->
+            %% pipe monitors the sink, so the sink death has already
+            %% detroyed the pipe
+            riak_kv_mrc_pipe:cleanup_sink(Mrc),
+            {format_error(Error), done};
+        {error, {_From, {Error, _Input}}, _} ->
+            riak_kv_mrc_pipe:destroy_sink(Mrc),
             {format_error({error, Error}), done}
     end.
 

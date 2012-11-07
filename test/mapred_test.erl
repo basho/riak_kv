@@ -483,7 +483,7 @@ dead_pipe_test_() ->
                  Spec = 
                      [{map, {modfun, riak_kv_mapreduce, map_object_value},
                        none, true}],
-                 {ok, Pipe, _Sink, _NumKeeps} =
+                 {{ok, Pipe}, _NumKeeps} =
                      riak_kv_mrc_pipe:mapred_stream(Spec),
                  riak_pipe:destroy(Pipe),
                  {error, Reason} = riak_kv_mrc_pipe:send_inputs(
@@ -501,7 +501,7 @@ dead_pipe_test_() ->
                  Spec = 
                      [{map, {modfun, riak_kv_mapreduce, map_object_value},
                        none, true}],
-                 {ok, Pipe, _Sink, _NumKeeps} =
+                 {{ok, Pipe}, _NumKeeps} =
                      riak_kv_mrc_pipe:mapred_stream(Spec),
                  riak_pipe:destroy(Pipe),
                  %% this is a hack to make sure that the async sender

@@ -111,10 +111,19 @@
          mapred/2,
          mapred/3,
          mapred_stream/1,
+         mapred_stream/2,
          send_inputs/2,
          send_inputs/3,
          send_inputs_async/2,
          send_inputs_async/3,
+         collect_outputs/2,
+         collect_outputs/3,
+         group_outputs/2,
+         mapred_stream_sink/3,
+         collect_sink/1,
+         receive_sink/1,
+         destroy_sink/1,
+         cleanup_sink/1,
          error_exists/1,
          mapred_plan/1,
          mapred_plan/2,
@@ -179,7 +188,7 @@
       | {jsanon, Source :: binary()}.
 -type link_match() :: binary() | '_'.
 
-%% The output of collect_outputs/5
+%% The output of collect_outputs/2,3, group_outputs/2, and collect_sink/1
 -type ungrouped_results() :: [{From :: non_neg_integer(), Result :: term()}].
 -type grouped_results() :: [Results :: list()]
                          | list().
@@ -196,46 +205,78 @@ mapred(Inputs, Query) ->
         |{error, Reason :: term(),
           {ok, grouped_results()} | {error, Reason :: term()}}.
 mapred(Inputs, Query, Timeout) ->
-    {ok, Pipe, Sink, NumKeeps} = mapred_stream(Query),
-    SinkMon = erlang:monitor(process, Sink),
-    case send_inputs(Pipe, Inputs, Timeout) of
-        ok ->
-            collect_outputs(Pipe, Sink, SinkMon, NumKeeps, Timeout);
+    case mapred_stream_sink(Inputs, Query, Timeout) of
+        {ok, Ctx} ->
+            case collect_sink(Ctx) of
+                {ok, _}=Success ->
+                    cleanup_sink(Ctx),
+                    Success;
+                {error, _}=Error ->
+                    destroy_sink(Ctx),
+                    Error
+            end;
         Error ->
-            riak_pipe:eoi(Pipe),
-            {error, Error,
-             collect_outputs(Pipe, Sink, SinkMon, NumKeeps, Timeout)}
+            {error, Error}
     end.
 
-%% @doc Setup the MapReduce plumbing, prepared to receive inputs.
+%% @equiv mapred_stream(Query, [])
+-spec mapred_stream([query_part()]) ->
+         {{ok, riak_pipe:pipe()}, NumKeeps :: integer()}.
+mapred_stream(Query) ->
+    mapred_stream(Query, []).
+
+%% @doc Setup the MapReduce plumbing, preparted to receive inputs.
 %% The caller should then use {@link send_inputs/2} or {@link
 %% send_inputs/3} to give the query inputs to process.
 %%
-%% The third element of the return tuple is the pid of a
-%% `riak_kv_mrc_sink' process that will act as the sink for the pipe.
-%%
-%% The fourth element of the return tuple is the number of phases that
+%% The second element of the return tuple is the number of phases that
 %% requested to keep their inputs, and will need to be passed to
-%% {@link collect_outputs/5} to get labels compatible with HTTP and PB
-%% interface results.
--spec mapred_stream([query_part()]) ->
-         {ok, riak_pipe:pipe(), Sink :: pid(), NumKeeps :: integer()}.
-mapred_stream(Query) ->
+%% {@link collect_outputs/3} or {@link group_outputs/2} to get labels
+%% compatible with HTTP and PB interface results.
+-spec mapred_stream([query_part()], list()) ->
+         {{ok, riak_pipe:pipe()}, NumKeeps :: integer()}.
+mapred_stream(Query, Options) when is_list(Options) ->
     NumKeeps = count_keeps_in_query(Query),
+    {riak_pipe:exec(mr2pipe_phases(Query),
+                    [{log, sink},{trace,[error]}]++Options),
+     NumKeeps}.
+
+%% @doc Setup the MapReduce plumbing, including separate process to
+%% receive output (the sink) and send input (the async sender), and a
+%% delayed `pipe_timeout' message. This call returns a context record
+%% containing details for each piece. Monitors are setup in the
+%% process that calls this function, watching the sink and sender.
+%%
+%% See {@link receive_sink/1} for details about how to use this
+%% context.
+-spec mapred_stream_sink(input(), [query_part()], timeout()) ->
+         {ok, #mrc_ctx{}} | {error, term()}.
+mapred_stream_sink(Inputs, Query, Timeout) ->
     {ok, Sink} = riak_kv_mrc_sink:start(self(), []),
-    try riak_pipe:exec(mr2pipe_phases(Query),
-                       [{sink, #fitting{pid=Sink}},
-                        {log, sink},{trace,[error]},
-                        {sink_type, {fsm_sync, infinity}}]) of
-        {ok, Pipe} ->
+    Options = [{sink, #fitting{pid=Sink}},
+               {sink_type, {fsm_sync, infinity}}],
+    try mapred_stream(Query, Options) of
+        {{ok, Pipe}, NumKeeps} ->
             %% catch just in case the pipe or sink has already died
-            %% for any reason - users will monitor and get a DOWN later
+            %% for any reason - we'll get a DOWN from the monitor later
             catch riak_kv_mrc_sink:use_pipe(Sink, Pipe),
-            {ok, Pipe, Sink, NumKeeps}
+            SinkMon = erlang:monitor(process, Sink),
+            PipeRef = (Pipe#pipe.sink)#fitting.ref,
+            Timer = erlang:send_after(Timeout, self(),
+                                      {pipe_timeout, PipeRef}),
+            {Sender, SenderMon} =
+                riak_kv_mrc_pipe:send_inputs_async(Pipe, Inputs),
+            {ok, #mrc_ctx{ref=PipeRef,
+                          pipe=Pipe,
+                          sink={Sink,SinkMon},
+                          sender={Sender,SenderMon},
+                          timer={Timer,PipeRef},
+                          keeps=NumKeeps}}
     catch throw:{badard, Fitting, Reason} ->
             riak_kv_mrc_sink:stop(Sink),
             {error, {Fitting, Reason}}
     end.
+    
 
 %% The plan functions are useful for seeing equivalent (we hope) pipeline.
 
@@ -629,45 +670,116 @@ send_key_list(Pipe, Bucket, ReqId) ->
             ok
     end.
 
-%% @doc Receive the results produced by the MapReduce pipe, grouped by
-%% the phase they came from. If `NumKeeps' is 2 or more, the return
-%% value is a list of result lists, `[Results :: list()]', in the same
-%% order as the phases that produced them.  If `NumKeeps' is less than
-%% 2, the return value is just a list (possibly empty) of results,
-%% `Results :: list()'.
--spec collect_outputs(riak_pipe:pipe(), pid(), reference(),
-                      non_neg_integer(), timeout()) ->
+%% @equiv collect_outputs(Pipe, NumKeeps, 60000)
+collect_outputs(Pipe, NumKeeps) ->
+    collect_outputs(Pipe, NumKeeps, ?DEFAULT_TIMEOUT).
+
+%% @doc Receive the results produced by the MapReduce pipe (directly,
+%% with no sink process between here and there), grouped by the phase
+%% they came from.  See {@link group_outputs/2} for details on that
+%% grouping.
+-spec collect_outputs(riak_pipe:pipe(), non_neg_integer(), timeout()) ->
          {ok, grouped_results()}
        | {error, {Reason :: term(), Outputs :: ungrouped_results()}}.
-collect_outputs(Pipe, Sink, SinkMon, NumKeeps, Timeout) ->
-    PipeRef = (Pipe#pipe.sink)#fitting.ref,
-    Timer = erlang:send_after(Timeout, self(), {pipe_timeout, PipeRef}),
-    case collect_outputs_loop(PipeRef, Sink, SinkMon, []) of
+collect_outputs(Pipe, NumKeeps, Timeout) ->
+    {Result, Outputs, []} = riak_pipe:collect_results(Pipe, Timeout),
+    case Result of
+        eoi ->
+            %% normal result
+            {ok, group_outputs(Outputs, NumKeeps)};
+        Other ->
+            {error, {Other, Outputs}}
+    end.
+
+%% @doc Group the outputs of the MapReduce pipe by the phase that
+%% produced them.  To be used with {@link collect_outputs/3}. If
+%% `NumKeeps' is 2 or more, the return value is a list of result
+%% lists, `[Results :: list()]', in the same order as the phases that
+%% produced them.  If `NumKeeps' is less than 2, the return value is
+%% just a list (possibly empty) of results, `Results :: list()'.
+-spec group_outputs(ungrouped_results(), non_neg_integer()) ->
+         grouped_results().
+group_outputs(Outputs, NumKeeps) when NumKeeps < 2 -> % 0 or 1
+    %% this path trusts that outputs are from only one phase;
+    %% if NumKeeps lies, all phases will be grouped together;
+    %% this is much faster than using dict:append/3 for a single key
+    %% when length(Outputs) is large
+    [ O || {_, O} <- Outputs ];
+group_outputs(Outputs, _NumKeeps) ->
+    Group = fun({I,O}, Acc) ->
+                    %% it is assumed that the number of phases
+                    %% producing outputs is small, so a linear search
+                    %% through phases we've seen is not too taxing
+                    case lists:keytake(I, 1, Acc) of
+                        {value, {I, IAcc}, RAcc} ->
+                            [{I,[O|IAcc]}|RAcc];
+                        false ->
+                            [{I,[O]}|Acc]
+                    end
+            end,
+    Merged = lists:foldl(Group, [], Outputs),
+    [ lists:reverse(O) || {_, O} <- lists:keysort(1, Merged) ].
+
+%% @doc Receive the results produced by the MapReduce pipe, via the
+%% sink started in {@link mapred_stream_sink/3}, grouped by the phase
+%% they came from. If `NumKeeps' is 2 or more, the return value is a
+%% list of result lists, `[Results :: list()]', in the same order as
+%% the phases that produced them.  If `NumKeeps' is less than 2, the
+%% return value is just a list (possibly empty) of results, `Results
+%% :: list()'.
+-spec collect_sink(#mrc_ctx{}) ->
+         {ok, grouped_results()}
+       | {error, {Reason :: term(), Outputs :: ungrouped_results()}}.
+collect_sink(#mrc_ctx{keeps=NumKeeps}=Ctx) ->
+    case collect_sink_loop(Ctx, []) of
         {ok, Outputs} ->
-            %% don't have to kill the sink, but do have to prevent its
-            %% 'DOWN' message from leaking
-            cleanup_pipe(Sink, SinkMon, Timer, PipeRef),
             {ok, remove_fitting_names(Outputs, NumKeeps)};
-        {error, {Reason, Outputs}}->
-            cleanup_pipe(Sink, SinkMon, Timer, PipeRef),
-            riak_pipe:destroy(Pipe),
-            {error, {Reason, remove_fitting_names(Outputs, NumKeeps)}}
+        {error, Reason, _}->
+            {error, Reason}
     end.
 
 %% collect everything the pipe has to offer
-collect_outputs_loop(PipeRef, Sink, SinkMon, Acc) ->
-    case pipe_receive_output(PipeRef, Sink, SinkMon) of
+collect_sink_loop(Ctx, Acc) ->
+    case receive_sink(Ctx) of
         {ok, false, Output} ->
-            collect_outputs_loop(PipeRef, Sink, SinkMon, [Output|Acc]);
+            collect_sink_loop(Ctx, [Output|Acc]);
         {ok, true, Output} ->
             {ok, riak_kv_mrc_sink:merge_outputs([Output|Acc])};
-        {error, Reason, Output} ->
-            {error, {Reason, riak_kv_mrc_sink:merge_outputs([Output|Acc])}}
+        {error, Reason, Outputs} ->
+            {error, Reason, Outputs}
     end.
 
-%% Grab the first sink response, or sink death, or timeout message.
-pipe_receive_output(PipeRef, Sink, SinkMon) ->
+%% @doc Receive any output generated by the system set up in {@link
+%% mapred_stream_sink/3}. This will include any of the following:
+%%
+%% <ul>
+%% <li>`#kv_mrc_sink{}'</li>
+%% <li>`DOWN' for `#mrc_ctx.sender' (the async sender)</li>
+%% <li>`DOWN' for `#mrc_ctx.sink'</li>
+%% <li>`{pipe_timeout, #mrc_ctx.ref}'</li>
+%% </ul>
+%%
+%% An `{ok, Done::boolean(), Results::orddict()}' tuple is returned if
+%% a `#kv_mrc_sink{}' message is recieved with no error logs. An
+%% `{error, Reason::term(), PartialResults::orddict()}' tuple is
+%% returned if any of the following are received: `#kv_mrc_sink{}'
+%% message with an error log, a `DOWN' for the async sender with
+%% non-`normal' reason, a `DOWN' for the sink, or the `pipe_timeout'.
+%%
+%% Note that this function calls {@link riak_kv_mrc_sink:next/1}, so
+%% your code should not also call it.
+-spec receive_sink(#mrc_ctx{}) ->
+          {ok, Done::boolean(), Results::grouped_results()}
+        | {error, Reason::term(), PartialResults::grouped_results()}.
+receive_sink(#mrc_ctx{sink={Sink,_}}=Ctx) ->
+    %% the sender-DOWN-normal case loops to ignore that message, but
+    %% we only want to send our next-request once
     riak_kv_mrc_sink:next(Sink),
+    receive_sink_helper(Ctx).
+
+receive_sink_helper(#mrc_ctx{ref=PipeRef,
+                             sink={Sink, SinkMon},
+                             sender={Sender, SenderMon}}=Ctx) ->
     receive
         #kv_mrc_sink{ref=PipeRef, results=Results, logs=Logs, done=Done} ->
             case error_exists(Logs) of
@@ -676,8 +788,13 @@ pipe_receive_output(PipeRef, Sink, SinkMon) ->
                 false ->
                     {ok, Done, Results}
             end;
-        {'DOWN', SinkMon, process, Sink, _} ->
-            {error, sink_died, []};
+        {'DOWN', SenderMon, process, Sender, normal} ->
+            %% sender dying normal just means it finished
+            receive_sink_helper(Ctx);
+        {'DOWN', SenderMon, process, Sender, Reason} ->
+            {error, {sender_died, Reason}, []};
+        {'DOWN', SinkMon, process, Sink, Reason} ->
+            {error, {sink_died, Reason}, []};
         {pipe_timeout, PipeRef} ->
             {error, timeout, []}
     end.
@@ -690,17 +807,51 @@ remove_fitting_names([{_,Outputs}], NumKeeps) when NumKeeps < 2 ->
 remove_fitting_names(Outputs, _NumKeeps) ->
     [O || {_, O} <- Outputs].
 
-%% make sure the sink is dead and doesn't leak messages into this mailbox
-cleanup_pipe(Sink, SinkMon, Timer, PipeRef) ->
+%% @doc Destroy the pipe, and call {@link cleanup_sink/1}.
+-spec destroy_sink(#mrc_ctx{}) -> ok.
+destroy_sink(#mrc_ctx{pipe=Pipe}=Ctx) ->
+    riak_pipe:destroy(Pipe),
+    cleanup_sink(Ctx).
+
+%% @doc Tear down the async sender, sink, and timer pieces setup by
+%% {@link mapred_stream_sink/3}, and collect any messages they might
+%% have been delivering.
+-spec cleanup_sink(#mrc_ctx{}) -> ok.
+cleanup_sink(#mrc_ctx{sender=Sender, sink=Sink, timer=Timer}) ->
+    cleanup_sender(Sender),
+    cleanup_sink(Sink),
+    cleanup_timer(Timer);
+cleanup_sink({SinkPid, SinkMon}) when is_pid(SinkPid),
+                                      is_reference(SinkMon) ->
     erlang:demonitor(SinkMon, [flush]),
     %% killing the sink should tear down the pipe
-    riak_kv_mrc_sink:stop(Sink),
+    riak_kv_mrc_sink:stop(SinkPid),
     %% receive just in case the sink had sent us one last response
-    receive #kv_mrc_sink{} -> ok after 0 -> ok end,
-    cleanup_timer(Timer, PipeRef).
+    receive #kv_mrc_sink{} -> ok after 0 -> ok end;
+cleanup_sink(undefined) ->
+    ok.
+
+%% Destroying the pipe via riak_pipe_builder:destroy/1 does not kill
+%% the sender immediately, because it causes the builder to exit with
+%% reason `normal', so no exit signal is sent. The sender will
+%% eventually receive `worker_startup_error's from vnodes that can no
+%% longer find the fittings, but to help the process along, we kill
+%% them immediately here.
+cleanup_sender(#mrc_ctx{sender=Sender}) ->
+    cleanup_sender(Sender);
+cleanup_sender({SenderPid, SenderMon}) when is_pid(SenderPid),
+                                            is_reference(SenderMon) ->
+    erlang:demonitor(SenderMon, [flush]),
+    exit(SenderPid, kill),
+    ok;
+cleanup_sender(undefined) ->
+    ok.
 
 %% don't let timer messages leak
-cleanup_timer(Tref, PipeRef) ->
+cleanup_timer(#mrc_ctx{timer=Timer}) ->
+    cleanup_timer(Timer);
+cleanup_timer({Tref, PipeRef}) when is_reference(Tref),
+                                    is_reference(PipeRef) ->
     case erlang:cancel_timer(Tref) of
         false ->
             receive
@@ -711,7 +862,9 @@ cleanup_timer(Tref, PipeRef) ->
             end;
         _ ->
             ok
-    end.
+    end;
+cleanup_timer(undefined) ->
+    ok.
 
 %% @doc Look through the logs the pipe produced, and determine if any
 %% of them signal an error. Return the details about the first error
