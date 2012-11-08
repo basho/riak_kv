@@ -38,7 +38,8 @@
 
 %% API
 -export([start_link/0, get_stats/0,
-         update/1, register_stats/0, produce_stats/0]).
+         update/1, register_stats/0, produce_stats/0,
+         leveldb_read_block_errors/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -251,7 +252,9 @@ stats() ->
      {[node, puts, coord_redirs], counter},
      {mapper_count, counter},
      {precommit_fail, counter},
-     {postcommit_fail, counter}].
+     {postcommit_fail, counter},
+     {[vnode, backend, leveldb, read_block_error],
+      {function, fun riak_kv_stat:leveldb_read_block_errors/0}}].
 
 %% @doc register a stat with folsom
 register_stat(Name, spiral) ->
@@ -261,7 +264,11 @@ register_stat(Name, counter) ->
 register_stat(Name, histogram) ->
     %% get the global default histo type
     {SampleType, SampleArgs} = get_sample_type(Name),
-    folsom_metrics:new_histogram(Name, SampleType, SampleArgs).
+    folsom_metrics:new_histogram(Name, SampleType, SampleArgs);
+register_stat(Name, {function, F}) ->
+    %% store the function in a gauge metric
+    folsom_metrics:new_gauge(Name),
+    folsom_metrics:notify({Name, F}).
 
 %% @doc the histogram sample type may be set in app.config
 %% use key `stat_sample_type` in the `riak_kv` section. Or the
@@ -276,3 +283,15 @@ get_sample_type(Name) ->
 %% @doc produce the legacy blob of stats for display.
 produce_stats() ->
     riak_kv_stat_bc:produce_stats().
+
+%% @doc get the leveldb.ReadBlockErrors counter.
+%% non-zero values mean it is time to consider replacing
+%% this nodes disk.
+leveldb_read_block_errors() ->
+    %% level stats are per node
+    %% but the way to get them is
+    %% is with riak_kv_vnode:vnode_status/1
+    %% for that reason just chose a partition
+    %% on this node at random
+    %% and ask for it's stats
+    tada.
