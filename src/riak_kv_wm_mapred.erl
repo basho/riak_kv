@@ -291,10 +291,10 @@ pipe_stream_mapred_results(RD,
     end.
 
 result_part({PhaseId, Results}, HasMRQuery, Boundary) ->
-    Data = [ riak_kv_mapred_json:jsonify_bkeys(
-               riak_kv_mapred_json:jsonify_not_found(R),
-               HasMRQuery)
-             || R <- Results ],
+    Data = riak_kv_mapred_json:jsonify_bkeys(
+             [riak_kv_mapred_json:jsonify_not_found(R)
+              || R <- Results ],
+             HasMRQuery),
     JSON = {struct, [{phase, PhaseId},
                      {data, Data}]},
     ["\r\n--", Boundary, "\r\n",
