@@ -25,11 +25,11 @@
 %% messages received from the pipe, until it is asked to send them to
 %% its owner. The owner is whatever process started this FSM.
 
-%% This FSM will speak both `raw' and `fsm_sync' sink types (it
+%% This FSM will speak both `raw' and `fsm' sink types (it
 %% answers appropriately to each, without parameterization).
 
 %% The FSM enforces a soft cap on the number of results and logs
-%% accumulated when receiving `fsm_sync' sink type messages. When the
+%% accumulated when receiving `fsm' sink type messages. When the
 %% number of results+logs that have been delivered exceeds the cap
 %% between calls to {@link next/1}, the sink stops delivering result
 %% acks to workers. The value of this cap can be specified by

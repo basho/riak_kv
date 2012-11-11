@@ -257,7 +257,7 @@ mapred_stream(Query, Options) when is_list(Options) ->
 mapred_stream_sink(Inputs, Query, Timeout) ->
     {ok, Sink} = riak_kv_mrc_sink:start(self(), []),
     Options = [{sink, #fitting{pid=Sink}},
-               {sink_type, {fsm_sync, sink_sync_period(), infinity}}],
+               {sink_type, {fsm, sink_sync_period(), infinity}}],
     try mapred_stream(Query, Options) of
         {{ok, Pipe}, NumKeeps} ->
             %% catch just in case the pipe or sink has already died

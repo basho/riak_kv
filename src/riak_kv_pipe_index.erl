@@ -129,7 +129,7 @@ done(_State) ->
 %%      all querying processes have started.
 %%
 %%      Note that log/trace messages are sent to the sink of the
-%%      original pipe. It is expected that that sink is an `fsm_sync' type.
+%%      original pipe. It is expected that that sink is an `fsm' type.
 -spec queue_existing_pipe(riak_pipe:pipe(),
                           bucket_or_filter(),
                           {eq, Index::binary(), Value::term()}
@@ -147,7 +147,7 @@ queue_existing_pipe(Pipe, Bucket, Query, Timeout) ->
                                [{sink, Head},
                                 {trace, [error]},
                                 {log, {sink, Pipe#pipe.sink}},
-                                {sink_type, {fsm_sync, Period, infinity}}]),
+                                {sink_type, {fsm, Period, infinity}}]),
 
     %% setup the cover operation
     ReqId = erlang:phash2({self(), os:timestamp()}), %% stolen from riak_client
