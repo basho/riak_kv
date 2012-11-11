@@ -188,8 +188,18 @@ collect_output(next, State) ->
                     {next_state, send_output, State}
             end
     end;
+collect_output(#pipe_result{ref=Ref, from=PhaseId, result=Res},
+               #state{ref=Ref, results=Acc}=State) ->
+    NewAcc = add_result(PhaseId, Res, Acc),
+    {next_state, collect_output, State#state{results=NewAcc}};
+collect_output(#pipe_log{ref=Ref, from=PhaseId, msg=Msg},
+               #state{ref=Ref, logs=Acc}=State) ->
+    {next_state, collect_output, State#state{logs=[{PhaseId, Msg}|Acc]}};
+collect_output(#pipe_eoi{ref=Ref}, #state{ref=Ref}=State) ->
+    {next_state, collect_output, State#state{done=true}};
 collect_output(_, State) ->
     {next_state, collect_output, State}.
+
 collect_output(#pipe_result{ref=Ref, from=PhaseId, result=Res},
                From,
                #state{ref=Ref, results=Acc}=State) ->
@@ -217,8 +227,21 @@ maybe_ack(From, #state{buffer_left=Left, delayed_acks=Delayed}=State) ->
 %% send_output: waiting for output to send, after having been asked
 %% for some while there wasn't any
 
+send_output(#pipe_result{ref=Ref, from=PhaseId, result=Res},
+            #state{ref=Ref, results=Acc}=State) ->
+    NewAcc = add_result(PhaseId, Res, Acc),
+    NewState = send_to_owner(State#state{results=NewAcc}),
+    {next_state, collect_output, NewState};
+send_output(#pipe_log{ref=Ref, from=PhaseId, msg=Msg},
+            #state{ref=Ref, logs=Acc}=State) ->
+    NewState = send_to_owner(State#state{logs=[{PhaseId, Msg}|Acc]}),
+    {next_state, collect_output, NewState};
+send_output(#pipe_eoi{ref=Ref}, #state{ref=Ref}=State) ->
+    NewState = send_to_owner(State#state{done=true}),
+    {stop, normal, NewState};
 send_output(_, State) ->
     {next_state, send_output, State}.
+
 send_output(#pipe_result{ref=Ref, from=PhaseId, result=Res},
             _From, #state{ref=Ref, results=Acc}=State) ->
     NewAcc = add_result(PhaseId, Res, Acc),

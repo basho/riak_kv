@@ -140,13 +140,14 @@ done(_State) ->
 queue_existing_pipe(Pipe, Bucket, Query, Timeout) ->
     %% make our tiny pipe
     [{_Name, Head}|_] = Pipe#pipe.fittings,
+    Period = riak_kv_mrc_pipe:sink_sync_period(),
     {ok, LKP} = riak_pipe:exec([#fitting_spec{name=index,
                                               module=?MODULE,
                                               nval=1}],
                                [{sink, Head},
                                 {trace, [error]},
                                 {log, {sink, Pipe#pipe.sink}},
-                                {sink_type, {fsm_sync, infinity}}]),
+                                {sink_type, {fsm_sync, Period, infinity}}]),
 
     %% setup the cover operation
     ReqId = erlang:phash2({self(), os:timestamp()}), %% stolen from riak_client

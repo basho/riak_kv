@@ -107,6 +107,8 @@
 %% TODO: Stolen from old-style MapReduce interface, but is 60s a good idea?
 -define(DEFAULT_TIMEOUT, 60000).
 
+-define(SINK_SYNC_PERIOD_DEFAULT, 10).
+
 -export([
          mapred/2,
          mapred/3,
@@ -128,7 +130,8 @@
          mapred_plan/1,
          mapred_plan/2,
          compile_string/1,
-         compat_fun/1
+         compat_fun/1,
+         sink_sync_period/0
         ]).
 %% NOTE: Example functions are used by EUnit tests
 -export([example/0, example_bucket/0, example_reduce/0,
@@ -254,7 +257,7 @@ mapred_stream(Query, Options) when is_list(Options) ->
 mapred_stream_sink(Inputs, Query, Timeout) ->
     {ok, Sink} = riak_kv_mrc_sink:start(self(), []),
     Options = [{sink, #fitting{pid=Sink}},
-               {sink_type, {fsm_sync, infinity}}],
+               {sink_type, {fsm_sync, sink_sync_period(), infinity}}],
     try mapred_stream(Query, Options) of
         {{ok, Pipe}, NumKeeps} ->
             %% catch just in case the pipe or sink has already died
@@ -896,6 +899,16 @@ compile_string(String) when is_list(String) ->
         {ok, Value}
     catch Type:Error ->
             {Type, Error}
+    end.
+
+%% choose sink sync period, given Options, app env, default
+-spec sink_sync_period() -> integer() | infinity.
+sink_sync_period() ->
+    case application:get_env(riak_kv, mrc_sink_sync_period) of
+        {ok, Size} when is_integer(Size); Size == infinity ->
+            Size;
+        _ ->
+            ?SINK_SYNC_PERIOD_DEFAULT
     end.
 
 %%%
