@@ -127,6 +127,9 @@ done(_State) ->
 %%      to trigger querying on the appropriate vnodes.  The `eoi'
 %%      message is sent to the pipe as soon as it is confirmed that
 %%      all querying processes have started.
+%%
+%%      Note that log/trace messages are sent to the sink of the
+%%      original pipe. It is expected that that sink is an `fsm' type.
 -spec queue_existing_pipe(riak_pipe:pipe(),
                           bucket_or_filter(),
                           {eq, Index::binary(), Value::term()}
@@ -137,12 +140,14 @@ done(_State) ->
 queue_existing_pipe(Pipe, Bucket, Query, Timeout) ->
     %% make our tiny pipe
     [{_Name, Head}|_] = Pipe#pipe.fittings,
+    Period = riak_kv_mrc_pipe:sink_sync_period(),
     {ok, LKP} = riak_pipe:exec([#fitting_spec{name=index,
                                               module=?MODULE,
                                               nval=1}],
                                [{sink, Head},
                                 {trace, [error]},
-                                {log, {sink, Pipe#pipe.sink}}]),
+                                {log, {sink, Pipe#pipe.sink}},
+                                {sink_type, {fsm, Period, infinity}}]),
 
     %% setup the cover operation
     ReqId = erlang:phash2({self(), os:timestamp()}), %% stolen from riak_client
