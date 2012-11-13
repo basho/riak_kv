@@ -294,4 +294,34 @@ leveldb_read_block_errors() ->
     %% for that reason just chose a partition
     %% on this node at random
     %% and ask for it's stats
-    tada.
+    {ok, R} = riak_core_ring_manager:get_my_ring(),
+    Indices = riak_core_ring:my_indices(R),
+    Nth = crypto:rand_uniform(1, length(Indices)),
+    Idx = lists:nth(Nth, Indices),
+    PList = [{Idx, node()}],
+    [{Idx, [Status]}] = riak_kv_vnode:vnode_status(PList),
+    leveldb_read_block_errors(Status).
+
+leveldb_read_block_errors({backend_status, riak_kv_eleveldb_backend, Status}) ->
+    rbe_val(proplists:get_value(read_block_error, Status));
+leveldb_read_block_errors({backend_status, riak_kv_multi_backend, Statuses}) ->
+    multibackend_read_block_errors(Statuses, undefined);
+leveldb_read_block_errors(_) ->
+    undefined.
+
+multibackend_read_block_errors([], Val) ->
+    rbe_val(Val);
+multibackend_read_block_errors([{_Name, Status}|Rest], undefined) ->
+    RBEVal = case proplists:get_value(mod, Status) of
+                 riak_kv_eleveldb_backend ->
+                     proplists:get_value(read_block_error, Status);
+                 _ -> undefined
+             end,
+    multibackend_read_block_errors(Rest, RBEVal);
+multibackend_read_block_errors(_, Val) ->
+    rbe_val(Val).
+
+rbe_val(undefined) ->
+    undefined;
+rbe_val(Bin) ->
+    list_to_integer(binary_to_list(Bin)).
