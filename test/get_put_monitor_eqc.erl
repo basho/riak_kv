@@ -112,7 +112,8 @@ postcondition(S, _Test, _Res) ->
     PutCount = length(PutList),
     ?assertMatch([{count, PutCount},_], folsom_metrics:get_metric_value(put_fsm_in_progress)),
     GetCount = length(GetList),
-    ?assertMatch([{count, GetCount},_], folsom_metrics:get_metric_value(get_fsm_in_progress)).
+    ?assertMatch([{count, GetCount},_], folsom_metrics:get_metric_value(get_fsm_in_progress)),
+    true.
 
 %% ====================================================================
 %% Calls
