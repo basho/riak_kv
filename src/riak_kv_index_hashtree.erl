@@ -113,27 +113,23 @@ delete(BKey, Tree) ->
 -spec start_exchange_remote(pid(), index_n(), pid())
                            -> ok | max_concurrency | not_built | already_locked.
 start_exchange_remote(FsmPid, IndexN, Tree) ->
-    put(calling, ?LINE),
     gen_server:call(Tree, {start_exchange_remote, FsmPid, IndexN}, infinity).
 
 %% @doc Update all hashtrees managed by the provided index_hashtree pid.
 -spec update(index_n(), pid()) -> ok | not_responsible.
 update(Id, Tree) ->
-    put(calling, ?LINE),
     gen_server:call(Tree, {update_tree, Id}, infinity).
 
 %% @doc Return a hash bucket from the tree identified by the given tree id
 %%      that is managed by the provided index_hashtree.
 -spec exchange_bucket(index_n(), integer(), integer(), pid()) -> orddict().
 exchange_bucket(Id, Level, Bucket, Tree) ->
-    put(calling, ?LINE),
     gen_server:call(Tree, {exchange_bucket, Id, Level, Bucket}, infinity).
 
 %% @doc Return a segment from the tree identified by the given tree id that
 %%      is managed by the provided index_hashtree.
 -spec exchange_segment(index_n(), integer(), pid()) -> orddict().
 exchange_segment(Id, Segment, Tree) ->
-    put(calling, ?LINE),
     gen_server:call(Tree, {exchange_segment, Id, Segment}, infinity).
 
 %% @doc Start the key exchange between a given tree managed by the
@@ -148,7 +144,6 @@ compare(Id, Remote, Tree) ->
 -spec compare(index_n(), hashtree:remote_fun(),
               undefined | hashtree:acc_fun(T), pid()) -> T.
 compare(Id, Remote, AccFun, Tree) ->
-    put(calling, ?LINE),
     gen_server:call(Tree, {compare, Id, Remote, AccFun}, infinity).
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
@@ -161,8 +156,6 @@ get_lock(Tree, Type) ->
 %%      locked, and associate the lock with the provided pid.
 -spec get_lock(pid(), any(), pid()) -> ok | not_built | already_locked.
 get_lock(Tree, Type, Pid) ->
-    put(tree, Tree),
-    put(calling, ?LINE),
     gen_server:call(Tree, {get_lock, Type, Pid}, infinity).
 
 %% @doc Poke the specified index_hashtree to ensure the tree is
