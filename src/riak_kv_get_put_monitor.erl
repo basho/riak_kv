@@ -2,7 +2,7 @@
 -behaviour(gen_server).
 -define(SERVER, ?MODULE).
 
--record(state, {gets = [], puts = []}).
+-record(state, {monitor_list = []}).
 
 %% ------------------------------------------------------------------
 %% API Function Exports
@@ -38,32 +38,43 @@ put_fsm_spawned(Pid) ->
 %% ------------------------------------------------------------------
 
 init([]) ->
-    folsom_metrics:new_counter(put_fsm_in_progress),
-    folsom_metrics:new_counter(get_fsm_in_progress),
-    folsom_metrics:new_histogram(put_fsm_errors, slide, 60),
-    folsom_metrics:new_histogram(get_fsm_errors, slide, 60),
+    folsom_metrics:new_spiral(put_fsm_in_progress),
+    folsom_metrics:new_spiral(get_fsm_in_progress),
+    folsom_metrics:new_spiral(put_fsm_errors),
+    folsom_metrics:new_spiral(get_fsm_errors),
     {ok, #state{}}.
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({get_fsm_spawned, Pid}, State) ->
-    #state{gets = GetList} = State,
-    GetList2 = insert_pid(Pid, GetList),
-    folsom_metrics:notify({get_fsm_in_progress, {inc, 1}}),
-    {noreply, State#state{gets = GetList2}};
+    #state{monitor_list = MonList} = State,
+    List2 = insert_pid(Pid, get, MonList),
+    folsom_metrics:notify({get_fsm_in_progress, 1}),
+    {noreply, State#state{monitor_list = List2}};
 
 handle_cast({put_fsm_spawned, Pid}, State) ->
-    #state{puts = PutList} = State,
-    PutList2 = insert_pid(Pid, PutList),
-    folsom_metrics:notify({put_fsm_in_process, {inc, 1}}),
-    {noreply, State#state{puts = PutList2}};
+    #state{monitor_list = List} = State,
+    List2 = insert_pid(Pid, put, List),
+    folsom_metrics:notify({put_fsm_in_process, 1}),
+    {noreply, State#state{monitor_list = List2}};
 
 handle_cast(stop, State) ->
     {stop, normal, State};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
+
+handle_info({'DOWN', MonRef, process, Pid, Cause}, State) ->
+    #state{monitor_list = MonList} = State,
+    case orddict_get_erase(MonRef, MonList) of
+        undefined ->
+            % meh, likely a late message
+            {noreply, State};
+        {{Pid, Type}, MonList2} ->
+            tell_folsom_about_exit(Type, Cause),
+            {noreply, State#state{monitor_list = MonList2}}
+    end;
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -78,6 +89,28 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal Function Definitions
 %% ------------------------------------------------------------------
 
-insert_pid(Pid, List) ->
+insert_pid(Pid, Type, List) ->
     MonRef = erlang:monitor(process, Pid),
-    orddict:store(MonRef, Pid, List).
+    orddict:store(MonRef, {Pid, Type}, List).
+
+tell_folsom_about_exit(put, Cause) when Cause == normal; Cause == shutdown ->
+    folsom_metrics:notify({put_fsm_in_progress, -1});
+tell_folsom_about_exit(get, Cause) when Cause == normal; Cause == shutdown ->
+    folsom_metrics:notify({get_fsm_in_progress, -1});
+% for the abnormal cases, we not only decrmemt the in progess count (like a
+    % normal exit) but increment the errors count as well.
+tell_folsom_about_exit(put, _Cause) ->
+    tell_folsom_about_exit(put, normal),
+    folsom_metrics:notify({put_fsm_errors, 1});
+tell_folsom_about_exit(get, _Cause) ->
+    tell_folsom_about_exit(get, normal),
+    folsom_metrics:notify({get_fsm_errors, 1}).
+
+orddict_get_erase(Key, Orddict) ->
+    case orddict:find(Key, Orddict) of
+        undefined ->
+            undefined;
+        {ok, Value} ->
+            Orddict2 = orddict:erase(Key, Orddict),
+            {Value, Orddict2}
+    end.
