@@ -100,9 +100,9 @@ enabled() ->
 %%      local hashtrees are built and rebuilt as necessary.
 -spec set_mode(automatic | manual) -> ok.
 set_mode(Mode=automatic) ->
-    ok = gen_server:call(?MODULE, {set_mode, Mode});
+    ok = gen_server:call(?MODULE, {set_mode, Mode}, infinity);
 set_mode(Mode=manual) ->
-    ok = gen_server:call(?MODULE, {set_mode, Mode}).
+    ok = gen_server:call(?MODULE, {set_mode, Mode}, infinity).
 
 %% @doc Toggle debug mode, which prints verbose AAE information to the console.
 -spec set_debug(boolean()) -> ok.
