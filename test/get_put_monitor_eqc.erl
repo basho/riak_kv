@@ -38,6 +38,7 @@ prop() ->
         {_,_,Res} = run_commands(?MODULE, Cmds),
         unlink(Pid),
         Monref = erlang:monitor(process, Pid),
+        riak_kv_get_put_monitor:stop(),
         receive
             {'DOWN', Monref, process, Pid, _} ->
                 ok
@@ -106,12 +107,12 @@ next_state(S, Res, {call, _, _, [put, _]}) ->
 postcondition(S, _Test, _Res) ->
     #state{put_errors = PutErrCount, get_errors = GetErrCount,
         put_fsm = PutList, get_fsm = GetList} = S,
-    ?assertMatch([{count, PutErrCount},_], folsom:get_metric_value(put_fsm_errors)),
-    ?assertMatch([{count, GetErrCount},_], folsom:get_metric_value(get_fsm_errors)),
+    ?assertMatch([{count, PutErrCount},_], folsom_metrics:get_metric_value(put_fsm_errors)),
+    ?assertMatch([{count, GetErrCount},_], folsom_metrics:get_metric_value(get_fsm_errors)),
     PutCount = length(PutList),
-    ?assertMatch([{count, PutCount},_], folsom:get_metric_value(put_fsm_in_progress)),
+    ?assertMatch([{count, PutCount},_], folsom_metrics:get_metric_value(put_fsm_in_progress)),
     GetCount = length(GetList),
-    ?assertMatch([{count, GetCount},_], folsom:get_metric_value(get_fsm_in_progress)).
+    ?assertMatch([{count, GetCount},_], folsom_metrics:get_metric_value(get_fsm_in_progress)).
 
 %% ====================================================================
 %% Calls
@@ -139,7 +140,7 @@ get_fsm_exit_error(get, S) ->
 
 put_fsm_started() ->
     Pid = fake_fsm(),
-    riak_kv_get_put_monitor:get_fsm_spawned(Pid),
+    riak_kv_get_put_monitor:put_fsm_spawned(Pid),
     Pid.
 
 put_fsm_exit_normal(put, S) ->
