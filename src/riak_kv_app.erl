@@ -23,7 +23,7 @@
 -module(riak_kv_app).
 
 -behaviour(application).
--export([start/2,stop/1]).
+-export([start/2, prep_stop/1, stop/1]).
 
 -define(SERVICES, [{riak_kv_pb_object, 3, 6}, %% ClientID stuff
                    {riak_kv_pb_object, 9, 14}, %% Object requests
@@ -150,10 +150,30 @@ start(_Type, _StartArgs) ->
             {error, Reason}
     end.
 
+%% @doc Prepare to stop - called before the supervisor tree is shutdown
+prep_stop(_State) ->
+    try %% wrap with a try/catch - application carries on regardless,
+        %% no error message or logging about the failure otherwise.
+
+        lager:info("Stopping application riak_kv - marked service down.\n", []),
+        riak_core_node_watcher:service_down(riak_kv)
+
+        %% TODO: Gracefully unregister riak_kv webmachine endpoints.
+        %% Cannot do this currently as it calls application:set_env while this function
+        %% is itself inside of application controller.  webmachine really needs it's own
+        %% ETS table for dispatch information.
+        %%[ webmachine_router:remove_route(R) || R <- riak_kv_web:dispatch_table() ],
+    catch
+        Type:Reason ->
+            lager:error("Stopping application riak_api - ~p:~p.\n", [Type, Reason])
+    end,
+    stopping.
+
 %% @spec stop(State :: term()) -> ok
 %% @doc The application:stop callback for riak.
 stop(_State) ->
     ok = riak_api_pb_service:deregister(?SERVICES),
+    lager:info("Stopped  application riak_kv.\n", []),
     ok.
 
 %% 719528 days from Jan 1, 0 to Jan 1, 1970
