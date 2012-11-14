@@ -104,15 +104,52 @@ next_state(S, Res, {call, _, _, [put, _]}) ->
     S#state{put_fsm = Puts2}.
 
 
-postcondition(S, _Test, _Res) ->
+postcondition(S, {call, _Mod, put_fsm_started, _Args}, Res) ->
+    check_state(S#state{put_fsm = [Res | S#state.put_fsm]});
+
+postcondition(S, {call, _Mod, get_fsm_started, _Args}, Res) ->
+    check_state(S#state{get_fsm = [Res | S#state.get_fsm]});
+
+postcondition(S, {call, _Mod, put_fsm_exit_error, _Args}, Res) ->
+    S2 = S#state{
+        put_fsm = ordsets:del_element(Res, S#state.put_fsm),
+        put_errors = S#state.put_errors + 1
+    },
+    check_state(S2);
+
+postcondition(S, {call, _Mod, get_fsm_exit_error, _Args}, Res) ->
+    S2 = S#state{
+        get_fsm = ordsets:del_element(Res, S#state.get_fsm),
+        get_errors = S#state.get_errors + 1
+    },
+    check_state(S2);
+
+postcondition(S, {call, _Mod, _NiceShutdown, [put, _]}, Res) ->
+    S2 = S#state{
+        put_fsm = ordsets:del_element(Res, S#state.put_fsm)
+    },
+    check_state(S2);
+
+postcondition(S, {call, _Mod, _NiceShutdown, [get, _]}, Res) ->
+    S2 = S#state{
+        get_fsm = ordsets:del_element(Res, S#state.get_fsm)
+    },
+    check_state(S2).
+
+
+check_state(S) ->
     #state{put_errors = PutErrCount, get_errors = GetErrCount,
         put_fsm = PutList, get_fsm = GetList} = S,
-    ?assertMatch([{count, PutErrCount},_], folsom_metrics:get_metric_value(put_fsm_errors)),
-    ?assertMatch([{count, GetErrCount},_], folsom_metrics:get_metric_value(get_fsm_errors)),
+    ?debugFmt("state of thing:  ~p", [gen_server:call(riak_kv_get_put_monitor, dump_state)]),
+    % with a timetrap of 60 seconds, the spiral will never have values slide off
+    ?assertMatch([{count, PutErrCount},_], folsom_metrics:get_metric_value(put_fsm_errors_minute)),
+    ?assertMatch([{count, GetErrCount},_], folsom_metrics:get_metric_value(get_fsm_errors_minute)),
+    ?assertEqual(PutErrCount, folsom_metrics:get_metric_value(put_fsm_errors_since_start)),
+    ?assertEqual(GetErrCount, folsom_metrics:get_metric_value(get_fsm_errors_since_start)),
     PutCount = length(PutList),
-    ?assertMatch([{count, PutCount},_], folsom_metrics:get_metric_value(put_fsm_in_progress)),
+    ?assertEqual(PutCount, folsom_metrics:get_metric_value(put_fsm_in_progress)),
     GetCount = length(GetList),
-    ?assertMatch([{count, GetCount},_], folsom_metrics:get_metric_value(get_fsm_in_progress)),
+    ?assertEqual(GetCount, folsom_metrics:get_metric_value(get_fsm_in_progress)),
     true.
 
 %% ====================================================================
@@ -179,6 +216,10 @@ end_and_wait(Pid, Cause) ->
             ok
     end.
 
+lists_random([]) ->
+    erlang:error(badarg);
+lists_random([E]) ->
+    E;
 lists_random(List) ->
     Max = length(List),
     Nth = crypto:rand_uniform(1, Max),
