@@ -72,18 +72,10 @@ calc_timing(Stages0) ->
 calc_timing([], FirstStageStart, ReplyTime, Acc) ->
     %% Time from first stage start until reply sent
     {timer:now_diff(ReplyTime, FirstStageStart), orddict:to_list(Acc)};
-calc_timing([{Stage, StageStart} | Rest], StageEnd, ReplyTime, Acc) ->
+calc_timing([{Stage, StageStart} | Rest], StageEnd, ReplyTime, Acc0) ->
     StageDuration = timer:now_diff(StageEnd, StageStart),
-    calc_timing(Rest, StageStart, ReplyTime,
-                add_or_update(Stage, StageDuration, Acc)).
-
-%% When the same stage appears more than once in
-%% a list of timings() aggregate the times into
-%% a total for that stage
-add_or_update(Stage, Elapsed, Acc) ->
-    case orddict:find(Stage, Acc) of
-        error ->
-            orddict:store(Stage, Elapsed, Acc);
-        {ok, Val} ->
-            orddict:store(Stage, Elapsed+Val, Acc)
-    end.
+    %% When the same stage appears more than once in
+    %% a list of timings() aggregate the times into
+    %% a total for that stage
+    Acc = orddict:update_counter(Stage, StageDuration, Acc0),
+    calc_timing(Rest, StageStart, ReplyTime, Acc).
