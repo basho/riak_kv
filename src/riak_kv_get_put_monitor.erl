@@ -135,10 +135,10 @@ handle_info(_Info, State) ->
 
 %% @private
 terminate(_Reason, _State) ->
-	Counters = [put_fsm_in_progress, get_fsm_in_progress, put_fsm_errors_minute,
-				get_fsm_errors_minute, put_fsm_errors_since_start,
-				get_fsm_errors_since_start],
-	[folsom_metrics:delete_metric(Counter) || Counter <- Counters],
+    Counters = [put_fsm_in_progress, get_fsm_in_progress, put_fsm_errors_minute,
+                get_fsm_errors_minute, put_fsm_errors_since_start,
+                get_fsm_errors_since_start],
+    [folsom_metrics:delete_metric(Counter) || Counter <- Counters],
     ok.
 
 %% @private
