@@ -113,7 +113,7 @@ prepare_exchange(start_exchange, State=#state{remote=RemoteVN,
             case riak_kv_index_hashtree:get_lock(State#state.local_tree,
                                                  local_fsm) of
                 ok ->
-                    riak_kv_vnode:exchange_remote(RemoteVN, IndexN),
+                    exchange_remote_request(RemoteVN, IndexN),
                     next_state_with_timeout(prepare_exchange, State);
                 _ ->
                     send_exchange_status(already_locked, State),
@@ -237,6 +237,14 @@ update_request(Tree, {Index, _}, IndexN) ->
                          not_responsible ->
                              {not_responsible, Index, IndexN}
                      end
+             end).
+
+exchange_remote_request(RemoteVN, IndexN) ->
+    FsmPid = self(),
+    as_event(fun() ->
+                     riak_kv_entropy_manager:start_exchange_remote(RemoteVN,
+                                                                   IndexN,
+                                                                   FsmPid)
              end).
 
 %% @private

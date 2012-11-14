@@ -27,6 +27,7 @@
          get_lock/1,
          get_lock/2,
          requeue_poke/1,
+         start_exchange_remote/3,
          exchange_status/4]).
 
 %% gen_server callbacks
@@ -71,6 +72,23 @@ get_lock(Type) ->
 -spec get_lock(any(), pid()) -> ok | max_concurrency.
 get_lock(Type, Pid) ->
     gen_server:call(?MODULE, {get_lock, Type, Pid}, infinity).
+
+%% @doc Acquire the necessary locks for an entropy exchange with the specified
+%%      remote vnode. The request is sent to the remote entropy manager which
+%%      will try to acquire a concurrency lock. If successsful, the request is
+%%      then forwarded to the relevant index_hashtree to acquire a tree lock.
+%%      If both locks are acquired, the pid of the remote index_hashtree is
+%%      returned.
+-spec start_exchange_remote({index(), node()}, index_n(), pid())
+                           -> {remote_exchange, pid()} |
+                              {remote_exchange, anti_entropy_disabled} |
+                              {remote_exchange, max_concurrency} |
+                              {remote_exchange, not_built} |
+                              {remote_exchange, already_locked}.
+start_exchange_remote(_VNode={Index, Node}, IndexN, FsmPid) ->
+    gen_server:call({?MODULE, Node},
+                    {start_exchange_remote, FsmPid, Index, IndexN},
+                    infinity).
 
 %% @doc Used by {@link riak_kv_index_hashtree} to requeue a poke on
 %%      build failure.
@@ -175,6 +193,24 @@ handle_call({manual_exchange, Exchange}, _From, State) ->
 handle_call({get_lock, Type, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Pid, State),
     {reply, Reply, State2};
+handle_call({start_exchange_remote, FsmPid, Index, IndexN}, From, State) ->
+    case {enabled(),
+          orddict:find(Index, State#state.trees)} of
+        {false, _} ->
+            {reply, {remote_exchange, anti_entropy_disabled}, State};
+        {_, error} ->
+            {reply, {remote_exchange, not_built}, State};
+        {_, {ok, Tree}} ->
+            case do_get_lock(exchange_remote, FsmPid, State) of
+                {ok, State2} ->
+                    %% Concurrency lock acquired, now forward to index_hashtree
+                    %% to acquire tree lock.
+                    riak_kv_index_hashtree:start_exchange_remote(FsmPid, From, IndexN, Tree),
+                    {noreply, State2};
+                {Reply, State2} ->
+                    {reply, {remote_exchange, Reply}, State2}
+            end
+    end;
 handle_call({cancel_exchange, Index}, _From, State) ->
     case lists:keyfind(Index, 1, State#state.exchanges) of
         false ->
@@ -202,7 +238,7 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(tick, State) ->
-    State2 = tick(State),
+    State2 = maybe_tick(State),
     {noreply, State2};
 handle_info({'DOWN', Ref, _, Obj, _}, State) ->
     State2 = maybe_release_lock(Ref, State),
@@ -268,7 +304,7 @@ reload_hashtrees(State=#state{trees=Trees}) ->
     State3.
 
 
--spec do_get_lock(any(),pid(),state()) -> {'max_concurrency',state()}.
+-spec do_get_lock(any(),pid(),state()) -> {ok | max_concurrency, state()}.
 do_get_lock(_Type, Pid, State=#state{locks=Locks}) ->
     Concurrency = app_helper:get_env(riak_kv,
                                      anti_entropy_concurrency,
@@ -324,21 +360,30 @@ schedule_tick() ->
     erlang:send_after(Tick, ?MODULE, tick),
     ok.
 
--spec tick(state()) -> state().
-tick(State) ->
-    case riak_core_capability:get({riak_kv, anti_entropy}, disabled) of
-        disabled ->
-            NextState = State;
-        enabled_v1 ->
-            State2 = maybe_reload_hashtrees(State),
-            State3 = lists:foldl(fun(_,S) ->
-                                         maybe_poke_tree(S)
-                                 end, State2, lists:seq(1,10)),
-            State4 = maybe_exchange(State3),
-            NextState = State4
+-spec maybe_tick(state()) -> state().
+maybe_tick(State) ->
+    case enabled() of
+        true ->
+            case riak_core_capability:get({riak_kv, anti_entropy}, disabled) of
+                disabled ->
+                    NextState = State;
+                enabled_v1 ->
+                    NextState = tick(State)
+            end;
+        false ->
+            NextState = State
     end,
     schedule_tick(),
     NextState.
+
+-spec tick(state()) -> state().
+tick(State) ->
+    State2 = maybe_reload_hashtrees(State),
+    State3 = lists:foldl(fun(_,S) ->
+                                 maybe_poke_tree(S)
+                         end, State2, lists:seq(1,10)),
+    State4 = maybe_exchange(State3),
+    State4.
 
 -spec maybe_poke_tree(state()) -> state().
 maybe_poke_tree(State=#state{trees=[]}) ->

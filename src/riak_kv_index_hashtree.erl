@@ -42,7 +42,7 @@
          exchange_bucket/4,
          exchange_segment/3,
          update/2,
-         start_exchange_remote/3,
+         start_exchange_remote/4,
          delete/2,
          insert/4,
          insert/5,
@@ -108,12 +108,12 @@ insert_object(BKey, RObj, Tree) ->
 delete(BKey, Tree) ->
     gen_server:cast(Tree, {delete, BKey}).
 
-%% @doc Acquire both the remote concurrency lock and remote tree lock for the
-%%      specified tree that is managed by the provided index_hashtree.
--spec start_exchange_remote(pid(), index_n(), pid())
-                           -> ok | max_concurrency | not_built | already_locked.
-start_exchange_remote(FsmPid, IndexN, Tree) ->
-    gen_server:call(Tree, {start_exchange_remote, FsmPid, IndexN}, infinity).
+%% @doc Called by the entropy manager to finish the process used to acquire
+%%      remote vnode locks when starting an exchange. For more details,
+%%      see {@link riak_kv_entropy_manager:start_exchange_remote/3}
+-spec start_exchange_remote(pid(), term(), index_n(), pid()) -> ok.
+start_exchange_remote(FsmPid, From, IndexN, Tree) ->
+    gen_server:cast(Tree, {start_exchange_remote, FsmPid, From, IndexN}).
 
 %% @doc Update all hashtrees managed by the provided index_hashtree pid.
 -spec update(index_n(), pid()) -> ok | not_responsible.
@@ -194,19 +194,6 @@ handle_call({get_lock, Type, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Pid, State),
     {reply, Reply, State2};
 
-handle_call({start_exchange_remote, FsmPid, _IndexN}, _From, State) ->
-    case riak_kv_entropy_manager:get_lock(exchange_remote, FsmPid) of
-        max_concurrency ->
-            {reply, max_concurrency, State};
-        ok ->
-            case do_get_lock(remote_fsm, FsmPid, State) of
-                {ok, State2} ->
-                    {reply, ok, State2};
-                {Reply, State2} ->
-                    {reply, Reply, State2}
-            end
-    end;
-
 handle_call({update_tree, Id}, From, State) ->
     lager:debug("Updating tree: (vnode)=~p (preflist)=~p", [State#state.index, Id]),
     apply_tree(Id,
@@ -274,6 +261,17 @@ handle_cast({delete, BKey}, State) ->
     IndexN = riak_kv_util:get_index_n(BKey, Ring),
     State2 = do_delete(IndexN, term_to_binary(BKey), State),
     {noreply, State2};
+
+handle_cast({start_exchange_remote, FsmPid, From, _IndexN}, State) ->
+    %% Concurrency lock already acquired, try to acquire tree lock.
+    case do_get_lock(remote_fsm, FsmPid, State) of
+        {ok, State2} ->
+            gen_server:reply(From, {remote_exchange, self()}),
+            {noreply, State2};
+        {Reply, State2} ->
+            gen_server:reply(From, {remote_exchange, Reply}),
+            {noreply, State2}
+    end;
 
 handle_cast(_Msg, State) ->
     {noreply, State}.

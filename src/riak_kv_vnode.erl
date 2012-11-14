@@ -1,4 +1,3 @@
-
 %% -------------------------------------------------------------------
 %%
 %% riak_kv_vnode: VNode Implementation
@@ -46,8 +45,7 @@
          repair/1,
          repair_status/1,
          repair_filter/1,
-         hashtree_pid/1,
-         exchange_remote/2]).
+         hashtree_pid/1]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -95,7 +93,6 @@
 -type index_op() :: add | remove.
 -type index_value() :: integer() | binary().
 -type index() :: non_neg_integer().
--type index_n() :: {index(), pos_integer()}.
 -type state() :: #state{}.
 
 -record(putargs, {returnbody :: boolean(),
@@ -293,16 +290,6 @@ hashtree_pid(Partition) ->
                                         {hashtree_pid, node()},
                                         riak_kv_vnode_master,
                                         infinity).
-
--spec exchange_remote({index(), node()}, index_n()) -> ok.
-exchange_remote(VNode, IndexN) ->
-    {_, RemoteNode} = VNode,
-    Sender = {fsm, undefined, self()},
-    riak_core_vnode_master:command(VNode,
-                                   {start_exchange_remote, self(), RemoteNode, IndexN},
-                                   Sender,
-                                   riak_kv_vnode_master).
-
 %% VNode callbacks
 
 init([Index]) ->
@@ -449,16 +436,6 @@ handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
         _ ->
             {reply, {error, wrong_node}, State}
     end;
-handle_command({start_exchange_remote, FsmPid, Node, IndexN}, Sender, State) ->
-    %% Handle riak_core request forwarding during ownership handoff.
-    case node() of
-        Node ->
-            do_start_exchange_remote(State#state.hashtrees, FsmPid,
-                                     IndexN, Sender);
-        _ ->
-            riak_core_vnode:reply(Sender, {remote_exchange, wrong_node})
-    end,
-    {noreply, State};
 
 %% Commands originating from inside this vnode
 handle_command({backend_callback, Ref, Msg}, _Sender,
@@ -700,26 +677,6 @@ handle_exit(_Pid, Reason, State) ->
     %% queue and never being processed.
     lager:error("Linked process exited. Reason: ~p", [Reason]),
     {stop, linked_process_crash, State}.
-
-
-do_start_exchange_remote(undefined, _FsmPid, _IndexN, Sender) ->
-    %% Can happen if AAE is disabled on this node or if request is
-    %% accidently sent to secondary vnode during ownership change.
-    case riak_kv_entropy_manager:enabled() of
-        true ->
-            riak_core_vnode:reply(Sender,
-                                  {remote_exchange, not_built});
-        false ->
-            riak_core_vnode:reply(Sender,
-                                  {remote_exchange, anti_entropy_disabled})
-    end;
-do_start_exchange_remote(HT, FsmPid, IndexN, Sender) ->
-    case riak_kv_index_hashtree:start_exchange_remote(FsmPid, IndexN, HT) of
-        ok ->
-            riak_core_vnode:reply(Sender, {remote_exchange, HT});
-        Error ->
-            riak_core_vnode:reply(Sender, {remote_exchange, Error})
-    end.
 
 %% @private
 %% upon receipt of a client-initiated put
