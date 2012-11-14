@@ -25,12 +25,6 @@
 -module(riak_client, [Node,ClientId]).
 -author('Justin Sheehy <justin@basho.com>').
 
--export([mapred/2,mapred/3,mapred/4]).
--export([mapred_stream/2,mapred_stream/3,mapred_stream/4]).
--export([mapred_bucket/2,mapred_bucket/3,mapred_bucket/4]).
--export([mapred_bucket_stream/3,mapred_bucket_stream/4,mapred_bucket_stream/5,
-         mapred_bucket_stream/6]).
--export([mapred_dynamic_inputs_stream/3]).
 -export([get/2, get/3,get/4]).
 -export([put/1, put/2,put/3,put/4,put/5]).
 -export([delete/2,delete/3,delete/4]).
@@ -55,158 +49,6 @@
 -define(DEFAULT_ERRTOL, 0.00003).
 
 -type riak_client() :: term().
-
-%% @spec mapred(Inputs :: riak_kv_mapred_term:mapred_inputs(),
-%%              Query :: [riak_kv_mapred_query:mapred_queryterm()]) ->
-%%       {ok, riak_kv_mapred_query:mapred_result()} |
-%%       {error, {bad_qterm, riak_kv_mapred_query:mapred_queryterm()}} |
-%%       {error, timeout} |
-%%       {error, Err :: term()}
-%% @doc Perform a map/reduce job across the cluster.
-%%      See the map/reduce documentation for explanation of behavior.
-%% @equiv mapred(Inputs, Query, default_timeout())
-mapred(Inputs,Query) -> mapred(Inputs,Query,?DEFAULT_TIMEOUT).
-
-%% @spec mapred(Inputs :: riak_kv_mapred_term:mapred_inputs(),
-%%              Query :: [riak_kv_mapred_query:mapred_queryterm()],
-%%              TimeoutMillisecs :: integer()  | 'infinity') ->
-%%       {ok, riak_kv_mapred_query:mapred_result()} |
-%%       {error, {bad_qterm, riak_kv_mapred_query:mapred_queryterm()}} |
-%%       {error, timeout} |
-%%       {error, Err :: term()}
-%% @doc Perform a map/reduce job across the cluster.
-%%      See the map/reduce documentation for explanation of behavior.
-mapred(Inputs,Query,Timeout) ->
-    mapred(Inputs,Query,undefined,Timeout).
-
-%% @spec mapred(Inputs :: riak_kv_mapred_term:mapred_inputs(),
-%%              Query :: [riak_kv_mapred_query:mapred_queryterm()],
-%%              TimeoutMillisecs :: integer()  | 'infinity',
-%%              ResultTransformer :: function()) ->
-%%       {ok, riak_kv_mapred_query:mapred_result()} |
-%%       {error, {bad_qterm, riak_kv_mapred_query:mapred_queryterm()}} |
-%%       {error, timeout} |
-%%       {error, Err :: term()}
-%% @doc Perform a map/reduce job across the cluster.
-%%      See the map/reduce documentation for explanation of behavior.
-mapred(Inputs,Query,ResultTransformer,Timeout) when is_binary(Inputs) orelse
-                                                    is_tuple(Inputs) ->
-    case is_binary(Inputs) orelse is_key_filter(Inputs) of
-        true ->
-            mapred_bucket(Inputs, Query, ResultTransformer, Timeout);
-        false ->
-            Me = self(),
-            case mapred_stream(Query,Me,ResultTransformer,Timeout) of
-                {ok, {ReqId, FlowPid}} ->
-                    mapred_dynamic_inputs_stream(FlowPid, Inputs, Timeout),
-                    luke_flow:finish_inputs(FlowPid),
-                    luke_flow:collect_output(ReqId, Timeout);
-                Error ->
-                    Error
-            end
-    end;
-mapred(Inputs,Query,ResultTransformer,Timeout)
-  when is_list(Query),
-       (is_integer(Timeout) orelse Timeout =:= infinity) ->
-    Me = self(),
-    case mapred_stream(Query,Me,ResultTransformer,Timeout) of
-        {ok, {ReqId, FlowPid}} ->
-            case is_list(Inputs) of
-                true ->
-                    add_inputs(FlowPid, Inputs);
-                false ->
-                    mapred_dynamic_inputs_stream(FlowPid, Inputs, Timeout)
-            end,
-            luke_flow:finish_inputs(FlowPid),
-            luke_flow:collect_output(ReqId, Timeout);
-        Error ->
-            Error
-    end.
-
-%% @spec mapred_stream(Query :: [riak_kv_mapred_query:mapred_queryterm()],
-%%                     ClientPid :: pid()) ->
-%%       {ok, {ReqId :: term(), MR_FSM_PID :: pid()}} |
-%%       {error, {bad_qterm, riak_kv_mapred_query:mapred_queryterm()}} |
-%%       {error, Err :: term()}
-%% @doc Perform a streaming map/reduce job across the cluster.
-%%      See the map/reduce documentation for explanation of behavior.
-mapred_stream(Query,ClientPid) ->
-    mapred_stream(Query,ClientPid,?DEFAULT_TIMEOUT).
-
-%% @spec mapred_stream(Query :: [riak_kv_mapred_query:mapred_queryterm()],
-%%                     ClientPid :: pid(),
-%%                     TimeoutMillisecs :: integer() | 'infinity') ->
-%%       {ok, {ReqId :: term(), MR_FSM_PID :: pid()}} |
-%%       {error, {bad_qterm, riak_kv_mapred_query:mapred_queryterm()}} |
-%%       {error, Err :: term()}
-%% @doc Perform a streaming map/reduce job across the cluster.
-%%      See the map/reduce documentation for explanation of behavior.
-mapred_stream(Query, ClientPid, Timeout) ->
-    mapred_stream(Query, ClientPid, undefined, Timeout).
-
-%% @spec mapred_stream(Query :: [riak_kv_mapred_query:mapred_queryterm()],
-%%                     ClientPid :: pid(),
-%%                     TimeoutMillisecs :: integer() | 'infinity',
-%%                     ResultTransformer :: function()) ->
-%%       {ok, {ReqId :: term(), MR_FSM_PID :: pid()}} |
-%%       {error, {bad_qterm, riak_kv_mapred_query:mapred_queryterm()}} |
-%%       {error, Err :: term()}
-%% @doc Perform a streaming map/reduce job across the cluster.
-%%      See the map/reduce documentation for explanation of behavior.
-mapred_stream(Query,ClientPid,ResultTransformer,Timeout)
-  when is_list(Query), is_pid(ClientPid),
-       (is_integer(Timeout) orelse Timeout =:= infinity) ->
-    ReqId = mk_reqid(),
-    case riak_kv_mapred_query:start(Node, ClientPid, ReqId, Query, ResultTransformer, Timeout) of
-        {ok, Pid} ->
-            {ok, {ReqId, Pid}};
-        Error ->
-            Error
-    end.
-
-mapred_bucket_stream(Bucket, Query, ClientPid) ->
-    mapred_bucket_stream(Bucket, Query, ClientPid, ?DEFAULT_TIMEOUT).
-
-mapred_bucket_stream(Bucket, Query, ClientPid, Timeout) ->
-    mapred_bucket_stream(Bucket, Query, ClientPid, undefined, Timeout).
-
-mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout) ->
-    {ok,{MR_ReqId,MR_FSM}} = mapred_stream(Query,ClientPid,ResultTransformer,Timeout),
-    {ok,_Stream_ReqID} = stream_list_keys(Bucket, Timeout,
-                                  MR_FSM, mapred),
-    {ok,MR_ReqId}.
-
-
-%% @deprecated Only in place for backwards compatibility.
-mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout, _) ->
-    mapred_bucket_stream(Bucket, Query, ClientPid, ResultTransformer, Timeout).
-
-mapred_bucket(Bucket, Query) ->
-    mapred_bucket(Bucket, Query, ?DEFAULT_TIMEOUT).
-
-mapred_bucket(Bucket, Query, Timeout) ->
-    mapred_bucket(Bucket, Query, undefined, Timeout).
-
-mapred_bucket(Bucket, Query, ResultTransformer, Timeout) ->
-    Me = self(),
-    {ok,MR_ReqId} = mapred_bucket_stream(Bucket, Query, Me,
-                                         ResultTransformer, Timeout),
-    luke_flow:collect_output(MR_ReqId, Timeout).
-
--define(PRINT(Var), io:format("DEBUG: ~p:~p - ~p~n~n ~p~n~n", [?MODULE, ?LINE, ??Var, Var])).
-
-%% An InputDef defines a Module and Function to call to generate
-%% inputs for a map/reduce job. Should return {ok,
-%% LukeReqID}. Ideally, we'd combine both the other input types (BKeys
-%% and Bucket) into this approach, but postponing until after a code
-%% review of Map/Reduce.
-mapred_dynamic_inputs_stream(FSMPid, InputDef, Timeout) ->
-    case InputDef of
-        {modfun, Mod, Fun, Options} ->
-            Mod:Fun(FSMPid, Options, Timeout);
-        _ ->
-            throw({invalid_inputdef, InputDef})
-    end.
 
 %% @spec get(riak_object:bucket(), riak_object:key()) ->
 %%       {ok, riak_object:riak_object()} |
@@ -469,7 +311,7 @@ list_keys(Bucket, Timeout, ErrorTolerance) when is_integer(Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
     FSM_Timeout = trunc(Timeout / 8),
-    riak_kv_keys_fsm_legacy_sup:start_keys_fsm(Node, [ReqId, Bucket, FSM_Timeout, plain, ErrorTolerance, Me]),
+    riak_kv_keys_fsm_legacy_sup:start_keys_fsm(Node, [ReqId, Bucket, FSM_Timeout, ErrorTolerance, Me]),
     wait_for_listkeys(ReqId, Timeout);
 %% @spec list_keys(riak_object:bucket(), TimeoutMillisecs :: integer()) ->
 %%       {ok, [Key :: riak_object:key()]} |
@@ -487,7 +329,7 @@ list_keys(Bucket, Filter, Timeout) ->
         _ ->
             Me = self(),
             ReqId = mk_reqid(),
-            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout, plain]]),
+            riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout]]),
             wait_for_listkeys(ReqId, Timeout)
     end.
 
@@ -505,11 +347,11 @@ stream_list_keys(Bucket, Timeout, _) ->
     stream_list_keys(Bucket, Timeout).
 
 %% @deprecated Only in place for backwards compatibility.
-stream_list_keys(Bucket0, Timeout, ErrorTolerance, Client, ClientType) ->
+stream_list_keys(Bucket0, Timeout, ErrorTolerance, Client, _ClientType) ->
     ReqId = mk_reqid(),
     case build_filter(Bucket0) of
         {ok, Filter} ->
-            riak_kv_keys_fsm_legacy_sup:start_keys_fsm(Node, [ReqId, Filter, Timeout, ClientType, ErrorTolerance, Client]),
+            riak_kv_keys_fsm_legacy_sup:start_keys_fsm(Node, [ReqId, Filter, Timeout, ErrorTolerance, Client]),
             {ok, ReqId};
         Error ->
             Error
@@ -550,8 +392,7 @@ stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
                                                                   Client},
                                                                  [Bucket, 
                                                                   FilterExprs, 
-                                                                  Timeout, 
-                                                                  ClientType]]),
+                                                                  Timeout]]),
                             {ok, ReqId}
                     end;
                 Bucket ->
@@ -559,8 +400,7 @@ stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
                                                         [{raw, ReqId, Client}, 
                                                          [Bucket,
                                                           none,
-                                                          Timeout,
-                                                          ClientType]]),
+                                                          Timeout]]),
                     {ok, ReqId}
             end
     end;
@@ -636,7 +476,7 @@ list_buckets(Filter, Timeout) ->
         _ ->
             Me = self(),
             ReqId = mk_reqid(),
-            riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, [Filter, Timeout, plain]]),
+            riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, [Filter, Timeout]]),
             wait_for_listbuckets(ReqId, Timeout)
     end.
 
@@ -676,7 +516,7 @@ get_index(Bucket, Query) ->
 get_index(Bucket, Query, Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, plain]]),
+    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout]]),
     wait_for_query_results(ReqId, Timeout).
 
 %% @spec stream_get_index(Bucket :: binary(),
@@ -700,7 +540,7 @@ stream_get_index(Bucket, Query) ->
 stream_get_index(Bucket, Query, Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, plain]]),
+    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout]]),
     {ok, ReqId}.
 
 %% @spec set_bucket(riak_object:bucket(), [BucketProp :: {atom(),term()}]) -> ok
@@ -798,21 +638,6 @@ wait_for_query_results(ReqId, Timeout, Acc) ->
     after Timeout ->
             {error, timeout}
     end.
-
-add_inputs(_FlowPid, []) ->
-    ok;
-add_inputs(FlowPid, Inputs) when length(Inputs) < 100 ->
-    luke_flow:add_inputs(FlowPid, Inputs);
- add_inputs(FlowPid, Inputs) ->
-    {Current, Next} = lists:split(100, Inputs),
-    luke_flow:add_inputs(FlowPid, Current),
-    add_inputs(FlowPid, Next).
-
-is_key_filter({Bucket, Filters}) when is_binary(Bucket),
-                                      is_list(Filters) ->
-    true;
-is_key_filter(_) ->
-    false.
 
 %% @deprecated This function is only here to support
 %% rolling upgrades and will be removed.

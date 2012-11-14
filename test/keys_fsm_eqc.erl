@@ -62,8 +62,8 @@ coverage_test() ->
 %% ====================================================================
 
 prop_basic_listkeys() ->
-    ?FORALL({ReqId, Bucket, KeyFilter, NVal, ObjectCount, Timeout, ClientType},
-            {g_reqid(), g_bucket(), g_key_filter(), g_n_val(), g_object_count(), g_timeout(), g_client_type()},
+    ?FORALL({ReqId, Bucket, KeyFilter, NVal, ObjectCount, Timeout},
+            {g_reqid(), g_bucket(), g_key_filter(), g_n_val(), g_object_count(), g_timeout()},
             ?TRAPEXIT(
                begin
                    riak_kv_memory_backend:reset(),
@@ -93,7 +93,7 @@ prop_basic_listkeys() ->
                            ExpectedKeys = lists:foldl(ExpectedKeyFilter, [], GeneratedKeys)
                    end,
                    %% Call start_link
-                   Keys = start_link(ReqId, Bucket, KeyFilter, Timeout, ClientType),
+                   Keys = start_link(ReqId, Bucket, KeyFilter, Timeout),
                    ?WHENFAIL(
                       begin
                           io:format("Bucket: ~p n_val: ~p ObjectCount: ~p KeyFilter: ~p~n", [Bucket, NVal, ObjectCount, KeyFilter]),
@@ -114,10 +114,10 @@ prop_basic_listkeys() ->
 %% Wrappers
 %%====================================================================
 
-start_link(ReqId, Bucket, Filter, Timeout, ClientType) ->
+start_link(ReqId, Bucket, Filter, Timeout) ->
     Sink = spawn(?MODULE, data_sink, [ReqId, [], false]),
     From = {raw, ReqId, Sink},
-    {ok, _FsmPid} = riak_core_coverage_fsm:start_link(riak_kv_keys_fsm, From, [Bucket, Filter, Timeout, ClientType]),
+    {ok, _FsmPid} = riak_core_coverage_fsm:start_link(riak_kv_keys_fsm, From, [Bucket, Filter, Timeout]),
     wait_for_replies(Sink, ReqId).
 
 %%====================================================================
@@ -138,10 +138,6 @@ g_key_filter() ->
                 lists:member(X, MatchKeys)
         end,
     frequency([{5, none}, {2, KeyFilter}]).
-
-g_client_type() ->
-    %% TODO: Incorporate mapred type
-    plain.
 
 g_n_val() ->
     choose(1,5).
