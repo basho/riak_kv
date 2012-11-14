@@ -115,12 +115,14 @@ start(_Type, _StartArgs) ->
                                           [true, false],
                                           false),
 
+            %% mapred_system should remain until no nodes still exist
+            %% that would propose 'legacy' as the default choice
             riak_core_capability:register({riak_kv, mapred_system},
-                                          [pipe, legacy],
-                                          legacy,
+                                          [pipe],
+                                          pipe,
                                           {riak_kv,
                                            mapred_system,
-                                           [{pipe, pipe}, {legacy, legacy}]}),
+                                           [{pipe, pipe}]}),
 
             riak_core_capability:register({riak_kv, mapred_2i_pipe},
                                           [true, false],

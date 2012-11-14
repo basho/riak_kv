@@ -24,7 +24,7 @@
 
 -module(riak_kv_wm_mapred).
 
--export([init/1, service_available/2, allowed_methods/2, known_content_type/2, forbidden/2]).
+-export([init/1,allowed_methods/2, known_content_type/2, forbidden/2]).
 -export([malformed_request/2, process_post/2, content_types_provided/2]).
 -export([nop/2]).
 
@@ -36,20 +36,11 @@
 -define(DEFAULT_TIMEOUT, 60000).
 
 
--record(state, {client, inputs, timeout, mrquery, boundary}).
+-record(state, {inputs, timeout, mrquery, boundary}).
 -type state() :: #state{}.
 
 init(_) ->
-    {ok, undefined}.
-
-service_available(RD, State) ->
-    case riak:local_client() of
-        {ok, Client} ->
-            {true, RD, #state{client=Client}};
-        Error ->
-            lager:error("~s", Error),
-            {false, RD, State}
-    end.
+    {ok, #state{}}.
 
 forbidden(RD, State) ->
     {riak_kv_wm_utils:is_forbidden(RD), RD, State}.
@@ -72,12 +63,7 @@ nop(RD, State) ->
     {usage(), RD, State}.
 
 process_post(RD, State) ->
-    case riak_kv_util:mapred_system() of
-        pipe ->
-            pipe_mapred(RD, State);
-        legacy ->
-            legacy_mapred(RD, State)
-    end.
+    pipe_mapred(RD, State).
 
 %% Internal functions
 send_error(Error, RD)  ->
@@ -167,12 +153,6 @@ usage() ->
         " \"inputs\":[...list of inputs...],\n"
         " \"query\":[...list of map/reduce phases...]\n"
         "}\n".
-
-is_key_filter({Bucket, Filters}) when is_binary(Bucket),
-                                      is_list(Filters) ->
-    true;
-is_key_filter(_) ->
-    false.
 
 %% PIPE MAPRED
 
@@ -300,83 +280,3 @@ result_part({PhaseId, Results}, HasMRQuery, Boundary) ->
     ["\r\n--", Boundary, "\r\n",
      "Content-Type: application/json\r\n\r\n",
      mochijson2:encode(JSON)].
-
-%% LEGACY MAPRED
-
-legacy_mapred(RD,
-              #state{inputs=Inputs,
-                     mrquery=Query,
-                     timeout=Timeout}=State) ->
-    Me = self(),
-    {ok, Client} = riak:local_client(),
-    ResultTransformer = fun riak_kv_mapred_json:jsonify_not_found/1,
-    case wrq:get_qs_value("chunked", RD) of
-        "true" ->
-            {ok, ReqId} =
-                case is_binary(Inputs) orelse is_key_filter(Inputs) of
-                    true ->
-                        Client:mapred_bucket_stream(Inputs, Query, Me, ResultTransformer, Timeout);
-                    false ->
-                        if is_list(Inputs) ->
-                                {ok, {RId, FSM}} = Client:mapred_stream(Query, Me, ResultTransformer, Timeout),
-                                luke_flow:add_inputs(FSM, Inputs),
-                                luke_flow:finish_inputs(FSM),
-                                {ok, RId};
-                           is_tuple(Inputs) ->
-                                {ok, {RId, FSM}} = Client:mapred_stream(Query, Me, ResultTransformer, Timeout),
-                                Client:mapred_dynamic_inputs_stream(FSM, Inputs, Timeout),
-                                luke_flow:finish_inputs(FSM),
-                                {ok, RId}
-                        end
-                end,
-            Boundary = riak_core_util:unique_id_62(),
-            RD1 = wrq:set_resp_header("Content-Type", "multipart/mixed;boundary=" ++ Boundary, RD),
-            State1 = State#state{boundary=Boundary},
-            {true, wrq:set_resp_body({stream, legacy_stream_mapred_results(RD1, ReqId, State1)}, RD1), State1};
-        Param when Param =:= "false";
-                   Param =:= undefined ->
-            Results = case is_binary(Inputs) orelse is_key_filter(Inputs) of
-                          true ->
-                              Client:mapred_bucket(Inputs, Query, ResultTransformer, Timeout);
-                          false ->
-                              if is_list(Inputs) ->
-                                      Client:mapred(Inputs, Query, ResultTransformer, Timeout);
-                                 is_tuple(Inputs) ->
-                                      case Client:mapred_stream(Query,Me,ResultTransformer,Timeout) of
-                                          {ok, {ReqId, FlowPid}} ->
-                                              Client:mapred_dynamic_inputs_stream(FlowPid, Inputs, Timeout),
-                                              luke_flow:finish_inputs(FlowPid),
-                                              luke_flow:collect_output(ReqId, Timeout);
-                                          Error ->
-                                              Error
-                                      end
-                              end
-                      end,
-            RD1 = wrq:set_resp_header("Content-Type", "application/json", RD),
-            case Results of
-                "all nodes failed" ->
-                    {{halt, 500}, wrq:set_resp_body("All nodes failed", RD), State};
-                {error, _} ->
-                    {{halt, 500}, send_error(Results, RD1), State};
-                {ok, Result} ->
-                    {true, wrq:set_resp_body(mochijson2:encode(Result), RD1), State}
-            end
-    end.
-
-legacy_stream_mapred_results(RD, ReqId, #state{timeout=Timeout}=State) ->
-    FinalTimeout = erlang:trunc(Timeout * 1.02),
-    receive
-        {flow_results, ReqId, done} -> {iolist_to_binary(["\r\n--", State#state.boundary, "--\r\n"]), done};
-        {flow_results, ReqId, {error, Error}} ->
-            {format_error(Error), done};
-        {flow_error, ReqId, Error} ->
-            {format_error({error, Error}), done};
-        {flow_results, PhaseId, ReqId, Res} ->
-            Data = mochijson2:encode({struct, [{phase, PhaseId}, {data, Res}]}),
-            Body = ["\r\n--", State#state.boundary, "\r\n",
-                    "Content-Type: application/json\r\n\r\n",
-                    Data],
-            {iolist_to_binary(Body), fun() -> legacy_stream_mapred_results(RD, ReqId, State) end}
-    after FinalTimeout ->
-            {format_error({error, timeout}), done}
-    end.

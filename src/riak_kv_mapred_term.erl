@@ -110,7 +110,7 @@ valid_input_targets(Invalid) ->
     {error, {"Inputs target tuples must be {B,K} or {{B,K},KeyData}:", Invalid}}.
 
 %% Return ok if query are valid, {error, Reason} if not.  Not very strong validation
-%% done here as riak_kv_mapred_query will check this.
+%% done here as endpoints and riak_kv_mrc_pipe will check this.
 parse_query(Query) when is_list(Query) ->
     {ok, Query};
 parse_query(Invalid) ->

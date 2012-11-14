@@ -281,7 +281,6 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
                            start_time=StartTime,
                            options=Options},
                Sender, State=#state{idx=Idx}) ->
-    riak_kv_mapred_cache:eject(BKey),
     riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
     UpdState = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
     {noreply, UpdState};
@@ -637,7 +636,6 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
 
 do_backend_delete(BKey, RObj, State = #state{mod = Mod, modstate = ModState}) ->
     %% object is a tombstone or all siblings are tombstones
-    riak_kv_mapred_cache:eject(BKey),
 
     %% Calculate the index specs to remove...
     %% JDM: This should just be a tombstone by this point, but better

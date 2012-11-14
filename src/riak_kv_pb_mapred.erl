@@ -49,8 +49,7 @@
          process_stream/3]).
 
 -record(state, {req,
-                req_ctx,
-                client}).
+                req_ctx}).
 
 -record(pipe_ctx, {ref,      % easier-access ref/reqid
                    mrc,      % #mrc_ctx{}
@@ -59,8 +58,7 @@
                    has_mr_query}). % true if the request contains a query.
 
 init() ->
-    {ok, C} = riak:local_client(),
-    #state{client=C}.
+    #state{}.
 
 decode(Code, Bin) ->
     {ok, riak_pb_codec:decode(Code, Bin)}.
@@ -75,12 +73,7 @@ process(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
         {error, Reason} ->
             {error, {format, Reason}, State};
         {ok, Inputs, Query, Timeout} ->
-            case riak_kv_util:mapred_system() of
-                pipe ->
-                    pipe_mapreduce(Req, State, Inputs, Query, Timeout);
-                legacy ->
-                    legacy_mapreduce(Req, State, Inputs, Query, Timeout)
-            end
+            pipe_mapreduce(Req, State, Inputs, Query, Timeout)
     end.
 
 process_stream(#kv_mrc_sink{ref=ReqId,
@@ -156,30 +149,6 @@ process_stream({pipe_timeout, Ref}, Ref,
     destroy_pipe(PipeCtx),
     {error, "timeout", clear_state_req(State)};
 
-%% LEGACY Handle response from mapred_stream/mapred_bucket_stream
-process_stream({flow_results, ReqId, done}, ReqId,
-            State=#state{req=#rpbmapredreq{}, req_ctx=ReqId}) ->
-    {done, #rpbmapredresp{done = 1}, State#state{req = undefined, req_ctx = undefined}};
-
-process_stream({flow_results, ReqId, {error, Reason}}, ReqId,
-            State=#state{req=#rpbmapredreq{}, req_ctx=ReqId}) ->
-    {error, {format, Reason}, clear_state_req(State)};
-
-process_stream({flow_results, PhaseId, ReqId, Res}, ReqId,
-            State=#state{req=#rpbmapredreq{content_type = ContentType},
-                         req_ctx=ReqId}) ->
-    case encode_mapred_phase(Res, ContentType, true) of
-        {error, Reason} ->
-            {error, {format, Reason},
-             State#state{req = undefined, req_ctx = undefined}};
-        Response ->
-            {reply, #rpbmapredresp{phase=PhaseId,response=Response}, State}
-    end;
-
-process_stream({flow_error, ReqId, Error}, ReqId,
-            State=#state{req=#rpbmapredreq{}, req_ctx=ReqId}) ->
-    {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}};
-
 process_stream(_,_,State) -> % Ignore any late replies from gen_servers/messages from fsms
     {ignore, State}.
 
@@ -215,53 +184,6 @@ pipe_mapreduce(Req, State, Inputs, Query, Timeout) ->
             {error, {format, "Phase ~p: ~s", [Fitting, Reason]}, State}
     end.
 
-legacy_mapreduce(#rpbmapredreq{content_type=ContentType}=Req,
-                 #state{client=C}=State, Inputs, Query, Timeout) ->
-    ResultTransformer = get_result_transformer(ContentType),
-    case is_binary(Inputs) orelse is_key_filter(Inputs) of
-        true ->
-            case C:mapred_bucket_stream(Inputs, Query,
-                                        self(), ResultTransformer, Timeout) of
-                {stop, Error} ->
-                    {error, {format, Error}, State};
-
-                {ok, ReqId} ->
-                    {reply, {stream,ReqId}, State#state{req = Req, req_ctx = ReqId}}
-            end;
-        false ->
-            case is_list(Inputs) of
-                true ->
-                    case C:mapred_stream(Query, self(), ResultTransformer, Timeout) of
-                        {stop, Error} ->
-                            {error, {format, Error}, State};
-
-                        {ok, {ReqId, FSM}} ->
-                            luke_flow:add_inputs(FSM, Inputs),
-                            luke_flow:finish_inputs(FSM),
-                            {reply, {stream,ReqId}, State#state{req = Req, req_ctx = ReqId}}
-                    end;
-                false ->
-                    case is_tuple(Inputs) andalso size(Inputs)==4 andalso
-                        element(1, Inputs) == modfun andalso
-                        is_atom(element(2, Inputs)) andalso
-                        is_atom(element(3, Inputs)) of
-                        true ->
-                            case C:mapred_stream(Query, self(), ResultTransformer, Timeout) of
-                                {stop, Error} ->
-                                    {error, {format,Error}, State};
-
-                                {ok, {ReqId, FSM}} ->
-                                    C:mapred_dynamic_inputs_stream(
-                                      FSM, Inputs, Timeout),
-                                    luke_flow:finish_inputs(FSM),
-                                    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}}
-                            end;
-                        false ->
-                            {error, {format, bad_mapred_inputs}, State}
-                    end
-            end
-    end.
-
 %% Decode a mapred query
 %% {ok, ParsedInputs, ParsedQuery, Timeout};
 decode_mapred_query(Query, <<"application/json">>) ->
@@ -270,13 +192,6 @@ decode_mapred_query(Query, <<"application/x-erlang-binary">>) ->
     riak_kv_mapred_term:parse_request(Query);
 decode_mapred_query(_Query, ContentType) ->
     {error, {unknown_content_type, ContentType}}.
-
-%% Detect key filtering
-is_key_filter({Bucket, Filters}) when is_binary(Bucket),
-                                      is_list(Filters) ->
-    true;
-is_key_filter(_) ->
-    false.
 
 %% PB can only return responses for one phase at a time,
 %% so we have to build a message for each
@@ -305,11 +220,3 @@ encode_mapred_phase(Res, <<"application/x-erlang-binary">>, _) ->
     term_to_binary(Res);
 encode_mapred_phase(_Res, ContentType, _) ->
     {error, {unknown_content_type, ContentType}}.
-
-%% get a result transformer for the content-type
-%% jsonify not_founds for application/json
-%% do nothing otherwise
-get_result_transformer(<<"application/json">>) ->
-    fun riak_kv_mapred_json:jsonify_not_found/1;
-get_result_transformer(_) ->
-    undefined.

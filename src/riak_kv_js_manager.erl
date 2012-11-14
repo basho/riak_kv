@@ -121,11 +121,6 @@ handle_call({mark_idle, VM}, _From, #state{master=Master,
 handle_call(reload_vms, _From, #state{master=Master, idle=Idle}=State) ->
     reload_idle_vms(Idle),
     mark_pending_reloads(Master, Idle),
-    if State#state.name == ?JSPOOL_MAP ->
-            riak_kv_mapred_cache:clear();
-       true ->
-            ok
-    end,
     {reply, ok, State};
 
 handle_call({reserve_batch_vm, Owner}, _From, State) ->
