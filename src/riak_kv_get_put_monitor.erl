@@ -110,10 +110,12 @@ tell_folsom_about_exit(get, Cause) when Cause == normal; Cause == shutdown ->
     % normal exit) but increment the errors count as well.
 tell_folsom_about_exit(put, _Cause) ->
     tell_folsom_about_exit(put, normal),
-    folsom_metrics:notify({put_fsm_errors, 1});
+    folsom_metrics:notify({put_fsm_errors_since_start, {inc, 1}}),
+    folsom_metrics:notify({put_fsm_errors_minute, 1});
 tell_folsom_about_exit(get, _Cause) ->
     tell_folsom_about_exit(get, normal),
-    folsom_metrics:notify({get_fsm_errors, 1}).
+    folsom_metrics:notify({get_fsm_errors_since_start, {inc, 1}}),
+    folsom_metrics:notify({get_fsm_errors_minute, 1}).
 
 orddict_get_erase(Key, Orddict) ->
     case orddict:find(Key, Orddict) of
