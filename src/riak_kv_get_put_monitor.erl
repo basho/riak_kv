@@ -38,25 +38,30 @@ put_fsm_spawned(Pid) ->
 %% ------------------------------------------------------------------
 
 init([]) ->
-    folsom_metrics:new_spiral(put_fsm_in_progress),
-    folsom_metrics:new_spiral(get_fsm_in_progress),
-    folsom_metrics:new_spiral(put_fsm_errors),
-    folsom_metrics:new_spiral(get_fsm_errors),
+    folsom_metrics:new_counter(put_fsm_in_progress),
+    folsom_metrics:new_counter(get_fsm_in_progress),
+    folsom_metrics:new_spiral(put_fsm_errors_minute),
+    folsom_metrics:new_spiral(get_fsm_errors_minute),
+    folsom_metrics:new_counter(put_fsm_errors_since_start),
+    folsom_metrics:new_counter(get_fsm_errors_since_start),
     {ok, #state{}}.
+
+handle_call(dump_state, _From, State) ->
+    {reply, State, State};
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({get_fsm_spawned, Pid}, State) ->
-    #state{monitor_list = MonList} = State,
-    List2 = insert_pid(Pid, get, MonList),
-    folsom_metrics:notify({get_fsm_in_progress, 1}),
+    #state{monitor_list = List} = State,
+    List2 = insert_pid(Pid, get, List),
+    folsom_metrics:notify({get_fsm_in_progress, {inc, 1}}),
     {noreply, State#state{monitor_list = List2}};
 
 handle_cast({put_fsm_spawned, Pid}, State) ->
     #state{monitor_list = List} = State,
     List2 = insert_pid(Pid, put, List),
-    folsom_metrics:notify({put_fsm_in_process, 1}),
+    folsom_metrics:notify({put_fsm_in_progress, {inc, 1}}),
     {noreply, State#state{monitor_list = List2}};
 
 handle_cast(stop, State) ->
@@ -94,9 +99,9 @@ insert_pid(Pid, Type, List) ->
     orddict:store(MonRef, {Pid, Type}, List).
 
 tell_folsom_about_exit(put, Cause) when Cause == normal; Cause == shutdown ->
-    folsom_metrics:notify({put_fsm_in_progress, -1});
+    folsom_metrics:notify({put_fsm_in_progress, {dec, 1}});
 tell_folsom_about_exit(get, Cause) when Cause == normal; Cause == shutdown ->
-    folsom_metrics:notify({get_fsm_in_progress, -1});
+    folsom_metrics:notify({get_fsm_in_progress, {dec, 1}});
 % for the abnormal cases, we not only decrmemt the in progess count (like a
     % normal exit) but increment the errors count as well.
 tell_folsom_about_exit(put, _Cause) ->
