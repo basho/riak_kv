@@ -29,7 +29,6 @@
 -export([test_vnode/1, put/7]).
 -export([start_vnode/1,
          get/3,
-         mget/3,
          del/3,
          put/6,
          coord_put/6,
@@ -116,14 +115,6 @@ get(Preflist, BKey, ReqId) ->
     riak_core_vnode_master:command(Preflist,
                                    Req,
                                    {fsm, undefined, self()},
-                                   riak_kv_vnode_master).
-
-mget(Preflist, BKeys, ReqId) ->
-    Req = ?KV_MGET_REQ{bkeys=BKeys,
-                       req_id=ReqId,
-                       from={fsm, self()}},
-    riak_core_vnode_master:command(Preflist,
-                                   Req,
                                    riak_kv_vnode_master).
 
 del(Preflist, BKey, ReqId) ->
@@ -287,8 +278,6 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
 
 handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
     do_get(Sender, BKey, ReqId, State);
-handle_command(?KV_MGET_REQ{bkeys=BKeys, req_id=ReqId, from=From}, _Sender, State) ->
-    do_mget(From, BKeys, ReqId, State);
 handle_command(#riak_kv_listkeys_req_v1{bucket=Bucket, req_id=ReqId}, _Sender,
                State=#state{mod=Mod, modstate=ModState, idx=Idx}) ->
     do_legacy_list_bucket(ReqId,Bucket,Mod,ModState,Idx,State);
@@ -827,19 +816,6 @@ do_get(_Sender, BKey, ReqID,
     Retval = do_get_term(BKey, Mod, ModState),
     riak_kv_stat:update(vnode_get),
     {reply, {r, Retval, Idx, ReqID}, State}.
-
-do_mget({fsm, Sender}, BKeys, ReqId, State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
-    F = fun(BKey) ->
-                R = do_get_term(BKey, Mod, ModState),
-                case R of
-                    {ok, Obj} ->
-                        gen_fsm:send_event(Sender, {r, Obj, Idx, ReqId});
-                    _ ->
-                        gen_fsm:send_event(Sender, {r, {R, BKey}, Idx, ReqId})
-                end,
-                riak_kv_stat:update(vnode_get) end,
-    [F(BKey) || BKey <- BKeys],
-    {noreply, State}.
 
 %% @private
 do_get_term(BKey, Mod, ModState) ->
