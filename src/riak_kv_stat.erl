@@ -152,17 +152,16 @@ do_per_index(Op, Idx, USecs) ->
 do_get_bucket(false, _) ->
     ok;
 do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize}=Args) ->
-    BucketAtom = binary_to_atom(Bucket, latin1),
-    case (catch folsom_metrics:notify_existing_metric({?APP, node, gets, BucketAtom}, 1, spiral)) of
+    case (catch folsom_metrics:notify_existing_metric({?APP, node, gets, Bucket}, 1, spiral)) of
         ok ->
-            [folsom_metrics:notify_existing_metric({?APP, node, gets, Dimension, BucketAtom}, Arg, histogram)
+            [folsom_metrics:notify_existing_metric({?APP, node, gets, Dimension, Bucket}, Arg, histogram)
              || {Dimension, Arg} <- [{time, Microsecs},
                                      {siblings, NumSiblings},
                                      {objsize, ObjSize}], Arg /= undefined],
-            do_stages([?APP, node, gets, time, BucketAtom], Stages);
+            do_stages([?APP, node, gets, time, Bucket], Stages);
         {'EXIT', _} ->
-            folsom_metrics:new_spiral({?APP, node, gets, BucketAtom}),
-            [register_stat({?APP, node, gets, Dimension, BucketAtom}, histogram) || Dimension <- [time,
+            folsom_metrics:new_spiral({?APP, node, gets, Bucket}),
+            [register_stat({?APP, node, gets, Dimension, Bucket}, histogram) || Dimension <- [time,
                                                                                   siblings,
                                                                                   objsize]],
             do_get_bucket(true, Args)
@@ -172,14 +171,13 @@ do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize}=Args) ->
 do_put_bucket(false, _) ->
     ok;
 do_put_bucket(true, {Bucket, Microsecs, Stages}=Args) ->
-    BucketAtom = binary_to_atom(Bucket, latin1),
-    case (catch folsom_metrics:notify_existing_metric({?APP, node, puts, BucketAtom}, 1, spiral)) of
+    case (catch folsom_metrics:notify_existing_metric({?APP, node, puts, Bucket}, 1, spiral)) of
         ok ->
-            folsom_metrics:notify_existing_metric({?APP, node, puts, time, BucketAtom}, Microsecs, histogram),
-            do_stages([?APP, node, puts, time, BucketAtom], Stages);
+            folsom_metrics:notify_existing_metric({?APP, node, puts, time, Bucket}, Microsecs, histogram),
+            do_stages([?APP, node, puts, time, Bucket], Stages);
         {'EXIT', _} ->
-            register_stat({?APP, node, puts, BucketAtom}, spiral),
-            register_stat({?APP, node, puts, time, BucketAtom}, histogram),
+            register_stat({?APP, node, puts, Bucket}, spiral),
+            register_stat({?APP, node, puts, time, Bucket}, histogram),
             do_put_bucket(true, Args)
     end.
 
