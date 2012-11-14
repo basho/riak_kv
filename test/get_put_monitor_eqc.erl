@@ -33,16 +33,8 @@ check() ->
 prop() ->
     ?FORALL(Cmds, commands(?MODULE), begin
         crypto:start(),
-        application:start(folsom),
-        {ok, Pid} = riak_kv_get_put_monitor:start_link(),
+        application:start(folsom),        
         {_,_,Res} = run_commands(?MODULE, Cmds),
-        unlink(Pid),
-        Monref = erlang:monitor(process, Pid),
-        riak_kv_get_put_monitor:stop(),
-        receive
-            {'DOWN', Monref, process, Pid, _} ->
-                ok
-        end,
         case Res of
             ok -> ok;
             _ -> io:format(user, "QC result: ~p\n", [Res])
@@ -55,8 +47,22 @@ prop() ->
 %% ====================================================================
 
 initial_state() ->
+    MaybePid = whereis(riak_kv_get_put_monitor),
+    riak_kv_get_put_monitor:stop(),
+    case MaybePid of
+        undefined -> ok;
+        _ -> riak_kv_test_util:wait_for_pid(MaybePid)
+    end,
+    application:start(folsom),
+    {ok, Pid} = riak_kv_get_put_monitor:start_link(),
+    unlink(Pid),
     #state{}.
 
+command(#state{put_fsm = [], get_fsm = []}) ->
+    oneof([
+        {call, ?MODULE, get_fsm_started, []},
+        {call, ?MODULE, put_fsm_started, []}
+    ]);
 command(S) ->
     oneof([
         {call, ?MODULE, get_fsm_started, []},
@@ -140,16 +146,18 @@ postcondition(S, {call, _Mod, _NiceShutdown, [get, _]}, Res) ->
 check_state(S) ->
     #state{put_errors = PutErrCount, get_errors = GetErrCount,
         put_fsm = PutList, get_fsm = GetList} = S,
-    ?debugFmt("state of thing:  ~p", [gen_server:call(riak_kv_get_put_monitor, dump_state)]),
+%    ?debugFmt("state of thing:  ~p", [gen_server:call(riak_kv_get_put_monitor, dump_state)]),
     % with a timetrap of 60 seconds, the spiral will never have values slide off
-    ?assertMatch([{count, PutErrCount},_], folsom_metrics:get_metric_value(put_fsm_errors_minute)),
-    ?assertMatch([{count, GetErrCount},_], folsom_metrics:get_metric_value(get_fsm_errors_minute)),
-    ?assertEqual(PutErrCount, folsom_metrics:get_metric_value(put_fsm_errors_since_start)),
-    ?assertEqual(GetErrCount, folsom_metrics:get_metric_value(get_fsm_errors_since_start)),
     PutCount = length(PutList),
     ?assertEqual(PutCount, folsom_metrics:get_metric_value(put_fsm_in_progress)),
     GetCount = length(GetList),
     ?assertEqual(GetCount, folsom_metrics:get_metric_value(get_fsm_in_progress)),
+    [{count, GotPutErrCount},_] = folsom_metrics:get_metric_value(put_fsm_errors_minute),
+    ?assertEqual(PutErrCount, GotPutErrCount),
+    [{count, GotGetErrCount},_] = folsom_metrics:get_metric_value(get_fsm_errors_minute),
+    ?assertEqual(GetErrCount, GotGetErrCount),
+    ?assertEqual(PutErrCount, folsom_metrics:get_metric_value(put_fsm_errors_since_start)),
+    ?assertEqual(GetErrCount, folsom_metrics:get_metric_value(get_fsm_errors_since_start)),
     true.
 
 %% ====================================================================
