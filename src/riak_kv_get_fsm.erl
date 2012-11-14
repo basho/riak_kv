@@ -67,8 +67,7 @@
                 startnow :: {non_neg_integer(), non_neg_integer(), non_neg_integer()},
                 get_usecs :: non_neg_integer(),
                 tracked_bucket=false :: boolean(), %% is per bucket stats enabled for this bucket
-                timing = [] :: [{atom(), {non_neg_integer(), non_neg_integer(),
-                           non_neg_integer()}}],
+                timing = [] :: [{atom(), erlang:timestamp()}],
                 calculated_timings :: {ResponseUSecs::non_neg_integer(),
                                        [{StateName::atom(), TimeUSecs::non_neg_integer()}]} | undefined
                }).
@@ -396,7 +395,7 @@ client_reply(Reply, StateData0 = #state{from = {raw, ReqId, Pid},
     ShortCode = riak_kv_get_core:result_shortcode(Reply),
     %% calculate timings here, since the trace macro needs total response time
     %% Stuff the result in state so we don't need to calculate it again
-    {ResponseUSecs, Stages} = riak_kv_fsm_util:calc_timing(StateData#state.timing),
+    {ResponseUSecs, Stages} = riak_kv_fsm_timing:calc_timing(StateData#state.timing),
     ?DTRACE(?C_GET_FSM_CLIENT_REPLY, [ShortCode, ResponseUSecs], ["client_reply"]),
     StateData#state{calculated_timings={ResponseUSecs, Stages}}.
 
@@ -428,7 +427,7 @@ client_info(true, StateData, Acc) ->
 client_info([], _StateData, Acc) ->
     Acc;
 client_info([timing | Rest], StateData = #state{timing=Timing}, Acc) ->
-    {ResponseUsecs, Stages} = riak_kv_fsm_util:calc_timing(Timing),
+    {ResponseUsecs, Stages} = riak_kv_fsm_timing:calc_timing(Timing),
     client_info(Rest, StateData, [{response_usecs, ResponseUsecs},
                                   {stages, Stages} | Acc]);
 client_info([vnodes | Rest], StateData = #state{get_core = GetCore}, Acc) ->
@@ -439,7 +438,7 @@ client_info([Unknown | Rest], StateData, Acc) ->
 
 %% Add timing information to the state
 add_timing(Stage, State = #state{timing = Timing}) ->
-    State#state{timing = riak_kv_fsm_util:add_timing(Stage, Timing)}.
+    State#state{timing = riak_kv_fsm_timing:add_timing(Stage, Timing)}.
 
 details() ->
     [timing,

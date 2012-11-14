@@ -181,6 +181,8 @@
 -export([start_link/0, get_stats/0,
          update/1, register_stats/0, produce_stats/0]).
 
+-export([track_bucket/1, untrack_bucket/1]).
+
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -208,6 +210,12 @@ get_stats() ->
 
 update(Arg) ->
     gen_server:cast(?SERVER, {update, Arg}).
+
+track_bucket(Bucket) when is_binary(Bucket) ->
+    riak_core_bucket:set_bucket(Bucket, [{stat_tracked, true}]).
+
+untrack_bucket(Bucket) when is_binary(Bucket) ->
+    riak_core_bucket:set_bucket(Bucket, [{stat_tracked, false}]).
 
 %% gen_server
 

@@ -470,7 +470,7 @@ finish(timeout, StateData = #state{timing = Timing, reply = Reply,
         _Ok ->
             %% TODO: Improve reporting of timing
             %% For now can add debug tracers to view the return from calc_timing
-            {Duration, Stages} = riak_kv_fsm_util:calc_timing(Timing),
+            {Duration, Stages} = riak_kv_fsm_timing:calc_timing(Timing),
             riak_kv_stat:update({put_fsm_time, Bucket, Duration, Stages, StatTracked}),
             ?DTRACE(?C_PUT_FSM_FINISH, [0, Duration], [])
     end,
@@ -829,7 +829,7 @@ client_info([], _StateData, Info) ->
     Info;
 client_info([timing | Rest], StateData = #state{timing = Timing}, Info) ->
     %% Duration is time from receiving request to responding
-    {ResponseUsecs, Stages} = riak_kv_fsm_util:calc_timing(Timing),
+    {ResponseUsecs, Stages} = riak_kv_fsm_timing:calc_timing(Timing),
     client_info(Rest, StateData, [{response_usecs, ResponseUsecs},
                                   {stages, Stages} | Info]).
 
@@ -839,7 +839,7 @@ default_details() ->
 
 %% Add timing information to the state
 add_timing(Stage, State = #state{timing = Timing}) ->
-    State#state{timing = riak_kv_fsm_util:add_timing(Stage, Timing)}.
+    State#state{timing = riak_kv_fsm_timing:add_timing(Stage, Timing)}.
 
 atom2list(A) when is_atom(A) ->
     atom_to_list(A);
