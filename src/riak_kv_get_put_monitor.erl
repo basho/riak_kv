@@ -1,3 +1,40 @@
+%% -------------------------------------------------------------------
+%%
+%% riak_kv_get_put_monitor:  Oberserve and stat log get/put fsm's
+%%
+%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%%
+%% This file is provided to you under the Apache License,
+%% Version 2.0 (the "License"); you may not use this file
+%% except in compliance with the License.  You may obtain
+%% a copy of the License at
+%%
+%%   http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing,
+%% software distributed under the License is distributed on an
+%% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+%% KIND, either express or implied.  See the License for the
+%% specific language governing permissions and limitations
+%% under the License.
+%%
+%% -------------------------------------------------------------------
+
+%% @doc Monitor reporting processes and notify folsom about live and error
+%% exits. It is up to the fsm to report it's existence to the monitor. If this
+%% module exits unexpectadly, the stats in folsom are not lost; a clean exit
+%% will reset the stats.
+%%
+%% The stats tracked are:
+%% * put_fsm_in_progress: a counter of the number of put fsm's current running.
+%% * get_fsm_in_progress: as above, but for get fsm's.
+%% * put_fsm_errors_minute: a spiral metric of the put fsm's that have exited 
+%% for a reason other than shutdown or normal.
+%% * get_fsm_errors_minute: as above, but for get fsm's.
+%% * put_fsm_errors_since_start: a count of all put fsm's that have exited for
+%% a reason other than shutdown or normal since the folsom stat was created.
+%% * get_fsm_errors_since_start: as above, but for get fsm's.
+
 -module(riak_kv_get_put_monitor).
 -behaviour(gen_server).
 -define(SERVER, ?MODULE).
@@ -21,15 +58,23 @@
 %% API Function Definitions
 %% ------------------------------------------------------------------
 
+%% @doc Starts the monitor service.
+-spec start_link() -> {'ok', pid()}.
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
+%% @doc Stops the service with reason 'normal'
+-spec stop() -> 'ok'.
 stop() ->
     gen_server:cast(?SERVER, stop).
 
+%% @doc Begin monitoring the passed pid and tag its stats for a get fsm.
+-spec get_fsm_spawned(Pid :: pid()) -> 'ok'.
 get_fsm_spawned(Pid) ->
     gen_server:cast(?SERVER, {get_fsm_spawned, Pid}).
 
+%% @doc Begin monitoring the passed pid and tag its stats for a put fsm.
+-spec put_fsm_spawned(Pid :: pid()) -> 'ok'.
 put_fsm_spawned(Pid) ->
     gen_server:cast(?SERVER, {put_fsm_spawned, Pid}).
 
@@ -37,6 +82,7 @@ put_fsm_spawned(Pid) ->
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 
+%% @private
 init([]) ->
     folsom_metrics:new_counter(put_fsm_in_progress),
     folsom_metrics:new_counter(get_fsm_in_progress),
@@ -46,12 +92,14 @@ init([]) ->
     folsom_metrics:new_counter(get_fsm_errors_since_start),
     {ok, #state{}}.
 
+%% @private
 handle_call(dump_state, _From, State) ->
     {reply, State, State};
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
+%% @private
 handle_cast({get_fsm_spawned, Pid}, State) ->
     #state{monitor_list = List} = State,
     List2 = insert_pid(Pid, get, List),
@@ -70,6 +118,7 @@ handle_cast(stop, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+%% @private
 handle_info({'DOWN', MonRef, process, Pid, Cause}, State) ->
     #state{monitor_list = MonList} = State,
     case orddict_get_erase(MonRef, MonList) of
@@ -84,6 +133,7 @@ handle_info({'DOWN', MonRef, process, Pid, Cause}, State) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
+%% @private
 terminate(_Reason, _State) ->
 	Counters = [put_fsm_in_progress, get_fsm_in_progress, put_fsm_errors_minute,
 				get_fsm_errors_minute, put_fsm_errors_since_start,
@@ -91,6 +141,7 @@ terminate(_Reason, _State) ->
 	[folsom_metrics:delete_metric(Counter) || Counter <- Counters],
     ok.
 
+%% @private
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
