@@ -98,11 +98,11 @@ start(_Type, _StartArgs) ->
                                            [{true, true}, {false, false}]}),
 
             riak_core_capability:register({riak_kv, legacy_keylisting},
-                                          [false, true],
-                                          true,
+                                          [false],
+                                          false,
                                           {riak_kv,
                                            legacy_keylisting,
-                                           [{true, true}, {false, false}]}),
+                                           [{false, false}]}),
 
             riak_core_capability:register({riak_kv, listkeys_backpressure},
                                           [true, false],
@@ -180,4 +180,3 @@ check_epoch() ->
                 "but your system says the epoch is ~p", [Epoch]),
             ok
     end.
-
