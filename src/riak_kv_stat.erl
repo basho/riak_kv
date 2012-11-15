@@ -254,7 +254,7 @@ stats() ->
      {precommit_fail, counter},
      {postcommit_fail, counter},
      {[vnode, backend, leveldb, read_block_error],
-      {function, fun riak_kv_stat:leveldb_read_block_errors/0}}].
+      {function, {function, ?MODULE, leveldb_read_block_errors}}}].
 
 %% @doc register a stat with folsom
 register_stat(Name, spiral) ->
