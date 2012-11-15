@@ -340,10 +340,15 @@ read_repair_stats() ->
     aggregate(read_repairs, [riak_kv, node, gets, read_repairs, '_', '_', '_'], [6,7]).
 
 %% TODO generalise for riak_core_stat_q
+%% aggregates spiral values for stats retrieved by `Query'
+%% aggregates by the key field(s) indexed at `Fields'
+%% produces a flat list of `BaseName_NameOfFieldAtIndex[_count]'
+%% to fit in with the existing naming convention in the legacy stat blob
 aggregate(BaseName, Query, Fields) ->
     Stats = riak_core_stat_q:get_stats(Query),
     Aggregates = do_aggregate(Stats, Fields),
-    recursive_join(BaseName, Aggregates).
+    FlatStats = flatten_aggregate_stats(BaseName, Aggregates),
+    lists:flatten(FlatStats).
 
 do_aggregate(Stats, Fields) ->
     lists:foldl(fun({Name, [{count, C0}, {one, O0}]}, Acc) ->
@@ -357,20 +362,27 @@ do_aggregate(Stats, Fields) ->
                 orddict:new(),
                 Stats).
 
+%% Generate a dictionary key for the running
+%% aggregation using key `Name' elements at index(es)
+%% in `Fields'
 key_from_fields(Name, Fields) ->
     Key = [element(N, Name) || N <- Fields],
     join(Key).
 
-recursive_join(BaseName, Aggregates) ->
-    L = orddict:fold(fun(K, V, Acc) when not is_list(V) ->
-                             [{join([BaseName, K]), V}|Acc];
-                        (K, V, Acc)  ->
-                             [recursive_join(join([BaseName, K]), V)|Acc]
-                     end,
-                     [],
-                     Aggregates),
-    lists:flatten(L).
+%% Folds over the aggregate nested dictionaries to create
+%% a flat list of stats whose names are made by
+%% joining key names to `BaseName'
+flatten_aggregate_stats(BaseName, Aggregates) ->
+    orddict:fold(fun(K, V, Acc) when not is_list(V) ->
+                         [{join([BaseName, K]), V}|Acc];
+                    (K, V, Acc)  ->
+                         [flatten_aggregate_stats(join([BaseName, K]), V)|Acc]
+                 end,
+                 [],
+                 Aggregates).
 
+%% Join a list of atoms into a single atom
+%% with elements separated by '_'
 join(L) ->
     join(L, <<>>).
 

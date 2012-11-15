@@ -262,10 +262,10 @@ register_stat(Name, histogram) ->
     folsom_metrics:new_histogram(Name, SampleType, SampleArgs).
 
 %% @doc the histogram sample type may be set in app.config
-%% use key `stat_sample_type` in the `riak_kv` section. Or the
-%% name of an `histogram` stat.
+%% use key `stat_sample_type' in the `riak_kv' section. Or the
+%% name of an `histogram' stat.
 %% Check the folsom homepage for available types.
-%% Defaults to `{slide_uniform, {60, 1028}}` (a uniform sliding window
+%% Defaults to `{slide_uniform, {60, 1028}}' (a uniform sliding window
 %% of 60 seconds, with a uniform sample of at most 1028 entries)
 get_sample_type(Name) ->
     SampleType0 = app_helper:get_env(riak_kv, stat_sample_type, {slide_uniform, {60, 1028}}),
