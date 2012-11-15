@@ -71,9 +71,10 @@ rewrite_cast({vnode_get, {Partition,_Node},
 rewrite_cast({vnode_list_bucket, {Partition,_Node},
               {FSM_pid, Bucket, ReqID}}) ->
     Req = riak_core_vnode_master:make_request(
-            #riak_kv_listkeys_req_v1{
+            #riak_kv_listkeys_req_v2{
                bucket=Bucket,
-               req_id=ReqID},
+               req_id=ReqID,
+               caller=self()},
             {fsm, undefined, FSM_pid},
             Partition),
     {ok, Req}.
@@ -167,7 +168,7 @@ legacy_kv_test_() ->
             ReqId = 456,
             RealStartTime = {0,0,0},
             Options = [],
-            send_0_11_0_cmd(vnode_put, 
+            send_0_11_0_cmd(vnode_put,
                             {self(), {Bucket,Key}, RObj1, ReqId, RealStartTime, Options}),
             receive
                 Msg ->
@@ -202,9 +203,7 @@ legacy_kv_test_() ->
 send_0_11_0_cmd(Cmd, Msg) ->
     gen_server:cast({riak_kv_vnode_master, node()},
                     {Cmd, {0, node()}, Msg}).
-                                  
+
 
 -endif. % BROKEN_EUNIT
 -endif.
-      
-    
