@@ -30,8 +30,7 @@
 -export([delete/2,delete/3,delete/4]).
 -export([delete_vclock/3,delete_vclock/4,delete_vclock/5]).
 -export([list_keys/1,list_keys/2,list_keys/3]).
--export([stream_list_keys/1,stream_list_keys/2,stream_list_keys/3,
-         stream_list_keys/4]).
+-export([stream_list_keys/1,stream_list_keys/2,stream_list_keys/3]).
 -export([filter_buckets/1]).
 -export([filter_keys/2,filter_keys/3]).
 -export([list_buckets/0,list_buckets/2]).
@@ -314,7 +313,7 @@ list_keys(Bucket, Timeout) ->
 list_keys(Bucket, Filter, Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout, plain]]),
+    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout]]),
     wait_for_listkeys(ReqId, Timeout).
 
 stream_list_keys(Bucket) ->
@@ -324,13 +323,9 @@ stream_list_keys(Bucket, Timeout) ->
     Me = self(),
     stream_list_keys(Bucket, Timeout, Me).
 
-stream_list_keys(Bucket, Timeout, Client) when is_pid(Client) ->
-    stream_list_keys(Bucket, Timeout, Client, plain).
-
 %% @spec stream_list_keys(riak_object:bucket(),
 %%                        TimeoutMillisecs :: integer(),
-%%                        Client :: pid(),
-%%                        ClientType :: atom()) ->
+%%                        Client :: pid()) ->
 %%       {ok, ReqId :: term()}
 %% @doc List the keys known to be present in Bucket.
 %%      Key lists are updated asynchronously, so this may be slightly
@@ -340,9 +335,7 @@ stream_list_keys(Bucket, Timeout, Client) when is_pid(Client) ->
 %%      and a final {ReqId, done} message.
 %%      None of the Keys lists will be larger than the number of
 %%      keys in Bucket on any single vnode.
-%%      If ClientType is set to 'mapred' instead of 'plain', then the
-%%      messages will be sent in the form of a MR input stream.
-stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
+stream_list_keys(Input, Timeout, Client) when is_pid(Client) ->
     ReqId = mk_reqid(),
     case Input of
         {Bucket, FilterInput} ->
@@ -356,8 +349,7 @@ stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
                                                           Client},
                                                          [Bucket,
                                                           FilterExprs,
-                                                          Timeout,
-                                                          ClientType]]),
+                                                          Timeout]]),
                     {ok, ReqId}
             end;
         Bucket ->
@@ -365,8 +357,7 @@ stream_list_keys(Input, Timeout, Client, ClientType) when is_pid(Client) ->
                                                 [{raw, ReqId, Client},
                                                  [Bucket,
                                                   none,
-                                                  Timeout,
-                                                  ClientType]]),
+                                                  Timeout]]),
             {ok, ReqId}
     end.
 
@@ -418,7 +409,7 @@ list_buckets() ->
 list_buckets(Filter, Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, [Filter, Timeout, plain]]),
+    riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, [Filter, Timeout]]),
     wait_for_listbuckets(ReqId, Timeout).
 
 %% @spec filter_buckets(Fun :: function()) ->
