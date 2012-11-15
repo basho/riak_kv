@@ -280,9 +280,11 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
                            start_time=StartTime,
                            options=Options},
                Sender, State=#state{idx=Idx}) ->
+    StartTS = os:timestamp(),
     riak_kv_mapred_cache:eject(BKey),
     riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
     UpdState = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
+    update_vnode_stats(vnode_put, Idx, StartTS),
     {noreply, UpdState};
 
 handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
@@ -631,7 +633,6 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     riak_core_vnode:reply(Sender, Reply),
 
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
-    riak_kv_stat:update(vnode_put),
     UpdState.
 
 do_backend_delete(BKey, RObj, State = #state{mod = Mod, modstate = ModState}) ->
@@ -825,12 +826,14 @@ put_merge(true, false, CurObj, UpdObj, VId, StartTime) ->
 %% @private
 do_get(_Sender, BKey, ReqID,
        State=#state{idx=Idx,mod=Mod,modstate=ModState}) ->
+    StartTS = os:timestamp(),
     Retval = do_get_term(BKey, Mod, ModState),
-    riak_kv_stat:update(vnode_get),
+    update_vnode_stats(vnode_get, Idx, StartTS),
     {reply, {r, Retval, Idx, ReqID}, State}.
 
 do_mget({fsm, Sender}, BKeys, ReqId, State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
     F = fun(BKey) ->
+                StartTS = os:timestamp(),
                 R = do_get_term(BKey, Mod, ModState),
                 case R of
                     {ok, Obj} ->
@@ -838,7 +841,7 @@ do_mget({fsm, Sender}, BKeys, ReqId, State=#state{idx=Idx, mod=Mod, modstate=Mod
                     _ ->
                         gen_fsm:send_event(Sender, {r, {R, BKey}, Idx, ReqId})
                 end,
-                riak_kv_stat:update(vnode_get) end,
+                update_vnode_stats(vnode_get, Idx, StartTS) end,
     [F(BKey) || BKey <- BKeys],
     {noreply, State}.
 
@@ -1046,7 +1049,9 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
 %% upon receipt of a handoff datum, there is no client FSM
 do_diffobj_put({Bucket, Key}, DiffObj,
                _StateData=#state{mod=Mod,
-                                 modstate=ModState}) ->
+                                 modstate=ModState,
+                                 idx=Idx}) ->
+    StartTS = os:timestamp(),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
     case Mod:get(Bucket, Key, ModState) of
@@ -1062,7 +1067,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
             case Res of
                 {ok, _UpdModState} ->
                     update_index_write_stats(IndexBackend, IndexSpecs),
-                    riak_kv_stat:update(vnode_put);
+                    update_vnode_stats(vnode_put, Idx, StartTS);
                 _ -> nop
             end,
             Res;
@@ -1087,7 +1092,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                     case Res of
                         {ok, _UpdModState} ->
                             update_index_write_stats(IndexBackend, IndexSpecs),
-                            riak_kv_stat:update(vnode_put);
+                            update_vnode_stats(vnode_put, Idx, StartTS);
                         _ ->
                             nop
                     end,
@@ -1194,6 +1199,11 @@ wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
             wait_for_vnode_status_results(PrefLists, ReqId, Acc)
     end.
 
+%% @private
+-spec update_vnode_stats(vnode_get | vnode_put, partition(), erlang:timestamp()) ->
+                                ok.
+update_vnode_stats(Op, Idx, StartTS) ->
+    riak_kv_stat:update({Op, Idx, timer:now_diff( os:timestamp(), StartTS)}).
 
 %% @private
 update_index_write_stats(false, _IndexSpecs) ->
