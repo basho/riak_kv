@@ -181,6 +181,8 @@
 -export([start_link/0, get_stats/0,
          update/1, register_stats/0, produce_stats/0]).
 
+-export([track_bucket/1, untrack_bucket/1]).
+
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -192,7 +194,8 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 register_stats() ->
-    [(catch folsom_metrics:delete_metric({?APP, Name})) || {Name, _Type} <- stats()],
+    [(catch folsom_metrics:delete_metric(Stat)) || Stat <- folsom_metrics:get_metrics(),
+                                                           is_tuple(Stat), element(1, Stat) == ?APP],
     [register_stat({?APP, Name}, Type) || {Name, Type} <- stats()],
     riak_core_stat_cache:register_app(?APP, {?MODULE, produce_stats, []}).
 
@@ -207,6 +210,12 @@ get_stats() ->
 
 update(Arg) ->
     gen_server:cast(?SERVER, {update, Arg}).
+
+track_bucket(Bucket) when is_binary(Bucket) ->
+    riak_core_bucket:set_bucket(Bucket, [{stat_tracked, true}]).
+
+untrack_bucket(Bucket) when is_binary(Bucket) ->
+    riak_core_bucket:set_bucket(Bucket, [{stat_tracked, false}]).
 
 %% gen_server
 
@@ -246,20 +255,23 @@ update1({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
 update1({vnode_index_delete, Postings}) ->
     folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes}, Postings, spiral),
     folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, Postings, spiral);
-update1({get_fsm, Bucket, Microsecs, undefined, undefined, PerBucket}) ->
+update1({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket}) ->
     folsom_metrics:notify_existing_metric({?APP, node_gets}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node_get_fsm_time}, Microsecs, histogram),
-    do_get_bucket(PerBucket, {Bucket, Microsecs, undefined, undefined});
-update1({get_fsm, Bucket, Microsecs, NumSiblings, ObjSize, PerBucket}) ->
+    do_stages([?APP, node_get_fsm, time], Stages),
+    do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined});
+update1({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket}) ->
     folsom_metrics:notify_existing_metric({?APP, node_gets}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node_get_fsm_time}, Microsecs, histogram),
     folsom_metrics:notify_existing_metric({?APP, node_get_fsm_siblings}, NumSiblings, histogram),
     folsom_metrics:notify_existing_metric({?APP, node_get_fsm_objsize}, ObjSize, histogram),
-    do_get_bucket(PerBucket, {Bucket, Microsecs, NumSiblings, ObjSize});
-update1({put_fsm_time, Bucket,  Microsecs, PerBucket}) ->
+    do_stages([?APP, node_get_fsm, time], Stages),
+    do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize});
+update1({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket}) ->
     folsom_metrics:notify_existing_metric({?APP, node_puts}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node_put_fsm_time}, Microsecs, histogram),
-    do_put_bucket(PerBucket, {Bucket, Microsecs});
+    do_stages([?APP, node_put_fsm, time], Stages),
+    do_put_bucket(PerBucket, {Bucket, Microsecs, Stages});
 update1(read_repairs) ->
     folsom_metrics:notify_existing_metric({?APP, read_repairs}, 1, spiral);
 update1(coord_redir) ->
@@ -277,35 +289,60 @@ update1(postcommit_fail) ->
 %%  per bucket get_fsm stats
 do_get_bucket(false, _) ->
     ok;
-do_get_bucket(true, {Bucket, Microsecs, NumSiblings, ObjSize}=Args) ->
+do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize}=Args) ->
     BucketAtom = binary_to_atom(Bucket, latin1),
-    case (catch folsom_metrics:notify_existing_metric({?APP, join(node_gets, BucketAtom)}, 1, spiral)) of
+    case (catch folsom_metrics:notify_existing_metric({?APP, node_get_fsm, total, BucketAtom}, 1, spiral)) of
         ok ->
-            [folsom_metrics:notify_existing_metric({?APP, join(Stat, BucketAtom)}, Arg, histogram)
-             || {Stat, Arg} <- [{node_get_fsm_time, Microsecs},
-                                {node_get_fsm_siblings, NumSiblings},
-                                {node_get_fsm_objsize, ObjSize}], Arg /= undefined];
+            [folsom_metrics:notify_existing_metric({?APP, node_get_fsm, Dimension, BucketAtom}, Arg, histogram)
+             || {Dimension, Arg} <- [{time, Microsecs},
+                                     {siblings, NumSiblings},
+                                     {objsize, ObjSize}], Arg /= undefined],
+            do_stages([?APP, node_get_fsm, time, BucketAtom], Stages);
         {'EXIT', _} ->
-            folsom_metrics:new_spiral({?APP, join(node_gets, BucketAtom)}),
-            [register_stat({?APP, join(Stat, BucketAtom)}, histogram) || Stat <- [node_get_fsm_time,
-                                                                                  node_get_fsm_siblings,
-                                                                                  node_get_fsm_objsize]],
+            folsom_metrics:new_spiral({?APP, node_get_fsm, total, BucketAtom}),
+            [register_stat({?APP, node_get_fsm, Dimension, BucketAtom}, histogram) || Dimension <- [time,
+                                                                                  siblings,
+                                                                                  objsize]],
             do_get_bucket(true, Args)
     end.
 
 %% per bucket put_fsm stats
 do_put_bucket(false, _) ->
     ok;
-do_put_bucket(true, {Bucket, Microsecs}=Args) ->
+do_put_bucket(true, {Bucket, Microsecs, Stages}=Args) ->
     BucketAtom = binary_to_atom(Bucket, latin1),
-    case (catch folsom_metrics:notify_existing_metric({?APP, join(node_puts, BucketAtom)}, 1, spiral)) of
+    case (catch folsom_metrics:notify_existing_metric({?APP, node_put_fsm, total, BucketAtom}, 1, spiral)) of
         ok ->
-            folsom_metrics:notify_existing_metric({?APP, join(node_put_fsm_time, BucketAtom)}, Microsecs, histogram);
+            folsom_metrics:notify_existing_metric({?APP, node_put_fsm, time, BucketAtom}, Microsecs, histogram),
+            do_stages([?APP, node_put_fsm, time, BucketAtom], Stages);
         {'EXIT', _} ->
-            register_stat({?APP, join(node_puts, BucketAtom)}, spiral),
-            register_stat({?APP, join(node_put_fsm_time, BucketAtom)}, histogram),
+            register_stat({?APP, node_put_fsm, total, BucketAtom}, spiral),
+            register_stat({?APP, node_put_fsm, time, BucketAtom}, histogram),
             do_put_bucket(true, Args)
     end.
+
+%% Path is list that provides a conceptual path to a stat
+%% folsom uses the tuple as flat name
+%% but some ets query magic means we can get stats by APP, Stat, DimensionX
+%% Path, then is a list like [?APP, StatName]
+%% Both get and put fsm have a list of {state, microseconds}
+%% that they provide for stats.
+%% Use the state to append to the stat "path" to create a further dimension on the stat
+do_stages(_Path, []) ->
+    ok;
+do_stages(Path, [{Stage, Time}|Stages]) ->
+    create_or_update(list_to_tuple(Path ++ [Stage]), Time, histogram),
+    do_stages(Path, Stages).
+
+create_or_update(Name, UpdateVal, Type) ->
+    case (catch folsom_metrics:notify_existing_metric(Name, UpdateVal, Type)) of
+        ok ->
+            ok;
+        {'EXIT', _} ->
+            register_stat(Name, Type),
+            create_or_update(Name, UpdateVal, Type)
+    end.
+
 
 %% @spec produce_stats(state(), integer()) -> proplist()
 %% @doc Produce a proplist-formatted view of the current aggregation
