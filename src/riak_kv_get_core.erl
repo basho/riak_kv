@@ -30,8 +30,9 @@
 -type reply() :: {ok, riak_object:riak_object()} |
                  {error, notfound} |
                  {error, any()}.
+-type repair_reason() :: notfound | outofdate.
 -type final_action() :: nop |
-                        {read_repair, [non_neg_integer()], riak_object:riak_object()} |
+                        {read_repair, [{non_neg_integer() | repair_reason()}], riak_object:riak_object()} |
                         delete.
 -type idxresult() :: {non_neg_integer(), result()}.
 
@@ -90,7 +91,7 @@ result_shortcode({ok, _RObj})       -> 1;
 result_shortcode({error, notfound}) -> 0;
 result_shortcode(_)                 -> -1.
 
-%% Check if enough results have been added to respond 
+%% Check if enough results have been added to respond
 -spec enough(getcore()) -> boolean().
 enough(#getcore{r = R, num_ok = NumOk,
                 num_notfound = NumNotFound,
@@ -126,24 +127,24 @@ response(GetCore = #getcore{r = R, num_ok = NumOk, num_notfound = NumNotFound,
                                             riak_kv_util:is_x_deleted(RObj)]),
                     Fails = [F || F = {_Idx, {error, Reason}} <- Results,
                                   Reason /= notfound],
-                    fail_reply(R, NumOk, NumOk - DelObjs, 
+                    fail_reply(R, NumOk, NumOk - DelObjs,
                                NumNotFound + DelObjs, Fails)
             end,
     {Reply, GetCore#getcore{merged = Merged}}.
 
 %% Check if all expected results have been added
 -spec has_all_results(getcore()) -> boolean().
-has_all_results(#getcore{n = N, num_ok = NOk, 
+has_all_results(#getcore{n = N, num_ok = NOk,
                          num_fail = NFail, num_notfound = NNF}) ->
     NOk + NFail + NNF >= N.
 
 %% Decide on any post-response actions
 %% nop - do nothing
-%% {readrepair, Indices, MObj} - send read repairs iff any vnode has ancestor data 
+%% {readrepair, Indices, MObj} - send read repairs iff any vnode has ancestor data
 %%                               (including tombstones)
 %% delete - issue deletes if all vnodes returned tombstones.  This needs to be
 %%          supplemented with a check that the vnodes were all primaries.
-%% 
+%%
 -spec final_action(getcore()) -> {final_action(), getcore()}.
 final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                                 allow_mult = AllowMult}) ->
@@ -158,16 +159,16 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                       notfound ->
                           [];
                       _ -> % ok or tombstone
-                          [Idx || {Idx, {ok, RObj}} <- Results, 
+                          [{Idx, outofdate} || {Idx, {ok, RObj}} <- Results,
                                   strict_descendant(MObj, RObj)] ++
-                              [Idx || {Idx, {error, notfound}} <- Results]
+                              [{Idx, notfound} || {Idx, {error, notfound}} <- Results]
                   end,
     Action = case ReadRepairs of
                  [] when ObjState == tombstone ->
                      %% Allow delete if merge object is deleted,
                      %% there are no read repairs pending and
                      %% a value was received from all vnodes
-                     case riak_kv_util:is_x_deleted(MObj) andalso 
+                     case riak_kv_util:is_x_deleted(MObj) andalso
                          length([xx || {_Idx, {ok, _RObj}} <- Results]) == N of
                          true ->
                              delete;
@@ -182,10 +183,10 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
     {Action, GetCore#getcore{merged = Merged}}.
 
 %% Return request info
--spec info(undefined | getcore()) -> [{vnode_oks, non_neg_integer()} | 
+-spec info(undefined | getcore()) -> [{vnode_oks, non_neg_integer()} |
                                       {vnode_errors, [any()]}].
-                  
-info(undefined) -> 
+
+info(undefined) ->
     []; % make uninitialized case easier
 info(#getcore{num_ok = NumOks, num_fail = NumFail, results = Results}) ->
     Oks = [{vnode_oks, NumOks}],
@@ -205,7 +206,7 @@ info(#getcore{num_ok = NumOks, num_fail = NumFail, results = Results}) ->
 strict_descendant(O1, O2) ->
     vclock:descends(riak_object:vclock(O1),riak_object:vclock(O2)) andalso
     not vclock:descends(riak_object:vclock(O2),riak_object:vclock(O1)).
-        
+
 merge(Replies, AllowMult) ->
     RObjs = [RObj || {_I, {ok, RObj}} <- Replies],
     case RObjs of
@@ -225,5 +226,3 @@ fail_reply(_R, _NumR, 0, NumNotFound, []) when NumNotFound > 0 ->
     {error, notfound};
 fail_reply(R, NumR, _NumNotDeleted, _NumNotFound, _Fails) ->
     {error, {r_val_unsatisfied, R,  NumR}}.
-
-
