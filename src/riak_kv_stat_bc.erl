@@ -146,6 +146,7 @@ produce_stats() ->
       [lists:flatten(backwards_compat(riak_core_stat_q:get_stats([riak_kv]))),
        backwards_compat_pb(riak_core_stat_q:get_stats([riak_api])),
        read_repair_stats(),
+       level_stats(),
        pipe_stats(),
        cpu_stats(),
        mem_stats(),
@@ -328,6 +329,11 @@ bc_stat_val(StatName, Val) when is_list(Val) ->
     [{join([StatName, ValName]), ValVal} || {ValName, ValVal} <- Val];
 bc_stat_val(StatName, Val) ->
     {StatName, Val}.
+
+%% Leveldb stats are a last minute new edition to the blob
+level_stats() ->
+    Stats = riak_core_stat_q:get_stats([riak_kv, vnode, backend, leveldb, read_block_error]),
+    [{join(lists:nthtail(3, tuple_to_list(Name))), Val} || {Name, Val} <- Stats].
 
 %% Read repair stats are a new edition to the legacy blob.
 %% Added to the blob since the stat query interface was not ready for the 1.3

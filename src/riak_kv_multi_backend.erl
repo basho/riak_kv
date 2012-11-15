@@ -314,7 +314,12 @@ is_empty(#state{backends=Backends}) ->
 -spec status(state()) -> [{atom(), term()}].
 status(#state{backends=Backends}) ->
     %% @TODO Reexamine how this is handled
-    [{N, Mod:status(ModState)} || {N, Mod, ModState} <- Backends].
+    %% all backend mods return a proplist from Mod:status/1
+    %% So as to tag the backend with its mod, without
+    %% breaking this API list of two tuples return,
+    %% add the tuple {mod, Mod} to the status for each
+    %% backend.
+    [{N, [{mod, Mod} | Mod:status(ModState)]} || {N, Mod, ModState} <- Backends].
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.

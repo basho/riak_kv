@@ -300,7 +300,8 @@ is_empty(#state{ref=Ref}) ->
 -spec status(state()) -> [{atom(), term()}].
 status(State) ->
     {ok, Stats} = eleveldb:status(State#state.ref, <<"leveldb.stats">>),
-    [{stats, Stats}].
+    {ok, ReadBlockError} = eleveldb:status(State#state.ref, <<"leveldb.ReadBlockError">>),
+    [{stats, Stats}, {read_block_error, ReadBlockError}].
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
@@ -655,7 +656,7 @@ retry_fail_test() ->
         ok = stop(State2)
     after
         os:cmd("rm -rf " ++ Root),
-        application:unset_env(riak_kv, eleveldb_open_retries), 
+        application:unset_env(riak_kv, eleveldb_open_retries),
         application:unset_env(riak_kv, eleveldb_open_retry_delay)
     end.
 
