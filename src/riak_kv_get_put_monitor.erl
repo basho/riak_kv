@@ -25,19 +25,29 @@
 %% module exits unexpectadly, the stats in folsom are not lost; a clean exit
 %% will reset the stats.
 %%
-%% The stats tracked are:
-%% * put_fsm_in_progress: a counter of the number of put fsm's current running.
-%% * get_fsm_in_progress: as above, but for get fsm's.
-%% * put_fsm_errors_minute: a spiral metric of the put fsm's that have exited 
-%% for a reason other than shutdown or normal.
-%% * get_fsm_errors_minute: as above, but for get fsm's.
-%% * put_fsm_errors_since_start: a count of all put fsm's that have exited for
-%% a reason other than shutdown or normal since the folsom stat was created.
-%% * get_fsm_errors_since_start: as above, but for get fsm's.
-
+%% The stat names are all 4 element tuples, the first two elements being
+%% 'riak_kv', then the local node. The third is either 'get' or 'put' depending
+%% on if the fsm reporting in was for a get or a put action.  The final element
+%% is either 'in_progess' or 'errors'.
+%%
+%% The 'in_progess' is a simple counter reporting the number of get or put fsm's
+%% currently alive.  'errors' is a spiral for all fsm's that exited with a
+%% reason other than normal or shutdown.
 -module(riak_kv_get_put_monitor).
 -behaviour(gen_server).
 -define(SERVER, ?MODULE).
+-define(STATTYPES, [
+    {new_counter, put, in_progess},
+    {new_counter, get, in_progess},
+    {new_spiral, put, errors},
+    {new_spiral, get, errors}
+]).
+-define(COUNTER(FsmType, DataPoint), {riak_kv, node(), FsmType, DataPoint}).
+-define(COUNTERS, [?COUNTER(FsmType, DataPoint) ||
+    {_, FsmType, DataPoint} <- ?STATTYPES]).
+
+-type metric() :: {'riak_kv', node(), 'put' | 'get', 'in_progess' | 'errors'}.
+-type spiral_value() :: [{'counter', non_neg_integer()} | {'one', non_neg_integer()}].
 
 -record(state, {monitor_list = []}).
 
@@ -45,7 +55,8 @@
 %% API Function Exports
 %% ------------------------------------------------------------------
 
--export([start_link/0, get_fsm_spawned/1, put_fsm_spawned/1, stop/0]).
+-export([start_link/0, get_fsm_spawned/1, put_fsm_spawned/1,
+    all_stats/0, stop/0]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -78,18 +89,26 @@ get_fsm_spawned(Pid) ->
 put_fsm_spawned(Pid) ->
     gen_server:cast(?SERVER, {put_fsm_spawned, Pid}).
 
+%% @doc Get a proplist of all the stats tracked thus far.
+-spec all_stats() -> [{metric(), non_neg_integer() | spiral_value()}].
+all_stats() ->
+    [{Key, folsom_metrics:get_metric_value(Key)} ||
+        Key <- ?COUNTERS].
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 
 %% @private
 init([]) ->
-    folsom_metrics:new_counter(put_fsm_in_progress),
-    folsom_metrics:new_counter(get_fsm_in_progress),
-    folsom_metrics:new_spiral(put_fsm_errors_minute),
-    folsom_metrics:new_spiral(get_fsm_errors_minute),
-    folsom_metrics:new_counter(put_fsm_errors_since_start),
-    folsom_metrics:new_counter(get_fsm_errors_since_start),
+    [begin
+        folsom_metrics:Func(?COUNTER(FsmType, DataPoint))
+    end || {Func, FsmType, DataPoint} <- ?STATTYPES],
+%    folsom_metrics:new_counter(put_fsm_in_progress),
+%    folsom_metrics:new_counter(get_fsm_in_progress),
+%    folsom_metrics:new_spiral(put_fsm_errors_minute),
+%    folsom_metrics:new_spiral(get_fsm_errors_minute),
+%    folsom_metrics:new_counter(put_fsm_errors_since_start),
+%    folsom_metrics:new_counter(get_fsm_errors_since_start),
     {ok, #state{}}.
 
 %% @private
@@ -103,13 +122,13 @@ handle_call(_Request, _From, State) ->
 handle_cast({get_fsm_spawned, Pid}, State) ->
     #state{monitor_list = List} = State,
     List2 = insert_pid(Pid, get, List),
-    folsom_metrics:notify({get_fsm_in_progress, {inc, 1}}),
+    tell_folsom_about_spawn(get),
     {noreply, State#state{monitor_list = List2}};
 
 handle_cast({put_fsm_spawned, Pid}, State) ->
     #state{monitor_list = List} = State,
     List2 = insert_pid(Pid, put, List),
-    folsom_metrics:notify({put_fsm_in_progress, {inc, 1}}),
+    tell_folsom_about_spawn(put),
     {noreply, State#state{monitor_list = List2}};
 
 handle_cast(stop, State) ->
@@ -135,10 +154,7 @@ handle_info(_Info, State) ->
 
 %% @private
 terminate(_Reason, _State) ->
-    Counters = [put_fsm_in_progress, get_fsm_in_progress, put_fsm_errors_minute,
-                get_fsm_errors_minute, put_fsm_errors_since_start,
-                get_fsm_errors_since_start],
-    [folsom_metrics:delete_metric(Counter) || Counter <- Counters],
+    [folsom_metrics:delete_metric(Counter) || Counter <- ?COUNTERS],
     ok.
 
 %% @private
@@ -153,20 +169,16 @@ insert_pid(Pid, Type, List) ->
     MonRef = erlang:monitor(process, Pid),
     orddict:store(MonRef, {Pid, Type}, List).
 
-tell_folsom_about_exit(put, Cause) when Cause == normal; Cause == shutdown ->
-    folsom_metrics:notify({put_fsm_in_progress, {dec, 1}});
-tell_folsom_about_exit(get, Cause) when Cause == normal; Cause == shutdown ->
-    folsom_metrics:notify({get_fsm_in_progress, {dec, 1}});
+tell_folsom_about_spawn(Type) ->
+    folsom_metrics:notify({?COUNTER(Type, in_progess), {inc, 1}}).
+
+tell_folsom_about_exit(Type, Cause) when Cause == normal; Cause == shutdown ->
+    folsom_metrics:notify({?COUNTER(Type, in_progess), {dec, 1}});
 % for the abnormal cases, we not only decrmemt the in progess count (like a
     % normal exit) but increment the errors count as well.
-tell_folsom_about_exit(put, _Cause) ->
-    tell_folsom_about_exit(put, normal),
-    folsom_metrics:notify({put_fsm_errors_since_start, {inc, 1}}),
-    folsom_metrics:notify({put_fsm_errors_minute, 1});
-tell_folsom_about_exit(get, _Cause) ->
-    tell_folsom_about_exit(get, normal),
-    folsom_metrics:notify({get_fsm_errors_since_start, {inc, 1}}),
-    folsom_metrics:notify({get_fsm_errors_minute, 1}).
+tell_folsom_about_exit(Type, _Cause) ->
+    tell_folsom_about_exit(Type, normal),
+    folsom_metrics:notify({?COUNTER(Type, errors), 1}).
 
 orddict_get_erase(Key, Orddict) ->
     case orddict:find(Key, Orddict) of
