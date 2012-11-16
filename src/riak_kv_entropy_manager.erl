@@ -240,6 +240,14 @@ handle_cast(_Msg, State) ->
 handle_info(tick, State) ->
     State2 = maybe_tick(State),
     {noreply, State2};
+handle_info({{hashtree_pid, Index}, Reply}, State) ->
+    case Reply of
+        {ok, Pid} when is_pid(Pid) ->
+            State2 = add_hashtree_pid(Index, Pid, State),
+            {noreply, State2};
+        _ ->
+            {noreply, State}
+    end;
 handle_info({'DOWN', Ref, _, Obj, _}, State) ->
     State2 = maybe_release_lock(Ref, State),
     State3 = maybe_clear_exchange(Ref, State2),
@@ -273,11 +281,11 @@ settings() ->
             {false, []}
     end.
 
--spec maybe_reload_hashtrees(state()) -> state().
-maybe_reload_hashtrees(State) ->
+-spec maybe_reload_hashtrees(riak_core_ring(), state()) -> state().
+maybe_reload_hashtrees(Ring, State) ->
     case lists:member(riak_kv, riak_core_node_watcher:services(node())) of
         true ->
-            reload_hashtrees(State);
+            reload_hashtrees(Ring, State);
         false ->
             State
     end.
@@ -285,24 +293,27 @@ maybe_reload_hashtrees(State) ->
 %% Determine the index_hashtree pid for each running primary vnode. This
 %% function is called each tick to ensure that any newly spawned vnodes are
 %% queried.
--spec reload_hashtrees(state()) -> state().
-reload_hashtrees(State=#state{trees=Trees}) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+-spec reload_hashtrees(riak_core_ring(), state()) -> state().
+reload_hashtrees(Ring, State=#state{trees=Trees}) ->
     Indices = riak_core_ring:my_indices(Ring),
     Existing = dict:from_list(Trees),
     MissingIdx = [Idx || Idx <- Indices,
                          not dict:is_key(Idx, Existing)],
-    L = [{Idx, Pid} || Idx <- MissingIdx,
-                       {ok,Pid} <- [riak_kv_vnode:hashtree_pid(Idx)],
-                       is_pid(Pid) andalso is_process_alive(Pid)],
-    Trees2 = orddict:from_list(Trees ++ L),
-    State2 = State#state{trees=Trees2},
-    State3 = lists:foldl(fun({Idx,Pid}, StateAcc) ->
-                                 monitor(process, Pid),
-                                 add_index_exchanges(Idx, StateAcc)
-                         end, State2, L),
-    State3.
+    [riak_kv_vnode:request_hashtree_pid(Idx) || Idx <- MissingIdx],
+    State.
 
+add_hashtree_pid(Index, Pid, State=#state{trees=Trees}) ->
+    case orddict:find(Index, Trees) of
+        {ok, Pid} ->
+            %% Already know about this hashtree
+            State;
+        _ ->
+            monitor(process, Pid),
+            Trees2 = orddict:store(Index, Pid, Trees),
+            State2 = State#state{trees=Trees2},
+            State3 = add_index_exchanges(Index, State2),
+            State3
+    end.
 
 -spec do_get_lock(any(),pid(),state()) -> {ok | max_concurrency, state()}.
 do_get_lock(_Type, Pid, State=#state{locks=Locks}) ->
@@ -378,11 +389,12 @@ maybe_tick(State) ->
 
 -spec tick(state()) -> state().
 tick(State) ->
-    State2 = maybe_reload_hashtrees(State),
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    State2 = maybe_reload_hashtrees(Ring, State),
     State3 = lists:foldl(fun(_,S) ->
                                  maybe_poke_tree(S)
                          end, State2, lists:seq(1,10)),
-    State4 = maybe_exchange(State3),
+    State4 = maybe_exchange(Ring, State3),
     State4.
 
 -spec maybe_poke_tree(state()) -> state().
@@ -461,9 +473,7 @@ start_exchange(LocalVN, {RemoteIdx, IndexN}, Ring, State) ->
                     %% be running (eg. after a crash).  Send request to
                     %% the vnode to trigger on-demand start and requeue
                     %% exchange.
-                    spawn(fun() ->
-                                  riak_kv_vnode:hashtree_pid(LocalIdx)
-                          end),
+                    riak_kv_vnode:request_hashtree_pid(LocalIdx),
                     State2 = requeue_exchange(LocalIdx, RemoteIdx, IndexN, State),
                     {not_built, State2};
                 {ok, Tree} ->
@@ -532,9 +542,8 @@ already_exchanging(Index, #state{exchanges=E}) ->
             true
     end.
 
--spec maybe_exchange(state()) -> state().
-maybe_exchange(State) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+-spec maybe_exchange(riak_core_ring(), state()) -> state().
+maybe_exchange(Ring, State) ->
     case next_exchange(Ring, State) of
         {none, State2} ->
             State2;

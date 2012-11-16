@@ -45,7 +45,8 @@
          repair/1,
          repair_status/1,
          repair_filter/1,
-         hashtree_pid/1]).
+         hashtree_pid/1,
+         request_hashtree_pid/1]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -290,6 +291,17 @@ hashtree_pid(Partition) ->
                                         {hashtree_pid, node()},
                                         riak_kv_vnode_master,
                                         infinity).
+
+%% Asynchronous version of {@link hashtree_pid/1} that sends a message back to
+%% the calling process. Used by the {@link riak_kv_entropy_manager}.
+-spec request_hashtree_pid(index()) -> ok.
+request_hashtree_pid(Partition) ->
+    ReqId = {hashtree_pid, Partition},
+    riak_core_vnode_master:command({Partition, node()},
+                                   {hashtree_pid, node()},
+                                   {raw, ReqId, self()},
+                                   riak_kv_vnode_master).
+
 %% VNode callbacks
 
 init([Index]) ->
