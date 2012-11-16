@@ -246,6 +246,14 @@ wait_for_req_id(ReqId, Pid) ->
 
 start_fake_get_put_monitor() ->
     Pid = spawn_link(?MODULE, fake_get_put_monitor, [undefined]),
+    case whereis(riak_kv_get_put_monitor) of
+        undefined ->
+            ok;
+        OldPid ->
+            unlink(OldPid),
+            exit(OldPid, shutdown),
+            riak_kv_test_util:wait_for_pid(OldPid)
+    end,
     register(riak_kv_get_put_monitor, Pid),
     {ok, Pid}.
 

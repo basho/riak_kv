@@ -37,16 +37,16 @@
 -behaviour(gen_server).
 -define(SERVER, ?MODULE).
 -define(STATTYPES, [
-    {new_counter, put, in_progess},
-    {new_counter, get, in_progess},
-    {new_spiral, put, errors},
-    {new_spiral, get, errors}
+    {new_counter, puts, in_progess},
+    {new_counter, gets, in_progess},
+    {new_spiral, puts, errors},
+    {new_spiral, gets, errors}
 ]).
 -define(COUNTER(FsmType, DataPoint), {riak_kv, node(), FsmType, DataPoint}).
 -define(COUNTERS, [?COUNTER(FsmType, DataPoint) ||
     {_, FsmType, DataPoint} <- ?STATTYPES]).
 
--type metric() :: {'riak_kv', node(), 'put' | 'get', 'in_progess' | 'errors'}.
+-type metric() :: {'riak_kv', node(), 'puts' | 'gets', 'in_progess' | 'errors'}.
 -type spiral_value() :: [{'counter', non_neg_integer()} | {'one', non_neg_integer()}].
 
 -record(state, {monitor_list = []}).
@@ -98,7 +98,7 @@ all_stats() ->
 %% Returns the last count for the get fms's in progress.
 -spec get_in_progress() -> non_neg_integer().
 get_in_progress() ->
-    folsom_metrics:get_metric_value(?COUNTER(get, in_progress)).
+    folsom_metrics:get_metric_value(?COUNTER(gets, in_progress)).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
@@ -121,14 +121,14 @@ handle_call(_Request, _From, State) ->
 %% @private
 handle_cast({get_fsm_spawned, Pid}, State) ->
     #state{monitor_list = List} = State,
-    List2 = insert_pid(Pid, get, List),
-    tell_folsom_about_spawn(get),
+    List2 = insert_pid(Pid, gets, List),
+    tell_folsom_about_spawn(gets),
     {noreply, State#state{monitor_list = List2}};
 
 handle_cast({put_fsm_spawned, Pid}, State) ->
     #state{monitor_list = List} = State,
-    List2 = insert_pid(Pid, put, List),
-    tell_folsom_about_spawn(put),
+    List2 = insert_pid(Pid, puts, List),
+    tell_folsom_about_spawn(puts),
     {noreply, State#state{monitor_list = List2}};
 
 handle_cast(stop, State) ->
