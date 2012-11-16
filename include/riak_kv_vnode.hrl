@@ -11,11 +11,6 @@
           bkey :: {binary(), binary()},
           req_id :: non_neg_integer()}).
 
--record(riak_kv_mget_req_v1, {
-          bkeys :: list({binary(), binary()}),
-          req_id :: non_neg_integer(),
-          from :: term()}).
-
 -record(riak_kv_listkeys_req_v2, {
           bucket :: binary()|'_'|tuple(),
           req_id :: non_neg_integer(),
@@ -62,7 +57,6 @@
 
 -define(KV_PUT_REQ, #riak_kv_put_req_v1).
 -define(KV_GET_REQ, #riak_kv_get_req_v1).
--define(KV_MGET_REQ, #riak_kv_mget_req_v1).
 -define(KV_LISTBUCKETS_REQ, #riak_kv_listbuckets_req_v1).
 -define(KV_LISTKEYS_REQ, #riak_kv_listkeys_req_v4).
 -define(KV_INDEX_REQ, #riak_kv_index_req_v2).
