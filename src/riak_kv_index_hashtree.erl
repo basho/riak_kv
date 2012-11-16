@@ -504,15 +504,15 @@ do_compare(Id, Remote, AccFun, From, State) ->
                           "(vnode)=~p (preflist)=~p", [State#state.index, Id]),
             gen_server:reply(From, []);
         {ok, Tree} ->
-            spawn(fun() ->
-                          Result = case AccFun of
-                                       undefined ->
-                                           hashtree:compare(Tree, Remote);
-                                       _ ->
-                                           hashtree:compare(Tree, Remote, AccFun)
-                                   end,
-                          gen_server:reply(From, Result)
-                  end)
+            spawn_link(fun() ->
+                               Result = case AccFun of
+                                            undefined ->
+                                                hashtree:compare(Tree, Remote);
+                                            _ ->
+                                                hashtree:compare(Tree, Remote, AccFun)
+                                        end,
+                               gen_server:reply(From, Result)
+                       end)
     end,
     ok.
 
