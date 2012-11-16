@@ -155,18 +155,19 @@ check_state(S) ->
     timer:sleep(10),
 
     % with a timetrap of 60 seconds, the spiral will never have values slide off
-    PutCount = length(PutList),
-    ?assertEqual(PutCount, folsom_metrics:get_metric_value(put_fsm_in_progress)),
-    GetCount = length(GetList),
-    ?assertEqual(GetCount, folsom_metrics:get_metric_value(get_fsm_in_progress)),
+    MetricExpects = [
+        {{riak_kv, node(), put, in_progess}, length(PutList)},
+        {{riak_kv, node(), get, in_progess}, length(GetList)},
+        {{riak_kv, node(), put, errors}, [{count, PutErrCount}, {one, PutErrCount}]},
+        {{riak_kv, node(), get, errors}, [{count, GetErrCount}, {one, GetErrCount}]}
+    ],
 
-    ?assertEqual(PutErrCount, folsom_metrics:get_metric_value(put_fsm_errors_since_start)),
-    ?assertEqual(GetErrCount, folsom_metrics:get_metric_value(get_fsm_errors_since_start)),
+    [ begin
+        ?assertEqual(Expected, folsom_metrics:get_metric_value(Metric))
+    end || {Metric, Expected} <- MetricExpects],
 
-    [{count, GotPutErrCount},_] = folsom_metrics:get_metric_value(put_fsm_errors_minute),
-    ?assertEqual(PutErrCount, GotPutErrCount),
-    [{count, GotGetErrCount},_] = folsom_metrics:get_metric_value(get_fsm_errors_minute),
-    ?assertEqual(GetErrCount, GotGetErrCount),
+    AllMetrics = riak_kv_get_put_monitor:all_stats(),
+    ?assertEqual(ordsets:from_list(MetricExpects), ordsets:from_list(AllMetrics)),
     true.
 
 %% ====================================================================
