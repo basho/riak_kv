@@ -109,12 +109,6 @@ init([]) ->
     [begin
         folsom_metrics:Func(?COUNTER(FsmType, DataPoint))
     end || {Func, FsmType, DataPoint} <- ?STATTYPES],
-%    folsom_metrics:new_counter(put_fsm_in_progress),
-%    folsom_metrics:new_counter(get_fsm_in_progress),
-%    folsom_metrics:new_spiral(put_fsm_errors_minute),
-%    folsom_metrics:new_spiral(get_fsm_errors_minute),
-%    folsom_metrics:new_counter(put_fsm_errors_since_start),
-%    folsom_metrics:new_counter(get_fsm_errors_since_start),
     {ok, #state{}}.
 
 %% @private
