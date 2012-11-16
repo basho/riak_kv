@@ -270,4 +270,24 @@ is_get_put_last_cast(Type, Pid) ->
             false
     end.
 
+start_fake_rng(ProcessName) ->
+    Pid = spawn_link(?MODULE, fake_rng, [1]),
+    register(ProcessName, Pid),
+    {ok, Pid}.
+
+set_fake_rng(ProcessName, Val) ->
+    gen_server:cast(ProcessName, {set, Val}).
+
+get_fake_rng(ProcessName) ->
+    gen_server:call(ProcessName, get).
+
+fake_rng(N) ->
+    receive
+        {'$gen_call', From, get} ->
+            gen_server:reply(From, N),
+            fake_rng(N);
+        {'$gen_cast', {set, NewN}} ->
+            fake_rng(NewN)
+    end.
+
 -endif. % EQC
