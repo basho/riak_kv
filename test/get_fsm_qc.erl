@@ -167,11 +167,15 @@ option() ->
 options() ->
     list(option()).
 
+rr_abort_opts() ->
+    % {SoftCap, HardCap, ActualRunning, RandomRollResult}
+    {choose(1000, 2000), choose(3000, 4000), choose(0, 4999), choose(0, 100)}.
+
 prop_basic_get() ->
-    ?FORALL({RSeed,PRSeed,Options0, Objects,ReqId,VGetResps},
+    ?FORALL({RSeed,PRSeed,Options0, Objects,ReqId,VGetResps,RRAbort},
             {r_seed(), r_seed(), options(),
              fsm_eqc_util:riak_objects(), noshrink(largeint()),
-             vnodegetresps()},
+             vnodegetresps(),rr_abort_opts()},
     begin
         N = length(VGetResps),
         {R, RealR} = r_val(N, 1000000, RSeed),
@@ -275,7 +279,7 @@ prop_basic_get() ->
                 [{result, equals(RetResult, ExpResult)},
                  {details, check_details(RetInfo, State)},
                  {n_value, equals(length(History), ExpectedN)},
-                 {repair, check_repair(Objects, RepairHistory, History)},
+                 {repair, check_repair(Objects, RepairHistory, History, RRAbort)},
                  {delete,  check_delete(Objects, RepairHistory, History, PerfectPreflist)},
                  {distinct, all_distinct(Partitions)},
                  {told_monitor, fsm_eqc_util:is_get_put_last_cast(get, GetPid)}
@@ -341,7 +345,19 @@ do_repair(Heads, {ok, Lineage}) ->
 do_repair(_Heads, _V) ->
     false.
 
-expected_repairs(H) ->
+expected_repairs(_H, {_Soft,Hard,Actual,_Roll}) when Actual >= Hard ->
+    [];
+expected_repairs(H, {Soft, Hard, Actual, Roll}) when Soft < Actual, Actual < Hard ->
+    CapAdjusted = Hard - Soft,
+    ActualAdjusted = Actual - Soft,
+    Percent = ActualAdjusted / CapAdjusted * 100,
+    if
+      Roll < Percent ->
+        [];
+      true ->
+        expected_repairs(H, true)
+    end;
+expected_repairs(H,_RRAbort) ->
     case [ Lineage || {_, {ok, Lineage}} <- H ] of
         []   -> [];
         Lins ->
@@ -381,11 +397,11 @@ check_info([{vnode_errors, _Errors} | Rest], State) ->
 %% Check the read repairs - no need to worry about delete objects, deletes can only
 %% happen when all read repairs are complete.
 
-check_repair(Objects, RepairH, H) ->
+check_repair(Objects, RepairH, H, RRAbort) ->
     Actual = [ Part || {Part, ?KV_PUT_REQ{}} <- RepairH ],
     Heads  = merge_heads([ Lineage || {_, {ok, Lineage}} <- H ]),
     RepairObject  = (catch build_merged_object(Heads, Objects)),
-    Expected =expected_repairs(H),
+    Expected =expected_repairs(H,RRAbort),
     RepairObjects = [ Obj || {_Idx, ?KV_PUT_REQ{object=Obj}} <- RepairH ],
     conjunction(
         [{puts, equals(lists:sort(Expected), lists:sort(Actual))},
