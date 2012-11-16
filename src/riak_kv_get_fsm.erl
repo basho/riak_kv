@@ -170,7 +170,11 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
 validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
                                    n = N, bucket_props = BucketProps, preflist2 = PL2}) ->
     ?DTRACE(?C_GET_FSM_VALIDATE, [], ["validate"]),
-    Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
+    AppEnvTimeout = app_helper:get_env(riak_kv, timeout),
+    Timeout = case AppEnvTimeout of
+                  undefined -> get_option(timeout, Options, ?DEFAULT_TIMEOUT);
+                  _ -> AppEnvTimeout
+              end,
     R0 = get_option(r, Options, ?DEFAULT_R),
     PR0 = get_option(pr, Options, ?DEFAULT_PR),
     R = riak_kv_util:expand_rw_value(r, R0, BucketProps, N),
