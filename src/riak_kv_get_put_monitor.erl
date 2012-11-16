@@ -56,7 +56,7 @@
 %% ------------------------------------------------------------------
 
 -export([start_link/0, get_fsm_spawned/1, put_fsm_spawned/1,
-    all_stats/0, stop/0]).
+    all_stats/0, stop/0, get_in_progress/0]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -94,6 +94,12 @@ put_fsm_spawned(Pid) ->
 all_stats() ->
     [{Key, folsom_metrics:get_metric_value(Key)} ||
         Key <- ?COUNTERS].
+
+%% Returns the last count for the get fms's in progress.
+-spec get_in_progress() -> non_neg_integer().
+get_in_progress() ->
+    folsom_metrics:get_metric_value(?COUNTER(get, in_progress)).
+
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------

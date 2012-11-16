@@ -61,6 +61,7 @@ setup() ->
 
     %% Start up mock servers and dependencies
     fsm_eqc_util:start_mock_servers(),
+    fsm_eqc_util:start_fake_rng(?MODULE),
     ok.
 
 cleanup(_) ->
@@ -195,6 +196,16 @@ prop_basic_get() ->
 
         Options = fsm_eqc_util:make_options([{r, R}, {pr, PR}], [{timeout, 200} | Options0]),
 
+        {SoftCap, HardCap, Actual, Roll} = RRAbort,
+        application:set_env(riak, read_repair_skip_soft_cap, SoftCap),
+        application:set_env(riak, read_repair_skip_hard_cap, HardCap),
+        FolsomKey = {riak_kv, node(), get, in_progress},
+        % don't really care if the key doesn't exist when we delete it.
+        catch folsom_metrics:delete_metric(FolsomKey),
+        folsom_metrics:new_counter(FolsomKey),
+        folsom_metrics:notify({FolsomKey, {inc, Actual}}),
+        fsm_eqc_util:set_fake_rng(?MODULE, Roll),
+
         {ok, GetPid} = riak_kv_get_fsm:test_link({raw, ReqId, self()},
                             riak_object:bucket(Object),
                             riak_object:key(Object),
@@ -267,6 +278,8 @@ prop_basic_get() ->
                 io:format("Res: ~p\n", [Res]),
                 io:format("Repair: ~p~nHistory: ~p~n",
                           [RepairHistory, History]),
+                io:format("SoftCap: ~p~nHardCap: ~p~nActual: ~p~nRoll: ~p~n",
+                          [SoftCap, HardCap, Actual, Roll]),
                 io:format("RetResult: ~p~nExpResult: ~p~nDeleted objects: ~p~n",
                           [RetResult, ExpResult, Deleted]),
                 io:format("N: ~p  R: ~p  RealR: ~p  PR: ~p  RealPR: ~p~n"

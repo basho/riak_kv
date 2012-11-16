@@ -331,7 +331,7 @@ finalize(StateData=#state{get_core = GetCore}) ->
         delete ->
             maybe_delete(UpdStateData);
         {read_repair, Indices, RepairObj} ->
-            read_repair(Indices, RepairObj, UpdStateData);
+            maybe_read_repair(Indices, RepairObj, UpdStateData);
         _Nop ->
             ?DTRACE(?C_GET_FSM_FINALIZE, [], ["finalize"]),
             ok
@@ -355,6 +355,48 @@ maybe_delete(_StateData=#state{n = N, preflist2=Sent,
                     ["maybe_delete", "nop"]),
             nop
     end.
+
+%% based on what the get_put_monitor stats say, and a random roll, potentially
+%% skip read-repriar
+maybe_read_repair(Indices, RepairObj, UpdStateData) ->
+    SoftCap = riak:get_app_env(read_repair_skip_soft_cap),
+    HardCap = riak:get_app_env(read_repair_skip_hard_cap),
+    Dorr = determine_do_read_repair(SoftCap, HardCap),
+    if
+        Dorr ->
+            read_repair(Indices, RepairObj, UpdStateData);
+        true ->
+            skipping
+    end.
+
+determine_do_read_repair(SoftCap, HardCap) when SoftCap == undefined; HardCap == undefined ->
+    true;
+determine_do_read_repair(SoftCap, HardCap) ->
+    Actual = riak_kv_get_put_monitor:get_in_progress(),
+    determine_do_read_repair(SoftCap, HardCap, Actual).
+
+determine_do_read_repair(SoftCap, _HardCap, Actual) when Actual =< SoftCap ->
+    true;
+determine_do_read_repair(_SoftCap, HardCap, Actual) when HardCap =< Actual ->
+    false;
+determine_do_read_repair(SoftCap, HardCap, Actual) ->
+    Roll = roll_d100(),
+    determine_do_read_repair(SoftCap, HardCap, Actual, Roll).
+
+determine_do_read_repair(SoftCap, HardCap, Actual, Roll) ->
+    AdjustedActual = Actual - SoftCap,
+    AdjustedHard = HardCap - SoftCap,
+    Threshold = AdjustedActual / AdjustedHard * 100,
+    Threshold =< Roll.
+
+-ifdef(TEST).
+roll_d100() ->
+    fsm_eqc_util:get_fake_rng(get_fsm_qc).
+-else.
+% technically not a d100 as it has a 0
+roll_d100() ->
+    crypto:rand_uniform(0, 100).
+-endif.
 
 %% Issue read repairs for any vnodes that are out of date
 read_repair(Indices, RepairObj,
@@ -457,6 +499,19 @@ atom2list(P) when is_pid(P)->
 %%      changes: riak_kv_vnode:test_vnode/1 now relies on riak_core to
 %%      be running ... eventually there's a call to
 %%      riak_core_ring_manager:get_raw_ring().
+
+determine_do_read_repair_test_() ->
+    [
+        {"soft cap is undefined", ?_assert(determine_do_read_repair(undefined, 7))},
+        {"hard cap is undefiend", ?_assert(determine_do_read_repair(3000, undefined))},
+        {"actual below soft cap", ?_assert(determine_do_read_repair(3000, 7000, 2000))},
+        {"actual equals soft cap", ?_assert(determine_do_read_repair(3000, 7000, 3000))},
+        {"actual above hard cap", ?_assertNot(determine_do_read_repair(3000, 7000, 9000))},
+        {"actaul equals hard cap", ?_assertNot(determine_do_read_repair(3000, 7000, 7000))},
+        {"roll below threshold", ?_assertNot(determine_do_read_repair(5000, 15000, 10000, 1))},
+        {"roll exactly threshold", ?_assert(determine_do_read_repair(5000, 15000, 10000, 50))},
+        {"roll above threshold", ?_assert(determine_do_read_repair(5000, 15000, 10000, 70))}
+    ].
 
 -ifdef(BROKEN_EUNIT_PURITY_VIOLATION).
 get_fsm_test_() ->
