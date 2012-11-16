@@ -42,11 +42,11 @@
     {new_spiral, puts, errors},
     {new_spiral, gets, errors}
 ]).
--define(COUNTER(FsmType, DataPoint), {riak_kv, node(), FsmType, DataPoint}).
+-define(COUNTER(FsmType, DataPoint), {riak_kv, node, FsmType, DataPoint}).
 -define(COUNTERS, [?COUNTER(FsmType, DataPoint) ||
     {_, FsmType, DataPoint} <- ?STATTYPES]).
 
--type metric() :: {'riak_kv', node(), 'puts' | 'gets', 'in_progess' | 'errors'}.
+-type metric() :: {'riak_kv', 'node', 'puts' | 'gets', 'in_progess' | 'errors'}.
 -type spiral_value() :: [{'counter', non_neg_integer()} | {'one', non_neg_integer()}].
 
 -record(state, {monitor_list = []}).
