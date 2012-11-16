@@ -183,6 +183,7 @@ start_mock_servers() ->
     application:load(riak_core),
     application:start(crypto),
     application:start(folsom),
+    start_fake_get_put_monitor(),
     riak_core_stat_cache:start_link(),
     riak_kv_stat:register_stats(),
     riak_core_ring_events:start_link(),
@@ -241,6 +242,32 @@ wait_for_req_id(ReqId, Pid) ->
             {anything, Anything1}
     after 400 ->
             timeout
+    end.
+
+start_fake_get_put_monitor() ->
+    Pid = spawn_link(?MODULE, fake_get_put_monitor, [undefined]),
+    register(riak_kv_get_put_monitor, Pid),
+    {ok, Pid}.
+
+fake_get_put_monitor(LastCast) ->
+    receive
+        {'$gen_call', From, last_cast} ->
+            gen_server:reply(From, LastCast),
+            fake_get_put_monitor(LastCast);
+        {'$gen_cast', NewCast} ->
+            fake_get_put_monitor(NewCast);
+        _ ->
+            fake_get_put_monitor(LastCast)
+    end.
+
+is_get_put_last_cast(Type, Pid) ->
+    case gen_server:call(riak_kv_get_put_monitor, last_cast) of
+        {get_fsm_spawned, Pid} when Type == get ->
+            true;
+        {put_fsm_spawned, Pid} when Type == put ->
+            true;
+        _ ->
+            false
     end.
 
 -endif. % EQC

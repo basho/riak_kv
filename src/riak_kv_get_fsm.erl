@@ -129,6 +129,7 @@ init([From, Bucket, Key, Options]) ->
                        options = Options,
                        bkey = {Bucket, Key},
                        startnow = StartNow},
+    riak_kv_get_put_monitor:get_fsm_spawned(self()),
     riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
     ?DTRACE(?C_GET_FSM_INIT, [], ["init"]),
     {ok, prepare, StateData, 0};
