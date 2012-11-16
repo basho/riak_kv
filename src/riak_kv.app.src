@@ -43,6 +43,9 @@
          %% use the legacy routines for tracking kv stats
          {legacy_stats, true},
 
+         %% enable referer check
+         {secure_referer_check, true},
+
          %% Allow Erlang MapReduce functions to be specified as
          %% strings.
          %%
