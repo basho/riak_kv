@@ -254,6 +254,8 @@ fake_get_put_monitor(LastCast) ->
         {'$gen_call', From, last_cast} ->
             gen_server:reply(From, LastCast),
             fake_get_put_monitor(LastCast);
+        {'$gen_cast', stop} ->
+            ok;
         {'$gen_cast', NewCast} ->
             fake_get_put_monitor(NewCast);
         _ ->
