@@ -104,6 +104,9 @@ init([]) ->
     LegacyKeysFsmSup = {riak_kv_keys_fsm_legacy_sup,
                  {riak_kv_keys_fsm_legacy_sup, start_link, []},
                  permanent, infinity, supervisor, [riak_kv_keys_fsm_legacy_sup]},
+    GetPutMonitor = {riak_kv_get_put_monitor,
+                     {riak_kv_get_put_monitor, start_link, []},
+                     permanent, 5000, worker, [riak_kv_get_put_monitor]},
 
     % Figure out which processes we should run...
     HasStorageBackend = (app_helper:get_env(riak_kv, storage_backend) /= undefined),
@@ -120,6 +123,7 @@ init([]) ->
         LegacyKeysFsmSup,
         KLSup,
         KLMaster,
+        GetPutMonitor,
         JSSup,
         MapJSPool,
         ReduceJSPool,
