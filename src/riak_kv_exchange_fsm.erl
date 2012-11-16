@@ -113,7 +113,7 @@ prepare_exchange(start_exchange, State=#state{remote=RemoteVN,
             case riak_kv_index_hashtree:get_lock(State#state.local_tree,
                                                  local_fsm) of
                 ok ->
-                    exchange_remote_request(RemoteVN, IndexN),
+                    remote_exchange_request(RemoteVN, IndexN),
                     next_state_with_timeout(prepare_exchange, State);
                 _ ->
                     send_exchange_status(already_locked, State),
@@ -145,10 +145,8 @@ update_trees(start_exchange, State=#state{local=LocalVN,
 
     update_request(LocalTree, LocalVN, IndexN),
     update_request(RemoteTree, RemoteVN, IndexN),
-    next_state_with_timeout(update_trees, State);
+    {next_state, update_trees, State};
 
-update_trees(timeout, State) ->
-    do_timeout(State);
 update_trees({not_responsible, VNodeIdx, IndexN}, State) ->
     lager:debug("VNode ~p does not cover preflist ~p", [VNodeIdx, IndexN]),
     send_exchange_status({not_responsible, VNodeIdx, IndexN}, State),
@@ -160,7 +158,7 @@ update_trees({tree_built, _, _}, State) ->
             lager:debug("Moving to key exchange"),
             {next_state, key_exchange, State, 0};
         _ ->
-            next_state_with_timeout(update_trees, State#state{built=Built})
+            {next_state, update_trees, State#state{built=Built}}
     end.
 
 %% @doc Now that locks have been acquired and both hashtrees have been updated,
@@ -239,7 +237,7 @@ update_request(Tree, {Index, _}, IndexN) ->
                      end
              end).
 
-exchange_remote_request(RemoteVN, IndexN) ->
+remote_exchange_request(RemoteVN, IndexN) ->
     FsmPid = self(),
     as_event(fun() ->
                      riak_kv_entropy_manager:start_exchange_remote(RemoteVN,
@@ -250,10 +248,10 @@ exchange_remote_request(RemoteVN, IndexN) ->
 %% @private
 as_event(F) ->
     Self = self(),
-    spawn(fun() ->
-                  Result = F(),
-                  gen_fsm:send_event(Self, Result)
-          end),
+    spawn_link(fun() ->
+                       Result = F(),
+                       gen_fsm:send_event(Self, Result)
+               end),
     ok.
 
 %% @private
