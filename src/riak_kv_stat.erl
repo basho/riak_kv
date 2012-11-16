@@ -38,7 +38,8 @@
 
 %% API
 -export([start_link/0, get_stats/0,
-         update/1, register_stats/0, produce_stats/0]).
+         update/1, register_stats/0, produce_stats/0,
+         leveldb_read_block_errors/0]).
 
 -export([track_bucket/1, untrack_bucket/1]).
 
@@ -257,7 +258,9 @@ stats() ->
      {[node, puts, coord_redirs], counter},
      {mapper_count, counter},
      {precommit_fail, counter},
-     {postcommit_fail, counter}].
+     {postcommit_fail, counter},
+     {[vnode, backend, leveldb, read_block_error],
+      {function, {function, ?MODULE, leveldb_read_block_errors}}}].
 
 %% @doc register a stat with folsom
 register_stat(Name, spiral) ->
@@ -267,7 +270,11 @@ register_stat(Name, counter) ->
 register_stat(Name, histogram) ->
     %% get the global default histo type
     {SampleType, SampleArgs} = get_sample_type(Name),
-    folsom_metrics:new_histogram(Name, SampleType, SampleArgs).
+    folsom_metrics:new_histogram(Name, SampleType, SampleArgs);
+register_stat(Name, {function, F}) ->
+    %% store the function in a gauge metric
+    folsom_metrics:new_gauge(Name),
+    folsom_metrics:notify({Name, F}).
 
 %% @doc the histogram sample type may be set in app.config
 %% use key `stat_sample_type' in the `riak_kv' section. Or the
@@ -283,3 +290,44 @@ get_sample_type(Name) ->
 produce_stats() ->
     riak_kv_stat_bc:produce_stats().
 
+%% @doc get the leveldb.ReadBlockErrors counter.
+%% non-zero values mean it is time to consider replacing
+%% this nodes disk.
+leveldb_read_block_errors() ->
+    %% level stats are per node
+    %% but the way to get them is
+    %% is with riak_kv_vnode:vnode_status/1
+    %% for that reason just chose a partition
+    %% on this node at random
+    %% and ask for it's stats
+    {ok, R} = riak_core_ring_manager:get_my_ring(),
+    Indices = riak_core_ring:my_indices(R),
+    Nth = crypto:rand_uniform(1, length(Indices)),
+    Idx = lists:nth(Nth, Indices),
+    PList = [{Idx, node()}],
+    [{Idx, [Status]}] = riak_kv_vnode:vnode_status(PList),
+    leveldb_read_block_errors(Status).
+
+leveldb_read_block_errors({backend_status, riak_kv_eleveldb_backend, Status}) ->
+    rbe_val(proplists:get_value(read_block_error, Status));
+leveldb_read_block_errors({backend_status, riak_kv_multi_backend, Statuses}) ->
+    multibackend_read_block_errors(Statuses, undefined);
+leveldb_read_block_errors(_) ->
+    undefined.
+
+multibackend_read_block_errors([], Val) ->
+    rbe_val(Val);
+multibackend_read_block_errors([{_Name, Status}|Rest], undefined) ->
+    RBEVal = case proplists:get_value(mod, Status) of
+                 riak_kv_eleveldb_backend ->
+                     proplists:get_value(read_block_error, Status);
+                 _ -> undefined
+             end,
+    multibackend_read_block_errors(Rest, RBEVal);
+multibackend_read_block_errors(_, Val) ->
+    rbe_val(Val).
+
+rbe_val(undefined) ->
+    undefined;
+rbe_val(Bin) ->
+    list_to_integer(binary_to_list(Bin)).
