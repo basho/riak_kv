@@ -47,6 +47,7 @@
          insert/4,
          insert/5,
          insert_object/3,
+         stop/1,
          destroy/1]).
 
 -export([poke/1]).
@@ -171,11 +172,15 @@ get_lock(Tree, Type, Pid) ->
 poke(Tree) ->
     gen_server:cast(Tree, poke).
 
+%% @doc Terminate the specified index_hashtree.
+stop(Tree) ->
+    gen_server:cast(Tree, stop).
+
 %% @doc Destroy the specified index_hashtree, which will destroy all
 %%      associated hashtrees and terminate.
 -spec destroy(pid()) -> ok.
 destroy(Tree) ->
-    gen_server:call(Tree, destroy).
+    gen_server:call(Tree, destroy, infinity).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -245,6 +250,11 @@ handle_call(_Request, _From, State) ->
 handle_cast(poke, State) ->
     State2 = do_poke(State),
     {noreply, State2};
+
+handle_cast(stop, State) ->
+    {_,Tree0} = hd(State#state.trees),
+    hashtree:close(Tree0),
+    {stop, normal, State};
 
 handle_cast(build_failed, State) ->
     riak_kv_entropy_manager:requeue_poke(State#state.index),

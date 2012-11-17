@@ -24,6 +24,13 @@
 %% API
 -export([start_link/0,
          manual_exchange/1,
+         enabled/0,
+         enable/0,
+         disable/0,
+         set_mode/1,
+         set_debug/1,
+         cancel_exchange/1,
+         cancel_exchanges/0,
          get_lock/1,
          get_lock/2,
          requeue_poke/1,
@@ -32,8 +39,7 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3, enabled/0, set_mode/1, set_debug/1,
-         cancel_exchange/1, cancel_exchanges/0]).
+         terminate/2, code_change/3]).
 
 -type index() :: non_neg_integer().
 -type index_n() :: {index(), pos_integer()}.
@@ -141,6 +147,12 @@ set_debug(Enabled) ->
     end,
     ok.
 
+enable() ->
+    gen_server:call(?MODULE, enable, infinity).
+
+disable() ->
+    gen_server:call(?MODULE, disable, infinity).
+
 %% @doc Manually trigger hashtree exchanges.
 %%      -- If an index is provided, trigger exchanges between the index and all
 %%         sibling indices for all index_n.
@@ -194,6 +206,15 @@ handle_call({set_mode, Mode}, _From, State) ->
 handle_call({manual_exchange, Exchange}, _From, State) ->
     State2 = trigger_exchange(Exchange, State),
     {reply, ok, State2};
+handle_call(enable, _From, State) ->
+    {_, Opts} = settings(),
+    application:set_env(riak_kv, anti_entropy, {on, Opts}),
+    {reply, ok, State};
+handle_call(disable, _From, State) ->
+    {_, Opts} = settings(),
+    application:set_env(riak_kv, anti_entropy, {off, Opts}),
+    [riak_kv_index_hashtree:stop(T) || {_,T} <- State#state.trees],
+    {reply, ok, State};
 handle_call({get_lock, Type, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Pid, State),
     {reply, Reply, State2};
@@ -320,7 +341,13 @@ reload_hashtrees(Ring, State=#state{trees=Trees}) ->
     [riak_kv_vnode:request_hashtree_pid(Idx) || Idx <- MissingIdx],
     State.
 
-add_hashtree_pid(Index, Pid, State=#state{trees=Trees}) ->
+add_hashtree_pid(Index, Pid, State) ->
+    add_hashtree_pid(enabled(), Index, Pid, State).
+
+add_hashtree_pid(false, _Index, Pid, State) ->
+    riak_kv_index_hashtree:stop(Pid),
+    State;
+add_hashtree_pid(true, Index, Pid, State=#state{trees=Trees}) ->
     case orddict:find(Index, Trees) of
         {ok, Pid} ->
             %% Already know about this hashtree
@@ -414,6 +441,9 @@ maybe_tick(State) ->
                     NextState = tick(State)
             end;
         false ->
+            %% Ensure we do not have any running index_hashtrees, which can
+            %% happen when disabling anti-entropy on a live system.
+            [riak_kv_index_hashtree:stop(T) || {_,T} <- State#state.trees],
             NextState = State
     end,
     schedule_tick(),

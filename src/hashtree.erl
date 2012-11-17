@@ -106,6 +106,7 @@
          update_snapshot/1,
          update_perform/1,
          rehash_tree/1,
+         close/1,
          destroy/1,
          read_meta/2,
          write_meta/3,
@@ -229,6 +230,11 @@ new({Index,TreeId}, LinkedStore, Options) ->
                    tree=dict:new()},
     State2 = share_segment_store(State, LinkedStore),
     State2.
+
+-spec close(hashtree()) -> hashtree().
+close(State) ->
+    eleveldb:close(State#state.ref),
+    State.
 
 -spec destroy(hashtree()) -> hashtree().
 destroy(State) ->

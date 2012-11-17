@@ -452,7 +452,15 @@ handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
     %% Handle riak_core request forwarding during ownership handoff.
     case node() of
         Node ->
-            {reply, {ok, HT}, State};
+            %% Following is necessary in cases where anti-entropy was enabled
+            %% after the vnode was already running
+            case HT of
+                undefined ->
+                    State2 = maybe_create_hashtrees(State),
+                    {reply, {ok, State2#state.hashtrees}, State2};
+                _ ->
+                    {reply, {ok, HT}, State}
+            end;
         _ ->
             {reply, {error, wrong_node}, State}
     end;
@@ -686,8 +694,9 @@ handle_info(retry_create_hashtree, State=#state{hashtrees=undefined}) ->
 handle_info(retry_create_hashtree, State) ->
     {ok, State};
 handle_info({'DOWN', _, _, Pid, _}, State=#state{hashtrees=Pid}) ->
-    State2 = maybe_create_hashtrees(State),
-    {ok, State2};
+    State2 = State#state{hashtrees=undefined},
+    State3 = maybe_create_hashtrees(State2),
+    {ok, State3};
 handle_info({'DOWN', _, _, _, _}, State) ->
     {ok, State};
 handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=ModState}) ->
