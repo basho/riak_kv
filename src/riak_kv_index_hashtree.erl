@@ -558,12 +558,7 @@ clear_tree(State=#state{index=Index, trees=Trees}) ->
 maybe_build(State=#state{built=false}) ->
     Self = self(),
     Pid = spawn_link(fun() ->
-                             case riak_kv_entropy_manager:get_lock(build) of
-                                 ok ->
-                                     build_or_rehash(Self, State);
-                                 _Error ->
-                                     gen_server:cast(Self, build_failed)
-                             end
+                             build_or_rehash(Self, State)
                      end),
     State#state{built=Pid};
 maybe_build(State) ->
@@ -575,15 +570,22 @@ maybe_build(State) ->
 %% current on-disk segments.
 -spec build_or_rehash(pid(), state()) -> ok.
 build_or_rehash(Self, State=#state{index=Index, trees=Trees}) ->
-    case load_built(State) of
-        false ->
+    Type = case load_built(State) of
+               false -> build;
+               true  -> rehash
+           end,
+    Lock = riak_kv_entropy_manager:get_lock(Type),
+    case {Lock, Type} of
+        {ok, build} ->
             lager:debug("Starting build: ~p", [Index]),
             fold_keys(Index, Self),
             lager:debug("Finished build (a): ~p", [Index]), 
             gen_server:cast(Self, build_finished);
-        true ->
+        {ok, rehash} ->
             lager:debug("Starting rehash: ~p", [Index]),
             [hashtree:rehash_tree(T) || {_,T} <- Trees],
             lager:debug("Finished rehash (a): ~p", [Index]),
-            gen_server:cast(Self, build_finished)
+            gen_server:cast(Self, build_finished);
+        {_Error, _} ->
+            gen_server:cast(Self, build_failed)
     end.
