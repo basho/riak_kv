@@ -277,9 +277,9 @@ handle_info({{hashtree_pid, Index}, Reply}, State) ->
         _ ->
             {noreply, State}
     end;
-handle_info({'DOWN', Ref, _, Obj, _}, State) ->
+handle_info({'DOWN', Ref, _, Obj, Status}, State) ->
     State2 = maybe_release_lock(Ref, State),
-    State3 = maybe_clear_exchange(Ref, State2),
+    State3 = maybe_clear_exchange(Ref, Status, State2),
     State4 = maybe_clear_registered_tree(Obj, State3),
     {noreply, State4};
 handle_info(_Info, State) ->
@@ -393,13 +393,13 @@ maybe_release_lock(Ref, State) ->
     Locks = lists:keydelete(Ref, 2, State#state.locks),
     State#state{locks=Locks}.
 
--spec maybe_clear_exchange(reference(), state()) -> state().
-maybe_clear_exchange(Ref, State) ->
+-spec maybe_clear_exchange(reference(), term(), state()) -> state().
+maybe_clear_exchange(Ref, Status, State) ->
     case lists:keytake(Ref, 2, State#state.exchanges) of
         false ->
             State;
         {value, {Idx,Ref,_Pid}, Exchanges} ->
-            lager:debug("Untracking exchange: ~p", [Idx]),
+            lager:debug("Untracking exchange: ~p :: ~p", [Idx, Status]),
             State#state{exchanges=Exchanges}
     end.
 
@@ -521,8 +521,19 @@ trigger_exchanges(Exchanges, State) ->
                      state()) -> {any(), state()}.
 start_exchange(LocalVN, {RemoteIdx, IndexN}, Ring, State) ->
     Owner = riak_core_ring:index_owner(Ring, RemoteIdx),
-    RemoteVN = {RemoteIdx, Owner},
+    Nodes = lists:usort([node(), Owner]),
+    DownNodes = Nodes -- riak_core_node_watcher:nodes(riak_kv),
+    case DownNodes of
+        [] ->
+            RemoteVN = {RemoteIdx, Owner},
+            start_exchange(LocalVN, RemoteVN, IndexN, Ring, State);
+        _ ->
+            {{riak_kv_down, DownNodes}, State}
+    end.
+
+start_exchange(LocalVN, RemoteVN, IndexN, Ring, State) ->
     {LocalIdx, _} = LocalVN,
+    {RemoteIdx, _} = RemoteVN,
     case riak_core_ring:index_owner(Ring, LocalIdx) == node() of
         false ->
             %% No longer owner of this partition, ignore exchange
