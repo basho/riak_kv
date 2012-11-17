@@ -45,6 +45,7 @@
                 trees          = []        :: [{index(), pid()}],
                 tree_queue     = []        :: [{index(), pid()}],
                 locks          = []        :: [{pid(), reference()}],
+                build_tokens   = 0         :: pos_integer(),
                 exchange_queue = []        :: [exchange()],
                 exchanges      = []        :: [{index(), reference(), pid()}]
                }).
@@ -52,6 +53,7 @@
 -type state() :: #state{}.
 
 -define(DEFAULT_CONCURRENCY, 2).
+-define(DEFAULT_BUILD_LIMIT, {1, 10000}).
 
 %%%===================================================================
 %%% API
@@ -183,7 +185,9 @@ init([]) ->
                    locks=[],
                    exchanges=[],
                    exchange_queue=[]},
-    {ok, State}.
+    State2 = reset_build_tokens(State),
+    schedule_reset_build_tokens(),
+    {ok, State2}.
 
 handle_call({set_mode, Mode}, _From, State) ->
     {reply, ok, State#state{mode=Mode}};
@@ -240,6 +244,10 @@ handle_cast(_Msg, State) ->
 handle_info(tick, State) ->
     State2 = maybe_tick(State),
     {noreply, State2};
+handle_info(reset_build_tokens, State) ->
+    State2 = reset_build_tokens(State),
+    schedule_reset_build_tokens(),
+    {noreply, State2};
 handle_info({{hashtree_pid, Index}, Reply}, State) ->
     case Reply of
         {ok, Pid} when is_pid(Pid) ->
@@ -265,6 +273,16 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+schedule_reset_build_tokens() ->
+    {_, Reset} = app_helper:get_env(riak_kv, anti_entropy_build_limit,
+                                    ?DEFAULT_BUILD_LIMIT),
+    erlang:send_after(Reset, self(), reset_build_tokens).
+
+reset_build_tokens(State) ->
+    {Tokens, _} = app_helper:get_env(riak_kv, anti_entropy_build_limit,
+                                     ?DEFAULT_BUILD_LIMIT),
+    State#state{build_tokens=Tokens}.
 
 -spec settings() -> {boolean(), proplists:proplist()}.
 settings() ->
@@ -316,7 +334,7 @@ add_hashtree_pid(Index, Pid, State=#state{trees=Trees}) ->
     end.
 
 -spec do_get_lock(any(),pid(),state()) -> {ok | max_concurrency, state()}.
-do_get_lock(_Type, Pid, State=#state{locks=Locks}) ->
+do_get_lock(Type, Pid, State=#state{locks=Locks}) ->
     Concurrency = app_helper:get_env(riak_kv,
                                      anti_entropy_concurrency,
                                      ?DEFAULT_CONCURRENCY),
@@ -324,10 +342,24 @@ do_get_lock(_Type, Pid, State=#state{locks=Locks}) ->
         true ->
             {max_concurrency, State};
         false ->
-            Ref = monitor(process, Pid),
-            State2 = State#state{locks=[{Pid,Ref}|Locks]},
-            {ok, State2}
+            case check_lock_type(Type, State) of
+                {ok, State2} ->
+                    Ref = monitor(process, Pid),
+                    State3 = State2#state{locks=[{Pid,Ref}|Locks]},
+                    {ok, State3};
+                Error ->
+                    {Error, State}
+            end
     end.
+
+check_lock_type(build, State=#state{build_tokens=Tokens}) ->
+    if Tokens > 0 ->
+            {ok, State#state{build_tokens=Tokens-1}};
+       true ->
+            build_limit_reached
+    end;
+check_lock_type(_Type, State) ->
+    {ok, State}.
 
 -spec maybe_release_lock(reference(), state()) -> state().
 maybe_release_lock(Ref, State) ->

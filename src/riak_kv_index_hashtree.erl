@@ -559,10 +559,10 @@ maybe_build(State=#state{built=false}) ->
     Self = self(),
     Pid = spawn_link(fun() ->
                              case riak_kv_entropy_manager:get_lock(build) of
-                                 max_concurrency ->
-                                     gen_server:cast(Self, build_failed);
                                  ok ->
-                                     build_or_rehash(Self, State)
+                                     build_or_rehash(Self, State);
+                                 _Error ->
+                                     gen_server:cast(Self, build_failed)
                              end
                      end),
     State#state{built=Pid};

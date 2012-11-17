@@ -106,9 +106,6 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 prepare_exchange(start_exchange, State=#state{remote=RemoteVN,
                                               index_n=IndexN}) ->
     case riak_kv_entropy_manager:get_lock(exchange) of
-        max_concurrency ->
-            send_exchange_status(max_concurrency, State),
-            {stop, normal, State};
         ok ->
             case riak_kv_index_hashtree:get_lock(State#state.local_tree,
                                                  local_fsm) of
@@ -118,7 +115,10 @@ prepare_exchange(start_exchange, State=#state{remote=RemoteVN,
                 _ ->
                     send_exchange_status(already_locked, State),
                     {stop, normal, State}
-            end
+            end;
+        Error ->
+            send_exchange_status(Error, State),
+            {stop, normal, State}
     end;
 prepare_exchange(timeout, State) ->
     do_timeout(State);
