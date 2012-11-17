@@ -187,15 +187,28 @@ destroy(Tree) ->
 %%%===================================================================
 
 init([Index, IndexNs]) ->
-    Root = "data/anti",
-    Path = filename:join(Root, integer_to_list(Index)),
+    case determine_data_root() of
+        undefined ->
+            case riak_kv_entropy_manager:enabled() of
+                true ->
+                    lager:warning("Neither riak_kv/anti_entropy_data_dir or "
+                                  "riak_core/platform_data_dir are defined. "
+                                  "Disabling active anti-entropy."),
+                    riak_kv_entropy_manager:disable();
+                false ->
+                    ok
+            end,
+            ignore;
+        Root ->
+            Path = filename:join(Root, integer_to_list(Index)),
 
-    State = #state{index=Index,
-                   trees=orddict:new(),
-                   built=false,
-                   path=Path},
-    State2 = init_trees(IndexNs, State),
-    {ok, State2}.
+            State = #state{index=Index,
+                           trees=orddict:new(),
+                           built=false,
+                           path=Path},
+            State2 = init_trees(IndexNs, State),
+            {ok, State2}
+    end.
 
 handle_call({new_tree, Id}, _From, State) ->
     State2 = do_new_tree(Id, State),
@@ -307,6 +320,23 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+determine_data_root() ->
+    case application:get_env(riak_kv, anti_entropy_data_dir) of
+        {ok, EntropyRoot} ->
+            EntropyRoot;
+        undefined ->
+            case application:get_env(riak_core, platform_data_dir) of
+                {ok, PlatformRoot} ->
+                    Root = filename:join(PlatformRoot, "anti_entropy"),
+                    lager:warning("Config riak_kv/anti_entropy_data_dir is "
+                                  "missing. Defaulting to: ~p", [Root]),
+                    application:set_env(riak_kv, anti_entropy_data_dir, Root),
+                    Root;
+                undefined ->
+                    undefined
+            end
+    end.
 
 -spec init_trees([index_n()], state()) -> state().
 init_trees(IndexNs, State) ->
