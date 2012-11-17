@@ -30,7 +30,7 @@
 -include_lib("riak_kv_vnode.hrl").
 
 %% API
--export([start_link/2]).
+-export([start/2, start_link/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -73,6 +73,12 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
+
+%% @doc Spawn an index_hashtree process that manages the hashtrees (one
+%%      for each `index_n') for the specified partition index.
+-spec start(index(), [index_n()]) -> {ok, pid()} | {error, term()}.
+start(Index, IndexNs) ->
+    gen_server:start(?MODULE, [Index, IndexNs], []).
 
 %% @doc Spawn an index_hashtree process that manages the hashtrees (one
 %%      for each `index_n') for the specified partition index.

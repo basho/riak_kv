@@ -124,8 +124,16 @@ maybe_create_hashtrees(true, State=#state{idx=Index}) ->
             State;
         true ->
             RP = riak_kv_util:responsible_preflists(Index),
-            {ok, Trees} = riak_kv_index_hashtree:start_link(Index, RP),
-            State#state{hashtrees=Trees}
+            case riak_kv_index_hashtree:start(Index, RP) of
+                {ok, Trees} ->
+                    monitor(process, Trees),
+                    State#state{hashtrees=Trees};
+                Error ->
+                    lager:info("riak_kv/~p: unable to start index_hashtree: ~p",
+                               [Index, Error]),
+                    erlang:send_after(1000, self(), retry_create_hashtree),
+                    State#state{hashtrees=undefined}
+            end
     end.
 
 %% API
@@ -659,12 +667,29 @@ delete(State=#state{idx=Index,mod=Mod, modstate=ModState}) ->
         HT ->
             riak_kv_index_hashtree:destroy(HT)
     end,
-    {ok, State#state{modstate=UpdModState,vnodeid=undefined}}.
+    {ok, State#state{modstate=UpdModState,vnodeid=undefined,hashtrees=undefined}}.
 
 terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
+handle_info(retry_create_hashtree, State=#state{hashtrees=undefined}) ->
+    State2 = maybe_create_hashtrees(State),
+    case State2#state.hashtrees of
+        undefined ->
+            ok;
+        _ ->
+            lager:info("riak_kv/~p: successfully started index_hashtree on retry",
+                       [State#state.idx])
+    end,
+    {ok, State2};
+handle_info(retry_create_hashtree, State) ->
+    {ok, State};
+handle_info({'DOWN', _, _, Pid, _}, State=#state{hashtrees=Pid}) ->
+    State2 = maybe_create_hashtrees(State),
+    {ok, State2};
+handle_info({'DOWN', _, _, _, _}, State) ->
+    {ok, State};
 handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=ModState}) ->
     UpdState = case do_get_term(BKey, Mod, ModState) of
                    {ok, RObj} ->
