@@ -569,9 +569,7 @@ all_pairwise_exchanges(Index, Ring) ->
     LocalIndexN = riak_kv_util:responsible_preflists(Index, Ring),
     Sibs = riak_kv_util:preflist_siblings(Index),
     lists:flatmap(
-      fun(RemoteIdx) when RemoteIdx == Index ->
-              [];
-         (RemoteIdx) ->
+      fun(RemoteIdx) ->
               RemoteIndexN = riak_kv_util:responsible_preflists(RemoteIdx, Ring),
               SharedIndexN = ordsets:intersection(ordsets:from_list(LocalIndexN),
                                                   ordsets:from_list(RemoteIndexN)),

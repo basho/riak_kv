@@ -197,7 +197,7 @@ preflist_siblings(Index, N, Ring) ->
     Indices = [Idx || {Idx, _} <- PL],
     RevIndices = lists:reverse(Indices),
     {Succ, _} = lists:split(N-1, Indices),
-    {Pred, _} = lists:split(N, RevIndices),
+    {Pred, _} = lists:split(N-1, tl(RevIndices)),
     lists:reverse(Pred) ++ Succ.
 
 -spec responsible_preflists(index()) -> [index_n()].
