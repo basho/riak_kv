@@ -228,15 +228,7 @@ responsible_preflists_n(RevIndices, N) ->
 
 -spec determine_max_n(riak_core_ring()) -> pos_integer().
 determine_max_n(Ring) ->
-    Buckets = riak_core_ring:get_buckets(Ring),
-    BucketProps = [riak_core_bucket:get_bucket(Bucket, Ring) || Bucket <- Buckets],
-    Default = app_helper:get_env(riak_core, default_bucket_props),
-    MaxN0 = proplists:get_value(n_val, Default),
-    MaxN = lists:foldl(fun(Props, MaxN) ->
-                               N = proplists:get_value(n_val, Props),
-                               erlang:max(N, MaxN)
-                       end, MaxN0, BucketProps),
-    MaxN.
+    lists:max(determine_all_n(Ring)).
 
 -spec determine_all_n(riak_core_ring()) -> [pos_integer(),...].
 determine_all_n(Ring) ->
