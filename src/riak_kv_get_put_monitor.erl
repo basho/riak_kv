@@ -37,8 +37,8 @@
 -behaviour(gen_server).
 -define(SERVER, ?MODULE).
 -define(STATTYPES, [
-    {new_counter, puts, in_progess},
-    {new_counter, gets, in_progess},
+    {new_counter, puts, in_progress},
+    {new_counter, gets, in_progress},
     {new_spiral, puts, errors},
     {new_spiral, gets, errors}
 ]).

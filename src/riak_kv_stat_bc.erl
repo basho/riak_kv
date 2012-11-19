@@ -355,11 +355,11 @@ get_put_stats([], Acc) ->
     lists:reverse(Acc);
 
 get_put_stats([{Key, N} | Tail], Acc) when is_number(N) ->
-    NewKey = join(lists:nthtail(3, tuple_to_list(Key))),
+    NewKey = join(lists:nthtail(1, tuple_to_list(Key))),
     get_put_stats(Tail, [{NewKey, N} | Acc]);
 
 get_put_stats([{Key, Spiral} | Tail], Acc) ->
-    Elems = [{join(lists:nthtail(3, tuple_to_list(Key)) ++ [SpiralKey]), SpiralVal}
+    Elems = [{join(lists:nthtail(1, tuple_to_list(Key)) ++ [SpiralKey]), SpiralVal}
         || {SpiralKey, SpiralVal} <- Spiral],
     Acc2 = lists:append(Elems, Acc),
     get_put_stats(Tail, Acc2).
