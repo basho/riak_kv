@@ -314,6 +314,7 @@ produce_stats() ->
     lists:append(
       [lists:flatten([backwards_compat(Name, Type, get_stat({?APP, Name}, Type)) || {Name, Type} <- stats()]),
        backwards_compat_pb(riak_api_stat:produce_stats()),
+       get_put_monitor_stats(),
        cpu_stats(),
        mem_stats(),
        disk_stats(),
@@ -390,6 +391,41 @@ register_stat(Name, histogram) ->
 get_sample_type(Name) ->
     SampleType0 = app_helper:get_env(riak_kv, stat_sample_type, {slide_uniform, {60, 1028}}),
     app_helper:get_env(riak_kv, Name, SampleType0).
+
+get_put_monitor_stats() ->
+    GPStats = riak_kv_get_put_monitor:all_stats(),
+    get_put_monitor_stats(GPStats).
+
+get_put_monitor_stats(Stats) ->
+    get_put_monitor_stats(Stats, []).
+
+get_put_monitor_stats([], Acc) ->
+    lists:reverse(Acc);
+
+get_put_monitor_stats([{Key, Val} | Tail], Acc) when is_list(Val) ->
+    BaseKey = lists:nthtail(1, tuple_to_list(Key)),
+    Stats = [{get_put_monitor_stats_join(BaseKey ++ [SubKey]), SubVal}
+        || {SubKey, SubVal} <- Val],
+    get_put_monitor_stats(Tail, Stats ++ Acc);
+
+get_put_monitor_stats([{Key, Val} | Tail], Acc) ->
+    BaseKey = lists:nthtail(1, tuple_to_list(Key)),
+    Stat = {get_put_monitor_stats_join(BaseKey), Val},
+    get_put_monitor_stats(Tail, [Stat | Acc]).
+
+get_put_monitor_stats_join(Parts) ->
+    get_put_monitor_stats_join(Parts, []).
+
+get_put_monitor_stats_join([Part | Tail], []) ->
+    get_put_monitor_stats_join(Tail, [Part]);
+
+get_put_monitor_stats_join([], Acc) ->
+    Joined = lists:reverse(Acc),
+    Stringy = [atom_to_list(X) || X <- Joined],
+    list_to_atom(lists:flatten(Stringy));
+
+get_put_monitor_stats_join([Part | Tail], Acc) ->
+    get_put_monitor_stats_join(Tail, [Part, '_' | Acc]).
 
 %% @spec cpu_stats() -> proplist()
 %% @doc Get stats on the cpu, as given by the cpu_sup module
