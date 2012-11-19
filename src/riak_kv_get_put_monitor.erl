@@ -28,9 +28,9 @@
 %% The stat names are all 4 element tuples, the first two elements being
 %% 'riak_kv', then the local node. The third is either 'get' or 'put' depending
 %% on if the fsm reporting in was for a get or a put action.  The final element
-%% is either 'in_progess' or 'errors'.
+%% is either 'in_progress' or 'errors'.
 %%
-%% The 'in_progess' is a simple counter reporting the number of get or put fsm's
+%% The 'in_progress' is a simple counter reporting the number of get or put fsm's
 %% currently alive.  'errors' is a spiral for all fsm's that exited with a
 %% reason other than normal or shutdown.
 -module(riak_kv_get_put_monitor).
@@ -46,7 +46,7 @@
 -define(COUNTERS, [?COUNTER(FsmType, DataPoint) ||
     {_, FsmType, DataPoint} <- ?STATTYPES]).
 
--type metric() :: {'riak_kv', 'node', 'puts' | 'gets', 'in_progess' | 'errors'}.
+-type metric() :: {'riak_kv', 'node', 'puts' | 'gets', 'in_progress' | 'errors'}.
 -type spiral_value() :: [{'counter', non_neg_integer()} | {'one', non_neg_integer()}].
 
 -record(state, {monitor_list = []}).
@@ -170,11 +170,11 @@ insert_pid(Pid, Type, List) ->
     orddict:store(MonRef, {Pid, Type}, List).
 
 tell_folsom_about_spawn(Type) ->
-    folsom_metrics:notify({?COUNTER(Type, in_progess), {inc, 1}}).
+    folsom_metrics:notify({?COUNTER(Type, in_progress), {inc, 1}}).
 
 tell_folsom_about_exit(Type, Cause) when Cause == normal; Cause == shutdown ->
-    folsom_metrics:notify({?COUNTER(Type, in_progess), {dec, 1}});
-% for the abnormal cases, we not only decrmemt the in progess count (like a
+    folsom_metrics:notify({?COUNTER(Type, in_progress), {dec, 1}});
+% for the abnormal cases, we not only decrmemt the in progress count (like a
     % normal exit) but increment the errors count as well.
 tell_folsom_about_exit(Type, _Cause) ->
     tell_folsom_about_exit(Type, normal),
