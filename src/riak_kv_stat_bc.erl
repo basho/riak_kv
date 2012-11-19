@@ -145,6 +145,7 @@ produce_stats() ->
     lists:append(
       [lists:flatten(backwards_compat(riak_core_stat_q:get_stats([riak_kv]))),
        backwards_compat_pb(riak_core_stat_q:get_stats([riak_api])),
+       get_put_stats(),
        read_repair_stats(),
        level_stats(),
        pipe_stats(),
@@ -344,6 +345,24 @@ level_stats() ->
 %% which are elements 6 and 7 in the key.
 read_repair_stats() ->
     aggregate(read_repairs, [riak_kv, node, gets, read_repairs, '_', '_', '_'], [6,7]).
+
+%% Stats for the get_put_monitor.
+get_put_stats() ->
+    Stats = riak_kv_get_put_monitor:all_stats(),
+    get_put_stats(Stats, []).
+
+get_put_stats([], Acc) ->
+    lists:reverse(Acc);
+
+get_put_stats([{Key, N} | Tail], Acc) when is_number(N) ->
+    NewKey = join(lists:nthtail(1, tuple_to_list(Key))),
+    get_put_stats(Tail, [{NewKey, N} | Acc]);
+
+get_put_stats([{Key, Spiral} | Tail], Acc) ->
+    Elems = [{join(lists:nthtail(1, tuple_to_list(Key)) ++ [SpiralKey]), SpiralVal}
+        || {SpiralKey, SpiralVal} <- Spiral],
+    Acc2 = lists:append(Elems, Acc),
+    get_put_stats(Tail, Acc2).
 
 %% TODO generalise for riak_core_stat_q
 %% aggregates spiral values for stats retrieved by `Query'
