@@ -172,7 +172,11 @@ insert_pid(Pid, Type, List) ->
 tell_folsom_about_spawn(Type) ->
     folsom_metrics:notify({?COUNTER(Type, in_progress), {inc, 1}}).
 
-tell_folsom_about_exit(Type, Cause) when Cause == normal; Cause == shutdown ->
+tell_folsom_about_exit(Type, Cause) when Cause == normal; Cause == shutdown; Cause == noproc ->
+    % no proc is considered 'normal' because that indicates the process had exited
+    % before the monitor was able to be applied.  We have no way of knowing why
+    % it exited, and on an underloaded system, it is most likely the request
+    % completed before we got the 'monitor me' message.
     folsom_metrics:notify({?COUNTER(Type, in_progress), {dec, 1}});
 % for the abnormal cases, we not only decrmemt the in progress count (like a
     % normal exit) but increment the errors count as well.
