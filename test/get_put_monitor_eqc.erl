@@ -62,6 +62,8 @@ command(S) ->
     frequency([
         {3, {call, ?MODULE, put_fsm_started, []}},
         {3, {call, ?MODULE, get_fsm_started, []}},
+        {1, {call, ?MODULE, put_fsm_noproc, []}},
+        {1, {call, ?MODULE, get_fsm_noproc, []}},
         {1, {call, ?MODULE, put_fsm_exit_normal, [put, g_put_pid(S)]}},
         {1, {call, ?MODULE, put_fsm_exit_shutdown, [put, g_put_pid(S)]}},
         {1, {call, ?MODULE, put_fsm_exit_error, [put, g_put_pid(S)]}},
@@ -95,6 +97,12 @@ next_state(S, Res, {call, _, put_fsm_started, []}) ->
     Puts2 = ordsets:add_element(Res, S#state.put_fsm),
     S#state{put_fsm = Puts2};
 
+next_state(S, _Res, {call, _, get_fsm_noproc, []}) ->
+    S;
+
+next_state(S, _Res, {call, _, put_fsm_noproc, []}) ->
+    S;
+
 next_state(S, _Res, {call, _, get_fsm_exit_error, [get, Pid]}) ->
     Gets2 = ordsets:del_element(Pid, S#state.get_fsm),
     ErrCount = S#state.get_errors + 1,
@@ -119,6 +127,12 @@ postcondition(S, {call, _Mod, put_fsm_started, _Args}, Res) ->
 
 postcondition(S, {call, _Mod, get_fsm_started, _Args}, Res) ->
     check_state(S#state{get_fsm = [Res | S#state.get_fsm]});
+
+postcondition(S, {call, _Mod, put_fsm_noproc, _Args}, _Res) ->
+    check_state(S);
+
+postcondition(S, {call, _Mod, get_fsm_noproc, _Args}, _Res) ->
+    check_state(S);
 
 postcondition(S, {call, _Mod, put_fsm_exit_error, _Args}, Res) ->
     S2 = S#state{
@@ -179,6 +193,14 @@ get_fsm_started() ->
     riak_kv_get_put_monitor:get_fsm_spawned(Pid),
     Pid.
 
+get_fsm_noproc() ->
+    Pid = fake_fsm(),
+    end_and_wait(Pid, normal),
+    riak_kv_get_put_monitor:get_fsm_spawned(Pid),
+    % ugh, sleep; need to give time for the down message to get to the monitor.
+    timer:sleep(10),
+    Pid.
+
 get_fsm_exit_normal(get, Pid) ->
     end_and_wait(Pid, normal),
     Pid.
@@ -194,6 +216,13 @@ get_fsm_exit_error(get, Pid) ->
 put_fsm_started() ->
     Pid = fake_fsm(),
     riak_kv_get_put_monitor:put_fsm_spawned(Pid),
+    Pid.
+
+put_fsm_noproc() ->
+    Pid = fake_fsm(),
+    end_and_wait(Pid, normal),
+    riak_kv_get_put_monitor:put_fsm_spawned(Pid),
+    timer:sleep(20),
     Pid.
 
 put_fsm_exit_normal(put, Pid) ->
