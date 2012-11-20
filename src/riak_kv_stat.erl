@@ -262,6 +262,8 @@ update1({put_fsm_time, Bucket,  Microsecs, PerBucket}) ->
     do_put_bucket(PerBucket, {Bucket, Microsecs});
 update1(read_repairs) ->
     folsom_metrics:notify_existing_metric({?APP, read_repairs}, 1, spiral);
+update1(skipped_read_repairs) ->
+    folsom_metrics:notify_existing_metric({?APP, skipped_read_repairs}, 1, spiral);
 update1(coord_redir) ->
     folsom_metrics:notify_existing_metric({?APP, coord_redirs_total}, {inc, 1}, counter);
 update1(mapper_start) ->
@@ -374,6 +376,7 @@ stats() ->
      {node_puts, spiral},
      {node_put_fsm_time, histogram},
      {read_repairs, spiral},
+     {skipped_read_repairs, spiral},
      {coord_redirs_total, counter},
      {mapper_count, counter},
      {precommit_fail, counter},

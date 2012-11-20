@@ -353,6 +353,7 @@ maybe_read_repair(Indices, RepairObj, UpdStateData) ->
         Dorr ->
             read_repair(Indices, RepairObj, UpdStateData);
         true ->
+            riak_kv_stat:update(skipped_read_repairs),
             skipping
     end.
 
