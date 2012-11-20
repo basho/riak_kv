@@ -199,7 +199,7 @@ prop_basic_get() ->
         {SoftCap, HardCap, Actual, Roll} = RRAbort,
         application:set_env(riak, read_repair_skip_soft_cap, SoftCap),
         application:set_env(riak, read_repair_skip_hard_cap, HardCap),
-        FolsomKey = {riak_kv, node, gets, in_progress},
+        FolsomKey = {riak_kv, node, gets, active},
         % don't really care if the key doesn't exist when we delete it.
         catch folsom_metrics:delete_metric(FolsomKey),
         folsom_metrics:new_counter(FolsomKey),

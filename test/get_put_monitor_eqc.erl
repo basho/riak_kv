@@ -170,8 +170,8 @@ check_state(S) ->
 
     % with a timetrap of 60 seconds, the spiral will never have values slide off
     MetricExpects = [
-        {{riak_kv, node, puts, in_progress}, length(PutList)},
-        {{riak_kv, node, gets, in_progress}, length(GetList)},
+        {{riak_kv, node, puts, active}, length(PutList)},
+        {{riak_kv, node, gets, active}, length(GetList)},
         {{riak_kv, node, puts, errors}, [{count, PutErrCount}, {one, PutErrCount}]},
         {{riak_kv, node, gets, errors}, [{count, GetErrCount}, {one, GetErrCount}]}
     ],

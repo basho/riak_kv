@@ -28,17 +28,17 @@
 %% The stat names are all 4 element tuples, the first two elements being
 %% 'riak_kv', then the local node. The third is either 'get' or 'put' depending
 %% on if the fsm reporting in was for a get or a put action.  The final element
-%% is either 'in_progress' or 'errors'.
+%% is either 'active' or 'errors'.
 %%
-%% The 'in_progress' is a simple counter reporting the number of get or put fsm's
+%% The 'active' is a simple counter reporting the number of get or put fsm's
 %% currently alive.  'errors' is a spiral for all fsm's that exited with a
 %% reason other than normal or shutdown.
 -module(riak_kv_get_put_monitor).
 -behaviour(gen_server).
 -define(SERVER, ?MODULE).
 -define(STATTYPES, [
-    {new_counter, puts, in_progress},
-    {new_counter, gets, in_progress},
+    {new_counter, puts, active},
+    {new_counter, gets, active},
     {new_spiral, puts, errors},
     {new_spiral, gets, errors}
 ]).
@@ -46,7 +46,7 @@
 -define(COUNTERS, [?COUNTER(FsmType, DataPoint) ||
     {_, FsmType, DataPoint} <- ?STATTYPES]).
 
--type metric() :: {'riak_kv', 'node', 'puts' | 'gets', 'in_progress' | 'errors'}.
+-type metric() :: {'riak_kv', 'node', 'puts' | 'gets', 'active' | 'errors'}.
 -type spiral_value() :: [{'counter', non_neg_integer()} | {'one', non_neg_integer()}].
 
 -record(state, {monitor_list = []}).
@@ -56,7 +56,7 @@
 %% ------------------------------------------------------------------
 
 -export([start_link/0, get_fsm_spawned/1, put_fsm_spawned/1,
-    all_stats/0, stop/0, get_in_progress/0]).
+    all_stats/0, stop/0, gets_active/0]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -96,9 +96,9 @@ all_stats() ->
         Key <- ?COUNTERS].
 
 %% Returns the last count for the get fms's in progress.
--spec get_in_progress() -> non_neg_integer().
-get_in_progress() ->
-    folsom_metrics:get_metric_value(?COUNTER(gets, in_progress)).
+-spec gets_active() -> non_neg_integer().
+gets_active() ->
+    folsom_metrics:get_metric_value(?COUNTER(gets, active)).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
@@ -170,15 +170,15 @@ insert_pid(Pid, Type, List) ->
     orddict:store(MonRef, {Pid, Type}, List).
 
 tell_folsom_about_spawn(Type) ->
-    folsom_metrics:notify({?COUNTER(Type, in_progress), {inc, 1}}).
+    folsom_metrics:notify({?COUNTER(Type, active), {inc, 1}}).
 
 tell_folsom_about_exit(Type, Cause) when Cause == normal; Cause == shutdown; Cause == noproc ->
     % no proc is considered 'normal' because that indicates the process had exited
     % before the monitor was able to be applied.  We have no way of knowing why
     % it exited, and on an underloaded system, it is most likely the request
     % completed before we got the 'monitor me' message.
-    folsom_metrics:notify({?COUNTER(Type, in_progress), {dec, 1}});
-% for the abnormal cases, we not only decrmemt the in progress count (like a
+    folsom_metrics:notify({?COUNTER(Type, active), {dec, 1}});
+    % for the abnormal cases, we not only decrmemt the active count (like a
     % normal exit) but increment the errors count as well.
 tell_folsom_about_exit(Type, _Cause) ->
     tell_folsom_about_exit(Type, normal),

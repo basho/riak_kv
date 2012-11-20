@@ -359,7 +359,7 @@ maybe_read_repair(Indices, RepairObj, UpdStateData) ->
 determine_do_read_repair(SoftCap, HardCap) when SoftCap == undefined; HardCap == undefined ->
     true;
 determine_do_read_repair(SoftCap, HardCap) ->
-    Actual = riak_kv_get_put_monitor:get_in_progress(),
+    Actual = riak_kv_get_put_monitor:gets_active(),
     determine_do_read_repair(SoftCap, HardCap, Actual).
 
 determine_do_read_repair(SoftCap, _HardCap, Actual) when Actual =< SoftCap ->
