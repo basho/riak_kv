@@ -26,9 +26,10 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
+%% TODO: refactor to remove wm_raw into two files, one that we pull in.
 -include("riak_kv_wm_raw.hrl").
 
--export_type([riak_object/0, bucket/0, key/0, value/0]).
+-export_type([riak_object/0, bucket/0, key/0, value/0, binary_version/0]).
 
 -type key() :: binary().
 -type bucket() :: binary().
@@ -49,12 +50,35 @@
           updatemetadata=dict:store(clean, true, dict:new()) :: dict(),
           updatevalue :: term()
          }).
--opaque riak_object() :: #r_object{}.
+-opaque riak_object() :: #r_object{} | r_object_bin().
 
 -type index_op() :: add | remove.
 -type index_value() :: integer() | binary().
 
 -define(MAX_KEY_SIZE, 65536).
+
+%% Riak Objects in binary format (on disk)
+
+%% -type binobj_header()     :: <<53:8, Version:8, VClockLen:32, VClockBin/binary,
+%%                                SibCount:32>>.
+%% -type binobj_flags()      :: <<Deleted:1, 0:7/bitstring>>.
+%% -type binobj_umeta_pair() :: <<KeyLen:32, Key/binary, ValueLen:32, Value/binary>>.
+%% -type binobj_meta()       :: <<LastMod:LastModLen, VTag:128, binobj_flags(),
+%%                                [binobj_umeta_pair()]>>.
+%% -type binobj_value()      :: <<ValueLen:32, ValueBin/binary, MetaLen:32,
+%%                                [binobj_meta()]>>.
+%% -type binobj()            :: <<binobj_header(), [binobj_value()]>>.
+
+-type r_object_bin() :: binary().
+-type r_content_bin() :: binary().
+-type binary_version() :: v0 | v1.
+%% -type rfc1123_date() :: string(). % LastMod Date
+
+-define(LASTMOD_LEN, 29). %% static length of rfc1123_date() type. Hard-coded in Erlang.
+-define(V1_VERS, 1).
+-define(MAGIC, 53).      %% Magic number, as opposed to 131 for Erlang term-to-binary magic
+                         %% Shanley's(11) + Joe's(42)
+-define(EMPTY_VTAG_BIN, <<"e">>).
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
@@ -65,6 +89,142 @@
 -export([to_json/1, from_json/1]).
 -export([index_specs/1, diff_index_specs/2]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
+-export([to_binary/2, from_binary/3, to_binary_version/4]).
+
+%% @doc Convert riak object to binary form
+-spec to_binary(binary_version(), #r_object{}) -> r_object_bin().
+to_binary(v0, RObj) ->
+    term_to_binary(RObj);
+to_binary(v1, #r_object{contents=Contents, vclock=VClock}) ->
+    new_v1(VClock, Contents).
+
+-spec to_binary_version(binary_version(), bucket(), key(), r_object_bin()) -> r_object_bin().
+to_binary_version(v0, _, _, <<131,_/binary>>=Bin) ->
+    Bin;
+to_binary_version(v1, _, _, <<?MAGIC:8/integer, 1:8/integer, _/binary>>=Bin) ->
+    Bin;
+to_binary_version(Vsn, B, K, Bin) ->
+    to_binary(Vsn, from_binary(B, K, Bin)).
+
+%% @doc Convert binary object to riak object
+-spec from_binary(bucket(),key(),binary()) -> #r_object{} | {error, atom()}.
+from_binary(_B,_K,<<131, _Rest/binary>>=ObjTerm) ->
+    binary_to_term(ObjTerm);
+from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
+    %% Version 1 of binary riak object
+    case Rest of
+        <<VclockLen:32/integer, VclockBin:VclockLen/binary, SibCount:32/integer, SibsBin/binary>> ->
+            Vclock = binary_to_term(VclockBin),
+            Contents = sibs_of_binary(SibCount, SibsBin),
+            #r_object{bucket=B,key=K,contents=Contents,vclock=Vclock};
+        _Other ->
+            {error, bad_object_format}
+    end;
+from_binary(_B, _K, <<?MAGIC, _Ver, _Rest/binary>>=_ObjBin) ->
+    {error, unknown_version}.
+
+sibs_of_binary(Count,SibsBin) ->
+    sibs_of_binary(Count, SibsBin, []).
+
+sibs_of_binary(0, <<>>, Result) -> lists:reverse(Result);
+sibs_of_binary(0, _NotEmpty, _Result) ->
+    {error, corrupt_contents};
+sibs_of_binary(Count, SibsBin, Result) ->
+    {Sib, SibsRest} = sib_of_binary(SibsBin),
+    sibs_of_binary(Count-1, SibsRest, [Sib | Result]).
+
+sib_of_binary(<<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBin:MetaLen/binary, Rest/binary>>) ->
+    <<LMMega:32/integer, LMSecs:32/integer, LMMicro:32/integer, VTagLen:8/integer, VTag:VTagLen/binary, Deleted:1/binary-unit:8, MetaRestBin/binary>> = MetaBin,
+    DeletedVal = case Deleted of <<1>> -> true; _False -> false end,
+    MDList0 = case {LMMega, LMSecs, LMMicro} of
+                  {0, 0, 0} -> []; %% original meta had no last mod
+                  LM -> [{?MD_LASTMOD, LM}]
+              end,
+    MDList1 = case VTag of
+                  ?EMPTY_VTAG_BIN -> MDList0;
+                  _ -> MDList0 ++ [{?MD_VTAG, binary_to_list(VTag)}]
+              end,
+    MDList = case DeletedVal of
+                 true ->
+                     MDList1
+                         ++ [{?MD_DELETED, DeletedVal}]
+                         ++ meta_of_binary(MetaRestBin);
+                 false ->
+                     MDList1 ++ meta_of_binary(MetaRestBin)
+             end,
+    MD = dict:from_list(MDList),
+    {#r_content{metadata=MD, value=decode_maybe_binary(ValBin)}, Rest}.
+
+
+meta_of_binary(MetaBin) ->
+    meta_of_binary(MetaBin, []).
+meta_of_binary(<<>>, Acc) ->
+    Acc;
+meta_of_binary(<<KeyLen:32/integer, KeyBin:KeyLen/binary, ValueLen:32/integer, ValueBin:ValueLen/binary, Rest/binary>>, ResultList) ->
+    Key = decode_maybe_binary(KeyBin),
+    Value = decode_maybe_binary(ValueBin),
+    meta_of_binary(Rest, [{Key, Value} | ResultList]).
+
+%% @doc Contruct new binary riak objects.
+-spec new_v1(vclock:vclock(), [#r_content{}]) -> r_object_bin().
+new_v1(Vclock, Siblings) ->
+    VclockBin = term_to_binary(Vclock),
+    VclockLen = byte_size(VclockBin),
+    SibCount = length(Siblings),
+    SibsBin = bin_contents(Siblings),
+    <<?MAGIC:8/integer, ?V1_VERS:8/integer, VclockLen:32/integer, VclockBin/binary, SibCount:32/integer, SibsBin/binary>>.
+
+-spec bin_content(#r_content{}) -> r_content_bin().
+bin_content(#r_content{metadata=Meta, value=Val}) ->
+    ValBin = encode_maybe_binary(Val),
+    ValLen = byte_size(ValBin),
+    {{VTagVal, Deleted, LastModVal}, RestBin} = dict:fold(fun fold_meta_to_bin/3, {{undefined, <<0>>, undefined}, <<>>}, Meta),
+    VTagBin = case VTagVal of
+                  undefined ->  ?EMPTY_VTAG_BIN;
+                  _ -> list_to_binary(VTagVal)
+              end,
+    VTagLen = byte_size(VTagBin),
+    LastModBin = case LastModVal of
+                     undefined -> <<0:32/integer, 0:32/integer, 0:32/integer>>;
+                     {Mega,Secs,Micro} -> <<Mega:32/integer, Secs:32/integer, Micro:32/integer>>
+                 end,
+    MetaBin = <<LastModBin/binary, VTagLen:8/integer, VTagBin:VTagLen/binary, Deleted:1/binary-unit:8, RestBin/binary>>,
+    MetaLen = byte_size(MetaBin),
+    <<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBin:MetaLen/binary>>.
+
+bin_contents(Contents) ->
+    F = fun(Content, Acc) ->
+                <<Acc/binary, (bin_content(Content))/binary>>
+        end,
+    lists:foldl(F, <<>>, Contents).
+
+fold_meta_to_bin(?MD_VTAG, Value, {{_Vt,Del,Lm},RestBin}) ->
+    {{Value, Del, Lm}, RestBin};
+fold_meta_to_bin(?MD_LASTMOD, Value, {{Vt,Del,_Lm},RestBin}) ->
+     {{Vt, Del, Value}, RestBin};
+fold_meta_to_bin(?MD_DELETED, true, {{Vt,_Del,Lm},RestBin})->
+     {{Vt, <<1>>, Lm}, RestBin};
+fold_meta_to_bin(?MD_DELETED, "true", Acc) ->
+    fold_meta_to_bin(?MD_DELETED, true, Acc);
+fold_meta_to_bin(?MD_DELETED, _, {{Vt,_Del,Lm},RestBin}) ->
+    {{Vt, <<0>>, Lm}, RestBin};
+fold_meta_to_bin(Key, Value, {{_Vt,_Del,_Lm}=Elems,RestBin}) ->
+    ValueBin = encode_maybe_binary(Value),
+    ValueLen = byte_size(ValueBin),
+    KeyBin = encode_maybe_binary(Key),
+    KeyLen = byte_size(KeyBin),
+    MetaBin = <<KeyLen:32/integer, KeyBin/binary, ValueLen:32/integer, ValueBin/binary>>,
+    {Elems, <<RestBin/binary, MetaBin/binary>>}.
+
+encode_maybe_binary(Bin) when is_binary(Bin) ->
+    <<1, Bin/binary>>;
+encode_maybe_binary(Bin) ->
+    <<0, (term_to_binary(Bin))/binary>>.
+
+decode_maybe_binary(<<1, Bin/binary>>) ->
+    Bin;
+decode_maybe_binary(<<0, Bin/binary>>) ->
+    binary_to_term(Bin).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -505,7 +665,7 @@ dejsonify_meta_value({struct, PList}) ->
                         [{Key, dejsonify_meta_value(V)}|Acc]
                 end, [], PList);
 dejsonify_meta_value(Value) -> Value.
-                               
+
 
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
     case dict:find(clean, M) of
@@ -531,7 +691,7 @@ syntactic_merge(CurrentObject, NewObject) ->
                       true  -> apply_updates(CurrentObject);
                       false -> CurrentObject
                   end,
-    
+
     case ancestors([UpdatedCurr, UpdatedNew]) of
         [] -> merge(UpdatedCurr, UpdatedNew);
         [Ancestor] ->
@@ -793,7 +953,7 @@ check_most_recent({V1, T1, D1}, {V2, T2, D2}) ->
     ?assertEqual(C3, C4),
 
     C3#r_content.value.
-    
+
 
 determinstic_most_recent_test() ->
     D = calendar:datetime_to_gregorian_seconds(
