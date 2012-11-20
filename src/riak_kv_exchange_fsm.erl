@@ -199,7 +199,9 @@ key_exchange(timeout, State=#state{local=LocalVN,
         [] ->
             ok;
         [Count] ->
-            lager:info("Repaired ~b keys through active anti-entropy", [Count])
+            lager:info("Repaired ~b keys during active anti-entropy exchange "
+                       "of ~p between ~p and ~p",
+                       [Count, IndexN, LocalVN, RemoteVN])
     end,
     {stop, normal, State}.
 

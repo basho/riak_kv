@@ -76,7 +76,7 @@ get_lock(Type) ->
     get_lock(Type, self()).
 
 %% @doc Acquire an exchange concurrency lock if available, and associate
-%%      the lock with the calling process.
+%%      the lock with the provided pid.
 -spec get_lock(any(), pid()) -> ok | max_concurrency.
 get_lock(Type, Pid) ->
     gen_server:call(?MODULE, {get_lock, Type, Pid}, infinity).
@@ -184,13 +184,13 @@ cancel_exchanges() ->
 init([]) ->
     schedule_tick(),
     {_, Opts} = settings(),
-    Mode = case lists:member(manual, Opts) of
+    Mode = case proplists:is_defined(manual, Opts) of
                true ->
                    manual;
                false ->
                    automatic
            end,
-    set_debug(lists:member(debug, Opts)),
+    set_debug(proplists:is_defined(debug, Opts)),
     State = #state{mode=Mode,
                    trees=[],
                    tree_queue=[],
@@ -204,7 +204,7 @@ init([]) ->
 handle_call({set_mode, Mode}, _From, State) ->
     {reply, ok, State#state{mode=Mode}};
 handle_call({manual_exchange, Exchange}, _From, State) ->
-    State2 = trigger_exchange(Exchange, State),
+    State2 = enqueue_exchange(Exchange, State),
     {reply, ok, State2};
 handle_call(enable, _From, State) ->
     {_, Opts} = settings(),
@@ -310,8 +310,6 @@ settings() ->
     case app_helper:get_env(riak_kv, anti_entropy, {off, []}) of
         {on, Opts} ->
             {true, Opts};
-        {manual, Opts} ->
-            {true, [manual|Opts]};
         {off, Opts} ->
             {false, Opts};
         X ->
@@ -360,7 +358,8 @@ add_hashtree_pid(true, Index, Pid, State=#state{trees=Trees}) ->
             State3
     end.
 
--spec do_get_lock(any(),pid(),state()) -> {ok | max_concurrency, state()}.
+-spec do_get_lock(any(),pid(),state())
+                 -> {ok | max_concurrency | build_limit_reached, state()}.
 do_get_lock(Type, Pid, State=#state{locks=Locks}) ->
     Concurrency = app_helper:get_env(riak_kv,
                                      anti_entropy_concurrency,
@@ -486,32 +485,32 @@ do_exchange_status(_Pid, LocalVN, RemoteVN, IndexN, Reply, State) ->
             State2
     end.
 
--spec trigger_exchange(index() |
+-spec enqueue_exchange(index() |
                        {index(), index_n()} |
                        {index(), index(), index_n()}, state()) -> state().
-trigger_exchange(E={Index, _RemoteIdx, _IndexN}, State) ->
+enqueue_exchange(E={Index, _RemoteIdx, _IndexN}, State) ->
     %% Verify that the exchange is valid
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Exchanges = all_pairwise_exchanges(Index, Ring),
     case lists:member(E, Exchanges) of
         true ->
-            trigger_exchanges([E], State);
+            enqueue_exchanges([E], State);
         false ->
             State
     end;
-trigger_exchange({Index, IndexN}, State) -> 
+enqueue_exchange({Index, IndexN}, State) -> 
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Exchanges = all_pairwise_exchanges(Index, Ring),
     Exchanges2 = [Exchange || Exchange={_, _, IdxN} <- Exchanges,
                               IdxN =:= IndexN],
-    trigger_exchanges(Exchanges2, State);
-trigger_exchange(Index, State) ->
+    enqueue_exchanges(Exchanges2, State);
+enqueue_exchange(Index, State) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Exchanges = all_pairwise_exchanges(Index, Ring),
-    trigger_exchanges(Exchanges, State).
+    enqueue_exchanges(Exchanges, State).
 
--spec trigger_exchanges([exchange()], state()) -> state().
-trigger_exchanges(Exchanges, State) ->
+-spec enqueue_exchanges([exchange()], state()) -> state().
+enqueue_exchanges(Exchanges, State) ->
     EQ = prune_exchanges(State#state.exchange_queue ++ Exchanges),
     State#state{exchange_queue=EQ}.
 
