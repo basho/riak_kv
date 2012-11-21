@@ -197,8 +197,8 @@ prop_basic_get() ->
         Options = fsm_eqc_util:make_options([{r, R}, {pr, PR}], [{timeout, 200} | Options0]),
 
         {SoftCap, HardCap, Actual, Roll} = RRAbort,
-        application:set_env(riak, read_repair_skip_soft_cap, SoftCap),
-        application:set_env(riak, read_repair_skip_hard_cap, HardCap),
+        application:set_env(riak_kv, read_repair_soft, SoftCap),
+        application:set_env(riak_kv, read_repair_max, HardCap),
         FolsomKey = {riak_kv, node, gets, active},
         % don't really care if the key doesn't exist when we delete it.
         catch folsom_metrics:delete_metric(FolsomKey),

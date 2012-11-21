@@ -346,8 +346,8 @@ maybe_delete(_StateData=#state{n = N, preflist2=Sent,
 %% based on what the get_put_monitor stats say, and a random roll, potentially
 %% skip read-repriar
 maybe_read_repair(Indices, RepairObj, UpdStateData) ->
-    SoftCap = riak:get_app_env(read_repair_skip_soft_cap),
-    HardCap = riak:get_app_env(read_repair_skip_hard_cap),
+    HardCap = app_helper:get_env(riak_kv, read_repair_max),
+    SoftCap = app_helper:get_env(riak_kv, read_repair_soft, HardCap),
     Dorr = determine_do_read_repair(SoftCap, HardCap),
     if
         Dorr ->
@@ -357,7 +357,7 @@ maybe_read_repair(Indices, RepairObj, UpdStateData) ->
             skipping
     end.
 
-determine_do_read_repair(SoftCap, HardCap) when SoftCap == undefined; HardCap == undefined ->
+determine_do_read_repair(_SoftCap, HardCap) when HardCap == undefined ->
     true;
 determine_do_read_repair(SoftCap, HardCap) ->
     Actual = riak_kv_get_put_monitor:gets_active(),
@@ -367,6 +367,8 @@ determine_do_read_repair(SoftCap, _HardCap, Actual) when Actual =< SoftCap ->
     true;
 determine_do_read_repair(_SoftCap, HardCap, Actual) when HardCap =< Actual ->
     false;
+determine_do_read_repair(HardCap, HardCap, _Actual) ->
+    true; % hardcap == softcap and Actual < HardCap
 determine_do_read_repair(SoftCap, HardCap, Actual) ->
     Roll = roll_d100(),
     determine_do_read_repair(SoftCap, HardCap, Actual, Roll).
