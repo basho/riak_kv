@@ -71,10 +71,10 @@ make_treevars() ->
     %{1024*1024, 1024, 4}.
 
 start_1(S) ->
-    hashtree:new(0, [{segments, S#state.segments}, {width,
+    hashtree:new({0,0}, [{segments, S#state.segments}, {width,
                 S#state.width}, {mem_levels, S#state.mem_levels}]).
 start_2(S) ->
-    hashtree:new(0, [{segments, S#state.segments}, {width,
+    hashtree:new({0,0}, [{segments, S#state.segments}, {width,
                 S#state.width}, {mem_levels, S#state.mem_levels}]).
 
 write_1(Tree, {Key, Hash}) ->
