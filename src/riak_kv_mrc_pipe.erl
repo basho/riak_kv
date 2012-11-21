@@ -142,7 +142,9 @@
 -include("riak_kv_mrc_sink.hrl").
 
 -export_type([map_query_fun/0,
-              reduce_query_fun/0]).
+              reduce_query_fun/0,
+              key_input/0,
+              link_match/0]).
 
 %% All of the types of Input allowed for a MapReduce
 -type input() :: [key_input()]
