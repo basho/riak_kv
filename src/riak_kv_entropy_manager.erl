@@ -51,7 +51,7 @@
                 trees          = []        :: [{index(), pid()}],
                 tree_queue     = []        :: [{index(), pid()}],
                 locks          = []        :: [{pid(), reference()}],
-                build_tokens   = 0         :: pos_integer(),
+                build_tokens   = 0         :: non_neg_integer(),
                 exchange_queue = []        :: [exchange()],
                 exchanges      = []        :: [{index(), reference(), pid()}]
                }).
