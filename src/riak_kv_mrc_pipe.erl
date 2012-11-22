@@ -187,7 +187,7 @@
 -type query_fun() ::
         {modfun, Module :: atom(), Function :: atom()}
       | {strfun, {Bucket :: binary(), Key :: binary()}}
-      | {strfun, Source :: string()}
+      | {strfun, Source :: string()|binary()}
       | {jsanon, {Bucket :: binary(), Key :: binary()}}
       | {jsfun, Name :: binary()}
       | {jsanon, Source :: binary()}.
@@ -885,7 +885,7 @@ error_exists(Logs) ->
 %% This is used by {@link riak_kv_mrc_map} and {@link
 %% riak_kv_w_reduce} to compile functions specified as `{strfun,
 %% Source}'.
--spec compile_string(string()) -> {ok, term()}
+-spec compile_string(string()|binary()) -> {ok, term()}
                                 | {ErrorType :: term, Reason :: term}.
 compile_string(Binary) when is_binary(Binary) ->
     compile_string(binary_to_list(Binary));

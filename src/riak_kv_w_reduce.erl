@@ -199,8 +199,7 @@ handoff(HandoffAcc, #state{inacc=OldInAcc}=State) ->
                  "reducing handoff").
 
 %% @doc Actually evaluate the aggregation function.
--spec reduce([term()], state(), string()) ->
-         {ok, [term()]} | {error, {term(), term(), term()}}.
+-spec reduce([term()], state(), string()) -> list().
 reduce(Inputs, #state{fd=FittingDetails}, ErrString) ->
     {rct, Fun, Arg} = FittingDetails#fitting_details.arg,
     ?T(FittingDetails, [reduce], {reducing, ErrString, length(Inputs)}),
@@ -257,7 +256,7 @@ no_input_run_reduce_once() ->
 
 %% @doc Fetch source code for the reduce function stored in a Riak KV
 %% object.
--spec stored_source(binary(), binary()) -> string().
+-spec stored_source(binary(), binary()) -> binary().
 stored_source(Bucket, Key) ->
     {ok, C} = riak:local_client(),
     {ok, Object} = C:get(Bucket, Key, 1),
