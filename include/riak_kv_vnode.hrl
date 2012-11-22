@@ -30,13 +30,13 @@
 
 -record(riak_kv_index_req_v1, {
           bucket :: binary() | tuple(),
-          item_filter :: function(),
+          item_filter :: riak_kv_coverage_filter:filter(),
           qry :: riak_index:query_def()}).
 
 %% same as _v1, but triggers ack-based backpressure
 -record(riak_kv_index_req_v2, {
           bucket :: binary() | tuple(),
-          item_filter :: function(),
+          item_filter :: riak_kv_coverage_filter:filter(),
           qry :: riak_index:query_def()}).
 
 -record(riak_kv_vnode_status_req_v1, {}).
