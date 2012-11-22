@@ -198,6 +198,12 @@
 -type grouped_results() :: [Results :: list()]
                          | list().
 
+%% The error reasons returned from collect_sink/1
+-type receive_sink_error() :: {sender_died, Reason::term()}
+                            | {sink_died, Reason::term()}
+                            | timeout
+                            | {From::non_neg_integer(), Info::term()}.
+
 %% @equiv mapred(Inputs, Query, 60000)
 mapred(Inputs, Query) ->
     mapred(Inputs, Query, ?DEFAULT_TIMEOUT).
@@ -734,7 +740,7 @@ group_outputs(Outputs, _NumKeeps) ->
 %% :: list()'.
 -spec collect_sink(#mrc_ctx{}) ->
          {ok, grouped_results()}
-       | {error, {Reason :: term(), Outputs :: ungrouped_results()}}.
+       | {error, receive_sink_error()}.
 collect_sink(#mrc_ctx{keeps=NumKeeps}=Ctx) ->
     case collect_sink_loop(Ctx, []) of
         {ok, Outputs} ->
@@ -775,7 +781,7 @@ collect_sink_loop(Ctx, Acc) ->
 %% your code should not also call it.
 -spec receive_sink(#mrc_ctx{}) ->
           {ok, Done::boolean(), Results::grouped_results()}
-        | {error, Reason::term(), PartialResults::grouped_results()}.
+        | {error, receive_sink_error(), PartialResults::grouped_results()}.
 receive_sink(#mrc_ctx{sink={Sink,_}}=Ctx) ->
     %% the sender-DOWN-normal case loops to ignore that message, but
     %% we only want to send our next-request once
