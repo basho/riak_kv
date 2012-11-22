@@ -142,7 +142,9 @@
 -include("riak_kv_mrc_sink.hrl").
 
 -export_type([map_query_fun/0,
-              reduce_query_fun/0]).
+              reduce_query_fun/0,
+              key_input/0,
+              link_match/0]).
 
 %% All of the types of Input allowed for a MapReduce
 -type input() :: [key_input()]
@@ -185,7 +187,7 @@
 -type query_fun() ::
         {modfun, Module :: atom(), Function :: atom()}
       | {strfun, {Bucket :: binary(), Key :: binary()}}
-      | {strfun, Source :: string()}
+      | {strfun, Source :: string()|binary()}
       | {jsanon, {Bucket :: binary(), Key :: binary()}}
       | {jsfun, Name :: binary()}
       | {jsanon, Source :: binary()}.
@@ -819,7 +821,7 @@ destroy_sink(#mrc_ctx{pipe=Pipe}=Ctx) ->
 %% @doc Tear down the async sender, sink, and timer pieces setup by
 %% {@link mapred_stream_sink/3}, and collect any messages they might
 %% have been delivering.
--spec cleanup_sink(#mrc_ctx{}) -> ok.
+-spec cleanup_sink(#mrc_ctx{}|{pid(),reference()}|undefined) -> ok.
 cleanup_sink(#mrc_ctx{sender=Sender, sink=Sink, timer=Timer}) ->
     cleanup_sender(Sender),
     cleanup_sink(Sink),
@@ -840,8 +842,6 @@ cleanup_sink(undefined) ->
 %% eventually receive `worker_startup_error's from vnodes that can no
 %% longer find the fittings, but to help the process along, we kill
 %% them immediately here.
-cleanup_sender(#mrc_ctx{sender=Sender}) ->
-    cleanup_sender(Sender);
 cleanup_sender({SenderPid, SenderMon}) when is_pid(SenderPid),
                                             is_reference(SenderMon) ->
     erlang:demonitor(SenderMon, [flush]),
@@ -851,8 +851,6 @@ cleanup_sender(undefined) ->
     ok.
 
 %% don't let timer messages leak
-cleanup_timer(#mrc_ctx{timer=Timer}) ->
-    cleanup_timer(Timer);
 cleanup_timer({Tref, PipeRef}) when is_reference(Tref),
                                     is_reference(PipeRef) ->
     case erlang:cancel_timer(Tref) of
@@ -887,7 +885,7 @@ error_exists(Logs) ->
 %% This is used by {@link riak_kv_mrc_map} and {@link
 %% riak_kv_w_reduce} to compile functions specified as `{strfun,
 %% Source}'.
--spec compile_string(string()) -> {ok, term()}
+-spec compile_string(string()|binary()) -> {ok, term()}
                                 | {ErrorType :: term, Reason :: term}.
 compile_string(Binary) when is_binary(Binary) ->
     compile_string(binary_to_list(Binary));

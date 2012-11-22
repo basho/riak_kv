@@ -356,7 +356,7 @@ buffer_size(Options) ->
             end
     end.
 
--spec buffer_size_options(list()) -> non_neg_integer().
+-spec buffer_size_options(list()) -> {ok, non_neg_integer()} | false.
 buffer_size_options(Options) ->
     case lists:keyfind(buffer, 1, Options) of
         {buffer, Size} when is_integer(Size), Size >= 0 ->
@@ -365,7 +365,7 @@ buffer_size_options(Options) ->
             false
     end.
 
--spec buffer_size_app_env() -> non_neg_integer().
+-spec buffer_size_app_env() -> {ok, non_neg_integer()} | false.
 buffer_size_app_env() ->
     case application:get_env(riak_kv, mrc_sink_buffer) of
         {ok, Size} when is_integer(Size), Size >= 0 ->
