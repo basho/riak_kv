@@ -215,8 +215,7 @@ reduce(Inputs, #state{fd=FittingDetails}, ErrString) ->
 %% @doc Check that the arg is a valid arity-2 function.  See {@link
 %%      riak_pipe_v:validate_function/3}.
 -spec validate_arg({rct, function(), term()}) -> ok | {error, iolist()}.
-
-validate_arg({rct, Fun, _FunArg}) when is_function(Fun) ->
+validate_arg({rct, Fun, _FunArg}) ->
     validate_fun(Fun).
 
 validate_fun(Fun) when is_function(Fun) ->
