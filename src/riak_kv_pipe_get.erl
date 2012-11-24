@@ -34,13 +34,16 @@
 %% partition number as the Pipe vnode owning this worker.  For this
 %% reason, it is important to use a `chashfun' for this fitting that
 %% gives the same answer as the consistent hashing function for the KV
-%% object.
+%% object. If the object is not found at the local KV vnode, each KV
+%% vnode in the remainder of the object's primary preflist is tried in
+%% sequence.
 %%
 %% If the object is found, the tuple `{ok, Object, Keydata}' is sent
 %% as output.  If an error occurs looking up the object, and the
 %% preflist has been exhausted, the tuple `{Error, {Bucket, Key},
-%% KeyData}' is sent as output (where `Error' is usually `not_found').
-%% The atom `undefined' is used as `KeyData' if none is specified.
+%% KeyData}' is sent as output (where `Error' is usually `{error,
+%% notfound}').  The atom `undefined' is used as `KeyData' if none is
+%% specified.
 
 -module(riak_kv_pipe_get).
 -behaviour(riak_pipe_vnode_worker).
@@ -79,36 +82,65 @@ init(Partition, FittingDetails) ->
 %% @doc Lookup the bucket/key pair on the Riak KV vnode, and send it
 %% downstream.
 -spec process(riak_kv_mrc_pipe:key_input(), boolean(), state())
-         -> {ok | forward_preflist | {error, term()}, state()}.
+         -> {ok | {error, term()}, state()}.
 process(Input, Last, #state{partition=Partition, fd=FittingDetails}=State) ->
+    %% assume local chashfun was used for initial attempt
+    case try_partition(Input, {Partition, node()}, FittingDetails) of
+        {error, _} when Last == false ->
+            {try_preflist(Input, State), State};
+        Result ->
+            {send_output(Input, Result, State), State}
+    end.
+
+send_output(Input, {ok, Obj}, State) ->
+    send_output({ok, Obj, keydata(Input)}, State);
+send_output(Input, Error, State) ->
+    send_output({Error, bkey(Input), keydata(Input)}, State).
+
+send_output(Output, #state{partition=Partition, fd=FittingDetails}) ->
+    riak_pipe_vnode_worker:send_output(
+      Output, Partition, FittingDetails).
+
+%% @doc Try the other primaries in the Input's preflist (skipping the
+%% local vnode we already tried in {@link process/3}.
+try_preflist(Input, #state{partition=P}=State) ->
+    %% pipe only uses primaries - mimicking that here, both to provide
+    %% continuity, and also to avoid a really long wait for a true
+    %% not-found
+    AnnPreflist = riak_core_apl:get_primary_apl(
+                    bkey_chash(Input), bkey_nval(Input), riak_kv),
+    Preflist = [ V || {V, _A} <- AnnPreflist ],
+    %% remove the one we already tried
+    RestPreflist = Preflist--[{P, node()}],
+    try_preflist(Input, RestPreflist, State).
+
+%% helper function walking the remaining preflist
+try_preflist(Input, [], State) ->
+    %% send not-found if no replicas gave us the value
+    send_output(Input, {error, notfound}, State);
+try_preflist(Input, [NextV|Rest], #state{fd=FittingDetails}=State) ->
+    case try_partition(Input, NextV, FittingDetails) of
+        {ok,_}=Result ->
+            send_output(Input, Result, State);
+        _Error ->
+            try_preflist(Input, Rest, State)
+    end.
+
+try_partition(Input, Vnode, FittingDetails) ->
     ReqId = make_req_id(),
+    Start = os:timestamp(),
     riak_core_vnode_master:command(
-      {Partition, node()}, %% assume local chashfun was used
+      Vnode,
       ?KV_GET_REQ{bkey=bkey(Input), req_id=ReqId},
       {raw, ReqId, self()},
       riak_kv_vnode_master),
     receive
         {ReqId, {r, {ok, Obj}, _, _}} ->
-            case riak_pipe_vnode_worker:send_output(
-                   {ok, Obj, keydata(Input)}, Partition, FittingDetails) of
-                ok ->
-                    {ok, State};
-                ER ->
-                    {ER, State}
-            end;
+            ?T(FittingDetails, [kv_get], [{kv_get_latency, {r, timer:now_diff(os:timestamp(), Start)}}]),
+            {ok, Obj};
         {ReqId, {r, {error, _} = Error, _, _}} ->
-            if Last ->
-                    case riak_pipe_vnode_worker:send_output(
-                           {Error, bkey(Input), keydata(Input)},
-                           Partition, FittingDetails) of
-                        ok ->
-                            {ok, State};
-                        ER ->
-                            {ER, State}
-                    end;
-               true ->
-                    {forward_preflist, State}
-            end
+            ?T(FittingDetails, [kv_get], [{kv_get_latency, {Error, timer:now_diff(os:timestamp(), Start)}}]),
+            Error
     end.
 
 %% @doc Not used.
@@ -117,7 +149,7 @@ done(_State) ->
     ok.
 
 make_req_id() ->
-    erlang:phash2(erlang:now()). % stolen from riak_client
+    erlang:phash2({self(), os:timestamp()}). % stolen from riak_client
 
 %% useful utilities
 

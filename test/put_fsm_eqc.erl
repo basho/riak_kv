@@ -111,7 +111,7 @@ setup() ->
     application:load(lager),
     application:set_env(lager, handlers,
                         [{lager_file_backend, [{?LAGER_LOGFILE, info, 10485760,"$D0",5}]}]),
-    ok = application:start(lager),
+    ok = lager:start(),
 
     %% Start up mock servers and dependencies
     fsm_eqc_util:start_mock_servers(),

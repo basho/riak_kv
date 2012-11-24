@@ -34,12 +34,7 @@
 
 -spec(statistics() -> [any()]).
 statistics() ->
-    case whereis(riak_kv_stat) of
-        undefined ->
-            [];
-        _ ->
-            riak_kv_stat:get_stats()
-    end.
+    riak_kv_stat:get_stats().
 
 ringready() ->
     riak_core_status:ringready().

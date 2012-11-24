@@ -62,7 +62,6 @@
 %% Check if the cluster contains encoded values that need to be migrated
 check_cluster() ->
     {ok, RC} = riak:local_client(),
-    riak_kv_mapred_cache:clear(),
     {ok, Buckets} = RC:list_buckets(),
     case Buckets of
         [] ->
@@ -70,16 +69,16 @@ check_cluster() ->
             {empty, [], []};
         _ ->
             EObjs = get_encoded_keys(RC),
-            check_cluster2(RC, EObjs)
+            check_cluster2(EObjs)
     end.
 
-check_cluster2(_, []) ->
+check_cluster2([]) ->
     io:format("Cluster does not contain URL encoded values. "
               "No migration needed.~n", []),
     {not_needed, [], []};
 
-check_cluster2(RC, EObjs) ->
-    case {check_safe(RC, EObjs), check_double_encoding(EObjs)} of
+check_cluster2(EObjs) ->
+    case {check_safe(EObjs), check_double_encoding(EObjs)} of
         {{safe, _}, {false, _}} ->
             io:format("Cluster contains URL encoded values. "
                       "Migration needed.~n", []),
@@ -112,7 +111,8 @@ get_encoded_keys() ->
 get_encoded_keys(RC) ->
     {ok, Buckets} = RC:list_buckets(),
     EObjs = [begin
-                 {ok, Objs} = RC:mapred(Bucket, [reduce_check_encoded()]),
+                 {ok, Objs} = riak_kv_mrc_pipe:mapred(
+                                Bucket, [reduce_check_encoded()]),
                  Objs
              end || Bucket <- Buckets],
     lists:flatten(EObjs).
@@ -146,9 +146,9 @@ check_double_encoding(EObjs) ->
     end.
 
 %% Determine if it is safe to perform migration (no bucket/key conflicts).
-check_safe(RC, EObjs) ->
+check_safe(EObjs) ->
     EObjs2 = [decode_name(Name) || Name <- EObjs],
-    MR = RC:mapred(EObjs2, [map_unsafe()]),
+    MR = riak_kv_mrc_pipe:mapred(EObjs2, [map_unsafe()]),
     case MR of
         {ok, []} ->
             {safe, []};
@@ -167,9 +167,7 @@ map_unsafe(RO, _, _) ->
 %% Perform first phase of migration: copying encoded values to
 %% unencoded equivalents.
 migrate_objects(EObjs) ->
-    {ok, RC} = riak:local_client(),
-    riak_kv_mapred_cache:clear(),
-    MR = RC:mapred(EObjs, [map_rewrite_encoded()]),
+    MR = riak_kv_mrc_pipe:mapred(EObjs, [map_rewrite_encoded()]),
     case MR of
         {ok, []} ->
             io:format("All objects with URL encoded buckets/keys have been "

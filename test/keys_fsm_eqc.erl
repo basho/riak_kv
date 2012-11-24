@@ -42,8 +42,8 @@
 eqc_test_() ->
     {spawn,
      [{setup,
-       fun setup/0,
-       fun cleanup/1,
+       riak_kv_test_util:common_setup(?MODULE, fun configure/1),
+       riak_kv_test_util:common_cleanup(?MODULE, fun configure/1),
        [%% Run the quickcheck tests
         {timeout, 60000, % timeout is in msec
          ?_assertEqual(true, quickcheck(numtests(?TEST_ITERATIONS, ?QC_OUT(prop_basic_listkeys()))))}
@@ -51,43 +51,6 @@ eqc_test_() ->
       }
      ]
     }.
-
-setup() ->
-    %% Shut logging up - too noisy.
-    application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, "keys_fsm_eqc_sasl.log"}),
-    error_logger:tty(false),
-    error_logger:logfile({open, "keys_fsm_eqc.log"}),
-
-    %% Cleanup in case a previous test did not
-    cleanup(setup),
-    %% Pause the make sure everything is cleaned up
-    timer:sleep(2000),
-
-    %% Start erlang node
-    TestNode = list_to_atom("testnode" ++ integer_to_list(element(3, now()))),
-    net_kernel:start([TestNode, shortnames]),
-    do_dep_apps(start, dep_apps()),
-
-    %% Create a fresh ring for the test
-    riak_core_ring_manager:ring_trans(
-      fun(R0, _Args) ->
-              R1 = riak_core_ring:add_member(node(), R0, node()),
-              R2 = lists:foldl(fun({I, _OldNode}, RAcc) ->
-                                       riak_core_ring:transfer_node(I, node(), RAcc)
-                               end, R1, riak_core_ring:all_owners(R0)),
-              {new_ring, R2}
-      end, undefined),
-    ok.
-
-cleanup(_) ->
-    do_dep_apps(stop, lists:reverse(dep_apps())),
-    catch exit(whereis(riak_kv_vnode_master), kill), %% Leaks occasionally
-    catch exit(whereis(riak_sysmon_filter), kill), %% Leaks occasionally
-    net_kernel:stop(),
-    %% Reset the riak_core vnode_modules
-    application:set_env(riak_core, vnode_modules, []),
-    ok.
 
 %% Call unused callback functions to clear them in the coverage
 %% checker so the real code stands out.
@@ -99,71 +62,62 @@ coverage_test() ->
 %% ====================================================================
 
 prop_basic_listkeys() ->
-    ?FORALL({ReqId, Bucket, KeyFilter, NVal, ObjectCount, Timeout, ClientType},
-            {g_reqid(), g_bucket(), g_key_filter(), g_n_val(), g_object_count(), g_timeout(), g_client_type()},
-        ?TRAPEXIT(
-           begin
-               {ok, Client} = riak:local_client(),
-               {ok, Buckets} = Client:list_buckets(),
-               case lists:member(Bucket, Buckets) of
-                   true -> % bucket has already been used
-                       %% Delete the existing keys in the bucket
-                       {ok, OldKeys} = Client:list_keys(Bucket),
-                       [Client:delete(Bucket, OldKey) || OldKey <- OldKeys];
-                   false ->
-                       ok
-               end,
-               %% Set bucket properties
-               BucketProps = riak_core_bucket:get_bucket(Bucket),
-               NewBucketProps = orddict:store(n_val, NVal, BucketProps),
-               riak_core_bucket:set_bucket(Bucket, NewBucketProps),
-               %% Create objects in bucket
-               GeneratedKeys = [list_to_binary(integer_to_list(X)) || X <- lists:seq(1, ObjectCount)],
-               [ok = Client:put(riak_object:new(Bucket, Key, <<"val">>)) || Key <- GeneratedKeys],
+    ?FORALL({ReqId, Bucket, KeyFilter, NVal, ObjectCount, Timeout},
+            {g_reqid(), g_bucket(), g_key_filter(), g_n_val(), g_object_count(), g_timeout()},
+            ?TRAPEXIT(
+               begin
+                   riak_kv_memory_backend:reset(),
+                   {ok, Client} = riak:local_client(),
+                   BucketProps = riak_core_bucket:get_bucket(Bucket),
+                   NewBucketProps = orddict:store(n_val, NVal, BucketProps),
+                   riak_core_bucket:set_bucket(Bucket, NewBucketProps),
+                   %% Create objects in bucket
+                   GeneratedKeys = [list_to_binary(integer_to_list(X)) || X <- lists:seq(1, ObjectCount)],
+                   [ok = Client:put(riak_object:new(Bucket, Key, <<"val">>)) || Key <- GeneratedKeys],
 
-               %% Set the expected output based on if a
-               %% key filter is being used or not.
-               case KeyFilter of
-                   none ->
-                       ExpectedKeys = GeneratedKeys;
-                   _ ->
-                       ExpectedKeyFilter =
-                           fun(K, Acc) ->
-                                   case KeyFilter(K) of
-                                       true ->
-                                           [K | Acc];
-                                       false ->
-                                           Acc
-                                   end
-                           end,
-                       ExpectedKeys = lists:foldl(ExpectedKeyFilter, [], GeneratedKeys)
-               end,
-               %% Call start_link
-               Keys = start_link(ReqId, Bucket, KeyFilter, Timeout, ClientType),
-              ?WHENFAIL(
-                  begin
-                      io:format("Bucket: ~p n_val: ~p ObjectCount: ~p KeyFilter: ~p~n", [Bucket, NVal, ObjectCount, KeyFilter]),
-                      io:format("Expected Key Count: ~p Actual Key Count: ~p~n",
-                                [length(ExpectedKeys), length(Keys)]),
-                      io:format("Expected Keys: ~p~nActual Keys: ~p~n",
-                                [ExpectedKeys, lists:sort(Keys)])
-                  end,
-                  conjunction(
-                    [
-                     {results, equals(lists:sort(Keys), lists:sort(ExpectedKeys))}
-                    ]))
+                   %% Set the expected output based on if a
+                   %% key filter is being used or not.
+                   case KeyFilter of
+                       none ->
+                           ExpectedKeys = GeneratedKeys;
+                       _ ->
+                           ExpectedKeyFilter =
+                               fun(K, Acc) ->
+                                       case KeyFilter(K) of
+                                           true ->
+                                               [K | Acc];
+                                           false ->
+                                               Acc
+                                       end
+                               end,
+                           ExpectedKeys = lists:foldl(ExpectedKeyFilter, [], GeneratedKeys)
+                   end,
+                   %% Call start_link
+                   Keys = start_link(ReqId, Bucket, KeyFilter, Timeout),
+                   ?WHENFAIL(
+                      begin
+                          io:format("Bucket: ~p n_val: ~p ObjectCount: ~p KeyFilter: ~p~n", [Bucket, NVal, ObjectCount, KeyFilter]),
+                          io:format("Expected Key Count: ~p Actual Key Count: ~p~n",
+                                    [length(ExpectedKeys), length(Keys)]),
+                          io:format("Expected Keys: ~p~nActual Keys: ~p~n",
+                                    [ExpectedKeys, lists:sort(Keys)])
+                      end,
+                      conjunction(
+                        [
+                         {results, equals(lists:sort(Keys), lists:sort(ExpectedKeys))}
+                        ]))
 
-           end
-          )).
+               end
+              )).
 
 %%====================================================================
 %% Wrappers
 %%====================================================================
 
-start_link(ReqId, Bucket, Filter, Timeout, ClientType) ->
+start_link(ReqId, Bucket, Filter, Timeout) ->
     Sink = spawn(?MODULE, data_sink, [ReqId, [], false]),
     From = {raw, ReqId, Sink},
-    {ok, _FsmPid} = riak_core_coverage_fsm:start_link(riak_kv_keys_fsm, From, [Bucket, Filter, Timeout, ClientType]),
+    {ok, _FsmPid} = riak_core_coverage_fsm:start_link(riak_kv_keys_fsm, From, [Bucket, Filter, Timeout]),
     wait_for_replies(Sink, ReqId).
 
 %%====================================================================
@@ -185,10 +139,6 @@ g_key_filter() ->
         end,
     frequency([{5, none}, {2, KeyFilter}]).
 
-g_client_type() ->
-    %% TODO: Incorporate mapred type
-    plain.
-
 g_n_val() ->
     choose(1,5).
 
@@ -205,15 +155,12 @@ g_timeout() ->
 %% Helpers
 %%====================================================================
 
-prepare() ->
-    application:load(sasl),
-    error_logger:delete_report_handler(sasl_report_tty_h),
-    error_logger:delete_report_handler(error_logger_tty_h),
-
-    TestNode = list_to_atom("testnode" ++ integer_to_list(element(3, now())) ++
-                                "@localhost"),
-    {ok, _} = net_kernel:start([TestNode, longnames]),
-    do_dep_apps(start, dep_apps()),
+configure(load) ->
+    application:set_env(riak_kv, storage_backend, riak_kv_memory_backend),
+    application:set_env(riak_kv, test, true),
+    application:set_env(riak_kv, vnode_vclocks, true),
+    application:set_env(riak_kv, delete_mode, immediate);
+configure(_) ->
     ok.
 
 test() ->
@@ -225,34 +172,11 @@ test(N) ->
 check() ->
     check(prop_basic_listkeys(), current_counterexample()).
 
-dep_apps() ->
-    SetupFun =
-        fun(start) ->
-            %% Set some missing env vars that are normally
-            %% part of release packaging.
-            application:set_env(riak_core, ring_creation_size, 64),
-            application:set_env(riak_kv, storage_backend, riak_kv_memory_backend),
-            application:set_env(riak_kv, vnode_vclocks, true),
-            application:set_env(riak_kv, delete_mode, immediate),
-            application:set_env(riak_kv, legacy_keylisting, false),
-
-            %% Start riak_kv
-            timer:sleep(500);
-           (stop) ->
-            ok
-        end,
-    XX = fun(_) -> error_logger:info_msg("Registered: ~w\n", [lists:sort(registered())]) end,
-    [sasl, crypto, riak_sysmon, webmachine, XX, os_mon,
-     lager, riak_core, XX, luke, erlang_js,
-     inets, mochiweb, riak_pipe, SetupFun, riak_kv, SetupFun].
-
-do_dep_apps(StartStop, Apps) ->
-    lists:map(fun(A) when is_atom(A) -> application:StartStop(A);
-                 (F)                 -> F(StartStop)
-              end, Apps).
-
 data_sink(ReqId, KeyList, Done) ->
     receive
+        {ReqId, From={_Pid,_Ref}, {keys, Keys}} ->
+            riak_kv_keys_fsm:ack_keys(From),
+            data_sink(ReqId, KeyList++Keys, false);
         {ReqId, {keys, Keys}} ->
             data_sink(ReqId, KeyList++Keys, false);
         {ReqId, done} ->
@@ -289,5 +213,4 @@ wait_for_replies(Sink, ReqId) ->
             ?debugFmt("Received keys for older run: ~p~n", [ORef])
     end.
 
- -endif. % EQC
-
+-endif. % EQC

@@ -36,59 +36,50 @@
 -type req_id() :: non_neg_integer().
 
 -record(state, {buckets=sets:new() :: [term()],
-                client_type :: plain | mapred,
                 from :: from()}).
+
+-include("riak_kv_dtrace.hrl").
 
 %% @doc Return a tuple containing the ModFun to call per vnode,
 %% the number of primary preflist vnodes the operation
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
-init(From={_, _, ClientPid}, [ItemFilter, Timeout, ClientType]) ->
-    case ClientType of
-        %% Link to the mapred job so we die if the job dies
-        mapred ->
-            link(ClientPid);
-        _ ->
-            ok
-    end,
+init(From={_, _, ClientPid}, [ItemFilter, Timeout]) ->
+    ClientNode = atom_to_list(node(ClientPid)),
+    PidStr = pid_to_list(ClientPid),
+    FilterX = if ItemFilter == none -> 0;
+                 true               -> 1
+              end,
+    %% "other" is a legacy term from when MapReduce used this FSM (in
+    %% which case, the string "mapred" would appear
+    ?DTRACE(?C_BUCKETS_INIT, [2, FilterX],
+            [<<"other">>, ClientNode, PidStr]),
     %% Construct the bucket listing request
     Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
     {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{client_type=ClientType, from=From}}.
+     #state{from=From}}.
 
 process_results(done, StateData) ->
     {done, StateData};
 process_results(Buckets,
                 StateData=#state{buckets=BucketAcc}) ->
+    ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [length(Buckets)], []),
     {ok, StateData#state{buckets=sets:union(sets:from_list(Buckets),
                                                BucketAcc)}};
 process_results({error, Reason}, _State) ->
+    ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [-1], []),
     {error, Reason}.
 
 finish({error, Error},
-       StateData=#state{client_type=ClientType,
-                        from={raw, ReqId, ClientPid}}) ->
-    case ClientType of
-        mapred ->
-            %% An error occurred or the timeout interval elapsed
-            %% so all we can do now is die so that the rest of the
-            %% MapReduce processes will also die and be cleaned up.
-            exit(Error);
-        plain ->
-            %% Notify the requesting client that an error
-            %% occurred or the timeout has elapsed.
-            ClientPid ! {ReqId, Error}
-    end,
+       StateData=#state{from={raw, ReqId, ClientPid}}) ->
+    ?DTRACE(?C_BUCKETS_FINISH, [-1], []),
+    %% Notify the requesting client that an error
+    %% occurred or the timeout has elapsed.
+    ClientPid ! {ReqId, Error},
     {stop, normal, StateData};
 finish(clean,
        StateData=#state{buckets=Buckets,
-                        client_type=ClientType,
                         from={raw, ReqId, ClientPid}}) ->
-    case ClientType of
-        mapred ->
-            luke_flow:add_inputs(Buckets),
-            luke_flow:finish_inputs(ClientPid);
-        plain ->
-            ClientPid ! {ReqId, {buckets, sets:to_list(Buckets)}}
-    end,
+    ClientPid ! {ReqId, {buckets, sets:to_list(Buckets)}},
+    ?DTRACE(?C_BUCKETS_FINISH, [0], []),
     {stop, normal, StateData}.

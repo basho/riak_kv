@@ -21,128 +21,34 @@
 -module(mapred_test).
 
 -include_lib("eunit/include/eunit.hrl").
-
+-include_lib("riak_pipe/include/riak_pipe.hrl").
 -compile(export_all).
 
-dep_apps() ->
-    DelMe = "./EUnit-SASL.log",
-    DataDir = "./EUnit-datadir",
-    os:cmd("rm -rf " ++ DataDir),
-    os:cmd("mkdir " ++ DataDir),
-    KillDamnFilterProc = fun() ->
-                                 catch exit(whereis(riak_sysmon_filter), kill),
-                                 wait_until_dead(whereis(riak_sysmon_filter))
-                         end,                                 
-    Core_Settings = [{handoff_ip, "0.0.0.0"},
-                     {handoff_port, 9183},
-                     {ring_creation_size, 16},
-                     {ring_state_dir, DataDir}],
-    KV_Settings = [{storage_backend, riak_kv_memory_backend},
-                   {vnode_vclocks, true},
-                   {pb_ip, "0.0.0.0"},
-                   {pb_port, 48087}, % arbitrary #
-                   {map_js_vm_count, 4},
-                   {reduce_js_vm_count, 3}],
-    [
-     fun(start) ->
-             net_kernel:start([mapred_test@localhost, shortnames]),
-             timer:sleep(50),
-             _ = application:stop(sasl),
-             _ = application:load(sasl),
-             put(old_sasl_l, app_helper:get_env(sasl, sasl_error_logger)),
-             ok = application:set_env(sasl, sasl_error_logger, {file, DelMe}),
-             ok = application:start(sasl),
-             %%error_logger:tty(false);
-             error_logger:tty(true);
-        (stop) ->
-             ok = application:stop(sasl),
-             ok = application:set_env(sasl, sasl_error_logger, erase(old_sasl_l));
-        (fullstop) ->
-             _ = application:stop(sasl)
-     end,
-     %% public_key and ssl are not needed here but started by others so
-     %% stop them when we're done.
-     crypto, public_key, ssl,
-     fun(start) ->
-             ok = application:start(riak_sysmon);
-        (stop) ->
-             ok = application:stop(riak_sysmon),
-             KillDamnFilterProc();
-        (fullstop) ->
-             _ = application:stop(riak_sysmon),
-             KillDamnFilterProc()
-     end,
-     webmachine,
-     os_mon,
-     lager,
-     fun(start) ->
-             _ = application:load(riak_core),
-             %% riak_core_handoff_listener uses {reusaddr, true}, but
-             %% sometimes we just restart too quickly and hit an
-             %% eaddrinuse when restarting riak_core?
-             timer:sleep(1000),
-             %% io:format(user, "DEBUGG: ~s\n", [os:cmd("netstat -na | egrep -vi 'stream|dgram'")]),
-             [begin
-                  put({?MODULE,AppKey}, app_helper:get_env(riak_core, AppKey)),
-                  ok = application:set_env(riak_core, AppKey, Val)
-              end || {AppKey, Val} <- Core_Settings],
-             ok = application:start(riak_core);
-        (stop) ->
-             ok = application:stop(riak_core),
-             [ok = application:set_env(riak_core, AppKey, get({?MODULE, AppKey}))
-              || {AppKey, _Val} <- Core_Settings];
-        (fullstop) ->
-             _ = application:stop(riak_core)
-     end,
-     riak_pipe,
-     luke,
-     erlang_js,
-     inets,
-     mochiweb,
-     fun(start) ->
-             _ = application:load(riak_kv),
-             [begin
-                  put({?MODULE,AppKey}, app_helper:get_env(riak_kv, AppKey)),
-                  ok = application:set_env(riak_kv, AppKey, Val)
-              end || {AppKey, Val} <- KV_Settings],
-             ok = application:start(riak_kv);
-        (stop) ->
-             ok = application:stop(riak_kv),
-             net_kernel:stop(),
-             [ok = application:set_env(riak_kv, AppKey, get({?MODULE, AppKey}))
-              || {AppKey, _Val} <- KV_Settings];
-        (fullstop) ->
-             _ = application:stop(riak_kv)
-     end].
+setup() ->
+    riak_kv_test_util:common_setup(?MODULE, fun configure/1).
 
-do_dep_apps(fullstop) ->
-    lists:map(fun(A) when is_atom(A) -> _ = application:stop(A);
-                 (F)                 -> F(fullstop)
-              end, lists:reverse(dep_apps()));
-do_dep_apps(StartStop) ->
-    Apps = if StartStop == start -> dep_apps();
-              StartStop == stop  -> lists:reverse(dep_apps())
-           end,
-    lists:map(fun(A) when is_atom(A) -> ok = application:StartStop(A);
-                 (F)                 -> F(StartStop)
-              end, Apps).
+cleanup() ->
+    riak_kv_test_util:common_cleanup(?MODULE, fun configure/1).
 
-prepare_runtime() ->
-     fun() ->
-             do_dep_apps(fullstop),
-             timer:sleep(50),
-             do_dep_apps(start),
-             timer:sleep(50),
-             riak_core:wait_for_service(riak_kv),
-             riak_core:wait_for_service(riak_pipe),
-             [foo1, foo2]
-     end.
+configure(load) ->
+    KVSettings = [{storage_backend, riak_kv_memory_backend},
+                  {test, true},
+                  {vnode_vclocks, true},
+                  {pb_ip, "0.0.0.0"},
+                  {pb_port, 0}, % arbitrary #
+                  {map_js_vm_count, 4},
+                  {reduce_js_vm_count, 3}],
+    CoreSettings = [{handoff_ip, "0.0.0.0"},
+                     {handoff_port, 0},
+                     {ring_creation_size, 16}],
+    [ application:set_env(riak_core, K, V) || {K,V} <- CoreSettings ],
+    [ application:set_env(riak_kv, K, V) || {K,V} <- KVSettings ],
+    ok;
 
-teardown_runtime() ->
-     fun(_PrepareThingie) ->
-             do_dep_apps(stop),
-             timer:sleep(50)
-     end.    
+configure(start) ->
+    riak_core:wait_for_service(riak_pipe);
+configure(_) ->
+    ok.
 
 inputs_gen_seq(Pipe, Max, _Timeout) ->
     [riak_pipe:queue_work(Pipe, X) || X <- lists:seq(1, Max)],
@@ -156,30 +62,6 @@ inputs_gen_bkeys_1(Pipe, {Bucket, Start, End}, _Timeout) ->
     riak_pipe:eoi(Pipe),
     ok.
 
-setup_demo_test_() ->
-    {foreach,
-     prepare_runtime(),
-     teardown_runtime(),
-     [
-      fun(_) ->
-              {"Setup demo test",
-               fun() ->
-                       Num = 5,
-                       {ok, C} = riak:local_client(),
-                       [ok = C:put(riak_object:new(
-                                     <<"foonum">>,
-                                     list_to_binary("bar"++integer_to_list(X)),
-                                     X)) 
-                        || X <- lists:seq(1, Num)],
-                       [{ok, _} = C:get(<<"foonum">>,
-                                      list_to_binary("bar"++integer_to_list(X)))
-                        || X <- lists:seq(1, Num)],
-                       ok
-               end}
-      end
-     ]
-    }.
-
 compat_basic1_test_() ->
     IntsBucket = <<"foonum">>,
     ReduceSumFun = fun(Inputs, _) -> [lists:sum(Inputs)] end,
@@ -187,8 +69,8 @@ compat_basic1_test_() ->
     LinkKey = <<"yo">>,
 
     {setup,
-     prepare_runtime(),
-     teardown_runtime(),
+     setup(),
+     cleanup(),
      fun(_) ->
          [
           ?_test(
@@ -211,9 +93,6 @@ compat_basic1_test_() ->
                  %% This will trigger a traversal of IntsBucket, but
                  %% because the query is empty, the MapReduce will
                  %% traverse the bucket and send BKeys down the pipe.
-                 %% AFAICT, the original Riak MapReduce will crash with
-                 %% luke_flow errors if the query list is empty.  This
-                 %% new implementation will pass the BKeys as-is.
                  {ok, BKeys} =
                      riak_kv_mrc_pipe:mapred(IntsBucket, []),
                  5 = length(BKeys),
@@ -379,8 +258,8 @@ compat_buffer_and_prereduce_test_() ->
     ReduceSumFun = fun(Inputs, _) -> [lists:sum(Inputs)] end,
 
     {setup,
-     prepare_runtime(),
-     teardown_runtime(),
+     setup(),
+     cleanup(),
      fun(_) ->
          [
           ?_test(
@@ -459,8 +338,8 @@ compat_javascript_test_() ->
     NotFoundBkey = {<<"does not">>, <<"exit">>},
 
     {setup,
-     prepare_runtime(),
-     teardown_runtime(),
+     setup(),
+     cleanup(),
      fun(_) ->
          [
           ?_test(
@@ -587,6 +466,288 @@ compat_javascript_test_() ->
              end)
           ]
      end}.
+
+dead_pipe_test_() ->
+    {setup,
+     setup(),
+     cleanup(),
+     fun(_) ->
+         [
+          ?_test(
+             %% Verify that sending inputs to a pipe that has already
+             %% stopped raises an error (synchronous send)
+             begin
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       none, true}],
+                 {{ok, Pipe}, _NumKeeps} =
+                     riak_kv_mrc_pipe:mapred_stream(Spec),
+                 riak_pipe:destroy(Pipe),
+                 {error, Reason} = riak_kv_mrc_pipe:send_inputs(
+                                     Pipe, [{<<"foo">>, <<"bar">>}]),
+                 %% Each vnode should have received the input, but
+                 %% being unable to find the fitting process, returned
+                 %% `worker_startup_failed` (and probably also printed
+                 %% "fitting was gone before startup")
+                 ?assert(lists:member(worker_startup_failed, Reason))
+             end),
+          ?_test(
+             %% Verify that sending inputs to a pipe that has already
+             %% stopped raises an error (async send)
+             begin
+                 Spec = 
+                     [{map, {modfun, riak_kv_mapreduce, map_object_value},
+                       none, true}],
+                 {{ok, Pipe}, _NumKeeps} =
+                     riak_kv_mrc_pipe:mapred_stream(Spec),
+                 riak_pipe:destroy(Pipe),
+                 %% this is a hack to make sure that the async sender
+                 %% doesn't die immediately upon linking to the
+                 %% already-dead builder
+                 PipeB = Pipe#pipe{builder=spawn(fake_builder(self()))},
+                 {Sender, SenderRef} =
+                     riak_kv_mrc_pipe:send_inputs_async(
+                       PipeB, [{<<"foo">>, <<"bar">>}]),
+                 receive
+                     {'DOWN', SenderRef, process, Sender, Error} ->
+                         {error, Reason} = Error
+                 end,
+                 %% let the fake builder shut down now
+                 PipeB#pipe.builder ! test_over,
+                 %% Each vnode should have received the input, but
+                 %% being unable to find the fitting process, returned
+                 %% `worker_startup_failed` (and probably also printed
+                 %% "fitting was gone before startup")
+                 ?assert(lists:member(worker_startup_failed, Reason))
+             end)
+         ]
+     end}.
+
+fake_builder(TestProc) ->
+    fun() ->
+            Ref = erlang:monitor(process, TestProc),
+            receive
+                test_over ->
+                    ok;
+                {'DOWN',Ref,process,TestProc,_} ->
+                    ok
+            end
+    end.
+
+notfound_failover_test_() ->
+    IntsBucket = <<"foonum">>,
+    NumInts = 5,
+
+    {setup,
+     setup(),
+     cleanup(),
+     fun(_) ->
+         [
+          ?_test(
+             %% The data created by this step is used by all/most of the
+             %% following tests.
+             ok = riak_kv_mrc_pipe:example_setup(NumInts)
+            ),
+          ?_test(
+             %% check the condition that used to bring down a pipe in
+             %% https://github.com/basho/riak_kv/issues/290
+             %% this version checks it with an actual not-found
+             begin
+                 QLimit = 3,
+                 WaitRef = make_ref(),
+                 Spec =
+                     [{map,
+                       {modfun, riak_kv_mapreduce, map_object_value},
+                       <<"include_keydata">>, false},
+                      {reduce,
+                       {modfun, ?MODULE, reduce_wait_for_signal},
+                       [{reduce_phase_batch_size, 1},
+                        {wait, {self(), WaitRef}}],
+                       true}],
+                 PipeSpec = riak_kv_mrc_pipe:mapred_plan(Spec),
+                 %% make it easier to fill
+                 SmallPipeSpec = [ S#fitting_spec{q_limit=QLimit}
+                                   || S <- PipeSpec ],
+                 {ok, Pipe} = riak_pipe:exec(SmallPipeSpec,
+                                             [{log, sink},
+                                              {trace, [error, queue_full]}]),
+                 ExistingKey = {IntsBucket, <<"bar1">>},
+                 ChashFun = (hd(SmallPipeSpec))#fitting_spec.chashfun,
+                 MissingKey = find_adjacent_key(ChashFun, ExistingKey),
+                 %% get main workers spun up
+                 ok = riak_pipe:queue_work(Pipe, ExistingKey),
+                 receive {waiting, WaitRef, ReducePid} -> ok end,
+
+                 %% reduce is now blocking, fill its queue
+                 [ ok = riak_pipe:queue_work(Pipe, ExistingKey)
+                   || _ <- lists:seq(1, QLimit) ],
+
+                 {NValMod,NValFun} = (hd(SmallPipeSpec))#fitting_spec.nval,
+                 NVal = NValMod:NValFun(ExistingKey),
+
+                 %% each of N paths through the primary preflist
+                 [ fill_map_queue(Pipe, QLimit, ExistingKey)
+                   || _ <- lists:seq(1, NVal) ],
+
+                 %% check get queue actually full
+                 ExpectedTOs = lists:duplicate(NVal, timeout),
+                 {error, ExpectedTOs} =
+                     riak_pipe:queue_work(Pipe, ExistingKey, noblock),
+
+                 %% now inject a missing key that would need to
+                 %% failover to the full queue
+                 ok = riak_pipe:queue_work(Pipe, {MissingKey, test_passing}),
+                 %% and watch for it to block in the reduce queue
+                 %% *this* is when pre-patched code would fail:
+                 %% we'll receive an [error] trace from the kvget fitting's
+                 %% failure to forward the bkey along its preflist
+                 ok = consume_queue_full(Pipe, 1),
+
+                 %% let the pipe finish
+                 riak_pipe:eoi(Pipe),
+                 ReducePid ! {continue, WaitRef},
+
+                 {eoi, Results, Logs} = riak_pipe:collect_results(Pipe),
+                 %% the object does not exist, but we told the map
+                 %% phase to send on its keydata - check for it
+                 ?assert(lists:member({1, test_passing}, Results)),
+                 %% just to be a little extra cautious, check for
+                 %% other errors
+                 ?assertEqual([], [E || {_,{trace,[error],_}}=E <- Logs])
+             end),
+          ?_test(
+             %% check the condition that used to bring down a pipe in
+             %% https://github.com/basho/riak_kv/issues/290
+             %% this version checks with an object that is missing a replica
+             begin
+                 QLimit = 3,
+                 WaitRef = make_ref(),
+                 Spec =
+                     [{map,
+                       {modfun, riak_kv_mapreduce, map_object_value},
+                       none, false},
+                      {reduce,
+                       {modfun, ?MODULE, reduce_wait_for_signal},
+                       [{reduce_phase_batch_size, 1},
+                        {wait, {self(), WaitRef}}],
+                       true}],
+                 PipeSpec = riak_kv_mrc_pipe:mapred_plan(Spec),
+                 %% make it easier to fill
+                 SmallPipeSpec = [ S#fitting_spec{q_limit=QLimit}
+                                   || S <- PipeSpec ],
+                 {ok, Pipe} = riak_pipe:exec(SmallPipeSpec,
+                                             [{log, sink},
+                                              {trace, [error, queue_full]}]),
+                 ExistingKey = {IntsBucket, <<"bar1">>},
+                 ChashFun = (hd(SmallPipeSpec))#fitting_spec.chashfun,
+                 {MissingBucket, MissingKey} =
+                     find_adjacent_key(ChashFun, ExistingKey),
+
+                 %% create a value for the "missing" key
+                 {ok, C} = riak:local_client(),
+                 ok = C:put(riak_object:new(MissingBucket, MissingKey,
+                                            test_passing),
+                            3),
+                 %% and now kill the first replica;
+                 %% this will make the vnode local to the kvget pipe
+                 %% fitting return an error (because it's the memory
+                 %% backend), so it will have to look at another kv vnode
+                 [{{PrimaryIndex, _},_}] =
+                     riak_core_apl:get_primary_apl(
+                       ChashFun({MissingBucket, MissingKey}), 1, riak_kv),
+                 {ok, VnodePid} = riak_core_vnode_manager:get_vnode_pid(
+                                    PrimaryIndex, riak_kv_vnode),
+                 exit(VnodePid, kill),
+                 
+                 %% get main workers spun up
+                 ok = riak_pipe:queue_work(Pipe, ExistingKey),
+                 receive {waiting, WaitRef, ReducePid} -> ok end,
+
+                 %% reduce is now blocking, fill its queue
+                 [ ok = riak_pipe:queue_work(Pipe, ExistingKey)
+                   || _ <- lists:seq(1, QLimit) ],
+
+                 {NValMod,NValFun} = (hd(SmallPipeSpec))#fitting_spec.nval,
+                 NVal = NValMod:NValFun(ExistingKey),
+
+                 %% each of N paths through the primary preflist
+                 [ fill_map_queue(Pipe, QLimit, ExistingKey)
+                   || _ <- lists:seq(1, NVal) ],
+
+                 %% check get queue actually full
+                 ExpectedTOs = lists:duplicate(NVal, timeout),
+                 {error, ExpectedTOs} =
+                     riak_pipe:queue_work(Pipe, ExistingKey, noblock),
+
+                 %% now inject a missing key that would need to
+                 %% failover to the full queue
+                 ok = riak_pipe:queue_work(Pipe, {MissingBucket, MissingKey}),
+                 %% and watch for it to block in the reduce queue
+                 %% *this* is when pre-patched code would fail:
+                 %% we'll receive an [error] trace from the kvget fitting's
+                 %% failure to forward the bkey along its preflist
+                 ok = consume_queue_full(Pipe, 1),
+
+                 %% let the pipe finish
+                 riak_pipe:eoi(Pipe),
+                 ReducePid ! {continue, WaitRef},
+
+                 {eoi, Results, Logs} = riak_pipe:collect_results(Pipe),
+                 %% the object does not exist, but we told the map
+                 %% phase to send on its keydata - check for it
+                 ?assert(lists:member({1, test_passing}, Results)),
+                 %% just to be a little extra cautious, check for
+                 %% other errors
+                 ?assertEqual([], [E || {_,{trace,[error],_}}=E <- Logs])
+             end)
+         ]
+     end}.
+
+fill_map_queue(Pipe, QLimit, ExistingKey) ->
+    %% give the map worker one more to block on
+    ok = riak_pipe:queue_work(Pipe, ExistingKey, noblock),
+    consume_queue_full(Pipe, 1),
+    %% map is now blocking, fill its queue
+    [ ok = riak_pipe:queue_work(Pipe, ExistingKey, noblock)
+      || _ <- lists:seq(1, QLimit) ],
+    %% give the get worker one more to block on
+    ok = riak_pipe:queue_work(Pipe, ExistingKey, noblock),
+    consume_queue_full(Pipe, {xform_map, 0}),
+    %% get is now blocking, fill its queue
+    [ ok = riak_pipe:queue_work(Pipe, ExistingKey, noblock)
+      || _ <- lists:seq(1, QLimit) ],
+    ok.
+
+find_adjacent_key({Mod, Fun}, ExistingKey) ->
+    [ExistingHead|_] = riak_core_apl:get_primary_apl(
+                         Mod:Fun(ExistingKey), 2, riak_kv),
+    [K|_] = lists:dropwhile(
+              fun(N) ->
+                      K = {<<"foonum_missing">>,
+                           list_to_binary(integer_to_list(N))},
+                      [_,Second] = riak_core_apl:get_primary_apl(
+                                     Mod:Fun(K), 2, riak_kv),
+                      Second /= ExistingHead
+              end,
+              lists:seq(1, 1000)),
+    {<<"foonum_missing">>, list_to_binary(integer_to_list(K))}.
+
+consume_queue_full(Pipe, FittingName) ->
+    {log, {FittingName, {trace, [queue_full], _}}} =
+        riak_pipe:receive_result(Pipe, 5000),
+    ok.
+
+reduce_wait_for_signal(Inputs, Args) ->
+    case get(waited) of
+        true ->
+            Inputs;
+        _ ->
+            {TestProc, WaitRef} = proplists:get_value(wait, Args),
+            TestProc ! {waiting, WaitRef, self()},
+            receive {continue, WaitRef} -> ok end,
+            put(waited, true),
+            Inputs
+    end.
 
 wait_until_dead(Pid) when is_pid(Pid) ->
     Ref = monitor(process, Pid),

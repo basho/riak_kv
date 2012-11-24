@@ -23,7 +23,14 @@
 -module(riak_kv_app).
 
 -behaviour(application).
--export([start/2,stop/1]).
+-export([start/2, prep_stop/1, stop/1]).
+
+-define(SERVICES, [{riak_kv_pb_object, 3, 6}, %% ClientID stuff
+                   {riak_kv_pb_object, 9, 14}, %% Object requests
+                   {riak_kv_pb_bucket, 15, 22}, %% Bucket requests
+                   {riak_kv_pb_mapred, 23, 24}, %% MapReduce requests
+                   {riak_kv_pb_index, 25, 26} %% Secondary index requests
+                  ]).
 
 %% @spec start(Type :: term(), StartArgs :: term()) ->
 %%          {ok,Pid} | ignore | {error,Error}
@@ -82,13 +89,58 @@ start(_Type, _StartArgs) ->
     %% Spin up supervisor
     case riak_kv_sup:start_link() of
         {ok, Pid} ->
+            %% Register capabilities
+            riak_core_capability:register({riak_kv, vnode_vclocks},
+                                          [true, false],
+                                          false,
+                                          {riak_kv,
+                                           vnode_vclocks,
+                                           [{true, true}, {false, false}]}),
+
+            riak_core_capability:register({riak_kv, legacy_keylisting},
+                                          [false],
+                                          false,
+                                          {riak_kv,
+                                           legacy_keylisting,
+                                           [{false, false}]}),
+
+            riak_core_capability:register({riak_kv, listkeys_backpressure},
+                                          [true, false],
+                                          false,
+                                          {riak_kv,
+                                           listkeys_backpressure,
+                                           [{true, true}, {false, false}]}),
+
+            riak_core_capability:register({riak_kv, index_backpressure},
+                                          [true, false],
+                                          false),
+
+            %% mapred_system should remain until no nodes still exist
+            %% that would propose 'legacy' as the default choice
+            riak_core_capability:register({riak_kv, mapred_system},
+                                          [pipe],
+                                          pipe,
+                                          {riak_kv,
+                                           mapred_system,
+                                           [{pipe, pipe}]}),
+
+            riak_core_capability:register({riak_kv, mapred_2i_pipe},
+                                          [true, false],
+                                          false,
+                                          {riak_kv,
+                                           mapred_2i_pipe,
+                                           [{true, true}, {false, false}]}),
+
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
             %% synchronously.
             riak_core:register(riak_kv, [
                 {vnode_module, riak_kv_vnode},
-                {bucket_validator, riak_kv_bucket}
+                {bucket_validator, riak_kv_bucket},
+                {stat_mod, riak_kv_stat}
             ]),
+
+            ok = riak_api_pb_service:register(?SERVICES),
 
             %% Add routes to webmachine
             [ webmachine_router:add_route(R)
@@ -98,9 +150,30 @@ start(_Type, _StartArgs) ->
             {error, Reason}
     end.
 
+%% @doc Prepare to stop - called before the supervisor tree is shutdown
+prep_stop(_State) ->
+    try %% wrap with a try/catch - application carries on regardless,
+        %% no error message or logging about the failure otherwise.
+
+        lager:info("Stopping application riak_kv - marked service down.\n", []),
+        riak_core_node_watcher:service_down(riak_kv)
+
+        %% TODO: Gracefully unregister riak_kv webmachine endpoints.
+        %% Cannot do this currently as it calls application:set_env while this function
+        %% is itself inside of application controller.  webmachine really needs it's own
+        %% ETS table for dispatch information.
+        %%[ webmachine_router:remove_route(R) || R <- riak_kv_web:dispatch_table() ],
+    catch
+        Type:Reason ->
+            lager:error("Stopping application riak_api - ~p:~p.\n", [Type, Reason])
+    end,
+    stopping.
+
 %% @spec stop(State :: term()) -> ok
 %% @doc The application:stop callback for riak.
 stop(_State) ->
+    ok = riak_api_pb_service:deregister(?SERVICES),
+    lager:info("Stopped  application riak_kv.\n", []),
     ok.
 
 %% 719528 days from Jan 1, 0 to Jan 1, 1970
@@ -113,7 +186,7 @@ check_epoch() ->
     %% doc for erlang:now/0 says return value is platform-dependent
     %% -> let's emit an error if this platform doesn't think the epoch
     %%    is Jan 1, 1970
-    {MSec, Sec, _} = erlang:now(),
+    {MSec, Sec, _} = os:timestamp(),
     GSec = calendar:datetime_to_gregorian_seconds(
              calendar:universal_time()),
     case GSec - ((MSec*1000000)+Sec) of
@@ -127,4 +200,3 @@ check_epoch() ->
                 "but your system says the epoch is ~p", [Epoch]),
             ok
     end.
-

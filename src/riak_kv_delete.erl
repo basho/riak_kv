@@ -31,6 +31,8 @@
 
 -export([start_link/6, start_link/7, start_link/8, delete/8]).
 
+-include("riak_kv_dtrace.hrl").
+
 start_link(ReqId, Bucket, Key, Options, Timeout, Client) ->
     {ok, proc_lib:spawn_link(?MODULE, delete, [ReqId, Bucket, Key,
                                                Options, Timeout, Client, undefined,
@@ -52,8 +54,11 @@ start_link(ReqId, Bucket, Key, Options, Timeout, Client, ClientId, VClock) ->
 %% @doc Delete the object at Bucket/Key.  Direct return value is uninteresting,
 %%      see riak_client:delete/3 for expected gen_server replies to Client.
 delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
+    riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
+    ?DTRACE(?C_DELETE_INIT1, [0], []),
     case get_r_options(Bucket, Options) of
         {error, Reason} ->
+            ?DTRACE(?C_DELETE_INIT1, [-1], []),
             Client ! {ReqId, {error, Reason}};
         {R, PR} ->
             RealStartTime = riak_core_util:moment(),
@@ -63,14 +68,19 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
                     RemainingTime = Timeout - (riak_core_util:moment() - RealStartTime),
                     delete(ReqId,Bucket,Key,Options,RemainingTime,Client,ClientId,riak_object:vclock(OrigObj));
                 {error, notfound} ->
+                    ?DTRACE(?C_DELETE_INIT1, [-2], []),
                     Client ! {ReqId, {error, notfound}};
                 X ->
+                    ?DTRACE(?C_DELETE_INIT1, [-3], []),
                     Client ! {ReqId, X}
             end
     end;
 delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
+    riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
+    ?DTRACE(?C_DELETE_INIT2, [0], []),
     case get_w_options(Bucket, Options) of
         {error, Reason} ->
+            ?DTRACE(?C_DELETE_INIT2, [-1], []),
             Client ! {ReqId, {error, Reason}};
         {W, PW, DW} ->
             Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(?MD_DELETED,
@@ -81,10 +91,15 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
             Client ! {ReqId, Reply},
             case Reply of
                 ok ->
+                    ?DTRACE(?C_DELETE_INIT2, [1], [<<"reap">>]),
                     {ok, C2} = riak:local_client(),
                     AsyncTimeout = 60*1000,     % Avoid client-specified value
-                    C2:get(Bucket, Key, all, AsyncTimeout);
-                _ -> nop
+                    Res = C2:get(Bucket, Key, all, AsyncTimeout),
+                    ?DTRACE(?C_DELETE_REAPER_GET_DONE, [1], [<<"reap">>]),
+                    Res;
+                _ ->
+                    ?DTRACE(?C_DELETE_INIT2, [2], [<<"nop">>]),
+                    nop
             end
     end.
 
@@ -164,26 +179,16 @@ get_w_options(Bucket, Options) ->
     end.
 
 
-
-
-
-
-
-
-
-
-
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
 
 delete_test_() ->
-    cleanup(ignored_arg),
     %% Execute the test cases
-    { foreach, 
-      fun setup/0,
-      fun cleanup/1,
+    {foreach,
+      setup(),
+      cleanup(),
       [
           fun invalid_r_delete/0,
           fun invalid_rw_delete/0,
@@ -280,75 +285,18 @@ invalid_pw_delete() ->
             ?assert(false)
     end.
 
+configure(load) ->
+    application:set_env(riak_core, default_bucket_props,
+                        [{r, quorum}, {w, quorum}, {pr, 0}, {pw, 0},
+                         {rw, quorum}, {n_val, 3}]),
+    application:set_env(riak_kv, storage_backend, riak_kv_memory_backend);
+configure(_) -> ok.
+
 setup() ->
-    %% Shut logging up - too noisy.
-    application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_delete_test_sasl.log"}),
-    error_logger:tty(false),
-    error_logger:logfile({open, "riak_kv_delete_test.log"}),
-    %% Start erlang node
-    TestNode = list_to_atom("testnode" ++ integer_to_list(element(3, now())) ++
-                                integer_to_list(element(2, now()))),
-    case net_kernel:start([TestNode, shortnames]) of
-        {ok, _} ->
-            ok;
-        {error, {already_started, _}} ->
-            ok
-    end,
-    do_dep_apps(start, dep_apps()),
-    application:set_env(riak_core, default_bucket_props, [{r, quorum},
-            {w, quorum}, {pr, 0}, {pw, 0}, {rw, quorum}, {n_val, 3}]),
-    %% There's some weird interaction with the quickcheck tests in put_fsm_eqc
-    %% that somehow makes the riak_kv_delete sup not be running if those tests
-    %% run before these. I'm sick of trying to figure out what is not being
-    %% cleaned up right, thus the following workaround.
-    case whereis(riak_kv_delete_sup) of
-        undefined ->
-            {ok, _} = riak_kv_delete_sup:start_link();
-        _ ->
-            ok
-    end,
-    riak_kv_get_fsm_sup:start_link(),
-    timer:sleep(500).
+    riak_kv_test_util:common_setup(?MODULE, fun configure/1).
 
-cleanup(_Pid) ->
-    do_dep_apps(stop, lists:reverse(dep_apps())),
-    catch exit(whereis(riak_kv_vnode_master), kill), %% Leaks occasionally
-    catch exit(whereis(riak_sysmon_filter), kill), %% Leaks occasionally
-    catch unlink(whereis(riak_kv_get_fsm_sup)),
-    catch unlink(whereis(riak_kv_delete_sup)),
-    catch exit(whereis(riak_kv_get_fsm_sup), kill), %% Leaks occasionally
-    catch exit(whereis(riak_kv_delete_sup), kill), %% Leaks occasionally
-    net_kernel:stop(),
-    %% Reset the riak_core vnode_modules
-    application:unset_env(riak_core, default_bucket_props),
-    application:unset_env(sasl, sasl_error_logger),
-    error_logger:tty(true),
-    application:set_env(riak_core, vnode_modules, []).
+cleanup() ->
+    riak_kv_test_util:common_cleanup(?MODULE, fun configure/1).
 
-dep_apps() ->
-    SetupFun =
-        fun(start) ->
-            %% Set some missing env vars that are normally 
-            %% part of release packaging.
-            application:set_env(riak_core, ring_creation_size, 64),
-            application:set_env(riak_kv, storage_backend, riak_kv_memory_backend),
-            %% Create a fresh ring for the test
-            Ring = riak_core_ring:fresh(),
-            riak_core_ring_manager:set_ring_global(Ring),
-
-            %% Start riak_kv
-            timer:sleep(500);
-           (stop) ->
-            ok
-        end,
-    XX = fun(_) -> error_logger:info_msg("Registered: ~w\n", [lists:sort(registered())]) end,
-    [sasl, crypto, riak_sysmon, webmachine, XX, riak_core, XX, luke, erlang_js,
-     inets, mochiweb, os_mon, SetupFun, riak_kv].
-
-do_dep_apps(StartStop, Apps) ->
-    lists:map(fun(A) when is_atom(A) -> application:StartStop(A);
-                 (F)                 -> F(StartStop)
-              end, Apps).
 
 -endif.

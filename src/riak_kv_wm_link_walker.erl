@@ -122,6 +122,7 @@
          init/1,
          malformed_request/2,
          service_available/2,
+         forbidden/2,
          allowed_methods/2,
          content_types_provided/2,
          resource_exists/2,
@@ -250,6 +251,9 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
              Ctx}
     end.
 
+forbidden(RD, Ctx) ->
+    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
+
 %% @spec allowed_methods(reqdata(), context()) ->
 %%          {[method()], reqdata(), context()}
 %% @doc Get the list of methods this resource supports.
@@ -287,8 +291,8 @@ resource_exists(RD, Ctx=#ctx{bucket=B, key=K, client=C}) ->
 %% @doc Execute the link walking query, and build the response body.
 %%      This function has to explicitly set the Content-Type header,
 %%      because Webmachine doesn't know to add the "boundary" parameter to it.
-to_multipart_mixed(RD, Ctx=#ctx{linkquery=Query, start=Start, client=C}) ->
-    Results = execute_query(C, [Start], Query),
+to_multipart_mixed(RD, Ctx=#ctx{linkquery=Query, start=Start}) ->
+    Results = execute_query([Start], Query),
     Boundary = riak_core_util:unique_id_62(),
     {multipart_mixed_encode(Results, Boundary, Ctx),
      %% reset content-type now that we now what it is
@@ -297,7 +301,7 @@ to_multipart_mixed(RD, Ctx=#ctx{linkquery=Query, start=Start, client=C}) ->
                          RD),
      Ctx}.
 
-%% @spec execute_query(riak_client(), [riak_object()], [linkquery()]) ->
+%% @spec execute_query([riak_object()], [linkquery()]) ->
 %%          [[riak_object()]]
 %% @type linkquery() = {Bucket::binary()|'_', Tag::binary()|'_', Acc::boolean()}
 %% @doc Execute the link query.  Return a list of link step results,
@@ -307,36 +311,31 @@ to_multipart_mixed(RD, Ctx=#ctx{linkquery=Query, start=Start, client=C}) ->
 %%      This function chops up the list of steps into segments of contiguous
 %%      Acc==false steps.  Acc==true requires an end to a map/reduce query in
 %%      order to package up the results of that step for delivery to the client.
-execute_query(_, _, []) -> [];
-execute_query(C, StartObjects, [{Bucket, Tag, Acc}|RestQuery]) ->
+execute_query(_, []) -> [];
+execute_query(StartObjects, [{Bucket, Tag, Acc}|RestQuery]) ->
     StartLinks = lists:append([links(O, Bucket, Tag)
                                || O <- StartObjects]),
     {SegResults,Leftover} =
         if Acc ->
-                {execute_segment(C, StartLinks, []), RestQuery};
+                {execute_segment(StartLinks, []), RestQuery};
         true ->
             {SafeQuery, [LastSafe|UnsafeQuery]} =
                 lists:splitwith(fun({_,_,SegAcc}) -> not SegAcc end,
                                 RestQuery),
-            {execute_segment(C, StartLinks,SafeQuery++[LastSafe]),
+            {execute_segment(StartLinks,SafeQuery++[LastSafe]),
              UnsafeQuery}
      end,
-    [SegResults|execute_query(C,SegResults,Leftover)].
+    [SegResults|execute_query(SegResults,Leftover)].
 
-%% @spec execute_segment(riak_client, [bkeytag()], [linkquery()]) ->
+%% @spec execute_segment([bkeytag()], [linkquery()]) ->
 %%          [riak_object()]
 %% @doc Execute a string of link steps, where only the last step's
 %%      result will be kept for later.
-execute_segment(C, Start, Steps) ->
+execute_segment(Start, Steps) ->
     MR = [{link, Bucket, Key, false} || {Bucket, Key, _} <- Steps]
         ++[riak_kv_mapreduce:reduce_set_union(false),
            riak_kv_mapreduce:map_identity(true)],
-    case riak_kv_util:mapred_system() of
-        pipe ->
-            {ok, Objects} = riak_kv_mrc_pipe:mapred(Start, MR);
-        legacy ->
-            {ok, Objects} = C:mapred(Start, MR)
-    end,
+    {ok, Objects} = riak_kv_mrc_pipe:mapred(Start, MR),
     %% remove notfounds and strip link tags from objects
     lists:reverse(
       lists:foldl(fun({error, notfound}, Acc) -> Acc;

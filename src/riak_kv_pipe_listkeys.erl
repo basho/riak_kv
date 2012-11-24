@@ -73,7 +73,7 @@ process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
             Filters = [],
             FilterVNodes = []
     end,
-    ReqId = erlang:phash2(erlang:now()), % stolen from riak_client
+    ReqId = erlang:phash2({self(), os:timestamp()}), % stolen from riak_client
     riak_core_vnode_master:coverage(
       riak_kv_keys_fsm:req(Bucket, Filters),
       {Partition, node()},
@@ -133,6 +133,9 @@ done(_State) ->
 %%      to trigger keylisting on the appropriate vnodes.  The `eoi'
 %%      message is sent to the pipe as soon as it is confirmed that
 %%      all keylisting processes have started.
+%%
+%%      Note that log/trace messages are sent to the sink of the
+%%      original pipe. It is expected that that sink is an `fsm' type.
 -spec queue_existing_pipe(riak_pipe:pipe(),
                           bucket_or_filter(),
                           timeout()) ->
@@ -140,15 +143,17 @@ done(_State) ->
 queue_existing_pipe(Pipe, Bucket, Timeout) ->
     %% make our tiny pipe
     [{_Name, Head}|_] = Pipe#pipe.fittings,
+    Period = riak_kv_mrc_pipe:sink_sync_period(),
     {ok, LKP} = riak_pipe:exec([#fitting_spec{name=listkeys,
                                               module=?MODULE,
                                               nval=1}],
                                [{sink, Head},
                                 {trace, [error]},
-                                {log, {sink, Pipe#pipe.sink}}]),
+                                {log, {sink, Pipe#pipe.sink}},
+                                {sink_type, {fsm, Period, infinity}}]),
 
     %% setup the cover operation
-    ReqId = erlang:phash2(erlang:now()), %% stolen from riak_client
+    ReqId = erlang:phash2({self(), os:timestamp()}), %% stolen from riak_client
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
     {ok, Sender} = riak_pipe_qcover_sup:start_qcover_fsm(
@@ -156,7 +161,23 @@ queue_existing_pipe(Pipe, Bucket, Timeout) ->
                       [LKP, Bucket, NVal]]),
 
     %% wait for cover to hit everything
-    erlang:link(Sender),
+    {RealTO, TOReason} =
+        try erlang:link(Sender) of
+            true ->
+                %% Sender was alive - wait as expected
+                {Timeout, timeout}
+        catch error:noproc ->
+                %% Sender finished early; it's always spawned locally,
+                %% so we'll get a noproc exit, instead of an exit signal
+
+                %% messages had better already be in our mailbox,
+                %% don't wait any extra time for them
+                {0,
+                 %% we'll have no idea what its failure was, unless it
+                 %% sent us an error message
+                 listkeys_coverage_failure}
+        end,
+
     receive
         {ReqId, done} ->
             %% this eoi will flow into the other pipe
@@ -166,8 +187,8 @@ queue_existing_pipe(Pipe, Bucket, Timeout) ->
             %% this destroy should not harm the other pipe
             riak_pipe:destroy(LKP),
             Error
-    after Timeout ->
+    after RealTO ->
             %% this destroy should not harm the other pipe
             riak_pipe:destroy(LKP),
-            {error, timeout}
+            {error, TOReason}
     end.
