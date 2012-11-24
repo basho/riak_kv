@@ -36,7 +36,7 @@
 -type value() :: term().
 
 -record(r_content, {
-          metadata :: dict(),
+          metadata :: dict(), 
           value :: term(),
           dvvclock :: dottedvv:dottedvv()
          }).
@@ -56,7 +56,7 @@
 
 -define(MAX_KEY_SIZE, 65536).
 
--export([new/3, new/4, ensure_robject/1, equal/2, reconcile/2]).
+-export([new/3, new/4, ensure_robject/1, equal/2, reconcile/3, reconcile/2]).
 -export([increment_vclock/2, increment_vclock/3, update_vclock/3]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([vclock/1, update_value/2, update_metadata/2, bucket/1, value_count/1]).
@@ -139,8 +139,9 @@ equal_contents([C1|R1],[C2|R2]) ->
 %       merged).   If AllowMultiple is false, the riak_object returned will
 %       contain the value of the most-recently-updated object, as per the
 %       X-Riak-Last-Modified header.
-reconcile(Objects, AllowMultiple) ->
-    RObjs = reconcile(Objects),
+reconcile(Objs, AllowMultiple) -> reconcile(Objs, [], AllowMultiple).
+reconcile(Current, New, AllowMultiple) ->
+    RObjs = reconcile_sync(Current, New),
     AllContents = lists:flatten([O#r_object.contents || O <- RObjs]),
     Contents = case AllowMultiple of
                    false ->
@@ -163,11 +164,17 @@ reconcile(Objects, AllowMultiple) ->
 
 
 %% @spec reconcile([riak_object()]) -> [riak_object()]
-reconcile(Objects) ->
-    AllClocks = [vclock(O) || O <- Objects],
-    SyncClocks = lists:foldl(fun(X,Y) -> dottedvv:sync(X,Y) end, dottedvv:fresh(), AllClocks),
+reconcile_sync(Current, New) ->
+    ClockNew = vclock(New),
+    {Curr, ClocksCurrent} =
+        case is_list(Current) of
+            true -> {Current, lists:flatten([vclock(O) || O <- Current])};
+            false -> {[Current], vclock(Current)}
+        end,
+    SyncClocks = dottedvv:sync(ClocksCurrent, ClockNew),
+    AllObjs = Curr ++ [New],
     Objs =
-        [[Obj || Obj <- Objects, dottedvv:descends(vclock(Obj), C)]
+        [[Obj || Obj <- AllObjs, (dottedvv:descends(vclock(Obj), C))]
                 || C <- SyncClocks],
     remove_duplicate_objects(lists:flatten(Objs)).
 
@@ -245,6 +252,7 @@ key(#r_object{key=Key}) -> Key.
 
 %% @spec vclock(riak_object()) -> [dottedvv:dottedvv()]
 %% @doc  Return the dotted version vector(s) for this riak_object.
+vclock([]) -> {};
 vclock(#r_object{contents=C}) ->  [Content#r_content.dvvclock || Content <- C].
 
 
@@ -417,10 +425,13 @@ from_json(Obj) ->
 
 jsonify_metadata(MD) ->
     MDJS = fun({LastMod, Now={_,_,_}}) ->
-                                                % convert Now to JS-readable time string
+                   %% convert Now to JS-readable time string
                    {LastMod, list_to_binary(
                                httpd_util:rfc1123_date(
                                  calendar:now_to_local_time(Now)))};
+              %% When the user metadata is empty, it should still be a struct
+              ({?MD_USERMETA, []}) ->
+                   {?MD_USERMETA, {struct, []}};
               ({<<"Links">>, Links}) ->
                    {<<"Links">>, [ [B, K, T] || {{B, K}, T} <- Links ]};
               ({Name, List=[_|_]}) ->
@@ -478,7 +489,7 @@ dejsonify_values([{<<"metadata">>, {struct, MD0}},
                             <<"Links">> ->
                                 {Key, [{{B, K}, Tag} || [B, K, Tag] <- Val]};
                             <<"X-Riak-Last-Modified">> ->
-                                {Key, erlang:now()};
+                                {Key, os:timestamp()};
                             _ ->
                                 {Key, if
                                           is_binary(Val) ->
@@ -529,7 +540,7 @@ syntactic_merge(CurrentObject, NewObject) ->
                       false -> CurrentObject
                   end,
 
-    reconcile([UpdatedNew, UpdatedCurr], true).
+    reconcile(UpdatedCurr, UpdatedNew, true).
 
 -ifdef(TEST).
 
@@ -557,8 +568,8 @@ update_test() ->
 reconcile_test() ->
     {O,O2} = update_test(),
     O3 = riak_object:increment_vclock(O2,self()),
-    O3 = riak_object:reconcile([O,O3],true),
-    O3 = riak_object:reconcile([O,O3],false),
+    O3 = riak_object:reconcile(O,O3,true),
+    O3 = riak_object:reconcile(O,O3,false),
     {O,O3}.
 
 merge1_test() ->
@@ -688,7 +699,7 @@ date_reconcile_test() ->
                httpd_util:rfc1123_date(
                  calendar:gregorian_seconds_to_datetime(D+1)),
                get_metadata(O3)))),
-    O5 = riak_object:reconcile([O2,O4], false),
+    O5 = riak_object:reconcile(O2,O4, false),
     false = riak_object:equal(O2, O5),
     false = riak_object:equal(O4, O5).
 
