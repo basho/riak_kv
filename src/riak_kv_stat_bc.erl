@@ -270,7 +270,7 @@ system_stats() ->
     [{nodename, node()},
      {connected_nodes, nodes()},
      {sys_driver_version, list_to_binary(erlang:system_info(driver_version))},
-     {sys_global_heaps_size, erlang:system_info(global_heaps_size)},
+     {sys_global_heaps_size, safe_global_heap_size()},
      {sys_heap_type, erlang:system_info(heap_type)},
      {sys_logical_processors, erlang:system_info(logical_processors)},
      {sys_otp_release, list_to_binary(erlang:system_info(otp_release))},
@@ -281,6 +281,14 @@ system_stats() ->
      {sys_threads_enabled, erlang:system_info(threads)},
      {sys_thread_pool_size, erlang:system_info(thread_pool_size)},
      {sys_wordsize, erlang:system_info(wordsize)}].
+
+safe_global_heap_size() ->
+    try erlang:system_info(global_heaps_size) of
+        N -> N
+    catch
+        error:badarg ->
+            deprecated
+    end.
 
 app_stats() ->
     [{list_to_atom(atom_to_list(A) ++ "_version"), list_to_binary(V)}
