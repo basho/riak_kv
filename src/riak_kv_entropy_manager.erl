@@ -59,7 +59,7 @@
 -type state() :: #state{}.
 
 -define(DEFAULT_CONCURRENCY, 2).
--define(DEFAULT_BUILD_LIMIT, {1, 10000}).
+-define(DEFAULT_BUILD_LIMIT, {1, 3600000}). %% Once per hour
 
 %%%===================================================================
 %%% API
@@ -422,7 +422,8 @@ next_tree(State=#state{tree_queue=Queue}) ->
 
 -spec schedule_tick() -> ok.
 schedule_tick() ->
-    DefaultTick = 1000,
+    %% Perform tick every 15 seconds
+    DefaultTick = 15000,
     Tick = app_helper:get_env(riak_kv,
                               anti_entropy_tick,
                               DefaultTick),

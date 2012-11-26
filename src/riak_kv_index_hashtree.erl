@@ -69,7 +69,7 @@
 -type state() :: #state{}.
 
 %% Time from build to expiration of tree, in millseconds
--define(DEFAULT_EXPIRE, 10000).
+-define(DEFAULT_EXPIRE, 604800000). %% 1 week
 
 %%%===================================================================
 %%% API

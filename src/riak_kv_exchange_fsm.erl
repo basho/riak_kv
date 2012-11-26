@@ -47,7 +47,7 @@
                }).
 
 %% Per state transition timeout used by certain transitions
--define(DEFAULT_ACTION_TIMEOUT, 20000).
+-define(DEFAULT_ACTION_TIMEOUT, 300000). %% 5 minutes
 
 %%%===================================================================
 %%% API
