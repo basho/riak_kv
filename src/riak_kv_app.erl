@@ -24,6 +24,7 @@
 
 -behaviour(application).
 -export([start/2, prep_stop/1, stop/1]).
+-export([check_kv_health/1]).
 
 -define(SERVICES, [{riak_kv_pb_object, 3, 6}, %% ClientID stuff
                    {riak_kv_pb_object, 9, 14}, %% Object requests
@@ -136,6 +137,7 @@ start(_Type, _StartArgs) ->
             %% synchronously.
             riak_core:register(riak_kv, [
                 {vnode_module, riak_kv_vnode},
+                {health_check, {?MODULE, check_kv_health, []}},
                 {bucket_validator, riak_kv_bucket},
                 {stat_mod, riak_kv_stat}
             ]),
@@ -200,3 +202,12 @@ check_epoch() ->
                 "but your system says the epoch is ~p", [Epoch]),
             ok
     end.
+
+check_kv_health(_Pid) ->
+    VNodes = riak_core_vnode_manager:all_index_pid(riak_kv_vnode),
+    Threshold = app_helper:get_env(riak_kv, vnode_mailbox_limit, 5000),
+    SlowVNs =
+        [{Idx,Len} || {Idx, Pid} <- VNodes,
+                      {message_queue_len, Len} <- process_info(Pid, [message_queue_len]),
+                      Len > Threshold],
+    SlowVNs =:= [].
