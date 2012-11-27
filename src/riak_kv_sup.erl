@@ -83,6 +83,9 @@ init([]) ->
     SinkFsmSup = {riak_kv_mrc_sink_sup,
                   {riak_kv_mrc_sink_sup, start_link, []},
                   permanent, infinity, supervisor, [riak_kv_mrc_sink_sup]},
+    GetPutMonitor = {riak_kv_get_put_monitor,
+                     {riak_kv_get_put_monitor, start_link, []},
+                     permanent, 5000, worker, [riak_kv_get_put_monitor]},
 
     % Figure out which processes we should run...
     HasStorageBackend = (app_helper:get_env(riak_kv, storage_backend) /= undefined),
@@ -97,6 +100,7 @@ init([]) ->
         BucketsFsmSup,
         KeysFsmSup,
         IndexFsmSup,
+        GetPutMonitor,
         JSSup,
         MapJSPool,
         ReduceJSPool,

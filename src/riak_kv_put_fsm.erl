@@ -32,7 +32,7 @@
 
 -behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
--export([start/6,start/7]).
+-export([start/3, start/6,start/7]).
 -export([start_link/3,start_link/6,start_link/7]).
 -ifdef(TEST).
 -export([test_link/4]).
@@ -106,6 +106,9 @@
 %% Public API
 %% ===================================================================
 
+start(From, Object, PutOptions) ->
+    gen_fsm:start(?MODULE, [From, Object, PutOptions], []).
+
 %% In place only for backwards compatibility
 start(ReqId,RObj,W,DW,Timeout,ResultPid) ->
     start_link(ReqId,RObj,W,DW,Timeout,ResultPid,[]).
@@ -153,6 +156,7 @@ init([From, RObj, Options]) ->
                                            robj = RObj,
                                            bkey = BKey,
                                            options = Options}),
+    riak_kv_get_put_monitor:put_fsm_spawned(self()),
     riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
     case riak_kv_util:is_x_deleted(RObj) of
         true  ->
@@ -203,18 +207,20 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
             process_reply({error, all_nodes_down}, StateData0);
         {_, true} ->
             %% This node is not in the preference list
-            %% forward on to the first node
-            [{{_Idx, CoordNode},_Type}|_] = Preflist2,
-            Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
+            %% forward on to a random node
+            ListPos = crypto:rand_uniform(1, length(Preflist2)),
+            {{_Idx, CoordNode},_Type} = lists:nth(ListPos, Preflist2),
+            _Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
             ?DTRACE(?C_PUT_FSM_PREPARE, [1],
                     ["prepare", atom2list(CoordNode)]),
-            case rpc:call(CoordNode,riak_kv_put_fsm_sup,start_put_fsm,[CoordNode,[From,RObj,Options]],Timeout) of
-                {ok, _Pid} ->
-                    ?DTRACE(?C_PUT_FSM_PREPARE, [2],
+            try
+                 proc_lib:spawn(CoordNode,riak_kv_put_fsm,start_link,[From,RObj,Options]),
+                 ?DTRACE(?C_PUT_FSM_PREPARE, [2],
                             ["prepare", atom2list(CoordNode)]),
-                    riak_kv_stat:update(coord_redir),
-                    {stop, normal, StateData0};
-                {_, Reason} -> % {error,_} or {badrpc,_}
+                 riak_kv_stat:update(coord_redir),
+                 {stop, normal, StateData0}
+            catch
+                _:Reason ->
                     ?DTRACE(?C_PUT_FSM_PREPARE, [-2],
                             ["prepare", dtrace_errstr(Reason)]),
                     lager:error("Unable to forward put for ~p to ~p - ~p\n",
