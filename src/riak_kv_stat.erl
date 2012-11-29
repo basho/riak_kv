@@ -47,6 +47,8 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
+% TODO temporarily silence warnings
+-export([get_put_monitor_stats/0]).
 -define(SERVER, ?MODULE).
 -define(APP, riak_kv).
 
@@ -256,6 +258,10 @@ stats() ->
      {[node, puts, time], histogram},
      {[node, gets, read_repairs], spiral},
      {[node, puts, coord_redirs], counter},
+     {[node, puts, active], counter},
+     {[node, gets, active], counter},
+     {[node, puts, errors], spiral},
+     {[node, gets, errors], spiral},
      {mapper_count, counter},
      {precommit_fail, counter},
      {postcommit_fail, counter},
@@ -314,6 +320,41 @@ leveldb_read_block_errors({backend_status, riak_kv_multi_backend, Statuses}) ->
     multibackend_read_block_errors(Statuses, undefined);
 leveldb_read_block_errors(_) ->
     undefined.
+
+get_put_monitor_stats() ->
+    GPStats = riak_kv_get_put_monitor:all_stats(),
+    get_put_monitor_stats(GPStats).
+
+get_put_monitor_stats(Stats) ->
+    get_put_monitor_stats(Stats, []).
+
+get_put_monitor_stats([], Acc) ->
+    lists:reverse(Acc);
+
+get_put_monitor_stats([{Key, Val} | Tail], Acc) when is_list(Val) ->
+    BaseKey = lists:nthtail(1, tuple_to_list(Key)),
+    Stats = [{get_put_monitor_stats_join(BaseKey ++ [SubKey]), SubVal}
+        || {SubKey, SubVal} <- Val],
+    get_put_monitor_stats(Tail, Stats ++ Acc);
+
+get_put_monitor_stats([{Key, Val} | Tail], Acc) ->
+    BaseKey = lists:nthtail(1, tuple_to_list(Key)),
+    Stat = {get_put_monitor_stats_join(BaseKey), Val},
+    get_put_monitor_stats(Tail, [Stat | Acc]).
+
+get_put_monitor_stats_join(Parts) ->
+    get_put_monitor_stats_join(Parts, []).
+
+get_put_monitor_stats_join([Part | Tail], []) ->
+    get_put_monitor_stats_join(Tail, [Part]);
+
+get_put_monitor_stats_join([], Acc) ->
+    Joined = lists:reverse(Acc),
+    Stringy = [atom_to_list(X) || X <- Joined],
+    list_to_atom(lists:flatten(Stringy));
+
+get_put_monitor_stats_join([Part | Tail], Acc) ->
+    get_put_monitor_stats_join(Tail, [Part, '_' | Acc]).
 
 multibackend_read_block_errors([], Val) ->
     rbe_val(Val);

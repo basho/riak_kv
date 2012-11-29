@@ -183,6 +183,7 @@ start_mock_servers() ->
     application:load(riak_core),
     application:start(crypto),
     application:start(folsom),
+    start_fake_get_put_monitor(),
     riak_core_stat_cache:start_link(),
     riak_kv_stat:register_stats(),
     riak_core_ring_events:start_link(),
@@ -192,6 +193,7 @@ start_mock_servers() ->
     ok.
 
 cleanup_mock_servers() ->
+    stop_fake_get_put_monitor(),
     application:stop(folsom),
     application:stop(riak_core).
 
@@ -241,6 +243,72 @@ wait_for_req_id(ReqId, Pid) ->
             {anything, Anything1}
     after 400 ->
             timeout
+    end.
+
+start_fake_get_put_monitor() ->
+    Pid = spawn_link(?MODULE, fake_get_put_monitor, [undefined]),
+    case whereis(riak_kv_get_put_monitor) of
+        undefined ->
+            ok;
+        OldPid ->
+            unlink(OldPid),
+            exit(OldPid, shutdown),
+            riak_kv_test_util:wait_for_pid(OldPid)
+    end,
+    register(riak_kv_get_put_monitor, Pid),
+    {ok, Pid}.
+
+stop_fake_get_put_monitor() ->
+    case whereis(riak_kv_get_put_monitor) of
+        undefined ->
+            ok;
+        Pid ->
+            unlink(Pid),
+            exit(Pid, shutdown),
+            riak_kv_test_util:wait_for_pid(Pid)
+    end.
+
+fake_get_put_monitor(LastCast) ->
+    receive
+        {'$gen_call', From, last_cast} ->
+            gen_server:reply(From, LastCast),
+            fake_get_put_monitor(LastCast);
+        {'$gen_cast', stop} ->
+            ok;
+        {'$gen_cast', NewCast} ->
+            fake_get_put_monitor(NewCast);
+        _ ->
+            fake_get_put_monitor(LastCast)
+    end.
+
+is_get_put_last_cast(Type, Pid) ->
+    case gen_server:call(riak_kv_get_put_monitor, last_cast) of
+        {get_fsm_spawned, Pid} when Type == get ->
+            true;
+        {put_fsm_spawned, Pid} when Type == put ->
+            true;
+        _ ->
+            false
+    end.
+
+start_fake_rng(ProcessName) ->
+    Pid = spawn_link(?MODULE, fake_rng, [1]),
+    register(ProcessName, Pid),
+    {ok, Pid}.
+
+set_fake_rng(ProcessName, Val) ->
+    gen_server:cast(ProcessName, {set, Val}).
+
+get_fake_rng(ProcessName) ->
+    gen_server:call(ProcessName, get).
+
+fake_rng(N) ->
+    receive
+        {'$gen_call', From, get} ->
+            gen_server:reply(From, N),
+            fake_rng(N);
+        {'$gen_cast', {set, NewN}} ->
+            fake_rng(NewN)
     end.
 
 -endif. % EQC

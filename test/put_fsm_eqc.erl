@@ -393,7 +393,8 @@ prop_basic_put() ->
            conjunction([{result, equals(RetResult, Expected)},
                         {details, check_details(RetInfo, Options)},
                         {postcommit, equals(PostCommits, ExpectedPostCommits)},
-                        {puts_sent, check_puts_sent(ExpectedVnodePuts, H)}]))
+                        {puts_sent, check_puts_sent(ExpectedVnodePuts, H)},
+                        {told_monitor, fsm_eqc_util:is_get_put_last_cast(put, PutPid)}]))
     end).
 
 make_options([], Options) ->

@@ -83,6 +83,9 @@ init([]) ->
     SinkFsmSup = {riak_kv_mrc_sink_sup,
                   {riak_kv_mrc_sink_sup, start_link, []},
                   permanent, infinity, supervisor, [riak_kv_mrc_sink_sup]},
+    GetPutMonitor = {riak_kv_get_put_monitor,
+                     {riak_kv_get_put_monitor, start_link, []},
+                     permanent, 5000, worker, [riak_kv_get_put_monitor]},
 
     EntropyManager = {riak_kv_entropy_manager,
                       {riak_kv_entropy_manager, start_link, []},
@@ -102,6 +105,7 @@ init([]) ->
         KeysFsmSup,
         IndexFsmSup,
         EntropyManager,
+        GetPutMonitor,
         JSSup,
         MapJSPool,
         ReduceJSPool,

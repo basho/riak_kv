@@ -159,7 +159,8 @@ configure(load) ->
     application:set_env(riak_kv, storage_backend, riak_kv_memory_backend),
     application:set_env(riak_kv, test, true),
     application:set_env(riak_kv, vnode_vclocks, true),
-    application:set_env(riak_kv, delete_mode, immediate);
+    Out = application:set_env(riak_kv, delete_mode, immediate),
+    Out;
 configure(_) ->
     ok.
 
