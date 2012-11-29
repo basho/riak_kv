@@ -362,6 +362,10 @@ maybe_delete(_StateData=#state{n = N, preflist2=Sent,
 
 %% based on what the get_put_monitor stats say, and a random roll, potentially
 %% skip read-repriar
+%% On a very busy system with many writes and many reads, it is possible to
+%% get overloaded by read-repairs. By occasionally skipping read_repair we
+%% can keep the load more managable; ie the only load on the system becomes
+%% the gets, puts, etc.
 maybe_read_repair(Indices, RepairObj, UpdStateData) ->
     HardCap = app_helper:get_env(riak_kv, read_repair_max),
     SoftCap = app_helper:get_env(riak_kv, read_repair_soft, HardCap),
@@ -386,8 +390,6 @@ determine_do_read_repair(_SoftCap, HardCap, Actual) when HardCap =< Actual ->
     false;
 determine_do_read_repair(SoftCap, _HardCap, Actual) when Actual =< SoftCap ->
     true;
-%determine_do_read_repair(HardCap, HardCap, _Actual) ->
-%    true; % hardcap == softcap and Actual < HardCap
 determine_do_read_repair(SoftCap, HardCap, Actual) ->
     Roll = roll_d100(),
     determine_do_read_repair(SoftCap, HardCap, Actual, Roll).
