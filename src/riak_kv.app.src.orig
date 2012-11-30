@@ -3,7 +3,11 @@
 {application, riak_kv,
  [
   {description, "Riak Key/Value Store"},
+<<<<<<< HEAD
+  {vsn, "1.2.1"},
+=======
   {vsn, "1.2.1p3"},
+>>>>>>> master
   {applications, [
                   kernel,
                   stdlib,

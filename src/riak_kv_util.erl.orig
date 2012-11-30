@@ -32,11 +32,15 @@
          expand_value/3,
          expand_rw_value/4,
          normalize_rw_value/2,
+<<<<<<< HEAD
+         make_request/2]).
+=======
          make_request/2,
          get_index_n/2,
          preflist_siblings/1,
          responsible_preflists/1,
          responsible_preflists/2]).
+>>>>>>> master
 
 -include_lib("riak_kv_vnode.hrl").
 
@@ -152,6 +156,8 @@ normalize_rw_value(quorum, N) -> erlang:trunc((N/2)+1);
 normalize_rw_value(all, N) -> N;
 normalize_rw_value(_, _) -> error.
 
+<<<<<<< HEAD
+=======
 %% ===================================================================
 %% Preflist utility functions
 %% ===================================================================
@@ -230,6 +236,7 @@ determine_all_n(Ring) ->
                        end, [DefaultN], BucketProps),
     AllN.
 
+>>>>>>> master
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================

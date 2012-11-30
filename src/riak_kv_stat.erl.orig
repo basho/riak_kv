@@ -47,8 +47,11 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
+<<<<<<< HEAD
+=======
 % TODO temporarily silence warnings
 -export([get_put_monitor_stats/0]).
+>>>>>>> master
 -define(SERVER, ?MODULE).
 -define(APP, riak_kv).
 
@@ -258,10 +261,13 @@ stats() ->
      {[node, puts, time], histogram},
      {[node, gets, read_repairs], spiral},
      {[node, puts, coord_redirs], counter},
+<<<<<<< HEAD
+=======
      {[node, puts, active], counter},
      {[node, gets, active], counter},
      {[node, puts, errors], spiral},
      {[node, gets, errors], spiral},
+>>>>>>> master
      {mapper_count, counter},
      {precommit_fail, counter},
      {postcommit_fail, counter},
@@ -321,6 +327,8 @@ leveldb_read_block_errors({backend_status, riak_kv_multi_backend, Statuses}) ->
 leveldb_read_block_errors(_) ->
     undefined.
 
+<<<<<<< HEAD
+=======
 get_put_monitor_stats() ->
     GPStats = riak_kv_get_put_monitor:all_stats(),
     get_put_monitor_stats(GPStats).
@@ -356,6 +364,7 @@ get_put_monitor_stats_join([], Acc) ->
 get_put_monitor_stats_join([Part | Tail], Acc) ->
     get_put_monitor_stats_join(Tail, [Part, '_' | Acc]).
 
+>>>>>>> master
 multibackend_read_block_errors([], Val) ->
     rbe_val(Val);
 multibackend_read_block_errors([{_Name, Status}|Rest], undefined) ->

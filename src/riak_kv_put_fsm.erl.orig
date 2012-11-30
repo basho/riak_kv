@@ -156,7 +156,10 @@ init([From, RObj, Options]) ->
                                            robj = RObj,
                                            bkey = BKey,
                                            options = Options}),
+<<<<<<< HEAD
+=======
     riak_kv_get_put_monitor:put_fsm_spawned(self()),
+>>>>>>> master
     riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
     case riak_kv_util:is_x_deleted(RObj) of
         true  ->
@@ -207,6 +210,20 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
             process_reply({error, all_nodes_down}, StateData0);
         {_, true} ->
             %% This node is not in the preference list
+<<<<<<< HEAD
+            %% forward on to the first node
+            [{{_Idx, CoordNode},_Type}|_] = Preflist2,
+            Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
+            ?DTRACE(?C_PUT_FSM_PREPARE, [1],
+                    ["prepare", atom2list(CoordNode)]),
+            case rpc:call(CoordNode,riak_kv_put_fsm_sup,start_put_fsm,[CoordNode,[From,RObj,Options]],Timeout) of
+                {ok, _Pid} ->
+                    ?DTRACE(?C_PUT_FSM_PREPARE, [2],
+                            ["prepare", atom2list(CoordNode)]),
+                    riak_kv_stat:update(coord_redir),
+                    {stop, normal, StateData0};
+                {_, Reason} -> % {error,_} or {badrpc,_}
+=======
             %% forward on to a random node
             ListPos = crypto:rand_uniform(1, length(Preflist2)),
             {{_Idx, CoordNode},_Type} = lists:nth(ListPos, Preflist2),
@@ -221,6 +238,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                  {stop, normal, StateData0}
             catch
                 _:Reason ->
+>>>>>>> master
                     ?DTRACE(?C_PUT_FSM_PREPARE, [-2],
                             ["prepare", dtrace_errstr(Reason)]),
                     lager:error("Unable to forward put for ~p to ~p - ~p\n",

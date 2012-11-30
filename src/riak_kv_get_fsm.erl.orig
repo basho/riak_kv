@@ -132,7 +132,10 @@ init([From, Bucket, Key, Options]) ->
                                            options = Options,
                                            bkey = {Bucket, Key},
                                            startnow = StartNow}),
+<<<<<<< HEAD
+=======
     riak_kv_get_put_monitor:get_fsm_spawned(self()),
+>>>>>>> master
     riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
     ?DTRACE(?C_GET_FSM_INIT, [], ["init"]),
     {ok, prepare, StateData, 0};
@@ -173,11 +176,15 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
 validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
                                    n = N, bucket_props = BucketProps, preflist2 = PL2}) ->
     ?DTRACE(?C_GET_FSM_VALIDATE, [], ["validate"]),
+<<<<<<< HEAD
+    Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
+=======
     AppEnvTimeout = app_helper:get_env(riak_kv, timeout),
     Timeout = case AppEnvTimeout of
                   undefined -> get_option(timeout, Options, ?DEFAULT_TIMEOUT);
                   _ -> AppEnvTimeout
               end,
+>>>>>>> master
     R0 = get_option(r, Options, ?DEFAULT_R),
     PR0 = get_option(pr, Options, ?DEFAULT_PR),
     R = riak_kv_util:expand_rw_value(r, R0, BucketProps, N),
