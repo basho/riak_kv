@@ -171,6 +171,8 @@
                 ref            :: term(),
                 path           :: string(),
                 itr            :: term(),
+                write_buffer   :: [{binary(), binary()}],
+                write_buffer_count :: integer(),
                 dirty_segments :: array()
                }).
 
@@ -227,6 +229,8 @@ new({Index,TreeId}, LinkedStore, Options) ->
                    mem_levels=MemLevels,
                    %% dirty_segments=gb_sets:new(),
                    dirty_segments=bitarray_new(NumSegments),
+                   write_buffer=[],
+                   write_buffer_count=0,
                    tree=dict:new()},
     State2 = share_segment_store(State, LinkedStore),
     State2.
@@ -253,13 +257,32 @@ insert(Key, ObjHash, State, Opts) ->
     HKey = encode(State#state.id, Segment, Key),
     case should_insert(HKey, Opts, State) of
         true ->
-            ok = eleveldb:put(State#state.ref, HKey, ObjHash, []),
-            %% Dirty = gb_sets:add_element(Segment, State#state.dirty_segments),
-            Dirty = bitarray_set(Segment, State#state.dirty_segments),
-            State#state{dirty_segments=Dirty};
+            WBuffer = [{HKey, ObjHash} | State#state.write_buffer],
+            WCount = State#state.write_buffer_count + 1,
+            State2 = State#state{write_buffer=WBuffer,
+                                 write_buffer_count=WCount},
+            State3 = maybe_flush_buffer(State2),
+            %% Dirty = gb_sets:add_element(Segment, State3#state.dirty_segments),
+            Dirty = bitarray_set(Segment, State3#state.dirty_segments),
+            State3#state{dirty_segments=Dirty};
         false ->
             State
     end.
+
+maybe_flush_buffer(State=#state{write_buffer_count=WCount}) ->
+    Threshold = 200,
+    case WCount > Threshold of
+        true ->
+            flush_buffer(State);
+        false ->
+            State
+    end.
+
+flush_buffer(State=#state{write_buffer=WBuffer}) ->
+    Updates = [{put, Key, Hash} || {Key, Hash} <- WBuffer],
+    ok = eleveldb:write(State#state.ref, Updates, []),
+    State#state{write_buffer=[],
+                write_buffer_count=0}.
 
 -spec delete(binary(), hashtree()) -> hashtree().
 delete(Key, State) ->
@@ -290,14 +313,16 @@ should_insert(HKey, Opts, State) ->
 
 -spec update_snapshot(hashtree()) -> {hashtree(), hashtree()}.
 update_snapshot(State=#state{segments=NumSegments}) ->
-    SnapState = snapshot(State),
-    State2 = SnapState#state{dirty_segments=bitarray_new(NumSegments)},
-    {SnapState, State2}.
+    State2 = flush_buffer(State),
+    SnapState = snapshot(State2),
+    State3 = SnapState#state{dirty_segments=bitarray_new(NumSegments)},
+    {SnapState, State3}.
 
 -spec update_tree(hashtree()) -> hashtree().
 update_tree(State) ->
-    State2 = snapshot(State),
-    update_perform(State2).
+    State2 = flush_buffer(State),
+    State3 = snapshot(State2),
+    update_perform(State3).
 
 -spec update_perform(hashtree()) -> hashtree().
 update_perform(State2=#state{dirty_segments=Dirty, segments=NumSegments}) ->
