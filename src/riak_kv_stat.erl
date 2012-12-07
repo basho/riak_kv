@@ -58,7 +58,7 @@ start_link() ->
 register_stats() ->
     [(catch folsom_metrics:delete_metric(Stat)) || Stat <- folsom_metrics:get_metrics(),
                                                            is_tuple(Stat), element(1, Stat) == ?APP],
-    [register_stat(stat_name(Name), Type) || {Name, Type} <- stats()],
+    [do_register_stat(stat_name(Name), Type) || {Name, Type} <- stats()],
     riak_core_stat_cache:register_app(?APP, {?MODULE, produce_stats, []}).
 
 %% @spec get_stats() -> proplist()
@@ -70,8 +70,22 @@ get_stats() ->
         Error -> Error
     end.
 
+%% Creation of a dynamic stat _must_ be serialized.
+register_stat(Name, Type) ->
+    gen_server:call(?SERVER, {register, Name, Type}).
+
 update(Arg) ->
-    gen_server:cast(?SERVER, {update, Arg}).
+    %% Large message queues on heavily loaded nodes
+    %% mean calling folsom direct, rather than casting here.
+    %% We catch the update so a failed stat update
+    %% does not fail a read / write to riak.
+    try do_update(Arg) of
+        _ ->
+            ok
+    catch
+        ErrClass:Err ->
+            lager:error("~p:~p updating stat ~p.", [ErrClass, Err, Arg])
+    end.
 
 track_bucket(Bucket) when is_binary(Bucket) ->
     riak_core_bucket:set_bucket(Bucket, [{stat_tracked, true}]).
@@ -85,8 +99,9 @@ init([]) ->
     register_stats(),
     {ok, ok}.
 
-handle_call(_Req, _From, State) ->
-    {reply, ok, State}.
+handle_call({register, Name, Type}, _From, State) ->
+    Rep = do_register_stat(Name, Type),
+    {reply, Rep, State}.
 
 handle_cast({update, Arg}, State) ->
     do_update(Arg),
@@ -269,15 +284,15 @@ stats() ->
       {function, {function, ?MODULE, leveldb_read_block_errors}}}].
 
 %% @doc register a stat with folsom
-register_stat(Name, spiral) ->
+do_register_stat(Name, spiral) ->
     folsom_metrics:new_spiral(Name);
-register_stat(Name, counter) ->
+do_register_stat(Name, counter) ->
     folsom_metrics:new_counter(Name);
-register_stat(Name, histogram) ->
+do_register_stat(Name, histogram) ->
     %% get the global default histo type
     {SampleType, SampleArgs} = get_sample_type(Name),
     folsom_metrics:new_histogram(Name, SampleType, SampleArgs);
-register_stat(Name, {function, F}) ->
+do_register_stat(Name, {function, F}) ->
     %% store the function in a gauge metric
     folsom_metrics:new_gauge(Name),
     folsom_metrics:notify({Name, F}).
