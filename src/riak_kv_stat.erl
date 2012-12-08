@@ -41,7 +41,7 @@
          update/1, register_stats/0, produce_stats/0,
          leveldb_read_block_errors/0, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
--export([active_gets/0]).
+-export([active_gets/0, active_puts/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -94,6 +94,10 @@ untrack_bucket(Bucket) when is_binary(Bucket) ->
 %% The current number of active get fsms in riak
 active_gets() ->
     folsom_metrics:get_metric_value({?APP, node, gets, fsm, active}).
+
+%% The current number of active put fsms in riak
+active_puts() ->
+    folsom_metrics:get_metric_value({?APP, node, puts, fsm, active}).
 
 stop() ->
     gen_server:cast(?SERVER, stop).

@@ -162,13 +162,18 @@ prep_stop(_State) ->
         %% no error message or logging about the failure otherwise.
 
         lager:info("Stopping application riak_kv - marked service down.\n", []),
-        riak_core_node_watcher:service_down(riak_kv)
+        riak_core_node_watcher:service_down(riak_kv),
 
-        %% TODO: Gracefully unregister riak_kv webmachine endpoints.
-        %% Cannot do this currently as it calls application:set_env while this function
-        %% is itself inside of application controller.  webmachine really needs it's own
-        %% ETS table for dispatch information.
-        %%[ webmachine_router:remove_route(R) || R <- riak_kv_web:dispatch_table() ],
+        ok = riak_api_pb_service:deregister(?SERVICES),
+        lager:info("Unregistered pb services"),
+
+        %% Gracefully unregister riak_kv webmachine endpoints.
+        [ webmachine_router:remove_route(R) || R <-
+            riak_kv_web:dispatch_table() ],
+        lager:info("unregistered webmachine routes"),
+        wait_for_put_fsms(),
+        lager:info("all active put FSMs completed"),
+        ok
     catch
         Type:Reason ->
             lager:error("Stopping application riak_api - ~p:~p.\n", [Type, Reason])
@@ -178,7 +183,6 @@ prep_stop(_State) ->
 %% @spec stop(State :: term()) -> ok
 %% @doc The application:stop callback for riak.
 stop(_State) ->
-    ok = riak_api_pb_service:deregister(?SERVICES),
     lager:info("Stopped  application riak_kv.\n", []),
     ok.
 
@@ -239,3 +243,12 @@ check_kv_health(_Pid) ->
             ok
     end,
     Passed.
+
+wait_for_put_fsms() ->
+    case riak_kv_get_put_monitor:puts_active() of
+        0 -> ok;
+        Count ->
+            lager:info("Waiting for ~p put FSMs to complete", [Count]),
+            timer:sleep(1000),
+            wait_for_put_fsms()
+    end.
