@@ -84,7 +84,7 @@ encode(Message) ->
 
 %% @doc process/2 callback. Handles an incoming request message.
 process(rpbgetclientidreq, #state{client=C, client_id=CID} = State) ->
-    ClientId = case app_helper:get_env(riak_kv, vnode_vclocks, false) of
+    ClientId = case riak_core_capability:get(riak_kv, vnode_vclocks) of
                    true -> CID;
                    false -> C:get_client_id()
                end,
@@ -92,7 +92,7 @@ process(rpbgetclientidreq, #state{client=C, client_id=CID} = State) ->
     {reply, Resp, State};
 
 process(#rpbsetclientidreq{client_id = ClientId}, State) ->
-    NewState = case app_helper:get_env(riak_kv, vnode_vclocks, false) of
+    NewState = case riak_core_capability:get(riak_kv, vnode_vclocks) of
                    true -> State#state{client_id=ClientId};
                    false ->
                        {ok, C} = riak:local_client(ClientId),
