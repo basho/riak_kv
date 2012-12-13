@@ -39,16 +39,14 @@
 %% API
 -export([start_link/0, get_stats/0,
          update/1, register_stats/0, produce_stats/0,
-         leveldb_read_block_errors/0]).
-
+         leveldb_read_block_errors/0, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
+-export([active_gets/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
-% TODO temporarily silence warnings
--export([get_put_monitor_stats/0]).
 -define(SERVER, ?MODULE).
 -define(APP, riak_kv).
 
@@ -93,6 +91,13 @@ track_bucket(Bucket) when is_binary(Bucket) ->
 untrack_bucket(Bucket) when is_binary(Bucket) ->
     riak_core_bucket:set_bucket(Bucket, [{stat_tracked, false}]).
 
+%% The current number of active get fsms in riak
+active_gets() ->
+    folsom_metrics:get_metric_value({?APP, node, gets, fsm, active}).
+
+stop() ->
+    gen_server:cast(?SERVER, stop).
+
 %% gen_server
 
 init([]) ->
@@ -106,6 +111,8 @@ handle_call({register, Name, Type}, _From, State) ->
 handle_cast({update, Arg}, State) ->
     do_update(Arg),
     {noreply, State};
+handle_cast(stop, State) ->
+    {stop, normal, State};
 handle_cast(_Req, State) ->
     {noreply, State}.
 
@@ -165,7 +172,14 @@ do_update(mapper_end) ->
 do_update(precommit_fail) ->
     folsom_metrics:notify_existing_metric({?APP, precommit_fail}, {inc, 1}, counter);
 do_update(postcommit_fail) ->
-    folsom_metrics:notify_existing_metric({?APP, postcommit_fail}, {inc, 1}, counter).
+    folsom_metrics:notify_existing_metric({?APP, postcommit_fail}, {inc, 1}, counter);
+do_update({fsm_spawned, Type}) when Type =:= gets; Type =:= puts ->
+    folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, active}, {inc, 1}, counter);
+do_update({fsm_exit, Type}) when Type =:= gets; Type =:= puts  ->
+    folsom_metrics:notify_existing_metric({?APP, node, Type, fsm,  active}, {dec, 1}, counter);
+do_update({fsm_error, Type}) when Type =:= gets; Type =:= puts ->
+    do_update({fsm_exit, Type}),
+    folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, errors}, 1, spiral).
 
 %% private
 %% Per index stats (by op)
@@ -273,10 +287,10 @@ stats() ->
      {[node, puts, time], histogram},
      {[node, gets, read_repairs], spiral},
      {[node, puts, coord_redirs], counter},
-     {[node, puts, active], counter},
-     {[node, gets, active], counter},
-     {[node, puts, errors], spiral},
-     {[node, gets, errors], spiral},
+     {[node, puts, fsm, active], counter},
+     {[node, gets, fsm, active], counter},
+     {[node, puts, fsm, errors], spiral},
+     {[node, gets, fsm, errors], spiral},
      {mapper_count, counter},
      {precommit_fail, counter},
      {postcommit_fail, counter},
@@ -335,41 +349,6 @@ leveldb_read_block_errors({backend_status, riak_kv_multi_backend, Statuses}) ->
     multibackend_read_block_errors(Statuses, undefined);
 leveldb_read_block_errors(_) ->
     undefined.
-
-get_put_monitor_stats() ->
-    GPStats = riak_kv_get_put_monitor:all_stats(),
-    get_put_monitor_stats(GPStats).
-
-get_put_monitor_stats(Stats) ->
-    get_put_monitor_stats(Stats, []).
-
-get_put_monitor_stats([], Acc) ->
-    lists:reverse(Acc);
-
-get_put_monitor_stats([{Key, Val} | Tail], Acc) when is_list(Val) ->
-    BaseKey = lists:nthtail(1, tuple_to_list(Key)),
-    Stats = [{get_put_monitor_stats_join(BaseKey ++ [SubKey]), SubVal}
-        || {SubKey, SubVal} <- Val],
-    get_put_monitor_stats(Tail, Stats ++ Acc);
-
-get_put_monitor_stats([{Key, Val} | Tail], Acc) ->
-    BaseKey = lists:nthtail(1, tuple_to_list(Key)),
-    Stat = {get_put_monitor_stats_join(BaseKey), Val},
-    get_put_monitor_stats(Tail, [Stat | Acc]).
-
-get_put_monitor_stats_join(Parts) ->
-    get_put_monitor_stats_join(Parts, []).
-
-get_put_monitor_stats_join([Part | Tail], []) ->
-    get_put_monitor_stats_join(Tail, [Part]);
-
-get_put_monitor_stats_join([], Acc) ->
-    Joined = lists:reverse(Acc),
-    Stringy = [atom_to_list(X) || X <- Joined],
-    list_to_atom(lists:flatten(Stringy));
-
-get_put_monitor_stats_join([Part | Tail], Acc) ->
-    get_put_monitor_stats_join(Tail, [Part, '_' | Acc]).
 
 multibackend_read_block_errors([], Val) ->
     rbe_val(Val);
