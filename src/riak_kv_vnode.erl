@@ -818,7 +818,6 @@ prepare_put(#state{vnodeid=VId,
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs};
                 {newobj, NewObj} ->
-%                    VC = riak_object:vclock(NewObj),
                     AMObj = enforce_allow_mult(NewObj, BProps),
                     case IndexBackend of
                         true ->
@@ -828,16 +827,6 @@ prepare_put(#state{vnodeid=VId,
                         false ->
                             IndexSpecs = []
                     end,
-%                    case PruneTime of
-%                        undefined ->
-%                            ObjToStore = AMObj;
-%                        _ ->
-%                            ObjToStore =
-%                                riak_object:set_vclock(AMObj,
-%                                                       vclock:prune(VC,
-%                                                                    PruneTime,
-%                                                                    BProps))
-%                    end,
                     {{true, AMObj},
                      PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}}
             end
@@ -909,7 +898,6 @@ put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
     {newobj, UpdObj};
 put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
     ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
-%    case ResObj =:= CurObj of
     case dottedvv:equal(riak_object:vclock(ResObj), riak_object:vclock(CurObj)) of
         true ->
             {oldobj, CurObj};
@@ -922,20 +910,6 @@ put_merge(true, false, CurObj, UpdObj, VId, _StartTime) ->
     UpdObj1 = riak_object:update_vclock(UpdObj, CurObj, VId),
     ResObj = riak_object:syntactic_merge(CurObj, UpdObj1),
     {newobj, ResObj}.
-%    UpdVC = riak_object:vclock(UpdObj1),
-%    CurVC = riak_object:vclock(CurObj),
-%
-%    %% Check the coord put will replace the existing object
-%    case vclock:get_counter(VId, UpdVC) > vclock:get_counter(VId, CurVC) andalso
-%        vclock:descends(CurVC, UpdVC) == false andalso
-%        vclock:descends(UpdVC, CurVC) == true of
-%        true ->
-%            {newobj, UpdObj1};
-%        false ->
-%            %% If not, make sure it does
-%            {newobj, riak_object:increment_vclock(
-%                       riak_object:merge(CurObj, UpdObj1), VId, StartTime)}
-%    end.
 
 %% @private
 do_get(_Sender, BKey, ReqID,

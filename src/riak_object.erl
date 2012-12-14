@@ -132,8 +132,9 @@ equal_contents([C1|R1],[C2|R2]) ->
 
 
 
-% @spec reconcile([riak_object()], boolean()) -> riak_object()
-% @doc  Reconcile a list of riak objects.  If AllowMultiple is true,
+% @spec reconcile([riak_object()], [riak_object()], boolean()) -> riak_object()
+% @doc  Reconcile the object from the client and the object from the server. 
+%       If AllowMultiple is true,
 %       the riak_object returned may contain multiple values if Objects
 %       contains sibling versions (objects that could not be syntactically
 %       merged).   If AllowMultiple is false, the riak_object returned will
@@ -163,7 +164,7 @@ reconcile(Current, New, AllowMultiple) ->
                    updatevalue=undefined}.
 
 
-%% @spec reconcile([riak_object()]) -> [riak_object()]
+%% @spec reconcile([riak_object()], [riak_object()]) -> [riak_object()]
 reconcile_sync(Current, New) ->
     ClockNew = vclock(New),
     {Curr, ClocksCurrent} =
@@ -332,11 +333,6 @@ increment_vclock(Object=#r_object{}, Id) ->
 update_vclock(ObjectC=#r_object{}, ObjectR=#r_object{}, Id) ->
     Dvv = dottedvv:update(vclock(ObjectC), vclock(ObjectR), Id),
     riak_object:set_vclock(ObjectC,Dvv).
-
-%% @doc  Increment the entry for ClientId in O's vclock.
-%-spec increment_vclock(riak_object(), vclock:vclock_node(), vclock:timestamp()) -> riak_object().
-%increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
-%    Object#r_object{vclock=vclock:increment(ClientId, Timestamp, Object#r_object.vclock)}.
 
 %% @doc Prepare a list of index specifications
 %% to pass to the backend. This function is for
