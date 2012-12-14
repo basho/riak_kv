@@ -279,7 +279,8 @@ maybe_flush_buffer(State=#state{write_buffer_count=WCount}) ->
     end.
 
 flush_buffer(State=#state{write_buffer=WBuffer}) ->
-    Updates = [{put, Key, Hash} || {Key, Hash} <- WBuffer],
+    %% Write buffer is built backwards, reverse before building update list
+    Updates = [{put, Key, Hash} || {Key, Hash} <- lists:reverse(WBuffer)],
     ok = eleveldb:write(State#state.ref, Updates, []),
     State#state{write_buffer=[],
                 write_buffer_count=0}.
