@@ -246,43 +246,20 @@ wait_for_req_id(ReqId, Pid) ->
     end.
 
 start_fake_get_put_monitor() ->
-    Pid = spawn_link(?MODULE, fake_get_put_monitor, [undefined]),
-    case whereis(riak_kv_get_put_monitor) of
-        undefined ->
-            ok;
-        OldPid ->
-            unlink(OldPid),
-            exit(OldPid, shutdown),
-            riak_kv_test_util:wait_for_pid(OldPid)
-    end,
-    register(riak_kv_get_put_monitor, Pid),
-    {ok, Pid}.
+    meck:new(riak_kv_get_put_monitor),
+    meck:expect(riak_kv_get_put_monitor, get_fsm_spawned,
+                fun(_Pid) ->  ok  end),
+    meck:expect(riak_kv_get_put_monitor, put_fsm_spawned,
+                fun(_Pid) ->  ok  end),
+    meck:expect(riak_kv_get_put_monitor, gets_active,
+                fun() -> meck:passthrough([])
+                end).
 
 stop_fake_get_put_monitor() ->
-    case whereis(riak_kv_get_put_monitor) of
-        undefined ->
-            ok;
-        Pid ->
-            unlink(Pid),
-            exit(Pid, shutdown),
-            riak_kv_test_util:wait_for_pid(Pid)
-    end.
-
-fake_get_put_monitor(LastCast) ->
-    receive
-        {'$gen_call', From, last_cast} ->
-            gen_server:reply(From, LastCast),
-            fake_get_put_monitor(LastCast);
-        {'$gen_cast', stop} ->
-            ok;
-        {'$gen_cast', NewCast} ->
-            fake_get_put_monitor(NewCast);
-        _ ->
-            fake_get_put_monitor(LastCast)
-    end.
+    meck:unload(riak_kv_get_put_monitor).
 
 is_get_put_last_cast(Type, Pid) ->
-    case gen_server:call(riak_kv_get_put_monitor, last_cast) of
+    case last_spawn(lists:reverse(meck:history(riak_kv_get_put_monitor))) of
         {get_fsm_spawned, Pid} when Type == get ->
             true;
         {put_fsm_spawned, Pid} when Type == put ->
@@ -290,6 +267,18 @@ is_get_put_last_cast(Type, Pid) ->
         _ ->
             false
     end.
+
+%% Just get the last `XXX_fsm_spawned/1' from the list
+%% of meck history calls.
+%% Expects a reversed meck:history()
+last_spawn([]) ->
+    undefined;
+last_spawn([{_MPid, {_Mod, TypeFun, [Pid]}, ok}|_Rest]) ->
+    {TypeFun, Pid};
+last_spawn([_Hist|Rest]) ->
+    last_spawn(Rest).
+
+
 
 start_fake_rng(ProcessName) ->
     Pid = spawn_link(?MODULE, fake_rng, [1]),

@@ -34,161 +34,47 @@
 %% currently alive.  'errors' is a spiral for all fsm's that exited with a
 %% reason other than normal or shutdown.
 -module(riak_kv_get_put_monitor).
--behaviour(gen_server).
--define(SERVER, ?MODULE).
--define(STATTYPES, [
-    {new_counter, puts, active},
-    {new_counter, gets, active},
-    {new_spiral, puts, errors},
-    {new_spiral, gets, errors}
-]).
--define(COUNTER(FsmType, DataPoint), {riak_kv, node, FsmType, DataPoint}).
--define(COUNTERS, [?COUNTER(FsmType, DataPoint) ||
-    {_, FsmType, DataPoint} <- ?STATTYPES]).
-
--type metric() :: {'riak_kv', 'node', 'puts' | 'gets', 'active' | 'errors'}.
--type spiral_value() :: [{'counter', non_neg_integer()} | {'one', non_neg_integer()}].
-
--record(state, {monitor_list = []}).
 
 %% ------------------------------------------------------------------
 %% API Function Exports
 %% ------------------------------------------------------------------
 
--export([start_link/0, get_fsm_spawned/1, put_fsm_spawned/1,
-    all_stats/0, stop/0, gets_active/0]).
-
-%% ------------------------------------------------------------------
-%% gen_server Function Exports
-%% ------------------------------------------------------------------
-
--export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+-export([get_fsm_spawned/1, put_fsm_spawned/1,
+         gets_active/0, spawned/2]).
 
 %% ------------------------------------------------------------------
 %% API Function Definitions
 %% ------------------------------------------------------------------
 
-%% @doc Starts the monitor service.
--spec start_link() -> {'ok', pid()}.
-start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
-
-%% @doc Stops the service with reason 'normal'
--spec stop() -> 'ok'.
-stop() ->
-    gen_server:cast(?SERVER, stop).
 
 %% @doc Begin monitoring the passed pid and tag its stats for a get fsm.
 -spec get_fsm_spawned(Pid :: pid()) -> 'ok'.
 get_fsm_spawned(Pid) ->
-    gen_server:cast(?SERVER, {get_fsm_spawned, Pid}).
+    spawn(?MODULE, spawned, [gets, Pid]).
+
+spawned(Type, Pid) ->
+    MonRef = monitor(process, Pid),
+    riak_kv_stat:update({fsm_spawned, Type}),
+    monitor_loop(MonRef, Pid, Type).
+
+monitor_loop(MonRef, Pid, Type) ->
+    receive
+        {'DOWN', MonRef, process, Pid, Cause}
+          when Cause == normal; Cause == shutdown; Cause == noproc ->
+            riak_kv_stat:update({fsm_exit, Type});
+        {'DOWN', MonRef, process, Pid, _Cause} ->
+            riak_kv_stat:update({fsm_error, Type});
+        _ ->
+            monitor_loop(MonRef, Pid, Type)
+    end.
 
 %% @doc Begin monitoring the passed pid and tag its stats for a put fsm.
 -spec put_fsm_spawned(Pid :: pid()) -> 'ok'.
 put_fsm_spawned(Pid) ->
-    gen_server:cast(?SERVER, {put_fsm_spawned, Pid}).
-
-%% @doc Get a proplist of all the stats tracked thus far.
--spec all_stats() -> [{metric(), non_neg_integer() | spiral_value()}].
-all_stats() ->
-    [{Key, folsom_metrics:get_metric_value(Key)} ||
-        Key <- ?COUNTERS].
+    spawn(?MODULE, spawned, [puts, Pid]).
 
 %% Returns the last count for the get fms's in progress.
 -spec gets_active() -> non_neg_integer().
 gets_active() ->
-    folsom_metrics:get_metric_value(?COUNTER(gets, active)).
+    riak_kv_stat:active_gets().
 
-%% ------------------------------------------------------------------
-%% gen_server Function Definitions
-%% ------------------------------------------------------------------
-
-%% @private
-init([]) ->
-    [begin
-        folsom_metrics:Func(?COUNTER(FsmType, DataPoint))
-    end || {Func, FsmType, DataPoint} <- ?STATTYPES],
-    {ok, #state{}}.
-
-%% @private
-handle_call(dump_state, _From, State) ->
-    {reply, State, State};
-
-handle_call(_Request, _From, State) ->
-    {reply, ok, State}.
-
-%% @private
-handle_cast({get_fsm_spawned, Pid}, State) ->
-    #state{monitor_list = List} = State,
-    List2 = insert_pid(Pid, gets, List),
-    tell_folsom_about_spawn(gets),
-    {noreply, State#state{monitor_list = List2}};
-
-handle_cast({put_fsm_spawned, Pid}, State) ->
-    #state{monitor_list = List} = State,
-    List2 = insert_pid(Pid, puts, List),
-    tell_folsom_about_spawn(puts),
-    {noreply, State#state{monitor_list = List2}};
-
-handle_cast(stop, State) ->
-    {stop, normal, State};
-
-handle_cast(_Msg, State) ->
-    {noreply, State}.
-
-%% @private
-handle_info({'DOWN', MonRef, process, Pid, Cause}, State) ->
-    #state{monitor_list = MonList} = State,
-    case orddict_get_erase(MonRef, MonList) of
-        undefined ->
-            % meh, likely a late message
-            {noreply, State};
-        {{Pid, Type}, MonList2} ->
-            tell_folsom_about_exit(Type, Cause),
-            {noreply, State#state{monitor_list = MonList2}}
-    end;
-
-handle_info(_Info, State) ->
-    {noreply, State}.
-
-%% @private
-terminate(_Reason, _State) ->
-    [folsom_metrics:delete_metric(Counter) || Counter <- ?COUNTERS],
-    ok.
-
-%% @private
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
-
-%% ------------------------------------------------------------------
-%% Internal Function Definitions
-%% ------------------------------------------------------------------
-
-insert_pid(Pid, Type, List) ->
-    MonRef = erlang:monitor(process, Pid),
-    orddict:store(MonRef, {Pid, Type}, List).
-
-tell_folsom_about_spawn(Type) ->
-    folsom_metrics:notify({?COUNTER(Type, active), {inc, 1}}).
-
-tell_folsom_about_exit(Type, Cause) when Cause == normal; Cause == shutdown; Cause == noproc ->
-    % no proc is considered 'normal' because that indicates the process had exited
-    % before the monitor was able to be applied.  We have no way of knowing why
-    % it exited, and on an underloaded system, it is most likely the request
-    % completed before we got the 'monitor me' message.
-    folsom_metrics:notify({?COUNTER(Type, active), {dec, 1}});
-    % for the abnormal cases, we not only decrmemt the active count (like a
-    % normal exit) but increment the errors count as well.
-tell_folsom_about_exit(Type, _Cause) ->
-    tell_folsom_about_exit(Type, normal),
-    folsom_metrics:notify({?COUNTER(Type, errors), 1}).
-
-orddict_get_erase(Key, Orddict) ->
-    case orddict:find(Key, Orddict) of
-        undefined ->
-            undefined;
-        {ok, Value} ->
-            Orddict2 = orddict:erase(Key, Orddict),
-            {Value, Orddict2}
-    end.
