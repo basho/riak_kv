@@ -86,6 +86,10 @@
 %% LevelDB instance, however updates and exchanges operate over a snapshot of
 %% the tree.
 %%
+%% In order to improve performance, writes are buffered in memory and sent
+%% to LevelDB using a single batch write. Writes are flushed whenever the
+%% buffer becomes full, as well as before updating the hashtree.
+%%
 %% Tree exchange is provided by the ``compare/2'' and ``compare/3'' functions.
 %% The behavior of these functions is determined through a provided function
 %% that implements logic to get buckets and segments for a given remote tree,
