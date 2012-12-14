@@ -108,9 +108,7 @@ handle_call({register, Name, Type}, _From, State) ->
     Rep = do_register_stat(Name, Type),
     {reply, Rep, State}.
 
-handle_cast({update, Arg}, State) ->
-    do_update(Arg),
-    {noreply, State};
+
 handle_cast(stop, State) ->
     {stop, normal, State};
 handle_cast(_Req, State) ->
