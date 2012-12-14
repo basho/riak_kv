@@ -20,19 +20,13 @@
 
 eqc_test_() ->
     {setup, fun() ->
-        ok
-    end,
-    fun(_) ->
-        case whereis(riak_kv_get_put_monitor) of
-            undefined ->
-                ok;
-            Pid ->
-                riak_kv_get_put_monitor:stop(),
-                riak_kv_test_util:wait_for_pid(Pid)
-        end
-    end, [
-        {timeout, 120, ?_assertEqual(true, quickcheck(numtests(100, ?QC_OUT(prop()))))}
-    ]}.
+                    ok
+            end,
+     fun(_) ->
+             [maybe_stop_and_wait(Server) || Server <- [riak_core_stat_cache, riak_kv_stat]]
+     end, [
+           {timeout, 120, ?_assertEqual(true, quickcheck(numtests(100, ?QC_OUT(prop()))))}
+          ]}.
 
 test() ->
     test(100).
@@ -47,9 +41,13 @@ prop() ->
     ?FORALL(Cmds, commands(?MODULE), begin
         crypto:start(),
         application:start(folsom),        
-        {_,_,Res} = run_commands(?MODULE, Cmds),
+        {_,State,Res} = run_commands(?MODULE, Cmds),
         case Res of
-            ok -> ok;
+            ok ->
+                %% what about all the prcesses started?
+                %% can we wait for the all to end, please?
+                exit_gracefully(State),
+                ok;
             _ -> io:format(user, "QC result: ~p\n", [Res])
         end,
         aggregate(command_names(Cmds), Res == ok)
@@ -60,15 +58,12 @@ prop() ->
 %% ====================================================================
 
 initial_state() ->
-    MaybePid = whereis(riak_kv_get_put_monitor),
-    riak_kv_get_put_monitor:stop(),
-    case MaybePid of
-        undefined -> ok;
-        _ -> riak_kv_test_util:wait_for_pid(MaybePid)
-    end,
+    [maybe_stop_and_wait(Server) || Server <- [riak_core_stat_cache, riak_kv_stat]],
     application:start(folsom),
-    {ok, Pid} = riak_kv_get_put_monitor:start_link(),
+    {ok, Cache} = riak_core_stat_cache:start_link(),
+    {ok, Pid} = riak_kv_stat:start_link(),
     unlink(Pid),
+    unlink(Cache),
     #state{}.
 
 command(S) ->
@@ -183,19 +178,23 @@ check_state(S) ->
 
     % with a timetrap of 60 seconds, the spiral will never have values slide off
     MetricExpects = [
-        {{riak_kv, node, puts, active}, length(PutList)},
-        {{riak_kv, node, gets, active}, length(GetList)},
-        {{riak_kv, node, puts, errors}, [{count, PutErrCount}, {one, PutErrCount}]},
-        {{riak_kv, node, gets, errors}, [{count, GetErrCount}, {one, GetErrCount}]}
+        {{riak_kv, node, puts, fsm, active}, length(PutList)},
+        {{riak_kv, node, gets, fsm, active}, length(GetList)},
+        {{riak_kv, node, puts, fsm, errors}, [{count, PutErrCount}, {one, PutErrCount}]},
+        {{riak_kv, node, gets, fsm, errors}, [{count, GetErrCount}, {one, GetErrCount}]}
     ],
 
     [ begin
         ?assertEqual(Expected, folsom_metrics:get_metric_value(Metric))
     end || {Metric, Expected} <- MetricExpects],
 
-    AllMetrics = riak_kv_get_put_monitor:all_stats(),
-    ?assertEqual(ordsets:from_list(MetricExpects), ordsets:from_list(AllMetrics)),
     true.
+
+%% wait for all fake fsms to finish, so the monitors
+%% get to finish before folsom is stopped.
+exit_gracefully(S) ->
+    #state{put_fsm = PutList, get_fsm = GetList} = S,
+    [end_and_wait(Pid, normal) || Pid <- PutList ++ GetList].
 
 %% ====================================================================
 %% Calls
@@ -278,4 +277,16 @@ lists_random(List) ->
     Max = length(List),
     Nth = crypto:rand_uniform(1, Max),
     lists:nth(Nth, List).
+
+%% Make sure `Server' is not running
+%% `Server' _MUST_ have an exported fun `stop/0'
+%% that stopes the server
+maybe_stop_and_wait(Server) ->
+    case whereis(Server) of
+        undefined ->
+            ok;
+        Pid ->
+            Server:stop(),
+            riak_kv_test_util:wait_for_pid(Pid)
+    end.
 -endif.
