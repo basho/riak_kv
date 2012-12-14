@@ -455,9 +455,11 @@ new_segment_store(Opts, State) ->
                   SegmentPath ->
                       SegmentPath
               end,
-    Options = [{create_if_missing, true},
-               {write_buffer_size, 1024*1024},
-               {max_open_files, 20}],
+    Config = app_helper:get_env(riak_kv,
+                                anti_entropy_leveldb_opts,
+                                [{write_buffer_size, 4*1024*1024},
+                                 {max_open_files, 20}]),
+    Options = [{create_if_missing, true} | Config],
     filelib:ensure_dir(DataDir),
     {ok, Ref} = eleveldb:open(DataDir, Options),
     State#state{ref=Ref, path=DataDir}.
