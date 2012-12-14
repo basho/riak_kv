@@ -77,7 +77,7 @@ start(_Type, _StartArgs) ->
     case code:ensure_loaded(StorageBackend) of
         {error,nofile} ->
             lager:critical("storage_backend ~p is non-loadable.",
-                                   [StorageBackend]),
+                           [StorageBackend]),
             throw({error, invalid_storage_backend});
         _ ->
             ok
@@ -193,21 +193,43 @@ check_epoch() ->
              calendar:universal_time()),
     case GSec - ((MSec*1000000)+Sec) of
         N when (N < ?SEC_TO_EPOCH+5 andalso N > ?SEC_TO_EPOCH-5);
-        (N < -?SEC_TO_EPOCH+5 andalso N > -?SEC_TO_EPOCH-5) ->
+               (N < -?SEC_TO_EPOCH+5 andalso N > -?SEC_TO_EPOCH-5) ->
             %% if epoch is within 10 sec of expected, accept it
             ok;
         N ->
             Epoch = calendar:gregorian_seconds_to_datetime(N),
             lager:error("Riak expects your system's epoch to be Jan 1, 1970,"
-                "but your system says the epoch is ~p", [Epoch]),
+                        "but your system says the epoch is ~p", [Epoch]),
             ok
     end.
 
 check_kv_health(_Pid) ->
     VNodes = riak_core_vnode_manager:all_index_pid(riak_kv_vnode),
-    Threshold = app_helper:get_env(riak_kv, vnode_mailbox_limit, 5000),
+    {Low, High} = app_helper:get_env(riak_kv, vnode_mailbox_limit, {1, 5000}),
+    case lists:member(riak_kv, riak_core_node_watcher:services(node())) of
+        true ->
+            %% Service active, use high watermark
+            Mode = enabled,
+            Threshold = High;
+        false ->
+            %% Service disabled, use low watermark
+            Mode = disabled,
+            Threshold = Low
+    end,
+
     SlowVNs =
         [{Idx,Len} || {Idx, Pid} <- VNodes,
                       {message_queue_len, Len} <- process_info(Pid, [message_queue_len]),
                       Len > Threshold],
-    SlowVNs =:= [].
+    Passed = (SlowVNs =:= []),
+
+    case {Passed, Mode} of
+        {false, enabled} ->
+            lager:info("Disabling riak_kv due to large message queues. "
+                       "Offending vnodes: ~p", [SlowVNs]);
+        {true, disabled} ->
+            lager:info("Re-enabling riak_kv after successful health check");
+        _ ->
+            ok
+    end,
+    Passed.
