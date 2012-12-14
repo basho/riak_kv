@@ -270,7 +270,7 @@ is_get_put_last_cast(Type, Pid) ->
 
 %% Just get the last `XXX_fsm_spawned/1' from the list
 %% of meck history calls.
-%% Expects a reversed mecck:history()
+%% Expects a reversed meck:history()
 last_spawn([]) ->
     undefined;
 last_spawn([{_MPid, {_Mod, TypeFun, [Pid]}, ok}|_Rest]) ->
