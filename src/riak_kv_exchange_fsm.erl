@@ -197,8 +197,10 @@ key_exchange(timeout, State=#state{local=LocalVN,
     %% TODO: Add stats for AAE
     case riak_kv_index_hashtree:compare(IndexN, Remote, AccFun, LocalTree) of
         [] ->
+            exchange_complete(LocalVN, RemoteVN, IndexN, 0),
             ok;
         [Count] ->
+            exchange_complete(LocalVN, RemoteVN, IndexN, Count),
             lager:info("Repaired ~b keys during active anti-entropy exchange "
                        "of ~p between ~p and ~p",
                        [Count, IndexN, LocalVN, RemoteVN])
@@ -276,3 +278,8 @@ next_state_with_timeout(StateName, State) ->
     next_state_with_timeout(StateName, State, State#state.timeout).
 next_state_with_timeout(StateName, State, Timeout) ->
     {next_state, StateName, State, Timeout}.
+
+exchange_complete({LocalIdx, _}, {RemoteIdx, RemoteNode}, IndexN, Repaired) ->
+    riak_kv_entropy_info:exchange_complete(LocalIdx, RemoteIdx, IndexN, Repaired),
+    rpc:call(RemoteNode, riak_kv_entropy_info, exchange_complete,
+             [RemoteIdx, LocalIdx, IndexN, Repaired]).

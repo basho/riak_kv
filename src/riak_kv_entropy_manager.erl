@@ -36,6 +36,7 @@
          requeue_poke/1,
          start_exchange_remote/3,
          exchange_status/4]).
+-export([all_pairwise_exchanges/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
