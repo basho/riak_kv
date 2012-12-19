@@ -35,6 +35,7 @@
          transfers/1,
          cluster_info/1,
          down/1,
+         aae_status/1,
          reload_code/1]).
 
 %% Arrow is 24 chars wide
@@ -364,6 +365,61 @@ reload_file(Filename) ->
         _ ->
             io:format("Module ~w not yet loaded, skipped.~n", [Mod])
     end.
+
+aae_status([]) ->
+    ExchangeInfo = riak_kv_entropy_info:compute_exchange_info(),
+    aae_exchange_status(ExchangeInfo),
+    io:format("~n"),
+    aae_tree_status(),
+    io:format("~n"), 
+    aae_repair_status(ExchangeInfo).
+
+aae_exchange_status(ExchangeInfo) -> 
+    io:format("~s~n", [string:centre(" Exchanges ", 79, $=)]),
+    io:format("~-49s  ~-12s  ~-12s~n", ["Index", "Last (ago)", "All (ago)"]),
+    io:format("~79..-s~n", [""]),
+    [begin
+         Now = os:timestamp(),
+         LastStr = format_timestamp(Now, LastTS),
+         AllStr = format_timestamp(Now, AllTS),
+         io:format("~-49b  ~-12s  ~-12s~n", [Index, LastStr, AllStr]),
+         ok
+     end || {Index, LastTS, AllTS, _Repairs} <- ExchangeInfo],
+    ok.
+
+aae_repair_status(ExchangeInfo) ->
+    io:format("~s~n", [string:centre(" Keys Repaired ", 79, $=)]),
+    io:format("~-49s  ~s  ~s  ~s~n", ["Index",
+                                      string:centre("Last", 8),
+                                      string:centre("Mean", 8),
+                                      string:centre("Max", 8)]),
+    io:format("~79..-s~n", [""]),
+    [begin
+         io:format("~-49b  ~s  ~s  ~s~n", [Index,
+                                           string:centre(integer_to_list(Last), 8),
+                                           string:centre(integer_to_list(Mean), 8),
+                                           string:centre(integer_to_list(Max), 8)]),
+         ok
+     end || {Index, _, _, {Last,_Min,Max,Mean}} <- ExchangeInfo],
+    ok.
+
+aae_tree_status() ->
+    TreeInfo = riak_kv_entropy_info:compute_tree_info(),
+    io:format("~s~n", [string:centre(" Entropy Trees ", 79, $=)]),
+    io:format("~-49s  Built (ago)~n", ["Index"]),
+    io:format("~79..-s~n", [""]),
+    [begin
+         Now = os:timestamp(),
+         BuiltStr = format_timestamp(Now, BuiltTS),
+         io:format("~-49b  ~s~n", [Index, BuiltStr]),
+         ok
+     end || {Index, BuiltTS} <- TreeInfo],
+    ok.
+
+format_timestamp(_Now, undefined) ->
+    "--";
+format_timestamp(Now, TS) ->
+    riak_core_format:human_time_fmt("~.1f", timer:now_diff(Now, TS)).
 
 %%%===================================================================
 %%% Private

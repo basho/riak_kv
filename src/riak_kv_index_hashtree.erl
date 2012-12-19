@@ -454,8 +454,36 @@ apply_tree(Id, Fun, State=#state{trees=Trees}) ->
 do_build_finished(State=#state{index=Index, built=_Pid}) ->
     lager:debug("Finished build (b): ~p", [Index]),
     {_,Tree0} = hd(State#state.trees),
+    BuildTime = get_build_time(Tree0),
     hashtree:write_meta(<<"built">>, <<1>>, Tree0),
-    State#state{built=true, build_time=os:timestamp()}.
+    hashtree:write_meta(<<"build_time">>, term_to_binary(BuildTime), Tree0),
+    riak_kv_entropy_info:tree_built(Index, BuildTime),
+    State#state{built=true, build_time=BuildTime}.
+
+%% Determine the build time for all trees associated with this
+%% index. The build time is stored as metadata in the on-disk file. If
+%% the tree was rehashed after a restart, this function should return
+%% the original build time. If this is a newly created tree (or if the
+%% on-disk time is invalid), the function returns the current time.
+-spec get_build_time(hashtree()) -> calendar:t_now().
+get_build_time(Tree) ->
+    Time = case hashtree:read_meta(<<"build_time">>, Tree) of
+               {ok, TimeBin} ->
+                   binary_to_term(TimeBin);
+               _ ->
+                   undefined
+           end,
+    case valid_time(Time) of
+        true ->
+            Time;
+        false ->
+            os:timestamp()
+    end.
+
+valid_time({X,Y,Z}) when is_integer(X) and is_integer(Y) and is_integer(Z) ->
+    true;
+valid_time(_) ->
+    false.
 
 -spec do_insert(index_n(), binary(), binary(), proplist(), state()) -> state().
 do_insert(Id, Key, Hash, Opts, State=#state{trees=Trees}) ->
@@ -498,9 +526,9 @@ handle_unexpected_key(Id, Key, State=#state{index=Partition}) ->
             %% TODO: We should probably remove these warnings before final
             %%       release, as reducing N will result in a ton of log/console
             %%       spam.
-            lager:warning("Object ~p encountered during fold over partition "
-                          "~p, but key does not hash to an index handled by "
-                          "this partition", [Key, Partition]),
+            %% lager:warning("Object ~p encountered during fold over partition "
+            %%               "~p, but key does not hash to an index handled by "
+            %%               "this partition", [Key, Partition]),
             State;
         true ->
             %% The encountered object belongs to a preflist that is currently
