@@ -526,9 +526,9 @@ handle_unexpected_key(Id, Key, State=#state{index=Partition}) ->
             %% TODO: We should probably remove these warnings before final
             %%       release, as reducing N will result in a ton of log/console
             %%       spam.
-            lager:warning("Object ~p encountered during fold over partition "
-                          "~p, but key does not hash to an index handled by "
-                          "this partition", [Key, Partition]),
+            %% lager:warning("Object ~p encountered during fold over partition "
+            %%               "~p, but key does not hash to an index handled by "
+            %%               "this partition", [Key, Partition]),
             State;
         true ->
             %% The encountered object belongs to a preflist that is currently

@@ -226,7 +226,7 @@ read_repair_keydiff(RC, {_, KeyBin}) ->
     %%       spammy. Should this just be removed? We can always use
     %%       redbug to trace read_repair_keydiff when needed. Of course,
     %%       users can't do that.
-    lager:debug("Anti-entropy forced read repair: ~p/~p", [Bucket, Key]),
+    %% lager:debug("Anti-entropy forced read repair: ~p/~p", [Bucket, Key]),
     RC:get(Bucket, Key),
     ok.
 
