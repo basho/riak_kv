@@ -33,7 +33,6 @@
          reip/1,
          ringready/1,
          transfers/1,
-         cluster_info/1,
          down/1,
          aae_status/1,
          reload_code/1]).
@@ -319,28 +318,6 @@ transfers([]) ->
     io:format("~n"),
     [DisplayDown(Node) || Node <- Down].
 
-cluster_info([OutFile|Rest]) ->
-    try
-        case lists:reverse(atomify_nodestrs(Rest)) of
-            [] ->
-                cluster_info:dump_all_connected(OutFile);
-            Nodes ->
-                cluster_info:dump_nodes(Nodes, OutFile)
-        end
-    catch
-        error:{badmatch, {error, eacces}} ->
-            io:format("Cluster_info failed, permission denied writing to ~p~n", [OutFile]);
-        error:{badmatch, {error, enoent}} ->
-            io:format("Cluster_info failed, no such directory ~p~n", [filename:dirname(OutFile)]);
-        error:{badmatch, {error, enotdir}} ->
-            io:format("Cluster_info failed, not a directory ~p~n", [filename:dirname(OutFile)]);
-        Exception:Reason ->
-            lager:error("Cluster_info failed ~p:~p",
-                [Exception, Reason]),
-            io:format("Cluster_info failed, see log for details~n"),
-            error
-    end.
-
 reload_code([]) ->
     case app_helper:get_env(riak_kv, add_paths) of
         List when is_list(List) ->
@@ -435,16 +412,6 @@ format_stats([], Acc) ->
     lists:reverse(Acc);
 format_stats([{Stat, V}|T], Acc) ->
     format_stats(T, [io_lib:format("~p : ~p~n", [Stat, V])|Acc]).
-
-atomify_nodestrs(Strs) ->
-    lists:foldl(fun("local", Acc) -> [node()|Acc];
-                   (NodeStr, Acc) -> try
-                                         [list_to_existing_atom(NodeStr)|Acc]
-                                     catch error:badarg ->
-                                         io:format("Bad node: ~s\n", [NodeStr]),
-                                         Acc
-                                     end
-                end, [], Strs).
 
 print_vnode_statuses([]) ->
     ok;
