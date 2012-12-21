@@ -32,6 +32,7 @@
                    {riak_kv_pb_mapred, 23, 24}, %% MapReduce requests
                    {riak_kv_pb_index, 25, 26} %% Secondary index requests
                   ]).
+-define(MAX_FLUSH_PUT_FSM_RETRIES, 10).
 
 %% @spec start(Type :: term(), StartArgs :: term()) ->
 %%          {ok,Pid} | ignore | {error,Error}
@@ -244,11 +245,20 @@ check_kv_health(_Pid) ->
     end,
     Passed.
 
-wait_for_put_fsms() ->
+wait_for_put_fsms(N) ->
     case riak_kv_get_put_monitor:puts_active() of
         0 -> ok;
         Count ->
-            lager:info("Waiting for ~p put FSMs to complete", [Count]),
-            timer:sleep(1000),
-            wait_for_put_fsms()
+            case N of
+                0 ->
+                    lager:warning("Timed out waiting for put FSMs to flush"),
+                    ok;
+                _ -> lager:info("Waiting for ~p put FSMs to complete",
+                                [Count]),
+                     timer:sleep(1000),
+                     wait_for_put_fsms(N-1)
+            end
     end.
+
+wait_for_put_fsms() ->
+    wait_for_put_fsms(?MAX_FLUSH_PUT_FSM_RETRIES).
