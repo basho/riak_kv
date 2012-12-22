@@ -34,6 +34,7 @@
 -define(HEAD_USERMETA_PREFIX, "x-riak-meta-").
 -define(HEAD_INDEX_PREFIX,    "x-riak-index-").
 -define(HEAD_DELETED,         "X-Riak-Deleted").
+-define(HEAD_TIMEOUT,         "X-Riak-Timeout").
 
 %% Names of JSON fields in bucket properties
 -define(JSON_PROPS,   <<"props">>).
