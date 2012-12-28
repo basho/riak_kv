@@ -223,7 +223,9 @@ check_kv_health(_Pid) ->
 
     SlowVNs =
         [{Idx,Len} || {Idx, Pid} <- VNodes,
-                      {message_queue_len, Len} <- process_info(Pid, [message_queue_len]),
+                      Info <- [process_info(Pid, [message_queue_len])],
+                      is_list(Info),
+                      {message_queue_len, Len} <- Info,
                       Len > Threshold],
     Passed = (SlowVNs =:= []),
 
