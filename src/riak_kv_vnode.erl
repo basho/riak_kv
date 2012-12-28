@@ -123,7 +123,7 @@ maybe_create_hashtrees(true, State=#state{idx=Index}) ->
             State;
         true ->
             RP = riak_kv_util:responsible_preflists(Index),
-            case riak_kv_index_hashtree:start(Index, RP) of
+            case riak_kv_index_hashtree:start(Index, RP, self()) of
                 {ok, Trees} ->
                     monitor(process, Trees),
                     State#state{hashtrees=Trees};
