@@ -30,7 +30,7 @@
 -include_lib("riak_kv_vnode.hrl").
 
 %% API
--export([start/2, start_link/2]).
+-export([start/3, start_link/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -60,6 +60,7 @@
 -type hashtree() :: hashtree:hashtree().
 
 -record(state, {index,
+                vnode_pid,
                 built,
                 lock :: undefined | reference(),
                 path,
@@ -77,15 +78,15 @@
 
 %% @doc Spawn an index_hashtree process that manages the hashtrees (one
 %%      for each `index_n') for the specified partition index.
--spec start(index(), [index_n()]) -> {ok, pid()} | {error, term()}.
-start(Index, IndexNs) ->
-    gen_server:start(?MODULE, [Index, IndexNs], []).
+-spec start(index(), [index_n()], pid()) -> {ok, pid()} | {error, term()}.
+start(Index, IndexNs, VNPid) ->
+    gen_server:start(?MODULE, [Index, IndexNs, VNPid], []).
 
 %% @doc Spawn an index_hashtree process that manages the hashtrees (one
 %%      for each `index_n') for the specified partition index.
--spec start_link(index(), [index_n()]) -> {ok, pid()} | {error, term()}.
-start_link(Index, IndexNs) ->
-    gen_server:start_link(?MODULE, [Index, IndexNs], []).
+-spec start_link(index(), [index_n()], pid()) -> {ok, pid()} | {error, term()}.
+start_link(Index, IndexNs, VNPid) ->
+    gen_server:start_link(?MODULE, [Index, IndexNs, VNPid], []).
 
 %% @doc Add a key/hash pair to the tree identified by the given tree id
 %%      that is managed by the provided index_hashtree pid.
@@ -186,7 +187,7 @@ destroy(Tree) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init([Index, IndexNs]) ->
+init([Index, IndexNs, VNPid]) ->
     case determine_data_root() of
         undefined ->
             case riak_kv_entropy_manager:enabled() of
@@ -201,8 +202,10 @@ init([Index, IndexNs]) ->
             ignore;
         Root ->
             Path = filename:join(Root, integer_to_list(Index)),
+            monitor(process, VNPid),
 
             State = #state{index=Index,
+                           vnode_pid=VNPid,
                            trees=orddict:new(),
                            built=false,
                            path=Path},
@@ -265,8 +268,7 @@ handle_cast(poke, State) ->
     {noreply, State2};
 
 handle_cast(stop, State) ->
-    {_,Tree0} = hd(State#state.trees),
-    hashtree:close(Tree0),
+    close_trees(State),
     {stop, normal, State};
 
 handle_cast(build_failed, State) ->
@@ -305,9 +307,14 @@ handle_cast({start_exchange_remote, FsmPid, From, _IndexN}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+handle_info({'DOWN', _, _, Pid, _}, State) when Pid == State#state.vnode_pid ->
+    %% vnode has terminated, exit as well
+    close_trees(State),
+    {stop, normal, State};
 handle_info({'DOWN', Ref, _, _, _}, State) ->
     State2 = maybe_release_lock(Ref, State),
     {noreply, State2};
+   
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -657,3 +664,7 @@ build_or_rehash(Self, State=#state{index=Index, trees=Trees}) ->
         {_Error, _} ->
             gen_server:cast(Self, build_failed)
     end.
+
+close_trees(State) ->
+    {_,Tree0} = hd(State#state.trees),
+    hashtree:close(Tree0).
