@@ -642,9 +642,13 @@ next_exchange(_Ring, State=#state{exchange_queue=[],
                                   mode=Mode}) when Mode == manual ->
     {none, State};
 next_exchange(Ring, State=#state{exchange_queue=[]}) ->
-    [Exchange|Rest] = prune_exchanges(all_exchanges(node(), Ring, State)),
-    State2 = State#state{exchange_queue=Rest},
-    {Exchange, State2};
+    case prune_exchanges(all_exchanges(node(), Ring, State)) of
+        [] ->
+            {none, State};
+        [Exchange|Rest] ->
+            State2 = State#state{exchange_queue=Rest},
+            {Exchange, State2}
+    end;
 next_exchange(_Ring, State=#state{exchange_queue=Exchanges}) ->
     [Exchange|Rest] = Exchanges,
     State2 = State#state{exchange_queue=Rest},
