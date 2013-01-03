@@ -111,7 +111,7 @@ process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    make_option(notfound_ok, NFOk) ++
                    make_option(basic_quorum, BQ)) of
         {ok, O} ->
-            case erlify_rpbvc(VClock) == riak_object:vclock(O) of
+            case riak_object:equal_vclock(erlify_rpbvc(VClock),riak_object:get_vclock(O,false)) of
                 true ->
                     {reply, #rpbgetresp{unchanged = true}, State};
                 _ ->
@@ -127,7 +127,7 @@ process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                                         riak_pb_kv_codec:encode_contents(Contents)
                                 end,
                     {reply, #rpbgetresp{content = PbContent,
-                                        vclock = pbify_rpbvc(riak_object:vclock(O))}, State}
+                                        vclock = pbify_rpbvc(riak_object:get_vclock(O,false))}, State}
             end;
         {error, {deleted, TombstoneVClock}} ->
             %% Found a tombstone - return its vector clock so it can
@@ -146,7 +146,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
         {ok, _} when NoneMatch ->
             {error, "match_found", State};
         {ok, O} when NotMod ->
-            case erlify_rpbvc(PbVC) == riak_object:vclock(O) of
+            case erlify_rpbvc(PbVC) == riak_object:get_vclock(O,false) of
                 true ->
                     process(Req#rpbputreq{if_not_modified=undefined,
                                           if_none_match=undefined},
@@ -215,7 +215,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                                  riak_pb_kv_codec:encode_contents(Contents)
                          end,
             PutResp = #rpbputresp{content = PbContents,
-                                  vclock = pbify_rpbvc(riak_object:vclock(Obj)),
+                                  vclock = pbify_rpbvc(riak_object:get_vclock(Obj,false)),
                                   key = ReturnKey
                                  },
             {reply, PutResp, State};
@@ -289,9 +289,9 @@ make_option(K, V) ->
 
 %% Convert a vector clock to erlang
 erlify_rpbvc(undefined) ->
-    vclock:fresh();
+    riak_object:new_vclock();
 erlify_rpbvc(<<>>) ->
-    vclock:fresh();
+    riak_object:new_vclock();
 erlify_rpbvc(PbVc) ->
     binary_to_term(zlib:unzip(PbVc)).
 

@@ -32,36 +32,37 @@
 
 -type key() :: binary().
 -type bucket() :: binary().
-%% -type bkey() :: {bucket(), key()}.
 -type value() :: term().
 
 -record(r_content, {
           metadata :: dict(), 
-          value :: term(),
-          dvvclock :: dottedvv:dottedvv()
+          value :: term()
          }).
 
 %% Opaque container for Riak objects, a.k.a. riak_object()
 -record(r_object, {
           bucket :: bucket(),
           key :: key(),
-          contents :: [#r_content{}],
+          contents :: compactdvv:clock(), % [{id, count, [r_content]}]
           updatemetadata=dict:store(clean, true, dict:new()) :: dict(),
           updatevalue :: term()
          }).
+
 -opaque riak_object() :: #r_object{}.
+-opaque riak_content() :: #r_content{}.
 
 -type index_op() :: add | remove.
 -type index_value() :: integer() | binary().
 
 -define(MAX_KEY_SIZE, 65536).
 
--export([new/3, new/4, ensure_robject/1, equal/2, reconcile/3, reconcile/2]).
--export([increment_vclock/2, increment_vclock/3, update_vclock/3]).
--export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
--export([vclock/1, update_value/2, update_metadata/2, bucket/1, value_count/1]).
+-export([new/3, new/4, ensure_robject/1, equal/2, new_vclock/0, equal_vclock/2]).
+-export([increment_vclock/2, increment_vclock/3, update_vclock/4, update_vclock/3]).
+-export([reconcile/2, descendant/2, strict_descendant/2, key/1]).
+-export([get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
+-export([get_vclock/2, update_value/2, update_metadata/2, bucket/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
--export([apply_updates/1, syntactic_merge/2]).
+-export([apply_updates/1, syntactic_merge/2, compare_content_dates/2, set_lww/1]).
 -export([to_json/1, from_json/1]).
 -export([index_specs/1, diff_index_specs/2]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
@@ -88,26 +89,41 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
         false ->
             case MD of
                 no_initial_metadata ->
-                    Contents = [#r_content{metadata=dict:new(), value=V, dvvclock = dottedvv:fresh()}],
+                    Contents = compactdvv:new([#r_content{metadata=dict:new(), value=V}]),
                     #r_object{bucket=B,key=K,
                               contents=Contents};
                 _ ->
-                    Contents = [#r_content{metadata=MD, value=V, dvvclock = dottedvv:fresh()}],
+                    Contents = compactdvv:new([#r_content{metadata=MD, value=V}]),
                     #r_object{bucket=B,key=K,updatemetadata=MD,
                               contents=Contents}
             end
     end.
 
+-spec new_vclock() -> compactdvv:clock().
+new_vclock() -> compactdvv:new().
+
 %% Ensure the incoming term is a riak_object.
 -spec ensure_robject(any()) -> riak_object().
 ensure_robject(Obj = #r_object{}) -> Obj.
 
--spec equal(riak_object(), riak_object()) -> true | false.
+-spec strict_descendant(riak_object(), riak_object()) -> boolean().
+strict_descendant(#r_object{contents=C1},#r_object{contents=C2}) ->
+    compactdvv:strict_descendant(C1,C2).
+
+-spec descendant(riak_object(), riak_object()) -> boolean().
+descendant(#r_object{contents=C1},#r_object{contents=C2}) ->
+    compactdvv:equal(C1,C2) orelse compactdvv:strict_descendant(C1,C2).
+
+-spec equal_vclock(riak_object(), riak_object()) -> boolean().
+equal_vclock(#r_object{contents=C1},#r_object{contents=C2}) ->
+    compactdvv:equal(C1,C2).
+
+-spec equal(riak_object(), riak_object()) -> boolean().
 %% @doc Deep (expensive) comparison of Riak objects.
 equal(Obj1,Obj2) ->
     (Obj1#r_object.bucket =:= Obj2#r_object.bucket)
         andalso (Obj1#r_object.key =:= Obj2#r_object.key)
-        andalso dottedvv:equal(vclock(Obj1),vclock(Obj2))
+        andalso equal_vclock(Obj1,Obj2)
         andalso equal2(Obj1,Obj2).
 equal2(Obj1,Obj2) ->
     UM1 = lists:keysort(1, dict:to_list(Obj1#r_object.updatemetadata)),
@@ -115,8 +131,8 @@ equal2(Obj1,Obj2) ->
     (UM1 =:= UM2)
         andalso (Obj1#r_object.updatevalue =:= Obj2#r_object.updatevalue)
         andalso begin
-                    Cont1 = lists:sort(Obj1#r_object.contents),
-                    Cont2 = lists:sort(Obj2#r_object.contents),
+                    Cont1 = lists:sort(get_contents(Obj1)),
+                    Cont2 = lists:sort(get_contents(Obj2)),
                     equal_contents(Cont1,Cont2)
                 end.
 equal_contents([],[]) -> true;
@@ -127,12 +143,10 @@ equal_contents([C1|R1],[C2|R2]) ->
     MD2 = lists:keysort(1, dict:to_list(C2#r_content.metadata)),
     (MD1 =:= MD2)
         andalso (C1#r_content.value =:= C2#r_content.value)
-        andalso dottedvv:equal(C1#r_content.dvvclock,C1#r_content.dvvclock)
         andalso equal_contents(R1,R2).
 
 
 
-% @spec reconcile([riak_object()], [riak_object()], boolean()) -> riak_object()
 % @doc  Reconcile the object from the client and the object from the server. 
 %       If AllowMultiple is true,
 %       the riak_object returned may contain multiple values if Objects
@@ -140,67 +154,53 @@ equal_contents([C1|R1],[C2|R2]) ->
 %       merged).   If AllowMultiple is false, the riak_object returned will
 %       contain the value of the most-recently-updated object, as per the
 %       X-Riak-Last-Modified header.
-reconcile(Objs, AllowMultiple) -> reconcile(Objs, [], AllowMultiple).
-reconcile(Current, New, AllowMultiple) ->
-    RObjs = reconcile_sync(Current, New),
-    AllContents = lists:flatten([O#r_object.contents || O <- RObjs]),
+-spec reconcile([riak_object()], boolean()) -> riak_object().
+reconcile(RObjs, AllowMultiple) ->
+    AllContents = [O#r_object.contents || O <- RObjs],
+    SyncedContents = compactdvv:sync(AllContents),
     Contents = case AllowMultiple of
-                   false ->
-                       Cont = most_recent_content(AllContents),
-                       case length(AllContents) of
-                            1 -> [Cont];
-                            _ -> AllClocks = lists:flatten([vclock(O) || O <- RObjs]),
-                                 M = Cont#r_content.metadata,
-                                 V = Cont#r_content.value,
-                                 C = dottedvv:merge(AllClocks),
-                                 [#r_content{metadata=M, value=V, dvvclock=C}]
-                       end;
-                   true ->
-                       lists:usort(AllContents)
+                   false -> compactdvv:lww(SyncedContents);
+                   true -> SyncedContents
                end,
     HdObj = hd(RObjs),
     HdObj#r_object{contents=Contents,
                    updatemetadata=dict:store(clean, true, dict:new()),
                    updatevalue=undefined}.
 
+-spec syntactic_merge(riak_object(), riak_object()) -> riak_object().
+syntactic_merge(CurrentObj, NewObj) ->
+    %% Paranoia in case objects were incorrectly stored
+    %% with update information.  Vclock is not updated
+    %% but since no data is lost the objects will be
+    %% fixed if rewritten.
+    UCurr = update(CurrentObj),
+    UNew = update(NewObj),
+    reconcile([UNew, UCurr], true).
 
-%% @spec reconcile([riak_object()], [riak_object()]) -> [riak_object()]
-reconcile_sync(Current, New) ->
-    ClockNew = vclock(New),
-    {Curr, ClocksCurrent} =
-        case is_list(Current) of
-            true -> {Current, lists:flatten([vclock(O) || O <- Current])};
-            false -> {[Current], vclock(Current)}
-        end,
-    SyncClocks = dottedvv:sync(ClocksCurrent, ClockNew),
-    AllObjs = Curr ++ [New],
-    Objs =
-        [[Obj || Obj <- AllObjs, (dottedvv:descends(vclock(Obj), C))]
-                || C <- SyncClocks],
-    remove_duplicate_objects(lists:flatten(Objs)).
 
-remove_duplicate_objects(Os) -> rem_dup_objs(Os,[]).
-rem_dup_objs([],Acc) -> Acc;
-rem_dup_objs([O|Rest],Acc) ->
-    EqO = [AO || AO <- Acc, riak_object:equal(AO,O) =:= true],
-    case EqO of
-        [] -> rem_dup_objs(Rest,[O|Acc]);
-        _ -> rem_dup_objs(Rest,Acc)
-    end.
+-spec set_lww(riak_object()) -> riak_object().
+set_lww(Object=#r_object{contents=C}) ->
+    set_contents(Object,most_recent_content(C)).
 
-most_recent_content(AllContents) ->
-    hd(lists:sort(fun compare_content_dates/2, AllContents)).
+-spec most_recent_content(riak_content()) -> riak_content().
+most_recent_content(Contents) ->
+    compactdvv:lww(fun riak_object:compare_content_dates/2, Contents).
 
-compare_content_dates(C1,C2) ->
-    D1 = dict:fetch(<<"X-Riak-Last-Modified">>, C1#r_content.metadata),
-    D2 = dict:fetch(<<"X-Riak-Last-Modified">>, C2#r_content.metadata),
+-spec compare_content_dates(riak_content(), riak_content()) -> boolean().
+compare_content_dates(C1, C2) ->
+    compare_metadata(C1#r_content.metadata,C2#r_content.metadata).
+
+-spec compare_metadata(dict(), dict()) -> boolean().
+compare_metadata(MD1,MD2) ->
+    D1 = dict:fetch(<<"X-Riak-Last-Modified">>, MD1),
+    D2 = dict:fetch(<<"X-Riak-Last-Modified">>, MD2),
     %% true if C1 was modifed later than C2
     Cmp1 = riak_core_util:compare_dates(D1, D2),
     %% true if C2 was modifed later than C1
     Cmp2 = riak_core_util:compare_dates(D2, D1),
     %% check for deleted objects
-    Del1 = dict:is_key(<<"X-Riak-Deleted">>, C1#r_content.metadata),
-    Del2 = dict:is_key(<<"X-Riak-Deleted">>, C2#r_content.metadata),
+    Del1 = dict:is_key(<<"X-Riak-Deleted">>, MD1),
+    Del2 = dict:is_key(<<"X-Riak-Deleted">>, MD2),
 
     SameDate = (Cmp1 =:= Cmp2),
     case {SameDate, Del1, Del2} of
@@ -213,126 +213,159 @@ compare_content_dates(C1,C2) ->
         _ ->
             %% Dates equal and either both present or both deleted, compare
             %% by opaque contents.
-            C1 < C2
+            MD1 < MD2
     end.
 
-% @spec apply_updates(riak_object()) -> riak_object()
+
+-spec is_updated(riak_object()) -> boolean().
+is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
+    case dict:find(clean, M) of
+        error -> true;
+        {ok,_} ->
+            case V of
+                undefined -> false;
+                _ -> true
+            end
+    end.
+
+-spec update(riak_object()) -> riak_object().
+update(Obj) ->
+    case is_updated(Obj) of
+        true  -> apply_updates(Obj);
+        false -> Obj
+    end.
+
+
 % @doc  Promote pending updates (made with the update_value() and
 %       update_metadata() calls) to this riak_object.
+-spec apply_updates(riak_object()) -> riak_object().
 apply_updates(Object=#r_object{}) ->
-    VL = case Object#r_object.updatevalue of
+    C = case Object#r_object.updatevalue of
              undefined ->
-                 [{C#r_content.value, C#r_content.dvvclock} || C <- Object#r_object.contents];
+                 get_vclock(Object,true);
              _ ->
-                 Clocks = vclock(Object),
-                 Clock = dottedvv:merge(Clocks),
-                 [{Object#r_object.updatevalue, Clock}]
+                 MD = hd(get_metadatas(Object)),
+                 VL = Object#r_object.updatevalue,
+                 Rcont = #r_content{metadata=MD,value=VL},
+                 compactdvv:set_value(get_vclock(Object,false),Rcont)
          end,
-    MD = case dict:find(clean, Object#r_object.updatemetadata) of
-             {ok,_} ->
-                 MDs = [C#r_content.metadata || C <- Object#r_object.contents],
-                 case Object#r_object.updatevalue of
-                     undefined -> MDs;
-                     _ -> [hd(MDs)]
-                 end;
-             error ->
-                 [dict:erase(clean,Object#r_object.updatemetadata) || _X <- VL]
-         end,
-    Contents = [#r_content{metadata=M,value=V,dvvclock=C} || {M,{V,C}} <- lists:zip(MD, VL)],
-    Object#r_object{contents=Contents,
+    case dict:find(clean, Object#r_object.updatemetadata) of
+        error ->
+            [dict:erase(clean,Object#r_object.updatemetadata) || _X <- lists:seq(1,compactdvv:value_count(C))]
+    end,
+    Object#r_object{contents=C,
                     updatemetadata=dict:store(clean, true, dict:new()),
                     updatevalue=undefined}.
 
-%% @spec bucket(riak_object()) -> bucket()
 %% @doc Return the containing bucket for this riak_object.
+-spec bucket(riak_object()) -> bucket().
 bucket(#r_object{bucket=Bucket}) -> Bucket.
 
-%% @spec key(riak_object()) -> key()
 %% @doc  Return the key for this riak_object.
+-spec key(riak_object()) -> key().
 key(#r_object{key=Key}) -> Key.
 
-%% @spec vclock(riak_object()) -> [dottedvv:dottedvv()]
-%% @doc  Return the dotted version vector(s) for this riak_object.
-vclock([]) -> {};
-vclock(#r_object{contents=C}) ->  [Content#r_content.dvvclock || Content <- C].
+%% @doc  Return the logical clock for this riak_object.
+-spec get_vclock(riak_object(), boolean()) -> compactdvv:clock().
+get_vclock(#r_object{contents=Clock}, _WithContents = true) -> Clock;
+get_vclock(#r_object{contents=Clock}, _WithContents = false) -> compactdvv:join(Clock).
 
 
-%% @spec value_count(riak_object()) -> non_neg_integer()
 %% @doc  Return the number of values (siblings) of this riak_object.
-value_count(#r_object{contents=Contents}) -> length(Contents).
+-spec value_count(riak_object()) -> non_neg_integer().
+value_count(#r_object{contents=Contents}) -> compactdvv:value_count(Contents).
 
-%% @spec get_contents(riak_object()) -> [{dict(), value()}]
 %% @doc  Return the contents (a list of {metadata, value} tuples) for
 %%       this riak_object.
-get_contents(#r_object{contents=Contents}) ->
-    [{Content#r_content.metadata, Content#r_content.value, Content#r_content.dvvclock} ||
-        Content <- Contents].
+-spec get_contents(riak_object()) -> [riak_content()].
+get_contents(#r_object{contents=Contents}) -> compactdvv:get_values(Contents).
 
-%% @spec get_metadata(riak_object()) -> dict()
 %% @doc  Assert that this riak_object has no siblings and return its associated
 %%       metadata.  This function will fail with a badmatch error if the
 %%       object has siblings (value_count() > 1).
-get_metadata(O=#r_object{}) ->
+-spec get_metadata(riak_object()) -> dict().
+get_metadata(#r_object{contents=Contents}) ->
                                                 % this blows up intentionally (badmatch) if more than one content value!
-    [{Metadata,_V,_C}] = get_contents(O),
-    Metadata.
+    1 = compactdvv:value_count(Contents),
+    V = compactdvv:get_last_value(Contents),
+    V#r_content.metadata.
 
-%% @spec get_metadatas(riak_object()) -> [dict()]
 %% @doc  Return a list of the metadata values for this riak_object.
-get_metadatas(#r_object{contents=Contents}) ->
-    [Content#r_content.metadata || Content <- Contents].
+-spec get_metadatas(riak_object()) -> [dict()].
+get_metadatas(#r_object{contents=C}) ->
+    [V#r_content.metadata || V <- compactdvv:get_values(C)].
 
-%% @spec get_values(riak_object()) -> [value()]
 %% @doc  Return a list of object values for this riak_object.
-get_values(#r_object{contents=C}) -> [Content#r_content.value || Content <- C].
+-spec get_values(riak_object()) -> [value()].
+get_values(#r_object{contents=C}) ->
+    [V#r_content.value || V <- compactdvv:get_values(C)].
 
-%% @spec get_value(riak_object()) -> value()
 %% @doc  Assert that this riak_object has no siblings and return its associated
 %%       value.  This function will fail with a badmatch error if the object
 %%       has siblings (value_count() > 1).
-get_value(Object=#r_object{}) ->
+-spec get_value(riak_object()) -> value().
+get_value(#r_object{contents=C}) ->
                                                 % this blows up intentionally (badmatch) if more than one content value!
-    [{_M,Value,_C}] = get_contents(Object),
-    Value.
+    1 = compactdvv:value_count(C),
+    V = compactdvv:get_last_value(C),
+    V#r_content.value.
 
-%% @spec update_metadata(riak_object(), dict()) -> riak_object()
 %% @doc  Set the updated metadata of an object to M.
+-spec update_metadata(riak_object(), dict()) -> riak_object().
 update_metadata(Object=#r_object{}, M) ->
     Object#r_object{updatemetadata=dict:erase(clean, M)}.
 
-%% @spec update_value(riak_object(), value()) -> riak_object()
 %% @doc  Set the updated value of an object to V
+-spec update_value(riak_object(), value()) -> riak_object().
 update_value(Object=#r_object{}, V) -> Object#r_object{updatevalue=V}.
 
-%% @spec get_update_metadata(riak_object()) -> dict()
 %% @doc  Return the updated metadata of this riak_object.
+-spec get_update_metadata(riak_object()) -> dict().
 get_update_metadata(#r_object{updatemetadata=UM}) -> UM.
 
-%% @spec get_update_value(riak_object()) -> value()
 %% @doc  Return the updated value of this riak_object.
+-spec get_update_value(riak_object()) -> value().
 get_update_value(#r_object{updatevalue=UV}) -> UV.
 
-%% @spec set_vclock(riak_object(), vclock:vclock()) -> riak_object()
 %% @doc  INTERNAL USE ONLY.  Set the vclock of riak_object O to V.
+-spec set_vclock(riak_object(), compactdvv:clock()) -> riak_object().
 set_vclock(Object=#r_object{contents=Contents}, Clock) -> 
-    [C|_] = Contents,
-    C2 = C#r_content{dvvclock = Clock},
-    Object#r_object{contents=[C2]}.
+    1 = compactdvv:value_count(Contents),
+    V = compactdvv:get_last_value(Contents),
+    C = compactdvv:set_value(Clock,V),
+    Object#r_object{contents=C}.
 
-%% @doc  Increment the entry for Id in O's vclock (ignore timestamp since we are not pruning).
--spec increment_vclock(riak_object(), dottedvv:id(), dottedvv:timestamp()) -> riak_object().
-increment_vclock(Object, Id, _Timestamp) -> increment_vclock(Object, Id).
+%% @doc  INTERNAL USE ONLY.  Set the contents of riak_object 
+%%       to the Contents. Normal clients should use the
+%%       set_update_[value|metadata]() + apply_updates() method for changing
+%%       object contents.
+-spec set_contents(riak_object(), riak_content()) -> riak_object().
+set_contents(Object=#r_object{}, Contents) ->
+    Object#r_object{contents=Contents}.
 
 %% @doc  Increment the entry for Id in O's vclock.
--spec increment_vclock(riak_object(), dottedvv:id()) -> riak_object().
-increment_vclock(Object=#r_object{}, Id) ->
-    Dvv = dottedvv:increment(Id, vclock(Object)),
-    riak_object:set_vclock(Object, Dvv).
+-spec increment_vclock(riak_object(), any(), non_neg_integer()) -> riak_object().
+increment_vclock(Object=#r_object{}, Id, _TS) ->
+    increment_vclock(Object, Id).
 
--spec update_vclock(riak_object(), riak_object(), dottedvv:id()) -> riak_object().
-update_vclock(ObjectC=#r_object{}, ObjectR=#r_object{}, Id) ->
-    Dvv = dottedvv:update(vclock(ObjectC), vclock(ObjectR), Id),
-    riak_object:set_vclock(ObjectC,Dvv).
+%% @doc  Increment the entry for Id in O's vclock (ignore timestamp since we are not pruning).
+-spec increment_vclock(riak_object(), any()) -> riak_object().
+increment_vclock(Object=#r_object{contents=Conts}, Id) ->
+    Value = #r_content{} = compactdvv:get_last_value(Conts),
+    C = compactdvv:syncupdate(Conts, Id, Value),
+    set_contents(Object, C).
+
+-spec update_vclock(riak_object(), riak_object(), any()) -> riak_object().
+update_vclock(ObjectC=#r_object{contents=ContC}, #r_object{contents=ContR}, Id) ->
+    Value = #r_content{} = compactdvv:get_last_value(ContC),
+    C = compactdvv:syncupdate(ContC, ContR, Id, Value),
+    set_contents(ObjectC, C).
+
+-spec update_vclock(riak_object(), riak_object(), any(), non_neg_integer()) -> riak_object().
+update_vclock(ObjectC=#r_object{}, ObjectR=#r_object{}, Id, _TS) ->
+    increment_vclock(ObjectC, ObjectR, Id).
+
+
 
 %% @doc Prepare a list of index specifications
 %% to pass to the backend. This function is for
@@ -388,26 +421,36 @@ index_data(Obj) ->
 assemble_index_specs(Indexes, IndexOp) ->
     [{IndexOp, Index, Value} || {Index, Value} <- Indexes].
 
-%% @spec set_contents(riak_object(), [{dict(), value()}]) -> riak_object()
-%% @doc  INTERNAL USE ONLY.  Set the contents of riak_object to the
-%%       {Metadata, Value, Clock} pairs in MVs. Normal clients should use the
-%%       set_update_[value|metadata]() + apply_updates() method for changing
-%%       object contents.
-set_contents(Object=#r_object{}, MVs) when is_list(MVs) ->
-    Object#r_object{contents=[#r_content{metadata=M, value=V, dvvclock=C} || {M, V, C} <- MVs]}.
 
-%% @spec to_json(riak_object()) -> {struct, list(any())}
 %% @doc Converts a riak_object into its JSON equivalent
+-spec to_json(riak_object()) -> {struct, list(any())}.
 to_json(Obj=#r_object{}) ->
-    {struct, [{<<"bucket">>, riak_object:bucket(Obj)},
-              {<<"key">>, riak_object:key(Obj)},
-              {<<"values">>,
-               [{struct,
-                 [{<<"metadata">>, jsonify_metadata(MD)},
-                  {<<"data">>, V},
-                  {<<"vclock">>, riak_kv_wm_utils:encode_vclock(C)}]}
-                || {MD, V, C} <- riak_object:get_contents(Obj)
-               ]}]}.
+    {struct, 
+      [
+        {<<"bucket">>, bucket(Obj)},
+        {<<"key">>, key(Obj)},
+        {<<"contents">>,
+          [
+            {struct,
+              [
+                {<<"id">>, riak_kv_wm_utils:encode_vclock(Id)},
+                {<<"counter">>, riak_kv_wm_utils:encode_vclock(Counter)},
+                {<<"values">>,
+                  [
+                    {struct, 
+                      [
+                        {<<"metadata">>, jsonify_metadata(Rcont#r_content.metadata)},
+                        {<<"value">>, Rcont#r_content.value}
+                      ]
+                    } || Rcont <- Values
+                  ]
+                }
+              ]
+            } || {Id, Counter, Values} <- get_vclock(Obj,true)
+          ]
+        }
+      ]
+    }.
 
 -spec from_json(any()) -> riak_object().
 from_json({struct, Obj}) ->
@@ -415,9 +458,9 @@ from_json({struct, Obj}) ->
 from_json(Obj) ->
     Bucket = proplists:get_value(<<"bucket">>, Obj),
     Key = proplists:get_value(<<"key">>, Obj),
-    [{struct, Values}] = proplists:get_value(<<"values">>, Obj),
-    RObj0 = riak_object:new(Bucket, Key, <<"">>),
-    riak_object:set_contents(RObj0, dejsonify_values(Values, [])).
+    Contents = proplists:get_value(<<"contents">>, Obj),
+    RObj0 = new(Bucket, Key, <<"">>),
+    set_contents(RObj0, dejsonify_contents(Contents, [])).
 
 jsonify_metadata(MD) ->
     MDJS = fun({LastMod, Now={_,_,_}}) ->
@@ -476,10 +519,23 @@ jsonify_proplist(List) ->
                                      end
                              end, dict:new(), List)).
 
+
+dejsonify_contents([], Accum) ->
+    lists:reverse(Accum);
+dejsonify_contents([{struct, [
+                      {<<"id">>, Id},
+                      {<<"counter">>, Counter}, 
+                      {<<"values">>, Values}]} | T], Accum) ->
+    V = dejsonify_values(Values),
+    dejsonify_contents(T, [{Id,Counter,V}|Accum]).
+
+
+dejsonify_values(V) -> dejsonify_values(V,[]).
 dejsonify_values([], Accum) ->
     lists:reverse(Accum);
-dejsonify_values([{<<"metadata">>, {struct, MD0}},
-                  {<<"data">>, D}, {<<"vclock">>, C} | T], Accum) ->
+dejsonify_values([{struct, [
+                    {<<"metadata">>, {struct, MD0}},
+                    {<<"value">>, V}]} | T], Accum) ->
     Converter = fun({Key, Val}) ->
                         case Key of
                             <<"Links">> ->
@@ -496,8 +552,7 @@ dejsonify_values([{<<"metadata">>, {struct, MD0}},
                         end
                 end,
     MD = dict:from_list([Converter(KV) || KV <- MD0]),
-    Clock = binary_to_term(zlib:unzip(base64:decode(C))),
-    dejsonify_values(T, [{MD, D, Clock}|Accum]).
+    dejsonify_values(T, [#r_content{metadata=MD, value=V}|Accum]).
 
 %% @doc convert structs back into proplists
 dejsonify_meta_value({struct, PList}) ->
@@ -509,34 +564,8 @@ dejsonify_meta_value({struct, PList}) ->
                         [{Key, dejsonify_meta_value(V)}|Acc]
                 end, [], PList);
 dejsonify_meta_value(Value) -> Value.
-                               
-
-is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
-    case dict:find(clean, M) of
-        error -> true;
-        {ok,_} ->
-            case V of
-                undefined -> false;
-                _ -> true
-            end
-    end.
 
 
-syntactic_merge(CurrentObject, NewObject) ->
-    %% Paranoia in case objects were incorrectly stored
-    %% with update information.  Vclock is not updated
-    %% but since no data is lost the objects will be
-    %% fixed if rewritten.
-    UpdatedNew = case is_updated(NewObject) of
-                     true  -> apply_updates(NewObject);
-                     false -> NewObject
-                 end,
-    UpdatedCurr = case is_updated(CurrentObject) of
-                      true  -> apply_updates(CurrentObject);
-                      false -> CurrentObject
-                  end,
-
-    reconcile(UpdatedCurr, UpdatedNew, true).
 
 -ifdef(TEST).
 
@@ -580,7 +609,7 @@ merge2_test() ->
     O1 = riak_object:increment_vclock(object_test(), node1),
     O2 = riak_object:increment_vclock(riak_object:new(B,K,V), node2),
     O3 = riak_object:syntactic_merge(O1, O2),
-    [node1, node2] = lists:sort([N || {_,{N,_}} <- riak_object:vclock(O3)]),
+    [node1, node2] = lists:sort([N || {_,{N,_}} <- riak_object:get_vclock(O3,false)]),
     2 = riak_object:value_count(O3).
 
 merge3_test() ->
@@ -763,7 +792,7 @@ jsonify_round_trip_test() ->
     O2 = from_json(to_json(O)),
     ?assertEqual(bucket(O), bucket(O2)),
     ?assertEqual(key(O), key(O2)),
-    ?assert(dottedvv:equal(vclock(O), vclock(O2))),
+    ?assert(compactdvv:equal(get_vclock(O,true), get_vclock(O2,true))),
     ?assertEqual(lists:sort(Meta), lists:sort(dict:fetch(?MD_USERMETA, get_metadata(O2)))),
     ?assertEqual(Links, dict:fetch(?MD_LINKS, get_metadata(O2))),
     ?assertEqual(lists:sort(Indexes), lists:sort(index_data(O2))),

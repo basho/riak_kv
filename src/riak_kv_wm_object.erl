@@ -775,16 +775,14 @@ select_doc(#ctx{doc={ok, Doc}, vtag=Vtag}) ->
     case riak_object:get_update_value(Doc) of
         undefined ->
             case riak_object:get_contents(Doc) of
-                [Single] -> {MD,V,_Clock} = Single,
-                            {MD,V};
+                [Single] -> Single;
                 Mult ->
                     case lists:dropwhile(
-                           fun({M,_,_}) ->
+                           fun({M,_}) ->
                                    dict:fetch(?MD_VTAG, M) /= Vtag
                            end,
                            Mult) of
-                        [Match|_] -> {MD,V,_Clock} = Match,
-                                      {MD,V};
+                        [Match|_] -> Match;
                         [] -> multiple_choices
                     end
             end;
@@ -806,7 +804,7 @@ encode_vclock_header(RD, #ctx{doc={error, {deleted, VClock}}}) ->
 %%      into something suitable for an HTTP header
 vclock_header(Doc) ->
     {?HEAD_VCLOCK,
-        encode_vclock(riak_object:vclock(Doc))}.
+        encode_vclock(riak_object:get_vclock(Doc, false))}.
 
 encode_vclock(VClock) ->
     binary_to_list(base64:encode(zlib:zip(term_to_binary(VClock)))).
@@ -817,7 +815,7 @@ encode_vclock(VClock) ->
 %%      vclock is returned.
 decode_vclock_header(RD) ->
     case wrq:get_req_header(?HEAD_VCLOCK, RD) of
-        undefined -> dottedvv:fresh();
+        undefined -> riak_object:new_vclock();
         Head      -> binary_to_term(zlib:unzip(base64:decode(Head)))
     end.
 
@@ -866,7 +864,7 @@ generate_etag(RD, Ctx) ->
             {dict:fetch(?MD_VTAG, MD), RD, Ctx};
         multiple_choices ->
             {ok, Doc} = Ctx#ctx.doc,
-            <<ETag:128/integer>> = crypto:md5(term_to_binary(riak_object:vclock(Doc))),
+            <<ETag:128/integer>> = crypto:md5(term_to_binary(riak_object:get_vclock(Doc,false))),
             {riak_core_util:integer_to_list(ETag, 62), RD, Ctx}
     end.
 

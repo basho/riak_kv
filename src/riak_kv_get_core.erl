@@ -118,7 +118,7 @@ response(GetCore = #getcore{r = R, num_ok = NumOk, num_notfound = NumNotFound,
                         ok ->
                             Merged; % {ok, MObj}
                         tombstone when DeletedVClock ->
-                            {error, {deleted, riak_object:vclock(MObj)}};
+                            {error, {deleted, riak_object:get_vclock(MObj,false)}};
                         _ -> % tombstone or notfound
                             {error, notfound}
                     end;
@@ -160,7 +160,7 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                           [];
                       _ -> % ok or tombstone
                           [{Idx, outofdate} || {Idx, {ok, RObj}} <- Results,
-                                  strict_descendant(MObj, RObj)] ++
+                                  riak_object:strict_descendant(MObj, RObj)] ++
                               [{Idx, notfound} || {Idx, {error, notfound}} <- Results]
                   end,
     Action = case ReadRepairs of
@@ -202,9 +202,6 @@ info(#getcore{num_ok = NumOks, num_fail = NumFail, results = Results}) ->
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
-
-strict_descendant(O1, O2) ->
-    dottedvv:strict_descends(riak_object:vclock(O1),riak_object:vclock(O2)).
 
 merge(Replies, AllowMult) ->
     RObjs = [RObj || {_I, {ok, RObj}} <- Replies],

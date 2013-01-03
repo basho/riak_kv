@@ -469,7 +469,7 @@ calculate_objsize(Bucket, Obj) ->
     Contents = riak_object:get_contents(Obj),
     size(Bucket) +
         size(riak_object:key(Obj)) +
-        size(term_to_binary(riak_object:vclock(Obj))) +
+        size(term_to_binary(riak_object:get_vclock(Obj,false))) +
         lists:sum([size(term_to_binary(MD)) + value_size(Value) || {MD, Value} <- Contents]).
 
 value_size(Value) when is_binary(Value) -> size(Value);

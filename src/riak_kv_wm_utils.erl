@@ -92,7 +92,7 @@ default_encodings() ->
 %% @spec multipart_encode_body(string(), binary(), {dict(), binary()}) -> iolist()
 %% @doc Produce one part of a multipart body, representing one sibling
 %%      of a multi-valued document.
-multipart_encode_body(Prefix, Bucket, {MD, V, Clock}, APIVersion) ->
+multipart_encode_body(Prefix, Bucket, {MD, V}, APIVersion) ->
     Links1 = case dict:find(?MD_LINKS, MD) of
                  {ok, Ls} -> Ls;
                  error -> []
@@ -122,7 +122,6 @@ multipart_encode_body(Prefix, Bucket, {MD, V, Clock}, APIVersion) ->
              Rfc1123
      end,
      "\r\n",
-     "VClock: ",encode_vclock(Clock),"\r\n",
      case dict:find(?MD_DELETED, MD) of
          {ok, "true"} ->
              [?HEAD_DELETED, ": true\r\n"];
@@ -150,7 +149,7 @@ multipart_encode_body(Prefix, Bucket, {MD, V, Clock}, APIVersion) ->
 %%      into something suitable for an HTTP header
 vclock_header(Doc) ->
     {?HEAD_VCLOCK,
-        encode_vclock(riak_object:vclock(Doc))}.
+        encode_vclock(riak_object:get_vclock(Doc,false))}.
 
 encode_vclock(VClock) ->
     binary_to_list(base64:encode(zlib:zip(term_to_binary(VClock)))).

@@ -66,7 +66,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
             case C:get(Bucket,Key,[{r,R},{pr,PR},{timeout,Timeout}]) of
                 {ok, OrigObj} ->
                     RemainingTime = Timeout - (riak_core_util:moment() - RealStartTime),
-                    delete(ReqId,Bucket,Key,Options,RemainingTime,Client,ClientId,riak_object:vclock(OrigObj));
+                    delete(ReqId,Bucket,Key,Options,RemainingTime,Client,ClientId,riak_object:get_vclocks(OrigObj, false));
                 {error, notfound} ->
                     ?DTRACE(?C_DELETE_INIT1, [-2], []),
                     Client ! {ReqId, {error, notfound}};
@@ -240,7 +240,7 @@ invalid_w_delete() ->
     Key = <<"testkey">>,
     Timeout = 60000,
     riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{w,W}],
-            Timeout, self(), undefined, vclock:fresh()]),
+            Timeout, self(), undefined, riak_object:new_vclock()]),
     %% Wait for error response
     receive
         {_RequestId, Result} ->
@@ -275,7 +275,7 @@ invalid_pw_delete() ->
     Key = <<"testkey">>,
     Timeout = 60000,
     riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key,
-            [{pw,PW}], Timeout, self(), undefined, vclock:fresh()]),
+            [{pw,PW}], Timeout, self(), undefined, riak_object:new_vclock()]),
     %% Wait for error response
     receive
         {_RequestId, Result} ->

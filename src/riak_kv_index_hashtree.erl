@@ -360,8 +360,8 @@ load_built(#state{trees=Trees}) ->
 hash_object(RObjBin) ->
     %% Normalize the `riak_object' vector clock before hashing
     RObj = binary_to_term(RObjBin),
-    Vclock = riak_object:vclock(RObj),
-    UpdObj = riak_object:set_vclock(RObj, lists:sort(Vclock)),
+    Vclock = riak_object:get_vclock(RObj,true),
+    UpdObj = riak_object:set_contents(RObj, lists:sort(Vclock)),
     Hash = erlang:phash2(term_to_binary(UpdObj)),
     term_to_binary(Hash).
 

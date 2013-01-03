@@ -872,33 +872,19 @@ enforce_allow_mult(Obj, BProps) ->
     case proplists:get_value(allow_mult, BProps) of
         true -> Obj;
         _ ->
-            case riak_object:get_contents(Obj) of
-                [_] -> Obj;
-                Mult ->
-                    Clocks = [C || {_,_,C} <- Mult],
-                    Clock = dottedvv:merge(Clocks),
-                    {MD, V, _VC} = select_newest_content(Mult),
-                    riak_object:set_contents(Obj, [{MD, V, Clock}])
+            case riak_object:value_count(Obj) of
+                1 -> Obj;
+                _ ->
+                    riak_object:set_lww(Obj)
             end
     end.
-
-%% @private
-%% choose the latest content to store for the allow_mult=false case
-select_newest_content(Mult) ->
-    hd(lists:sort(
-         fun({MD0, _, _}, {MD1, _, _}) ->
-                 riak_core_util:compare_dates(
-                   dict:fetch(<<"X-Riak-Last-Modified">>, MD0),
-                   dict:fetch(<<"X-Riak-Last-Modified">>, MD1))
-         end,
-         Mult)).
 
 %% @private
 put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
     {newobj, UpdObj};
 put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
     ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
-    case dottedvv:equal(riak_object:vclock(ResObj), riak_object:vclock(CurObj)) of
+    case riak_object:equal_vclock(ResObj,CurObj) of
         true ->
             {oldobj, CurObj};
         false ->
@@ -906,9 +892,10 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
     end;
 put_merge(true, true, _CurObj, UpdObj, VId, StartTime) -> % coord=false, LWW=true
     {newobj, riak_object:increment_vclock(UpdObj, VId, StartTime)};
-put_merge(true, false, CurObj, UpdObj, VId, _StartTime) ->
-    UpdObj1 = riak_object:update_vclock(UpdObj, CurObj, VId),
-    ResObj = riak_object:syntactic_merge(CurObj, UpdObj1),
+put_merge(true, false, CurObj, UpdObj, VId, StartTime) ->
+    CurObj1 = riak_object:update(CurObj),
+    UpdObj1 = riak_object:update(UpdObj),
+    ResObj = riak_object:update_vclock(UpdObj1, CurObj1, VId, StartTime),
     {newobj, ResObj}.
 
 %% @private
@@ -1092,8 +1079,8 @@ do_get_vclocks(KeyList,_State=#state{mod=Mod,modstate=ModState}) ->
 %% @private
 do_get_vclock({Bucket, Key}, Mod, ModState) ->
     case Mod:get(Bucket, Key, ModState) of
-        {error, not_found, _UpdModState} -> vclock:fresh();
-        {ok, Val, _UpdModState} -> riak_object:vclock(binary_to_term(Val))
+        {error, not_found, _UpdModState} -> riak_object:new_vclock();
+        {ok, Val, _UpdModState} -> riak_object:get_vclock(binary_to_term(Val),false)
     end.
 
 %% @private
