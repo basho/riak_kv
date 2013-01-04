@@ -35,7 +35,7 @@
 -type value() :: term().
 
 -record(r_content, {
-          metadata :: dict(), 
+          metadata :: dict(),
           value :: term()
          }).
 
@@ -43,7 +43,7 @@
 -record(r_object, {
           bucket :: bucket(),
           key :: key(),
-          contents :: compactdvv:clock(), % [{id, count, [r_content]}]
+          contents :: compactdvv:clock(), % [{id, count, [riak_content()]}]
           updatemetadata=dict:store(clean, true, dict:new()) :: dict(),
           updatevalue :: term()
          }).
@@ -278,7 +278,10 @@ value_count(#r_object{contents=Contents}) -> compactdvv:value_count(Contents).
 %% @doc  Return the contents (a list of {metadata, value} tuples) for
 %%       this riak_object.
 -spec get_contents(riak_object()) -> [riak_content()].
-get_contents(#r_object{contents=Contents}) -> compactdvv:get_values(Contents).
+get_contents(#r_object{contents=Contents}) -> 
+    Rconts = compactdvv:get_values(Contents),
+    [{C#r_content.metadata, C#r_content.value} ||
+         C <- Rconts].
 
 %% @doc  Assert that this riak_object has no siblings and return its associated
 %%       metadata.  This function will fail with a badmatch error if the

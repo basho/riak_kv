@@ -68,7 +68,7 @@ is_x_deleted(Obj) ->
 %%      deleted.  Return is the atom 'undefined' if all contents
 %%      are marked deleted, or the input Obj if any of them are not.
 obj_not_deleted(Obj) ->
-    case [{M, V, C} || {M, V, C} <- riak_object:get_contents(Obj),
+    case [{M, V} || {M, V} <- riak_object:get_contents(Obj),
                     dict:is_key(<<"X-Riak-Deleted">>, M) =:= false] of
         [] -> undefined;
         _ -> Obj

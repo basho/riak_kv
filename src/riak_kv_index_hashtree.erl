@@ -358,11 +358,7 @@ load_built(#state{trees=Trees}) ->
 %% Generate a hash value for a binary-encoded `riak_object'
 -spec hash_object(riak_object_t2b()) -> binary().
 hash_object(RObjBin) ->
-    %% Normalize the `riak_object' vector clock before hashing
-    RObj = binary_to_term(RObjBin),
-    Vclock = riak_object:get_vclock(RObj,true),
-    UpdObj = riak_object:set_contents(RObj, lists:sort(Vclock)),
-    Hash = erlang:phash2(term_to_binary(UpdObj)),
+    Hash = erlang:phash2(term_to_binary(RObjBin)),
     term_to_binary(Hash).
 
 %% Fold over a given vnode's data, inserting each object into the appropriate
