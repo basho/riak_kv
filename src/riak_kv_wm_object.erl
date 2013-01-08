@@ -142,7 +142,7 @@
               links,        %% [link()] - links of the object
               index_fields, %% [index_field()]
               method,       %% atom() - HTTP method for the request
-              timeout=60000 %% integer() - passed-in timeout value in ms
+              timeout       %% integer() - passed-in timeout value in ms
              }).
 %% @type link() = {{Bucket::binary(), Key::binary()}, Tag::binary()}
 %% @type index_field() = {Key::string(), Value::string()}
@@ -175,7 +175,9 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                           list_to_integer(TimeoutStr)
                       catch
                           _:_ ->
-                              lager:error("Bad timeout value~n", []),
+                              lager:error("Bad timeout value ~p, "
+                                          "using ~d~n", 
+                                          [TimeoutStr, ?DEFAULT_TIMEOUT]),
                               ?DEFAULT_TIMEOUT
                       end
               end,
