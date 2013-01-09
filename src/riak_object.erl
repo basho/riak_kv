@@ -138,11 +138,11 @@ equal2(Obj1,Obj2) ->
 equal_contents([],[]) -> true;
 equal_contents(_,[]) -> false;
 equal_contents([],_) -> false;
-equal_contents([C1|R1],[C2|R2]) ->
-    MD1 = lists:keysort(1, dict:to_list(C1#r_content.metadata)),
-    MD2 = lists:keysort(1, dict:to_list(C2#r_content.metadata)),
+equal_contents([{M1,V1}|R1],[{M2,V2}|R2]) ->
+    MD1 = lists:keysort(1, dict:to_list(M1)),
+    MD2 = lists:keysort(1, dict:to_list(M2)),
     (MD1 =:= MD2)
-        andalso (C1#r_content.value =:= C2#r_content.value)
+        andalso (V1 =:= V2)
         andalso equal_contents(R1,R2).
 
 
@@ -156,8 +156,15 @@ equal_contents([C1|R1],[C2|R2]) ->
 %       X-Riak-Last-Modified header.
 -spec reconcile([riak_object()], boolean()) -> riak_object().
 reconcile(RObjs, AllowMultiple) ->
-    AllContents = [O#r_object.contents || O <- RObjs],
-    SyncedContents = compactdvv:sync(AllContents),
+    %% filter clocks with null as id
+    AllContents = 
+        [lists:filter(fun ({I,_,_}) -> I =/= null end, O#r_object.contents) || O <- RObjs],
+    AllContents2 = 
+        case AllContents of 
+            [] -> [O#r_object.contents || O <- RObjs]; 
+            _ -> AllContents 
+        end,
+    SyncedContents = compactdvv:sync(AllContents2),
     Contents = case AllowMultiple of
                    false -> compactdvv:lww(SyncedContents);
                    true -> SyncedContents
@@ -187,20 +194,16 @@ most_recent_content(Contents) ->
     compactdvv:lww(fun riak_object:compare_content_dates/2, Contents).
 
 -spec compare_content_dates(riak_content(), riak_content()) -> boolean().
-compare_content_dates(C1, C2) ->
-    compare_metadata(C1#r_content.metadata,C2#r_content.metadata).
-
--spec compare_metadata(dict(), dict()) -> boolean().
-compare_metadata(MD1,MD2) ->
-    D1 = dict:fetch(<<"X-Riak-Last-Modified">>, MD1),
-    D2 = dict:fetch(<<"X-Riak-Last-Modified">>, MD2),
+compare_content_dates(C1,C2) ->
+    D1 = dict:fetch(<<"X-Riak-Last-Modified">>, C1#r_content.metadata),
+    D2 = dict:fetch(<<"X-Riak-Last-Modified">>, C2#r_content.metadata),
     %% true if C1 was modifed later than C2
     Cmp1 = riak_core_util:compare_dates(D1, D2),
     %% true if C2 was modifed later than C1
     Cmp2 = riak_core_util:compare_dates(D2, D1),
     %% check for deleted objects
-    Del1 = dict:is_key(<<"X-Riak-Deleted">>, MD1),
-    Del2 = dict:is_key(<<"X-Riak-Deleted">>, MD2),
+    Del1 = dict:is_key(<<"X-Riak-Deleted">>, C1#r_content.metadata),
+    Del2 = dict:is_key(<<"X-Riak-Deleted">>, C2#r_content.metadata),
 
     SameDate = (Cmp1 =:= Cmp2),
     case {SameDate, Del1, Del2} of
@@ -213,7 +216,7 @@ compare_metadata(MD1,MD2) ->
         _ ->
             %% Dates equal and either both present or both deleted, compare
             %% by opaque contents.
-            MD1 < MD2
+            C1 < C2
     end.
 
 
@@ -240,20 +243,30 @@ update(Obj) ->
 %       update_metadata() calls) to this riak_object.
 -spec apply_updates(riak_object()) -> riak_object().
 apply_updates(Object=#r_object{}) ->
-    C = case Object#r_object.updatevalue of
-             undefined ->
-                 get_vclock(Object,true);
-             _ ->
-                 MD = hd(get_metadatas(Object)),
-                 VL = Object#r_object.updatevalue,
-                 Rcont = #r_content{metadata=MD,value=VL},
-                 compactdvv:set_value(get_vclock(Object,false),Rcont)
-         end,
-    case dict:find(clean, Object#r_object.updatemetadata) of
-        error ->
-            [dict:erase(clean,Object#r_object.updatemetadata) || _X <- lists:seq(1,compactdvv:value_count(C))]
-    end,
-    Object#r_object{contents=C,
+    CurrentContents = get_vclock(Object,true),
+    UpdatedContents = 
+        case Object#r_object.updatevalue of
+            undefined ->
+                case dict:find(clean, Object#r_object.updatemetadata) of
+                    {ok,_} -> CurrentContents; %% no changes in values or metadata
+                    error -> 
+                        NewMD = dict:erase(clean,Object#r_object.updatemetadata),
+                        compactdvv:map_values(
+                            fun (R) -> #r_content{metadata=NewMD, value=R#r_content.value} end,
+                            CurrentContents)
+                end;
+            _ ->
+                MD = case dict:find(clean, Object#r_object.updatemetadata) of
+                        {ok,_} -> 
+                            hd(get_metadatas(Object));
+                        error -> 
+                            dict:erase(clean,Object#r_object.updatemetadata)
+                     end,
+                VL = Object#r_object.updatevalue,
+                NewR = #r_content{metadata=MD,value=VL},
+                compactdvv:set_value(CurrentContents,NewR)
+        end,
+    Object#r_object{contents=UpdatedContents,
                     updatemetadata=dict:store(clean, true, dict:new()),
                     updatevalue=undefined}.
 
@@ -354,8 +367,12 @@ increment_vclock(Object=#r_object{}, Id, _TS) ->
 %% @doc  Increment the entry for Id in O's vclock (ignore timestamp since we are not pruning).
 -spec increment_vclock(riak_object(), any()) -> riak_object().
 increment_vclock(Object=#r_object{contents=Conts}, Id) ->
-    Value = #r_content{} = compactdvv:get_last_value(Conts),
-    C = compactdvv:syncupdate(Conts, Id, Value),
+    C = case Conts of
+        [{null,0,[V]}] -> compactdvv:syncupdate([], Id, V);
+        _ -> 
+            Value = #r_content{} = compactdvv:get_last_value(Conts),
+            compactdvv:syncupdate(Conts, Id, Value)
+    end,
     set_contents(Object, C).
 
 -spec update_vclock(riak_object(), riak_object(), any()) -> riak_object().
@@ -530,7 +547,9 @@ dejsonify_contents([{struct, [
                       {<<"counter">>, Counter}, 
                       {<<"values">>, Values}]} | T], Accum) ->
     V = dejsonify_values(Values),
-    dejsonify_contents(T, [{Id,Counter,V}|Accum]).
+    Id2 = binary_to_term(zlib:unzip(base64:decode(Id))),
+    Counter2 = binary_to_term(zlib:unzip(base64:decode(Counter))),
+    dejsonify_contents(T, [{Id2,Counter2,V}|Accum]).
 
 
 dejsonify_values(V) -> dejsonify_values(V,[]).
@@ -596,8 +615,8 @@ update_test() ->
 reconcile_test() ->
     {O,O2} = update_test(),
     O3 = riak_object:increment_vclock(O2,self()),
-    O3 = riak_object:reconcile(O,O3,true),
-    O3 = riak_object:reconcile(O,O3,false),
+    O3 = riak_object:reconcile([O,O3],true),
+    O3 = riak_object:reconcile([O,O3],false),
     {O,O3}.
 
 merge1_test() ->
@@ -612,7 +631,7 @@ merge2_test() ->
     O1 = riak_object:increment_vclock(object_test(), node1),
     O2 = riak_object:increment_vclock(riak_object:new(B,K,V), node2),
     O3 = riak_object:syntactic_merge(O1, O2),
-    [node1, node2] = lists:sort([N || {_,{N,_}} <- riak_object:get_vclock(O3,false)]),
+    [node1, node2] = lists:sort([N || {N,_,_} <- riak_object:get_vclock(O3,false)]),
     2 = riak_object:value_count(O3).
 
 merge3_test() ->
@@ -659,7 +678,7 @@ inequality_value_test() ->
 
 inequality_multivalue_test() ->
     O1 = riak_object:new(<<"test">>, <<"a">>, "value"),
-    [C] = riak_object:get_contents(O1),
+    [C] = riak_object:get_vclock(O1,true),
     O1p = riak_object:set_contents(O1, [C,C]),
     false = riak_object:equal(O1, O1p),
     false = riak_object:equal(O1p, O1).
@@ -727,7 +746,7 @@ date_reconcile_test() ->
                httpd_util:rfc1123_date(
                  calendar:gregorian_seconds_to_datetime(D+1)),
                get_metadata(O3)))),
-    O5 = riak_object:reconcile(O2,O4, false),
+    O5 = riak_object:reconcile([O2,O4], false),
     false = riak_object:equal(O2, O5),
     false = riak_object:equal(O4, O5).
 
@@ -756,14 +775,6 @@ is_updated_test() ->
     ?assert(is_updated(OMu)),
     OVu = riak_object:update_value(O, testupdate),
     ?assert(is_updated(OVu)).
-
-remove_duplicates_test() ->
-    O0 = riak_object:new(<<"test">>, <<"test">>, zero),
-    O1 = riak_object:new(<<"test">>, <<"test">>, one),
-    ND = remove_duplicate_objects([O0, O0, O1, O1, O0, O1]),
-    ?assertEqual(2, length(ND)),
-    ?assert(lists:member(O0, ND)),
-    ?assert(lists:member(O1, ND)).
 
 new_with_ctype_test() ->
     O = riak_object:new(<<"b">>, <<"k">>, <<"{\"a\":1}">>, "application/json"),
@@ -816,8 +827,8 @@ check_most_recent({V1, T1, D1}, {V2, T2, D2}) ->
 
     ?assertEqual(C3, C4),
 
-    C3#r_content.value.
-    
+    (compactdvv:get_last_value(C3))#r_content.value.
+
 
 determinstic_most_recent_test() ->
     D = calendar:datetime_to_gregorian_seconds(
