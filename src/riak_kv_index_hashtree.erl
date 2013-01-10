@@ -51,7 +51,8 @@
          stop/1,
          destroy/1]).
 
--export([poke/1]).
+-export([poke/1,
+         get_build_time/1]).
 
 -type index() :: non_neg_integer().
 -type index_n() :: {index(), pos_integer()}.
