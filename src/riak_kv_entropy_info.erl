@@ -24,7 +24,9 @@
          create_table/0,
          dump/0,
          compute_exchange_info/1,
-         compute_tree_info/1]).
+         compute_exchange_info/2,
+         compute_tree_info/1,
+         all_exchanges/2]).
 
 -define(ETS, ets_riak_kv_entropy).
 
@@ -89,11 +91,14 @@ dump() ->
                                    [{index(), Last :: t_now(), All :: t_now(),
                                      repair_stats()}].
 compute_exchange_info(Type) ->
+    compute_exchange_info(Type, {?MODULE, all_exchanges}).
+
+compute_exchange_info(Type, {M,F}) ->
     filter_index_info(),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Indices = riak_core_ring:my_indices(Ring),
     Defaults = [{Index, undefined, undefined, undefined} || Index <- Indices],
-    KnownInfo = [compute_exchange_info(Ring, Index, Info)
+    KnownInfo = [compute_exchange_info({M,F}, Ring, Index, Info)
                  || {{Type2, Index}, Info} <- all_index_info(), Type2 == Type],
     merge_to_first(KnownInfo, Defaults).
 
@@ -166,9 +171,9 @@ all_exchanges(Ring, Index) ->
     L2 = [{RemoteIdx, IndexN} || {_, RemoteIdx, IndexN} <- L1],
     {Index, L2}.
 
-compute_exchange_info(Ring, Index, #index_info{exchanges=Exchanges,
-                                               repaired=Repaired}) ->
-    {_, AllExchanges} = all_exchanges(Ring, Index),
+compute_exchange_info({M,F}, Ring, Index, #index_info{exchanges=Exchanges,
+                                                      repaired=Repaired}) ->
+    {_, AllExchanges} = M:F(Ring, Index),
     Defaults = [{Exchange, undefined} || Exchange <- AllExchanges],
     KnownTime = [{Exchange, EI#exchange_info.time} || {Exchange, EI} <- Exchanges],
     AllTime = merge_to_first(KnownTime, Defaults),
