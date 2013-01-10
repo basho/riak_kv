@@ -293,7 +293,7 @@ reload_file(Filename) ->
     end.
 
 aae_status([]) ->
-    ExchangeInfo = riak_kv_entropy_info:compute_exchange_info(),
+    ExchangeInfo = riak_kv_entropy_info:compute_exchange_info(riak_kv),
     aae_exchange_status(ExchangeInfo),
     io:format("~n"),
     aae_tree_status(),
@@ -330,7 +330,7 @@ aae_repair_status(ExchangeInfo) ->
     ok.
 
 aae_tree_status() ->
-    TreeInfo = riak_kv_entropy_info:compute_tree_info(),
+    TreeInfo = riak_kv_entropy_info:compute_tree_info(riak_kv),
     io:format("~s~n", [string:centre(" Entropy Trees ", 79, $=)]),
     io:format("~-49s  Built (ago)~n", ["Index"]),
     io:format("~79..-s~n", [""]),

@@ -19,12 +19,12 @@
 %% -------------------------------------------------------------------
 -module(riak_kv_entropy_info).
 
--export([tree_built/2,
-         exchange_complete/4,
+-export([tree_built/3,
+         exchange_complete/5,
          create_table/0,
          dump/0,
-         compute_exchange_info/0,
-         compute_tree_info/0]).
+         compute_exchange_info/1,
+         compute_tree_info/1]).
 
 -define(ETS, ets_riak_kv_entropy).
 
@@ -59,14 +59,15 @@
 %%%===================================================================
 
 %% @doc Store AAE tree build time
--spec tree_built(index(), t_now()) -> ok.
-tree_built(Index, Time) ->
-    update_index_info(Index, {tree_built, Time}).
+-spec tree_built(atom(), index(), t_now()) -> ok.
+tree_built(Type, Index, Time) ->
+    update_index_info({Type, Index}, {tree_built, Time}).
 
 %% @doc Store information about a just-completed AAE exchange
--spec exchange_complete(index(), index(), index_n(), pos_integer()) -> ok.
-exchange_complete(Index, RemoteIdx, IndexN, Repaired) ->
-    update_index_info(Index, {exchange_complete, RemoteIdx, IndexN, Repaired}).
+-spec exchange_complete(atom(), index(), index(), index_n(), pos_integer()) -> ok.
+exchange_complete(Type, Index, RemoteIdx, IndexN, Repaired) ->
+    update_index_info({Type, Index},
+                      {exchange_complete, RemoteIdx, IndexN, Repaired}).
 
 %% @doc Called by {@link riak_kv_sup} to create public ETS table used for
 %%      holding AAE information for reporting. Table will be owned by
@@ -84,24 +85,27 @@ dump() ->
 %% indices. For each index, return a tuple containing time of most recent
 %% exchange; time since the index completed exchanges with all sibling indices;
 %% as well as statistics about repairs triggered by different exchanges.
--spec compute_exchange_info()  -> [{index(), Last :: t_now(), All :: t_now(),
-                                    repair_stats()}].
-compute_exchange_info() ->
+-spec compute_exchange_info(atom())  ->
+                                   [{index(), Last :: t_now(), All :: t_now(),
+                                     repair_stats()}].
+compute_exchange_info(Type) ->
     filter_index_info(),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Indices = riak_core_ring:my_indices(Ring),
     Defaults = [{Index, undefined, undefined, undefined} || Index <- Indices],
-    KnownInfo = [compute_exchange_info(Ring, Index, Info) || {Index, Info} <- all_index_info()],
+    KnownInfo = [compute_exchange_info(Ring, Index, Info)
+                 || {{Type2, Index}, Info} <- all_index_info(), Type2 == Type],
     merge_to_first(KnownInfo, Defaults).
 
 %% @doc Return a list of AAE build times for each locally owned index.
--spec compute_tree_info() -> [{index(), t_now()}].
-compute_tree_info() ->
+-spec compute_tree_info(atom()) -> [{index(), t_now()}].
+compute_tree_info(Type) ->
     filter_index_info(),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Indices = riak_core_ring:my_indices(Ring),
     Defaults = [{Index, undefined} || Index <- Indices],
-    KnownInfo = [{Index, Info#index_info.build_time} || {Index, Info} <- all_index_info()],
+    KnownInfo = [{Index, Info#index_info.build_time}
+                 || {{Type2, Index}, Info} <- all_index_info(), Type2 == Type],
     merge_to_first(KnownInfo, Defaults).
 
 %%%===================================================================
@@ -111,20 +115,20 @@ compute_tree_info() ->
 %% Utility function to load stored information for a given index,
 %% invoke `handle_index_info' to update the information, and then
 %% store the new info back into the ETS table.
--spec update_index_info(index(), term()) -> ok.
-update_index_info(Index, Cmd) ->
-    Info = case ets:lookup(?ETS, {index, Index}) of
+-spec update_index_info({atom(), index()}, term()) -> ok.
+update_index_info(Key, Cmd) ->
+    Info = case ets:lookup(?ETS, {index, Key}) of
                [] ->
                    #index_info{};
                [{_, I}] ->
                    I
            end,
-    Info2 = handle_index_info(Cmd, Index, Info),
-    ets:insert(?ETS, {{index, Index}, Info2}),
+    Info2 = handle_index_info(Cmd, Key, Info),
+    ets:insert(?ETS, {{index, Key}, Info2}),
     ok.
 
 %% Return a list of all stored index information.
--spec all_index_info() -> [{index(), index_info()}].
+-spec all_index_info() -> [{{atom(), index()}, index_info()}].
 all_index_info() ->
     ets:select(?ETS, [{{{index, '$1'}, '$2'}, [], [{{'$1','$2'}}]}]).
 
@@ -135,7 +139,7 @@ filter_index_info() ->
     Indices = ets:select(?ETS, [{{{index, '$1'}, '$2'}, [], ['$1']}]),
     Others = ordsets:subtract(ordsets:from_list(Indices),
                               ordsets:from_list(Primaries)),
-    [ets:delete(?ETS, {index, Idx}) || Idx <- Others],
+    [ets:match_delete(?ETS, {{index, {'_', Idx}}, '_'}) || Idx <- Others],
     ok.
 
 %% Update provided index info based on request.

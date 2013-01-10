@@ -482,7 +482,7 @@ do_build_finished(State=#state{index=Index, built=_Pid}) ->
     BuildTime = get_build_time(Tree0),
     hashtree:write_meta(<<"built">>, <<1>>, Tree0),
     hashtree:write_meta(<<"build_time">>, term_to_binary(BuildTime), Tree0),
-    riak_kv_entropy_info:tree_built(Index, BuildTime),
+    riak_kv_entropy_info:tree_built(riak_kv, Index, BuildTime),
     State#state{built=true, build_time=BuildTime}.
 
 %% Determine the build time for all trees associated with this
