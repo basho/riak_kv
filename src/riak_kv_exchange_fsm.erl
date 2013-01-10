@@ -284,6 +284,7 @@ next_state_with_timeout(StateName, State, Timeout) ->
     {next_state, StateName, State, Timeout}.
 
 exchange_complete({LocalIdx, _}, {RemoteIdx, RemoteNode}, IndexN, Repaired) ->
-    riak_kv_entropy_info:exchange_complete(LocalIdx, RemoteIdx, IndexN, Repaired),
+    riak_kv_entropy_info:exchange_complete(riak_kv, LocalIdx, RemoteIdx,
+                                           IndexN, Repaired),
     rpc:call(RemoteNode, riak_kv_entropy_info, exchange_complete,
-             [RemoteIdx, LocalIdx, IndexN, Repaired]).
+             [riak_kv, RemoteIdx, LocalIdx, IndexN, Repaired]).
