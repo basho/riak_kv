@@ -66,7 +66,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
             case C:get(Bucket,Key,[{r,R},{pr,PR},{timeout,Timeout}]) of
                 {ok, OrigObj} ->
                     RemainingTime = Timeout - (riak_core_util:moment() - RealStartTime),
-                    delete(ReqId,Bucket,Key,Options,RemainingTime,Client,ClientId,riak_object:get_vclocks(OrigObj, false));
+                    delete(ReqId,Bucket,Key,Options,RemainingTime,Client,ClientId,riak_object:get_vclock(OrigObj, false));
                 {error, notfound} ->
                     ?DTRACE(?C_DELETE_INIT1, [-2], []),
                     Client ! {ReqId, {error, notfound}};

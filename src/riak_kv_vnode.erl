@@ -890,11 +890,11 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
         false ->
             {newobj, ResObj}
     end;
-put_merge(true, true, _CurObj, UpdObj, VId, StartTime) -> % coord=false, LWW=true
+put_merge(true, true, _CurObj, UpdObj, VId, StartTime) -> % coord=true, LWW=true
     {newobj, riak_object:increment_vclock(UpdObj, VId, StartTime)};
 put_merge(true, false, CurObj, UpdObj, VId, StartTime) ->
-    CurObj1 = riak_object:update(CurObj),
-    UpdObj1 = riak_object:update(UpdObj),
+    CurObj1 = riak_object:apply_updates(CurObj),
+    UpdObj1 = riak_object:apply_updates(UpdObj),
     ResObj = riak_object:update_vclock(UpdObj1, CurObj1, VId, StartTime),
     {newobj, ResObj}.
 

@@ -358,7 +358,7 @@ load_built(#state{trees=Trees}) ->
 %% Generate a hash value for a binary-encoded `riak_object'
 -spec hash_object(riak_object_t2b()) -> binary().
 hash_object(RObjBin) ->
-    Hash = erlang:phash2(term_to_binary(RObjBin)),
+    Hash = erlang:phash2(RObjBin),
     term_to_binary(Hash).
 
 %% Fold over a given vnode's data, inserting each object into the appropriate
