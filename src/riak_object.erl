@@ -167,7 +167,7 @@ reconcile(RObjs, AllowMultiple) ->
         end,
     SyncedContents = compactdvv:sync(AllContents2),
     Contents = case AllowMultiple of
-                   false -> compactdvv:lww(SyncedContents);
+                   false -> most_recent_content(SyncedContents);
                    true -> SyncedContents
                end,
     HdObj = hd(RObjs),
