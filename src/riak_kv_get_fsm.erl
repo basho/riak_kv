@@ -67,6 +67,7 @@
                 startnow :: {non_neg_integer(), non_neg_integer(), non_neg_integer()},
                 get_usecs :: non_neg_integer(),
                 tracked_bucket=false :: boolean(), %% is per bucket stats enabled for this bucket
+                idx_type :: {non_neg_integer(), 'primary' | 'fallback'}, %% mapping of index to partition type (primary | fallback)
                 timing = [] :: [{atom(), erlang:timestamp()}],
                 calculated_timings :: {ResponseUSecs::non_neg_integer(),
                                        [{StateName::atom(), TimeUSecs::non_neg_integer()}]} | undefined
@@ -163,6 +164,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
     StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
+
     new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
                                           n = N,
                                           bucket_props=BucketProps,
@@ -184,27 +186,31 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
     PR = riak_kv_util:expand_rw_value(pr, PR0, BucketProps, N),
     NumVnodes = length(PL2),
     NumPrimaries = length([x || {_,primary} <- PL2]),
+    IdxType = [{Part, Type} || {{Part, _Node}, Type} <- PL2],
+
     case validate_quorum(R, R0, N, PR, PR0, NumPrimaries, NumVnodes) of
         ok ->
             BQ0 = get_option(basic_quorum, Options, default),
+            FailR = erlang:max(R, PR), %% fail fast
             FailThreshold =
                 case riak_kv_util:expand_value(basic_quorum, BQ0, BucketProps) of
                     true ->
                         erlang:min((N div 2)+1, % basic quorum, or
-                                   (N-R+1)); % cannot ever get R 'ok' replies
+                                   (N-FailR+1)); % cannot ever get R 'ok' replies
                     _ElseFalse ->
-                        N - R + 1 % cannot ever get R 'ok' replies
+                        N - FailR + 1 % cannot ever get R 'ok' replies
                 end,
             AllowMult = proplists:get_value(allow_mult,BucketProps),
             NFOk0 = get_option(notfound_ok, Options, default),
             NotFoundOk = riak_kv_util:expand_value(notfound_ok, NFOk0, BucketProps),
             DeletedVClock = get_option(deletedvclock, Options, false),
-            GetCore = riak_kv_get_core:init(N, R, FailThreshold,
+            GetCore = riak_kv_get_core:init(N, R, PR, FailThreshold,
                                             NotFoundOk, AllowMult,
                                             DeletedVClock),
             new_state_timeout(execute, StateData#state{get_core = GetCore,
                                                        timeout = Timeout,
-                                                       req_id = ReqId});
+                                                       req_id = ReqId,
+                                                       idx_type = IdxType});
         Error ->
             StateData2 = client_reply(Error, StateData),
             {stop, normal, StateData2}
@@ -251,11 +257,13 @@ preflist_for_tracing(Preflist) ->
      end || {Idx, Nd} <- lists:sublist(Preflist, 4)].
 
 %% @private
-waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = GetCore}) ->
+waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = GetCore,
+                                                                  idx_type= IdxType}) ->
     ShortCode = riak_kv_get_core:result_shortcode(VnodeResult),
+    ResponseStatus = get_response_owner_status(Idx, IdxType),
     IdxStr = integer_to_list(Idx),
     ?DTRACE(?C_GET_FSM_WAITING_R, [ShortCode], ["waiting_vnode_r", IdxStr]),
-    UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
+    UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, ResponseStatus, GetCore),
     case riak_kv_get_core:enough(UpdGetCore) of
         true ->
             {Reply, UpdGetCore2} = riak_kv_get_core:response(UpdGetCore),
@@ -272,14 +280,22 @@ waiting_vnode_r(request_timeout, StateData) ->
     update_stats(timeout, S2),
     finalize(S2).
 
+%% @private If the Idx is not in the IdxType
+%% the world should end
+get_response_owner_status(Idx, IdxType) ->
+    {Idx, Status} = lists:keyfind(Idx, 1, IdxType),
+    Status.
+
 %% @private
 waiting_read_repair({r, VnodeResult, Idx, _ReqId},
-                    StateData = #state{get_core = GetCore}) ->
+                    StateData = #state{get_core = GetCore,
+                                       idx_type = IdxType}) ->
+    ResponseStatus = get_response_owner_status(Idx, IdxType),
     ShortCode = riak_kv_get_core:result_shortcode(VnodeResult),
     IdxStr = integer_to_list(Idx),
     ?DTRACE(?C_GET_FSM_WAITING_RR, [ShortCode],
             ["waiting_read_repair", IdxStr]),
-    UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
+    UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, ResponseStatus, GetCore),
     maybe_finalize(StateData#state{get_core = UpdGetCore});
 waiting_read_repair(request_timeout, StateData) ->
     ?DTRACE(?C_GET_FSM_WAITING_RR_TIMEOUT, [-2],
@@ -402,7 +418,7 @@ determine_do_read_repair(SoftCap, HardCap, Actual, Roll) ->
 
 -ifdef(TEST).
 roll_d100() ->
-    fsm_eqc_util:get_fake_rng(get_fsm_qc).
+    fsm_eqc_util:get_fake_rng(get_fsm_eqc).
 -else.
 % technically not a d100 as it has a 0
 roll_d100() ->
