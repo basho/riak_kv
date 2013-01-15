@@ -657,12 +657,13 @@ extract_content_type(RD) ->
 %% @doc Extract headers prefixed by X-Riak-Meta- in the client's PUT request
 %%      to be returned by subsequent GET requests.
 extract_user_meta(RD) ->
-    lists:filter(fun({K,_V}) ->
+    List = lists:filter(fun({K,_V}) ->
                     lists:prefix(
                         ?HEAD_USERMETA_PREFIX,
                         string:to_lower(riak_kv_wm_utils:any_to_list(K)))
                 end,
-                mochiweb_headers:to_list(wrq:req_headers(RD))).
+                mochiweb_headers:to_list(wrq:req_headers(RD))),
+    [{string:sub_string(A, 13),B} || {A,B} <- List].
 
 %% @spec multiple_choices(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
@@ -712,7 +713,7 @@ produce_doc_body(RD, Ctx) ->
             UserMetaRD = case dict:find(?MD_USERMETA, MD) of
                         {ok, UserMeta} ->
                             lists:foldl(fun({K,V},Acc) ->
-                                            wrq:merge_resp_headers([{K,V}],Acc)
+                                            wrq:merge_resp_headers([{?HEAD_USERMETA_PREFIX ++ K,V}],Acc)
                                         end,
                                         LinkRD, UserMeta);
                         error -> LinkRD
