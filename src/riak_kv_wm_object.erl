@@ -663,7 +663,12 @@ extract_user_meta(RD) ->
                         string:to_lower(riak_kv_wm_utils:any_to_list(K)))
                 end,
                 mochiweb_headers:to_list(wrq:req_headers(RD))),
-    [{string:sub_string(A, 13),B} || {A,B} <- List].
+    case application:get_env(riak_kv, strip_http_user_metadata_prefix) of
+        {ok, true} ->
+            [{string:sub_string(A, 13),B} || {A,B} <- List];
+        _ ->
+            List
+    end.
 
 %% @spec multiple_choices(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
@@ -713,7 +718,12 @@ produce_doc_body(RD, Ctx) ->
             UserMetaRD = case dict:find(?MD_USERMETA, MD) of
                         {ok, UserMeta} ->
                             lists:foldl(fun({K,V},Acc) ->
-                                            wrq:merge_resp_headers([{?HEAD_USERMETA_PREFIX ++ K,V}],Acc)
+                                            case application:get_env(riak_kv, strip_http_user_metadata_prefix) of
+                                                {ok, true} ->
+                                                    wrq:merge_resp_headers([{?HEAD_USERMETA_PREFIX ++ K,V}],Acc);
+                                                _ ->
+                                                    wrq:merge_resp_headers([{K,V}],Acc)
+                                            end
                                         end,
                                         LinkRD, UserMeta);
                         error -> LinkRD
