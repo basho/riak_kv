@@ -40,7 +40,7 @@
 %% ------------------------------------------------------------------
 
 -export([get_fsm_spawned/1, put_fsm_spawned/1,
-         gets_active/0, spawned/2]).
+         gets_active/0, puts_active/0, spawned/2]).
 
 %% ------------------------------------------------------------------
 %% API Function Definitions
@@ -78,3 +78,7 @@ put_fsm_spawned(Pid) ->
 gets_active() ->
     riak_kv_stat:active_gets().
 
+%% Returns the last count for the put fms's in progress.
+-spec puts_active() -> non_neg_integer().
+puts_active() ->
+    riak_kv_stat:active_puts().
