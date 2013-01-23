@@ -241,12 +241,22 @@ new({Index,TreeId}, LinkedStore, Options) ->
 
 -spec close(hashtree()) -> hashtree().
 close(State) ->
-    eleveldb:close(State#state.ref),
-    State.
+    close_iterator(State#state.itr),
+    catch eleveldb:close(State#state.ref),
+    State#state{itr=undefined}.
+
+close_iterator(Itr) ->
+    try
+        eleveldb:iterator_close(Itr)
+    catch
+        _:_ ->
+            ok
+    end.
 
 -spec destroy(hashtree()) -> hashtree().
 destroy(State) ->
-    eleveldb:close(State#state.ref),
+    %% Assumption: close was already called on all hashtrees that
+    %%             use this LevelDB instance,
     ok = eleveldb:destroy(State#state.path, []),
     State.
 
