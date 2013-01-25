@@ -100,7 +100,7 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
     end.
 
 -spec new_vclock() -> dvvset:clock().
-new_vclock() -> dvvset:new2([]).
+new_vclock() -> [].
 
 %% Ensure the incoming term is a riak_object.
 -spec ensure_robject(any()) -> riak_object().
@@ -321,9 +321,9 @@ get_update_value(#r_object{updatevalue=UV}) -> UV.
 %% obtained in a get_vclock.
 -spec set_vclock(riak_object(), dvvset:vector()) -> riak_object().
 set_vclock(Object, Clock) ->
-    Vs = get_values(apply_updates(Object)),
+    Vs = dvvset:values(get_contents(apply_updates(Object))),
     %% extract the causal information
-    VersionVector = dvvset:join(Clock),
+    %%VersionVector = dvvset:join(Clock),
     %% set the contents to a new clock with the same causal information 
     %% as the version vector, but with the new list of values.
     Object#r_object{contents=dvvset:new2(VersionVector,Vs)}.

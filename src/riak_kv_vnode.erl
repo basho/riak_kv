@@ -1076,7 +1076,7 @@ do_get_vclocks(KeyList,_State=#state{mod=Mod,modstate=ModState}) ->
 %% @private
 do_get_vclock({Bucket, Key}, Mod, ModState) ->
     case Mod:get(Bucket, Key, ModState) of
-        {error, not_found, _UpdModState} -> []; %riak_object:new_vclock();
+        {error, not_found, _UpdModState} -> riak_object:new_vclock();
         {ok, Val, _UpdModState} -> riak_object:get_vclock(binary_to_term(Val))
     end.
 
