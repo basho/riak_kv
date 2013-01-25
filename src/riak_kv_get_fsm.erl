@@ -466,10 +466,10 @@ update_stats(_, #state{ bkey = {Bucket, _}, tracked_bucket = StatTracked, calcul
 %% calling term_to_binary/1, but it should be easier on memory,
 %% especially for objects with large values.
 calculate_objsize(Bucket, Obj) ->
-    Contents = riak_object:get_contents(Obj),
+    Contents = riak_object:get_md_values(Obj),
     size(Bucket) +
         size(riak_object:key(Obj)) +
-        size(term_to_binary(riak_object:get_vclock(Obj,false))) +
+        size(term_to_binary(riak_object:get_vclock(Obj))) +
         lists:sum([size(term_to_binary(MD)) + value_size(Value) || {MD, Value} <- Contents]).
 
 value_size(Value) when is_binary(Value) -> size(Value);

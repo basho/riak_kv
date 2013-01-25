@@ -66,7 +66,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
             case C:get(Bucket,Key,[{r,R},{pr,PR},{timeout,Timeout}]) of
                 {ok, OrigObj} ->
                     RemainingTime = Timeout - (riak_core_util:moment() - RealStartTime),
-                    delete(ReqId,Bucket,Key,Options,RemainingTime,Client,ClientId,riak_object:get_vclock(OrigObj, false));
+                    delete(ReqId,Bucket,Key,Options,RemainingTime,Client,ClientId,riak_object:get_vclock(OrigObj));
                 {error, notfound} ->
                     ?DTRACE(?C_DELETE_INIT1, [-2], []),
                     Client ! {ReqId, {error, notfound}};
@@ -85,7 +85,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
         {W, PW, DW} ->
             Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(?MD_DELETED,
                                                                  "true", dict:new())),
-            Tombstone = riak_object:set_vclock(Obj0, VClock),
+            Tombstone = riak_object:set_vclock(Obj0, VClock), %% same value as current Obj0
             {ok,C} = riak:local_client(ClientId),
             Reply = C:put(Tombstone, [{w,W},{pw,PW},{dw, DW},{timeout,Timeout}]),
             Client ! {ReqId, Reply},

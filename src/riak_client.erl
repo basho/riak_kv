@@ -254,7 +254,7 @@ delete(Bucket,Key,Options,Timeout) when is_list(Options) ->
 delete(Bucket,Key,RW,Timeout) ->
     delete(Bucket,Key,[{rw, RW}], Timeout).
 
-%% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock:vclock()) ->
+%% @spec delete_vclock(riak_object:bucket(), riak_object:key(), dvvset:clock()) ->
 %%        ok |
 %%       {error, too_many_fails} |
 %%       {error, notfound} |
@@ -266,7 +266,7 @@ delete(Bucket,Key,RW,Timeout) ->
 delete_vclock(Bucket,Key,VClock) ->
     delete_vclock(Bucket,Key,VClock,[{rw,default}],?DEFAULT_TIMEOUT).
 
-%% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock::vclock(), RW :: integer()) ->
+%% @spec delete_vclock(riak_object:bucket(), riak_object:key(), dvvset:clock(), RW :: integer()) ->
 %%        ok |
 %%       {error, too_many_fails} |
 %%       {error, notfound} |
@@ -280,7 +280,7 @@ delete_vclock(Bucket,Key,VClock,Options) when is_list(Options) ->
 delete_vclock(Bucket,Key,VClock,RW) ->
     delete_vclock(Bucket,Key,VClock,[{rw, RW}],?DEFAULT_TIMEOUT).
 
-%% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock:vclock(), RW :: integer(),
+%% @spec delete_vclock(riak_object:bucket(), riak_object:key(), dvvset:clock(), RW :: integer(),
 %%           TimeoutMillisecs :: integer()) ->
 %%        ok |
 %%       {error, too_many_fails} |

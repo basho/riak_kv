@@ -248,7 +248,7 @@ decode_object(RO) ->
 copy_object(RO, B, K) ->
     {ok, RC} = riak:local_client(),
     NO1 = riak_object:new(B, K, <<>>),
-    NO2 = riak_object:set_contents(NO1, riak_object:get_vclock(RO,true)),
+    NO2 = riak_object:set_contents(NO1, riak_object:get_contents(RO)),
     RC:put(NO2).
 
 %% Force writes to fail to test failure behavior
@@ -307,16 +307,16 @@ test_migration() ->
     {ok, []} = riak_kv_encoding_migrate:delete_migrated_objects(EObjs),
     {not_needed, [], []} = riak_kv_encoding_migrate:check_cluster(),
 
-    C1 = riak_object:get_contents(O2),
+    C1 = riak_object:get_md_values(O2),
 
-    C2 = riak_object:get_contents(O4),
+    C2 = riak_object:get_md_values(O4),
 
     {ok, MO1} = RC:get(<<"me@mine">>, <<"key">>),
-    nearly_equal_contents(C1, riak_object:get_contents(MO1)),
+    nearly_equal_contents(C1, riak_object:get_md_values(MO1)),
     true = riak_object:descendant(MO1, O2),
 
     {ok, MO2} = RC:get(<<"bucket">>, <<"key@">>),
-    nearly_equal_contents(C2, riak_object:get_contents(MO2)),
+    nearly_equal_contents(C2, riak_object:get_md_values(MO2)),
     true = riak_object:descendant(MO2, O4),
 
     %% Use precommit hook to test failure scenarios

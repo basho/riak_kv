@@ -403,7 +403,7 @@ multipart_encode_body(NestedResults, Ctx) when is_list(NestedResults) ->
 multipart_encode_body(RiakObject, Ctx) ->
     APIVersion = Ctx#ctx.api_version,
     Prefix = Ctx#ctx.prefix,
-    [{MD, V}|Rest] = riak_object:get_contents(RiakObject),
+    [{MD, V}|Rest] = riak_object:get_md_values(RiakObject),
     {VHead, Vclock} = riak_kv_wm_utils:vclock_header(RiakObject),
     [VHead,": ",Vclock,"\r\n",
 

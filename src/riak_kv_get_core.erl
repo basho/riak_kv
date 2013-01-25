@@ -118,7 +118,7 @@ response(GetCore = #getcore{r = R, num_ok = NumOk, num_notfound = NumNotFound,
                         ok ->
                             Merged; % {ok, MObj}
                         tombstone when DeletedVClock ->
-                            {error, {deleted, riak_object:get_vclock(MObj,false)}};
+                            {error, {deleted, riak_object:get_vclock(MObj)}};
                         _ -> % tombstone or notfound
                             {error, notfound}
                     end;

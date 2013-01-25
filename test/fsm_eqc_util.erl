@@ -141,7 +141,7 @@ build_riak_obj(B,K,Vc,Val,tombstone) ->
     add_tombstone(Obj).
 
 add_tombstone(Obj) ->
-    [{M,V}] = riak_object:get_contents(Obj),
+    [{M,V}] = riak_object:get_md_values(Obj),
     NewM = dict:store(<<"X-Riak-Deleted">>, true, M),
     riak_object:set_contents(Obj, [{NewM, V}]).
                 

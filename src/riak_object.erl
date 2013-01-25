@@ -43,7 +43,7 @@
 -record(r_object, {
           bucket :: bucket(),
           key :: key(),
-          contents :: compactdvv:clock(), % [{id, count, [riak_content()]}]
+          contents :: dvvset:clock(), %% a container for riak_content()'s, with built-in causal information 
           updatemetadata=dict:store(clean, true, dict:new()) :: dict(),
           updatevalue :: term()
          }).
@@ -55,16 +55,15 @@
 -type index_value() :: integer() | binary().
 
 -define(MAX_KEY_SIZE, 65536).
--define(NULLID,null).
 
 -export([new/3, new/4, ensure_robject/1, equal/2, new_vclock/0, equal_vclock/2]).
 -export([increment_vclock/2, increment_vclock/3, update_vclock/4, update_vclock/3]).
 -export([reconcile/2, descendant/2, strict_descendant/2, key/1]).
 -export([get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
--export([get_vclock/2, update_value/2, update_metadata/2, bucket/1, value_count/1]).
+-export([get_vclock/1, update_value/2, update_metadata/2, bucket/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([apply_updates/1, syntactic_merge/2, compare_content_dates/2, set_lww/1]).
--export([to_json/1, from_json/1]).
+-export([get_md_values/1,to_json/1, from_json/1]).
 -export([index_specs/1, diff_index_specs/2]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 
@@ -90,18 +89,18 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
         false ->
             case MD of
                 no_initial_metadata ->
-                    Contents = compactdvv:new(?NULLID,[#r_content{metadata=dict:new(), value=V}]),
+                    Contents = dvvset:new(#r_content{metadata=dict:new(), value=V}),
                     #r_object{bucket=B,key=K,
                               contents=Contents};
                 _ ->
-                    Contents = compactdvv:new(?NULLID,[#r_content{metadata=MD, value=V}]),
+                    Contents = dvvset:new(#r_content{metadata=MD, value=V}),
                     #r_object{bucket=B,key=K,updatemetadata=MD,
                               contents=Contents}
             end
     end.
 
--spec new_vclock() -> compactdvv:clock().
-new_vclock() -> compactdvv:new(?NULLID,[]).
+-spec new_vclock() -> dvvset:clock().
+new_vclock() -> dvvset:new2([]).
 
 %% Ensure the incoming term is a riak_object.
 -spec ensure_robject(any()) -> riak_object().
@@ -109,15 +108,15 @@ ensure_robject(Obj = #r_object{}) -> Obj.
 
 -spec strict_descendant(riak_object(), riak_object()) -> boolean().
 strict_descendant(#r_object{contents=C1},#r_object{contents=C2}) ->
-    compactdvv:strict_descendant(C1,C2).
+    dvvset:less(C2,C1).
 
 -spec descendant(riak_object(), riak_object()) -> boolean().
 descendant(#r_object{contents=C1},#r_object{contents=C2}) ->
-    compactdvv:equal(C1,C2) orelse compactdvv:strict_descendant(C1,C2).
+    dvvset:equal(C1,C2) orelse dvvset:less(C2,C1).
 
 -spec equal_vclock(riak_object(), riak_object()) -> boolean().
 equal_vclock(#r_object{contents=C1},#r_object{contents=C2}) ->
-    compactdvv:equal(C1,C2).
+    dvvset:equal(C1,C2).
 
 -spec equal(riak_object(), riak_object()) -> boolean().
 %% @doc Deep (expensive) comparison of Riak objects.
@@ -132,8 +131,8 @@ equal2(Obj1,Obj2) ->
     (UM1 =:= UM2)
         andalso (Obj1#r_object.updatevalue =:= Obj2#r_object.updatevalue)
         andalso begin
-                    Cont1 = lists:sort(get_contents(Obj1)),
-                    Cont2 = lists:sort(get_contents(Obj2)),
+                    Cont1 = lists:sort(get_md_values(Obj1)),
+                    Cont2 = lists:sort(get_md_values(Obj2)),
                     equal_contents(Cont1,Cont2)
                 end.
 equal_contents([],[]) -> true;
@@ -157,15 +156,8 @@ equal_contents([{M1,V1}|R1],[{M2,V2}|R2]) ->
 %       X-Riak-Last-Modified header.
 -spec reconcile([riak_object()], boolean()) -> riak_object().
 reconcile(RObjs, AllowMultiple) ->
-    %% filter clocks with null as id, except if there aren't any non-null ids
-    AllContents = 
-        [lists:filter(fun ({I,_,_}) -> I =/= ?NULLID end, O#r_object.contents) || O <- RObjs],
-    AllContents2 = 
-        case lists:append(AllContents) of 
-            [] -> [O#r_object.contents || O <- RObjs]; 
-            _ -> AllContents 
-        end,
-    SyncedContents = compactdvv:sync(AllContents2),
+    AllContents = [O#r_object.contents || O <- RObjs],
+    SyncedContents = dvvset:sync(AllContents),
     Contents = case AllowMultiple of
                    false -> most_recent_content(SyncedContents);
                    true -> SyncedContents
@@ -177,10 +169,6 @@ reconcile(RObjs, AllowMultiple) ->
 
 -spec syntactic_merge(riak_object(), riak_object()) -> riak_object().
 syntactic_merge(CurrentObj, NewObj) ->
-    %% Paranoia in case objects were incorrectly stored
-    %% with update information.  Vclock is not updated
-    %% but since no data is lost the objects will be
-    %% fixed if rewritten.
     UCurr = apply_updates(CurrentObj),
     UNew = apply_updates(NewObj),
     reconcile([UNew, UCurr], true).
@@ -192,7 +180,7 @@ set_lww(Object=#r_object{contents=C}) ->
 
 -spec most_recent_content(riak_content()) -> riak_content().
 most_recent_content(Contents) ->
-    compactdvv:lww(fun riak_object:compare_content_dates/2, Contents).
+    dvvset:lww(fun riak_object:compare_content_dates/2, Contents).
 
 -spec compare_content_dates(riak_content(), riak_content()) -> boolean().
 compare_content_dates(C1,C2) ->
@@ -225,7 +213,7 @@ compare_content_dates(C1,C2) ->
 %       update_metadata() calls) to this riak_object.
 -spec apply_updates(riak_object()) -> riak_object().
 apply_updates(Object=#r_object{}) ->
-    CurrentContents = get_vclock(Object,true),
+    CurrentContents = get_contents(Object),
     UpdatedContents = 
         case Object#r_object.updatevalue of
             undefined ->
@@ -233,7 +221,7 @@ apply_updates(Object=#r_object{}) ->
                     {ok,_} -> CurrentContents; %% no changes in values or metadata
                     error -> 
                         NewMD = dict:erase(clean,Object#r_object.updatemetadata),
-                        compactdvv:map_values(
+                        dvvset:map(
                             fun (R) -> #r_content{metadata=NewMD, value=R#r_content.value} end,
                             CurrentContents)
                 end;
@@ -246,7 +234,11 @@ apply_updates(Object=#r_object{}) ->
                      end,
                 VL = Object#r_object.updatevalue,
                 NewR = #r_content{metadata=MD,value=VL},
-                compactdvv:set_value(CurrentContents,NewR)
+                %% extract the causal information
+                VersionVector = dvvset:join(CurrentContents),
+                %% construct a new clock with the same causal information as the previous,
+                %% but with the new value only.
+                dvvset:new(VersionVector,NewR)
         end,
     Object#r_object{contents=UpdatedContents,
                     updatemetadata=dict:store(clean, true, dict:new()),
@@ -261,51 +253,51 @@ bucket(#r_object{bucket=Bucket}) -> Bucket.
 key(#r_object{key=Key}) -> Key.
 
 %% @doc  Return the logical clock for this riak_object.
--spec get_vclock(riak_object(), boolean()) -> compactdvv:clock().
-get_vclock(#r_object{contents=Clock}, _WithContents = true) -> Clock;
-get_vclock(#r_object{contents=Clock}, _WithContents = false) -> compactdvv:join(Clock).
-
+-spec get_vclock(riak_object()) -> dvvset:vector().
+get_vclock(#r_object{contents=Clock}) -> dvvset:join(Clock).
 
 %% @doc  Return the number of values (siblings) of this riak_object.
 -spec value_count(riak_object()) -> non_neg_integer().
-value_count(#r_object{contents=Contents}) -> compactdvv:value_count(Contents).
+value_count(#r_object{contents=Contents}) -> dvvset:size(Contents).
 
 %% @doc  Return the contents (a list of {metadata, value} tuples) for
 %%       this riak_object.
--spec get_contents(riak_object()) -> [riak_content()].
-get_contents(#r_object{contents=Contents}) -> 
-    Rconts = compactdvv:get_values(Contents),
-    [{C#r_content.metadata, C#r_content.value} ||
-         C <- Rconts].
+-spec get_md_values(riak_object()) -> [{dict(), term()}].
+get_md_values(#r_object{contents=Contents}) ->
+    [{C#r_content.metadata, C#r_content.value} || C <- dvvset:values(Contents)].
+
+%% @doc  Return the contents (dvvset:clock()) as is.
+-spec get_contents(riak_object()) -> dvvset:clock().
+get_contents(#r_object{contents=Contents}) -> Contents.
 
 %% @doc  Assert that this riak_object has no siblings and return its associated
 %%       metadata.  This function will fail with a badmatch error if the
 %%       object has siblings (value_count() > 1).
 -spec get_metadata(riak_object()) -> dict().
 get_metadata(#r_object{contents=Contents}) ->
-                                                % this blows up intentionally (badmatch) if more than one content value!
-    1 = compactdvv:value_count(Contents),
-    V = compactdvv:get_last_value(Contents),
+    % this blows up intentionally (badmatch) if more than one content value!
+    1 = dvvset:size(Contents),
+    V = dvvset:last(fun riak_object:compare_content_dates/2, Contents),
     V#r_content.metadata.
 
 %% @doc  Return a list of the metadata values for this riak_object.
 -spec get_metadatas(riak_object()) -> [dict()].
 get_metadatas(#r_object{contents=C}) ->
-    [V#r_content.metadata || V <- compactdvv:get_values(C)].
+    [V#r_content.metadata || V <- dvvset:values(C)].
 
 %% @doc  Return a list of object values for this riak_object.
 -spec get_values(riak_object()) -> [value()].
 get_values(#r_object{contents=C}) ->
-    [V#r_content.value || V <- compactdvv:get_values(C)].
+    [V#r_content.value || V <- dvvset:values(C)].
 
 %% @doc  Assert that this riak_object has no siblings and return its associated
 %%       value.  This function will fail with a badmatch error if the object
 %%       has siblings (value_count() > 1).
 -spec get_value(riak_object()) -> value().
 get_value(#r_object{contents=C}) ->
-                                                % this blows up intentionally (badmatch) if more than one content value!
-    1 = compactdvv:value_count(C),
-    V = compactdvv:get_last_value(C),
+    % this blows up intentionally (badmatch) if more than one content value!
+    1 = dvvset:size(C),
+    V = dvvset:last(fun riak_object:compare_content_dates/2, C),
     V#r_content.value.
 
 %% @doc  Set the updated metadata of an object to M.
@@ -325,16 +317,16 @@ get_update_metadata(#r_object{updatemetadata=UM}) -> UM.
 -spec get_update_value(riak_object()) -> value().
 get_update_value(#r_object{updatevalue=UV}) -> UV.
 
-%% @doc  INTERNAL USE ONLY.  Set the vclock of riak_object O to V.
--spec set_vclock(riak_object(), compactdvv:clock()) -> riak_object().
-set_vclock(Object=#r_object{contents=Contents}, Clock) -> 
-    C = case Object#r_object.updatevalue of
-        undefined ->
-            V = compactdvv:get_last_value(Contents),
-            compactdvv:set_value(Clock,V);
-        _ -> compactdvv:set_value(Clock,Object#r_object.updatevalue)
-    end,
-    Object#r_object{contents=C}.
+%% @doc Set a clock of the riak_object using a version vector,
+%% obtained in a get_vclock.
+-spec set_vclock(riak_object(), dvvset:vector()) -> riak_object().
+set_vclock(Object, Clock) ->
+    Vs = get_values(apply_updates(Object)),
+    %% extract the causal information
+    VersionVector = dvvset:join(Clock),
+    %% set the contents to a new clock with the same causal information 
+    %% as the version vector, but with the new list of values.
+    Object#r_object{contents=dvvset:new2(VersionVector,Vs)}.
 
 %% @doc  INTERNAL USE ONLY.  Set the contents of riak_object 
 %%       to the Contents. Normal clients should use the
@@ -352,17 +344,11 @@ increment_vclock(Object=#r_object{}, Id, _TS) ->
 %% @doc  Increment the entry for Id in O's vclock (ignore timestamp since we are not pruning).
 -spec increment_vclock(riak_object(), any()) -> riak_object().
 increment_vclock(Object=#r_object{contents=Conts}, Id) ->
-    Conts2 = lists:filter(fun ({I,_,_}) -> I =/= ?NULLID end, Conts),
-    Value = compactdvv:get_last_value(Conts),
-    NewConts = compactdvv:syncupdate(Conts2, Id, Value),
-    set_contents(Object, NewConts).
+    Object#r_object{contents=dvvset:update(Conts, Id)}.
 
 -spec update_vclock(riak_object(), riak_object(), any()) -> riak_object().
 update_vclock(ObjectC=#r_object{contents=ContC}, #r_object{contents=ContR}, Id) ->
-    ContC2 = lists:filter(fun ({I,_,_}) -> I =/= ?NULLID end, ContC),
-    Value = compactdvv:get_last_value(ContC),
-    NewConts = compactdvv:syncupdate(ContC2, ContR, Id, Value),
-    set_contents(ObjectC, NewConts).
+    ObjectC#r_object{contents=dvvset:update(ContC, ContR, Id)}.
 
 -spec update_vclock(riak_object(), riak_object(), any(), non_neg_integer()) -> riak_object().
 update_vclock(ObjectC=#r_object{}, ObjectR=#r_object{}, Id, _TS) ->
@@ -428,29 +414,38 @@ assemble_index_specs(Indexes, IndexOp) ->
 %% @doc Converts a riak_object into its JSON equivalent
 -spec to_json(riak_object()) -> {struct, list(any())}.
 to_json(Obj=#r_object{}) ->
-    {struct, 
-      [
-        {<<"bucket">>, bucket(Obj)},
+    {CV,AV} = get_contents(Obj),
+    {struct,
+      [ {<<"bucket">>, bucket(Obj)},
         {<<"key">>, key(Obj)},
         {<<"contents">>,
-          [
-            {struct,
-              [
-                {<<"id">>, riak_kv_wm_utils:encode_vclock(Id)},
-                {<<"counter">>, riak_kv_wm_utils:encode_vclock(Counter)},
-                {<<"values">>,
-                  [
-                    {struct, 
-                      [
-                        {<<"metadata">>, jsonify_metadata(Rcont#r_content.metadata)},
-                        {<<"value">>, Rcont#r_content.value}
-                      ]
-                    } || Rcont <- Values
-                  ]
-                }
-              ]
-            } || {Id, Counter, Values} <- get_vclock(Obj,true)
-          ]
+          {  struct,
+            [ {<<"causal_values">>,
+                [ {struct,
+                    [ {<<"id">>, riak_kv_wm_utils:encode_vclock(Id)},
+                      {<<"counter">>, riak_kv_wm_utils:encode_vclock(Counter)},
+                      {<<"values">>,
+                        [ {struct, 
+                            [ {<<"metadata">>, jsonify_metadata(Rcont#r_content.metadata)},
+                              {<<"value">>, Rcont#r_content.value}
+                            ]
+                          } || Rcont <- Values
+                        ]
+                      }
+                    ]
+                  } || {Id, Counter, Values} <- CV
+                ]
+              },
+              {<<"anonym_values">>,
+                [ {struct, 
+                    [ {<<"metadata">>, jsonify_metadata(Rcont#r_content.metadata)},
+                      {<<"value">>, Rcont#r_content.value}
+                    ]
+                  } || Rcont <- AV
+                ]
+              }
+            ]
+          }
         }
       ]
     }.
@@ -461,9 +456,9 @@ from_json({struct, Obj}) ->
 from_json(Obj) ->
     Bucket = proplists:get_value(<<"bucket">>, Obj),
     Key = proplists:get_value(<<"key">>, Obj),
-    Contents = proplists:get_value(<<"contents">>, Obj),
+    C = proplists:get_value(<<"contents">>, Obj),
     RObj0 = new(Bucket, Key, <<"">>),
-    set_contents(RObj0, dejsonify_contents(Contents, [])).
+    set_contents(RObj0, dejsonify_contents(C)).
 
 jsonify_metadata(MD) ->
     MDJS = fun({LastMod, Now={_,_,_}}) ->
@@ -521,6 +516,13 @@ jsonify_proplist(List) ->
                                              dict:store(JSONKey, JSONVal, Dict)
                                      end
                              end, dict:new(), List)).
+
+
+
+dejsonify_contents({struct, [{<<"causal_values">>, V},{<<"anonym_values">>, A}]}) ->
+    V1 = dejsonify_contents(V,[]),
+    A1 = dejsonify_values(A),
+    {V1,A1}.
 
 
 dejsonify_contents([], Accum) ->
@@ -614,7 +616,7 @@ merge2_test() ->
     O1 = riak_object:increment_vclock(object_test(), node1),
     O2 = riak_object:increment_vclock(riak_object:new(B,K,V), node2),
     O3 = riak_object:syntactic_merge(O1, O2),
-    [node1, node2] = lists:sort([N || {N,_,_} <- riak_object:get_vclock(O3,false)]),
+    [node1, node2] = dvvset:ids(riak_object:get_contents(O3)),
     2 = riak_object:value_count(O3).
 
 merge3_test() ->
@@ -661,8 +663,9 @@ inequality_value_test() ->
 
 inequality_multivalue_test() ->
     O1 = riak_object:new(<<"test">>, <<"a">>, "value"),
-    [C] = riak_object:get_vclock(O1,true),
-    O1p = riak_object:set_contents(O1, [C,C]),
+    C = riak_object:get_contents(O1),
+    1 = riak_object:value_count(O1),
+    O1p = riak_object:set_contents(O1, {[C,C],[]}),
     false = riak_object:equal(O1, O1p),
     false = riak_object:equal(O1p, O1).
 
@@ -776,26 +779,35 @@ jsonify_round_trip_test() ->
                          {?MD_INDEX, Indexes},
                          {?MD_LINKS, Links}]),
     O = riak_object:new(<<"b">>, <<"k">>, <<"{\"a\":1}">>, MD),
+    [V] = dvvset:values(get_contents(O)),
     O2 = from_json(to_json(O)),
     ?assertEqual(bucket(O), bucket(O2)),
     ?assertEqual(key(O), key(O2)),
-    ?assert(compactdvv:equal(get_vclock(O,true), get_vclock(O2,true))),
     ?assertEqual(lists:sort(Meta), lists:sort(dict:fetch(?MD_USERMETA, get_metadata(O2)))),
     ?assertEqual(Links, dict:fetch(?MD_LINKS, get_metadata(O2))),
     ?assertEqual(lists:sort(Indexes), lists:sort(index_data(O2))),
-    ?assertEqual(get_contents(O), get_contents(O2)),
     O3 = increment_vclock(O,"a"),
-    O4 = increment_vclock(O3,"a"),
-    O5 = update_vclock(O4,O3,"b"),
-    O3b = from_json(to_json(O3)),
-    O4b = from_json(to_json(O4)),
+    O3a = set_contents(O3, dvvset:new(dvvset:join(get_contents(O3)),V)),
+    O4 = increment_vclock(O3a,"a"),
+    O4a = set_contents(O4, dvvset:new(dvvset:join(get_contents(O4)),V)),
+    O5 = update_vclock(O4a,O3a,"b"),
+    O3b = from_json(to_json(O3a)),
+    O4b = from_json(to_json(O4a)),
     O5b = from_json(to_json(O5)),
-    ?assert(compactdvv:equal(get_vclock(O3,true), get_vclock(O3b,true))),
-    ?assertEqual(get_contents(O3), get_contents(O3b)),
-    ?assert(compactdvv:equal(get_vclock(O4,true), get_vclock(O4b,true))),
-    ?assertEqual(get_contents(O4), get_contents(O4b)),
-    ?assert(compactdvv:equal(get_vclock(O5,true), get_vclock(O5b,true))),
-    ?assertEqual(get_contents(O5), get_contents(O5b)).
+    io:format("~nO1:~p~n",[O3a]),
+    io:format("~nO3:~p~n",[O3b]),
+    ?assert(dvvset:equal(get_contents(O),   get_contents(O2))),
+    ?assert(dvvset:equal(get_contents(O3a), get_contents(O3b))),
+    ?assert(dvvset:equal(get_contents(O4a), get_contents(O4b))),
+    ?assert(dvvset:equal(get_contents(O5),  get_contents(O5b))),
+    ?assertEqual(get_contents(O),           get_contents(O2)),
+    ?assertEqual(get_contents(O3a),         get_contents(O3b)),
+    ?assertEqual(get_contents(O4a),         get_contents(O4b)),
+    ?assertEqual(get_contents(O5),          get_contents(O5b)),
+    ?assertEqual(get_md_values(O),          get_md_values(O2)),
+    ?assertEqual(get_md_values(O3a),        get_md_values(O3b)),
+    ?assertEqual(get_md_values(O4a),        get_md_values(O4b)),
+    ?assertEqual(get_md_values(O5),         get_md_values(O5b)).
 
 
 check_most_recent({V1, T1, D1}, {V2, T2, D2}) ->
@@ -805,15 +817,15 @@ check_most_recent({V1, T1, D1}, {V2, T2, D2}) ->
     O1 = riak_object:new(<<"test">>, <<"a">>, V1, MD1),
     O2 = riak_object:new(<<"test">>, <<"a">>, V2, MD2),
 
-    C1 = hd(O1#r_object.contents),
-    C2 = hd(O2#r_object.contents),
+    C1 = (dvvset:last(fun riak_object:compare_content_dates/2, get_contents(O1))),
+    C2 = (dvvset:last(fun riak_object:compare_content_dates/2, get_contents(O2))),
 
-    C3 = most_recent_content([C1, C2]),
-    C4 = most_recent_content([C2, C1]),
+    C3 = most_recent_content(dvvset:new2([C1, C2])),
+    C4 = most_recent_content(dvvset:new2([C2, C1])),
 
     ?assertEqual(C3, C4),
 
-    (compactdvv:get_last_value(C3))#r_content.value.
+    (dvvset:last(fun riak_object:compare_content_dates/2, C3))#r_content.value.
 
 
 determinstic_most_recent_test() ->

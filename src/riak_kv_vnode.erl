@@ -814,6 +814,9 @@ prepare_put(#state{vnodeid=VId,
             {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
         {ok, Val, _UpdModState} ->
             OldObj = binary_to_term(Val),
+
+    io:format("~nO2:~p~n",[OldObj]),
+    io:format("~nO3:~p~n",[RObj]),
             case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs};
@@ -883,13 +886,7 @@ enforce_allow_mult(Obj, BProps) ->
 put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
     {newobj, UpdObj};
 put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
-    ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
-    case riak_object:equal_vclock(ResObj,CurObj) of
-        true ->
-            {oldobj, CurObj};
-        false ->
-            {newobj, ResObj}
-    end;
+    {newobj, riak_object:syntactic_merge(CurObj, UpdObj)};
 put_merge(true, true, _CurObj, UpdObj, VId, StartTime) -> % coord=true, LWW=true
     {newobj, riak_object:increment_vclock(UpdObj, VId, StartTime)};
 put_merge(true, false, CurObj, UpdObj, VId, StartTime) ->
@@ -1079,8 +1076,8 @@ do_get_vclocks(KeyList,_State=#state{mod=Mod,modstate=ModState}) ->
 %% @private
 do_get_vclock({Bucket, Key}, Mod, ModState) ->
     case Mod:get(Bucket, Key, ModState) of
-        {error, not_found, _UpdModState} -> riak_object:new_vclock();
-        {ok, Val, _UpdModState} -> riak_object:get_vclock(binary_to_term(Val),false)
+        {error, not_found, _UpdModState} -> []; %riak_object:new_vclock();
+        {ok, Val, _UpdModState} -> riak_object:get_vclock(binary_to_term(Val))
     end.
 
 %% @private
@@ -1410,6 +1407,7 @@ backend_with_known_key(BackendMod) ->
     B = <<"f">>,
     K = <<"b">>,
     O = riak_object:new(B, K, <<"z">>),
+    io:format("~nO1:~p~n",[O]),
     {noreply, S2} = handle_command(?KV_PUT_REQ{bkey={B,K},
                                                object=O,
                                                req_id=123,

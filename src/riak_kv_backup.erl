@@ -153,7 +153,7 @@ read_and_restore_function(Client, BinTerm) ->
 %% If the bucket name is an atom, convert it to a binary...
 make_binary_bucket(Bucket, Key, OriginalObj) when is_atom(Bucket) ->
     Bucket1 = list_to_binary(atom_to_list(Bucket)),
-    OriginalContents = riak_object:get_vclock(OriginalObj,true),
+    OriginalContents = riak_object:get_contents(OriginalObj),
 
     % We can't change the bucket name without creating a new object...
     NewObj = riak_object:new(Bucket1, Key, placeholder),

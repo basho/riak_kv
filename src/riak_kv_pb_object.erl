@@ -111,11 +111,11 @@ process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    make_option(notfound_ok, NFOk) ++
                    make_option(basic_quorum, BQ)) of
         {ok, O} ->
-            case riak_object:equal_vclock(erlify_rpbvc(VClock),riak_object:get_vclock(O,false)) of
+            case riak_object:equal_vclock(erlify_rpbvc(VClock),riak_object:get_vclock(O)) of
                 true ->
                     {reply, #rpbgetresp{unchanged = true}, State};
                 _ ->
-                    Contents = riak_object:get_contents(O),
+                    Contents = riak_object:get_md_values(O),
                     PbContent = case Head of
                                     true ->
                                         %% Remove all the 'value' fields from the contents
@@ -127,7 +127,7 @@ process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                                         riak_pb_kv_codec:encode_contents(Contents)
                                 end,
                     {reply, #rpbgetresp{content = PbContent,
-                                        vclock = pbify_rpbvc(riak_object:get_vclock(O,false))}, State}
+                                        vclock = pbify_rpbvc(riak_object:get_vclock(O))}, State}
             end;
         {error, {deleted, TombstoneVClock}} ->
             %% Found a tombstone - return its vector clock so it can
@@ -146,7 +146,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
         {ok, _} when NoneMatch ->
             {error, "match_found", State};
         {ok, O} when NotMod ->
-            case erlify_rpbvc(PbVC) == riak_object:get_vclock(O,false) of
+            case erlify_rpbvc(PbVC) == riak_object:get_vclock(O) of
                 true ->
                     process(Req#rpbputreq{if_not_modified=undefined,
                                           if_none_match=undefined},
@@ -203,7 +203,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
         ok ->
             {reply, #rpbputresp{}, State};
         {ok, Obj} ->
-            Contents = riak_object:get_contents(Obj),
+            Contents = riak_object:get_md_values(Obj),
             PbContents = case ReturnHead of
                              true ->
                                  %% Remove all the 'value' fields from the contents
@@ -215,7 +215,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                                  riak_pb_kv_codec:encode_contents(Contents)
                          end,
             PutResp = #rpbputresp{content = PbContents,
-                                  vclock = pbify_rpbvc(riak_object:get_vclock(Obj,false)),
+                                  vclock = pbify_rpbvc(riak_object:get_vclock(Obj)),
                                   key = ReturnKey
                                  },
             {reply, PutResp, State};

@@ -149,7 +149,7 @@ multipart_encode_body(Prefix, Bucket, {MD, V}, APIVersion) ->
 %%      into something suitable for an HTTP header
 vclock_header(Doc) ->
     {?HEAD_VCLOCK,
-        encode_vclock(riak_object:get_vclock(Doc,false))}.
+        encode_vclock(riak_object:get_vclock(Doc))}.
 
 encode_vclock(VClock) ->
     binary_to_list(base64:encode(zlib:zip(term_to_binary(VClock)))).

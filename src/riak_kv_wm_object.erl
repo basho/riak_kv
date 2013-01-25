@@ -757,7 +757,7 @@ produce_multipart_body(RD, Ctx=#ctx{doc={ok, Doc}, bucket=B, prefix=P}) ->
     Boundary = riak_core_util:unique_id_62(),
     {[[["\r\n--",Boundary,"\r\n",
         riak_kv_wm_utils:multipart_encode_body(P, B, Content, APIVersion)]
-       || Content <- riak_object:get_contents(Doc)],
+       || Content <- riak_object:get_md_values(Doc)],
       "\r\n--",Boundary,"--\r\n"],
      wrq:set_resp_header(?HEAD_CTYPE,
                          "multipart/mixed; boundary="++Boundary,
@@ -774,7 +774,7 @@ produce_multipart_body(RD, Ctx=#ctx{doc={ok, Doc}, bucket=B, prefix=P}) ->
 select_doc(#ctx{doc={ok, Doc}, vtag=Vtag}) ->
     case riak_object:get_update_value(Doc) of
         undefined ->
-            case riak_object:get_contents(Doc) of
+            case riak_object:get_md_values(Doc) of
                 [Single] -> Single;
                 Mult ->
                     case lists:dropwhile(
@@ -804,7 +804,7 @@ encode_vclock_header(RD, #ctx{doc={error, {deleted, VClock}}}) ->
 %%      into something suitable for an HTTP header
 vclock_header(Doc) ->
     {?HEAD_VCLOCK,
-        encode_vclock(riak_object:get_vclock(Doc, false))}.
+        encode_vclock(riak_object:get_vclock(Doc))}.
 
 encode_vclock(VClock) ->
     binary_to_list(base64:encode(zlib:zip(term_to_binary(VClock)))).
@@ -864,7 +864,7 @@ generate_etag(RD, Ctx) ->
             {dict:fetch(?MD_VTAG, MD), RD, Ctx};
         multiple_choices ->
             {ok, Doc} = Ctx#ctx.doc,
-            <<ETag:128/integer>> = crypto:md5(term_to_binary(riak_object:get_vclock(Doc,false))),
+            <<ETag:128/integer>> = crypto:md5(term_to_binary(riak_object:get_vclock(Doc))),
             {riak_core_util:integer_to_list(ETag, 62), RD, Ctx}
     end.
 
