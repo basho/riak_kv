@@ -322,11 +322,9 @@ get_update_value(#r_object{updatevalue=UV}) -> UV.
 -spec set_vclock(riak_object(), dvvset:vector()) -> riak_object().
 set_vclock(Object, Clock) ->
     Vs = dvvset:values(get_contents(apply_updates(Object))),
-    %% extract the causal information
-    %%VersionVector = dvvset:join(Clock),
     %% set the contents to a new clock with the same causal information 
     %% as the version vector, but with the new list of values.
-    Object#r_object{contents=dvvset:new2(VersionVector,Vs)}.
+    Object#r_object{contents=dvvset:new2(Clock,Vs)}.
 
 %% @doc  INTERNAL USE ONLY.  Set the contents of riak_object 
 %%       to the Contents. Normal clients should use the
