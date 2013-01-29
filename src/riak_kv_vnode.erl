@@ -45,6 +45,7 @@
          repair_status/1,
          repair_filter/1,
          hashtree_pid/1,
+         rehash/3,
          request_hashtree_pid/1]).
 
 %% riak_core_vnode API
@@ -301,6 +302,19 @@ request_hashtree_pid(Partition) ->
                                    {raw, ReqId, self()},
                                    riak_kv_vnode_master).
 
+%% Used by {@link riak_kv_exchange_fsm} to force a vnode to update the hashtree
+%% for repaired keys. Typically, repairing keys will trigger read repair that
+%% will update the AAE hash in the write path. However, if the AAE tree is
+%% divergent from the KV data, it is possible that AAE will try to repair keys
+%% that do not have divergent KV replicas. In that case, read repair is never
+%% triggered. Always rehashing keys after any attempt at repair ensures that
+%% AAE does not try to repair the same non-divergent keys over and over.
+rehash(Preflist, Bucket, Key) ->
+    riak_core_vnode_master:command(Preflist,
+                                   {rehash, Bucket, Key},
+                                   ignore,
+                                   riak_kv_vnode_master).
+
 %% VNode callbacks
 
 init([Index]) ->
@@ -451,6 +465,10 @@ handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
         _ ->
             {reply, {error, wrong_node}, State}
     end;
+handle_command({rehash, Bucket, Key}, _, State=#state{mod=Mod, modstate=ModState}) ->
+    {ok, Bin, _UpdModState} = do_get_binary({Bucket, Key}, Mod, ModState),
+    update_hashtree(Bucket, Key, Bin, State),
+    {noreply, State};
 
 %% Commands originating from inside this vnode
 handle_command({backend_callback, Ref, Msg}, _Sender,
