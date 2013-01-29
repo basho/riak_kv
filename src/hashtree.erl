@@ -855,6 +855,8 @@ do_local(N) ->
     B4 = update_tree(B3),
     KeyDiff = local_compare(A4, B4),
     io:format("KeyDiff: ~p~n", [KeyDiff]),
+    close(A4),
+    close(B4),
     destroy(A4),
     destroy(B4),
     ok.
@@ -882,6 +884,8 @@ do_concurrent_build(N1, N2) ->
     KeyDiff = local_compare(A4, B4),
     io:format("KeyDiff: ~p~n", [KeyDiff]),
 
+    close(A4),
+    close(B4),
     destroy(A4),
     destroy(B4),
     ok.
@@ -978,6 +982,8 @@ snapshot_test() ->
     B1 = update_tree(B0),
     B2 = insert(<<"10">>, <<"42">>, B1),
     KeyDiff = local_compare(A1, B1),
+    close(A1),
+    close(B2),
     destroy(A1),
     destroy(B2),
     ?assertEqual([{different, <<"10">>}], KeyDiff),
@@ -1081,6 +1087,8 @@ prop_correct() ->
                              ?assertEqual([], local_compare(A7, B8)),
                              true
                          end || Id <- lists:seq(0, 10)],
+                        close(A0),
+                        close(B0),
                         destroy(A0),
                         destroy(B0),
                         true
