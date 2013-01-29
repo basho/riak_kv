@@ -185,7 +185,7 @@ key_exchange(timeout, State=#state{local=LocalVN,
     {ok, RC} = riak:local_client(),
     AccFun = fun(KeyDiff, Acc) ->
                      lists:foldl(fun(Diff, Acc2) ->
-                                         read_repair_keydiff(RC, Diff),
+                                         read_repair_keydiff(RC, LocalVN, RemoteVN, Diff),
                                          case Acc2 of
                                              [] ->
                                                  [1];
@@ -220,14 +220,16 @@ exchange_segment(Tree, IndexN, Segment) ->
     riak_kv_index_hashtree:exchange_segment(IndexN, Segment, Tree).
 
 %% @private
-read_repair_keydiff(RC, {_, KeyBin}) ->
+read_repair_keydiff(RC, LocalVN, RemoteVN, {_, KeyBin}) ->
     {Bucket, Key} = binary_to_term(KeyBin),
     %% TODO: Even though this is at debug level, it's still extremely
     %%       spammy. Should this just be removed? We can always use
     %%       redbug to trace read_repair_keydiff when needed. Of course,
     %%       users can't do that.
     %% lager:debug("Anti-entropy forced read repair: ~p/~p", [Bucket, Key]),
-    RC:get(Bucket, Key),
+    RC:get(Bucket, Key, [{r, all}]),
+    %% Force vnodes to update AAE tree in case read repair wasn't triggered
+    riak_kv_vnode:rehash([LocalVN, RemoteVN], Bucket, Key),
     ok.
 
 %% @private
