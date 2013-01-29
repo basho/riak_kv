@@ -227,7 +227,7 @@ read_repair_keydiff(RC, LocalVN, RemoteVN, {_, KeyBin}) ->
     %%       redbug to trace read_repair_keydiff when needed. Of course,
     %%       users can't do that.
     %% lager:debug("Anti-entropy forced read repair: ~p/~p", [Bucket, Key]),
-    RC:get(Bucket, Key, [{r, all}]),
+    RC:get(Bucket, Key),
     %% Force vnodes to update AAE tree in case read repair wasn't triggered
     riak_kv_vnode:rehash([LocalVN, RemoteVN], Bucket, Key),
     ok.
