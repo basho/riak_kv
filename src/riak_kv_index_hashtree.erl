@@ -78,14 +78,16 @@
 
 %% @doc Spawn an index_hashtree process that manages the hashtrees (one
 %%      for each `index_n') for the specified partition index.
--spec start(index(), [index_n()], pid()) -> {ok, pid()} | {error, term()}.
-start(Index, IndexNs, VNPid) ->
+-spec start(index(), nonempty_list(index_n()), pid()) -> {ok, pid()} | 
+                                                         {error, term()}.
+start(Index, IndexNs=[_|_], VNPid) ->
     gen_server:start(?MODULE, [Index, IndexNs, VNPid], []).
 
 %% @doc Spawn an index_hashtree process that manages the hashtrees (one
 %%      for each `index_n') for the specified partition index.
--spec start_link(index(), [index_n()], pid()) -> {ok, pid()} | {error, term()}.
-start_link(Index, IndexNs, VNPid) ->
+-spec start_link(index(), nonempty_list(index_n()), pid()) -> {ok, pid()} |
+                                                              {error, term()}.
+start_link(Index, IndexNs=[_|_], VNPid) ->
     gen_server:start_link(?MODULE, [Index, IndexNs, VNPid], []).
 
 %% @doc Add a key/hash pair to the tree identified by the given tree id
@@ -99,22 +101,28 @@ insert(Id, Key, Hash, Tree) ->
 %%       ``if_missing'' :: Only insert the key/hash pair if the key does not
 %%                         already exist in the hashtree.
 -spec insert(index_n(), binary(), binary(), pid(), proplist()) -> ok.
+insert(_Id, _Key, _Hash, undefined, _Options) ->
+    ok;
 insert(Id, Key, Hash, Tree, Options) ->
-    gen_server:cast(Tree, {insert, Id, Key, Hash, Options}).
+    catch gen_server:call(Tree, {insert, Id, Key, Hash, Options}, infinity).
 
 %% @doc Add a term_to_binary encoded riak_object associated with a given
 %%      bucket/key to the appropriate hashtree managed by the provided
 %%      index_hashtree pid. The hash value is generated using
 %%      {@link hash_object/1}.
 -spec insert_object({binary(), binary()}, riak_object_t2b(), pid()) -> ok.
+insert_object(_BKey, _RObj, undefined) ->
+    ok;
 insert_object(BKey, RObj, Tree) ->
-    gen_server:cast(Tree, {insert_object, BKey, RObj}).
+    catch gen_server:call(Tree, {insert_object, BKey, RObj}, infinity).
 
 %% @doc Remove the key/hash pair associated with a given bucket/key from the
 %%      appropriate hashtree managed by the provided index_hashtree pid.
 -spec delete({binary(), binary()}, pid()) -> ok.
+delete(_BKey, undefined) ->
+    ok;
 delete(BKey, Tree) ->
-    gen_server:cast(Tree, {delete, BKey}).
+    catch gen_server:call(Tree, {delete, BKey}, infinity).
 
 %% @doc Called by the entropy manager to finish the process used to acquire
 %%      remote vnode locks when starting an exchange. For more details,
@@ -221,6 +229,20 @@ handle_call({get_lock, Type, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Pid, State),
     {reply, Reply, State2};
 
+handle_call({insert, Id, Key, Hash, Options}, _From, State) ->
+    State2 = do_insert(Id, Key, Hash, Options, State),
+    {reply, ok, State2};
+handle_call({insert_object, BKey, RObj}, _From, State) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    IndexN = riak_kv_util:get_index_n(BKey, Ring),
+    State2 = do_insert(IndexN, term_to_binary(BKey), hash_object(RObj), [], State),
+    {reply, ok, State2};
+handle_call({delete, BKey}, _From, State) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    IndexN = riak_kv_util:get_index_n(BKey, Ring),
+    State2 = do_delete(IndexN, term_to_binary(BKey), State),
+    {reply, ok, State2};
+
 handle_call({update_tree, Id}, From, State) ->
     lager:debug("Updating tree: (vnode)=~p (preflist)=~p", [State#state.index, Id]),
     apply_tree(Id,
@@ -255,9 +277,8 @@ handle_call({compare, Id, Remote, AccFun}, From, State) ->
     {noreply, State};
 
 handle_call(destroy, _From, State) ->
-    {_,Tree0} = hd(State#state.trees),
-    hashtree:destroy(Tree0),
-    {stop, normal, ok, State};
+    State2 = destroy_trees(State),
+    {stop, normal, ok, State2};
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -277,20 +298,6 @@ handle_cast(build_failed, State) ->
     {noreply, State2};
 handle_cast(build_finished, State) ->
     State2 = do_build_finished(State),
-    {noreply, State2};
-
-handle_cast({insert, Id, Key, Hash, Options}, State) ->
-    State2 = do_insert(Id, Key, Hash, Options, State),
-    {noreply, State2};
-handle_cast({insert_object, BKey, RObj}, State) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    IndexN = riak_kv_util:get_index_n(BKey, Ring),
-    State2 = do_insert(IndexN, term_to_binary(BKey), hash_object(RObj), [], State),
-    {noreply, State2};
-handle_cast({delete, BKey}, State) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    IndexN = riak_kv_util:get_index_n(BKey, Ring),
-    State2 = do_delete(IndexN, term_to_binary(BKey), State),
     {noreply, State2};
 
 handle_cast({start_exchange_remote, FsmPid, From, _IndexN}, State) ->
@@ -621,13 +628,18 @@ maybe_clear(State) ->
     State.
 
 -spec clear_tree(state()) -> state().
-clear_tree(State=#state{index=Index, trees=Trees}) ->
+clear_tree(State=#state{index=Index}) ->
     lager:debug("Clearing tree ~p", [State#state.index]),
-    {_,Tree0} = hd(Trees),
-    hashtree:destroy(Tree0),
+    State2 = destroy_trees(State),
     IndexNs = riak_kv_util:responsible_preflists(Index),
-    State2 = init_trees(IndexNs, State#state{trees=orddict:new()}),
-    State2#state{built=false}.
+    State3 = init_trees(IndexNs, State2#state{trees=orddict:new()}),
+    State3#state{built=false}.
+
+destroy_trees(State) ->
+    State2 = close_trees(State),
+    {_,Tree0} = hd(State2#state.trees),
+    hashtree:destroy(Tree0),
+    State2.
 
 -spec maybe_build(state()) -> state().
 maybe_build(State=#state{built=false}) ->
@@ -665,6 +677,6 @@ build_or_rehash(Self, State=#state{index=Index, trees=Trees}) ->
             gen_server:cast(Self, build_failed)
     end.
 
-close_trees(State) ->
-    {_,Tree0} = hd(State#state.trees),
-    hashtree:close(Tree0).
+close_trees(State=#state{trees=Trees}) ->
+    Trees2 = [{IdxN, hashtree:close(Tree)} || {IdxN, Tree} <- Trees],
+    State#state{trees=Trees2}.
