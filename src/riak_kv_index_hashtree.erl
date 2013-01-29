@@ -78,14 +78,16 @@
 
 %% @doc Spawn an index_hashtree process that manages the hashtrees (one
 %%      for each `index_n') for the specified partition index.
--spec start(index(), [index_n()], pid()) -> {ok, pid()} | {error, term()}.
-start(Index, IndexNs, VNPid) ->
+-spec start(index(), nonempty_list(index_n()), pid()) -> {ok, pid()} | 
+                                                         {error, term()}.
+start(Index, IndexNs=[_|_], VNPid) ->
     gen_server:start(?MODULE, [Index, IndexNs, VNPid], []).
 
 %% @doc Spawn an index_hashtree process that manages the hashtrees (one
 %%      for each `index_n') for the specified partition index.
--spec start_link(index(), [index_n()], pid()) -> {ok, pid()} | {error, term()}.
-start_link(Index, IndexNs, VNPid) ->
+-spec start_link(index(), nonempty_list(index_n()), pid()) -> {ok, pid()} |
+                                                              {error, term()}.
+start_link(Index, IndexNs=[_|_], VNPid) ->
     gen_server:start_link(?MODULE, [Index, IndexNs, VNPid], []).
 
 %% @doc Add a key/hash pair to the tree identified by the given tree id
@@ -296,20 +298,6 @@ handle_cast(build_failed, State) ->
     {noreply, State2};
 handle_cast(build_finished, State) ->
     State2 = do_build_finished(State),
-    {noreply, State2};
-
-handle_cast({insert, Id, Key, Hash, Options}, State) ->
-    State2 = do_insert(Id, Key, Hash, Options, State),
-    {noreply, State2};
-handle_cast({insert_object, BKey, RObj}, State) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    IndexN = riak_kv_util:get_index_n(BKey, Ring),
-    State2 = do_insert(IndexN, term_to_binary(BKey), hash_object(RObj), [], State),
-    {noreply, State2};
-handle_cast({delete, BKey}, State) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    IndexN = riak_kv_util:get_index_n(BKey, Ring),
-    State2 = do_delete(IndexN, term_to_binary(BKey), State),
     {noreply, State2};
 
 handle_cast({start_exchange_remote, FsmPid, From, _IndexN}, State) ->
