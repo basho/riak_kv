@@ -466,8 +466,13 @@ handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
             {reply, {error, wrong_node}, State}
     end;
 handle_command({rehash, Bucket, Key}, _, State=#state{mod=Mod, modstate=ModState}) ->
-    {ok, Bin, _UpdModState} = do_get_binary({Bucket, Key}, Mod, ModState),
-    update_hashtree(Bucket, Key, Bin, State),
+    case do_get_binary({Bucket, Key}, Mod, ModState) of
+        {ok, Bin, _UpdModState} ->
+            update_hashtree(Bucket, Key, Bin, State);
+        _ ->
+            %% Do nothing if data doesn't exist
+            ok
+    end,
     {noreply, State};
 
 %% Commands originating from inside this vnode
