@@ -241,12 +241,22 @@ new({Index,TreeId}, LinkedStore, Options) ->
 
 -spec close(hashtree()) -> hashtree().
 close(State) ->
-    eleveldb:close(State#state.ref),
-    State.
+    close_iterator(State#state.itr),
+    catch eleveldb:close(State#state.ref),
+    State#state{itr=undefined}.
+
+close_iterator(Itr) ->
+    try
+        eleveldb:iterator_close(Itr)
+    catch
+        _:_ ->
+            ok
+    end.
 
 -spec destroy(hashtree()) -> hashtree().
 destroy(State) ->
-    eleveldb:close(State#state.ref),
+    %% Assumption: close was already called on all hashtrees that
+    %%             use this LevelDB instance,
     ok = eleveldb:destroy(State#state.path, []),
     State.
 
@@ -623,7 +633,7 @@ multi_select_segment(#state{id=Id, itr=Itr}, Segments, F) ->
                _ ->
                    encode(Id, First, <<>>)
            end,
-    IS2 = iterate(eleveldb:iterator_move(Itr, Seek), IS1),
+    IS2 = iterate(iterator_move(Itr, Seek), IS1),
     #itr_state{current_segment=LastSegment,
                segment_acc=LastAcc,
                final_acc=FA} = IS2,
@@ -634,6 +644,16 @@ multi_select_segment(#state{id=Id, itr=Itr}, Segments, F) ->
             [];
         _ ->
             Result
+    end.
+
+iterator_move(undefined, _Seek) ->
+    {error, invalid_iterator};
+iterator_move(Itr, Seek) ->
+    try
+        eleveldb:iterator_move(Itr, Seek)
+    catch
+        _:badarg ->
+            {error, invalid_iterator}
     end.
 
 -spec iterate({'error','invalid_iterator'} | {'ok',binary(),binary()},
@@ -662,21 +682,21 @@ iterate({ok, K, V}, IS=#itr_state{itr=Itr,
             %% Still reading existing segment
             IS2 = IS#itr_state{current_segment=Segment,
                                segment_acc=[{K,V} | Acc]},
-            iterate(eleveldb:iterator_move(Itr, next), IS2);
+            iterate(iterator_move(Itr, next), IS2);
         {Id, _, [Seg|Remaining]} ->
             %% Pointing at next segment we are interested in
             IS2 = IS#itr_state{current_segment=Seg,
                                remaining_segments=Remaining,
                                segment_acc=[{K,V}],
                                final_acc=[{Segment, F(Acc)} | FinalAcc]},
-            iterate(eleveldb:iterator_move(Itr, next), IS2);
+            iterate(iterator_move(Itr, next), IS2);
         {Id, _, ['*']} ->
             %% Pointing at next segment we are interested in
             IS2 = IS#itr_state{current_segment=Seg,
                                remaining_segments=['*'],
                                segment_acc=[{K,V}],
                                final_acc=[{Segment, F(Acc)} | FinalAcc]},
-            iterate(eleveldb:iterator_move(Itr, next), IS2);
+            iterate(iterator_move(Itr, next), IS2);
         {Id, _, [NextSeg|Remaining]} ->
             %% Pointing at uninteresting segment, seek to next interesting one
             IS2 = IS#itr_state{current_segment=NextSeg,
@@ -684,7 +704,7 @@ iterate({ok, K, V}, IS=#itr_state{itr=Itr,
                                segment_acc=[],
                                final_acc=[{Segment, F(Acc)} | FinalAcc]},
             Seek = encode(Id, NextSeg, <<>>),
-            iterate(eleveldb:iterator_move(Itr, Seek), IS2);
+            iterate(iterator_move(Itr, Seek), IS2);
         _ ->
             %% Done with traversal
             IS
@@ -835,6 +855,8 @@ do_local(N) ->
     B4 = update_tree(B3),
     KeyDiff = local_compare(A4, B4),
     io:format("KeyDiff: ~p~n", [KeyDiff]),
+    close(A4),
+    close(B4),
     destroy(A4),
     destroy(B4),
     ok.
@@ -862,6 +884,8 @@ do_concurrent_build(N1, N2) ->
     KeyDiff = local_compare(A4, B4),
     io:format("KeyDiff: ~p~n", [KeyDiff]),
 
+    close(A4),
+    close(B4),
     destroy(A4),
     destroy(B4),
     ok.
@@ -958,6 +982,8 @@ snapshot_test() ->
     B1 = update_tree(B0),
     B2 = insert(<<"10">>, <<"42">>, B1),
     KeyDiff = local_compare(A1, B1),
+    close(A1),
+    close(B2),
     destroy(A1),
     destroy(B2),
     ?assertEqual([{different, <<"10">>}], KeyDiff),
@@ -1061,6 +1087,8 @@ prop_correct() ->
                              ?assertEqual([], local_compare(A7, B8)),
                              true
                          end || Id <- lists:seq(0, 10)],
+                        close(A0),
+                        close(B0),
                         destroy(A0),
                         destroy(B0),
                         true
