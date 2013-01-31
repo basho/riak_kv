@@ -794,6 +794,7 @@ prepare_put(State=#state{vnodeid=VId,
                          modstate=ModState},
             PutArgs=#putargs{bkey={Bucket, _Key},
                              lww=LWW,
+                             coord=Coord,
                              robj=RObj,
                              starttime=StartTime}) ->
     %% Can we avoid reading the existing object? If this is not an
@@ -804,7 +805,13 @@ prepare_put(State=#state{vnodeid=VId,
     IndexBackend = lists:member(indexes, Capabilities),
     case LWW andalso not IndexBackend of
         true ->
-            ObjToStore = riak_object:increment_vclock(RObj, VId, StartTime),
+            ObjToStore =
+                case Coord of
+                    true ->
+                        riak_object:increment_vclock(RObj, VId, StartTime);
+                    false ->
+                        RObj
+                end,
             {{true, ObjToStore}, PutArgs#putargs{is_index = false}};
         false ->
             prepare_put(State, PutArgs, IndexBackend)
