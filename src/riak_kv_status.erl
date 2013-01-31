@@ -34,12 +34,7 @@
 
 -spec(statistics() -> [any()]).
 statistics() ->
-    case whereis(riak_kv_stat) of
-        undefined ->
-            [];
-        _ ->
-            riak_kv_stat:get_stats()
-    end.
+    riak_kv_stat:get_stats().
 
 ringready() ->
     riak_core_status:ringready().
@@ -51,5 +46,5 @@ transfers() ->
 -spec vnode_status() -> [{atom(), term()}].
 vnode_status() ->
     %% Get the kv vnode indexes and the associated pids for the node.
-    PrefLists = riak_core_vnode_master:all_index_pid(riak_kv_vnode),
+    PrefLists = riak_core_vnode_manager:all_index_pid(riak_kv_vnode),
     riak_kv_vnode:vnode_status(PrefLists).

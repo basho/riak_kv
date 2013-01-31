@@ -314,7 +314,12 @@ is_empty(#state{backends=Backends}) ->
 -spec status(state()) -> [{atom(), term()}].
 status(#state{backends=Backends}) ->
     %% @TODO Reexamine how this is handled
-    [{N, Mod:status(ModState)} || {N, Mod, ModState} <- Backends].
+    %% all backend mods return a proplist from Mod:status/1
+    %% So as to tag the backend with its mod, without
+    %% breaking this API list of two tuples return,
+    %% add the tuple {mod, Mod} to the status for each
+    %% backend.
+    [{N, [{mod, Mod} | Mod:status(ModState)]} || {N, Mod, ModState} <- Backends].
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
@@ -535,10 +540,10 @@ eqc_test_() ->
        [{setup,
          fun setup/0,
          fun cleanup/1,
-         [?_assertEqual(true,
-                        backend_eqc:test(?MODULE, true, sample_config())),
-          ?_assertEqual(true,
-                        backend_eqc:test(?MODULE, true, async_fold_config()))
+         [{timeout, 60000, [?_assertEqual(true,
+                        backend_eqc:test(?MODULE, true, sample_config()))]},
+          {timeout, 60000, [?_assertEqual(true,
+                        backend_eqc:test(?MODULE, true, async_fold_config()))]}
          ]}]}]}.
 
 setup() ->
@@ -603,6 +608,7 @@ extra_callback_test() ->
     application:stop(bitcask).
 
 bad_config_test() ->
+    application:unset_env(riak_kv, multi_backend),
     ErrorReason = multi_backend_config_unset,
     ?assertEqual({error, ErrorReason}, start(0, [])).
 

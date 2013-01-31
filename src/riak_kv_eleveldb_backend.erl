@@ -54,6 +54,7 @@
 
 -record(state, {ref :: reference(),
                 data_root :: string(),
+                open_opts = [],
                 config :: config(),
                 read_opts = [],
                 write_opts = [],
@@ -93,22 +94,25 @@ start(Partition, Config) ->
     %% Get the data root directory
     DataDir = filename:join(app_helper:get_prop_or_env(data_root, Config, eleveldb),
                             integer_to_list(Partition)),
-    case open_db(DataDir, Config) of
-        {ok, Ref} ->
-            {ok, #state { ref = Ref,
-                          data_root = DataDir,
-                          read_opts = config_value(read_options, Config, []),
-                          write_opts = config_value(write_options, Config, []),
-                          fold_opts = config_value(fold_options, Config, [{fill_cache, false}]),
-                          config = Config }};
+
+    %% Initialize state
+    S0 = init_state(DataDir, Config),
+    case open_db(S0) of
+        {ok, State} ->
+            {ok, State};
         {error, Reason} ->
             {error, Reason}
     end.
 
 %% @doc Stop the eleveldb backend
 -spec stop(state()) -> ok.
-stop(_State) ->
-    %% No-op; GC handles cleanup
+stop(State) ->
+    case State#state.ref of
+        undefined ->
+            ok;
+        _ ->
+            eleveldb:close(State#state.ref)
+    end,
     ok.
 
 %% @doc Retrieve an object from the eleveldb backend
@@ -277,17 +281,13 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
 %% @doc Delete all objects from this eleveldb backend
 %% and return a fresh reference.
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
-drop(#state{data_root=DataRoot}=State) ->
-    case eleveldb:destroy(DataRoot, []) of
+drop(State0) ->
+    eleveldb:close(State0#state.ref),
+    case eleveldb:destroy(State0#state.data_root, []) of
         ok ->
-            case open_db(DataRoot, State#state.config) of
-                {ok, Ref} ->
-                    {ok, State#state { ref = Ref }};
-                {error, Reason} ->
-                    {error, Reason, State}
-            end;
+            {ok, State0#state{ref = undefined}};
         {error, Reason} ->
-            {error, Reason, State}
+            {error, Reason, State0}
     end.
 
 %% @doc Returns true if this eleveldb backend contains any
@@ -300,7 +300,8 @@ is_empty(#state{ref=Ref}) ->
 -spec status(state()) -> [{atom(), term()}].
 status(State) ->
     {ok, Stats} = eleveldb:status(State#state.ref, <<"leveldb.stats">>),
-    [{stats, Stats}].
+    {ok, ReadBlockError} = eleveldb:status(State#state.ref, <<"leveldb.ReadBlockError">>),
+    [{stats, Stats}, {read_block_error, ReadBlockError}].
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
@@ -312,40 +313,97 @@ callback(_Ref, _Msg, State) ->
 %% ===================================================================
 
 %% @private
-open_db(DataRoot, Config) ->
+init_state(DataRoot, Config) ->
     %% Get the data root directory
     filelib:ensure_dir(filename:join(DataRoot, "dummy")),
+
+    %% Merge the proplist passed in from Config with any values specified by the
+    %% eleveldb app level; precedence is given to the Config.
+    MergedConfig = orddict:merge(fun(_K, VLocal, _VGlobal) -> VLocal end,
+                                 orddict:from_list(Config), % Local
+                                 orddict:from_list(application:get_all_env(eleveldb))), % Global
 
     %% Use a variable write buffer size in order to reduce the number
     %% of vnodes that try to kick off compaction at the same time
     %% under heavy uniform load...
-    WriteBufferMin = config_value(write_buffer_size_min, Config, 3 * 1024 * 1024),
-    WriteBufferMax = config_value(write_buffer_size_max, Config, 6 * 1024 * 1024),
+    WriteBufferMin = config_value(write_buffer_size_min, MergedConfig, 30 * 1024 * 1024),
+    WriteBufferMax = config_value(write_buffer_size_max, MergedConfig, 60 * 1024 * 1024),
     WriteBufferSize = WriteBufferMin + random:uniform(1 + WriteBufferMax - WriteBufferMin),
 
-    %% Assemble options...
-    Options = [
-               {create_if_missing, true},
-               {write_buffer_size, WriteBufferSize},
-               {max_open_files, config_value(max_open_files, Config)},
-               {cache_size, config_value(cache_size, Config)},
-               {paranoid_checks, config_value(paranoid_checks, Config)}
-              ],
+    %% Update the write buffer size in the merged config and make sure create_if_missing is set
+    %% to true
+    FinalConfig = orddict:store(write_buffer_size, WriteBufferSize,
+                                orddict:store(create_if_missing, true, MergedConfig)),
 
-    lager:debug("Opening LevelDB in ~s with options: ~p\n", [DataRoot, Options]),
-    eleveldb:open(DataRoot, Options).
+    %% Parse out the open/read/write options
+    {OpenOpts, _BadOpenOpts} = eleveldb:validate_options(open, FinalConfig),
+    {ReadOpts, _BadReadOpts} = eleveldb:validate_options(read, FinalConfig),
+    {WriteOpts, _BadWriteOpts} = eleveldb:validate_options(write, FinalConfig),
 
+    %% Use read options for folding, but FORCE fill_cache to false
+    FoldOpts = lists:keystore(fill_cache, 1, ReadOpts, {fill_cache, false}),
+
+    %% Warn if block_size is set
+    SSTBS = proplists:get_value(sst_block_size, OpenOpts, false),
+    BS = proplists:get_value(block_size, OpenOpts, false),
+    case BS /= false andalso SSTBS == false of
+        true ->
+            lager:warning("eleveldb block_size has been renamed sst_block_size "
+                          "and the current setting of ~p is being ignored.  "
+                          "Changing sst_block_size is strongly cautioned "
+                          "against unless you know what you are doing.  Remove "
+                          "block_size from app.config to get rid of this "
+                          "message.\n", [BS]);
+        _ ->
+            ok
+    end,
+
+    %% Generate a debug message with the options we'll use for each operation
+    lager:debug("Datadir ~s options for LevelDB: ~p\n",
+                [DataRoot, [{open, OpenOpts}, {read, ReadOpts}, {write, WriteOpts}, {fold, FoldOpts}]]),
+    #state { data_root = DataRoot,
+             open_opts = OpenOpts,
+             read_opts = ReadOpts,
+             write_opts = WriteOpts,
+             fold_opts = FoldOpts,
+             config = FinalConfig }.
 
 %% @private
-config_value(Key, Config) ->
-    config_value(Key, Config, undefined).
+open_db(State) ->
+    RetriesLeft = app_helper:get_env(riak_kv, eleveldb_open_retries, 30),
+    open_db(State, max(1, RetriesLeft), undefined).
+
+open_db(_State0, 0, LastError) ->
+    {error, LastError};
+open_db(State0, RetriesLeft, _) ->
+    case eleveldb:open(State0#state.data_root, State0#state.open_opts) of
+        {ok, Ref} ->
+            {ok, State0#state { ref = Ref }};
+        %% Check specifically for lock error, this can be caused if
+        %% a crashed vnode takes some time to flush leveldb information
+        %% out to disk.  The process is gone, but the NIF resource cleanup
+        %% may not have completed.
+        {error, {db_open, OpenErr}=Reason} ->
+            case lists:prefix("IO error: lock ", OpenErr) of
+                true ->
+                    SleepFor = app_helper:get_env(riak_kv, eleveldb_open_retry_delay, 2000),
+                    lager:debug("Leveldb backend retrying ~p in ~p ms after error ~s\n",
+                                [State0#state.data_root, SleepFor, OpenErr]),
+                    timer:sleep(SleepFor),
+                    open_db(State0, RetriesLeft - 1, Reason);
+                false ->
+                    {error, Reason}
+            end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 %% @private
 config_value(Key, Config, Default) ->
-    case proplists:get_value(Key, Config) of
-        undefined ->
-            app_helper:get_env(eleveldb, Key, Default);
-        Value ->
+    case orddict:find(Key, Config) of
+        error ->
+            Default;
+        {ok, Value} ->
             Value
     end.
 
@@ -509,6 +567,100 @@ custom_config_test_() ->
     application:set_env(eleveldb, data_root, ""),
     riak_kv_backend:standard_test(?MODULE, [{data_root, "test/eleveldb-backend"}]).
 
+retry_test() ->
+    Root = "/tmp/eleveldb_retry_test",
+    try
+        {ok, State1} = start(42, [{data_root, Root}]),
+        Me = self(),
+        Pid1 = spawn_link(fun() ->
+                                  receive
+                                      stop ->
+                                          Me ! {1, stop(State1)}
+                                  end
+                          end),
+        _Pid2 = spawn_link(
+                 fun() ->
+                         Me ! {2, running},
+                         Me ! {2, start(42, [{data_root, Root}])}
+                 end),
+        %% Ensure Pid2 is runnng and  give it 10ms to get into the open
+        %% so we know it has a lock clash
+        receive
+            {2, running} ->
+                timer:sleep(10);
+            X ->
+                throw({unexpected, X})
+        after
+            5000 ->
+                throw(timeout1)
+        end,
+        %% Tell Pid1 to shut it down
+        Pid1 ! stop,
+        receive
+            {1, ok} ->
+                ok;
+            X2 ->
+                throw({unexpected, X2})
+        after
+            5000 ->
+                throw(timeout2)
+        end,
+        %% Wait for Pid2
+        receive
+            {2, {ok, _State2}} ->
+                ok;
+            {2, Res} ->
+                throw({notok, Res});
+            X3 ->
+                throw({unexpected, X3})
+        end
+    after
+        os:cmd("rm -rf " ++ Root)
+    end.
+
+retry_fail_test() ->
+    Root = "/tmp/eleveldb_fail_retry_test",
+    try
+        application:set_env(riak_kv, eleveldb_open_retries, 3), % 3 times, 1ms a time
+        application:set_env(riak_kv, eleveldb_open_retry_delay, 1),
+        {ok, State1} = start(42, [{data_root, Root}]),
+        Me = self(),
+        spawn_link(
+          fun() ->
+                  Me ! {2, running},
+                  Me ! {2, start(42, [{data_root, Root}])}
+          end),
+        %% Ensure Pid2 is runnng and  give it 10ms to get into the open
+        %% so we know it has a lock clash
+        receive
+            {2, running} ->
+                ok;
+            X ->
+                throw({unexpected, X})
+        after
+            5000 ->
+                throw(timeout1)
+        end,
+        %% Wait for Pid2 to fail
+        receive
+            {2, {error, {db_open, _Why}}} ->
+                ok;
+            {2, Res} ->
+                throw({expect_fail, Res});
+            X3 ->
+                throw({unexpected, X3})
+        end,
+        %% Then close and reopen, just for kicks to prove it was the locking
+        ok = stop(State1),
+        {ok, State2} = start(42, [{data_root, Root}]),
+        ok = stop(State2)
+    after
+        os:cmd("rm -rf " ++ Root),
+        application:unset_env(riak_kv, eleveldb_open_retries),
+        application:unset_env(riak_kv, eleveldb_open_retry_delay)
+    end.
+
+
 -ifdef(EQC).
 
 eqc_test_() ->
@@ -522,9 +674,9 @@ eqc_test_() ->
            [?_assertEqual(true,
                           backend_eqc:test(?MODULE, false,
                                            [{data_root,
-                                             "test/eleveldb-backend"},
-                                            {async_folds, false}])),
-            ?_assertEqual(true,
+                                             "test/eleveldb-backend"}]))]},
+          {timeout, 60000,
+            [?_assertEqual(true,
                           backend_eqc:test(?MODULE, false,
                                            [{data_root,
                                              "test/eleveldb-backend"}]))]}

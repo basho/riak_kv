@@ -33,14 +33,14 @@
                 num_oks = 0,
                 del_oks = 0,
                 num_errs = 0}).
-                
+
 
 %%====================================================================
-%% eunit test 
+%% eunit test
 %%====================================================================
 
 eqc_test_() ->
-    {spawn, 
+    {spawn,
      [{setup,
        fun setup/0,
        fun cleanup/1,
@@ -61,6 +61,7 @@ setup() ->
 
     %% Start up mock servers and dependencies
     fsm_eqc_util:start_mock_servers(),
+    fsm_eqc_util:start_fake_rng(?MODULE),
     ok.
 
 cleanup(_) ->
@@ -73,12 +74,12 @@ coverage_test() ->
     riak_kv_test_util:call_unused_fsm_funs(riak_kv_get_fsm).
 
 %%====================================================================
-%% Shell helpers 
+%% Shell helpers
 %%====================================================================
 
 prepare() ->
     fsm_eqc_util:start_mock_servers().
-    
+
 test() ->
     test(100).
 
@@ -148,17 +149,17 @@ r_seed() ->
 detail() -> frequency([{1, timing},
                        {1, vnodes},
                        {1, not_a_detail}]).
-    
+
 details() -> frequency([{10, true}, %% All details requested
                         {10, list(detail())},
                         { 1, false}]).
-    
+
 bool_prop(Name) ->
     frequency([{4, {Name, true}},
                {1, Name},
                {5, {Name, false}}]).
 
-option() -> 
+option() ->
     frequency([{1, {details, details()}},
                {1, bool_prop(notfound_ok)},
                {1, bool_prop(deletedvclock)},
@@ -167,11 +168,15 @@ option() ->
 options() ->
     list(option()).
 
+rr_abort_opts() ->
+    % {SoftCap, HardCap, ActualRunning, RandomRollResult}
+    {choose(1000, 2000), choose(3000, 4000), choose(0, 4999), choose(0, 100)}.
+
 prop_basic_get() ->
-    ?FORALL({RSeed,PRSeed,Options0, Objects,ReqId,VGetResps},
+    ?FORALL({RSeed,PRSeed,Options0, Objects,ReqId,VGetResps,RRAbort},
             {r_seed(), r_seed(), options(),
              fsm_eqc_util:riak_objects(), noshrink(largeint()),
-             vnodegetresps()},
+             vnodegetresps(),rr_abort_opts()},
     begin
         N = length(VGetResps),
         {R, RealR} = r_val(N, 1000000, RSeed),
@@ -186,10 +191,20 @@ prop_basic_get() ->
         application:set_env(riak_core,
                             default_bucket_props,
                             BucketProps),
-        
+
         [{_,Object}|_] = Objects,
-        
+
         Options = fsm_eqc_util:make_options([{r, R}, {pr, PR}], [{timeout, 200} | Options0]),
+
+        {SoftCap, HardCap, Actual, Roll} = RRAbort,
+        application:set_env(riak_kv, read_repair_soft, SoftCap),
+        application:set_env(riak_kv, read_repair_max, HardCap),
+        FolsomKey = {riak_kv, node, gets, fsm, active},
+        % don't really care if the key doesn't exist when we delete it.
+        catch folsom_metrics:delete_metric(FolsomKey),
+        folsom_metrics:new_counter(FolsomKey),
+        folsom_metrics:notify({FolsomKey, {inc, Actual}}),
+        fsm_eqc_util:set_fake_rng(?MODULE, Roll),
 
         {ok, GetPid} = riak_kv_get_fsm:test_link({raw, ReqId, self()},
                             riak_object:bucket(Object),
@@ -244,9 +259,9 @@ prop_basic_get() ->
         PerfectPreflist = lists:all(fun({{_Idx,_Node},primary}) -> true;
                                        ({{_Idx,_Node},fallback}) -> false
                                     end, PL2),
-        
 
-        {RetResult, RetInfo} = case Res of 
+
+        {RetResult, RetInfo} = case Res of
                                    timeout ->
                                        {Res, undefined};
                                    {ok, _RetObj} ->
@@ -257,12 +272,14 @@ prop_basic_get() ->
                                        {{ok, RetObj}, Info0};
                                    {error, Reason, Info0} ->
                                        {{error, Reason}, Info0}
-                               end,                                                 
+                               end,
         ?WHENFAIL(
             begin
                 io:format("Res: ~p\n", [Res]),
                 io:format("Repair: ~p~nHistory: ~p~n",
                           [RepairHistory, History]),
+                io:format("SoftCap: ~p~nHardCap: ~p~nActual: ~p~nRoll: ~p~n",
+                          [SoftCap, HardCap, Actual, Roll]),
                 io:format("RetResult: ~p~nExpResult: ~p~nDeleted objects: ~p~n",
                           [RetResult, ExpResult, Deleted]),
                 io:format("N: ~p  R: ~p  RealR: ~p  PR: ~p  RealPR: ~p~n"
@@ -275,9 +292,10 @@ prop_basic_get() ->
                 [{result, equals(RetResult, ExpResult)},
                  {details, check_details(RetInfo, State)},
                  {n_value, equals(length(History), ExpectedN)},
-                 {repair, check_repair(Objects, RepairHistory, History)},
+                 {repair, check_repair(Objects, RepairHistory, History, RRAbort)},
                  {delete,  check_delete(Objects, RepairHistory, History, PerfectPreflist)},
-                 {distinct, all_distinct(Partitions)}
+                 {distinct, all_distinct(Partitions)},
+                 {told_monitor, fsm_eqc_util:is_get_put_last_cast(get, GetPid)}
                 ]))
     end).
 
@@ -287,7 +305,7 @@ prop_basic_get() ->
 make_preflist2([], _Index, PL2) ->
     lists:reverse(PL2);
 make_preflist2([{_PartVal, PrimaryFallback} | Rest], Index, PL2) ->
-    make_preflist2(Rest, Index + 1, 
+    make_preflist2(Rest, Index + 1,
                    [{{Index, whereis(fsm_eqc_vnode)}, PrimaryFallback} | PL2]).
 
 %% Make responses
@@ -295,7 +313,7 @@ make_partvals([], PartVals) ->
     lists:reverse(PartVals);
 make_partvals([{PartVal, _PrimaryFallback} | Rest], PartVals) ->
     make_partvals(Rest, [PartVal | PartVals]).
- 
+
 
 %% Work out R given a seed.
 %% Generate a value from 0..N+1
@@ -340,7 +358,19 @@ do_repair(Heads, {ok, Lineage}) ->
 do_repair(_Heads, _V) ->
     false.
 
-expected_repairs(H) ->
+expected_repairs(_H, {_Soft,Hard,Actual,_Roll}) when Actual >= Hard ->
+    [];
+expected_repairs(H, {Soft, Hard, Actual, Roll}) when Soft < Actual, Actual < Hard ->
+    CapAdjusted = Hard - Soft,
+    ActualAdjusted = Actual - Soft,
+    Percent = ActualAdjusted / CapAdjusted * 100,
+    if
+      Roll < Percent ->
+        [];
+      true ->
+        expected_repairs(H, true)
+    end;
+expected_repairs(H,_RRAbort) ->
     case [ Lineage || {_, {ok, Lineage}} <- H ] of
         []   -> [];
         Lins ->
@@ -363,7 +393,9 @@ check_info([], _State) ->
     true;
 check_info([{not_a_detail, unknown_detail} | Rest], State) ->
     check_info(Rest, State);
-check_info([{duration, _} | Rest], State) ->
+check_info([{response_usecs, _} | Rest], State) ->
+    check_info(Rest, State);
+check_info([{stages, _} | Rest], State) ->
     check_info(Rest, State);
 check_info([{vnode_oks, VnodeOks} | Rest], State = #state{num_oks = NumOks}) ->
     %% How many Ok's in first RealR responses received by FSM.
@@ -380,11 +412,11 @@ check_info([{vnode_errors, _Errors} | Rest], State) ->
 %% Check the read repairs - no need to worry about delete objects, deletes can only
 %% happen when all read repairs are complete.
 
-check_repair(Objects, RepairH, H) ->
+check_repair(Objects, RepairH, H, RRAbort) ->
     Actual = [ Part || {Part, ?KV_PUT_REQ{}} <- RepairH ],
     Heads  = merge_heads([ Lineage || {_, {ok, Lineage}} <- H ]),
     RepairObject  = (catch build_merged_object(Heads, Objects)),
-    Expected =expected_repairs(H),
+    Expected =expected_repairs(H,RRAbort),
     RepairObjects = [ Obj || {_Idx, ?KV_PUT_REQ{object=Obj}} <- RepairH ],
     conjunction(
         [{puts, equals(lists:sort(Expected), lists:sort(Actual))},
@@ -403,8 +435,8 @@ check_delete(Objects, RepairH, H, PerfectPreflist) ->
     %% and a perfect preflist and the object is deleted
     RetLins = [Lineage || {_Idx, {ok, Lineage}} <- H],
     URetLins = lists:usort(RetLins),
-    Expected = case PerfectPreflist andalso 
-                   length(RetLins) == length(H) andalso 
+    Expected = case PerfectPreflist andalso
+                   length(RetLins) == length(H) andalso
                    length(URetLins) == 1 andalso
                    riak_kv_util:is_x_deleted(proplists:get_value(hd(URetLins), Objects)) of
                    true ->
@@ -418,7 +450,7 @@ check_delete(Objects, RepairH, H, PerfectPreflist) ->
 
 all_distinct(Xs) ->
     equals(lists:sort(Xs),lists:usort(Xs)).
-   
+
 build_merged_object([], _Objects) ->
     undefined;
 build_merged_object(Heads, Objects) ->
@@ -504,6 +536,6 @@ expect(H, State = #state{n = N, real_r = R, deleted = Deleted, notfound_is_ok = 
             end
     end.
 
-    
-    
+
+
 -endif. % EQC

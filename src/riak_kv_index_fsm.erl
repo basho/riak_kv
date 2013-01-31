@@ -42,80 +42,77 @@
 -export([init/2,
          process_results/2,
          finish/2]).
+-export([use_ack_backpressure/0,
+         req/3]).
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
--record(state, {client_type :: plain | mapred,
-                from :: from()}).
+-record(state, {from :: from()}).
+
+%% @doc Returns `true' if the new ack-based backpressure index
+%% protocol should be used.  This decision is based on the
+%% `index_backpressure' setting in `riak_kv''s application
+%% environment.
+-spec use_ack_backpressure() -> boolean().
+use_ack_backpressure() ->
+    riak_core_capability:get({riak_kv, index_backpressure}, false) == true.
+
+%% @doc Construct the correct index command record.
+-spec req(binary(), term(), term()) -> term().
+req(Bucket, ItemFilter, Query) ->
+    case use_ack_backpressure() of
+        true ->
+            ?KV_INDEX_REQ{bucket=Bucket,
+                          item_filter=ItemFilter,
+                          qry=Query};
+        false ->
+            #riak_kv_index_req_v1{bucket=Bucket,
+                                  item_filter=ItemFilter,
+                                  qry=Query}
+    end.
 
 %% @doc Return a tuple containing the ModFun to call per vnode,
 %% the number of primary preflist vnodes the operation
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
-init(From={_, _, ClientPid}, [Bucket, ItemFilter, Query, Timeout, ClientType]) ->
-    case ClientType of
-        %% Link to the mapred job so we die if the job dies
-        mapred ->
-            link(ClientPid);
-        _ ->
-            ok
-    end,
+init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout]) ->
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
     %% Construct the key listing request
-    Req = ?KV_INDEX_REQ{bucket=Bucket,
-                        item_filter=ItemFilter,
-                        qry=Query},
+    Req = req(Bucket, ItemFilter, Query),
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{client_type=ClientType, from=From}}.
+     #state{from=From}}.
 
 process_results({error, Reason}, _State) ->
     {error, Reason};
+process_results({From, Bucket, Results},
+                StateData=#state{from={raw, ReqId, ClientPid}}) ->
+    process_query_results(Bucket, Results, ReqId, ClientPid),
+    riak_kv_vnode:ack_keys(From), % tell that vnode we're ready for more
+    {ok, StateData};
 process_results({Bucket, Results},
-                StateData=#state{client_type=ClientType,
-                                 from={raw, ReqId, ClientPid}}) ->
-    process_query_results(ClientType, Bucket, Results, ReqId, ClientPid),
+                StateData=#state{from={raw, ReqId, ClientPid}}) ->
+    process_query_results(Bucket, Results, ReqId, ClientPid),
     {ok, StateData};
 process_results(done, StateData) ->
     {done, StateData}.
 
 finish({error, Error},
-       StateData=#state{from={raw, ReqId, ClientPid},
-                        client_type=ClientType}) ->
-    case ClientType of
-        mapred ->
-            %% An error occurred or the timeout interval elapsed
-            %% so all we can do now is die so that the rest of the
-            %% MapReduce processes will also die and be cleaned up.
-            exit(Error);
-        plain ->
-            %% Notify the requesting client that an error
-            %% occurred or the timeout has elapsed.
-            ClientPid ! {ReqId, {error, Error}}
-    end,
+       StateData=#state{from={raw, ReqId, ClientPid}}) ->
+    %% Notify the requesting client that an error
+    %% occurred or the timeout has elapsed.
+    ClientPid ! {ReqId, {error, Error}},
     {stop, normal, StateData};
 finish(clean,
-       StateData=#state{from={raw, ReqId, ClientPid},
-                        client_type=ClientType}) ->
-    case ClientType of
-        mapred ->
-            luke_flow:finish_inputs(ClientPid);
-        plain ->
-            ClientPid ! {ReqId, done}
-    end,
+       StateData=#state{from={raw, ReqId, ClientPid}}) ->
+    ClientPid ! {ReqId, done},
     {stop, normal, StateData}.
 
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
 
-process_query_results(plain, _Bucket, Results, ReqId, ClientPid) ->
-    ClientPid ! {ReqId, {results, Results}};
-process_query_results(mapred, Bucket, Results, _ReqId, ClientPid) ->
-    try
-        luke_flow:add_inputs(ClientPid, [{Bucket, Result} || Result <- Results])
-    catch _:_ ->
-            exit(self(), normal)
-    end.
+process_query_results(_Bucket, Results, ReqId, ClientPid) ->
+    ClientPid ! {ReqId, {results, Results}}.

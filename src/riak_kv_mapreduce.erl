@@ -58,7 +58,7 @@
 %% @spec map_identity(boolean()) -> map_phase_spec()
 %% @doc Produces a spec for a map phase that simply returns
 %%      each object it's handed.  That is:
-%%      Client:mapred(BucketKeys, [map_identity(true)]).
+%%      riak_kv_mrc_pipe:mapred(BucketKeys, [map_identity(true)]).
 %%      Would return all of the objects named by BucketKeys.
 map_identity(Acc) ->
     {map, {modfun, riak_kv_mapreduce, map_identity}, none, Acc}.
@@ -72,7 +72,7 @@ map_identity(RiakObject, _, _) -> [RiakObject].
 %% @doc Produces a spec for a map phase that simply returns
 %%      the values of the objects from the input to the phase.
 %%      That is:
-%%      Client:mapred(BucketKeys, [map_object_value(true)]).
+%%      riak_kv_mrc_pipe:mapred(BucketKeys, [map_object_value(true)]).
 %%      Would return a list that contains the value of each
 %%      object named by BucketKeys.
 map_object_value(Acc) ->
@@ -227,8 +227,8 @@ reduce_sort(List, _) ->
 %%      The original purpose of this function was to count
 %%      the results of a key-listing.  For example:
 %%```
-%%      [KeyCount] = C:mapred(<<"my_bucket">>,
-%%                            [riak_kv_mapreduce:reduce_count_inputs(true)]).
+%%      [KeyCount] = riak_kv_mrc_pipe:mapred(<<"my_bucket">>,
+%%                      [riak_kv_mapreduce:reduce_count_inputs(true)]).
 %%'''
 %%      KeyCount will contain the number of keys found in "my_bucket".
 reduce_count_inputs(Acc) ->

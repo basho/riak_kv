@@ -41,18 +41,13 @@ start_link() ->
 %% @spec init([]) -> SupervisorTree
 %% @doc supervisor callback.
 init([]) ->
+    catch dtrace:init(),                   % NIF load trigger (R14B04)
+    catch dyntrace:p(),                    % NIF load trigger (R15B01+)
+    riak_kv_entropy_info:create_table(),
     VMaster = {riak_kv_vnode_master,
                {riak_core_vnode_master, start_link,
-                [riak_kv_vnode, riak_kv_legacy_vnode]},
+                [riak_kv_vnode, riak_kv_legacy_vnode, riak_kv]},
                permanent, 5000, worker, [riak_core_vnode_master]},
-    RiakPb = [ {riak_kv_pb_socket_sup, {riak_kv_pb_socket_sup, start_link, []},
-                permanent, infinity, supervisor, [riak_kv_pb_socket_sup]},
-               {riak_kv_pb_listener, {riak_kv_pb_listener, start_link, []},
-               permanent, 5000, worker, [riak_kv_pb_listener]}
-              ],
-    RiakStat = {riak_kv_stat,
-                {riak_kv_stat, start_link, []},
-                permanent, 5000, worker, [riak_kv_stat]},
     MapJSPool = {?JSPOOL_MAP,
                  {riak_kv_js_manager, start_link,
                   [?JSPOOL_MAP, read_js_pool_size(map_js_vm_count, "map")]},
@@ -68,25 +63,6 @@ init([]) ->
     JSSup = {riak_kv_js_sup,
              {riak_kv_js_sup, start_link, []},
              permanent, infinity, supervisor, [riak_kv_js_sup]},
-    %% @TODO This code is only here to support
-    %% rolling upgrades and will be removed.
-    KLMaster = {riak_kv_keylister_master,
-                 {riak_kv_keylister_master, start_link, []},
-                 permanent, 30000, worker, [riak_kv_keylister_master]},
-    %% @TODO This code is only here to support
-    %% rolling upgrades and will be removed.
-    KLSup = {riak_kv_keylister_legacy_sup,
-             {riak_kv_keylister_legacy_sup, start_link, []},
-             permanent, infinity, supervisor, [riak_kv_keylister_sup]},
-    MapCache = {riak_kv_mapred_cache,
-                 {riak_kv_mapred_cache, start_link, []},
-                 permanent, 30000, worker, [riak_kv_mapred_cache]},
-    MapMaster = {riak_kv_map_master,
-                 {riak_kv_map_master, start_link, []},
-                 permanent, 30000, worker, [riak_kv_map_master]},
-    MapperSup = {riak_kv_mapper_sup,
-                 {riak_kv_mapper_sup, start_link, []},
-                 permanent, infinity, supervisor, [riak_kv_mapper_sup]},
     GetFsmSup = {riak_kv_get_fsm_sup,
                  {riak_kv_get_fsm_sup, start_link, []},
                  permanent, infinity, supervisor, [riak_kv_get_fsm_sup]},
@@ -105,39 +81,31 @@ init([]) ->
     IndexFsmSup = {riak_kv_index_fsm_sup,
                    {riak_kv_index_fsm_sup, start_link, []},
                    permanent, infinity, supervisor, [riak_kv_index_fsm_sup]},
-    %% @TODO This code is only here to support
-    %% rolling upgrades and will be removed.
-    LegacyKeysFsmSup = {riak_kv_keys_fsm_legacy_sup,
-                 {riak_kv_keys_fsm_legacy_sup, start_link, []},
-                 permanent, infinity, supervisor, [riak_kv_keys_fsm_legacy_sup]},
+    SinkFsmSup = {riak_kv_mrc_sink_sup,
+                  {riak_kv_mrc_sink_sup, start_link, []},
+                  permanent, infinity, supervisor, [riak_kv_mrc_sink_sup]},
+    EntropyManager = {riak_kv_entropy_manager,
+                      {riak_kv_entropy_manager, start_link, []},
+                      permanent, 30000, worker, [riak_kv_entropy_manager]},
 
     % Figure out which processes we should run...
-    IsPbConfigured = (app_helper:get_env(riak_kv, pb_ip) /= undefined)
-        andalso (app_helper:get_env(riak_kv, pb_port) /= undefined),
     HasStorageBackend = (app_helper:get_env(riak_kv, storage_backend) /= undefined),
-    IsStatEnabled = (app_helper:get_env(riak_kv, riak_kv_stat) == true),
 
     % Build the process list...
     Processes = lists:flatten([
         ?IF(HasStorageBackend, VMaster, []),
-        ?IF(IsPbConfigured, RiakPb, []),
-        ?IF(IsStatEnabled, RiakStat, []),
         GetFsmSup,
         PutFsmSup,
         DeleteSup,
+        SinkFsmSup,
         BucketsFsmSup,
         KeysFsmSup,
         IndexFsmSup,
-        LegacyKeysFsmSup,
-        KLSup,
-        KLMaster,
+        EntropyManager,
         JSSup,
         MapJSPool,
         ReduceJSPool,
-        HookJSPool,
-        MapperSup,
-        MapMaster,
-        MapCache
+        HookJSPool
     ]),
 
     % Run the proesses...

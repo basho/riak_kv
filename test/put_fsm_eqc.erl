@@ -41,9 +41,9 @@
 
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include_lib("riak_kv_vnode.hrl").
--include_lib("riak_kv_js_pools.hrl").
--include_lib("riak_kv/src/riak_kv_wm_raw.hrl").
+-include("riak_kv_vnode.hrl").
+-include("riak_kv_js_pools.hrl").
+-include("../src/riak_kv_wm_raw.hrl").
 
 -compile(export_all).
 -export([postcommit_ok/1]).
@@ -55,6 +55,7 @@
          {w, quorum},
          {dw, quorum}]).
 -define(HOOK_SAYS_NO, <<"the hook says no">>).
+-define(LAGER_LOGFILE, "put_fsm_eqc_lager.log").
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
@@ -106,12 +107,20 @@ setup() ->
     error_logger:tty(false),
     error_logger:logfile({open, "put_fsm_eqc.log"}),
 
+    application:stop(lager),
+    application:load(lager),
+    application:set_env(lager, handlers,
+                        [{lager_file_backend, [{?LAGER_LOGFILE, info, 10485760,"$D0",5}]}]),
+    ok = lager:start(),
+
     %% Start up mock servers and dependencies
     fsm_eqc_util:start_mock_servers(),
     start_javascript(),
     State.
 
 cleanup(running) ->
+    application:stop(lager),
+    application:unload(lager),
     cleanup_javascript(),
     fsm_eqc_util:cleanup_mock_servers(),
     %% Cleanup the JS manager process
@@ -239,6 +248,8 @@ precommit_hooks() ->
 postcommit_hook() ->
     frequency([{9, {erlang, postcommit_ok}},
                {1,  {erlang, postcommit_crash}},
+               {1,  {erlang, postcommit_fail}},
+               {1,  {erlang, postcommit_fail_reason}},
                {1,  {garbage, garbage}}]).
  
 postcommit_hooks() ->
@@ -263,12 +274,16 @@ prop_basic_put() ->
     ?FORALL({PWSeed, WSeed, DWSeed,
              Objects, ObjectIdxSeed,
              VPutResp,
-             Options0, AllowMult, Precommit, Postcommit}, 
+             Options0, AllowMult, Precommit, Postcommit,
+             LogLevel}, 
             {w_dw_seed(), w_dw_seed(), w_dw_seed(),
              fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
              vnodeputresps(),
-             options(),bool(), precommit_hooks(), postcommit_hooks()},
+             options(),bool(), precommit_hooks(), postcommit_hooks(),
+             oneof([info, debug])},
     begin
+        lager:set_loglevel(lager_file_backend, ?LAGER_LOGFILE, LogLevel),
+
         N = length(VPutResp),
         {PW, RealPW} = pw_val(N, 1000000, PWSeed),
         {W, RealW} = w_dw_val(N, 1000000, WSeed),
@@ -378,7 +393,8 @@ prop_basic_put() ->
            conjunction([{result, equals(RetResult, Expected)},
                         {details, check_details(RetInfo, Options)},
                         {postcommit, equals(PostCommits, ExpectedPostCommits)},
-                        {puts_sent, check_puts_sent(ExpectedVnodePuts, H)}]))
+                        {puts_sent, check_puts_sent(ExpectedVnodePuts, H)},
+                        {told_monitor, fsm_eqc_util:is_get_put_last_cast(put, PutPid)}]))
     end).
 
 make_options([], Options) ->
@@ -778,6 +794,12 @@ postcommit_crash(_Obj) ->
     Ok = ok,
     Ok = postcommit_crash.
 
+postcommit_fail(_Obj) ->
+    fail.
+
+postcommit_fail_reason(_Obj) ->
+    {fail, ?HOOK_SAYS_NO}.
+
 apply_precommit(Object, []) ->
     Object;
 apply_precommit(Object, [{_, precommit_add_md} | Rest]) ->
@@ -800,7 +822,7 @@ precommit_should_fail([]) ->
 precommit_should_fail([{garbage, garbage} | _Rest]) ->
     {true, {error, {precommit_fail, {invalid_hook_def, not_a_hook_def}}}};
 precommit_should_fail([{garbage, empty} | _Rest]) ->
-    {true, {error, {precommit_fail, {invalid_hook_def, no_hook}}}};
+    {true, {error, {precommit_fail, {invalid_hook_def, {struct, []}}}}};
 precommit_should_fail([{erlang,precommit_undefined} | _Rest]) ->
     {true, {error, {precommit_fail, 
                     {hook_crashed,{put_fsm_eqc,precommit_undefined,error,undef}}}}};

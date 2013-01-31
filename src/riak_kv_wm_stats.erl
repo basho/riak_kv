@@ -29,6 +29,7 @@
          encodings_provided/2,
          content_types_provided/2,
          service_available/2,
+         forbidden/2,
          produce_body/2,
          pretty_print/2
         ]).
@@ -67,13 +68,10 @@ content_types_provided(ReqData, Context) ->
 
 
 service_available(ReqData, Ctx) ->
-    case app_helper:get_env(riak_kv, riak_kv_stat, false) of
-        false ->
-            {false, wrq:append_to_response_body("riak_kv_stat is disabled on this node.\n", ReqData),
-             Ctx};
-        true ->
-            {true, ReqData, Ctx}
-    end.
+    {true, ReqData, Ctx}.
+
+forbidden(RD, Ctx) ->
+    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
 
 produce_body(ReqData, Ctx) ->
     Body = mochijson2:encode({struct, get_stats()}),
@@ -89,5 +87,3 @@ pretty_print(RD1, C1=#ctx{}) ->
 get_stats() ->
     proplists:delete(disk, riak_kv_stat:get_stats()) ++
         riak_core_stat:get_stats().
-
-

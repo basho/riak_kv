@@ -33,6 +33,8 @@
 %% API
 -export([build_filter/3]).
 
+-export_type([filter/0]).
+
 -type bucket() :: binary().
 -type filter() :: none | fun((any()) -> boolean()) | [{atom(), atom(), [any()]}].
 -type index() :: non_neg_integer().

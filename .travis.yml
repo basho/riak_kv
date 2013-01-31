@@ -1,0 +1,12 @@
+language: erlang
+script: (rebar compile && rebar eunit skip_deps=true) || (find . -name "*.log" -print -exec cat \{\} \; && sh -c "exit 1")
+notifications:
+  webhooks: http://basho-engbot.herokuapp.com/travis?key=ad9a6e51d706903e1fd0963c7b8e064b93e85b56
+  email: eng@basho.com
+before_script:
+  - "ulimit -n 4096"
+otp_release:
+  - R15B01
+  - R15B
+  - R14B04
+  - R14B03

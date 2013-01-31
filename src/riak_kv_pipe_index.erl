@@ -60,7 +60,7 @@ init(Partition, FittingDetails) ->
 
 %% @doc Process queries indexes on the KV vnode, according to the
 %% input bucket and query.
--spec process(term(), boolean(), state()) -> {ok, state()}.
+-spec process(term(), boolean(), state()) -> {ok | {error, term()}, state()}.
 process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
     case Input of
         {cover, FilterVNodes, {Bucket, Query}} ->
@@ -68,32 +68,48 @@ process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
         {Bucket, Query} ->
             FilterVNodes = []
     end,
-    ReqId = erlang:phash2(erlang:now()), % stolen from riak_client
+    ReqId = erlang:phash2({self(), os:timestamp()}), % stolen from riak_client
     riak_core_vnode_master:coverage(
-      ?KV_INDEX_REQ{bucket=Bucket,
-                    item_filter=none, %% riak_client uses nothing else?
-                    qry=Query},
+      riak_kv_index_fsm:req(Bucket, none, Query),
       {Partition, node()},
       FilterVNodes,
       {raw, ReqId, self()},
       riak_kv_vnode_master),
-    keysend_loop(ReqId, Partition, FittingDetails),
-    {ok, State}.
+    {keysend_loop(ReqId, Partition, FittingDetails), State}.
 
 keysend_loop(ReqId, Partition, FittingDetails) ->
     receive
+        {ReqId, {error, _Reason} = ER} ->
+            ER;
+        {ReqId, {From, Bucket, Keys}} ->
+            case keysend(Bucket, Keys, Partition, FittingDetails) of
+                ok ->
+                    riak_kv_vnode:ack_keys(From),
+                    keysend_loop(ReqId, Partition, FittingDetails);
+                ER ->
+                    ER
+            end;
         {ReqId, {Bucket, Keys}} ->
-            keysend(Bucket, Keys, Partition, FittingDetails),
-            keysend_loop(ReqId, Partition, FittingDetails);
+            case keysend(Bucket, Keys, Partition, FittingDetails) of
+                ok ->
+                    keysend_loop(ReqId, Partition, FittingDetails);
+                ER ->
+                    ER
+            end;
         {ReqId, done} ->
             ok
     end.
 
-keysend(Bucket, Keys, Partition, FittingDetails) ->
-    [ riak_pipe_vnode_worker:send_output(
-         {Bucket, Key}, Partition, FittingDetails)
-      || Key <- Keys ],
-    ok.
+keysend(_Bucket, [], _Partition, _FittingDetails) ->
+    ok;
+keysend(Bucket, [Key | Keys], Partition, FittingDetails) ->
+    case riak_pipe_vnode_worker:send_output(
+           {Bucket, Key}, Partition, FittingDetails) of
+        ok ->
+            keysend(Bucket, Keys, Partition, FittingDetails);
+        ER ->
+            ER
+    end.
 
 %% @doc Unused.
 -spec done(state()) -> ok.
@@ -111,6 +127,9 @@ done(_State) ->
 %%      to trigger querying on the appropriate vnodes.  The `eoi'
 %%      message is sent to the pipe as soon as it is confirmed that
 %%      all querying processes have started.
+%%
+%%      Note that log/trace messages are sent to the sink of the
+%%      original pipe. It is expected that that sink is an `fsm' type.
 -spec queue_existing_pipe(riak_pipe:pipe(),
                           bucket_or_filter(),
                           {eq, Index::binary(), Value::term()}
@@ -121,13 +140,17 @@ done(_State) ->
 queue_existing_pipe(Pipe, Bucket, Query, Timeout) ->
     %% make our tiny pipe
     [{_Name, Head}|_] = Pipe#pipe.fittings,
+    Period = riak_kv_mrc_pipe:sink_sync_period(),
     {ok, LKP} = riak_pipe:exec([#fitting_spec{name=index,
                                               module=?MODULE,
                                               nval=1}],
-                               [{sink, Head}]),
+                               [{sink, Head},
+                                {trace, [error]},
+                                {log, {sink, Pipe#pipe.sink}},
+                                {sink_type, {fsm, Period, infinity}}]),
 
     %% setup the cover operation
-    ReqId = erlang:phash2(erlang:now()), %% stolen from riak_client
+    ReqId = erlang:phash2({self(), os:timestamp()}), %% stolen from riak_client
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
     {ok, Sender} = riak_pipe_qcover_sup:start_qcover_fsm(
@@ -135,7 +158,23 @@ queue_existing_pipe(Pipe, Bucket, Query, Timeout) ->
                       [LKP, {Bucket, Query}, NVal]]),
 
     %% wait for cover to hit everything
-    erlang:link(Sender),
+    {RealTO, TOReason} =
+        try erlang:link(Sender) of
+            true ->
+                %% Sender was alive - wait as expected
+                {Timeout, timeout}
+        catch error:noproc ->
+                %% Sender finished early; it's always spawned locally,
+                %% so we'll get a noproc exit, instead of an exit signal
+
+                %% messages had better already be in our mailbox,
+                %% don't wait any extra time for them
+                {0,
+                 %% we'll have no idea what its failure was, unless it
+                 %% sent us an error message
+                 index_coverage_failure}
+        end,
+
     receive
         {ReqId, done} ->
             %% this eoi will flow into the other pipe
@@ -145,8 +184,8 @@ queue_existing_pipe(Pipe, Bucket, Query, Timeout) ->
             %% this destroy should not harm the other pipe
             riak_pipe:destroy(LKP),
             Error
-    after Timeout ->
+    after RealTO ->
             %% this destroy should not harm the other pipe
             riak_pipe:destroy(LKP),
-            {error, timeout}
+            {error, TOReason}
     end.

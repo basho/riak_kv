@@ -3,14 +3,14 @@
 {application, riak_kv,
  [
   {description, "Riak Key/Value Store"},
-  {vsn, "1.0.2"},
+  {vsn, "1.2.1p3"},
   {applications, [
                   kernel,
                   stdlib,
                   sasl,
                   crypto,
+                  riak_api,
                   riak_core,
-                  luke,
                   erlang_js,
                   mochiweb,
                   webmachine,
@@ -26,13 +26,6 @@
          %% Secondary code paths
          {add_paths, []},
 
-         %% This option enables compatability of bucket and key listing
-         %% with 0.14 and earlier versions. Once a rolling upgrade to
-         %% a version > 0.14 is completed for a cluster, this should be
-         %% set to false for improved performance for bucket and key
-         %% listing operations.
-         {legacy_keylisting, true},
-
          %% This option toggles compatibility of keylisting with 1.0
          %% and earlier versions.  Once a rolling upgrade to a version
          %% > 1.0 is completed for a cluster, this should be set to
@@ -42,6 +35,9 @@
 
          %% use the legacy routines for tracking kv stats
          {legacy_stats, true},
+
+         %% Enable active anti-entropy
+         {anti_entropy, {on, []}},
 
          %% Allow Erlang MapReduce functions to be specified as
          %% strings.

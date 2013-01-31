@@ -33,13 +33,20 @@
          expand_rw_value/4,
          normalize_rw_value/2,
          make_request/2,
-         mapred_system/0]).
+         get_index_n/2,
+         preflist_siblings/1,
+         responsible_preflists/1,
+         responsible_preflists/2]).
 
 -include_lib("riak_kv_vnode.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
+
+-type riak_core_ring() :: riak_core_ring:riak_core_ring().
+-type index() :: non_neg_integer().
+-type index_n() :: {index(), pos_integer()}.
 
 %% ===================================================================
 %% Public API
@@ -145,28 +152,83 @@ normalize_rw_value(quorum, N) -> erlang:trunc((N/2)+1);
 normalize_rw_value(all, N) -> N;
 normalize_rw_value(_, _) -> error.
 
-%% @doc Find out which MapReduce system should be used.  Returns
-%%      `legacy' if `riak_client:mapred*' should be used.  Returns
-%%      `pipe' if `riak_kv_mrc_pipe:mapred*' should be used.
-%%
-%%      Depends on the `mapred_system' variable in the `riak_kv'
-%%      application's environment.
--spec mapred_system() -> pipe | legacy.
-mapred_system() ->
-    case app_helper:get_env(riak_kv, mapred_system, legacy) of
-        pipe   -> pipe;
-        legacy -> legacy;
-        Other  ->
-            error_logger:warning_msg(
-              "Unknown value for riak_kv:mapred_system:~n   ~p~n"
-              "Defaulting to 'legacy'.",
-              [Other]),
-            %% override user's choice here so that warning doesn't
-            %% print repeatedly in the log
-            application:set_env(riak_kv, mapred_system, legacy),
-            legacy
-    end.
+%% ===================================================================
+%% Preflist utility functions
+%% ===================================================================
 
+%% @doc Given a bucket/key, determine the associated preflist index_n.
+-spec get_index_n({binary(), binary()}, riak_core_ring()) -> index_n().
+get_index_n({Bucket, Key}, Ring) ->
+    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
+    N = proplists:get_value(n_val, BucketProps),
+    ChashKey = riak_core_util:chash_key({Bucket, Key}),
+    Index = riak_core_ring:responsible_index(ChashKey, Ring),
+    {Index, N}.
+
+%% @doc Given an index, determine all sibling indices that participate in one
+%%      or more preflists with the specified index.
+-spec preflist_siblings(index()) -> [index()].
+preflist_siblings(Index) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    preflist_siblings(Index, Ring).
+
+%% @doc See {@link preflist_siblings/1}.
+-spec preflist_siblings(index(), riak_core_ring()) -> [index()].
+preflist_siblings(Index, Ring) ->
+    MaxN = determine_max_n(Ring),
+    preflist_siblings(Index, MaxN, Ring).
+
+-spec preflist_siblings(index(), pos_integer(), riak_core_ring()) -> [index()].
+preflist_siblings(Index, N, Ring) ->
+    IndexBin = <<Index:160/integer>>,
+    PL = riak_core_ring:preflist(IndexBin, Ring),
+    Indices = [Idx || {Idx, _} <- PL],
+    RevIndices = lists:reverse(Indices),
+    {Succ, _} = lists:split(N-1, Indices),
+    {Pred, _} = lists:split(N-1, tl(RevIndices)),
+    lists:reverse(Pred) ++ Succ.
+
+-spec responsible_preflists(index()) -> [index_n()].
+responsible_preflists(Index) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    responsible_preflists(Index, Ring).
+
+-spec responsible_preflists(index(), riak_core_ring()) -> [index_n()].
+responsible_preflists(Index, Ring) ->
+    AllN = determine_all_n(Ring),
+    responsible_preflists(Index, AllN, Ring).
+
+-spec responsible_preflists(index(), [pos_integer(),...], riak_core_ring())
+                           -> [index_n()].
+responsible_preflists(Index, AllN, Ring) ->
+    IndexBin = <<Index:160/integer>>,
+    PL = riak_core_ring:preflist(IndexBin, Ring),
+    Indices = [Idx || {Idx, _} <- PL],
+    RevIndices = lists:reverse(Indices),
+    lists:flatmap(fun(N) ->
+                          responsible_preflists_n(RevIndices, N)
+                  end, AllN).
+
+-spec responsible_preflists_n([index()], pos_integer()) -> [index_n()].
+responsible_preflists_n(RevIndices, N) ->
+    {Pred, _} = lists:split(N, RevIndices),
+    [{Idx, N} || Idx <- lists:reverse(Pred)].
+
+-spec determine_max_n(riak_core_ring()) -> pos_integer().
+determine_max_n(Ring) ->
+    lists:max(determine_all_n(Ring)).
+
+-spec determine_all_n(riak_core_ring()) -> [pos_integer(),...].
+determine_all_n(Ring) ->
+    Buckets = riak_core_ring:get_buckets(Ring),
+    BucketProps = [riak_core_bucket:get_bucket(Bucket, Ring) || Bucket <- Buckets],
+    Default = app_helper:get_env(riak_core, default_bucket_props),
+    DefaultN = proplists:get_value(n_val, Default),
+    AllN = lists:foldl(fun(Props, AllN) ->
+                               N = proplists:get_value(n_val, Props),
+                               ordsets:add_element(N, AllN)
+                       end, [DefaultN], BucketProps),
+    AllN.
 
 %% ===================================================================
 %% EUnit tests
