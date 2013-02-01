@@ -828,7 +828,7 @@ prepare_put(#state{vnodeid=VId,
                              prunetime=PruneTime},
             IndexBackend) ->
     case Mod:get(Bucket, Key, ModState) of
-        {error, not_found, _UpdModState} ->
+        {error, _Err, _UpdModState} ->
             case IndexBackend of
                 true ->
                     IndexSpecs = riak_object:index_specs(RObj);
@@ -1467,6 +1467,9 @@ bitcask_test_dir() ->
 eleveldb_test_dir() ->
     "./test.eleveldb-temp-data".
 
+clean_test_dirs() ->
+    ?cmd("rm -rf " ++ bitcask_test_dir()),
+    ?cmd("rm -rf " ++ eleveldb_test_dir()).
 
 backend_with_known_key(BackendMod) ->
     dummy_backend(BackendMod),
@@ -1486,6 +1489,7 @@ backend_with_known_key(BackendMod) ->
 list_buckets_test_() ->
     {foreach,
      fun() ->
+             clean_test_dirs(),
              application:start(sasl),
              Env = application:get_all_env(riak_kv),
              application:start(folsom),
@@ -1544,6 +1548,7 @@ list_buckets_test_i(BackendMod) ->
     flush_msgs().
 
 filter_keys_test() ->
+    clean_test_dirs(),
     {S, B, K} = backend_with_known_key(riak_kv_memory_backend),
     Caller1 = new_result_listener(keys),
     handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
@@ -1570,6 +1575,7 @@ filter_keys_test() ->
 
 %% Bad CRC's prevent objects from being writable
 bitcask_badcrc_test() ->
+    clean_test_dirs(),
     {S, B, K} = backend_with_known_key(riak_kv_bitcask_backend),
     DataDir = filename:join(bitcask_test_dir(), "0"),
     [DataFile] = filelib:wildcard(DataDir ++ "/*.data"),
