@@ -168,8 +168,15 @@ done(#state{acc=Acc0, inacc=InAcc, delay=Delay, p=Partition, fd=FittingDetails} 
              true ->
                   reduce(Acc0 ++ lists:reverse(InAcc), S, "done()")
           end,
-    [ riak_pipe_vnode_worker:send_output(O, Partition, FittingDetails)
-      || O <- Acc ],
+	[begin
+		case riak_pipe_vnode_worker:send_output(O, Partition, FittingDetails) of
+			{error, [preflist_exhausted]}->
+				%%We can't send reduce result to the output. Node is down. We must throw error,otherwise MapReduce will be return empty list.
+				exit(preflist_exhausted);
+			_->
+				ok
+		end 
+	end	|| O <- Acc],
     ok.
 
 %% @doc The archive is the accumulator.
