@@ -104,8 +104,8 @@ stop() ->
 
 init([]) ->
     register_stats(),
-    State = {state, [spawn(?MODULE, monitor_loop, [index]), 
-                     spawn(?MODULE, monitor_loop, [list])]},
+    State = {state, [spawn_link(?MODULE, monitor_loop, [index]), 
+                     spawn_link(?MODULE, monitor_loop, [list])]},
     {ok, State}.
 
 handle_call({register, Name, Type}, _From, State) ->
