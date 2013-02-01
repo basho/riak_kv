@@ -1592,6 +1592,7 @@ bitcask_badcrc_test() ->
                                    S),
     flush_msgs().
 
+
 new_result_listener(Type) ->
     case Type of
         buckets ->
