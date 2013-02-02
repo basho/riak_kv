@@ -321,14 +321,12 @@ mr2pipe_phases([]) ->
                    module=riak_pipe_w_pass,
                    chashfun=follow}];
 mr2pipe_phases(Query) ->
-    %% now() is used as a random hash to choose which vnode to collect
-    %% the reduce inputs
-    ConstantHashCookie = const_hash_cookie(),
+    ConstantHash = random_constant_hash(),
 
     %% first convert phase
     QueryT = list_to_tuple(Query),
     Numbered = lists:zip(Query, lists:seq(0, length(Query)-1)),
-    Fittings0 = lists:flatten([mr2pipe_phase(P,I,ConstantHashCookie,QueryT) ||
+    Fittings0 = lists:flatten([mr2pipe_phase(P,I,ConstantHash,QueryT) ||
                                   {P,I} <- Numbered]),
 
     %% clean up naive 'keep' translationg
@@ -350,14 +348,14 @@ mr2pipe_phases(Query) ->
 
 -spec mr2pipe_phase(query_part(),
                     Index :: integer(),
-                    ConstantHashSeed :: term(),
+                    ConstantHash :: chash:index(),
                     Query :: tuple()) ->
          [ riak_pipe:fitting_spec() ].
-mr2pipe_phase({map,FunSpec,Arg,Keep}, I, _ConstHashCookie, QueryT) ->
+mr2pipe_phase({map,FunSpec,Arg,Keep}, I, _ConstHash, QueryT) ->
     map2pipe(FunSpec, Arg, Keep, I, QueryT);
-mr2pipe_phase({reduce,FunSpec,Arg,Keep}, I, ConstHashCookie, _QueryT) ->
-    reduce2pipe(FunSpec, Arg, Keep, I, ConstHashCookie);
-mr2pipe_phase({link,Bucket,Tag,Keep}, I, _ConstHashCookie, QueryT)->
+mr2pipe_phase({reduce,FunSpec,Arg,Keep}, I, ConstHash, _QueryT) ->
+    reduce2pipe(FunSpec, Arg, Keep, I, ConstHash);
+mr2pipe_phase({link,Bucket,Tag,Keep}, I, _ConstHash, QueryT)->
     link2pipe(Bucket, Tag, Keep, I, QueryT).
 
 %% @doc Covert a map phase to its pipe fitting specs.
@@ -458,7 +456,7 @@ query_type(Idx, QueryT) ->
 %% A constant has is used to get all of the inputs for the reduce to
 %% the same vnode, without caring about which specific vnode that is.
 -spec reduce2pipe(reduce_query_fun(), term(), boolean(),
-                  Index :: integer(), ConstantHashSeed :: term()) ->
+                  Index :: integer(), ConstantHash :: chash:index()) ->
          [ riak_pipe:fitting_spec() ].
 reduce2pipe(FunSpec, Arg, Keep, I, Hash) ->
     [#fitting_spec{name={reduce,I},
@@ -1038,14 +1036,35 @@ compat_fun(66856669, 6, Fun) ->
 compat_fun(_, _, _) ->
     error.
 
-const_hash_cookie()->
-	Random = chash:key_of(now()),
-	{ok, Ring} = riak_core_ring_manager:get_my_ring(),
-	NodeCount = length(riak_core_ring:all_members(Ring)),
-	case riak_core_apl:get_primary_apl(Random,NodeCount,riak_pipe) of
-		[{{Partition, _Node},_Type}|_]->
-			riak_pipe_vnode:hash_for_partition(Partition);
-		_->
-			%%TODO: May be return some error?
-			Random
-	end.
+%% @doc Generate a constant hash for a vnode we know is up. This is
+%% used to route all reduce inputs to the same vnode.
+random_constant_hash()->
+    %% using now/0 as a randomizer, so that we don't overload just one
+    %% riak node with reduce work
+    Random = chash:key_of(now()),
+
+    %% the trick here: generate a random hash, then find the first
+    %% vnode alive in its preflist, then re-generate a hash that puts
+    %% the live vnode at the head of its preflist (since we'll be
+    %% using N=1 for reduce)
+    %%
+    %% one problem with this strategy is that it makes the burden of
+    %% reduce a little unfair on those vnodes that are successors to
+    %% down vnodes (because they will now receive all of their own
+    %% work, plus all work assigned to their predecessor); perhaps
+    %% something that also skips a random number of up vnodes in the
+    %% next version?
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    Preflist = riak_core_ring:preflist(Random, Ring),
+    {Partition, _Node} = first_up(Preflist),
+    riak_pipe_vnode:hash_for_partition(Partition).    
+
+%% this will fail if: this node() is a new member, owning no
+%% partitions or not having started its riak_pipe service yet, and all
+%% other nodes are down
+first_up(Preflist) ->
+    UpSet = ordsets:from_list(riak_core_node_watcher:nodes(riak_pipe)),
+    hd(lists:dropwhile(fun({_P, Node}) ->
+                               not ordsets:is_element(Node, UpSet)
+                       end,
+                       Preflist)).
