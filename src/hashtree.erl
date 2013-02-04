@@ -271,17 +271,21 @@ insert(Key, ObjHash, State, Opts) ->
     HKey = encode(State#state.id, Segment, Key),
     case should_insert(HKey, Opts, State) of
         true ->
-            WBuffer = [{HKey, ObjHash} | State#state.write_buffer],
-            WCount = State#state.write_buffer_count + 1,
-            State2 = State#state{write_buffer=WBuffer,
-                                 write_buffer_count=WCount},
-            State3 = maybe_flush_buffer(State2),
-            %% Dirty = gb_sets:add_element(Segment, State3#state.dirty_segments),
-            Dirty = bitarray_set(Segment, State3#state.dirty_segments),
-            State3#state{dirty_segments=Dirty};
+            State2 = enqueue_action({put, HKey, ObjHash}, State),
+            %% Dirty = gb_sets:add_element(Segment, State2#state.dirty_segments),
+            Dirty = bitarray_set(Segment, State2#state.dirty_segments),
+            State2#state{dirty_segments=Dirty};
         false ->
             State
     end.
+
+enqueue_action(Action, State) ->
+    WBuffer = [Action|State#state.write_buffer],
+    WCount = State#state.write_buffer_count + 1,
+    State2 = State#state{write_buffer=WBuffer,
+                         write_buffer_count=WCount},
+    State3 = maybe_flush_buffer(State2),
+    State3.
 
 maybe_flush_buffer(State=#state{write_buffer_count=WCount}) ->
     Threshold = 200,
@@ -293,8 +297,8 @@ maybe_flush_buffer(State=#state{write_buffer_count=WCount}) ->
     end.
 
 flush_buffer(State=#state{write_buffer=WBuffer}) ->
-    %% Write buffer is built backwards, reverse before building update list
-    Updates = [{put, Key, Hash} || {Key, Hash} <- lists:reverse(WBuffer)],
+    %% Write buffer is built backwards, reverse to build update list
+    Updates = lists:reverse(WBuffer),
     ok = eleveldb:write(State#state.ref, Updates, []),
     State#state{write_buffer=[],
                 write_buffer_count=0}.
@@ -304,10 +308,10 @@ delete(Key, State) ->
     Hash = erlang:phash2(Key),
     Segment = Hash rem State#state.segments,
     HKey = encode(State#state.id, Segment, Key),
-    ok = eleveldb:delete(State#state.ref, HKey, []),
-    %% Dirty = gb_sets:add_element(Segment, State#state.dirty_segments),
-    Dirty = bitarray_set(Segment, State#state.dirty_segments),
-    State#state{dirty_segments=Dirty}.
+    State2 = enqueue_action({delete, HKey}, State),
+    %% Dirty = gb_sets:add_element(Segment, State2#state.dirty_segments),
+    Dirty = bitarray_set(Segment, State2#state.dirty_segments),
+    State2#state{dirty_segments=Dirty}.
 
 -spec should_insert(segment_bin(), proplist(), hashtree()) -> boolean().
 should_insert(HKey, Opts, State) ->
