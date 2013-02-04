@@ -603,6 +603,9 @@ handle_options([{returnbody, false}|T], State = #state{postcommit = Postcommit})
                                           dw=erlang:max(1,State#state.dw),
                                           returnbody=false})
     end;
+handle_options([{counter_op, _Amt}=COP|T], State) ->
+    VNodeOpts = [COP | State#state.vnode_options],
+    handle_options(T, State#state{vnode_options=VNodeOpts});
 handle_options([{_,_}|T], State) -> handle_options(T, State).
 
 init_putcore(State = #state{n = N, w = W, dw = DW, allowmult = AllowMult,
