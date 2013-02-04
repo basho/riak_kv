@@ -108,7 +108,8 @@
                   bprops :: maybe_improper_list(),
                   starttime :: non_neg_integer(),
                   prunetime :: undefined| non_neg_integer(),
-                  is_index=false :: boolean() %% set if the b/end supports indexes
+                  is_index=false :: boolean(), %% set if the b/end supports indexes
+                  counter_op = undefined :: undefined | integer() %% if set this is a counter operation
                  }).
 
 -spec maybe_create_hashtrees(state()) -> state().
@@ -753,6 +754,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
             PruneTime = StartTime
     end,
     Coord = proplists:get_value(coord, Options, false),
+    CounterOp = proplists:get_value(counter_op, Options, undefined),
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
                        coord=Coord,
                        lww=proplists:get_value(last_write_wins, BProps, false),
@@ -761,7 +763,8 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        reqid=ReqID,
                        bprops=BProps,
                        starttime=StartTime,
-                       prunetime=PruneTime},
+                       prunetime=PruneTime,
+                       counter_op = CounterOp},
     {PrepPutRes, UpdPutArgs} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
@@ -827,7 +830,8 @@ prepare_put(#state{vnodeid=VId,
                              coord=Coord,
                              lww=LWW,
                              starttime=StartTime,
-                             prunetime=PruneTime},
+                             prunetime=PruneTime,
+                             counter_op = CounterOp},
             IndexBackend) ->
     case Mod:get(Bucket, Key, ModState) of
         {error, not_found, _UpdModState} ->
@@ -838,8 +842,18 @@ prepare_put(#state{vnodeid=VId,
                     IndexSpecs = []
             end,
             ObjToStore = case Coord of
-                             true ->
-                                 riak_object:increment_vclock(RObj, VId, StartTime);
+                              true ->
+                                  VClockUp = riak_object:increment_vclock(RObj, VId, StartTime),
+                                  case CounterOp of
+                                      %% coordinating a counter operation means
+                                      %% creating / incrementing the counter
+                                      Val when is_integer(Val) ->
+                                          %% make a new counter, stuff it in the riak_object
+                                          Counter = riak_kv_pncounter:new(VId, CounterOp),
+                                          Incremented = riak_object:update_value(VClockUp, {riak_kv_pncounter, Counter}),
+                                          riak_object:apply_updates(Incremented);
+                                      _ -> VClockUp
+                                  end;
                              false ->
                                  RObj
                          end,
@@ -852,28 +866,36 @@ prepare_put(#state{vnodeid=VId,
                 {newobj, NewObj} ->
                     VC = riak_object:vclock(NewObj),
                     AMObj = enforce_allow_mult(NewObj, BProps),
-                    case IndexBackend of
-                        true ->
-                            IndexSpecs =
-                                riak_object:diff_index_specs(AMObj,
+                    IndexSpecs = case IndexBackend of
+                                     true ->
+                                         riak_object:diff_index_specs(AMObj,
                                                              OldObj);
-                        false ->
-                            IndexSpecs = []
+                                     false ->
+                                         []
                     end,
-                    case PruneTime of
-                        undefined ->
-                            ObjToStore = AMObj;
-                        _ ->
-                            ObjToStore =
-                                riak_object:set_vclock(AMObj,
-                                                       vclock:prune(VC,
-                                                                    PruneTime,
-                                                                    BProps))
+                    ObjToStore = case PruneTime of
+                                     undefined ->
+                                         AMObj;
+                                     _ ->
+                                         riak_object:set_vclock(AMObj,
+                                                                vclock:prune(VC,
+                                                                             PruneTime,
+                                                                             BProps))
                     end,
-                    {{true, ObjToStore},
+                    ObjToStore2 = handle_counter(Coord, CounterOp, VId, ObjToStore, IndexSpecs),
+                    {{true, ObjToStore2},
                      PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}}
             end
     end.
+
+handle_counter(true, CounterOp, VId, RObj, IndexSpecs) when is_integer(CounterOp) ->
+    riak_kv_counter:update(RObj, IndexSpecs, VId, CounterOp);
+handle_counter(false, CounterOp, _Vid, RObj, IndexSpecs) when is_integer(CounterOp) ->
+    %% non co-ord put, merge the values if there are siblings
+    %% 'cos that is the point of CRDTs / counters: no siblings
+    riak_kv_counter:merge(RObj, IndexSpecs);
+handle_counter(_Coord, __CounterOp, _VId, RObj, _IndexSpecs) ->
+    RObj.
 
 perform_put({false, Obj},
             #state{idx=Idx}=State,
@@ -945,7 +967,7 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
         false ->
             {newobj, ResObj}
     end;
-put_merge(true, true, _CurObj, UpdObj, VId, StartTime) -> % coord=false, LWW=true
+put_merge(true, true, _CurObj, UpdObj, VId, StartTime) -> % coord=true, LWW=true
     {newobj, riak_object:increment_vclock(UpdObj, VId, StartTime)};
 put_merge(true, false, CurObj, UpdObj, VId, StartTime) ->
     UpdObj1 = riak_object:increment_vclock(UpdObj, VId, StartTime),
