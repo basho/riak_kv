@@ -650,7 +650,8 @@ handoff_finished(_TargetNode, State) ->
     {ok, State}.
 
 handle_handoff_data(BinObj, State) ->
-    PBObj = riak_core_pb:decode_riakobject_pb(zlib:unzip(BinObj)),
+io:format("JFW: handle_handoff_data() called\n"),
+    PBObj = riak_core_pb:decode_riakobject_pb(decode_binary_object(BinObj)),
     BKey = {PBObj#riakobject_pb.bucket,PBObj#riakobject_pb.key},
     case do_diffobj_put(BKey, binary_to_term(PBObj#riakobject_pb.val), State) of
         {ok, UpdModState} ->
@@ -662,8 +663,9 @@ handle_handoff_data(BinObj, State) ->
     end.
 
 encode_handoff_item({B, K}, V) ->
-    zlib:zip(riak_core_pb:encode_riakobject_pb(
-               #riakobject_pb{bucket=B, key=K, val=V})).
+    encode_binary_object(
+        riak_core_pb:encode_riakobject_pb(
+            #riakobject_pb{bucket=B, key=K, val=V})).
 
 is_empty(State=#state{mod=Mod, modstate=ModState}) ->
     {Mod:is_empty(ModState), State}.
@@ -1351,6 +1353,25 @@ object_info({Bucket, _Key}=BKey) ->
     Hash = riak_core_util:chash_key(BKey),
     {Bucket, Hash}.
 
+%% @private
+%% Encoding and decoding selection:
+
+decode_binary_object(BinaryObject) ->
+io:format("JFW: decode_binary_object() called\n"),
+    case riak_core_capability:get({riak_core, handoff_data_encoding}, encode_zlib) of
+        encode_zlib -> io:format("JFW: decode_binary_object() invoking zlib\n"),
+                       zlib:unzip(BinaryObject);
+
+        encode_raw  -> erlang:binary_to_term(BinaryObject);
+    end.
+
+encode_binary_object(BinaryObject) ->
+    case riak_core_capability:get({riak_core, handoff_data_encoding}, encode_zlib) of
+        encode_zlib -> io:format("JFW: encode_binary_object(): invoking zlib\n"),
+                       zlib:zip(BinaryObject);
+
+        encode_raw  -> erlang:term_to_binary(BinaryObject);
+    end.
 
 -ifdef(TEST).
 
