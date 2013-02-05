@@ -470,8 +470,8 @@ handle_command({rehash, Bucket, Key}, _, State=#state{mod=Mod, modstate=ModState
         {ok, Bin, _UpdModState} ->
             update_hashtree(Bucket, Key, Bin, State);
         _ ->
-            %% Do nothing if data doesn't exist
-            ok
+            %% Make sure hashtree isn't tracking deleted data
+            riak_kv_index_hashtree:delete({Bucket, Key}, State#state.hashtrees)
     end,
     {noreply, State};
 
