@@ -89,7 +89,7 @@
 -export([to_json/1, from_json/1]).
 -export([index_specs/1, diff_index_specs/2]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
--export([to_binary/2, from_binary/3, to_binary_version/4]).
+-export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
 
 %% @doc Convert riak object to binary form
 -spec to_binary(binary_version(), #r_object{}) -> r_object_bin().
@@ -105,6 +105,10 @@ to_binary_version(v1, _, _, <<?MAGIC:8/integer, 1:8/integer, _/binary>>=Bin) ->
     Bin;
 to_binary_version(Vsn, B, K, Bin) ->
     to_binary(Vsn, from_binary(B, K, Bin)).
+
+-spec binary_version(r_object_bin()) -> binary_version() | undefined.
+binary_version(<<131,_/binary>>) -> v0;
+binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 
 %% @doc Convert binary object to riak object
 -spec from_binary(bucket(),key(),binary()) -> #r_object{} | {error, atom()}.
