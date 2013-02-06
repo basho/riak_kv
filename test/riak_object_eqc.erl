@@ -55,4 +55,17 @@ riak_object_bin() ->
 binary_version() ->
     oneof([v0, v1]).
 
+%%====================================================================
+%% Shell helpers
+%%====================================================================
+
+test() ->
+    test(100).
+
+test(N) ->
+    quickcheck(numtests(N, prop_roundtrip())).
+
+check() ->
+    check(prop_roundtrip(), current_counterexample()).
+
 -endif. %% EQC

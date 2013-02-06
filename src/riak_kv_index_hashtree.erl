@@ -386,9 +386,7 @@ load_built(#state{trees=Trees}) ->
 hash_object({Bucket, Key}, RObjBin) ->
     %% Normalize the `riak_object' vector clock before hashing
     RObj = riak_object:from_binary(Bucket, Key, RObjBin),
-    Vclock = riak_object:vclock(RObj),
-    UpdObj = riak_object:set_vclock(RObj, lists:sort(Vclock)),
-    Hash = riak_object:hash(UpdObj),
+    Hash = riak_object:hash(RObj),
     term_to_binary(Hash).
 
 %% Fold over a given vnode's data, inserting each object into the appropriate
