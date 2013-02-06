@@ -1357,20 +1357,15 @@ object_info({Bucket, _Key}=BKey) ->
 %% Encoding and decoding selection:
 
 decode_binary_object(BinaryObject) ->
-io:format("JFW: decode_binary_object() called\n"),
     case riak_core_capability:get({riak_core, handoff_data_encoding}, encode_zlib) of
-        encode_zlib -> io:format("JFW: decode_binary_object() invoking zlib\n"),
-                       zlib:unzip(BinaryObject);
-
-        encode_raw  -> erlang:binary_to_term(BinaryObject);
+        encode_zlib -> zlib:unzip(BinaryObject);
+        encode_raw  -> binary_to_term(BinaryObject)
     end.
 
 encode_binary_object(BinaryObject) ->
     case riak_core_capability:get({riak_core, handoff_data_encoding}, encode_zlib) of
-        encode_zlib -> io:format("JFW: encode_binary_object(): invoking zlib\n"),
-                       zlib:zip(BinaryObject);
-
-        encode_raw  -> erlang:term_to_binary(BinaryObject);
+        encode_zlib -> zlib:zip(BinaryObject);
+        encode_raw  -> term_to_binary(BinaryObject)
     end.
 
 -ifdef(TEST).
