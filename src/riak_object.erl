@@ -82,7 +82,8 @@
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
--export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1, hash/1]).
+-export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
+-export([hash/1, approximate_size/2]).
 -export([vclock/1, update_value/2, update_metadata/2, bucket/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([merge/2, apply_updates/1, syntactic_merge/2]).
@@ -182,7 +183,20 @@ new_v1(Vclock, Siblings) ->
 bin_content(#r_content{metadata=Meta, value=Val}) ->
     ValBin = encode_maybe_binary(Val),
     ValLen = byte_size(ValBin),
-    {{VTagVal, Deleted, LastModVal}, RestBin} = dict:fold(fun fold_meta_to_bin/3, {{undefined, <<0>>, undefined}, <<>>}, Meta),
+    MetaBin = meta_bin(Meta),
+    MetaLen = byte_size(MetaBin),
+    <<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBin:MetaLen/binary>>.
+
+bin_contents(Contents) ->
+    F = fun(Content, Acc) ->
+                <<Acc/binary, (bin_content(Content))/binary>>
+        end,
+    lists:foldl(F, <<>>, Contents).
+
+meta_bin(MD) ->
+    {{VTagVal, Deleted, LastModVal}, RestBin} = dict:fold(fun fold_meta_to_bin/3,
+                                                          {{undefined, <<0>>, undefined}, <<>>},
+                                                          MD),
     VTagBin = case VTagVal of
                   undefined ->  ?EMPTY_VTAG_BIN;
                   _ -> list_to_binary(VTagVal)
@@ -192,15 +206,8 @@ bin_content(#r_content{metadata=Meta, value=Val}) ->
                      undefined -> <<0:32/integer, 0:32/integer, 0:32/integer>>;
                      {Mega,Secs,Micro} -> <<Mega:32/integer, Secs:32/integer, Micro:32/integer>>
                  end,
-    MetaBin = <<LastModBin/binary, VTagLen:8/integer, VTagBin:VTagLen/binary, Deleted:1/binary-unit:8, RestBin/binary>>,
-    MetaLen = byte_size(MetaBin),
-    <<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBin:MetaLen/binary>>.
-
-bin_contents(Contents) ->
-    F = fun(Content, Acc) ->
-                <<Acc/binary, (bin_content(Content))/binary>>
-        end,
-    lists:foldl(F, <<>>, Contents).
+    <<LastModBin/binary, VTagLen:8/integer, VTagBin:VTagLen/binary,
+      Deleted:1/binary-unit:8, RestBin/binary>>.
 
 fold_meta_to_bin(?MD_VTAG, Value, {{_Vt,Del,Lm},RestBin}) ->
     {{Value, Del, Lm}, RestBin};
@@ -229,6 +236,25 @@ decode_maybe_binary(<<1, Bin/binary>>) ->
     Bin;
 decode_maybe_binary(<<0, Bin/binary>>) ->
     binary_to_term(Bin).
+
+%% Get an approximation of object size by adding together the bucket, key,
+%% vectorclock, and all of the siblings. This is more complex than
+%% calling term_to_binary/1, but it should be easier on memory,
+%% especially for objects with large values.
+-spec approximate_size(binary_version(), #r_object{}) -> integer().
+approximate_size(Vsn, #r_object{bucket=Bucket,key=Key,contents=Contents,vclock=VClock}) ->
+    size(Bucket) + size(Key) + size(term_to_binary(VClock)) + contents_size(Vsn, Contents).
+
+contents_size(Vsn, Contents) ->
+    lists:sum([metadata_size(Vsn, MD) + value_size(Val) || {MD, Val} <- Contents]).
+
+metadata_size(v0, MD) ->
+    size(term_to_binary(MD));
+metadata_size(v1, MD) ->
+    size(meta_bin(MD)).
+
+value_size(Value) when is_binary(Value) -> size(Value);
+value_size(Value) -> size(term_to_binary(Value)).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
