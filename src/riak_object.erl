@@ -82,7 +82,7 @@
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
--export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
+-export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1, hash/1]).
 -export([vclock/1, update_value/2, update_metadata/2, bucket/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([merge/2, apply_updates/1, syntactic_merge/2]).
@@ -455,6 +455,10 @@ get_value(Object=#r_object{}) ->
                                                 % this blows up intentionally (badmatch) if more than one content value!
     [{_M,Value}] = get_contents(Object),
     Value.
+
+-spec hash(#r_object{}) -> integer().
+hash(Obj=#r_object{}) ->
+    erlang:phash2(to_binary(v0, Obj)).
 
 %% @spec update_metadata(riak_object(), dict()) -> riak_object()
 %% @doc  Set the updated metadata of an object to M.

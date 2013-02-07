@@ -93,16 +93,20 @@ backup_vnodes([Partition|T], Node) ->
     receive stop -> stop end,
     backup_vnodes(T, Node).
 
-backup_folder(_, V, Pid) ->
-    Pid ! {backup, V},
+backup_folder(K, V, Pid) ->
+    Pid ! {backup, {K, V}},
     Pid.
 
 result_collector(PPid) ->
     receive
         stop -> 
             PPid ! stop;
-        {backup, M} when is_binary(M) ->
-            disk_log:log(?TABLE, M),
+        {backup, {{B, K}, M}} when is_binary(M) ->
+            %% make sure binary is encoded using term_to_binary (v0)
+            %% not v1 format. restore does not have access to bucket/key
+            %% so must include them in encoded format, which v1 does not
+            ObjBin = riak_object:to_binary_version(v0, B, K, M),
+            disk_log:log(?TABLE, ObjBin),
             result_collector(PPid)
     end.
 
