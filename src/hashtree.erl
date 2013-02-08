@@ -474,11 +474,27 @@ new_segment_store(Opts, State) ->
                   SegmentPath ->
                       SegmentPath
               end,
-    Config = app_helper:get_env(riak_kv,
-                                anti_entropy_leveldb_opts,
-                                [{write_buffer_size, 4*1024*1024},
-                                 {max_open_files, 20}]),
-    Options = [{create_if_missing, true} | Config],
+
+    DefaultWriteBufferMin = 4 * 1024 * 1024,
+    DefaultWriteBufferMax = 14 * 1024 * 1024,
+    ConfigVars = app_helper:get_env(riak_kv,
+                                    anti_entropy_leveldb_opts,
+                                    [{write_buffer_size_min, DefaultWriteBufferMin},
+                                     {write_buffer_size_max, DefaultWriteBufferMax},
+                                     {max_open_files, 20}]),
+    Config = orddict:from_list(ConfigVars),
+
+    %% Use a variable write buffer size to prevent against all buffers being
+    %% flushed to disk at once when under a heavy uniform load.
+    WriteBufferMin = proplists:get_value(write_buffer_size_min, Config, DefaultWriteBufferMin),
+    WriteBufferMax = proplists:get_value(write_buffer_size_max, Config, DefaultWriteBufferMax),
+    {Offset, _} = random:uniform_s(1 + WriteBufferMax - WriteBufferMin, now()),
+    WriteBufferSize = WriteBufferMin + Offset,
+    Config2 = orddict:store(write_buffer_size, WriteBufferSize, Config),
+    Config3 = orddict:erase(write_buffer_size_min, Config2),
+    Config4 = orddict:erase(write_buffer_size_max, Config3),
+    Options = orddict:store(create_if_missing, true, Config4),
+
     filelib:ensure_dir(DataDir),
     {ok, Ref} = eleveldb:open(DataDir, Options),
     State#state{ref=Ref, path=DataDir}.
