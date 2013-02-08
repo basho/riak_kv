@@ -96,6 +96,8 @@
 -type index() :: non_neg_integer().
 -type state() :: #state{}.
 
+-define(HASHTREE_TOKENS, 90).
+
 -record(putargs, {returnbody :: boolean(),
                   coord:: boolean(),
                   lww :: boolean(),
@@ -1199,10 +1201,28 @@ do_diffobj_put({Bucket, Key}, DiffObj,
 
 -spec update_hashtree(binary(), binary(), binary(), state()) -> ok.
 update_hashtree(Bucket, Key, Val, #state{hashtrees=Trees}) ->
-    riak_kv_index_hashtree:insert_object({Bucket, Key}, Val, Trees).
+    case get_hashtree_token() of
+        true ->
+            riak_kv_index_hashtree:async_insert_object({Bucket, Key}, Val, Trees);
+        false ->
+            riak_kv_index_hashtree:insert_object({Bucket, Key}, Val, Trees),
+            put(hashtree_tokens, ?HASHTREE_TOKENS)
+    end.
+
+get_hashtree_token() ->
+    Tokens = get(hashtree_tokens),
+    case Tokens of
+        undefined ->
+            put(hashtree_tokens, ?HASHTREE_TOKENS - 1),
+            true;
+        N when N > 0 ->
+            put(hashtree_tokens, Tokens - 1),
+            true;
+        _ ->
+            false
+    end.
 
 %% @private
-
 %% Get the vnodeid, assigning and storing if necessary
 get_vnodeid(Index) ->
     F = fun(Status) ->
