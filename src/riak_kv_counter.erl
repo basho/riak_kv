@@ -37,12 +37,12 @@
 -spec update(riak_object:riak_object(), riak_object:index_specs(),
              binary(), integer()) ->
                     riak_object:riak_object().
-update(RObj, _IndexSpecs, _Actor, 0) ->
-    RObj;
 update(RObj, IndexSpecs, Actor, Amt) ->
-    {Counter0, NonCounterSiblings, Meta} = merge_object(RObj, IndexSpecs,
-                                                        riak_kv_pncounter:new()),
-    Counter = update_counter(Counter0, Actor, Amt),
+    {Counter0, NonCounterSiblings, Meta} = merge_object(RObj, IndexSpecs),
+    Counter = case Amt of
+                  0 -> Counter0;
+                  _ -> update_counter(Counter0, Actor, Amt)
+              end,
     update_object(RObj, Meta, Counter, NonCounterSiblings).
 
 %% @doc Unlike regular, opaque `riak_object' values, conflicting
@@ -51,7 +51,7 @@ update(RObj, IndexSpecs, Actor, Amt) ->
 -spec merge(riak_object:riak_object(), riak_object:index_specs()) ->
                    riak_object:riak_object().
 merge(RObj, IndexSpecs) ->
-    {Counter, NonCounterSiblings, Meta} = merge_object(RObj, IndexSpecs, undefined),
+    {Counter, NonCounterSiblings, Meta} = merge_object(RObj, IndexSpecs),
     update_object(RObj, Meta, Counter, NonCounterSiblings).
 
 %% @doc Currently _IGNORES_ all non-counter sibling values
@@ -59,21 +59,25 @@ merge(RObj, IndexSpecs) ->
                    integer().
 value(RObj) ->
     Contents = riak_object:get_contents(RObj),
-    {Counter, _NonCounterSiblings} = merge_contents(Contents, riak_kv_pncounter:new()),
-    riak_kv_pncounter:value(Counter).
+    {Counter, _NonCounterSiblings} = merge_contents(Contents),
+    case Counter of
+        undefined -> 0;
+        _ ->
+            riak_kv_pncounter:value(Counter)
+    end.
 
 %% Merge contents _AND_ meta
-merge_object(RObj, IndexSpecs, Seed) ->
+merge_object(RObj, IndexSpecs) ->
     Contents = riak_object:get_contents(RObj),
-    {Counter, NonCounterSiblings} = merge_contents(Contents, Seed),
+    {Counter, NonCounterSiblings} = merge_contents(Contents),
     Meta = merged_meta(IndexSpecs),
     {Counter, NonCounterSiblings, Meta}.
 
 %% Only merge the values of actual PN-Counters
 %% If a non-CRDT datum is present, keep it as a sibling value
-merge_contents(Contents, Seed) ->
+merge_contents(Contents) ->
     lists:foldl(fun merge_value/2,
-                {Seed, []},
+                {undefined, []},
                Contents).
 
 %% worker for `do_merge/1'
@@ -98,6 +102,8 @@ merged_meta(IndexSpecs) ->
             dict:store(?MD_INDEX, Indexes, dict:new())
     end.
 
+update_counter(undefined, Actor, Amt) ->
+    update_counter(riak_kv_pncounter:new(), Actor, Amt);
 update_counter(Counter, Actor, Amt) ->
     Op = counter_op(Amt),
     riak_kv_pncounter:update(Op, Actor, Counter).

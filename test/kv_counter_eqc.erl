@@ -122,18 +122,42 @@ prop_update() ->
             begin
                 Updated = riak_kv_counter:update(RObj, IndexSpecs, Actor, Amt),
 
+                NumMergedCounters =  num_counters(Updated),
+                ExpectedCounters = case {NumMergedCounters, Amt} of
+                                       {0, 0} -> 0;
+                                       _ -> 1
+                                   end,
+                %% Check that the structure of the merged counter is correct
+                CounterSeed = case Amt of
+                                  0 -> undefined;
+                                  _ -> riak_kv_pncounter:new(Actor, Amt)
+                              end,
+                ExpectedCounter = merge_object(RObj, CounterSeed),
+                {MergedMeta, MergedCounter} = single_counter(Updated),
+                %% Check that the meta is correct
+                ExpectedIndexMeta = expected_indexes(IndexSpecs, ExpectedCounters),
+                %% Check that non-sibling values and meta are untouched
+                ExpectedSiblings = non_counter_siblings(RObj),
+                ActualSiblings = non_counter_siblings(Updated),
+
                 ?WHENFAIL(
                    begin
                        io:format("Gen ~p~n", [RObj]),
                        io:format("Updated ~p~n", [Updated]),
                        io:format("Index Specs ~p~n", [IndexSpecs]),
-                       io:format("Amt ~p~n", [Amt])
+                       io:format("Amt ~p~n", [Amt]),
+                       io:format("Merged counter ~p Expected counter ~p", [ExpectedCounter, MergedCounter])
                    end,
                    collect(Amt,
                            conjunction([
                                        {counter_value, equals(sumthem(RObj) + Amt,
                                                               riak_kv_counter:value(Updated))},
-                                        {merge_checks, verify_merge(RObj, Updated, IndexSpecs)}
+                                         {number_of_counters,
+                                         equals(ExpectedCounters, NumMergedCounters)},
+                                       {counter_structure,
+                                        counters_equal(ExpectedCounter, MergedCounter)},
+                                        {siblings, equals(lists:sort(ExpectedSiblings), lists:sort(ActualSiblings))},
+                                        {index_meta, equals(ExpectedIndexMeta, sorted_index_meta(MergedMeta))}
                                        ])
                           ))
             end).
