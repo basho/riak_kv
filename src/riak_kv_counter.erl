@@ -37,6 +37,8 @@
 -spec update(riak_object:riak_object(), riak_object:index_specs(),
              binary(), integer()) ->
                     riak_object:riak_object().
+update(RObj, _IndexSpecs, _Actor, 0) ->
+    RObj;
 update(RObj, IndexSpecs, Actor, Amt) ->
     {Counter0, NonCounterSiblings, Meta} = merge_object(RObj, IndexSpecs,
                                                         riak_kv_pncounter:new()),
@@ -89,9 +91,12 @@ merge_value(NonCounter, {Mergedest, NonCounterSiblings}) ->
 %% therefore create a meta that is
 %% only the index meta data we already know about
 merged_meta(IndexSpecs) ->
-    Indexes = [{Index, Value} || {Op, Index, Value} <- IndexSpecs,
-                                 Op =:= add],
-    dict:store(?MD_INDEX, Indexes, dict:new()).
+    case [{Index, Value} || {Op, Index, Value} <- IndexSpecs,
+                                 Op =:= add] of
+        [] -> dict:new();
+        Indexes ->
+            dict:store(?MD_INDEX, Indexes, dict:new())
+    end.
 
 update_counter(Counter, Actor, Amt) ->
     Op = counter_op(Amt),
