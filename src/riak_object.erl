@@ -28,7 +28,7 @@
 -endif.
 -include("riak_kv_wm_raw.hrl").
 
--export_type([riak_object/0, bucket/0, key/0, value/0]).
+-export_type([riak_object/0, bucket/0, key/0, value/0, index_specs/0]).
 
 -type key() :: binary().
 -type bucket() :: binary().
@@ -53,6 +53,8 @@
 
 -type index_op() :: add | remove.
 -type index_value() :: integer() | binary().
+-type index_spec() :: {index_op(), binary(), index_value()}.
+-type index_specs() :: [index_spec()].
 
 -define(MAX_KEY_SIZE, 65536).
 
@@ -333,7 +335,7 @@ increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
 %% stored for a key and therefore no existing
 %% index data.
 -spec index_specs(riak_object()) ->
-                         [{index_op(), binary(), index_value()}].
+                         index_specs().
 index_specs(Obj) ->
     Indexes = index_data(Obj),
     assemble_index_specs(Indexes, add).
@@ -345,7 +347,7 @@ index_specs(Obj) ->
 %% second parameter. If there are siblings only the unique new
 %% indexes are added.
 -spec diff_index_specs(riak_object(), riak_object()) ->
-                              [{index_op(), binary(), index_value()}].
+                              index_specs().
 diff_index_specs(Obj, OldObj) ->
     OldIndexes = index_data(OldObj),
     OldIndexSet = ordsets:from_list(OldIndexes),
