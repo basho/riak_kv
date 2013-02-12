@@ -101,6 +101,7 @@ prop_merge() ->
                        io:format("Merged ~p\n", [Merged]),
                        io:format("Index Specs ~p~n", [IndexSpecs])
                    end,
+
                    conjunction([
                                 {value, equals(sumthem(RObj), riak_kv_counter:value(Merged))},
                                 {verify_merge, verify_merge(RObj, Merged, IndexSpecs, FExpectedCounters, MergeSeed)}
@@ -196,6 +197,7 @@ counters_equal(undefined, _C2) ->
 counters_equal(C1, C2) ->
     riak_kv_pncounter:equal(C1, C2).
 
+
 %% Extract a single {meta, counter} value
 single_counter(Merged) ->
     Contents = riak_object:get_contents(Merged),
@@ -219,6 +221,7 @@ non_counter_siblings(RObj) ->
                                               end,
                                               Contents),
     lists:sort(NonCounters).
+
 
 num_counters(RObj) ->
     Values = riak_object:get_values(RObj),
@@ -298,3 +301,4 @@ index_value() ->
     oneof([binary(), int()]).
 
 -endif. % EQC
+
