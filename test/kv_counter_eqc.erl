@@ -2,7 +2,7 @@
 %%
 %% kv_counter_eqc: Quickcheck test for riak_kv_counter
 %%
-%% Copyright (c) 2007-2012 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -22,9 +22,8 @@
 
 -module(kv_counter_eqc).
 
-%%-ifdef(EQC).
+-ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -include("../src/riak_kv_wm_raw.hrl").
@@ -33,10 +32,26 @@
 
 -define(BUCKET, <<"b">>).
 -define(KEY, <<"k">>).
--define(NUMTESTS, 1000).
+-define(NUMTESTS, 500).
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) ->
                               io:format(user, Str, Args) end, P)).
+
+%%====================================================================
+%% eunit test
+%%====================================================================
+
+counter_value_test_() ->
+    {timeout, 60000, % do not trust the docs - timeout is in msec
+      ?_assertEqual(true, quickcheck(numtests(?NUMTESTS, ?QC_OUT(prop_value()))))}.
+
+counter_merge_test_() ->
+    {timeout, 60000, % do not trust the docs - timeout is in msec
+       ?_assertEqual(true, quickcheck(numtests(?NUMTESTS, ?QC_OUT(prop_merge()))))}.
+
+counter_update_test_() ->
+    {timeout, 60000, % do not trust the docs - timeout is in msec
+       ?_assertEqual(true, quickcheck(numtests(?NUMTESTS, ?QC_OUT(prop_update()))))}.
 
 %%====================================================================
 %% Shell helpers
@@ -60,137 +75,90 @@ test_update() ->
 test_update(N) ->
     quickcheck(numtests(N, prop_update())).
 
+%%====================================================================
+%% properties
+%%====================================================================
+
 prop_value() ->
-    %% given any riak_object,
-    %% value will return the value
-    %% of merged PN-Counter payloads (zero if no counters)
     ?FORALL(RObj, riak_object(),
-            collect(num_counters(RObj),
-                    equals(sumthem(RObj), riak_kv_counter:value(RObj)))).
+            equals(sumthem(RObj), riak_kv_counter:value(RObj))).
 
 prop_merge() ->
-    %% given any riak_object
-    %% merge will return a
-    %% riak_object where all counter siblings
-    %% are squashed to a single value
-    %% and all counter metadata is squashed to
-    %% a single dict of indexes
-    %% all other siblings must be maintained, untouched.
     ?FORALL({RObj, IndexSpecs}, {riak_object(), index_specs()},
             begin
                 Merged = riak_kv_counter:merge(RObj, IndexSpecs),
-                NumGeneratedCounters = num_counters(RObj),
-                NumMergedCounters =  num_counters(Merged),
-                ExpectedCounters = case NumGeneratedCounters of
-                                       0 -> 0;
-                                       _ -> 1
-                                   end,
-                %% Check that the structure of the merged counter is correct
-                ExpectedCounter = merge_object(RObj, undefined),
-                {MergedMeta, MergedCounter} = single_counter(Merged),
-                %% Check that the meta is correct
-                ExpectedIndexMeta = expected_indexes(IndexSpecs, NumGeneratedCounters),
-                %% Check that non-sibling values and meta are untouched
-                ExpectedSiblings = non_counter_siblings(RObj),
-                ActualSiblings = non_counter_siblings(Merged),
+                FExpectedCounters = fun(NumGeneratedCounters) ->
+                                            case NumGeneratedCounters of
+                                                0 -> 0;
+                                                _ -> 1
+                                            end
+                                    end,
+                MergeSeed = undefined,
+
                 ?WHENFAIL(
                    begin
                        io:format("Gen ~p\n", [RObj]),
                        io:format("Merged ~p\n", [Merged]),
                        io:format("Index Specs ~p~n", [IndexSpecs])
                    end,
-                   collect(NumGeneratedCounters,
-                           conjunction([
-                                        {value, equals(sumthem(RObj), riak_kv_counter:value(Merged))},
-                                        {number_of_counters,
-                                         equals(ExpectedCounters, NumMergedCounters)},
-                                       {counter_structure,
-                                        counters_equal(ExpectedCounter, MergedCounter)},
-                                        {siblings, equals(lists:sort(ExpectedSiblings), lists:sort(ActualSiblings))},
-                                        {index_meta, equals(ExpectedIndexMeta, sorted_index_meta(MergedMeta))}
-                                       ])))
+                   conjunction([
+                                {value, equals(sumthem(RObj), riak_kv_counter:value(Merged))},
+                                {verify_merge, verify_merge(RObj, Merged, IndexSpecs, FExpectedCounters, MergeSeed)}
+                               ]))
             end).
 
 prop_update() ->
-    %% given any riak object, will update the counter value of that object.
-    %% If any counter values are present they will be merged and incremented
-    %% if not, then a new counter is created, and incremented
-    %% all non-counter values and meta are left alone
-    %% only counter index meta is preserved, again using indexspecs.
     ?FORALL({RObj, IndexSpecs, Actor, Amt},
             {riak_object(), index_specs(), noshrink(binary(4)), int()},
             begin
                 Updated = riak_kv_counter:update(RObj, IndexSpecs, Actor, Amt),
-
-                NumMergedCounters =  num_counters(Updated),
-                ExpectedCounters = case {NumMergedCounters, Amt} of
-                                       {0, 0} -> 0;
-                                       _ -> 1
-                                   end,
-                %% Check that the structure of the merged counter is correct
-                CounterSeed = case Amt of
-                                  0 -> undefined;
-                                  _ -> riak_kv_pncounter:new(Actor, Amt)
-                              end,
-                ExpectedCounter = merge_object(RObj, CounterSeed),
-                {MergedMeta, MergedCounter} = single_counter(Updated),
-                %% Check that the meta is correct
-                ExpectedIndexMeta = expected_indexes(IndexSpecs, ExpectedCounters),
-                %% Check that non-sibling values and meta are untouched
-                ExpectedSiblings = non_counter_siblings(RObj),
-                ActualSiblings = non_counter_siblings(Updated),
+                FExpectedCounters = fun(NumGeneratedCounters) ->
+                                            case {NumGeneratedCounters, Amt} of
+                                                {0, 0} -> 0;
+                                                _ -> 1
+                                            end
+                                    end,
+                MergeSeed = case Amt of
+                                0 -> undefined;
+                                _ -> riak_kv_pncounter:new(Actor, Amt)
+                            end,
 
                 ?WHENFAIL(
                    begin
                        io:format("Gen ~p~n", [RObj]),
                        io:format("Updated ~p~n", [Updated]),
                        io:format("Index Specs ~p~n", [IndexSpecs]),
-                       io:format("Amt ~p~n", [Amt]),
-                       io:format("Merged counter ~p Expected counter ~p", [ExpectedCounter, MergedCounter])
+                       io:format("Amt ~p~n", [Amt])
                    end,
-                   collect(Amt,
-                           conjunction([
-                                       {counter_value, equals(sumthem(RObj) + Amt,
-                                                              riak_kv_counter:value(Updated))},
-                                         {number_of_counters,
-                                         equals(ExpectedCounters, NumMergedCounters)},
-                                       {counter_structure,
-                                        counters_equal(ExpectedCounter, MergedCounter)},
-                                        {siblings, equals(lists:sort(ExpectedSiblings), lists:sort(ActualSiblings))},
-                                        {index_meta, equals(ExpectedIndexMeta, sorted_index_meta(MergedMeta))}
-                                       ])
-                          ))
+                   conjunction([
+                                {counter_value, equals(sumthem(RObj) + Amt,
+                                                       riak_kv_counter:value(Updated))},
+                                {verify_merge, verify_merge(RObj, Updated, IndexSpecs, FExpectedCounters, MergeSeed)}
+                               ]))
             end).
-
-%% Both update and merge
-%% share most of their properties
-%% so reuses them
-verify_merge(Generated, PostAction, IndexSpecs) ->
-    NumGeneratedCounters = num_counters(Generated),
-    NumPostActionCounters =  num_counters(PostAction),
-    ExpectedCounters = case NumGeneratedCounters of
-                           0 -> 0;
-                           _ -> 1
-                       end,
-    %% Check that the structure of the merged counter is correct
-    ExpectedCounter = merge_object(Generated, undefined),
-    {PostActionMeta, PostActionCounter} = single_counter(PostAction),
-    %% Check that the meta is correct
-    ExpectedIndexMeta = expected_indexes(IndexSpecs, NumGeneratedCounters),
-    %% Check that non-sibling values and meta are untouched
-    ExpectedSiblings = non_counter_siblings(Generated),
-    ActualSiblings = non_counter_siblings(PostAction),
-    conjunction([{number_of_counters,
-                  equals(ExpectedCounters, NumPostActionCounters)},
-                 {counter_structure,
-                  counters_equal(ExpectedCounter, PostActionCounter)},
-                 {siblings, equals(lists:sort(ExpectedSiblings), lists:sort(ActualSiblings))},
-                 {index_meta, equals(ExpectedIndexMeta, sorted_index_meta(PostActionMeta))}
-                ]).
 
 %%====================================================================
 %% Helpers
 %%====================================================================
+
+%% Update and Merge are the same, except for the
+%% end value of the counter. Reuse the common properties.
+verify_merge(Generated, PostAction, IndexSpecs, FExpectedCounters, MergeSeed) ->
+    NumGeneratedCounters = num_counters(Generated),
+    ExpectedCounters = FExpectedCounters(NumGeneratedCounters),
+    ExpectedCounter = merge_object(Generated, MergeSeed),
+    NumMergedCounters =  num_counters(PostAction),
+    {MergedMeta, MergedCounter} = single_counter(PostAction),
+    ExpectedIndexMeta = expected_indexes(IndexSpecs, ExpectedCounters),
+    ExpectedSiblings = non_counter_siblings(Generated),
+    ActualSiblings = non_counter_siblings(PostAction),
+    conjunction([{number_of_counters,
+                   equals(ExpectedCounters, NumMergedCounters)},
+                  {counter_structure,
+                   counters_equal(ExpectedCounter, MergedCounter)},
+                  {siblings, equals(ExpectedSiblings, ActualSiblings)},
+                  {index_meta, equals(ExpectedIndexMeta, sorted_index_meta(MergedMeta))}]).
+
 sorted_index_meta(undefined) ->
     undefined;
 sorted_index_meta(Meta) ->
@@ -228,13 +196,13 @@ counters_equal(undefined, _C2) ->
 counters_equal(C1, C2) ->
     riak_kv_pncounter:equal(C1, C2).
 
-%% Extract a single {meta , counter} value
+%% Extract a single {meta, counter} value
 single_counter(Merged) ->
     Contents = riak_object:get_contents(Merged),
     case [begin
               {riak_kv_pncounter, Counter} = Val,
               {Meta, Counter}
-          end|| {Meta, Val} <- Contents,
+          end || {Meta, Val} <- Contents,
                 is_tuple(Val),
                 riak_kv_pncounter =:= element(1, Val)] of
         [Single] ->
@@ -250,7 +218,7 @@ non_counter_siblings(RObj) ->
                                                       false
                                               end,
                                               Contents),
-    NonCounters.
+    lists:sort(NonCounters).
 
 num_counters(RObj) ->
     Values = riak_object:get_values(RObj),
@@ -329,4 +297,4 @@ index_op() ->
 index_value() ->
     oneof([binary(), int()]).
 
-%%-endif. % EQC
+-endif. % EQC
