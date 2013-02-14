@@ -36,8 +36,8 @@
          %% use the legacy routines for tracking kv stats
          {legacy_stats, true},
 
-         %% Enable active anti-entropy
-         {anti_entropy, {on, []}},
+         %% Disable active anti-entropy by default
+         {anti_entropy, {off, []}},
 
          %% Allow Erlang MapReduce functions to be specified as
          %% strings.
