@@ -89,11 +89,11 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
         false ->
             case MD of
                 no_initial_metadata ->
-                    Contents = dvvset:new(#r_content{metadata=dict:new(), value=V}),
+                    Contents = dvvset:new([#r_content{metadata=dict:new(), value=V}]),
                     #r_object{bucket=B,key=K,
                               contents=Contents};
                 _ ->
-                    Contents = dvvset:new(#r_content{metadata=MD, value=V}),
+                    Contents = dvvset:new([#r_content{metadata=MD, value=V}]),
                     #r_object{bucket=B,key=K,updatemetadata=MD,
                               contents=Contents}
             end
@@ -238,7 +238,7 @@ apply_updates(Object=#r_object{}) ->
                 VersionVector = dvvset:join(CurrentContents),
                 %% construct a new clock with the same causal information as the previous,
                 %% but with the new value only.
-                dvvset:new(VersionVector,NewR)
+                dvvset:new(VersionVector,[NewR])
         end,
     Object#r_object{contents=UpdatedContents,
                     updatemetadata=dict:store(clean, true, dict:new()),
@@ -324,7 +324,7 @@ set_vclock(Object, Clock) ->
     Vs = dvvset:values(get_contents(apply_updates(Object))),
     %% set the contents to a new clock with the same causal information 
     %% as the version vector, but with the new list of values.
-    Object#r_object{contents=dvvset:new2(Clock,Vs)}.
+    Object#r_object{contents=dvvset:new(Clock,Vs)}.
 
 %% @doc  INTERNAL USE ONLY.  Set the contents of riak_object 
 %%       to the Contents. Normal clients should use the
@@ -785,9 +785,9 @@ jsonify_round_trip_test() ->
     ?assertEqual(Links, dict:fetch(?MD_LINKS, get_metadata(O2))),
     ?assertEqual(lists:sort(Indexes), lists:sort(index_data(O2))),
     O3 = increment_vclock(O,"a"),
-    O3a = set_contents(O3, dvvset:new(dvvset:join(get_contents(O3)),V)),
+    O3a = set_contents(O3, dvvset:new(dvvset:join(get_contents(O3)),[V])),
     O4 = increment_vclock(O3a,"a"),
-    O4a = set_contents(O4, dvvset:new(dvvset:join(get_contents(O4)),V)),
+    O4a = set_contents(O4, dvvset:new(dvvset:join(get_contents(O4)),[V])),
     O5 = update_vclock(O4a,O3a,"b"),
     O3b = from_json(to_json(O3a)),
     O4b = from_json(to_json(O4a)),
@@ -818,8 +818,8 @@ check_most_recent({V1, T1, D1}, {V2, T2, D2}) ->
     C1 = (dvvset:last(fun riak_object:compare_content_dates/2, get_contents(O1))),
     C2 = (dvvset:last(fun riak_object:compare_content_dates/2, get_contents(O2))),
 
-    C3 = most_recent_content(dvvset:new2([C1, C2])),
-    C4 = most_recent_content(dvvset:new2([C2, C1])),
+    C3 = most_recent_content(dvvset:new([C1, C2])),
+    C4 = most_recent_content(dvvset:new([C2, C1])),
 
     ?assertEqual(C3, C4),
 
