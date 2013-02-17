@@ -57,6 +57,8 @@
          handle_coverage/4,
          is_empty/1,
          delete/1,
+         request_hash/1,
+         object_info/1,
          handle_handoff_command/3,
          handoff_starting/2,
          handoff_cancelled/1,
@@ -728,6 +730,17 @@ handle_handoff_command(Req=?KV_PUT_REQ{}, Sender, State) ->
 handle_handoff_command(Req, Sender, State) ->
     handle_command(Req, Sender, State).
 
+%% callback used by dynamic ring sizing to determine where
+%% requests should be forwarded. Gets/puts/deletes are forwarded
+%% during the operation, all other requests are not
+request_hash(?KV_PUT_REQ{bkey=BKey}) ->
+    riak_core_util:chash_key(BKey);
+request_hash(?KV_GET_REQ{bkey=BKey}) ->
+    riak_core_util:chash_key(BKey);
+request_hash(?KV_DELETE_REQ{bkey=BKey}) ->
+    riak_core_util:chash_key(BKey);
+request_hash(_Req) ->
+    undefined.
 
 handoff_starting(_TargetNode, State) ->
     {true, State#state{in_handoff=true}}.
