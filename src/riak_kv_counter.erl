@@ -80,9 +80,9 @@ merge_contents(Contents) ->
                 {undefined, []},
                Contents).
 
-%% worker for `do_merge/1'
-merge_value({_MD, {riak_kv_pncounter, _Counter}}=PNCount, {undefined, NonCounterSiblings}) ->
-    merge_value(PNCount, {riak_kv_pncounter:new(), NonCounterSiblings});
+%% worker for `merge_contents/1'
+merge_value({_MD, {riak_kv_pncounter, Counter}}, {undefined, NonCounterSiblings}) ->
+    {Counter, NonCounterSiblings};
 merge_value({_MD, {riak_kv_pncounter, Counter}}, {Mergedest, NonCounterSiblings}) ->
     {riak_kv_pncounter:merge(Counter, Mergedest), NonCounterSiblings};
 merge_value(NonCounter, {Mergedest, NonCounterSiblings}) ->

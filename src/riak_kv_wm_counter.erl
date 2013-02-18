@@ -229,7 +229,6 @@ extract_index_fields(RD) ->
 content_types_provided(RD, Ctx) ->
     {[{"text/plain", to_text}], RD, Ctx}.
 
-
 resource_exists(RD, Ctx0) when Ctx0#ctx.method =:= 'GET' ->
     DocCtx = ensure_doc(Ctx0),
     case DocCtx#ctx.doc of
@@ -271,7 +270,7 @@ ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};
 ensure_doc(Ctx=#ctx{doc=undefined, bucket=B, key=K, client=C, r=R,
         pr=PR, basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
-    Ctx#ctx{doc=C:get(B, K, [deletedvclock, {r, R}, {pr, PR},
+    Ctx#ctx{doc=C:get(B, K, [{r, R}, {pr, PR},
                 {basic_quorum, Quorum}, {notfound_ok, NotFoundOK}])};
 ensure_doc(Ctx) -> Ctx.
 
