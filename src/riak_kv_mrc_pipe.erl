@@ -959,6 +959,9 @@ example_setup() ->
 
 %% @doc Store some example data for the other example functions.
 %%
+%% WARNING: This function is used by riak_test mapred_*
+%% tests. Changing what it creates will break those tests.
+%%
 %% Objects stored:
 %% <dl>
 %%   <dt>`foo/bar'</dt>
