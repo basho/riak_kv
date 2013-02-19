@@ -2,7 +2,7 @@
 %%
 %% riak_kv_mapreduce: convenience functions for defining common map/reduce phases
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -26,26 +26,40 @@
 %% phase spec producers
 -export([map_identity/1,
          map_object_value/1,
-         map_object_value_list/1]).
+         map_object_value_list/1,
+         map_delete/1,
+         map_datasize/1
+         ]).
 -export([reduce_identity/1,
          reduce_set_union/1,
          reduce_sort/1,
          reduce_string_to_integer/1,
          reduce_sum/1,
          reduce_plist_sum/1,
-         reduce_count_inputs/1]).
+         reduce_count_inputs/1,
+         reduce_limit/1,
+         reduce_delete/1
+         ]).
 
 %% phase function definitions
 -export([map_identity/3,
          map_object_value/3,
-         map_object_value_list/3]).
+         map_object_value_list/3,
+         map_delete/3,
+         map_datasize/3
+         ]).
 -export([reduce_identity/2,
          reduce_set_union/2,
          reduce_sort/2,
          reduce_string_to_integer/2,
          reduce_sum/2,
          reduce_plist_sum/2,
-         reduce_count_inputs/2]).
+         reduce_count_inputs/2,
+         reduce_limit/2,
+         reduce_delete/2
+         ]).
+
+-define(DEFAULT_REDUCE_LIMIT_SIZE, 100).
 
 %-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -125,6 +139,50 @@ notfound_map_action(_NF, _KD, <<"filter_notfound">>)    -> [];
 notfound_map_action(NF, _KD, <<"include_notfound">>)    -> [NF];
 notfound_map_action(_NF, KD, <<"include_keydata">>)     -> [KD]; 
 notfound_map_action(_NF, _KD, {struct,[{<<"sub">>,V}]}) -> V.
+
+%% @spec map_delete(boolean()) -> map_phase_spec()
+%% @doc Produces a spec for a map phase that deletes
+%%      each object it's handed.
+map_delete(Acc) ->
+    {map, {modfun, riak_kv_mapreduce, map_delete}, none, Acc}.
+
+%% @spec map_delete(riak_object:riak_object(), term(), term()) ->
+%%                   [] | [integer()]
+%% @doc map phase function for map_delete/1
+map_delete({error, notfound}, _, _) ->
+    [];
+map_delete(RiakObject, _, _) ->
+    case is_deleted(RiakObject) of
+        true ->
+            [];
+        false ->
+            {ok, C} = riak:local_client(),
+            Bucket = riak_object:bucket(RiakObject),
+            Key = riak_object:key(RiakObject),
+            C:delete(Bucket, Key),
+            [1]  
+    end.
+
+%% @spec map_datasize(boolean()) -> map_phase_spec()
+%% @doc Produces a spec for a map phase that returns the total
+%%      size in bytes of all siblings of the object it's handed.
+map_datasize(Acc) ->
+    {map, {modfun, riak_kv_mapreduce, map_datasize}, none, Acc}.
+
+%% @spec map_datasize(riak_object:riak_object(), term(), term()) ->
+%%                   [integer()]
+%% @doc map phase function for map_datasize/1
+map_datasize({error, notfound}, _, _) ->
+    [];
+map_datasize(RiakObject, _, _) ->
+    [lists:foldl(fun({MD,Val}, A) ->
+                     case dict:is_key(<<"X-Riak-Deleted">>, MD) of
+                         true ->
+                             A;
+                         false ->
+                             (byte_size(Val) + A)
+                     end
+                 end, 0, riak_object:get_contents(RiakObject))].
 
 %%
 %% Reduce Phases
@@ -217,7 +275,6 @@ reduce_sort(Acc) ->
 reduce_sort(List, _) ->
     lists:sort(List).
 
-
 %% @spec reduce_count_inputs(boolean()) -> reduce_phase_spec()
 %% @doc Produces a spec for a reduce phase that counts its
 %%      inputs.  Inputs to this phase must not be integers, or
@@ -245,6 +302,77 @@ input_counter_fold(PrevCount, Acc) when is_integer(PrevCount) ->
 input_counter_fold(_, Acc) ->
     1+Acc.
 
+%% @spec reduce_limit(boolean()) -> reduce_phase_spec()
+%% @doc Produces a spec for a reduce phase that limits the size
+%%      of the list to a configurable number
+reduce_limit(Acc) ->
+    {reduce, {modfun, riak_kv_mapreduce, reduce_limit}, none, Acc}.
+
+%% @spec reduce_limit([term()], term()) -> [term()]
+%% @doc reduce phase function for reduce_limit/1
+reduce_limit(List, Arg) when is_binary(Arg) ->
+    try 
+        reduce_limit(List, list_to_integer(binary_to_list(Arg)))
+    catch
+        _:_ ->
+            try
+                {struct, Props} = mochijson2:decode(Arg),
+                case proplists:get_value(<<"limit">>, Props, ?DEFAULT_REDUCE_LIMIT_SIZE) of
+                    Limit when is_integer(Limit) ->
+                        reduce_limit(List, Limit);
+                    Limit when is_binary(Limit) ->
+                        reduce_limit(List, list_to_integer(binary_to_list(Limit)))
+                end
+            catch
+                _:_  ->
+                    []
+            end
+    end;
+reduce_limit(List, {struct, Props}) ->
+    case proplists:get_value(<<"limit">>, Props, ?DEFAULT_REDUCE_LIMIT_SIZE) of
+        Limit when is_integer(Limit) ->
+            reduce_limit(List, Limit);
+        Limit when is_binary(Limit) ->
+            reduce_limit(List, list_to_integer(binary_to_list(Limit)))
+    end;
+reduce_limit(List, Limit) when is_integer(Limit) andalso (length(List) >= Limit) ->
+    {L , _} = lists:split(Limit, List),
+    L;
+reduce_limit(List, Limit) when is_integer(Limit) ->
+    List;
+reduce_limit(List, _) ->
+    reduce_limit(List, ?DEFAULT_REDUCE_LIMIT_SIZE).
+
+%% @spec reduce_delete(boolean()) -> reduce_phase_spec()
+%% @doc Produces a spec for a reduce phase that deletes
+%%      any [Bucket, Key] it's handed and returns a count of deleted records.  
+reduce_delete(Acc) ->
+    {reduce, {modfun, riak_kv_mapreduce, reduce_delete}, none, Acc}.
+
+%% @spec reduce_delete([term()], term()) -> [integer()]
+%% @doc map phase function for reduce_delete/1
+reduce_delete(List, _) -> 
+    F = fun(Count, {C, Acc}) when is_integer(Count) ->
+                {C, (Acc+Count)};
+           ({error, notfound}, {C, Acc}) ->
+                {C, Acc};
+           ({{Bucket, Key}, _}, {C, Acc}) ->
+                C:delete(Bucket, Key),
+                {C, (Acc+1)};
+           ({Bucket, Key}, {C, Acc}) ->
+                C:delete(Bucket, Key),
+                {C, (Acc+1)};
+            ([Bucket, Key], {C, Acc}) ->
+                C:delete(Bucket, Key),
+                {C, (Acc+1)};
+           (Other, _Acc) ->
+                %% Fail loudly on anything unexpected.
+                lager:error("Unhandled entry: ~p", [Other]),
+                throw({unhandled_entry, Other})
+        end,
+    {ok, C} = riak:local_client(),
+    {C, N} = lists:foldl(F, {C,0}, List),
+    [N].
 
 %% @spec reduce_string_to_integer(boolean()) -> reduce_phase_spec()
 %% @doc Produces a spec for a reduce phase that converts
@@ -276,6 +404,20 @@ is_datum({not_found, _, _}) ->
 is_datum(_) ->
     true.
 
+%% Helper function
+is_deleted([]) ->
+    true;
+is_deleted([[Dict | D]]) ->
+    case dict:is_key(<<"X-Riak-Deleted">>, Dict) of
+        false ->
+            false;
+        true ->
+            is_deleted(D)
+    end;
+is_deleted(RiakObject) ->
+    MetaDataList = riak_object:get_metadatas(RiakObject),
+    is_deleted(MetaDataList).
+
 %% unit tests %%
 map_identity_test() ->
     O1 = riak_object:new(<<"a">>, <<"1">>, "value1"),
@@ -288,6 +430,18 @@ map_object_value_test() ->
     ["value1"] = map_object_value_list(O2, test, test),
     [] = map_object_value({error, notfound}, test, <<"filter_notfound">>),
     [{error,notfound}] = map_object_value({error, notfound}, test, <<"include_notfound">>).
+
+map_datasize_test() ->
+    MD1 = dict:from_list([{<<"X-Riak-Deleted">>,<<"">>}]),
+    MD2 = dict:new(),
+    O1 = riak_object:new(<<"test">>, <<"a">>, <<"value">>),
+    O2 = riak_object:set_contents(O1, [{MD1,<<"value">>}]),
+    O3 = riak_object:set_contents(O1, [{MD2,<<"value">>},{MD2,<<"value">>}]),
+    O4 = riak_object:set_contents(O1, [{MD1,<<"value">>},{MD2, <<"value">>}]),
+    ?assertEqual([5], map_datasize(O1, none, none)),
+    ?assertEqual([0], map_datasize(O2, none, none)),
+    ?assertEqual([10], map_datasize(O3, none, none)),
+    ?assertEqual([5], map_datasize(O4, none, none)).
 
 reduce_set_union_test() ->
     [bar,baz,foo] = lists:sort(reduce_set_union([foo,foo,bar,baz], test)).
@@ -343,3 +497,19 @@ reduce_count_inputs_test() ->
                               {"b5","k5"},{"b5","k5"}],
                              none),
                         none)).
+
+reduce_limit_test() ->
+    [1,2,3] = reduce_limit([1,2,3], none),
+    [1,2] = reduce_limit([1,2,3,4,5], 2),
+    [1,2] = reduce_limit([1,2,3,4], <<"2">>),
+    [1,2] = reduce_limit([1,2,3,4], <<"{\"limit\":2}">>),
+    ?DEFAULT_REDUCE_LIMIT_SIZE = length(reduce_limit(lists:seq(1,200), none)).
+
+
+
+
+
+
+
+
+
