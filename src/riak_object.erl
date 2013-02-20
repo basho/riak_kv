@@ -114,8 +114,8 @@ strict_descendant(#r_object{contents=C1},#r_object{contents=C2}) ->
 descendant(#r_object{contents=C1},#r_object{contents=C2}) ->
     dvvset:equal(C1,C2) orelse dvvset:less(C2,C1).
 
--spec equal_vclock(riak_object(), riak_object()) -> boolean().
-equal_vclock(#r_object{contents=C1},#r_object{contents=C2}) ->
+-spec equal_vclock(dvvset:vector(), dvvset:vector()) -> boolean().
+equal_vclock(C1, C2) ->
     dvvset:equal(C1,C2).
 
 -spec equal(riak_object(), riak_object()) -> boolean().
@@ -123,7 +123,7 @@ equal_vclock(#r_object{contents=C1},#r_object{contents=C2}) ->
 equal(Obj1,Obj2) ->
     (Obj1#r_object.bucket =:= Obj2#r_object.bucket)
         andalso (Obj1#r_object.key =:= Obj2#r_object.key)
-        andalso equal_vclock(Obj1,Obj2)
+        andalso equal_vclock(get_vclock(Obj1), get_vclock(Obj2))
         andalso equal2(Obj1,Obj2).
 equal2(Obj1,Obj2) ->
     UM1 = lists:keysort(1, dict:to_list(Obj1#r_object.updatemetadata)),
