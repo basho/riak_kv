@@ -663,9 +663,9 @@ io:format("JFW: handle_handoff_data() called\n"),
     end.
 
 encode_handoff_item({B, K}, V) ->
-    encode_binary_object(
+    EncodedValue = encode_binary_object(V),
         riak_core_pb:encode_riakobject_pb(
-            #riakobject_pb{bucket=B, key=K, val=V})).
+            #riakobject_pb{bucket=B, key=K, val=EncodedValue}).
 
 is_empty(State=#state{mod=Mod, modstate=ModState}) ->
     {Mod:is_empty(ModState), State}.
