@@ -281,7 +281,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
     IdxType = [{Part, Type} || {{Part, _Node}, Type} <- Preflist2],
     NumPrimaries = length([x || {_,primary} <- Preflist2]),
     NumVnodes = length(Preflist2),
-    MinVnodes = erlang:max(1, erlang:max(W, erlang:max(DW, PW))), % always need at least one vnode
+    MinVnodes = lists:max([1, W, DW, PW]), % always need at least one vnode
 
     if
         PW =:= error ->
@@ -616,7 +616,6 @@ handle_options([{_,_}|T], State) -> handle_options(T, State).
 init_putcore(State = #state{n = N, w = W, pw = PW, dw = DW, allowmult = AllowMult,
                             returnbody = ReturnBody}, IdxType) ->
     PutCore = riak_kv_put_core:init(N, W, PW, DW,
-                                    N-W+1,   % cannot ever get W replies
                                     N-PW+1,  % cannot ever get PW replies
                                     N-DW+1,  % cannot ever get DW replies
                                     AllowMult,
@@ -836,9 +835,7 @@ add_client_info(Reply, Details, State) ->
         ok ->
             {ok, Info};
         {OkError, ObjReason} ->
-            {OkError, ObjReason, Info};
-        {OkError, Error, ErrorInfo1, ErrorInfo2} ->
-            {OkError, Error, ErrorInfo1, ErrorInfo2, Info}
+            {OkError, ObjReason, Info}
     end.
 
 client_info(true, StateData, Info) ->

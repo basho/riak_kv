@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_get_core).
--export([init/7, add_result/4, result_shortcode/1, enough/1, response/1,
+-export([init/8, add_result/3, result_shortcode/1, enough/1, response/1,
          has_all_results/1, final_action/1, info/1]).
 -export_type([getcore/0, result/0, reply/0, final_action/0]).
 
@@ -39,6 +39,7 @@
                         {read_repair, [{non_neg_integer() | repair_reason()}], riak_object:riak_object()} |
                         delete.
 -type idxresult() :: {non_neg_integer(), result()}.
+-type idx_type() :: [{non_neg_integer, 'primary' | 'fallback'}].
 
 -record(getcore, {n :: pos_integer(),
                   r :: pos_integer(),
@@ -54,7 +55,8 @@
                   num_pok = 0 :: non_neg_integer(),
                   num_notfound = 0 :: non_neg_integer(),
                   num_deleted = 0 :: non_neg_integer(),
-                  num_fail = 0 :: non_neg_integer()}).
+                  num_fail = 0 :: non_neg_integer(),
+                  idx_type :: idx_type()}).
 -opaque getcore() :: #getcore{}.
 
 %% ====================================================================
@@ -62,20 +64,23 @@
 %% ====================================================================
 
 %% Initialize a get and return an opaque get core context
--spec init(pos_integer(), pos_integer(), pos_integer(), pos_integer(), boolean(), boolean(),
-           boolean()) -> getcore().
-init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DeletedVClock) ->
+-spec init(N::pos_integer(), R::pos_integer(), PR::pos_integer(),
+           FailThreshold::pos_integer(), NotFoundOK::boolean(),
+           AllowMult::boolean(), DeletedVClock::boolean(),
+           IdxType::idx_type()) -> getcore().
+init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, IdxType) ->
     #getcore{n = N,
              r = R,
              pr = PR,
              fail_threshold = FailThreshold,
              notfound_ok = NotFoundOk,
              allow_mult = AllowMult,
-             deletedvclock = DeletedVClock}.
+             deletedvclock = DeletedVClock,
+             idx_type = IdxType}.
 
 %% Add a result for a vnode index
--spec add_result(non_neg_integer(), result(), primary | fallback, getcore()) -> getcore().
-add_result(Idx, {ok, RObj} = Result, Status, GetCore) ->
+-spec add_result(non_neg_integer(), result(), getcore()) -> getcore().
+add_result(Idx, {ok, RObj} = Result, GetCore) ->
     Dels = case riak_kv_util:is_x_deleted(RObj) of
         true ->  1;
         false -> 0
@@ -84,21 +89,21 @@ add_result(Idx, {ok, RObj} = Result, Status, GetCore) ->
             results = [{Idx, Result}|GetCore#getcore.results],
             merged = undefined,
             num_ok = GetCore#getcore.num_ok + 1,
-            num_deleted = GetCore#getcore.num_deleted + Dels}, Status);
-add_result(Idx, {error, notfound} = Result, Status, GetCore) ->
+            num_deleted = GetCore#getcore.num_deleted + Dels}, Idx);
+add_result(Idx, {error, notfound} = Result, GetCore) ->
     case GetCore#getcore.notfound_ok of
         true ->
             num_pr(GetCore#getcore{
                     results = [{Idx, Result}|GetCore#getcore.results],
                     merged = undefined,
-                    num_ok = GetCore#getcore.num_ok + 1}, Status);
+                    num_ok = GetCore#getcore.num_ok + 1}, Idx);
         _ ->
             GetCore#getcore{
                 results = [{Idx, Result}|GetCore#getcore.results],
                 merged = undefined,
                 num_notfound = GetCore#getcore.num_notfound + 1}
     end;
-add_result(Idx, {error, _Reason} = Result, _Status, GetCore) ->
+add_result(Idx, {error, _Reason} = Result, GetCore) ->
     GetCore#getcore{
         results = [{Idx, Result}|GetCore#getcore.results],
         merged = undefined,
@@ -118,7 +123,7 @@ enough(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK}) when
 enough(#getcore{fail_threshold = FailThreshold, num_notfound = NumNotFound,
         num_fail = NumFail}) when NumNotFound + NumFail >= FailThreshold ->
     true;
-%% Got all N responses, but unable to satisfy quorum
+%% Got all N responses, but unable to satisfy PR
 enough(#getcore{n = N, num_ok = NumOK, num_notfound = NumNotFound,
         num_fail = NumFail}) when NumOK + NumNotFound + NumFail >= N ->
     true;
@@ -249,11 +254,21 @@ merge(Replies, AllowMult) ->
             end
     end.
 
-%% @private increment PR if the response is from a primary
-num_pr(GetCore, primary) ->
-    GetCore#getcore{num_pok = GetCore#getcore.num_pok + 1};
-num_pr(GetCore, _) ->
-    GetCore.
+%% @private If the Idx is not in the IdxType
+%% the world should end
+is_primary_response(Idx, IdxType) ->
+    {Idx, Status} = lists:keyfind(Idx, 1, IdxType),
+    Status == primary.
+
+%% @private Increment PR, if appropriate
+num_pr(GetCore = #getcore{num_pok=NumPOK, idx_type=IdxType}, Idx) ->
+    case is_primary_response(Idx, IdxType) of
+        true ->
+            GetCore#getcore{num_pok=NumPOK+1};
+        false ->
+            GetCore
+    end.
+
 
 -ifdef(TEST).
 %% simple sanity tests
@@ -354,7 +369,7 @@ response_test_() ->
                                 results= [
                                     {1, {ok, RObj}},
                                     {2, {ok, RObj}},
-                                    {3, {ok, RObj}}]})),
+                                    {4, {ok, RObj}}]})), %% from a fallback
                     ok
             end},
         {"R & PR unsatisfied, PR >= R",
@@ -368,8 +383,8 @@ response_test_() ->
                                 num_fail = 2,
                                 results= [
                                     {1, {ok, RObj}},
-                                    {2, {ok, RObj}},
-                                    {3, {ok, RObj}}]})),
+                                    {2, {error, foo}},
+                                    {3, {error, foo}}]})),
                     ok
             end},
         {"R & PR unsatisfied, R > PR",
@@ -383,14 +398,15 @@ response_test_() ->
                                 num_fail = 2,
                                 results= [
                                     {1, {ok, RObj}},
-                                    {2, {ok, RObj}},
-                                    {3, {ok, RObj}}]})),
+                                    {2, {error, foo}},
+                                    {3, {error, foo}}]})),
                     ok
             end},
 
         {"All results notfound/tombstone",
             fun() ->
-                    RObj = riak_object:new(<<"foo">>, <<"bar">>, <<"baz">>),
+                    RObj = riak_object:new(<<"foo">>, <<"bar">>, <<"baz">>,
+                        dict:from_list([{<<"X-Riak-Deleted">>, true}])),
                     ?assertMatch({{error, notfound}, _},
                         response(#getcore{n= 3, r = 3, pr=0,
                                 fail_threshold = 1, num_ok = 1, num_pok = 0,
@@ -399,8 +415,8 @@ response_test_() ->
                                 num_fail = 0,
                                 results= [
                                     {1, {ok, RObj}},
-                                    {2, {ok, RObj}},
-                                    {3, {ok, RObj}}]})),
+                                    {2, {error, notfound}},
+                                    {3, {error, notfound}}]})),
                     ok
             end}
     ].

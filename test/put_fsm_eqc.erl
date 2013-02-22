@@ -745,15 +745,15 @@ enough_replies({_H, _N, W, DW, PW, NumW, NumDW, NumPW, _NumFail, _RObj, _Precomm
 %% Too many failures to reach PW & PW >= DW
 enough_replies({_H, N, _W, DW, PW, _NumW, _NumDW, NumPW, NumFail, _RObj, _Precommit, _PL}) when
       NumFail > N - PW, PW >= DW ->
-    {true, {error, pw_val_unsatisfied, PW, NumPW}};
+    {true, {error, {pw_val_unsatisfied, PW, NumPW}}};
 %% Too many failures to reach DW
 enough_replies({_H, N, _W, DW, _PW, _NumW, NumDW, _NumPW, NumFail, _RObj, _Precommit, _PL}) when
       NumFail > N - DW ->
-    {true, {error, dw_val_unsatisfied, DW, NumDW}};
+    {true, {error, {dw_val_unsatisfied, DW, NumDW}}};
 %% Got N responses, but not PW
 enough_replies({_H, N, _W, _DW, PW, _NumW, NumDW, NumPW, NumFail, _RObj, _Precommit, _PL}) when
       NumFail + NumDW >= N, NumPW < PW ->
-    {true, {error, pw_val_unsatisfied, PW, NumPW}};
+    {true, {error, {pw_val_unsatisfied, PW, NumPW}}};
 enough_replies(_) ->
     false.
 
