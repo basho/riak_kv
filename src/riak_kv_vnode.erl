@@ -650,8 +650,8 @@ handoff_finished(_TargetNode, State) ->
     {ok, State}.
 
 handle_handoff_data(BinObj, State) ->
-lager:error("JFW: handle_handoff_data() BinObj is ~p~nDecoded is ~p", [BinObj, decode_binary_object(BinObj)]),
-    PBObj = riak_core_pb:decode_riakobject_pb(decode_binary_object(BinObj)),
+    { DecodedObject, _EncodingMethod } = decode_binary_object(BinObj),
+    PBObj = riak_core_pb:decode_riakobject_pb(DecodedObject),
     BKey = {PBObj#riakobject_pb.bucket,PBObj#riakobject_pb.key},
     case do_diffobj_put(BKey, binary_to_term(PBObj#riakobject_pb.val), State) of
         {ok, UpdModState} ->
@@ -663,10 +663,8 @@ lager:error("JFW: handle_handoff_data() BinObj is ~p~nDecoded is ~p", [BinObj, d
     end.
 
 encode_handoff_item({B, K}, V) ->
-    { EncodedValue, EncodingMethod } = encode_binary_object(V),
-lager:error("JFW: encode_handoff_item(): EncodedValue by method ~p of ~p is ~p", [EncodingMethod, V, EncodedValue]),
-    EncodedObject = riak_core_pb:encode_riakobject_pb(#riakobject_pb{bucket=B, key=K, val=EncodedValue}),
-    { EncodedObject, EncodingMethod }.
+    PBEncodedObject = riak_core_pb:encode_riakobject_pb(#riakobject_pb{bucket=B, key=K, val=V}),
+    encode_binary_object(PBEncodedObject).
 
 is_empty(State=#state{mod=Mod, modstate=ModState}) ->
     {Mod:is_empty(ModState), State}.
@@ -1364,11 +1362,9 @@ decode_binary_object(BinaryObject) ->
     end.
 
 encode_binary_object(BinaryObject) ->
-lager:info("JFW: encode_binary_object begins"),
-lager:info("JFW: encode_binary_object() selected encoding is: ", [riak_core_capability:get({riak_core, handoff_data_encoding}, encode_zlib)]),
     case riak_core_capability:get({riak_core, handoff_data_encoding}, encode_zlib) of
         encode_zlib -> { zlib:zip(BinaryObject), encode_zlib };
-        encode_raw  -> { term_to_binary(BinaryObject), encode_raw }
+        encode_raw  -> { term_to_binary(iolist_to_binary(BinaryObject)), encode_raw }
     end.
 
 -ifdef(TEST).
