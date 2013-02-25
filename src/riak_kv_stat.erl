@@ -49,10 +49,12 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         terminate/2, code_change/3, monitor_loop/1]).
 
 -define(SERVER, ?MODULE).
 -define(APP, riak_kv).
+
+-record(state, {monitors}).
 
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
@@ -110,12 +112,28 @@ stop() ->
 
 init([]) ->
     register_stats(),
-    {ok, ok}.
+    State = {state, [spawn_link(?MODULE, monitor_loop, [index]), 
+                     spawn_link(?MODULE, monitor_loop, [list])]},
+    {ok, State}.
 
 handle_call({register, Name, Type}, _From, State) ->
     Rep = do_register_stat(Name, Type),
-    {reply, Rep, State}.
-
+    {reply, Rep, State};
+handle_call({get_monitor, Type}, _From, State) ->
+    Monitors = State#state.monitors,
+    [Monitor] = lists:filter(fun(Mon) ->
+                                     Mon ! {get_type, self()},
+                                     receive 
+                                         T when is_atom(T), 
+                                                T == Type ->
+                                             true;
+                                         _ -> false
+                                     after 
+                                         1000 -> false
+                                     end
+                             end,
+                             Monitors),
+    {reply, Monitor, State}.
 
 handle_cast(stop, State) ->
     {stop, normal, State};
@@ -185,9 +203,44 @@ do_update({fsm_exit, Type}) when Type =:= gets; Type =:= puts  ->
     folsom_metrics:notify_existing_metric({?APP, node, Type, fsm,  active}, {dec, 1}, counter);
 do_update({fsm_error, Type}) when Type =:= gets; Type =:= puts ->
     do_update({fsm_exit, Type}),
-    folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, errors}, 1, spiral).
+    folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, errors}, 1, spiral);
+do_update({index_create, Pid}) ->
+    folsom_metrics:notify_existing_metric({?APP, index, fsm, create}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, index, fsm, active}, {inc, 1}, counter),
+    add_monitor(index, Pid);
+do_update(index_create_error) ->
+    folsom_metrics:notify_existing_metric({?APP, index, fsm, create, error}, 1, spiral);
+do_update({list_create, Pid}) ->
+    folsom_metrics:notify_existing_metric({?APP, list, fsm, create}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, list, fsm, active}, {inc, 1}, counter),
+    add_monitor(list, Pid);
+do_update(list_create_error) ->
+    folsom_metrics:notify_existing_metric({?APP, list, fsm, create, error}, 1, spiral);
+do_update({fsm_destroy, Type}) ->
+    folsom_metrics:notify_existing_metric({?APP, Type, fsm, active}, {dec, 1}, counter).
 
 %% private
+
+add_monitor(Type, Pid) ->
+    M = gen_server:call(?SERVER, {get_monitor, Type}),
+    case M of 
+        Mon when is_pid(Mon) ->
+            Mon ! {add_pid, Pid}; 
+        error -> 
+            lager:error("No couldn't find procress to add monitor")
+    end.           
+
+monitor_loop(Type) ->
+    receive 
+        {add_pid, Pid} ->
+            erlang:monitor(process, Pid);
+        {get_type, Sender} ->
+            Sender ! Type;
+        {'DOWN', _Ref, process, _Pid, _Reason} ->
+            do_update({fsm_destroy, Type})
+    end,
+    monitor_loop(Type).        
+
 %% Per index stats (by op)
 do_per_index(Op, Idx, USecs) ->
     IdxAtom = list_to_atom(integer_to_list(Idx)),
@@ -297,6 +350,12 @@ stats() ->
      {[node, gets, fsm, active], counter},
      {[node, puts, fsm, errors], spiral},
      {[node, gets, fsm, errors], spiral},
+     {[index, fsm, create], spiral},
+     {[index, fsm, create, error], spiral},
+     {[index, fsm, active], counter},
+     {[list, fsm, create], spiral},
+     {[list, fsm, create, error], spiral},
+     {[list, fsm, active], counter},
      {mapper_count, counter},
      {precommit_fail, counter},
      {postcommit_fail, counter},

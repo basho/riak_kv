@@ -32,7 +32,14 @@
 -export([init/1]).
 
 start_index_fsm(Node, Args) ->
-    supervisor:start_child({?MODULE, Node}, Args).
+    case supervisor:start_child({?MODULE, Node}, Args) of
+        {ok, Pid} ->
+            riak_kv_stat:update({index_create, Pid}),
+            {ok, Pid};
+        Error ->
+            riak_kv_stat:update(index_create_error),
+            Error
+    end.
 
 %% @spec start_link() -> ServerRet
 %% @doc API for starting the supervisor.
