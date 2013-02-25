@@ -418,7 +418,12 @@ is_deleted(RiakObject) ->
     MetaDataList = riak_object:get_metadatas(RiakObject),
     is_deleted(MetaDataList).
 
-%% unit tests %%
+%%
+%% EUNIT tests...
+%%
+
+-ifdef (TEST).
+
 map_identity_test() ->
     O1 = riak_object:new(<<"a">>, <<"1">>, "value1"),
     [O1] = map_identity(O1, test, test).
@@ -505,11 +510,4 @@ reduce_limit_test() ->
     [1,2] = reduce_limit([1,2,3,4], <<"{\"limit\":2}">>),
     ?DEFAULT_REDUCE_LIMIT_SIZE = length(reduce_limit(lists:seq(1,200), none)).
 
-
-
-
-
-
-
-
-
+-endif.
