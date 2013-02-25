@@ -234,10 +234,10 @@ legacy_stat_map() ->
      {precommit_fail, {riak_kv, precommit_fail}, counter},
      {postcommit_fail, {riak_kv, postcommit_fail}, counter},
      {index_fsm_create, {{riak_kv, index, fsm, create}, one}, spiral},
-     {index_fsm_create_error, {{riak_kv, index, fsm, create}, one}, spiral},
+     {index_fsm_create_error, {{riak_kv, index, fsm, create, error}, one}, spiral},
      {index_fsm_active, {riak_kv, index, fsm, active}, counter},
      {list_fsm_create, {{riak_kv, list, fsm, create}, one}, spiral},
-     {list_fsm_create_error, {{riak_kv, list, fsm, create}, one}, spiral},
+     {list_fsm_create_error, {{riak_kv, list, fsm, create, error}, one}, spiral},
      {list_fsm_active, {riak_kv, list, fsm, active}, counter}
     ].
 
