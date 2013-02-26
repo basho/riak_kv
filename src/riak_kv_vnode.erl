@@ -827,8 +827,22 @@ prepare_put(#state{vnodeid=VId,
                              starttime=StartTime,
                              prunetime=PruneTime},
             IndexBackend) ->
-    case Mod:get(Bucket, Key, ModState) of
-        {error, _Err, _UpdModState} ->
+    GetReply =
+        case Mod:get(Bucket, Key, ModState) of
+            {error, not_found, _UpdModState} ->
+                ok;
+            % NOTE: bad_crc is NOT an official backend response. It is
+            % specific to bitcask currently and handling it may be changed soon.
+            % A standard set of responses will be agreed on
+            % https://github.com/basho/riak_kv/issues/496
+            {error, bad_crc, _UpdModState} ->
+                lager:info("Bad CRC detected while reading Bucket=~p, Key=~p", [Bucket, Key]),
+                ok;
+            {ok, GetVal, _UpdModState} ->
+                {ok, GetVal}
+        end,
+    case GetReply of
+        ok ->
             case IndexBackend of
                 true ->
                     IndexSpecs = riak_object:index_specs(RObj);
@@ -842,7 +856,7 @@ prepare_put(#state{vnodeid=VId,
                                  RObj
                          end,
             {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
-        {ok, Val, _UpdModState} ->
+        {ok, Val} ->
             OldObj = binary_to_term(Val),
             case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
                 {oldobj, OldObj1} ->
