@@ -169,7 +169,7 @@ get(Bucket, Key, #state{op_get = Gets} = S) ->
     Meta2 = dict:store(<<"X-Riak-VTag">>, make_vtag(erlang:now()), Meta1),
     O = riak_object:increment_vclock(riak_object:new(Bucket, Key, Bin, Meta2),
                                      <<"yessir!">>, 1),
-    {ok, term_to_binary(O), S#state{op_get = Gets + 1}}.
+    {ok, riak_object:to_binary(v0, O), S#state{op_get = Gets + 1}}.
 
 %% @doc Store an object, yes, sir!
 -type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
@@ -311,7 +311,7 @@ fold_objects_fun(FoldObjectsFun, Bucket, Size) ->
             Meta2 = dict:store(<<"X-Riak-VTag">>, make_vtag(erlang:now()), Meta1),
             O = riak_object:increment_vclock(riak_object:new(Bucket, Key, Bin, Meta2),
                                              <<"yessir!">>, 1),
-            FoldObjectsFun(Bucket, Key, term_to_binary(O), Acc);
+            FoldObjectsFun(Bucket, Key, riak_object:to_binary(v0, O), Acc);
        (_, _, Acc) ->
             Acc
     end.

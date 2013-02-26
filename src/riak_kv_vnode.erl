@@ -46,7 +46,8 @@
          repair_filter/1,
          hashtree_pid/1,
          rehash/3,
-         request_hashtree_pid/1]).
+         request_hashtree_pid/1,
+         reformat_object/2]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -317,6 +318,13 @@ rehash(Preflist, Bucket, Key) ->
                                    ignore,
                                    riak_kv_vnode_master).
 
+-spec reformat_object(index(), {riak_object:bucket(), riak_object:key()}) ->
+                             ok | {error, term()}.
+reformat_object(Partition, BKey) ->
+    riak_core_vnode_master:sync_spawn_command({Partition, node()},
+                                              {reformat_object, BKey},
+                                              riak_kv_vnode_master).
+
 %% VNode callbacks
 
 init([Index]) ->
@@ -511,7 +519,10 @@ handle_command(?KV_VNODE_STATUS_REQ{},
                             modstate=ModState}) ->
     BackendStatus = {backend_status, Mod, Mod:status(ModState)},
     VNodeStatus = [BackendStatus],
-    {reply, {vnode_status, Index, VNodeStatus}, State}.
+    {reply, {vnode_status, Index, VNodeStatus}, State};
+handle_command({reformat_object, BKey}, _Sender, State) ->
+    {Reply, UpdState} = do_reformat(BKey, State),
+    {reply, Reply, UpdState}.
 
 %% @doc Handle a coverage request.
 %% More information about the specification for the ItemFilter
@@ -653,8 +664,8 @@ handoff_finished(_TargetNode, State) ->
 
 handle_handoff_data(BinObj, State) ->
     PBObj = riak_core_pb:decode_riakobject_pb(zlib:unzip(BinObj)),
-    BKey = {PBObj#riakobject_pb.bucket,PBObj#riakobject_pb.key},
-    case do_diffobj_put(BKey, binary_to_term(PBObj#riakobject_pb.val), State) of
+    {B, K} = BKey = {PBObj#riakobject_pb.bucket,PBObj#riakobject_pb.key},
+    case do_diffobj_put(BKey, riak_object:from_binary(B, K, PBObj#riakobject_pb.val), State) of
         {ok, UpdModState} ->
             {reply, ok, State#state{modstate=UpdModState}};
         {error, Reason, UpdModState} ->
@@ -664,8 +675,13 @@ handle_handoff_data(BinObj, State) ->
     end.
 
 encode_handoff_item({B, K}, V) ->
+    %% before sending data to another node change binary version
+    %% to one supported by the cluster. This way we don't send
+    %% unsupported formats to old nodes
+    ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
+    Val = riak_object:to_binary_version(ObjFmt, B, K, V),
     zlib:zip(riak_core_pb:encode_riakobject_pb(
-               #riakobject_pb{bucket=B, key=K, val=V})).
+               #riakobject_pb{bucket=B, key=K, val=Val})).
 
 is_empty(State=#state{mod=Mod, modstate=ModState}) ->
     {Mod:is_empty(ModState), State}.
@@ -860,7 +876,7 @@ prepare_put(#state{idx=Idx,
                          end,
             {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
         {ok, Val} ->
-            OldObj = binary_to_term(Val),
+            OldObj = object_from_binary(Bucket, Key, Val),
             case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs};
@@ -908,7 +924,8 @@ perform_put({true, Obj},
                      bkey={Bucket, Key},
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
-    Val = term_to_binary(Obj),
+    ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
+    Val = riak_object:to_binary(ObjFmt, Obj),
     case Mod:put(Bucket, Key, IndexSpecs, Val, ModState) of
         {ok, UpdModState} ->
             update_hashtree(Bucket, Key, Val, State),
@@ -922,6 +939,29 @@ perform_put({true, Obj},
             Reply = {fail, Idx, ReqID}
     end,
     {Reply, State#state{modstate=UpdModState}}.
+
+do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
+    case Mod:get(Bucket, Key, ModState) of
+        {error, not_found, _UpdModState} ->
+            Reply = {error, not_found},
+            UpdState = State;
+        {ok, ObjBin, _UpdModState} ->
+            %% since it is assumed capabilities have been properly set
+            %% to the desired version, to reformat, all we need to do
+            %% is submit a new write
+            RObj = riak_object:from_binary(Bucket, Key, ObjBin),
+            PutArgs = #putargs{returnbody=false,
+                               bkey=BKey,
+                               reqid=undefined,
+                               index_specs=[]},
+            case perform_put({true, RObj}, State, PutArgs) of
+                {{fail, _, _}, UpdState}  ->
+                    Reply = {error, backend_error};
+                {_, UpdState} ->
+                    Reply = ok
+            end
+    end,
+    {Reply, UpdState}.
 
 %% @private
 %% enforce allow_mult bucket property so that no backend ever stores
@@ -991,7 +1031,7 @@ do_get(_Sender, BKey, ReqID,
 do_get_term(BKey, Mod, ModState) ->
     case do_get_binary(BKey, Mod, ModState) of
         {ok, Bin, _UpdModState} ->
-            {ok, binary_to_term(Bin)};
+            {ok, object_from_binary(BKey, Bin)};
         %% @TODO Eventually it would be good to
         %% make the use of not_found or notfound
         %% consistent throughout the code.
@@ -1161,7 +1201,7 @@ do_get_vclocks(KeyList,_State=#state{mod=Mod,modstate=ModState}) ->
 do_get_vclock({Bucket, Key}, Mod, ModState) ->
     case Mod:get(Bucket, Key, ModState) of
         {error, not_found, _UpdModState} -> vclock:fresh();
-        {ok, Val, _UpdModState} -> riak_object:vclock(binary_to_term(Val))
+        {ok, Val, _UpdModState} -> riak_object:vclock(object_from_binary(Bucket, Key, Val))
     end.
 
 %% @private
@@ -1181,7 +1221,8 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                 false ->
                     IndexSpecs = []
             end,
-            Val = term_to_binary(DiffObj),
+            ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
+            Val = riak_object:to_binary(ObjFmt, DiffObj),
             Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
             case Res of
                 {ok, _UpdModState} ->
@@ -1192,7 +1233,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
             end,
             Res;
         {ok, Val0, _UpdModState} ->
-            OldObj = binary_to_term(Val0),
+            OldObj = object_from_binary(Bucket, Key, Val0),
             %% Merge handoff values with the current - possibly discarding
             %% if out of date.  Ok to set VId/Starttime undefined as
             %% they are not used for non-coordinating puts.
@@ -1207,7 +1248,8 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                         false ->
                             IndexSpecs = []
                     end,
-                    Val = term_to_binary(AMObj),
+                    ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
+                    Val = riak_object:to_binary(ObjFmt, AMObj),
                     Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
                     case Res of
                         {ok, _UpdModState} ->
@@ -1393,6 +1435,14 @@ default_object_nval() ->
 object_info({Bucket, _Key}=BKey) ->
     Hash = riak_core_util:chash_key(BKey),
     {Bucket, Hash}.
+
+object_from_binary({B,K}, ValBin) ->
+    object_from_binary(B, K, ValBin).
+object_from_binary(B, K, ValBin) ->
+    case riak_object:from_binary(B, K, ValBin) of
+        {error, R} -> throw(R);
+        Obj -> Obj
+    end.
 
 
 -ifdef(TEST).
