@@ -816,7 +816,8 @@ prepare_put(State=#state{vnodeid=VId,
         false ->
             prepare_put(State, PutArgs, IndexBackend)
     end.
-prepare_put(#state{vnodeid=VId,
+prepare_put(#state{idx=Idx,
+                   vnodeid=VId,
                    mod=Mod,
                    modstate=ModState},
             PutArgs=#putargs{bkey={Bucket, Key},
@@ -836,7 +837,7 @@ prepare_put(#state{vnodeid=VId,
             % A standard set of responses will be agreed on
             % https://github.com/basho/riak_kv/issues/496
             {error, bad_crc, _UpdModState} ->
-                lager:info("Bad CRC detected while reading Bucket=~p, Key=~p", [Bucket, Key]),
+                lager:info("Bad CRC detected while reading Partition=~p, Bucket=~p, Key=~p", [Idx, Bucket, Key]),
                 ok;
             {ok, GetVal, _UpdModState} ->
                 {ok, GetVal}
@@ -1587,7 +1588,8 @@ filter_keys_test() ->
 %% include bitcask.hrl for HEADER_SIZE macro
 -include_lib("bitcask/include/bitcask.hrl").
 
-%% Bad CRC's prevent objects from being writable
+%% Verify that a bad CRC on read will not crash the vnode, which when done in
+%% preparation for a write prevents the write from going through.
 bitcask_badcrc_test() ->
     clean_test_dirs(),
     {S, B, K} = backend_with_known_key(riak_kv_bitcask_backend),
