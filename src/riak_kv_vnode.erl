@@ -650,7 +650,7 @@ handoff_finished(_TargetNode, State) ->
     {ok, State}.
 
 handle_handoff_data(BinObj, State) ->
-    { DecodedObject, _EncodingMethod } = decode_binary_object(BinObj),
+    DecodedObject = decode_binary_object(BinObj),
     PBObj = riak_core_pb:decode_riakobject_pb(DecodedObject),
     BKey = {PBObj#riakobject_pb.bucket,PBObj#riakobject_pb.key},
     case do_diffobj_put(BKey, binary_to_term(PBObj#riakobject_pb.val), State) of
@@ -1355,16 +1355,19 @@ object_info({Bucket, _Key}=BKey) ->
 %% @private
 %% Encoding and decoding selection:
 
+handoff_data_encoding_method() ->
+    riak_core_capability:get({riak_core, handoff_data_encoding}, encode_zlib).
+
 decode_binary_object(BinaryObject) ->
-    case riak_core_capability:get({riak_core, handoff_data_encoding}, encode_zlib) of
-        encode_zlib -> { zlib:unzip(BinaryObject), encode_zlib };
-        encode_raw  -> { binary_to_term(BinaryObject), encode_raw }
+    case handoff_data_encoding_method() of
+        encode_zlib -> zlib:unzip(BinaryObject);
+        encode_raw  -> binary_to_term(BinaryObject)
     end.
 
 encode_binary_object(BinaryObject) ->
-    case riak_core_capability:get({riak_core, handoff_data_encoding}, encode_zlib) of
-        encode_zlib -> { zlib:zip(BinaryObject), encode_zlib };
-        encode_raw  -> { term_to_binary(iolist_to_binary(BinaryObject)), encode_raw }
+    case handoff_data_encoding_method() of 
+        encode_zlib ->  zlib:zip(BinaryObject);
+        encode_raw  -> term_to_binary(iolist_to_binary(BinaryObject))
     end.
 
 -ifdef(TEST).
