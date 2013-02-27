@@ -834,7 +834,7 @@ encode_vclock_header(RD, #ctx{doc={ok, Doc}}) ->
     {Head, Val} = vclock_header(Doc),
     wrq:set_resp_header(Head, Val, RD);
 encode_vclock_header(RD, #ctx{doc={error, {deleted, VClock}}}) ->
-    wrq:set_resp_header(?HEAD_VCLOCK, encode_vclock(VClock), RD).
+    wrq:set_resp_header(?HEAD_VCLOCK, riak_kv_wm_utils:encode_vclock(VClock), RD).
 
 
 %% @spec vclock_header(riak_object()) -> {Name::string(), Value::string()}
@@ -843,12 +843,6 @@ encode_vclock_header(RD, #ctx{doc={error, {deleted, VClock}}}) ->
 vclock_header(Doc) ->
     EncodedVClock = riak_kv_wm_utils:encode_vclock(Doc),
     {?HEAD_VCLOCK, EncodedVClock}.
-%%JFW    {?HEAD_VCLOCK,
-%%          encode_vclock(riak_object:vclock(Doc))}.
-
-%% JFW
-%%encode_vclock(VClock) ->
-%%    binary_to_list(base64:encode(zlib:zip(term_to_binary(VClock)))).
 
 %% @spec decode_vclock_header(reqdata()) -> vclock()
 %% @doc Translate the X-Riak-Vclock header value from the request into
@@ -857,7 +851,6 @@ vclock_header(Doc) ->
 decode_vclock_header(RD) ->
     case wrq:get_req_header(?HEAD_VCLOCK, RD) of
         undefined -> vclock:fresh();
-%%JFW        Head      -> binary_to_term(zlib:unzip(base64:decode(Head)))
         Head      -> binary_to_term(riak_kv_wm_utils:decode_vclock(Head))
     end.
 

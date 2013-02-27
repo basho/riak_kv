@@ -31,6 +31,7 @@
          multipart_encode_body/4,
          vclock_header/1,
          encode_vclock/1,
+         decode_vclock/1,
          format_links/3,
          format_uri/4,
          encode_value/1,
@@ -154,7 +155,9 @@ vclock_header(Doc) ->
 
 %% Fetch the preferred vclock encoding method:
 vclock_encoding_method() ->
-    riak_kv_capability:get({riak_kv, vclock_data_encoding}, encode_zlib).
+    EncodingMethod = riak_kv_capability:get({riak_kv, vclock_data_encoding}, encode_zlib),
+lager:info("JFW encoding method is: ~p", [EncodingMethod]),
+    EncodingMethod.
 
 %% Encode a vclock in accordance with our capability setting:
 encode_vclock(VClock) ->
@@ -164,8 +167,8 @@ encode_vclock(VClock) ->
     end.
 
 %% Decode a vclock against our capability settings:
-decode_vlock(VClock) ->
-    case vlock_encoding_method() of
+decode_vclock(VClock) ->
+    case vclock_encoding_method() of
         encode_zlib -> zlib:unzip(base64:decode(VClock));
         encode_raw  -> base64:decode(VClock)
     end.
