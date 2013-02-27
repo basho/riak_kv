@@ -152,8 +152,23 @@ vclock_header(Doc) ->
     {?HEAD_VCLOCK,
         encode_vclock(riak_object:vclock(Doc))}.
 
+%% Fetch the preferred vclock encoding method:
+vclock_encoding_method() ->
+    riak_kv_capability:get({riak_kv, vclock_data_encoding}, encode_zlib).
+
+%% Encode a vclock in accordance with our capability setting:
 encode_vclock(VClock) ->
-    binary_to_list(base64:encode(zlib:zip(term_to_binary(VClock)))).
+    case vclock_encoding_method() of
+        encode_zlib -> binary_to_list(base64:encode(zlib:zip(term_to_binary(VClock))));
+        encode_raw  -> binary_to_list(base64:encode(term_to_binary(VClock)))
+    end.
+
+%% Decode a vclock against our capability settings:
+decode_vlock(VClock) ->
+    case vlock_encoding_method() of
+        encode_zlib -> zlib:unzip(base64:decode(VClock));
+        encode_raw  -> base64:decode(VClock)
+    end.
 
 format_links(Links, Prefix, APIVersion) ->
     format_links(Links, Prefix, APIVersion, []).
