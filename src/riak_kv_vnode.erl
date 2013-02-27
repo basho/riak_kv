@@ -1356,7 +1356,7 @@ object_info({Bucket, _Key}=BKey) ->
 %% Encoding and decoding selection:
 
 handoff_data_encoding_method() ->
-    riak_core_capability:get({riak_core, handoff_data_encoding}, encode_zlib).
+    riak_core_capability:get({riak_kv, handoff_data_encoding}, encode_zlib).
 
 decode_binary_object(BinaryObject) ->
     case handoff_data_encoding_method() of
@@ -1366,7 +1366,7 @@ decode_binary_object(BinaryObject) ->
 
 encode_binary_object(BinaryObject) ->
     case handoff_data_encoding_method() of 
-        encode_zlib ->  zlib:zip(BinaryObject);
+        encode_zlib -> zlib:zip(BinaryObject);
         encode_raw  -> term_to_binary(iolist_to_binary(BinaryObject))
     end.
 

@@ -137,6 +137,10 @@ start(_Type, _StartArgs) ->
                                           [enabled_v1, disabled],
                                           disabled),
 
+            riak_core_capability:register({riak_kv, handoff_data_encoding},
+                                          [encode_raw, encode_zlib],
+                                          encode_raw),
+
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
             %% synchronously.
