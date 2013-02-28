@@ -572,11 +572,11 @@ post_is_create(RD, Ctx) ->
 %% @doc Choose the Key for the document created during a bucket-level POST.
 %%      This function also sets the Location header to generate a
 %%      201 Created response.
-create_path(RD, Ctx=#ctx{prefix=P, bucket=B}) ->
+create_path(RD, Ctx=#ctx{prefix=P, bucket=B, api_version=V}) ->
     K = riak_core_util:unique_id_62(),
     {K,
      wrq:set_resp_header("Location",
-                         lists:append(["/",P,"/",binary_to_list(B),"/",K]),
+                         riak_kv_wm_utils:format_uri(B, K, P, V),
                          RD),
      Ctx#ctx{key=list_to_binary(K)}}.
 
