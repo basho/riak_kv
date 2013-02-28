@@ -83,7 +83,7 @@ new(B, K, V, C) when is_binary(B), is_binary(K), is_list(C) ->
 %% NOTE: Removed "is_tuple(MD)" guard to make Dialyzer happy.  The previous clause
 %%       has a guard for string(), so this clause is OK without the guard.
 new(B, K, V, MD) when is_binary(B), is_binary(K) ->
-    case size(K) > ?MAX_KEY_SIZE of
+    case byte_size(K) > ?MAX_KEY_SIZE of
         true ->
             throw({error,key_too_large});
         false ->
@@ -212,27 +212,27 @@ compare_content_dates(C1,C2) ->
 % @doc  Promote pending updates (made with the update_value() and
 %       update_metadata() calls) to this riak_object.
 -spec apply_updates(riak_object()) -> riak_object().
-apply_updates(Object=#r_object{}) ->
+apply_updates(Object = #r_object{updatemetadata = Updatemetadata,
+       updatevalue = VL}) ->
     CurrentContents = get_contents(Object),
     UpdatedContents = 
-        case Object#r_object.updatevalue of
+        case VL of
             undefined ->
-                case dict:find(clean, Object#r_object.updatemetadata) of
+                case dict:find(clean, Updatemetadata) of
                     {ok,_} -> CurrentContents; %% no changes in values or metadata
                     error -> 
-                        NewMD = dict:erase(clean,Object#r_object.updatemetadata),
+                        NewMD = dict:erase(clean, Updatemetadata),
                         dvvset:map(
                             fun (R) -> #r_content{metadata=NewMD, value=R#r_content.value} end,
                             CurrentContents)
                 end;
             _ ->
-                MD = case dict:find(clean, Object#r_object.updatemetadata) of
+                MD = case dict:find(clean, Updatemetadata) of
                         {ok,_} -> 
                             hd(get_metadatas(Object));
                         error -> 
-                            dict:erase(clean,Object#r_object.updatemetadata)
+                            dict:erase(clean, Updatemetadata)
                      end,
-                VL = Object#r_object.updatevalue,
                 NewR = #r_content{metadata=MD,value=VL},
                 %% extract the causal information
                 VersionVector = dvvset:join(CurrentContents),
