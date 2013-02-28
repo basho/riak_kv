@@ -163,6 +163,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
     StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
+
     new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
                                           n = N,
                                           bucket_props=BucketProps,
@@ -184,24 +185,27 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
     PR = riak_kv_util:expand_rw_value(pr, PR0, BucketProps, N),
     NumVnodes = length(PL2),
     NumPrimaries = length([x || {_,primary} <- PL2]),
+    IdxType = [{Part, Type} || {{Part, _Node}, Type} <- PL2],
+
     case validate_quorum(R, R0, N, PR, PR0, NumPrimaries, NumVnodes) of
         ok ->
             BQ0 = get_option(basic_quorum, Options, default),
+            FailR = erlang:max(R, PR), %% fail fast
             FailThreshold =
                 case riak_kv_util:expand_value(basic_quorum, BQ0, BucketProps) of
                     true ->
                         erlang:min((N div 2)+1, % basic quorum, or
-                                   (N-R+1)); % cannot ever get R 'ok' replies
+                                   (N-FailR+1)); % cannot ever get R 'ok' replies
                     _ElseFalse ->
-                        N - R + 1 % cannot ever get R 'ok' replies
+                        N - FailR + 1 % cannot ever get R 'ok' replies
                 end,
             AllowMult = proplists:get_value(allow_mult,BucketProps),
             NFOk0 = get_option(notfound_ok, Options, default),
             NotFoundOk = riak_kv_util:expand_value(notfound_ok, NFOk0, BucketProps),
             DeletedVClock = get_option(deletedvclock, Options, false),
-            GetCore = riak_kv_get_core:init(N, R, FailThreshold,
+            GetCore = riak_kv_get_core:init(N, R, PR, FailThreshold,
                                             NotFoundOk, AllowMult,
-                                            DeletedVClock),
+                                            DeletedVClock, IdxType),
             new_state_timeout(execute, StateData#state{get_core = GetCore,
                                                        timeout = Timeout,
                                                        req_id = ReqId});
@@ -402,7 +406,7 @@ determine_do_read_repair(SoftCap, HardCap, Actual, Roll) ->
 
 -ifdef(TEST).
 roll_d100() ->
-    fsm_eqc_util:get_fake_rng(get_fsm_qc).
+    fsm_eqc_util:get_fake_rng(get_fsm_eqc).
 -else.
 % technically not a d100 as it has a 0
 roll_d100() ->

@@ -102,7 +102,6 @@ init([]) ->
 active(?VNODE_REQ{index=Idx,
                   sender=Sender,
                   request=?KV_GET_REQ{req_id=ReqId}}, State) ->
-    %io:format(user, "Get ~p reqid ~p\n", [Idx, ReqId]),
     {Value, State1} = get_data(Idx,State),
     case Value of
         {error, timeout} ->

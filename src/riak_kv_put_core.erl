@@ -20,9 +20,13 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_put_core).
--export([init/7, add_result/2, enough/1, response/1, 
+-export([init/9, add_result/2, enough/1, response/1,
          final/1, result_shortcode/1, result_idx/1]).
 -export_type([putcore/0, result/0, reply/0]).
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
 
 -type vput_result() :: any().
 
@@ -36,10 +40,12 @@
                  {error, notfound} |
                  {error, any()}.
 -type idxresult() :: {non_neg_integer(), result()}.
+-type idx_type() :: [{non_neg_integer, 'primary' | 'fallback'}].
 -record(putcore, {n :: pos_integer(),
                   w :: non_neg_integer(),
                   dw :: non_neg_integer(),
-                  w_fail_threshold :: pos_integer(),
+                  pw :: non_neg_integer(),
+                  pw_fail_threshold :: pos_integer(),
                   dw_fail_threshold :: pos_integer(),
                   returnbody :: boolean(),
                   allowmult :: boolean(),
@@ -47,7 +53,10 @@
                   final_obj :: undefined | riak_object:riak_object(),
                   num_w = 0 :: non_neg_integer(),
                   num_dw = 0 :: non_neg_integer(),
-                  num_fail = 0 :: non_neg_integer()}).
+                  num_pw = 0 :: non_neg_integer(),
+                  num_fail = 0 :: non_neg_integer(),
+                  idx_type :: idx_type() %% mapping of idx -> primary | fallback
+                 }).
 -opaque putcore() :: #putcore{}.
 
 %% ====================================================================
@@ -55,15 +64,19 @@
 %% ====================================================================
 
 %% Initialize a put and return an opaque put core context
--spec init(pos_integer(), non_neg_integer(), non_neg_integer(), 
-           pos_integer(), pos_integer(), boolean(), boolean()) -> putcore().
-init(N, W, DW, WFailThreshold, DWFailThreshold, AllowMult, ReturnBody) ->
-    #putcore{n = N, w = W, dw = DW,
-             w_fail_threshold = WFailThreshold,
+-spec init(N::pos_integer(), W::non_neg_integer(), PW::non_neg_integer(),
+           DW::non_neg_integer(), PWFail::pos_integer(), DWFail::pos_integer(),
+           AllowMult::boolean(), ReturnBody::boolean(),
+           IDXType::idx_type()) -> putcore().
+init(N, W, PW, DW, PWFailThreshold,
+     DWFailThreshold, AllowMult, ReturnBody, IdxType) ->
+    #putcore{n = N, w = W, pw = PW, dw = DW,
+             pw_fail_threshold = PWFailThreshold,
              dw_fail_threshold = DWFailThreshold,
              allowmult = AllowMult,
-             returnbody = ReturnBody}.
-   
+             returnbody = ReturnBody,
+             idx_type = IdxType}.
+
 %% Add a result from the vnode
 -spec add_result(vput_result(), putcore()) -> putcore().
 add_result({w, Idx, _ReqId}, PutCore = #putcore{results = Results,
@@ -72,12 +85,12 @@ add_result({w, Idx, _ReqId}, PutCore = #putcore{results = Results,
                     num_w = NumW + 1};
 add_result({dw, Idx, _ReqId}, PutCore = #putcore{results = Results,
                                                  num_dw = NumDW}) ->
-    PutCore#putcore{results = [{Idx, {dw, undefined}} | Results], 
-                    num_dw = NumDW + 1};
+    num_pw(PutCore#putcore{results = [{Idx, {dw, undefined}} | Results],
+                    num_dw = NumDW + 1}, Idx);
 add_result({dw, Idx, ResObj, _ReqId}, PutCore = #putcore{results = Results,
                                                          num_dw = NumDW}) ->
-    PutCore#putcore{results = [{Idx, {dw, ResObj}} | Results],
-                    num_dw = NumDW + 1};
+    num_pw(PutCore#putcore{results = [{Idx, {dw, ResObj}} | Results],
+                    num_dw = NumDW + 1}, Idx);
 add_result({fail, Idx, _ReqId}, PutCore = #putcore{results = Results,
                                                    num_fail = NumFail}) ->
     PutCore#putcore{results = [{Idx, {error, undefined}} | Results],
@@ -86,34 +99,46 @@ add_result(_Other, PutCore = #putcore{num_fail = NumFail}) ->
     %% Treat unrecognized messages as failures - no index to store them against
     PutCore#putcore{num_fail = NumFail + 1}.
 
-%% Check if enough results have been added to respond 
+%% Check if enough results have been added to respond
 -spec enough(putcore()) -> boolean().
-enough(#putcore{w = W, num_w = NumW, dw = DW, num_dw = NumDW, 
-                num_fail = NumFail, w_fail_threshold = WFailThreshold,
-                dw_fail_threshold = DWFailThreshold}) ->
-    (NumW >= W andalso NumDW >= DW) orelse
-        (NumW >= W andalso NumFail >= DWFailThreshold) orelse
-        (NumW < W andalso NumFail >= WFailThreshold).
+%% The perfect world, all the quorum restrictions have been met.
+enough(#putcore{w = W, num_w = NumW, dw = DW, num_dw = NumDW, pw = PW, num_pw = NumPW}) when
+      NumW >= W, NumDW >= DW, NumPW >= PW ->
+    true;
+%% Enough failures that we can't meet the PW restriction
+enough(#putcore{ num_fail = NumFail, pw_fail_threshold = PWFailThreshold}) when
+      NumFail >= PWFailThreshold ->
+    true;
+%% Enough failures that we can't meet the DW restriction
+enough(#putcore{ num_fail = NumFail, dw_fail_threshold = DWFailThreshold}) when
+      NumFail >= DWFailThreshold ->
+    true;
+%% We've received all DW responses but can't satisfy PW
+enough(#putcore{n = N, num_dw = NumDW, num_fail = NumFail, pw = PW, num_pw = NumPW}) when
+      NumDW + NumFail >= N, NumPW < PW ->
+    true;
+enough(_PutCore) ->
+    false.
 
 %% Get success/fail response once enough results received
 -spec response(putcore()) -> {reply(), putcore()}.
-response(PutCore = #putcore{w = W, num_w = NumW, dw = DW, num_dw = NumDW,
-                            num_fail = NumFail,
-                            w_fail_threshold = WFailThreshold,
-                            dw_fail_threshold = DWFailThreshold}) ->
-    if
-        NumW >= W andalso NumDW >= DW ->
-            maybe_return_body(PutCore);
-        
-        NumW >= W andalso NumFail >= DWFailThreshold ->
-            {{error, too_many_fails}, PutCore};
-        
-       NumW < W andalso NumFail >= WFailThreshold ->
-            {{error, too_many_fails}, PutCore};
-        
-        true ->
-            {{error, {w_val_unsatisfied, NumW, NumDW, W, DW}}, PutCore}
-    end.
+%% Perfect world - all quora met
+response(PutCore = #putcore{w = W, num_w = NumW, dw = DW, num_dw = NumDW, pw = PW, num_pw = NumPW}) when
+      NumW >= W, NumDW >= DW, NumPW >= PW ->
+    maybe_return_body(PutCore);
+%% Everything is ok, except we didn't meet PW
+response(PutCore = #putcore{w = W, num_w = NumW, dw = DW, num_dw = NumDW, pw = PW, num_pw = NumPW}) when
+      NumW >= W, NumDW >= DW, NumPW < PW ->
+    {{error, {pw_val_unsatisfied, PW, NumPW}}, PutCore};
+%% Didn't make PW, and PW >= DW
+response(PutCore = #putcore{n = N, num_fail = NumFail, dw = DW, pw=PW, num_pw = NumPW}) when
+      NumFail > N - PW, PW >= DW ->
+    {{error, {pw_val_unsatisfied, PW, NumPW}}, PutCore};
+%% Didn't make DW and DW > PW
+response(PutCore = #putcore{n = N, num_fail = NumFail, dw = DW, num_dw = NumDW}) when
+      NumFail > N - DW ->
+    {{error, {dw_val_unsatisfied, DW, NumDW}}, PutCore}.
+
 
 %% Get final value - if returnbody did not need the result it allows delaying
 %% running reconcile until after the client reply is sent.
@@ -153,3 +178,127 @@ maybe_return_body(PutCore = #putcore{returnbody = true}) ->
     {ReplyObj, UpdPutCore} = final(PutCore),
     {{ok, ReplyObj}, UpdPutCore}.
 
+%% @private If the Idx is not in the IdxType
+%% the world should end
+is_primary_response(Idx, IdxType) ->
+    {Idx, Status} = lists:keyfind(Idx, 1, IdxType),
+    Status == primary.
+
+%% @private Increment PW, if appropriate
+num_pw(PutCore = #putcore{num_pw=NumPW, idx_type=IdxType}, Idx) ->
+    case is_primary_response(Idx, IdxType) of
+        true ->
+            PutCore#putcore{num_pw=NumPW+1};
+        false ->
+            PutCore
+    end.
+
+
+
+-ifdef(TEST).
+%% simple sanity tests
+enough_test_() ->
+    [
+        {"Checking W",
+            fun() ->
+                    %% you can never fail W directly...
+                    ?assertEqual(false, enough(#putcore{n=3, w=3, dw=0, pw=0,
+                                dw_fail_threshold=4, pw_fail_threshold=4, num_w=1,
+                                num_dw=0, num_pw=0, num_fail=0})),
+                    ?assertEqual(false, enough(#putcore{n=3, w=3, dw=0, pw=0,
+                                dw_fail_threshold=4, pw_fail_threshold=4, num_w=2,
+                                num_dw=0, num_pw=0, num_fail=0})),
+                    %% got enough Ws
+                    ?assertEqual(true, enough(#putcore{n=3, w=3, dw=0, pw=0,
+                                dw_fail_threshold=4, pw_fail_threshold=4, num_w=3,
+                                num_dw=0, num_pw=0, num_fail=0})),
+                ok
+        end},
+        {"Checking DW",
+            fun() ->
+                    ?assertEqual(false, enough(#putcore{n=3, w=0, dw=3, pw=0,
+                                dw_fail_threshold=1, pw_fail_threshold=4, num_w=3,
+                                num_dw=1, num_pw=0, num_fail=0})),
+                    ?assertEqual(false, enough(#putcore{n=3, w=0, dw=3, pw=0,
+                                dw_fail_threshold=1, pw_fail_threshold=4, num_w=3,
+                                num_dw=2, num_pw=0, num_fail=0})),
+                    %% got enough DWs
+                    ?assertEqual(true, enough(#putcore{n=3, w=0, dw=3, pw=0,
+                                dw_fail_threshold=1, pw_fail_threshold=4, num_w=3,
+                                num_dw=3, num_pw=0, num_fail=0})),
+                    %% exceeded failure threshold
+                    ?assertEqual(true, enough(#putcore{n=3, w=0, dw=3, pw=0,
+                                dw_fail_threshold=1, pw_fail_threshold=4, num_w=3,
+                                num_dw=2, num_pw=0, num_fail=1})),
+                ok
+        end},
+        {"Checking PW",
+            fun() ->
+                    ?assertEqual(false, enough(#putcore{n=3, w=0, dw=0, pw=3,
+                                dw_fail_threshold=4, pw_fail_threshold=1, num_w=3,
+                                num_dw=1, num_pw=1, num_fail=0})),
+                    ?assertEqual(false, enough(#putcore{n=3, w=0, dw=0, pw=3,
+                                dw_fail_threshold=4, pw_fail_threshold=1, num_w=3,
+                                num_dw=2, num_pw=2, num_fail=0})),
+                    %% got enough PWs
+                    ?assertEqual(true, enough(#putcore{n=3, w=0, dw=0, pw=3,
+                                dw_fail_threshold=4, pw_fail_threshold=1, num_w=3,
+                                num_dw=3, num_pw=3, num_fail=0})),
+                    %% exceeded failure threshold
+                    ?assertEqual(true, enough(#putcore{n=3, w=0, dw=0, pw=3,
+                                dw_fail_threshold=4, pw_fail_threshold=1, num_w=3,
+                                num_dw=2, num_pw=2, num_fail=1})),
+                    %% can never satisfy PW
+                    ?assertEqual(true, enough(#putcore{n=3, w=0, dw=0, pw=3,
+                                dw_fail_threshold=4, pw_fail_threshold=1, num_w=3,
+                                num_dw=3, num_pw=2, num_fail=0})),
+
+                ok
+        end}
+    ].
+
+response_test_() ->
+    [
+        {"Requirements met",
+            fun() ->
+                    ?assertMatch({ok, _},
+                        response(#putcore{n=3, w=1, dw=3, pw=2,
+                                dw_fail_threshold=1, pw_fail_threshold=2, num_w=3,
+                                num_dw=3, num_pw=2, num_fail=0,
+                                returnbody=false})),
+                    ok
+            end},
+        {"DW val unsatisfied",
+            fun() ->
+                    ?assertMatch({{error, {dw_val_unsatisfied, 3, 2}}, _},
+                        response(#putcore{n=3, w=0, dw=3, pw=0,
+                                dw_fail_threshold=1, pw_fail_threshold=4, num_w=3,
+                                num_dw=2, num_pw=0, num_fail=1})),
+                    %% can never satify PW or DW and PW >= DW
+                    ?assertMatch({{error, {dw_val_unsatisfied, 3, 2}}, _},
+                        response(#putcore{n=3, w=0, dw=3, pw=2,
+                                dw_fail_threshold=1, pw_fail_threshold=2, num_w=3,
+                                num_dw=2, num_pw=1, num_fail=1})),
+                    ok
+            end},
+        {"PW val unsatisfied",
+            fun() ->
+                    ?assertMatch({{error, {pw_val_unsatisfied, 3, 2}}, _},
+                        response(#putcore{n=3, w=0, dw=0, pw=3,
+                                dw_fail_threshold=4, pw_fail_threshold=1, num_w=3,
+                                num_dw=2, num_pw=2, num_fail=1})),
+                    ?assertMatch({{error, {pw_val_unsatisfied, 3, 1}}, _},
+                        response(#putcore{n=3, w=0, dw=0, pw=3,
+                                dw_fail_threshold=4, pw_fail_threshold=1, num_w=3,
+                                num_dw=3, num_pw=1, num_fail=0})),
+                    %% can never satify PW or DW and PW >= DW
+                    ?assertMatch({{error, {pw_val_unsatisfied, 3, 2}}, _},
+                        response(#putcore{n=3, w=0, dw=3, pw=3,
+                                dw_fail_threshold=1, pw_fail_threshold=1, num_w=3,
+                                num_dw=2, num_pw=2, num_fail=1})),
+                    ok
+            end}
+
+    ].
+
+-endif.
