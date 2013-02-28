@@ -33,6 +33,7 @@
          reip/1,
          ringready/1,
          transfers/1,
+         transfer_limit/1,
          cluster_info/1,
          down/1,
          aae_status/1,
@@ -318,6 +319,16 @@ transfers([]) ->
 
     io:format("~n"),
     [DisplayDown(Node) || Node <- Down].
+
+-spec transfer_limit(list()) -> ok.
+transfer_limit([]) ->
+    riak_core_console:transfer_limit([]),
+    io:format("Note: You can change transfer limits with "
+              "'riak-admin transfer_limit <limit>'~n"
+              "      and 'riak-admin transfer_limit <node> <limit>'~n"),
+    ok;
+transfer_limit(List) ->
+    riak_core_console:transfer_limit(List).
 
 cluster_info([OutFile|Rest]) ->
     try
