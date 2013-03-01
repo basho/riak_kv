@@ -128,9 +128,7 @@ encodings_provided(RD, Ctx) ->
 %%      is specified, keys will be streamed back to the client in JSON chunks
 %%      like so: {"keys":[Key1, Key2,...]}.
 %%      A Link header will also be added to the response by this function
-%%      if the keys are included in the JSON object.  The Link header
-%%      will include links to all keys in the bucket, with the property
-%%      "rel=contained".
+%%      if the keys are included in the JSON object.
 produce_bucket_body(RD, #ctx{client=Client,
                              bucket=Bucket,
                              allow_props_param=AllowProps}=Ctx) ->
