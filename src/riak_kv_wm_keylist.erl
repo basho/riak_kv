@@ -127,17 +127,10 @@ encodings_provided(RD, Ctx) ->
 %%      "keys=false" query param is specified. If "keys=stream" query param
 %%      is specified, keys will be streamed back to the client in JSON chunks
 %%      like so: {"keys":[Key1, Key2,...]}.
-%%      A Link header will also be added to the response by this function
-%%      if the keys are included in the JSON object.  The Link header
-%%      will include links to all keys in the bucket, with the property
-%%      "rel=contained".
-produce_bucket_body(RD, Ctx) ->
-    APIVersion = Ctx#ctx.api_version,
-    Prefix = Ctx#ctx.prefix,
-    Client = Ctx#ctx.client,
-    Bucket = Ctx#ctx.bucket,
-
-    IncludeBucketProps = (Ctx#ctx.allow_props_param == true)
+produce_bucket_body(RD, #ctx{client=Client,
+                             bucket=Bucket,
+                             allow_props_param=AllowProps}=Ctx) ->
+    IncludeBucketProps = (AllowProps == true)
         andalso (wrq:get_qs_value(?Q_PROPS, RD) /= ?Q_FALSE),
 
     BucketPropsJson =
@@ -171,15 +164,9 @@ produce_bucket_body(RD, Ctx) ->
         ?Q_TRUE ->
             %% Get the JSON response...
             {ok, KeyList} = Client:list_keys(Bucket),
-            JsonKeys1 = BucketPropsJson ++ [{?Q_KEYS, KeyList}],
-            JsonKeys2 = {struct, JsonKeys1},
-            JsonKeys3 = mochijson2:encode(JsonKeys2),
-
-            %% Create a new RD with link headers for each key...
-            Links1 = [{Bucket, X, "contained"} || X <- KeyList],
-            Links2 = riak_kv_wm_utils:format_links(Links1, Prefix, APIVersion),
-            NewRD = wrq:merge_resp_headers(Links2, RD),
-            {JsonKeys3, NewRD, Ctx};
+            JsonKeys = mochijson2:encode({struct, BucketPropsJson ++
+                                              [{?Q_KEYS, KeyList}]}),
+            {JsonKeys, RD, Ctx};
         _ ->
             JsonProps = mochijson2:encode({struct, BucketPropsJson}),
             {JsonProps, RD, Ctx}
