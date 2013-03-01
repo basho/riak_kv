@@ -88,6 +88,9 @@ start(_Type, _StartArgs) ->
     %% the app is missing or packaging is broken.
     catch cluster_info:register_app(riak_kv_cinfo),
 
+    %% print out critical env limits for support/debugging purposes
+    catch riak_kv_env:doc_env(),
+
     %% Spin up supervisor
     case riak_kv_sup:start_link() of
         {ok, Pid} ->
