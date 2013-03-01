@@ -127,8 +127,6 @@ encodings_provided(RD, Ctx) ->
 %%      "keys=false" query param is specified. If "keys=stream" query param
 %%      is specified, keys will be streamed back to the client in JSON chunks
 %%      like so: {"keys":[Key1, Key2,...]}.
-%%      A Link header will also be added to the response by this function
-%%      if the keys are included in the JSON object.
 produce_bucket_body(RD, #ctx{client=Client,
                              bucket=Bucket,
                              allow_props_param=AllowProps}=Ctx) ->
@@ -168,8 +166,6 @@ produce_bucket_body(RD, #ctx{client=Client,
             {ok, KeyList} = Client:list_keys(Bucket),
             JsonKeys = mochijson2:encode({struct, BucketPropsJson ++
                                               [{?Q_KEYS, KeyList}]}),
-
-            %% Create a new RD with link headers for each key...
             {JsonKeys, RD, Ctx};
         _ ->
             JsonProps = mochijson2:encode({struct, BucketPropsJson}),
