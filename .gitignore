@@ -6,3 +6,5 @@ priv/*
 doc
 test.*-temp-data
 ebin
+/.eqc-info
+/current_counterexample.eqc
