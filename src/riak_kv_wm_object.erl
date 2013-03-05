@@ -841,7 +841,7 @@ encode_vclock_header(RD, #ctx{doc={error, {deleted, VClock}}}) ->
 %% @doc Transform the Erlang representation of the document's vclock
 %%      into something suitable for an HTTP header
 vclock_header(Doc) ->
-    EncodedVClock = riak_kv_wm_utils:encode_vclock(Doc),
+    EncodedVClock = riak_kv_wm_utils:term_to_http_vclock(Doc),
     {?HEAD_VCLOCK, EncodedVClock}.
 
 %% @spec decode_vclock_header(reqdata()) -> vclock()
@@ -851,7 +851,7 @@ vclock_header(Doc) ->
 decode_vclock_header(RD) ->
     case wrq:get_req_header(?HEAD_VCLOCK, RD) of
         undefined -> vclock:fresh();
-        Head      -> binary_to_term(riak_kv_wm_utils:decode_vclock(Head))
+        Head      -> riak_kv_wm_utils:vclock_to_term(Head)
     end.
 
 %% @spec ensure_doc(context()) -> context()
@@ -1053,7 +1053,7 @@ handle_common_error(Reason, RD, Ctx) ->
                 wrq:set_resp_header("Content-Type", "text/plain",
                     wrq:append_to_response_body(
                         io_lib:format("not found~n",[]),
-                        riak_kv_wm_utils:encode_vclock_header(RD, Ctx))),
+                        encode_vclock_header(RD, Ctx))),
                 Ctx};
         {error, {n_val_violation, N}} ->
             Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
