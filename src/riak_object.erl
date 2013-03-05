@@ -406,10 +406,18 @@ assemble_index_specs(Indexes, IndexOp) ->
 set_contents(Object=#r_object{}, MVs) when is_list(MVs) ->
     Object#r_object{contents=[#r_content{metadata=M,value=V} || {M, V} <- MVs]}.
 
+%% @spec vclock_header(riak_object()) -> {Name::string(), Value::string()}
+%% @doc Transform the Erlang representation of the document's vclock
+%%      into something suitable for an HTTP header
+vclock_header(Doc) ->
+    {?HEAD_VCLOCK,
+        binary_to_list(riak_kv_wm_utils:encode_vclock(term_to_binary(riak_object:vclock(Doc))))}.
+
+%% @spec to_json(riak_object()) -> {struct, list(any())}
 %% @doc Converts a riak_object into its JSON equivalent
 -spec to_json(riak_object()) -> {struct, list(any())}.
 to_json(Obj=#r_object{}) ->
-    {_,Vclock} = riak_kv_wm_utils:vclock_header(Obj),
+    {_,Vclock} = vclock_header(Obj),
     {struct, [{<<"bucket">>, riak_object:bucket(Obj)},
               {<<"key">>, riak_object:key(Obj)},
               {<<"vclock">>, list_to_binary(Vclock)},

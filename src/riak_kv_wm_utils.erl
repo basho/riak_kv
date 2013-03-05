@@ -29,7 +29,6 @@
          get_client_id/1,
          default_encodings/0,
          multipart_encode_body/4,
-         vclock_header/1,
          encode_vclock/1,
          decode_vclock/1,
          term_to_vclock/1, 
@@ -149,16 +148,9 @@ multipart_encode_body(Prefix, Bucket, {MD, V}, APIVersion) ->
      "\r\n",
      encode_value(V)].
 
-%% @spec vclock_header(riak_object()) -> {Name::string(), Value::string()}
-%% @doc Transform the Erlang representation of the document's vclock
-%%      into something suitable for an HTTP header
-vclock_header(Doc) ->
-    {?HEAD_VCLOCK,
-        encode_vclock(riak_object:vclock(Doc))}.
-
 %% Fetch the preferred vclock encoding method:
 vclock_encoding_method() ->
-    riak_kv_capability:get({riak_kv, vclock_data_encoding}, encode_zlib).
+    riak_core_capability:get({riak_kv, vclock_data_encoding}, encode_zlib).
 
 %% Encode a vclock in accordance with our capability setting:
 encode_vclock(VClock_Binary) ->
