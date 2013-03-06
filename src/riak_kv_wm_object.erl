@@ -834,14 +834,15 @@ encode_vclock_header(RD, #ctx{doc={ok, Doc}}) ->
     {Head, Val} = vclock_header(Doc),
     wrq:set_resp_header(Head, Val, RD);
 encode_vclock_header(RD, #ctx{doc={error, {deleted, VClock}}}) ->
-    wrq:set_resp_header(?HEAD_VCLOCK, riak_kv_wm_utils:encode_vclock(VClock), RD).
+    wrq:set_resp_header(?HEAD_VCLOCK, riak_object:encode_vclock(VClock), RD).
 
 
 %% @spec vclock_header(riak_object()) -> {Name::string(), Value::string()}
 %% @doc Transform the Erlang representation of the document's vclock
 %%      into something suitable for an HTTP header
 vclock_header(Doc) ->
-    EncodedVClock = riak_kv_wm_utils:term_to_http_vclock(Doc),
+    %% JFW: I'm slightly suspicious about this because we're dropping the initial term_to_binary(Doc):
+    EncodedVClock = binary_to_list(riak_object:encode_vclock(Doc)),
     {?HEAD_VCLOCK, EncodedVClock}.
 
 %% @spec decode_vclock_header(reqdata()) -> vclock()

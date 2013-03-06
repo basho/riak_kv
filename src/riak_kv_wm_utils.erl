@@ -29,11 +29,6 @@
          get_client_id/1,
          default_encodings/0,
          multipart_encode_body/4,
-         encode_vclock/1,
-         decode_vclock/1,
-         term_to_vclock/1, 
-         vclock_to_term/1, 
-         term_to_http_vclock/1,
          format_links/3,
          format_uri/4,
          encode_value/1,
@@ -147,37 +142,6 @@ multipart_encode_body(Prefix, Bucket, {MD, V}, APIVersion) ->
      end,
      "\r\n",
      encode_value(V)].
-
-%% Fetch the preferred vclock encoding method:
-vclock_encoding_method() ->
-    riak_core_capability:get({riak_kv, vclock_data_encoding}, encode_zlib).
-
-%% Encode a vclock in accordance with our capability setting:
-%% JFW: take a term, return binary 
-encode_vclock(VClock_Binary) ->
-    case vclock_encoding_method() of
-        encode_zlib -> base64:encode(zlib:zip(VClock_Binary));
-        encode_raw  -> base64:encode(VClock_Binary)
-    end.
-
-%% Decode a vclock against our capability settings:
-%% JFW: take a term, return vclock
-decode_vclock(VClock) ->
-    case vclock_encoding_method() of
-        encode_zlib -> zlib:unzip(base64:decode(VClock));
-        encode_raw  -> base64:decode(VClock)
-    end.
-
-%% Encode a vector clock with type conversion:
-term_to_vclock(VClock_Term) ->
-    encode_vclock(term_to_binary(VClock_Term)).
-
-%% Decode a vector clock with type conversion:
-vclock_to_term(EncodedVClock) ->
-    binary_to_term(decode_vclock(EncodedVClock)).
-
-term_to_http_vclock(VClock_Term) ->
-    binary_to_list(term_to_vclock(VClock_Term)).
 
 format_links(Links, Prefix, APIVersion) ->
     format_links(Links, Prefix, APIVersion, []).
