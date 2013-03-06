@@ -153,6 +153,7 @@ vclock_encoding_method() ->
     riak_core_capability:get({riak_kv, vclock_data_encoding}, encode_zlib).
 
 %% Encode a vclock in accordance with our capability setting:
+%% JFW: take a term, return binary 
 encode_vclock(VClock_Binary) ->
     case vclock_encoding_method() of
         encode_zlib -> base64:encode(zlib:zip(VClock_Binary));
@@ -160,6 +161,7 @@ encode_vclock(VClock_Binary) ->
     end.
 
 %% Decode a vclock against our capability settings:
+%% JFW: take a term, return vclock
 decode_vclock(VClock) ->
     case vclock_encoding_method() of
         encode_zlib -> zlib:unzip(base64:decode(VClock));

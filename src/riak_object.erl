@@ -435,7 +435,7 @@ from_json(Obj) ->
     Bucket = proplists:get_value(<<"bucket">>, Obj),
     Key = proplists:get_value(<<"key">>, Obj),
     VClock0 = proplists:get_value(<<"vclock">>, Obj),
-    VClock = riak_kv_wm_utils:decode_vclock(VClock0),
+    VClock = riak_kv_wm_utils:vclock_to_term(VClock0),
     [{struct, Values}] = proplists:get_value(<<"values">>, Obj),
     RObj0 = riak_object:new(Bucket, Key, <<"">>),
     RObj1 = riak_object:set_vclock(RObj0, VClock),
