@@ -511,7 +511,55 @@ handle_command(?KV_VNODE_STATUS_REQ{},
                             modstate=ModState}) ->
     BackendStatus = {backend_status, Mod, Mod:status(ModState)},
     VNodeStatus = [BackendStatus],
-    {reply, {vnode_status, Index, VNodeStatus}, State}.
+    {reply, {vnode_status, Index, VNodeStatus}, State};
+handle_command({fix_incorrect_index_entry, done}, _Sender,
+               State=#state{mod=Mod, modstate=ModState}) ->
+    case Mod:mark_indexes_fixed(ModState) of %% only defined for eleveldb backend
+        {ok, NewModState} ->
+            {reply, ok, State#state{modstate=NewModState}};
+        {error, _Reason} ->
+            {reply, error, State}
+    end;
+handle_command({fix_incorrect_index_entry, StorageKey},
+               _Sender,
+               State=#state{mod=Mod,
+                            modstate=ModState}) ->
+    Reply =
+        case Mod:fix_index(StorageKey, ModState) of %% only defined for eleveldb backend
+            {ok, _UpModState} ->
+                ok;
+            {ignore, _UpModState} ->
+                ignore;
+            {error, Reason, _UpModState} ->
+                {error, Reason}
+        end,
+    {reply, Reply, State};
+handle_command(get_incorrect_index_entries,
+               Sender,
+               State=#state{mod=Mod,
+                            modstate=ModState}) ->
+    case Mod of
+        riak_kv_eleveldb_backend ->
+            Status = Mod:status(ModState),
+            case proplists:get_value(fixed_indexes, Status) of
+                true -> {reply, done, State};
+                false ->
+                    FoldFun = fun(_, StorageKey, _) ->
+                                      riak_core_vnode:reply(Sender, StorageKey)
+                              end,
+                    FinishFun = fun(_) -> riak_core_vnode:reply(Sender, done) end,
+                    Opts = [{index, incorrect_format}, async_fold],
+                    case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, undefined) of
+                        {async, AsyncWork} ->
+                            {async, {fold, AsyncWork, FinishFun}, Sender, State};
+                        _ ->
+                            {noreply, State}
+                    end
+            end;
+        _ ->
+            lager:error("Backend ~p does not support incorrect index query", [Mod]),
+            {reply, ignore, State}
+    end.
 
 %% @doc Handle a coverage request.
 %% More information about the specification for the ItemFilter

@@ -33,6 +33,8 @@
          put/5,
          delete/4,
          drop/1,
+         fix_index/2,
+         mark_indexes_fixed/1,
          fold_buckets/4,
          fold_keys/4,
          fold_objects/4,
@@ -51,6 +53,7 @@
 
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold, indexes]).
+-define(FIXED_INDEXES_KEY, sext:encode(fixed_indexes)).
 
 -record(state, {ref :: reference(),
                 data_root :: string(),
@@ -58,7 +61,8 @@
                 config :: config(),
                 read_opts = [],
                 write_opts = [],
-                fold_opts = [{fill_cache, false}]
+                fold_opts = [{fill_cache, false}],
+                fixed_indexes = false
                }).
 
 
@@ -99,9 +103,28 @@ start(Partition, Config) ->
     S0 = init_state(DataDir, Config),
     case open_db(S0) of
         {ok, State} ->
-            {ok, State};
+            determine_fixed_index_status(State);
         {error, Reason} ->
             {error, Reason}
+    end.
+
+determine_fixed_index_status(State) ->
+    case indexes_fixed(State) of
+        {error, Reason} ->
+            {error, Reason};
+        true ->
+            {ok, State#state{fixed_indexes=true}};
+        false ->
+            case is_empty(State) of
+                true -> mark_indexes_fixed_on_start(State);
+                false -> {ok, State#state{fixed_indexes=false}}
+            end
+    end.
+
+mark_indexes_fixed_on_start(State) ->
+    case mark_indexes_fixed(State) of
+        {error, Reason, _} -> {error, Reason};
+        Res -> Res
     end.
 
 %% @doc Stop the eleveldb backend
@@ -138,18 +161,19 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
                  {ok, state()} |
                  {error, term(), state()}.
 put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
-                                                write_opts=WriteOpts}=State) ->
+                                                write_opts=WriteOpts,
+                                                fixed_indexes=FixedIndexes}=State) ->
     %% Create the KV update...
     StorageKey = to_object_key(Bucket, PrimaryKey),
     Updates1 = [{put, StorageKey, Val}],
 
     %% Convert IndexSpecs to index updates...
     F = fun({add, Field, Value}) ->
-                {put, to_index_key(Bucket, PrimaryKey, Field, Value), <<>>};
+                [{put, to_index_key(Bucket, PrimaryKey, Field, Value), <<>>}];
            ({remove, Field, Value}) ->
-                {delete, to_index_key(Bucket, PrimaryKey, Field, Value)}
+                index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value)
         end,
-    Updates2 = [F(X) || X <- IndexSpecs],
+    Updates2 = lists:flatmap(F, IndexSpecs),
 
     %% Perform the write...
     case eleveldb:write(Ref, Updates1 ++ Updates2, WriteOpts) of
@@ -159,13 +183,60 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
             {error, Reason, State}
     end.
 
+indexes_fixed(#state{ref=Ref,read_opts=ReadOpts}) ->
+    case eleveldb:get(Ref, ?FIXED_INDEXES_KEY, ReadOpts) of
+        {ok, _} ->
+            true;
+        not_found ->
+            false;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value) ->
+    KeyDelete = [{delete, to_index_key(Bucket, PrimaryKey, Field, Value)}],
+    LegacyDelete = [{delete, to_legacy_index_key(Bucket, PrimaryKey, Field, Value)}
+                    || FixedIndexes =:= false],
+    KeyDelete ++ LegacyDelete.
+
+fix_index(IndexKey, #state{ref=Ref,
+                           read_opts=ReadOpts,
+                           write_opts=WriteOpts} = State) ->
+    case eleveldb:get(Ref, IndexKey, ReadOpts) of
+        {ok, _} ->
+            {Bucket, Key, Field, Value} = from_index_key(IndexKey),
+            NewKey = to_index_key(Bucket, Key, Field, Value),
+            Updates = [{delete, IndexKey}, {put, NewKey, <<>>}],
+            case eleveldb:write(Ref, Updates, WriteOpts) of
+                ok ->
+                    {ok, State};
+                {error, Reason} ->
+                    {error, Reason, State}
+            end;
+        not_found ->
+            {ignore, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
+
+mark_indexes_fixed(State=#state{fixed_indexes=true}) ->
+    {ok, State};
+mark_indexes_fixed(State=#state{ref=Ref, write_opts=WriteOpts}) ->
+    Updates = [{put, ?FIXED_INDEXES_KEY, <<>>}],
+    case eleveldb:write(Ref, Updates, WriteOpts) of
+        ok ->
+            {ok, State#state{fixed_indexes=true}};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
 
 %% @doc Delete an object from the eleveldb backend
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
                     {ok, state()} |
                     {error, term(), state()}.
 delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref,
-                                              write_opts=WriteOpts}=State) ->
+                                              write_opts=WriteOpts,
+                                              fixed_indexes=FixedIndexes}=State) ->
 
     %% Create the KV delete...
     StorageKey = to_object_key(Bucket, PrimaryKey),
@@ -173,9 +244,9 @@ delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref,
 
     %% Convert IndexSpecs to index deletes...
     F = fun({remove, Field, Value}) ->
-                {delete, to_index_key(Bucket, PrimaryKey, Field, Value)}
+                index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value)
         end,
-    Updates2 = [F(X) || X <- IndexSpecs],
+    Updates2 = lists:flatmap(F, IndexSpecs),
 
     case eleveldb:write(Ref, Updates1 ++ Updates2, WriteOpts) of
         ok ->
@@ -298,10 +369,10 @@ is_empty(#state{ref=Ref}) ->
 
 %% @doc Get the status information for this eleveldb backend
 -spec status(state()) -> [{atom(), term()}].
-status(State) ->
+status(State=#state{fixed_indexes=FixedIndexes}) ->
     {ok, Stats} = eleveldb:status(State#state.ref, <<"leveldb.stats">>),
     {ok, ReadBlockError} = eleveldb:status(State#state.ref, <<"leveldb.ReadBlockError">>),
-    [{stats, Stats}, {read_block_error, ReadBlockError}].
+    [{stats, Stats}, {read_block_error, ReadBlockError}, {fixed_indexes, FixedIndexes}].
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
@@ -476,6 +547,31 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, FilterField, StartTerm,
                     throw({break, Acc})
             end
     end;
+fold_keys_fun(FoldKeysFun, {index, incorrect_format}) ->
+    %% Over incorrectly formatted 2i index values
+    fun(StorageKey, Acc) ->
+            Action =
+                case from_index_key(StorageKey) of
+                    {Bucket, Key, Field, Term} ->
+                        NewKey = to_index_key(Bucket, Key, Field, Term),
+                        case NewKey =:= StorageKey of
+                            true  ->
+                                ignore;
+                            false ->
+                                {fold, Bucket, StorageKey}
+                        end;
+                    _ ->
+                        stop
+                end,
+            case Action of
+                {fold, B, K} ->
+                    FoldKeysFun(B, K, Acc);
+                ignore ->
+                    Acc;
+                stop ->
+                    throw({break, Acc})
+            end
+    end;
 fold_keys_fun(_FoldKeysFun, Other) ->
     throw({unknown_limiter, Other}).
 
@@ -511,6 +607,9 @@ fold_opts(Bucket, FoldOpts) ->
 to_first_key(undefined) ->
     %% Start at the first object in LevelDB...
     to_object_key(<<>>, <<>>);
+to_first_key({index, _}) ->
+    %% Start at first index entry
+    to_index_key(<<>>, <<>>, <<>>, <<>>);
 to_first_key({bucket, Bucket}) ->
     %% Start at the first object for a given bucket...
     to_object_key(Bucket, <<>>);
@@ -543,6 +642,9 @@ from_object_key(LKey) ->
 
 to_index_key(Bucket, Key, Field, Term) ->
     sext:encode({i, Bucket, Field, Term, Key}).
+
+to_legacy_index_key(Bucket, Key, Field, Term) -> %% encode with legacy bignum encoding
+    sext:encode({i, Bucket, Field, Term, Key}, true).
 
 from_index_key(LKey) ->
     case sext:decode(LKey) of
