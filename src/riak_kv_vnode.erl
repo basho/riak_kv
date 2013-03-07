@@ -515,7 +515,57 @@ handle_command(?KV_VNODE_STATUS_REQ{},
                             modstate=ModState}) ->
     BackendStatus = {backend_status, Mod, Mod:status(ModState)},
     VNodeStatus = [BackendStatus],
-    {reply, {vnode_status, Index, VNodeStatus}, State}.
+    {reply, {vnode_status, Index, VNodeStatus}, State};
+handle_command({fix_incorrect_index_entry, {done, ForUpgrade}}, _Sender,
+               State=#state{mod=Mod, modstate=ModState}) ->
+    case Mod:mark_indexes_fixed(ModState, ForUpgrade) of %% only defined for eleveldb backend
+        {ok, NewModState} ->
+            {reply, ok, State#state{modstate=NewModState}};
+        {error, _Reason} ->
+            {reply, error, State}
+    end;
+handle_command({fix_incorrect_index_entry, {Bucket, StorageKey}, ForUpgrade},
+               _Sender,
+               State=#state{mod=Mod,
+                            modstate=ModState}) ->
+    Reply =
+        case Mod:fix_index(Bucket, StorageKey, ForUpgrade, ModState) of
+            {ok, _UpModState} ->
+                ok;
+            {ignore, _UpModState} ->
+                ignore;
+            {error, Reason, _UpModState} ->
+                {error, Reason}
+        end,
+    {reply, Reply, State};
+handle_command({get_index_entries, ForUpgrade},
+               Sender,
+               State=#state{mod=Mod,
+                            modstate=ModState0}) ->
+    {ok, Caps} = Mod:capabilities(ModState0),
+    case lists:member(index_reformat, Caps) of
+        true ->
+            ModState = Mod:set_legacy_indexes(ModState0, not ForUpgrade),
+            Status = Mod:status(ModState),
+            case {ForUpgrade, proplists:get_value(fixed_indexes, Status)} of
+                {true, true} -> {reply, done, State};
+                {_,  _} ->
+                    FoldFun = fun(Bucket, StorageKey, _) ->
+                                      riak_core_vnode:reply(Sender, {Bucket, StorageKey})
+                              end,
+                    FinishFun = fun(_) -> riak_core_vnode:reply(Sender, done) end,
+                    Opts = [{index, incorrect_format, ForUpgrade}, async_fold],
+                    case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, undefined) of
+                        {async, AsyncWork} ->
+                            {async, {fold, AsyncWork, FinishFun}, Sender, State};
+                        _ ->
+                            {noreply, State}
+                    end
+            end;
+        false ->
+            lager:error("Backend ~p does not support incorrect index query", [Mod]),
+            {reply, ignore, State}
+    end.
 
 %% @doc Handle a coverage request.
 %% More information about the specification for the ItemFilter
