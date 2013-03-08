@@ -64,3 +64,4 @@
 -define(Q_STREAM, "stream").
 -define(Q_VTAG,  "vtag").
 -define(Q_RETURNBODY, "returnbody").
+-define(Q_2I_RETURNTERMS, "returnterms").

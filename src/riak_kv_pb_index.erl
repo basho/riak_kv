@@ -83,8 +83,10 @@ process(#rpbindexreq{bucket=Bucket, index=Index, qtype=eq, key=SKey}, #state{cli
             {error, {format, Reason}, State}
     end;
 process(#rpbindexreq{bucket=Bucket, index=Index, qtype=range,
-                     range_min=Min, range_max=Max}, #state{client=Client}=State) ->
-    case riak_index:to_index_query(Index, [Min, Max]) of
+                     range_min=Min, range_max=Max, return_terms=Bool0}, #state{client=Client}=State) ->
+    CanReturnTerms = riak_core_capability:get({riak_kv, '2i_return_terms'}, false),
+    Bool = normalize_bool(Bool0),
+    case riak_index:to_index_query(Index, [Min, Max], (Bool andalso CanReturnTerms)) of
         {ok, Query} ->
             case Client:get_index(Bucket, Query) of
                 {ok, Results} ->
@@ -95,6 +97,11 @@ process(#rpbindexreq{bucket=Bucket, index=Index, qtype=range,
         {error, Reason} ->
             {error, {format, Reason}, State}
     end.
+
+normalize_bool(B) when is_boolean(B) ->
+    B;
+normalize_bool(_) ->
+    false.
 
 %% @doc process_stream/3 callback. This service does not create any
 %% streaming responses and so ignores all incoming messages.
