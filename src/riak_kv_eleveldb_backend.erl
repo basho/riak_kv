@@ -464,6 +464,8 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, <<"$key">>, StartKey, E
             end
     end;
 fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, FilterField, StartTerm, EndTerm}}) ->
+    fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, FilterField, StartTerm, EndTerm, false}});
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, FilterField, StartTerm, EndTerm, Terms}}) ->
     %% 2I range query...
     fun(StorageKey, Acc) ->
             case from_index_key(StorageKey) of
@@ -471,7 +473,12 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, FilterField, StartTerm,
                                                 FilterField == Field,
                                                 StartTerm =< Term,
                                                 EndTerm >= Term ->
-                    FoldKeysFun(Bucket, Key, Acc);
+                    case Terms of
+                        true ->
+                            FoldKeysFun(Bucket, {Key, Term}, Acc);
+                        false ->
+                            FoldKeysFun(Bucket, Key, Acc)
+                    end;
                 _ ->
                     throw({break, Acc})
             end
@@ -524,7 +531,10 @@ to_first_key({index, Bucket, {range, <<"$key">>, StartTerm, _EndTerm}}) ->
     %% 2I range query on special $key field...
     to_object_key(Bucket, StartTerm);
 to_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm}}) ->
-    %% 2I range query...
+    %% (Legacy) 2I range query...
+    to_index_key(Bucket, <<>>, Field, StartTerm);
+to_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm, _Terms}}) ->
+    %% 2I range query (return terms too)
     to_index_key(Bucket, <<>>, Field, StartTerm);
 to_first_key(Other) ->
     erlang:throw({unknown_limiter, Other}).

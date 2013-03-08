@@ -32,7 +32,8 @@
          format_failure_reason/1,
          normalize_index_field/1,
          timestamp/0,
-         to_index_query/2
+         to_index_query/2,
+         to_index_query/3
         ]).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -225,11 +226,15 @@ timestamp() ->
     {MegaSeconds,Seconds,MilliSeconds}=os:timestamp(),
     (MegaSeconds * 1000000000000) + (Seconds * 1000000) + MilliSeconds.
 
+
+to_index_query(IndexField, Args) ->
+    to_index_query(IndexField, Args, false).
+
 %% @spec to_index_query(binary(), [binary()]) ->
 %%         {ok, {atom(), binary(), list(binary())}} | {error, Reasons}.
 %% @doc Given an IndexOp, IndexName, and Args, construct and return a
 %%      valid query, or a list of errors if the query is malformed.
-to_index_query(IndexField, Args) ->
+to_index_query(IndexField, Args, ReturnTerms) ->
     %% Normalize the index field...
     IndexField1 = riak_index:normalize_index_field(IndexField),
 
@@ -242,11 +247,20 @@ to_index_query(IndexField, Args) ->
             %% One argument == exact match query
             {ok, {eq, IndexField1, Value}};
 
-        {ok, [{_, Start}, {_, End}]} ->
+        {ok, [{Field, Start}, {Field, End}]} ->
             %% Two arguments == range query
             case End > Start of
                 true ->
-                    {ok, {range, IndexField1, Start, End}};
+                    case {Field, ReturnTerms} of
+                        {?KEYFIELD, _} ->
+                            %% Not a range query where we can return the index term, since
+                            %% it is the Key itself
+                            {ok, {range, IndexField1, Start, End}};
+                        {_, true} ->
+                            {ok, {range, IndexField1, Start, End, true}};
+                        {_, false} ->
+                            {ok,{range, IndexField1, Start, End}}
+                    end;
                 false ->
                     {error, {invalid_range, Args}}
             end;
@@ -301,7 +315,6 @@ normalize_index_field(V) when is_binary(V) ->
     normalize_index_field(binary_to_list(V));
 normalize_index_field(V) when is_list(V) ->
     list_to_binary(string:to_lower(V)).
-
 
 %% ====================
 %% TESTS

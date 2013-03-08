@@ -113,10 +113,15 @@ build_item_filter(FilterInput) ->
 
 %% @private
 build_preflist_fun(Bucket, Ring) ->
-    fun(Key) ->
+    fun({Key, _Value}) ->
+            ChashKey = riak_core_util:chash_key({Bucket, Key}),
+            riak_core_ring:responsible_index(ChashKey, Ring);
+       (Key) ->
             ChashKey = riak_core_util:chash_key({Bucket, Key}),
             riak_core_ring:responsible_index(ChashKey, Ring)
     end.
+
+
 
 compose([]) ->
     none;

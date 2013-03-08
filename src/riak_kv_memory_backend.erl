@@ -423,6 +423,13 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, <<"$key">>, _, _}}) ->
 fold_keys_fun(FoldKeysFun, {index, FilterBucket, {eq, <<"$key">>, _}}) ->
     %% 2I eq query on special $key field...
     fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
+%% Return the index term and the index key
+fold_keys_fun(FoldKeysFun, {index, _FilterBucket, {range, _Field, _Start, _End, true}}) ->
+    fun({{Bucket, _FilterField, FilterTerm, Key}, _}, Acc) ->
+            FoldKeysFun(Bucket, {Key, FilterTerm}, Acc);
+       (_, Acc) ->
+            Acc
+    end;
 fold_keys_fun(FoldKeysFun, {index, _FilterBucket, _Query}) ->
     fun({{Bucket, _FilterField, _FilterTerm, Key}, _}, Acc) ->
             FoldKeysFun(Bucket, Key, Acc);
@@ -471,9 +478,12 @@ get_index_folder(Folder, Acc0, {index, Bucket, {eq, Field, Term}}, _, IndexRef) 
     fun() ->
             index_range_folder(Folder, Acc0, IndexRef, {Bucket, Field, Term, undefined}, {Bucket, Field, Term, Term})
     end;
-get_index_folder(Folder, Acc0, {index, Bucket, {range, Field, Min, Max}}, _, IndexRef) ->
+%% Legacy range query
+get_index_folder(Folder, Acc0, {index, Bucket, {range, Field, Min, Max}}, DataRef, IndexRef) ->
+    get_index_folder(Folder, Acc0, {index, Bucket, {range, Field, Min, Max, false}}, DataRef, IndexRef);
+get_index_folder(Folder, Acc0, {index, Bucket, {range, Field, Min, Max, Terms}}, _, IndexRef) ->
     fun() ->
-            index_range_folder(Folder, Acc0, IndexRef, {Bucket, Field, Min, undefined}, {Bucket, Field, Min, Max})
+            index_range_folder(Folder, Acc0, IndexRef, {Bucket, Field, Min, undefined}, {Bucket, Field, Min, Max, Terms})
     end.
 
 
@@ -501,7 +511,7 @@ key_range_folder(_Folder, Acc, _DataRef, _DataKey, _Query) ->
     Acc.
 
 %% Iterates over a range of index postings
-index_range_folder(Folder, Acc0, IndexRef, {B, I, V, _K}=IndexKey, {B, I, Min, Max}=Query) when V >= Min, V =< Max ->
+index_range_folder(Folder, Acc0, IndexRef, {B, I, V, _K}=IndexKey, {B, I, Min, Max, _Terms}=Query) when V >= Min, V =< Max ->
     case ets:lookup(IndexRef, IndexKey) of
         [] ->
             %% This will happen on the first iteration, where the key
