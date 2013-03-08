@@ -89,8 +89,11 @@ malformed_request(RD, Ctx) ->
     IndexField = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(field, RD))),
     Args1 = wrq:path_tokens(RD),
     Args2 = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
+    ReturnTerms0 = wrq:get_qs_value(?Q_2I_RETURNTERMS, "false", RD),
+    ReturnTerms = normalize_boolean(string:to_lower(ReturnTerms0)),
+    CanReturnTerms = riak_core_capability:get({riak_kv, '2i_return_terms'}, false),
 
-    case riak_index:to_index_query(IndexField, Args2) of
+    case riak_index:to_index_query(IndexField, Args2, (ReturnTerms andalso CanReturnTerms)) of
         {ok, Query} ->
             %% Request is valid.
             NewCtx = Ctx#ctx{
@@ -106,7 +109,14 @@ malformed_request(RD, Ctx) ->
              Ctx}
     end.
 
-
+normalize_boolean("false") ->
+    false;
+normalize_boolean("0") ->
+    false;
+normalize_boolean("no") ->
+    false;
+normalize_boolean(_) ->
+    true.
 
 %% @spec content_types_provided(reqdata(), context()) ->
 %%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
