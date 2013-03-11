@@ -83,15 +83,18 @@ process(#rpbindexreq{bucket=Bucket, index=Index, qtype=eq, key=SKey}, #state{cli
             {error, {format, Reason}, State}
     end;
 process(#rpbindexreq{bucket=Bucket, index=Index, qtype=range,
-                     range_min=Min, range_max=Max, return_terms=Bool0}, #state{client=Client}=State) ->
+                     range_min=Min, range_max=Max, return_terms=ReturnTerms0}, #state{client=Client}=State) ->
     CanReturnTerms = riak_core_capability:get({riak_kv, '2i_return_terms'}, false),
-    Bool = normalize_bool(Bool0),
-    case riak_index:to_index_query(Index, [Min, Max], (Bool andalso CanReturnTerms)) of
+    ReturnTerms = (normalize_bool(ReturnTerms0) andalso CanReturnTerms),
+    case riak_index:to_index_query(Index, [Min, Max], ReturnTerms) of
         {ok, Query} ->
-            case Client:get_index(Bucket, Query) of
-                {ok, Results} ->
+            case {ReturnTerms, Client:get_index(Bucket, Query)} of
+                {false, {ok, Results}} ->
                     {reply, #rpbindexresp{keys=Results}, State};
-                {error, QReason} ->
+                {true, {ok, Results0}} ->
+                    Results = [riak_pb_kv_codec:encode_index_pair(Res) || Res <- Results0],
+                    {reply, #rpbindexresp{results=Results}, State};
+                {_, {error, QReason}} ->
                     {error, {format, QReason}, State}
             end;
         {error, Reason} ->
