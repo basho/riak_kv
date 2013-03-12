@@ -411,8 +411,9 @@ set_contents(Object=#r_object{}, MVs) when is_list(MVs) ->
 %% @doc Transform the Erlang representation of the document's vclock
 %%      into something suitable for an HTTP header
 vclock_header(Doc) ->
-    {?HEAD_VCLOCK,
-        binary_to_list(encode_vclock(term_to_binary(riak_object:vclock(Doc))))}.
+    VClock = riak_object:vclock(Doc),
+    EncodedVClock = binary_to_list(encode_vclock(term_to_binary(VClock))), 
+    {?HEAD_VCLOCK, EncodedVClock}.
 
 %% @spec to_json(riak_object()) -> {struct, list(any())}
 %% @doc Converts a riak_object into its JSON equivalent
