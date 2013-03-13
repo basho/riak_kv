@@ -512,20 +512,20 @@ handle_command(?KV_VNODE_STATUS_REQ{},
     BackendStatus = {backend_status, Mod, Mod:status(ModState)},
     VNodeStatus = [BackendStatus],
     {reply, {vnode_status, Index, VNodeStatus}, State};
-handle_command({fix_incorrect_index_entry, done}, _Sender,
+handle_command({fix_incorrect_index_entry, {done, ForUpgrade}}, _Sender,
                State=#state{mod=Mod, modstate=ModState}) ->
-    case Mod:mark_indexes_fixed(ModState) of %% only defined for eleveldb backend
+    case Mod:mark_indexes_fixed(ModState, ForUpgrade) of %% only defined for eleveldb backend
         {ok, NewModState} ->
             {reply, ok, State#state{modstate=NewModState}};
         {error, _Reason} ->
             {reply, error, State}
     end;
-handle_command({fix_incorrect_index_entry, StorageKey},
+handle_command({fix_incorrect_index_entry, StorageKey, ForUpgrade},
                _Sender,
                State=#state{mod=Mod,
                             modstate=ModState}) ->
     Reply =
-        case Mod:fix_index(StorageKey, ModState) of %% only defined for eleveldb backend
+        case Mod:fix_index(StorageKey, ForUpgrade, ModState) of
             {ok, _UpModState} ->
                 ok;
             {ignore, _UpModState} ->
@@ -534,21 +534,23 @@ handle_command({fix_incorrect_index_entry, StorageKey},
                 {error, Reason}
         end,
     {reply, Reply, State};
-handle_command(get_incorrect_index_entries,
+handle_command({get_index_entries, ForUpgrade},
                Sender,
                State=#state{mod=Mod,
-                            modstate=ModState}) ->
+                            modstate=ModState0}) ->
     case Mod of
         riak_kv_eleveldb_backend ->
+            ModState = Mod:set_legacy_indices(ModState0, not ForUpgrade),
             Status = Mod:status(ModState),
-            case proplists:get_value(fixed_indexes, Status) of
-                true -> {reply, done, State};
-                false ->
+            case {ForUpgrade, proplists:get_value(fixed_indexes, Status)} of
+                {true, true} -> {reply, done, State};
+                {false, false} -> {reply, done, State}; %% this check may be wrong w/ legacy write
+                {_,  _} ->
                     FoldFun = fun(_, StorageKey, _) ->
                                       riak_core_vnode:reply(Sender, StorageKey)
                               end,
                     FinishFun = fun(_) -> riak_core_vnode:reply(Sender, done) end,
-                    Opts = [{index, incorrect_format}, async_fold],
+                    Opts = [{index, incorrect_format, ForUpgrade}, async_fold],
                     case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, undefined) of
                         {async, AsyncWork} ->
                             {async, {fold, AsyncWork, FinishFun}, Sender, State};

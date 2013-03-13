@@ -33,8 +33,9 @@
          put/5,
          delete/4,
          drop/1,
-         fix_index/2,
-         mark_indexes_fixed/1,
+         fix_index/3,
+         mark_indexes_fixed/2,
+         set_legacy_indices/2,
          fold_buckets/4,
          fold_keys/4,
          fold_objects/4,
@@ -62,7 +63,8 @@
                 read_opts = [],
                 write_opts = [],
                 fold_opts = [{fill_cache, false}],
-                fixed_indexes = false
+                fixed_indexes = false, %% true if legacy indices should be rewritten
+                legacy_indices = false %% true if new writes use legacy indices (downgrade)
                }).
 
 
@@ -122,7 +124,7 @@ determine_fixed_index_status(State) ->
     end.
 
 mark_indexes_fixed_on_start(State) ->
-    case mark_indexes_fixed(State) of
+    case mark_indexes_fixed(State, true) of
         {error, Reason, _} -> {error, Reason};
         Res -> Res
     end.
@@ -162,6 +164,7 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
                  {error, term(), state()}.
 put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
                                                 write_opts=WriteOpts,
+                                                legacy_indices=WriteLegacy,
                                                 fixed_indexes=FixedIndexes}=State) ->
     %% Create the KV update...
     StorageKey = to_object_key(Bucket, PrimaryKey),
@@ -169,7 +172,12 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
 
     %% Convert IndexSpecs to index updates...
     F = fun({add, Field, Value}) ->
-                [{put, to_index_key(Bucket, PrimaryKey, Field, Value), <<>>}];
+                case WriteLegacy of
+                    true ->
+                        [{put, to_legacy_index_key(Bucket, PrimaryKey, Field, Value), <<>>}];
+                    false ->
+                        [{put, to_index_key(Bucket, PrimaryKey, Field, Value), <<>>}]
+                end;
            ({remove, Field, Value}) ->
                 index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value)
         end,
@@ -185,8 +193,10 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
 
 indexes_fixed(#state{ref=Ref,read_opts=ReadOpts}) ->
     case eleveldb:get(Ref, ?FIXED_INDEXES_KEY, ReadOpts) of
-        {ok, _} ->
+        {ok, <<1>>} ->
             true;
+        {ok, <<0>>} ->
+            false;
         not_found ->
             false;
         {error, Reason} ->
@@ -199,13 +209,16 @@ index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value) ->
                     || FixedIndexes =:= false],
     KeyDelete ++ LegacyDelete.
 
-fix_index(IndexKey, #state{ref=Ref,
-                           read_opts=ReadOpts,
-                           write_opts=WriteOpts} = State) ->
+fix_index(IndexKey, ForUpgrade, #state{ref=Ref,
+                                       read_opts=ReadOpts,
+                                       write_opts=WriteOpts} = State) ->
     case eleveldb:get(Ref, IndexKey, ReadOpts) of
         {ok, _} ->
             {Bucket, Key, Field, Value} = from_index_key(IndexKey),
-            NewKey = to_index_key(Bucket, Key, Field, Value),
+            NewKey = case ForUpgrade of
+                         true -> to_index_key(Bucket, Key, Field, Value);
+                         false -> to_legacy_index_key(Bucket, Key, Field, Value)
+                     end,
             Updates = [{delete, IndexKey}, {put, NewKey, <<>>}],
             case eleveldb:write(Ref, Updates, WriteOpts) of
                 ok ->
@@ -219,16 +232,25 @@ fix_index(IndexKey, #state{ref=Ref,
             {error, Reason, State}
     end.
 
-mark_indexes_fixed(State=#state{fixed_indexes=true}) ->
+mark_indexes_fixed(State=#state{fixed_indexes=true}, true) ->
     {ok, State};
-mark_indexes_fixed(State=#state{ref=Ref, write_opts=WriteOpts}) ->
-    Updates = [{put, ?FIXED_INDEXES_KEY, <<>>}],
+mark_indexes_fixed(State=#state{fixed_indexes=false}, false) ->
+    {ok, State};
+mark_indexes_fixed(State=#state{ref=Ref, write_opts=WriteOpts}, ForUpgrade) ->
+    Value = case ForUpgrade of
+                true -> <<1>>;
+                false -> <<0>>
+            end,
+    Updates = [{put, ?FIXED_INDEXES_KEY, Value}],
     case eleveldb:write(Ref, Updates, WriteOpts) of
         ok ->
-            {ok, State#state{fixed_indexes=true}};
+            {ok, State#state{fixed_indexes=ForUpgrade}};
         {error, Reason} ->
             {error, Reason, State}
     end.
+
+set_legacy_indices(State, WriteLegacy) ->
+    State#state{legacy_indices=WriteLegacy}.
 
 %% @doc Delete an object from the eleveldb backend
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
@@ -547,13 +569,18 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, FilterField, StartTerm,
                     throw({break, Acc})
             end
     end;
-fold_keys_fun(FoldKeysFun, {index, incorrect_format}) ->
+fold_keys_fun(FoldKeysFun, {index, incorrect_format, ForUpgrade}) when is_boolean(ForUpgrade) ->
     %% Over incorrectly formatted 2i index values
     fun(StorageKey, Acc) ->
             Action =
                 case from_index_key(StorageKey) of
                     {Bucket, Key, Field, Term} ->
-                        NewKey = to_index_key(Bucket, Key, Field, Term),
+                        NewKey = case ForUpgrade of
+                                     true ->
+                                         to_index_key(Bucket, Key, Field, Term);
+                                     false ->
+                                         to_legacy_index_key(Bucket, Key, Field, Term)
+                                 end,
                         case NewKey =:= StorageKey of
                             true  ->
                                 ignore;
@@ -607,12 +634,12 @@ fold_opts(Bucket, FoldOpts) ->
 to_first_key(undefined) ->
     %% Start at the first object in LevelDB...
     to_object_key(<<>>, <<>>);
-to_first_key({index, _}) ->
-    %% Start at first index entry
-    to_index_key(<<>>, <<>>, <<>>, <<>>);
 to_first_key({bucket, Bucket}) ->
     %% Start at the first object for a given bucket...
     to_object_key(Bucket, <<>>);
+to_first_key({index, incorrect_format, ForUpgrade}) when is_boolean(ForUpgrade) ->
+    %% Start at first index entry
+    to_index_key(<<>>, <<>>, <<>>, <<>>);
 to_first_key({index, Bucket, {eq, <<"$bucket">>, _Term}}) ->
     %% 2I exact match query on special $bucket field...
     to_first_key({bucket, Bucket});

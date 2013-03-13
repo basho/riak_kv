@@ -238,9 +238,12 @@ fix_incorrect_index_entries() ->
 %% needs to sum success/error/ignore accorss results of pmap
 fix_incorrect_index_entries(Opts) when is_list(Opts) ->
     MaxN = proplists:get_value(concurrency, Opts, 2),
-    lager:info("index reformat starting with concurrency: ~p", [MaxN]),
+    ForUpgrade = not proplists:get_value(downgrade, Opts, false),
+    lager:info("index reformat starting with concurrency: ~p for upgrade: ~p",
+               [MaxN, ForUpgrade]),
     IdxList = [Idx || {riak_kv_vnode, Idx, _} <- riak_core_vnode_manager:all_vnodes()],
-    Counts = riak_core_util:pmap(fun fix_incorrect_index_entries/1, IdxList, MaxN),
+    F = fun(X) -> fix_incorrect_index_entries(X, ForUpgrade) end,
+    Counts = riak_core_util:pmap(F, IdxList, MaxN),
     {SuccessCounts, IgnoredCounts, ErrorCounts} = lists:unzip3(Counts),
     SuccessTotal = lists:sum(SuccessCounts),
     IgnoredTotal = lists:sum(IgnoredCounts),
@@ -253,20 +256,21 @@ fix_incorrect_index_entries(Opts) when is_list(Opts) ->
             lager:info("index reformat encountered ~p errors reformatting keys. Please re-run",
                        [ErrorTotal])
     end,
-    {SuccessTotal, IgnoredTotal, ErrorTotal};
-fix_incorrect_index_entries(Idx) ->
-    fix_incorrect_index_entries(Idx, fun fix_incorrect_index_entry/3, {0, 0, 0}).
+    {SuccessTotal, IgnoredTotal, ErrorTotal}.
 
-fix_incorrect_index_entries(Idx, FixFun, Acc0) ->
+fix_incorrect_index_entries(Idx, ForUpgrade) ->
+    fix_incorrect_index_entries(Idx, fun fix_incorrect_index_entry/4, {0, 0, 0}, ForUpgrade).
+
+fix_incorrect_index_entries(Idx, FixFun, Acc0, ForUpgrade) ->
     Ref = make_ref(),
     riak_core_vnode_master:command({Idx, node()},
-                                   get_incorrect_index_entries,
+                                   {get_index_entries, ForUpgrade},
                                    {raw, Ref, self()},
                                    riak_kv_vnode_master),
-    case process_incorrect_index_entries(Ref, Idx, FixFun, Acc0) of
+    case process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, Acc0) of
         ignore -> Acc0;
-        {SuccessCount,_,ErrorCount}=Res ->
-            MarkRes = mark_indexes_reformatted(Idx, SuccessCount, ErrorCount),
+        {_,_,ErrorCount}=Res ->
+            MarkRes = mark_indexes_reformatted(Idx, ErrorCount, ForUpgrade),
             case MarkRes of
                 error ->
                     %% there was an error marking the partition as reformatted. treat this like
@@ -276,9 +280,9 @@ fix_incorrect_index_entries(Idx, FixFun, Acc0) ->
             end
     end.
 
-fix_incorrect_index_entry(Idx, BadKey, {Success, Ignore, Error}) ->
+fix_incorrect_index_entry(Idx, ForUpgrade, BadKey, {Success, Ignore, Error}) ->
     Res = riak_core_vnode_master:sync_command({Idx, node()},
-                                              {fix_incorrect_index_entry, BadKey},
+                                              {fix_incorrect_index_entry, BadKey, ForUpgrade},
                                               riak_kv_vnode_master),
     case Res of
         ok ->
@@ -290,24 +294,22 @@ fix_incorrect_index_entry(Idx, BadKey, {Success, Ignore, Error}) ->
     end.
 
 %% needs to take an acc to count success/error/ignore
-process_incorrect_index_entries(Ref, Idx, FixFun, Acc) ->
+process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, Acc) ->
     receive
         {Ref, ignore} ->
             ignore;
         {Ref, done} ->
             Acc;
         {Ref, Key} ->
-            NextAcc = FixFun(Idx, Key, Acc),
-            process_incorrect_index_entries(Ref, Idx, FixFun, NextAcc)
+            NextAcc = FixFun(Idx, ForUpgrade, Key, Acc),
+            process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, NextAcc)
     end.
 
-mark_indexes_reformatted(_, 0, 0) ->
-    ok;
-mark_indexes_reformatted(Idx, _, 0) ->
+mark_indexes_reformatted(Idx, 0, ForUpgrade) ->
     riak_core_vnode_master:sync_command({Idx, node()},
-                                        {fix_incorrect_index_entry, done},
+                                        {fix_incorrect_index_entry, {done, ForUpgrade}},
                                         riak_kv_vnode_master);
-mark_indexes_reformatted(_Idx, _SuccessCount, _ErrorCount) ->
+mark_indexes_reformatted(_Idx, _ErrorCount, _ForUpgrade) ->
     undefined.
 
 
