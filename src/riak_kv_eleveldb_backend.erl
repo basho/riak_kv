@@ -594,10 +594,9 @@ fold_objects_fun(FoldObjectsFun, FilterBucket) ->
 %% Augment the fold options list if a
 %% bucket is defined.
 fold_opts(undefined, FoldOpts) ->
-    FoldOpts;
+    [{first_key, to_first_key(undefined)} | FoldOpts];
 fold_opts(Bucket, FoldOpts) ->
-    BKey = sext:encode({Bucket, <<>>}),
-    [{first_key, BKey} | FoldOpts].
+    [{first_key, to_first_key({bucket, Bucket})} | FoldOpts].
 
 
 %% @private Given a scope limiter, use sext to encode an expression
