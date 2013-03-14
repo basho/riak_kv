@@ -63,7 +63,7 @@
                 read_opts = [],
                 write_opts = [],
                 fold_opts = [{fill_cache, false}],
-                fixed_indexes = false, %% true if legacy indices should be rewritten
+                fixed_indexes = false, %% true if legacy indices have be rewritten
                 legacy_indices = false %% true if new writes use legacy indices (downgrade)
                }).
 

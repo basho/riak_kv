@@ -235,7 +235,6 @@ determine_all_n(Ring) ->
 fix_incorrect_index_entries() ->
     fix_incorrect_index_entries([]).
 
-%% needs to sum success/error/ignore accorss results of pmap
 fix_incorrect_index_entries(Opts) when is_list(Opts) ->
     MaxN = proplists:get_value(concurrency, Opts, 2),
     ForUpgrade = not proplists:get_value(downgrade, Opts, false),
