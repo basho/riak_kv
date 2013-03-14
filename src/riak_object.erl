@@ -67,7 +67,7 @@
 -export([increment_vclock/2, increment_vclock/3]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([hash/1, approximate_size/2]).
--export([vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
+-export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
 -export([update_value/2, update_metadata/2, bucket/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([merge/2, apply_updates/1, syntactic_merge/2]).
@@ -750,11 +750,12 @@ decode_maybe_binary(<<0, Bin/binary>>) ->
 %%
 
 %% Fetch the preferred vclock encoding method:
+-spec vclock_encoding_method() -> atom().
 vclock_encoding_method() ->
     riak_core_capability:get({riak_kv, vclock_data_encoding}, encode_zlib).
 
 %% Encode a vclock in accordance with our capability setting:
--spec encode_vclock(VClock :: term()) -> binary().
+-spec encode_vclock(VClock :: base64:ascii_string() | base64:ascii_binary()) -> base64:ascii_binary().
 encode_vclock(VClock) ->
     case vclock_encoding_method() of
         encode_zlib -> base64:encode(zlib:zip(VClock));
@@ -762,7 +763,8 @@ encode_vclock(VClock) ->
     end.
 
 %% Decode a vclock against our capability settings:
--spec decode_vclock(VClock :: term()) -> vclock:vclock().
+%% JFW: -spec decode_vclock(VClock :: term()) -> vclock:vclock().
+-spec decode_vclock(VClock :: base64:ascii_string() | base64:ascii_binary()) -> vclock:vclock().
 decode_vclock(VClock) ->
     case vclock_encoding_method() of
         encode_zlib -> zlib:unzip(base64:decode(VClock));
