@@ -54,7 +54,7 @@
 
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold, indexes]).
--define(FIXED_INDEXES_KEY, sext:encode(fixed_indexes)).
+-define(FIXED_INDEXES_KEY, fixed_indexes).
 
 -record(state, {ref :: reference(),
                 data_root :: string(),
@@ -192,7 +192,7 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
     end.
 
 indexes_fixed(#state{ref=Ref,read_opts=ReadOpts}) ->
-    case eleveldb:get(Ref, ?FIXED_INDEXES_KEY, ReadOpts) of
+    case eleveldb:get(Ref, to_md_key(?FIXED_INDEXES_KEY), ReadOpts) of
         {ok, <<1>>} ->
             true;
         {ok, <<0>>} ->
@@ -241,7 +241,7 @@ mark_indexes_fixed(State=#state{ref=Ref, write_opts=WriteOpts}, ForUpgrade) ->
                 true -> <<1>>;
                 false -> <<0>>
             end,
-    Updates = [{put, ?FIXED_INDEXES_KEY, Value}],
+    Updates = [{put, to_md_key(?FIXED_INDEXES_KEY), Value}],
     case eleveldb:write(Ref, Updates, WriteOpts) of
         ok ->
             {ok, State#state{fixed_indexes=ForUpgrade}};
@@ -679,6 +679,11 @@ from_index_key(LKey) ->
         _ ->
             undefined
     end.
+
+%% @doc Encode a key to store partition meta-data attributes.
+to_md_key(Key) ->
+    sext:encode({md, Key}).
+
 
 %% ===================================================================
 %% EUnit tests
