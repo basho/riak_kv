@@ -311,6 +311,8 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{fold_opts=FoldOpts,
                 [{atom(), term()}],
                 state()) -> {ok, term()} | {async, fun()}.
 fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
+                                         fixed_indexes=FixedIdx,
+                                         legacy_indices=WriteLegacyIdx,
                                          ref=Ref}) ->
     %% Figure out how we should limit the fold: by bucket, by
     %% secondary index, or neither (fold across everything.)
@@ -328,21 +330,45 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     FirstKey = to_first_key(Limiter),
     FoldFun = fold_keys_fun(FoldKeysFun, Limiter),
     FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    ExtraFold = not FixedIdx orelse WriteLegacyIdx,
     KeyFolder =
         fun() ->
-                %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
-                try
-                    eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
-                catch
-                    {break, AccFinal} ->
-                        AccFinal
-                end
+            %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
+            AccFinal =
+                       try
+                           eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
+                       catch
+                           {break, BrkResult} ->
+                               BrkResult
+                       end,
+            case ExtraFold of
+                true ->
+                    legacy_key_fold(Ref, FoldFun, AccFinal, FoldOpts1, Limiter);
+                false ->
+                    AccFinal
+            end
         end,
     case lists:member(async_fold, Opts) of
         true ->
             {async, KeyFolder};
         false ->
             {ok, KeyFolder()}
+    end.
+
+legacy_key_fold(Ref, FoldFun, Acc, FoldOpts0, Query={index, _, _}) ->
+    {_, FirstKey} = lists:keyfind(first_key, 1, FoldOpts0),
+    LegacyKey = to_legacy_first_key(Query),
+    case LegacyKey =/= FirstKey of
+        true ->
+            try
+                FoldOpts = lists:keyreplace(first_key, 1, FoldOpts0, {first_key, LegacyKey}),
+                eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts)
+            catch
+                {break, AccFinal} ->
+                    AccFinal
+            end;
+        false ->
+            Acc
     end.
 
 %% @doc Fold over all the objects for one or all buckets.
@@ -654,6 +680,13 @@ to_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm}}) ->
 to_first_key(Other) ->
     erlang:throw({unknown_limiter, Other}).
 
+% @doc If index query, encode key using legacy sext format.
+to_legacy_first_key({index, Bucket, {eq, Field, Term}}) ->
+    to_legacy_first_key({index, Bucket, {range, Field, Term, Term}});
+to_legacy_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm}}) ->
+    to_legacy_index_key(Bucket, <<>>, Field, StartTerm);
+to_legacy_first_key(Other) ->
+    to_first_key(Other).
 
 to_object_key(Bucket, Key) ->
     sext:encode({o, Bucket, Key}).
