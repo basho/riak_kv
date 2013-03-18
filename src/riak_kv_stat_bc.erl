@@ -330,7 +330,7 @@ config_stats() ->
 %% @doc add the pipe stats to the blob in a style consistent
 %% with those stats already in the blob
 pipe_stats() ->
-    Stats = riak_core_stat_q:get_stats([riak_pipe]),
+    Stats = riak_pipe_stat:get_stats(),
     lists:flatten([bc_stat(Name, Val) || {Name, Val} <- Stats]).
 
 %% old style blob stats don't have the app name
