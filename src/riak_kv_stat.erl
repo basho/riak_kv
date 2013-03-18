@@ -42,6 +42,7 @@
          leveldb_read_block_errors/0, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
 -export([active_gets/0, active_puts/0]).
+-export([stat_repair/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -107,11 +108,24 @@ stop() ->
 
 init([]) ->
     register_stats(),
-    {ok, ok}.
+    RepairProc = spawn_link(?MODULE, stat_repair, []),
+    {ok, RepairProc}.
 
 handle_call({register, Name, Type}, _From, State) ->
     Rep = do_register_stat(Name, Type),
     {reply, Rep, State}.
+
+stat_repair() ->
+    stat_repair_loop().
+
+stat_repair_loop() ->
+    receive
+        {re_register_stat, Arg} ->
+            re_register_stat(Arg),
+            stat_repair_loop();
+        _ ->
+            stat_repair_loop()
+    end.
 
 handle_cast({re_register_stat, Arg}, State) ->
     %% To avoid massive message queues
@@ -121,7 +135,8 @@ handle_cast({re_register_stat, Arg}, State) ->
     %% the server, so broken stats stay broken.
     %% This re-creates the same behaviour as when a brokwn stat
     %% crashes the gen_server by re-registering that stat.
-    re_register_stat(Arg),
+    State ! {re_register_stat, Arg},
+    %%re_register_stat(Arg),
     {noreply, State};
 handle_cast(stop, State) ->
     {stop, normal, State};
