@@ -82,7 +82,8 @@ update(Arg) ->
             ok
     catch
         ErrClass:Err ->
-            lager:error("~p:~p updating stat ~p.", [ErrClass, Err, Arg])
+            lager:error("~p:~p updating stat ~p.", [ErrClass, Err, Arg]),
+            gen_server:cast(?SERVER, {re_register_stat, Arg})
     end.
 
 track_bucket(Bucket) when is_binary(Bucket) ->
@@ -112,7 +113,16 @@ handle_call({register, Name, Type}, _From, State) ->
     Rep = do_register_stat(Name, Type),
     {reply, Rep, State}.
 
-
+handle_cast({re_register_stat, Arg}, State) ->
+    %% To avoid massive message queues
+    %% riak_kv stats are updated in the calling process
+    %% @see `update/1'.
+    %% The downside is that errors updating a stat don't crash
+    %% the server, so broken stats stay broken.
+    %% This re-creates the same behaviour as when a brokwn stat
+    %% crashes the gen_server by re-registering that stat.
+    re_register_stat(Arg),
+    {noreply, State};
 handle_cast(stop, State) ->
     {stop, normal, State};
 handle_cast(_Req, State) ->
@@ -298,6 +308,59 @@ stats() ->
      {postcommit_fail, counter},
      {[vnode, backend, leveldb, read_block_error],
       {function, {function, ?MODULE, leveldb_read_block_errors}}}].
+
+%% Re-register broken stats
+re_register_stat(Arg) ->
+    %% The same stat my be detected as broken
+    %% many times concurrently so it
+    %% may have been re-registered already.
+    case (catch do_update(Arg)) of
+        {'EXIT', _} ->
+            Stats =  stats_from_update_arg(Arg),
+            [begin
+                 (catch folsom_metrics:delete_metric(Name)),
+                 do_register_stat(Name, Type)
+             end || {Name, {metric, _, Type, _}} <- Stats];
+        ok  ->
+            ok
+    end.
+
+%% Map from application argument used in call to `update/1' to
+%% folsom stat names and types.
+stats_from_update_arg({vnode_get, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, gets]);
+stats_from_update_arg({vnode_put, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, puts]);
+stats_from_update_arg(vnode_index_read) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, index, reads]);
+stats_from_update_arg({vnode_index_write, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, index, writes]) ++
+        riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
+stats_from_update_arg({vnode_index_delete, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
+stats_from_update_arg({get_fsm, _, _, _, _, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, node, gets]);
+stats_from_update_arg({put_fsm_time, _, _, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, node, puts]);
+stats_from_update_arg({read_repairs, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, nodes, gets, read_repairs]);
+stats_from_update_arg(coord_redirs) ->
+    [{?APP, node, puts, coord_redirs}, {metric,[],counter,undefined}];
+stats_from_update_arg(mapper_start) ->
+    [{?APP, mapper_count}, {metric,[],counter,undefined}];
+stats_from_update_arg(mapper_end) ->
+    stats_from_update_arg(mapper_start);
+stats_from_update_arg(precommit_fail) ->
+    [{?APP, precommit_fail}, {metric,[],counter,undefined}];
+stats_from_update_arg(postcommit_fail) ->
+    [{?APP, postcommit_fail}, {metric,[],counter,undefined}];
+stats_from_update_arg({fsm_spawned, Type}) ->
+    [{?APP, node, Type, fsm, active}, {metric,[],counter,undefined}];
+stats_from_update_arg({fsm_exit, Type}) ->
+    stats_from_update_arg({fsm_spawned, Type});
+stats_from_update_arg({fsm_error, Type}) ->
+    stats_from_update_arg({fsm_spawned, Type}) ++
+        [{?APP, node, Type, fsm, errors}, {metric,[], spiral, undefined}].
 
 %% @doc register a stat with folsom
 do_register_stat(Name, spiral) ->
