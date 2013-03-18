@@ -98,12 +98,11 @@ capabilities(State) ->
     %% Expose ?CAPABILITIES plus the intersection of all child
     %% backends. (This backend creates a shim for any backends that
     %% don't support async_fold.)
-    F = fun({_, Mod, ModState}, Acc) ->
-                {ok, S1} = Mod:capabilities(ModState),
-                S2 = ordsets:from_list(S1),
-                ordsets:intersection(Acc, S2)
-        end,
-    Caps1 = lists:foldl(F, ordsets:new(), State#state.backends),
+    AllCaps = lists:map(fun({_, Mod, ModState}) ->
+                                {ok, Cs} = Mod:capabilities(ModState),
+                                ordsets:from_list(Cs)
+                        end, State#state.backends),
+    Caps1 = ordsets:intersection(AllCaps),
     Caps2 = ordsets:to_list(Caps1),
 
     Capabilities = lists:usort(?CAPABILITIES ++ Caps2),
