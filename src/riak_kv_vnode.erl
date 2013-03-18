@@ -28,6 +28,7 @@
 %% API
 -export([test_vnode/1, put/7]).
 -export([start_vnode/1,
+         start_vnodes/1,
          get/3,
          del/3,
          put/6,
@@ -141,6 +142,9 @@ maybe_create_hashtrees(true, State=#state{idx=Index}) ->
 %% API
 start_vnode(I) ->
     riak_core_vnode_master:get_vnode_pid(I, riak_kv_vnode).
+
+start_vnodes(IdxList) ->
+    riak_core_vnode_master:get_vnode_pid(IdxList, riak_kv_vnode).
 
 test_vnode(I) ->
     riak_core_vnode:start_link(riak_kv_vnode, I, infinity).
