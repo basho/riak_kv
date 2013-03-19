@@ -143,8 +143,7 @@
 %%      of stats.
 produce_stats() ->
     lists:append(
-      [lists:flatten(backwards_compat(riak_core_stat_q:get_stats([riak_kv]))),
-       backwards_compat_pb(riak_core_stat_q:get_stats([riak_api])),
+      [lists:flatten(legacy_stats()),
        read_repair_stats(),
        level_stats(),
        pipe_stats(),
@@ -163,26 +162,43 @@ produce_stats() ->
 %% naming constraints the new names are not simply the old names
 %% with commas for underscores. Uses legacy_stat_map to generate
 %% legacys stats from the new list of stats.
-backwards_compat(Stats) ->
-    [bc_stat(Old, New, Type, Stats) || {Old, New, Type} <- legacy_stat_map()].
+legacy_stats() ->
+    {Legacy, _Calculated} = lists:foldl(fun({Old, New, Type}, {Acc, Cache}) ->
+                                                bc_stat({Old, New, Type}, Acc, Cache) end,
+                                        {[], []},
+                                        legacy_stat_map()),
+    lists:reverse(Legacy).
 
-bc_stat(Old, {New, Field}, histogram_percentile, Stats) ->
-    Stat = proplists:get_value(New, Stats),
+%% @doc legacy stats uses multifield stats for multiple stats
+%% don't calculate the same stat many times
+get_stat(Name, Cache, CalcFun) ->
+    case proplists:get_value(Name, Cache) of
+        undefined ->
+            S =  folsom_metrics:CalcFun(Name),
+            {S, [{Name, S} | Cache]};
+        Cached -> {Cached, Cache}
+    end.
+
+bc_stat({Old, {NewName, Field}, histogram}, Acc, Cache) ->
+    {Stat, Cache1} = get_stat(NewName, Cache, get_histogram_statistics),
+    Val = proplists:get_value(Field, Stat),
+    {[{Old, trunc(Val)} | Acc], Cache1};
+bc_stat({Old, {NewName, Field}, histogram_percentile}, Acc, Cache) ->
+    {Stat, Cache1} = get_stat(NewName, Cache, get_histogram_statistics),
     Percentile = proplists:get_value(percentile, Stat),
     Val = proplists:get_value(Field, Percentile),
-    {Old, trunc(Val)};
-bc_stat(Old, {New, Field}, histogram, Stats) ->
-    Stat = proplists:get_value(New, Stats),
+    {[{Old, trunc(Val)} | Acc], Cache1};
+bc_stat({Old, {NewName, Field}, spiral}, Acc, Cache) ->
+    {Stat, Cache1} = get_stat(NewName, Cache, get_metric_value),
     Val = proplists:get_value(Field, Stat),
-    {Old, trunc(Val)};
-bc_stat(Old, {New, Field}, spiral, Stats) ->
-    Stat = proplists:get_value(New, Stats),
-    Val = proplists:get_value(Field, Stat),
-    {Old, Val};
-bc_stat(Old, New, counter, Stats) ->
-    Stat = proplists:get_value(New, Stats),
-    {Old, Stat}.
-
+    {[{Old, Val} | Acc], Cache1};
+bc_stat({Old, NewName, counter}, Acc, Cache) ->
+    {Stat, Cache1} = get_stat(NewName, Cache, get_metric_value),
+    {[{Old, Stat} | Acc], Cache1};
+bc_stat({Old, NewName, function}, Acc, Cache) ->
+    {{function, Mod, Fun}, Cache1} = get_stat(NewName, Cache, get_metric_value),
+    Val = Mod:Fun(),
+    {[{Old, Val} | Acc], Cache1}.
 
 %% hard coded mapping of stats to legacy format
 %% There was a enough variation in the old names that a simple
@@ -232,16 +248,11 @@ legacy_stat_map() ->
      {coord_redirs_total, {riak_kv,node,puts,coord_redirs}, counter},
      {executing_mappers, {riak_kv,mapper_count}, counter},
      {precommit_fail, {riak_kv, precommit_fail}, counter},
-     {postcommit_fail, {riak_kv, postcommit_fail}, counter}
+     {postcommit_fail, {riak_kv, postcommit_fail}, counter},
+     {pbc_active, {riak_api, pbc_connects, active}, function},
+     {pbc_connects, {{riak_api, pbc_connects}, one}, spiral},
+     {pbc_connects_total, {{riak_api, pbc_connects}, count}, spiral}
     ].
-
-%% PB stats are now under riak_api. In the past they were part of riak_kv.
-%% This function maps those new values to the old names.
-backwards_compat_pb(Stats) ->
-    [bc_stat(Old, New, Type, Stats) || {Old, New, Type} <-
-                                     [{pbc_active, {riak_api, pbc_connects, active}, counter},
-                                      {pbc_connects, {{riak_api, pbc_connects}, one}, spiral},
-                                      {pbc_connects_total, {{riak_api, pbc_connects}, count}, spiral}]].
 
 %% @spec cpu_stats() -> proplist()
 %% @doc Get stats on the cpu, as given by the cpu_sup module
@@ -319,7 +330,7 @@ config_stats() ->
 %% @doc add the pipe stats to the blob in a style consistent
 %% with those stats already in the blob
 pipe_stats() ->
-    Stats = riak_core_stat_q:get_stats([riak_pipe]),
+    Stats = riak_pipe_stat:get_stats(),
     lists:flatten([bc_stat(Name, Val) || {Name, Val} <- Stats]).
 
 %% old style blob stats don't have the app name
