@@ -98,6 +98,10 @@ process(#rpbsetclientidreq{client_id = ClientId}, State) ->
                end,
     {reply, rpbsetclientidresp, NewState};
 
+process(#rpbgetreq{bucket = <<>>}, State) ->
+    {error, "Bucket cannot be zero-length", State};
+process(#rpbgetreq{key = <<>>}, State) ->
+    {error, "Key cannot be zero-length", State};
 process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    basic_quorum=BQ, if_modified=VClock,
                    head=Head, deletedvclock=DeletedVClock,
@@ -139,6 +143,10 @@ process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
             {error, {format,Reason}, State}
     end;
 
+process(#rpbputreq{bucket = <<>>}, State) ->
+    {error, "Bucket cannot be zero-length", State};
+process(#rpbputreq{key = <<>>}, State) ->
+    {error, "Key cannot be zero-length", State};
 process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
                    if_not_modified=NotMod, if_none_match=NoneMatch} = Req,
         #state{client=C} = State) when NotMod; NoneMatch ->
