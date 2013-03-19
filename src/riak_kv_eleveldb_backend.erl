@@ -204,9 +204,11 @@ indexes_fixed(#state{ref=Ref,read_opts=ReadOpts}) ->
     end.
 
 index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value) ->
-    KeyDelete = [{delete, to_index_key(Bucket, PrimaryKey, Field, Value)}],
-    LegacyDelete = [{delete, to_legacy_index_key(Bucket, PrimaryKey, Field, Value)}
-                    || FixedIndexes =:= false],
+    IndexKey = to_index_key(Bucket, PrimaryKey, Field, Value),
+    LegacyKey = to_legacy_index_key(Bucket, PrimaryKey, Field, Value),
+    KeyDelete = [{delete, IndexKey}],
+    LegacyDelete = [{delete, LegacyKey}
+                    || FixedIndexes =:= false andalso IndexKey =/= LegacyKey],
     KeyDelete ++ LegacyDelete.
 
 fix_index(_Bucket, IndexKey, ForUpgrade, #state{ref=Ref,
