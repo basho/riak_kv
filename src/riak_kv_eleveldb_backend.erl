@@ -33,7 +33,7 @@
          put/5,
          delete/4,
          drop/1,
-         fix_index/3,
+         fix_index/4,
          mark_indexes_fixed/2,
          set_legacy_indices/2,
          fold_buckets/4,
@@ -53,7 +53,7 @@
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold, indexes]).
+-define(CAPABILITIES, [async_fold, indexes, index_reformat]).
 -define(FIXED_INDEXES_KEY, fixed_indexes).
 
 -record(state, {ref :: reference(),
@@ -209,9 +209,9 @@ index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value) ->
                     || FixedIndexes =:= false],
     KeyDelete ++ LegacyDelete.
 
-fix_index(IndexKey, ForUpgrade, #state{ref=Ref,
-                                       read_opts=ReadOpts,
-                                       write_opts=WriteOpts} = State) ->
+fix_index(_Bucket, IndexKey, ForUpgrade, #state{ref=Ref,
+                                                read_opts=ReadOpts,
+                                                write_opts=WriteOpts} = State) ->
     case eleveldb:get(Ref, IndexKey, ReadOpts) of
         {ok, _} ->
             {Bucket, Key, Field, Value} = from_index_key(IndexKey),

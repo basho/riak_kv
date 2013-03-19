@@ -520,12 +520,12 @@ handle_command({fix_incorrect_index_entry, {done, ForUpgrade}}, _Sender,
         {error, _Reason} ->
             {reply, error, State}
     end;
-handle_command({fix_incorrect_index_entry, StorageKey, ForUpgrade},
+handle_command({fix_incorrect_index_entry, {Bucket, StorageKey}, ForUpgrade},
                _Sender,
                State=#state{mod=Mod,
                             modstate=ModState}) ->
     Reply =
-        case Mod:fix_index(StorageKey, ForUpgrade, ModState) of
+        case Mod:fix_index(Bucket, StorageKey, ForUpgrade, ModState) of
             {ok, _UpModState} ->
                 ok;
             {ignore, _UpModState} ->
@@ -538,16 +538,16 @@ handle_command({get_index_entries, ForUpgrade},
                Sender,
                State=#state{mod=Mod,
                             modstate=ModState0}) ->
-    case Mod of
-        riak_kv_eleveldb_backend ->
+    {ok, Caps} = Mod:capabilities(ModState0),
+    case lists:member(index_reformat, Caps) of
+        true ->
             ModState = Mod:set_legacy_indices(ModState0, not ForUpgrade),
             Status = Mod:status(ModState),
             case {ForUpgrade, proplists:get_value(fixed_indexes, Status)} of
                 {true, true} -> {reply, done, State};
-                {false, false} -> {reply, done, State}; %% this check may be wrong w/ legacy write
                 {_,  _} ->
-                    FoldFun = fun(_, StorageKey, _) ->
-                                      riak_core_vnode:reply(Sender, StorageKey)
+                    FoldFun = fun(Bucket, StorageKey, _) ->
+                                      riak_core_vnode:reply(Sender, {Bucket, StorageKey})
                               end,
                     FinishFun = fun(_) -> riak_core_vnode:reply(Sender, done) end,
                     Opts = [{index, incorrect_format, ForUpgrade}, async_fold],
@@ -558,7 +558,7 @@ handle_command({get_index_entries, ForUpgrade},
                             {noreply, State}
                     end
             end;
-        _ ->
+        false ->
             lager:error("Backend ~p does not support incorrect index query", [Mod]),
             {reply, ignore, State}
     end.
