@@ -28,7 +28,9 @@
          map_object_value/1,
          map_object_value_list/1,
          map_delete/1,
-         map_datasize/1
+         map_datasize/1,
+         map_id/1,
+         map_key/1
          ]).
 -export([reduce_identity/1,
          reduce_set_union/1,
@@ -46,7 +48,9 @@
          map_object_value/3,
          map_object_value_list/3,
          map_delete/3,
-         map_datasize/3
+         map_datasize/3,
+         map_id/3,
+         map_key/3
          ]).
 -export([reduce_identity/2,
          reduce_set_union/2,
@@ -110,6 +114,7 @@ map_object_value(Acc) ->
 map_object_value({error, notfound}=NF, KD, Action) ->
     notfound_map_action(NF, KD, Action);
 map_object_value(RiakObject, _, _) ->
+
     [riak_object:get_value(RiakObject)].
 
 %% @spec map_object_value_list(boolean) -> map_phase_spec()
@@ -131,14 +136,20 @@ map_object_value_list(Acc) ->
 map_object_value_list({error, notfound}=NF, KD, Action) ->
     notfound_map_action(NF, KD, Action);
 map_object_value_list(RiakObject, _, _) ->
-    riak_object:get_value(RiakObject).
+    case riakc_obj:value_count(RiakObject) of
+        1 ->
+            riak_object:get_value(RiakObject);
+        _ ->
+            [[<<"siblings">>, riak_object:bucket(RiakObject), riak_object:key(RiakObject)]]
+    end.
 
 %% implementation of the notfound behavior for
 %% map_object_value and map_object_value_list
 notfound_map_action(_NF, _KD, <<"filter_notfound">>)    -> [];
 notfound_map_action(NF, _KD, <<"include_notfound">>)    -> [NF];
 notfound_map_action(_NF, KD, <<"include_keydata">>)     -> [KD]; 
-notfound_map_action(_NF, _KD, {struct,[{<<"sub">>,V}]}) -> V.
+notfound_map_action(_NF, _KD, {struct,[{<<"sub">>,V}]}) -> V;
+notfound_map_action(_NF, _KD, _) -> [].
 
 %% @spec map_delete(boolean()) -> map_phase_spec()
 %% @doc Produces a spec for a map phase that deletes
@@ -183,6 +194,44 @@ map_datasize(RiakObject, _, _) ->
                              (byte_size(Val) + A)
                      end
                  end, 0, riak_object:get_contents(RiakObject))].
+
+%% @spec map_id(boolean()) -> map_phase_spec()
+%% @doc Produces a spec for a map phase that returns
+%%      the ID of each object it's handed.
+map_id(Acc) ->
+    {map, {modfun, riak_kv_mapreduce, map_id}, none, Acc}.
+
+%% @spec map_id(riak_object:riak_object(), term(), term()) ->
+%%                   [[Bucket :: binary(), Key :: binary()]]
+%% @doc map phase function returning bucket name and key in a readable format
+map_id({error, notfound}, _, _) ->
+    [];
+map_id(RiakObject, _, _) ->
+    case is_deleted(RiakObject) of
+        true ->
+            [];
+        false ->
+            [[riak_object:bucket(RiakObject), riak_object:key(RiakObject)]]
+    end.
+
+%% @spec map_key(boolean()) -> map_phase_spec()
+%% @doc Produces a spec for a map phase that returns
+%%      the key of each object it's handed.
+map_key(Acc) ->
+    {map, {modfun, riak_kv_mapreduce, map_key}, none, Acc}.
+
+%% @spec map_key(riak_object:riak_object(), term(), term()) ->
+%%                   [Key :: binary()]
+%% @doc map phase function returning object key in a readable format
+map_key({error, notfound}, _, _) ->
+    [];
+map_key(RiakObject, _, _) ->
+    case is_deleted(RiakObject) of
+        true ->
+            [];
+        false ->
+            [riak_object:key(RiakObject)]    
+    end. 
 
 %%
 %% Reduce Phases
@@ -407,7 +456,7 @@ is_datum(_) ->
 %% Helper function
 is_deleted([]) ->
     true;
-is_deleted([[Dict | D]]) ->
+is_deleted([Dict | D]) ->
     case dict:is_key(<<"X-Riak-Deleted">>, Dict) of
         false ->
             false;
@@ -415,8 +464,7 @@ is_deleted([[Dict | D]]) ->
             is_deleted(D)
     end;
 is_deleted(RiakObject) ->
-    MetaDataList = riak_object:get_metadatas(RiakObject),
-    is_deleted(MetaDataList).
+    is_deleted(riak_object:get_metadatas(RiakObject)).
 
 %%
 %% EUNIT tests...
@@ -447,6 +495,14 @@ map_datasize_test() ->
     ?assertEqual([0], map_datasize(O2, none, none)),
     ?assertEqual([10], map_datasize(O3, none, none)),
     ?assertEqual([5], map_datasize(O4, none, none)).
+
+map_id_test() ->
+    O1 = riak_object:new(<<"a">>, <<"1">>, "value1"),
+    ?assertEqual([[<<"a">>,<<"1">>]], map_id(O1, test, test)).
+
+map_key_test() ->
+    O1 = riak_object:new(<<"a">>, <<"1">>, "value1"),
+    ?assertEqual([<<"1">>], map_key(O1, test, test)).
 
 reduce_set_union_test() ->
     [bar,baz,foo] = lists:sort(reduce_set_union([foo,foo,bar,baz], test)).
