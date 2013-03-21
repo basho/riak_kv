@@ -171,38 +171,47 @@ legacy_stats() ->
 
 %% @doc legacy stats uses multifield stats for multiple stats
 %% don't calculate the same stat many times
-get_stat(Name, Cache, CalcFun) ->
+get_stat(Name, Type, Cache) ->
+    get_stat(Name, Type, Cache, fun(S) -> S end).
+
+get_stat(Name, Type, Cache, ValFun) ->
     case proplists:get_value(Name, Cache) of
         undefined ->
-            S =  folsom_metrics:CalcFun(Name),
-            {S, [{Name, S} | Cache]};
-        Cached -> {Cached, Cache}
+            case riak_core_stat_q:calc_stat({Name, Type}) of
+                unavailable -> {unavailable, Cache};
+                Stat ->
+                    {ValFun(Stat), [{Name, Stat} | Cache]}
+            end;
+        Cached -> {ValFun(Cached), Cache}
     end.
 
 bc_stat({Old, {NewName, Field}, histogram}, Acc, Cache) ->
-    {Stat, Cache1} = get_stat(NewName, Cache, get_histogram_statistics),
-    Val = proplists:get_value(Field, Stat),
-    {[{Old, trunc(Val)} | Acc], Cache1};
+    ValFun = fun(Stat) -> trunc(proplists:get_value(Field, Stat)) end,
+    {Val, Cache1} = get_stat(NewName, histogram, Cache, ValFun),
+    {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, {NewName, Field}, histogram_percentile}, Acc, Cache) ->
-    {Stat, Cache1} = get_stat(NewName, Cache, get_histogram_statistics),
-    Percentile = proplists:get_value(percentile, Stat),
-    Val = proplists:get_value(Field, Percentile),
-    {[{Old, trunc(Val)} | Acc], Cache1};
+    ValFun = fun(Stat) ->
+                     Percentile = proplists:get_value(percentile, Stat),
+                     Val = proplists:get_value(Field, Percentile),
+                     trunc(Val) end,
+    {Val, Cache1} = get_stat(NewName, histogram, Cache, ValFun),
+    {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, {NewName, Field}, spiral}, Acc, Cache) ->
-    {Stat, Cache1} = get_stat(NewName, Cache, get_metric_value),
-    Val = proplists:get_value(Field, Stat),
+    ValFun = fun(Stat) ->
+                     proplists:get_value(Field, Stat)
+             end,
+    {Val, Cache1} = get_stat(NewName, spiral, Cache, ValFun),
     {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, NewName, counter}, Acc, Cache) ->
-    {Stat, Cache1} = get_stat(NewName, Cache, get_metric_value),
-    {[{Old, Stat} | Acc], Cache1};
+    {Val, Cache1} = get_stat(NewName, counter, Cache),
+    {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, NewName, function}, Acc, Cache) ->
-    {{function, Mod, Fun}, Cache1} = get_stat(NewName, Cache, get_metric_value),
-    Val = Mod:Fun(),
+    {Val, Cache1} = get_stat(NewName, gauge, Cache),
     {[{Old, Val} | Acc], Cache1}.
 
 %% hard coded mapping of stats to legacy format
 %% There was a enough variation in the old names that a simple
-%% concatenation of the elements in the new  stat key would not suffice
+%% concatenation of the elements in the new stat key would not suffice
 %% applications depend on these exact legacy names.
 legacy_stat_map() ->
     [{vnode_gets, {{riak_kv, vnode, gets}, one}, spiral},
@@ -330,14 +339,15 @@ config_stats() ->
 %% @doc add the pipe stats to the blob in a style consistent
 %% with those stats already in the blob
 pipe_stats() ->
-    Stats = riak_core_stat_q:get_stats([riak_pipe]),
-    lists:flatten([bc_stat(Name, Val) || {Name, Val} <- Stats]).
+    lists:flatten([bc_stat(Name, Val) || {Name, Val} <- riak_pipe_stat:get_stats()]).
 
 %% old style blob stats don't have the app name
 %% and they have underscores, not commas
-bc_stat(Name, Val) ->
+bc_stat(Name, Val) when is_tuple(Name) ->
     StatName = join(tl(tuple_to_list(Name))),
-    bc_stat_val(StatName, Val).
+    bc_stat_val(StatName, Val);
+bc_stat(Name, Val) ->
+    bc_stat_val(Name, Val).
 
 %% Old style stats don't have tuple lists as values
 %% they have an entry per element in the complex stats tuple list
