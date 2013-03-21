@@ -33,7 +33,7 @@
 -export([stream_list_keys/1,stream_list_keys/2,stream_list_keys/3]).
 -export([filter_buckets/1]).
 -export([filter_keys/2,filter_keys/3]).
--export([list_buckets/0,list_buckets/2]).
+-export([list_buckets/0, list_buckets/1, list_buckets/2]).
 -export([get_index/3,get_index/2]).
 -export([stream_get_index/3,stream_get_index/2]).
 -export([set_bucket/2,get_bucket/1,reset_bucket/1]).
@@ -417,6 +417,19 @@ filter_keys(Bucket, Fun, Timeout) ->
 list_buckets() ->
     list_buckets(none, ?DEFAULT_TIMEOUT).
 
+%% @spec list_buckets(timeout()) ->
+%%       {ok, [Bucket :: riak_object:bucket()]} |
+%%       {error, timeout} |
+%%       {error, Err :: term()}
+%% @doc List buckets known to have keys.
+%%      Key lists are updated asynchronously, so this may be slightly
+%%      out of date if called immediately after any operation that
+%%      either adds the first key or removes the last remaining key from
+%%      a bucket.
+%% @equiv list_buckets(default_timeout())
+list_buckets(Timeout) ->
+    list_buckets(none, Timeout).
+
 %% @spec list_buckets(TimeoutMillisecs :: integer()) ->
 %%       {ok, [Bucket :: riak_object:bucket()]} |
 %%       {error, timeout} |
@@ -429,7 +442,7 @@ list_buckets() ->
 list_buckets(Filter, Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, [Filter, Timeout]]),
+    riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, [{raw, ReqId, Me}, [Filter, Timeout, false]]),
     wait_for_listbuckets(ReqId, Timeout).
 
 %% @spec filter_buckets(Fun :: function()) ->
