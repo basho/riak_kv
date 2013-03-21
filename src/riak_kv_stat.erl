@@ -47,6 +47,8 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
+-record(state, {repair_mon}).
+
 -define(SERVER, ?MODULE).
 -define(APP, riak_kv).
 
@@ -82,7 +84,8 @@ update(Arg) ->
             ok
     catch
         ErrClass:Err ->
-            lager:error("~p:~p updating stat ~p.", [ErrClass, Err, Arg])
+            lager:error("~p:~p updating stat ~p.", [ErrClass, Err, Arg]),
+            gen_server:cast(?SERVER, {re_register_stat, Arg})
     end.
 
 track_bucket(Bucket) when is_binary(Bucket) ->
@@ -106,18 +109,32 @@ stop() ->
 
 init([]) ->
     register_stats(),
-    {ok, ok}.
+    RepairMonitor = spawn_monitor(fun() -> stat_repair_loop() end),
+    {ok, #state{repair_mon=RepairMonitor}}.
 
 handle_call({register, Name, Type}, _From, State) ->
     Rep = do_register_stat(Name, Type),
     {reply, Rep, State}.
 
-
+handle_cast({re_register_stat, Arg}, State) ->
+    %% To avoid massive message queues
+    %% riak_kv stats are updated in the calling process
+    %% @see `update/1'.
+    %% The downside is that errors updating a stat don't crash
+    %% the server, so broken stats stay broken.
+    %% This re-creates the same behaviour as when a brokwn stat
+    %% crashes the gen_server by re-registering that stat.
+    #state{repair_mon={Pid, _Mon}} = State,
+    Pid ! {re_register_stat, Arg},
+    {noreply, State};
 handle_cast(stop, State) ->
     {stop, normal, State};
 handle_cast(_Req, State) ->
     {noreply, State}.
 
+handle_info({'DOWN', MonRef, process, Pid, _Cause}, State=#state{repair_mon={Pid, MonRef}}) ->
+    RepairMonitor = spawn_monitor(fun() -> stat_repair_loop() end),
+    {noreply, State#state{repair_mon=RepairMonitor}};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -368,3 +385,74 @@ rbe_val(undefined) ->
     undefined;
 rbe_val(Bin) ->
     list_to_integer(binary_to_list(Bin)).
+
+%% All stat creation is serialized through riak_kv_stat.
+%% Some stats are created on demand as part of the call to `update/1'.
+%% When a stat error is caught, the stat must be deleted and recreated.
+%% Since stat updates can happen from many processes concurrently
+%% a stat that throws an error may already have been deleted and
+%% recreated. To protect against needlessly deleting and recreating
+%% an already 'fixed stat' first retry the stat update. There is a chance
+%% that the retry succeeds as the stat has been recreated, but some on
+%% demand stat it uses has not yet. Since stat creates are serialized
+%% in riak_kv_stat re-registering a stat could cause a deadlock.
+%% This loop is spawned as a process to avoid that.
+stat_repair_loop() ->
+    receive
+        {re_register_stat, Arg} ->
+            re_register_stat(Arg),
+            stat_repair_loop();
+        _ ->
+            stat_repair_loop()
+    end.
+
+re_register_stat(Arg) ->
+    case (catch do_update(Arg)) of
+        {'EXIT', _} ->
+            Stats =  stats_from_update_arg(Arg),
+            [begin
+                 (catch folsom_metrics:delete_metric(Name)),
+                 do_register_stat(Name, Type)
+             end || {Name, {metric, _, Type, _}} <- Stats];
+        ok  ->
+            ok
+    end.
+
+%% Map from application argument used in call to `update/1' to
+%% folsom stat names and types.
+%% Updates that create dynamic stats must select all
+%% related stats.
+stats_from_update_arg({vnode_get, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, gets]);
+stats_from_update_arg({vnode_put, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, puts]);
+stats_from_update_arg(vnode_index_read) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, index, reads]);
+stats_from_update_arg({vnode_index_write, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, index, writes]) ++
+        riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
+stats_from_update_arg({vnode_index_delete, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
+stats_from_update_arg({get_fsm, _, _, _, _, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, node, gets]);
+stats_from_update_arg({put_fsm_time, _, _, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, node, puts]);
+stats_from_update_arg({read_repairs, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, nodes, gets, read_repairs]);
+stats_from_update_arg(coord_redirs) ->
+    [{?APP, node, puts, coord_redirs}, {metric,[],counter,undefined}];
+stats_from_update_arg(mapper_start) ->
+    [{?APP, mapper_count}, {metric,[],counter,undefined}];
+stats_from_update_arg(mapper_end) ->
+    stats_from_update_arg(mapper_start);
+stats_from_update_arg(precommit_fail) ->
+    [{?APP, precommit_fail}, {metric,[],counter,undefined}];
+stats_from_update_arg(postcommit_fail) ->
+    [{?APP, postcommit_fail}, {metric,[],counter,undefined}];
+stats_from_update_arg({fsm_spawned, Type}) ->
+    [{?APP, node, Type, fsm, active}, {metric,[],counter,undefined}];
+stats_from_update_arg({fsm_exit, Type}) ->
+    stats_from_update_arg({fsm_spawned, Type});
+stats_from_update_arg({fsm_error, Type}) ->
+    stats_from_update_arg({fsm_spawned, Type}) ++
+        [{?APP, node, Type, fsm, errors}, {metric,[], spiral, undefined}].
