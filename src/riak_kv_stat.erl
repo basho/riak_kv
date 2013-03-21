@@ -132,9 +132,9 @@ handle_cast(stop, State) ->
 handle_cast(_Req, State) ->
     {noreply, State}.
 
-handle_info({'DOWN', MonRef, process, Pid, _Cause}, #state{repair_mon={Pid, MonRef}}) ->
+handle_info({'DOWN', MonRef, process, Pid, _Cause}, State=#state{repair_mon={Pid, MonRef}}) ->
     RepairMonitor = spawn_monitor(fun() -> stat_repair_loop() end),
-    {noreply, #state{repair_mon=RepairMonitor}};
+    {noreply, State#state{repair_mon=RepairMonitor}};
 handle_info(_Info, State) ->
     {noreply, State}.
 
