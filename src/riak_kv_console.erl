@@ -36,6 +36,7 @@
          cluster_info/1,
          down/1,
          aae_status/1,
+         reformat_indexes/1,
          reload_code/1]).
 
 %% Arrow is 24 chars wide
@@ -420,6 +421,51 @@ format_timestamp(_Now, undefined) ->
     "--";
 format_timestamp(Now, TS) ->
     riak_core_format:human_time_fmt("~.1f", timer:now_diff(Now, TS)).
+
+reformat_indexes([]) ->
+    start_index_reformat([]),
+    io:format("index reformat started with default options~n"),
+    io:format("check console.log for status information~n"),
+    ok;
+reformat_indexes(["--downgrade"]) ->
+    start_index_reformat([{downgrade, true}]),
+    io:format("index reformat downgrade started with default options~n"),
+    io:format("check console.log for status information~n"),
+    ok;
+reformat_indexes([ConcurrencyStr | Rest]) ->
+    {Valid, Opts} = try list_to_integer(ConcurrencyStr) of
+                        Concurrency ->
+                            BaseOpts = [{concurrency, Concurrency}],
+                            Final = case lists:member("--downgrade", Rest) of
+                                        true -> [{downgrade, true} | BaseOpts];
+                                        false -> BaseOpts
+                                    end,
+                            {true, Final}
+                    catch
+                        _:_ ->
+                            {false, []}
+                    end,
+    case Valid of
+        true ->
+            start_index_reformat(Opts),
+            io:format("index reformat started with options: ~p~n", [Opts]),
+            io:format("check console.log for status information~n"),
+            ok;
+        false ->
+            io:format("~p is not an integer~n", [ConcurrencyStr]),
+            error
+    end.
+
+start_index_reformat(Opts) ->
+    spawn(fun() -> run_index_reformat(Opts) end).
+
+run_index_reformat(Opts) ->
+    try riak_kv_util:fix_incorrect_index_entries(Opts)
+    catch
+        Err:Reason ->
+            lager:error("index reformat crashed with error type ~p and reason: ~p",
+                        [Err, Reason])
+    end.
 
 %%%===================================================================
 %%% Private
