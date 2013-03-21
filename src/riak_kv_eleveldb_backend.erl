@@ -35,7 +35,7 @@
          drop/1,
          fix_index/4,
          mark_indexes_fixed/2,
-         set_legacy_indices/2,
+         set_legacy_indexes/2,
          fold_buckets/4,
          fold_keys/4,
          fold_objects/4,
@@ -63,8 +63,8 @@
                 read_opts = [],
                 write_opts = [],
                 fold_opts = [{fill_cache, false}],
-                fixed_indexes = false, %% true if legacy indices have be rewritten
-                legacy_indices = false %% true if new writes use legacy indices (downgrade)
+                fixed_indexes = false, %% true if legacy indexes have be rewritten
+                legacy_indexes = false %% true if new writes use legacy indexes (downgrade)
                }).
 
 
@@ -164,7 +164,7 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
                  {error, term(), state()}.
 put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
                                                 write_opts=WriteOpts,
-                                                legacy_indices=WriteLegacy,
+                                                legacy_indexes=WriteLegacy,
                                                 fixed_indexes=FixedIndexes}=State) ->
     %% Create the KV update...
     StorageKey = to_object_key(Bucket, PrimaryKey),
@@ -251,8 +251,8 @@ mark_indexes_fixed(State=#state{ref=Ref, write_opts=WriteOpts}, ForUpgrade) ->
             {error, Reason, State}
     end.
 
-set_legacy_indices(State, WriteLegacy) ->
-    State#state{legacy_indices=WriteLegacy}.
+set_legacy_indexes(State, WriteLegacy) ->
+    State#state{legacy_indexes=WriteLegacy}.
 
 %% @doc Delete an object from the eleveldb backend
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
@@ -314,7 +314,7 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{fold_opts=FoldOpts,
                 state()) -> {ok, term()} | {async, fun()}.
 fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
                                          fixed_indexes=FixedIdx,
-                                         legacy_indices=WriteLegacyIdx,
+                                         legacy_indexes=WriteLegacyIdx,
                                          ref=Ref}) ->
     %% Figure out how we should limit the fold: by bucket, by
     %% secondary index, or neither (fold across everything.)

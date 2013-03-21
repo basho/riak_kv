@@ -36,7 +36,7 @@
          cluster_info/1,
          down/1,
          aae_status/1,
-         reformat_indices/1,
+         reformat_indexes/1,
          reload_code/1]).
 
 %% Arrow is 24 chars wide
@@ -422,17 +422,17 @@ format_timestamp(_Now, undefined) ->
 format_timestamp(Now, TS) ->
     riak_core_format:human_time_fmt("~.1f", timer:now_diff(Now, TS)).
 
-reformat_indices([]) ->
+reformat_indexes([]) ->
     start_index_reformat([]),
     io:format("index reformat started with default options~n"),
     io:format("check console.log for status information~n"),
     ok;
-reformat_indices(["--downgrade"]) ->
+reformat_indexes(["--downgrade"]) ->
     start_index_reformat([{downgrade, true}]),
     io:format("index reformat downgrade started with default options~n"),
     io:format("check console.log for status information~n"),
     ok;
-reformat_indices([ConcurrencyStr | Rest]) ->
+reformat_indexes([ConcurrencyStr | Rest]) ->
     {Valid, Opts} = try list_to_integer(ConcurrencyStr) of
                         Concurrency ->
                             BaseOpts = [{concurrency, Concurrency}],

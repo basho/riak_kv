@@ -541,7 +541,7 @@ handle_command({get_index_entries, ForUpgrade},
     {ok, Caps} = Mod:capabilities(ModState0),
     case lists:member(index_reformat, Caps) of
         true ->
-            ModState = Mod:set_legacy_indices(ModState0, not ForUpgrade),
+            ModState = Mod:set_legacy_indexes(ModState0, not ForUpgrade),
             Status = Mod:status(ModState),
             case {ForUpgrade, proplists:get_value(fixed_indexes, Status)} of
                 {true, true} -> {reply, done, State};

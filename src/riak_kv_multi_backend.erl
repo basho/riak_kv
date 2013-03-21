@@ -40,7 +40,7 @@
          status/1,
          callback/3,
          fix_index/4,
-         set_legacy_indices/2,
+         set_legacy_indexes/2,
          mark_indexes_fixed/2]).
 
 -ifdef(TEST).
@@ -356,14 +356,14 @@ callback(Ref, Msg, #state{backends=Backends}=State) ->
     [Mod:callback(Ref, Msg, ModState) || {_N, Mod, ModState} <- Backends],
     {ok, State}.
 
-set_legacy_indices(State=#state{backends=Backends}, WriteLegacy) ->
-    NewBackends = [{I, Mod, maybe_set_legacy_indices(Mod, ModState, WriteLegacy)} ||
+set_legacy_indexes(State=#state{backends=Backends}, WriteLegacy) ->
+    NewBackends = [{I, Mod, maybe_set_legacy_indexes(Mod, ModState, WriteLegacy)} ||
                       {I, Mod, ModState} <- Backends],
     State#state{backends=NewBackends}.
 
-maybe_set_legacy_indices(Mod, ModState, WriteLegacy) ->
+maybe_set_legacy_indexes(Mod, ModState, WriteLegacy) ->
     case backend_can_index_reformat(Mod, ModState) of
-        true -> Mod:set_legacy_indices(ModState, WriteLegacy);
+        true -> Mod:set_legacy_indexes(ModState, WriteLegacy);
         false -> ModState
     end.
 
