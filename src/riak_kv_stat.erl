@@ -84,7 +84,7 @@ update(Arg) ->
             ok
     catch
         ErrClass:Err ->
-            lager:error("~p:~p updating stat ~p.", [ErrClass, Err, Arg]),
+            lager:warning("~p:~p updating stat ~p.", [ErrClass, Err, Arg]),
             gen_server:cast(?SERVER, {re_register_stat, Arg})
     end.
 
