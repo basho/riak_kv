@@ -704,7 +704,20 @@ multiple_choices(RD, Ctx=#ctx{vtag=undefined, doc={ok, Doc}}) ->
     end;
 multiple_choices(RD, Ctx) ->
     %% specific vtag was specified
-    {false, RD, Ctx}.
+    %% if it's a tombstone add the X-Riak-Deleted header
+    case select_doc(Ctx) of
+        {M, _} ->
+            case dict:find(?MD_DELETED, M) of
+                {ok, true} ->
+                    {false,
+                        wrq:set_resp_header(?HEAD_DELETED, "true", RD),
+                        Ctx};
+                error ->
+                    {false, RD, Ctx}
+            end;
+        multiple_choices ->
+            throw({unexpected_code_path, ?MODULE, multiple_choices, multiple_choices})
+    end.
 
 %% @spec produce_doc_body(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Extract the value of the document, and place it in the
@@ -1038,9 +1051,10 @@ handle_common_error(Reason, RD, Ctx) ->
         {error, {deleted, _VClock}} ->
             {{halt, 404},
                 wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("not found~n",[]),
-                        encode_vclock_header(RD, Ctx))),
+                    wrq:set_resp_header(?HEAD_DELETED, "true",
+                        wrq:append_to_response_body(
+                            io_lib:format("not found~n",[]),
+                            encode_vclock_header(RD, Ctx)))),
                 Ctx};
         {error, {n_val_violation, N}} ->
             Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
