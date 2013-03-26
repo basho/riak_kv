@@ -29,8 +29,10 @@
          map_object_value_list/1,
          map_delete/1,
          map_datasize/1,
+         map_large_objects/1,
          map_id/1,
-         map_key/1
+         map_key/1,
+         map_siblings/1
          ]).
 -export([reduce_identity/1,
          reduce_set_union/1,
@@ -49,8 +51,10 @@
          map_object_value_list/3,
          map_delete/3,
          map_datasize/3,
+         map_large_objects/3,
          map_id/3,
-         map_key/3
+         map_key/3,
+         map_siblings/3
          ]).
 -export([reduce_identity/2,
          reduce_set_union/2,
@@ -64,6 +68,7 @@
          ]).
 
 -define(DEFAULT_REDUCE_LIMIT_SIZE, 100).
+-define(DEFAULT_LARGE_OBJECT_LIMIT, 1048576).
 
 %-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -195,6 +200,57 @@ map_datasize(RiakObject, _, _) ->
                      end
                  end, 0, riak_object:get_contents(RiakObject))].
 
+
+
+
+%% @spec map_large_objects(boolean()) -> map_phase_spec()
+%% @doc Produces a spec for a map phase that returns id and size
+%%      in bytes of all object exceeding a specific size.
+%%      If siblings exist, the combined size of these is used.
+map_large_objects(Acc) ->
+    {map, {modfun, riak_kv_mapreduce, map_large_objects}, none, Acc}.
+
+%% @spec map_large_objects(riak_object:riak_object(), term(), term()) ->
+%%                   [[Bucket :: binary(), Key :: binary(), integer()]] | []
+%% @doc map phase function for map_datasize/1
+map_large_objects({error, notfound}, _, _) ->
+    [];
+map_large_objects(RiakObject, KeyData, Arg) when is_binary(Arg) ->
+    try 
+        map_large_objects(RiakObject, KeyData, list_to_integer(binary_to_list(Arg)))
+    catch
+        _:_ ->
+            try
+                {struct, Props} = mochijson2:decode(Arg),
+                map_large_objects(RiakObject, KeyData, Props)
+            catch
+                _:_  ->
+                    []
+            end
+    end;
+map_large_objects(RiakObject, KeyData, Props) when is_list(Props) ->
+    case proplists:get_value(<<"limit">>, Props, ?DEFAULT_LARGE_OBJECT_LIMIT) of
+        Limit when is_integer(Limit) ->
+            map_large_objects(RiakObject, KeyData, Limit);
+        _ ->
+            map_large_objects(RiakObject, KeyData, ?DEFAULT_LARGE_OBJECT_LIMIT)      
+    end;
+map_large_objects(RiakObject, _, Limit) when is_integer(Limit) ->
+    Size = lists:foldl(fun({MD,Val}, A) ->
+                     case dict:is_key(<<"X-Riak-Deleted">>, MD) of
+                         true ->
+                             A;
+                         false ->
+                             (byte_size(Val) + A)
+                     end
+                 end, 0, riak_object:get_contents(RiakObject)),
+    case Size > Limit of
+        true ->
+            [[riak_object:bucket(RiakObject), riak_object:key(RiakObject), Size]];
+        false ->
+            []
+    end.
+
 %% @spec map_id(boolean()) -> map_phase_spec()
 %% @doc Produces a spec for a map phase that returns
 %%      the ID of each object it's handed.
@@ -232,6 +288,31 @@ map_key(RiakObject, _, _) ->
         false ->
             [riak_object:key(RiakObject)]    
     end. 
+
+%% @spec map_siblings(boolean()) -> map_phase_spec()
+%% @doc Produces a spec for a map phase that returns
+%%      the ID of each object it's handed.
+map_siblings(Acc) ->
+    {map, {modfun, riak_kv_mapreduce, map_siblings}, none, Acc}.
+
+%% @spec map_siblings(riak_object:riak_object(), term(), term()) ->
+%%                   [[Bucket :: binary(), Key :: binary()]]
+%% @doc map phase function returning bucket name and key in a readable format
+%%      for any record passed in that contains siblings
+map_siblings({error, notfound}, _, _) ->
+    [];
+map_siblings(RiakObject, _, _) ->
+    case is_deleted(RiakObject) of
+        true ->
+            [];
+        false ->
+            case riak_object:value_count(RiakObject) of
+                1 ->
+                    [];
+                _ ->
+                    [[riak_object:bucket(RiakObject), riak_object:key(RiakObject)]]
+            end
+    end.
 
 %%
 %% Reduce Phases
@@ -496,6 +577,18 @@ map_datasize_test() ->
     ?assertEqual([10], map_datasize(O3, none, none)),
     ?assertEqual([5], map_datasize(O4, none, none)).
 
+map_large_objects_test() ->
+    MD1 = dict:from_list([{<<"X-Riak-Deleted">>,<<"">>}]),
+    MD2 = dict:new(),
+    O1 = riak_object:new(<<"b">>, <<"k">>, <<"0123456789">>),
+    O2 = riak_object:set_contents(O1, [{MD1,<<"0123456789">>}]),
+    O3 = riak_object:set_contents(O1, [{MD2,<<"0123456789">>},{MD2,<<"0123456789">>}]),
+    O4 = riak_object:set_contents(O1, [{MD1,<<"0123456789">>},{MD2, <<"0123456789">>}]),
+    ?assertEqual([[<<"b">>,<<"k">>,10]], map_large_objects(O1, none, [{<<"limit">>, 7}])),
+    ?assertEqual([], map_large_objects(O2, none, <<"7">>)),
+    ?assertEqual([[<<"b">>,<<"k">>,20]], map_large_objects(O3, none, <<"7">>)),
+    ?assertEqual([[<<"b">>,<<"k">>,10]], map_large_objects(O4, none, <<"{\"limit\":7}">>)).
+
 map_id_test() ->
     O1 = riak_object:new(<<"a">>, <<"1">>, "value1"),
     ?assertEqual([[<<"a">>,<<"1">>]], map_id(O1, test, test)).
@@ -503,6 +596,13 @@ map_id_test() ->
 map_key_test() ->
     O1 = riak_object:new(<<"a">>, <<"1">>, "value1"),
     ?assertEqual([<<"1">>], map_key(O1, test, test)).
+
+map_siblings_test() ->
+    MD = dict:new(),
+    O1 = riak_object:new(<<"b">>, <<"k">>, <<"value">>),
+    O2 = riak_object:set_contents(O1, [{MD,<<"value">>},{MD,<<"value">>}]),
+    ?assertEqual([], map_siblings(O1, test, test)),
+    ?assertEqual([[<<"b">>,<<"k">>]], map_siblings(O2, test, test)).
 
 reduce_set_union_test() ->
     [bar,baz,foo] = lists:sort(reduce_set_union([foo,foo,bar,baz], test)).
