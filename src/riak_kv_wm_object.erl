@@ -168,20 +168,6 @@ init(Props) ->
 %%      bindings from the dispatch, as well as any vtag
 %%      query parameter.
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
-    Timeout = case wrq:get_req_header(?HEAD_TIMEOUT, RD) of 
-                  undefined -> ?DEFAULT_TIMEOUT;
-                  TimeoutStr -> 
-                      try
-                          list_to_integer(TimeoutStr)
-                      catch
-                          _:_ ->
-                              lager:error("Bad timeout value ~p, "
-                                          "using ~d~n", 
-                                          [TimeoutStr, ?DEFAULT_TIMEOUT]),
-                              ?DEFAULT_TIMEOUT
-                      end
-              end,
-    
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true,
@@ -197,8 +183,7 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                        undefined -> undefined;
                        K -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, K))
                    end,
-               vtag=wrq:get_qs_value(?Q_VTAG, RD),
-               timeout=Timeout
+               vtag=wrq:get_qs_value(?Q_VTAG, RD)
               }};
         Error ->
             {false,
@@ -245,29 +230,66 @@ malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'POST'
         undefined ->
             {true, missing_content_type(RD), Ctx};
         _ ->
-            case malformed_rw_params(RD, Ctx) of
-                Result={true, _, _} -> 
+            case malformed_timeout_param(RD, Ctx) of
+                Result={true, _, _} ->
                     Result;
-                {false, RWRD, RWCtx} ->
-                    case malformed_link_headers(RWRD, RWCtx) of
-                        Result = {true, _, _} ->
+                {false, ToRD, ToCtx} ->
+                    case malformed_rw_params(ToRD, ToCtx) of
+                        Result={true, _, _} -> 
                             Result;
-                        {false, RWLH, LHCtx} ->
-                            malformed_index_headers(RWLH, LHCtx)
+                        {false, RWRD, RWCtx} ->
+                            case malformed_link_headers(RWRD, RWCtx) of
+                                Result = {true, _, _} ->
+                                    Result;
+                                {false, RWLH, LHCtx} ->
+                                    malformed_index_headers(RWLH, LHCtx)
+                            end
                     end
             end
     end;
-malformed_request(RD, Ctx) ->
-    case malformed_rw_params(RD, Ctx) of
-        Result = {true, _, _} ->
+malformed_request(RD, Ctx) -> 
+    case malformed_timeout_param(RD, Ctx) of
+        Result={true, _, _} ->
             Result;
-        {false, ResRD, ResCtx} ->
-            DocCtx = ensure_doc(ResCtx),
-            case DocCtx#ctx.doc of
-                {error, Reason} ->
-                    handle_common_error(Reason, ResRD, DocCtx);
-                _ ->
-                    {false, ResRD, DocCtx}
+        {false, ToRD, ToCtx} ->
+            case malformed_rw_params(ToRD, ToCtx) of
+                Result = {true, _, _} ->
+                    Result;
+                {false, ResRD, ResCtx} ->
+                    DocCtx = ensure_doc(ResCtx),
+                    case DocCtx#ctx.doc of
+                        {error, Reason} ->
+                            handle_common_error(Reason, ResRD, DocCtx);
+                        _ ->
+                            {false, ResRD, DocCtx}
+                    end
+            end
+    end.
+
+%% @spec malformed_timeout_param(reqdata(), context()) ->
+%%          {boolean(), reqdata(), context()}
+%% @doc Check that the timeout parameter is are a
+%%      string-encoded integer.  Store the integer value
+%%      in context() if so.
+malformed_timeout_param(RD, Ctx) ->
+    case wrq:get_qs_value("timeout", none, RD) of
+        none ->
+            {false, RD, Ctx};
+        TimeoutStr -> 
+            try
+                Timeout = list_to_integer(TimeoutStr),
+                {false, RD, Ctx#ctx{timeout=Timeout}}
+            catch
+                _:_ ->
+                    {true,
+                     wrq:append_to_resp_body(io_lib:format("Bad timeout "
+                                                           "value ~p, "
+                                                           "using ~p~n", 
+                                                           [TimeoutStr, 
+                                                            ?DEFAULT_TIMEOUT]),
+                                             wrq:set_resp_header(?HEAD_CTYPE, 
+                                                                 "text/plain", RD)),
+                     Ctx}
             end
     end.
 
@@ -611,10 +633,13 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L, index_fields=IF
     IndexMD = dict:store(?MD_INDEX, IF, UserMetaMD),
     MDDoc = riak_object:update_metadata(VclockDoc, IndexMD),
     Doc = riak_object:update_value(MDDoc, riak_kv_wm_utils:accept_value(CType, wrq:req_body(RD))),
-    Options = case wrq:get_qs_value(?Q_RETURNBODY, RD) of ?Q_TRUE -> [returnbody]; _ -> [] end,
-    case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, 
-                     {timeout, Ctx#ctx.timeout} |
-                Options]) of
+    Options0 = case wrq:get_qs_value(?Q_RETURNBODY, RD) of ?Q_TRUE -> [returnbody]; _ -> [] end,
+    Options = case Ctx#ctx.timeout of 
+                  undefined -> Options0;
+                  Else -> [{timeout, Else} | Options0]
+              end,
+    case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw} |
+                     Options]) of
         {error, Reason} ->
             handle_common_error(Reason, RD, Ctx);
         ok ->
@@ -848,19 +873,27 @@ ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};
 ensure_doc(Ctx=#ctx{doc=undefined, bucket=B, key=K, client=C, r=R,
         pr=PR, basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
-    Ctx#ctx{doc=C:get(B, K, [deletedvclock, {r, R}, {pr, PR},
-                             {basic_quorum, Quorum}, 
-                             {notfound_ok, NotFoundOK}, 
-                             {timeout, Ctx#ctx.timeout}])};
+    Opts0 = [deletedvclock, {r, R}, {pr, PR},
+             {basic_quorum, Quorum},
+             {notfound_ok, NotFoundOK}],
+    Opts = case Ctx#ctx.timeout of 
+               undefined -> Opts0;
+               Else -> Opts0 ++ [{timeout, Else}]
+           end,
+    Ctx#ctx{doc=C:get(B, K, Opts)};
 ensure_doc(Ctx) -> Ctx.
 
 %% @spec delete_resource(reqdata(), context()) -> {true, reqdata(), context()}
 %% @doc Delete the document specified.
 delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C, rw=RW, r=R, w=W,
-        pr=PR, pw=PW, dw=DW, timeout=Timeout}) ->
-    Options = lists:filter(fun({_, default}) -> false; (_) -> true end,
-        [{rw, RW}, {r, R}, {w, W}, {pr, PR}, {pw, PW}, {dw, DW}, 
-         {timeout, Timeout}]),
+        pr=PR, pw=PW, dw=DW}) ->
+    Options0 = lists:filter(fun({_, default}) -> false; (_) -> true end,
+                            [{rw, RW}, {r, R}, {w, W}, {pr, PR}, 
+                             {pw, PW}, {dw, DW}]),
+    Options = case Ctx#ctx.timeout of 
+                  undefined -> Options0;
+                  Else -> Options0 ++ [{timeout, Else}]
+              end,
     Result = case wrq:get_req_header(?HEAD_VCLOCK, RD) of
         undefined -> 
             C:delete(B,K,Options);

@@ -65,8 +65,6 @@
                 req_ctx,   % context to go along with request (partial results, request ids etc)
                 client_id = <<0,0,0,0>> }). % emulate legacy API when vnode_vclocks is true
 
--define(DEFAULT_TIMEOUT, 60000).
-
 %% @doc init/0 callback. Returns the service internal start
 %% state.
 -spec init() -> any().
@@ -102,12 +100,14 @@ process(#rpbsetclientidreq{client_id = ClientId}, State) ->
 
 process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    basic_quorum=BQ, if_modified=VClock,
-                   head=Head, deletedvclock=DeletedVClock}, #state{client=C} = State) ->
+                   head=Head, deletedvclock=DeletedVClock,
+                   timeout=Timeout}, #state{client=C} = State) ->
     R = decode_quorum(R0),
     PR = decode_quorum(PR0),
     case C:get(B, K, make_option(deletedvclock, DeletedVClock) ++
                    make_option(r, R) ++
                    make_option(pr, PR) ++
+                   make_option(timeout, Timeout) ++
                    make_option(notfound_ok, NFOk) ++
                    make_option(basic_quorum, BQ)) of
         {ok, O} ->
@@ -166,7 +166,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
 
 process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                    w=W0, dw=DW0, pw=PW0, return_body=ReturnBody,
-                   return_head=ReturnHead},
+                   return_head=ReturnHead, timeout=Timeout},
         #state{client=C} = State) ->
 
     case K of
@@ -196,7 +196,8 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                       end
               end,
     case C:put(O, make_option(w, W) ++ make_option(dw, DW) ++
-                   make_option(pw, PW) ++ [{timeout, default_timeout()} | Options]) of
+                   make_option(pw, PW) ++ make_option(timeout, Timeout) ++ 
+                   Options) of
         ok when is_binary(ReturnKey) ->
             PutResp = #rpbputresp{key = ReturnKey},
             {reply, PutResp, State};
@@ -226,7 +227,8 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
     end;
 
 process(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
-                   r=R0, w=W0, pr=PR0, pw=PW0, dw=DW0, rw=RW0},
+                   r=R0, w=W0, pr=PR0, pw=PW0, dw=DW0, rw=RW0,
+                   timeout=Timeout},
         #state{client=C} = State) ->
     W = decode_quorum(W0),
     PW = decode_quorum(PW0),
@@ -240,7 +242,8 @@ process(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
         make_option(rw, RW) ++
         make_option(pr, PR) ++
         make_option(pw, PW) ++
-        make_option(dw, DW),
+        make_option(dw, DW) ++
+        make_option(timeout, Timeout),
     Result = case PbVc of
                  undefined ->
                      C:delete(B, K, Options);
@@ -298,6 +301,3 @@ erlify_rpbvc(PbVc) ->
 %% Convert a vector clock to protocol buffers
 pbify_rpbvc(Vc) ->
     zlib:zip(term_to_binary(Vc)).
-
-default_timeout() ->
-    ?DEFAULT_TIMEOUT.
