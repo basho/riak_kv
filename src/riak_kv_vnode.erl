@@ -48,7 +48,8 @@
          hashtree_pid/1,
          rehash/3,
          request_hashtree_pid/1,
-         reformat_object/2]).
+         reformat_object/2,
+         stop_fold/1]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -1198,6 +1199,9 @@ result_fun_ack(Bucket, Sender) ->
             receive
                 {Monitor, ok} ->
                     erlang:demonitor(Monitor, [flush]);
+                {Monitor, stop_fold} ->
+                    erlang:demonitor(Monitor, [flush]),
+                    throw(stop_fold);
                 {'DOWN', Monitor, process, _Pid, _Reason} ->
                     throw(receiver_down)
             end
@@ -1210,6 +1214,9 @@ result_fun_ack(Bucket, Sender) ->
 -spec ack_keys(From::{pid(), reference()}) -> term().
 ack_keys({Pid, Ref}) ->
     Pid ! {Ref, ok}.
+
+stop_fold({Pid, Ref}) ->
+    Pid ! {Ref, stop_fold}.
 
 %% @private
 finish_fun(BufferMod, Sender) ->

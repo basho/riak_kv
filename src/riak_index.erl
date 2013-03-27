@@ -33,13 +33,16 @@
          normalize_index_field/1,
          timestamp/0,
          to_index_query/2,
-         to_index_query/3
+         to_index_query/3,
+         make_continuation/1,
+         return_terms/2
         ]).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
 -include("riak_kv_wm_raw.hrl").
+-include("riak_kv_index.hrl").
 -define(TIMEOUT, 30000).
 -define(BUCKETFIELD, <<"$bucket">>).
 -define(KEYFIELD, <<"$key">>).
@@ -55,12 +58,16 @@
 %% @type query_element()   :: {eq,    index_field(), [index_value()]},
 %%                         :: {range, index_field(), [index_value(), index_value()}
 
+-type last_result() :: {value(), key()} | key().
+-type value() :: binary() | integer().
+-type key() :: binary().
+-opaque continuation() :: binary(). %% encoded last_result().
 
 mapred_index(Dest, Args) ->
     mapred_index(Dest, Args, ?TIMEOUT).
 mapred_index(_Pipe, [Bucket, Query], Timeout) ->
     {ok, C} = riak:local_client(),
-    {ok, ReqId} = C:stream_get_index(Bucket, Query, Timeout),
+    {ok, ReqId} = C:stream_get_index(Bucket, Query, [{timeout, Timeout}]),
     {ok, Bucket, ReqId}.
 
 %% @spec parse_object_hook(riak_object:riak_object()) ->
@@ -226,15 +233,11 @@ timestamp() ->
     {MegaSeconds,Seconds,MilliSeconds}=os:timestamp(),
     (MegaSeconds * 1000000000000) + (Seconds * 1000000) + MilliSeconds.
 
-
-to_index_query(IndexField, Args) ->
-    to_index_query(IndexField, Args, false).
-
 %% @spec to_index_query(binary(), [binary()]) ->
 %%         {ok, {atom(), binary(), list(binary())}} | {error, Reasons}.
 %% @doc Given an IndexOp, IndexName, and Args, construct and return a
 %%      valid query, or a list of errors if the query is malformed.
-to_index_query(IndexField, Args, ReturnTerms) ->
+to_index_query(IndexField, Args) ->
     %% Normalize the index field...
     IndexField1 = riak_index:normalize_index_field(IndexField),
 
@@ -247,20 +250,11 @@ to_index_query(IndexField, Args, ReturnTerms) ->
             %% One argument == exact match query
             {ok, {eq, IndexField1, Value}};
 
-        {ok, [{Field, Start}, {Field, End}]} ->
+        {ok, [{_, Start}, {_, End}]} ->
             %% Two arguments == range query
             case End > Start of
                 true ->
-                    case {Field, ReturnTerms} of
-                        {?KEYFIELD, _} ->
-                            %% Not a range query where we can return the index term, since
-                            %% it is the Key itself
-                            {ok, {range, IndexField1, Start, End}};
-                        {_, true} ->
-                            {ok, {range, IndexField1, Start, End, true}};
-                        {_, false} ->
-                            {ok,{range, IndexField1, Start, End}}
-                    end;
+                    {ok, {range, IndexField1, Start, End}};
                 false ->
                     {error, {invalid_range, Args}}
             end;
@@ -272,6 +266,63 @@ to_index_query(IndexField, Args, ReturnTerms) ->
             {error, FailureReasons}
     end.
 
+%% v2 2i queries
+to_index_query(IndexField, Args, Continuation) ->
+    Version = riak_core_capability:get({riak_kv, '2i_version'}, v1),
+    Query = to_index_query(IndexField, Args),
+    case {Version, Query} of
+        {_Any, {error, _Reson}=Error} -> Error;
+        {v1, OKQ} -> OKQ;
+        {v2, {ok, Q}} ->
+            V2Q = make_v2_query(Q),
+            apply_continuation(V2Q, decode_contintuation(Continuation))
+    end.
+
+make_v2_query({eq, ?KEYFIELD, Value}) ->
+    ?KV_INDEX_Q{filter_field=?KEYFIELD, start_key=Value, start_term=Value, end_term=Value, return_terms=false};
+make_v2_query({eq, Field, Value}) ->
+    ?KV_INDEX_Q{filter_field=Field, start_term=Value, end_term=Value, return_terms=false};
+make_v2_query({range, ?KEYFIELD, Start, End}) ->
+    ?KV_INDEX_Q{filter_field=?KEYFIELD, start_term=Start, start_key=Start,
+                end_term=End, return_terms=false};
+make_v2_query({range, Field, Start, End}) ->
+    ?KV_INDEX_Q{filter_field=Field, start_term=Start,
+                end_term=End}.
+
+apply_continuation(Q, undefined) ->
+    {ok, Q};
+apply_continuation(Q=?KV_INDEX_Q{}, {Value, Key}) when is_binary(Key),
+                                                                   is_integer(Value) orelse is_binary(Value) ->
+    {ok, Q?KV_INDEX_Q{start_key=Key, start_inclusive=false, start_term=Value}};
+apply_continuation(Q=?KV_INDEX_Q{}, Key) when is_binary(Key) ->
+    %% a Keys / bucket index
+    {ok, Q?KV_INDEX_Q{start_key=Key, start_term=Key, start_inclusive=false}};
+apply_continuation(Q, C) ->
+    {error, {invalid_continuation, C, Q}}.
+
+return_terms(true, ?KV_INDEX_Q{return_terms=true}) ->
+    true;
+return_terms(_, _) ->
+    false.
+
+%% @doc To enable pagination.
+%% returns an opaque value that
+%% must be passed to
+%% `to_index_query/4' to
+%% get a query that will "continue"
+%% from the given last result
+-spec make_continuation(list()) -> continuation().
+make_continuation([]) ->
+    undefined;
+make_continuation(L) ->
+    Last = lists:last(L),
+    base64:encode(term_to_binary(Last)).
+
+-spec decode_contintuation(continuation() | undefined) -> last_result() | undefined.
+decode_contintuation(undefined) ->
+    undefined;
+decode_contintuation(Bin) ->
+    binary_to_term(base64:decode(Bin)).
 
 %% @spec field_types() -> data_type_defs().
 %%
@@ -315,6 +366,7 @@ normalize_index_field(V) when is_binary(V) ->
     normalize_index_field(binary_to_list(V));
 normalize_index_field(V) when is_list(V) ->
     list_to_binary(string:to_lower(V)).
+
 
 %% ====================
 %% TESTS
