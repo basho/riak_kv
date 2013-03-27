@@ -446,7 +446,7 @@ filter_buckets(Fun) ->
 %%
 %% @doc Run the provided index query.
 get_index(Bucket, Query) ->
-    get_index(Bucket, Query, ?DEFAULT_TIMEOUT).
+    get_index(Bucket, Query, [{timeout, ?DEFAULT_TIMEOUT}]).
 
 %% @spec get_index(Bucket :: binary(),
 %%                 Query :: riak_index:query_def(),
@@ -456,10 +456,12 @@ get_index(Bucket, Query) ->
 %%       {error, Err :: term()}.
 %%
 %% @doc Run the provided index query.
-get_index(Bucket, Query, Timeout) ->
+get_index(Bucket, Query, Opts) ->
+    Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
+    MaxResults = proplists:get_value(max_results, Opts, all),
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout]]),
+    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults]]),
     wait_for_query_results(ReqId, Timeout).
 
 %% @spec stream_get_index(Bucket :: binary(),
@@ -470,7 +472,7 @@ get_index(Bucket, Query, Timeout) ->
 %%
 %% @doc Run the provided index query, return a stream handle.
 stream_get_index(Bucket, Query) ->
-    stream_get_index(Bucket, Query, ?DEFAULT_TIMEOUT).
+    stream_get_index(Bucket, Query, [{timeout, ?DEFAULT_TIMEOUT}]).
 
 %% @spec stream_get_index(Bucket :: binary(),
 %%                        Query :: riak_index:query_def(),
@@ -480,10 +482,12 @@ stream_get_index(Bucket, Query) ->
 %%       {error, Err :: term()}.
 %%
 %% @doc Run the provided index query, return a stream handle.
-stream_get_index(Bucket, Query, Timeout) ->
+stream_get_index(Bucket, Query, Opts) ->
+    Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
+    MaxResults = proplists:get_value(max_results, Opts, all),
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout]]),
+    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults]]),
     {ok, ReqId}.
 
 %% @spec set_bucket(riak_object:bucket(), [BucketProp :: {atom(),term()}]) -> ok
@@ -575,7 +579,7 @@ wait_for_query_results(ReqId, Timeout) ->
 %% @private
 wait_for_query_results(ReqId, Timeout, Acc) ->
     receive
-        {ReqId, done} -> {ok, lists:flatten(Acc)};
+        {ReqId, done} -> {ok, lists:flatten(lists:reverse(Acc))};
         {ReqId,{results, Res}} -> wait_for_query_results(ReqId, Timeout, [Res | Acc]);
         {ReqId, Error} -> {error, Error}
     after Timeout ->

@@ -45,6 +45,8 @@
                    to_index_key/4, from_index_key/1
                   ]}).
 
+-include("riak_kv_index.hrl").
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -421,7 +423,6 @@ fold_buckets_fun(FoldBucketsFun) ->
             end
     end.
 
-
 %% @private
 %% Return a function to fold over keys on this backend
 fold_keys_fun(FoldKeysFun, undefined) ->
@@ -464,8 +465,6 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, <<"$key">>, StartKey, E
             end
     end;
 fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, FilterField, StartTerm, EndTerm}}) ->
-    fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, FilterField, StartTerm, EndTerm, false}});
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, FilterField, StartTerm, EndTerm, Terms}}) ->
     %% 2I range query...
     fun(StorageKey, Acc) ->
             case from_index_key(StorageKey) of
@@ -473,18 +472,79 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, FilterField, StartTerm,
                                                 FilterField == Field,
                                                 StartTerm =< Term,
                                                 EndTerm >= Term ->
-                    case Terms of
-                        true ->
-                            FoldKeysFun(Bucket, {Key, Term}, Acc);
-                        false ->
-                            FoldKeysFun(Bucket, Key, Acc)
-                    end;
+                    FoldKeysFun(Bucket, Key, Acc);
+                _ ->
+                    throw({break, Acc})
+            end
+    end;
+%% v2 indexes - pagination support
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, ?KV_INDEX_Q{filter_field= <<"$bucket">>,
+                                                             start_key=StartKey,
+                                                             start_inclusive=Incl}}) ->
+    %% Fold across a bucket
+    fun(StorageKey, Acc) ->
+            case from_object_key(StorageKey) of
+                {Bucket, Key} when Bucket == FilterBucket,
+                                   Key >= StartKey ->
+                    SkipItem = (Key == StartKey andalso not Incl),
+                    stoppable_fold(FoldKeysFun, Bucket, Key, Acc, SkipItem);
+                _ ->
+                    throw({break, Acc})
+            end
+    end;
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, ?KV_INDEX_Q{filter_field= <<"$key">>,
+                                                             start_key=StartKey,
+                                                             end_term=EndKey,
+                                                             start_inclusive=Incl}}) ->
+    %% Fold across a key range
+    fun(StorageKey, Acc) ->
+            case from_object_key(StorageKey) of
+                {Bucket, Key} when Bucket == FilterBucket,
+                                   Key >= StartKey,
+                                   Key =< EndKey ->
+                    SkipItem = (Key == StartKey andalso not Incl),
+                    stoppable_fold(FoldKeysFun, Bucket, Key, Acc, SkipItem);
+                _ ->
+                    throw({break, Acc})
+            end
+    end;
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, ?KV_INDEX_Q{filter_field=FilterField,
+                                                             start_key=StartKey,
+                                                             start_term=StartTerm,
+                                                             end_term=EndTerm,
+                                                             return_terms=Terms,
+                                                             start_inclusive=Incl}}) ->
+    %% range query
+    fun(StorageKey, Acc) ->
+            case from_index_key(StorageKey) of
+                {Bucket, Key, Field, Term} when FilterBucket == Bucket,
+                                                FilterField == Field,
+                                                Key >= StartKey,
+                                                Term =< EndTerm,
+                                                Term >= StartTerm ->
+                    Val = if
+                              Terms -> {Term, Key};
+                              true -> Key
+                          end,
+                    SkipItem = (Key == StartKey andalso not Incl),
+                    stoppable_fold(FoldKeysFun, Bucket, Val, Acc, SkipItem);
                 _ ->
                     throw({break, Acc})
             end
     end;
 fold_keys_fun(_FoldKeysFun, Other) ->
     throw({unknown_limiter, Other}).
+
+stoppable_fold(Fun, Bucket, Item, Acc, false) ->
+    try
+        Fun(Bucket, Item, Acc)
+    catch
+        stop_fold ->
+            throw({break, Acc})
+    end;
+%% Skip this item
+stoppable_fold(_, _, _, Acc, true) ->
+    Acc.
 
 %% @private
 %% Return a function to fold over the objects on this backend
@@ -510,7 +570,6 @@ fold_opts(Bucket, FoldOpts) ->
     BKey = sext:encode({Bucket, <<>>}),
     [{first_key, BKey} | FoldOpts].
 
-
 %% @private Given a scope limiter, use sext to encode an expression
 %% that represents the starting key for the scope. For example, since
 %% we store objects under {o, Bucket, Key}, the first key for the
@@ -521,6 +580,9 @@ to_first_key(undefined) ->
 to_first_key({bucket, Bucket}) ->
     %% Start at the first object for a given bucket...
     to_object_key(Bucket, <<>>);
+to_first_key({index, incorrect_format, ForUpgrade}) when is_boolean(ForUpgrade) ->
+    %% Start at first index entry
+    to_index_key(<<>>, <<>>, <<>>, <<>>);
 to_first_key({index, Bucket, {eq, <<"$bucket">>, _Term}}) ->
     %% 2I exact match query on special $bucket field...
     to_first_key({bucket, Bucket});
@@ -531,14 +593,20 @@ to_first_key({index, Bucket, {range, <<"$key">>, StartTerm, _EndTerm}}) ->
     %% 2I range query on special $key field...
     to_object_key(Bucket, StartTerm);
 to_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm}}) ->
-    %% (Legacy) 2I range query...
+    %% 2I range query...
     to_index_key(Bucket, <<>>, Field, StartTerm);
-to_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm, _Terms}}) ->
-    %% 2I range query (return terms too)
-    to_index_key(Bucket, <<>>, Field, StartTerm);
+%% V2 indexes
+to_first_key({index, Bucket,
+              ?KV_INDEX_Q{filter_field=Field,
+                          start_key=StartKey}}) when Field == <<"$key">>;
+                                                     Field == <<"$bucket">> ->
+    to_object_key(Bucket, StartKey);
+to_first_key({index, Bucket, ?KV_INDEX_Q{filter_field=Field,
+                                         start_key=StartKey,
+                                         start_term=StartTerm}}) ->
+    to_index_key(Bucket, StartKey, Field, StartTerm);
 to_first_key(Other) ->
     erlang:throw({unknown_limiter, Other}).
-
 
 to_object_key(Bucket, Key) ->
     sext:encode({o, Bucket, Key}).

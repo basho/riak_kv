@@ -59,6 +59,8 @@
 %% "Testing" backend API
 -export([reset/0]).
 
+-include("riak_kv_index.hrl").
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -compile([export_all]).
@@ -423,20 +425,23 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, <<"$key">>, _, _}}) ->
 fold_keys_fun(FoldKeysFun, {index, FilterBucket, {eq, <<"$key">>, _}}) ->
     %% 2I eq query on special $key field...
     fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
-%% Return the index term and the index key
-fold_keys_fun(FoldKeysFun, {index, _FilterBucket, {range, _Field, _Start, _End, true}}) ->
+%% V2 indexes
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, ?KV_INDEX_Q{filter_field=FF}}) when
+      FF == <<"$bucket">>; FF == <<"$key">> ->
+    fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
+fold_keys_fun(FoldKeysFun, {index, _FilterBucket, ?KV_INDEX_Q{}}) ->
     fun({{Bucket, _FilterField, FilterTerm, Key}, _}, Acc) ->
-            FoldKeysFun(Bucket, {Key, FilterTerm}, Acc);
+            FoldKeysFun(Bucket, {FilterTerm, Key}, Acc);
        (_, Acc) ->
             Acc
     end;
+%% Transversion catch all
 fold_keys_fun(FoldKeysFun, {index, _FilterBucket, _Query}) ->
     fun({{Bucket, _FilterField, _FilterTerm, Key}, _}, Acc) ->
             FoldKeysFun(Bucket, Key, Acc);
        (_, Acc) ->
             Acc
     end.
-
 
 %% @private
 %% Return a function to fold over keys on this backend
@@ -460,71 +465,120 @@ get_folder(FoldFun, Acc, DataRef) ->
     end.
 
 %% @private
+%% 'legacy' 2i (v1)
 get_index_folder(Folder, Acc0, {index, Bucket, {eq, <<"$bucket">>, _}}, DataRef, _) ->
     %% For the special $bucket index, turn it into a fold over the
     %% data table.
     fun() ->
-            key_range_folder(Folder, Acc0, DataRef, {Bucket, <<>>}, Bucket)
+            key_range_folder(Folder, Acc0, DataRef, {Bucket, <<>>}, {Bucket, <<>>, true})
     end;
 get_index_folder(Folder, Acc0, {index, Bucket, {range, <<"$key">>, Min, Max}}, DataRef, _) ->
     %% For the special range lookup on the $key index, turn it into a
     %% fold on the data table
     fun() ->
-            key_range_folder(Folder, Acc0, DataRef, {Bucket, Min}, {Bucket, Min, Max})
+            key_range_folder(Folder, Acc0, DataRef, {Bucket, Min}, {Bucket, Min, Max, true})
     end;
 get_index_folder(Folder, Acc0, {index, Bucket, {eq, <<"$key">>, Val}}, DataRef, IndexRef) ->
     get_index_folder(Folder, Acc0, {index, Bucket, {range, <<"$key">>, Val, Val}}, DataRef, IndexRef);
 get_index_folder(Folder, Acc0, {index, Bucket, {eq, Field, Term}}, _, IndexRef) ->
     fun() ->
-            index_range_folder(Folder, Acc0, IndexRef, {Bucket, Field, Term, undefined}, {Bucket, Field, Term, Term})
+            index_range_folder(Folder, Acc0, IndexRef,
+                               {Bucket, Field, Term, undefined},
+                               {Bucket, Field, Term, Term, true})
     end;
-%% Legacy range query
-get_index_folder(Folder, Acc0, {index, Bucket, {range, Field, Min, Max}}, DataRef, IndexRef) ->
-    get_index_folder(Folder, Acc0, {index, Bucket, {range, Field, Min, Max, false}}, DataRef, IndexRef);
-get_index_folder(Folder, Acc0, {index, Bucket, {range, Field, Min, Max, Terms}}, _, IndexRef) ->
+get_index_folder(Folder, Acc0, {index, Bucket, {range, Field, Min, Max}}, _, IndexRef) ->
     fun() ->
-            index_range_folder(Folder, Acc0, IndexRef, {Bucket, Field, Min, undefined}, {Bucket, Field, Min, Max, Terms})
+            index_range_folder(Folder, Acc0, IndexRef,
+                               {Bucket, Field, Min, undefined},
+                               {Bucket, Field, Min, Max, true})
+    end;
+%% V2 2i
+get_index_folder(Folder, Acc0, {index, Bucket, Q=?KV_INDEX_Q{filter_field= <<"$bucket">>}}, DataRef, _) ->
+    %% get first key
+    ?KV_INDEX_Q{start_key=StartKey, start_inclusive=Incl} = Q,
+    fun() ->
+            key_range_folder(Folder, Acc0, DataRef, {Bucket, StartKey}, {Bucket, StartKey, Incl})
+    end;
+get_index_folder(Folder, Acc0, {index, Bucket, Q=?KV_INDEX_Q{filter_field= <<"$key">>}}, DataRef, _) ->
+    %% get range
+    ?KV_INDEX_Q{start_key=StartKey, end_term=EndKey, start_inclusive=Incl} = Q,
+    fun() ->
+            key_range_folder(Folder, Acc0, DataRef, {Bucket, StartKey}, {Bucket, StartKey, EndKey, Incl})
+    end;
+get_index_folder(Folder, Acc0, {index, Bucket, Q=?KV_INDEX_Q{}}, _, IndexRef) ->
+    %% get range
+    ?KV_INDEX_Q{start_key=StartKey, start_term=Min, filter_field=FF, end_term=Max, start_inclusive=Incl} = Q,
+    fun() ->
+            index_range_folder(Folder, Acc0, IndexRef,
+                               {Bucket, FF, Min, StartKey},
+                               {Bucket, FF, Min, Max, StartKey, Incl})
     end.
-
 
 %% Iterates over a range of keys, for the special $key and $bucket
 %% indexes.
 %% @private
--spec key_range_folder(function(), term(), ets:tid(), {riak_object:bucket(), riak_object:key()}, binary() | {riak_object:bucket(), term(), term()}) -> term().
-key_range_folder(Folder, Acc0, DataRef, {B,_}=DataKey, B) ->
-    case ets:lookup(DataRef, DataKey) of
-        [] ->
-            key_range_folder(Folder, Acc0, DataRef, ets:next(DataRef, DataKey), B);
-        [Object] ->
-            Acc = Folder(Object, Acc0),
-            key_range_folder(Folder, Acc, DataRef, ets:next(DataRef, DataKey), B)
+-spec key_range_folder(function(), term(), ets:tid(),
+                       {riak_object:bucket(), riak_object:key()},
+                       {riak_object:bucket(), StartKey::binary(), StartIncl::boolean()} |
+                       {riak_object:bucket(), Start::term(), End::term(), StartIncl::boolean()})
+                      -> term().
+key_range_folder(Folder, Acc0, DataRef, {B,_}=DataKey, {B, StartKey, Incl}=Q) ->
+    case {Incl, ets:lookup(DataRef, DataKey)} of
+        {_, []} ->
+            key_range_folder(Folder, Acc0, DataRef, ets:next(DataRef, DataKey), Q);
+        {false, [{{B, StartKey}, _V}]} ->
+            %% Exclude the first key from the results
+            key_range_folder(Folder, Acc0, DataRef, ets:next(DataRef, DataKey), Q);
+        {_, [Object]} ->
+            %% eugh eugh eugh, use a throw to stop the fold
+            try
+                Acc = Folder(Object, Acc0),
+                key_range_folder(Folder, Acc, DataRef, ets:next(DataRef, DataKey), Q)
+            catch  stop_fold ->
+                    Acc0
+            end
     end;
-key_range_folder(Folder, Acc0, DataRef, {B,K}=DataKey, {B, Min, Max}=Query) when K >= Min, K =< Max ->
-    case ets:lookup(DataRef, DataKey) of
-        [] ->
+key_range_folder(Folder, Acc0, DataRef, {B,K}=DataKey, {B, Min, Max, Incl}=Query)
+  when K >= Min, K =< Max ->
+    case {Incl, ets:lookup(DataRef, DataKey)} of
+        {_, []} ->
             key_range_folder(Folder, Acc0, DataRef, ets:next(DataRef, DataKey), Query);
-        [Object] ->
-            Acc = Folder(Object, Acc0),
-            key_range_folder(Folder, Acc, DataRef, ets:next(DataRef, DataKey), Query)
+        {false, [{{B, Min}, _V}]} ->
+            %% Exclude the first key from the results
+            key_range_folder(Folder, Acc0, DataRef, ets:next(DataRef, DataKey), Query);
+        {_, [Object]} ->
+            try
+                Acc = Folder(Object, Acc0),
+                key_range_folder(Folder, Acc, DataRef, ets:next(DataRef, DataKey), Query)
+            catch stop_fold ->
+                    Acc0
+            end
     end;
 key_range_folder(_Folder, Acc, _DataRef, _DataKey, _Query) ->
     Acc.
 
 %% Iterates over a range of index postings
-index_range_folder(Folder, Acc0, IndexRef, {B, I, V, _K}=IndexKey, {B, I, Min, Max, _Terms}=Query) when V >= Min, V =< Max ->
-    case ets:lookup(IndexRef, IndexKey) of
-        [] ->
+index_range_folder(Folder, Acc0, IndexRef, {B, I, V, _K}=IndexKey,
+                   {B, I, Min, Max, StartKey, Incl}=Query) when V >= Min, V =< Max ->
+    case {Incl, ets:lookup(IndexRef, IndexKey)} of
+        {_, []} ->
             %% This will happen on the first iteration, where the key
             %% does not exist. In all other cases, ETS will give us a
             %% real key from next/2.
             index_range_folder(Folder, Acc0, IndexRef, ets:next(IndexRef, IndexKey), Query);
-        [Posting] ->
-            Acc = Folder(Posting, Acc0),
-            index_range_folder(Folder, Acc, IndexRef, ets:next(IndexRef, IndexKey), Query)
+        {false, [{{B, I, V, StartKey},_}]} ->
+            %% Exclude first key from results
+            index_range_folder(Folder, Acc0, IndexRef, ets:next(IndexRef, IndexKey), Query);
+        {_, [Posting]} ->
+            try
+                Acc = Folder(Posting, Acc0),
+                index_range_folder(Folder, Acc, IndexRef, ets:next(IndexRef, IndexKey), Query)
+            catch stop_fold ->
+                    Acc0
+            end
     end;
 index_range_folder(_Folder, Acc, _IndexRef, _IndexKey, _Query) ->
     Acc.
-
 
 %% @private
 do_put(Bucket, Key, Val, IndexSpecs, DataRef, IndexRef) ->
