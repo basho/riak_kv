@@ -283,7 +283,7 @@ mapred_stream_sink(Inputs, Query, Timeout) ->
                           sender={Sender,SenderMon},
                           timer={Timer,PipeRef},
                           keeps=NumKeeps}}
-    catch throw:{badard, Fitting, Reason} ->
+    catch throw:{badarg, Fitting, Reason} ->
             riak_kv_mrc_sink:stop(Sink),
             {error, {Fitting, Reason}}
     end.
