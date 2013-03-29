@@ -524,24 +524,28 @@ handle_command({fix_incorrect_index_entry, {done, ForUpgrade}}, _Sender,
         {error, _Reason} ->
             {reply, error, State}
     end;
-handle_command({fix_incorrect_index_entry, {Bucket, StorageKey}, ForUpgrade},
+handle_command({fix_incorrect_index_entry, Keys, ForUpgrade},
                _Sender,
                State=#state{mod=Mod,
                             modstate=ModState}) ->
     Reply =
-        case Mod:fix_index(Bucket, StorageKey, ForUpgrade, ModState) of
+        case Mod:fix_index(undefined, Keys, ForUpgrade, ModState) of
             {ok, _UpModState} ->
                 ok;
             {ignore, _UpModState} ->
                 ignore;
             {error, Reason, _UpModState} ->
-                {error, Reason}
+                {error, Reason};
+            {reply, Totals, _UpModState} ->
+                Totals
         end,
     {reply, Reply, State};
-handle_command({get_index_entries, ForUpgrade},
+handle_command({get_index_entries, Opts},
                Sender,
                State=#state{mod=Mod,
                             modstate=ModState0}) ->
+    ForUpgrade = not proplists:get_value(downgrade, Opts, false),
+    BufferSize = proplists:get_value(batch_size, Opts, 1),
     {ok, Caps} = Mod:capabilities(ModState0),
     case lists:member(index_reformat, Caps) of
         true ->
@@ -550,12 +554,24 @@ handle_command({get_index_entries, ForUpgrade},
             case {ForUpgrade, proplists:get_value(fixed_indexes, Status)} of
                 {true, true} -> {reply, done, State};
                 {_,  _} ->
-                    FoldFun = fun(Bucket, StorageKey, _) ->
-                                      riak_core_vnode:reply(Sender, {Bucket, StorageKey})
-                              end,
+                    BufferMod = riak_kv_fold_buffer,
+                    ResultFun =
+                        fun(Results) ->
+                            BatchRef = make_ref(),
+                            riak_core_vnode:reply(Sender, {self(), BatchRef, Results}),
+                            Monitor = riak_core_vnode:monitor(Sender),
+                            receive
+                                {ack_keys, BatchRef} ->
+                                    erlang:demonitor(Monitor, [flush]);
+                                {'DOWN', Monitor, process, _Pid, _Reason} ->
+                                    throw(index_reformat_client_died)
+                            end
+                        end,
+                    Buffer = BufferMod:new(BufferSize, ResultFun),
+                    FoldFun = fold_fun(keys, BufferMod, none),
                     FinishFun = fun(_) -> riak_core_vnode:reply(Sender, done) end,
-                    Opts = [{index, incorrect_format, ForUpgrade}, async_fold],
-                    case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, undefined) of
+                    FoldOpts = [{index, incorrect_format, ForUpgrade}, async_fold],
+                    case list(FoldFun, FinishFun, Mod, fold_keys, ModState, FoldOpts, Buffer) of
                         {async, AsyncWork} ->
                             {async, {fold, AsyncWork, FinishFun}, Sender, State};
                         _ ->

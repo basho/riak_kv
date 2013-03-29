@@ -238,10 +238,12 @@ fix_incorrect_index_entries() ->
 fix_incorrect_index_entries(Opts) when is_list(Opts) ->
     MaxN = proplists:get_value(concurrency, Opts, 2),
     ForUpgrade = not proplists:get_value(downgrade, Opts, false),
-    lager:info("index reformat starting with concurrency: ~p for upgrade: ~p",
-               [MaxN, ForUpgrade]),
+    BatchSize = proplists:get_value(batch_size, Opts, 100),
+    lager:info("index reformat: starting with concurrency: ~p, batch size: ~p, for upgrade: ~p",
+               [MaxN, BatchSize, ForUpgrade]),
     IdxList = [Idx || {riak_kv_vnode, Idx, _} <- riak_core_vnode_manager:all_vnodes()],
-    F = fun(X) -> fix_incorrect_index_entries(X, ForUpgrade) end,
+    FixOpts = [{batch_size, BatchSize}, {downgrade, not ForUpgrade}],
+    F = fun(X) -> fix_incorrect_index_entries(X, FixOpts) end,
     Counts = riak_core_util:pmap(F, IdxList, MaxN),
     {SuccessCounts, IgnoredCounts, ErrorCounts} = lists:unzip3(Counts),
     SuccessTotal = lists:sum(SuccessCounts),
@@ -249,21 +251,23 @@ fix_incorrect_index_entries(Opts) when is_list(Opts) ->
     ErrorTotal = lists:sum(ErrorCounts),
     case ErrorTotal of
         0 ->
-            lager:info("index reformat complete on all partitions. Fixed: ~p, Ignored: ~p",
+            lager:info("index reformat: complete on all partitions. Fixed: ~p, Ignored: ~p",
                        [SuccessTotal, IgnoredTotal]);
         _ ->
-            lager:info("index reformat encountered ~p errors reformatting keys. Please re-run",
+            lager:info("index reformat: encountered ~p errors reformatting keys. Please re-run",
                        [ErrorTotal])
     end,
     {SuccessTotal, IgnoredTotal, ErrorTotal}.
 
-fix_incorrect_index_entries(Idx, ForUpgrade) ->
-    fix_incorrect_index_entries(Idx, fun fix_incorrect_index_entry/4, {0, 0, 0}, ForUpgrade).
+fix_incorrect_index_entries(Idx, FixOpts) ->
+    fix_incorrect_index_entries(Idx, fun fix_incorrect_index_entry/4, {0, 0, 0}, FixOpts).
 
-fix_incorrect_index_entries(Idx, FixFun, Acc0, ForUpgrade) ->
+fix_incorrect_index_entries(Idx, FixFun, Acc0, FixOpts) ->
     Ref = make_ref(),
+    ForUpgrade = not proplists:get_value(downgrade, FixOpts, false),
+    lager:info("index reformat: querying partition ~p for index entries to reformat", [Idx]),
     riak_core_vnode_master:command({Idx, node()},
-                                   {get_index_entries, ForUpgrade},
+                                   {get_index_entries, FixOpts},
                                    {raw, Ref, self()},
                                    riak_kv_vnode_master),
     case process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, Acc0) of
@@ -279,9 +283,9 @@ fix_incorrect_index_entries(Idx, FixFun, Acc0, ForUpgrade) ->
             end
     end.
 
-fix_incorrect_index_entry(Idx, ForUpgrade, BadKey, {Success, Ignore, Error}) ->
+fix_incorrect_index_entry(Idx, ForUpgrade, BadKeys, {Success, Ignore, Error}) ->
     Res = riak_core_vnode_master:sync_command({Idx, node()},
-                                              {fix_incorrect_index_entry, BadKey, ForUpgrade},
+                                              {fix_incorrect_index_entry, BadKeys, ForUpgrade},
                                               riak_kv_vnode_master),
     case Res of
         ok ->
@@ -289,25 +293,42 @@ fix_incorrect_index_entry(Idx, ForUpgrade, BadKey, {Success, Ignore, Error}) ->
         ignore ->
             {Success, Ignore+1, Error};
         {error, _} ->
-            {Success, Ignore, Error+1}
+            {Success, Ignore, Error+1};
+        {S, I, E} ->
+            {Success+S, Ignore+I, Error+E}
     end.
 
 %% needs to take an acc to count success/error/ignore
-process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, Acc) ->
+process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, {S, I, E} = Acc) ->
     receive
         {Ref, ignore} ->
+            lager:info("index reformat: ignoring partition ~p", [Idx]),
             ignore;
         {Ref, done} ->
+            lager:info("index reformat: finished with partition ~p, Fixed=~p, Ignored=~p, Errors=~p", [Idx, S, I, E]),
             Acc;
-        {Ref, Key} ->
-            NextAcc = FixFun(Idx, ForUpgrade, Key, Acc),
+        {Ref, {Pid, BatchRef, Keys}} ->
+            {NS, NI, NE} = NextAcc = FixFun(Idx, ForUpgrade, Keys, Acc),
+            ReportN = 10000,
+            case ((NS+NI+NE) div ReportN) /= ((S+I+E) div ReportN) of
+               true ->
+                    lager:info("index reformat: reformatting partition ~p, Fixed=~p, Ignore=~p, Error=~p", [Idx, NS, NI, NE]);
+                false ->
+                    ok
+            end,
+            ack_incorrect_keys(Pid, BatchRef),
             process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, NextAcc)
     end.
+
+ack_incorrect_keys(Pid, Ref) ->
+    Pid ! {ack_keys, Ref}.
 
 mark_indexes_reformatted(Idx, 0, ForUpgrade) ->
     riak_core_vnode_master:sync_command({Idx, node()},
                                         {fix_incorrect_index_entry, {done, ForUpgrade}},
-                                        riak_kv_vnode_master);
+                                        riak_kv_vnode_master),
+    lager:info("index reformat: marked partition ~p as fixed", [Idx]),
+    ok;
 mark_indexes_reformatted(_Idx, _ErrorCount, _ForUpgrade) ->
     undefined.
 

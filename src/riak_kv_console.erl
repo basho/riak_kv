@@ -422,39 +422,26 @@ format_timestamp(_Now, undefined) ->
 format_timestamp(Now, TS) ->
     riak_core_format:human_time_fmt("~.1f", timer:now_diff(Now, TS)).
 
-reformat_indexes([]) ->
-    start_index_reformat([]),
-    io:format("index reformat started with default options~n"),
-    io:format("check console.log for status information~n"),
-    ok;
-reformat_indexes(["--downgrade"]) ->
-    start_index_reformat([{downgrade, true}]),
-    io:format("index reformat downgrade started with default options~n"),
-    io:format("check console.log for status information~n"),
-    ok;
-reformat_indexes([ConcurrencyStr | Rest]) ->
-    {Valid, Opts} = try list_to_integer(ConcurrencyStr) of
-                        Concurrency ->
-                            BaseOpts = [{concurrency, Concurrency}],
-                            Final = case lists:member("--downgrade", Rest) of
-                                        true -> [{downgrade, true} | BaseOpts];
-                                        false -> BaseOpts
-                                    end,
-                            {true, Final}
-                    catch
-                        _:_ ->
-                            {false, []}
-                    end,
-    case Valid of
+index_reformat_options([], Opts) ->
+    Opts;
+index_reformat_options(["--downgrade" | Rest], Opts) ->
+    index_reformat_options(Rest, [{downgrade, true} | Opts]);
+index_reformat_options([IntStr | Rest], Opts) ->
+    %% Letting it crash here if not an integer
+    IntVal = list_to_integer(IntStr),
+    case lists:keymember(concurrency, 1, Opts) of
         true ->
-            start_index_reformat(Opts),
-            io:format("index reformat started with options: ~p~n", [Opts]),
-            io:format("check console.log for status information~n"),
-            ok;
+            [{batch_size, IntVal} | Opts];
         false ->
-            io:format("~p is not an integer~n", [ConcurrencyStr]),
-            error
+            index_reformat_options(Rest, [{concurrency, IntVal} | Opts])
     end.
+
+reformat_indexes(Args) ->
+    Opts = index_reformat_options(Args, []),
+    start_index_reformat(Opts),
+    io:format("index reformat started with options ~p ~n", [Opts]),
+    io:format("check console.log for status information~n"),
+    ok.
 
 start_index_reformat(Opts) ->
     spawn(fun() -> run_index_reformat(Opts) end).

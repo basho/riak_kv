@@ -211,9 +211,34 @@ index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value) ->
                     || FixedIndexes =:= false andalso IndexKey =/= LegacyKey],
     KeyDelete ++ LegacyDelete.
 
+fix_index(_Bucket, IndexKeys, ForUpgrade, #state{ref=Ref,
+                                                read_opts=ReadOpts,
+                                                write_opts=WriteOpts} = State)
+                                        when is_list(IndexKeys) ->
+    FoldFun =
+        fun(ok, {Success, Ignore, Error}) ->
+               {Success+1, Ignore, Error};
+           (ignore, {Success, Ignore, Error}) ->
+               {Success, Ignore+1, Error};
+           ({error, _}, {Success, Ignore, Error}) ->
+               {Success, Ignore, Error+1}
+        end,
+    Totals =
+        lists:foldl(FoldFun, {0,0,0},
+                    [fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts)
+                        || IndexKey <- IndexKeys]),
+    {reply, Totals, State};
 fix_index(_Bucket, IndexKey, ForUpgrade, #state{ref=Ref,
                                                 read_opts=ReadOpts,
                                                 write_opts=WriteOpts} = State) ->
+    case fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts) of
+        Atom when is_atom(Atom) ->
+            {Atom, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
+
+fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts) ->
     case eleveldb:get(Ref, IndexKey, ReadOpts) of
         {ok, _} ->
             {Bucket, Key, Field, Value} = from_index_key(IndexKey),
@@ -224,14 +249,14 @@ fix_index(_Bucket, IndexKey, ForUpgrade, #state{ref=Ref,
             Updates = [{delete, IndexKey}, {put, NewKey, <<>>}],
             case eleveldb:write(Ref, Updates, WriteOpts) of
                 ok ->
-                    {ok, State};
+                    ok;
                 {error, Reason} ->
-                    {error, Reason, State}
+                    {error, Reason}
             end;
         not_found ->
-            {ignore, State};
+            ignore;
         {error, Reason} ->
-            {error, Reason, State}
+            {error, Reason}
     end.
 
 mark_indexes_fixed(State=#state{fixed_indexes=true}, true) ->
@@ -371,7 +396,9 @@ legacy_key_fold(Ref, FoldFun, Acc, FoldOpts0, Query={index, _, _}) ->
             end;
         false ->
             Acc
-    end.
+    end;
+legacy_key_fold(_Ref, _FoldFun, Acc, _FoldOpts, _Query) ->
+    Acc.
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
