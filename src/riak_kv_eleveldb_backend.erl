@@ -33,7 +33,7 @@
          put/5,
          delete/4,
          drop/1,
-         fix_index/4,
+         fix_index/3,
          mark_indexes_fixed/2,
          set_legacy_indexes/2,
          fold_buckets/4,
@@ -211,7 +211,7 @@ index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value) ->
                     || FixedIndexes =:= false andalso IndexKey =/= LegacyKey],
     KeyDelete ++ LegacyDelete.
 
-fix_index(_Bucket, IndexKeys, ForUpgrade, #state{ref=Ref,
+fix_index(IndexKeys, ForUpgrade, #state{ref=Ref,
                                                 read_opts=ReadOpts,
                                                 write_opts=WriteOpts} = State)
                                         when is_list(IndexKeys) ->
@@ -226,9 +226,9 @@ fix_index(_Bucket, IndexKeys, ForUpgrade, #state{ref=Ref,
     Totals =
         lists:foldl(FoldFun, {0,0,0},
                     [fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts)
-                        || IndexKey <- IndexKeys]),
+                        || {_Bucket, IndexKey} <- IndexKeys]),
     {reply, Totals, State};
-fix_index(_Bucket, IndexKey, ForUpgrade, #state{ref=Ref,
+fix_index(IndexKey, ForUpgrade, #state{ref=Ref,
                                                 read_opts=ReadOpts,
                                                 write_opts=WriteOpts} = State) ->
     case fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts) of

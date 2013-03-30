@@ -529,7 +529,7 @@ handle_command({fix_incorrect_index_entry, Keys, ForUpgrade},
                State=#state{mod=Mod,
                             modstate=ModState}) ->
     Reply =
-        case Mod:fix_index(undefined, Keys, ForUpgrade, ModState) of
+        case Mod:fix_index(Keys, ForUpgrade, ModState) of
             {ok, _UpModState} ->
                 ok;
             {ignore, _UpModState} ->
@@ -557,6 +557,8 @@ handle_command({get_index_entries, Opts},
                     BufferMod = riak_kv_fold_buffer,
                     ResultFun =
                         fun(Results) ->
+                            % Send result batch and wait for acknowledgement
+                            % before moving on (backpressure to avoid flooding caller).
                             BatchRef = make_ref(),
                             riak_core_vnode:reply(Sender, {self(), BatchRef, Results}),
                             Monitor = riak_core_vnode:monitor(Sender),
@@ -568,7 +570,7 @@ handle_command({get_index_entries, Opts},
                             end
                         end,
                     Buffer = BufferMod:new(BufferSize, ResultFun),
-                    FoldFun = fold_fun(keys, BufferMod, none),
+                    FoldFun = fun(B, K, Buf) -> BufferMod:add({B, K}, Buf) end,
                     FinishFun = fun(_) -> riak_core_vnode:reply(Sender, done) end,
                     FoldOpts = [{index, incorrect_format, ForUpgrade}, async_fold],
                     case list(FoldFun, FinishFun, Mod, fold_keys, ModState, FoldOpts, Buffer) of
