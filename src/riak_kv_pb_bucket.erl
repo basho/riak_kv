@@ -92,14 +92,14 @@ process_stream({ReqId, done}, ReqId,
     {done, #rpblistkeysresp{done = 1}, State};
 process_stream({ReqId, From, {keys, []}}, ReqId,
                State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
-    riak_kv_keys_fsm:ack_keys(From),
+    {_, ok} = riak_kv_keys_fsm:ack_keys(From),
     {ignore, State};
 process_stream({ReqId, {keys, []}}, ReqId,
                State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     {ignore, State};
 process_stream({ReqId, From, {keys, Keys}}, ReqId,
                State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
-    riak_kv_keys_fsm:ack_keys(From),
+    {_, ok} = riak_kv_keys_fsm:ack_keys(From),
     {reply, #rpblistkeysresp{keys = Keys}, State};
 process_stream({ReqId, {keys, Keys}}, ReqId,
                State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
