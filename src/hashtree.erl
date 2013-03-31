@@ -495,7 +495,7 @@ new_segment_store(Opts, State) ->
     Config4 = orddict:erase(write_buffer_size_max, Config3),
     Options = orddict:store(create_if_missing, true, Config4),
 
-    filelib:ensure_dir(DataDir),
+    ok = filelib:ensure_dir(DataDir),
     {ok, Ref} = eleveldb:open(DataDir, Options),
     State#state{ref=Ref, path=DataDir}.
 
@@ -875,10 +875,10 @@ do_local(N) ->
     B4 = update_tree(B3),
     KeyDiff = local_compare(A4, B4),
     io:format("KeyDiff: ~p~n", [KeyDiff]),
-    close(A4),
-    close(B4),
-    destroy(A4),
-    destroy(B4),
+    _ = close(A4),
+    _ = close(B4),
+    _ = destroy(A4),
+    _ = destroy(B4),
     ok.
 
 do_concurrent_build(N1, N2) ->
@@ -904,10 +904,10 @@ do_concurrent_build(N1, N2) ->
     KeyDiff = local_compare(A4, B4),
     io:format("KeyDiff: ~p~n", [KeyDiff]),
 
-    close(A4),
-    close(B4),
-    destroy(A4),
-    destroy(B4),
+    _ = close(A4),
+    _ = close(B4),
+    _ = destroy(A4),
+    _ = destroy(B4),
     ok.
 
 do_remote(N) ->
