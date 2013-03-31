@@ -1,1 +1,10 @@
-EVEN IF I MATCH I CANT MATCH
+riak_kv_pb_bucket.erl:46: Callback info about the riak_api_pb_service behaviour is not available
+riak_kv_pb_index.erl:41: Callback info about the riak_api_pb_service behaviour is not available
+riak_kv_pb_mapred.erl:43: Callback info about the riak_api_pb_service behaviour is not available
+riak_kv_pb_object.erl:53: Callback info about the riak_api_pb_service behaviour is not available
+riak_kv_pipe_get.erl:49: Callback info about the riak_pipe_vnode_worker behaviour is not available
+riak_kv_pipe_index.erl:40: Callback info about the riak_pipe_vnode_worker behaviour is not available
+riak_kv_pipe_listkeys.erl:41: Callback info about the riak_pipe_vnode_worker behaviour is not available
+riak_kv_vnode.erl:26: Callback info about the riak_core_vnode behaviour is not available
+riak_kv_w_reduce.erl:96: Callback info about the riak_pipe_vnode_worker behaviour is not available
+riak_kv_worker.erl:27: Callback info about the riak_core_vnode_worker behaviour is not available
