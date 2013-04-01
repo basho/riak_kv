@@ -390,8 +390,7 @@ maybe_mark_indexes_fixed(Mod, ModState, ForUpgrade) ->
 
 fix_index(BKeys, ForUpgrade, State) ->
     % Group keys per bucket 
-    PerBucket = lists:foldl(fun({B,K},D) -> dict:append(B,K,D) end, dict:new(),
-                            dict:new(), BKeys),
+    PerBucket = lists:foldl(fun(BK={B,_},D) -> dict:append(B,BK,D) end, dict:new(), BKeys),
     Result = 
         dict:fold(
             fun(Bucket, StorageKey, Acc = {Success, Ignore, Errors}) ->
@@ -408,7 +407,7 @@ fix_index(BKeys, ForUpgrade, State) ->
     {reply, Result, State}.
 
 backend_fix_index({_, Mod, ModState}, Bucket, StorageKey, ForUpgrade) ->
-    case Mod:fix_index(Bucket, StorageKey, ForUpgrade, ModState) of
+    case Mod:fix_index(StorageKey, ForUpgrade, ModState) of
         {reply, Reply, _UpModState} -> 
             Reply;
         {error, Reason} ->

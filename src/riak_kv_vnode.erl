@@ -571,7 +571,11 @@ handle_command({get_index_entries, Opts},
                         end,
                     Buffer = BufferMod:new(BufferSize, ResultFun),
                     FoldFun = fun(B, K, Buf) -> BufferMod:add({B, K}, Buf) end,
-                    FinishFun = fun(_) -> riak_core_vnode:reply(Sender, done) end,
+                    FinishFun =
+                        fun(FinalBuffer) ->
+                            BufferMod:flush(FinalBuffer),
+                            riak_core_vnode:reply(Sender, done)
+                        end,
                     FoldOpts = [{index, incorrect_format, ForUpgrade}, async_fold],
                     case list(FoldFun, FinishFun, Mod, fold_keys, ModState, FoldOpts, Buffer) of
                         {async, AsyncWork} ->
