@@ -431,7 +431,17 @@ parse_int(IntStr) ->
     end.
 
 index_reformat_options([], Opts) ->
-    Opts;
+    Defaults = [{concurrency, 2}, {batch_size, 100}],
+    AddIfAbsent =
+        fun({Name,Val}, Acc) ->
+            case lists:keymember(Name, 1, Acc) of
+                true ->
+                    Acc;
+                false ->
+                    [{Name, Val} | Acc]
+            end
+        end,
+    lists:foldl(AddIfAbsent, Opts, Defaults);
 index_reformat_options(["--downgrade"], Opts) ->
     [{downgrade, true} | Opts];
 index_reformat_options(["--downgrade" | More], _Opts) ->
