@@ -41,7 +41,8 @@
          callback/3,
          fix_index/3,
          set_legacy_indexes/2,
-         mark_indexes_fixed/2]).
+         mark_indexes_fixed/2,
+         fixed_index_status/1]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -322,31 +323,7 @@ status(#state{backends=Backends}) ->
     %% breaking this API list of two tuples return,
     %% add the tuple {mod, Mod} to the status for each
     %% backend.
-    {Statuses, FixedIndexes} =
-        lists:mapfoldl(fun({N, Mod, ModState}, Acc) ->
-                               Status = Mod:status(ModState),
-                               Entry = {N, [{mod, Mod} | Status]},
-                               case fixed_index_status(Mod, ModState, Status) of
-                                   undefined -> {Entry, Acc};
-                                   Res ->
-                                       case Acc of
-                                           undefined -> {Entry, Res};
-                                           _ -> {Entry, Res andalso Acc}
-                                       end
-                               end
-                       end,
-                       undefined,
-                       Backends),
-    case FixedIndexes of
-        undefined -> Statuses;
-        _ -> [{fixed_indexes, FixedIndexes} | Statuses]
-    end.
-
-fixed_index_status(Mod, ModState, Status) ->
-    case backend_can_index_reformat(Mod, ModState) of
-        true -> proplists:get_value(fixed_indexes, Status);
-        false -> undefined
-    end.
+    [{N, [{mod, Mod} | Mod:status(ModState)]} || {N, Mod, ModState} <- Backends].
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
@@ -415,6 +392,30 @@ backend_fix_index({_, Mod, ModState}, Bucket, StorageKey, ForUpgrade) ->
                        [Bucket, StorageKey, Mod, Reason]),
             {0, 0, length(StorageKey)}
     end.
+
+-spec fixed_index_status(state()) -> boolean().
+fixed_index_status(#state{backends=Backends}) ->
+    lists:foldl(fun({_N, Mod, ModState}, Acc) ->
+                        Status = Mod:status(ModState),
+                        case fixed_index_status(Mod, ModState, Status) of
+                            undefined -> Acc;
+                            Res ->
+                                case Acc of
+                                    undefined -> Res;
+                                    _ -> Res andalso Acc
+                                end
+                        end
+                end,
+                undefined,
+                Backends).
+
+fixed_index_status(Mod, ModState, Status) ->
+    case backend_can_index_reformat(Mod, ModState) of
+        true -> proplists:get_value(fixed_indexes, Status);
+        false -> undefined
+    end.
+
+
 
 %% ===================================================================
 %% Internal functions
