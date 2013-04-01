@@ -550,8 +550,8 @@ handle_command({get_index_entries, Opts},
     case lists:member(index_reformat, Caps) of
         true ->
             ModState = Mod:set_legacy_indexes(ModState0, not ForUpgrade),
-            Status = Mod:status(ModState),
-            case {ForUpgrade, proplists:get_value(fixed_indexes, Status)} of
+            Status = Mod:fixed_index_status(ModState),
+            case {ForUpgrade, Status} of
                 {true, true} -> {reply, done, State};
                 {_,  _} ->
                     BufferMod = riak_kv_fold_buffer,
