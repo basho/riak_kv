@@ -33,9 +33,10 @@
          put/5,
          delete/4,
          drop/1,
-         fix_index/4,
+         fix_index/3,
          mark_indexes_fixed/2,
          set_legacy_indexes/2,
+         fixed_index_status/1,
          fold_buckets/4,
          fold_keys/4,
          fold_objects/4,
@@ -211,9 +212,34 @@ index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value) ->
                     || FixedIndexes =:= false andalso IndexKey =/= LegacyKey],
     KeyDelete ++ LegacyDelete.
 
-fix_index(_Bucket, IndexKey, ForUpgrade, #state{ref=Ref,
+fix_index(IndexKeys, ForUpgrade, #state{ref=Ref,
+                                                read_opts=ReadOpts,
+                                                write_opts=WriteOpts} = State)
+                                        when is_list(IndexKeys) ->
+    FoldFun =
+        fun(ok, {Success, Ignore, Error}) ->
+               {Success+1, Ignore, Error};
+           (ignore, {Success, Ignore, Error}) ->
+               {Success, Ignore+1, Error};
+           ({error, _}, {Success, Ignore, Error}) ->
+               {Success, Ignore, Error+1}
+        end,
+    Totals =
+        lists:foldl(FoldFun, {0,0,0},
+                    [fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts)
+                        || {_Bucket, IndexKey} <- IndexKeys]),
+    {reply, Totals, State};
+fix_index(IndexKey, ForUpgrade, #state{ref=Ref,
                                                 read_opts=ReadOpts,
                                                 write_opts=WriteOpts} = State) ->
+    case fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts) of
+        Atom when is_atom(Atom) ->
+            {Atom, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
+
+fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts) ->
     case eleveldb:get(Ref, IndexKey, ReadOpts) of
         {ok, _} ->
             {Bucket, Key, Field, Value} = from_index_key(IndexKey),
@@ -224,14 +250,14 @@ fix_index(_Bucket, IndexKey, ForUpgrade, #state{ref=Ref,
             Updates = [{delete, IndexKey}, {put, NewKey, <<>>}],
             case eleveldb:write(Ref, Updates, WriteOpts) of
                 ok ->
-                    {ok, State};
+                    ok;
                 {error, Reason} ->
-                    {error, Reason, State}
+                    {error, Reason}
             end;
         not_found ->
-            {ignore, State};
+            ignore;
         {error, Reason} ->
-            {error, Reason, State}
+            {error, Reason}
     end.
 
 mark_indexes_fixed(State=#state{fixed_indexes=true}, true) ->
@@ -253,6 +279,10 @@ mark_indexes_fixed(State=#state{ref=Ref, write_opts=WriteOpts}, ForUpgrade) ->
 
 set_legacy_indexes(State, WriteLegacy) ->
     State#state{legacy_indexes=WriteLegacy}.
+
+-spec fixed_index_status(state()) -> boolean().
+fixed_index_status(#state{fixed_indexes=Fixed}) ->
+    Fixed.
 
 %% @doc Delete an object from the eleveldb backend
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
@@ -371,7 +401,9 @@ legacy_key_fold(Ref, FoldFun, Acc, FoldOpts0, Query={index, _, _}) ->
             end;
         false ->
             Acc
-    end.
+    end;
+legacy_key_fold(_Ref, _FoldFun, Acc, _FoldOpts, _Query) ->
+    Acc.
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),

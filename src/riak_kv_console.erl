@@ -422,38 +422,60 @@ format_timestamp(_Now, undefined) ->
 format_timestamp(Now, TS) ->
     riak_core_format:human_time_fmt("~.1f", timer:now_diff(Now, TS)).
 
-reformat_indexes([]) ->
-    start_index_reformat([]),
-    io:format("index reformat started with default options~n"),
-    io:format("check console.log for status information~n"),
-    ok;
-reformat_indexes(["--downgrade"]) ->
-    start_index_reformat([{downgrade, true}]),
-    io:format("index reformat downgrade started with default options~n"),
-    io:format("check console.log for status information~n"),
-    ok;
-reformat_indexes([ConcurrencyStr | Rest]) ->
-    {Valid, Opts} = try list_to_integer(ConcurrencyStr) of
-                        Concurrency ->
-                            BaseOpts = [{concurrency, Concurrency}],
-                            Final = case lists:member("--downgrade", Rest) of
-                                        true -> [{downgrade, true} | BaseOpts];
-                                        false -> BaseOpts
-                                    end,
-                            {true, Final}
-                    catch
-                        _:_ ->
-                            {false, []}
-                    end,
-    case Valid of
-        true ->
-            start_index_reformat(Opts),
-            io:format("index reformat started with options: ~p~n", [Opts]),
-            io:format("check console.log for status information~n"),
+parse_int(IntStr) ->
+    try
+        list_to_integer(IntStr)
+    catch
+        error:badarg ->
+            undefined
+    end.
+
+index_reformat_options([], Opts) ->
+    Defaults = [{concurrency, 2}, {batch_size, 100}],
+    AddIfAbsent =
+        fun({Name,Val}, Acc) ->
+            case lists:keymember(Name, 1, Acc) of
+                true ->
+                    Acc;
+                false ->
+                    [{Name, Val} | Acc]
+            end
+        end,
+    lists:foldl(AddIfAbsent, Opts, Defaults);
+index_reformat_options(["--downgrade"], Opts) ->
+    [{downgrade, true} | Opts];
+index_reformat_options(["--downgrade" | More], _Opts) ->
+    io:format("Invalid arguments after downgrade switch : ~p~n", [More]),
+    undefined;
+index_reformat_options([IntStr | Rest], Opts) ->
+    HasConcurrency = lists:keymember(concurrency, 1, Opts),
+    HasBatchSize = lists:keymember(batch_size, 1, Opts),
+    case {parse_int(IntStr), HasConcurrency, HasBatchSize} of
+        {_, true, true} ->
+            io:format("Expected --downgrade instead of ~p~n", [IntStr]),
+            undefined;
+        {undefined, _, _ } ->
+            io:format("Expected integer parameter instead of ~p~n", [IntStr]),
+            undefined;
+        {IntVal, false, false} ->
+            index_reformat_options(Rest, [{concurrency, IntVal} | Opts]);
+        {IntVal, true, false} ->
+            index_reformat_options(Rest, [{batch_size, IntVal} | Opts])
+    end;
+index_reformat_options(_, _) ->
+    undefined.
+
+reformat_indexes(Args) ->
+    Opts = index_reformat_options(Args, []),
+    case Opts of
+        undefined ->
+            io:format("Expected options: <concurrency> <batch size> [--downgrade]~n"),
             ok;
-        false ->
-            io:format("~p is not an integer~n", [ConcurrencyStr]),
-            error
+        _ ->
+            start_index_reformat(Opts),
+            io:format("index reformat started with options ~p ~n", [Opts]),
+            io:format("check console.log for status information~n"),
+            ok
     end.
 
 start_index_reformat(Opts) ->
