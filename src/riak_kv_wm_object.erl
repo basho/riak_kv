@@ -634,12 +634,8 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L, index_fields=IF
     MDDoc = riak_object:update_metadata(VclockDoc, IndexMD),
     Doc = riak_object:update_value(MDDoc, riak_kv_wm_utils:accept_value(CType, wrq:req_body(RD))),
     Options0 = case wrq:get_qs_value(?Q_RETURNBODY, RD) of ?Q_TRUE -> [returnbody]; _ -> [] end,
-    Options = case Ctx#ctx.timeout of 
-                  undefined -> Options0;
-                  Else -> [{timeout, Else} | Options0]
-              end,
-    case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw} |
-                     Options]) of
+    Options = make_options(Options0, Ctx),
+    case C:put(Doc, Options) of
         {error, Reason} ->
             handle_common_error(Reason, RD, Ctx);
         ok ->
@@ -871,29 +867,18 @@ decode_vclock_header(RD) ->
 %%      worry about the order of executing of those places.
 ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};
-ensure_doc(Ctx=#ctx{doc=undefined, bucket=B, key=K, client=C, r=R,
-        pr=PR, basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
-    Opts0 = [deletedvclock, {r, R}, {pr, PR},
-             {basic_quorum, Quorum},
-             {notfound_ok, NotFoundOK}],
-    Opts = case Ctx#ctx.timeout of 
-               undefined -> Opts0;
-               Else -> Opts0 ++ [{timeout, Else}]
-           end,
-    Ctx#ctx{doc=C:get(B, K, Opts)};
+ensure_doc(Ctx=#ctx{doc=undefined, bucket=B, key=K, client=C,
+                    basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
+    Options0 = [deletedvclock, {basic_quorum, Quorum},
+                {notfound_ok, NotFoundOK}],
+    Options = make_options(Options0, Ctx),
+    Ctx#ctx{doc=C:get(B, K, Options)};
 ensure_doc(Ctx) -> Ctx.
 
 %% @spec delete_resource(reqdata(), context()) -> {true, reqdata(), context()}
 %% @doc Delete the document specified.
-delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C, rw=RW, r=R, w=W,
-        pr=PR, pw=PW, dw=DW}) ->
-    Options0 = lists:filter(fun({_, default}) -> false; (_) -> true end,
-                            [{rw, RW}, {r, R}, {w, W}, {pr, PR}, 
-                             {pw, PW}, {dw, DW}]),
-    Options = case Ctx#ctx.timeout of 
-                  undefined -> Options0;
-                  Else -> Options0 ++ [{timeout, Else}]
-              end,
+delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C}) ->
+    Options = make_options([], Ctx),
     Result = case wrq:get_req_header(?HEAD_VCLOCK, RD) of
         undefined -> 
             C:delete(B,K,Options);
@@ -1116,4 +1101,10 @@ handle_common_error(Reason, RD, Ctx) ->
                 Ctx}
     end.
 
-
+make_options(Prev, Ctx) ->
+    NewOpts0 = [{rw, Ctx#ctx.rw}, {r, Ctx#ctx.r}, {w, Ctx#ctx.w}, 
+                {pr, Ctx#ctx.pr}, {pw, Ctx#ctx.pw}, {dw, Ctx#ctx.dw}, 
+                {timeout, Ctx#ctx.timeout}],
+    NewOpts = [ {Opt, Val} || {Opt, Val} <- NewOpts0, 
+                              Val /= undefined, Val /= default ],
+    Prev ++ NewOpts.
