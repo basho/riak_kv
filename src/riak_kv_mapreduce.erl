@@ -634,16 +634,16 @@ reduce_spec_form_test_() ->
         || F <- [reduce_set_union, reduce_sum, reduce_plist_sum] ]).
 
 reduce_sort_test() ->
-    [a,b,c] = reduce_sort([b,a,c], none),
-    [1,2,3,4,5] = reduce_sort([4,2,1,3,5], none),
-    ["a", "b", "c"] = reduce_sort(["c", "b", "a"], none),
-    [<<"a">>, <<"is">>, <<"test">>, <<"this">>] = reduce_sort([<<"this">>, <<"is">>, <<"a">>, <<"test">>], none).
+    ?assertEqual([a,b,c], reduce_sort([b,a,c], none)),
+    ?assertEqual([1,2,3,4,5], reduce_sort([4,2,1,3,5], none)),
+    ?assertEqual(["a", "b", "c"], reduce_sort(["c", "b", "a"], none)),
+    ?assertEqual([<<"a">>, <<"is">>, <<"test">>, <<"this">>], reduce_sort([<<"this">>, <<"is">>, <<"a">>, <<"test">>], none)).
 
 reduce_string_to_integer_test() ->
-    [1,2,3] = reduce_string_to_integer(["1", "2", "3"], none),
-    [1,2,3] = reduce_string_to_integer([<<"1">>, <<"2">>, <<"3">>], none),
-    [1,2,3,4,5] = reduce_string_to_integer(["1", <<"2">>, <<"3">>, "4", "5"], none),
-    [1,2,3,4,5] = reduce_string_to_integer(["1", <<"2">>, <<"3">>, 4, 5], none).
+    ?assertEqual([1,2,3], reduce_string_to_integer(["1", "2", "3"], none)),
+    ?assertEqual([1,2,3], reduce_string_to_integer([<<"1">>, <<"2">>, <<"3">>], none)),
+    ?assertEqual([1,2,3,4,5], reduce_string_to_integer(["1", <<"2">>, <<"3">>, "4", "5"], none)),
+    ?assertEqual([1,2,3,4,5], reduce_string_to_integer(["1", <<"2">>, <<"3">>, 4, 5], none)).
 
 reduce_count_inputs_test() ->
     ?assertEqual([1], reduce_count_inputs([{"b1","k1"}], none)),
@@ -660,10 +660,10 @@ reduce_count_inputs_test() ->
                         none)).
 
 reduce_limit_test() ->
-    [1,2,3] = reduce_limit([1,2,3], none),
-    [1,2] = reduce_limit([1,2,3,4,5], 2),
-    [1,2] = reduce_limit([1,2,3,4], <<"2">>),
-    [1,2] = reduce_limit([1,2,3,4], <<"{\"limit\":2}">>),
-    ?DEFAULT_REDUCE_LIMIT_SIZE = length(reduce_limit(lists:seq(1,200), none)).
+    ?assertEqual([1,2,3], reduce_limit([1,2,3], none)),
+    ?assertEqual([1,2], reduce_limit([1,2,3,4,5], 2)),
+    ?assertEqual([1,2], reduce_limit([1,2,3,4], <<"2">>)),
+    ?assertEqual([1,2], reduce_limit([1,2,3,4], <<"{\"limit\":2}">>)),
+    ?assertEqual(?DEFAULT_REDUCE_LIMIT_SIZE, length(reduce_limit(lists:seq(1,200), none))).
 
 -endif.
