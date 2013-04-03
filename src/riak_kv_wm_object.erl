@@ -283,10 +283,8 @@ malformed_timeout_param(RD, Ctx) ->
                 _:_ ->
                     {true,
                      wrq:append_to_resp_body(io_lib:format("Bad timeout "
-                                                           "value ~p, "
-                                                           "using ~p~n", 
-                                                           [TimeoutStr, 
-                                                            ?DEFAULT_TIMEOUT]),
+                                                           "value ~p~n",
+                                                           [TimeoutStr]),
                                              wrq:set_resp_header(?HEAD_CTYPE, 
                                                                  "text/plain", RD)),
                      Ctx}
