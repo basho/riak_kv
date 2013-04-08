@@ -71,24 +71,21 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(rpblistbucketsreq,
+process(#rpblistbucketsreq{timeout=T}=Req,
         #state{client=C} = State) ->
-    case C:list_buckets() of
-        {ok, Buckets} ->
-            {reply, #rpblistbucketsresp{buckets = Buckets}, State};
-        {error, Reason} ->
-            {error, {format, Reason}, State}
-    end;
+    {ok, ReqId} = C:stream_list_buckets(T),
+    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
 
 %% Start streaming in list keys
-process(#rpblistkeysreq{bucket=B}=Req, #state{client=C} = State) ->
+process(#rpblistkeysreq{bucket=B,timeout=T}=Req, #state{client=C} = State) ->
     %% stream_list_keys results will be processed by process_stream/3
-    {ok, ReqId} = C:stream_list_keys(B),
+    {ok, ReqId} = C:stream_list_keys(B, T),
     {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}}.
 
-%% @doc process_stream/3 callback. Handles streaming keys messages.
+%% @doc process_stream/3 callback. Handles streaming keys messages and
+%% streaming buckets.
 process_stream({ReqId, done}, ReqId,
-            State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
+               State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     {done, #rpblistkeysresp{done = 1}, State};
 process_stream({ReqId, From, {keys, []}}, ReqId,
                State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
@@ -106,4 +103,23 @@ process_stream({ReqId, {keys, Keys}}, ReqId,
     {reply, #rpblistkeysresp{keys = Keys}, State};
 process_stream({ReqId, Error}, ReqId,
                State=#state{ req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
+    {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}};
+%% list buckets clauses.
+process_stream({ReqId, done}, ReqId,
+               State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
+    {done, #rpblistbucketsresp{done = 1}, State};
+process_stream({ReqId, _From, {buckets, []}}, ReqId,
+               State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
+    {ignore, State};
+process_stream({ReqId, {buckets, []}}, ReqId,
+               State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
+    {ignore, State};
+process_stream({ReqId, _From, {buckets, Buckets}}, ReqId,
+               State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
+    {reply, #rpblistbucketsresp{buckets = Buckets}, State};
+process_stream({ReqId, {buckets, Buckets}}, ReqId,
+               State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
+    {reply, #rpblistbucketsresp{buckets = Buckets}, State};
+process_stream({ReqId, Error}, ReqId,
+               State=#state{ req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}}.
