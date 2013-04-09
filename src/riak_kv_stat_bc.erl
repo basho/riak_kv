@@ -143,8 +143,7 @@
 %%      of stats.
 produce_stats() ->
     lists:append(
-      [lists:flatten(backwards_compat(riak_core_stat_q:get_stats([riak_kv]))),
-       backwards_compat_pb(riak_core_stat_q:get_stats([riak_api])),
+      [lists:flatten(legacy_stats()),
        read_repair_stats(),
        level_stats(),
        pipe_stats(),
@@ -163,30 +162,56 @@ produce_stats() ->
 %% naming constraints the new names are not simply the old names
 %% with commas for underscores. Uses legacy_stat_map to generate
 %% legacys stats from the new list of stats.
-backwards_compat(Stats) ->
-    [bc_stat(Old, New, Type, Stats) || {Old, New, Type} <- legacy_stat_map()].
+legacy_stats() ->
+    {Legacy, _Calculated} = lists:foldl(fun({Old, New, Type}, {Acc, Cache}) ->
+                                                bc_stat({Old, New, Type}, Acc, Cache) end,
+                                        {[], []},
+                                        legacy_stat_map()),
+    lists:reverse(Legacy).
 
-bc_stat(Old, {New, Field}, histogram_percentile, Stats) ->
-    Stat = proplists:get_value(New, Stats),
-    Percentile = proplists:get_value(percentile, Stat),
-    Val = proplists:get_value(Field, Percentile),
-    {Old, trunc(Val)};
-bc_stat(Old, {New, Field}, histogram, Stats) ->
-    Stat = proplists:get_value(New, Stats),
-    Val = proplists:get_value(Field, Stat),
-    {Old, trunc(Val)};
-bc_stat(Old, {New, Field}, spiral, Stats) ->
-    Stat = proplists:get_value(New, Stats),
-    Val = proplists:get_value(Field, Stat),
-    {Old, Val};
-bc_stat(Old, New, counter, Stats) ->
-    Stat = proplists:get_value(New, Stats),
-    {Old, Stat}.
+%% @doc legacy stats uses multifield stats for multiple stats
+%% don't calculate the same stat many times
+get_stat(Name, Type, Cache) ->
+    get_stat(Name, Type, Cache, fun(S) -> S end).
 
+get_stat(Name, Type, Cache, ValFun) ->
+    case proplists:get_value(Name, Cache) of
+        undefined ->
+            case riak_core_stat_q:calc_stat({Name, Type}) of
+                unavailable -> {unavailable, Cache};
+                Stat ->
+                    {ValFun(Stat), [{Name, Stat} | Cache]}
+            end;
+        Cached -> {ValFun(Cached), Cache}
+    end.
+
+bc_stat({Old, {NewName, Field}, histogram}, Acc, Cache) ->
+    ValFun = fun(Stat) -> trunc(proplists:get_value(Field, Stat)) end,
+    {Val, Cache1} = get_stat(NewName, histogram, Cache, ValFun),
+    {[{Old, Val} | Acc], Cache1};
+bc_stat({Old, {NewName, Field}, histogram_percentile}, Acc, Cache) ->
+    ValFun = fun(Stat) ->
+                     Percentile = proplists:get_value(percentile, Stat),
+                     Val = proplists:get_value(Field, Percentile),
+                     trunc(Val) end,
+    {Val, Cache1} = get_stat(NewName, histogram, Cache, ValFun),
+    {[{Old, Val} | Acc], Cache1};
+bc_stat({Old, {NewName, Field}, spiral}, Acc, Cache) ->
+    ValFun = fun(Stat) ->
+                     proplists:get_value(Field, Stat)
+             end,
+    {Val, Cache1} = get_stat(NewName, spiral, Cache, ValFun),
+    {[{Old, Val} | Acc], Cache1};
+bc_stat({Old, NewName, counter}, Acc, Cache) ->
+    {Val, Cache1} = get_stat(NewName, counter, Cache),
+    {[{Old, Val} | Acc], Cache1};
+bc_stat({Old, NewName, function}, Acc, Cache) ->
+    {Val, Cache1} = get_stat(NewName, gauge, Cache),
+    {[{Old, Val} | Acc], Cache1}.
 
 %% hard coded mapping of stats to legacy format
 %% There was a enough variation in the old names that a simple
-%% concatenation of the elements in the new  stat key would not suffice
+%% concatenation of the elements in the new stat key would not suffice
 %% applications depend on these exact legacy names.
 legacy_stat_map() ->
     [{vnode_gets, {{riak_kv, vnode, gets}, one}, spiral},
@@ -232,16 +257,17 @@ legacy_stat_map() ->
      {coord_redirs_total, {riak_kv,node,puts,coord_redirs}, counter},
      {executing_mappers, {riak_kv,mapper_count}, counter},
      {precommit_fail, {riak_kv, precommit_fail}, counter},
-     {postcommit_fail, {riak_kv, postcommit_fail}, counter}
+     {postcommit_fail, {riak_kv, postcommit_fail}, counter},
+     {index_fsm_create, {{riak_kv, index, fsm, create}, one}, spiral},
+     {index_fsm_create_error, {{riak_kv, index, fsm, create, error}, one}, spiral},
+     {index_fsm_active, {riak_kv, index, fsm, active}, counter},
+     {list_fsm_create, {{riak_kv, list, fsm, create}, one}, spiral},
+     {list_fsm_create_error, {{riak_kv, list, fsm, create, error}, one}, spiral},
+     {list_fsm_active, {riak_kv, list, fsm, active}, counter},
+     {pbc_active, {riak_api, pbc_connects, active}, function},
+     {pbc_connects, {{riak_api, pbc_connects}, one}, spiral},
+     {pbc_connects_total, {{riak_api, pbc_connects}, count}, spiral}
     ].
-
-%% PB stats are now under riak_api. In the past they were part of riak_kv.
-%% This function maps those new values to the old names.
-backwards_compat_pb(Stats) ->
-    [bc_stat(Old, New, Type, Stats) || {Old, New, Type} <-
-                                     [{pbc_active, {riak_api, pbc_connects, active}, counter},
-                                      {pbc_connects, {{riak_api, pbc_connects}, one}, spiral},
-                                      {pbc_connects_total, {{riak_api, pbc_connects}, count}, spiral}]].
 
 %% @spec cpu_stats() -> proplist()
 %% @doc Get stats on the cpu, as given by the cpu_sup module
@@ -319,14 +345,15 @@ config_stats() ->
 %% @doc add the pipe stats to the blob in a style consistent
 %% with those stats already in the blob
 pipe_stats() ->
-    Stats = riak_core_stat_q:get_stats([riak_pipe]),
-    lists:flatten([bc_stat(Name, Val) || {Name, Val} <- Stats]).
+    lists:flatten([bc_stat(Name, Val) || {Name, Val} <- riak_pipe_stat:get_stats()]).
 
 %% old style blob stats don't have the app name
 %% and they have underscores, not commas
-bc_stat(Name, Val) ->
+bc_stat(Name, Val) when is_tuple(Name) ->
     StatName = join(tl(tuple_to_list(Name))),
-    bc_stat_val(StatName, Val).
+    bc_stat_val(StatName, Val);
+bc_stat(Name, Val) ->
+    bc_stat_val(Name, Val).
 
 %% Old style stats don't have tuple lists as values
 %% they have an entry per element in the complex stats tuple list

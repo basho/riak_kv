@@ -81,7 +81,7 @@ eqc_test_() ->
                                                             []}, 5)),
         %% Run the quickcheck tests
         {timeout, 60000, % do not trust the docs - timeout is in msec
-         ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop_basic_put()))))}
+         ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(prop_basic_put()))))}
        ]
       }
      ]
@@ -143,15 +143,24 @@ cleanup(started) ->
 prepare() ->
     fsm_eqc_util:start_mock_servers(),
     start_javascript().
-    
+
 test() ->
     test(100).
 
 test(N) ->
-    quickcheck(numtests(N, prop_basic_put())).
+    State = setup(),
+    try quickcheck(numtests(N, prop_basic_put()))
+    after
+        cleanup(State)
+    end.
 
 check() ->
-    check(prop_basic_put(), current_counterexample()).
+    State = setup(),
+    try check(prop_basic_put(), current_counterexample())
+    after
+        cleanup(State)
+    end.
+
 
 %%====================================================================
 %% Generators
@@ -286,8 +295,10 @@ prop_basic_put() ->
 
         N = length(VPutResp),
         {PW, RealPW} = pw_val(N, 1000000, PWSeed),
-        {W, RealW} = w_dw_val(N, 1000000, WSeed),
-        {DW, RealDW}  = w_dw_val(N, RealW, DWSeed),
+        %% DW is always at least 1 because of coordinating puts
+        {DW, RealDW}  = w_dw_val(N, 1, DWSeed),
+        %% W can be 0
+        {W, RealW0} = w_dw_val(N, 0, WSeed),
 
         %% {Q, _Ring, NodeStatus} = fsm_eqc_util:mock_ring(N + NQdiff, NodeStatus0), 
 
@@ -347,8 +358,12 @@ prop_basic_put() ->
         %% Work out the expected results.  Have to determine the effective dw
         %% the FSM would have used to know when it would have stopped processing responses
         %% and returned to the client.
-        EffDW = get_effective_dw(RealDW, Options, Postcommit),
-        ExpectObject = expect_object(H, RealW, EffDW, AllowMult),
+        EffDW0 = get_effective_dw(RealDW, Options, Postcommit),
+
+        EffDW = erlang:max(EffDW0, RealPW),
+        RealW = erlang:max(EffDW, RealW0),
+
+        ExpectObject = expect_object(H, RealW, EffDW, RealPW, AllowMult, PL2),
         {Expected, ExpectedPostCommits, ExpectedVnodePuts} = 
             expect(VPutResp, H, N, PW, RealPW, W, RealW, DW, EffDW, Options,
                    Precommit, Postcommit, ExpectObject, PL2),
@@ -367,8 +382,12 @@ prop_basic_put() ->
                                    {ok, RetObj, Info0} ->
                                        {{ok, RetObj}, Info0};
                                    {error, Reason, Info0} ->
-                                       {{error, Reason}, Info0}
-                               end,                                                 
+                                       {{error, Reason}, Info0};
+                                   {error, Reason, Info0, Info1} ->
+                                       {{error, Reason, Info0, Info1}, undefined};
+                                   {error, Reason, Info0, Info1, _Info2} ->
+                                       {{error, Reason, Info0, Info1}, undefined}
+                               end,
 
         ?WHENFAIL(
            begin
@@ -522,7 +541,7 @@ expect(VPutResp, H, N, PW, RealPW, W, RealW, DW, EffDW, Options,
             DW =:= garbage ->
                 {{error, {dw_val_violation, garbage}}, 0};
 
-            RealW > N orelse EffDW > N orelse RealPW > N ->
+            RealW > N orelse EffDW > N orelse RealPW > N  ->
                 {{error, {n_val_violation, N}}, 0};
 
             RealPW > NumPrimaries ->
@@ -550,12 +569,15 @@ expect(VPutResp, H, N, PW, RealPW, W, RealW, DW, EffDW, Options,
                     [{w, _, _}, {fail, _, _} | _] ->
                         {maybe_add_robj({error, local_put_failed}, ReturnObj, Precommit, Options), VPuts};
                     _ ->
-                        {expect(HNoTimeout, {H, N, RealW, EffDW, 0, 0, 0, ReturnObj, Precommit}, Options), 
+                        
+                        {expect(HNoTimeout, {H, N, RealW, EffDW, RealPW, 0, 0, 0, 0, ReturnObj, Precommit, PL2}, Options), 
                          VPuts}
                 end
         end,
     ExpectPostcommit = case {ExpectResult, Postcommit} of
                            {{error, _}, _} ->
+                               [];
+                           {{error, _, _, _}, _} ->
                                [];
                            {timeout, _} ->
                                [];
@@ -569,7 +591,7 @@ expect(VPutResp, H, N, PW, RealPW, W, RealW, DW, EffDW, Options,
                        end,
     {ExpectResult, ExpectPostcommit, ExpectVnodePuts}.
 
-expect([], {_H, _N, _W, _DW, _NumW, _NumDW, _NumFail, RObj, Precommit}=S,
+expect([], {_H, _N, _W, _DW, _PW, _NumW, _NumDW, _NumPW, _NumFail, RObj, Precommit, _PL}=S,
       Options) ->
     case enough_replies(S) of % this handles W=0 case
         {true, Expect} ->
@@ -577,9 +599,9 @@ expect([], {_H, _N, _W, _DW, _NumW, _NumDW, _NumFail, RObj, Precommit}=S,
         false ->
             maybe_add_robj({error, timeout}, RObj, Precommit, Options)
     end;
-expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit},
+expect([{w, _Idx, _}|Rest], {H, N, W, DW, PW, NumW, NumDW, NumPW,  NumFail, RObj, Precommit, PL},
       Options) ->
-    S = {H, N, W, DW, NumW + 1, NumDW, NumFail, RObj, Precommit},
+    S = {H, N, W, DW, PW, NumW + 1, NumDW, NumPW, NumFail, RObj, Precommit, PL},
 
     case enough_replies(S) of
         {true, Expect} ->
@@ -588,9 +610,12 @@ expect([{w, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit},
         false ->
             expect(Rest, S, Options)
     end;
-expect([DWReply|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit},
+expect([DWReply|Rest], {H, N, W, DW, PW, NumW, NumDW, NumPW, NumFail, RObj, Precommit, PL},
        Options) when element(1, DWReply) == dw->
-    S = {H, N, W, DW, NumW, NumDW + 1, NumFail, RObj, Precommit},
+    Idx = element(2, DWReply),
+    POK = primacy(Idx, PL),
+
+    S = {H, N, W, DW, PW, NumW, NumDW + 1, NumPW+POK, NumFail, RObj, Precommit, PL},
     case enough_replies(S) of
         {true, Expect} ->
             maybe_add_robj(Expect, RObj, Precommit, Options);
@@ -598,12 +623,12 @@ expect([DWReply|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit},
             expect(Rest, S, Options)
     end;
 %% Fail on coordindating vnode - request fails
-expect([{fail, {1, _}, _}|_Rest], {_H, _N, _W, _DW, _NumW, _NumDW, _NumFail, RObj, Precommit},
+expect([{fail, {1, _}, _}|_Rest], {_H, _N, _W, _DW, _PW, _NumW, _NumDW, _NumPW, _NumFail, RObj, Precommit, _PL},
        Options) ->
     maybe_add_robj({error, too_many_fails}, RObj, Precommit, Options);
-expect([{fail, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit},
+expect([{fail, _, _}|Rest], {H, N, W, DW, PW, NumW, NumDW, NumPW, NumFail, RObj, Precommit, PL},
        Options) ->
-    S = {H, N, W, DW, NumW, NumDW, NumFail + 1, RObj, Precommit},
+    S = {H, N, W, DW, PW, NumW, NumDW, NumPW, NumFail + 1, RObj, Precommit, PL},
     case enough_replies(S) of
         {true, Expect} ->
             maybe_add_robj(Expect, RObj, Precommit, Options);
@@ -613,29 +638,32 @@ expect([{fail, _, _}|Rest], {H, N, W, DW, NumW, NumDW, NumFail, RObj, Precommit}
 expect([{{timeout,_Stage}, _, _}|Rest], S, Options) ->
     expect(Rest, S, Options).
 
-expect_object(H, W, DW, AllowMult) ->
-    expect_object(filter_timeouts(H), W, DW, AllowMult, 0, 0, []).
+expect_object(H, W, DW, PW, AllowMult, PL) ->
+    expect_object(filter_timeouts(H), W, DW, PW, AllowMult, PL, 0, 0, 0, []).
 
 %% Once W and DW are met, reconcile the returned object
-expect_object([], _W, _DW, _AllowMult, _NumW, _NumDW, _Objs) ->
+expect_object([], _W, _DW, _PW, _AllowMult, _PL, _NumW, _NumDW, _NumPW, _Objs) ->
     noreply;
-expect_object([{w,_,_} | H], W, DW, AllowMult, NumW, NumDW, Objs) ->
-    case NumW+1 >= W andalso NumDW >= DW andalso Objs /= [] of
+expect_object([{w,_,_} | H], W, DW, PW, AllowMult, PL, NumW, NumDW, NumPW, Objs) ->
+    case NumW+1 >= W andalso NumDW >= DW andalso
+            Objs /= [] andalso NumPW >= PW of
         true ->
             riak_object:reconcile(Objs, AllowMult);
         false ->
-            expect_object(H, W, DW, AllowMult, NumW + 1, NumDW, Objs)
+            expect_object(H, W, DW, PW, AllowMult, PL, NumW + 1, NumDW, NumPW, Objs)
     end;
  %%   expect_object(H, W, DW, AllowMult, NumW + 1, NumDW, Objs);
-expect_object([{dw,_,Obj, _} | H], W, DW, AllowMult, NumW, NumDW, Objs) ->
-    case NumW >= W andalso NumDW +1 >= DW of
+expect_object([{dw,Idx,Obj, _} | H], W, DW,  PW, AllowMult, PL, NumW, NumDW, NumPW, Objs) ->
+    POK = primacy(Idx, PL),
+    case NumW >= W andalso NumDW +1 >= DW andalso NumPW+POK >= PW of
         true ->
             riak_object:reconcile([Obj | Objs], AllowMult);
         false ->
-            expect_object(H, W, DW, AllowMult, NumW, NumDW + 1, [Obj | Objs])
+            expect_object(H, W, DW, PW, AllowMult, PL, NumW, NumDW + 1,
+                NumPW+POK, [Obj | Objs])
     end;
-expect_object([_ | H], W, DW, AllowMult, NumW, NumDW, Objs) ->
-    expect_object(H, W, DW, AllowMult, NumW, NumDW, Objs).
+expect_object([_ | H], W, DW, PW, AllowMult, PL, NumW, NumDW, NumPW, Objs) ->
+    expect_object(H, W, DW, PW, AllowMult, PL, NumW, NumDW, NumPW, Objs).
 
 %% Work out W and DW given a seed.
 %% Generate a value from 0..N+1
@@ -643,7 +671,7 @@ w_dw_val(_N, _Min, garbage) ->
     {garbage, 1000000};
 w_dw_val(N, Min, Seed) when is_number(Seed) ->
     Val = Seed rem (N + 2),
-    {Val, erlang:max(1, erlang:min(Min, Val))};
+    {Val, erlang:max(1, erlang:max(Min, Val))};
 w_dw_val(N, Min, Seed) ->
     Val = case Seed of
               one -> 1;
@@ -651,7 +679,17 @@ w_dw_val(N, Min, Seed) ->
               X when X == quorum; X == default; X == missing -> (N div 2) + 1;
               _ -> Seed
           end,
-    {Seed, erlang:max(1, erlang:min(Min, Val))}.
+    {Seed, erlang:max(Min, Val)}.
+
+%% Is the given index a primary index accoring to the preflist?
+primacy(Idx, Preflist) ->
+    case lists:keyfind(Idx, 1, [{Index, Primacy} ||
+                                   {{Index, _Pid}, Primacy} <- Preflist]) of
+        {Idx, primary} ->
+            1;
+        _ ->
+            0
+    end.
 
 %% Work out W and DW given a seed.
 %% Generate a value from 0..N+1
@@ -700,23 +738,25 @@ filter_timeouts(H) ->
                     (_) -> true
                  end, H).
 
-enough_replies({_H, N, W, DW, NumW, NumDW, NumFail, _RObj, _Precommit}) ->
-    MaxWFails =  N - W,
-    MaxDWFails =  N - DW,
-    if
-        NumW >= W andalso NumDW >= DW ->
-            {true, ok};
+%% All quorum satisfied
+enough_replies({_H, _N, W, DW, PW, NumW, NumDW, NumPW, _NumFail, _RObj, _Precommit, _PL}) when
+      NumW >= W, NumDW >= DW, NumPW >= PW ->
+    {true, ok};
+%% Too many failures to reach PW & PW >= DW
+enough_replies({_H, N, _W, DW, PW, _NumW, _NumDW, NumPW, NumFail, _RObj, _Precommit, _PL}) when
+      NumFail > N - PW, PW >= DW ->
+    {true, {error, {pw_val_unsatisfied, PW, NumPW}}};
+%% Too many failures to reach DW
+enough_replies({_H, N, _W, DW, _PW, _NumW, NumDW, _NumPW, NumFail, _RObj, _Precommit, _PL}) when
+      NumFail > N - DW ->
+    {true, {error, {dw_val_unsatisfied, DW, NumDW}}};
+%% Got N responses, but not PW
+enough_replies({_H, N, _W, _DW, PW, _NumW, NumDW, NumPW, NumFail, _RObj, _Precommit, _PL}) when
+      NumFail + NumDW >= N, NumPW < PW ->
+    {true, {error, {pw_val_unsatisfied, PW, NumPW}}};
+enough_replies(_) ->
+    false.
 
-        NumW < W andalso NumFail > MaxWFails ->
-            {true, {error, too_many_fails}};
-
-        NumW >= W andalso NumFail > MaxDWFails ->
-            {true, {error, too_many_fails}};
-
-        true ->
-            false
-    end.
- 
 maybe_add_robj(ok, RObj, Precommit, Options) ->
     case precommit_should_fail(Precommit, Options) of
         {true, Expect} ->

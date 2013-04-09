@@ -28,6 +28,7 @@
 %% API
 -export([test_vnode/1, put/7]).
 -export([start_vnode/1,
+         start_vnodes/1,
          get/3,
          del/3,
          put/6,
@@ -46,7 +47,8 @@
          repair_filter/1,
          hashtree_pid/1,
          rehash/3,
-         request_hashtree_pid/1]).
+         request_hashtree_pid/1,
+         reformat_object/2]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -142,6 +144,9 @@ maybe_create_hashtrees(true, State=#state{idx=Index}) ->
 %% API
 start_vnode(I) ->
     riak_core_vnode_master:get_vnode_pid(I, riak_kv_vnode).
+
+start_vnodes(IdxList) ->
+    riak_core_vnode_master:get_vnode_pid(IdxList, riak_kv_vnode).
 
 test_vnode(I) ->
     riak_core_vnode:start_link(riak_kv_vnode, I, infinity).
@@ -317,6 +322,13 @@ rehash(Preflist, Bucket, Key) ->
                                    {rehash, Bucket, Key},
                                    ignore,
                                    riak_kv_vnode_master).
+
+-spec reformat_object(index(), {riak_object:bucket(), riak_object:key()}) ->
+                             ok | {error, term()}.
+reformat_object(Partition, BKey) ->
+    riak_core_vnode_master:sync_spawn_command({Partition, node()},
+                                              {reformat_object, BKey},
+                                              riak_kv_vnode_master).
 
 %% VNode callbacks
 
@@ -512,7 +524,82 @@ handle_command(?KV_VNODE_STATUS_REQ{},
                             modstate=ModState}) ->
     BackendStatus = {backend_status, Mod, Mod:status(ModState)},
     VNodeStatus = [BackendStatus],
-    {reply, {vnode_status, Index, VNodeStatus}, State}.
+    {reply, {vnode_status, Index, VNodeStatus}, State};
+handle_command({reformat_object, BKey}, _Sender, State) ->
+    {Reply, UpdState} = do_reformat(BKey, State),
+    {reply, Reply, UpdState};
+handle_command({fix_incorrect_index_entry, {done, ForUpgrade}}, _Sender,
+               State=#state{mod=Mod, modstate=ModState}) ->
+    case Mod:mark_indexes_fixed(ModState, ForUpgrade) of %% only defined for eleveldb backend
+        {ok, NewModState} ->
+            {reply, ok, State#state{modstate=NewModState}};
+        {error, _Reason} ->
+            {reply, error, State}
+    end;
+handle_command({fix_incorrect_index_entry, Keys, ForUpgrade},
+               _Sender,
+               State=#state{mod=Mod,
+                            modstate=ModState}) ->
+    Reply =
+        case Mod:fix_index(Keys, ForUpgrade, ModState) of
+            {ok, _UpModState} ->
+                ok;
+            {ignore, _UpModState} ->
+                ignore;
+            {error, Reason, _UpModState} ->
+                {error, Reason};
+            {reply, Totals, _UpModState} ->
+                Totals
+        end,
+    {reply, Reply, State};
+handle_command({get_index_entries, Opts},
+               Sender,
+               State=#state{mod=Mod,
+                            modstate=ModState0}) ->
+    ForUpgrade = not proplists:get_value(downgrade, Opts, false),
+    BufferSize = proplists:get_value(batch_size, Opts, 1),
+    {ok, Caps} = Mod:capabilities(ModState0),
+    case lists:member(index_reformat, Caps) of
+        true ->
+            ModState = Mod:set_legacy_indexes(ModState0, not ForUpgrade),
+            Status = Mod:fixed_index_status(ModState),
+            case {ForUpgrade, Status} of
+                {true, true} -> {reply, done, State};
+                {_,  _} ->
+                    BufferMod = riak_kv_fold_buffer,
+                    ResultFun =
+                        fun(Results) ->
+                            % Send result batch and wait for acknowledgement
+                            % before moving on (backpressure to avoid flooding caller).
+                            BatchRef = make_ref(),
+                            riak_core_vnode:reply(Sender, {self(), BatchRef, Results}),
+                            Monitor = riak_core_vnode:monitor(Sender),
+                            receive
+                                {ack_keys, BatchRef} ->
+                                    erlang:demonitor(Monitor, [flush]);
+                                {'DOWN', Monitor, process, _Pid, _Reason} ->
+                                    throw(index_reformat_client_died)
+                            end
+                        end,
+                    Buffer = BufferMod:new(BufferSize, ResultFun),
+                    FoldFun = fun(B, K, Buf) -> BufferMod:add({B, K}, Buf) end,
+                    FinishFun =
+                        fun(FinalBuffer) ->
+                            BufferMod:flush(FinalBuffer),
+                            riak_core_vnode:reply(Sender, done)
+                        end,
+                    FoldOpts = [{index, incorrect_format, ForUpgrade}, async_fold],
+                    case list(FoldFun, FinishFun, Mod, fold_keys, ModState, FoldOpts, Buffer) of
+                        {async, AsyncWork} ->
+                            {async, {fold, AsyncWork, FinishFun}, Sender, State};
+                        _ ->
+                            {noreply, State}
+                    end
+            end;
+        false ->
+            lager:error("Backend ~p does not support incorrect index query", [Mod]),
+            {reply, ignore, State}
+    end.
 
 %% @doc Handle a coverage request.
 %% More information about the specification for the ItemFilter
@@ -654,8 +741,8 @@ handoff_finished(_TargetNode, State) ->
 
 handle_handoff_data(BinObj, State) ->
     PBObj = riak_core_pb:decode_riakobject_pb(zlib:unzip(BinObj)),
-    BKey = {PBObj#riakobject_pb.bucket,PBObj#riakobject_pb.key},
-    case do_diffobj_put(BKey, binary_to_term(PBObj#riakobject_pb.val), State) of
+    {B, K} = BKey = {PBObj#riakobject_pb.bucket,PBObj#riakobject_pb.key},
+    case do_diffobj_put(BKey, riak_object:from_binary(B, K, PBObj#riakobject_pb.val), State) of
         {ok, UpdModState} ->
             {reply, ok, State#state{modstate=UpdModState}};
         {error, Reason, UpdModState} ->
@@ -665,8 +752,13 @@ handle_handoff_data(BinObj, State) ->
     end.
 
 encode_handoff_item({B, K}, V) ->
+    %% before sending data to another node change binary version
+    %% to one supported by the cluster. This way we don't send
+    %% unsupported formats to old nodes
+    ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
+    Val = riak_object:to_binary_version(ObjFmt, B, K, V),
     zlib:zip(riak_core_pb:encode_riakobject_pb(
-               #riakobject_pb{bucket=B, key=K, val=V})).
+               #riakobject_pb{bucket=B, key=K, val=Val})).
 
 is_empty(State=#state{mod=Mod, modstate=ModState}) ->
     {Mod:is_empty(ModState), State}.
@@ -821,7 +913,8 @@ prepare_put(State=#state{vnodeid=VId,
         false ->
             prepare_put(State, PutArgs, IndexBackend)
     end.
-prepare_put(#state{vnodeid=VId,
+prepare_put(#state{idx=Idx,
+                   vnodeid=VId,
                    mod=Mod,
                    modstate=ModState},
             PutArgs=#putargs{bkey={Bucket, Key},
@@ -833,8 +926,22 @@ prepare_put(#state{vnodeid=VId,
                              prunetime=PruneTime,
                              counter_op = CounterOp},
             IndexBackend) ->
-    case Mod:get(Bucket, Key, ModState) of
-        {error, not_found, _UpdModState} ->
+    GetReply =
+        case Mod:get(Bucket, Key, ModState) of
+            {error, not_found, _UpdModState} ->
+                ok;
+            % NOTE: bad_crc is NOT an official backend response. It is
+            % specific to bitcask currently and handling it may be changed soon.
+            % A standard set of responses will be agreed on
+            % https://github.com/basho/riak_kv/issues/496
+            {error, bad_crc, _UpdModState} ->
+                lager:info("Bad CRC detected while reading Partition=~p, Bucket=~p, Key=~p", [Idx, Bucket, Key]),
+                ok;
+            {ok, GetVal, _UpdModState} ->
+                {ok, GetVal}
+        end,
+    case GetReply of
+        ok ->
             case IndexBackend of
                 true ->
                     IndexSpecs = riak_object:index_specs(RObj);
@@ -858,8 +965,8 @@ prepare_put(#state{vnodeid=VId,
                                  RObj
                          end,
             {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
-        {ok, Val, _UpdModState} ->
-            OldObj = binary_to_term(Val),
+        {ok, Val} ->
+            OldObj = object_from_binary(Bucket, Key, Val),
             case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs};
@@ -915,7 +1022,8 @@ perform_put({true, Obj},
                      bkey={Bucket, Key},
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
-    Val = term_to_binary(Obj),
+    ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
+    Val = riak_object:to_binary(ObjFmt, Obj),
     case Mod:put(Bucket, Key, IndexSpecs, Val, ModState) of
         {ok, UpdModState} ->
             update_hashtree(Bucket, Key, Val, State),
@@ -929,6 +1037,29 @@ perform_put({true, Obj},
             Reply = {fail, Idx, ReqID}
     end,
     {Reply, State#state{modstate=UpdModState}}.
+
+do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
+    case Mod:get(Bucket, Key, ModState) of
+        {error, not_found, _UpdModState} ->
+            Reply = {error, not_found},
+            UpdState = State;
+        {ok, ObjBin, _UpdModState} ->
+            %% since it is assumed capabilities have been properly set
+            %% to the desired version, to reformat, all we need to do
+            %% is submit a new write
+            RObj = riak_object:from_binary(Bucket, Key, ObjBin),
+            PutArgs = #putargs{returnbody=false,
+                               bkey=BKey,
+                               reqid=undefined,
+                               index_specs=[]},
+            case perform_put({true, RObj}, State, PutArgs) of
+                {{fail, _, _}, UpdState}  ->
+                    Reply = {error, backend_error};
+                {_, UpdState} ->
+                    Reply = ok
+            end
+    end,
+    {Reply, UpdState}.
 
 %% @private
 %% enforce allow_mult bucket property so that no backend ever stores
@@ -998,7 +1129,7 @@ do_get(_Sender, BKey, ReqID,
 do_get_term(BKey, Mod, ModState) ->
     case do_get_binary(BKey, Mod, ModState) of
         {ok, Bin, _UpdModState} ->
-            {ok, binary_to_term(Bin)};
+            {ok, object_from_binary(BKey, Bin)};
         %% @TODO Eventually it would be good to
         %% make the use of not_found or notfound
         %% consistent throughout the code.
@@ -1168,7 +1299,7 @@ do_get_vclocks(KeyList,_State=#state{mod=Mod,modstate=ModState}) ->
 do_get_vclock({Bucket, Key}, Mod, ModState) ->
     case Mod:get(Bucket, Key, ModState) of
         {error, not_found, _UpdModState} -> vclock:fresh();
-        {ok, Val, _UpdModState} -> riak_object:vclock(binary_to_term(Val))
+        {ok, Val, _UpdModState} -> riak_object:vclock(object_from_binary(Bucket, Key, Val))
     end.
 
 %% @private
@@ -1188,7 +1319,8 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                 false ->
                     IndexSpecs = []
             end,
-            Val = term_to_binary(DiffObj),
+            ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
+            Val = riak_object:to_binary(ObjFmt, DiffObj),
             Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
             case Res of
                 {ok, _UpdModState} ->
@@ -1199,7 +1331,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
             end,
             Res;
         {ok, Val0, _UpdModState} ->
-            OldObj = binary_to_term(Val0),
+            OldObj = object_from_binary(Bucket, Key, Val0),
             %% Merge handoff values with the current - possibly discarding
             %% if out of date.  Ok to set VId/Starttime undefined as
             %% they are not used for non-coordinating puts.
@@ -1214,7 +1346,8 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                         false ->
                             IndexSpecs = []
                     end,
-                    Val = term_to_binary(AMObj),
+                    ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
+                    Val = riak_object:to_binary(ObjFmt, AMObj),
                     Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
                     case Res of
                         {ok, _UpdModState} ->
@@ -1401,6 +1534,14 @@ object_info({Bucket, _Key}=BKey) ->
     Hash = riak_core_util:chash_key(BKey),
     {Bucket, Hash}.
 
+object_from_binary({B,K}, ValBin) ->
+    object_from_binary(B, K, ValBin).
+object_from_binary(B, K, ValBin) ->
+    case riak_object:from_binary(B, K, ValBin) of
+        {error, R} -> throw(R);
+        Obj -> Obj
+    end.
+
 
 -ifdef(TEST).
 
@@ -1517,6 +1658,9 @@ bitcask_test_dir() ->
 eleveldb_test_dir() ->
     "./test.eleveldb-temp-data".
 
+clean_test_dirs() ->
+    ?cmd("rm -rf " ++ bitcask_test_dir()),
+    ?cmd("rm -rf " ++ eleveldb_test_dir()).
 
 backend_with_known_key(BackendMod) ->
     dummy_backend(BackendMod),
@@ -1536,6 +1680,7 @@ backend_with_known_key(BackendMod) ->
 list_buckets_test_() ->
     {foreach,
      fun() ->
+             clean_test_dirs(),
              application:start(sasl),
              Env = application:get_all_env(riak_kv),
              application:start(folsom),
@@ -1594,6 +1739,7 @@ list_buckets_test_i(BackendMod) ->
     flush_msgs().
 
 filter_keys_test() ->
+    clean_test_dirs(),
     {S, B, K} = backend_with_known_key(riak_kv_memory_backend),
     Caller1 = new_result_listener(keys),
     handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
@@ -1614,6 +1760,30 @@ filter_keys_test() ->
     ?assertEqual({ok, []}, results_from_listener(Caller3)),
 
     flush_msgs().
+
+%% include bitcask.hrl for HEADER_SIZE macro
+-include_lib("bitcask/include/bitcask.hrl").
+
+%% Verify that a bad CRC on read will not crash the vnode, which when done in
+%% preparation for a write prevents the write from going through.
+bitcask_badcrc_test() ->
+    clean_test_dirs(),
+    {S, B, K} = backend_with_known_key(riak_kv_bitcask_backend),
+    DataDir = filename:join(bitcask_test_dir(), "0"),
+    [DataFile] = filelib:wildcard(DataDir ++ "/*.data"),
+    {ok, Fh} = file:open(DataFile, [read, write]),
+    ok = file:pwrite(Fh, ?HEADER_SIZE, <<0>>),
+    file:close(Fh),
+    O = riak_object:new(B, K, <<"y">>),
+    {noreply, _} = handle_command(?KV_PUT_REQ{bkey={B,K},
+                                               object=O,
+                                               req_id=123,
+                                               start_time=riak_core_util:moment(),
+                                               options=[]},
+                                   {raw, 456, self()},
+                                   S),
+    flush_msgs().
+
 
 new_result_listener(Type) ->
     case Type of

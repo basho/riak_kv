@@ -506,7 +506,27 @@ share_segment_store(State, #state{ref=Ref, path=Path}) ->
 -spec hash(term()) -> binary().
 hash(X) ->
     %% erlang:phash2(X).
-    crypto:sha(term_to_binary(X)).
+    sha(term_to_binary(X)).
+
+sha(Bin) ->
+    Chunk = app_helper:get_env(riak_kv, anti_entropy_sha_chunk, 4096),
+    sha(Chunk, Bin).
+
+sha(Chunk, Bin) ->
+    Ctx1 = crypto:sha_init(),
+    Ctx2 = sha(Chunk, Bin, Ctx1),
+    SHA = crypto:sha_final(Ctx2),
+    SHA.
+
+sha(Chunk, Bin, Ctx) ->
+    case Bin of
+        <<Data:Chunk/binary, Rest/binary>> ->
+            Ctx2 = crypto:sha_update(Ctx, Data),
+            sha(Chunk, Rest, Ctx2);
+        Data ->
+            Ctx2 = crypto:sha_update(Ctx, Data),
+            Ctx2
+    end.
 
 -spec update_levels(integer(),
                     [{integer(), [{integer(), binary()}]}],
@@ -1026,6 +1046,19 @@ delta_test() ->
 %%%===================================================================
 
 -ifdef(EQC).
+sha_test_() ->
+    {timeout, 60,
+     fun() ->
+             ?assert(eqc:quickcheck(eqc:testing_time(4, prop_sha())))
+     end
+    }.
+
+prop_sha() ->
+    ?FORALL(Size, choose(256, 1024*1024),
+            ?FORALL(Chunk, choose(1, Size),
+                    ?FORALL(Bin, binary(Size),
+                            sha(Chunk, Bin) =:= crypto:sha(Bin)))).
+
 eqc_test_() ->
     {timeout, 5,
      fun() ->

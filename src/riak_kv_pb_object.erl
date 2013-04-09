@@ -50,6 +50,11 @@
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_pb/include/riak_pb_kv_codec.hrl").
 
+-ifdef(TEST).
+-compile([export_all]).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 -behaviour(riak_api_pb_service).
 
 -export([init/0,
@@ -64,8 +69,6 @@
                 req,       % current request (for multi-message requests like list keys)
                 req_ctx,   % context to go along with request (partial results, request ids etc)
                 client_id = <<0,0,0,0>> }). % emulate legacy API when vnode_vclocks is true
-
--define(DEFAULT_TIMEOUT, 60000).
 
 %% @doc init/0 callback. Returns the service internal start
 %% state.
@@ -100,14 +103,20 @@ process(#rpbsetclientidreq{client_id = ClientId}, State) ->
                end,
     {reply, rpbsetclientidresp, NewState};
 
+process(#rpbgetreq{bucket = <<>>}, State) ->
+    {error, "Bucket cannot be zero-length", State};
+process(#rpbgetreq{key = <<>>}, State) ->
+    {error, "Key cannot be zero-length", State};
 process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    basic_quorum=BQ, if_modified=VClock,
-                   head=Head, deletedvclock=DeletedVClock}, #state{client=C} = State) ->
+                   head=Head, deletedvclock=DeletedVClock,
+                   timeout=Timeout}, #state{client=C} = State) ->
     R = decode_quorum(R0),
     PR = decode_quorum(PR0),
     case C:get(B, K, make_option(deletedvclock, DeletedVClock) ++
                    make_option(r, R) ++
                    make_option(pr, PR) ++
+                   make_option(timeout, Timeout) ++
                    make_option(notfound_ok, NFOk) ++
                    make_option(basic_quorum, BQ)) of
         {ok, O} ->
@@ -139,6 +148,10 @@ process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
             {error, {format,Reason}, State}
     end;
 
+process(#rpbputreq{bucket = <<>>}, State) ->
+    {error, "Bucket cannot be zero-length", State};
+process(#rpbputreq{key = <<>>}, State) ->
+    {error, "Key cannot be zero-length", State};
 process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
                    if_not_modified=NotMod, if_none_match=NoneMatch} = Req,
         #state{client=C} = State) when NotMod; NoneMatch ->
@@ -166,7 +179,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
 
 process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                    w=W0, dw=DW0, pw=PW0, return_body=ReturnBody,
-                   return_head=ReturnHead},
+                   return_head=ReturnHead, timeout=Timeout},
         #state{client=C} = State) ->
 
     case K of
@@ -196,7 +209,8 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                       end
               end,
     case C:put(O, make_option(w, W) ++ make_option(dw, DW) ++
-                   make_option(pw, PW) ++ [{timeout, default_timeout()} | Options]) of
+                   make_option(pw, PW) ++ make_option(timeout, Timeout) ++ 
+                   Options) of
         ok when is_binary(ReturnKey) ->
             PutResp = #rpbputresp{key = ReturnKey},
             {reply, PutResp, State};
@@ -226,7 +240,8 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
     end;
 
 process(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
-                   r=R0, w=W0, pr=PR0, pw=PW0, dw=DW0, rw=RW0},
+                   r=R0, w=W0, pr=PR0, pw=PW0, dw=DW0, rw=RW0,
+                   timeout=Timeout},
         #state{client=C} = State) ->
     W = decode_quorum(W0),
     PW = decode_quorum(PW0),
@@ -240,7 +255,8 @@ process(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
         make_option(rw, RW) ++
         make_option(pr, PR) ++
         make_option(pw, PW) ++
-        make_option(dw, DW),
+        make_option(dw, DW) ++
+        make_option(timeout, Timeout),
     Result = case PbVc of
                  undefined ->
                      C:delete(B, K, Options);
@@ -299,5 +315,63 @@ erlify_rpbvc(PbVc) ->
 pbify_rpbvc(Vc) ->
     zlib:zip(term_to_binary(Vc)).
 
-default_timeout() ->
-    ?DEFAULT_TIMEOUT.
+%% ===================================================================
+%% Tests
+%% ===================================================================
+-ifdef(TEST).
+
+-define(CODE(Msg), riak_pb_codec:msg_code(Msg)).
+-define(PAYLOAD(Msg), riak_kv_pb:encode(Msg)).
+
+empty_bucket_key_test_() ->
+    Name = "empty_bucket_key_test",
+    SetupFun =  fun (load) ->
+                        application:set_env(riak_kv, storage_backend, riak_kv_memory_backend),
+                        application:set_env(riak_api, pb_ip, "127.0.0.1"),
+                        application:set_env(riak_api, pb_port, 32767);
+                    (_) -> ok end,
+    {setup,
+     riak_kv_test_util:common_setup(Name, SetupFun),
+     riak_kv_test_util:common_cleanup(Name, SetupFun),
+     [{"RpbPutReq with empty key is disallowed",
+       ?_assertMatch([0|_], request(#rpbputreq{bucket = <<"foo">>,
+                                               key = <<>>,
+                                               content=#rpbcontent{value = <<"dummy">>}}))},
+      {"RpbPutReq with empty bucket is disallowed",
+       ?_assertMatch([0|_], request(#rpbputreq{bucket = <<>>,
+                                               key = <<"foo">>,
+                                               content=#rpbcontent{value = <<"dummy">>}}))},
+      {"RpbGetReq with empty key is disallowed",
+       ?_assertMatch([0|_], request(#rpbgetreq{bucket = <<"foo">>,
+                                               key = <<>>}))},
+      {"RpbGetReq with empty bucket is disallowed",
+       ?_assertMatch([0|_], request(#rpbgetreq{bucket = <<>>,
+                                               key = <<"foo">>}))}]}.
+
+%% Utility funcs copied from riak_api/test/pb_service_test.erl
+
+request(Msg) when is_tuple(Msg) andalso is_atom(element(1, Msg)) ->
+    request(?CODE(element(1,Msg)), iolist_to_binary(?PAYLOAD(Msg))).
+
+request(Code, Payload) when is_binary(Payload), is_integer(Code) ->
+    Connection = new_connection(),
+    ?assertMatch({ok, _}, Connection),
+    {ok, Socket} = Connection,
+    request(Code, Payload, Socket).
+
+request(Code, Payload, Socket) when is_binary(Payload), is_integer(Code) ->
+    ?assertEqual(ok, gen_tcp:send(Socket, <<Code:8, Payload/binary>>)),
+    Result = gen_tcp:recv(Socket, 0),
+    ?assertMatch({ok, _}, Result),
+    {ok, Response} = Result,
+    Response.
+
+new_connection() ->
+    new_connection([{packet,4}, {header, 1}]).
+
+new_connection(Options) ->
+    Host = app_helper:get_env(riak_api, pb_ip),
+    Port = app_helper:get_env(riak_api, pb_port),
+    gen_tcp:connect(Host, Port, [binary, {active, false},{nodelay, true}|Options]).
+
+-endif.

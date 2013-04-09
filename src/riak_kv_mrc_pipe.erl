@@ -283,7 +283,7 @@ mapred_stream_sink(Inputs, Query, Timeout) ->
                           sender={Sender,SenderMon},
                           timer={Timer,PipeRef},
                           keeps=NumKeeps}}
-    catch throw:{badard, Fitting, Reason} ->
+    catch throw:{badarg, Fitting, Reason} ->
             riak_kv_mrc_sink:stop(Sink),
             {error, {Fitting, Reason}}
     end.
@@ -958,6 +958,9 @@ example_setup() ->
     example_setup(5).
 
 %% @doc Store some example data for the other example functions.
+%%
+%% WARNING: This function is used by riak_test mapred_*
+%% tests. Changing what it creates will break those tests.
 %%
 %% Objects stored:
 %% <dl>

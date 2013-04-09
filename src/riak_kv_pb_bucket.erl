@@ -26,8 +26,6 @@
 %% <pre>
 %% 15 - RpbListBucketsReq
 %% 17 - RpbListKeysReq
-%% 19 - RpbGetBucketReq
-%% 21 - RpbSetBucketReq
 %% </pre>
 %%
 %% <p>This service produces the following responses:</p>
@@ -35,8 +33,6 @@
 %% <pre>
 %% 16 - RpbListBucketsResp
 %% 18 - RpbListKeysResp{1,}
-%% 20 - RpbGetBucketResp
-%% 22 - RpbSetBucketResp
 %% </pre>
 %%
 %% <p>The semantics are unchanged from their original
@@ -88,25 +84,7 @@ process(rpblistbucketsreq,
 process(#rpblistkeysreq{bucket=B}=Req, #state{client=C} = State) ->
     %% stream_list_keys results will be processed by process_stream/3
     {ok, ReqId} = C:stream_list_keys(B),
-    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
-
-%% Get bucket properties
-process(#rpbgetbucketreq{bucket=B},
-        #state{client=C} = State) ->
-    Props = C:get_bucket(B),
-    PbProps = riak_pb_kv_codec:encode_bucket_props(Props),
-    {reply, #rpbgetbucketresp{props = PbProps}, State};
-
-%% Set bucket properties
-process(#rpbsetbucketreq{bucket=B, props = PbProps},
-        #state{client=C} = State) ->
-    Props = riak_pb_kv_codec:decode_bucket_props(PbProps),
-    case C:set_bucket(B, Props) of
-        ok ->
-            {reply, rpbsetbucketresp, State};
-        {error, Details} ->
-            {error, {format, "Invalid bucket properties: ~p", [Details]}, State}
-    end.
+    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}}.
 
 %% @doc process_stream/3 callback. Handles streaming keys messages.
 process_stream({ReqId, done}, ReqId,

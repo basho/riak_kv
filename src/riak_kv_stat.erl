@@ -36,6 +36,10 @@
 
 -behaviour(gen_server).
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 %% API
 -export([start_link/0, get_stats/0,
          update/1, register_stats/0, produce_stats/0,
@@ -45,7 +49,9 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         terminate/2, code_change/3, monitor_loop/1]).
+
+-record(state, {repair_mon, monitors}).
 
 -define(SERVER, ?MODULE).
 -define(APP, riak_kv).
@@ -82,7 +88,8 @@ update(Arg) ->
             ok
     catch
         ErrClass:Err ->
-            lager:error("~p:~p updating stat ~p.", [ErrClass, Err, Arg])
+            lager:warning("~p:~p updating stat ~p.", [ErrClass, Err, Arg]),
+            gen_server:cast(?SERVER, {re_register_stat, Arg})
     end.
 
 track_bucket(Bucket) when is_binary(Bucket) ->
@@ -106,18 +113,49 @@ stop() ->
 
 init([]) ->
     register_stats(),
-    {ok, ok}.
+    State = #state{monitors = [spawn_link(?MODULE, monitor_loop, [index]),
+                               spawn_link(?MODULE, monitor_loop, [list])],
+                   repair_mon = spawn_monitor(fun() -> stat_repair_loop() end)},
+    {ok, State}.
 
 handle_call({register, Name, Type}, _From, State) ->
     Rep = do_register_stat(Name, Type),
-    {reply, Rep, State}.
+    {reply, Rep, State};
+handle_call({get_monitor, Type}, _From, State) ->
+    Monitors = State#state.monitors,
+    [Monitor] = lists:filter(fun(Mon) ->
+                                     Mon ! {get_type, self()},
+                                     receive
+                                         T when is_atom(T),
+                                                T == Type ->
+                                             true;
+                                         _ -> false
+                                     after
+                                         1000 -> false
+                                     end
+                             end,
+                             Monitors),
+    {reply, Monitor, State}.
 
-
+handle_cast({re_register_stat, Arg}, State) ->
+    %% To avoid massive message queues
+    %% riak_kv stats are updated in the calling process
+    %% @see `update/1'.
+    %% The downside is that errors updating a stat don't crash
+    %% the server, so broken stats stay broken.
+    %% This re-creates the same behaviour as when a brokwn stat
+    %% crashes the gen_server by re-registering that stat.
+    #state{repair_mon={Pid, _Mon}} = State,
+    Pid ! {re_register_stat, Arg},
+    {noreply, State};
 handle_cast(stop, State) ->
     {stop, normal, State};
 handle_cast(_Req, State) ->
     {noreply, State}.
 
+handle_info({'DOWN', MonRef, process, Pid, _Cause}, State=#state{repair_mon={Pid, MonRef}}) ->
+    RepairMonitor = spawn_monitor(fun() -> stat_repair_loop() end),
+    {noreply, State#state{repair_mon=RepairMonitor}};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -181,9 +219,44 @@ do_update({fsm_exit, Type}) when Type =:= gets; Type =:= puts  ->
     folsom_metrics:notify_existing_metric({?APP, node, Type, fsm,  active}, {dec, 1}, counter);
 do_update({fsm_error, Type}) when Type =:= gets; Type =:= puts ->
     do_update({fsm_exit, Type}),
-    folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, errors}, 1, spiral).
+    folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, errors}, 1, spiral);
+do_update({index_create, Pid}) ->
+    folsom_metrics:notify_existing_metric({?APP, index, fsm, create}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, index, fsm, active}, {inc, 1}, counter),
+    add_monitor(index, Pid);
+do_update(index_create_error) ->
+    folsom_metrics:notify_existing_metric({?APP, index, fsm, create, error}, 1, spiral);
+do_update({list_create, Pid}) ->
+    folsom_metrics:notify_existing_metric({?APP, list, fsm, create}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, list, fsm, active}, {inc, 1}, counter),
+    add_monitor(list, Pid);
+do_update(list_create_error) ->
+    folsom_metrics:notify_existing_metric({?APP, list, fsm, create, error}, 1, spiral);
+do_update({fsm_destroy, Type}) ->
+    folsom_metrics:notify_existing_metric({?APP, Type, fsm, active}, {dec, 1}, counter).
 
 %% private
+
+add_monitor(Type, Pid) ->
+    M = gen_server:call(?SERVER, {get_monitor, Type}),
+    case M of
+        Mon when is_pid(Mon) ->
+            Mon ! {add_pid, Pid};
+        error ->
+            lager:error("No couldn't find procress to add monitor")
+    end.
+
+monitor_loop(Type) ->
+    receive
+        {add_pid, Pid} ->
+            erlang:monitor(process, Pid);
+        {get_type, Sender} ->
+            Sender ! Type;
+        {'DOWN', _Ref, process, _Pid, _Reason} ->
+            do_update({fsm_destroy, Type})
+    end,
+    monitor_loop(Type).
+
 %% Per index stats (by op)
 do_per_index(Op, Idx, USecs) ->
     IdxAtom = list_to_atom(integer_to_list(Idx)),
@@ -293,6 +366,12 @@ stats() ->
      {[node, gets, fsm, active], counter},
      {[node, puts, fsm, errors], spiral},
      {[node, gets, fsm, errors], spiral},
+     {[index, fsm, create], spiral},
+     {[index, fsm, create, error], spiral},
+     {[index, fsm, active], counter},
+     {[list, fsm, create], spiral},
+     {[list, fsm, create, error], spiral},
+     {[list, fsm, active], counter},
      {mapper_count, counter},
      {precommit_fail, counter},
      {postcommit_fail, counter},
@@ -338,12 +417,25 @@ leveldb_read_block_errors() ->
     %% on this node at random
     %% and ask for it's stats
     {ok, R} = riak_core_ring_manager:get_my_ring(),
-    Indices = riak_core_ring:my_indices(R),
-    Nth = crypto:rand_uniform(1, length(Indices)),
-    Idx = lists:nth(Nth, Indices),
+    case riak_core_ring:my_indices(R) of
+        [] -> undefined;
+        [Idx] ->
+            Status = vnode_status(Idx),
+            leveldb_read_block_errors(Status);
+        Indices ->
+            %% technically a call to status is a vnode
+            %% operation, so spread the load by picking
+            %% a vnode at random.
+            Nth = crypto:rand_uniform(1, length(Indices)),
+            Idx = lists:nth(Nth, Indices),
+            Status = vnode_status(Idx),
+            leveldb_read_block_errors(Status)
+    end.
+
+vnode_status(Idx) ->
     PList = [{Idx, node()}],
     [{Idx, [Status]}] = riak_kv_vnode:vnode_status(PList),
-    leveldb_read_block_errors(Status).
+    Status.
 
 leveldb_read_block_errors({backend_status, riak_kv_eleveldb_backend, Status}) ->
     rbe_val(proplists:get_value(read_block_error, Status));
@@ -368,3 +460,158 @@ rbe_val(undefined) ->
     undefined;
 rbe_val(Bin) ->
     list_to_integer(binary_to_list(Bin)).
+
+%% All stat creation is serialized through riak_kv_stat.
+%% Some stats are created on demand as part of the call to `update/1'.
+%% When a stat error is caught, the stat must be deleted and recreated.
+%% Since stat updates can happen from many processes concurrently
+%% a stat that throws an error may already have been deleted and
+%% recreated. To protect against needlessly deleting and recreating
+%% an already 'fixed stat' first retry the stat update. There is a chance
+%% that the retry succeeds as the stat has been recreated, but some on
+%% demand stat it uses has not yet. Since stat creates are serialized
+%% in riak_kv_stat re-registering a stat could cause a deadlock.
+%% This loop is spawned as a process to avoid that.
+stat_repair_loop() ->
+    receive
+        {re_register_stat, Arg} ->
+            re_register_stat(Arg),
+            stat_repair_loop();
+        _ ->
+            stat_repair_loop()
+    end.
+
+re_register_stat(Arg) ->
+    case (catch do_update(Arg)) of
+        {'EXIT', _} ->
+            Stats =  stats_from_update_arg(Arg),
+            [begin
+                 (catch folsom_metrics:delete_metric(Name)),
+                 do_register_stat(Name, Type)
+             end || {Name, {metric, _, Type, _}} <- Stats];
+        ok  ->
+            ok
+    end.
+
+%% Map from application argument used in call to `update/1' to
+%% folsom stat names and types.
+%% Updates that create dynamic stats must select all
+%% related stats.
+stats_from_update_arg({vnode_get, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, gets]);
+stats_from_update_arg({vnode_put, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, puts]);
+stats_from_update_arg(vnode_index_read) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, index, reads]);
+stats_from_update_arg({vnode_index_write, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, index, writes]) ++
+        riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
+stats_from_update_arg({vnode_index_delete, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
+stats_from_update_arg({get_fsm, _, _, _, _, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, node, gets]);
+stats_from_update_arg({put_fsm_time, _, _, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, node, puts]);
+stats_from_update_arg({read_repairs, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, nodes, gets, read_repairs]);
+stats_from_update_arg(coord_redirs) ->
+    [{{?APP, node, puts, coord_redirs}, {metric,[],counter,undefined}}];
+stats_from_update_arg(mapper_start) ->
+    [{{?APP, mapper_count}, {metric,[],counter,undefined}}];
+stats_from_update_arg(mapper_end) ->
+    stats_from_update_arg(mapper_start);
+stats_from_update_arg(precommit_fail) ->
+    [{{?APP, precommit_fail}, {metric,[],counter,undefined}}];
+stats_from_update_arg(postcommit_fail) ->
+    [{{?APP, postcommit_fail}, {metric,[],counter,undefined}}];
+stats_from_update_arg({fsm_spawned, Type}) ->
+    [{{?APP, node, Type, fsm, active}, {metric,[],counter,undefined}}];
+stats_from_update_arg({fsm_exit, Type}) ->
+    stats_from_update_arg({fsm_spawned, Type});
+stats_from_update_arg({fsm_error, Type}) ->
+    stats_from_update_arg({fsm_spawned, Type}) ++
+        [{{?APP, node, Type, fsm, errors}, {metric,[], spiral, undefined}}];
+stats_from_update_arg({index_create, _Pid}) ->
+    [{{?APP, index, fsm, create}, {metric, [], spiral, undefined}}];
+stats_from_update_arg(index_create_error) ->
+    [{{?APP, index, fsm, create, error}, {metric, [], spiral, undefined}}];
+stats_from_update_arg({list_create, _Pid}) ->
+    [{{?APP, list, fsm, create}, {metric, [], spiral, undefined}}];
+stats_from_update_arg(list_create_error) ->
+    [{{?APP, list, fsm, create, error}, {metric, [], spiral, undefined}}];
+stats_from_update_arg(_) ->
+    [].
+
+-ifdef(TEST).
+-define(LEVEL_STATUS(Idx, Val),  [{Idx, [{backend_status, riak_kv_eleveldb_backend,
+                                                      [{read_block_error, Val}]}]}]).
+-define(BITCASK_STATUS(Idx),  [{Idx, [{backend_status, riak_kv_bitcask_backend,
+                                                      []}]}]).
+-define(MULTI_STATUS(Idx, Val), [{Idx,  [{backend_status, riak_kv_multi_backend, Val}]}]).
+
+leveldb_rbe_test_() ->
+    {foreach,
+     fun() ->
+             meck:new(riak_core_ring_manager),
+             meck:new(riak_core_ring),
+             meck:new(riak_kv_vnode),
+             meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, [fake_ring]} end)
+     end,
+     fun(_) ->
+             meck:unload(riak_kv_vnode),
+             meck:unload(riak_core_ring),
+             meck:unload(riak_core_ring_manager)
+     end,
+     [{"Zero indexes", fun zero_indexes/0},
+      {"Single index", fun single_index/0},
+      {"Multi indexes", fun multi_index/0},
+      {"Bitcask Backend", fun bitcask_backend/0},
+      {"Multi Backend", fun multi_backend/0}]
+    }.
+
+zero_indexes() ->
+    meck:expect(riak_core_ring, my_indices, fun(_R) -> [] end),
+    ?assertEqual(undefined, leveldb_read_block_errors()).
+
+single_index() ->
+    meck:expect(riak_core_ring, my_indices, fun(_R) -> [index1] end),
+    meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) -> ?LEVEL_STATUS(Idx, <<"100">>) end),
+    ?assertEqual(100, leveldb_read_block_errors()),
+
+    meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) -> ?LEVEL_STATUS(Idx, nonsense) end),
+    ?assertEqual(undefined, leveldb_read_block_errors()).
+
+multi_index() ->
+    meck:expect(riak_core_ring, my_indices, fun(_R) -> [index1, index2, index3] end),
+    meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) -> ?LEVEL_STATUS(Idx, <<"100">>) end),
+    ?assertEqual(100, leveldb_read_block_errors()).
+
+bitcask_backend() ->
+    meck:expect(riak_core_ring, my_indices, fun(_R) -> [index1, index2, index3] end),
+    meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) -> ?BITCASK_STATUS(Idx) end),
+    ?assertEqual(undefined, leveldb_read_block_errors()).
+
+multi_backend() ->
+    meck:expect(riak_core_ring, my_indices, fun(_R) -> [index1, index2, index3] end),
+    %% some backends, none level
+    meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) ->
+                                                     ?MULTI_STATUS(Idx,
+                                                              [{name1, [{mod, bitcask}]},
+                                                               {name2, [{mod, fired_chicked}]}]
+                                                       )
+                                             end),
+    ?assertEqual(undefined, leveldb_read_block_errors()),
+
+    %% one or movel leveldb backends (first level answer is returned)
+    meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) ->
+                                                    ?MULTI_STATUS(Idx,
+                                                              [{name1, [{mod, bitcask}]},
+                                                               {name2, [{mod, riak_kv_eleveldb_backend},
+                                                                        {read_block_error, <<"99">>}]},
+                                                               {name2, [{mod, riak_kv_eleveldb_backend},
+                                                                        {read_block_error, <<"1000">>}]}]
+                                                       )
+                                             end),
+    ?assertEqual(99, leveldb_read_block_errors()).
+
+-endif.
