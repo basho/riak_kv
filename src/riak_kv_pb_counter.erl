@@ -91,8 +91,7 @@ process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
         {error, Reason} ->
             {error, {format,Reason}, State}
     end;
-process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=CounterOp,
-                            indexes=Indexes},
+process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=CounterOp},
         #state{client=C} = State) ->
 
     O0 = riak_object:new(B, K, ?NEW_COUNTER),
@@ -101,10 +100,8 @@ process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=Coun
     W = decode_quorum(W0),
     DW = decode_quorum(DW0),
     PW = decode_quorum(PW0),
-    IndexMeta = riak_pb_kv_codec:decode_content_meta(indexes, Indexes, undefined),
-    O2 = riak_object:update_metadata(O, dict:from_list(IndexMeta)),
     Options = [{counter_op, CounterOp}],
-    case C:put(O2, make_option(w, W) ++ make_option(dw, DW) ++
+    case C:put(O, make_option(w, W) ++ make_option(dw, DW) ++
                    make_option(pw, PW) ++ [{timeout, default_timeout()} | Options]) of
         ok ->
             {reply, #rpbcounterupdateresp{}, State};

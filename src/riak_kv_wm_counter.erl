@@ -58,7 +58,6 @@
               riak,         %% local | {node(), atom()} - params for riak client
               doc,          %% {ok, riak_object()}|{error, term()} - the object found
               bucketprops,  %% proplist() - properties of the bucket
-              index_fields, %% [index_field()]
               method,       %% atom() - HTTP method for the request
               counter_op    :: integer() | undefined %% The amount to add to the counter
              }).
@@ -117,7 +116,7 @@ malformed_request(RD, Ctx0) when Ctx0#ctx.method =:= 'POST' ->
                 Result={true, _, _} ->
                     Result;
                 {false, RWRD, RWCtx} ->
-                    malformed_index_headers(RWRD, RWCtx)
+                    {false, RWRD, RWCtx}
             end
     end;
 malformed_request(RD, Ctx) ->
@@ -186,46 +185,6 @@ normalize_rw_param("quorum") -> quorum;
 normalize_rw_param("all") -> all;
 normalize_rw_param(V) -> list_to_integer(V).
 
-malformed_index_headers(RD, Ctx) ->
-    %% Get a list of index_headers...
-    IndexFields1 = extract_index_fields(RD),
-
-    %% Validate the fields. If validation passes, then the index
-    %% headers are correctly formed.
-    case riak_index:parse_fields(IndexFields1) of
-        {ok, IndexFields2} ->
-            {false, RD, Ctx#ctx { index_fields=IndexFields2 }};
-        {error, Reasons} ->
-            {true,
-             wrq:append_to_resp_body(
-               [riak_index:format_failure_reason(X) || X <- Reasons],
-               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
-             Ctx}
-    end.
-
-extract_index_fields(RD) ->
-    PrefixSize = length(?HEAD_INDEX_PREFIX),
-    {ok, RE} = re:compile(",\\s"),
-    F = fun({K,V}, Acc) ->
-                KList = riak_kv_wm_utils:any_to_list(K),
-                case lists:prefix(?HEAD_INDEX_PREFIX, string:to_lower(KList)) of
-                    true ->
-                        %% Isolate the name of the index field.
-                        IndexField = list_to_binary(element(2, lists:split(PrefixSize, KList))),
-
-                        %% HACK ALERT: Split values on comma. The HTTP
-                        %% spec allows for comma separated tokens
-                        %% where the tokens can be quoted strings. We
-                        %% don't currently support quoted strings.
-                        %% (http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html)
-                        Values = re:split(V, RE, [{return, binary}]),
-                        [{IndexField, X} || X <- Values] ++ Acc;
-                    false ->
-                        Acc
-                end
-        end,
-    lists:foldl(F, [], mochiweb_headers:to_list(wrq:req_headers(RD))).
-
 content_types_provided(RD, Ctx) ->
     {[{"text/plain", to_text}], RD, Ctx}.
 
@@ -247,19 +206,17 @@ post_is_create(RD, Ctx) ->
 
 process_post(RD, Ctx) -> accept_doc_body(RD, Ctx).
 
-accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, index_fields=IF,
+accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C,
                             counter_op=CounterOp}) ->
     Doc0 = riak_object:new(B, K, ?NEW_COUNTER),
     VclockDoc = riak_object:set_vclock(Doc0, vclock:fresh()),
-    IndexMD = dict:store(?MD_INDEX, IF, dict:new()),
-    Doc = riak_object:update_metadata(VclockDoc, IndexMD),
     Options = [{counter_op, CounterOp}],
-    case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
+    case C:put(VclockDoc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
                 Options]) of
         {error, Reason} ->
             handle_common_error(Reason, RD, Ctx);
         ok ->
-            {true, RD, Ctx#ctx{doc={ok, Doc}}}
+            {true, RD, Ctx#ctx{doc={ok, VclockDoc}}}
     end.
 
 to_text(RD, Ctx=#ctx{doc={ok, Doc}}) ->
