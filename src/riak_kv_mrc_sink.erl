@@ -189,12 +189,14 @@ collect_output(next, State) ->
             end
     end;
 collect_output(#pipe_result{ref=Ref, from=PhaseId, result=Res},
-               #state{ref=Ref, results=Acc}=State) ->
+               #state{ref=Ref, results=Acc, buffer_left=Left}=State) ->
     NewAcc = add_result(PhaseId, Res, Acc),
-    {next_state, collect_output, State#state{results=NewAcc}};
+    {next_state, collect_output,
+     State#state{results=NewAcc, buffer_left=Left-1}};
 collect_output(#pipe_log{ref=Ref, from=PhaseId, msg=Msg},
-               #state{ref=Ref, logs=Acc}=State) ->
-    {next_state, collect_output, State#state{logs=[{PhaseId, Msg}|Acc]}};
+               #state{ref=Ref, logs=Acc, buffer_left=Left}=State) ->
+    {next_state, collect_output,
+     State#state{logs=[{PhaseId, Msg}|Acc], buffer_left=Left-1}};
 collect_output(#pipe_eoi{ref=Ref}, #state{ref=Ref}=State) ->
     {next_state, collect_output, State#state{done=true}};
 collect_output(_, State) ->
