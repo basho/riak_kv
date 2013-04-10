@@ -38,7 +38,8 @@
          fix_incorrect_index_entries/1,
          fix_incorrect_index_entries/0,
          responsible_preflists/1,
-         responsible_preflists/2]).
+         responsible_preflists/2,
+         make_vtag/1]).
 
 -include_lib("riak_kv_vnode.hrl").
 
@@ -332,6 +333,11 @@ mark_indexes_reformatted(Idx, 0, ForUpgrade) ->
 mark_indexes_reformatted(_Idx, _ErrorCount, _ForUpgrade) ->
     undefined.
 
+%% @Doc vtag creation function
+-spec make_vtag(erlang:timestamp()) -> list().
+make_vtag(Now) ->
+    <<HashAsNum:128/integer>> = crypto:md5(term_to_binary({node(), Now})),
+    riak_core_util:integer_to_list(HashAsNum,62).
 
 %% ===================================================================
 %% EUnit tests
@@ -358,5 +364,10 @@ deleted_test() ->
            riak_object:update_metadata(
              O, dict:store(<<"X-Riak-Deleted">>, true, MD))),
     true = is_x_deleted(O1).
+
+make_vtag_test() ->
+    crypto:start(),
+    ?assertNot(make_vtag(now()) =:=
+               make_vtag(now())).
 
 -endif.

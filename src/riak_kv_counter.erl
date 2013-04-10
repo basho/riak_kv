@@ -21,7 +21,7 @@
 %% -------------------------------------------------------------------
 -module(riak_kv_counter).
 
--export([update/4, merge/2, value/1]).
+-export([update/3, merge/1, value/1]).
 
 -include("riak_kv_wm_raw.hrl").
 
@@ -34,11 +34,10 @@
 %% for later resolution by the user.
 %%
 %% @TODO How do we let callers now about the sibling values?
--spec update(riak_object:riak_object(), riak_object:index_specs(),
-             binary(), integer()) ->
+-spec update(riak_object:riak_object(), binary(), integer()) ->
                     riak_object:riak_object().
-update(RObj, IndexSpecs, Actor, Amt) ->
-    {Counter0, NonCounterSiblings, Meta} = merge_object(RObj, IndexSpecs),
+update(RObj, Actor, Amt) ->
+    {Meta, Counter0, NonCounterSiblings} = merge_object(RObj),
     Counter = case Amt of
                   0 -> Counter0;
                   _ -> update_counter(Counter0, Actor, Amt)
@@ -48,10 +47,10 @@ update(RObj, IndexSpecs, Actor, Amt) ->
 %% @doc Unlike regular, opaque `riak_object' values, conflicting
 %% counter writes can be merged by Riak, thanks to their internal
 %% CRDT PN-Counter structure.
--spec merge(riak_object:riak_object(), riak_object:index_specs()) ->
+-spec merge(riak_object:riak_object()) ->
                    riak_object:riak_object().
-merge(RObj, IndexSpecs) ->
-    {Counter, NonCounterSiblings, Meta} = merge_object(RObj, IndexSpecs),
+merge(RObj) ->
+    {Meta, Counter, NonCounterSiblings} = merge_object(RObj),
     update_object(RObj, Meta, Counter, NonCounterSiblings).
 
 %% @doc Currently _IGNORES_ all non-counter sibling values
@@ -59,7 +58,7 @@ merge(RObj, IndexSpecs) ->
                    integer().
 value(RObj) ->
     Contents = riak_object:get_contents(RObj),
-    {Counter, _NonCounterSiblings} = merge_contents(Contents),
+    {_Meta, Counter, _NonCounterSiblings} = merge_contents(Contents),
     case Counter of
         undefined -> 0;
         _ ->
@@ -67,40 +66,24 @@ value(RObj) ->
     end.
 
 %% Merge contents _AND_ meta
-merge_object(RObj, IndexSpecs) ->
+merge_object(RObj) ->
     Contents = riak_object:get_contents(RObj),
-    {Counter, NonCounterSiblings} = merge_contents(Contents),
-    Meta = merged_meta(IndexSpecs),
-    {Counter, NonCounterSiblings, Meta}.
+    merge_contents(Contents).
 
 %% Only merge the values of actual PN-Counters
 %% If a non-CRDT datum is present, keep it as a sibling value
 merge_contents(Contents) ->
     lists:foldl(fun merge_value/2,
-                {undefined, []},
+                {undefined, undefined, []},
                Contents).
 
 %% worker for `merge_contents/1'
-merge_value({_MD, {riak_kv_pncounter, Counter}}, {undefined, NonCounterSiblings}) ->
-    {Counter, NonCounterSiblings};
-merge_value({_MD, {riak_kv_pncounter, Counter}}, {Mergedest, NonCounterSiblings}) ->
-    {riak_kv_pncounter:merge(Counter, Mergedest), NonCounterSiblings};
-merge_value(NonCounter, {Mergedest, NonCounterSiblings}) ->
-    {Mergedest, [NonCounter | NonCounterSiblings]}.
-
-%% Only indexes are allowed in counter
-%% meta data.
-%% The job of merging index meta data has
-%% already been done to get the indexspecs
-%% therefore create a meta that is
-%% only the index meta data we already know about
-merged_meta(IndexSpecs) ->
-    case [{Index, Value} || {Op, Index, Value} <- IndexSpecs,
-                                 Op =:= add] of
-        [] -> dict:new();
-        Indexes ->
-            dict:store(?MD_INDEX, Indexes, dict:new())
-    end.
+merge_value({MD, {riak_kv_pncounter, Counter}}, {undefined, undefined, NonCounterSiblings}) ->
+    {MD, Counter, NonCounterSiblings};
+merge_value({MD, {riak_kv_pncounter, Counter}}, {MergedMeta, Mergedest, NonCounterSiblings}) ->
+    {merge_meta(MD, MergedMeta), riak_kv_pncounter:merge(Counter, Mergedest), NonCounterSiblings};
+merge_value(NonCounter, {MD, Mergedest, NonCounterSiblings}) ->
+    {MD, Mergedest, [NonCounter | NonCounterSiblings]}.
 
 update_counter(undefined, Actor, Amt) ->
     update_counter(riak_kv_pncounter:new(), Actor, Amt);
@@ -116,14 +99,43 @@ counter_op(Amt) ->
 %% This uses an exported but marked INTERNAL
 %% function of `riak_object:set_contents' to preserve
 %% non-counter sibling values and Metadata
-update_object(RObj, _Meta, undefined, _Siblings) ->
+%% NOTE: if `Meta' is `undefined' then this
+%% is a new counter.
+update_object(RObj, _, undefined, _Siblings) ->
     RObj;
 update_object(RObj, Meta, Counter, []) ->
     RObj2 = riak_object:update_value(RObj, {riak_kv_pncounter, Counter}),
-    RObj3 = riak_object:update_metadata(RObj2, Meta),
+    RObj3 = riak_object:update_metadata(RObj2, counter_meta(Meta)),
     riak_object:apply_updates(RObj3);
 update_object(RObj, Meta, Counter, SiblingValues) ->
     %% keep non-counter siblings, too
-    riak_object:set_contents(RObj, [{Meta, {riak_kv_pncounter, Counter}} | SiblingValues]).
+    riak_object:set_contents(RObj, [{counter_meta(Meta), {riak_kv_pncounter, Counter}} | SiblingValues]).
 
 
+counter_meta(undefined) ->
+    Now = os:timestamp(),
+    M = dict:new(),
+    M2 = dict:store(?MD_LASTMOD, Now, M),
+    dict:store(?MD_VTAG, riak_kv_util:make_vtag(Now), M2);
+counter_meta(Meta) ->
+    Meta.
+
+%% Just a simple take the largest for meta values based on last mod
+merge_meta(Meta1, Meta2) ->
+    case later(lastmod(Meta1), lastmod(Meta2)) of
+        true ->
+            Meta1;
+        false ->
+            Meta2
+    end.
+
+lastmod(Meta) ->
+    dict:fetch(?MD_LASTMOD, Meta).
+
+later(TS1, TS2) ->
+    case timer:now_diff(TS1, TS2) of
+        Before when Before < 0 ->
+            false;
+        _ ->
+            true
+    end.

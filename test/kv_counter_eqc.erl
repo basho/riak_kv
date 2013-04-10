@@ -84,9 +84,9 @@ prop_value() ->
             equals(sumthem(RObj), riak_kv_counter:value(RObj))).
 
 prop_merge() ->
-    ?FORALL({RObj, IndexSpecs}, {riak_object(), index_specs()},
+    ?FORALL(RObj, riak_object(),
             begin
-                Merged = riak_kv_counter:merge(RObj, IndexSpecs),
+                Merged = riak_kv_counter:merge(RObj),
                 FExpectedCounters = fun(NumGeneratedCounters) ->
                                             case NumGeneratedCounters of
                                                 0 -> 0;
@@ -98,21 +98,20 @@ prop_merge() ->
                 ?WHENFAIL(
                    begin
                        io:format("Gen ~p\n", [RObj]),
-                       io:format("Merged ~p\n", [Merged]),
-                       io:format("Index Specs ~p~n", [IndexSpecs])
+                       io:format("Merged ~p\n", [Merged])
                    end,
 
                    conjunction([
                                 {value, equals(sumthem(RObj), riak_kv_counter:value(Merged))},
-                                {verify_merge, verify_merge(RObj, Merged, IndexSpecs, FExpectedCounters, MergeSeed)}
+                                {verify_merge, verify_merge(RObj, Merged, FExpectedCounters, MergeSeed)}
                                ]))
             end).
 
 prop_update() ->
-    ?FORALL({RObj, IndexSpecs, Actor, Amt},
-            {riak_object(), index_specs(), noshrink(binary(4)), int()},
+    ?FORALL({RObj, Actor, Amt},
+            {riak_object(), noshrink(binary(4)), int()},
             begin
-                Updated = riak_kv_counter:update(RObj, IndexSpecs, Actor, Amt),
+                Updated = riak_kv_counter:update(RObj, Actor, Amt),
                 FExpectedCounters = fun(NumGeneratedCounters) ->
                                             case {NumGeneratedCounters, Amt} of
                                                 {0, 0} -> 0;
@@ -128,13 +127,12 @@ prop_update() ->
                    begin
                        io:format("Gen ~p~n", [RObj]),
                        io:format("Updated ~p~n", [Updated]),
-                       io:format("Index Specs ~p~n", [IndexSpecs]),
                        io:format("Amt ~p~n", [Amt])
                    end,
                    conjunction([
                                 {counter_value, equals(sumthem(RObj) + Amt,
                                                        riak_kv_counter:value(Updated))},
-                                {verify_merge, verify_merge(RObj, Updated, IndexSpecs, FExpectedCounters, MergeSeed)}
+                                {verify_merge, verify_merge(RObj, Updated, FExpectedCounters, MergeSeed)}
                                ]))
             end).
 
@@ -144,13 +142,12 @@ prop_update() ->
 
 %% Update and Merge are the same, except for the
 %% end value of the counter. Reuse the common properties.
-verify_merge(Generated, PostAction, IndexSpecs, FExpectedCounters, MergeSeed) ->
+verify_merge(Generated, PostAction, FExpectedCounters, MergeSeed) ->
     NumGeneratedCounters = num_counters(Generated),
     ExpectedCounters = FExpectedCounters(NumGeneratedCounters),
     ExpectedCounter = merge_object(Generated, MergeSeed),
     NumMergedCounters =  num_counters(PostAction),
     {MergedMeta, MergedCounter} = single_counter(PostAction),
-    ExpectedIndexMeta = expected_indexes(IndexSpecs, ExpectedCounters),
     ExpectedSiblings = non_counter_siblings(Generated),
     ActualSiblings = non_counter_siblings(PostAction),
     conjunction([{number_of_counters,
@@ -158,33 +155,29 @@ verify_merge(Generated, PostAction, IndexSpecs, FExpectedCounters, MergeSeed) ->
                   {counter_structure,
                    counters_equal(ExpectedCounter, MergedCounter)},
                   {siblings, equals(ExpectedSiblings, ActualSiblings)},
-                  {index_meta, equals(ExpectedIndexMeta, sorted_index_meta(MergedMeta))}]).
+                  {meta, equals(latest_meta(Generated, MergedMeta), MergedMeta)}]).
 
-sorted_index_meta(undefined) ->
-    undefined;
-sorted_index_meta(Meta) ->
-    case dict:find(?MD_INDEX, Meta) of
-        error ->
-            undefined;
-        {ok, Val} ->
-            lists:sort(Val)
-    end.
+latest_meta(RObj, MergedMeta) ->
+    %% Get the largest last modified containing meta data
+    latest_counter_meta(riak_object:get_contents(RObj), MergedMeta).
 
-expected_indexes(_IndexSpecs, 0) ->
-    undefined;
-expected_indexes(IndexSpecs, _) ->
-    %% Use fold just to differentiate the code
-    %% under test and the testing code
-    case lists:foldl(fun({add, Index, Val}, Acc) ->
-                             [{Index, Val} | Acc];
-                        (_, Acc) ->
-                             Acc
-                     end,
-                     [],
-                     IndexSpecs) of
-        [] ->
-            undefined;
-        Indexes -> lists:sort(Indexes)
+latest_counter_meta([], Latest) ->
+    Latest;
+latest_counter_meta([{MD, {riak_kv_pncounter, _}}|Rest], Latest) ->
+    latest_counter_meta(Rest, get_latest_meta(MD, Latest));
+latest_counter_meta([_|Rest], Latest) ->
+    latest_counter_meta(Rest, Latest).
+
+get_latest_meta(MD, undefined) ->
+    MD;
+get_latest_meta(MD1, MD2) ->
+    TS1 = dict:fetch(?MD_LASTMOD, MD1),
+    TS2 = dict:fetch(?MD_LASTMOD, MD2),
+    case timer:now_diff(TS1, TS2) of
+        N when N < 0 ->
+            MD2;
+        _ ->
+            MD1
     end.
 
 %% safe wrap of riak_kv_pncounter:equal/2
@@ -196,7 +189,6 @@ counters_equal(undefined, _C2) ->
     false;
 counters_equal(C1, C2) ->
     riak_kv_pncounter:equal(C1, C2).
-
 
 %% Extract a single {meta, counter} value
 single_counter(Merged) ->
@@ -262,7 +254,13 @@ contents() ->
     list(content()).
 
 content() ->
-    {metadata(), value()}.
+    oneof([{metadata(), binary()}, {counter_meta(), pncounter()}]).
+
+counter_meta() ->
+    %% generate a dict of metadata
+    ?LET({_Mega, _Sec, _Micro}=Now, {nat(), nat(), nat()},
+         dict:store(?MD_VTAG, riak_kv_util:make_vtag(Now),
+                    dict:store(?MD_LASTMOD, Now, dict:new()))).
 
 metadata() ->
     %% generate a dict of metadata
@@ -276,9 +274,6 @@ metadatum() ->
     %% just present
     {binary(), binary()}.
 
-value() ->
-    oneof([binary(), pncounter()]).
-
 gcounter() ->
     list(clock()).
 
@@ -287,18 +282,6 @@ pncounter() ->
 
 clock() ->
     {int(), nat()}.
-
-index_specs() ->
-    list(index_spec()).
-
-index_spec() ->
-    {index_op(), binary(), index_value()}.
-
-index_op() ->
-    oneof([add, remove]).
-
-index_value() ->
-    oneof([binary(), int()]).
 
 -endif. % EQC
 

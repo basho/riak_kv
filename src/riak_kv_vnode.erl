@@ -989,19 +989,19 @@ prepare_put(#state{idx=Idx,
                                                                              PruneTime,
                                                                              BProps))
                     end,
-                    ObjToStore2 = handle_counter(Coord, CounterOp, VId, ObjToStore, IndexSpecs),
+                    ObjToStore2 = handle_counter(Coord, CounterOp, VId, ObjToStore),
                     {{true, ObjToStore2},
                      PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}}
             end
     end.
 
-handle_counter(true, CounterOp, VId, RObj, IndexSpecs) when is_integer(CounterOp) ->
-    riak_kv_counter:update(RObj, IndexSpecs, VId, CounterOp);
-handle_counter(false, CounterOp, _Vid, RObj, IndexSpecs) when is_integer(CounterOp) ->
+handle_counter(true, CounterOp, VId, RObj) when is_integer(CounterOp) ->
+    riak_kv_counter:update(RObj, VId, CounterOp);
+handle_counter(false, CounterOp, _Vid, RObj) when is_integer(CounterOp) ->
     %% non co-ord put, merge the values if there are siblings
     %% 'cos that is the point of CRDTs / counters: no siblings
-    riak_kv_counter:merge(RObj, IndexSpecs);
-handle_counter(_Coord, __CounterOp, _VId, RObj, _IndexSpecs) ->
+    riak_kv_counter:merge(RObj);
+handle_counter(_Coord, __CounterOp, _VId, RObj) ->
     RObj.
 
 perform_put({false, Obj},

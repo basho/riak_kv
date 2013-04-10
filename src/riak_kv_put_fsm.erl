@@ -663,13 +663,9 @@ update_last_modified(RObj) ->
     %% objects with the same vclock on 0.14.2 if the same clientid was used in
     %% the same second.  It can be revisited post-1.0.0.
     Now = os:timestamp(),
-    NewMD = dict:store(?MD_VTAG, make_vtag(Now),
+    NewMD = dict:store(?MD_VTAG, riak_kv_util:make_vtag(Now),
                        dict:store(?MD_LASTMOD, Now, MD0)),
     riak_object:update_metadata(RObj, NewMD).
-
-make_vtag(Now) ->
-    <<HashAsNum:128/integer>> = crypto:md5(term_to_binary({node(), Now})),
-    riak_core_util:integer_to_list(HashAsNum,62).
 
 %% Invokes the hook and returns a tuple of
 %% {Lang, Called, Result}
@@ -866,15 +862,3 @@ atom2list(P) when is_pid(P)->
 
 dtrace_errstr(Term) ->
     io_lib:format("~P", [Term, 12]).
-
-%% ===================================================================
-%% EUnit tests
-%% ===================================================================
--ifdef(TEST).
-
-make_vtag_test() ->
-    crypto:start(),
-    ?assertNot(make_vtag(now()) =:=
-               make_vtag(now())).
-
--endif.
