@@ -93,23 +93,30 @@ process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
     end;
 process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=CounterOp},
         #state{client=C} = State) ->
-
-    O0 = riak_object:new(B, K, ?NEW_COUNTER),
-    O = riak_object:set_vclock(O0, vclock:fresh()),
-    %% erlang_protobuffs encodes as 1/0/undefined
-    W = decode_quorum(W0),
-    DW = decode_quorum(DW0),
-    PW = decode_quorum(PW0),
-    Options = [{counter_op, CounterOp}],
-    case C:put(O, make_option(w, W) ++ make_option(dw, DW) ++
-                   make_option(pw, PW) ++ [{timeout, default_timeout()} | Options]) of
-        ok ->
-            {reply, #rpbcounterupdateresp{}, State};
-        {error, notfound} ->
-            {reply, #rpbcounterupdateresp{}, State};
-        {error, Reason} ->
-            {error, {format, Reason}, State}
+    case allow_mult(B) of
+        true ->
+            O0 = riak_object:new(B, K, ?NEW_COUNTER),
+            O = riak_object:set_vclock(O0, vclock:fresh()),
+            %% erlang_protobuffs encodes as 1/0/undefined
+            W = decode_quorum(W0),
+            DW = decode_quorum(DW0),
+            PW = decode_quorum(PW0),
+            Options = [{counter_op, CounterOp}],
+            case C:put(O, make_option(w, W) ++ make_option(dw, DW) ++
+                           make_option(pw, PW) ++ [{timeout, default_timeout()} | Options]) of
+                ok ->
+                    {reply, #rpbcounterupdateresp{}, State};
+                {error, notfound} ->
+                    {reply, #rpbcounterupdateresp{}, State};
+                {error, Reason} ->
+                    {error, {format, Reason}, State}
+            end;
+        false ->
+            {error, {format, "Counters require bucket property 'allow_mult=true'"}, State}
     end.
+
+allow_mult(Bucket) ->
+    proplists:get_value(allow_mult, riak_core_bucket:get_bucket(Bucket)).
 
 %% @doc process_stream/3 callback. This service does not create any
 %% streaming responses and so ignores all incoming messages.

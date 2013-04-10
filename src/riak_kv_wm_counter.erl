@@ -208,16 +208,24 @@ process_post(RD, Ctx) -> accept_doc_body(RD, Ctx).
 
 accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C,
                             counter_op=CounterOp}) ->
-    Doc0 = riak_object:new(B, K, ?NEW_COUNTER),
-    VclockDoc = riak_object:set_vclock(Doc0, vclock:fresh()),
-    Options = [{counter_op, CounterOp}],
-    case C:put(VclockDoc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
-                Options]) of
-        {error, Reason} ->
-            handle_common_error(Reason, RD, Ctx);
-        ok ->
-            {true, RD, Ctx#ctx{doc={ok, VclockDoc}}}
+    case allow_mult(B) of
+        true ->
+            Doc0 = riak_object:new(B, K, ?NEW_COUNTER),
+            VclockDoc = riak_object:set_vclock(Doc0, vclock:fresh()),
+            Options = [{counter_op, CounterOp}],
+            case C:put(VclockDoc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
+                                   Options]) of
+                {error, Reason} ->
+                    handle_common_error(Reason, RD, Ctx);
+                ok ->
+                    {true, RD, Ctx#ctx{doc={ok, VclockDoc}}}
+            end;
+        false ->
+            handle_common_error(allow_mult_false, RD, Ctx)
     end.
+
+allow_mult(Bucket) ->
+    proplists:get_value(allow_mult, riak_core_bucket:get_bucket(Bucket)).
 
 to_text(RD, Ctx=#ctx{doc={ok, Doc}}) ->
     Value = riak_kv_counter:value(Doc),
@@ -261,6 +269,9 @@ handle_common_error(Reason, RD, Ctx) ->
             Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
                 " n value of ~p~n", [N]),
             {{halt, 400}, wrq:append_to_response_body(Msg, RD), Ctx};
+        {error, allow_mult_false} ->
+            Msg = "Counters require bucket property 'allow_mult=true'",
+            {{halt, 409}, wrq:append_to_response_body(Msg, RD), Ctx};
         {error, {r_val_unsatisfied, Requested, Returned}} ->
             {{halt, 503},
                 wrq:set_resp_header("Content-Type", "text/plain",
