@@ -271,17 +271,21 @@ insert(Key, ObjHash, State, Opts) ->
     HKey = encode(State#state.id, Segment, Key),
     case should_insert(HKey, Opts, State) of
         true ->
-            WBuffer = [{HKey, ObjHash} | State#state.write_buffer],
-            WCount = State#state.write_buffer_count + 1,
-            State2 = State#state{write_buffer=WBuffer,
-                                 write_buffer_count=WCount},
-            State3 = maybe_flush_buffer(State2),
-            %% Dirty = gb_sets:add_element(Segment, State3#state.dirty_segments),
-            Dirty = bitarray_set(Segment, State3#state.dirty_segments),
-            State3#state{dirty_segments=Dirty};
+            State2 = enqueue_action({put, HKey, ObjHash}, State),
+            %% Dirty = gb_sets:add_element(Segment, State2#state.dirty_segments),
+            Dirty = bitarray_set(Segment, State2#state.dirty_segments),
+            State2#state{dirty_segments=Dirty};
         false ->
             State
     end.
+
+enqueue_action(Action, State) ->
+    WBuffer = [Action|State#state.write_buffer],
+    WCount = State#state.write_buffer_count + 1,
+    State2 = State#state{write_buffer=WBuffer,
+                         write_buffer_count=WCount},
+    State3 = maybe_flush_buffer(State2),
+    State3.
 
 maybe_flush_buffer(State=#state{write_buffer_count=WCount}) ->
     Threshold = 200,
@@ -293,8 +297,8 @@ maybe_flush_buffer(State=#state{write_buffer_count=WCount}) ->
     end.
 
 flush_buffer(State=#state{write_buffer=WBuffer}) ->
-    %% Write buffer is built backwards, reverse before building update list
-    Updates = [{put, Key, Hash} || {Key, Hash} <- lists:reverse(WBuffer)],
+    %% Write buffer is built backwards, reverse to build update list
+    Updates = lists:reverse(WBuffer),
     ok = eleveldb:write(State#state.ref, Updates, []),
     State#state{write_buffer=[],
                 write_buffer_count=0}.
@@ -304,10 +308,10 @@ delete(Key, State) ->
     Hash = erlang:phash2(Key),
     Segment = Hash rem State#state.segments,
     HKey = encode(State#state.id, Segment, Key),
-    ok = eleveldb:delete(State#state.ref, HKey, []),
-    %% Dirty = gb_sets:add_element(Segment, State#state.dirty_segments),
-    Dirty = bitarray_set(Segment, State#state.dirty_segments),
-    State#state{dirty_segments=Dirty}.
+    State2 = enqueue_action({delete, HKey}, State),
+    %% Dirty = gb_sets:add_element(Segment, State2#state.dirty_segments),
+    Dirty = bitarray_set(Segment, State2#state.dirty_segments),
+    State2#state{dirty_segments=Dirty}.
 
 -spec should_insert(segment_bin(), proplist(), hashtree()) -> boolean().
 should_insert(HKey, Opts, State) ->
@@ -470,11 +474,27 @@ new_segment_store(Opts, State) ->
                   SegmentPath ->
                       SegmentPath
               end,
-    Config = app_helper:get_env(riak_kv,
-                                anti_entropy_leveldb_opts,
-                                [{write_buffer_size, 4*1024*1024},
-                                 {max_open_files, 20}]),
-    Options = [{create_if_missing, true} | Config],
+
+    DefaultWriteBufferMin = 4 * 1024 * 1024,
+    DefaultWriteBufferMax = 14 * 1024 * 1024,
+    ConfigVars = app_helper:get_env(riak_kv,
+                                    anti_entropy_leveldb_opts,
+                                    [{write_buffer_size_min, DefaultWriteBufferMin},
+                                     {write_buffer_size_max, DefaultWriteBufferMax},
+                                     {max_open_files, 20}]),
+    Config = orddict:from_list(ConfigVars),
+
+    %% Use a variable write buffer size to prevent against all buffers being
+    %% flushed to disk at once when under a heavy uniform load.
+    WriteBufferMin = proplists:get_value(write_buffer_size_min, Config, DefaultWriteBufferMin),
+    WriteBufferMax = proplists:get_value(write_buffer_size_max, Config, DefaultWriteBufferMax),
+    {Offset, _} = random:uniform_s(1 + WriteBufferMax - WriteBufferMin, now()),
+    WriteBufferSize = WriteBufferMin + Offset,
+    Config2 = orddict:store(write_buffer_size, WriteBufferSize, Config),
+    Config3 = orddict:erase(write_buffer_size_min, Config2),
+    Config4 = orddict:erase(write_buffer_size_max, Config3),
+    Options = orddict:store(create_if_missing, true, Config4),
+
     filelib:ensure_dir(DataDir),
     {ok, Ref} = eleveldb:open(DataDir, Options),
     State#state{ref=Ref, path=DataDir}.

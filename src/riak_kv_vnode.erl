@@ -96,6 +96,8 @@
 -type index() :: non_neg_integer().
 -type state() :: #state{}.
 
+-define(DEFAULT_HASHTREE_TOKENS, 90).
+
 -record(putargs, {returnbody :: boolean(),
                   coord:: boolean(),
                   lww :: boolean(),
@@ -470,8 +472,8 @@ handle_command({rehash, Bucket, Key}, _, State=#state{mod=Mod, modstate=ModState
         {ok, Bin, _UpdModState} ->
             update_hashtree(Bucket, Key, Bin, State);
         _ ->
-            %% Do nothing if data doesn't exist
-            ok
+            %% Make sure hashtree isn't tracking deleted data
+            riak_kv_index_hashtree:delete({Bucket, Key}, State#state.hashtrees)
     end,
     {noreply, State};
 
@@ -817,7 +819,8 @@ prepare_put(State=#state{vnodeid=VId,
         false ->
             prepare_put(State, PutArgs, IndexBackend)
     end.
-prepare_put(#state{vnodeid=VId,
+prepare_put(#state{idx=Idx,
+                   vnodeid=VId,
                    mod=Mod,
                    modstate=ModState},
             PutArgs=#putargs{bkey={Bucket, Key},
@@ -828,8 +831,22 @@ prepare_put(#state{vnodeid=VId,
                              starttime=StartTime,
                              prunetime=PruneTime},
             IndexBackend) ->
-    case Mod:get(Bucket, Key, ModState) of
-        {error, not_found, _UpdModState} ->
+    GetReply =
+        case Mod:get(Bucket, Key, ModState) of
+            {error, not_found, _UpdModState} ->
+                ok;
+            % NOTE: bad_crc is NOT an official backend response. It is
+            % specific to bitcask currently and handling it may be changed soon.
+            % A standard set of responses will be agreed on
+            % https://github.com/basho/riak_kv/issues/496
+            {error, bad_crc, _UpdModState} ->
+                lager:info("Bad CRC detected while reading Partition=~p, Bucket=~p, Key=~p", [Idx, Bucket, Key]),
+                ok;
+            {ok, GetVal, _UpdModState} ->
+                {ok, GetVal}
+        end,
+    case GetReply of
+        ok ->
             case IndexBackend of
                 true ->
                     IndexSpecs = riak_object:index_specs(RObj);
@@ -843,7 +860,7 @@ prepare_put(#state{vnodeid=VId,
                                  RObj
                          end,
             {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
-        {ok, Val, _UpdModState} ->
+        {ok, Val} ->
             OldObj = binary_to_term(Val),
             case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
                 {oldobj, OldObj1} ->
@@ -1207,10 +1224,36 @@ do_diffobj_put({Bucket, Key}, DiffObj,
 
 -spec update_hashtree(binary(), binary(), binary(), state()) -> ok.
 update_hashtree(Bucket, Key, Val, #state{hashtrees=Trees}) ->
-    riak_kv_index_hashtree:insert_object({Bucket, Key}, Val, Trees).
+    case get_hashtree_token() of
+        true ->
+            riak_kv_index_hashtree:async_insert_object({Bucket, Key}, Val, Trees),
+            ok;
+        false ->
+            riak_kv_index_hashtree:insert_object({Bucket, Key}, Val, Trees),
+            put(hashtree_tokens, max_hashtree_tokens()),
+            ok
+    end.
+
+get_hashtree_token() ->
+    Tokens = get(hashtree_tokens),
+    case Tokens of
+        undefined ->
+            put(hashtree_tokens, max_hashtree_tokens() - 1),
+            true;
+        N when N > 0 ->
+            put(hashtree_tokens, Tokens - 1),
+            true;
+        _ ->
+            false
+    end.
+
+-spec max_hashtree_tokens() -> pos_integer().
+max_hashtree_tokens() ->
+    app_helper:get_env(riak_kv,
+                       anti_entropy_max_async, 
+                       ?DEFAULT_HASHTREE_TOKENS).
 
 %% @private
-
 %% Get the vnodeid, assigning and storing if necessary
 get_vnodeid(Index) ->
     F = fun(Status) ->
@@ -1485,6 +1528,9 @@ bitcask_test_dir() ->
 eleveldb_test_dir() ->
     "./test.eleveldb-temp-data".
 
+clean_test_dirs() ->
+    ?cmd("rm -rf " ++ bitcask_test_dir()),
+    ?cmd("rm -rf " ++ eleveldb_test_dir()).
 
 backend_with_known_key(BackendMod) ->
     dummy_backend(BackendMod),
@@ -1504,6 +1550,7 @@ backend_with_known_key(BackendMod) ->
 list_buckets_test_() ->
     {foreach,
      fun() ->
+             clean_test_dirs(),
              application:start(sasl),
              Env = application:get_all_env(riak_kv),
              application:start(folsom),
@@ -1562,6 +1609,7 @@ list_buckets_test_i(BackendMod) ->
     flush_msgs().
 
 filter_keys_test() ->
+    clean_test_dirs(),
     {S, B, K} = backend_with_known_key(riak_kv_memory_backend),
     Caller1 = new_result_listener(keys),
     handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
@@ -1582,6 +1630,30 @@ filter_keys_test() ->
     ?assertEqual({ok, []}, results_from_listener(Caller3)),
 
     flush_msgs().
+
+%% include bitcask.hrl for HEADER_SIZE macro
+-include_lib("bitcask/include/bitcask.hrl").
+
+%% Verify that a bad CRC on read will not crash the vnode, which when done in
+%% preparation for a write prevents the write from going through.
+bitcask_badcrc_test() ->
+    clean_test_dirs(),
+    {S, B, K} = backend_with_known_key(riak_kv_bitcask_backend),
+    DataDir = filename:join(bitcask_test_dir(), "0"),
+    [DataFile] = filelib:wildcard(DataDir ++ "/*.data"),
+    {ok, Fh} = file:open(DataFile, [read, write]),
+    ok = file:pwrite(Fh, ?HEADER_SIZE, <<0>>),
+    file:close(Fh),
+    O = riak_object:new(B, K, <<"y">>),
+    {noreply, _} = handle_command(?KV_PUT_REQ{bkey={B,K},
+                                               object=O,
+                                               req_id=123,
+                                               start_time=riak_core_util:moment(),
+                                               options=[]},
+                                   {raw, 456, self()},
+                                   S),
+    flush_msgs().
+
 
 new_result_listener(Type) ->
     case Type of

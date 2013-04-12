@@ -141,10 +141,13 @@
               bucketprops,  %% proplist() - properties of the bucket
               links,        %% [link()] - links of the object
               index_fields, %% [index_field()]
-              method        %% atom() - HTTP method for the request
+              method,       %% atom() - HTTP method for the request
+              timeout       %% integer() - passed-in timeout value in ms
              }).
 %% @type link() = {{Bucket::binary(), Key::binary()}, Tag::binary()}
 %% @type index_field() = {Key::string(), Value::string()}
+
+-define(DEFAULT_TIMEOUT, 60000).
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
@@ -165,6 +168,20 @@ init(Props) ->
 %%      bindings from the dispatch, as well as any vtag
 %%      query parameter.
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
+    Timeout = case wrq:get_req_header(?HEAD_TIMEOUT, RD) of 
+                  undefined -> ?DEFAULT_TIMEOUT;
+                  TimeoutStr -> 
+                      try
+                          list_to_integer(TimeoutStr)
+                      catch
+                          _:_ ->
+                              lager:error("Bad timeout value ~p, "
+                                          "using ~d~n", 
+                                          [TimeoutStr, ?DEFAULT_TIMEOUT]),
+                              ?DEFAULT_TIMEOUT
+                      end
+              end,
+    
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true,
@@ -180,7 +197,8 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                        undefined -> undefined;
                        K -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, K))
                    end,
-               vtag=wrq:get_qs_value(?Q_VTAG, RD)
+               vtag=wrq:get_qs_value(?Q_VTAG, RD),
+               timeout=Timeout
               }};
         Error ->
             {false,
@@ -594,7 +612,8 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L, index_fields=IF
     MDDoc = riak_object:update_metadata(VclockDoc, IndexMD),
     Doc = riak_object:update_value(MDDoc, riak_kv_wm_utils:accept_value(CType, wrq:req_body(RD))),
     Options = case wrq:get_qs_value(?Q_RETURNBODY, RD) of ?Q_TRUE -> [returnbody]; _ -> [] end,
-    case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
+    case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, 
+                     {timeout, Ctx#ctx.timeout} |
                 Options]) of
         {error, Reason} ->
             handle_common_error(Reason, RD, Ctx);
@@ -830,15 +849,18 @@ ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
 ensure_doc(Ctx=#ctx{doc=undefined, bucket=B, key=K, client=C, r=R,
         pr=PR, basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
     Ctx#ctx{doc=C:get(B, K, [deletedvclock, {r, R}, {pr, PR},
-                {basic_quorum, Quorum}, {notfound_ok, NotFoundOK}])};
+                             {basic_quorum, Quorum}, 
+                             {notfound_ok, NotFoundOK}, 
+                             {timeout, Ctx#ctx.timeout}])};
 ensure_doc(Ctx) -> Ctx.
 
 %% @spec delete_resource(reqdata(), context()) -> {true, reqdata(), context()}
 %% @doc Delete the document specified.
 delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C, rw=RW, r=R, w=W,
-        pr=PR, pw=PW, dw=DW}) ->
+        pr=PR, pw=PW, dw=DW, timeout=Timeout}) ->
     Options = lists:filter(fun({_, default}) -> false; (_) -> true end,
-        [{rw, RW}, {r, R}, {w, W}, {pr, PR}, {pw, PW}, {dw, DW}]),
+        [{rw, RW}, {r, R}, {w, W}, {pr, PR}, {pw, PW}, {dw, DW}, 
+         {timeout, Timeout}]),
     Result = case wrq:get_req_header(?HEAD_VCLOCK, RD) of
         undefined -> 
             C:delete(B,K,Options);

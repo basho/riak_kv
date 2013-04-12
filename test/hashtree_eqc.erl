@@ -5,14 +5,16 @@
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eqc/include/eqc_statem.hrl").
+-define(QC_OUT(P),
+        eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
 -include_lib("eunit/include/eunit.hrl").
 
 hashtree_test_() ->
     {timeout, 30,
         fun() ->
-                ?assert(eqc:quickcheck(eqc:testing_time(29,
-                            hashtree_eqc:prop_correct())))
+                ?assert(eqc:quickcheck(?QC_OUT(eqc:testing_time(29,
+                            hashtree_eqc:prop_correct()))))
         end
     }.
 
@@ -182,8 +184,8 @@ prop_correct() ->
                             begin
                                     io:format("History: ~p\nState: ~p\nRes: ~p\n~p\n",
                                         [H,S,Res, zip(tl(Cmds), [Y || {_, Y} <- H])]),
-                                    catch hashtree:destroy(S#state.tree1),
-                                    catch hashtree:destroy(S#state.tree2)
+                                    catch hashtree:destroy(hashtree:close(S#state.tree1)),
+                                    catch hashtree:destroy(hashtree:close(S#state.tree2))
                             end,
                             begin
                                     ?assertEqual(ok, Res),
@@ -215,8 +217,8 @@ prop_correct() ->
                                             ?assertEqual(lists:usort(Expected),
                                                 lists:usort(KeyDiff)),
 
-                                            hashtree:destroy(T1),
-                                            hashtree:destroy(T2),
+                                            catch hashtree:destroy(hashtree:close(T1)),
+                                            catch hashtree:destroy(hashtree:close(T2)),
                                             true
                                     end
                             end
