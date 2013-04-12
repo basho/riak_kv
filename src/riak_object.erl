@@ -763,7 +763,6 @@ encode_vclock(VClock) ->
     end.
 
 %% Decode a vclock against our capability settings:
-%% JFW: -spec decode_vclock(VClock :: term()) -> vclock:vclock().
 -spec decode_vclock(VClock :: base64:ascii_string() | base64:ascii_binary()) -> vclock:vclock().
 decode_vclock(VClock) ->
     case vclock_encoding_method() of
