@@ -275,8 +275,8 @@ init([Index]) ->
     end.
 
 
-handle_overload_command(?KV_PUT_REQ{req_id=ReqID}, Sender, Idx) ->
-    riak_core_vnode:reply(Sender, {fail, Idx, ReqID});
+handle_overload_command(?KV_PUT_REQ{}, Sender, Idx) ->
+    riak_core_vnode:reply(Sender, {fail, Idx, overload}); % subvert ReqId
 handle_overload_command(?KV_GET_REQ{req_id=ReqID}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqID});
 handle_overload_command(_, _, _) ->
