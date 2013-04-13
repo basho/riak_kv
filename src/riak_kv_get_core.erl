@@ -223,7 +223,13 @@ merge(Replies, AllowMult) ->
 
 fail_reply(_R, _NumR, 0, NumNotFound, []) when NumNotFound > 0 ->
     {error, notfound};
-fail_reply(R, NumR, _NumNotDeleted, _NumNotFound, _Fails) ->
-    {error, {r_val_unsatisfied, R,  NumR}}.
+fail_reply(R, NumR, _NumNotDeleted, _NumNotFound, Fails) ->
+    case [x || {_,{error, overload}} <- Fails] of
+        [] ->
+            {error, {r_val_unsatisfied, R,  NumR}};
+        _->
+            {error, overload}
+    end.
+
 
 

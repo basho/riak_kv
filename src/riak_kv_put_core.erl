@@ -100,7 +100,8 @@ enough(#putcore{w = W, num_w = NumW, dw = DW, num_dw = NumDW,
 response(PutCore = #putcore{w = W, num_w = NumW, dw = DW, num_dw = NumDW,
                             num_fail = NumFail,
                             w_fail_threshold = WFailThreshold,
-                            dw_fail_threshold = DWFailThreshold}) ->
+                            dw_fail_threshold = DWFailThreshold,
+                            results = Results}) ->
     if
         NumW >= W andalso NumDW >= DW ->
             maybe_return_body(PutCore);
@@ -112,7 +113,12 @@ response(PutCore = #putcore{w = W, num_w = NumW, dw = DW, num_dw = NumDW,
             {{error, too_many_fails}, PutCore};
         
         true ->
-            {{error, {w_val_unsatisfied, NumW, NumDW, W, DW}}, PutCore}
+            case [x || {_,{fail, _Idx, overload}} <- Results] of
+                [] ->
+                    {{error, {w_val_unsatisfied, NumW, NumDW, W, DW}}, PutCore};
+                _ ->
+                    {{error, overload}, PutCore}
+            end
     end.
 
 %% Get final value - if returnbody did not need the result it allows delaying
