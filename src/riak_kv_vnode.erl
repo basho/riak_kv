@@ -47,6 +47,7 @@
 -export([init/1,
          terminate/2,
          handle_command/3,
+         handle_overload_command/3,
          handle_coverage/4,
          is_empty/1,
          delete/1,
@@ -273,6 +274,14 @@ init([Index]) ->
             {error, Reason1}
     end.
 
+
+handle_overload_command(?KV_PUT_REQ{req_id=ReqID}, Sender, Idx) ->
+    riak_core_vnode:reply(Sender, {fail, Idx, ReqID});
+handle_overload_command(?KV_GET_REQ{req_id=ReqID}, Sender, Idx) ->
+    riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqID});
+handle_overload_command(_, _, _) ->
+    %% not handled yet
+    ok.
 
 handle_command(?KV_PUT_REQ{bkey=BKey,
                            object=Object,
