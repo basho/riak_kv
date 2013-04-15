@@ -189,12 +189,14 @@ collect_output(next, State) ->
             end
     end;
 collect_output(#pipe_result{ref=Ref, from=PhaseId, result=Res},
-               #state{ref=Ref, results=Acc}=State) ->
+               #state{ref=Ref, results=Acc, buffer_left=Left}=State) ->
     NewAcc = add_result(PhaseId, Res, Acc),
-    {next_state, collect_output, State#state{results=NewAcc}};
+    {next_state, collect_output,
+     State#state{results=NewAcc, buffer_left=Left-1}};
 collect_output(#pipe_log{ref=Ref, from=PhaseId, msg=Msg},
-               #state{ref=Ref, logs=Acc}=State) ->
-    {next_state, collect_output, State#state{logs=[{PhaseId, Msg}|Acc]}};
+               #state{ref=Ref, logs=Acc, buffer_left=Left}=State) ->
+    {next_state, collect_output,
+     State#state{logs=[{PhaseId, Msg}|Acc], buffer_left=Left-1}};
 collect_output(#pipe_eoi{ref=Ref}, #state{ref=Ref}=State) ->
     {next_state, collect_output, State#state{done=true}};
 collect_output(_, State) ->
@@ -382,14 +384,18 @@ buffer_size_test_() ->
     Tests = [ {"buffer option", 5, [{buffer, 5}], []},
               {"buffer app env", 5, [], [{mrc_sink_buffer, 5}]},
               {"buffer default", ?BUFFER_SIZE_DEFAULT, [], []} ],
+    FillFuns = [ {"send_event", fun gen_fsm:send_event/2},
+                 {"sync_send_event", fun gen_fsm:sync_send_event/2},
+                 {"erlang:send", fun(S, R) -> S ! R, ok end} ],
     {foreach,
      fun() -> application:load(riak_kv) end,
      fun(_) -> application:unload(riak_kv) end,
-     [buffer_size_test_helper(Name, Size, Options, AppEnv)
-      || {Name, Size, Options, AppEnv} <- Tests]}.
+     [buffer_size_test_helper(Name, FillFun, Size, Options, AppEnv)
+      || {Name, Size, Options, AppEnv} <- Tests,
+         FillFun <- FillFuns]}.
 
-buffer_size_test_helper(Name, Size, Options, AppEnv) ->
-    {Name,
+buffer_size_test_helper(Name, {FillName, FillFun}, Size, Options, AppEnv) ->
+    {Name++" "++FillName,
      fun() ->
             application:load(riak_kv),
             [ application:set_env(riak_kv, K, V) || {K, V} <- AppEnv ],
@@ -402,10 +408,9 @@ buffer_size_test_helper(Name, Size, Options, AppEnv) ->
             ?MODULE:use_pipe(Sink, Pipe),
 
             %% fill its buffer
-            [ ok = gen_fsm:sync_send_event(
+            [ ok = FillFun(
                      Sink,
-                     #pipe_result{from=tester, ref=Ref, result=I},
-                     1000)
+                     #pipe_result{from=tester, ref=Ref, result=I})
               || I <- lists:seq(1, Size) ],
             
             %% ensure extra result will block
