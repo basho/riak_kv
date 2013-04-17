@@ -163,6 +163,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
     StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
+
     new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
                                           n = N,
                                           bucket_props=BucketProps,
@@ -184,24 +185,27 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
     PR = riak_kv_util:expand_rw_value(pr, PR0, BucketProps, N),
     NumVnodes = length(PL2),
     NumPrimaries = length([x || {_,primary} <- PL2]),
+    IdxType = [{Part, Type} || {{Part, _Node}, Type} <- PL2],
+
     case validate_quorum(R, R0, N, PR, PR0, NumPrimaries, NumVnodes) of
         ok ->
             BQ0 = get_option(basic_quorum, Options, default),
+            FailR = erlang:max(R, PR), %% fail fast
             FailThreshold =
                 case riak_kv_util:expand_value(basic_quorum, BQ0, BucketProps) of
                     true ->
                         erlang:min((N div 2)+1, % basic quorum, or
-                                   (N-R+1)); % cannot ever get R 'ok' replies
+                                   (N-FailR+1)); % cannot ever get R 'ok' replies
                     _ElseFalse ->
-                        N - R + 1 % cannot ever get R 'ok' replies
+                        N - FailR + 1 % cannot ever get R 'ok' replies
                 end,
             AllowMult = proplists:get_value(allow_mult,BucketProps),
             NFOk0 = get_option(notfound_ok, Options, default),
             NotFoundOk = riak_kv_util:expand_value(notfound_ok, NFOk0, BucketProps),
             DeletedVClock = get_option(deletedvclock, Options, false),
-            GetCore = riak_kv_get_core:init(N, R, FailThreshold,
+            GetCore = riak_kv_get_core:init(N, R, PR, FailThreshold,
                                             NotFoundOk, AllowMult,
-                                            DeletedVClock),
+                                            DeletedVClock, IdxType),
             new_state_timeout(execute, StateData#state{get_core = GetCore,
                                                        timeout = Timeout,
                                                        req_id = ReqId});
@@ -402,7 +406,7 @@ determine_do_read_repair(SoftCap, HardCap, Actual, Roll) ->
 
 -ifdef(TEST).
 roll_d100() ->
-    fsm_eqc_util:get_fake_rng(get_fsm_qc).
+    fsm_eqc_util:get_fake_rng(get_fsm_eqc).
 -else.
 % technically not a d100 as it has a 0
 roll_d100() ->
@@ -455,25 +459,12 @@ client_reply(Reply, StateData0 = #state{from = {raw, ReqId, Pid},
 update_stats({ok, Obj}, #state{tracked_bucket = StatTracked, calculated_timings={ResponseUSecs, Stages}}) ->
     %% Stat the number of siblings and the object size, and timings
     NumSiblings = riak_object:value_count(Obj),
+    ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
+    ObjSize = riak_object:approximate_size(ObjFmt, Obj),
     Bucket = riak_object:bucket(Obj),
-    ObjSize = calculate_objsize(Bucket, Obj),
     riak_kv_stat:update({get_fsm, Bucket, ResponseUSecs, Stages, NumSiblings, ObjSize, StatTracked});
 update_stats(_, #state{ bkey = {Bucket, _}, tracked_bucket = StatTracked, calculated_timings={ResponseUSecs, Stages}}) ->
     riak_kv_stat:update({get_fsm, Bucket, ResponseUSecs, Stages, undefined, undefined, StatTracked}).
-
-%% Get an approximation of object size by adding together the bucket, key,
-%% vectorclock, and all of the siblings. This is more complex than
-%% calling term_to_binary/1, but it should be easier on memory,
-%% especially for objects with large values.
-calculate_objsize(Bucket, Obj) ->
-    Contents = riak_object:get_contents(Obj),
-    size(Bucket) +
-        size(riak_object:key(Obj)) +
-        size(term_to_binary(riak_object:vclock(Obj))) +
-        lists:sum([size(term_to_binary(MD)) + value_size(Value) || {MD, Value} <- Contents]).
-
-value_size(Value) when is_binary(Value) -> size(Value);
-value_size(Value) -> size(term_to_binary(Value)).
 
 client_info(true, StateData, Acc) ->
     client_info(details(), StateData, Acc);

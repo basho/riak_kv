@@ -28,7 +28,7 @@
 -endif.
 -include("riak_kv_wm_raw.hrl").
 
--export_type([riak_object/0, bucket/0, key/0, value/0]).
+-export_type([riak_object/0, bucket/0, key/0, value/0, binary_version/0]).
 
 -type key() :: binary().
 -type bucket() :: binary().
@@ -53,17 +53,26 @@
 
 -type index_op() :: add | remove.
 -type index_value() :: integer() | binary().
+-type binary_version() :: v0 | v1.
 
 -define(MAX_KEY_SIZE, 65536).
+
+-define(LASTMOD_LEN, 29). %% static length of rfc1123_date() type. Hard-coded in Erlang.
+-define(V1_VERS, 1).
+-define(MAGIC, 53).      %% Magic number, as opposed to 131 for Erlang term-to-binary magic
+                         %% Shanley's(11) + Joe's(42)
+-define(EMPTY_VTAG_BIN, <<"e">>).
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
+-export([hash/1, approximate_size/2]).
 -export([vclock/1, update_value/2, update_metadata/2, bucket/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([merge/2, apply_updates/1, syntactic_merge/2]).
 -export([to_json/1, from_json/1]).
 -export([index_specs/1, diff_index_specs/2]).
+-export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 
 %% @doc Constructor for new riak objects.
@@ -98,12 +107,12 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
             end
     end.
 
-%% Ensure the incoming term is a riak_object.
+%% @doc Ensure the incoming term is a riak_object.
 -spec ensure_robject(any()) -> riak_object().
 ensure_robject(Obj = #r_object{}) -> Obj.
 
--spec equal(riak_object(), riak_object()) -> true | false.
 %% @doc Deep (expensive) comparison of Riak objects.
+-spec equal(riak_object(), riak_object()) -> true | false.
 equal(Obj1,Obj2) ->
     (Obj1#r_object.bucket =:= Obj2#r_object.bucket)
         andalso (Obj1#r_object.key =:= Obj2#r_object.key)
@@ -129,13 +138,29 @@ equal_contents([C1|R1],[C2|R2]) ->
         andalso (C1#r_content.value =:= C2#r_content.value)
         andalso equal_contents(R1,R2).
 
-%% @spec reconcile([riak_object()], boolean()) -> riak_object()
+
+%% @doc  Given a list of riak_object()s, return the objects that are pure
+%%       ancestors of other objects in the list, if any.  The changes in the
+%%       objects returned by this function are guaranteed to be reflected in
+%%       the other objects in Objects, and can safely be discarded from the list
+%%       without losing data.
+-spec ancestors([riak_object()]) -> [riak_object()].
+ancestors(pure_baloney_to_fool_dialyzer) ->
+    [#r_object{vclock = vclock:fresh()}];
+ancestors(Objects) ->
+    ToRemove = [[O2 || O2 <- Objects,
+                       vclock:descends(O1#r_object.vclock,O2#r_object.vclock),
+                       (vclock:descends(O2#r_object.vclock,O1#r_object.vclock) == false)]
+                || O1 <- Objects],
+    lists:flatten(ToRemove).
+
 %% @doc  Reconcile a list of riak objects.  If AllowMultiple is true,
 %%       the riak_object returned may contain multiple values if Objects
 %%       contains sibling versions (objects that could not be syntactically
 %%       merged).   If AllowMultiple is false, the riak_object returned will
 %%       contain the value of the most-recently-updated object, as per the
 %%       X-Riak-Last-Modified header.
+-spec reconcile([riak_object()], boolean()) -> riak_object().
 reconcile(Objects, AllowMultiple) ->
     RObjs = reconcile(Objects),
     AllContents = lists:flatten([O#r_object.contents || O <- RObjs]),
@@ -151,22 +176,7 @@ reconcile(Objects, AllowMultiple) ->
                    updatemetadata=dict:store(clean, true, dict:new()),
                    updatevalue=undefined}.
 
-%% @spec ancestors([riak_object()]) -> [riak_object()]
-%% @doc  Given a list of riak_object()s, return the objects that are pure
-%%       ancestors of other objects in the list, if any.  The changes in the
-%%       objects returned by this function are guaranteed to be reflected in
-%%       the other objects in Objects, and can safely be discarded from the list
-%%       without losing data.
-ancestors(pure_baloney_to_fool_dialyzer) ->
-    [#r_object{vclock = vclock:fresh()}];
-ancestors(Objects) ->
-    ToRemove = [[O2 || O2 <- Objects,
-                       vclock:descends(O1#r_object.vclock,O2#r_object.vclock),
-                       (vclock:descends(O2#r_object.vclock,O1#r_object.vclock) == false)]
-                || O1 <- Objects],
-    lists:flatten(ToRemove).
-
-%% @spec reconcile([riak_object()]) -> [riak_object()]
+-spec reconcile([riak_object()]) -> [riak_object()].
 reconcile(Objects) ->
     All = sets:from_list(Objects),
     Del = sets:from_list(ancestors(Objects)),
@@ -209,9 +219,9 @@ compare_content_dates(C1,C2) ->
             C1 < C2
     end.
 
-%% @spec merge(riak_object(), riak_object()) -> riak_object()
 %% @doc  Merge the contents and vclocks of OldObject and NewObject.
 %%       Note:  This function calls apply_updates on NewObject.
+-spec merge(riak_object(), riak_object()) -> riak_object().
 merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
     OldObject#r_object{contents=lists:umerge(lists:usort(NewObject#r_object.contents),
@@ -221,9 +231,9 @@ merge(OldObject, NewObject) ->
                        updatemetadata=dict:store(clean, true, dict:new()),
                        updatevalue=undefined}.
 
-%% @spec apply_updates(riak_object()) -> riak_object()
 %% @doc  Promote pending updates (made with the update_value() and
 %%       update_metadata() calls) to this riak_object.
+-spec apply_updates(riak_object()) -> riak_object().
 apply_updates(Object=#r_object{}) ->
     VL = case Object#r_object.updatevalue of
              undefined ->
@@ -246,75 +256,82 @@ apply_updates(Object=#r_object{}) ->
                     updatemetadata=dict:store(clean, true, dict:new()),
                     updatevalue=undefined}.
 
-%% @spec bucket(riak_object()) -> bucket()
 %% @doc Return the containing bucket for this riak_object.
+-spec bucket(riak_object()) -> bucket().
 bucket(#r_object{bucket=Bucket}) -> Bucket.
 
-%% @spec key(riak_object()) -> key()
 %% @doc  Return the key for this riak_object.
+-spec key(riak_object()) -> key().
 key(#r_object{key=Key}) -> Key.
 
-%% @spec vclock(riak_object()) -> vclock:vclock()
 %% @doc  Return the vector clock for this riak_object.
+-spec vclock(riak_object()) -> vclock:vclock().
 vclock(#r_object{vclock=VClock}) -> VClock.
 
-%% @spec value_count(riak_object()) -> non_neg_integer()
 %% @doc  Return the number of values (siblings) of this riak_object.
+-spec value_count(riak_object()) -> non_neg_integer().
 value_count(#r_object{contents=Contents}) -> length(Contents).
 
-%% @spec get_contents(riak_object()) -> [{dict(), value()}]
 %% @doc  Return the contents (a list of {metadata, value} tuples) for
 %%       this riak_object.
+-spec get_contents(riak_object()) -> [{dict(), value()}].
 get_contents(#r_object{contents=Contents}) ->
     [{Content#r_content.metadata, Content#r_content.value} ||
         Content <- Contents].
 
-%% @spec get_metadata(riak_object()) -> dict()
 %% @doc  Assert that this riak_object has no siblings and return its associated
 %%       metadata.  This function will fail with a badmatch error if the
 %%       object has siblings (value_count() > 1).
+-spec get_metadata(riak_object()) -> dict().
 get_metadata(O=#r_object{}) ->
-                                                % this blows up intentionally (badmatch) if more than one content value!
+    % this blows up intentionally (badmatch) if more than one content value!
     [{Metadata,_V}] = get_contents(O),
     Metadata.
 
-%% @spec get_metadatas(riak_object()) -> [dict()]
 %% @doc  Return a list of the metadata values for this riak_object.
+-spec get_metadatas(riak_object()) -> [dict()].
 get_metadatas(#r_object{contents=Contents}) ->
     [Content#r_content.metadata || Content <- Contents].
 
-%% @spec get_values(riak_object()) -> [value()]
 %% @doc  Return a list of object values for this riak_object.
+-spec get_values(riak_object()) -> [value()].
 get_values(#r_object{contents=C}) -> [Content#r_content.value || Content <- C].
 
-%% @spec get_value(riak_object()) -> value()
 %% @doc  Assert that this riak_object has no siblings and return its associated
 %%       value.  This function will fail with a badmatch error if the object
 %%       has siblings (value_count() > 1).
+-spec get_value(riak_object()) -> value().
 get_value(Object=#r_object{}) ->
-                                                % this blows up intentionally (badmatch) if more than one content value!
+    % this blows up intentionally (badmatch) if more than one content value!
     [{_M,Value}] = get_contents(Object),
     Value.
 
-%% @spec update_metadata(riak_object(), dict()) -> riak_object()
+%% @doc calculates the hash of a riak object
+-spec hash(riak_object()) -> integer().
+hash(Obj=#r_object{}) ->
+    Vclock = vclock(Obj),
+    UpdObj = riak_object:set_vclock(Obj, lists:sort(Vclock)),
+    erlang:phash2(to_binary(v0, UpdObj)).
+
 %% @doc  Set the updated metadata of an object to M.
+-spec update_metadata(riak_object(), dict()) -> riak_object().
 update_metadata(Object=#r_object{}, M) ->
     Object#r_object{updatemetadata=dict:erase(clean, M)}.
 
-%% @spec update_value(riak_object(), value()) -> riak_object()
 %% @doc  Set the updated value of an object to V
+-spec update_value(riak_object(), value()) -> riak_object().
 update_value(Object=#r_object{}, V) -> Object#r_object{updatevalue=V}.
 
-%% @spec get_update_metadata(riak_object()) -> dict()
 %% @doc  Return the updated metadata of this riak_object.
+-spec get_update_metadata(riak_object()) -> dict().
 get_update_metadata(#r_object{updatemetadata=UM}) -> UM.
 
-%% @spec get_update_value(riak_object()) -> value()
 %% @doc  Return the updated value of this riak_object.
+-spec get_update_value(riak_object()) -> value().
 get_update_value(#r_object{updatevalue=UV}) -> UV.
 
-%% @spec set_vclock(riak_object(), vclock:vclock()) -> riak_object()
 %% @doc  INTERNAL USE ONLY.  Set the vclock of riak_object O to V.
+-spec set_vclock(riak_object(), vclock:vclock()) -> riak_object().
 set_vclock(Object=#r_object{}, VClock) -> Object#r_object{vclock=VClock}.
 
 %% @doc  Increment the entry for ClientId in O's vclock.
@@ -381,16 +398,16 @@ index_data(Obj) ->
 assemble_index_specs(Indexes, IndexOp) ->
     [{IndexOp, Index, Value} || {Index, Value} <- Indexes].
 
-%% @spec set_contents(riak_object(), [{dict(), value()}]) -> riak_object()
 %% @doc  INTERNAL USE ONLY.  Set the contents of riak_object to the
 %%       {Metadata, Value} pairs in MVs. Normal clients should use the
 %%       set_update_[value|metadata]() + apply_updates() method for changing
 %%       object contents.
+-spec set_contents(riak_object(), [{dict(), value()}]) -> riak_object().
 set_contents(Object=#r_object{}, MVs) when is_list(MVs) ->
     Object#r_object{contents=[#r_content{metadata=M,value=V} || {M, V} <- MVs]}.
 
-%% @spec to_json(riak_object()) -> {struct, list(any())}
 %% @doc Converts a riak_object into its JSON equivalent
+-spec to_json(riak_object()) -> {struct, list(any())}.
 to_json(Obj=#r_object{}) ->
     {_,Vclock} = riak_kv_wm_utils:vclock_header(Obj),
     {struct, [{<<"bucket">>, riak_object:bucket(Obj)},
@@ -505,7 +522,7 @@ dejsonify_meta_value({struct, PList}) ->
                         [{Key, dejsonify_meta_value(V)}|Acc]
                 end, [], PList);
 dejsonify_meta_value(Value) -> Value.
-                               
+
 
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
     case dict:find(clean, M) of
@@ -518,6 +535,7 @@ is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
     end.
 
 
+-spec syntactic_merge(riak_object(), riak_object()) -> riak_object().
 syntactic_merge(CurrentObject, NewObject) ->
     %% Paranoia in case objects were incorrectly stored
     %% with update information.  Vclock is not updated
@@ -531,7 +549,7 @@ syntactic_merge(CurrentObject, NewObject) ->
                       true  -> apply_updates(CurrentObject);
                       false -> CurrentObject
                   end,
-    
+
     case ancestors([UpdatedCurr, UpdatedNew]) of
         [] -> merge(UpdatedCurr, UpdatedNew);
         [Ancestor] ->
@@ -540,6 +558,180 @@ syntactic_merge(CurrentObject, NewObject) ->
                 false -> UpdatedCurr
             end
     end.
+
+%% @doc Get an approximation of object size by adding together the bucket, key,
+%% vectorclock, and all of the siblings. This is more complex than
+%% calling term_to_binary/1, but it should be easier on memory,
+%% especially for objects with large values.
+-spec approximate_size(binary_version(), riak_object()) -> integer().
+approximate_size(Vsn, Obj=#r_object{bucket=Bucket,key=Key,vclock=VClock}) ->
+    Contents = get_contents(Obj),
+    size(Bucket) + size(Key) + size(term_to_binary(VClock)) + contents_size(Vsn, Contents).
+
+contents_size(Vsn, Contents) ->
+    lists:sum([metadata_size(Vsn, MD) + value_size(Val) || {MD, Val} <- Contents]).
+
+metadata_size(v0, MD) ->
+    size(term_to_binary(MD));
+metadata_size(v1, MD) ->
+    size(meta_bin(MD)).
+
+value_size(Value) when is_binary(Value) -> size(Value);
+value_size(Value) -> size(term_to_binary(Value)).
+
+%% @doc Convert riak object to binary form
+-spec to_binary(binary_version(), riak_object()) -> binary().
+to_binary(v0, RObj) ->
+    term_to_binary(RObj);
+to_binary(v1, #r_object{contents=Contents, vclock=VClock}) ->
+    new_v1(VClock, Contents).
+
+%% @doc convert a binary encoded riak object to a different
+%% encoding version. If the binary is already in the desired
+%% encoding this is a no-op
+-spec to_binary_version(binary_version(), bucket(), key(), binary()) -> binary().
+to_binary_version(v0, _, _, <<131,_/binary>>=Bin) ->
+    Bin;
+to_binary_version(v1, _, _, <<?MAGIC:8/integer, 1:8/integer, _/binary>>=Bin) ->
+    Bin;
+to_binary_version(Vsn, B, K, Bin) ->
+    to_binary(Vsn, from_binary(B, K, Bin)).
+
+%% @doc return the binary version the riak object binary is encoded in
+-spec binary_version(binary()) -> binary_version().
+binary_version(<<131,_/binary>>) -> v0;
+binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
+
+%% @doc Convert binary object to riak object
+-spec from_binary(bucket(),key(),binary()) -> riak_object().
+from_binary(_B,_K,<<131, _Rest/binary>>=ObjTerm) ->
+    binary_to_term(ObjTerm);
+from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
+    %% Version 1 of binary riak object
+    case Rest of
+        <<VclockLen:32/integer, VclockBin:VclockLen/binary, SibCount:32/integer, SibsBin/binary>> ->
+            Vclock = binary_to_term(VclockBin),
+            Contents = sibs_of_binary(SibCount, SibsBin),
+            #r_object{bucket=B,key=K,contents=Contents,vclock=Vclock};
+        _Other ->
+            {error, bad_object_format}
+    end.
+
+sibs_of_binary(Count,SibsBin) ->
+    sibs_of_binary(Count, SibsBin, []).
+
+sibs_of_binary(0, <<>>, Result) -> lists:reverse(Result);
+sibs_of_binary(0, _NotEmpty, _Result) ->
+    {error, corrupt_contents};
+sibs_of_binary(Count, SibsBin, Result) ->
+    {Sib, SibsRest} = sib_of_binary(SibsBin),
+    sibs_of_binary(Count-1, SibsRest, [Sib | Result]).
+
+sib_of_binary(<<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBin:MetaLen/binary, Rest/binary>>) ->
+    <<LMMega:32/integer, LMSecs:32/integer, LMMicro:32/integer, VTagLen:8/integer, VTag:VTagLen/binary, Deleted:1/binary-unit:8, MetaRestBin/binary>> = MetaBin,
+
+    MDList0 = deleted_meta(Deleted, []),
+    MDList1 = last_mod_meta({LMMega, LMSecs, LMMicro}, MDList0),
+    MDList2 = vtag_meta(VTag, MDList1),
+    MDList = meta_of_binary(MetaRestBin, MDList2),
+    MD = dict:from_list(MDList),
+    {#r_content{metadata=MD, value=decode_maybe_binary(ValBin)}, Rest}.
+
+deleted_meta(<<1>>, MDList) ->
+    [{?MD_DELETED, true} | MDList];
+deleted_meta(_, MDList) ->
+    MDList.
+
+last_mod_meta({0, 0, 0}, MDList) ->
+    MDList;
+last_mod_meta(LM, MDList) ->
+    [{?MD_LASTMOD, LM} | MDList].
+
+vtag_meta(?EMPTY_VTAG_BIN, MDList) ->
+    MDList;
+vtag_meta(VTag, MDList) ->
+    [{?MD_VTAG, binary_to_list(VTag)} | MDList].
+
+meta_of_binary(<<>>, Acc) ->
+    Acc;
+meta_of_binary(<<KeyLen:32/integer, KeyBin:KeyLen/binary, ValueLen:32/integer, ValueBin:ValueLen/binary, Rest/binary>>, ResultList) ->
+    Key = decode_maybe_binary(KeyBin),
+    Value = decode_maybe_binary(ValueBin),
+    meta_of_binary(Rest, [{Key, Value} | ResultList]).
+
+%% V1 Riak Object Binary Encoding
+%% -type binobj_header()     :: <<53:8, Version:8, VClockLen:32, VClockBin/binary,
+%%                                SibCount:32>>.
+%% -type binobj_flags()      :: <<Deleted:1, 0:7/bitstring>>.
+%% -type binobj_umeta_pair() :: <<KeyLen:32, Key/binary, ValueLen:32, Value/binary>>.
+%% -type binobj_meta()       :: <<LastMod:LastModLen, VTag:128, binobj_flags(),
+%%                                [binobj_umeta_pair()]>>.
+%% -type binobj_value()      :: <<ValueLen:32, ValueBin/binary, MetaLen:32,
+%%                                [binobj_meta()]>>.
+%% -type binobj()            :: <<binobj_header(), [binobj_value()]>>.
+new_v1(Vclock, Siblings) ->
+    VclockBin = term_to_binary(Vclock),
+    VclockLen = byte_size(VclockBin),
+    SibCount = length(Siblings),
+    SibsBin = bin_contents(Siblings),
+    <<?MAGIC:8/integer, ?V1_VERS:8/integer, VclockLen:32/integer, VclockBin/binary, SibCount:32/integer, SibsBin/binary>>.
+
+bin_content(#r_content{metadata=Meta, value=Val}) ->
+    ValBin = encode_maybe_binary(Val),
+    ValLen = byte_size(ValBin),
+    MetaBin = meta_bin(Meta),
+    MetaLen = byte_size(MetaBin),
+    <<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBin:MetaLen/binary>>.
+
+bin_contents(Contents) ->
+    F = fun(Content, Acc) ->
+                <<Acc/binary, (bin_content(Content))/binary>>
+        end,
+    lists:foldl(F, <<>>, Contents).
+
+meta_bin(MD) ->
+    {{VTagVal, Deleted, LastModVal}, RestBin} = dict:fold(fun fold_meta_to_bin/3,
+                                                          {{undefined, <<0>>, undefined}, <<>>},
+                                                          MD),
+    VTagBin = case VTagVal of
+                  undefined ->  ?EMPTY_VTAG_BIN;
+                  _ -> list_to_binary(VTagVal)
+              end,
+    VTagLen = byte_size(VTagBin),
+    LastModBin = case LastModVal of
+                     undefined -> <<0:32/integer, 0:32/integer, 0:32/integer>>;
+                     {Mega,Secs,Micro} -> <<Mega:32/integer, Secs:32/integer, Micro:32/integer>>
+                 end,
+    <<LastModBin/binary, VTagLen:8/integer, VTagBin:VTagLen/binary,
+      Deleted:1/binary-unit:8, RestBin/binary>>.
+
+fold_meta_to_bin(?MD_VTAG, Value, {{_Vt,Del,Lm},RestBin}) ->
+    {{Value, Del, Lm}, RestBin};
+fold_meta_to_bin(?MD_LASTMOD, Value, {{Vt,Del,_Lm},RestBin}) ->
+     {{Vt, Del, Value}, RestBin};
+fold_meta_to_bin(?MD_DELETED, true, {{Vt,_Del,Lm},RestBin})->
+     {{Vt, <<1>>, Lm}, RestBin};
+fold_meta_to_bin(?MD_DELETED, "true", Acc) ->
+    fold_meta_to_bin(?MD_DELETED, true, Acc);
+fold_meta_to_bin(?MD_DELETED, _, {{Vt,_Del,Lm},RestBin}) ->
+    {{Vt, <<0>>, Lm}, RestBin};
+fold_meta_to_bin(Key, Value, {{_Vt,_Del,_Lm}=Elems,RestBin}) ->
+    ValueBin = encode_maybe_binary(Value),
+    ValueLen = byte_size(ValueBin),
+    KeyBin = encode_maybe_binary(Key),
+    KeyLen = byte_size(KeyBin),
+    MetaBin = <<KeyLen:32/integer, KeyBin/binary, ValueLen:32/integer, ValueBin/binary>>,
+    {Elems, <<RestBin/binary, MetaBin/binary>>}.
+
+encode_maybe_binary(Bin) when is_binary(Bin) ->
+    <<1, Bin/binary>>;
+encode_maybe_binary(Bin) ->
+    <<0, (term_to_binary(Bin))/binary>>.
+
+decode_maybe_binary(<<1, Bin/binary>>) ->
+    Bin;
+decode_maybe_binary(<<0, Bin/binary>>) ->
+    binary_to_term(Bin).
 
 -ifdef(TEST).
 
@@ -793,7 +985,7 @@ check_most_recent({V1, T1, D1}, {V2, T2, D2}) ->
     ?assertEqual(C3, C4),
 
     C3#r_content.value.
-    
+
 
 determinstic_most_recent_test() ->
     D = calendar:datetime_to_gregorian_seconds(

@@ -76,6 +76,7 @@
                 n :: pos_integer(),
                 w :: non_neg_integer(),
                 dw :: non_neg_integer(),
+                pw :: non_neg_integer(),
                 coord_pl_entry :: {integer(), atom()},
                 preflist2 :: riak_core_apl:preflist2(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
@@ -93,7 +94,7 @@
                 put_usecs :: undefined | non_neg_integer(),
                 timing = [] :: [{atom(), {non_neg_integer(), non_neg_integer(),
                                           non_neg_integer()}}],
-                reply, % reply sent to client
+                reply, % reply sent to client,
                 tracked_bucket=false :: boolean() %% tracke per bucket stats
                }).
 
@@ -274,11 +275,14 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
         _ ->
             %% DW must always be 1 with node-based vclocks.
             %% The coord vnode is responsible for incrementing the vclock
-            DW = erlang:min(DW1, erlang:max(1, W))
+            DW = erlang:max(DW1, 1)
     end,
+
+    IdxType = [{Part, Type} || {{Part, _Node}, Type} <- Preflist2],
     NumPrimaries = length([x || {_,primary} <- Preflist2]),
     NumVnodes = length(Preflist2),
-    MinVnodes = erlang:max(1, erlang:max(W, DW)), % always need at least one vnode
+    MinVnodes = lists:max([1, W, DW, PW]), % always need at least one vnode
+
     if
         PW =:= error ->
             process_reply({error, {pw_val_violation, PW0}}, StateData0);
@@ -306,7 +310,9 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                 if Disable -> [];
                    true -> get_hooks(postcommit, BucketProps)
                 end,
-            StateData1 = StateData0#state{n=N, w=W, dw=DW, allowmult=AllowMult,
+            StateData1 = StateData0#state{n=N,
+                                          w=W,
+                                          pw=PW, dw=DW, allowmult=AllowMult,
                                           precommit = Precommit,
                                           postcommit = Postcommit,
                                           req_id = ReqId,
@@ -314,7 +320,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
             Options = flatten_options(proplists:unfold(Options0 ++ ?DEFAULT_OPTS), []),
             StateData2 = handle_options(Options, StateData1),
             StateData3 = apply_updates(StateData2),
-            StateData = init_putcore(StateData3),
+            StateData = init_putcore(StateData3, IdxType),
             ?DTRACE(?C_PUT_FSM_VALIDATE, [N, W, PW, DW], []),
             case Precommit of
                 [] -> % Nothing to run, spare the timing code
@@ -368,6 +374,8 @@ execute_local(StateData=#state{robj=RObj, req_id = ReqId,
     %% Must always wait for local vnode - it contains the object with updated vclock
     %% to use for the remotes. (Ignore optimization for N=1 case for now).
     new_state(waiting_local_vnode, StateData2).
+
+
 
 %% @private
 waiting_local_vnode(request_timeout, StateData) ->
@@ -605,13 +613,14 @@ handle_options([{returnbody, false}|T], State = #state{postcommit = Postcommit})
     end;
 handle_options([{_,_}|T], State) -> handle_options(T, State).
 
-init_putcore(State = #state{n = N, w = W, dw = DW, allowmult = AllowMult,
-                            returnbody = ReturnBody}) ->
-    PutCore = riak_kv_put_core:init(N, W, DW,
-                                    N-W+1,   % cannot ever get W replies
+init_putcore(State = #state{n = N, w = W, pw = PW, dw = DW, allowmult = AllowMult,
+                            returnbody = ReturnBody}, IdxType) ->
+    PutCore = riak_kv_put_core:init(N, W, PW, DW,
+                                    N-PW+1,  % cannot ever get PW replies
                                     N-DW+1,  % cannot ever get DW replies
                                     AllowMult,
-                                    ReturnBody),
+                                    ReturnBody,
+                                    IdxType),
     State#state{putcore = PutCore}.
 
 

@@ -111,23 +111,14 @@ encodings_provided(RD, Ctx) ->
 %% @doc Produce the JSON response to a bucket-level GET.
 %%      Includes a list of known buckets if the "buckets=true" query
 %%      param is specified.
-produce_bucket_list(RD, Ctx) ->
-    APIVersion = Ctx#ctx.api_version,
-    Client = Ctx#ctx.client,
-    Prefix = Ctx#ctx.prefix,
-
-    {ListPart, LinkRD} =
-        case wrq:get_qs_value(?Q_BUCKETS, RD) of
+produce_bucket_list(RD, #ctx{client=Client}=Ctx) ->
+    ListPart = case wrq:get_qs_value(?Q_BUCKETS, RD) of
             ?Q_TRUE ->
                 %% Get the buckets.
                 {ok, Buckets} = Client:list_buckets(),
 
-                %% Add the bucket links.
-                Links1 = [{X, "contained"} || X <- Buckets],
-                Links2 = riak_kv_wm_utils:format_links(Links1, Prefix, APIVersion),
-                NewRD = wrq:merge_resp_headers(Links2, RD),
-                {[{?JSON_BUCKETS, Buckets}], NewRD};
+                [{?JSON_BUCKETS, Buckets}];
             _ ->
-                {[], RD}
+                []
         end,
-    {mochijson2:encode({struct, ListPart}), LinkRD, Ctx}.
+    {mochijson2:encode({struct, ListPart}), RD, Ctx}.
