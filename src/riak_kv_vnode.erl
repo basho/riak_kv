@@ -731,11 +731,9 @@ handle_handoff_command(Req, Sender, State) ->
     handle_command(Req, Sender, State).
 
 %% callback used by dynamic ring sizing to determine where
-%% requests should be forwarded. Gets/puts/deletes are forwarded
+%% requests should be forwarded. Puts/deletes are forwarded
 %% during the operation, all other requests are not
 request_hash(?KV_PUT_REQ{bkey=BKey}) ->
-    riak_core_util:chash_key(BKey);
-request_hash(?KV_GET_REQ{bkey=BKey}) ->
     riak_core_util:chash_key(BKey);
 request_hash(?KV_DELETE_REQ{bkey=BKey}) ->
     riak_core_util:chash_key(BKey);
