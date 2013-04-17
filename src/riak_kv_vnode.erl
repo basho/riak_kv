@@ -125,10 +125,8 @@ maybe_create_hashtrees(false, State) ->
 maybe_create_hashtrees(true, State=#state{idx=Index}) ->
     %% Only maintain a hashtree if a primary vnode
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    case riak_core_ring:index_owner(Ring, Index) == node() of
-        false ->
-            State;
-        true ->
+    case riak_core_ring:vnode_type(Ring, Index) of
+        primary ->
             RP = riak_kv_util:responsible_preflists(Index),
             case riak_kv_index_hashtree:start(Index, RP, self()) of
                 {ok, Trees} ->
@@ -139,7 +137,9 @@ maybe_create_hashtrees(true, State=#state{idx=Index}) ->
                                [Index, Error]),
                     erlang:send_after(1000, self(), retry_create_hashtree),
                     State#state{hashtrees=undefined}
-            end
+            end;
+        _ ->
+            State
     end.
 
 %% API
