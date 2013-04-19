@@ -638,7 +638,7 @@ sib_of_binary(<<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, Met
     {#r_content{metadata=MD, value=decode_maybe_binary(ValBin)}, Rest}.
 
 deleted_meta(<<1>>, MDList) ->
-    [{?MD_DELETED, true} | MDList];
+    [{?MD_DELETED, "true"} | MDList];
 deleted_meta(_, MDList) ->
     MDList.
 
