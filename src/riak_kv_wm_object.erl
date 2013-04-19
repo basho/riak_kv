@@ -727,7 +727,7 @@ multiple_choices(RD, Ctx) ->
     case select_doc(Ctx) of
         {M, _} ->
             case dict:find(?MD_DELETED, M) of
-                {ok, true} ->
+                {ok, "true"} ->
                     {false,
                         wrq:set_resp_header(?HEAD_DELETED, "true", RD),
                         Ctx};
