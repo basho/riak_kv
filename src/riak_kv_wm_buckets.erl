@@ -38,7 +38,8 @@
          forbidden/2,
          content_types_provided/2,
          encodings_provided/2,
-         produce_bucket_list/2
+         produce_bucket_list/2,
+         malformed_request/2
         ]).
 
 %% @type context() = term()
@@ -47,7 +48,8 @@
           client,       %% riak_client() - the store client
           prefix,       %% string() - prefix for resource uris
           riak,         %% local | {node(), atom()} - params for riak client
-          method        %% atom() - HTTP method for the request
+          method,       %% atom() - HTTP method for the request
+          timeout       %% integer() - list buckets timeout
          }).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -106,19 +108,67 @@ content_types_provided(RD, Ctx) ->
 encodings_provided(RD, Ctx) ->
     {riak_kv_wm_utils:default_encodings(), RD, Ctx}.
 
+malformed_request(RD, Ctx) ->
+    malformed_timeout_param(RD, Ctx).
+
+%% @spec malformed_timeout_param(reqdata(), context()) ->
+%%          {boolean(), reqdata(), context()}
+%% @doc Check that the timeout parameter is are a
+%%      string-encoded integer.  Store the integer value
+%%      in context() if so.
+malformed_timeout_param(RD, Ctx) ->
+    case wrq:get_qs_value("timeout", none, RD) of
+        none ->
+            {false, RD, Ctx};
+        TimeoutStr -> 
+            try
+                Timeout = list_to_integer(TimeoutStr),
+                {false, RD, Ctx#ctx{timeout=Timeout}}
+            catch
+                _:_ ->
+                    {true,
+                     wrq:append_to_resp_body(io_lib:format("Bad timeout "
+                                                           "value ~p~n",
+                                                           [TimeoutStr]),
+                                             wrq:set_resp_header(?HEAD_CTYPE, 
+                                                                 "text/plain", RD)),
+                     Ctx}
+            end
+    end.
+
 
 %% @spec produce_bucket_list(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Produce the JSON response to a bucket-level GET.
 %%      Includes a list of known buckets if the "buckets=true" query
 %%      param is specified.
-produce_bucket_list(RD, #ctx{client=Client}=Ctx) ->
-    ListPart = case wrq:get_qs_value(?Q_BUCKETS, RD) of
-            ?Q_TRUE ->
-                %% Get the buckets.
-                {ok, Buckets} = Client:list_buckets(),
+produce_bucket_list(RD, #ctx{client=Client,
+                             timeout=Timeout}=Ctx) ->
+    case wrq:get_qs_value(?Q_BUCKETS, RD) of
+        ?Q_TRUE ->
+            %% Get the buckets.
+            {ok, Buckets} = Client:list_buckets(Timeout),
+            {mochijson2:encode({struct, [{?JSON_BUCKETS, Buckets}]}), 
+             RD, Ctx};
+        ?Q_STREAM ->
+            F = fun() ->
+                        {ok, ReqId} = Client:stream_list_buckets(Timeout),
+                        stream_buckets(ReqId)
+                end,
+            {{stream, {[], F}}, RD, Ctx};
+        _ ->
+            {mochijson2:encode({struct, [{?JSON_BUCKETS, []}]})}
+        end.
 
-                [{?JSON_BUCKETS, Buckets}];
-            _ ->
-                []
-        end,
-    {mochijson2:encode({struct, ListPart}), RD, Ctx}.
+stream_buckets(ReqId) ->
+    receive
+        {ReqId, done} -> 
+                {mochijson2:encode({struct, 
+                                    [{<<"buckets">>, []}]}), done};
+        {ReqId, _From, {buckets_stream, Buckets}} ->
+            {mochijson2:encode({struct, [{<<"buckets">>, Buckets}]}), 
+             fun() -> stream_buckets(ReqId) end};
+        {ReqId, {buckets_stream, Buckets}} ->
+            {mochijson2:encode({struct, [{<<"buckets">>, Buckets}]}),
+             fun() -> stream_buckets(ReqId) end};
+        {ReqId, timeout} -> {mochijson2:encode({struct, [{error, timeout}]}), done}
+    end.

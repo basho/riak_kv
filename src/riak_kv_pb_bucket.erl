@@ -75,7 +75,11 @@ process(#rpblistbucketsreq{timeout=T}=Req,
         #state{client=C} = State) ->
     {ok, ReqId} = C:stream_list_buckets(T),
     {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
-
+%% this should remain for backwards compatibility
+process(rpblistbucketsreq, #state{client=C} = State) ->
+    {ok, ReqId} = C:stream_list_buckets(),
+    {reply, {stream, ReqId}, State#state{req = #rpblistbucketsreq{}, 
+                                         req_ctx = ReqId}};
 %% Start streaming in list keys
 process(#rpblistkeysreq{bucket=B,timeout=T}=Req, #state{client=C} = State) ->
     %% stream_list_keys results will be processed by process_stream/3
@@ -108,16 +112,10 @@ process_stream({ReqId, Error}, ReqId,
 process_stream({ReqId, done}, ReqId,
                State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {done, #rpblistbucketsresp{done = 1}, State};
-process_stream({ReqId, _From, {buckets, []}}, ReqId,
+process_stream({ReqId, {buckets_stream, []}}, ReqId,
                State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {ignore, State};
-process_stream({ReqId, {buckets, []}}, ReqId,
-               State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
-    {ignore, State};
-process_stream({ReqId, _From, {buckets, Buckets}}, ReqId,
-               State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
-    {reply, #rpblistbucketsresp{buckets = Buckets}, State};
-process_stream({ReqId, {buckets, Buckets}}, ReqId,
+process_stream({ReqId, {buckets_stream, Buckets}}, ReqId,
                State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {reply, #rpblistbucketsresp{buckets = Buckets}, State};
 process_stream({ReqId, Error}, ReqId,

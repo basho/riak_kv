@@ -91,8 +91,8 @@ finish({error, Error},
     reply(Error, From),
     {stop, normal, StateData};
 finish(clean, StateData=#state{from=From, stream=true}) ->
-    reply({buckets_stream, done}, From),
     ?DTRACE(?C_BUCKETS_FINISH, [0], []),
+    reply(done, From),
     {stop, normal, StateData};    
 finish(clean,
        StateData=#state{buckets=Buckets,
@@ -142,7 +142,7 @@ receive_bucket_stream(ReqId, Start) ->
 
 receive_bucket_stream(ReqId, Start, Buckets, Messages) ->
     receive
-        {ReqId, {buckets_stream, done}=Msg} ->
+        {ReqId, done=Msg} ->
             lager:debug("Bucket stream done! ~p", [timer:now_diff(os:timestamp(), Start)]),
             {Buckets, lists:reverse([Msg|Messages])};
         {ReqId, {buckets_stream, NewBuckets}=Msg} ->
