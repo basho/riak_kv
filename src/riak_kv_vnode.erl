@@ -760,7 +760,21 @@ encode_handoff_item({B, K}, V) ->
                #riakobject_pb{bucket=B, key=K, val=Val})).
 
 is_empty(State=#state{mod=Mod, modstate=ModState}) ->
-    {Mod:is_empty(ModState), State}.
+    IsEmpty = Mod:is_empty(ModState),
+    case IsEmpty of
+        true ->
+            {true, State};
+        false ->
+            Size = maybe_calc_handoff_size(State),
+            {false, Size, State}
+    end.
+
+maybe_calc_handoff_size(#state{mod=Mod,modstate=ModState}) ->
+    {ok, Capabilities} = Mod:capabilities(ModState),
+    case lists:member(size, Capabilities) of
+        true -> Mod:data_size(ModState);
+        false -> undefined
+    end.
 
 delete(State=#state{idx=Index,mod=Mod, modstate=ModState}) ->
     %% clear vnodeid first, if drop removes data but fails

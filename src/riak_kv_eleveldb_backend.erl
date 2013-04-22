@@ -44,6 +44,8 @@
          status/1,
          callback/3]).
 
+-export([data_size/1]).
+
 -compile({inline, [
                    to_object_key/2, from_object_key/1,
                    to_index_key/4, from_index_key/1
@@ -54,7 +56,7 @@
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold, indexes, index_reformat]).
+-define(CAPABILITIES, [async_fold, indexes, index_reformat, size]).
 -define(FIXED_INDEXES_KEY, fixed_indexes).
 
 -record(state, {ref :: reference(),
@@ -460,6 +462,16 @@ status(State=#state{fixed_indexes=FixedIndexes}) ->
 -spec callback(reference(), any(), state()) -> {ok, state()}.
 callback(_Ref, _Msg, State) ->
     {ok, State}.
+
+%% @doc Get the size of the eleveldb backend in bytes
+-spec data_size(state()) -> undefined | {non_neg_integer(), bytes}.
+data_size(State) ->
+    try {ok, <<SizeStr/binary>>} = eleveldb:status(State#state.ref, <<"leveldb.total-bytes">>),
+         list_to_integer(binary_to_list(SizeStr)) of
+        Size -> {Size, bytes}
+    catch
+        error:_ -> undefined
+    end.
 
 %% ===================================================================
 %% Internal functions

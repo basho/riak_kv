@@ -42,6 +42,8 @@
          status/1,
          callback/3]).
 
+-export([data_size/1]).
+
 %% Helper API
 -export([key_counts/0,
          key_counts/1]).
@@ -54,7 +56,7 @@
 
 -define(MERGE_CHECK_INTERVAL, timer:minutes(3)).
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold]).
+-define(CAPABILITIES, [async_fold,size]).
 
 -record(state, {ref :: reference(),
                 data_dir :: string(),
@@ -353,6 +355,14 @@ status(#state{ref=Ref}) ->
     {KeyCount, Status} = bitcask:status(Ref),
     [{key_count, KeyCount}, {status, Status}].
 
+%% @doc Get the size of the bitcask backend (in number of keys)
+-spec data_size(state()) -> undefined | {non_neg_integer(), objects}.
+data_size(State) ->
+    Status = status(State),
+    case proplists:get_value(key_count, Status) of
+        undefined -> undefined;
+        KeyCount -> {KeyCount, objects}
+    end.
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
