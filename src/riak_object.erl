@@ -757,17 +757,41 @@ vclock_encoding_method() ->
 %% Encode a vclock in accordance with our capability setting:
 -spec encode_vclock(VClock :: base64:ascii_string() | base64:ascii_binary()) -> base64:ascii_binary().
 encode_vclock(VClock) ->
-    case vclock_encoding_method() of
-        encode_zlib -> base64:encode(zlib:zip(VClock));
-        encode_raw  -> base64:encode(VClock)
+    do_encode_vclock(vclock_encoding_method(), VClock).
+
+-spec do_encode_vclock(atom(), VClock :: base64:ascii_string() | base64:ascii_binary()) -> base64:ascii_binary().
+do_encode_vclock(Method, VClock) ->
+    EncodedVClock = case Method of
+                        encode_zlib -> zlib:zip(VClock);
+                        encode_raw  -> VClock
+                    end,
+
+    %% Note that base64:encode() operates on an ASCII string:
+    base64:encode(term_to_binary({ Method, EncodedVClock })).
+
+-spec decode_vclock({ atom(), VClock :: base64:ascii_string() | base64:ascii_binary() }) -> vclock:vclock().
+decode_vclock(EncodedVClock) ->
+
+    VClockTerm = base64:decode(EncodedVClock),
+
+    try binary_to_term(VClockTerm) of
+        { Method, VClock }  -> do_decode_vclock(Method, VClock)
+
+    %% Fall back to legacy zlib decoding:
+    catch
+        _                   ->  
+                               do_decode_vclock(encode_zlib, VClockTerm)
     end.
 
 %% Decode a vclock against our capability settings:
--spec decode_vclock(VClock :: base64:ascii_string() | base64:ascii_binary()) -> vclock:vclock().
-decode_vclock(VClock) ->
-    case vclock_encoding_method() of
-        encode_zlib -> zlib:unzip(base64:decode(VClock));
-        encode_raw  -> base64:decode(VClock)
+-spec do_decode_vclock(atom(), EncodedVClock :: base64:ascii_string() | base64:ascii_binary()) -> vclock:vclock().
+do_decode_vclock(Method, VClock) ->
+    case Method of
+        encode_zlib -> zlib:unzip(VClock);
+        encode_raw  -> VClock;
+
+        _           -> lager:error("Bad vclock encoding ~p", [Method]),
+                       throw(bad_vclock_encoding_method)
     end.
 
 -ifdef(TEST).
