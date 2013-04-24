@@ -124,7 +124,21 @@ start_link(ReqId,RObj,W,DW,Timeout,ResultPid,Options) ->
     start_link({raw, ReqId, ResultPid}, RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options]).
 
 start_link(From, Object, PutOptions) ->
-    gen_fsm:start_link(?MODULE, [From, Object, PutOptions], []).
+    Args = [From, Object, PutOptions],
+    case whereis(riak_kv_put_fsm_sj) of
+        undefined ->
+            %% Overload protection disabled
+            gen_fsm:start_link(?MODULE, Args, []);
+        _ ->
+            case sidejob_supervisor:start_child(riak_kv_put_fsm_sj,
+                                                gen_fsm, start_link,
+                                                [?MODULE, Args, []]) of
+                {error, overload} ->
+                    riak_kv_util:overload_reply(From);
+                {ok, _Pid} ->
+                    ok
+            end
+    end.
 
 %% ===================================================================
 %% Test API

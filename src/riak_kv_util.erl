@@ -33,7 +33,8 @@
          expand_rw_value/4,
          normalize_rw_value/2,
          make_request/2,
-         mapred_system/0]).
+         mapred_system/0,
+         overload_reply/1]).
 
 -include_lib("riak_kv_vnode.hrl").
 
@@ -155,6 +156,10 @@ normalize_rw_value(_, _) -> error.
 mapred_system() ->
     riak_core_capability:get({riak_kv, mapred_system}, legacy).
 
+overload_reply({raw, ReqId, Pid}) ->
+    Pid ! {ReqId, {error, overload}};
+overload_reply(_) ->
+    ok.
 
 %% ===================================================================
 %% EUnit tests
