@@ -56,6 +56,8 @@
          status/1,
          callback/3]).
 
+-export([data_size/1]).
+
 %% "Testing" backend API
 -export([reset/0]).
 
@@ -65,7 +67,7 @@
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold, indexes]).
+-define(CAPABILITIES, [async_fold, indexes, size]).
 
 %% Macros for working with indexes
 -define(DELETE_PTN(B,K), {{B,'_','_',K},'_'}).
@@ -355,6 +357,19 @@ status(#state{data_ref=DataRef,
              {index_table_status, IndexStatus},
              {time_table_status, TimeStatus}]
     end.
+
+%% @doc Get the size of the memory backend. Returns a dynamic size
+%%      since new writes may appear in an ets fold
+-spec data_size(state()) -> undefined | {function(), dynamic}.
+data_size(#state{data_ref=DataRef}) ->
+    F = fun() ->
+                DataStatus = ets:info(DataRef),
+                case proplists:get_value(size, DataStatus) of
+                    undefined -> undefined;
+                    ObjCount -> {ObjCount, objects}
+                end
+        end,
+    {F, dynamic}.
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
