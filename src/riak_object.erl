@@ -337,6 +337,7 @@ set_vclock(Object=#r_object{}, VClock) -> Object#r_object{vclock=VClock}.
 
 %% @doc  Increment the entry for ClientId in O's vclock.
 -spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object().
+%% @spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object()
 increment_vclock(Object=#r_object{}, ClientId) ->
     Object#r_object{vclock=vclock:increment(ClientId, Object#r_object.vclock)}.
 
@@ -532,7 +533,6 @@ dejsonify_meta_value({struct, PList}) ->
                         [{Key, dejsonify_meta_value(V)}|Acc]
                 end, [], PList);
 dejsonify_meta_value(Value) -> Value.
-
 
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
     case dict:find(clean, M) of
@@ -761,26 +761,28 @@ encode_vclock(VClock) ->
 
 -spec do_encode_vclock(atom(), VClock :: base64:ascii_string() | base64:ascii_binary()) -> base64:ascii_binary().
 do_encode_vclock(Method, VClock) ->
-    EncodedVClock = case Method of
-                        encode_zlib -> zlib:zip(VClock);
-                        encode_raw  -> VClock
-                    end,
+    case Method of
+        encode_raw  -> return_encoded_vclock(Method, VClock);
 
+        %% zlib legacy support: we don't return standard encoding with metadata:
+        encode_zlib -> base64:encode(term_to_binary(zlib:zip(VClock)))
+    end.
+
+%% Return a vclock in a consistent format:
+return_encoded_vclock(Method, EncodedVClock) ->
     %% Note that base64:encode() operates on an ASCII string:
     base64:encode(term_to_binary({ Method, EncodedVClock })).
 
 -spec decode_vclock({ atom(), VClock :: base64:ascii_string() | base64:ascii_binary() }) -> vclock:vclock().
 decode_vclock(EncodedVClock) ->
+    VClockCandidateTerm = base64:decode(EncodedVClock),
 
-    VClockTerm = base64:decode(EncodedVClock),
-
-    try binary_to_term(VClockTerm) of
+    try binary_to_term(EncodedVClock) of
         { Method, VClock }  -> do_decode_vclock(Method, VClock)
 
-    %% Fall back to legacy zlib decoding:
-    catch
-        _                   ->  
-                               do_decode_vclock(encode_zlib, VClockTerm)
+    %% A single term means we have a legacy zlib vclock:
+    catch 
+        _:_                 -> do_decode_vclock(encode_zlib, binary_to_term(VClockCandidateTerm))
     end.
 
 %% Decode a vclock against our capability settings:
@@ -790,7 +792,7 @@ do_decode_vclock(Method, VClock) ->
         encode_zlib -> zlib:unzip(VClock);
         encode_raw  -> VClock;
 
-        _           -> lager:error("Bad vclock encoding ~p", [Method]),
+        _           -> lager:error("Bad vclock encoding method ~p", [Method]),
                        throw(bad_vclock_encoding_method)
     end.
 
@@ -1046,7 +1048,6 @@ check_most_recent({V1, T1, D1}, {V2, T2, D2}) ->
     ?assertEqual(C3, C4),
 
     C3#r_content.value.
-
 
 determinstic_most_recent_test() ->
     D = calendar:datetime_to_gregorian_seconds(
