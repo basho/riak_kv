@@ -569,7 +569,6 @@ syntactic_merge(CurrentObject, NewObject) ->
             end
     end.
 
-<<<<<<< HEAD
 %% @doc Get an approximation of object size by adding together the bucket, key,
 %% vectorclock, and all of the siblings. This is more complex than
 %% calling term_to_binary/1, but it should be easier on memory,
@@ -743,7 +742,6 @@ decode_maybe_binary(<<1, Bin/binary>>) ->
     Bin;
 decode_maybe_binary(<<0, Bin/binary>>) ->
     binary_to_term(Bin).
-=======
 
 %%
 %% Helpers for managing vector clock encoding and related capability:
@@ -765,7 +763,10 @@ do_encode_vclock(Method, VClock) ->
         encode_raw  -> return_encoded_vclock(Method, VClock);
 
         %% zlib legacy support: we don't return standard encoding with metadata:
-        encode_zlib -> base64:encode(term_to_binary(zlib:zip(VClock)))
+        encode_zlib ->
+OutVC= base64:encode(term_to_binary(zlib:zip(VClock))),
+io:format("JFW: OutVC = ~p~n", [OutVC]),
+OutVC
     end.
 
 %% Return a vclock in a consistent format:
@@ -775,21 +776,24 @@ return_encoded_vclock(Method, EncodedVClock) ->
 
 -spec decode_vclock({ atom(), VClock :: base64:ascii_string() | base64:ascii_binary() }) -> vclock:vclock().
 decode_vclock(EncodedVClock) ->
+io:format("JFW: EncodedVClock = ~p~n", [EncodedVClock]),
     VClockCandidateTerm = base64:decode(EncodedVClock),
+    VClockTerm = binary_to_term(VClockCandidateTerm),
 
-    try binary_to_term(EncodedVClock) of
+    try VClockTerm of
         { Method, VClock }  -> do_decode_vclock(Method, VClock)
 
     %% A single term means we have a legacy zlib vclock:
     catch 
-        _:_                 -> do_decode_vclock(encode_zlib, binary_to_term(VClockCandidateTerm))
+        _:_                 -> do_decode_vclock(encode_zlib, VClockTerm)
     end.
 
 %% Decode a vclock against our capability settings:
 -spec do_decode_vclock(atom(), EncodedVClock :: base64:ascii_string() | base64:ascii_binary()) -> vclock:vclock().
 do_decode_vclock(Method, VClock) ->
+io:format("JFW: do_decode_vclock(): Method = ~p, VClock = ~p~n", [Method, VClock]),
     case Method of
-        encode_zlib -> zlib:unzip(VClock);
+        encode_zlib -> JFWOC = zlib:unzip(VClock), io:format("JFW: unzipped: ~p~n", [JFWOC]), JFWOC;
         encode_raw  -> VClock;
 
         _           -> lager:error("Bad vclock encoding method ~p", [Method]),
