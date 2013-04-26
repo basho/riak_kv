@@ -1000,7 +1000,6 @@ new_with_ctype_test() ->
     O = riak_object:new(<<"b">>, <<"k">>, <<"{\"a\":1}">>, "application/json"),
     ?assertEqual("application/json", dict:fetch(?MD_CTYPE, riak_object:get_metadata(O))).
 
-new_with_md_test() ->
     O = riak_object:new(<<"b">>, <<"k">>, <<"abc">>, dict:from_list([{?MD_CHARSET,"utf8"}])),
     ?assertEqual("utf8", dict:fetch(?MD_CHARSET, riak_object:get_metadata(O))).
 
