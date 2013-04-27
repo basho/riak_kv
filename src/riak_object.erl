@@ -763,10 +763,7 @@ do_encode_vclock(Method, VClock) ->
         encode_raw  -> return_encoded_vclock(Method, VClock);
 
         %% zlib legacy support: we don't return standard encoding with metadata:
-        encode_zlib ->
-OutVC= base64:encode(term_to_binary(zlib:zip(VClock))),
-io:format("JFW: OutVC = ~p~n", [OutVC]),
-OutVC
+        encode_zlib -> base64:encode(zlib:zip(VClock))
     end.
 
 %% Return a vclock in a consistent format:
@@ -776,25 +773,25 @@ return_encoded_vclock(Method, EncodedVClock) ->
 
 -spec decode_vclock({ atom(), VClock :: base64:ascii_string() | base64:ascii_binary() }) -> vclock:vclock().
 decode_vclock(EncodedVClock) ->
-io:format("JFW: EncodedVClock = ~p~n", [EncodedVClock]),
-    VClockCandidateTerm = base64:decode(EncodedVClock),
-    VClockTerm = binary_to_term(VClockCandidateTerm),
 
-    try VClockTerm of
-        { Method, VClock }  -> do_decode_vclock(Method, VClock)
+    try binary_to_term(base64:decode(EncodedVClock)) of
+        { Method, VClock }  -> do_decode_vclock(Method, VClock);
 
-    %% A single term means we have a legacy zlib vclock:
+        _                   -> lager:error("Request to decode invalid vclock"),
+                               throw(invalid_vclock)
+
+    %% An exception means we have a legacy zlib vclock:
     catch 
-        _:_                 -> do_decode_vclock(encode_zlib, VClockTerm)
+        _:_                 -> do_decode_vclock(encode_zlib, EncodedVClock)
     end.
 
 %% Decode a vclock against our capability settings:
 -spec do_decode_vclock(atom(), EncodedVClock :: base64:ascii_string() | base64:ascii_binary()) -> vclock:vclock().
 do_decode_vclock(Method, VClock) ->
-io:format("JFW: do_decode_vclock(): Method = ~p, VClock = ~p~n", [Method, VClock]),
     case Method of
-        encode_zlib -> JFWOC = zlib:unzip(VClock), io:format("JFW: unzipped: ~p~n", [JFWOC]), JFWOC;
         encode_raw  -> VClock;
+
+        encode_zlib -> zlib:unzip(VClock);
 
         _           -> lager:error("Bad vclock encoding method ~p", [Method]),
                        throw(bad_vclock_encoding_method)
