@@ -267,6 +267,8 @@ to_index_query(IndexField, Args) ->
     end.
 
 %% v2 2i queries
+to_index_query(IndexField, Args, Continuation, 
+
 to_index_query(IndexField, Args, Continuation) ->
     Version = riak_core_capability:get({riak_kv, '2i_version'}, v1),
     Query = to_index_query(IndexField, Args),
