@@ -34,8 +34,10 @@
          timestamp/0,
          to_index_query/2,
          to_index_query/3,
+         to_index_query/6,
          make_continuation/1,
-         return_terms/2
+         return_terms/2,
+         upgrade_query/1
         ]).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -267,30 +269,54 @@ to_index_query(IndexField, Args) ->
     end.
 
 %% v2 2i queries
-to_index_query(IndexField, Args, Continuation, 
+%% @doc Create an index query of the current highest version supported by
+%% cluster capability.
+%% This 6 arity version is for the new (temporarily unsupported) `return_body' feature
+%% for CS.
+%% @see riak_kv_pb_csbucket
+to_index_query(IndexField, Args, Continuation, ReturnBody, StartKey, StartInl) ->
+    BaseQuery = ?KV_INDEX_Q{return_body=ReturnBody, start_key=StartKey, start_inclusive=StartInl},
+    to_index_query(IndexField, Args, Continuation, BaseQuery).
 
+%% @doc Create an index quey of the current highest version supported by
+%% cluster capability.
+%% `IndexField' is either a user supplied term or one of
+%% the inbuilt indexes (`<<"$key">>' and <<"$bucket">>').
+%% `Args' is a list or either a start and end for a range, or a single
+%% value for equality.
+%% `Continuation' is the opaque continuation that may have been
+%% returned from a previous query, or `undefined'.
+%% @see make_continuation/1
 to_index_query(IndexField, Args, Continuation) ->
+    to_index_query(IndexField, Args, Continuation, ?KV_INDEX_Q{}).
+
+to_index_query(IndexField, Args, Continuation, BaseQuery) ->
     Version = riak_core_capability:get({riak_kv, '2i_version'}, v1),
     Query = to_index_query(IndexField, Args),
     case {Version, Query} of
         {_Any, {error, _Reson}=Error} -> Error;
         {v1, OKQ} -> OKQ;
-        {v2, {ok, Q}} ->
-            V2Q = make_v2_query(Q),
+        {v2, {ok, V1Q}} ->
+            V2Q = make_v2_query(V1Q, BaseQuery),
             apply_continuation(V2Q, decode_contintuation(Continuation))
     end.
 
-make_v2_query({eq, ?KEYFIELD, Value}) ->
-    ?KV_INDEX_Q{filter_field=?KEYFIELD, start_key=Value, start_term=Value, end_term=Value, return_terms=false};
-make_v2_query({eq, Field, Value}) ->
-    ?KV_INDEX_Q{filter_field=Field, start_term=Value, end_term=Value, return_terms=false};
-make_v2_query({range, ?KEYFIELD, Start, End}) ->
-    ?KV_INDEX_Q{filter_field=?KEYFIELD, start_term=Start, start_key=Start,
+%% @doc upgrade a V1 Query to a v2 Query
+make_v2_query({eq, ?KEYFIELD, Value}, Q) ->
+    Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_key=Value, start_term=Value,
+                 end_term=Value, return_terms=false};
+make_v2_query({eq, Field, Value}, Q) ->
+    Q?KV_INDEX_Q{filter_field=Field, start_term=Value, end_term=Value, return_terms=false};
+make_v2_query({range, ?KEYFIELD, Start, End}, Q) ->
+    Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_term=Start, start_key=Start,
                 end_term=End, return_terms=false};
-make_v2_query({range, Field, Start, End}) ->
-    ?KV_INDEX_Q{filter_field=Field, start_term=Start,
-                end_term=End}.
+make_v2_query({range, Field, Start, End}, Q) ->
+    Q?KV_INDEX_Q{filter_field=Field, start_term=Start,
+                 end_term=End};
+make_v2_query(V1Q, _) ->
+    {error, {invalid_v1_query, V1Q}}.
 
+%% @doc if a continuation is specified, use it to update the query
 apply_continuation(Q, undefined) ->
     {ok, Q};
 apply_continuation(Q=?KV_INDEX_Q{}, {Value, Key}) when is_binary(Key),
@@ -302,6 +328,15 @@ apply_continuation(Q=?KV_INDEX_Q{}, Key) when is_binary(Key) ->
 apply_continuation(Q, C) ->
     {error, {invalid_continuation, C, Q}}.
 
+%% @doc upgrade a query to the current latest version
+upgrade_query(Q=?KV_INDEX_Q{}) ->
+    Q;
+upgrade_query(Q) when is_tuple(Q) ->
+    make_v2_query(Q, ?KV_INDEX_Q{}).
+
+%% @doc Should index terms be returned in a result
+%% to the client. Requires both that they are wanted (arg1)
+%% and available (arg2)
 return_terms(true, ?KV_INDEX_Q{return_terms=true}) ->
     true;
 return_terms(_, _) ->
@@ -310,7 +345,7 @@ return_terms(_, _) ->
 %% @doc To enable pagination.
 %% returns an opaque value that
 %% must be passed to
-%% `to_index_query/4' to
+%% `to_index_query/3' to
 %% get a query that will "continue"
 %% from the given last result
 -spec make_continuation(list()) -> continuation().
@@ -320,6 +355,7 @@ make_continuation(L) ->
     Last = lists:last(L),
     base64:encode(term_to_binary(Last)).
 
+%% @doc decode a continuation received from the outside world.
 -spec decode_contintuation(continuation() | undefined) -> last_result() | undefined.
 decode_contintuation(undefined) ->
     undefined;

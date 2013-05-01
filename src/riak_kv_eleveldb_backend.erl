@@ -610,89 +610,31 @@ fold_keys_fun(FoldKeysFun, {bucket, FilterBucket}) ->
                     throw({break, Acc})
             end
     end;
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, {eq, <<"$bucket">>, _}}) ->
-    %% 2I exact match query on special $bucket field...
-    fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, {eq, FilterField, FilterTerm}}) ->
-    %% Rewrite 2I exact match query as a range...
-    NewQuery = {range, FilterField, FilterTerm, FilterTerm},
-    fold_keys_fun(FoldKeysFun, {index, FilterBucket, NewQuery});
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, <<"$key">>, StartKey, EndKey}}) ->
-    %% 2I range query on special $key field...
+%% 2i queries
+fold_keys_fun(FoldKeysFun, {indexes, FilterBucket, Q=?KV_INDEX_Q{filter_field=FilterField}})
+  when FilterField =:= <<"$bucket">>;
+       FilterField =:= <<"$key">> ->
+    %% Inbuilt indexes
     fun(StorageKey, Acc) ->
-            case from_object_key(StorageKey) of
-                {Bucket, Key} when FilterBucket == Bucket,
-                                   StartKey =< Key,
-                                   EndKey >= Key ->
-                    FoldKeysFun(Bucket, Key, Acc);
+            ObjectKey = from_object_key(StorageKey),
+            case object_key_in_range(ObjectKey, FilterBucket, Q) of
+                {true, {Bucket, Key}} ->
+                    stoppable_fold(FoldKeysFun, Bucket, Key, Acc);
                 _ ->
                     throw({break, Acc})
             end
     end;
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, FilterField, StartTerm, EndTerm}}) ->
-    %% 2I range query...
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Terms}}) ->
+    %% User indexes
     fun(StorageKey, Acc) ->
-            case from_index_key(StorageKey) of
-                {Bucket, Key, Field, Term} when FilterBucket == Bucket,
-                                                FilterField == Field,
-                                                StartTerm =< Term,
-                                                EndTerm >= Term ->
-                    FoldKeysFun(Bucket, Key, Acc);
-                _ ->
-                    throw({break, Acc})
-            end
-    end;
-%% v2 indexes - pagination support
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, ?KV_INDEX_Q{filter_field= <<"$bucket">>,
-                                                             start_key=StartKey,
-                                                             start_inclusive=Incl}}) ->
-    %% Fold across a bucket
-    fun(StorageKey, Acc) ->
-            case from_object_key(StorageKey) of
-                {Bucket, Key} when Bucket == FilterBucket,
-                                   Key >= StartKey ->
-                    SkipItem = (Key == StartKey andalso not Incl),
-                    stoppable_fold(FoldKeysFun, Bucket, Key, Acc, SkipItem);
-                _ ->
-                    throw({break, Acc})
-            end
-    end;
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, ?KV_INDEX_Q{filter_field= <<"$key">>,
-                                                             start_key=StartKey,
-                                                             end_term=EndKey,
-                                                             start_inclusive=Incl}}) ->
-    %% Fold across a key range
-    fun(StorageKey, Acc) ->
-            case from_object_key(StorageKey) of
-                {Bucket, Key} when Bucket == FilterBucket,
-                                   Key >= StartKey,
-                                   Key =< EndKey ->
-                    SkipItem = (Key == StartKey andalso not Incl),
-                    stoppable_fold(FoldKeysFun, Bucket, Key, Acc, SkipItem);
-                _ ->
-                    throw({break, Acc})
-            end
-    end;
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, ?KV_INDEX_Q{filter_field=FilterField,
-                                                             start_key=StartKey,
-                                                             start_term=StartTerm,
-                                                             end_term=EndTerm,
-                                                             return_terms=Terms,
-                                                             start_inclusive=Incl}}) ->
-    %% range query
-    fun(StorageKey, Acc) ->
-            case from_index_key(StorageKey) of
-                {Bucket, Key, Field, Term} when FilterBucket == Bucket,
-                                                FilterField == Field,
-                                                Key >= StartKey,
-                                                Term =< EndTerm,
-                                                Term >= StartTerm ->
+            IndexKey = from_index_key(StorageKey),
+            case index_key_in_range(IndexKey, FilterBucket, Q) of
+                {true, {Bucket, Key, _Field, Term}} ->
                     Val = if
                               Terms -> {Term, Key};
                               true -> Key
                           end,
-                    SkipItem = (Key == StartKey andalso not Incl),
-                    stoppable_fold(FoldKeysFun, Bucket, Val, Acc, SkipItem);
+                    stoppable_fold(FoldKeysFun, Bucket, Val, Acc);
                 _ ->
                     throw({break, Acc})
             end
@@ -727,25 +669,84 @@ fold_keys_fun(FoldKeysFun, {index, incorrect_format, ForUpgrade}) when is_boolea
                     throw({break, Acc})
             end
     end;
+fold_keys_fun(FoldKeysFun, {index, FoldKeysFun, V1Q}) ->
+    %% Handle legacy queries
+    Q = riak_index:upgrade_query(V1Q),
+    fold_keys_fun(FoldKeysFun, {index, FoldKeysFun, Q});
 fold_keys_fun(_FoldKeysFun, Other) ->
     throw({unknown_limiter, Other}).
 
-stoppable_fold(Fun, Bucket, Item, Acc, false) ->
+%% @private
+%% To stop a fold in progress when pagination limit is reached.
+stoppable_fold(Fun, Bucket, Item, Acc) ->
     try
         Fun(Bucket, Item, Acc)
     catch
         stop_fold ->
             throw({break, Acc})
-    end;
-%% Skip this item
-stoppable_fold(_, _, _, Acc, true) ->
-    Acc.
+    end.
+
+%% @private
+%% Is an index key in range for a 2i query?
+index_key_in_range({Bucket, Key, Field, Term}=IK, Bucket, ?KV_INDEX_Q{filter_field=Field,
+                                                                      start_key=StartKey,
+                                                                      start_inclusive=true,
+                                                                      start_term=StartTerm,
+                                                                      end_term=EndTerm})
+  when Key >= StartKey,
+       Term >= StartTerm,
+       Term =< EndTerm ->
+    {true, IK};
+index_key_in_range({Bucket, Key, Field, Term}=IK, Bucket, ?KV_INDEX_Q{filter_field=Field,
+                                                                      start_key=StartKey,
+                                                                      start_term=StartTerm,
+                                                                      end_term=EndTerm})
+  when Key > StartKey,
+       Term >= StartTerm,
+       Term =< EndTerm ->
+    {true, IK};
+index_key_in_range(_, _, _) ->
+    false.
+
+%% @private
+%% Is a {bucket, key} pair in range for an index query
+object_key_in_range({Bucket, Key}=OK, Bucket, ?KV_INDEX_Q{start_key=StartKey,
+                                                          start_inclusive=true,
+                                                          end_term=undefined})
+  when Key >= StartKey ->
+    {true, OK};
+object_key_in_range({Bucket, Key}=OK, Bucket, ?KV_INDEX_Q{start_key=StartKey,
+                                                          start_inclusive=true,
+                                                          end_term=EndKey})
+  when Key >= StartKey,
+       Key =< EndKey ->
+    {true, OK};
+object_key_in_range({Bucket, Key}=OK, Bucket, ?KV_INDEX_Q{start_key=StartKey,
+                                                          end_term=undefined})
+  when Key > StartKey ->
+    {true, OK};
+object_key_in_range({Bucket, Key}=OK, Bucket, ?KV_INDEX_Q{start_key=StartKey,
+                                                          end_term=EndKey})
+  when Key > StartKey,
+       Key =< EndKey ->
+    {true, OK};
+object_key_in_range(_, _, _Q) ->
+    false.
 
 %% @private
 %% Return a function to fold over the objects on this backend
+fold_objects_fun(FoldObjectsFun, {index, FilterBucket, Q=?KV_INDEX_Q{}}) ->
+    %% 2I range query on $key or $bucket field
+    fun({StorageKey, Value}, Acc) ->
+            ObjectKey = from_object_key(StorageKey),
+            case object_key_in_range(ObjectKey, FilterBucket, Q) of
+                {true, {Bucket, Key}} ->
+                    stoppable_fold(FoldObjectsFun, Bucket, {o, Key, Value}, Acc);
+                _ ->
+                    throw({break, Acc})
+            end
+    end;
 fold_objects_fun(FoldObjectsFun, FilterBucket) ->
-    %% 2I does not support fold objects at this time, so this is much
-    %% simpler than fold_keys_fun.
     fun({StorageKey, Value}, Acc) ->
             case from_object_key(StorageKey) of
                 {Bucket, Key} when FilterBucket == undefined;
