@@ -302,6 +302,8 @@ to_index_query(IndexField, Args, Continuation, BaseQuery) ->
     end.
 
 %% @doc upgrade a V1 Query to a v2 Query
+make_v2_query({eq, ?BUCKETFIELD, _Bucket}, Q) ->
+    Q?KV_INDEX_Q{filter_field=?BUCKETFIELD, return_terms=false};
 make_v2_query({eq, ?KEYFIELD, Value}, Q) ->
     Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_key=Value, start_term=Value,
                  end_term=Value, return_terms=false};
