@@ -611,7 +611,7 @@ fold_keys_fun(FoldKeysFun, {bucket, FilterBucket}) ->
             end
     end;
 %% 2i queries
-fold_keys_fun(FoldKeysFun, {indexes, FilterBucket, Q=?KV_INDEX_Q{filter_field=FilterField}})
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{filter_field=FilterField}})
   when FilterField =:= <<"$bucket">>;
        FilterField =:= <<"$key">> ->
     %% Inbuilt indexes
