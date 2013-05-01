@@ -134,7 +134,6 @@ process_stream({ReqId, done}, ReqId, State=#state{req_id=ReqId,
                                                   result_count=Count}) ->
     %% Only add the continuation if there (may) be more results to send
     #rpbindexreq{max_results=MaxResults} = Req,
-    lager:info("XXXX YO!!! ~p ~p ~p", [is_integer(MaxResults), Count, MaxResults]),
     Resp = case is_integer(MaxResults) andalso Count =:= MaxResults of
                true -> #rpbindexresp{done=1, continuation=Continuation};
                false -> #rpbindexresp{done=1}
