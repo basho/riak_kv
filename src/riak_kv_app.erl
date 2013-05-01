@@ -144,15 +144,16 @@ start(_Type, _StartArgs) ->
                                           [v1, v0],
                                           v0),
 
+            HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
             %% synchronously.
             riak_core:register(riak_kv, [
                 {vnode_module, riak_kv_vnode},
-                {health_check, {?MODULE, check_kv_health, []}},
                 {bucket_validator, riak_kv_bucket},
                 {stat_mod, riak_kv_stat}
-            ]),
+            ]
+            ++ [{health_check, {?MODULE, check_kv_health, []}} || HealthCheckOn]),
 
             ok = riak_api_pb_service:register(?SERVICES),
 
