@@ -1511,12 +1511,11 @@ count_index_specs(IndexSpecs) ->
 
 %% @private
 bucket_nval_map(Ring) ->
-    [{riak_core_bucket:name(B), riak_core_bucket:n_val(B)} ||
-        B <- riak_core_bucket:get_buckets(Ring)].
+    riak_core_bucket:bucket_nval_map(Ring).
 
 %% @private
 default_object_nval() ->
-    riak_core_bucket:n_val(riak_core_config:default_bucket_props()).
+    riak_core_bucket:default_object_nval().
 
 %% @private
 object_info({Bucket, _Key}=BKey) ->
