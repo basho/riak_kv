@@ -196,27 +196,25 @@ index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)
                     Final = case make_continuation(MaxResults, [LastResult], Count) of
                                 undefined -> ["\r\n--", Boundary, "--\r\n"];
                                 Continuation ->
-                                    Json = encode_continuation(Continuation),
+                                    Json = mochijson2:encode(mochify_continuation(Continuation)),
                                     ["\r\n--", Boundary, "--\r\n",
                                      "Content-Type: application/json\r\n\r\n",
                                      Json,
                                      "\r\n--", Boundary, "--\r\n"]
                             end,
                     {iolist_to_binary(Final), done};
+                {ReqID, {results, []}} ->
+                    {<<>>, index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)};
                 {ReqID, {results, Results}} ->
                     %% JSONify the results
-                    JsonResults = encode_results(Results, ReturnTerms),
+                    JsonResults = encode_results(ReturnTerms, Results),
                     Body = ["\r\n--", Boundary, "\r\n",
                             "Content-Type: application/json\r\n\r\n",
                             JsonResults],
-                    %% don't let an empty result set wipe out
-                    %% a previous last result
-                    LastResult1 = case Results of
-                                     [] -> LastResult;
-                                     _ -> last_result(Results)
-                                 end,
+                    LastResult1 = last_result(Results),
+                    Count1 = Count + length(Results),
                     {iolist_to_binary(Body),
-                     index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult1, Count+length(Results))};
+                     index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult1, Count1)};
                 {ReqID, Error} ->
                     lager:error("Error in index wm: ~p", [Error]),
                     Body = ["\r\n--", Boundary, "\r\n",
@@ -249,16 +247,17 @@ encode_results(ReturnTerms, Results) ->
     encode_results(ReturnTerms, Results, undefined).
 
 encode_results(true, Results, Continuation) ->
-    JsonKeys2 = {struct, [{?Q_RESULTS, [{struct, [{Val, Key}]} || {Val, Key} <- Results]}] ++ encode_continuation(Continuation)},
+    JsonKeys2 = {struct, [{?Q_RESULTS, [{struct, [{Val, Key}]} || {Val, Key} <- Results]}] ++
+                     mochify_continuation(Continuation)},
     mochijson2:encode(JsonKeys2);
 encode_results(false, Results, Continuation) ->
     JustTheKeys = filter_values(Results),
-    JsonKeys1 = {struct, [{?Q_KEYS, JustTheKeys}] ++ encode_continuation(Continuation)},
+    JsonKeys1 = {struct, [{?Q_KEYS, JustTheKeys}] ++ mochify_continuation(Continuation)},
     mochijson2:encode(JsonKeys1).
 
-encode_continuation(undefined) ->
+mochify_continuation(undefined) ->
     [];
-encode_continuation(Continuation) ->
+mochify_continuation(Continuation) ->
     [{?Q_2I_CONTINUATION, Continuation}].
 
 filter_values([]) ->
