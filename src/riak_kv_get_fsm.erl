@@ -100,12 +100,13 @@ start_link(ReqId,Bucket,Key,R,Timeout,From) ->
 -spec start_link({raw, req_id(), pid()}, binary(), binary(), options()) ->
                         {ok, pid()} | {error, any()}.
 start_link(From, Bucket, Key, GetOptions) ->
-    Args = [From, Bucket, Key, GetOptions],
     case whereis(riak_kv_get_fsm_sj) of
         undefined ->
             %% Overload protection disabled 
+            Args = [From, Bucket, Key, GetOptions, true],
             gen_fsm:start_link(?MODULE, Args, []);
         _ ->
+            Args = [From, Bucket, Key, GetOptions, false],
             case sidejob_supervisor:start_child(riak_kv_get_fsm_sj,
                                                 gen_fsm, start_link,
                                                 [?MODULE, Args, []]) of
@@ -131,7 +132,7 @@ test_link(ReqId,Bucket,Key,R,Timeout,From,StateProps) ->
     test_link({raw, ReqId, From}, Bucket, Key, [{r, R}, {timeout, Timeout}], StateProps).
 
 test_link(From, Bucket, Key, GetOptions, StateProps) ->
-    gen_fsm:start_link(?MODULE, {test, [From, Bucket, Key, GetOptions], StateProps}, []).
+    gen_fsm:start_link(?MODULE, {test, [From, Bucket, Key, GetOptions, true], StateProps}, []).
 
 -endif.
 
@@ -140,13 +141,13 @@ test_link(From, Bucket, Key, GetOptions, StateProps) ->
 %% ====================================================================
 
 %% @private
-init([From, Bucket, Key, Options]) ->
+init([From, Bucket, Key, Options, Monitor]) ->
     StartNow = os:timestamp(),
     StateData = add_timing(prepare, #state{from = From,
                                            options = Options,
                                            bkey = {Bucket, Key},
                                            startnow = StartNow}),
-    riak_kv_get_put_monitor:get_fsm_spawned(self()),
+    (Monitor =:= true) andalso riak_kv_get_put_monitor:get_fsm_spawned(self()),
     riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
     ?DTRACE(?C_GET_FSM_INIT, [], ["init"]),
     {ok, prepare, StateData, 0};
@@ -399,7 +400,7 @@ maybe_read_repair(Indices, RepairObj, UpdStateData) ->
 determine_do_read_repair(_SoftCap, HardCap) when HardCap == undefined ->
     true;
 determine_do_read_repair(SoftCap, HardCap) ->
-    Actual = riak_kv_get_put_monitor:gets_active(),
+    Actual = riak_kv_util:gets_active(),
     determine_do_read_repair(SoftCap, HardCap, Actual).
 
 determine_do_read_repair(undefined, HardCap, Actual) ->

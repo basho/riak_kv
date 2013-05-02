@@ -39,6 +39,9 @@
          fix_incorrect_index_entries/0,
          responsible_preflists/1,
          responsible_preflists/2,
+         puts_active/0,
+         exact_puts_active/0,
+         gets_active/0,
          overload_reply/1]).
 
 -include_lib("riak_kv_vnode.hrl").
@@ -337,6 +340,30 @@ overload_reply({raw, ReqId, Pid}) ->
     Pid ! {ReqId, {error, overload}};
 overload_reply(_) ->
     ok.
+
+puts_active() ->
+    case whereis(riak_kv_put_fsm_sj) of
+        undefined ->
+            riak_kv_get_put_monitor:puts_active();
+        _ ->
+            sidejob_resource_stats:usage(riak_kv_put_fsm_sj)
+    end.
+
+exact_puts_active() ->
+    case whereis(riak_kv_put_fsm_sj) of
+        undefined ->
+            riak_kv_get_put_monitor:puts_active();
+        _ ->
+            length(sidejob_supervisor:which_children(riak_kv_put_fsm_sj))
+    end.
+
+gets_active() ->
+    case whereis(riak_kv_get_fsm_sj) of
+        undefined ->
+            riak_kv_get_put_monitor:gets_active();
+        _ ->
+            sidejob_resource_stats:usage(riak_kv_get_fsm_sj)
+    end.
 
 %% ===================================================================
 %% EUnit tests

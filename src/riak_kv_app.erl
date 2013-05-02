@@ -257,7 +257,7 @@ check_kv_health(_Pid) ->
     Passed.
 
 wait_for_put_fsms(N) ->
-    case riak_kv_get_put_monitor:puts_active() of
+    case riak_kv_util:exact_puts_active() of
         0 -> ok;
         Count ->
             case N of
