@@ -59,6 +59,7 @@
          delete/1,
          request_hash/1,
          object_info/1,
+         nval_map/1,
          handle_handoff_command/3,
          handoff_starting/2,
          handoff_cancelled/1,
@@ -290,8 +291,8 @@ repair_filter(Target) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     riak_core_repair:gen_filter(Target,
                                 Ring,
-                                bucket_nval_map(Ring),
-                                default_object_nval(),
+                                nval_map(Ring),
+                                riak_core_bucket:default_object_nval(),
                                 fun object_info/1).
 
 -spec hashtree_pid(index()) -> {ok, pid()}.
@@ -1509,13 +1510,9 @@ count_index_specs(IndexSpecs) ->
         end,
     lists:foldl(F, {0, 0}, IndexSpecs).
 
-%% @private
-bucket_nval_map(Ring) ->
-    riak_core_bucket:bucket_nval_map(Ring).
 
-%% @private
-default_object_nval() ->
-    riak_core_bucket:default_object_nval().
+nval_map(Ring) ->
+    riak_core_bucket:bucket_nval_map(Ring).
 
 %% @private
 object_info({Bucket, _Key}=BKey) ->
