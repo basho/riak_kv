@@ -155,14 +155,22 @@ response(#getcore{num_notfound = NumNotFound, num_ok = NumOK,
 %% We've satisfied R, but not PR
 response(#getcore{r = R, pr = PR, num_ok = NumR, num_pok = NumPR} = GetCore)
       when PR > 0, NumPR < PR, NumR >= R ->
-    {{error, {pr_val_unsatisfied, PR,  NumPR}}, GetCore};
+    check_overload({error, {pr_val_unsatisfied, PR,  NumPR}}, GetCore);
 %% PR and/or R are unsatisfied, but PR is more restrictive
 response(#getcore{r = R, num_pok = NumPR, pr = PR} = GetCore) when PR >= R ->
-    {{error, {pr_val_unsatisfied, PR,  NumPR}}, GetCore};
+    check_overload({error, {pr_val_unsatisfied, PR,  NumPR}}, GetCore);
 %% PR and/or R are unsatisfied, but R is more restrictive
 response(#getcore{r = R, num_ok = NumR} = GetCore) ->
-    {{error, {r_val_unsatisfied, R,  NumR}}, GetCore}.
+    check_overload({error, {r_val_unsatisfied, R,  NumR}}, GetCore).
 
+%% Check for vnode overload
+check_overload(Response, GetCore = #getcore{results=Results}) ->
+    case [x || {_,{error, overload}} <- Results] of
+        [] ->
+            {Response, GetCore};
+        _->
+            {{error, overload}, GetCore}
+    end.
 
 %% Check if all expected results have been added
 -spec has_all_results(getcore()) -> boolean().

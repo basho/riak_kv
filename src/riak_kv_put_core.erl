@@ -129,16 +129,24 @@ response(PutCore = #putcore{w = W, num_w = NumW, dw = DW, num_dw = NumDW, pw = P
 %% Everything is ok, except we didn't meet PW
 response(PutCore = #putcore{w = W, num_w = NumW, dw = DW, num_dw = NumDW, pw = PW, num_pw = NumPW}) when
       NumW >= W, NumDW >= DW, NumPW < PW ->
-    {{error, {pw_val_unsatisfied, PW, NumPW}}, PutCore};
+    check_overload({error, {pw_val_unsatisfied, PW, NumPW}}, PutCore);
 %% Didn't make PW, and PW >= DW
 response(PutCore = #putcore{n = N, num_fail = NumFail, dw = DW, pw=PW, num_pw = NumPW}) when
       NumFail > N - PW, PW >= DW ->
-    {{error, {pw_val_unsatisfied, PW, NumPW}}, PutCore};
+    check_overload({error, {pw_val_unsatisfied, PW, NumPW}}, PutCore);
 %% Didn't make DW and DW > PW
 response(PutCore = #putcore{n = N, num_fail = NumFail, dw = DW, num_dw = NumDW}) when
       NumFail > N - DW ->
-    {{error, {dw_val_unsatisfied, DW, NumDW}}, PutCore}.
+    check_overload({error, {dw_val_unsatisfied, DW, NumDW}}, PutCore).
 
+%% Check for vnode overload
+check_overload(Response, PutCore = #putcore{results=Results}) ->
+    case [x || {_,{error, overload}} <- Results] of
+        [] ->
+            {Response, PutCore};
+        _->
+            {{error, overload}, PutCore}
+    end.
 
 %% Get final value - if returnbody did not need the result it allows delaying
 %% running reconcile until after the client reply is sent.
