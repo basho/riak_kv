@@ -38,7 +38,8 @@
          fix_incorrect_index_entries/1,
          fix_incorrect_index_entries/0,
          responsible_preflists/1,
-         responsible_preflists/2]).
+         responsible_preflists/2,
+         overload_reply/1]).
 
 -include_lib("riak_kv_vnode.hrl").
 
@@ -332,6 +333,10 @@ mark_indexes_reformatted(Idx, 0, ForUpgrade) ->
 mark_indexes_reformatted(_Idx, _ErrorCount, _ForUpgrade) ->
     undefined.
 
+overload_reply({raw, ReqId, Pid}) ->
+    Pid ! {ReqId, {error, overload}};
+overload_reply(_) ->
+    ok.
 
 %% ===================================================================
 %% EUnit tests
