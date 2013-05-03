@@ -426,14 +426,16 @@ extract_index_fields(RD) ->
                     true ->
                         %% Isolate the name of the index field.
                         IndexField = list_to_binary(element(2, lists:split(PrefixSize, KList))),
-
+                        %% url-decode the header field-name and value
+                        IndexField1 = mochiweb_util:unquote(IndexField),        
+                        V2 = mochiweb_util:unquote(V),
                         %% HACK ALERT: Split values on comma. The HTTP
                         %% spec allows for comma separated tokens
                         %% where the tokens can be quoted strings. We
                         %% don't currently support quoted strings.
                         %% (http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html)
-                        Values = re:split(V, RE, [{return, binary}]),
-                        [{IndexField, X} || X <- Values] ++ Acc;
+                        Values = re:split(V2, RE, [{return, binary}]),
+                        [{IndexField1, X} || X <- Values] ++ Acc;
                     false ->
                         Acc
                 end
@@ -773,9 +775,11 @@ produce_doc_body(RD, Ctx) ->
             IndexRD = case dict:find(?MD_INDEX, MD) of
                           {ok, IndexMeta} ->
                               lists:foldl(fun({K,V}, Acc) ->
-                                                  K1 = riak_kv_wm_utils:any_to_list(K),
-                                                  V1 = riak_kv_wm_utils:any_to_list(V),
-                                                  wrq:merge_resp_headers([{?HEAD_INDEX_PREFIX ++ K1, V1}], Acc)
+                                                  K1 = mochiweb_util:quote_plus(K),
+                                                  K2 = riak_kv_wm_utils:any_to_list(K1),
+                                                  V1 = mochiweb_util:quote_plus(V),
+                                                  V2 = riak_kv_wm_utils:any_to_list(V1),
+                                                  wrq:merge_resp_headers([{?HEAD_INDEX_PREFIX ++ K2, V2}], Acc)
                                           end,
                                           UserMetaRD, IndexMeta);
                           error -> UserMetaRD
