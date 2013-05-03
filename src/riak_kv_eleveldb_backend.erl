@@ -416,9 +416,23 @@ legacy_key_fold(_Ref, _FoldFun, Acc, _FoldOpts, _Query) ->
                    state()) -> {ok, any()} | {async, fun()}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
                                                ref=Ref}) ->
-    Bucket =  proplists:get_value(bucket, Opts),
-    FoldOpts1 = fold_opts(Bucket, FoldOpts),
-    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
+    %% Figure out how we should limit the fold: by bucket, by
+    %% secondary index, or neither (fold across everything.)
+    Bucket = lists:keyfind(bucket, 1, Opts),
+    Index = lists:keyfind(index, 1, Opts),
+
+    %% Multiple limiters may exist. Take the most specific limiter.
+    Limiter =
+        if Index /= false  -> Index;
+           Bucket /= false -> Bucket;
+           true            -> undefined
+        end,
+
+    %% Set up the fold...
+    FirstKey = to_first_key(Limiter),
+    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    FoldFun = fold_objects_fun(FoldObjectsFun, Limiter),
+
     ObjectFolder =
         fun() ->
                 try
@@ -620,6 +634,8 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{filter_field=Filt
             case object_key_in_range(ObjectKey, FilterBucket, Q) of
                 {true, {Bucket, Key}} ->
                     stoppable_fold(FoldKeysFun, Bucket, Key, Acc);
+                {skip, _BK} ->
+                    Acc;
                 _ ->
                     throw({break, Acc})
             end
@@ -635,6 +651,8 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Term
                               true -> Key
                           end,
                     stoppable_fold(FoldKeysFun, Bucket, Val, Acc);
+                {skip, _IK} ->
+                    Acc;
                 _ ->
                     throw({break, Acc})
             end
@@ -688,82 +706,79 @@ stoppable_fold(Fun, Bucket, Item, Acc) ->
 
 %% @private
 %% Is an index key in range for a 2i query?
-index_key_in_range({Bucket, Key, Field, Term}=IK, Bucket, ?KV_INDEX_Q{filter_field=Field,
-                                                                      start_key=StartKey,
-                                                                      start_inclusive=true,
-                                                                      start_term=StartTerm,
-                                                                      end_term=EndTerm})
-  when Key >= StartKey,
-       Term >= StartTerm,
+index_key_in_range({Bucket, Key, Field, Term}=IK, Bucket,
+                   ?KV_INDEX_Q{filter_field=Field,
+                               start_key=StartKey,
+                               start_inclusive=StartInc,
+                               start_term=StartTerm,
+                               end_term=EndTerm})
+  when Term >= StartTerm,
        Term =< EndTerm ->
-    {true, IK};
-index_key_in_range({Bucket, Key, Field, Term}=IK, Bucket, ?KV_INDEX_Q{filter_field=Field,
-                                                                      start_key=StartKey,
-                                                                      start_term=StartTerm,
-                                                                      end_term=EndTerm})
-  when Key > StartKey,
-       Term >= StartTerm,
-       Term =< EndTerm ->
-    {true, IK};
+    in_range(gt(StartInc, Key, StartKey), true, IK);
 index_key_in_range(_, _, _) ->
     false.
 
 %% @private
 %% Is a {bucket, key} pair in range for an index query
-object_key_in_range({Bucket, Key}=OK, Bucket, ?KV_INDEX_Q{start_key=StartKey,
-                                                          start_inclusive=true,
-                                                          end_term=undefined})
-  when Key >= StartKey ->
+object_key_in_range({Bucket, Key}=OK, Bucket, Q=?KV_INDEX_Q{end_term=undefined}) ->
+    ?KV_INDEX_Q{start_key=Start, start_inclusive=StartInc} = Q,
+    in_range(gt(StartInc, Key, Start), true, OK);
+object_key_in_range({Bucket, Key}=OK, Bucket, Q) ->
+    ?KV_INDEX_Q{start_key=Start, start_inclusive=StartInc,
+                end_term=End, end_inclusive=EndInc} = Q,
+    in_range(gt(StartInc, Key, Start), gt(EndInc, End, Key), OK);
+object_key_in_range(_, _, _) ->
+    false.
+
+in_range(true, true, OK) ->
     {true, OK};
-object_key_in_range({Bucket, Key}=OK, Bucket, ?KV_INDEX_Q{start_key=StartKey,
-                                                          start_inclusive=true,
-                                                          end_term=EndKey})
-  when Key >= StartKey,
-       Key =< EndKey ->
-    {true, OK};
-object_key_in_range({Bucket, Key}=OK, Bucket, ?KV_INDEX_Q{start_key=StartKey,
-                                                          end_term=undefined})
-  when Key > StartKey ->
-    {true, OK};
-object_key_in_range({Bucket, Key}=OK, Bucket, ?KV_INDEX_Q{start_key=StartKey,
-                                                          end_term=EndKey})
-  when Key > StartKey,
-       Key =< EndKey ->
-    {true, OK};
-object_key_in_range(_, _, _Q) ->
+in_range(skip, true, OK) ->
+    {skip, OK};
+in_range(_, _, _) ->
+    false.
+
+gt(true, A, B) when A >= B ->
+    true;
+gt(false, A, B) when A > B ->
+    true;
+gt(false, A, B) when A == B ->
+    skip;
+gt(_, _, _) ->
     false.
 
 %% @private
 %% Return a function to fold over the objects on this backend
 fold_objects_fun(FoldObjectsFun, {index, FilterBucket, Q=?KV_INDEX_Q{}}) ->
-    %% 2I range query on $key or $bucket field
+    %% 2I query on $key or $bucket field with return_body
     fun({StorageKey, Value}, Acc) ->
             ObjectKey = from_object_key(StorageKey),
             case object_key_in_range(ObjectKey, FilterBucket, Q) of
                 {true, {Bucket, Key}} ->
                     stoppable_fold(FoldObjectsFun, Bucket, {o, Key, Value}, Acc);
+                {skip, _BK} ->
+                    Acc;
                 _ ->
                     throw({break, Acc})
             end
     end;
-fold_objects_fun(FoldObjectsFun, FilterBucket) ->
+fold_objects_fun(FoldObjectsFun, {bucket, FilterBucket}) ->
     fun({StorageKey, Value}, Acc) ->
             case from_object_key(StorageKey) of
-                {Bucket, Key} when FilterBucket == undefined;
-                                   Bucket == FilterBucket ->
+                {Bucket, Key} when Bucket == FilterBucket ->
+                    FoldObjectsFun(Bucket, Key, Value, Acc);
+                _ ->
+                    throw({break, Acc})
+            end
+    end;
+fold_objects_fun(FoldObjectsFun, undefined) ->
+    fun({StorageKey, Value}, Acc) ->
+            case from_object_key(StorageKey) of
+                {Bucket, Key} ->
                     FoldObjectsFun(Bucket, Key, Value, Acc);
                 _ ->
                     throw({break, Acc})
             end
     end.
-
-%% @private
-%% Augment the fold options list if a
-%% bucket is defined.
-fold_opts(undefined, FoldOpts) ->
-    [{first_key, to_first_key(undefined)} | FoldOpts];
-fold_opts(Bucket, FoldOpts) ->
-    [{first_key, to_first_key({bucket, Bucket})} | FoldOpts].
 
 %% @private Given a scope limiter, use sext to encode an expression
 %% that represents the starting key for the scope. For example, since

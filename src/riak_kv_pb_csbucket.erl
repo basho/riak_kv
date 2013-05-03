@@ -65,9 +65,10 @@ encode(Message) ->
 
 process(Req=#rpbcsbucketreq{}, State) ->
     #rpbcsbucketreq{bucket=Bucket, start_key=StartKey,
-                    start_incl=Incl, continuation=Continuation} = Req,
-    %% @TODO deal with an EndKey present!!
-    Query = riak_index:to_index_query(<<"$bucket">>, [Bucket], Continuation, true, StartKey, Incl),
+                    start_incl=StartIncl, continuation=Continuation,
+                    end_key=EndKey, end_incl=EndIncl} = Req,
+    Query = riak_index:to_index_query(<<"$bucket">>, [Bucket], Continuation, true, {StartKey, StartIncl}, {EndKey, EndIncl}),
+    lager:info("query ~p", [Query]),
     maybe_perform_query(Query, Req, State).
 
 maybe_perform_query({error, Reason}, _Req, State) ->

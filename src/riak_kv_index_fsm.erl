@@ -95,6 +95,7 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults]) ->
      #state{from=From, max_results=MaxResults}}.
 
 plan(CoverageVNodes, State) ->
+    lager:info("plan is ~p", [CoverageVNodes]),
     {ok, State#state{merge_sort_buffer=sms:new(CoverageVNodes)}}.
 
 process_results(_VNode, {error, Reason}, _State) ->

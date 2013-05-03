@@ -6,6 +6,7 @@
           end_term :: binary() | undefined, %% Note, in an eq query, start==end
           return_terms=true :: boolean(), %% Note, should be false for an equals query
           start_inclusive=true :: boolean(),
+          end_inclusive=true :: boolean(),
           return_body=false ::boolean() %% Note, only for riak cs bucket folds
          }).
 

@@ -678,14 +678,30 @@ handle_coverage_index(Bucket, ItemFilter, Query,
             ResultFun = ResultFunFun(Bucket, Sender),
             Opts = [{index, Bucket, Query},
                     {bucket, Bucket}],
-            handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
+            %% @HACK
+            %% Really this should be decided in the backend
+            %% if there was a index_query fun.
+            FoldType = case riak_index:return_body(Query) of
+                           true -> fold_objects;
+                           false -> fold_keys
+                       end,
+            handle_coverage_keyfold(FoldType, Bucket, ItemFilter, ResultFun,
                                     FilterVNodes, Sender, Opts, State);
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
     end.
 
 %% Convenience for handling both v3 and v4 coverage-based key fold operations
-handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
+handle_coverage_keyfold(Bucket, ItemFilter, Query,
+                      FilterVNodes, Sender, State,
+                      ResultFunFun) ->
+    handle_coverage_keyfold(fold_keys, Bucket, ItemFilter, Query,
+                            FilterVNodes, Sender, State, ResultFunFun).
+
+%% Until a bit of a refactor can occur to better abstract
+%% index operations, allow the ModFun for folding to be declared
+%% to support index operations that can return objects
+handle_coverage_keyfold(FoldType, Bucket, ItemFilter, ResultFun,
                         FilterVNodes, Sender, Opts0,
                         State=#state{async_folding=AsyncFolding,
                                      idx=Index,
@@ -701,13 +717,13 @@ handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     AsyncBackend = lists:member(async_fold, Capabilities),
-    case AsyncFolding andalso AsyncBackend of
-        true ->
-            Opts = [async_fold | Opts0];
-        false ->
-            Opts = Opts0
-    end,
-    case list(FoldFun, FinishFun, Mod, fold_keys, ModState, Opts, Buffer) of
+    Opts = case AsyncFolding andalso AsyncBackend of
+               true ->
+                   [async_fold | Opts0];
+               false ->
+                   Opts0
+           end,
+    case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
         _ ->

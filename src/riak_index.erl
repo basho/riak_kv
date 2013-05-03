@@ -37,6 +37,7 @@
          to_index_query/6,
          make_continuation/1,
          return_terms/2,
+         return_body/1,
          upgrade_query/1
         ]).
 -ifdef(TEST).
@@ -274,8 +275,10 @@ to_index_query(IndexField, Args) ->
 %% This 6 arity version is for the new (temporarily unsupported) `return_body' feature
 %% for CS.
 %% @see riak_kv_pb_csbucket
-to_index_query(IndexField, Args, Continuation, ReturnBody, StartKey, StartInl) ->
-    BaseQuery = ?KV_INDEX_Q{return_body=ReturnBody, start_key=StartKey, start_inclusive=StartInl},
+to_index_query(IndexField, Args, Continuation, ReturnBody, {Start, StartInc}, {End, EndInc}) ->
+    BaseQuery = ?KV_INDEX_Q{return_body=ReturnBody,
+                            start_key=Start, start_inclusive=StartInc,
+                            end_term=End, end_inclusive=EndInc},
     to_index_query(IndexField, Args, Continuation, BaseQuery).
 
 %% @doc Create an index quey of the current highest version supported by
@@ -343,6 +346,16 @@ return_terms(true, ?KV_INDEX_Q{return_terms=true}) ->
     true;
 return_terms(_, _) ->
     false.
+
+%% @doc Should the object body of an indexed key
+%% be returned with the result?
+return_body(?KV_INDEX_Q{return_body=true, filter_field=FF})
+  when FF =:= ?KEYFIELD;
+       FF =:= ?BUCKETFIELD ->
+    true;
+return_body(_) ->
+    false.
+
 
 %% @doc To enable pagination.
 %% returns an opaque value that
