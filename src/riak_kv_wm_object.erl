@@ -280,7 +280,7 @@ malformed_timeout_param(RD, Ctx) ->
     case wrq:get_qs_value("timeout", none, RD) of
         none ->
             {false, RD, Ctx};
-        TimeoutStr -> 
+        TimeoutStr ->
             try
                 Timeout = list_to_integer(TimeoutStr),
                 {false, RD, Ctx#ctx{timeout=Timeout}}
@@ -290,7 +290,7 @@ malformed_timeout_param(RD, Ctx) ->
                      wrq:append_to_resp_body(io_lib:format("Bad timeout "
                                                            "value ~p~n",
                                                            [TimeoutStr]),
-                                             wrq:set_resp_header(?HEAD_CTYPE, 
+                                             wrq:set_resp_header(?HEAD_CTYPE,
                                                                  "text/plain", RD)),
                      Ctx}
             end
@@ -397,7 +397,7 @@ malformed_link_headers(RD, Ctx) ->
 %% @spec malformed_index_headers(reqdata(), context()) ->
 %%           {boolean(), reqdata(), context()}
 %%
-%% @doc Check that the Index headers (HTTP headers prefixed with index_") 
+%% @doc Check that the Index headers (HTTP headers prefixed with index_")
 %%      are valid. Store the parsed headers in context() if valid,
 %%      or print an error in reqdata() if not.
 %%      An index field should be of the form "index_fieldname_type"
@@ -751,7 +751,7 @@ multiple_choices(RD, Ctx) ->
 %%      property "rel=container".  The rest of the links will be
 %%      constructed from the links of the document.
 produce_doc_body(RD, Ctx) ->
-    Prefix = Ctx#ctx.prefix, 
+    Prefix = Ctx#ctx.prefix,
     Bucket = Ctx#ctx.bucket,
     APIVersion = Ctx#ctx.api_version,
     case select_doc(Ctx) of
@@ -763,7 +763,7 @@ produce_doc_body(RD, Ctx) ->
                     end,
             Links2 = riak_kv_wm_utils:format_links([{Bucket, "up"}|Links1], Prefix, APIVersion),
             LinkRD = wrq:merge_resp_headers(Links2, RD),
-            
+
             %% Add user metadata to response...
             UserMetaRD = case dict:find(?MD_USERMETA, MD) of
                         {ok, UserMeta} ->
@@ -896,7 +896,7 @@ ensure_doc(Ctx) -> Ctx.
 delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C}) ->
     Options = make_options([], Ctx),
     Result = case wrq:get_req_header(?HEAD_VCLOCK, RD) of
-        undefined -> 
+        undefined ->
             C:delete(B,K,Options);
         _ ->
             C:delete_vclock(B,K,decode_vclock_header(RD),Options)
@@ -937,7 +937,7 @@ last_modified(RD, Ctx) ->
         multiple_choices ->
             {ok, Doc} = Ctx#ctx.doc,
             LMDates = [ normalize_last_modified(MD) ||
-                          MD <- riak_object:get_metadatas(Doc) ],            
+                          MD <- riak_object:get_metadatas(Doc) ],
             {lists:max(LMDates), RD, Ctx}
     end.
 
@@ -962,7 +962,7 @@ get_link_heads(RD, Ctx) ->
     Bucket = Ctx#ctx.bucket,
 
     %% Get a list of link headers...
-    LinkHeaders1 = 
+    LinkHeaders1 =
         case wrq:get_req_header(?HEAD_LINK, RD) of
             undefined -> [];
             Heads -> string:tokens(Heads, ",")
@@ -970,7 +970,7 @@ get_link_heads(RD, Ctx) ->
 
     %% Decode the link headers. Throw an exception if we can't
     %% properly parse any of the headers...
-    {BucketLinks, KeyLinks} = 
+    {BucketLinks, KeyLinks} =
         case APIVersion of
             1 ->
                 {ok, BucketRegex} = re:compile("</" ++ Prefix ++ "/([^/]+)>; ?rel=\"([^\"]+)\""),
@@ -986,12 +986,12 @@ get_link_heads(RD, Ctx) ->
     %% bucket...
     IsValid = (BucketLinks == []) orelse (BucketLinks == [{Bucket, <<"up">>}]),
     case IsValid of
-        true -> 
+        true ->
             KeyLinks;
         false ->
             throw({invalid_link_headers, LinkHeaders1})
     end.
-        
+
 %% Run each LinkHeader string() through the BucketRegex and
 %% KeyRegex. Return {BucketLinks, KeyLinks}.
 extract_links(LinkHeaders, BucketRegex, KeyRegex) ->
@@ -1119,9 +1119,9 @@ handle_common_error(Reason, RD, Ctx) ->
     end.
 
 make_options(Prev, Ctx) ->
-    NewOpts0 = [{rw, Ctx#ctx.rw}, {r, Ctx#ctx.r}, {w, Ctx#ctx.w}, 
-                {pr, Ctx#ctx.pr}, {pw, Ctx#ctx.pw}, {dw, Ctx#ctx.dw}, 
+    NewOpts0 = [{rw, Ctx#ctx.rw}, {r, Ctx#ctx.r}, {w, Ctx#ctx.w},
+                {pr, Ctx#ctx.pr}, {pw, Ctx#ctx.pw}, {dw, Ctx#ctx.dw},
                 {timeout, Ctx#ctx.timeout}],
-    NewOpts = [ {Opt, Val} || {Opt, Val} <- NewOpts0, 
+    NewOpts = [ {Opt, Val} || {Opt, Val} <- NewOpts0,
                               Val /= undefined, Val /= default ],
     Prev ++ NewOpts.
