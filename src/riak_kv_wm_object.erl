@@ -226,44 +226,49 @@ allow_missing_post(RD, Ctx) ->
 %%      at this time.
 malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'POST'
                                 orelse Ctx#ctx.method =:= 'PUT' ->
+    malformed_request([fun malformed_content_type/2,
+                       fun malformed_timeout_param/2,
+                       fun malformed_rw_params/2,
+                       fun malformed_link_headers/2,
+                       fun malformed_index_headers/2],
+                      RD, Ctx);
+malformed_request(RD, Ctx) ->
+    malformed_request([fun malformed_timeout_param/2,
+                       fun malformed_rw_params/2,
+                       fun malformed_check_doc/2], RD, Ctx).
+
+%% @doc Given a list of 2-arity funs, threads through the request data
+%% and context, returning as soon as a single fun discovers a
+%% malformed request or halts.
+%% -spec malformed_request([fun()], wrq:reqdata(), #ctx{}) -> {boolean() | {halt, non_neg_integer()}, wrq:reqdata(), #ctx{}}.
+malformed_request([], RD, Ctx) ->
+    {false, RD, Ctx};
+malformed_request([H|T], RD, Ctx) ->
+    case H(RD, Ctx) of
+        {true, _, _} = Result -> Result;
+        {{halt,_}, _, _} = Halt -> Halt;
+        {false, RD1, Ctx1} ->
+            malformed_request(T, RD1, Ctx1)
+    end.
+
+%% @doc Detects whether the Content-Type header is missing on
+%% PUT/POST.
+malformed_content_type(RD, Ctx) ->
     case wrq:get_req_header("Content-Type", RD) of
         undefined ->
             {true, missing_content_type(RD), Ctx};
+        _ -> {false, RD, Ctx}
+    end.
+
+%% @doc Detects whether fetching the requested object results in an
+%% error.
+malformed_check_doc(RD, Ctx) ->
+    DocCtx = ensure_doc(Ctx),
+    case DocCtx#ctx.doc of
+        {error, Reason} ->
+            handle_common_error(Reason, RD, DocCtx);
         _ ->
-            case malformed_timeout_param(RD, Ctx) of
-                Result={true, _, _} ->
-                    Result;
-                {false, ToRD, ToCtx} ->
-                    case malformed_rw_params(ToRD, ToCtx) of
-                        Result={true, _, _} -> 
-                            Result;
-                        {false, RWRD, RWCtx} ->
-                            case malformed_link_headers(RWRD, RWCtx) of
-                                Result = {true, _, _} ->
-                                    Result;
-                                {false, RWLH, LHCtx} ->
-                                    malformed_index_headers(RWLH, LHCtx)
-                            end
-                    end
-            end
-    end;
-malformed_request(RD, Ctx) -> 
-    case malformed_timeout_param(RD, Ctx) of
-        Result={true, _, _} ->
-            Result;
-        {false, ToRD, ToCtx} ->
-            case malformed_rw_params(ToRD, ToCtx) of
-                Result = {true, _, _} ->
-                    Result;
-                {false, ResRD, ResCtx} ->
-                    DocCtx = ensure_doc(ResCtx),
-                    case DocCtx#ctx.doc of
-                        {error, Reason} ->
-                            handle_common_error(Reason, ResRD, DocCtx);
-                        _ ->
-                            {false, ResRD, DocCtx}
-                    end
-            end
+            {false, RD, DocCtx}
     end.
 
 %% @spec malformed_timeout_param(reqdata(), context()) ->
