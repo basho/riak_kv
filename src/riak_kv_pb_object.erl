@@ -176,7 +176,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
 
 process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                    w=W0, dw=DW0, pw=PW0, return_body=ReturnBody,
-                   return_head=ReturnHead, timeout=Timeout},
+                   return_head=ReturnHead, timeout=Timeout, asis=AsIs},
         #state{client=C} = State) ->
 
     case K of
@@ -206,7 +206,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                       end
               end,
     case C:put(O, make_options([{w, W}, {dw, DW}, {pw, PW}, 
-                                {timeout, Timeout}]) ++ Options) of
+                                {timeout, Timeout}, {asis, AsIs}]) ++ Options) of
         ok when is_binary(ReturnKey) ->
             PutResp = #rpbputresp{key = ReturnKey},
             {reply, PutResp, State};
