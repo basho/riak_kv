@@ -413,7 +413,7 @@ set_contents(Object=#r_object{}, MVs) when is_list(MVs) ->
 %%      into something suitable for an HTTP header
 vclock_header(Doc) ->
     VClock = riak_object:vclock(Doc),
-    EncodedVClock = binary_to_list(encode_vclock(term_to_binary(VClock))), 
+    EncodedVClock = binary_to_list(encode_vclock(term_to_binary(VClock))),
     {?HEAD_VCLOCK, EncodedVClock}.
 
 %% @spec to_json(riak_object()) -> {struct, list(any())}
@@ -774,16 +774,19 @@ return_encoded_vclock(Method, EncodedVClock) ->
 -spec decode_vclock({ atom(), VClock :: base64:ascii_string() | base64:ascii_binary() }) -> vclock:vclock().
 decode_vclock(EncodedVClock) ->
 
-    try binary_to_term(base64:decode(EncodedVClock)) of
-        { Method, VClock }  -> do_decode_vclock(Method, VClock);
+    try base64:decode(EncodedVClock) of
+        VCTerm  -> case VCTerm of
+                        { Method, VClock }  -> do_decode_vclock(Method, binary_to_term(VClock));
 
-        _                   -> lager:error("Request to decode invalid vclock"),
-                               throw(invalid_vclock)
+                        %% Handle a base64 encoded vclock:
+                        VClockTerm          -> do_decode_vclock(encode_zlib, VClockTerm)
+                   end
 
-    %% An exception means we have a legacy zlib vclock:
+    %% An exception means we have a raw legacy zlib vclock:
     catch 
-        _:_                 -> do_decode_vclock(encode_zlib, EncodedVClock)
+        _:_   -> do_decode_vclock(encode_zlib, EncodedVClock)
     end.
+
 
 %% Decode a vclock against our capability settings:
 -spec do_decode_vclock(atom(), EncodedVClock :: base64:ascii_string() | base64:ascii_binary()) -> vclock:vclock().

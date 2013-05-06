@@ -834,7 +834,7 @@ encode_vclock_header(RD, #ctx{doc={ok, Doc}}) ->
     {Head, Val} = riak_object:vclock_header(Doc),
     wrq:set_resp_header(Head, Val, RD);
 encode_vclock_header(RD, #ctx{doc={error, {deleted, VClock}}}) ->
-    EncodedVClock = riak_object:encode_vclock(VClock),
+    EncodedVClock = riak_object:encode_vclock(term_to_binary(VClock)),
     wrq:set_resp_header(?HEAD_VCLOCK, binary_to_list(EncodedVClock), RD).
 
 %% @spec decode_vclock_header(reqdata()) -> vclock()
@@ -844,7 +844,7 @@ encode_vclock_header(RD, #ctx{doc={error, {deleted, VClock}}}) ->
 decode_vclock_header(RD) ->
     case wrq:get_req_header(?HEAD_VCLOCK, RD) of
         undefined -> vclock:fresh();
-             Head      -> riak_object:decode_vclock(Head)
+             Head -> binary_to_term(riak_object:decode_vclock(Head))
     end.
 
 %% @spec ensure_doc(context()) -> context()
