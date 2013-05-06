@@ -134,6 +134,7 @@
               pw,           %% integer() - number of primary nodes required in preflist on write
               basic_quorum, %% boolean() - whether to use basic_quorum
               notfound_ok,  %% boolean() - whether to treat notfounds as successes
+              asis,         %% boolean() - whether to send the put without modifying the vclock
               prefix,       %% string() - prefix for resource uris
               riak,         %% local | {node(), atom()} - params for riak client
               doc,          %% {ok, riak_object()}|{error, term()} - the object found
@@ -314,7 +315,8 @@ malformed_rw_params(RD, Ctx) ->
     lists:foldl(fun malformed_boolean_param/2,
                 Res,
                 [{#ctx.basic_quorum, "basic_quorum", "default"},
-                 {#ctx.notfound_ok, "notfound_ok", "default"}]).
+                 {#ctx.notfound_ok, "notfound_ok", "default"},
+                 {#ctx.asis, "asis", "false"}]).
 
 %% @spec malformed_rw_param({Idx::integer(), Name::string(), Default::string()},
 %%                          {boolean(), reqdata(), context()}) ->
@@ -1121,7 +1123,7 @@ handle_common_error(Reason, RD, Ctx) ->
 make_options(Prev, Ctx) ->
     NewOpts0 = [{rw, Ctx#ctx.rw}, {r, Ctx#ctx.r}, {w, Ctx#ctx.w},
                 {pr, Ctx#ctx.pr}, {pw, Ctx#ctx.pw}, {dw, Ctx#ctx.dw},
-                {timeout, Ctx#ctx.timeout}],
+                {timeout, Ctx#ctx.timeout}, {asis, Ctx#ctx.asis}],
     NewOpts = [ {Opt, Val} || {Opt, Val} <- NewOpts0,
                               Val /= undefined, Val /= default ],
     Prev ++ NewOpts.
