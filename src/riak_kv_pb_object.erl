@@ -113,12 +113,9 @@ process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    timeout=Timeout}, #state{client=C} = State) ->
     R = decode_quorum(R0),
     PR = decode_quorum(PR0),
-    case C:get(B, K, make_option(deletedvclock, DeletedVClock) ++
-                   make_option(r, R) ++
-                   make_option(pr, PR) ++
-                   make_option(timeout, Timeout) ++
-                   make_option(notfound_ok, NFOk) ++
-                   make_option(basic_quorum, BQ)) of
+    case C:get(B, K, make_options([{deletedvclock, DeletedVClock},
+                                   {r, R}, {pr, PR}, {timeout, Timeout},
+                                   {notfound_ok, NFOk}, {basic_quorum, BQ}])) of
         {ok, O} ->
             case erlify_rpbvc(VClock) == riak_object:vclock(O) of
                 true ->
@@ -208,9 +205,8 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                           _ -> []
                       end
               end,
-    case C:put(O, make_option(w, W) ++ make_option(dw, DW) ++
-                   make_option(pw, PW) ++ make_option(timeout, Timeout) ++ 
-                   Options) of
+    case C:put(O, make_options([{w, W}, {dw, DW}, {pw, PW}, 
+                                {timeout, Timeout}]) ++ Options) of
         ok when is_binary(ReturnKey) ->
             PutResp = #rpbputresp{key = ReturnKey},
             {reply, PutResp, State};
@@ -250,13 +246,8 @@ process(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
     PR = decode_quorum(PR0),
     RW = decode_quorum(RW0),
 
-    Options = make_option(r, R) ++
-        make_option(w, W) ++
-        make_option(rw, RW) ++
-        make_option(pr, PR) ++
-        make_option(pw, PW) ++
-        make_option(dw, DW) ++
-        make_option(timeout, Timeout),
+    Options = make_options([{r, R}, {w, W}, {rw, RW}, {pr, PR}, {pw, PW}, 
+                            {dw, DW}, {timeout, Timeout}]),
     Result = case PbVc of
                  undefined ->
                      C:delete(B, K, Options);
@@ -292,6 +283,9 @@ update_rpbcontent(O0, RpbContent) ->
 update_pbvc(O0, PbVc) ->
     Vclock = erlify_rpbvc(PbVc),
     riak_object:set_vclock(O0, Vclock).
+
+make_options(List) ->
+    lists:flatmap(fun({K,V}) -> make_option(K,V) end, List).
 
 %% return a key/value tuple that we can ++ to other options so long as the
 %% value is not default or undefined -- those values are pulled from the
