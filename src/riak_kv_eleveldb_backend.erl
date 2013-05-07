@@ -687,10 +687,10 @@ fold_keys_fun(FoldKeysFun, {index, incorrect_format, ForUpgrade}) when is_boolea
                     throw({break, Acc})
             end
     end;
-fold_keys_fun(FoldKeysFun, {index, FoldKeysFun, V1Q}) ->
+fold_keys_fun(FoldKeysFun, {index, Bucket, V1Q}) ->
     %% Handle legacy queries
     Q = riak_index:upgrade_query(V1Q),
-    fold_keys_fun(FoldKeysFun, {index, FoldKeysFun, Q});
+    fold_keys_fun(FoldKeysFun, {index, Bucket, Q});
 fold_keys_fun(_FoldKeysFun, Other) ->
     throw({unknown_limiter, Other}).
 
@@ -793,18 +793,6 @@ to_first_key({bucket, Bucket}) ->
 to_first_key({index, incorrect_format, ForUpgrade}) when is_boolean(ForUpgrade) ->
     %% Start at first index entry
     to_index_key(<<>>, <<>>, <<>>, <<>>);
-to_first_key({index, Bucket, {eq, <<"$bucket">>, _Term}}) ->
-    %% 2I exact match query on special $bucket field...
-    to_first_key({bucket, Bucket});
-to_first_key({index, Bucket, {eq, Field, Term}}) ->
-    %% Rewrite 2I exact match query as a range...
-    to_first_key({index, Bucket, {range, Field, Term, Term}});
-to_first_key({index, Bucket, {range, <<"$key">>, StartTerm, _EndTerm}}) ->
-    %% 2I range query on special $key field...
-    to_object_key(Bucket, StartTerm);
-to_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm}}) ->
-    %% 2I range query...
-    to_index_key(Bucket, <<>>, Field, StartTerm);
 %% V2 indexes
 to_first_key({index, Bucket,
               ?KV_INDEX_Q{filter_field=Field,
@@ -815,6 +803,10 @@ to_first_key({index, Bucket, ?KV_INDEX_Q{filter_field=Field,
                                          start_key=StartKey,
                                          start_term=StartTerm}}) ->
     to_index_key(Bucket, StartKey, Field, StartTerm);
+%% Upgrade legacy queries to current version
+to_first_key({index, Bucket, Q}) ->
+    UpgradeQ = riak_index:upgrade_query(Q),
+    to_first_key({index, Bucket, UpgradeQ});
 to_first_key(Other) ->
     erlang:throw({unknown_limiter, Other}).
 
