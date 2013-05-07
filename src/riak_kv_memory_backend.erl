@@ -431,15 +431,6 @@ fold_keys_fun(FoldKeysFun, {bucket, FilterBucket}) ->
        (_, Acc) ->
             Acc
     end;
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, {eq, <<"$bucket">>, _}}) ->
-    %% 2I exact match query on special $bucket field...
-    fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, <<"$key">>, _, _}}) ->
-    %% 2I range query on special $key field...
-    fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, {eq, <<"$key">>, _}}) ->
-    %% 2I eq query on special $key field...
-    fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
 %% V2 indexes
 fold_keys_fun(FoldKeysFun, {index, FilterBucket, ?KV_INDEX_Q{filter_field=FF}}) when
       FF == <<"$bucket">>; FF == <<"$key">> ->
@@ -450,13 +441,10 @@ fold_keys_fun(FoldKeysFun, {index, _FilterBucket, ?KV_INDEX_Q{}}) ->
        (_, Acc) ->
             Acc
     end;
-%% Transversion catch all
-fold_keys_fun(FoldKeysFun, {index, _FilterBucket, _Query}) ->
-    fun({{Bucket, _FilterField, _FilterTerm, Key}, _}, Acc) ->
-            FoldKeysFun(Bucket, Key, Acc);
-       (_, Acc) ->
-            Acc
-    end.
+%% Upgrade legacy indexes
+fold_keys_fun(FoldKeysFun, {index, Bucket, Q}) ->
+    UpgradeQ = riak_index:upgrade_query(Q),
+    fold_keys_fun(FoldKeysFun, {index, Bucket, UpgradeQ}).
 
 %% @private
 %% Return a function to fold over keys on this backend
@@ -480,33 +468,6 @@ get_folder(FoldFun, Acc, DataRef) ->
     end.
 
 %% @private
-%% 'legacy' 2i (v1)
-get_index_folder(Folder, Acc0, {index, Bucket, {eq, <<"$bucket">>, _}}, DataRef, _) ->
-    %% For the special $bucket index, turn it into a fold over the
-    %% data table.
-    fun() ->
-            key_range_folder(Folder, Acc0, DataRef, {Bucket, <<>>}, {Bucket, <<>>, true})
-    end;
-get_index_folder(Folder, Acc0, {index, Bucket, {range, <<"$key">>, Min, Max}}, DataRef, _) ->
-    %% For the special range lookup on the $key index, turn it into a
-    %% fold on the data table
-    fun() ->
-            key_range_folder(Folder, Acc0, DataRef, {Bucket, Min}, {Bucket, Min, Max, true})
-    end;
-get_index_folder(Folder, Acc0, {index, Bucket, {eq, <<"$key">>, Val}}, DataRef, IndexRef) ->
-    get_index_folder(Folder, Acc0, {index, Bucket, {range, <<"$key">>, Val, Val}}, DataRef, IndexRef);
-get_index_folder(Folder, Acc0, {index, Bucket, {eq, Field, Term}}, _, IndexRef) ->
-    fun() ->
-            index_range_folder(Folder, Acc0, IndexRef,
-                               {Bucket, Field, Term, undefined},
-                               {Bucket, Field, Term, Term, true})
-    end;
-get_index_folder(Folder, Acc0, {index, Bucket, {range, Field, Min, Max}}, _, IndexRef) ->
-    fun() ->
-            index_range_folder(Folder, Acc0, IndexRef,
-                               {Bucket, Field, Min, undefined},
-                               {Bucket, Field, Min, Max, true})
-    end;
 %% V2 2i
 get_index_folder(Folder, Acc0, {index, Bucket, Q=?KV_INDEX_Q{filter_field= <<"$bucket">>}}, DataRef, _) ->
     %% get first key
@@ -527,7 +488,11 @@ get_index_folder(Folder, Acc0, {index, Bucket, Q=?KV_INDEX_Q{}}, _, IndexRef) ->
             index_range_folder(Folder, Acc0, IndexRef,
                                {Bucket, FF, Min, StartKey},
                                {Bucket, FF, Min, Max, StartKey, Incl})
-    end.
+    end;
+get_index_folder(Folder, Acc, {index, Bucket, Q}, DataRef, IndexRef) ->
+    UpgradeQ = riak_index:upgrade_query(Q),
+    get_index_folder(Folder, Acc, {index, Bucket, UpgradeQ}, DataRef, IndexRef).
+
 
 %% Iterates over a range of keys, for the special $key and $bucket
 %% indexes.
