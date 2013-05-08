@@ -456,10 +456,10 @@ multibackend_read_block_errors([{_Name, Status}|Rest], undefined) ->
 multibackend_read_block_errors(_, Val) ->
     rbe_val(Val).
 
-rbe_val(undefined) ->
-    undefined;
-rbe_val(Bin) ->
-    list_to_integer(binary_to_list(Bin)).
+rbe_val(Bin) when is_binary(Bin) ->
+    list_to_integer(binary_to_list(Bin));
+rbe_val(_) ->
+    undefined.
 
 %% All stat creation is serialized through riak_kv_stat.
 %% Some stats are created on demand as part of the call to `update/1'.
