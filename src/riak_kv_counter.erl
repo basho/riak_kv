@@ -111,7 +111,6 @@ update_object(RObj, Meta, Counter, SiblingValues) ->
     %% keep non-counter siblings, too
     riak_object:set_contents(RObj, [{counter_meta(Meta), {riak_kv_pncounter, Counter}} | SiblingValues]).
 
-
 counter_meta(undefined) ->
     Now = os:timestamp(),
     M = dict:new(),

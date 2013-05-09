@@ -66,6 +66,7 @@
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
+-include_lib("riak_kv_types.hrl").
 
 %% @spec init(proplist()) -> {ok, context()}
 %% @doc Initialize this resource.  This function extracts the
@@ -210,7 +211,7 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C,
                             counter_op=CounterOp}) ->
     case allow_mult(B) of
         true ->
-            Doc0 = riak_object:new(B, K, ?NEW_COUNTER),
+            Doc0 = riak_object:new(B, K, ?NEW_COUNTER, ?COUNTER_TYPE),
             VclockDoc = riak_object:set_vclock(Doc0, vclock:fresh()),
             Options = [{counter_op, CounterOp}],
             case C:put(VclockDoc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
