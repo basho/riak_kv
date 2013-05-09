@@ -38,7 +38,9 @@
          make_continuation/1,
          return_terms/2,
          return_body/1,
-         upgrade_query/1
+         upgrade_query/1,
+         object_key_in_range/3,
+         index_key_in_range/3
         ]).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -356,6 +358,45 @@ return_body(?KV_INDEX_Q{return_body=true, filter_field=FF})
 return_body(_) ->
     false.
 
+%% @doc is an index key in range for a 2i query?
+index_key_in_range({Bucket, Key, Field, Term}=IK, Bucket,
+                   ?KV_INDEX_Q{filter_field=Field,
+                               start_key=StartKey,
+                               start_inclusive=StartInc,
+                               start_term=StartTerm,
+                               end_term=EndTerm})
+  when Term >= StartTerm,
+       Term =< EndTerm ->
+    in_range(gt(StartInc, Key, StartKey), true, IK);
+index_key_in_range(_, _, _) ->
+    false.
+
+%% @doc Is a {bucket, key} pair in range for an index query
+object_key_in_range({Bucket, Key}=OK, Bucket, Q=?KV_INDEX_Q{end_term=undefined}) ->
+    ?KV_INDEX_Q{start_key=Start, start_inclusive=StartInc} = Q,
+    in_range(gt(StartInc, Key, Start), true, OK);
+object_key_in_range({Bucket, Key}=OK, Bucket, Q) ->
+    ?KV_INDEX_Q{start_key=Start, start_inclusive=StartInc,
+                end_term=End, end_inclusive=EndInc} = Q,
+    in_range(gt(StartInc, Key, Start), gt(EndInc, End, Key), OK);
+object_key_in_range(_, _, _) ->
+    false.
+
+in_range(true, true, OK) ->
+    {true, OK};
+in_range(skip, true, OK) ->
+    {skip, OK};
+in_range(_, _, _) ->
+    false.
+
+gt(true, A, B) when A >= B ->
+    true;
+gt(false, A, B) when A > B ->
+    true;
+gt(false, A, B) when A == B ->
+    skip;
+gt(_, _, _) ->
+    false.
 
 %% @doc To enable pagination.
 %% returns an opaque value that

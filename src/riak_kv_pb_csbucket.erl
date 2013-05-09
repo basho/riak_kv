@@ -68,7 +68,6 @@ process(Req=#rpbcsbucketreq{}, State) ->
                     start_incl=StartIncl, continuation=Continuation,
                     end_key=EndKey, end_incl=EndIncl} = Req,
     Query = riak_index:to_index_query(<<"$bucket">>, [Bucket], Continuation, true, {StartKey, StartIncl}, {EndKey, EndIncl}),
-    lager:info("query ~p", [Query]),
     maybe_perform_query(Query, Req, State).
 
 maybe_perform_query({error, Reason}, _Req, State) ->

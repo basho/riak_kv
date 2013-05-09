@@ -631,7 +631,7 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{filter_field=Filt
     %% Inbuilt indexes
     fun(StorageKey, Acc) ->
             ObjectKey = from_object_key(StorageKey),
-            case object_key_in_range(ObjectKey, FilterBucket, Q) of
+            case riak_index:object_key_in_range(ObjectKey, FilterBucket, Q) of
                 {true, {Bucket, Key}} ->
                     stoppable_fold(FoldKeysFun, Bucket, Key, Acc);
                 {skip, _BK} ->
@@ -644,7 +644,7 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Term
     %% User indexes
     fun(StorageKey, Acc) ->
             IndexKey = from_index_key(StorageKey),
-            case index_key_in_range(IndexKey, FilterBucket, Q) of
+            case riak_index:index_key_in_range(IndexKey, FilterBucket, Q) of
                 {true, {Bucket, Key, _Field, Term}} ->
                     Val = if
                               Terms -> {Term, Key};
@@ -704,47 +704,7 @@ stoppable_fold(Fun, Bucket, Item, Acc) ->
             throw({break, Acc})
     end.
 
-%% @private
-%% Is an index key in range for a 2i query?
-index_key_in_range({Bucket, Key, Field, Term}=IK, Bucket,
-                   ?KV_INDEX_Q{filter_field=Field,
-                               start_key=StartKey,
-                               start_inclusive=StartInc,
-                               start_term=StartTerm,
-                               end_term=EndTerm})
-  when Term >= StartTerm,
-       Term =< EndTerm ->
-    in_range(gt(StartInc, Key, StartKey), true, IK);
-index_key_in_range(_, _, _) ->
-    false.
 
-%% @private
-%% Is a {bucket, key} pair in range for an index query
-object_key_in_range({Bucket, Key}=OK, Bucket, Q=?KV_INDEX_Q{end_term=undefined}) ->
-    ?KV_INDEX_Q{start_key=Start, start_inclusive=StartInc} = Q,
-    in_range(gt(StartInc, Key, Start), true, OK);
-object_key_in_range({Bucket, Key}=OK, Bucket, Q) ->
-    ?KV_INDEX_Q{start_key=Start, start_inclusive=StartInc,
-                end_term=End, end_inclusive=EndInc} = Q,
-    in_range(gt(StartInc, Key, Start), gt(EndInc, End, Key), OK);
-object_key_in_range(_, _, _) ->
-    false.
-
-in_range(true, true, OK) ->
-    {true, OK};
-in_range(skip, true, OK) ->
-    {skip, OK};
-in_range(_, _, _) ->
-    false.
-
-gt(true, A, B) when A >= B ->
-    true;
-gt(false, A, B) when A > B ->
-    true;
-gt(false, A, B) when A == B ->
-    skip;
-gt(_, _, _) ->
-    false.
 
 %% @private
 %% Return a function to fold over the objects on this backend
@@ -752,7 +712,7 @@ fold_objects_fun(FoldObjectsFun, {index, FilterBucket, Q=?KV_INDEX_Q{}}) ->
     %% 2I query on $key or $bucket field with return_body
     fun({StorageKey, Value}, Acc) ->
             ObjectKey = from_object_key(StorageKey),
-            case object_key_in_range(ObjectKey, FilterBucket, Q) of
+            case riak_index:object_key_in_range(ObjectKey, FilterBucket, Q) of
                 {true, {Bucket, Key}} ->
                     stoppable_fold(FoldObjectsFun, Bucket, {o, Key, Value}, Acc);
                 {skip, _BK} ->
