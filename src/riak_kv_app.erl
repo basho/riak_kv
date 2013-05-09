@@ -31,7 +31,7 @@
                    {riak_kv_pb_bucket, 15, 18}, %% Bucket requests
                    {riak_kv_pb_mapred, 23, 24}, %% MapReduce requests
                    {riak_kv_pb_index, 25, 26}, %% Secondary index requests
-                   {riak_kv_pb_counter, 29, 32} %% counter requests
+                   {riak_kv_pb_counter, 50, 53} %% counter requests
                   ]).
 -define(MAX_FLUSH_PUT_FSM_RETRIES, 10).
 
