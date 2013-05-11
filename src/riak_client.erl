@@ -539,6 +539,14 @@ mk_reqid() ->
 %% @private
 wait_for_reqid(ReqId, Timeout) ->
     receive
+        {ReqId, {error, overload}=Response} ->
+            case app_helper:get_env(riak_kv, overload_backoff, undefined) of
+                Msecs when is_number(Msecs) ->
+                    timer:sleep(Msecs);
+                undefined ->
+                    ok
+            end,
+            Response;
         {ReqId, Response} -> Response
     after Timeout ->
             {error, timeout}
