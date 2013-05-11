@@ -125,7 +125,23 @@ start_link(ReqId,RObj,W,DW,Timeout,ResultPid,Options) ->
     start_link({raw, ReqId, ResultPid}, RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options]).
 
 start_link(From, Object, PutOptions) ->
-    gen_fsm:start_link(?MODULE, [From, Object, PutOptions], []).
+    case whereis(riak_kv_put_fsm_sj) of
+        undefined ->
+            %% Overload protection disabled
+            Args = [From, Object, PutOptions, true],
+            gen_fsm:start_link(?MODULE, Args, []);
+        _ ->
+            Args = [From, Object, PutOptions, false],
+            case sidejob_supervisor:start_child(riak_kv_put_fsm_sj,
+                                                gen_fsm, start_link,
+                                                [?MODULE, Args, []]) of
+                {error, overload} ->
+                    riak_kv_util:overload_reply(From),
+                    {error, overload};
+                {ok, Pid} ->
+                    {ok, Pid}
+            end
+    end.
 
 %% ===================================================================
 %% Test API
@@ -141,7 +157,7 @@ start_link(From, Object, PutOptions) ->
 %%
 %% As test, but linked to the caller
 test_link(From, Object, PutOptions, StateProps) ->
-    gen_fsm:start_link(?MODULE, {test, [From, Object, PutOptions], StateProps}, []).
+    gen_fsm:start_link(?MODULE, {test, [From, Object, PutOptions, true], StateProps}, []).
 
 -endif.
 
@@ -151,13 +167,13 @@ test_link(From, Object, PutOptions, StateProps) ->
 %% ====================================================================
 
 %% @private
-init([From, RObj, Options]) ->
+init([From, RObj, Options, Monitor]) ->
     BKey = {Bucket, Key} = {riak_object:bucket(RObj), riak_object:key(RObj)},
     StateData = add_timing(prepare, #state{from = From,
                                            robj = RObj,
                                            bkey = BKey,
                                            options = Options}),
-    riak_kv_get_put_monitor:put_fsm_spawned(self()),
+    (Monitor =:= true) andalso riak_kv_get_put_monitor:put_fsm_spawned(self()),
     riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
     case riak_kv_util:is_x_deleted(RObj) of
         true  ->
