@@ -111,9 +111,10 @@ start_link(From, Bucket, Key, GetOptions) ->
                                                 gen_fsm, start_link,
                                                 [?MODULE, Args, []]) of
                 {error, overload} ->
-                    riak_kv_util:overload_reply(From);
-                {ok, _Pid} ->
-                    ok
+                    riak_kv_util:overload_reply(From),
+                    {error, overload};
+                {ok, Pid} ->
+                    {ok, Pid}
             end
     end.
 
