@@ -66,13 +66,13 @@ build_filter(Bucket, ItemFilterInput, FilterVNode) ->
             %% Compose a key filtering function for the VNode
             ItemFilter;
         (ItemFilter == none) -> % only vnode filtering required
-            {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-            PrefListFun = build_preflist_fun(Bucket, Ring),
+            {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+            PrefListFun = build_preflist_fun(Bucket, CHBin),
             %% Create a VNode filter
             compose_filter(FilterVNode, PrefListFun);
         true -> % key and vnode filtering
-            {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-            PrefListFun = build_preflist_fun(Bucket, Ring),
+            {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+            PrefListFun = build_preflist_fun(Bucket, CHBin),
             %% Create a filter for the VNode
             compose_filter(FilterVNode, PrefListFun, ItemFilter) 
     end.
@@ -112,10 +112,10 @@ build_item_filter(FilterInput) ->
 
 
 %% @private
-build_preflist_fun(Bucket, Ring) ->
+build_preflist_fun(Bucket, CHBin) ->
     fun(Key) ->
             ChashKey = riak_core_util:chash_key({Bucket, Key}),
-            riak_core_ring:responsible_index(ChashKey, Ring)
+            chashbin:responsible_index(ChashKey, CHBin)
     end.
 
 compose([]) ->
