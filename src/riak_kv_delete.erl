@@ -104,8 +104,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
     end.
 
 get_r_options(Bucket, Options) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
     N = proplists:get_value(n_val,BucketProps),
     %% specifying R/W AND RW together doesn't make sense, so check if R or W
     %is defined first. If not, use RW or default.
@@ -139,8 +138,7 @@ get_r_options(Bucket, Options) ->
     end.
 
 get_w_options(Bucket, Options) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
     N = proplists:get_value(n_val,BucketProps),
     %% specifying R/W AND RW together doesn't make sense, so check if R or W
     %is defined first. If not, use RW or default.

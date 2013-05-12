@@ -239,13 +239,11 @@ handle_call({insert, Id, Key, Hash, Options}, _From, State) ->
     State2 = do_insert(Id, Key, Hash, Options, State),
     {reply, ok, State2};
 handle_call({insert_object, BKey, RObj}, _From, State) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    IndexN = riak_kv_util:get_index_n(BKey, Ring),
+    IndexN = riak_kv_util:get_index_n(BKey),
     State2 = do_insert(IndexN, term_to_binary(BKey), hash_object(BKey, RObj), [], State),
     {reply, ok, State2};
 handle_call({delete, BKey}, _From, State) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    IndexN = riak_kv_util:get_index_n(BKey, Ring),
+    IndexN = riak_kv_util:get_index_n(BKey),
     State2 = do_delete(IndexN, term_to_binary(BKey), State),
     {reply, ok, State2};
 
@@ -299,8 +297,7 @@ handle_cast(stop, State) ->
     {stop, normal, State};
 
 handle_cast({insert_object, BKey, RObj}, State) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    IndexN = riak_kv_util:get_index_n(BKey, Ring),
+    IndexN = riak_kv_util:get_index_n(BKey),
     State2 = do_insert(IndexN, term_to_binary(BKey), hash_object(BKey, RObj), [], State),
     {noreply, State2};
 
@@ -398,9 +395,8 @@ hash_object({Bucket, Key}, RObjBin) ->
 %% key/hash pair will be ignored.
 -spec fold_keys(index(), pid()) -> ok.
 fold_keys(Partition, Tree) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Req = ?FOLD_REQ{foldfun=fun(BKey={Bucket,Key}, RObj, _) ->
-                                    IndexN = riak_kv_util:get_index_n({Bucket, Key}, Ring),
+                                    IndexN = riak_kv_util:get_index_n({Bucket, Key}),
                                     insert(IndexN, term_to_binary(BKey), hash_object(BKey, RObj),
                                            Tree, [if_missing]),
                                     ok
