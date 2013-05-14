@@ -52,6 +52,8 @@ start(_Type, _StartArgs) ->
             sidejob:new_resource(riak_kv_get_fsm_sj, sidejob_supervisor, FSM_Limit)
     end,
 
+    sidejob:new_resource(riak_kv_stat_sj, riak_kv_stat_worker, 10000),
+
     %% Look at the epoch and generating an error message if it doesn't match up
     %% to our expectations
     check_epoch(),
