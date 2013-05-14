@@ -35,7 +35,7 @@
 %%%===================================================================
 
 update(Arg) ->
-    sidejob:cast(riak_kv_stat_sj, {update, Arg}).
+    sidejob:unbounded_cast(riak_kv_stat_sj, {update, Arg}).
 
 %%%===================================================================
 %%% gen_server callbacks
