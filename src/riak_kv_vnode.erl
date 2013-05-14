@@ -66,6 +66,8 @@
          handle_exit/3,
          handle_info/2]).
 
+-export([handoff_data_encoding_method/0]).
+
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_map_phase.hrl").
 -include_lib("riak_core/include/riak_core_pb.hrl").
@@ -1520,7 +1522,7 @@ handoff_data_encoding_method() ->
 %% Decode a binary object. We first try to interpret the data as a "new format" object which indicates
 %% its encoding method, but if that fails we use the legacy zlib and protocol buffer decoding:
 decode_binary_object(BinaryObject) ->
-    case binary_to_term(BinaryObject) of
+    try binary_to_term(BinaryObject) of
         { Method, BinObj } -> 
                                 case Method of
                                     encode_raw  -> {B, K, Val} = binary_to_term(BinObj),
@@ -1531,8 +1533,12 @@ decode_binary_object(BinaryObject) ->
                                                    throw(invalid_handoff_encoding)
                                 end;
 
-        %% zlib encoding is a special legacy mode:
-        BinObj              ->  do_zlib_decode(BinObj)
+        _                   ->  lager:error("Request to decode invalid handoff object"),
+                                throw(invalid_handoff_object)
+
+    %% An exception means we have a legacy handoff object:
+    catch
+        _:_                 -> do_zlib_decode(BinaryObject)
     end.  
 
 do_zlib_decode(BinaryObject) ->
@@ -1548,6 +1554,7 @@ encode_binary_object(Bucket, Key, Value) ->
         encode_raw  -> EncodedObject = term_to_binary({ Bucket, Key, iolist_to_binary(Value) }),
                        return_encoded_binary_object(Method, EncodedObject);
 
+        %% zlib encoding is a special case, we return the legacy format:
         encode_zlib -> PBEncodedObject = riak_core_pb:encode_riakobject_pb(#riakobject_pb{bucket=Bucket, key=Key, val=Value}),
                        zlib:zip(PBEncodedObject)
     end.
