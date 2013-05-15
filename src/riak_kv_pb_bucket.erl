@@ -71,15 +71,30 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(#rpblistbucketsreq{timeout=T}=Req,
-        #state{client=C} = State) ->
-    {ok, ReqId} = C:stream_list_buckets(T),
-    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
+process(#rpblistbucketsreq{timeout=T, stream=S}=Req,
+        #state{client=C} = State) -> 
+    case S of 
+        true -> 
+            {ok, ReqId} = C:stream_list_buckets(T),
+            {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
+        _ ->
+            case C:list_buckets(T) of
+                {ok, Buckets} ->
+                    {reply, #rpblistbucketsresp{buckets = Buckets}, State};
+                {error, Reason} ->
+                    {error, {format, Reason}, State}
+            end
+    end;
+
 %% this should remain for backwards compatibility
 process(rpblistbucketsreq, #state{client=C} = State) ->
-    {ok, ReqId} = C:stream_list_buckets(),
-    {reply, {stream, ReqId}, State#state{req = #rpblistbucketsreq{}, 
-                                         req_ctx = ReqId}};
+    case C:list_buckets() of
+        {ok, Buckets} ->
+            {reply, #rpblistbucketsresp{buckets = Buckets}, State};
+        {error, Reason} ->
+            {error, {format, Reason}, State}
+    end;
+
 %% Start streaming in list keys
 process(#rpblistkeysreq{bucket=B,timeout=T}=Req, #state{client=C} = State) ->
     %% stream_list_keys results will be processed by process_stream/3
