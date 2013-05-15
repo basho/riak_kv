@@ -2,7 +2,7 @@
 %%
 %% riak_kv_pb_object: Expose KV functionality to Protocol Buffers
 %%
-%% Copyright (c) 2012 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2012-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -110,6 +110,7 @@ process(#rpbgetreq{key = <<>>}, State) ->
 process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    basic_quorum=BQ, if_modified=VClock,
                    head=Head, deletedvclock=DeletedVClock,
+                   n_val=N_val, sloppy_quorum=SloppyQuorum,
                    timeout=Timeout}, #state{client=C} = State) ->
     R = decode_quorum(R0),
     PR = decode_quorum(PR0),
@@ -118,8 +119,11 @@ process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    make_option(pr, PR) ++
                    make_option(timeout, Timeout) ++
                    make_option(notfound_ok, NFOk) ++
-                   make_option(basic_quorum, BQ)) of
+                   make_option(basic_quorum, BQ) ++
+                   make_option(n_val, N_val) ++
+                   make_option(sloppy_quorum, SloppyQuorum)) of
         {ok, O} ->
+
             case erlify_rpbvc(VClock) == riak_object:vclock(O) of
                 true ->
                     {reply, #rpbgetresp{unchanged = true}, State};
@@ -153,9 +157,12 @@ process(#rpbputreq{bucket = <<>>}, State) ->
 process(#rpbputreq{key = <<>>}, State) ->
     {error, "Key cannot be zero-length", State};
 process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
-                   if_not_modified=NotMod, if_none_match=NoneMatch} = Req,
+                   if_not_modified=NotMod, if_none_match=NoneMatch,
+                   n_val=N_val, sloppy_quorum=SloppyQuorum} = Req,
         #state{client=C} = State) when NotMod; NoneMatch ->
-    case C:get(B, K) of
+    GetOpts = make_option(n_val, N_val) ++
+              make_option(sloppy_quorum, SloppyQuorum),
+    case C:get(B, K, GetOpts) of
         {ok, _} when NoneMatch ->
             {error, "match_found", State};
         {ok, O} when NotMod ->
@@ -179,7 +186,8 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
 
 process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                    w=W0, dw=DW0, pw=PW0, return_body=ReturnBody,
-                   return_head=ReturnHead, timeout=Timeout},
+                   return_head=ReturnHead, timeout=Timeout,
+                   n_val=N_val, sloppy_quorum=SloppyQuorum},
         #state{client=C} = State) ->
 
     case K of
@@ -209,8 +217,10 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                       end
               end,
     case C:put(O, make_option(w, W) ++ make_option(dw, DW) ++
-                   make_option(pw, PW) ++ make_option(timeout, Timeout) ++ 
-                   Options) of
+                  make_option(pw, PW) ++ make_option(timeout, Timeout) ++
+                  make_option(n_val, N_val) ++
+                  make_option(sloppy_quorum, SloppyQuorum) ++
+                  Options) of
         ok when is_binary(ReturnKey) ->
             PutResp = #rpbputresp{key = ReturnKey},
             {reply, PutResp, State};
@@ -241,7 +251,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
 
 process(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
                    r=R0, w=W0, pr=PR0, pw=PW0, dw=DW0, rw=RW0,
-                   timeout=Timeout},
+                   timeout=Timeout, n_val=N_val, sloppy_quorum=SloppyQuorum},
         #state{client=C} = State) ->
     W = decode_quorum(W0),
     PW = decode_quorum(PW0),
@@ -256,7 +266,9 @@ process(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
         make_option(pr, PR) ++
         make_option(pw, PW) ++
         make_option(dw, DW) ++
-        make_option(timeout, Timeout),
+        make_option(timeout, Timeout) ++
+        make_option(n_val, N_val) ++
+        make_option(sloppy_quorum, SloppyQuorum),
     Result = case PbVc of
                  undefined ->
                      C:delete(B, K, Options);

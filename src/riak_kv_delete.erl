@@ -2,7 +2,7 @@
 %%
 %% riak_delete: two-step object deletion
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -60,10 +60,10 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
         {error, Reason} ->
             ?DTRACE(?C_DELETE_INIT1, [-1], []),
             Client ! {ReqId, {error, Reason}};
-        {R, PR} ->
+        {R, PR, PassThruOpts} ->
             RealStartTime = riak_core_util:moment(),
             {ok, C} = riak:local_client(),
-            case C:get(Bucket,Key,[{r,R},{pr,PR},{timeout,Timeout}]) of
+            case C:get(Bucket,Key,[{r,R},{pr,PR},{timeout,Timeout}]++PassThruOpts) of
                 {ok, OrigObj} ->
                     RemainingTime = Timeout - (riak_core_util:moment() - RealStartTime),
                     delete(ReqId,Bucket,Key,Options,RemainingTime,Client,ClientId,riak_object:vclock(OrigObj));
@@ -82,12 +82,12 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
         {error, Reason} ->
             ?DTRACE(?C_DELETE_INIT2, [-1], []),
             Client ! {ReqId, {error, Reason}};
-        {W, PW, DW} ->
+        {W, PW, DW, PassThruOptions} ->
             Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(?MD_DELETED,
                                                                  "true", dict:new())),
             Tombstone = riak_object:set_vclock(Obj0, VClock),
             {ok,C} = riak:local_client(ClientId),
-            Reply = C:put(Tombstone, [{w,W},{pw,PW},{dw, DW},{timeout,Timeout}]),
+            Reply = C:put(Tombstone, [{w,W},{pw,PW},{dw, DW},{timeout,Timeout}]++PassThruOptions),
             Client ! {ReqId, Reply},
             case Reply of
                 ok ->
@@ -106,7 +106,12 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
 get_r_options(Bucket, Options) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
-    N = proplists:get_value(n_val,BucketProps),
+    N = case proplists:get_value(n_val, Options) of
+            undefined ->
+                proplists:get_value(n_val, BucketProps);
+            N_val when is_integer(N_val), N_val > 0 ->
+                N_val
+        end,
     %% specifying R/W AND RW together doesn't make sense, so check if R or W
     %is defined first. If not, use RW or default.
     R = case proplists:is_defined(r, Options) orelse proplists:is_defined(w, Options) of
@@ -134,14 +139,19 @@ get_r_options(Bucket, Options) ->
                 error ->
                     {error, {pr_val_violation, PR0}};
                 PR ->
-                    {R, PR}
+                    {R, PR, extract_passthru_options(Options)}
            end
     end.
 
 get_w_options(Bucket, Options) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
-    N = proplists:get_value(n_val,BucketProps),
+    N = case proplists:get_value(n_val, Options) of
+            undefined ->
+                proplists:get_value(n_val, BucketProps);
+            N_val when is_integer(N_val), N_val > 0 ->
+                N_val
+        end,
     %% specifying R/W AND RW together doesn't make sense, so check if R or W
     %is defined first. If not, use RW or default.
     W = case proplists:is_defined(w, Options) of
@@ -173,11 +183,19 @@ get_w_options(Bucket, Options) ->
                         error ->
                             {error, {dw_val_violation, DW0}};
                         DW ->
-                            {W, PW, DW}
+                            {W, PW, DW, extract_passthru_options(Options)}
                     end
             end
     end.
 
+%% NOTE: The types are defined so that this isn't really proplist for
+%%       these values but a 2-tuple list, namely, 'sloppy_quorum'
+%%       cannot appear as a proplist-style property but must always
+%%       appear as {sloppy_quorum, boolean()}.
+
+extract_passthru_options(Options) ->
+    [Opt || {K, _} = Opt <- Options,
+            K == sloppy_quorum orelse K == n_val].
 
 %% ===================================================================
 %% EUnit tests

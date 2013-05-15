@@ -2,7 +2,7 @@
 %%
 %% riak_put_fsm: coordination of Riak PUT requests
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -64,7 +64,11 @@
         {details, detail()} |
         %% Put the value as-is, do not increment the vclocks
         %% to make the value a frontier.
-        asis.
+        asis |
+        %% Use a sloppy quorum, default = true
+        {sloppy_quorum, boolean()} |
+        %% Use a sloppy quorum, default = value from bucket properties
+        {n_val, pos_integer()}.
 
 -type options() :: [option()].
 
@@ -193,15 +197,26 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
     {ok,Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj), Ring),
     DocIdx = riak_core_util:chash_key(BKey),
-    N = proplists:get_value(n_val,BucketProps),
+    N = case proplists:get_value(n_val, Options) of
+            undefined ->
+                proplists:get_value(n_val,BucketProps);
+            N_val when is_integer(N_val), N_val > 0 ->
+                N_val
+        end,
     StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
+    Preflist2b = case proplists:get_value(sloppy_quorum, Options, true) of
+                     true ->
+                         Preflist2;
+                     _ ->
+                         [P || P = {_, primary} <- Preflist2]
+                 end,
     %% Check if this node is in the preference list so it can coordinate
-    LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
+    LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2b,
                         Node == node()],
     Must = (get_option(asis, Options, false) /= true),
-    case {Preflist2, LocalPL =:= [] andalso Must == true} of
+    case {Preflist2b, LocalPL =:= [] andalso Must == true} of
         {[], _} ->
             %% Empty preflist
             ?DTRACE(?C_PUT_FSM_PREPARE, [-1], ["prepare",<<"all nodes down">>]),
@@ -209,8 +224,8 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
         {_, true} ->
             %% This node is not in the preference list
             %% forward on to a random node
-            ListPos = crypto:rand_uniform(1, length(Preflist2)+1),
-            {{_Idx, CoordNode},_Type} = lists:nth(ListPos, Preflist2),
+            ListPos = crypto:rand_uniform(1, length(Preflist2b)+1),
+            {{_Idx, CoordNode},_Type} = lists:nth(ListPos, Preflist2b),
             _Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
             ?DTRACE(?C_PUT_FSM_PREPARE, [1],
                     ["prepare", atom2list(CoordNode)]),
@@ -246,7 +261,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
             StateData = StateData0#state{n = N,
                                          bucket_props = BucketProps,
                                          coord_pl_entry = CoordPLEntry,
-                                         preflist2 = Preflist2,
+                                         preflist2 = Preflist2b,
                                          starttime = StartTime,
                                          tracked_bucket = StatTracked},
             ?DTRACE(?C_PUT_FSM_PREPARE, [0], ["prepare", CoordPlNode]),
@@ -611,6 +626,10 @@ handle_options([{returnbody, false}|T], State = #state{postcommit = Postcommit})
                                           dw=erlang:max(1,State#state.dw),
                                           returnbody=false})
     end;
+handle_options([{K, _V} = Opt|T], State = #state{vnode_options = VnodeOpts})
+  when K == sloppy_quorum; K == n_val ->
+    %% Take these options as-is
+    handle_options(T, State#state{vnode_options = [Opt|VnodeOpts]});
 handle_options([{_,_}|T], State) -> handle_options(T, State).
 
 init_putcore(State = #state{n = N, w = W, pw = PW, dw = DW, allowmult = AllowMult,

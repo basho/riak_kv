@@ -2,7 +2,7 @@
 %%
 %% riak_get_fsm: coordination of Riak GET requests
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -44,7 +44,9 @@
                   {timeout, pos_integer() | infinity} | %% Timeout for vnode responses
                   {details, details()} |       %% Return extra details as a 3rd element
                   {details, true} |
-                  details.
+                  details |
+                  {sloppy_quorum, boolean()} | %% default = true
+                  {n_val, boolean()}.          %% default = bucket props
 
 -type options() :: [option()].
 -type req_id() :: non_neg_integer().
@@ -154,20 +156,32 @@ init({test, Args, StateProps}) ->
     {ok, validate, TestStateData, 0}.
 
 %% @private
-prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
+prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
+                                  options=Options}) ->
     ?DTRACE(?C_GET_FSM_PREPARE, [], ["prepare"]),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     DocIdx = riak_core_util:chash_key(BKey),
-    N = proplists:get_value(n_val,BucketProps),
+    N = case proplists:get_value(n_val, Options) of
+            undefined ->
+                proplists:get_value(n_val,BucketProps);
+            N_val when is_integer(N_val), N_val > 0 ->
+                N_val
+        end,
     StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
+    Preflist2b = case proplists:get_value(sloppy_quorum, Options, true) of
+                     true ->
+                         Preflist2;
+                     _ ->
+                         [P || P = {_, primary} <- Preflist2]
+                 end,
 
     new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
                                           n = N,
                                           bucket_props=BucketProps,
-                                          preflist2 = Preflist2,
+                                          preflist2 = Preflist2b,
                                           tracked_bucket = StatTracked}).
 
 %% @private
