@@ -1525,7 +1525,7 @@ decode_binary_object(BinaryObject) ->
     try binary_to_term(BinaryObject) of
         { Method, BinObj } -> 
                                 case Method of
-                                    encode_raw  -> {B, K, Val} = binary_to_term(BinObj),
+                                    encode_raw  -> {B, K, Val} = BinObj,
                                                    BKey = {B, K},
                                                    {BKey, Val};
 
@@ -1551,7 +1551,7 @@ encode_binary_object(Bucket, Key, Value) ->
     Method = handoff_data_encoding_method(),
 
     case Method of
-        encode_raw  -> EncodedObject = term_to_binary({ Bucket, Key, iolist_to_binary(Value) }),
+        encode_raw  -> EncodedObject = { Bucket, Key, iolist_to_binary(Value) },
                        return_encoded_binary_object(Method, EncodedObject);
 
         %% zlib encoding is a special case, we return the legacy format:
