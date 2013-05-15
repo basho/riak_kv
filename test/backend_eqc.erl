@@ -34,7 +34,12 @@
          test/2,
          test/3,
          test/4,
-         test/5]).
+         test/5,
+         property/1,
+         property/2,
+         property/3,
+         property/4,
+         property/5]).
 
 %% eqc_fsm callbacks
 -export([initial_state/0,
@@ -71,21 +76,40 @@
 %% ====================================================================
 
 test(Backend) ->
-    test(Backend, false).
+    test2(property(Backend, false)).
 
 test(Backend, Volatile) ->
-    test(Backend, Volatile, []).
+    test2(property(Backend, Volatile, [])).
 
 test(Backend, Volatile, Config) ->
-    test(Backend, Volatile, Config, fun(BeState,_Olds) ->
-                catch(Backend:stop(BeState)) end).
+    test2(property(Backend, Volatile, Config,
+                   fun(BeState,_Olds) -> catch(Backend:stop(BeState)) end)).
 
 test(Backend, Volatile, Config, Cleanup) ->
-    test(Backend, Volatile, Config, Cleanup, ?TEST_ITERATIONS).
+    test2(property(Backend, Volatile, Config, Cleanup, ?TEST_ITERATIONS)).
 
 test(Backend, Volatile, Config, Cleanup, NumTests) ->
-    eqc:quickcheck(eqc:numtests(NumTests,
-                                prop_backend(Backend, Volatile, Config, Cleanup))).
+    test2(property(Backend, Volatile, Config, Cleanup, NumTests)).
+
+test2(Prop) ->
+    eqc:quickcheck(Prop).
+
+property(Backend) ->
+    property(Backend, false).
+
+property(Backend, Volatile) ->
+    property(Backend, Volatile, []).
+
+property(Backend, Volatile, Config) ->
+    property(Backend, Volatile, Config, fun(BeState,_Olds) ->
+                catch(Backend:stop(BeState)) end).
+
+property(Backend, Volatile, Config, Cleanup) ->
+    property(Backend, Volatile, Config, Cleanup, ?TEST_ITERATIONS).
+
+property(Backend, Volatile, Config, Cleanup, NumTests) ->
+    eqc:numtests(NumTests,
+                 prop_backend(Backend, Volatile, Config, Cleanup)).
 
 %% ====================================================================
 %% eqc property
@@ -122,10 +146,24 @@ prop_backend(Backend, Volatile, Config, Cleanup) ->
 %%====================================================================
 
 bucket() ->
-    elements([<<"b1">>,<<"b2">>,<<"b3">>,<<"b4">>]).
+    elements([<<"b1">>,<<"b2">>]).
+
+bucket(#qcst{backend=Backend}) ->
+    try
+        Backend:backend_eqc_bucket()
+    catch error:undef ->
+            bucket()
+    end.
 
 key() ->
-    elements([<<"k1">>,<<"k2">>,<<"k3">>,<<"k4">>]).
+    elements([<<"k1">>,<<"k2">>]).
+
+key(#qcst{backend=Backend}) ->
+    try
+        Backend:backend_eqc_key()
+    catch error:undef ->
+            key()
+    end.
 
 val() ->
     %% The creation of the riak object and the call
@@ -140,8 +178,11 @@ val() ->
 g_opts() ->
     frequency([{5, [async_fold]}, {2, []}]).
 
-fold_keys_opts() ->
-    frequency([{5, [async_fold]}, {2, []}, {2, [{index, bucket(), index_query()}]}, {2, [{bucket, bucket()}]}]).
+fold_keys_opts(Q) ->
+    frequency([{5, [async_fold]},
+               {2, []},
+               {2, [{index, bucket(Q), index_query(Q)}]},
+               {2, [{bucket, bucket(Q)}]}]).
 
 index_specs() ->
     ?LET(L, list(index_spec()), lists:usort(L)).
@@ -154,9 +195,9 @@ index_spec() ->
            {remove, int_index(), int_posting()}
           ]).
 
-index_query() ->
+index_query(Q) ->
     oneof([
-           {eq, <<"$bucket">>, bucket()}, %% the bucket() in this query is ignored/transformed
+           {eq, <<"$bucket">>, bucket(Q)}, %% the bucket() in this query is ignored/transformed
            range_query(<<"$key">>, key(), key()),
            {eq, <<"$key">>, key()},
            eq_query(),
@@ -349,7 +390,15 @@ next_state_data(_From, _To, S, _R, {call, _M, put, [Bucket, Key, IndexSpecs, Val
     S#qcst{d = orddict:store({Bucket, Key}, Val, S#qcst.d),
            i = update_indexes(Bucket, Key, IndexSpecs, S#qcst.i)};
 next_state_data(_From, _To, S, _R, {call, _M, delete, [Bucket, Key|_]}) ->
-    S#qcst{d = orddict:erase({Bucket, Key}, S#qcst.d),
+    D1 = orddict:erase({Bucket, Key}, S#qcst.d),
+    D2 = try
+             Backend = S#qcst.backend,
+             BE_c = S#qcst.c,
+             Backend:backend_eqc_filter_orddict_on_delete(Bucket, Key, D1, BE_c)
+         catch error:undef ->
+                 D1
+         end,
+    S#qcst{d = D2,
            i = remove_indexes(Bucket, Key, S#qcst.i)};
 next_state_data(_From, _To, S, _R, {call, ?MODULE, drop, _}) ->
 
@@ -367,13 +416,13 @@ stopped(#qcst{backend=Backend,
 
 running(#qcst{backend=Backend,
               s=State,
-              i=Indexes}) ->
+              i=Indexes}=Q) ->
     [
-     {history, {call, Backend, put, [bucket(), key(), index_specs(), val(), State]}},
-     {history, {call, Backend, get, [bucket(), key(), State]}},
-     {history, {call, ?MODULE, delete, [bucket(), key(), Backend, State, Indexes]}},
+     {history, {call, Backend, put, [bucket(Q), key(Q), index_specs(), val(), State]}},
+     {history, {call, Backend, get, [bucket(Q), key(Q), State]}},
+     {history, {call, ?MODULE, delete, [bucket(Q), key(Q), Backend, State, Indexes]}},
      {history, {call, Backend, fold_buckets, [fold_buckets_fun(), get_fold_buffer(), g_opts(), State]}},
-     {history, {call, Backend, fold_keys, [fold_keys_fun(), get_fold_buffer(), fold_keys_opts(), State]}},
+     {history, {call, Backend, fold_keys, [fold_keys_fun(), get_fold_buffer(), fold_keys_opts(Q), State]}},
      {history, {call, Backend, fold_objects, [fold_objects_fun(), get_fold_buffer(), g_opts(), State]}},
      {history, {call, Backend, is_empty, [State]}},
      {stopped, {call, ?MODULE, drop, [Backend, State]}},
@@ -545,7 +594,13 @@ postcondition(_From, _To, S,
         {ok, Buffer} ->
             finish_fold(Buffer, From)
     end,
-    R = receive_fold_results([]),
+    R0 = receive_fold_results([]),
+    R = try
+            (S#qcst.backend):backend_eqc_fold_objects_transform(R0)
+        catch
+            error:undef ->
+                R0
+        end,
     lists:sort(Objects) =:= lists:sort(R);
 postcondition(_From, _To, S,{call, _M, is_empty, [_BeState]}, R) ->
     R =:= (orddict:size(S#qcst.d) =:= 0);

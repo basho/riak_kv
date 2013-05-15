@@ -1542,7 +1542,7 @@ object_info({Bucket, _Key}=BKey) ->
     {Bucket, Hash}.
 
 -spec encode_and_Mod_put(
-        Obj::riak_object:object(), Mod::term(), Bucket::riak_object:bucket(),
+        Obj::riak_object:riak_object(), Mod::term(), Bucket::riak_object:bucket(),
         Key::riak_object:key(), IndexSpecs::list(), ModState::term()) ->
            {{ok, UpdModState::term()}, EncodedObj::binary()} |
            {{error, Reason::term(), UpdModState::term()}, EncodedObj::binary()}.
