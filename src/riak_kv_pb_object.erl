@@ -309,11 +309,11 @@ erlify_rpbvc(undefined) ->
 erlify_rpbvc(<<>>) ->
     vclock:fresh();
 erlify_rpbvc(PbVc) ->
-    binary_to_term(riak_object:decode_vclock(PbVc)).
+    riak_object:decode_vclock(PbVc).
 
 %% Convert a vector clock to protocol buffers
 pbify_rpbvc(Vc) ->
-    riak_object:encode_vclock(term_to_binary(Vc)).
+    riak_object:encode_vclock(Vc).
 
 %% ===================================================================
 %% Tests
