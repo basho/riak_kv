@@ -140,6 +140,10 @@ start(_Type, _StartArgs) ->
                                           [enabled_v1, disabled],
                                           disabled),
 
+            riak_core_capability:register({riak_kv, handoff_data_encoding},
+                                          [encode_raw, encode_zlib],
+                                          encode_zlib),
+
             riak_core_capability:register({riak_kv, object_format},
                                           [v1, v0],
                                           v0),
