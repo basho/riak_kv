@@ -66,6 +66,8 @@
          handle_exit/3,
          handle_info/2]).
 
+-export([handoff_data_encoding_method/0]).
+
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_map_phase.hrl").
 -include_lib("riak_core/include/riak_core_pb.hrl").
@@ -739,9 +741,9 @@ handoff_finished(_TargetNode, State) ->
     {ok, State}.
 
 handle_handoff_data(BinObj, State) ->
-    PBObj = riak_core_pb:decode_riakobject_pb(zlib:unzip(BinObj)),
-    {B, K} = BKey = {PBObj#riakobject_pb.bucket,PBObj#riakobject_pb.key},
-    case do_diffobj_put(BKey, riak_object:from_binary(B, K, PBObj#riakobject_pb.val), State) of
+    {BKey, Val} = decode_binary_object(BinObj),
+    {B, K} = BKey,
+    case do_diffobj_put(BKey, riak_object:from_binary(B, K, Val), State) of
         {ok, UpdModState} ->
             {reply, ok, State#state{modstate=UpdModState}};
         {error, Reason, UpdModState} ->
@@ -755,9 +757,8 @@ encode_handoff_item({B, K}, V) ->
     %% to one supported by the cluster. This way we don't send
     %% unsupported formats to old nodes
     ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
-    Val = riak_object:to_binary_version(ObjFmt, B, K, V),
-    zlib:zip(riak_core_pb:encode_riakobject_pb(
-               #riakobject_pb{bucket=B, key=K, val=Val})).
+    Value  = riak_object:to_binary_version(ObjFmt, B, K, V),
+    encode_binary_object(B, K, Value).
 
 is_empty(State=#state{mod=Mod, modstate=ModState}) ->
     IsEmpty = Mod:is_empty(ModState),
@@ -1526,6 +1527,56 @@ object_info({Bucket, _Key}=BKey) ->
     Hash = riak_core_util:chash_key(BKey),
     {Bucket, Hash}.
 
+%% @private
+%% Encoding and decoding selection:
+
+handoff_data_encoding_method() ->
+    riak_core_capability:get({riak_kv, handoff_data_encoding}, encode_zlib).
+
+%% Decode a binary object. We first try to interpret the data as a "new format" object which indicates
+%% its encoding method, but if that fails we use the legacy zlib and protocol buffer decoding:
+decode_binary_object(BinaryObject) ->
+    try binary_to_term(BinaryObject) of
+        { Method, BinObj } -> 
+                                case Method of
+                                    encode_raw  -> {B, K, Val} = BinObj,
+                                                   BKey = {B, K},
+                                                   {BKey, Val};
+
+                                    _           -> lager:error("Invalid handoff encoding ~p", [Method]),
+                                                   throw(invalid_handoff_encoding)
+                                end;
+
+        _                   ->  lager:error("Request to decode invalid handoff object"),
+                                throw(invalid_handoff_object)
+
+    %% An exception means we have a legacy handoff object:
+    catch
+        _:_                 -> do_zlib_decode(BinaryObject)
+    end.  
+
+do_zlib_decode(BinaryObject) ->
+    DecodedObject = zlib:unzip(BinaryObject),
+    PBObj = riak_core_pb:decode_riakobject_pb(DecodedObject),
+    BKey = {PBObj#riakobject_pb.bucket,PBObj#riakobject_pb.key},
+    {BKey, PBObj#riakobject_pb.val}.
+
+encode_binary_object(Bucket, Key, Value) ->
+    Method = handoff_data_encoding_method(),
+
+    case Method of
+        encode_raw  -> EncodedObject = { Bucket, Key, iolist_to_binary(Value) },
+                       return_encoded_binary_object(Method, EncodedObject);
+
+        %% zlib encoding is a special case, we return the legacy format:
+        encode_zlib -> PBEncodedObject = riak_core_pb:encode_riakobject_pb(#riakobject_pb{bucket=Bucket, key=Key, val=Value}),
+                       zlib:zip(PBEncodedObject)
+    end.
+
+%% Return objects in a consistent form:
+return_encoded_binary_object(Method, EncodedObject) ->
+    term_to_binary({ Method, EncodedObject }).
+
 object_from_binary({B,K}, ValBin) ->
     object_from_binary(B, K, ValBin).
 object_from_binary(B, K, ValBin) ->
@@ -1533,7 +1584,6 @@ object_from_binary(B, K, ValBin) ->
         {error, R} -> throw(R);
         Obj -> Obj
     end.
-
 
 -ifdef(TEST).
 
