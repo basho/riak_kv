@@ -1013,7 +1013,7 @@ perform_put({true, Obj},
                      bkey={Bucket, Key},
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
-    case encode_and_Mod_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) of
+    case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) of
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             case RB of
@@ -1130,7 +1130,7 @@ do_get_term({Bucket, Key}, Mod, ModState) ->
     end.
 
 do_get_binary(Bucket, Key, Mod, ModState) ->
-    case mod_capability_uses_r_object(Mod, ModState, Bucket) of
+    case uses_r_object(Mod, ModState, Bucket) of
         true ->
             Mod:get_object(Bucket, Key, true, ModState);
         false ->
@@ -1138,7 +1138,7 @@ do_get_binary(Bucket, Key, Mod, ModState) ->
     end.
 
 do_get_object(Bucket, Key, Mod, ModState) ->
-    case mod_capability_uses_r_object(Mod, ModState, Bucket) of
+    case uses_r_object(Mod, ModState, Bucket) of
         true ->
             Mod:get_object(Bucket, Key, false, ModState);
         false ->
@@ -1330,8 +1330,8 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                 false ->
                     IndexSpecs = []
             end,
-            case encode_and_Mod_put(DiffObj, Mod, Bucket, Key,
-                                    IndexSpecs, ModState) of
+            case encode_and_put(DiffObj, Mod, Bucket, Key,
+                                IndexSpecs, ModState) of
                 {{ok, _UpdModState} = InnerRes, EncodedVal} ->
                     update_hashtree(Bucket, Key, EncodedVal, StateData),
                     update_index_write_stats(IndexBackend, IndexSpecs),
@@ -1355,8 +1355,8 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                         false ->
                             IndexSpecs = []
                     end,
-                    case encode_and_Mod_put(AMObj, Mod, Bucket, Key,
-                                            IndexSpecs, ModState) of
+                    case encode_and_put(AMObj, Mod, Bucket, Key,
+                                        IndexSpecs, ModState) of
                         {{ok, _UpdModState} = InnerRes, EncodedVal} ->
                             update_hashtree(Bucket, Key, EncodedVal, StateData),
                             update_index_write_stats(IndexBackend, IndexSpecs),
@@ -1541,14 +1541,14 @@ object_info({Bucket, _Key}=BKey) ->
     Hash = riak_core_util:chash_key(BKey),
     {Bucket, Hash}.
 
--spec encode_and_Mod_put(
-        Obj::riak_object:riak_object(), Mod::term(), Bucket::riak_object:bucket(),
-        Key::riak_object:key(), IndexSpecs::list(), ModState::term()) ->
+-spec encode_and_put(
+      Obj::riak_object:riak_object(), Mod::term(), Bucket::riak_object:bucket(),
+      Key::riak_object:key(), IndexSpecs::list(), ModState::term()) ->
            {{ok, UpdModState::term()}, EncodedObj::binary()} |
            {{error, Reason::term(), UpdModState::term()}, EncodedObj::binary()}.
 
-encode_and_Mod_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
-    case mod_capability_uses_r_object(Mod, ModState, Bucket) of
+encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
+    case uses_r_object(Mod, ModState, Bucket) of
         true ->
             Mod:put_object(Bucket, Key, IndexSpecs, Obj, ModState);
         false ->
@@ -1557,7 +1557,7 @@ encode_and_Mod_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
             {Mod:put(Bucket, Key, IndexSpecs, EncodedVal, ModState), EncodedVal}
     end.
 
-mod_capability_uses_r_object(Mod, ModState, Bucket) ->
+uses_r_object(Mod, ModState, Bucket) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     lists:member(uses_r_object, Capabilities).
 
