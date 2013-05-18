@@ -242,7 +242,7 @@ exec(S) ->
         end
     catch
         What:Reason ->
-            {What, Reason, Next, S}
+            {What, {Reason, erlang:get_stacktrace()}, Next, S}
     end.
 
 status(#state{verbose = true} = S, Next) ->
@@ -630,8 +630,11 @@ get_fsm_proc(ReqId, #params{n = N, r = R}) ->
     NotFoundOk = true,
     AllowMult = true,
     DeletedVclock = true,
-    GetCore = riak_kv_get_core:init(N, R, FailThreshold, NotFoundOk, 
-                                    AllowMult, DeletedVclock),
+    GetCore = riak_kv_get_core:init(N, R, FailThreshold,
+                                    9999, %% SLF hack
+                                    NotFoundOk, AllowMult, DeletedVclock,
+                                    [{Idx, primary} || Idx <- lists:seq(1, N)] %% SLF hack
+                                   ),
     #proc{name = {get_fsm, ReqId}, handler = get_fsm,
           procst = #getfsmst{getcore = GetCore}}.
 
@@ -690,11 +693,14 @@ get_fsm(#msg{from = {kv_vnode, Idx, _}, c = {r, Result, Idx, _ReqId}},
 put_fsm_proc(ReqId, #params{n = N, w = W, dw = DW}) ->
     AllowMult = true,
     ReturnBody = false,
-    PutCore = riak_kv_put_core:init(N, W, DW, 
+    PutCore = riak_kv_put_core:init(N, W, DW,
+                                    DW, %% SLF hack
                                     N-W+1,   % cannot ever get W replies
                                     N-DW+1,  % cannot ever get DW replies
                                     AllowMult,
-                                    ReturnBody),
+                                    ReturnBody,
+                                    [{Idx, primary} || Idx <- lists:seq(1, N)] %% SLF hack
+),
     #proc{name = {put_fsm, ReqId}, handler = put_fsm, procst = #putfsmst{putcore = PutCore}}.
 
 put_fsm(#msg{from = From, c = {put, PL, Obj}},
