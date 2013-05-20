@@ -46,7 +46,7 @@
                   {details, true} |
                   details |
                   {sloppy_quorum, boolean()} | %% default = true
-                  {n_val, boolean()}.          %% default = bucket props
+                  {n_val, pos_integer()}.      %% default = bucket props
 
 -type options() :: [option()].
 -type req_id() :: non_neg_integer().
