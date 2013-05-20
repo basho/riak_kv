@@ -630,8 +630,9 @@ get_fsm_proc(ReqId, #params{n = N, r = R}) ->
     NotFoundOk = true,
     AllowMult = true,
     DeletedVclock = true,
-    GetCore = riak_kv_get_core:init(N, R, FailThreshold,
-                                    9999, %% SLF hack
+    GetCore = riak_kv_get_core:init(N, R,
+                                    0, %% SLF hack
+                                    FailThreshold,
                                     NotFoundOk, AllowMult, DeletedVclock,
                                     [{Idx, primary} || Idx <- lists:seq(1, N)] %% SLF hack
                                    ),
