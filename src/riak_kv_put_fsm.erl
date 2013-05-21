@@ -67,7 +67,7 @@
         asis |
         %% Use a sloppy quorum, default = true
         {sloppy_quorum, boolean()} |
-        %% Use a sloppy quorum, default = value from bucket properties
+        %% The N value, default = value from bucket properties
         {n_val, pos_integer()}.
 
 -type options() :: [option()].
