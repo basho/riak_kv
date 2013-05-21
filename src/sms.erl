@@ -44,7 +44,7 @@ new(Vnodes) ->
 %% `Data'
 -spec add_results(non_neg_integer(), list(), sms()) -> sms().
 add_results(VnodeID, done, Data) ->
-    UpdateFun = fun({active, Prev}) -> {done, Prev} end,
+    UpdateFun = fun({_, Prev}) -> {done, Prev} end,
     update(VnodeID, UpdateFun, Data);
 add_results(VnodeID, Results, Data) ->
     UpdateFun = fun ({active, Prev}) -> {active, Prev ++ Results} end,
@@ -67,7 +67,8 @@ done(Data) ->
 %% be consumed by the client, and `sms()' is a buffer of remaining results.
 -spec sms(sms()) -> {[term()] | [], sms()}.
 sms(Data) ->
-    case any_empty(values(Data)) of
+    Vals = values(Data),
+    case any_empty(Vals) orelse Vals == [] of
         true ->
             {[], Data};
         false ->
