@@ -266,7 +266,11 @@ legacy_stat_map() ->
      {list_fsm_active, {riak_kv, list, fsm, active}, counter},
      {pbc_active, {riak_api, pbc_connects, active}, function},
      {pbc_connects, {{riak_api, pbc_connects}, one}, spiral},
-     {pbc_connects_total, {{riak_api, pbc_connects}, count}, spiral}
+     {pbc_connects_total, {{riak_api, pbc_connects}, count}, spiral},
+     {node_get_fsm_active, {riak_kv, node, gets, fsm, active}, counter},
+     {node_get_fsm_errors, {{riak_kv, node, gets, fsm, errors}, one}, spiral},
+     {node_put_fsm_active, {riak_kv, node, puts, fsm, active}, counter},
+     {node_put_fsm_errors, {{riak_kv, node, puts, fsm, errors}, one}, spiral}
     ].
 
 %% @spec cpu_stats() -> proplist()
