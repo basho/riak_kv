@@ -120,7 +120,12 @@ determine_fixed_index_status(State) ->
         true ->
             {ok, State#state{fixed_indexes=true}};
         false ->
-            case is_empty(State) of
+            %% call eleveldb directly to circumvent extra check
+            %% for fixed indexes entry. if entry is present we
+            %% don't want to ignore becasue it occurs on downgrade.
+            %% ignoring is not dangerous but reports confusing results
+            %% (empty downgraded partitions still returning fixed = true)
+            case eleveldb:is_empty(State#state.ref) of
                 true -> mark_indexes_fixed_on_start(State);
                 false -> {ok, State#state{fixed_indexes=false}}
             end
