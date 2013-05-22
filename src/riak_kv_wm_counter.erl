@@ -20,7 +20,51 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc @TODO doc this
+%% @doc Resource for serving Counters over HTTP.
+%%
+%% Available operations:
+%%
+%% POST /buckets/Bucket/counters/Key
+%%   Increment the counter at `Bucket', `Key' by
+%%   the integer amount of the request body. If the request body cannot be
+%%   parsed (by erlang `list_to_integer/1') then a `400 bad request'
+%%   is the result.
+%%   The following query params are accepted (@see `riak_kv_wm_object' docs, too):
+%%
+%%   <dl>
+%%     <dt>w</dt><dd>The write quorum. See below for defaults and values.</dd>
+%%     <dt>pw</dt><dd>The primary write quorum. See below for defaults and values.</dd>
+%%     <dt>dw</dt><dd>The durable write quorum. See below for default and values.</dd>
+%%     <dt>returnvalue</dt><dd>Boolean. Default is `false' if not provided. When `true'
+%%                             the response body will be the value of the counter.</dd>
+%%   </dl>
+%%
+%%  GET /buckets/Bucket/counters/Key
+%%    Get the current value of the counter at `Bucket', `Key'. Result is a text/plain
+%%    body with an integer value, or `not_found' if no counter exists at that resource location.
+%%    The following query params are accepted:
+%%
+%%    <dl>
+%%      <dt>r</dt><dd>Read quorum. See below for defaults and values.</dd>
+%%      <dt>pr</dt><dd>Primary read quorum. See below for defaults and values.</dd>
+%%      <dt>basic_quorum</dt><dd>Boolean. Return as soon as a quorum of responses are received
+%%                               if true. Default is the bucket default, if absent.</dd>
+%%      <dt>notfound_ok</dt><dd>Boolean. A `not_found` response from a vnode counts toward
+%%                              `r' quorum if true. Default is the bucket default, if absent.</dd>
+%%    </dl>
+%%
+%%   Quorum values (r/pr/w/pw/dw):
+%%     <dl>
+%%       <dt>default</dt<dd>Whatever the bucket default is. This is the value used
+%%                          for any absent value.</dd>
+%%      <dt>quorum</dt><dd>(Bucket N val / 2) + 1</dd>
+%%      <dt>all</dt><dd>All replicas must respond</dd>
+%%      <dt>one</dt><dd>Any one response is enough</dd>
+%%      <dt>Integer</dt><dd>That specific number of vnodes must respond. Must be =< N</dd>
+%%    </dl>
+%% Please see http://docs.basho.com for details of all the quorum values and there effect.
+
+
 
 -module(riak_kv_wm_counter).
 
@@ -141,7 +185,6 @@ malformed_rw_params(RD, Ctx) ->
                 [{#ctx.r, "r", "default"},
                  {#ctx.w, "w", "default"},
                  {#ctx.dw, "dw", "default"},
-                 {#ctx.rw, "rw", "default"},
                  {#ctx.pw, "pw", "default"},
                  {#ctx.pr, "pr", "default"}]),
     lists:foldl(fun malformed_boolean_param/2,
@@ -213,24 +256,38 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C,
         true ->
             Doc0 = riak_object:new(B, K, ?NEW_COUNTER, ?COUNTER_TYPE),
             VclockDoc = riak_object:set_vclock(Doc0, vclock:fresh()),
-            Options = [{counter_op, CounterOp}],
+            Options = [{counter_op, CounterOp}] ++ return_value(RD),
             case C:put(VclockDoc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
                                    Options]) of
                 {error, Reason} ->
                     handle_common_error(Reason, RD, Ctx);
                 ok ->
-                    {true, RD, Ctx#ctx{doc={ok, VclockDoc}}}
+                    {true, RD, Ctx#ctx{doc={ok, VclockDoc}}};
+                {ok, RObj} ->
+                    Body = produce_doc_body(RObj),
+                    {true, wrq:append_to_resp_body(Body, RD), Ctx#ctx{doc={ok, RObj}}}
             end;
         false ->
             handle_common_error(allow_mult_false, RD, Ctx)
     end.
 
+return_value(RD) ->
+    case wrq:get_qs_value(?Q_RETURNVALUE, RD) of
+        ?Q_TRUE ->
+            [returnbody];
+        _ ->
+            []
+end.
+
 allow_mult(Bucket) ->
     proplists:get_value(allow_mult, riak_core_bucket:get_bucket(Bucket)).
 
 to_text(RD, Ctx=#ctx{doc={ok, Doc}}) ->
+    {produce_doc_body(Doc), RD, Ctx}.
+
+produce_doc_body(Doc) ->
     Value = riak_kv_counter:value(Doc),
-    {integer_to_list(Value), RD, Ctx}.
+    integer_to_list(Value).
 
 ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};

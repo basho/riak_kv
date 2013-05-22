@@ -948,22 +948,7 @@ prepare_put(#state{idx=Idx,
                 false ->
                     IndexSpecs = []
             end,
-            ObjToStore = case Coord of
-                              true ->
-                                  VClockUp = riak_object:increment_vclock(RObj, VId, StartTime),
-                                  case CounterOp of
-                                      %% coordinating a counter operation means
-                                      %% creating / incrementing the counter
-                                      Val when is_integer(Val) ->
-                                          %% make a new counter, stuff it in the riak_object
-                                          Counter = riak_kv_pncounter:new(VId, CounterOp),
-                                          Incremented = riak_object:update_value(VClockUp, {riak_kv_pncounter, Counter}),
-                                          riak_object:apply_updates(Incremented);
-                                      _ -> VClockUp
-                                  end;
-                             false ->
-                                 RObj
-                         end,
+            ObjToStore = prepare_coord_put(Coord, RObj, VId, StartTime, CounterOp),
             {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
         {ok, Val} ->
             OldObj = object_from_binary(Bucket, Key, Val),
@@ -994,6 +979,20 @@ prepare_put(#state{idx=Idx,
                      PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}}
             end
     end.
+
+%% @Doc in the case that this a co-ordinating put, prepare the object.
+prepare_coord_put(true, RObj, VId, StartTime, CounterOp) when is_integer(CounterOp) ->
+    VClockUp = riak_object:increment_vclock(RObj, VId, StartTime),
+    %% coordinating a counter operation means
+    %% creating + incrementing the counter.
+    %% Make a new counter, stuff it in the riak_object
+    Counter = riak_kv_pncounter:new(VId, CounterOp),
+    Incremented = riak_object:update_value(VClockUp, {riak_kv_pncounter, Counter}),
+    riak_object:apply_updates(Incremented);
+prepare_coord_put(true, RObj, VId, StartTime, _CounterOp) ->
+    riak_object:increment_vclock(RObj, VId, StartTime);
+prepare_coord_put(false, RObj, _VId, _StartTime, _CounterOp) ->
+    RObj.
 
 handle_counter(true, CounterOp, VId, RObj) when is_integer(CounterOp) ->
     riak_kv_counter:update(RObj, VId, CounterOp);

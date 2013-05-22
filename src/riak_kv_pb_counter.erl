@@ -92,7 +92,8 @@ process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
         {error, Reason} ->
             {error, {format,Reason}, State}
     end;
-process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=CounterOp},
+process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=CounterOp,
+                            returnvalue=RetVal},
         #state{client=C} = State) ->
     case allow_mult(B) of
         true ->
@@ -102,11 +103,14 @@ process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=Coun
             W = decode_quorum(W0),
             DW = decode_quorum(DW0),
             PW = decode_quorum(PW0),
-            Options = [{counter_op, CounterOp}],
+            Options = [{counter_op, CounterOp}] ++ return_value(RetVal),
             case C:put(O, make_option(w, W) ++ make_option(dw, DW) ++
                            make_option(pw, PW) ++ [{timeout, default_timeout()} | Options]) of
                 ok ->
                     {reply, #rpbcounterupdateresp{}, State};
+                {ok, RObj} ->
+                    Value = riak_kv_counter:value(RObj),
+                    {reply, #rpbcounterupdateresp{value=Value}, State};
                 {error, notfound} ->
                     {reply, #rpbcounterupdateresp{}, State};
                 {error, Reason} ->
@@ -115,6 +119,11 @@ process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=Coun
         false ->
             {error, {format, "Counters require bucket property 'allow_mult=true'"}, State}
     end.
+
+return_value(true) ->
+    [returnbody];
+return_value(_) ->
+    [].
 
 allow_mult(Bucket) ->
     proplists:get_value(allow_mult, riak_core_bucket:get_bucket(Bucket)).

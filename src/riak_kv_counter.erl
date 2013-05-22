@@ -2,7 +2,7 @@
 %%
 %% riak_kv_counter: Counter logic to bridge riak_object and riak_kv_pncounter
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -19,11 +19,6 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
--module(riak_kv_counter).
-
--export([update/3, merge/1, value/1]).
-
--include("riak_kv_wm_raw.hrl").
 
 %% @doc A counter is a two tuple of a `riak_kv_pncounter'
 %% stored in a `riak_object'
@@ -33,7 +28,19 @@
 %% not a `riak_kv_pncounter' in that case, we keep the sibling
 %% for later resolution by the user.
 %%
-%% @TODO How do we let callers now about the sibling values?
+%% This module is the bridge between the `riak_kv_pncounter' data structure
+%% and riak_kv's `riak_object' and API endpoints.
+%%
+%% @see riak_kv_pncounter.erl
+%% @end
+
+-module(riak_kv_counter).
+
+-export([update/3, merge/1, value/1]).
+
+-include("riak_kv_wm_raw.hrl").
+
+%% @doc Update `Actor's entry by `Amt' and store it in `RObj'.
 -spec update(riak_object:riak_object(), binary(), integer()) ->
                     riak_object:riak_object().
 update(RObj, Actor, Amt) ->
