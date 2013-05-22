@@ -174,7 +174,9 @@ key_exchange(timeout, State=#state{local=LocalVN,
     Remote = fun(get_bucket, {L, B}) ->
                      exchange_bucket(RemoteTree, IndexN, L, B);
                 (key_hashes, Segment) ->
-                     exchange_segment(RemoteTree, IndexN, Segment)
+                     exchange_segment(RemoteTree, IndexN, Segment);
+                (_, _) ->
+                     ok
              end,
 
     %% Unclear if we should allow exchange to run indefinitely or enforce
