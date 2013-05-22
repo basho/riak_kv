@@ -851,21 +851,11 @@ select_doc(#ctx{doc={ok, Doc}, vtag=Vtag}) ->
 %% @spec encode_vclock_header(reqdata(), context()) -> reqdata()
 %% @doc Add the X-Riak-Vclock header to the response.
 encode_vclock_header(RD, #ctx{doc={ok, Doc}}) ->
-    {Head, Val} = vclock_header(Doc),
+    {Head, Val} = riak_object:vclock_header(Doc),
     wrq:set_resp_header(Head, Val, RD);
 encode_vclock_header(RD, #ctx{doc={error, {deleted, VClock}}}) ->
-    wrq:set_resp_header(?HEAD_VCLOCK, encode_vclock(VClock), RD).
-
-
-%% @spec vclock_header(riak_object()) -> {Name::string(), Value::string()}
-%% @doc Transform the Erlang representation of the document's vclock
-%%      into something suitable for an HTTP header
-vclock_header(Doc) ->
-    {?HEAD_VCLOCK,
-        encode_vclock(riak_object:vclock(Doc))}.
-
-encode_vclock(VClock) ->
-    binary_to_list(base64:encode(zlib:zip(term_to_binary(VClock)))).
+    BinVClock = riak_object:encode_vclock(VClock),
+    wrq:set_resp_header(?HEAD_VCLOCK, binary_to_list(base64:encode(BinVClock)), RD).
 
 %% @spec decode_vclock_header(reqdata()) -> vclock()
 %% @doc Translate the X-Riak-Vclock header value from the request into
@@ -874,7 +864,7 @@ encode_vclock(VClock) ->
 decode_vclock_header(RD) ->
     case wrq:get_req_header(?HEAD_VCLOCK, RD) of
         undefined -> vclock:fresh();
-        Head      -> binary_to_term(zlib:unzip(base64:decode(Head)))
+             Head -> riak_object:decode_vclock(base64:decode(Head))
     end.
 
 %% @spec ensure_doc(context()) -> context()
