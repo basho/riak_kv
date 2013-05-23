@@ -145,7 +145,7 @@ start(_Type, _StartArgs) ->
                                           encode_zlib),
 
             riak_core_capability:register({riak_kv, object_format},
-                                          [v1, v0],
+                                          get_object_format_modes(),
                                           v0),
 
             riak_core_capability:register({riak_kv, vclock_data_encoding},
@@ -277,3 +277,10 @@ wait_for_put_fsms(N) ->
 
 wait_for_put_fsms() ->
     wait_for_put_fsms(?MAX_FLUSH_PUT_FSM_RETRIES).
+
+get_object_format_modes() ->
+    %% TODO: clearly, this isn't ideal if we have more versions
+    case app_helper:get_env(riak_kv, object_format, v0) of
+        v0 -> [v0,v1];
+        v1 -> [v1,v0]
+    end.
