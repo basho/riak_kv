@@ -37,6 +37,7 @@
          to_index_query/6,
          make_continuation/1,
          return_terms/2,
+         apply_regex/2,
          return_body/1,
          upgrade_query/1,
          object_key_in_range/3,
@@ -308,18 +309,17 @@ to_index_query(IndexField, Args, Continuation, BaseQuery) ->
 
 %% @doc upgrade a V1 Query to a v2 Query
 make_v2_query({eq, ?BUCKETFIELD, _Bucket}, Q) ->
-    Q?KV_INDEX_Q{filter_field=?BUCKETFIELD, return_terms=false};
+    Q?KV_INDEX_Q{filter_field=?BUCKETFIELD, return_terms=false, apply_regexp=false};
 make_v2_query({eq, ?KEYFIELD, Value}, Q) ->
     Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_key=Value, start_term=Value,
-                 end_term=Value, return_terms=false};
+                 end_term=Value, return_terms=false, apply_regexp=false};
 make_v2_query({eq, Field, Value}, Q) ->
-    Q?KV_INDEX_Q{filter_field=Field, start_term=Value, end_term=Value, return_terms=false};
+    Q?KV_INDEX_Q{filter_field=Field, start_term=Value, end_term=Value, return_terms=false, apply_regexp=false};
 make_v2_query({range, ?KEYFIELD, Start, End}, Q) ->
     Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_term=Start, start_key=Start,
-                end_term=End, return_terms=false};
+                end_term=End, return_terms=false, apply_regexp=false};
 make_v2_query({range, Field, Start, End}, Q) ->
-    Q?KV_INDEX_Q{filter_field=Field, start_term=Start,
-                 end_term=End};
+    Q?KV_INDEX_Q{filter_field=Field, start_term=Start, end_term=End};
 make_v2_query(V1Q, _) ->
     {error, {invalid_v1_query, V1Q}}.
 
@@ -347,6 +347,13 @@ upgrade_query(Q) when is_tuple(Q) ->
 return_terms(true, ?KV_INDEX_Q{return_terms=true}) ->
     true;
 return_terms(_, _) ->
+    false.
+
+%% @doc should a regexp be applied - requires that one has 
+%% been passed (arg1), and makes sense in context of query (arg2)
+apply_regex(true, ?KV_INDEX_Q{apply_regexp=true}) ->
+    true;
+apply_regex(_, _) ->
     false.
 
 %% @doc Should the object body of an indexed key

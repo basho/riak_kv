@@ -7,7 +7,9 @@
           return_terms=true :: boolean(), %% Note, should be false for an equals query
           start_inclusive=true :: boolean(),
           end_inclusive=true :: boolean(),
-          return_body=false ::boolean() %% Note, only for riak cs bucket folds
+          return_body=false ::boolean(), %% Note, only for riak cs bucket folds
+          apply_regexp=true :: boolean(), %% Note should be false for an equals query
+          term_regexp %% This should carry a regular expression if and only if apply_regex is true
          }).
 
 -define(KV_INDEX_Q, #riak_kv_index_v2).

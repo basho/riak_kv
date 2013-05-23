@@ -47,7 +47,9 @@
           bucket,       %% The bucket to query.
           index_query,   %% The query..
           max_results :: all | pos_integer(), %% maximum nunber of 2i results to return, the page size.
-          return_terms = false :: boolean() %% should the index values be returned
+          return_terms = false :: boolean(), %% should the index values be returned
+          apply_regexp = false :: boolean(), %% Note should be false for an equals query
+          term_regexp %% This should carry a regular expression if and only if apply_regex is true
          }).
 
 -define(ALL_2I_RESULTS, all).
@@ -97,16 +99,21 @@ malformed_request(RD, Ctx) ->
     ReturnTerms = normalize_boolean(string:to_lower(ReturnTerms0)),
     MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, ?ALL_2I_RESULTS, RD),
     Continuation = wrq:get_qs_value(?Q_2I_CONTINUATION, undefined, RD),
+    RegExpTerm0 = wrq:get_qs_value(?Q_2I_REGEXPTERMS, "false", RD),
+    RegExpTerm = normalize_boolean(string:to_lower(RegExpTerm0)),
 
     case {validate_max(MaxResults0), riak_index:to_index_query(IndexField, Args2, Continuation)} of
         {{true, MaxResults}, {ok, Query}} ->
             %% Request is valid.
             ReturnTerms1 = riak_index:return_terms(ReturnTerms, Query),
+            ApplyRegExp = riak_index:apply_regex(RegExpTerm, Query),
             NewCtx = Ctx#ctx{
                        bucket = Bucket,
                        index_query = Query,
                        max_results = MaxResults,
-                       return_terms = ReturnTerms1
+                       return_terms = ReturnTerms1,
+                       apply_regexp = ApplyRegExp,
+                       term_regexp = RegExpTerm0
                       },
             {false, RD, NewCtx};
         {_, {error, Reason}} ->
@@ -177,6 +184,8 @@ handle_streaming_index_query(RD, Ctx) ->
     Query = Ctx#ctx.index_query,
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,
+    RegExp = {Ctx#ctx.apply_regexp, Ctx#ctx.term_regexp},
+
 
     %% Create a new multipart/mixed boundary
     Boundary = riak_core_util:unique_id_62(),
@@ -186,10 +195,10 @@ handle_streaming_index_query(RD, Ctx) ->
                 RD),
 
     {ok, ReqID} =  Client:stream_get_index(Bucket, Query, [{max_results, MaxResults}]),
-    StreamFun = index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, undefined, 0),
+    StreamFun = index_stream_helper(ReqID, Boundary, ReturnTerms, RegExp, MaxResults, undefined, 0),
     {{stream, {<<>>, StreamFun}}, CTypeRD, Ctx}.
 
-index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count) ->
+index_stream_helper(ReqID, Boundary, ReturnTerms, RegExp, MaxResults, LastResult, Count) ->
     fun() ->
             receive
                 {ReqID, done} ->
@@ -204,7 +213,7 @@ index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)
                             end,
                     {iolist_to_binary(Final), done};
                 {ReqID, {results, []}} ->
-                    {<<>>, index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)};
+                    {<<>>, index_stream_helper(ReqID, Boundary, ReturnTerms, RegExp, MaxResults, LastResult, Count)};
                 {ReqID, {results, Results}} ->
                     %% JSONify the results
                     JsonResults = encode_results(ReturnTerms, Results),
@@ -214,7 +223,7 @@ index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)
                     LastResult1 = last_result(Results),
                     Count1 = Count + length(Results),
                     {iolist_to_binary(Body),
-                     index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult1, Count1)};
+                     index_stream_helper(ReqID, Boundary, ReturnTerms, RegExp, MaxResults, LastResult1, Count1)};
                 {ReqID, Error} ->
                     lager:error("Error in index wm: ~p", [Error]),
                     Body = ["\r\n--", Boundary, "\r\n",

@@ -74,7 +74,9 @@ add(Item, #buffer{acc=Acc,
 add(Item, #buffer{acc=Acc,
                   size=Size}=Buffer) ->
     Buffer#buffer{acc=[Item | Acc],
-                  size=Size+1}.
+                  size=Size+1};
+add(skip_result, Buffer) ->
+  Buffer.
 
 %% @doc Call the buffer function on the
 %% remaining items and then reset the buffer.

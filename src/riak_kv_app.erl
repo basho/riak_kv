@@ -157,6 +157,10 @@ start(_Type, _StartArgs) ->
                                           [v2, v1],
                                           v1),
 
+            riak_core_capability:register({riak_kv, '2i_regexp_terms'},
+                                          [true, false],
+                                          false),
+
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
             %% synchronously.
