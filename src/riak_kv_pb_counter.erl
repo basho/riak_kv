@@ -41,7 +41,6 @@
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_pb/include/riak_pb_kv_codec.hrl").
--include_lib("riak_kv_types.hrl").
 
 -behaviour(riak_api_pb_service).
 
@@ -97,8 +96,8 @@ process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=Coun
         #state{client=C} = State) ->
     case allow_mult(B) of
         true ->
-            O0 = riak_object:new(B, K, ?NEW_COUNTER, ?COUNTER_TYPE),
-            O = riak_object:set_vclock(O0, vclock:fresh()),
+            O = riak_kv_counter:new(B, K),
+
             %% erlang_protobuffs encodes as 1/0/undefined
             W = decode_quorum(W0),
             DW = decode_quorum(DW0),

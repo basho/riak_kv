@@ -36,7 +36,7 @@
 
 -module(riak_kv_gcounter).
 
--export([new/0, new/2, value/1, update/3, merge/2, equal/2]).
+-export([new/0, new/2, value/1, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -118,6 +118,61 @@ increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
                              {C + Amount, ModGCnt}
                      end,
     [{Actor, Ctr}|NewGCnt].
+
+-define(TAG, 70).
+-define(V1_VERS, 1).
+
+%% @doc Encode an effecient binary representation of a `gcounter()'
+-spec to_binary(gcounter()) -> binary().
+to_binary(GCnt) ->
+    ActorCnt = length(GCnt),
+    EntriesBin = encode_entries(GCnt),
+    <<?TAG:8/integer, ?V1_VERS:8/integer, ActorCnt:32/integer, EntriesBin/binary>>.
+
+%% @private
+encode_entries(GCnt) ->
+    F = fun({Actor, Cnt}, Acc) ->
+                ActorBin = encode_actor(Actor),
+                ActorLen = byte_size(ActorBin),
+                CntBin = binary:encode_unsigned(Cnt),
+                CntLen = byte_size(CntBin),
+                <<Acc/binary, ActorLen:32/integer, ActorBin:ActorLen/binary,
+                  CntLen:32/integer, CntBin:CntLen/binary>>
+        end,
+    lists:foldl(F, <<>>, GCnt).
+
+%% @private Actor ids in riak are vnode ids, so should always be binaries
+encode_actor(Actor) when is_binary(Actor) ->
+    <<1, Actor/binary>>;
+encode_actor(Actor) ->
+    <<0, (term_to_binary(Actor))/binary>>.
+
+%% @doc Decode binary G-Counter
+-spec from_binary(binary()) -> gcounter().
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, ActorCnt:32/integer, EntriesBin/binary>>) ->
+    decode_entries(ActorCnt, EntriesBin, []).
+
+%% @private
+decode_entries(0, <<>>, GCnt) ->
+    GCnt;
+decode_entries(0, _NotEmpty, _GCnt) ->
+    {error, corrupt_contents};
+decode_entries(Cnt, EntriesBin, GCnt) ->
+    {Entry, Entries} = decode_entry(EntriesBin),
+    decode_entries(Cnt-1, Entries, [Entry | GCnt]).
+
+%% @private
+decode_entry(<<ActorLen:32/integer, ActorBin:ActorLen/binary,
+               CntLen:32/integer, CntBin:CntLen/binary,  Rest/binary>>) ->
+    Cnt = binary:decode_unsigned(CntBin),
+    {{decode_actor(ActorBin), Cnt}, Rest}.
+
+%% @private
+decode_actor(<<1, Bin/binary>>) ->
+    Bin;
+decode_actor(<<0, Bin/binary>>) ->
+    binary_to_term(Bin).
+
 
 
 %% ===================================================================
@@ -218,5 +273,15 @@ usage_test() ->
     ?assertEqual([{a1, 3}, {a2, 1}, {a3, 3}, {a4, 1}],
                  lists:sort(merge(GC3_2, GC2_2))).
 
+roundtrip_bin_test() ->
+    GC = new(),
+    GC1 = update({increment, 2}, <<"a1">>, GC),
+    GC2 = update({increment, 4}, a2, GC1),
+    GC3 = update(increment, "a4", GC2),
+    GC4 = update({increment, 10000000000000000000000000000000000000000}, {complex, "actor", [<<"term">>, 2]}, GC3),
+    Bin = to_binary(GC4),
+    Decoded = from_binary(Bin),
+    ?debugFmt("Bin size ~p, T2B size ~p", [byte_size(Bin), byte_size(term_to_binary(GC4))]),
+    ?assert(equal(GC4, Decoded)).
 
 -endif.

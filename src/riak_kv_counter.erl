@@ -36,9 +36,17 @@
 
 -module(riak_kv_counter).
 
--export([update/3, merge/1, value/1]).
+-export([update/3, merge/1, value/1, new/2]).
 
 -include("riak_kv_wm_raw.hrl").
+-include_lib("riak_kv_types.hrl").
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
+-define(TAG, 69).
+-define(V1_VERS, 1).
 
 %% @doc Update `Actor's entry by `Amt' and store it in `RObj'.
 -spec update(riak_object:riak_object(), binary(), integer()) ->
@@ -85,9 +93,13 @@ merge_contents(Contents) ->
                Contents).
 
 %% worker for `merge_contents/1'
-merge_value({MD, {riak_kv_pncounter, Counter}}, {undefined, undefined, NonCounterSiblings}) ->
+merge_value({MD, <<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>},
+            {undefined, undefined, NonCounterSiblings}) ->
+    Counter = riak_kv_pncounter:from_binary(CounterBin),
     {MD, Counter, NonCounterSiblings};
-merge_value({MD, {riak_kv_pncounter, Counter}}, {MergedMeta, Mergedest, NonCounterSiblings}) ->
+merge_value({MD, <<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>},
+            {MergedMeta, Mergedest, NonCounterSiblings}) ->
+    Counter = riak_kv_pncounter:from_binary(CounterBin),
     {merge_meta(MD, MergedMeta), riak_kv_pncounter:merge(Counter, Mergedest), NonCounterSiblings};
 merge_value(NonCounter, {MD, Mergedest, NonCounterSiblings}) ->
     {MD, Mergedest, [NonCounter | NonCounterSiblings]}.
@@ -111,12 +123,12 @@ counter_op(Amt) ->
 update_object(RObj, _, undefined, _Siblings) ->
     RObj;
 update_object(RObj, Meta, Counter, []) ->
-    RObj2 = riak_object:update_value(RObj, {riak_kv_pncounter, Counter}),
+    RObj2 = riak_object:update_value(RObj, encode(Counter)),
     RObj3 = riak_object:update_metadata(RObj2, counter_meta(Meta)),
     riak_object:apply_updates(RObj3);
 update_object(RObj, Meta, Counter, SiblingValues) ->
     %% keep non-counter siblings, too
-    riak_object:set_contents(RObj, [{counter_meta(Meta), {riak_kv_pncounter, Counter}} | SiblingValues]).
+    riak_object:set_contents(RObj, [{counter_meta(Meta), encode(Counter)} | SiblingValues]).
 
 counter_meta(undefined) ->
     Now = os:timestamp(),
@@ -145,3 +157,33 @@ later(TS1, TS2) ->
         _ ->
             true
     end.
+
+new(B, K) ->
+    Bin = encode(riak_kv_pncounter:new()),
+    Doc0 = riak_object:new(B, K, Bin, ?COUNTER_TYPE),
+    riak_object:set_vclock(Doc0, vclock:fresh()).
+
+encode(Counter) ->
+    CounterBin = riak_kv_pncounter:to_binary(Counter),
+    <<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>.
+
+%% decode(<<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>) ->
+%%     riak_kv_pncounter:from_binary(CounterBin).
+
+%% ===================================================================
+%% EUnit tests
+%% ===================================================================
+-ifdef(TEST).
+
+roundtrip_bin_test() ->
+    PN = riak_kv_pncounter:new(),
+    PN1 = riak_kv_pncounter:update({increment, 2}, <<"a1">>, PN),
+    PN2 = riak_kv_pncounter:update({decrement, 1000000000000000000000000}, douglas_Actor, PN1),
+    PN3 = riak_kv_pncounter:update(increment, [{very, ["Complex"], <<"actor">>}, honest], PN2),
+    PN4 = riak_kv_pncounter:update(decrement, "another_acotr", PN3),
+    Bin = encode(PN4),
+    ?debugFmt("Bin ~p t2b ~p", [byte_size(Bin),
+                                byte_size(term_to_binary({riak_kv_pncounter, PN4}))]),
+    ?assert(byte_size(Bin) < term_to_binary({riak_kv_pncounter, PN4})).
+
+-endif.
