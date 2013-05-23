@@ -367,7 +367,7 @@ index_key_in_range({Bucket, Key, Field, Term}=IK, Bucket,
                                end_term=EndTerm})
   when Term >= StartTerm,
        Term =< EndTerm ->
-    in_range(gt(StartInc, Key, StartKey), true, IK);
+    in_range(gt(StartInc, {Term, Key}, {StartTerm, StartKey}), true, IK);
 index_key_in_range(_, _, _) ->
     false.
 
@@ -467,6 +467,20 @@ normalize_index_field(V) when is_list(V) ->
 %% ====================
 
 -ifdef(TEST).
+
+index_in_range_test() ->
+    %% In that case that same Key has multiple values for an index
+    %% make sure that we don't skip in range values
+    %% when start_inclusive is false
+    FF = <<"f1">>,
+    K = <<"k">>,
+    B = <<"b">>,
+    IK = {B, K, FF, 1},
+    IK2 = {B, K, FF, 2},
+    %% Expect IK to be out of range but IK2 to be in
+    Q = ?KV_INDEX_Q{filter_field=FF, start_key=K, start_term=1, start_inclusive=false, end_term=3},
+    ?assertEqual({skip, IK}, index_key_in_range(IK, B, Q)),
+    ?assertEqual({true, IK2}, index_key_in_range(IK2, B, Q)).
 
 parse_binary_test() ->
     ?assertMatch({ok, <<"">>}, parse_binary(<<"">>)),
