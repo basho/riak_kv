@@ -87,13 +87,8 @@ process(#rpblistbucketsreq{timeout=T, stream=S}=Req,
     end;
 
 %% this should remain for backwards compatibility
-process(rpblistbucketsreq, #state{client=C} = State) ->
-    case C:list_buckets() of
-        {ok, Buckets} ->
-            {reply, #rpblistbucketsresp{buckets = Buckets}, State};
-        {error, Reason} ->
-            {error, {format, Reason}, State}
-    end;
+process(rpblistbucketsreq, State) ->
+    process(#rpblistbucketsreq{}, State);
 
 %% Start streaming in list keys
 process(#rpblistkeysreq{bucket=B,timeout=T}=Req, #state{client=C} = State) ->
