@@ -301,6 +301,9 @@ fix_incorrect_index_entry(Idx, ForUpgrade, BadKeys, {Success, Ignore, Error}) ->
 %% needs to take an acc to count success/error/ignore
 process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, {S, I, E} = Acc) ->
     receive
+        {Ref, {error, Reason}} ->
+            lager:error("index reformat: error on partition ~p: ~p", [Idx, Reason]),
+            {S, I, E+1};
         {Ref, ignore} ->
             lager:info("index reformat: ignoring partition ~p", [Idx]),
             ignore;
@@ -318,6 +321,11 @@ process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, {S, I, E} = Acc) -
             end,
             ack_incorrect_keys(Pid, BatchRef),
             process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, NextAcc)
+    after
+        120000 ->
+            lager:error("index reformat: timed out waiting for response from partition ~p",
+                        [Idx]),
+            {S, I, E+1}
     end.
 
 ack_incorrect_keys(Pid, Ref) ->
