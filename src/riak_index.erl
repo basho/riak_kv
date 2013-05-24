@@ -339,8 +339,8 @@ apply_continuation(Q, C) ->
 upgrade_query(Q=?KV_INDEX_Q{}) ->
     Q;
 upgrade_query(Q) when is_tuple(Q) ->
-    {ok, Q} = make_v2_query(Q, ?KV_INDEX_Q{}),
-    Q.
+    {ok, V2Q} = make_v2_query(Q, ?KV_INDEX_Q{}),
+    V2Q.
 
 %% @doc Should index terms be returned in a result
 %% to the client. Requires both that they are wanted (arg1)
