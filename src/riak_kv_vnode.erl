@@ -685,7 +685,7 @@ handle_coverage_index(Bucket, ItemFilter, Query,
                            true -> fold_objects;
                            false -> fold_keys
                        end,
-            handle_coverage_keyfold(FoldType, Bucket, ItemFilter, ResultFun,
+            handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
                                     FilterVNodes, Sender, Opts, State);
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
@@ -695,13 +695,13 @@ handle_coverage_index(Bucket, ItemFilter, Query,
 handle_coverage_keyfold(Bucket, ItemFilter, Query,
                       FilterVNodes, Sender, State,
                       ResultFunFun) ->
-    handle_coverage_keyfold(fold_keys, Bucket, ItemFilter, Query,
+    handle_coverage_fold(fold_keys, Bucket, ItemFilter, Query,
                             FilterVNodes, Sender, State, ResultFunFun).
 
 %% Until a bit of a refactor can occur to better abstract
 %% index operations, allow the ModFun for folding to be declared
 %% to support index operations that can return objects
-handle_coverage_keyfold(FoldType, Bucket, ItemFilter, ResultFun,
+handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
                         FilterVNodes, Sender, Opts0,
                         State=#state{async_folding=AsyncFolding,
                                      idx=Index,
