@@ -849,8 +849,7 @@ handle_exit(_Pid, Reason, State) ->
 do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     case proplists:get_value(bucket_props, Options) of
         undefined ->
-            {ok,Ring} = riak_core_ring_manager:get_my_ring(),
-            BProps = riak_core_bucket:get_bucket(Bucket, Ring);
+            BProps = riak_core_bucket:get_bucket(Bucket);
         BProps ->
             BProps
     end,
