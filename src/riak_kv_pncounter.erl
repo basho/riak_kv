@@ -34,7 +34,7 @@
 
 -module(riak_kv_pncounter).
 
--export([new/0, new/2, value/1, update/3, merge/2, equal/2]).
+-export([new/0, new/2, value/1, update/3, merge/2, equal/2, to_binary/1, from_binary/1]).
 
 %% EQC API
 -ifdef(EQC).
@@ -90,6 +90,7 @@ update({decrement, By}, Actor, {Incr, Decr}) when is_integer(By), By > 0 ->
 
 %% @doc Merge two `pncounter()'s to a single `pncounter()'. This is the Least Upper Bound
 %% function described in the literature.
+-spec merge(pncounter(), pncounter()) -> pncounter().
 merge({Incr1, Decr1}, {Incr2, Decr2}) ->
     MergedIncr =  riak_kv_gcounter:merge(Incr1, Incr2),
     MergedDecr =  riak_kv_gcounter:merge(Decr1, Decr2),
@@ -98,8 +99,30 @@ merge({Incr1, Decr1}, {Incr2, Decr2}) ->
 %% @doc Are two `pncounter()'s structurally equal? This is not `value/1' equality.
 %% Two counters might represent the total `-42', and not be `equal/2'. Equality here is
 %% that both counters represent exactly the same information.
+-spec equal(pncounter(), pncounter()) -> boolean().
 equal({Incr1, Decr1}, {Incr2, Decr2}) ->
     riak_kv_gcounter:equal(Incr1, Incr2) andalso riak_kv_gcounter:equal(Decr1, Decr2).
+
+-define(TAG, 71).
+-define(V1_VERS, 1).
+
+%% @doc Encode an effecient binary representation of `pncounter()'
+-spec to_binary(pncounter()) -> binary().
+to_binary({P, N}) ->
+    PBin = riak_kv_gcounter:to_binary(P),
+    NBin = riak_kv_gcounter:to_binary(N),
+    PBinLen = byte_size(PBin),
+    NBinLen = byte_size(NBin),
+    <<?TAG:8/integer, ?V1_VERS:8/integer,
+      PBinLen:32/integer, PBin:PBinLen/binary,
+      NBinLen:32/integer, NBin:NBinLen/binary>>.
+
+%% @doc Decode a binary encoded PN-Counter
+-spec from_binary(binary()) -> pncounter().
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer,
+              PBinLen:32/integer, PBin:PBinLen/binary,
+              NBinLen:32/integer, NBin:NBinLen/binary>>) ->
+    {riak_kv_gcounter:from_binary(PBin), riak_kv_gcounter:from_binary(NBin)}.
 
 %% ===================================================================
 %% EUnit tests
@@ -208,5 +231,15 @@ usage_test() ->
     PNCnt2_3 = update(decrement, a2, PNCnt2_2),
     ?assertEqual({[{a1, 3}, {a4, 1}, {a2, 1}, {a3, 3}], [{a5, 2}, {a2, 1}]},
                  merge(PNCnt3_3, PNCnt2_3)).
+
+roundtrip_bin_test() ->
+    PN = new(),
+    PN1 = update({increment, 2}, <<"a1">>, PN),
+    PN2 = update({decrement, 1000000000000000000000000}, douglas_Actor, PN1),
+    PN3 = update(increment, [{very, ["Complex"], <<"actor">>}, honest], PN2),
+    PN4 = update(decrement, "another_acotr", PN3),
+    Bin = to_binary(PN4),
+    Decoded = from_binary(Bin),
+    ?assert(equal(PN4, Decoded)).
 
 -endif.
