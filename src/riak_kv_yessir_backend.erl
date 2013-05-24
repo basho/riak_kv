@@ -166,7 +166,7 @@ get(Bucket, Key, #state{op_get = Gets} = S) ->
           end,
     Meta = dict:new(),
     Meta1 = dict:store(<<"X-Riak-Last-Modified">>, erlang:now(), Meta),
-    Meta2 = dict:store(<<"X-Riak-VTag">>, make_vtag(erlang:now()), Meta1),
+    Meta2 = dict:store(<<"X-Riak-VTag">>, riak_kv_util:make_vtag(erlang:now()), Meta1),
     O = riak_object:increment_vclock(riak_object:new(Bucket, Key, Bin, Meta2),
                                      <<"yessir!">>, 1),
     {ok, riak_object:to_binary(v0, O), S#state{op_get = Gets + 1}}.
@@ -308,18 +308,13 @@ fold_objects_fun(FoldObjectsFun, Bucket, Size) ->
             Bin = value_for_random(VR, Size),
             Meta = dict:new(),
             Meta1 = dict:store(<<"X-Riak-Last-Modified">>, erlang:now(), Meta),
-            Meta2 = dict:store(<<"X-Riak-VTag">>, make_vtag(erlang:now()), Meta1),
+            Meta2 = dict:store(<<"X-Riak-VTag">>, riak_kv_util:make_vtag(erlang:now()), Meta1),
             O = riak_object:increment_vclock(riak_object:new(Bucket, Key, Bin, Meta2),
                                              <<"yessir!">>, 1),
             FoldObjectsFun(Bucket, Key, riak_object:to_binary(v0, O), Acc);
        (_, _, Acc) ->
             Acc
     end.
-
-%% borrowed from kv get_fsm...
-make_vtag(Now) ->
-    <<HashAsNum:128/integer>> = crypto:md5(term_to_binary({node(), Now})),
-    riak_core_util:integer_to_list(HashAsNum,62).
 
 get_binsize(<<"yessir.", Rest/binary>>) ->
     get_binsize(Rest, 0);
