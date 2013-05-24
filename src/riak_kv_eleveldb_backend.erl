@@ -122,7 +122,12 @@ determine_fixed_index_status(State) ->
         true ->
             {ok, State#state{fixed_indexes=true}};
         false ->
-            case is_empty(State) of
+            %% call eleveldb directly to circumvent extra check
+            %% for fixed indexes entry. if entry is present we
+            %% don't want to ignore becasue it occurs on downgrade.
+            %% ignoring is not dangerous but reports confusing results
+            %% (empty downgraded partitions still returning fixed = true)
+            case eleveldb:is_empty(State#state.ref) of
                 true -> mark_indexes_fixed_on_start(State);
                 false -> {ok, State#state{fixed_indexes=false}}
             end
@@ -464,8 +469,26 @@ drop(State0) ->
 %% @doc Returns true if this eleveldb backend contains any
 %% non-tombstone values; otherwise returns false.
 -spec is_empty(state()) -> boolean() | {error, term()}.
-is_empty(#state{ref=Ref}) ->
-    eleveldb:is_empty(Ref).
+is_empty(#state{ref=Ref, read_opts=ReadOpts, write_opts=WriteOpts}) ->
+    case eleveldb:is_empty(Ref) of
+        true ->
+            true;
+        false ->
+            is_empty_but_md(Ref, ReadOpts, WriteOpts)
+    end.
+
+is_empty_but_md(Ref, _ReadOpts, _WriteOpts) ->
+    MDKey = to_md_key(?FIXED_INDEXES_KEY),
+    %% fold, and if any key (except md key) is found, not
+    %% empty
+    FF = fun(Key, _) when Key == MDKey -> true;
+            (_K, _) -> throw({break, false})
+         end,
+    try
+        eleveldb:fold_keys(Ref, FF, true, [{fill_cache, false}])
+    catch {break, Empty} ->
+            Empty
+    end.
 
 %% @doc Get the status information for this eleveldb backend
 -spec status(state()) -> [{atom(), term()}].
@@ -926,11 +949,6 @@ eqc_test_() ->
          fun setup/0,
          fun cleanup/1,
          [
-          {timeout, 60000,
-           [?_assertEqual(true,
-                          backend_eqc:test(?MODULE, false,
-                                           [{data_root,
-                                             "test/eleveldb-backend"}]))]},
           {timeout, 60000,
             [?_assertEqual(true,
                           backend_eqc:test(?MODULE, false,

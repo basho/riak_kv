@@ -136,11 +136,11 @@ check_erlang_limits() ->
                     false -> 1024;
                     PL -> list_to_integer(PL)
                 end,
-    PortMsg = case PortLimit < 4096 of
+    PortMsg = case PortLimit < 64000 of
                   true ->
                       %% needs to be revisited for R16+
                       {warn, "Erlang ports limit of ~p is low, at least "
-                       "4096 is recommended", [PortLimit]};
+                       "64000 is recommended", [PortLimit]};
                   false ->
                       {info, "Erlang ports limit: ~p", [PortLimit]}
               end,
@@ -150,10 +150,10 @@ check_erlang_limits() ->
                    false -> 1400;
                    Limit -> list_to_integer(Limit)
                end,
-    ETSMsg = case ETSLimit < 8192 of
+    ETSMsg = case ETSLimit < 256000 of
                  true ->
                      {warn,"ETS table count limit of ~p is low, at least "
-                      "8192 is recommended.", [ETSLimit]};
+                      "256000 is recommended.", [ETSLimit]};
                  false ->
                      {info, "ETS table count limit: ~p",
                       [ETSLimit]}

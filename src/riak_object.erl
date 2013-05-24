@@ -67,7 +67,9 @@
 -export([increment_vclock/2, increment_vclock/3]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([hash/1, approximate_size/2]).
--export([vclock/1, update_value/2, update_metadata/2, bucket/1, value_count/1]).
+-export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
+-export([encode_vclock/2, decode_vclock/2]).
+-export([update_value/2, update_metadata/2, bucket/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([merge/2, apply_updates/1, syntactic_merge/2]).
 -export([to_json/1, from_json/1]).
@@ -336,6 +338,7 @@ set_vclock(Object=#r_object{}, VClock) -> Object#r_object{vclock=VClock}.
 
 %% @doc  Increment the entry for ClientId in O's vclock.
 -spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object().
+%% @spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object()
 increment_vclock(Object=#r_object{}, ClientId) ->
     Object#r_object{vclock=vclock:increment(ClientId, Object#r_object.vclock)}.
 
@@ -406,10 +409,19 @@ assemble_index_specs(Indexes, IndexOp) ->
 set_contents(Object=#r_object{}, MVs) when is_list(MVs) ->
     Object#r_object{contents=[#r_content{metadata=M,value=V} || {M, V} <- MVs]}.
 
+%% @spec vclock_header(riak_object()) -> {Name::string(), Value::string()}
+%% @doc Transform the Erlang representation of the document's vclock
+%%      into something suitable for an HTTP header
+vclock_header(Doc) ->
+    VClock = riak_object:vclock(Doc),
+    EncodedVClock = binary_to_list(base64:encode(encode_vclock(VClock))),
+    {?HEAD_VCLOCK, EncodedVClock}.
+
+%% @spec to_json(riak_object()) -> {struct, list(any())}
 %% @doc Converts a riak_object into its JSON equivalent
 -spec to_json(riak_object()) -> {struct, list(any())}.
 to_json(Obj=#r_object{}) ->
-    {_,Vclock} = riak_kv_wm_utils:vclock_header(Obj),
+    {_,Vclock} = vclock_header(Obj),
     {struct, [{<<"bucket">>, riak_object:bucket(Obj)},
               {<<"key">>, riak_object:key(Obj)},
               {<<"vclock">>, list_to_binary(Vclock)},
@@ -427,7 +439,7 @@ from_json(Obj) ->
     Bucket = proplists:get_value(<<"bucket">>, Obj),
     Key = proplists:get_value(<<"key">>, Obj),
     VClock0 = proplists:get_value(<<"vclock">>, Obj),
-    VClock = binary_to_term(zlib:unzip(base64:decode(VClock0))),
+    VClock = decode_vclock(base64:decode(VClock0)),
     [{struct, Values}] = proplists:get_value(<<"values">>, Obj),
     RObj0 = riak_object:new(Bucket, Key, <<"">>),
     RObj1 = riak_object:set_vclock(RObj0, VClock),
@@ -522,7 +534,6 @@ dejsonify_meta_value({struct, PList}) ->
                         [{Key, dejsonify_meta_value(V)}|Acc]
                 end, [], PList);
 dejsonify_meta_value(Value) -> Value.
-
 
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
     case dict:find(clean, M) of
@@ -732,6 +743,51 @@ decode_maybe_binary(<<1, Bin/binary>>) ->
     Bin;
 decode_maybe_binary(<<0, Bin/binary>>) ->
     binary_to_term(Bin).
+
+%%
+%% Helpers for managing vector clock encoding and related capability:
+%%
+
+%% Fetch the preferred vclock encoding method:
+-spec vclock_encoding_method() -> atom().
+vclock_encoding_method() ->
+    riak_core_capability:get({riak_kv, vclock_data_encoding}, encode_zlib).
+
+%% Encode a vclock in accordance with our capability setting:
+encode_vclock(VClock) ->
+    encode_vclock(vclock_encoding_method(), VClock).
+
+-spec encode_vclock(atom(), VClock :: vclock:vclock()) -> binary().
+encode_vclock(Method, VClock) ->
+    case Method of
+        %% zlib legacy support: we don't return standard encoding with metadata:
+        encode_zlib -> zlib:zip(term_to_binary(VClock));
+        _ -> embed_encoding_method(Method, VClock)
+    end.
+
+%% Return a vclock in a consistent format:
+embed_encoding_method(Method, EncodedVClock) ->
+    term_to_binary({ Method, EncodedVClock }).
+
+-spec decode_vclock(binary()) -> vclock:vclock().
+decode_vclock(EncodedVClock) ->
+    % For later versions, we expect to simply read the embedded encoding
+    % so switching will not be a problem. But upgrading from first version
+    % without embedded encoding is handled by the try/catch. We should be
+    % able to remove that expensive part a couple of releases after 1.4
+    {Method, EncodedVClock2} = try binary_to_term(EncodedVClock)
+    catch error:badarg -> {encode_zlib, EncodedVClock} end,
+    decode_vclock(Method, EncodedVClock2).
+
+%% Decode a vclock against our capability settings:
+-spec decode_vclock(atom(), VClock :: term()) -> vclock:vclock().
+decode_vclock(Method, VClock) ->
+    case Method of
+        encode_raw  -> VClock;
+        encode_zlib -> binary_to_term(zlib:unzip(VClock));
+        _           -> lager:error("Bad vclock encoding method ~p", [Method]),
+                       throw(bad_vclock_encoding_method)
+    end.
 
 -ifdef(TEST).
 
@@ -986,7 +1042,6 @@ check_most_recent({V1, T1, D1}, {V2, T2, D2}) ->
 
     C3#r_content.value.
 
-
 determinstic_most_recent_test() ->
     D = calendar:datetime_to_gregorian_seconds(
           httpd_util:convert_request_date(
@@ -1025,5 +1080,10 @@ determinstic_most_recent_test() ->
 
     ?assertEqual(<<"b">>, check_most_recent({<<"a">>, TPast, Deleted},
                                             {<<"b">>, TNow, Deleted})).
+
+vclock_codec_test() ->
+    VCs = [<<"BinVclock">>, {vclock, something, [], <<"blah">>}, vclock:fresh()],
+    [ ?assertEqual({Method, VC}, {Method, decode_vclock(encode_vclock(Method, VC))})
+     || VC <- VCs, Method <- [encode_raw, encode_zlib]].
 
 -endif.

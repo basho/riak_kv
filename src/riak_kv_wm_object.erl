@@ -134,6 +134,7 @@
               pw,           %% integer() - number of primary nodes required in preflist on write
               basic_quorum, %% boolean() - whether to use basic_quorum
               notfound_ok,  %% boolean() - whether to treat notfounds as successes
+              asis,         %% boolean() - whether to send the put without modifying the vclock
               prefix,       %% string() - prefix for resource uris
               riak,         %% local | {node(), atom()} - params for riak client
               doc,          %% {ok, riak_object()}|{error, term()} - the object found
@@ -226,44 +227,49 @@ allow_missing_post(RD, Ctx) ->
 %%      at this time.
 malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'POST'
                                 orelse Ctx#ctx.method =:= 'PUT' ->
+    malformed_request([fun malformed_content_type/2,
+                       fun malformed_timeout_param/2,
+                       fun malformed_rw_params/2,
+                       fun malformed_link_headers/2,
+                       fun malformed_index_headers/2],
+                      RD, Ctx);
+malformed_request(RD, Ctx) ->
+    malformed_request([fun malformed_timeout_param/2,
+                       fun malformed_rw_params/2,
+                       fun malformed_check_doc/2], RD, Ctx).
+
+%% @doc Given a list of 2-arity funs, threads through the request data
+%% and context, returning as soon as a single fun discovers a
+%% malformed request or halts.
+%% -spec malformed_request([fun()], wrq:reqdata(), #ctx{}) -> {boolean() | {halt, non_neg_integer()}, wrq:reqdata(), #ctx{}}.
+malformed_request([], RD, Ctx) ->
+    {false, RD, Ctx};
+malformed_request([H|T], RD, Ctx) ->
+    case H(RD, Ctx) of
+        {true, _, _} = Result -> Result;
+        {{halt,_}, _, _} = Halt -> Halt;
+        {false, RD1, Ctx1} ->
+            malformed_request(T, RD1, Ctx1)
+    end.
+
+%% @doc Detects whether the Content-Type header is missing on
+%% PUT/POST.
+malformed_content_type(RD, Ctx) ->
     case wrq:get_req_header("Content-Type", RD) of
         undefined ->
             {true, missing_content_type(RD), Ctx};
+        _ -> {false, RD, Ctx}
+    end.
+
+%% @doc Detects whether fetching the requested object results in an
+%% error.
+malformed_check_doc(RD, Ctx) ->
+    DocCtx = ensure_doc(Ctx),
+    case DocCtx#ctx.doc of
+        {error, Reason} ->
+            handle_common_error(Reason, RD, DocCtx);
         _ ->
-            case malformed_timeout_param(RD, Ctx) of
-                Result={true, _, _} ->
-                    Result;
-                {false, ToRD, ToCtx} ->
-                    case malformed_rw_params(ToRD, ToCtx) of
-                        Result={true, _, _} -> 
-                            Result;
-                        {false, RWRD, RWCtx} ->
-                            case malformed_link_headers(RWRD, RWCtx) of
-                                Result = {true, _, _} ->
-                                    Result;
-                                {false, RWLH, LHCtx} ->
-                                    malformed_index_headers(RWLH, LHCtx)
-                            end
-                    end
-            end
-    end;
-malformed_request(RD, Ctx) -> 
-    case malformed_timeout_param(RD, Ctx) of
-        Result={true, _, _} ->
-            Result;
-        {false, ToRD, ToCtx} ->
-            case malformed_rw_params(ToRD, ToCtx) of
-                Result = {true, _, _} ->
-                    Result;
-                {false, ResRD, ResCtx} ->
-                    DocCtx = ensure_doc(ResCtx),
-                    case DocCtx#ctx.doc of
-                        {error, Reason} ->
-                            handle_common_error(Reason, ResRD, DocCtx);
-                        _ ->
-                            {false, ResRD, DocCtx}
-                    end
-            end
+            {false, RD, DocCtx}
     end.
 
 %% @spec malformed_timeout_param(reqdata(), context()) ->
@@ -275,7 +281,7 @@ malformed_timeout_param(RD, Ctx) ->
     case wrq:get_qs_value("timeout", none, RD) of
         none ->
             {false, RD, Ctx};
-        TimeoutStr -> 
+        TimeoutStr ->
             try
                 Timeout = list_to_integer(TimeoutStr),
                 {false, RD, Ctx#ctx{timeout=Timeout}}
@@ -285,7 +291,7 @@ malformed_timeout_param(RD, Ctx) ->
                      wrq:append_to_resp_body(io_lib:format("Bad timeout "
                                                            "value ~p~n",
                                                            [TimeoutStr]),
-                                             wrq:set_resp_header(?HEAD_CTYPE, 
+                                             wrq:set_resp_header(?HEAD_CTYPE,
                                                                  "text/plain", RD)),
                      Ctx}
             end
@@ -309,7 +315,8 @@ malformed_rw_params(RD, Ctx) ->
     lists:foldl(fun malformed_boolean_param/2,
                 Res,
                 [{#ctx.basic_quorum, "basic_quorum", "default"},
-                 {#ctx.notfound_ok, "notfound_ok", "default"}]).
+                 {#ctx.notfound_ok, "notfound_ok", "default"},
+                 {#ctx.asis, "asis", "false"}]).
 
 %% @spec malformed_rw_param({Idx::integer(), Name::string(), Default::string()},
 %%                          {boolean(), reqdata(), context()}) ->
@@ -392,7 +399,7 @@ malformed_link_headers(RD, Ctx) ->
 %% @spec malformed_index_headers(reqdata(), context()) ->
 %%           {boolean(), reqdata(), context()}
 %%
-%% @doc Check that the Index headers (HTTP headers prefixed with index_") 
+%% @doc Check that the Index headers (HTTP headers prefixed with index_")
 %%      are valid. Store the parsed headers in context() if valid,
 %%      or print an error in reqdata() if not.
 %%      An index field should be of the form "index_fieldname_type"
@@ -723,7 +730,20 @@ multiple_choices(RD, Ctx=#ctx{vtag=undefined, doc={ok, Doc}}) ->
     end;
 multiple_choices(RD, Ctx) ->
     %% specific vtag was specified
-    {false, RD, Ctx}.
+    %% if it's a tombstone add the X-Riak-Deleted header
+    case select_doc(Ctx) of
+        {M, _} ->
+            case dict:find(?MD_DELETED, M) of
+                {ok, "true"} ->
+                    {false,
+                        wrq:set_resp_header(?HEAD_DELETED, "true", RD),
+                        Ctx};
+                error ->
+                    {false, RD, Ctx}
+            end;
+        multiple_choices ->
+            throw({unexpected_code_path, ?MODULE, multiple_choices, multiple_choices})
+    end.
 
 %% @spec produce_doc_body(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Extract the value of the document, and place it in the
@@ -733,7 +753,7 @@ multiple_choices(RD, Ctx) ->
 %%      property "rel=container".  The rest of the links will be
 %%      constructed from the links of the document.
 produce_doc_body(RD, Ctx) ->
-    Prefix = Ctx#ctx.prefix, 
+    Prefix = Ctx#ctx.prefix,
     Bucket = Ctx#ctx.bucket,
     APIVersion = Ctx#ctx.api_version,
     case select_doc(Ctx) of
@@ -745,7 +765,7 @@ produce_doc_body(RD, Ctx) ->
                     end,
             Links2 = riak_kv_wm_utils:format_links([{Bucket, "up"}|Links1], Prefix, APIVersion),
             LinkRD = wrq:merge_resp_headers(Links2, RD),
-            
+
             %% Add user metadata to response...
             UserMetaRD = case dict:find(?MD_USERMETA, MD) of
                         {ok, UserMeta} ->
@@ -831,21 +851,11 @@ select_doc(#ctx{doc={ok, Doc}, vtag=Vtag}) ->
 %% @spec encode_vclock_header(reqdata(), context()) -> reqdata()
 %% @doc Add the X-Riak-Vclock header to the response.
 encode_vclock_header(RD, #ctx{doc={ok, Doc}}) ->
-    {Head, Val} = vclock_header(Doc),
+    {Head, Val} = riak_object:vclock_header(Doc),
     wrq:set_resp_header(Head, Val, RD);
 encode_vclock_header(RD, #ctx{doc={error, {deleted, VClock}}}) ->
-    wrq:set_resp_header(?HEAD_VCLOCK, encode_vclock(VClock), RD).
-
-
-%% @spec vclock_header(riak_object()) -> {Name::string(), Value::string()}
-%% @doc Transform the Erlang representation of the document's vclock
-%%      into something suitable for an HTTP header
-vclock_header(Doc) ->
-    {?HEAD_VCLOCK,
-        encode_vclock(riak_object:vclock(Doc))}.
-
-encode_vclock(VClock) ->
-    binary_to_list(base64:encode(zlib:zip(term_to_binary(VClock)))).
+    BinVClock = riak_object:encode_vclock(VClock),
+    wrq:set_resp_header(?HEAD_VCLOCK, binary_to_list(base64:encode(BinVClock)), RD).
 
 %% @spec decode_vclock_header(reqdata()) -> vclock()
 %% @doc Translate the X-Riak-Vclock header value from the request into
@@ -854,7 +864,7 @@ encode_vclock(VClock) ->
 decode_vclock_header(RD) ->
     case wrq:get_req_header(?HEAD_VCLOCK, RD) of
         undefined -> vclock:fresh();
-        Head      -> binary_to_term(zlib:unzip(base64:decode(Head)))
+             Head -> riak_object:decode_vclock(base64:decode(Head))
     end.
 
 %% @spec ensure_doc(context()) -> context()
@@ -878,7 +888,7 @@ ensure_doc(Ctx) -> Ctx.
 delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C}) ->
     Options = make_options([], Ctx),
     Result = case wrq:get_req_header(?HEAD_VCLOCK, RD) of
-        undefined -> 
+        undefined ->
             C:delete(B,K,Options);
         _ ->
             C:delete_vclock(B,K,decode_vclock_header(RD),Options)
@@ -919,7 +929,7 @@ last_modified(RD, Ctx) ->
         multiple_choices ->
             {ok, Doc} = Ctx#ctx.doc,
             LMDates = [ normalize_last_modified(MD) ||
-                          MD <- riak_object:get_metadatas(Doc) ],            
+                          MD <- riak_object:get_metadatas(Doc) ],
             {lists:max(LMDates), RD, Ctx}
     end.
 
@@ -944,7 +954,7 @@ get_link_heads(RD, Ctx) ->
     Bucket = Ctx#ctx.bucket,
 
     %% Get a list of link headers...
-    LinkHeaders1 = 
+    LinkHeaders1 =
         case wrq:get_req_header(?HEAD_LINK, RD) of
             undefined -> [];
             Heads -> string:tokens(Heads, ",")
@@ -952,7 +962,7 @@ get_link_heads(RD, Ctx) ->
 
     %% Decode the link headers. Throw an exception if we can't
     %% properly parse any of the headers...
-    {BucketLinks, KeyLinks} = 
+    {BucketLinks, KeyLinks} =
         case APIVersion of
             1 ->
                 {ok, BucketRegex} = re:compile("</" ++ Prefix ++ "/([^/]+)>; ?rel=\"([^\"]+)\""),
@@ -968,12 +978,12 @@ get_link_heads(RD, Ctx) ->
     %% bucket...
     IsValid = (BucketLinks == []) orelse (BucketLinks == [{Bucket, <<"up">>}]),
     case IsValid of
-        true -> 
+        true ->
             KeyLinks;
         false ->
             throw({invalid_link_headers, LinkHeaders1})
     end.
-        
+
 %% Run each LinkHeader string() through the BucketRegex and
 %% KeyRegex. Return {BucketLinks, KeyLinks}.
 extract_links(LinkHeaders, BucketRegex, KeyRegex) ->
@@ -1054,9 +1064,10 @@ handle_common_error(Reason, RD, Ctx) ->
         {error, {deleted, _VClock}} ->
             {{halt, 404},
                 wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("not found~n",[]),
-                        encode_vclock_header(RD, Ctx))),
+                    wrq:set_resp_header(?HEAD_DELETED, "true",
+                        wrq:append_to_response_body(
+                            io_lib:format("not found~n",[]),
+                            encode_vclock_header(RD, Ctx)))),
                 Ctx};
         {error, {n_val_violation, N}} ->
             Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
@@ -1100,9 +1111,9 @@ handle_common_error(Reason, RD, Ctx) ->
     end.
 
 make_options(Prev, Ctx) ->
-    NewOpts0 = [{rw, Ctx#ctx.rw}, {r, Ctx#ctx.r}, {w, Ctx#ctx.w}, 
-                {pr, Ctx#ctx.pr}, {pw, Ctx#ctx.pw}, {dw, Ctx#ctx.dw}, 
-                {timeout, Ctx#ctx.timeout}],
-    NewOpts = [ {Opt, Val} || {Opt, Val} <- NewOpts0, 
+    NewOpts0 = [{rw, Ctx#ctx.rw}, {r, Ctx#ctx.r}, {w, Ctx#ctx.w},
+                {pr, Ctx#ctx.pr}, {pw, Ctx#ctx.pw}, {dw, Ctx#ctx.dw},
+                {timeout, Ctx#ctx.timeout}, {asis, Ctx#ctx.asis}],
+    NewOpts = [ {Opt, Val} || {Opt, Val} <- NewOpts0,
                               Val /= undefined, Val /= default ],
     Prev ++ NewOpts.

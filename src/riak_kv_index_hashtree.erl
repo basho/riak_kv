@@ -333,7 +333,7 @@ handle_info({'DOWN', _, _, Pid, _}, State) when Pid == State#state.vnode_pid ->
 handle_info({'DOWN', Ref, _, _, _}, State) ->
     State2 = maybe_release_lock(Ref, State),
     {noreply, State2};
-   
+
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -603,12 +603,14 @@ do_compare(Id, Remote, AccFun, From, State) ->
             gen_server:reply(From, []);
         {ok, Tree} ->
             spawn_link(fun() ->
+                               Remote(init, self()),
                                Result = case AccFun of
                                             undefined ->
                                                 hashtree:compare(Tree, Remote);
                                             _ ->
                                                 hashtree:compare(Tree, Remote, AccFun)
                                         end,
+                               Remote(final, self()),
                                gen_server:reply(From, Result)
                        end)
     end,

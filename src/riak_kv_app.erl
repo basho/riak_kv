@@ -141,13 +141,21 @@ start(_Type, _StartArgs) ->
                                           [enabled_v1, disabled],
                                           disabled),
 
+            riak_core_capability:register({riak_kv, handoff_data_encoding},
+                                          [encode_raw, encode_zlib],
+                                          encode_zlib),
+
             riak_core_capability:register({riak_kv, object_format},
-                                          [v1, v0],
+                                          get_object_format_modes(),
                                           v0),
 
             riak_core_capability:register({riak_kv, secondary_index_version},
                                           [v2, v1],
                                           v1),
+
+            riak_core_capability:register({riak_kv, vclock_data_encoding},
+                                          [encode_zlib, encode_raw],
+                                          encode_zlib),
 
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
@@ -274,3 +282,10 @@ wait_for_put_fsms(N) ->
 
 wait_for_put_fsms() ->
     wait_for_put_fsms(?MAX_FLUSH_PUT_FSM_RETRIES).
+
+get_object_format_modes() ->
+    %% TODO: clearly, this isn't ideal if we have more versions
+    case app_helper:get_env(riak_kv, object_format, v0) of
+        v0 -> [v0,v1];
+        v1 -> [v1,v0]
+    end.
