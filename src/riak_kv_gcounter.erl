@@ -239,7 +239,18 @@ roundtrip_bin_test() ->
     GC4 = update({increment, 10000000000000000000000000000000000000000}, {complex, "actor", [<<"term">>, 2]}, GC3),
     Bin = to_binary(GC4),
     Decoded = from_binary(Bin),
-    ?debugFmt("Bin size ~p, T2B size ~p", [byte_size(Bin), byte_size(term_to_binary(GC4))]),
     ?assert(equal(GC4, Decoded)).
+
+lots_of_actors_test() ->
+    GC = lists:foldl(fun(_, GCnt) ->
+                            ActorLen = crypto:rand_uniform(1, 1000),
+                            Actor = crypto:rand_bytes(ActorLen),
+                            Cnt = crypto:rand_uniform(1, 10000),
+                            riak_kv_gcounter:update({increment, Cnt}, Actor, GCnt) end,
+                    new(),
+                    lists:seq(1, 1000)),
+    Bin = to_binary(GC),
+    Decoded = from_binary(Bin),
+    ?assert(equal(GC, Decoded)).
 
 -endif.

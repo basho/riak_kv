@@ -240,8 +240,6 @@ roundtrip_bin_test() ->
     PN4 = update(decrement, "another_acotr", PN3),
     Bin = to_binary(PN4),
     Decoded = from_binary(Bin),
-    ?assert(equal(PN4, Decoded)),
-    ?debugFmt("Binsize ~p T2B size ~p", [byte_size(Bin),
-                                         byte_size(term_to_binary(PN4))]).
+    ?assert(equal(PN4, Decoded)).
 
 -endif.
