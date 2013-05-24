@@ -182,8 +182,6 @@ roundtrip_bin_test() ->
     PN3 = riak_kv_pncounter:update(increment, [{very, ["Complex"], <<"actor">>}, honest], PN2),
     PN4 = riak_kv_pncounter:update(decrement, "another_acotr", PN3),
     Bin = to_binary(PN4),
-    ?debugFmt("Bin ~p t2b ~p", [byte_size(Bin),
-                                byte_size(term_to_binary({riak_kv_pncounter, PN4}))]),
     ?assert(byte_size(Bin) < term_to_binary({riak_kv_pncounter, PN4})).
 
 -endif.
