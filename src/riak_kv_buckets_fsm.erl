@@ -35,8 +35,9 @@
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
--record(state, {buckets=sets:new() :: [term()],
-                from :: from()}).
+-record(state, {buckets=sets:new() :: set(),
+                from :: from(),
+                stream=false :: boolean()}).
 
 -include("riak_kv_dtrace.hrl").
 
@@ -44,7 +45,9 @@
 %% the number of primary preflist vnodes the operation
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
-init(From={_, _, ClientPid}, [ItemFilter, Timeout]) ->
+init(From, [_, _]=Args) ->
+    init(From, Args ++ [false]);
+init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream]) ->
     ClientNode = atom_to_list(node(ClientPid)),
     PidStr = pid_to_list(ClientPid),
     FilterX = if ItemFilter == none -> 0;
@@ -57,29 +60,57 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout]) ->
     %% Construct the bucket listing request
     Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
     {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{from=From}}.
+     #state{from=From, stream=Stream}}.
 
 process_results(done, StateData) ->
     {done, StateData};
 process_results(Buckets,
-                StateData=#state{buckets=BucketAcc}) ->
+                StateData=#state{buckets=BucketAcc, from=From, stream=true}) ->
     ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [length(Buckets)], []),
-    {ok, StateData#state{buckets=sets:union(sets:from_list(Buckets),
-                                               BucketAcc)}};
+    BucketsToSend = [ B  || B <- Buckets,
+                             not sets:is_element(B, BucketAcc) ],
+    if 
+        BucketsToSend =/= [] ->
+            reply({buckets_stream, BucketsToSend}, From);
+        true -> ok
+    end,
+    {ok, StateData#state{buckets=accumulate(Buckets, BucketAcc)}};
+process_results(Buckets,
+                StateData=#state{buckets=BucketAcc, stream=false}) ->
+    ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [length(Buckets)], []),
+    {ok, StateData#state{buckets=accumulate(Buckets, BucketAcc)}};
 process_results({error, Reason}, _State) ->
     ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [-1], []),
     {error, Reason}.
 
 finish({error, Error},
-       StateData=#state{from={raw, ReqId, ClientPid}}) ->
+       StateData=#state{from=From}) ->
     ?DTRACE(?C_BUCKETS_FINISH, [-1], []),
     %% Notify the requesting client that an error
     %% occurred or the timeout has elapsed.
-    ClientPid ! {ReqId, Error},
+    reply(Error, From),
     {stop, normal, StateData};
+finish(clean, StateData=#state{from=From, stream=true}) ->
+    ?DTRACE(?C_BUCKETS_FINISH, [0], []),
+    reply(done, From),
+    {stop, normal, StateData};    
 finish(clean,
        StateData=#state{buckets=Buckets,
-                        from={raw, ReqId, ClientPid}}) ->
-    ClientPid ! {ReqId, {buckets, sets:to_list(Buckets)}},
+                        from=From,
+                        stream=false}) ->
+    reply({buckets, sets:to_list(Buckets)}, From),
     ?DTRACE(?C_BUCKETS_FINISH, [0], []),
     {stop, normal, StateData}.
+
+reply(Msg, {raw, ReqId, ClientPid}) ->
+    ClientPid ! {ReqId, Msg}.
+
+accumulate(Entries, Set) ->
+    sets:union(sets:from_list(Entries),Set).
+
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-compile(export_all).
+%% tests should go here at some point.
+-endif.
