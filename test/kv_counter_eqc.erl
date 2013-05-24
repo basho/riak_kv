@@ -30,6 +30,9 @@
 
 -compile(export_all).
 
+-define(TAG, 69).
+-define(V1_VERS, 1).
+
 -define(BUCKET, <<"b">>).
 -define(KEY, <<"k">>).
 -define(NUMTESTS, 500).
@@ -120,7 +123,7 @@ prop_update() ->
                                     end,
                 MergeSeed = case Amt of
                                 0 -> undefined;
-                                _ -> riak_kv_pncounter:new(Actor, Amt)
+                                _ ->  riak_kv_pncounter:new(Actor, Amt)
                             end,
 
                 ?WHENFAIL(
@@ -163,7 +166,7 @@ latest_meta(RObj, MergedMeta) ->
 
 latest_counter_meta([], Latest) ->
     Latest;
-latest_counter_meta([{MD, {riak_kv_pncounter, _}}|Rest], Latest) ->
+latest_counter_meta([{MD, <<?TAG:8/integer, ?V1_VERS:8/integer, _CounterBin/binary>>}|Rest], Latest) ->
     latest_counter_meta(Rest, get_latest_meta(MD, Latest));
 latest_counter_meta([_|Rest], Latest) ->
     latest_counter_meta(Rest, Latest).
@@ -187,26 +190,42 @@ counters_equal(_C1, undefined) ->
     false;
 counters_equal(undefined, _C2) ->
     false;
+counters_equal(C1B, C2B) when is_binary(C1B), is_binary(C2B) ->
+    C1 = riak_kv_counter:from_binary(C1B),
+    C2 = riak_kv_counter:from_binary(C2B),
+    riak_kv_pncounter:equal(C1, C2);
+counters_equal(C1B, C2) when is_binary(C1B) ->
+    C1 = riak_kv_counter:from_binary(C1B),
+    counters_equal(C1, C2);
+counters_equal(C1, C2B) when is_binary(C2B) ->
+    C2 = riak_kv_counter:from_binary(C2B),
+    counters_equal(C1, C2);
 counters_equal(C1, C2) ->
     riak_kv_pncounter:equal(C1, C2).
+
 
 %% Extract a single {meta, counter} value
 single_counter(Merged) ->
     Contents = riak_object:get_contents(Merged),
     case [begin
-              {riak_kv_pncounter, Counter} = Val,
+              <<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>> = Val,
+              Counter = riak_kv_pncounter:from_binary(CounterBin),
               {Meta, Counter}
           end || {Meta, Val} <- Contents,
-                is_tuple(Val),
-                riak_kv_pncounter =:= element(1, Val)] of
+         is_counter(Val)] of
         [Single] ->
             Single;
         _Many -> {undefined, undefined}
     end.
 
+is_counter(<<?TAG:8/integer, ?V1_VERS:8/integer, _CounterBin/binary>>) ->
+    true;
+is_counter(_) ->
+    false.
+
 non_counter_siblings(RObj) ->
     Contents = riak_object:get_contents(RObj),
-    {_Counters, NonCounters} = lists:partition(fun({_Md, {riak_kv_pncounter, _C}}) ->
+    {_Counters, NonCounters} = lists:partition(fun({_Md, <<?TAG:8/integer, ?V1_VERS:8/integer, _CounterBin/binary>>}) ->
                                                       true;
                                                  ({_MD, _Val}) ->
                                                       false
@@ -218,14 +237,14 @@ non_counter_siblings(RObj) ->
 num_counters(RObj) ->
     Values = riak_object:get_values(RObj),
     length([ok || Val <- Values,
-                  is_tuple(Val),
-                  riak_kv_pncounter =:= element(1, Val)]).
+                  is_counter(Val)]).
 
 merge_object(RObj, Seed) ->
     Values = riak_object:get_values(RObj),
-    lists:foldl(fun({riak_kv_pncounter, Counter}, undefined) ->
-                        Counter;
-                    ({riak_kv_pncounter, Counter}, Mergedest) ->
+    lists:foldl(fun(<<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>, undefined) ->
+                        riak_kv_pncounter:from_binary(CounterBin);
+                   (<<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>, Mergedest) ->
+                        Counter = riak_kv_pncounter:from_binary(CounterBin),
                         riak_kv_pncounter:merge(Counter, Mergedest);
                    (_Bin, Mergedest) ->
                         Mergedest end,
@@ -277,8 +296,12 @@ metadatum() ->
 gcounter() ->
     list(clock()).
 
+pncounterds() ->
+    {gcounter(), gcounter()}.
+
 pncounter() ->
-    {riak_kv_pncounter, {gcounter(), gcounter()}}.
+    ?LET(PNCounter, pncounterds(),
+         riak_kv_counter:to_binary(PNCounter)).
 
 clock() ->
     {int(), nat()}.

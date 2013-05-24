@@ -36,7 +36,7 @@
 
 -module(riak_kv_counter).
 
--export([update/3, merge/1, value/1, new/2]).
+-export([update/3, merge/1, value/1, new/2, to_binary/1, from_binary/1]).
 
 -include("riak_kv_wm_raw.hrl").
 -include_lib("riak_kv_types.hrl").
@@ -123,12 +123,12 @@ counter_op(Amt) ->
 update_object(RObj, _, undefined, _Siblings) ->
     RObj;
 update_object(RObj, Meta, Counter, []) ->
-    RObj2 = riak_object:update_value(RObj, encode(Counter)),
+    RObj2 = riak_object:update_value(RObj, to_binary(Counter)),
     RObj3 = riak_object:update_metadata(RObj2, counter_meta(Meta)),
     riak_object:apply_updates(RObj3);
 update_object(RObj, Meta, Counter, SiblingValues) ->
     %% keep non-counter siblings, too
-    riak_object:set_contents(RObj, [{counter_meta(Meta), encode(Counter)} | SiblingValues]).
+    riak_object:set_contents(RObj, [{counter_meta(Meta), to_binary(Counter)} | SiblingValues]).
 
 counter_meta(undefined) ->
     Now = os:timestamp(),
@@ -159,16 +159,16 @@ later(TS1, TS2) ->
     end.
 
 new(B, K) ->
-    Bin = encode(riak_kv_pncounter:new()),
+    Bin = to_binary(riak_kv_pncounter:new()),
     Doc0 = riak_object:new(B, K, Bin, ?COUNTER_TYPE),
     riak_object:set_vclock(Doc0, vclock:fresh()).
 
-encode(Counter) ->
+to_binary(Counter) ->
     CounterBin = riak_kv_pncounter:to_binary(Counter),
     <<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>.
 
-%% decode(<<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>) ->
-%%     riak_kv_pncounter:from_binary(CounterBin).
+from_binary(<<?TAG:8/integer,?V1_VERS:8/integer,CounterBin/binary>>) ->
+     riak_kv_pncounter:from_binary(CounterBin).
 
 %% ===================================================================
 %% EUnit tests
@@ -181,7 +181,7 @@ roundtrip_bin_test() ->
     PN2 = riak_kv_pncounter:update({decrement, 1000000000000000000000000}, douglas_Actor, PN1),
     PN3 = riak_kv_pncounter:update(increment, [{very, ["Complex"], <<"actor">>}, honest], PN2),
     PN4 = riak_kv_pncounter:update(decrement, "another_acotr", PN3),
-    Bin = encode(PN4),
+    Bin = to_binary(PN4),
     ?debugFmt("Bin ~p t2b ~p", [byte_size(Bin),
                                 byte_size(term_to_binary({riak_kv_pncounter, PN4}))]),
     ?assert(byte_size(Bin) < term_to_binary({riak_kv_pncounter, PN4})).

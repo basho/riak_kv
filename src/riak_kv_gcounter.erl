@@ -125,55 +125,13 @@ increment_by(Amount, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
 %% @doc Encode an effecient binary representation of a `gcounter()'
 -spec to_binary(gcounter()) -> binary().
 to_binary(GCnt) ->
-    ActorCnt = length(GCnt),
-    EntriesBin = encode_entries(GCnt),
-    <<?TAG:8/integer, ?V1_VERS:8/integer, ActorCnt:32/integer, EntriesBin/binary>>.
-
-%% @private
-encode_entries(GCnt) ->
-    F = fun({Actor, Cnt}, Acc) ->
-                ActorBin = encode_actor(Actor),
-                ActorLen = byte_size(ActorBin),
-                CntBin = binary:encode_unsigned(Cnt),
-                CntLen = byte_size(CntBin),
-                <<Acc/binary, ActorLen:32/integer, ActorBin:ActorLen/binary,
-                  CntLen:32/integer, CntBin:CntLen/binary>>
-        end,
-    lists:foldl(F, <<>>, GCnt).
-
-%% @private Actor ids in riak are vnode ids, so should always be binaries
-encode_actor(Actor) when is_binary(Actor) ->
-    <<1, Actor/binary>>;
-encode_actor(Actor) ->
-    <<0, (term_to_binary(Actor))/binary>>.
+    EntriesBin = term_to_binary(GCnt),
+    <<?TAG:8/integer, ?V1_VERS:8/integer, EntriesBin/binary>>.
 
 %% @doc Decode binary G-Counter
 -spec from_binary(binary()) -> gcounter().
-from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, ActorCnt:32/integer, EntriesBin/binary>>) ->
-    decode_entries(ActorCnt, EntriesBin, []).
-
-%% @private
-decode_entries(0, <<>>, GCnt) ->
-    GCnt;
-decode_entries(0, _NotEmpty, _GCnt) ->
-    {error, corrupt_contents};
-decode_entries(Cnt, EntriesBin, GCnt) ->
-    {Entry, Entries} = decode_entry(EntriesBin),
-    decode_entries(Cnt-1, Entries, [Entry | GCnt]).
-
-%% @private
-decode_entry(<<ActorLen:32/integer, ActorBin:ActorLen/binary,
-               CntLen:32/integer, CntBin:CntLen/binary,  Rest/binary>>) ->
-    Cnt = binary:decode_unsigned(CntBin),
-    {{decode_actor(ActorBin), Cnt}, Rest}.
-
-%% @private
-decode_actor(<<1, Bin/binary>>) ->
-    Bin;
-decode_actor(<<0, Bin/binary>>) ->
-    binary_to_term(Bin).
-
-
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, EntriesBin/binary>>) ->
+    binary_to_term(EntriesBin).
 
 %% ===================================================================
 %% EUnit tests
