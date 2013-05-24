@@ -948,7 +948,7 @@ prepare_put(#state{idx=Idx,
                 false ->
                     IndexSpecs = []
             end,
-            ObjToStore = prepare_coord_put(Coord, RObj, VId, StartTime, CounterOp),
+            ObjToStore = prepare_new_put(Coord, RObj, VId, StartTime, CounterOp),
             {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
         {ok, Val} ->
             OldObj = object_from_binary(Bucket, Key, Val),
@@ -981,17 +981,15 @@ prepare_put(#state{idx=Idx,
     end.
 
 %% @Doc in the case that this a co-ordinating put, prepare the object.
-prepare_coord_put(true, RObj, VId, StartTime, CounterOp) when is_integer(CounterOp) ->
+prepare_new_put(true, RObj, VId, StartTime, CounterOp) when is_integer(CounterOp) ->
     VClockUp = riak_object:increment_vclock(RObj, VId, StartTime),
-    %% coordinating a counter operation means
+    %% coordinating a _NEW_ counter operation means
     %% creating + incrementing the counter.
     %% Make a new counter, stuff it in the riak_object
-    Counter = riak_kv_pncounter:new(VId, CounterOp),
-    Incremented = riak_object:update_value(VClockUp, {riak_kv_pncounter, Counter}),
-    riak_object:apply_updates(Incremented);
-prepare_coord_put(true, RObj, VId, StartTime, _CounterOp) ->
+    riak_kv_counter:update(VClockUp, VId, CounterOp);
+prepare_new_put(true, RObj, VId, StartTime, _CounterOp) ->
     riak_object:increment_vclock(RObj, VId, StartTime);
-prepare_coord_put(false, RObj, _VId, _StartTime, _CounterOp) ->
+prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
     RObj.
 
 handle_counter(true, CounterOp, VId, RObj) when is_integer(CounterOp) ->
@@ -1000,7 +998,8 @@ handle_counter(false, CounterOp, _Vid, RObj) when is_integer(CounterOp) ->
     %% non co-ord put, merge the values if there are siblings
     %% 'cos that is the point of CRDTs / counters: no siblings
     riak_kv_counter:merge(RObj);
-handle_counter(_Coord, __CounterOp, _VId, RObj) ->
+handle_counter(_Coord, _CounterOp, _VId, RObj) ->
+    %% i.e. not a counter op
     RObj.
 
 perform_put({false, Obj},
