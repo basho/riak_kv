@@ -55,6 +55,8 @@
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
 
+-define(DEFAULT_TIMEOUT, 5 * 60000).
+
 %% @spec init(proplist()) -> {ok, context()}
 %% @doc Initialize this resource.  This function extracts the
 %%      'prefix' and 'riak' properties from the dispatch args.
@@ -142,7 +144,12 @@ malformed_timeout_param(RD, Ctx) ->
 %%      Includes a list of known buckets if the "buckets=true" query
 %%      param is specified.
 produce_bucket_list(RD, #ctx{client=Client,
-                             timeout=Timeout}=Ctx) ->
+                             timeout=Timeout0}=Ctx) ->
+    Timeout = 
+        case Timeout0 of
+            undefined -> ?DEFAULT_TIMEOUT;
+            Set -> Set
+        end,
     case wrq:get_qs_value(?Q_BUCKETS, RD) of
         ?Q_TRUE ->
             %% Get the buckets.
