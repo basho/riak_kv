@@ -2,7 +2,7 @@
 %%
 %% riak_kv_pb_index: Expose secondary index queries to Protocol Buffers
 %%
-%% Copyright (c) 2012 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -35,7 +35,7 @@
 
 -module(riak_kv_pb_csbucket).
 
--include_lib("../../riak_pb/include/riak_kv_pb.hrl"). %% @TODO reset this
+-include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include("riak_kv_index.hrl").
 
 -behaviour(riak_api_pb_service).
@@ -86,7 +86,7 @@ process_stream({ReqId, done}, ReqId, State=#state{req_id=ReqId,
                                                   result_count=Count}) ->
     %% Only add the continuation if there may be more results to send
     #rpbcsbucketreq{max_results=MaxResults} = Req,
-    Resp = case is_integer(MaxResults) andalso Count =:= MaxResults of
+    Resp = case is_integer(MaxResults) andalso Count >= MaxResults of
                true -> #rpbcsbucketresp{done=1, continuation=Continuation};
                false -> #rpbcsbucketresp{done=1}
            end,
@@ -114,7 +114,7 @@ encode_result(B, {K, V}) ->
     #rpbindexobject{key=K, object=GetResp}.
 
 pbify_rpbvc(Vc) ->
-    zlib:zip(term_to_binary(Vc)).
+    riak_object:encode_vclock(Vc).
 
 make_continuation(MaxResults, {o, K, _V}, MaxResults) ->
     riak_index:make_continuation([K]);

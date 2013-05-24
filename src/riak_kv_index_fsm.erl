@@ -2,7 +2,7 @@
 %%
 %% riak_index_fsm: Manage secondary index queries.
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -103,34 +103,47 @@ process_results(_VNode, {From, _Bucket, _Results}, State=#state{max_results=X, r
     riak_kv_vnode:stop_fold(From),
     {done, State};
 process_results(VNode, {From, Bucket, Results}, State) ->
-    {ok, State2} = process_results(VNode, {Bucket, Results}, State),
-    riak_kv_vnode:ack_keys(From),
-    {ok, State2};
+    case process_results(VNode, {Bucket, Results}, State) of
+        {ok, State2} ->
+            riak_kv_vnode:ack_keys(From),
+            {ok, State2};
+        {done, State2} ->
+            riak_kv_vnode:stop_fold(From),
+            {done, State2}
+    end;
 process_results(VNode, {_Bucket, Results}, State) ->
     #state{merge_sort_buffer=MergeSortBuffer,
            from={raw, ReqId, ClientPid}, results_sent=ResultsSent, max_results=MaxResults} = State,
     %% add new results to buffer
-    BufferWithNewResults = sms:add_results(VNode, lists:reverse(Results), MergeSortBuffer),
-    ProcessBuffer = sms:sms(BufferWithNewResults),
-    {NewBuffer, Sent} = case ProcessBuffer of
-                            {[], BufferWithNewResults} ->
-                                {BufferWithNewResults, 0};
-                            {ToSend, NewBuff} ->
-                                DownTheWire = case (ResultsSent + length(ToSend)) > MaxResults of
-                                                  true ->
-                                                      lists:sublist(ToSend, MaxResults - ResultsSent);
-                                                  false ->
-                                                      ToSend
-                                              end,
-                                ClientPid ! {ReqId, {results, DownTheWire}},
-                                {NewBuff, length(DownTheWire)}
-                        end,
-    {ok, State#state{merge_sort_buffer=NewBuffer, results_sent=Sent+ResultsSent}};
+    {ToSend, NewBuff} = update_buffer(VNode, Results, MergeSortBuffer),
+    LenToSend = length(ToSend),
+    {Response, ResultsLen, ResultsToSend} = get_results_to_send(LenToSend, ToSend, ResultsSent, MaxResults),
+    send_results(ClientPid, ReqId, ResultsToSend),
+    {Response, State#state{merge_sort_buffer=NewBuff, results_sent=ResultsSent+ResultsLen}};
 process_results(VNode, done, State) ->
     %% tell the sms buffer about the done vnode
     #state{merge_sort_buffer=MergeSortBuffer} = State,
     BufferWithNewResults = sms:add_results(VNode, done, MergeSortBuffer),
     {done, State#state{merge_sort_buffer=BufferWithNewResults}}.
+
+%% @private Update the buffer with results and process it
+update_buffer(VNode, Results, Buffer) ->
+    BufferWithNewResults = sms:add_results(VNode, lists:reverse(Results), Buffer),
+    sms:sms(BufferWithNewResults).
+
+%% @private Get the subset of `ToSend' that we can send without violating `MaxResults'
+get_results_to_send(LenToSend, ToSend, ResultsSent, MaxResults) when (ResultsSent + LenToSend) >= MaxResults ->
+    ResultsLen = MaxResults - ResultsSent,
+    ResultsToSend = lists:sublist(ToSend, ResultsLen),
+    {done, ResultsLen, ResultsToSend};
+get_results_to_send(LenToSend, ToSend, _, _) ->
+    {ok, LenToSend, ToSend}.
+
+%% @private send results, but only if there are some
+send_results(_ClientPid, _ReqId, []) ->
+    ok;
+send_results(ClientPid, ReqId, ResultsToSend) ->
+    ClientPid ! {ReqId, {results, ResultsToSend}}.
 
 
 %% Legacy, unsorted 2i, should remove?

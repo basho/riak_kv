@@ -46,7 +46,7 @@
           riak,         %% local | {node(), atom()} - params for riak client
           bucket,       %% The bucket to query.
           index_query,   %% The query..
-          max_results :: all | pos_integer(), %% maximum nunber of 2i results to return, the page size.
+          max_results :: all | pos_integer(), %% maximum number of 2i results to return, the page size.
           return_terms = false :: boolean() %% should the index values be returned
          }).
 
@@ -98,8 +98,14 @@ malformed_request(RD, Ctx) ->
     MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, ?ALL_2I_RESULTS, RD),
     Continuation = wrq:get_qs_value(?Q_2I_CONTINUATION, undefined, RD),
 
-    case {validate_max(MaxResults0), riak_index:to_index_query(IndexField, Args2, Continuation)} of
-        {{true, MaxResults}, {ok, Query}} ->
+    case {ReturnTerms, validate_max(MaxResults0), riak_index:to_index_query(IndexField, Args2, Continuation)} of
+        {malformed, _, _} ->
+             {true,
+             wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
+                                             [?Q_2I_RETURNTERMS, ReturnTerms0]),
+                               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, {true, MaxResults}, {ok, Query}} ->
             %% Request is valid.
             ReturnTerms1 = riak_index:return_terms(ReturnTerms, Query),
             NewCtx = Ctx#ctx{
@@ -109,13 +115,13 @@ malformed_request(RD, Ctx) ->
                        return_terms = ReturnTerms1
                       },
             {false, RD, NewCtx};
-        {_, {error, Reason}} ->
+        {_, _, {error, Reason}} ->
             {true,
              wrq:set_resp_body(
                io_lib:format("Invalid query: ~p~n", [Reason]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {{false, BadVal}, _} ->
+        {_, {false, BadVal}, _} ->
             {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a positive integer",
                                              [?Q_2I_MAX_RESULTS, BadVal]),
@@ -138,12 +144,10 @@ validate_max(N) when is_list(N) ->
 
 normalize_boolean("false") ->
     false;
-normalize_boolean("0") ->
-    false;
-normalize_boolean("no") ->
-    false;
+normalize_boolean("true") ->
+    true;
 normalize_boolean(_) ->
-    true.
+    malformed.
 
 %% @spec content_types_provided(reqdata(), context()) ->
 %%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
@@ -217,9 +221,10 @@ index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)
                      index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult1, Count1)};
                 {ReqID, Error} ->
                     lager:error("Error in index wm: ~p", [Error]),
+                    ErrorJson = mochijson2:encode({struct, [{error, Error}]}),
                     Body = ["\r\n--", Boundary, "\r\n",
-                            "Content-Type: text/plain\r\n\r\n",
-                            "there was an error..."],
+                            "Content-Type: application/json\r\n\r\n",
+                            ErrorJson],
                     {iolist_to_binary(Body), done}
             after 60000 ->
                     {error, timeout}

@@ -286,7 +286,7 @@ to_index_query(IndexField, Args, Continuation, ReturnBody, {Start, StartInc}, {E
 %% @doc Create an index quey of the current highest version supported by
 %% cluster capability.
 %% `IndexField' is either a user supplied term or one of
-%% the inbuilt indexes (`<<"$key">>' and <<"$bucket">>').
+%% the inbuilt indexes (`<<"$key">>' and `<<"$bucket">>').
 %% `Args' is a list or either a start and end for a range, or a single
 %% value for equality.
 %% `Continuation' is the opaque continuation that may have been
@@ -296,30 +296,30 @@ to_index_query(IndexField, Args, Continuation) ->
     to_index_query(IndexField, Args, Continuation, ?KV_INDEX_Q{}).
 
 to_index_query(IndexField, Args, Continuation, BaseQuery) ->
-    Version = riak_core_capability:get({riak_kv, '2i_version'}, v1),
+    Version = riak_core_capability:get({riak_kv, secondary_index_version}, v1),
     Query = to_index_query(IndexField, Args),
     case {Version, Query} of
-        {_Any, {error, _Reson}=Error} -> Error;
+        {_Any, {error, _Reason}=Error} -> Error;
         {v1, OKQ} -> OKQ;
         {v2, {ok, V1Q}} ->
-            V2Q = make_v2_query(V1Q, BaseQuery),
-            apply_continuation(V2Q, decode_contintuation(Continuation))
+            {ok, V2Q} = make_v2_query(V1Q, BaseQuery),
+            apply_continuation(V2Q, decode_continuation(Continuation))
     end.
 
 %% @doc upgrade a V1 Query to a v2 Query
 make_v2_query({eq, ?BUCKETFIELD, _Bucket}, Q) ->
-    Q?KV_INDEX_Q{filter_field=?BUCKETFIELD, return_terms=false};
+    {ok, Q?KV_INDEX_Q{filter_field=?BUCKETFIELD, return_terms=false}};
 make_v2_query({eq, ?KEYFIELD, Value}, Q) ->
-    Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_key=Value, start_term=Value,
-                 end_term=Value, return_terms=false};
+    {ok, Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_key=Value, start_term=Value,
+                 end_term=Value, return_terms=false}};
 make_v2_query({eq, Field, Value}, Q) ->
-    Q?KV_INDEX_Q{filter_field=Field, start_term=Value, end_term=Value, return_terms=false};
+    {ok, Q?KV_INDEX_Q{filter_field=Field, start_term=Value, end_term=Value, return_terms=false}};
 make_v2_query({range, ?KEYFIELD, Start, End}, Q) ->
-    Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_term=Start, start_key=Start,
-                end_term=End, return_terms=false};
+    {ok, Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_term=Start, start_key=Start,
+                end_term=End, return_terms=false}};
 make_v2_query({range, Field, Start, End}, Q) ->
-    Q?KV_INDEX_Q{filter_field=Field, start_term=Start,
-                 end_term=End};
+    {ok, Q?KV_INDEX_Q{filter_field=Field, start_term=Start,
+                 end_term=End}};
 make_v2_query(V1Q, _) ->
     {error, {invalid_v1_query, V1Q}}.
 
@@ -339,7 +339,8 @@ apply_continuation(Q, C) ->
 upgrade_query(Q=?KV_INDEX_Q{}) ->
     Q;
 upgrade_query(Q) when is_tuple(Q) ->
-    make_v2_query(Q, ?KV_INDEX_Q{}).
+    {ok, Q} = make_v2_query(Q, ?KV_INDEX_Q{}),
+    Q.
 
 %% @doc Should index terms be returned in a result
 %% to the client. Requires both that they are wanted (arg1)
@@ -412,10 +413,10 @@ make_continuation(L) ->
     base64:encode(term_to_binary(Last)).
 
 %% @doc decode a continuation received from the outside world.
--spec decode_contintuation(continuation() | undefined) -> last_result() | undefined.
-decode_contintuation(undefined) ->
+-spec decode_continuation(continuation() | undefined) -> last_result() | undefined.
+decode_continuation(undefined) ->
     undefined;
-decode_contintuation(Bin) ->
+decode_continuation(Bin) ->
     binary_to_term(base64:decode(Bin)).
 
 %% @spec field_types() -> data_type_defs().

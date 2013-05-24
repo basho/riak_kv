@@ -145,7 +145,7 @@ start(_Type, _StartArgs) ->
                                           [v1, v0],
                                           v0),
 
-            riak_core_capability:register({riak_kv, '2i_version'},
+            riak_core_capability:register({riak_kv, secondary_index_version},
                                           [v2, v1],
                                           v1),
 
