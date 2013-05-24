@@ -94,7 +94,11 @@ raw_dispatch(Name) ->
       riak_kv_wm_link_walker, Props2},
 
      {["buckets", bucket, "index", field, '*'],
-      riak_kv_wm_index, Props2}
+      riak_kv_wm_index, Props2},
+
+     %% counters
+     {["buckets", bucket, "counters", key],
+      riak_kv_wm_counter, Props2}
     ].
 
 is_post(Req) ->
