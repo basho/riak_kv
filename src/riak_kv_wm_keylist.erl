@@ -48,7 +48,8 @@
          forbidden/2,
          content_types_provided/2,
          encodings_provided/2,
-         produce_bucket_body/2
+         produce_bucket_body/2,
+         malformed_request/2
         ]).
 
 %% @type context() = term()
@@ -57,7 +58,8 @@
               client,       %% riak_client() - the store client
               prefix,       %% string() - prefix for resource uris
               riak,         %% local | {node(), atom()} - params for riak client
-              allow_props_param %% true if the user can also list props. (legacy API)
+              allow_props_param, %% true if the user can also list props. (legacy API)
+              timeout       %% integer() - list keys timeout
              }).
 %% @type link() = {{Bucket::binary(), Key::binary()}, Tag::binary()}
 %% @type index_field() = {Key::string(), Value::string()}
@@ -121,6 +123,35 @@ encodings_provided(RD, Ctx) ->
     %% identity and gzip for top-level and bucket-level requests
     {riak_kv_wm_utils:default_encodings(), RD, Ctx}.
 
+malformed_request(RD, Ctx) ->
+    malformed_timeout_param(RD, Ctx).
+
+%% @spec malformed_timeout_param(reqdata(), context()) ->
+%%          {boolean(), reqdata(), context()}
+%% @doc Check that the timeout parameter is are a
+%%      string-encoded integer.  Store the integer value
+%%      in context() if so.
+malformed_timeout_param(RD, Ctx) ->
+    case wrq:get_qs_value("timeout", none, RD) of
+        none ->
+            {false, RD, Ctx};
+        TimeoutStr -> 
+            try
+                Timeout = list_to_integer(TimeoutStr),
+                {false, RD, Ctx#ctx{timeout=Timeout}}
+            catch
+                _:_ ->
+                    {true,
+                     wrq:append_to_resp_body(io_lib:format("Bad timeout "
+                                                           "value ~p~n",
+                                                           [TimeoutStr]),
+                                             wrq:set_resp_header(?HEAD_CTYPE, 
+                                                                 "text/plain", RD)),
+                     Ctx}
+            end
+    end.
+
+
 %% @spec produce_bucket_body(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Produce the JSON response to a bucket-level GET.
 %%      Includes the keys of the documents in the bucket unless the
@@ -129,6 +160,7 @@ encodings_provided(RD, Ctx) ->
 %%      like so: {"keys":[Key1, Key2,...]}.
 produce_bucket_body(RD, #ctx{client=Client,
                              bucket=Bucket,
+                             timeout=Timeout,
                              allow_props_param=AllowProps}=Ctx) ->
     IncludeBucketProps = (AllowProps == true)
         andalso (wrq:get_qs_value(?Q_PROPS, RD) /= ?Q_FALSE),
@@ -145,7 +177,8 @@ produce_bucket_body(RD, #ctx{client=Client,
         ?Q_STREAM ->
             %% Start streaming the keys...
             F = fun() ->
-                        {ok, ReqId} = Client:stream_list_keys(Bucket),
+                        {ok, ReqId} = Client:stream_list_keys(Bucket, 
+                                                              Timeout),
                         stream_keys(ReqId)
                 end,
 
@@ -163,10 +196,14 @@ produce_bucket_body(RD, #ctx{client=Client,
 
         ?Q_TRUE ->
             %% Get the JSON response...
-            {ok, KeyList} = Client:list_keys(Bucket),
-            JsonKeys = mochijson2:encode({struct, BucketPropsJson ++
-                                              [{?Q_KEYS, KeyList}]}),
-            {JsonKeys, RD, Ctx};
+            case Client:list_keys(Bucket, Timeout) of
+                {ok, KeyList} ->
+                    JsonKeys = mochijson2:encode({struct, BucketPropsJson ++
+                                                      [{?Q_KEYS, KeyList}]}),
+                    {JsonKeys, RD, Ctx};
+                {error, Reason} ->
+                    {mochijson2:encode({struct, [{error, Reason}]}), RD, Ctx}
+            end;
         _ ->
             JsonProps = mochijson2:encode({struct, BucketPropsJson}),
             {JsonProps, RD, Ctx}
@@ -179,5 +216,6 @@ stream_keys(ReqId) ->
             {mochijson2:encode({struct, [{<<"keys">>, Keys}]}), fun() -> stream_keys(ReqId) end};
         {ReqId, {keys, Keys}} ->
             {mochijson2:encode({struct, [{<<"keys">>, Keys}]}), fun() -> stream_keys(ReqId) end};
-        {ReqId, done} -> {mochijson2:encode({struct, [{<<"keys">>, []}]}), done}
+        {ReqId, done} -> {mochijson2:encode({struct, [{<<"keys">>, []}]}), done};
+        {ReqId, timeout} -> {mochijson2:encode({struct, [{error, timeout}]}), done}
     end.

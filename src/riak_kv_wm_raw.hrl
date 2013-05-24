@@ -53,8 +53,6 @@
 -define(JSON_EXTRACT, <<"search_extractor">>).
 -define(JSON_EXTRACT_LEGACY, <<"rs_extractfun">>).
 
-
-
 %% Names of HTTP query parameters
 -define(Q_PROPS, "props").
 -define(Q_BUCKETS, "buckets").
@@ -68,3 +66,4 @@
 -define(Q_2I_MAX_RESULTS, "max_results").
 -define(Q_2I_CONTINUATION, "continuation").
 -define(Q_RESULTS,  "results").
+-define(Q_RETURNVALUE, "returnvalue").
