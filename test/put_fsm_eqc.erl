@@ -566,8 +566,8 @@ expect(VPutResp, H, N, PW, RealPW, W, RealW, DW, EffDW, Options,
                                 0
                         end,
                 case H of
-                    [{w, _, _}, {fail, _, _} | _] ->
-                        {maybe_add_robj({error, local_put_failed}, ReturnObj, Precommit, Options), VPuts};
+                    [{w, _, _}, {fail, _, FailedReqId} | _] ->
+                        {maybe_add_robj({error, FailedReqId}, ReturnObj, Precommit, Options), VPuts};
                     _ ->
                         
                         {expect(HNoTimeout, {H, N, RealW, EffDW, RealPW, 0, 0, 0, 0, ReturnObj, Precommit, PL2}, Options), 
