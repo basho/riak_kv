@@ -45,8 +45,12 @@
           client,       %% riak_client() - the store client
           riak,         %% local | {node(), atom()} - params for riak client
           bucket,       %% The bucket to query.
-          index_query   %% The query..
+          index_query,   %% The query..
+          max_results :: all | pos_integer(), %% maximum number of 2i results to return, the page size.
+          return_terms = false :: boolean() %% should the index values be returned
          }).
+
+-define(ALL_2I_RESULTS, all).
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
@@ -89,24 +93,61 @@ malformed_request(RD, Ctx) ->
     IndexField = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(field, RD))),
     Args1 = wrq:path_tokens(RD),
     Args2 = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
+    ReturnTerms0 = wrq:get_qs_value(?Q_2I_RETURNTERMS, "false", RD),
+    ReturnTerms = normalize_boolean(string:to_lower(ReturnTerms0)),
+    MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, ?ALL_2I_RESULTS, RD),
+    Continuation = wrq:get_qs_value(?Q_2I_CONTINUATION, undefined, RD),
 
-    case riak_index:to_index_query(IndexField, Args2) of
-        {ok, Query} ->
+    case {ReturnTerms, validate_max(MaxResults0), riak_index:to_index_query(IndexField, Args2, Continuation)} of
+        {malformed, _, _} ->
+             {true,
+             wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
+                                             [?Q_2I_RETURNTERMS, ReturnTerms0]),
+                               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, {true, MaxResults}, {ok, Query}} ->
             %% Request is valid.
+            ReturnTerms1 = riak_index:return_terms(ReturnTerms, Query),
             NewCtx = Ctx#ctx{
                        bucket = Bucket,
-                       index_query = Query
+                       index_query = Query,
+                       max_results = MaxResults,
+                       return_terms = ReturnTerms1
                       },
             {false, RD, NewCtx};
-        {error, Reason} ->
+        {_, _, {error, Reason}} ->
             {true,
              wrq:set_resp_body(
                io_lib:format("Invalid query: ~p~n", [Reason]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, {false, BadVal}, _} ->
+            {true,
+             wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a positive integer",
+                                             [?Q_2I_MAX_RESULTS, BadVal]),
+                               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx}
     end.
 
+validate_max(all) ->
+    {true, all};
+validate_max(N) when is_list(N) ->
+    try
+        list_to_integer(N) of
+        Max when Max > 0  ->
+            {true, Max};
+        LessThanZero ->
+            {false, LessThanZero}
+    catch _:_ ->
+            {false, N}
+    end.
 
+normalize_boolean("false") ->
+    false;
+normalize_boolean("true") ->
+    true;
+normalize_boolean(_) ->
+    malformed.
 
 %% @spec content_types_provided(reqdata(), context()) ->
 %%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
@@ -127,19 +168,122 @@ encodings_provided(RD, Ctx) ->
 %% @spec produce_index_results(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Produce the JSON response to an index lookup.
 produce_index_results(RD, Ctx) ->
-    %% Extract vars...
+    case wrq:get_qs_value("stream", "false", RD) of
+        "true" ->
+            handle_streaming_index_query(RD, Ctx);
+        _ ->
+            handle_all_in_memory_index_query(RD, Ctx)
+    end.
+
+handle_streaming_index_query(RD, Ctx) ->
     Client = Ctx#ctx.client,
     Bucket = Ctx#ctx.bucket,
     Query = Ctx#ctx.index_query,
+    MaxResults = Ctx#ctx.max_results,
+    ReturnTerms = Ctx#ctx.return_terms,
+
+    %% Create a new multipart/mixed boundary
+    Boundary = riak_core_util:unique_id_62(),
+    CTypeRD = wrq:set_resp_header(
+                "Content-Type",
+                "multipart/mixed;boundary="++Boundary,
+                RD),
+
+    {ok, ReqID} =  Client:stream_get_index(Bucket, Query, [{max_results, MaxResults}]),
+    StreamFun = index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, undefined, 0),
+    {{stream, {<<>>, StreamFun}}, CTypeRD, Ctx}.
+
+index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count) ->
+    fun() ->
+            receive
+                {ReqID, done} ->
+                    Final = case make_continuation(MaxResults, [LastResult], Count) of
+                                undefined -> ["\r\n--", Boundary, "--\r\n"];
+                                Continuation ->
+                                    Json = mochijson2:encode(mochify_continuation(Continuation)),
+                                    ["\r\n--", Boundary, "--\r\n",
+                                     "Content-Type: application/json\r\n\r\n",
+                                     Json,
+                                     "\r\n--", Boundary, "--\r\n"]
+                            end,
+                    {iolist_to_binary(Final), done};
+                {ReqID, {results, []}} ->
+                    {<<>>, index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)};
+                {ReqID, {results, Results}} ->
+                    %% JSONify the results
+                    JsonResults = encode_results(ReturnTerms, Results),
+                    Body = ["\r\n--", Boundary, "\r\n",
+                            "Content-Type: application/json\r\n\r\n",
+                            JsonResults],
+                    LastResult1 = last_result(Results),
+                    Count1 = Count + length(Results),
+                    {iolist_to_binary(Body),
+                     index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult1, Count1)};
+                {ReqID, Error} ->
+                    lager:error("Error in index wm: ~p", [Error]),
+                    ErrorJson = mochijson2:encode({struct, [{error, Error}]}),
+                    Body = ["\r\n--", Boundary, "\r\n",
+                            "Content-Type: application/json\r\n\r\n",
+                            ErrorJson],
+                    {iolist_to_binary(Body), done}
+            after 60000 ->
+                    {error, timeout}
+            end
+    end.
+
+handle_all_in_memory_index_query(RD, Ctx) ->
+    Client = Ctx#ctx.client,
+    Bucket = Ctx#ctx.bucket,
+    Query = Ctx#ctx.index_query,
+    MaxResults = Ctx#ctx.max_results,
+    ReturnTerms = Ctx#ctx.return_terms,
 
     %% Do the index lookup...
-    case Client:get_index(Bucket, Query) of
+    case Client:get_index(Bucket, Query, [{max_results, MaxResults}]) of
         {ok, Results} ->
-            %% JSONify the results...
-            JsonKeys1 = {struct, [{?Q_KEYS, Results}]},
-            JsonKeys2 = mochijson2:encode(JsonKeys1),
-            {JsonKeys2, RD, Ctx};
+            Continuation = make_continuation(MaxResults, Results, length(Results)),
+            JsonResults = encode_results(ReturnTerms, Results, Continuation),
+            {JsonResults, RD, Ctx};
         {error, Reason} ->
             {{error, Reason}, RD, Ctx}
     end.
 
+encode_results(ReturnTerms, Results) ->
+    encode_results(ReturnTerms, Results, undefined).
+
+encode_results(true, Results, Continuation) ->
+    JsonKeys2 = {struct, [{?Q_RESULTS, [{struct, [{Val, Key}]} || {Val, Key} <- Results]}] ++
+                     mochify_continuation(Continuation)},
+    mochijson2:encode(JsonKeys2);
+encode_results(false, Results, Continuation) ->
+    JustTheKeys = filter_values(Results),
+    JsonKeys1 = {struct, [{?Q_KEYS, JustTheKeys}] ++ mochify_continuation(Continuation)},
+    mochijson2:encode(JsonKeys1).
+
+mochify_continuation(undefined) ->
+    [];
+mochify_continuation(Continuation) ->
+    [{?Q_2I_CONTINUATION, Continuation}].
+
+filter_values([]) ->
+    [];
+filter_values([{_, _} | _T]=Results) ->
+    [K || {_V, K} <- Results];
+filter_values(Results) ->
+    Results.
+
+%% @doc Like `lists:last/1' but doesn't choke on an empty list
+-spec last_result([] | list()) -> term() | undefined.
+last_result([]) ->
+    undefined;
+last_result(L) ->
+    lists:last(L).
+
+%% @Doc if this is a paginated query make a continuation
+-spec make_continuation(Max::non_neg_integer() | undefined,
+                        list(),
+                        ResultCount::non_neg_integer()) -> binary() | undefined.
+make_continuation(MaxResults, Results, MaxResults) ->
+    riak_index:make_continuation(Results);
+make_continuation(_, _, _)  ->
+    undefined.

@@ -244,7 +244,10 @@ fold_buckets_fun() ->
     end.
 
 fold_keys_fun() ->
-    fun(Bucket, Key, Acc) ->
+    fun(Bucket, Key, Acc) when is_binary(Key) ->
+            riak_kv_fold_buffer:add({Bucket, Key}, Acc);
+       (Bucket, {_IdxVal, Key}, Acc) when is_binary(Key) ->
+            %% TODO: Don't throw away the index's value, check it!
             riak_kv_fold_buffer:add({Bucket, Key}, Acc)
     end.
 
@@ -503,7 +506,7 @@ postcondition(_From, _To, S,
     case lists:sort(Keys) =:= lists:sort(R) of
         true -> true;
         _ ->
-            [{expected, Keys},{received, R}]
+            [{line,?LINE},{expected, Keys},{received, R}]
     end;
 postcondition(_From, _To, S,
               {call, _M, fold_keys, [_FoldFun, _Acc, [{index, Bucket, {eq, Idx, SKey}}], _BeState]}, FoldRes) ->
@@ -522,7 +525,7 @@ postcondition(_From, _To, S,
     case lists:sort(Keys) =:= lists:sort(R) of
         true -> true;
         _ ->
-            [{expected, Keys},{received, R}]
+            [{line,?LINE},{expected, Keys},{received, R}]
     end;
 postcondition(_From, _To, S,
               {call, _M, fold_keys, [_FoldFun, _Acc, [{index, Bucket, {range, Idx, Min, Max}}], _BeState]}, FoldRes) ->
@@ -541,7 +544,7 @@ postcondition(_From, _To, S,
     case lists:sort(Keys) =:= lists:sort(R) of
         true -> true;
         _ ->
-            [{expected, Keys},{received, R}]
+            [{line,?LINE},{expected, Keys},{received, R}]
     end;
 postcondition(_From, _To, S,
               {call, _M, fold_keys, [_FoldFun, _Acc, [{bucket, B}], _BeState]}, FoldRes) ->
@@ -560,7 +563,7 @@ postcondition(_From, _To, S,
     case lists:sort(Keys) =:= lists:sort(R) of
         true -> true;
         _ ->
-            [{expected, Keys},{received, R}]
+            [{line,?LINE},{expected, Keys},{received, R}]
     end;
 postcondition(_From, _To, S,
               {call, _M, fold_keys, [_FoldFun, _Acc, _Opts, _BeState]}, FoldRes) ->
@@ -579,7 +582,7 @@ postcondition(_From, _To, S,
     case lists:sort(Keys) =:= lists:sort(R) of
         true -> true;
         _ ->
-            [{expected, Keys},{received, R}]
+            [{line,?LINE},{expected, Keys},{received, R}]
     end;
 postcondition(_From, _To, S,
               {call, _M, fold_objects, [_FoldFun, _Acc, _Opts, _BeState]}, FoldRes) ->

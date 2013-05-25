@@ -51,6 +51,8 @@
                    to_index_key/4, from_index_key/1
                   ]}).
 
+-include("riak_kv_index.hrl").
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -419,9 +421,23 @@ legacy_key_fold(_Ref, _FoldFun, Acc, _FoldOpts, _Query) ->
                    state()) -> {ok, any()} | {async, fun()}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
                                                ref=Ref}) ->
-    Bucket =  proplists:get_value(bucket, Opts),
-    FoldOpts1 = fold_opts(Bucket, FoldOpts),
-    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
+    %% Figure out how we should limit the fold: by bucket, by
+    %% secondary index, or neither (fold across everything.)
+    Bucket = lists:keyfind(bucket, 1, Opts),
+    Index = lists:keyfind(index, 1, Opts),
+
+    %% Multiple limiters may exist. Take the most specific limiter.
+    Limiter =
+        if Index /= false  -> Index;
+           Bucket /= false -> Bucket;
+           true            -> undefined
+        end,
+
+    %% Set up the fold...
+    FirstKey = to_first_key(Limiter),
+    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    FoldFun = fold_objects_fun(FoldObjectsFun, Limiter),
+
     ObjectFolder =
         fun() ->
                 try
@@ -609,7 +625,6 @@ fold_buckets_fun(FoldBucketsFun) ->
             end
     end.
 
-
 %% @private
 %% Return a function to fold over keys on this backend
 fold_keys_fun(FoldKeysFun, undefined) ->
@@ -632,34 +647,35 @@ fold_keys_fun(FoldKeysFun, {bucket, FilterBucket}) ->
                     throw({break, Acc})
             end
     end;
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, {eq, <<"$bucket">>, _}}) ->
-    %% 2I exact match query on special $bucket field...
-    fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, {eq, FilterField, FilterTerm}}) ->
-    %% Rewrite 2I exact match query as a range...
-    NewQuery = {range, FilterField, FilterTerm, FilterTerm},
-    fold_keys_fun(FoldKeysFun, {index, FilterBucket, NewQuery});
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, <<"$key">>, StartKey, EndKey}}) ->
-    %% 2I range query on special $key field...
+%% 2i queries
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{filter_field=FilterField}})
+  when FilterField =:= <<"$bucket">>;
+       FilterField =:= <<"$key">> ->
+    %% Inbuilt indexes
     fun(StorageKey, Acc) ->
-            case from_object_key(StorageKey) of
-                {Bucket, Key} when FilterBucket == Bucket,
-                                   StartKey =< Key,
-                                   EndKey >= Key ->
-                    FoldKeysFun(Bucket, Key, Acc);
+            ObjectKey = from_object_key(StorageKey),
+            case riak_index:object_key_in_range(ObjectKey, FilterBucket, Q) of
+                {true, {Bucket, Key}} ->
+                    stoppable_fold(FoldKeysFun, Bucket, Key, Acc);
+                {skip, _BK} ->
+                    Acc;
                 _ ->
                     throw({break, Acc})
             end
     end;
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, FilterField, StartTerm, EndTerm}}) ->
-    %% 2I range query...
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Terms}}) ->
+    %% User indexes
     fun(StorageKey, Acc) ->
-            case from_index_key(StorageKey) of
-                {Bucket, Key, Field, Term} when FilterBucket == Bucket,
-                                                FilterField == Field,
-                                                StartTerm =< Term,
-                                                EndTerm >= Term ->
-                    FoldKeysFun(Bucket, Key, Acc);
+            IndexKey = from_index_key(StorageKey),
+            case riak_index:index_key_in_range(IndexKey, FilterBucket, Q) of
+                {true, {Bucket, Key, _Field, Term}} ->
+                    Val = if
+                              Terms -> {Term, Key};
+                              true -> Key
+                          end,
+                    stoppable_fold(FoldKeysFun, Bucket, Val, Acc);
+                {skip, _IK} ->
+                    Acc;
                 _ ->
                     throw({break, Acc})
             end
@@ -694,32 +710,58 @@ fold_keys_fun(FoldKeysFun, {index, incorrect_format, ForUpgrade}) when is_boolea
                     throw({break, Acc})
             end
     end;
+fold_keys_fun(FoldKeysFun, {index, Bucket, V1Q}) ->
+    %% Handle legacy queries
+    Q = riak_index:upgrade_query(V1Q),
+    fold_keys_fun(FoldKeysFun, {index, Bucket, Q});
 fold_keys_fun(_FoldKeysFun, Other) ->
     throw({unknown_limiter, Other}).
 
 %% @private
+%% To stop a fold in progress when pagination limit is reached.
+stoppable_fold(Fun, Bucket, Item, Acc) ->
+    try
+        Fun(Bucket, Item, Acc)
+    catch
+        stop_fold ->
+            throw({break, Acc})
+    end.
+
+
+
+%% @private
 %% Return a function to fold over the objects on this backend
-fold_objects_fun(FoldObjectsFun, FilterBucket) ->
-    %% 2I does not support fold objects at this time, so this is much
-    %% simpler than fold_keys_fun.
+fold_objects_fun(FoldObjectsFun, {index, FilterBucket, Q=?KV_INDEX_Q{}}) ->
+    %% 2I query on $key or $bucket field with return_body
+    fun({StorageKey, Value}, Acc) ->
+            ObjectKey = from_object_key(StorageKey),
+            case riak_index:object_key_in_range(ObjectKey, FilterBucket, Q) of
+                {true, {Bucket, Key}} ->
+                    stoppable_fold(FoldObjectsFun, Bucket, {o, Key, Value}, Acc);
+                {skip, _BK} ->
+                    Acc;
+                _ ->
+                    throw({break, Acc})
+            end
+    end;
+fold_objects_fun(FoldObjectsFun, {bucket, FilterBucket}) ->
     fun({StorageKey, Value}, Acc) ->
             case from_object_key(StorageKey) of
-                {Bucket, Key} when FilterBucket == undefined;
-                                   Bucket == FilterBucket ->
+                {Bucket, Key} when Bucket == FilterBucket ->
+                    FoldObjectsFun(Bucket, Key, Value, Acc);
+                _ ->
+                    throw({break, Acc})
+            end
+    end;
+fold_objects_fun(FoldObjectsFun, undefined) ->
+    fun({StorageKey, Value}, Acc) ->
+            case from_object_key(StorageKey) of
+                {Bucket, Key} ->
                     FoldObjectsFun(Bucket, Key, Value, Acc);
                 _ ->
                     throw({break, Acc})
             end
     end.
-
-%% @private
-%% Augment the fold options list if a
-%% bucket is defined.
-fold_opts(undefined, FoldOpts) ->
-    [{first_key, to_first_key(undefined)} | FoldOpts];
-fold_opts(Bucket, FoldOpts) ->
-    [{first_key, to_first_key({bucket, Bucket})} | FoldOpts].
-
 
 %% @private Given a scope limiter, use sext to encode an expression
 %% that represents the starting key for the scope. For example, since
@@ -734,18 +776,20 @@ to_first_key({bucket, Bucket}) ->
 to_first_key({index, incorrect_format, ForUpgrade}) when is_boolean(ForUpgrade) ->
     %% Start at first index entry
     to_index_key(<<>>, <<>>, <<>>, <<>>);
-to_first_key({index, Bucket, {eq, <<"$bucket">>, _Term}}) ->
-    %% 2I exact match query on special $bucket field...
-    to_first_key({bucket, Bucket});
-to_first_key({index, Bucket, {eq, Field, Term}}) ->
-    %% Rewrite 2I exact match query as a range...
-    to_first_key({index, Bucket, {range, Field, Term, Term}});
-to_first_key({index, Bucket, {range, <<"$key">>, StartTerm, _EndTerm}}) ->
-    %% 2I range query on special $key field...
-    to_object_key(Bucket, StartTerm);
-to_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm}}) ->
-    %% 2I range query...
-    to_index_key(Bucket, <<>>, Field, StartTerm);
+%% V2 indexes
+to_first_key({index, Bucket,
+              ?KV_INDEX_Q{filter_field=Field,
+                          start_key=StartKey}}) when Field == <<"$key">>;
+                                                     Field == <<"$bucket">> ->
+    to_object_key(Bucket, StartKey);
+to_first_key({index, Bucket, ?KV_INDEX_Q{filter_field=Field,
+                                         start_key=StartKey,
+                                         start_term=StartTerm}}) ->
+    to_index_key(Bucket, StartKey, Field, StartTerm);
+%% Upgrade legacy queries to current version
+to_first_key({index, Bucket, Q}) ->
+    UpgradeQ = riak_index:upgrade_query(Q),
+    to_first_key({index, Bucket, UpgradeQ});
 to_first_key(Other) ->
     erlang:throw({unknown_limiter, Other}).
 
