@@ -32,13 +32,22 @@
          format_failure_reason/1,
          normalize_index_field/1,
          timestamp/0,
-         to_index_query/2
+         to_index_query/2,
+         to_index_query/3,
+         to_index_query/6,
+         make_continuation/1,
+         return_terms/2,
+         return_body/1,
+         upgrade_query/1,
+         object_key_in_range/3,
+         index_key_in_range/3
         ]).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
 -include("riak_kv_wm_raw.hrl").
+-include("riak_kv_index.hrl").
 -define(TIMEOUT, 30000).
 -define(BUCKETFIELD, <<"$bucket">>).
 -define(KEYFIELD, <<"$key">>).
@@ -54,12 +63,16 @@
 %% @type query_element()   :: {eq,    index_field(), [index_value()]},
 %%                         :: {range, index_field(), [index_value(), index_value()}
 
+-type last_result() :: {value(), key()} | key().
+-type value() :: binary() | integer().
+-type key() :: binary().
+-opaque continuation() :: binary(). %% encoded last_result().
 
 mapred_index(Dest, Args) ->
     mapred_index(Dest, Args, ?TIMEOUT).
 mapred_index(_Pipe, [Bucket, Query], Timeout) ->
     {ok, C} = riak:local_client(),
-    {ok, ReqId} = C:stream_get_index(Bucket, Query, Timeout),
+    {ok, ReqId} = C:stream_get_index(Bucket, Query, [{timeout, Timeout}]),
     {ok, Bucket, ReqId}.
 
 %% @spec parse_object_hook(riak_object:riak_object()) ->
@@ -258,6 +271,153 @@ to_index_query(IndexField, Args) ->
             {error, FailureReasons}
     end.
 
+%% v2 2i queries
+%% @doc Create an index query of the current highest version supported by
+%% cluster capability.
+%% This 6 arity version is for the new (temporarily unsupported) `return_body' feature
+%% for CS.
+%% @see riak_kv_pb_csbucket
+to_index_query(IndexField, Args, Continuation, ReturnBody, {Start, StartInc}, {End, EndInc}) ->
+    BaseQuery = ?KV_INDEX_Q{return_body=ReturnBody,
+                            start_key=Start, start_inclusive=StartInc,
+                            end_term=End, end_inclusive=EndInc},
+    to_index_query(IndexField, Args, Continuation, BaseQuery).
+
+%% @doc Create an index quey of the current highest version supported by
+%% cluster capability.
+%% `IndexField' is either a user supplied term or one of
+%% the inbuilt indexes (`<<"$key">>' and `<<"$bucket">>').
+%% `Args' is a list or either a start and end for a range, or a single
+%% value for equality.
+%% `Continuation' is the opaque continuation that may have been
+%% returned from a previous query, or `undefined'.
+%% @see make_continuation/1
+to_index_query(IndexField, Args, Continuation) ->
+    to_index_query(IndexField, Args, Continuation, ?KV_INDEX_Q{}).
+
+to_index_query(IndexField, Args, Continuation, BaseQuery) ->
+    Version = riak_core_capability:get({riak_kv, secondary_index_version}, v1),
+    Query = to_index_query(IndexField, Args),
+    case {Version, Query} of
+        {_Any, {error, _Reason}=Error} -> Error;
+        {v1, OKQ} -> OKQ;
+        {v2, {ok, V1Q}} ->
+            {ok, V2Q} = make_v2_query(V1Q, BaseQuery),
+            apply_continuation(V2Q, decode_continuation(Continuation))
+    end.
+
+%% @doc upgrade a V1 Query to a v2 Query
+make_v2_query({eq, ?BUCKETFIELD, _Bucket}, Q) ->
+    {ok, Q?KV_INDEX_Q{filter_field=?BUCKETFIELD, return_terms=false}};
+make_v2_query({eq, ?KEYFIELD, Value}, Q) ->
+    {ok, Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_key=Value, start_term=Value,
+                 end_term=Value, return_terms=false}};
+make_v2_query({eq, Field, Value}, Q) ->
+    {ok, Q?KV_INDEX_Q{filter_field=Field, start_term=Value, end_term=Value, return_terms=false}};
+make_v2_query({range, ?KEYFIELD, Start, End}, Q) ->
+    {ok, Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_term=Start, start_key=Start,
+                end_term=End, return_terms=false}};
+make_v2_query({range, Field, Start, End}, Q) ->
+    {ok, Q?KV_INDEX_Q{filter_field=Field, start_term=Start,
+                 end_term=End}};
+make_v2_query(V1Q, _) ->
+    {error, {invalid_v1_query, V1Q}}.
+
+%% @doc if a continuation is specified, use it to update the query
+apply_continuation(Q, undefined) ->
+    {ok, Q};
+apply_continuation(Q=?KV_INDEX_Q{}, {Value, Key}) when is_binary(Key),
+                                                                   is_integer(Value) orelse is_binary(Value) ->
+    {ok, Q?KV_INDEX_Q{start_key=Key, start_inclusive=false, start_term=Value}};
+apply_continuation(Q=?KV_INDEX_Q{}, Key) when is_binary(Key) ->
+    %% a Keys / bucket index
+    {ok, Q?KV_INDEX_Q{start_key=Key, start_term=Key, start_inclusive=false}};
+apply_continuation(Q, C) ->
+    {error, {invalid_continuation, C, Q}}.
+
+%% @doc upgrade a query to the current latest version
+upgrade_query(Q=?KV_INDEX_Q{}) ->
+    Q;
+upgrade_query(Q) when is_tuple(Q) ->
+    {ok, V2Q} = make_v2_query(Q, ?KV_INDEX_Q{}),
+    V2Q.
+
+%% @doc Should index terms be returned in a result
+%% to the client. Requires both that they are wanted (arg1)
+%% and available (arg2)
+return_terms(true, ?KV_INDEX_Q{return_terms=true}) ->
+    true;
+return_terms(_, _) ->
+    false.
+
+%% @doc Should the object body of an indexed key
+%% be returned with the result?
+return_body(?KV_INDEX_Q{return_body=true, filter_field=FF})
+  when FF =:= ?KEYFIELD;
+       FF =:= ?BUCKETFIELD ->
+    true;
+return_body(_) ->
+    false.
+
+%% @doc is an index key in range for a 2i query?
+index_key_in_range({Bucket, Key, Field, Term}=IK, Bucket,
+                   ?KV_INDEX_Q{filter_field=Field,
+                               start_key=StartKey,
+                               start_inclusive=StartInc,
+                               start_term=StartTerm,
+                               end_term=EndTerm})
+  when Term >= StartTerm,
+       Term =< EndTerm ->
+    in_range(gt(StartInc, {Term, Key}, {StartTerm, StartKey}), true, IK);
+index_key_in_range(_, _, _) ->
+    false.
+
+%% @doc Is a {bucket, key} pair in range for an index query
+object_key_in_range({Bucket, Key}=OK, Bucket, Q=?KV_INDEX_Q{end_term=undefined}) ->
+    ?KV_INDEX_Q{start_key=Start, start_inclusive=StartInc} = Q,
+    in_range(gt(StartInc, Key, Start), true, OK);
+object_key_in_range({Bucket, Key}=OK, Bucket, Q) ->
+    ?KV_INDEX_Q{start_key=Start, start_inclusive=StartInc,
+                end_term=End, end_inclusive=EndInc} = Q,
+    in_range(gt(StartInc, Key, Start), gt(EndInc, End, Key), OK);
+object_key_in_range(_, _, _) ->
+    false.
+
+in_range(true, true, OK) ->
+    {true, OK};
+in_range(skip, true, OK) ->
+    {skip, OK};
+in_range(_, _, _) ->
+    false.
+
+gt(true, A, B) when A >= B ->
+    true;
+gt(false, A, B) when A > B ->
+    true;
+gt(false, A, B) when A == B ->
+    skip;
+gt(_, _, _) ->
+    false.
+
+%% @doc To enable pagination.
+%% returns an opaque value that
+%% must be passed to
+%% `to_index_query/3' to
+%% get a query that will "continue"
+%% from the given last result
+-spec make_continuation(list()) -> continuation().
+make_continuation([]) ->
+    undefined;
+make_continuation(L) ->
+    Last = lists:last(L),
+    base64:encode(term_to_binary(Last)).
+
+%% @doc decode a continuation received from the outside world.
+-spec decode_continuation(continuation() | undefined) -> last_result() | undefined.
+decode_continuation(undefined) ->
+    undefined;
+decode_continuation(Bin) ->
+    binary_to_term(base64:decode(Bin)).
 
 %% @spec field_types() -> data_type_defs().
 %%
@@ -308,6 +468,20 @@ normalize_index_field(V) when is_list(V) ->
 %% ====================
 
 -ifdef(TEST).
+
+index_in_range_test() ->
+    %% In that case that same Key has multiple values for an index
+    %% make sure that we don't skip in range values
+    %% when start_inclusive is false
+    FF = <<"f1">>,
+    K = <<"k">>,
+    B = <<"b">>,
+    IK = {B, K, FF, 1},
+    IK2 = {B, K, FF, 2},
+    %% Expect IK to be out of range but IK2 to be in
+    Q = ?KV_INDEX_Q{filter_field=FF, start_key=K, start_term=1, start_inclusive=false, end_term=3},
+    ?assertEqual({skip, IK}, index_key_in_range(IK, B, Q)),
+    ?assertEqual({true, IK2}, index_key_in_range(IK2, B, Q)).
 
 parse_binary_test() ->
     ?assertMatch({ok, <<"">>}, parse_binary(<<"">>)),

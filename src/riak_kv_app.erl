@@ -30,7 +30,8 @@
                    {riak_kv_pb_object, 9, 14}, %% Object requests
                    {riak_kv_pb_bucket, 15, 18}, %% Bucket requests
                    {riak_kv_pb_mapred, 23, 24}, %% MapReduce requests
-                   {riak_kv_pb_index, 25, 26}, %% Secondary index requests
+                   {riak_kv_pb_index, 25, 26},   %% Secondary index requests
+                   {riak_kv_pb_csbucket, 40, 41}, %%  CS bucket folding support
                    {riak_kv_pb_counter, 50, 53} %% counter requests
                   ]).
 -define(MAX_FLUSH_PUT_FSM_RETRIES, 10).
@@ -149,9 +150,13 @@ start(_Type, _StartArgs) ->
                                           get_object_format_modes(),
                                           v0),
 
+            riak_core_capability:register({riak_kv, secondary_index_version},
+                                          [v2, v1],
+                                          v1),
+
             riak_core_capability:register({riak_kv, vclock_data_encoding},
                                           [encode_zlib, encode_raw],
-                                          encode_zlib), 
+                                          encode_zlib),
 
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
