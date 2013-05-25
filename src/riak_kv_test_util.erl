@@ -245,7 +245,7 @@ dep_apps(Test, Extra) ->
         end,
 
     [sasl, Silencer, crypto, public_key, ssl, riak_sysmon, os_mon,
-     runtime_tools, erlang_js, inets, mochiweb, webmachine,
+     runtime_tools, erlang_js, inets, mochiweb, webmachine, sidejob,
      basho_stats, bitcask, compiler, syntax_tools, lager, folsom,
      riak_core, riak_pipe, riak_api, riak_kv, DefaultSetupFun, Extra].
 
