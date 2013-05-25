@@ -166,22 +166,21 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
             undefined ->
                 proplists:get_value(n_val,BucketProps);
             N_val when is_integer(N_val), N_val > 0 ->
+                %% TODO: No sanity check of this value vs. "real" n_val.
                 N_val
         end,
     StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
-    Preflist2b = case proplists:get_value(sloppy_quorum, Options, true) of
-                     true ->
-                         Preflist2;
-                     _ ->
-                         [P || P = {_, primary} <- Preflist2]
-                 end,
-
+    Preflist2 = case proplists:get_value(sloppy_quorum, Options, true) of
+                true ->
+                    riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes);
+                false ->
+                    riak_core_apl:get_primary_apl(DocIdx, N, Ring, UpNodes)
+            end,
     new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
                                           n = N,
                                           bucket_props=BucketProps,
-                                          preflist2 = Preflist2b,
+                                          preflist2 = Preflist2,
                                           tracked_bucket = StatTracked}).
 
 %% @private

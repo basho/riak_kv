@@ -110,6 +110,7 @@ get_r_options(Bucket, Options) ->
             undefined ->
                 proplists:get_value(n_val, BucketProps);
             N_val when is_integer(N_val), N_val > 0 ->
+                %% TODO: No sanity check of this value vs. "real" n_val.
                 N_val
         end,
     %% specifying R/W AND RW together doesn't make sense, so check if R or W
