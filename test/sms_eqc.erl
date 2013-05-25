@@ -21,6 +21,8 @@
 %% @doc Quickcheck test for the sms streaming merge sort module code.
 -module(sms_eqc).
 
+-ifdef(EQC).
+
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -190,3 +192,5 @@ next_state(S = #state{received=Received, sources=Sources}, V, {call, _, sms, _})
 %% Done has no side effects, it should just return all buffered received values.
 next_state(S, _V, {call, _, done,_}) ->
     S.
+
+-endif. % EQC
