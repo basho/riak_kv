@@ -155,8 +155,9 @@
 %% @doc Extract the links from Object that match {Bucket, Tag}.
 %%      Set this function as the bucket property linkfun to enable
 %%      {link, Bucket, Key, Acc} syntax in mapreduce queries on the bucket.
-%%      Client:set_bucket(Bucket, [{linkfun, {modfun, riak_kv_wm_link_walker,
-%%                                            mapreduce_linkfun}}])
+%%      riak_client:set_bucket(Client, Bucket,
+%%                             [{linkfun, {modfun, riak_kv_wm_link_walker,
+%%                             mapreduce_linkfun}}])
 mapreduce_linkfun({error, notfound}, _, _) -> [];
 mapreduce_linkfun(Object, _, {Bucket, Tag}) ->
     links(Object, Bucket, Tag).
@@ -280,7 +281,7 @@ expires(RD, Ctx=#ctx{cache_secs=Secs}) ->
 %% @doc This resource exists if Riak returns {ok, riak_object()} from
 %%      a get of the starting document.
 resource_exists(RD, Ctx=#ctx{bucket=B, key=K, client=C}) ->
-    case C:get(B, K, 2) of
+    case riak_client:get(C, B, K, 2) of
         {ok, Start} ->
             {true, RD, Ctx#ctx{start=Start}};
         _ ->

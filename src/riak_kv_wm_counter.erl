@@ -255,7 +255,7 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C,
         true ->
             Doc = riak_kv_counter:new(B, K),
             Options = [{counter_op, CounterOp}] ++ return_value(RD),
-            case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
+            case riak_client:put(C, Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
                                    Options]) of
                 {error, Reason} ->
                     handle_common_error(Reason, RD, Ctx);
@@ -291,7 +291,7 @@ ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};
 ensure_doc(Ctx=#ctx{doc=undefined, bucket=B, key=K, client=C, r=R,
         pr=PR, basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
-    Ctx#ctx{doc=C:get(B, K, [{r, R}, {pr, PR},
+    Ctx#ctx{doc=riak_client:get(C, B, K, [{r, R}, {pr, PR},
                 {basic_quorum, Quorum}, {notfound_ok, NotFoundOK}])};
 ensure_doc(Ctx) -> Ctx.
 

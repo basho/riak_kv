@@ -199,7 +199,7 @@ produce_bucket_body(RD, Ctx) ->
     {JsonProps3, RD, Ctx}.
 
 get_bucket_props_json(Client, Bucket) ->
-    Props1 = Client:get_bucket(Bucket),
+    Props1 = riak_client:get_bucket(Client, Bucket),
     Props2 = lists:map(fun jsonify_bucket_prop/1, Props1),
     {?JSON_PROPS, {struct, Props2}}.
 
@@ -208,7 +208,7 @@ get_bucket_props_json(Client, Bucket) ->
 %%      bucket-level PUT request.
 accept_bucket_body(RD, Ctx=#ctx{bucket=B, client=C, bucketprops=Props}) ->
     ErlProps = lists:map(fun erlify_bucket_prop/1, Props),
-    case C:set_bucket(B, ErlProps) of
+    case riak_client:set_bucket(C, B, ErlProps) of
         ok ->
             {true, RD, Ctx};
         {error, Details} ->
@@ -220,7 +220,7 @@ accept_bucket_body(RD, Ctx=#ctx{bucket=B, client=C, bucketprops=Props}) ->
 %% @spec delete_resource(reqdata(), context()) -> {boolean, reqdata(), context()}
 %% @doc Reset the bucket properties back to the default values
 delete_resource(RD, Ctx=#ctx{bucket=B, client=C}) ->
-    C:reset_bucket(B),
+    riak_client:reset_bucket(C, B),
     {true, RD, Ctx}.
 
 %% @spec jsonify_bucket_prop({Property::atom(), erlpropvalue()}) ->

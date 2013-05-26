@@ -75,10 +75,10 @@ process(#rpblistbucketsreq{timeout=T, stream=S}=Req,
         #state{client=C} = State) -> 
     case S of 
         true -> 
-            {ok, ReqId} = C:stream_list_buckets(T),
+            {ok, ReqId} = riak_client:stream_list_buckets(C, T),
             {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
         _ ->
-            case C:list_buckets(T) of
+            case riak_client:list_buckets(C, T) of
                 {ok, Buckets} ->
                     {reply, #rpblistbucketsresp{buckets = Buckets}, State};
                 {error, Reason} ->
@@ -93,7 +93,7 @@ process(rpblistbucketsreq, State) ->
 %% Start streaming in list keys
 process(#rpblistkeysreq{bucket=B,timeout=T}=Req, #state{client=C} = State) ->
     %% stream_list_keys results will be processed by process_stream/3
-    {ok, ReqId} = C:stream_list_keys(B, T),
+    {ok, ReqId} = riak_client:stream_list_keys(C, B, T),
     {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}}.
 
 %% @doc process_stream/3 callback. Handles streaming keys messages and

@@ -189,7 +189,8 @@ handle_streaming_index_query(RD, Ctx) ->
                 "multipart/mixed;boundary="++Boundary,
                 RD),
 
-    {ok, ReqID} =  Client:stream_get_index(Bucket, Query, [{max_results, MaxResults}]),
+    {ok, ReqID} =  riak_client:stream_get_index(
+                     Client, Bucket, Query, [{max_results, MaxResults}]),
     StreamFun = index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, undefined, 0),
     {{stream, {<<>>, StreamFun}}, CTypeRD, Ctx}.
 
@@ -239,7 +240,7 @@ handle_all_in_memory_index_query(RD, Ctx) ->
     ReturnTerms = Ctx#ctx.return_terms,
 
     %% Do the index lookup...
-    case Client:get_index(Bucket, Query, [{max_results, MaxResults}]) of
+    case riak_client:get_index(Client, Bucket, Query, [{max_results, MaxResults}]) of
         {ok, Results} ->
             Continuation = make_continuation(MaxResults, Results, length(Results)),
             JsonResults = encode_results(ReturnTerms, Results, Continuation),

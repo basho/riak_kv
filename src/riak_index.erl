@@ -67,12 +67,13 @@
 -type value() :: binary() | integer().
 -type key() :: binary().
 -opaque continuation() :: binary(). %% encoded last_result().
+-export_type([continuation/0]).
 
 mapred_index(Dest, Args) ->
     mapred_index(Dest, Args, ?TIMEOUT).
 mapred_index(_Pipe, [Bucket, Query], Timeout) ->
     {ok, C} = riak:local_client(),
-    {ok, ReqId} = C:stream_get_index(Bucket, Query, [{timeout, Timeout}]),
+    {ok, ReqId} = riak_client:stream_get_index(C, Bucket, Query, [{timeout, Timeout}]),
     {ok, Bucket, ReqId}.
 
 %% @spec parse_object_hook(riak_object:riak_object()) ->

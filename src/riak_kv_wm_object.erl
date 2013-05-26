@@ -640,7 +640,7 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L, index_fields=IF
     Doc = riak_object:update_value(MDDoc, riak_kv_wm_utils:accept_value(CType, wrq:req_body(RD))),
     Options0 = case wrq:get_qs_value(?Q_RETURNBODY, RD) of ?Q_TRUE -> [returnbody]; _ -> [] end,
     Options = make_options(Options0, Ctx),
-    case C:put(Doc, Options) of
+    case riak_client:put(C, Doc, Options) of
         {error, Reason} ->
             handle_common_error(Reason, RD, Ctx);
         ok ->
@@ -880,7 +880,7 @@ ensure_doc(Ctx=#ctx{doc=undefined, bucket=B, key=K, client=C,
     Options0 = [deletedvclock, {basic_quorum, Quorum},
                 {notfound_ok, NotFoundOK}],
     Options = make_options(Options0, Ctx),
-    Ctx#ctx{doc=C:get(B, K, Options)};
+    Ctx#ctx{doc=riak_client:get(C, B, K, Options)};
 ensure_doc(Ctx) -> Ctx.
 
 %% @spec delete_resource(reqdata(), context()) -> {true, reqdata(), context()}
@@ -889,9 +889,9 @@ delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C}) ->
     Options = make_options([], Ctx),
     Result = case wrq:get_req_header(?HEAD_VCLOCK, RD) of
         undefined ->
-            C:delete(B,K,Options);
+            riak_client:delete(C, B,K,Options);
         _ ->
-            C:delete_vclock(B,K,decode_vclock_header(RD),Options)
+            riak_client:delete_vclock(C,B,K,decode_vclock_header(RD),Options)
     end,
     case Result of
         {error, Reason} ->

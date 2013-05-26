@@ -153,12 +153,12 @@ produce_bucket_list(RD, #ctx{client=Client,
     case wrq:get_qs_value(?Q_BUCKETS, RD) of
         ?Q_TRUE ->
             %% Get the buckets.
-            {ok, Buckets} = Client:list_buckets(Timeout),
+            {ok, Buckets} = riak_client:list_buckets(Client, Timeout),
             {mochijson2:encode({struct, [{?JSON_BUCKETS, Buckets}]}), 
              RD, Ctx};
         ?Q_STREAM ->
             F = fun() ->
-                        {ok, ReqId} = Client:stream_list_buckets(Timeout),
+                        {ok, ReqId} = riak_client:stream_list_buckets(Client, Timeout),
                         stream_buckets(ReqId)
                 end,
             {{stream, {[], F}}, RD, Ctx};

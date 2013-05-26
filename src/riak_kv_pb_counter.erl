@@ -79,7 +79,7 @@ process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    basic_quorum=BQ}, #state{client=C} = State) ->
     R = decode_quorum(R0),
     PR = decode_quorum(PR0),
-    case C:get(B, K, make_option(r, R) ++
+    case riak_client:get(C, B, K, make_option(r, R) ++
                    make_option(pr, PR) ++
                    make_option(notfound_ok, NFOk) ++
                    make_option(basic_quorum, BQ)) of
@@ -103,7 +103,7 @@ process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=Coun
             DW = decode_quorum(DW0),
             PW = decode_quorum(PW0),
             Options = [{counter_op, CounterOp}] ++ return_value(RetVal),
-            case C:put(O, make_option(w, W) ++ make_option(dw, DW) ++
+            case riak_client:put(C, O, make_option(w, W) ++ make_option(dw, DW) ++
                            make_option(pw, PW) ++ [{timeout, default_timeout()} | Options]) of
                 ok ->
                     {reply, #rpbcounterupdateresp{}, State};

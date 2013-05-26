@@ -120,6 +120,7 @@
                 p :: riak_pipe_vnode:partition(),
                 fd :: riak_pipe_fitting:details()}).
 -opaque state() :: #state{}.
+-export_type([state/0]).
 
 -define(DEFAULT_JS_RESERVE_ATTEMPTS, 10).
 
@@ -259,7 +260,7 @@ no_input_run_reduce_once() ->
 -spec stored_source(binary(), binary()) -> binary().
 stored_source(Bucket, Key) ->
     {ok, C} = riak:local_client(),
-    {ok, Object} = C:get(Bucket, Key, 1),
+    {ok, Object} = riak_client:get(C, Bucket, Key, 1),
     riak_object:get_value(Object).
 
 %% @doc Produce a function suitable for this fitting's `Arg' that will
