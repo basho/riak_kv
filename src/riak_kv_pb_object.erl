@@ -89,7 +89,7 @@ encode(Message) ->
 process(rpbgetclientidreq, #state{client=C, client_id=CID} = State) ->
     ClientId = case riak_core_capability:get({riak_kv, vnode_vclocks}) of
                    true -> CID;
-                   false -> C:get_client_id()
+                   false -> riak_client:get_client_id(C)
                end,
     Resp = #rpbgetclientidresp{client_id = ClientId},
     {reply, Resp, State};
@@ -113,7 +113,7 @@ process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    timeout=Timeout}, #state{client=C} = State) ->
     R = decode_quorum(R0),
     PR = decode_quorum(PR0),
-    case C:get(B, K, make_options([{deletedvclock, DeletedVClock},
+    case riak_client:get(C, B, K, make_options([{deletedvclock, DeletedVClock},
                                    {r, R}, {pr, PR}, {timeout, Timeout},
                                    {notfound_ok, NFOk}, {basic_quorum, BQ}])) of
         {ok, O} ->
@@ -152,7 +152,7 @@ process(#rpbputreq{key = <<>>}, State) ->
 process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
                    if_not_modified=NotMod, if_none_match=NoneMatch} = Req,
         #state{client=C} = State) when NotMod; NoneMatch ->
-    case C:get(B, K) of
+    case riak_client:get(C, B, K) of
         {ok, _} when NoneMatch ->
             {error, "match_found", State};
         {ok, O} when NotMod ->
@@ -205,7 +205,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
                           _ -> []
                       end
               end,
-    case C:put(O, make_options([{w, W}, {dw, DW}, {pw, PW}, 
+    case riak_client:put(C, O, make_options([{w, W}, {dw, DW}, {pw, PW}, 
                                 {timeout, Timeout}, {asis, AsIs}]) ++ Options) of
         ok when is_binary(ReturnKey) ->
             PutResp = #rpbputresp{key = ReturnKey},
@@ -250,10 +250,10 @@ process(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
                             {dw, DW}, {timeout, Timeout}]),
     Result = case PbVc of
                  undefined ->
-                     C:delete(B, K, Options);
+                     riak_client:delete(C, B, K, Options);
                  _ ->
                      VClock = erlify_rpbvc(PbVc),
-                     C:delete_vclock(B, K, VClock, Options)
+                     riak_client:delete_vclock(C, B, K, VClock, Options)
              end,
     case Result of
         ok ->

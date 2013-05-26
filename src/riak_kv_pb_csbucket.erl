@@ -75,7 +75,8 @@ maybe_perform_query({error, Reason}, _Req, State) ->
 maybe_perform_query({ok, Query}, Req, State) ->
     #rpbcsbucketreq{bucket=Bucket, max_results=MaxResults} = Req,
     #state{client=Client} = State,
-    {ok, ReqId} = Client:stream_get_index(Bucket, Query, [{max_results, MaxResults}]),
+    {ok, ReqId} = riak_client:stream_get_index(
+                    Client, Bucket, Query, [{max_results, MaxResults}]),
     {reply, {stream, ReqId}, State#state{req_id=ReqId, req=Req}}.
 
 

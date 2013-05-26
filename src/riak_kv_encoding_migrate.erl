@@ -62,7 +62,7 @@
 %% Check if the cluster contains encoded values that need to be migrated
 check_cluster() ->
     {ok, RC} = riak:local_client(),
-    {ok, Buckets} = RC:list_buckets(),
+    {ok, Buckets} = riak_client:list_buckets(RC),
     case Buckets of
         [] ->
             io:format("Cluster is empty. No migration needed.~n", []),
@@ -109,7 +109,7 @@ get_encoded_keys() ->
     get_encoded_keys(RC).
 
 get_encoded_keys(RC) ->
-    {ok, Buckets} = RC:list_buckets(),
+    {ok, Buckets} = riak_client:list_buckets(RC),
     EObjs = [begin
                  {ok, Objs} = riak_kv_mrc_pipe:mapred(
                                 Bucket, [reduce_check_encoded()]),
@@ -211,7 +211,7 @@ postcommit_rewrite(RO) ->
 delete_migrated_objects(EObjs) ->
     {ok, RC} = riak:local_client(),
     Failed = lists:foldl(fun(Name={B, K}, Acc) ->
-                                 case RC:delete(B, K) of
+                                 case riak_client:delete(RC, B, K) of
                                      ok ->
                                          Acc;
                                      _ ->
@@ -250,7 +250,7 @@ copy_object(RO, B, K) ->
     NO1 = riak_object:new(B, K, <<>>),
     NO2 = riak_object:set_vclock(NO1, riak_object:vclock(RO)),
     NO3 = riak_object:set_contents(NO2, riak_object:get_contents(RO)),
-    RC:put(NO3).
+    riak_client:put(RC, NO3).
 
 %% Force writes to fail to test failure behavior
 precommit_fail(_) ->
@@ -264,44 +264,44 @@ test_migration() ->
     {empty, [], []} = riak_kv_encoding_migrate:check_cluster(),
 
     O1 = riak_object:new(<<"bucket">>, <<"key">>, <<"val">>),
-    RC:put(O1),
+    riak_client:put(RC, O1),
     {not_needed, [], []} = riak_kv_encoding_migrate:check_cluster(),
 
     MD1 = dict:store(<<"X-MyTag">>, <<"A">>, dict:new()),
     O2 = riak_object:new(<<"me%40mine">>, <<"key">>, <<"A">>, MD1),
-    RC:put(O2),
+    riak_client:put(RC, O2),
     {needed, [{<<"me%40mine">>, <<"key">>}], []} =
         riak_kv_encoding_migrate:check_cluster(),
 
     O3 = riak_object:new(<<"me@mine">>, <<"key">>, <<"A">>, MD1),
-    RC:put(O3),
+    riak_client:put(RC, O3),
     {custom, _, [{<<"me%40mine">>, <<"key">>}]} =
         riak_kv_encoding_migrate:check_cluster(),
 
-    RC:delete(<<"me%40mine">>, <<"key">>),
+    riak_client:delete(RC, <<"me%40mine">>, <<"key">>),
     {not_needed, [], []} = riak_kv_encoding_migrate:check_cluster(),
 
     MD2 = dict:store(<<"X-MyTag">>, <<"B">>, dict:new()),
     O4 = riak_object:new(<<"bucket">>, <<"key%40">>, <<"B">>, MD2),
-    RC:put(O4),
+    riak_client:put(RC, O4),
     {needed, [{<<"bucket">>, <<"key%40">>}], []} =
         riak_kv_encoding_migrate:check_cluster(),
     
     O5 = riak_object:new(<<"bucket">>, <<"key@">>, <<"B">>, MD2),
-    RC:put(O5),
+    riak_client:put(RC, O5),
     {custom, _, [{<<"bucket">>, <<"key%40">>}]} =
         riak_kv_encoding_migrate:check_cluster(),
 
-    RC:delete(<<"me@mine">>, <<"key">>),
-    RC:delete(<<"bucket">>, <<"key@">>),
-    RC:put(O2),
+    riak_client:delete(RC, <<"me@mine">>, <<"key">>),
+    riak_client:delete(RC, <<"bucket">>, <<"key@">>),
+    riak_client:put(RC, O2),
 
     O6 = riak_object:new(<<"bdouble%2540">>, <<"bkey%2540">>, <<"C">>),
-    RC:put(O6),
+    riak_client:put(RC, O6),
     {custom, _, [{<<"bdouble%2540">>, <<"bkey%2540">>}]} =
         riak_kv_encoding_migrate:check_cluster(),
 
-    RC:delete(<<"bdouble%2540">>, <<"bkey%2540">>),
+    riak_client:delete(RC, <<"bdouble%2540">>, <<"bkey%2540">>),
     {needed, EObjs, []} = riak_kv_encoding_migrate:check_cluster(),
 
     {ok, []} = riak_kv_encoding_migrate:migrate_objects(EObjs),
@@ -314,34 +314,34 @@ test_migration() ->
     C2 = riak_object:get_contents(O4),
     V2 = riak_object:vclock(O4),
 
-    {ok, MO1} = RC:get(<<"me@mine">>, <<"key">>),
+    {ok, MO1} = riak_client:get(RC, <<"me@mine">>, <<"key">>),
     nearly_equal_contents(C1, riak_object:get_contents(MO1)),
     true = vclock:descends(riak_object:vclock(MO1), V1),
 
-    {ok, MO2} = RC:get(<<"bucket">>, <<"key@">>),
+    {ok, MO2} = riak_client:get(RC, <<"bucket">>, <<"key@">>),
     nearly_equal_contents(C2, riak_object:get_contents(MO2)),
     true = vclock:descends(riak_object:vclock(MO2), V2),
 
     %% Use precommit hook to test failure scenarios
     O7 = riak_object:new(<<"fail">>, <<"key%40">>, <<"value">>),
-    RC:put(O7),
+    riak_client:put(RC, O7),
     {needed, EObjs2, []} = riak_kv_encoding_migrate:check_cluster(),
 
     FailHook = {struct, [{<<"mod">>, <<"riak_kv_encoding_migrate">>},
                          {<<"fun">>, <<"precommit_fail">>}]},
 
-    RC:set_bucket(<<"fail">>, [{precommit, [FailHook]}]),
+    riak_client:set_bucket(RC, <<"fail">>, [{precommit, [FailHook]}]),
     {failed, [{<<"fail">>, <<"key%40">>}]} =
         riak_kv_encoding_migrate:migrate_objects(EObjs2),
 
-    RC:set_bucket(<<"fail">>, [{precommit, []}]),
+    riak_client:set_bucket(RC, <<"fail">>, [{precommit, []}]),
     {ok, []} = riak_kv_encoding_migrate:migrate_objects(EObjs2),
 
-    RC:set_bucket(<<"fail">>, [{precommit, [FailHook]}]),
+    riak_client:set_bucket(RC, <<"fail">>, [{precommit, [FailHook]}]),
     {failed, [{<<"fail">>, <<"key%40">>}]} =
         riak_kv_encoding_migrate:delete_migrated_objects(EObjs2),
 
-    RC:set_bucket(<<"fail">>, [{precommit, []}]),
+    riak_client:set_bucket(RC, <<"fail">>, [{precommit, []}]),
     {ok, []} = riak_kv_encoding_migrate:delete_migrated_objects(EObjs2),
 
     {not_needed, [], []} = riak_kv_encoding_migrate:check_cluster(),

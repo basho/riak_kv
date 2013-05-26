@@ -66,6 +66,7 @@
                 phase :: riak_kv_mrc_pipe:map_query_fun(),
                 arg :: term()}).
 -opaque state() :: #state{}.
+-export_type([state/0]).
 
 -define(DEFAULT_JS_RESERVE_ATTEMPTS, 10).
 
@@ -100,7 +101,7 @@ init_phase({Anon, {Bucket, Key}})
   when Anon =:= jsanon; Anon =:= strfun ->
     %% lookup source for stored functions only at fitting worker startup
     {ok, C} = riak:local_client(),
-    case C:get(Bucket, Key, 1) of
+    case riak_client:get(C, Bucket, Key, 1) of
         {ok, Object} ->
             case riak_object:get_value(Object) of
                 Source when Anon =:= jsanon, is_binary(Source) ->

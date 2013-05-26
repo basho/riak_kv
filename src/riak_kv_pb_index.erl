@@ -80,14 +80,16 @@ maybe_perform_query({error, Reason}, _Req, State) ->
 maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
     #rpbindexreq{bucket=Bucket, max_results=MaxResults} = Req,
     #state{client=Client} = State,
-    {ok, ReqId} = Client:stream_get_index(Bucket, Query, [{max_results, MaxResults}]),
+    {ok, ReqId} = riak_client:stream_get_index(
+                    Client, Bucket, Query, [{max_results, MaxResults}]),
     ReturnTerms = riak_index:return_terms(Req#rpbindexreq.return_terms, Query),
     {reply, {stream, ReqId}, State#state{req_id=ReqId, req=Req#rpbindexreq{return_terms=ReturnTerms}}};
 maybe_perform_query({ok, Query}, Req, State) ->
     #rpbindexreq{bucket=Bucket, max_results=MaxResults, return_terms=ReturnTerms0} = Req,
     #state{client=Client} = State,
     ReturnTerms =  riak_index:return_terms(ReturnTerms0, Query),
-    QueryResult = Client:get_index(Bucket, Query, [{max_results, MaxResults}]),
+    QueryResult = riak_client:get_index(
+                    Client, Bucket, Query, [{max_results, MaxResults}]),
     handle_query_results(ReturnTerms, MaxResults, QueryResult , State).
 
 handle_query_results(_, _, {error, Reason}, State) ->
