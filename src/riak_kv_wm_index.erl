@@ -47,8 +47,7 @@
           bucket,       %% The bucket to query.
           index_query,   %% The query..
           max_results :: all | pos_integer(), %% maximum nunber of 2i results to return, the page size.
-          return_terms = false :: boolean(), %% should the index values be returned
-          term_regexp = undefined %% This should carry a regular expression or the atom undefined
+          return_terms = false :: boolean() %% should the index values be returned
          }).
 
 -define(ALL_2I_RESULTS, all).
