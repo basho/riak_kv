@@ -309,15 +309,15 @@ to_index_query(IndexField, Args, Continuation, BaseQuery) ->
 
 %% @doc upgrade a V1 Query to a v2 Query
 make_v2_query({eq, ?BUCKETFIELD, _Bucket}, Q) ->
-    Q?KV_INDEX_Q{filter_field=?BUCKETFIELD, return_terms=false, apply_regexp=false};
+    Q?KV_INDEX_Q{filter_field=?BUCKETFIELD, return_terms=false, term_regexp=false};
 make_v2_query({eq, ?KEYFIELD, Value}, Q) ->
     Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_key=Value, start_term=Value,
-                 end_term=Value, return_terms=false, apply_regexp=false};
+                 end_term=Value, return_terms=false, term_regexp=false};
 make_v2_query({eq, Field, Value}, Q) ->
-    Q?KV_INDEX_Q{filter_field=Field, start_term=Value, end_term=Value, return_terms=false, apply_regexp=false};
+    Q?KV_INDEX_Q{filter_field=Field, start_term=Value, end_term=Value, return_terms=false, term_regexp=false};
 make_v2_query({range, ?KEYFIELD, Start, End}, Q) ->
     Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_term=Start, start_key=Start,
-                end_term=End, return_terms=false, apply_regexp=false};
+                end_term=End, return_terms=false, term_regexp=false};
 make_v2_query({range, Field, Start, End}, Q) ->
     Q?KV_INDEX_Q{filter_field=Field, start_term=Start, end_term=End};
 make_v2_query(V1Q, _) ->
@@ -351,10 +351,19 @@ return_terms(_, _) ->
 
 %% @doc should a regexp be applied - requires that one has 
 %% been passed (arg1), and makes sense in context of query (arg2)
-apply_regex(true, ?KV_INDEX_Q{apply_regexp=true}) ->
-    true;
-apply_regex(_, _) ->
-    false.
+%% returns {ok, compileRegex} or {error, _} or {false, ok}
+apply_regex(undefined, Query) ->
+    {false, Query?KV_INDEX_Q{term_regexp=false}};
+apply_regex(_, Query=?KV_INDEX_Q{term_regexp=false}) ->
+    {false, Query};
+apply_regex(RegExp, Query) ->
+    case re:compile(RegExp) of
+        {ok, CompiledRegex} ->
+            Query1 = Query?KV_INDEX_Q{term_regexp=CompiledRegex},
+            {true, Query1};
+        {error, RegexError} ->
+            {error, RegexError}
+    end.
 
 %% @doc Should the object body of an indexed key
 %% be returned with the result?

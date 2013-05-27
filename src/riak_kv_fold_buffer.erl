@@ -64,6 +64,8 @@ new(MaxSize, Fun) ->
 %% the accumlated buffer items and
 %% then the buffer is emptied.
 -spec add(any(), buffer()) -> buffer().
+add(skip_result, Buffer) ->
+  Buffer;
 add(Item, #buffer{acc=Acc,
                   buffer_fun=Fun,
                   max_size=MaxSize,
@@ -74,9 +76,8 @@ add(Item, #buffer{acc=Acc,
 add(Item, #buffer{acc=Acc,
                   size=Size}=Buffer) ->
     Buffer#buffer{acc=[Item | Acc],
-                  size=Size+1};
-add(skip_result, Buffer) ->
-  Buffer.
+                  size=Size+1}.
+
 
 %% @doc Call the buffer function on the
 %% remaining items and then reset the buffer.
