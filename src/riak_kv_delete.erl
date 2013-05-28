@@ -89,8 +89,9 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
             {ok,C} = riak:local_client(ClientId),
             Reply = C:put(Tombstone, [{w,W},{pw,PW},{dw, DW},{timeout,Timeout}]++PassThruOptions),
             Client ! {ReqId, Reply},
+            HasCustomN_val = proplists:get_value(n_val, Options) /= undefined,
             case Reply of
-                ok ->
+                ok when HasCustomN_val == false ->
                     ?DTRACE(?C_DELETE_INIT2, [1], [<<"reap">>]),
                     {ok, C2} = riak:local_client(),
                     AsyncTimeout = 60*1000,     % Avoid client-specified value
