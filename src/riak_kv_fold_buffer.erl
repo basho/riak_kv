@@ -64,8 +64,6 @@ new(MaxSize, Fun) ->
 %% the accumlated buffer items and
 %% then the buffer is emptied.
 -spec add(any(), buffer()) -> buffer().
-add(skip_result, Buffer) ->
-  Buffer;
 add(Item, #buffer{acc=Acc,
                   buffer_fun=Fun,
                   max_size=MaxSize,

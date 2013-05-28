@@ -380,10 +380,24 @@ index_key_in_range({Bucket, Key, Field, Term}=IK, Bucket,
                                start_key=StartKey,
                                start_inclusive=StartInc,
                                start_term=StartTerm,
-                               end_term=EndTerm})
+                               end_term=EndTerm,
+                               term_regexp=RegExp})
   when Term >= StartTerm,
        Term =< EndTerm ->
-    in_range(gt(StartInc, {Term, Key}, {StartTerm, StartKey}), true, IK);
+    InRange = in_range(gt(StartInc, {Term, Key}, {StartTerm, StartKey}), true, IK),
+    case {InRange, RegExp} of
+        {_, false} ->
+            InRange;
+        {{true, OK}, _} ->
+            case re:run(Term, RegExp) of
+                nomatch ->
+                    {skip, OK};
+                {match, _} ->
+                    InRange
+            end;
+        {_, _} ->
+            InRange
+    end;
 index_key_in_range(_, _, _) ->
     false.
 

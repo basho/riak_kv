@@ -663,33 +663,16 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{filter_field=Filt
                     throw({break, Acc})
             end
     end;
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Terms, term_regexp=TermRegExp}}) ->
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Terms}}) ->
     %% User indexes
     fun(StorageKey, Acc) ->
             IndexKey = from_index_key(StorageKey),
             case riak_index:index_key_in_range(IndexKey, FilterBucket, Q) of
                 {true, {Bucket, Key, _Field, Term}} ->
-                    Val = 
-                        case {Terms, TermRegExp} of
-                            {false, false} -> 
-                                Key;
-                            {true, false} ->
-                                {Term, Key};
-                            {false, _} ->
-                                case re:run(Term, TermRegExp) of
-                                    nomatch ->
-                                        skip_result;
-                                    {match, _} ->
-                                        Key
-                                end;
-                            {true, _} ->
-                                case re:run(Term, TermRegExp) of
-                                    nomatch ->
-                                        skip_result;
-                                    {match, _} ->
-                                        {Term, Key}
-                                end
-                        end,
+                    Val = if
+                        Terms -> {Term, Key};
+                        true -> Key
+                    end,
                     stoppable_fold(FoldKeysFun, Bucket, Val, Acc);
                 {skip, _IK} ->
                     Acc;
