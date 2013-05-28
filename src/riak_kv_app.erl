@@ -36,12 +36,30 @@
                   ]).
 -define(MAX_FLUSH_PUT_FSM_RETRIES, 10).
 
+-define(DEFAULT_FSM_LIMIT, 10000).
+
 %% @spec start(Type :: term(), StartArgs :: term()) ->
 %%          {ok,Pid} | ignore | {error,Error}
 %% @doc The application:start callback for riak.
 %%      Arguments are ignored as all configuration is done via the erlenv file.
 start(_Type, _StartArgs) ->
     riak_core_util:start_app_deps(riak_kv),
+
+    FSM_Limit = app_helper:get_env(riak_kv, fsm_limit, ?DEFAULT_FSM_LIMIT),
+    case FSM_Limit of
+        undefined ->
+            ok;
+        _ ->
+            sidejob:new_resource(riak_kv_put_fsm_sj, sidejob_supervisor, FSM_Limit),
+            sidejob:new_resource(riak_kv_get_fsm_sj, sidejob_supervisor, FSM_Limit)
+    end,
+
+    case app_helper:get_env(riak_kv, direct_stats, false) of
+        true ->
+            ok;
+        false ->
+            sidejob:new_resource(riak_kv_stat_sj, riak_kv_stat_worker, 10000)
+    end,
 
     %% Look at the epoch and generating an error message if it doesn't match up
     %% to our expectations
@@ -158,15 +176,16 @@ start(_Type, _StartArgs) ->
                                           [encode_zlib, encode_raw],
                                           encode_zlib),
 
+            HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
             %% synchronously.
             riak_core:register(riak_kv, [
                 {vnode_module, riak_kv_vnode},
-                {health_check, {?MODULE, check_kv_health, []}},
                 {bucket_validator, riak_kv_bucket},
                 {stat_mod, riak_kv_stat}
-            ]),
+            ]
+            ++ [{health_check, {?MODULE, check_kv_health, []}} || HealthCheckOn]),
 
             ok = riak_api_pb_service:register(?SERVICES),
 
@@ -267,7 +286,7 @@ check_kv_health(_Pid) ->
     Passed.
 
 wait_for_put_fsms(N) ->
-    case riak_kv_get_put_monitor:puts_active() of
+    case riak_kv_util:exact_puts_active() of
         0 -> ok;
         Count ->
             case N of
