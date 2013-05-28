@@ -875,8 +875,7 @@ handle_exit(_Pid, Reason, State) ->
 do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     case proplists:get_value(bucket_props, Options) of
         undefined ->
-            {ok,Ring} = riak_core_ring_manager:get_my_ring(),
-            BProps = riak_core_bucket:get_bucket(Bucket, Ring);
+            BProps = riak_core_bucket:get_bucket(Bucket);
         BProps ->
             BProps
     end,
@@ -1801,6 +1800,7 @@ backend_with_known_key(BackendMod) ->
 list_buckets_test_() ->
     {foreach,
      fun() ->
+             riak_core_ring_manager:setup_ets(test),
              clean_test_dirs(),
              application:start(sasl),
              Env = application:get_all_env(riak_kv),
@@ -1810,6 +1810,7 @@ list_buckets_test_() ->
              Env
      end,
      fun(Env) ->
+             riak_core_ring_manager:cleanup_ets(test),
              riak_core_stat_cache:stop(),
              application:stop(folsom),
              application:stop(sasl),
@@ -1860,6 +1861,7 @@ list_buckets_test_i(BackendMod) ->
     flush_msgs().
 
 filter_keys_test() ->
+    riak_core_ring_manager:setup_ets(test),
     clean_test_dirs(),
     {S, B, K} = backend_with_known_key(riak_kv_memory_backend),
     Caller1 = new_result_listener(keys),
@@ -1880,6 +1882,7 @@ filter_keys_test() ->
                     {fsm, {126, {0, node()}}, Caller3}, S),
     ?assertEqual({ok, []}, results_from_listener(Caller3)),
 
+    riak_core_ring_manager:cleanup_ets(test),
     flush_msgs().
 
 %% include bitcask.hrl for HEADER_SIZE macro
@@ -1888,6 +1891,7 @@ filter_keys_test() ->
 %% Verify that a bad CRC on read will not crash the vnode, which when done in
 %% preparation for a write prevents the write from going through.
 bitcask_badcrc_test() ->
+    riak_core_ring_manager:setup_ets(test),
     clean_test_dirs(),
     {S, B, K} = backend_with_known_key(riak_kv_bitcask_backend),
     DataDir = filename:join(bitcask_test_dir(), "0"),
@@ -1903,6 +1907,7 @@ bitcask_badcrc_test() ->
                                                options=[]},
                                    {raw, 456, self()},
                                    S),
+    riak_core_ring_manager:cleanup_ets(test),
     flush_msgs().
 
 
