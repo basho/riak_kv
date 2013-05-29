@@ -362,11 +362,12 @@ finalize(StateData=#state{get_core = GetCore}) ->
 %% Maybe issue deletes if all primary nodes are available.
 %% Get core will only requestion deletion if all vnodes
 %% replies with the same value.
-maybe_delete(_StateData=#state{n = N, preflist2=Sent,
-                               req_id=ReqId, bkey=BKey}) ->
+maybe_delete(StateData=#state{n = N, preflist2=Sent,
+                              req_id=ReqId, bkey=BKey}) ->
     %% Check sent to a perfect preflist and we can delete
     IdealNodes = [{I, Node} || {{I, Node}, primary} <- Sent],
-    case length(IdealNodes) == N of
+    NotCustomN = not using_custom_n_val(StateData),
+    case NotCustomN andalso (length(IdealNodes) == N) of
         true ->
             ?DTRACE(?C_GET_FSM_MAYBE_DELETE, [1],
                     ["maybe_delete", "triggered"]),
@@ -375,6 +376,14 @@ maybe_delete(_StateData=#state{n = N, preflist2=Sent,
             ?DTRACE(?C_GET_FSM_MAYBE_DELETE, [0],
                     ["maybe_delete", "nop"]),
             nop
+    end.
+
+using_custom_n_val(#state{n=N, bucket_props=BucketProps}) ->
+    case proplists:get_value(n_val, BucketProps) of
+        N ->
+            false;
+        _ ->
+            true
     end.
 
 %% based on what the get_put_monitor stats say, and a random roll, potentially
