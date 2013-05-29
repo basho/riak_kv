@@ -262,11 +262,16 @@ merge(Replies, AllowMult) ->
             end
     end.
 
-%% @private If the Idx is not in the IdxType
-%% the world should end
+%% @private Checks IdxType to see if Idx is a primary.
+%% If the Idx is not in the IdxType the world must be
+%% resizing (ring expanding). In that case, Idx is
+%% assumed to be a primary, since only primaries forward.
 is_primary_response(Idx, IdxType) ->
-    {Idx, Status} = lists:keyfind(Idx, 1, IdxType),
-    Status == primary.
+    case lists:keyfind(Idx, 1, IdxType) of
+        false -> true;
+        {Idx, Status} -> Status == primary
+    end.
+
 
 %% @private Increment PR, if appropriate
 num_pr(GetCore = #getcore{num_pok=NumPOK, idx_type=IdxType}, Idx) ->
