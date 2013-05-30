@@ -169,7 +169,7 @@ get_index_n({Bucket, Key}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     N = proplists:get_value(n_val, BucketProps),
     ChashKey = riak_core_util:chash_key({Bucket, Key}),
-    CHBin = riak_core_ring_manager:get_chash_bin(),
+    {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
     Index = chashbin:responsible_index(ChashKey, CHBin),
     {Index, N}.
 
