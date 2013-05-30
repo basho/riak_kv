@@ -521,25 +521,31 @@ enqueue_exchanges(Exchanges, State) ->
                      riak_core_ring(),
                      state()) -> {any(), state()}.
 start_exchange(LocalVN, {RemoteIdx, IndexN}, Ring, State) ->
-    Owner = riak_core_ring:index_owner(Ring, RemoteIdx),
-    Nodes = lists:usort([node(), Owner]),
-    DownNodes = Nodes -- riak_core_node_watcher:nodes(riak_kv),
-    case DownNodes of
-        [] ->
-            RemoteVN = {RemoteIdx, Owner},
-            start_exchange(LocalVN, RemoteVN, IndexN, Ring, State);
-        _ ->
-            {{riak_kv_down, DownNodes}, State}
+    %% in rare cases, when the ring is resized, there may be an
+    %% exchange enqueued for an index that no longer exists. catch
+    %% the case here and move on
+    try riak_core_ring:index_owner(Ring, RemoteIdx) of
+        Owner ->
+            Nodes = lists:usort([node(), Owner]),
+            DownNodes = Nodes -- riak_core_node_watcher:nodes(riak_kv),
+            case DownNodes of
+                [] ->
+                    RemoteVN = {RemoteIdx, Owner},
+                    start_exchange(LocalVN, RemoteVN, IndexN, Ring, State);
+                _ ->
+                    {{riak_kv_down, DownNodes}, State}
+            end
+    catch
+        error:{badmatch,_} ->
+            lager:warning("ignoring exchange to non-existent index: ~p", [RemoteIdx]),
+            {ok, State}
     end.
 
 start_exchange(LocalVN, RemoteVN, IndexN, Ring, State) ->
     {LocalIdx, _} = LocalVN,
     {RemoteIdx, _} = RemoteVN,
-    case riak_core_ring:index_owner(Ring, LocalIdx) == node() of
-        false ->
-            %% No longer owner of this partition, ignore exchange
-            {not_responsible, State};
-        true ->
+    case riak_core_ring:vnode_type(Ring, LocalIdx) of
+        primary ->
             case orddict:find(LocalIdx, State#state.trees) of
                 error ->
                     %% The local vnode has not yet registered it's
@@ -561,7 +567,11 @@ start_exchange(LocalVN, RemoteVN, IndexN, Ring, State) ->
                         {error, Reason} ->
                             {Reason, State}
                     end
-            end
+            end;
+        _ ->
+            %% No longer owner of this partition or partition is
+            %% part or larger future ring, ignore exchange
+            {not_responsible, State}
     end.
 
 -spec all_pairwise_exchanges(index(), riak_core_ring())

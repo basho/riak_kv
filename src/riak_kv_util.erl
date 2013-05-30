@@ -33,7 +33,7 @@
          expand_rw_value/4,
          normalize_rw_value/2,
          make_request/2,
-         get_index_n/2,
+         get_index_n/1,
          preflist_siblings/1,
          fix_incorrect_index_entries/1,
          fix_incorrect_index_entries/0,
@@ -164,12 +164,13 @@ normalize_rw_value(_, _) -> error.
 %% ===================================================================
 
 %% @doc Given a bucket/key, determine the associated preflist index_n.
--spec get_index_n({binary(), binary()}, riak_core_ring()) -> index_n().
-get_index_n({Bucket, Key}, Ring) ->
-    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
+-spec get_index_n({binary(), binary()}) -> index_n().
+get_index_n({Bucket, Key}) ->
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
     N = proplists:get_value(n_val, BucketProps),
     ChashKey = riak_core_util:chash_key({Bucket, Key}),
-    Index = riak_core_ring:responsible_index(ChashKey, Ring),
+    {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+    Index = chashbin:responsible_index(ChashKey, CHBin),
     {Index, N}.
 
 %% @doc Given an index, determine all sibling indices that participate in one

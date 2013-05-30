@@ -1057,17 +1057,5 @@ random_constant_hash()->
     %% work, plus all work assigned to their predecessor); perhaps
     %% something that also skips a random number of up vnodes in the
     %% next version?
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    Preflist = riak_core_ring:preflist(Random, Ring),
-    {Partition, _Node} = first_up(Preflist),
-    riak_pipe_vnode:hash_for_partition(Partition).    
-
-%% this will fail if: this node() is a new member, owning no
-%% partitions or not having started its riak_pipe service yet, and all
-%% other nodes are down
-first_up(Preflist) ->
-    UpSet = ordsets:from_list(riak_core_node_watcher:nodes(riak_pipe)),
-    hd(lists:dropwhile(fun({_P, Node}) ->
-                               not ordsets:is_element(Node, UpSet)
-                       end,
-                       Preflist)).
+    {Partition, _Node} = riak_core_apl:first_up(Random, riak_pipe),
+    riak_pipe_vnode:hash_for_partition(Partition).

@@ -186,11 +186,15 @@ maybe_return_body(PutCore = #putcore{returnbody = true}) ->
     {ReplyObj, UpdPutCore} = final(PutCore),
     {{ok, ReplyObj}, UpdPutCore}.
 
-%% @private If the Idx is not in the IdxType
-%% the world should end
+%% @private Checks IdxType to see if Idx is a primary.
+%% If the Idx is not in the IdxType the world must be
+%% resizing (ring expanding). In that case, Idx is
+%% assumed to be a primary, since only primaries forward.
 is_primary_response(Idx, IdxType) ->
-    {Idx, Status} = lists:keyfind(Idx, 1, IdxType),
-    Status == primary.
+    case lists:keyfind(Idx, 1, IdxType) of
+        false -> true;
+        {Idx, Status} -> Status == primary
+    end.
 
 %% @private Increment PW, if appropriate
 num_pw(PutCore = #putcore{num_pw=NumPW, idx_type=IdxType}, Idx) ->

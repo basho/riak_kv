@@ -210,8 +210,7 @@ init({test, Args, StateProps}) ->
 prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                      bkey = BKey,
                                      options = Options}) ->
-    {ok,Ring} = riak_core_ring_manager:get_my_ring(),
-    BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj), Ring),
+    BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
     DocIdx = riak_core_util:chash_key(BKey),
     N = case proplists:get_value(n_val, Options) of
             undefined ->
@@ -224,9 +223,9 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Preflist2 = case proplists:get_value(sloppy_quorum, Options, true) of
                     true ->
-                        riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes);
+                        riak_core_apl:get_apl_ann(DocIdx, N, UpNodes);
                     false ->
-                        riak_core_apl:get_primary_apl(DocIdx, N, Ring, UpNodes)
+                        riak_core_apl:get_primary_apl(DocIdx, N, UpNodes)
                 end,
     %% Check if this node is in the preference list so it can coordinate
     LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,

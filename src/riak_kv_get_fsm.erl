@@ -175,8 +175,7 @@ init({test, Args, StateProps}) ->
 prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
                                   options=Options}) ->
     ?DTRACE(?C_GET_FSM_PREPARE, [], ["prepare"]),
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
     DocIdx = riak_core_util:chash_key(BKey),
     N = case proplists:get_value(n_val, Options) of
             undefined ->
@@ -189,9 +188,9 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Preflist2 = case proplists:get_value(sloppy_quorum, Options, true) of
                 true ->
-                    riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes);
+                    riak_core_apl:get_apl_ann(DocIdx, N, UpNodes);
                 false ->
-                    riak_core_apl:get_primary_apl(DocIdx, N, Ring, UpNodes)
+                    riak_core_apl:get_primary_apl(DocIdx, N, UpNodes)
             end,
     new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
                                           n = N,
