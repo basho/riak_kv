@@ -2,7 +2,7 @@
 %%
 %% riak_put_fsm: coordination of Riak PUT requests
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -64,7 +64,11 @@
         {details, detail()} |
         %% Put the value as-is, do not increment the vclocks
         %% to make the value a frontier.
-        asis.
+        asis |
+        %% Use a sloppy quorum, default = true
+        {sloppy_quorum, boolean()} |
+        %% The N value, default = value from bucket properties
+        {n_val, pos_integer()}.
 
 -type options() :: [option()].
 
@@ -209,10 +213,21 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
     {ok,Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj), Ring),
     DocIdx = riak_core_util:chash_key(BKey),
-    N = proplists:get_value(n_val,BucketProps),
+    N = case proplists:get_value(n_val, Options) of
+            undefined ->
+                proplists:get_value(n_val,BucketProps);
+            N_val when is_integer(N_val), N_val > 0 ->
+                %% TODO: No sanity check of this value vs. "real" n_val.
+                N_val
+        end,
     StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
+    Preflist2 = case proplists:get_value(sloppy_quorum, Options, true) of
+                    true ->
+                        riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes);
+                    false ->
+                        riak_core_apl:get_primary_apl(DocIdx, N, Ring, UpNodes)
+                end,
     %% Check if this node is in the preference list so it can coordinate
     LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
                         Node == node()],
@@ -630,6 +645,10 @@ handle_options([{returnbody, false}|T], State = #state{postcommit = Postcommit})
 handle_options([{counter_op, _Amt}=COP|T], State) ->
     VNodeOpts = [COP | State#state.vnode_options],
     handle_options(T, State#state{vnode_options=VNodeOpts});
+handle_options([{K, _V} = Opt|T], State = #state{vnode_options = VnodeOpts})
+  when K == sloppy_quorum; K == n_val ->
+    %% Take these options as-is
+    handle_options(T, State#state{vnode_options = [Opt|VnodeOpts]});
 handle_options([{_,_}|T], State) -> handle_options(T, State).
 
 init_putcore(State = #state{n = N, w = W, pw = PW, dw = DW, allowmult = AllowMult,
