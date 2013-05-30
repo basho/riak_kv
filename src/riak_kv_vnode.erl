@@ -59,6 +59,9 @@
          handle_coverage/4,
          is_empty/1,
          delete/1,
+         request_hash/1,
+         object_info/1,
+         nval_map/1,
          handle_handoff_command/3,
          handoff_starting/2,
          handoff_cancelled/1,
@@ -128,10 +131,8 @@ maybe_create_hashtrees(false, State) ->
 maybe_create_hashtrees(true, State=#state{idx=Index}) ->
     %% Only maintain a hashtree if a primary vnode
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    case riak_core_ring:index_owner(Ring, Index) == node() of
-        false ->
-            State;
-        true ->
+    case riak_core_ring:vnode_type(Ring, Index) of
+        primary ->
             RP = riak_kv_util:responsible_preflists(Index),
             case riak_kv_index_hashtree:start(Index, RP, self()) of
                 {ok, Trees} ->
@@ -142,7 +143,9 @@ maybe_create_hashtrees(true, State=#state{idx=Index}) ->
                                [Index, Error]),
                     erlang:send_after(1000, self(), retry_create_hashtree),
                     State#state{hashtrees=undefined}
-            end
+            end;
+        _ ->
+            State
     end.
 
 %% API
@@ -293,8 +296,8 @@ repair_filter(Target) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     riak_core_repair:gen_filter(Target,
                                 Ring,
-                                bucket_nval_map(Ring),
-                                default_object_nval(),
+                                nval_map(Ring),
+                                riak_core_bucket:default_object_nval(),
                                 fun object_info/1).
 
 -spec hashtree_pid(index()) -> {ok, pid()}.
@@ -757,6 +760,15 @@ handle_handoff_command(Req=?KV_PUT_REQ{}, Sender, State) ->
 handle_handoff_command(Req, Sender, State) ->
     handle_command(Req, Sender, State).
 
+%% callback used by dynamic ring sizing to determine where
+%% requests should be forwarded. Puts/deletes are forwarded
+%% during the operation, all other requests are not
+request_hash(?KV_PUT_REQ{bkey=BKey}) ->
+    riak_core_util:chash_key(BKey);
+request_hash(?KV_DELETE_REQ{bkey=BKey}) ->
+    riak_core_util:chash_key(BKey);
+request_hash(_Req) ->
+    undefined.
 
 handoff_starting(_TargetNode, State) ->
     {true, State#state{in_handoff=true}}.
@@ -1580,14 +1592,9 @@ count_index_specs(IndexSpecs) ->
         end,
     lists:foldl(F, {0, 0}, IndexSpecs).
 
-%% @private
-bucket_nval_map(Ring) ->
-    [{riak_core_bucket:name(B), riak_core_bucket:n_val(B)} ||
-        B <- riak_core_bucket:get_buckets(Ring)].
 
-%% @private
-default_object_nval() ->
-    riak_core_bucket:n_val(riak_core_config:default_bucket_props()).
+nval_map(Ring) ->
+    riak_core_bucket:bucket_nval_map(Ring).
 
 %% @private
 object_info({Bucket, _Key}=BKey) ->
