@@ -536,7 +536,7 @@ start_exchange(LocalVN, {RemoteIdx, IndexN}, Ring, State) ->
                     {{riak_kv_down, DownNodes}, State}
             end
     catch
-        error:badarg ->
+        error:{badmatch,_} ->
             lager:warning("ignoring exchange to non-existent index: ~p", [RemoteIdx]),
             {ok, State}
     end.
