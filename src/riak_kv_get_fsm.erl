@@ -177,26 +177,35 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
     ?DTRACE(?C_GET_FSM_PREPARE, [], ["prepare"]),
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     DocIdx = riak_core_util:chash_key(BKey),
+    Bucket_N = proplists:get_value(n_val,BucketProps),
     N = case proplists:get_value(n_val, Options) of
             undefined ->
-                proplists:get_value(n_val,BucketProps);
-            N_val when is_integer(N_val), N_val > 0 ->
-                %% TODO: No sanity check of this value vs. "real" n_val.
-                N_val
+                Bucket_N;
+            N_val when is_integer(N_val), N_val > 0, N_val =< Bucket_N ->
+                %% don't allow custom N to exceed bucket N
+                N_val;
+            Bad_N ->
+                {error, {n_val_violation, Bad_N}}
         end,
-    StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
-    UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    Preflist2 = case proplists:get_value(sloppy_quorum, Options, true) of
-                true ->
-                    riak_core_apl:get_apl_ann(DocIdx, N, UpNodes);
-                false ->
-                    riak_core_apl:get_primary_apl(DocIdx, N, UpNodes)
-            end,
-    new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
-                                          n = N,
-                                          bucket_props=BucketProps,
-                                          preflist2 = Preflist2,
-                                          tracked_bucket = StatTracked}).
+    case N of
+        {error, _} = Error ->
+            StateData2 = client_reply(Error, StateData),
+            {stop, normal, StateData2};
+        _ ->
+            StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
+            UpNodes = riak_core_node_watcher:nodes(riak_kv),
+            Preflist2 = case proplists:get_value(sloppy_quorum, Options, true) of
+                        true ->
+                            riak_core_apl:get_apl_ann(DocIdx, N, UpNodes);
+                        false ->
+                            riak_core_apl:get_primary_apl(DocIdx, N, UpNodes)
+                    end,
+            new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
+                                                n = N,
+                                                bucket_props=BucketProps,
+                                                preflist2 = Preflist2,
+                                                tracked_bucket = StatTracked})
+    end.
 
 %% @private
 validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
