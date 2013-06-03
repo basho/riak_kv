@@ -546,7 +546,7 @@ postcondition(_From, _To, S,
         _ ->
             [{line,?LINE},{expected, Keys},{received, R}]
     end;
-postcondition(_From, _To, S,
+postcondition(_From, _To, #qcst{backend=Backend}=S,
               {call, _M, fold_keys, [_FoldFun, _Acc, [{bucket, B}], _BeState]}, FoldRes) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Keys = [{Bucket, Key} || {{Bucket, Key}, _} <- ExpectedEntries, Bucket == B],
@@ -563,9 +563,14 @@ postcondition(_From, _To, S,
     case lists:sort(Keys) =:= lists:sort(R) of
         true -> true;
         _ ->
-            [{line,?LINE},{expected, Keys},{received, R}]
+            try
+                Backend:backend_eqc_postcondition_fold_keys(Keys, R)
+            catch
+                error:undef ->
+                    [{line,?LINE},{expected, Keys},{received, R}]
+            end
     end;
-postcondition(_From, _To, S,
+postcondition(_From, _To, #qcst{backend=Backend}=S,
               {call, _M, fold_keys, [_FoldFun, _Acc, _Opts, _BeState]}, FoldRes) ->
     ExpectedEntries = orddict:to_list(S#qcst.d),
     Keys = [{Bucket, Key} || {{Bucket, Key}, _} <- ExpectedEntries],
@@ -582,7 +587,12 @@ postcondition(_From, _To, S,
     case lists:sort(Keys) =:= lists:sort(R) of
         true -> true;
         _ ->
-            [{line,?LINE},{expected, Keys},{received, R}]
+            try
+                Backend:backend_eqc_postcondition_fold_keys(Keys, R)
+            catch
+                error:undef ->
+                    [{line,?LINE},{expected, Keys},{received, R}]
+            end
     end;
 postcondition(_From, _To, S,
               {call, _M, fold_objects, [_FoldFun, _Acc, _Opts, _BeState]}, FoldRes) ->
