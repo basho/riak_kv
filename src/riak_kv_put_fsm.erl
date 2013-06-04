@@ -212,75 +212,83 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                      options = Options}) ->
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
     DocIdx = riak_core_util:chash_key(BKey),
+    Bucket_N = proplists:get_value(n_val,BucketProps),
     N = case proplists:get_value(n_val, Options) of
             undefined ->
-                proplists:get_value(n_val,BucketProps);
-            N_val when is_integer(N_val), N_val > 0 ->
-                %% TODO: No sanity check of this value vs. "real" n_val.
-                N_val
+                Bucket_N;
+            N_val when is_integer(N_val), N_val > 0, N_val =< Bucket_N ->
+                %% don't allow custom N to exceed bucket N
+                N_val;
+            Bad_N ->
+                {error, {n_val_violation, Bad_N}}
         end,
-    StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
-    UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    Preflist2 = case proplists:get_value(sloppy_quorum, Options, true) of
-                    true ->
-                        riak_core_apl:get_apl_ann(DocIdx, N, UpNodes);
-                    false ->
-                        riak_core_apl:get_primary_apl(DocIdx, N, UpNodes)
-                end,
-    %% Check if this node is in the preference list so it can coordinate
-    LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
-                        Node == node()],
-    Must = (get_option(asis, Options, false) /= true),
-    case {Preflist2, LocalPL =:= [] andalso Must == true} of
-        {[], _} ->
-            %% Empty preflist
-            ?DTRACE(?C_PUT_FSM_PREPARE, [-1], ["prepare",<<"all nodes down">>]),
-            process_reply({error, all_nodes_down}, StateData0);
-        {_, true} ->
-            %% This node is not in the preference list
-            %% forward on to a random node
-            ListPos = crypto:rand_uniform(1, length(Preflist2)+1),
-            {{_Idx, CoordNode},_Type} = lists:nth(ListPos, Preflist2),
-            _Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
-            ?DTRACE(?C_PUT_FSM_PREPARE, [1],
-                    ["prepare", atom2list(CoordNode)]),
-            try
-                 proc_lib:spawn(CoordNode,riak_kv_put_fsm,start_link,[From,RObj,Options]),
-                 ?DTRACE(?C_PUT_FSM_PREPARE, [2],
-                            ["prepare", atom2list(CoordNode)]),
-                 riak_kv_stat:update(coord_redir),
-                 {stop, normal, StateData0}
-            catch
-                _:Reason ->
-                    ?DTRACE(?C_PUT_FSM_PREPARE, [-2],
-                            ["prepare", dtrace_errstr(Reason)]),
-                    lager:error("Unable to forward put for ~p to ~p - ~p\n",
-                                [BKey, CoordNode, Reason]),
-                    process_reply({error, {coord_handoff_failed, Reason}}, StateData0)
-            end;
+    case N of
+        {error, _} = Error ->
+            process_reply(Error, StateData0);
         _ ->
-            %% Putting asis, no need to handle locally on a node in the
-            %% preflist, can coordinate from anywhere
-            CoordPLEntry = case Must of
-                               true ->
-                                   hd(LocalPL);
-                               _ ->
-                                   undefined
-                           end,
-            CoordPlNode = case CoordPLEntry of
-                              undefined  -> undefined;
-                              {_Idx, Nd} -> atom2list(Nd)
-                          end,
-            %% This node is in the preference list, continue
-            StartTime = riak_core_util:moment(),
-            StateData = StateData0#state{n = N,
-                                         bucket_props = BucketProps,
-                                         coord_pl_entry = CoordPLEntry,
-                                         preflist2 = Preflist2,
-                                         starttime = StartTime,
-                                         tracked_bucket = StatTracked},
-            ?DTRACE(?C_PUT_FSM_PREPARE, [0], ["prepare", CoordPlNode]),
-            new_state_timeout(validate, StateData)
+            StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
+            UpNodes = riak_core_node_watcher:nodes(riak_kv),
+            Preflist2 = case proplists:get_value(sloppy_quorum, Options, true) of
+                            true ->
+                                riak_core_apl:get_apl_ann(DocIdx, N, UpNodes);
+                            false ->
+                                riak_core_apl:get_primary_apl(DocIdx, N, UpNodes)
+                        end,
+            %% Check if this node is in the preference list so it can coordinate
+            LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
+                                Node == node()],
+            Must = (get_option(asis, Options, false) /= true),
+            case {Preflist2, LocalPL =:= [] andalso Must == true} of
+                {[], _} ->
+                    %% Empty preflist
+                    ?DTRACE(?C_PUT_FSM_PREPARE, [-1], ["prepare",<<"all nodes down">>]),
+                    process_reply({error, all_nodes_down}, StateData0);
+                {_, true} ->
+                    %% This node is not in the preference list
+                    %% forward on to a random node
+                    ListPos = crypto:rand_uniform(1, length(Preflist2)+1),
+                    {{_Idx, CoordNode},_Type} = lists:nth(ListPos, Preflist2),
+                    _Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
+                    ?DTRACE(?C_PUT_FSM_PREPARE, [1],
+                            ["prepare", atom2list(CoordNode)]),
+                    try
+                        proc_lib:spawn(CoordNode,riak_kv_put_fsm,start_link,[From,RObj,Options]),
+                        ?DTRACE(?C_PUT_FSM_PREPARE, [2],
+                                    ["prepare", atom2list(CoordNode)]),
+                        riak_kv_stat:update(coord_redir),
+                        {stop, normal, StateData0}
+                    catch
+                        _:Reason ->
+                            ?DTRACE(?C_PUT_FSM_PREPARE, [-2],
+                                    ["prepare", dtrace_errstr(Reason)]),
+                            lager:error("Unable to forward put for ~p to ~p - ~p\n",
+                                        [BKey, CoordNode, Reason]),
+                            process_reply({error, {coord_handoff_failed, Reason}}, StateData0)
+                    end;
+                _ ->
+                    %% Putting asis, no need to handle locally on a node in the
+                    %% preflist, can coordinate from anywhere
+                    CoordPLEntry = case Must of
+                                    true ->
+                                        hd(LocalPL);
+                                    _ ->
+                                        undefined
+                                end,
+                    CoordPlNode = case CoordPLEntry of
+                                    undefined  -> undefined;
+                                    {_Idx, Nd} -> atom2list(Nd)
+                                end,
+                    %% This node is in the preference list, continue
+                    StartTime = riak_core_util:moment(),
+                    StateData = StateData0#state{n = N,
+                                                bucket_props = BucketProps,
+                                                coord_pl_entry = CoordPLEntry,
+                                                preflist2 = Preflist2,
+                                                starttime = StartTime,
+                                                tracked_bucket = StatTracked},
+                    ?DTRACE(?C_PUT_FSM_PREPARE, [0], ["prepare", CoordPlNode]),
+                    new_state_timeout(validate, StateData)
+            end
     end.
 
 %% @private
