@@ -155,8 +155,10 @@ code_hash() ->
 
 client_test(cluster) ->
     {ok, Client} = riak:local_client(),
-    BKeyList = get_test_key_list([node()|nodes()]),
-    client_test_phase_loop(BKeyList,Client);
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    NValue = proplists:get_value(n_val,riak_core_bucket:get_bucket(?CLIENT_TEST_BUCKET, Ring)),
+    BKeyList = get_test_key_list(Ring, Client),
+    client_test_phase_loop(BKeyList, Client, NValue);
     %io:format("Keylist: ~p~n", [L]);
 client_test(NodeStr) when is_list(NodeStr) ->
     client_test(riak_core_util:str_to_node(NodeStr));
@@ -165,7 +167,7 @@ client_test(Node) ->
         pong ->
             case client_connect(Node) of
                 {ok, Client} ->
-                    case client_test_phase1(Client,{?CLIENT_TEST_BUCKET, ?CLIENT_TEST_KEY}) of
+                    case client_test_phase1(Client,{?CLIENT_TEST_BUCKET, ?CLIENT_TEST_KEY},1) of
                         ok ->
                             io:format("Successfully completed 1 read/write cycle to ~p\n", [Node]),
                             ok;
@@ -187,69 +189,72 @@ client_test(Node) ->
 %% Internal functions for testing a Riak node through single read/write cycle
 %%
 
-create_test_key_list([],Keylist, _Ring) ->
+create_test_key_list([], Keylist, _Ring) ->
     Keylist;
 
-create_test_key_list([Node|T], Keylist0, Ring) ->
-    BKey = client_test_key_finder(Node, Ring),
+create_test_key_list([Pref|T], Keylist0, Ring) ->
+    BKey = client_test_key_finder(Pref, Ring, 0),
     Keylist = [BKey|Keylist0],
     create_test_key_list(T,Keylist,Ring).
 
-get_test_key_list(Nodes) ->
-    {ok, Client} = riak:local_client(),
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+get_test_key_list(Ring, Client) ->
+    NValue = proplists:get_value(n_val,riak_core_bucket:get_bucket(?CLIENT_TEST_BUCKET, Ring)),
     case Client:get(?CLIENT_TEST_BUCKET, ?CLIENT_TEST_KEY_LIST) of
         {ok, Object} ->
             riak_object:get_value(Object);
         {error, notfound} ->
-            BKeylist = create_test_key_list(Nodes,[],Ring),
+            BKeylist = create_test_key_list(riak_core_ring:all_preflists(Ring, NValue), [], Ring),
             ok = Client:put(riak_object:new(?CLIENT_TEST_BUCKET, ?CLIENT_TEST_KEY_LIST, BKeylist)),
             BKeylist;
         Error ->
             io:format("Error during riak-admin test client operations: ~p", [Error]) 
     end.
 
-client_test_key_finder(Node, Ring) ->
-    % Make random key and conver to {bucket,key}
-    BKey = {?CLIENT_TEST_BUCKET,base64:encode(crypto:strong_rand_bytes(8))},
+client_test_key_finder(Pref, Ring, Iteration) ->
+    % TODO: make this less expensive, takes many many iterations to find a good key
+    % Make a bucket key. Attempt determinism using an iterator
+    BKey = {?CLIENT_TEST_BUCKET,list_to_binary(integer_to_list(Iteration))},
     DocIdx = riak_core_util:chash_key(BKey),
-    NValue = proplists:get_value(n_val,riak_core_bucket:get_bucket(?CLIENT_TEST_BUCKET, Ring)),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    NValue = proplists:get_value(n_val,riak_core_bucket:get_bucket(?CLIENT_TEST_BUCKET, Ring)),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, NValue, Ring, UpNodes),
-    PrimaryPreflist = [Nodename || {{_Index,Nodename}, primary} <- Preflist2],
-    case lists:member(Node, PrimaryPreflist)  of
+    Preflist = [Index || {{Index, _Node}, _} <- Preflist2],
+    F = fun(Elem) ->
+            lists:member(Elem, [PartID || {PartID,_node} <- Pref]) 
+    end,
+    case lists:all(F, Preflist)  of
         true ->
-            {Node,BKey};
+            {Preflist,BKey};
         false ->
-            client_test_key_finder(Node, Ring)
+            client_test_key_finder(Pref, Ring, Iteration+1)
     end.
 
-client_test_phase_loop([],_Client) ->
+client_test_phase_loop([],_Client,_NValue) ->
     ok;
-client_test_phase_loop([{Node,{Bucket,Key}}|Tail],Client) ->
-    case client_test_phase1(Client,{Bucket,Key}) of
+client_test_phase_loop([{Preflist,{Bucket,Key}}|Tail],Client,NValue) ->
+    case client_test_phase1(Client,{Bucket,Key},NValue) of
         ok ->
-            io:format("Successfully completed 1 read/write cycle to ~p\n", [Node]),
-            client_test_phase_loop(Tail,Client);
+            io:format("Successfully completed 1 read/write cycle to ~p\n", [Preflist]),
+            client_test_phase_loop(Tail,Client,NValue);
         error ->
             error
     end.
 
-client_test_phase1(Client, {Bucket,Key}) ->
-    case Client:get(Bucket, Key, 1) of
+client_test_phase1(Client, {Bucket,Key}, NValue) ->
+    case Client:get(Bucket, Key) of
         {ok, Object} ->
-            client_test_phase2(Client, Object);
+            client_test_phase2(Client, Object, NValue);
         {error, notfound} ->
-            client_test_phase2(Client, riak_object:new(Bucket, Key, undefined));
+            client_test_phase2(Client, riak_object:new(Bucket, Key, undefined),NValue);
         Error ->
             io:format("Failed to read test value: ~p", [Error]),
             error
     end.
 
-client_test_phase2(Client, Object0) ->
+client_test_phase2(Client, Object0, NValue) ->
     Now = calendar:universal_time(),
     Object = riak_object:update_value(Object0, Now),
-    case Client:put(Object, 1) of
+    case Client:put(Object, NValue) of
         ok ->
             client_test_phase3(Client, Now, {riak_object:bucket(Object),riak_object:key(Object)});
         Error ->
