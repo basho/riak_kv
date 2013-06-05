@@ -792,8 +792,6 @@ jsonify_round_trip_test() ->
     O3b = from_json(to_json(O3a)),
     O4b = from_json(to_json(O4a)),
     O5b = from_json(to_json(O5)),
-    io:format("~nO1:~p~n",[O3a]),
-    io:format("~nO3:~p~n",[O3b]),
     ?assert(dvvset:equal(get_contents(O),   get_contents(O2))),
     ?assert(dvvset:equal(get_contents(O3a), get_contents(O3b))),
     ?assert(dvvset:equal(get_contents(O4a), get_contents(O4b))),

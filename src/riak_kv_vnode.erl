@@ -814,9 +814,6 @@ prepare_put(#state{vnodeid=VId,
             {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
         {ok, Val, _UpdModState} ->
             OldObj = binary_to_term(Val),
-
-    io:format("~nO2:~p~n",[OldObj]),
-    io:format("~nO3:~p~n",[RObj]),
             case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs};
@@ -1407,7 +1404,6 @@ backend_with_known_key(BackendMod) ->
     B = <<"f">>,
     K = <<"b">>,
     O = riak_object:new(B, K, <<"z">>),
-    io:format("~nO1:~p~n",[O]),
     {noreply, S2} = handle_command(?KV_PUT_REQ{bkey={B,K},
                                                object=O,
                                                req_id=123,
