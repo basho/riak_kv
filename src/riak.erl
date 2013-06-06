@@ -154,12 +154,13 @@ code_hash() ->
 -define(CLIENT_TEST_KEY_LIST, <<"list">>).
 
 client_test(cluster) ->
+    %Create client, grab ring and n_value for all test operations
     {ok, Client} = riak:local_client(),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     NValue = proplists:get_value(n_val,riak_core_bucket:get_bucket(?CLIENT_TEST_BUCKET, Ring)),
+    %Get a list of {Preflist, {Bucket, Key}} that map to all preflists in the ring
     BKeyList = get_test_key_list(Ring, Client),
     client_test_phase_loop(BKeyList, Client, NValue);
-    %io:format("Keylist: ~p~n", [L]);
 client_test(NodeStr) when is_list(NodeStr) ->
     client_test(riak_core_util:str_to_node(NodeStr));
 client_test(Node) ->
@@ -201,24 +202,30 @@ get_test_key_list(Ring, Client) ->
     NValue = proplists:get_value(n_val,riak_core_bucket:get_bucket(?CLIENT_TEST_BUCKET, Ring)),
     case Client:get(?CLIENT_TEST_BUCKET, ?CLIENT_TEST_KEY_LIST) of
         {ok, Object} ->
+            %TODO: This should check if the ring size has changed with a simple length check
             riak_object:get_value(Object);
         {error, notfound} ->
             BKeylist = create_test_key_list(riak_core_ring:all_preflists(Ring, NValue), [], Ring),
-            ok = Client:put(riak_object:new(?CLIENT_TEST_BUCKET, ?CLIENT_TEST_KEY_LIST, BKeylist)),
-            BKeylist;
+            case Client:put(riak_object:new(?CLIENT_TEST_BUCKET, ?CLIENT_TEST_KEY_LIST, BKeylist)) of 
+                ok ->
+                    BKeylist;
+                Error ->
+                    io:format("Failed to write test value: ~p", [Error])
+            end;
         Error ->
             io:format("Error during riak-admin test client operations: ~p", [Error]) 
     end.
 
 client_test_key_finder(Pref, Ring, Iteration) ->
     % TODO: make this less expensive, takes many many iterations to find a good key
+
     % Make a bucket key. Attempt determinism using an iterator
     BKey = {?CLIENT_TEST_BUCKET,list_to_binary(integer_to_list(Iteration))},
     DocIdx = riak_core_util:chash_key(BKey),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     NValue = proplists:get_value(n_val,riak_core_bucket:get_bucket(?CLIENT_TEST_BUCKET, Ring)),
     Preflist2 = riak_core_apl:get_apl_ann(DocIdx, NValue, Ring, UpNodes),
-    Preflist = [Index || {{Index, _Node}, _} <- Preflist2],
+    Preflist = [Index || {{Index, _Node}, _Type} <- Preflist2],
     F = fun(Elem) ->
             lists:member(Elem, [PartID || {PartID,_node} <- Pref]) 
     end,
@@ -229,14 +236,16 @@ client_test_key_finder(Pref, Ring, Iteration) ->
             client_test_key_finder(Pref, Ring, Iteration+1)
     end.
 
+%Loop for a get/put/get cycle on a list of keys
 client_test_phase_loop([],_Client,_NValue) ->
+    io:format("Successfully completed read/write cycle to all preflists.~n"),
     ok;
 client_test_phase_loop([{Preflist,{Bucket,Key}}|Tail],Client,NValue) ->
     case client_test_phase1(Client,{Bucket,Key},NValue) of
         ok ->
-            io:format("Successfully completed 1 read/write cycle to ~p\n", [Preflist]),
             client_test_phase_loop(Tail,Client,NValue);
         error ->
+            io:format("Failed read/write cycle to preflist: ~p\n", [Preflist]),
             error
     end.
 
