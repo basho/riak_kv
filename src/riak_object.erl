@@ -605,8 +605,11 @@ to_binary_version(v0, _, _, <<131,_/binary>>=Bin) ->
     Bin;
 to_binary_version(v1, _, _, <<?MAGIC:8/integer, 1:8/integer, _/binary>>=Bin) ->
     Bin;
-to_binary_version(Vsn, B, K, Bin) ->
-    to_binary(Vsn, from_binary(B, K, Bin)).
+to_binary_version(Vsn, B, K, Bin) when is_binary(Bin) ->
+    to_binary(Vsn, from_binary(B, K, Bin));
+%% r_object record definition isn't available, so hack the guard.
+to_binary_version(Vsn, _B, _K, O) when is_tuple(O), element(1, O) == r_object ->
+    to_binary(Vsn, O).
 
 %% @doc return the binary version the riak object binary is encoded in
 -spec binary_version(binary()) -> binary_version().
