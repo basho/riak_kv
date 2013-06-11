@@ -605,8 +605,10 @@ to_binary_version(v0, _, _, <<131,_/binary>>=Bin) ->
     Bin;
 to_binary_version(v1, _, _, <<?MAGIC:8/integer, 1:8/integer, _/binary>>=Bin) ->
     Bin;
-to_binary_version(Vsn, B, K, Bin) ->
-    to_binary(Vsn, from_binary(B, K, Bin)).
+to_binary_version(Vsn, B, K, Bin) when is_binary(Bin) ->
+    to_binary(Vsn, from_binary(B, K, Bin));
+to_binary_version(Vsn, _B, _K, Obj = #r_object{}) ->
+    to_binary(Vsn, Obj).
 
 %% @doc return the binary version the riak object binary is encoded in
 -spec binary_version(binary()) -> binary_version().
@@ -626,7 +628,9 @@ from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
             #r_object{bucket=B,key=K,contents=Contents,vclock=Vclock};
         _Other ->
             {error, bad_object_format}
-    end.
+    end;
+from_binary(_B, _K, Obj = #r_object{}) ->
+    Obj.
 
 sibs_of_binary(Count,SibsBin) ->
     sibs_of_binary(Count, SibsBin, []).
