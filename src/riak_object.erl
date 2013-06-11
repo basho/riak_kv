@@ -628,7 +628,9 @@ from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
             #r_object{bucket=B,key=K,contents=Contents,vclock=Vclock};
         _Other ->
             {error, bad_object_format}
-    end.
+    end;
+from_binary(_B, _K, Obj = #r_object{}) ->
+    Obj.
 
 sibs_of_binary(Count,SibsBin) ->
     sibs_of_binary(Count, SibsBin, []).
