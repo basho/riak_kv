@@ -190,7 +190,9 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
                 true ->
                     riak_core_apl:get_apl_ann(DocIdx, N, UpNodes);
                 false ->
-                    riak_core_apl:get_primary_apl(DocIdx, N, UpNodes)
+                    %% TODO: Avoid 2nd call to node_watcher inside the
+                    %%       call to get_primary_apl/3.
+                    riak_core_apl:get_primary_apl(DocIdx, N, riak_kv)
             end,
     new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
                                           n = N,
