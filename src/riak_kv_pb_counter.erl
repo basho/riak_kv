@@ -76,26 +76,31 @@ encode(Message) ->
 
 %% @doc process/2 callback. Handles an incoming request message.
 process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
-                   basic_quorum=BQ}, #state{client=C} = State) ->
-    R = decode_quorum(R0),
-    PR = decode_quorum(PR0),
-    case C:get(B, K, make_option(r, R) ++
-                   make_option(pr, PR) ++
-                   make_option(notfound_ok, NFOk) ++
-                   make_option(basic_quorum, BQ)) of
-        {ok, O} ->
-            Value = riak_kv_counter:value(O),
-            {reply, #rpbcountergetresp{value = Value}, State};
-        {error, notfound} ->
-            {reply, #rpbcountergetresp{}, State};
-        {error, Reason} ->
-            {error, {format,Reason}, State}
+                          basic_quorum=BQ}, #state{client=C} = State) ->
+    case  riak_core_capability:get({riak_kv, counters}, false) of
+        true ->
+            R = decode_quorum(R0),
+            PR = decode_quorum(PR0),
+            case C:get(B, K, make_option(r, R) ++
+                           make_option(pr, PR) ++
+                           make_option(notfound_ok, NFOk) ++
+                           make_option(basic_quorum, BQ)) of
+                {ok, O} ->
+                    Value = riak_kv_counter:value(O),
+                    {reply, #rpbcountergetresp{value = Value}, State};
+                {error, notfound} ->
+                    {reply, #rpbcountergetresp{}, State};
+                {error, Reason} ->
+                    {error, {format,Reason}, State}
+            end;
+        false ->
+            {error, {format, "Counters are not supported"}, State}
     end;
 process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=CounterOp,
-                            returnvalue=RetVal},
+                             returnvalue=RetVal},
         #state{client=C} = State) ->
-    case allow_mult(B) of
-        true ->
+    case {allow_mult(B), riak_core_capability:get({riak_kv, counters}, false)} of
+        {true, true} ->
             O = riak_kv_counter:new(B, K),
 
             %% erlang_protobuffs encodes as 1/0/undefined
@@ -115,7 +120,9 @@ process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=Coun
                 {error, Reason} ->
                     {error, {format, Reason}, State}
             end;
-        false ->
+        {_, false} ->
+            {error, {format, "Counters are not supported"}, State};
+        {false, true} ->
             {error, {format, "Counters require bucket property 'allow_mult=true'"}, State}
     end.
 
