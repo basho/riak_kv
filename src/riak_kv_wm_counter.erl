@@ -120,7 +120,7 @@ init(Props) ->
               riak=proplists:get_value(riak, Props)}}.
 
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
-    case riak_core_capability:get({riak_kv, counters}, false) of
+    case riak_kv_counter:supported() of
         true ->
             case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
                 {ok, C} ->

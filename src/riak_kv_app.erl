@@ -176,9 +176,9 @@ start(_Type, _StartArgs) ->
                                           [encode_zlib, encode_raw],
                                           encode_zlib),
 
-            riak_core_capability:register({riak_kv, counters},
-                                          [true, false],
-                                          false),
+            riak_core_capability:register({riak_kv, crdt},
+                                          [[pncounter],[]],
+                                          []),
 
             HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
             %% Go ahead and mark the riak_kv service as up in the node watcher.

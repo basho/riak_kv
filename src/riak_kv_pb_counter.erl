@@ -77,7 +77,7 @@ encode(Message) ->
 %% @doc process/2 callback. Handles an incoming request message.
 process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                           basic_quorum=BQ}, #state{client=C} = State) ->
-    case  riak_core_capability:get({riak_kv, counters}, false) of
+    case riak_kv_counter:supported() of
         true ->
             R = decode_quorum(R0),
             PR = decode_quorum(PR0),
@@ -99,7 +99,7 @@ process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
 process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=CounterOp,
                              returnvalue=RetVal},
         #state{client=C} = State) ->
-    case {allow_mult(B), riak_core_capability:get({riak_kv, counters}, false)} of
+    case {allow_mult(B), riak_kv_counter:supported()} of
         {true, true} ->
             O = riak_kv_counter:new(B, K),
 

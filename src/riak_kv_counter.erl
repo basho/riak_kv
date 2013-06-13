@@ -36,7 +36,7 @@
 
 -module(riak_kv_counter).
 
--export([update/3, merge/1, value/1, new/2, to_binary/1, from_binary/1]).
+-export([update/3, merge/1, value/1, new/2, to_binary/1, from_binary/1, supported/0]).
 
 -include("riak_kv_wm_raw.hrl").
 -include_lib("riak_kv_types.hrl").
@@ -169,6 +169,11 @@ to_binary(Counter) ->
 
 from_binary(<<?TAG:8/integer,?V1_VERS:8/integer,CounterBin/binary>>) ->
      riak_kv_pncounter:from_binary(CounterBin).
+
+%% @doc Check cluster capability for counter support
+-spec supported() -> boolean().
+supported() ->
+    lists:member(pncounter, riak_core_capability:get({riak_kv, crdt}, [])).
 
 %% ===================================================================
 %% EUnit tests
