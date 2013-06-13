@@ -120,26 +120,34 @@ init(Props) ->
               riak=proplists:get_value(riak, Props)}}.
 
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
-    case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
-        {ok, C} ->
-            {true,
-             RD,
-             Ctx#ctx{
-               method=wrq:method(RD),
-               client=C,
-               bucket=case wrq:path_info(bucket, RD) of
-                         undefined -> undefined;
-                         B -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, B))
-                      end,
-               key=case wrq:path_info(key, RD) of
-                       undefined -> undefined;
-                       K -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, K))
-                   end
-              }};
-        Error ->
+    case riak_kv_counter:supported() of
+        true ->
+            case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
+                {ok, C} ->
+                    {true,
+                     RD,
+                     Ctx#ctx{
+                       method=wrq:method(RD),
+                       client=C,
+                       bucket=case wrq:path_info(bucket, RD) of
+                                  undefined -> undefined;
+                                  B -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, B))
+                              end,
+                       key=case wrq:path_info(key, RD) of
+                               undefined -> undefined;
+                               K -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, K))
+                           end
+                      }};
+                Error ->
+                    {false,
+                     wrq:set_resp_body(
+                       io_lib:format("Unable to connect to Riak: ~p~n", [Error]),
+                       wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+                     Ctx}
+            end;
+        false  ->
             {false,
-             wrq:set_resp_body(
-               io_lib:format("Unable to connect to Riak: ~p~n", [Error]),
+             wrq:set_resp_body("Counters are not supported.",
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx}
     end.
