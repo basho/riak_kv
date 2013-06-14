@@ -530,8 +530,8 @@ index_range_folder(Folder, Acc0, IndexRef, {B, I, V, _K}=IndexKey,
             %% does not exist. In all other cases, ETS will give us a
             %% real key from next/2.
             index_range_folder(Folder, Acc0, IndexRef, ets:next(IndexRef, IndexKey), Query);
-        {false, [{{B, I, V, StartKey},_}]} ->
-            %% Exclude first key from results
+        {false, [{{B, I, Min, StartKey},_}]} ->
+            %% Exclude start {val,key} from results
             index_range_folder(Folder, Acc0, IndexRef, ets:next(IndexRef, IndexKey), Query);
         {_, [Posting]} ->
             try
