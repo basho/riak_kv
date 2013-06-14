@@ -230,13 +230,15 @@ do_update({fsm_error, Type}) when Type =:= gets; Type =:= puts ->
 do_update({index_create, Pid}) ->
     folsom_metrics:notify_existing_metric({?APP, index, fsm, create}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, index, fsm, active}, {inc, 1}, counter),
-    add_monitor(index, Pid);
+    add_monitor(index, Pid),
+    ok;
 do_update(index_create_error) ->
     folsom_metrics:notify_existing_metric({?APP, index, fsm, create, error}, 1, spiral);
 do_update({list_create, Pid}) ->
     folsom_metrics:notify_existing_metric({?APP, list, fsm, create}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, list, fsm, active}, {inc, 1}, counter),
-    add_monitor(list, Pid);
+    add_monitor(list, Pid),
+    ok;
 do_update(list_create_error) ->
     folsom_metrics:notify_existing_metric({?APP, list, fsm, create, error}, 1, spiral);
 do_update({fsm_destroy, Type}) ->
@@ -491,12 +493,12 @@ stat_repair_loop() ->
 re_register_stat(Arg) ->
     case (catch do_update(Arg)) of
         {'EXIT', _} ->
-            Stats =  stats_from_update_arg(Arg),
+            Stats = stats_from_update_arg(Arg),
             [begin
                  (catch folsom_metrics:delete_metric(Name)),
                  do_register_stat(Name, Type)
              end || {Name, {metric, _, Type, _}} <- Stats];
-        ok  ->
+        ok ->
             ok
     end.
 
@@ -539,11 +541,13 @@ stats_from_update_arg({fsm_error, Type}) ->
     stats_from_update_arg({fsm_spawned, Type}) ++
         [{{?APP, node, Type, fsm, errors}, {metric,[], spiral, undefined}}];
 stats_from_update_arg({index_create, _Pid}) ->
-    [{{?APP, index, fsm, create}, {metric, [], spiral, undefined}}];
+    [{{?APP, index, fsm, create}, {metric, [], spiral, undefined}},
+     {{?APP, index, fsm, active}, {metric, [], counter, undefined}}];
 stats_from_update_arg(index_create_error) ->
     [{{?APP, index, fsm, create, error}, {metric, [], spiral, undefined}}];
 stats_from_update_arg({list_create, _Pid}) ->
-    [{{?APP, list, fsm, create}, {metric, [], spiral, undefined}}];
+    [{{?APP, list, fsm, create}, {metric, [], spiral, undefined}},
+     {{?APP, list, fsm, active}, {metric, [], counter, undefined}}];
 stats_from_update_arg(list_create_error) ->
     [{{?APP, list, fsm, create, error}, {metric, [], spiral, undefined}}];
 stats_from_update_arg(_) ->
