@@ -42,6 +42,8 @@
          status/1,
          callback/3]).
 
+-export([data_size/1]).
+
 %% Helper API
 -export([key_counts/0,
          key_counts/1]).
@@ -54,7 +56,7 @@
 
 -define(MERGE_CHECK_INTERVAL, timer:minutes(3)).
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold]).
+-define(CAPABILITIES, [async_fold,size]).
 
 -record(state, {ref :: reference(),
                 data_dir :: string(),
@@ -124,7 +126,12 @@ start(Partition, Config) ->
 %% @doc Stop the bitcask backend
 -spec stop(state()) -> ok.
 stop(#state{ref=Ref}) ->
-    bitcask:close(Ref).
+    case Ref of
+        undefined ->
+            ok;
+        _ ->
+            bitcask:close(Ref)
+    end.
 
 %% @doc Retrieve an object from the bitcask backend
 -spec get(riak_object:bucket(), riak_object:key(), state()) ->
@@ -304,8 +311,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{opts=BitcaskOpts,
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
 drop(#state{ref=Ref,
             partition=Partition,
-            root=DataRoot,
-            opts=BitcaskOpts}=State) ->
+            root=DataRoot}=State) ->
     %% Close the bitcask reference
     bitcask:close(Ref),
 
@@ -321,44 +327,27 @@ drop(#state{ref=Ref,
     CleanupDir = check_for_cleanup_dir(DataRoot, auto),
     move_unused_dirs(CleanupDir, PartitionDirs),
 
+    %% Spawn a process to cleanup the old data files.
+    %% The use of spawn is intentional. We do not
+    %% care if this process dies since any lingering
+    %% files will be cleaned up on the next drop.
+    %% The worst case is that the files hang
+    %% around and take up some disk space.
+    spawn(drop_data_cleanup(PartitionStr, CleanupDir)),
+
     %% Make sure the data directory is now empty
     data_directory_cleanup(PartitionDir),
-
-    case make_data_dir(filename:join([DataRoot,
-                                      PartitionStr])) of
-        {ok, DataDir} ->
-            %% Spawn a process to cleanup the old data files.
-            %% The use of spawn is intentional. We do not
-            %% care if this process dies since any lingering
-            %% files will be cleaned up on the next drop.
-            %% The worst case is that the files hang
-            %% around and take up some disk space.
-            spawn(drop_data_cleanup(PartitionStr, CleanupDir)),
-
-            %% Now open the bitcask and return an updated state
-            %% so this backend can continue processing.
-            case bitcask:open(filename:join(DataRoot, DataDir), BitcaskOpts) of
-                Ref1 when is_reference(Ref1) ->
-                    {ok, State#state{data_dir=DataDir,
-                                     ref=Ref1}};
-                {error, Reason} ->
-                    {error, Reason, State#state{data_dir=DataDir}}
-            end;
-        {error, Reason1} ->
-            {error, Reason1, State}
-    end.
+    {ok, State#state{ref = undefined}}.
 
 %% @doc Returns true if this bitcasks backend contains any
 %% non-tombstone values; otherwise returns false.
 -spec is_empty(state()) -> boolean().
 is_empty(#state{ref=Ref}) ->
-    %% Determining if a bitcask is empty requires us to find at least
-    %% one value that is NOT a tombstone. Accomplish this by doing a fold_keys
-    %% that forcibly bails on the very first key encountered.
-    F = fun(_K, _Acc0) ->
-                throw(found_one_value)
-        end,
-    (catch bitcask:fold_keys(Ref, F, undefined)) /= found_one_value.
+    %% Estimate if we are empty or not as determining for certain
+    %% requires a fold over the keyspace that may block. The estimate may
+    %% return false when this bitcask is actually empty, but it will never
+    %% return true when the bitcask has data.
+    bitcask:is_empty_estimate(Ref).
 
 %% @doc Get the status information for this bitcask backend
 -spec status(state()) -> [{atom(), term()}].
@@ -366,6 +355,14 @@ status(#state{ref=Ref}) ->
     {KeyCount, Status} = bitcask:status(Ref),
     [{key_count, KeyCount}, {status, Status}].
 
+%% @doc Get the size of the bitcask backend (in number of keys)
+-spec data_size(state()) -> undefined | {non_neg_integer(), objects}.
+data_size(State) ->
+    Status = status(State),
+    case proplists:get_value(key_count, Status) of
+        undefined -> undefined;
+        KeyCount -> {KeyCount, objects}
+    end.
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
@@ -737,7 +734,7 @@ drop_test() ->
     %% Stop the backend
     ok = stop(State1),
     os:cmd("rm -rf test/bitcask-backend/*"),
-    ?assertEqual(["42", "auto_cleanup"], lists:sort(DataDirs)),
+    ?assertEqual(["auto_cleanup"], lists:sort(DataDirs)),
     %% The drop cleanup happens in a separate process so
     %% there is no guarantee it has happened yet when
     %% this test runs.

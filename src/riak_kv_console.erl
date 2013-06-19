@@ -32,14 +32,11 @@
          vnode_status/1,
          reip/1,
          ringready/1,
-         transfers/1,
          cluster_info/1,
          down/1,
+         aae_status/1,
+         reformat_indexes/1,
          reload_code/1]).
-
-%% Arrow is 24 chars wide
--define(ARROW, "=======================>").
-
 
 join([NodeStr]) ->
     join(NodeStr, fun riak_core:join/1,
@@ -68,6 +65,10 @@ join(NodeStr, JoinFn, SuccessFmt, SuccessArgs) ->
                 error;
             {error, not_single_node} ->
                 io:format("Failed: This node is already a member of a "
+                          "cluster~n"),
+                error;
+            {error, self_join} ->
+                io:format("Failed: This node cannot join itself in a "
                           "cluster~n"),
                 error;
             {error, _} ->
@@ -243,77 +244,6 @@ ringready([]) ->
             error
     end.
 
-%% Provide a list of nodes with pending partition transfers (i.e. any secondary vnodes)
-%% and list any owned vnodes that are *not* running
--spec(transfers([]) -> ok).
-transfers([]) ->
-    try
-        {DownNodes, Pending} = riak_core_status:transfers(),
-        case DownNodes of
-            [] -> ok;
-            _  -> io:format("Nodes ~p are currently down.\n", [DownNodes])
-        end,
-        F = fun({waiting_to_handoff, Node, Count}, Acc) ->
-                io:format("~p waiting to handoff ~p partitions\n", [Node, Count]),
-                Acc + 1;
-            ({stopped, Node, Count}, Acc) ->
-                io:format("~p does not have ~p primary partitions running\n", [Node, Count]),
-                Acc + 1
-        end,
-        case lists:foldl(F, 0, Pending) of
-            0 ->
-                io:format("No transfers active\n"),
-                ok;
-            _ ->
-                error
-        end
-    catch
-        Exception:Reason ->
-            lager:error("Transfers failed ~p:~p", [Exception,
-                    Reason]),
-            io:format("Transfers failed, see log for details~n"),
-            error
-    end,
-
-    %% Now display active transfers
-    {Xfers, Down} = riak_core_status:all_active_transfers(),
-
-    DisplayXfer =
-        fun({{Mod, Partition}, Node, outbound, active, _Status}) ->
-                print_v1_status(Mod, Partition, Node);
-
-           ({status_v2, Status}) ->
-                %% Display base status
-                Type = proplists:get_value(type, Status),
-                Mod = proplists:get_value(mod, Status),
-                SrcPartition = proplists:get_value(src_partition, Status),
-                TargetPartition = proplists:get_value(target_partition, Status),
-                StartTS = proplists:get_value(start_ts, Status),
-                SrcNode = proplists:get_value(src_node, Status),
-                TargetNode = proplists:get_value(target_node, Status),
-
-                print_v2_status(Type, Mod, {SrcPartition, TargetPartition}, StartTS),
-
-                %% Get info about stats if there is any yet
-                Stats = proplists:get_value(stats, Status),
-
-                print_stats(SrcNode, TargetNode, Stats),
-                io:format("~n");
-
-           (_) ->
-                ignore
-        end,
-    DisplayDown =
-        fun(Node) ->
-                io:format("Node ~p could not be contacted~n", [Node])
-        end,
-
-    io:format("~nActive Transfers:~n~n", []),
-    [DisplayXfer(Xfer) || Xfer <- lists:flatten(Xfers)],
-
-    io:format("~n"),
-    [DisplayDown(Node) || Node <- Down].
-
 cluster_info([OutFile|Rest]) ->
     try
         case lists:reverse(atomify_nodestrs(Rest)) of
@@ -361,16 +291,131 @@ reload_file(Filename) ->
             io:format("Module ~w not yet loaded, skipped.~n", [Mod])
     end.
 
+aae_status([]) ->
+    ExchangeInfo = riak_kv_entropy_info:compute_exchange_info(),
+    aae_exchange_status(ExchangeInfo),
+    io:format("~n"),
+    aae_tree_status(),
+    io:format("~n"), 
+    aae_repair_status(ExchangeInfo).
+
+aae_exchange_status(ExchangeInfo) -> 
+    io:format("~s~n", [string:centre(" Exchanges ", 79, $=)]),
+    io:format("~-49s  ~-12s  ~-12s~n", ["Index", "Last (ago)", "All (ago)"]),
+    io:format("~79..-s~n", [""]),
+    [begin
+         Now = os:timestamp(),
+         LastStr = format_timestamp(Now, LastTS),
+         AllStr = format_timestamp(Now, AllTS),
+         io:format("~-49b  ~-12s  ~-12s~n", [Index, LastStr, AllStr]),
+         ok
+     end || {Index, LastTS, AllTS, _Repairs} <- ExchangeInfo],
+    ok.
+
+aae_repair_status(ExchangeInfo) ->
+    io:format("~s~n", [string:centre(" Keys Repaired ", 79, $=)]),
+    io:format("~-49s  ~s  ~s  ~s~n", ["Index",
+                                      string:centre("Last", 8),
+                                      string:centre("Mean", 8),
+                                      string:centre("Max", 8)]),
+    io:format("~79..-s~n", [""]),
+    [begin
+         io:format("~-49b  ~s  ~s  ~s~n", [Index,
+                                           string:centre(integer_to_list(Last), 8),
+                                           string:centre(integer_to_list(Mean), 8),
+                                           string:centre(integer_to_list(Max), 8)]),
+         ok
+     end || {Index, _, _, {Last,_Min,Max,Mean}} <- ExchangeInfo],
+    ok.
+
+aae_tree_status() ->
+    TreeInfo = riak_kv_entropy_info:compute_tree_info(),
+    io:format("~s~n", [string:centre(" Entropy Trees ", 79, $=)]),
+    io:format("~-49s  Built (ago)~n", ["Index"]),
+    io:format("~79..-s~n", [""]),
+    [begin
+         Now = os:timestamp(),
+         BuiltStr = format_timestamp(Now, BuiltTS),
+         io:format("~-49b  ~s~n", [Index, BuiltStr]),
+         ok
+     end || {Index, BuiltTS} <- TreeInfo],
+    ok.
+
+format_timestamp(_Now, undefined) ->
+    "--";
+format_timestamp(Now, TS) ->
+    riak_core_format:human_time_fmt("~.1f", timer:now_diff(Now, TS)).
+
+parse_int(IntStr) ->
+    try
+        list_to_integer(IntStr)
+    catch
+        error:badarg ->
+            undefined
+    end.
+
+index_reformat_options([], Opts) ->
+    Defaults = [{concurrency, 2}, {batch_size, 100}],
+    AddIfAbsent =
+        fun({Name,Val}, Acc) ->
+            case lists:keymember(Name, 1, Acc) of
+                true ->
+                    Acc;
+                false ->
+                    [{Name, Val} | Acc]
+            end
+        end,
+    lists:foldl(AddIfAbsent, Opts, Defaults);
+index_reformat_options(["--downgrade"], Opts) ->
+    [{downgrade, true} | Opts];
+index_reformat_options(["--downgrade" | More], _Opts) ->
+    io:format("Invalid arguments after downgrade switch : ~p~n", [More]),
+    undefined;
+index_reformat_options([IntStr | Rest], Opts) ->
+    HasConcurrency = lists:keymember(concurrency, 1, Opts),
+    HasBatchSize = lists:keymember(batch_size, 1, Opts),
+    case {parse_int(IntStr), HasConcurrency, HasBatchSize} of
+        {_, true, true} ->
+            io:format("Expected --downgrade instead of ~p~n", [IntStr]),
+            undefined;
+        {undefined, _, _ } ->
+            io:format("Expected integer parameter instead of ~p~n", [IntStr]),
+            undefined;
+        {IntVal, false, false} ->
+            index_reformat_options(Rest, [{concurrency, IntVal} | Opts]);
+        {IntVal, true, false} ->
+            index_reformat_options(Rest, [{batch_size, IntVal} | Opts])
+    end;
+index_reformat_options(_, _) ->
+    undefined.
+
+reformat_indexes(Args) ->
+    Opts = index_reformat_options(Args, []),
+    case Opts of
+        undefined ->
+            io:format("Expected options: <concurrency> <batch size> [--downgrade]~n"),
+            ok;
+        _ ->
+            start_index_reformat(Opts),
+            io:format("index reformat started with options ~p ~n", [Opts]),
+            io:format("check console.log for status information~n"),
+            ok
+    end.
+
+start_index_reformat(Opts) ->
+    spawn(fun() -> run_index_reformat(Opts) end).
+
+run_index_reformat(Opts) ->
+    try riak_kv_util:fix_incorrect_index_entries(Opts)
+    catch
+        Err:Reason ->
+            lager:error("index reformat crashed with error type ~p and reason: ~p",
+                        [Err, Reason])
+    end.
+
 %%%===================================================================
 %%% Private
 %%%===================================================================
-
-datetime_str({_Mega, _Secs, _Micro}=Now) ->
-    datetime_str(calendar:now_to_datetime(Now));
-datetime_str({{Year, Month, Day}, {Hour, Min, Sec}}) ->
-    riak_core_format:fmt("~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B",
-                         [Year,Month,Day,Hour,Min,Sec]).
-
 format_stats([], Acc) ->
     lists:reverse(Acc);
 format_stats([{Stat, V}|T], Acc) ->
@@ -417,54 +462,3 @@ print_vnode_status([StatusItem | RestStatusItems]) ->
             io:format("Status: ~n~p~n", [StatusItem])
     end,
     print_vnode_status(RestStatusItems).
-
-print_v2_status(Type, Mod, {SrcPartition, TargetPartition}, StartTS) ->
-    StartTSStr = datetime_str(StartTS),
-    Running = timer:now_diff(now(), StartTS),
-    RunningStr = riak_core_format:human_time_fmt("~.2f", Running),
-
-    io:format("transfer type: ~s~n", [Type]),
-    io:format("vnode type: ~p~n", [Mod]),
-    case Type of
-        repair ->
-            io:format("source partition: ~p~n", [SrcPartition]),
-            io:format("target partition: ~p~n", [TargetPartition]);
-        _ ->
-            io:format("partition: ~p~n", [TargetPartition])
-    end,
-    io:format("started: ~s [~s ago]~n", [StartTSStr, RunningStr]).
-
-print_v1_status(Mod, Partition, Node) ->
-    io:format("vnode type: ~p~n", [Mod]),
-    io:format("partition: ~p~n", [Partition]),
-    io:format("target node: ~p~n~n", [Node]).
-
-print_stats(SrcNode, TargetNode, no_stats) ->
-    ToFrom = riak_core_format:fmt("~16s ~s ~16s",
-                                  [SrcNode, ?ARROW, TargetNode]),
-    Width = length(ToFrom),
-
-    io:format("last update: no updates seen~n"),
-    io:format("objects transferred: unknown~n~n"),
-    io:format("~s~n", [string:centre("unknown", Width)]),
-    io:format("~s~n", [ToFrom]),
-    io:format("~s~n", [string:centre("unknown", Width)]);
-print_stats(SrcNode, TargetNode, Stats) ->
-    ObjsS = proplists:get_value(objs_per_s, Stats),
-    BytesS = proplists:get_value(bytes_per_s, Stats),
-    LastUpdate = proplists:get_value(last_update, Stats),
-    Diff = timer:now_diff(now(), LastUpdate),
-    DiffStr = riak_core_format:human_time_fmt("~.2f", Diff),
-    Objs = proplists:get_value(objs_total, Stats),
-    ObjsSStr = riak_core_format:fmt("~p Objs/s", [ObjsS]),
-    ByteStr = riak_core_format:human_size_fmt("~.2f", BytesS) ++ "/s",
-    TS = datetime_str(LastUpdate),
-    ToFrom = riak_core_format:fmt("~16s ~s ~16s",
-                                  [SrcNode, ?ARROW, TargetNode]),
-    Width = length(ToFrom),
-
-    io:format("last update: ~s [~s ago]~n", [TS, DiffStr]),
-    io:format("objects transferred: ~p~n~n", [Objs]),
-    io:format("~s~n", [string:centre(ObjsSStr, Width)]),
-    io:format("~s~n", [ToFrom]),
-    io:format("~s~n", [string:centre(ByteStr, Width)]).

@@ -38,6 +38,7 @@
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_pipe/include/riak_pipe.hrl").
+-include("riak_kv_mrc_sink.hrl").
 
 -behaviour(riak_api_pb_service).
 
@@ -48,18 +49,16 @@
          process_stream/3]).
 
 -record(state, {req,
-                req_ctx,
-                client}).
+                req_ctx}).
 
--record(pipe_ctx, {pipe,     % pipe handling mapred request
-                   ref,      % easier-access ref/reqid
-                   timer,    % ref() for timeout send_after
+-record(pipe_ctx, {ref,      % easier-access ref/reqid
+                   mrc,      % #mrc_ctx{}
                    sender,   % {pid(), monitor()} of process sending inputs
+                   sink,     % {pid(), monitor()} of process collecting outputs
                    has_mr_query}). % true if the request contains a query.
 
 init() ->
-    {ok, C} = riak:local_client(),
-    #state{client=C}.
+    #state{}.
 
 decode(Code, Bin) ->
     {ok, riak_pb_codec:decode(Code, Bin)}.
@@ -74,50 +73,47 @@ process(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
         {error, Reason} ->
             {error, {format, Reason}, State};
         {ok, Inputs, Query, Timeout} ->
-            case riak_kv_util:mapred_system() of
-                pipe ->
-                    pipe_mapreduce(Req, State, Inputs, Query, Timeout);
-                legacy ->
-                    legacy_mapreduce(Req, State, Inputs, Query, Timeout)
-            end
+            pipe_mapreduce(Req, State, Inputs, Query, Timeout)
     end.
 
-
-process_stream(#pipe_eoi{ref=ReqId}, ReqId,
+process_stream(#kv_mrc_sink{ref=ReqId,
+                             results=Results,
+                             logs=Logs,
+                             done=Done},
+               ReqId,
                State=#state{req=#rpbmapredreq{},
                             req_ctx=#pipe_ctx{ref=ReqId,
-                                              timer=Timer}}) ->
-    erlang:cancel_timer(Timer),
-    {done, #rpbmapredresp{done = 1}, State#state{req = undefined, req_ctx = undefined}};
-
-process_stream(#pipe_result{ref=ReqId, from=PhaseId, result=Res},
-               ReqId,
-               State=#state{req=#rpbmapredreq{content_type = ContentType},
-                            req_ctx=#pipe_ctx{ref=ReqId, has_mr_query=HasMRQuery}=PipeCtx}) ->
-    case encode_mapred_phase([Res], ContentType, HasMRQuery) of
-        {error, Reason} ->
-            erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
-            %% destroying the pipe will automatically kill the sender
-            riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
-            {error, Reason, State#state{req = undefined, req_ctx = undefined}};
-        Response ->
-            {reply, #rpbmapredresp{phase=PhaseId, response=Response}, State}
-    end;
-
-process_stream(#pipe_log{ref=ReqId, from=From, msg=Msg},
-               ReqId,
-               State=#state{req=#rpbmapredreq{},
-                            req_ctx=#pipe_ctx{ref=ReqId}=PipeCtx}) ->
-    case Msg of
-        {trace, [error], {error, Info}} ->
-            erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
-            %% destroying the pipe will automatically kill the sender
-            riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
+                                              mrc=Mrc}=PipeCtx}) ->
+    case riak_kv_mrc_pipe:error_exists(Logs) of
+        false ->
+            case msgs_for_results(Results, State) of
+                {ok, Msgs} ->
+                    if Done ->
+                            cleanup_pipe(PipeCtx),
+                            %% we could set the done=1 flag on the
+                            %% final results message, but that has
+                            %% never been done, so there are probably
+                            %% client libs that aren't expecting it;
+                            %% play it safe for now
+                            {done,
+                             Msgs++[#rpbmapredresp{done=1}],
+                             clear_state_req(State)};
+                       true ->
+                            {Sink, _} = Mrc#mrc_ctx.sink,
+                            riak_kv_mrc_sink:next(Sink),
+                            {reply, Msgs, State}
+                    end;
+                {error, Reason} ->
+                    destroy_pipe(PipeCtx),
+                    {error, Reason, clear_state_req(State)}
+            end;
+        {true, From, Info} ->
+            destroy_pipe(PipeCtx),
             JsonInfo = {struct, riak_kv_mapred_json:jsonify_pipe_error(
                                   From, Info)},
-            {error, mochijson2:encode(JsonInfo), State#state{req = undefined, req_ctx = undefined}};
-        _ ->
-            {ignore, State}
+            {error,
+             mochijson2:encode(JsonInfo),
+             clear_state_req(State)}
     end;
 
 process_stream({'DOWN', Ref, process, Pid, Reason}, Ref,
@@ -132,43 +128,26 @@ process_stream({'DOWN', Ref, process, Pid, Reason}, Ref,
        true ->
             %% something went wrong sending inputs - tell the client
             %% about it, and shutdown the pipe
-            erlang:cancel_timer(PipeCtx#pipe_ctx.timer),
-            riak_pipe:destroy(PipeCtx#pipe_ctx.pipe),
+            destroy_pipe(PipeCtx),
             lager:error("Error sending inputs: ~p", [Reason]),
             {error, {format, "Error sending inputs: ~p", [Reason]},
-             State#state{req=undefined, req_ctx=undefined}}
+             clear_state_req(State)}
     end;
-
+process_stream({'DOWN', Mon, process, Pid, Reason}, _,
+               State=#state{req=#rpbmapredreq{},
+                            req_ctx=#pipe_ctx{sink={Pid, Mon}}=PipeCtx}) ->
+    %% the sink died, which it shouldn't be able to do before
+    %% delivering our final results
+    destroy_pipe(PipeCtx),
+    lager:error("Error receiving outputs: ~p", [Reason]),
+    {error,
+     {format, "Error receiving outputs: ~p", [Reason]},
+     clear_state_req(State)};
 process_stream({pipe_timeout, Ref}, Ref,
                State=#state{req=#rpbmapredreq{},
-                            req_ctx=#pipe_ctx{ref=Ref,pipe=Pipe}}) ->
-    %% destroying the pipe will automatically kill the sender
-    riak_pipe:destroy(Pipe),
-    {error, "timeout", State#state{req=undefined, req_ctx=undefined}};
-
-%% LEGACY Handle response from mapred_stream/mapred_bucket_stream
-process_stream({flow_results, ReqId, done}, ReqId,
-            State=#state{req=#rpbmapredreq{}, req_ctx=ReqId}) ->
-    {done, #rpbmapredresp{done = 1}, State#state{req = undefined, req_ctx = undefined}};
-
-process_stream({flow_results, ReqId, {error, Reason}}, ReqId,
-            State=#state{req=#rpbmapredreq{}, req_ctx=ReqId}) ->
-    {error, {format, Reason}, State#state{req=undefined, req_ctx=undefined}};
-
-process_stream({flow_results, PhaseId, ReqId, Res}, ReqId,
-            State=#state{req=#rpbmapredreq{content_type = ContentType},
-                         req_ctx=ReqId}) ->
-    case encode_mapred_phase(Res, ContentType, true) of
-        {error, Reason} ->
-            {error, {format, Reason},
-             State#state{req = undefined, req_ctx = undefined}};
-        Response ->
-            {reply, #rpbmapredresp{phase=PhaseId,response=Response}, State}
-    end;
-
-process_stream({flow_error, ReqId, Error}, ReqId,
-            State=#state{req=#rpbmapredreq{}, req_ctx=ReqId}) ->
-    {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}};
+                            req_ctx=#pipe_ctx{ref=Ref}=PipeCtx}) ->
+    destroy_pipe(PipeCtx),
+    {error, "timeout", clear_state_req(State)};
 
 process_stream(_,_,State) -> % Ignore any late replies from gen_servers/messages from fsms
     {ignore, State}.
@@ -178,69 +157,31 @@ process_stream(_,_,State) -> % Ignore any late replies from gen_servers/messages
 %% Internal functions
 %% ===================================================================
 
+clear_state_req(State) ->
+     State#state{req=undefined, req_ctx=undefined}.
+
+destroy_pipe(#pipe_ctx{mrc=Mrc}) ->
+    riak_kv_mrc_pipe:destroy_sink(Mrc).
+
+cleanup_pipe(#pipe_ctx{mrc=Mrc}) ->
+    riak_kv_mrc_pipe:cleanup_sink(Mrc).
+
 pipe_mapreduce(Req, State, Inputs, Query, Timeout) ->
-    try riak_kv_mrc_pipe:mapred_stream(Query) of
-        {{ok, Pipe}, _NumKeeps} ->
-            PipeRef = (Pipe#pipe.sink)#fitting.ref,
-            Timer = erlang:send_after(Timeout, self(),
-                                      {pipe_timeout, PipeRef}),
-            {InputSender, SenderMonitor} =
-                riak_kv_mrc_pipe:send_inputs_async(Pipe, Inputs),
-            Ctx = #pipe_ctx{pipe=Pipe,
-                            ref=PipeRef,
-                            timer=Timer,
-                            sender={InputSender, SenderMonitor},
+    case riak_kv_mrc_pipe:mapred_stream_sink(Inputs, Query, Timeout) of
+        {ok, #mrc_ctx{ref=PipeRef,
+                      sink={Sink,SinkMon},
+                      sender={Sender,SenderMon}}=Mrc} ->
+            riak_kv_mrc_sink:next(Sink),
+            %% pulling ref, sink, and sender out to make matches less
+            %% nested in process callbacks
+            Ctx = #pipe_ctx{ref=PipeRef,
+                            mrc=Mrc,
+                            sink={Sink,SinkMon},
+                            sender={Sender,SenderMon},
                             has_mr_query = (Query /= [])},
-            {reply, {stream, PipeRef}, State#state{req=Req, req_ctx=Ctx}}
-    catch throw:{badarg, Fitting, Reason} ->
+            {reply, {stream, PipeRef}, State#state{req=Req, req_ctx=Ctx}};
+        {error, {Fitting, Reason}} ->
             {error, {format, "Phase ~p: ~s", [Fitting, Reason]}, State}
-    end.
-
-legacy_mapreduce(#rpbmapredreq{content_type=ContentType}=Req,
-                 #state{client=C}=State, Inputs, Query, Timeout) ->
-    ResultTransformer = get_result_transformer(ContentType),
-    case is_binary(Inputs) orelse is_key_filter(Inputs) of
-        true ->
-            case C:mapred_bucket_stream(Inputs, Query,
-                                        self(), ResultTransformer, Timeout) of
-                {stop, Error} ->
-                    {error, {format, Error}, State};
-
-                {ok, ReqId} ->
-                    {reply, {stream,ReqId}, State#state{req = Req, req_ctx = ReqId}}
-            end;
-        false ->
-            case is_list(Inputs) of
-                true ->
-                    case C:mapred_stream(Query, self(), ResultTransformer, Timeout) of
-                        {stop, Error} ->
-                            {error, {format, Error}, State};
-
-                        {ok, {ReqId, FSM}} ->
-                            luke_flow:add_inputs(FSM, Inputs),
-                            luke_flow:finish_inputs(FSM),
-                            {reply, {stream,ReqId}, State#state{req = Req, req_ctx = ReqId}}
-                    end;
-                false ->
-                    case is_tuple(Inputs) andalso size(Inputs)==4 andalso
-                        element(1, Inputs) == modfun andalso
-                        is_atom(element(2, Inputs)) andalso
-                        is_atom(element(3, Inputs)) of
-                        true ->
-                            case C:mapred_stream(Query, self(), ResultTransformer, Timeout) of
-                                {stop, Error} ->
-                                    {error, {format,Error}, State};
-
-                                {ok, {ReqId, FSM}} ->
-                                    C:mapred_dynamic_inputs_stream(
-                                      FSM, Inputs, Timeout),
-                                    luke_flow:finish_inputs(FSM),
-                                    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}}
-                            end;
-                        false ->
-                            {error, {format, bad_mapred_inputs}, State}
-                    end
-            end
     end.
 
 %% Decode a mapred query
@@ -252,12 +193,24 @@ decode_mapred_query(Query, <<"application/x-erlang-binary">>) ->
 decode_mapred_query(_Query, ContentType) ->
     {error, {unknown_content_type, ContentType}}.
 
-%% Detect key filtering
-is_key_filter({Bucket, Filters}) when is_binary(Bucket),
-                                      is_list(Filters) ->
-    true;
-is_key_filter(_) ->
-    false.
+%% PB can only return responses for one phase at a time,
+%% so we have to build a message for each
+msgs_for_results(Results, #state{req=Req, req_ctx=PipeCtx}) ->
+    msgs_for_results(Results,
+                   Req#rpbmapredreq.content_type,
+                   PipeCtx#pipe_ctx.has_mr_query,
+                   []).
+
+msgs_for_results([{PhaseId, Results}|Rest], CType, HasMRQuery, Acc) ->
+    case encode_mapred_phase(Results, CType, HasMRQuery) of
+        {error, _}=Error ->
+            Error;
+        Encoded ->
+            Msg=#rpbmapredresp{phase=PhaseId, response=Encoded},
+            msgs_for_results(Rest, CType, HasMRQuery, [Msg|Acc])
+    end;
+msgs_for_results([], _, _, Acc) ->
+    {ok, lists:reverse(Acc)}.
 
 %% Convert a map/reduce phase to the encoding requested
 encode_mapred_phase(Res, <<"application/json">>, HasMRQuery) ->
@@ -267,11 +220,3 @@ encode_mapred_phase(Res, <<"application/x-erlang-binary">>, _) ->
     term_to_binary(Res);
 encode_mapred_phase(_Res, ContentType, _) ->
     {error, {unknown_content_type, ContentType}}.
-
-%% get a result transformer for the content-type
-%% jsonify not_founds for application/json
-%% do nothing otherwise
-get_result_transformer(<<"application/json">>) ->
-    fun riak_kv_mapred_json:jsonify_not_found/1;
-get_result_transformer(_) ->
-    undefined.

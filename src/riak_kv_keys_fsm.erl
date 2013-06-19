@@ -49,8 +49,7 @@
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
--record(state, {client_type :: plain | mapred,
-                from :: from()}).
+-record(state, {from :: from()}).
 
 -include("riak_kv_dtrace.hrl").
 
@@ -78,44 +77,36 @@ req(Bucket, ItemFilter) ->
 %% the number of primary preflist vnodes the operation
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
-init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout, ClientType]) ->
+init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout]) ->
     riak_core_dtrace:put_tag(io_lib:format("~p", [Bucket])),
     ClientNode = atom_to_list(node(ClientPid)),
     PidStr = pid_to_list(ClientPid),
     FilterX = if ItemFilter == none -> 0;
                  true               -> 1
               end,
-    case ClientType of
-        %% Link to the mapred job so we die if the job dies
-        mapred ->
-            ?DTRACE(?C_KEYS_INIT, [1, FilterX],
-                    [<<"mapred">>, ClientNode, PidStr]),
-            link(ClientPid);
-        _ ->
-            ?DTRACE(?C_KEYS_INIT, [2, FilterX],
-                    [<<"other">>, ClientNode, PidStr])
-    end,
+    %% "other" is a legacy term from when MapReduce used this FSM (in
+    %% which case, the string "mapred" would appear
+    ?DTRACE(?C_KEYS_INIT, [2, FilterX],
+            [<<"other">>, ClientNode, PidStr]),
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
     %% Construct the key listing request
     Req = req(Bucket, ItemFilter),
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{client_type=ClientType, from=From}}.
+     #state{from=From}}.
 
 process_results({From, Bucket, Keys},
-                StateData=#state{client_type=ClientType,
-                                 from={raw, ReqId, ClientPid}}) ->
+                StateData=#state{from={raw, ReqId, ClientPid}}) ->
     %% TODO: have caller give us the Idx number.
     ?DTRACE(?C_KEYS_PROCESS_RESULTS, [length(Keys)], []),
-    process_keys(ClientType, Bucket, Keys, ReqId, ClientPid),
+    process_keys(Bucket, Keys, ReqId, ClientPid),
     riak_kv_vnode:ack_keys(From), % tell that vnode we're ready for more
     {ok, StateData};
 process_results({Bucket, Keys},
-                StateData=#state{client_type=ClientType,
-                                 from={raw, ReqId, ClientPid}}) ->
+                StateData=#state{from={raw, ReqId, ClientPid}}) ->
     ?DTRACE(?C_KEYS_PROCESS_RESULTS, [length(Keys)], []),
-    process_keys(ClientType, Bucket, Keys, ReqId, ClientPid),
+    process_keys(Bucket, Keys, ReqId, ClientPid),
     {ok, StateData};
 process_results(done, StateData) ->
     {done, StateData};
@@ -124,30 +115,15 @@ process_results({error, Reason}, _State) ->
     {error, Reason}.
 
 finish({error, Error},
-       StateData=#state{from={raw, ReqId, ClientPid},
-                        client_type=ClientType}) ->
+       StateData=#state{from={raw, ReqId, ClientPid}}) ->
     ?DTRACE(?C_KEYS_FINISH, [-1], []),
-    case ClientType of
-        mapred ->
-            %% An error occurred or the timeout interval elapsed
-            %% so all we can do now is die so that the rest of the
-            %% MapReduce processes will also die and be cleaned up.
-            exit(Error);
-        plain ->
-            %% Notify the requesting client that an error
-            %% occurred or the timeout has elapsed.
-            ClientPid ! {ReqId, Error}
-    end,
+    %% Notify the requesting client that an error
+    %% occurred or the timeout has elapsed.
+    ClientPid ! {ReqId, Error},
     {stop, normal, StateData};
 finish(clean,
-       StateData=#state{from={raw, ReqId, ClientPid},
-                        client_type=ClientType}) ->
-    case ClientType of
-        mapred ->
-            luke_flow:finish_inputs(ClientPid);
-        plain ->
-            ClientPid ! {ReqId, done}
-    end,
+       StateData=#state{from={raw, ReqId, ClientPid}}) ->
+    ClientPid ! {ReqId, done},
     ?DTRACE(?C_KEYS_FINISH, [0], []),
     {stop, normal, StateData}.
 
@@ -163,7 +139,7 @@ finish(clean,
 ack_keys({Pid, Ref}) ->
     Pid ! {Ref, ok}.
 
-process_keys(plain, _Bucket, Keys, ReqId, ClientPid) ->
+process_keys(_Bucket, Keys, ReqId, ClientPid) ->
     case use_ack_backpressure() of
         true ->
             Monitor = erlang:monitor(process, ClientPid),
@@ -176,10 +152,4 @@ process_keys(plain, _Bucket, Keys, ReqId, ClientPid) ->
             end;
         false ->
             ClientPid ! {ReqId, {keys, Keys}}
-    end;
-process_keys(mapred, Bucket, Keys, _ReqId, ClientPid) ->
-    try
-        luke_flow:add_inputs(ClientPid, [{Bucket, Key} || Key <- Keys])
-    catch _:_ ->
-            exit(self(), normal)
     end.

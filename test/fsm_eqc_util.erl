@@ -183,6 +183,8 @@ start_mock_servers() ->
     application:load(riak_core),
     application:start(crypto),
     application:start(folsom),
+    start_fake_get_put_monitor(),
+    riak_core_stat_cache:start_link(),
     riak_kv_stat:register_stats(),
     riak_core_ring_events:start_link(),
     riak_core_node_watcher_events:start_link(),
@@ -191,6 +193,7 @@ start_mock_servers() ->
     ok.
 
 cleanup_mock_servers() ->
+    stop_fake_get_put_monitor(),
     application:stop(folsom),
     application:stop(riak_core).
 
@@ -240,6 +243,61 @@ wait_for_req_id(ReqId, Pid) ->
             {anything, Anything1}
     after 400 ->
             timeout
+    end.
+
+start_fake_get_put_monitor() ->
+    meck:new(riak_kv_get_put_monitor),
+    meck:expect(riak_kv_get_put_monitor, get_fsm_spawned,
+                fun(_Pid) ->  ok  end),
+    meck:expect(riak_kv_get_put_monitor, put_fsm_spawned,
+                fun(_Pid) ->  ok  end),
+    meck:expect(riak_kv_get_put_monitor, gets_active,
+                fun() -> meck:passthrough([])
+                end).
+
+stop_fake_get_put_monitor() ->
+    meck:unload(riak_kv_get_put_monitor).
+
+is_get_put_last_cast(Type, Pid) ->
+    case last_spawn(lists:reverse(meck:history(riak_kv_get_put_monitor))) of
+        {get_fsm_spawned, Pid} when Type == get ->
+            true;
+        {put_fsm_spawned, Pid} when Type == put ->
+            true;
+        _ ->
+            false
+    end.
+
+%% Just get the last `XXX_fsm_spawned/1' from the list
+%% of meck history calls.
+%% Expects a reversed meck:history()
+last_spawn([]) ->
+    undefined;
+last_spawn([{_MPid, {_Mod, TypeFun, [Pid]}, ok}|_Rest]) ->
+    {TypeFun, Pid};
+last_spawn([_Hist|Rest]) ->
+    last_spawn(Rest).
+
+
+
+start_fake_rng(ProcessName) ->
+    Pid = spawn_link(?MODULE, fake_rng, [1]),
+    register(ProcessName, Pid),
+    {ok, Pid}.
+
+set_fake_rng(ProcessName, Val) ->
+    gen_server:cast(ProcessName, {set, Val}).
+
+get_fake_rng(ProcessName) ->
+    gen_server:call(ProcessName, get).
+
+fake_rng(N) ->
+    receive
+        {'$gen_call', From, get} ->
+            gen_server:reply(From, N),
+            fake_rng(N);
+        {'$gen_cast', {set, NewN}} ->
+            fake_rng(NewN)
     end.
 
 -endif. % EQC

@@ -2,7 +2,7 @@
 %%
 %% riak_put_fsm: coordination of Riak PUT requests
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -32,7 +32,7 @@
 
 -behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
--export([start/6,start/7]).
+-export([start/3, start/6,start/7]).
 -export([start_link/3,start_link/6,start_link/7]).
 -ifdef(TEST).
 -export([test_link/4]).
@@ -64,7 +64,11 @@
         {details, detail()} |
         %% Put the value as-is, do not increment the vclocks
         %% to make the value a frontier.
-        asis.
+        asis |
+        %% Use a sloppy quorum, default = true
+        {sloppy_quorum, boolean()} |
+        %% The N value, default = value from bucket properties
+        {n_val, pos_integer()}.
 
 -type options() :: [option()].
 
@@ -76,6 +80,7 @@
                 n :: pos_integer(),
                 w :: non_neg_integer(),
                 dw :: non_neg_integer(),
+                pw :: non_neg_integer(),
                 coord_pl_entry :: {integer(), atom()},
                 preflist2 :: riak_core_apl:preflist2(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
@@ -93,7 +98,7 @@
                 put_usecs :: undefined | non_neg_integer(),
                 timing = [] :: [{atom(), {non_neg_integer(), non_neg_integer(),
                                           non_neg_integer()}}],
-                reply, % reply sent to client
+                reply, % reply sent to client,
                 tracked_bucket=false :: boolean() %% tracke per bucket stats
                }).
 
@@ -105,6 +110,9 @@
 %% ===================================================================
 %% Public API
 %% ===================================================================
+
+start(From, Object, PutOptions) ->
+    gen_fsm:start(?MODULE, [From, Object, PutOptions], []).
 
 %% In place only for backwards compatibility
 start(ReqId,RObj,W,DW,Timeout,ResultPid) ->
@@ -121,7 +129,23 @@ start_link(ReqId,RObj,W,DW,Timeout,ResultPid,Options) ->
     start_link({raw, ReqId, ResultPid}, RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options]).
 
 start_link(From, Object, PutOptions) ->
-    gen_fsm:start_link(?MODULE, [From, Object, PutOptions], []).
+    case whereis(riak_kv_put_fsm_sj) of
+        undefined ->
+            %% Overload protection disabled
+            Args = [From, Object, PutOptions, true],
+            gen_fsm:start_link(?MODULE, Args, []);
+        _ ->
+            Args = [From, Object, PutOptions, false],
+            case sidejob_supervisor:start_child(riak_kv_put_fsm_sj,
+                                                gen_fsm, start_link,
+                                                [?MODULE, Args, []]) of
+                {error, overload} ->
+                    riak_kv_util:overload_reply(From),
+                    {error, overload};
+                {ok, Pid} ->
+                    {ok, Pid}
+            end
+    end.
 
 %% ===================================================================
 %% Test API
@@ -137,7 +161,7 @@ start_link(From, Object, PutOptions) ->
 %%
 %% As test, but linked to the caller
 test_link(From, Object, PutOptions, StateProps) ->
-    gen_fsm:start_link(?MODULE, {test, [From, Object, PutOptions], StateProps}, []).
+    gen_fsm:start_link(?MODULE, {test, [From, Object, PutOptions, true], StateProps}, []).
 
 -endif.
 
@@ -147,12 +171,13 @@ test_link(From, Object, PutOptions, StateProps) ->
 %% ====================================================================
 
 %% @private
-init([From, RObj, Options]) ->
+init([From, RObj, Options, Monitor]) ->
     BKey = {Bucket, Key} = {riak_object:bucket(RObj), riak_object:key(RObj)},
     StateData = add_timing(prepare, #state{from = From,
                                            robj = RObj,
                                            bkey = BKey,
                                            options = Options}),
+    (Monitor =:= true) andalso riak_kv_get_put_monitor:put_fsm_spawned(self()),
     riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
     case riak_kv_util:is_x_deleted(RObj) of
         true  ->
@@ -185,13 +210,23 @@ init({test, Args, StateProps}) ->
 prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                      bkey = BKey,
                                      options = Options}) ->
-    {ok,Ring} = riak_core_ring_manager:get_my_ring(),
-    BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj), Ring),
+    BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
     DocIdx = riak_core_util:chash_key(BKey),
-    N = proplists:get_value(n_val,BucketProps),
+    N = case proplists:get_value(n_val, Options) of
+            undefined ->
+                proplists:get_value(n_val,BucketProps);
+            N_val when is_integer(N_val), N_val > 0 ->
+                %% TODO: No sanity check of this value vs. "real" n_val.
+                N_val
+        end,
     StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
+    Preflist2 = case proplists:get_value(sloppy_quorum, Options, true) of
+                    true ->
+                        riak_core_apl:get_apl_ann(DocIdx, N, UpNodes);
+                    false ->
+                        riak_core_apl:get_primary_apl(DocIdx, N, UpNodes)
+                end,
     %% Check if this node is in the preference list so it can coordinate
     LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
                         Node == node()],
@@ -203,18 +238,20 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
             process_reply({error, all_nodes_down}, StateData0);
         {_, true} ->
             %% This node is not in the preference list
-            %% forward on to the first node
-            [{{_Idx, CoordNode},_Type}|_] = Preflist2,
-            Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
+            %% forward on to a random node
+            ListPos = crypto:rand_uniform(1, length(Preflist2)+1),
+            {{_Idx, CoordNode},_Type} = lists:nth(ListPos, Preflist2),
+            _Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
             ?DTRACE(?C_PUT_FSM_PREPARE, [1],
                     ["prepare", atom2list(CoordNode)]),
-            case rpc:call(CoordNode,riak_kv_put_fsm_sup,start_put_fsm,[CoordNode,[From,RObj,Options]],Timeout) of
-                {ok, _Pid} ->
-                    ?DTRACE(?C_PUT_FSM_PREPARE, [2],
+            try
+                 proc_lib:spawn(CoordNode,riak_kv_put_fsm,start_link,[From,RObj,Options]),
+                 ?DTRACE(?C_PUT_FSM_PREPARE, [2],
                             ["prepare", atom2list(CoordNode)]),
-                    riak_kv_stat:update(coord_redir),
-                    {stop, normal, StateData0};
-                {_, Reason} -> % {error,_} or {badrpc,_}
+                 riak_kv_stat:update(coord_redir),
+                 {stop, normal, StateData0}
+            catch
+                _:Reason ->
                     ?DTRACE(?C_PUT_FSM_PREPARE, [-2],
                             ["prepare", dtrace_errstr(Reason)]),
                     lager:error("Unable to forward put for ~p to ~p - ~p\n",
@@ -230,7 +267,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                _ ->
                                    undefined
                            end,
-            CoordPlNode = case CoordPLEntry of 
+            CoordPlNode = case CoordPLEntry of
                               undefined  -> undefined;
                               {_Idx, Nd} -> atom2list(Nd)
                           end,
@@ -268,11 +305,14 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
         _ ->
             %% DW must always be 1 with node-based vclocks.
             %% The coord vnode is responsible for incrementing the vclock
-            DW = erlang:min(DW1, erlang:max(1, W))
+            DW = erlang:max(DW1, 1)
     end,
+
+    IdxType = [{Part, Type} || {{Part, _Node}, Type} <- Preflist2],
     NumPrimaries = length([x || {_,primary} <- Preflist2]),
     NumVnodes = length(Preflist2),
-    MinVnodes = erlang:max(1, erlang:max(W, DW)), % always need at least one vnode
+    MinVnodes = lists:max([1, W, DW, PW]), % always need at least one vnode
+
     if
         PW =:= error ->
             process_reply({error, {pw_val_violation, PW0}}, StateData0);
@@ -300,7 +340,9 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                 if Disable -> [];
                    true -> get_hooks(postcommit, BucketProps)
                 end,
-            StateData1 = StateData0#state{n=N, w=W, dw=DW, allowmult=AllowMult,
+            StateData1 = StateData0#state{n=N,
+                                          w=W,
+                                          pw=PW, dw=DW, allowmult=AllowMult,
                                           precommit = Precommit,
                                           postcommit = Postcommit,
                                           req_id = ReqId,
@@ -308,7 +350,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
             Options = flatten_options(proplists:unfold(Options0 ++ ?DEFAULT_OPTS), []),
             StateData2 = handle_options(Options, StateData1),
             StateData3 = apply_updates(StateData2),
-            StateData = init_putcore(StateData3),
+            StateData = init_putcore(StateData3, IdxType),
             ?DTRACE(?C_PUT_FSM_VALIDATE, [N, W, PW, DW], []),
             case Precommit of
                 [] -> % Nothing to run, spare the timing code
@@ -363,6 +405,8 @@ execute_local(StateData=#state{robj=RObj, req_id = ReqId,
     %% to use for the remotes. (Ignore optimization for N=1 case for now).
     new_state(waiting_local_vnode, StateData2).
 
+
+
 %% @private
 waiting_local_vnode(request_timeout, StateData) ->
     ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [-1], []),
@@ -370,11 +414,11 @@ waiting_local_vnode(request_timeout, StateData) ->
 waiting_local_vnode(Result, StateData = #state{putcore = PutCore}) ->
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
     case Result of
-        {fail, Idx, _ReqId} ->
+        {fail, Idx, ReqIdSubvertedToReason} ->
             ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [-1],
                     [integer_to_list(Idx)]),
             %% Local vnode failure is enough to sink whole operation
-            process_reply({error, local_put_failed}, StateData#state{putcore = UpdPutCore1});
+            process_reply({error, ReqIdSubvertedToReason}, StateData#state{putcore = UpdPutCore1});
         {w, Idx, _ReqId} ->
             ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [1],
                     [integer_to_list(Idx)]),
@@ -470,8 +514,8 @@ finish(timeout, StateData = #state{timing = Timing, reply = Reply,
         _Ok ->
             %% TODO: Improve reporting of timing
             %% For now can add debug tracers to view the return from calc_timing
-            {Duration, _Stages} = calc_timing(Timing),
-            riak_kv_stat:update({put_fsm_time, Bucket, Duration, StatTracked}),
+            {Duration, Stages} = riak_kv_fsm_timing:calc_timing(Timing),
+            riak_kv_stat:update({put_fsm_time, Bucket, Duration, Stages, StatTracked}),
             ?DTRACE(?C_PUT_FSM_FINISH, [0, Duration], [])
     end,
     {stop, normal, StateData};
@@ -597,15 +641,23 @@ handle_options([{returnbody, false}|T], State = #state{postcommit = Postcommit})
                                           dw=erlang:max(1,State#state.dw),
                                           returnbody=false})
     end;
+handle_options([{counter_op, _Amt}=COP|T], State) ->
+    VNodeOpts = [COP | State#state.vnode_options],
+    handle_options(T, State#state{vnode_options=VNodeOpts});
+handle_options([{K, _V} = Opt|T], State = #state{vnode_options = VnodeOpts})
+  when K == sloppy_quorum; K == n_val ->
+    %% Take these options as-is
+    handle_options(T, State#state{vnode_options = [Opt|VnodeOpts]});
 handle_options([{_,_}|T], State) -> handle_options(T, State).
 
-init_putcore(State = #state{n = N, w = W, dw = DW, allowmult = AllowMult,
-                            returnbody = ReturnBody}) ->
-    PutCore = riak_kv_put_core:init(N, W, DW,
-                                    N-W+1,   % cannot ever get W replies
+init_putcore(State = #state{n = N, w = W, pw = PW, dw = DW, allowmult = AllowMult,
+                            returnbody = ReturnBody}, IdxType) ->
+    PutCore = riak_kv_put_core:init(N, W, PW, DW,
+                                    N-PW+1,  % cannot ever get PW replies
                                     N-DW+1,  % cannot ever get DW replies
                                     AllowMult,
-                                    ReturnBody),
+                                    ReturnBody,
+                                    IdxType),
     State#state{putcore = PutCore}.
 
 
@@ -644,14 +696,10 @@ update_last_modified(RObj) ->
     %% which should serve the same purpose.  It was possible to generate two
     %% objects with the same vclock on 0.14.2 if the same clientid was used in
     %% the same second.  It can be revisited post-1.0.0.
-    Now = erlang:now(),
-    NewMD = dict:store(?MD_VTAG, make_vtag(Now),
+    Now = os:timestamp(),
+    NewMD = dict:store(?MD_VTAG, riak_kv_util:make_vtag(Now),
                        dict:store(?MD_LASTMOD, Now, MD0)),
     riak_object:update_metadata(RObj, NewMD).
-
-make_vtag(Now) ->
-    <<HashAsNum:128/integer>> = crypto:md5(term_to_binary({node(), Now})),
-    riak_core_util:integer_to_list(HashAsNum,62).
 
 %% Invokes the hook and returns a tuple of
 %% {Lang, Called, Result}
@@ -829,7 +877,7 @@ client_info([], _StateData, Info) ->
     Info;
 client_info([timing | Rest], StateData = #state{timing = Timing}, Info) ->
     %% Duration is time from receiving request to responding
-    {ResponseUsecs, Stages} = calc_timing(Timing),
+    {ResponseUsecs, Stages} = riak_kv_fsm_timing:calc_timing(Timing),
     client_info(Rest, StateData, [{response_usecs, ResponseUsecs},
                                   {stages, Stages} | Info]).
 
@@ -839,29 +887,7 @@ default_details() ->
 
 %% Add timing information to the state
 add_timing(Stage, State = #state{timing = Timing}) ->
-    State#state{timing = [{Stage, os:timestamp()} | Timing]}.
-
-%% Calc timing information - stored as {Stage, StageStart} in reverse order.
-%% ResponseUsecs is calculated as time from reply to start.
-calc_timing([{Stage, Now} | Timing]) ->
-    ReplyNow = case Stage of
-                   reply ->
-                       Now;
-                   _ ->
-                       undefined
-               end,
-    calc_timing(Timing, Now, ReplyNow, []).
-
-%% Each timing stage has start time.
-calc_timing([], StageEnd, ReplyNow, Stages) ->
-    %% StageEnd is prepare time
-    {timer:now_diff(ReplyNow, StageEnd), Stages};
-calc_timing([{reply, ReplyNow}|_]=Timing, StageEnd, undefined, Stages) ->
-    %% Populate ReplyNow then handle normally.
-    calc_timing(Timing, StageEnd, ReplyNow, Stages);
-calc_timing([{Stage, StageStart} | Rest], StageEnd, ReplyNow, Stages) ->
-    calc_timing(Rest, StageStart, ReplyNow,
-                [{Stage, timer:now_diff(StageEnd, StageStart)} | Stages]).
+    State#state{timing = riak_kv_fsm_timing:add_timing(Stage, Timing)}.
 
 atom2list(A) when is_atom(A) ->
     atom_to_list(A);
@@ -870,15 +896,3 @@ atom2list(P) when is_pid(P)->
 
 dtrace_errstr(Term) ->
     io_lib:format("~P", [Term, 12]).
-
-%% ===================================================================
-%% EUnit tests
-%% ===================================================================
--ifdef(TEST).
-
-make_vtag_test() ->
-    crypto:start(),
-    ?assertNot(make_vtag(now()) =:=
-               make_vtag(now())).
-
--endif.

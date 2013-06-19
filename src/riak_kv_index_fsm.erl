@@ -2,7 +2,7 @@
 %%
 %% riak_index_fsm: Manage secondary index queries.
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -40,82 +40,156 @@
 -include_lib("riak_kv_vnode.hrl").
 
 -export([init/2,
+         plan/2,
+         process_results/3,
          process_results/2,
          finish/2]).
+-export([use_ack_backpressure/0,
+         req/3]).
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
--record(state, {client_type :: plain | mapred,
-                from :: from()}).
+-record(state, {from :: from(),
+                merge_sort_buffer :: sms:sms(),
+                max_results :: all | pos_integer(),
+                results_sent = 0 :: non_neg_integer()}).
+
+%% @doc Returns `true' if the new ack-based backpressure index
+%% protocol should be used.  This decision is based on the
+%% `index_backpressure' setting in `riak_kv''s application
+%% environment.
+-spec use_ack_backpressure() -> boolean().
+use_ack_backpressure() ->
+    riak_core_capability:get({riak_kv, index_backpressure}, false) == true.
+
+%% @doc Construct the correct index command record.
+-spec req(binary(), term(), term()) -> term().
+req(Bucket, ItemFilter, Query) ->
+    case use_ack_backpressure() of
+        true ->
+            ?KV_INDEX_REQ{bucket=Bucket,
+                          item_filter=ItemFilter,
+                          qry=Query};
+        false ->
+            #riak_kv_index_req_v1{bucket=Bucket,
+                                  item_filter=ItemFilter,
+                                  qry=Query}
+    end.
 
 %% @doc Return a tuple containing the ModFun to call per vnode,
 %% the number of primary preflist vnodes the operation
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
-init(From={_, _, ClientPid}, [Bucket, ItemFilter, Query, Timeout, ClientType]) ->
-    case ClientType of
-        %% Link to the mapred job so we die if the job dies
-        mapred ->
-            link(ClientPid);
-        _ ->
-            ok
-    end,
+init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout]) ->
+    %% http://erlang.org/doc/reference_manual/expressions.html#id77404
+    %% atom() > number()
+    init(From, [Bucket, ItemFilter, Query, Timeout, all]);
+init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults]) ->
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
     %% Construct the key listing request
-    Req = ?KV_INDEX_REQ{bucket=Bucket,
-                        item_filter=ItemFilter,
-                        qry=Query},
+    Req = req(Bucket, ItemFilter, Query),
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{client_type=ClientType, from=From}}.
+     #state{from=From, max_results=MaxResults}}.
 
+plan(CoverageVNodes, State) ->
+    {ok, State#state{merge_sort_buffer=sms:new(CoverageVNodes)}}.
+
+process_results(_VNode, {error, Reason}, _State) ->
+    {error, Reason};
+process_results(_VNode, {From, _Bucket, _Results}, State=#state{max_results=X, results_sent=Y})  when Y >= X ->
+    riak_kv_vnode:stop_fold(From),
+    {done, State};
+process_results(VNode, {From, Bucket, Results}, State) ->
+    case process_results(VNode, {Bucket, Results}, State) of
+        {ok, State2} ->
+            riak_kv_vnode:ack_keys(From),
+            {ok, State2};
+        {done, State2} ->
+            riak_kv_vnode:stop_fold(From),
+            {done, State2}
+    end;
+process_results(VNode, {_Bucket, Results}, State) ->
+    #state{merge_sort_buffer=MergeSortBuffer,
+           from={raw, ReqId, ClientPid}, results_sent=ResultsSent, max_results=MaxResults} = State,
+    %% add new results to buffer
+    {ToSend, NewBuff} = update_buffer(VNode, Results, MergeSortBuffer),
+    LenToSend = length(ToSend),
+    {Response, ResultsLen, ResultsToSend} = get_results_to_send(LenToSend, ToSend, ResultsSent, MaxResults),
+    send_results(ClientPid, ReqId, ResultsToSend),
+    {Response, State#state{merge_sort_buffer=NewBuff, results_sent=ResultsSent+ResultsLen}};
+process_results(VNode, done, State) ->
+    %% tell the sms buffer about the done vnode
+    #state{merge_sort_buffer=MergeSortBuffer} = State,
+    BufferWithNewResults = sms:add_results(VNode, done, MergeSortBuffer),
+    {done, State#state{merge_sort_buffer=BufferWithNewResults}}.
+
+%% @private Update the buffer with results and process it
+update_buffer(VNode, Results, Buffer) ->
+    BufferWithNewResults = sms:add_results(VNode, lists:reverse(Results), Buffer),
+    sms:sms(BufferWithNewResults).
+
+%% @private Get the subset of `ToSend' that we can send without violating `MaxResults'
+get_results_to_send(LenToSend, ToSend, ResultsSent, MaxResults) when (ResultsSent + LenToSend) >= MaxResults ->
+    ResultsLen = MaxResults - ResultsSent,
+    ResultsToSend = lists:sublist(ToSend, ResultsLen),
+    {done, ResultsLen, ResultsToSend};
+get_results_to_send(LenToSend, ToSend, _, _) ->
+    {ok, LenToSend, ToSend}.
+
+%% @private send results, but only if there are some
+send_results(_ClientPid, _ReqId, []) ->
+    ok;
+send_results(ClientPid, ReqId, ResultsToSend) ->
+    ClientPid ! {ReqId, {results, ResultsToSend}}.
+
+
+%% Legacy, unsorted 2i, should remove?
 process_results({error, Reason}, _State) ->
     {error, Reason};
+process_results({From, Bucket, Results},
+                StateData=#state{from={raw, ReqId, ClientPid}}) ->
+    process_query_results(Bucket, Results, ReqId, ClientPid),
+    riak_kv_vnode:ack_keys(From), % tell that vnode we're ready for more
+    {ok, StateData};
 process_results({Bucket, Results},
-                StateData=#state{client_type=ClientType,
-                                 from={raw, ReqId, ClientPid}}) ->
-    process_query_results(ClientType, Bucket, Results, ReqId, ClientPid),
+                StateData=#state{from={raw, ReqId, ClientPid}}) ->
+    process_query_results(Bucket, Results, ReqId, ClientPid),
     {ok, StateData};
 process_results(done, StateData) ->
     {done, StateData}.
 
 finish({error, Error},
-       StateData=#state{from={raw, ReqId, ClientPid},
-                        client_type=ClientType}) ->
-    case ClientType of
-        mapred ->
-            %% An error occurred or the timeout interval elapsed
-            %% so all we can do now is die so that the rest of the
-            %% MapReduce processes will also die and be cleaned up.
-            exit(Error);
-        plain ->
-            %% Notify the requesting client that an error
-            %% occurred or the timeout has elapsed.
-            ClientPid ! {ReqId, {error, Error}}
-    end,
+       StateData=#state{from={raw, ReqId, ClientPid}}) ->
+    %% Notify the requesting client that an error
+    %% occurred or the timeout has elapsed.
+    ClientPid ! {ReqId, {error, Error}},
     {stop, normal, StateData};
 finish(clean,
-       StateData=#state{from={raw, ReqId, ClientPid},
-                        client_type=ClientType}) ->
-    case ClientType of
-        mapred ->
-            luke_flow:finish_inputs(ClientPid);
-        plain ->
-            ClientPid ! {ReqId, done}
-    end,
-    {stop, normal, StateData}.
+       StateData=#state{from={raw, ReqId, ClientPid}, merge_sort_buffer=undefined}) ->
+    ClientPid ! {ReqId, done},
+    {stop, normal, StateData};
+finish(clean,
+       State=#state{from={raw, ReqId, ClientPid},
+                    merge_sort_buffer=MergeSortBuffer,
+                    results_sent=ResultsSent,
+                    max_results=MaxResults}) ->
+    LastResults = sms:done(MergeSortBuffer),
+    DownTheWire = case (ResultsSent + length(LastResults)) > MaxResults of
+                      true ->
+                          lists:sublist(LastResults, MaxResults - ResultsSent);
+                      false ->
+                          LastResults
+                  end,
+    ClientPid ! {ReqId, {results, DownTheWire}},
+    ClientPid ! {ReqId, done},
+    {stop, normal, State}.
 
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
 
-process_query_results(plain, _Bucket, Results, ReqId, ClientPid) ->
-    ClientPid ! {ReqId, {results, Results}};
-process_query_results(mapred, Bucket, Results, _ReqId, ClientPid) ->
-    try
-        luke_flow:add_inputs(ClientPid, [{Bucket, Result} || Result <- Results])
-    catch _:_ ->
-            exit(self(), normal)
-    end.
+process_query_results(_Bucket, Results, ReqId, ClientPid) ->
+    ClientPid ! {ReqId, {results, Results}}.

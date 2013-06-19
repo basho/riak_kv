@@ -29,9 +29,8 @@
          get_client_id/1,
          default_encodings/0,
          multipart_encode_body/4,
-         vclock_header/1,
-         encode_vclock/1,
          format_links/3,
+         format_uri/4,
          encode_value/1,
          accept_value/2,
          any_to_list/1,
@@ -144,16 +143,6 @@ multipart_encode_body(Prefix, Bucket, {MD, V}, APIVersion) ->
      "\r\n",
      encode_value(V)].
 
-%% @spec vclock_header(riak_object()) -> {Name::string(), Value::string()}
-%% @doc Transform the Erlang representation of the document's vclock
-%%      into something suitable for an HTTP header
-vclock_header(Doc) ->
-    {?HEAD_VCLOCK,
-        encode_vclock(riak_object:vclock(Doc))}.
-
-encode_vclock(VClock) ->
-    binary_to_list(base64:encode(zlib:zip(term_to_binary(VClock)))).
-
 format_links(Links, Prefix, APIVersion) ->
     format_links(Links, Prefix, APIVersion, []).
 format_links([{{Bucket,Key}, Tag}|Rest], Prefix, APIVersion, Acc) ->
@@ -175,18 +164,19 @@ format_links([{Bucket, Key, Tag}|Rest], Prefix, APIVersion, Acc) ->
     Bucket1 = mochiweb_util:quote_plus(Bucket),
     Key1 = mochiweb_util:quote_plus(Key),
     Tag1 = mochiweb_util:quote_plus(Tag),
-    Val = 
-        case APIVersion of 
-            1 ->
-                io_lib:format("</~s/~s/~s>; riaktag=\"~s\"",
-                              [Prefix, Bucket1, Key1, Tag1]);
-            2 ->
-                io_lib:format("</buckets/~s/keys/~s>; riaktag=\"~s\"",
-                          [Bucket1, Key1, Tag1])
-        end,
+    Val = io_lib:format("<~s>; riaktag=\"~s\"",
+                        [format_uri(Bucket1, Key1, Prefix, APIVersion),
+                         Tag1]),
     format_links(Rest, Prefix, APIVersion, [{?HEAD_LINK, Val}|Acc]);
 format_links([], _Prefix, _APIVersion, Acc) ->
     Acc.
+
+%% @doc Format the URI for a bucket/key correctly for the api version
+%% used. (APIVersion is the final parameter.)
+format_uri(Bucket, Key, Prefix, 1) ->
+    io_lib:format("/~s/~s/~s", [Prefix, Bucket, Key]);
+format_uri(Bucket, Key, _Prefix, 2) ->
+    io_lib:format("/buckets/~s/keys/~s", [Bucket, Key]).
 
 %% @spec get_ctype(dict(), term()) -> string()
 %% @doc Work out the content type for this object - use the metadata if provided
@@ -235,7 +225,8 @@ any_to_bool(V) when is_boolean(V) ->
     V.
 
 is_forbidden(RD) ->
-    is_null_origin(RD) or not is_valid_referer(RD).
+    is_null_origin(RD) or 
+    (app_helper:get_env(riak_kv,secure_referer_check,true) and not is_valid_referer(RD)).
 
 %% @doc Check if the Origin header is "null". This is useful to look for attempts
 %%      at CSRF, but is not a complete answer to the problem.

@@ -2,7 +2,7 @@
 %%
 %% riak_delete: two-step object deletion
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -60,10 +60,10 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
         {error, Reason} ->
             ?DTRACE(?C_DELETE_INIT1, [-1], []),
             Client ! {ReqId, {error, Reason}};
-        {R, PR} ->
+        {R, PR, PassThruOpts} ->
             RealStartTime = riak_core_util:moment(),
             {ok, C} = riak:local_client(),
-            case C:get(Bucket,Key,[{r,R},{pr,PR},{timeout,Timeout}]) of
+            case C:get(Bucket,Key,[{r,R},{pr,PR},{timeout,Timeout}]++PassThruOpts) of
                 {ok, OrigObj} ->
                     RemainingTime = Timeout - (riak_core_util:moment() - RealStartTime),
                     delete(ReqId,Bucket,Key,Options,RemainingTime,Client,ClientId,riak_object:vclock(OrigObj));
@@ -82,15 +82,16 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
         {error, Reason} ->
             ?DTRACE(?C_DELETE_INIT2, [-1], []),
             Client ! {ReqId, {error, Reason}};
-        {W, PW, DW} ->
+        {W, PW, DW, PassThruOptions} ->
             Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(?MD_DELETED,
                                                                  "true", dict:new())),
             Tombstone = riak_object:set_vclock(Obj0, VClock),
             {ok,C} = riak:local_client(ClientId),
-            Reply = C:put(Tombstone, [{w,W},{pw,PW},{dw, DW},{timeout,Timeout}]),
+            Reply = C:put(Tombstone, [{w,W},{pw,PW},{dw, DW},{timeout,Timeout}]++PassThruOptions),
             Client ! {ReqId, Reply},
+            HasCustomN_val = proplists:get_value(n_val, Options) /= undefined,
             case Reply of
-                ok ->
+                ok when HasCustomN_val == false ->
                     ?DTRACE(?C_DELETE_INIT2, [1], [<<"reap">>]),
                     {ok, C2} = riak:local_client(),
                     AsyncTimeout = 60*1000,     % Avoid client-specified value
@@ -104,9 +105,14 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
     end.
 
 get_r_options(Bucket, Options) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
-    N = proplists:get_value(n_val,BucketProps),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    N = case proplists:get_value(n_val, Options) of
+            undefined ->
+                proplists:get_value(n_val, BucketProps);
+            N_val when is_integer(N_val), N_val > 0 ->
+                %% TODO: No sanity check of this value vs. "real" n_val.
+                N_val
+        end,
     %% specifying R/W AND RW together doesn't make sense, so check if R or W
     %is defined first. If not, use RW or default.
     R = case proplists:is_defined(r, Options) orelse proplists:is_defined(w, Options) of
@@ -134,14 +140,18 @@ get_r_options(Bucket, Options) ->
                 error ->
                     {error, {pr_val_violation, PR0}};
                 PR ->
-                    {R, PR}
+                    {R, PR, extract_passthru_options(Options)}
            end
     end.
 
 get_w_options(Bucket, Options) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
-    N = proplists:get_value(n_val,BucketProps),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    N = case proplists:get_value(n_val, Options) of
+            undefined ->
+                proplists:get_value(n_val, BucketProps);
+            N_val when is_integer(N_val), N_val > 0 ->
+                N_val
+        end,
     %% specifying R/W AND RW together doesn't make sense, so check if R or W
     %is defined first. If not, use RW or default.
     W = case proplists:is_defined(w, Options) of
@@ -173,11 +183,19 @@ get_w_options(Bucket, Options) ->
                         error ->
                             {error, {dw_val_violation, DW0}};
                         DW ->
-                            {W, PW, DW}
+                            {W, PW, DW, extract_passthru_options(Options)}
                     end
             end
     end.
 
+%% NOTE: The types are defined so that this isn't really proplist for
+%%       these values but a 2-tuple list, namely, 'sloppy_quorum'
+%%       cannot appear as a proplist-style property but must always
+%%       appear as {sloppy_quorum, boolean()}.
+
+extract_passthru_options(Options) ->
+    [Opt || {K, _} = Opt <- Options,
+            K == sloppy_quorum orelse K == n_val].
 
 %% ===================================================================
 %% EUnit tests
@@ -185,11 +203,10 @@ get_w_options(Bucket, Options) ->
 -ifdef(TEST).
 
 delete_test_() ->
-    cleanup(ignored_arg),
     %% Execute the test cases
-    { foreach, 
-      fun setup/0,
-      fun cleanup/1,
+    {foreach,
+      setup(),
+      cleanup(),
       [
           fun invalid_r_delete/0,
           fun invalid_rw_delete/0,
@@ -286,75 +303,18 @@ invalid_pw_delete() ->
             ?assert(false)
     end.
 
+configure(load) ->
+    application:set_env(riak_core, default_bucket_props,
+                        [{r, quorum}, {w, quorum}, {pr, 0}, {pw, 0},
+                         {rw, quorum}, {n_val, 3}]),
+    application:set_env(riak_kv, storage_backend, riak_kv_memory_backend);
+configure(_) -> ok.
+
 setup() ->
-    %% Shut logging up - too noisy.
-    application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_delete_test_sasl.log"}),
-    error_logger:tty(false),
-    error_logger:logfile({open, "riak_kv_delete_test.log"}),
-    %% Start erlang node
-    TestNode = list_to_atom("testnode" ++ integer_to_list(element(3, now())) ++
-                                integer_to_list(element(2, now()))),
-    case net_kernel:start([TestNode, shortnames]) of
-        {ok, _} ->
-            ok;
-        {error, {already_started, _}} ->
-            ok
-    end,
-    do_dep_apps(start, dep_apps()),
-    application:set_env(riak_core, default_bucket_props, [{r, quorum},
-            {w, quorum}, {pr, 0}, {pw, 0}, {rw, quorum}, {n_val, 3}]),
-    %% There's some weird interaction with the quickcheck tests in put_fsm_eqc
-    %% that somehow makes the riak_kv_delete sup not be running if those tests
-    %% run before these. I'm sick of trying to figure out what is not being
-    %% cleaned up right, thus the following workaround.
-    case whereis(riak_kv_delete_sup) of
-        undefined ->
-            {ok, _} = riak_kv_delete_sup:start_link();
-        _ ->
-            ok
-    end,
-    riak_kv_get_fsm_sup:start_link(),
-    timer:sleep(500).
+    riak_kv_test_util:common_setup(?MODULE, fun configure/1).
 
-cleanup(_Pid) ->
-    do_dep_apps(stop, lists:reverse(dep_apps())),
-    catch exit(whereis(riak_kv_vnode_master), kill), %% Leaks occasionally
-    catch exit(whereis(riak_sysmon_filter), kill), %% Leaks occasionally
-    catch unlink(whereis(riak_kv_get_fsm_sup)),
-    catch unlink(whereis(riak_kv_delete_sup)),
-    catch exit(whereis(riak_kv_get_fsm_sup), kill), %% Leaks occasionally
-    catch exit(whereis(riak_kv_delete_sup), kill), %% Leaks occasionally
-    net_kernel:stop(),
-    %% Reset the riak_core vnode_modules
-    application:unset_env(riak_core, default_bucket_props),
-    application:unset_env(sasl, sasl_error_logger),
-    error_logger:tty(true),
-    application:set_env(riak_core, vnode_modules, []).
+cleanup() ->
+    riak_kv_test_util:common_cleanup(?MODULE, fun configure/1).
 
-dep_apps() ->
-    SetupFun =
-        fun(start) ->
-            %% Set some missing env vars that are normally 
-            %% part of release packaging.
-            application:set_env(riak_core, ring_creation_size, 64),
-            application:set_env(riak_kv, storage_backend, riak_kv_memory_backend),
-            %% Create a fresh ring for the test
-            Ring = riak_core_ring:fresh(),
-            riak_core_ring_manager:set_ring_global(Ring),
-
-            %% Start riak_kv
-            timer:sleep(500);
-           (stop) ->
-            ok
-        end,
-    XX = fun(_) -> error_logger:info_msg("Registered: ~w\n", [lists:sort(registered())]) end,
-    [sasl, crypto, riak_sysmon, webmachine, XX, riak_core, XX, luke, erlang_js,
-     inets, mochiweb, os_mon, SetupFun, riak_kv].
-
-do_dep_apps(StartStop, Apps) ->
-    lists:map(fun(A) when is_atom(A) -> application:StartStop(A);
-                 (F)                 -> F(StartStop)
-              end, Apps).
 
 -endif.

@@ -38,14 +38,18 @@
          fold_objects/4,
          is_empty/1,
          status/1,
-         callback/3]).
+         callback/3,
+         fix_index/3,
+         set_legacy_indexes/2,
+         mark_indexes_fixed/2,
+         fixed_index_status/1]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold]).
+-define(CAPABILITIES, [async_fold, index_reformat]).
 
 -record (state, {backends :: [{atom(), atom(), term()}],
                  default_backend :: atom()}).
@@ -98,12 +102,12 @@ capabilities(State) ->
     %% Expose ?CAPABILITIES plus the intersection of all child
     %% backends. (This backend creates a shim for any backends that
     %% don't support async_fold.)
-    F = fun({_, Mod, ModState}, Acc) ->
+    F = fun(Mod, ModState) ->
                 {ok, S1} = Mod:capabilities(ModState),
-                S2 = ordsets:from_list(S1),
-                ordsets:intersection(Acc, S2)
+                ordsets:from_list(S1)
         end,
-    Caps1 = lists:foldl(F, ordsets:new(), State#state.backends),
+    AllCaps = [F(Mod, ModState) || {_, Mod, ModState} <- State#state.backends],
+    Caps1 = ordsets:intersection(AllCaps),
     Caps2 = ordsets:to_list(Caps1),
 
     Capabilities = lists:usort(?CAPABILITIES ++ Caps2),
@@ -314,7 +318,12 @@ is_empty(#state{backends=Backends}) ->
 -spec status(state()) -> [{atom(), term()}].
 status(#state{backends=Backends}) ->
     %% @TODO Reexamine how this is handled
-    [{N, Mod:status(ModState)} || {N, Mod, ModState} <- Backends].
+    %% all backend mods return a proplist from Mod:status/1
+    %% So as to tag the backend with its mod, without
+    %% breaking this API list of two tuples return,
+    %% add the tuple {mod, Mod} to the status for each
+    %% backend.
+    [{N, [{mod, Mod} | Mod:status(ModState)]} || {N, Mod, ModState} <- Backends].
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
@@ -323,6 +332,90 @@ callback(Ref, Msg, #state{backends=Backends}=State) ->
     %% filter out if they need it.
     [Mod:callback(Ref, Msg, ModState) || {_N, Mod, ModState} <- Backends],
     {ok, State}.
+
+set_legacy_indexes(State=#state{backends=Backends}, WriteLegacy) ->
+    NewBackends = [{I, Mod, maybe_set_legacy_indexes(Mod, ModState, WriteLegacy)} ||
+                      {I, Mod, ModState} <- Backends],
+    State#state{backends=NewBackends}.
+
+maybe_set_legacy_indexes(Mod, ModState, WriteLegacy) ->
+    case backend_can_index_reformat(Mod, ModState) of
+        true -> Mod:set_legacy_indexes(ModState, WriteLegacy);
+        false -> ModState
+    end.
+
+mark_indexes_fixed(State=#state{backends=Backends}, ForUpgrade) ->
+    NewBackends = mark_indexes_fixed(Backends, [], ForUpgrade),
+    {ok, State#state{backends=NewBackends}}.
+
+mark_indexes_fixed([], NewBackends, _) ->
+    lists:reverse(NewBackends);
+mark_indexes_fixed([{I, Mod, ModState} | Backends], NewBackends, ForUpgrade) ->
+    Res = maybe_mark_indexes_fixed(Mod, ModState, ForUpgrade),
+    case Res of
+        {error, Reason} ->
+            {error, Reason};
+        {ok, NewModState} ->
+            mark_indexes_fixed(Backends, [{I, Mod, NewModState} | NewBackends], ForUpgrade)
+    end.
+
+maybe_mark_indexes_fixed(Mod, ModState, ForUpgrade) ->
+    case backend_can_index_reformat(Mod, ModState) of
+        true -> Mod:mark_indexes_fixed(ModState, ForUpgrade);
+        false -> {ok, ModState}
+    end.
+
+fix_index(BKeys, ForUpgrade, State) ->
+    % Group keys per bucket 
+    PerBucket = lists:foldl(fun(BK={B,_},D) -> dict:append(B,BK,D) end, dict:new(), BKeys),
+    Result = 
+        dict:fold(
+            fun(Bucket, StorageKey, Acc = {Success, Ignore, Errors}) ->
+                {_, Mod,  ModState} = Backend = get_backend(Bucket, State),
+                case backend_can_index_reformat(Mod, ModState) of
+                    true -> 
+                            {S, I, E} = backend_fix_index(Backend, Bucket, 
+                                                          StorageKey, ForUpgrade),
+                            {Success + S, Ignore + I, Errors + E};
+                    false -> 
+                            Acc
+                end
+            end, {0, 0, 0}, PerBucket),
+    {reply, Result, State}.
+
+backend_fix_index({_, Mod, ModState}, Bucket, StorageKey, ForUpgrade) ->
+    case Mod:fix_index(StorageKey, ForUpgrade, ModState) of
+        {reply, Reply, _UpModState} -> 
+            Reply;
+        {error, Reason} ->
+           lager:error("Failed to fix index for bucket ~p, key ~p, backend ~p: ~p",
+                       [Bucket, StorageKey, Mod, Reason]),
+            {0, 0, length(StorageKey)}
+    end.
+
+-spec fixed_index_status(state()) -> boolean().
+fixed_index_status(#state{backends=Backends}) ->
+    lists:foldl(fun({_N, Mod, ModState}, Acc) ->
+                        Status = Mod:status(ModState),
+                        case fixed_index_status(Mod, ModState, Status) of
+                            undefined -> Acc;
+                            Res ->
+                                case Acc of
+                                    undefined -> Res;
+                                    _ -> Res andalso Acc
+                                end
+                        end
+                end,
+                undefined,
+                Backends).
+
+fixed_index_status(Mod, ModState, Status) ->
+    case backend_can_index_reformat(Mod, ModState) of
+        true -> proplists:get_value(fixed_indexes, Status);
+        false -> undefined
+    end.
+
+
 
 %% ===================================================================
 %% Internal functions
@@ -401,29 +494,45 @@ backend_fold_fun(ModFun, FoldFun, Opts, AsyncFold) ->
             %% Get the backend capabilities to determine
             %% if it supports asynchronous folding.
             {ok, ModCaps} = Module:capabilities(SubState),
-            case AsyncFold andalso
-                lists:member(async_fold, ModCaps) of
-                true ->
-                    AsyncWork =
-                        fun(Acc1) ->
-                                Module:ModFun(FoldFun,
-                                              Acc1,
-                                              Opts,
-                                              SubState)
-                        end,
-                    {Acc, [AsyncWork | WorkList]};
-                false ->
-                    Result = Module:ModFun(FoldFun,
-                                           Acc,
-                                           Opts,
-                                           SubState),
-                    case Result of
-                        {ok, Acc1} ->
-                            {Acc1, WorkList};
-                        {error, Reason} ->
-                            throw({error, {Module, Reason}})
-                    end
+            DoAsync = AsyncFold andalso lists:member(async_fold, ModCaps),
+            Indexes = lists:keyfind(index, 1, Opts),
+            case Indexes of
+                {index, incorrect_format, _ForUpgrade} ->
+                    case lists:member(index_reformat, ModCaps) of
+                        true -> backend_fold_fun(Module, ModFun, SubState, FoldFun,
+                                                 Opts, {Acc, WorkList}, DoAsync);
+                        false -> {Acc, WorkList}
+                    end;
+                _ ->
+                    backend_fold_fun(Module,
+                                     ModFun,
+                                     SubState,
+                                     FoldFun,
+                                     Opts,
+                                     {Acc, WorkList},
+                                     DoAsync)
             end
+    end.
+
+backend_fold_fun(Module, ModFun, SubState, FoldFun, Opts, {Acc, WorkList}, true) ->
+    AsyncWork =
+        fun(Acc1) ->
+                Module:ModFun(FoldFun,
+                              Acc1,
+                              Opts,
+                              SubState)
+        end,
+    {Acc, [AsyncWork | WorkList]};
+backend_fold_fun(Module, ModFun, SubState, FoldFun, Opts, {Acc, WorkList}, false) ->
+    Result = Module:ModFun(FoldFun,
+                           Acc,
+                           Opts,
+                           SubState),
+    case Result of
+        {ok, Acc1} ->
+            {Acc1, WorkList};
+        {error, Reason} ->
+            throw({error, {Module, Reason}})
     end.
 
 async_fold_fun() ->
@@ -446,6 +555,10 @@ error_filter({error, _, _}) ->
     true;
 error_filter(_) ->
     false.
+
+backend_can_index_reformat(Mod, ModState) ->
+    {ok, Caps} = Mod:capabilities(ModState),
+    lists:member(index_reformat, Caps).
 
 %% ===================================================================
 %% EUnit tests
@@ -603,6 +716,7 @@ extra_callback_test() ->
     application:stop(bitcask).
 
 bad_config_test() ->
+    application:unset_env(riak_kv, multi_backend),
     ErrorReason = multi_backend_config_unset,
     ?assertEqual({error, ErrorReason}, start(0, [])).
 

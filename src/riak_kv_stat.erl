@@ -28,162 +28,30 @@
 %%      folsom.
 %%
 %%      Get the latest aggregation of stats with the exported function
-%%      get_stats/0. Or use folsom_metrics:get_metric_value/1
+%%      get_stats/0. Or use folsom_metrics:get_metric_value/1,
+%%      or riak_core_stat_q:get_stats/1.
 %%
-%%      Current stats:
-%%<dl><dt>  vnode_gets
-%%</dt><dd> Total number of gets handled by all vnodes on this node
-%%          in the last minute.
-%%</dd><dd> update(vnode_get)
-%%
-%%</dd><dt> vnode_puts
-%%</dt><dd> Total number of puts handled by all vnodes on this node
-%%          in the last minute.
-%%</dd><dd> update(vnode_put)
-%%
-%%</dd><dt> vnode_index_reads
-%%</dt><dd> The number of index reads handled by all vnodes on this node.
-%%          Each query counts as an index read.
-%%</dd><dd> update(vnode_index_read)
-%%
-%%</dd><dt> vnode_index_writes
-%%</dt><dd> The number of batched writes handled by all vnodes on this node.
-%%</dd><dd> update({vnode_index_write, PostingsAdded, PostingsRemoved})
-%%
-%%</dd><dt> vnode_index_writes_postings
-%%</dt><dd> The number of postings written to all vnodes on this node.
-%%</dd><dd> update({vnode_index_write, PostingsAdded, PostingsRemoved})
-%%
-%%</dd><dt> vnode_index_deletes
-%%</dt><dd> The number of batched writes handled by all vnodes on this node.
-%%</dd><dd> update({vnode_index_delete, PostingsRemoved})
-%%
-%%</dd><dt> vnode_index_deletes_postings
-%%</dt><dd> The number of postings written to all vnodes on this node.
-%%</dd><dd> update({vnode_index_delete, PostingsRemoved})
-%%
-%%</dd><dt> node_gets
-%%</dt><dd> Number of gets coordinated by this node in the last
-%%          minute.
-%%</dd><dd> update({get_fsm, _Bucket, Microseconds, NumSiblings, ObjSize})
-%%
-%%</dd><dt> node_get_fsm_siblings
-%%</dt><dd> Stats about number of siblings per object in the last minute.
-%%</dd><dd> Updated via node_gets.
-%%
-%%</dd><dt> node_get_fsm_objsize
-%%</dt><dd> Stats about object size over the last minute. The object
-%%          size is an estimate calculated by summing the size of the
-%%          bucket name, key name, and serialized vector clock, plus
-%%          the value and serialized metadata of each sibling.
-%%</dd><dd> Updated via node_gets.
-%%
-%%</dd><dt> node_get_fsm_time_mean
-%%</dt><dd> Mean time, in microseconds, between when a riak_kv_get_fsm is
-%%          started and when it sends a reply to the client, for the
-%%          last minute.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_get_fsm_time_median
-%%</dt><dd> Median time, in microseconds, between when a riak_kv_get_fsm
-%%          is started and when it sends a reply to the client, for
-%%          the last minute.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_get_fsm_time_95
-%%</dt><dd> Response time, in microseconds, met or beaten by 95% of
-%%          riak_kv_get_fsm executions.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_get_fsm_time_99
-%%</dt><dd> Response time, in microseconds, met or beaten by 99% of
-%%          riak_kv_get_fsm executions.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_get_fsm_time_100
-%%</dt><dd> Response time, in microseconds, met or beaten by 100% of
-%%          riak_kv_get_fsm executions.
-%%</dd><dd> update({get_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_puts
-%%</dt><dd> Number of puts coordinated by this node in the last
-%%          minute.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_put_fsm_time_mean
-%%</dt><dd> Mean time, in microseconds, between when a riak_kv_put_fsm is
-%%          started and when it sends a reply to the client, for the
-%%          last minute.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_put_fsm_time_median
-%%</dt><dd> Median time, in microseconds, between when a riak_kv_put_fsm
-%%          is started and when it sends a reply to the client, for
-%%          the last minute.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_put_fsm_time_95
-%%</dt><dd> Response time, in microseconds, met or beaten by 95% of
-%%          riak_kv_put_fsm executions.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_put_fsm_time_99
-%%</dt><dd> Response time, in microseconds, met or beaten by 99% of
-%%          riak_kv_put_fsm executions.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
-%%</dd><dt> node_put_fsm_time_100
-%%</dt><dd> Response time, in microseconds, met or beaten by 100% of
-%%          riak_kv_put_fsm executions.
-%%</dd><dd> update({put_fsm_time, Microseconds})
-%%
-%%</dd><dt> cpu_nprocs
-%%</dt><dd> Value returned by {@link cpu_sup:nprocs/0}.
-%%
-%%</dd><dt> cpu_avg1
-%%</dt><dd> Value returned by {@link cpu_sup:avg1/0}.
-%%
-%%</dd><dt> cpu_avg5
-%%</dt><dd> Value returned by {@link cpu_sup:avg5/0}.
-%%
-%%</dd><dt> cpu_avg15
-%%</dt><dd> Value returned by {@link cpu_sup:avg15/0}.
-%%
-%%</dd><dt> mem_total
-%%</dt><dd> The first element of the tuple returned by
-%%          {@link memsup:get_memory_data/0}.
-%%
-%%</dd><dt> mem_allocated
-%%</dt><dd> The second element of the tuple returned by
-%%          {@link memsup:get_memory_data/0}.
-%%
-%%</dd><dt> disk
-%%</dt><dd> Value returned by {@link disksup:get_disk_data/0}.
-%%
-%%</dd><dt> pbc_connects_total
-%%</dt><dd> Total number of pb socket connections since start
-%%
-%%</dd><dt> pbc_active
-%%</dt><dd> Number of active pb socket connections
-%%
-%%</dd><dt> coord_redirs_total
-%%</dt><dd> Number of puts forwarded to be coordinated on a node
-%%          in the preflist.
-%%
-%%</dd></dl>
-%%
-%%
+
 -module(riak_kv_stat).
 
 -behaviour(gen_server).
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 %% API
 -export([start_link/0, get_stats/0,
-         update/1, register_stats/0, produce_stats/0]).
+         update/1, perform_update/1, register_stats/0, produce_stats/0,
+         leveldb_read_block_errors/0, stop/0]).
+-export([track_bucket/1, untrack_bucket/1]).
+-export([active_gets/0, active_puts/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         terminate/2, code_change/3, monitor_loop/1]).
+
+-record(state, {repair_mon, monitors}).
 
 -define(SERVER, ?MODULE).
 -define(APP, riak_kv).
@@ -192,7 +60,9 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 register_stats() ->
-    [register_stat({?APP, Name}, Type) || {Name, Type} <- stats()],
+    [(catch folsom_metrics:delete_metric(Stat)) || Stat <- folsom_metrics:get_metrics(),
+                                                           is_tuple(Stat), element(1, Stat) == ?APP],
+    [do_register_stat(stat_name(Name), Type) || {Name, Type} <- stats()],
     riak_core_stat_cache:register_app(?APP, {?MODULE, produce_stats, []}).
 
 %% @spec get_stats() -> proplist()
@@ -204,23 +74,95 @@ get_stats() ->
         Error -> Error
     end.
 
+%% Creation of a dynamic stat _must_ be serialized.
+register_stat(Name, Type) ->
+    gen_server:call(?SERVER, {register, Name, Type}).
+
 update(Arg) ->
-    gen_server:cast(?SERVER, {update, Arg}).
+    case erlang:module_loaded(riak_kv_stat_sj) of
+        true ->
+            %% Dispatch request to sidejob worker
+            riak_kv_stat_worker:update(Arg);
+        false ->
+            perform_update(Arg)
+    end.
+
+%% @doc
+%% Callback used by a {@link riak_kv_stat_worker} to perform actual update
+perform_update(Arg) ->
+    try do_update(Arg) of
+        _ ->
+            ok
+    catch
+        ErrClass:Err ->
+            lager:warning("~p:~p updating stat ~p.", [ErrClass, Err, Arg]),
+            gen_server:cast(?SERVER, {re_register_stat, Arg})
+    end.
+
+track_bucket(Bucket) when is_binary(Bucket) ->
+    riak_core_bucket:set_bucket(Bucket, [{stat_tracked, true}]).
+
+untrack_bucket(Bucket) when is_binary(Bucket) ->
+    riak_core_bucket:set_bucket(Bucket, [{stat_tracked, false}]).
+
+%% The current number of active get fsms in riak
+active_gets() ->
+    folsom_metrics:get_metric_value({?APP, node, gets, fsm, active}).
+
+%% The current number of active put fsms in riak
+active_puts() ->
+    folsom_metrics:get_metric_value({?APP, node, puts, fsm, active}).
+
+stop() ->
+    gen_server:cast(?SERVER, stop).
 
 %% gen_server
 
 init([]) ->
-    {ok, ok}.
+    register_stats(),
+    State = #state{monitors = [spawn_link(?MODULE, monitor_loop, [index]),
+                               spawn_link(?MODULE, monitor_loop, [list])],
+                   repair_mon = spawn_monitor(fun() -> stat_repair_loop() end)},
+    {ok, State}.
 
-handle_call(_Req, _From, State) ->
-    {reply, ok, State}.
+handle_call({register, Name, Type}, _From, State) ->
+    Rep = do_register_stat(Name, Type),
+    {reply, Rep, State};
+handle_call({get_monitor, Type}, _From, State) ->
+    Monitors = State#state.monitors,
+    [Monitor] = lists:filter(fun(Mon) ->
+                                     Mon ! {get_type, self()},
+                                     receive
+                                         T when is_atom(T),
+                                                T == Type ->
+                                             true;
+                                         _ -> false
+                                     after
+                                         1000 -> false
+                                     end
+                             end,
+                             Monitors),
+    {reply, Monitor, State}.
 
-handle_cast({update, Arg}, State) ->
-    update1(Arg),
+handle_cast({re_register_stat, Arg}, State) ->
+    %% To avoid massive message queues
+    %% riak_kv stats are updated in the calling process
+    %% @see `update/1'.
+    %% The downside is that errors updating a stat don't crash
+    %% the server, so broken stats stay broken.
+    %% This re-creates the same behaviour as when a brokwn stat
+    %% crashes the gen_server by re-registering that stat.
+    #state{repair_mon={Pid, _Mon}} = State,
+    Pid ! {re_register_stat, Arg},
     {noreply, State};
+handle_cast(stop, State) ->
+    {stop, normal, State};
 handle_cast(_Req, State) ->
     {noreply, State}.
 
+handle_info({'DOWN', MonRef, process, Pid, _Cause}, State=#state{repair_mon={Pid, MonRef}}) ->
+    RepairMonitor = spawn_monitor(fun() -> stat_repair_loop() end),
+    {noreply, State#state{repair_mon=RepairMonitor}};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -231,225 +173,452 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %% @doc Update the given stat
-update1(vnode_get) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_gets}, 1, spiral);
-update1(vnode_put) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_puts}, 1, spiral);
-update1(vnode_index_read) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_reads}, 1, spiral);
-update1({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_writes}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_writes_postings}, PostingsAdded, spiral),
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, PostingsRemoved, spiral);
-update1({vnode_index_delete, Postings}) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes}, Postings, spiral),
-    folsom_metrics:notify_existing_metric({?APP, vnode_index_deletes_postings}, Postings, spiral);
-update1({get_fsm, Bucket, Microsecs, undefined, undefined, PerBucket}) ->
-    folsom_metrics:notify_existing_metric({?APP, node_gets}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, node_get_fsm_time}, Microsecs, histogram),
-    do_get_bucket(PerBucket, {Bucket, Microsecs, undefined, undefined});
-update1({get_fsm, Bucket, Microsecs, NumSiblings, ObjSize, PerBucket}) ->
-    folsom_metrics:notify_existing_metric({?APP, node_gets}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, node_get_fsm_time}, Microsecs, histogram),
-    folsom_metrics:notify_existing_metric({?APP, node_get_fsm_siblings}, NumSiblings, histogram),
-    folsom_metrics:notify_existing_metric({?APP, node_get_fsm_objsize}, ObjSize, histogram),
-    do_get_bucket(PerBucket, {Bucket, Microsecs, NumSiblings, ObjSize});
-update1({put_fsm_time, Bucket,  Microsecs, PerBucket}) ->
-    folsom_metrics:notify_existing_metric({?APP, node_puts}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, node_put_fsm_time}, Microsecs, histogram),
-    do_put_bucket(PerBucket, {Bucket, Microsecs});
-update1(read_repairs) ->
-    folsom_metrics:notify_existing_metric({?APP, read_repairs}, 1, spiral);
-update1(coord_redir) ->
-    folsom_metrics:notify_existing_metric({?APP, coord_redirs_total}, {inc, 1}, counter);
-update1(mapper_start) ->
+do_update({vnode_get, Idx, USecs}) ->
+    folsom_metrics:notify_existing_metric({?APP, vnode, gets}, 1, spiral),
+    create_or_update({?APP, vnode, gets, time}, USecs, histogram),
+    do_per_index(gets, Idx, USecs);
+do_update({vnode_put, Idx, USecs}) ->
+    folsom_metrics:notify_existing_metric({?APP, vnode, puts}, 1, spiral),
+    create_or_update({?APP, vnode, puts, time}, USecs, histogram),
+    do_per_index(puts, Idx, USecs);
+do_update(vnode_index_read) ->
+    folsom_metrics:notify_existing_metric({?APP, vnode, index, reads}, 1, spiral);
+do_update({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
+    folsom_metrics:notify_existing_metric({?APP, vnode, index, writes}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, vnode, index, writes, postings}, PostingsAdded, spiral),
+    folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes, postings}, PostingsRemoved, spiral);
+do_update({vnode_index_delete, Postings}) ->
+    folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes}, Postings, spiral),
+    folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes, postings}, Postings, spiral);
+do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket}) ->
+    folsom_metrics:notify_existing_metric({?APP, node, gets}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, node, gets, time}, Microsecs, histogram),
+    do_stages([?APP, node, gets, time], Stages),
+    do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined});
+do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket}) ->
+    folsom_metrics:notify_existing_metric({?APP, node, gets}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, node, gets, time}, Microsecs, histogram),
+    folsom_metrics:notify_existing_metric({?APP, node, gets, siblings}, NumSiblings, histogram),
+    folsom_metrics:notify_existing_metric({?APP, node, gets, objsize}, ObjSize, histogram),
+    do_stages([?APP, node, gets, time], Stages),
+    do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize});
+do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket}) ->
+    folsom_metrics:notify_existing_metric({?APP, node, puts}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, node, puts, time}, Microsecs, histogram),
+    do_stages([?APP, node, puts, time], Stages),
+    do_put_bucket(PerBucket, {Bucket, Microsecs, Stages});
+do_update({read_repairs, Indices, Preflist}) ->
+    folsom_metrics:notify_existing_metric({?APP, node, gets, read_repairs}, 1, spiral),
+    do_repairs(Indices, Preflist);
+do_update(coord_redir) ->
+    folsom_metrics:notify_existing_metric({?APP, node, puts, coord_redirs}, {inc, 1}, counter);
+do_update(mapper_start) ->
     folsom_metrics:notify_existing_metric({?APP, mapper_count}, {inc, 1}, counter);
-update1(mapper_end) ->
+do_update(mapper_end) ->
     folsom_metrics:notify_existing_metric({?APP, mapper_count}, {dec, 1}, counter);
-update1(precommit_fail) ->
+do_update(precommit_fail) ->
     folsom_metrics:notify_existing_metric({?APP, precommit_fail}, {inc, 1}, counter);
-update1(postcommit_fail) ->
-    folsom_metrics:notify_existing_metric({?APP, postcommit_fail}, {inc, 1}, counter).
+do_update(postcommit_fail) ->
+    folsom_metrics:notify_existing_metric({?APP, postcommit_fail}, {inc, 1}, counter);
+do_update({fsm_spawned, Type}) when Type =:= gets; Type =:= puts ->
+    folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, active}, {inc, 1}, counter);
+do_update({fsm_exit, Type}) when Type =:= gets; Type =:= puts  ->
+    folsom_metrics:notify_existing_metric({?APP, node, Type, fsm,  active}, {dec, 1}, counter);
+do_update({fsm_error, Type}) when Type =:= gets; Type =:= puts ->
+    do_update({fsm_exit, Type}),
+    folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, errors}, 1, spiral);
+do_update({index_create, Pid}) ->
+    folsom_metrics:notify_existing_metric({?APP, index, fsm, create}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, index, fsm, active}, {inc, 1}, counter),
+    add_monitor(index, Pid);
+do_update(index_create_error) ->
+    folsom_metrics:notify_existing_metric({?APP, index, fsm, create, error}, 1, spiral);
+do_update({list_create, Pid}) ->
+    folsom_metrics:notify_existing_metric({?APP, list, fsm, create}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, list, fsm, active}, {inc, 1}, counter),
+    add_monitor(list, Pid);
+do_update(list_create_error) ->
+    folsom_metrics:notify_existing_metric({?APP, list, fsm, create, error}, 1, spiral);
+do_update({fsm_destroy, Type}) ->
+    folsom_metrics:notify_existing_metric({?APP, Type, fsm, active}, {dec, 1}, counter).
 
 %% private
+
+add_monitor(Type, Pid) ->
+    M = gen_server:call(?SERVER, {get_monitor, Type}),
+    case M of
+        Mon when is_pid(Mon) ->
+            Mon ! {add_pid, Pid};
+        error ->
+            lager:error("No couldn't find procress to add monitor")
+    end.
+
+monitor_loop(Type) ->
+    receive
+        {add_pid, Pid} ->
+            erlang:monitor(process, Pid);
+        {get_type, Sender} ->
+            Sender ! Type;
+        {'DOWN', _Ref, process, _Pid, _Reason} ->
+            do_update({fsm_destroy, Type})
+    end,
+    monitor_loop(Type).
+
+%% Per index stats (by op)
+do_per_index(Op, Idx, USecs) ->
+    IdxAtom = list_to_atom(integer_to_list(Idx)),
+    create_or_update({?APP, vnode, Op, IdxAtom}, 1, spiral),
+    create_or_update({?APP, vnode, Op, time, IdxAtom}, USecs, histogram).
+
 %%  per bucket get_fsm stats
 do_get_bucket(false, _) ->
     ok;
-do_get_bucket(true, {Bucket, Microsecs, NumSiblings, ObjSize}=Args) ->
-    BucketAtom = binary_to_atom(Bucket, latin1),
-    case (catch folsom_metrics:notify_existing_metric({?APP, join(node_gets, BucketAtom)}, 1, spiral)) of
+do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize}=Args) ->
+    case (catch folsom_metrics:notify_existing_metric({?APP, node, gets, Bucket}, 1, spiral)) of
         ok ->
-            [folsom_metrics:notify_existing_metric({?APP, join(Stat, BucketAtom)}, Arg, histogram)
-             || {Stat, Arg} <- [{node_get_fsm_time, Microsecs},
-                                {node_get_fsm_siblings, NumSiblings},
-                                {node_get_fsm_objsize, ObjSize}], Arg /= undefined];
+            [folsom_metrics:notify_existing_metric({?APP, node, gets, Dimension, Bucket}, Arg, histogram)
+             || {Dimension, Arg} <- [{time, Microsecs},
+                                     {siblings, NumSiblings},
+                                     {objsize, ObjSize}], Arg /= undefined],
+            do_stages([?APP, node, gets, time, Bucket], Stages);
         {'EXIT', _} ->
-            folsom_metrics:new_spiral({?APP, join(node_gets, BucketAtom)}),
-            [register_stat({?APP, join(Stat, BucketAtom)}, histogram) || Stat <- [node_get_fsm_time,
-                                                                                  node_get_fsm_siblings,
-                                                                                  node_get_fsm_objsize]],
+            folsom_metrics:new_spiral({?APP, node, gets, Bucket}),
+            [register_stat({?APP, node, gets, Dimension, Bucket}, histogram) || Dimension <- [time,
+                                                                                  siblings,
+                                                                                  objsize]],
             do_get_bucket(true, Args)
     end.
 
 %% per bucket put_fsm stats
 do_put_bucket(false, _) ->
     ok;
-do_put_bucket(true, {Bucket, Microsecs}=Args) ->
-    BucketAtom = binary_to_atom(Bucket, latin1),
-    case (catch folsom_metrics:notify_existing_metric({?APP, join(node_puts, BucketAtom)}, 1, spiral)) of
+do_put_bucket(true, {Bucket, Microsecs, Stages}=Args) ->
+    case (catch folsom_metrics:notify_existing_metric({?APP, node, puts, Bucket}, 1, spiral)) of
         ok ->
-            folsom_metrics:notify_existing_metric({?APP, join(node_put_fsm_time, BucketAtom)}, Microsecs, histogram);
+            folsom_metrics:notify_existing_metric({?APP, node, puts, time, Bucket}, Microsecs, histogram),
+            do_stages([?APP, node, puts, time, Bucket], Stages);
         {'EXIT', _} ->
-            register_stat({?APP, join(node_puts, BucketAtom)}, spiral),
-            register_stat({?APP, join(node_put_fsm_time, BucketAtom)}, histogram),
+            register_stat({?APP, node, puts, Bucket}, spiral),
+            register_stat({?APP, node, puts, time, Bucket}, histogram),
             do_put_bucket(true, Args)
     end.
 
-%% @spec produce_stats(state(), integer()) -> proplist()
-%% @doc Produce a proplist-formatted view of the current aggregation
-%%      of stats.
-produce_stats() ->
-    lists:append(
-      [lists:flatten([backwards_compat(Name, Type, get_stat({?APP, Name}, Type)) || {Name, Type} <- stats()]),
-       backwards_compat_pb(riak_api_stat:produce_stats()),
-       cpu_stats(),
-       mem_stats(),
-       disk_stats(),
-       system_stats(),
-       ring_stats(),
-       config_stats(),
-       app_stats(),
-       memory_stats()
-      ]).
+%% Path is list that provides a conceptual path to a stat
+%% folsom uses the tuple as flat name
+%% but some ets query magic means we can get stats by APP, Stat, DimensionX
+%% Path, then is a list like [?APP, StatName]
+%% Both get and put fsm have a list of {state, microseconds}
+%% that they provide for stats.
+%% Use the state to append to the stat "path" to create a further dimension on the stat
+do_stages(_Path, []) ->
+    ok;
+do_stages(Path, [{Stage, Time}|Stages]) ->
+    create_or_update(list_to_tuple(Path ++ [Stage]), Time, histogram),
+    do_stages(Path, Stages).
 
-get_stat(Name, histogram) ->
-    folsom_metrics:get_histogram_statistics(Name);
-get_stat(Name, _Type) ->
-    folsom_metrics:get_metric_value(Name).
+%% create dimensioned stats for read repairs.
+%% The indexes are from get core [{Index, Reason::notfound|outofdate}]
+%% preflist is a preflist of [{{Index, Node}, Type::primary|fallback}]
+do_repairs(Indices, Preflist) ->
+    lists:foreach(fun({{Idx, Node}, Type}) ->
+                          case proplists:get_value(Idx, Indices) of
+                              undefined ->
+                                  ok;
+                              Reason ->
+                                  create_or_update({?APP, node, gets,  read_repairs, Node, Type, Reason}, 1, spiral)
+                          end
+                  end,
+                  Preflist).
 
-backwards_compat_pb({riak_api, Stats}) ->
-    [{pbc_active, proplists:get_value(pbc_connects_active, Stats)} |
-     backwards_compat(pbc_connects, spiral, proplists:get_value(pbc_connects, Stats))].
+%% for dynamically created / dimensioned stats
+%% that can't be registered at start up
+create_or_update(Name, UpdateVal, Type) ->
+    case (catch folsom_metrics:notify_existing_metric(Name, UpdateVal, Type)) of
+        ok ->
+            ok;
+        {'EXIT', _} ->
+            register_stat(Name, Type),
+            create_or_update(Name, UpdateVal, Type)
+    end.
 
-backwards_compat(Name, spiral, Stats) ->
-    [{Name, trunc(proplists:get_value(one, Stats))},
-     {join(Name, total), proplists:get_value(count, Stats)}];
-backwards_compat(mapper_count, counter, Stats) ->
-    {executing_mappers, Stats};
-backwards_compat(pbc_connects_active, counter, Stats) ->
-    {pbc_active, Stats};
-backwards_compat(Name, counter, Stats) ->
-    {Name, Stats};
-backwards_compat(Name, histogram, Stats) ->
-    backwards_compat_histo(Name, Stats).
+%% Stats are namespaced by APP in folsom
+%% so that we don't need to co-ordinate on naming
+%% between apps.
+stat_name(Name) when is_list(Name) ->
+    list_to_tuple([?APP] ++ Name);
+stat_name(Name) when is_atom(Name) ->
+    {?APP, Name}.
 
-backwards_compat_histo(Name, Stats) ->
-    Percentiles = proplists:get_value(percentile, Stats),
-    [{join(Name, mean), trunc(proplists:get_value(arithmetic_mean, Stats))},
-     {join(Name, median), trunc(proplists:get_value(median, Stats))},
-     {join(Name, '95'), trunc(proplists:get_value(95, Percentiles))},
-     {join(Name, '99'), trunc(proplists:get_value(99, Percentiles))},
-     {join(Name, '100'), trunc(proplists:get_value(max, Stats))}].
-
-join(Atom1, Atom2) ->
-    Bin1 = atom_to_binary(Atom1, latin1),
-    Bin2 = atom_to_binary(Atom2, latin1),
-    binary_to_atom(<<Bin1/binary, $_, Bin2/binary>>, latin1).
-
+%% @doc list of {Name, Type} for static
+%% stats that we can register at start up
 stats() ->
-    [{vnode_gets, spiral},
-     {vnode_puts, spiral},
-     {vnode_index_reads, spiral},
-     {vnode_index_writes, spiral},
-     {vnode_index_writes_postings, spiral},
-     {vnode_index_deletes, spiral},
-     {vnode_index_deletes_postings, spiral},
-     {node_gets, spiral},
-     {node_get_fsm_siblings, histogram},
-     {node_get_fsm_objsize, histogram},
-     {node_get_fsm_time, histogram},
-     {node_puts, spiral},
-     {node_put_fsm_time, histogram},
-     {read_repairs, spiral},
-     {coord_redirs_total, counter},
+    [{[vnode, gets], spiral},
+     {[vnode, gets, time], histogram},
+     {[vnode, puts], spiral},
+     {[vnode, puts, time], histogram},
+     {[vnode, index, reads], spiral},
+     {[vnode, index ,writes], spiral},
+     {[vnode, index, writes, postings], spiral},
+     {[vnode, index, deletes], spiral},
+     {[vnode, index, deletes, postings], spiral},
+     {[node, gets], spiral},
+     {[node, gets, siblings], histogram},
+     {[node, gets, objsize], histogram},
+     {[node, gets, time], histogram},
+     {[node, puts], spiral},
+     {[node, puts, time], histogram},
+     {[node, gets, read_repairs], spiral},
+     {[node, puts, coord_redirs], counter},
+     {[node, puts, fsm, active], counter},
+     {[node, gets, fsm, active], counter},
+     {[node, puts, fsm, errors], spiral},
+     {[node, gets, fsm, errors], spiral},
+     {[index, fsm, create], spiral},
+     {[index, fsm, create, error], spiral},
+     {[index, fsm, active], counter},
+     {[list, fsm, create], spiral},
+     {[list, fsm, create, error], spiral},
+     {[list, fsm, active], counter},
      {mapper_count, counter},
      {precommit_fail, counter},
-     {postcommit_fail, counter}].
+     {postcommit_fail, counter},
+     {[vnode, backend, leveldb, read_block_error],
+      {function, {function, ?MODULE, leveldb_read_block_errors}}}].
 
-register_stat(Name, spiral) ->
+%% @doc register a stat with folsom
+do_register_stat(Name, spiral) ->
     folsom_metrics:new_spiral(Name);
-register_stat(Name, counter) ->
+do_register_stat(Name, counter) ->
     folsom_metrics:new_counter(Name);
-register_stat(Name, histogram) ->
+do_register_stat(Name, histogram) ->
     %% get the global default histo type
     {SampleType, SampleArgs} = get_sample_type(Name),
-    folsom_metrics:new_histogram(Name, SampleType, SampleArgs).
+    folsom_metrics:new_histogram(Name, SampleType, SampleArgs);
+do_register_stat(Name, {function, F}) ->
+    %% store the function in a gauge metric
+    folsom_metrics:new_gauge(Name),
+    folsom_metrics:notify({Name, F}).
 
+%% @doc the histogram sample type may be set in app.config
+%% use key `stat_sample_type' in the `riak_kv' section. Or the
+%% name of an `histogram' stat.
+%% Check the folsom homepage for available types.
+%% Defaults to `{slide_uniform, {60, 1028}}' (a uniform sliding window
+%% of 60 seconds, with a uniform sample of at most 1028 entries)
 get_sample_type(Name) ->
     SampleType0 = app_helper:get_env(riak_kv, stat_sample_type, {slide_uniform, {60, 1028}}),
     app_helper:get_env(riak_kv, Name, SampleType0).
 
-%% @spec cpu_stats() -> proplist()
-%% @doc Get stats on the cpu, as given by the cpu_sup module
-%%      of the os_mon application.
-cpu_stats() ->
-    [{cpu_nprocs, cpu_sup:nprocs()},
-     {cpu_avg1, cpu_sup:avg1()},
-     {cpu_avg5, cpu_sup:avg5()},
-     {cpu_avg15, cpu_sup:avg15()}].
+%% @doc produce the legacy blob of stats for display.
+produce_stats() ->
+    riak_kv_stat_bc:produce_stats().
 
-%% @spec mem_stats() -> proplist()
-%% @doc Get stats on the memory, as given by the memsup module
-%%      of the os_mon application.
-mem_stats() ->
-    {Total, Alloc, _} = memsup:get_memory_data(),
-    [{mem_total, Total},
-     {mem_allocated, Alloc}].
-
-%% @spec disk_stats() -> proplist()
-%% @doc Get stats on the disk, as given by the disksup module
-%%      of the os_mon application.
-disk_stats() ->
-    [{disk, disksup:get_disk_data()}].
-
-system_stats() ->
-    [{nodename, node()},
-     {connected_nodes, nodes()},
-     {sys_driver_version, list_to_binary(erlang:system_info(driver_version))},
-     {sys_global_heaps_size, erlang:system_info(global_heaps_size)},
-     {sys_heap_type, erlang:system_info(heap_type)},
-     {sys_logical_processors, erlang:system_info(logical_processors)},
-     {sys_otp_release, list_to_binary(erlang:system_info(otp_release))},
-     {sys_process_count, erlang:system_info(process_count)},
-     {sys_smp_support, erlang:system_info(smp_support)},
-     {sys_system_version, list_to_binary(string:strip(erlang:system_info(system_version), right, $\n))},
-     {sys_system_architecture, list_to_binary(erlang:system_info(system_architecture))},
-     {sys_threads_enabled, erlang:system_info(threads)},
-     {sys_thread_pool_size, erlang:system_info(thread_pool_size)},
-     {sys_wordsize, erlang:system_info(wordsize)}].
-
-app_stats() ->
-    [{list_to_atom(atom_to_list(A) ++ "_version"), list_to_binary(V)}
-     || {A,_,V} <- application:which_applications()].
-
-memory_stats() ->
-    [{list_to_atom("memory_" ++ atom_to_list(K)), V} || {K,V} <- erlang:memory()].
-
-ring_stats() ->
+%% @doc get the leveldb.ReadBlockErrors counter.
+%% non-zero values mean it is time to consider replacing
+%% this nodes disk.
+leveldb_read_block_errors() ->
+    %% level stats are per node
+    %% but the way to get them is
+    %% is with riak_kv_vnode:vnode_status/1
+    %% for that reason just chose a partition
+    %% on this node at random
+    %% and ask for it's stats
     {ok, R} = riak_core_ring_manager:get_my_ring(),
-    [{ring_members, riak_core_ring:all_members(R)},
-     {ring_num_partitions, riak_core_ring:num_partitions(R)},
-     {ring_ownership, list_to_binary(lists:flatten(io_lib:format("~p", [dict:to_list(
-                        lists:foldl(fun({_P, N}, Acc) ->
-                                            case dict:find(N, Acc) of
-                                                {ok, V} ->
-                                                    dict:store(N, V+1, Acc);
-                                                error ->
-                                                    dict:store(N, 1, Acc)
-                                            end
-                                    end, dict:new(), riak_core_ring:all_owners(R)))])))}].
+    case riak_core_ring:my_indices(R) of
+        [] -> undefined;
+        [Idx] ->
+            Status = vnode_status(Idx),
+            leveldb_read_block_errors(Status);
+        Indices ->
+            %% technically a call to status is a vnode
+            %% operation, so spread the load by picking
+            %% a vnode at random.
+            Nth = crypto:rand_uniform(1, length(Indices)),
+            Idx = lists:nth(Nth, Indices),
+            Status = vnode_status(Idx),
+            leveldb_read_block_errors(Status)
+    end.
 
+vnode_status(Idx) ->
+    PList = [{Idx, node()}],
+    [{Idx, [Status]}] = riak_kv_vnode:vnode_status(PList),
+    Status.
 
-config_stats() ->
-    [{ring_creation_size, app_helper:get_env(riak_core, ring_creation_size)},
-     {storage_backend, app_helper:get_env(riak_kv, storage_backend)}].
+leveldb_read_block_errors({backend_status, riak_kv_eleveldb_backend, Status}) ->
+    rbe_val(proplists:get_value(read_block_error, Status));
+leveldb_read_block_errors({backend_status, riak_kv_multi_backend, Statuses}) ->
+    multibackend_read_block_errors(Statuses, undefined);
+leveldb_read_block_errors(_) ->
+    undefined.
+
+multibackend_read_block_errors([], Val) ->
+    rbe_val(Val);
+multibackend_read_block_errors([{_Name, Status}|Rest], undefined) ->
+    RBEVal = case proplists:get_value(mod, Status) of
+                 riak_kv_eleveldb_backend ->
+                     proplists:get_value(read_block_error, Status);
+                 _ -> undefined
+             end,
+    multibackend_read_block_errors(Rest, RBEVal);
+multibackend_read_block_errors(_, Val) ->
+    rbe_val(Val).
+
+rbe_val(Bin) when is_binary(Bin) ->
+    list_to_integer(binary_to_list(Bin));
+rbe_val(_) ->
+    undefined.
+
+%% All stat creation is serialized through riak_kv_stat.
+%% Some stats are created on demand as part of the call to `update/1'.
+%% When a stat error is caught, the stat must be deleted and recreated.
+%% Since stat updates can happen from many processes concurrently
+%% a stat that throws an error may already have been deleted and
+%% recreated. To protect against needlessly deleting and recreating
+%% an already 'fixed stat' first retry the stat update. There is a chance
+%% that the retry succeeds as the stat has been recreated, but some on
+%% demand stat it uses has not yet. Since stat creates are serialized
+%% in riak_kv_stat re-registering a stat could cause a deadlock.
+%% This loop is spawned as a process to avoid that.
+stat_repair_loop() ->
+    receive
+        {re_register_stat, Arg} ->
+            re_register_stat(Arg),
+            stat_repair_loop();
+        _ ->
+            stat_repair_loop()
+    end.
+
+re_register_stat(Arg) ->
+    case (catch do_update(Arg)) of
+        {'EXIT', _} ->
+            Stats =  stats_from_update_arg(Arg),
+            [begin
+                 (catch folsom_metrics:delete_metric(Name)),
+                 do_register_stat(Name, Type)
+             end || {Name, {metric, _, Type, _}} <- Stats];
+        ok  ->
+            ok
+    end.
+
+%% Map from application argument used in call to `update/1' to
+%% folsom stat names and types.
+%% Updates that create dynamic stats must select all
+%% related stats.
+stats_from_update_arg({vnode_get, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, gets]);
+stats_from_update_arg({vnode_put, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, puts]);
+stats_from_update_arg(vnode_index_read) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, index, reads]);
+stats_from_update_arg({vnode_index_write, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, index, writes]) ++
+        riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
+stats_from_update_arg({vnode_index_delete, _}) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
+stats_from_update_arg({get_fsm, _, _, _, _, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, node, gets]);
+stats_from_update_arg({put_fsm_time, _, _, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, node, puts]);
+stats_from_update_arg({read_repairs, _, _}) ->
+    riak_core_stat_q:names_and_types([?APP, nodes, gets, read_repairs]);
+stats_from_update_arg(coord_redirs) ->
+    [{{?APP, node, puts, coord_redirs}, {metric,[],counter,undefined}}];
+stats_from_update_arg(mapper_start) ->
+    [{{?APP, mapper_count}, {metric,[],counter,undefined}}];
+stats_from_update_arg(mapper_end) ->
+    stats_from_update_arg(mapper_start);
+stats_from_update_arg(precommit_fail) ->
+    [{{?APP, precommit_fail}, {metric,[],counter,undefined}}];
+stats_from_update_arg(postcommit_fail) ->
+    [{{?APP, postcommit_fail}, {metric,[],counter,undefined}}];
+stats_from_update_arg({fsm_spawned, Type}) ->
+    [{{?APP, node, Type, fsm, active}, {metric,[],counter,undefined}}];
+stats_from_update_arg({fsm_exit, Type}) ->
+    stats_from_update_arg({fsm_spawned, Type});
+stats_from_update_arg({fsm_error, Type}) ->
+    stats_from_update_arg({fsm_spawned, Type}) ++
+        [{{?APP, node, Type, fsm, errors}, {metric,[], spiral, undefined}}];
+stats_from_update_arg({index_create, _Pid}) ->
+    [{{?APP, index, fsm, create}, {metric, [], spiral, undefined}}];
+stats_from_update_arg(index_create_error) ->
+    [{{?APP, index, fsm, create, error}, {metric, [], spiral, undefined}}];
+stats_from_update_arg({list_create, _Pid}) ->
+    [{{?APP, list, fsm, create}, {metric, [], spiral, undefined}}];
+stats_from_update_arg(list_create_error) ->
+    [{{?APP, list, fsm, create, error}, {metric, [], spiral, undefined}}];
+stats_from_update_arg(_) ->
+    [].
+
+-ifdef(TEST).
+-define(LEVEL_STATUS(Idx, Val),  [{Idx, [{backend_status, riak_kv_eleveldb_backend,
+                                                      [{read_block_error, Val}]}]}]).
+-define(BITCASK_STATUS(Idx),  [{Idx, [{backend_status, riak_kv_bitcask_backend,
+                                                      []}]}]).
+-define(MULTI_STATUS(Idx, Val), [{Idx,  [{backend_status, riak_kv_multi_backend, Val}]}]).
+
+leveldb_rbe_test_() ->
+    {foreach,
+     fun() ->
+             meck:new(riak_core_ring_manager),
+             meck:new(riak_core_ring),
+             meck:new(riak_kv_vnode),
+             meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, [fake_ring]} end)
+     end,
+     fun(_) ->
+             meck:unload(riak_kv_vnode),
+             meck:unload(riak_core_ring),
+             meck:unload(riak_core_ring_manager)
+     end,
+     [{"Zero indexes", fun zero_indexes/0},
+      {"Single index", fun single_index/0},
+      {"Multi indexes", fun multi_index/0},
+      {"Bitcask Backend", fun bitcask_backend/0},
+      {"Multi Backend", fun multi_backend/0}]
+    }.
+
+zero_indexes() ->
+    meck:expect(riak_core_ring, my_indices, fun(_R) -> [] end),
+    ?assertEqual(undefined, leveldb_read_block_errors()).
+
+single_index() ->
+    meck:expect(riak_core_ring, my_indices, fun(_R) -> [index1] end),
+    meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) -> ?LEVEL_STATUS(Idx, <<"100">>) end),
+    ?assertEqual(100, leveldb_read_block_errors()),
+
+    meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) -> ?LEVEL_STATUS(Idx, nonsense) end),
+    ?assertEqual(undefined, leveldb_read_block_errors()).
+
+multi_index() ->
+    meck:expect(riak_core_ring, my_indices, fun(_R) -> [index1, index2, index3] end),
+    meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) -> ?LEVEL_STATUS(Idx, <<"100">>) end),
+    ?assertEqual(100, leveldb_read_block_errors()).
+
+bitcask_backend() ->
+    meck:expect(riak_core_ring, my_indices, fun(_R) -> [index1, index2, index3] end),
+    meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) -> ?BITCASK_STATUS(Idx) end),
+    ?assertEqual(undefined, leveldb_read_block_errors()).
+
+multi_backend() ->
+    meck:expect(riak_core_ring, my_indices, fun(_R) -> [index1, index2, index3] end),
+    %% some backends, none level
+    meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) ->
+                                                     ?MULTI_STATUS(Idx,
+                                                              [{name1, [{mod, bitcask}]},
+                                                               {name2, [{mod, fired_chicked}]}]
+                                                       )
+                                             end),
+    ?assertEqual(undefined, leveldb_read_block_errors()),
+
+    %% one or movel leveldb backends (first level answer is returned)
+    meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) ->
+                                                    ?MULTI_STATUS(Idx,
+                                                              [{name1, [{mod, bitcask}]},
+                                                               {name2, [{mod, riak_kv_eleveldb_backend},
+                                                                        {read_block_error, <<"99">>}]},
+                                                               {name2, [{mod, riak_kv_eleveldb_backend},
+                                                                        {read_block_error, <<"1000">>}]}]
+                                                       )
+                                             end),
+    ?assertEqual(99, leveldb_read_block_errors()).
+
+-endif.

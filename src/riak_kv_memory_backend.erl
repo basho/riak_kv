@@ -56,15 +56,20 @@
          status/1,
          callback/3]).
 
+-export([data_size/1]).
+
 %% "Testing" backend API
 -export([reset/0]).
 
+-include("riak_kv_index.hrl").
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-compile([export_all]).
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold, indexes]).
+-define(CAPABILITIES, [async_fold, indexes, size]).
 
 %% Macros for working with indexes
 -define(DELETE_PTN(B,K), {{B,'_','_',K},'_'}).
@@ -196,7 +201,7 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
                                                       time_ref=TimeRef,
                                                       ttl=TTL,
                                                       used_memory=UsedMemory}) ->
-    Now = now(),
+    Now = os:timestamp(),
     case TTL of
         undefined ->
             Val1 = Val;
@@ -271,9 +276,25 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{data_ref=DataRef}) ->
                 any(),
                 [{atom(), term()}],
                 state()) -> {ok, term()} | {async, fun()}.
-fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef,
-                                         index_ref=IndexRef}) ->
+fold_keys(FoldKeysFun, Acc, Opts, State) ->
+   fold(fun fold_keys_fun/2, FoldKeysFun, Acc, Opts, State).
 
+%% @doc Fold over all the objects for one or all buckets.
+-spec fold_objects(riak_kv_backend:fold_objects_fun(),
+                   any(),
+                   [{atom(), term()}],
+                   state()) -> {ok, any()} | {async, fun()}.
+fold_objects(FoldObjectsFun, Acc, Opts, State) ->
+    fold(fun fold_objects_fun/2, FoldObjectsFun, Acc, Opts, State).
+
+%% @private
+%% @doc generalised fold
+-spec fold(function(), riak_kv_backend:fold_objects_fun() |
+           riak_kv_backend:fold_keys_fun(), any(),
+           [{atom(), term()}],
+           state()) ->
+                   {ok, any()} | {async, function()}.
+fold(FoldTypeFun, FoldFun0, Acc, Opts, #state{data_ref=DataRef, index_ref=IndexRef}) ->
     %% Figure out how we should limit the fold: by bucket, by
     %% secondary index, or neither (fold across everything.)
     Bucket = lists:keyfind(bucket, 1, Opts),
@@ -283,13 +304,13 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef,
     %% get an appropriate folder function.
     Folder = if
                  Index /= false  ->
-                     FoldFun = fold_keys_fun(FoldKeysFun, Index),
+                     FoldFun = FoldTypeFun(FoldFun0, Index),
                      get_index_folder(FoldFun, Acc, Index, DataRef, IndexRef);
                  Bucket /= false ->
-                     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
+                     FoldFun = FoldTypeFun(FoldFun0, Bucket),
                      get_folder(FoldFun, Acc, DataRef);
                  true ->
-                     FoldFun = fold_keys_fun(FoldKeysFun, undefined),
+                     FoldFun = FoldTypeFun(FoldFun0, undefined),
                      get_folder(FoldFun, Acc, DataRef)
              end,
 
@@ -299,23 +320,6 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{data_ref=DataRef,
         false ->
             {ok, Folder()}
     end.
-
-%% @doc Fold over all the objects for one or all buckets.
--spec fold_objects(riak_kv_backend:fold_objects_fun(),
-                   any(),
-                   [{atom(), term()}],
-                   state()) -> {ok, any()} | {async, fun()}.
-fold_objects(FoldObjectsFun, Acc, Opts, #state{data_ref=DataRef}) ->
-    Bucket =  proplists:get_value(bucket, Opts),
-    FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
-    case lists:member(async_fold, Opts) of
-        true ->
-            {async, get_folder(FoldFun, Acc, DataRef)};
-        false ->
-            Acc0 = ets:foldl(FoldFun, Acc, DataRef),
-            {ok, Acc0}
-    end.
-
 %% @doc Delete all objects from this memory backend
 -spec drop(state()) -> {ok, state()}.
 drop(State=#state{data_ref=DataRef,
@@ -354,6 +358,19 @@ status(#state{data_ref=DataRef,
              {index_table_status, IndexStatus},
              {time_table_status, TimeStatus}]
     end.
+
+%% @doc Get the size of the memory backend. Returns a dynamic size
+%%      since new writes may appear in an ets fold
+-spec data_size(state()) -> undefined | {function(), dynamic}.
+data_size(#state{data_ref=DataRef}) ->
+    F = fun() ->
+                DataStatus = ets:info(DataRef),
+                case proplists:get_value(size, DataStatus) of
+                    undefined -> undefined;
+                    ObjCount -> {ObjCount, objects}
+                end
+        end,
+    {F, dynamic}.
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
@@ -413,19 +430,20 @@ fold_keys_fun(FoldKeysFun, {bucket, FilterBucket}) ->
        (_, Acc) ->
             Acc
     end;
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, {eq, <<"$bucket">>, _}}) ->
-    %% 2I exact match query on special $bucket field...
+%% V2 indexes
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, ?KV_INDEX_Q{filter_field=FF}}) when
+      FF == <<"$bucket">>; FF == <<"$key">> ->
     fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, <<"$key">>, _, _}}) ->
-    %% 2I range query on special $key field...
-    fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
-fold_keys_fun(FoldKeysFun, {index, _FilterBucket, _Query}) ->
-    fun({{Bucket, _FilterField, _FilterTerm, Key}, _}, Acc) ->
-            FoldKeysFun(Bucket, Key, Acc);
+fold_keys_fun(FoldKeysFun, {index, _FilterBucket, ?KV_INDEX_Q{}}) ->
+    fun({{Bucket, _FilterField, FilterTerm, Key}, _}, Acc) ->
+            FoldKeysFun(Bucket, {FilterTerm, Key}, Acc);
        (_, Acc) ->
             Acc
-    end.
-
+    end;
+%% Upgrade legacy indexes
+fold_keys_fun(FoldKeysFun, {index, Bucket, Q}) ->
+    UpgradeQ = riak_index:upgrade_query(Q),
+    fold_keys_fun(FoldKeysFun, {index, Bucket, UpgradeQ}).
 
 %% @private
 %% Return a function to fold over keys on this backend
@@ -435,11 +453,17 @@ fold_objects_fun(FoldObjectsFun, undefined) ->
        (_, Acc) ->
             Acc
     end;
-fold_objects_fun(FoldObjectsFun, FilterBucket) ->
+fold_objects_fun(FoldObjectsFun, {bucket, FilterBucket}) ->
     fun({{Bucket, Key}, Value}, Acc) when Bucket == FilterBucket->
             FoldObjectsFun(Bucket, Key, Value, Acc);
        (_, Acc) ->
             Acc
+    end;
+%% V2 Indexes NOTE: no folding over objects for non $ indexes, yet.
+fold_objects_fun(FoldObjectsFun, {index, _Bucket, ?KV_INDEX_Q{filter_field=FF}})
+    when FF == <<"$bucket">>; FF == <<"$key">>  ->
+    fun({{Bucket, Key}, Value}, Acc) ->
+            FoldObjectsFun(Bucket, {o, Key, Value}, Acc)
     end.
 
 %% @private
@@ -449,66 +473,76 @@ get_folder(FoldFun, Acc, DataRef) ->
     end.
 
 %% @private
-get_index_folder(Folder, Acc0, {index, Bucket, {eq, <<"$bucket">>, _}}, DataRef, _) ->
-    %% For the special $bucket index, turn it into a fold over the
-    %% data table.
+%% V2 2i
+get_index_folder(Folder, Acc0, {index, Bucket, Q=?KV_INDEX_Q{filter_field=FF, start_key=StartKey}}, DataRef, _)
+  when FF == <<"$bucket">>; FF == <<"$key">> ->
     fun() ->
-            key_range_folder(Folder, Acc0, DataRef, {Bucket, <<>>}, Bucket)
+            key_range_folder(Folder, Acc0, DataRef, {Bucket, StartKey}, {Bucket, Q})
     end;
-get_index_folder(Folder, Acc0, {index, Bucket, {range, <<"$key">>, Min, Max}}, DataRef, _) ->
-    %% For the special range lookup on the $key index, turn it into a
-    %% fold on the data table
+get_index_folder(Folder, Acc0, {index, Bucket, Q=?KV_INDEX_Q{}}, _, IndexRef) ->
+    %% get range
+    ?KV_INDEX_Q{start_key=StartKey, start_term=Min, filter_field=FF, end_term=Max, start_inclusive=Incl} = Q,
     fun() ->
-            key_range_folder(Folder, Acc0, DataRef, {Bucket, Min}, {Bucket, Min, Max})
+            index_range_folder(Folder, Acc0, IndexRef,
+                               {Bucket, FF, Min, StartKey},
+                               {Bucket, FF, Min, Max, StartKey, Incl})
     end;
-get_index_folder(Folder, Acc0, {index, Bucket, {eq, Field, Term}}, _, IndexRef) ->
-    fun() ->
-            index_range_folder(Folder, Acc0, IndexRef, {Bucket, Field, Term, undefined}, {Bucket, Field, Term, Term})
-    end;
-get_index_folder(Folder, Acc0, {index, Bucket, {range, Field, Min, Max}}, _, IndexRef) ->
-    fun() ->
-            index_range_folder(Folder, Acc0, IndexRef, {Bucket, Field, Min, undefined}, {Bucket, Field, Min, Max})
-    end.
+get_index_folder(Folder, Acc, {index, Bucket, Q}, DataRef, IndexRef) ->
+    UpgradeQ = riak_index:upgrade_query(Q),
+    get_index_folder(Folder, Acc, {index, Bucket, UpgradeQ}, DataRef, IndexRef).
 
 
-%% Iterates over a range of keys, for the special $key and $bucket
+%% Iterates over a range of keys (values?), for the special $key and $bucket
 %% indexes.
 %% @private
--spec key_range_folder(function(), term(), ets:tid(), {riak_object:bucket(), riak_object:key()}, binary() | {riak_object:bucket(), term(), term()}) -> term().
-key_range_folder(Folder, Acc0, DataRef, {B,_}=DataKey, B) ->
+-spec key_range_folder(function(), term(), ets:tid(),
+                       {riak_object:bucket(), riak_object:key()},
+                       {riak_object:bucket(), Query::term()})
+                      -> term().
+key_range_folder(Folder, Acc0, DataRef, {B, _K}=DataKey, {B, Q}) ->
     case ets:lookup(DataRef, DataKey) of
         [] ->
-            key_range_folder(Folder, Acc0, DataRef, ets:next(DataRef, DataKey), B);
-        [Object] ->
-            Acc = Folder(Object, Acc0),
-            key_range_folder(Folder, Acc, DataRef, ets:next(DataRef, DataKey), B)
-    end;
-key_range_folder(Folder, Acc0, DataRef, {B,K}=DataKey, {B, Min, Max}=Query) when K >= Min, K =< Max ->
-    case ets:lookup(DataRef, DataKey) of
-        [] ->
-            key_range_folder(Folder, Acc0, DataRef, ets:next(DataRef, DataKey), Query);
-        [Object] ->
-            Acc = Folder(Object, Acc0),
-            key_range_folder(Folder, Acc, DataRef, ets:next(DataRef, DataKey), Query)
+            key_range_folder(Folder, Acc0, DataRef, ets:next(DataRef, DataKey), {B, Q});
+        [{DataKey, _V}=Obj] ->
+            case riak_index:object_key_in_range(DataKey, B, Q) of
+                {true, DataKey} ->
+                    %% add value to acc
+                    try
+                        Acc = Folder(Obj, Acc0),
+                        key_range_folder(Folder, Acc, DataRef, ets:next(DataRef, DataKey), {B, Q})
+                    catch stop_fold ->
+                            Acc0
+                    end;
+                {skip, DataKey} ->
+                    key_range_folder(Folder, Acc0, DataRef, ets:next(DataRef, DataKey), {B, Q});
+                false -> Acc0
+            end
     end;
 key_range_folder(_Folder, Acc, _DataRef, _DataKey, _Query) ->
     Acc.
 
 %% Iterates over a range of index postings
-index_range_folder(Folder, Acc0, IndexRef, {B, I, V, _K}=IndexKey, {B, I, Min, Max}=Query) when V >= Min, V =< Max ->
-    case ets:lookup(IndexRef, IndexKey) of
-        [] ->
+index_range_folder(Folder, Acc0, IndexRef, {B, I, V, _K}=IndexKey,
+                   {B, I, Min, Max, StartKey, Incl}=Query) when V >= Min, V =< Max ->
+    case {Incl, ets:lookup(IndexRef, IndexKey)} of
+        {_, []} ->
             %% This will happen on the first iteration, where the key
             %% does not exist. In all other cases, ETS will give us a
             %% real key from next/2.
             index_range_folder(Folder, Acc0, IndexRef, ets:next(IndexRef, IndexKey), Query);
-        [Posting] ->
-            Acc = Folder(Posting, Acc0),
-            index_range_folder(Folder, Acc, IndexRef, ets:next(IndexRef, IndexKey), Query)
+        {false, [{{B, I, Min, StartKey},_}]} ->
+            %% Exclude start {val,key} from results
+            index_range_folder(Folder, Acc0, IndexRef, ets:next(IndexRef, IndexKey), Query);
+        {_, [Posting]} ->
+            try
+                Acc = Folder(Posting, Acc0),
+                index_range_folder(Folder, Acc, IndexRef, ets:next(IndexRef, IndexKey), Query)
+            catch stop_fold ->
+                    Acc0
+            end
     end;
 index_range_folder(_Folder, Acc, _IndexRef, _IndexKey, _Query) ->
     Acc.
-
 
 %% @private
 do_put(Bucket, Key, Val, IndexSpecs, DataRef, IndexRef) ->
@@ -519,7 +553,7 @@ do_put(Bucket, Key, Val, IndexSpecs, DataRef, IndexRef) ->
 
 %% Check if this timestamp is past the ttl setting.
 exceeds_ttl(Timestamp, TTL) ->
-    Diff = (timer:now_diff(now(), Timestamp) / 1000 / 1000),
+    Diff = (timer:now_diff(os:timestamp(), Timestamp) / 1000 / 1000),
     Diff > TTL.
 
 update_indexes(_Bucket, _Key, undefined, _IndexRef) ->
@@ -638,6 +672,34 @@ max_memory_test_() ->
      ?_assertEqual({error, not_found, State2}, get(Bucket, Key1, State2)),
      %% Key2 should still be present
      ?_assertEqual({ok, Value2, State2}, get(Bucket, Key2, State2))
+    ].
+
+regression_367_key_range_test_() ->
+    {ok, State} = start(142, []),
+    Keys = [begin
+                Bin = list_to_binary(integer_to_list(I)),
+                if I < 10 ->
+                        <<"obj0", Bin/binary>>;
+                   true -> <<"obj", Bin/binary>>
+                end
+            end || I <- lists:seq(1,30) ],
+    Bucket = <<"keyrange">>,
+    Value = <<"foobarbaz">>,
+    State1 = lists:foldl(fun(Key, IState) ->
+                                 {ok, NewState} = put(Bucket, Key, [], Value, IState),
+                                 NewState
+                         end, State, Keys),
+    Folder = fun(_B, K, Acc) ->
+                     Acc ++ [K]
+             end,
+    [
+     ?_assertEqual({ok, [<<"obj01">>]}, fold_keys(Folder, [], [{index, Bucket, {range, <<"$key">>, <<"obj01">>, <<"obj01">>}}], State1)),
+     ?_assertEqual({ok, [<<"obj10">>,<<"obj11">>]}, fold_keys(Folder, [], [{index, Bucket, {range, <<"$key">>, <<"obj10">>, <<"obj11">>}}], State1)),
+     ?_assertEqual({ok, [<<"obj01">>]}, fold_keys(Folder, [], [{index, Bucket, {range, <<"$key">>, <<"obj00">>, <<"obj01">>}}], State1)),
+     ?_assertEqual({ok, lists:sort(Keys)}, fold_keys(Folder, [], [{index, Bucket, {range, <<"$key">>, <<"obj0">>, <<"obj31">>}}], State1)),
+     ?_assertEqual({ok, []}, fold_keys(Folder, [], [{index, Bucket, {range, <<"$key">>, <<"obj31">>, <<"obj32">>}}], State1)),
+     ?_assertEqual({ok, [<<"obj01">>]}, fold_keys(Folder, [], [{index, Bucket, {eq, <<"$key">>, <<"obj01">>}}], State1)),
+     ?_assertEqual(ok, stop(State1))
     ].
 
 -ifdef(EQC).

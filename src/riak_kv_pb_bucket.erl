@@ -26,8 +26,6 @@
 %% <pre>
 %% 15 - RpbListBucketsReq
 %% 17 - RpbListKeysReq
-%% 19 - RpbGetBucketReq
-%% 21 - RpbSetBucketReq
 %% </pre>
 %%
 %% <p>This service produces the following responses:</p>
@@ -35,8 +33,6 @@
 %% <pre>
 %% 16 - RpbListBucketsResp
 %% 18 - RpbListKeysResp{1,}
-%% 20 - RpbGetBucketResp
-%% 22 - RpbSetBucketResp
 %% </pre>
 %%
 %% <p>The semantics are unchanged from their original
@@ -75,42 +71,35 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(rpblistbucketsreq,
-        #state{client=C} = State) ->
-    case C:list_buckets() of
-        {ok, Buckets} ->
-            {reply, #rpblistbucketsresp{buckets = Buckets}, State};
-        {error, Reason} ->
-            {error, {format, Reason}, State}
+process(#rpblistbucketsreq{timeout=T, stream=S}=Req,
+        #state{client=C} = State) -> 
+    case S of 
+        true -> 
+            {ok, ReqId} = C:stream_list_buckets(T),
+            {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
+        _ ->
+            case C:list_buckets(T) of
+                {ok, Buckets} ->
+                    {reply, #rpblistbucketsresp{buckets = Buckets}, State};
+                {error, Reason} ->
+                    {error, {format, Reason}, State}
+            end
     end;
 
+%% this should remain for backwards compatibility
+process(rpblistbucketsreq, State) ->
+    process(#rpblistbucketsreq{}, State);
+
 %% Start streaming in list keys
-process(#rpblistkeysreq{bucket=B}=Req, #state{client=C} = State) ->
+process(#rpblistkeysreq{bucket=B,timeout=T}=Req, #state{client=C} = State) ->
     %% stream_list_keys results will be processed by process_stream/3
-    {ok, ReqId} = C:stream_list_keys(B),
-    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
+    {ok, ReqId} = C:stream_list_keys(B, T),
+    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}}.
 
-%% Get bucket properties
-process(#rpbgetbucketreq{bucket=B},
-        #state{client=C} = State) ->
-    Props = C:get_bucket(B),
-    PbProps = riak_pb_kv_codec:encode_bucket_props(Props),
-    {reply, #rpbgetbucketresp{props = PbProps}, State};
-
-%% Set bucket properties
-process(#rpbsetbucketreq{bucket=B, props = PbProps},
-        #state{client=C} = State) ->
-    Props = riak_pb_kv_codec:decode_bucket_props(PbProps),
-    case C:set_bucket(B, Props) of
-        ok ->
-            {reply, rpbsetbucketresp, State};
-        {error, Details} ->
-            {error, {format, "Invalid bucket properties: ~p", [Details]}, State}
-    end.
-
-%% @doc process_stream/3 callback. Handles streaming keys messages.
+%% @doc process_stream/3 callback. Handles streaming keys messages and
+%% streaming buckets.
 process_stream({ReqId, done}, ReqId,
-            State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
+               State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     {done, #rpblistkeysresp{done = 1}, State};
 process_stream({ReqId, From, {keys, []}}, ReqId,
                State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
@@ -128,4 +117,17 @@ process_stream({ReqId, {keys, Keys}}, ReqId,
     {reply, #rpblistkeysresp{keys = Keys}, State};
 process_stream({ReqId, Error}, ReqId,
                State=#state{ req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
+    {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}};
+%% list buckets clauses.
+process_stream({ReqId, done}, ReqId,
+               State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
+    {done, #rpblistbucketsresp{done = 1}, State};
+process_stream({ReqId, {buckets_stream, []}}, ReqId,
+               State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
+    {ignore, State};
+process_stream({ReqId, {buckets_stream, Buckets}}, ReqId,
+               State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
+    {reply, #rpblistbucketsresp{buckets = Buckets}, State};
+process_stream({ReqId, Error}, ReqId,
+               State=#state{ req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}}.
