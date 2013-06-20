@@ -1038,77 +1038,74 @@ send_precommit_error(RD, Reason) ->
             end,
     wrq:append_to_response_body(Error, RD1).
 
-handle_common_error(Reason, RD, Ctx) ->
-    case {error, Reason} of
-        {error, precommit_fail} ->
-            {{halt, 403}, send_precommit_error(RD, undefined), Ctx};
-        {error, {precommit_fail, Message}} ->
-            {{halt, 403}, send_precommit_error(RD, Message), Ctx};
-        {error, too_many_fails} ->
-            {{halt, 503}, wrq:append_to_response_body("Too Many write failures"
-                    " to satisfy W/DW\n", RD), Ctx};
-        {error, timeout} ->
-            {{halt, 503},
-                wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("request timed out~n",[]),
-                        RD)),
-                Ctx};
-        {error, notfound} ->
-            {{halt, 404},
-                wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("not found~n",[]),
-                        RD)),
-                Ctx};
-        {error, {deleted, _VClock}} ->
-            {{halt, 404},
-                wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:set_resp_header(?HEAD_DELETED, "true",
-                        wrq:append_to_response_body(
-                            io_lib:format("not found~n",[]),
-                            encode_vclock_header(RD, Ctx)))),
-                Ctx};
-        {error, {n_val_violation, N}} ->
-            Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
-                " n value of ~p~n", [N]),
-            {{halt, 400}, wrq:append_to_response_body(Msg, RD), Ctx};
-        {error, {r_val_unsatisfied, Requested, Returned}} ->
-            {{halt, 503},
-                wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("R-value unsatisfied: ~p/~p~n",
-                            [Returned, Requested]),
-                        RD)),
-                Ctx};
-        {error, {dw_val_unsatisfied, DW, NumDW}} ->
-            {{halt, 503},
-                wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("DW-value unsatisfied: ~p/~p~n",
-                            [NumDW, DW]),
-                        RD)),
-                Ctx};
-        {error, {pr_val_unsatisfied, Requested, Returned}} ->
-            {{halt, 503},
-                wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("PR-value unsatisfied: ~p/~p~n",
-                            [Returned, Requested]),
-                        RD)),
-                Ctx};
-        {error, {pw_val_unsatisfied, Requested, Returned}} ->
-            Msg = io_lib:format("PW-value unsatisfied: ~p/~p~n", [Returned,
-                    Requested]),
-            {{halt, 503}, wrq:append_to_response_body(Msg, RD), Ctx};
-        {error, Err} ->
-            {{halt, 500},
-                wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("Error:~n~p~n",[Err]),
-                        RD)),
-                Ctx}
-    end.
+handle_common_error(precommit_fail, RD, Ctx) ->
+    {{halt, 403}, send_precommit_error(RD, undefined), Ctx};
+handle_common_error({precommit_fail, Message}, RD, Ctx) ->
+    {{halt, 403}, send_precommit_error(RD, Message), Ctx};
+handle_common_error(too_many_fails, RD, Ctx) ->
+    {{halt, 503}, wrq:append_to_response_body("Too Many write failures"
+                      " to satisfy W/DW\n", RD), Ctx};
+handle_common_error(timeout, RD, Ctx) ->
+    {{halt, 503},
+        wrq:set_resp_header("Content-Type", "text/plain",
+            wrq:append_to_response_body(
+                io_lib:format("request timed out~n",[]),
+                RD)),
+    Ctx};
+handle_common_error(notfound, RD, Ctx) ->
+    {{halt, 404},
+        wrq:set_resp_header("Content-Type", "text/plain",
+            wrq:append_to_response_body(
+                io_lib:format("not found~n",[]),
+                RD)),
+        Ctx};
+handle_common_error({deleted, _VClock}, RD, Ctx) ->
+    {{halt, 404},
+        wrq:set_resp_header("Content-Type", "text/plain",
+            wrq:set_resp_header(?HEAD_DELETED, "true",
+                wrq:append_to_response_body(
+                    io_lib:format("not found~n",[]),
+                    encode_vclock_header(RD, Ctx)))),
+        Ctx};
+handle_common_error({n_val_violation, N}, RD, Ctx) ->
+    Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
+        " n value of ~p~n", [N]),
+    {{halt, 400}, wrq:append_to_response_body(Msg, RD), Ctx};
+handle_common_error({r_val_unsatisfied, Requested, Returned}, RD, Ctx) ->
+    {{halt, 503},
+        wrq:set_resp_header("Content-Type", "text/plain",
+            wrq:append_to_response_body(
+                io_lib:format("R-value unsatisfied: ~p/~p~n",
+                    [Returned, Requested]),
+                RD)),
+        Ctx};
+handle_common_error({dw_val_unsatisfied, DW, NumDW}, RD, Ctx) ->
+    {{halt, 503},
+        wrq:set_resp_header("Content-Type", "text/plain",
+            wrq:append_to_response_body(
+                io_lib:format("DW-value unsatisfied: ~p/~p~n",
+                    [NumDW, DW]),
+                RD)),
+        Ctx};
+handle_common_error({pr_val_unsatisfied, Requested, Returned}, RD, Ctx) ->
+    {{halt, 503},
+        wrq:set_resp_header("Content-Type", "text/plain",
+            wrq:append_to_response_body(
+                io_lib:format("PR-value unsatisfied: ~p/~p~n",
+                    [Returned, Requested]),
+                RD)),
+        Ctx};
+handle_common_error({pw_val_unsatisfied, Requested, Returned}, RD, Ctx) ->
+    Msg = io_lib:format("PW-value unsatisfied: ~p/~p~n", [Returned,
+            Requested]),
+    {{halt, 503}, wrq:append_to_response_body(Msg, RD), Ctx};
+handle_common_error(Err, RD, Ctx) ->
+    {{halt, 500},
+        wrq:set_resp_header("Content-Type", "text/plain",
+            wrq:append_to_response_body(
+                io_lib:format("Error:~n~p~n",[Err]),
+                RD)),
+        Ctx}.
 
 make_options(Prev, Ctx) ->
     NewOpts0 = [{rw, Ctx#ctx.rw}, {r, Ctx#ctx.r}, {w, Ctx#ctx.w},

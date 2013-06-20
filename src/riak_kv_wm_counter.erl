@@ -303,72 +303,69 @@ ensure_doc(Ctx=#ctx{doc=undefined, bucket=B, key=K, client=C, r=R,
                 {basic_quorum, Quorum}, {notfound_ok, NotFoundOK}])};
 ensure_doc(Ctx) -> Ctx.
 
-handle_common_error(Reason, RD, Ctx) ->
-    case {error, Reason} of
-        {error, too_many_fails} ->
-            {{halt, 503}, wrq:append_to_response_body("Too Many write failures"
-                    " to satisfy W/DW\n", RD), Ctx};
-        {error, timeout} ->
-            {{halt, 503},
-                wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("request timed out~n",[]),
-                        RD)),
-                Ctx};
-        {error, notfound} ->
-            {{halt, 404},
-                wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("not found~n",[]),
-                        RD)),
-                Ctx};
-        {error, {deleted, _VClock}} ->
-            {{halt, 404},
-                wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("not found~n",[]),
-                        RD)),
-                Ctx};
-        {error, {n_val_violation, N}} ->
-            Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
-                " n value of ~p~n", [N]),
-            {{halt, 400}, wrq:append_to_response_body(Msg, RD), Ctx};
-        {error, allow_mult_false} ->
-            Msg = "Counters require bucket property 'allow_mult=true'",
-            {{halt, 409}, wrq:append_to_response_body(Msg, RD), Ctx};
-        {error, {r_val_unsatisfied, Requested, Returned}} ->
-            {{halt, 503},
-                wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("R-value unsatisfied: ~p/~p~n",
-                            [Returned, Requested]),
-                        RD)),
-                Ctx};
-        {error, {w_val_unsatisfied, NumW, NumDW, W, DW}} ->
-            {{halt, 503},
-                wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("W/DW-value unsatisfied: w=~p/~p dw=~p/~p~n",
-                            [NumW, W, NumDW, DW]),
-                        RD)),
-                Ctx};
-        {error, {pr_val_unsatisfied, Requested, Returned}} ->
-            {{halt, 503},
-                wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("PR-value unsatisfied: ~p/~p~n",
-                            [Returned, Requested]),
-                        RD)),
-                Ctx};
-        {error, {pw_val_unsatisfied, Requested, Returned}} ->
-            Msg = io_lib:format("PW-value unsatisfied: ~p/~p~n", [Returned,
-                    Requested]),
-            {{halt, 503}, wrq:append_to_response_body(Msg, RD), Ctx};
-        {error, Err} ->
-            {{halt, 500},
-                wrq:set_resp_header("Content-Type", "text/plain",
-                    wrq:append_to_response_body(
-                        io_lib:format("Error:~n~p~n",[Err]),
-                        RD)),
-                Ctx}
-    end.
+handle_common_error(allow_mult_false, RD, Ctx) ->
+    Msg = "Counters require bucket property 'allow_mult=true'",
+    {{halt, 409}, wrq:append_to_response_body(Msg, RD), Ctx};
+handle_common_error(too_many_fails, RD, Ctx) ->
+    {{halt, 503}, wrq:append_to_response_body("Too Many write failures"
+                      " to satisfy W/DW\n", RD), Ctx};
+handle_common_error(timeout, RD, Ctx) ->
+    {{halt, 503},
+        wrq:set_resp_header("Content-Type", "text/plain",
+            wrq:append_to_response_body(
+                io_lib:format("request timed out~n",[]),
+                RD)),
+    Ctx};
+handle_common_error(notfound, RD, Ctx) ->
+    {{halt, 404},
+        wrq:set_resp_header("Content-Type", "text/plain",
+            wrq:append_to_response_body(
+                io_lib:format("not found~n",[]),
+                RD)),
+        Ctx};
+handle_common_error({deleted, _VClock}, RD, Ctx) ->
+    {{halt, 404},
+        wrq:set_resp_header("Content-Type", "text/plain",
+            wrq:append_to_response_body(
+                io_lib:format("not found~n",[]),
+                RD)),
+        Ctx};
+handle_common_error({n_val_violation, N}, RD, Ctx) ->
+    Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
+        " n value of ~p~n", [N]),
+    {{halt, 400}, wrq:append_to_response_body(Msg, RD), Ctx};
+handle_common_error({r_val_unsatisfied, Requested, Returned}, RD, Ctx) ->
+    {{halt, 503},
+        wrq:set_resp_header("Content-Type", "text/plain",
+            wrq:append_to_response_body(
+                io_lib:format("R-value unsatisfied: ~p/~p~n",
+                    [Returned, Requested]),
+                RD)),
+        Ctx};
+handle_common_error({dw_val_unsatisfied, DW, NumDW}, RD, Ctx) ->
+    {{halt, 503},
+        wrq:set_resp_header("Content-Type", "text/plain",
+            wrq:append_to_response_body(
+                io_lib:format("DW-value unsatisfied: ~p/~p~n",
+                    [NumDW, DW]),
+                RD)),
+        Ctx};
+handle_common_error({pr_val_unsatisfied, Requested, Returned}, RD, Ctx) ->
+    {{halt, 503},
+        wrq:set_resp_header("Content-Type", "text/plain",
+            wrq:append_to_response_body(
+                io_lib:format("PR-value unsatisfied: ~p/~p~n",
+                    [Returned, Requested]),
+                RD)),
+        Ctx};
+handle_common_error({pw_val_unsatisfied, Requested, Returned}, RD, Ctx) ->
+    Msg = io_lib:format("PW-value unsatisfied: ~p/~p~n", [Returned,
+            Requested]),
+    {{halt, 503}, wrq:append_to_response_body(Msg, RD), Ctx};
+handle_common_error(Err, RD, Ctx) ->
+    {{halt, 500},
+        wrq:set_resp_header("Content-Type", "text/plain",
+            wrq:append_to_response_body(
+                io_lib:format("Error:~n~p~n",[Err]),
+                RD)),
+        Ctx}.
