@@ -21,7 +21,10 @@
 
 -export([run/2]).
 
-run(ObjectVsn, KillHandoffs) ->
+run(ObjectVsn, Opts) ->
+    Concurrency = proplists:get_value(concurrency, Opts, 2),
+    KillHandoffs = proplists:get_value(kill_handoffs, Opts, true),
+    lager:info("Starting object reformat with concurrency: ~p", [Concurrency]),
     lager:info("Setting preferred object format to ~p", [ObjectVsn]),
     set_capabilities(ObjectVsn),
     lager:info("Preferred object format set to ~p", [ObjectVsn]),
@@ -35,13 +38,16 @@ run(ObjectVsn, KillHandoffs) ->
 
     %% migrate each running vnode
     Running = riak_core_vnode_manager:all_vnodes(riak_kv_vnode),
-    Me = node(),
     Counts = riak_core_util:pmap(fun({riak_kv_vnode, Idx, _}) ->
-                                         lager:debug("reformatting partition ~p on ~p",
-                                                     [Idx, Me]),
-                                         reformat_partition(Idx)
+                                         lager:info("reformatting objects on partition ~p",
+                                                    [Idx]),
+                                         {S, I, E} = reformat_partition(Idx),
+                                         lager:info("completed reformatting objects on "
+                                                    "partition ~p. Success: ~p. Ignored: ~p. "
+                                                    "Error: ~p", [Idx, S, I, E]),
+                                         {S, I, E}
                                  end,
-                                 Running),
+                                 Running, Concurrency),
     {SuccessCounts, IgnoredCounts, ErrorCounts} = lists:unzip3(Counts),
     SuccessTotal = lists:sum(SuccessCounts),
     IgnoredTotal = lists:sum(IgnoredCounts),
