@@ -144,6 +144,7 @@
 produce_stats() ->
     lists:append(
       [lists:flatten(legacy_stats()),
+       sidejob_stats(),
        read_repair_stats(),
        level_stats(),
        pipe_stats(),
@@ -266,14 +267,68 @@ legacy_stat_map() ->
      {list_fsm_active, {riak_kv, list, fsm, active}, counter},
      {pbc_active, {riak_api, pbc_connects, active}, function},
      {pbc_connects, {{riak_api, pbc_connects}, one}, spiral},
-     {pbc_connects_total, {{riak_api, pbc_connects}, count}, spiral},
-     {node_get_fsm_active, {riak_kv, node, gets, fsm, active}, counter},
-     {node_get_fsm_errors, {{riak_kv, node, gets, fsm, errors}, one}, spiral},
-     {node_get_fsm_errors_total, {{riak_kv, node, gets, fsm, errors}, count}, spiral},
-     {node_put_fsm_active, {riak_kv, node, puts, fsm, active}, counter},
-     {node_put_fsm_errors, {{riak_kv, node, puts, fsm, errors}, one}, spiral},
-     {node_put_fsm_errors_total, {{riak_kv, node, puts, fsm, errors}, count}, spiral}
-    ].
+     {pbc_connects_total, {{riak_api, pbc_connects}, count}, spiral}] ++ legacy_fsm_stats().
+
+legacy_fsm_stats() ->
+    %% When not using sidejob to manage FSMs, include the legacy FSM stats.
+    legacy_get_fsm_stats() ++ legacy_put_fsm_stats().
+
+legacy_get_fsm_stats() ->
+    case whereis(riak_kv_get_fsm_sj) of
+        undefined ->
+            [{node_get_fsm_active, {riak_kv, node, gets, fsm, active}, counter},
+             {node_get_fsm_errors, {{riak_kv, node, gets, fsm, errors}, one}, spiral},
+             {node_get_fsm_errors_total, {{riak_kv, node, gets, fsm, errors}, count}, spiral}];
+        _ ->
+            []
+    end.
+
+legacy_put_fsm_stats() ->
+    case whereis(riak_kv_put_fsm_sj) of
+        undefined ->
+            [{node_put_fsm_active, {riak_kv, node, puts, fsm, active}, counter},
+             {node_put_fsm_errors, {{riak_kv, node, puts, fsm, errors}, one}, spiral},
+             {node_put_fsm_errors_total, {{riak_kv, node, puts, fsm, errors}, count}, spiral}];
+        _ ->
+            []
+    end.
+
+sidejob_stats() ->
+    sidejob_get_fsm_stats() ++ sidejob_put_fsm_stats().
+
+sidejob_get_fsm_stats() ->
+    Resource = riak_kv_get_fsm_sj,
+    case whereis(Resource) of
+        undefined ->
+            [];
+        _ ->
+            Stats = sidejob_resource_stats:stats(Resource),
+            Map = [{node_get_fsm_active,         usage},
+                   {node_get_fsm_active_60s,     usage_60s},
+                   {node_get_fsm_in_rate,        in_rate},
+                   {node_get_fsm_out_rate,       out_rate},
+                   {node_get_fsm_rejected,       rejected},
+                   {node_get_fsm_rejected_60s,   rejected_60s},
+                   {node_get_fsm_rejected_total, rejected_total}],
+            [{Rename, proplists:get_value(Stat, Stats)} || {Rename, Stat} <- Map]
+    end.
+
+sidejob_put_fsm_stats() ->
+    Resource = riak_kv_put_fsm_sj,
+    case whereis(Resource) of
+        undefined ->
+            [];
+        _ ->
+            Stats = sidejob_resource_stats:stats(Resource),
+            Map = [{node_put_fsm_active,         usage},
+                   {node_put_fsm_active_60s,     usage_60s},
+                   {node_put_fsm_in_rate,        in_rate},
+                   {node_put_fsm_out_rate,       out_rate},
+                   {node_put_fsm_rejected,       rejected},
+                   {node_put_fsm_rejected_60s,   rejected_60s},
+                   {node_put_fsm_rejected_total, rejected_total}],
+            [{Rename, proplists:get_value(Stat, Stats)} || {Rename, Stat} <- Map]
+    end.
 
 %% @spec cpu_stats() -> proplist()
 %% @doc Get stats on the cpu, as given by the cpu_sup module
