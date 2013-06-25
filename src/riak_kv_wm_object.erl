@@ -787,7 +787,14 @@ produce_doc_body(RD, Ctx) ->
                                           UserMetaRD, IndexMeta);
                           error -> UserMetaRD
                       end,
-            {riak_kv_wm_utils:encode_value(Doc), encode_vclock_header(IndexRD, Ctx), Ctx};
+
+            % Add Preflist Header to response
+            PreflistRD = preflist_header(IndexRD, Ctx),
+            
+            % Add Vclock Header
+            VclockRD = encode_vclock_header(PreflistRD, Ctx),
+
+            {riak_kv_wm_utils:encode_value(Doc), VclockRD, Ctx};
         multiple_choices ->
             throw({unexpected_code_path, ?MODULE, produce_doc_body, multiple_choices})
     end.
@@ -800,9 +807,15 @@ produce_doc_body(RD, Ctx) ->
 produce_sibling_message_body(RD, Ctx=#ctx{doc={ok, Doc}}) ->
     Vtags = [ dict:fetch(?MD_VTAG, M)
               || M <- riak_object:get_metadatas(Doc) ],
+
+    % Add Preflist Header
+    PrefListRD = preflist_header(RD, Ctx),
+
+    % Vclock Header
+    VClockRD = encode_vclock_header(PrefListRD, Ctx),
+
     {[<<"Siblings:\n">>, [ [V,<<"\n">>] || V <- Vtags]],
-     wrq:set_resp_header(?HEAD_CTYPE, "text/plain",
-                         encode_vclock_header(RD, Ctx)),
+     wrq:set_resp_header(?HEAD_CTYPE, "text/plain", VClockRD),
      Ctx}.
 
 %% @spec produce_multipart_body(reqdata(), context()) ->
@@ -813,13 +826,17 @@ produce_sibling_message_body(RD, Ctx=#ctx{doc={ok, Doc}}) ->
 produce_multipart_body(RD, Ctx=#ctx{doc={ok, Doc}, bucket=B, prefix=P}) ->
     APIVersion = Ctx#ctx.api_version,
     Boundary = riak_core_util:unique_id_62(),
+
+    PrefListRD = preflist_header(RD, Ctx),
+    VclockRD = encode_vclock_header(PrefListRD, Ctx),
+
     {[[["\r\n--",Boundary,"\r\n",
         riak_kv_wm_utils:multipart_encode_body(P, B, Content, APIVersion)]
        || Content <- riak_object:get_contents(Doc)],
       "\r\n--",Boundary,"--\r\n"],
      wrq:set_resp_header(?HEAD_CTYPE,
                          "multipart/mixed; boundary="++Boundary,
-                         encode_vclock_header(RD, Ctx)),
+                         VclockRD),
      Ctx}.
 
 
@@ -1117,3 +1134,18 @@ make_options(Prev, Ctx) ->
     NewOpts = [ {Opt, Val} || {Opt, Val} <- NewOpts0,
                               Val /= undefined, Val /= default ],
     Prev ++ NewOpts.
+
+preflist_header(RD, Ctx) ->
+    PrefListNodes = get_preflist(Ctx),
+    {PrefListIPs, _FailNodes} = rpc:multicall(PrefListNodes, riak_core_config, http_ip_and_port, []),
+    PrefListHdr = riak_kv_wm_utils:format_preflist(PrefListIPs),
+    wrq:set_resp_header(?HEAD_PREFLIST, PrefListHdr, RD).
+
+% We only want primaries that are also up.
+get_preflist(_Ctx=#ctx{bucket=Bucket,key=Key}) ->
+    DocIdx = riak_core_util:chash_key({Bucket, Key}),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    N = proplists:get_value(n_val,BucketProps),
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    PrefList = riak_core_apl:get_apl_ann(DocIdx, N, UpNodes),
+    [Node || {{_VnodeId, Node}, primary} <- PrefList].
