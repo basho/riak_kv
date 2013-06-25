@@ -193,13 +193,11 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
             {stop, normal, StateData2};
         _ ->
             StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
-            UpNodes = riak_core_node_watcher:nodes(riak_kv),
             Preflist2 = case proplists:get_value(sloppy_quorum, Options, true) of
                         true ->
+                            UpNodes = riak_core_node_watcher:nodes(riak_kv),
                             riak_core_apl:get_apl_ann(DocIdx, N, UpNodes);
                         false ->
-                            %% TODO: Avoid 2nd call to node_watcher inside the
-                            %%       call to get_primary_apl/3.
                             riak_core_apl:get_primary_apl(DocIdx, N, riak_kv)
                     end,
             new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
