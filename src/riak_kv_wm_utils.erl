@@ -31,6 +31,7 @@
          multipart_encode_body/4,
          format_links/3,
          format_uri/4,
+         format_preflist/1,
          encode_value/1,
          accept_value/2,
          any_to_list/1,
@@ -177,6 +178,24 @@ format_uri(Bucket, Key, Prefix, 1) ->
     io_lib:format("/~s/~s/~s", [Prefix, Bucket, Key]);
 format_uri(Bucket, Key, _Prefix, 2) ->
     io_lib:format("/buckets/~s/keys/~s", [Bucket, Key]).
+    
+%% @doc Format the IP/Ports for correctly for the Preflist header
+format_preflist(Preflist) ->
+    binary_to_list(format_preflist_bin(Preflist)).
+
+format_preflist_bin([]) ->
+    <<>>;
+format_preflist_bin([{IP, Port}]) ->
+    iolist_to_binary(format_ip_port(IP, Port));
+format_preflist_bin([{IP, Port} | IPPortList]) ->
+    IPPort = iolist_to_binary(format_ip_port(IP, Port)),
+    Rest   = format_preflist_bin(IPPortList),
+    <<IPPort/binary, ", ", Rest/binary>>.
+    
+
+%% @doc Format a single IP/Port into a URL for the Preflist header
+format_ip_port(IP, Port) ->
+    io_lib:format("http://~ts:~B/", [IP, Port]).
 
 %% @spec get_ctype(dict(), term()) -> string()
 %% @doc Work out the content type for this object - use the metadata if provided
