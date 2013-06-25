@@ -36,6 +36,7 @@
          down/1,
          aae_status/1,
          reformat_indexes/1,
+         reformat_objects/1,
          reload_code/1]).
 
 join([NodeStr]) ->
@@ -396,17 +397,39 @@ reformat_indexes(Args) ->
             io:format("Expected options: <concurrency> <batch size> [--downgrade]~n"),
             ok;
         _ ->
-            start_index_reformat(Opts),
+            start_reformat(riak_kv_util, fix_incorrect_index_entries, [Opts]),
             io:format("index reformat started with options ~p ~n", [Opts]),
             io:format("check console.log for status information~n"),
             ok
     end.
 
-start_index_reformat(Opts) ->
-    spawn(fun() -> run_index_reformat(Opts) end).
+reformat_objects([KillHandoffsStr]) ->
+    reformat_objects([KillHandoffsStr, "2"]);
+reformat_objects(["true", ConcurrencyStr | _Rest]) ->
+    reformat_objects([true, ConcurrencyStr]);
+reformat_objects(["false", ConcurrencyStr | _Rest]) ->
+    reformat_objects([false, ConcurrencyStr]);
+reformat_objects([KillHandoffs, ConcurrencyStr]) when is_atom(KillHandoffs) ->
+    case parse_int(ConcurrencyStr) of
+        C when C > 0 ->
+            start_reformat(riak_kv_reformat, run,
+                           [v0, [{concurrency, C}, {kill_handoffs, KillHandoffs}]]),
+            io:format("object reformat started with concurrency ~p~n", [C]),
+            io:format("check console.log for status information~n");
+        _ ->
+            io:format("ERROR: second argument must be an integer greater than zero.~n"),
+            error
 
-run_index_reformat(Opts) ->
-    try riak_kv_util:fix_incorrect_index_entries(Opts)
+    end;
+reformat_objects(_) ->
+    io:format("ERROR: first argument must be either \"true\" or \"false\".~n"),
+    error.
+
+start_reformat(M, F, A) ->
+    spawn(fun() -> run_reformat(M, F, A) end).
+
+run_reformat(M, F, A) ->
+    try erlang:apply(M, F, A)
     catch
         Err:Reason ->
             lager:error("index reformat crashed with error type ~p and reason: ~p",
