@@ -405,18 +405,21 @@ reformat_indexes(Args) ->
 
 reformat_objects([KillHandoffsStr]) ->
     reformat_objects([KillHandoffsStr, "2"]);
-reformat_objects(["true", ConcurrencyStr]) ->
+reformat_objects(["true", ConcurrencyStr | _Rest]) ->
     reformat_objects([true, ConcurrencyStr]);
-reformat_objects(["false", ConcurrencyStr]) ->
+reformat_objects(["false", ConcurrencyStr | _Rest]) ->
     reformat_objects([false, ConcurrencyStr]);
 reformat_objects([KillHandoffs, ConcurrencyStr]) when is_atom(KillHandoffs) ->
     case parse_int(ConcurrencyStr) of
-        undefined ->
-            io:format("ERROR: second argument must be a positive integer.~n"),
-            error;
-        C ->
+        C when C > 0 ->
             start_reformat(riak_kv_reformat, run,
-                           [v0, [{concurrency, C}, {kill_handoffs, KillHandoffs}]])
+                           [v0, [{concurrency, C}, {kill_handoffs, KillHandoffs}]]),
+            io:format("object reformat started with concurrency ~p~n", [C]),
+            io:format("check console.log for status information~n");
+        _ ->
+            io:format("ERROR: second argument must be an integer greater than zero.~n"),
+            error
+
     end;
 reformat_objects(_) ->
     io:format("ERROR: first argument must be either \"true\" or \"false\".~n"),

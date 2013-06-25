@@ -30,19 +30,19 @@ run(ObjectVsn, Opts) ->
     lager:info("Preferred object format set to ~p", [ObjectVsn]),
     case KillHandoffs of
         true ->
-            lager:info("killing any inbound and outbound handoffs", []);
+            lager:info("Killing any inbound and outbound handoffs", []);
         false ->
-            lager:info("waiting on any in-flight inbound and outbound handoffs", [])
+            lager:info("Waiting on any in-flight inbound and outbound handoffs", [])
     end,
     kill_or_wait_on_handoffs(KillHandoffs, 0),
 
     %% migrate each running vnode
     Running = riak_core_vnode_manager:all_vnodes(riak_kv_vnode),
     Counts = riak_core_util:pmap(fun({riak_kv_vnode, Idx, _}) ->
-                                         lager:info("reformatting objects on partition ~p",
+                                         lager:info("Reformatting objects on partition ~p",
                                                     [Idx]),
                                          {S, I, E} = reformat_partition(Idx),
-                                         lager:info("completed reformatting objects on "
+                                         lager:info("Completed reformatting objects on "
                                                     "partition ~p. Success: ~p. Ignored: ~p. "
                                                     "Error: ~p", [Idx, S, I, E]),
                                          {S, I, E}
