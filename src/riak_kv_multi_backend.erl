@@ -37,6 +37,7 @@
          fold_keys/4,
          fold_objects/4,
          is_empty/1,
+         data_size/1,
          status/1,
          callback/3,
          fix_index/3,
@@ -313,6 +314,13 @@ is_empty(#state{backends=Backends}) ->
                   Module:is_empty(SubState)
           end,
     lists:all(Fun, Backends).
+
+%% @doc Not currently supporting data size
+%% @todo Come up with a way to reflect mixed backend data sizes,
+%% as level reports in bytes, bitcask in # of keys.
+-spec data_size(state()) -> undefined.
+data_size(_) ->
+    undefined.
 
 %% @doc Get the status information for this backend
 -spec status(state()) -> [{atom(), term()}].
