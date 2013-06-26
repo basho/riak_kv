@@ -649,7 +649,7 @@ handle_options([{returnbody, false}|T], State = #state{postcommit = Postcommit})
                                           dw=erlang:max(1,State#state.dw),
                                           returnbody=false})
     end;
-handle_options([{counter_op, _Amt}=COP|T], State) ->
+handle_options([{crdt_op, _Op}=COP|T], State) ->
     VNodeOpts = [COP | State#state.vnode_options],
     handle_options(T, State#state{vnode_options=VNodeOpts});
 handle_options([{K, _V} = Opt|T], State = #state{vnode_options = VnodeOpts})

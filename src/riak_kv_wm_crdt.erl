@@ -277,7 +277,7 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C,
                     {true, RD, Ctx#ctx{doc={ok, Doc}}};
                 {ok, RObj} ->
                     ?CRDT_OP{mod=Type} = Ctx#ctx.crdt_op,
-                    Body = produce_doc_body(Type, RObj),
+                    Body = produce_doc_body(RObj, Type),
                     {true, wrq:append_to_resp_body(Body, RD), Ctx#ctx{doc={ok, RObj}}}
             end;
         false ->
@@ -297,7 +297,7 @@ allow_mult(Bucket) ->
 
 to_text(RD, Ctx=#ctx{doc={ok, Doc}}) ->
     ?CRDT_OP{mod=Type} = Ctx#ctx.crdt_op,
-    {produce_doc_body(Type, Doc), RD, Ctx}.
+    {produce_doc_body(Doc, Type), RD, Ctx}.
 
 produce_doc_body(Doc, Type) ->
     riak_kv_crdt:value(Doc, Type).

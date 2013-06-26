@@ -79,17 +79,19 @@ merge_contents(Contents) ->
 merge_value({MD, <<?TAG:8/integer, ?V1_VERS:8/integer, CRDTBin/binary>>},
             {Dict, NonCounterSiblings}) ->
     CRDT=?CRDT{mod=Mod, value=Val, ctype=CType} = crdt_from_binary(CRDTBin),
-    D2 = orddict:update(Mod, fun({Meta, Value}) ->
-                                     {merge_meta(CType, Meta, MD),
-                                      ?CRDT{value=Mod:merge(Value, Val)}} end,
-                            {MD, CRDT}, Dict),
+    D2 = orddict:update(Mod, fun({Meta, Mergedest=?CRDT{value=Value}}) ->
+                                     NewMeta = merge_meta(CType, Meta, MD),
+                                     NewVal = Mod:merge(Value, Val),
+                                     {NewMeta, Mergedest?CRDT{value = NewVal}}
+                             end,
+                        {MD, CRDT}, Dict),
     {D2, NonCounterSiblings};
 merge_value(NonCRDT, {Dict, NonCRDTSiblings}) ->
     {Dict, [NonCRDT | NonCRDTSiblings]}.
 
 update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op}) ->
     InitialVal = Mod:update(Op, Actor, Mod:new()),
-    orddit:update(Mod, fun({Meta, CRDT=?CRDT{value=Value}}) ->
+    orddict:update(Mod, fun({Meta, CRDT=?CRDT{value=Value}}) ->
                                {Meta, CRDT?CRDT{value=Mod:update(Op, Actor, Value)}} end,
                   {undefined, to_record(Mod, InitialVal)},
                   Dict).
@@ -101,7 +103,7 @@ update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op}) ->
 %% is a new crdt.
 update_object(RObj, CRDTs, SiblingValues) ->
     %% keep non-counter siblings, too
-    CRDTSiblings = [{meta(Meta, CRDT), to_binary(CRDT)} || {Meta, CRDT} <- dict:to_list(CRDTs)],
+    CRDTSiblings = [{meta(Meta, CRDT), to_binary(CRDT)} || {_Mod, {Meta, CRDT}} <- orddict:to_list(CRDTs)],
     riak_object:set_contents(RObj, CRDTSiblings ++ SiblingValues).
 
 meta(undefined, ?CRDT{ctype=CType}) ->
