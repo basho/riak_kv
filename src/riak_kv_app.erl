@@ -26,6 +26,8 @@
 -export([start/2, prep_stop/1, stop/1]).
 -export([check_kv_health/1]).
 
+-include_lib("riak_kv_types.hrl").
+
 -define(SERVICES, [{riak_kv_pb_object, 3, 6}, %% ClientID stuff
                    {riak_kv_pb_object, 9, 14}, %% Object requests
                    {riak_kv_pb_bucket, 15, 18}, %% Bucket requests
@@ -177,7 +179,7 @@ start(_Type, _StartArgs) ->
                                           encode_zlib),
 
             riak_core_capability:register({riak_kv, crdt},
-                                          [[pncounter],[]],
+                                          [?KNOWN_TYPES,[]],
                                           []),
 
             HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
