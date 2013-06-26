@@ -96,9 +96,9 @@ raw_dispatch(Name) ->
      {["buckets", bucket, "index", field, '*'],
       riak_kv_wm_index, Props2},
 
-     %% counters
-     {["buckets", bucket, "counters", key],
-      riak_kv_wm_counter, Props2}
+     %% crdts
+     {["buckets", bucket, crdt, key], {riak_kv_wm_crdt, known_type},
+      riak_kv_wm_crdt, Props2}
     ].
 
 is_post(Req) ->

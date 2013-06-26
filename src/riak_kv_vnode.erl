@@ -115,7 +115,7 @@
                   starttime :: non_neg_integer(),
                   prunetime :: undefined| non_neg_integer(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
-                  counter_op = undefined :: undefined | integer() %% if set this is a counter operation
+                  crdt_op = undefined :: undefined | term() %% if set this is a crdt operation
                  }).
 
 -spec maybe_create_hashtrees(state()) -> state().
@@ -895,7 +895,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
             PruneTime = StartTime
     end,
     Coord = proplists:get_value(coord, Options, false),
-    CounterOp = proplists:get_value(counter_op, Options, undefined),
+    CRDTOp = proplists:get_value(crdt_op, Options, undefined),
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
                        coord=Coord,
                        lww=proplists:get_value(last_write_wins, BProps, false),
@@ -905,7 +905,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        bprops=BProps,
                        starttime=StartTime,
                        prunetime=PruneTime,
-                       counter_op = CounterOp},
+                       crdt_op = CRDTOp},
     {PrepPutRes, UpdPutArgs} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
@@ -973,7 +973,7 @@ prepare_put(#state{idx=Idx,
                              lww=LWW,
                              starttime=StartTime,
                              prunetime=PruneTime,
-                             counter_op = CounterOp},
+                             crdt_op = CRDTOp},
             IndexBackend) ->
     GetReply =
         case do_get_object(Bucket, Key, Mod, ModState) of
@@ -997,7 +997,7 @@ prepare_put(#state{idx=Idx,
                 false ->
                     IndexSpecs = []
             end,
-            ObjToStore = prepare_new_put(Coord, RObj, VId, StartTime, CounterOp),
+            ObjToStore = prepare_new_put(Coord, RObj, VId, StartTime, CRDTOp),
             {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
         {ok, OldObj} ->
             case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
@@ -1022,33 +1022,32 @@ prepare_put(#state{idx=Idx,
                                                                              PruneTime,
                                                                              BProps))
                     end,
-                    ObjToStore2 = handle_counter(Coord, CounterOp, VId, ObjToStore),
+                    ObjToStore2 = handle_crdt(Coord, CRDTOp, VId, ObjToStore),
                     {{true, ObjToStore2},
                      PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}}
             end
     end.
 
 %% @Doc in the case that this a co-ordinating put, prepare the object.
-prepare_new_put(true, RObj, VId, StartTime, CounterOp) when is_integer(CounterOp) ->
+prepare_new_put(true, RObj, VId, StartTime, undefined) ->
+    riak_object:increment_vclock(RObj, VId, StartTime);
+prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
     VClockUp = riak_object:increment_vclock(RObj, VId, StartTime),
     %% coordinating a _NEW_ counter operation means
     %% creating + incrementing the counter.
     %% Make a new counter, stuff it in the riak_object
-    riak_kv_counter:update(VClockUp, VId, CounterOp);
-prepare_new_put(true, RObj, VId, StartTime, _CounterOp) ->
-    riak_object:increment_vclock(RObj, VId, StartTime);
+    riak_kv_crdt:update(VClockUp, VId, CRDTOp);
 prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
     RObj.
 
-handle_counter(true, CounterOp, VId, RObj) when is_integer(CounterOp) ->
-    riak_kv_counter:update(RObj, VId, CounterOp);
-handle_counter(false, CounterOp, _Vid, RObj) when is_integer(CounterOp) ->
-    %% non co-ord put, merge the values if there are siblings
-    %% 'cos that is the point of CRDTs / counters: no siblings
-    riak_kv_counter:merge(RObj);
-handle_counter(_Coord, _CounterOp, _VId, RObj) ->
-    %% i.e. not a counter op
-    RObj.
+handle_crdt(_, undefined, _VId, RObj) ->
+    RObj;
+handle_crdt(true, CRDTOp, VId, RObj) ->
+    riak_kv_crdt:update(RObj, VId, CRDTOp);
+handle_crdt(false, _CRDTOp, _Vid, RObj) ->
+    %% non co-ord put that was a CRDT operation? Merge the values if
+    %% there are siblings 'cos that is the point of CRDTs: no siblings
+    riak_kv_crdt:merge(RObj).
 
 perform_put({false, Obj},
             #state{idx=Idx}=State,
