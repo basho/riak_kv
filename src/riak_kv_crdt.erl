@@ -24,7 +24,7 @@
 
 -export([update/3, merge/1, value/2, new/3,
          to_binary/1, from_binary/1, supported/1, parse_operation/2,
-         to_type/1]).
+         to_type/1, from_type/1]).
 
 -include("riak_kv_wm_raw.hrl").
 -include_lib("riak_kv_types.hrl").
@@ -196,6 +196,15 @@ to_type("maps") ->
     ?MAP_TYPE;
 to_type(_) ->
     undefined.
+
+from_type(?SET_TYPE) ->
+    "sets";
+from_type(?COUNTER_TYPE) ->
+    "counters";
+from_type(?LWW_TYPE) ->
+    "lww";
+from_type(?MAP_TYPE) ->
+    "maps".
 
 %% ===================================================================
 %% EUnit tests

@@ -300,7 +300,22 @@ to_text(RD, Ctx=#ctx{doc={ok, Doc}}) ->
     {produce_doc_body(Doc, Type), RD, Ctx}.
 
 produce_doc_body(Doc, Type) ->
-    riak_kv_crdt:value(Doc, Type).
+    JSON = to_json(Type, riak_kv_crdt:value(Doc, Type)),
+    mochijson2:encode(JSON).
+
+to_json(?MAP_TYPE, Val) ->
+    map_to_json(Val, []);
+to_json(_, Val) ->
+    Val.
+
+map_to_json([], Acc) ->
+    {struct, Acc};
+map_to_json([{{Name, Type}, Val} | Rest], Acc) ->
+    Elem = {make_name(Name, Type), to_json(Type, Val)},
+    map_to_json(Rest, [Elem | Acc]).
+
+make_name(Name, Type) ->
+    lists:flatten(io_lib:format("~s_~s", [Name, riak_kv_crdt:from_type(Type)])).
 
 ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};
