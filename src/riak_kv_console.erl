@@ -37,9 +37,9 @@
          down/1,
          aae_status/1,
          reformat_indexes/1,
-         indexrepair_start/0,
-         indexrepair_stop/0,
-         indexrepair_status/0,
+         indexrepair_start/1,
+         indexrepair_stop/1,
+         indexrepair_status/1,
          reload_code/1]).
 
 %% Arrow is 24 chars wide
@@ -492,7 +492,7 @@ run_index_reformat(Opts) ->
                         [Err, Reason])
     end.
 
-indexrepair_start() ->
+indexrepair_start([]) ->
     LocalPartitions = local_partitions(),
     case currently_active_local_indexrepairs(LocalPartitions) of
         0 ->
@@ -502,11 +502,11 @@ indexrepair_start() ->
             io:format("Index repair could not be started as there are already ~p repairs in progress.~n", [N])
     end.
 
-indexrepair_stop() ->
+indexrepair_stop([]) ->
     riak_core_vnode_manager:kill_repairs(killed_by_user),
     io:format("All index repairs terminated.~n").
 
-indexrepair_status() ->
+indexrepair_status([]) ->
     LocalPartitions = local_partitions(),
     case currently_active_local_indexrepairs(LocalPartitions) of
         0 ->
