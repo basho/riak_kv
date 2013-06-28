@@ -37,6 +37,9 @@
          down/1,
          aae_status/1,
          reformat_indexes/1,
+         indexrepair_start/0,
+         indexrepair_stop/0,
+         indexrepair_status/0,
          reload_code/1]).
 
 %% Arrow is 24 chars wide
@@ -489,6 +492,29 @@ run_index_reformat(Opts) ->
                         [Err, Reason])
     end.
 
+indexrepair_start() ->
+    LocalPartitions = local_partitions(),
+    case currently_active_local_indexrepairs(LocalPartitions) of
+        0 ->
+            [riak_kv_vnode:repair(P) || P <- LocalPartitions],
+            io:format("Index repair started for ~p partitions.~n", [length(LocalPartitions)]);
+        N ->
+            io:format("Index repair could not be started as there are already ~p repairs in progress.~n", [N])
+    end.
+
+indexrepair_stop() ->
+    riak_core_vnode_manager:kill_repairs(killed_by_user),
+    io:format("All index repairs terminated.~n").
+
+indexrepair_status() ->
+    LocalPartitions = local_partitions(),
+    case currently_active_local_indexrepairs(LocalPartitions) of
+        0 ->
+            io:format("No index repairs are currently being performed.~n");
+        N ->
+            io:format("Index repair is currently being performed for ~p partitions.~n", [N])
+    end.
+
 %%%===================================================================
 %%% Private
 %%%===================================================================
@@ -596,3 +622,11 @@ print_stats(SrcNode, TargetNode, Stats) ->
     io:format("~s~n", [string:centre(ObjsSStr, Width)]),
     io:format("~s~n", [ToFrom]),
     io:format("~s~n", [string:centre(ByteStr, Width)]).
+
+local_partitions() ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    [P || {P, N} <- riak_core_ring:all_owners(Ring), N == node()].
+
+currently_active_local_indexrepairs(LocalPartitions) ->
+    Status = [{P, riak_kv_vnode:repair_status(P)} || P <- LocalPartitions],
+    length([P || {P, in_progress} <- Status]).
