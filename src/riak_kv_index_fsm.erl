@@ -53,6 +53,7 @@
 -record(state, {from :: from(),
                 merge_sort_buffer :: sms:sms(),
                 max_results :: all | pos_integer(),
+                results_per_vnode = dict:new() :: dict(),
                 results_sent = 0 :: non_neg_integer()}).
 
 %% @doc Returns `true' if the new ack-based backpressure index
@@ -105,21 +106,33 @@ process_results(_VNode, {From, _Bucket, _Results}, State=#state{max_results=X, r
 process_results(VNode, {From, Bucket, Results}, State) ->
     case process_results(VNode, {Bucket, Results}, State) of
         {ok, State2} ->
-            riak_kv_vnode:ack_keys(From),
-            {ok, State2};
+            #state{results_per_vnode=PerNode, max_results=MaxResults} = State2,
+            VNodeCount = dict:fetch(VNode, PerNode),
+            case VNodeCount < MaxResults of
+                true ->
+                    riak_kv_vnode:ack_keys(From),
+                    {ok, State2};
+                false ->
+                    riak_kv_vnode:stop_fold(From),
+                    {done, State2}
+            end;
         {done, State2} ->
             riak_kv_vnode:stop_fold(From),
             {done, State2}
     end;
 process_results(VNode, {_Bucket, Results}, State) ->
-    #state{merge_sort_buffer=MergeSortBuffer,
+    #state{merge_sort_buffer=MergeSortBuffer, results_per_vnode=PerNode,
            from={raw, ReqId, ClientPid}, results_sent=ResultsSent, max_results=MaxResults} = State,
     %% add new results to buffer
     {ToSend, NewBuff} = update_buffer(VNode, Results, MergeSortBuffer),
+    NumResults = length(Results),
+    NewPerNode = dict:update(VNode, fun(C) -> C + NumResults end, NumResults, PerNode),
     LenToSend = length(ToSend),
     {Response, ResultsLen, ResultsToSend} = get_results_to_send(LenToSend, ToSend, ResultsSent, MaxResults),
     send_results(ClientPid, ReqId, ResultsToSend),
-    {Response, State#state{merge_sort_buffer=NewBuff, results_sent=ResultsSent+ResultsLen}};
+    {Response, State#state{merge_sort_buffer=NewBuff,
+                           results_per_vnode=NewPerNode,
+                           results_sent=ResultsSent+ResultsLen}};
 process_results(VNode, done, State) ->
     %% tell the sms buffer about the done vnode
     #state{merge_sort_buffer=MergeSortBuffer} = State,
