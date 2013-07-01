@@ -43,7 +43,7 @@
 %% API
 -export([start_link/0, get_stats/0,
          update/1, perform_update/1, register_stats/0, produce_stats/0,
-         leveldb_read_block_errors/0, stop/0]).
+         leveldb_read_block_errors/0, bitcask_dead_bytes/0, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
 -export([active_gets/0, active_puts/0]).
 
@@ -385,7 +385,9 @@ stats() ->
      {precommit_fail, counter},
      {postcommit_fail, counter},
      {[vnode, backend, leveldb, read_block_error],
-      {function, {function, ?MODULE, leveldb_read_block_errors}}}].
+      {function, {function, ?MODULE, leveldb_read_block_errors}}},
+     {[vnode, backend, bitcask, dead_bytes],
+      {function, {function, ?MODULE, bitcask_dead_bytes}}}].
 
 %% @doc register a stat with folsom
 do_register_stat(Name, spiral) ->
@@ -469,6 +471,65 @@ rbe_val(Bin) when is_binary(Bin) ->
     list_to_integer(binary_to_list(Bin));
 rbe_val(_) ->
     undefined.
+
+%% @doc get the number of bitcask dead bytes.
+%%   returns [{VNodeIdx, DeadBytes}, ... ] if bitcask_backend
+%%   returns [{VNodeIdx, [ {BackendName, DeadBytes}, ... ]}, ... ] if multi_backend
+%%   returns [{VnodeIdx, undefined}, ... ] if there are no bitcask backends
+%%   DeadBytes the total across bitcask files if more than one exist per vnode
+bitcask_dead_bytes() ->
+    {ok, R} = riak_core_ring_manager:get_my_ring(),
+    Indices = riak_core_ring:my_indices(R),
+    bitcask_dead_bytes(Indices).
+
+bitcask_dead_bytes(Indices) ->
+    bitcask_dead_bytes(Indices, []).
+
+bitcask_dead_bytes([], Result) ->
+    Result;
+bitcask_dead_bytes([Idx|Indices], Result) ->
+    Status = case vnode_status(Idx) of
+        {backend_status, riak_kv_bitcask_backend, PropList} ->
+            bitcask_get_totaldb(PropList);
+        {backend_status, riak_kv_multi_backend, Statuses} ->
+            multibackend_get_totaldb(Statuses, []);
+        _ ->
+            undefined
+    end,
+    case Status of
+        [] ->
+            bitcask_dead_bytes(Indices, Result);
+        undefined ->
+            bitcask_dead_bytes(Indices, Result);
+        _ -> 
+            bitcask_dead_bytes(Indices, Result ++ [{Idx, Status}])
+    end.
+
+bitcask_get_totaldb(PropList) when is_list(PropList) ->
+    case proplists:get_value(status, PropList) of
+        Statuses when is_list(Statuses) ->
+            Bytes = [ X || {_, _, X, _} <- Statuses ],
+            lists:foldl(fun(X, Sum) -> X + Sum end, 0, Bytes);
+        _ ->
+            0
+    end;
+bitcask_get_totaldb(_) ->
+    undefined.
+
+multibackend_get_totaldb([], DeadBytes) ->
+    DeadBytes;
+multibackend_get_totaldb([{Name, Status}|Rest], DeadBytes) ->
+    case proplists:get_value(mod, Status) of
+        riak_kv_bitcask_backend ->
+            Bytes = bitcask_get_totaldb(Status),
+            multibackend_get_totaldb(Rest, DeadBytes ++ [{Name, Bytes}]);
+        _ ->
+            multibackend_get_totaldb(Rest, DeadBytes)
+    end;
+multibackend_get_totaldb([ _ | Rest], DeadBytes) ->
+    multibackend_get_totaldb(Rest, DeadBytes);
+multibackend_get_totaldb(_, DeadBytes) ->
+    DeadBytes.
 
 %% All stat creation is serialized through riak_kv_stat.
 %% Some stats are created on demand as part of the call to `update/1'.
