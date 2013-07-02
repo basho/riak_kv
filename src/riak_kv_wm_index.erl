@@ -201,7 +201,7 @@ index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)
                                 undefined -> ["\r\n--", Boundary, "--\r\n"];
                                 Continuation ->
                                     Json = mochijson2:encode(mochify_continuation(Continuation)),
-                                    ["\r\n--", Boundary, "--\r\n",
+                                    ["\r\n--", Boundary, "\r\n",
                                      "Content-Type: application/json\r\n\r\n",
                                      Json,
                                      "\r\n--", Boundary, "--\r\n"]
