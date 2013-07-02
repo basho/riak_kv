@@ -224,7 +224,8 @@ index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)
                     ErrorJson = mochijson2:encode({struct, [{error, Error}]}),
                     Body = ["\r\n--", Boundary, "\r\n",
                             "Content-Type: application/json\r\n\r\n",
-                            ErrorJson],
+                            ErrorJson,
+                            "\r\n--", Boundary, "--\r\n"],
                     {iolist_to_binary(Body), done}
             after 60000 ->
                     {error, timeout}
