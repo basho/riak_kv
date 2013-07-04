@@ -36,7 +36,7 @@
 
 -module(riak_kv_counter).
 
--export([update/3, merge/1, value/1, new/2, to_binary/1, from_binary/1, supported/0]).
+-export([update/3, merge/1, value/1, sibling_value/1, new/2, to_binary/1, from_binary/1, supported/0]).
 
 -include("riak_kv_wm_raw.hrl").
 -include_lib("riak_kv_types.hrl").
@@ -91,6 +91,17 @@ value(RObj) ->
         undefined -> 0;
         _ ->
             riak_kv_pncounter:value(Counter)
+    end.
+
+%% @doc Turn a single sibling into a counter value. Used by the YZ Extractor.
+-spec sibling_value(binary()) -> {ok, integer()} | {error, term()}.
+sibling_value(Sibling) ->
+    try
+        PNCounter = riak_kv_counter:from_binary(Sibling),
+        Value = riak_pn_counter:value(PNCounter),
+        {ok, Value};
+    catch
+        _:_ -> {error, not_counter}
     end.
 
 %% Merge contents _AND_ meta
