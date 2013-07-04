@@ -44,7 +44,9 @@
 
 %% Arrow is 24 chars wide
 -define(ARROW, "=======================>").
-
+-define(KVREPAIR_PROCESS, kvindexrepair).
+-define(SEARCHREPAIR_PROCESS, searchindexrepair).
+-define(INDEXREPAIRINTERVAL, 30000).
 
 join([NodeStr]) ->
     join(NodeStr, fun riak_core:join/1,
@@ -492,27 +494,40 @@ run_index_reformat(Opts) ->
                         [Err, Reason])
     end.
 
-indexrepair_start([]) ->
-    LocalPartitions = local_partitions(),
-    case currently_active_local_indexrepairs(LocalPartitions) of
-        0 ->
-            [riak_kv_vnode:repair(P) || P <- LocalPartitions],
-            io:format("Index repair started for ~p partitions.~n", [length(LocalPartitions)]);
-        N ->
-            io:format("Index repair could not be started as there are already ~p repairs in progress.~n", [N])
+indexrepair_start([Type]) ->
+    case repair_is_running(Type) of
+        true ->
+            io:format("Unable to start ~s index repair as repair already in progress.~n", [Type]),
+            ok;
+        false ->
+            start_repairs(Type)
     end.
 
-indexrepair_stop([]) ->
-    riak_core_vnode_manager:kill_repairs(killed_by_user),
-    io:format("All index repairs terminated.~n").
+indexrepair_stop([Type]) ->
+    case repair_is_running(Type) of
+        true ->
+            case Type of
+                "kv" ->
+                    exit(?KVREPAIR_PROCESS, kill),
+                    riak_core_vnode_manager:kill_repairs(killed_by_user),
+                    io:format("All kv index repairs terminated.~n");
+                "search" ->
+                    exit(?SEARCHREPAIR_PROCESS, kill),
+                    riak_core_vnode_manager:kill_repairs(killed_by_user),
+                    io:format("All search index repairs terminated.~n")
+            end;
+        false ->
+            io:format("No ~s index repair is currently running.~n", [Type])
+    end.
 
-indexrepair_status([]) ->
-    LocalPartitions = local_partitions(),
-    case currently_active_local_indexrepairs(LocalPartitions) of
-        0 ->
-            io:format("No index repairs are currently being performed.~n");
-        N ->
-            io:format("Index repair is currently being performed for ~p partitions.~n", [N])
+indexrepair_status([Type]) ->
+    case repair_is_running(Type) of
+        true ->
+            io:format("Repair of ~s indexes in progress.~n", [Type]),
+            ok;
+        false ->
+            io:format("No repair of ~s indexes in progress.~n", [Type]),
+            ok
     end.
 
 %%%===================================================================
@@ -627,6 +642,53 @@ local_partitions() ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     [P || {P, N} <- riak_core_ring:all_owners(Ring), N == node()].
 
-currently_active_local_indexrepairs(LocalPartitions) ->
-    Status = [{P, riak_kv_vnode:repair_status(P)} || P <- LocalPartitions],
-    length([P || {P, in_progress} <- Status]).
+determine_service(Type) ->
+    case Type of
+        "kv" ->
+            ?KVREPAIR_PROCESS;
+        "search" ->
+            ?SEARCHREPAIR_PROCESS
+    end.
+
+repair_is_running(Type) ->
+    case whereis(determine_service(Type)) of
+        undefined ->
+            false;
+        _ ->
+            true
+    end.
+
+start_repairs(Type) ->
+    spawn(fun() ->
+              try register(determine_service(Type), self()) of
+                  true ->
+                      lager:log(info,self(),"Starting ~s index repair.",[Type]),
+                      [repair_partition(Type,P) || P <- local_partitions()],
+                      lager:log(info,self(),"Completed ~s index repair.",[Type])
+              catch
+                  _:_ ->
+                      lager:log(info,self(),"Unable to start ~s index repair as it is currently in progress.",[Type])
+              end
+          end),
+    io:format("Started ~s index repair.~n",[Type]).
+
+repair_partition(Type,P) ->
+    Mod = case Type of
+        "kv" ->
+            riak_kv_vnode;
+        "search" ->
+            riak_search_vnode
+    end,
+    lager:log(info,self(),"Begin ~s index repair of partition ~p.",[Type,P]),
+    Mod:repair(P),
+    wait_for_repair(Mod, P),
+    lager:log(info,self(),"Completed ~s index repair of partition ~p.",[Type,P]),
+    ok.
+
+wait_for_repair(Mod, P) ->
+    receive after ?INDEXREPAIRINTERVAL ->
+        case Mod:repair_status(P) of
+          in_progress -> wait_for_repair(Mod,P);
+          _ -> ok
+        end
+    end.
