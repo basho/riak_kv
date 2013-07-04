@@ -65,8 +65,21 @@ update(RObj, Actor, Amt) ->
 -spec merge(riak_object:riak_object()) ->
                    riak_object:riak_object().
 merge(RObj) ->
-    {Meta, Counter, NonCounterSiblings} = merge_object(RObj),
-    update_object(RObj, Meta, Counter, NonCounterSiblings).
+    case might_have_counter(RObj) of
+        true -> {Meta, Counter, NonCounterSiblings} = merge_object(RObj),
+                update_object(RObj, Meta, Counter, NonCounterSiblings);
+        _    -> RObj
+    end.
+    
+%% @doc returns true if any of the siblings of the riak_object
+%% could be a counter (using the content type or the binary tag and version)
+-spec might_have_counter(riak_object:riak_object()) -> boolean().
+might_have_counter(RObj) ->
+    Contents = get_contents(RObj),
+    lists:any(fun({MD,Value}) -> 
+        dict:find(?MD_CTYPE, MD) =:= {ok, ?COUNTER_TYPE} orelse
+        <<?TAG:8/integer, ?V1_VERS:8/integer, _>> = Value
+    end, Contents).
 
 %% @doc Currently _IGNORES_ all non-counter sibling values
 -spec value(riak_object:riak_object()) ->
