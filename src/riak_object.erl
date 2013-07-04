@@ -226,12 +226,45 @@ compare_content_dates(C1,C2) ->
 -spec merge(riak_object(), riak_object()) -> riak_object().
 merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
-    OldObject#r_object{contents=lists:umerge(lists:usort(NewObject#r_object.contents),
-                                             lists:usort(OldObject#r_object.contents)),
+    MergedContents = lists:umerge(lists:usort(NewObject#r_object.contents),
+                                  lists:usort(OldObject#r_object.contents)),
+    MergedContents2 = maybe_add_sibling_index(MergedContents),
+    OldObject#r_object{contents=MergedContents2,
                        vclock=vclock:merge([OldObject#r_object.vclock,
                                             NewObj1#r_object.vclock]),
                        updatemetadata=dict:store(clean, true, dict:new()),
                        updatevalue=undefined}.
+
+maybe_add_sibling_index(Contents=[_,_|_]) ->
+    ShouldAddIndex =
+        lists:any(fun(#r_content{metadata=MD}) ->
+                          case dict:find(?MD_USERMETA, MD) of
+                              {ok, UM} ->
+                                  lists:member({"X-Riak-Meta-X-Index-Siblings","true"}, UM);
+                              error ->
+                                  false
+                          end
+                  end,
+                  Contents),
+    if ShouldAddIndex ->
+            [HdC|TailC] = Contents,
+            SiblingIndex = {<<"x_riak_siblings_int">>, length(Contents)},
+            OldMD = HdC#r_content.metadata,
+            NewMD = dict:update(?MD_INDEX,
+                                fun(OldIdx) ->
+                                        lists:keystore(<<"x_riak_siblings_int">>, 1, OldIdx,
+                                                       [SiblingIndex])
+                                end,
+                                SiblingIndex,
+                                OldMD),
+            NewHdC = HdC#r_content{metadata=NewMD},
+            [NewHdC | TailC];
+       true ->
+            Contents
+    end;
+maybe_add_sibling_index(Contents) ->
+    %% Less than two siblings.
+    Contents.
 
 %% @doc  Promote pending updates (made with the update_value() and
 %%       update_metadata() calls) to this riak_object.
