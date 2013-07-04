@@ -75,10 +75,14 @@ merge(RObj) ->
 %% could be a counter (using the content type or the binary tag and version)
 -spec might_have_counter(riak_object:riak_object()) -> boolean().
 might_have_counter(RObj) ->
-    Contents = get_contents(RObj),
+    Contents = riak_object:get_contents(RObj),
     lists:any(fun({MD,Value}) -> 
-        dict:find(?MD_CTYPE, MD) =:= {ok, ?COUNTER_TYPE} orelse
-        <<?TAG:8/integer, ?V1_VERS:8/integer, _>> = Value
+        try
+            CType = dict:fetch(?MD_CTYPE, MD),
+            Match = binary:match(Value, <<?TAG:8/integer, ?V1_VERS:8/integer>>),
+            CType == ?COUNTER_TYPE orelse Match == {0,2}
+        catch _:_ -> false
+        end
     end, Contents).
 
 %% @doc Currently _IGNORES_ all non-counter sibling values
@@ -99,7 +103,7 @@ sibling_value(Sibling) ->
     try
         PNCounter = riak_kv_counter:from_binary(Sibling),
         Value = riak_pn_counter:value(PNCounter),
-        {ok, Value};
+        {ok, Value}
     catch
         _:_ -> {error, not_counter}
     end.
