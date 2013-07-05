@@ -27,6 +27,7 @@
 %% webmachine resource exports
 -export([
          init/1,
+         is_authorized/2,
          to_html/2
         ]).
 
@@ -34,6 +35,39 @@
 
 init([]) ->
     {ok, undefined}.
+
+is_authorized(ReqData, Ctx) ->
+    Res = case app_helper:get_env(riak_core, security, false) of
+        true ->
+            lager:info("Auth header ~p",
+                       [wrq:get_req_header("Authorization", ReqData)]),
+            case wrq:get_req_header("Authorization", ReqData) of
+                "Basic " ++ Base64 ->
+                    UserPass = base64:decode_to_string(Base64),
+                    [User, Pass] = string:tokens(UserPass, ":"),
+                    {ok, Peer} = inet_parse:address(wrq:peer(ReqData)),
+                    lager:info("credentials ~p ~p from ~p", [User, Pass,
+                                                             Peer]),
+                    case riak_core_security:authenticate(User, Pass,
+                                                         Peer)
+                    of
+                        {ok, _} ->
+                            true;
+                        {error, _} ->
+                            false
+                    end;
+                _ ->
+                    false
+            end;
+        false ->
+            true
+    end,
+    case Res of
+        false ->
+            {"Basic realm=\"Riak\"", ReqData, Ctx};
+        true ->
+            {true, ReqData, Ctx}
+    end.
 
 to_html(ReqData, Ctx) ->
     {"OK", ReqData, Ctx}.
