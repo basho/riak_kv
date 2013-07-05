@@ -39,25 +39,30 @@ init([]) ->
 is_authorized(ReqData, Ctx) ->
     Res = case app_helper:get_env(riak_core, security, false) of
         true ->
-            lager:info("Auth header ~p",
-                       [wrq:get_req_header("Authorization", ReqData)]),
-            case wrq:get_req_header("Authorization", ReqData) of
-                "Basic " ++ Base64 ->
-                    UserPass = base64:decode_to_string(Base64),
-                    [User, Pass] = string:tokens(UserPass, ":"),
-                    {ok, Peer} = inet_parse:address(wrq:peer(ReqData)),
-                    lager:info("credentials ~p ~p from ~p", [User, Pass,
-                                                             Peer]),
-                    case riak_core_security:authenticate(User, Pass,
-                                                         Peer)
-                    of
-                        {ok, _} ->
-                            true;
-                        {error, _} ->
+            Scheme = wrq:scheme(ReqData),
+            case Scheme == https of
+                true ->
+                    case wrq:get_req_header("Authorization", ReqData) of
+                        "Basic " ++ Base64 ->
+                            UserPass = base64:decode_to_string(Base64),
+                            [User, Pass] = string:tokens(UserPass, ":"),
+                            {ok, Peer} = inet_parse:address(wrq:peer(ReqData)),
+                            case riak_core_security:authenticate(User, Pass,
+                                    Peer)
+                                of
+                                {ok, _} ->
+                                    true;
+                                {error, _} ->
+                                    false
+                            end;
+                        _ ->
                             false
                     end;
-                _ ->
-                    false
+                false ->
+                    %% security is enabled, but they're connecting over HTTP.
+                    %% which means if they authed, the credentials would be in
+                    %% plaintext
+                    insecure
             end;
         false ->
             true
@@ -66,7 +71,14 @@ is_authorized(ReqData, Ctx) ->
         false ->
             {"Basic realm=\"Riak\"", ReqData, Ctx};
         true ->
-            {true, ReqData, Ctx}
+            {true, ReqData, Ctx};
+        insecure ->
+            %% XXX 301 may be more appropriate here, but since the http and
+            %% https port are different and configurable, it is hard to figure
+            %% out the redirect URL to serve.
+            {{halt, 426}, wrq:append_to_resp_body(<<"Security is enabled and "
+                    "Riak does not accept credentials over HTTP. Try HTTPS "
+                    "instead.">>, ReqData), Ctx}
     end.
 
 to_html(ReqData, Ctx) ->
