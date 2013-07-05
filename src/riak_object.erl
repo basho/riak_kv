@@ -235,6 +235,7 @@ merge(OldObject, NewObject) ->
                        updatemetadata=dict:store(clean, true, dict:new()),
                        updatevalue=undefined}.
 
+-spec maybe_add_sibling_index/1 :: ([#r_content{}]) -> [#r_content{}].
 maybe_add_sibling_index(Contents=[_,_|_]) ->
     ShouldAddIndex =
         lists:any(fun(#r_content{metadata=MD}) ->
@@ -248,23 +249,38 @@ maybe_add_sibling_index(Contents=[_,_|_]) ->
                   Contents),
     if ShouldAddIndex ->
             [HdC|TailC] = Contents,
-            SiblingIndex = {<<"x_riak_siblings_int">>, length(Contents)},
-            OldMD = HdC#r_content.metadata,
-            NewMD = dict:update(?MD_INDEX,
-                                fun(OldIdx) ->
-                                        lists:keystore(<<"x_riak_siblings_int">>, 1, OldIdx,
-                                                       [SiblingIndex])
-                                end,
-                                SiblingIndex,
-                                OldMD),
-            NewHdC = HdC#r_content{metadata=NewMD},
-            [NewHdC | TailC];
+            NewHdC = update_sibling_index(HdC, length(Contents)),
+            NewTailC = [remove_sibling_index(C) || C <- TailC],
+            [NewHdC | NewTailC];
        true ->
             Contents
     end;
 maybe_add_sibling_index(Contents) ->
     %% Less than two siblings.
     Contents.
+
+-spec update_sibling_index/2 :: (#r_content{}, integer()) -> #r_content{}.
+update_sibling_index(Content=#r_content{metadata=OldMD}, NewCount) ->
+    IndexItem = {<<"x_riak_siblings_int">>, NewCount},
+    NewMD = dict:update(?MD_INDEX,
+                        fun(OldIdx) ->
+                                lists:keystore(<<"x_riak_siblings_int">>, 1, OldIdx,
+                                               IndexItem)
+                        end,
+                        [IndexItem],
+                        OldMD),
+    Content#r_content{metadata=NewMD}.
+
+-spec remove_sibling_index/1 :: (#r_content{}) -> #r_content{}.
+remove_sibling_index(Content=#r_content{metadata=OldMD}) ->
+    NewMD = dict:update(?MD_INDEX,
+                        fun(OldIdx) ->
+                                lists:keydelete(<<"x_riak_siblings_int">>, 1, OldIdx)
+                        end,
+                        [],
+                        OldMD),
+    Content#r_content{metadata=NewMD}.
+
 
 %% @doc  Promote pending updates (made with the update_value() and
 %%       update_metadata() calls) to this riak_object.
