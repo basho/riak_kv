@@ -1187,6 +1187,28 @@ sibling_index_updated_on_further_conflict_test() ->
     OM = riak_object:syntactic_merge(O1, O2),
     ?assertEqual([{<<"x_riak_siblings_int">>, 3}], index_data(OM)).
 
+sibling_index_updated_properly_on_join_test() ->
+    B = <<"buckets_are_binaries">>,
+    K = <<"keys are binaries">>,
+    V1 = <<"testvalue1">>,
+    V2 = <<"testvalue2">>,
+    V3 = <<"testvalue3">>,
+    V4 = <<"testvalue4">>,
+    MD1 = dict:store(?MD_USERMETA, [{"X-Riak-Meta-X-Index-Siblings", "true"}],
+                     dict:new()),
+    O1 = riak_object:increment_vclock(riak_object:new(B,K,V1, MD1), node1),
+    O2 = riak_object:increment_vclock(riak_object:new(B,K,V2, MD1), node2),
+
+    O3 = riak_object:increment_vclock(riak_object:new(B,K,V3, MD1), node3),
+    O4 = riak_object:increment_vclock(riak_object:new(B,K,V4, MD1), node4),
+
+    OM12 = riak_object:syntactic_merge(O1, O2),
+    OM34 = riak_object:syntactic_merge(O3, O4),
+    ?assertEqual([{<<"x_riak_siblings_int">>, 2}], index_data(OM12)),
+    ?assertEqual([{<<"x_riak_siblings_int">>, 2}], index_data(OM34)),
+    OM1234 = riak_object:syntactic_merge(OM12, OM34),
+    ?assertEqual([{<<"x_riak_siblings_int">>, 4}], index_data(OM1234)).
+
 sibling_index_removable_on_conflict_resolution_test() ->
     O1 = sibling_index_created_when_requested_and_conflict_test(),
     V3 = <<"testvalue3">>,
