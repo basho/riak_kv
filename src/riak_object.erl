@@ -1139,4 +1139,69 @@ vclock_codec_test() ->
     [ ?assertEqual({Method, VC}, {Method, decode_vclock(encode_vclock(Method, VC))})
      || VC <- VCs, Method <- [encode_raw, encode_zlib]].
 
+sibling_index_not_created_when_not_requested_test() ->
+    B = <<"buckets_are_binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"testvalue">>,
+    O1 = riak_object:increment_vclock(riak_object:new(B,K,V), node1),
+    O2 = riak_object:increment_vclock(riak_object:new(B,K,V), node2),
+    OM = riak_object:syntactic_merge(O1, O2),
+    ?assertEqual([], index_data(OM)).
+
+sibling_index_not_created_when_not_conflict_test() ->
+    B = <<"buckets_are_binaries">>,
+    K = <<"keys are binaries">>,
+    V1 = <<"testvalue1">>,
+    V2 = <<"testvalue2">>,
+    MD1 = dict:store(?MD_USERMETA, [{"X-Riak-Meta-X-Index-Siblings", "true"}],
+                     dict:new()),
+    O1 = riak_object:increment_vclock(riak_object:new(B,K,V1, MD1), node1),
+    O2 = riak_object:increment_vclock(riak_object:update_value(O1, V2), node2),
+    OM = riak_object:syntactic_merge(O1, O2),
+    ?assertEqual([], index_data(OM)).
+
+sibling_index_created_when_requested_and_conflict_test() ->
+    B = <<"buckets_are_binaries">>,
+    K = <<"keys are binaries">>,
+    V1 = <<"testvalue1">>,
+    V2 = <<"testvalue2">>,
+    MD1 = dict:store(?MD_USERMETA, [{"X-Riak-Meta-X-Index-Siblings", "true"}],
+                     dict:new()),
+    O1 = riak_object:increment_vclock(riak_object:new(B,K,V1, MD1), node1),
+    O2 = riak_object:increment_vclock(riak_object:new(B,K,V2, MD1), node2),
+
+    %% Test both merge ways:
+    OM1 = riak_object:syntactic_merge(O1, O2),
+    ?assertEqual([{<<"x_riak_siblings_int">>, 2}], index_data(OM1)),
+    OM2 = riak_object:syntactic_merge(O1, O2),
+    ?assertEqual([{<<"x_riak_siblings_int">>, 2}], index_data(OM2)),
+    OM1.
+
+sibling_index_updated_on_further_conflict_test() ->
+    O1 = sibling_index_created_when_requested_and_conflict_test(),
+    B = riak_object:bucket(O1),
+    K = riak_object:key(O1),
+    V3 = <<"testvalue3">>,
+    O2 = riak_object:increment_vclock(riak_object:new(B,K,V3), node3),
+
+    OM = riak_object:syntactic_merge(O1, O2),
+    ?assertEqual([{<<"x_riak_siblings_int">>, 3}], index_data(OM)).
+
+sibling_index_removable_on_conflict_resolution_test() ->
+    O1 = sibling_index_created_when_requested_and_conflict_test(),
+    V3 = <<"testvalue3">>,
+    OldMD = hd(riak_object:get_metadatas(O1)),
+    NewMD = dict:update(?MD_INDEX,
+                        fun(OldIdx) ->
+                                lists:keydelete(<<"x_riak_siblings_int">>, 1, OldIdx)
+                        end,
+                        [],
+                        OldMD),
+    O2 = riak_object:increment_vclock(
+           riak_object:update_value(
+             riak_object:update_metadata(O1, NewMD), V3), node3),
+
+    OM = riak_object:syntactic_merge(O1, O2),
+    ?assertEqual([], index_data(OM)).
+
 -endif.
