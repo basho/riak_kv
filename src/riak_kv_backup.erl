@@ -32,10 +32,10 @@
 
 %%% BACKUP %%%
 
-%% @doc 
-%% Connect to the cluster of which EntryNode is a member, 
+%% @doc
+%% Connect to the cluster of which EntryNode is a member,
 %% read data from the cluster, and save the data in the specified file.
-backup(EntryNode, BaseFilename, Mode) -> 
+backup(EntryNode, BaseFilename, Mode) ->
     % Make sure we can reach the node...
     ensure_connected(EntryNode),
 
@@ -65,7 +65,7 @@ backup(EntryNode, BaseFilename, Mode) ->
                                   {type, halt}]),
 
 
-    case Mode of
+   _ = case Mode of
         "all" ->
             [backup_node(Node, Ring) || Node <- Members];
         "node" ->
@@ -74,11 +74,11 @@ backup(EntryNode, BaseFilename, Mode) ->
     io:format("syncing and closing log~n"),
     ok = disk_log:sync(?TABLE),
     ok = disk_log:close(?TABLE),
-    
+
     % Make sure the nodes are still synchronized...
     ensure_synchronized(Ring, Members),
     ok.
-    
+
 backup_node(Node, Ring) ->
     Partitions = [I || {I,N} <- riak_core_ring:all_owners(Ring), N =:= Node],
     backup_vnodes(Partitions, Node).
@@ -99,14 +99,14 @@ backup_folder(K, V, Pid) ->
 
 result_collector(PPid) ->
     receive
-        stop -> 
+        stop ->
             PPid ! stop;
         {backup, {{B, K}, M}} when is_binary(M) ->
             %% make sure binary is encoded using term_to_binary (v0)
             %% not v1 format. restore does not have access to bucket/key
             %% so must include them in encoded format, which v1 does not
             ObjBin = riak_object:to_binary_version(v0, B, K, M),
-            disk_log:log(?TABLE, ObjBin),
+            _ = disk_log:log(?TABLE, ObjBin),
             result_collector(PPid)
     end.
 
@@ -117,17 +117,17 @@ result_collector(PPid) ->
 %% and write it to the cluster of which EntryNode is a member.
 restore(EntryNode, Filename) ->
     io:format("Restoring from '~s' to cluster to which '~s' belongs.~n", [Filename, EntryNode]),
-    
+
     % Connect to the node...
     {ok, Client} = riak:client_connect(EntryNode),
-    
+
     % Open the table, write it out, close the table...
     {ok, ?TABLE} = disk_log:open([{name, ?TABLE},
                                   {file, Filename},
                                   {mode, read_only},
-                                   {type, halt}]),
+                                  {type, halt}]),
     Count = traverse_backup(
-                disk_log:chunk(?TABLE, start), 
+                disk_log:chunk(?TABLE, start),
                 fun(Entry) -> read_and_restore_function(Client, Entry) end, 0),
     ok = disk_log:close(?TABLE),
     io:format("Restored ~p records.~n", [Count]),
@@ -136,10 +136,10 @@ restore(EntryNode, Filename) ->
 traverse_backup(eof, _VisitorFun, Count) ->
     Count;
 traverse_backup({Cont, Terms}, VisitorFun, Count) when is_list(Terms) ->
-    [VisitorFun(T) || T <- Terms],
-    traverse_backup(disk_log:chunk(?TABLE, Cont), 
+    _ = [VisitorFun(T) || T <- Terms],
+    traverse_backup(disk_log:chunk(?TABLE, Cont),
                     VisitorFun, Count+length(Terms)).
-    
+
 
 read_and_restore_function(Client, BinTerm) ->
     Obj = binary_to_term(BinTerm),
@@ -151,9 +151,9 @@ read_and_restore_function(Client, BinTerm) ->
     %% Store the object; be sure to tell the FSM not to update last modified!
     Response = Client:put(Obj1,1,1,1200000, [asis,{update_last_modified, false}]),
     {continue, Response}.
-   
-%%% DATA CLEANING %%% 
-    
+
+%%% DATA CLEANING %%%
+
 %% If the bucket name is an atom, convert it to a binary...
 make_binary_bucket(Bucket, Key, OriginalObj) when is_atom(Bucket) ->
     Bucket1 = list_to_binary(atom_to_list(Bucket)),
@@ -164,7 +164,7 @@ make_binary_bucket(Bucket, Key, OriginalObj) when is_atom(Bucket) ->
     NewObj = riak_object:new(Bucket1, Key, placeholder),
     NewObj1 = riak_object:set_contents(NewObj, OriginalContents),
     _NewObj2 = riak_object:set_vclock(NewObj1, OriginalVClock);
-    
+
 %% If the bucket name is a binary, just pass it on through...
 make_binary_bucket(Bucket, _Key, Obj) when is_binary(Bucket) -> Obj.
 
@@ -192,10 +192,10 @@ ensure_synchronized(Ring, Members) ->
 % pmap(Fun, List) ->
 %     Workers = [spawn_worker(self(), Pred, Data) || X <- List],
 %     [wait_result(Worker) || Worker <- Workers].
-% 
+%
 % spawn_worker(Parent, Fun, Data) ->
 %     erlang:spawn_monitor(fun() -> Parent ! {self(), Fun(Data)} end).
-% 
+%
 % wait_result({Pid,Ref}) ->
 %     receive
 %         {'DOWN', Ref, _, _, normal} -> receive {Pid,Result} -> Result end;
