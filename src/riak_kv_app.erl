@@ -187,7 +187,8 @@ start(_Type, _StartArgs) ->
             riak_core:register(riak_kv, [
                 {vnode_module, riak_kv_vnode},
                 {bucket_validator, riak_kv_bucket},
-                {stat_mod, riak_kv_stat}
+                {stat_mod, riak_kv_stat},
+                {permissions, [get, put, delete]}
             ]
             ++ [{health_check, {?MODULE, check_kv_health, []}} || HealthCheckOn]),
 
