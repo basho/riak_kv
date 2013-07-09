@@ -101,6 +101,27 @@ init([]) ->
 
 active(?VNODE_REQ{index=Idx,
                   sender=Sender,
+                  request=?KV_GET_BIN_REQ{req_id=ReqId}}, State) ->
+    {Value, State1} = get_data(Idx,State),
+    case Value of
+        {error, timeout} ->
+            ok;
+        {ok, Obj} ->
+            riak_core_vnode:reply(Sender, {r_bin, {ok, riak_object:to_binary(v0, Obj)}, Idx, ReqId});
+        _ ->
+            riak_core_vnode:reply(Sender, {r_bin, Value, Idx, ReqId})
+    end,
+    %% Speed things up by banging along a timeout if the last entry
+    case State1#state.partvals of
+        [] ->
+            {fsm, undefined, Pid} = Sender,
+            Pid ! request_timeout;
+        _ ->
+            ok
+    end,
+    {next_state, active, State1};
+active(?VNODE_REQ{index=Idx,
+                  sender=Sender,
                   request=?KV_GET_REQ{req_id=ReqId}}, State) ->
     {Value, State1} = get_data(Idx,State),
     case Value of

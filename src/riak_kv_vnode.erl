@@ -30,6 +30,7 @@
 -export([start_vnode/1,
          start_vnodes/1,
          get/3,
+         get_bin/3,
          del/3,
          put/6,
          local_get/2,
@@ -170,6 +171,17 @@ get(Preflist, BKey, ReqId, Sender) ->
                                    Req,
                                    Sender,
                                    riak_kv_vnode_master).
+get_bin(Preflist, BKey, ReqId) ->
+    %% Assuming this function is called from a FSM process
+    %% so self() == FSM pid
+    Sender = {fsm, undefined, self()},
+    Req = ?KV_GET_BIN_REQ{bkey=BKey,
+                      req_id=ReqId},
+    riak_core_vnode_master:command(Preflist,
+                                   Req,
+                                   Sender,
+                                   riak_kv_vnode_master).
+
 
 del(Preflist, BKey, ReqId) ->
     riak_core_vnode_master:command(Preflist,
@@ -406,6 +418,8 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
 
 handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
     do_get(Sender, BKey, ReqId, State);
+handle_command(?KV_GET_BIN_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
+    do_get_bin(Sender, BKey, ReqId, State);
 handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Caller}, _Sender,
                State=#state{async_folding=AsyncFolding,
                             key_buf_size=BufferSize,
@@ -1170,6 +1184,31 @@ do_get(_Sender, BKey, ReqID,
     Retval = do_get_term(BKey, Mod, ModState),
     update_vnode_stats(vnode_get, Idx, StartTS),
     {reply, {r, Retval, Idx, ReqID}, State}.
+
+%% @private
+do_get_bin(_Sender, BKey, ReqID,
+           State=#state{idx=Idx,mod=Mod,modstate=ModState}) ->
+    StartTS = os:timestamp(),
+    Retval = do_get_bin(BKey, Mod, ModState),
+    update_vnode_stats(vnode_get, Idx, StartTS),
+    {reply, {r_bin, Retval, Idx, ReqID}, State}.
+
+%% @private
+do_get_bin({Bucket, Key}, Mod, ModState) ->
+    case do_get_binary(Bucket, Key, Mod, ModState) of
+        {ok, Obj, _UpdModState} ->
+            {ok, Obj};
+        %% @TODO Eventually it would be good to
+        %% make the use of not_found or notfound
+        %% consistent throughout the code.
+        {error, not_found, _UpdatedModstate} ->
+            {error, notfound};
+        {error, Reason, _UpdatedModstate} ->
+            {error, Reason};
+        Err ->
+            Err
+    end.
+
 
 %% @private
 do_get_term({Bucket, Key}, Mod, ModState) ->

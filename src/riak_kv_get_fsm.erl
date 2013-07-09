@@ -277,7 +277,7 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
     Ps = preflist_for_tracing(Preflist),
     ?DTRACE(?C_GET_FSM_PREFLIST, [], Ps),
-    riak_kv_vnode:get(Preflist, BKey, ReqId),
+    riak_kv_vnode:get_bin(Preflist, BKey, ReqId),
     StateData = StateData0#state{tref=TRef},
     new_state(waiting_vnode_r, StateData).
 
@@ -292,6 +292,17 @@ preflist_for_tracing(Preflist) ->
      end || {Idx, Nd} <- lists:sublist(Preflist, 4)].
 
 %% @private
+
+waiting_vnode_r({r_bin, {ok, BinObj}, Idx, _ReqId},
+                StateData = #state{bkey={B, K}}) ->
+    case riak_object:from_binary(B, K, BinObj) of
+        {error, R} ->
+            lager:error("Invalid object ~p/~p : ~p", [B, K, R]);
+        RObj ->
+            waiting_vnode_r({r, {ok, RObj}, Idx, _ReqId}, StateData)
+    end;
+waiting_vnode_r({r_bin, VnodeResult, Idx, _ReqId}, StateData) ->
+    waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData);
 waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = GetCore}) ->
     ShortCode = riak_kv_get_core:result_shortcode(VnodeResult),
     IdxStr = integer_to_list(Idx),
@@ -314,6 +325,16 @@ waiting_vnode_r(request_timeout, StateData) ->
     finalize(S2).
 
 %% @private
+waiting_read_repair({r_bin, {ok, BinObj}, Idx, _ReqId},
+                StateData = #state{bkey={B, K}}) ->
+    case riak_object:from_binary(B, K, BinObj) of
+        {error, R} ->
+            lager:error("Invalid object ~p/~p : ~p", [B, K, R]);
+        RObj ->
+            waiting_read_repair({r, {ok, RObj}, Idx, _ReqId}, StateData)
+    end;
+waiting_read_repair({r_bin, VnodeResult, Idx, _ReqId}, StateData) ->
+    waiting_read_repair({r, VnodeResult, Idx, _ReqId}, StateData);
 waiting_read_repair({r, VnodeResult, Idx, _ReqId},
                     StateData = #state{get_core = GetCore}) ->
     ShortCode = riak_kv_get_core:result_shortcode(VnodeResult),
