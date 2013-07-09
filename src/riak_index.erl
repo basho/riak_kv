@@ -67,6 +67,7 @@
 -type value() :: binary() | integer().
 -type key() :: binary().
 -opaque continuation() :: binary(). %% encoded last_result().
+-export_type([continuation/0]).
 
 mapred_index(Dest, Args) ->
     mapred_index(Dest, Args, ?TIMEOUT).

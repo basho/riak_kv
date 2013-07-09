@@ -469,7 +469,7 @@ new_segment_store(Opts, State) ->
     DataDir = case proplists:get_value(segment_path, Opts) of
                   undefined ->
                       Root = "/tmp/anti/level",
-                      <<P:128/integer>> = crypto:md5(term_to_binary(erlang:now())),
+                      <<P:128/integer>> = crypto:hash(md5, term_to_binary(erlang:now())),
                       filename:join(Root, integer_to_list(P));
                   SegmentPath ->
                       SegmentPath
@@ -513,18 +513,18 @@ sha(Bin) ->
     sha(Chunk, Bin).
 
 sha(Chunk, Bin) ->
-    Ctx1 = crypto:sha_init(),
+    Ctx1 = crypto:hash_init(sha),
     Ctx2 = sha(Chunk, Bin, Ctx1),
-    SHA = crypto:sha_final(Ctx2),
+    SHA = crypto:hash_final(Ctx2),
     SHA.
 
 sha(Chunk, Bin, Ctx) ->
     case Bin of
         <<Data:Chunk/binary, Rest/binary>> ->
-            Ctx2 = crypto:sha_update(Ctx, Data),
+            Ctx2 = crypto:hash_update(Ctx, Data),
             sha(Chunk, Rest, Ctx2);
         Data ->
-            Ctx2 = crypto:sha_update(Ctx, Data),
+            Ctx2 = crypto:hash_update(Ctx, Data),
             Ctx2
     end.
 

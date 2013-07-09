@@ -341,7 +341,8 @@ mark_indexes_reformatted(_Idx, _ErrorCount, _ForUpgrade) ->
 %% @Doc vtag creation function
 -spec make_vtag(erlang:timestamp()) -> list().
 make_vtag(Now) ->
-    <<HashAsNum:128/integer>> = crypto:md5(term_to_binary({node(), Now})),
+    <<HashAsNum:128/integer>> = crypto:hash(md5, 
+                                            term_to_binary({node(), Now})),
     riak_core_util:integer_to_list(HashAsNum,62).
 
 overload_reply({raw, ReqId, Pid}) ->
