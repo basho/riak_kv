@@ -179,12 +179,6 @@ start(_Partition, Config) ->
                    undefined -> 1024;
                    Count     -> Count
                end,
-    S = #state{aae_mode = AAE_Mode,
-               constant_r_object = riak_object:new(<<>>, <<>>, <<>>),
-               default_get = <<42:(DefaultLen*8)>>,
-               default_size = DefaultLen,
-               key_count = KeyCount},
-    io:format("~p\n", [S]),                     % QQQ DELETE ME
     {ok, #state{aae_mode = AAE_Mode,
                 constant_r_object = riak_object:new(<<>>, <<>>, <<>>),
                 default_get = <<42:(DefaultLen*8)>>,
