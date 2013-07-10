@@ -114,71 +114,7 @@ start(_Type, _StartArgs) ->
     %% Spin up supervisor
     case riak_kv_sup:start_link() of
         {ok, Pid} ->
-            %% Register capabilities
-            riak_core_capability:register({riak_kv, vnode_vclocks},
-                                          [true, false],
-                                          false,
-                                          {riak_kv,
-                                           vnode_vclocks,
-                                           [{true, true}, {false, false}]}),
-
-            riak_core_capability:register({riak_kv, legacy_keylisting},
-                                          [false],
-                                          false,
-                                          {riak_kv,
-                                           legacy_keylisting,
-                                           [{false, false}]}),
-
-            riak_core_capability:register({riak_kv, listkeys_backpressure},
-                                          [true, false],
-                                          false,
-                                          {riak_kv,
-                                           listkeys_backpressure,
-                                           [{true, true}, {false, false}]}),
-
-            riak_core_capability:register({riak_kv, index_backpressure},
-                                          [true, false],
-                                          false),
-
-            %% mapred_system should remain until no nodes still exist
-            %% that would propose 'legacy' as the default choice
-            riak_core_capability:register({riak_kv, mapred_system},
-                                          [pipe],
-                                          pipe,
-                                          {riak_kv,
-                                           mapred_system,
-                                           [{pipe, pipe}]}),
-
-            riak_core_capability:register({riak_kv, mapred_2i_pipe},
-                                          [true, false],
-                                          false,
-                                          {riak_kv,
-                                           mapred_2i_pipe,
-                                           [{true, true}, {false, false}]}),
-
-            riak_core_capability:register({riak_kv, anti_entropy},
-                                          [enabled_v1, disabled],
-                                          disabled),
-
-            riak_core_capability:register({riak_kv, handoff_data_encoding},
-                                          [encode_raw, encode_zlib],
-                                          encode_zlib),
-
-            riak_core_capability:register({riak_kv, object_format},
-                                          get_object_format_modes(),
-                                          v0),
-
-            riak_core_capability:register({riak_kv, secondary_index_version},
-                                          [v2, v1],
-                                          v1),
-
-            riak_core_capability:register({riak_kv, vclock_data_encoding},
-                                          [encode_zlib, encode_raw],
-                                          encode_zlib),
-
-            riak_core_capability:register({riak_kv, crdt},
-                                          [[pncounter],[]],
-                                          []),
+            register_capabilities(),
 
             HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
             %% Go ahead and mark the riak_kv service as up in the node watcher.
@@ -200,6 +136,79 @@ start(_Type, _StartArgs) ->
         {error, Reason} ->
             {error, Reason}
     end.
+
+
+register_capabilities() ->
+    [ begin
+            case Cap of
+                {Name, Values, Default, Legacy} ->
+                    riak_core_capability:register(Name, Values, Default, Legacy);
+                {Name, Values, Default} ->
+                    riak_core_capability:register(Name, Values, Default)
+            end
+        end || Cap <- capabilities()].
+
+capabilities() ->
+    [{{riak_kv, vnode_vclocks},
+      [true, false],
+      false,
+      {riak_kv, vnode_vclocks, [{true, true}, {false, false}]}},
+
+     {{riak_kv, legacy_keylisting},
+      [false],
+      false,
+      {riak_kv, legacy_keylisting, [{false, false}]}},
+
+     {{riak_kv, listkeys_backpressure},
+      [true, false],
+      false,
+      {riak_kv, listkeys_backpressure, [{true, true}, {false, false}]}},
+
+     {{riak_kv, index_backpressure},
+      [true, false],
+      false},
+
+     %% mapred_system should remain until no nodes still exist
+     %% that would propose 'legacy' as the default choice
+     {{riak_kv, mapred_system},
+      [pipe],
+      pipe,
+      {riak_kv, mapred_system, [{pipe, pipe}]}},
+
+     {{riak_kv, mapred_2i_pipe},
+      [true, false],
+      false,
+      {riak_kv, mapred_2i_pipe, [{true, true}, {false, false}]}},
+
+     {{riak_kv, anti_entropy},
+      [enabled_v1, disabled],
+      disabled},
+
+     {{riak_kv, handoff_data_encoding},
+      [encode_raw, encode_zlib],
+      encode_zlib},
+
+     {{riak_kv, object_format},
+      get_object_format_modes(),
+      v0},
+
+     {{riak_kv, secondary_index_version},
+      [v2, v1],
+      v1},
+
+     {{riak_kv, vclock_data_encoding},
+      [encode_zlib, encode_raw],
+      encode_zlib},
+
+     {{riak_kv, crdt},
+      [[pncounter],[]],
+      []},
+
+     {{riak_kv, get_fsm_bin},
+      [true, false],
+      false}
+    ].
+
 
 %% @doc Prepare to stop - called before the supervisor tree is shutdown
 prep_stop(_State) ->

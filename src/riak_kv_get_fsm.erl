@@ -277,7 +277,12 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
     Ps = preflist_for_tracing(Preflist),
     ?DTRACE(?C_GET_FSM_PREFLIST, [], Ps),
-    riak_kv_vnode:get_bin(Preflist, BKey, ReqId),
+    case riak_core_capability:get({riak_kv, get_fsm_bin}) of
+        true ->
+            riak_kv_vnode:get_bin(Preflist, BKey, ReqId);
+        false ->
+            riak_kv_vnode:get(Preflist, BKey, ReqId)
+    end,
     StateData = StateData0#state{tref=TRef},
     new_state(waiting_vnode_r, StateData).
 
