@@ -64,6 +64,7 @@
 
 -record(state, {partition, fd}).
 -opaque state() :: #state{}.
+-export_type([state/0]).
 
 -type input() :: {Bucket :: binary(), Key :: binary()}
                | {{Bucket :: binary(), Key :: binary()}, KeyData :: term()}

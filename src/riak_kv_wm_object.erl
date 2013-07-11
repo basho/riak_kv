@@ -900,6 +900,14 @@ delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C}) ->
             {true, RD, Ctx}
     end.
 
+-ifdef(new_hash).
+md5(Bin) ->
+    crypto:hash(md5, Bin).
+-else.
+md5(Bin) ->
+    crypto:md5(Bin).
+-endif.
+
 %% @spec generate_etag(reqdata(), context()) ->
 %%          {undefined|string(), reqdata(), context()}
 %% @doc Get the etag for this resource.
@@ -912,7 +920,8 @@ generate_etag(RD, Ctx) ->
             {dict:fetch(?MD_VTAG, MD), RD, Ctx};
         multiple_choices ->
             {ok, Doc} = Ctx#ctx.doc,
-            <<ETag:128/integer>> = crypto:md5(term_to_binary(riak_object:vclock(Doc))),
+            <<ETag:128/integer>> = 
+                md5(term_to_binary(riak_object:vclock(Doc))),
             {riak_core_util:integer_to_list(ETag, 62), RD, Ctx}
     end.
 
