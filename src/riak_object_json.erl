@@ -29,7 +29,6 @@
 
 -export([encode/1,decode/1]).
 
-%% @spec to_json(riak_object()) -> {struct, list(any())}
 %% @doc Converts a riak_object into its JSON equivalent
 -spec encode(riak_object:riak_object()) -> {struct, list(any())}.
 encode(Obj) ->
@@ -66,8 +65,8 @@ jsonify_metadata(MD) ->
               %% When the user metadata is empty, it should still be a struct
               ({?MD_USERMETA, []}) ->
                    {?MD_USERMETA, {struct, []}};
-              ({<<"Links">>, Links}) ->
-                   {<<"Links">>, [ [B, K, T] || {{B, K}, T} <- Links ]};
+              ({?MD_LINKS, Links}) ->
+                   {?MD_LINKS, [ [B, K, T] || {{B, K}, T} <- Links ]};
               ({Name, List=[_|_]}) ->
                    {Name, jsonify_metadata_list(List)};
               ({Name, Value}) ->
@@ -81,7 +80,7 @@ jsonify_metadata_list(List) ->
     Classifier = fun({Key,_}, Type) when (is_binary(Key) orelse is_list(Key)),
                                          Type /= array, Type /= string ->
                          struct;
-                    (C, Type) when is_integer(C), C >= 0, C =< 256,
+                    (C, Type) when is_integer(C), C >= 0, C < 256,
                                    Type /= array, Type /= struct ->
                          string;
                     (_, _) ->
@@ -120,9 +119,9 @@ dejsonify_values([{<<"metadata">>, {struct, MD0}},
                   {<<"data">>, D}|T], Accum) ->
     Converter = fun({Key, Val}) ->
                         case Key of
-                            <<"Links">> ->
+                            ?MD_LINKS ->
                                 {Key, [{{B, K}, Tag} || [B, K, Tag] <- Val]};
-                            <<"X-Riak-Last-Modified">> ->
+                            ?MD_LASTMOD ->
                                 {Key, os:timestamp()};
                             _ ->
                                 {Key, if
