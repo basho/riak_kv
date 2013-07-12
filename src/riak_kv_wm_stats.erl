@@ -21,7 +21,6 @@
 %% -------------------------------------------------------------------
 
 -module(riak_kv_wm_stats).
--author('Andy Gross <andy@basho.com>').
 
 %% webmachine resource exports
 -export([
