@@ -61,7 +61,6 @@
 %% app.config file.
 %%
 %% <ul>
-
 %% <li>`yessir_aae_mode_encoding' - Specify which mode of behavior to
 %%                                  use when interacting with Riak KV's
 %%                                  anti-entropy mode for put & put_object
@@ -84,6 +83,9 @@
 %%   </ul>
 %% <li>`yessir_default_size' - The number of bytes of generated data for the value.</li>
 %% <li>`yessir_key_count'    - The number of keys that will be folded over, e.g. list_keys().</li>
+%% <li>`yessir_bucket_prefix_list'  - A list {BucketPrefixBin, {Module, Fun}}
+%%                              tuples, where Module:Fun/3 is called if a
+%%                              Bucket's name matches BucketPrefixBin.</li>
 %% </ul>
 %%
 %% TODO list:
@@ -101,6 +103,7 @@
 -behavior(riak_kv_backend).
 
 %% KV Backend API
+-compile(export_all).                           % TODO DEBUGGING ONLY
 -export([api_version/0,
          capabilities/1,
          capabilities/2,
@@ -132,6 +135,7 @@
           default_get = <<>>,
           default_size = 0,
           key_count = 0,
+          bprefix_list = [],
           op_get = 0,
           op_put = 0,
           op_delete = 0
@@ -179,11 +183,17 @@ start(_Partition, Config) ->
                    undefined -> 1024;
                    Count     -> Count
                end,
+    BPrefixList = case app_helper:get_prop_or_env(
+                        yessir_bucket_prefix_list, Config, yessir_backend) of
+                     undefined -> [];
+                     BPL       -> BPL
+                 end,
     {ok, #state{aae_mode = AAE_Mode,
                 constant_r_object = riak_object:new(<<>>, <<>>, <<>>),
                 default_get = <<42:(DefaultLen*8)>>,
                 default_size = DefaultLen,
-                key_count = KeyCount}}.
+                key_count = KeyCount,
+                bprefix_list = BPrefixList}}.
 
 %% @doc Stop this backend, yes, sir!
 -spec stop(state()) -> ok.
@@ -193,15 +203,34 @@ stop(_State) ->
 %% @doc Get a fake object, yes, sir!
 -spec get(riak_object:bucket(), riak_object:key(), state()) ->
                  {ok, any(), state()}.
-get(Bucket, Key, #state{op_get = Gets} = S) ->
-    O = make_get_object(Bucket, Key, S),
-    {ok, riak_object:to_binary(v0, O), S#state{op_get = Gets + 1}}.
+get(Bucket, Key, S) ->
+    RObj = make_get_object(Bucket, Key, S),
+    make_get_return_val(RObj, true, S).
 
-get_object(Bucket, Key, true = _WantsBinary, S) ->
-    get(Bucket, Key, S);
-get_object(Bucket, Key, false = _WantsBinary, #state{op_get = Gets} = S) ->
-    O = make_get_object(Bucket, Key, S),
-    {ok, O, S#state{op_get = Gets + 1}}.
+get_object(Bucket, Key, WantsBinary, S) ->
+    get_object_bprefix(S#state.bprefix_list, Bucket, Key, WantsBinary, S).
+
+get_object_bprefix([], Bucket, Key, WantsBinary, S) ->
+    get_object_default(Bucket, Key, WantsBinary, S);
+get_object_bprefix([{P, {Mod, Fun}}|Ps], Bucket, Key, WantsBinary, S) ->
+    P_len = byte_size(P),
+    case Bucket of
+        <<P:P_len/binary, Rest/binary>> ->
+            make_get_return_val(Mod:Fun(Rest, Bucket, Key), WantsBinary, S);
+        _ ->
+            get_object_bprefix(Ps, Bucket, Key, WantsBinary, S)
+    end.
+
+get_object_default(Bucket, Key, WantsBinary, S) ->
+    make_get_return_val(make_get_object(Bucket, Key, S), WantsBinary, S).
+
+make_get_return_val(Error, _WantsBinary, #state{op_get = Gets} = S)
+  when Error == not_found; Error == bad_crc ->
+    {error, Error, S#state{op_get = Gets + 1}};
+make_get_return_val(RObj, true = _WantsBinary, #state{op_get = Gets} = S) ->
+    {ok, riak_object:to_binary(v0, RObj), S#state{op_get = Gets + 1}};
+make_get_return_val(RObj, false = _WantsBinary, #state{op_get = Gets} = S) ->
+    {ok, RObj, S#state{op_get = Gets + 1}}.
 
 %% @doc Store an object, yes, sir!
 -type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
@@ -351,11 +380,7 @@ fold_keys_fun(FoldKeysFun, Bucket) ->
 fold_objects_fun(FoldObjectsFun, Bucket, Size) ->
     fun(Key, VR, Acc) when Key /= undefined ->
             Bin = value_for_random(VR, Size),
-            Meta = dict:new(),
-            Meta1 = dict:store(<<"X-Riak-Last-Modified">>, erlang:now(), Meta),
-            Meta2 = dict:store(<<"X-Riak-VTag">>, riak_kv_util:make_vtag(erlang:now()), Meta1),
-            O = riak_object:increment_vclock(riak_object:new(Bucket, Key, Bin, Meta2),
-                                             <<"yessir!">>, 1),
+            O = make_riak_safe_obj(Bucket, Key, Bin),
             FoldObjectsFun(Bucket, Key, riak_object:to_binary(v0, O), Acc);
        (_, _, Acc) ->
             Acc
@@ -376,16 +401,164 @@ make_get_object(Bucket, Key, S) ->
               undefined    -> S#state.default_get;
               N            -> <<42:(N*8)>>
           end,
-    Meta = dict:new(),
-    Meta1 = dict:store(<<"X-Riak-Last-Modified">>, erlang:now(), Meta),
-    Meta2 = dict:store(<<"X-Riak-VTag">>, riak_kv_util:make_vtag(erlang:now()), Meta1),
-    riak_object:increment_vclock(riak_object:new(Bucket, Key, Bin, Meta2),
-                                 <<"yessir!">>, 1).
+    make_riak_safe_obj(Bucket, Key, Bin).
+
+make_riak_safe_obj(Bucket, Key, Bin) when is_binary(Bin) ->
+    make_riak_safe_obj(Bucket, Key, Bin, []).
+
+make_riak_safe_obj(Bucket, Key, Bin, Metas)
+  when is_binary(Bin), is_list(Metas) ->
+    Meta = dict:from_list(
+             [{<<"X-Riak-Meta">>, Metas},
+              {<<"X-Riak-Last-Modified">>, {44, 45, 46}},
+              {<<"X-Riak-VTag">>, riak_kv_util:make_vtag({42,42,42})}]),
+    RObj = riak_object:new(Bucket, Key, Bin, Meta),
+    riak_object:increment_vclock(RObj, <<"yessir!">>, 1).
 
 %%
 %% Test
 %%
+
+bc_num_buckets() ->
+    1.
+bc_display_name() ->
+    "foobar".
+bc_public_key() ->
+    "J2IP6WGUQ_FNGIAN9AFI".
+bc_private_key() ->    
+    "mbB-1VACNsrN0yLAUSpCFmXNNBpAC3X0lPmINA==".
+bc_canonical_id() ->    
+    "18983ba0e16e18a2b103ca16b84fad93d12a2fbed1c88048931fb91b0b844ad3".
+bc_obj_size() ->
+    %% 4*1024*1024 + 4.
+    80*1024*1024.
+bc_block_size() ->
+    1048576.
+bc_acl() ->
+    {acl_v2,{bc_display_name(),
+             bc_canonical_id(),
+             bc_public_key()},
+     [{{bc_display_name(),
+        bc_canonical_id()},
+       ['FULL_CONTROL']}],
+     {1370,310148,497003}}.
+
+bc_get_memoized_checksum(Size) ->
+    case whereis(?MODULE) of
+        undefined ->
+            (catch spawn(fun() -> erlang:register(?MODULE, self()),
+                                  bc_run_memoized_server(orddict:new())
+                         end)),
+            timer:sleep(100),
+            bc_get_memoized_checksum(Size);
+        _Pid ->
+            ?MODULE ! {checksum, Size, self()},
+            receive
+                {checksum_result, X} ->
+                    X
+            end
+    end.
+
+bc_run_memoized_server(D) ->
+    receive
+        {checksum, Size, Pid} ->
+            case orddict:find(Size, D) of
+                error ->
+                    BlockSize = bc_block_size(),
+                    WholeBlocks = Size div BlockSize,
+                    RemBytes = Size rem BlockSize,
+                    X = lists:duplicate(WholeBlocks, <<42:(BlockSize*8)>>) ++
+                        [<<42:(RemBytes*8)>>],
+                    CSum = bc_md5(X),
+                    Pid ! {checksum_result, CSum},
+                    bc_run_memoized_server(orddict:store(Size, CSum, D));
+                {ok, CSum} ->
+                    Pid ! {checksum_result, CSum},
+                    bc_run_memoized_server(D)
+            end
+    end.
+
+bc_md5(L) ->
+    crypto:md5_final(lists:foldl(fun(X, Ctx) -> crypto:md5_update(Ctx, X) end, crypto:md5_init(), L)).
+
+b_moss_users(_Suffix, Bucket, Key) ->
+    V = {rcs_user_v2,"foo bar",bc_display_name(),"foobar@example.com",
+         Key,
+         bc_private_key(),
+         bc_canonical_id(), 
+         [{moss_bucket_v1,"b"++integer_to_list(X),created,
+           "2013-05-02T19:57:03.000Z",{1367,524623,660302}, undefined} ||
+             X <- lists:seq(1, bc_num_buckets())],
+         enabled},
+    make_riak_safe_obj(Bucket, Key, riak_object:to_binary(v0, V)).
+
+b_moss_buckets(_Suffix, Bucket, Key) ->
+    V = list_to_binary(bc_public_key()),
+    Metas = [{<<"X-Moss-Acl">>, term_to_binary(bc_acl())}],
+    make_riak_safe_obj(Bucket, Key, V, Metas).
+
+b_object(_Suffix, Bucket, Key) ->
+    BlockSize = bc_block_size(),
+    Size = b_object_size(Key),
+    <<UUIDa:5/binary, _/binary>> = erlang:md5([Bucket, Key]),
+    UUIDb = <<BlockSize:(3*8)>>,
+    UUIDc = <<Size:(8*8)>>,
+    UUID = list_to_binary([UUIDa,UUIDb,UUIDc]),
+    V =  [{UUID, % hehheh secret comms channel
+           {lfs_manifest_v3,3,bc_block_size(),
+            {<<"b0">>,Key},              % Don't care about bucket name
+            [],"2013-06-04T01:43:28.000Z",
+            UUID,
+            Size, <<"binary/octet-stream">>,
+            bc_get_memoized_checksum(Size),
+            active,
+            {1370,310148,497212},
+            {1370,310148,500525},
+            [],undefined,undefined,undefined,undefined,
+            bc_acl(),
+            [],undefined}}],
+    make_riak_safe_obj(Bucket, Key, riak_object:to_binary(v0, V)).
+
+b_block(_Suffix, Bucket, Key) ->
+    <<_Random:5/binary, BlockSize:(3*8), Size:(8*8), BlockNum:32>> = Key,
+    Bytes = erlang:min(BlockSize, Size - (BlockNum * BlockSize)),
+    make_riak_safe_obj(Bucket, Key, <<42:(Bytes*8)>>).
+
+b_not_found(_, _, _) ->
+    not_found.
+
+b_object_size(Key) when is_binary(Key) ->
+    b_object_size(binary_to_list(Key));
+b_object_size([$g|Rest]) ->
+    {Size, _} = string:to_integer(Rest),
+    Size * 1024*1024*1024;
+b_object_size([$m|Rest]) ->
+    {Size, _} = string:to_integer(Rest),
+    Size * 1024*1024;
+b_object_size([$k|Rest]) ->
+    {Size, _} = string:to_integer(Rest),
+    Size * 1024;
+b_object_size([$b|Rest]) ->
+    {Size, _} = string:to_integer(Rest),
+    Size;
+b_object_size(_) ->
+    bc_obj_size().
+
 -ifdef(USE_BROKEN_TESTS).
+
+t0() ->
+    B0 = <<"foo">>,
+    {ok, S0} = start(0, [{yessir_aae_mode_encoding, constant_binary},
+                         {yessir_default_size, 2},
+                         {yessir_key_count, 5},
+                         {yessir_bucket_prefix_list,
+                          [{B0, {?MODULE, t0_number1}}]
+                         }]),
+    get_object(B0, <<"key">>, true, S0).
+
+t0_number1(_BucketSuffix, Bucket, Key) ->
+    riak_object:new(Bucket, Key, <<"HEYHEY!">>).
+
 -ifdef(TEST).
 simple_test() ->
    Config = [],
