@@ -20,9 +20,6 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_vnode).
--author('Kevin Smith <kevin@basho.com>').
--author('John Muellerleile <johnm@basho.com>').
-
 -behaviour(riak_core_vnode).
 
 %% API
