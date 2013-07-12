@@ -26,8 +26,6 @@
 
 -module(riak_kv_fold_buffer).
 
--author('Kelly McLaughlin <kelly@basho.com>').
-
 %% Public API
 -export([new/2,
          add/2,
