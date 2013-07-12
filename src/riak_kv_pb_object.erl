@@ -79,7 +79,17 @@ init() ->
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) ->
-    {ok, riak_pb_codec:decode(Code, Bin)}.
+    Msg = riak_pb_codec:decode(Code, Bin),
+    case Msg of
+        #rpbgetreq{} ->
+            {ok, Msg, {"riak_kv.get", Msg#rpbgetreq.bucket}};
+        #rpbputreq{} ->
+            {ok, Msg, {"riak_kv.put", Msg#rpbputreq.bucket}};
+        #rpbdelreq{} ->
+            {ok, Msg, {"riak_kv.delete", Msg#rpbdelreq.bucket}};
+        _ ->
+            {ok, Msg}
+    end.
 
 %% @doc encode/1 callback. Encodes an outgoing response message.
 encode(Message) ->
