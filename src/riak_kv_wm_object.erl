@@ -246,7 +246,7 @@ forbidden(RD, Ctx=#ctx{security=undefined}) ->
         true ->
             {true, RD, Ctx};
         false ->
-            malformed_check_doc(RD, Ctx)
+            forbidden_check_doc(RD, Ctx)
     end;
 
 forbidden(RD, Ctx=#ctx{security=Security}) ->
@@ -283,11 +283,22 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
                             %% we do this early as it used to be done in the
                             %% malformed check, so the rest of the resource
                             %% assumes that the key is present.
-                            malformed_check_doc(RD, Ctx);
+                            forbidden_check_doc(RD, Ctx);
                         _ ->
                             {false, RD, Ctx}
                     end
             end
+    end.
+
+%% @doc Detects whether fetching the requested object results in an
+%% error.
+forbidden_check_doc(RD, Ctx) ->
+    DocCtx = ensure_doc(Ctx),
+    case DocCtx#ctx.doc of
+        {error, Reason} ->
+            handle_common_error(Reason, RD, DocCtx);
+        _ ->
+            {false, RD, DocCtx}
     end.
 
 %% @spec allowed_methods(reqdata(), context()) ->
@@ -351,17 +362,6 @@ malformed_content_type(RD, Ctx) ->
         undefined ->
             {true, missing_content_type(RD), Ctx};
         _ -> {false, RD, Ctx}
-    end.
-
-%% @doc Detects whether fetching the requested object results in an
-%% error.
-malformed_check_doc(RD, Ctx) ->
-    DocCtx = ensure_doc(Ctx),
-    case DocCtx#ctx.doc of
-        {error, Reason} ->
-            handle_common_error(Reason, RD, DocCtx);
-        _ ->
-            {false, RD, DocCtx}
     end.
 
 %% @spec malformed_timeout_param(reqdata(), context()) ->
