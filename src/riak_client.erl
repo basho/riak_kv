@@ -133,7 +133,7 @@ get(Bucket, Key, R, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) when is_binary(
 %%      Return as soon as the default W value number of nodes for this bucket
 %%      nodes have received the request.
 %% @equiv put(RObj, [])
-put(RObj, {?MODULE, [_Node, _ClientId]}=THIS) -> THIS:put(RObj, [], THIS).
+put(RObj, {?MODULE, [_Node, _ClientId]}=THIS) -> put(RObj, [], THIS).
 
 
 %% @spec put(RObj :: riak_object:riak_object(), riak_kv_put_fsm::options(), riak_client()) ->
