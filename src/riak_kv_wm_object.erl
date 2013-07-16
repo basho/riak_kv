@@ -208,7 +208,7 @@ is_authorized(ReqData, Ctx) ->
                             [User, Pass] = string:tokens(UserPass, ":"),
                             {ok, Peer} = inet_parse:address(wrq:peer(ReqData)),
                             case riak_core_security:authenticate(User, Pass,
-                                    Peer)
+                                    [{ip, Peer}])
                                 of
                                 {ok, Sec} ->
                                     {true, Sec};
