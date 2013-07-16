@@ -242,7 +242,13 @@ is_authorized(ReqData, Ctx) ->
     end.
 
 forbidden(RD, Ctx=#ctx{security=undefined}) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
+    case riak_kv_wm_utils:is_forbidden(RD) of
+        true ->
+            {true, RD, Ctx};
+        false ->
+            malformed_check_doc(RD, Ctx)
+    end;
+
 forbidden(RD, Ctx=#ctx{security=Security}) ->
     case riak_kv_wm_utils:is_forbidden(RD) of
         true ->
@@ -277,15 +283,7 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
                             %% we do this early as it used to be done in the
                             %% malformed check, so the rest of the resource
                             %% assumes that the key is present.
-                            DocCtx = ensure_doc(Ctx),
-                            case DocCtx#ctx.doc of
-                                {error, Reason} ->
-                                    handle_common_error(Reason,
-                                                        RD,
-                                                        DocCtx);
-                                _ ->
-                                    {false, RD, DocCtx}
-                            end;
+                            malformed_check_doc(RD, Ctx);
                         _ ->
                             {false, RD, Ctx}
                     end
@@ -353,6 +351,17 @@ malformed_content_type(RD, Ctx) ->
         undefined ->
             {true, missing_content_type(RD), Ctx};
         _ -> {false, RD, Ctx}
+    end.
+
+%% @doc Detects whether fetching the requested object results in an
+%% error.
+malformed_check_doc(RD, Ctx) ->
+    DocCtx = ensure_doc(Ctx),
+    case DocCtx#ctx.doc of
+        {error, Reason} ->
+            handle_common_error(Reason, RD, DocCtx);
+        _ ->
+            {false, RD, DocCtx}
     end.
 
 %% @spec malformed_timeout_param(reqdata(), context()) ->
