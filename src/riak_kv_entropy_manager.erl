@@ -51,7 +51,6 @@
 -record(state, {mode           = automatic :: automatic | manual,
                 trees          = []        :: [{index(), pid()}],
                 tree_queue     = []        :: [{index(), pid()}],
-                locks          = []        :: [{pid(), reference()}],
                 build_tokens   = 0         :: non_neg_integer(),
                 exchange_queue = []        :: [exchange()],
                 exchanges      = []        :: [{index(), reference(), pid()}]
@@ -191,11 +190,17 @@ init([]) ->
                false ->
                    automatic
            end,
+    Concurrency = app_helper:get_env(riak_kv,
+                                     anti_entropy_concurrency,
+                                     ?DEFAULT_CONCURRENCY),
+    KillProcsIfLimitsReached = true,
+    riak_core_bg_manager:set_concurrency_limit(anti_entropy_concurrency,
+                                               Concurrency,
+                                               KillProcsIfLimitsReached),
     set_debug(proplists:is_defined(debug, Opts)),
     State = #state{mode=Mode,
                    trees=[],
                    tree_queue=[],
-                   locks=[],
                    exchanges=[],
                    exchange_queue=[]},
     State2 = reset_build_tokens(State),
@@ -279,10 +284,9 @@ handle_info({{hashtree_pid, Index}, Reply}, State) ->
             {noreply, State}
     end;
 handle_info({'DOWN', Ref, _, Obj, Status}, State) ->
-    State2 = maybe_release_lock(Ref, State),
-    State3 = maybe_clear_exchange(Ref, Status, State2),
-    State4 = maybe_clear_registered_tree(Obj, State3),
-    {noreply, State4};
+    State2 = maybe_clear_exchange(Ref, Status, State),
+    State3 = maybe_clear_registered_tree(Obj, State2),
+    {noreply, State3};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -361,19 +365,20 @@ add_hashtree_pid(true, Index, Pid, State=#state{trees=Trees}) ->
 
 -spec do_get_lock(any(),pid(),state())
                  -> {ok | max_concurrency | build_limit_reached, state()}.
-do_get_lock(Type, Pid, State=#state{locks=Locks}) ->
-    Concurrency = app_helper:get_env(riak_kv,
-                                     anti_entropy_concurrency,
-                                     ?DEFAULT_CONCURRENCY),
-    case length(Locks) >= Concurrency of
+do_get_lock(Type, Pid, State) ->
+    case riak_core_bg_manager:concurrency_limit_reached(anti_entropy_concurrency) of
         true ->
             {max_concurrency, State};
         false ->
             case check_lock_type(Type, State) of
                 {ok, State2} ->
-                    Ref = monitor(process, Pid),
-                    State3 = State2#state{locks=[{Pid,Ref}|Locks]},
-                    {ok, State3};
+                    %% only way this could fail is if another process
+                    %% gets a lock first, which should not happen in
+                    %% this context. But... test anyhow.
+                    case riak_core_bg_manager:get_lock(Type, Pid) of
+                        ok -> {ok, State2};
+                        Err -> {Err, State2}
+                    end;
                 Error ->
                     {Error, State}
             end
@@ -387,11 +392,6 @@ check_lock_type(build, State=#state{build_tokens=Tokens}) ->
     end;
 check_lock_type(_Type, State) ->
     {ok, State}.
-
--spec maybe_release_lock(reference(), state()) -> state().
-maybe_release_lock(Ref, State) ->
-    Locks = lists:keydelete(Ref, 2, State#state.locks),
-    State#state{locks=Locks}.
 
 -spec maybe_clear_exchange(reference(), term(), state()) -> state().
 maybe_clear_exchange(Ref, Status, State) ->
