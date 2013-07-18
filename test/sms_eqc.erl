@@ -54,8 +54,8 @@ sms_prop() ->
             begin
             {H, S, R} = run_commands(?MODULE, Cmds),
             eqc_gen:with_parameter(show_states, true,
-                                   pretty_commands(?MODULE, Cmds,
-                                                   {H, S, R}, R == ok))
+                                   eqc_statem:pretty_commands(?MODULE, Cmds,
+                                                              {H, S, R}, R == ok))
         end).
 
 initial_state() ->

@@ -66,6 +66,7 @@
                 phase :: riak_kv_mrc_pipe:map_query_fun(),
                 arg :: term()}).
 -opaque state() :: #state{}.
+-export_type([state/0]).
 
 -define(DEFAULT_JS_RESERVE_ATTEMPTS, 10).
 
