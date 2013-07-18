@@ -41,8 +41,16 @@ initial_state() ->
 integer_to_binary(Int) ->
     list_to_binary(integer_to_list(Int)).
 
+-ifdef(new_hash).
+sha(Bin) ->
+    crypto:hash(sha, Bin).
+-else.
+sha(Bin) ->
+    crypto:sha(Bin).
+-endif.
+
 object(_S) ->
-    {?LET(Key, int(), integer_to_binary(Key)), crypto:sha(term_to_binary(make_ref()))}.
+    {?LET(Key, int(), ?MODULE:integer_to_binary(Key)), sha(term_to_binary(make_ref()))}.
 
 command(S) ->
     oneof(
