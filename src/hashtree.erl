@@ -455,6 +455,42 @@ get_bucket(Level, Bucket, State) ->
 %%% Internal functions
 %%%===================================================================
 
+-ifndef(old_hash).
+md5(Bin) ->
+    crypto:hash(md5, Bin).
+
+-ifdef(TEST).
+esha(Bin) ->
+    crypto:hash(sha, Bin).
+-endif.
+
+esha_init() ->
+    crypto:hash_init(sha).
+
+esha_update(Ctx, Bin) ->
+    crypto:hash_update(Ctx, Bin).
+
+esha_final(Ctx) ->
+    crypto:hash_final(Ctx).
+-else.
+md5(Bin) ->
+    crypto:md5(Bin).
+
+-ifdef(TEST).
+esha(Bin) ->
+    crypto:sha(Bin).
+-endif.
+
+esha_init() ->
+    crypto:sha_init().
+
+esha_update(Ctx, Bin) ->
+    crypto:sha_update(Ctx, Bin).
+
+esha_final(Ctx) ->
+    crypto:sha_final(Ctx).
+-endif.
+
 -spec set_bucket(integer(), integer(), any(), hashtree()) -> hashtree().
 set_bucket(Level, Bucket, Val, State) ->
     case Level =< State#state.mem_levels of
@@ -469,7 +505,7 @@ new_segment_store(Opts, State) ->
     DataDir = case proplists:get_value(segment_path, Opts) of
                   undefined ->
                       Root = "/tmp/anti/level",
-                      <<P:128/integer>> = crypto:md5(term_to_binary(erlang:now())),
+                      <<P:128/integer>> = md5(term_to_binary(erlang:now())),
                       filename:join(Root, integer_to_list(P));
                   SegmentPath ->
                       SegmentPath
@@ -513,18 +549,18 @@ sha(Bin) ->
     sha(Chunk, Bin).
 
 sha(Chunk, Bin) ->
-    Ctx1 = crypto:sha_init(),
+    Ctx1 = esha_init(),
     Ctx2 = sha(Chunk, Bin, Ctx1),
-    SHA = crypto:sha_final(Ctx2),
+    SHA = esha_final(Ctx2),
     SHA.
 
 sha(Chunk, Bin, Ctx) ->
     case Bin of
         <<Data:Chunk/binary, Rest/binary>> ->
-            Ctx2 = crypto:sha_update(Ctx, Data),
+            Ctx2 = esha_update(Ctx, Data),
             sha(Chunk, Rest, Ctx2);
         Data ->
-            Ctx2 = crypto:sha_update(Ctx, Data),
+            Ctx2 = esha_update(Ctx, Data),
             Ctx2
     end.
 
@@ -1030,9 +1066,9 @@ snapshot_test() ->
     ok.
 
 delta_test() ->
-    T1 = update_tree(insert(<<"1">>, crypto:sha(term_to_binary(make_ref())),
+    T1 = update_tree(insert(<<"1">>, esha(term_to_binary(make_ref())),
                             new())),
-    T2 = update_tree(insert(<<"2">>, crypto:sha(term_to_binary(make_ref())),
+    T2 = update_tree(insert(<<"2">>, esha(term_to_binary(make_ref())),
                             new())),
     Diff = local_compare(T1, T2),
     ?assertEqual([{remote_missing, <<"1">>}, {missing, <<"2">>}], Diff),
@@ -1057,7 +1093,7 @@ prop_sha() ->
     ?FORALL(Size, choose(256, 1024*1024),
             ?FORALL(Chunk, choose(1, Size),
                     ?FORALL(Bin, binary(Size),
-                            sha(Chunk, Bin) =:= crypto:sha(Bin)))).
+                            sha(Chunk, Bin) =:= esha(Bin)))).
 
 eqc_test_() ->
     {timeout, 5,
