@@ -23,9 +23,6 @@
 %% @doc interaction with JavaScript VMs
 
 -module(riak_kv_js_vm).
--author('Kevin Smith <kevin@basho.com>').
--author('John Muellerleile <johnm@basho.com>').
-
 -behaviour(gen_server).
 
 %% API

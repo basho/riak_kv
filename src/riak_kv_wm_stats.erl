@@ -21,7 +21,6 @@
 %% -------------------------------------------------------------------
 
 -module(riak_kv_wm_stats).
--author('Andy Gross <andy@basho.com>').
 
 %% webmachine resource exports
 -export([
@@ -85,5 +84,6 @@ pretty_print(RD1, C1=#ctx{}) ->
     {json_pp:print(binary_to_list(list_to_binary(Json))), RD2, C2}.
 
 get_stats() ->
-    proplists:delete(disk, riak_kv_stat:get_stats()) ++
-        riak_core_stat:get_stats().
+    {value, {disk, Disk}, Stats} = lists:keytake(disk, 1, riak_kv_stat:get_stats()),
+    DiskFlat = [{struct, [{id, list_to_binary(Id)}, {size, Size}, {used, Used}]} || {Id, Size, Used} <- Disk],
+    lists:append([Stats, [{disk, DiskFlat}], riak_core_stat:get_stats()]).

@@ -23,7 +23,6 @@
 %% @doc object used for access into the riak system
 
 -module(riak_client).
--author('Justin Sheehy <justin@basho.com>').
 
 -export([new/2]).
 -export([get/3,get/4,get/5]).

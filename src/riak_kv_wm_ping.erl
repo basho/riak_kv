@@ -23,7 +23,6 @@
 %% @doc simple Webmachine resource for availability test
 
 -module(riak_kv_wm_ping).
--author('Dave Smith <dizzyd@dizzyd.com>').
 
 %% webmachine resource exports
 -export([
