@@ -900,7 +900,7 @@ delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C}) ->
             {true, RD, Ctx}
     end.
 
--ifdef(new_hash).
+-ifndef(old_hash).
 md5(Bin) ->
     crypto:hash(md5, Bin).
 -else.

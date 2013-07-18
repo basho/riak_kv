@@ -455,7 +455,7 @@ get_bucket(Level, Bucket, State) ->
 %%% Internal functions
 %%%===================================================================
 
--ifdef(new_hash).
+-ifndef(old_hash).
 md5(Bin) ->
     crypto:hash(md5, Bin).
 

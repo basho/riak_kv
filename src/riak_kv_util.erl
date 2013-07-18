@@ -338,7 +338,7 @@ mark_indexes_reformatted(Idx, 0, ForUpgrade) ->
 mark_indexes_reformatted(_Idx, _ErrorCount, _ForUpgrade) ->
     undefined.
 
--ifdef(new_hash).
+-ifndef(old_hash).
 md5(Bin) ->
     crypto:hash(md5, Bin).
 -else.
