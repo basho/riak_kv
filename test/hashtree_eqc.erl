@@ -41,7 +41,7 @@ initial_state() ->
 integer_to_binary(Int) ->
     list_to_binary(integer_to_list(Int)).
 
--ifdef(new_hash).
+-ifndef(old_hash).
 sha(Bin) ->
     crypto:hash(sha, Bin).
 -else.
