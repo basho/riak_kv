@@ -449,13 +449,13 @@ fold_keys_fun(FoldKeysFun, {index, Bucket, Q}) ->
 %% Return a function to fold over keys on this backend
 fold_objects_fun(FoldObjectsFun, undefined) ->
     fun({{Bucket, Key}, Value}, Acc) ->
-            FoldObjectsFun(Bucket, Key, Value, Acc);
+            FoldObjectsFun(Bucket, Key, strip_timestamp(Value), Acc);
        (_, Acc) ->
             Acc
     end;
 fold_objects_fun(FoldObjectsFun, {bucket, FilterBucket}) ->
     fun({{Bucket, Key}, Value}, Acc) when Bucket == FilterBucket->
-            FoldObjectsFun(Bucket, Key, Value, Acc);
+            FoldObjectsFun(Bucket, Key, strip_timestamp(Value), Acc);
        (_, Acc) ->
             Acc
     end;
@@ -463,8 +463,15 @@ fold_objects_fun(FoldObjectsFun, {bucket, FilterBucket}) ->
 fold_objects_fun(FoldObjectsFun, {index, _Bucket, ?KV_INDEX_Q{filter_field=FF}})
     when FF == <<"$bucket">>; FF == <<"$key">>  ->
     fun({{Bucket, Key}, Value}, Acc) ->
-            FoldObjectsFun(Bucket, {o, Key, Value}, Acc)
+            FoldObjectsFun(Bucket, {o, Key, strip_timestamp(Value)}, Acc)
     end.
+
+%% @private
+%% when folding objects, do not return the timestamp info if TTL is enabled
+strip_timestamp({{ts, _}, Val}) ->
+    Val;
+strip_timestamp(Val) ->
+    Val.
 
 %% @private
 get_folder(FoldFun, Acc, DataRef) ->
