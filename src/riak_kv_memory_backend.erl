@@ -115,8 +115,9 @@ capabilities(_, _) ->
 %% @doc Start the memory backend
 -spec start(integer(), config()) -> {ok, state()}.
 start(Partition, Config) ->
-    TTL = app_helper:get_prop_or_env(ttl, Config, memory_backend),
-    MemoryMB = app_helper:get_prop_or_env(max_memory, Config, memory_backend),
+    TTL = riak_kv_util:get_backend_config(ttl, Config, memory_backend),
+    MemoryMB = riak_kv_util:get_backend_config(max_memory, Config, memory_backend),
+    %% leave this one alone, it is only for testing
     TableOpts = case app_helper:get_prop_or_env(test, Config, memory_backend) of
                     true ->
                         [ordered_set, public, named_table];

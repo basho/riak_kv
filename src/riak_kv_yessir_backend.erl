@@ -137,12 +137,12 @@ capabilities(_, _) ->
 %% @doc Start this backend, yes, sir!
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(_Partition, Config) ->
-    DefaultLen = case app_helper:get_prop_or_env(
+    DefaultLen = case riak_kv_util:get_backend_config(
                         yessir_default_size, Config, yessir_backend) of
                      undefined -> 1024;
                      Len       -> Len
                  end,
-    KeyCount = case app_helper:get_prop_or_env(
+    KeyCount = case riak_kv_util:get_backend_config(
                       yessir_key_count, Config, yessir_backend) of
                    undefined -> 1024;
                    Count     -> Count
