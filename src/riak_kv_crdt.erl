@@ -184,7 +184,7 @@ parse_operation(CRDTOp, OpBin) ->
             {error, {Class, Reason}}
     end.
 
-%% @doc turn the string token into a
+%% @doc turn a string token into a
 %% CRDT type
 to_type("sets") ->
     ?SET_TYPE;
@@ -198,13 +198,13 @@ to_type(_) ->
     undefined.
 
 from_type(?SET_TYPE) ->
-    "sets";
+    "set";
 from_type(?COUNTER_TYPE) ->
-    "counters";
+    "counter";
 from_type(?LWW_TYPE) ->
     "lww";
 from_type(?MAP_TYPE) ->
-    "maps".
+    "map".
 
 %% ===================================================================
 %% EUnit tests
