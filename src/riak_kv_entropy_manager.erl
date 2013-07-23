@@ -190,13 +190,7 @@ init([]) ->
                false ->
                    automatic
            end,
-    Concurrency = app_helper:get_env(riak_kv,
-                                     anti_entropy_concurrency,
-                                     ?DEFAULT_CONCURRENCY),
-    KillProcsIfLimitsReached = true,
-    riak_core_bg_manager:set_concurrency_limit(anti_entropy_concurrency,
-                                               Concurrency,
-                                               KillProcsIfLimitsReached),
+    set_lock_maximums(),
     set_debug(proplists:is_defined(debug, Opts)),
     State = #state{mode=Mode,
                    trees=[],
@@ -300,6 +294,22 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
+%% Concurrency locks are ruled by one limit, which is the
+%% anti_entropy_concurrency limit. The sum of build, rehash, and
+%% exchange locks should never exceed anti_entropy_concurrency.
+%% Instead of implementing a complicated "set" or "child" model of
+%% locks, we just set them each to the limit; and first get a lock
+%% on anti_entropy_concurrency.
+set_lock_maximums() ->
+    Concurrency = app_helper:get_env(riak_kv,
+                                     anti_entropy_concurrency,
+                                     ?DEFAULT_CONCURRENCY),
+    KillProcsIfLimitsReached = true,
+    [ riak_core_bg_manager:set_concurrency_limit(LockType,
+                                                 Concurrency,
+                                                 KillProcsIfLimitsReached)
+      || LockType <- [anti_entropy_concurrency, build, rehash, exchange] ].
+
 schedule_reset_build_tokens() ->
     {_, Reset} = app_helper:get_env(riak_kv, anti_entropy_build_limit,
                                     ?DEFAULT_BUILD_LIMIT),
@@ -366,15 +376,17 @@ add_hashtree_pid(true, Index, Pid, State=#state{trees=Trees}) ->
 -spec do_get_lock(any(),pid(),state())
                  -> {ok | max_concurrency | build_limit_reached, state()}.
 do_get_lock(Type, Pid, State) ->
-    case riak_core_bg_manager:concurrency_limit_reached(anti_entropy_concurrency) of
-        true ->
+    %% Get the parent lock of all AAE locks, which enforces the limit
+    %% of any AAE manager operations, e.g. build, rehash, exchange.
+    case riak_core_bg_manager:get_lock(anti_entropy_concurrency) of
+        max_concurrency ->
             {max_concurrency, State};
-        false ->
+        ok ->
+            %% possibly impose other checks, like build token availability
             case check_lock_type(Type, State) of
                 {ok, State2} ->
-                    %% only way this could fail is if another process
-                    %% gets a lock first, which should not happen in
-                    %% this context. But... test anyhow.
+                    %% This can't fail, because we already got the
+                    %% the anti-entropy lock, but test anyhow!
                     case riak_core_bg_manager:get_lock(Type, Pid) of
                         ok -> {ok, State2};
                         Err -> {Err, State2}
