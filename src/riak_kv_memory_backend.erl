@@ -2,7 +2,7 @@
 %%
 %% riak_memory_backend: storage engine using ETS tables
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -120,7 +120,7 @@ start(Partition, Config) ->
     %% leave this one alone, it is only for testing
     TableOpts = case app_helper:get_prop_or_env(test, Config, memory_backend) of
                     true ->
-                        [ordered_set, public, named_table];
+                        [ordered_set, public];
                     _ ->
                         [ordered_set]
                 end,
@@ -632,6 +632,7 @@ object_size(Object) ->
 -ifdef(TEST).
 
 simple_test_() ->
+    application:set_env(memory_backend, test, true),
     riak_kv_backend:standard_test(?MODULE, []).
 
 ttl_test_() ->
