@@ -103,7 +103,6 @@
 -behavior(riak_kv_backend).
 
 %% KV Backend API
--compile(export_all).                           % TODO DEBUGGING ONLY
 -export([api_version/0,
          capabilities/1,
          capabilities/2,
@@ -121,6 +120,7 @@
          is_empty/1,
          status/1,
          callback/3]).
+-export([make_riak_safe_obj/3, make_riak_safe_obj/4]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -418,131 +418,6 @@ make_riak_safe_obj(Bucket, Key, Bin, Metas)
 %%
 %% Test
 %%
-
-bc_num_buckets() ->
-    1.
-bc_display_name() ->
-    "foobar".
-bc_public_key() ->
-    "J2IP6WGUQ_FNGIAN9AFI".
-bc_private_key() ->    
-    "mbB-1VACNsrN0yLAUSpCFmXNNBpAC3X0lPmINA==".
-bc_canonical_id() ->    
-    "18983ba0e16e18a2b103ca16b84fad93d12a2fbed1c88048931fb91b0b844ad3".
-bc_obj_size() ->
-    %% 4*1024*1024 + 4.
-    80*1024*1024.
-bc_block_size() ->
-    1048576.
-bc_acl() ->
-    {acl_v2,{bc_display_name(),
-             bc_canonical_id(),
-             bc_public_key()},
-     [{{bc_display_name(),
-        bc_canonical_id()},
-       ['FULL_CONTROL']}],
-     {1370,310148,497003}}.
-
-bc_get_memoized_checksum(Size) ->
-    case whereis(?MODULE) of
-        undefined ->
-            (catch spawn(fun() -> erlang:register(?MODULE, self()),
-                                  bc_run_memoized_server(orddict:new())
-                         end)),
-            timer:sleep(100),
-            bc_get_memoized_checksum(Size);
-        _Pid ->
-            ?MODULE ! {checksum, Size, self()},
-            receive
-                {checksum_result, X} ->
-                    X
-            end
-    end.
-
-bc_run_memoized_server(D) ->
-    receive
-        {checksum, Size, Pid} ->
-            case orddict:find(Size, D) of
-                error ->
-                    BlockSize = bc_block_size(),
-                    WholeBlocks = Size div BlockSize,
-                    RemBytes = Size rem BlockSize,
-                    X = lists:duplicate(WholeBlocks, <<42:(BlockSize*8)>>) ++
-                        [<<42:(RemBytes*8)>>],
-                    CSum = bc_md5(X),
-                    Pid ! {checksum_result, CSum},
-                    bc_run_memoized_server(orddict:store(Size, CSum, D));
-                {ok, CSum} ->
-                    Pid ! {checksum_result, CSum},
-                    bc_run_memoized_server(D)
-            end
-    end.
-
-bc_md5(L) ->
-    crypto:md5_final(lists:foldl(fun(X, Ctx) -> crypto:md5_update(Ctx, X) end, crypto:md5_init(), L)).
-
-b_moss_users(_Suffix, Bucket, Key) ->
-    V = {rcs_user_v2,"foo bar",bc_display_name(),"foobar@example.com",
-         Key,
-         bc_private_key(),
-         bc_canonical_id(), 
-         [{moss_bucket_v1,"b"++integer_to_list(X),created,
-           "2013-05-02T19:57:03.000Z",{1367,524623,660302}, undefined} ||
-             X <- lists:seq(1, bc_num_buckets())],
-         enabled},
-    make_riak_safe_obj(Bucket, Key, riak_object:to_binary(v0, V)).
-
-b_moss_buckets(_Suffix, Bucket, Key) ->
-    V = list_to_binary(bc_public_key()),
-    Metas = [{<<"X-Moss-Acl">>, term_to_binary(bc_acl())}],
-    make_riak_safe_obj(Bucket, Key, V, Metas).
-
-b_object(_Suffix, Bucket, Key) ->
-    BlockSize = bc_block_size(),
-    Size = b_object_size(Key),
-    <<UUIDa:5/binary, _/binary>> = erlang:md5([Bucket, Key]),
-    UUIDb = <<BlockSize:(3*8)>>,
-    UUIDc = <<Size:(8*8)>>,
-    UUID = list_to_binary([UUIDa,UUIDb,UUIDc]),
-    V =  [{UUID, % hehheh secret comms channel
-           {lfs_manifest_v3,3,bc_block_size(),
-            {<<"b0">>,Key},              % Don't care about bucket name
-            [],"2013-06-04T01:43:28.000Z",
-            UUID,
-            Size, <<"binary/octet-stream">>,
-            bc_get_memoized_checksum(Size),
-            active,
-            {1370,310148,497212},
-            {1370,310148,500525},
-            [],undefined,undefined,undefined,undefined,
-            bc_acl(),
-            [],undefined}}],
-    make_riak_safe_obj(Bucket, Key, riak_object:to_binary(v0, V)).
-
-b_block(_Suffix, Bucket, Key) ->
-    <<_Random:5/binary, BlockSize:(3*8), Size:(8*8), BlockNum:32>> = Key,
-    Bytes = erlang:min(BlockSize, Size - (BlockNum * BlockSize)),
-    make_riak_safe_obj(Bucket, Key, <<42:(Bytes*8)>>).
-
-b_not_found(_, _, _) ->
-    not_found.
-
-b_object_size(Key) when is_binary(Key) ->
-    b_object_size(binary_to_list(Key));
-b_object_size([$g|Rest]) ->
-    {Size, _} = string:to_integer(Rest),
-    Size * 1024*1024*1024;
-b_object_size([$m|Rest]) ->
-    {Size, _} = string:to_integer(Rest),
-    Size * 1024*1024;
-b_object_size([$k|Rest]) ->
-    {Size, _} = string:to_integer(Rest),
-    Size * 1024;
-b_object_size([$b|Rest]) ->
-    {Size, _} = string:to_integer(Rest),
-    Size;
-b_object_size(_) ->
-    bc_obj_size().
 
 -ifdef(USE_BROKEN_TESTS).
 
