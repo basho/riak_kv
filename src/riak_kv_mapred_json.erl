@@ -491,7 +491,10 @@ pipe_phase_index(I)          -> I.
 -spec trunc_print(term()) -> binary().
 trunc_print(Term) ->
     {Msg, _Len} = lager_trunc_io:print(Term, 500),
-    iolist_to_binary(Msg).
+    %% `lager_trunc_io:print/2' returns an IO-list (in latin1).
+    %% `mochijson2:encode/1' expects, that binaries are encoded in UTF-8.
+    %% Do not use `iolist_to_binary/1' here.
+    unicode:characters_to_binary(Msg).
 
 %% @doc Pull a field out of a proplist, and possibly transform it.
 pipe_error_field(Field, Proplist) ->
@@ -617,5 +620,8 @@ key_select_test() ->
 
 strfun_test() ->
     {ok, _Inputs, _Query, _Timeout} = riak_kv_mapred_json:parse_request(?ERLANG_STRFUN_JOB).
+
+trunc_print_test() ->
+    mochijson2:encode(trunc_print(<<242,66>>)).
 
 -endif.
