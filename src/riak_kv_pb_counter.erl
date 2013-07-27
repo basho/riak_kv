@@ -24,15 +24,15 @@
 %% following request messages:</p>
 %%
 %% <pre>
-%%  29 - RpbCounterUpdateReq
-%%  31 - RpbCounterGetReq
+%%  50 - RpbCounterUpdateReq
+%%  52 - RpbCounterGetReq
 %% </pre>
 %%
 %% <p>This service produces the following responses:</p>
 %%
 %% <pre>
-%%  30 - RpbCounterUpdateResp - 0 length
-%%  32 - RpbCounterGetResp
+%%  51 - RpbCounterUpdateResp - 0 length
+%%  53 - RpbCounterGetResp
 %% </pre>
 %%
 %% @end
