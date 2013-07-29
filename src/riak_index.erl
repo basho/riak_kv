@@ -330,6 +330,9 @@ apply_continuation(Q, undefined) ->
 apply_continuation(Q=?KV_INDEX_Q{}, {Value, Key}) when is_binary(Key),
                                                                    is_integer(Value) orelse is_binary(Value) ->
     {ok, Q?KV_INDEX_Q{start_key=Key, start_inclusive=false, start_term=Value}};
+apply_continuation(Q=?KV_INDEX_Q{filter_field=FF}, Key) when is_binary(Key), FF /= ?KEYFIELD, FF /= ?BUCKETFIELD ->
+    %% an EQ index, never change start_term, only start key
+    {ok, Q?KV_INDEX_Q{start_key=Key, start_inclusive=false}};
 apply_continuation(Q=?KV_INDEX_Q{}, Key) when is_binary(Key) ->
     %% a Keys / bucket index
     {ok, Q?KV_INDEX_Q{start_key=Key, start_term=Key, start_inclusive=false}};
