@@ -36,7 +36,7 @@
 
 -module(riak_kv_counter).
 
--export([update/3, merge/1, value/1, new/2, to_binary/1, from_binary/1, supported/0]).
+-export([update/3, merge/1, value/1, sibling_value/1, new/2, to_binary/1, from_binary/1, supported/0]).
 
 -include("riak_kv_wm_raw.hrl").
 -include_lib("riak_kv_types.hrl").
@@ -65,8 +65,25 @@ update(RObj, Actor, Amt) ->
 -spec merge(riak_object:riak_object()) ->
                    riak_object:riak_object().
 merge(RObj) ->
-    {Meta, Counter, NonCounterSiblings} = merge_object(RObj),
-    update_object(RObj, Meta, Counter, NonCounterSiblings).
+    case might_have_counter(RObj) of
+        true -> {Meta, Counter, NonCounterSiblings} = merge_object(RObj),
+                update_object(RObj, Meta, Counter, NonCounterSiblings);
+        _    -> RObj
+    end.
+    
+%% @doc returns true if any of the siblings of the riak_object
+%% could be a counter (using the content type or the binary tag and version)
+-spec might_have_counter(riak_object:riak_object()) -> boolean().
+might_have_counter(RObj) ->
+    Contents = riak_object:get_contents(RObj),
+    lists:any(fun({MD,Value}) -> 
+        try
+            CType = dict:fetch(?MD_CTYPE, MD),
+            Match = binary:match(Value, <<?TAG:8/integer, ?V1_VERS:8/integer>>),
+            CType == ?COUNTER_TYPE orelse Match == {0,2}
+        catch _:_ -> false
+        end
+    end, Contents).
 
 %% @doc Currently _IGNORES_ all non-counter sibling values
 -spec value(riak_object:riak_object()) ->
@@ -78,6 +95,17 @@ value(RObj) ->
         undefined -> 0;
         _ ->
             riak_kv_pncounter:value(Counter)
+    end.
+
+%% @doc Turn a single sibling into a counter value. Used by the YZ Extractor.
+-spec sibling_value(binary()) -> {ok, integer()} | {error, term()}.
+sibling_value(Sibling) ->
+    try
+        PNCounter = riak_kv_counter:from_binary(Sibling),
+        Value = riak_pn_counter:value(PNCounter),
+        {ok, Value}
+    catch
+        _:_ -> {error, not_counter}
     end.
 
 %% Merge contents _AND_ meta
