@@ -401,13 +401,14 @@ hash_object({Bucket, Key}, RObjBin) ->
 %% key/hash pair will be ignored.
 -spec fold_keys(index(), pid()) -> ok.
 fold_keys(Partition, Tree) ->
-    Req = ?FOLD_REQ{foldfun=fun(BKey={Bucket,Key}, RObj, _) ->
-                                    IndexN = riak_kv_util:get_index_n({Bucket, Key}),
-                                    insert(IndexN, term_to_binary(BKey), hash_object(BKey, RObj),
-                                           Tree, [if_missing]),
-                                    ok
-                            end,
-                    acc0=ok},
+    Req = riak_core_util:make_fold_req(
+            fun(BKey={Bucket,Key}, RObj, _) ->
+                    IndexN = riak_kv_util:get_index_n({Bucket, Key}),
+                    insert(IndexN, term_to_binary(BKey), hash_object(BKey, RObj),
+                           Tree, [if_missing]),
+                    ok
+            end,
+            ok, false, [aae_reconstruction]),
     riak_core_vnode_master:sync_command({Partition, node()},
                                         Req,
                                         riak_kv_vnode_master, infinity),
