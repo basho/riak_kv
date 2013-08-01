@@ -102,7 +102,7 @@ value(RObj) ->
 sibling_value(Sibling) ->
     try
         PNCounter = riak_kv_counter:from_binary(Sibling),
-        Value = riak_pn_counter:value(PNCounter),
+        Value = riak_kv_pncounter:value(PNCounter),
         {ok, Value}
     catch
         _:_ -> {error, not_counter}
