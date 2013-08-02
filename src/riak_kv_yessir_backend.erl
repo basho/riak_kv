@@ -61,6 +61,12 @@
 %% app.config file.
 %%
 %% <ul>
+%% <li>`yessir_return_same_r_obj' - Fastest and dumbest mode.  Return
+%%                                  exactly the same object, regardless of
+%%                                  the BKey asked for.  The returned object's
+%%                                  BKey is constant, so any part of Riak that
+%%                                  cares about matching/valid BKey inside of
+%%                                  the object will be confused and/or break.
 %% <li>`yessir_aae_mode_encoding' - Specify which mode of behavior to
 %%                                  use when interacting with Riak KV's
 %%                                  anti-entropy mode for put & put_object
@@ -132,6 +138,8 @@
 -record(state, {
           aae_mode :: atom(),
           constant_r_object,
+          same_r_object,
+          same_r_object_bin,
           default_get = <<>>,
           default_size = 0,
           key_count = 0,
@@ -188,9 +196,21 @@ start(_Partition, Config) ->
                      undefined -> [];
                      BPL       -> BPL
                  end,
+    DefaultValue = <<42:(DefaultLen*8)>>,
+    {SameRObj, SameRObjBin} =
+        case app_helper:get_prop_or_env(
+               yessir_return_same_r_obj, Config, yessir_backend) of
+            true ->
+                RObj = make_riak_safe_obj(<<>>, <<>>, DefaultValue),
+                {RObj, riak_object:to_binary(v0, RObj)};
+            _ ->
+                {undefined, undefined}
+        end,
     {ok, #state{aae_mode = AAE_Mode,
                 constant_r_object = riak_object:new(<<>>, <<>>, <<>>),
-                default_get = <<42:(DefaultLen*8)>>,
+                same_r_object = SameRObj,
+                same_r_object_bin = SameRObjBin,
+                default_get = DefaultValue,
                 default_size = DefaultLen,
                 key_count = KeyCount,
                 bprefix_list = BPrefixList}}.
@@ -203,6 +223,9 @@ stop(_State) ->
 %% @doc Get a fake object, yes, sir!
 -spec get(riak_object:bucket(), riak_object:key(), state()) ->
                  {ok, any(), state()}.
+get(_Bucket, _Key, #state{same_r_object_bin=RObjBin})
+  when same_r_object_bin /= undefined ->
+    RObjBin;
 get(Bucket, Key, S) ->
     RObj = make_get_object(Bucket, Key, S),
     make_get_return_val(RObj, true, S).
@@ -396,6 +419,9 @@ get_binsize(<<X:8, Rest/binary>>, Val) when $0 =< X, X =< $9->
 get_binsize(_, Val) ->
     Val.
 
+make_get_object(_Bucket, _Key, #state{same_r_object=RObj})
+  when same_r_object /= undefined ->
+    RObj;
 make_get_object(Bucket, Key, S) ->
     Bin = case get_binsize(Key) of
               undefined    -> S#state.default_get;
