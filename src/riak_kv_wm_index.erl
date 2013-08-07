@@ -246,17 +246,20 @@ index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, Timeout, LastResul
                     {iolist_to_binary(Body),
                      index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, Timeout, LastResult1, Count1)};
                 {ReqID, Error} ->
-                    lager:error("Error in index wm: ~p", [Error]),
-                    ErrorJson = encode_error(Error),
-                    Body = ["\r\n--", Boundary, "\r\n",
-                            "Content-Type: application/json\r\n\r\n",
-                            ErrorJson,
-                            "\r\n--", Boundary, "--\r\n"],
-                    {iolist_to_binary(Body), done}
+                    stream_error(Error, Boundary)
             after Timeout ->
-                    {error, timeout}
+                    stream_error({error, timeout}, Boundary)
             end
     end.
+
+stream_error(Error, Boundary) ->
+    lager:error("Error in index wm: ~p", [Error]),
+    ErrorJson = encode_error(Error),
+    Body = ["\r\n--", Boundary, "\r\n",
+            "Content-Type: application/json\r\n\r\n",
+            ErrorJson,
+            "\r\n--", Boundary, "--\r\n"],
+    {iolist_to_binary(Body), done}.
 
 encode_error({error, E}) ->
     encode_error(E);
@@ -264,7 +267,7 @@ encode_error(Error) when is_atom(Error); is_binary(Error) ->
     mochijson2:encode({struct, [{error, Error}]});
 encode_error(Error) ->
     E = io_lib:format("~p",[Error]),
-    mochijson2:encode({struct, [{error, iolist_to_binary(E)}]}).
+    mochijson2:encode({struct, [{error, erlang:iolist_to_binary(E)}]}).
 
 handle_all_in_memory_index_query(RD, Ctx) ->
     Client = Ctx#ctx.client,
