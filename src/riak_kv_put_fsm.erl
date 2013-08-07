@@ -99,7 +99,8 @@
                 timing = [] :: [{atom(), {non_neg_integer(), non_neg_integer(),
                                           non_neg_integer()}}],
                 reply, % reply sent to client,
-                tracked_bucket=false :: boolean() %% tracke per bucket stats
+                tracked_bucket=false :: boolean(), %% track per bucket stats
+                bad_coordinators = [] :: [atom()]
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -145,6 +146,15 @@ start_link(From, Object, PutOptions) ->
                 {ok, Pid} ->
                     {ok, Pid}
             end
+    end.
+
+monitor_remote_coordinator(CoordNode, StateData) ->
+    receive
+        {ack, CoordNode, now_executing} ->
+            {stop, normal, StateData}
+    after 3000 ->
+            Bad = StateData#state.bad_coordinators,
+            prepare(timeout, StateData#state{bad_coordinators=[CoordNode|Bad]})
     end.
 
 %% ===================================================================
@@ -209,7 +219,8 @@ init({test, Args, StateProps}) ->
 %% @private
 prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                      bkey = BKey,
-                                     options = Options}) ->
+                                     options = Options,
+                                     bad_coordinators = BadCoordinators}) ->
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
     DocIdx = riak_core_util:chash_key(BKey),
     Bucket_N = proplists:get_value(n_val,BucketProps),
@@ -227,13 +238,16 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
             process_reply(Error, StateData0);
         _ ->
             StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
-            Preflist2 = case proplists:get_value(sloppy_quorum, Options, true) of
+            Preflist1 = case proplists:get_value(sloppy_quorum, Options, true) of
                             true ->
                                 UpNodes = riak_core_node_watcher:nodes(riak_kv),
-                                riak_core_apl:get_apl_ann(DocIdx, N, UpNodes);
+                                riak_core_apl:get_apl_ann(
+                                  DocIdx, N, UpNodes -- BadCoordinators);
                             false ->
                                 riak_core_apl:get_primary_apl(DocIdx, N, riak_kv)
                         end,
+            Preflist2 = [X || X = {{_Index, Node}, _Type} <- Preflist1,
+                              not lists:member(Node, BadCoordinators)],
             %% Check if this node is in the preference list so it can coordinate
             LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
                                 Node == node()],
@@ -252,17 +266,18 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                     ?DTRACE(?C_PUT_FSM_PREPARE, [1],
                             ["prepare", atom2list(CoordNode)]),
                     try
-                        proc_lib:spawn(CoordNode,riak_kv_put_fsm,start_link,[From,RObj,Options]),
+                        Options2 = [{ack_execute, self()}|Options],
+                        proc_lib:spawn(CoordNode,riak_kv_put_fsm,start_link,[From,RObj,Options2]),
                         ?DTRACE(?C_PUT_FSM_PREPARE, [2],
                                     ["prepare", atom2list(CoordNode)]),
                         riak_kv_stat:update(coord_redir),
-                        {stop, normal, StateData0}
+                        monitor_remote_coordinator(CoordNode, StateData0)
                     catch
                         _:Reason ->
                             ?DTRACE(?C_PUT_FSM_PREPARE, [-2],
                                     ["prepare", dtrace_errstr(Reason)]),
-                            lager:error("Unable to forward put for ~p to ~p - ~p\n",
-                                        [BKey, CoordNode, Reason]),
+                            lager:error("Unable to forward put for ~p to ~p - ~p @ ~p\n",
+                                        [BKey, CoordNode, Reason, erlang:get_stacktrace()]),
                             process_reply({error, {coord_handoff_failed, Reason}}, StateData0)
                     end;
                 _ ->
@@ -387,7 +402,15 @@ precommit(timeout, State = #state{precommit = [Hook | Rest], robj = RObj}) ->
     end.
 
 %% @private
-execute(State=#state{coord_pl_entry = CPL}) ->
+execute(State=#state{options = Options, coord_pl_entry = CPL}) ->
+    %% If we are a forwarded coordinator, the originating node is expecting
+    %% an ack from us.
+    case get_option(ack_execute, Options) of
+        undefined ->
+            ok;
+        Pid ->
+            Pid ! {ack, node(), now_executing}
+    end,
     case CPL of
         undefined ->
             execute_remote(State);
@@ -848,6 +871,9 @@ get_hooks(HookType, BucketProps) ->
         Hooks when is_list(Hooks) ->
             Hooks
     end.
+
+get_option(Name, Options) ->
+    get_option(Name, Options, undefined).
 
 get_option(Name, Options, Default) ->
     proplists:get_value(Name, Options, Default).
