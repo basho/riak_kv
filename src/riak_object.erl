@@ -80,20 +80,30 @@
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
+new({T, B}, K, V) when is_binary(T), is_binary(B), is_binary(K) ->
+    new_int({T, B}, K, V, no_initial_metadata);
 new(B, K, V) when is_binary(B), is_binary(K) ->
-    new(B, K, V, no_initial_metadata).
+    new_int(B, K, V, no_initial_metadata).
 
 %% @doc Constructor for new riak objects with an initial content-type.
 -spec new(Bucket::bucket(), Key::key(), Value::value(),
           string() | dict() | no_initial_metadata) -> riak_object().
+new({T, B}, K, V, C) when is_binary(T), is_binary(B), is_binary(K), is_list(C) ->
+    new_int({T, B}, K, V, dict:from_list([{?MD_CTYPE, C}]));
 new(B, K, V, C) when is_binary(B), is_binary(K), is_list(C) ->
-    new(B, K, V, dict:from_list([{?MD_CTYPE, C}]));
+    new_int(B, K, V, dict:from_list([{?MD_CTYPE, C}]));
 
 %% @doc Constructor for new riak objects with an initial metadata dict.
 %%
 %% NOTE: Removed "is_tuple(MD)" guard to make Dialyzer happy.  The previous clause
 %%       has a guard for string(), so this clause is OK without the guard.
+new({T, B}, K, V, MD) when is_binary(T), is_binary(B), is_binary(K) ->
+    new_int({T, B}, K, V, MD);
 new(B, K, V, MD) when is_binary(B), is_binary(K) ->
+    new_int(B, K, V, MD).
+
+%% internal version after all validation has been done
+new_int(B, K, V, MD) ->
     case size(K) > ?MAX_KEY_SIZE of
         true ->
             throw({error,key_too_large});
