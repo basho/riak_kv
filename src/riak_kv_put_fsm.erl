@@ -148,11 +148,21 @@ start_link(From, Object, PutOptions) ->
             end
     end.
 
-monitor_remote_coordinator(CoordNode, StateData) ->
+spawn_coordinator_proc(CoordNode, Mod, Fun, Args) ->
+    %% If the net_kernel cannot talk to CoordNode, then any variation
+    %% of the spawn BIF will block.  The whole point of picking a new
+    %% coordinator node is being able to pick a new coordinator node
+    %% and try it ... without blocking for dozens of seconds.
+    spawn(fun() ->
+                  proc_lib:spawn(CoordNode, Mod, Fun, Args)
+          end).
+
+monitor_remote_coordinator(MiddleMan, CoordNode, StateData) ->
     receive
         {ack, CoordNode, now_executing} ->
             {stop, normal, StateData}
     after 3000 ->
+            exit(MiddleMan, kill),
             Bad = StateData#state.bad_coordinators,
             prepare(timeout, StateData#state{bad_coordinators=[CoordNode|Bad]})
     end.
@@ -267,11 +277,13 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                             ["prepare", atom2list(CoordNode)]),
                     try
                         Options2 = [{ack_execute, self()}|Options],
-                        proc_lib:spawn(CoordNode,riak_kv_put_fsm,start_link,[From,RObj,Options2]),
+                        MiddleMan = spawn_coordinator_proc(
+                                      CoordNode, riak_kv_put_fsm, start_link,
+                                      [From,RObj,Options2]),
                         ?DTRACE(?C_PUT_FSM_PREPARE, [2],
                                     ["prepare", atom2list(CoordNode)]),
                         riak_kv_stat:update(coord_redir),
-                        monitor_remote_coordinator(CoordNode, StateData0)
+                        monitor_remote_coordinator(MiddleMan, CoordNode, StateData0)
                     catch
                         _:Reason ->
                             ?DTRACE(?C_PUT_FSM_PREPARE, [-2],
