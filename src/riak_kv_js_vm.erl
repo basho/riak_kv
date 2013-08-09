@@ -101,7 +101,7 @@ handle_call({batch_dispatch, _JobId, {_Sender, {map, {jsanon, JS}, Reduced, Arg}
 handle_call({batch_dispatch, _JobId, {_Sender, {map, {jsfun, JS}, _Reduced, Arg},
                                       Value, KeyData, _BKey}},
                                      _From, #state{ctx=Ctx}=State) ->
-    JsonValue = riak_object:to_json(Value),
+    JsonValue = riak_object_json:encode(Value),
     JsonArg = jsonify_arg(Arg),
     Reply = invoke_js(Ctx, JS, [JsonValue, KeyData, JsonArg]),
     {reply, Reply, State};
@@ -143,7 +143,7 @@ handle_call({dispatch, _JobId, {{jsfun, JS}, Args}}, _From,
     {reply, Reply, State};
 %% Pre-commit hook with named function
 handle_call({dispatch, _JobId, {{jsfun, JS}, Obj}}, _From, #state{ctx=Ctx}=State) ->
-    Reply = invoke_js(Ctx, JS, [riak_object:to_json(Obj)]),
+    Reply = invoke_js(Ctx, JS, [riak_object_json:encode(Obj)]),
     maybe_idle(State),
     {reply, Reply, State};
 handle_call(Request, _From, State) ->
@@ -159,7 +159,7 @@ handle_cast(reload, #state{ctx=Ctx, pool=Pool}=State) ->
 handle_cast({batch_dispatch, JobId, {Sender, {map, {jsanon, JS}, Arg, _Acc},
                                             Value,
                                             KeyData, _BKey}}, State) ->
-    JsonValue = riak_object:to_json(Value),
+    JsonValue = riak_object_json:encode(Value),
     JsonArg = jsonify_arg(Arg),
     {Result, UpdatedState} = define_invoke_anon_js(JS, [JsonValue, KeyData, JsonArg], State),
     FinalState = case Result of
@@ -176,7 +176,7 @@ handle_cast({batch_dispatch, JobId, {Sender, {map, {jsanon, JS}, Arg, _Acc},
 handle_cast({batch_dispatch, JobId, {Sender, {map, {jsfun, JS}, Arg, _Acc},
                                             Value,
                                             KeyData, _BKey}}, #state{ctx=Ctx}=State) ->
-    JsonValue = riak_object:to_json(Value),
+    JsonValue = riak_object_json:encode(Value),
     JsonArg = jsonify_arg(Arg),
     case invoke_js(Ctx, JS, [JsonValue, KeyData, JsonArg]) of
         {ok, R} ->
@@ -190,7 +190,7 @@ handle_cast({batch_dispatch, JobId, {Sender, {map, {jsfun, JS}, Arg, _Acc},
 handle_cast({dispatch, _Requestor, JobId, {Sender, {map, {jsanon, JS}, Arg, _Acc},
                                             Value,
                                             KeyData, _BKey}}, State) ->
-    JsonValue = riak_object:to_json(Value),
+    JsonValue = riak_object_json:encode(Value),
     JsonArg = jsonify_arg(Arg),
     {Result, UpdatedState} = define_invoke_anon_js(JS, [JsonValue, KeyData, JsonArg], State),
     FinalState = case Result of
@@ -208,7 +208,7 @@ handle_cast({dispatch, _Requestor, JobId, {Sender, {map, {jsanon, JS}, Arg, _Acc
 handle_cast({dispatch, _Requestor, JobId, {Sender, {map, {jsfun, JS}, Arg, _Acc},
                                             Value,
                                             KeyData, _BKey}}, #state{ctx=Ctx}=State) ->
-    JsonValue = riak_object:to_json(Value),
+    JsonValue = riak_object_json:encode(Value),
     JsonArg = jsonify_arg(Arg),
     case invoke_js(Ctx, JS, [JsonValue, KeyData, JsonArg]) of
         {ok, R} ->

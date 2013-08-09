@@ -188,7 +188,7 @@ map_js(_JS, _Arg, {{error, notfound}, {Bucket, Key}, KeyData}) ->
            {Bucket, Key},
            KeyData}]};
 map_js(JS, Arg, {ok, Input, KeyData}) ->
-    JSArgs = [riak_object:to_json(Input), KeyData, Arg],
+    JSArgs = [riak_object_json:encode(Input), KeyData, Arg],
     JSCall = {JS, JSArgs},
     case riak_kv_js_manager:blocking_dispatch(
            ?JSPOOL_MAP, JSCall, ?DEFAULT_JS_RESERVE_ATTEMPTS) of
