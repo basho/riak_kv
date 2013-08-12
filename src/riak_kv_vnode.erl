@@ -161,7 +161,7 @@ get(Preflist, BKey, ReqId) ->
     get(Preflist, BKey, ReqId, {fsm, undefined, self()}).
 
 get(Preflist, BKey, ReqId, Sender) ->
-    Req = ?KV_GET_REQ{bkey=BKey,
+    Req = ?KV_GET_REQ{bkey=sanitize_bkey(BKey),
                       req_id=ReqId},
     riak_core_vnode_master:command(Preflist,
                                    Req,
@@ -170,7 +170,7 @@ get(Preflist, BKey, ReqId, Sender) ->
 
 del(Preflist, BKey, ReqId) ->
     riak_core_vnode_master:command(Preflist,
-                                   ?KV_DELETE_REQ{bkey=BKey,
+                                   ?KV_DELETE_REQ{bkey=sanitize_bkey(BKey),
                                                   req_id=ReqId},
                                    riak_kv_vnode_master).
 
@@ -183,7 +183,7 @@ put(Preflist, BKey, Obj, ReqId, StartTime, Options, Sender)
   when is_integer(StartTime) ->
     riak_core_vnode_master:command(Preflist,
                                    ?KV_PUT_REQ{
-                                      bkey = BKey,
+                                      bkey = sanitize_bkey(BKey),
                                       object = Obj,
                                       req_id = ReqId,
                                       start_time = StartTime,
@@ -227,7 +227,7 @@ coord_put(IndexNode, BKey, Obj, ReqId, StartTime, Options, Sender)
   when is_integer(StartTime) ->
     riak_core_vnode_master:command(IndexNode,
                                    ?KV_PUT_REQ{
-                                      bkey = BKey,
+                                      bkey = sanitize_bkey(BKey),
                                       object = Obj,
                                       req_id = ReqId,
                                       start_time = StartTime,
@@ -331,7 +331,8 @@ rehash(Preflist, Bucket, Key) ->
                              ok | {error, term()}.
 reformat_object(Partition, BKey) ->
     riak_core_vnode_master:sync_spawn_command({Partition, node()},
-                                              {reformat_object, BKey},
+                                              {reformat_object,
+                                               sanitize_bkey(BKey)},
                                               riak_kv_vnode_master).
 
 %% VNode callbacks
@@ -1666,6 +1667,11 @@ encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
 uses_r_object(Mod, ModState, Bucket) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     lists:member(uses_r_object, Capabilities).
+
+sanitize_bkey({{<<"default">>, B}, K}) ->
+    {B, K};
+sanitize_bkey(BKey) ->
+    BKey.
 
 -ifdef(TEST).
 
