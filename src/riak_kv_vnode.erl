@@ -1083,7 +1083,10 @@ perform_put({true, Obj},
     {Reply, State#state{modstate=UpdModState}}.
 
 do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
-    case do_get_object(Bucket, Key, Mod, ModState) of
+    case (catch do_get_object(Bucket, Key, Mod, ModState)) of
+        {'EXIT', {badarg, _}} -> 
+            Reply = {error, not_found},
+            UpdState = State;
         {error, not_found, _UpdModState} ->
             Reply = {error, not_found},
             UpdState = State;
