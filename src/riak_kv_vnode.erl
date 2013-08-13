@@ -1084,7 +1084,8 @@ perform_put({true, Obj},
 
 do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
     case (catch do_get_object(Bucket, Key, Mod, ModState)) of
-        {'EXIT', {badarg, _}} -> 
+        {'EXIT', _} -> 
+            lager:warning("Corrupted ancestor or sibling value discarded"),
             Reply = {error, not_found},
             UpdState = State;
         {error, not_found, _UpdModState} ->
