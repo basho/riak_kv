@@ -285,6 +285,13 @@ handle_all_in_memory_index_query(RD, Ctx) ->
             Continuation = make_continuation(MaxResults, Results, length(Results)),
             JsonResults = encode_results(ReturnTerms, Results, Continuation),
             {JsonResults, RD, Ctx};
+        {error, timeout} ->
+            {{halt, 503},
+             wrq:set_resp_header("Content-Type", "text/plain",
+                                 wrq:append_to_response_body(
+                                   io_lib:format("request timed out~n",[]),
+                                   RD)),
+             Ctx};
         {error, Reason} ->
             {{error, Reason}, RD, Ctx}
     end.
