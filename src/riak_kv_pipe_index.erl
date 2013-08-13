@@ -105,12 +105,19 @@ keysend(_Bucket, [], _Partition, _FittingDetails) ->
     ok;
 keysend(Bucket, [Key | Keys], Partition, FittingDetails) ->
     case riak_pipe_vnode_worker:send_output(
-           {Bucket, Key}, Partition, FittingDetails) of
+           {Bucket, strip_index(Key)}, Partition, FittingDetails) of
         ok ->
             keysend(Bucket, Keys, Partition, FittingDetails);
         ER ->
             ER
     end.
+
+%% @Doc remove the index term from the
+%% 2i result
+strip_index({_IndexTerm, Key}) ->
+    Key;
+strip_index(Key) ->
+    Key.
 
 %% @doc Unused.
 -spec done(state()) -> ok.
