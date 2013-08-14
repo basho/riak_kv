@@ -120,9 +120,10 @@ stop() ->
 
 init([]) ->
     register_stats(),
+    Me = self(),
     State = #state{monitors = [{index, spawn_link(?MODULE, monitor_loop, [index])},
                                {list, spawn_link(?MODULE, monitor_loop, [list])}],
-                   repair_mon = spawn_monitor(fun() -> stat_repair_loop() end)},
+                   repair_mon = spawn_monitor(fun() -> stat_repair_loop(Me) end)},
     {ok, State}.
 
 handle_call({register, Name, Type}, _From, State) ->
@@ -153,7 +154,8 @@ handle_cast(_Req, State) ->
     {noreply, State}.
 
 handle_info({'DOWN', MonRef, process, Pid, _Cause}, State=#state{repair_mon={Pid, MonRef}}) ->
-    RepairMonitor = spawn_monitor(fun() -> stat_repair_loop() end),
+    Me = self(),
+    RepairMonitor = spawn_monitor(fun() -> stat_repair_loop(Me) end),
     {noreply, State#state{repair_mon=RepairMonitor}};
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -470,9 +472,15 @@ stat_repair_loop() ->
         {re_register_stat, Arg} ->
             re_register_stat(Arg),
             stat_repair_loop();
+        {'DOWN', _, process, _, _} ->
+            ok;
         _ ->
             stat_repair_loop()
     end.
+
+stat_repair_loop(Dad) ->
+    erlang:monitor(process, Dad),
+    stat_repair_loop().
 
 re_register_stat(Arg) ->
     case (catch do_update(Arg)) of
