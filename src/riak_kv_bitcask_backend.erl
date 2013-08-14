@@ -145,6 +145,9 @@ get(Bucket, Key, #state{ref=Ref}=State) ->
             {error, not_found, State};
         {error, nofile}  ->
             {error, not_found, State};
+        {error, bad_crc}  ->
+            lager:warning("Discarding corrupted value"),
+            {error, not_found, State};
         {error, Reason} ->
             {error, Reason, State}
     end.

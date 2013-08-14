@@ -962,8 +962,7 @@ prepare_put(State=#state{vnodeid=VId,
         false ->
             prepare_put(State, PutArgs, IndexBackend)
     end.
-prepare_put(#state{idx=Idx,
-                   vnodeid=VId,
+prepare_put(#state{vnodeid=VId,
                    mod=Mod,
                    modstate=ModState},
             PutArgs=#putargs{bkey={Bucket, Key},
@@ -978,13 +977,6 @@ prepare_put(#state{idx=Idx,
     GetReply =
         case do_get_object(Bucket, Key, Mod, ModState) of
             {error, not_found, _UpdModState} ->
-                ok;
-            % NOTE: bad_crc is NOT an official backend response. It is
-            % specific to bitcask currently and handling it may be changed soon.
-            % A standard set of responses will be agreed on
-            % https://github.com/basho/riak_kv/issues/496
-            {error, bad_crc, _UpdModState} ->
-                lager:info("Bad CRC detected while reading Partition=~p, Bucket=~p, Key=~p", [Idx, Bucket, Key]),
                 ok;
             {ok, TheOldObj, _UpdModState} ->
                 {ok, TheOldObj}
@@ -1199,9 +1191,17 @@ do_get_object(Bucket, Key, Mod, ModState) ->
         false ->
             case do_get_binary(Bucket, Key, Mod, ModState) of
                 {ok, ObjBin, _UpdModState} ->
-                    case riak_object:from_binary(Bucket, Key, ObjBin) of
-                        {error, R} ->
-                            throw(R);
+                    case (catch riak_object:from_binary(Bucket, Key, ObjBin)) of
+                        {'EXIT', _} ->
+                            lager:debug("Get on ~p/~p failed", [Bucket, Key]),
+                            lager:warning("Corrupted value discarded"),
+                            {error, not_found, _UpdModState};
+                        {error, Reason} ->
+                            lager:debug("Get on ~p/~p failed", [Bucket, Key]),
+                            lager:warning("Couldn't deserialize object, "
+                                          "discarding. Reason: ~p", 
+                                          [Reason]),
+                            {error, not_found, _UpdModState};
                         RObj ->
                             {ok, RObj, _UpdModState}
                     end;
