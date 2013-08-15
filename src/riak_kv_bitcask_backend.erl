@@ -144,6 +144,7 @@ get(Bucket, Key, #state{ref=Ref}=State) ->
         not_found  ->
             {error, not_found, State};
         {error, bad_crc}  ->
+            lager:warning("Unreadable object discarded"),
             {error, not_found, State};
         {error, nofile}  ->
             {error, not_found, State};

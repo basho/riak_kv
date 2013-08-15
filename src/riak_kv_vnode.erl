@@ -749,7 +749,8 @@ handle_handoff_data(BinObj, State) ->
                 {reply, {error, Err}, State}
         end
     catch %% never let a bad object break a handoff
-        _ -> 
+        _ ->  
+            lager:warning("Unreadable object discarded"),
             {reply, {error, bad_object}, State}
     end.
 
@@ -918,6 +919,7 @@ prepare_put(#state{vnodeid=VId,
                 try
                     {ok, binary_to_term(OldObjBin), UpdModState}
                 catch _ ->
+                        lager:warning("Unreadable object discarded"),
                         {error, not_found, UpdModState}
                 end;
             Else -> Else
@@ -1071,6 +1073,7 @@ do_get_term(BKey, Mod, ModState) ->
             try 
                 {ok, binary_to_term(Bin)}
             catch _ -> 
+                    lager:warning("Unreadable object discarded"),
                     {error, notfound}
             end;
                   
@@ -1261,6 +1264,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                 try
                     {ok, binary_to_term(OldObjBin), UpdModState}
                 catch _ ->
+                        lager:warning("Unreadable object discarded"),
                         {error, not_found, UpdModState}
                 end;
             Else -> Else
