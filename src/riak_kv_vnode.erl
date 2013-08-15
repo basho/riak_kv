@@ -1273,6 +1273,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                 false ->
                     IndexSpecs = []
             end,
+            Val = term_to_binary(DiffObj),
             Res = Mod:put(Bucket, Key, IndexSpecs, Val, ModState),
             case Res of
                 {ok, _UpdModState} ->
