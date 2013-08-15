@@ -751,7 +751,7 @@ handle_handoff_data(BinObj, State) ->
     catch %% never let a bad object break a handoff
         _ -> 
             {reply, {error, bad_object}, State}
-    end
+    end.
 
 encode_handoff_item({B, K}, V) ->
     zlib:zip(riak_core_pb:encode_riakobject_pb(
@@ -938,7 +938,7 @@ prepare_put(#state{vnodeid=VId,
                          end,
             {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
         {ok, Val, _UpdModState} ->
-            case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
+            case put_merge(Coord, LWW, Val, RObj, VId, StartTime) of
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs};
                 {newobj, NewObj} ->
@@ -948,7 +948,7 @@ prepare_put(#state{vnodeid=VId,
                         true ->
                             IndexSpecs =
                                 riak_object:diff_index_specs(AMObj,
-                                                             OldObj);
+                                                             Val);
                         false ->
                             IndexSpecs = []
                     end,
