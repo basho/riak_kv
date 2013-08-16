@@ -780,15 +780,20 @@ handoff_finished(_TargetNode, State) ->
     {ok, State}.
 
 handle_handoff_data(BinObj, State) ->
-    {BKey, Val} = decode_binary_object(BinObj),
-    {B, K} = BKey,
-    case do_diffobj_put(BKey, riak_object:from_binary(B, K, Val), State) of
-        {ok, UpdModState} ->
-            {reply, ok, State#state{modstate=UpdModState}};
-        {error, Reason, UpdModState} ->
-            {reply, {error, Reason}, State#state{modstate=UpdModState}};
-        Err ->
-            {reply, {error, Err}, State}
+    case (catch decode_binary_object(BinObj)) of 
+        {'EXIT', _} ->
+            {reply, {error, bad_object}, State};
+        {BKey, Val} ->
+            {B, K} = BKey,
+            case do_diffobj_put(BKey, riak_object:from_binary(B, K, Val), 
+                                State) of
+                {ok, UpdModState} ->
+                    {reply, ok, State#state{modstate=UpdModState}};
+                {error, Reason, UpdModState} ->
+                    {reply, {error, Reason}, State#state{modstate=UpdModState}};
+                Err ->
+                    {reply, {error, Err}, State}
+            end
     end.
 
 encode_handoff_item({B, K}, V) ->
