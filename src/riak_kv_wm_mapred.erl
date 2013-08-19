@@ -208,9 +208,10 @@ pipe_mapred_nonchunked(RD, State, Mrc) ->
         {error, timeout} ->
             riak_kv_mrc_pipe:destroy_sink(Mrc),
             {{halt, 500}, send_error({error, timeout}, RD), State};
-        {error, {_From, {Error, _Input}}} ->
+        {error, {From, Info}} ->
             riak_kv_mrc_pipe:destroy_sink(Mrc),
-            {{halt, 500}, send_error({error, Error}, RD), State}
+            Json = riak_kv_mapred_json:jsonify_pipe_error(From, Info),
+            {{halt, 500}, send_error({error, Json}, RD), State}
     end.
 
 pipe_mapred_chunked(RD, State, Mrc) ->
@@ -265,9 +266,10 @@ pipe_stream_mapred_results(RD,
             %% detroyed the pipe
             riak_kv_mrc_pipe:cleanup_sink(Mrc),
             {format_error(Error), done};
-        {error, {_From, {Error, _Input}}, _} ->
+        {error, {From, Info}, _} ->
             riak_kv_mrc_pipe:destroy_sink(Mrc),
-            {format_error({error, Error}), done}
+            Json = riak_kv_mapred_json:jsonify_pipe_error(From, Info),
+            {format_error({error, Json}), done}
     end.
 
 result_part({PhaseId, Results}, HasMRQuery, Boundary) ->
