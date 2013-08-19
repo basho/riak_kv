@@ -792,8 +792,9 @@ handle_handoff_data(BinObj, State) ->
             Err ->
                 {reply, {error, Err}, State}
         end
-    catch _:_ ->
-            lager:warning("Unreadable object discarded in handoff"),
+    catch Error:Reason2 ->
+            lager:warning("Unreadable object discarded in handoff: ~p:~p",
+                          [Error, Reason2]),
             {reply, ok, State}
     end.
 
@@ -801,11 +802,13 @@ encode_handoff_item({B, K}, V) ->
     %% before sending data to another node change binary version
     %% to one supported by the cluster. This way we don't send
     %% unsupported formats to old nodes
+    ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
     try
-        ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
         Value  = riak_object:to_binary_version(ObjFmt, B, K, V),
         encode_binary_object(B, K, Value)
-    catch _:_ ->
+    catch Error:Reason ->
+            lager:warning("Handoff encode failed: ~p:~p",
+                          [Error,Reason]),
             corrupted
     end.
 
