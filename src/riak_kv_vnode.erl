@@ -749,8 +749,9 @@ handle_handoff_data(BinObj, State) ->
                 {reply, {error, Err}, State}
         end
     catch %% never let a bad object break a handoff
-        _:_ ->  
-            lager:warning("Unreadable object discarded in handoff"),
+        Error:Reason2 ->  
+            lager:warning("Unreadable object discarded in handoff: ~p:~p",
+                          [Error,Reason2]),
             {reply, ok, State}
     end.
 
