@@ -737,15 +737,22 @@ handoff_finished(_TargetNode, State) ->
     {ok, State}.
 
 handle_handoff_data(BinObj, State) ->
-    PBObj = riak_core_pb:decode_riakobject_pb(zlib:unzip(BinObj)),
-    BKey = {PBObj#riakobject_pb.bucket,PBObj#riakobject_pb.key},
-    case do_diffobj_put(BKey, binary_to_term(PBObj#riakobject_pb.val), State) of
-        {ok, UpdModState} ->
-            {reply, ok, State#state{modstate=UpdModState}};
-        {error, Reason, UpdModState} ->
-            {reply, {error, Reason}, State#state{modstate=UpdModState}};
-        Err ->
-            {reply, {error, Err}, State}
+    try
+        PBObj = riak_core_pb:decode_riakobject_pb(zlib:unzip(BinObj)),
+        BKey = {PBObj#riakobject_pb.bucket,PBObj#riakobject_pb.key},
+        case do_diffobj_put(BKey, binary_to_term(PBObj#riakobject_pb.val), State) of
+            {ok, UpdModState} ->
+                {reply, ok, State#state{modstate=UpdModState}};
+            {error, Reason, UpdModState} ->
+                {reply, {error, Reason}, State#state{modstate=UpdModState}};
+            Err ->
+                {reply, {error, Err}, State}
+        end
+    catch %% never let a bad object break a handoff
+        Error:Reason2 ->  
+            lager:warning("Unreadable object discarded in handoff: ~p:~p",
+                          [Error,Reason2]),
+            {reply, ok, State}
     end.
 
 encode_handoff_item({B, K}, V) ->
@@ -907,7 +914,19 @@ prepare_put(#state{vnodeid=VId,
                              starttime=StartTime,
                              prunetime=PruneTime},
             IndexBackend) ->
-    case Mod:get(Bucket, Key, ModState) of
+    Result = 
+        case Mod:get(Bucket, Key, ModState) of
+            {ok, OldObjBin, UpdModState} ->
+                try
+                    {ok, binary_to_term(OldObjBin), UpdModState}
+                catch _:_ ->
+                        lager:warning("Unreadable object ~p/~p discarded",
+                                      [Bucket, Key]),
+                        {error, not_found, UpdModState}
+                end;
+            Else -> Else
+        end,
+    case Result of
         {error, not_found, _UpdModState} ->
             case IndexBackend of
                 true ->
@@ -923,8 +942,7 @@ prepare_put(#state{vnodeid=VId,
                          end,
             {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
         {ok, Val, _UpdModState} ->
-            OldObj = binary_to_term(Val),
-            case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
+            case put_merge(Coord, LWW, Val, RObj, VId, StartTime) of
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs};
                 {newobj, NewObj} ->
@@ -934,7 +952,7 @@ prepare_put(#state{vnodeid=VId,
                         true ->
                             IndexSpecs =
                                 riak_object:diff_index_specs(AMObj,
-                                                             OldObj);
+                                                             Val);
                         false ->
                             IndexSpecs = []
                     end,
@@ -1054,7 +1072,15 @@ do_get(_Sender, BKey, ReqID,
 do_get_term(BKey, Mod, ModState) ->
     case do_get_binary(BKey, Mod, ModState) of
         {ok, Bin, _UpdModState} ->
-            {ok, binary_to_term(Bin)};
+            try 
+                {ok, binary_to_term(Bin)}
+            catch _:_ -> 
+                    {Bucket, Key} = BKey,
+                    lager:warning("Unreadable object ~p/~p discarded",
+                                  [Bucket, Key]),
+                    {error, notfound}
+            end;
+                  
         %% @TODO Eventually it would be good to
         %% make the use of not_found or notfound
         %% consistent throughout the code.
@@ -1236,7 +1262,19 @@ do_diffobj_put({Bucket, Key}, DiffObj,
     StartTS = os:timestamp(),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
-    case Mod:get(Bucket, Key, ModState) of
+    Result = 
+        case Mod:get(Bucket, Key, ModState) of
+            {ok, OldObjBin, UpdModState} ->
+                try
+                    {ok, binary_to_term(OldObjBin), UpdModState}
+                catch _:_ ->
+                        lager:warning("Unreadable object ~p/~p discarded",
+                                      [Bucket,Key]),
+                        {error, not_found, UpdModState}
+                end;
+            Else -> Else
+        end,
+    case Result of
         {error, not_found, _UpdModState} ->
             case IndexBackend of
                 true ->
@@ -1254,8 +1292,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                 _ -> nop
             end,
             Res;
-        {ok, Val0, _UpdModState} ->
-            OldObj = binary_to_term(Val0),
+        {ok, OldObj, _UpdModState} ->
             %% Merge handoff values with the current - possibly discarding
             %% if out of date.  Ok to set VId/Starttime undefined as
             %% they are not used for non-coordinating puts.

@@ -384,11 +384,16 @@ load_built(#state{trees=Trees}) ->
 -spec hash_object(riak_object_t2b()) -> binary().
 hash_object(RObjBin) ->
     %% Normalize the `riak_object' vector clock before hashing
-    RObj = binary_to_term(RObjBin),
-    Vclock = riak_object:vclock(RObj),
-    UpdObj = riak_object:set_vclock(RObj, lists:sort(Vclock)),
-    Hash = erlang:phash2(term_to_binary(UpdObj)),
-    term_to_binary(Hash).
+    try
+        RObj = binary_to_term(RObjBin),
+        Vclock = riak_object:vclock(RObj),
+        UpdObj = riak_object:set_vclock(RObj, lists:sort(Vclock)),
+        Hash = erlang:phash2(term_to_binary(UpdObj)),
+        term_to_binary(Hash)
+    catch _:_ ->
+            Null = erlang:phash2(<<>>),
+            term_to_binary(Null)
+    end.
 
 %% Fold over a given vnode's data, inserting each object into the appropriate
 %% hashtree. Use the `if_missing' option to only insert the key/hash pair if
