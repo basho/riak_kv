@@ -26,10 +26,17 @@
          to_binary/1, from_binary/1, supported/1, parse_operation/2,
          to_type/1, from_type/1]).
 
+-export([split_ops/1]).
+
 -include("riak_kv_wm_raw.hrl").
 -include_lib("riak_kv_types.hrl").
 
 -ifdef(TEST).
+-ifdef(EQC).
+-export([test_split/0, test_split/1]).
+
+-include_lib("eqc/include/eqc.hrl").
+-endif.
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -48,15 +55,15 @@ merge(RObj) ->
     update_object(RObj, CRDTs, Siblings).
 
 value(RObj, Type) ->
-    {CRDTs, _NonCounterSiblings} = merge_object(RObj),
+    {CRDTs, _NonCRDTSiblings} = merge_object(RObj),
     crdt_value(Type, orddict:find(Type, CRDTs)).
 
 %% @TODO in riak_dt change value to query allow query to take an
 %% argument, (so as to query subfields of map, or set membership etc)
 crdt_value(Type, error) ->
-    Type:new();
+    {<<>>, Type:new()};
 crdt_value(Type, {ok, {_Meta, ?CRDT{mod=Type, value=Value}}}) ->
-    Type:value(Value).
+    {get_context(Type, Value), Type:value(Value)}.
 
 %% Merge contents _AND_ meta
 merge_object(RObj) ->
@@ -89,12 +96,74 @@ merge_value({MD, <<?TAG:8/integer, ?V1_VERS:8/integer, CRDTBin/binary>>},
 merge_value(NonCRDT, {Dict, NonCRDTSiblings}) ->
     {Dict, [NonCRDT | NonCRDTSiblings]}.
 
-update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op}) ->
+%% @doc Apply the updates to the CRDT.
+update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op, ctx=undefined}) ->
     InitialVal = Mod:update(Op, Actor, Mod:new()),
     orddict:update(Mod, fun({Meta, CRDT=?CRDT{value=Value}}) ->
                                {Meta, CRDT?CRDT{value=Mod:update(Op, Actor, Value)}} end,
                   {undefined, to_record(Mod, InitialVal)},
-                  Dict).
+                   Dict);
+update_crdt(Dict, Actor, ?CRDT_OP{mod=?MAP_TYPE=Mod, op=Ops, ctx=OpCtx}) ->
+    Ctx = context_to_crdt(Mod, OpCtx),
+    {PreOps, PostOps} = split_ops(Ops),
+    InitialVal = Mod:update(PreOps, Actor, Ctx),
+    orddict:update(Mod, fun({Meta, CRDT=?CRDT{value=Value}}) ->
+                                Merged = Mod:merge(InitialVal, Value),
+                                {Meta, CRDT?CRDT{value=Mod:update(PostOps, Actor, Merged)}} end,
+                   {undefined, to_record(Mod, InitialVal)},
+                   Dict);
+update_crdt(Dict, Actor, ?CRDT_OP{mod=?SET_TYPE=Mod, op={remove, _}=Op, ctx=OpCtx}) ->
+    Ctx = context_to_crdt(Mod, OpCtx),
+    InitialVal = Mod:update(Op, Actor, Ctx),
+    orddict:update(Mod, fun({Meta, CRDT=?CRDT{value=Value}}) ->
+                                {Meta, CRDT?CRDT{value=Mod:merge(InitialVal, Value)}} end,
+                   {undefined, to_record(Mod, InitialVal)},
+                   Dict).
+
+context_to_crdt(Mod, undefined) ->
+    Mod:new();
+context_to_crdt(Mod, Ctx) ->
+    Mod:from_binary(Ctx).
+
+%% @private Takes an update operation and splits it into two update
+%% operations.  returns {pre, post} where pre is an update operation
+%% that must be a applied to a context _before_ it is merged with
+%% local replica state and post is an update operation that must be
+%% applied after the context has been merged with the local replica
+%% state.
+%%
+%% Why?  When fields are removed from Maps or elements from Sets the
+%% remove must be applied to the state observed by the client.  If a
+%% client as seen a field or element in a set, but the replica
+%% handling the remove has not then a confusing preconditione failed
+%% error will be generated for the user.
+%%
+%% The reason for applying remove type operations to the context
+%% before the merge is to ensure that only the adds seen by the client
+%% are removed, and not adds that happen to be present at this
+%% replica.
+%%
+%% @TODO optimise the case where either Pre or Post comes back
+%% essentially as a No Op (for example, and update to a nested Map
+%% that has no operations. While this does not affect correctness, it
+%% is not ideal.
+split_ops(Ops) when is_list(Ops) ->
+    split_ops(Ops, [], []);
+split_ops({update, Ops}) ->
+    {Pre, Post} = split_ops(Ops),
+    {{update, Pre}, {update, Post}}.
+
+split_ops([], Pre, Post) ->
+    {lists:reverse(Pre), lists:reverse(Post)};
+split_ops([{remove, _Key}=Op | Rest], Pre, Post) ->
+    split_ops(Rest, [Op | Pre], Post);
+split_ops([{update, _Key, {remove, _}}=Op | Rest], Pre, Post) -> %% BAD! Knows about the set remove operation
+    split_ops(Rest, [Op | Pre], Post);
+split_ops([{update, {_Name, ?MAP_TYPE}=Key, Op} | Rest], Pre0, Post0) ->
+    {Pre, Post} = split_ops(Op),
+    split_ops(Rest, [{update, Key, Pre} | Pre0], [{update, Key, Post} | Post0]);
+split_ops([Op | Rest], Pre, Post) ->
+    split_ops(Rest, Pre, [Op | Post]).
 
 %% This uses an exported but marked INTERNAL
 %% function of `riak_object:set_contents' to preserve
@@ -206,18 +275,99 @@ from_type(?LWW_TYPE) ->
 from_type(?MAP_TYPE) ->
     "map".
 
+%% @Doc the update context can be empty for some types.
+%% Those that support an precondition_context should supply
+%% a smaller than Type:to_binary(Value) binary context.
+get_context(Type, Value) ->
+    case lists:member(precondition_context, Type:module_info(exports)) of
+        true -> Type:precondition_context(Value);
+        false -> <<>>
+    end.
+
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
 
-%% roundtrip_bin_test() ->
-%%     PN = riak_kv_pncounter:new(),
-%%     PN1 = riak_kv_pncounter:update({increment, 2}, <<"a1">>, PN),
-%%     PN2 = riak_kv_pncounter:update({decrement, 1000000000000000000000000}, douglas_Actor, PN1),
-%%     PN3 = riak_kv_pncounter:update(increment, [{very, ["Complex"], <<"actor">>}, honest], PN2),
-%%     PN4 = riak_kv_pncounter:update(decrement, "another_acotr", PN3),
-%%     Bin = to_binary(PN4),
-    %% ?assert(byte_size(Bin) < term_to_binary({riak_kv_pncounter, PN4})).
+-ifdef(EQC).
 
+-define(NUM_TESTS, 1000).
+
+eqc_test_() ->
+    [?_assert(test_split() =:= true)].
+
+test_split() ->
+    test_split(?NUM_TESTS).
+
+test_split(NumTests) ->
+    eqc:quickcheck(eqc:numtests(NumTests, prop_split())).
+
+prop_split() ->
+    ?FORALL(Ops, riak_dt_multi:gen_op(),
+            begin
+                {Pre, Post} = split_ops(Ops),
+                {update, AgOps} = Ops,
+                ?WHENFAIL(
+                   begin
+                       io:format("Generated Ops ~p~n", [Ops]),
+                       io:format("Split Pre ~p~n", [Pre]),
+                       io:format("Split Post ~p~n", [Post])
+                   end,
+                   collect(length(AgOps),
+                           collect(depth(AgOps, 0),
+                                   conjunction([
+                                                {pre, only_rem_ops(Pre)},
+                                                {pre_depth, equals(depth(Pre, 0), depth(Ops, 0))},
+                                                {post, only_add_ops(Post)},
+                                                {post_depth, equals(depth(Post, 0), depth(Ops, 0))}
+                                               ])))
+                  )
+            end).
+
+
+
+depth({update, Ops}, Depth) ->
+    depth(Ops, Depth);
+depth([], Depth) ->
+    Depth;
+depth([{update, {_Name, ?MAP_TYPE}, {update, Ops}}| Rest], Depth) ->
+    max(depth(Ops, Depth +1), depth(Rest, Depth));
+depth([_Op | Rest], Depth) ->
+    depth(Rest, Depth).
+
+only_type_ops(_TestFun, []) ->
+    true;
+only_type_ops(TestFun, [Op | Rest]) ->
+    case TestFun(Op) of
+        false ->
+            false;
+        true ->
+            only_type_ops(TestFun, Rest)
+    end.
+
+only_add_ops({update, Ops}) ->
+    only_add_ops(Ops);
+only_add_ops(Ops) ->
+    only_type_ops(fun is_add_op/1, Ops).
+
+only_rem_ops({update, Ops}) ->
+    only_rem_ops(Ops);
+only_rem_ops(Ops) ->
+    only_type_ops(fun is_rem_op/1, Ops).
+
+is_add_op({update, {_Name, ?MAP_TYPE}, {update, Ops}}) ->
+    only_add_ops(Ops);
+is_add_op(Op) ->
+    not is_rem_op(Op).
+
+is_rem_op({update, {_Name, ?MAP_TYPE}, {update, Ops}}) ->
+    only_rem_ops(Ops);
+is_rem_op({remove, _Key}) ->
+    true;
+is_rem_op({update, _Key, {remove, _Elem}}) ->
+    true;
+is_rem_op(_Op) ->
+    false.
+
+-endif.
 -endif.
