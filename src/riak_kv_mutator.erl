@@ -32,32 +32,39 @@
 
 -module(riak_kv_mutator).
 
--define(ets, riak_kv_mutators_registry).
-
--export([create/0, destroy/0]).
 -export([register/1, unregister/1]).
 -export([get/0]).
 -export([mutate_put/2, mutate_get/2]).
 
-create() ->
-    Ets = ets:new(?ets, [named_table, {read_concurrency, true}, public]),
-    {ok, Ets}.
-
-destroy() ->
-    ets:delete(?ets),
-    ok.
-
 register(Module) ->
-    ets:insert(?ets, {Module}),
-    ok.
+    Modifier = fun
+        (undefined) ->
+            [Module];
+        (Values) ->
+            Values2 = lists:filter(fun erlang:is_list/1, Values),
+            Values3 = ordsets:union(Values2),
+            ordsets:add_element(Module, Values3)
+    end,
+    riak_core_metadata:put({kv, mutators}, list, Modifier).
 
 unregister(Module) ->
-    ets:delete(?ets, Module),
-    ok.
+    Modifier = fun
+        (undefined) ->
+            [];
+        (Values) ->
+            Values2 = lists:filter(fun erlang:is_list/1, Values),
+            Values3 = ordsets:union(Values2),
+            ordsets:del_element(Module, Values3)
+    end,
+    riak_core_metadata:put({kv, mutators}, list, Modifier, []).
 
 get() ->
-    List = ets:match(?ets, {'$1'}),
-    {ok, lists:flatten(List)}.
+    Resolver = fun(Values) ->
+        Values2 = lists:filter(fun erlang:is_list/1, Values),
+        ordsets:union(Values2)
+    end,
+    Modules = riak_core_metadata:get({kv, mutators}, list, [{default, []}, {resolver, Resolver}]),
+    {ok, Modules}.
 
 mutate_get(Object, BucketProps) ->
     mutate(Object, BucketProps, mutate_get).
@@ -66,7 +73,8 @@ mutate_put(Object, BucketProps) ->
     mutate(Object, BucketProps, mutate_put).
 
 mutate(Object, BucketProps, Func) ->
-    FoldFun = fun({Module}, Obj) ->
+    FoldFun = fun(Module, Obj) ->
         Module:Func(Obj, BucketProps)
     end,
-    ets:foldl(FoldFun, Object, ?ets).
+    {ok, Modules} = ?MODULE:get(),
+    lists:foldl(FoldFun, Object, Modules).

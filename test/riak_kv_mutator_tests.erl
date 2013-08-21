@@ -5,18 +5,21 @@
 
 -export([mutate_put/2, mutate_get/2]).
 
-creation_destruction_test() ->
-    Got = riak_kv_mutator:create(),
-    ?assertMatch({ok, _Ref}, Got),
-    Got2 = riak_kv_mutator:destroy(),
-    ?assertEqual(ok, Got2).
-
 functionaltiy_test_() ->
     {foreach, fun() ->
-        riak_kv_mutator:create()
+        purge_data_dir(),
+        {ok, Pid} = riak_core_metadata_manager:start_link([{data_dir, "test_data"}]),
+        Pid
     end,
-    fun(_) ->
-        riak_kv_mutator:destroy()
+    fun(Pid) ->
+        unlink(Pid),
+        exit(Pid, kill),
+        Mon = erlang:monitor(process, Pid),
+        receive
+            {'DOWN', Mon, process, Pid, _Why} ->
+                ok
+        end,
+        purge_data_dir()
     end, [
 
         fun(_) -> {"register a mutator", fun() ->
@@ -61,6 +64,13 @@ functionaltiy_test_() ->
 
     ]}.
 
+purge_data_dir() ->
+    {ok, CWD} = file:get_cwd(),
+    DataDir = filename:join(CWD, "test_data"),
+    DataFiles = filename:join([DataDir, "*"]),
+    [file:delete(File) || File <- filelib:wildcard(DataFiles)],
+    file:del_dir(DataDir).
+
 mutate_put(Object, BucketProps) ->
     mutate(Object, BucketProps).
 
@@ -68,30 +78,21 @@ mutate_get(Object, BucketProps) ->
     mutate(Object, BucketProps).
 
 mutate(Object, BucketProps) ->
-    ?debugMsg("bing"),
     NewVal = case proplists:get_value(<<"bucket_prop">>, BucketProps) of
         BProp when is_binary(BProp) ->
-    ?debugMsg("bing"),
             <<"mutated", BProp/binary>>;
         undefined ->
-    ?debugMsg("bing"),
             <<"mutated">>
     end,
-    ?debugMsg("bing"),
     Meta = riak_object:get_metadata(Object),
     Mutations = case dict:find(<<"mutations">>, Meta) of
         {ok, N} when is_integer(N) ->
-    ?debugMsg("bing"),
             N + 1;
         _ ->
-    ?debugMsg("bing"),
             0
     end,
-    ?debugMsg("bing"),
     Meta2 = dict:store(<<"mutations">>, Mutations, Meta),
-    ?debugMsg("bing"),
     Object2 = riak_object:update_value(Object, NewVal),
-    ?debugMsg("bing"),
     Object3 = riak_object:update_metadata(Object2, Meta2),
     riak_object:apply_updates(Object3).
 
