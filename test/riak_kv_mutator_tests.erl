@@ -57,14 +57,25 @@ functionaltiy_test_() ->
             ?assertEqual(ExpectedMetaMutations, dict:fetch(<<"mutations">>, riak_object:get_metadata(Got)))
         end} end,
 
-        fun(_) -> {"mutate a get", fun() ->
-            Object = riak_object:new(<<"bucket">>, <<"key">>, <<"original_data">>, dict:from_list([{<<"mutations">>, 7}])),
+        fun(_) -> {"do not mutate on get if not mutated on put", fun() ->
+            Data = <<"original_data">>,
+            Object = riak_object:new(<<"bucket">>, <<"key">>, Data, dict:from_list([{<<"mutations">>, 0}])),
             riak_kv_mutator:register(?MODULE),
             Got = riak_kv_mutator:mutate_get(Object, [{<<"bucket_prop">>, <<"warble">>}]),
+            ?assertEqual(Data, riak_object:get_value(Got)),
+            ?assertEqual(0, dict:fetch(<<"mutations">>, riak_object:get_metadata(Got)))
+
+        end} end,
+
+        fun(_) -> {"mutate a get", fun() ->
+            riak_kv_mutator:register(?MODULE),
+            Object = riak_object:new(<<"bucket">>, <<"key">>, <<"original_data">>, dict:from_list([{<<"mutations">>, 0}])),
+            Object2 = riak_kv_mutator:mutate_put(Object, [{<<"bucket_prop">>, <<"warble">>}]),
+            Object3 = riak_kv_mutator:mutate_get(Object2, [{<<"bucket_prop">>, <<"warble">>}]),
             ExpectedVal = <<"mutatedwarble">>,
-            ExpectedMetaMutations = 8,
-            ?assertEqual(ExpectedVal, riak_object:get_value(Got)),
-            ?assertEqual(ExpectedMetaMutations, dict:fetch(<<"mutations">>, riak_object:get_metadata(Got)))
+            ExpectedMetaMutations = 2,
+            ?assertEqual(ExpectedVal, riak_object:get_value(Object3)),
+            ?assertEqual(ExpectedMetaMutations, dict:fetch(<<"mutations">>, riak_object:get_metadata(Object3)))
         end} end
 
     ]}.

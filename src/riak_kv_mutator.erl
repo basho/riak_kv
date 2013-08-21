@@ -45,7 +45,7 @@ register(Module) ->
             Values3 = ordsets:union(Values2),
             ordsets:add_element(Module, Values3)
     end,
-    riak_core_metadata:put({kv, mutators}, list, Modifier).
+    riak_core_metadata:put({riak_kv, mutators}, list, Modifier).
 
 unregister(Module) ->
     Modifier = fun
@@ -56,25 +56,38 @@ unregister(Module) ->
             Values3 = ordsets:union(Values2),
             ordsets:del_element(Module, Values3)
     end,
-    riak_core_metadata:put({kv, mutators}, list, Modifier, []).
+    riak_core_metadata:put({riak_kv, mutators}, list, Modifier, []).
 
 get() ->
     Resolver = fun(Values) ->
         Values2 = lists:filter(fun erlang:is_list/1, Values),
         ordsets:union(Values2)
     end,
-    Modules = riak_core_metadata:get({kv, mutators}, list, [{default, []}, {resolver, Resolver}]),
+    Modules = riak_core_metadata:get({riak_kv, mutators}, list, [{default, []}, {resolver, Resolver}]),
     {ok, Modules}.
 
 mutate_get(Object, BucketProps) ->
-    mutate(Object, BucketProps, mutate_get).
+    Meta = riak_object:get_metadata(Object),
+    {AppliedMutators, Meta2} = case dict:find(mutators_applied, Meta) of
+        error ->
+            {[], Meta};
+        {ok, Applied} ->
+            {Applied, dict:erase(mutators_applied, Meta)}
+    end,
+    Object2 = riak_object:update_metadata(Object, Meta2),
+    Object3 = riak_object:apply_updates(Object2),
+    FoldFun = fun(Module, Obj) ->
+        Module:mutate_get(Obj, BucketProps)
+    end,
+    lists:foldl(FoldFun, Object3, AppliedMutators).
 
 mutate_put(Object, BucketProps) ->
-    mutate(Object, BucketProps, mutate_put).
-
-mutate(Object, BucketProps, Func) ->
     FoldFun = fun(Module, Obj) ->
-        Module:Func(Obj, BucketProps)
+        Module:mutate_put(Obj, BucketProps)
     end,
     {ok, Modules} = ?MODULE:get(),
-    lists:foldl(FoldFun, Object, Modules).
+    Object2 = lists:foldl(FoldFun, Object, Modules),
+    Meta = riak_object:get_metadata(Object2),
+    Meta2 = dict:store(mutators_applied, Modules, Meta),
+    Object3 = riak_object:update_metadata(Object2, Meta2),
+    riak_object:apply_updates(Object3).
