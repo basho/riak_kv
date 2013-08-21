@@ -34,7 +34,7 @@
 
 -export([register/1, unregister/1]).
 -export([get/0]).
--export([mutate_put/2, mutate_get/2]).
+-export([mutate_put/2, mutate_get/1]).
 
 register(Module) ->
     Modifier = fun
@@ -66,7 +66,7 @@ get() ->
     Modules = riak_core_metadata:get({riak_kv, mutators}, list, [{default, []}, {resolver, Resolver}]),
     {ok, Modules}.
 
-mutate_get(Object, BucketProps) ->
+mutate_get(Object) ->
     Meta = riak_object:get_metadata(Object),
     {AppliedMutators, Meta2} = case dict:find(mutators_applied, Meta) of
         error ->
@@ -77,7 +77,7 @@ mutate_get(Object, BucketProps) ->
     Object2 = riak_object:update_metadata(Object, Meta2),
     Object3 = riak_object:apply_updates(Object2),
     FoldFun = fun(Module, Obj) ->
-        Module:mutate_get(Obj, BucketProps)
+        Module:mutate_get(Obj)
     end,
     lists:foldl(FoldFun, Object3, AppliedMutators).
 

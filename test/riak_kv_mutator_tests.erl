@@ -3,7 +3,7 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
--export([mutate_put/2, mutate_get/2]).
+-export([mutate_put/2, mutate_get/1]).
 
 functionaltiy_test_() ->
     {foreach, fun() ->
@@ -61,7 +61,7 @@ functionaltiy_test_() ->
             Data = <<"original_data">>,
             Object = riak_object:new(<<"bucket">>, <<"key">>, Data, dict:from_list([{<<"mutations">>, 0}])),
             riak_kv_mutator:register(?MODULE),
-            Got = riak_kv_mutator:mutate_get(Object, [{<<"bucket_prop">>, <<"warble">>}]),
+            Got = riak_kv_mutator:mutate_get(Object),
             ?assertEqual(Data, riak_object:get_value(Got)),
             ?assertEqual(0, dict:fetch(<<"mutations">>, riak_object:get_metadata(Got)))
 
@@ -71,8 +71,8 @@ functionaltiy_test_() ->
             riak_kv_mutator:register(?MODULE),
             Object = riak_object:new(<<"bucket">>, <<"key">>, <<"original_data">>, dict:from_list([{<<"mutations">>, 0}])),
             Object2 = riak_kv_mutator:mutate_put(Object, [{<<"bucket_prop">>, <<"warble">>}]),
-            Object3 = riak_kv_mutator:mutate_get(Object2, [{<<"bucket_prop">>, <<"warble">>}]),
-            ExpectedVal = <<"mutatedwarble">>,
+            Object3 = riak_kv_mutator:mutate_get(Object2),
+            ExpectedVal = <<"mutated">>,
             ExpectedMetaMutations = 2,
             ?assertEqual(ExpectedVal, riak_object:get_value(Object3)),
             ?assertEqual(ExpectedMetaMutations, dict:fetch(<<"mutations">>, riak_object:get_metadata(Object3)))
@@ -90,14 +90,14 @@ purge_data_dir() ->
 mutate_put(Object, BucketProps) ->
     mutate(Object, BucketProps).
 
-mutate_get(Object, BucketProps) ->
-    mutate(Object, BucketProps).
+mutate_get(Object) ->
+    mutate(Object, []).
 
 mutate(Object, BucketProps) ->
     NewVal = case proplists:get_value(<<"bucket_prop">>, BucketProps) of
         BProp when is_binary(BProp) ->
             <<"mutated", BProp/binary>>;
-        undefined ->
+        _ ->
             <<"mutated">>
     end,
     Meta = riak_object:get_metadata(Object),
