@@ -279,7 +279,7 @@ from_type(?MAP_TYPE) ->
 %% Those that support an precondition_context should supply
 %% a smaller than Type:to_binary(Value) binary context.
 get_context(Type, Value) ->
-    case lists:member(precondition_context, Type:module_info(exports)) of
+    case lists:member({precondition_context, 1}, Type:module_info(exports)) of
         true -> Type:precondition_context(Value);
         false -> <<>>
     end.
