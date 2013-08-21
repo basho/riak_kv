@@ -1,5 +1,5 @@
 -record(crdt, {mod, ctype, value}).
--record(crdt_op, {mod, op}).
+-record(crdt_op, {mod, op, ctx}).
 
 -define(CRDT, #crdt).
 -define(CRDT_OP, #crdt_op).

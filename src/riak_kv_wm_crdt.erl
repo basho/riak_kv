@@ -121,6 +121,7 @@ init(Props) ->
 
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
     Type = riak_kv_crdt:to_type(wrq:path_info(crdt, RD)),
+    OpCtx = wrq:get_req_header(?HEAD_CRDT_CONTEXT, RD),
     case riak_kv_crdt:supported(Type) of
         true ->
             case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
@@ -138,7 +139,7 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                                undefined -> undefined;
                                K -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, K))
                            end,
-                       crdt_op=?CRDT_OP{mod=Type}
+                       crdt_op=?CRDT_OP{mod=Type, ctx=OpCtx}
                       }};
                 Error ->
                     {false,
@@ -297,11 +298,13 @@ allow_mult(Bucket) ->
 
 to_text(RD, Ctx=#ctx{doc={ok, Doc}}) ->
     ?CRDT_OP{mod=Type} = Ctx#ctx.crdt_op,
-    {produce_doc_body(Doc, Type), RD, Ctx}.
+    {ClientContext, Body} = produce_doc_body(Doc, Type),
+    {Body, wrq:merge_resp_headers([{?HEAD_CRDT_CONTEXT, ClientContext}], RD), Ctx}.
 
 produce_doc_body(Doc, Type) ->
-    JSON = to_json(Type, riak_kv_crdt:value(Doc, Type)),
-    mochijson2:encode(JSON).
+    {ClientContext, Body} = riak_kv_crdt:value(Doc, Type),
+    JSON = to_json(Type, Body),
+    {binary_to_list(base64:encode(ClientContext)), mochijson2:encode(JSON)}.
 
 to_json(?MAP_TYPE, Val) ->
     map_to_json(Val, []);
