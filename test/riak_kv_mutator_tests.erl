@@ -34,6 +34,11 @@ functionaltiy_test_() ->
             ?assertEqual({ok, [fake_module, fake_module_2]}, Got)
         end} end,
 
+        fun(_) -> {"retrieve an empty list of mutators", fun() ->
+            Got = riak_kv_mutator:get(),
+            ?assertEqual({ok, []}, Got)
+        end} end,
+
         fun(_) -> {"unregister", fun() ->
             ok = riak_kv_mutator:register(fake_module),
             Got1 = riak_kv_mutator:unregister(fake_module),
