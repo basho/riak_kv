@@ -242,17 +242,22 @@ fix_index(IndexKey, ForUpgrade, #state{ref=Ref,
 fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts) ->
     case eleveldb:get(Ref, IndexKey, ReadOpts) of
         {ok, _} ->
-            {Bucket, Key, Field, Value} = from_index_key(IndexKey),
-            NewKey = case ForUpgrade of
-                         true -> to_index_key(Bucket, Key, Field, Value);
-                         false -> to_legacy_index_key(Bucket, Key, Field, Value)
-                     end,
-            Updates = [{delete, IndexKey}, {put, NewKey, <<>>}],
-            case eleveldb:write(Ref, Updates, WriteOpts) of
-                ok ->
-                    ok;
-                {error, Reason} ->
-                    {error, Reason}
+            case from_index_key(IndexKey) of 
+                {Bucket, Key, Field, Value} ->
+                    
+                    NewKey = case ForUpgrade of
+                                 true -> to_index_key(Bucket, Key, Field, Value);
+                                 false -> to_legacy_index_key(Bucket, Key, Field, Value)
+                             end,
+                    Updates = [{delete, IndexKey}, {put, NewKey, <<>>}],
+                    case eleveldb:write(Ref, Updates, WriteOpts) of
+                        ok ->
+                            ok;
+                        {error, Reason} ->
+                            {error, Reason}
+                    end;
+                ignore ->
+                    ignore
             end;
         not_found ->
             ignore;
@@ -569,6 +574,8 @@ fold_buckets_fun(FoldBucketsFun) ->
                     {Acc, LastBucket};
                 {Bucket, _} ->
                     {FoldBucketsFun(Bucket, Acc), Bucket};
+                ignore ->
+                    {Acc, LastBucket};
                 _ ->
                     throw({break, Acc})
             end
@@ -583,6 +590,8 @@ fold_keys_fun(FoldKeysFun, undefined) ->
             case from_object_key(StorageKey) of
                 {Bucket, Key} ->
                     FoldKeysFun(Bucket, Key, Acc);
+                ignore ->
+                    Acc;
                 _ ->
                     throw({break, Acc})
             end
@@ -593,6 +602,8 @@ fold_keys_fun(FoldKeysFun, {bucket, FilterBucket}) ->
             case from_object_key(StorageKey) of
                 {Bucket, Key} when Bucket == FilterBucket ->
                     FoldKeysFun(Bucket, Key, Acc);
+                ignore ->
+                    Acc;
                 _ ->
                     throw({break, Acc})
             end
@@ -612,6 +623,8 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, <<"$key">>, StartKey, E
                                    StartKey =< Key,
                                    EndKey >= Key ->
                     FoldKeysFun(Bucket, Key, Acc);
+                ignore ->
+                    Acc;
                 _ ->
                     throw({break, Acc})
             end
@@ -625,6 +638,8 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, {range, FilterField, StartTerm,
                                                 StartTerm =< Term,
                                                 EndTerm >= Term ->
                     FoldKeysFun(Bucket, Key, Acc);
+                ignore ->
+                    Acc;
                 _ ->
                     throw({break, Acc})
             end
@@ -647,6 +662,8 @@ fold_keys_fun(FoldKeysFun, {index, incorrect_format, ForUpgrade}) when is_boolea
                             false ->
                                 {fold, Bucket, StorageKey}
                         end;
+                    ignore ->
+                        ignore;
                     _ ->
                         stop
                 end,
@@ -672,6 +689,8 @@ fold_objects_fun(FoldObjectsFun, FilterBucket) ->
                 {Bucket, Key} when FilterBucket == undefined;
                                    Bucket == FilterBucket ->
                     FoldObjectsFun(Bucket, Key, Value, Acc);
+                ignore ->
+                    Acc;
                 _ ->
                     throw({break, Acc})
             end
@@ -726,7 +745,10 @@ to_object_key(Bucket, Key) ->
     sext:encode({o, Bucket, Key}).
 
 from_object_key(LKey) ->
-    case sext:decode(LKey) of
+    case (catch sext:decode(LKey)) of
+        {'EXIT', _} -> 
+            lager:warning("Corrupted object key, discarding"),
+            ignore;
         {o, Bucket, Key} ->
             {Bucket, Key};
         _ ->
@@ -740,7 +762,10 @@ to_legacy_index_key(Bucket, Key, Field, Term) -> %% encode with legacy bignum en
     sext:encode({i, Bucket, Field, Term, Key}, true).
 
 from_index_key(LKey) ->
-    case sext:decode(LKey) of
+    case (catch sext:decode(LKey)) of
+        {'EXIT', _} -> 
+            lager:warning("Corrupted index key, discarding"),
+            ignore;
         {i, Bucket, Field, Term, Key} ->
             {Bucket, Key, Field, Term};
         _ ->
