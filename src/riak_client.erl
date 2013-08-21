@@ -33,9 +33,9 @@
 -export([stream_list_keys/2,stream_list_keys/3,stream_list_keys/4]).
 -export([filter_buckets/2]).
 -export([filter_keys/3,filter_keys/4]).
--export([list_buckets/1,list_buckets/2,list_buckets/3]).
+-export([list_buckets/1,list_buckets/2,list_buckets/3, list_buckets/4]).
 -export([stream_list_buckets/1,stream_list_buckets/2,
-         stream_list_buckets/3,stream_list_buckets/4]).
+         stream_list_buckets/3,stream_list_buckets/4, stream_list_buckets/5]).
 -export([get_index/4,get_index/3]).
 -export([stream_get_index/4,stream_get_index/3]).
 -export([set_bucket/3,get_bucket/2,reset_bucket/2]).
@@ -375,8 +375,11 @@ stream_list_keys(Bucket, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      keys in Bucket on any single vnode.
 stream_list_keys(Input, Timeout, Client, {?MODULE, [Node, _ClientId]}) when is_pid(Client) ->
     ReqId = mk_reqid(),
+    lager:info("input is ~p", [Input]),
     case Input of
-        {Bucket, FilterInput} ->
+        %% buckets with bucket types are also a 2-tuple, so be careful not to
+        %% treat the bucket type like a filter
+        {Bucket, FilterInput} when not is_binary(FilterInput) ->
             case riak_kv_mapred_filters:build_filter(FilterInput) of
                 {error, _Error} ->
                     {error, _Error};
@@ -434,7 +437,7 @@ filter_keys(Bucket, Fun, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      a bucket.
 %% @equiv list_buckets(default_timeout())
 list_buckets({?MODULE, [_Node, _ClientId]}=THIS) ->
-    list_buckets(none, ?DEFAULT_TIMEOUT, THIS).
+    list_buckets(none, ?DEFAULT_TIMEOUT, <<"default">>, THIS).
 
 %% @spec list_buckets(timeout()) ->
 %%       {ok, [Bucket :: riak_object:bucket()]} |
@@ -446,10 +449,10 @@ list_buckets({?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      either adds the first key or removes the last remaining key from
 %%      a bucket.
 %% @equiv list_buckets(default_timeout())
-list_buckets(Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
-    list_buckets(none, Timeout, THIS);
 list_buckets(undefined, {?MODULE, [_Node, _ClientId]}=THIS) ->
-    list_buckets(none, ?DEFAULT_TIMEOUT*8, THIS).
+    list_buckets(none, ?DEFAULT_TIMEOUT*8, <<"default">>, THIS);
+list_buckets(Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    list_buckets(none, Timeout, <<"default">>, THIS).
 
 %% @spec list_buckets(TimeoutMillisecs :: integer(), riak_client()) ->
 %%       {ok, [Bucket :: riak_object:bucket()]} |
@@ -460,13 +463,16 @@ list_buckets(undefined, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      out of date if called immediately after any operation that
 %%      either adds the first key or removes the last remaining key from
 %%      a bucket.
-list_buckets(Filter, Timeout, {?MODULE, [Node, _ClientId]}) ->
+list_buckets(Filter, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    list_buckets(Filter, Timeout, <<"default">>, THIS).
+
+list_buckets(Filter, Timeout, Type, {?MODULE, [Node, _ClientId]}) ->
     Me = self(),
     ReqId = mk_reqid(),
     {ok, _Pid} = riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, 
                                                            [{raw, ReqId, Me}, 
                                                             [Filter, Timeout, 
-                                                             false]]),
+                                                             false, Type]]),
     wait_for_listbuckets(ReqId).
 
 %% @spec filter_buckets(Fun :: function(), riak_client()) ->
@@ -487,11 +493,11 @@ stream_list_buckets(Timeout, {?MODULE, [_Node, _ClientId]}=THIS)
     stream_list_buckets(none, Timeout, THIS);
 stream_list_buckets(Filter, {?MODULE, [_Node, _ClientId]}=THIS) 
   when is_function(Filter) ->
-    stream_list_buckets(Filter, ?DEFAULT_TIMEOUT, THIS).    
+    stream_list_buckets(Filter, ?DEFAULT_TIMEOUT, THIS).
 
 stream_list_buckets(Filter, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
     Me = self(),
-    stream_list_buckets(Filter, Timeout, Me, THIS).
+    stream_list_buckets(Filter, Timeout, Me, <<"default">>, THIS).
 
 %% @spec stream_list_buckets(FilterFun :: fun(),
 %%                           TimeoutMillisecs :: integer(),
@@ -504,14 +510,22 @@ stream_list_buckets(Filter, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      out of date if called immediately after any operation that
 %%      either adds the first key or removes the last remaining key from
 %%      a bucket.
+stream_list_buckets(Filter, Timeout, Type, 
+                    {?MODULE, [_Node, _ClientId]}=THIS) when is_binary(Type) ->
+    Me = self(),
+    stream_list_buckets(Filter, Timeout, Me, Type, THIS);
 stream_list_buckets(Filter, Timeout, Client, 
+                    {?MODULE, [_Node, _ClientId]}=THIS) ->
+    stream_list_buckets(Filter, Timeout, Client, <<"default">>, THIS).
+
+stream_list_buckets(Filter, Timeout, Client, Type,
                     {?MODULE, [Node, _ClientId]}) ->
     ReqId = mk_reqid(),
     {ok, _Pid} = riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, 
                                                            [{raw, ReqId, 
                                                              Client}, 
                                                             [Filter, Timeout, 
-                                                             true]]),
+                                                             true, Type]]),
     {ok, ReqId}.
 
 %% @spec get_index(Bucket :: binary(),
