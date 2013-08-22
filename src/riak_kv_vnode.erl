@@ -1104,9 +1104,11 @@ perform_put({true, Obj},
                    modstate=ModState}=State,
             #putargs{returnbody=RB,
                      bkey={Bucket, Key},
+                     bprops=BProps,
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
-    case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) of
+    Obj2 = riak_kv_mutator:mutate_put(Obj, BProps),
+    case encode_and_put(Obj2, Mod, Bucket, Key, IndexSpecs, ModState) of
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             ?INDEX(Obj, put, Idx),
@@ -1211,7 +1213,8 @@ do_get(_Sender, BKey, ReqID,
 do_get_term({Bucket, Key}, Mod, ModState) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
         {ok, Obj, _UpdModState} ->
-            {ok, Obj};
+            Obj2 = riak_kv_mutator:mutate_get(Obj),
+            {ok, Obj2};
         %% @TODO Eventually it would be good to
         %% make the use of not_found or notfound
         %% consistent throughout the code.
@@ -1504,7 +1507,7 @@ get_hashtree_token() ->
 -spec max_hashtree_tokens() -> pos_integer().
 max_hashtree_tokens() ->
     app_helper:get_env(riak_kv,
-                       anti_entropy_max_async, 
+                       anti_entropy_max_async,
                        ?DEFAULT_HASHTREE_TOKENS).
 
 %% @private
@@ -1654,7 +1657,7 @@ handoff_data_encoding_method() ->
 %% its encoding method, but if that fails we use the legacy zlib and protocol buffer decoding:
 decode_binary_object(BinaryObject) ->
     try binary_to_term(BinaryObject) of
-        { Method, BinObj } -> 
+        { Method, BinObj } ->
                                 case Method of
                                     encode_raw  -> {B, K, Val} = BinObj,
                                                    BKey = {B, K},
@@ -1670,7 +1673,7 @@ decode_binary_object(BinaryObject) ->
     %% An exception means we have a legacy handoff object:
     catch
         _:_                 -> do_zlib_decode(BinaryObject)
-    end.  
+    end.
 
 do_zlib_decode(BinaryObject) ->
     DecodedObject = zlib:unzip(BinaryObject),
@@ -1863,11 +1866,13 @@ list_buckets_test_() ->
              application:start(folsom),
              riak_core_stat_cache:start_link(),
              riak_kv_stat:register_stats(),
+             riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
              Env
      end,
      fun(Env) ->
              riak_core_ring_manager:cleanup_ets(test),
              riak_core_stat_cache:stop(),
+             riak_kv_test_util:stop_process(riak_core_metadata_manager),
              application:stop(folsom),
              application:stop(sasl),
              [application:unset_env(riak_kv, K) ||
@@ -1919,6 +1924,7 @@ list_buckets_test_i(BackendMod) ->
 filter_keys_test() ->
     riak_core_ring_manager:setup_ets(test),
     clean_test_dirs(),
+    riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
     {S, B, K} = backend_with_known_key(riak_kv_memory_backend),
     Caller1 = new_result_listener(keys),
     handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
@@ -1939,6 +1945,7 @@ filter_keys_test() ->
     ?assertEqual({ok, []}, results_from_listener(Caller3)),
 
     riak_core_ring_manager:cleanup_ets(test),
+    riak_kv_test_util:stop_process(riak_core_metadata_manager),
     flush_msgs().
 
 %% include bitcask.hrl for HEADER_SIZE macro
@@ -1948,6 +1955,7 @@ filter_keys_test() ->
 %% preparation for a write prevents the write from going through.
 bitcask_badcrc_test() ->
     riak_core_ring_manager:setup_ets(test),
+    riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
     clean_test_dirs(),
     {S, B, K} = backend_with_known_key(riak_kv_bitcask_backend),
     DataDir = filename:join(bitcask_test_dir(), "0"),
@@ -1964,6 +1972,7 @@ bitcask_badcrc_test() ->
                                    {raw, 456, self()},
                                    S),
     riak_core_ring_manager:cleanup_ets(test),
+    riak_kv_test_util:stop_process(riak_core_metadata_manager),
     flush_msgs().
 
 
