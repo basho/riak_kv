@@ -73,11 +73,11 @@ process(Req=#rpbcsbucketreq{}, State) ->
 maybe_perform_query({error, Reason}, _Req, State) ->
     {error, {format, Reason}, State};
 maybe_perform_query({ok, Query}, Req, State) ->
-    #rpbcsbucketreq{bucket=Bucket, max_results=MaxResults} = Req,
+    #rpbcsbucketreq{bucket=Bucket, max_results=MaxResults, timeout=Timeout} = Req,
     #state{client=Client} = State,
-    {ok, ReqId} = Client:stream_get_index(Bucket, Query, [{max_results, MaxResults}]),
+    Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults}]),
+    {ok, ReqId} = Client:stream_get_index(Bucket, Query, Opts),
     {reply, {stream, ReqId}, State#state{req_id=ReqId, req=Req}}.
-
 
 %% @doc process_stream/3 callback. Handle streamed responses
 process_stream({ReqId, done}, ReqId, State=#state{req_id=ReqId,
