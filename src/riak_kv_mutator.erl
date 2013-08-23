@@ -79,7 +79,7 @@ mutate_get(Object) ->
     FoldFun = fun(Module, Obj) ->
         Module:mutate_get(Obj)
     end,
-    lists:foldl(FoldFun, Object3, AppliedMutators).
+    lists:foldl(FoldFun, Object3, lists:reverse(AppliedMutators)).
 
 mutate_put(Object, BucketProps) ->
     FoldFun = fun(Module, Obj) ->

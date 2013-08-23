@@ -47,6 +47,14 @@ functionaltiy_test_() ->
             ?assertEqual({ok, []}, Got2)
         end} end,
 
+        fun(_) -> {"mutator list ordered set", fun() ->
+            Mods = [a,z,c,b],
+            [riak_kv_mutator:register(M) || M <- Mods],
+            Got1 = riak_kv_mutator:get(),
+            Expected = ordsets:from_list(Mods),
+            ?assertEqual({ok, Expected}, Got1)
+        end} end,
+
         fun(_) -> {"mutate a put", fun() ->
             Object = riak_object:new(<<"bucket">>, <<"key">>, <<"original_data">>, dict:from_list([{<<"mutations">>, 0}])),
             riak_kv_mutator:register(?MODULE),
@@ -76,6 +84,66 @@ functionaltiy_test_() ->
             ExpectedMetaMutations = 2,
             ?assertEqual(ExpectedVal, riak_object:get_value(Object3)),
             ?assertEqual(ExpectedMetaMutations, dict:fetch(<<"mutations">>, riak_object:get_metadata(Object3)))
+        end} end,
+
+        fun(_) -> {"get mutations are reversed order from put mutators", fun() ->
+            meck:new(m1),
+            meck:new(m2),
+            meck:expect(m1, mutate_put, fun(Object, _Props) ->
+                Meta = riak_object:get_metadata(Object),
+                Mutations = case dict:find(<<"mutations">>, Meta) of
+                    {ok, N} ->
+                        N * 2;
+                    _ ->
+                        7
+                end,
+                Meta2 = dict:store(<<"mutations">>, Mutations, Meta),
+                Object2 = riak_object:update_metadata(Object, Meta2),
+                riak_object:apply_updates(Object2)
+            end),
+            meck:expect(m2, mutate_put, fun(Object, _Props) ->
+                Meta = riak_object:get_metadata(Object),
+                Mutations = case dict:find(<<"mutations">>, Meta) of
+                    {ok, N} ->
+                        N + 3;
+                    _ ->
+                        20
+                end,
+                Meta2 = dict:store(<<"mutations">>, Mutations, Meta),
+                Object2 = riak_object:update_metadata(Object, Meta2),
+                riak_object:apply_updates(Object2)
+            end),
+            meck:expect(m1, mutate_get, fun(Object) ->
+                Meta = riak_object:get_metadata(Object),
+                Mutations = case dict:find(<<"mutations">>, Meta) of
+                    {ok, N} ->
+                        N div 2;
+                    _ ->
+                        9
+                end,
+                Meta2 = dict:store(<<"mutations">>, Mutations, Meta),
+                Obj2 = riak_object:update_metadata(Object, Meta2),
+                riak_object:apply_updates(Obj2)
+            end),
+            meck:expect(m2, mutate_get, fun(Obj) ->
+                Meta = riak_object:get_metadata(Obj),
+                Mutations = case dict:find(<<"mutations">>, Meta) of
+                    {ok, N} ->
+                        N - 3;
+                    _ ->
+                        77
+                end,
+                Meta2 =  dict:store(<<"mutations">>, Mutations, Meta),
+                Obj2 = riak_object:update_metadata(Obj, Meta2),
+                riak_object:apply_updates(Obj2)
+            end),
+            riak_kv_mutator:register(m1),
+            riak_kv_mutator:register(m2),
+            Obj = riak_object:new(<<"bucket">>, <<"key">>, <<"data">>, dict:from_list([{<<"mutations">>, 11}])),
+            Obj2 = riak_kv_mutator:mutate_put(Obj, []),
+            Obj3 = riak_kv_mutator:mutate_get(Obj2),
+            Meta = riak_object:get_metadata(Obj3),
+            ?assertEqual({ok, 11}, dict:find(<<"mutations">>, Meta))
         end} end
 
     ]}.
