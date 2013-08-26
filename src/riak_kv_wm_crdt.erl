@@ -121,7 +121,7 @@ init(Props) ->
 
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
     Type = riak_kv_crdt:to_type(wrq:path_info(crdt, RD)),
-    OpCtx = wrq:get_req_header(?HEAD_CRDT_CONTEXT, RD),
+    OpCtx = get_op_context(wrq:get_req_header(?HEAD_CRDT_CONTEXT, RD)),
     case riak_kv_crdt:supported(Type) of
         true ->
             case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
@@ -154,6 +154,11 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx}
     end.
+
+get_op_context(undefined) ->
+    undefined;
+get_op_context(Ctx) ->
+    base64:decode(Ctx).
 
 forbidden(RD, Ctx) ->
     {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
