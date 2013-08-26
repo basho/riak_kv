@@ -55,6 +55,27 @@ functionaltiy_test_() ->
             ?assertEqual({ok, Expected}, Got1)
         end} end,
 
+        fun(_) -> {"register a mutator with a priority", fun() ->
+            Got1 = riak_kv_mutator:register(fake_module, 3),
+            ?assertEqual(ok, Got1),
+            Got2 = riak_kv_mutator:get(),
+            ?assertEqual({ok, [fake_module]}, Got2)
+        end} end,
+
+        fun(_) -> {"register a mutator twice, differing priorities", fun() ->
+            ok = riak_kv_mutator:register(fake_module, 3),
+            ok = riak_kv_mutator:register(fake_module, 7),
+            Got = riak_kv_mutator:get(),
+            ?assertEqual({ok, [fake_module]}, Got)
+        end} end,
+
+        fun(_) -> {"priority determines mutator order", fun() ->
+            ok = riak_kv_mutator:register(fake_module, 7),
+            ok = riak_kv_mutator:register(fake_module_2, 2),
+            Got = riak_kv_mutator:get(),
+            ?assertEqual({ok, [fake_module_2, fake_module]}, Got)
+        end} end,
+
         fun(_) -> {"mutate a put", fun() ->
             Object = riak_object:new(<<"bucket">>, <<"key">>, <<"original_data">>, dict:from_list([{<<"mutations">>, 0}])),
             riak_kv_mutator:register(?MODULE),
