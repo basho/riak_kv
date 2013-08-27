@@ -69,7 +69,7 @@
 -export([hash/1, approximate_size/2]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
 -export([encode_vclock/2, decode_vclock/2]).
--export([update_value/2, update_metadata/2, bucket/1, value_count/1]).
+-export([update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([merge/2, apply_updates/1, syntactic_merge/2]).
 -export([to_json/1, from_json/1]).
@@ -272,6 +272,17 @@ apply_updates(Object=#r_object{}) ->
 %% @doc Return the containing bucket for this riak_object.
 -spec bucket(riak_object()) -> bucket().
 bucket(#r_object{bucket=Bucket}) -> Bucket.
+
+%% @doc Return the containing bucket for this riak_object without any type
+%% information, if present.
+-spec bucket_only(riak_object()) -> binary().
+bucket_only(#r_object{bucket={_Type, Bucket}}) -> Bucket;
+bucket_only(#r_object{bucket=Bucket}) -> Bucket.
+
+%% @doc Return the containing bucket-type for this riak_object.
+-spec type(riak_object()) -> binary() | undefined.
+type(#r_object{bucket={Type, _Bucket}}) -> Type;
+type(#r_object{bucket=_Bucket}) -> undefined.
 
 %% @doc  Return the key for this riak_object.
 -spec key(riak_object()) -> key().

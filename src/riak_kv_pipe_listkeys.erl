@@ -64,10 +64,19 @@ init(Partition, FittingDetails) ->
 -spec process(term(), boolean(), state()) -> {ok | {error, term()}, state()}.
 process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
     case Input of
+        {cover, FilterVNodes, {T, B}} when is_binary(T), is_binary(B) ->
+            %% bucket and type
+            Bucket = {T, B},
+            Filters = [];
         {cover, FilterVNodes, {Bucket, Filters}} ->
             ok;
         {cover, FilterVNodes, Bucket} ->
             Filters = [];
+        {T, B} when is_binary(T), is_binary(B) ->
+            %% bucket and type
+            Bucket = {T, B},
+            Filters = [],
+            FilterVNodes = [];
         {Bucket, Filters} ->
             FilterVNodes = [];
         Bucket ->
@@ -111,7 +120,7 @@ keysend(_Bucket, [], _Partition, _FittingDetails) ->
     ok;
 keysend(Bucket, [Key | Keys], Partition, FittingDetails) ->
     case riak_pipe_vnode_worker:send_output(
-           {Bucket, Key}, Partition, FittingDetails) of
+           {{Bucket, Key}, undefined}, Partition, FittingDetails) of
         ok ->
             keysend(Bucket, Keys, Partition, FittingDetails);
         ER ->

@@ -65,6 +65,8 @@ parse_request(BinReq) ->
 %%                        |{modfun, atom(), atom(), list()}
 parse_inputs(Bucket) when is_binary(Bucket) ->
     {ok, Bucket};
+parse_inputs({Type, Bucket}) when is_binary(Type), is_binary(Bucket) ->
+    {ok, {Type, Bucket}};
 parse_inputs(Targets) when is_list(Targets) ->
     case valid_input_targets(Targets) of
         ok -> {ok, Targets};
@@ -103,6 +105,8 @@ parse_inputs(Invalid) ->
 valid_input_targets([]) ->
     ok;
 valid_input_targets([{B,K}|Rest]) when is_binary(B), is_binary(K) ->
+    valid_input_targets(Rest);
+valid_input_targets([{{{T,B},K},_KeyData}|Rest]) when is_binary(T), is_binary(B), is_binary(K) ->
     valid_input_targets(Rest);
 valid_input_targets([{{B,K},_KeyData}|Rest]) when is_binary(B), is_binary(K) ->
     valid_input_targets(Rest);
