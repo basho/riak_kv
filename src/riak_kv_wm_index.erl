@@ -258,12 +258,10 @@ whack_index_fsm(ReqID, Pid) ->
     clear_index_fsm_msgs(ReqID).
 
 wait_for_death(Pid) ->
+    Ref = erlang:monitor(process, Pid),
     exit(Pid, kill),
-    case is_process_alive(Pid) of
-        true ->
-            timer:sleep(10),
-            wait_for_death(Pid);
-        false ->
+    receive
+        {'DOWN', Ref, process, Pid, _Info} ->
             ok
     end.
 
