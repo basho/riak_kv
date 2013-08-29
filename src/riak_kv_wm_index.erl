@@ -215,11 +215,11 @@ handle_streaming_index_query(RD, Ctx) ->
 
     Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults}]),
 
-    {ok, ReqID} =  Client:stream_get_index(Bucket, Query, Opts),
-    StreamFun = index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, proplists:get_value(timeout, Opts), undefined, 0),
+    {ok, ReqID, FSMPid} =  Client:stream_get_index(Bucket, Query, Opts),
+    StreamFun = index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, proplists:get_value(timeout, Opts), undefined, 0),
     {{stream, {<<>>, StreamFun}}, CTypeRD, Ctx}.
 
-index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, Timeout, LastResult, Count) ->
+index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult, Count) ->
     fun() ->
             receive
                 {ReqID, done} ->
@@ -234,7 +234,7 @@ index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, Timeout, LastResul
                             end,
                     {iolist_to_binary(Final), done};
                 {ReqID, {results, []}} ->
-                    {<<>>, index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, Timeout, LastResult, Count)};
+                    {<<>>, index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult, Count)};
                 {ReqID, {results, Results}} ->
                     %% JSONify the results
                     JsonResults = encode_results(ReturnTerms, Results),
@@ -244,12 +244,34 @@ index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, Timeout, LastResul
                     LastResult1 = last_result(Results),
                     Count1 = Count + length(Results),
                     {iolist_to_binary(Body),
-                     index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, Timeout, LastResult1, Count1)};
+                     index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult1, Count1)};
                 {ReqID, Error} ->
                     stream_error(Error, Boundary)
             after Timeout ->
+                    whack_index_fsm(ReqID, FSMPid),
                     stream_error({error, timeout}, Boundary)
             end
+    end.
+
+whack_index_fsm(ReqID, Pid) ->
+    wait_for_death(Pid),
+    clear_index_fsm_msgs(ReqID).
+
+wait_for_death(Pid) ->
+    Ref = erlang:monitor(process, Pid),
+    exit(Pid, kill),
+    receive
+        {'DOWN', Ref, process, Pid, _Info} ->
+            ok
+    end.
+
+clear_index_fsm_msgs(ReqID) ->
+    receive
+        {ReqID, _} ->
+            clear_index_fsm_msgs(ReqID)
+    after
+        0 ->
+            ok
     end.
 
 stream_error(Error, Boundary) ->
