@@ -24,7 +24,7 @@
 
 -export([update/3, merge/1, value/2, new/3,
          to_binary/1, from_binary/1, supported/1, parse_operation/2,
-         to_type/1, from_type/1]).
+         to_mod/1, from_mod/1]).
 
 -export([split_ops/1]).
 
@@ -229,8 +229,6 @@ crdt_from_binary(<<TypeLen:32/integer, Type:TypeLen/binary, CRDTBin/binary>>) ->
 
 to_record(?COUNTER_TYPE, Val) ->
     ?COUNTER_TYPE(Val);
-to_record(?LWW_TYPE, Val) ->
-    ?LWW_TYPE(Val);
 to_record(?MAP_TYPE, Val) ->
     ?MAP_TYPE(Val);
 to_record(?SET_TYPE, Val) ->
@@ -253,27 +251,35 @@ parse_operation(CRDTOp, OpBin) ->
             {error, {Class, Reason}}
     end.
 
-%% @doc turn a string token into a
+%% @doc turn a string token / atom into a
 %% CRDT type
-to_type("sets") ->
+to_mod("sets") ->
     ?SET_TYPE;
-to_type("counters") ->
+to_mod("counters") ->
     ?COUNTER_TYPE;
-to_type("lww") ->
-    ?LWW_TYPE;
-to_type("maps") ->
+to_mod("maps") ->
     ?MAP_TYPE;
-to_type(_) ->
+to_mod(set) ->
+    ?SET_TYPE;
+to_mod(counter) ->
+    ?COUNTER_TYPE;
+to_mod(register) ->
+    ?LWW_TYPE;
+to_mod(flag) ->
+    ?FLAG_TYPE;
+to_mod(_) ->
     undefined.
 
-from_type(?SET_TYPE) ->
-    "set";
-from_type(?COUNTER_TYPE) ->
-    "counter";
-from_type(?LWW_TYPE) ->
-    "lww";
-from_type(?MAP_TYPE) ->
-    "map".
+from_mod(?SET_TYPE) ->
+    set;
+from_mod(?COUNTER_TYPE) ->
+    counter;
+from_mod(?LWW_TYPE) ->
+    register;
+from_mod(?MAP_TYPE) ->
+    map;
+from_mod(?FLAG_TYPE) ->
+    flag.
 
 %% @Doc the update context can be empty for some types.
 %% Those that support an precondition_context should supply
