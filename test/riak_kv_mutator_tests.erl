@@ -5,7 +5,7 @@
 
 -export([mutate_put/2, mutate_get/1]).
 
-functionaltiy_test_() ->
+functionality_test_() ->
     {foreach, fun() ->
         purge_data_dir(),
         {ok, Pid} = riak_core_metadata_manager:start_link([{data_dir, "test_data"}]),
