@@ -3,7 +3,7 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
--export([mutate_put/2, mutate_get/1]).
+-export([mutate_put/5, mutate_get/3]).
 
 functionality_test_() ->
     {foreach, fun() ->
@@ -79,11 +79,11 @@ functionality_test_() ->
         fun(_) -> {"mutate a put", fun() ->
             Object = riak_object:new(<<"bucket">>, <<"key">>, <<"original_data">>, dict:from_list([{<<"mutations">>, 0}])),
             riak_kv_mutator:register(?MODULE),
-            Got = riak_kv_mutator:mutate_put(Object, [{<<"bucket_prop">>, <<"bprop">>}]),
+            {FullMutate, MetaMutates} = riak_kv_mutator:mutate_put(Object, [{<<"bucket_prop">>, <<"bprop">>}]),
             ExpectedVal = <<"mutatedbprop">>,
             ExpectedMetaMutations = 1,
-            ?assertEqual(ExpectedVal, riak_object:get_value(Got)),
-            ?assertEqual(ExpectedMetaMutations, dict:fetch(<<"mutations">>, riak_object:get_metadata(Got)))
+            ?assertEqual(ExpectedVal, riak_object:get_value(FullMutate)),
+            ?assertEqual(ExpectedMetaMutations, dict:fetch(<<"mutations">>, riak_object:get_metadata(MetaMutates)))
         end} end,
 
         fun(_) -> {"do not mutate on get if not mutated on put", fun() ->
@@ -99,19 +99,18 @@ functionality_test_() ->
         fun(_) -> {"mutate a get", fun() ->
             riak_kv_mutator:register(?MODULE),
             Object = riak_object:new(<<"bucket">>, <<"key">>, <<"original_data">>, dict:from_list([{<<"mutations">>, 0}])),
-            Object2 = riak_kv_mutator:mutate_put(Object, [{<<"bucket_prop">>, <<"warble">>}]),
+            {Object2, _MetaObject} = riak_kv_mutator:mutate_put(Object, [{<<"bucket_prop">>, <<"warble">>}]),
             Object3 = riak_kv_mutator:mutate_get(Object2),
-            ExpectedVal = <<"mutated">>,
+            ExpectedVal = <<"mutatedwarble">>,
             ExpectedMetaMutations = 2,
             ?assertEqual(ExpectedVal, riak_object:get_value(Object3)),
             ?assertEqual(ExpectedMetaMutations, dict:fetch(<<"mutations">>, riak_object:get_metadata(Object3)))
         end} end,
 
         fun(_) -> {"get mutations are reversed order from put mutators", fun() ->
-            meck:new(m1),
-            meck:new(m2),
-            meck:expect(m1, mutate_put, fun(Object, _Props) ->
-                Meta = riak_object:get_metadata(Object),
+            meck:new(m1, [non_strict]),
+            meck:new(m2, [non_strict]),
+            meck:expect(m1, mutate_put, fun(Meta, Value, MetaChanges, _Object, _Props) ->
                 Mutations = case dict:find(<<"mutations">>, Meta) of
                     {ok, N} ->
                         N * 2;
@@ -119,11 +118,10 @@ functionality_test_() ->
                         7
                 end,
                 Meta2 = dict:store(<<"mutations">>, Mutations, Meta),
-                Object2 = riak_object:update_metadata(Object, Meta2),
-                riak_object:apply_updates(Object2)
+                MetaChanges1 = dict:store(<<"mutations">>, Mutations, MetaChanges),
+                {Meta2, Value, MetaChanges1}
             end),
-            meck:expect(m2, mutate_put, fun(Object, _Props) ->
-                Meta = riak_object:get_metadata(Object),
+            meck:expect(m2, mutate_put, fun(Meta, Value, MetaChanges, _Object, _Props) ->
                 Mutations = case dict:find(<<"mutations">>, Meta) of
                     {ok, N} ->
                         N + 3;
@@ -131,11 +129,10 @@ functionality_test_() ->
                         20
                 end,
                 Meta2 = dict:store(<<"mutations">>, Mutations, Meta),
-                Object2 = riak_object:update_metadata(Object, Meta2),
-                riak_object:apply_updates(Object2)
+                MetaChanges1 = dict:store(<<"mutations">>, Mutations, MetaChanges),
+                {Meta2, Value, MetaChanges1}
             end),
-            meck:expect(m1, mutate_get, fun(Object) ->
-                Meta = riak_object:get_metadata(Object),
+            meck:expect(m1, mutate_get, fun(Meta, Value, _Object) ->
                 Mutations = case dict:find(<<"mutations">>, Meta) of
                     {ok, N} ->
                         N div 2;
@@ -143,11 +140,9 @@ functionality_test_() ->
                         9
                 end,
                 Meta2 = dict:store(<<"mutations">>, Mutations, Meta),
-                Obj2 = riak_object:update_metadata(Object, Meta2),
-                riak_object:apply_updates(Obj2)
+                {Meta2, Value}
             end),
-            meck:expect(m2, mutate_get, fun(Obj) ->
-                Meta = riak_object:get_metadata(Obj),
+            meck:expect(m2, mutate_get, fun(Meta, Value, _Obj) ->
                 Mutations = case dict:find(<<"mutations">>, Meta) of
                     {ok, N} ->
                         N - 3;
@@ -155,13 +150,12 @@ functionality_test_() ->
                         77
                 end,
                 Meta2 =  dict:store(<<"mutations">>, Mutations, Meta),
-                Obj2 = riak_object:update_metadata(Obj, Meta2),
-                riak_object:apply_updates(Obj2)
+                {Meta2, Value}
             end),
             riak_kv_mutator:register(m1),
             riak_kv_mutator:register(m2),
             Obj = riak_object:new(<<"bucket">>, <<"key">>, <<"data">>, dict:from_list([{<<"mutations">>, 11}])),
-            Obj2 = riak_kv_mutator:mutate_put(Obj, []),
+            {Obj2, _Faked} = riak_kv_mutator:mutate_put(Obj, []),
             Obj3 = riak_kv_mutator:mutate_get(Obj2),
             Meta = riak_object:get_metadata(Obj3),
             ?assertEqual({ok, 11}, dict:find(<<"mutations">>, Meta))
@@ -176,20 +170,13 @@ purge_data_dir() ->
     [file:delete(File) || File <- filelib:wildcard(DataFiles)],
     file:del_dir(DataDir).
 
-mutate_put(Object, BucketProps) ->
-    mutate(Object, BucketProps).
-
-mutate_get(Object) ->
-    mutate(Object, []).
-
-mutate(Object, BucketProps) ->
+mutate_put(Meta, _Value, ExposedMeta, _Object, BucketProps) ->
     NewVal = case proplists:get_value(<<"bucket_prop">>, BucketProps) of
         BProp when is_binary(BProp) ->
             <<"mutated", BProp/binary>>;
         _ ->
             <<"mutated">>
     end,
-    Meta = riak_object:get_metadata(Object),
     Mutations = case dict:find(<<"mutations">>, Meta) of
         {ok, N} when is_integer(N) ->
             N + 1;
@@ -197,8 +184,17 @@ mutate(Object, BucketProps) ->
             0
     end,
     Meta2 = dict:store(<<"mutations">>, Mutations, Meta),
-    Object2 = riak_object:update_value(Object, NewVal),
-    Object3 = riak_object:update_metadata(Object2, Meta2),
-    riak_object:apply_updates(Object3).
+    RevealedMeta2 = dict:store(<<"mutations">>, Mutations, ExposedMeta),
+    {Meta2, NewVal, RevealedMeta2}.
+
+mutate_get(Meta, Value, _Object) ->
+    Mutations = case dict:find(<<"mutations">>, Meta) of
+        {ok, N} when is_integer(N) ->
+            N + 1;
+        _ ->
+            0
+    end,
+    Meta2 = dict:store(<<"mutations">>, Mutations, Meta),
+    {Meta2, Value}.
 
 -endif.

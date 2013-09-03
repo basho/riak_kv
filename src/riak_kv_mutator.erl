@@ -32,9 +32,14 @@
 
 -module(riak_kv_mutator).
 
+-include_lib("eunit/include/eunit.hrl").
+
 -export([register/1, register/2, unregister/1]).
 -export([get/0]).
 -export([mutate_put/2, mutate_get/1]).
+
+-callback mutate_put(Meta :: dict(), Value :: any(), ExposedMeta :: dict(), FullObject :: riak_object:riak_object(), BucketProps :: orddict:orddict()) -> {dict(), any(), dict()}.
+-callback mutate_get(Meta :: dict(), Value :: any(), FullObject :: riak_object:riak_object()) -> {dict(), any()}.
 
 -define(DEFAULT_PRIORITY, 0).
 
@@ -73,30 +78,44 @@ get() ->
     {ok, Modules}.
 
 mutate_get(Object) ->
-    Meta = riak_object:get_metadata(Object),
-    {AppliedMutators, Meta2} = case dict:find(mutators_applied, Meta) of
+    Contents = riak_object:get_contents(Object),
+    Contents2 = lists:map(fun({InMeta, InValue}) ->
+        maybe_get_mutate(InMeta, InValue, Object)
+    end, Contents),
+    riak_object:set_contents(Object, Contents2).
+
+maybe_get_mutate(Meta, Value, Object) ->
+    case dict:find(mutators_applied, Meta) of
         error ->
-            {[], Meta};
+            ?debugMsg("no mutators applied"),
+            {Meta, Value};
         {ok, Applied} ->
-            {Applied, dict:erase(mutators_applied, Meta)}
-    end,
-    Object2 = riak_object:update_metadata(Object, Meta2),
-    Object3 = riak_object:apply_updates(Object2),
-    FoldFun = fun(Module, Obj) ->
-        Module:mutate_get(Obj)
-    end,
-    lists:foldl(FoldFun, Object3, lists:reverse(AppliedMutators)).
+            ?debugFmt("muttors applied in put order: ~p", [Applied]),
+            lists:foldr(fun(Mutator, {InMeta, InValue}) ->
+                Mutator:mutate_get(InMeta, InValue, Object)
+            end, {Meta, Value}, Applied)
+    end.
 
 mutate_put(Object, BucketProps) ->
-    FoldFun = fun(Module, Obj) ->
-        Module:mutate_put(Obj, BucketProps)
-    end,
+    Contents = riak_object:get_contents(Object),
     {ok, Modules} = ?MODULE:get(),
-    Object2 = lists:foldl(FoldFun, Object, Modules),
-    Meta = riak_object:get_metadata(Object2),
-    Meta2 = dict:store(mutators_applied, Modules, Meta),
-    Object3 = riak_object:update_metadata(Object2, Meta2),
-    riak_object:apply_updates(Object3).
+    MetasValuesRevealeds = lists:map(fun({InMeta, InValue}) ->
+        {InMeta1, InValue1, InRevealed} = lists:foldl(fun(Module, {InInMeta, InInValue, InInRevealed}) ->
+            Module:mutate_put(InInMeta, InInValue, InInRevealed, Object, BucketProps)
+        end, {InMeta, InValue, dict:new()}, Modules),
+        InMeta2 = dict:store(mutators_applied, Modules, InMeta1),
+        {InMeta2, InValue1, InRevealed}
+    end, Contents),
+    Contents2 = [{M,V} || {M,V,_R} <- MetasValuesRevealeds],
+    Mutated = riak_object:set_contents(Object, Contents2),
+    FakedContents = lists:map(fun({InMeta, InContent, InRevealed}) ->
+        FixedMeta = dict:merge(fun(_Key, _NotMutated, MutatedVal) ->
+            MutatedVal
+        end, InMeta, InRevealed),
+        {FixedMeta, InContent}
+    end, MetasValuesRevealeds),
+    Faked = riak_object:set_contents(Object, FakedContents),
+    {Mutated, Faked}.
 
 merge_values([]) ->
     [];
