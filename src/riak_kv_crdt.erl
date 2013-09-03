@@ -98,23 +98,22 @@ merge_value(NonCRDT, {Dict, NonCRDTSiblings}) ->
 
 %% @doc Apply the updates to the CRDT.
 update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op, ctx=undefined}) ->
-    InitialVal = Mod:update(Op, Actor, Mod:new()),
-    orddict:update(Mod, fun({Meta, CRDT=?CRDT{value=Value}}) ->
-                               {Meta, CRDT?CRDT{value=Mod:update(Op, Actor, Value)}} end,
-                  {undefined, to_record(Mod, InitialVal)},
-                   Dict);
+    {Meta, Record, Value} = fetch_with_default(Mod, Dict),
+    {ok, NewVal} = Mod:update(Op, Actor, Value),
+    orddict:store(Mod, {Meta, Record?CRDT{value=NewVal}}, Dict);
 update_crdt(Dict, Actor, ?CRDT_OP{mod=?MAP_TYPE=Mod, op=Ops, ctx=OpCtx}) ->
     Ctx = context_to_crdt(Mod, OpCtx),
     {PreOps, PostOps} = split_ops(Ops),
-    InitialVal = Mod:update(PreOps, Actor, Ctx),
+    {ok, InitialVal} = Mod:update(PreOps, Actor, Ctx),
     orddict:update(Mod, fun({Meta, CRDT=?CRDT{value=Value}}) ->
                                 Merged = Mod:merge(InitialVal, Value),
-                                {Meta, CRDT?CRDT{value=Mod:update(PostOps, Actor, Merged)}} end,
+                                NewValue = Mod:update(PostOps, Actor, Merged),
+                                {Meta, CRDT?CRDT{value=NewValue}} end,
                    {undefined, to_record(Mod, InitialVal)},
                    Dict);
-update_crdt(Dict, Actor, ?CRDT_OP{mod=?SET_TYPE=Mod, op={remove, _}=Op, ctx=OpCtx}) ->
+update_crdt(Dict, Actor, ?CRDT_OP{mod=?SET_TYPE=Mod, op={RemOp, _}=Op, ctx=OpCtx}) when RemOp == remove; RemOp == remove_all ->
     Ctx = context_to_crdt(Mod, OpCtx),
-    InitialVal = Mod:update(Op, Actor, Ctx),
+    {ok, InitialVal} = Mod:update(Op, Actor, Ctx),
     orddict:update(Mod, fun({Meta, CRDT=?CRDT{value=Value}}) ->
                                 {Meta, CRDT?CRDT{value=Mod:merge(InitialVal, Value)}} end,
                    {undefined, to_record(Mod, InitialVal)},
@@ -124,6 +123,17 @@ context_to_crdt(Mod, undefined) ->
     Mod:new();
 context_to_crdt(Mod, Ctx) ->
     Mod:from_binary(Ctx).
+
+%% @doc get the merged CRDT for type `Mod' from the dictionary. If it
+%% is not present generate a default entry
+fetch_with_default(Mod, Dict) ->
+    case orddict:find(Mod, Dict) of
+        error ->
+            Value = Mod:new(),
+            {undefined, to_record(Mod, Value), Value};
+        {ok, {Meta, Record=?CRDT{value=Value}}} ->
+            {Meta, Record, Value}
+    end.
 
 %% @private Takes an update operation and splits it into two update
 %% operations.  returns {pre, post} where pre is an update operation
@@ -259,27 +269,16 @@ to_mod("counters") ->
     ?COUNTER_TYPE;
 to_mod("maps") ->
     ?MAP_TYPE;
-to_mod(set) ->
-    ?SET_TYPE;
-to_mod(counter) ->
-    ?COUNTER_TYPE;
-to_mod(register) ->
-    ?LWW_TYPE;
-to_mod(flag) ->
-    ?FLAG_TYPE;
-to_mod(_) ->
-    undefined.
+to_mod(Type) ->
+    proplists:get_value(Type, ?MOD_MAP).
 
-from_mod(?SET_TYPE) ->
-    set;
-from_mod(?COUNTER_TYPE) ->
-    counter;
-from_mod(?LWW_TYPE) ->
-    register;
-from_mod(?MAP_TYPE) ->
-    map;
-from_mod(?FLAG_TYPE) ->
-    flag.
+from_mod(Mod) ->
+    case lists:keyfind(Mod, 2, ?MOD_MAP) of
+        {Type, Mod} ->
+            Type;
+        false ->
+            undefined
+    end.
 
 %% @Doc the update context can be empty for some types.
 %% Those that support an precondition_context should supply

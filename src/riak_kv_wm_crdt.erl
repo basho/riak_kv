@@ -120,7 +120,7 @@ init(Props) ->
               riak=proplists:get_value(riak, Props)}}.
 
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
-    Type = riak_kv_crdt:to_type(wrq:path_info(crdt, RD)),
+    Type = riak_kv_crdt:to_mod(wrq:path_info(crdt, RD)),
     OpCtx = get_op_context(wrq:get_req_header(?HEAD_CRDT_CONTEXT, RD)),
     case riak_kv_crdt:supported(Type) of
         true ->
@@ -323,7 +323,7 @@ map_to_json([{{Name, Type}, Val} | Rest], Acc) ->
     map_to_json(Rest, [Elem | Acc]).
 
 make_name(Name, Type) ->
-    lists:flatten(io_lib:format("~s_~s", [Name, riak_kv_crdt:from_type(Type)])).
+    lists:flatten(io_lib:format("~s_~s", [Name, riak_kv_crdt:from_mod(Type)])).
 
 ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};
@@ -405,4 +405,4 @@ handle_common_error(Reason, RD, Ctx) ->
 
 %% @dc Webmachine dispatch guard for crdt resource
 known_type(ReqData) ->
-    undefined /= riak_kv_crdt:to_type(wrq:path_info(crdt, ReqData)).
+    undefined /= riak_kv_crdt:to_mod(wrq:path_info(crdt, ReqData)).
