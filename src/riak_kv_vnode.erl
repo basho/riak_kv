@@ -1107,14 +1107,14 @@ perform_put({true, Obj},
                      bprops=BProps,
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
-    Obj2 = riak_kv_mutator:mutate_put(Obj, BProps),
+    {Obj2, Fake} = riak_kv_mutator:mutate_put(Obj, BProps),
     case encode_and_put(Obj2, Mod, Bucket, Key, IndexSpecs, ModState) of
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             ?INDEX(Obj, put, Idx),
             case RB of
                 true ->
-                    Reply = {dw, Idx, Obj, ReqID};
+                    Reply = {dw, Idx, Fake, ReqID};
                 false ->
                     Reply = {dw, Idx, ReqID}
             end;
