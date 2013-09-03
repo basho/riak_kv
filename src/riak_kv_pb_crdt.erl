@@ -80,8 +80,9 @@ encode(Message) ->
 process(#dtfetchreq{bucket=B, key=K, r=R0, pr=PR0,
                     notfound_ok=NFOk, basic_quorum=BQ,
                     sloppy_quorum=SloppyQ, n_val=NVal,
-                    type=Type, include_context=InclCtx},
+                    type=BType, include_context=InclCtx},
         #state{client=C} = State) ->
+    Type = bucket_type_to_type(BType),
     Mod = riak_kv_crdt:to_mod(Type),
     case riak_kv_crdt:supported(Mod) of
         true ->
@@ -96,7 +97,7 @@ process(#dtfetchreq{bucket=B, key=K, r=R0, pr=PR0,
                 {ok, O} ->
                     {Ctx0, Value} = riak_kv_crdt:value(O, Mod),
                     Ctx = get_context(Ctx0, InclCtx),
-                    Resp = riak_pb_dt_codec:encode_fetch_response(Type, Value, Ctx),
+                    Resp = riak_pb_dt_codec:encode_fetch_response(Type, Value, Ctx, ?MOD_MAP),
                     {reply, Resp, State};
                 {error, notfound} ->
                     {reply, #dtfetchresp{}, State};
@@ -106,23 +107,26 @@ process(#dtfetchreq{bucket=B, key=K, r=R0, pr=PR0,
         false ->
             {error, {format, "~p is not supported", [Type]}, State}
     end;
-process(#dtupdatereq{bucket=B, key=K, type=Type,
+process(#dtupdatereq{bucket=B, key=K, type=BType,
                      w=W0, dw=DW0, pw=PW0, context=Ctx,
                      timeout=Timeout, sloppy_quorum=SloppyQ,
                      n_val=NVal, include_context=InclCtx,
-                     ops=Ops, return_body=RetVal},
+                     op=Op0, return_body=RetVal},
         #state{client=C} = State) ->
+    Type = bucket_type_to_type(BType),
     Mod = riak_kv_crdt:to_mod(Type),
     %% @TODO bucket type check
+    {Key, ReturnKey} = get_key(K),
     case riak_kv_crdt:supported(Mod) of
         true ->
-            O = riak_kv_crdt:new(B, K, Mod),
-            Op = get_crdt_op(Ops, Ctx),
+            O = riak_kv_crdt:new(B, Key, Mod),
+            Op = riak_pb_dt_codec:decode_operation(Op0),
             %% erlang_protobuffs encodes as 1/0/undefined
             W = decode_quorum(W0),
             DW = decode_quorum(DW0),
             PW = decode_quorum(PW0),
-            Options = [{crdt_op, Op}] ++ return_value(RetVal),
+            CrdtOp = make_operation(Mod, Op, Ctx),
+            Options = [{crdt_op, CrdtOp}] ++ return_value(RetVal),
             case C:put(O, make_option(w, W) ++
                            make_option(dw, DW) ++
                            make_option(pw, PW) ++
@@ -131,29 +135,39 @@ process(#dtupdatereq{bucket=B, key=K, type=Type,
                            make_option(n_val, NVal) ++
                            Options) of
                 ok ->
-                    {reply, #rpbcounterupdateresp{}, State};
+                    {reply, #dtupdateresp{key=ReturnKey}, State};
                 {ok, RObj} ->
-                    Value = riak_kv_counter:value(RObj),
-                    {reply, #rpbcounterupdateresp{value=Value}, State};
+                    {ReturnCtx, Value} = riak_kv_crdt:value(RObj, Type),
+                    {reply, update_resp(Type, Value, get_context(ReturnCtx, InclCtx)), State};
                 {error, notfound} ->
-                    {reply, #rpbcounterupdateresp{}, State};
+                    {reply, #dtupdateresp{}, State};
                 {error, Reason} ->
                     {error, {format, Reason}, State}
             end;
-        {_, false} ->
-            {error, {format, "Counters are not supported"}, State};
-        {false, true} ->
-            {error, {format, "Counters require bucket property 'allow_mult=true'"}, State}
+         false ->
+            {error, {format, "~p is not supported"}, [Type], State}
     end.
 
-get_crdt_op(Ops, Ctx) ->
-    ErlOp = erlify_ops(Ops, Ctx, []),
-    ?CRDT_OP{mod=Mod, op=ErlOp, context=Ctx}.
+get_key(undefined) ->
+    %% Generate a key, the user didn't supply one
+    Key = list_to_binary(riak_core_util:unique_id_62()),
+    {Key, Key};
+get_key(K) ->
+    {K, undefined}.
 
-erlify_ops([], Acc) ->
-    lists:reverse(Acc);
-erlify_ops() ->
+%% @TODO actually use bucket types, here I just fake it
+bucket_type_to_type(BType) ->
+    binary_to_atom(BType, utf8).
 
+make_operation(Mod, Op, Ctx) ->
+    #crdt_op{mod=Mod, op=Op, ctx=Ctx}.
+
+update_resp(map, Value, Ctx) ->
+    #dtupdateresp{map_value=Value, context=Ctx};
+update_resp(counter, Value, Ctx) ->
+    #dtupdateresp{counter_value=Value, context=Ctx};
+update_resp(set, Value, Ctx) ->
+    #dtupdateresp{set_value=Value, context=Ctx}.
 
 return_value(true) ->
     [returnbody];

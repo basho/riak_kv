@@ -16,6 +16,10 @@
 
 %% Internal Only Key->Map->Field->Type types
 -define(FLAG_TYPE, riak_dt_od_flag).
--define(LWW_TYPE, riak_dt_lwwreg).
+-define(REG_TYPE, riak_dt_lwwreg).
 
 -define(TOP_LEVEL_TYPES, [?COUNTER_TYPE, ?SET_TYPE, ?MAP_TYPE]).
+-define(ALL_TYPES, ?TOP_LEVEL_TYPES ++ [?FLAG_TYPE, ?REG_TYPE]).
+-define(MOD_MAP, [{map, ?MAP_TYPE}, {set, ?SET_TYPE},
+                  {counter, ?COUNTER_TYPE}, {flag, ?FLAG_TYPE},
+                  {register, ?REG_TYPE}]).
