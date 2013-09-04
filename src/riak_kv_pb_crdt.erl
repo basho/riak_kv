@@ -120,7 +120,7 @@ process(#dtupdatereq{bucket=B, key=K, type=BType,
     case riak_kv_crdt:supported(Mod) of
         true ->
             O = riak_kv_crdt:new(B, Key, Mod),
-            Op = riak_pb_dt_codec:decode_operation(Op0),
+            Op = riak_pb_dt_codec:decode_operation(Op0, ?MOD_MAP),
             %% erlang_protobuffs encodes as 1/0/undefined
             W = decode_quorum(W0),
             DW = decode_quorum(DW0),
