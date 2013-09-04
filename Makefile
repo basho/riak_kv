@@ -18,14 +18,8 @@ distclean: clean
 test: all	
 	./rebar skip_deps=true eunit
 
-deps:
-	./rebar get-deps
-
-
 docs:
 	./rebar skip_deps=true doc
 
 dialyzer: compile
 	@dialyzer -Wno_return -c apps/riak_kv/ebin
-
-
