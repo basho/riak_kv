@@ -82,10 +82,10 @@ process(#dtfetchreq{bucket=B, key=K, r=R0, pr=PR0,
                     sloppy_quorum=SloppyQ, n_val=NVal,
                     type=BType, include_context=InclCtx},
         #state{client=C} = State) ->
-    Type = bucket_type_to_type(BType),
+    {AllowMult, Type} = bucket_type_to_type(B, BType),
     Mod = riak_kv_crdt:to_mod(Type),
-    case riak_kv_crdt:supported(Mod) of
-        true ->
+    case {AllowMult, riak_kv_crdt:supported(Mod)} of
+        {true, true} ->
             R = decode_quorum(R0),
             PR = decode_quorum(PR0),
             case C:get(B, K, make_option(r, R) ++
@@ -104,8 +104,10 @@ process(#dtfetchreq{bucket=B, key=K, r=R0, pr=PR0,
                 {error, Reason} ->
                     {error, {format,Reason}, State}
             end;
-        false ->
-            {error, {format, "~p is not supported", [Type]}, State}
+        {false, _} ->
+            {error, {format, "Bucket must be allow_mult=true"}, State};
+        {true, false} ->
+            {error, {format, "`~p` is not a supported type", [Type]}, State}
     end;
 process(#dtupdatereq{bucket=B, key=K, type=BType,
                      w=W0, dw=DW0, pw=PW0, context=Ctx,
@@ -113,12 +115,11 @@ process(#dtupdatereq{bucket=B, key=K, type=BType,
                      n_val=NVal, include_context=InclCtx,
                      op=Op0, return_body=RetVal},
         #state{client=C} = State) ->
-    Type = bucket_type_to_type(BType),
+    {AllowMult, Type} = bucket_type_to_type(B, BType),
     Mod = riak_kv_crdt:to_mod(Type),
-    %% @TODO bucket type check
     {Key, ReturnKey} = get_key(K),
-    case riak_kv_crdt:supported(Mod) of
-        true ->
+    case {AllowMult, riak_kv_crdt:supported(Mod)} of
+        {true, true} ->
             O = riak_kv_crdt:new(B, Key, Mod),
             Op = riak_pb_dt_codec:decode_operation(Op0, ?MOD_MAP),
             %% erlang_protobuffs encodes as 1/0/undefined
@@ -144,40 +145,11 @@ process(#dtupdatereq{bucket=B, key=K, type=BType,
                 {error, Reason} ->
                     {error, {format, Reason}, State}
             end;
-         false ->
-            {error, {format, "~p is not supported"}, [Type], State}
+        {false, _} ->
+            {error, {format, "Bucket must be allow_mult=true"}, State};
+        {true, false} ->
+            {error, {format, "`~p` is not a supported type", [Type]}, State}
     end.
-
-get_key(undefined) ->
-    %% Generate a key, the user didn't supply one
-    Key = list_to_binary(riak_core_util:unique_id_62()),
-    {Key, Key};
-get_key(K) ->
-    {K, undefined}.
-
-%% @TODO actually use bucket types, here I just fake it
-bucket_type_to_type(BType) ->
-    binary_to_atom(BType, utf8).
-
-make_operation(Mod, Op, Ctx) ->
-    #crdt_op{mod=Mod, op=Op, ctx=Ctx}.
-
-update_resp(map, Value, Ctx) ->
-    #dtupdateresp{map_value=Value, context=Ctx};
-update_resp(counter, Value, Ctx) ->
-    #dtupdateresp{counter_value=Value, context=Ctx};
-update_resp(set, Value, Ctx) ->
-    #dtupdateresp{set_value=Value, context=Ctx}.
-
-return_value(true) ->
-    [returnbody];
-return_value(_) ->
-    [].
-
-get_context(_Ctx, false) ->
-   undefined;
-get_context(Ctx, true) ->
-    Ctx.
 
 %% @doc process_stream/3 callback. This service does not create any
 %% streaming responses and so ignores all incoming messages.
@@ -202,3 +174,37 @@ timeout(Timeout) when is_integer(Timeout), Timeout > 0 ->
     Timeout;
 timeout(_) ->
     ?DEFAULT_TIMEOUT.
+
+get_key(undefined) ->
+    %% Generate a key, the user didn't supply one
+    Key = list_to_binary(riak_core_util:unique_id_62()),
+    {Key, Key};
+get_key(K) ->
+    {K, undefined}.
+
+%% @TODO actually use bucket types, here I just fake it
+bucket_type_to_type(Bucket, _BType) ->
+    BProps = riak_core_bucket:get_bucket(Bucket),
+    DataType = proplists:get_value(datatype, BProps),
+    AllowMult = proplists:get_value(allow_mult, BProps),
+    {AllowMult, DataType}.
+
+make_operation(Mod, Op, Ctx) ->
+    #crdt_op{mod=Mod, op=Op, ctx=Ctx}.
+
+update_resp(map, Value, Ctx) ->
+    #dtupdateresp{map_value=Value, context=Ctx};
+update_resp(counter, Value, Ctx) ->
+    #dtupdateresp{counter_value=Value, context=Ctx};
+update_resp(set, Value, Ctx) ->
+    #dtupdateresp{set_value=Value, context=Ctx}.
+
+return_value(true) ->
+    [returnbody];
+return_value(_) ->
+    [].
+
+get_context(_Ctx, false) ->
+   undefined;
+get_context(Ctx, true) ->
+    Ctx.
