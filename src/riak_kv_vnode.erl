@@ -1022,8 +1022,14 @@ prepare_put(#state{vnodeid=VId,
                 false ->
                     IndexSpecs = []
             end,
-            ObjToStore = prepare_new_put(Coord, RObj, VId, StartTime, CRDTOp),
-            {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
+            case prepare_new_put(Coord, RObj, VId, StartTime, CRDTOp) of
+                {error, _}=E ->
+                    {{fail, Idx, E}, PutArgs}; %% NOTE subverts ReqId to Error
+                ObjToStore ->
+                    {{true, ObjToStore},
+                     PutArgs#putargs{index_specs=IndexSpecs,
+                                     is_index=IndexBackend}}
+            end;
         {ok, OldObj} ->
             case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
                 {oldobj, OldObj1} ->
@@ -1047,9 +1053,14 @@ prepare_put(#state{vnodeid=VId,
                                                                              PruneTime,
                                                                              BProps))
                     end,
-                    ObjToStore2 = handle_crdt(Coord, CRDTOp, VId, ObjToStore),
-                    {{true, ObjToStore2},
-                     PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}}
+                    case handle_crdt(Coord, CRDTOp, VId, ObjToStore) of
+                        {error, _}=E ->
+                            {{fail, Idx, E}, PutArgs};%% NOTE subverts ReqId to Error
+                        ObjToStore2 ->
+                            {{true, ObjToStore2},
+                             PutArgs#putargs{index_specs=IndexSpecs,
+                                             is_index=IndexBackend}}
+                    end
             end
     end.
 
@@ -1058,9 +1069,9 @@ prepare_new_put(true, RObj, VId, StartTime, undefined) ->
     riak_object:increment_vclock(RObj, VId, StartTime);
 prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
     VClockUp = riak_object:increment_vclock(RObj, VId, StartTime),
-    %% coordinating a _NEW_ counter operation means
-    %% creating + incrementing the counter.
-    %% Make a new counter, stuff it in the riak_object
+    %% coordinating a _NEW_ crdt operation means
+    %% creating + updating the crdt.
+    %% Make a new crdt, stuff it in the riak_object
     riak_kv_crdt:update(VClockUp, VId, CRDTOp);
 prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
     RObj.
@@ -1074,6 +1085,8 @@ handle_crdt(false, _CRDTOp, _Vid, RObj) ->
     %% there are siblings 'cos that is the point of CRDTs: no siblings
     riak_kv_crdt:merge(RObj).
 
+perform_put({fail, _, _}=Reply, State, _PutArgs) ->
+    {Reply, State};
 perform_put({false, Obj},
             #state{idx=Idx}=State,
             #putargs{returnbody=true,
