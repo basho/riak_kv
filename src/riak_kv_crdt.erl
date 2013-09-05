@@ -47,8 +47,12 @@
 %% in case of siblings of different types
 update(RObj, Actor, Operation) ->
     {CRDTs0, Siblings} = merge_object(RObj),
-    CRDTs = update_crdt(CRDTs0, Actor, Operation),
-    update_object(RObj, CRDTs, Siblings).
+    case update_crdt(CRDTs0, Actor, Operation) of
+        {error, _}=E ->
+            E;
+        CRDTs ->
+            update_object(RObj, CRDTs, Siblings)
+    end.
 
 merge(RObj) ->
     {CRDTs, Siblings} = merge_object(RObj),
@@ -96,28 +100,38 @@ merge_value({MD, <<?TAG:8/integer, ?V1_VERS:8/integer, CRDTBin/binary>>},
 merge_value(NonCRDT, {Dict, NonCRDTSiblings}) ->
     {Dict, [NonCRDT | NonCRDTSiblings]}.
 
-%% @doc Apply the updates to the CRDT.
+%% @doc Apply the updates to the CRDT.  If there is no context for the
+%% operation then apply the operation to the local merged replica, and
+%% risk preondition errors and unexpected behaviour.
+%% @see split_ops/1 for more explanation
 update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op, ctx=undefined}) ->
     {Meta, Record, Value} = fetch_with_default(Mod, Dict),
-    {ok, NewVal} = Mod:update(Op, Actor, Value),
-    orddict:store(Mod, {Meta, Record?CRDT{value=NewVal}}, Dict);
-update_crdt(Dict, Actor, ?CRDT_OP{mod=?MAP_TYPE=Mod, op=Ops, ctx=OpCtx}) ->
+    case Mod:update(Op, Actor, Value) of
+        {ok, NewVal} ->
+            orddict:store(Mod, {Meta, Record?CRDT{value=NewVal}}, Dict);
+        {error, _}=E -> E
+    end;
+update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx}) when Mod==?MAP_TYPE;
+                                                                    Mod==?SET_TYPE->
     Ctx = context_to_crdt(Mod, OpCtx),
     {PreOps, PostOps} = split_ops(Ops),
-    {ok, InitialVal} = Mod:update(PreOps, Actor, Ctx),
-    orddict:update(Mod, fun({Meta, CRDT=?CRDT{value=Value}}) ->
-                                Merged = Mod:merge(InitialVal, Value),
-                                NewValue = Mod:update(PostOps, Actor, Merged),
-                                {Meta, CRDT?CRDT{value=NewValue}} end,
-                   {undefined, to_record(Mod, InitialVal)},
-                   Dict);
-update_crdt(Dict, Actor, ?CRDT_OP{mod=?SET_TYPE=Mod, op={RemOp, _}=Op, ctx=OpCtx}) when RemOp == remove; RemOp == remove_all ->
-    Ctx = context_to_crdt(Mod, OpCtx),
-    {ok, InitialVal} = Mod:update(Op, Actor, Ctx),
-    orddict:update(Mod, fun({Meta, CRDT=?CRDT{value=Value}}) ->
-                                {Meta, CRDT?CRDT{value=Mod:merge(InitialVal, Value)}} end,
-                   {undefined, to_record(Mod, InitialVal)},
-                   Dict).
+    %% Apply Pre (remove) ops to the context
+    case Mod:update(PreOps, Actor, Ctx) of
+        {error, _}=E -> E;
+        {ok, InitialVal} ->
+            %% Merge with local replica and then apply post (add) ops
+            case orddict:find(Mod, Dict) of
+                error ->
+                    orddict:store(Mod, {undefined, to_record(Mod, InitialVal)});
+                {ok, {Meta, LocalCRDT=?CRDT{value=LocalReplica}}} ->
+                    Merged = Mod:merge(InitialVal, LocalReplica),
+                    case Mod:update(PostOps, Actor, Merged) of
+                        {error, _}=E -> E;
+                        {ok, NewVal} ->
+                            orddict:store(Mod, {Meta, LocalCRDT?CRDT{value=NewVal}}, Dict)
+                    end
+            end
+    end.
 
 context_to_crdt(Mod, undefined) ->
     Mod:new();
@@ -159,6 +173,12 @@ fetch_with_default(Mod, Dict) ->
 %% is not ideal.
 split_ops(Ops) when is_list(Ops) ->
     split_ops(Ops, [], []);
+split_ops({AddOp, _}=Op) when AddOp == add;
+                              AddOp == add_all ->
+    {{update, []}, {update, [Op]}};
+split_ops({RemOp, _}=Op) when RemOp == remove;
+                              RemOp == remove_all ->
+    {{update, [Op]}, {update, []}};
 split_ops({update, Ops}) ->
     {Pre, Post} = split_ops(Ops),
     {{update, Pre}, {update, Post}}.
@@ -167,7 +187,9 @@ split_ops([], Pre, Post) ->
     {lists:reverse(Pre), lists:reverse(Post)};
 split_ops([{remove, _Key}=Op | Rest], Pre, Post) ->
     split_ops(Rest, [Op | Pre], Post);
-split_ops([{update, _Key, {remove, _}}=Op | Rest], Pre, Post) -> %% BAD! Knows about the set remove operation
+split_ops([{remove_all, _ELems}=Op | Rest], Pre, Post) ->
+    split_ops(Rest, [Op | Pre], Post);
+split_ops([{update, _Key, {remove, _}}=Op | Rest], Pre, Post) ->
     split_ops(Rest, [Op | Pre], Post);
 split_ops([{update, {_Name, ?MAP_TYPE}=Key, Op} | Rest], Pre0, Post0) ->
     {Pre, Post} = split_ops(Op),
@@ -296,22 +318,22 @@ get_context(Type, Value) ->
 
 -ifdef(EQC).
 
--define(NUM_TESTS, 1000).
+-define(TEST_TIME_SECONDS, 15).
 
 eqc_test_() ->
-    [?_assert(test_split() =:= true)].
+    {timeout, ?TEST_TIME_SECONDS+5, [?_assert(test_split() =:= true)]}.
 
 test_split() ->
-    test_split(?NUM_TESTS).
+    test_split(?TEST_TIME_SECONDS).
 
-test_split(NumTests) ->
-    eqc:quickcheck(eqc:numtests(NumTests, prop_split())).
+test_split(TestTimeSeconds) ->
+    eqc:quickcheck(eqc:testing_time(TestTimeSeconds, prop_split())).
 
 prop_split() ->
-    ?FORALL(Ops, riak_dt_multi:gen_op(),
+    ?FORALL(Ops, oneof([riak_dt_multi:gen_op(), riak_dt_vvorset:gen_op()]),
             begin
                 {Pre, Post} = split_ops(Ops),
-                {update, AgOps} = Ops,
+                AgOps = to_list(Ops),
                 ?WHENFAIL(
                    begin
                        io:format("Generated Ops ~p~n", [Ops]),
@@ -322,14 +344,17 @@ prop_split() ->
                            collect(depth(AgOps, 0),
                                    conjunction([
                                                 {pre, only_rem_ops(Pre)},
-                                                {pre_depth, equals(depth(Pre, 0), depth(Ops, 0))},
+                                                {pre_depth, equals(depth(Pre, 0), depth(AgOps, 0))},
                                                 {post, only_add_ops(Post)},
-                                                {post_depth, equals(depth(Post, 0), depth(Ops, 0))}
+                                                {post_depth, equals(depth(Post, 0), depth(AgOps, 0))}
                                                ])))
                   )
             end).
 
-
+to_list({update, Ops}) ->
+    Ops;
+to_list(Op) ->
+    [Op].
 
 depth({update, Ops}, Depth) ->
     depth(Ops, Depth);
@@ -368,6 +393,8 @@ is_add_op(Op) ->
 is_rem_op({update, {_Name, ?MAP_TYPE}, {update, Ops}}) ->
     only_rem_ops(Ops);
 is_rem_op({remove, _Key}) ->
+    true;
+is_rem_op({remove_all, _Elems}) ->
     true;
 is_rem_op({update, _Key, {remove, _Elem}}) ->
     true;
