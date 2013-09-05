@@ -285,7 +285,7 @@ from_mod(Mod) ->
 %% a smaller than Type:to_binary(Value) binary context.
 get_context(Type, Value) ->
     case lists:member({precondition_context, 1}, Type:module_info(exports)) of
-        true -> Type:precondition_context(Value);
+        true -> Type:to_binary(Type:precondition_context(Value));
         false -> <<>>
     end.
 
