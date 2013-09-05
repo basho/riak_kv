@@ -150,7 +150,18 @@ done(_State) ->
                           bucket_or_filter(),
                           timeout()) ->
          ok | {error, Reason :: term()}.
-queue_existing_pipe(Pipe, Bucket, Timeout) ->
+queue_existing_pipe(Pipe, Input, Timeout) ->
+    Bucket = case Input of
+                 {T, B} when is_binary(T), is_binary(B) ->
+                     %% type and bucket
+                     {T, B};
+                 B when is_binary(B) ->
+                     %% just bucket
+                     B;
+                 {B, Filter} when is_list(Filter) ->
+                     %% bucket with filter
+                     B
+             end,
     %% make our tiny pipe
     [{_Name, Head}|_] = Pipe#pipe.fittings,
     Period = riak_kv_mrc_pipe:sink_sync_period(),
@@ -168,7 +179,7 @@ queue_existing_pipe(Pipe, Bucket, Timeout) ->
     NVal = proplists:get_value(n_val, BucketProps),
     {ok, Sender} = riak_pipe_qcover_sup:start_qcover_fsm(
                      [{raw, ReqId, self()},
-                      [LKP, Bucket, NVal]]),
+                      [LKP, Input, NVal]]),
 
     %% wait for cover to hit everything
     {RealTO, TOReason} =
