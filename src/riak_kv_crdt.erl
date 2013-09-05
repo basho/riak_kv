@@ -317,8 +317,11 @@ get_context(Type, Value) ->
 -ifdef(TEST).
 
 -ifdef(EQC).
+-define(QC_OUT(P),
+        eqc:on_output(fun(Str, Args) ->
+                              io:format(user, Str, Args) end, P)).
 
--define(TEST_TIME_SECONDS, 15).
+-define(TEST_TIME_SECONDS, 10).
 
 eqc_test_() ->
     {timeout, ?TEST_TIME_SECONDS+5, [?_assert(test_split() =:= true)]}.
@@ -327,7 +330,7 @@ test_split() ->
     test_split(?TEST_TIME_SECONDS).
 
 test_split(TestTimeSeconds) ->
-    eqc:quickcheck(eqc:testing_time(TestTimeSeconds, prop_split())).
+    eqc:quickcheck(eqc:testing_time(TestTimeSeconds, ?QC_OUT(prop_split()))).
 
 prop_split() ->
     ?FORALL(Ops, oneof([riak_dt_multi:gen_op(), riak_dt_vvorset:gen_op()]),
