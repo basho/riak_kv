@@ -23,3 +23,6 @@
 -define(MOD_MAP, [{map, ?MAP_TYPE}, {set, ?SET_TYPE},
                   {counter, ?COUNTER_TYPE}, {flag, ?FLAG_TYPE},
                   {register, ?REG_TYPE}]).
+
+-type crdt() :: ?CRDT{}.
+-type crdt_op() :: ?CRDT_OP{}.

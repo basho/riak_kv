@@ -43,8 +43,17 @@
 -define(TAG, 69).
 -define(V1_VERS, 1).
 
-%% NOTE operation needs to be a ?CRDT_OP
-%% in case of siblings of different types
+-type crdts() :: [{DT_MOD::module(), crdt()}].
+-type ro_content() :: {Meta::dict(), Value::binary()}.
+-type ro_contents() :: [ro_content()].
+-type precondition_error() :: {error, {precondition, {not_present, term()}}}.
+
+%% @doc applies the gievn `Operation' to the merged value.  first
+%% performs a merge (@see merge/1), and then applies the update.
+%% NOTE: operation needs to be a ?CRDT_OP in case of siblings of different
+%% types
+-spec update(riak_object:riak_object(), riak_dt:actor(), riak_dt:operation()) ->
+                    riak_object:riak_object() | precondition_error().
 update(RObj, Actor, Operation) ->
     {CRDTs0, Siblings} = merge_object(RObj),
     case update_crdt(CRDTs0, Actor, Operation) of
@@ -54,39 +63,59 @@ update(RObj, Actor, Operation) ->
             update_object(RObj, CRDTs, Siblings)
     end.
 
+%% @doc Merge all sibling values that are CRDTs into a single value
+%% for that CRDT type.  NOTE: handles sibling types. For example if
+%% there are 5 siblings, 2 or which are riak_dt_pncounter, and 2 are
+%% riak_dt_vvorset, and 1 user supplied opaque value, then the results
+%% is a converge counter, a converged set, and the opaque sibling, a
+%% total of 3 sibings. Hopefully with bucket types, sibling types will
+%% NEVER occur.
+-spec merge(riak_object:riak_object()) -> riak_object:riak_object().
 merge(RObj) ->
     {CRDTs, Siblings} = merge_object(RObj),
     update_object(RObj, CRDTs, Siblings).
 
+%% @doc for the given riak_object `RObj' and the provided `Type',
+%% which must be a support riak_dt crdt module, returns an update
+%% context, and user value. Performs a merge, then gets the CRDT end
+%% user value.  @see merge/1
+-spec value(riak_object:riak_object(), module()) -> {binary(), riak_dt:value()}.
 value(RObj, Type) ->
     {CRDTs, _NonCRDTSiblings} = merge_object(RObj),
     crdt_value(Type, orddict:find(Type, CRDTs)).
 
 %% @TODO in riak_dt change value to query allow query to take an
 %% argument, (so as to query subfields of map, or set membership etc)
+-spec crdt_value(module(), error | {ok, {dict(), crdt()}}) ->
+                        {binary(), riak_dt:value()}.
 crdt_value(Type, error) ->
     {<<>>, Type:new()};
 crdt_value(Type, {ok, {_Meta, ?CRDT{mod=Type, value=Value}}}) ->
     {get_context(Type, Value), Type:value(Value)}.
 
-%% Merge contents _AND_ meta
+%% @private Merge contents _AND_ meta
+-spec merge_object(riak_object:riak_object()) ->
+                          {crdts(), list()}.
 merge_object(RObj) ->
     Contents = riak_object:get_contents(RObj),
     merge_contents(Contents).
 
-%% Only merge the values of CRDTs
-%% If there are siblings that are CRDTs
-%% BUT NOT THE SAME TYPE (don't do that!!)
-%% Merge type-to-type and store a single sibling per-type
-%% If a non-CRDT datum is present, keep it as a sibling value
-%% The accumulator is a dict of type -> {meta, value}
-%% where meta and value are the most merged
+%% @private Only merge the values of CRDTs If there are siblings that
+%% are CRDTs BUT NOT THE SAME TYPE (don't do that!!)  Merge
+%% type-to-type and store a single sibling per-type If a non-CRDT data
+%% are present, keep them as sibling values
+-spec merge_contents(ro_contents()) ->
+                            {crdts(), ro_contents()}.
 merge_contents(Contents) ->
     lists:foldl(fun merge_value/2,
                 {orddict:new(), []},
                Contents).
 
-%% worker for `merge_contents/1'
+%% @private worker for `merge_contents/1' if the content is a CRDT,
+%% de-binary it, merge it and store the most merged value in the
+%% accumulartor dictionary.
+-spec merge_value(ro_content(), {crdts(), ro_contents()}) ->
+                         {crdts(), ro_contents()}.
 merge_value({MD, <<?TAG:8/integer, ?V1_VERS:8/integer, CRDTBin/binary>>},
             {Dict, NonCounterSiblings}) ->
     CRDT=?CRDT{mod=Mod, value=Val, ctype=CType} = crdt_from_binary(CRDTBin),
@@ -100,10 +129,12 @@ merge_value({MD, <<?TAG:8/integer, ?V1_VERS:8/integer, CRDTBin/binary>>},
 merge_value(NonCRDT, {Dict, NonCRDTSiblings}) ->
     {Dict, [NonCRDT | NonCRDTSiblings]}.
 
-%% @doc Apply the updates to the CRDT.  If there is no context for the
-%% operation then apply the operation to the local merged replica, and
-%% risk preondition errors and unexpected behaviour.
+%% @private Apply the updates to the CRDT. If there is no context for
+%% the operation then apply the operation to the local merged replica,
+%% and risk precondition errors and unexpected behaviour.
+%%
 %% @see split_ops/1 for more explanation
+-spec update_crdt(orddict:orddict(), riak_dt:actor(), crdt_op()) -> orddict:ordddict() | precondition_error().
 update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op, ctx=undefined}) ->
     {Meta, Record, Value} = fetch_with_default(Mod, Dict),
     case Mod:update(Op, Actor, Value) of
@@ -122,7 +153,7 @@ update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx}) when Mod==?MAP_TY
             %% Merge with local replica and then apply post (add) ops
             case orddict:find(Mod, Dict) of
                 error ->
-                    orddict:store(Mod, {undefined, to_record(Mod, InitialVal)});
+                    orddict:store(Mod, {undefined, to_record(Mod, InitialVal)}, Dict);
                 {ok, {Meta, LocalCRDT=?CRDT{value=LocalReplica}}} ->
                     Merged = Mod:merge(InitialVal, LocalReplica),
                     case Mod:update(PostOps, Actor, Merged) of
@@ -133,6 +164,7 @@ update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx}) when Mod==?MAP_TY
             end
     end.
 
+-spec context_to_crdt(module(), undefined | binary()) -> riak_dt:crdt().
 context_to_crdt(Mod, undefined) ->
     Mod:new();
 context_to_crdt(Mod, Ctx) ->
