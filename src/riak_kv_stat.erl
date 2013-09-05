@@ -120,29 +120,15 @@ stop() ->
 
 init([]) ->
     register_stats(),
-    State = #state{monitors = [spawn_link(?MODULE, monitor_loop, [index]),
-                               spawn_link(?MODULE, monitor_loop, [list])],
-                   repair_mon = spawn_monitor(fun() -> stat_repair_loop() end)},
+    Me = self(),
+    State = #state{monitors = [{index, spawn_link(?MODULE, monitor_loop, [index])},
+                               {list, spawn_link(?MODULE, monitor_loop, [list])}],
+                   repair_mon = spawn_monitor(fun() -> stat_repair_loop(Me) end)},
     {ok, State}.
 
 handle_call({register, Name, Type}, _From, State) ->
     Rep = do_register_stat(Name, Type),
-    {reply, Rep, State};
-handle_call({get_monitor, Type}, _From, State) ->
-    Monitors = State#state.monitors,
-    [Monitor] = lists:filter(fun(Mon) ->
-                                     Mon ! {get_type, self()},
-                                     receive
-                                         T when is_atom(T),
-                                                T == Type ->
-                                             true;
-                                         _ -> false
-                                     after
-                                         1000 -> false
-                                     end
-                             end,
-                             Monitors),
-    {reply, Monitor, State}.
+    {reply, Rep, State}.
 
 handle_cast({re_register_stat, Arg}, State) ->
     %% To avoid massive message queues
@@ -155,13 +141,21 @@ handle_cast({re_register_stat, Arg}, State) ->
     #state{repair_mon={Pid, _Mon}} = State,
     Pid ! {re_register_stat, Arg},
     {noreply, State};
+handle_cast({monitor, Type, Pid}, State) ->
+    case proplists:get_value(Type, State#state.monitors) of
+        Monitor when is_pid(Monitor) ->
+            Monitor ! {add_pid, Pid};
+        _ -> lager:error("Couldn't find process for ~p to add monitor", [Type])
+    end,
+    {noreply, State};
 handle_cast(stop, State) ->
     {stop, normal, State};
 handle_cast(_Req, State) ->
     {noreply, State}.
 
 handle_info({'DOWN', MonRef, process, Pid, _Cause}, State=#state{repair_mon={Pid, MonRef}}) ->
-    RepairMonitor = spawn_monitor(fun() -> stat_repair_loop() end),
+    Me = self(),
+    RepairMonitor = spawn_monitor(fun() -> stat_repair_loop(Me) end),
     {noreply, State#state{repair_mon=RepairMonitor}};
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -247,20 +241,12 @@ do_update({fsm_destroy, Type}) ->
 %% private
 
 add_monitor(Type, Pid) ->
-    M = gen_server:call(?SERVER, {get_monitor, Type}),
-    case M of
-        Mon when is_pid(Mon) ->
-            Mon ! {add_pid, Pid};
-        error ->
-            lager:error("No couldn't find procress to add monitor")
-    end.
+    gen_server:cast(?SERVER, {monitor, Type, Pid}).
 
 monitor_loop(Type) ->
     receive
         {add_pid, Pid} ->
             erlang:monitor(process, Pid);
-        {get_type, Sender} ->
-            Sender ! Type;
         {'DOWN', _Ref, process, _Pid, _Reason} ->
             do_update({fsm_destroy, Type})
     end,
@@ -486,9 +472,15 @@ stat_repair_loop() ->
         {re_register_stat, Arg} ->
             re_register_stat(Arg),
             stat_repair_loop();
+        {'DOWN', _, process, _, _} ->
+            ok;
         _ ->
             stat_repair_loop()
     end.
+
+stat_repair_loop(Dad) ->
+    erlang:monitor(process, Dad),
+    stat_repair_loop().
 
 re_register_stat(Arg) ->
     case (catch do_update(Arg)) of

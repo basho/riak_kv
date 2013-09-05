@@ -215,11 +215,11 @@ handle_streaming_index_query(RD, Ctx) ->
 
     Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults}]),
 
-    {ok, ReqID} =  Client:stream_get_index(Bucket, Query, Opts),
-    StreamFun = index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, undefined, 0),
+    {ok, ReqID, FSMPid} =  Client:stream_get_index(Bucket, Query, Opts),
+    StreamFun = index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, proplists:get_value(timeout, Opts), undefined, 0),
     {{stream, {<<>>, StreamFun}}, CTypeRD, Ctx}.
 
-index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count) ->
+index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult, Count) ->
     fun() ->
             receive
                 {ReqID, done} ->
@@ -234,7 +234,7 @@ index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)
                             end,
                     {iolist_to_binary(Final), done};
                 {ReqID, {results, []}} ->
-                    {<<>>, index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)};
+                    {<<>>, index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult, Count)};
                 {ReqID, {results, Results}} ->
                     %% JSONify the results
                     JsonResults = encode_results(ReturnTerms, Results),
@@ -244,19 +244,52 @@ index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)
                     LastResult1 = last_result(Results),
                     Count1 = Count + length(Results),
                     {iolist_to_binary(Body),
-                     index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult1, Count1)};
+                     index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult1, Count1)};
                 {ReqID, Error} ->
-                    lager:error("Error in index wm: ~p", [Error]),
-                    ErrorJson = mochijson2:encode({struct, [{error, Error}]}),
-                    Body = ["\r\n--", Boundary, "\r\n",
-                            "Content-Type: application/json\r\n\r\n",
-                            ErrorJson,
-                            "\r\n--", Boundary, "--\r\n"],
-                    {iolist_to_binary(Body), done}
-            after 60000 ->
-                    {error, timeout}
+                    stream_error(Error, Boundary)
+            after Timeout ->
+                    whack_index_fsm(ReqID, FSMPid),
+                    stream_error({error, timeout}, Boundary)
             end
     end.
+
+whack_index_fsm(ReqID, Pid) ->
+    wait_for_death(Pid),
+    clear_index_fsm_msgs(ReqID).
+
+wait_for_death(Pid) ->
+    Ref = erlang:monitor(process, Pid),
+    exit(Pid, kill),
+    receive
+        {'DOWN', Ref, process, Pid, _Info} ->
+            ok
+    end.
+
+clear_index_fsm_msgs(ReqID) ->
+    receive
+        {ReqID, _} ->
+            clear_index_fsm_msgs(ReqID)
+    after
+        0 ->
+            ok
+    end.
+
+stream_error(Error, Boundary) ->
+    lager:error("Error in index wm: ~p", [Error]),
+    ErrorJson = encode_error(Error),
+    Body = ["\r\n--", Boundary, "\r\n",
+            "Content-Type: application/json\r\n\r\n",
+            ErrorJson,
+            "\r\n--", Boundary, "--\r\n"],
+    {iolist_to_binary(Body), done}.
+
+encode_error({error, E}) ->
+    encode_error(E);
+encode_error(Error) when is_atom(Error); is_binary(Error) ->
+    mochijson2:encode({struct, [{error, Error}]});
+encode_error(Error) ->
+    E = io_lib:format("~p",[Error]),
+    mochijson2:encode({struct, [{error, erlang:iolist_to_binary(E)}]}).
 
 handle_all_in_memory_index_query(RD, Ctx) ->
     Client = Ctx#ctx.client,
@@ -274,6 +307,13 @@ handle_all_in_memory_index_query(RD, Ctx) ->
             Continuation = make_continuation(MaxResults, Results, length(Results)),
             JsonResults = encode_results(ReturnTerms, Results, Continuation),
             {JsonResults, RD, Ctx};
+        {error, timeout} ->
+            {{halt, 503},
+             wrq:set_resp_header("Content-Type", "text/plain",
+                                 wrq:append_to_response_body(
+                                   io_lib:format("request timed out~n",[]),
+                                   RD)),
+             Ctx};
         {error, Reason} ->
             {{error, Reason}, RD, Ctx}
     end.
