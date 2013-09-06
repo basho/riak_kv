@@ -39,9 +39,8 @@
 
 -module(riak_kv_pb_crdt).
 
-%% @TODO REVERT THESE PATHS!!!
--include_lib("../../riak_pb/include/riak_dt_pb.hrl").
--include_lib("../../riak_pb/include/riak_pb_kv_codec.hrl").
+-include_lib("riak_pb/include/riak_dt_pb.hrl").
+-include_lib("riak_pb/include/riak_pb_kv_codec.hrl").
 -include_lib("riak_kv_types.hrl").
 
 -behaviour(riak_api_pb_service).
