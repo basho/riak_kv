@@ -121,7 +121,9 @@ filter_buckets([], _Type, Acc) ->
     Acc;
 filter_buckets([{Type, Bucket}|Rest], Type, Acc) ->
     filter_buckets(Rest, Type, [Bucket|Acc]);
-filter_buckets([Bucket|Rest], Type = <<"default">>, Acc) when is_binary(Bucket) ->
+filter_buckets([Bucket|Rest], Type, Acc) when is_binary(Bucket),
+                                              Type == undefined orelse
+                                              Type == <<"default">> ->
     filter_buckets(Rest, Type, [Bucket|Acc]);
 filter_buckets([_|Rest], Type, Acc) ->
     %% does not match

@@ -375,7 +375,6 @@ stream_list_keys(Bucket, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      keys in Bucket on any single vnode.
 stream_list_keys(Input, Timeout, Client, {?MODULE, [Node, _ClientId]}) when is_pid(Client) ->
     ReqId = mk_reqid(),
-    lager:info("input is ~p", [Input]),
     case Input of
         %% buckets with bucket types are also a 2-tuple, so be careful not to
         %% treat the bucket type like a filter
