@@ -509,13 +509,13 @@ stream_list_buckets(Filter, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      out of date if called immediately after any operation that
 %%      either adds the first key or removes the last remaining key from
 %%      a bucket.
-stream_list_buckets(Filter, Timeout, Type, 
-                    {?MODULE, [_Node, _ClientId]}=THIS) when is_binary(Type) ->
-    Me = self(),
-    stream_list_buckets(Filter, Timeout, Me, Type, THIS);
 stream_list_buckets(Filter, Timeout, Client, 
+                    {?MODULE, [_Node, _ClientId]}=THIS) when is_pid(Client) ->
+    stream_list_buckets(Filter, Timeout, Client, <<"default">>, THIS);
+stream_list_buckets(Filter, Timeout, Type,
                     {?MODULE, [_Node, _ClientId]}=THIS) ->
-    stream_list_buckets(Filter, Timeout, Client, <<"default">>, THIS).
+    Me = self(),
+    stream_list_buckets(Filter, Timeout, Me, Type, THIS).
 
 stream_list_buckets(Filter, Timeout, Client, Type,
                     {?MODULE, [Node, _ClientId]}) ->
