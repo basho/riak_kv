@@ -141,7 +141,7 @@ all_index_info() ->
 filter_index_info() ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Primaries = riak_core_ring:my_indices(Ring),
-    Indices = ets:select(?ETS, [{{{index, '$1'}, '$2'}, [], ['$1']}]),
+    Indices = ets:select(?ETS, [{{{index, {'_', '$1'}}, '_'}, [], ['$1']}]),
     Others = ordsets:subtract(ordsets:from_list(Indices),
                               ordsets:from_list(Primaries)),
     [ets:match_delete(?ETS, {{index, {'_', Idx}}, '_'}) || Idx <- Others],
