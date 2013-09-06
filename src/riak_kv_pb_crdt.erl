@@ -100,9 +100,11 @@ process(#dtfetchreq{bucket=B, key=K, r=R0, pr=PR0,
                     Resp = riak_pb_dt_codec:encode_fetch_response(Type, Value, Ctx, ?MOD_MAP),
                     {reply, Resp, State};
                 {error, notfound} ->
-                    {reply, #dtfetchresp{}, State};
+                    Resp = riak_pb_dt_codec:encode_fetch_response(Type, undefined, undefined),
+                    {reply, Resp, State};
                 {error, Reason} ->
-                    {error, {format,Reason}, State}
+                    {error, {format,Reason}, State};
+                Other -> lager:info("got ~p", [Other])
             end;
         {false, _} ->
             {error, {format, "Bucket must be allow_mult=true"}, State};
