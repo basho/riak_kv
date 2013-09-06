@@ -542,33 +542,32 @@ get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
     riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults]]),
     wait_for_query_results(ReqId, Timeout).
 
-%% @spec stream_get_index(Bucket :: binary(),
-%%                        Query :: riak_index:query_def(),
-%%                        riak_client()) ->
-%%       {ok, pid()} |
-%%       {error, timeout} |
-%%       {error, Err :: term()}.
-%%
 %% @doc Run the provided index query, return a stream handle.
+-spec stream_get_index(Bucket :: binary(), Query :: riak_index:query_def(),
+                       riak_client()) ->
+    {ok, ReqId :: term(), FSMPid :: pid()} | {error, Reason :: term()}.
 stream_get_index(Bucket, Query, {?MODULE, [_Node, _ClientId]}=THIS) ->
     stream_get_index(Bucket, Query, [{timeout, ?DEFAULT_TIMEOUT}], THIS).
 
-%% @spec stream_get_index(Bucket :: binary(),
-%%                        Query :: riak_index:query_def(),
-%%                        TimeoutMillisecs :: integer(),
-%%                        riak_client()) ->
-%%       {ok, pid()} |
-%%       {error, timeout} |
-%%       {error, Err :: term()}.
-%%
 %% @doc Run the provided index query, return a stream handle.
+-spec stream_get_index(Bucket :: binary(), Query :: riak_index:query_def(),
+                       Opts :: proplists:proplist(), riak_client()) ->
+    {ok, ReqId :: term(), FSMPid :: pid()} | {error, Reason :: term()}.
 stream_get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
     Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
     MaxResults = proplists:get_value(max_results, Opts, all),
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults]]),
-    {ok, ReqId}.
+    case riak_kv_index_fsm_sup:start_index_fsm(Node,
+                                               [{raw, ReqId, Me},
+                                                [Bucket, none,
+                                                 Query, Timeout,
+                                                 MaxResults]]) of
+        {ok, Pid} ->
+            {ok, ReqId, Pid};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 %% @spec set_bucket(riak_object:bucket(), [BucketProp :: {atom(),term()}], riak_client()) -> ok
 %% @doc Set the given properties for Bucket.

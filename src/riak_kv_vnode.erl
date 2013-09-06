@@ -777,15 +777,22 @@ handoff_finished(_TargetNode, State) ->
     {ok, State}.
 
 handle_handoff_data(BinObj, State) ->
-    {BKey, Val} = decode_binary_object(BinObj),
-    {B, K} = BKey,
-    case do_diffobj_put(BKey, riak_object:from_binary(B, K, Val), State) of
-        {ok, UpdModState} ->
-            {reply, ok, State#state{modstate=UpdModState}};
-        {error, Reason, UpdModState} ->
-            {reply, {error, Reason}, State#state{modstate=UpdModState}};
-        Err ->
-            {reply, {error, Err}, State}
+    try
+        {BKey, Val} = decode_binary_object(BinObj),
+        {B, K} = BKey,
+        case do_diffobj_put(BKey, riak_object:from_binary(B, K, Val), 
+                            State) of
+            {ok, UpdModState} ->
+                {reply, ok, State#state{modstate=UpdModState}};
+            {error, Reason, UpdModState} ->
+                {reply, {error, Reason}, State#state{modstate=UpdModState}};
+            Err ->
+                {reply, {error, Err}, State}
+        end
+    catch Error:Reason2 ->
+            lager:warning("Unreadable object discarded in handoff: ~p:~p",
+                          [Error, Reason2]),
+            {reply, ok, State}
     end.
 
 encode_handoff_item({B, K}, V) ->
@@ -793,8 +800,14 @@ encode_handoff_item({B, K}, V) ->
     %% to one supported by the cluster. This way we don't send
     %% unsupported formats to old nodes
     ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
-    Value  = riak_object:to_binary_version(ObjFmt, B, K, V),
-    encode_binary_object(B, K, Value).
+    try
+        Value  = riak_object:to_binary_version(ObjFmt, B, K, V),
+        encode_binary_object(B, K, Value)
+    catch Error:Reason ->
+            lager:warning("Handoff encode failed: ~p:~p",
+                          [Error,Reason]),
+            corrupted
+    end.
 
 is_empty(State=#state{mod=Mod, modstate=ModState}) ->
     IsEmpty = Mod:is_empty(ModState),
@@ -962,8 +975,7 @@ prepare_put(State=#state{vnodeid=VId,
         false ->
             prepare_put(State, PutArgs, IndexBackend)
     end.
-prepare_put(#state{idx=Idx,
-                   vnodeid=VId,
+prepare_put(#state{vnodeid=VId,
                    mod=Mod,
                    modstate=ModState},
             PutArgs=#putargs{bkey={Bucket, Key},
@@ -978,13 +990,6 @@ prepare_put(#state{idx=Idx,
     GetReply =
         case do_get_object(Bucket, Key, Mod, ModState) of
             {error, not_found, _UpdModState} ->
-                ok;
-            % NOTE: bad_crc is NOT an official backend response. It is
-            % specific to bitcask currently and handling it may be changed soon.
-            % A standard set of responses will be agreed on
-            % https://github.com/basho/riak_kv/issues/496
-            {error, bad_crc, _UpdModState} ->
-                lager:info("Bad CRC detected while reading Partition=~p, Bucket=~p, Key=~p", [Idx, Bucket, Key]),
                 ok;
             {ok, TheOldObj, _UpdModState} ->
                 {ok, TheOldObj}
@@ -1211,11 +1216,17 @@ do_get_object(Bucket, Key, Mod, ModState) ->
         false ->
             case do_get_binary(Bucket, Key, Mod, ModState) of
                 {ok, ObjBin, _UpdModState} ->
-                    case riak_object:from_binary(Bucket, Key, ObjBin) of
-                        {error, R} ->
-                            throw(R);
-                        RObj ->
-                            {ok, RObj, _UpdModState}
+                    try
+                        case riak_object:from_binary(Bucket, Key, ObjBin) of
+                            {error, Reason} ->
+                                throw(Reason);
+                            RObj ->
+                                {ok, RObj, _UpdModState}
+                        end
+                    catch _:_ ->
+                            lager:warning("Unreadable object ~p/~p discarded",
+                                          [Bucket,Key]),
+                            {error, not_found, _UpdModState}
                     end;
                 Else ->
                     Else
