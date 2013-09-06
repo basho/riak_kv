@@ -39,7 +39,7 @@
 
 -module(riak_kv_pb_crdt).
 
--include_lib("riak_pb/include/riak_dt_pb.hrl").
+-include_lib("../../riak_pb/include/riak_dt_pb.hrl").
 -include_lib("riak_pb/include/riak_pb_kv_codec.hrl").
 -include_lib("riak_kv_types.hrl").
 
@@ -118,11 +118,13 @@ process(#dtupdatereq{bucket=B, key=K, type=BType,
         #state{client=C} = State) ->
     {AllowMult, Type} = bucket_type_to_type(B, BType),
     Mod = riak_kv_crdt:to_mod(Type),
+    Op = riak_pb_dt_codec:decode_operation(Op0, ?MOD_MAP),
+    OpType = riak_pb_dt_codec:operation_type(Op0),
+    ModsMatch = mods_match(Type, OpType),
     {Key, ReturnKey} = get_key(K),
-    case {AllowMult, riak_kv_crdt:supported(Mod)} of
-        {true, true} ->
+    case {AllowMult, riak_kv_crdt:supported(Mod), ModsMatch} of
+        {true, true, true} ->
             O = riak_kv_crdt:new(B, Key, Mod),
-            Op = riak_pb_dt_codec:decode_operation(Op0, ?MOD_MAP),
             %% erlang_protobuffs encodes as 1/0/undefined
             W = decode_quorum(W0),
             DW = decode_quorum(DW0),
@@ -146,10 +148,13 @@ process(#dtupdatereq{bucket=B, key=K, type=BType,
                 {error, Reason} ->
                     {error, {format, Reason}, State}
             end;
-        {false, _} ->
+        {false, _, _} ->
             {error, {format, "Bucket must be allow_mult=true"}, State};
-        {true, false} ->
-            {error, {format, "`~p` is not a supported type", [Type]}, State}
+        {true, false ,_} ->
+            {error, {format, "Bucket datatype `~p` is not a supported type", [Type]}, State};
+        {_, _, false} ->
+            {error, {format, "Operation type is `~p` but  bucket type is `~p`.",
+                     [OpType, Type]}, State}
     end.
 
 %% @doc process_stream/3 callback. This service does not create any
@@ -209,3 +214,7 @@ get_context(_Ctx, false) ->
    undefined;
 get_context(Ctx, true) ->
     Ctx.
+
+mods_match(BucketMod, OpType) ->
+    OpMod = riak_kv_crdt:to_mod(OpType),
+    OpMod == BucketMod.
