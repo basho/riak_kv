@@ -20,11 +20,13 @@
 -module(riak_kv_entropy_info).
 
 -export([tree_built/3,
+         exchange_complete/4,
          exchange_complete/5,
          create_table/0,
          dump/0,
-         compute_exchange_info/1,
+         compute_exchange_info/0,
          compute_exchange_info/2,
+         compute_tree_info/0,
          compute_tree_info/1,
          all_exchanges/2]).
 
@@ -65,6 +67,11 @@
 tree_built(Type, Index, Time) ->
     update_index_info({Type, Index}, {tree_built, Time}).
 
+%% @see exchange_complete/5
+-spec exchange_complete(index(), index(), index_n(), pos_integer()) -> ok.
+exchange_complete(Index, RemoteIdx, IndexN, Repaired) ->
+    exchange_complete(riak_kv, Index, RemoteIdx, IndexN, Repaired).
+
 %% @doc Store information about a just-completed AAE exchange
 -spec exchange_complete(atom(), index(), index(), index_n(), pos_integer()) -> ok.
 exchange_complete(Type, Index, RemoteIdx, IndexN, Repaired) ->
@@ -87,12 +94,15 @@ dump() ->
 %% indices. For each index, return a tuple containing time of most recent
 %% exchange; time since the index completed exchanges with all sibling indices;
 %% as well as statistics about repairs triggered by different exchanges.
--spec compute_exchange_info(atom())  ->
+-spec compute_exchange_info()  ->
                                    [{index(), Last :: t_now(), All :: t_now(),
                                      repair_stats()}].
-compute_exchange_info(Type) ->
-    compute_exchange_info(Type, {?MODULE, all_exchanges}).
+compute_exchange_info() ->
+    compute_exchange_info(riak_kv, {?MODULE, all_exchanges}).
 
+-spec compute_exchange_info(atom(), {atom(), atom()})  ->
+                                   [{index(), Last :: t_now(), All :: t_now(),
+                                     repair_stats()}].
 compute_exchange_info(Type, {M,F}) ->
     filter_index_info(),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
@@ -101,6 +111,10 @@ compute_exchange_info(Type, {M,F}) ->
     KnownInfo = [compute_exchange_info({M,F}, Ring, Index, Info)
                  || {{Type2, Index}, Info} <- all_index_info(), Type2 == Type],
     merge_to_first(KnownInfo, Defaults).
+
+%% @see compute_tree_info/1
+compute_tree_info() ->
+    compute_tree_info(riak_kv).
 
 %% @doc Return a list of AAE build times for each locally owned index.
 -spec compute_tree_info(atom()) -> [{index(), t_now()}].
