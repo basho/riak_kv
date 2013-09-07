@@ -51,7 +51,8 @@
          stop/1,
          destroy/1]).
 
--export([poke/1]).
+-export([poke/1,
+         get_build_time/1]).
 
 -type index() :: non_neg_integer().
 -type index_n() :: {index(), pos_integer()}.
@@ -382,9 +383,14 @@ load_built(#state{trees=Trees}) ->
 -spec hash_object({riak_object:bucket(), riak_object:key()}, riak_object_t2b()) -> binary().
 hash_object({Bucket, Key}, RObjBin) ->
     %% Normalize the `riak_object' vector clock before hashing
-    RObj = riak_object:from_binary(Bucket, Key, RObjBin),
-    Hash = riak_object:hash(RObj),
-    term_to_binary(Hash).
+    try
+        RObj = riak_object:from_binary(Bucket, Key, RObjBin),
+        Hash = riak_object:hash(RObj),
+        term_to_binary(Hash)
+    catch _:_ ->
+            Null = erlang:phash2(<<>>),
+            term_to_binary(Null)
+    end.
 
 %% Fold over a given vnode's data, inserting each object into the appropriate
 %% hashtree. Use the `if_missing' option to only insert the key/hash pair if

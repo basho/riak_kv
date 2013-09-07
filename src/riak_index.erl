@@ -78,7 +78,7 @@ mapred_index(Dest, Args) ->
     mapred_index(Dest, Args, ?TIMEOUT).
 mapred_index(_Pipe, [Bucket, Query], Timeout) ->
     {ok, C} = riak:local_client(),
-    {ok, ReqId} = C:stream_get_index(Bucket, Query, [{timeout, Timeout}]),
+    {ok, ReqId, _} = C:stream_get_index(Bucket, Query, [{timeout, Timeout}]),
     {ok, Bucket, ReqId}.
 
 %% @spec parse_object_hook(riak_object:riak_object()) ->
@@ -378,6 +378,8 @@ index_key_in_range({Bucket, Key, Field, Term}=IK, Bucket,
   when Term >= StartTerm,
        Term =< EndTerm ->
     in_range(gt(StartInc, {Term, Key}, {StartTerm, StartKey}), true, IK);
+index_key_in_range(ignore, _, _) ->
+    {skip, ignore};
 index_key_in_range(_, _, _) ->
     false.
 
@@ -389,6 +391,8 @@ object_key_in_range({Bucket, Key}=OK, Bucket, Q) ->
     ?KV_INDEX_Q{start_key=Start, start_inclusive=StartInc,
                 end_term=End, end_inclusive=EndInc} = Q,
     in_range(gt(StartInc, Key, Start), gt(EndInc, End, Key), OK);
+object_key_in_range(ignore, _, _) ->
+    {skip, ignore};
 object_key_in_range(_, _, _) ->
     false.
 

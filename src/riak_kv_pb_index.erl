@@ -82,7 +82,7 @@ maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
     #state{client=Client} = State,
     Bucket = maybe_bucket_type(T, B),
     Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults}]),
-    {ok, ReqId} = Client:stream_get_index(Bucket, Query, Opts),
+    {ok, ReqId, _FSMPid} = Client:stream_get_index(Bucket, Query, Opts),
     ReturnTerms = riak_index:return_terms(Req#rpbindexreq.return_terms, Query),
     {reply, {stream, ReqId}, State#state{req_id=ReqId, req=Req#rpbindexreq{return_terms=ReturnTerms}}};
 maybe_perform_query({ok, Query}, Req, State) ->

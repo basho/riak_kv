@@ -118,11 +118,16 @@ start(Partition, Config) ->
     TTL = riak_kv_util:get_backend_config(ttl, Config, memory_backend),
     MemoryMB = riak_kv_util:get_backend_config(max_memory, Config, memory_backend),
     %% leave this one alone, it is only for testing
+    NormalTableOpts = [ordered_set],
+    TestTableOpts = app_helper:get_prop_or_env(test_table_opts,
+                                               Config,
+                                               memory_backend,
+                                               [named_table, public]),
     TableOpts = case app_helper:get_prop_or_env(test, Config, memory_backend) of
                     true ->
-                        [ordered_set, public];
+                        NormalTableOpts ++ TestTableOpts;
                     _ ->
-                        [ordered_set]
+                        NormalTableOpts
                 end,
     case MemoryMB of
         undefined ->
@@ -632,8 +637,8 @@ object_size(Object) ->
 -ifdef(TEST).
 
 simple_test_() ->
-    application:set_env(memory_backend, test, true),
-    riak_kv_backend:standard_test(?MODULE, []).
+    Config = [{test, true}, {test_table_opts, [public]}],
+    riak_kv_backend:standard_test(?MODULE, Config).
 
 ttl_test_() ->
     Config = [{ttl, 15}],
