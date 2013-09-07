@@ -120,7 +120,7 @@ process(#dtupdatereq{bucket=B, key=K, type=BType,
     Mod = riak_kv_crdt:to_mod(Type),
     Op = riak_pb_dt_codec:decode_operation(Op0, ?MOD_MAP),
     OpType = riak_pb_dt_codec:operation_type(Op0),
-    ModsMatch = mods_match(Type, OpType),
+    ModsMatch = mods_match(Mod, OpType),
     {Key, ReturnKey} = get_key(K),
     case {AllowMult, riak_kv_crdt:supported(Mod), ModsMatch} of
         {true, true, true} ->
