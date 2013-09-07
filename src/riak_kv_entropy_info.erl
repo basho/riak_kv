@@ -19,7 +19,8 @@
 %% -------------------------------------------------------------------
 -module(riak_kv_entropy_info).
 
--export([tree_built/3,
+-export([tree_built/2,
+         tree_built/3,
          exchange_complete/4,
          exchange_complete/5,
          create_table/0,
@@ -61,6 +62,10 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
+
+%% @see tree_built/3
+tree_built(Index, Time) ->
+    tree_built(riak_kv, Index, Time).
 
 %% @doc Store AAE tree build time
 -spec tree_built(atom(), index(), t_now()) -> ok.
