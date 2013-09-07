@@ -454,12 +454,17 @@ add_timeout_opt(Timeout, Opts) ->
 %%      map a field name to a field type.
 field_types() ->
     [
-     {?BUCKETFIELD, fun parse_binary/1},
+     {?BUCKETFIELD, fun parse_bucket/1},
      {?KEYFIELD,    fun parse_binary/1},
      {<<"_bin">>,    fun parse_binary/1},
      {<<"_int">>,    fun parse_integer/1}
     ].
 
+
+parse_bucket({Type, Bucket}) when is_binary(Type), is_binary(Bucket) ->
+    {ok, {Type, Bucket}};
+parse_bucket(Bucket) ->
+    parse_binary(Bucket).
 
 %% @private
 %% @spec parse_binary(string()) -> {ok, binary()}

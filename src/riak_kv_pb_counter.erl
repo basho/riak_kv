@@ -75,12 +75,14 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
-                          basic_quorum=BQ}, #state{client=C} = State) ->
+process(#rpbcountergetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0,
+                          notfound_ok=NFOk, basic_quorum=BQ},
+        #state{client=C} = State) ->
     case riak_kv_counter:supported() of
         true ->
             R = decode_quorum(R0),
             PR = decode_quorum(PR0),
+            B = maybe_bucket_type(T, B0),
             case C:get(B, K, make_option(r, R) ++
                            make_option(pr, PR) ++
                            make_option(notfound_ok, NFOk) ++
@@ -96,9 +98,10 @@ process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
         false ->
             {error, {format, "Counters are not supported"}, State}
     end;
-process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=CounterOp,
+process(#rpbcounterupdatereq{bucket=B0, type=T, key=K,  w=W0, dw=DW0, pw=PW0, amount=CounterOp,
                              returnvalue=RetVal},
         #state{client=C} = State) ->
+    B = maybe_bucket_type(T, B0),
     case {allow_mult(B), riak_kv_counter:supported()} of
         {true, true} ->
             O = riak_kv_counter:new(B, K),
@@ -155,3 +158,11 @@ make_option(K, V) ->
 
 default_timeout() ->
     ?DEFAULT_TIMEOUT.
+
+%% Construct a {Type, Bucket} tuple, if not working with the default bucket
+maybe_bucket_type(undefined, B) ->
+    B;
+maybe_bucket_type(<<"default">>, B) ->
+    B;
+maybe_bucket_type(T, B) ->
+    {T, B}.

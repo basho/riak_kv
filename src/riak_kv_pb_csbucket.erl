@@ -64,17 +64,19 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 process(Req=#rpbcsbucketreq{}, State) ->
-    #rpbcsbucketreq{bucket=Bucket, start_key=StartKey,
+    #rpbcsbucketreq{type=T, bucket=B, start_key=StartKey,
                     start_incl=StartIncl, continuation=Continuation,
                     end_key=EndKey, end_incl=EndIncl} = Req,
+    Bucket = maybe_bucket_type(T, B),
     Query = riak_index:to_index_query(<<"$bucket">>, [Bucket], Continuation, true, {StartKey, StartIncl}, {EndKey, EndIncl}),
     maybe_perform_query(Query, Req, State).
 
 maybe_perform_query({error, Reason}, _Req, State) ->
     {error, {format, Reason}, State};
 maybe_perform_query({ok, Query}, Req, State) ->
-    #rpbcsbucketreq{bucket=Bucket, max_results=MaxResults, timeout=Timeout} = Req,
+    #rpbcsbucketreq{type=T, bucket=B, max_results=MaxResults, timeout=Timeout} = Req,
     #state{client=Client} = State,
+    Bucket = maybe_bucket_type(T, B),
     Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults}]),
     {ok, ReqId, _FSMPid} = Client:stream_get_index(Bucket, Query, Opts),
     {reply, {stream, ReqId}, State#state{req_id=ReqId, req=Req}}.
@@ -120,3 +122,11 @@ make_continuation(MaxResults, {o, K, _V}, MaxResults) ->
     riak_index:make_continuation([K]);
 make_continuation(_, _, _)  ->
     undefined.
+
+%% Construct a {Type, Bucket} tuple, if not working with the default bucket
+maybe_bucket_type(undefined, B) ->
+    B;
+maybe_bucket_type(<<"default">>, B) ->
+    B;
+maybe_bucket_type(T, B) ->
+    {T, B}.

@@ -33,7 +33,8 @@
 -spec encode(riak_object:riak_object()) -> {struct, list(any())}.
 encode(Obj) ->
     {_,Vclock} = riak_object:vclock_header(Obj),
-    {struct, [{<<"bucket">>, riak_object:bucket(Obj)},
+    {struct, [{<<"type">>, riak_object:type(Obj)},
+              {<<"bucket">>, riak_object:bucket_only(Obj)},
               {<<"key">>, riak_object:key(Obj)},
               {<<"vclock">>, list_to_binary(Vclock)},
               {<<"values">>,
