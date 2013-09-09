@@ -39,7 +39,7 @@
 -export([mutate_put/2, mutate_get/1]).
 
 -callback mutate_put(Meta :: dict(), Value :: any(), ExposedMeta :: dict(), FullObject :: riak_object:riak_object(), BucketProps :: orddict:orddict()) -> {dict(), any(), dict()}.
--callback mutate_get(Meta :: dict(), Value :: any(), FullObject :: riak_object:riak_object()) -> {dict(), any()}.
+-callback mutate_get(FullObject :: riak_object:riak_object()) -> riak_object:riak_object().
 
 -define(DEFAULT_PRIORITY, 0).
 
@@ -78,23 +78,20 @@ get() ->
     {ok, Modules}.
 
 mutate_get(Object) ->
-    Contents = riak_object:get_contents(Object),
-    Contents2 = lists:map(fun({InMeta, InValue}) ->
-        maybe_get_mutate(InMeta, InValue, Object)
-    end, Contents),
-    riak_object:set_contents(Object, Contents2).
-
-maybe_get_mutate(Meta, Value, Object) ->
+    [Meta | _] = riak_object:get_metadatas(Object),
     case dict:find(mutators_applied, Meta) of
         error ->
-            ?debugMsg("no mutators applied"),
-            {Meta, Value};
+            Object;
         {ok, Applied} ->
-            ?debugFmt("muttors applied in put order: ~p", [Applied]),
-            lists:foldr(fun(Mutator, {InMeta, InValue}) ->
-                Mutator:mutate_get(InMeta, InValue, Object)
-            end, {Meta, Value}, Applied)
+            DeMutateOrder = lists:reverse(Applied),
+            mutate_get(Object, DeMutateOrder)
     end.
+
+mutate_get(Object, []) ->
+    Object;
+mutate_get(Object, [Mutator | Tail]) ->
+    Object2 = Mutator:mutate_get(Object),
+    mutate_get(Object2, Tail).
 
 mutate_put(Object, BucketProps) ->
     Contents = riak_object:get_contents(Object),

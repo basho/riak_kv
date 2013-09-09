@@ -3,7 +3,7 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
--export([mutate_put/5, mutate_get/3]).
+-export([mutate_put/5, mutate_get/1]).
 
 functionality_test_() ->
     {foreach, fun() ->
@@ -132,25 +132,33 @@ functionality_test_() ->
                 MetaChanges1 = dict:store(<<"mutations">>, Mutations, MetaChanges),
                 {Meta2, Value, MetaChanges1}
             end),
-            meck:expect(m1, mutate_get, fun(Meta, Value, _Object) ->
-                Mutations = case dict:find(<<"mutations">>, Meta) of
-                    {ok, N} ->
-                        N div 2;
-                    _ ->
-                        9
-                end,
-                Meta2 = dict:store(<<"mutations">>, Mutations, Meta),
-                {Meta2, Value}
+            meck:expect(m1, mutate_get, fun(Object) ->
+                MetaValues = riak_object:get_contents(Object),
+                MetaValues2 = lists:map(fun({Meta, Value}) ->
+                    Mutations = case dict:find(<<"mutations">>, Meta) of
+                        {ok, N} ->
+                            N div 2;
+                        _ ->
+                            9
+                    end,
+                    Meta2 = dict:store(<<"mutations">>, Mutations, Meta),
+                    {Meta2, Value}
+                end, MetaValues),
+                riak_object:set_contents(Object, MetaValues2)
             end),
-            meck:expect(m2, mutate_get, fun(Meta, Value, _Obj) ->
-                Mutations = case dict:find(<<"mutations">>, Meta) of
-                    {ok, N} ->
-                        N - 3;
-                    _ ->
-                        77
-                end,
-                Meta2 =  dict:store(<<"mutations">>, Mutations, Meta),
-                {Meta2, Value}
+            meck:expect(m2, mutate_get, fun(Obj) ->
+                Contents = riak_object:get_contents(Obj),
+                Contents2 = lists:map(fun({Meta, Value}) ->
+                    Mutations = case dict:find(<<"mutations">>, Meta) of
+                        {ok, N} ->
+                            N - 3;
+                        _ ->
+                            77
+                    end,
+                    Meta2 =  dict:store(<<"mutations">>, Mutations, Meta),
+                    {Meta2, Value}
+                end, Contents),
+                riak_object:set_contents(Obj, Contents2)
             end),
             riak_kv_mutator:register(m1),
             riak_kv_mutator:register(m2),
@@ -187,14 +195,18 @@ mutate_put(Meta, _Value, ExposedMeta, _Object, BucketProps) ->
     RevealedMeta2 = dict:store(<<"mutations">>, Mutations, ExposedMeta),
     {Meta2, NewVal, RevealedMeta2}.
 
-mutate_get(Meta, Value, _Object) ->
-    Mutations = case dict:find(<<"mutations">>, Meta) of
-        {ok, N} when is_integer(N) ->
-            N + 1;
-        _ ->
-            0
-    end,
-    Meta2 = dict:store(<<"mutations">>, Mutations, Meta),
-    {Meta2, Value}.
+mutate_get(Object) ->
+    MetaValues = riak_object:get_contents(Object),
+    MetaValues2 = lists:map(fun({Meta, Value}) ->
+        Mutations = case dict:find(<<"mutations">>, Meta) of
+            {ok, N} when is_integer(N) ->
+                N + 1;
+            _ ->
+                0
+        end,
+        Meta2 = dict:store(<<"mutations">>, Mutations, Meta),
+        {Meta2, Value}
+    end, MetaValues),
+    riak_object:set_contents(Object, MetaValues2).
 
 -endif.
