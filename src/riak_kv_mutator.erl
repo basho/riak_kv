@@ -90,8 +90,12 @@ mutate_get(Object) ->
 mutate_get(Object, []) ->
     Object;
 mutate_get(Object, [Mutator | Tail]) ->
-    Object2 = Mutator:mutate_get(Object),
-    mutate_get(Object2, Tail).
+    case Mutator:mutate_get(Object) of
+        notfound ->
+            notfound;
+        Object2 ->
+            mutate_get(Object2, Tail)
+    end.
 
 mutate_put(Object, BucketProps) ->
     Contents = riak_object:get_contents(Object),

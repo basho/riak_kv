@@ -166,7 +166,61 @@ functionality_test_() ->
             {Obj2, _Faked} = riak_kv_mutator:mutate_put(Obj, []),
             Obj3 = riak_kv_mutator:mutate_get(Obj2),
             Meta = riak_object:get_metadata(Obj3),
-            ?assertEqual({ok, 11}, dict:find(<<"mutations">>, Meta))
+            ?assertEqual({ok, 11}, dict:find(<<"mutations">>, Meta)),
+            meck:unload([m1,m2])
+        end} end,
+
+        fun(_) -> {"notfound is a valid return for a get mutator", fun() ->
+            meck:new(m1, [non_strict]),
+            meck:new(m2, [non_strict]),
+            meck:expect(m1, mutate_put, fun(Meta, Value, MetaChanges, _Object, _Props) ->
+                {Meta, Value, MetaChanges}
+            end),
+            meck:expect(m2, mutate_put, fun(Meta, Value, MetaChanges, _Object, _Props) ->
+                {Meta, Value, MetaChanges}
+            end),
+            meck:expect(m1, mutate_get, fun(Object) ->
+                Object
+            end),
+            meck:expect(m2, mutate_get, fun(_Obj) ->
+                notfound
+            end),
+            riak_kv_mutator:register(m1),
+            riak_kv_mutator:register(m2),
+            Obj = riak_object:new(<<"bucket">>, <<"key">>, <<"data">>, dict:from_list([{<<"mutations">>, 11}])),
+            {Obj2, _Faked} = riak_kv_mutator:mutate_put(Obj, []),
+            Obj3 = riak_kv_mutator:mutate_get(Obj2),
+            ?assertEqual(notfound, Obj3),
+            meck:unload([m1,m2])
+        end} end,
+
+        fun(_) -> {"notfound prevents other mutators being called", fun() ->
+            meck:new(m1, [non_strict]),
+            meck:new(m2, [non_strict]),
+            meck:expect(m1, mutate_put, fun(Meta, Value, MetaChanges, _Object, _Props) ->
+                {Meta, Value, MetaChanges}
+            end),
+            meck:expect(m2, mutate_put, fun(Meta, Value, MetaChanges, _Object, _Props) ->
+                {Meta, Value, MetaChanges}
+            end),
+            meck:expect(m1, mutate_get, fun(Object) ->
+                Contents = riak_object:get_contents(Object),
+                Contents2 = lists:map(fun({Meta, Value}) ->
+                    Meta2 = dict:store(mutated, true, Meta),
+                    {Meta2, Value}
+                end, Contents),
+                riak_object:set_contents(Object, Contents2)
+            end),
+            meck:expect(m2, mutate_get, fun(_Obj) ->
+                notfound
+            end),
+            riak_kv_mutator:register(m1),
+            riak_kv_mutator:register(m2),
+            Obj = riak_object:new(<<"bucket">>, <<"key">>, <<"data">>, dict:from_list([{<<"mutations">>, 11}])),
+            {Obj2, _Faked} = riak_kv_mutator:mutate_put(Obj, []),
+            Obj3 = riak_kv_mutator:mutate_get(Obj2),
+            ?assertEqual(notfound, Obj3),
+            meck:unload([m1,m2])
         end} end
 
     ]}.
