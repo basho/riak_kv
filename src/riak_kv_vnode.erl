@@ -1213,8 +1213,12 @@ do_get(_Sender, BKey, ReqID,
 do_get_term({Bucket, Key}, Mod, ModState) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
         {ok, Obj, _UpdModState} ->
-            Obj2 = riak_kv_mutator:mutate_get(Obj),
-            {ok, Obj2};
+            case riak_kv_mutator:mutate_get(Obj) of
+                notfound ->
+                    {error, notfound};
+                Obj2 ->
+                    {ok, Obj2}
+            end;
         %% @TODO Eventually it would be good to
         %% make the use of not_found or notfound
         %% consistent throughout the code.
