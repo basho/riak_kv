@@ -29,6 +29,50 @@
 %% can be run.
 %%
 %% This doubles as a behavior defining module for the mutators.
+%%
+%% == Callbacks ==
+%%
+%% A mutator callback must implement 2 function: mutate_put/5 and mutate_get/1.
+%%
+%% <code><b>mutate_put(MetaData, Value, ExposedMeta,
+%% FullObject, BucketProperties) -> Result</b></code>
+%%
+%% Types:
+%% ```
+%%     MetaData = dict()
+%%     Value = term()
+%%     ExposedMeta = dict()
+%%     FullObject = riak_object:riak_object()
+%%     BucketProperties = orddict:orddict()
+%%     Result = {NewMeta, NewValue, NewExposedMeta}
+%%         NewMeta = dict()
+%%         NewValue = term()
+%%         NewExposedMeta = dict()'''
+%%
+%% The mutate_put callback is called for each metadata/value pair a riak_object
+%% has. The return value of NewMeta and NewValue are used by the storage backend
+%% while the NewExposedMeta is used for the client return where NewMeta would
+%% normally. The NewExposedMeta is merged with the NewMeta to generate the
+%% exposed metadata; if the same key is found, the NewExposedMeta value is used.
+%%
+%% The mutations are run in the same process as the vnode.
+%%
+%% <code><b>mutate_get(Object) -> Result</b></code>
+%%
+%% Types:
+%% ```
+%%     Object = riak_object:riak_object()
+%%     Result = riak_object:riak_object() | 'notfound'
+%% '''
+%% Take the object from storage and reverse whatever mutation was applied. Note
+%% the bucket properties are not part of this callback, so if some data is
+%% important to reverse a mutation, it must be put in the metadata by the
+%% `mutate_put' function. Also note how the entire object is given as opposed to
+%% simply a metadata/value pair. Care must be taken not to corrupt the object.
+%%
+%% A return of ``'notfound''' stops the mutator chain and returns immediately. This
+%% provides an escape hatch of sorts; if the mutator cannot reverse the mutation
+%% effectively, return ``'notfound'''.
 
 -module(riak_kv_mutator).
 
@@ -39,13 +83,20 @@
 -export([mutate_put/2, mutate_get/1]).
 
 -callback mutate_put(Meta :: dict(), Value :: any(), ExposedMeta :: dict(), FullObject :: riak_object:riak_object(), BucketProps :: orddict:orddict()) -> {dict(), any(), dict()}.
--callback mutate_get(FullObject :: riak_object:riak_object()) -> riak_object:riak_object().
+-callback mutate_get(FullObject :: riak_object:riak_object()) -> riak_object:riak_object() | 'notfound'.
 
 -define(DEFAULT_PRIORITY, 0).
 
+%% @doc Register the given module as a mutator with the default priority of 0.
+%% @see register/2
+-spec register(Module :: atom()) -> 'ok'.
 register(Module) ->
     ?MODULE:register(Module, ?DEFAULT_PRIORITY).
 
+%% @doc Register a module as a mutator with the given priority. Modules with
+%% equal priority are done in sort sort (alphabetical) order. A module
+%% can only be registered once.
+-spec register(Module :: atom(), Priority :: term()) -> 'ok'.
 register(Module, Priority) ->
     Modifier = fun
         (undefined) ->
@@ -56,6 +107,8 @@ register(Module, Priority) ->
     end,
     riak_core_metadata:put({riak_kv, mutators}, list, Modifier).
 
+%% @doc Remove a module from the mutator list.
+-spec unregister(Module :: atom()) -> 'ok'.
 unregister(Module) ->
     Modifier = fun
         (undefined) ->
@@ -66,6 +119,9 @@ unregister(Module) ->
     end,
     riak_core_metadata:put({riak_kv, mutators}, list, Modifier, []).
 
+%% @doc Retrieve the list of mutators in the order to apply them when doing a
+%% a put mutation. To get the order when doing a get mutation, reverse the list.
+-spec get() -> [atom()].
 get() ->
     Resolver = fun(Values) ->
         Values2 = lists:filter(fun erlang:is_list/1, Values),
@@ -77,6 +133,9 @@ get() ->
     Modules = [M || {_P, M} <- Sorted],
     {ok, Modules}.
 
+%% @doc Unmutate an object after retrieval from storage. When an object is
+%% mutated, the mutators applied are put into the object's metadata.
+-spec mutate_get(Object :: riak_object:riak_object()) -> riak_object:riak_object().
 mutate_get(Object) ->
     [Meta | _] = riak_object:get_metadatas(Object),
     case dict:find(mutators_applied, Meta) of
@@ -97,6 +156,9 @@ mutate_get(Object, [Mutator | Tail]) ->
             mutate_get(Object2, Tail)
     end.
 
+%% @doc Mutate an object in preparation to storage, returning a tuple of the
+%% object to store and the object to return to the client.
+-spec mutate_put(Object :: riak_object:riak_object(), BucketProps :: orddict:orddict()) -> {riak_object:riak_object(), riak_object:riak_object()}.
 mutate_put(Object, BucketProps) ->
     Contents = riak_object:get_contents(Object),
     {ok, Modules} = ?MODULE:get(),
