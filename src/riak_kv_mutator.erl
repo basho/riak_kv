@@ -123,9 +123,15 @@ unregister(Module) ->
 %% a put mutation. To get the order when doing a get mutation, reverse the list.
 -spec get() -> [atom()].
 get() ->
-    Resolver = fun(Values) ->
-        Values2 = lists:filter(fun erlang:is_list/1, Values),
-        merge_values(Values2)
+    Resolver = fun
+        ('$deleted', '$delete') ->
+            [];
+        ('$deleted', Values) ->
+            Values;
+        (Values, '$deleted') ->
+            Values;
+        (Values1, Values2) ->
+            merge_values([Values1, Values2])
     end,
     ModulesAndPriors = riak_core_metadata:get({riak_kv, mutators}, list, [{default, []}, {resolver, Resolver}]),
     Flipped = [{P, M} || {M, P} <- ModulesAndPriors],
