@@ -87,7 +87,7 @@ process(#dtfetchreq{bucket=B, key=K, r=R0, pr=PR0,
         {true, true} ->
             R = decode_quorum(R0),
             PR = decode_quorum(PR0),
-            case C:get(B, K, make_option(r, R) ++
+            case C:get({BType, B}, K, make_option(r, R) ++
                            make_option(pr, PR) ++
                            make_option(notfound_ok, NFOk) ++
                            make_option(basic_quorum, BQ) ++
@@ -124,7 +124,7 @@ process(#dtupdatereq{bucket=B, key=K, type=BType,
     {Key, ReturnKey} = get_key(K),
     case {AllowMult, riak_kv_crdt:supported(Mod), ModsMatch} of
         {true, true, true} ->
-            O = riak_kv_crdt:new(B, Key, Mod),
+            O = riak_kv_crdt:new({BType, B}, Key, Mod),
             %% erlang_protobuffs encodes as 1/0/undefined
             W = decode_quorum(W0),
             DW = decode_quorum(DW0),
