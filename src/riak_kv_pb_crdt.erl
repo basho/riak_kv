@@ -188,9 +188,8 @@ get_key(undefined) ->
 get_key(K) ->
     {K, undefined}.
 
-%% @TODO actually use bucket types, here I just fake it
-bucket_type_to_type(Bucket, _BType) ->
-    BProps = riak_core_bucket:get_bucket(Bucket),
+bucket_type_to_type(Bucket, BType) ->
+    BProps = riak_core_bucket:get_bucket({BType, Bucket}),
     DataType = proplists:get_value(datatype, BProps),
     AllowMult = proplists:get_value(allow_mult, BProps),
     {AllowMult, DataType}.
