@@ -197,38 +197,7 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
     end.
 
 is_authorized(ReqData, Ctx) ->
-    Res = case app_helper:get_env(riak_core, security, false) of
-        true ->
-            Scheme = wrq:scheme(ReqData),
-            case Scheme == https of
-                true ->
-                    case wrq:get_req_header("Authorization", ReqData) of
-                        "Basic " ++ Base64 ->
-                            UserPass = base64:decode_to_string(Base64),
-                            [User, Pass] = [list_to_binary(X) || X <-
-                                                                 string:tokens(UserPass, ":")],
-                            {ok, Peer} = inet_parse:address(wrq:peer(ReqData)),
-                            case riak_core_security:authenticate(User, Pass,
-                                    [{ip, Peer}])
-                                of
-                                {ok, Sec} ->
-                                    {true, Sec};
-                                {error, _} ->
-                                    false
-                            end;
-                        _ ->
-                            false
-                    end;
-                false ->
-                    %% security is enabled, but they're connecting over HTTP.
-                    %% which means if they authed, the credentials would be in
-                    %% plaintext
-                    insecure
-            end;
-        false ->
-            {true, undefined} %% no security context
-    end,
-    case Res of
+    case riak_api_web_security:is_authorized(ReqData) of
         false ->
             {"Basic realm=\"Riak\"", ReqData, Ctx};
         {true, SecContext} ->
@@ -247,9 +216,17 @@ forbidden(RD, Ctx=#ctx{security=undefined}) ->
         true ->
             {true, RD, Ctx};
         false ->
-            forbidden_check_doc(RD, Ctx)
+            %% If it is a put or a post, don't require the object to already
+            %% exist.
+            case Ctx#ctx.method of
+                'POST' ->
+                    {false, RD, Ctx};
+                'PUT' ->
+                    {false, RD, Ctx};
+                _ ->
+                    forbidden_check_doc(RD, Ctx)
+            end
     end;
-
 forbidden(RD, Ctx=#ctx{security=Security}) ->
     case riak_kv_wm_utils:is_forbidden(RD) of
         true ->
@@ -268,16 +245,16 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
                     "riak_kv.delete"
             end,
 
-            {Res, _} = riak_core_security:check_permission(Perm,
-                                                           Ctx#ctx.bucket,
+            Res = riak_core_security:check_permission({Perm,
+                                                           {<<"default">>,
+                                                            Ctx#ctx.bucket}},
                                                            Security),
             case Res of
-                false ->
-                    Error = list_to_binary(io_lib:format("Permission ~s denied to user ~s on "
-                                                         "bucket ~s", [Perm, riak_core_security:get_username(Security),
-                                                                       Ctx#ctx.bucket])),
-                    {true, wrq:append_to_resp_body(Error, RD), Ctx};
-                true ->
+                {false, Error, _} ->
+                    {true, wrq:append_to_resp_body(list_to_binary(Error), RD), Ctx};
+                {true, _} ->
+                    lager:info("authorized to ~p on ~p", [Perm,
+                                                          Ctx#ctx.bucket]),
                     case Perm of
                         "riak_kv.get" ->
                             %% Ensure the key is here, otherwise 404
@@ -291,7 +268,7 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
             end
     end.
 
-%% @doc Detects whether fetching the requested object results in an
+%% @doc Detects whether fetching the requeste object results in an
 %% error.
 forbidden_check_doc(RD, Ctx) ->
     DocCtx = ensure_doc(Ctx),

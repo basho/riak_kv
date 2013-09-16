@@ -24,7 +24,7 @@
 
 -module(riak_kv_mapred_term).
 
--export([parse_request/1]).
+-export([parse_request/1, get_required_permissions/2]).
 
 -define(DEFAULT_TIMEOUT, 60000).
 
@@ -119,3 +119,69 @@ parse_query(Query) when is_list(Query) ->
     {ok, Query};
 parse_query(Invalid) ->
     {error, {"Query takes a list of step tuples", Invalid}}.
+
+%% Look at a parsed MR Input and Query and return a list of required
+%% permissions.
+get_required_permissions(Inputs, _Query) ->
+    InputPermissions = case Inputs of
+        Bucket when is_binary(Bucket) ->
+            [{"riak_kv.list_keys", {<<"default">>, Bucket}},
+             {"riak_kv.mapreduce", {<<"default">>,
+                                              Bucket}}];
+        {Type, Bucket} when is_binary(Bucket), is_binary(Type)
+                            ->
+            [{"riak_kv.list_keys", {Type, Bucket}},
+             {"riak_kv.mapreduce", {Type, Bucket}}];
+        {modfun, _M, _F, _A} ->
+            %% XXX this requires a 'blanket' mapreduce permission
+            %% because we have no way to figure out what keys
+            %% will be involved
+            [{"riak_kv.mapreduce"}];
+        {index, Bucket, _Index, _Key} ->
+            B = case is_binary(Bucket) of
+                    true ->
+                        {<<"default">>, Bucket};
+                    false ->
+                        Bucket
+                end,
+            [{"riak_kv.index", B},
+             {"riak_kv.mapreduce", B}];
+        {index, Bucket, _Index, _Start, _End} ->
+            B = case is_binary(Bucket) of
+                    true ->
+                        {<<"default">>, Bucket};
+                    false ->
+                        Bucket
+                end,
+            [{"riak_kv.index", B},
+             {"riak_kv.mapreduce", B}];
+        {search, Bucket, _Query} when is_binary(Bucket) ->
+            %% needs search AND mapreduce permissions
+            [{"riak_kv.mapreduce", Bucket},
+             {"riak_search.query", Bucket}];
+        {search, Bucket, _Query, _Filter} when is_binary(Bucket) ->
+            %% needs search AND mapreduce permissions
+            [{"riak_kv.mapreduce", Bucket},
+             {"riak_search.query", Bucket}];
+        {Bucket, Filters} when is_binary(Bucket),
+                               is_list(Filters) ->
+            [{"riak_kv.list_keys", {<<"default">>, Bucket}},
+             {"riak_kv.mapreduce", {<<"default">>, Bucket}}];
+        Targets when is_list(Targets) ->
+            %% MR over a list of bucket/key pairs, with
+            %% optional keydata.
+            %% Figure out all the buckets involved...
+            B = lists:foldl(fun({{{Type, Bucket}, _Key},
+                                 _KeyData}, Acc) ->
+                                    [{Type, Bucket} | Acc];
+                               ({{Bucket, _Key}, _KeyData}, Acc) ->
+                                    [{<<"default">>, Bucket} | Acc];
+                               ({Bucket, _Key}, Acc) ->
+                                    [{<<"default">>, Bucket} | Acc]
+                            end, [], Targets),
+            [{"riak_kv.mapreduce", Bucket} || Bucket <- lists:usort(B)]
+    end,
+
+    %% TODO - check the Query for link walking inputs and implement a list
+    %% keys permission we can tack on.
+    InputPermissions.

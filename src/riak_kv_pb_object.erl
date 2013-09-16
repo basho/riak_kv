@@ -82,11 +82,14 @@ decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
         #rpbgetreq{} ->
-            {ok, Msg, {"riak_kv.get", Msg#rpbgetreq.bucket}};
+            {ok, Msg, {"riak_kv.get", bucket_type(Msg#rpbgetreq.type,
+                                                        Msg#rpbgetreq.bucket)}};
         #rpbputreq{} ->
-            {ok, Msg, {"riak_kv.put", Msg#rpbputreq.bucket}};
+            {ok, Msg, {"riak_kv.put", bucket_type(Msg#rpbputreq.type,
+                                                        Msg#rpbputreq.bucket)}};
         #rpbdelreq{} ->
-            {ok, Msg, {"riak_kv.delete", Msg#rpbdelreq.bucket}};
+            {ok, Msg, {"riak_kv.delete", bucket_type(Msg#rpbdelreq.type,
+                                                           Msg#rpbdelreq.bucket)}};
         _ ->
             {ok, Msg}
     end.
@@ -348,6 +351,12 @@ maybe_bucket_type(undefined, B) ->
 maybe_bucket_type(<<"default">>, B) ->
     B;
 maybe_bucket_type(T, B) ->
+    {T, B}.
+
+%% always construct {Type, Bucket} tuple, filling in default type if needed
+bucket_type(undefined, B) ->
+    {<<"default">>, B};
+bucket_type(T, B) ->
     {T, B}.
 
 %% ===================================================================
