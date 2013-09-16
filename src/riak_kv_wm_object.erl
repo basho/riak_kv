@@ -253,8 +253,6 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
                 {false, Error, _} ->
                     {true, wrq:append_to_resp_body(list_to_binary(Error), RD), Ctx};
                 {true, _} ->
-                    lager:info("authorized to ~p on ~p", [Perm,
-                                                          Ctx#ctx.bucket]),
                     case Perm of
                         "riak_kv.get" ->
                             %% Ensure the key is here, otherwise 404

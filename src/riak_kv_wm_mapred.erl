@@ -68,11 +68,8 @@ forbidden(RD, State) ->
                 {'POST', Body} when Body /= undefined ->
                     case riak_kv_mapred_json:parse_request(Body) of
                         {ok, ParsedInputs, _ParsedQuery, _Timeout} ->
-                            lager:info("MR inputs are ~p", [ParsedInputs]),
                             Permissions = riak_kv_mapred_term:get_required_permissions(ParsedInputs,
                                                                                        _ParsedQuery),
-                            lager:info("MR permissions are ~p",
-                                       [Permissions]),
                             Res = riak_core_security:check_permissions(
                                     Permissions,
                                     State#state.security),
@@ -171,7 +168,6 @@ check_body(RD, State) ->
 verify_body(Body, State) ->
     case riak_kv_mapred_json:parse_request(Body) of
         {ok, ParsedInputs, ParsedQuery, Timeout} ->
-            lager:info("MR inputs are ~p", [ParsedInputs]),
             {true, [], State#state{inputs=ParsedInputs,
                                    mrquery=ParsedQuery,
                                    timeout=Timeout}};
