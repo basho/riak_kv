@@ -148,6 +148,14 @@ start_link(From, Object, PutOptions) ->
             end
     end.
 
+make_ack_options(Options) ->
+    case riak_core_capability:get({riak_kv, put_fsm_ack_execute}, disabled) of
+        disabled ->
+            {false, Options};
+        enabled ->
+            {true, [{ack_execute, self()}|Options]}
+    end.
+
 spawn_coordinator_proc(CoordNode, Mod, Fun, Args) ->
     %% If the net_kernel cannot talk to CoordNode, then any variation
     %% of the spawn BIF will block.  The whole point of picking a new
@@ -157,7 +165,9 @@ spawn_coordinator_proc(CoordNode, Mod, Fun, Args) ->
                   proc_lib:spawn(CoordNode, Mod, Fun, Args)
           end).
 
-monitor_remote_coordinator(MiddleMan, CoordNode, StateData) ->
+monitor_remote_coordinator(false = _UseAckP, _MiddleMan, _CoordNode, StateData) ->
+    {stop, normal, StateData};
+monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
     receive
         {ack, CoordNode, now_executing} ->
             {stop, normal, StateData}
@@ -276,14 +286,16 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                     ?DTRACE(?C_PUT_FSM_PREPARE, [1],
                             ["prepare", atom2list(CoordNode)]),
                     try
-                        Options2 = [{ack_execute, self()}|Options],
+                        {UseAckP, Options2} = make_ack_options(
+                                               [{ack_execute, self()}|Options]),
                         MiddleMan = spawn_coordinator_proc(
                                       CoordNode, riak_kv_put_fsm, start_link,
                                       [From,RObj,Options2]),
                         ?DTRACE(?C_PUT_FSM_PREPARE, [2],
                                     ["prepare", atom2list(CoordNode)]),
                         riak_kv_stat:update(coord_redir),
-                        monitor_remote_coordinator(MiddleMan, CoordNode, StateData0)
+                        monitor_remote_coordinator(UseAckP, MiddleMan,
+                                                   CoordNode, StateData0)
                     catch
                         _:Reason ->
                             ?DTRACE(?C_PUT_FSM_PREPARE, [-2],
