@@ -68,7 +68,12 @@
         %% Use a sloppy quorum, default = true
         {sloppy_quorum, boolean()} |
         %% The N value, default = value from bucket properties
-        {n_val, pos_integer()}.
+        {n_val, pos_integer()} |
+        %% Control server-side put failure retry, default = true.
+        %% Some CRDTs and other client operations that cannot tolerate
+        %% an automatic retry on the server side; those operations should
+        %% use {retry_put_coordinator_failure, false}.
+        {retry_put_coordinator_failure, boolean()}.
 
 -type options() :: [option()].
 
@@ -153,7 +158,12 @@ make_ack_options(Options) ->
         disabled ->
             {false, Options};
         enabled ->
-            {true, [{ack_execute, self()}|Options]}
+            case proplists:get_value(retry_put_coordinator_failure, Options, true) of
+                true ->
+                    {true, [{ack_execute, self()}|Options]};
+                _Else ->
+                    {false, Options}
+            end
     end.
 
 spawn_coordinator_proc(CoordNode, Mod, Fun, Args) ->
