@@ -322,7 +322,9 @@ to_binary(?CRDT{mod=riak_dt_pncounter, value=Value}, ?V1_VERS) ->
 from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>) ->
     v1_counter_from_binary(CounterBin);
 from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, CRDTBin/binary>>) ->
-    crdt_from_binary(CRDTBin).
+    crdt_from_binary(CRDTBin);
+from_binary(Bin) ->
+    {error, {invalid_binary, Bin}}.
 
 %% @private attempt to deserialize a v1 counter (riak 1.4.x counter)
 v1_counter_from_binary(CounterBin) ->

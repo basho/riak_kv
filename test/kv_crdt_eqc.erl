@@ -70,7 +70,7 @@ test_merge() ->
     test_merge(100).
 
 test_merge(N) ->
-        quickcheck(numtests(N, prop_merge())).
+    quickcheck(numtests(N, prop_merge())).
 
 test_update() ->
     test_update(100).
@@ -123,16 +123,16 @@ prop_update() ->
     ?FORALL({RObj, Actor, Amt},
             {riak_object(), noshrink(binary(4)), int()},
             begin
-                Updated = riak_kv_crdt:update(RObj, Actor, Amt),
-                FExpectedCounters = fun(NumGeneratedCounters) ->
-                                            case {NumGeneratedCounters, Amt} of
-                                                {0, 0} -> 0;
-                                                _ -> 1
-                                            end
+                CounterOp = counter_op(Amt),
+                Op = ?CRDT_OP{mod=riak_dt_pncounter, op=CounterOp},
+                Updated = riak_kv_crdt:update(RObj, Actor, Op),
+                FExpectedCounters = fun(_NumGeneratedCounters) ->
+                                            1
                                     end,
                 MergeSeed = case Amt of
-                                0 -> undefined;
-                                _ ->  riak_dt_pncounter:new(Actor, Amt)
+                                0 -> riak_dt_pncounter:new(Actor, Amt);
+                                _ -> {ok, Cnter} = riak_dt_pncounter:new(Actor, Amt),
+                                     Cnter
                             end,
                 {_, Cnt} = riak_kv_crdt:value(Updated, riak_dt_pncounter),
                 ?WHENFAIL(
@@ -151,6 +151,10 @@ prop_update() ->
 %%====================================================================
 %% Helpers
 %%====================================================================
+counter_op(Amt) when Amt < 0 ->
+    {decrement, Amt*-1};
+counter_op(Amt) ->
+    {increment, Amt}.
 
 %% Update and Merge are the same, except for the
 %% end value of the counter. Reuse the common properties.
@@ -175,8 +179,13 @@ latest_meta(RObj, MergedMeta) ->
 
 latest_counter_meta([], Latest) ->
     Latest;
-latest_counter_meta([{MD, <<?TAG:8/integer, ?V1_VERS:8/integer, _CounterBin/binary>>}|Rest], Latest) ->
-    latest_counter_meta(Rest, get_latest_meta(MD, Latest));
+latest_counter_meta([{MD, Val}|Rest], Latest) ->
+    case is_counter(Val) of
+        true ->
+            latest_counter_meta(Rest, get_latest_meta(MD, Latest));
+        false ->
+            latest_counter_meta(Rest, Latest)
+    end;
 latest_counter_meta([_|Rest], Latest) ->
     latest_counter_meta(Rest, Latest).
 
@@ -200,14 +209,14 @@ counters_equal(_C1, undefined) ->
 counters_equal(undefined, _C2) ->
     false;
 counters_equal(C1B, C2B) when is_binary(C1B), is_binary(C2B) ->
-    C1 = riak_kv_crdt:from_binary(C1B),
-    C2 = riak_kv_crdt:from_binary(C2B),
-    riak_dt_pncounter:equal(C1, C2);
+    {ok, ?CRDT{value=C1}} = riak_kv_crdt:from_binary(C1B),
+    {ok, ?CRDT{value=C2}} = riak_kv_crdt:from_binary(C2B),
+    counters_equal(C1, C2);
 counters_equal(C1B, C2) when is_binary(C1B) ->
-    C1 = riak_kv_crdt:from_binary(C1B),
+    {ok, ?CRDT{value=C1}} = riak_kv_crdt:from_binary(C1B),
     counters_equal(C1, C2);
 counters_equal(C1, C2B) when is_binary(C2B) ->
-    C2 = riak_kv_crdt:from_binary(C2B),
+    {ok, ?CRDT{value=C2}} = riak_kv_crdt:from_binary(C2B),
     counters_equal(C1, C2);
 counters_equal(C1, C2) ->
     riak_dt_pncounter:equal(C1, C2).
@@ -217,8 +226,7 @@ counters_equal(C1, C2) ->
 single_counter(Merged) ->
     Contents = riak_object:get_contents(Merged),
     case [begin
-              <<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>> = Val,
-              Counter = riak_dt_pncounter:from_binary(CounterBin),
+              {ok, ?CRDT{value=Counter}} = riak_kv_crdt:from_binary(Val),
               {Meta, Counter}
           end || {Meta, Val} <- Contents,
          is_counter(Val)] of
@@ -227,18 +235,19 @@ single_counter(Merged) ->
         _Many -> {undefined, undefined}
     end.
 
-is_counter(<<?TAG:8/integer, ?V1_VERS:8/integer, _CounterBin/binary>>) ->
-    true;
-is_counter(_) ->
-    false.
+
+is_counter(Val) ->
+    case riak_kv_crdt:from_binary(Val) of
+        {ok, ?CRDT{mod=riak_dt_pncounter}} ->
+            true;
+        _ ->
+            false
+    end.
 
 non_counter_siblings(RObj) ->
     Contents = riak_object:get_contents(RObj),
-    {_Counters, NonCounters} = lists:partition(fun({_Md, <<?TAG:8/integer, ?V1_VERS:8/integer, _CounterBin/binary>>}) ->
-                                                      true;
-                                                 ({_MD, _Val}) ->
-                                                      false
-                                              end,
+    {_Counters, NonCounters} = lists:partition(fun({_Md, Val}) ->
+                                                      is_counter(Val) end,
                                               Contents),
     lists:sort(NonCounters).
 
@@ -292,8 +301,8 @@ content() ->
 counter_meta() ->
     %% generate a dict of metadata
     ?LET({_Mega, _Sec, _Micro}=Now, {nat(), nat(), nat()},
-         dict:store(?MD_VTAG, riak_kv_util:make_vtag(Now),
-                    dict:store(?MD_LASTMOD, Now, dict:new()))).
+         dict:store(?MD_CTYPE, "application/riak_counter", dict:store(?MD_VTAG, riak_kv_util:make_vtag(Now),
+                    dict:store(?MD_LASTMOD, Now, dict:new())))).
 
 metadata() ->
     %% generate a dict of metadata
