@@ -107,13 +107,16 @@ process(#rpbgetreq{bucket = <<>>}, State) ->
     {error, "Bucket cannot be zero-length", State};
 process(#rpbgetreq{key = <<>>}, State) ->
     {error, "Key cannot be zero-length", State};
-process(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
+process(#rpbgetreq{type = <<>>}, State) ->
+    {error, "Type cannot be zero-length", State};
+process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    basic_quorum=BQ, if_modified=VClock,
                    head=Head, deletedvclock=DeletedVClock,
                    n_val=N_val, sloppy_quorum=SloppyQuorum,
                    timeout=Timeout}, #state{client=C} = State) ->
     R = decode_quorum(R0),
     PR = decode_quorum(PR0),
+    B = maybe_bucket_type(T, B0),
     case C:get(B, K, make_option(deletedvclock, DeletedVClock) ++
                    make_option(r, R) ++
                    make_option(pr, PR) ++
@@ -156,12 +159,15 @@ process(#rpbputreq{bucket = <<>>}, State) ->
     {error, "Bucket cannot be zero-length", State};
 process(#rpbputreq{key = <<>>}, State) ->
     {error, "Key cannot be zero-length", State};
-process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
+process(#rpbputreq{type = <<>>}, State) ->
+    {error, "Type cannot be zero-length", State};
+process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC,
                    if_not_modified=NotMod, if_none_match=NoneMatch,
                    n_val=N_val, sloppy_quorum=SloppyQuorum} = Req,
         #state{client=C} = State) when NotMod; NoneMatch ->
     GetOpts = make_option(n_val, N_val) ++
               make_option(sloppy_quorum, SloppyQuorum),
+    B = maybe_bucket_type(T, B0),
     case C:get(B, K, GetOpts) of
         {ok, _} when NoneMatch ->
             {error, "match_found", State};
@@ -184,7 +190,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC,
             {error, {format, Reason}, State}
     end;
 
-process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
+process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
                    w=W0, dw=DW0, pw=PW0, return_body=ReturnBody,
                    return_head=ReturnHead, timeout=Timeout, asis=AsIs,
                    n_val=N_val, sloppy_quorum=SloppyQuorum},
@@ -200,6 +206,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
             %% Don't return the key since we're not generating one
             ReturnKey = undefined
     end,
+    B = maybe_bucket_type(T, B0),
     O0 = riak_object:new(B, Key, <<>>),
     O1 = update_rpbcontent(O0, RpbContent),
     O  = update_pbvc(O1, PbVC),
@@ -207,6 +214,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
     W = decode_quorum(W0),
     DW = decode_quorum(DW0),
     PW = decode_quorum(PW0),
+    B = maybe_bucket_type(T, B0),
     Options = case ReturnBody of
                   1 -> [returnbody];
                   true -> [returnbody];
@@ -248,7 +256,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
             {error, {format, Reason}, State}
     end;
 
-process(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
+process(#rpbdelreq{bucket=B0, type=T, key=K, vclock=PbVc,
                    r=R0, w=W0, pr=PR0, pw=PW0, dw=DW0, rw=RW0,
                    timeout=Timeout, n_val=N_val, sloppy_quorum=SloppyQuorum},
         #state{client=C} = State) ->
@@ -259,6 +267,7 @@ process(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
     PR = decode_quorum(PR0),
     RW = decode_quorum(RW0),
 
+    B = maybe_bucket_type(T, B0),
     Options = make_options([{r, R}, {w, W}, {rw, RW}, {pr, PR}, {pw, PW}, 
                             {dw, DW}, {timeout, Timeout}, {n_val, N_val},
                             {sloppy_quorum, SloppyQuorum}]),
@@ -322,6 +331,14 @@ erlify_rpbvc(PbVc) ->
 %% Convert a vector clock to protocol buffers
 pbify_rpbvc(Vc) ->
     riak_object:encode_vclock(Vc).
+
+%% Construct a {Type, Bucket} tuple, if not working with the default bucket
+maybe_bucket_type(undefined, B) ->
+    B;
+maybe_bucket_type(<<"default">>, B) ->
+    B;
+maybe_bucket_type(T, B) ->
+    {T, B}.
 
 %% ===================================================================
 %% Tests

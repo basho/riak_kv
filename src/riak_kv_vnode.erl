@@ -170,7 +170,7 @@ get(Preflist, BKey, ReqId) ->
     get(Preflist, BKey, ReqId, {fsm, undefined, self()}).
 
 get(Preflist, BKey, ReqId, Sender) ->
-    Req = ?KV_GET_REQ{bkey=BKey,
+    Req = ?KV_GET_REQ{bkey=sanitize_bkey(BKey),
                       req_id=ReqId},
     riak_core_vnode_master:command(Preflist,
                                    Req,
@@ -179,7 +179,7 @@ get(Preflist, BKey, ReqId, Sender) ->
 
 del(Preflist, BKey, ReqId) ->
     riak_core_vnode_master:command(Preflist,
-                                   ?KV_DELETE_REQ{bkey=BKey,
+                                   ?KV_DELETE_REQ{bkey=sanitize_bkey(BKey),
                                                   req_id=ReqId},
                                    riak_kv_vnode_master).
 
@@ -192,7 +192,7 @@ put(Preflist, BKey, Obj, ReqId, StartTime, Options, Sender)
   when is_integer(StartTime) ->
     riak_core_vnode_master:command(Preflist,
                                    ?KV_PUT_REQ{
-                                      bkey = BKey,
+                                      bkey = sanitize_bkey(BKey),
                                       object = Obj,
                                       req_id = ReqId,
                                       start_time = StartTime,
@@ -236,7 +236,7 @@ coord_put(IndexNode, BKey, Obj, ReqId, StartTime, Options, Sender)
   when is_integer(StartTime) ->
     riak_core_vnode_master:command(IndexNode,
                                    ?KV_PUT_REQ{
-                                      bkey = BKey,
+                                      bkey = sanitize_bkey(BKey),
                                       object = Obj,
                                       req_id = ReqId,
                                       start_time = StartTime,
@@ -258,10 +258,9 @@ list_keys(Preflist, ReqId, Caller, Bucket) ->
                                    riak_kv_vnode_master).
 
 fold(Preflist, Fun, Acc0) ->
+    Req = riak_core_util:make_fold_req(Fun, Acc0),
     riak_core_vnode_master:sync_spawn_command(Preflist,
-                                              ?FOLD_REQ{
-                                                 foldfun=Fun,
-                                                 acc0=Acc0},
+                                              Req,
                                               riak_kv_vnode_master).
 
 get_vclocks(Preflist, BKeyList) ->
@@ -340,7 +339,8 @@ rehash(Preflist, Bucket, Key) ->
                              ok | {error, term()}.
 reformat_object(Partition, BKey) ->
     riak_core_vnode_master:sync_spawn_command({Partition, node()},
-                                              {reformat_object, BKey},
+                                              {reformat_object,
+                                               sanitize_bkey(BKey)},
                                               riak_kv_vnode_master).
 
 %% VNode callbacks
@@ -474,7 +474,15 @@ handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender, State) ->
     do_delete(BKey, ReqId, State);
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
     {reply, do_get_vclocks(BKeys, State), State};
-handle_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0}, Sender, State) ->
+handle_command(#riak_core_fold_req_v1{} = ReqV1,
+               Sender, State) ->
+    %% Use make_fold_req() to upgrade to the most recent ?FOLD_REQ
+    handle_command(riak_core_util:make_fold_req(ReqV1), Sender, State);
+handle_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0,
+                         forwardable=_Forwardable, opts=Opts}, Sender, State) ->
+    %% The riak_core layer takes care of forwarding/not forwarding, so
+    %% we ignore forwardable here.
+    %%
     %% The function in riak_core used for object folding expects the
     %% bucket and key pair to be passed as the first parameter, but in
     %% riak_kv the bucket and key have been separated. This function
@@ -482,7 +490,7 @@ handle_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0}, Sender, State) ->
     FoldWrapper = fun(Bucket, Key, Value, Acc) ->
                           FoldFun({Bucket, Key}, Value, Acc)
                   end,
-    do_fold(FoldWrapper, Acc0, Sender, State);
+    do_fold(FoldWrapper, Acc0, Sender, Opts, State);
 
 %% entropy exchange commands
 handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
@@ -1377,16 +1385,16 @@ do_delete(BKey, ReqId, State) ->
     end.
 
 %% @private
-do_fold(Fun, Acc0, Sender, State=#state{async_folding=AsyncFolding,
-                                        mod=Mod,
-                                        modstate=ModState}) ->
+do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
+                                                 mod=Mod,
+                                                 modstate=ModState}) ->
     {ok, Capabilities} = Mod:capabilities(ModState),
     AsyncBackend = lists:member(async_fold, Capabilities),
     case AsyncFolding andalso AsyncBackend of
         true ->
-            Opts = [async_fold];
+            Opts = [async_fold|ReqOpts];
         false ->
-            Opts = []
+            Opts = ReqOpts
     end,
     case Mod:fold_objects(Fun, Acc0, Opts, ModState) of
         {ok, Acc} ->
@@ -1705,6 +1713,11 @@ encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
 uses_r_object(Mod, ModState, Bucket) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     lists:member(uses_r_object, Capabilities).
+
+sanitize_bkey({{<<"default">>, B}, K}) ->
+    {B, K};
+sanitize_bkey(BKey) ->
+    BKey.
 
 -ifdef(TEST).
 

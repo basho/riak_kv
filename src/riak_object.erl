@@ -31,7 +31,7 @@
 -export_type([riak_object/0, bucket/0, key/0, value/0, binary_version/0]).
 
 -type key() :: binary().
--type bucket() :: binary().
+-type bucket() :: binary() | {binary(), binary()}.
 %% -type bkey() :: {bucket(), key()}.
 -type value() :: term().
 
@@ -69,7 +69,7 @@
 -export([hash/1, approximate_size/2]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
 -export([encode_vclock/2, decode_vclock/2]).
--export([update_value/2, update_metadata/2, bucket/1, value_count/1]).
+-export([update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([merge/2, apply_updates/1, syntactic_merge/2]).
 -export([to_json/1, from_json/1]).
@@ -80,20 +80,30 @@
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
+new({T, B}, K, V) when is_binary(T), is_binary(B), is_binary(K) ->
+    new_int({T, B}, K, V, no_initial_metadata);
 new(B, K, V) when is_binary(B), is_binary(K) ->
-    new(B, K, V, no_initial_metadata).
+    new_int(B, K, V, no_initial_metadata).
 
 %% @doc Constructor for new riak objects with an initial content-type.
 -spec new(Bucket::bucket(), Key::key(), Value::value(),
           string() | dict() | no_initial_metadata) -> riak_object().
+new({T, B}, K, V, C) when is_binary(T), is_binary(B), is_binary(K), is_list(C) ->
+    new_int({T, B}, K, V, dict:from_list([{?MD_CTYPE, C}]));
 new(B, K, V, C) when is_binary(B), is_binary(K), is_list(C) ->
-    new(B, K, V, dict:from_list([{?MD_CTYPE, C}]));
+    new_int(B, K, V, dict:from_list([{?MD_CTYPE, C}]));
 
 %% @doc Constructor for new riak objects with an initial metadata dict.
 %%
 %% NOTE: Removed "is_tuple(MD)" guard to make Dialyzer happy.  The previous clause
 %%       has a guard for string(), so this clause is OK without the guard.
+new({T, B}, K, V, MD) when is_binary(T), is_binary(B), is_binary(K) ->
+    new_int({T, B}, K, V, MD);
 new(B, K, V, MD) when is_binary(B), is_binary(K) ->
+    new_int(B, K, V, MD).
+
+%% internal version after all validation has been done
+new_int(B, K, V, MD) ->
     case size(K) > ?MAX_KEY_SIZE of
         true ->
             throw({error,key_too_large});
@@ -262,6 +272,17 @@ apply_updates(Object=#r_object{}) ->
 %% @doc Return the containing bucket for this riak_object.
 -spec bucket(riak_object()) -> bucket().
 bucket(#r_object{bucket=Bucket}) -> Bucket.
+
+%% @doc Return the containing bucket for this riak_object without any type
+%% information, if present.
+-spec bucket_only(riak_object()) -> binary().
+bucket_only(#r_object{bucket={_Type, Bucket}}) -> Bucket;
+bucket_only(#r_object{bucket=Bucket}) -> Bucket.
+
+%% @doc Return the containing bucket-type for this riak_object.
+-spec type(riak_object()) -> binary() | undefined.
+type(#r_object{bucket={Type, _Bucket}}) -> Type;
+type(#r_object{bucket=_Bucket}) -> undefined.
 
 %% @doc  Return the key for this riak_object.
 -spec key(riak_object()) -> key().

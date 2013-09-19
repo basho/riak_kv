@@ -587,6 +587,8 @@ send_inputs(Pipe, BucketKeyList, _Timeout) when is_list(BucketKeyList) ->
     end;
 send_inputs(Pipe, Bucket, Timeout) when is_binary(Bucket) ->
     riak_kv_pipe_listkeys:queue_existing_pipe(Pipe, Bucket, Timeout);
+send_inputs(Pipe, {Type, Bucket}, Timeout) when is_binary(Type), is_binary(Bucket) ->
+    riak_kv_pipe_listkeys:queue_existing_pipe(Pipe, {Type, Bucket}, Timeout);
 send_inputs(Pipe, {Bucket, FilterExprs}, Timeout) ->
     case riak_kv_mapred_filters:build_filter(FilterExprs) of
         {ok, Filters} ->

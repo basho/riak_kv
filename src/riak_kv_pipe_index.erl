@@ -105,7 +105,7 @@ keysend(_Bucket, [], _Partition, _FittingDetails) ->
     ok;
 keysend(Bucket, [Key | Keys], Partition, FittingDetails) ->
     case riak_pipe_vnode_worker:send_output(
-           {Bucket, strip_index(Key)}, Partition, FittingDetails) of
+           {{Bucket, strip_index(Key)}, undefined}, Partition, FittingDetails) of
         ok ->
             keysend(Bucket, Keys, Partition, FittingDetails);
         ER ->

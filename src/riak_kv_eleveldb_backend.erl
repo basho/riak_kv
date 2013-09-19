@@ -786,7 +786,7 @@ fold_objects_fun(FoldObjectsFun, undefined) ->
 %% bucket "foo" would be `sext:encode({o, <<"foo">>, <<>>}).`
 to_first_key(undefined) ->
     %% Start at the first object in LevelDB...
-    to_object_key(<<>>, <<>>);
+    to_object_key({<<>>, <<>>}, <<>>);
 to_first_key({bucket, Bucket}) ->
     %% Start at the first object for a given bucket...
     to_object_key(Bucket, <<>>);
