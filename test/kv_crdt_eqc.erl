@@ -20,12 +20,12 @@
 %%
 %% -------------------------------------------------------------------
 
--module(kv_counter_eqc).
+-module(kv_crdt_eqc).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eunit/include/eunit.hrl").
-
+-include_lib("riak_kv_types.hrl").
 -include("../src/riak_kv_wm_raw.hrl").
 
 -compile(export_all).
@@ -84,12 +84,20 @@ test_update(N) ->
 
 prop_value() ->
     ?FORALL(RObj, riak_object(),
-            equals(sumthem(RObj), riak_kv_counter:value(RObj))).
+            begin
+                Expected = sumthem(RObj),
+                {_, Cnt} = riak_kv_crdt:value(RObj, riak_dt_pncounter),
+                ?WHENFAIL(
+                   begin
+                       io:format("Gen ~p\n", [RObj])
+                   end,
+                   equals(Expected, Cnt))
+            end).
 
 prop_merge() ->
     ?FORALL(RObj, riak_object(),
             begin
-                Merged = riak_kv_counter:merge(RObj),
+                Merged = riak_kv_crdt:merge(RObj),
                 FExpectedCounters = fun(NumGeneratedCounters) ->
                                             case NumGeneratedCounters of
                                                 0 -> 0;
@@ -97,6 +105,7 @@ prop_merge() ->
                                             end
                                     end,
                 MergeSeed = undefined,
+                {_, Cnt} = riak_kv_crdt:value(Merged, riak_dt_pncounter),
 
                 ?WHENFAIL(
                    begin
@@ -105,7 +114,7 @@ prop_merge() ->
                    end,
 
                    conjunction([
-                                {value, equals(sumthem(RObj), riak_kv_counter:value(Merged))},
+                                {value, equals(sumthem(RObj), Cnt)},
                                 {verify_merge, verify_merge(RObj, Merged, FExpectedCounters, MergeSeed)}
                                ]))
             end).
@@ -114,7 +123,7 @@ prop_update() ->
     ?FORALL({RObj, Actor, Amt},
             {riak_object(), noshrink(binary(4)), int()},
             begin
-                Updated = riak_kv_counter:update(RObj, Actor, Amt),
+                Updated = riak_kv_crdt:update(RObj, Actor, Amt),
                 FExpectedCounters = fun(NumGeneratedCounters) ->
                                             case {NumGeneratedCounters, Amt} of
                                                 {0, 0} -> 0;
@@ -123,9 +132,9 @@ prop_update() ->
                                     end,
                 MergeSeed = case Amt of
                                 0 -> undefined;
-                                _ ->  riak_kv_pncounter:new(Actor, Amt)
+                                _ ->  riak_dt_pncounter:new(Actor, Amt)
                             end,
-
+                {_, Cnt} = riak_kv_crdt:value(Updated, riak_dt_pncounter),
                 ?WHENFAIL(
                    begin
                        io:format("Gen ~p~n", [RObj]),
@@ -134,7 +143,7 @@ prop_update() ->
                    end,
                    conjunction([
                                 {counter_value, equals(sumthem(RObj) + Amt,
-                                                       riak_kv_counter:value(Updated))},
+                                                       Cnt)},
                                 {verify_merge, verify_merge(RObj, Updated, FExpectedCounters, MergeSeed)}
                                ]))
             end).
@@ -183,7 +192,7 @@ get_latest_meta(MD1, MD2) ->
             MD1
     end.
 
-%% safe wrap of riak_kv_pncounter:equal/2
+%% safe wrap of riak_dt_pncounter:equal/2
 counters_equal(undefined, undefined) ->
     true;
 counters_equal(_C1, undefined) ->
@@ -191,17 +200,17 @@ counters_equal(_C1, undefined) ->
 counters_equal(undefined, _C2) ->
     false;
 counters_equal(C1B, C2B) when is_binary(C1B), is_binary(C2B) ->
-    C1 = riak_kv_counter:from_binary(C1B),
-    C2 = riak_kv_counter:from_binary(C2B),
-    riak_kv_pncounter:equal(C1, C2);
+    C1 = riak_kv_crdt:from_binary(C1B),
+    C2 = riak_kv_crdt:from_binary(C2B),
+    riak_dt_pncounter:equal(C1, C2);
 counters_equal(C1B, C2) when is_binary(C1B) ->
-    C1 = riak_kv_counter:from_binary(C1B),
+    C1 = riak_kv_crdt:from_binary(C1B),
     counters_equal(C1, C2);
 counters_equal(C1, C2B) when is_binary(C2B) ->
-    C2 = riak_kv_counter:from_binary(C2B),
+    C2 = riak_kv_crdt:from_binary(C2B),
     counters_equal(C1, C2);
 counters_equal(C1, C2) ->
-    riak_kv_pncounter:equal(C1, C2).
+    riak_dt_pncounter:equal(C1, C2).
 
 
 %% Extract a single {meta, counter} value
@@ -209,7 +218,7 @@ single_counter(Merged) ->
     Contents = riak_object:get_contents(Merged),
     case [begin
               <<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>> = Val,
-              Counter = riak_kv_pncounter:from_binary(CounterBin),
+              Counter = riak_dt_pncounter:from_binary(CounterBin),
               {Meta, Counter}
           end || {Meta, Val} <- Contents,
          is_counter(Val)] of
@@ -242,10 +251,15 @@ num_counters(RObj) ->
 merge_object(RObj, Seed) ->
     Values = riak_object:get_values(RObj),
     lists:foldl(fun(<<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>, undefined) ->
-                        riak_kv_pncounter:from_binary(CounterBin);
+                        try riak_dt_pncounter:from_binary(CounterBin) of
+                            Counter -> Counter
+                        catch _:_ -> undefined
+                        end;
                    (<<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>, Mergedest) ->
-                        Counter = riak_kv_pncounter:from_binary(CounterBin),
-                        riak_kv_pncounter:merge(Counter, Mergedest);
+                        try riak_dt_pncounter:from_binary(CounterBin) of
+                            Counter -> riak_dt_pncounter:merge(Counter, Mergedest)
+                        catch _:_ -> Mergedest
+                        end;
                    (_Bin, Mergedest) ->
                         Mergedest end,
                 Seed,
@@ -254,8 +268,8 @@ merge_object(RObj, Seed) ->
 %% Somewhat duplicates the logic under test
 %% but is a different implementation, at least
 sumthem(RObj) ->
-    Merged = merge_object(RObj, riak_kv_pncounter:new()),
-    riak_kv_pncounter:value(Merged).
+    Merged = merge_object(RObj, riak_dt_pncounter:new()),
+    riak_dt_pncounter:value(Merged).
 
 %%====================================================================
 %% Generators
@@ -301,7 +315,7 @@ pncounterds() ->
 
 pncounter() ->
     ?LET(PNCounter, pncounterds(),
-         riak_kv_counter:to_binary(PNCounter)).
+         riak_kv_crdt:to_binary(?CRDT{mod=riak_dt_pncounter, value=PNCounter}, ?V1_VERS)).
 
 clock() ->
     {int(), nat()}.

@@ -23,10 +23,9 @@
 -module(riak_kv_crdt).
 
 -export([update/3, merge/1, value/2, new/3,
-         to_binary/1, from_binary/1, supported/1, parse_operation/2,
+         supported/1, parse_operation/2,
          to_mod/1, from_mod/1]).
-
--export([split_ops/1]).
+-export([to_binary/2, to_binary/1, from_binary/1]).
 
 -include("riak_kv_wm_raw.hrl").
 -include_lib("riak_kv_types.hrl").
@@ -34,7 +33,6 @@
 -ifdef(TEST).
 -ifdef(EQC).
 -export([test_split/0, test_split/1]).
-
 -include_lib("eqc/include/eqc.hrl").
 -endif.
 -include_lib("eunit/include/eunit.hrl").
@@ -42,13 +40,14 @@
 
 -define(TAG, 69).
 -define(V1_VERS, 1).
+-define(V2_VERS, 2).
 
 -type crdts() :: [{DT_MOD::module(), crdt()}].
 -type ro_content() :: {Meta::dict(), Value::binary()}.
 -type ro_contents() :: [ro_content()].
 -type precondition_error() :: {error, {precondition, {not_present, term()}}}.
 
-%% @doc applies the gievn `Operation' to the merged value.  first
+%% @doc applies the given `Operation' to the merged value.  first
 %% performs a merge (@see merge/1), and then applies the update.
 %% NOTE: operation needs to be a ?CRDT_OP in case of siblings of different
 %% types
@@ -89,7 +88,7 @@ value(RObj, Type) ->
 -spec crdt_value(module(), error | {ok, {dict(), crdt()}}) ->
                         {binary(), riak_dt:value()}.
 crdt_value(Type, error) ->
-    {<<>>, Type:new()};
+    {<<>>, Type:value(Type:new())};
 crdt_value(Type, {ok, {_Meta, ?CRDT{mod=Type, value=Value}}}) ->
     {get_context(Type, Value), Type:value(Value)}.
 
@@ -98,7 +97,16 @@ crdt_value(Type, {ok, {_Meta, ?CRDT{mod=Type, value=Value}}}) ->
                           {crdts(), list()}.
 merge_object(RObj) ->
     Contents = riak_object:get_contents(RObj),
-    merge_contents(Contents).
+    {CRDTs, NonCRDTSiblings, Errors} = merge_contents(Contents),
+    log_errors(RObj, Errors),
+    {CRDTs, NonCRDTSiblings}.
+
+log_errors(_, []) ->
+    ok;
+log_errors(RObj, Errors) ->
+    Bucket = riak_object:bucket(RObj),
+    Key = riak_object:key(RObj),
+    lager:info("Error(s) deserializing CRDT at ~p ~p: ~p~n", [Bucket, Key, Errors]).
 
 %% @private Only merge the values of CRDTs If there are siblings that
 %% are CRDTs BUT NOT THE SAME TYPE (don't do that!!)  Merge
@@ -108,26 +116,37 @@ merge_object(RObj) ->
                             {crdts(), ro_contents()}.
 merge_contents(Contents) ->
     lists:foldl(fun merge_value/2,
-                {orddict:new(), []},
+                {orddict:new(), [], []},
                Contents).
 
 %% @private worker for `merge_contents/1' if the content is a CRDT,
 %% de-binary it, merge it and store the most merged value in the
-%% accumulartor dictionary.
+%% accumulator dictionary.
 -spec merge_value(ro_content(), {crdts(), ro_contents()}) ->
                          {crdts(), ro_contents()}.
-merge_value({MD, <<?TAG:8/integer, ?V1_VERS:8/integer, CRDTBin/binary>>},
-            {Dict, NonCounterSiblings}) ->
-    CRDT=?CRDT{mod=Mod, value=Val, ctype=CType} = crdt_from_binary(CRDTBin),
-    D2 = orddict:update(Mod, fun({Meta, Mergedest=?CRDT{value=Value}}) ->
-                                     NewMeta = merge_meta(CType, Meta, MD),
-                                     NewVal = Mod:merge(Value, Val),
-                                     {NewMeta, Mergedest?CRDT{value = NewVal}}
-                             end,
-                        {MD, CRDT}, Dict),
-    {D2, NonCounterSiblings};
-merge_value(NonCRDT, {Dict, NonCRDTSiblings}) ->
-    {Dict, [NonCRDT | NonCRDTSiblings]}.
+merge_value({MD, <<?TAG:8/integer, Version:8/integer, CRDTBin/binary>>=Content},
+            {Dict, NonCRDTSiblings, Errors}) ->
+    case deserialize_crdt(Version, CRDTBin) of
+        {ok, CRDT=?CRDT{mod=Mod, value=Val, ctype=CType}} ->
+            D2 = orddict:update(Mod, fun({Meta, Mergedest=?CRDT{value=Value}}) ->
+                                             NewMeta = merge_meta(CType, Meta, MD),
+                                             NewVal = Mod:merge(Value, Val),
+                                             {NewMeta, Mergedest?CRDT{value = NewVal}}
+                                     end,
+                                {MD, CRDT}, Dict),
+            {D2, NonCRDTSiblings, Errors};
+        {error, Error} ->
+            {Dict, [{MD, Content} | NonCRDTSiblings], [Error | Errors]}
+    end;
+merge_value(NonCRDT, {Dict, NonCRDTSiblings, Errors}) ->
+    {Dict, [NonCRDT | NonCRDTSiblings], Errors}.
+
+deserialize_crdt(?V1_VERS, CounterBin) ->
+    v1_counter_from_binary(CounterBin);
+deserialize_crdt(?V2_VERS, CRDTBin) ->
+    crdt_from_binary(CRDTBin);
+deserialize_crdt(V, _Bin) ->
+    {error, {invalid_version, V}}.
 
 %% @private Apply the updates to the CRDT. If there is no context for
 %% the operation then apply the operation to the local merged replica,
@@ -277,19 +296,59 @@ new(B, K, Mod) ->
     Doc0 = riak_object:new(B, K, Bin, CType),
     riak_object:set_vclock(Doc0, vclock:fresh()).
 
+%% @doc turn a `crdt()' record into a binary for storage on disk /
+%% passing on the network
+-spec to_binary(crdt()) -> binary().
 to_binary(?CRDT{mod=Mod, value=Value}) ->
     CRDTBin = Mod:to_binary(Value),
     Type = atom_to_binary(Mod, latin1),
     TypeLen = byte_size(Type),
-    <<?TAG:8/integer, ?V1_VERS:8/integer, TypeLen:32/integer, Type:TypeLen/binary, CRDTBin/binary>>.
+    <<?TAG:8/integer, ?V2_VERS:8/integer, TypeLen:32/integer, Type:TypeLen/binary, CRDTBin/binary>>.
 
-from_binary(<<?TAG:8/integer,?V1_VERS:8/integer, CRDTBin/binary>>) ->
+%% @doc turn a `crdt()' record into a `Version' binary for storage on
+%% disk / passing on the network
+-spec to_binary(crdt(), Version::pos_integer()) -> binary().
+to_binary(CRDT, ?V2_VERS) ->
+    to_binary(CRDT);
+to_binary(?CRDT{mod=riak_dt_pncounter, value=Value}, ?V1_VERS) ->
+    CounterBin = riak_dt_pncounter:to_binary(Value),
+    <<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>.
+
+%% @doc deserialize a crdt from it's binary format.  The binary must
+%% start with the riak_kv_crdt tag and a version If the binary can be
+%% deserailised into a `crdt()' returns `{ok, crdt()}', otherwise
+%% `{error, term()}'
+-spec from_binary(binary()) -> {ok, crdt()} | {error, term()}.
+from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>) ->
+    v1_counter_from_binary(CounterBin);
+from_binary(<<?TAG:8/integer, ?V2_VERS:8/integer, CRDTBin/binary>>) ->
     crdt_from_binary(CRDTBin).
 
+%% @private attempt to deserialize a v1 counter (riak 1.4.x counter)
+v1_counter_from_binary(CounterBin) ->
+    try
+        to_record(riak_dt_pncounter, riak_dt_pncounter:from_binary(CounterBin)) of
+        ?CRDT{}=Counter ->
+            {ok, Counter}
+    catch
+        Class:Err ->
+            {error, {Class, Err}}
+        end.
+
+%% @private attempt to deserialize a v2 CRDT.
 crdt_from_binary(<<TypeLen:32/integer, Type:TypeLen/binary, CRDTBin/binary>>) ->
-    Mod = binary_to_existing_atom(Type, latin1),
-    Val = Mod:from_binary(CRDTBin),
-    to_record(Mod, Val).
+    try
+        Mod = binary_to_existing_atom(Type, latin1),
+        Val = Mod:from_binary(CRDTBin),
+        to_record(Mod, Val) of
+        ?CRDT{}=CRDT ->
+            {ok, CRDT}
+    catch
+        Class:Err ->
+            {error, {Class, Err}}
+    end;
+crdt_from_binary(_) ->
+    {error, {invalid_crdt_binary}}.
 
 to_record(?COUNTER_TYPE, Val) ->
     ?COUNTER_TYPE(Val);
