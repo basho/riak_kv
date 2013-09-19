@@ -8,10 +8,10 @@
 -define(COUNTER_TYPE, riak_dt_pncounter).
 -define(COUNTER_TYPE(Val), #crdt{mod=?COUNTER_TYPE, ctype="application/riak_counter", value=Val}).
 
--define(SET_TYPE, riak_dt_vvorset).
+-define(SET_TYPE, riak_dt_orswot).
 -define(SET_TYPE(Val), #crdt{mod=?SET_TYPE, ctype="application/riak_set", value=Val}).
 
--define(MAP_TYPE, riak_dt_multi).
+-define(MAP_TYPE, riak_dt_map).
 -define(MAP_TYPE(Val), #crdt{mod=?MAP_TYPE, ctype="application/riak_map", value=Val}).
 
 %% Internal Only Key->Map->Field->Type types

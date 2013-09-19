@@ -426,7 +426,7 @@ test_split(TestTimeSeconds) ->
     eqc:quickcheck(eqc:testing_time(TestTimeSeconds, ?QC_OUT(prop_split()))).
 
 prop_split() ->
-    ?FORALL(Ops, oneof([riak_dt_multi:gen_op(), riak_dt_vvorset:gen_op()]),
+    ?FORALL(Ops, oneof([riak_dt_map:gen_op(), riak_dt_orswot:gen_op()]),
             begin
                 {Pre, Post} = split_ops(Ops),
                 AgOps = to_list(Ops),
