@@ -34,6 +34,8 @@
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
 -export([start/3, start/6,start/7]).
 -export([start_link/3,start_link/6,start_link/7]).
+-export([set_put_coordinator_failure_timeout/1,
+         get_put_coordinator_failure_timeout/0]).
 -ifdef(TEST).
 -export([test_link/4]).
 -endif.
@@ -105,7 +107,8 @@
                                           non_neg_integer()}}],
                 reply, % reply sent to client,
                 tracked_bucket=false :: boolean(), %% track per bucket stats
-                bad_coordinators = [] :: [atom()]
+                bad_coordinators = [] :: [atom()],
+                coordinator_timeout :: integer()
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -153,6 +156,18 @@ start_link(From, Object, PutOptions) ->
             end
     end.
 
+set_put_coordinator_failure_timeout(MS) when is_integer(MS), MS >= 0 ->
+    %% mochiglobal:put(put_coordinator_failure_timeout, MS);
+    application:set_env(riak_kv, put_coordinator_failure_timeout, MS);
+set_put_coordinator_failure_timeout(Bad) ->
+    lager:error("~s:set_put_coordinator_failure_timeout(~p) invalid",
+                [?MODULE, Bad]),
+    set_put_coordinator_failure_timeout(3000).
+
+get_put_coordinator_failure_timeout() ->
+    %% mochiglobal:get(put_coordinator_failure_timeout).
+    app_helper:get_env(riak_kv, put_coordinator_failure_timeout, 3000).
+
 make_ack_options(Options) ->
     case riak_core_capability:get({riak_kv, put_fsm_ack_execute}, disabled) of
         disabled ->
@@ -181,7 +196,7 @@ monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
     receive
         {ack, CoordNode, now_executing} ->
             {stop, normal, StateData}
-    after 3000 ->
+    after StateData#state.coordinator_timeout ->
             exit(MiddleMan, kill),
             Bad = StateData#state.bad_coordinators,
             prepare(timeout, StateData#state{bad_coordinators=[CoordNode|Bad]})
@@ -213,10 +228,12 @@ test_link(From, Object, PutOptions, StateProps) ->
 %% @private
 init([From, RObj, Options, Monitor]) ->
     BKey = {Bucket, Key} = {riak_object:bucket(RObj), riak_object:key(RObj)},
+    CoordTimeout = get_put_coordinator_failure_timeout(),
     StateData = add_timing(prepare, #state{from = From,
                                            robj = RObj,
                                            bkey = BKey,
-                                           options = Options}),
+                                           options = Options,
+                                           coordinator_timeout=CoordTimeout}),
     (Monitor =:= true) andalso riak_kv_get_put_monitor:put_fsm_spawned(self()),
     riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
     case riak_kv_util:is_x_deleted(RObj) of
@@ -268,16 +285,17 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
             process_reply(Error, StateData0);
         _ ->
             StatTracked = proplists:get_value(stat_tracked, BucketProps, false),
-            Preflist1 = case proplists:get_value(sloppy_quorum, Options, true) of
+            Preflist2 = case proplists:get_value(sloppy_quorum, Options, true) of
                             true ->
                                 UpNodes = riak_core_node_watcher:nodes(riak_kv),
                                 riak_core_apl:get_apl_ann(
                                   DocIdx, N, UpNodes -- BadCoordinators);
                             false ->
-                                riak_core_apl:get_primary_apl(DocIdx, N, riak_kv)
+                                Preflist1 = riak_core_apl:get_primary_apl(
+                                              DocIdx, N, riak_kv),
+                                [X || X = {{_Index, Node}, _Type} <- Preflist1,
+                                      not lists:member(Node, BadCoordinators)]
                         end,
-            Preflist2 = [X || X = {{_Index, Node}, _Type} <- Preflist1,
-                              not lists:member(Node, BadCoordinators)],
             %% Check if this node is in the preference list so it can coordinate
             LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
                                 Node == node()],
