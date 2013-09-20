@@ -64,7 +64,29 @@ init() ->
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) ->
-    {ok, riak_pb_codec:decode(Code, Bin)}.
+    Msg = riak_pb_codec:decode(Code, Bin),
+    case Msg of
+        rpblistbucketsreq ->
+            %% backwards compat
+            {ok, Msg, {"riak_kv.list_buckets", <<"default">>}};
+        #rpblistbucketsreq{} ->
+            Type = case Msg#rpblistbucketsreq.type of
+                       undefined ->
+                           <<"default">>;
+                       T ->
+                           T
+                   end,
+            {ok, Msg, {"riak_kv.list_buckets", Type}};
+        #rpblistkeysreq{} ->
+            Type = case Msg#rpblistkeysreq.type of
+                       undefined ->
+                           <<"default">>;
+                       T ->
+                           T
+                   end,
+            {ok, Msg, {"riak_kv.list_keys", {Type,
+                                                Msg#rpblistkeysreq.bucket}}}
+    end.
 
 %% @doc encode/1 callback. Encodes an outgoing response message.
 encode(Message) ->

@@ -57,7 +57,12 @@ init() ->
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) ->
-    {ok, riak_pb_codec:decode(Code, Bin)}.
+    Msg = riak_pb_codec:decode(Code, Bin),
+    case Msg of
+        #rpbindexreq{type=T, bucket=B} ->
+            Bucket = bucket_type(T, B),
+            {ok, Msg, {"riak_kv.index", Bucket}}
+    end.
 
 %% @doc encode/1 callback. Encodes an outgoing response message.
 encode(Message) ->
@@ -163,4 +168,10 @@ maybe_bucket_type(undefined, B) ->
 maybe_bucket_type(<<"default">>, B) ->
     B;
 maybe_bucket_type(T, B) ->
+    {T, B}.
+
+%% always construct {Type, Bucket} tuple, filling in default type if needed
+bucket_type(undefined, B) ->
+    {<<"default">>, B};
+bucket_type(T, B) ->
     {T, B}.
