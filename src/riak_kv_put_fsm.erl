@@ -157,7 +157,6 @@ start_link(From, Object, PutOptions) ->
     end.
 
 set_put_coordinator_failure_timeout(MS) when is_integer(MS), MS >= 0 ->
-    %% mochiglobal:put(put_coordinator_failure_timeout, MS);
     application:set_env(riak_kv, put_coordinator_failure_timeout, MS);
 set_put_coordinator_failure_timeout(Bad) ->
     lager:error("~s:set_put_coordinator_failure_timeout(~p) invalid",
@@ -165,7 +164,6 @@ set_put_coordinator_failure_timeout(Bad) ->
     set_put_coordinator_failure_timeout(3000).
 
 get_put_coordinator_failure_timeout() ->
-    %% mochiglobal:get(put_coordinator_failure_timeout).
     app_helper:get_env(riak_kv, put_coordinator_failure_timeout, 3000).
 
 make_ack_options(Options) ->

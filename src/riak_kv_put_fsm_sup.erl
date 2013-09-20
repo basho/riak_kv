@@ -41,10 +41,6 @@ start_link() ->
 %% @spec init([]) -> SupervisorTree
 %% @doc supervisor callback.
 init([]) ->
-    %% Mochiglobal used this way is far slower than the application app ETS
-    %% CoordTimeout = app_helper:get_env(riak_kv, put_coordinator_failure_timeout, 3000),
-    %% riak_kv_put_fsm:set_put_coordinator_failure_timeout(CoordTimeout),
-
     PutFsmSpec = {undefined,
                {riak_kv_put_fsm, start_link, []},
                temporary, 5000, worker, [riak_kv_put_fsm]},
