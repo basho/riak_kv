@@ -99,6 +99,7 @@
 -export([
          init/1,
          service_available/2,
+         is_authorized/2,
          forbidden/2,
          allowed_methods/2,
          allow_missing_post/2,
@@ -143,7 +144,8 @@
               links,        %% [link()] - links of the object
               index_fields, %% [index_field()]
               method,       %% atom() - HTTP method for the request
-              timeout       %% integer() - passed-in timeout value in ms
+              timeout,      %% integer() - passed-in timeout value in ms
+              security      %% security context
              }).
 %% @type link() = {{Bucket::binary(), Key::binary()}, Tag::binary()}
 %% @type index_field() = {Key::string(), Value::string()}
@@ -194,8 +196,86 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
              Ctx}
     end.
 
-forbidden(RD, Ctx) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
+is_authorized(ReqData, Ctx) ->
+    case riak_api_web_security:is_authorized(ReqData) of
+        false ->
+            {"Basic realm=\"Riak\"", ReqData, Ctx};
+        {true, SecContext} ->
+            {true, ReqData, Ctx#ctx{security=SecContext}};
+        insecure ->
+            %% XXX 301 may be more appropriate here, but since the http and
+            %% https port are different and configurable, it is hard to figure
+            %% out the redirect URL to serve.
+            {{halt, 426}, wrq:append_to_resp_body(<<"Security is enabled and "
+                    "Riak does not accept credentials over HTTP. Try HTTPS "
+                    "instead.">>, ReqData), Ctx}
+    end.
+
+forbidden(RD, Ctx=#ctx{security=undefined}) ->
+    case riak_kv_wm_utils:is_forbidden(RD) of
+        true ->
+            {true, RD, Ctx};
+        false ->
+            %% If it is a put or a post, don't require the object to already
+            %% exist.
+            case Ctx#ctx.method of
+                'POST' ->
+                    {false, RD, Ctx};
+                'PUT' ->
+                    {false, RD, Ctx};
+                _ ->
+                    forbidden_check_doc(RD, Ctx)
+            end
+    end;
+forbidden(RD, Ctx=#ctx{security=Security}) ->
+    case riak_kv_wm_utils:is_forbidden(RD) of
+        true ->
+            {true, RD, Ctx};
+        false ->
+            Perm = case Ctx#ctx.method of
+                'POST' ->
+                    "riak_kv.put";
+                'PUT' ->
+                    "riak_kv.put";
+                'HEAD' ->
+                    "riak_kv.get";
+                'GET' ->
+                    "riak_kv.get";
+                'DELETE' ->
+                    "riak_kv.delete"
+            end,
+
+            Res = riak_core_security:check_permission({Perm,
+                                                           {<<"default">>,
+                                                            Ctx#ctx.bucket}},
+                                                           Security),
+            case Res of
+                {false, Error, _} ->
+                    {true, wrq:append_to_resp_body(list_to_binary(Error), RD), Ctx};
+                {true, _} ->
+                    case Perm of
+                        "riak_kv.get" ->
+                            %% Ensure the key is here, otherwise 404
+                            %% we do this early as it used to be done in the
+                            %% malformed check, so the rest of the resource
+                            %% assumes that the key is present.
+                            forbidden_check_doc(RD, Ctx);
+                        _ ->
+                            {false, RD, Ctx}
+                    end
+            end
+    end.
+
+%% @doc Detects whether fetching the requeste object results in an
+%% error.
+forbidden_check_doc(RD, Ctx) ->
+    DocCtx = ensure_doc(Ctx),
+    case DocCtx#ctx.doc of
+        {error, Reason} ->
+            handle_common_error(Reason, RD, DocCtx);
+        _ ->
+            {false, RD, DocCtx}
+    end.
 
 %% @spec allowed_methods(reqdata(), context()) ->
 %%          {[method()], reqdata(), context()}
@@ -235,8 +315,7 @@ malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'POST'
                       RD, Ctx);
 malformed_request(RD, Ctx) ->
     malformed_request([fun malformed_timeout_param/2,
-                       fun malformed_rw_params/2,
-                       fun malformed_check_doc/2], RD, Ctx).
+                       fun malformed_rw_params/2], RD, Ctx).
 
 %% @doc Given a list of 2-arity funs, threads through the request data
 %% and context, returning as soon as a single fun discovers a
@@ -259,17 +338,6 @@ malformed_content_type(RD, Ctx) ->
         undefined ->
             {true, missing_content_type(RD), Ctx};
         _ -> {false, RD, Ctx}
-    end.
-
-%% @doc Detects whether fetching the requested object results in an
-%% error.
-malformed_check_doc(RD, Ctx) ->
-    DocCtx = ensure_doc(Ctx),
-    case DocCtx#ctx.doc of
-        {error, Reason} ->
-            handle_common_error(Reason, RD, DocCtx);
-        _ ->
-            {false, RD, DocCtx}
     end.
 
 %% @spec malformed_timeout_param(reqdata(), context()) ->

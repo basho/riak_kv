@@ -61,7 +61,22 @@ init() ->
     #state{}.
 
 decode(Code, Bin) ->
-    {ok, riak_pb_codec:decode(Code, Bin)}.
+    Msg = riak_pb_codec:decode(Code, Bin),
+    case Msg of
+        #rpbmapredreq{} ->
+            %% I know we decode it in process() too, but we need to figure out
+            %% what permissions this mapreduce will require
+            #rpbmapredreq{request=MrReq, content_type=ContentType}=Msg,
+            case decode_mapred_query(MrReq, ContentType) of
+                {error, _} ->
+                    %% can't decode it, so we can't apply permissions to it.
+                    %% This doesn't matter since process() will fail anyway.
+                    {ok, Msg};
+                {ok, Inputs, Query, _} ->
+                    {ok, Msg, riak_kv_mapred_term:get_required_permissions(Inputs,
+                                                                           Query)}
+            end
+    end.
 
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.

@@ -45,6 +45,7 @@
 -export([
          init/1,
          service_available/2,
+         is_authorized/2,
          forbidden/2,
          content_types_provided/2,
          encodings_provided/2,
@@ -59,7 +60,8 @@
               prefix,       %% string() - prefix for resource uris
               riak,         %% local | {node(), atom()} - params for riak client
               allow_props_param, %% true if the user can also list props. (legacy API)
-              timeout       %% integer() - list keys timeout
+              timeout,      %% integer() - list keys timeout
+              security      %% security context
              }).
 %% @type link() = {{Bucket::binary(), Key::binary()}, Tag::binary()}
 %% @type index_field() = {Key::string(), Value::string()}
@@ -103,9 +105,39 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
              Ctx}
     end.
 
-forbidden(RD, Ctx) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
+is_authorized(ReqData, Ctx) ->
+    case riak_api_web_security:is_authorized(ReqData) of
+        false ->
+            {"Basic realm=\"Riak\"", ReqData, Ctx};
+        {true, SecContext} ->
+            {true, ReqData, Ctx#ctx{security=SecContext}};
+        insecure ->
+            %% XXX 301 may be more appropriate here, but since the http and
+            %% https port are different and configurable, it is hard to figure
+            %% out the redirect URL to serve.
+            {{halt, 426}, wrq:append_to_resp_body(<<"Security is enabled and "
+                    "Riak does not accept credentials over HTTP. Try HTTPS "
+                    "instead.">>, ReqData), Ctx}
+    end.
 
+forbidden(RD, Ctx = #ctx{security=undefined}) ->
+    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
+forbidden(RD, Ctx) ->
+    case riak_kv_wm_utils:is_forbidden(RD) of
+        true ->
+            {true, RD, Ctx};
+        false ->
+            Res = riak_core_security:check_permission({"riak_kv.list_keys",
+                                                       {<<"default">>,
+                                                        Ctx#ctx.bucket}},
+                                                      Ctx#ctx.security),
+            case Res of
+                {false, Error, _} ->
+                    {true, wrq:append_to_resp_body(list_to_binary(Error), RD), Ctx};
+                {true, _} ->
+                    {false, RD, Ctx}
+            end
+    end.
 
 %% @spec content_types_provided(reqdata(), context()) ->
 %%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}

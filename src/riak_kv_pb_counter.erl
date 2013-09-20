@@ -68,7 +68,16 @@ init() ->
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) ->
-    {ok, riak_pb_codec:decode(Code, Bin)}.
+    Msg = riak_pb_codec:decode(Code, Bin),
+    %% no special permissions for counters, just get/put
+    case Msg of
+        #rpbcountergetreq{type=T, bucket=B} ->
+            Bucket = bucket_type(T, B),
+            {ok, Msg, {"riak_kv.get", Bucket}};
+        #rpbcounterupdatereq{type=T, bucket=B} ->
+            Bucket = bucket_type(T, B),
+            {ok, Msg, {"riak_kv.put", Bucket}}
+    end.
 
 %% @doc encode/1 callback. Encodes an outgoing response message.
 encode(Message) ->
@@ -166,3 +175,10 @@ maybe_bucket_type(<<"default">>, B) ->
     B;
 maybe_bucket_type(T, B) ->
     {T, B}.
+
+%% always construct {Type, Bucket} tuple, filling in default type if needed
+bucket_type(undefined, B) ->
+    {<<"default">>, B};
+bucket_type(T, B) ->
+    {T, B}.
+
