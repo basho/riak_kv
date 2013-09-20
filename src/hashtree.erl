@@ -117,6 +117,7 @@
          local_compare/2,
          compare/2,
          compare/3,
+         compare/4,
          top_hash/1,
          get_bucket/3,
          key_hashes/2,
@@ -401,7 +402,10 @@ compare(Tree, Remote) ->
 
 -spec compare(hashtree(), remote_fun(), acc_fun(X)) -> X.
 compare(Tree, Remote, AccFun) ->
-    compare(1, 0, Tree, Remote, AccFun, []).
+    compare(Tree, Remote, AccFun, []).
+
+compare(Tree, Remote, AccFun, Acc) ->
+    compare(1, 0, Tree, Remote, AccFun, Acc).
 
 -spec levels(hashtree()) -> pos_integer().
 levels(#state{levels=L}) ->
