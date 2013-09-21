@@ -57,9 +57,6 @@
 
 -define(DEFAULT_TIMEOUT, 60000).
 
-%% The empty counter that is the body of all new counter objects
--define(NEW_COUNTER, {riak_kv_pncounter, riak_kv_pncounter:new()}).
-
 %% @doc init/0 callback. Returns the service internal start
 %% state.
 -spec init() -> any().
