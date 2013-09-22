@@ -52,8 +52,45 @@ validate([{BoolProp, MaybeBool}|T], ValidProps, Errors) when is_atom(BoolProp), 
         Bool ->
             validate(T, [{BoolProp, Bool}|ValidProps], Errors)
     end;
+validate([{IntProp, MaybeInt}=Prop | T], ValidProps, Errors) when is_atom(IntProp), IntProp =:= big_vclock
+                                                                  orelse IntProp =:= n_val
+                                                                  orelse IntProp =:= old_vclock
+                                                                  orelse IntProp =:= small_vclock ->
+case is_integer(MaybeInt) of
+    true when MaybeInt > 0 ->
+        validate(T, [Prop | ValidProps], Errors);
+    _ ->
+        validate(T, ValidProps, [{IntProp, not_integer} | Errors])
+end;
+validate([{QProp, MaybeQ}=Prop | T], ValidProps, Errors) when is_atom(QProp), QProp =:= dw
+                                                              orelse QProp =:= pw
+                                                              orelse QProp =:= pr
+                                                              orelse QProp =:= r
+                                                              orelse QProp =:= rw
+                                                              orelse QProp =:= w ->
+    case is_quorum(MaybeQ) of
+        true ->
+            validate(T, [Prop | ValidProps], Errors);
+        false ->
+            validate(T, ValidProps, [{QProp, not_valid_quorum} | Errors])
+    end;
 validate([Prop|T], ValidProps, Errors) ->
     validate(T, [Prop|ValidProps], Errors).
+
+
+-spec is_quorum(term()) -> true | false.
+is_quorum(Q) when is_integer(Q), Q > 0 ->
+    true;
+is_quorum(Q) when is_atom(Q), Q =:= quorum
+                  orelse Q =:= one
+                  orelse Q =:= all ->
+    true;
+is_quorum(Q) when is_binary(Q), Q =:= <<"quorum">>
+                  orelse Q =:= <<"one">>
+                  orelse Q =:= <<"all">> ->
+    true;
+is_quorum(_) ->
+    false.
 
 -spec coerce_bool(any()) -> boolean() | error.
 coerce_bool(true) ->
