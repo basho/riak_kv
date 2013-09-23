@@ -123,7 +123,7 @@ unregister(Module) ->
 -spec get() -> [atom()].
 get() ->
     Resolver = fun
-        ('$deleted', '$delete') ->
+        ('$deleted', '$deleted') ->
             [];
         ('$deleted', Values) ->
             Values;
