@@ -154,6 +154,10 @@ mutate_get(Object) ->
 mutate_get(Object, []) ->
     Object;
 mutate_get(Object, [Mutator | Tail]) ->
+    % so event though the mutate_put callback has to return
+    % {Meta, Value, Exposed} values, the get callback gets away with just
+    % giving the object? This is to avoid complicated interaction with
+    % notfound return.
     case Mutator:mutate_get(Object) of
         notfound ->
             notfound;
@@ -162,13 +166,22 @@ mutate_get(Object, [Mutator | Tail]) ->
     end.
 
 %% @doc Mutate an object in preparation to storage, returning a tuple of the
-%% object to store and the object to return to the client.
+%% object to store and the object to return to the client. For each sibling
+%% the object has {Meta, Value} pair, each mutator is called with a copy
+%% that iteration's Meta used as the exposed meta." Later mutators are
+%% given the results of previous mutators. Once all mutations are complete,
+%% two {@link riak_object:riak_object()}s are returned. The first is what
+%% is to be stored, while the second has the exposed meta set with the
+%% orginal value(s).
 -spec mutate_put(Object :: riak_object:riak_object(), BucketProps :: orddict:orddict()) -> {riak_object:riak_object(), riak_object:riak_object()}.
 mutate_put(Object, BucketProps) ->
     Contents = riak_object:get_contents(Object),
     {ok, Modules} = ?MODULE:get(),
     MetasValuesRevealeds = lists:map(fun({InMeta, InValue}) ->
         {InMeta1, InValue1, InRevealed} = lists:foldl(fun(Module, {InInMeta, InInValue, InInRevealed}) ->
+            % why not just give the riak_object? because of a warning
+            % in riak_object stating that set_contents is for internal
+            % use only. Hopefully this qualifies.
             Module:mutate_put(InInMeta, InInValue, InInRevealed, Object, BucketProps)
         end, {InMeta, InValue, dict:new()}, Modules),
         InMeta2 = dict:store(mutators_applied, Modules, InMeta1),
