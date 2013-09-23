@@ -658,7 +658,7 @@ search_module() ->
                 {ok, riak_search} ->
                     {ok, riak_search};
                 undefined ->
-                    {error, "riak_kv:mapred_provider not defined"};
+                    {ok, riak_search};
                 Other ->
                     {error, {unknown_mapred_provider, Other}}
             end;
