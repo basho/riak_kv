@@ -76,8 +76,6 @@
 
 -module(riak_kv_mutator).
 
--include_lib("eunit/include/eunit.hrl").
-
 -export([register/1, register/2, unregister/1]).
 -export([get/0]).
 -export([mutate_put/2, mutate_get/1]).
