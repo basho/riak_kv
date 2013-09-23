@@ -93,7 +93,8 @@ register(Module) ->
 
 %% @doc Register a module as a mutator with the given priority. Modules with
 %% equal priority are done in sort sort (alphabetical) order. A module
-%% can only be registered once.
+%% can only be registered once. When there is a conflict (two different
+%% lists), those lists are merged.
 -spec register(Module :: atom(), Priority :: term()) -> 'ok'.
 register(Module, Priority) ->
     Modifier = fun
