@@ -26,13 +26,16 @@
 -export([start/2, prep_stop/1, stop/1]).
 -export([check_kv_health/1]).
 
+-include_lib("riak_kv_types.hrl").
+
 -define(SERVICES, [{riak_kv_pb_object, 3, 6}, %% ClientID stuff
                    {riak_kv_pb_object, 9, 14}, %% Object requests
                    {riak_kv_pb_bucket, 15, 18}, %% Bucket requests
                    {riak_kv_pb_mapred, 23, 24}, %% MapReduce requests
                    {riak_kv_pb_index, 25, 26},   %% Secondary index requests
                    {riak_kv_pb_csbucket, 40, 41}, %%  CS bucket folding support
-                   {riak_kv_pb_counter, 50, 53} %% counter requests
+                   {riak_kv_pb_counter, 50, 53}, %% counter requests
+                   {riak_kv_pb_crdt, 80, 83} %% CRDT requests
                   ]).
 -define(MAX_FLUSH_PUT_FSM_RETRIES, 10).
 
@@ -177,8 +180,12 @@ start(_Type, _StartArgs) ->
                                           encode_zlib),
 
             riak_core_capability:register({riak_kv, crdt},
-                                          [[pncounter],[]],
+                                          [?TOP_LEVEL_TYPES, []],
                                           []),
+
+            riak_core_capability:register({riak_kv, put_fsm_ack_execute},
+                                          [enabled, disabled],
+                                          disabled),
 
             HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
             %% Go ahead and mark the riak_kv service as up in the node watcher.
@@ -187,7 +194,9 @@ start(_Type, _StartArgs) ->
             riak_core:register(riak_kv, [
                 {vnode_module, riak_kv_vnode},
                 {bucket_validator, riak_kv_bucket},
-                {stat_mod, riak_kv_stat}
+                {stat_mod, riak_kv_stat},
+                {permissions, [get, put, delete, list_keys, list_buckets,
+                               mapreduce, index]}
             ]
             ++ [{health_check, {?MODULE, check_kv_health, []}} || HealthCheckOn]),
 

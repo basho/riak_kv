@@ -24,7 +24,7 @@
 
 -module(riak_kv_wm_mapred).
 
--export([init/1,allowed_methods/2, known_content_type/2, forbidden/2]).
+-export([init/1,allowed_methods/2, known_content_type/2, is_authorized/2, forbidden/2]).
 -export([malformed_request/2, process_post/2, content_types_provided/2]).
 -export([nop/2]).
 
@@ -36,14 +36,59 @@
 -define(DEFAULT_TIMEOUT, 60000).
 
 
--record(state, {inputs, timeout, mrquery, boundary}).
+-record(state, {inputs, timeout, mrquery, boundary, security}).
 -type state() :: #state{}.
 
 init(_) ->
     {ok, #state{}}.
 
+is_authorized(ReqData, State) ->
+    case riak_api_web_security:is_authorized(ReqData) of
+        false ->
+            {"Basic realm=\"Riak\"", ReqData, State};
+        {true, SecContext} ->
+            {true, ReqData, State#state{security=SecContext}};
+        insecure ->
+            %% XXX 301 may be more appropriate here, but since the http and
+            %% https port are different and configurable, it is hard to figure
+            %% out the redirect URL to serve.
+            {{halt, 426}, wrq:append_to_resp_body(<<"Security is enabled and "
+                    "Riak does not accept credentials over HTTP. Try HTTPS "
+                    "instead.">>, ReqData), State}
+    end.
+
+forbidden(RD, State = #state{security=undefined}) ->
+    {riak_kv_wm_utils:is_forbidden(RD), RD, State};
 forbidden(RD, State) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, State}.
+    case riak_kv_wm_utils:is_forbidden(RD) of
+        true ->
+            {true, RD, State};
+        false ->
+            case {wrq:method(RD), wrq:req_body(RD)} of
+                {'POST', Body} when Body /= undefined ->
+                    case riak_kv_mapred_json:parse_request(Body) of
+                        {ok, ParsedInputs, _ParsedQuery, _Timeout} ->
+                            Permissions = riak_kv_mapred_term:get_required_permissions(ParsedInputs,
+                                                                                       _ParsedQuery),
+                            Res = riak_core_security:check_permissions(
+                                    Permissions,
+                                    State#state.security),
+                            case Res of
+                                {false, Error, _} ->
+                                    {true, wrq:append_to_resp_body(
+                                             list_to_binary(Error), RD), State};
+                                {true, _} ->
+                                    {false, RD, State}
+                            end;
+                        _ ->
+                            %% bad input, will be caught in verify_body
+                            {false, RD, State}
+                    end;
+                _ ->
+                    %% bad input, will be caught in verify_body
+                    {false, RD, State}
+            end
+    end.
 
 allowed_methods(RD, State) ->
     {['GET','HEAD','POST'], RD, State}.

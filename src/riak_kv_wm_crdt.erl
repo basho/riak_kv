@@ -66,12 +66,13 @@
 
 
 
--module(riak_kv_wm_counter).
+-module(riak_kv_wm_crdt).
 
 %% webmachine resource exports
 -export([
          init/1,
          service_available/2,
+         is_authorized/2,
          forbidden/2,
          allowed_methods/2,
          malformed_request/2,
@@ -80,10 +81,9 @@
          post_is_create/2,
          process_post/2,
          accept_doc_body/2,
-         to_text/2
+         to_text/2,
+         known_type/1
         ]).
-%% The empty counter that is the body of all new counter objects
--define(NEW_COUNTER, {riak_kv_pncounter, riak_kv_pncounter:new()}).
 
 %% @type context() = term()
 -record(ctx, {api_version,  %% integer() - Determine which version of the API to use.
@@ -103,13 +103,15 @@
               doc,          %% {ok, riak_object()}|{error, term()} - the object found
               bucketprops,  %% proplist() - properties of the bucket
               method,       %% atom() - HTTP method for the request
-              counter_op    :: integer() | undefined %% The amount to add to the counter
+              crdt_op    :: term() | undefined, %% A parsed CRDT Op
+              security      %% security context
              }).
 %% @type link() = {{Bucket::binary(), Key::binary()}, Tag::binary()}
 %% @type index_field() = {Key::string(), Value::string()}
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
+-include_lib("riak_kv_types.hrl").
 
 %% @spec init(proplist()) -> {ok, context()}
 %% @doc Initialize this resource.  This function extracts the
@@ -120,7 +122,9 @@ init(Props) ->
               riak=proplists:get_value(riak, Props)}}.
 
 service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
-    case riak_kv_counter:supported() of
+    Type = riak_kv_crdt:to_mod(wrq:path_info(crdt, RD)),
+    OpCtx = get_op_context(wrq:get_req_header(?HEAD_CRDT_CONTEXT, RD)),
+    case riak_kv_crdt:supported(Type) of
         true ->
             case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
                 {ok, C} ->
@@ -136,7 +140,8 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                        key=case wrq:path_info(key, RD) of
                                undefined -> undefined;
                                K -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, K))
-                           end
+                           end,
+                       crdt_op=?CRDT_OP{mod=Type, ctx=OpCtx}
                       }};
                 Error ->
                     {false,
@@ -147,23 +152,70 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
             end;
         false  ->
             {false,
-             wrq:set_resp_body("Counters are not supported.",
+             wrq:set_resp_body(io_lib:format("~p are not supported.~n", [Type]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx}
     end.
 
-forbidden(RD, Ctx) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
+get_op_context(undefined) ->
+    undefined;
+get_op_context(Ctx) ->
+    base64:decode(Ctx).
+
+is_authorized(ReqData, Ctx) ->
+    case riak_api_web_security:is_authorized(ReqData) of
+        false ->
+            {"Basic realm=\"Riak\"", ReqData, Ctx};
+        {true, SecContext} ->
+            {true, ReqData, Ctx#ctx{security=SecContext}};
+        insecure ->
+            %% XXX 301 may be more appropriate here, but since the http and
+            %% https port are different and configurable, it is hard to figure
+            %% out the redirect URL to serve.
+            {{halt, 426}, wrq:append_to_resp_body(<<"Security is enabled and "
+                    "Riak does not accept credentials over HTTP. Try HTTPS "
+                    "instead.">>, ReqData), Ctx}
+    end.
+
+forbidden(RD, Ctx = #ctx{security=undefined}) ->
+    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
+forbidden(RD, Ctx=#ctx{security=Security}) ->
+    case riak_kv_wm_utils:is_forbidden(RD) of
+        true ->
+            {true, RD, Ctx};
+        false ->
+            Perm = case Ctx#ctx.method of
+                'POST' ->
+                    "riak_kv.put";
+                'GET' ->
+                    "riak_kv.get"
+            end,
+
+            Res = riak_core_security:check_permission({Perm,
+                                                           {<<"default">>,
+                                                            Ctx#ctx.bucket}},
+                                                           Security),
+            case Res of
+                {false, Error, _} ->
+                    {true, wrq:append_to_resp_body(list_to_binary(Error), RD), Ctx};
+                {true, _} ->
+                    {false, RD, Ctx}
+            end
+    end.
 
 allowed_methods(RD, Ctx) ->
     {['GET', 'POST'], RD, Ctx}.
 
 malformed_request(RD, Ctx0) when Ctx0#ctx.method =:= 'POST' ->
-    case catch list_to_integer(binary_to_list(wrq:req_body(RD))) of
-        {'EXIT', _} ->
-            {true, RD, Ctx0};
-        Change ->
-            Ctx = Ctx0#ctx{counter_op = Change},
+    case riak_kv_crdt:parse_operation(Ctx0#ctx.crdt_op, wrq:req_body(RD)) of
+        {error, Reason} ->
+            {true,
+             wrq:set_resp_body(
+               io_lib:format("Invalid operation: ~p~n", [Reason]),
+               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx0};
+        {ok, Op} ->
+            Ctx = Ctx0#ctx{crdt_op = Op},
             case malformed_rw_params(RD, Ctx) of
                 Result={true, _, _} ->
                     Result;
@@ -258,11 +310,11 @@ post_is_create(RD, Ctx) ->
 process_post(RD, Ctx) -> accept_doc_body(RD, Ctx).
 
 accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C,
-                            counter_op=CounterOp}) ->
+                            crdt_op=Op}) ->
     case allow_mult(B) of
         true ->
-            Doc = riak_kv_counter:new(B, K),
-            Options = [{counter_op, CounterOp}] ++ return_value(RD),
+            Doc = riak_kv_crdt:new(B, K, Op?CRDT_OP.mod),
+            Options = [{crdt_op, Op}] ++ return_value(RD),
             case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
                                    Options]) of
                 {error, Reason} ->
@@ -270,7 +322,8 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C,
                 ok ->
                     {true, RD, Ctx#ctx{doc={ok, Doc}}};
                 {ok, RObj} ->
-                    Body = produce_doc_body(RObj),
+                    ?CRDT_OP{mod=Type} = Ctx#ctx.crdt_op,
+                    Body = produce_doc_body(RObj, Type),
                     {true, wrq:append_to_resp_body(Body, RD), Ctx#ctx{doc={ok, RObj}}}
             end;
         false ->
@@ -289,11 +342,28 @@ allow_mult(Bucket) ->
     proplists:get_value(allow_mult, riak_core_bucket:get_bucket(Bucket)).
 
 to_text(RD, Ctx=#ctx{doc={ok, Doc}}) ->
-    {produce_doc_body(Doc), RD, Ctx}.
+    ?CRDT_OP{mod=Type} = Ctx#ctx.crdt_op,
+    {ClientContext, Body} = produce_doc_body(Doc, Type),
+    {Body, wrq:merge_resp_headers([{?HEAD_CRDT_CONTEXT, ClientContext}], RD), Ctx}.
 
-produce_doc_body(Doc) ->
-    Value = riak_kv_counter:value(Doc),
-    integer_to_list(Value).
+produce_doc_body(Doc, Type) ->
+    {ClientContext, Body} = riak_kv_crdt:value(Doc, Type),
+    JSON = to_json(Type, Body),
+    {binary_to_list(base64:encode(ClientContext)), mochijson2:encode(JSON)}.
+
+to_json(?MAP_TYPE, Val) ->
+    map_to_json(Val, []);
+to_json(_, Val) ->
+    Val.
+
+map_to_json([], Acc) ->
+    {struct, Acc};
+map_to_json([{{Name, Type}, Val} | Rest], Acc) ->
+    Elem = {make_name(Name, Type), to_json(Type, Val)},
+    map_to_json(Rest, [Elem | Acc]).
+
+make_name(Name, Type) ->
+    lists:flatten(io_lib:format("~s_~s", [Name, riak_kv_crdt:from_mod(Type)])).
 
 ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};
@@ -372,3 +442,7 @@ handle_common_error(Reason, RD, Ctx) ->
                         RD)),
                 Ctx}
     end.
+
+%% @dc Webmachine dispatch guard for crdt resource
+known_type(ReqData) ->
+    undefined /= riak_kv_crdt:to_mod(wrq:path_info(crdt, ReqData)).
