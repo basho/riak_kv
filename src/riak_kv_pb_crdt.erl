@@ -75,7 +75,8 @@ init() ->
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) ->
-    {ok, riak_pb_codec:decode(Code, Bin)}.
+    Msg = riak_pb_codec:decode(Code, Bin),
+    {ok, Msg, permission_for(Msg)}.
 
 %% @doc encode/1 callback. Encodes an outgoing response message.
 encode(Message) ->
@@ -343,3 +344,8 @@ upgrade_response(_, {error, Err, State}) ->
 
 %% End of v1.4 adapter
 %% ===================================================================
+
+permission_for(#dtupdatereq{bucket=B, type=T}) ->
+    {"riak_kv.put", {T,B}};
+permission_for(#dtfetchreq{bucket=B, type=T}) ->
+    {"riak_kv.get", {T,B}}.
