@@ -155,11 +155,11 @@ get_required_permissions(Inputs, _Query) ->
                 end,
             [{"riak_kv.index", B},
              {"riak_kv.mapreduce", B}];
-        {search, Bucket, _Query} when is_binary(Bucket) ->
+        {search, Bucket, _SearchQuery} when is_binary(Bucket) ->
             %% needs search AND mapreduce permissions
             [{"riak_kv.mapreduce", Bucket},
              {"riak_search.query", Bucket}];
-        {search, Bucket, _Query, _Filter} when is_binary(Bucket) ->
+        {search, Bucket, _SearchQuery, _SearchFilter} when is_binary(Bucket) ->
             %% needs search AND mapreduce permissions
             [{"riak_kv.mapreduce", Bucket},
              {"riak_search.query", Bucket}];
