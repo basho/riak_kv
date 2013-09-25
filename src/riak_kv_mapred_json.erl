@@ -179,23 +179,10 @@ is_search_input(_) -> false.
 
 parse_search_input(Inputs) ->
     Bucket = proplists:get_value(<<"bucket">>, Inputs),
-    Index = proplists:get_value(<<"index">>, Inputs),
     Query = proplists:get_value(<<"query">>, Inputs),
     Filter = proplists:get_value(<<"filter">>, Inputs, []),
-    Group = case Index of
-                undefined ->
-                    Bucket;
-                _ ->
-                    %% this is mochijson2 format, which is what the user
-                    %% would pass in if they used the modfun format:
-                    %% {
-                    %%  "module":...,
-                    %%  "function":...,
-                    %%  "arg":[{"index":Index},Query,...filter...]
-                    %% }
-                    {struct,[{<<"index">>,Index}]}
-            end,
-    {ok, {search, Group, Query, Filter}}.
+    Index = proplists:get_value(<<"index">>, Inputs, Bucket),
+    {ok, {search, Index, Query, Filter}}.
 
 %% Allowed forms:
 %% {"input":{"bucket":BucketName, "index":IndexName, "key":SecondaryKey},
