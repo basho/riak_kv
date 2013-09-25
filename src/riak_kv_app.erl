@@ -187,6 +187,9 @@ start(_Type, _StartArgs) ->
                                           [enabled, disabled],
                                           disabled),
 
+            % get/put mutator is supported, but not all nodes may have it
+            riak_core_capability:register({riak_kv, mutators}, [true, false], false),
+
             HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
