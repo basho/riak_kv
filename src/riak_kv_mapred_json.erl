@@ -172,15 +172,17 @@ parse_modfun_input(Inputs) ->
 
 is_search_input(Inputs) when is_list(Inputs) ->
     HasBucket = proplists:get_value(<<"bucket">>, Inputs) /= undefined,
+    HasIndex = proplists:get_value(<<"index">>, Inputs) /= undefined,
     HasQuery = proplists:get_value(<<"query">>, Inputs) /= undefined,
-    HasBucket andalso HasQuery;
+    (HasBucket orelse HasIndex) andalso HasQuery;
 is_search_input(_) -> false.
 
 parse_search_input(Inputs) ->
     Bucket = proplists:get_value(<<"bucket">>, Inputs),
     Query = proplists:get_value(<<"query">>, Inputs),
     Filter = proplists:get_value(<<"filter">>, Inputs, []),
-    {ok, {search, Bucket, Query, Filter}}.
+    Index = proplists:get_value(<<"index">>, Inputs, Bucket),
+    {ok, {search, Index, Query, Filter}}.
 
 %% Allowed forms:
 %% {"input":{"bucket":BucketName, "index":IndexName, "key":SecondaryKey},
