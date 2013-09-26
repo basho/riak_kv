@@ -8,15 +8,23 @@
 functionality_test_() ->
     {foreach, fun() ->
         purge_data_dir(),
-        {ok, Pid} = riak_core_metadata_manager:start_link([{data_dir, "test_data"}]),
-        Pid
+        {ok, MetadataManagerPid} = riak_core_metadata_manager:start_link([{data_dir, "test_data"}]),
+        {ok, HashtreePid} = riak_core_metadata_hashtree:start_link("test_data"),
+        {HashtreePid, MetadataManagerPid}
     end,
-    fun(Pid) ->
-        unlink(Pid),
-        exit(Pid, kill),
-        Mon = erlang:monitor(process, Pid),
+    fun({HashtreePid, MetadataManagerPid}) ->
+        unlink(MetadataManagerPid),
+        exit(MetadataManagerPid, kill),
+        unlink(HashtreePid),
+        exit(HashtreePid, kill),
+        Mon = erlang:monitor(process, MetadataManagerPid),
         receive
-            {'DOWN', Mon, process, Pid, _Why} ->
+            {'DOWN', Mon, process, MetadataManagerPid, _Why} ->
+                ok
+        end,
+        Mon2 = erlang:monitor(process, HashtreePid),
+        receive
+            {'DOWN', Mon2, process, HashtreePid, _AlsoWhy} ->
                 ok
         end,
         purge_data_dir()
