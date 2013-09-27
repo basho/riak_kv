@@ -492,10 +492,6 @@ merge2(Obj1, Obj2) ->
             Keep1 = drop_dominated_dots(Obj2#r_object.vclock, Obj1#r_object.contents, []),
             Keep2 = drop_dominated_dots(Obj1#r_object.vclock, Obj2#r_object.contents, []),
             Keep = lists:umerge(lists:usort(Keep1), lists:usort(Keep2)),
-            case length(Keep) of
-                0 -> lager:info("Fuck, dropped all the data, oops");
-                _ -> ok
-            end,
             Obj1#r_object{contents=Keep,
                           vclock=vclock:merge([Obj1#r_object.vclock,
                                                Obj2#r_object.vclock]),
