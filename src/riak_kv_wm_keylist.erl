@@ -133,7 +133,8 @@ forbidden(RD, Ctx) ->
                                                       Ctx#ctx.security),
             case Res of
                 {false, Error, _} ->
-                    {true, wrq:append_to_resp_body(list_to_binary(Error), RD), Ctx};
+                    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
+                    {true, wrq:append_to_resp_body(list_to_binary(Error), RD1), Ctx};
                 {true, _} ->
                     {false, RD, Ctx}
             end
