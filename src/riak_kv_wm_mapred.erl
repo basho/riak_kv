@@ -75,8 +75,9 @@ forbidden(RD, State) ->
                                     State#state.security),
                             case Res of
                                 {false, Error, _} ->
+                                    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
                                     {true, wrq:append_to_resp_body(
-                                             list_to_binary(Error), RD), State};
+                                             list_to_binary(Error), RD1), State};
                                 {true, _} ->
                                     {false, RD, State}
                             end;
