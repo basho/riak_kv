@@ -19,6 +19,15 @@
 %% specific language governing permissions and limitations
 %% under the License.
 %%
+%% Changeset module is responsible for tracking which riak objects
+%% have changed over intervals of time. For each interval of time,
+%% a bloom filter is maintained in memory and updated with the
+%% Bucket/Key for each changed object. Periodically, the in-memory
+%% bloom is serialized onto disk. Also periodically, the bloom filter
+%% is rotated so that a new filter is started for a new time period.
+%% Queries can be made to obtain the union of blooms that "cover"
+%% the changes since the given time. Files are maintined in sortable
+%% order based on their interval's start time.
 %% -------------------------------------------------------------------
 -module(riak_kv_changeset).
 -behaviour(gen_server).
@@ -50,11 +59,13 @@
           partition,
           bloom,
           file,
-          interval
+          rotate_interval,
+          save_interval
          }).
 
 -define(DEFAULT_BLOOM_SIZE, 10000000).
 -define(DEFAULT_TIMEBOX_INTERVAL, (60 * 60 * 1000)). %% one hour
+-define(DEFAULT_SAVE_INTERVAL, (60 * 1000)).         %% once per minute
 
 %%---------------------------------------
 %% API Functions
@@ -87,15 +98,22 @@ object_changed(BKey, Val, Pid) ->
 
 init([Partition]) ->
     {File, Bloom} = create_file_backed_bloom(Partition),
-    Interval = get_timebox_interval(),
-    erlang:send_after(Interval, self(), rotate),
-    {ok, #state{file=File, bloom=Bloom, interval=Interval, partition=Partition}}.
+    RotateInterval = get_timebox_interval(),
+    SaveInterval = get_save_interval(),
+    erlang:send_after(RotateInterval, self(), rotate),
+    erlang:send_after(SaveInterval, self(), save),
+    {ok, #state{file=File, bloom=Bloom,
+                rotate_interval=RotateInterval,
+                save_interval=SaveInterval,
+                partition=Partition}}.
 
 handle_call({changed, BKey, Val}, _From, State=#state{file=File, bloom=Bloom}) ->
-    Bloom2 = do_object_changed(BKey, Val, File, Bloom, true),
+    %% forces a write to disk
+    Bloom2 = do_object_changed(BKey, Val, File, Bloom),
     {reply, ok, State#state{bloom=Bloom2}};
 handle_call({bloom_since, Timestamp}, _From, State=#state{partition=Partition,
                                                           file=File, bloom=Bloom}) ->
+    %% flush before reading
     write_bloom_to_file(Bloom, File),
     Result = do_get_bloom_since(Timestamp, Partition),
     {reply, Result, State};
@@ -104,13 +122,17 @@ handle_call(Msg, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({changed, BKey, Val}, State=#state{file=File, bloom=Bloom}) ->
-    Bloom2 = do_object_changed(BKey, Val, File, Bloom, false),
+    Bloom2 = do_object_changed(BKey, Val, File, Bloom),
     {noreply, State#state{bloom=Bloom2}};
 handle_cast(Msg, State) ->
     lager:warning("ignored handle_cast ~p", [Msg]),
     {noreply, State}.
 
-handle_info(rotate, State=#state{interval=Interval}) ->
+handle_info(save, State=#state{bloom=Bloom, file=Fd, save_interval=Interval}) ->
+    write_bloom_to_file(Bloom, Fd),
+    erlang:send_after(Interval, self(), save),
+    {noreply, State};
+handle_info(rotate, State=#state{rotate_interval=Interval}) ->
     %% io:format("Rotating bloom files~n"),
     erlang:send_after(Interval, self(), rotate),
     State2 = do_rotate_bloom(State),
@@ -132,11 +154,20 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% @doc Return the number of milliseconds between bloom filter rotations.
 get_timebox_interval() ->
-    case application:get_env(riak_kv, changeset_interval) of
+    case application:get_env(riak_kv, changeset_rotate_interval) of
         {ok, Interval} ->
             Interval;
         undefined ->
             ?DEFAULT_TIMEBOX_INTERVAL
+    end.
+
+%% @doc Return the number of milliseconds between bloom filter writes to disk.
+get_save_interval() ->
+    case application:get_env(riak_kv, changeset_save_interval) of
+        {ok, Interval} ->
+            Interval;
+        undefined ->
+            ?DEFAULT_SAVE_INTERVAL
     end.
 
 do_rotate_bloom(State=#state{file=Fd, partition=Partition, bloom=Bloom}) ->
@@ -145,15 +176,9 @@ do_rotate_bloom(State=#state{file=Fd, partition=Partition, bloom=Bloom}) ->
     {NewFd, NewBloom} = create_file_backed_bloom(Partition),
     State#state{file=NewFd, bloom=NewBloom}.
 
-%% @doc Update the bloom filter with the bucket and key that changed
-%% and write the bloom to disk.
-do_object_changed({Bucket, Key}, _Val, File, Bloom, true) ->
+%% @doc Update the bloom filter with the bucket and key that changed.
+do_object_changed({Bucket, Key}, _Val, _File, Bloom) ->
     %% io:format("do_object_changed and write: ~p/~p~n", [Bucket, Key]),
-    ebloom:insert(Bloom, <<Bucket/binary, Key/binary>>),
-    write_bloom_to_file(Bloom, File),
-    Bloom;
-do_object_changed({Bucket, Key}, _Val, _File, Bloom, false) ->
-    %% io:format("do_object_changed no write: ~p/~p~n", [Bucket, Key]),
     ebloom:insert(Bloom, <<Bucket/binary, Key/binary>>),
     Bloom.
 
@@ -333,11 +358,13 @@ files_since(Timestamp, Partition) ->
 
 -ifdef(TEST).
 roundtrip_test() ->
-    Interval = 2000,
+    RotateInterval = 2000,
+    SaveInterval = 500,
     Partition = 1234567890,
     Val = ignored_riak_obj_value,
     application:set_env(riak_kv, changeset_data_dir, "/tmp/riak_kv_data_dir"),
-    application:set_env(riak_kv, changeset_interval, Interval),
+    application:set_env(riak_kv, changeset_rotate_interval, RotateInterval),
+    application:set_env(riak_kv, changeset_save_interval, SaveInterval),
 
     Bucket = <<"adventure">>,
 
@@ -363,7 +390,7 @@ roundtrip_test() ->
     object_changed({Bucket, Key3}, Val, Pid),
 
     %% wait until the next interval has rotated.
-    timer:sleep(Interval + 250),
+    timer:sleep(RotateInterval + 250),
 
     TS2 = os:timestamp(),
     async_object_changed({Bucket, Key4}, Val, Pid),

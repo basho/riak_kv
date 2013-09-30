@@ -104,7 +104,8 @@
                 key_buf_size :: pos_integer(),
                 async_folding :: boolean(),
                 in_handoff = false :: boolean(),
-                hashtrees :: pid() }).
+                hashtrees :: pid(),
+                changeset :: pid()}).
 
 -type index_op() :: add | remove.
 -type index_value() :: integer() | binary().
@@ -112,6 +113,7 @@
 -type state() :: #state{}.
 
 -define(DEFAULT_HASHTREE_TOKENS, 90).
+-define(DEFAULT_CHANGESET_TOKENS, 100).
 
 -record(putargs, {returnbody :: boolean(),
                   coord:: boolean(),
@@ -126,6 +128,18 @@
                   is_index=false :: boolean(), %% set if the b/end supports indexes
                   counter_op = undefined :: undefined | integer() %% if set this is a counter operation
                  }).
+
+-spec maybe_create_changeset(state()) -> state().
+maybe_create_changeset(State=#state{changeset=undefined, idx=Partition}) ->
+    case riak_kv_changeset:start_link(Partition) of
+        {ok, Pid} ->
+            State#state{changeset=Pid};
+        Error ->
+            lager:warning("riak_kv/~p: unable to start changeset: ~p",
+                          [Partition, Error]),
+            %% TODO: retry later.
+            State
+    end.
 
 -spec maybe_create_hashtrees(state()) -> state().
 maybe_create_hashtrees(State) ->
@@ -373,7 +387,8 @@ init([Index]) ->
                     %% Create worker pool initialization tuple
                     FoldWorkerPool = {pool, riak_kv_worker, WorkerPoolSize, []},
                     State2 = maybe_create_hashtrees(State),
-                    {ok, State2, [FoldWorkerPool]};
+                    State3 = maybe_create_changeset(State2),
+                    {ok, State3, [FoldWorkerPool]};
                 false ->
                     {ok, State}
             end;
@@ -882,6 +897,11 @@ handle_info({'DOWN', _, _, Pid, _}, State=#state{hashtrees=Pid}) ->
     State2 = State#state{hashtrees=undefined},
     State3 = maybe_create_hashtrees(State2),
     {ok, State3};
+handle_info({'DOWN', _, _, Pid, _}, State=#state{changeset=Pid}) ->
+    State2 = State#state{changeset=undefined},
+    State3 = maybe_create_changeset(State2),
+    {ok, State3};
+
 handle_info({'DOWN', _, _, _, _}, State) ->
     {ok, State};
 handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=ModState}) ->
@@ -1095,6 +1115,7 @@ perform_put({true, Obj},
                      index_specs=IndexSpecs}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) of
         {{ok, UpdModState}, EncodedVal} ->
+            update_changeset(Bucket, Key, EncodedVal, State),
             update_hashtree(Bucket, Key, EncodedVal, State),
             ?INDEX(Obj, put, Idx),
             case RB of
@@ -1426,6 +1447,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
             case encode_and_put(DiffObj, Mod, Bucket, Key,
                                 IndexSpecs, ModState) of
                 {{ok, _UpdModState} = InnerRes, EncodedVal} ->
+                    update_changeset(Bucket, Key, EncodedVal, StateData),
                     update_hashtree(Bucket, Key, EncodedVal, StateData),
                     update_index_write_stats(IndexBackend, IndexSpecs),
                     update_vnode_stats(vnode_put, Idx, StartTS),
@@ -1452,6 +1474,7 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                     case encode_and_put(AMObj, Mod, Bucket, Key,
                                         IndexSpecs, ModState) of
                         {{ok, _UpdModState} = InnerRes, EncodedVal} ->
+                            update_changeset(Bucket, Key, EncodedVal, StateData),
                             update_hashtree(Bucket, Key, EncodedVal, StateData),
                             update_index_write_stats(IndexBackend, IndexSpecs),
                             update_vnode_stats(vnode_put, Idx, StartTS),
@@ -1462,6 +1485,42 @@ do_diffobj_put({Bucket, Key}, DiffObj,
                     end
             end
     end.
+
+%% @doc Mark this Bucket/Key/Val as having been changed during the
+%%      current time interval. Skip if changset is undefined, which
+%%      can be used as the kill switch.
+-spec update_changeset(binary(), binary(), binary(), state()) -> ok.
+update_changeset(_Bucket, _Key, _Val, #state{changeset=undefined}) -> ok;
+update_changeset(Bucket, Key, Val, #state{changeset=Pid}) ->
+    case get_changeset_token() of
+        true ->
+            riak_kv_changeset:async_object_changed({Bucket, Key}, Val, Pid),
+            ok;
+        false ->
+            %% Synchronized call will block until all previous asyncs finish.
+            riak_kv_changeset:object_changed({Bucket, Key}, Val, Pid),
+            put(changeset_tokens, max_changeset_tokens()),
+            ok
+    end.
+
+get_changeset_token() ->
+    Tokens = get(changeset_tokens),
+    case Tokens of
+        undefined ->
+            put(chageset_tokens, max_changeset_tokens() - 1),
+            true;
+        N when N > 0 ->
+            put(changeset_tokens, Tokens - 1),
+            true;
+        _ ->
+            false
+    end.
+
+-spec max_changeset_tokens() -> pos_integer().
+max_changeset_tokens() ->
+    app_helper:get_env(riak_etl,
+                       etl_max_async, 
+                       ?DEFAULT_CHANGESET_TOKENS).
 
 -spec update_hashtree(binary(), binary(), binary(), state()) -> ok.
 update_hashtree(Bucket, Key, Val, #state{hashtrees=Trees}) ->
