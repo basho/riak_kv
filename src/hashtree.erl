@@ -124,6 +124,7 @@
          mem_levels/1]).
 
 -ifdef(TEST).
+-export([local_compare/2]).
 -export([run_local/0,
          run_local/1,
          run_concurrent_build/0,
