@@ -159,8 +159,8 @@
 
 -type keydiff() :: {missing | remote_missing | different, binary()}.
 
--type remote_fun() :: fun((get_bucket | key_hashes,
-                           {integer(), integer()}) -> any()).
+-type remote_fun() :: fun((get_bucket | key_hashes | init | final,
+                           {integer(), integer()} | integer() | term()) -> any()).
 
 -type acc_fun(Acc) :: fun(([keydiff()], Acc) -> Acc).
 
