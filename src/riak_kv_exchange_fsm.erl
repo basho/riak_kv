@@ -49,6 +49,9 @@
 %% Per state transition timeout used by certain transitions
 -define(DEFAULT_ACTION_TIMEOUT, 300000). %% 5 minutes
 
+%% Use occasional calls to disk_log:log() for some backpressure periodically
+-define(LOG_BATCH_SIZE, 5000).
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -179,7 +182,7 @@ key_exchange(timeout, State=#state{local=LocalVN,
     LogFile2 = lists:flatten(io_lib:format("~s/~s/out.~p.~p.~p",
                                            [TmpDir, ?MODULE, NA, NB, NC])),
     ok = filelib:ensure_dir(LogFile2),
-    Remote = fun(get_bucket, {L, B}=_X) ->
+    Remote = fun(get_bucket, {L, B}) ->
                      exchange_bucket(RemoteTree, IndexN, L, B);
                 (key_hashes, Segment) ->
                      exchange_segment(RemoteTree, IndexN, Segment);
@@ -209,7 +212,7 @@ key_exchange(timeout, State=#state{local=LocalVN,
                      lists:foldl(fun({DiffReason, BKeyBin}, Count) ->
                                          {B, K} = binary_to_term(BKeyBin),
                                          T = {B, K, DiffReason},
-                                         if Count rem 5000 == 0 ->
+                                         if Count rem ?LOG_BATCH_SIZE == 0 ->
                                                  ok = disk_log:log(WriteLog, T);
                                             true ->
                                                  ok = disk_log:alog(WriteLog, T)
