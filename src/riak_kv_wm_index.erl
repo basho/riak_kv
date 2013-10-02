@@ -38,6 +38,7 @@
          malformed_request/2,
          content_types_provided/2,
          encodings_provided/2,
+         resource_exists/2,
          produce_index_results/2
         ]).
 
@@ -45,6 +46,7 @@
 -record(ctx, {
           client,       %% riak_client() - the store client
           riak,         %% local | {node(), atom()} - params for riak client
+          bucket_type,  %% Bucket type (from uri)
           bucket,       %% The bucket to query.
           index_query,   %% The query..
           max_results :: all | pos_integer(), %% maximum number of 2i results to return, the page size.
@@ -62,7 +64,8 @@
 %% @doc Initialize this resource.
 init(Props) ->
     {ok, #ctx{
-       riak=proplists:get_value(riak, Props)
+       riak=proplists:get_value(riak, Props),
+       bucket_type=proplists:get_value(bucket_type, Props)
       }}.
 
 
@@ -70,7 +73,8 @@ init(Props) ->
 %%          {boolean(), reqdata(), context()}
 %% @doc Determine whether or not a connection to Riak
 %%      can be established. Also, extract query params.
-service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
+service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
+    Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true, RD, Ctx#ctx { client=C }};
@@ -223,6 +227,9 @@ encodings_provided(RD, Ctx) ->
     {riak_kv_wm_utils:default_encodings(), RD, Ctx}.
 
 
+resource_exists(RD, #ctx{bucket_type=BType}=Ctx) ->
+    {riak_kv_wm_utils:bucket_type_exists(BType), RD, Ctx}.
+
 %% @spec produce_index_results(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Produce the JSON response to an index lookup.
 produce_index_results(RD, Ctx) ->
@@ -235,7 +242,7 @@ produce_index_results(RD, Ctx) ->
 
 handle_streaming_index_query(RD, Ctx) ->
     Client = Ctx#ctx.client,
-    Bucket = Ctx#ctx.bucket,
+    Bucket = riak_kv_wm_utils:maybe_bucket_type(Ctx#ctx.bucket_type, Ctx#ctx.bucket),
     Query = Ctx#ctx.index_query,
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,
@@ -328,7 +335,7 @@ encode_error(Error) ->
 
 handle_all_in_memory_index_query(RD, Ctx) ->
     Client = Ctx#ctx.client,
-    Bucket = Ctx#ctx.bucket,
+    Bucket = riak_kv_wm_utils:maybe_bucket_type(Ctx#ctx.bucket_type, Ctx#ctx.bucket),
     Query = Ctx#ctx.index_query,
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,
