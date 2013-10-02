@@ -391,7 +391,7 @@ init([Index]) ->
 
 
 handle_overload_command(?KV_PUT_REQ{}, Sender, Idx) ->
-    riak_core_vnode:reply(Sender, {fail, Idx, overload}); % subvert ReqId
+    riak_core_vnode:reply(Sender, {fail, Idx, overload});
 handle_overload_command(?KV_GET_REQ{req_id=ReqID}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqID});
 handle_overload_command(_, _, _) ->
@@ -470,8 +470,8 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
         _ ->
             {noreply, State}
     end;
-handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender, State) ->
-    do_delete(BKey, ReqId, State);
+handle_command(?KV_DELETE_REQ{bkey=BKey}, _Sender, State) ->
+    do_delete(BKey, State);
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
     {reply, do_get_vclocks(BKeys, State), State};
 handle_command(#riak_core_fold_req_v1{} = ReqV1,
@@ -1024,8 +1024,8 @@ prepare_put(#state{vnodeid=VId,
                     IndexSpecs = []
             end,
             case prepare_new_put(Coord, RObj, VId, StartTime, CRDTOp) of
-                {error, _}=E ->
-                    {{fail, Idx, E}, PutArgs}; %% NOTE subverts ReqId to Error
+                {error, E} ->
+                    {{fail, Idx, E}, PutArgs};
                 ObjToStore ->
                     {{true, ObjToStore},
                      PutArgs#putargs{index_specs=IndexSpecs,
@@ -1055,8 +1055,8 @@ prepare_put(#state{vnodeid=VId,
                                                                              BProps))
                     end,
                     case handle_crdt(Coord, CRDTOp, VId, ObjToStore) of
-                        {error, _}=E ->
-                            {{fail, Idx, E}, PutArgs};%% NOTE subverts ReqId to Error
+                        {error, E} ->
+                            {{fail, Idx, E}, PutArgs};
                         ObjToStore2 ->
                             {{true, ObjToStore2},
                              PutArgs#putargs{index_specs=IndexSpecs,
@@ -1116,8 +1116,8 @@ perform_put({true, Obj},
                 false ->
                     Reply = {dw, Idx, ReqID}
             end;
-        {{error, _Reason, UpdModState}, _EncodedVal} ->
-            Reply = {fail, Idx, ReqID}
+        {{error, Reason, UpdModState}, _EncodedVal} ->
+            Reply = {fail, Idx, Reason}
     end,
     {Reply, State#state{modstate=UpdModState}}.
 
@@ -1135,8 +1135,8 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
                                reqid=undefined,
                                index_specs=[]},
             case perform_put({true, RObj}, State, PutArgs) of
-                {{fail, _, _}, UpdState}  ->
-                    Reply = {error, backend_error};
+                {{fail, _, Reason}, UpdState}  ->
+                    Reply = {error, Reason};
                 {_, UpdState} ->
                     Reply = ok
             end
@@ -1348,7 +1348,7 @@ finish_fold(BufferMod, Buffer, Sender) ->
     riak_core_vnode:reply(Sender, done).
 
 %% @private
-do_delete(BKey, ReqId, State) ->
+do_delete(BKey, State) ->
     Mod = State#state.mod,
     ModState = State#state.modstate,
     Idx = State#state.idx,
@@ -1363,25 +1363,25 @@ do_delete(BKey, ReqId, State) ->
                     case DeleteMode of
                         keep ->
                             %% keep tombstones indefinitely
-                            {reply, {fail, Idx, ReqId}, State};
+                            {reply, {fail, Idx, del_mode_keep}, State};
                         immediate ->
                             UpdState = do_backend_delete(BKey, RObj, State),
-                            {reply, {del, Idx, ReqId}, UpdState};
+                            {reply, {del, Idx, del_mode_immediate}, UpdState};
                         Delay when is_integer(Delay) ->
                             erlang:send_after(Delay, self(),
                                               {final_delete, BKey,
                                                delete_hash(RObj)}),
                             %% Nothing checks these messages - will just reply
                             %% del for now until we can refactor.
-                            {reply, {del, Idx, ReqId}, State}
+                            {reply, {del, Idx, del_mode_delayed}, State}
                     end;
                 _ ->
                     %% not a tombstone or not all siblings are tombstones
-                    {reply, {fail, Idx, ReqId}, State}
+                    {reply, {fail, Idx, not_tombstone}, State}
             end;
         _ ->
             %% does not exist in the backend
-            {reply, {fail, Idx, ReqId}, State}
+            {reply, {fail, Idx, not_found}, State}
     end.
 
 %% @private
