@@ -495,11 +495,11 @@ waiting_local_vnode(request_timeout, StateData) ->
 waiting_local_vnode(Result, StateData = #state{putcore = PutCore}) ->
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
     case Result of
-        {fail, Idx, ReqIdSubvertedToReason} ->
+        {fail, Idx, Reason} ->
             ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [-1],
                     [integer_to_list(Idx)]),
             %% Local vnode failure is enough to sink whole operation
-            process_reply({error, ReqIdSubvertedToReason}, StateData#state{putcore = UpdPutCore1});
+            process_reply({error, Reason}, StateData#state{putcore = UpdPutCore1});
         {w, Idx, _ReqId} ->
             ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [1],
                     [integer_to_list(Idx)]),
