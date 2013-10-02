@@ -154,12 +154,12 @@ format_links([{{Bucket,Key}, Tag}|Rest], Prefix, APIVersion, Acc) ->
 format_links([{Bucket, Tag}|Rest], Prefix, APIVersion, Acc) ->
     Bucket1 = mochiweb_util:quote_plus(Bucket),
     Tag1 = mochiweb_util:quote_plus(Tag),
-    Val = 
+    Val =
         case APIVersion of
             1 ->
                 io_lib:format("</~s/~s>; rel=\"~s\"",
                               [Prefix, Bucket1, Tag1]);
-            2 -> 
+            2 ->
                 io_lib:format("</buckets/~s>; rel=\"~s\"",
                               [Bucket1, Tag1])
         end,
@@ -229,7 +229,7 @@ any_to_bool(V) when is_boolean(V) ->
     V.
 
 is_forbidden(RD) ->
-    is_null_origin(RD) or 
+    is_null_origin(RD) or
     (app_helper:get_env(riak_kv,secure_referer_check,true) and not is_valid_referer(RD)).
 
 %% @doc Check if the Origin header is "null". This is useful to look for attempts
