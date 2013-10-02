@@ -44,7 +44,7 @@
 %%     {"props":{Prop:Val}}
 %%   Where the "props" object takes the same form as returned from
 %%   a GET of the same resource.
-%% 
+%%
 %% DELETE /buckets/Bucket/props
 %%   Reset bucket properties back to the default settings
 %%   not supported by the OLD API
@@ -62,6 +62,7 @@
          content_types_provided/2,
          encodings_provided/2,
          content_types_accepted/2,
+         resource_exists/2,
          produce_bucket_body/2,
          accept_bucket_body/2,
          get_bucket_props_json/2,
@@ -69,14 +70,15 @@
         ]).
 
 %% @type context() = term()
--record(ctx, {bucket,       %% binary() - Bucket name (from uri)
+-record(ctx, {bucket_type,  %% binary() - Bucket type (from uri)
+              bucket,       %% binary() - Bucket name (from uri)
               client,       %% riak_client() - the store client
               prefix,       %% string() - prefix for resource uris
               riak,         %% local | {node(), atom()} - params for riak client
               bucketprops,  %% proplist() - properties of the bucket
               method,       %% atom() - HTTP method for the request
               api_version,  %% non_neg_integer() - old or new http api
-              security      %% security context
+              security     %% security context
              }).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -89,7 +91,8 @@ init(Props) ->
     {ok, #ctx{
        prefix=proplists:get_value(prefix, Props),
        riak=proplists:get_value(riak, Props),
-       api_version=proplists:get_value(api_version,Props)
+       api_version=proplists:get_value(api_version,Props),
+       bucket_type=proplists:get_value(bucket_type, Props)
       }}.
 
 %% @spec service_available(reqdata(), context()) ->
@@ -97,7 +100,8 @@ init(Props) ->
 %% @doc Determine whether or not a connection to Riak can be
 %%      established.  This function also takes this opportunity to extract
 %%      the 'bucket' bindings from the dispatch.
-service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
+service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
+    Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true,
@@ -150,7 +154,7 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
             end,
 
             Res = riak_core_security:check_permission({Perm,
-                                                           {<<"default">>,
+                                                           {Ctx#ctx.bucket_type,
                                                             Ctx#ctx.bucket}},
                                                            Security),
             case Res of
@@ -209,6 +213,9 @@ bucket_format_message(RD) ->
       wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)).
 
 
+resource_exists(RD, Ctx) ->
+    {riak_kv_wm_utils:bucket_type_exists(Ctx#ctx.bucket_type), RD, Ctx}.
+
 %% @spec content_types_provided(reqdata(), context()) ->
 %%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
 %% @doc List the content types available for representing this resource.
@@ -235,7 +242,7 @@ content_types_accepted(RD, Ctx) ->
 %% @doc Produce the bucket properties as JSON.
 produce_bucket_body(RD, Ctx) ->
     Client = Ctx#ctx.client,
-    Bucket = Ctx#ctx.bucket,
+    Bucket = {Ctx#ctx.bucket_type, Ctx#ctx.bucket},
     JsonProps1 = get_bucket_props_json(Client, Bucket),
     JsonProps2 = {struct, [JsonProps1]},
     JsonProps3 = mochijson2:encode(JsonProps2),
@@ -249,9 +256,9 @@ get_bucket_props_json(Client, Bucket) ->
 %% @spec accept_bucket_body(reqdata(), context()) -> {true, reqdata(), context()}
 %% @doc Modify the bucket properties according to the body of the
 %%      bucket-level PUT request.
-accept_bucket_body(RD, Ctx=#ctx{bucket=B, client=C, bucketprops=Props}) ->
+accept_bucket_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, client=C, bucketprops=Props}) ->
     ErlProps = lists:map(fun riak_kv_wm_utils:erlify_bucket_prop/1, Props),
-    case C:set_bucket(B, ErlProps) of
+    case C:set_bucket({T,B}, ErlProps) of
         ok ->
             {true, RD, Ctx};
         {error, Details} ->
@@ -262,6 +269,6 @@ accept_bucket_body(RD, Ctx=#ctx{bucket=B, client=C, bucketprops=Props}) ->
 
 %% @spec delete_resource(reqdata(), context()) -> {boolean, reqdata(), context()}
 %% @doc Reset the bucket properties back to the default values
-delete_resource(RD, Ctx=#ctx{bucket=B, client=C}) ->
-    C:reset_bucket(B),
+delete_resource(RD, Ctx=#ctx{bucket_type=T, bucket=B, client=C}) ->
+    C:reset_bucket({T,B}),
     {true, RD, Ctx}.
