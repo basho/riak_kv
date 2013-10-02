@@ -49,12 +49,14 @@
          forbidden/2,
          content_types_provided/2,
          encodings_provided/2,
+         resource_exists/2,
          produce_bucket_body/2,
          malformed_request/2
         ]).
 
 %% @type context() = term()
 -record(ctx, {api_version,  %% integer() - Determine which version of the API to use.
+              bucket_type,  %% binary() - Bucket type (from uri)
               bucket,       %% binary() - Bucket name (from uri)
               client,       %% riak_client() - the store client
               prefix,       %% string() - prefix for resource uris
@@ -76,7 +78,9 @@ init(Props) ->
     {ok, #ctx{api_version=proplists:get_value(api_version, Props),
               prefix=proplists:get_value(prefix, Props),
               riak=proplists:get_value(riak, Props),
-              allow_props_param=proplists:get_value(allow_props_param, Props)}}.
+              allow_props_param=proplists:get_value(allow_props_param, Props),
+              bucket_type=proplists:get_value(bucket_type, Props)
+             }}.
 
 %% @spec service_available(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
@@ -85,7 +89,8 @@ init(Props) ->
 %%      opportunity to extract the 'bucket' and 'key' path
 %%      bindings from the dispatch, as well as any vtag
 %%      query parameter.
-service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
+service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
+    Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true,
@@ -184,6 +189,8 @@ malformed_timeout_param(RD, Ctx) ->
             end
     end.
 
+resource_exists(RD, Ctx) ->
+    {riak_kv_wm_utils:bucket_type_exists(Ctx#ctx.bucket_type), RD, Ctx}.
 
 %% @spec produce_bucket_body(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Produce the JSON response to a bucket-level GET.
@@ -192,9 +199,11 @@ malformed_timeout_param(RD, Ctx) ->
 %%      is specified, keys will be streamed back to the client in JSON chunks
 %%      like so: {"keys":[Key1, Key2,...]}.
 produce_bucket_body(RD, #ctx{client=Client,
-                             bucket=Bucket,
+                             bucket=Bucket0,
+                             bucket_type=Type,
                              timeout=Timeout,
                              allow_props_param=AllowProps}=Ctx) ->
+    Bucket = riak_kv_wm_utils:maybe_bucket_type(Type, Bucket0),
     IncludeBucketProps = (AllowProps == true)
         andalso (wrq:get_qs_value(?Q_PROPS, RD) /= ?Q_FALSE),
 
