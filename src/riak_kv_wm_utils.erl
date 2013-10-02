@@ -37,7 +37,9 @@
          any_to_bool/1,
          is_forbidden/1,
          jsonify_bucket_prop/1,
-         erlify_bucket_prop/1
+         erlify_bucket_prop/1,
+         ensure_bucket_type/3,
+         bucket_type_exists/1
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -373,3 +375,22 @@ erlify_bucket_prop({?JSON_CHASH, {struct, Props}}) ->
                         proplists:get_value(?JSON_FUN, Props)))}};
 erlify_bucket_prop({Prop, Value}) ->
     {list_to_existing_atom(binary_to_list(Prop)), Value}.
+
+%% @doc Populates the resource's context/state with the bucket type
+%% from the path info, if not already set.
+ensure_bucket_type(RD, Ctx, FNum) ->
+    case {element(FNum, Ctx), wrq:path_info(bucket_type, RD)} of
+        {undefined, undefined} ->
+            setelement(FNum, Ctx, <<"default">>);
+        {_BType, undefined} ->
+            Ctx;
+        {_, B} ->
+            BType = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, B)),
+            setelement(FNum, Ctx, BType)
+    end.
+
+%% @doc Checks whether the given bucket type "exists" (for use in
+%% resource_exists callback).
+bucket_type_exists(<<"default">>) -> true;
+bucket_type_exists(Type) ->
+    riak_core_bucket_type:get(Type) /= undefined.
