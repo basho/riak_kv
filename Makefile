@@ -2,7 +2,7 @@
 
 all: deps compile
 
-compile:
+compile: deps
 	./rebar compile
 
 deps:
@@ -22,7 +22,8 @@ docs:
 	./rebar skip_deps=true doc
 
 APPS = kernel stdlib sasl erts ssl tools os_mon runtime_tools crypto inets \
-	xmerl webtool snmp public_key mnesia eunit syntax_tools compiler
+	xmerl webtool snmp public_key mnesia eunit syntax_tools compiler \
+	deps/**/ebin
 COMBO_PLT = $(HOME)/.riak_kv_dialyzer_plt
 
 check_plt: compile
