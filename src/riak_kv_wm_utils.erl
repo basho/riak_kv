@@ -31,6 +31,7 @@
          multipart_encode_body/4,
          format_links/3,
          format_uri/4,
+         format_uri/5,
          encode_value/1,
          accept_value/2,
          any_to_list/1,
@@ -181,6 +182,17 @@ format_uri(Bucket, Key, Prefix, 1) ->
     io_lib:format("/~s/~s/~s", [Prefix, Bucket, Key]);
 format_uri(Bucket, Key, _Prefix, 2) ->
     io_lib:format("/buckets/~s/keys/~s", [Bucket, Key]).
+
+
+%% @doc Format the URI for a type/bucket/key correctly for the api version
+%% used. (APIVersion is the final parameter.)
+format_uri(_Type, Bucket, Key, Prefix, 1) ->
+    format_uri(Bucket, Key, Prefix, 1);
+format_uri(_Type, Bucket, Key, Prefix, 2) ->
+    format_uri(Bucket, Key, Prefix, 2);
+format_uri(Type, Bucket, Key, _Prefix, 3) ->
+    io_lib:format("/types/~s/buckets/~s/keys/~s", [Type, Bucket, Key]).
+
 
 %% @spec get_ctype(dict(), term()) -> string()
 %% @doc Work out the content type for this object - use the metadata if provided

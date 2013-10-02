@@ -53,9 +53,8 @@ raw_dispatch() ->
 
 raw_dispatch(Name) ->
     Props1 = [{bucket_type, <<"default">>}, {api_version, 1}|raw_props(Name)],
-    Props2 = [{api_version, 2}|raw_props(Name)],
-    Props3 = [ {["types", bucket_type], Props2},
-               {[], [{bucket_type, <<"default">>}|Props2]}],
+    Props2 = [ {["types", bucket_type], [{api_version, 3}|raw_props(Name)]},
+               {[], [{bucket_type, <<"default">>}, {api_version, 2}|raw_props(Name)]}],
 
     [
      %% OLD API
@@ -105,7 +104,7 @@ raw_dispatch(Name) ->
      %% crdts
      {Prefix ++ ["buckets", bucket, crdt, key], {riak_kv_wm_crdt, known_type},
       riak_kv_wm_crdt, Props}
-    ] || {Prefix, Props} <- Props3 ]).
+    ] || {Prefix, Props} <- Props2 ]).
 
 is_post(Req) ->
     wrq:method(Req) == 'POST'.
