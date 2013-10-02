@@ -701,7 +701,7 @@ process_post(RD, Ctx) -> accept_doc_body(RD, Ctx).
 accept_doc_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C, links=L, index_fields=IF}) ->
     Doc0 = case {Ctx#ctx.doc, T} of
                {ok, D} -> D;
-               _       -> riak_object:new(maybe_bucket_type(T,B), K, <<>>)
+               _       -> riak_object:new(riak_kv_wm_utils:maybe_bucket_type(T,B), K, <<>>)
            end,
     VclockDoc = riak_object:set_vclock(Doc0, decode_vclock_header(RD)),
     {CType, Charset} = extract_content_type(RD),
@@ -964,7 +964,7 @@ ensure_doc(Ctx=#ctx{doc=undefined, bucket_type=T, bucket=B, key=K, client=C,
             Options0 = [deletedvclock, {basic_quorum, Quorum},
                         {notfound_ok, NotFoundOK}],
             Options = make_options(Options0, Ctx),
-            Ctx#ctx{doc=C:get(maybe_bucket_type(T,B), K, Options)};
+            Ctx#ctx{doc=C:get(riak_kv_wm_utils:maybe_bucket_type(T,B), K, Options)};
         false ->
             Ctx#ctx{doc={error, bucket_type_unknown}}
     end;
@@ -976,9 +976,9 @@ delete_resource(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C}) ->
     Options = make_options([], Ctx),
     Result = case wrq:get_req_header(?HEAD_VCLOCK, RD) of
         undefined ->
-            C:delete(maybe_bucket_type(T,B),K,Options);
+            C:delete(riak_kv_wm_utils:maybe_bucket_type(T,B),K,Options);
         _ ->
-            C:delete_vclock(maybe_bucket_type(T,B),K,decode_vclock_header(RD),Options)
+            C:delete_vclock(riak_kv_wm_utils:maybe_bucket_type(T,B),xK,decode_vclock_header(RD),Options)
     end,
     case Result of
         {error, Reason} ->
@@ -1220,12 +1220,3 @@ make_options(Prev, Ctx) ->
     NewOpts = [ {Opt, Val} || {Opt, Val} <- NewOpts0,
                               Val /= undefined, Val /= default ],
     Prev ++ NewOpts.
-
-%% Construct a {Type, Bucket} tuple, if not working with the default bucket
-%% @todo factor this into another module, copied from riak_kv_pb_object
-maybe_bucket_type(undefined, B) ->
-    B;
-maybe_bucket_type(<<"default">>, B) ->
-    B;
-maybe_bucket_type(T, B) ->
-    {T, B}.

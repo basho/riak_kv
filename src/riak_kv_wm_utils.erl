@@ -40,7 +40,8 @@
          jsonify_bucket_prop/1,
          erlify_bucket_prop/1,
          ensure_bucket_type/3,
-         bucket_type_exists/1
+         bucket_type_exists/1,
+         maybe_bucket_type/2
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -406,3 +407,11 @@ ensure_bucket_type(RD, Ctx, FNum) ->
 bucket_type_exists(<<"default">>) -> true;
 bucket_type_exists(Type) ->
     riak_core_bucket_type:get(Type) /= undefined.
+
+%% Construct a {Type, Bucket} tuple, if not working with the default bucket
+maybe_bucket_type(undefined, B) ->
+    B;
+maybe_bucket_type(<<"default">>, B) ->
+    B;
+maybe_bucket_type(T, B) ->
+    {T, B}.
