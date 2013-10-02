@@ -37,6 +37,7 @@
          service_available/2,
          is_authorized/2,
          forbidden/2,
+         resource_exists/2,
          content_types_provided/2,
          encodings_provided/2,
          produce_bucket_list/2,
@@ -45,13 +46,14 @@
 
 %% @type context() = term()
 -record(ctx, {
+          bucket_type,  %% binary() - bucket type (from uri)
           api_version,  %% integer() - Determine which version of the API to use.
           client,       %% riak_client() - the store client
           prefix,       %% string() - prefix for resource uris
           riak,         %% local | {node(), atom()} - params for riak client
           method,       %% atom() - HTTP method for the request
           timeout,      %% integer() - list buckets timeout
-          security      %% security context
+          security     %% security context
          }).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -66,7 +68,8 @@ init(Props) ->
     {ok, #ctx{
        api_version=proplists:get_value(api_version, Props),
        prefix=proplists:get_value(prefix, Props),
-       riak=proplists:get_value(riak, Props)
+       riak=proplists:get_value(riak, Props),
+       bucket_type=proplists:get_value(bucket_type, Props)
       }}.
 
 
@@ -77,7 +80,8 @@ init(Props) ->
 %%      opportunity to extract the 'bucket' and 'key' path
 %%      bindings from the dispatch, as well as any vtag
 %%      query parameter.
-service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
+service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
+    Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true, 
@@ -117,7 +121,7 @@ forbidden(RD, Ctx) ->
             {true, RD, Ctx};
         false ->
             Res = riak_core_security:check_permission({"riak_kv.list_buckets",
-                                                       <<"default">>},
+                                                       Ctx#ctx.bucket_type},
                                                       Ctx#ctx.security),
             case Res of
                 {false, Error, _} ->
@@ -171,13 +175,16 @@ malformed_timeout_param(RD, Ctx) ->
             end
     end.
 
+resource_exists(RD, #ctx{bucket_type=BType}=Ctx) ->
+    {riak_kv_wm_utils:bucket_type_exists(BType), RD, Ctx}.
 
 %% @spec produce_bucket_list(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Produce the JSON response to a bucket-level GET.
 %%      Includes a list of known buckets if the "buckets=true" query
 %%      param is specified.
 produce_bucket_list(RD, #ctx{client=Client,
-                             timeout=Timeout0}=Ctx) ->
+                             timeout=Timeout0,
+                             bucket_type=BType}=Ctx) ->
     Timeout = 
         case Timeout0 of
             undefined -> ?DEFAULT_TIMEOUT;
@@ -186,12 +193,12 @@ produce_bucket_list(RD, #ctx{client=Client,
     case wrq:get_qs_value(?Q_BUCKETS, RD) of
         ?Q_TRUE ->
             %% Get the buckets.
-            {ok, Buckets} = Client:list_buckets(Timeout),
+            {ok, Buckets} = Client:list_buckets(none, Timeout, BType),
             {mochijson2:encode({struct, [{?JSON_BUCKETS, Buckets}]}), 
              RD, Ctx};
         ?Q_STREAM ->
             F = fun() ->
-                        {ok, ReqId} = Client:stream_list_buckets(Timeout),
+                        {ok, ReqId} = Client:stream_list_buckets(none, Timeout, BType),
                         stream_buckets(ReqId)
                 end,
             {{stream, {[], F}}, RD, Ctx};
@@ -212,3 +219,4 @@ stream_buckets(ReqId) ->
              fun() -> stream_buckets(ReqId) end};
         {ReqId, timeout} -> {mochijson2:encode({struct, [{error, timeout}]}), done}
     end.
+
