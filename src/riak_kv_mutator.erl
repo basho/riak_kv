@@ -30,6 +30,13 @@
 %%
 %% This doubles as a behavior defining module for the mutators.
 %%
+%% == Words of Warning ==
+%%
+%% Once an object has been stored with a given mutator list, attempting to
+%% retreive that object will require those mutators. If the mutators done't
+%% exists or have changed in a non-backwards compatible way, you can expect
+%% to have at worst a crash, or at best a corrupted object.
+%%
 %% == Callbacks ==
 %%
 %% A mutator callback must implement 2 function: mutate_put/5 and mutate_get/1.
@@ -94,7 +101,10 @@ register(Module) ->
 %% @doc Register a module as a mutator with the given priority. Modules with
 %% equal priority are done in default (alphabetical) order. A module
 %% can only be registered once. When there is a conflict (two different
-%% lists), those lists are merged.
+%% lists), those lists are merged. Note that if an object is stored with
+%% a mutator, that mutator is used on retrieval. If that mutator code is
+%% removed or changed in a backwards incompatible manner, at best the
+%% object will be corrupted; at worst it will cause a crash.
 -spec register(Module :: atom(), Priority :: term()) -> 'ok'.
 register(Module, Priority) ->
     Modifier = fun
@@ -106,7 +116,12 @@ register(Module, Priority) ->
     end,
     riak_core_metadata:put({riak_kv, mutators}, list, Modifier).
 
-%% @doc Remove a module from the mutator list.
+%% @doc Remove a module from the mutator list. Removing a mutator from the
+%% list does not remove the mutator from use for retreiving objects. Any
+%% object that was stored while the mutator was registered will use that
+%% mutator on get. Thus, if the code for a mutator is not available or
+%% was changed in a non-backwards compatible way, at best one can expect
+%% corrupt objects, at worst a crash.
 -spec unregister(Module :: atom()) -> 'ok'.
 unregister(Module) ->
     Modifier = fun
@@ -140,6 +155,9 @@ get() ->
 
 %% @doc Unmutate an object after retrieval from storage. When an object is
 %% mutated, the mutators applied are put into the object's metadata.
+%% If the mutator does not exist anymore or has changed in a backwards
+%% incompatible manner, at best there will be corrupt objects, at worst
+%% a crash.
 -spec mutate_get(Object :: riak_object:riak_object()) -> riak_object:riak_object().
 mutate_get(Object) ->
     [Meta | _] = riak_object:get_metadatas(Object),
