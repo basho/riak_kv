@@ -109,10 +109,10 @@ register(Module) ->
 register(Module, Priority) ->
     Modifier = fun
         (undefined) ->
-            [{Module, Priority}];
+            [{Priority, Module}];
         (Values) ->
             Values2 = merge_values(Values),
-            orddict:store(Module, Priority, Values2)
+            insert_mutator(Module, Priority, Values2)
     end,
     riak_core_metadata:put({riak_kv, mutators}, list, Modifier).
 
@@ -129,7 +129,7 @@ unregister(Module) ->
             [];
         (Values) ->
             Values2 = merge_values(Values),
-            orddict:erase(Module, Values2)
+            lists:keydelete(Module, 2, Values2)
     end,
     riak_core_metadata:put({riak_kv, mutators}, list, Modifier, []).
 
@@ -144,13 +144,13 @@ get() ->
             Values;
         (Values, '$deleted') ->
             Values;
+        (Values, Values) ->
+            Values;
         (Values1, Values2) ->
             merge_values([Values1, Values2])
     end,
     ModulesAndPriors = riak_core_metadata:get({riak_kv, mutators}, list, [{default, []}, {resolver, Resolver}]),
-    Flipped = [{P, M} || {M, P} <- ModulesAndPriors],
-    Sorted = lists:sort(Flipped),
-    Modules = [M || {_P, M} <- Sorted],
+    Modules = [M || {_P, M} <- ModulesAndPriors],
     {ok, Modules}.
 
 %% @doc Unmutate an object after retrieval from storage. When an object is
@@ -230,11 +230,18 @@ merge_values(Values) ->
 merge_values([], Acc) ->
     Acc;
 
-merge_values([Head | Tail], Acc) ->
-    Acc2 = orddict:merge(fun merge_fun/3, Acc, Head),
+merge_values([{Priority, Module} = Mutator | Tail], Acc) ->
+    Acc2 = case lists:keyfind(Module, 2, Acc) of
+        false ->
+            ordsets:add_element(Mutator, Acc);
+        {P1, _} when P1 < Priority ->
+            Acc;
+        Else ->
+            ordsets:all_element(Mutator, ordsets:del_element(Else))
+    end,
     merge_values(Tail, Acc2).
 
-merge_fun(_Key, P1, P2) when P1 < P2 ->
-    P1;
-merge_fun(_Key, _P1, P2) ->
-    P2.
+insert_mutator(Module, Priority, Mutators) ->
+    Mutators2 = lists:keydelete(Module, 2, Mutators),
+    ordsets:add_element({Priority, Module}, Mutators2).
+
