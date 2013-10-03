@@ -26,7 +26,7 @@
 %% data storage backend is not meant to be the object given. An
 %% example would be storing only meta data for an object on a remote
 %% cluster. This module is an interface to register mutators that will
-%% can be run.
+%% be run.
 %%
 %% This doubles as a behavior defining module for the mutators.
 %%
@@ -92,7 +92,7 @@ register(Module) ->
     ?MODULE:register(Module, ?DEFAULT_PRIORITY).
 
 %% @doc Register a module as a mutator with the given priority. Modules with
-%% equal priority are done in sort sort (alphabetical) order. A module
+%% equal priority are done in default (alphabetical) order. A module
 %% can only be registered once. When there is a conflict (two different
 %% lists), those lists are merged.
 -spec register(Module :: atom(), Priority :: term()) -> 'ok'.
