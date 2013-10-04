@@ -35,7 +35,9 @@
          accept_value/2,
          any_to_list/1,
          any_to_bool/1,
-         is_forbidden/1
+         is_forbidden/1,
+         jsonify_bucket_prop/1,
+         erlify_bucket_prop/1
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -269,3 +271,105 @@ referer_tuple(RD) ->
                     {invalid, Url}
             end
     end.
+
+%% @spec jsonify_bucket_prop({Property::atom(), erlpropvalue()}) ->
+%%           {Property::binary(), jsonpropvalue()}
+%% @type erlpropvalue() = integer()|string()|boolean()|
+%%                        {modfun, atom(), atom()}|{atom(), atom()}
+%% @type jsonpropvalue() = integer()|string()|boolean()|{struct,[jsonmodfun()]}
+%% @type jsonmodfun() = {mod_binary(), binary()}|{fun_binary(), binary()}
+%% @doc Convert erlang bucket properties to JSON bucket properties.
+%%      Property names are converted from atoms to binaries.
+%%      Integer, string, and boolean property values are left as integer,
+%%      string, or boolean JSON values.
+%%      {modfun, Module, Function} or {Module, Function} values of the
+%%      linkfun and chash_keyfun properties are converted to JSON objects
+%%      of the form:
+%%        {"mod":ModuleNameAsString,
+%%         "fun":FunctionNameAsString}
+jsonify_bucket_prop({linkfun, {modfun, Module, Function}}) ->
+    {?JSON_LINKFUN, {struct, [{?JSON_MOD,
+                               list_to_binary(atom_to_list(Module))},
+                              {?JSON_FUN,
+                               list_to_binary(atom_to_list(Function))}]}};
+jsonify_bucket_prop({linkfun, {qfun, _}}) ->
+    {?JSON_LINKFUN, <<"qfun">>};
+jsonify_bucket_prop({linkfun, {jsfun, Name}}) ->
+    {?JSON_LINKFUN, {struct, [{?JSON_JSFUN, Name}]}};
+jsonify_bucket_prop({linkfun, {jsanon, {Bucket, Key}}}) ->
+    {?JSON_LINKFUN, {struct, [{?JSON_JSANON,
+                               {struct, [{?JSON_JSBUCKET, Bucket},
+                                         {?JSON_JSKEY, Key}]}}]}};
+jsonify_bucket_prop({linkfun, {jsanon, Source}}) ->
+    {?JSON_LINKFUN, {struct, [{?JSON_JSANON, Source}]}};
+jsonify_bucket_prop({chash_keyfun, {Module, Function}}) ->
+    {?JSON_CHASH, {struct, [{?JSON_MOD,
+                             list_to_binary(atom_to_list(Module))},
+                            {?JSON_FUN,
+                             list_to_binary(atom_to_list(Function))}]}};
+%% TODO Remove Legacy extractor prop in future version
+jsonify_bucket_prop({rs_extractfun, {modfun, M, F}}) ->
+    {?JSON_EXTRACT_LEGACY, {struct, [{?JSON_MOD,
+                                      list_to_binary(atom_to_list(M))},
+                                     {?JSON_FUN,
+                                      list_to_binary(atom_to_list(F))}]}};
+jsonify_bucket_prop({rs_extractfun, {{modfun, M, F}, Arg}}) ->
+    {?JSON_EXTRACT_LEGACY, {struct, [{?JSON_MOD,
+                                      list_to_binary(atom_to_list(M))},
+                                     {?JSON_FUN,
+                                      list_to_binary(atom_to_list(F))},
+                                     {?JSON_ARG, Arg}]}};
+jsonify_bucket_prop({search_extractor, {struct, _}=S}) ->
+    {?JSON_EXTRACT, S};
+jsonify_bucket_prop({search_extractor, {M, F}}) ->
+    {?JSON_EXTRACT, {struct, [{?JSON_MOD,
+                             list_to_binary(atom_to_list(M))},
+                              {?JSON_FUN,
+                               list_to_binary(atom_to_list(F))}]}};
+jsonify_bucket_prop({search_extractor, {M, F, Arg}}) ->
+    {?JSON_EXTRACT, {struct, [{?JSON_MOD,
+                               list_to_binary(atom_to_list(M))},
+                              {?JSON_FUN,
+                               list_to_binary(atom_to_list(F))},
+                              {?JSON_ARG, Arg}]}};
+
+jsonify_bucket_prop({Prop, Value}) ->
+    {list_to_binary(atom_to_list(Prop)), Value}.
+
+%% @spec erlify_bucket_prop({Property::binary(), jsonpropvalue()}) ->
+%%          {Property::atom(), erlpropvalue()}
+%% @doc The reverse of jsonify_bucket_prop/1.  Converts JSON representation
+%%      of bucket properties to their Erlang form.
+erlify_bucket_prop({?JSON_LINKFUN, {struct, Props}}) ->
+    case {proplists:get_value(?JSON_MOD, Props),
+          proplists:get_value(?JSON_FUN, Props)} of
+        {Mod, Fun} when is_binary(Mod), is_binary(Fun) ->
+            {linkfun, {modfun,
+                       list_to_existing_atom(binary_to_list(Mod)),
+                       list_to_existing_atom(binary_to_list(Fun))}};
+        {undefined, undefined} ->
+            case proplists:get_value(?JSON_JSFUN, Props) of
+                Name when is_binary(Name) ->
+                    {linkfun, {jsfun, Name}};
+                undefined ->
+                    case proplists:get_value(?JSON_JSANON, Props) of
+                        {struct, Bkey} ->
+                            Bucket = proplists:get_value(?JSON_JSBUCKET, Bkey),
+                            Key = proplists:get_value(?JSON_JSKEY, Bkey),
+                            %% bomb if malformed
+                            true = is_binary(Bucket) andalso is_binary(Key),
+                            {linkfun, {jsanon, {Bucket, Key}}};
+                        Source when is_binary(Source) ->
+                            {linkfun, {jsanon, Source}}
+                    end
+            end
+    end;
+erlify_bucket_prop({?JSON_CHASH, {struct, Props}}) ->
+    {chash_keyfun, {list_to_existing_atom(
+                      binary_to_list(
+                        proplists:get_value(?JSON_MOD, Props))),
+                    list_to_existing_atom(
+                      binary_to_list(
+                        proplists:get_value(?JSON_FUN, Props)))}};
+erlify_bucket_prop({Prop, Value}) ->
+    {list_to_existing_atom(binary_to_list(Prop)), Value}.
