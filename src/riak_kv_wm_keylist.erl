@@ -231,7 +231,7 @@ produce_bucket_body(RD, #ctx{client=Client,
                 case Ctx#ctx.api_version of
                     1 ->
                         mochijson2:encode({struct, BucketPropsJson});
-                    2 ->
+                    Two when Two >= 2 ->
                         []
                 end,
             {{stream, {FirstResult, F}}, RD, Ctx};

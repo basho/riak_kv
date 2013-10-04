@@ -172,7 +172,8 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
 %%      Properties allows HEAD, GET, and PUT.
 allowed_methods(RD, Ctx) when Ctx#ctx.api_version =:= 1 ->
     {['HEAD', 'GET', 'PUT'], RD, Ctx};
-allowed_methods(RD, Ctx) when Ctx#ctx.api_version =:= 2 ->
+allowed_methods(RD, Ctx) when Ctx#ctx.api_version =:= 2;
+                              Ctx#ctx.api_version =:= 3 ->
     {['HEAD', 'GET', 'PUT', 'DELETE'], RD, Ctx}.
 
 %% @spec malformed_request(reqdata(), context()) ->
@@ -242,7 +243,7 @@ content_types_accepted(RD, Ctx) ->
 %% @doc Produce the bucket properties as JSON.
 produce_bucket_body(RD, Ctx) ->
     Client = Ctx#ctx.client,
-    Bucket = {Ctx#ctx.bucket_type, Ctx#ctx.bucket},
+    Bucket = riak_kv_wm_utils:maybe_bucket_type(Ctx#ctx.bucket_type, Ctx#ctx.bucket),
     JsonProps1 = get_bucket_props_json(Client, Bucket),
     JsonProps2 = {struct, [JsonProps1]},
     JsonProps3 = mochijson2:encode(JsonProps2),

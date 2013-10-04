@@ -161,7 +161,7 @@ format_links([{Bucket, Tag}|Rest], Prefix, APIVersion, Acc) ->
             1 ->
                 io_lib:format("</~s/~s>; rel=\"~s\"",
                               [Prefix, Bucket1, Tag1]);
-            2 ->
+            Two when Two >= 2 ->
                 io_lib:format("</buckets/~s>; rel=\"~s\"",
                               [Bucket1, Tag1])
         end,
