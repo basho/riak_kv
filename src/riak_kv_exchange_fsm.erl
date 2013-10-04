@@ -49,6 +49,9 @@
 %% Per state transition timeout used by certain transitions
 -define(DEFAULT_ACTION_TIMEOUT, 300000). %% 5 minutes
 
+%% Use occasional calls to disk_log:log() for some backpressure periodically
+-define(LOG_BATCH_SIZE, 5000).
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -171,11 +174,31 @@ key_exchange(timeout, State=#state{local=LocalVN,
     lager:debug("Starting key exchange between ~p and ~p", [LocalVN, RemoteVN]),
     lager:debug("Exchanging hashes for preflist ~p", [IndexN]),
 
+    TmpDir = app_helper:get_env(riak_core, platform_data_dir, "/tmp"),
+    {NA, NB, NC} = Now = WriteLog = now(),
+    LogFile1 = lists:flatten(io_lib:format("~s/~s/in.~p.~p.~p",
+                                           [TmpDir, ?MODULE, NA, NB, NC])),
+    ok = filelib:ensure_dir(LogFile1),
+    LogFile2 = lists:flatten(io_lib:format("~s/~s/out.~p.~p.~p",
+                                           [TmpDir, ?MODULE, NA, NB, NC])),
+    ok = filelib:ensure_dir(LogFile2),
     Remote = fun(get_bucket, {L, B}) ->
                      exchange_bucket(RemoteTree, IndexN, L, B);
                 (key_hashes, Segment) ->
                      exchange_segment(RemoteTree, IndexN, Segment);
-                (_, _) ->
+                (init, _Y) ->
+                     %% Our return value is ignored, so we can't return
+                     %% the disk log handle here.  However, disk_log is
+                     %% magically stateful, so we don't need to change
+                     %% the exchange API to accomodate us.
+                     {ok, _} = open_disk_log(Now, LogFile1, read_write),
+                     ok;
+                (final, _Y) ->
+                     ok = disk_log:sync(Now),
+                     ok = disk_log:close(Now),
+                     ok;
+                (_X, _Y) ->
+                     lager:error("~s LINE ~p: ~p ~p", [?MODULE, ?LINE, _X, _Y]),
                      ok
              end,
 
@@ -186,27 +209,53 @@ key_exchange(timeout, State=#state{local=LocalVN,
     %% entropy manager if needed.
     {ok, RC} = riak:local_client(),
     AccFun = fun(KeyDiff, Acc) ->
-                     lists:foldl(fun(Diff, Acc2) ->
-                                         read_repair_keydiff(RC, LocalVN, RemoteVN, Diff),
-                                         case Acc2 of
-                                             [] ->
-                                                 [1];
-                                             [Count] ->
-                                                 [Count+1]
-                                         end
+                     lists:foldl(fun({DiffReason, BKeyBin}, Count) ->
+                                         {B, K} = binary_to_term(BKeyBin),
+                                         T = {B, K, DiffReason},
+                                         if Count rem ?LOG_BATCH_SIZE == 0 ->
+                                                 ok = disk_log:log(WriteLog, T);
+                                            true ->
+                                                 ok = disk_log:alog(WriteLog, T)
+                                         end,
+                                         Count+1
                                  end, Acc, KeyDiff)
              end,
     %% TODO: Add stats for AAE
-    case riak_kv_index_hashtree:compare(IndexN, Remote, AccFun, LocalTree) of
-        [] ->
-            exchange_complete(LocalVN, RemoteVN, IndexN, 0),
+    Count = riak_kv_index_hashtree:compare(IndexN, Remote, AccFun, 0, LocalTree),
+    if Count == 0 ->
             ok;
-        [Count] ->
-            exchange_complete(LocalVN, RemoteVN, IndexN, Count),
+       true ->
+            %% Sort the keys.  For vnodes that use backends that preserve
+            %% lexicographic sort order for BKeys, this is a big
+            %% improvement.  For backends that do not, e.g. Bitcask, sorting
+            %% by BKey is unlikely to be any worse.  For Riak CS's use
+            %% pattern, sorting may have some benefit since block N is
+            %% likely to be nearby on disk of block N+1.
+            StartTime = now(),
+            ok = sort_disk_log(LogFile1, LogFile2),
+            lager:debug("~s:key_exchange: sorting time = ~p seconds\n",
+                        [?MODULE, timer:now_diff(now(), StartTime) / 1000000]),
+            {ok, ReadLog} = open_disk_log(Now, LogFile2, read_only),
+            FoldRes =
+                fold_disk_log(fun(Diff, Acc) ->
+                                      read_repair_keydiff(RC, LocalVN, RemoteVN,
+                                                          Diff),
+                                      Acc + 1
+                              end, 0, ReadLog),
+            disk_log:close(ReadLog),
+            if Count == FoldRes ->
+                    ok;
+               true ->
+                    lager:error("~s:key_exchange: Count ~p /= FoldRes ~p\n",
+                                [?MODULE, Count, FoldRes])
+            end,
             lager:info("Repaired ~b keys during active anti-entropy exchange "
                        "of ~p between ~p and ~p",
                        [Count, IndexN, LocalVN, RemoteVN])
     end,
+    exchange_complete(LocalVN, RemoteVN, IndexN, Count),
+    _ = file:delete(LogFile1),
+    _ = file:delete(LogFile2),
     {stop, normal, State}.
 
 %%%===================================================================
@@ -222,8 +271,7 @@ exchange_segment(Tree, IndexN, Segment) ->
     riak_kv_index_hashtree:exchange_segment(IndexN, Segment, Tree).
 
 %% @private
-read_repair_keydiff(RC, LocalVN, RemoteVN, {_, KeyBin}) ->
-    {Bucket, Key} = binary_to_term(KeyBin),
+read_repair_keydiff(RC, LocalVN, RemoteVN, {Bucket, Key, _Reason}) ->
     %% TODO: Even though this is at debug level, it's still extremely
     %%       spammy. Should this just be removed? We can always use
     %%       redbug to trace read_repair_keydiff when needed. Of course,
@@ -287,3 +335,73 @@ exchange_complete({LocalIdx, _}, {RemoteIdx, RemoteNode}, IndexN, Repaired) ->
     riak_kv_entropy_info:exchange_complete(LocalIdx, RemoteIdx, IndexN, Repaired),
     rpc:call(RemoteNode, riak_kv_entropy_info, exchange_complete,
              [RemoteIdx, LocalIdx, IndexN, Repaired]).
+
+open_disk_log(Name, Path, RWorRO) ->
+    open_disk_log(Name, Path, RWorRO, [{type, halt}, {format, internal}]).
+
+open_disk_log(Name, Path, RWorRO, OtherOpts) ->
+    disk_log:open([{name, Name}, {file, Path}, {mode, RWorRO}|OtherOpts]).
+
+sort_disk_log(InputFile, OutputFile) ->
+    {ok, ReadLog} = open_disk_log(now(), InputFile, read_only),
+    _ = file:delete(OutputFile),
+    {ok, WriteLog} = open_disk_log(now(), OutputFile, read_write),
+    Input = sort_disk_log_input(ReadLog),
+    Output = sort_disk_log_output(WriteLog),
+    try
+        file_sorter:sort(Input, Output, {format, term})
+    after
+        ok = disk_log:close(ReadLog),
+        ok = disk_log:close(WriteLog)
+    end.
+
+sort_disk_log_input(ReadLog) ->
+    sort_disk_log_input(ReadLog, start).
+
+sort_disk_log_input(ReadLog, Cont) ->
+    fun(close) ->
+            ok;
+       (read) ->
+            case disk_log:chunk(ReadLog, Cont) of
+                {error, Reason} ->
+                    {error, Reason};
+                {Cont2, Terms} ->
+                    {Terms, sort_disk_log_input(ReadLog, Cont2)};
+                {Cont2, Terms, _Badbytes} ->
+                    {Terms, sort_disk_log_input(ReadLog, Cont2)};
+                eof ->
+                    end_of_input
+            end
+    end.
+
+sort_disk_log_output(WriteLog) ->
+    sort_disk_log_output(WriteLog, 1).
+
+sort_disk_log_output(WriteLog, Count) ->
+    fun(close) ->
+            ok;
+       (Terms) ->
+            %% Typical length of terms is on the order of 1-1500
+            %% e.g. [{Bucket1, Key1, missing|remote_missing|different}, ...]
+            if Count rem 100 == 0 ->
+                    disk_log:log_terms(WriteLog, Terms);
+                true ->
+                    disk_log:alog_terms(WriteLog, Terms)
+            end,
+            sort_disk_log_output(WriteLog, Count + 1)
+    end.
+
+fold_disk_log(Fun, Acc, DiskLog) ->
+    fold_disk_log(disk_log:chunk(DiskLog, start), Fun, Acc, DiskLog).
+
+fold_disk_log(eof, _Fun, Acc, _DiskLog) ->
+    Acc;
+fold_disk_log({Cont, Terms}, Fun, Acc, DiskLog) ->
+    Acc2 = try
+               lists:foldl(Fun, Acc, Terms)
+    catch X:Y ->
+            lager:error("~s:fold_disk_log: caught ~p ~p @ ~p\n",
+                        [?MODULE, X, Y, erlang:get_stacktrace()]),
+            Acc
+    end,
+    fold_disk_log(disk_log:chunk(DiskLog, Cont), Fun, Acc2, DiskLog).

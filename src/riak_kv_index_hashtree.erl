@@ -39,6 +39,7 @@
 -export([get_lock/2,
          compare/3,
          compare/4,
+         compare/5,
          exchange_bucket/4,
          exchange_segment/3,
          update/2,
@@ -167,7 +168,14 @@ compare(Id, Remote, Tree) ->
 -spec compare(index_n(), hashtree:remote_fun(),
               undefined | hashtree:acc_fun(T), pid()) -> T.
 compare(Id, Remote, AccFun, Tree) ->
-    gen_server:call(Tree, {compare, Id, Remote, AccFun}, infinity).
+    compare(Id, Remote, AccFun, [], Tree).
+
+%% @doc A variant of {@link compare/3} that takes a key difference accumulator
+%%      function as an additional parameter.
+-spec compare(index_n(), hashtree:remote_fun(),
+              undefined | hashtree:acc_fun(T), any(), pid()) -> T.
+compare(Id, Remote, AccFun, Acc, Tree) ->
+    gen_server:call(Tree, {compare, Id, Remote, AccFun, Acc}, infinity).
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the calling process.
@@ -277,8 +285,8 @@ handle_call({exchange_segment, Id, Segment}, _From, State) ->
                end,
                State);
 
-handle_call({compare, Id, Remote, AccFun}, From, State) ->
-    do_compare(Id, Remote, AccFun, From, State),
+handle_call({compare, Id, Remote, AccFun, Acc}, From, State) ->
+    do_compare(Id, Remote, AccFun, Acc, From, State),
     {noreply, State};
 
 handle_call(destroy, _From, State) ->
@@ -596,8 +604,8 @@ tree_id(_) ->
     erlang:error(badarg).
 
 -spec do_compare(index_n(), hashtree:remote_fun(), hashtree:acc_fun(any()),
-                 term(), state()) -> ok.
-do_compare(Id, Remote, AccFun, From, State) ->
+                 any(), term(), state()) -> ok.
+do_compare(Id, Remote, AccFun, Acc, From, State) ->
     case orddict:find(Id, State#state.trees) of
         error ->
             %% This case shouldn't happen, but might as well safely handle it.
@@ -607,12 +615,8 @@ do_compare(Id, Remote, AccFun, From, State) ->
         {ok, Tree} ->
             spawn_link(fun() ->
                                Remote(init, self()),
-                               Result = case AccFun of
-                                            undefined ->
-                                                hashtree:compare(Tree, Remote);
-                                            _ ->
-                                                hashtree:compare(Tree, Remote, AccFun)
-                                        end,
+                               Result = hashtree:compare(Tree, Remote,
+                                                         AccFun, Acc),
                                Remote(final, self()),
                                gen_server:reply(From, Result)
                        end)
