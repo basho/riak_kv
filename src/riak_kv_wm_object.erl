@@ -978,7 +978,7 @@ delete_resource(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C}) ->
         undefined ->
             C:delete(riak_kv_wm_utils:maybe_bucket_type(T,B),K,Options);
         _ ->
-            C:delete_vclock(riak_kv_wm_utils:maybe_bucket_type(T,B),xK,decode_vclock_header(RD),Options)
+            C:delete_vclock(riak_kv_wm_utils:maybe_bucket_type(T,B),K,decode_vclock_header(RD),Options)
     end,
     case Result of
         {error, Reason} ->
