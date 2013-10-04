@@ -453,7 +453,6 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
             end,
             BufferFun =
                 fun(Results) ->
-                        lager:info("RESULTS: ~p", [Results]),
                         Caller ! {ReqId, {kl, Idx, Results}}
                 end,
             Extras = fold_extras(keys, Idx, Bucket),
