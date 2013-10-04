@@ -480,7 +480,8 @@ bucket_type_create([TypeStr, PropsStr]) ->
 bucket_type_create(Type, {struct, Fields}) ->
     case proplists:get_value(<<"props">>, Fields) of
         {struct, Props} ->
-            bucket_type_print_create_result(Type, riak_core_bucket_type:create(Type, Props));
+            ErlProps = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props],
+            bucket_type_print_create_result(Type, riak_core_bucket_type:create(Type, ErlProps));
         _ ->
             io:format("Cannot create bucket type ~s: no props field found in json~n", [Type]),
             error
@@ -502,7 +503,8 @@ bucket_type_update([TypeStr, PropsStr]) ->
 bucket_type_update(Type, {struct, Fields}) ->
     case proplists:get_value(<<"props">>, Fields) of
         {struct, Props} ->
-            bucket_type_print_update_result(Type, riak_core_bucket_type:update(Type, Props));
+            ErlProps = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props],
+            bucket_type_print_update_result(Type, riak_core_bucket_type:update(Type, ErlProps));
         _ ->
             io:format("Cannot create bucket type ~s: no props field found in json~n", [Type]),
             error
