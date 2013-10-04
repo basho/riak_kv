@@ -440,7 +440,7 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
                         UniqueResults = lists:usort(Results),
                         Caller ! {ReqId, {kl, Idx, UniqueResults}}
                 end,
-            FoldFun = fold_fun(buckets, BufferMod, Filter),
+            FoldFun = fold_fun(buckets, BufferMod, Filter, undefined),
             ModFun = fold_buckets;
         _ ->
             {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
@@ -455,7 +455,8 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
                 fun(Results) ->
                         Caller ! {ReqId, {kl, Idx, Results}}
                 end,
-            FoldFun = fold_fun(keys, BufferMod, Filter),
+            Extras = fold_extras(keys, Idx, Bucket),
+            FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
             ModFun = fold_keys
     end,
     Buffer = BufferMod:new(BufferSize, BufferFun),
@@ -644,8 +645,9 @@ handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
     %% Construct the filter function
     Filter = riak_kv_coverage_filter:build_filter(all, ItemFilter, undefined),
     BufferMod = riak_kv_fold_buffer,
+
     Buffer = BufferMod:new(BufferSize, result_fun(Sender)),
-    FoldFun = fold_fun(buckets, BufferMod, Filter),
+    FoldFun = fold_fun(buckets, BufferMod, Filter, undefined),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(ModState),
     AsyncBackend = lists:member(async_fold, Capabilities),
@@ -742,7 +744,8 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
     BufferMod = riak_kv_fold_buffer,
     Buffer = BufferMod:new(BufferSize, ResultFun),
-    FoldFun = fold_fun(keys, BufferMod, Filter),
+    Extras = fold_extras(keys, Index, Bucket),
+    FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     AsyncBackend = lists:member(async_fold, Capabilities),
@@ -1275,11 +1278,11 @@ list(FoldFun, FinishFun, Mod, ModFun, ModState, Opts, Buffer) ->
     end.
 
 %% @private
-fold_fun(buckets, BufferMod, none) ->
+fold_fun(buckets, BufferMod, none, _Extra) ->
     fun(Bucket, Buffer) ->
             BufferMod:add(Bucket, Buffer)
     end;
-fold_fun(buckets, BufferMod, Filter) ->
+fold_fun(buckets, BufferMod, Filter, _Extra) ->
     fun(Bucket, Buffer) ->
             case Filter(Bucket) of
                 true ->
@@ -1288,16 +1291,41 @@ fold_fun(buckets, BufferMod, Filter) ->
                     Buffer
             end
     end;
-fold_fun(keys, BufferMod, none) ->
+fold_fun(keys, BufferMod, none, undefined) ->
     fun(_, Key, Buffer) ->
             BufferMod:add(Key, Buffer)
     end;
-fold_fun(keys, BufferMod, Filter) ->
+fold_fun(keys, BufferMod, none, {Bucket, Index, N, NumPartitions}) ->
+    fun(_, Key, Buffer) ->
+            Hash = riak_core_util:chash_key({Bucket, Key}),
+            case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
+                Index ->
+                    BufferMod:add(Key, Buffer);
+                _ ->
+                    Buffer
+            end
+    end;
+fold_fun(keys, BufferMod, Filter, undefined) ->
     fun(_, Key, Buffer) ->
             case Filter(Key) of
                 true ->
                     BufferMod:add(Key, Buffer);
                 false ->
+                    Buffer
+            end
+    end;
+fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
+    fun(_, Key, Buffer) ->
+            Hash = riak_core_util:chash_key({Bucket, Key}),
+            case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
+                Index ->
+                    case Filter(Key) of
+                        true ->
+                            BufferMod:add(Key, Buffer);
+                        false ->
+                            Buffer
+                    end;
+                _ ->
                     Buffer
             end
     end.
@@ -1313,6 +1341,23 @@ result_fun(Bucket, Sender) ->
     fun(Items) ->
             riak_core_vnode:reply(Sender, {Bucket, Items})
     end.
+
+fold_extras(keys, Index, Bucket) ->
+    case app_helper:get_env(riak_kv, fold_preflist_filter, false) of
+        true ->
+            {ok, R} = riak_core_ring_manager:get_my_ring(),
+            NValMap = nval_map(R),
+            N = case lists:keyfind(Bucket, 1, NValMap) of
+                    false -> riak_core_bucket:default_object_nval();
+                    {Bucket, NVal} -> NVal
+                end,
+            NumPartitions = riak_core_ring:num_partitions(R),
+            {Bucket, Index, N, NumPartitions};
+        false ->
+            undefined
+    end;
+fold_extras(_, _, _) ->
+    undefined.
 
 %% wait for acknowledgement that results were received before
 %% continuing, as a way of providing backpressure for processes that
