@@ -41,6 +41,7 @@
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_pb/include/riak_pb_kv_codec.hrl").
+-include("riak_kv_types.hrl").
 
 -behaviour(riak_api_pb_service).
 
@@ -55,9 +56,6 @@
 -record(state, {client}).
 
 -define(DEFAULT_TIMEOUT, 60000).
-
-%% The empty counter that is the body of all new counter objects
--define(NEW_COUNTER, {riak_kv_pncounter, riak_kv_pncounter:new()}).
 
 %% @doc init/0 callback. Returns the service internal start
 %% state.
@@ -87,7 +85,7 @@ encode(Message) ->
 process(#rpbcountergetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0,
                           notfound_ok=NFOk, basic_quorum=BQ},
         #state{client=C} = State) ->
-    case riak_kv_counter:supported() of
+    case lists:member(pncounter, riak_core_capability:get({riak_kv, crdt}, [])) of
         true ->
             R = decode_quorum(R0),
             PR = decode_quorum(PR0),
@@ -97,7 +95,7 @@ process(#rpbcountergetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0,
                            make_option(notfound_ok, NFOk) ++
                            make_option(basic_quorum, BQ)) of
                 {ok, O} ->
-                    Value = riak_kv_counter:value(O),
+                    {_Ctx, Value} = riak_kv_crdt:value(O, ?LEGACY_COUNTER_TYPE),
                     {reply, #rpbcountergetresp{value = Value}, State};
                 {error, notfound} ->
                     {reply, #rpbcountergetresp{}, State};
@@ -113,7 +111,7 @@ process(#rpbcounterupdatereq{bucket=B0, type=T, key=K,  w=W0, dw=DW0, pw=PW0, am
     B = maybe_bucket_type(T, B0),
     case {allow_mult(B), riak_kv_counter:supported()} of
         {true, true} ->
-            O = riak_kv_counter:new(B, K),
+            O = riak_kv_crdt:new(B, K, ?LEGACY_COUNTER_TYPE),
 
             %% erlang_protobuffs encodes as 1/0/undefined
             W = decode_quorum(W0),
@@ -125,7 +123,7 @@ process(#rpbcounterupdatereq{bucket=B0, type=T, key=K,  w=W0, dw=DW0, pw=PW0, am
                 ok ->
                     {reply, #rpbcounterupdateresp{}, State};
                 {ok, RObj} ->
-                    Value = riak_kv_counter:value(RObj),
+                    {_Ctx, Value} = riak_kv_crdt:value(RObj, ?LEGACY_COUNTER_TYPE),
                     {reply, #rpbcounterupdateresp{value=Value}, State};
                 {error, notfound} ->
                     {reply, #rpbcounterupdateresp{}, State};

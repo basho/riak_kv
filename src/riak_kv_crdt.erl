@@ -148,12 +148,22 @@ deserialize_crdt(?V2_VERS, CRDTBin) ->
 deserialize_crdt(V, _Bin) ->
     {error, {invalid_version, V}}.
 
+counter_op(N) when N < 0 ->
+    {decrement, N*-1};
+counter_op(N) ->
+    {increment, N}.
+
 %% @private Apply the updates to the CRDT. If there is no context for
 %% the operation then apply the operation to the local merged replica,
 %% and risk precondition errors and unexpected behaviour.
 %%
 %% @see split_ops/1 for more explanation
--spec update_crdt(orddict:orddict(), riak_dt:actor(), crdt_op()) -> orddict:ordddict() | precondition_error().
+-spec update_crdt(orddict:orddict(), riak_dt:actor(), crdt_op() | non_neg_integer()) -> orddict:ordddict() | precondition_error().
+update_crdt(Dict, Actor, Amt) when is_integer(Amt) ->
+    %% Handle legacy 1.4 counter operation, upgrade to current OP
+    CounterOp = counter_op(Amt),
+    Op = ?CRDT_OP{mod=riak_kv_pncounter, op=CounterOp},
+    update_crdt(Dict, Actor, Op);
 update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op, ctx=undefined}) ->
     {Meta, Record, Value} = fetch_with_default(Mod, Dict),
     case Mod:update(Op, Actor, Value) of
@@ -352,6 +362,8 @@ crdt_from_binary(<<TypeLen:32/integer, Type:TypeLen/binary, CRDTBin/binary>>) ->
 crdt_from_binary(_) ->
     {error, {invalid_crdt_binary}}.
 
+to_record(?LEGACY_COUNTER_TYPE, Val) ->
+    ?LEGACY_COUNTER_TYPE(Val);
 to_record(?COUNTER_TYPE, Val) ->
     ?COUNTER_TYPE(Val);
 to_record(?MAP_TYPE, Val) ->

@@ -180,7 +180,7 @@ start(_Type, _StartArgs) ->
                                           encode_zlib),
 
             riak_core_capability:register({riak_kv, crdt},
-                                          [?TOP_LEVEL_TYPES, []],
+                                          [?TOP_LEVEL_TYPES, [pncounter], []],
                                           []),
 
             riak_core_capability:register({riak_kv, put_fsm_ack_execute},
