@@ -104,6 +104,7 @@ setup() ->
     %% Shut logging up - too noisy.
     application:load(sasl),
     application:set_env(sasl, sasl_error_logger, {file, "put_fsm_eqc_sasl.log"}),
+    application:set_env(riak_kv, fsm_trace_enabled, true),
     error_logger:tty(false),
     error_logger:logfile({open, "put_fsm_eqc.log"}),
 

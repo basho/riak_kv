@@ -132,11 +132,9 @@ make_request(Request, Index) ->
                                         Index).
 
 get_bucket_option(Type, BucketProps) ->
-    case proplists:get_value(Type, BucketProps, default) of
-        default ->
-            {ok, DefaultProps} = application:get_env(riak_core, default_bucket_props),
-            proplists:get_value(Type, DefaultProps, error);
-        Val -> Val
+    case lists:keyfind(Type, 1, BucketProps) of
+        {Type, Val} -> Val;
+        _ -> throw(unknown_bucket_option)
     end.
 
 expand_value(Type, default, BucketProps) ->

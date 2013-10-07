@@ -6,6 +6,13 @@
 -define(DTRACE(Category, Ints, Strings),
         dtrace_int(Category, Ints, Strings)).
 
+-define(DTRACE(Cond, Category, Ints, Strings),
+        case Cond of
+            true ->
+                dtrace_int(Category, Ints, Strings);
+            _ -> ok
+        end).
+
 %% Probe categories
 -define(C_GET_FSM_INIT,               500).
 -define(C_GET_FSM_PREPARE,            501).
