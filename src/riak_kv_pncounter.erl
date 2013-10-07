@@ -82,6 +82,8 @@ value({Incr, Decr}) ->
 update(increment, Actor, {Incr, Decr}) ->
     {ok, GC}  = riak_kv_gcounter:update(increment, Actor, Incr),
     {ok, {GC, Decr}};
+update({_Op, 0}, _Actor, Cntr) ->
+    {ok, Cntr};
 update({increment, By}, Actor, {Incr, Decr}) when is_integer(By), By > 0 ->
     {ok, GC} = riak_kv_gcounter:update({increment, By}, Actor, Incr),
     {ok, {GC, Decr}};
