@@ -304,9 +304,9 @@ referer_tuple(RD) ->
 %%         "fun":FunctionNameAsString}
 jsonify_bucket_prop({linkfun, {modfun, Module, Function}}) ->
     {?JSON_LINKFUN, {struct, [{?JSON_MOD,
-                               list_to_binary(atom_to_list(Module))},
+                               atom_to_binary(Module, utf8)},
                               {?JSON_FUN,
-                               list_to_binary(atom_to_list(Function))}]}};
+                               atom_to_binary(Function, utf8)}]}};
 jsonify_bucket_prop({linkfun, {qfun, _}}) ->
     {?JSON_LINKFUN, <<"qfun">>};
 jsonify_bucket_prop({linkfun, {jsfun, Name}}) ->
@@ -319,37 +319,38 @@ jsonify_bucket_prop({linkfun, {jsanon, Source}}) ->
     {?JSON_LINKFUN, {struct, [{?JSON_JSANON, Source}]}};
 jsonify_bucket_prop({chash_keyfun, {Module, Function}}) ->
     {?JSON_CHASH, {struct, [{?JSON_MOD,
-                             list_to_binary(atom_to_list(Module))},
+                             atom_to_binary(Module, utf8)},
                             {?JSON_FUN,
-                             list_to_binary(atom_to_list(Function))}]}};
+                             atom_to_binary(Function, utf8)}]}};
 %% TODO Remove Legacy extractor prop in future version
 jsonify_bucket_prop({rs_extractfun, {modfun, M, F}}) ->
     {?JSON_EXTRACT_LEGACY, {struct, [{?JSON_MOD,
-                                      list_to_binary(atom_to_list(M))},
+                                      atom_to_binary(M, utf8)},
                                      {?JSON_FUN,
-                                      list_to_binary(atom_to_list(F))}]}};
+                                      atom_to_binary(F, utf8)}]}};
 jsonify_bucket_prop({rs_extractfun, {{modfun, M, F}, Arg}}) ->
     {?JSON_EXTRACT_LEGACY, {struct, [{?JSON_MOD,
-                                      list_to_binary(atom_to_list(M))},
+                                      atom_to_binary(M, utf8)},
                                      {?JSON_FUN,
-                                      list_to_binary(atom_to_list(F))},
+                                      atom_to_binary(F, utf8)},
                                      {?JSON_ARG, Arg}]}};
 jsonify_bucket_prop({search_extractor, {struct, _}=S}) ->
     {?JSON_EXTRACT, S};
 jsonify_bucket_prop({search_extractor, {M, F}}) ->
     {?JSON_EXTRACT, {struct, [{?JSON_MOD,
-                             list_to_binary(atom_to_list(M))},
+                             atom_to_binary(M, utf8)},
                               {?JSON_FUN,
-                               list_to_binary(atom_to_list(F))}]}};
+                               atom_to_binary(F, utf8)}]}};
 jsonify_bucket_prop({search_extractor, {M, F, Arg}}) ->
     {?JSON_EXTRACT, {struct, [{?JSON_MOD,
-                               list_to_binary(atom_to_list(M))},
+                               atom_to_binary(M, utf8)},
                               {?JSON_FUN,
-                               list_to_binary(atom_to_list(F))},
+                               atom_to_binary(F, utf8)},
                               {?JSON_ARG, Arg}]}};
-
+jsonify_bucket_prop({name, {_T, B}}) ->
+    {<<"name">>, B};
 jsonify_bucket_prop({Prop, Value}) ->
-    {list_to_binary(atom_to_list(Prop)), Value}.
+    {atom_to_binary(Prop, utf8), Value}.
 
 %% @spec erlify_bucket_prop({Property::binary(), jsonpropvalue()}) ->
 %%          {Property::atom(), erlpropvalue()}
