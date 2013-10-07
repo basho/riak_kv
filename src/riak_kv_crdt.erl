@@ -98,15 +98,21 @@ crdt_value(Type, {ok, {_Meta, ?CRDT{mod=Type, value=Value}}}) ->
 merge_object(RObj) ->
     Contents = riak_object:get_contents(RObj),
     {CRDTs, NonCRDTSiblings, Errors} = merge_contents(Contents),
-    log_errors(RObj, Errors),
-    {CRDTs, NonCRDTSiblings}.
-
-log_errors(_, []) ->
-    ok;
-log_errors(RObj, Errors) ->
     Bucket = riak_object:bucket(RObj),
     Key = riak_object:key(RObj),
+    log_errors(Bucket, Key, Errors),
+    maybe_log_sibling_crdts(Bucket, Key, CRDTs),
+    {CRDTs, NonCRDTSiblings}.
+
+log_errors(_, _, []) ->
+    ok;
+log_errors(Bucket, Key, Errors) ->
     lager:info("Error(s) deserializing CRDT at ~p ~p: ~p~n", [Bucket, Key, Errors]).
+
+maybe_log_sibling_crdts(Bucket, Key, CRDTs) when length(CRDTs) > 1 ->
+    lager:info("Sibling CRDTs at ~p ~p: ~p~n", [Bucket, Key, orddict:fetch_keys(CRDTs)]);
+maybe_log_sibling_crdts(_, _, _) ->
+    ok.
 
 %% @private Only merge the values of CRDTs If there are siblings that
 %% are CRDTs BUT NOT THE SAME TYPE (don't do that!!)  Merge
@@ -158,7 +164,8 @@ counter_op(N) ->
 %% and risk precondition errors and unexpected behaviour.
 %%
 %% @see split_ops/1 for more explanation
--spec update_crdt(orddict:orddict(), riak_dt:actor(), crdt_op() | non_neg_integer()) -> orddict:ordddict() | precondition_error().
+-spec update_crdt(orddict:orddict(), riak_dt:actor(), crdt_op() | non_neg_integer()) ->
+                         orddict:ordddict() | precondition_error().
 update_crdt(Dict, Actor, Amt) when is_integer(Amt) ->
     %% Handle legacy 1.4 counter operation, upgrade to current OP
     CounterOp = counter_op(Amt),
@@ -320,8 +327,8 @@ to_binary(?CRDT{mod=Mod, value=Value}) ->
 -spec to_binary(crdt(), Version::pos_integer()) -> binary().
 to_binary(CRDT, ?V2_VERS) ->
     to_binary(CRDT);
-to_binary(?CRDT{mod=riak_dt_pncounter, value=Value}, ?V1_VERS) ->
-    CounterBin = riak_dt_pncounter:to_binary(Value),
+to_binary(?CRDT{mod=?LEGACY_COUNTER_TYPE, value=Value}, ?V1_VERS) ->
+    CounterBin = ?LEGACY_COUNTER_TYPE:to_binary(Value),
     <<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>.
 
 %% @doc deserialize a crdt from it's binary format.  The binary must
@@ -339,7 +346,7 @@ from_binary(Bin) ->
 %% @private attempt to deserialize a v1 counter (riak 1.4.x counter)
 v1_counter_from_binary(CounterBin) ->
     try
-        to_record(riak_dt_pncounter, riak_dt_pncounter:from_binary(CounterBin)) of
+        to_record(?LEGACY_COUNTER_TYPE, ?LEGACY_COUNTER_TYPE:from_binary(CounterBin)) of
         ?CRDT{}=Counter ->
             {ok, Counter}
     catch

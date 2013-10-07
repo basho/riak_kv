@@ -103,7 +103,8 @@ create(Mod) ->
     Mod:new().
 
 update(Mod, Op, {ID, C}) ->
-    Mod:update(Op, ID, C).
+    {ok, Val} = Mod:update(Op, ID, C),
+    Val.
 
 merge(Mod, {_IDS, CS}, {_IDD, CD}) ->
     Mod:merge(CS, CD).

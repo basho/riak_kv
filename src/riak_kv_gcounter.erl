@@ -75,9 +75,9 @@ value(GCnt) ->
 -spec update(gcounter_op(), term(), gcounter()) ->
                     gcounter().
 update(increment, Actor, GCnt) ->
-    increment_by(1, Actor, GCnt);
+    {ok, increment_by(1, Actor, GCnt)};
 update({increment, Amount}, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
-    increment_by(Amount, Actor, GCnt).
+   {ok, increment_by(Amount, Actor, GCnt)}.
 
 %% @doc Merge two `gcounter()'s to a single `gcounter()'. This is the Least Upper Bound
 %% function described in the literature.
@@ -171,14 +171,14 @@ value_test() ->
 
 update_increment_test() ->
     GC0 = new(),
-    GC1 = update(increment, 1, GC0),
-    GC2 = update(increment, 2, GC1),
-    GC3 = update(increment, 1, GC2),
+    {ok, GC1} = update(increment, 1, GC0),
+    {ok, GC2} = update(increment, 2, GC1),
+    {ok, GC3} = update(increment, 1, GC2),
     ?assertEqual([{1, 2}, {2, 1}], GC3).
 
 update_increment_by_test() ->
     GC0 = new(),
-    GC = update({increment, 7}, 1, GC0),
+    {ok, GC} = update({increment, 7}, 1, GC0),
     ?assertEqual([{1, 7}], GC).
 
 merge_test() ->
@@ -222,33 +222,35 @@ usage_test() ->
     GC1 = new(),
     GC2 = new(),
     ?assert(equal(GC1, GC2)),
-    GC1_1 = update({increment, 2}, a1, GC1),
-    GC2_1 = update(increment, a2, GC2),
+    {ok, GC1_1} = update({increment, 2}, a1, GC1),
+    {ok, GC2_1} = update(increment, a2, GC2),
     GC3 = merge(GC1_1, GC2_1),
-    GC2_2 = update({increment, 3}, a3, GC2_1),
-    GC3_1 = update(increment, a4, GC3),
-    GC3_2 = update(increment, a1, GC3_1),
+    {ok, GC2_2} = update({increment, 3}, a3, GC2_1),
+    {ok, GC3_1} = update(increment, a4, GC3),
+    {ok, GC3_2} = update(increment, a1, GC3_1),
     ?assertEqual([{a1, 3}, {a2, 1}, {a3, 3}, {a4, 1}],
                  lists:sort(merge(GC3_2, GC2_2))).
 
 roundtrip_bin_test() ->
     GC = new(),
-    GC1 = update({increment, 2}, <<"a1">>, GC),
-    GC2 = update({increment, 4}, a2, GC1),
-    GC3 = update(increment, "a4", GC2),
-    GC4 = update({increment, 10000000000000000000000000000000000000000}, {complex, "actor", [<<"term">>, 2]}, GC3),
+    {ok, GC1} = update({increment, 2}, <<"a1">>, GC),
+    {ok, GC2} = update({increment, 4}, a2, GC1),
+    {ok, GC3} = update(increment, "a4", GC2),
+    {ok, GC4} = update({increment, 10000000000000000000000000000000000000000}, {complex, "actor", [<<"term">>, 2]}, GC3),
     Bin = to_binary(GC4),
     Decoded = from_binary(Bin),
     ?assert(equal(GC4, Decoded)).
 
 lots_of_actors_test() ->
     GC = lists:foldl(fun(_, GCnt) ->
-                            ActorLen = crypto:rand_uniform(1, 1000),
-                            Actor = crypto:rand_bytes(ActorLen),
-                            Cnt = crypto:rand_uniform(1, 10000),
-                            riak_kv_gcounter:update({increment, Cnt}, Actor, GCnt) end,
-                    new(),
-                    lists:seq(1, 1000)),
+                             ActorLen = crypto:rand_uniform(1, 1000),
+                             Actor = crypto:rand_bytes(ActorLen),
+                             Cnt = crypto:rand_uniform(1, 10000),
+                             {ok, GC} = riak_kv_gcounter:update({increment, Cnt}, Actor, GCnt),
+                             GC
+                     end,
+                     new(),
+                     lists:seq(1, 1000)),
     Bin = to_binary(GC),
     Decoded = from_binary(Bin),
     ?assert(equal(GC, Decoded)).

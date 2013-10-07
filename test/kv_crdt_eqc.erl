@@ -324,7 +324,7 @@ pncounterds() ->
 
 pncounter() ->
     ?LET(PNCounter, pncounterds(),
-         riak_kv_crdt:to_binary(?CRDT{mod=riak_dt_pncounter, value=PNCounter}, ?V1_VERS)).
+         riak_kv_crdt:to_binary(?CRDT{mod=riak_kv_pncounter, value=PNCounter}, ?V1_VERS)).
 
 clock() ->
     {int(), nat()}.
