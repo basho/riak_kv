@@ -378,13 +378,13 @@ init([Index]) ->
                     {ok, State}
             end;
         {error, Reason} ->
-            lager:error("Failed to start ~p Reason: ~p",
-                        [Mod, Reason]),
+            lager:error("Failed to start ~p backend for index ~p error: ~p",
+                        [Mod, Index, Reason]),
             riak:stop("backend module failed to start."),
             {error, Reason};
         {'EXIT', Reason1} ->
-            lager:error("Failed to start ~p Reason: ~p",
-                        [Mod, Reason1]),
+            lager:error("Failed to start ~p backend for index ~p crash: ~p",
+                        [Mod, Index, Reason1]),
             riak:stop("backend module failed to start."),
             {error, Reason1}
     end.
