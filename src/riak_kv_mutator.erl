@@ -237,7 +237,7 @@ merge_values([{Priority, Module} = Mutator | Tail], Acc) ->
         {P1, _} when P1 < Priority ->
             Acc;
         Else ->
-            ordsets:add_element(Mutator, ordsets:del_element(Else))
+            ordsets:add_element(Mutator, ordsets:del_element(Else, Acc))
     end,
     merge_values(Tail, Acc2).
 
