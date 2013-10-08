@@ -77,6 +77,9 @@ raw_dispatch(Name) ->
       riak_kv_wm_link_walker, Props1}
     ] ++
 
+   [ {["types", bucket_type, "props"], riak_kv_wm_bucket_type,
+      [{api_version, 3}|raw_props(Name)]} ] ++
+
    lists:flatten([
     [
      %% NEW API
