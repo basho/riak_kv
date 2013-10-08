@@ -109,7 +109,7 @@ process(#rpbcounterupdatereq{bucket=B0, type=T, key=K,  w=W0, dw=DW0, pw=PW0, am
                              returnvalue=RetVal},
         #state{client=C} = State) ->
     B = maybe_bucket_type(T, B0),
-    case {allow_mult(B), riak_kv_counter:supported()} of
+    case {allow_mult(B), lists:member(pncounter, riak_core_capability:get({riak_kv, crdt}, []))} of
         {true, true} ->
             O = riak_kv_crdt:new(B, K, ?LEGACY_COUNTER_TYPE),
 

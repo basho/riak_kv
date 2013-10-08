@@ -169,7 +169,7 @@ counter_op(N) ->
 update_crdt(Dict, Actor, Amt) when is_integer(Amt) ->
     %% Handle legacy 1.4 counter operation, upgrade to current OP
     CounterOp = counter_op(Amt),
-    Op = ?CRDT_OP{mod=riak_kv_pncounter, op=CounterOp},
+    Op = ?CRDT_OP{mod=?LEGACY_COUNTER_TYPE, op=CounterOp},
     update_crdt(Dict, Actor, Op);
 update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op, ctx=undefined}) ->
     {Meta, Record, Value} = fetch_with_default(Mod, Dict),
@@ -316,6 +316,8 @@ new(B, K, Mod) ->
 %% @doc turn a `crdt()' record into a binary for storage on disk /
 %% passing on the network
 -spec to_binary(crdt()) -> binary().
+to_binary(CRDT=?CRDT{mod=?LEGACY_COUNTER_TYPE}) ->
+    to_binary(CRDT, ?V1_VERS);
 to_binary(?CRDT{mod=Mod, value=Value}) ->
     CRDTBin = Mod:to_binary(Value),
     Type = atom_to_binary(Mod, latin1),
