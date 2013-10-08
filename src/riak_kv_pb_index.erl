@@ -37,6 +37,7 @@
 -module(riak_kv_pb_index).
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
+-include("riak_kv_index.hrl").
 
 -behaviour(riak_api_pb_service).
 
@@ -68,17 +69,43 @@ decode(Code, Bin) ->
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
+validate_request(#rpbindexreq{qtype=QType, key=SKey,
+                              range_min=Min, range_max=Max,
+                              term_regex=TermRe} = Req) ->
+    {ValRe, ValErr} = case TermRe of
+        undefined ->
+            {undefined, undefined};
+        _ ->
+            re:compile(TermRe)
+    end,
+
+    if
+        QType == eq andalso not is_binary(SKey) ->
+            {error, {format, "Invalid equality query ~p", [SKey]}};
+        QType == range andalso not(is_binary(Min) andalso is_binary(Max)) ->
+            {error, {format, "Invalid range query: ~p -> ~p", [Min, Max]}};
+        ValRe =:= error ->
+            {error, {format, "Invalid term regular expression ~p : ~p",
+                     [TermRe, ValErr]}};
+        true ->
+            Query = riak_index:to_index_query(query_params(Req)),
+            case Query of
+                {ok, ?KV_INDEX_Q{start_term=Start, term_regex=Re}} when is_integer(Start)
+                       andalso Re =/= undefined ->
+                    {error, "Can not use term regular expression in integer query"};
+                _ ->
+                    Query
+            end
+    end.
+
 %% @doc process/2 callback. Handles an incoming request message.
-process(#rpbindexreq{qtype=eq, key=SKey}, State)
-  when not is_binary(SKey) ->
-    {error, {format, "Invalid equality query ~p", [SKey]}, State};
-process(#rpbindexreq{qtype=range, range_min=Min, range_max=Max}, State)
-  when not (is_binary(Min) andalso is_binary(Max)) ->
-    {error, {format, "Invalid range query: ~p -> ~p", [Min, Max]}, State};
-process(Req=#rpbindexreq{}, State) ->
-    {Index, Args, Continuation} = query_params(Req),
-    Query = riak_index:to_index_query(Index, Args, Continuation),
-    maybe_perform_query(Query, Req, State).
+process(#rpbindexreq{} = Req, State) ->
+    case validate_request(Req) of
+        {error, Err} ->
+            {error, Err, State};
+        QueryVal ->
+            maybe_perform_query(QueryVal, Req, State)
+    end.
 
 maybe_perform_query({error, Reason}, _Req, State) ->
     {error, {format, Reason}, State};
@@ -107,10 +134,14 @@ handle_query_results(ReturnTerms, MaxResults,  {ok, Results}, State) ->
     Resp = encode_results(ReturnTerms, Results, Cont),
     {reply, Resp, State}.
 
-query_params(#rpbindexreq{qtype=eq, index=Index, key=Value, continuation=Continuation}) ->
-    {Index, [Value], Continuation};
-query_params(#rpbindexreq{index=Index, range_min=Min, range_max=Max, continuation=Continuation}) ->
-    {Index, [Min, Max], Continuation}.
+query_params(#rpbindexreq{qtype=eq, index=Index, key=Value,
+                          term_regex=Re, continuation=Continuation}) ->
+    [{field, Index}, {start_term, Value}, {term_regex, Re},
+     {continuation, Continuation}];
+query_params(#rpbindexreq{index=Index, range_min=Min, range_max=Max,
+                          term_regex=Re, continuation=Continuation}) ->
+     [{field, Index}, {start_term, Min}, {end_term, Max},
+      {term_regex, Re}, {continuation, Continuation}].
 
 encode_results(true, Results0, Continuation) ->
     Results = [encode_result(Res) || Res <- Results0],

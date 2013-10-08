@@ -65,6 +65,7 @@
 -define(Q_RETURNBODY, "returnbody").
 -define(Q_2I_RETURNTERMS, "return_terms").
 -define(Q_2I_MAX_RESULTS, "max_results").
+-define(Q_2I_TERM_REGEX, "term_regex").
 -define(Q_2I_CONTINUATION, "continuation").
 -define(Q_RESULTS,  "results").
 -define(Q_RETURNVALUE, "returnvalue").
