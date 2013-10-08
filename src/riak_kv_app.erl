@@ -169,7 +169,7 @@ start(_Type, _StartArgs) ->
                                           v0),
 
             riak_core_capability:register({riak_kv, secondary_index_version},
-                                          [v2, v1],
+                                          [v3, v2, v1],
                                           v1),
 
             riak_core_capability:register({riak_kv, vclock_data_encoding},

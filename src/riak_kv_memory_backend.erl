@@ -434,6 +434,18 @@ fold_keys_fun(FoldKeysFun, {bucket, FilterBucket}) ->
 fold_keys_fun(FoldKeysFun, {index, FilterBucket, ?KV_INDEX_Q{filter_field=FF}}) when
       FF == <<"$bucket">>; FF == <<"$key">> ->
     fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
+fold_keys_fun(FoldKeysFun, {index, _FilterBucket, ?KV_INDEX_Q{term_regex=Re}})
+    when Re /= undefined ->
+    fun({{Bucket, _FilterField, FilterTerm, Key}, _}, Acc) ->
+            case re:run(FilterTerm, Re) of
+                nomatch ->
+                    Acc;
+                {match, _} ->
+                    FoldKeysFun(Bucket, {FilterTerm, Key}, Acc)
+            end;
+       (_, Acc) ->
+            Acc
+    end;
 fold_keys_fun(FoldKeysFun, {index, _FilterBucket, ?KV_INDEX_Q{}}) ->
     fun({{Bucket, _FilterField, FilterTerm, Key}, _}, Acc) ->
             FoldKeysFun(Bucket, {FilterTerm, Key}, Acc);
@@ -473,7 +485,6 @@ get_folder(FoldFun, Acc, DataRef) ->
     end.
 
 %% @private
-%% V2 2i
 get_index_folder(Folder, Acc0, {index, Bucket, Q=?KV_INDEX_Q{filter_field=FF, start_key=StartKey}}, DataRef, _)
   when FF == <<"$bucket">>; FF == <<"$key">> ->
     fun() ->
