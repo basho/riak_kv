@@ -80,19 +80,20 @@ get(Bucket, Key, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%       {error, Err :: term()}
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as R-value for the nodes
 %%      have responded with a value or error.
-get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}) when is_list(Options) ->
+get(Bucket, Key, Options0, {?MODULE, [Node, _ClientId]}) when is_list(Options0) ->
     Me = self(),
     ReqId = mk_reqid(),
-    case node() of
+    {Timeout, Options} = extract_timeout(Options0),
+    Pid = 
+        case node() of
         Node ->
-            riak_kv_get_fsm:start_link({raw, ReqId, Me}, Bucket, Key, Options);
-        _ ->
-            proc_lib:spawn_link(Node, riak_kv_get_fsm, start_link,
-                                [{raw, ReqId, Me}, Bucket, Key, Options])
-    end,
+                riak_kv_get_fsm:start_link({raw, ReqId, Me}, Bucket, Key, Options);
+            _ ->
+                proc_lib:spawn_link(Node, riak_kv_get_fsm, start_link,
+                                    [{raw, ReqId, Me}, Bucket, Key, Options])
+        end,
     %% TODO: Investigate adding a monitor here and eliminating the timeout.
-    Timeout = recv_timeout(Options),
-    wait_for_reqid(ReqId, Timeout);
+    wait_for_reqid(Pid, ReqId, Timeout);
 
 %% @spec get(riak_object:bucket(), riak_object:key(), R :: integer(), riak_client()) ->
 %%       {ok, riak_object:riak_object()} |
@@ -146,31 +147,31 @@ put(RObj, {?MODULE, [_Node, _ClientId]}=THIS) -> put(RObj, [], THIS).
 %%       {error, Err :: term()}
 %%       {error, Err :: term(), details()}
 %% @doc Store RObj in the cluster.
-put(RObj, Options, {?MODULE, [Node, ClientId]}) when is_list(Options) ->
+put(RObj, Options0, {?MODULE, [Node, ClientId]}) when is_list(Options0) ->
     Me = self(),
     ReqId = mk_reqid(),
-    case ClientId of
-        undefined ->
-            case node() of
-                Node ->
-                    riak_kv_put_fsm:start_link({raw, ReqId, Me}, RObj, Options);
-                _ ->
-                    proc_lib:spawn_link(Node, riak_kv_put_fsm, start_link,
-                                        [{raw, ReqId, Me}, RObj, Options])
-            end;
-        _ ->
-            UpdObj = riak_object:increment_vclock(RObj, ClientId),
-            case node() of
-                Node ->
-                    riak_kv_put_fsm:start_link({raw, ReqId, Me}, UpdObj, [asis|Options]);
-                _ ->
-                    proc_lib:spawn_link(Node, riak_kv_put_fsm, start_link,
-                                        [{raw, ReqId, Me}, RObj, [asis|Options]])
-            end
-    end,
+    {Timeout, Options} = extract_timeout(Options0),
+    Pid = case ClientId of
+              undefined ->
+                  case node() of
+                      Node ->
+                          riak_kv_put_fsm:start_link({raw, ReqId, Me}, RObj, Options);
+                      _ ->
+                          proc_lib:spawn_link(Node, riak_kv_put_fsm, start_link,
+                                              [{raw, ReqId, Me}, RObj, Options])
+                  end;
+              _ ->
+                  UpdObj = riak_object:increment_vclock(RObj, ClientId),
+                  case node() of
+                      Node ->
+                          riak_kv_put_fsm:start_link({raw, ReqId, Me}, UpdObj, [asis|Options]);
+                      _ ->
+                          proc_lib:spawn_link(Node, riak_kv_put_fsm, start_link,
+                                              [{raw, ReqId, Me}, RObj, [asis|Options]])
+                  end
+          end,
     %% TODO: Investigate adding a monitor here and eliminating the timeout.
-    Timeout = recv_timeout(Options),
-    wait_for_reqid(ReqId, Timeout);
+    wait_for_reqid(Pid, ReqId, Timeout);
 
 %% @spec put(RObj :: riak_object:riak_object(), W :: integer(), riak_client()) ->
 %%        ok |
@@ -254,13 +255,13 @@ delete(Bucket,Key,RW,{?MODULE, [_Node, _ClientId]}=THIS) ->
 %%       {error, Err :: term()}
 %% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
-delete(Bucket,Key,Options,Timeout,{?MODULE, [Node, ClientId]}) when is_list(Options) ->
+delete(Bucket,Key,Options0,Timeout,{?MODULE, [Node, ClientId]}) when is_list(Options0) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, Options, Timeout,
-                                           Me, ClientId]),
-    RTimeout = recv_timeout(Options),
-    wait_for_reqid(ReqId, erlang:min(Timeout, RTimeout));
+    {RTimeout, Options} = extract_timeout(Options0),
+    Pid = riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, Options, infinity,
+                                                 Me, ClientId]),
+    wait_for_reqid(Pid, ReqId, erlang:min(Timeout, RTimeout));
 delete(Bucket,Key,RW,Timeout,{?MODULE, [_Node, _ClientId]}=THIS) ->
     delete(Bucket,Key,[{rw, RW}], Timeout, THIS).
 
@@ -301,13 +302,13 @@ delete_vclock(Bucket,Key,VClock,RW,{?MODULE, [_Node, _ClientId]}=THIS) ->
 %%       {error, Err :: term()}
 %% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
-delete_vclock(Bucket,Key,VClock,Options,Timeout,{?MODULE, [Node, ClientId]}) when is_list(Options) ->
+delete_vclock(Bucket,Key,VClock,Options0,Timeout,{?MODULE, [Node, ClientId]}) when is_list(Options0) ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, Options, Timeout,
-                                           Me, ClientId, VClock]),
-    RTimeout = recv_timeout(Options),
-    wait_for_reqid(ReqId, erlang:min(Timeout, RTimeout));
+    {RTimeout, Options} = extract_timeout(Options0),
+    Pid = riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, Options, infinity,
+                                                 Me, ClientId, VClock]),
+    wait_for_reqid(Pid, ReqId, erlang:min(Timeout, RTimeout));
 delete_vclock(Bucket,Key,VClock,RW,Timeout,{?MODULE, [_Node, _ClientId]}=THIS) ->
     delete_vclock(Bucket,Key,VClock,[{rw, RW}],Timeout,THIS).
 
@@ -633,7 +634,8 @@ mk_reqid() ->
     erlang:phash2({self(), os:timestamp()}). % only has to be unique per-pid
 
 %% @private
-wait_for_reqid(ReqId, Timeout) ->
+wait_for_reqid(Pid, ReqId, Timeout) ->
+    StartTime = os:timestamp(),
     receive
         {ReqId, {error, overload}=Response} ->
             case app_helper:get_env(riak_kv, overload_backoff, undefined) of
@@ -643,10 +645,27 @@ wait_for_reqid(ReqId, Timeout) ->
                     ok
             end,
             Response;
-        {ReqId, Response} -> Response
+        {ReqId, coord_executing, CoordPid} ->
+            %% if there's a remote put, we need to kill the right pid.
+            Timeout1 = recalc_timeout(Timeout, StartTime),
+            wait_for_reqid(CoordPid, ReqId, Timeout1);            
+        {ReqId, Response} -> Response;
+        {'EXIT', _} -> 
+            %% if the client is part of a long-lived process, we need to 
+            %% be careful about selective receive problems, as can get 
+            %% put monitor messages.
+            Timeout2 = recalc_timeout(Timeout, StartTime),
+            wait_for_reqid(Pid, ReqId, Timeout2)
     after Timeout ->
+            exit(Pid, kill),
             {error, timeout}
     end.
+
+%% @private 
+recalc_timeout(Timeout, StartTime) ->
+    Now = os:timestamp(),
+    Elapsed = timer:now_diff(Now, StartTime),
+    Timeout - (Elapsed div 1000).
 
 %% @private
 wait_for_listkeys(ReqId) ->
@@ -684,13 +703,13 @@ wait_for_query_results(ReqId, Timeout, Acc) ->
             {error, timeout}
     end.
 
-recv_timeout(Options) ->
-    case proplists:get_value(recv_timeout, Options) of
-        undefined ->
-            %% If no reply timeout given, use the FSM timeout + 100ms to give it a chance
-            %% to respond.
-            proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) + 100;
-        Timeout ->
-            %% Otherwise use the directly supplied timeout.
-            Timeout
-    end.
+%% @private
+extract_timeout(Options) ->
+    Timeout = 
+        case lists:keyfind(timeout, 1, Options) of
+            false ->
+                ?DEFAULT_TIMEOUT;
+            {timeout, T} ->
+                T
+        end,
+    {Timeout, lists:keydelete(timeout, 1, Options)}.

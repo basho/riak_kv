@@ -77,6 +77,8 @@
 -include("riak_kv_dtrace.hrl").
 
 -define(DEFAULT_TIMEOUT, 60000).
+-define(FAILSAFE_TIMEOUT, 70000).
+
 -define(DEFAULT_R, default).
 -define(DEFAULT_PR, 0).
 
@@ -211,11 +213,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
 validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
                                    n = N, bucket_props = BucketProps, preflist2 = PL2}) ->
     ?DTRACE(?C_GET_FSM_VALIDATE, [], ["validate"]),
-    AppEnvTimeout = app_helper:get_env(riak_kv, timeout),
-    Timeout = case AppEnvTimeout of
-                  undefined -> get_option(timeout, Options, ?DEFAULT_TIMEOUT);
-                  _ -> AppEnvTimeout
-              end,
+    Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
     R0 = get_option(r, Options, ?DEFAULT_R),
     PR0 = get_option(pr, Options, ?DEFAULT_PR),
     R = riak_kv_util:expand_rw_value(r, R0, BucketProps, N),
@@ -279,7 +277,7 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
     ?DTRACE(?C_GET_FSM_PREFLIST, [], Ps),
     riak_kv_vnode:get(Preflist, BKey, ReqId),
     StateData = StateData0#state{tref=TRef},
-    new_state(waiting_vnode_r, StateData).
+    new_state_timeout(waiting_vnode_r, StateData, ?FAILSAFE_TIMEOUT).
 
 %% @private calculate a concatenated preflist for tracing macro
 preflist_for_tracing(Preflist) ->
@@ -305,13 +303,17 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
             maybe_finalize(NewStateData);
         false ->
             %% don't use new_state/2 since we do timing per state, not per message in state
-            {next_state, waiting_vnode_r,  StateData#state{get_core = UpdGetCore}}
+            {next_state, waiting_vnode_r,  StateData#state{get_core = UpdGetCore},
+             ?FAILSAFE_TIMEOUT}
     end;
 waiting_vnode_r(request_timeout, StateData) ->
     ?DTRACE(?C_GET_FSM_WAITING_R_TIMEOUT, [-2], ["waiting_vnode_r", "timeout"]),
-    S2 = client_reply({error,timeout}, StateData),
-    update_stats(timeout, S2),
-    finalize(S2).
+    update_stats(timeout, StateData),
+    finalize(StateData);
+waiting_vnode_r(timeout, StateData) ->
+    ?DTRACE(?C_GET_FSM_WAITING_R_TIMEOUT, [-2], ["waiting_vnode_r", "timeout"]),
+    update_stats(timeout, StateData),
+    finalize(StateData).
 
 %% @private
 waiting_read_repair({r, VnodeResult, Idx, _ReqId},
@@ -323,6 +325,10 @@ waiting_read_repair({r, VnodeResult, Idx, _ReqId},
     UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
     maybe_finalize(StateData#state{get_core = UpdGetCore});
 waiting_read_repair(request_timeout, StateData) ->
+    ?DTRACE(?C_GET_FSM_WAITING_RR_TIMEOUT, [-2],
+            ["waiting_read_repair", "timeout"]),
+    finalize(StateData);
+waiting_read_repair(timeout, StateData) ->
     ?DTRACE(?C_GET_FSM_WAITING_RR_TIMEOUT, [-2],
             ["waiting_read_repair", "timeout"]),
     finalize(StateData).
@@ -354,14 +360,14 @@ code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 %% Internal functions
 %% ====================================================================
 
-%% Move to the new state, marking the time it started
-new_state(StateName, StateData) ->
-    {next_state, StateName, add_timing(StateName, StateData)}.
-
 %% Move to the new state, marking the time it started and trigger an immediate
 %% timeout.
 new_state_timeout(StateName, StateData) ->
-    {next_state, StateName, add_timing(StateName, StateData), 0}.
+    new_state_timeout(StateName, StateData, 0).
+
+%% or optionally, a specific one.
+new_state_timeout(StateName, StateData, Timeout) ->
+    {next_state, StateName, add_timing(StateName, StateData), Timeout}.
 
 maybe_finalize(StateData=#state{get_core = GetCore}) ->
     case riak_kv_get_core:has_all_results(GetCore) of

@@ -115,6 +115,7 @@
 
 -define(PARSE_INDEX_PRECOMMIT, {struct, [{<<"mod">>, <<"riak_index">>}, {<<"fun">>, <<"parse_object_hook">>}]}).
 -define(DEFAULT_TIMEOUT, 60000).
+-define(FAILSAFE_TIMEOUT, 70000).
 
 %% ===================================================================
 %% Public API
@@ -190,9 +191,11 @@ spawn_coordinator_proc(CoordNode, Mod, Fun, Args) ->
 
 monitor_remote_coordinator(false = _UseAckP, _MiddleMan, _CoordNode, StateData) ->
     {stop, normal, StateData};
-monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
+monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, 
+                           StateData = #state{from = {_, ReqId, Pid}}) ->
     receive
-        {ack, CoordNode, now_executing} ->
+        {ack, CoordNode, now_executing, CoordPid} ->
+            Pid ! {ReqId, coord_executing, CoordPid},
             {stop, normal, StateData}
     after StateData#state.coordinator_timeout ->
             exit(MiddleMan, kill),
@@ -318,7 +321,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                       CoordNode, riak_kv_put_fsm, start_link,
                                       [From,RObj,Options2]),
                         ?DTRACE(?C_PUT_FSM_PREPARE, [2],
-                                    ["prepare", atom2list(CoordNode)]),
+                                ["prepare", atom2list(CoordNode)]),
                         riak_kv_stat:update(coord_redir),
                         monitor_remote_coordinator(UseAckP, MiddleMan,
                                                    CoordNode, StateData0)
@@ -459,7 +462,7 @@ execute(State=#state{options = Options, coord_pl_entry = CPL}) ->
         undefined ->
             ok;
         Pid ->
-            Pid ! {ack, node(), now_executing}
+            Pid ! {ack, node(), now_executing, self()}
     end,
     case CPL of
         undefined ->
@@ -484,14 +487,18 @@ execute_local(StateData=#state{robj=RObj, req_id = ReqId,
     StateData2 = StateData1#state{robj = RObj, tref = TRef},
     %% Must always wait for local vnode - it contains the object with updated vclock
     %% to use for the remotes. (Ignore optimization for N=1 case for now).
-    new_state(waiting_local_vnode, StateData2).
-
-
+    new_state_timeout(waiting_local_vnode, StateData2, ?FAILSAFE_TIMEOUT).
 
 %% @private
 waiting_local_vnode(request_timeout, StateData) ->
     ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [-1], []),
-    process_reply({error,timeout}, StateData);
+    %% replying with an error here causes spurious messages more often than not, 
+    %% so just stop.
+    {stop, normal, StateData};
+waiting_local_vnode(timeout, StateData) ->
+    ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [-1], []),
+    %% same here, but on the failsafe path.
+    {stop, normal, StateData};
 waiting_local_vnode(Result, StateData = #state{putcore = PutCore}) ->
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
     case Result of
@@ -503,7 +510,8 @@ waiting_local_vnode(Result, StateData = #state{putcore = PutCore}) ->
         {w, Idx, _ReqId} ->
             ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [1],
                     [integer_to_list(Idx)]),
-            {next_state, waiting_local_vnode, StateData#state{putcore = UpdPutCore1}};
+            {next_state, waiting_local_vnode, StateData#state{putcore = UpdPutCore1},
+            ?FAILSAFE_TIMEOUT};
         {dw, Idx, PutObj, _ReqId} ->
             %% Either returnbody is true or coord put merged with the existing
             %% object and bumped the vclock.  Either way use the returned
@@ -540,14 +548,17 @@ execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
             {Reply, UpdPutCore} = riak_kv_put_core:response(PutCore),
             process_reply(Reply, StateData#state{putcore = UpdPutCore});
         false ->
-            new_state(waiting_remote_vnode, StateData1)
+            new_state_timeout(waiting_remote_vnode, StateData1, ?FAILSAFE_TIMEOUT)
     end.
 
 
 %% @private
 waiting_remote_vnode(request_timeout, StateData) ->
     ?DTRACE(?C_PUT_FSM_WAITING_REMOTE_VNODE, [-1], []),
-    process_reply({error,timeout}, StateData);
+    {stop, {error, timeout}, StateData};
+waiting_remote_vnode(timeout, StateData) ->
+    ?DTRACE(?C_PUT_FSM_WAITING_REMOTE_VNODE, [-1], []),
+    {stop, {error, timeout}, StateData};
 waiting_remote_vnode(Result, StateData = #state{putcore = PutCore}) ->
     ShortCode = riak_kv_put_core:result_shortcode(Result),
     IdxStr = integer_to_list(riak_kv_put_core:result_idx(Result)),
@@ -558,7 +569,8 @@ waiting_remote_vnode(Result, StateData = #state{putcore = PutCore}) ->
             {Reply, UpdPutCore2} = riak_kv_put_core:response(UpdPutCore1),
             process_reply(Reply, StateData#state{putcore = UpdPutCore2});
         false ->
-            {next_state, waiting_remote_vnode, StateData#state{putcore = UpdPutCore1}}
+            {next_state, waiting_remote_vnode, StateData#state{putcore = UpdPutCore1},
+             ?FAILSAFE_TIMEOUT}
     end.
 
 %% @private
@@ -635,14 +647,14 @@ code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 %% Internal functions
 %% ====================================================================
 
-%% Move to the new state, marking the time it started
-new_state(StateName, StateData) ->
-    {next_state, StateName, add_timing(StateName, StateData)}.
-
 %% Move to the new state, marking the time it started and trigger an immediate
 %% timeout.
 new_state_timeout(StateName, StateData) ->
-    {next_state, StateName, add_timing(StateName, StateData), 0}.
+    new_state_timeout(StateName, StateData, 0).
+
+%% or a specific timeout.
+new_state_timeout(StateName, StateData, Timeout) ->
+    {next_state, StateName, add_timing(StateName, StateData), Timeout}.
 
 %% What to do once enough responses from vnodes have been received to reply
 process_reply(Reply, StateData = #state{postcommit = PostCommit,
