@@ -254,6 +254,19 @@
   {datatype, {enum, [v0, v1]}}
 ]}.
 
+%% @doc md_cache_size controls how large the md cache is allowed to be
+%% it defaults to 1MB, set to 0 to disable the cache.  This shouldn't 
+%% be neccessary on-disk based backends, but can help performance in some
+%% cases (i.e. memory backend, data fits in block cache, etc).
+%% note that this is the size of the ETS table, rather than the actual data,
+%% to keep the size calculation simple, thus more space may be used than 
+%% the simple size * vnode_count calculation would imply.
+{mapping, "md_cache_size", "riak_kv.vnode_md_cache_size", [
+  {datatype, bytesize},
+  {default, "512KB"}
+]}.
+
+
 %%%% Memory backend section
 
 {mapping, "memory_backend.max_memory", "riak_kv.memory_backend.max_memory", [

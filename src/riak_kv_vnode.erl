@@ -359,7 +359,17 @@ init([Index]) ->
     DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
     AsyncFolding = app_helper:get_env(riak_kv, async_folds, true) == true,
     MDCacheSize = app_helper:get_env(riak_kv, vnode_md_cache_size), 
-    MDCache = new_md_cache(VId), 
+    MDCache = 
+        case MDCacheSize of
+            N when is_integer(N),
+                   N > 0 ->
+                lager:info("Initializing metadata cache with size limit: ~p bytes", 
+                           [MDCacheSize]),
+                new_md_cache(VId);
+            _ -> 
+                lager:info("No metadata cache size defined, not starting"),
+                undefined
+        end,
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
@@ -878,7 +888,7 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
 
 handle_info(recreate_md_cache, State=#state{vnodeid=VId}) ->
     lager:info("md_cache died and was recreated"),
-    State#state{md_cache=new_md_cache(VId)};
+    {ok, State#state{md_cache=new_md_cache(VId)}};
 handle_info(retry_create_hashtree, State=#state{hashtrees=undefined}) ->
     State2 = maybe_create_hashtrees(State),
     case State2#state.hashtrees of
@@ -1022,7 +1032,13 @@ prepare_put(#state{vnodeid=VId,
                              prunetime=PruneTime,
                              crdt_op = CRDTOp},
             IndexBackend) ->
-    {CacheClock, CacheSpecs} = check_md_cache(MDCache, BKey),
+    {CacheClock, CacheSpecs} = 
+        case MDCache of
+            undefined ->
+                {undefined, undefined};
+            _ ->
+                check_md_cache(MDCache, BKey)
+        end,
     RequiresGet = 
         case CacheClock of
             undefined ->
@@ -1152,9 +1168,14 @@ perform_put({true, Obj},
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
     {Obj2, Fake} = riak_kv_mutator:mutate_put(Obj, BProps),
-    VClock = riak_object:vclock(Obj2),
-    Specs = riak_object:index_specs(Obj2),
-    insert_md_cache(MDCache, MDCacheSize, BKey, {VClock, Specs}),
+    case MDCache of 
+        undefined ->
+            ok;
+        _ ->
+            VClock = riak_object:vclock(Obj2),
+            Specs = riak_object:index_specs(Obj2),
+            insert_md_cache(MDCache, MDCacheSize, BKey, {VClock, Specs})
+    end,
     case encode_and_put(Obj2, Mod, Bucket, Key, IndexSpecs, ModState) of
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
@@ -1254,8 +1275,10 @@ do_get(_Sender, BKey, ReqID,
                     md_cache=MDCache, md_cache_size=MDCacheSize}) ->
     StartTS = os:timestamp(),
     Retval = do_get_term(BKey, Mod, ModState),                
-    case Retval of
-        {ok, Obj} ->
+    case {MDCache, Retval} of
+        {undefined, _} ->
+            ok;
+        {_, {ok, Obj}} ->
             VClock = riak_object:vclock(Obj),
             Specs = riak_object:index_specs(Obj),
             insert_md_cache(MDCache, MDCacheSize, BKey, {VClock, Specs});
