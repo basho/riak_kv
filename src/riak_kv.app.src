@@ -41,6 +41,9 @@
          %% Disable active anti-entropy by default
          {anti_entropy, {off, []}},
 
+         %% size of the vclock/indices cache per vnode 
+         {vnode_md_cache_size, 1048576},
+
          %% Allow Erlang MapReduce functions to be specified as
          %% strings.
          %%
