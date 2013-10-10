@@ -699,7 +699,7 @@ process_post(RD, Ctx) -> accept_doc_body(RD, Ctx).
 %%      This function translates the headers and body of the HTTP request
 %%      into their final riak_object() form, and executes the Riak put.
 accept_doc_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C, links=L, index_fields=IF}) ->
-    Doc0 = case {Ctx#ctx.doc, T} of
+    Doc0 = case Ctx#ctx.doc of
                {ok, D} -> D;
                _       -> riak_object:new(riak_kv_wm_utils:maybe_bucket_type(T,B), K, <<>>)
            end,
