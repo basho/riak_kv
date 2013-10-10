@@ -1161,7 +1161,7 @@ handle_common_error(Reason, RD, Ctx) ->
         {error, bucket_type_unknown} ->
             {{halt, 404},
              wrq:set_resp_body(
-               io_lib:format("Unknown bucket type: ~p", [Ctx#ctx.bucket_type]),
+               io_lib:format("Unknown bucket type: ~s", [Ctx#ctx.bucket_type]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
         {error, {deleted, _VClock}} ->
