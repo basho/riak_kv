@@ -167,10 +167,14 @@ get_put_coordinator_failure_timeout() ->
     app_helper:get_env(riak_kv, put_coordinator_failure_timeout, 3000).
 
 make_ack_options(Options) ->
-    case riak_core_capability:get({riak_kv, put_fsm_ack_execute}, disabled) of
-        disabled ->
+    case (riak_core_capability:get(
+            {riak_kv, put_fsm_ack_execute}, disabled) == disabled
+          orelse
+          app_helper:get_env(
+            riak_kv, retry_put_coordinator_failure, on) == off) of
+        true ->
             {false, Options};
-        enabled ->
+        false ->
             case proplists:get_value(retry_put_coordinator_failure, Options, true) of
                 true ->
                     {true, [{ack_execute, self()}|Options]};
