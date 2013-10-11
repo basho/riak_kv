@@ -187,15 +187,7 @@ get_key(K) ->
 
 bucket_type_to_type(Bucket, BType) ->
     BProps = riak_core_bucket:get_bucket({BType, Bucket}),
-    DataType = case proplists:get_value(datatype, BProps) of
-                   Atom when is_atom(Atom) -> Atom;
-                   Bin when is_binary(Bin) ->
-                       try binary_to_existing_atom(Bin, utf8) of
-                           Atom -> Atom
-                       catch
-                           _:_ -> undefined
-                       end
-               end,
+    DataType = proplists:get_value(datatype, BProps),
     AllowMult = proplists:get_value(allow_mult, BProps),
     {AllowMult, DataType}.
 
