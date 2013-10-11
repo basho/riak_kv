@@ -340,6 +340,8 @@ jsonify_bucket_prop({Prop, Value}) ->
 %%          {Property::atom(), erlpropvalue()}
 %% @doc The reverse of jsonify_bucket_prop/1.  Converts JSON representation
 %%      of bucket properties to their Erlang form.
+erlify_bucket_prop({?JSON_DATATYPE, Type}) when is_binary(Type) ->
+    {datatype, binary_to_existing_atom(Type, utf8)};
 erlify_bucket_prop({?JSON_LINKFUN, {struct, Props}}) ->
     case {proplists:get_value(?JSON_MOD, Props),
           proplists:get_value(?JSON_FUN, Props)} of
