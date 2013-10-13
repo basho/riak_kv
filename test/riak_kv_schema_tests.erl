@@ -11,6 +11,16 @@ basic_schema_test() ->
     Config = cuttlefish_unit:generate_templated_config(
         ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], [], context()),
 
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.n_val", 3),
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.pr", 0),
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.r", quorum),
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.w", quorum),
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.pw", 0),
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.dw", quorum),
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.rw", quorum),
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.allow_mult", false),
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.last_write_wins", false),
+
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy", {on, []}),
     cuttlefish_unit:assert_config(Config, "riak_kv.storage_backend", riak_kv_bitcask_backend),
     cuttlefish_unit:assert_config(Config, "riak_kv.raw_name", "riak"),
@@ -41,6 +51,27 @@ basic_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend_default", undefined),
     cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend", undefined),
 
+    ok.
+
+default_bucket_properties_test() ->
+    Conf = [
+        {["buckets", "default", "pr"], "quorum"},
+        {["buckets", "default", "rw"], "all"},
+        {["buckets", "default", "w"], "1"},
+        {["buckets", "default", "r"], "3"},
+        {["buckets", "default", "siblings"], on},
+        {["buckets", "default", "last_write_wins"], true}
+    ],
+
+    Config = cuttlefish_unit:generate_templated_config(
+        ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context()),
+
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.pr", quorum),
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.rw", all),
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.w", 1),
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.r", 3),
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.allow_mult", true),
+    cuttlefish_unit:assert_config(Config, "riak_kv.default_bucket_props.last_write_wins", true),
     ok.
 
 override_non_multi_backend_schema_test() ->
