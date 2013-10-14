@@ -1,8 +1,8 @@
 %% -------------------------------------------------------------------
 %%
-%% stats_http_resource: publishing Riak runtime stats via HTTP
+%% riak_kv_wm_stats: publishing Riak runtime stats via HTTP
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file

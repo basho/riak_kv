@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_buckets - Webmachine resource for listing buckets.
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,10 +24,15 @@
 %%
 %% Available operations:
 %%
-%% GET /buckets?buckets=true (NEW) 
+%% GET /types/Type/buckets?buckets=true (with bucket-type)
+%% GET /types/Type/buckets?buckets=stream
+%% GET /buckets?buckets=true (NEW)
+%% GET /buckets?buckets=stream
 %% GET /Prefix?buckets=true
 %%   Get information about available buckets. Note that generating the
-%%   bucket list is expensive, so we require the "buckets=true" arg.
+%%   bucket list is expensive, so we require the "buckets=true" or
+%%   "buckets=stream" arg.
+%%
 
 -module(riak_kv_wm_buckets).
 
@@ -37,6 +42,7 @@
          service_available/2,
          is_authorized/2,
          forbidden/2,
+         resource_exists/2,
          content_types_provided/2,
          encodings_provided/2,
          produce_bucket_list/2,
@@ -45,13 +51,14 @@
 
 %% @type context() = term()
 -record(ctx, {
+          bucket_type,  %% binary() - bucket type (from uri)
           api_version,  %% integer() - Determine which version of the API to use.
           client,       %% riak_client() - the store client
           prefix,       %% string() - prefix for resource uris
           riak,         %% local | {node(), atom()} - params for riak client
           method,       %% atom() - HTTP method for the request
           timeout,      %% integer() - list buckets timeout
-          security      %% security context
+          security     %% security context
          }).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -66,7 +73,8 @@ init(Props) ->
     {ok, #ctx{
        api_version=proplists:get_value(api_version, Props),
        prefix=proplists:get_value(prefix, Props),
-       riak=proplists:get_value(riak, Props)
+       riak=proplists:get_value(riak, Props),
+       bucket_type=proplists:get_value(bucket_type, Props)
       }}.
 
 
@@ -77,12 +85,13 @@ init(Props) ->
 %%      opportunity to extract the 'bucket' and 'key' path
 %%      bindings from the dispatch, as well as any vtag
 %%      query parameter.
-service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
+service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
+    Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
-            {true, 
+            {true,
              RD,
-             Ctx#ctx{ 
+             Ctx#ctx{
                method=wrq:method(RD),
                client=C
               }};
@@ -117,7 +126,7 @@ forbidden(RD, Ctx) ->
             {true, RD, Ctx};
         false ->
             Res = riak_core_security:check_permission({"riak_kv.list_buckets",
-                                                       <<"default">>},
+                                                       Ctx#ctx.bucket_type},
                                                       Ctx#ctx.security),
             case Res of
                 {false, Error, _} ->
@@ -155,7 +164,7 @@ malformed_timeout_param(RD, Ctx) ->
     case wrq:get_qs_value("timeout", none, RD) of
         none ->
             {false, RD, Ctx};
-        TimeoutStr -> 
+        TimeoutStr ->
             try
                 Timeout = list_to_integer(TimeoutStr),
                 {false, RD, Ctx#ctx{timeout=Timeout}}
@@ -165,20 +174,23 @@ malformed_timeout_param(RD, Ctx) ->
                      wrq:append_to_resp_body(io_lib:format("Bad timeout "
                                                            "value ~p~n",
                                                            [TimeoutStr]),
-                                             wrq:set_resp_header(?HEAD_CTYPE, 
+                                             wrq:set_resp_header(?HEAD_CTYPE,
                                                                  "text/plain", RD)),
                      Ctx}
             end
     end.
 
+resource_exists(RD, #ctx{bucket_type=BType}=Ctx) ->
+    {riak_kv_wm_utils:bucket_type_exists(BType), RD, Ctx}.
 
 %% @spec produce_bucket_list(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Produce the JSON response to a bucket-level GET.
 %%      Includes a list of known buckets if the "buckets=true" query
 %%      param is specified.
 produce_bucket_list(RD, #ctx{client=Client,
-                             timeout=Timeout0}=Ctx) ->
-    Timeout = 
+                             timeout=Timeout0,
+                             bucket_type=BType}=Ctx) ->
+    Timeout =
         case Timeout0 of
             undefined -> ?DEFAULT_TIMEOUT;
             Set -> Set
@@ -186,12 +198,12 @@ produce_bucket_list(RD, #ctx{client=Client,
     case wrq:get_qs_value(?Q_BUCKETS, RD) of
         ?Q_TRUE ->
             %% Get the buckets.
-            {ok, Buckets} = Client:list_buckets(Timeout),
-            {mochijson2:encode({struct, [{?JSON_BUCKETS, Buckets}]}), 
+            {ok, Buckets} = Client:list_buckets(none, Timeout, BType),
+            {mochijson2:encode({struct, [{?JSON_BUCKETS, Buckets}]}),
              RD, Ctx};
         ?Q_STREAM ->
             F = fun() ->
-                        {ok, ReqId} = Client:stream_list_buckets(Timeout),
+                        {ok, ReqId} = Client:stream_list_buckets(none, Timeout, BType),
                         stream_buckets(ReqId)
                 end,
             {{stream, {[], F}}, RD, Ctx};
@@ -201,11 +213,11 @@ produce_bucket_list(RD, #ctx{client=Client,
 
 stream_buckets(ReqId) ->
     receive
-        {ReqId, done} -> 
-                {mochijson2:encode({struct, 
+        {ReqId, done} ->
+                {mochijson2:encode({struct,
                                     [{<<"buckets">>, []}]}), done};
         {ReqId, _From, {buckets_stream, Buckets}} ->
-            {mochijson2:encode({struct, [{<<"buckets">>, Buckets}]}), 
+            {mochijson2:encode({struct, [{<<"buckets">>, Buckets}]}),
              fun() -> stream_buckets(ReqId) end};
         {ReqId, {buckets_stream, Buckets}} ->
             {mochijson2:encode({struct, [{<<"buckets">>, Buckets}]}),
