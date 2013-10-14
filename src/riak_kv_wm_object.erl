@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_object: Webmachine resource for KV object level operations.
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,11 +24,13 @@
 %%
 %% Available operations:
 %%
+%% POST /types/Type/buckets/Bucket/keys (with bucket-type)
 %% POST /buckets/Bucket/keys (NEW)
 %% POST /Prefix/Bucket (OLD)
 %%   Equivalent to "PUT /Prefix/Bucket/Key" where Key is chosen
 %%   by the server.
 %%
+%% GET /types/Type/buckets/Bucket/keys/Key (with bucket-type)
 %% GET /buckets/Bucket/keys/Key (NEW)
 %% GET /Prefix/Bucket/Key (OLD)
 %%   Get the data stored in the named Bucket under the named Key.
@@ -54,6 +56,7 @@
 %%   sibling, include the query param "vtag=V", where V is the vtag
 %%   of the sibling you want.
 %%
+%% PUT /types/Type/buckets/Bucket/keys/Key (with bucket-type)
 %% PUT /buckets/Bucket/keys/Key (NEW)
 %% PUT /Prefix/Bucket/Key (OLD)
 %%   Store new data in the named Bucket under the named Key.
@@ -81,11 +84,13 @@
 %%   to determine whether or not the resource exists). A default
 %%   r-value of 2 will be used if none is specified.
 %%
+%% POST /types/Type/buckets/Bucket/keys/Key (with bucket-type)
 %% POST /buckets/Bucket/keys/Key (NEW)
 %% POST /Prefix/Bucket/Key (OLD)
 %%   Equivalent to "PUT /Prefix/Bucket/Key" (useful for clients that
 %%   do not support the PUT method).
 %%
+%% DELETE /types/Type/buckets/Bucket/keys/Key (with bucket-type)
 %% DELETE /buckets/Bucket/keys/Key (NEW)
 %% DELETE /Prefix/Bucket/Key (OLD)
 %%   Delete the data stored in the named Bucket under the named Key.
@@ -124,6 +129,7 @@
 
 %% @type context() = term()
 -record(ctx, {api_version,  %% integer() - Determine which version of the API to use.
+              bucket_type,  %% binary() - Bucket type (from uri)
               bucket,       %% binary() - Bucket name (from uri)
               key,          %% binary() - Key (from uri)
               client,       %% riak_client() - the store client
@@ -161,7 +167,8 @@
 init(Props) ->
     {ok, #ctx{api_version=proplists:get_value(api_version, Props),
               prefix=proplists:get_value(prefix, Props),
-              riak=proplists:get_value(riak, Props)}}.
+              riak=proplists:get_value(riak, Props),
+              bucket_type=proplists:get_value(bucket_type, Props)}}.
 
 %% @spec service_available(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
@@ -170,7 +177,8 @@ init(Props) ->
 %%      opportunity to extract the 'bucket' and 'key' path
 %%      bindings from the dispatch, as well as any vtag
 %%      query parameter.
-service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
+service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
+    Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true,
@@ -217,12 +225,12 @@ forbidden(RD, Ctx=#ctx{security=undefined}) ->
             {true, RD, Ctx};
         false ->
             %% If it is a put or a post, don't require the object to already
-            %% exist.
+            %% exist, but the bucket type must exist.
             case Ctx#ctx.method of
                 'POST' ->
-                    {false, RD, Ctx};
+                    forbidden_check_bucket_type(RD, Ctx);
                 'PUT' ->
-                    {false, RD, Ctx};
+                    forbidden_check_bucket_type(RD, Ctx);
                 _ ->
                     forbidden_check_doc(RD, Ctx)
             end
@@ -246,7 +254,7 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
             end,
 
             Res = riak_core_security:check_permission({Perm,
-                                                           {<<"default">>,
+                                                           {Ctx#ctx.bucket_type,
                                                             Ctx#ctx.bucket}},
                                                            Security),
             case Res of
@@ -262,12 +270,13 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
                             %% assumes that the key is present.
                             forbidden_check_doc(RD, Ctx);
                         _ ->
-                            {false, RD, Ctx}
+                            %% Ensure the bucket type exists, otherwise 404 early.
+                            forbidden_check_bucket_type(RD, Ctx)
                     end
             end
     end.
 
-%% @doc Detects whether fetching the requeste object results in an
+%% @doc Detects whether fetching the requested object results in an
 %% error.
 forbidden_check_doc(RD, Ctx) ->
     DocCtx = ensure_doc(Ctx),
@@ -276,6 +285,15 @@ forbidden_check_doc(RD, Ctx) ->
             handle_common_error(Reason, RD, DocCtx);
         _ ->
             {false, RD, DocCtx}
+    end.
+
+%% @doc Detects whether the requested object's bucket-type exists.
+forbidden_check_bucket_type(RD, Ctx) ->
+    case riak_kv_wm_utils:bucket_type_exists(Ctx#ctx.bucket_type) of
+        true ->
+            {false, RD, Ctx};
+        false ->
+            handle_common_error(bucket_type_unknown, RD, Ctx)
     end.
 
 %% @spec allowed_methods(reqdata(), context()) ->
@@ -668,11 +686,11 @@ post_is_create(RD, Ctx) ->
 %% @doc Choose the Key for the document created during a bucket-level POST.
 %%      This function also sets the Location header to generate a
 %%      201 Created response.
-create_path(RD, Ctx=#ctx{prefix=P, bucket=B, api_version=V}) ->
+create_path(RD, Ctx=#ctx{prefix=P, bucket_type=T, bucket=B, api_version=V}) ->
     K = riak_core_util:unique_id_62(),
     {K,
      wrq:set_resp_header("Location",
-                         riak_kv_wm_utils:format_uri(B, K, P, V),
+                         riak_kv_wm_utils:format_uri(T, B, K, P, V),
                          RD),
      Ctx#ctx{key=list_to_binary(K)}}.
 
@@ -685,10 +703,10 @@ process_post(RD, Ctx) -> accept_doc_body(RD, Ctx).
 %% @doc Store the data the client is PUTing in the document.
 %%      This function translates the headers and body of the HTTP request
 %%      into their final riak_object() form, and executes the Riak put.
-accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L, index_fields=IF}) ->
+accept_doc_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C, links=L, index_fields=IF}) ->
     Doc0 = case Ctx#ctx.doc of
                {ok, D} -> D;
-               _       -> riak_object:new(B, K, <<>>)
+               _       -> riak_object:new(riak_kv_wm_utils:maybe_bucket_type(T,B), K, <<>>)
            end,
     VclockDoc = riak_object:set_vclock(Doc0, decode_vclock_header(RD)),
     {CType, Charset} = extract_content_type(RD),
@@ -944,23 +962,28 @@ decode_vclock_header(RD) ->
 %%      worry about the order of executing of those places.
 ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};
-ensure_doc(Ctx=#ctx{doc=undefined, bucket=B, key=K, client=C,
+ensure_doc(Ctx=#ctx{doc=undefined, bucket_type=T, bucket=B, key=K, client=C,
                     basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
-    Options0 = [deletedvclock, {basic_quorum, Quorum},
-                {notfound_ok, NotFoundOK}],
-    Options = make_options(Options0, Ctx),
-    Ctx#ctx{doc=C:get(B, K, Options)};
+    case riak_kv_wm_utils:bucket_type_exists(T) of
+        true ->
+            Options0 = [deletedvclock, {basic_quorum, Quorum},
+                        {notfound_ok, NotFoundOK}],
+            Options = make_options(Options0, Ctx),
+            Ctx#ctx{doc=C:get(riak_kv_wm_utils:maybe_bucket_type(T,B), K, Options)};
+        false ->
+            Ctx#ctx{doc={error, bucket_type_unknown}}
+    end;
 ensure_doc(Ctx) -> Ctx.
 
 %% @spec delete_resource(reqdata(), context()) -> {true, reqdata(), context()}
 %% @doc Delete the document specified.
-delete_resource(RD, Ctx=#ctx{bucket=B, key=K, client=C}) ->
+delete_resource(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C}) ->
     Options = make_options([], Ctx),
     Result = case wrq:get_req_header(?HEAD_VCLOCK, RD) of
         undefined ->
-            C:delete(B,K,Options);
+            C:delete(riak_kv_wm_utils:maybe_bucket_type(T,B),K,Options);
         _ ->
-            C:delete_vclock(B,K,decode_vclock_header(RD),Options)
+            C:delete_vclock(riak_kv_wm_utils:maybe_bucket_type(T,B),K,decode_vclock_header(RD),Options)
     end,
     case Result of
         {error, Reason} ->
@@ -989,7 +1012,7 @@ generate_etag(RD, Ctx) ->
             {dict:fetch(?MD_VTAG, MD), RD, Ctx};
         multiple_choices ->
             {ok, Doc} = Ctx#ctx.doc,
-            <<ETag:128/integer>> = 
+            <<ETag:128/integer>> =
                 md5(term_to_binary(riak_object:vclock(Doc))),
             {riak_core_util:integer_to_list(ETag, 62), RD, Ctx}
     end.
@@ -1046,7 +1069,8 @@ get_link_heads(RD, Ctx) ->
                 {ok, BucketRegex} = re:compile("</" ++ Prefix ++ "/([^/]+)>; ?rel=\"([^\"]+)\""),
                 {ok, KeyRegex} = re:compile("</" ++ Prefix ++ "/([^/]+)/([^/]+)>; ?riaktag=\"([^\"]+)\""),
                 extract_links(LinkHeaders1, BucketRegex, KeyRegex);
-            2 ->
+            %% @todo Handle links in API Version 3?
+            Two when Two >= 2 ->
                 {ok, BucketRegex} = re:compile("</buckets/([^/]+)>; ?rel=\"([^\"]+)\""),
                 {ok, KeyRegex} = re:compile("</buckets/([^/]+)/keys/([^/]+)>; ?riaktag=\"([^\"]+)\""),
                 extract_links(LinkHeaders1, BucketRegex, KeyRegex)
@@ -1139,6 +1163,12 @@ handle_common_error(Reason, RD, Ctx) ->
                         io_lib:format("not found~n",[]),
                         RD)),
                 Ctx};
+        {error, bucket_type_unknown} ->
+            {{halt, 404},
+             wrq:set_resp_body(
+               io_lib:format("Unknown bucket type: ~s", [Ctx#ctx.bucket_type]),
+               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
         {error, {deleted, _VClock}} ->
             {{halt, 404},
                 wrq:set_resp_header("Content-Type", "text/plain",
