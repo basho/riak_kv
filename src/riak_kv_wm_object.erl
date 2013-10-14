@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_object: Webmachine resource for KV object level operations.
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,11 +24,13 @@
 %%
 %% Available operations:
 %%
+%% POST /types/Type/buckets/Bucket/keys (with bucket-type)
 %% POST /buckets/Bucket/keys (NEW)
 %% POST /Prefix/Bucket (OLD)
 %%   Equivalent to "PUT /Prefix/Bucket/Key" where Key is chosen
 %%   by the server.
 %%
+%% GET /types/Type/buckets/Bucket/keys/Key (with bucket-type)
 %% GET /buckets/Bucket/keys/Key (NEW)
 %% GET /Prefix/Bucket/Key (OLD)
 %%   Get the data stored in the named Bucket under the named Key.
@@ -54,6 +56,7 @@
 %%   sibling, include the query param "vtag=V", where V is the vtag
 %%   of the sibling you want.
 %%
+%% PUT /types/Type/buckets/Bucket/keys/Key (with bucket-type)
 %% PUT /buckets/Bucket/keys/Key (NEW)
 %% PUT /Prefix/Bucket/Key (OLD)
 %%   Store new data in the named Bucket under the named Key.
@@ -81,11 +84,13 @@
 %%   to determine whether or not the resource exists). A default
 %%   r-value of 2 will be used if none is specified.
 %%
+%% POST /types/Type/buckets/Bucket/keys/Key (with bucket-type)
 %% POST /buckets/Bucket/keys/Key (NEW)
 %% POST /Prefix/Bucket/Key (OLD)
 %%   Equivalent to "PUT /Prefix/Bucket/Key" (useful for clients that
 %%   do not support the PUT method).
 %%
+%% DELETE /types/Type/buckets/Bucket/keys/Key (with bucket-type)
 %% DELETE /buckets/Bucket/keys/Key (NEW)
 %% DELETE /Prefix/Bucket/Key (OLD)
 %%   Delete the data stored in the named Bucket under the named Key.

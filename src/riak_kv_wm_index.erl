@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_index - Webmachine resource for running index queries.
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,8 +24,26 @@
 %%
 %% Available operations:
 %%
-%% GET /buckets/bucket/indexes/index/op/arg1...
+%% GET /buckets/Bucket/index/IndexName/Key
+%% GET /buckets/Bucket/index/IndexName/Start/End
 %%   Run an index lookup, return the results as JSON.
+%%
+%% GET /types/Type/buckets/Bucket/index/IndexName/Key
+%% GET /types/Type/buckets/Bucket/index/IndexName/Start/End
+%%   Run an index lookup over the Bucket in BucketType, returning the
+%%   results in JSON.
+%%
+%% Both URL formats support the following query-string options:
+%%   * max_results=Integer
+%%         limits the number of results returned
+%%   * stream=true
+%%         streams the results back in multipart/mixed chunks
+%%   * continuation=C
+%%         the continuation returned from the last query, used to
+%%         fetch the next "page" of results.
+%%   * return_terms=true
+%%         when querying with a range, returns the value of the index
+%%         along with the key.
 
 -module(riak_kv_wm_index).
 

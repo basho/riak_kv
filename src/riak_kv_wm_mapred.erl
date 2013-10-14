@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_mapred: webmachine resource for mapreduce requests
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -215,7 +215,7 @@ pipe_mapred(RD,
                     pipe_mapred_nonchunked(RD, State, Mrc)
             end;
         {error, {Fitting, Reason}} ->
-            {{halt, 400}, 
+            {{halt, 400},
              send_error({error, [{phase, Fitting},
                                  {error, iolist_to_binary(Reason)}]}, RD),
              State}
@@ -274,7 +274,7 @@ pipe_mapred_chunked(RD, State, Mrc) ->
      BoundaryState}.
 
 pipe_stream_mapred_results(RD,
-                           #state{boundary=Boundary}=State, 
+                           #state{boundary=Boundary}=State,
                            Mrc) ->
     case riak_kv_mrc_pipe:receive_sink(Mrc) of
         {ok, Done, Outputs} ->

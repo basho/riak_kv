@@ -1,8 +1,8 @@
 %% -------------------------------------------------------------------
 %%
-%% raw_http_resource: Webmachine resource for listing bucket properties.
+%% riak_kv_wm_props: Webmachine resource for listing bucket properties.
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,6 +24,7 @@
 %%
 %% Available operations:
 %%
+%% GET /types/Type/buckets/Bucket/props (with bucket-type)
 %% GET /buckets/Bucket/props (NEW)
 %% GET /Prefix/Bucket (OLD)
 %%   Get information about the named Bucket, in JSON form:
@@ -36,7 +37,8 @@
 %%   Where ModuleName and FunctionName are each strings representing
 %%   a module and function.
 %%
-%% GET /buckets/Bucket/props
+%% PUT /types/Type/buckets/Bucket/props (with bucket-type)
+%% PUT /buckets/Bucket/props
 %% PUT /Prefix/Bucket (OLD)
 %%   Modify bucket properties.
 %%   Content-type must be application/json, and the body must have
@@ -45,6 +47,7 @@
 %%   Where the "props" object takes the same form as returned from
 %%   a GET of the same resource.
 %%
+%% DELETE /types/Type/buckets/Bucket/props (with bucket-type)
 %% DELETE /buckets/Bucket/props
 %%   Reset bucket properties back to the default settings
 %%   not supported by the OLD API

@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_buckets - Webmachine resource for listing buckets.
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,10 +24,15 @@
 %%
 %% Available operations:
 %%
-%% GET /buckets?buckets=true (NEW) 
+%% GET /types/Type/buckets?buckets=true (with bucket-type)
+%% GET /types/Type/buckets?buckets=stream
+%% GET /buckets?buckets=true (NEW)
+%% GET /buckets?buckets=stream
 %% GET /Prefix?buckets=true
 %%   Get information about available buckets. Note that generating the
-%%   bucket list is expensive, so we require the "buckets=true" arg.
+%%   bucket list is expensive, so we require the "buckets=true" or
+%%   "buckets=stream" arg.
+%%
 
 -module(riak_kv_wm_buckets).
 
@@ -84,9 +89,9 @@ service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
     Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
-            {true, 
+            {true,
              RD,
-             Ctx#ctx{ 
+             Ctx#ctx{
                method=wrq:method(RD),
                client=C
               }};
@@ -159,7 +164,7 @@ malformed_timeout_param(RD, Ctx) ->
     case wrq:get_qs_value("timeout", none, RD) of
         none ->
             {false, RD, Ctx};
-        TimeoutStr -> 
+        TimeoutStr ->
             try
                 Timeout = list_to_integer(TimeoutStr),
                 {false, RD, Ctx#ctx{timeout=Timeout}}
@@ -169,7 +174,7 @@ malformed_timeout_param(RD, Ctx) ->
                      wrq:append_to_resp_body(io_lib:format("Bad timeout "
                                                            "value ~p~n",
                                                            [TimeoutStr]),
-                                             wrq:set_resp_header(?HEAD_CTYPE, 
+                                             wrq:set_resp_header(?HEAD_CTYPE,
                                                                  "text/plain", RD)),
                      Ctx}
             end
@@ -185,7 +190,7 @@ resource_exists(RD, #ctx{bucket_type=BType}=Ctx) ->
 produce_bucket_list(RD, #ctx{client=Client,
                              timeout=Timeout0,
                              bucket_type=BType}=Ctx) ->
-    Timeout = 
+    Timeout =
         case Timeout0 of
             undefined -> ?DEFAULT_TIMEOUT;
             Set -> Set
@@ -194,7 +199,7 @@ produce_bucket_list(RD, #ctx{client=Client,
         ?Q_TRUE ->
             %% Get the buckets.
             {ok, Buckets} = Client:list_buckets(none, Timeout, BType),
-            {mochijson2:encode({struct, [{?JSON_BUCKETS, Buckets}]}), 
+            {mochijson2:encode({struct, [{?JSON_BUCKETS, Buckets}]}),
              RD, Ctx};
         ?Q_STREAM ->
             F = fun() ->
@@ -208,15 +213,14 @@ produce_bucket_list(RD, #ctx{client=Client,
 
 stream_buckets(ReqId) ->
     receive
-        {ReqId, done} -> 
-                {mochijson2:encode({struct, 
+        {ReqId, done} ->
+                {mochijson2:encode({struct,
                                     [{<<"buckets">>, []}]}), done};
         {ReqId, _From, {buckets_stream, Buckets}} ->
-            {mochijson2:encode({struct, [{<<"buckets">>, Buckets}]}), 
+            {mochijson2:encode({struct, [{<<"buckets">>, Buckets}]}),
              fun() -> stream_buckets(ReqId) end};
         {ReqId, {buckets_stream, Buckets}} ->
             {mochijson2:encode({struct, [{<<"buckets">>, Buckets}]}),
              fun() -> stream_buckets(ReqId) end};
         {ReqId, timeout} -> {mochijson2:encode({struct, [{error, timeout}]}), done}
     end.
-

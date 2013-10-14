@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_bucket_type: Webmachine resource for bucket type properties
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -35,7 +35,7 @@
 %%   Where ModuleName and FunctionName are each strings representing
 %%   a module and function.
 %%
-%% GET /types/Type/props
+%% POST|PUT /types/Type/props
 %%   Modify bucket-type properties.
 %%   Content-type must be application/json, and the body must have
 %%   the form:
@@ -43,7 +43,7 @@
 %%   Where the "props" object takes the same form as returned from
 %%   a GET of the same resource.
 %%
-%% DELETE /types/Bucket/props
+%% DELETE /types/Type/props
 %%   Reset bucket-type properties back to the default settings
 
 -module(riak_kv_wm_bucket_type).
@@ -152,7 +152,7 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
     end.
 
 %% @doc Detects whether the requested bucket-type exists.
-forbidden_check_bucket_type(RD, #ctx{method=M}=Ctx) when M =:= 'PUT'; 
+forbidden_check_bucket_type(RD, #ctx{method=M}=Ctx) when M =:= 'PUT';
                                                          M =:= 'DELETE' ->
     %% If the bucket type doesn't exist, we want to bail early so that
     %% users cannot PUT/DELETE bucket types that don't exist.
@@ -245,9 +245,9 @@ content_types_accepted(RD, Ctx) ->
 produce_bucket_type_body(RD, Ctx) ->
     Props = riak_core_bucket_type:get(Ctx#ctx.bucket_type),
     JsonProps = mochijson2:encode(
-                  {struct, 
+                  {struct,
                    [
-                    {?JSON_PROPS, 
+                    {?JSON_PROPS,
                      [ riak_kv_wm_utils:jsonify_bucket_prop(P) || P <- Props ]}
                    ]}),
     {JsonProps, RD, Ctx}.
@@ -269,5 +269,12 @@ accept_bucket_type_body(RD, Ctx=#ctx{bucket_type=T, bucketprops=Props}) ->
 %% @spec delete_resource(reqdata(), context()) -> {boolean, reqdata(), context()}
 %% @doc Reset the bucket properties back to the default values
 delete_resource(RD, Ctx=#ctx{bucket_type=T}) ->
-    ok = riak_core_bucket_type:reset(T),
-    {true, RD, Ctx}.
+    case riak_core_bucket_type:reset(T) of
+        ok ->
+            {true, RD, Ctx};
+        Error ->
+            {false,
+             wrq:append_to_resp_body(
+               io_lib:format("The bucket type ~s could not be reset: ~p~n", [T, Error]),
+               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)), Ctx}
+    end.

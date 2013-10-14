@@ -3,7 +3,7 @@
 %% riak_kv_wm_keylist - Webmachine resource for listing
 %%                      the keys in a bucket.
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -25,6 +25,7 @@
 %%
 %% Available operations:
 %%
+%% GET /types/Type/buckets/Bucket/keys?keys=true|stream (with bucket-type)
 %% GET /buckets/Bucket/keys?keys=true|stream (NEW)
 %% GET /Prefix/Bucket?keys=true|stream (OLD)
 %%   Get the keys for a bucket. This is an expensive operation.
@@ -38,6 +39,7 @@
 %%   the user can also specify a 'props=true' to include props in the
 %%   JSON response. This provides backward compatibility with the
 %%   old HTTP API.
+%%
 
 -module(riak_kv_wm_keylist).
 
@@ -173,7 +175,7 @@ malformed_timeout_param(RD, Ctx) ->
     case wrq:get_qs_value("timeout", none, RD) of
         none ->
             {false, RD, Ctx};
-        TimeoutStr -> 
+        TimeoutStr ->
             try
                 Timeout = list_to_integer(TimeoutStr),
                 {false, RD, Ctx#ctx{timeout=Timeout}}
@@ -183,7 +185,7 @@ malformed_timeout_param(RD, Ctx) ->
                      wrq:append_to_resp_body(io_lib:format("Bad timeout "
                                                            "value ~p~n",
                                                            [TimeoutStr]),
-                                             wrq:set_resp_header(?HEAD_CTYPE, 
+                                             wrq:set_resp_header(?HEAD_CTYPE,
                                                                  "text/plain", RD)),
                      Ctx}
             end
@@ -219,7 +221,7 @@ produce_bucket_body(RD, #ctx{client=Client,
         ?Q_STREAM ->
             %% Start streaming the keys...
             F = fun() ->
-                        {ok, ReqId} = Client:stream_list_keys(Bucket, 
+                        {ok, ReqId} = Client:stream_list_keys(Bucket,
                                                               Timeout),
                         stream_keys(ReqId)
                 end,
