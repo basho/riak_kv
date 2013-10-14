@@ -310,15 +310,15 @@
 %% pre- and post-commit hook functions.
 %% @datatype integer
 %% @mapping 
-{mapping, "javascript_vm.map_js_vm_count", "riak_kv.map_js_vm_count", [
+{mapping, "javascript_vm.map_count", "riak_kv.map_js_vm_count", [
   {default, {{map_js_vms}} },
   {datatype, integer}
 ]}.
-{mapping, "javascript_vm.reduce_js_vm_count", "riak_kv.reduce_js_vm_count", [
+{mapping, "javascript_vm.reduce_count", "riak_kv.reduce_js_vm_count", [
   {default, {{reduce_js_vms}} },
   {datatype, integer}
 ]}.
-{mapping, "javascript_vm.hook_js_vm_count", "riak_kv.hook_js_vm_count", [
+{mapping, "javascript_vm.hook_count", "riak_kv.hook_js_vm_count", [
   {default, {{hook_js_vms}} },
   {datatype, integer}
 ]}.
