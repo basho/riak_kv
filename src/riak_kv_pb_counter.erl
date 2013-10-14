@@ -39,8 +39,8 @@
 
 -module(riak_kv_pb_counter).
 
--include_lib("riak_pb/include/riak_kv_pb.hrl").
--include_lib("riak_pb/include/riak_pb_kv_codec.hrl").
+-include_lib("../../riak_pb/include/riak_kv_pb.hrl").
+-include_lib("../../riak_pb/include/riak_pb_kv_codec.hrl").
 -include("riak_kv_types.hrl").
 
 -behaviour(riak_api_pb_service).
@@ -69,11 +69,11 @@ decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     %% no special permissions for counters, just get/put
     case Msg of
-        #rpbcountergetreq{type=T, bucket=B} ->
-            Bucket = bucket_type(T, B),
+        #rpbcountergetreq{bucket=B} ->
+            Bucket = bucket_type(B),
             {ok, Msg, {"riak_kv.get", Bucket}};
-        #rpbcounterupdatereq{type=T, bucket=B} ->
-            Bucket = bucket_type(T, B),
+        #rpbcounterupdatereq{bucket=B} ->
+            Bucket = bucket_type(B),
             {ok, Msg, {"riak_kv.put", Bucket}}
     end.
 
@@ -82,14 +82,13 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(#rpbcountergetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0,
+process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0,
                           notfound_ok=NFOk, basic_quorum=BQ},
         #state{client=C} = State) ->
     case lists:member(pncounter, riak_core_capability:get({riak_kv, crdt}, [])) of
         true ->
             R = decode_quorum(R0),
             PR = decode_quorum(PR0),
-            B = maybe_bucket_type(T, B0),
             case C:get(B, K, make_option(r, R) ++
                            make_option(pr, PR) ++
                            make_option(notfound_ok, NFOk) ++
@@ -105,10 +104,9 @@ process(#rpbcountergetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0,
         false ->
             {error, {format, "Counters are not supported"}, State}
     end;
-process(#rpbcounterupdatereq{bucket=B0, type=T, key=K,  w=W0, dw=DW0, pw=PW0, amount=CounterOp,
+process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=CounterOp,
                              returnvalue=RetVal},
         #state{client=C} = State) ->
-    B = maybe_bucket_type(T, B0),
     case {allow_mult(B), lists:member(pncounter, riak_core_capability:get({riak_kv, crdt}, []))} of
         {true, true} ->
             O = riak_kv_crdt:new(B, K, ?LEGACY_COUNTER_TYPE),
@@ -166,17 +164,6 @@ make_option(K, V) ->
 default_timeout() ->
     ?DEFAULT_TIMEOUT.
 
-%% Construct a {Type, Bucket} tuple, if not working with the default bucket
-maybe_bucket_type(undefined, B) ->
-    B;
-maybe_bucket_type(<<"default">>, B) ->
-    B;
-maybe_bucket_type(T, B) ->
-    {T, B}.
-
 %% always construct {Type, Bucket} tuple, filling in default type if needed
-bucket_type(undefined, B) ->
-    {<<"default">>, B};
-bucket_type(T, B) ->
-    {T, B}.
-
+bucket_type(B) ->
+    {<<"default">>, B}.
