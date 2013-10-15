@@ -134,6 +134,7 @@ process(#dtupdatereq{bucket=B, key=K, type=BType,
                            make_option(timeout, timeout(Timeout)) ++
                            make_option(sloppy_quorum, SloppyQ) ++
                            make_option(n_val, NVal) ++
+                           make_option(retry_put_coordinator_failure, false) ++
                            Options) of
                 ok ->
                     {reply, #dtupdateresp{key=ReturnKey}, State};
