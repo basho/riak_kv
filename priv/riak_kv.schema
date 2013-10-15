@@ -244,6 +244,16 @@
   {datatype, integer}
 ]}.
 
+%% @doc retry_put_coordinator_failure will enable/disable the
+%% 'retry_put_coordinator_failure' per-operation option of the
+%% put FSM.
+%% on = Riak 2.0 behavior (strongly recommended)
+%% off = Riak 1.x behavior
+{mapping, "retry_put_coordinator_failure", "riak_kv.retry_put_coordinator_failure", [
+  {default, on},
+  {datatype, {enum, [on, off]}}
+]}.
+
 %% @doc object_format controls which binary representation of a riak_object 
 %% is stored on disk.
 %% Current options are: v0, v1.
