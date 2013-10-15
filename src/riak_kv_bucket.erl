@@ -81,13 +81,12 @@ validate([Prop|T], ValidProps, Errors) ->
 -spec is_quorum(term()) -> true | false.
 is_quorum(Q) when is_integer(Q), Q > 0 ->
     true;
-is_quorum(Q) when is_atom(Q), Q =:= quorum
-                  orelse Q =:= one
-                  orelse Q =:= all ->
-    true;
-is_quorum(Q) when is_binary(Q), Q =:= <<"quorum">>
-                  orelse Q =:= <<"one">>
-                  orelse Q =:= <<"all">> ->
+is_quorum(Q)  when Q =:= quorum
+                   orelse Q =:= one
+                   orelse Q =:= all
+                   orelse Q =:= <<"quorum">>
+                   orelse Q =:= <<"one">>
+                   orelse Q =:= <<"all">> ->
     true;
 is_quorum(_) ->
     false.
