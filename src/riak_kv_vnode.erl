@@ -72,7 +72,7 @@
 
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_map_phase.hrl").
--include_lib("riak_core/include/riak_core_pb.hrl").
+-include_lib("riak_core_pb.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
