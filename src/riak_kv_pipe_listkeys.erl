@@ -119,8 +119,14 @@ keysend_loop(ReqId, Partition, FittingDetails) ->
 keysend(_Bucket, [], _Partition, _FittingDetails) ->
     ok;
 keysend(Bucket, [Key | Keys], Partition, FittingDetails) ->
+    Out = if
+        is_tuple(Bucket) ->
+            {{Bucket, Key}, undefined};
+        true ->
+            {Bucket, Key}
+    end,
     case riak_pipe_vnode_worker:send_output(
-           {{Bucket, Key}, undefined}, Partition, FittingDetails) of
+           Out, Partition, FittingDetails) of
         ok ->
             keysend(Bucket, Keys, Partition, FittingDetails);
         ER ->

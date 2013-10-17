@@ -338,8 +338,16 @@ jsonify_bkeys(Results, HasMRQuery) when HasMRQuery == true ->
 jsonify_bkeys(Results, HasMRQuery) when HasMRQuery == false ->
     jsonify_bkeys_1(Results, []).
 
+%% @doc Translate undefined to null, which mochijson will translate to JS null 
+maybe_null(undefined) ->
+    null;
+maybe_null(V) ->
+    V.
+
 jsonify_bkeys_1([{{{T,B},K},D}|Rest], Acc) ->
-    jsonify_bkeys_1(Rest, [[T,B,K,D]|Acc]);
+    jsonify_bkeys_1(Rest, [[B,K,maybe_null(D),T]|Acc]);
+jsonify_bkeys_1([{{B, K}, undefined}|Rest], Acc) ->
+    jsonify_bkeys_1(Rest, [[B,K]|Acc]);
 jsonify_bkeys_1([{{B, K},D}|Rest], Acc) ->
     jsonify_bkeys_1(Rest, [[B,K,D]|Acc]);
 jsonify_bkeys_1([{B, K}|Rest], Acc) ->
