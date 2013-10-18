@@ -117,7 +117,9 @@ get(Bucket, Key, R, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%       {error, Err :: term()}
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as R
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
-get(Bucket, Key, R, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) when is_binary(Bucket), is_binary(Key),
+get(Bucket, Key, R, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) when
+                                  (is_binary(Bucket) orelse is_tuple(Bucket)),
+                                  is_binary(Key),
                                   (is_atom(R) or is_integer(R)),
                                   is_integer(Timeout) ->
     get(Bucket, Key, [{r, R}, {timeout, Timeout}], THIS).
