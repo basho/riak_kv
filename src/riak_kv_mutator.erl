@@ -239,6 +239,10 @@ merge_values([{Priority, Module} = Mutator | Tail], Acc) ->
         Else ->
             ordsets:add_element(Mutator, ordsets:del_element(Else, Acc))
     end,
+    merge_values(Tail, Acc2);
+
+merge_values([MutatorList | Tail], Acc) ->
+    Acc2 = merge_values(MutatorList, Acc),
     merge_values(Tail, Acc2).
 
 insert_mutator(Module, Priority, Mutators) ->
