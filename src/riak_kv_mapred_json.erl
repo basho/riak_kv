@@ -596,7 +596,7 @@ key_input_test() ->
     ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))),
 
     %% Test parsing bucket types
-    JSON3 = <<"[[\"t1\", \"b1\", \"k1\", \"v1\"], [\"t2\", \"b2\", \"k2\", \"v2\"], [\"t3\", \"b3\", \"k3\", \"v3\"]]">>,
+    JSON3 = <<"[[\"b1\", \"k1\", \"v1\", \"t1\"], [\"b2\", \"k2\", \"v2\", \"t2\"], [\"b3\", \"k3\", \"v3\", \"t3\"]]">>,
     Expected3 = {ok, [
                       {{{<<"t1">>, <<"b1">>}, <<"k1">>}, <<"v1">>},
                       {{{<<"t2">>, <<"b2">>}, <<"k2">>}, <<"v2">>},
