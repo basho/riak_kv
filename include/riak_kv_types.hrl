@@ -5,8 +5,8 @@
 -define(CRDT_OP, #crdt_op).
 
 %% Top Level Key->Type Types
--define(LEGACY_COUNTER_TYPE, riak_kv_pncounter).
--define(LEGACY_COUNTER_TYPE(Val), #crdt{mod=?LEGACY_COUNTER_TYPE, ctype="application/riak_counter", value=Val}).
+-define(V1_COUNTER_TYPE, riak_kv_pncounter).
+-define(V1_COUNTER_TYPE(Val), #crdt{mod=?V1_COUNTER_TYPE, ctype="application/riak_counter", value=Val}).
 -define(COUNTER_TYPE, riak_dt_pncounter).
 -define(COUNTER_TYPE(Val), #crdt{mod=?COUNTER_TYPE, ctype="application/riak_counter", value=Val}).
 

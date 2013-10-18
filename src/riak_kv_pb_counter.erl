@@ -39,8 +39,8 @@
 
 -module(riak_kv_pb_counter).
 
--include_lib("../../riak_pb/include/riak_kv_pb.hrl").
--include_lib("../../riak_pb/include/riak_pb_kv_codec.hrl").
+-include_lib("riak_pb/include/riak_kv_pb.hrl").
+-include_lib("riak_pb/include/riak_pb_kv_codec.hrl").
 -include("riak_kv_types.hrl").
 
 -behaviour(riak_api_pb_service).
@@ -94,7 +94,7 @@ process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0,
                            make_option(notfound_ok, NFOk) ++
                            make_option(basic_quorum, BQ)) of
                 {ok, O} ->
-                    {_Ctx, Value} = riak_kv_crdt:value(O, ?LEGACY_COUNTER_TYPE),
+                    {_Ctx, Value} = riak_kv_crdt:value(O, ?V1_COUNTER_TYPE),
                     {reply, #rpbcountergetresp{value = Value}, State};
                 {error, notfound} ->
                     {reply, #rpbcountergetresp{}, State};
@@ -109,7 +109,7 @@ process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=Coun
         #state{client=C} = State) ->
     case {allow_mult(B), lists:member(pncounter, riak_core_capability:get({riak_kv, crdt}, []))} of
         {true, true} ->
-            O = riak_kv_crdt:new(B, K, ?LEGACY_COUNTER_TYPE),
+            O = riak_kv_crdt:new(B, K, ?V1_COUNTER_TYPE),
 
             %% erlang_protobuffs encodes as 1/0/undefined
             W = decode_quorum(W0),
@@ -121,7 +121,7 @@ process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=Coun
                 ok ->
                     {reply, #rpbcounterupdateresp{}, State};
                 {ok, RObj} ->
-                    {_Ctx, Value} = riak_kv_crdt:value(RObj, ?LEGACY_COUNTER_TYPE),
+                    {_Ctx, Value} = riak_kv_crdt:value(RObj, ?V1_COUNTER_TYPE),
                     {reply, #rpbcounterupdateresp{value=Value}, State};
                 {error, notfound} ->
                     {reply, #rpbcounterupdateresp{}, State};

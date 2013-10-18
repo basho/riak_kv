@@ -107,10 +107,10 @@ merge_object(RObj) ->
 log_errors(_, _, []) ->
     ok;
 log_errors(Bucket, Key, Errors) ->
-    lager:info("Error(s) deserializing CRDT at ~p ~p: ~p~n", [Bucket, Key, Errors]).
+    lager:error("Error(s) deserializing CRDT at ~p ~p: ~p~n", [Bucket, Key, Errors]).
 
 maybe_log_sibling_crdts(Bucket, Key, CRDTs) when length(CRDTs) > 1 ->
-    lager:info("Sibling CRDTs at ~p ~p: ~p~n", [Bucket, Key, orddict:fetch_keys(CRDTs)]);
+    lager:error("Sibling CRDTs at ~p ~p: ~p~n", [Bucket, Key, orddict:fetch_keys(CRDTs)]);
 maybe_log_sibling_crdts(_, _, _) ->
     ok.
 
@@ -155,7 +155,7 @@ deserialize_crdt(V, _Bin) ->
     {error, {invalid_version, V}}.
 
 counter_op(N) when N < 0 ->
-    {decrement, N*-1};
+    {decrement, -N};
 counter_op(N) ->
     {increment, N}.
 
@@ -169,7 +169,7 @@ counter_op(N) ->
 update_crdt(Dict, Actor, Amt) when is_integer(Amt) ->
     %% Handle legacy 1.4 counter operation, upgrade to current OP
     CounterOp = counter_op(Amt),
-    Op = ?CRDT_OP{mod=?LEGACY_COUNTER_TYPE, op=CounterOp},
+    Op = ?CRDT_OP{mod=?V1_COUNTER_TYPE, op=CounterOp},
     update_crdt(Dict, Actor, Op);
 update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op, ctx=undefined}) ->
     {Meta, Record, Value} = fetch_with_default(Mod, Dict),
@@ -316,7 +316,7 @@ new(B, K, Mod) ->
 %% @doc turn a `crdt()' record into a binary for storage on disk /
 %% passing on the network
 -spec to_binary(crdt()) -> binary().
-to_binary(CRDT=?CRDT{mod=?LEGACY_COUNTER_TYPE}) ->
+to_binary(CRDT=?CRDT{mod=?V1_COUNTER_TYPE}) ->
     to_binary(CRDT, ?V1_VERS);
 to_binary(?CRDT{mod=Mod, value=Value}) ->
     CRDTBin = Mod:to_binary(Value),
@@ -329,8 +329,8 @@ to_binary(?CRDT{mod=Mod, value=Value}) ->
 -spec to_binary(crdt(), Version::pos_integer()) -> binary().
 to_binary(CRDT, ?V2_VERS) ->
     to_binary(CRDT);
-to_binary(?CRDT{mod=?LEGACY_COUNTER_TYPE, value=Value}, ?V1_VERS) ->
-    CounterBin = ?LEGACY_COUNTER_TYPE:to_binary(Value),
+to_binary(?CRDT{mod=?V1_COUNTER_TYPE, value=Value}, ?V1_VERS) ->
+    CounterBin = ?V1_COUNTER_TYPE:to_binary(Value),
     <<?TAG:8/integer, ?V1_VERS:8/integer, CounterBin/binary>>.
 
 %% @doc deserialize a crdt from it's binary format.  The binary must
@@ -348,7 +348,7 @@ from_binary(Bin) ->
 %% @private attempt to deserialize a v1 counter (riak 1.4.x counter)
 v1_counter_from_binary(CounterBin) ->
     try
-        to_record(?LEGACY_COUNTER_TYPE, ?LEGACY_COUNTER_TYPE:from_binary(CounterBin)) of
+        to_record(?V1_COUNTER_TYPE, ?V1_COUNTER_TYPE:from_binary(CounterBin)) of
         ?CRDT{}=Counter ->
             {ok, Counter}
     catch
@@ -371,8 +371,8 @@ crdt_from_binary(<<TypeLen:32/integer, Type:TypeLen/binary, CRDTBin/binary>>) ->
 crdt_from_binary(_) ->
     {error, {invalid_crdt_binary}}.
 
-to_record(?LEGACY_COUNTER_TYPE, Val) ->
-    ?LEGACY_COUNTER_TYPE(Val);
+to_record(?V1_COUNTER_TYPE, Val) ->
+    ?V1_COUNTER_TYPE(Val);
 to_record(?COUNTER_TYPE, Val) ->
     ?COUNTER_TYPE(Val);
 to_record(?MAP_TYPE, Val) ->

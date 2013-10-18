@@ -97,7 +97,7 @@ raw_dispatch(Name) ->
       riak_kv_wm_index, Props2},
 
      %% counters
-     {["buckets", bucket, counters, key],
+     {["buckets", bucket, "counters", key],
       riak_kv_wm_counter, Props2}
     ].
 
