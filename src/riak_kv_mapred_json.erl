@@ -150,7 +150,7 @@ parse_inputs([], Accum) ->
 parse_inputs([[Bucket, Key]|T], Accum) when is_binary(Bucket),
                                              is_binary(Key) ->
     parse_inputs(T, [{Bucket, Key}|Accum]);
-parse_inputs([[Type, Bucket, Key, KeyData]|T], Accum) when is_binary(Type),
+parse_inputs([[Bucket, Key, KeyData, Type]|T], Accum) when is_binary(Type),
                                                            is_binary(Bucket),
                                                            is_binary(Key) ->
     parse_inputs(T, [{{{Type,Bucket}, Key}, KeyData}|Accum]);
@@ -319,6 +319,12 @@ parse_query(Invalid, _Accum) ->
              "   ",mochijson2:encode(Invalid),"\n"]}.
 
 dejsonify_not_found({struct, [{<<"not_found">>,
+                               {struct, [{<<"bucket_type">>, BType},
+                                         {<<"bucket">>, Bucket},
+                                         {<<"key">>, Key},
+                                         {<<"keydata">>, KeyData}]}}]}) ->
+    {not_found, {{BType, Bucket}, Key}, KeyData};
+dejsonify_not_found({struct, [{<<"not_found">>,
                      {struct, [{<<"bucket">>, Bucket},
                                {<<"key">>, Key},
                                {<<"keydata">>, KeyData}]}}]}) ->
@@ -326,6 +332,11 @@ dejsonify_not_found({struct, [{<<"not_found">>,
 dejsonify_not_found(Data) ->
     Data.
 
+jsonify_not_found({not_found, {{BType, Bucket}, Key}, KeyData}) ->
+    {struct, [{not_found, {struct, [{<<"bucket_type">>, BType},
+                                    {<<"bucket">>, Bucket},
+                                    {<<"key">>, Key},
+                                    {<<"keydata">>, KeyData}]}}]};
 jsonify_not_found({not_found, {Bucket, Key}, KeyData}) ->
     {struct, [{not_found, {struct, [{<<"bucket">>, Bucket},
                                     {<<"key">>, Key},
@@ -621,12 +632,12 @@ index_input_test() ->
     ?assertEqual(Expected3, parse_inputs(mochijson2:decode(JSON3))).
 
 keyfilter_input_test() ->
-    JSON = <<"{\"bucket\":\"mybucket\",\"key_filters\":[[\"match\", \"key.*\"]]}">>,
-    Expected = {ok, {<<"mybucket">>, [[<<"match">>, <<"key.*">>]]}},
+    JSON = <<"{\"bucket\":\"mybucket\",\"key_filters\":[[\"matches\", \"key.*\"]]}">>,
+    Expected = {ok, {<<"mybucket">>, [[<<"matches">>, <<"key.*">>]]}},
     ?assertEqual(Expected, parse_inputs(mochijson2:decode(JSON))),
 
-    JSON2 = <<"{\"bucket\":[\"mytype\", \"mybucket\"],\"key_filters\":[[\"match\", \"key.*\"]]}">>,
-    Expected2 = {ok, {{<<"mytype">>,<<"mybucket">>}, [[<<"match">>, <<"key.*">>]]}},
+    JSON2 = <<"{\"bucket\":[\"mytype\", \"mybucket\"],\"key_filters\":[[\"matches\", \"key.*\"]]}">>,
+    Expected2 = {ok, {{<<"mytype">>,<<"mybucket">>}, [[<<"matches">>, <<"key.*">>]]}},
     ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))).
 
 

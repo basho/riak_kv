@@ -164,7 +164,14 @@ make_req_id() ->
 bkey({{_,_}=Bkey,_}) -> Bkey;
 bkey({_,_}=Bkey)     -> Bkey;
 bkey([Bucket,Key])   -> {Bucket, Key};
-bkey([Bucket,Key,_]) -> {Bucket, Key}.
+bkey([Bucket,Key,_]) -> {Bucket, Key};
+bkey([Bucket,Key,_, BType]) -> {{BType, Bucket}, Key}.
+
+%% @doc Translate JS null to standard Erlang undefined
+null2undefined(null) ->
+    undefined;
+null2undefined(V) ->
+    V.
 
 %% @doc Extract KeyData from input.  The atom `undefined' is returned
 %%      if no keydata is specified.
@@ -172,7 +179,8 @@ bkey([Bucket,Key,_]) -> {Bucket, Key}.
 keydata({{_,_},KeyData}) -> KeyData;
 keydata({_,_})           -> undefined;
 keydata([_,_])           -> undefined;
-keydata([_,_,KeyData])   -> KeyData.
+keydata([_,_,KeyData])   -> null2undefined(KeyData);
+keydata([_,_,KeyData,_])   -> null2undefined(KeyData).
 
 %% @doc Compute the KV hash of the input.
 -spec bkey_chash(riak_kv_mrc_pipe:key_input()) -> chash:index().
