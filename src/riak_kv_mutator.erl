@@ -237,11 +237,35 @@ merge_values([{Priority, Module} = Mutator | Tail], Acc) ->
         {P1, _} when P1 < Priority ->
             Acc;
         Else ->
-            ordsets:add_element(Mutator, ordsets:del_element(Else))
+            ordsets:add_element(Mutator, ordsets:del_element(Else, Acc))
     end,
+    merge_values(Tail, Acc2);
+
+merge_values([MutatorList | Tail], Acc) ->
+    Acc2 = merge_values(MutatorList, Acc),
     merge_values(Tail, Acc2).
 
 insert_mutator(Module, Priority, Mutators) ->
     Mutators2 = lists:keydelete(Module, 2, Mutators),
     ordsets:add_element({Priority, Module}, Mutators2).
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+merge_test() ->
+    ?assertEqual([], merge_values([])),
+    ?assertEqual([], merge_values([not_a_list_so_trashed])),
+    ?assertEqual([{1, module1}], merge_values([[{1, module1}]])),
+    ?assertEqual([{1, module1}], merge_values([[{1, module1}],[]])),
+    ?assertEqual([{1, module1}], merge_values([[], [{1, module1}],[]])),
+    ?assertEqual([{1, module1}], merge_values([{1, module1}], [{9, module1}])),
+    ?assertEqual([{1, module1}], merge_values([{9, module1}], [{1, module1}])),
+    ?assertEqual([{1, module1}], merge_values([[{1, module1}], [{9, module1}]])),
+    ?assertEqual([{1, module1}], merge_values([[{9, module1}], [{3, module1}], [{1, module1}]])),
+    ?assertEqual([{1, module1},{2, module2}],
+                 merge_values([[{9, module1}, {4, module2}],
+                               [{3, module1}, {2, module2}],
+                               [{1, module1}, {10, module2}]])),
+    ok.
+
+-endif.
