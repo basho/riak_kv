@@ -325,10 +325,11 @@ operation_to_amt(Op0) ->
 %% module
 process_legacy_counter({error, Reason}, State) ->
     {error, {format, Reason}, State};
-process_legacy_counter(Req, _State) ->
+process_legacy_counter(Req, State) ->
     LegacyState = riak_kv_pb_counter:init(),
-    Resp = riak_kv_pb_counter:process(Req, LegacyState),
-    upgrade_response(Req, Resp).
+    %% Discard the riak_kv_pb_counter state.
+    {E1, E2, _LegacyState2} = riak_kv_pb_counter:process(Req, LegacyState),
+    upgrade_response(Req, {E1, E2, State}).
 
 %% Transform a v1.4 counter response to a v2.0 dt response
 upgrade_response(_, {reply, #rpbcountergetresp{value=Val}, State}) ->
