@@ -1,8 +1,8 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_wm_props: Webmachine resource for listing bucket properties.
+%% riak_kv_wm_bucket_type: Webmachine resource for bucket type properties
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,12 +24,10 @@
 %%
 %% Available operations:
 %%
-%% GET /types/Type/buckets/Bucket/props (with bucket-type)
-%% GET /buckets/Bucket/props (NEW)
-%% GET /Prefix/Bucket (OLD)
-%%   Get information about the named Bucket, in JSON form:
+%% GET /types/Type/props
+%%   Get information about the named Type, in JSON form:
 %%     {"props":{Prop1:Val1,Prop2:Val2,...}}
-%%   Each bucket property will be included in the "props" object.
+%%   Each bucket-type property will be included in the "props" object.
 %%   "linkfun" and "chash_keyfun" properties will be encoded as
 %%   JSON objects of the form:
 %%     {"mod":ModuleName,
@@ -37,22 +35,18 @@
 %%   Where ModuleName and FunctionName are each strings representing
 %%   a module and function.
 %%
-%% PUT /types/Type/buckets/Bucket/props (with bucket-type)
-%% PUT /buckets/Bucket/props
-%% PUT /Prefix/Bucket (OLD)
-%%   Modify bucket properties.
+%% POST|PUT /types/Type/props
+%%   Modify bucket-type properties.
 %%   Content-type must be application/json, and the body must have
 %%   the form:
 %%     {"props":{Prop:Val}}
 %%   Where the "props" object takes the same form as returned from
 %%   a GET of the same resource.
 %%
-%% DELETE /types/Type/buckets/Bucket/props (with bucket-type)
-%% DELETE /buckets/Bucket/props
-%%   Reset bucket properties back to the default settings
-%%   not supported by the OLD API
+%% DELETE /types/Type/props
+%%   Reset bucket-type properties back to the default settings
 
--module(riak_kv_wm_props).
+-module(riak_kv_wm_bucket_type).
 
 %% webmachine resource exports
 -export([
@@ -66,15 +60,13 @@
          encodings_provided/2,
          content_types_accepted/2,
          resource_exists/2,
-         produce_bucket_body/2,
-         accept_bucket_body/2,
-         get_bucket_props_json/2,
+         produce_bucket_type_body/2,
+         accept_bucket_type_body/2,
          delete_resource/2
         ]).
 
 %% @type context() = term()
 -record(ctx, {bucket_type,  %% binary() - Bucket type (from uri)
-              bucket,       %% binary() - Bucket name (from uri)
               client,       %% riak_client() - the store client
               prefix,       %% string() - prefix for resource uris
               riak,         %% local | {node(), atom()} - params for riak client
@@ -92,11 +84,11 @@
 %%      'prefix' and 'riak' properties from the dispatch args.
 init(Props) ->
     {ok, #ctx{
-       prefix=proplists:get_value(prefix, Props),
-       riak=proplists:get_value(riak, Props),
-       api_version=proplists:get_value(api_version,Props),
-       bucket_type=proplists:get_value(bucket_type, Props)
-      }}.
+            prefix=proplists:get_value(prefix, Props),
+            riak=proplists:get_value(riak, Props),
+            api_version=proplists:get_value(api_version,Props),
+            bucket_type=proplists:get_value(bucket_type, Props)
+           }}.
 
 %% @spec service_available(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
@@ -107,16 +99,7 @@ service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
     Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
-            {true,
-             RD,
-             Ctx#ctx{
-               method=wrq:method(RD),
-               client=C,
-               bucket=case wrq:path_info(bucket, RD) of
-                         undefined -> undefined;
-                         B -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, B))
-                      end
-              }};
+            {true, RD, Ctx#ctx{method=wrq:method(RD), client=C}};
         Error ->
             {false,
              wrq:set_resp_body(
@@ -149,34 +132,49 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
         false ->
             Perm = case Ctx#ctx.method of
                 'PUT' ->
-                    "riak_core.set_bucket";
+                    "riak_core.set_bucket_type";
                 'GET' ->
-                    "riak_core.get_bucket";
+                    "riak_core.get_bucket_type";
                 'HEAD' ->
-                    "riak_core.get_bucket"
+                    "riak_core.get_bucket_type";
+                'DELETE' ->
+                    "riak_core.set_bucket_type"
             end,
 
-            Res = riak_core_security:check_permission({Perm,
-                                                           {Ctx#ctx.bucket_type,
-                                                            Ctx#ctx.bucket}},
-                                                           Security),
+            Res = riak_core_security:check_permission({Perm, Ctx#ctx.bucket_type}, Security),
             case Res of
                 {false, Error, _} ->
                     RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
                     {true, wrq:append_to_resp_body(list_to_binary(Error), RD1), Ctx};
                 {true, _} ->
-                    {false, RD, Ctx}
+                    forbidden_check_bucket_type(RD, Ctx)
             end
     end.
+
+%% @doc Detects whether the requested bucket-type exists.
+forbidden_check_bucket_type(RD, #ctx{method=M}=Ctx) when M =:= 'PUT';
+                                                         M =:= 'DELETE' ->
+    %% If the bucket type doesn't exist, we want to bail early so that
+    %% users cannot PUT/DELETE bucket types that don't exist.
+    case riak_kv_wm_utils:bucket_type_exists(Ctx#ctx.bucket_type) of
+        true ->
+            {false, RD, Ctx};
+        false ->
+            {{halt, 404},
+             wrq:set_resp_body(
+               io_lib:format("Cannot modify unknown bucket type: ~p", [Ctx#ctx.bucket_type]),
+               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx}
+    end;
+forbidden_check_bucket_type(RD, Ctx) ->
+    {false, RD, Ctx}.
+
 
 %% @spec allowed_methods(reqdata(), context()) ->
 %%          {[method()], reqdata(), context()}
 %% @doc Get the list of methods this resource supports.
 %%      Properties allows HEAD, GET, and PUT.
-allowed_methods(RD, Ctx) when Ctx#ctx.api_version =:= 1 ->
-    {['HEAD', 'GET', 'PUT'], RD, Ctx};
-allowed_methods(RD, Ctx) when Ctx#ctx.api_version =:= 2;
-                              Ctx#ctx.api_version =:= 3 ->
+allowed_methods(RD, Ctx) when Ctx#ctx.api_version =:= 3 ->
     {['HEAD', 'GET', 'PUT', 'DELETE'], RD, Ctx}.
 
 %% @spec malformed_request(reqdata(), context()) ->
@@ -186,7 +184,7 @@ allowed_methods(RD, Ctx) when Ctx#ctx.api_version =:= 2;
 %%      Body format is checked to be valid JSON, including
 %%      a "props" object for a bucket-PUT.
 malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'PUT' ->
-    malformed_bucket_put(RD, Ctx);
+    malformed_props(RD, Ctx);
 malformed_request(RD, Ctx) ->
     {false, RD, Ctx}.
 
@@ -194,25 +192,25 @@ malformed_request(RD, Ctx) ->
 %%          {boolean(), reqdata(), context()}
 %% @doc Check the JSON format of a bucket-level PUT.
 %%      Must be a valid JSON object, containing a "props" object.
-malformed_bucket_put(RD, Ctx) ->
+malformed_props(RD, Ctx) ->
     case catch mochijson2:decode(wrq:req_body(RD)) of
         {struct, Fields} ->
             case proplists:get_value(?JSON_PROPS, Fields) of
                 {struct, Props} ->
                     {false, RD, Ctx#ctx{bucketprops=Props}};
                 _ ->
-                    {true, bucket_format_message(RD), Ctx}
+                    {true, props_format_message(RD), Ctx}
             end;
         _ ->
-            {true, bucket_format_message(RD), Ctx}
+            {true, props_format_message(RD), Ctx}
     end.
 
 %% @spec bucket_format_message(reqdata()) -> reqdata()
 %% @doc Put an error about the format of the bucket-PUT body
 %%      in the response body of the reqdata().
-bucket_format_message(RD) ->
+props_format_message(RD) ->
     wrq:append_to_resp_body(
-      ["bucket PUT must be a JSON object of the form:\n",
+      ["bucket type PUT must be a JSON object of the form:\n",
        "{\"",?JSON_PROPS,"\":{...bucket properties...}}"],
       wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)).
 
@@ -225,7 +223,7 @@ resource_exists(RD, Ctx) ->
 %% @doc List the content types available for representing this resource.
 %%      "application/json" is the content-type for props requests.
 content_types_provided(RD, Ctx) ->
-    {[{"application/json", produce_bucket_body}], RD, Ctx}.
+    {[{"application/json", produce_bucket_type_body}], RD, Ctx}.
 
 %% @spec encodings_provided(reqdata(), context()) ->
 %%          {[{Encoding::string(), Producer::function()}], reqdata(), context()}
@@ -240,29 +238,26 @@ encodings_provided(RD, Ctx) ->
 %% @doc Get the list of content types this resource will accept.
 %%      "application/json" is the only type accepted for props PUT.
 content_types_accepted(RD, Ctx) ->
-    {[{"application/json", accept_bucket_body}], RD, Ctx}.
+    {[{"application/json", accept_bucket_type_body}], RD, Ctx}.
 
 %% @spec produce_bucket_body(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Produce the bucket properties as JSON.
-produce_bucket_body(RD, Ctx) ->
-    Client = Ctx#ctx.client,
-    Bucket = riak_kv_wm_utils:maybe_bucket_type(Ctx#ctx.bucket_type, Ctx#ctx.bucket),
-    JsonProps1 = get_bucket_props_json(Client, Bucket),
-    JsonProps2 = {struct, [JsonProps1]},
-    JsonProps3 = mochijson2:encode(JsonProps2),
-    {JsonProps3, RD, Ctx}.
-
-get_bucket_props_json(Client, Bucket) ->
-    Props1 = Client:get_bucket(Bucket),
-    Props2 = lists:map(fun riak_kv_wm_utils:jsonify_bucket_prop/1, Props1),
-    {?JSON_PROPS, {struct, Props2}}.
+produce_bucket_type_body(RD, Ctx) ->
+    Props = riak_core_bucket_type:get(Ctx#ctx.bucket_type),
+    JsonProps = mochijson2:encode(
+                  {struct,
+                   [
+                    {?JSON_PROPS,
+                     [ riak_kv_wm_utils:jsonify_bucket_prop(P) || P <- Props ]}
+                   ]}),
+    {JsonProps, RD, Ctx}.
 
 %% @spec accept_bucket_body(reqdata(), context()) -> {true, reqdata(), context()}
 %% @doc Modify the bucket properties according to the body of the
 %%      bucket-level PUT request.
-accept_bucket_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, client=C, bucketprops=Props}) ->
+accept_bucket_type_body(RD, Ctx=#ctx{bucket_type=T, bucketprops=Props}) ->
     ErlProps = lists:map(fun riak_kv_wm_utils:erlify_bucket_prop/1, Props),
-    case C:set_bucket({T,B}, ErlProps) of
+    case riak_core_bucket_type:update(T, ErlProps) of
         ok ->
             {true, RD, Ctx};
         {error, Details} ->
@@ -273,6 +268,13 @@ accept_bucket_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, client=C, bucketprops=P
 
 %% @spec delete_resource(reqdata(), context()) -> {boolean, reqdata(), context()}
 %% @doc Reset the bucket properties back to the default values
-delete_resource(RD, Ctx=#ctx{bucket_type=T, bucket=B, client=C}) ->
-    C:reset_bucket({T,B}),
-    {true, RD, Ctx}.
+delete_resource(RD, Ctx=#ctx{bucket_type=T}) ->
+    case riak_core_bucket_type:reset(T) of
+        ok ->
+            {true, RD, Ctx};
+        Error ->
+            {false,
+             wrq:append_to_resp_body(
+               io_lib:format("The bucket type ~s could not be reset: ~p~n", [T, Error]),
+               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)), Ctx}
+    end.

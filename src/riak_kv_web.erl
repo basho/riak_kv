@@ -52,8 +52,10 @@ raw_dispatch() ->
     end.
 
 raw_dispatch(Name) ->
-    Props1 = [{api_version, 1}|raw_props(Name)],
-    Props2 = [{api_version, 2}|raw_props(Name)],
+    Props1 = [{bucket_type, <<"default">>}, {api_version, 1}|raw_props(Name)],
+    Props2 = [ {["types", bucket_type], [{api_version, 3}|raw_props(Name)]},
+               {[], [{bucket_type, <<"default">>}, {api_version, 2}|raw_props(Name)]}],
+
     [
      %% OLD API
      {[Name],
@@ -72,34 +74,45 @@ raw_dispatch(Name) ->
       riak_kv_wm_object, Props1},
 
      {[Name, bucket, key, '*'],
-      riak_kv_wm_link_walker, Props1},
+      riak_kv_wm_link_walker, 
 
+    ] ++
+
+   [ {["types", bucket_type, "props"], riak_kv_wm_bucket_type,
+      [{api_version, 3}|raw_props(Name)]} ] ++
+
+   lists:flatten([
+    [
      %% NEW API
-     {["buckets"],
-      riak_kv_wm_buckets, Props2},
+     {Prefix ++ ["buckets"],
+      riak_kv_wm_buckets, Props},
 
-     {["buckets", bucket, "props"],
-      riak_kv_wm_props, Props2},
+     {Prefix ++ ["buckets", bucket, "props"],
+      riak_kv_wm_props, Props},
 
-     {["buckets", bucket, "keys"], fun is_post/1,
-      riak_kv_wm_object, Props2},
+     {Prefix ++ ["buckets", bucket, "keys"], fun is_post/1,
+      riak_kv_wm_object, Props},
 
-     {["buckets", bucket, "keys"],
-      riak_kv_wm_keylist, Props2},
+     {Prefix ++ ["buckets", bucket, "keys"],
+      riak_kv_wm_keylist, Props},
 
-     {["buckets", bucket, "keys", key],
-      riak_kv_wm_object, Props2},
+     {Prefix ++ ["buckets", bucket, "keys", key],
+      riak_kv_wm_object, Props},
 
-     {["buckets", bucket, "keys", key, '*'],
-      riak_kv_wm_link_walker, Props2},
+     {Prefix ++ ["buckets", bucket, "keys", key, '*'],
+      riak_kv_wm_link_walker, Props},
 
-     {["buckets", bucket, "index", field, '*'],
-      riak_kv_wm_index, Props2},
+     {Prefix ++ ["buckets", bucket, "index", field, '*'],
+      riak_kv_wm_index, Props},
 
      %% counters
      {["buckets", bucket, "counters", key],
-      riak_kv_wm_counter, Props2}
-    ].
+      riak_kv_wm_counter, Props},
+
+     %% crdts
+     {Prefix ++ ["buckets", bucket, crdt, key], {riak_kv_wm_crdt, known_type},
+      riak_kv_wm_crdt, Props}
+    ] || {Prefix, Props} <- Props2 ]).
 
 is_post(Req) ->
     wrq:method(Req) == 'POST'.
