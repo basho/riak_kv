@@ -167,10 +167,14 @@ get_put_coordinator_failure_timeout() ->
     app_helper:get_env(riak_kv, put_coordinator_failure_timeout, 3000).
 
 make_ack_options(Options) ->
-    case riak_core_capability:get({riak_kv, put_fsm_ack_execute}, disabled) of
-        disabled ->
+    case (riak_core_capability:get(
+            {riak_kv, put_fsm_ack_execute}, disabled) == disabled
+          orelse
+          app_helper:get_env(
+            riak_kv, retry_put_coordinator_failure, on) == off) of
+        true ->
             {false, Options};
-        enabled ->
+        false ->
             case proplists:get_value(retry_put_coordinator_failure, Options, true) of
                 true ->
                     {true, [{ack_execute, self()}|Options]};
@@ -495,11 +499,11 @@ waiting_local_vnode(request_timeout, StateData) ->
 waiting_local_vnode(Result, StateData = #state{putcore = PutCore}) ->
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
     case Result of
-        {fail, Idx, ReqIdSubvertedToReason} ->
+        {fail, Idx, Reason} ->
             ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [-1],
                     [integer_to_list(Idx)]),
             %% Local vnode failure is enough to sink whole operation
-            process_reply({error, ReqIdSubvertedToReason}, StateData#state{putcore = UpdPutCore1});
+            process_reply({error, Reason}, StateData#state{putcore = UpdPutCore1});
         {w, Idx, _ReqId} ->
             ?DTRACE(?C_PUT_FSM_WAITING_LOCAL_VNODE, [1],
                     [integer_to_list(Idx)]),
@@ -722,7 +726,7 @@ handle_options([{returnbody, false}|T], State = #state{postcommit = Postcommit})
                                           dw=erlang:max(1,State#state.dw),
                                           returnbody=false})
     end;
-handle_options([{counter_op, _Amt}=COP|T], State) ->
+handle_options([{crdt_op, _Op}=COP|T], State) ->
     VNodeOpts = [COP | State#state.vnode_options],
     handle_options(T, State#state{vnode_options=VNodeOpts});
 handle_options([{K, _V} = Opt|T], State = #state{vnode_options = VnodeOpts})

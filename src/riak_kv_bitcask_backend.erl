@@ -56,11 +56,18 @@
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold,size]).
 
+%% must not be 131, otherwise will match t2b in error
+%% yes, I know that this is horrible.
+-define(VERSION_1, 1).
+-define(VERSION_BYTE, ?VERSION_1).
+-define(CURRENT_KEY_TRANS, fun key_transform_to_1/1).
+
 -record(state, {ref :: reference(),
                 data_dir :: string(),
                 opts :: [{atom(), term()}],
                 partition :: integer(),
-                root :: string()}).
+                root :: string(),
+                key_vsn :: integer()}).
 
 -type state() :: #state{}.
 -type config() :: [{atom(), term()}].
@@ -85,10 +92,60 @@ capabilities(_) ->
 capabilities(_, _) ->
     {ok, ?CAPABILITIES}.
 
+%% @doc Transformation functions for the keys coming off the disk.
+key_transform_to_1(<<?VERSION_1:7, _:1, _Rest/binary>> = Key) ->
+    Key;
+key_transform_to_1(<<131:8,_Rest/bits>> = Key0) ->
+    {Bucket, Key} = binary_to_term(Key0),
+    make_bk(?VERSION_BYTE, Bucket, Key).
+
+key_transform_to_0(<<?VERSION_1:7,_Rest/bits>> = Key0) ->
+    term_to_binary(bk_to_tuple(Key0));
+key_transform_to_0(<<131:8,_Rest/binary>> = Key) ->
+    Key.
+
+bk_to_tuple(<<?VERSION_1:7, HasType:1, Sz:16/integer,
+             TypeOrBucket:Sz/bytes, Rest/binary>>) ->
+    case HasType of
+        0 ->
+            %% no type, first field is bucket
+            {TypeOrBucket, Rest};
+        1 ->
+            %% has a tyoe, extract bucket as well
+            <<BucketSz:16/integer, Bucket:BucketSz/bytes, Key/binary>> = Rest,
+            {{TypeOrBucket, Bucket}, Key}
+    end;
+bk_to_tuple(<<131:8,_Rest/binary>> = BK) ->
+    binary_to_term(BK).
+
+make_bk(0, Bucket, Key) ->
+    term_to_binary({Bucket, Key});
+make_bk(1, {Type, Bucket}, Key) ->
+    TypeSz = size(Type),
+    BucketSz = size(Bucket),
+    <<?VERSION_BYTE:7, 1:1, TypeSz:16/integer, Type/binary,
+      BucketSz:16/integer, Bucket/binary, Key/binary>>;
+make_bk(1, Bucket, Key) ->
+    BucketSz = size(Bucket),
+    <<?VERSION_BYTE:7, 0:1, BucketSz:16/integer,
+     Bucket/binary, Key/binary>>.
+
 %% @doc Start the bitcask backend
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
-start(Partition, Config) ->
-    %% Get the data root directory
+start(Partition, Config0) ->
+    {Config, KeyVsn} = 
+        case app_helper:get_prop_or_env(small_keys, Config0, bitcask) of
+            false -> 
+                C0 = proplists:delete(small_keys, Config0),
+                C1 = C0 ++ [{key_transform, fun key_transform_to_0/1}],
+                {C1, 0};
+            _ ->
+                C0 = proplists:delete(small_keys, Config0),
+                C1 = C0 ++ [{key_transform, ?CURRENT_KEY_TRANS}],
+                {C1, ?VERSION_BYTE}
+        end,
+        
+    %% Get the data root directory  
     case app_helper:get_prop_or_env(data_root, Config, bitcask) of
         undefined ->
             lager:error("Failed to create bitcask dir: data_root is not set"),
@@ -99,7 +156,7 @@ start(Partition, Config) ->
             case get_data_dir(DataRoot, PartitionStr) of
                 {ok, DataDir} ->
                     BitcaskOpts = set_mode(read_write, Config),
-                    case bitcask:open(filename:join(DataRoot, DataDir), BitcaskOpts) of
+                    case bitcask:open(filename:join(DataRoot, DataDir), BitcaskOpts) of 
                         Ref when is_reference(Ref) ->
                             check_fcntl(),
                             schedule_merge(Ref),
@@ -108,7 +165,8 @@ start(Partition, Config) ->
                                         data_dir=DataDir,
                                         root=DataRoot,
                                         opts=BitcaskOpts,
-                                        partition=Partition}};
+                                        partition=Partition,
+                                        key_vsn=KeyVsn}};
                         {error, Reason1} ->
                             lager:error("Failed to start bitcask backend: ~p\n",
                                         [Reason1]),
@@ -136,8 +194,8 @@ stop(#state{ref=Ref}) ->
                  {ok, any(), state()} |
                  {error, not_found, state()} |
                  {error, term(), state()}.
-get(Bucket, Key, #state{ref=Ref}=State) ->
-    BitcaskKey = term_to_binary({Bucket, Key}),
+get(Bucket, Key, #state{ref=Ref, key_vsn=KVers}=State) ->
+    BitcaskKey = make_bk(KVers, Bucket, Key),
     case bitcask:get(Ref, BitcaskKey) of
         {ok, Value} ->
             {ok, Value, State};
@@ -161,8 +219,9 @@ get(Bucket, Key, #state{ref=Ref}=State) ->
 -spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
-put(Bucket, PrimaryKey, _IndexSpecs, Val, #state{ref=Ref}=State) ->
-    BitcaskKey = term_to_binary({Bucket, PrimaryKey}),
+put(Bucket, PrimaryKey, _IndexSpecs, Val, 
+    #state{ref=Ref, key_vsn=KeyVsn}=State) ->
+    BitcaskKey = make_bk(KeyVsn, Bucket, PrimaryKey),
     case bitcask:put(Ref, BitcaskKey, Val) of
         ok ->
             {ok, State};
@@ -177,8 +236,9 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val, #state{ref=Ref}=State) ->
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
                     {ok, state()} |
                     {error, term(), state()}.
-delete(Bucket, Key, _IndexSpecs, #state{ref=Ref}=State) ->
-    BitcaskKey = term_to_binary({Bucket, Key}),
+delete(Bucket, Key, _IndexSpecs, 
+       #state{ref=Ref, key_vsn=KeyVsn}=State) ->
+    BitcaskKey = make_bk(KeyVsn, Bucket, Key),
     case bitcask:delete(Ref, BitcaskKey) of
         ok ->
             {ok, State};
@@ -199,10 +259,10 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{opts=BitcaskOpts,
     case lists:member(async_fold, Opts) of
         true ->
             ReadOpts = set_mode(read_only, BitcaskOpts),
+            
             BucketFolder =
                 fun() ->
-                        case bitcask:open(filename:join(DataRoot, DataFile),
-                                          ReadOpts) of
+                        case bitcask:open(filename:join(DataRoot, DataFile), ReadOpts) of
                             Ref1 when is_reference(Ref1) ->
                                 try
                                     {Acc1, _} =
@@ -245,8 +305,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{opts=BitcaskOpts,
             ReadOpts = set_mode(read_only, BitcaskOpts),
             KeyFolder =
                 fun() ->
-                        case bitcask:open(filename:join(DataRoot, DataFile),
-                                          ReadOpts) of
+                        case bitcask:open(filename:join(DataRoot, DataFile), ReadOpts) of
                             Ref1 when is_reference(Ref1) ->
                                 try
                                     bitcask:fold_keys(Ref1, FoldFun, Acc)
@@ -284,8 +343,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{opts=BitcaskOpts,
             ReadOpts = set_mode(read_only, BitcaskOpts),
             ObjectFolder =
                 fun() ->
-                        case bitcask:open(filename:join(DataRoot, DataFile),
-                                          ReadOpts) of
+                        case bitcask:open(filename:join(DataRoot, DataFile), ReadOpts) of
                             Ref1 when is_reference(Ref1) ->
                                 try
                                     bitcask:fold(Ref1, FoldFun, Acc)
@@ -437,7 +495,7 @@ check_fcntl() ->
 %% Return a function to fold over the buckets on this backend
 fold_buckets_fun(FoldBucketsFun) ->
     fun(#bitcask_entry{key=BK}, {Acc, BucketSet}) ->
-            {Bucket, _} = binary_to_term(BK),
+            {Bucket, _} = bk_to_tuple(BK),
             case sets:is_element(Bucket, BucketSet) of
                 true ->
                     {Acc, BucketSet};
@@ -451,12 +509,12 @@ fold_buckets_fun(FoldBucketsFun) ->
 %% Return a function to fold over keys on this backend
 fold_keys_fun(FoldKeysFun, undefined) ->
     fun(#bitcask_entry{key=BK}, Acc) ->
-            {Bucket, Key} = binary_to_term(BK),
+            {Bucket, Key} = bk_to_tuple(BK),
             FoldKeysFun(Bucket, Key, Acc)
     end;
 fold_keys_fun(FoldKeysFun, Bucket) ->
     fun(#bitcask_entry{key=BK}, Acc) ->
-            {B, Key} = binary_to_term(BK),
+            {B, Key} = bk_to_tuple(BK),
             case B =:= Bucket of
                 true ->
                     FoldKeysFun(B, Key, Acc);
@@ -469,12 +527,12 @@ fold_keys_fun(FoldKeysFun, Bucket) ->
 %% Return a function to fold over keys on this backend
 fold_objects_fun(FoldObjectsFun, undefined) ->
     fun(BK, Value, Acc) ->
-            {Bucket, Key} = binary_to_term(BK),
+            {Bucket, Key} = bk_to_tuple(BK),
             FoldObjectsFun(Bucket, Key, Value, Acc)
     end;
 fold_objects_fun(FoldObjectsFun, Bucket) ->
     fun(BK, Value, Acc) ->
-            {B, Key} = binary_to_term(BK),
+            {B, Key} = bk_to_tuple(BK),
             case B =:= Bucket of
                 true ->
                     FoldObjectsFun(B, Key, Value, Acc);
@@ -763,6 +821,49 @@ get_data_dir_test() ->
      || Dir <- TSPartitionDirs ++ OtherPartitionDirs],
     %% Check the results
     ?assertEqual({ok, "21"}, get_data_dir(Path, "21")).
+
+key_version_test() ->
+    FoldKeysFun =
+        fun(Bucket, Key, Acc) ->
+                [{Bucket, Key} | Acc]
+        end,
+
+    ?assertCmd("rm -rf test/bitcask-backend"),
+    application:set_env(bitcask, data_root, "test/bitcask-backend"),
+    application:set_env(bitcask, small_keys, true),
+    {ok, S} = ?MODULE:start(42, []),
+    ?MODULE:put(<<"b1">>, <<"k1">>, [], <<"v1">>, S),
+    ?MODULE:put(<<"b2">>, <<"k1">>, [], <<"v2">>, S),
+    ?MODULE:put(<<"b3">>, <<"k1">>, [], <<"v3">>, S),
+
+    ?assertMatch({ok, <<"v2">>, _}, ?MODULE:get(<<"b2">>, <<"k1">>, S)),
+
+    ?MODULE:stop(S),
+    application:set_env(bitcask, small_keys, false),
+    {ok, S1} = ?MODULE:start(42, []),
+    %%{ok, L0} = ?MODULE:fold_keys(FoldKeysFun, [], [], S1),
+    %%io:format("~p~n", [L0]),
+
+    ?assertMatch({ok, <<"v2">>, _}, ?MODULE:get(<<"b2">>, <<"k1">>, S1)),
+
+    ?MODULE:put(<<"b4">>, <<"k1">>, [], <<"v4">>, S1),
+    ?MODULE:put(<<"b5">>, <<"k1">>, [], <<"v5">>, S1),
+
+    ?MODULE:stop(S1),
+    application:set_env(bitcask, small_keys, true),
+    {ok, S2} = ?MODULE:start(42, []),
+
+    {ok, L0} = ?MODULE:fold_keys(FoldKeysFun, [], [], S2),
+    L = lists:sort(L0),
+    ?_assertEqual([
+                   {<<"b1">>, <<"k1">>},
+                   {<<"b2">>, <<"k1">>},
+                   {<<"b3">>, <<"k1">>},                   
+                   {<<"b4">>, <<"k1">>},
+                   {<<"b5">>, <<"k1">>}
+                  ],
+                  L).
+    
 
 existing_partition_dirs_test() ->
     %% Cleanup

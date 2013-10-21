@@ -23,7 +23,7 @@
 
 -module(riak_kv_bucket).
 
--export([validate/1]).
+-export([validate/4]).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -32,8 +32,11 @@
 -type props() :: [prop()].
 -type errors() :: [error()].
 
--spec validate(props()) -> {props(), errors()}.
-validate(BucketProps) when is_list(BucketProps) ->
+-spec validate(create | update,
+               {riak_core_bucket_type:bucket_type(), undefined | binary()} | binary(),
+               undefined | props(),
+               props()) -> {props(), errors()}.
+validate(_CreateOrUpdate, _Bucket, _Existing, BucketProps) when is_list(BucketProps) ->
     lager:debug("Was called ~p~n", [BucketProps]),
     validate(BucketProps, [], []).
 

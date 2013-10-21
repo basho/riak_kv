@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_link_walker: HTTP access to Riak link traversal
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -141,6 +141,7 @@
 -record(ctx, {api_version, %% integer() - Determine which version of the API to use.
               prefix,      %% string() - prefix for resource urls
               riak,        %% local | {node(), atom()} - params for riak client
+              bucket_type, %% string() - bucket type (from uri)
               bucket,      %% binary() - Bucket name (from uri)
               key,         %% binary() - Key (from uri),
               linkquery,
@@ -200,7 +201,8 @@ init(Props) ->
     {ok, #ctx{api_version=proplists:get_value(api_version, Props),
               prefix=proplists:get_value(prefix, Props),
               riak=proplists:get_value(riak, Props),
-              cache_secs=proplists:get_value(cache_secs, Props, 600)
+              cache_secs=proplists:get_value(cache_secs, Props, 600),
+              bucket_type=proplists:get_value(bucket_type, Props)
              }}.
 
 %% @spec malformed_request(reqdata(), context()) ->
@@ -229,7 +231,8 @@ malformed_request(RD, Ctx) ->
 %%      can be established.  This function also takes this
 %%      opportunity to extract the 'bucket' and 'key' path
 %%      bindings from the dispatch.
-service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
+service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
+    Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             CtxBucket =
@@ -252,7 +255,16 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
     end.
 
 forbidden(RD, Ctx) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
+    case Ctx#ctx.bucket_type of
+        <<"default">> ->
+            {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
+        _Other ->
+            RD1 = wrq:set_resp_header(?HEAD_CTYPE, "text/plain"),
+            {true,
+             wrq:set_resp_body("Link-walking is not allowed on keys stored in "
+                               "bucket-types.", RD1),
+             Ctx}
+    end.
 
 %% @spec allowed_methods(reqdata(), context()) ->
 %%          {[method()], reqdata(), context()}

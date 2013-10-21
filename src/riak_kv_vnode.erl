@@ -72,7 +72,7 @@
 
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_map_phase.hrl").
--include_lib("riak_core/include/riak_core_pb.hrl").
+-include_lib("riak_core_pb.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -124,7 +124,7 @@
                   starttime :: non_neg_integer(),
                   prunetime :: undefined| non_neg_integer(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
-                  counter_op = undefined :: undefined | integer() %% if set this is a counter operation
+                  crdt_op = undefined :: undefined | term() %% if set this is a crdt operation
                  }).
 
 -spec maybe_create_hashtrees(state()) -> state().
@@ -378,20 +378,20 @@ init([Index]) ->
                     {ok, State}
             end;
         {error, Reason} ->
-            lager:error("Failed to start ~p Reason: ~p",
-                        [Mod, Reason]),
+            lager:error("Failed to start ~p backend for index ~p error: ~p",
+                        [Mod, Index, Reason]),
             riak:stop("backend module failed to start."),
             {error, Reason};
         {'EXIT', Reason1} ->
-            lager:error("Failed to start ~p Reason: ~p",
-                        [Mod, Reason1]),
+            lager:error("Failed to start ~p backend for index ~p crash: ~p",
+                        [Mod, Index, Reason1]),
             riak:stop("backend module failed to start."),
             {error, Reason1}
     end.
 
 
 handle_overload_command(?KV_PUT_REQ{}, Sender, Idx) ->
-    riak_core_vnode:reply(Sender, {fail, Idx, overload}); % subvert ReqId
+    riak_core_vnode:reply(Sender, {fail, Idx, overload});
 handle_overload_command(?KV_GET_REQ{req_id=ReqID}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqID});
 handle_overload_command(_, _, _) ->
@@ -440,7 +440,7 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
                         UniqueResults = lists:usort(Results),
                         Caller ! {ReqId, {kl, Idx, UniqueResults}}
                 end,
-            FoldFun = fold_fun(buckets, BufferMod, Filter),
+            FoldFun = fold_fun(buckets, BufferMod, Filter, undefined),
             ModFun = fold_buckets;
         _ ->
             {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
@@ -455,7 +455,8 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
                 fun(Results) ->
                         Caller ! {ReqId, {kl, Idx, Results}}
                 end,
-            FoldFun = fold_fun(keys, BufferMod, Filter),
+            Extras = fold_extras(keys, Idx, Bucket),
+            FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
             ModFun = fold_keys
     end,
     Buffer = BufferMod:new(BufferSize, BufferFun),
@@ -470,14 +471,14 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
         _ ->
             {noreply, State}
     end;
-handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender, State) ->
-    do_delete(BKey, ReqId, State);
+handle_command(?KV_DELETE_REQ{bkey=BKey}, _Sender, State) ->
+    do_delete(BKey, State);
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
     {reply, do_get_vclocks(BKeys, State), State};
 handle_command(#riak_core_fold_req_v1{} = ReqV1,
                Sender, State) ->
     %% Use make_fold_req() to upgrade to the most recent ?FOLD_REQ
-    handle_command(riak_core_util:make_fold_req(ReqV1), Sender, State);
+    handle_command(riak_core_util:make_newest_fold_req(ReqV1), Sender, State);
 handle_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0,
                          forwardable=_Forwardable, opts=Opts}, Sender, State) ->
     %% The riak_core layer takes care of forwarding/not forwarding, so
@@ -644,8 +645,9 @@ handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
     %% Construct the filter function
     Filter = riak_kv_coverage_filter:build_filter(all, ItemFilter, undefined),
     BufferMod = riak_kv_fold_buffer,
+
     Buffer = BufferMod:new(BufferSize, result_fun(Sender)),
-    FoldFun = fold_fun(buckets, BufferMod, Filter),
+    FoldFun = fold_fun(buckets, BufferMod, Filter, undefined),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(ModState),
     AsyncBackend = lists:member(async_fold, Capabilities),
@@ -742,7 +744,8 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
     BufferMod = riak_kv_fold_buffer,
     Buffer = BufferMod:new(BufferSize, ResultFun),
-    FoldFun = fold_fun(keys, BufferMod, Filter),
+    Extras = fold_extras(keys, Index, Bucket),
+    FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     AsyncBackend = lists:member(async_fold, Capabilities),
@@ -925,7 +928,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
             PruneTime = StartTime
     end,
     Coord = proplists:get_value(coord, Options, false),
-    CounterOp = proplists:get_value(counter_op, Options, undefined),
+    CRDTOp = proplists:get_value(crdt_op, Options, undefined),
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
                        coord=Coord,
                        lww=proplists:get_value(last_write_wins, BProps, false),
@@ -935,7 +938,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        bprops=BProps,
                        starttime=StartTime,
                        prunetime=PruneTime,
-                       counter_op = CounterOp},
+                       crdt_op = CRDTOp},
     {PrepPutRes, UpdPutArgs} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
@@ -997,7 +1000,8 @@ prepare_put(State=#state{vnodeid=VId,
     end.
 prepare_put(#state{vnodeid=VId,
                    mod=Mod,
-                   modstate=ModState},
+                   modstate=ModState,
+                   idx=Idx},
             PutArgs=#putargs{bkey={Bucket, Key},
                              robj=RObj,
                              bprops=BProps,
@@ -1005,7 +1009,7 @@ prepare_put(#state{vnodeid=VId,
                              lww=LWW,
                              starttime=StartTime,
                              prunetime=PruneTime,
-                             counter_op = CounterOp},
+                             crdt_op = CRDTOp},
             IndexBackend) ->
     GetReply =
         case do_get_object(Bucket, Key, Mod, ModState) of
@@ -1022,8 +1026,14 @@ prepare_put(#state{vnodeid=VId,
                 false ->
                     IndexSpecs = []
             end,
-            ObjToStore = prepare_new_put(Coord, RObj, VId, StartTime, CounterOp),
-            {{true, ObjToStore}, PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}};
+            case prepare_new_put(Coord, RObj, VId, StartTime, CRDTOp) of
+                {error, E} ->
+                    {{fail, Idx, E}, PutArgs};
+                ObjToStore ->
+                    {{true, ObjToStore},
+                     PutArgs#putargs{index_specs=IndexSpecs,
+                                     is_index=IndexBackend}}
+            end;
         {ok, OldObj} ->
             case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
                 {oldobj, OldObj1} ->
@@ -1047,34 +1057,40 @@ prepare_put(#state{vnodeid=VId,
                                                                              PruneTime,
                                                                              BProps))
                     end,
-                    ObjToStore2 = handle_counter(Coord, CounterOp, VId, ObjToStore),
-                    {{true, ObjToStore2},
-                     PutArgs#putargs{index_specs=IndexSpecs, is_index=IndexBackend}}
+                    case handle_crdt(Coord, CRDTOp, VId, ObjToStore) of
+                        {error, E} ->
+                            {{fail, Idx, E}, PutArgs};
+                        ObjToStore2 ->
+                            {{true, ObjToStore2},
+                             PutArgs#putargs{index_specs=IndexSpecs,
+                                             is_index=IndexBackend}}
+                    end
             end
     end.
 
 %% @Doc in the case that this a co-ordinating put, prepare the object.
-prepare_new_put(true, RObj, VId, StartTime, CounterOp) when is_integer(CounterOp) ->
-    VClockUp = riak_object:increment_vclock(RObj, VId, StartTime),
-    %% coordinating a _NEW_ counter operation means
-    %% creating + incrementing the counter.
-    %% Make a new counter, stuff it in the riak_object
-    riak_kv_counter:update(VClockUp, VId, CounterOp);
-prepare_new_put(true, RObj, VId, StartTime, _CounterOp) ->
+prepare_new_put(true, RObj, VId, StartTime, undefined) ->
     riak_object:increment_vclock(RObj, VId, StartTime);
+prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
+    VClockUp = riak_object:increment_vclock(RObj, VId, StartTime),
+    %% coordinating a _NEW_ crdt operation means
+    %% creating + updating the crdt.
+    %% Make a new crdt, stuff it in the riak_object
+    riak_kv_crdt:update(VClockUp, VId, CRDTOp);
 prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
     RObj.
 
-handle_counter(true, CounterOp, VId, RObj) when is_integer(CounterOp) ->
-    riak_kv_counter:update(RObj, VId, CounterOp);
-handle_counter(false, CounterOp, _Vid, RObj) when is_integer(CounterOp) ->
-    %% non co-ord put, merge the values if there are siblings
-    %% 'cos that is the point of CRDTs / counters: no siblings
-    riak_kv_counter:merge(RObj);
-handle_counter(_Coord, _CounterOp, _VId, RObj) ->
-    %% i.e. not a counter op
-    RObj.
+handle_crdt(_, undefined, _VId, RObj) ->
+    RObj;
+handle_crdt(true, CRDTOp, VId, RObj) ->
+    riak_kv_crdt:update(RObj, VId, CRDTOp);
+handle_crdt(false, _CRDTOp, _Vid, RObj) ->
+    %% non co-ord put that was a CRDT operation? Merge the values if
+    %% there are siblings 'cos that is the point of CRDTs: no siblings
+    riak_kv_crdt:merge(RObj).
 
+perform_put({fail, _, _}=Reply, State, _PutArgs) ->
+    {Reply, State};
 perform_put({false, Obj},
             #state{idx=Idx}=State,
             #putargs{returnbody=true,
@@ -1091,20 +1107,22 @@ perform_put({true, Obj},
                    modstate=ModState}=State,
             #putargs{returnbody=RB,
                      bkey={Bucket, Key},
+                     bprops=BProps,
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
-    case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) of
+    {Obj2, Fake} = riak_kv_mutator:mutate_put(Obj, BProps),
+    case encode_and_put(Obj2, Mod, Bucket, Key, IndexSpecs, ModState) of
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             ?INDEX(Obj, put, Idx),
             case RB of
                 true ->
-                    Reply = {dw, Idx, Obj, ReqID};
+                    Reply = {dw, Idx, Fake, ReqID};
                 false ->
                     Reply = {dw, Idx, ReqID}
             end;
-        {{error, _Reason, UpdModState}, _EncodedVal} ->
-            Reply = {fail, Idx, ReqID}
+        {{error, Reason, UpdModState}, _EncodedVal} ->
+            Reply = {fail, Idx, Reason}
     end,
     {Reply, State#state{modstate=UpdModState}}.
 
@@ -1122,8 +1140,8 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
                                reqid=undefined,
                                index_specs=[]},
             case perform_put({true, RObj}, State, PutArgs) of
-                {{fail, _, _}, UpdState}  ->
-                    Reply = {error, backend_error};
+                {{fail, _, Reason}, UpdState}  ->
+                    Reply = {error, Reason};
                 {_, UpdState} ->
                     Reply = ok
             end
@@ -1198,7 +1216,12 @@ do_get(_Sender, BKey, ReqID,
 do_get_term({Bucket, Key}, Mod, ModState) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
         {ok, Obj, _UpdModState} ->
-            {ok, Obj};
+            case riak_kv_mutator:mutate_get(Obj) of
+                notfound ->
+                    {error, notfound};
+                Obj2 ->
+                    {ok, Obj2}
+            end;
         %% @TODO Eventually it would be good to
         %% make the use of not_found or notfound
         %% consistent throughout the code.
@@ -1221,10 +1244,20 @@ do_get_binary(Bucket, Key, Mod, ModState) ->
 do_get_object(Bucket, Key, Mod, ModState) ->
     case uses_r_object(Mod, ModState, Bucket) of
         true ->
+            %% Non binary returns do not trigger size warnings
             Mod:get_object(Bucket, Key, false, ModState);
         false ->
             case do_get_binary(Bucket, Key, Mod, ModState) of
                 {ok, ObjBin, _UpdModState} ->
+                    BinSize = size(ObjBin),
+                    WarnSize = app_helper:get_env(riak_kv, warn_object_size),
+                    case BinSize > WarnSize of
+                        true ->
+                            lager:warning("Read large object ~p/~p (~p bytes)",
+                                          [Bucket, Key, BinSize]);
+                        false ->
+                            ok
+                    end,
                     try
                         case riak_object:from_binary(Bucket, Key, ObjBin) of
                             {error, Reason} ->
@@ -1255,11 +1288,11 @@ list(FoldFun, FinishFun, Mod, ModFun, ModState, Opts, Buffer) ->
     end.
 
 %% @private
-fold_fun(buckets, BufferMod, none) ->
+fold_fun(buckets, BufferMod, none, _Extra) ->
     fun(Bucket, Buffer) ->
             BufferMod:add(Bucket, Buffer)
     end;
-fold_fun(buckets, BufferMod, Filter) ->
+fold_fun(buckets, BufferMod, Filter, _Extra) ->
     fun(Bucket, Buffer) ->
             case Filter(Bucket) of
                 true ->
@@ -1268,16 +1301,41 @@ fold_fun(buckets, BufferMod, Filter) ->
                     Buffer
             end
     end;
-fold_fun(keys, BufferMod, none) ->
+fold_fun(keys, BufferMod, none, undefined) ->
     fun(_, Key, Buffer) ->
             BufferMod:add(Key, Buffer)
     end;
-fold_fun(keys, BufferMod, Filter) ->
+fold_fun(keys, BufferMod, none, {Bucket, Index, N, NumPartitions}) ->
+    fun(_, Key, Buffer) ->
+            Hash = riak_core_util:chash_key({Bucket, Key}),
+            case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
+                Index ->
+                    BufferMod:add(Key, Buffer);
+                _ ->
+                    Buffer
+            end
+    end;
+fold_fun(keys, BufferMod, Filter, undefined) ->
     fun(_, Key, Buffer) ->
             case Filter(Key) of
                 true ->
                     BufferMod:add(Key, Buffer);
                 false ->
+                    Buffer
+            end
+    end;
+fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
+    fun(_, Key, Buffer) ->
+            Hash = riak_core_util:chash_key({Bucket, Key}),
+            case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
+                Index ->
+                    case Filter(Key) of
+                        true ->
+                            BufferMod:add(Key, Buffer);
+                        false ->
+                            Buffer
+                    end;
+                _ ->
                     Buffer
             end
     end.
@@ -1293,6 +1351,23 @@ result_fun(Bucket, Sender) ->
     fun(Items) ->
             riak_core_vnode:reply(Sender, {Bucket, Items})
     end.
+
+fold_extras(keys, Index, Bucket) ->
+    case app_helper:get_env(riak_kv, fold_preflist_filter, false) of
+        true ->
+            {ok, R} = riak_core_ring_manager:get_my_ring(),
+            NValMap = nval_map(R),
+            N = case lists:keyfind(Bucket, 1, NValMap) of
+                    false -> riak_core_bucket:default_object_nval();
+                    {Bucket, NVal} -> NVal
+                end,
+            NumPartitions = riak_core_ring:num_partitions(R),
+            {Bucket, Index, N, NumPartitions};
+        false ->
+            undefined
+    end;
+fold_extras(_, _, _) ->
+    undefined.
 
 %% wait for acknowledgement that results were received before
 %% continuing, as a way of providing backpressure for processes that
@@ -1335,7 +1410,7 @@ finish_fold(BufferMod, Buffer, Sender) ->
     riak_core_vnode:reply(Sender, done).
 
 %% @private
-do_delete(BKey, ReqId, State) ->
+do_delete(BKey, State) ->
     Mod = State#state.mod,
     ModState = State#state.modstate,
     Idx = State#state.idx,
@@ -1350,25 +1425,25 @@ do_delete(BKey, ReqId, State) ->
                     case DeleteMode of
                         keep ->
                             %% keep tombstones indefinitely
-                            {reply, {fail, Idx, ReqId}, State};
+                            {reply, {fail, Idx, del_mode_keep}, State};
                         immediate ->
                             UpdState = do_backend_delete(BKey, RObj, State),
-                            {reply, {del, Idx, ReqId}, UpdState};
+                            {reply, {del, Idx, del_mode_immediate}, UpdState};
                         Delay when is_integer(Delay) ->
                             erlang:send_after(Delay, self(),
                                               {final_delete, BKey,
                                                delete_hash(RObj)}),
                             %% Nothing checks these messages - will just reply
                             %% del for now until we can refactor.
-                            {reply, {del, Idx, ReqId}, State}
+                            {reply, {del, Idx, del_mode_delayed}, State}
                     end;
                 _ ->
                     %% not a tombstone or not all siblings are tombstones
-                    {reply, {fail, Idx, ReqId}, State}
+                    {reply, {fail, Idx, not_tombstone}, State}
             end;
         _ ->
             %% does not exist in the backend
-            {reply, {fail, Idx, ReqId}, State}
+            {reply, {fail, Idx, not_found}, State}
     end.
 
 %% @private
@@ -1491,7 +1566,7 @@ get_hashtree_token() ->
 -spec max_hashtree_tokens() -> pos_integer().
 max_hashtree_tokens() ->
     app_helper:get_env(riak_kv,
-                       anti_entropy_max_async, 
+                       anti_entropy_max_async,
                        ?DEFAULT_HASHTREE_TOKENS).
 
 %% @private
@@ -1641,7 +1716,7 @@ handoff_data_encoding_method() ->
 %% its encoding method, but if that fails we use the legacy zlib and protocol buffer decoding:
 decode_binary_object(BinaryObject) ->
     try binary_to_term(BinaryObject) of
-        { Method, BinObj } -> 
+        { Method, BinObj } ->
                                 case Method of
                                     encode_raw  -> {B, K, Val} = BinObj,
                                                    BKey = {B, K},
@@ -1657,7 +1732,7 @@ decode_binary_object(BinaryObject) ->
     %% An exception means we have a legacy handoff object:
     catch
         _:_                 -> do_zlib_decode(BinaryObject)
-    end.  
+    end.
 
 do_zlib_decode(BinaryObject) ->
     DecodedObject = zlib:unzip(BinaryObject),
@@ -1688,13 +1763,55 @@ return_encoded_binary_object(Method, EncodedObject) ->
            {{error, Reason::term(), UpdModState::term()}, EncodedObj::binary()}.
 
 encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
+    NumSiblings = riak_object:value_count(Obj),
+    case NumSiblings > app_helper:get_env(riak_kv, max_siblings) of
+        true ->
+            lager:error("Too many siblings for object ~p/~p (~p)",
+                        [Bucket, Key, NumSiblings]),
+            {{error, {too_many_siblings, NumSiblings}, ModState},
+             undefined};
+        false ->
+            case NumSiblings > app_helper:get_env(riak_kv, warn_siblings) of
+                true ->
+                    lager:warning("Too many siblings for object ~p/~p (~p)",
+                                  [Bucket, Key, NumSiblings]);
+                false ->
+                    ok
+            end,
+            encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState)
+    end.
+
+encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
     case uses_r_object(Mod, ModState, Bucket) of
         true ->
+            %% Non binary returning backends will have to handle size warnings
+            %% and errors themselves.
             Mod:put_object(Bucket, Key, IndexSpecs, Obj, ModState);
         false ->
             ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
             EncodedVal = riak_object:to_binary(ObjFmt, Obj),
-            {Mod:put(Bucket, Key, IndexSpecs, EncodedVal, ModState), EncodedVal}
+            BinSize = size(EncodedVal),
+            %% Report or fail on large objects
+            case BinSize > app_helper:get_env(riak_kv, max_object_size) of
+                true ->
+                    lager:error("Object too large to write: ~p/~p ~p bytes",
+                                [Bucket, Key, BinSize]),
+                    {{error, {too_large, BinSize}, ModState},
+                     EncodedVal};
+                false ->
+                    WarnSize = app_helper:get_env(riak_kv, warn_object_size),
+                    case BinSize > WarnSize of
+                       true ->
+                            lager:warning("Writing very large object " ++
+                                          "(~p bytes) to ~p/~p",
+                                          [BinSize, Bucket, Key]);
+                        false ->
+                            ok
+                    end,
+                    PutRet = Mod:put(Bucket, Key, IndexSpecs, EncodedVal,
+                                     ModState),
+                    {PutRet, EncodedVal}
+            end
     end.
 
 uses_r_object(Mod, ModState, Bucket) ->
@@ -1850,11 +1967,13 @@ list_buckets_test_() ->
              application:start(folsom),
              riak_core_stat_cache:start_link(),
              riak_kv_stat:register_stats(),
+             riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
              Env
      end,
      fun(Env) ->
              riak_core_ring_manager:cleanup_ets(test),
              riak_core_stat_cache:stop(),
+             riak_kv_test_util:stop_process(riak_core_metadata_manager),
              application:stop(folsom),
              application:stop(sasl),
              [application:unset_env(riak_kv, K) ||
@@ -1906,6 +2025,7 @@ list_buckets_test_i(BackendMod) ->
 filter_keys_test() ->
     riak_core_ring_manager:setup_ets(test),
     clean_test_dirs(),
+    riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
     {S, B, K} = backend_with_known_key(riak_kv_memory_backend),
     Caller1 = new_result_listener(keys),
     handle_coverage(?KV_LISTKEYS_REQ{bucket=B,
@@ -1926,6 +2046,7 @@ filter_keys_test() ->
     ?assertEqual({ok, []}, results_from_listener(Caller3)),
 
     riak_core_ring_manager:cleanup_ets(test),
+    riak_kv_test_util:stop_process(riak_core_metadata_manager),
     flush_msgs().
 
 %% include bitcask.hrl for HEADER_SIZE macro
@@ -1935,6 +2056,7 @@ filter_keys_test() ->
 %% preparation for a write prevents the write from going through.
 bitcask_badcrc_test() ->
     riak_core_ring_manager:setup_ets(test),
+    riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
     clean_test_dirs(),
     {S, B, K} = backend_with_known_key(riak_kv_bitcask_backend),
     DataDir = filename:join(bitcask_test_dir(), "0"),
@@ -1951,6 +2073,7 @@ bitcask_badcrc_test() ->
                                    {raw, 456, self()},
                                    S),
     riak_core_ring_manager:cleanup_ets(test),
+    riak_kv_test_util:stop_process(riak_core_metadata_manager),
     flush_msgs().
 
 

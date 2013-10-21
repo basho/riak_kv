@@ -224,7 +224,7 @@ stop(_State) ->
 -spec get(riak_object:bucket(), riak_object:key(), state()) ->
                  {ok, any(), state()}.
 get(_Bucket, _Key, #state{same_r_object_bin=RObjBin})
-  when same_r_object_bin /= undefined ->
+  when RObjBin /= undefined ->
     RObjBin;
 get(Bucket, Key, S) ->
     RObj = make_get_object(Bucket, Key, S),
@@ -420,7 +420,7 @@ get_binsize(_, Val) ->
     Val.
 
 make_get_object(_Bucket, _Key, #state{same_r_object=RObj})
-  when same_r_object /= undefined ->
+  when RObj /= undefined ->
     RObj;
 make_get_object(Bucket, Key, S) ->
     Bin = case get_binsize(Key) of

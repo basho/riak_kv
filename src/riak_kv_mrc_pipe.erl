@@ -620,11 +620,21 @@ send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey}, Timeout) ->
             send_inputs(Pipe, NewInput, Timeout)
     end;
 send_inputs(Pipe, {search, Bucket, Query}, Timeout) ->
-    NewInput = {modfun, riak_search, mapred_search, [Bucket, Query, []]},
-    send_inputs(Pipe, NewInput, Timeout);
+    case search_module() of
+        {ok, Mod} ->
+            NewInput = {modfun, Mod, mapred_search, [Bucket, Query, []]},
+            send_inputs(Pipe, NewInput, Timeout);
+        {error, _}=Error ->
+            Error
+    end;
 send_inputs(Pipe, {search, Bucket, Query, Filter}, Timeout) ->
-    NewInput = {modfun, riak_search, mapred_search, [Bucket, Query, Filter]},
-    send_inputs(Pipe, NewInput, Timeout);
+    case search_module() of
+        {ok, Mod} ->
+            NewInput = {modfun, Mod, mapred_search, [Bucket, Query, Filter]},
+            send_inputs(Pipe, NewInput, Timeout);
+        {error, _}=Error ->
+            Error
+    end;
 send_inputs(Pipe, {modfun, Mod, Fun, Arg} = Modfun, Timeout) ->
     try Mod:Fun(Pipe, Arg, Timeout) of
         {ok, Bucket, ReqId} ->
@@ -635,6 +645,34 @@ send_inputs(Pipe, {modfun, Mod, Fun, Arg} = Modfun, Timeout) ->
         X:Y ->
             {Modfun, X, Y, erlang:get_stacktrace()}
     end.
+
+%% decide whether yokozuna or riak_search should be used for
+%% {search, ...} inputs
+search_module() ->
+    case {enabled(yokozuna), enabled(riak_search)} of
+        {true, true} ->
+            case application:get_env(riak_kv, mapred_search) of
+                %% being explicit here to help find typo errors earlier
+                {ok, yokozuna} ->
+                    {ok, yokozuna};
+                {ok, riak_search} ->
+                    {ok, riak_search};
+                undefined ->
+                    {ok, riak_search};
+                Other ->
+                    {error, {unknown_mapred_provider, Other}}
+            end;
+        {true, _} ->
+            {ok, yokozuna};
+        {_, true} ->
+            {ok, riak_search};
+        _ ->
+            {error, "search not enabled"}
+    end.
+
+%% riak_search and yokozuna both use an `enabled' appenv setting
+enabled(App) ->
+    {ok, true} == application:get_env(App, enabled).
 
 %% @doc Helper function used to redirect the results of
 %% index/search/etc. queries into the MapReduce pipe.  The function

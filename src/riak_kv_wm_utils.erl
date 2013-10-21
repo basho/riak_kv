@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_utils: Common functions used by riak_kv_wm_* modules.
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -31,11 +31,17 @@
          multipart_encode_body/4,
          format_links/3,
          format_uri/4,
+         format_uri/5,
          encode_value/1,
          accept_value/2,
          any_to_list/1,
          any_to_bool/1,
-         is_forbidden/1
+         is_forbidden/1,
+         jsonify_bucket_prop/1,
+         erlify_bucket_prop/1,
+         ensure_bucket_type/3,
+         bucket_type_exists/1,
+         maybe_bucket_type/2
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -150,12 +156,12 @@ format_links([{{Bucket,Key}, Tag}|Rest], Prefix, APIVersion, Acc) ->
 format_links([{Bucket, Tag}|Rest], Prefix, APIVersion, Acc) ->
     Bucket1 = mochiweb_util:quote_plus(Bucket),
     Tag1 = mochiweb_util:quote_plus(Tag),
-    Val = 
+    Val =
         case APIVersion of
             1 ->
                 io_lib:format("</~s/~s>; rel=\"~s\"",
                               [Prefix, Bucket1, Tag1]);
-            2 -> 
+            Two when Two >= 2 ->
                 io_lib:format("</buckets/~s>; rel=\"~s\"",
                               [Bucket1, Tag1])
         end,
@@ -177,6 +183,17 @@ format_uri(Bucket, Key, Prefix, 1) ->
     io_lib:format("/~s/~s/~s", [Prefix, Bucket, Key]);
 format_uri(Bucket, Key, _Prefix, 2) ->
     io_lib:format("/buckets/~s/keys/~s", [Bucket, Key]).
+
+
+%% @doc Format the URI for a type/bucket/key correctly for the api version
+%% used. (APIVersion is the final parameter.)
+format_uri(_Type, Bucket, Key, Prefix, 1) ->
+    format_uri(Bucket, Key, Prefix, 1);
+format_uri(_Type, Bucket, Key, Prefix, 2) ->
+    format_uri(Bucket, Key, Prefix, 2);
+format_uri(Type, Bucket, Key, _Prefix, 3) ->
+    io_lib:format("/types/~s/buckets/~s/keys/~s", [Type, Bucket, Key]).
+
 
 %% @spec get_ctype(dict(), term()) -> string()
 %% @doc Work out the content type for this object - use the metadata if provided
@@ -225,7 +242,7 @@ any_to_bool(V) when is_boolean(V) ->
     V.
 
 is_forbidden(RD) ->
-    is_null_origin(RD) or 
+    is_null_origin(RD) or
     (app_helper:get_env(riak_kv,secure_referer_check,true) and not is_valid_referer(RD)).
 
 %% @doc Check if the Origin header is "null". This is useful to look for attempts
@@ -269,3 +286,135 @@ referer_tuple(RD) ->
                     {invalid, Url}
             end
     end.
+
+%% @spec jsonify_bucket_prop({Property::atom(), erlpropvalue()}) ->
+%%           {Property::binary(), jsonpropvalue()}
+%% @type erlpropvalue() = integer()|string()|boolean()|
+%%                        {modfun, atom(), atom()}|{atom(), atom()}
+%% @type jsonpropvalue() = integer()|string()|boolean()|{struct,[jsonmodfun()]}
+%% @type jsonmodfun() = {mod_binary(), binary()}|{fun_binary(), binary()}
+%% @doc Convert erlang bucket properties to JSON bucket properties.
+%%      Property names are converted from atoms to binaries.
+%%      Integer, string, and boolean property values are left as integer,
+%%      string, or boolean JSON values.
+%%      {modfun, Module, Function} or {Module, Function} values of the
+%%      linkfun and chash_keyfun properties are converted to JSON objects
+%%      of the form:
+%%        {"mod":ModuleNameAsString,
+%%         "fun":FunctionNameAsString}
+jsonify_bucket_prop({linkfun, {modfun, Module, Function}}) ->
+    {?JSON_LINKFUN, {struct, [{?JSON_MOD,
+                               atom_to_binary(Module, utf8)},
+                              {?JSON_FUN,
+                               atom_to_binary(Function, utf8)}]}};
+jsonify_bucket_prop({linkfun, {qfun, _}}) ->
+    {?JSON_LINKFUN, <<"qfun">>};
+jsonify_bucket_prop({linkfun, {jsfun, Name}}) ->
+    {?JSON_LINKFUN, {struct, [{?JSON_JSFUN, Name}]}};
+jsonify_bucket_prop({linkfun, {jsanon, {Bucket, Key}}}) ->
+    {?JSON_LINKFUN, {struct, [{?JSON_JSANON,
+                               {struct, [{?JSON_JSBUCKET, Bucket},
+                                         {?JSON_JSKEY, Key}]}}]}};
+jsonify_bucket_prop({linkfun, {jsanon, Source}}) ->
+    {?JSON_LINKFUN, {struct, [{?JSON_JSANON, Source}]}};
+jsonify_bucket_prop({chash_keyfun, {Module, Function}}) ->
+    {?JSON_CHASH, {struct, [{?JSON_MOD,
+                             atom_to_binary(Module, utf8)},
+                            {?JSON_FUN,
+                             atom_to_binary(Function, utf8)}]}};
+%% TODO Remove Legacy extractor prop in future version
+jsonify_bucket_prop({rs_extractfun, {modfun, M, F}}) ->
+    {?JSON_EXTRACT_LEGACY, {struct, [{?JSON_MOD,
+                                      atom_to_binary(M, utf8)},
+                                     {?JSON_FUN,
+                                      atom_to_binary(F, utf8)}]}};
+jsonify_bucket_prop({rs_extractfun, {{modfun, M, F}, Arg}}) ->
+    {?JSON_EXTRACT_LEGACY, {struct, [{?JSON_MOD,
+                                      atom_to_binary(M, utf8)},
+                                     {?JSON_FUN,
+                                      atom_to_binary(F, utf8)},
+                                     {?JSON_ARG, Arg}]}};
+jsonify_bucket_prop({search_extractor, {struct, _}=S}) ->
+    {?JSON_EXTRACT, S};
+jsonify_bucket_prop({search_extractor, {M, F}}) ->
+    {?JSON_EXTRACT, {struct, [{?JSON_MOD,
+                             atom_to_binary(M, utf8)},
+                              {?JSON_FUN,
+                               atom_to_binary(F, utf8)}]}};
+jsonify_bucket_prop({search_extractor, {M, F, Arg}}) ->
+    {?JSON_EXTRACT, {struct, [{?JSON_MOD,
+                               atom_to_binary(M, utf8)},
+                              {?JSON_FUN,
+                               atom_to_binary(F, utf8)},
+                              {?JSON_ARG, Arg}]}};
+jsonify_bucket_prop({name, {_T, B}}) ->
+    {<<"name">>, B};
+jsonify_bucket_prop({Prop, Value}) ->
+    {atom_to_binary(Prop, utf8), Value}.
+
+%% @spec erlify_bucket_prop({Property::binary(), jsonpropvalue()}) ->
+%%          {Property::atom(), erlpropvalue()}
+%% @doc The reverse of jsonify_bucket_prop/1.  Converts JSON representation
+%%      of bucket properties to their Erlang form.
+erlify_bucket_prop({?JSON_DATATYPE, Type}) when is_binary(Type) ->
+    {datatype, binary_to_existing_atom(Type, utf8)};
+erlify_bucket_prop({?JSON_LINKFUN, {struct, Props}}) ->
+    case {proplists:get_value(?JSON_MOD, Props),
+          proplists:get_value(?JSON_FUN, Props)} of
+        {Mod, Fun} when is_binary(Mod), is_binary(Fun) ->
+            {linkfun, {modfun,
+                       list_to_existing_atom(binary_to_list(Mod)),
+                       list_to_existing_atom(binary_to_list(Fun))}};
+        {undefined, undefined} ->
+            case proplists:get_value(?JSON_JSFUN, Props) of
+                Name when is_binary(Name) ->
+                    {linkfun, {jsfun, Name}};
+                undefined ->
+                    case proplists:get_value(?JSON_JSANON, Props) of
+                        {struct, Bkey} ->
+                            Bucket = proplists:get_value(?JSON_JSBUCKET, Bkey),
+                            Key = proplists:get_value(?JSON_JSKEY, Bkey),
+                            %% bomb if malformed
+                            true = is_binary(Bucket) andalso is_binary(Key),
+                            {linkfun, {jsanon, {Bucket, Key}}};
+                        Source when is_binary(Source) ->
+                            {linkfun, {jsanon, Source}}
+                    end
+            end
+    end;
+erlify_bucket_prop({?JSON_CHASH, {struct, Props}}) ->
+    {chash_keyfun, {list_to_existing_atom(
+                      binary_to_list(
+                        proplists:get_value(?JSON_MOD, Props))),
+                    list_to_existing_atom(
+                      binary_to_list(
+                        proplists:get_value(?JSON_FUN, Props)))}};
+erlify_bucket_prop({Prop, Value}) ->
+    {list_to_existing_atom(binary_to_list(Prop)), Value}.
+
+%% @doc Populates the resource's context/state with the bucket type
+%% from the path info, if not already set.
+ensure_bucket_type(RD, Ctx, FNum) ->
+    case {element(FNum, Ctx), wrq:path_info(bucket_type, RD)} of
+        {undefined, undefined} ->
+            setelement(FNum, Ctx, <<"default">>);
+        {_BType, undefined} ->
+            Ctx;
+        {_, B} ->
+            BType = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, B)),
+            setelement(FNum, Ctx, BType)
+    end.
+
+%% @doc Checks whether the given bucket type "exists" (for use in
+%% resource_exists callback).
+bucket_type_exists(<<"default">>) -> true;
+bucket_type_exists(Type) ->
+    riak_core_bucket_type:get(Type) /= undefined.
+
+%% Construct a {Type, Bucket} tuple, if not working with the default bucket
+maybe_bucket_type(undefined, B) ->
+    B;
+maybe_bucket_type(<<"default">>, B) ->
+    B;
+maybe_bucket_type(T, B) ->
+    {T, B}.

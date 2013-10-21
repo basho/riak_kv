@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_index - Webmachine resource for running index queries.
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,8 +24,26 @@
 %%
 %% Available operations:
 %%
-%% GET /buckets/bucket/indexes/index/op/arg1...
+%% GET /buckets/Bucket/index/IndexName/Key
+%% GET /buckets/Bucket/index/IndexName/Start/End
 %%   Run an index lookup, return the results as JSON.
+%%
+%% GET /types/Type/buckets/Bucket/index/IndexName/Key
+%% GET /types/Type/buckets/Bucket/index/IndexName/Start/End
+%%   Run an index lookup over the Bucket in BucketType, returning the
+%%   results in JSON.
+%%
+%% Both URL formats support the following query-string options:
+%%   * max_results=Integer
+%%         limits the number of results returned
+%%   * stream=true
+%%         streams the results back in multipart/mixed chunks
+%%   * continuation=C
+%%         the continuation returned from the last query, used to
+%%         fetch the next "page" of results.
+%%   * return_terms=true
+%%         when querying with a range, returns the value of the index
+%%         along with the key.
 
 -module(riak_kv_wm_index).
 
@@ -33,10 +51,12 @@
 -export([
          init/1,
          service_available/2,
+         is_authorized/2,
          forbidden/2,
          malformed_request/2,
          content_types_provided/2,
          encodings_provided/2,
+         resource_exists/2,
          produce_index_results/2
         ]).
 
@@ -44,11 +64,13 @@
 -record(ctx, {
           client,       %% riak_client() - the store client
           riak,         %% local | {node(), atom()} - params for riak client
+          bucket_type,  %% Bucket type (from uri)
           bucket,       %% The bucket to query.
           index_query,   %% The query..
           max_results :: all | pos_integer(), %% maximum number of 2i results to return, the page size.
           return_terms = false :: boolean(), %% should the index values be returned
-          timeout :: non_neg_integer() | undefined | infinity
+          timeout :: non_neg_integer() | undefined | infinity,
+          security        %% security context
          }).
 
 -define(ALL_2I_RESULTS, all).
@@ -60,7 +82,8 @@
 %% @doc Initialize this resource.
 init(Props) ->
     {ok, #ctx{
-       riak=proplists:get_value(riak, Props)
+       riak=proplists:get_value(riak, Props),
+       bucket_type=proplists:get_value(bucket_type, Props)
       }}.
 
 
@@ -68,7 +91,8 @@ init(Props) ->
 %%          {boolean(), reqdata(), context()}
 %% @doc Determine whether or not a connection to Riak
 %%      can be established. Also, extract query params.
-service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
+service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
+    Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true, RD, Ctx#ctx { client=C }};
@@ -80,8 +104,41 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
              Ctx}
     end.
 
+is_authorized(ReqData, Ctx) ->
+    case riak_api_web_security:is_authorized(ReqData) of
+        false ->
+            {"Basic realm=\"Riak\"", ReqData, Ctx};
+        {true, SecContext} ->
+            {true, ReqData, Ctx#ctx{security=SecContext}};
+        insecure ->
+            %% XXX 301 may be more appropriate here, but since the http and
+            %% https port are different and configurable, it is hard to figure
+            %% out the redirect URL to serve.
+            {{halt, 426}, wrq:append_to_resp_body(<<"Security is enabled and "
+                    "Riak does not accept credentials over HTTP. Try HTTPS "
+                    "instead.">>, ReqData), Ctx}
+    end.
+
+forbidden(RD, Ctx = #ctx{security=undefined}) ->
+    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
 forbidden(RD, Ctx) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
+    case riak_kv_wm_utils:is_forbidden(RD) of
+        true ->
+            {true, RD, Ctx};
+        false ->
+            Bucket = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(bucket, RD))),
+            Res = riak_core_security:check_permission({"riak_kv.index",
+                                                       {<<"default">>,
+                                                        Bucket}},
+                                                      Ctx#ctx.security),
+            case Res of
+                {false, Error, _} ->
+                    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
+                    {true, wrq:append_to_resp_body(list_to_binary(Error), RD1), Ctx};
+                {true, _} ->
+                    {false, RD, Ctx}
+            end
+    end.
 
 %% @spec malformed_request(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
@@ -188,6 +245,9 @@ encodings_provided(RD, Ctx) ->
     {riak_kv_wm_utils:default_encodings(), RD, Ctx}.
 
 
+resource_exists(RD, #ctx{bucket_type=BType}=Ctx) ->
+    {riak_kv_wm_utils:bucket_type_exists(BType), RD, Ctx}.
+
 %% @spec produce_index_results(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Produce the JSON response to an index lookup.
 produce_index_results(RD, Ctx) ->
@@ -200,7 +260,7 @@ produce_index_results(RD, Ctx) ->
 
 handle_streaming_index_query(RD, Ctx) ->
     Client = Ctx#ctx.client,
-    Bucket = Ctx#ctx.bucket,
+    Bucket = riak_kv_wm_utils:maybe_bucket_type(Ctx#ctx.bucket_type, Ctx#ctx.bucket),
     Query = Ctx#ctx.index_query,
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,
@@ -293,7 +353,7 @@ encode_error(Error) ->
 
 handle_all_in_memory_index_query(RD, Ctx) ->
     Client = Ctx#ctx.client,
-    Bucket = Ctx#ctx.bucket,
+    Bucket = riak_kv_wm_utils:maybe_bucket_type(Ctx#ctx.bucket_type, Ctx#ctx.bucket),
     Query = Ctx#ctx.index_query,
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,

@@ -3,7 +3,7 @@
 %% riak_kv_wm_keylist - Webmachine resource for listing
 %%                      the keys in a bucket.
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -25,6 +25,7 @@
 %%
 %% Available operations:
 %%
+%% GET /types/Type/buckets/Bucket/keys?keys=true|stream (with bucket-type)
 %% GET /buckets/Bucket/keys?keys=true|stream (NEW)
 %% GET /Prefix/Bucket?keys=true|stream (OLD)
 %%   Get the keys for a bucket. This is an expensive operation.
@@ -38,6 +39,7 @@
 %%   the user can also specify a 'props=true' to include props in the
 %%   JSON response. This provides backward compatibility with the
 %%   old HTTP API.
+%%
 
 -module(riak_kv_wm_keylist).
 
@@ -45,21 +47,25 @@
 -export([
          init/1,
          service_available/2,
+         is_authorized/2,
          forbidden/2,
          content_types_provided/2,
          encodings_provided/2,
+         resource_exists/2,
          produce_bucket_body/2,
          malformed_request/2
         ]).
 
 %% @type context() = term()
 -record(ctx, {api_version,  %% integer() - Determine which version of the API to use.
+              bucket_type,  %% binary() - Bucket type (from uri)
               bucket,       %% binary() - Bucket name (from uri)
               client,       %% riak_client() - the store client
               prefix,       %% string() - prefix for resource uris
               riak,         %% local | {node(), atom()} - params for riak client
               allow_props_param, %% true if the user can also list props. (legacy API)
-              timeout       %% integer() - list keys timeout
+              timeout,      %% integer() - list keys timeout
+              security      %% security context
              }).
 %% @type link() = {{Bucket::binary(), Key::binary()}, Tag::binary()}
 %% @type index_field() = {Key::string(), Value::string()}
@@ -74,7 +80,9 @@ init(Props) ->
     {ok, #ctx{api_version=proplists:get_value(api_version, Props),
               prefix=proplists:get_value(prefix, Props),
               riak=proplists:get_value(riak, Props),
-              allow_props_param=proplists:get_value(allow_props_param, Props)}}.
+              allow_props_param=proplists:get_value(allow_props_param, Props),
+              bucket_type=proplists:get_value(bucket_type, Props)
+             }}.
 
 %% @spec service_available(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
@@ -83,7 +91,8 @@ init(Props) ->
 %%      opportunity to extract the 'bucket' and 'key' path
 %%      bindings from the dispatch, as well as any vtag
 %%      query parameter.
-service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
+service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
+    Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true,
@@ -103,9 +112,40 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
              Ctx}
     end.
 
-forbidden(RD, Ctx) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
+is_authorized(ReqData, Ctx) ->
+    case riak_api_web_security:is_authorized(ReqData) of
+        false ->
+            {"Basic realm=\"Riak\"", ReqData, Ctx};
+        {true, SecContext} ->
+            {true, ReqData, Ctx#ctx{security=SecContext}};
+        insecure ->
+            %% XXX 301 may be more appropriate here, but since the http and
+            %% https port are different and configurable, it is hard to figure
+            %% out the redirect URL to serve.
+            {{halt, 426}, wrq:append_to_resp_body(<<"Security is enabled and "
+                    "Riak does not accept credentials over HTTP. Try HTTPS "
+                    "instead.">>, ReqData), Ctx}
+    end.
 
+forbidden(RD, Ctx = #ctx{security=undefined}) ->
+    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
+forbidden(RD, Ctx) ->
+    case riak_kv_wm_utils:is_forbidden(RD) of
+        true ->
+            {true, RD, Ctx};
+        false ->
+            Res = riak_core_security:check_permission({"riak_kv.list_keys",
+                                                       {<<"default">>,
+                                                        Ctx#ctx.bucket}},
+                                                      Ctx#ctx.security),
+            case Res of
+                {false, Error, _} ->
+                    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
+                    {true, wrq:append_to_resp_body(list_to_binary(Error), RD1), Ctx};
+                {true, _} ->
+                    {false, RD, Ctx}
+            end
+    end.
 
 %% @spec content_types_provided(reqdata(), context()) ->
 %%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
@@ -135,7 +175,7 @@ malformed_timeout_param(RD, Ctx) ->
     case wrq:get_qs_value("timeout", none, RD) of
         none ->
             {false, RD, Ctx};
-        TimeoutStr -> 
+        TimeoutStr ->
             try
                 Timeout = list_to_integer(TimeoutStr),
                 {false, RD, Ctx#ctx{timeout=Timeout}}
@@ -145,12 +185,14 @@ malformed_timeout_param(RD, Ctx) ->
                      wrq:append_to_resp_body(io_lib:format("Bad timeout "
                                                            "value ~p~n",
                                                            [TimeoutStr]),
-                                             wrq:set_resp_header(?HEAD_CTYPE, 
+                                             wrq:set_resp_header(?HEAD_CTYPE,
                                                                  "text/plain", RD)),
                      Ctx}
             end
     end.
 
+resource_exists(RD, Ctx) ->
+    {riak_kv_wm_utils:bucket_type_exists(Ctx#ctx.bucket_type), RD, Ctx}.
 
 %% @spec produce_bucket_body(reqdata(), context()) -> {binary(), reqdata(), context()}
 %% @doc Produce the JSON response to a bucket-level GET.
@@ -159,9 +201,11 @@ malformed_timeout_param(RD, Ctx) ->
 %%      is specified, keys will be streamed back to the client in JSON chunks
 %%      like so: {"keys":[Key1, Key2,...]}.
 produce_bucket_body(RD, #ctx{client=Client,
-                             bucket=Bucket,
+                             bucket=Bucket0,
+                             bucket_type=Type,
                              timeout=Timeout,
                              allow_props_param=AllowProps}=Ctx) ->
+    Bucket = riak_kv_wm_utils:maybe_bucket_type(Type, Bucket0),
     IncludeBucketProps = (AllowProps == true)
         andalso (wrq:get_qs_value(?Q_PROPS, RD) /= ?Q_FALSE),
 
@@ -177,7 +221,7 @@ produce_bucket_body(RD, #ctx{client=Client,
         ?Q_STREAM ->
             %% Start streaming the keys...
             F = fun() ->
-                        {ok, ReqId} = Client:stream_list_keys(Bucket, 
+                        {ok, ReqId} = Client:stream_list_keys(Bucket,
                                                               Timeout),
                         stream_keys(ReqId)
                 end,
@@ -189,7 +233,7 @@ produce_bucket_body(RD, #ctx{client=Client,
                 case Ctx#ctx.api_version of
                     1 ->
                         mochijson2:encode({struct, BucketPropsJson});
-                    2 ->
+                    Two when Two >= 2 ->
                         []
                 end,
             {{stream, {FirstResult, F}}, RD, Ctx};

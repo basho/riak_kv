@@ -35,6 +35,7 @@
 -define(HEAD_INDEX_PREFIX,    "x-riak-index-").
 -define(HEAD_DELETED,         "X-Riak-Deleted").
 -define(HEAD_TIMEOUT,         "X-Riak-Timeout").
+-define(HEAD_CRDT_CONTEXT,    "X-Riak-CRDT-Ctx").
 
 %% Names of JSON fields in bucket properties
 -define(JSON_PROPS,   <<"props">>).
@@ -52,6 +53,7 @@
 -define(JSON_ALLOW_MULT, <<"allow_mult">>).
 -define(JSON_EXTRACT, <<"search_extractor">>).
 -define(JSON_EXTRACT_LEGACY, <<"rs_extractfun">>).
+-define(JSON_DATATYPE, <<"datatype">>).
 
 %% Names of HTTP query parameters
 -define(Q_PROPS, "props").

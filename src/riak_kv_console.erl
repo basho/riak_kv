@@ -37,7 +37,13 @@
          aae_status/1,
          reformat_indexes/1,
          reformat_objects/1,
-         reload_code/1]).
+         reload_code/1,
+         bucket_type_status/1,
+         bucket_type_activate/1,
+         bucket_type_create/1,
+         bucket_type_update/1,
+         bucket_type_reset/1,
+         bucket_type_list/1]).
 
 join([NodeStr]) ->
     join(NodeStr, fun riak_core:join/1,
@@ -434,6 +440,111 @@ run_reformat(M, F, A) ->
         Err:Reason ->
             lager:error("index reformat crashed with error type ~p and reason: ~p",
                         [Err, Reason])
+    end.
+
+bucket_type_status([TypeStr]) ->
+    Type = list_to_binary(TypeStr),
+    bucket_type_print_status(Type, riak_core_bucket_type:status(Type)),
+    bucket_type_print_props(riak_core_claimant:get_bucket_type(Type, undefined, false)).
+
+bucket_type_print_status(Type, undefined) ->
+    io:format("~s is not an existing bucket type~n", [Type]);
+bucket_type_print_status(Type, created) ->
+    io:format("~s has been created but cannot be activated yet~n", [Type]);
+bucket_type_print_status(Type, ready) ->
+    io:format("~s has been created and may be activated~n", [Type]);
+bucket_type_print_status(Type, active) ->
+    io:format("~s is active~n", [Type]).
+
+bucket_type_print_props(undefined) ->
+    ok;
+bucket_type_print_props(Props) ->
+    io:format("~n"),
+    [io:format("~p: ~p~n", [K, V]) || {K, V} <- Props].
+
+bucket_type_activate([TypeStr]) ->
+    Type = list_to_binary(TypeStr),
+    bucket_type_print_activate_result(Type, riak_core_bucket_type:activate(Type)).
+
+bucket_type_print_activate_result(Type, ok) ->
+    io:format("~s has been activated~n", [Type]);
+bucket_type_print_activate_result(Type, {error, undefined}) ->
+    bucket_type_print_status(Type, undefined);
+bucket_type_print_activate_result(Type, {error, not_ready}) ->
+    bucket_type_print_status(Type, created).
+
+bucket_type_create([TypeStr, PropsStr]) ->
+    Type = list_to_binary(TypeStr),
+    bucket_type_create(Type, catch mochijson2:decode(PropsStr)).
+
+bucket_type_create(Type, {struct, Fields}) ->
+    case proplists:get_value(<<"props">>, Fields) of
+        {struct, Props} ->
+            ErlProps = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props],
+            bucket_type_print_create_result(Type, riak_core_bucket_type:create(Type, ErlProps));
+        _ ->
+            io:format("Cannot create bucket type ~s: no props field found in json~n", [Type]),
+            error
+    end;
+bucket_type_create(Type, _) ->
+    io:format("Cannot create bucket type ~s: invalid json~n", [Type]),
+    error.
+
+bucket_type_print_create_result(Type, ok) ->
+    io:format("~s created~n", [Type]);
+bucket_type_print_create_result(Type, {error, Reason}) ->
+    io:format("Error creating bucket type ~s: ~p~n", [Type, Reason]),
+    error.
+
+bucket_type_update([TypeStr, PropsStr]) ->
+    Type = list_to_binary(TypeStr),
+    bucket_type_update(Type, catch mochijson2:decode(PropsStr)).
+
+bucket_type_update(Type, {struct, Fields}) ->
+    case proplists:get_value(<<"props">>, Fields) of
+        {struct, Props} ->
+            ErlProps = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props],
+            bucket_type_print_update_result(Type, riak_core_bucket_type:update(Type, ErlProps));
+        _ ->
+            io:format("Cannot create bucket type ~s: no props field found in json~n", [Type]),
+            error
+    end;
+bucket_type_update(Type, _) ->
+    io:format("Cannot update bucket type: ~s: invalid json~n", [Type]),
+    error.
+
+bucket_type_print_update_result(Type, ok) ->
+    io:format("~s updated~n", [Type]);
+bucket_type_print_update_result(Type, {error, Reason}) ->
+    io:format("Error updating bucket type ~s: ~p~n", [Type, Reason]),
+    error.
+
+bucket_type_reset([TypeStr]) ->
+    Type = list_to_binary(TypeStr),
+    bucket_type_print_reset_result(Type, riak_core_bucket_type:reset(Type)).
+
+bucket_type_print_reset_result(Type, ok) ->
+    io:format("~s reset~n", [Type]);
+bucket_type_print_reset_result(Type, {error, Reason}) ->
+    io:format("Error updating bucket type ~s: ~p~n", [Type, Reason]),
+    error.
+
+bucket_type_list([]) ->
+    It = riak_core_bucket_type:iterator(),
+    bucket_type_print_list(It).
+
+bucket_type_print_list(It) ->
+    case riak_core_bucket_type:itr_done(It) of
+        true ->
+            riak_core_bucket_type:itr_close(It);
+        false ->
+            {Type, Props} = riak_core_bucket_type:itr_value(It),
+            ActiveStr = case proplists:get_value(active, Props, false) of
+                            true -> "active";
+                            false -> "not active"
+                        end,
+            io:format("~s (~s)~n", [Type, ActiveStr]),
+            bucket_type_print_list(riak_core_bucket_type:itr_next(It))
     end.
 
 %%%===================================================================
