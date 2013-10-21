@@ -74,7 +74,7 @@ raw_dispatch(Name) ->
       riak_kv_wm_object, Props1},
 
      {[Name, bucket, key, '*'],
-      riak_kv_wm_link_walker, 
+      riak_kv_wm_link_walker, Props1}
 
     ] ++
 

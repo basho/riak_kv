@@ -164,7 +164,6 @@ maybe_update({true, true}, Req, State0) ->
     O = riak_kv_crdt:new({BType, B}, Key, Mod),
     Options0 = make_options(Req),
     CrdtOp = make_operation(Mod, Op, Ctx),
-                           make_option() ++
     Options = [{crdt_op, CrdtOp},
                {retry_put_coordinator_failure, false}] ++ Options0,
     Resp =  C:put(O, Options),
