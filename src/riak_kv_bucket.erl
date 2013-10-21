@@ -55,7 +55,7 @@ validate([{BoolProp, MaybeBool}|T], ValidProps, Errors) when is_atom(BoolProp), 
         Bool ->
             validate(T, [{BoolProp, Bool}|ValidProps], Errors)
     end;
-validate([{IntProp, MaybeInt}=Prop | T], ValidProps, Errors) when is_atom(IntProp), IntProp =:= big_vclock
+validate([{IntProp, MaybeInt}=Prop | T], ValidProps, Errors) when IntProp =:= big_vclock
                                                                   orelse IntProp =:= n_val
                                                                   orelse IntProp =:= old_vclock
                                                                   orelse IntProp =:= small_vclock ->
@@ -65,13 +65,19 @@ case is_integer(MaybeInt) of
     _ ->
         validate(T, ValidProps, [{IntProp, not_integer} | Errors])
 end;
-validate([{QProp, MaybeQ}=Prop | T], ValidProps, Errors) when is_atom(QProp), QProp =:= dw
-                                                              orelse QProp =:= pw
-                                                              orelse QProp =:= pr
-                                                              orelse QProp =:= r
+validate([{QProp, MaybeQ}=Prop | T], ValidProps, Errors) when  QProp =:= r
                                                               orelse QProp =:= rw
                                                               orelse QProp =:= w ->
     case is_quorum(MaybeQ) of
+        true ->
+            validate(T, [Prop | ValidProps], Errors);
+        false ->
+            validate(T, ValidProps, [{QProp, not_valid_quorum} | Errors])
+    end;
+validate([{QProp, MaybeQ}=Prop | T], ValidProps, Errors) when QProp =:= dw
+                                                              orelse QProp =:= pw
+                                                              orelse QProp =:= pr ->
+    case is_opt_quorum(MaybeQ) of
         true ->
             validate(T, [Prop | ValidProps], Errors);
         false ->
@@ -81,7 +87,7 @@ validate([Prop|T], ValidProps, Errors) ->
     validate(T, [Prop|ValidProps], Errors).
 
 
--spec is_quorum(term()) -> true | false.
+-spec is_quorum(term()) -> boolean().
 is_quorum(Q) when is_integer(Q), Q > 0 ->
     true;
 is_quorum(Q)  when Q =:= quorum
@@ -93,6 +99,13 @@ is_quorum(Q)  when Q =:= quorum
     true;
 is_quorum(_) ->
     false.
+
+%% @private some quorum options can be zero
+-spec is_opt_quorum(term()) -> boolean().
+is_opt_quorum(Q) when is_integer(Q), Q >= 0 ->
+    true;
+is_opt_quorum(Q) ->
+    is_quorum(Q).
 
 -spec coerce_bool(any()) -> boolean() | error.
 coerce_bool(true) ->
@@ -110,7 +123,7 @@ coerce_bool(Int) when is_integer(Int) , Int > 0 ->
 coerce_bool(MaybeBool) when is_list(MaybeBool) ->
     Lower = string:to_lower(MaybeBool),
     Atom = (catch list_to_existing_atom(Lower)),
-    case Atom of 
+    case Atom of
         true -> true;
         false -> false;
         _ -> error
@@ -131,7 +144,7 @@ coerce_bool_test_ () ->
      ?_assertEqual(false, coerce_bool("fAlSE")),
      ?_assertEqual(false, coerce_bool(<<"FAlse">>)),
      ?_assertEqual(true, coerce_bool(<<"trUe">>)),
-     ?_assertEqual(true, coerce_bool(1)),     
+     ?_assertEqual(true, coerce_bool(1)),
      ?_assertEqual(true, coerce_bool(234567)),
      ?_assertEqual(false, coerce_bool(0)),
      ?_assertEqual(false, coerce_bool(-1234)),
