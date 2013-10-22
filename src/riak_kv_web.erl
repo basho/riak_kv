@@ -111,11 +111,8 @@ raw_dispatch(Name) ->
       riak_kv_wm_link_walker, Props},
 
      {Prefix ++ ["buckets", bucket, "index", field, '*'],
-      riak_kv_wm_index, Props},
+      riak_kv_wm_index, Props}
 
-     %% crdts
-     {Prefix ++ ["buckets", bucket, crdt, key], {riak_kv_wm_crdt, known_type},
-      riak_kv_wm_crdt, Props}
     ] || {Prefix, Props} <- Props2 ]).
 
 is_post(Req) ->
