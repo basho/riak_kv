@@ -64,17 +64,7 @@
 get(Bucket, Key) ->
     get(Bucket, Key, []).
 
-%% @spec get(riak_object:bucket(), riak_object:key(), options()) ->
-%%       {ok, riak_object:riak_object()} |
-%%       {error, notfound} |
-%%       {error, {deleted, vclock()}} |
-%%       {error, timeout} |
-%%       {error, {n_val_violation, N::integer()}} |
-%%       {error, {r_val_unsatisfied, R::integer(), Replies::integer()}} |
-%%       {error, Err :: term()}
-%% @doc Fetch the object at Bucket/Key.  Return a value as soon as R-value for the nodes
-%%      have responded with a value or error.
-get(Bucket, Key, Options) when is_list(Options) ->
+normal_get(Bucket, Key, Options) ->    
     Me = self(),
     ReqId = mk_reqid(),
     case node() of
@@ -86,7 +76,41 @@ get(Bucket, Key, Options) when is_list(Options) ->
     end,
     %% TODO: Investigate adding a monitor here and eliminating the timeout.
     Timeout = recv_timeout(Options),
-    wait_for_reqid(ReqId, Timeout);
+    wait_for_reqid(ReqId, Timeout).
+
+consistent_get(Bucket, Key, Options) ->
+    BKey = {Bucket, Key},
+    Ensemble = ensemble(BKey),
+    Timeout = recv_timeout(Options),
+    case riak_ensemble_client:kget(Node, Ensemble, BKey, Timeout) of
+        {error, _}=Err ->
+            Err;
+        {ok, Obj} ->
+            case riak_object:get_value(Obj) of
+                notfound ->
+                    {error, notfound};
+                _ ->
+                    {ok, Obj}
+            end
+    end.
+
+%% @spec get(riak_object:bucket(), riak_object:key(), options()) ->
+%%       {ok, riak_object:riak_object()} |
+%%       {error, notfound} |
+%%       {error, {deleted, vclock()}} |
+%%       {error, timeout} |
+%%       {error, {n_val_violation, N::integer()}} |
+%%       {error, {r_val_unsatisfied, R::integer(), Replies::integer()}} |
+%%       {error, Err :: term()}
+%% @doc Fetch the object at Bucket/Key.  Return a value as soon as R-value for the nodes
+%%      have responded with a value or error.
+get(Bucket, Key, Options) when is_list(Options) ->
+    case riak_kv_util:consistent_object(Bucket) of
+        true ->
+            consistent_get(Bucket, Key, Options);
+        false ->
+            normal_get(Bucket, Key, Options)
+    end;
 
 %% @spec get(riak_object:bucket(), riak_object:key(), R :: integer()) ->
 %%       {ok, riak_object:riak_object()} |
@@ -129,18 +153,7 @@ get(Bucket, Key, R, Timeout) when is_binary(Bucket), is_binary(Key),
 put(RObj) -> THIS:put(RObj, []).
 
 
-%% @spec put(RObj :: riak_object:riak_object(), riak_kv_put_fsm::options()) ->
-%%       ok |
-%%       {ok, details()} |
-%%       {ok, riak_object:riak_object()} |
-%%       {ok, riak_object:riak_object(), details()} |
-%%       {error, notfound} |
-%%       {error, timeout} |
-%%       {error, {n_val_violation, N::integer()}} |
-%%       {error, Err :: term()}
-%%       {error, Err :: term(), details()}
-%% @doc Store RObj in the cluster.
-put(RObj, Options) when is_list(Options) ->
+normal_put(RObj, Options) ->
     Me = self(),
     ReqId = mk_reqid(),
     case ClientId of
@@ -164,7 +177,60 @@ put(RObj, Options) when is_list(Options) ->
     end,
     %% TODO: Investigate adding a monitor here and eliminating the timeout.
     Timeout = recv_timeout(Options),
-    wait_for_reqid(ReqId, Timeout);
+    wait_for_reqid(ReqId, Timeout).
+
+consistent_put(RObj, Options) ->
+    BKey = {riak_object:bucket(RObj), riak_object:key(RObj)},
+    Ensemble = ensemble(BKey),
+    NewObj = riak_object:apply_updates(RObj),
+    Timeout = recv_timeout(Options),
+    Result = case consistent_put_type(RObj, Options) of
+                 update ->
+                     riak_ensemble_client:kupdate(Node, Ensemble, BKey, RObj, NewObj, Timeout);
+                 put_once ->
+                     riak_ensemble_client:kput_once(Node, Ensemble, BKey, NewObj, Timeout);
+                 overwrite ->
+                     riak_ensemble_client:kover(Node, Ensemble, BKey, NewObj, Timeout)
+             end,
+    ReturnBody = lists:member(returnbody, Options),
+    case Result of
+        {error, _}=Error ->
+            Error;
+        {ok, Obj} when ReturnBody ->
+            {ok, Obj};
+        {ok, _Obj} ->
+            ok
+    end.
+
+consistent_put_type(RObj, Options) ->
+    VClockGiven = (riak_object:vclock(RObj) =/= []),
+    IfMissing = lists:member({if_none_match, true}, Options),
+    if VClockGiven ->
+            update;
+       IfMissing ->
+            put_once;
+       true ->
+            overwrite
+    end.
+
+%% @spec put(RObj :: riak_object:riak_object(), riak_kv_put_fsm::options()) ->
+%%       ok |
+%%       {ok, details()} |
+%%       {ok, riak_object:riak_object()} |
+%%       {ok, riak_object:riak_object(), details()} |
+%%       {error, notfound} |
+%%       {error, timeout} |
+%%       {error, {n_val_violation, N::integer()}} |
+%%       {error, Err :: term()}
+%%       {error, Err :: term(), details()}
+%% @doc Store RObj in the cluster.
+put(RObj, Options) when is_list(Options) ->
+    case riak_kv_util:consistent_object(riak_object:bucket(RObj)) of
+        true ->
+            consistent_put(RObj, Options);
+        false ->
+            normal_put(RObj, Options)
+    end;
 
 %% @spec put(RObj :: riak_object:riak_object(), W :: integer()) ->
 %%        ok |
@@ -248,14 +314,33 @@ delete(Bucket,Key,RW) ->
 %% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
 delete(Bucket,Key,Options,Timeout) when is_list(Options) ->
+    case riak_kv_util:consistent_object(Bucket) of
+        true ->
+            consistent_delete(Bucket, Key, Options, Timeout);
+        false ->
+            normal_delete(Bucket, Key, Options, Timeout)
+    end;
+delete(Bucket,Key,RW,Timeout) ->
+    delete(Bucket,Key,[{rw, RW}], Timeout).
+
+normal_delete(Bucket, Key, Options, Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
     riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, Options, Timeout,
                                            Me, ClientId]),
     RTimeout = recv_timeout(Options),
-    wait_for_reqid(ReqId, erlang:min(Timeout, RTimeout));
-delete(Bucket,Key,RW,Timeout) ->
-    delete(Bucket,Key,[{rw, RW}], Timeout).
+    wait_for_reqid(ReqId, erlang:min(Timeout, RTimeout)).
+
+consistent_delete(Bucket, Key, Options, _Timeout) ->
+    BKey = {Bucket, Key},
+    Ensemble = ensemble(BKey),
+    RTimeout = recv_timeout(Options),
+    case riak_ensemble_client:kdelete(Node, Ensemble, BKey, RTimeout) of
+        {error, _}=Err ->
+            Err;
+        {ok, Obj} when element(1, Obj) =:= r_object ->
+            ok
+    end.
 
 %% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock:vclock()) ->
 %%        ok |
@@ -294,15 +379,35 @@ delete_vclock(Bucket,Key,VClock,RW) ->
 %% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
 delete_vclock(Bucket,Key,VClock,Options,Timeout) when is_list(Options) ->
+    case riak_kv_util:consistent_object(Bucket) of
+        true ->
+            consistent_delete_vclock(Bucket, Key, VClock, Options, Timeout);
+        false ->
+            normal_delete_vclock(Bucket, Key, VClock, Options, Timeout)
+    end;
+delete_vclock(Bucket,Key,VClock,RW,Timeout) ->
+    delete_vclock(Bucket,Key,VClock,[{rw, RW}],Timeout).
+
+normal_delete_vclock(Bucket, Key, VClock, Options, Timeout) ->
     Me = self(),
     ReqId = mk_reqid(),
     riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, Options, Timeout,
                                            Me, ClientId, VClock]),
     RTimeout = recv_timeout(Options),
-    wait_for_reqid(ReqId, erlang:min(Timeout, RTimeout));
-delete_vclock(Bucket,Key,VClock,RW,Timeout) ->
-    delete_vclock(Bucket,Key,VClock,[{rw, RW}],Timeout).
+    wait_for_reqid(ReqId, erlang:min(Timeout, RTimeout)).
 
+consistent_delete_vclock(Bucket, Key, VClock, Options, _Timeout) ->
+    BKey = {Bucket, Key},
+    Ensemble = ensemble(BKey),
+    Current = riak_object:set_vclock(riak_object:new(Bucket, Key, <<>>),
+                                     VClock),
+    RTimeout = recv_timeout(Options),
+    case riak_ensemble_client:ksafe_delete(Node, Ensemble, BKey, Current, RTimeout) of
+        {error, _}=Err ->
+            Err;
+        {ok, Obj} when element(1, Obj) =:= r_object ->
+            ok
+    end.
 
 %% @spec list_keys(riak_object:bucket()) ->
 %%       {ok, [Key :: riak_object:key()]} |
@@ -665,3 +770,10 @@ recv_timeout(Options) ->
             %% Otherwise use the directly supplied timeout.
             Timeout
     end.
+
+ensemble(BKey={Bucket, _Key}) ->
+    {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+    DocIdx = riak_core_util:chash_key(BKey),
+    Partition = chashbin:responsible_index(DocIdx, CHBin),
+    N = riak_core_bucket:n_val(riak_core_bucket:get_bucket(Bucket)),
+    {kv, Partition, N}.

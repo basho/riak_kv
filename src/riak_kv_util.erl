@@ -43,6 +43,7 @@
          puts_active/0,
          exact_puts_active/0,
          gets_active/0,
+         consistent_object/1,
          overload_reply/1]).
 
 -include_lib("riak_kv_vnode.hrl").
@@ -158,6 +159,16 @@ normalize_rw_value(one, _N) -> 1;
 normalize_rw_value(quorum, N) -> erlang:trunc((N/2)+1);
 normalize_rw_value(all, N) -> N;
 normalize_rw_value(_, _) -> error.
+
+consistent_object(Bucket) ->
+    case Bucket of
+        <<"c#", _/binary>> ->
+            true;
+        <<"c~", _/binary>> ->
+            true;
+        _ ->
+            false
+    end.
 
 %% ===================================================================
 %% Preflist utility functions
