@@ -36,8 +36,10 @@
                {riak_core_bucket_type:bucket_type(), undefined | binary()} | binary(),
                undefined | props(),
                props()) -> {props(), errors()}.
+validate(CreateOrUpdate, {_T, _N}, Existing, BucketProps) when is_list(Existing), is_list(BucketProps) ->
+    validate_dt_props(CreateOrUpdate, Existing, BucketProps);
 validate(_CreateOrUpdate, _Bucket, _Existing, BucketProps) when is_list(BucketProps) ->
-    lager:debug("Was called ~p~n", [BucketProps]),
+
     validate(BucketProps, [], []).
 
 -spec validate(InProps::props(), ValidProps::props(), Errors::errors()) ->
@@ -81,6 +83,10 @@ coerce_bool(MaybeBool) when is_list(MaybeBool) ->
     end;
 coerce_bool(_) ->
     error.
+
+validate_dt_props(create, _, Props) ->
+    DType = proplists:get_value(datatype, Props),
+    
 
 %%
 %% EUNIT tests...
