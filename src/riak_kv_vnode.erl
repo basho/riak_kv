@@ -852,6 +852,30 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
+handle_info({ensemble_get, Key, From}, State) ->
+    {reply, {r, Retval, _, _}, State2} = do_get(undefined, Key, undefined, State),
+    Reply = case Retval of
+                {ok, Obj} ->
+                    Obj;
+                _ ->
+                    notfound
+            end,
+    riak_kv_ensemble_backend:reply(From, Reply),
+    {ok, State2};
+
+handle_info({ensemble_put, Key, Obj, From}, State) ->
+    {Result, State2} = actual_put(Key, Obj, [], false, undefined, State),
+    Reply = case Result of
+                {dw, _Idx, _Obj, _ReqID} ->
+                    Obj;
+                {dw, _Idx, _ReqID} ->
+                    Obj;
+                {fail, _Idx, _ReqID} ->
+                    failed
+            end,
+    riak_kv_ensemble_backend:reply(From, Reply),
+    {ok, State2};
+
 handle_info(retry_create_hashtree, State=#state{hashtrees=undefined}) ->
     State2 = maybe_create_hashtrees(State),
     case State2#state.hashtrees of
@@ -1069,13 +1093,17 @@ perform_put({false, _Obj},
                      reqid=ReqId}) ->
     {{dw, Idx, ReqId}, State};
 perform_put({true, Obj},
-            #state{idx=Idx,
-                   mod=Mod,
-                   modstate=ModState}=State,
+            State,
             #putargs{returnbody=RB,
-                     bkey={Bucket, Key},
+                     bkey=BKey,
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
+    {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State),
+    {Reply, State2}.
+
+actual_put({Bucket, Key}, Obj, IndexSpecs, RB, ReqID, State=#state{idx=Idx,
+                                                                   mod=Mod,
+                                                                   modstate=ModState}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) of
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),

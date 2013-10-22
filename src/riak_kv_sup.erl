@@ -88,6 +88,10 @@ init([]) ->
                       {riak_kv_entropy_manager, start_link, []},
                       permanent, 30000, worker, [riak_kv_entropy_manager]},
 
+    EnsemblesKV =  {riak_kv_ensembles,
+                    {riak_kv_ensembles, start_link, []},
+                    permanent, 30000, worker, [riak_kv_ensembles]},
+
     % Figure out which processes we should run...
     HasStorageBackend = (app_helper:get_env(riak_kv, storage_backend) /= undefined),
 
@@ -102,6 +106,7 @@ init([]) ->
         KeysFsmSup,
         IndexFsmSup,
         EntropyManager,
+        EnsemblesKV,
         JSSup,
         MapJSPool,
         ReduceJSPool,
