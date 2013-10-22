@@ -72,6 +72,7 @@
          handle_info/2]).
 
 -export([handoff_data_encoding_method/0]).
+-export([set_vnode_forwarding/2]).
 
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_map_phase.hrl").
@@ -98,6 +99,8 @@
                 key_buf_size :: pos_integer(),
                 async_folding :: boolean(),
                 in_handoff = false :: boolean(),
+                handoff_target :: node(),
+                forward :: node() | [{integer(), node()}],
                 hashtrees :: pid() }).
 
 -type index_op() :: add | remove.
@@ -770,14 +773,14 @@ request_hash(?KV_DELETE_REQ{bkey=BKey}) ->
 request_hash(_Req) ->
     undefined.
 
-handoff_starting(_TargetNode, State) ->
-    {true, State#state{in_handoff=true}}.
+handoff_starting({_HOType, TargetNode}, State) ->
+    {true, State#state{in_handoff=true, handoff_target=TargetNode}}.
 
 handoff_cancelled(State) ->
-    {ok, State#state{in_handoff=false}}.
+    {ok, State#state{in_handoff=false, handoff_target=undefined}}.
 
 handoff_finished(_TargetNode, State) ->
-    {ok, State}.
+    {ok, State#state{in_handoff=false, handoff_target=undefined}}.
 
 handle_handoff_data(BinObj, State) ->
     try
@@ -811,6 +814,9 @@ encode_handoff_item({B, K}, V) ->
                           [Error,Reason]),
             corrupted
     end.
+
+set_vnode_forwarding(Forward, State) ->
+    State#state{forward=Forward}.
 
 is_empty(State=#state{mod=Mod, modstate=ModState}) ->
     IsEmpty = Mod:is_empty(ModState),
@@ -852,18 +858,46 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
-handle_info({ensemble_get, Key, From}, State) ->
-    {reply, {r, Retval, _, _}, State2} = do_get(undefined, Key, undefined, State),
-    Reply = case Retval of
-                {ok, Obj} ->
-                    Obj;
-                _ ->
-                    notfound
-            end,
-    riak_kv_ensemble_backend:reply(From, Reply),
-    {ok, State2};
+handle_info({ensemble_get, Key, From}, State=#state{idx=Idx, forward=Fwd}) ->
+    case Fwd of
+        undefined ->
+            {reply, {r, Retval, _, _}, State2} = do_get(undefined, Key, undefined, State),
+            Reply = case Retval of
+                        {ok, Obj} ->
+                            Obj;
+                        _ ->
+                            notfound
+                    end,
+            riak_kv_ensemble_backend:reply(From, Reply),
+            {ok, State2};
+        Fwd when is_atom(Fwd) ->
+            forward_get({Idx, Fwd}, Key, From),
+            {ok, State}
+    end;
 
-handle_info({ensemble_put, Key, Obj, From}, State) ->
+handle_info({ensemble_put, Key, Obj, From}, State=#state{handoff_target=HOTarget,
+                                                         idx=Idx,
+                                                         forward=Fwd}) ->
+    case Fwd of
+        undefined ->
+            {Result, State2} = actual_put(Key, Obj, [], false, undefined, State),
+            Reply = case Result of
+                        {dw, _Idx, _Obj, _ReqID} ->
+                            Obj;
+                        {dw, _Idx, _ReqID} ->
+                            Obj;
+                        {fail, _Idx, _ReqID} ->
+                            failed
+                    end,
+            ((Reply =/= failed) and (HOTarget =/= undefined)) andalso raw_put(HOTarget, Key, Obj),
+            riak_kv_ensemble_backend:reply(From, Reply),
+            {ok, State2};
+        Fwd when is_atom(Fwd) ->
+            forward_put({Idx, Fwd}, Key, Obj, From),
+            {ok, State}
+    end;
+
+handle_info({raw_forward_put, Key, Obj, From}, State) ->
     {Result, State2} = actual_put(Key, Obj, [], false, undefined, State),
     Reply = case Result of
                 {dw, _Idx, _Obj, _ReqID} ->
@@ -874,6 +908,19 @@ handle_info({ensemble_put, Key, Obj, From}, State) ->
                     failed
             end,
     riak_kv_ensemble_backend:reply(From, Reply),
+    {ok, State2};
+handle_info({raw_forward_get, Key, From}, State) ->
+    {reply, {r, Retval, _, _}, State2} = do_get(undefined, Key, undefined, State),
+    Reply = case Retval of
+                {ok, Obj} ->
+                    Obj;
+                _ ->
+                    notfound
+            end,
+    riak_kv_ensemble_backend:reply(From, Reply),
+    {ok, State2};
+handle_info({raw_put, Key, Obj}, State) ->
+    {_, State2} = actual_put(Key, Obj, [], false, undefined, State),
     {ok, State2};
 
 handle_info(retry_create_hashtree, State=#state{hashtrees=undefined}) ->
@@ -918,6 +965,25 @@ handle_exit(_Pid, Reason, State) ->
     %% queue and never being processed.
     lager:error("Linked process exited. Reason: ~p", [Reason]),
     {stop, linked_process_crash, State}.
+
+%% @private
+forward_put({Idx, Node}, Key, Obj, From) ->
+    Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx, Node),
+    riak_core_send_msg:bang_unreliable(Proxy, {raw_forward_put, Key, Obj, From}),
+    ok.
+
+%% @private
+forward_get({Idx, Node}, Key, From) ->
+    Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx, Node),
+    riak_core_send_msg:bang_unreliable(Proxy, {raw_forward_get, Key, From}),
+    ok.
+
+%% @private
+raw_put({Idx, Node}, Key, Obj) ->
+    Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx, Node),
+    %% Note: This cannot be bang_unreliable. Don't change.
+    Proxy ! {raw_put, Key, Obj},
+    ok.
 
 %% @private
 %% upon receipt of a client-initiated put
