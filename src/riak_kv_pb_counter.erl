@@ -117,7 +117,8 @@ process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=Coun
             PW = decode_quorum(PW0),
             Options = [{counter_op, CounterOp}] ++ return_value(RetVal),
             case C:put(O, make_option(w, W) ++ make_option(dw, DW) ++
-                           make_option(pw, PW) ++ [{timeout, default_timeout()} | Options]) of
+                           make_option(pw, PW) ++ [{timeout, default_timeout()},
+                                                   {retry_put_coordinator_failure, false} | Options]) of
                 ok ->
                     {reply, #rpbcounterupdateresp{}, State};
                 {ok, RObj} ->

@@ -263,7 +263,8 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C,
         true ->
             Doc = riak_kv_crdt:new(B, K, ?V1_COUNTER_TYPE),
             Options = [{counter_op, CounterOp}] ++ return_value(RD),
-            case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {timeout, 60000} |
+            case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw},
+                             {timeout, 60000}, {retry_put_coordinator_failure, false} |
                                    Options]) of
                 {error, Reason} ->
                     handle_common_error(Reason, RD, Ctx);
