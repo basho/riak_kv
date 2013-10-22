@@ -150,7 +150,7 @@ parse_inputs([], Accum) ->
 parse_inputs([[Bucket, Key]|T], Accum) when is_binary(Bucket),
                                              is_binary(Key) ->
     parse_inputs(T, [{Bucket, Key}|Accum]);
-parse_inputs([[Type, Bucket, Key, KeyData]|T], Accum) when is_binary(Type),
+parse_inputs([[Bucket, Key, KeyData, Type]|T], Accum) when is_binary(Type),
                                                            is_binary(Bucket),
                                                            is_binary(Key) ->
     parse_inputs(T, [{{{Type,Bucket}, Key}, KeyData}|Accum]);
@@ -319,6 +319,12 @@ parse_query(Invalid, _Accum) ->
              "   ",mochijson2:encode(Invalid),"\n"]}.
 
 dejsonify_not_found({struct, [{<<"not_found">>,
+                               {struct, [{<<"bucket_type">>, BType},
+                                         {<<"bucket">>, Bucket},
+                                         {<<"key">>, Key},
+                                         {<<"keydata">>, KeyData}]}}]}) ->
+    {not_found, {{BType, Bucket}, Key}, KeyData};
+dejsonify_not_found({struct, [{<<"not_found">>,
                      {struct, [{<<"bucket">>, Bucket},
                                {<<"key">>, Key},
                                {<<"keydata">>, KeyData}]}}]}) ->
@@ -326,6 +332,11 @@ dejsonify_not_found({struct, [{<<"not_found">>,
 dejsonify_not_found(Data) ->
     Data.
 
+jsonify_not_found({not_found, {{BType, Bucket}, Key}, KeyData}) ->
+    {struct, [{not_found, {struct, [{<<"bucket_type">>, BType},
+                                    {<<"bucket">>, Bucket},
+                                    {<<"key">>, Key},
+                                    {<<"keydata">>, KeyData}]}}]};
 jsonify_not_found({not_found, {Bucket, Key}, KeyData}) ->
     {struct, [{not_found, {struct, [{<<"bucket">>, Bucket},
                                     {<<"key">>, Key},
@@ -338,8 +349,16 @@ jsonify_bkeys(Results, HasMRQuery) when HasMRQuery == true ->
 jsonify_bkeys(Results, HasMRQuery) when HasMRQuery == false ->
     jsonify_bkeys_1(Results, []).
 
+%% @doc Translate undefined to null, which mochijson will translate to JS null 
+maybe_null(undefined) ->
+    null;
+maybe_null(V) ->
+    V.
+
 jsonify_bkeys_1([{{{T,B},K},D}|Rest], Acc) ->
-    jsonify_bkeys_1(Rest, [[T,B,K,D]|Acc]);
+    jsonify_bkeys_1(Rest, [[B,K,maybe_null(D),T]|Acc]);
+jsonify_bkeys_1([{{B, K}, undefined}|Rest], Acc) ->
+    jsonify_bkeys_1(Rest, [[B,K]|Acc]);
 jsonify_bkeys_1([{{B, K},D}|Rest], Acc) ->
     jsonify_bkeys_1(Rest, [[B,K,D]|Acc]);
 jsonify_bkeys_1([{B, K}|Rest], Acc) ->
@@ -577,7 +596,7 @@ key_input_test() ->
     ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))),
 
     %% Test parsing bucket types
-    JSON3 = <<"[[\"t1\", \"b1\", \"k1\", \"v1\"], [\"t2\", \"b2\", \"k2\", \"v2\"], [\"t3\", \"b3\", \"k3\", \"v3\"]]">>,
+    JSON3 = <<"[[\"b1\", \"k1\", \"v1\", \"t1\"], [\"b2\", \"k2\", \"v2\", \"t2\"], [\"b3\", \"k3\", \"v3\", \"t3\"]]">>,
     Expected3 = {ok, [
                       {{{<<"t1">>, <<"b1">>}, <<"k1">>}, <<"v1">>},
                       {{{<<"t2">>, <<"b2">>}, <<"k2">>}, <<"v2">>},
@@ -613,12 +632,12 @@ index_input_test() ->
     ?assertEqual(Expected3, parse_inputs(mochijson2:decode(JSON3))).
 
 keyfilter_input_test() ->
-    JSON = <<"{\"bucket\":\"mybucket\",\"key_filters\":[[\"match\", \"key.*\"]]}">>,
-    Expected = {ok, {<<"mybucket">>, [[<<"match">>, <<"key.*">>]]}},
+    JSON = <<"{\"bucket\":\"mybucket\",\"key_filters\":[[\"matches\", \"key.*\"]]}">>,
+    Expected = {ok, {<<"mybucket">>, [[<<"matches">>, <<"key.*">>]]}},
     ?assertEqual(Expected, parse_inputs(mochijson2:decode(JSON))),
 
-    JSON2 = <<"{\"bucket\":[\"mytype\", \"mybucket\"],\"key_filters\":[[\"match\", \"key.*\"]]}">>,
-    Expected2 = {ok, {{<<"mytype">>,<<"mybucket">>}, [[<<"match">>, <<"key.*">>]]}},
+    JSON2 = <<"{\"bucket\":[\"mytype\", \"mybucket\"],\"key_filters\":[[\"matches\", \"key.*\"]]}">>,
+    Expected2 = {ok, {{<<"mytype">>,<<"mybucket">>}, [[<<"matches">>, <<"key.*">>]]}},
     ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))).
 
 

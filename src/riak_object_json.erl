@@ -33,7 +33,7 @@
 -spec encode(riak_object:riak_object()) -> {struct, list(any())}.
 encode(Obj) ->
     {_,Vclock} = riak_object:vclock_header(Obj),
-    {struct, [{<<"type">>, riak_object:type(Obj)},
+    {struct, [{<<"bucket_type">>, riak_object:type(Obj)},
               {<<"bucket">>, riak_object:bucket_only(Obj)},
               {<<"key">>, riak_object:key(Obj)},
               {<<"vclock">>, list_to_binary(Vclock)},
@@ -48,7 +48,18 @@ encode(Obj) ->
 decode({struct, Obj}) ->
     decode(Obj);
 decode(Obj) ->
-    Bucket = proplists:get_value(<<"bucket">>, Obj),
+    BucketType = proplists:get_value(<<"bucket_type">>, Obj),
+    Bucket0 = proplists:get_value(<<"bucket">>, Obj),
+    Bucket = case BucketType of
+        null ->
+            Bucket0;
+        undefined ->
+            Bucket0;
+        <<"default">> ->
+            Bucket0;
+        _ ->
+            {BucketType, Bucket0}
+    end,
     Key = proplists:get_value(<<"key">>, Obj),
     VClock0 = proplists:get_value(<<"vclock">>, Obj),
     VClock = riak_object:decode_vclock(base64:decode(VClock0)),
@@ -168,16 +179,19 @@ jsonify_round_trip_test() ->
                          {?MD_CTYPE, "application/json"},
                          {?MD_INDEX, Indexes},
                          {?MD_LINKS, Links}]),
-    O = riak_object:new(<<"b">>, <<"k">>, <<"{\"a\":1}">>, MD),
-    O2 = decode(encode(O)),
-    ?assertEqual(riak_object:bucket(O), riak_object:bucket(O2)),
-    ?assertEqual(riak_object:key(O), riak_object:key(O2)),
-    ?assert(vclock:equal(riak_object:vclock(O), riak_object:vclock(O2))),
-    ?assertEqual(lists:sort(Meta),
-                 lists:sort(dict:fetch(?MD_USERMETA,
-                                       riak_object:get_metadata(O2)))),
-    ?assertEqual(Links, dict:fetch(?MD_LINKS, riak_object:get_metadata(O2))),
-    ?assertEqual(lists:sort(Indexes), lists:sort(riak_object:index_data(O2))),
-    ?assertEqual(riak_object:get_contents(O), riak_object:get_contents(O2)).
+    [begin
+            O = riak_object:new(B, K, V, MD),
+            O2 = decode(encode(O)),
+            ?assertEqual(riak_object:bucket(O), riak_object:bucket(O2)),
+            ?assertEqual(riak_object:key(O), riak_object:key(O2)),
+            ?assert(vclock:equal(riak_object:vclock(O), riak_object:vclock(O2))),
+            ?assertEqual(lists:sort(Meta),
+                         lists:sort(dict:fetch(?MD_USERMETA,
+                                               riak_object:get_metadata(O2)))),
+            ?assertEqual(Links, dict:fetch(?MD_LINKS, riak_object:get_metadata(O2))),
+            ?assertEqual(lists:sort(Indexes), lists:sort(riak_object:index_data(O2))),
+            ?assertEqual(riak_object:get_contents(O), riak_object:get_contents(O2))
+        end || {B, K, V} <- [{<<"b">>, <<"k">>, <<"{\"a\":1}">>},
+                             {{<<"t">>, <<"b">>}, <<"k2">>, <<"{\"a\":2}">>}]].
 
 -endif.
