@@ -26,6 +26,7 @@
 -export([validate/4]).
 
 -include_lib("eunit/include/eunit.hrl").
+-include("riak_kv_types.hrl").
 
 -type prop() :: {PropName::atom(), PropValue::any()}.
 -type error() :: {PropName::atom(), ErrorReason::atom()}.
@@ -36,10 +37,13 @@
                {riak_core_bucket_type:bucket_type(), undefined | binary()} | binary(),
                undefined | props(),
                props()) -> {props(), errors()}.
-validate(CreateOrUpdate, {_T, _N}, Existing, BucketProps) when is_list(Existing), is_list(BucketProps) ->
+validate(CreateOrUpdate, {_T, _N}, Existing0, BucketProps) when is_list(BucketProps) ->
+    Existing = case Existing0 of
+                   undefined -> [];
+                   _ -> Existing0
+               end,
     validate_dt_props(CreateOrUpdate, Existing, BucketProps);
 validate(_CreateOrUpdate, _Bucket, _Existing, BucketProps) when is_list(BucketProps) ->
-
     validate(BucketProps, [], []).
 
 -spec validate(InProps::props(), ValidProps::props(), Errors::errors()) ->
@@ -76,7 +80,7 @@ coerce_bool(Int) when is_integer(Int) , Int > 0 ->
 coerce_bool(MaybeBool) when is_list(MaybeBool) ->
     Lower = string:to_lower(MaybeBool),
     Atom = (catch list_to_existing_atom(Lower)),
-    case Atom of 
+    case Atom of
         true -> true;
         false -> false;
         _ -> error
@@ -84,9 +88,76 @@ coerce_bool(MaybeBool) when is_list(MaybeBool) ->
 coerce_bool(_) ->
     error.
 
-validate_dt_props(create, _, Props) ->
-    DType = proplists:get_value(datatype, Props),
-    
+%% @private riak datatype support requires a bucket type of `datatype'
+%% and `allow_mult' set to `true'. This function enforces those
+%% _before_ calling the usual validate code, since the two properties
+%% are interdependant. We take the presence of a `datatype' property
+%% as indication that this bucket type is a special type, somewhere to
+%% store CRDTs. I realise this somewhat undermines the reason for
+%% bucket types (no magic names) but there has to be some way to
+%% indicate intent, and that way is the "special" property name
+%% `datatype'.
+%%
+%% Since we don't ever want sibling CRDT types (though we can handle
+%% them @see riak_kv_crdt), `datatype' is an immutable property. Once
+%% you create a bucket with a certain datatype you can't change
+%% it. The `update' bucket type path enforces this. It doesn't
+%% validate the type, since it assumes that was done at creation.
+-spec validate_dt_props(create | update, props(), props()) -> {props(), errors()}.
+validate_dt_props(create, Existing, Props) ->
+    validate_data_type(proplists:get_value(datatype, Props), Existing, Props);
+validate_dt_props(update, Existing, Props) ->
+    case proplists:get_value(datatype, Existing) of
+        undefined ->
+            validate_dt_props(create, Existing, Props);
+        DType ->
+            case proplists:get_value(datatype, Props) of
+                undefined ->
+                    validate_allow_mult(Existing, Props, [], []);
+                DType ->
+                    validate_allow_mult(Existing, Props, [{datatype, DType}], []);
+                Other ->
+                    Err = lists:flatten(io_lib:format("Cannot change datatype from ~p to ~p", [DType, Other])),
+                    validate_allow_mult(Existing, Props, [], [{datatype, Err}])
+            end
+    end.
+
+validate_allow_mult(Existing, Props, Valid, Errors) ->
+    case allow_mult(allow_mult(Existing), allow_mult(Props)) of
+        true ->
+            validate(lists:keydelete(allow_mult, 1, Props), [{allow_mult, true} | Valid], Errors);
+        false ->
+            Err = io_lib:format("Data Type buckets must be allow_mult=true", []),
+            validate(lists:keydelete(allow_mult, 1,  Props), Valid, [{allow_mult, Err} | Errors])
+    end.
+
+validate_data_type(undefined, _Existing, Props) ->
+    validate(Props, [], []);
+validate_data_type(DType, Existing, Props0) ->
+    Props = lists:keydelete(datatype, 1, Props0),
+    Mod = riak_kv_crdt:to_mod(DType),
+    case lists:member(Mod, ?V2_TOP_LEVEL_TYPES) of
+        true ->
+            validate_allow_mult(Existing, Props, [{datatype, DType}], []);
+        false ->
+            Err = lists:flatten(io_lib:format("~p not supported for bucket datatype property", [DType])),
+            validate_allow_mult(Existing, Props, [], [{datatype, Err}])
+    end.
+
+allow_mult(true, undefined) ->
+    true;
+allow_mult(_, true) ->
+    true;
+allow_mult(_, _) ->
+    false.
+
+allow_mult(Props) ->
+    case proplists:get_value(allow_mult, Props) of
+        undefined ->
+            undefined;
+        MaybeBool ->
+            coerce_bool(MaybeBool)
+    end.
 
 %%
 %% EUNIT tests...
@@ -111,4 +182,5 @@ coerce_bool_test_ () ->
      ?_assertEqual(error, coerce_bool(<<"frangipan">>)),
      ?_assertEqual(error, coerce_bool(erlang:make_ref()))
     ].
+
 -endif.

@@ -20,7 +20,10 @@
 -define(FLAG_TYPE, riak_dt_od_flag).
 -define(REG_TYPE, riak_dt_lwwreg).
 
--define(TOP_LEVEL_TYPES, [?COUNTER_TYPE, ?SET_TYPE, ?MAP_TYPE, pncounter]).
+
+-define(V1_TOP_LEVEL_TYPES, [pncounter]).
+-define(V2_TOP_LEVEL_TYPES, [?COUNTER_TYPE, ?SET_TYPE, ?MAP_TYPE]).
+-define(TOP_LEVEL_TYPES, ?V1_TOP_LEVEL_TYPES ++ ?V2_TOP_LEVEL_TYPES).
 -define(ALL_TYPES, ?TOP_LEVEL_TYPES ++ [?FLAG_TYPE, ?REG_TYPE]).
 -define(MOD_MAP, [{map, ?MAP_TYPE}, {set, ?SET_TYPE},
                   {counter, ?COUNTER_TYPE}, {flag, ?FLAG_TYPE},
