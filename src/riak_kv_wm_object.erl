@@ -640,7 +640,14 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L, index_fields=IF
     Doc = riak_object:update_value(MDDoc, riak_kv_wm_utils:accept_value(CType, wrq:req_body(RD))),
     Options0 = case wrq:get_qs_value(?Q_RETURNBODY, RD) of ?Q_TRUE -> [returnbody]; _ -> [] end,
     Options = make_options(Options0, Ctx),
-    case C:put(Doc, Options) of
+    NoneMatch = (wrq:get_req_header("If-None-Match", RD) =/= undefined),
+    Options2 = case riak_kv_util:consistent_object(B) and NoneMatch of
+                   true ->
+                       [{if_none_match, true}|Options];
+                   false ->
+                       Options
+               end,
+    case C:put(Doc, Options2) of
         {error, Reason} ->
             handle_common_error(Reason, RD, Ctx);
         ok ->
@@ -1101,6 +1108,8 @@ handle_common_error(Reason, RD, Ctx) ->
             Msg = io_lib:format("PW-value unsatisfied: ~p/~p~n", [Returned,
                     Requested]),
             {{halt, 503}, wrq:append_to_response_body(Msg, RD), Ctx};
+        {error, failed} ->
+            {{halt, 412}, RD, Ctx};
         {error, Err} ->
             {{halt, 500},
                 wrq:set_resp_header("Content-Type", "text/plain",
