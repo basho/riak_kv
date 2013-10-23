@@ -59,7 +59,12 @@ handle_cast(_Msg, State) ->
 
 handle_info(tick, State) ->
     State2 = tick(State),
+    schedule_tick(),
     {noreply, State2};
+
+handle_info(retry, State) ->
+    maybe_bootstrap_ensembles(),
+    {noreply, State};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -75,20 +80,22 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 schedule_tick() ->
-    erlang:send_after(10000, ?MODULE, tick).
+    erlang:send_after(10000, self(), tick).
+
+schedule_retry() ->
+    erlang:send_after(10000, self(), retry).
 
 tick(State=#state{last_ring_id=LastID}) ->
     case riak_core_ring_manager:get_ring_id() of
         LastID ->
             State;
         RingID ->
-            {ok, Ring, CHBin} = riak_core_ring_manager:get_raw_ring_chashbin(),
-            maybe_bootstrap_ensembles(Ring, CHBin),
-            schedule_tick(),
+            maybe_bootstrap_ensembles(),
             State#state{last_ring_id=RingID}
     end.
 
-maybe_bootstrap_ensembles(Ring, CHBin) ->
+maybe_bootstrap_ensembles() ->
+    {ok, Ring, CHBin} = riak_core_ring_manager:get_raw_ring_chashbin(),
     IsClaimant = (riak_core_ring:claimant(Ring) == node()),
     IsReady = riak_core_ring:ring_ready(Ring),
     case IsClaimant and IsReady of
@@ -107,12 +114,14 @@ bootstrap_preflists(Ring, CHBin) ->
     Known = [{Idx, N} || {{kv, Idx, N}, _} <- Ensembles],
     Need = AllPL -- Known,
     io:format("All: ~p~nKnown ~p~nNeed: ~p~n", [AllPL, Known, Need]),
-    [begin
-         {PL, _} = chashbin:itr_pop(N, chashbin:exact_iterator(Idx, CHBin)),
-         %% TODO: Make ensembles/peers use ensemble/peer as actual peer name so this is unneeded
-         Peers = [{{kv, Idx, N, Idx2}, Node} || {Idx2, Node} <- PL],
-         riak_ensemble_manager:create_ensemble({kv, Idx, N}, undefined, Peers,
-                                               riak_kv_ensemble_backend, []),
-         ok
-     end || {Idx, N} <- Need],
+    L = [begin
+             {PL, _} = chashbin:itr_pop(N, chashbin:exact_iterator(Idx, CHBin)),
+             %% TODO: Make ensembles/peers use ensemble/peer as actual peer name so this is unneeded
+             Peers = [{{kv, Idx, N, Idx2}, Node} || {Idx2, Node} <- PL],
+             riak_ensemble_manager:create_ensemble({kv, Idx, N}, undefined, Peers,
+                                                   riak_kv_ensemble_backend, [])
+         end || {Idx, N} <- Need],
+    Failed = [Result || Result <- L,
+                        Result =/= ok],
+    (Failed =:= []) orelse schedule_retry(),
     ok.
