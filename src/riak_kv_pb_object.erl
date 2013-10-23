@@ -181,7 +181,17 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC,
     GetOpts = make_option(n_val, N_val) ++
               make_option(sloppy_quorum, SloppyQuorum),
     B = maybe_bucket_type(T, B0),
-    case C:get(B, K, GetOpts) of
+    Result = case riak_kv_util:consistent_object(B) of
+                 true ->
+                     consistent;
+                 false ->
+                     C:get(B, K, GetOpts)
+             end,
+    case Result of
+        consistent ->
+            process(Req#rpbputreq{if_not_modified=undefined,
+                                  if_none_match=consistent},
+                    State);
         {ok, _} when NoneMatch ->
             {error, "match_found", State};
         {ok, O} when NotMod ->
@@ -206,7 +216,8 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC,
 process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
                    w=W0, dw=DW0, pw=PW0, return_body=ReturnBody,
                    return_head=ReturnHead, timeout=Timeout, asis=AsIs,
-                   n_val=N_val, sloppy_quorum=SloppyQuorum},
+                   n_val=N_val, sloppy_quorum=SloppyQuorum,
+                   if_none_match=NoneMatch},
         #state{client=C} = State) ->
 
     case K of
@@ -237,10 +248,16 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
                           _ -> []
                       end
               end,
+    Options2 = case NoneMatch of
+                   consistent ->
+                       [{if_none_match, true}|Options];
+                   _ ->
+                       Options
+               end,
     case C:put(O, make_options([{w, W}, {dw, DW}, {pw, PW}, 
                                 {timeout, Timeout}, {asis, AsIs},
                                 {n_val, N_val},
-                                {sloppy_quorum, SloppyQuorum}]) ++ Options) of
+                                {sloppy_quorum, SloppyQuorum}]) ++ Options2) of
         ok when is_binary(ReturnKey) ->
             PutResp = #rpbputresp{key = ReturnKey},
             {reply, PutResp, State};
