@@ -31,13 +31,15 @@
 -export([obj_epoch/1, obj_seq/1, obj_key/1, obj_value/1]).
 -export([set_obj_epoch/2, set_obj_seq/2, set_obj_value/2]).
 -export([get/3, put/4, tick/5]).
+-export([sync_request/2, sync/2]).
 -export([reply/2]).
 
 -include_lib("riak_ensemble/include/riak_ensemble_types.hrl").
 
 -record(state, {ensemble  :: ensemble_id(),
                 id        :: peer_id(),
-                proxy     :: atom()}).
+                proxy     :: atom(),
+                async     :: pid()}).
 
 -type obj()    :: riak_object:riak_object().
 -type state()  :: #state{}.
@@ -145,6 +147,21 @@ reply(From, Reply) ->
 
 %%===================================================================
 
+%% TODO: Implement AAE syncing.
+
+-spec sync_request(riak_ensemble_backend:from(), state()) -> state().
+sync_request(From, State) ->
+    riak_ensemble_backend:reply(From, ok),
+    State.
+
+-spec sync([{peer_id(), orddict:orddict()}], state()) -> {ok, state()}       |
+                                                         {async, state()}    |
+                                                         {{error,_}, state()}.
+sync(_, State) ->
+    {ok, State}.
+
+%%===================================================================
+
 -spec tick(epoch(), seq(), peer_id(), views(), state()) -> state().
 tick(_Epoch, _Seq, _Leader, Views, State=#state{id=Id}) ->
     {{kv, Idx, N, _}, _} = Id,
@@ -158,12 +175,22 @@ tick(_Epoch, _Seq, _Leader, Views, State=#state{id=Id}) ->
     Changes = [{add, Peer} || Peer <- Add] ++ [{del, Peer} || Peer <- Del],
     case Changes of
         [] ->
-            ok;
+            State;
         _ ->
-            io:format("~p~n", [Changes]),
-            spawn(fun() ->
-                          riak_ensemble_peer:update_members(self(), Changes, 5000)
-                  end),
-            ok
-    end,
-    State.
+            %% io:format("## ~p~n~p~n~p~n", [Peers, Latest, Changes]),
+            State2 = maybe_async_update(Changes, State),
+            State2
+    end.
+
+maybe_async_update(Changes, State=#state{async=Async}) ->
+    CurrentAsync = is_pid(Async) andalso is_process_alive(Async),
+    case CurrentAsync of
+        true ->
+            State;
+        false ->
+            Self = self(),
+            Async2 = spawn(fun() ->
+                                   riak_ensemble_peer:update_members(Self, Changes, 5000)
+                           end),
+            State#state{async=Async2}
+    end.
