@@ -110,12 +110,14 @@ consistent_get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}) ->
 %%       {error, Err :: term()}
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as R-value for the nodes
 %%      have responded with a value or error.
-get(Bucket, Key, Options, {?MODULE, [_Node, _ClientId]}=THIS) when is_list(Options) ->
-    case riak_kv_util:consistent_object(Bucket) of
+get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
+    case consistent_object(Node, Bucket) of
         true ->
             consistent_get(Bucket, Key, Options, THIS);
         false ->
-            normal_get(Bucket, Key, Options, THIS)
+            normal_get(Bucket, Key, Options, THIS);
+        {error,_}=Err ->
+            Err
     end;
 
 %% @spec get(riak_object:bucket(), riak_object:key(), R :: integer(), riak_client()) ->
@@ -232,12 +234,14 @@ consistent_put_type(RObj, Options) ->
 %%       {error, Err :: term()}
 %%       {error, Err :: term(), details()}
 %% @doc Store RObj in the cluster.
-put(RObj, Options, {?MODULE, [_Node, _ClientId]}=THIS) when is_list(Options) ->
-    case riak_kv_util:consistent_object(riak_object:bucket(RObj)) of
+put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
+    case consistent_object(Node, riak_object:bucket(RObj)) of
         true ->
             consistent_put(RObj, Options, THIS);
         false ->
-            normal_put(RObj, Options, THIS)
+            normal_put(RObj, Options, THIS);
+        {error,_}=Err ->
+            Err
     end;
 
 %% @spec put(RObj :: riak_object:riak_object(), W :: integer(), riak_client()) ->
@@ -322,12 +326,14 @@ delete(Bucket,Key,RW,{?MODULE, [_Node, _ClientId]}=THIS) ->
 %%       {error, Err :: term()}
 %% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
-delete(Bucket,Key,Options,Timeout,{?MODULE, [_Node, _ClientId]}=THIS) when is_list(Options) ->
-    case riak_kv_util:consistent_object(Bucket) of
+delete(Bucket,Key,Options,Timeout,{?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
+    case consistent_object(Node, Bucket) of
         true ->
             consistent_delete(Bucket, Key, Options, Timeout, THIS);
         false ->
-            normal_delete(Bucket, Key, Options, Timeout, THIS)
+            normal_delete(Bucket, Key, Options, Timeout, THIS);
+        {error,_}=Err ->
+            Err
     end;
 delete(Bucket,Key,RW,Timeout,{?MODULE, [_Node, _ClientId]}=THIS) ->
     delete(Bucket,Key,[{rw, RW}], Timeout, THIS).
@@ -388,12 +394,14 @@ delete_vclock(Bucket,Key,VClock,RW,{?MODULE, [_Node, _ClientId]}=THIS) ->
 %%       {error, Err :: term()}
 %% @doc Delete the object at Bucket/Key.  Return a value as soon as W/DW (or RW)
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
-delete_vclock(Bucket,Key,VClock,Options,Timeout,{?MODULE, [_Node, _ClientId]}=THIS) when is_list(Options) ->
-    case riak_kv_util:consistent_object(Bucket) of
+delete_vclock(Bucket,Key,VClock,Options,Timeout,{?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
+    case consistent_object(Node, Bucket) of
         true ->
             consistent_delete_vclock(Bucket, Key, VClock, Options, Timeout, THIS);
         false ->
-            normal_delete_vclock(Bucket, Key, VClock, Options, Timeout, THIS)
+            normal_delete_vclock(Bucket, Key, VClock, Options, Timeout, THIS);
+        {error,_}=Err ->
+            Err
     end;
 delete_vclock(Bucket,Key,VClock,RW,Timeout,{?MODULE, [_Node, _ClientId]}=THIS) ->
     delete_vclock(Bucket,Key,VClock,[{rw, RW}],Timeout,THIS).
@@ -808,3 +816,13 @@ ensemble(BKey={Bucket, _Key}) ->
     Partition = chashbin:responsible_index(DocIdx, CHBin),
     N = riak_core_bucket:n_val(riak_core_bucket:get_bucket(Bucket)),
     {kv, Partition, N}.
+
+consistent_object(Node, Bucket) when Node =:= node() ->
+    riak_kv_util:consistent_object(Bucket);
+consistent_object(Node, Bucket) ->
+    case rpc:call(Node, riak_kv_util, consistent_object, [Bucket]) of
+        {badrpc, _}=Err ->
+            {error, Err};
+        Result ->
+            Result
+    end.

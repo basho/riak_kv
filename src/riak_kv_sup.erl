@@ -106,7 +106,7 @@ init([]) ->
         KeysFsmSup,
         IndexFsmSup,
         EntropyManager,
-        EnsemblesKV,
+        [EnsemblesKV || riak_core_sup:ensembles_enabled()],
         JSSup,
         MapJSPool,
         ReduceJSPool,

@@ -161,14 +161,13 @@ normalize_rw_value(quorum, N) -> erlang:trunc((N/2)+1);
 normalize_rw_value(all, N) -> N;
 normalize_rw_value(_, _) -> error.
 
+-spec consistent_object(binary() | {binary(),binary()}) -> true | false | {error,_}.
 consistent_object(Bucket) ->
-    case Bucket of
-        <<"c#", _/binary>> ->
-            true;
-        <<"c~", _/binary>> ->
-            true;
-        _ ->
-            false
+    case riak_core_bucket:get_bucket(Bucket) of
+        Props when is_list(Props) ->
+            lists:member({consistent, true}, Props);
+        {error, _}=Err ->
+            Err
     end.
 
 %% ===================================================================
