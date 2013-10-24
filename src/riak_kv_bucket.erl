@@ -381,12 +381,16 @@ prop_merges() ->
             begin
                 Result={Good, _Bad} = validate(update, Bucket, Existing, New),
 
-                Expected = case {default_bucket(Bucket), has_allow_mult(New), has_datatype(Existing)} of
-                               {true, _, _} ->
+                Expected = case {default_bucket(Bucket), has_allow_mult(New), allow_mult(New), has_datatype(Existing)} of
+                               {true, _, Mult,  _} when Mult /= error ->
                                    merge(New, Existing);
-                               {false, true, false} ->
+                               {true, true, error, _} ->
+                                   merge([proplists:lookup(datatype, New)], lists:keydelete(allow_mult, 1, Existing));
+                               {false, true, Mult,  false} when Mult /= error ->
                                    merge([proplists:lookup(allow_mult, New)], Existing);
-                               {false, true, true} ->
+                               {false,true,error,false} ->
+                                   Existing;
+                               {false, true, _Mult, true} ->
                                    Existing
                            end,
 
@@ -449,7 +453,7 @@ gen_new(create) ->
          Defaults ++ Mult ++ Datatype).
 
 gen_allow_mult() ->
-    ?LET(Mult, bool(), [{allow_mult, Mult}]).
+    ?LET(Mult, frequency([{9, bool()}, {1, binary()}]), [{allow_mult, Mult}]).
 
 gen_datatype_property() ->
     ?LET(Datattype, oneof([gen_datatype(), notadatatype]), [{datatype, Datattype}]).
@@ -484,6 +488,10 @@ immutable(update, New, Existing, {_Good, Bad}) ->
         {undefined, false, _Meh} ->
             has_allow_mult(Bad);
         {_Datatype, false, _Datatype2} ->
+            has_allow_mult(Bad) andalso has_datatype(Bad);
+        {_Datatype, _, _Datatype} ->
+            has_allow_mult(Bad);
+        {_, _, _} ->
             has_allow_mult(Bad) andalso has_datatype(Bad)
     end.
 
@@ -498,7 +506,7 @@ only_create_if_valid({Good, Bad}, New) ->
                 false ->
                     has_datatype(Bad) andalso has_allow_mult(Good)
             end;
-        {Datatype, false} ->
+        {Datatype, _} ->
             case lists:member(riak_kv_crdt:to_mod(Datatype), ?V2_TOP_LEVEL_TYPES) of
                 true ->
                     has_allow_mult(Bad) andalso has_datatype(Good);
