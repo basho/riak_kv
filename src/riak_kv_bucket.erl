@@ -225,8 +225,8 @@ validate_create_dt_props(Unvalidated0, Valid, Invalid) ->
     Unvalidated = lists:keydelete(allow_mult, 1, Unvalidated0),
     case allow_mult(Unvalidated0) of
         true ->
-            {Unvalidated0, [{allow_mult, true} | Valid], Invalid};
-        false ->
+            {Unvalidated, [{allow_mult, true} | Valid], Invalid};
+        _ ->
             Err = io_lib:format("Data Type buckets must be allow_mult=true", []),
             {Unvalidated, Valid, [{allow_mult, Err} | Invalid]}
     end.
@@ -258,8 +258,8 @@ validate_update_dt_props(New, Valid, Invalid) ->
             {Unvalidated, Valid, Invalid};
         true ->
             {Unvalidated, [{allow_mult, true} | Valid], Invalid};
-        false ->
-            {Unvalidated, Valid, [{allow_mult, "Cannot change datatype bucket to allow_mult=false"} | Invalid]}
+        _ ->
+            {Unvalidated, Valid, [{allow_mult, "Cannot change datatype bucket from allow_mult=true"} | Invalid]}
 end.
 
 %% @private just grab the allow_mult value if it exists
