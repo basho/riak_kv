@@ -220,7 +220,12 @@ consistent_put_type(RObj, Options) ->
        IfMissing ->
             put_once;
        true ->
-            overwrite
+            %% Defaulting to put_once here for safety.
+            %% Our client API makes it too easy to accidently send requests
+            %% without a provided vector clock and clobber your data.
+            %% overwrite
+            %% TODO: Expose client option to explicitly request overwrite
+            put_once
     end.
 
 %% @spec put(RObj :: riak_object:riak_object(), riak_kv_put_fsm::options(), riak_client()) ->
