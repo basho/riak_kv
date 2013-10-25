@@ -1179,7 +1179,7 @@ put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
     {newobj, UpdObj};
 put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
     ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
-    case ResObj =:= CurObj of
+    case riak_object:equal(ResObj, CurObj) of
         true ->
             {oldobj, CurObj};
         false ->
