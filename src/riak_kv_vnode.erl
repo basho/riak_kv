@@ -89,6 +89,12 @@
 -define(INDEX(Obj, Reason, Partition), yz_kv:index(Obj, Reason, Partition)).
 -endif.
 
+-ifdef(TEST).
+-define(YZ_SHOULD_HANDOFF(X), true).
+-else.
+-define(YZ_SHOULD_HANDOFF(X), yz_kv:should_handoff(X)).
+-endif.
+
 -record(mrjob, {cachekey :: term(),
                 bkey :: term(),
                 reqid :: term(),
@@ -790,8 +796,13 @@ request_hash(?KV_DELETE_REQ{bkey=BKey}) ->
 request_hash(_Req) ->
     undefined.
 
-handoff_starting({_HOType, TargetNode}, State) ->
-    {true, State#state{in_handoff=true, handoff_target=TargetNode}}.
+handoff_starting({_HOType, TargetNode}=_X, State) ->
+    case ?YZ_SHOULD_HANDOFF(_X) of
+        true ->
+            {true, State#state{in_handoff=true, handoff_target=TargetNode}};
+        false ->
+            {false, State#state{in_handoff=false, handoff_target=undefined}}
+    end.
 
 handoff_cancelled(State) ->
     {ok, State#state{in_handoff=false, handoff_target=undefined}}.
