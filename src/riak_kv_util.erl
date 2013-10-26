@@ -43,6 +43,7 @@
          puts_active/0,
          exact_puts_active/0,
          gets_active/0,
+         consistent_object/1,
          overload_reply/1,
          get_backend_config/3]).
 
@@ -159,6 +160,15 @@ normalize_rw_value(one, _N) -> 1;
 normalize_rw_value(quorum, N) -> erlang:trunc((N/2)+1);
 normalize_rw_value(all, N) -> N;
 normalize_rw_value(_, _) -> error.
+
+-spec consistent_object(binary() | {binary(),binary()}) -> true | false | {error,_}.
+consistent_object(Bucket) ->
+    case riak_core_bucket:get_bucket(Bucket) of
+        Props when is_list(Props) ->
+            lists:member({consistent, true}, Props);
+        {error, _}=Err ->
+            Err
+    end.
 
 %% ===================================================================
 %% Preflist utility functions
