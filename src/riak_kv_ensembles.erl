@@ -113,7 +113,7 @@ bootstrap_preflists(Ring, CHBin) ->
     Ensembles = riak_ensemble_manager:rget(ensembles, []),
     Known = [{Idx, N} || {{kv, Idx, N}, _} <- Ensembles],
     Need = AllPL -- Known,
-    io:format("All: ~p~nKnown ~p~nNeed: ~p~n", [AllPL, Known, Need]),
+    %% io:format("All: ~p~nKnown ~p~nNeed: ~p~n", [AllPL, Known, Need]),
     L = [begin
              {PL, _} = chashbin:itr_pop(N, chashbin:exact_iterator(Idx, CHBin)),
              %% TODO: Make ensembles/peers use ensemble/peer as actual peer name so this is unneeded
