@@ -39,9 +39,9 @@
 
 -module(riak_kv_pb_crdt).
 
--include_lib("riak_pb/include/riak_dt_pb.hrl").
--include_lib("riak_pb/include/riak_kv_pb.hrl").
--include_lib("riak_pb/include/riak_pb_kv_codec.hrl").
+-include_lib("../../riak_pb/include/riak_dt_pb.hrl").
+-include_lib("../../riak_pb/include/riak_kv_pb.hrl").
+-include_lib("../../riak_pb/include/riak_pb_kv_codec.hrl").
 -include_lib("riak_kv_types.hrl").
 
 -behaviour(riak_api_pb_service).
@@ -181,9 +181,11 @@ process_update_response(ok, State) ->
     #state{return_key=ReturnKey} = State,
     {reply, #dtupdateresp{key=ReturnKey}, State};
 process_update_response({ok, RObj}, State) ->
-    #state{type=Type, return_ctx=ReturnCtx} = State,
-    {Ctx, Value} = riak_kv_crdt:value(RObj, Type),
-    {reply, update_resp(Type, Value, get_context(Ctx, ReturnCtx)), State};
+    #state{type=Type, mod=Mod, return_key=Key, return_ctx=ReturnCtx} = State,
+    {Ctx, Value} = riak_kv_crdt:value(RObj, Mod),
+    Resp = riak_pb_dt_codec:encode_update_response(Type, Value, Key,
+                                                   get_context(Ctx, ReturnCtx), ?MOD_MAP),
+    {reply, Resp, State};
 process_update_response({error, notfound}, State) ->
     {reply, #dtupdateresp{}, State};
 process_update_response({error, Reason}, State) ->
@@ -251,13 +253,6 @@ bucket_type_to_type(Bucket, BType) ->
 
 make_operation(Mod, Op, Ctx) ->
     #crdt_op{mod=Mod, op=Op, ctx=Ctx}.
-
-update_resp(map, Value, Ctx) ->
-    #dtupdateresp{map_value=Value, context=Ctx};
-update_resp(counter, Value, Ctx) ->
-    #dtupdateresp{counter_value=Value, context=Ctx};
-update_resp(set, Value, Ctx) ->
-    #dtupdateresp{set_value=Value, context=Ctx}.
 
 return_value(true) ->
     [returnbody];
@@ -340,9 +335,7 @@ upgrade_response(_, {reply, #rpbcountergetresp{value=Val}, State}) ->
 upgrade_response(#rpbcounterupdatereq{}, {reply, #rpbcounterupdateresp{}, State}) ->
     {reply, #dtupdateresp{}, State};
 upgrade_response(_, {reply, #rpbcounterupdateresp{value=Value}, State}) ->
-    {reply, update_resp(riak_kv_crdt:from_mod(?COUNTER_TYPE),
-                        Value,
-                        undefined), State};
+    {reply, #dtupdateresp{counter_value=Value}, State};
 upgrade_response(_, {error, Err, State}) ->
     {error, Err, State}.
 
