@@ -670,9 +670,10 @@ get_index(Bucket, Query, {?MODULE, [_Node, _ClientId]}=THIS) ->
 get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
     Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
     MaxResults = proplists:get_value(max_results, Opts, all),
+    Order = proplists:get_value(order, Opts, unsorted),
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults]]),
+    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults, Order]]),
     wait_for_query_results(ReqId, Timeout).
 
 %% @doc Run the provided index query, return a stream handle.
@@ -689,13 +690,14 @@ stream_get_index(Bucket, Query, {?MODULE, [_Node, _ClientId]}=THIS) ->
 stream_get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
     Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
     MaxResults = proplists:get_value(max_results, Opts, all),
+    Order = proplists:get_value(order, Opts, unsorted),
     Me = self(),
     ReqId = mk_reqid(),
     case riak_kv_index_fsm_sup:start_index_fsm(Node,
                                                [{raw, ReqId, Me},
                                                 [Bucket, none,
                                                  Query, Timeout,
-                                                 MaxResults]]) of
+                                                 MaxResults, Order]]) of
         {ok, Pid} ->
             {ok, ReqId, Pid};
         {error, Reason} ->
