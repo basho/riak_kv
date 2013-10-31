@@ -51,7 +51,7 @@
 -type req_id() :: non_neg_integer().
 
 -record(state, {from :: from(),
-                order :: sorted | unsorted,
+                sort :: boolean(),
                 merge_sort_buffer = undefined :: sms:sms() | undefined,
                 max_results :: all | pos_integer(),
                 results_per_vnode = dict:new() :: dict(),
@@ -89,23 +89,25 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, all]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, undefined]);
-init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, Order0]) ->
+init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, Sort0]) ->
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
-    Order = case is_integer(MaxResults) andalso MaxResults > 0 of
-        true -> sorted;
-        false -> case Order0 of
-                undefined -> unsorted;
-                _ -> Order0
-            end
+    Paginating = is_integer(MaxResults) andalso MaxResults > 0, 
+    Sort = case {Paginating, Sort0} of
+        {true, _} ->
+            true;
+        {_, undefined} ->
+            app_helper:get_env(riak_kv, secondary_index_sort_default);
+        _ ->
+            Sort0
     end,
     %% Construct the key listing request
     Req = req(Bucket, ItemFilter, Query),
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{from=From, max_results=MaxResults, order=Order}}.
+     #state{from=From, max_results=MaxResults, sort=Sort}}.
 
-plan(CoverageVNodes, State = #state{order=sorted}) ->
+plan(CoverageVNodes, State = #state{sort=true}) ->
     {ok, State#state{merge_sort_buffer=sms:new(CoverageVNodes)}};
 plan(_CoverageVNodes, State) ->
     {ok, State}.
@@ -117,7 +119,7 @@ process_results(_VNode, {From, _Bucket, _Results}, State=#state{max_results=X, r
     {done, State};
 process_results(VNode, {From, Bucket, Results}, State) ->
     case process_results(VNode, {Bucket, Results}, State) of
-        {ok, State2 = #state{order=sorted}} ->
+        {ok, State2 = #state{sort=true}} ->
             #state{results_per_vnode=PerNode, max_results=MaxResults} = State2,
             VNodeCount = dict:fetch(VNode, PerNode),
             case VNodeCount < MaxResults of
@@ -135,7 +137,7 @@ process_results(VNode, {From, Bucket, Results}, State) ->
             riak_kv_vnode:stop_fold(From),
             {done, State2}
     end;
-process_results(VNode, {_Bucket, Results}, State = #state{order=sorted}) ->
+process_results(VNode, {_Bucket, Results}, State = #state{sort=true}) ->
     #state{merge_sort_buffer=MergeSortBuffer, results_per_vnode=PerNode,
            from={raw, ReqId, ClientPid}, results_sent=ResultsSent, max_results=MaxResults} = State,
     %% add new results to buffer
@@ -148,7 +150,7 @@ process_results(VNode, {_Bucket, Results}, State = #state{order=sorted}) ->
     {Response, State#state{merge_sort_buffer=NewBuff,
                            results_per_vnode=NewPerNode,
                            results_sent=ResultsSent+ResultsLen}};
-process_results(VNode, done, State = #state{order=sorted}) ->
+process_results(VNode, done, State = #state{sort=true}) ->
     %% tell the sms buffer about the done vnode
     #state{merge_sort_buffer=MergeSortBuffer} = State,
     BufferWithNewResults = sms:add_results(VNode, done, MergeSortBuffer),

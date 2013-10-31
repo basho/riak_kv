@@ -73,7 +73,7 @@
           max_results :: all | pos_integer(), %% maximum number of 2i results to return, the page size.
           return_terms = false :: boolean(), %% should the index values be returned
           timeout :: non_neg_integer() | undefined | infinity,
-          order :: sorted | unsorted,
+          sort :: boolean() | undefined,
           security        %% security context
          }).
 
@@ -157,13 +157,16 @@ malformed_request(RD, Ctx) ->
     Args2 = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
     ReturnTerms0 = wrq:get_qs_value(?Q_2I_RETURNTERMS, "false", RD),
     ReturnTerms = normalize_boolean(string:to_lower(ReturnTerms0)),
-    Sorted0 = wrq:get_qs_value(?Q_2I_SORT, "false", RD),
-    Sorted = normalize_boolean(string:to_lower(Sorted0)),
+    Sort0 = wrq:get_qs_value(?Q_2I_SORT, RD),
+    Sort = case Sort0 of
+        undefined -> undefined;
+        _ -> normalize_boolean(string:to_lower(Sort0))
+    end,
     MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, ?ALL_2I_RESULTS, RD),
     Continuation = wrq:get_qs_value(?Q_2I_CONTINUATION, undefined, RD),
     Timeout0 =  wrq:get_qs_value("timeout", undefined, RD),
 
-    case {Sorted,
+    case {Sort,
           ReturnTerms,
           validate_timeout(Timeout0),
           validate_max(MaxResults0),
@@ -171,7 +174,7 @@ malformed_request(RD, Ctx) ->
         {malformed, _, _, _, _} ->
              {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
-                                             [?Q_2I_SORT, Sorted0]),
+                                             [?Q_2I_SORT, Sort0]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
         {_, malformed, _, _, _} ->
@@ -183,14 +186,13 @@ malformed_request(RD, Ctx) ->
         {_, _, {true, Timeout}, {true, MaxResults}, {ok, Query}} ->
             %% Request is valid.
             ReturnTerms1 = riak_index:return_terms(ReturnTerms, Query),
-            Order = case Sorted of true -> sorted; false -> unsorted end,
             NewCtx = Ctx#ctx{
                        bucket = Bucket,
                        index_query = Query,
                        max_results = MaxResults,
                        return_terms = ReturnTerms1,
                        timeout=Timeout,
-                       order = Order
+                       sort = Sort
                       },
             {false, RD, NewCtx};
         {_, _, _, _, {error, Reason}} ->
@@ -283,7 +285,7 @@ handle_streaming_index_query(RD, Ctx) ->
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,
     Timeout = Ctx#ctx.timeout,
-    Order = Ctx#ctx.order,
+    Sort = Ctx#ctx.sort,
 
     %% Create a new multipart/mixed boundary
     Boundary = riak_core_util:unique_id_62(),
@@ -292,8 +294,8 @@ handle_streaming_index_query(RD, Ctx) ->
                 "multipart/mixed;boundary="++Boundary,
                 RD),
 
-    Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults},
-                                                {order, Order}]),
+    Opts0 = [{max_results, MaxResults}] ++ [{sort, Sort} || Sort /= undefined],
+    Opts = riak_index:add_timeout_opt(Timeout, Opts0), 
 
     {ok, ReqID, FSMPid} =  Client:stream_get_index(Bucket, Query, Opts),
     StreamFun = index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, proplists:get_value(timeout, Opts), undefined, 0),
@@ -377,11 +379,11 @@ handle_all_in_memory_index_query(RD, Ctx) ->
     Query = Ctx#ctx.index_query,
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,
-    Order = Ctx#ctx.order,
+    Sort = Ctx#ctx.sort,
     Timeout = Ctx#ctx.timeout,
 
-    Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults},
-                                               {order, Order}]),
+    Opts0 = [{max_results, MaxResults}] ++ [{sort, Sort} || Sort /= undefined],
+    Opts = riak_index:add_timeout_opt(Timeout, Opts0), 
 
     %% Do the index lookup...
     case Client:get_index(Bucket, Query, Opts) of
