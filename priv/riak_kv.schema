@@ -287,7 +287,7 @@
 ]}.
 
 %% @doc Default for 2i sort on results. If your application relies
-%% on the undocumented sorted order of results introduced in 1.4.2 and made
+%% on the sorted order of results introduced in 1.4 with pagination and made
 %% optional and off by default in 1.4.4, and you are not able to change your
 %% to override the sort order, uncomment this value and set to true.
 {mapping, "secondary_index_sort_default", "riak_kv.secondary_index_sort_default", [
