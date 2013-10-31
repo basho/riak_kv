@@ -44,6 +44,9 @@
 %%   * return_terms=true
 %%         when querying with a range, returns the value of the index
 %%         along with the key.
+%%   * sort=true|false
+%%         whether the results will be sorted. Ignored when max_results
+%%         is set, as pagination requires sorted results.
 
 -module(riak_kv_wm_index).
 
@@ -70,6 +73,7 @@
           max_results :: all | pos_integer(), %% maximum number of 2i results to return, the page size.
           return_terms = false :: boolean(), %% should the index values be returned
           timeout :: non_neg_integer() | undefined | infinity,
+          sort :: boolean() | undefined,
           security        %% security context
          }).
 
@@ -153,18 +157,33 @@ malformed_request(RD, Ctx) ->
     Args2 = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
     ReturnTerms0 = wrq:get_qs_value(?Q_2I_RETURNTERMS, "false", RD),
     ReturnTerms = normalize_boolean(string:to_lower(ReturnTerms0)),
+    Sort0 = wrq:get_qs_value(?Q_2I_SORT, RD),
+    Sort = case Sort0 of
+        undefined -> undefined;
+        _ -> normalize_boolean(string:to_lower(Sort0))
+    end,
     MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, ?ALL_2I_RESULTS, RD),
     Continuation = wrq:get_qs_value(?Q_2I_CONTINUATION, undefined, RD),
     Timeout0 =  wrq:get_qs_value("timeout", undefined, RD),
 
-    case {ReturnTerms, validate_timeout(Timeout0), validate_max(MaxResults0), riak_index:to_index_query(IndexField, Args2, Continuation)} of
-        {malformed, _, _, _} ->
+    case {Sort,
+          ReturnTerms,
+          validate_timeout(Timeout0),
+          validate_max(MaxResults0),
+          riak_index:to_index_query(IndexField, Args2, Continuation)} of
+        {malformed, _, _, _, _} ->
+             {true,
+             wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
+                                             [?Q_2I_SORT, Sort0]),
+                               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, malformed, _, _, _} ->
              {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
                                              [?Q_2I_RETURNTERMS, ReturnTerms0]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, {true, Timeout}, {true, MaxResults}, {ok, Query}} ->
+        {_, _, {true, Timeout}, {true, MaxResults}, {ok, Query}} ->
             %% Request is valid.
             ReturnTerms1 = riak_index:return_terms(ReturnTerms, Query),
             NewCtx = Ctx#ctx{
@@ -172,22 +191,23 @@ malformed_request(RD, Ctx) ->
                        index_query = Query,
                        max_results = MaxResults,
                        return_terms = ReturnTerms1,
-                       timeout=Timeout
+                       timeout=Timeout,
+                       sort = Sort
                       },
             {false, RD, NewCtx};
-        {_, _, _, {error, Reason}} ->
+        {_, _, _, _, {error, Reason}} ->
             {true,
              wrq:set_resp_body(
                io_lib:format("Invalid query: ~p~n", [Reason]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, {false, BadVal}, _} ->
+        {_, _, _, {false, BadVal}, _} ->
             {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a positive integer",
                                              [?Q_2I_MAX_RESULTS, BadVal]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, {error, Input}, _, _} ->
+        {_, _, {error, Input}, _, _} ->
             {true, wrq:append_to_resp_body(io_lib:format("Bad timeout "
                                                            "value ~p. Must be a non-negative integer~n",
                                                            [Input]),
@@ -265,6 +285,7 @@ handle_streaming_index_query(RD, Ctx) ->
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,
     Timeout = Ctx#ctx.timeout,
+    Sort = Ctx#ctx.sort,
 
     %% Create a new multipart/mixed boundary
     Boundary = riak_core_util:unique_id_62(),
@@ -273,7 +294,8 @@ handle_streaming_index_query(RD, Ctx) ->
                 "multipart/mixed;boundary="++Boundary,
                 RD),
 
-    Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults}]),
+    Opts0 = [{max_results, MaxResults}] ++ [{sort, Sort} || Sort /= undefined],
+    Opts = riak_index:add_timeout_opt(Timeout, Opts0), 
 
     {ok, ReqID, FSMPid} =  Client:stream_get_index(Bucket, Query, Opts),
     StreamFun = index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, proplists:get_value(timeout, Opts), undefined, 0),
@@ -357,9 +379,11 @@ handle_all_in_memory_index_query(RD, Ctx) ->
     Query = Ctx#ctx.index_query,
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,
+    Sort = Ctx#ctx.sort,
     Timeout = Ctx#ctx.timeout,
 
-    Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults}]),
+    Opts0 = [{max_results, MaxResults}] ++ [{sort, Sort} || Sort /= undefined],
+    Opts = riak_index:add_timeout_opt(Timeout, Opts0), 
 
     %% Do the index lookup...
     case Client:get_index(Bucket, Query, Opts) of

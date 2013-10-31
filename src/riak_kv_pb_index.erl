@@ -83,18 +83,23 @@ process(Req=#rpbindexreq{}, State) ->
 maybe_perform_query({error, Reason}, _Req, State) ->
     {error, {format, Reason}, State};
 maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
-    #rpbindexreq{type = T, bucket=B, max_results=MaxResults, timeout=Timeout} = Req,
+    #rpbindexreq{type = T, bucket=B, max_results=MaxResults, timeout=Timeout,
+                 sort=Sort} = Req,
     #state{client=Client} = State,
     Bucket = maybe_bucket_type(T, B),
-    Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults}]),
+    Opts0 = [{max_results, MaxResults}] ++ [{sort, Sort} || Sort /= undefined],
+    Opts = riak_index:add_timeout_opt(Timeout, Opts0),
     {ok, ReqId, _FSMPid} = Client:stream_get_index(Bucket, Query, Opts),
     ReturnTerms = riak_index:return_terms(Req#rpbindexreq.return_terms, Query),
     {reply, {stream, ReqId}, State#state{req_id=ReqId, req=Req#rpbindexreq{return_terms=ReturnTerms}}};
 maybe_perform_query({ok, Query}, Req, State) ->
-    #rpbindexreq{type = T, bucket=B, max_results=MaxResults, return_terms=ReturnTerms0, timeout=Timeout} = Req,
+    #rpbindexreq{type = T, bucket=B, max_results=MaxResults,
+                 return_terms=ReturnTerms0, timeout=Timeout,
+                 sort=Sort} = Req,
     #state{client=Client} = State,
     Bucket = maybe_bucket_type(T, B),
-    Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults}]),
+    Opts0 = [{max_results, MaxResults}] ++ [{sort, Sort} || Sort /= undefined],
+    Opts = riak_index:add_timeout_opt(Timeout, Opts0),
     ReturnTerms =  riak_index:return_terms(ReturnTerms0, Query),
     QueryResult = Client:get_index(Bucket, Query, Opts),
     handle_query_results(ReturnTerms, MaxResults, QueryResult , State).
