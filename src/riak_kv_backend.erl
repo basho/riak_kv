@@ -107,7 +107,7 @@ make_test_key(Backend, Suffix) ->
 make_bs_and_ks(Backend) ->
     {make_test_bucket(Backend, 1),
      make_test_bucket(Backend, 2),
-     make_test_key(Backend, 2),
+     make_test_key(Backend, 1),
      make_test_key(Backend, 2)}.
 
 basic_store_and_fetch({Backend, State}) ->
