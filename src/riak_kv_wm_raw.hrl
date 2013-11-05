@@ -17,7 +17,6 @@
 %% Names of riak_object metadata fields
 -define(MD_CTYPE,    <<"content-type">>).
 -define(MD_CHARSET,  <<"charset">>).
--define(MD_ENCODING, <<"content-encoding">>).
 -define(MD_VTAG,     <<"X-Riak-VTag">>).
 -define(MD_LINKS,    <<"Links">>).
 -define(MD_LASTMOD,  <<"X-Riak-Last-Modified">>).
@@ -29,7 +28,6 @@
 -define(HEAD_CTYPE,           "Content-Type").
 -define(HEAD_VCLOCK,          "X-Riak-Vclock").
 -define(HEAD_LINK,            "Link").
--define(HEAD_ENCODING,        "Content-Encoding").
 -define(HEAD_CLIENT,          "X-Riak-ClientId").
 -define(HEAD_USERMETA_PREFIX, "x-riak-meta-").
 -define(HEAD_INDEX_PREFIX,    "x-riak-index-").

@@ -504,27 +504,9 @@ charsets_provided(RD, Ctx0) ->
 %% @spec encodings_provided(reqdata(), context()) ->
 %%          {[{Encoding::string(), Producer::function()}], reqdata(), context()}
 %% @doc List the encodings available for representing this resource.
-%%      The encoding for a key-level request is the encoding that was
-%%      used in the PUT request that stored the document in Riak, or
-%%      "identity" and "gzip" if no encoding was specified at PUT-time.
+%%      Only 'identity' and 'gzip' are supported.
 encodings_provided(RD, Ctx0) ->
-    DocCtx = ensure_doc(Ctx0),
-    case DocCtx#ctx.doc of
-        {ok, _} ->
-            case select_doc(DocCtx) of
-                {MD, _} ->
-                    case dict:find(?MD_ENCODING, MD) of
-                        {ok, Enc} ->
-                            {[{Enc, fun(X) -> X end}], RD, DocCtx};
-                        error ->
-                            {riak_kv_wm_utils:default_encodings(), RD, DocCtx}
-                    end;
-                multiple_choices ->
-                    {riak_kv_wm_utils:default_encodings(), RD, DocCtx}
-            end;
-        {error, _} ->
-            {riak_kv_wm_utils:default_encodings(), RD, DocCtx}
-    end.
+    {riak_kv_wm_utils:default_encodings(), RD, Ctx0}.
 
 %% @spec content_types_accepted(reqdata(), context()) ->
 %%          {[{ContentType::string(), Acceptor::atom()}],
@@ -629,11 +611,7 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C, links=L, index_fields=IF
                         dict:store(?MD_CHARSET, Charset, CTypeMD);
                    true -> CTypeMD
                 end,
-    EncMD = case wrq:get_req_header(?HEAD_ENCODING, RD) of
-                undefined -> CharsetMD;
-                E -> dict:store(?MD_ENCODING, E, CharsetMD)
-            end,
-    LinkMD = dict:store(?MD_LINKS, L, EncMD),
+    LinkMD = dict:store(?MD_LINKS, L, CharsetMD),
     UserMetaMD = dict:store(?MD_USERMETA, UserMeta, LinkMD),
     IndexMD = dict:store(?MD_INDEX, IF, UserMetaMD),
     MDDoc = riak_object:update_metadata(VclockDoc, IndexMD),

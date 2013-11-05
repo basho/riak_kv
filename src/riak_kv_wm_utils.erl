@@ -106,10 +106,6 @@ multipart_encode_body(Prefix, Bucket, {MD, V}, APIVersion) ->
          error -> []
      end,
      "\r\n",
-     case dict:find(?MD_ENCODING, MD) of
-         {ok, Enc} -> [?HEAD_ENCODING,": ",Enc,"\r\n"];
-         error -> []
-     end,
      ?HEAD_LINK,": ",Links4,"\r\n",
      "Etag: ",dict:fetch(?MD_VTAG, MD),"\r\n",
      "Last-Modified: ",
