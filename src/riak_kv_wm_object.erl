@@ -545,26 +545,45 @@ content_types_accepted(RD, Ctx) ->
 %%      Documents exists if a read request to Riak returns {ok, riak_object()},
 %%      and either no vtag query parameter was specified, or the value of the
 %%      vtag param matches the vtag of some value of the Riak object.
+resource_exists(RD, #ctx{method=Method}=Ctx) when Method =:= 'PUT';
+                                                  Method =:= 'POST' ->
+    case req_is_conditional(RD) of
+        false ->
+            {false, RD, Ctx};
+        true ->
+            check_resource(RD, Ctx)
+    end;
 resource_exists(RD, Ctx0) ->
+    check_resource(RD, Ctx0).
+
+check_resource(RD, Ctx0) ->
     DocCtx = ensure_doc(Ctx0),
-    case DocCtx#ctx.doc of
-        {ok, Doc} ->
-            case DocCtx#ctx.vtag of
-                undefined ->
-                    {true, RD, DocCtx};
-                Vtag ->
-                    MDs = riak_object:get_metadatas(Doc),
-                    {lists:any(fun(M) ->
-                                       dict:fetch(?MD_VTAG, M) =:= Vtag
-                               end,
-                               MDs),
-                     RD, DocCtx#ctx{vtag=Vtag}}
-            end;
-        {error, _} ->
-            %% This should never actually be reached because all the error
-            %% conditions from ensure_doc are handled up in malformed_request.
-            {false, RD, DocCtx}
+        case DocCtx#ctx.doc of
+            {ok, Doc} ->
+                case DocCtx#ctx.vtag of
+                    undefined ->
+                        {true, RD, DocCtx};
+                    Vtag ->
+                        MDs = riak_object:get_metadatas(Doc),
+                        {lists:any(fun(M) ->
+                                           dict:fetch(?MD_VTAG, M) =:= Vtag
+                                   end,
+                                   MDs),
+                         RD, DocCtx#ctx{vtag=Vtag}}
+                end;
+            {error, _} ->
+                %% This should never actually be reached because all the error
+                %% conditions from ensure_doc are handled up in malformed_request.
+                {false, RD, DocCtx}
     end.
+
+%% @spec req_is_conditional(reqdata()) -> boolean()
+%% @doc Check if there are any conditional headers in the request 'If-*'.
+%%      This is used to short-circuit the pedantism in Webmachine decision core.
+req_is_conditional(RD) ->
+    lists:any(fun({K,_V}) -> 
+                  lists:prefix(?HEAD_CONDITION_PREFIX, string:to_lower(riak_kv_wm_utils:any_to_list(K)))
+              end, mochiweb_headers:to_list(wrq:req_headers(RD))).
 
 %% @spec post_is_create(reqdata(), context()) -> {boolean(), reqdata(), context()}
 %% @doc POST is considered a document-creation operation for bucket-level
