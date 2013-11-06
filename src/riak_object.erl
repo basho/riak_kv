@@ -62,6 +62,7 @@
 -define(MAGIC, 53).      %% Magic number, as opposed to 131 for Erlang term-to-binary magic
                          %% Shanley's(11) + Joe's(42)
 -define(EMPTY_VTAG_BIN, <<"e">>).
+-define(DOT, <<"dot">>).
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
@@ -71,7 +72,7 @@
 -export([encode_vclock/2, decode_vclock/2]).
 -export([update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
--export([merge/2, apply_updates/1, syntactic_merge/2]).
+-export([merge/2, apply_updates/1, syntactic_merge/2, merge2/2]).
 -export([to_json/1, from_json/1]).
 -export([index_data/1]).
 -export([index_specs/1, diff_index_specs/2]).
@@ -182,34 +183,40 @@ ancestors(Objects) ->
 %%       X-Riak-Last-Modified header.
 -spec reconcile([riak_object()], boolean()) -> riak_object().
 reconcile(Objects, AllowMultiple) ->
-    RObjs = reconcile(Objects),
-    AllContents = lists:flatten([O#r_object.contents || O <- RObjs]),
-    Contents = case AllowMultiple of
-                   false ->
-                       [most_recent_content(AllContents)];
-                   true ->
-                       lists:usort(AllContents)
-               end,
-    VClock = vclock:merge([O#r_object.vclock || O <- RObjs]),
-    HdObj = hd(RObjs),
-    HdObj#r_object{contents=Contents,vclock=VClock,
-                   updatemetadata=dict:store(clean, true, dict:new()),
-                   updatevalue=undefined}.
-
--spec reconcile([riak_object()]) -> [riak_object()].
-reconcile(Objects) ->
-    All = sets:from_list(Objects),
-    Del = sets:from_list(ancestors(Objects)),
-    remove_duplicate_objects(sets:to_list(sets:subtract(All, Del))).
-
-remove_duplicate_objects(Os) -> rem_dup_objs(Os,[]).
-rem_dup_objs([],Acc) -> Acc;
-rem_dup_objs([O|Rest],Acc) ->
-    EqO = [AO || AO <- Acc, riak_object:equal(AO,O) =:= true],
-    case EqO of
-        [] -> rem_dup_objs(Rest,[O|Acc]);
-        _ -> rem_dup_objs(Rest,Acc)
+    RObj = reconcile2(Objects),
+    case AllowMultiple of
+        false ->
+            Contents = [most_recent_content(RObj#r_object.contents)],
+            RObj#r_object{contents=Contents};
+        true ->
+            RObj
     end.
+
+
+%% -spec reconcile([riak_object()]) -> [riak_object()].
+%% reconcile(Objects) ->
+%%     All = sets:from_list(Objects),
+%%     Del = sets:from_list(ancestors(Objects)),
+%%     remove_duplicate_objects(sets:to_list(sets:subtract(All, Del))).
+
+reconcile2([Object]) ->
+    Object;
+reconcile2([Object1, Object2 | Rest]) ->
+    reconcile2(Rest, syntactic_merge(Object1, Object2)).
+
+reconcile2([], Mergedest) ->
+    Mergedest;
+reconcile2([Obj | Rest], Mergedest) ->
+    reconcile2(Rest, syntactic_merge(Obj, Mergedest)).
+
+%% remove_duplicate_objects(Os) -> rem_dup_objs(Os,[]).
+%% rem_dup_objs([],Acc) -> Acc;
+%% rem_dup_objs([O|Rest],Acc) ->
+%%     EqO = [AO || AO <- Acc, riak_object:equal(AO,O) =:= true],
+%%     case EqO of
+%%         [] -> rem_dup_objs(Rest,[O|Acc]);
+%%         _ -> rem_dup_objs(Rest,Acc)
+%%     end.
 
 most_recent_content(AllContents) ->
     hd(lists:sort(fun compare_content_dates/2, AllContents)).
@@ -369,12 +376,28 @@ set_vclock(Object=#r_object{}, VClock) -> Object#r_object{vclock=VClock}.
 -spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object().
 %% @spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object()
 increment_vclock(Object=#r_object{}, ClientId) ->
-    Object#r_object{vclock=vclock:increment(ClientId, Object#r_object.vclock)}.
+    %% If it is true that we only ever increment the vclock to create
+    %% a frontier object, then there most always be a single value
+    %% when we increment, so add the dot here.
+    NewClock = vclock:increment(ClientId, Object#r_object.vclock),
+    update_causal_history(Object#r_object{vclock=NewClock}, ClientId).
 
 %% @doc  Increment the entry for ClientId in O's vclock.
 -spec increment_vclock(riak_object(), vclock:vclock_node(), vclock:timestamp()) -> riak_object().
 increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
-    Object#r_object{vclock=vclock:increment(ClientId, Timestamp, Object#r_object.vclock)}.
+    NewClock = vclock:increment(ClientId, Timestamp, Object#r_object.vclock),
+    update_causal_history(Object#r_object{vclock=NewClock}, ClientId).
+
+%% @doc Update the object to capture causality. As well as adding the
+%% incremented clock, we generate a `dot' and store that in the
+%% metadata for the value. Assumes that this is only called when a new
+%% value is written
+-spec update_causal_history(riak_object(), vclock:vclock_node()) -> riak_object().
+update_causal_history(RObj, Actor) ->
+    Dot = vclock:get_entry(Actor, RObj#r_object.vclock),
+    %% Only add the dot if there is a single value in contents
+    #r_object{contents=[C=#r_content{metadata=Meta0}]} = RObj,
+    RObj#r_object{contents=[C#r_content{metadata=dict:store(?DOT, Dot, Meta0)}]}.
 
 %% @doc Prepare a list of index specifications
 %% to pass to the backend. This function is for
@@ -468,6 +491,43 @@ is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
             end
     end.
 
+merge2(Obj1, Obj2) ->
+    case vclock:equal(vclock(Obj1), vclock(Obj2)) of
+        true ->
+            Obj1;
+        false ->
+            Keep1 = drop_dominated_dots(Obj2#r_object.vclock, Obj1#r_object.contents, []),
+            Keep2 = drop_dominated_dots(Obj1#r_object.vclock, Obj2#r_object.contents, []),
+            Keep = lists:umerge(lists:usort(Keep1), lists:usort(Keep2)),
+            Obj1#r_object{contents=Keep,
+                          vclock=vclock:merge([Obj1#r_object.vclock,
+                                               Obj2#r_object.vclock]),
+                          updatemetadata=dict:store(clean, true, dict:new()),
+                          updatevalue=undefined}
+    end.
+
+drop_dominated_dots(_Clock, [], Acc) ->
+    Acc;
+drop_dominated_dots(Clock, [C=#r_content{metadata=MD} | Rest], Acc) ->
+    Dot = get_dot(MD),
+    case dot_descends(Dot, Clock) of
+        true ->
+            drop_dominated_dots(Clock, Rest, Acc);
+        false ->
+            drop_dominated_dots(Clock, Rest, [C | Acc])
+    end.
+
+get_dot(MD) ->
+    case dict:find(?DOT, MD) of
+        error ->
+            undefined;
+        {ok, Dot} -> Dot
+    end.
+
+dot_descends(undefined, _Clock) ->
+    false;
+dot_descends(Dot, Clock) ->
+    vclock:descends(Clock, [Dot]).
 
 -spec syntactic_merge(riak_object(), riak_object()) -> riak_object().
 syntactic_merge(CurrentObject, NewObject) ->
@@ -485,7 +545,7 @@ syntactic_merge(CurrentObject, NewObject) ->
                   end,
 
     case ancestors([UpdatedCurr, UpdatedNew]) of
-        [] -> merge(UpdatedCurr, UpdatedNew);
+        [] -> merge2(UpdatedCurr, UpdatedNew);
         [Ancestor] ->
             case equal(Ancestor, UpdatedCurr) of
                 true  -> UpdatedNew;
@@ -941,13 +1001,13 @@ is_updated_test() ->
     OVu = riak_object:update_value(O, testupdate),
     ?assert(is_updated(OVu)).
 
-remove_duplicates_test() ->
-    O0 = riak_object:new(<<"test">>, <<"test">>, zero),
-    O1 = riak_object:new(<<"test">>, <<"test">>, one),
-    ND = remove_duplicate_objects([O0, O0, O1, O1, O0, O1]),
-    ?assertEqual(2, length(ND)),
-    ?assert(lists:member(O0, ND)),
-    ?assert(lists:member(O1, ND)).
+%% remove_duplicates_test() ->
+%%     O0 = riak_object:new(<<"test">>, <<"test">>, zero),
+%%     O1 = riak_object:new(<<"test">>, <<"test">>, one),
+%%     ND = remove_duplicate_objects([O0, O0, O1, O1, O0, O1]),
+%%     ?assertEqual(2, length(ND)),
+%%     ?assert(lists:member(O0, ND)),
+%%     ?assert(lists:member(O1, ND)).
 
 new_with_ctype_test() ->
     O = riak_object:new(<<"b">>, <<"k">>, <<"{\"a\":1}">>, "application/json"),

@@ -1282,21 +1282,25 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
 put_merge(true, true, _CurObj, UpdObj, VId, StartTime) -> % coord=true, LWW=true
     {newobj, riak_object:increment_vclock(UpdObj, VId, StartTime)};
 put_merge(true, false, CurObj, UpdObj, VId, StartTime) ->
-    UpdObj1 = riak_object:increment_vclock(UpdObj, VId, StartTime),
-    UpdVC = riak_object:vclock(UpdObj1),
+    %% Merge the local object with the new one
+    %% Which means compare vclocks
+    %% every dot in the local clock that is dominated by the
+    %% put clock is dropped
+    %% merge the clocks
+    %% increment and add the new value under the latest dot
+    UpdVC = riak_object:vclock(UpdObj),
     CurVC = riak_object:vclock(CurObj),
-
-    %% Check the coord put will replace the existing object
-    case vclock:get_counter(VId, UpdVC) > vclock:get_counter(VId, CurVC) andalso
-        vclock:descends(CurVC, UpdVC) == false andalso
-        vclock:descends(UpdVC, CurVC) == true of
-        true ->
-            {newobj, UpdObj1};
-        false ->
-            %% If not, make sure it does
-            {newobj, riak_object:increment_vclock(
-                       riak_object:merge(CurObj, UpdObj1), VId, StartTime)}
-    end.
+    MergedClock = vclock:merge([UpdVC, CurVC]),
+    UpdObj1 = riak_object:set_vclock(UpdObj, MergedClock),
+    UpdObj2 = riak_object:increment_vclock(UpdObj1, VId, StartTime),
+    DominantClock = riak_object:vclock(UpdObj2),
+    UpdObj3 = riak_object:set_vclock(UpdObj2, UpdVC),
+    %% Now we have an update object whose value is dotted with the latest event
+    %% but whose clock is the one the user gave us
+    %% We can now merge these objects and then set the vclock to the
+    %% frontier clock
+    NewObj0 = riak_object:merge2(CurObj, UpdObj3),
+    {newobj, riak_object:set_vclock(NewObj0, DominantClock)}.
 
 %% @private
 do_get(_Sender, BKey, ReqID,
