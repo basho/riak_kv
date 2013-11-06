@@ -40,6 +40,7 @@
          fold_buckets/4,
          fold_keys/4,
          fold_objects/4,
+         fold_indexes/4,
          is_empty/1,
          status/1,
          callback/3]).
@@ -178,7 +179,7 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
                                                 fixed_indexes=FixedIndexes}=State) ->
     %% Create the KV update...
     StorageKey = to_object_key(Bucket, PrimaryKey),
-    Updates1 = [{put, StorageKey, Val}],
+    Updates1 = [{put, StorageKey, Val} || Val /= undefined],
 
     %% Convert IndexSpecs to index updates...
     F = fun({add, Field, Value}) ->
@@ -399,6 +400,33 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
             {async, KeyFolder};
         false ->
             {ok, KeyFolder()}
+    end.
+
+fold_indexes(FoldIndexFun, Acc, _Opts, #state{fold_opts=FoldOpts,
+                                              ref=Ref}) ->
+    FirstKey = to_index_key(<<>>, <<>>, <<>>, <<>>),
+    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    FoldFun = fold_indexes_fun(FoldIndexFun),
+    KeyFolder =
+        fun() ->
+                %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
+                try
+                    eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
+                catch
+                    {break, BrkResult} ->
+                        BrkResult
+                end
+        end,
+    {async, KeyFolder}.
+
+fold_indexes_fun(FoldIndexFun) ->
+    fun(StorageKey, Acc) ->
+            case from_index_key(StorageKey) of
+                {Bucket, Key, Field, Term} ->
+                    FoldIndexFun(Bucket, Key, Field, Term, Acc);
+                _ ->
+                    throw({break, Acc})
+            end
     end.
 
 legacy_key_fold(Ref, FoldFun, Acc, FoldOpts0, Query={index, _, _}) ->
@@ -659,32 +687,65 @@ fold_keys_fun(FoldKeysFun, {bucket, FilterBucket}) ->
             end
     end;
 %% 2i queries
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{filter_field=FilterField}})
+fold_keys_fun(FoldKeysFun, {index, FilterBucket,
+                            Q=?KV_INDEX_Q{filter_field=FilterField,
+                                         term_regex=TermRe}})
   when FilterField =:= <<"$bucket">>;
        FilterField =:= <<"$key">> ->
+    AccFun = case FilterField =:= <<"$key">> andalso TermRe =/= undefined of
+        true ->
+            fun(Bucket, Key, Acc) ->
+                    case re:run(Key, TermRe) of
+                        nomatch -> Acc;
+                        _ -> stoppable_fold(FoldKeysFun, Bucket, Key, Acc)
+                    end
+            end;
+        false ->
+            fun(Bucket, Key, Acc) ->
+                    stoppable_fold(FoldKeysFun, Bucket, Key, Acc)
+            end
+    end,
+
     %% Inbuilt indexes
     fun(StorageKey, Acc) ->
             ObjectKey = from_object_key(StorageKey),
             case riak_index:object_key_in_range(ObjectKey, FilterBucket, Q) of
                 {true, {Bucket, Key}} ->
-                    stoppable_fold(FoldKeysFun, Bucket, Key, Acc);
+                    AccFun(Bucket, Key, Acc);
                 {skip, _BK} ->
                     Acc;
                 _ ->
                     throw({break, Acc})
             end
     end;
-fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Terms}}) ->
+fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Terms,
+                                                              term_regex=TermRe}}) ->
+    AccFun = case TermRe =:= undefined of
+        true ->
+            fun(Bucket, _Term, Val, Acc) ->
+                    stoppable_fold(FoldKeysFun, Bucket, Val, Acc)
+            end;
+        false ->
+            fun(Bucket, Term, Val, Acc) ->
+                    case re:run(Term, TermRe) of
+                        nomatch ->
+                            Acc;
+                        _ ->
+                            stoppable_fold(FoldKeysFun, Bucket, Val, Acc)
+                    end
+            end
+    end,
+
     %% User indexes
     fun(StorageKey, Acc) ->
             IndexKey = from_index_key(StorageKey),
             case riak_index:index_key_in_range(IndexKey, FilterBucket, Q) of
                 {true, {Bucket, Key, _Field, Term}} ->
                     Val = if
-                              Terms -> {Term, Key};
-                              true -> Key
-                          end,
-                    stoppable_fold(FoldKeysFun, Bucket, Val, Acc);
+                        Terms -> {Term, Key};
+                        true -> Key
+                    end,
+                    AccFun(Bucket, Term, Val, Acc);
                 {skip, _IK} ->
                     Acc;
                 _ ->

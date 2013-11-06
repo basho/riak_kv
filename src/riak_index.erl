@@ -32,9 +32,8 @@
          format_failure_reason/1,
          normalize_index_field/1,
          timestamp/0,
+         to_index_query/1,
          to_index_query/2,
-         to_index_query/3,
-         to_index_query/6,
          make_continuation/1,
          return_terms/2,
          return_body/1,
@@ -52,6 +51,7 @@
 -define(TIMEOUT, 30000).
 -define(BUCKETFIELD, <<"$bucket">>).
 -define(KEYFIELD, <<"$key">>).
+-define(CURRENT_2I_VERSION, v3).
 
 %% See GH610, this default is for backwards compat, so 2i behaves as
 %% it did before the FSM timeout bug was "fixed"
@@ -74,6 +74,7 @@
 -opaque continuation() :: binary(). %% encoded last_result().
 -export_type([continuation/0]).
 
+-type query_version() :: v1 | v2 | v3.
 mapred_index(Dest, Args) ->
     mapred_index(Dest, Args, ?TIMEOUT).
 mapred_index(_Pipe, [Bucket, Query], Timeout) ->
@@ -244,89 +245,91 @@ timestamp() ->
     {MegaSeconds,Seconds,MilliSeconds}=os:timestamp(),
     (MegaSeconds * 1000000000000) + (Seconds * 1000000) + MilliSeconds.
 
-%% @spec to_index_query(binary(), [binary()]) ->
-%%         {ok, {atom(), binary(), list(binary())}} | {error, Reasons}.
-%% @doc Given an IndexOp, IndexName, and Args, construct and return a
-%%      valid query, or a list of errors if the query is malformed.
-to_index_query(IndexField, Args) ->
-    %% Normalize the index field...
-    IndexField1 = riak_index:normalize_index_field(IndexField),
+parse_field_if_defined(_, undefined) ->
+    {ok, undefined};
+parse_field_if_defined(Field, Val) ->
+    parse_field(Field, Val, field_types()).
 
-    %% Normalize the arguments...
-    case riak_index:parse_fields([{IndexField1, X} || X <- Args]) of
-        {ok, []} ->
-            {error, {too_few_arguments, Args}};
+to_index_query(?CURRENT_2I_VERSION, Args) ->
+    Defaults = ?KV_INDEX_Q{},
+    [Field1, Start, StartInc, End, EndInc,
+     TermRegex, ReturnBody, MaxResults, Cont
+    ] =
+        [proplists:get_value(F, Args, Default) ||
+            {F, Default} <-
+            [{field, Defaults?KV_INDEX_Q.filter_field},
+             {start_term, Defaults?KV_INDEX_Q.start_term},
+             {start_inclusive, Defaults?KV_INDEX_Q.start_inclusive},
+             {end_term, Defaults?KV_INDEX_Q.end_term},
+             {end_inclusive, Defaults?KV_INDEX_Q.end_inclusive},
+             {term_regex, Defaults?KV_INDEX_Q.term_regex},
+             {return_body, Defaults?KV_INDEX_Q.return_body},
+             {max_results, Defaults?KV_INDEX_Q.max_results},
+             {continuation, undefined}]],
+    Field = normalize_index_field(Field1),
+    SKeyDefault = case Field of
+        ?KEYFIELD -> Start;
+        _ -> Defaults?KV_INDEX_Q.start_key
+    end,
+    StartKey = proplists:get_value(start_key, Args, SKeyDefault),
+    %% Internal return terms, not to be confused with user facing
+    %% return terms in the external clients.
+    ReturnTerms = proplists:get_value(return_terms, Args, true) andalso
+    Field /= ?KEYFIELD,
 
-        {ok, [{_, Value}]} ->
-            %% One argument == exact match query
-            {ok, {eq, IndexField1, Value}};
-
-        {ok, [{_, Start}, {_, End}]} ->
-            %% Two arguments == range query
-            case End > Start of
-                true ->
-                    {ok, {range, IndexField1, Start, End}};
-                false ->
-                    {error, {invalid_range, Args}}
+    case {parse_field_if_defined(Field, Start),
+          parse_field_if_defined(Field, End)} of
+        {{ok, NormStart}, {ok, NormEnd}} ->
+            Req1 = ?KV_INDEX_Q{
+                    start_key=StartKey,
+                    filter_field=Field,
+                    start_term=NormStart,
+                    end_term=NormEnd,
+                    return_terms=ReturnTerms,
+                    start_inclusive=StartInc,
+                    end_inclusive=EndInc,
+                    return_body=ReturnBody,
+                    term_regex=TermRegex,
+                    max_results=MaxResults
+                     },
+            case Cont of
+                undefined ->
+                    {ok, Req1};
+                _ ->
+                    apply_continuation(Req1, decode_continuation(Cont))
             end;
-
-        {ok, _} ->
-            {error, {too_many_arguments, Args}};
-
-        {error, FailureReasons} ->
-            {error, FailureReasons}
+        {{error, _} = Err, _} ->
+            Err;
+        {_, {error, _} = Err} ->
+            Err
+    end;
+to_index_query(OldVersion, Args) ->
+    case to_index_query(?CURRENT_2I_VERSION, Args) of
+        {ok, Req} ->
+            downgrade_query(OldVersion, Req);
+        Err ->
+            Err
     end.
 
-%% v2 2i queries
-%% @doc Create an index query of the current highest version supported by
-%% cluster capability.
-%% This 6 arity version is for the new (temporarily unsupported) `return_body' feature
-%% for CS.
-%% @see riak_kv_pb_csbucket
-to_index_query(IndexField, Args, Continuation, ReturnBody, {Start, StartInc}, {End, EndInc}) ->
-    BaseQuery = ?KV_INDEX_Q{return_body=ReturnBody,
-                            start_key=Start, start_inclusive=StartInc,
-                            end_term=End, end_inclusive=EndInc},
-    to_index_query(IndexField, Args, Continuation, BaseQuery).
-
-%% @doc Create an index quey of the current highest version supported by
-%% cluster capability.
-%% `IndexField' is either a user supplied term or one of
-%% the inbuilt indexes (`<<"$key">>' and `<<"$bucket">>').
-%% `Args' is a list or either a start and end for a range, or a single
-%% value for equality.
-%% `Continuation' is the opaque continuation that may have been
-%% returned from a previous query, or `undefined'.
-%% @see make_continuation/1
-to_index_query(IndexField, Args, Continuation) ->
-    to_index_query(IndexField, Args, Continuation, ?KV_INDEX_Q{}).
-
-to_index_query(IndexField, Args, Continuation, BaseQuery) ->
+to_index_query(Args) ->
     Version = riak_core_capability:get({riak_kv, secondary_index_version}, v1),
-    Query = to_index_query(IndexField, Args),
-    case {Version, Query} of
-        {_Any, {error, _Reason}=Error} -> Error;
-        {v1, OKQ} -> OKQ;
-        {v2, {ok, V1Q}} ->
-            {ok, V2Q} = make_v2_query(V1Q, BaseQuery),
-            apply_continuation(V2Q, decode_continuation(Continuation))
-    end.
+    to_index_query(Version, Args).
 
 %% @doc upgrade a V1 Query to a v2 Query
-make_v2_query({eq, ?BUCKETFIELD, _Bucket}, Q) ->
+make_query({eq, ?BUCKETFIELD, _Bucket}, Q) ->
     {ok, Q?KV_INDEX_Q{filter_field=?BUCKETFIELD, return_terms=false}};
-make_v2_query({eq, ?KEYFIELD, Value}, Q) ->
+make_query({eq, ?KEYFIELD, Value}, Q) ->
     {ok, Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_key=Value, start_term=Value,
                  end_term=Value, return_terms=false}};
-make_v2_query({eq, Field, Value}, Q) ->
+make_query({eq, Field, Value}, Q) ->
     {ok, Q?KV_INDEX_Q{filter_field=Field, start_term=Value, end_term=Value, return_terms=false}};
-make_v2_query({range, ?KEYFIELD, Start, End}, Q) ->
+make_query({range, ?KEYFIELD, Start, End}, Q) ->
     {ok, Q?KV_INDEX_Q{filter_field=?KEYFIELD, start_term=Start, start_key=Start,
                 end_term=End, return_terms=false}};
-make_v2_query({range, Field, Start, End}, Q) ->
+make_query({range, Field, Start, End}, Q) ->
     {ok, Q?KV_INDEX_Q{filter_field=Field, start_term=Start,
-                 end_term=End}};
-make_v2_query(V1Q, _) ->
+                 end_term=End, return_terms=false}};
+make_query(V1Q, _) ->
     {error, {invalid_v1_query, V1Q}}.
 
 %% @doc if a continuation is specified, use it to update the query
@@ -347,15 +350,61 @@ apply_continuation(Q, C) ->
 %% @doc upgrade a query to the current latest version
 upgrade_query(Q=?KV_INDEX_Q{}) ->
     Q;
+upgrade_query(#riak_kv_index_v2{
+                start_key=StartKey,
+                filter_field=Field,
+                start_term=StartTerm,
+                end_term=EndTerm,
+                return_terms=ReturnTerms,
+                start_inclusive=StartInclusive,
+                end_inclusive=EndInclusive,
+                return_body=ReturnBody}) ->
+    ?KV_INDEX_Q{
+        start_key=StartKey,
+        filter_field=Field,
+        start_term=StartTerm,
+        end_term=EndTerm,
+        return_terms=ReturnTerms,
+        start_inclusive=StartInclusive,
+        end_inclusive=EndInclusive,
+        return_body=ReturnBody};
 upgrade_query(Q) when is_tuple(Q) ->
-    {ok, V2Q} = make_v2_query(Q, ?KV_INDEX_Q{}),
-    V2Q.
+    {ok, Q2} = make_query(Q, ?KV_INDEX_Q{}),
+    Q2.
+
+%% @doc Downgrade a lastest version query record to a previous version.
+-spec downgrade_query(V :: query_version(), ?KV_INDEX_Q{}) ->
+    {ok, tuple() | #riak_kv_index_v2{}} | {error, any()}.
+downgrade_query(v1, ?KV_INDEX_Q{
+                       filter_field=Field, start_term=Start, end_term=Start,
+                       return_terms=false}) ->
+    {ok, {eq, Field, Start}};
+downgrade_query(v1, ?KV_INDEX_Q{
+                filter_field=Field, start_term=Start, end_term=End}) ->
+    {ok, {range, Field, Start, End}};
+downgrade_query(v2, ?KV_INDEX_Q{
+                filter_field=Field, start_key=StartKey,
+                start_term=StartTerm, start_inclusive=StartInc,
+                end_term=EndTerm, end_inclusive=EndInc,
+                return_terms=ReturnTerms, return_body=ReturnBody}) ->
+    {ok, #riak_kv_index_v2{
+            filter_field = Field, start_key=StartKey,
+            start_term=StartTerm, start_inclusive=StartInc,
+            end_term=EndTerm, end_inclusive=EndInc,
+            return_terms=ReturnTerms, return_body=ReturnBody
+            }};
+downgrade_query(V, Q) ->
+    {error, {downgrade_not_supported, V, Q}}.
 
 %% @doc Should index terms be returned in a result
 %% to the client. Requires both that they are wanted (arg1)
 %% and available (arg2)
-return_terms(true, ?KV_INDEX_Q{return_terms=true}) ->
-    true;
+return_terms(false, _) ->
+    false;
+return_terms(true, ?KV_INDEX_Q{return_terms=ReturnTerms}) ->
+    ReturnTerms;
+return_terms(true, OldQ) ->
+    return_terms(true, upgrade_query(OldQ));
 return_terms(_, _) ->
     false.
 
@@ -384,9 +433,28 @@ index_key_in_range(_, _, _) ->
     false.
 
 %% @doc Is a {bucket, key} pair in range for an index query
-object_key_in_range({Bucket, Key}=OK, Bucket, Q=?KV_INDEX_Q{end_term=undefined}) ->
-    ?KV_INDEX_Q{start_key=Start, start_inclusive=StartInc} = Q,
+object_key_in_range({Bucket, Key} = OK, Bucket,
+                    ?KV_INDEX_Q{end_term=undefined,
+                                start_key=Start,
+                                start_inclusive=StartInc}) ->
     in_range(gt(StartInc, Key, Start), true, OK);
+object_key_in_range({Bucket, Key}=OK, Bucket,
+                    ?KV_INDEX_Q{filter_field=?KEYFIELD,
+                                start_key=Start,
+                                term_regex=TermRe,
+                                start_inclusive=StartInc,
+                                end_term=End,
+                                end_inclusive=EndInc})
+        when TermRe =/= undefined ->
+    case in_range(gt(StartInc, Key, Start), gt(EndInc, End, Key), OK) of
+        {true, OK} ->
+            case re:run(Key, TermRe) of
+                nomatch -> {skip, OK};
+                _ -> {true, OK}
+            end;
+        Other ->
+            Other
+    end;
 object_key_in_range({Bucket, Key}=OK, Bucket, Q) ->
     ?KV_INDEX_Q{start_key=Start, start_inclusive=StartInc,
                 end_term=End, end_inclusive=EndInc} = Q,
