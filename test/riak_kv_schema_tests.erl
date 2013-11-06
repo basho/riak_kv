@@ -42,6 +42,8 @@ basic_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend_default", undefined),
     cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend", undefined),
 
+    cuttlefish_unit:assert_config(Config, "riak_kv.secure_referer_check", true),
+
     ok.
 
 override_non_multi_backend_schema_test() ->
@@ -74,7 +76,8 @@ override_non_multi_backend_schema_test() ->
         {["retry_put_coordinator_failure"], off},
         {["object_format"], v0},
         {["memory_backend", "max_memory"], "8GB"},
-        {["memory_backend", "ttl"], "1d"}
+        {["memory_backend", "ttl"], "1d"},
+        {["secure_referer_check"], off}
     ],
 
     Config = cuttlefish_unit:generate_templated_config(
@@ -111,6 +114,7 @@ override_non_multi_backend_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend_default", undefined),
     cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend", undefined),
 
+    cuttlefish_unit:assert_config(Config, "riak_kv.secure_referer_check", false),
     ok.
 
 multi_backend_test() ->
@@ -153,6 +157,7 @@ multi_backend_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.memory_backend.max_memory", 4096),
     cuttlefish_unit:assert_config(Config, "riak_kv.memory_backend.ttl", undefined),
 
+    cuttlefish_unit:assert_config(Config, "riak_kv.secure_referer_check", true),
     %% make sure multi backend is not on by shell_default
     cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend_default", <<"backend_one">>),
 
