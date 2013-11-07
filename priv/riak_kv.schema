@@ -286,7 +286,7 @@
   {level, advanced}
 ]}.
 
-%% @doc In Riak 1.2 we added some measures to counteract cross-site scripting 
+%% @doc Measures were added to Riak 1.2 to counteract cross-site scripting 
 %% and request-forgery attacks. Some reverse-proxies cannot remove the Referer 
 %% header and makes serving data directly from Riak impossible. Turning
 %% secure_referer_check = off disables this security check
