@@ -19,18 +19,22 @@
 }.
 
 %% Riak KV config
-%% @doc Storage_backend specifies the Erlang module defining the storage
-%% mechanism that will be used on this node.
+
+%% @doc storage_backend specifies the engine used for Riak's key-value
+%% data and secondary indexes (if supported). Note the 'yessir' option
+%% is for testing only.
+%%
+%% Valid values are:
+%%    bitcask, leveldb, memory, yessir, multi
 {mapping, "storage_backend", "riak_kv.storage_backend", [
   {default, {{storage_backend}} },
-  {default, bitcask},
   {datatype, {enum, [bitcask, leveldb, memory, yessir, multi]}}
 ]}.
 
 { translation,
   "riak_kv.storage_backend",
   fun(Conf) ->
-    Setting = cuttlefish_util:conf_get_value("storage_backend", Conf), 
+    Setting = cuttlefish_util:conf_get_value("storage_backend", Conf),
     case Setting of
       bitcask -> riak_kv_bitcask_backend;
       leveldb -> riak_kv_eleveldb_backend;
