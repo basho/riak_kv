@@ -244,12 +244,30 @@ compare_content_dates(C1,C2) ->
 -spec merge(riak_object(), riak_object()) -> riak_object().
 merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
-    OldObject#r_object{contents=lists:umerge(lists:usort(NewObject#r_object.contents),
-                                             lists:usort(OldObject#r_object.contents)),
+    OldObject#r_object{contents=merge_contents(NewObject#r_object.contents,
+                                               OldObject#r_object.contents),
                        vclock=vclock:merge([OldObject#r_object.vclock,
                                             NewObj1#r_object.vclock]),
                        updatemetadata=dict:store(clean, true, dict:new()),
                        updatevalue=undefined}.
+
+%% @doc Merge the r_objects contents by converting the inner dict to
+%%      a list, ensuring a sane order, and merging into a unique list.
+merge_contents(NewContents, OldContents) ->
+    OldContents1 = lists:map(fun convert_to_dict_list/1, OldContents),
+    NewContents1 = lists:map(fun convert_to_dict_list/1, NewContents),
+    Result = lists:umerge(lists:usort(NewContents1),
+                          lists:usort(OldContents1)),
+    lists:map(fun convert_from_dict_list/1, Result).
+
+%% @doc Convert a r_content's inner dictionary to a list, and sort it to
+%%      ensure we can do comparsions between r_contents.
+convert_to_dict_list({r_content, Dict, Value}) ->
+    {r_content, lists:usort(dict:to_list(Dict)), Value}.
+
+%% @doc Convert a r_content's inner dictionary from a list to a dict.
+convert_from_dict_list({r_content, Dict, Value}) ->
+    {r_content, dict:from_list(Dict), Value}.
 
 %% @doc  Promote pending updates (made with the update_value() and
 %%       update_metadata() calls) to this riak_object.
