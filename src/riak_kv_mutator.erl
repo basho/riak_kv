@@ -135,7 +135,7 @@ unregister(Module) ->
 
 %% @doc Retrieve the list of mutators in the order to apply them when doing a
 %% a put mutation. To get the order when doing a get mutation, reverse the list.
--spec get() -> [atom()].
+-spec get() -> {ok, [atom()]}.
 get() ->
     Resolver = fun
         ('$deleted', '$deleted') ->
