@@ -85,7 +85,7 @@
 
 -export([register/1, register/2, unregister/1]).
 -export([get/0]).
--export([mutate_put/2, mutate_get/1]).
+-export([mutate_put/3, mutate_put/2, mutate_get/1]).
 
 -callback mutate_put(Meta :: dict(), Value :: any(), ExposedMeta :: dict(), FullObject :: riak_object:riak_object(), BucketProps :: orddict:orddict()) -> {dict(), any(), dict()}.
 -callback mutate_get(FullObject :: riak_object:riak_object()) -> riak_object:riak_object() | 'notfound'.
@@ -183,6 +183,11 @@ mutate_get(Object, [Mutator | Tail]) ->
             mutate_get(Object2, Tail)
     end.
 
+-spec mutate_put(Object :: riak_object:riak_object(), BucketProps :: orddict:orddict()) -> {riak_object:riak_object(), riak_object:riak_object()}.
+mutate_put(Object, BucketProps) ->
+    {ok, Modules} = ?MODULE:get(),
+    mutate_put(Object, BucketProps, Modules).
+
 %% @doc Mutate an object in preparation to storage, returning a tuple of the
 %% object to store and the object to return to the client. For each sibling
 %% the object has {Meta, Value} pair, each mutator is called with a copy
@@ -191,10 +196,9 @@ mutate_get(Object, [Mutator | Tail]) ->
 %% two {@link riak_object:riak_object()}s are returned. The first is what
 %% is to be stored, while the second has the exposed meta set with the
 %% orginal value(s).
--spec mutate_put(Object :: riak_object:riak_object(), BucketProps :: orddict:orddict()) -> {riak_object:riak_object(), riak_object:riak_object()}.
-mutate_put(Object, BucketProps) ->
+-spec mutate_put(Object :: riak_object:riak_object(), BucketProps :: orddict:orddict(), Modules :: [atom()]) -> {riak_object:riak_object(), riak_object:riak_object()}.
+mutate_put(Object, BucketProps, Modules) ->
     Contents = riak_object:get_contents(Object),
-    {ok, Modules} = ?MODULE:get(),
     MetasValuesRevealeds = lists:map(fun({InMeta, InValue}) ->
         {InMeta1, InValue1, InRevealed} = lists:foldl(fun(Module, {InInMeta, InInValue, InInRevealed}) ->
             % why not just give the riak_object? because of a warning
