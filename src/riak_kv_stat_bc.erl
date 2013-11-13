@@ -582,7 +582,7 @@ bc_stat(Name, Val) ->
 %% would be two stats, of NAME_count and NAME_one
 %% let's do that
 bc_stat_val(StatName, Val) when is_list(Val) ->
-    [{join([StatName, ValName]), ValVal} || {ValName, ValVal} <- Val];
+    [{join(StatName ++ [ValName]), ValVal} || {ValName, ValVal} <- Val];
 bc_stat_val(StatName, Val) ->
     {StatName, Val}.
 

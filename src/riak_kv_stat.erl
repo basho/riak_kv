@@ -42,8 +42,8 @@
 
 %% API
 -export([start_link/0, get_stats/0,
-         update/1, perform_update/1, register_stats/0, produce_stats/0,
-         leveldb_read_block_errors/0, stop/0]).
+         update/1, register_stats/0, produce_stats/0,
+         leveldb_read_block_errors/1, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
 -export([active_gets/0, active_puts/0]).
 
@@ -60,40 +60,24 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 register_stats() ->
-    _ = [(catch folsom_metrics:delete_metric(Stat)) ||
-            Stat <- folsom_metrics:get_metrics(),
-            is_tuple(Stat), element(1, Stat) == ?APP],
-    _ = [do_register_stat(stat_name(Name), Type) || {Name, Type} <- stats()],
-    riak_core_stat_cache:register_app(?APP, {?MODULE, produce_stats, []}).
+    riak_core_stat:register_stats(?APP, stats()).
 
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
 get_stats() ->
-    case riak_core_stat_cache:get_stats(?APP) of
-        {ok, Stats, _TS} ->
-            Stats;
-        Error -> Error
-    end.
+    riak_core_stat:get_stats(?APP).
 
 %% Creation of a dynamic stat _must_ be serialized.
 register_stat(Name, Type) ->
-    gen_server:call(?SERVER, {register, Name, Type}).
+    do_register_stat(Name, Type).
+    %% gen_server:call(?SERVER, {register, Name, Type}).
 
 update(Arg) ->
-    case erlang:module_loaded(riak_kv_stat_sj) of
-        true ->
-            %% Dispatch request to sidejob worker
-            riak_kv_stat_worker:update(Arg);
-        false ->
-            perform_update(Arg)
-    end.
-
-%% @doc
-%% Callback used by a {@link riak_kv_stat_worker} to perform actual update
-perform_update(Arg) ->
     try do_update(Arg) of
-        _ ->
-            ok
+	ok -> ok;
+	{error, not_found} ->
+            lager:warning("{error,not_found} updating stat ~p.", [Arg]),
+	    gen_server:cast(?SERVER, {re_register_stat, Arg})
     catch
         ErrClass:Err ->
             lager:warning("~p:~p updating stat ~p.", [ErrClass, Err, Arg]),
@@ -108,11 +92,13 @@ untrack_bucket(Bucket) when is_binary(Bucket) ->
 
 %% The current number of active get fsms in riak
 active_gets() ->
-    folsom_metrics:get_metric_value({?APP, node, gets, fsm, active}).
+    exometer:get_value([riak_core_stat:prefix(),
+			?APP, node, gets, fsm, active]).
 
 %% The current number of active put fsms in riak
 active_puts() ->
-    folsom_metrics:get_metric_value({?APP, node, puts, fsm, active}).
+    exometer:get_value([riak_core_stat:prefix(),
+			?APP, node, puts, fsm, active]).
 
 stop() ->
     gen_server:cast(?SERVER, stop).
@@ -169,112 +155,142 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% @doc Update the given stat
 do_update({vnode_get, Idx, USecs}) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, vnode, gets}, 1, spiral),
-    create_or_update({?APP, vnode, gets, time}, USecs, histogram),
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, vnode, gets], 1),
+    create_or_update([P, ?APP, vnode, gets, time], USecs, histogram),
     do_per_index(gets, Idx, USecs);
 do_update({vnode_put, Idx, USecs}) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, vnode, puts}, 1, spiral),
-    create_or_update({?APP, vnode, puts, time}, USecs, histogram),
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, vnode, puts], 1),
+    create_or_update([P, ?APP, vnode, puts, time], USecs, histogram),
     do_per_index(puts, Idx, USecs);
 do_update(vnode_index_refresh) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, vnode, index, refreshes}, 1, spiral);
+    exometer:update([riak_core_stat:prefix(), ?APP, vnode, index, refreshes], 1);
 do_update(vnode_index_read) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode, index, reads}, 1, spiral);
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, vnode, index, reads], 1);
 do_update({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, vnode, index, writes}, 1, spiral),
-    ok = folsom_metrics:notify_existing_metric({?APP, vnode, index, writes, postings}, PostingsAdded, spiral),
-    ok = folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes, postings}, PostingsRemoved, spiral);
+    P = riak_core_stat:prefix(),
+    ok = exometer:update([P, ?APP, vnode, index, writes], 1),
+    ok = exometer:update([P, ?APP, vnode, index, writes, postings], PostingsAdded),
+    ok = exometer:update([P, ?APP, vnode, index, deletes, postings], PostingsRemoved);
 do_update({vnode_index_delete, Postings}) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes}, Postings, spiral),
-    ok = folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes, postings}, Postings, spiral);
+    P = riak_core_stat:prefix(),
+    ok = exometer:update([P, ?APP, vnode, index, deletes], Postings),
+    ok = exometer:update([P, ?APP, vnode, index, deletes, postings], Postings);
 do_update({vnode_dt_update, Mod, Micros}) ->
+    P = riak_core_stat:prefix(),
     Type = riak_kv_crdt:from_mod(Mod),
-    ok = folsom_metrics:notify_existing_metric({?APP, vnode, Type, update}, 1, spiral),
-    ok = folsom_metrics:notify_existing_metric({?APP, vnode, Type, update, time}, Micros, histogram);
+    ok = exometer:update([P, ?APP, vnode, Type, update], 1),
+    ok = exometer:update([P, ?APP, vnode, Type, update, time], Micros);
 do_update({riak_object_merge, undefined,  Micros}) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, object, merge}, 1, spiral),
-    ok = folsom_metrics:notify_existing_metric({?APP, object, merge, time}, Micros, histogram);
+    P = riak_core_stat:prefix(),
+    ok = exometer:update([P, ?APP, object, merge], 1),
+    ok = exometer:update([P, ?APP, object, merge, time], Micros);
 do_update({riak_object_merge, Mod, Micros}) ->
+    P = riak_core_stat:prefix(),
     Type = riak_kv_crdt:from_mod(Mod),
-    ok = folsom_metrics:notify_existing_metric({?APP, object, Type, merge}, 1, spiral),
-    ok = folsom_metrics:notify_existing_metric({?APP, object, Type, merge, time}, Micros, histogram);
+    ok = exometer:update([P, ?APP, object, Type, merge], 1),
+    ok = exometer:update([P, ?APP, object, Type, merge, time], Micros);
 do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket, undefined}) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, node, gets}, 1, spiral),
-    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, time}, Microsecs, histogram),
+    P = riak_core_stat:prefix(),
+    ok = exometer:update([P, ?APP, node, gets], 1),
+    ok = exometer:update([P, ?APP, node, gets, time], Microsecs),
     do_stages([?APP, node, gets, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined});
 do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket, undefined}) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, node, gets}, 1, spiral),
-    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, time}, Microsecs, histogram),
-    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, siblings}, NumSiblings, histogram),
-    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, objsize}, ObjSize, histogram),
+    P = riak_core_stat:prefix(),
+    ok = exometer:update([P, ?APP, node, gets], 1),
+    ok = exometer:update([P, ?APP, node, gets, time], Microsecs),
+    ok = exometer:update([P, ?APP, node, gets, siblings], NumSiblings),
+    ok = exometer:update([P, ?APP, node, gets, objsize], ObjSize),
     do_stages([?APP, node, gets, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize});
 do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket, CRDTMod}) ->
+    P = riak_core_stat:prefix(),
     Type = riak_kv_crdt:from_mod(CRDTMod),
-    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Type}, 1, spiral),
-    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Type, time}, Microsecs, histogram),
+    ok = exometer:update([P, ?APP, node, gets, Type], 1),
+    ok = exometer:update([P, ?APP, node, gets, Type, time], Microsecs),
     do_stages([?APP, node, gets, Type, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined, Type});
 do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket, CRDTMod}) ->
+    P = riak_core_stat:prefix(),
     Type = riak_kv_crdt:from_mod(CRDTMod),
-    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Type}, 1, spiral),
-    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Type, time}, Microsecs, histogram),
-    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Type, siblings}, NumSiblings, histogram),
-    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Type, objsize}, ObjSize, histogram),
+    ok = exometer:update([P, ?APP, node, gets, Type], 1),
+    ok = exometer:update([P, ?APP, node, gets, Type, time], Microsecs),
+    ok = exometer:update([P, ?APP, node, gets, Type, siblings], NumSiblings),
+    ok = exometer:update([P, ?APP, node, gets, Type, objsize}, ObjSize),
     do_stages([?APP, node, gets, Type, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type});
 do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, undefined}) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, node, puts}, 1, spiral),
-    ok = folsom_metrics:notify_existing_metric({?APP, node, puts, time}, Microsecs, histogram),
+    P = riak_core_stat:prefix(),
+    ok = exometer:update([P, ?APP, node, puts], 1),
+    ok = exometer:update([P, ?APP, node, puts, time], Microsecs),
     do_stages([?APP, node, puts, time], Stages),
     do_put_bucket(PerBucket, {Bucket, Microsecs, Stages});
 do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, CRDTMod}) ->
+    P = riak_core_stat:prefix(),
     Type = riak_kv_crdt:from_mod(CRDTMod),
-    ok = folsom_metrics:notify_existing_metric({?APP, node, puts, Type}, 1, spiral),
-    ok = folsom_metrics:notify_existing_metric({?APP, node, puts, Type, time}, Microsecs, histogram),
+    ok = exometer:update([P, ?APP, node, puts, Type], 1),
+    ok = exometer:update([P, ?APP, node, puts, Type, time], Microsecs),
     do_stages([?APP, node, puts, Type, time], Stages),
     do_put_bucket(PerBucket, {Bucket, Microsecs, Stages, Type});
 do_update({read_repairs, Indices, Preflist}) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, read_repairs}, 1, spiral),
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, node, gets, read_repairs], 1),
     do_repairs(Indices, Preflist);
 do_update(coord_redir) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, node, puts, coord_redirs}, {inc, 1}, counter);
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, node, puts, coord_redirs], 1);
 do_update(mapper_start) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, mapper_count}, {inc, 1}, counter);
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, mapper_count], 1);
 do_update(mapper_end) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, mapper_count}, {dec, 1}, counter);
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, mapper_count], -1);
 do_update(precommit_fail) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, precommit_fail}, {inc, 1}, counter);
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, precommit_fail], 1);
 do_update(postcommit_fail) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, postcommit_fail}, {inc, 1}, counter);
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, postcommit_fail], 1);
 do_update({fsm_spawned, Type}) when Type =:= gets; Type =:= puts ->
-    ok = folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, active}, {inc, 1}, counter);
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, node, Type, fsm, active], 1);
 do_update({fsm_exit, Type}) when Type =:= gets; Type =:= puts  ->
-    ok = folsom_metrics:notify_existing_metric({?APP, node, Type, fsm,  active}, {dec, 1}, counter);
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, node, Type, fsm, active], -1);
 do_update({fsm_error, Type}) when Type =:= gets; Type =:= puts ->
-    ok = do_update({fsm_exit, Type}),
-    ok = folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, errors}, 1, spiral);
+    P = riak_core_stat:prefix(),
+    do_update({fsm_exit, Type}),
+    exometer:update([P, ?APP, node, Type, fsm, errors], 1);
 do_update({index_create, Pid}) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, index, fsm, create}, 1, spiral),
-    ok = folsom_metrics:notify_existing_metric({?APP, index, fsm, active}, {inc, 1}, counter),
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, index, fsm, create], 1),
+    exometer:update([P, ?APP, index, fsm, active], 1),
     add_monitor(index, Pid),
     ok;
 do_update(index_create_error) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, index, fsm, create, error}, 1, spiral);
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, index, fsm, create, error], 1);
 do_update({list_create, Pid}) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, list, fsm, create}, 1, spiral),
-    ok = folsom_metrics:notify_existing_metric({?APP, list, fsm, active}, {inc, 1}, counter),
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, list, fsm, create], 1),
+    exometer:update([P, ?APP, list, fsm, active], 1),
     add_monitor(list, Pid),
     ok;
 do_update(list_create_error) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, list, fsm, create, error}, 1, spiral);
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, list, fsm, create, error], 1);
 do_update({fsm_destroy, Type}) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, Type, fsm, active}, {dec, 1}, counter);
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, Type, fsm, active], -1);
 do_update({Type, actor_count, Count}) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, Type, actor_count}, Count, histogram);
+    P = riak_core_stat:prefix(),
+    exometer:update([P, ?APP, Type, actor_count], Count);
 do_update(late_put_fsm_coordinator_ack) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, late_put_fsm_coordinator_ack}, {inc, 1}, counter).
+    exometer:update([riak_core_stat:prefix(), ?APP, late_put_fsm_coordinator_ack], 1).
+
 
 %% private
 
@@ -295,40 +311,28 @@ monitor_loop(Type) ->
 %% Per index stats (by op)
 do_per_index(Op, Idx, USecs) ->
     IdxAtom = list_to_atom(integer_to_list(Idx)),
-    create_or_update({?APP, vnode, Op, IdxAtom}, 1, spiral),
-    create_or_update({?APP, vnode, Op, time, IdxAtom}, USecs, histogram).
+    P = riak_core_stat:prefix(),
+    create_or_update([P, ?APP, vnode, Op, IdxAtom], 1, spiral),
+    create_or_update([P, ?APP, vnode, Op, time, IdxAtom], USecs, histogram).
 
 %%  per bucket get_fsm stats
 do_get_bucket(false, _) ->
     ok;
 do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize}=Args) ->
-    case (catch folsom_metrics:notify_existing_metric({?APP, node, gets, Bucket}, 1, spiral)) of
+    P = riak_core_stat:prefix(),
+    case exometer:update([P, ?APP, node, gets, Bucket], 1) of
         ok ->
-            _ = [ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Dimension, Bucket}, Arg, histogram)
+	    [exometer:update([P, ?APP, node, gets, Dimension, Bucket], Arg)
              || {Dimension, Arg} <- [{time, Microsecs},
                                      {siblings, NumSiblings},
                                      {objsize, ObjSize}], Arg /= undefined],
-            do_stages([?APP, node, gets, time, Bucket], Stages);
-        {'EXIT', _} ->
-            ok = folsom_metrics:new_spiral({?APP, node, gets, Bucket}),
-            _ = [register_stat({?APP, node, gets, Dimension, Bucket}, histogram) || Dimension <- [time,
-                                                                                  siblings,
-                                                                                  objsize]],
-            do_get_bucket(true, Args)
-    end;
-do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type}=Args) ->
-    case (catch folsom_metrics:notify_existing_metric({?APP, node, gets, Type, Bucket}, 1, spiral)) of
-        ok ->
-            _ = [ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Type, Dimension, Bucket}, Arg, histogram)
-             || {Dimension, Arg} <- [{time, Microsecs},
-                                     {siblings, NumSiblings},
-                                     {objsize, ObjSize}], Arg /= undefined],
-            do_stages([?APP, node, gets, Type, time, Bucket], Stages);
-        {'EXIT', _} ->
-            ok = folsom_metrics:new_spiral({?APP, node, gets, Type, Bucket}),
-            _ = [register_stat({?APP, node, gets, Type, Dimension, Bucket}, histogram) || Dimension <- [time,
-                                                                                  siblings,
-                                                                                  objsize]],
+            do_stages([P, ?APP, node, gets, time, Bucket], Stages);
+	{error, not_found} ->
+	    exometer:new([P, ?APP, node, gets, Bucket], spiral),
+            [register_stat([P, ?APP, node, gets, Dimension, Bucket], histogram)
+	     || Dimension <- [time,
+			      siblings,
+			      objsize]],
             do_get_bucket(true, Args)
     end.
 
@@ -337,23 +341,25 @@ do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type}=Args
 do_put_bucket(false, _) ->
     ok;
 do_put_bucket(true, {Bucket, Microsecs, Stages}=Args) ->
-    case (catch folsom_metrics:notify_existing_metric({?APP, node, puts, Bucket}, 1, spiral)) of
+    P = riak_core_stat:prefix(),
+    case exometer:update([P, ?APP, node, puts, Bucket], 1) of
         ok ->
-            ok = folsom_metrics:notify_existing_metric({?APP, node, puts, time, Bucket}, Microsecs, histogram),
-            do_stages([?APP, node, puts, time, Bucket], Stages);
-        {'EXIT', _} ->
-            register_stat({?APP, node, puts, Bucket}, spiral),
-            register_stat({?APP, node, puts, time, Bucket}, histogram),
+	    exometer:update([P, ?APP, node, puts, time, Bucket], Microsecs),
+            do_stages([P, ?APP, node, puts, time, Bucket], Stages);
+	{error, _} ->
+            register_stat([P, ?APP, node, puts, Bucket], spiral),
+            register_stat([P, ?APP, node, puts, time, Bucket], histogram),
             do_put_bucket(true, Args)
     end;
 do_put_bucket(true, {Bucket, Microsecs, Stages, Type}=Args) ->
-    case (catch folsom_metrics:notify_existing_metric({?APP, node, puts, Type, Bucket}, 1, spiral)) of
-        ok ->
-            ok = folsom_metrics:notify_existing_metric({?APP, node, puts, Type, time, Bucket}, Microsecs, histogram),
-            do_stages([?APP, node, puts, Type, time, Bucket], Stages);
-        {'EXIT', _} ->
-            register_stat({?APP, node, puts, Type, Bucket}, spiral),
-            register_stat({?APP, node, puts, Type, time, Bucket}, histogram),
+    P = riak_core_stat:prefix(),
+    case exometer:update([P, ?APP, node, puts, Type, Bucket], 1) of
+	ok ->
+	    exometer:update([P, ?APP, node, puts, Type, time, Bucket], Microsecs),
+	    do_stages([P, ?APP, node, puts, Type, time, Bucket], Stages);
+	{error, _} ->
+            register_stat([P, ?APP, node, puts, Type, Bucket], spiral),
+            register_stat([P, ?APP, node, puts, Type, time, Bucket], histogram),
             do_put_bucket(true, Args)
     end.
 
@@ -367,7 +373,7 @@ do_put_bucket(true, {Bucket, Microsecs, Stages, Type}=Args) ->
 do_stages(_Path, []) ->
     ok;
 do_stages(Path, [{Stage, Time}|Stages]) ->
-    create_or_update(list_to_tuple(Path ++ [Stage]), Time, histogram),
+    create_or_update(Path ++ [Stage], Time, histogram),
     do_stages(Path, Stages).
 
 %% create dimensioned stats for read repairs.
@@ -379,7 +385,7 @@ do_repairs(Indices, Preflist) ->
                               undefined ->
                                   ok;
                               Reason ->
-                                  create_or_update({?APP, node, gets,  read_repairs, Node, Type, Reason}, 1, spiral)
+                                  create_or_update([?APP, node, gets,  read_repairs, Node, Type, Reason], 1, spiral)
                           end
                   end,
                   Preflist).
@@ -387,21 +393,13 @@ do_repairs(Indices, Preflist) ->
 %% for dynamically created / dimensioned stats
 %% that can't be registered at start up
 create_or_update(Name, UpdateVal, Type) ->
-    case (catch folsom_metrics:notify_existing_metric(Name, UpdateVal, Type)) of
-        ok ->
-            ok;
-        {'EXIT', _} ->
-            register_stat(Name, Type),
-            create_or_update(Name, UpdateVal, Type)
+    case exometer:update(Name, UpdateVal) of
+	ok ->
+	    ok;
+	{error, not_found} ->
+	    register_stat(Name, Type),
+	    exometer:update(Name, UpdateVal)
     end.
-
-%% Stats are namespaced by APP in folsom
-%% so that we don't need to co-ordinate on naming
-%% between apps.
-stat_name(Name) when is_list(Name) ->
-    list_to_tuple([?APP] ++ Name);
-stat_name(Name) when is_atom(Name) ->
-    {?APP, Name}.
 
 %% @doc list of {Name, Type} for static
 %% stats that we can register at start up
@@ -465,7 +463,7 @@ stats() ->
      {precommit_fail, counter},
      {postcommit_fail, counter},
      {[vnode, backend, leveldb, read_block_error],
-      {function, {function, ?MODULE, leveldb_read_block_errors}}},
+      {function, ?MODULE, leveldb_read_block_errors}},
      {[counter, actor_count], histogram},
      {[set, actor_count], histogram},
      {[map, actor_count], histogram},
@@ -480,19 +478,13 @@ stats() ->
      {late_put_fsm_coordinator_ack, counter}
     ].
 
-%% @doc register a stat with folsom
-do_register_stat(Name, spiral) ->
-    folsom_metrics:new_spiral(Name);
-do_register_stat(Name, counter) ->
-    folsom_metrics:new_counter(Name);
 do_register_stat(Name, histogram) ->
     %% get the global default histo type
-    {SampleType, SampleArgs} = get_sample_type(Name),
-    folsom_metrics:new_histogram(Name, SampleType, SampleArgs);
-do_register_stat(Name, {function, F}) ->
+    Opts = get_histogram_opts(Name),
+    exometer:new(Name, histogram, Opts);
+do_register_stat(Name, Type) ->
     %% store the function in a gauge metric
-    ok = folsom_metrics:new_gauge(Name),
-    folsom_metrics:notify({Name, F}).
+    exometer:new(Name, Type).
 
 %% @doc the histogram sample type may be set in app.config
 %% use key `stat_sample_type' in the `riak_kv' section. Or the
@@ -500,9 +492,14 @@ do_register_stat(Name, {function, F}) ->
 %% Check the folsom homepage for available types.
 %% Defaults to `{slide_uniform, {60, 1028}}' (a uniform sliding window
 %% of 60 seconds, with a uniform sample of at most 1028 entries)
-get_sample_type(Name) ->
+get_histogram_opts(Name) ->
     SampleType0 = app_helper:get_env(riak_kv, stat_sample_type, {slide_uniform, {60, 1028}}),
-    app_helper:get_env(riak_kv, Name, SampleType0).
+    case app_helper:get_env(riak_kv, Name, SampleType0) of
+	{Type, {SpanSeconds, MaxEntries}} ->
+	    [{type, Type},
+	     {time_span, SpanSeconds * 1000},
+	     {max_elements, MaxEntries}]
+    end.
 
 %% @doc produce the legacy blob of stats for display.
 produce_stats() ->
@@ -511,7 +508,7 @@ produce_stats() ->
 %% @doc get the leveldb.ReadBlockErrors counter.
 %% non-zero values mean it is time to consider replacing
 %% this nodes disk.
-leveldb_read_block_errors() ->
+leveldb_read_block_errors(_) ->
     %% level stats are per node
     %% but the way to get them is
     %% is with riak_kv_vnode:vnode_status/1
@@ -530,8 +527,12 @@ leveldb_read_block_errors() ->
             %% a vnode at random.
             Nth = crypto:rand_uniform(1, length(Indices)),
             Idx = lists:nth(Nth, Indices),
-            Status = vnode_status(Idx),
-            leveldb_read_block_errors(Status)
+            case vnode_status(Idx) of
+		{backend_status, BE, St} ->
+		    leveldb_read_block_errors_(BE, St);
+		_ ->
+		    undefined
+	    end
     end.
 
 vnode_status(Idx) ->
@@ -539,13 +540,11 @@ vnode_status(Idx) ->
     [{Idx, [Status]}] = riak_kv_vnode:vnode_status(PList),
     Status.
 
-leveldb_read_block_errors({backend_status, riak_kv_eleveldb_backend, Status}) ->
+leveldb_read_block_errors_(riak_kv_eleveldb_backend, Status) ->
     rbe_val(proplists:get_value(read_block_error, Status));
-leveldb_read_block_errors({backend_status, riak_kv_multi_backend, Statuses}) ->
+leveldb_read_block_errors_(riak_kv_multi_backend, Statuses) ->
     multibackend_read_block_errors(Statuses, undefined);
-leveldb_read_block_errors({error, Reason}) ->
-    {error, Reason};
-leveldb_read_block_errors(_) ->
+leveldb_read_block_errors_(_, _) ->
     undefined.
 
 multibackend_read_block_errors([], Val) ->
@@ -595,11 +594,8 @@ re_register_stat(Arg) ->
     case (catch do_update(Arg)) of
         {'EXIT', _} ->
             Stats = stats_from_update_arg(Arg),
-            _ = [begin
-                 (catch folsom_metrics:delete_metric(Name)),
-                 do_register_stat(Name, Type)
-             end || {Name, {metric, _, Type, _}} <- Stats],
-            ok;
+            [exometer:re_register(Name, Type)
+	     || {Name, {metric, _, Type, _}} <- Stats];
         ok ->
             ok
     end.
@@ -638,6 +634,7 @@ stats_from_update_arg({put_fsm_time, _, _, _, _}) ->
     riak_core_stat_q:names_and_types([?APP, node, puts]);
 stats_from_update_arg({read_repairs, _, _}) ->
     riak_core_stat_q:names_and_types([?APP, nodes, gets, read_repairs]);
+%% continue here
 stats_from_update_arg(coord_redirs) ->
     [{{?APP, node, puts, coord_redirs}, {metric,[],counter,undefined}}];
 stats_from_update_arg(mapper_start) ->
