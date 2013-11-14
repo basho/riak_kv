@@ -43,6 +43,10 @@ basic_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend", undefined),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.secure_referer_check", true),
+    cuttlefish_unit:assert_config(Config, "riak_kv.warn_object_size", 5242880),
+    cuttlefish_unit:assert_config(Config, "riak_kv.max_object_size", 52428800),
+    cuttlefish_unit:assert_config(Config, "riak_kv.warn_siblings", 25),
+    cuttlefish_unit:assert_config(Config, "riak_kv.max_siblings", 100),
 
     ok.
 
@@ -77,7 +81,11 @@ override_non_multi_backend_schema_test() ->
         {["object_format"], v0},
         {["memory_backend", "max_memory"], "8GB"},
         {["memory_backend", "ttl"], "1d"},
-        {["secure_referer_check"], off}
+        {["secure_referer_check"], off},
+        {["warn_object_size"], "10MB"},
+        {["max_object_size"], "100MB"},
+        {["warn_siblings"], 250},
+        {["max_siblings"], 1000}
     ],
 
     Config = cuttlefish_unit:generate_templated_config(
@@ -115,6 +123,10 @@ override_non_multi_backend_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend", undefined),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.secure_referer_check", false),
+    cuttlefish_unit:assert_config(Config, "riak_kv.warn_object_size", 10485760),
+    cuttlefish_unit:assert_config(Config, "riak_kv.max_object_size", 104857600),
+    cuttlefish_unit:assert_config(Config, "riak_kv.warn_siblings", 250),
+    cuttlefish_unit:assert_config(Config, "riak_kv.max_siblings", 1000),
     ok.
 
 multi_backend_test() ->
