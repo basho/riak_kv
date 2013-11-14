@@ -77,6 +77,7 @@
 -export([index_specs/1, diff_index_specs/2]).
 -export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
+-export([merge_vclocks/2]). %% INTERNAL, only for riak_kv
 -export([is_robject/1]).
 -export([update_last_modified/1]).
 
@@ -393,6 +394,12 @@ increment_vclock(Object=#r_object{}, ClientId) ->
 -spec increment_vclock(riak_object(), vclock:vclock_node(), vclock:timestamp()) -> riak_object().
 increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
     Object#r_object{vclock=vclock:increment(ClientId, Timestamp, Object#r_object.vclock)}.
+
+%% @doc when you want to create a frontier object, merges a vnode
+%% clock with an object clock.
+-spec merge_vclocks(riak_object(), vclock:vclock()) -> riak_object().
+merge_vclocks(Obj=#r_object{}, Vclock) ->
+    Obj#r_object{vclock=vclock:merge([Vclock, Obj#r_object.vclock])}.
 
 %% @doc Prepare a list of index specifications
 %% to pass to the backend. This function is for

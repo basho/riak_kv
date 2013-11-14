@@ -99,6 +99,12 @@
                 modstate :: term(),
                 mrjobs :: term(),
                 vnodeid :: undefined | binary(),
+                %% The number of writes co-ordinated by this vnode
+                counter :: non_neg_integer(),
+                %% How many co-ordinating writes before persisting the
+                %% counter to disk.
+                %% See config value `{riak_kv, counter_flush_threshold}'
+                counter_flush_threshold :: non_neg_integer(),
                 delete_mode :: keep | immediate | pos_integer(),
                 bucket_buf_size :: pos_integer(),
                 index_buf_size :: pos_integer(),
@@ -115,6 +121,8 @@
 -type state() :: #state{}.
 
 -define(DEFAULT_HASHTREE_TOKENS, 90).
+%% default value for `counter_flush_threshold' in `state'
+-define(DEFAULT_CNTR_THRESHOLD, 1000).
 
 -record(putargs, {returnbody :: boolean(),
                   coord:: boolean(),
@@ -355,7 +363,8 @@ init([Index]) ->
     IndexBufSize = app_helper:get_env(riak_kv, index_buffer_size, 100),
     KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
     WorkerPoolSize = app_helper:get_env(riak_kv, worker_pool_size, 10),
-    {ok, VId} = get_vnodeid(Index),
+    CounterThreshold = app_helper:get_env(riak_kv, counter_flush_threshold, ?DEFAULT_CNTR_THRESHOLD),
+    {ok, {VId, Counter}} = get_vnodeid(Index, CounterThreshold),
     DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
     AsyncFolding = app_helper:get_env(riak_kv, async_folds, true) == true,
     case catch Mod:start(Index, Configuration) of
@@ -366,6 +375,8 @@ init([Index]) ->
                            mod=Mod,
                            modstate=ModState,
                            vnodeid=VId,
+                           counter = Counter,
+                           counter_flush_threshold = CounterThreshold,
                            delete_mode=DeleteMode,
                            bucket_buf_size=BucketBufSize,
                            index_buf_size=IndexBufSize,
@@ -1004,7 +1015,7 @@ raw_put({Idx, Node}, Key, Obj) ->
 
 %% @private
 %% upon receipt of a client-initiated put
-do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
+do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State0) ->
     case proplists:get_value(bucket_props, Options) of
         undefined ->
             BProps = riak_core_bucket:get_bucket(Bucket);
@@ -1019,6 +1030,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     end,
     Coord = proplists:get_value(coord, Options, false),
     CRDTOp = proplists:get_value(counter_op, Options, proplists:get_value(crdt_op, Options, undefined)),
+    State = maybe_update_counter(Coord, State0),
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
                        coord=Coord,
                        lww=proplists:get_value(last_write_wins, BProps, false),
@@ -1089,6 +1101,7 @@ prepare_put(State=#state{vnodeid=VId,
             prepare_put(State, PutArgs, IndexBackend)
     end.
 prepare_put(#state{vnodeid=VId,
+                   counter=Counter,
                    mod=Mod,
                    modstate=ModState,
                    idx=Idx},
@@ -1116,7 +1129,7 @@ prepare_put(#state{vnodeid=VId,
                 false ->
                     IndexSpecs = []
             end,
-            case prepare_new_put(Coord, RObj, VId, StartTime, CRDTOp) of
+            case prepare_new_put(Coord, RObj, VId, Counter, StartTime, CRDTOp) of
                 {error, E} ->
                     {{fail, Idx, E}, PutArgs};
                 ObjToStore ->
@@ -1158,16 +1171,24 @@ prepare_put(#state{vnodeid=VId,
             end
     end.
 
-%% @Doc in the case that this a co-ordinating put, prepare the object.
-prepare_new_put(true, RObj, VId, StartTime, undefined) ->
-    riak_object:increment_vclock(RObj, VId, StartTime);
-prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
-    VClockUp = riak_object:increment_vclock(RObj, VId, StartTime),
+%% @Doc in the case that this a co-ordinating put, prepare the
+%% object. Notice that rather than trust that this object has never
+%% been stored at this node, we create a vclock for the vnode's total
+%% co-ordinated ops, and merge that with the object to be
+%% stored. Ensures a true frontier vclock in the case that for some
+%% reason there is notfound getting from local storage, but this vnode
+%% has already written this key. See riak_kv#679 for more.
+prepare_new_put(true, RObj, VId, Counter, StartTime, undefined) ->
+    VNodeClock = vclock:fresh(VId, Counter, StartTime),
+    riak_object:merge_vclocks(RObj, VNodeClock);
+prepare_new_put(true, RObj, VId, Counter, StartTime, CRDTOp) ->
+    VNodeClock = vclock:fresh(VId, Counter, StartTime),
+    VClockUp = riak_object:merge_vclocks(RObj, VNodeClock),
     %% coordinating a _NEW_ crdt operation means
     %% creating + updating the crdt.
     %% Make a new crdt, stuff it in the riak_object
     riak_kv_crdt:update(VClockUp, VId, CRDTOp);
-prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
+prepare_new_put(false, RObj, _VId, _Counter, _StartTime, _CounterOp) ->
     RObj.
 
 handle_crdt(_, undefined, _VId, RObj) ->
@@ -1672,40 +1693,56 @@ max_hashtree_tokens() ->
                        anti_entropy_max_async,
                        ?DEFAULT_HASHTREE_TOKENS).
 
-%% @private
-%% Get the vnodeid, assigning and storing if necessary
-get_vnodeid(Index) ->
+%% @private Get the vnodeid, assigning and storing if necessary.
+-spec get_vnodeid(partition(), non_neg_integer()) ->
+                         {ok, {binary(), non_neg_integer()}} |
+                         {error, term()}.
+get_vnodeid(Index, Threshold) ->
     F = fun(Status) ->
-                case proplists:get_value(vnodeid, Status, undefined) of
-                    undefined ->
+                case {proplists:get_value(vnodeid, Status, undefined), proplists:get_value(counter, Status, undefined)} of
+                    {undefined, _} ->
                         assign_vnodeid(os:timestamp(),
                                        riak_core_nodeid:get(),
+                                       Threshold,
                                        Status);
-                    VnodeId ->
-                        {VnodeId, Status}
+                    {_, undefined} ->
+                        %% If the counter is missing we need a new
+                        %% vnodeid as we have no idea what the count
+                        %% for this vnodeid is. Should only be
+                        %% possible in the case of an upgrade or bad
+                        %% file on disk.
+                        assign_vnodeid(os:timestamp(),
+                                       riak_core_nodeid:get(),
+                                       Threshold,
+                                       Status);
+                    {VnodeId, {Counter, Threshold0}} ->
+                        {{VnodeId, Counter+Threshold0}, Status}
                 end
         end,
-    update_vnode_status(F, Index). % Returns {ok, VnodeId} | {error, Reason}
+    update_vnode_status(F, Index). % Returns {ok, {VnodeId, Counter}} | {error, Reason}
 
 %% Assign a unique vnodeid, making sure the timestamp is unique by incrementing
 %% into the future if necessary.
-assign_vnodeid(Now, NodeId, Status) ->
+assign_vnodeid(Now, NodeId, Threshold, Status) ->
     {Mega, Sec, _Micro} = Now,
     NowEpoch = 1000000*Mega + Sec,
     LastVnodeEpoch = proplists:get_value(last_epoch, Status, 0),
     VnodeEpoch = erlang:max(NowEpoch, LastVnodeEpoch+1),
     VnodeId = <<NodeId/binary, VnodeEpoch:32/integer>>,
-    UpdStatus = [{vnodeid, VnodeId}, {last_epoch, VnodeEpoch} |
-                 proplists:delete(vnodeid,
-                                  proplists:delete(last_epoch, Status))],
-    {VnodeId, UpdStatus}.
+    UpdStatus = [{vnodeid, VnodeId}, {last_epoch, VnodeEpoch},
+                 %% A new vnodeid means start the count from zero
+                 {counter, {0, Threshold}} |
+                 proplists:delete(counter,
+                                  proplists:delete(vnodeid,
+                                                   proplists:delete(last_epoch, Status)))],
+    {{VnodeId, 0}, UpdStatus}.
 
 %% Clear the vnodeid - returns {ok, cleared}
 clear_vnodeid(Index) ->
     F = fun(Status) ->
-                {cleared, proplists:delete(vnodeid, Status)}
+                {cleared, proplists:delete(counter, proplists:delete(vnodeid, Status))}
         end,
-    update_vnode_status(F, Index). % Returns {ok, VnodeId} | {error, Reason}
+    update_vnode_status(F, Index). % Returns {ok, cleared} | {error, Reason}
 
 update_vnode_status(F, Index) ->
     VnodeFile = vnode_status_filename(Index),
@@ -1747,14 +1784,34 @@ read_vnode_status(File) ->
     end.
 
 write_vnode_status(Status, File) ->
-    VersionedStatus = [{version, 1} | proplists:delete(version, Status)],
-    TmpFile = File ++ "~",
-    case file:write_file(TmpFile, io_lib:format("~p.", [VersionedStatus])) of
-        ok ->
-            file:rename(TmpFile, File);
-        ER ->
-            ER
-    end.
+    VersionedStatus = [{version, 2} | proplists:delete(version, Status)],
+    riak_core_util:replace_file(File, io_lib:format("~p.", [VersionedStatus])).
+
+%% @doc update the vnode counter on co-ordinating puts And persist it
+%% if we pass the threshold number of puts.  Has the side effect that
+%% it writes to disk every `state.threshold' increments.
+-spec maybe_update_counter(boolean(), state()) -> state().
+maybe_update_counter(false, State) ->
+    State;
+maybe_update_counter(true, State) ->
+#state{idx=Index,
+       counter=Counter0,
+       counter_flush_threshold=Threshold} = State,
+    Counter = Counter0 + 1,
+    {ok, _} = maybe_flush_counter(Index, Counter, Threshold),
+    State#state{counter=Counter}.
+
+maybe_flush_counter(Index, Counter, Threshold) when Counter rem Threshold == 0 ->
+    flush_counter(Index, Counter, Threshold);
+maybe_flush_counter(_, _, _) ->
+    {ok, not_flushed}.
+
+flush_counter(Index, Counter, Threshold) ->
+    F = fun(Status) ->
+                {flushed, [{counter, {Counter, Threshold}} |
+                      proplists:delete(counter, Status)]}
+        end,
+    update_vnode_status(F, Index).
 
 %% @private
 wait_for_vnode_status_results([], _ReqId, Acc) ->
@@ -1933,40 +1990,116 @@ assign_vnodeid_restart_same_ts_test() ->
     Now1 = {1314,224520,343446}, %% TS=1314224520
     Now2 = {1314,224520,345865}, %% as unsigned net-order int <<78,85,121,136>>
     NodeId = <<1, 2, 3, 4>>,
-    {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
+    {{Vid1, Cntr}, Status1} = assign_vnodeid(Now1, NodeId, ?DEFAULT_CNTR_THRESHOLD, []),
     ?assertEqual(<<1, 2, 3, 4, 78, 85, 121, 136>>, Vid1),
+    ?assertEqual(0, Cntr), %% New VnodeId always gets a fresh zero counter
     %% Simulate clear
     Status2 = proplists:delete(vnodeid, Status1),
     %% Reassign
-    {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
-    ?assertEqual(<<1, 2, 3, 4, 78, 85, 121, 137>>, Vid2).
+    {{Vid2, Cntr2}, _Status3} = assign_vnodeid(Now2, NodeId, ?DEFAULT_CNTR_THRESHOLD, Status2),
+    ?assertEqual(<<1, 2, 3, 4, 78, 85, 121, 137>>, Vid2),
+    ?assertEqual(0, Cntr2).
 
 %% Check assigning a vnodeid with a later date
 assign_vnodeid_restart_later_ts_test() ->
     Now1 = {1000,000000,0}, %% <<59,154,202,0>>
     Now2 = {2000,000000,0}, %% <<119,53,148,0>>
     NodeId = <<1, 2, 3, 4>>,
-    {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
+    {{Vid1, Cntr}, Status1} = assign_vnodeid(Now1, NodeId, ?DEFAULT_CNTR_THRESHOLD, []),
     ?assertEqual(<<1, 2, 3, 4, 59,154,202,0>>, Vid1),
+    ?assertEqual(0, Cntr), %% New VnodeId always gets a fresh zero counter
     %% Simulate clear
     Status2 = proplists:delete(vnodeid, Status1),
     %% Reassign
-    {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
-    ?assertEqual(<<1, 2, 3, 4, 119,53,148,0>>, Vid2).
+    {{Vid2, Cntr2}, _Status3} = assign_vnodeid(Now2, NodeId, ?DEFAULT_CNTR_THRESHOLD, Status2),
+    ?assertEqual(<<1, 2, 3, 4, 119,53,148,0>>, Vid2),
+    ?assertEqual(0, Cntr2).
 
 %% Check assigning a vnodeid with a later date - just in case of clock skew
 assign_vnodeid_restart_earlier_ts_test() ->
     Now1 = {2000,000000,0}, %% <<119,53,148,0>>
     Now2 = {1000,000000,0}, %% <<59,154,202,0>>
     NodeId = <<1, 2, 3, 4>>,
-    {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
+    {{Vid1, Cntr}, Status1} = assign_vnodeid(Now1, NodeId, ?DEFAULT_CNTR_THRESHOLD, []),
     ?assertEqual(<<1, 2, 3, 4, 119,53,148,0>>, Vid1),
+    ?assertEqual(0, Cntr), %% New VnodeId always gets a fresh zero counter
     %% Simulate clear
     Status2 = proplists:delete(vnodeid, Status1),
     %% Reassign
     %% Should be greater than last offered - which is the 2mil timestamp
-    {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
-    ?assertEqual(<<1, 2, 3, 4, 119,53,148,1>>, Vid2).
+    {{Vid2, Cntr2}, _Status3} = assign_vnodeid(Now2, NodeId, ?DEFAULT_CNTR_THRESHOLD, Status2),
+    ?assertEqual(<<1, 2, 3, 4, 119,53,148,1>>, Vid2),
+    ?assertEqual(0, Cntr2).
+
+%% Test that absent counter data on restart forces a new vnodeid (and
+%% present does not!) And that absent vnodeid, but present counter
+%% data, forces a new vnodeid and counter.
+get_vnodeid_and_counter_restart_test_() ->
+    {setup,
+     fun() -> ok end,
+     fun(_) ->
+             ok = file:delete(vnode_status_filename(0))
+     end,
+     [?_test(begin
+                 LegacyVId = <<1, 2, 3, 4, 119,53,148,0>>,
+                 LegacyStatus = [{version, 1}, {vnodeid, LegacyVId}, {last_epoch, 1383673000}],
+                 {ok, ok} = update_vnode_status(fun(_) ->
+                                                        {ok, LegacyStatus} end,
+                                                0),
+                 {ok, {VId, Cntr}} = get_vnodeid(0, ?DEFAULT_CNTR_THRESHOLD),
+                 ?assertEqual(0, Cntr),
+                 ?assertNot(VId == LegacyVId),
+                 %% Re-get (like a crash, restart)
+                 {ok, {VId2, Cntr2}} = get_vnodeid(0, 10),
+                 %% The counter from disk should be incremented by
+                 %% threshold on disk (not the threshold passed to
+                 %% get_vnodeid!) to ensure it is a frontier.
+                 ?assertEqual(?DEFAULT_CNTR_THRESHOLD, Cntr2),
+                 ?assertEqual(VId, VId2)
+             end)]}.
+
+clear_vnodeid_clears_counter_test() ->
+    {setup,
+     fun() ->
+             %% make sure there is something to clear
+             get_vnodeid(0, ?DEFAULT_CNTR_THRESHOLD) end,
+     fun(_) ->
+             %% Leave FS as we found it
+             ok = file:delete(vnode_status_filename(0))
+     end,
+     [?_test(begin
+                 {ok, cleared} = clear_vnodeid(0),
+                 File = vnode_status_filename(0),
+                 {ok, Status} = read_vnode_status(File),
+                 ?assertEqual(none, proplists:lookup(counter, Status)),
+                 ?assertEqual(none, proplists:lookup(vnodeid, Status))
+             end)]}.
+
+counter_flush_test_() ->
+    {setup,
+     fun() ->
+             #state{idx=0, counter=0, counter_flush_threshold=10}
+     end,
+     fun(S) ->
+             #state{idx=Idx} = S,
+             ok = file:delete(vnode_status_filename(Idx))
+     end,
+     fun(S) ->
+             [?_test(begin
+                         S2 = maybe_update_counter(false, S),
+                         ?assertEqual(S, S2),
+                         S3 = maybe_update_counter(true, S2),
+                         ?assertEqual(1, S3#state.counter),
+                         S4 = lists:foldl(fun(_, State) ->
+                                                  maybe_update_counter(true, State) end,
+                                          S3,
+                                          lists:seq(1, 10)),
+                         ?assertEqual(11, S4#state.counter),
+                         File = vnode_status_filename(S4#state.idx),
+                         {ok, Status} = read_vnode_status(File),
+                         ?assertEqual({10, 10}, proplists:get_value(counter, Status))
+                     end)]
+     end}.
 
 %% Test
 vnode_status_test_() ->
