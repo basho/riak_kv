@@ -259,6 +259,8 @@ return_value(true) ->
 return_value(_) ->
     [].
 
+get_context(<<>>, _) ->
+    undefined;
 get_context(_Ctx, false) ->
    undefined;
 get_context(Ctx, true) ->
