@@ -826,6 +826,8 @@ consistent_object(Node, Bucket) when Node =:= node() ->
     riak_kv_util:consistent_object(Bucket);
 consistent_object(Node, Bucket) ->
     case rpc:call(Node, riak_kv_util, consistent_object, [Bucket]) of
+        {badrpc, {'EXIT', {undef, _}}} ->
+            false;
         {badrpc, _}=Err ->
             {error, Err};
         Result ->
