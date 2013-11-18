@@ -17,7 +17,8 @@
                   webmachine,
                   os_mon,
                   riak_pipe,
-                  riak_dt
+                  riak_dt,
+                  riak_pb
                  ]},
   {registered, []},
   {mod, {riak_kv_app, []}},
