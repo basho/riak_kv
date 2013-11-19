@@ -2,7 +2,7 @@
 %%
 %% riak_test_util: utilities for test scripts
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -244,10 +244,10 @@ dep_apps(Test, Extra) ->
            (_) -> ok
         end,
 
-    [sasl, Silencer, crypto, public_key, ssl, riak_sysmon, os_mon,
-     runtime_tools, erlang_js, inets, mochiweb, webmachine, sidejob,
-     basho_stats, bitcask, compiler, syntax_tools, lager, folsom,
-     riak_core, riak_pipe, riak_api, riak_dt, riak_kv, DefaultSetupFun, Extra].
+    [sasl, Silencer, crypto, asn1, public_key, ssl, riak_sysmon, os_mon, pbkdf2,
+     runtime_tools, erlang_js, inets, mochiweb, webmachine, sidejob, poolboy,
+     basho_stats, bitcask, compiler, syntax_tools, lager, folsom, protobuffs,
+     eleveldb, riak_core, riak_pipe, riak_api, riak_dt, riak_pb, riak_kv, DefaultSetupFun, Extra].
 
 
 %% @doc Runs the application-lifecycle phase across all of the given
