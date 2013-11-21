@@ -163,7 +163,6 @@ service_available(RD, Ctx0) ->
      Ctx#ctx{client=Client,
              bucket=path_segment_to_bin(bucket, RD),
              key=path_segment_to_bin(key, RD),
-             crdt_type=proplists:get_value(crdt, wrq:path_info(RD)),
              method=wrq:method(RD)}}.
 
 allowed_methods(RD, Ctx) ->
@@ -247,14 +246,21 @@ malformed_timeout_param({Result, RD, Ctx}) ->
         undefined ->
             {Result, RD, Ctx};
         TimeoutStr when is_list(TimeoutStr) ->
-            try
-                Timeout = list_to_integer(TimeoutStr),
-                {Result, RD, Ctx#ctx{timeout=Timeout}}
+            try list_to_integer(TimeoutStr) of
+                Timeout when is_integer(Timeout), Timeout > 0 ->
+                    {Result, RD, Ctx#ctx{timeout=Timeout}};
+                _Other ->
+                    {true,
+                     error_response("timeout query parameter must be an "
+                                    "integer greater than 0, ~s is invalid~n",
+                                    [TimeoutStr], RD),
+                     Ctx}
             catch
                 error:badarg ->
                     {true,
                      error_response("timeout query parameter must be an "
-                                    "integer, ~s is invalid~n", [TimeoutStr], RD),
+                                    "integer greater than 0, ~s is invalid~n",
+                                    [TimeoutStr], RD),
                      Ctx}
             end
     end.
@@ -292,6 +298,10 @@ forbidden_check_bucket_type(RD, Ctx) ->
 forbidden_check_crdt_type(RD, Ctx=#ctx{bucket_type = <<"default">>,
                                        bucket=B0,
                                        key=K0}) ->
+    %% Only legacy/1.4 counters are supported in the default/undefined
+    %% bucket type. Since we don't want to confuse semantics of the
+    %% new types or duplicate code, we redirect to the old resource
+    %% instead.
     B = mochiweb_util:quote_plus(B0),
     K = mochiweb_util:quote_plus(K0),
     CountersUrl = lists:flatten(
