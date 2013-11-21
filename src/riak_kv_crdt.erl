@@ -257,6 +257,8 @@ split_ops([{remove_all, _Elems}=Op | Rest], Pre, Post) ->
     split_ops(Rest, [Op | Pre], Post);
 split_ops([{update, Key, {remove, _}}=Op | Rest], Pre, Post) ->
     split_ops(Rest, [Op | Pre], [{add, Key} | Post]);
+split_ops([{update, Key, {remove_all, _}}=Op | Rest], Pre, Post) ->
+    split_ops(Rest, [Op | Pre], [{add, Key} | Post]);
 split_ops([{update, {_Name, _}=Key, {update, Ops}} | Rest], Pre0, Post0) when is_list(Ops) ->
     {Pre, Post} = split_ops(Ops,[], []),
     Pre1 = maybe_prepend(Key, Pre, Pre0),

@@ -58,22 +58,63 @@
 %% Then applies the new operation.
 %% If there was no local value there will be single sibling, the empty type
 %% If there was a local value there will be at least extra sibling, but maybe more
+
+%% Empty context? Ops are applied as is, not pre | post, exactly the
+%% same as applying the ops to a Type:new()
 prop_remove_empty_fallback_no_ctx_fails() ->
     ?FORALL({ROBj, Actor, Type,  Op, Context}, gen_empty(),
             begin
                 CRDTOp = ?CRDT_OP{mod=Type, op=Op, ctx=Context},
                 Res = riak_kv_crdt:update(ROBj, Actor, CRDTOp),
-                ExpectedError = not_present(first_remove_op(Op)),
+                Expected = Type:update(Op, Actor, Type:new()),
                 ?WHENFAIL(
                    begin
                        io:format("Riak Object ~p~n", [ROBj]),
                        io:format("Operation ~p~n", [Op]),
                        io:format("Context ~p~n", [Context])
                    end,
-                collect(Type, equals({error,
-                                      {precondition,
-                                       {not_present, ExpectedError}}}, Res)))
+                   collect(Type, equals(Expected, Res)))
             end).
+
+%% When a replica with no state handles removes with a context that
+%% contains the items to be removed, the removes should be a applied
+%% to the context first. The final state should be a replica With all
+%% the add operations applied merged with the context with all the
+%% removes applied
+prop_remove_empty_fallback_covering_ctx() ->
+    ?FORALL({ROBj, Actor, Type, Op, Context}, gen_empty_with_context(),
+            begin
+                CRDTOp = ?CRDT_OP{mod=Type, op=Op, ctx=Context},
+                Res = case riak_kv_crdt:update(ROBj, Actor, CRDTOp) of
+                          {error, _}=E ->
+                              E;
+                          O ->
+                              {_, Val} = riak_kv_crdt:value(O, Type),
+                              Val
+                      end,
+                Pre0 = case Context of
+                           undefined -> Type:new();
+                           _ -> Type:from_binary(Context)
+                       end,
+                {Rems, Adds} = riak_kv_crdt:split_ops(Op),
+                Expected = case Type:update(Rems, Actor, Pre0) of
+                               {ok, Pre} ->
+                                   {ok, Post} = Type:update(Adds, Actor, Type:new()),
+                                   Type:value(Type:merge(Pre, Post));
+                               Error -> Error
+                           end,
+                ?WHENFAIL(
+                   begin
+                       io:format("Riak Object ~p~n", [ROBj]),
+                       io:format("Operation ~p~n", [Op]),
+                       io:format("Context ~p~n", [Context])
+                   end,
+                   collect(Type, equals(Expected, Res)))
+            end).
+
+gen_empty_with_context() ->
+    ?LET({Actor, {Type, Op}}, {gen_actor(), gen_remove_op()},
+         {gen_empty(Type), Actor, Type,  Op, gen_context(Type, Op)}).
 
 gen_empty() ->
     ?LET({Actor, {Type, Op}}, {gen_actor(), gen_remove_op()},
@@ -87,7 +128,7 @@ gen_op() ->
 
 gen_remove_op() ->
     ?LET(Type, oneof([riak_dt_map, riak_dt_orswot]),
-         {Type, ?SUCHTHAT(Op, gen_op(Type), has_remove(Op))}).
+         {Type, ?SUCHTHAT(Op, gen_op(Type), has_remove(Type, Op))}).
 
 gen_type() ->
     oneof([riak_dt_map, riak_dt_orswot, riak_dt_pncounter]).
@@ -99,33 +140,44 @@ gen_empty(Mod) ->
     riak_kv_crdt:new(?BUCKET, ?KEY, Mod).
 
 gen_context(riak_dt_pncounter, _Op) ->
-    <<>>;
+    undefined;
 gen_context(Type, Op) ->
-    case has_remove(Op) of
+    case has_remove(Type, Op) of
         true ->
             %% Half the time get a context that contains what's being removed
             frequency([{5, gen_containing_context(Type, Op)},
-                       {5, <<>>}]);
+                       {5, undefined}]);
         false ->
-            <<>>
+            undefined
     end.
 
 gen_containing_context(Type, Op) ->
     DT = Type:new(),
     {Removes, _Adds} = riak_kv_crdt:split_ops(Op),
-    io:format("removes ~p~n", [Removes]),
     NewAdds = removes_to_adds(Removes),
     {ok, Val} = Type:update(NewAdds, <<1, 2, 3, 4>>, DT),
-    Val.
+    Type:to_binary(Val).
 
-has_remove([]) ->
+has_remove(_Type, []) ->
     false;
-has_remove(Ops) ->
+has_remove(Type, Ops) ->
     case riak_kv_crdt:split_ops(Ops) of
         {{update, []}, {update, _}} ->
             false;
-        _ -> true
-end.
+        {{update, _}, {update, []}} ->
+            true;
+        {{update, _}, {update, _}} ->
+            not self_cancelling(Type, Ops)
+    end.
+
+self_cancelling(Type, Ops) ->
+    T1 = Type:new(),
+    case Type:update(Ops, a, T1) of
+        {ok, _T2} ->
+            true;
+        _ ->
+            false
+    end.
 
 removes_to_adds({update, Rems}) ->
     {update, removes_to_adds(Rems, [])}.
