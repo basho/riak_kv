@@ -53,8 +53,12 @@ start(_Type, _StartArgs) ->
         undefined ->
             ok;
         _ ->
-            sidejob:new_resource(riak_kv_put_fsm_sj, sidejob_supervisor, FSM_Limit),
-            sidejob:new_resource(riak_kv_get_fsm_sj, sidejob_supervisor, FSM_Limit)
+	    Base = [riak_core_stat:prefix(), riak_kv],
+	    Workers = sidejob:default_workers(),
+            sidejob:new_resource(riak_kv_put_fsm_sj, sidejob_supervisor, FSM_Limit, Workers,
+				 [{exometer_name, Base ++ [put_fsm, sidejob]}]),
+            sidejob:new_resource(riak_kv_get_fsm_sj, sidejob_supervisor, FSM_Limit, Workers,
+				 [{exometer_name, Base ++ [get_fsm, sidejob]}])
     end,
 
     case app_helper:get_env(riak_kv, direct_stats, false) of
