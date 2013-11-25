@@ -159,6 +159,31 @@ produce_stats() ->
        yz_stat:search_stats()
       ]).
 
+%% This is a temporary fix. We should be able to get these through exometer
+%% (actually, read_repair_stats() *are* - only not aggregated)
+other_stats() ->
+    S = [t(sidejob_stats    , fun sidejob_stats/0),
+	 t(read_repair_stats, fun read_repair_stats/0),
+	 t(level_stats      , fun level_stats/0),
+	 t(pipe_stats       , fun pipe_stats/0),
+	 t(cpu_stats        , fun cpu_stats/0),
+	 t(mem_stats        , fun mem_stats/0),
+	 t(disk_stats       , fun disk_stats/0),
+	 t(system_stats     , fun system_stats/0),
+	 t(ring_stats       , fun ring_stats/0),
+	 t(config_stats     , fun config_stats/0),
+	 t(app_stats        , fun app_stats/0),
+	 t(memory_stats     , fun memory_stats/0)],
+    %% io:fwrite("S = ~p~n", [S]),  % Clean up when done adapting
+    lists:append([V || {_, _, V} <- S]).
+
+t(L, F) ->
+    T1 = os:timestamp(),
+    Res = F(),
+    T2 = os:timestamp(),
+    {L, timer:now_diff(T2, T1), Res}.
+     
+
 %% Stats in folsom are stored with tuples as keys, the
 %% tuples mimic an hierarchical structure. To be free of legacy
 %% naming constraints the new names are not simply the old names
