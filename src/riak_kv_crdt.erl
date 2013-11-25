@@ -23,8 +23,7 @@
 -module(riak_kv_crdt).
 
 -export([update/3, merge/1, value/2, new/3,
-         supported/1, parse_operation/2,
-         to_mod/1, from_mod/1]).
+         supported/1, to_mod/1, from_mod/1]).
 -export([to_binary/2, to_binary/1, from_binary/1]).
 
 -include("riak_kv_wm_raw.hrl").
@@ -384,18 +383,6 @@ to_record(?SET_TYPE, Val) ->
 %% @TODO what does this mean for Maps?
 supported(Mod) ->
     lists:member(Mod, riak_core_capability:get({riak_kv, crdt}, [])).
-
-%% @doc parse the operation from a binary
-%% Assume type is validated and supported
-%% This is where all the magic neds to be @TODO'd
-parse_operation(CRDTOp, OpBin) ->
-    try
-        {ok, Tokens, _} = erl_scan:string(binary_to_list(OpBin)),
-        {ok, Ops} = erl_parse:parse_term(Tokens),
-        {ok, CRDTOp?CRDT_OP{op=Ops}}
-    catch Class:Reason ->
-            {error, {Class, Reason}}
-    end.
 
 %% @doc turn a string token / atom into a
 %% CRDT type
