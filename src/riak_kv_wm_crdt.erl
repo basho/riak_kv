@@ -247,12 +247,15 @@ malformed_timeout_param({Result, RD, Ctx}) ->
             {Result, RD, Ctx};
         TimeoutStr when is_list(TimeoutStr) ->
             try list_to_integer(TimeoutStr) of
+                0 ->
+                    {Result, RD, Ctx#ctx{timeout=infinity}};
                 Timeout when is_integer(Timeout), Timeout > 0 ->
                     {Result, RD, Ctx#ctx{timeout=Timeout}};
                 _Other ->
                     {true,
                      error_response("timeout query parameter must be an "
-                                    "integer greater than 0, ~s is invalid~n",
+                                    "integer greater than 0 (or 0 for disabled), "
+                                    "~s is invalid~n",
                                     [TimeoutStr], RD),
                      Ctx}
             catch
