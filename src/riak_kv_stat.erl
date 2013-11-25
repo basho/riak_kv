@@ -60,12 +60,15 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 register_stats() ->
-    riak_core_stat:register_stats(?APP, stats()).
+      riak_core_stat:register_stats(?APP, stats()).
 
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
 get_stats() ->
-    riak_core_stat:get_stats(?APP).
+    lists:append(
+      [riak_core_stat:get_stats(?APP),
+       riak_kv_stat_bc:other_stats()]).
+       
 
 %% Creation of a dynamic stat _must_ be serialized.
 register_stat(Name, Type) ->

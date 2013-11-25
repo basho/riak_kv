@@ -171,15 +171,16 @@ status([]) ->
             [] ->
                 io:format("riak_kv_stat is not enabled.\n", []);
             Stats ->
-                StatString = format_stats(Stats,
+		Pfx = riak_core_stat:prefix(),
+                StatString = format_stats(Stats, Pfx,
                     ["-------------------------------------------\n",
                         io_lib:format("1-minute stats for ~p~n",[node()])]),
                 io:format("~s\n", [StatString])
         end
     catch
         Exception:Reason ->
-            lager:error("Status failed ~p:~p", [Exception,
-                    Reason]),
+            lager:error("Status failed ~p:~p~n~p", [Exception,
+                    Reason, erlang:get_stacktrace()]),
             io:format("Status failed, see log for details~n"),
             error
     end.
@@ -550,10 +551,42 @@ bucket_type_print_list(It) ->
 %%%===================================================================
 %%% Private
 %%%===================================================================
-format_stats([], Acc) ->
+format_stats([], _, Acc) ->
     lists:reverse(Acc);
-format_stats([{Stat, V}|T], Acc) ->
-    format_stats(T, [io_lib:format("~p : ~p~n", [Stat, V])|Acc]).
+format_stats([{Stat, V}|T], Pfx, Acc) ->
+    Fmt = format_stat_(strip_name(Stat, Pfx), V),
+    format_stats(T, Pfx, [Fmt|Acc]).
+
+strip_name([Pfx,_|T], Pfx) -> T;
+strip_name(Name, _) -> Name.
+
+pretty_name([H|T]) ->
+    lists:flatten([to_string(H) | [["_", to_string(X)] || X <- T]]);
+pretty_name(A) when is_atom(A) ->
+    to_string(A).
+
+
+to_string(A) when is_atom(A) -> atom_to_list(A);
+to_string(L) when is_list(L) -> L;
+to_string(I) when is_integer(I) -> integer_to_list(I).
+    
+     
+format_stat_(Name, V) ->
+    PName = pretty_name(Name),
+    if is_list(V) ->
+	    lists:map(
+	      fun({value, Val}) ->
+		      io_lib:format("~s : ~p~n", [PName, Val]);
+		 ({ms_since_reset,_}) ->
+		      []; % skip
+		 ({K, Val}) when is_atom(K) ->
+		      io_lib:format("~s_~w : ~p~n", [PName, K, Val]);
+		 (Val) ->
+		      io_lib:format("~s : ~p~n", [PName, Val])
+	      end, V);
+       true ->
+	    io_lib:format("~s : ~p~n", [PName, V])
+    end.
 
 atomify_nodestrs(Strs) ->
     lists:foldl(fun("local", Acc) -> [node()|Acc];
