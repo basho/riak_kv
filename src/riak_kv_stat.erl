@@ -67,7 +67,8 @@ register_stats() ->
 get_stats() ->
     lists:append(
       [riak_core_stat:get_stats(?APP),
-       riak_kv_stat_bc:other_stats()]).
+       riak_kv_stat_bc:other_stats(),
+       riak_core_stat:get_stats(common)]).
        
 
 %% Creation of a dynamic stat _must_ be serialized.

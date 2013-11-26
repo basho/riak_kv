@@ -148,7 +148,7 @@ produce_stats() ->
        read_repair_stats(),
        level_stats(),
        pipe_stats(),
-       cpu_stats(),
+       %% cpu_stats(),
        mem_stats(),
        disk_stats(),
        system_stats(),
@@ -166,7 +166,7 @@ other_stats() ->
 	 t(read_repair_stats, fun read_repair_stats/0),
 	 t(level_stats      , fun level_stats/0),
 	 t(pipe_stats       , fun pipe_stats/0),
-	 t(cpu_stats        , fun cpu_stats/0),
+	 %% t(cpu_stats        , fun cpu_stats/0),
 	 t(mem_stats        , fun mem_stats/0),
 	 t(disk_stats       , fun disk_stats/0),
 	 t(system_stats     , fun system_stats/0),
@@ -174,7 +174,7 @@ other_stats() ->
 	 t(config_stats     , fun config_stats/0),
 	 t(app_stats        , fun app_stats/0),
 	 t(memory_stats     , fun memory_stats/0)],
-    %% io:fwrite("S = ~p~n", [S]),  % Clean up when done adapting
+    io:fwrite("S = ~p~n", [S]),  % Clean up when done adapting
     lists:append([V || {_, _, V} <- S]).
 
 t(L, F) ->
@@ -534,11 +534,11 @@ sidejob_put_fsm_stats() ->
 %% @spec cpu_stats() -> proplist()
 %% @doc Get stats on the cpu, as given by the cpu_sup module
 %%      of the os_mon application.
-cpu_stats() ->
-    [{cpu_nprocs, cpu_sup:nprocs()},
-     {cpu_avg1, cpu_sup:avg1()},
-     {cpu_avg5, cpu_sup:avg5()},
-     {cpu_avg15, cpu_sup:avg15()}].
+%% cpu_stats() ->
+%%     [{cpu_nprocs, cpu_sup:nprocs()},
+%%      {cpu_avg1, cpu_sup:avg1()},
+%%      {cpu_avg5, cpu_sup:avg5()},
+%%      {cpu_avg15, cpu_sup:avg15()}].
 
 %% @spec mem_stats() -> proplist()
 %% @doc Get stats on the memory, as given by the memsup module
@@ -654,7 +654,8 @@ level_stats() ->
 %% The CSEs are only interested in aggregations of Type and Reason
 %% which are elements 6 and 7 in the key.
 read_repair_stats() ->
-    aggregate(read_repairs, [riak_kv, node, gets, read_repairs, '_', '_', '_'], [6,7]).
+    Pfx = riak_core_stat:prefix(),
+    aggregate(read_repairs, [Pfx, riak_kv, node, gets, read_repairs, '_', '_', '_'], [5,6,7]).
 
 %% TODO generalise for riak_core_stat_q
 %% aggregates spiral values for stats retrieved by `Query'
@@ -662,14 +663,14 @@ read_repair_stats() ->
 %% produces a flat list of `BaseName_NameOfFieldAtIndex[_count]'
 %% to fit in with the existing naming convention in the legacy stat blob
 aggregate(BaseName, Query, Fields) ->
-    Stats = riak_core_stat_q:get_stats(Query),
+    Stats = exometer:get_values(Query),
     Aggregates = do_aggregate(Stats, Fields),
     FlatStats = flatten_aggregate_stats(BaseName, Aggregates),
     lists:flatten(FlatStats).
 
 do_aggregate(Stats, Fields) ->
     lists:foldl(fun({Name, [{count, C0}, {one, O0}]}, Acc) ->
-                        Key = key_from_fields(Name, Fields),
+                        Key = key_from_fields(list_to_tuple(Name), Fields),
                         [{count, C}, {one, O}] = case orddict:find(Key, Acc) of
                                                      error -> [{count, 0}, {one, 0}];
                                                      {ok, V} -> V
