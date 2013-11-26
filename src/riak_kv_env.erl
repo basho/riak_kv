@@ -22,7 +22,8 @@
 
 -module(riak_kv_env).
 
--export([doc_env/0]).
+-export([doc_env/0,
+         get_mount_point/1]).
 
 -define(LINUX_PARAMS, [
                        {"vm.swappiness",                        0, gte}, 
@@ -36,6 +37,18 @@
                        {"net.ipv4.tcp_fin_timeout",            15, gte},
                        {"net.ipv4.tcp_tw_reuse",                1, eq}
                       ]).
+
+%% @doc Return a filesystem mount point for a given directory,
+%%      via a call to the unix 'df' command
+-spec get_mount_point(string()) -> string() | undefined.
+get_mount_point(Dir) ->
+  case Dir of
+    undefined -> undefined;
+    _ -> 
+      DiskFreeResult = os:cmd("df -P " ++ Dir),
+      [_ColumnLabels|[ColumnValues|_]] = string:tokens(DiskFreeResult, "\n"),
+      lists:last(string:tokens(ColumnValues, " "))
+  end.
 
 
 doc_env() ->

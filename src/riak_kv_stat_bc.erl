@@ -121,6 +121,9 @@
 %%</dd><dt> disk
 %%</dt><dd> Value returned by {@link disksup:get_disk_data/0}.
 %%
+%%</dd><dt> mount_points
+%%</dt><dd> List of file system mount points relevant to Riak (specifically, location of platform_data_dir)
+%%
 %%</dd><dt> pbc_connects_total
 %%</dt><dd> Total number of pb socket connections since start
 %%
@@ -151,6 +154,7 @@ produce_stats() ->
        cpu_stats(),
        mem_stats(),
        disk_stats(),
+       mount_point_stats(),
        system_stats(),
        ring_stats(),
        config_stats(),
@@ -352,6 +356,19 @@ mem_stats() ->
 %%      of the os_mon application.
 disk_stats() ->
     [{disk, disksup:get_disk_data()}].
+
+%% @doc Get a list of filesystem mount points relevant to Riak.
+%%      Currently includes the mount point for the riak data directory (platform_data_dir).
+%%      For use with disk_stats() to determine Riak disk space usage.
+-spec mount_point_stats() -> proplist().
+mount_point_stats() ->
+    RiakDataDir = case application:get_env(riak_core, platform_data_dir) of
+        {ok, PlatformRoot} -> PlatformRoot;
+        _ -> undefined
+    end,
+    DataDirMountPoint = riak_kv_env:get_mount_point(RiakDataDir),
+    MountPoints = [{platform_data_dir, DataDirMountPoint}],
+    [{mount_points, MountPoints}].
 
 system_stats() ->
     [{nodename, node()},
