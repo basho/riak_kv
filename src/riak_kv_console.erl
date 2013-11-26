@@ -579,7 +579,7 @@ format_stat_(Name, V) ->
 		      io_lib:format("~s : ~p~n", [PName, Val]);
 		 ({ms_since_reset,_}) ->
 		      []; % skip
-		 ({K, Val}) when is_atom(K) ->
+		 ({K, Val}) when is_atom(K); is_integer(K) ->
 		      io_lib:format("~s_~w : ~p~n", [PName, K, Val]);
 		 (Val) ->
 		      io_lib:format("~s : ~p~n", [PName, Val])
