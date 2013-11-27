@@ -113,13 +113,13 @@ malformed_request(RD, Ctx) ->
     Args2 = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
     ReturnTerms0 = wrq:get_qs_value(?Q_2I_RETURNTERMS, "false", RD),
     ReturnTerms = normalize_boolean(string:to_lower(ReturnTerms0)),
+    Continuation = wrq:get_qs_value(?Q_2I_CONTINUATION, undefined, RD),
     PgSort0 = wrq:get_qs_value(?Q_2I_PAGINATION_SORT, RD),
     PgSort = case PgSort0 of
         undefined -> undefined;
         _ -> normalize_boolean(string:to_lower(PgSort0))
     end,
     MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, ?ALL_2I_RESULTS, RD),
-    Continuation = wrq:get_qs_value(?Q_2I_CONTINUATION, undefined, RD),
     TermRegex = wrq:get_qs_value(?Q_2I_TERM_REGEX, undefined, RD),
     Timeout0 =  wrq:get_qs_value("timeout", undefined, RD),
     {Start, End} = case Args2 of
@@ -174,13 +174,19 @@ malformed_request(RD, Ctx) ->
         {_, _, {true, Timeout}, {true, MaxResults}, {ok, Query}, _} ->
             %% Request is valid.
             ReturnTerms1 = riak_index:return_terms(ReturnTerms, Query),
+            %% Special case: a continuation implies pagination sort
+            %% even if no max_results was given.
+            PgSortFinal = case Continuation of
+                              undefined -> PgSort;
+                              _ -> true
+                          end,
             NewCtx = Ctx#ctx{
                        bucket = Bucket,
                        index_query = Query,
                        max_results = MaxResults,
                        return_terms = ReturnTerms1,
                        timeout=Timeout,
-                       pagination_sort = PgSort
+                       pagination_sort = PgSortFinal
                       },
             {false, RD, NewCtx};
         {_, _, _, _, {error, Reason}, _} ->

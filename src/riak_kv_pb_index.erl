@@ -106,8 +106,13 @@ maybe_perform_query({error, Reason}, _Req, State) ->
     {error, {format, Reason}, State};
 maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
     #rpbindexreq{bucket=Bucket, max_results=MaxResults, timeout=Timeout,
-                 pagination_sort=PgSort} = Req,
+                 pagination_sort=PgSort0, continuation=Continuation} = Req,
     #state{client=Client} = State,
+    %% Special case: a continuation implies pagination even if no max_results
+    PgSort = case Continuation of
+                 undefined -> PgSort0;
+                 _ -> true
+             end,
     Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
     Opts = riak_index:add_timeout_opt(Timeout, Opts0),
     {ok, ReqId, _FSMPid} = Client:stream_get_index(Bucket, Query, Opts),
@@ -116,8 +121,12 @@ maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
 maybe_perform_query({ok, Query}, Req, State) ->
     #rpbindexreq{bucket=Bucket, max_results=MaxResults,
                  return_terms=ReturnTerms0, timeout=Timeout,
-                 pagination_sort=PgSort} = Req,
+                 pagination_sort=PgSort0, continuation=Continuation} = Req,
     #state{client=Client} = State,
+    PgSort = case Continuation of
+                 undefined -> PgSort0;
+                 _ -> true
+             end,
     Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
     Opts = riak_index:add_timeout_opt(Timeout, Opts0),
     ReturnTerms =  riak_index:return_terms(ReturnTerms0, Query),
