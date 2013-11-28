@@ -32,6 +32,7 @@
 
 -export([dispatch_table/0]).
 -include("riak_kv_wm_raw.hrl").
+-include("riak_kv_types.hrl").
 
 dispatch_table() ->
     MapredProps = mapred_props(),
@@ -58,7 +59,7 @@ raw_dispatch(Name) ->
                {[], APIv2Props}],
 
     [
-     %% OLD API
+     %% OLD API, remove in v2.2
      {[Name],
       riak_kv_wm_buckets, Props1},
 
@@ -80,7 +81,11 @@ raw_dispatch(Name) ->
     ] ++
 
    [ {["types", bucket_type, "props"], riak_kv_wm_bucket_type,
-      [{api_version, 3}|raw_props(Name)]} ] ++
+      [{api_version, 3}|raw_props(Name)]},
+     {["types", bucket_type, "buckets", bucket, "datatypes"], fun is_post/1,
+      riak_kv_wm_crdt, [{api_version, 3}]},
+     {["types", bucket_type, "buckets", bucket, "datatypes", key],
+      riak_kv_wm_crdt, [{api_version, 3}]}] ++
 
         [ %% v1.4 counters @TODO REMOVE at v2.2
           %% NOTE: no (default) bucket prefix only
