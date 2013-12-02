@@ -351,7 +351,7 @@ resource_exists(RD, Ctx=#ctx{key=undefined}) ->
     handle_common_error(notfound, RD, Ctx);
 resource_exists(RD, Ctx=#ctx{client=C, bucket_type=T, bucket=B, key=K}) ->
     Options = make_options(Ctx),
-    case C:get({T,B}, K, Options) of
+    case C:get({T,B}, K, [{crdt_op, true}|Options]) of
         {ok, O} ->
             {true, RD, Ctx#ctx{data=O}};
         {error, Reason} ->

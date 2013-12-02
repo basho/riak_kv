@@ -46,7 +46,8 @@
                   {details, true} |
                   details |
                   {sloppy_quorum, boolean()} | %% default = true
-                  {n_val, pos_integer()}.      %% default = bucket props
+                  {n_val, pos_integer()} |     %% default = bucket props
+                  {crdt_op, true | undefined}. %% default = undefined
 
 -type options() :: [option()].
 -type req_id() :: non_neg_integer().
@@ -71,7 +72,8 @@
                 tracked_bucket=false :: boolean(), %% is per bucket stats enabled for this bucket
                 timing = [] :: [{atom(), erlang:timestamp()}],
                 calculated_timings :: {ResponseUSecs::non_neg_integer(),
-                                       [{StateName::atom(), TimeUSecs::non_neg_integer()}]} | undefined
+                                       [{StateName::atom(), TimeUSecs::non_neg_integer()}]} | undefined,
+                crdt_op :: undefined | true
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -178,6 +180,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     DocIdx = riak_core_util:chash_key(BKey),
     Bucket_N = proplists:get_value(n_val,BucketProps),
+    CrdtOp = proplists:get_value(crdt_op, Options),
     N = case proplists:get_value(n_val, Options) of
             undefined ->
                 Bucket_N;
@@ -204,7 +207,8 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
                                                 n = N,
                                                 bucket_props=BucketProps,
                                                 preflist2 = Preflist2,
-                                                tracked_bucket = StatTracked})
+                                                tracked_bucket = StatTracked,
+                                                crdt_op = CrdtOp})
     end.
 
 %% @private
@@ -462,14 +466,16 @@ roll_d100() ->
 %% Issue read repairs for any vnodes that are out of date
 read_repair(Indices, RepairObj,
             #state{req_id = ReqId, starttime = StartTime,
-                   preflist2 = Sent, bkey = BKey, bucket_props = BucketProps}) ->
+                   preflist2 = Sent, bkey = BKey, bucket_props = BucketProps,
+                   crdt_op = CrdtOp}) ->
     RepairPreflist = [{Idx, Node} || {{Idx, Node}, _Type} <- Sent,
                                      proplists:get_value(Idx, Indices) /= undefined],
     Ps = preflist_for_tracing(RepairPreflist),
     ?DTRACE(?C_GET_FSM_RR, [], Ps),
     riak_kv_vnode:readrepair(RepairPreflist, BKey, RepairObj, ReqId,
                              StartTime, [{returnbody, false},
-                                         {bucket_props, BucketProps}]),
+                                         {bucket_props, BucketProps},
+                                         {crdt_op, CrdtOp}]),
     riak_kv_stat:update({read_repairs, Indices, Sent}).
 
 
