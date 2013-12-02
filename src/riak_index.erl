@@ -252,7 +252,7 @@ parse_field_if_defined(Field, Val) ->
 to_index_query(?CURRENT_2I_VERSION, Args) ->
     Defaults = ?KV_INDEX_Q{},
     [Field1, Start, StartInc, End1, EndInc,
-     TermRegex, ReturnBody, Cont
+     TermRegex, ReturnBody, MaxResults, Cont
     ] =
         [proplists:get_value(F, Args, Default) ||
             {F, Default} <-
@@ -263,6 +263,7 @@ to_index_query(?CURRENT_2I_VERSION, Args) ->
              {end_inclusive, Defaults?KV_INDEX_Q.end_inclusive},
              {term_regex, Defaults?KV_INDEX_Q.term_regex},
              {return_body, Defaults?KV_INDEX_Q.return_body},
+             {max_results, Defaults?KV_INDEX_Q.max_results},
              {continuation, undefined}]],
     End = case End1 of undefined -> Start; _ -> End1 end,
     Field = normalize_index_field(Field1),
@@ -285,10 +286,12 @@ to_index_query(?CURRENT_2I_VERSION, Args) ->
                     start_term=NormStart,
                     end_term=NormEnd,
                     return_terms=ReturnTerms,
-                    term_regex=TermRegex,
                     start_inclusive=StartInc,
                     end_inclusive=EndInc,
-                    return_body=ReturnBody},
+                    return_body=ReturnBody,
+                    term_regex=TermRegex,
+                    max_results=MaxResults
+                     },
             case Cont of
                 undefined ->
                     {ok, Req1};

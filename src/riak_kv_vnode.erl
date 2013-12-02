@@ -686,9 +686,19 @@ prepare_index_query(#riak_kv_index_v3{term_regex=RE} = Q) when
 prepare_index_query(Q) ->
     Q.
 
+%% @doc Batch size for results is set to 2i max_results if that is less
+%% than the default size. Without this the vnode may send back to the FSM
+%% more items than could ever be sent back to the client.
+buffer_size_for_index_query(#riak_kv_index_v3{max_results=N}, DefaultSize)
+  when is_integer(N), N < DefaultSize ->
+    N;
+buffer_size_for_index_query(_Q, DefaultSize) ->
+    DefaultSize.
+
 handle_coverage_index(Bucket, ItemFilter, Query,
                       FilterVNodes, Sender,
                       State=#state{mod=Mod,
+                                   key_buf_size=DefaultBufSz,
                                    modstate=ModState},
                       ResultFunFun) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
@@ -699,8 +709,9 @@ handle_coverage_index(Bucket, ItemFilter, Query,
             riak_kv_stat:update(vnode_index_read),
 
             ResultFun = ResultFunFun(Bucket, Sender),
+            BufSize = buffer_size_for_index_query(Query, DefaultBufSz),
             Opts = [{index, Bucket, prepare_index_query(Query)},
-                    {bucket, Bucket}],
+                    {bucket, Bucket}, {buffer_size, BufSize}],
             %% @HACK
             %% Really this should be decided in the backend
             %% if there was a index_query fun.
@@ -728,13 +739,14 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
                         FilterVNodes, Sender, Opts0,
                         State=#state{async_folding=AsyncFolding,
                                      idx=Index,
-                                     key_buf_size=BufferSize,
+                                     key_buf_size=DefaultBufSz,
                                      mod=Mod,
                                      modstate=ModState}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
     BufferMod = riak_kv_fold_buffer,
+    BufferSize = proplists:get_value(buffer_size, Opts0, DefaultBufSz),
     Buffer = BufferMod:new(BufferSize, ResultFun),
     FoldFun = fold_fun(keys, BufferMod, Filter),
     FinishFun = finish_fun(BufferMod, Sender),

@@ -127,11 +127,15 @@ malformed_request(RD, Ctx) ->
         [S] -> {S, undefined};
         [S, E] -> {S, E}
     end,
-    QRes = riak_index:to_index_query([
+    MaxVal = validate_max(MaxResults0),
+    QRes = riak_index:to_index_query(
+             [
                 {field, IndexField}, {start_term, Start}, {end_term, End},
                 {return_terms, ReturnTerms}, {continuation, Continuation},
                 {term_regex, TermRegex}
-                ]),
+             ]
+             ++ [{max_results, MaxResults} || {true, MaxResults} <- [MaxVal]]
+            ),
     ValRe = case TermRegex of
         undefined ->
             ok;
@@ -142,7 +146,7 @@ malformed_request(RD, Ctx) ->
     case {PgSort,
           ReturnTerms,
           validate_timeout(Timeout0),
-          validate_max(MaxResults0),
+          MaxVal,
           QRes,
           ValRe} of
         {malformed, _, _, _, _, _} ->

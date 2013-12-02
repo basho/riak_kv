@@ -142,13 +142,16 @@ handle_query_results(ReturnTerms, MaxResults,  {ok, Results}, State) ->
     {reply, Resp, State}.
 
 query_params(#rpbindexreq{qtype=eq, index=Index, key=Value,
-                          term_regex=Re, continuation=Continuation}) ->
+                          term_regex=Re, max_results=MaxResults,
+                          continuation=Continuation}) ->
     [{field, Index}, {start_term, Value}, {term_regex, Re},
-     {continuation, Continuation}];
+     {max_results, MaxResults}, {continuation, Continuation}];
 query_params(#rpbindexreq{index=Index, range_min=Min, range_max=Max,
-                          term_regex=Re, continuation=Continuation}) ->
+                          term_regex=Re, max_results=MaxResults,
+                          continuation=Continuation}) ->
      [{field, Index}, {start_term, Min}, {end_term, Max},
-      {term_regex, Re}, {continuation, Continuation}].
+      {term_regex, Re}, {max_results, MaxResults},
+      {continuation, Continuation}].
 
 encode_results(true, Results0, Continuation) ->
     Results = [encode_result(Res) || Res <- Results0],
