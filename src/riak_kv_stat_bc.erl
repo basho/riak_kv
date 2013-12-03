@@ -173,7 +173,6 @@ other_stats() ->
 	 t(config_stats     , fun config_stats/0),
 	 t(app_stats        , fun app_stats/0),
 	 t(memory_stats     , fun memory_stats/0)],
-    io:fwrite("S = ~p~n", [S]),  % Clean up when done adapting
     lists:append([V || {_, _, V} <- S]).
 
 t(L, F) ->
@@ -211,14 +210,18 @@ get_stat(Name, Type, Cache, ValFun) ->
         Cached -> {ValFun(Cached), Cache}
     end.
 
-bc_stat({Old, {NewName, Field}, histogram}, Acc, Cache) ->
-    ValFun = fun(Stat) -> trunc(proplists:get_value(Field, Stat)) end,
+bc_stat({Old, {NewName, Field}, histogram} = _X, Acc, Cache) ->
+    try
+    ValFun = fun(Stat) ->
+		     trunc(proplists:get_value(Field, Stat)) end,
     {Val, Cache1} = get_stat(NewName, histogram, Cache, ValFun),
-    {[{Old, Val} | Acc], Cache1};
+    {[{Old, Val} | Acc], Cache1}
+    catch
+	error:_ -> {[{Old,error} | Acc], Cache}
+    end;
 bc_stat({Old, {NewName, Field}, histogram_percentile}, Acc, Cache) ->
     ValFun = fun(Stat) ->
-                     Percentile = proplists:get_value(percentile, Stat),
-                     Val = proplists:get_value(Field, Percentile),
+                     Val = proplists:get_value(Field, Stat),
                      trunc(Val) end,
     {Val, Cache1} = get_stat(NewName, histogram, Cache, ValFun),
     {[{Old, Val} | Acc], Cache1};
@@ -229,7 +232,10 @@ bc_stat({Old, {NewName, Field}, spiral}, Acc, Cache) ->
     {Val, Cache1} = get_stat(NewName, spiral, Cache, ValFun),
     {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, NewName, counter}, Acc, Cache) ->
-    {Val, Cache1} = get_stat(NewName, counter, Cache),
+    ValFun = fun(Stat) ->
+		     proplists:get_value(value, Stat, 0)
+	     end,
+    {Val, Cache1} = get_stat(NewName, counter, Cache, ValFun),
     {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, NewName, function}, Acc, Cache) ->
     {Val, Cache1} = get_stat(NewName, gauge, Cache),
@@ -256,24 +262,24 @@ legacy_stat_map() ->
      {vnode_index_deletes_postings_total, {{riak_kv,vnode,index,deletes,postings}, count}, spiral},
      {node_gets, {{riak_kv,node,gets}, one}, spiral},
      {node_gets_total, {{riak_kv,node,gets}, count}, spiral},
-     {node_get_fsm_siblings_mean, {{riak_kv,node,gets,siblings}, arithmetic_mean}, histogram},
+     {node_get_fsm_siblings_mean, {{riak_kv,node,gets,siblings}, mean}, histogram},
      {node_get_fsm_siblings_median, {{riak_kv,node,gets,siblings}, median}, histogram},
      {node_get_fsm_siblings_95, {{riak_kv,node,gets,siblings}, 95}, histogram_percentile},
      {node_get_fsm_siblings_99, {{riak_kv,node,gets,siblings}, 99}, histogram_percentile},
      {node_get_fsm_siblings_100, {{riak_kv,node,gets,siblings}, max}, histogram},
-     {node_get_fsm_objsize_mean, {{riak_kv,node,gets,objsize}, arithmetic_mean}, histogram},
+     {node_get_fsm_objsize_mean, {{riak_kv,node,gets,objsize}, mean}, histogram},
      {node_get_fsm_objsize_median, {{riak_kv,node,gets,objsize}, median}, histogram},
      {node_get_fsm_objsize_95, {{riak_kv,node,gets,objsize}, 95}, histogram_percentile},
      {node_get_fsm_objsize_99, {{riak_kv,node,gets,objsize}, 99}, histogram_percentile},
      {node_get_fsm_objsize_100, {{riak_kv,node,gets,objsize}, max}, histogram},
-     {node_get_fsm_time_mean, {{riak_kv,node,gets,time}, arithmetic_mean}, histogram},
+     {node_get_fsm_time_mean, {{riak_kv,node,gets,time}, mean}, histogram},
      {node_get_fsm_time_median, {{riak_kv,node,gets,time}, median}, histogram},
      {node_get_fsm_time_95, {{riak_kv,node,gets,time}, 95}, histogram_percentile},
      {node_get_fsm_time_99, {{riak_kv,node,gets,time}, 99}, histogram_percentile},
      {node_get_fsm_time_100, {{riak_kv,node,gets,time}, max}, histogram},
      {node_puts, {{riak_kv,node, puts}, one}, spiral},
      {node_puts_total, {{riak_kv,node, puts}, count}, spiral},
-     {node_put_fsm_time_mean, {{riak_kv,node, puts, time}, arithmetic_mean}, histogram},
+     {node_put_fsm_time_mean, {{riak_kv,node, puts, time}, mean}, histogram},
      {node_put_fsm_time_median, {{riak_kv,node, puts, time}, median}, histogram},
      {node_put_fsm_time_95,  {{riak_kv,node, puts, time}, 95}, histogram_percentile},
      {node_put_fsm_time_99,  {{riak_kv,node, puts, time}, 99}, histogram_percentile},

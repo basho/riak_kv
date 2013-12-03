@@ -84,6 +84,32 @@ pretty_print(RD1, C1=#ctx{}) ->
     {json_pp:print(binary_to_list(list_to_binary(Json))), RD2, C2}.
 
 get_stats() ->
-    {value, {disk, Disk}, Stats} = lists:keytake(disk, 1, riak_kv_stat:get_stats()),
+    {value, {_, Disk}, Stats} = lists:keytake(disk, 1, riak_kv_stat_bc:produce_stats()),
     DiskFlat = [{struct, [{id, list_to_binary(Id)}, {size, Size}, {used, Used}]} || {Id, Size, Used} <- Disk],
-    lists:append([Stats, [{disk, DiskFlat}], riak_core_stat:get_stats()]).
+    insert_disk(Stats, {disk, DiskFlat}) ++ convert_stats(riak_core_stat:get_stats(), riak_core_stat:prefix()).
+
+insert_disk([{mem_allocated,_} = H|T], D) ->
+    [H, D|T];
+insert_disk([H|T], D) ->
+    [H|insert_disk(T, D)];
+insert_disk([], D) ->
+    [D].
+
+convert_stats([{[P, riak_core, N], V}|T], P) ->
+    case V of
+	[{value, Val}|_] ->
+	    [{N, Val}];
+	[{count,C}, {one,O}] ->
+	    [{atom_to_list(N) ++ "_total", C}, {N, O}];
+	L when is_list(L) ->
+	    lists:map(fun({K,Val}) when is_atom(K) ->
+			      {join(N, K), Val}
+		      end, L);
+	_ ->
+	    []
+    end ++ convert_stats(T, P);
+convert_stats([], _) ->
+    [].
+
+join(A, B) ->
+    binary_to_atom(<< (atom_to_binary(A, latin1))/binary, "_", (atom_to_binary(B, latin1))/binary>>, latin1).
