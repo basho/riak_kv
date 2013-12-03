@@ -122,7 +122,7 @@ maybe_fetch(true, Req, State) ->
     #dtfetchreq{bucket=B, key=K, type=BType, include_context=InclCtx} = Req,
     #state{client=C} = State,
     Options = make_options(Req),
-    Resp = C:get({BType, B}, K, Options),
+    Resp = C:get({BType, B}, K, [{crdt_op, true}|Options]),
     process_fetch_response(Resp, State#state{return_ctx=InclCtx});
 maybe_fetch(false, _Req, State) ->
     #state{type=Type} = State,
