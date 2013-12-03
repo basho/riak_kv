@@ -35,7 +35,22 @@
 
 -spec(statistics() -> [any()]).
 statistics() ->
+<<<<<<< HEAD
     riak_kv_stat:get_stats() ++ riak_core_stat:get_stats().
+=======
+    prune(riak_kv_stat:get_stats()).
+
+prune(Stats) ->
+    P = riak_core_stat:prefix(),
+    lists:filter(
+      fun({[P1,riak_kv,vnode,_,time,I|_], _}) when P1==P ->
+	      is_integer(I);
+	 ({[P1,riak_kv,vnode,I|_], _}) when P1==P ->
+	      is_integer(I);
+	 (_) -> true
+      end, Stats).
+	       
+>>>>>>> legacy stats, JSON stats fixed
 
 ringready() ->
     riak_core_status:ringready().
