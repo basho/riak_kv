@@ -191,13 +191,27 @@ strict_descendant(O1, O2) ->
 %%       X-Riak-Last-Modified header.
 -spec reconcile([riak_object()], boolean()) -> riak_object().
 reconcile(Objects, AllowMultiple) ->
-    RObj = reconcile(Objects),
+    RObj = reconcile(dedup(Objects)),
     case AllowMultiple of
         false ->
             Contents = [most_recent_content(RObj#r_object.contents)],
             RObj#r_object{contents=Contents};
         true ->
             RObj
+    end.
+
+dedup(Objects) ->
+    All = sets:from_list(Objects),
+    Del = sets:from_list(ancestors(Objects)),
+    remove_duplicate_objects(sets:to_list(sets:subtract(All, Del))).
+
+remove_duplicate_objects(Os) -> rem_dup_objs(Os,[]).
+rem_dup_objs([],Acc) -> Acc;
+rem_dup_objs([O|Rest],Acc) ->
+    EqO = [AO || AO <- Acc, riak_object:equal(AO,O) =:= true],
+    case EqO of
+        [] -> rem_dup_objs(Rest,[O|Acc]);
+        _ -> rem_dup_objs(Rest,Acc)
     end.
 
 reconcile([Object]) ->
