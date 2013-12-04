@@ -86,7 +86,9 @@ pretty_print(RD1, C1=#ctx{}) ->
 get_stats() ->
     {value, {_, Disk}, Stats} = lists:keytake(disk, 1, riak_kv_stat_bc:produce_stats()),
     DiskFlat = [{struct, [{id, list_to_binary(Id)}, {size, Size}, {used, Used}]} || {Id, Size, Used} <- Disk],
-    insert_disk(Stats, {disk, DiskFlat}) ++ convert_stats(riak_core_stat:get_stats(), riak_core_stat:prefix()).
+    insert_disk(Stats, {disk, DiskFlat}) ++
+	convert_stats(riak_core_stat:get_stats(common) ++
+			  riak_core_stat:get_stats(), riak_core_stat:prefix()).
 
 insert_disk([{mem_allocated,_} = H|T], D) ->
     [H, D|T];
@@ -95,15 +97,19 @@ insert_disk([H|T], D) ->
 insert_disk([], D) ->
     [D].
 
-convert_stats([{[P, riak_core, N], V}|T], P) ->
+convert_stats([{[P, App, N], V}|T], P) when App==riak_core; App==common ->
+    Name = case N of
+	       cpu_stats -> cpu;
+	       _ -> N
+	   end,
     case V of
 	[{value, Val}|_] ->
-	    [{N, Val}];
+	    [{Name, Val}];
 	[{count,C}, {one,O}] ->
-	    [{atom_to_list(N) ++ "_total", C}, {N, O}];
+	    [{atom_to_list(Name) ++ "_total", C}, {Name, O}];
 	L when is_list(L) ->
 	    lists:map(fun({K,Val}) when is_atom(K) ->
-			      {join(N, K), Val}
+			      {join(Name, K), Val}
 		      end, L);
 	_ ->
 	    []
