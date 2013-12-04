@@ -184,6 +184,14 @@ do_update({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
 do_update({vnode_index_delete, Postings}) ->
     folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes}, Postings, spiral),
     folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes, postings}, Postings, spiral);
+do_update({vnode_dt_update, Mod, Micros}) ->
+    Type = riak_kv_crdt:from_mod(Mod),
+    folsom_metrics:notify_existing_metric({?APP, vnode, Type, update}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, vnode, Type, update, time}, Micros, histogram);
+do_update({vnode_dt_merge, Mod, Micros}) ->
+    Type = riak_kv_crdt:from_mod(Mod),
+    folsom_metrics:notify_existing_metric({?APP, vnode, Type, merge}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, vnode, Type, merge, time}, Micros, histogram);
 do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket, undefined}) ->
     folsom_metrics:notify_existing_metric({?APP, node, gets}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node, gets, time}, Microsecs, histogram),
@@ -397,6 +405,18 @@ stats() ->
      {[vnode, index, writes, postings], spiral},
      {[vnode, index, deletes], spiral},
      {[vnode, index, deletes, postings], spiral},
+     {[vnode, counter, merge], spiral},
+     {[vnode, counter, merge, time], histogram},
+     {[vnode, counter, update], spiral},
+     {[vnode, counter, update, time], histogram},
+     {[vnode, set, merge], spiral},
+     {[vnode, set, merge, time], histogram},
+     {[vnode, set, update], spiral},
+     {[vnode, set, update, time], histogram},
+     {[vnode, map, merge], spiral},
+     {[vnode, map, merge, time], histogram},
+     {[vnode, map, update], spiral},
+     {[vnode, map, update, time], histogram},
      {[node, gets], spiral},
      {[node, gets, fsm, active], counter},
      {[node, gets, fsm, errors], spiral},
@@ -582,6 +602,14 @@ stats_from_update_arg({vnode_index_write, _, _}) ->
         riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
 stats_from_update_arg({vnode_index_delete, _}) ->
     riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
+stats_from_update_arg({vnode_dt_update, Mod, _}) ->
+    Type = riak_kv_crdt:from_mod(Mod),
+    [{{?APP, vnode, Type, update}, {metric, [], spiral, undefined}},
+     {{?APP, vnode, Type, update, time}, {metric, [], histogram, undefined}}];
+stats_from_update_arg({vnode_dt_merge, Mod, _}) ->
+    Type = riak_kv_crdt:from_mod(Mod),
+    [{{?APP, vnode, Type, merge}, {metric, [], spiral, undefined}},
+     {{?APP, vnode, Type, merge, time}, {metric, [], histogram, undefined}}];
 stats_from_update_arg({get_fsm, _, _, _, _, _, _, _}) ->
     riak_core_stat_q:names_and_types([?APP, node, gets]);
 stats_from_update_arg({put_fsm_time, _, _, _, _}) ->
