@@ -36,13 +36,12 @@
 -include_lib("webmachine/include/webmachine.hrl").
 
 -record(ctx, {}).
--type context() :: #ctx{}.
 
 init(_) ->
     {ok, #ctx{}}.
 
--spec encodings_provided(#wm_reqdata{}, context()) ->
-         {[term()], #wm_reqdata{}, context()}.
+%% @spec encodings_provided(webmachine:wrq(), context()) ->
+%%         {[encoding()], webmachine:wrq(), context()}
 %% @doc Get the list of encodings this resource provides.
 %%      "identity" is provided for all methods, and "gzip" is
 %%      provided for GET as well
@@ -55,8 +54,8 @@ encodings_provided(ReqData, Context) ->
             {[{"identity", fun(X) -> X end}], ReqData, Context}
     end.
 
--spec content_types_provided(#wm_reqdata{}, context()) ->
-    {[term()], #wm_reqdata{}, context()}.
+%% @spec content_types_provided(webmachine:wrq(), context()) ->
+%%          {[ctype()], webmachine:wrq(), context()}
 %% @doc Get the list of content types this resource provides.
 %%      "application/json" and "text/plain" are both provided
 %%      for all requests.  "text/plain" is a "pretty-printed"
@@ -77,8 +76,8 @@ produce_body(ReqData, Ctx) ->
     Body = mochijson2:encode({struct, get_stats()}),
     {Body, ReqData, Ctx}.
 
--spec pretty_print(#wm_reqdata{}, context()) ->
-          {string(), #wm_reqdata{}, context()}.
+%% @spec pretty_print(webmachine:wrq(), context()) ->
+%%          {string(), webmachine:wrq(), context()}
 %% @doc Format the respons JSON object is a "pretty-printed" style.
 pretty_print(RD1, C1=#ctx{}) ->
     {Json, RD2, C2} = produce_body(RD1, C1),
@@ -87,10 +86,9 @@ pretty_print(RD1, C1=#ctx{}) ->
 get_stats() ->
     {value, {_, Disk}, Stats} = lists:keytake(disk, 1, riak_kv_stat_bc:produce_stats()),
     DiskFlat = [{struct, [{id, list_to_binary(Id)}, {size, Size}, {used, Used}]} || {Id, Size, Used} <- Disk],
-<<<<<<< HEAD
-    lists:append([Stats, [{disk, DiskFlat}], riak_core_stat:get_stats(), yz_stat:search_stats()]).
-=======
-    insert_disk(Stats, {disk, DiskFlat}) ++ convert_stats(riak_core_stat:get_stats(), riak_core_stat:prefix()).
+    insert_disk(Stats, {disk, DiskFlat}) ++
+	convert_stats(riak_core_stat:get_stats(common) ++
+			  riak_core_stat:get_stats(), riak_core_stat:prefix()).
 
 insert_disk([{mem_allocated,_} = H|T], D) ->
     [H, D|T];
@@ -99,15 +97,19 @@ insert_disk([H|T], D) ->
 insert_disk([], D) ->
     [D].
 
-convert_stats([{[P, riak_core, N], V}|T], P) ->
+convert_stats([{[P, App, N], V}|T], P) when App==riak_core; App==common ->
+    Name = case N of
+	       cpu_stats -> cpu;
+	       _ -> N
+	   end,
     case V of
 	[{value, Val}|_] ->
-	    [{N, Val}];
+	    [{Name, Val}];
 	[{count,C}, {one,O}] ->
-	    [{atom_to_list(N) ++ "_total", C}, {N, O}];
+	    [{atom_to_list(Name) ++ "_total", C}, {Name, O}];
 	L when is_list(L) ->
 	    lists:map(fun({K,Val}) when is_atom(K) ->
-			      {join(N, K), Val}
+			      {join(Name, K), Val}
 		      end, L);
 	_ ->
 	    []
@@ -117,4 +119,3 @@ convert_stats([], _) ->
 
 join(A, B) ->
     binary_to_atom(<< (atom_to_binary(A, latin1))/binary, "_", (atom_to_binary(B, latin1))/binary>>, latin1).
->>>>>>> legacy stats, JSON stats fixed
