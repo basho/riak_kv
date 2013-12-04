@@ -15,7 +15,14 @@ clean:
 distclean: clean
 	./rebar delete-deps
 
-test: all
+# FIXME: This target is necessary so that riak_kv_crdt:eqc_test_ will find
+# the appropriate generators.
+test-compile:
+	cd deps/riak_dt
+	./rebar -DEQC -DTEST clean compile
+	cd ../..
+
+test: all test-compile
 	./rebar skip_deps=true eunit
 
 docs:
