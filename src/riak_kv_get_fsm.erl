@@ -508,15 +508,21 @@ client_reply(Reply, StateData0 = #state{from = {raw, ReqId, Pid},
     ?DTRACE(?C_GET_FSM_CLIENT_REPLY, [ShortCode, ResponseUSecs], ["client_reply"]),
     StateData#state{calculated_timings={ResponseUSecs, Stages}}.
 
-update_stats({ok, Obj}, #state{tracked_bucket = StatTracked, calculated_timings={ResponseUSecs, Stages}}) ->
+update_stats({ok, Obj}, #state{options=Options,
+                               tracked_bucket = StatTracked,
+                               calculated_timings={ResponseUSecs, Stages}}) ->
     %% Stat the number of siblings and the object size, and timings
+    CRDTMod = proplists:get_value(crdt_op, Options),
     NumSiblings = riak_object:value_count(Obj),
     ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
     ObjSize = riak_object:approximate_size(ObjFmt, Obj),
     Bucket = riak_object:bucket(Obj),
-    riak_kv_stat:update({get_fsm, Bucket, ResponseUSecs, Stages, NumSiblings, ObjSize, StatTracked});
-update_stats(_, #state{ bkey = {Bucket, _}, tracked_bucket = StatTracked, calculated_timings={ResponseUSecs, Stages}}) ->
-    riak_kv_stat:update({get_fsm, Bucket, ResponseUSecs, Stages, undefined, undefined, StatTracked}).
+    riak_kv_stat:update({get_fsm, Bucket, ResponseUSecs, Stages, NumSiblings, ObjSize, StatTracked, CRDTMod});
+update_stats(_, #state{options=Options, bkey = {Bucket, _},
+                       tracked_bucket = StatTracked,
+                       calculated_timings={ResponseUSecs, Stages}}) ->
+    CRDTMod = proplists:get_value(crdt_op, Options),
+    riak_kv_stat:update({get_fsm, Bucket, ResponseUSecs, Stages, undefined, undefined, StatTracked, CRDTMod}).
 
 client_info(true, StateData, Acc) ->
     client_info(details(), StateData, Acc);

@@ -94,7 +94,7 @@ process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0,
                            make_option(notfound_ok, NFOk) ++
                            make_option(basic_quorum, BQ)) of
                 {ok, O} ->
-                    {_Ctx, Value} = riak_kv_crdt:value(O, ?V1_COUNTER_TYPE),
+                    {{_Ctx, Value}, _} = riak_kv_crdt:value(O, ?V1_COUNTER_TYPE),
                     {reply, #rpbcountergetresp{value = Value}, State};
                 {error, notfound} ->
                     {reply, #rpbcountergetresp{}, State};
@@ -122,7 +122,7 @@ process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=Coun
                 ok ->
                     {reply, #rpbcounterupdateresp{}, State};
                 {ok, RObj} ->
-                    {_Ctx, Value} = riak_kv_crdt:value(RObj, ?V1_COUNTER_TYPE),
+                    {{_Ctx, Value}, _} = riak_kv_crdt:value(RObj, ?V1_COUNTER_TYPE),
                     {reply, #rpbcounterupdateresp{value=Value}, State};
                 {error, notfound} ->
                     {reply, #rpbcounterupdateresp{}, State};

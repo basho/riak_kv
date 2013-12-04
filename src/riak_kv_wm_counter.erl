@@ -334,7 +334,7 @@ to_text(RD, Ctx=#ctx{doc={ok, Doc}}) ->
     {produce_doc_body(Doc), RD, Ctx}.
 
 produce_doc_body(Doc) ->
-    {_Ctx, Value} = riak_kv_crdt:value(Doc, ?V1_COUNTER_TYPE),
+    {{_Ctx, Value},_} = riak_kv_crdt:value(Doc, ?V1_COUNTER_TYPE),
     integer_to_list(Value).
 
 ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
