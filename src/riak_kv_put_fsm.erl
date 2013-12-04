@@ -29,6 +29,7 @@
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_js_pools.hrl").
 -include("riak_kv_wm_raw.hrl").
+-include("riak_kv_types.hrl").
 
 -behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
@@ -591,7 +592,8 @@ postcommit(Reply, StateData = #state{putcore = PutCore}) ->
 
 finish(timeout, StateData = #state{timing = Timing, reply = Reply,
                                    bkey = {Bucket, _Key},
-                                   tracked_bucket = StatTracked}) ->
+                                   tracked_bucket = StatTracked,
+                                   options = Options}) ->
     case Reply of
         {error, _} ->
             ?DTRACE(?C_PUT_FSM_FINISH, [-1], []),
@@ -599,8 +601,12 @@ finish(timeout, StateData = #state{timing = Timing, reply = Reply,
         _Ok ->
             %% TODO: Improve reporting of timing
             %% For now can add debug tracers to view the return from calc_timing
+            CRDTMod = case proplists:get_value(crdt_op, Options) of
+                #crdt_op{mod=Mod} -> Mod;
+                _ -> undefined
+            end,
             {Duration, Stages} = riak_kv_fsm_timing:calc_timing(Timing),
-            riak_kv_stat:update({put_fsm_time, Bucket, Duration, Stages, StatTracked}),
+            riak_kv_stat:update({put_fsm_time, Bucket, Duration, Stages, StatTracked, CRDTMod}),
             ?DTRACE(?C_PUT_FSM_FINISH, [0, Duration], [])
     end,
     {stop, normal, StateData};

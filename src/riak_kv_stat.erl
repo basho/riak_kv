@@ -210,11 +210,17 @@ do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket, 
     folsom_metrics:notify_existing_metric({?APP, node, gets, Type, objsize}, ObjSize, histogram),
     do_stages([?APP, node, gets, Type, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type});
-do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket}) ->
+do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, undefined}) ->
     folsom_metrics:notify_existing_metric({?APP, node, puts}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node, puts, time}, Microsecs, histogram),
     do_stages([?APP, node, puts, time], Stages),
     do_put_bucket(PerBucket, {Bucket, Microsecs, Stages});
+do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, CRDTMod}) ->
+    Type = riak_kv_crdt:from_mod(CRDTMod),
+    folsom_metrics:notify_existing_metric({?APP, node, puts, Type}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, node, puts, Type, time}, Microsecs, histogram),
+    do_stages([?APP, node, puts, Type, time], Stages),
+    do_put_bucket(PerBucket, {Bucket, Microsecs, Stages, Type});
 do_update({read_repairs, Indices, Preflist}) ->
     folsom_metrics:notify_existing_metric({?APP, node, gets, read_repairs}, 1, spiral),
     do_repairs(Indices, Preflist);
@@ -321,6 +327,16 @@ do_put_bucket(true, {Bucket, Microsecs, Stages}=Args) ->
             register_stat({?APP, node, puts, Bucket}, spiral),
             register_stat({?APP, node, puts, time, Bucket}, histogram),
             do_put_bucket(true, Args)
+    end;
+do_put_bucket(true, {Bucket, Microsecs, Stages, Type}=Args) ->
+    case (catch folsom_metrics:notify_existing_metric({?APP, node, puts, Type, Bucket}, 1, spiral)) of
+        ok ->
+            folsom_metrics:notify_existing_metric({?APP, node, puts, Type, time, Bucket}, Microsecs, histogram),
+            do_stages([?APP, node, puts, Type, time, Bucket], Stages);
+        {'EXIT', _} ->
+            register_stat({?APP, node, puts, Type, Bucket}, spiral),
+            register_stat({?APP, node, puts, Type, time, Bucket}, histogram),
+            do_put_bucket(true, Args)
     end.
 
 %% Path is list that provides a conceptual path to a stat
@@ -408,6 +424,12 @@ stats() ->
      {[node, puts, fsm, active], counter},
      {[node, puts, fsm, errors], spiral},
      {[node, puts, time], histogram},
+     {[node, puts, counter], spiral},
+     {[node, puts, counter, time], histogram},
+     {[node, puts, set], spiral},
+     {[node, puts, set, time], histogram},
+     {[node, puts, map], spiral},
+     {[node, puts, map, time], histogram},
      {[index, fsm, create], spiral},
      {[index, fsm, create, error], spiral},
      {[index, fsm, active], counter},
