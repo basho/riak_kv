@@ -1027,6 +1027,14 @@ is_updated_test() ->
     OVu = riak_object:update_value(O, testupdate),
     ?assert(is_updated(OVu)).
 
+remove_duplicates_test() ->
+    O0 = riak_object:new(<<"test">>, <<"test">>, zero),
+    O1 = riak_object:new(<<"test">>, <<"test">>, one),
+    ND = remove_duplicate_objects([O0, O0, O1, O1, O0, O1]),
+    ?assertEqual(2, length(ND)),
+    ?assert(lists:member(O0, ND)),
+    ?assert(lists:member(O1, ND)).
+
 new_with_ctype_test() ->
     O = riak_object:new(<<"b">>, <<"k">>, <<"{\"a\":1}">>, "application/json"),
     ?assertEqual("application/json", dict:fetch(?MD_CTYPE, riak_object:get_metadata(O))).
