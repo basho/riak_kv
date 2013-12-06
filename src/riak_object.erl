@@ -859,9 +859,12 @@ update_test() ->
     {O,O2}.
 
 ancestor_test() ->
+    Actor = self(),
     {O,O2} = update_test(),
-    O3 = riak_object:increment_vclock(O2,self()),
+    O3 = riak_object:increment_vclock(O2, Actor),
     [O] = riak_object:ancestors([O,O3]),
+    MD = riak_object:get_metadata(O3),
+    ?assertMatch({Actor, {1, _}}, dict:fetch(?DOT, MD)),
     {O,O3}.
 
 reconcile_test() ->
@@ -1103,5 +1106,53 @@ vclock_codec_test() ->
     VCs = [<<"BinVclock">>, {vclock, something, [], <<"blah">>}, vclock:fresh()],
     [ ?assertEqual({Method, VC}, {Method, decode_vclock(encode_vclock(Method, VC))})
      || VC <- VCs, Method <- [encode_raw, encode_zlib]].
+
+dotted_values_reconcile_test() ->
+    {B, K} = {<<"b">>, <<"k">>},
+    A = riak_object:increment_vclock(riak_object:new(B, K, <<"a">>), a),
+    C = riak_object:increment_vclock(riak_object:new(B, K, <<"c">>), c),
+    Z = riak_object:increment_vclock(riak_object:new(B, K, <<"z">>), z),
+    A1 = riak_object:increment_vclock(riak_object:apply_updates(riak_object:update_value(A, <<"a1">>)), a),
+    C1 = riak_object:increment_vclock(riak_object:apply_updates(riak_object:update_value(C, <<"c1">>)), c),
+    Z1 = riak_object:increment_vclock(riak_object:apply_updates(riak_object:update_value(Z, <<"z1">>)), z),
+    ACZ = riak_object:reconcile([A, C, Z, A1, C1, Z1], true),
+    ?assertEqual(3, riak_object:value_count(ACZ)),
+    Contents = lists:sort(riak_object:get_contents(ACZ)),
+    verify_contents(Contents, [{{a, 2}, <<"a1">>}, {{c, 2}, <<"c1">>}, {{z, 2}, <<"z1">>}]),
+    Vclock = riak_object:vclock(ACZ),
+    ?assertEqual(2, vclock:get_counter(a, Vclock)),
+    ?assertEqual(2, vclock:get_counter(c, Vclock)),
+    ?assertEqual(2, vclock:get_counter(z, Vclock)),
+    ?assertEqual(3, length(Vclock)).
+
+mixed_merge_test() ->
+    {B, K} = {<<"b">>, <<"k">>},
+    A_VC = vclock:fresh(a, 3),
+    Z_VC = vclock:fresh(b, 2),
+    A = riak_object:set_vclock(riak_object:new(B, K, <<"a">>), A_VC),
+    C = riak_object:increment_vclock(riak_object:new(B, K, <<"c">>), c),
+    Z = riak_object:set_vclock(riak_object:new(B, K, <<"b">>), Z_VC),
+    ACZ = riak_object:reconcile([A, C, Z], true),
+    ?assertEqual(3, riak_object:value_count(ACZ)).
+
+mixed_merge2_test() ->
+    {B, K} = {<<"b">>, <<"k">>},
+    A = riak_object:new(B, K, <<"a">>),
+    A1 = riak_object:increment_vclock(A, a),
+    Z = riak_object:increment_vclock(A, z),
+    AZ = riak_object:merge(A1, Z),
+    AZ2 = riak_object:merge(AZ, AZ),
+    ?assertEqual(AZ2, AZ),
+    ?assertEqual(2, riak_object:value_count(AZ2)),
+    AZ3 = riak_object:set_contents(AZ2, [{dict:new(), <<"undotted">>} | riak_object:get_contents(AZ2)]),
+    AZ4 = riak_object:syntactic_merge(AZ3, AZ2),
+    ?assertEqual(AZ3, AZ4),
+    ?assertEqual(3, riak_object:value_count(AZ4)).
+
+verify_contents([], []) ->
+    ?assert(true);
+verify_contents([{MD, V} | Rest], [{{Actor, Count}, V} | Rest2]) ->
+    ?assertMatch({Actor, {Count, _}}, dict:fetch(?DOT, MD)),
+    verify_contents(Rest, Rest2).
 
 -endif.
