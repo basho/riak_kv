@@ -8,7 +8,7 @@
 { translation,
   "riak_kv.anti_entropy",
   fun(Conf) ->
-    Setting = cuttlefish_util:conf_get_value("anti_entropy", Conf), 
+    Setting = cuttlefish_util:conf_get_value("anti_entropy", Conf),
     case Setting of
       on -> {on, []};
       debug -> {on, [debug]};
@@ -58,7 +58,7 @@
 %% data. Once built, trees stay built until they are expired.
 %% Config is of the form:
 %%   {num-builds, per-timespan}
-%% Default is 1 build per hour. 
+%% Default is 1 build per hour.
 {mapping, "anti_entropy.build_limit.number", "riak_kv.anti_entropy_build_limit", [
   {default, 1},
   {datatype, integer}
@@ -72,7 +72,7 @@
 {translation,
  "riak_kv.anti_entropy_build_limit",
  fun(Conf) ->
-    {cuttlefish_util:conf_get_value("anti_entropy.build_limit.number", Conf), 
+    {cuttlefish_util:conf_get_value("anti_entropy.build_limit.number", Conf),
      cuttlefish_util:conf_get_value("anti_entropy.build_limit.per_timespan", Conf)}
  end}.
 
@@ -139,7 +139,7 @@
 { translation,
   "riak_kv.mapred_2i_pipe",
   fun(Conf) ->
-    Setting = cuttlefish_util:conf_get_value("mapred_2i_pipe", Conf), 
+    Setting = cuttlefish_util:conf_get_value("mapred_2i_pipe", Conf),
     case Setting of
       on -> true;
       off -> false;
@@ -150,7 +150,7 @@
 %% virtual machines are available for executing map, reduce,
 %% pre- and post-commit hook functions.
 %% @datatype integer
-%% @mapping 
+%% @mapping
 {mapping, "javascript_vm.map_count", "riak_kv.map_js_vm_count", [
   {default, {{map_js_vms}} },
   {datatype, integer}
@@ -203,13 +203,13 @@
 %% Only set on if *all* nodes in the cluster are upgraded to 1.0
 {mapping, "vnode_vclocks", "riak_kv.vnode_vclocks", [
   {default, on},
-  {datatype, {enum, [on, off]}} 
+  {datatype, {enum, [on, off]}}
 ]}.
 
 { translation,
   "riak_kv.vnode_vclocks",
   fun(Conf) ->
-    Setting = cuttlefish_util:conf_get_value("vnode_vclocks", Conf), 
+    Setting = cuttlefish_util:conf_get_value("vnode_vclocks", Conf),
     case Setting of
       on -> true;
       off -> false;
@@ -230,7 +230,7 @@
 { translation,
   "riak_kv.listkeys_backpressure",
   fun(Conf) ->
-    Setting = cuttlefish_util:conf_get_value("listkeys_backpressure", Conf), 
+    Setting = cuttlefish_util:conf_get_value("listkeys_backpressure", Conf),
     case Setting of
       on -> true;
       off -> false;
@@ -241,7 +241,7 @@
 %% @doc This option specifies how many of each type of fsm may exist
 %% concurrently.  This is for overload protection and is a new
 %% mechanism that obsoletes 1.3's health checks. Note that this number
-%% represents two potential processes, so +P in vm.args should be at 
+%% represents two potential processes, so +P in vm.args should be at
 %% least 3X the fsm_limit.
 {mapping, "fsm_limit", "riak_kv.fsm_limit", [
   {default, 50000},
@@ -258,7 +258,7 @@
   {datatype, {enum, [on, off]}}
 ]}.
 
-%% @doc object_format controls which binary representation of a riak_object 
+%% @doc object_format controls which binary representation of a riak_object
 %% is stored on disk.
 %% Current options are: v0, v1.
 %% v0: Original erlang:term_to_binary format. Higher space overhead.
@@ -270,15 +270,19 @@
 
 %%%% Memory backend section
 
+%% @doc memory_backend.max_memory was historically configured in terms of
+%% megabytes. Anything less than 1MB here will round up to 1MB. Any integer
+%% without a unit will be interpreted as bytes. An app.config setting of
+%% 1024 is equivalent to 1GB or 1024MB.
 {mapping, "memory_backend.max_memory", "riak_kv.memory_backend.max_memory", [
   {datatype, bytesize},
   {default, "4GB"},
   {level, advanced}
 ]}.
 
-{translation, 
- "riak_kv.memory_backend.max_memory", 
- fun(Conf) -> 
+{translation,
+ "riak_kv.memory_backend.max_memory",
+ fun(Conf) ->
   Bytes = cuttlefish_util:conf_get_value("memory_backend.max_memory", Conf),
   cuttlefish_util:ceiling(Bytes / 1048576)
  end
@@ -290,8 +294,8 @@
   {level, advanced}
 ]}.
 
-%% @doc Measures were added to Riak 1.2 to counteract cross-site scripting 
-%% and request-forgery attacks. Some reverse-proxies cannot remove the Referer 
+%% @doc Measures were added to Riak 1.2 to counteract cross-site scripting
+%% and request-forgery attacks. Some reverse-proxies cannot remove the Referer
 %% header and makes serving data directly from Riak impossible. Turning
 %% secure_referer_check = off disables this security check
 {mapping, "secure_referer_check", "riak_kv.secure_referer_check", [
