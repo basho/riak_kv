@@ -364,11 +364,16 @@ sidejob_put_fsm_stats() ->
 %% @spec cpu_stats() -> proplist()
 %% @doc Get stats on the cpu, as given by the cpu_sup module
 %%      of the os_mon application.
-%% cpu_stats() ->
-%%     [{cpu_nprocs, cpu_sup:nprocs()},
-%%      {cpu_avg1, cpu_sup:avg1()},
-%%      {cpu_avg5, cpu_sup:avg5()},
-%%      {cpu_avg15, cpu_sup:avg15()}].
+cpu_stats() ->
+    DPs = case exometer:get_value([riak_core_stat:prefix(),common,cpu_stats]) of
+	      {ok, L} -> L;
+	      _ -> []
+	  end,
+    [{N, proplists:get_value(K,DPs,0)} ||
+	{N,K} <- [{cpu_nprocs, nprocs},
+		  {cpu_avg1, avg1},
+		  {cpu_avg5, avg5},
+		  {cpu_avg15, avg15}]].
 
 %% @spec mem_stats() -> proplist()
 %% @doc Get stats on the memory, as given by the memsup module
