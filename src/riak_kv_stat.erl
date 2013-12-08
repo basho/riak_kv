@@ -42,7 +42,7 @@
 
 %% API
 -export([start_link/0, get_stats/0,
-         update/1, register_stats/0, produce_stats/0,
+         update/1, perform_update/1, register_stats/0, produce_stats/0,
          leveldb_read_block_errors/1, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
 -export([active_gets/0, active_puts/0]).
@@ -77,6 +77,17 @@ register_stat(Name, Type) ->
     %% gen_server:call(?SERVER, {register, Name, Type}).
 
 update(Arg) ->
+    case erlang:module_loaded(riak_kv_stat_sj) of
+	true ->
+	    %% Dispatch request to sidejob worker
+	    riak_kv_stat_worker:update(Arg);
+	false ->
+	    perform_update(Arg)
+    end.
+
+%% @doc
+%% Callback used by a {@link riak_kv_stat_worker} to perform actual update
+perform_update(Arg) ->
     try do_update(Arg) of
 	ok -> ok;
 	{error, not_found} ->
