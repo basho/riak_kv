@@ -252,23 +252,34 @@ compare_content_dates(C1,C2) ->
             C1 < C2
     end.
 
-%% @doc  Merge the contents and vclocks of OldObject and NewObject.
-%%       Note:  This function calls apply_updates on NewObject.
+%% @doc Merge the contents and vclocks of OldObject and NewObject.
+%%       Note: This function calls apply_updates on NewObject.
+%%       Depending on whether DVV is enabled or not, then may merge
+%%       dropping dotted and dominated siblings, otherwise keeps all
+%%       unique sibling values.
 -spec merge(riak_object(), riak_object()) -> riak_object().
 merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
     OldObject#r_object{contents=merge_contents(NewObject#r_object.contents,
                                                OldObject#r_object.contents,
                                                NewObj1#r_object.vclock,
-                                               OldObject#r_object.vclock),
+                                               OldObject#r_object.vclock,
+                                               dvv_enabled()),
                        vclock=vclock:merge([OldObject#r_object.vclock,
                                             NewObj1#r_object.vclock]),
                        updatemetadata=dict:store(clean, true, dict:new()),
                        updatevalue=undefined}.
 
+
 %% @doc Merge the r_objects contents by converting the inner dict to
 %%      a list, ensuring a sane order, and merging into a unique list.
-merge_contents(NewContents, OldContents, NewClock, OldClock) ->
+merge_contents(NewContents, OldContents, _NewClock, _OldClock, false) ->
+    OldContents1 = lists:map(fun convert_to_dict_list/1, OldContents),
+    NewContents1 = lists:map(fun convert_to_dict_list/1, NewContents),
+    Result = lists:umerge(lists:usort(NewContents1),
+                          lists:usort(OldContents1)),
+    lists:map(fun convert_from_dict_list/1, Result);
+merge_contents(NewContents, OldContents, NewClock, OldClock, true) ->
     {MaybeDropContents, OldContents1} = lists:foldl(fun(C, A) ->
                                                             fold_contents(C, A, NewClock)
                                                     end,

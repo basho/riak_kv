@@ -337,3 +337,26 @@
   {datatype, integer},
   {default, 100}
 ]}.
+
+%% @doc dvv is an enhancement to riak's logical clocks that prevents
+%% sibling explosion by storing an event in a value's metadata on
+%% creation. Riak later later uses that event information on merging
+%% conflicting writes to ensure that only genuinely concurrent values
+%% remain. DVV is enabled by default. As it is a new feature, you can
+%% switch it off.
+
+{mapping, "dvv", "riak_kv.dvv_enabled", [
+  {default, on},
+  {datatype, {enum, [on, off]}}
+]}.
+
+{ translation,
+  "riak_kv.dvv_enabled",
+  fun(Conf) ->
+    Setting = cuttlefish_util:conf_get_value("dvv", Conf),
+    case Setting of
+      on -> true;
+      off -> false;
+      _Default -> true
+    end
+  end}.
