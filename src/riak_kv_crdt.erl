@@ -31,7 +31,7 @@
 
 -ifdef(TEST).
 -ifdef(EQC).
--export([test_split/0, test_split/1, split_ops/1]).
+-compile(export_all).
 -include_lib("eqc/include/eqc.hrl").
 -endif.
 -include_lib("eunit/include/eunit.hrl").
@@ -542,6 +542,10 @@ is_add_op(Op) ->
 
 is_rem_op({update, {_Name, _}, {update, Ops}}) ->
     only_rem_ops(Ops);
+is_rem_op({update, {_Name, _}, {remove, _E}}) ->
+    true;
+is_rem_op({update, {_Name, _}, {remove_all, _Es}}) ->
+    true;
 is_rem_op({remove, _Key}) ->
     true;
 is_rem_op({remove_all, _Elems}) ->
