@@ -286,7 +286,7 @@ merge_contents(NewContents, OldContents, NewClock, OldClock) ->
 
 
 fold_contents({r_content, Dict, _Value}=C0, {DropContents, KeepContents}, Clock) ->
-    case dict:find(?DOT, Dict) of
+    case get_dot(Dict) of
         {ok, Dot} ->
             case {vclock:descends(Clock, [Dot]), orddict:is_key(Dot, DropContents)} of
                 {true, true} ->
@@ -301,9 +301,25 @@ fold_contents({r_content, Dict, _Value}=C0, {DropContents, KeepContents}, Clock)
                     Content = convert_to_dict_list(C0),
                     {DropContents, [Content | KeepContents]}
             end;
-        error ->
+        undefined ->
             Content = convert_to_dict_list(C0),
             {DropContents, [Content |  KeepContents]}
+    end.
+
+%% @private Get the dot from the passed metadata dict
+%% (if present and valid).
+-spec get_dot(dict()) -> {ok, vclock:dot()} | undefined.
+get_dot(Dict) ->
+    case dict:find(?DOT, Dict) of
+        {ok, Dot} ->
+            case vclock:valid_entry(Dot) of
+                true ->
+                    {ok, Dot};
+                false ->
+                    undefined
+            end;
+        error ->
+            undefined
     end.
 
 %% @doc Convert a r_content's inner dictionary to a list, and sort it to
@@ -433,34 +449,46 @@ set_vclock(Object=#r_object{}, VClock) -> Object#r_object{vclock=VClock}.
 -spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object().
 %% @spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object()
 increment_vclock(Object=#r_object{}, ClientId) ->
-    %% If it is true that we only ever increment the vclock to create
-    %% a frontier object, then there most only ever be a single value
-    %% when we increment, so add the dot here.
     NewClock = vclock:increment(ClientId, Object#r_object.vclock),
-    update_causal_history(Object#r_object{vclock=NewClock}, ClientId).
+    {ok, Dot} = vclock:get_entry(ClientId, NewClock),
+    assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled()).
 
 %% @doc  Increment the entry for ClientId in O's vclock.
 -spec increment_vclock(riak_object(), vclock:vclock_node(), vclock:timestamp()) -> riak_object().
 increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
     NewClock = vclock:increment(ClientId, Timestamp, Object#r_object.vclock),
-    update_causal_history(Object#r_object{vclock=NewClock}, ClientId).
-
-%% @doc Update the object to capture causality. As well as adding the
-%% incremented clock, we generate a `dot' and store that in the
-%% metadata for the value. Assumes that this is only called when a new
-%% value is written.
--spec update_causal_history(riak_object(), vclock:vclock_node()) -> riak_object().
-update_causal_history(RObj, Actor) ->
-    Dot = vclock:get_entry(Actor, RObj#r_object.vclock),
-    assign_dot(RObj, Dot).
+    {ok, Dot} = vclock:get_entry(ClientId, NewClock),
+    %% If it is true that we only ever increment the vclock to create
+    %% a frontier object, then there must only ever be a single value
+    %% when we increment, so add the dot here.
+    assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled()).
 
 %% @doc assign an event Dot to the value of the object.  Must be
 %% exactly one value for this object. Does not update the vector
-%% clock.
+%% clock. Dot must be a valid vclock entry or an error is thrown.
 -spec assign_dot(riak_object(), vclock:dot()) -> riak_object().
-assign_dot(Object=#r_object{}, Dot) ->
+assign_dot(Object, Dot) ->
+    case vclock:valid_entry(Dot) of
+        true ->
+            assign_dot(Object, Dot,  dvv_enabled());
+        false ->
+            throw({error, invalid_dot})
+    end.
+
+%% @private assign the dot to the value only if DVV is enabled. Only
+%% call with a valid dot. Only assign dot when there is a single value
+%% in contents.
+-spec assign_dot(riak_object(), vclock:dot(), boolean()) -> riak_object().
+assign_dot(Object, Dot, true) ->
     #r_object{contents=[C=#r_content{metadata=Meta0}]} = Object,
-    Object#r_object{contents=[C#r_content{metadata=dict:store(?DOT, Dot, Meta0)}]}.
+    Object#r_object{contents=[C#r_content{metadata=dict:store(?DOT, Dot, Meta0)}]};
+assign_dot(Object, _Dot, _DVVEnabled) ->
+    Object.
+
+%% @private is dvv enabled on this node?
+-spec dvv_enabled() -> boolean().
+dvv_enabled() ->
+    app_helper:get_env(riak_kv, dvv_enabled, true).
 
 %% @doc Prepare a list of index specifications
 %% to pass to the backend. This function is for
