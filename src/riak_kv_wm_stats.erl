@@ -98,52 +98,11 @@ get_stats() ->
 	++ riak_kv_stat_bc:memory_stats()
 	++ expand_disk_stats(riak_kv_stat_bc:disk_stats())
 	++ legacy_stats(legacy_core_stat_map())
-	++ riak_core_stat:vnodeq_stats().
+	++ transform_vnodeq(riak_core_stat:vnodeq_stats()).
 
 expand_disk_stats([{disk, Stats}]) ->
     [{disk, [{struct, [{id, list_to_binary(Id)}, {size, Size}, {used, Used}]}
 	     || {Id, Size, Used} <- Stats]}].
-%% get_stats() ->
-%%     {value, {_, Disk}, Stats} = lists:keytake(disk, 1, riak_kv_stat_bc:produce_stats()),
-%%     DiskFlat = [{struct, [{id, list_to_binary(Id)}, {size, Size}, {used, Used}]} || {Id, Size, Used} <- Disk],
-%%     insert_disk(Stats, {disk, DiskFlat}) ++
-%% 	convert_stats(riak_core_stat:get_stats(common) ++
-%% 			  riak_core_stat:get_stats(), riak_core_stat:prefix()).
-
-%% insert_disk([{mem_allocated,_} = H|T], D) ->
-%%     [H, D|T];
-%% insert_disk([H|T], D) ->
-%%     [H|insert_disk(T, D)];
-%% insert_disk([], D) ->
-%%     [D].
-
-%% convert_stats([{[P, App, N], V}|T], P) when App==riak_core; App==common ->
-%%     Name = case N of
-%% 	       cpu_stats -> cpu;
-%% 	       _ -> N
-%% 	   end,
-%%     case V of
-%% 	[{value, Val}|_] ->
-%% 	    [{Name, Val}];
-%% 	[{count,C}, {one,O}] ->
-%% 	    case Name of
-%% 		gossip_received ->
-%% 		    [{Name, C}];
-%% 		_ ->
-%% 		    [{atom_to_list(Name) ++ "_total", C}, {Name, O}]
-%% 	    end;
-%% 	L when is_list(L) ->
-%% 	    lists:map(fun({K,Val}) when is_atom(K) ->
-%% 			      {join(Name, K), Val}
-%% 		      end, L);
-%% 	_ ->
-%% 	    []
-%%     end ++ convert_stats(T, P);
-%% convert_stats([], _) ->
-%%     [].
-
-%% join(A, B) ->
-%%     binary_to_atom(<< (atom_to_binary(A, latin1))/binary, "_", (atom_to_binary(B, latin1))/binary>>, latin1).
 
 legacy_stats(Map) ->
     P = riak_core_stat:prefix(),
@@ -151,7 +110,6 @@ legacy_stats(Map) ->
       fun({K, DPs}, Acc) ->
 	      case exometer:get_value([P|K], [D || {D,_} <- DPs]) of
 		  {ok, Vs} when is_list(Vs) ->
-		      io:fwrite("stat(~p -> ~p~n", [[P|K],Vs]),
 		      lists:foldr(fun({D,V}, Acc1) ->
 					  {_,N} = lists:keyfind(D,1,DPs),
 					  [{N,V}|Acc1]
@@ -199,9 +157,9 @@ legacy_stat_map1() ->
      {[riak_kv,node,puts], [{one, node_puts},
 			    {count, node_puts_total}]},
      {[riak_kv,node,puts,time], [{mean, node_put_fsm_time_mean},
-				 {median, node_put_fsm_time_mean},
-				 {95, node_put_fsm_time_mean},
-				 {99, node_put_fsm_time_mean},
+				 {median, node_put_fsm_time_median},
+				 {95, node_put_fsm_time_95},
+				 {99, node_put_fsm_time_99},
 				 {100, node_put_fsm_time_100}]},
      {[riak_kv,node,gets,read_repairs], [{one, read_repairs},
 					 {count, read_repairs_total}]},
@@ -254,3 +212,15 @@ legacy_core_stat_map() ->
 				    {max, rebalance_delay_max},
 				    {mean, rebalance_delay_mean},
 				    {last, rebalance_delay_last}]}].
+
+transform_vnodeq(Stats) ->
+    lists:flatmap(
+      fun({[_, riak_core,N], [{value, V}]}) ->
+	      [{N, V}];
+	 ({[_, riak_core, N], Vals}) ->
+	      [{join(N, K), V} || {K, V} <- Vals]
+      end, Stats).
+
+join(A, B) ->
+    binary_to_list(<< (atom_to_binary(A, latin1))/binary, "_",
+		      (atom_to_binary(B, latin1))/binary >>).
