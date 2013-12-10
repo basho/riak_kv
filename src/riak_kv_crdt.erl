@@ -492,8 +492,8 @@ prop_split() ->
                        io:format("Split Pre ~p~n", [Pre]),
                        io:format("Split Post ~p~n", [Post])
                    end,
-                   collect(length(AgOps),
-                           collect(depth(AgOps, 0),
+                   collect(with_title("operation length"), length(AgOps),
+                           collect(with_title("operation depth"), depth(AgOps, 0),
                                    conjunction([
                                                 {pre, only_rem_ops(Pre)},
                                                 {post, only_add_ops(Post)}

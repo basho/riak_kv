@@ -92,16 +92,16 @@ prop_remove_empty_fallback_covering_ctx() ->
                               {_, Val} = riak_kv_crdt:value(O, Type),
                               Val
                       end,
-                Pre0 = case Context of
-                           undefined -> Type:new();
-                           _ -> Type:from_binary(Context)
-                       end,
-                {Rems, Adds} = riak_kv_crdt:split_ops(Op),
-                Expected = case Type:update(Rems, Actor, Pre0) of
-                               {ok, Pre} ->
-                                   {ok, Post} = Type:update(Adds, Actor, Type:new()),
-                                   Type:value(Type:merge(Pre, Post));
-                               Error -> Error
+                Expected = case Context of
+                               undefined -> Type:update(Op, Actor, Type:new());
+                               _ -> Pre = Type:from_binary(Context),
+                                    {Rems, Adds} = riak_kv_crdt:split_ops(Op),
+                                    case Type:update(Rems, Actor, Pre) of
+                                        {ok, CRDT} ->
+                                            {ok, Post} = Type:update(Adds, Actor, Type:new()),
+                                            Type:value(Type:merge(CRDT, Post));
+                                        Error -> Error
+                                    end
                            end,
                 ?WHENFAIL(
                    begin
