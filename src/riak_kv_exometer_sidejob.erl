@@ -3,14 +3,14 @@
 -behaviour(exometer_entry).
 
 %% API
--export([new_entry/2]).
+-export([new_entry/3]).
 
 %% Callback API
 -export([new/3, delete/3, get_value/4, update/4, reset/3, sample/3,
 	 get_datapoints/3, setopts/4]).
 
-new_entry(Name, SjName) ->
-    exometer:new(Name, sidejob, [{sj_name, SjName}]).
+new_entry(Name, SjName, Opts) ->
+    exometer:new(Name, sidejob, [{sj_name, SjName}|Opts]).
 
 -define(UNSUP, {error, unsupported}).
 
