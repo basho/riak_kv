@@ -232,6 +232,7 @@ read_repair_keydiff(RC, LocalVN, RemoteVN, {_, KeyBin}) ->
     RC:get(Bucket, Key),
     %% Force vnodes to update AAE tree in case read repair wasn't triggered
     riak_kv_vnode:rehash([LocalVN, RemoteVN], Bucket, Key),
+    timer:sleep(riak_kv_entropy_manager:get_aae_throttle()),
     ok.
 
 %% @private
