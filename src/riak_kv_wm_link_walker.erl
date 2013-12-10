@@ -255,15 +255,24 @@ service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
     end.
 
 forbidden(RD, Ctx) ->
-    case Ctx#ctx.bucket_type of
-        <<"default">> ->
-            {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
-        _Other ->
-            RD1 = wrq:set_resp_header(?HEAD_CTYPE, "text/plain"),
-            {true,
-             wrq:set_resp_body("Link-walking is not allowed on keys stored in "
-                               "bucket-types.", RD1),
-             Ctx}
+    case riak_core_security:is_enabled() of
+        true ->
+            RD1 = wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD),
+            {true, wrq:set_resp_body(<<"Link walking is"
+                                             " deprecated in Riak 2.0 and is"
+                                             " not compatible with
+                                             security.">>, RD1), Ctx};
+        false ->
+            case Ctx#ctx.bucket_type of
+                <<"default">> ->
+                    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
+                _Other ->
+                    RD1 = wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD),
+                    {true,
+                     wrq:set_resp_body("Link-walking is not allowed on keys stored in "
+                                       "bucket-types.", RD1),
+                     Ctx}
+            end
     end.
 
 %% @spec allowed_methods(reqdata(), context()) ->

@@ -168,14 +168,19 @@ is_modfun_input(Inputs) when is_list(Inputs) ->
 is_modfun_input(_) -> false.
 
 parse_modfun_input(Inputs) ->
-    Module = proplists:get_value(<<"module">>, Inputs),
-    Function = proplists:get_value(<<"function">>, Inputs),
+    Module = binary_to_atom(proplists:get_value(<<"module">>, Inputs), utf8),
+    Function = binary_to_atom(proplists:get_value(<<"function">>, Inputs), utf8),
     Arg = proplists:get_value(<<"arg">>, Inputs),
 
-    {ok, {modfun,
-          binary_to_atom(Module, utf8),
-          binary_to_atom(Function, utf8),
-          Arg}}.
+    case riak_kv_util:is_modfun_allowed(Module, Function) of
+        true ->
+            {ok, {modfun,
+                  Module,
+                  Function,
+                  Arg}};
+        Error ->
+            Error
+    end.
 
 is_search_input(Inputs) when is_list(Inputs) ->
     HasBucket = proplists:get_value(<<"bucket">>, Inputs) /= undefined,
@@ -434,7 +439,12 @@ parse_step(<<"erlang">>, StepDef) ->
         {bucket_key, {Bucket, Key}} ->
             {ok, {strfun, {Bucket, Key}}};
         {modfun, M, F} ->
-            {ok, {modfun, M, F}};
+            case riak_kv_util:is_modfun_allowed(M, F) of
+                true ->
+                    {ok, {modfun, M, F}};
+                Error ->
+                    Error
+            end;
         Else -> Else
     end;
 parse_step(undefined, StepDef) ->

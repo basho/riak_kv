@@ -88,7 +88,19 @@ process(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
         {error, Reason} ->
             {error, {format, Reason}, State};
         {ok, Inputs, Query, Timeout} ->
-            pipe_mapreduce(Req, State, Inputs, Query, Timeout)
+            %% check for link walk queries when security is enabled,
+            %% we don't allow them.
+            case {riak_core_security:is_enabled(),
+                  lists:keyfind(link, 1, Query)} of
+                {true, Links} when Links /= false ->
+                    %% we don't support link walking when security is
+                    %% enabled, return an error of some kind
+                    {error, {format, "Link walking is"
+                             " deprecated in Riak 2.0 and is"
+                             " not compatible with security."}, State};
+                _ ->
+                    pipe_mapreduce(Req, State, Inputs, Query, Timeout)
+            end
     end.
 
 process_stream(#kv_mrc_sink{ref=ReqId,
