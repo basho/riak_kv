@@ -74,7 +74,6 @@ forbidden(RD, Ctx) ->
 
 produce_body(ReqData, Ctx) ->
     Stats= get_stats(),
-    io:fwrite("WM Stats = ~p~n", [Stats]),
     Body = mochijson2:encode({struct, Stats}),
     {Body, ReqData, Ctx}.
 
