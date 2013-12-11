@@ -24,7 +24,7 @@
   %% group by $name into list, also cut the "multi_backend.$name" off every key
   BackendNames = cuttlefish_variable:fuzzy_matches(["multi_backend","$name","storage_backend"], Conf),
   %% for each in list, case statement on backend type
-  [ begin
+  Backends = [ begin
     BackendConfigName = ["multi_backend", Name],
     {BackendModule, BackendConfig} = case cuttlefish:conf_get(BackendConfigName ++ ["storage_backend"], Conf) of
       bitcask ->
@@ -55,7 +55,11 @@
       _ -> oops_all_berries
     end,
     {list_to_binary(Name),  BackendModule, BackendConfig}
-  end || {"$name", Name} <- BackendNames]
+  end || {"$name", Name} <- BackendNames],
+  case Backends of
+      [] -> throw(unset);
+      _ -> Backends
+  end
  end
 }.
 

@@ -28,7 +28,7 @@ basic_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.hook_js_vm_count", 2),
     cuttlefish_unit:assert_config(Config, "riak_kv.js_max_vm_mem", 8),
     cuttlefish_unit:assert_config(Config, "riak_kv.js_thread_stack", 16),
-    cuttlefish_unit:assert_config(Config, "riak_kv.js_source_dir", undefined),
+    cuttlefish_unit:assert_not_configured(Config, "riak_kv.js_source_dir"),
     cuttlefish_unit:assert_config(Config, "riak_kv.http_url_encoding", on),
     cuttlefish_unit:assert_config(Config, "riak_kv.vnode_vclocks", true),
     cuttlefish_unit:assert_config(Config, "riak_kv.listkeys_backpressure", true),
@@ -36,11 +36,11 @@ basic_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.retry_put_coordinator_failure", on),
     cuttlefish_unit:assert_config(Config, "riak_kv.object_format", v1),
     cuttlefish_unit:assert_config(Config, "riak_kv.memory_backend.max_memory", 4096),
-    cuttlefish_unit:assert_config(Config, "riak_kv.memory_backend.ttl", undefined),
+    cuttlefish_unit:assert_not_configured(Config, "riak_kv.memory_backend.ttl"),
 
     %% make sure multi backend is not on by shell_default
-    cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend_default", undefined),
-    cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend", undefined),
+    cuttlefish_unit:assert_not_configured(Config, "riak_kv.multi_backend_default"),
+    cuttlefish_unit:assert_not_configured(Config, "riak_kv.multi_backend"),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.secure_referer_check", true),
     cuttlefish_unit:assert_config(Config, "riak_kv.warn_object_size", 5242880),
@@ -119,8 +119,8 @@ override_non_multi_backend_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.memory_backend.ttl", 86400),
 
     %% make sure multi backend is not on by shell_default
-    cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend_default", undefined),
-    cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend", undefined),
+    cuttlefish_unit:assert_not_configured(Config, "riak_kv.multi_backend_default"),
+    cuttlefish_unit:assert_not_configured(Config, "riak_kv.multi_backend"),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.secure_referer_check", false),
     cuttlefish_unit:assert_config(Config, "riak_kv.warn_object_size", 10485760),
@@ -159,7 +159,7 @@ multi_backend_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.hook_js_vm_count", 2),
     cuttlefish_unit:assert_config(Config, "riak_kv.js_max_vm_mem", 8),
     cuttlefish_unit:assert_config(Config, "riak_kv.js_thread_stack", 16),
-    cuttlefish_unit:assert_config(Config, "riak_kv.js_source_dir", undefined),
+    cuttlefish_unit:assert_not_configured(Config, "riak_kv.js_source_dir"),
     cuttlefish_unit:assert_config(Config, "riak_kv.http_url_encoding", on),
     cuttlefish_unit:assert_config(Config, "riak_kv.vnode_vclocks", true),
     cuttlefish_unit:assert_config(Config, "riak_kv.listkeys_backpressure", true),
@@ -167,7 +167,7 @@ multi_backend_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.retry_put_coordinator_failure", on),
     cuttlefish_unit:assert_config(Config, "riak_kv.object_format", v1),
     cuttlefish_unit:assert_config(Config, "riak_kv.memory_backend.max_memory", 4096),
-    cuttlefish_unit:assert_config(Config, "riak_kv.memory_backend.ttl", undefined),
+    cuttlefish_unit:assert_not_configured(Config, "riak_kv.memory_backend.ttl"),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.secure_referer_check", true),
     %% make sure multi backend is not on by shell_default
