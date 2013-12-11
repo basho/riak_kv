@@ -6,8 +6,8 @@
 %% basic schema test will check to make sure that all defaults from the schema
 %% make it into the generated app.config
 basic_schema_test() ->
-    %% The defaults are defined in ../priv/riak_kv.schema and multi_backend.schema. 
-    %% they are the files under test. 
+    %% The defaults are defined in ../priv/riak_kv.schema and multi_backend.schema.
+    %% they are the files under test.
     Config = cuttlefish_unit:generate_templated_config(
         ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], [], context()),
 
@@ -177,7 +177,7 @@ multi_backend_test() ->
         {<<"backend_one">>, riak_kv_memory_backend, [{ttl, 86400}, {max_memory, 8192}]},
         {<<"backend_two">>, riak_kv_memory_backend, [{max_memory, 4096}]}
     ],
-    cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend", ExpectedMutliConfig), 
+    cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend", ExpectedMutliConfig),
     ok.
 
 %% this context() represents the substitution variables that rebar will use during the build process.

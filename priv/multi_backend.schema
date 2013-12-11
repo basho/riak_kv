@@ -1,11 +1,12 @@
+%%-*- mode: erlang -*-
 {mapping, "multi_backend.default", "riak_kv.multi_backend_default", [
   {level, advanced}
 ]}.
 
-{translation, 
- "riak_kv.multi_backend_default", 
- fun(Conf) -> 
-  list_to_binary(cuttlefish_util:conf_get_value(["multi_backend", "default"], Conf))
+{translation,
+ "riak_kv.multi_backend_default",
+ fun(Conf) ->
+  list_to_binary(cuttlefish:conf_get(["multi_backend", "default"], Conf))
  end}.
 
 %% Riak KV config
@@ -21,16 +22,16 @@
  "riak_kv.multi_backend",
  fun(Conf, Schema) ->
   %% group by $name into list, also cut the "multi_backend.$name" off every key
-  BackendNames = cuttlefish_util:matches_for_variable_def(["multi_backend","$name","storage_backend"], Conf),
+  BackendNames = cuttlefish_variable:fuzzy_matches(["multi_backend","$name","storage_backend"], Conf),
   %% for each in list, case statement on backend type
   [ begin
     BackendConfigName = ["multi_backend", Name],
-    {BackendModule, BackendConfig} = case cuttlefish_util:conf_get_value(BackendConfigName ++ ["storage_backend"], Conf) of
+    {BackendModule, BackendConfig} = case cuttlefish:conf_get(BackendConfigName ++ ["storage_backend"], Conf) of
       bitcask ->
         BackendConfigPrefix = BackendConfigName ++ ["bitcask"],
         SubConf = [ begin
           {Key -- BackendConfigName, Value}
-        end || {Key, Value} <- cuttlefish_util:filter_by_variable_starts_with(BackendConfigPrefix, Conf)],
+        end || {Key, Value} <- cuttlefish_variable:filter_by_prefix(BackendConfigPrefix, Conf)],
 
         BackendProplist = cuttlefish_generator:map(Schema, SubConf),
 
@@ -39,7 +40,7 @@
         BackendConfigPrefix = BackendConfigName ++ ["leveldb"],
         SubConf = [ begin
           {Key -- BackendConfigName, Value}
-        end || {Key, Value} <- cuttlefish_util:filter_by_variable_starts_with(BackendConfigPrefix, Conf)],
+        end || {Key, Value} <- cuttlefish_variable:filter_by_prefix(BackendConfigPrefix, Conf)],
 
         BackendProplist = cuttlefish_generator:map(Schema, SubConf),
 
@@ -48,7 +49,7 @@
         BackendConfigPrefix = BackendConfigName ++ ["memory_backend"],
         SubConf = [ begin
           {Key -- BackendConfigName, Value}
-        end || {Key, Value} <- cuttlefish_util:filter_by_variable_starts_with(BackendConfigPrefix, Conf)],
+        end || {Key, Value} <- cuttlefish_variable:filter_by_prefix(BackendConfigPrefix, Conf)],
         BackendProplist = cuttlefish_generator:map(Schema, SubConf),
         {riak_kv_memory_backend, proplists:get_value(memory_backend, proplists:get_value(riak_kv, BackendProplist))};
       _ -> oops_all_berries
