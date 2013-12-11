@@ -31,6 +31,7 @@
 -export_type([riak_object/0, bucket/0, key/0, value/0, binary_version/0]).
 
 -type key() :: binary().
+-type type() :: binary().
 -type bucket() :: binary() | {binary(), binary()}.
 %% -type bkey() :: {bucket(), key()}.
 -type value() :: term().
@@ -557,7 +558,17 @@ binary_version(<<131,_/binary>>) -> v0;
 binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 
 %% @doc Convert binary object to riak object
--spec from_binary(bucket(),key(),binary()) -> riak_object().
+-spec from_binary({type(), bucket()},key(),binary()) -> riak_object().
+from_binary({T,B},K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
+    %% Version 1 of binary riak object
+    case Rest of
+        <<VclockLen:32/integer, VclockBin:VclockLen/binary, SibCount:32/integer, SibsBin/binary>> ->
+            Vclock = binary_to_term(VclockBin),
+            Contents = sibs_of_binary(SibCount, SibsBin),
+            #r_object{bucket={T,B},key=K,contents=Contents,vclock=Vclock};
+        _Other ->
+            {error, bad_object_format}
+    end;
 from_binary(_B,_K,<<131, _Rest/binary>>=ObjTerm) ->
     binary_to_term(ObjTerm);
 from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
