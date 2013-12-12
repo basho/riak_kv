@@ -409,14 +409,25 @@ hash_object({Bucket, Key}, RObjBin) ->
 %% key/hash pair will be ignored.
 -spec fold_keys(index(), pid()) -> ok.
 fold_keys(Partition, Tree) ->
+    {Limit, Wait} = app_helper:get_env(riak_kv,
+                                       anti_entropy_build_throttle,
+                                       {1000000, 100}),
     Req = riak_core_util:make_fold_req(
-            fun(BKey={Bucket,Key}, RObj, _) ->
+            fun(BKey={Bucket,Key}, RObjBin, Acc) ->
+                    ObjSize = byte_size(RObjBin),
+                    if (Limit =/= 0) andalso ((Acc + ObjSize) > Limit) ->
+                            lager:debug("Throttling AAE rebuild for ~b ms", [Wait]),
+                            Acc2 = 0,
+                            timer:sleep(Wait);
+                       true ->
+                            Acc2 = Acc + ObjSize
+                    end,
                     IndexN = riak_kv_util:get_index_n({Bucket, Key}),
-                    insert(IndexN, term_to_binary(BKey), hash_object(BKey, RObj),
+                    insert(IndexN, term_to_binary(BKey), hash_object(BKey, RObjBin),
                            Tree, [if_missing]),
-                    ok
+                    Acc2
             end,
-            ok, false, [aae_reconstruction]),
+            0, false, [aae_reconstruction]),
     riak_core_vnode_master:sync_command({Partition, node()},
                                         Req,
                                         riak_kv_vnode_master, infinity),
