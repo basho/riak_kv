@@ -357,7 +357,8 @@ handle_info({'DOWN', Ref, _, _, _}, State) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_Reason, _) ->
+terminate(_Reason, State) ->
+    close_trees(State),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -728,8 +729,16 @@ build_or_rehash(Self, State=#state{index=Index, trees=Trees}) ->
     end.
 
 close_trees(State=#state{trees=Trees}) ->
-    Trees2 = [{IdxN, hashtree:close(Tree)} || {IdxN, Tree} <- Trees],
-    State#state{trees=Trees2}.
+    Trees2 = [begin
+                  NewTree = try
+                                hashtree:flush_buffer(Tree)
+                            catch _:_ ->
+                                    Tree
+                            end,
+                  {IdxN, NewTree}
+              end || {IdxN, Tree} <- Trees],
+    Trees3 = [{IdxN, hashtree:close(Tree)} || {IdxN, Tree} <- Trees2],
+    State#state{trees=Trees3}.
 
 %% @private
 %% @doc Unless skipping the background manager, try to acquire the per-vnode lock.
@@ -747,5 +756,3 @@ maybe_get_vnode_lock(SrcPartition) ->
         false ->
             ok
     end.
-
-    
