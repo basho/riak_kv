@@ -151,7 +151,8 @@ maybe_create_hashtrees(true, State=#state{idx=Index}) ->
     case riak_core_ring:vnode_type(Ring, Index) of
         primary ->
             RP = riak_kv_util:responsible_preflists(Index),
-            case riak_kv_index_hashtree:start(Index, RP, self()) of
+            Empty = element(1, is_empty(State)),
+            case riak_kv_index_hashtree:start(Index, RP, self(), Empty) of
                 {ok, Trees} ->
                     monitor(process, Trees),
                     State#state{hashtrees=Trees};

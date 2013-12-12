@@ -30,7 +30,7 @@
 -include_lib("riak_kv_vnode.hrl").
 
 %% API
--export([start/3, start_link/3]).
+-export([start/4, start_link/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -81,17 +81,17 @@
 
 %% @doc Spawn an index_hashtree process that manages the hashtrees (one
 %%      for each `index_n') for the specified partition index.
--spec start(index(), nonempty_list(index_n()), pid()) -> {ok, pid()} | 
-                                                         {error, term()}.
-start(Index, IndexNs=[_|_], VNPid) ->
-    gen_server:start(?MODULE, [Index, IndexNs, VNPid], []).
+-spec start(index(), nonempty_list(index_n()), pid(), boolean()) -> {ok, pid()} | 
+                                                                    {error, term()}.
+start(Index, IndexNs=[_|_], VNPid, VNEmpty) ->
+    gen_server:start(?MODULE, [Index, IndexNs, VNPid, VNEmpty], []).
 
 %% @doc Spawn an index_hashtree process that manages the hashtrees (one
 %%      for each `index_n') for the specified partition index.
--spec start_link(index(), nonempty_list(index_n()), pid()) -> {ok, pid()} |
-                                                              {error, term()}.
-start_link(Index, IndexNs=[_|_], VNPid) ->
-    gen_server:start_link(?MODULE, [Index, IndexNs, VNPid], []).
+-spec start_link(index(), nonempty_list(index_n()), pid(), boolean()) -> {ok, pid()} |
+                                                                         {error, term()}.
+start_link(Index, IndexNs=[_|_], VNPid, VNEmpty) ->
+    gen_server:start_link(?MODULE, [Index, IndexNs, VNPid, VNEmpty], []).
 
 %% @doc Add a key/hash pair to the tree identified by the given tree id
 %%      that is managed by the provided index_hashtree pid.
@@ -210,7 +210,7 @@ destroy(Tree) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init([Index, IndexNs, VNPid]) ->
+init([Index, IndexNs, VNPid, VNEmpty]) ->
     case determine_data_root() of
         undefined ->
             case riak_kv_entropy_manager:enabled() of
@@ -233,6 +233,11 @@ init([Index, IndexNs, VNPid]) ->
                            built=false,
                            path=Path},
             State2 = init_trees(IndexNs, State),
+            %% If vnode is empty, mark tree as built without performing fold
+            [begin
+                 lager:debug("Built empty AAE tree for ~p", [Index]),
+                 gen_server:cast(self(), build_finished)
+             end || VNEmpty =:= true],
             {ok, State2}
     end.
 
