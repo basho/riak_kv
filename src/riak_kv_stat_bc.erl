@@ -219,6 +219,8 @@ legacy_stat_map() ->
      {vnode_gets_total, {{riak_kv, vnode, gets}, count}, spiral},
      {vnode_puts, {{riak_kv, vnode, puts}, one}, spiral},
      {vnode_puts_total, {{riak_kv, vnode, puts}, count}, spiral},
+     {vnode_index_refreshes, {{riak_kv, vnode, index, refreshes}, one}, spiral},
+     {vnode_index_refreshes_total, {{riak_kv, vnode, index, refreshes}, count}, spiral},
      {vnode_index_reads, {{riak_kv, vnode, index, reads}, one}, spiral},
      {vnode_index_reads_total, {{riak_kv, vnode, index, reads}, count}, spiral},
      {vnode_index_writes, {{riak_kv, vnode, index, writes}, one}, spiral},
