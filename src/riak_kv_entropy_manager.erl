@@ -42,13 +42,13 @@
          get_aae_throttle_limits/0,
          set_aae_throttle_limits/1,
          get_max_local_vnodeq/0]).
+-export([multicall/5]).                         % for meck twiddle-testing
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
 -ifdef(TEST).
--export([multicall/5]).                         % for meck twiddle-testing
 -export([query_and_set_aae_throttle/1]).        % for eunit twiddle-testing
 -export([make_state/0, get_last_throttle/1]).   % for eunit twiddle-testing
 -include_lib("eunit/include/eunit.hrl").
