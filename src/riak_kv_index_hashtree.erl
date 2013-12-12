@@ -50,6 +50,7 @@
          insert_object/3,
          async_insert_object/3,
          stop/1,
+         clear/1,
          destroy/1]).
 
 -export([poke/1,
@@ -206,6 +207,10 @@ stop(Tree) ->
 destroy(Tree) ->
     gen_server:call(Tree, destroy, infinity).
 
+%% @doc Clear the specified index_hashtree, clearing all associated hashtrees
+clear(Tree) ->
+    gen_server:call(Tree, clear, infinity).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -297,6 +302,10 @@ handle_call({compare, Id, Remote, AccFun, Acc}, From, State) ->
 handle_call(destroy, _From, State) ->
     State2 = destroy_trees(State),
     {stop, normal, ok, State2};
+
+handle_call(clear, _From, State) ->
+    State2 = clear_tree(State),
+    {reply, ok, State2};
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -653,7 +662,7 @@ maybe_clear(State=#state{lock=undefined, built=true}) ->
                                 anti_entropy_expire,
                                 ?DEFAULT_EXPIRE),
     %% Need to convert from millsec to microsec
-    case Diff > (Expire * 1000) of
+    case (Expire =/= never) andalso (Diff > (Expire * 1000)) of
         true ->
             clear_tree(State);
         false ->
