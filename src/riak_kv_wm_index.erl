@@ -112,7 +112,7 @@ malformed_request(RD, Ctx) ->
     Args1 = wrq:path_tokens(RD),
     Args2 = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
     ReturnTerms0 = wrq:get_qs_value(?Q_2I_RETURNTERMS, "false", RD),
-    ReturnTerms = normalize_boolean(string:to_lower(ReturnTerms0)),
+    ReturnTerms1 = normalize_boolean(string:to_lower(ReturnTerms0)),
     Continuation = wrq:get_qs_value(?Q_2I_CONTINUATION, undefined, RD),
     PgSort0 = wrq:get_qs_value(?Q_2I_PAGINATION_SORT, RD),
     PgSort = case PgSort0 of
@@ -122,16 +122,23 @@ malformed_request(RD, Ctx) ->
     MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, ?ALL_2I_RESULTS, RD),
     TermRegex = wrq:get_qs_value(?Q_2I_TERM_REGEX, undefined, RD),
     Timeout0 =  wrq:get_qs_value("timeout", undefined, RD),
-    {Start, End} = case Args2 of
-        [] -> {undefined, undefined};
-        [S] -> {S, undefined};
-        [S, E] -> {S, E}
-    end,
+    {Start, End} = case {IndexField, Args2} of
+                       {<<"$bucket">>, _} -> {undefined, undefined};
+                       {_, []} -> {undefined, undefined};
+                       {_, [S]} -> {S, S};
+                       {_, [S, E]} -> {S, E}
+                   end,
+    ReturnTerms2 = case length(Args1) of
+                       1 ->
+                           false;
+                       _ ->
+                           ReturnTerms1
+                   end,
     MaxVal = validate_max(MaxResults0),
     QRes = riak_index:to_index_query(
              [
                 {field, IndexField}, {start_term, Start}, {end_term, End},
-                {return_terms, ReturnTerms}, {continuation, Continuation},
+                {return_terms, ReturnTerms2}, {continuation, Continuation},
                 {term_regex, TermRegex}
              ]
              ++ [{max_results, MaxResults} || {true, MaxResults} <- [MaxVal]]
@@ -144,7 +151,7 @@ malformed_request(RD, Ctx) ->
     end,
 
     case {PgSort,
-          ReturnTerms,
+          ReturnTerms2,
           validate_timeout(Timeout0),
           MaxVal,
           QRes,
@@ -177,7 +184,7 @@ malformed_request(RD, Ctx) ->
              Ctx};
         {_, _, {true, Timeout}, {true, MaxResults}, {ok, Query}, _} ->
             %% Request is valid.
-            ReturnTerms1 = riak_index:return_terms(ReturnTerms, Query),
+            ReturnTerms3 = riak_index:return_terms(ReturnTerms2, Query),
             %% Special case: a continuation implies pagination sort
             %% even if no max_results was given.
             PgSortFinal = case Continuation of
@@ -188,7 +195,7 @@ malformed_request(RD, Ctx) ->
                        bucket = Bucket,
                        index_query = Query,
                        max_results = MaxResults,
-                       return_terms = ReturnTerms1,
+                       return_terms = ReturnTerms3,
                        timeout=Timeout,
                        pagination_sort = PgSortFinal
                       },

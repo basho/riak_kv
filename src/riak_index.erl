@@ -251,7 +251,7 @@ parse_field_if_defined(Field, Val) ->
 
 to_index_query(?CURRENT_2I_VERSION, Args) ->
     Defaults = ?KV_INDEX_Q{},
-    [Field1, Start, StartInc, End1, EndInc,
+    [Field1, Start, StartInc, End, EndInc,
      TermRegex, ReturnBody, MaxResults, Cont
     ] =
         [proplists:get_value(F, Args, Default) ||
@@ -265,7 +265,6 @@ to_index_query(?CURRENT_2I_VERSION, Args) ->
              {return_body, Defaults?KV_INDEX_Q.return_body},
              {max_results, Defaults?KV_INDEX_Q.max_results},
              {continuation, undefined}]],
-    End = case End1 of undefined -> Start; _ -> End1 end,
     Field = normalize_index_field(Field1),
     SKeyDefault = case Field of
         ?KEYFIELD -> Start;
@@ -274,8 +273,8 @@ to_index_query(?CURRENT_2I_VERSION, Args) ->
     StartKey = proplists:get_value(start_key, Args, SKeyDefault),
     %% Internal return terms, not to be confused with user facing
     %% return terms in the external clients.
-    ReturnTerms = proplists:get_value(end_term, Args) =/= undefined andalso
-                  Field =/= ?KEYFIELD,
+    ReturnTerms = proplists:get_value(return_terms, Args, true) andalso
+    Field /= ?KEYFIELD,
 
     case {parse_field_if_defined(Field, Start),
           parse_field_if_defined(Field, End)} of
@@ -376,7 +375,8 @@ upgrade_query(Q) when is_tuple(Q) ->
 -spec downgrade_query(V :: query_version(), ?KV_INDEX_Q{}) ->
     {ok, tuple() | #riak_kv_index_v2{}} | {error, any()}.
 downgrade_query(v1, ?KV_INDEX_Q{
-                filter_field=Field, start_term=Start, end_term=undefined}) ->
+                       filter_field=Field, start_term=Start, end_term=Start,
+                       return_terms=false}) ->
     {ok, {eq, Field, Start}};
 downgrade_query(v1, ?KV_INDEX_Q{
                 filter_field=Field, start_term=Start, end_term=End}) ->
@@ -429,12 +429,9 @@ index_key_in_range(_, _, _) ->
 
 %% @doc Is a {bucket, key} pair in range for an index query
 object_key_in_range({Bucket, Key} = OK, Bucket,
-                    ?KV_INDEX_Q{filter_field=Field,
-                                end_term=End,
+                    ?KV_INDEX_Q{end_term=undefined,
                                 start_key=Start,
-                                start_inclusive=StartInc})
-        when Field =:= ?BUCKETFIELD orelse
-        End =:= undefined ->
+                                start_inclusive=StartInc}) ->
     in_range(gt(StartInc, Key, Start), true, OK);
 object_key_in_range({Bucket, Key}=OK, Bucket,
                     ?KV_INDEX_Q{filter_field=?KEYFIELD,
