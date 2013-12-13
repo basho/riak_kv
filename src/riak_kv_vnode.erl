@@ -1186,9 +1186,7 @@ handle_crdt(_, undefined, _VId, RObj) ->
 handle_crdt(true, CRDTOp, VId, RObj) ->
     riak_kv_crdt:update(RObj, VId, CRDTOp);
 handle_crdt(false, _CRDTOp, _Vid, RObj) ->
-    %% non co-ord put that was a CRDT operation? Merge the values if
-    %% there are siblings 'cos that is the point of CRDTs: no siblings
-    riak_kv_crdt:merge(RObj).
+    RObj.
 
 perform_put({fail, _, _}=Reply, State, _PutArgs) ->
     {Reply, State};
