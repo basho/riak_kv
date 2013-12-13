@@ -128,17 +128,14 @@ malformed_request(RD, Ctx) ->
                        {_, [S]} -> {S, S};
                        {_, [S, E]} -> {S, E}
                    end,
-    ReturnTerms2 = case length(Args1) of
-                       1 ->
-                           false;
-                       _ ->
-                           ReturnTerms1
-                   end,
+    IsEqualOp = length(Args1) == 1,
+    InternalReturnTerms = not( IsEqualOp orelse IndexField == <<"$field">> ),
     MaxVal = validate_max(MaxResults0),
     QRes = riak_index:to_index_query(
              [
                 {field, IndexField}, {start_term, Start}, {end_term, End},
-                {return_terms, ReturnTerms2}, {continuation, Continuation},
+                {return_terms, InternalReturnTerms},
+                {continuation, Continuation},
                 {term_regex, TermRegex}
              ]
              ++ [{max_results, MaxResults} || {true, MaxResults} <- [MaxVal]]
@@ -151,7 +148,7 @@ malformed_request(RD, Ctx) ->
     end,
 
     case {PgSort,
-          ReturnTerms2,
+          ReturnTerms1,
           validate_timeout(Timeout0),
           MaxVal,
           QRes,
@@ -184,7 +181,7 @@ malformed_request(RD, Ctx) ->
              Ctx};
         {_, _, {true, Timeout}, {true, MaxResults}, {ok, Query}, _} ->
             %% Request is valid.
-            ReturnTerms3 = riak_index:return_terms(ReturnTerms2, Query),
+            ReturnTerms2 = riak_index:return_terms(ReturnTerms1, Query),
             %% Special case: a continuation implies pagination sort
             %% even if no max_results was given.
             PgSortFinal = case Continuation of
@@ -195,7 +192,7 @@ malformed_request(RD, Ctx) ->
                        bucket = Bucket,
                        index_query = Query,
                        max_results = MaxResults,
-                       return_terms = ReturnTerms3,
+                       return_terms = ReturnTerms2,
                        timeout=Timeout,
                        pagination_sort = PgSortFinal
                       },
