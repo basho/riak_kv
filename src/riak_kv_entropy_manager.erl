@@ -202,8 +202,15 @@ init([]) ->
     schedule_reset_build_tokens(),
     {ok, State2}.
 
-handle_call({set_mode, Mode}, _From, State) ->
-    {reply, ok, State#state{mode=Mode}};
+handle_call({set_mode, Mode}, _From, State=#state{mode=CurrentMode}) ->
+    State2 = case {CurrentMode, Mode} of
+                 {auto, manual} ->
+                     %% Clear exchange queue when switching to manual mode
+                     State#state{exchange_queue=[]};
+                 _ ->
+                     State
+             end,
+    {reply, ok, State2#state{mode=Mode}};
 handle_call({manual_exchange, Exchange}, _From, State) ->
     State2 = enqueue_exchange(Exchange, State),
     {reply, ok, State2};
