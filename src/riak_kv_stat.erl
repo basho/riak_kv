@@ -429,13 +429,19 @@ leveldb_read_block_errors() ->
 
 vnode_status(Idx) ->
     PList = [{Idx, node()}],
-    [{Idx, [Status]}] = riak_kv_vnode:vnode_status(PList),
-    Status.
+    case riak_kv_vnode:vnode_status(PList) of
+        [{Idx, [Status]}] ->
+            Status;
+        Err ->
+            Err
+    end.
 
 leveldb_read_block_errors({backend_status, riak_kv_eleveldb_backend, Status}) ->
     rbe_val(proplists:get_value(read_block_error, Status));
 leveldb_read_block_errors({backend_status, riak_kv_multi_backend, Statuses}) ->
     multibackend_read_block_errors(Statuses, undefined);
+leveldb_read_block_errors({error, Reason}) ->
+    {error, Reason};
 leveldb_read_block_errors(_) ->
     undefined.
 

@@ -403,6 +403,8 @@ handle_overload_command(?KV_PUT_REQ{}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {fail, Idx, overload});
 handle_overload_command(?KV_GET_REQ{req_id=ReqID}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqID});
+handle_overload_command(?KV_VNODE_STATUS_REQ{}, Sender, _Idx) ->
+    riak_core_vnode:reply(Sender, {error, overload});
 handle_overload_command(_, _, _) ->
     %% not handled yet
     ok.
@@ -1777,6 +1779,8 @@ wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
             wait_for_vnode_status_results(UpdPrefLists,
                                           ReqId,
                                           [{Index, Status} | Acc]);
+        {ReqId, {error, overload}} ->
+            {error, overload};
          _ ->
             wait_for_vnode_status_results(PrefLists, ReqId, Acc)
     end.
