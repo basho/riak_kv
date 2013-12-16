@@ -103,7 +103,7 @@ crdt_stats(Type, {ok, {_Meta, ?CRDT{mod=Type, value=Value}}}) ->
             lists:foldr(fun(S, Acc) ->
                                 case Type:stat(S, Value) of
                                     undefined -> Acc;
-                                    Value -> [{from_mod(Type), S, Value}|Acc]
+                                    Stat -> [{from_mod(Type), S, Stat}|Acc]
                                 end
                         end, [], EnabledStats);
         false -> []
