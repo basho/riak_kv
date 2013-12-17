@@ -1,29 +1,32 @@
 %%-*- mode: erlang -*-
-%% Slightly more complex mapping with translation layer
-%% @doc enable active anti-entropy subsystem
+
+%% @doc How Riak will repair out-of-sync keys.
+%%
+%% * active: out-of-sync keys will be repaired in the background
+%% * passive: out-of-sync keys are only repaired on read
+%% * active-debug: like active, but outputs verbose debugging
+%%   information
 {mapping, "anti_entropy", "riak_kv.anti_entropy", [
-  {datatype, {enum, [on, off, debug]}},
-  {default, on}
+  {datatype, {enum, [active, passive, 'active-debug']}},
+  {default, active}
 ]}.
 
-{ translation,
-  "riak_kv.anti_entropy",
-  fun(Conf) ->
+{translation,
+ "riak_kv.anti_entropy",
+ fun(Conf) ->
     Setting = cuttlefish:conf_get("anti_entropy", Conf),
     case Setting of
-      on -> {on, []};
-      debug -> {on, [debug]};
-      off -> {off, []};
+      active -> {on, []};
+      'active-debug' -> {on, [debug]};
+      passive -> {off, []};
       _Default -> {on, []}
     end
   end
 }.
 
-%% Riak KV config
-
-%% @doc storage_backend specifies the engine used for Riak's key-value
-%% data and secondary indexes (if supported). Note the 'yessir' option
-%% is for testing only.
+%% @doc Specifies the engine used for Riak's key-value data and
+%% secondary indexes (if supported). Note the 'yessir' option is for
+%% testing only.
 %%
 %% Valid values are:
 %%    bitcask, leveldb, memory, yessir, multi
@@ -32,9 +35,9 @@
   {datatype, {enum, [bitcask, leveldb, memory, yessir, multi]}}
 ]}.
 
-{ translation,
-  "riak_kv.storage_backend",
-  fun(Conf) ->
+{translation,
+ "riak_kv.storage_backend",
+ fun(Conf) ->
     Setting = cuttlefish:conf_get("storage_backend", Conf),
     case Setting of
       bitcask -> riak_kv_bitcask_backend;
@@ -44,27 +47,28 @@
       multi -> riak_kv_multi_backend;
       _Default -> riak_kv_bitcask_backend
     end
-  end}.
+ end}.
 
-%% @doc raw_name is the first part of all URLS used by the Riak raw HTTP
-%% interface.  See riak_web.erl and raw_http_resource.erl for
-%% details.
+%% @doc The first part of all legacy URLs used by the Riak raw HTTP
+%% interface.
 {mapping, "raw_name", "riak_kv.raw_name", [
   {default, "riak"},
-  {commented, "riak"}
+  {level, advanced}
 ]}.
 
 %% @doc Restrict how fast AAE can build hash trees. Building the tree
 %% for a given partition requires a full scan over that partition's
 %% data. Once built, trees stay built until they are expired.
-%% Config is of the form:
-%%   {num-builds, per-timespan}
+%% .number is the number of builds
+%% .per_timespan is the amount of time in which that .number of builds occurs
+%%
 %% Default is 1 build per hour.
 {mapping, "anti_entropy.build_limit.number", "riak_kv.anti_entropy_build_limit", [
   {default, 1},
   {datatype, integer}
 ]}.
 
+%% @see anti_entropy.build_limit.number
 {mapping, "anti_entropy.build_limit.per_timespan", "riak_kv.anti_entropy_build_limit", [
   {default, "1h"},
   {datatype, {duration, ms}}
@@ -313,11 +317,11 @@
 ]}.
 
 %% @doc md_cache_size controls how large the md cache is allowed to be
-%% it defaults to 1MB, set to 0 to disable the cache.  This shouldn't 
+%% it defaults to 1MB, set to 0 to disable the cache.  This shouldn't
 %% be neccessary on-disk based backends, but can help performance in some
 %% cases (i.e. memory backend, data fits in block cache, etc).
 %% note that this is the size of the ETS table, rather than the actual data,
-%% to keep the size calculation simple, thus more space may be used than 
+%% to keep the size calculation simple, thus more space may be used than
 %% the simple size * vnode_count calculation would imply.
 {mapping, "md_cache_size", "riak_kv.vnode_md_cache_size", [
   {datatype, bytesize},
@@ -350,6 +354,8 @@
   {commented, "1d"}, %% no default, it's undefined.
   {level, advanced}
 ]}.
+
+%% TODO: memory_backend.test
 
 %% @doc Measures were added to Riak 1.2 to counteract cross-site scripting
 %% and request-forgery attacks. Some reverse-proxies cannot remove the Referer
@@ -421,4 +427,105 @@
       off -> false;
       _Default -> true
     end
-  end}.
+end}.
+
+%% @doc The number of primary replicas (non-fallback) that must reply
+%% to a read request.
+{mapping, "buckets.default.pr", "riak_core.default_bucket_props.pr", [
+  {datatype, [integer, {enum, [quorum, all]}]},
+  {default, 0},
+  {level, advanced}
+]}.
+
+%% @doc The number of replicas which must reply to a read request.
+{mapping, "buckets.default.r", "riak_core.default_bucket_props.r", [
+  {datatype, [{enum, [quorum, all]}, integer]},
+  {default, quorum},
+  {level, advanced}
+]}.
+
+%% @doc The number of replicas which must reply to a write request,
+%% indicating that the write was received.
+{mapping, "buckets.default.w", "riak_core.default_bucket_props.w", [
+  {datatype, [{enum, [quorum, all]}, integer]},
+  {default, quorum},
+  {level, advanced}
+]}.
+
+%% @doc The number of primary replicas (non-fallback) which must reply
+%% to a write request.
+{mapping, "buckets.default.pw", "riak_core.default_bucket_props.pw", [
+  {datatype, [integer, {enum, [quorum, all]}]},
+  {default, 0},
+  {level, advanced}
+]}.
+
+%% @doc The number of replicas which must reply to a write request,
+%% indicating that the write was committed to durable storage.
+{mapping, "buckets.default.dw", "riak_core.default_bucket_props.dw", [
+  {datatype, [{enum, [quorum, all]}, integer]},
+  {default, quorum},
+  {level, advanced}
+]}.
+
+%% @doc The number of replicas which must reply to a delete request.
+{mapping, "buckets.default.rw", "riak_core.default_bucket_props.rw", [
+  {datatype, [{enum, [quorum, all]}, integer]},
+  {default, quorum},
+  {level, advanced}
+]}.
+
+%% @doc Whether not-founds will count toward a quorum of reads.
+{mapping,
+ "buckets.default.notfound_ok",
+ "riak_core.default_bucket_props.notfound_ok", [
+  {default, true},
+  {datatype, {enum, [true, false]}},
+  {level, advanced}
+]}.
+
+%% @doc Whether not-founds will invoke the "basic quorum"
+%% optimization. This setting will short-circuit fetches where the
+%% majority of replicas report that the key is not found. Only used
+%% when notfound_ok = false.
+{mapping,
+ "buckets.default.basic_quorum",
+ "riak_core.default_bucket_props.basic_quorum", [
+ {default, false},
+ {datatype, {enum, [true, false]}},
+ {level, advanced}
+]}.
+
+%% @doc whether or not siblings are allowed.  Note: See Vector Clocks
+%% for a discussion of sibling resolution.
+{mapping, "buckets.default.allow_mult", "riak_core.default_bucket_props.allow_mult", [
+  {datatype, {enum, [on, off]}},
+  {default, on},
+  {level, advanced}
+]}.
+
+{translation,
+ "riak_core.default_bucket_props.allow_mult",
+ fun(Conf) ->
+  Setting = cuttlefish:conf_get("buckets.default.allow_mult", Conf),
+    case Setting of
+      on -> true;
+      off -> false;
+      _Default -> true
+    end
+ end}.
+
+%% @doc Whether conflicting writes resolve via timestamp.
+{mapping,
+  "buckets.default.last_write_wins",
+  "riak_core.default_bucket_props.last_write_wins", [
+  {datatype, {enum, [true, false]}},
+  {default, false},
+  {level, advanced}
+]}.
+
+%% TODO?
+%{mapping, "buckets.default.precommit", "riak_core.default_bucket_props.precommit", []},
+%{mapping, "buckets.default.postcommit", "riak_core.default_bucket_props.postcommit", []},
+%{mapping, "buckets.default.chash_keyfun", "riak_core.default_bucket_props.chash_keyfun", {riak_core_util, chash_std_keyfun}},
+%{mapping, "buckets.default.linkfun", "riak_core.default_bucket_props.linkfun", {modfun, riak_kv_wm_link_walker, mapreduce_linkfun}}
