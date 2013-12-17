@@ -327,7 +327,7 @@ make_query({range, ?KEYFIELD, Start, End}, Q) ->
                 end_term=End, return_terms=false}};
 make_query({range, Field, Start, End}, Q) ->
     {ok, Q?KV_INDEX_Q{filter_field=Field, start_term=Start,
-                 end_term=End}};
+                 end_term=End, return_terms=false}};
 make_query(V1Q, _) ->
     {error, {invalid_v1_query, V1Q}}.
 
@@ -398,10 +398,12 @@ downgrade_query(V, Q) ->
 %% @doc Should index terms be returned in a result
 %% to the client. Requires both that they are wanted (arg1)
 %% and available (arg2)
-return_terms(true, ?KV_INDEX_Q{return_terms=true}) ->
-    true;
-return_terms(_, _) ->
-    false.
+return_terms(false, _) ->
+    false;
+return_terms(true, ?KV_INDEX_Q{return_terms=ReturnTerms}) ->
+    ReturnTerms;
+return_terms(true, OldQ) ->
+    return_terms(true, upgrade_query(OldQ)).
 
 %% @doc Should the object body of an indexed key
 %% be returned with the result?
