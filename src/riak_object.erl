@@ -202,7 +202,7 @@ strict_descendant(O1, O2) ->
 %%       X-Riak-Last-Modified header.
 -spec reconcile([riak_object()], boolean()) -> riak_object().
 reconcile(Objects, AllowMultiple) ->
-    RObj = reconcile(dedup(Objects)),
+    RObj = reconcile(remove_dominated(Objects)),
     case AllowMultiple of
         false ->
             Contents = [most_recent_content(RObj#r_object.contents)],
@@ -211,25 +211,29 @@ reconcile(Objects, AllowMultiple) ->
             RObj
     end.
 
-dedup(Objects) ->
+%% @private remove all Objects from the list that are causally
+%% dominated by any other object in the list. Only concurrent /
+%% conflicting objects will remain.
+remove_dominated(Objects) ->
     All = sets:from_list(Objects),
     Del = sets:from_list(ancestors(Objects)),
-    remove_duplicate_objects(sets:to_list(sets:subtract(All, Del))).
+    sets:to_list(sets:subtract(All, Del)).
 
-remove_duplicate_objects(Os) -> rem_dup_objs(Os,[]).
-rem_dup_objs([],Acc) -> Acc;
-rem_dup_objs([O|Rest],Acc) ->
-    EqO = [AO || AO <- Acc, riak_object:equal(AO,O) =:= true],
-    case EqO of
-        [] -> rem_dup_objs(Rest,[O|Acc]);
-        _ -> rem_dup_objs(Rest,Acc)
-    end.
-
+%% @private pairwise merge the objects in the list so that a single,
+%% merged riak_object remains that contains all sibling values. Only
+%% called with a list of conflicting objects. Use `remove_dominated/1'
+%% to get such a list first.
 reconcile([Object]) ->
+    %% Only one object? Then we're reconciled already!
     Object;
 reconcile([Object1, Object2 | Rest]) ->
+    %% Start reconciling merging the first two objects in the list to
+    %% get a most merged object.
     reconcile2(Rest, syntactic_merge(Object1, Object2)).
 
+%% @private merge the head of the list with the running most merged
+%% object until all objects are merged. Only called with a list of
+%% conflicting objects.  @see reconcile/2
 reconcile2([], Mergedest) ->
     Mergedest;
 reconcile2([Obj | Rest], Mergedest) ->
@@ -267,7 +271,10 @@ compare_content_dates(C1,C2) ->
 %%       Note: This function calls apply_updates on NewObject.
 %%       Depending on whether DVV is enabled or not, then may merge
 %%       dropping dotted and dominated siblings, otherwise keeps all
-%%       unique sibling values.
+%%       unique sibling values. NOTE: as well as being a Syntactic
+%%       merge, this is also now a semantic merge for CRDTs.  Only
+%%       call with concurrent objects. Use `syntactic_merge/2' if one
+%%       object may strictly dominate another.
 -spec merge(riak_object(), riak_object()) -> riak_object().
 merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
@@ -1119,14 +1126,6 @@ is_updated_test() ->
     ?assert(is_updated(OMu)),
     OVu = riak_object:update_value(O, testupdate),
     ?assert(is_updated(OVu)).
-
-remove_duplicates_test() ->
-    O0 = riak_object:new(<<"test">>, <<"test">>, zero),
-    O1 = riak_object:new(<<"test">>, <<"test">>, one),
-    ND = remove_duplicate_objects([O0, O0, O1, O1, O0, O1]),
-    ?assertEqual(2, length(ND)),
-    ?assert(lists:member(O0, ND)),
-    ?assert(lists:member(O1, ND)).
 
 new_with_ctype_test() ->
     O = riak_object:new(<<"b">>, <<"k">>, <<"{\"a\":1}">>, "application/json"),
