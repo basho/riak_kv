@@ -360,13 +360,13 @@ disk_stats() ->
 %% @doc Get a list of filesystem mount points relevant to Riak.
 %%      Currently includes the mount point for the riak data directory (platform_data_dir).
 %%      For use with disk_stats() to determine Riak disk space usage.
--spec mount_point_stats() -> proplist().
+-spec mount_point_stats() -> proplist:proplist().
 mount_point_stats() ->
     RiakDataDir = case application:get_env(riak_core, platform_data_dir) of
         {ok, PlatformRoot} -> PlatformRoot;
         _ -> undefined
     end,
-    DataDirMountPoint = riak_kv_env:get_mount_point(RiakDataDir),
+    DataDirMountPoint = list_to_binary(riak_kv_env:get_mount_point(RiakDataDir)),
     MountPoints = [{platform_data_dir, DataDirMountPoint}],
     [{mount_points, MountPoints}].
 
