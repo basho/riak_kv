@@ -60,7 +60,7 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 register_stats() ->
-      riak_core_stat:register_stats(?APP, stats()).
+    riak_core_stat:register_stats(?APP, stats()).
 
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
@@ -69,30 +69,30 @@ get_stats() ->
       [riak_core_stat:get_stats(?APP),
        riak_kv_stat_bc:other_stats(),
        riak_core_stat:get_stats(common)]).
-       
+
 
 %% Creation of a dynamic stat _must_ be serialized.
 register_stat(Name, Type) ->
     do_register_stat(Name, Type).
-    %% gen_server:call(?SERVER, {register, Name, Type}).
+%% gen_server:call(?SERVER, {register, Name, Type}).
 
 update(Arg) ->
     case erlang:module_loaded(riak_kv_stat_sj) of
-	true ->
-	    %% Dispatch request to sidejob worker
-	    riak_kv_stat_worker:update(Arg);
-	false ->
-	    perform_update(Arg)
+        true ->
+            %% Dispatch request to sidejob worker
+            riak_kv_stat_worker:update(Arg);
+        false ->
+            perform_update(Arg)
     end.
 
 %% @doc
 %% Callback used by a {@link riak_kv_stat_worker} to perform actual update
 perform_update(Arg) ->
     try do_update(Arg) of
-	ok -> ok;
-	{error, not_found} ->
+        ok -> ok;
+        {error, not_found} ->
             lager:warning("{error,not_found} updating stat ~p.", [Arg]),
-	    gen_server:cast(?SERVER, {re_register_stat, Arg})
+            gen_server:cast(?SERVER, {re_register_stat, Arg})
     catch
         ErrClass:Err ->
             lager:warning("~p:~p updating stat ~p.", [ErrClass, Err, Arg]),
@@ -108,12 +108,12 @@ untrack_bucket(Bucket) when is_binary(Bucket) ->
 %% The current number of active get fsms in riak
 active_gets() ->
     exometer:get_value([riak_core_stat:prefix(),
-			?APP, node, gets, fsm, active]).
+                        ?APP, node, gets, fsm, active]).
 
 %% The current number of active put fsms in riak
 active_puts() ->
     exometer:get_value([riak_core_stat:prefix(),
-			?APP, node, puts, fsm, active]).
+                        ?APP, node, puts, fsm, active]).
 
 stop() ->
     gen_server:cast(?SERVER, stop).
@@ -186,9 +186,9 @@ do_update({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
     P = riak_core_stat:prefix(),
     exometer:update([P, ?APP, vnode, index, writes], 1),
     exometer:update([P, ?APP, vnode, index, writes, postings],
-			  PostingsAdded),
+		    PostingsAdded),
     exometer:update([P, ?APP, vnode, index, deletes, postings],
-			  PostingsRemoved);
+		    PostingsRemoved);
 do_update({vnode_index_delete, Postings}) ->
     P = riak_core_stat:prefix(),
     exometer:update([P, ?APP, vnode, index, deletes], Postings),
@@ -292,16 +292,16 @@ do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize}=Args) ->
     P = riak_core_stat:prefix(),
     case exometer:update([P, ?APP, node, gets, Bucket], 1) of
         ok ->
-	    [exometer:update([P, ?APP, node, gets, Dimension, Bucket], Arg)
+            [exometer:update([P, ?APP, node, gets, Dimension, Bucket], Arg)
              || {Dimension, Arg} <- [{time, Microsecs},
                                      {siblings, NumSiblings},
                                      {objsize, ObjSize}], Arg /= undefined],
             do_stages([P, ?APP, node, gets, time, Bucket], Stages);
-	{error, not_found} ->
-	    exometer:new([P, ?APP, node, gets, Bucket], spiral),
+        {error, not_found} ->
+            exometer:new([P, ?APP, node, gets, Bucket], spiral),
             [register_stat([P, ?APP, node, gets, Dimension, Bucket], histogram) || Dimension <- [time,
-                                                                                  siblings,
-                                                                                  objsize]],
+												 siblings,
+												 objsize]],
             do_get_bucket(true, Args)
     end.
 
@@ -312,9 +312,9 @@ do_put_bucket(true, {Bucket, Microsecs, Stages}=Args) ->
     P = riak_core_stat:prefix(),
     case exometer:update([P, ?APP, node, puts, Bucket], 1) of
         ok ->
-	    exometer:update([P, ?APP, node, puts, time, Bucket], Microsecs),
+            exometer:update([P, ?APP, node, puts, time, Bucket], Microsecs),
             do_stages([P, ?APP, node, puts, time, Bucket], Stages);
-	{error, _} ->
+        {error, _} ->
             register_stat([P, ?APP, node, puts, Bucket], spiral),
             register_stat([P, ?APP, node, puts, time, Bucket], histogram),
             do_put_bucket(true, Args)
@@ -351,11 +351,11 @@ do_repairs(Indices, Preflist) ->
 %% that can't be registered at start up
 create_or_update(Name, UpdateVal, Type) ->
     case exometer:update(Name, UpdateVal) of
-	ok ->
-	    ok;
-	{error, not_found} ->
-	    register_stat(Name, Type),
-	    exometer:update(Name, UpdateVal)
+        ok ->
+            ok;
+        {error, not_found} ->
+            register_stat(Name, Type),
+            exometer:update(Name, UpdateVal)
     end.
 
 %% @doc list of {Name, Type} for static
@@ -411,10 +411,10 @@ do_register_stat(Name, Type) ->
 get_histogram_opts(Name) ->
     SampleType0 = app_helper:get_env(riak_kv, stat_sample_type, {slide_uniform, {60, 1028}}),
     case app_helper:get_env(riak_kv, Name, SampleType0) of
-	{Type, {SpanSeconds, MaxEntries}} ->
-	    [{type, Type},
-	     {time_span, SpanSeconds * 1000},
-	     {max_elements, MaxEntries}]
+        {Type, {SpanSeconds, MaxEntries}} ->
+            [{type, Type},
+             {time_span, SpanSeconds * 1000},
+             {max_elements, MaxEntries}]
     end.
 
 %% @doc produce the legacy blob of stats for display.
@@ -444,11 +444,11 @@ leveldb_read_block_errors(_) ->
             Nth = crypto:rand_uniform(1, length(Indices)),
             Idx = lists:nth(Nth, Indices),
             case vnode_status(Idx) of
-		{backend_status, BE, St} ->
-		    leveldb_read_block_errors_int(BE, St);
-		_ ->
-		    undefined
-	    end
+                {backend_status, BE, St} ->
+                    leveldb_read_block_errors_int(BE, St);
+                _ ->
+                    undefined
+            end
     end.
 
 vnode_status(Idx) ->
@@ -511,7 +511,7 @@ re_register_stat(Arg) ->
         {'EXIT', _} ->
             Stats = stats_from_update_arg(Arg),
             [exometer:re_register(Name, Type)
-	     || {Name, {metric, _, Type, _}} <- Stats];
+             || {Name, {metric, _, Type, _}} <- Stats];
         ok ->
             ok
     end.
@@ -570,9 +570,9 @@ stats_from_update_arg(_) ->
 
 -ifdef(TEST).
 -define(LEVEL_STATUS(Idx, Val),  [{Idx, [{backend_status, riak_kv_eleveldb_backend,
-                                                      [{read_block_error, Val}]}]}]).
+					  [{read_block_error, Val}]}]}]).
 -define(BITCASK_STATUS(Idx),  [{Idx, [{backend_status, riak_kv_bitcask_backend,
-                                                      []}]}]).
+				       []}]}]).
 -define(MULTI_STATUS(Idx, Val), [{Idx,  [{backend_status, riak_kv_multi_backend, Val}]}]).
 
 leveldb_rbe_test_int() ->
@@ -622,21 +622,21 @@ multi_backend() ->
     %% some backends, none level
     meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) ->
                                                      ?MULTI_STATUS(Idx,
-                                                              [{name1, [{mod, bitcask}]},
-                                                               {name2, [{mod, fired_chicked}]}]
-                                                       )
+								   [{name1, [{mod, bitcask}]},
+								    {name2, [{mod, fired_chicked}]}]
+								  )
                                              end),
     ?assertEqual(undefined, leveldb_read_block_errors()),
 
     %% one or movel leveldb backends (first level answer is returned)
     meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) ->
-                                                    ?MULTI_STATUS(Idx,
-                                                              [{name1, [{mod, bitcask}]},
-                                                               {name2, [{mod, riak_kv_eleveldb_backend},
-                                                                        {read_block_error, <<"99">>}]},
-                                                               {name2, [{mod, riak_kv_eleveldb_backend},
-                                                                        {read_block_error, <<"1000">>}]}]
-                                                       )
+						     ?MULTI_STATUS(Idx,
+								   [{name1, [{mod, bitcask}]},
+								    {name2, [{mod, riak_kv_eleveldb_backend},
+									     {read_block_error, <<"99">>}]},
+								    {name2, [{mod, riak_kv_eleveldb_backend},
+									     {read_block_error, <<"1000">>}]}]
+								  )
                                              end),
     ?assertEqual(99, leveldb_read_block_errors()).
 
