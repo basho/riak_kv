@@ -173,7 +173,7 @@ do_update({vnode_get, Idx, USecs}) ->
     P = riak_core_stat:prefix(),
     exometer:update([P, ?APP, vnode, gets], 1),
     create_or_update([P, ?APP, vnode, gets, time], USecs, histogram),
-    do_per_index(puts, Idx, USecs);
+    do_per_index(gets, Idx, USecs);
 do_update({vnode_put, Idx, USecs}) ->
     P = riak_core_stat:prefix(),
     exometer:update([P, ?APP, vnode, puts], 1),
@@ -445,7 +445,7 @@ leveldb_read_block_errors(_) ->
             Idx = lists:nth(Nth, Indices),
             case vnode_status(Idx) of
 		{backend_status, BE, St} ->
-		    leveldb_read_block_errors_(BE, St);
+		    leveldb_read_block_errors_int(BE, St);
 		_ ->
 		    undefined
 	    end
@@ -456,11 +456,11 @@ vnode_status(Idx) ->
     [{Idx, [Status]}] = riak_kv_vnode:vnode_status(PList),
     Status.
 
-leveldb_read_block_errors_(riak_kv_eleveldb_backend, Status) ->
+leveldb_read_block_errors_int(riak_kv_eleveldb_backend, Status) ->
     rbe_val(proplists:get_value(read_block_error, Status));
-leveldb_read_block_errors_(riak_kv_multi_backend, Statuses) ->
+leveldb_read_block_errors_int(riak_kv_multi_backend, Statuses) ->
     multibackend_read_block_errors(Statuses, undefined);
-leveldb_read_block_errors_(_, _) ->
+leveldb_read_block_errors_int(_, _) ->
     undefined.
 
 multibackend_read_block_errors([], Val) ->
@@ -575,7 +575,7 @@ stats_from_update_arg(_) ->
                                                       []}]}]).
 -define(MULTI_STATUS(Idx, Val), [{Idx,  [{backend_status, riak_kv_multi_backend, Val}]}]).
 
-leveldb_rbe_test_() ->
+leveldb_rbe_test_int() ->
     {foreach,
      fun() ->
              meck:new(riak_core_ring_manager),
