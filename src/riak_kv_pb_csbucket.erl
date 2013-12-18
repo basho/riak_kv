@@ -68,7 +68,15 @@ process(Req=#rpbcsbucketreq{}, State) ->
                     start_incl=StartIncl, continuation=Continuation,
                     end_key=EndKey, end_incl=EndIncl} = Req,
     Bucket = maybe_bucket_type(T, B),
-    Query = riak_index:to_index_query(<<"$bucket">>, [Bucket], Continuation, true, {StartKey, StartIncl}, {EndKey, EndIncl}),
+    Query = riak_index:to_index_query([
+                {field,<<"$bucket">>},
+                {start_term, Bucket},
+                {start_inclusive, StartIncl},
+                {end_term, EndKey},
+                {end_inclusive, EndIncl},
+                {start_key, StartKey},
+                {continuation, Continuation}
+                ]),
     maybe_perform_query(Query, Req, State).
 
 maybe_perform_query({error, Reason}, _Req, State) ->

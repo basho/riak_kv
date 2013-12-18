@@ -77,6 +77,7 @@
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
+-include("riak_kv_index.hrl").
 
 %% @spec init(proplist()) -> {ok, context()}
 %% @doc Initialize this resource.
@@ -155,16 +156,48 @@ malformed_request(RD, Ctx) ->
     ReturnTerms = normalize_boolean(string:to_lower(ReturnTerms0)),
     MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, ?ALL_2I_RESULTS, RD),
     Continuation = wrq:get_qs_value(?Q_2I_CONTINUATION, undefined, RD),
+    TermRegex = wrq:get_qs_value(?Q_2I_TERM_REGEX, undefined, RD),
     Timeout0 =  wrq:get_qs_value("timeout", undefined, RD),
+    {Start, End} = case Args2 of
+        [] -> {undefined, undefined};
+        [S] -> {S, undefined};
+        [S, E] -> {S, E}
+    end,
+    QRes = riak_index:to_index_query([
+                {field, IndexField}, {start_term, Start}, {end_term, End},
+                {return_terms, ReturnTerms}, {continuation, Continuation},
+                {term_regex, TermRegex}
+                ]),
+    ValRe = case TermRegex of
+        undefined ->
+            ok;
+        _ ->
+            re:compile(TermRegex)
+    end,
 
-    case {ReturnTerms, validate_timeout(Timeout0), validate_max(MaxResults0), riak_index:to_index_query(IndexField, Args2, Continuation)} of
-        {malformed, _, _, _} ->
+    case {ReturnTerms, validate_timeout(Timeout0), validate_max(MaxResults0),
+          QRes, ValRe} of
+        {malformed, _, _, _, _} ->
              {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
                                              [?Q_2I_RETURNTERMS, ReturnTerms0]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, {true, Timeout}, {true, MaxResults}, {ok, Query}} ->
+        {_, _, _, {ok, ?KV_INDEX_Q{start_term=NormStart}}, {ok, _CompiledRe}}
+         when is_integer(NormStart) ->
+            {true,
+             wrq:set_resp_body("Can not use term regular expressions"
+                               " on integer queries",
+                               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, _, _, _, {error, ReError}} ->
+            {true,
+             wrq:set_resp_body(
+                    io_lib:format("Invalid term regular expression ~p : ~p",
+                                  [TermRegex, ReError]),
+                    wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, {true, Timeout}, {true, MaxResults}, {ok, Query}, _} ->
             %% Request is valid.
             ReturnTerms1 = riak_index:return_terms(ReturnTerms, Query),
             NewCtx = Ctx#ctx{
@@ -175,19 +208,19 @@ malformed_request(RD, Ctx) ->
                        timeout=Timeout
                       },
             {false, RD, NewCtx};
-        {_, _, _, {error, Reason}} ->
+        {_, _, _, {error, Reason}, _} ->
             {true,
              wrq:set_resp_body(
                io_lib:format("Invalid query: ~p~n", [Reason]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, {false, BadVal}, _} ->
+        {_, _, {false, BadVal}, _, _} ->
             {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a positive integer",
                                              [?Q_2I_MAX_RESULTS, BadVal]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, {error, Input}, _, _} ->
+        {_, {error, Input}, _, _, _} ->
             {true, wrq:append_to_resp_body(io_lib:format("Bad timeout "
                                                            "value ~p. Must be a non-negative integer~n",
                                                            [Input]),

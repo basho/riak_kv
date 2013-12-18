@@ -72,6 +72,7 @@
 -export([set_vnode_forwarding/2]).
 
 -include_lib("riak_kv_vnode.hrl").
+-include_lib("riak_kv_index.hrl").
 -include_lib("riak_kv_map_phase.hrl").
 -include_lib("riak_core_pb.hrl").
 
@@ -703,6 +704,13 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
     handle_coverage_index(Bucket, ItemFilter, Query,
                           FilterVNodes, Sender, State, fun result_fun_ack/2).
 
+prepare_index_query(#riak_kv_index_v3{term_regex=RE} = Q) when
+        RE =/= undefined ->
+    {ok, CompiledRE} = re:compile(RE),
+    Q#riak_kv_index_v3{term_regex=CompiledRE};
+prepare_index_query(Q) ->
+    Q.
+
 handle_coverage_index(Bucket, ItemFilter, Query,
                       FilterVNodes, Sender,
                       State=#state{mod=Mod,
@@ -716,7 +724,7 @@ handle_coverage_index(Bucket, ItemFilter, Query,
             riak_kv_stat:update(vnode_index_read),
 
             ResultFun = ResultFunFun(Bucket, Sender),
-            Opts = [{index, Bucket, Query},
+            Opts = [{index, Bucket, prepare_index_query(Query)},
                     {bucket, Bucket}],
             %% @HACK
             %% Really this should be decided in the backend
