@@ -153,8 +153,57 @@ validate([{BoolProp, MaybeBool}|T], ValidProps, Errors) when is_atom(BoolProp), 
         Bool ->
             validate(T, [{BoolProp, Bool}|ValidProps], Errors)
     end;
+validate([{IntProp, MaybeInt}=Prop | T], ValidProps, Errors) when IntProp =:= big_vclock
+                                                                  orelse IntProp =:= n_val
+                                                                  orelse IntProp =:= old_vclock
+                                                                  orelse IntProp =:= small_vclock ->
+case is_integer(MaybeInt) of
+    true when MaybeInt > 0 ->
+        validate(T, [Prop | ValidProps], Errors);
+    _ ->
+        validate(T, ValidProps, [{IntProp, not_integer} | Errors])
+end;
+validate([{QProp, MaybeQ}=Prop | T], ValidProps, Errors) when  QProp =:= r
+                                                              orelse QProp =:= rw
+                                                              orelse QProp =:= w ->
+    case is_quorum(MaybeQ) of
+        true ->
+            validate(T, [Prop | ValidProps], Errors);
+        false ->
+            validate(T, ValidProps, [{QProp, not_valid_quorum} | Errors])
+    end;
+validate([{QProp, MaybeQ}=Prop | T], ValidProps, Errors) when QProp =:= dw
+                                                              orelse QProp =:= pw
+                                                              orelse QProp =:= pr ->
+    case is_opt_quorum(MaybeQ) of
+        true ->
+            validate(T, [Prop | ValidProps], Errors);
+        false ->
+            validate(T, ValidProps, [{QProp, not_valid_quorum} | Errors])
+    end;
 validate([Prop|T], ValidProps, Errors) ->
     validate(T, [Prop|ValidProps], Errors).
+
+
+-spec is_quorum(term()) -> boolean().
+is_quorum(Q) when is_integer(Q), Q > 0 ->
+    true;
+is_quorum(Q)  when Q =:= quorum
+                   orelse Q =:= one
+                   orelse Q =:= all
+                   orelse Q =:= <<"quorum">>
+                   orelse Q =:= <<"one">>
+                   orelse Q =:= <<"all">> ->
+    true;
+is_quorum(_) ->
+    false.
+
+%% @private some quorum options can be zero
+-spec is_opt_quorum(term()) -> boolean().
+is_opt_quorum(Q) when is_integer(Q), Q >= 0 ->
+    true;
+is_opt_quorum(Q) ->
+    is_quorum(Q).
 
 -spec coerce_bool(any()) -> boolean() | error.
 coerce_bool(true) ->
