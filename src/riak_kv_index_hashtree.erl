@@ -441,8 +441,8 @@ object_fold_fun(Tree) ->
 index_fold_fun(Tree) ->
     fun(RObj, BinBKey) ->
             IndexData = riak_object:index_data(RObj),
-            [insert([{?INDEX_2I_N, BinBKey, hash_index_data(IndexDatum)}],
-                    [if_missing], Tree) || IndexDatum <- IndexData]
+            insert([{?INDEX_2I_N, BinBKey, hash_index_data(IndexData)}],
+                   [if_missing], Tree)
     end.
 
 %% @Doc the 2i index hashtree as a Magic index_n of {0, 0}
