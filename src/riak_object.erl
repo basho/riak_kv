@@ -223,21 +223,12 @@ remove_dominated(Objects) ->
 %% merged riak_object remains that contains all sibling values. Only
 %% called with a list of conflicting objects. Use `remove_dominated/1'
 %% to get such a list first.
-reconcile([Object]) ->
-    %% Only one object? Then we're reconciled already!
-    Object;
-reconcile([Object1, Object2 | Rest]) ->
-    %% Start reconciling merging the first two objects in the list to
-    %% get a most merged object.
-    reconcile2(Rest, syntactic_merge(Object1, Object2)).
-
-%% @private merge the head of the list with the running most merged
-%% object until all objects are merged. Only called with a list of
-%% conflicting objects.  @see reconcile/2
-reconcile2([], Mergedest) ->
-    Mergedest;
-reconcile2([Obj | Rest], Mergedest) ->
-    reconcile2(Rest, syntactic_merge(Obj, Mergedest)).
+reconcile(Objects) ->
+    lists:foldl(fun(O, Acc) ->
+                        syntactic_merge(O, Acc)
+                end,
+                hd(Objects),
+                tl(Objects)).
 
 most_recent_content(AllContents) ->
     hd(lists:sort(fun compare_content_dates/2, AllContents)).
@@ -324,6 +315,19 @@ prune_object_siblings(Object, Clock, MergeAcc) ->
 %% merged. It's job is to drop siblings that are causally dominated,
 %% remove duplicate values, and merge CRDT values down to a single
 %% value.
+%%
+%% When a Riak takes a PUT, a `dot' is generated. (@See assign_dot/2)
+%% for the PUT and placed in `riak_object' metadata. The cases below
+%% use this `dot' to decide if a sibling value has been superceded,
+%% and should therefore be dropped.
+%%
+%% Based on the work by Baquero et al:
+%%
+%% Efficient causality tracking in distributed storage systems with
+%% dotted version vectors
+%% http://doi.acm.org/10.1145/2332432.2332497
+%% Nuno Preguiça, Carlos Bauqero, Paulo Sérgio Almeida, Victor Fonte,
+%% and Ricardo Gonçalves. 2012
 -spec fold_contents(r_content(), merge_acc(), vclock:vclock()) -> merge_acc().
 fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
     #merge_acc{drop=Drop, keep=Keep, crdt=CRDT, error=Error} = MergeAcc,
@@ -331,35 +335,88 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
         {ok, Dot} ->
             case {vclock:descends(Clock, [Dot]), orddict:is_key(Dot, Drop)} of
                 {true, true} ->
-                    %% Dot present on both sides, keep it
+                    %% When the exact same dot present is present in
+                    %% both objects siblings, we keep that
+                    %% value. Without this merging the an object with
+                    %% itself would result in an object with no value
+                    %% at all, since an object's vector clock always
+                    %% dominates all its dots.
                     Content = convert_to_dict_list(C0),
                     MergeAcc#merge_acc{keep=ordsets:add_element(Content, Keep)};
                 {true, false} ->
-                    %% Dominated dot, add it to the drop list
+                    %% The `dot' os dominated by the other object's
+                    %% vclock. This means that the other object has a
+                    %% value that is the result of a PUT that
+                    %% reconciled this sibling value, we can therefore
+                    %% drop this value.
                     MergeAcc#merge_acc{drop=orddict:store(Dot, C0, Drop)};
                 {false, _} ->
-                    %% Not dominated, keep it
+                    %% The other object's vclock does not contain (or
+                    %% dominate) this sibling's `dot'. That means this
+                    %% is a genuinely concurrent (or sibling) value
+                    %% and should be kept for the user to reconcile.
                     Content = convert_to_dict_list(C0),
                     MergeAcc#merge_acc{keep=ordsets:add_element(Content, Keep)}
             end;
         undefined ->
-            %% CRDTs and legacy data don't have dots, which are you?
+            %% Both CRDTs and legacy data don't have dots. Legacy data
+            %% because it was written before DVV (or with DVV turned
+            %% off.) That means keep this sibling. We cannot know if
+            %% it is dominated. This is the pre-DVV behaviour.
+            %%
+            %% CRDTs values do not get a dot as they are merged by
+            %% Riak, not by the client. A CRDT PUT _NEVER_ overwrites
+            %% existing values in Riak, it is always merged with
+            %% them. The resulting value then does not have a single
+            %% event origin. Instead it is a merge of may events. In
+            %% DVVSets (referenced above) there is an `anonymous list'
+            %% for values that have no single event. In Riak we
+            %% already have that, by having an `undefined' dot. We
+            %% could store all the dots for a CRDT as a clock, but it
+            %% would need complex logic to prune.
+            %%
+            %% Since there are no dots for CRDT values, there can be
+            %% sibling values on disk. Which is a concern for sibling
+            %% explosion scenarios. To avoid such scenarios we call
+            %% out to CRDT logic to merge CRDTs into a single value
+            %% here.
             case riak_kv_crdt:merge_value({Dict, Value}, {CRDT, [], []}) of
                 {CRDT, [], [E]} ->
+                    %% An error occurred trying to merge this sibling
+                    %% value. This means it was CRDT with some
+                    %% corruption of teh binary format, or maybe a
+                    %% user's opaque binary that happens to match the
+                    %% CRDT binary start tag. Either way, gather the
+                    %% error for later logging.
                     MergeAcc#merge_acc{error=[E | Error]};
                 {CRDT, [{Dict, Value}], []} ->
+                    %% The sibling value was not a CRDT, but a
+                    %% (legacy?) un-dotted user opaque value. Add it
+                    %% to the list of values to keep.
                     Content = convert_to_dict_list(C0),
                     MergeAcc#merge_acc{keep=ordsets:add_element(Content, Keep)};
                 {CRDT2, [], []} ->
+                    %% The sibling was a CRDT and the CRDT accumulator
+                    %% has been updated.
                     MergeAcc#merge_acc{crdt=CRDT2}
             end
     end.
 
-%% @private Transform a `merge_acc()' to a list of `r_content()'
+%% @private Transform a `merge_acc()' to a list of `r_content()'. The
+%% merge accumulator contains a list of non CRDT (opaque) sibling
+%% values (`keep') and merged CRDT values (`crdt'). Due to bucket
+%% types it should really only ever contain one or the other (and the
+%% accumulated CRDTs should have a single value), but it is better to
+%% be safe.
 -spec merge_acc_to_contents(merge_acc()) -> list(r_content()).
 merge_acc_to_contents(MergeAcc) ->
     #merge_acc{keep=Keep, crdt=CRDTs} = MergeAcc,
+    %% Convert the non-CRDT sibling values back to dict metadata values.
     Keep2 = lists:map(fun convert_from_dict_list/1, ordsets:to_list(Keep)),
+    %% Iterate the set of converged CRDT values and turn them into
+    %% `r_content' entries.  by generating their metadata entry and
+    %% binary encoding their contents. Bucket Types should ensure this
+    %% accumulator only has one entry ever.
     orddict:fold(fun(_Type, {Meta, CRDT}, Acc) ->
                          [{r_content, riak_kv_crdt:meta(Meta, CRDT),
                            riak_kv_crdt:to_binary(CRDT)} | Acc]
@@ -386,8 +443,6 @@ get_dot(Dict) ->
 %% @doc Convert a r_content's inner dictionary to a list, and sort it to
 %%      ensure we can do comparsions between r_contents.
 convert_to_dict_list({r_content, Dict, Value}) ->
-    {r_content, lists:usort(dict:to_list(Dict)), Value};
-convert_to_dict_list({Dict, Value}) ->
     {r_content, lists:usort(dict:to_list(Dict)), Value}.
 
 %% @doc Convert a r_content's inner dictionary from a list to a dict.
@@ -549,7 +604,6 @@ dot_key() ->
 -spec assign_dot(riak_object(), vclock:dot(), boolean()) -> riak_object().
 assign_dot(Object, Dot, true) ->
     #r_object{contents=[C=#r_content{metadata=Meta0}]} = Object,
-    %% Dot must actually be a vclock, allbeit it one with a single entry
     Object#r_object{contents=[C#r_content{metadata=dict:store(?DOT, Dot, Meta0)}]};
 assign_dot(Object, _Dot, _DVVEnabled) ->
     Object.
@@ -1214,6 +1268,8 @@ dotted_values_reconcile_test() ->
     ?assertEqual(2, vclock:get_counter(z, Vclock)),
     ?assertEqual(3, length(Vclock)).
 
+%% Test the case where an object with undotted values is merged with
+%% an object with dotted values.
 mixed_merge_test() ->
     {B, K} = {<<"b">>, <<"k">>},
     A_VC = vclock:fresh(a, 3),

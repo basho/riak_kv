@@ -15,7 +15,14 @@
 %%====================================================================
 
 eqc_test_() ->
-    {timeout, 300000, ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop()))))}.
+    {setup,
+     fun() -> ok end,
+     fun(_) ->
+             %% re-instate the dvv_enabled default
+             application:set_env(riak_kv, dvv_enabled, true) end,
+     [
+      {timeout, 300000, ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop()))))}
+     ]}.
 
 %% TODO: 
 %% Change put to use per-node vclock.
@@ -119,10 +126,14 @@ gen_client_seeds() ->
          {non_empty(list(gen_regular_client())), gen_handoff_client()},
          [Handoff | Clients]).
 
+gen_dvv_enabled() ->
+    bool().
+
 prop() ->
-    ?FORALL({Pris, ClientSeeds, ParamsSeed},
-            {gen_pris(), gen_client_seeds(),gen_params()},
+    ?FORALL({Pris, ClientSeeds, ParamsSeed, DVVEnabled},
+            {gen_pris(), gen_client_seeds(),gen_params(), gen_dvv_enabled()},
             begin
+                application:set_env(riak_kv, dvv_enabled, DVVEnabled),
                 %% io:format(user, "Pris: ~p\n", [Pris]),
                 set_pri(Pris),
                 Params = make_params(ParamsSeed),
