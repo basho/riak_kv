@@ -61,6 +61,7 @@
          nval_map/1,
          handle_handoff_command/3,
          handoff_starting/2,
+         handoff_started/2,     %% Note: optional function of the behaviour
          handoff_cancelled/1,
          handoff_finished/2,
          handle_handoff_data/2,
@@ -74,6 +75,7 @@
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_map_phase.hrl").
 -include_lib("riak_core_pb.hrl").
+-include_lib("riak_core/include/riak_core_locks.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -377,6 +379,7 @@ init([Index]) ->
                            index_buf_size=IndexBufSize,
                            key_buf_size=KeyBufSize,
                            mrjobs=dict:new()},
+            try_set_vnode_lock_limit(Index),
             case AsyncFolding of
                 true ->
                     %% Create worker pool initialization tuple
@@ -804,6 +807,13 @@ handoff_starting({_HOType, TargetNode}=_X, State) ->
             {false, State#state{in_handoff=false, handoff_target=undefined}}
     end.
 
+%% @doc Optional callback that is exported, but not part of the behaviour.
+handoff_started({SrcPartition, _SrcNode}, WorkerPid) ->
+    case maybe_get_vnode_lock(SrcPartition, WorkerPid) of
+        ok -> true;
+        Error -> Error
+    end.
+
 handoff_cancelled(State) ->
     {ok, State#state{in_handoff=false, handoff_target=undefined}}.
 
@@ -885,6 +895,10 @@ delete(State=#state{idx=Index,mod=Mod, modstate=ModState}) ->
 terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
+
+handle_info({set_concurrency_limit, Lock, Limit}, State) ->
+    try_set_concurrency_limit(Lock, Limit),
+    {ok, State};
 
 handle_info({ensemble_get, Key, From}, State=#state{idx=Idx, forward=Fwd}) ->
     case Fwd of
@@ -1936,6 +1950,81 @@ sanitize_bkey({{<<"default">>, B}, K}) ->
     {B, K};
 sanitize_bkey(BKey) ->
     BKey.
+
+%% @private
+%% @doc Return true iff neither of the "skip background manager" configuration
+%%      settings are defined as anything other than false. 'skip_background_manager'
+%%      turns off all use of bg-mgr. 'handoff_skip_background_manager' only stops
+%%      handoff from using bg-mgr.
+-spec use_bg_mgr_for_handoff() -> boolean().
+use_bg_mgr_for_handoff() ->
+    %% note we're tolerant here of any non-boolean value as well. Iff it's 'false', we don't skip.
+    GlobalSkip = app_helper:get_env(riak_core, skip_background_manager, false) =/= false,
+    HandoffSkip = app_helper:get_env(riak_core, handoff_skip_background_manager, false) =/= false,
+    not (GlobalSkip orelse HandoffSkip).
+
+%% @private
+%% @doc Unless skipping the background manager, try to acquire the per-vnode lock.
+%%      Sets our task meta-data in the lock as 'handoff', which is useful for
+%%      seeing what's holding the lock via @link riak_core_background_mgr:ps/0.
+-spec maybe_get_vnode_lock(SrcPartition::integer(), pid()) -> ok | max_concurrency.
+maybe_get_vnode_lock(SrcPartition, Pid) ->
+    Lock = ?VNODE_LOCK(riak_kv_vnode, SrcPartition),
+    case use_bg_mgr_for_handoff() of
+        true  ->
+            case riak_core_bg_manager:get_lock(Lock, Pid, [{task, handoff}]) of
+                {ok, _Ref} -> ok;
+                max_concurrency -> max_concurrency
+            end;
+        false ->
+            lager:debug("Handoff is skipping the background manager vnode lock: ~p", [Lock]),
+            ok
+    end.
+
+%% @private
+%% @doc Return true iff neither of the "skip background manager" configuration
+%%      settings are defined as anything other than false. 'skip_background_manager'
+%%      turns off all use of bg-mgr.
+-spec use_bg_mgr() -> boolean().
+use_bg_mgr() ->
+    %% note we're tolerant here of any non-boolean value as well. Iff it's 'false', we don't skip.
+    GlobalSkip = app_helper:get_env(riak_core, skip_background_manager, false) =/= false,
+    not GlobalSkip.
+
+%% @private
+%% @doc Query the application environment for 'vnode_lock_concurrency', and
+%%      if it's an integer, use it to set the maximum vnode lock concurrency
+%%      for Idx. If the background manager is not available yet, schedule a
+%%      retry for later. If the application environment has a non "false"
+%%      setting of the key 'skip_background_manager', then this code just
+%%      returns ok without registering.
+try_set_vnode_lock_limit(Idx) ->
+    %% By default, register per-vnode concurrency limit "lock" with 1 so that only a
+    %% single participating subsystem can run a vnode fold at a time. Participation is
+    %% voluntary :-)
+    Concurrency = case app_helper:get_env(riak_kv, vnode_lock_concurrency, 1) of
+                      N when is_integer(N) -> N;
+                      _NotNumber -> 1
+                  end,
+    try_set_concurrency_limit(?VNODE_LOCK(riak_kv_vnode, Idx), Concurrency).
+
+try_set_concurrency_limit(Lock, Limit) ->
+    try_set_concurrency_limit(Lock, Limit, use_bg_mgr()).
+
+try_set_concurrency_limit(_Lock, _Limit, false) ->
+    lager:info("Skipping background manager."),
+    ok;
+try_set_concurrency_limit(Lock, Limit, true) ->
+    %% this is ok to do more than once
+    case riak_core_bg_manager:set_concurrency_limit(Lock, Limit) of
+        unregistered ->
+            %% not ready yet, try again later
+            lager:debug("Background manager unavailable. Will try to set: ~p later.", [Lock]),
+            erlang:send_after(250, ?MODULE, {set_concurrency_limit, Lock, Limit});
+        _ ->
+            lager:debug("Registered lock: ~p", [Lock]),
+            ok
+    end.
 
 -ifdef(TEST).
 

@@ -716,7 +716,7 @@ close_trees(State=#state{trees=Trees}) ->
 use_bg_mgr() ->
     %% note we're tolerant here of any non-boolean value as well. Iff it's 'false', we don't skip.
     GlobalSkip = app_helper:get_env(riak_core, skip_background_manager, false) =/= false,
-    AAESkip = not app_helper:get_env(riak_core, aae_skip_background_manager, false) =/= false,
+    AAESkip = app_helper:get_env(riak_core, aae_skip_background_manager, false) =/= false,
     not (GlobalSkip orelse AAESkip).
 
 %% @private
@@ -725,7 +725,7 @@ use_bg_mgr() ->
 %%      seeing what's holding the lock via @link riak_core_background_mgr:ps/0.
 -spec maybe_get_vnode_lock(SrcPartition::integer()) -> ok | max_concurrency.
 maybe_get_vnode_lock(SrcPartition) ->
-    Lock = ?VNODE_LOCK(SrcPartition),
+    Lock = ?VNODE_LOCK(riak_kv_vnode, SrcPartition),
     case use_bg_mgr() of
         true  ->
             case riak_core_bg_manager:get_lock(Lock, self(), [{task, aae_rebuild}]) of
@@ -733,7 +733,7 @@ maybe_get_vnode_lock(SrcPartition) ->
                 max_concurrency -> max_concurrency
             end;
         false ->
-            lager:debug("Handoff is skipping the background manager vnode lock: ~p", [Lock]),
+            lager:info("AAE tree rebuild is skipping the background manager vnode lock: ~p", [Lock]),
             ok
     end.
 
