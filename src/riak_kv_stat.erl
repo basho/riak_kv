@@ -186,9 +186,9 @@ do_update({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
     P = riak_core_stat:prefix(),
     exometer:update([P, ?APP, vnode, index, writes], 1),
     exometer:update([P, ?APP, vnode, index, writes, postings],
-		    PostingsAdded),
+                    PostingsAdded),
     exometer:update([P, ?APP, vnode, index, deletes, postings],
-		    PostingsRemoved);
+                    PostingsRemoved);
 do_update({vnode_index_delete, Postings}) ->
     P = riak_core_stat:prefix(),
     exometer:update([P, ?APP, vnode, index, deletes], Postings),
@@ -321,8 +321,8 @@ do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize}=Args) ->
         {error, not_found} ->
             exometer:new([P, ?APP, node, gets, Bucket], spiral),
             [register_stat([P, ?APP, node, gets, Dimension, Bucket], histogram) || Dimension <- [time,
-												 siblings,
-												 objsize]],
+                                                                                                 siblings,
+                                                                                                 objsize]],
             do_get_bucket(true, Args)
     end.
 
@@ -618,9 +618,9 @@ stats_from_update_arg(_) ->
 
 -ifdef(TEST).
 -define(LEVEL_STATUS(Idx, Val),  [{Idx, [{backend_status, riak_kv_eleveldb_backend,
-					  [{read_block_error, Val}]}]}]).
+                                          [{read_block_error, Val}]}]}]).
 -define(BITCASK_STATUS(Idx),  [{Idx, [{backend_status, riak_kv_bitcask_backend,
-				       []}]}]).
+                                       []}]}]).
 -define(MULTI_STATUS(Idx, Val), [{Idx,  [{backend_status, riak_kv_multi_backend, Val}]}]).
 
 leveldb_rbe_test_int() ->
@@ -670,21 +670,21 @@ multi_backend() ->
     %% some backends, none level
     meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) ->
                                                      ?MULTI_STATUS(Idx,
-								   [{name1, [{mod, bitcask}]},
-								    {name2, [{mod, fired_chicked}]}]
-								  )
+                                                                   [{name1, [{mod, bitcask}]},
+                                                                    {name2, [{mod, fired_chicked}]}]
+                                                                  )
                                              end),
     ?assertEqual(undefined, leveldb_read_block_errors()),
 
     %% one or movel leveldb backends (first level answer is returned)
     meck:expect(riak_kv_vnode, vnode_status, fun([{Idx, _}]) ->
-						     ?MULTI_STATUS(Idx,
-								   [{name1, [{mod, bitcask}]},
-								    {name2, [{mod, riak_kv_eleveldb_backend},
-									     {read_block_error, <<"99">>}]},
-								    {name2, [{mod, riak_kv_eleveldb_backend},
-									     {read_block_error, <<"1000">>}]}]
-								  )
+                                                     ?MULTI_STATUS(Idx,
+                                                                   [{name1, [{mod, bitcask}]},
+                                                                    {name2, [{mod, riak_kv_eleveldb_backend},
+                                                                             {read_block_error, <<"99">>}]},
+                                                                    {name2, [{mod, riak_kv_eleveldb_backend},
+                                                                             {read_block_error, <<"1000">>}]}]
+                                                                  )
                                              end),
     ?assertEqual(99, leveldb_read_block_errors()).
 
