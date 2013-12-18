@@ -45,7 +45,8 @@
          gets_active/0,
          consistent_object/1,
          overload_reply/1,
-         get_backend_config/3]).
+         get_backend_config/3,
+         is_modfun_allowed/2]).
 
 -include_lib("riak_kv_vnode.hrl").
 
@@ -413,6 +414,39 @@ get_backend_config(Key, Config, Category) ->
             end;
         Val ->
             Val
+    end.
+
+%% @doc Is the Module/Function from a mapreduce {modfun, ...} tuple allowed by
+%% the security rules? This is to help prevent against attacks like the one
+%% described in
+%% http://aphyr.com/posts/224-do-not-expose-riak-directly-to-the-internet
+%% by whitelisting the code path for 'allowed' mapreduce modules, which we
+%% assume the user has written securely.
+is_modfun_allowed(riak_kv_mapreduce, _) ->
+    %% these are common mapreduce helpers, provided by riak KV, we trust them
+    true;
+is_modfun_allowed(Mod, _Fun) ->
+    case riak_core_security:is_enabled() of
+        true ->
+            Paths = [filename:absname(N)
+                     || N <- app_helper:get_env(riak_kv, add_paths, [])],
+            case code:which(Mod) of
+                non_existing ->
+                    {error, {non_existing, Mod}};
+                Path when is_list(Path) ->
+                    %% ensure that the module is in one of the paths
+                    %% explicitly configured for third party code
+                    case lists:member(filename:dirname(Path), Paths) of
+                        true ->
+                            true;
+                        _ ->
+                            {error, {insecure_module_path, Path}}
+                    end;
+                Reason ->
+                    {error, {illegal_module, Mod, Reason}}
+            end;
+        _ ->
+            true
     end.
 
 %% ===================================================================

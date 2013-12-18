@@ -74,7 +74,12 @@ parse_inputs(Targets) when is_list(Targets) ->
     end;
 parse_inputs(Inputs = {modfun, Module, Function, _Options})
   when is_atom(Module), is_atom(Function) ->
-    {ok, Inputs};
+    case riak_kv_util:is_modfun_allowed(Module, Function) of
+        true ->
+            {ok, Inputs};
+        Error ->
+            Error
+    end;
 parse_inputs({index, Bucket, Index, Key}) ->
     case riak_index:parse_fields([{Index, Key}]) of
         {ok, [{Index1, Key1}]} ->
@@ -116,9 +121,27 @@ valid_input_targets(Invalid) ->
 %% Return ok if query are valid, {error, Reason} if not.  Not very strong validation
 %% done here as endpoints and riak_kv_mrc_pipe will check this.
 parse_query(Query) when is_list(Query) ->
-    {ok, Query};
+    %% check the phases don't use insecure modfuns, if security is enabled
+    case check_phases(Query) of
+        ok ->
+            {ok, Query};
+        Error ->
+            Error
+    end;
 parse_query(Invalid) ->
     {error, {"Query takes a list of step tuples", Invalid}}.
+
+check_phases([]) ->
+    ok;
+check_phases([{_, {modfun, Module, Function}, _, _}|T]) ->
+    case riak_kv_util:is_modfun_allowed(Module, Function) of
+        true ->
+            check_phases(T);
+        Error ->
+            Error
+    end;
+check_phases([_|T]) ->
+    check_phases(T).
 
 %% Look at a parsed MR Input and Query and return a list of required
 %% permissions.
