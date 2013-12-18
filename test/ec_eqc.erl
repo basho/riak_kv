@@ -912,7 +912,7 @@ coord_put_merge(LocalObj, PutObj, NodeId, Timestamp) ->
             %% so merge the PUT object and the local object.
             MergedClock = vclock:merge([PutVC, LocalVC]),
             FrontierClock = vclock:increment(NodeId, Timestamp, MergedClock),
-            Dot = vclock:get_entry(NodeId, FrontierClock),
+            {ok, Dot} = vclock:get_entry(NodeId, FrontierClock),
             %% Asign an event to the put value
             DottedPutObject = riak_object:assign_dot(PutObj, Dot),
             MergedObject = riak_object:merge(DottedPutObject, LocalObj),

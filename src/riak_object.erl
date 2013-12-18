@@ -368,7 +368,7 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
             %% Riak, not by the client. A CRDT PUT _NEVER_ overwrites
             %% existing values in Riak, it is always merged with
             %% them. The resulting value then does not have a single
-            %% event origin. Instead it is a merge of may events. In
+            %% event origin. Instead it is a merge of many events. In
             %% DVVSets (referenced above) there is an `anonymous list'
             %% for values that have no single event. In Riak we
             %% already have that, by having an `undefined' dot. We
