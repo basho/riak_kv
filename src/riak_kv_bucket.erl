@@ -40,6 +40,8 @@
 -type props() :: [prop()].
 -type errors() :: [error()].
 
+-export_type([props/0]).
+
 %% @doc called by riak_core in a few places to ensure bucket
 %%  properties are sane. The arguments combinations have the following
 %%  meanings:-

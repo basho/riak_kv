@@ -44,6 +44,7 @@ init([]) ->
     catch dtrace:init(),                   % NIF load trigger (R14B04)
     catch dyntrace:p(),                    % NIF load trigger (R15B01+)
     riak_kv_entropy_info:create_table(),
+    riak_kv_hooks:create_table(),
     VMaster = {riak_kv_vnode_master,
                {riak_core_vnode_master, start_link,
                 [riak_kv_vnode, riak_kv_legacy_vnode, riak_kv]},
