@@ -181,9 +181,7 @@ equal_contents([C1|R1],[C2|R2]) ->
 ancestors(pure_baloney_to_fool_dialyzer) ->
     [#r_object{vclock = vclock:fresh()}];
 ancestors(Objects) ->
-    ToRemove = [[O2 || O2 <- Objects, strict_descendant(O1, O2)]
-                || O1 <- Objects],
-    lists:flatten(ToRemove).
+    [ O2 || O1 <- Objects, O2 <- Objects, strict_descendant(O1, O2) ].
 
 %% @doc returns true if the `riak_object()' at `O1' is a strict
 %% descendant of that at `O2'. This means that the first object

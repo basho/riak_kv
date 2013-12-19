@@ -31,7 +31,6 @@
 -include("riak_object.hrl").
 -include_lib("riak_kv_types.hrl").
 
-
 -ifdef(TEST).
 -ifdef(EQC).
 -export([test_split/0, test_split/1]).
