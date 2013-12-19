@@ -163,17 +163,17 @@ produce_stats() ->
 %% (actually, read_repair_stats() *are* - only not aggregated)
 other_stats() ->
     S = [t(sidejob_stats    , fun sidejob_stats/0),
-	 t(read_repair_stats, fun read_repair_stats/0),
-	 t(level_stats      , fun level_stats/0),
-	 t(pipe_stats       , fun pipe_stats/0),
-	 %% t(cpu_stats        , fun cpu_stats/0),
-	 t(mem_stats        , fun mem_stats/0),
-	 t(disk_stats       , fun disk_stats/0),
-	 t(system_stats     , fun system_stats/0),
-	 t(ring_stats       , fun ring_stats/0),
-	 t(config_stats     , fun config_stats/0),
-	 t(app_stats        , fun app_stats/0),
-	 t(memory_stats     , fun memory_stats/0)],
+         t(read_repair_stats, fun read_repair_stats/0),
+         t(level_stats      , fun level_stats/0),
+         t(pipe_stats       , fun pipe_stats/0),
+         %% t(cpu_stats        , fun cpu_stats/0),
+         t(mem_stats        , fun mem_stats/0),
+         t(disk_stats       , fun disk_stats/0),
+         t(system_stats     , fun system_stats/0),
+         t(ring_stats       , fun ring_stats/0),
+         t(config_stats     , fun config_stats/0),
+         t(app_stats        , fun app_stats/0),
+         t(memory_stats     , fun memory_stats/0)],
     lists:append([V || {_, _, V} <- S]).
 
 t(L, F) ->
@@ -214,11 +214,11 @@ get_stat(Name, Type, Cache, ValFun) ->
 bc_stat({Old, {NewName, Field}, histogram} = _X, Acc, Cache) ->
     try
     ValFun = fun(Stat) ->
-		     trunc(proplists:get_value(Field, Stat)) end,
+                     trunc(proplists:get_value(Field, Stat)) end,
     {Val, Cache1} = get_stat(NewName, histogram, Cache, ValFun),
     {[{Old, Val} | Acc], Cache1}
     catch
-	error:_ -> {[{Old,error} | Acc], Cache}
+        error:_ -> {[{Old,error} | Acc], Cache}
     end;
 bc_stat({Old, {NewName, Field}, histogram_percentile}, Acc, Cache) ->
     ValFun = fun(Stat) ->
@@ -234,8 +234,8 @@ bc_stat({Old, {NewName, Field}, spiral}, Acc, Cache) ->
     {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, NewName, counter}, Acc, Cache) ->
     ValFun = fun(Stat) ->
-		     proplists:get_value(value, Stat, 0)
-	     end,
+                     proplists:get_value(value, Stat, 0)
+             end,
     {Val, Cache1} = get_stat(NewName, counter, Cache, ValFun),
     {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, NewName, function}, Acc, Cache) ->
@@ -512,14 +512,14 @@ sidejob_put_fsm_stats() ->
 %%      of the os_mon application.
 cpu_stats() ->
     DPs = case exometer:get_value([riak_core_stat:prefix(),common,cpu_stats]) of
-	      {ok, L} -> L;
-	      _ -> []
-	  end,
+              {ok, L} -> L;
+              _ -> []
+          end,
     [{N, proplists:get_value(K,DPs,0)} ||
-	{N,K} <- [{cpu_nprocs, nprocs},
-		  {cpu_avg1, avg1},
-		  {cpu_avg5, avg5},
-		  {cpu_avg15, avg15}]].
+        {N,K} <- [{cpu_nprocs, nprocs},
+                  {cpu_avg1, avg1},
+                  {cpu_avg5, avg5},
+                  {cpu_avg15, avg15}]].
 
 %% @spec mem_stats() -> proplist()
 %% @doc Get stats on the memory, as given by the memsup module
