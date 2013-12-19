@@ -403,7 +403,9 @@ return_terms(false, _) ->
 return_terms(true, ?KV_INDEX_Q{return_terms=ReturnTerms}) ->
     ReturnTerms;
 return_terms(true, OldQ) ->
-    return_terms(true, upgrade_query(OldQ)).
+    return_terms(true, upgrade_query(OldQ));
+return_terms(_, _) ->
+    false.
 
 %% @doc Should the object body of an indexed key
 %% be returned with the result?
