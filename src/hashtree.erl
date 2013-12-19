@@ -497,7 +497,8 @@ new_segment_store(Opts, State) ->
     Config2 = orddict:store(write_buffer_size, WriteBufferSize, Config),
     Config3 = orddict:erase(write_buffer_size_min, Config2),
     Config4 = orddict:erase(write_buffer_size_max, Config3),
-    Options = orddict:store(create_if_missing, true, Config4),
+    Config5 = orddict:store(use_bloomfilter, true, Config4),
+    Options = orddict:store(create_if_missing, true, Config5),
 
     filelib:ensure_dir(DataDir),
     {ok, Ref} = eleveldb:open(DataDir, Options),
