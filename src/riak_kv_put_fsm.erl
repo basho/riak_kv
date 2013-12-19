@@ -415,7 +415,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                 end,
             Postcommit =
                 if Disable -> [];
-                   true -> get_hooks(postcommit, BucketProps)
+                   true -> get_hooks(postcommit, BucketProps, StateData0)
                 end,
             StateData1 = StateData0#state{n=N,
                                           w=W,
@@ -892,6 +892,11 @@ get_hooks(HookType, BucketProps) ->
         Hooks when is_list(Hooks) ->
             Hooks
     end.
+
+get_hooks(postcommit, BucketProps, #state{bkey=BKey}) ->
+    BaseHooks = get_hooks(postcommit, BucketProps),
+    CondHooks = riak_kv_hooks:get_conditional_postcommit(BKey, BucketProps),
+    BaseHooks ++ (CondHooks -- BaseHooks).
 
 get_option(Name, Options) ->
     get_option(Name, Options, undefined).
