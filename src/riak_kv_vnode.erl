@@ -1292,7 +1292,7 @@ put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
 put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
     %% a downstream merge, or replication of a coordinated PUT
     %% Merge the value received with local replica value
-    %% and store the value IIF it is different to what we already have
+    %% and store the value IFF it is different to what we already have
     ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
     case riak_object:equal(ResObj, CurObj) of
         true ->
@@ -1320,7 +1320,7 @@ put_merge(true, false, LocalObj, PutObj, VId, StartTime) -> %% Coordinating=true
             MergedClock = vclock:merge([PutVC, LocalVC]),
             FrontierClock = vclock:increment(VId, StartTime, MergedClock),
             {ok, Dot} = vclock:get_entry(VId, FrontierClock),
-            %% Asign an event to the put value
+            %% Assign an event to the put value
             DottedPutObject = riak_object:assign_dot(PutObj, Dot),
             MergedObject = riak_object:merge(DottedPutObject, LocalObj),
             {newobj, riak_object:set_vclock(MergedObject, FrontierClock)}

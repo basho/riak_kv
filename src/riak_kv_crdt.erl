@@ -28,7 +28,9 @@
 -export([log_merge_errors/4, meta/2, merge_value/2]).
 
 -include("riak_kv_wm_raw.hrl").
+-include("riak_object.hrl").
 -include_lib("riak_kv_types.hrl").
+
 
 -ifdef(TEST).
 -ifdef(EQC).
@@ -304,7 +306,7 @@ merge_meta(CType, Meta1, Meta2) ->
 %% @private Never keep a dot for CRDTs, we want all values to survive
 %% a riak_obect:merge/2
 drop_the_dot(Dict) ->
-    dict:erase(riak_object:dot_key(), Dict).
+    dict:erase(?DOT, Dict).
 
 lastmod(Meta) ->
     dict:fetch(?MD_LASTMOD, Meta).

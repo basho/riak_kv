@@ -347,7 +347,8 @@
 
 {mapping, "dvv", "riak_kv.dvv_enabled", [
   {default, on},
-  {datatype, {enum, [on, off]}}
+  {datatype, {enum, [on, off]}},
+  {level, advanced}
 ]}.
 
 { translation,

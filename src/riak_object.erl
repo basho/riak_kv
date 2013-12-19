@@ -27,6 +27,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 -include("riak_kv_wm_raw.hrl").
+-include("riak_object.hrl").
 
 -export_type([riak_object/0, bucket/0, key/0, value/0, binary_version/0]).
 
@@ -44,7 +45,7 @@
          }).
 
 -record(r_content, {
-          metadata :: dict(),
+          metadata :: dict() | list(),
           value :: term()
          }).
 
@@ -72,7 +73,6 @@
 -define(MAGIC, 53).      %% Magic number, as opposed to 131 for Erlang term-to-binary magic
                          %% Shanley's(11) + Joe's(42)
 -define(EMPTY_VTAG_BIN, <<"e">>).
--define(DOT, <<"dot">>). %% The event at which a value was written, stored in metadata
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
@@ -92,7 +92,6 @@
 -export([update_last_modified/1]).
 -export([strict_descendant/2]).
 -export([assign_dot/2]).
--export([dot_key/0]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -224,9 +223,7 @@ remove_dominated(Objects) ->
 %% called with a list of conflicting objects. Use `remove_dominated/1'
 %% to get such a list first.
 reconcile(Objects) ->
-    lists:foldl(fun(O, Acc) ->
-                        syntactic_merge(O, Acc)
-                end,
+    lists:foldl(fun syntactic_merge/2,
                 hd(Objects),
                 tl(Objects)).
 
@@ -312,7 +309,7 @@ prune_object_siblings(Object, Clock, MergeAcc) ->
                 Object#r_object.contents).
 
 %% @private called once for each content entry for each object being
-%% merged. It's job is to drop siblings that are causally dominated,
+%% merged. Its job is to drop siblings that are causally dominated,
 %% remove duplicate values, and merge CRDT values down to a single
 %% value.
 %%
@@ -333,18 +330,18 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
     #merge_acc{drop=Drop, keep=Keep, crdt=CRDT, error=Error} = MergeAcc,
     case get_dot(Dict) of
         {ok, Dot} ->
-            case {vclock:descends(Clock, [Dot]), orddict:is_key(Dot, Drop)} of
+            case {vclock:descends_dot(Clock, Dot), orddict:is_key(Dot, Drop)} of
                 {true, true} ->
-                    %% When the exact same dot present is present in
-                    %% both objects siblings, we keep that
-                    %% value. Without this merging the an object with
-                    %% itself would result in an object with no value
-                    %% at all, since an object's vector clock always
-                    %% dominates all its dots.
+                    %% When the exact same dot is present in both
+                    %% objects siblings, we keep that value. Without
+                    %% this merging an object with itself would result
+                    %% in an object with no values at all, since an
+                    %% object's vector clock always dominates all its
+                    %% dots.
                     Content = convert_to_dict_list(C0),
                     MergeAcc#merge_acc{keep=ordsets:add_element(Content, Keep)};
                 {true, false} ->
-                    %% The `dot' os dominated by the other object's
+                    %% The `dot' is dominated by the other object's
                     %% vclock. This means that the other object has a
                     %% value that is the result of a PUT that
                     %% reconciled this sibling value, we can therefore
@@ -592,11 +589,6 @@ assign_dot(Object, Dot) ->
         false ->
             throw({error, invalid_dot})
     end.
-
-%% @doc the binary key used for the `dot` in metadata.
--spec dot_key() -> binary().
-dot_key() ->
-    ?DOT.
 
 %% @private assign the dot to the value only if DVV is enabled. Only
 %% call with a valid dot. Only assign dot when there is a single value

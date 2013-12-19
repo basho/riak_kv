@@ -802,8 +802,7 @@ kv_vnode(#msg{from = From, c = {coord_put, ReqId, NewObj, Timestamp}},
     [Pri1, Pri2] = lists:sort([next_pri(), next_pri()]),
     WMsg = new_msg(Name, From, {w, Idx, ReqId}, Pri1),
     NodeId = {vc, Start, Node},
-    NewObj1 = NewObj,%%riak_object:increment_vclock(NewObj, NodeId, ReqId),
-    UpdObj = coord_put_merge(CurObj, NewObj1, NodeId, Timestamp),
+    UpdObj = coord_put_merge(CurObj, NewObj, NodeId, Timestamp),
     DWMsg = new_msg(Name, From, {dw, Idx, ReqId, UpdObj}, Pri2), % ignore returnbody for now
     [{msgs, [WMsg, DWMsg]},
      {updp, P#proc{procst = PS#kvvnodest{start = Start, object = UpdObj}}}];
