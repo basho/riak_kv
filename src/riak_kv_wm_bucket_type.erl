@@ -42,9 +42,6 @@
 %%     {"props":{Prop:Val}}
 %%   Where the "props" object takes the same form as returned from
 %%   a GET of the same resource.
-%%
-%% DELETE /types/Type/props
-%%   Reset bucket-type properties back to the default settings
 
 -module(riak_kv_wm_bucket_type).
 
@@ -61,8 +58,7 @@
          content_types_accepted/2,
          resource_exists/2,
          produce_bucket_type_body/2,
-         accept_bucket_type_body/2,
-         delete_resource/2
+         accept_bucket_type_body/2
         ]).
 
 %% @type context() = term()
@@ -136,9 +132,7 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
                 'GET' ->
                     "riak_core.get_bucket_type";
                 'HEAD' ->
-                    "riak_core.get_bucket_type";
-                'DELETE' ->
-                    "riak_core.set_bucket_type"
+                    "riak_core.get_bucket_type"
             end,
 
             Res = riak_core_security:check_permission({Perm, Ctx#ctx.bucket_type}, Security),
@@ -175,7 +169,7 @@ forbidden_check_bucket_type(RD, Ctx) ->
 %% @doc Get the list of methods this resource supports.
 %%      Properties allows HEAD, GET, and PUT.
 allowed_methods(RD, Ctx) when Ctx#ctx.api_version =:= 3 ->
-    {['HEAD', 'GET', 'PUT', 'DELETE'], RD, Ctx}.
+    {['HEAD', 'GET', 'PUT'], RD, Ctx}.
 
 %% @spec malformed_request(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
@@ -264,17 +258,4 @@ accept_bucket_type_body(RD, Ctx=#ctx{bucket_type=T, bucketprops=Props}) ->
             JSON = mochijson2:encode(Details),
             RD2 = wrq:append_to_resp_body(JSON, RD),
             {{halt, 400}, RD2, Ctx}
-    end.
-
-%% @spec delete_resource(reqdata(), context()) -> {boolean, reqdata(), context()}
-%% @doc Reset the bucket properties back to the default values
-delete_resource(RD, Ctx=#ctx{bucket_type=T}) ->
-    case riak_core_bucket_type:reset(T) of
-        ok ->
-            {true, RD, Ctx};
-        Error ->
-            {false,
-             wrq:append_to_resp_body(
-               io_lib:format("The bucket type ~s could not be reset: ~p~n", [T, Error]),
-               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)), Ctx}
     end.
