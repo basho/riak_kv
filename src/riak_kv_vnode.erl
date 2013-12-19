@@ -75,7 +75,6 @@
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_map_phase.hrl").
 -include_lib("riak_core_pb.hrl").
--include_lib("riak_core/include/riak_core_locks.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -1952,44 +1951,21 @@ sanitize_bkey(BKey) ->
     BKey.
 
 %% @private
-%% @doc Return true iff neither of the "skip background manager" configuration
-%%      settings are defined as anything other than false. 'skip_background_manager'
-%%      turns off all use of bg-mgr. 'handoff_skip_background_manager' only stops
-%%      handoff from using bg-mgr.
--spec use_bg_mgr_for_handoff() -> boolean().
-use_bg_mgr_for_handoff() ->
-    %% note we're tolerant here of any non-boolean value as well. Iff it's 'false', we don't skip.
-    GlobalSkip = app_helper:get_env(riak_core, skip_background_manager, false) =/= false,
-    HandoffSkip = app_helper:get_env(riak_core, handoff_skip_background_manager, false) =/= false,
-    not (GlobalSkip orelse HandoffSkip).
-
-%% @private
 %% @doc Unless skipping the background manager, try to acquire the per-vnode lock.
 %%      Sets our task meta-data in the lock as 'handoff', which is useful for
 %%      seeing what's holding the lock via @link riak_core_background_mgr:ps/0.
 -spec maybe_get_vnode_lock(SrcPartition::integer(), pid()) -> ok | max_concurrency.
 maybe_get_vnode_lock(SrcPartition, Pid) ->
-    Lock = ?VNODE_LOCK(riak_kv_vnode, SrcPartition),
-    case use_bg_mgr_for_handoff() of
+    case riak_core_bg_manager:use_bg_mgr(riak_kv, handoff_skip_background_manager) of
         true  ->
+            Lock = ?VNODE_LOCK(SrcPartition),
             case riak_core_bg_manager:get_lock(Lock, Pid, [{task, handoff}]) of
                 {ok, _Ref} -> ok;
                 max_concurrency -> max_concurrency
             end;
         false ->
-            lager:debug("Handoff is skipping the background manager vnode lock: ~p", [Lock]),
             ok
     end.
-
-%% @private
-%% @doc Return true iff neither of the "skip background manager" configuration
-%%      settings are defined as anything other than false. 'skip_background_manager'
-%%      turns off all use of bg-mgr.
--spec use_bg_mgr() -> boolean().
-use_bg_mgr() ->
-    %% note we're tolerant here of any non-boolean value as well. Iff it's 'false', we don't skip.
-    GlobalSkip = app_helper:get_env(riak_core, skip_background_manager, false) =/= false,
-    not GlobalSkip.
 
 %% @private
 %% @doc Query the application environment for 'vnode_lock_concurrency', and
@@ -2006,10 +1982,10 @@ try_set_vnode_lock_limit(Idx) ->
                       N when is_integer(N) -> N;
                       _NotNumber -> 1
                   end,
-    try_set_concurrency_limit(?VNODE_LOCK(riak_kv_vnode, Idx), Concurrency).
+    try_set_concurrency_limit(?VNODE_LOCK(Idx), Concurrency).
 
 try_set_concurrency_limit(Lock, Limit) ->
-    try_set_concurrency_limit(Lock, Limit, use_bg_mgr()).
+    try_set_concurrency_limit(Lock, Limit, riak_core_bg_manager:use_bg_mgr()).
 
 try_set_concurrency_limit(_Lock, _Limit, false) ->
     lager:info("Skipping background manager."),
