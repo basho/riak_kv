@@ -27,6 +27,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 -include("riak_kv_wm_raw.hrl").
+-include("riak_object.hrl").
 
 -export_type([riak_object/0, bucket/0, key/0, value/0, binary_version/0]).
 
@@ -35,8 +36,16 @@
 %% -type bkey() :: {bucket(), key()}.
 -type value() :: term().
 
+%% Used by the merge function to accumulate contents
+-record(merge_acc, {
+          drop=orddict:new() :: orddict:orddict(),
+          keep=ordsets:new() :: ordset:ordset(),
+          crdt=orddict:new() :: orddict:orddict(),
+          error=[] :: list(binary())
+         }).
+
 -record(r_content, {
-          metadata :: dict(),
+          metadata :: dict() | list(),
           value :: term()
          }).
 
@@ -51,6 +60,8 @@
          }).
 -opaque riak_object() :: #r_object{}.
 
+-type merge_acc() :: #merge_acc{}.
+-type r_content() :: #r_content{}.
 -type index_op() :: add | remove.
 -type index_value() :: integer() | binary().
 -type binary_version() :: v0 | v1.
@@ -79,6 +90,8 @@
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 -export([is_robject/1]).
 -export([update_last_modified/1]).
+-export([strict_descendant/2]).
+-export([assign_dot/2]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -168,11 +181,15 @@ equal_contents([C1|R1],[C2|R2]) ->
 ancestors(pure_baloney_to_fool_dialyzer) ->
     [#r_object{vclock = vclock:fresh()}];
 ancestors(Objects) ->
-    ToRemove = [[O2 || O2 <- Objects,
-                       vclock:descends(O1#r_object.vclock,O2#r_object.vclock),
-                       (vclock:descends(O2#r_object.vclock,O1#r_object.vclock) == false)]
-                || O1 <- Objects],
-    lists:flatten(ToRemove).
+    [ O2 || O1 <- Objects, O2 <- Objects, strict_descendant(O1, O2) ].
+
+%% @doc returns true if the `riak_object()' at `O1' is a strict
+%% descendant of that at `O2'. This means that the first object
+%% causally dominates the second.
+%% @see vclock:dominates/2
+-spec strict_descendant(riak_object(), riak_object()) -> boolean().
+strict_descendant(O1, O2) ->
+    vclock:dominates(riak_object:vclock(O1), riak_object:vclock(O2)).
 
 %% @doc  Reconcile a list of riak objects.  If AllowMultiple is true,
 %%       the riak_object returned may contain multiple values if Objects
@@ -182,34 +199,31 @@ ancestors(Objects) ->
 %%       X-Riak-Last-Modified header.
 -spec reconcile([riak_object()], boolean()) -> riak_object().
 reconcile(Objects, AllowMultiple) ->
-    RObjs = reconcile(Objects),
-    AllContents = lists:flatten([O#r_object.contents || O <- RObjs]),
-    Contents = case AllowMultiple of
-                   false ->
-                       [most_recent_content(AllContents)];
-                   true ->
-                       lists:usort(AllContents)
-               end,
-    VClock = vclock:merge([O#r_object.vclock || O <- RObjs]),
-    HdObj = hd(RObjs),
-    HdObj#r_object{contents=Contents,vclock=VClock,
-                   updatemetadata=dict:store(clean, true, dict:new()),
-                   updatevalue=undefined}.
+    RObj = reconcile(remove_dominated(Objects)),
+    case AllowMultiple of
+        false ->
+            Contents = [most_recent_content(RObj#r_object.contents)],
+            RObj#r_object{contents=Contents};
+        true ->
+            RObj
+    end.
 
--spec reconcile([riak_object()]) -> [riak_object()].
-reconcile(Objects) ->
+%% @private remove all Objects from the list that are causally
+%% dominated by any other object in the list. Only concurrent /
+%% conflicting objects will remain.
+remove_dominated(Objects) ->
     All = sets:from_list(Objects),
     Del = sets:from_list(ancestors(Objects)),
-    remove_duplicate_objects(sets:to_list(sets:subtract(All, Del))).
+    sets:to_list(sets:subtract(All, Del)).
 
-remove_duplicate_objects(Os) -> rem_dup_objs(Os,[]).
-rem_dup_objs([],Acc) -> Acc;
-rem_dup_objs([O|Rest],Acc) ->
-    EqO = [AO || AO <- Acc, riak_object:equal(AO,O) =:= true],
-    case EqO of
-        [] -> rem_dup_objs(Rest,[O|Acc]);
-        _ -> rem_dup_objs(Rest,Acc)
-    end.
+%% @private pairwise merge the objects in the list so that a single,
+%% merged riak_object remains that contains all sibling values. Only
+%% called with a list of conflicting objects. Use `remove_dominated/1'
+%% to get such a list first.
+reconcile(Objects) ->
+    lists:foldl(fun syntactic_merge/2,
+                hd(Objects),
+                tl(Objects)).
 
 most_recent_content(AllContents) ->
     hd(lists:sort(fun compare_content_dates/2, AllContents)).
@@ -239,26 +253,187 @@ compare_content_dates(C1,C2) ->
             C1 < C2
     end.
 
-%% @doc  Merge the contents and vclocks of OldObject and NewObject.
-%%       Note:  This function calls apply_updates on NewObject.
+%% @doc Merge the contents and vclocks of OldObject and NewObject.
+%%       Note: This function calls apply_updates on NewObject.
+%%       Depending on whether DVV is enabled or not, then may merge
+%%       dropping dotted and dominated siblings, otherwise keeps all
+%%       unique sibling values. NOTE: as well as being a Syntactic
+%%       merge, this is also now a semantic merge for CRDTs.  Only
+%%       call with concurrent objects. Use `syntactic_merge/2' if one
+%%       object may strictly dominate another.
 -spec merge(riak_object(), riak_object()) -> riak_object().
 merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
-    OldObject#r_object{contents=merge_contents(NewObject#r_object.contents,
-                                               OldObject#r_object.contents),
+    Contents = merge_contents(NewObject, OldObject, dvv_enabled()),
+    OldObject#r_object{contents=Contents,
                        vclock=vclock:merge([OldObject#r_object.vclock,
                                             NewObj1#r_object.vclock]),
                        updatemetadata=dict:store(clean, true, dict:new()),
                        updatevalue=undefined}.
 
+
 %% @doc Merge the r_objects contents by converting the inner dict to
 %%      a list, ensuring a sane order, and merging into a unique list.
-merge_contents(NewContents, OldContents) ->
-    OldContents1 = lists:map(fun convert_to_dict_list/1, OldContents),
-    NewContents1 = lists:map(fun convert_to_dict_list/1, NewContents),
-    Result = lists:umerge(lists:usort(NewContents1),
-                          lists:usort(OldContents1)),
-    lists:map(fun convert_from_dict_list/1, Result).
+merge_contents(NewObject, OldObject, false) ->
+    OldContents = lists:map(fun convert_to_dict_list/1, OldObject#r_object.contents),
+    NewContents = lists:map(fun convert_to_dict_list/1, NewObject#r_object.contents),
+    Result = lists:umerge(lists:usort(NewContents),
+                          lists:usort(OldContents)),
+    lists:map(fun convert_from_dict_list/1, Result);
+%% @private with DVV enabled, use event dots in sibling metadata to
+%% remove dominated siblings and stop fake concurrency that causes
+%% sibling explsion. Also, since every sibling is iterated over (some
+%% twice!) why not merge CRDTs here, too?
+merge_contents(NewObject, OldObject, true) ->
+    Bucket = bucket(NewObject),
+    Key = key(NewObject),
+    MergeAcc0 = prune_object_siblings(OldObject, vclock(NewObject)),
+    MergeAcc = prune_object_siblings(NewObject, vclock(OldObject), MergeAcc0),
+    #merge_acc{crdt=CRDT, error=Error} = MergeAcc,
+    riak_kv_crdt:log_merge_errors(Bucket, Key, CRDT, Error),
+    merge_acc_to_contents(MergeAcc).
+
+%% @private de-duplicates, removes dominated siblings, merges CRDTs
+-spec prune_object_siblings(riak_object(), vclock:vclock()) -> merge_acc().
+prune_object_siblings(Object, Clock) ->
+    prune_object_siblings(Object, Clock, #merge_acc{}).
+
+-spec prune_object_siblings(riak_object(), vclock:vclock(), merge_acc()) -> merge_acc().
+prune_object_siblings(Object, Clock, MergeAcc) ->
+    lists:foldl(fun(Content, Acc) ->
+                        fold_contents(Content, Acc, Clock)
+                end,
+                MergeAcc,
+                Object#r_object.contents).
+
+%% @private called once for each content entry for each object being
+%% merged. Its job is to drop siblings that are causally dominated,
+%% remove duplicate values, and merge CRDT values down to a single
+%% value.
+%%
+%% When a Riak takes a PUT, a `dot' is generated. (@See assign_dot/2)
+%% for the PUT and placed in `riak_object' metadata. The cases below
+%% use this `dot' to decide if a sibling value has been superceded,
+%% and should therefore be dropped.
+%%
+%% Based on the work by Baquero et al:
+%%
+%% Efficient causality tracking in distributed storage systems with
+%% dotted version vectors
+%% http://doi.acm.org/10.1145/2332432.2332497
+%% Nuno Preguiça, Carlos Bauqero, Paulo Sérgio Almeida, Victor Fonte,
+%% and Ricardo Gonçalves. 2012
+-spec fold_contents(r_content(), merge_acc(), vclock:vclock()) -> merge_acc().
+fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
+    #merge_acc{drop=Drop, keep=Keep, crdt=CRDT, error=Error} = MergeAcc,
+    case get_dot(Dict) of
+        {ok, Dot} ->
+            case {vclock:descends_dot(Clock, Dot), orddict:is_key(Dot, Drop)} of
+                {true, true} ->
+                    %% When the exact same dot is present in both
+                    %% objects siblings, we keep that value. Without
+                    %% this merging an object with itself would result
+                    %% in an object with no values at all, since an
+                    %% object's vector clock always dominates all its
+                    %% dots.
+                    Content = convert_to_dict_list(C0),
+                    MergeAcc#merge_acc{keep=ordsets:add_element(Content, Keep)};
+                {true, false} ->
+                    %% The `dot' is dominated by the other object's
+                    %% vclock. This means that the other object has a
+                    %% value that is the result of a PUT that
+                    %% reconciled this sibling value, we can therefore
+                    %% drop this value.
+                    MergeAcc#merge_acc{drop=orddict:store(Dot, C0, Drop)};
+                {false, _} ->
+                    %% The other object's vclock does not contain (or
+                    %% dominate) this sibling's `dot'. That means this
+                    %% is a genuinely concurrent (or sibling) value
+                    %% and should be kept for the user to reconcile.
+                    Content = convert_to_dict_list(C0),
+                    MergeAcc#merge_acc{keep=ordsets:add_element(Content, Keep)}
+            end;
+        undefined ->
+            %% Both CRDTs and legacy data don't have dots. Legacy data
+            %% because it was written before DVV (or with DVV turned
+            %% off.) That means keep this sibling. We cannot know if
+            %% it is dominated. This is the pre-DVV behaviour.
+            %%
+            %% CRDTs values do not get a dot as they are merged by
+            %% Riak, not by the client. A CRDT PUT _NEVER_ overwrites
+            %% existing values in Riak, it is always merged with
+            %% them. The resulting value then does not have a single
+            %% event origin. Instead it is a merge of many events. In
+            %% DVVSets (referenced above) there is an `anonymous list'
+            %% for values that have no single event. In Riak we
+            %% already have that, by having an `undefined' dot. We
+            %% could store all the dots for a CRDT as a clock, but it
+            %% would need complex logic to prune.
+            %%
+            %% Since there are no dots for CRDT values, there can be
+            %% sibling values on disk. Which is a concern for sibling
+            %% explosion scenarios. To avoid such scenarios we call
+            %% out to CRDT logic to merge CRDTs into a single value
+            %% here.
+            case riak_kv_crdt:merge_value({Dict, Value}, {CRDT, [], []}) of
+                {CRDT, [], [E]} ->
+                    %% An error occurred trying to merge this sibling
+                    %% value. This means it was CRDT with some
+                    %% corruption of teh binary format, or maybe a
+                    %% user's opaque binary that happens to match the
+                    %% CRDT binary start tag. Either way, gather the
+                    %% error for later logging.
+                    MergeAcc#merge_acc{error=[E | Error]};
+                {CRDT, [{Dict, Value}], []} ->
+                    %% The sibling value was not a CRDT, but a
+                    %% (legacy?) un-dotted user opaque value. Add it
+                    %% to the list of values to keep.
+                    Content = convert_to_dict_list(C0),
+                    MergeAcc#merge_acc{keep=ordsets:add_element(Content, Keep)};
+                {CRDT2, [], []} ->
+                    %% The sibling was a CRDT and the CRDT accumulator
+                    %% has been updated.
+                    MergeAcc#merge_acc{crdt=CRDT2}
+            end
+    end.
+
+%% @private Transform a `merge_acc()' to a list of `r_content()'. The
+%% merge accumulator contains a list of non CRDT (opaque) sibling
+%% values (`keep') and merged CRDT values (`crdt'). Due to bucket
+%% types it should really only ever contain one or the other (and the
+%% accumulated CRDTs should have a single value), but it is better to
+%% be safe.
+-spec merge_acc_to_contents(merge_acc()) -> list(r_content()).
+merge_acc_to_contents(MergeAcc) ->
+    #merge_acc{keep=Keep, crdt=CRDTs} = MergeAcc,
+    %% Convert the non-CRDT sibling values back to dict metadata values.
+    Keep2 = lists:map(fun convert_from_dict_list/1, ordsets:to_list(Keep)),
+    %% Iterate the set of converged CRDT values and turn them into
+    %% `r_content' entries.  by generating their metadata entry and
+    %% binary encoding their contents. Bucket Types should ensure this
+    %% accumulator only has one entry ever.
+    orddict:fold(fun(_Type, {Meta, CRDT}, Acc) ->
+                         [{r_content, riak_kv_crdt:meta(Meta, CRDT),
+                           riak_kv_crdt:to_binary(CRDT)} | Acc]
+                 end,
+                 Keep2,
+                 CRDTs).
+
+%% @private Get the dot from the passed metadata dict
+%% (if present and valid).
+-spec get_dot(dict()) -> {ok, vclock:dot()} | undefined.
+get_dot(Dict) ->
+    case dict:find(?DOT, Dict) of
+        {ok, Dot} ->
+            case vclock:valid_entry(Dot) of
+                true ->
+                    {ok, Dot};
+                false ->
+                    undefined
+            end;
+        error ->
+            undefined
+    end.
 
 %% @doc Convert a r_content's inner dictionary to a list, and sort it to
 %%      ensure we can do comparsions between r_contents.
@@ -387,12 +562,46 @@ set_vclock(Object=#r_object{}, VClock) -> Object#r_object{vclock=VClock}.
 -spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object().
 %% @spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object()
 increment_vclock(Object=#r_object{}, ClientId) ->
-    Object#r_object{vclock=vclock:increment(ClientId, Object#r_object.vclock)}.
+    NewClock = vclock:increment(ClientId, Object#r_object.vclock),
+    {ok, Dot} = vclock:get_entry(ClientId, NewClock),
+    assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled()).
 
 %% @doc  Increment the entry for ClientId in O's vclock.
 -spec increment_vclock(riak_object(), vclock:vclock_node(), vclock:timestamp()) -> riak_object().
 increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
-    Object#r_object{vclock=vclock:increment(ClientId, Timestamp, Object#r_object.vclock)}.
+    NewClock = vclock:increment(ClientId, Timestamp, Object#r_object.vclock),
+    {ok, Dot} = vclock:get_entry(ClientId, NewClock),
+    %% If it is true that we only ever increment the vclock to create
+    %% a frontier object, then there must only ever be a single value
+    %% when we increment, so add the dot here.
+    assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled()).
+
+%% @doc assign an event Dot to the value of the object.  Must be
+%% exactly one value for this object. Does not update the vector
+%% clock. Dot must be a valid vclock entry or an error is thrown.
+-spec assign_dot(riak_object(), vclock:dot()) -> riak_object().
+assign_dot(Object, Dot) ->
+    case vclock:valid_entry(Dot) of
+        true ->
+            assign_dot(Object, Dot,  dvv_enabled());
+        false ->
+            throw({error, invalid_dot})
+    end.
+
+%% @private assign the dot to the value only if DVV is enabled. Only
+%% call with a valid dot. Only assign dot when there is a single value
+%% in contents.
+-spec assign_dot(riak_object(), vclock:dot(), boolean()) -> riak_object().
+assign_dot(Object, Dot, true) ->
+    #r_object{contents=[C=#r_content{metadata=Meta0}]} = Object,
+    Object#r_object{contents=[C#r_content{metadata=dict:store(?DOT, Dot, Meta0)}]};
+assign_dot(Object, _Dot, _DVVEnabled) ->
+    Object.
+
+%% @private is dvv enabled on this node?
+-spec dvv_enabled() -> boolean().
+dvv_enabled() ->
+    app_helper:get_env(riak_kv, dvv_enabled, true).
 
 %% @doc Prepare a list of index specifications
 %% to pass to the backend. This function is for
@@ -791,9 +1000,12 @@ update_test() ->
     {O,O2}.
 
 ancestor_test() ->
+    Actor = self(),
     {O,O2} = update_test(),
-    O3 = riak_object:increment_vclock(O2,self()),
+    O3 = riak_object:increment_vclock(O2, Actor),
     [O] = riak_object:ancestors([O,O3]),
+    MD = riak_object:get_metadata(O3),
+    ?assertMatch({Actor, {1, _}}, dict:fetch(?DOT, MD)),
     {O,O3}.
 
 reconcile_test() ->
@@ -959,14 +1171,6 @@ is_updated_test() ->
     OVu = riak_object:update_value(O, testupdate),
     ?assert(is_updated(OVu)).
 
-remove_duplicates_test() ->
-    O0 = riak_object:new(<<"test">>, <<"test">>, zero),
-    O1 = riak_object:new(<<"test">>, <<"test">>, one),
-    ND = remove_duplicate_objects([O0, O0, O1, O1, O0, O1]),
-    ?assertEqual(2, length(ND)),
-    ?assert(lists:member(O0, ND)),
-    ?assert(lists:member(O1, ND)).
-
 new_with_ctype_test() ->
     O = riak_object:new(<<"b">>, <<"k">>, <<"{\"a\":1}">>, "application/json"),
     ?assertEqual("application/json", dict:fetch(?MD_CTYPE, riak_object:get_metadata(O))).
@@ -1035,5 +1239,55 @@ vclock_codec_test() ->
     VCs = [<<"BinVclock">>, {vclock, something, [], <<"blah">>}, vclock:fresh()],
     [ ?assertEqual({Method, VC}, {Method, decode_vclock(encode_vclock(Method, VC))})
      || VC <- VCs, Method <- [encode_raw, encode_zlib]].
+
+dotted_values_reconcile_test() ->
+    {B, K} = {<<"b">>, <<"k">>},
+    A = riak_object:increment_vclock(riak_object:new(B, K, <<"a">>), a),
+    C = riak_object:increment_vclock(riak_object:new(B, K, <<"c">>), c),
+    Z = riak_object:increment_vclock(riak_object:new(B, K, <<"z">>), z),
+    A1 = riak_object:increment_vclock(riak_object:apply_updates(riak_object:update_value(A, <<"a1">>)), a),
+    C1 = riak_object:increment_vclock(riak_object:apply_updates(riak_object:update_value(C, <<"c1">>)), c),
+    Z1 = riak_object:increment_vclock(riak_object:apply_updates(riak_object:update_value(Z, <<"z1">>)), z),
+    ACZ = riak_object:reconcile([A, C, Z, A1, C1, Z1], true),
+    ?assertEqual(3, riak_object:value_count(ACZ)),
+    Contents = lists:sort(riak_object:get_contents(ACZ)),
+    verify_contents(Contents, [{{a, 2}, <<"a1">>}, {{c, 2}, <<"c1">>}, {{z, 2}, <<"z1">>}]),
+    Vclock = riak_object:vclock(ACZ),
+    ?assertEqual(2, vclock:get_counter(a, Vclock)),
+    ?assertEqual(2, vclock:get_counter(c, Vclock)),
+    ?assertEqual(2, vclock:get_counter(z, Vclock)),
+    ?assertEqual(3, length(Vclock)).
+
+%% Test the case where an object with undotted values is merged with
+%% an object with dotted values.
+mixed_merge_test() ->
+    {B, K} = {<<"b">>, <<"k">>},
+    A_VC = vclock:fresh(a, 3),
+    Z_VC = vclock:fresh(b, 2),
+    A = riak_object:set_vclock(riak_object:new(B, K, <<"a">>), A_VC),
+    C = riak_object:increment_vclock(riak_object:new(B, K, <<"c">>), c),
+    Z = riak_object:set_vclock(riak_object:new(B, K, <<"b">>), Z_VC),
+    ACZ = riak_object:reconcile([A, C, Z], true),
+    ?assertEqual(3, riak_object:value_count(ACZ)).
+
+mixed_merge2_test() ->
+    {B, K} = {<<"b">>, <<"k">>},
+    A = riak_object:new(B, K, <<"a">>),
+    A1 = riak_object:increment_vclock(A, a),
+    Z = riak_object:increment_vclock(A, z),
+    AZ = riak_object:merge(A1, Z),
+    AZ2 = riak_object:merge(AZ, AZ),
+    ?assertEqual(AZ2, AZ),
+    ?assertEqual(2, riak_object:value_count(AZ2)),
+    AZ3 = riak_object:set_contents(AZ2, [{dict:new(), <<"undotted">>} | riak_object:get_contents(AZ2)]),
+    AZ4 = riak_object:syntactic_merge(AZ3, AZ2),
+    ?assertEqual(AZ3, AZ4),
+    ?assertEqual(3, riak_object:value_count(AZ4)).
+
+verify_contents([], []) ->
+    ?assert(true);
+verify_contents([{MD, V} | Rest], [{{Actor, Count}, V} | Rest2]) ->
+    ?assertMatch({Actor, {Count, _}}, dict:fetch(?DOT, MD)),
+    verify_contents(Rest, Rest2).
 
 -endif.

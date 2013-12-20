@@ -42,6 +42,9 @@
          %% Disable active anti-entropy by default
          {anti_entropy, {off, []}},
 
+         %% Enable DVV by default
+         {dvv_enabled, true},
+
          %% Allow Erlang MapReduce functions to be specified as
          %% strings.
          %%

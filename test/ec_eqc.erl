@@ -15,7 +15,14 @@
 %%====================================================================
 
 eqc_test_() ->
-    {timeout, 300000, ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop()))))}.
+    {setup,
+     fun() -> ok end,
+     fun(_) ->
+             %% re-instate the dvv_enabled default
+             application:set_env(riak_kv, dvv_enabled, true) end,
+     [
+      {timeout, 300000, ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop()))))}
+     ]}.
 
 %% TODO: 
 %% Change put to use per-node vclock.
@@ -119,10 +126,14 @@ gen_client_seeds() ->
          {non_empty(list(gen_regular_client())), gen_handoff_client()},
          [Handoff | Clients]).
 
+gen_dvv_enabled() ->
+    bool().
+
 prop() ->
-    ?FORALL({Pris, ClientSeeds, ParamsSeed},
-            {gen_pris(), gen_client_seeds(),gen_params()},
+    ?FORALL({Pris, ClientSeeds, ParamsSeed, DVVEnabled},
+            {gen_pris(), gen_client_seeds(),gen_params(), gen_dvv_enabled()},
             begin
+                application:set_env(riak_kv, dvv_enabled, DVVEnabled),
                 %% io:format(user, "Pris: ~p\n", [Pris]),
                 set_pri(Pris),
                 Params = make_params(ParamsSeed),
@@ -791,8 +802,7 @@ kv_vnode(#msg{from = From, c = {coord_put, ReqId, NewObj, Timestamp}},
     [Pri1, Pri2] = lists:sort([next_pri(), next_pri()]),
     WMsg = new_msg(Name, From, {w, Idx, ReqId}, Pri1),
     NodeId = {vc, Start, Node},
-    NewObj1 = riak_object:increment_vclock(NewObj, NodeId, ReqId),
-    UpdObj = coord_put_merge(CurObj, NewObj1, NodeId, Timestamp),
+    UpdObj = coord_put_merge(CurObj, NewObj, NodeId, Timestamp),
     DWMsg = new_msg(Name, From, {dw, Idx, ReqId, UpdObj}, Pri2), % ignore returnbody for now
     [{msgs, [WMsg, DWMsg]},
      {updp, P#proc{procst = PS#kvvnodest{start = Start, object = UpdObj}}}];
@@ -882,21 +892,30 @@ syntactic_put_merge(CurObj, UpdObj) ->
     end.
 
 
-coord_put_merge(undefined, UpdObj, _NodeId, _Timestamp) ->
-    UpdObj;
-coord_put_merge(CurObj, UpdObj, NodeId, Timestamp) ->
-    %% Make sure UpdObj descends from CurObj and that NodeId is greater
-    CurVC = riak_object:vclock(CurObj),
-    UpdVC = riak_object:vclock(UpdObj),
+coord_put_merge(undefined, UpdObj, NodeId, Timestamp) ->
+    riak_object:increment_vclock(UpdObj, NodeId, Timestamp);
+coord_put_merge(LocalObj, PutObj, NodeId, Timestamp) ->
+  %% Get the vclock we have the object stored on disk at this replica
+    LocalVC = riak_object:vclock(LocalObj),
+    %% get the vclock from the put
+    PutVC = riak_object:vclock(PutObj),
 
-    %% Valid coord put replacing current object
-    case get_counter(NodeId, UpdVC) > get_counter(NodeId, CurVC) andalso
-        vclock:descends(CurVC, UpdVC) == false andalso 
-        vclock:descends(UpdVC, CurVC) == true of
+    %% Optimisation: if the put object's vclock descends from the
+    %% local object's vclock, then don't merge with local value, just
+    %% increment the clock and overwrite.
+    case vclock:descends(PutVC, LocalVC) of
         true ->
-            UpdObj;
+            riak_object:increment_vclock(PutObj, NodeId, Timestamp);
         false ->
-            riak_object:increment_vclock(riak_object:merge(CurObj, UpdObj),NodeId, Timestamp)
+            %% The PUT object is concurrent with some other PUT,
+            %% so merge the PUT object and the local object.
+            MergedClock = vclock:merge([PutVC, LocalVC]),
+            FrontierClock = vclock:increment(NodeId, Timestamp, MergedClock),
+            {ok, Dot} = vclock:get_entry(NodeId, FrontierClock),
+            %% Asign an event to the put value
+            DottedPutObject = riak_object:assign_dot(PutObj, Dot),
+            MergedObject = riak_object:merge(DottedPutObject, LocalObj),
+            riak_object:set_vclock(MergedObject, FrontierClock)
     end.
 
 

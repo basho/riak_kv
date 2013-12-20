@@ -25,8 +25,10 @@
 -export([update/3, merge/1, value/2, new/3,
          supported/1, to_mod/1, from_mod/1]).
 -export([to_binary/2, to_binary/1, from_binary/1]).
+-export([log_merge_errors/4, meta/2, merge_value/2]).
 
 -include("riak_kv_wm_raw.hrl").
+-include("riak_object.hrl").
 -include_lib("riak_kv_types.hrl").
 
 -ifdef(TEST).
@@ -103,6 +105,12 @@ merge_object(RObj) ->
     maybe_log_sibling_crdts(Bucket, Key, CRDTs),
     {CRDTs, NonCRDTSiblings}.
 
+%% @doc log any accumulated merge errors
+-spec log_merge_errors(riak_object:bucket(), riak_object:key(), crdts(), list()) -> ok.
+log_merge_errors(Bucket, Key, CRDTs, Errors) ->
+    log_errors(Bucket, Key, Errors),
+    maybe_log_sibling_crdts(Bucket, Key, CRDTs).
+
 log_errors(_, _, []) ->
     ok;
 log_errors(Bucket, Key, Errors) ->
@@ -124,9 +132,8 @@ merge_contents(Contents) ->
                 {orddict:new(), [], []},
                Contents).
 
-%% @private worker for `merge_contents/1' if the content is a CRDT,
-%% de-binary it, merge it and store the most merged value in the
-%% accumulator dictionary.
+%% @doc if the content is a CRDT, de-binary it, merge it and store the
+%% most merged value in the accumulator dictionary.
 -spec merge_value(ro_content(), {crdts(), ro_contents()}) ->
                          {crdts(), ro_contents()}.
 merge_value({MD, <<?TAG:8/integer, Version:8/integer, CRDTBin/binary>>=Content},
@@ -301,7 +308,12 @@ merge_meta(CType, Meta1, Meta2) ->
            end,
     %% Make sure the content type is
     %% up-to-date
-    dict:store(?MD_CTYPE, CType, Meta).
+    drop_the_dot(dict:store(?MD_CTYPE, CType, Meta)).
+
+%% @private Never keep a dot for CRDTs, we want all values to survive
+%% a riak_obect:merge/2
+drop_the_dot(Dict) ->
+    dict:erase(?DOT, Dict).
 
 lastmod(Meta) ->
     dict:fetch(?MD_LASTMOD, Meta).

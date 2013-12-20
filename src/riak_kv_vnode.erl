@@ -1199,9 +1199,7 @@ handle_crdt(_, undefined, _VId, RObj) ->
 handle_crdt(true, CRDTOp, VId, RObj) ->
     riak_kv_crdt:update(RObj, VId, CRDTOp);
 handle_crdt(false, _CRDTOp, _Vid, RObj) ->
-    %% non co-ord put that was a CRDT operation? Merge the values if
-    %% there are siblings 'cos that is the point of CRDTs: no siblings
-    riak_kv_crdt:merge(RObj).
+    RObj.
 
 perform_put({fail, _, _}=Reply, State, _PutArgs) ->
     {Reply, State};
@@ -1305,6 +1303,9 @@ select_newest_content(Mult) ->
 put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
     {newobj, UpdObj};
 put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
+    %% a downstream merge, or replication of a coordinated PUT
+    %% Merge the value received with local replica value
+    %% and store the value IFF it is different to what we already have
     ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
     case riak_object:equal(ResObj, CurObj) of
         true ->
@@ -1314,21 +1315,28 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
     end;
 put_merge(true, true, _CurObj, UpdObj, VId, StartTime) -> % coord=true, LWW=true
     {newobj, riak_object:increment_vclock(UpdObj, VId, StartTime)};
-put_merge(true, false, CurObj, UpdObj, VId, StartTime) ->
-    UpdObj1 = riak_object:increment_vclock(UpdObj, VId, StartTime),
-    UpdVC = riak_object:vclock(UpdObj1),
-    CurVC = riak_object:vclock(CurObj),
+put_merge(true, false, LocalObj, PutObj, VId, StartTime) -> %% Coordinating=true, LWW=false, local replica has value for key
+    %% Get the vclock we have the object stored on disk at this replica
+    LocalVC = riak_object:vclock(LocalObj),
+    %% get the vclock from the put
+    PutVC = riak_object:vclock(PutObj),
 
-    %% Check the coord put will replace the existing object
-    case vclock:get_counter(VId, UpdVC) > vclock:get_counter(VId, CurVC) andalso
-        vclock:descends(CurVC, UpdVC) == false andalso
-        vclock:descends(UpdVC, CurVC) == true of
+    %% Optimisation: if the put object's vclock descends from the
+    %% local object's vclock, then don't merge with local value, just
+    %% increment the clock and overwrite.
+    case vclock:descends(PutVC, LocalVC) of
         true ->
-            {newobj, UpdObj1};
+            {newobj, riak_object:increment_vclock(PutObj, VId, StartTime)};
         false ->
-            %% If not, make sure it does
-            {newobj, riak_object:increment_vclock(
-                       riak_object:merge(CurObj, UpdObj1), VId, StartTime)}
+            %% The PUT object is concurrent with some other PUT,
+            %% so merge the PUT object and the local object.
+            MergedClock = vclock:merge([PutVC, LocalVC]),
+            FrontierClock = vclock:increment(VId, StartTime, MergedClock),
+            {ok, Dot} = vclock:get_entry(VId, FrontierClock),
+            %% Assign an event to the put value
+            DottedPutObject = riak_object:assign_dot(PutObj, Dot),
+            MergedObject = riak_object:merge(DottedPutObject, LocalObj),
+            {newobj, riak_object:set_vclock(MergedObject, FrontierClock)}
     end.
 
 %% @private
