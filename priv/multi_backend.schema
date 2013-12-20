@@ -65,14 +65,14 @@
 
 %%%% Memory backend section
 
+%% @see memory_backend.max_memory
 {mapping, "multi_backend.$name.memory_backend.max_memory", "riak_kv.multi_backend", [
   {datatype, bytesize},
-  {default, "4GB"},
   {level, advanced}
 ]}.
 
+%% @see memory_backend.ttl
 {mapping, "multi_backend.$name.memory_backend.ttl", "riak_kv.multi_backend", [
   {datatype, {duration, s}},
-  {commented, "1d"}, %% no default, it's undefined.
   {level, advanced}
 ]}.

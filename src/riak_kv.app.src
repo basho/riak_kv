@@ -52,6 +52,21 @@
          %% This will allow arbitrary Erlang code to be submitted
          %% through the REST and Protocol Buffers interfaces. This
          %% should only be used for development purposes.
-         {allow_strfun, false}
+         {allow_strfun, false},
+
+         %% @doc http_url_encoding determines how Riak treats URL encoded
+         %% buckets, keys, and links over the REST API. When set to 'on' Riak
+         %% always decodes encoded values sent as URLs and Headers.  Otherwise,
+         %% Riak defaults to compatibility mode where links are decoded, but
+         %% buckets and keys are not. The compatibility mode will be removed in
+         %% a future release.
+         {http_url_encoding, on},
+
+         %% @doc mapred_2i_pipe indicates whether secondary-index
+         %% MapReduce inputs are queued in parallel via their own
+         %% pipe ('true'), or serially via a helper process
+         %% ('false' or undefined).  Set to 'false' or leave
+         %% undefined during a rolling upgrade from 1.0.
+         {mapred_2i_pipe, true}
         ]}
  ]}.
