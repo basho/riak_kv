@@ -264,7 +264,9 @@ compare_content_dates(C1,C2) ->
 -spec merge(riak_object(), riak_object()) -> riak_object().
 merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
-    Contents = merge_contents(NewObject, OldObject, dvv_enabled()),
+    DVV = dvv_enabled(),
+    {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
+    riak_kv_stat:update({riak_object_merge, CRDT, Time}),
     OldObject#r_object{contents=Contents,
                        vclock=vclock:merge([OldObject#r_object.vclock,
                                             NewObj1#r_object.vclock]),
@@ -279,7 +281,7 @@ merge_contents(NewObject, OldObject, false) ->
     NewContents = lists:map(fun convert_to_dict_list/1, NewObject#r_object.contents),
     Result = lists:umerge(lists:usort(NewContents),
                           lists:usort(OldContents)),
-    lists:map(fun convert_from_dict_list/1, Result);
+    {undefined, lists:map(fun convert_from_dict_list/1, Result)};
 %% @private with DVV enabled, use event dots in sibling metadata to
 %% remove dominated siblings and stop fake concurrency that causes
 %% sibling explsion. Also, since every sibling is iterated over (some
@@ -412,11 +414,12 @@ merge_acc_to_contents(MergeAcc) ->
     %% `r_content' entries.  by generating their metadata entry and
     %% binary encoding their contents. Bucket Types should ensure this
     %% accumulator only has one entry ever.
-    orddict:fold(fun(_Type, {Meta, CRDT}, Acc) ->
-                         [{r_content, riak_kv_crdt:meta(Meta, CRDT),
-                           riak_kv_crdt:to_binary(CRDT)} | Acc]
+    orddict:fold(fun(_Type, {Meta, CRDT}, {_, Contents}) ->
+                         {riak_kv_crdt:to_mod(CRDT),
+                          [{r_content, riak_kv_crdt:meta(Meta, CRDT),
+                           riak_kv_crdt:to_binary(CRDT)} | Contents]}
                  end,
-                 Keep2,
+                 {undefined, Keep2},
                  CRDTs).
 
 %% @private Get the dot from the passed metadata dict

@@ -429,6 +429,8 @@ to_mod("counters") ->
     ?COUNTER_TYPE;
 to_mod("maps") ->
     ?MAP_TYPE;
+to_mod(?CRDT{mod=Mod}) ->
+    Mod;
 to_mod(Type) ->
     proplists:get_value(Type, ?MOD_MAP).
 

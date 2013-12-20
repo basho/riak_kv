@@ -1198,7 +1198,7 @@ prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
 handle_crdt(_, undefined, _VId, RObj) ->
     RObj;
 handle_crdt(true, CRDTOp, VId, RObj) ->
-    riak_kv_crdt:update(RObj, VId, CRDTOp);
+    do_crdt_update(RObj, VId, CRDTOp);
 handle_crdt(false, _CRDTOp, _Vid, RObj) ->
     RObj.
 
