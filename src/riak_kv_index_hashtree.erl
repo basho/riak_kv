@@ -680,22 +680,47 @@ build_or_rehash(Self, State=#state{index=Index, trees=Trees}) ->
                false -> build;
                true  -> rehash
            end,
-    Lock = riak_kv_entropy_manager:get_lock(Type),
-    case {Lock, Type} of
-        {ok, build} ->
-            lager:debug("Starting build: ~p", [Index]),
-            fold_keys(Index, Self),
-            lager:debug("Finished build (a): ~p", [Index]), 
-            gen_server:cast(Self, build_finished);
-        {ok, rehash} ->
-            lager:debug("Starting rehash: ~p", [Index]),
-            [hashtree:rehash_tree(T) || {_,T} <- Trees],
-            lager:debug("Finished rehash (a): ~p", [Index]),
-            gen_server:cast(Self, build_finished);
-        {_Error, _} ->
+    case maybe_get_vnode_lock(Index) of
+        ok ->
+            Lock = riak_kv_entropy_manager:get_lock(Type),
+            case {Lock, Type} of
+                {ok, build} ->
+                    lager:debug("Starting build: ~p", [Index]),
+                    fold_keys(Index, Self),
+                    lager:debug("Finished build (a): ~p", [Index]), 
+                    gen_server:cast(Self, build_finished);
+                {ok, rehash} ->
+                    lager:debug("Starting rehash: ~p", [Index]),
+                    [hashtree:rehash_tree(T) || {_,T} <- Trees],
+                    lager:debug("Finished rehash (a): ~p", [Index]),
+                    gen_server:cast(Self, build_finished);
+                {_Error, _} ->
+                    gen_server:cast(Self, build_failed)
+            end;
+        max_concurrency ->
+            %% Something else is already doing a fold on this vnode.
             gen_server:cast(Self, build_failed)
     end.
 
 close_trees(State=#state{trees=Trees}) ->
     Trees2 = [{IdxN, hashtree:close(Tree)} || {IdxN, Tree} <- Trees],
     State#state{trees=Trees2}.
+
+%% @private
+%% @doc Unless skipping the background manager, try to acquire the per-vnode lock.
+%%      Sets our task meta-data in the lock as 'aae_rebuild', which is useful for
+%%      seeing what's holding the lock via @link riak_core_background_mgr:ps/0.
+-spec maybe_get_vnode_lock(SrcPartition::integer()) -> ok | max_concurrency.
+maybe_get_vnode_lock(SrcPartition) ->
+    case riak_core_bg_manager:use_bg_mgr(riak_kv, aae_use_background_manager) of
+        true  ->
+            Lock = ?KV_VNODE_LOCK(SrcPartition),
+            case riak_core_bg_manager:get_lock(Lock, self(), [{task, aae_rebuild}]) of
+                {ok, _Ref} -> ok;
+                max_concurrency -> max_concurrency
+            end;
+        false ->
+            ok
+    end.
+
+    
