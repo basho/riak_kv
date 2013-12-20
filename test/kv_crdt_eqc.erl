@@ -86,10 +86,10 @@ prop_value() ->
     ?FORALL(RObj, riak_object(),
             begin
                 Expected = sumthem(RObj),
-                {_, Cnt} = riak_kv_crdt:value(RObj, ?V1_COUNTER_TYPE),
+                {{_, Cnt},_} = riak_kv_crdt:value(RObj, ?V1_COUNTER_TYPE),
                 ?WHENFAIL(
                    begin
-                       io:format("Gen ~p\n", [RObj])
+                       io:format(user, "Gen ~p\n", [RObj])
                    end,
                    equals(Expected, Cnt))
             end).
@@ -105,7 +105,7 @@ prop_merge() ->
                                             end
                                     end,
                 MergeSeed = undefined,
-                {_, Cnt} = riak_kv_crdt:value(Merged, ?V1_COUNTER_TYPE),
+                {{_, Cnt},_} = riak_kv_crdt:value(Merged, ?V1_COUNTER_TYPE),
 
                 ?WHENFAIL(
                    begin
@@ -134,7 +134,7 @@ prop_update() ->
                                 _ -> {ok, Cnter} = ?V1_COUNTER_TYPE:new(Actor, Amt),
                                      Cnter
                             end,
-                {_, Cnt} = riak_kv_crdt:value(Updated, ?V1_COUNTER_TYPE),
+                {{_, Cnt},_} = riak_kv_crdt:value(Updated, ?V1_COUNTER_TYPE),
                 ?WHENFAIL(
                    begin
                        io:format("Gen ~p~n", [RObj]),

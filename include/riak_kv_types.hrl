@@ -29,5 +29,7 @@
                   {counter, ?COUNTER_TYPE}, {flag, ?FLAG_TYPE},
                   {register, ?REG_TYPE}]).
 
+-define(DATATYPE_STATS_DEFAULTS, [actor_count]).
+
 -type crdt() :: ?CRDT{}.
 -type crdt_op() :: ?CRDT_OP{}.

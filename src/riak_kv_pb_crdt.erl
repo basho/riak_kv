@@ -123,7 +123,7 @@ maybe_fetch(true, Req, State) ->
     #dtfetchreq{bucket=B, key=K, type=BType, include_context=InclCtx} = Req,
     #state{client=C} = State,
     Options = make_options(Req),
-    Resp = C:get({BType, B}, K, [{crdt_op, true}|Options]),
+    Resp = C:get({BType, B}, K, [{crdt_op, State#state.mod}|Options]),
     process_fetch_response(Resp, State#state{return_ctx=InclCtx});
 maybe_fetch(false, _Req, State) ->
     #state{type=Type} = State,
@@ -132,7 +132,8 @@ maybe_fetch(false, _Req, State) ->
 %% @private prepare a repsonse for a fetch operation
 process_fetch_response({ok, O}, State) ->
     #state{type=Type, mod=Mod, return_ctx=ReturnCtx} = State,
-    {Ctx0, Value} = riak_kv_crdt:value(O, Mod),
+    {{Ctx0, Value}, Stats} = riak_kv_crdt:value(O, Mod),
+    [ riak_kv_stat:update(S) || S <- Stats ],
     Ctx = get_context(Ctx0, ReturnCtx),
     Resp = riak_pb_dt_codec:encode_fetch_response(Type, Value, Ctx, ?MOD_MAP),
     {reply, Resp, State};
@@ -183,7 +184,8 @@ process_update_response(ok, State) ->
     {reply, #dtupdateresp{key=ReturnKey}, State};
 process_update_response({ok, RObj}, State) ->
     #state{type=Type, mod=Mod, return_key=Key, return_ctx=ReturnCtx} = State,
-    {Ctx, Value} = riak_kv_crdt:value(RObj, Mod),
+    {{Ctx, Value}, Stats} = riak_kv_crdt:value(RObj, Mod),
+    [ riak_kv_stat:update(S) || S <- Stats ],
     Resp = riak_pb_dt_codec:encode_update_response(Type, Value, Key,
                                                    get_context(Ctx, ReturnCtx), ?MOD_MAP),
     {reply, Resp, State};

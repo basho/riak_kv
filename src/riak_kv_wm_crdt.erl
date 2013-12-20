@@ -349,9 +349,9 @@ resource_exists(RD, Ctx=#ctx{key=undefined}) ->
     %% When fetching, if the key does not exist, we should give a not
     %% found.
     handle_common_error(notfound, RD, Ctx);
-resource_exists(RD, Ctx=#ctx{client=C, bucket_type=T, bucket=B, key=K}) ->
+resource_exists(RD, Ctx=#ctx{client=C, bucket_type=T, bucket=B, key=K, module=Mod}) ->
     Options = make_options(Ctx),
-    case C:get({T,B}, K, [{crdt_op, true}|Options]) of
+    case C:get({T,B}, K, [{crdt_op, Mod}|Options]) of
         {ok, O} ->
             {true, RD, Ctx#ctx{data=O}};
         {error, Reason} ->
@@ -386,7 +386,8 @@ process_post(RD0, Ctx0=#ctx{client=C, bucket_type=T, bucket=B, module=Mod}) ->
 
 produce_json(RD, Ctx=#ctx{module=Mod, data=RObj, include_context=I}) ->
     Type = riak_kv_crdt:from_mod(Mod),
-    {RespCtx, Value} = riak_kv_crdt:value(RObj, Mod),
+    {{RespCtx, Value}, Stats} = riak_kv_crdt:value(RObj, Mod),
+    [ riak_kv_stat:update(S) || S <- Stats ],
     Body = riak_kv_crdt_json:fetch_response_to_json(
                      Type, Value, get_context(RespCtx,I), ?MOD_MAP),
     {mochijson2:encode(Body), RD, Ctx}.

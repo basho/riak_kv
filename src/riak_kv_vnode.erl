@@ -75,6 +75,7 @@
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_map_phase.hrl").
 -include_lib("riak_core_pb.hrl").
+-include("riak_kv_types.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -1190,16 +1191,24 @@ prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
     %% coordinating a _NEW_ crdt operation means
     %% creating + updating the crdt.
     %% Make a new crdt, stuff it in the riak_object
-    riak_kv_crdt:update(VClockUp, VId, CRDTOp);
+    do_crdt_update(VClockUp, VId, CRDTOp);
 prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
     RObj.
 
 handle_crdt(_, undefined, _VId, RObj) ->
     RObj;
 handle_crdt(true, CRDTOp, VId, RObj) ->
-    riak_kv_crdt:update(RObj, VId, CRDTOp);
+    do_crdt_update(RObj, VId, CRDTOp);
 handle_crdt(false, _CRDTOp, _Vid, RObj) ->
     RObj.
+
+do_crdt_update(RObj, VId, CRDTOp) ->
+    {Time, Value} = timer:tc(riak_kv_crdt, update, [RObj, VId, CRDTOp]),
+    riak_kv_stat:update({vnode_dt_update, get_crdt_mod(CRDTOp), Time}),
+    Value.
+
+get_crdt_mod(#crdt_op{mod=Mod}) -> Mod;
+get_crdt_mod(Atom) when is_atom(Atom) -> Atom.
 
 perform_put({fail, _, _}=Reply, State, _PutArgs) ->
     {Reply, State};

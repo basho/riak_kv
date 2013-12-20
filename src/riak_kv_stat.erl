@@ -61,7 +61,7 @@ start_link() ->
 
 register_stats() ->
     [(catch folsom_metrics:delete_metric(Stat)) || Stat <- folsom_metrics:get_metrics(),
-                                                           is_tuple(Stat), element(1, Stat) == ?APP],
+                                                   is_tuple(Stat), element(1, Stat) == ?APP],
     [do_register_stat(stat_name(Name), Type) || {Name, Type} <- stats()],
     riak_core_stat_cache:register_app(?APP, {?MODULE, produce_stats, []}).
 
@@ -184,23 +184,54 @@ do_update({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
 do_update({vnode_index_delete, Postings}) ->
     folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes}, Postings, spiral),
     folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes, postings}, Postings, spiral);
-do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket}) ->
+do_update({vnode_dt_update, Mod, Micros}) ->
+    Type = riak_kv_crdt:from_mod(Mod),
+    folsom_metrics:notify_existing_metric({?APP, vnode, Type, update}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, vnode, Type, update, time}, Micros, histogram);
+do_update({riak_object_merge, undefined,  Micros}) ->
+    folsom_metrics:notify_existing_metric({?APP, object, merge}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, object, merge, time}, Micros, histogram);
+do_update({riak_object_merge, Mod, Micros}) ->
+    Type = riak_kv_crdt:from_mod(Mod),
+    folsom_metrics:notify_existing_metric({?APP, object, Type, merge}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, object, Type, merge, time}, Micros, histogram);
+do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket, undefined}) ->
     folsom_metrics:notify_existing_metric({?APP, node, gets}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node, gets, time}, Microsecs, histogram),
     do_stages([?APP, node, gets, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined});
-do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket}) ->
+do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket, undefined}) ->
     folsom_metrics:notify_existing_metric({?APP, node, gets}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node, gets, time}, Microsecs, histogram),
     folsom_metrics:notify_existing_metric({?APP, node, gets, siblings}, NumSiblings, histogram),
     folsom_metrics:notify_existing_metric({?APP, node, gets, objsize}, ObjSize, histogram),
     do_stages([?APP, node, gets, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize});
-do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket}) ->
+do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket, CRDTMod}) ->
+    Type = riak_kv_crdt:from_mod(CRDTMod),
+    folsom_metrics:notify_existing_metric({?APP, node, gets, Type}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, node, gets, Type, time}, Microsecs, histogram),
+    do_stages([?APP, node, gets, Type, time], Stages),
+    do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined, Type});
+do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket, CRDTMod}) ->
+    Type = riak_kv_crdt:from_mod(CRDTMod),
+    folsom_metrics:notify_existing_metric({?APP, node, gets, Type}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, node, gets, Type, time}, Microsecs, histogram),
+    folsom_metrics:notify_existing_metric({?APP, node, gets, Type, siblings}, NumSiblings, histogram),
+    folsom_metrics:notify_existing_metric({?APP, node, gets, Type, objsize}, ObjSize, histogram),
+    do_stages([?APP, node, gets, Type, time], Stages),
+    do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type});
+do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, undefined}) ->
     folsom_metrics:notify_existing_metric({?APP, node, puts}, 1, spiral),
     folsom_metrics:notify_existing_metric({?APP, node, puts, time}, Microsecs, histogram),
     do_stages([?APP, node, puts, time], Stages),
     do_put_bucket(PerBucket, {Bucket, Microsecs, Stages});
+do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, CRDTMod}) ->
+    Type = riak_kv_crdt:from_mod(CRDTMod),
+    folsom_metrics:notify_existing_metric({?APP, node, puts, Type}, 1, spiral),
+    folsom_metrics:notify_existing_metric({?APP, node, puts, Type, time}, Microsecs, histogram),
+    do_stages([?APP, node, puts, Type, time], Stages),
+    do_put_bucket(PerBucket, {Bucket, Microsecs, Stages, Type});
 do_update({read_repairs, Indices, Preflist}) ->
     folsom_metrics:notify_existing_metric({?APP, node, gets, read_repairs}, 1, spiral),
     do_repairs(Indices, Preflist);
@@ -236,7 +267,9 @@ do_update({list_create, Pid}) ->
 do_update(list_create_error) ->
     folsom_metrics:notify_existing_metric({?APP, list, fsm, create, error}, 1, spiral);
 do_update({fsm_destroy, Type}) ->
-    folsom_metrics:notify_existing_metric({?APP, Type, fsm, active}, {dec, 1}, counter).
+    folsom_metrics:notify_existing_metric({?APP, Type, fsm, active}, {dec, 1}, counter);
+do_update({Type, actor_count, Count}) ->
+    folsom_metrics:notify_existing_metric({?APP, Type, actor_count}, Count, histogram).
 
 %% private
 
@@ -275,7 +308,23 @@ do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize}=Args) ->
                                                                                   siblings,
                                                                                   objsize]],
             do_get_bucket(true, Args)
+    end;
+do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type}=Args) ->
+    case (catch folsom_metrics:notify_existing_metric({?APP, node, gets, Type, Bucket}, 1, spiral)) of
+        ok ->
+            [folsom_metrics:notify_existing_metric({?APP, node, gets, Type, Dimension, Bucket}, Arg, histogram)
+             || {Dimension, Arg} <- [{time, Microsecs},
+                                     {siblings, NumSiblings},
+                                     {objsize, ObjSize}], Arg /= undefined],
+            do_stages([?APP, node, gets, Type, time, Bucket], Stages);
+        {'EXIT', _} ->
+            folsom_metrics:new_spiral({?APP, node, gets, Type, Bucket}),
+            [register_stat({?APP, node, gets, Type, Dimension, Bucket}, histogram) || Dimension <- [time,
+                                                                                  siblings,
+                                                                                  objsize]],
+            do_get_bucket(true, Args)
     end.
+
 
 %% per bucket put_fsm stats
 do_put_bucket(false, _) ->
@@ -288,6 +337,16 @@ do_put_bucket(true, {Bucket, Microsecs, Stages}=Args) ->
         {'EXIT', _} ->
             register_stat({?APP, node, puts, Bucket}, spiral),
             register_stat({?APP, node, puts, time, Bucket}, histogram),
+            do_put_bucket(true, Args)
+    end;
+do_put_bucket(true, {Bucket, Microsecs, Stages, Type}=Args) ->
+    case (catch folsom_metrics:notify_existing_metric({?APP, node, puts, Type, Bucket}, 1, spiral)) of
+        ok ->
+            folsom_metrics:notify_existing_metric({?APP, node, puts, Type, time, Bucket}, Microsecs, histogram),
+            do_stages([?APP, node, puts, Type, time, Bucket], Stages);
+        {'EXIT', _} ->
+            register_stat({?APP, node, puts, Type, Bucket}, spiral),
+            register_stat({?APP, node, puts, Type, time, Bucket}, histogram),
             do_put_bucket(true, Args)
     end.
 
@@ -349,18 +408,45 @@ stats() ->
      {[vnode, index, writes, postings], spiral},
      {[vnode, index, deletes], spiral},
      {[vnode, index, deletes, postings], spiral},
+     {[vnode, counter, update], spiral},
+     {[vnode, counter, update, time], histogram},
+     {[vnode, set, update], spiral},
+     {[vnode, set, update, time], histogram},
+     {[vnode, map, update], spiral},
+     {[vnode, map, update, time], histogram},
      {[node, gets], spiral},
-     {[node, gets, siblings], histogram},
+     {[node, gets, fsm, active], counter},
+     {[node, gets, fsm, errors], spiral},
      {[node, gets, objsize], histogram},
-     {[node, gets, time], histogram},
-     {[node, puts], spiral},
-     {[node, puts, time], histogram},
      {[node, gets, read_repairs], spiral},
+     {[node, gets, siblings], histogram},
+     {[node, gets, time], histogram},
+     {[node, gets, counter], spiral},
+     {[node, gets, counter, objsize], histogram},
+     {[node, gets, counter, read_repairs], spiral},
+     {[node, gets, counter, siblings], histogram},
+     {[node, gets, counter, time], histogram},
+     {[node, gets, set], spiral},
+     {[node, gets, set, objsize], histogram},
+     {[node, gets, set, read_repairs], spiral},
+     {[node, gets, set, siblings], histogram},
+     {[node, gets, set, time], histogram},
+     {[node, gets, map], spiral},
+     {[node, gets, map, objsize], histogram},
+     {[node, gets, map, read_repairs], spiral},
+     {[node, gets, map, siblings], histogram},
+     {[node, gets, map, time], histogram},
+     {[node, puts], spiral},
      {[node, puts, coord_redirs], counter},
      {[node, puts, fsm, active], counter},
-     {[node, gets, fsm, active], counter},
      {[node, puts, fsm, errors], spiral},
-     {[node, gets, fsm, errors], spiral},
+     {[node, puts, time], histogram},
+     {[node, puts, counter], spiral},
+     {[node, puts, counter, time], histogram},
+     {[node, puts, set], spiral},
+     {[node, puts, set, time], histogram},
+     {[node, puts, map], spiral},
+     {[node, puts, map, time], histogram},
      {[index, fsm, create], spiral},
      {[index, fsm, create, error], spiral},
      {[index, fsm, active], counter},
@@ -371,7 +457,19 @@ stats() ->
      {precommit_fail, counter},
      {postcommit_fail, counter},
      {[vnode, backend, leveldb, read_block_error],
-      {function, {function, ?MODULE, leveldb_read_block_errors}}}].
+      {function, {function, ?MODULE, leveldb_read_block_errors}}},
+     {[counter, actor_count], histogram},
+     {[set, actor_count], histogram},
+     {[map, actor_count], histogram},
+     {[object, merge], spiral},
+     {[object, merge, time], histogram},
+     {[object, counter, merge], spiral},
+     {[object, counter, merge, time], histogram},
+     {[object, set, merge], spiral},
+     {[object, set, merge, time], histogram},
+     {[object, map, merge], spiral},
+     {[object, map, merge, time], histogram}
+    ].
 
 %% @doc register a stat with folsom
 do_register_stat(Name, spiral) ->
@@ -509,7 +607,18 @@ stats_from_update_arg({vnode_index_write, _, _}) ->
         riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
 stats_from_update_arg({vnode_index_delete, _}) ->
     riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
-stats_from_update_arg({get_fsm, _, _, _, _, _, _}) ->
+stats_from_update_arg({vnode_dt_update, Mod, _}) ->
+    Type = riak_kv_crdt:from_mod(Mod),
+    [{{?APP, vnode, Type, update}, {metric, [], spiral, undefined}},
+     {{?APP, vnode, Type, update, time}, {metric, [], histogram, undefined}}];
+stats_from_update_arg({riak_object_merge, undefined, _}) ->
+    [{{?APP, object, merge}, {metric, [], spiral, undefined}},
+     {{?APP, object, merge, time}, {metric, [], histogram, undefined}}];
+stats_from_update_arg({riak_object_merge, Mod, _}) ->
+    Type = riak_kv_crdt:from_mod(Mod),
+    [{{?APP, object, Type, merge}, {metric, [], spiral, undefined}},
+     {{?APP, object, Type, merge, time}, {metric, [], histogram, undefined}}];
+stats_from_update_arg({get_fsm, _, _, _, _, _, _, _}) ->
     riak_core_stat_q:names_and_types([?APP, node, gets]);
 stats_from_update_arg({put_fsm_time, _, _, _, _}) ->
     riak_core_stat_q:names_and_types([?APP, node, puts]);
@@ -542,6 +651,8 @@ stats_from_update_arg({list_create, _Pid}) ->
      {{?APP, list, fsm, active}, {metric, [], counter, undefined}}];
 stats_from_update_arg(list_create_error) ->
     [{{?APP, list, fsm, create, error}, {metric, [], spiral, undefined}}];
+stats_from_update_arg({DT, actor_count, _Value}) ->
+    [{{?APP, DT, actor_count}, {metric, [], histogram, undefined}}];
 stats_from_update_arg(_) ->
     [].
 

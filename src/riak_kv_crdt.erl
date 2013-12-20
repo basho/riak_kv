@@ -79,10 +79,12 @@ merge(RObj) ->
 %% which must be a support riak_dt crdt module, returns an update
 %% context, and user value. Performs a merge, then gets the CRDT end
 %% user value.  @see merge/1
--spec value(riak_object:riak_object(), module()) -> {binary(), riak_dt:value()}.
+-spec value(riak_object:riak_object(), module()) -> {{binary(), riak_dt:value()}, [{atom(), atom(), number()}]}.
 value(RObj, Type) ->
     {CRDTs, _NonCRDTSiblings} = merge_object(RObj),
-    crdt_value(Type, orddict:find(Type, CRDTs)).
+    DType = orddict:find(Type, CRDTs),
+    {crdt_value(Type, DType), crdt_stats(Type, DType)}.
+
 
 %% @TODO in riak_dt change value to query allow query to take an
 %% argument, (so as to query subfields of map, or set membership etc)
@@ -92,6 +94,21 @@ crdt_value(Type, error) ->
     {<<>>, Type:value(Type:new())};
 crdt_value(Type, {ok, {_Meta, ?CRDT{mod=Type, value=Value}}}) ->
     {get_context(Type, Value), Type:value(Value)}.
+
+crdt_stats(_, error) -> [];
+crdt_stats(Type, {ok, {_Meta, ?CRDT{mod=Type, value=Value}}}) ->
+    case lists:member({stat,2}, Type:module_info(exports)) of
+        true ->
+            EnabledStats = app_helper:get_env(riak_kv, datatype_stats, ?DATATYPE_STATS_DEFAULTS),
+            lists:foldr(fun(S, Acc) ->
+                                case Type:stat(S, Value) of
+                                    undefined -> Acc;
+                                    Stat -> [{from_mod(Type), S, Stat}|Acc]
+                                end
+                        end, [], EnabledStats);
+        false -> []
+    end.
+
 
 %% @private Merge contents _AND_ meta
 -spec merge_object(riak_object:riak_object()) ->
@@ -412,6 +429,8 @@ to_mod("counters") ->
     ?COUNTER_TYPE;
 to_mod("maps") ->
     ?MAP_TYPE;
+to_mod(?CRDT{mod=Mod}) ->
+    Mod;
 to_mod(Type) ->
     proplists:get_value(Type, ?MOD_MAP).
 
