@@ -714,7 +714,7 @@ close_trees(State=#state{trees=Trees}) ->
 maybe_get_vnode_lock(SrcPartition) ->
     case riak_core_bg_manager:use_bg_mgr(riak_kv, aae_use_background_manager) of
         true  ->
-            Lock = ?VNODE_LOCK(SrcPartition),
+            Lock = ?KV_VNODE_LOCK(SrcPartition),
             case riak_core_bg_manager:get_lock(Lock, self(), [{task, aae_rebuild}]) of
                 {ok, _Ref} -> ok;
                 max_concurrency -> max_concurrency

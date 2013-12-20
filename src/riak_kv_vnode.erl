@@ -1956,9 +1956,9 @@ sanitize_bkey(BKey) ->
 %%      seeing what's holding the lock via @link riak_core_background_mgr:ps/0.
 -spec maybe_get_vnode_lock(SrcPartition::integer(), pid()) -> ok | max_concurrency.
 maybe_get_vnode_lock(SrcPartition, Pid) ->
-    case riak_core_bg_manager:use_bg_mgr(riak_kv, handoff_skip_background_manager) of
+    case riak_core_bg_manager:use_bg_mgr(riak_kv, handoff_use_background_manager) of
         true  ->
-            Lock = ?VNODE_LOCK(SrcPartition),
+            Lock = ?KV_VNODE_LOCK(SrcPartition),
             case riak_core_bg_manager:get_lock(Lock, Pid, [{task, handoff}]) of
                 {ok, _Ref} -> ok;
                 max_concurrency -> max_concurrency
@@ -1971,8 +1971,8 @@ maybe_get_vnode_lock(SrcPartition, Pid) ->
 %% @doc Query the application environment for 'vnode_lock_concurrency', and
 %%      if it's an integer, use it to set the maximum vnode lock concurrency
 %%      for Idx. If the background manager is not available yet, schedule a
-%%      retry for later. If the application environment has a non "false"
-%%      setting of the key 'skip_background_manager', then this code just
+%%      retry for later. If the application environment variable
+%%      'riak_core/use_background_manager' is false, this code just
 %%      returns ok without registering.
 try_set_vnode_lock_limit(Idx) ->
     %% By default, register per-vnode concurrency limit "lock" with 1 so that only a
@@ -1982,13 +1982,13 @@ try_set_vnode_lock_limit(Idx) ->
                       N when is_integer(N) -> N;
                       _NotNumber -> 1
                   end,
-    try_set_concurrency_limit(?VNODE_LOCK(Idx), Concurrency).
+    try_set_concurrency_limit(?KV_VNODE_LOCK(Idx), Concurrency).
 
 try_set_concurrency_limit(Lock, Limit) ->
     try_set_concurrency_limit(Lock, Limit, riak_core_bg_manager:use_bg_mgr()).
 
 try_set_concurrency_limit(_Lock, _Limit, false) ->
-    lager:info("Skipping background manager."),
+    %% skip background manager
     ok;
 try_set_concurrency_limit(Lock, Limit, true) ->
     %% this is ok to do more than once

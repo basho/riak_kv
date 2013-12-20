@@ -68,4 +68,4 @@
 %% @doc vnode_lock(PartitionIndex) is a kv per-vnode lock, used possibly,
 %% by AAE tree rebuilds, fullsync, and handoff.
 %% See @link riak_core_background_mgr:get_lock/1
--define(VNODE_LOCK(Idx), {vnode_lock, Idx}).
+-define(KV_VNODE_LOCK(Idx), {vnode_lock, Idx}).
