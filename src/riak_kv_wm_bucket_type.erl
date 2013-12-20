@@ -146,10 +146,9 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
     end.
 
 %% @doc Detects whether the requested bucket-type exists.
-forbidden_check_bucket_type(RD, #ctx{method=M}=Ctx) when M =:= 'PUT';
-                                                         M =:= 'DELETE' ->
+forbidden_check_bucket_type(RD, #ctx{method=M}=Ctx) when M =:= 'PUT' ->
     %% If the bucket type doesn't exist, we want to bail early so that
-    %% users cannot PUT/DELETE bucket types that don't exist.
+    %% users cannot PUT bucket types that don't exist.
     case riak_kv_wm_utils:bucket_type_exists(Ctx#ctx.bucket_type) of
         true ->
             {false, RD, Ctx};
