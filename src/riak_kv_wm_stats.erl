@@ -86,6 +86,18 @@ pretty_print(RD1, C1=#ctx{}) ->
 
 
 get_stats() ->
+    case riak_core_stat:stat_system() of
+        legacy   -> get_stats_legacy();
+        exometer -> get_stats_exometer()
+    end.
+
+get_stats_legacy() ->
+    {value, {disk, Disk}, Stats} = lists:keytake(disk, 1, riak_kv_stat:get_stats()),
+    DiskFlat = [{struct, [{id, list_to_binary(Id)}, {size, Size}, {used, Used}]} || {Id, Size, Used} <- Disk],
+    lists:append([Stats, [{disk, DiskFlat}], riak_core_stat:get_stats()]).
+
+
+get_stats_exometer() ->
     legacy_stats(legacy_stat_map1())
         ++ riak_kv_stat_bc:read_repair_stats()
         ++ riak_kv_stat_bc:level_stats()

@@ -142,6 +142,30 @@
 %% @doc Produce a proplist-formatted view of the current aggregation
 %%      of stats.
 produce_stats() ->
+    case riak_core_stat:stat_system() of
+        legacy   -> produce_stats_legacy();
+        exometer -> produce_stats_exometer()
+    end.
+
+produce_stats_legacy() ->
+    lists:append(
+      [lists:flatten(legacy_stats()),
+       sidejob_stats(),
+       read_repair_stats(),
+       level_stats(),
+       pipe_stats(),
+       cpu_stats(),
+       mem_stats(),
+       disk_stats(),
+       system_stats(),
+       ring_stats(),
+       config_stats(),
+       app_stats(),
+       memory_stats()
+      ]).
+
+
+produce_stats_exometer() ->
     lists:append(
       [lists:flatten(legacy_stats()),
        sidejob_stats(),
@@ -180,7 +204,7 @@ t(L, F) ->
     Res = F(),
     T2 = os:timestamp(),
     {L, timer:now_diff(T2, T1), Res}.
-     
+
 
 %% Stats in folsom are stored with tuples as keys, the
 %% tuples mimic an hierarchical structure. To be free of legacy
@@ -365,6 +389,18 @@ sidejob_put_fsm_stats() ->
 %% @doc Get stats on the cpu, as given by the cpu_sup module
 %%      of the os_mon application.
 cpu_stats() ->
+    case riak_core_stat:stat_system() of
+        legacy   -> cpu_stats_legacy();
+        exometer -> cpu_stats_exometer()
+    end.
+
+cpu_stats_legacy() ->
+    [{cpu_nprocs, cpu_sup:nprocs()},
+     {cpu_avg1, cpu_sup:avg1()},
+     {cpu_avg5, cpu_sup:avg5()},
+     {cpu_avg15, cpu_sup:avg15()}].
+
+cpu_stats_exometer() ->
     DPs = case exometer:get_value([riak_core_stat:prefix(),common,cpu_stats]) of
               {ok, L} -> L;
               _ -> []
@@ -475,21 +511,48 @@ level_stats() ->
 %% The CSEs are only interested in aggregations of Type and Reason
 %% which are elements 6 and 7 in the key.
 read_repair_stats() ->
+    case riak_core_stat:stat_system() of
+        legacy   -> read_repair_stats_legacy();
+        exometer -> read_repair_stats_exometer()
+    end.
+
+read_repair_stats_legacy() ->
+    aggregate_legacy(read_repairs, [riak_kv, node, gets, read_repairs, '_', '_', '_'], [6,7]).
+
+read_repair_stats_exometer() ->
     Pfx = riak_core_stat:prefix(),
-    aggregate(read_repairs, [Pfx, riak_kv, node, gets, read_repairs, '_', '_', '_'], [5,6,7]).
+    aggregate_exometer(read_repairs, [Pfx, riak_kv, node, gets, read_repairs, '_', '_', '_'], [5,6,7]).
 
 %% TODO generalise for riak_core_stat_q
 %% aggregates spiral values for stats retrieved by `Query'
 %% aggregates by the key field(s) indexed at `Fields'
 %% produces a flat list of `BaseName_NameOfFieldAtIndex[_count]'
 %% to fit in with the existing naming convention in the legacy stat blob
-aggregate(BaseName, Query, Fields) ->
-    Stats = exometer:get_values(Query),
-    Aggregates = do_aggregate(Stats, Fields),
+aggregate_legacy(BaseName, Query, Fields) ->
+    Stats = riak_core_stat_q:get_stats(Query),
+    Aggregates = do_aggregate_legacy(Stats, Fields),
     FlatStats = flatten_aggregate_stats(BaseName, Aggregates),
     lists:flatten(FlatStats).
 
-do_aggregate(Stats, Fields) ->
+aggregate_exometer(BaseName, Query, Fields) ->
+    Stats = exometer:get_values(Query),
+    Aggregates = do_aggregate_exometer(Stats, Fields),
+    FlatStats = flatten_aggregate_stats(BaseName, Aggregates),
+    lists:flatten(FlatStats).
+
+do_aggregate_legacy(Stats, Fields) ->
+    lists:foldl(fun({Name, [{count, C0}, {one, O0}]}, Acc) ->
+                        Key = key_from_fields(Name, Fields),
+                        [{count, C}, {one, O}] = case orddict:find(Key, Acc) of
+                                                     error -> [{count, 0}, {one, 0}];
+                                                     {ok, V} -> V
+                                                 end,
+                        orddict:store(Key, [{count, C+C0}, {one, O+O0}], Acc)
+                end,
+                orddict:new(),
+                Stats).
+
+do_aggregate_exometer(Stats, Fields) ->
     lists:foldl(fun({Name, [{count, C0}, {one, O0}]}, Acc) ->
                         Key = key_from_fields(list_to_tuple(Name), Fields),
                         [{count, C}, {one, O}] = case orddict:find(Key, Acc) of

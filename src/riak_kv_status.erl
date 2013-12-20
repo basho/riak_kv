@@ -36,7 +36,10 @@
 
 -spec(statistics() -> [any()]).
 statistics() ->
-    get_stats(console).
+    case riak_core_stat:stat_system() of
+        legacy   -> riak_kv_stat:get_stats();
+        exometer -> get_stats(console)
+    end.
 
 ringready() ->
     riak_core_status:ringready().
