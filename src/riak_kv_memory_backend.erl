@@ -459,21 +459,31 @@ fold_keys_fun(FoldKeysFun, {bucket, FilterBucket}) ->
 fold_keys_fun(FoldKeysFun, {index, FilterBucket, ?KV_INDEX_Q{filter_field=FF}}) when
       FF == <<"$bucket">>; FF == <<"$key">> ->
     fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
-fold_keys_fun(FoldKeysFun, {index, _FilterBucket, ?KV_INDEX_Q{term_regex=Re}})
+fold_keys_fun(FoldKeysFun, {index, _FilterBucket,
+                            ?KV_INDEX_Q{term_regex=Re, return_terms=Terms}})
     when Re /= undefined ->
     fun({{Bucket, _FilterField, FilterTerm, Key}, _}, Acc) ->
             case re:run(FilterTerm, Re) of
                 nomatch ->
                     Acc;
                 {match, _} ->
-                    FoldKeysFun(Bucket, {FilterTerm, Key}, Acc)
+                    Val = if
+                        Terms -> {FilterTerm, Key};
+                        true -> Key
+                    end,
+                    FoldKeysFun(Bucket, Val, Acc)
             end;
        (_, Acc) ->
             Acc
     end;
-fold_keys_fun(FoldKeysFun, {index, _FilterBucket, ?KV_INDEX_Q{}}) ->
+fold_keys_fun(FoldKeysFun, {index, _FilterBucket,
+                            ?KV_INDEX_Q{return_terms=Terms}}) ->
     fun({{Bucket, _FilterField, FilterTerm, Key}, _}, Acc) ->
-            FoldKeysFun(Bucket, {FilterTerm, Key}, Acc);
+                    Val = if
+                        Terms -> {FilterTerm, Key};
+                        true -> Key
+                    end,
+            FoldKeysFun(Bucket, Val, Acc);
        (_, Acc) ->
             Acc
     end;
