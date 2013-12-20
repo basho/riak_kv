@@ -595,8 +595,13 @@ stats() ->
      {mapper_count, counter},
      {precommit_fail, counter},
      {postcommit_fail, counter},
-     {[vnode, backend, leveldb, read_block_error],
-      {function, ?MODULE, leveldb_read_block_errors}}].
+     {[vnode, backend, leveldb, read_block_error], read_block_error_fun_stat()}].
+
+read_block_error_fun_stat() ->
+    case riak_core_stat:stat_system() of
+        legacy   -> {function, {function, ?MODULE, leveldb_read_block_errors}};
+        exometer -> {function, ?MODULE, leveldb_read_block_errors}
+    end.
 
 do_register_stat(Name, Type) ->
     case riak_core_stat:stat_system() of
@@ -677,13 +682,20 @@ leveldb_read_block_errors(_) ->
             %% a vnode at random.
             Nth = crypto:rand_uniform(1, length(Indices)),
             Idx = lists:nth(Nth, Indices),
-            case vnode_status(Idx) of
-                {backend_status, BE, St} ->
-                    leveldb_read_block_errors_int(BE, St);
-                _ ->
-                    undefined
+            case riak_core_stat:stat_system() of
+                legacy ->
+                    Status = vnode_status(Idx),
+                    leveldb_read_block_errors(Status);
+                exometer ->
+                    case vnode_status(Idx) of
+                        {backend_status, BE, St} ->
+                            leveldb_read_block_errors_int(BE, St);
+                        _ ->
+                            undefined
+                    end
             end
     end.
+
 
 vnode_status(Idx) ->
     PList = [{Idx, node()}],

@@ -213,7 +213,8 @@ t(L, F) ->
 %% legacys stats from the new list of stats.
 legacy_stats() ->
     {Legacy, _Calculated} = lists:foldl(fun({Old, New, Type}, {Acc, Cache}) ->
-                                                bc_stat({Old, New, Type}, Acc, Cache) end,
+                                                try
+                                                bc_stat({Old, New, Type}, Acc, Cache) catch error:E -> error({E, erlang:get_stacktrace()}) end end,
                                         {[], []},
                                         legacy_stat_map()),
     lists:reverse(Legacy).
@@ -235,18 +236,22 @@ get_stat(Name, Type, Cache, ValFun) ->
     end.
 
 bc_stat({Old, {NewName, Field}, histogram} = _X, Acc, Cache) ->
-    try
-    ValFun = fun(Stat) ->
-                     trunc(proplists:get_value(Field, Stat)) end,
+    ValFun = fun(Stat) -> trunc(proplists:get_value(Field, Stat)) end,
     {Val, Cache1} = get_stat(NewName, histogram, Cache, ValFun),
-    {[{Old, Val} | Acc], Cache1}
-    catch
-        error:_ -> {[{Old,error} | Acc], Cache}
-    end;
+    {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, {NewName, Field}, histogram_percentile}, Acc, Cache) ->
-    ValFun = fun(Stat) ->
-                     Val = proplists:get_value(Field, Stat),
-                     trunc(Val) end,
+    ValFun =
+        case riak_core_stat:stat_system() of
+            legacy ->
+                fun(Stat) ->
+                        Percentile = proplists:get_value(percentile, Stat),
+                        Val = proplists:get_value(Field, Percentile),
+                        trunc(Val) end;
+            exometer ->
+                fun(Stat) ->
+                        Val = proplists:get_value(Field, Stat),
+                        trunc(Val) end
+        end,
     {Val, Cache1} = get_stat(NewName, histogram, Cache, ValFun),
     {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, {NewName, Field}, spiral}, Acc, Cache) ->
@@ -256,10 +261,16 @@ bc_stat({Old, {NewName, Field}, spiral}, Acc, Cache) ->
     {Val, Cache1} = get_stat(NewName, spiral, Cache, ValFun),
     {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, NewName, counter}, Acc, Cache) ->
-    ValFun = fun(Stat) ->
-                     proplists:get_value(value, Stat, 0)
-             end,
-    {Val, Cache1} = get_stat(NewName, counter, Cache, ValFun),
+    {Val, Cache1} =
+        case riak_core_stat:stat_system() of
+            legacy ->
+                get_stat(NewName, counter, Cache);
+            exometer ->
+                ValFun = fun(Stat) ->
+                                 proplists:get_value(value, Stat, 0)
+                         end,
+                get_stat(NewName, counter, Cache, ValFun)
+        end,
     {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, NewName, function}, Acc, Cache) ->
     {Val, Cache1} = get_stat(NewName, gauge, Cache),
@@ -270,6 +281,10 @@ bc_stat({Old, NewName, function}, Acc, Cache) ->
 %% concatenation of the elements in the new stat key would not suffice
 %% applications depend on these exact legacy names.
 legacy_stat_map() ->
+    Mean = case riak_core_stat:stat_system() of
+               legacy   -> arithmetic_mean;
+               exometer -> mean
+           end,
     [{vnode_gets, {{riak_kv, vnode, gets}, one}, spiral},
      {vnode_gets_total, {{riak_kv, vnode, gets}, count}, spiral},
      {vnode_puts, {{riak_kv, vnode, puts}, one}, spiral},
@@ -286,24 +301,24 @@ legacy_stat_map() ->
      {vnode_index_deletes_postings_total, {{riak_kv,vnode,index,deletes,postings}, count}, spiral},
      {node_gets, {{riak_kv,node,gets}, one}, spiral},
      {node_gets_total, {{riak_kv,node,gets}, count}, spiral},
-     {node_get_fsm_siblings_mean, {{riak_kv,node,gets,siblings}, mean}, histogram},
+     {node_get_fsm_siblings_mean, {{riak_kv,node,gets,siblings}, Mean}, histogram},
      {node_get_fsm_siblings_median, {{riak_kv,node,gets,siblings}, median}, histogram},
      {node_get_fsm_siblings_95, {{riak_kv,node,gets,siblings}, 95}, histogram_percentile},
      {node_get_fsm_siblings_99, {{riak_kv,node,gets,siblings}, 99}, histogram_percentile},
      {node_get_fsm_siblings_100, {{riak_kv,node,gets,siblings}, max}, histogram},
-     {node_get_fsm_objsize_mean, {{riak_kv,node,gets,objsize}, mean}, histogram},
+     {node_get_fsm_objsize_mean, {{riak_kv,node,gets,objsize}, Mean}, histogram},
      {node_get_fsm_objsize_median, {{riak_kv,node,gets,objsize}, median}, histogram},
      {node_get_fsm_objsize_95, {{riak_kv,node,gets,objsize}, 95}, histogram_percentile},
      {node_get_fsm_objsize_99, {{riak_kv,node,gets,objsize}, 99}, histogram_percentile},
      {node_get_fsm_objsize_100, {{riak_kv,node,gets,objsize}, max}, histogram},
-     {node_get_fsm_time_mean, {{riak_kv,node,gets,time}, mean}, histogram},
+     {node_get_fsm_time_mean, {{riak_kv,node,gets,time}, Mean}, histogram},
      {node_get_fsm_time_median, {{riak_kv,node,gets,time}, median}, histogram},
      {node_get_fsm_time_95, {{riak_kv,node,gets,time}, 95}, histogram_percentile},
      {node_get_fsm_time_99, {{riak_kv,node,gets,time}, 99}, histogram_percentile},
      {node_get_fsm_time_100, {{riak_kv,node,gets,time}, max}, histogram},
      {node_puts, {{riak_kv,node, puts}, one}, spiral},
      {node_puts_total, {{riak_kv,node, puts}, count}, spiral},
-     {node_put_fsm_time_mean, {{riak_kv,node, puts, time}, mean}, histogram},
+     {node_put_fsm_time_mean, {{riak_kv,node, puts, time}, Mean}, histogram},
      {node_put_fsm_time_median, {{riak_kv,node, puts, time}, median}, histogram},
      {node_put_fsm_time_95,  {{riak_kv,node, puts, time}, 95}, histogram_percentile},
      {node_put_fsm_time_99,  {{riak_kv,node, puts, time}, 99}, histogram_percentile},
