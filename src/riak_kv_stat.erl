@@ -43,7 +43,7 @@
 %% API
 -export([start_link/0, get_stats/0,
          update/1, perform_update/1, register_stats/0, produce_stats/0,
-         leveldb_read_block_errors/1, stop/0]).
+         leveldb_read_block_errors/0, leveldb_read_block_errors/1, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
 -export([active_gets/0, active_puts/0]).
 
@@ -663,6 +663,32 @@ produce_stats() ->
 %% @doc get the leveldb.ReadBlockErrors counter.
 %% non-zero values mean it is time to consider replacing
 %% this nodes disk.
+
+%% Legacy version
+leveldb_read_block_errors() ->
+    %% level stats are per node
+    %% but the way to get them is
+    %% is with riak_kv_vnode:vnode_status/1
+    %% for that reason just chose a partition
+    %% on this node at random
+    %% and ask for it's stats
+    {ok, R} = riak_core_ring_manager:get_my_ring(),
+    case riak_core_ring:my_indices(R) of
+        [] -> undefined;
+        [Idx] ->
+            Status = vnode_status(Idx),
+            leveldb_read_block_errors(Status);
+        Indices ->
+            %% technically a call to status is a vnode
+            %% operation, so spread the load by picking
+            %% a vnode at random.
+            Nth = crypto:rand_uniform(1, length(Indices)),
+            Idx = lists:nth(Nth, Indices),
+            Status = vnode_status(Idx),
+            leveldb_read_block_errors(Status)
+    end.
+
+%% exometer version
 leveldb_read_block_errors(_) ->
     %% level stats are per node
     %% but the way to get them is
