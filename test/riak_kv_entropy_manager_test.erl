@@ -61,6 +61,7 @@ side_effects_test_() ->
      end,
      fun(_) ->
              ?TM:set_aae_throttle_kill(false),
+             erase(inner_iters),
              meck:unload(?TM),
              ?TM:set_aae_throttle(0)
      end,
@@ -68,38 +69,57 @@ side_effects_test_() ->
       ?_test(
          begin
              State0 = ?TM:make_state(),
-             meck:expect(?TM, multicall, fun(_,_,_,_,_) -> {[], [nd]} end),
-             State1 = ?TM:query_and_set_aae_throttle(State0),
-             BigWait = ?TM:get_last_throttle(State1),
 
-             meck:expect(?TM, multicall, fun(_,_,_,_,_) -> {[{0,nd}], [nd]} end),
-             State2 = ?TM:query_and_set_aae_throttle(State1),
-             BigWait = ?TM:get_last_throttle(State2),
-
-             meck:expect(?TM, multicall, fun(_,_,_,_,_) -> {[{666,nd}], []} end),
-             State3 = ?TM:query_and_set_aae_throttle(State2),
-             BigWait = ?TM:get_last_throttle(State3),
+             ok = verify_mailbox_is_empty(),
+             put(inner_iters, 1),
 
              BadRPC_result = {badrpc,{'EXIT',{undef,[{riak_kv_entropy_manager,multicall,[x,x,x],[y,y,y]},{rpc,'-handle_call_call/6-fun-0-',5,[stack,trace,here]}]}}},
-             meck:expect(?TM, multicall, fun(_,_,_,_,_) -> { [BadRPC_result], []} end),
-             State4 = ?TM:query_and_set_aae_throttle(State3),
-             BigWait = ?TM:get_last_throttle(State4),
+             Tests1 = [{fun(_,_,_,_,_) -> {[], [nd]} end, BigWait},
+                       {fun(_,_,_,_,_) -> {[{0,nd}], [nd]} end, BigWait},
+                       {fun(_,_,_,_,_) -> {[{666,nd}], []} end, BigWait},
+                       {fun(_,_,_,_,_) -> { [BadRPC_result], []} end, BigWait}],
+             Eval = fun({Fun, ExpectThrottle}, St1) ->
+                            meck:expect(?TM, multicall, Fun),
+                            St3 = lists:foldl(
+                                  fun(_, Stx) ->
+                                          ?TM:query_and_set_aae_throttle(Stx)
+                                  end, St1, lists:seq(1, get(inner_iters))),
+                            {Throttle, St4} = ?TM:get_last_throttle(St3),
+                            ?assertEqual(ExpectThrottle, Throttle),
+                            St4
+                    end,
 
+             State10 = lists:foldl(Eval, State0, Tests1),
+             ok = verify_mailbox_is_empty(),
+
+             %% Put kill switch test in the middle, to try to catch
+             %% problems after the switch is turned off again.
+             Tests2 = [{fun(_,_,_,_,_) -> { [BadRPC_result], []} end, 0}],
              ?TM:set_aae_throttle_kill(true),
-             meck:expect(?TM, multicall, fun(_,_,_,_,_) -> { [BadRPC_result], []} end),
-             State4b = ?TM:query_and_set_aae_throttle(State4),
-             0 = ?TM:get_last_throttle(State4b),
+             State20 = lists:foldl(Eval, State10, Tests2),
+             ok = verify_mailbox_is_empty(),
              ?TM:set_aae_throttle_kill(false),
 
-             meck:expect(?TM, multicall, fun(_,_,_,_,_) -> {[{31,nd}], []} end),
-             State5 = ?TM:query_and_set_aae_throttle(State4b),
-             LittleWait = ?TM:get_last_throttle(State5),
+             Tests3 = [{fun(_,_,_,_,_) -> {[{31,nd}], []} end, LittleWait},
+                       {fun(_,_,_,_,_) -> {[{2,nd}], []} end, 0}],
+             State30 = lists:foldl(Eval, State20, Tests3),
+             ok = verify_mailbox_is_empty(),
 
-             meck:expect(?TM, multicall, fun(_,_,_,_,_) -> {[{2,nd}], []} end),
-             State6 = ?TM:query_and_set_aae_throttle(State5),
-             0 = ?TM:get_last_throttle(State6)
+             put(inner_iters, 10),
+             Tests4 = [{fun(_,_,_,_,_) -> timer:sleep(1000), {[{2,nd}], []} end, 0}],
+             _State40 = lists:foldl(Eval, State30, Tests4),
+             ok = verify_mailbox_is_empty(),
+             ok
          end)
       ]
     }.
+
+verify_mailbox_is_empty() ->
+    receive
+        X ->
+            error({mailbox_not_empty, got, X})
+    after 0 ->
+            ok
+    end.
 
 -endif.

@@ -69,6 +69,7 @@
                 build_tokens   = 0         :: non_neg_integer(),
                 exchange_queue = []        :: [exchange()],
                 exchanges      = []        :: [{index(), reference(), pid()}],
+                vnode_status_pid = undefined :: 'undefined' | pid(),
                 last_throttle  = undefined :: 'undefined' | non_neg_integer()
                }).
 
@@ -299,6 +300,15 @@ handle_info({{hashtree_pid, Index}, Reply}, State) ->
             State2 = add_hashtree_pid(Index, Pid, State),
             {noreply, State2};
         _ ->
+            {noreply, State}
+    end;
+handle_info({'DOWN', _, _, Pid, Status}, #state{vnode_status_pid=Pid}=State) ->
+    case Status of
+        {result, _} = RES ->
+            State2 = query_and_set_aae_throttle3(RES, State#state{vnode_status_pid=undefined}),
+            {noreply, State2};
+        Else ->
+            error_logger:error("query_and_set_aae_throttle error: ~p\n",[Else]),
             {noreply, State}
     end;
 handle_info({'DOWN', Ref, _, Obj, Status}, State) ->
@@ -768,9 +778,20 @@ query_and_set_aae_throttle(#state{last_throttle=LastThrottle} = State) ->
             State#state{last_throttle=0}
     end.
 
-query_and_set_aae_throttle2(#state{last_throttle=LastThrottle} = State) ->
+query_and_set_aae_throttle2(#state{vnode_status_pid = undefined} = State) ->
+    {Pid, _Ref} = spawn_monitor(fun() ->
+        RES = fix_up_rpc_errors(
+                ?MODULE:multicall([node()|nodes()],
+                                  ?MODULE, get_max_local_vnodeq, [], 10*1000)),
+              exit({result, RES})
+         end),
+    State#state{vnode_status_pid = Pid};
+query_and_set_aae_throttle2(State) ->
+    State.
+
+query_and_set_aae_throttle3({result, {MaxNds, BadNds}},
+                            #state{last_throttle=LastThrottle} = State) ->
     Limits = lists:sort(get_aae_throttle_limits()),
-    {MaxNds, BadNds} = fix_up_rpc_errors(?MODULE:multicall([node()|nodes()], ?MODULE, get_max_local_vnodeq, [], 10*1000)),
     %% If a node is really hosed, then this RPC call is going to fail
     %% for that node.  We might also delay the 'tick' processing by
     %% several seconds.  But the tick processing is OK if it's delayed
@@ -824,7 +845,21 @@ fix_up_rpc_errors({ResL, BadL}) ->
 make_state() ->
     #state{}.
 
-get_last_throttle(#state{last_throttle=Last}) ->
-    Last.
+get_last_throttle(State) ->
+    State2 = wait_for_vnode_status(State),
+    {State2#state.last_throttle, State2}.
+
+wait_for_vnode_status(State) ->
+    case get_aae_throttle_kill() of
+        true ->
+            State;
+        false ->
+            receive
+                {'DOWN',_,_,_,_} = Msg ->
+                    element(2, handle_info(Msg, State))
+            after 10*1000 ->
+                    error({?MODULE, wait_for_vnode_status, timeout})
+            end
+    end.
 
 -endif.
