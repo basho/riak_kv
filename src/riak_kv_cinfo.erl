@@ -48,12 +48,13 @@ cluster_info_generator_funs() ->
 aae_throttle(CPid) ->
     {Throttle, ThrottleLimits} = get_aae_throttle(),
     cluster_info:format(CPid, "Current throttle: ~p msec\n", [Throttle]),
-    cluster_info:format(CPid, "Limit AAT throttle parameters: ~p\n",
+    cluster_info:format(CPid, "Limit AAE throttle parameters: ~p\n",
                         [ThrottleLimits]).
 
 get_aae_throttle() ->
-    {riak_kv_entropy_manager:get_aae_throttle(),
-     riak_kv_entropy_manager:get_aae_throttle_limits()}.
+    [{throttle_kill, riak_kv_entropy_manager:get_aae_throttle_kill()},
+     {current_throttle, riak_kv_entropy_manager:get_aae_throttle()},
+     {limits, riak_kv_entropy_manager:get_aae_throttle_limits()}].
 
 status(CPid) -> % CPid is the data collector's pid.
     cluster_info:format(CPid, "~p\n", [riak_kv_status:statistics()]).

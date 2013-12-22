@@ -39,6 +39,8 @@
 -export([all_pairwise_exchanges/2]).
 -export([get_aae_throttle/0,
          set_aae_throttle/1,
+         get_aae_throttle_kill/0,
+         set_aae_throttle_kill/1,
          get_aae_throttle_limits/0,
          set_aae_throttle_limits/1,
          get_max_local_vnodeq/0]).
@@ -75,6 +77,7 @@
 -define(DEFAULT_CONCURRENCY, 2).
 -define(DEFAULT_BUILD_LIMIT, {1, 3600000}). %% Once per hour
 -define(AAE_THROTTLE_ENV_KEY, aae_throttle_sleep_time).
+-define(AAE_THROTTLE_KILL_ENV_KEY, aae_throttle_kill).
 
 %%%===================================================================
 %%% API
@@ -712,6 +715,17 @@ get_aae_throttle() ->
 set_aae_throttle(Milliseconds) when is_integer(Milliseconds), Milliseconds >= 0 ->
     application:set_env(riak_kv, ?AAE_THROTTLE_ENV_KEY, Milliseconds).
 
+get_aae_throttle_kill() ->
+    case app_helper:get_env(riak_kv, ?AAE_THROTTLE_KILL_ENV_KEY, undefined) of
+        true ->
+            true;
+        _ ->
+            false
+    end.
+
+set_aae_throttle_kill(Bool) when Bool == true; Bool == false ->
+    application:set_env(riak_kv, ?AAE_THROTTLE_KILL_ENV_KEY, Bool).
+
 get_max_local_vnodeq() ->
     try
         {element(2,lists:keyfind(riak_kv_vnodeq_max, 1, riak_core_stat:get_stats())), node()}
@@ -745,39 +759,65 @@ set_aae_throttle_limits(Limits) ->
     end.
 
 query_and_set_aae_throttle(#state{last_throttle=LastThrottle} = State) ->
+    case get_aae_throttle_kill() of
+        false ->
+            query_and_set_aae_throttle2(State);
+        true ->
+            perhaps_log_throttle_change(LastThrottle, 0, kill_switch),
+            set_aae_throttle(0),
+            State#state{last_throttle=0}
+    end.
+
+query_and_set_aae_throttle2(#state{last_throttle=LastThrottle} = State) ->
     Limits = lists:sort(get_aae_throttle_limits()),
-    {MaxNds, BadNds} = ?MODULE:multicall([node()|nodes()], ?MODULE, get_max_local_vnodeq, [], 10*1000),
-    %% If a node is really hosed, then this RPC call is going to fail for that node.
-    %% We might also delay the 'tick' processing by several seconds.  But the tick
-    %% processing is OK if it's delayed while we wait for slow nodes here.
+    {MaxNds, BadNds} = fix_up_rpc_errors(?MODULE:multicall([node()|nodes()], ?MODULE, get_max_local_vnodeq, [], 10*1000)),
+    %% If a node is really hosed, then this RPC call is going to fail
+    %% for that node.  We might also delay the 'tick' processing by
+    %% several seconds.  But the tick processing is OK if it's delayed
+    %% while we wait for slow nodes here.
     {WorstVMax, WorstNode} =
         case {BadNds, lists:reverse(lists:sort(MaxNds))} of
             {[], [{VMax, Node}|_]} ->
                 {VMax, Node};
             {BadNodes, _} ->
-                %% If anyone couldn't respond, let's assume the worst.  If that node
-                %% is actually down, then the net_kernel will mark it down for us
-                %% soon, and then we'll calculate a real value after that.
-                %% Note that a tuple as WorstVMax will always be bigger than an integer,
-                %% so we can avoid using false information like WorstVMax=99999999999999
-                %% and also give something meaningful in the user's info msg.
+                %% If anyone couldn't respond, let's assume the worst.
+                %% If that node is actually down, then the net_kernel
+                %% will mark it down for us soon, and then we'll
+                %% calculate a real value after that.  Note that a
+                %% tuple as WorstVMax will always be bigger than an
+                %% integer, so we can avoid using false information
+                %% like WorstVMax=99999999999999 and also give
+                %% something meaningful in the user's info msg.
                 {{unknown_mailbox_sizes, node_list, BadNds}, BadNodes}
         end,
     {Sat, _NonSat} = lists:partition(fun({X, _Limit}) -> X < WorstVMax end, Limits),
     [{_, NewThrottle}|_] = lists:reverse(lists:sort(Sat)),
-    if NewThrottle /= LastThrottle ->
-            _ = lager:info("Changing AAE throttle from ~p -> ~p msec/key, "
-                           "based on maximum vnode mailbox size ~p from ~p",
-                           [LastThrottle, NewThrottle, WorstVMax, WorstNode]),
-            set_aae_throttle(NewThrottle),
-            State#state{last_throttle=NewThrottle};
-       true ->
-            State
-    end.
+    perhaps_log_throttle_change(LastThrottle, NewThrottle,
+                                {WorstVMax, WorstNode}),
+    set_aae_throttle(NewThrottle),
+    State#state{last_throttle=NewThrottle}.
+
+perhaps_log_throttle_change(Last, New, kill_switch) when Last /= New ->
+    _ = lager:info("Changing AAE throttle from ~p -> ~p msec/key, "
+                   "based on kill switch on local node",
+                   [Last, New]);
+perhaps_log_throttle_change(Last, New, {WorstVMax, WorstNode}) when Last /= New ->
+    _ = lager:info("Changing AAE throttle from ~p -> ~p msec/key, "
+                   "based on maximum vnode mailbox size ~p from ~p",
+                   [Last, New, WorstVMax, WorstNode]);
+perhaps_log_throttle_change(_, _, _) ->
+    ok.
 
 %% Wrapper for meck interception for testing.
 multicall(A, B, C, D, E) ->
     rpc:multicall(A, B, C, D, E).
+
+fix_up_rpc_errors({ResL, BadL}) ->
+    lists:foldl(fun({N, _}=R, {Rs, Bs}) when is_integer(N) ->
+                        {[R|Rs], Bs};
+                   (_, {Rs, Bs}) ->
+                        {Rs, [bad_rpc_result|Bs]}
+                end, {[], BadL}, ResL).
 
 -ifdef(TEST).
 
