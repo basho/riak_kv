@@ -811,9 +811,9 @@ re_register_stat_legacy(Arg) ->
 re_register_stat_exometer(Arg) ->
     case (catch do_update_exometer(Arg)) of
         {'EXIT', _} ->
-            Stats = stats_from_update_arg(Arg),
+            Stats = exometer_names_and_types(Arg),
             [exometer:re_register(Name, Type)
-             || {Name, {metric, _, Type, _}} <- Stats];
+             || {Name, Type, _} <- Stats];
         ok ->
             ok
     end.
@@ -839,7 +839,6 @@ stats_from_update_arg({put_fsm_time, _, _, _, _}) ->
     riak_core_stat_q:names_and_types([?APP, node, puts]);
 stats_from_update_arg({read_repairs, _, _}) ->
     riak_core_stat_q:names_and_types([?APP, nodes, gets, read_repairs]);
-%% continue here
 stats_from_update_arg(coord_redirs) ->
     [{{?APP, node, puts, coord_redirs}, {metric,[],counter,undefined}}];
 stats_from_update_arg(mapper_start) ->
@@ -868,6 +867,63 @@ stats_from_update_arg({list_create, _Pid}) ->
 stats_from_update_arg(list_create_error) ->
     [{{?APP, list, fsm, create, error}, {metric, [], spiral, undefined}}];
 stats_from_update_arg(_) ->
+    [].
+
+exometer_names_and_types(Arg) ->
+    case exometer_names(Arg) of
+        [] ->
+            [];
+        Names ->
+            P = riak_core_stat:prefix(),
+            Pats = [{[P|N], [], ['$_']} || N <- Names],
+            exometer:select(Pats)
+    end.
+
+exometer_names({vnode_get, _, _}) ->
+    [[?APP, vnode, gets]];
+exometer_names({vnode_put, _, _}) ->
+    [[?APP, vnode, puts]];
+exometer_names(vnode_index_read) ->
+    [[?APP, vnode, index, reads]];
+exometer_names({vnode_index_write, _, _}) ->
+    [[?APP, vnode, index, writes],
+     [?APP, vnode, index, deletes]];
+exometer_names({vnode_index_delete, _}) ->
+    [[?APP, vnode, index, deletes]];
+exometer_names({get_fsm, _, _, _, _, _, _}) ->
+    [[?APP, node, gets]];
+exometer_names({put_fsm_time, _, _, _, _}) ->
+    [[?APP, node, puts]];
+exometer_names({read_repairs, _, _}) ->
+    [[?APP, nodes, gets, read_repairs]];
+exometer_names(coord_redirs) ->
+    [[?APP, node, puts, coord_redirs]];
+exometer_names(mapper_start) ->
+    [[?APP, mapper_count]];
+exometer_names(mapper_end) ->
+    exometer_names(mapper_start);
+exometer_names(precommit_fail) ->
+    [[?APP, precommit_fail]];
+exometer_names(postcommit_fail) ->
+    [[?APP, postcommit_fail]];
+exometer_names({fsm_spawned, Type}) ->
+    [[?APP, node, Type, fsm, active]];
+exometer_names({fsm_exit, Type}) ->
+    exometer_names({fsm_spawned, Type});
+exometer_names({fsm_error, Type}) ->
+    exometer_names({fsm_spawned, Type}) ++
+        [[?APP, node, Type, fsm, errors]];
+exometer_names({index_create, _Pid}) ->
+    [[?APP, index, fsm, create],
+     [?APP, index, fsm, active]];
+exometer_names(index_create_error) ->
+    [[?APP, index, fsm, create, error]];
+exometer_names({list_create, _Pid}) ->
+    [[?APP, list, fsm, create],
+     [?APP, list, fsm, active]];
+exometer_names(list_create_error) ->
+    [[?APP, list, fsm, create, error]];
+exometer_names(_) ->
     [].
 
 -ifdef(TEST).
