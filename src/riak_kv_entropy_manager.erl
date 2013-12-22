@@ -78,7 +78,7 @@
 -define(DEFAULT_CONCURRENCY, 2).
 -define(DEFAULT_BUILD_LIMIT, {1, 3600000}). %% Once per hour
 -define(AAE_THROTTLE_ENV_KEY, aae_throttle_sleep_time).
--define(AAE_THROTTLE_KILL_ENV_KEY, aae_throttle_kill).
+-define(AAE_THROTTLE_KILL_ENV_KEY, aae_throttle_kill_switch).
 
 %%%===================================================================
 %%% API
@@ -203,8 +203,23 @@ cancel_exchanges() ->
 init([]) ->
     %% Side-effects section
     set_aae_throttle(0),
-    set_aae_throttle_limits(
-      [{-1, 0}, {200, 10}, {500, 50}, {750, 250}, {900, 1000}, {1100, 5000}]),
+    %% riak_kv.app has some sane limits already set, or config via Cuttlefish
+    %% If the value is not sane, the pattern match below will fail.
+    Limits = case app_helper:get_env(riak_kv, aae_throttle_limits, []) of
+                 [] ->
+                     [{-1,0}, {200,10}, {500,50}, {750,250}, {900,1000}, {1100,5000}];
+                 OtherLs ->
+                     OtherLs
+             end,
+    case set_aae_throttle_limits(Limits) of
+        ok ->
+            ok;
+        {error, DiagProps} ->
+            [lager:error("aae_throttle_limits/anti_entropy.throttle.limits "
+                         "list fails this test: ~p\n", [Check]) ||
+                {Check, false} <- DiagProps],
+            error(invalid_aae_throttle_limits)
+    end,
     schedule_tick(),
 
     {_, Opts} = settings(),
@@ -764,8 +779,9 @@ set_aae_throttle_limits(Limits) ->
             lager:info("Setting AAE throttle limits: ~p\n", [Limits]),
             application:set_env(riak_kv, aae_throttle_limits, Limits),
             ok;
-        Else ->
-            {error, Else}
+        {Else1, Else2} ->
+            {error, [{negative_one_length_is_present, Else1},
+                     {all_sleep_times_are_non_negative_integers, Else2}]}
     end.
 
 query_and_set_aae_throttle(#state{last_throttle=LastThrottle} = State) ->
