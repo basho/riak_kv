@@ -731,10 +731,12 @@ maybe_clear(State) ->
     State.
 
 -spec clear_tree(state()) -> state().
-clear_tree(State=#state{index=Index}) ->
+clear_tree(State=#state{index=Index, trees=Trees}) ->
     lager:debug("Clearing tree ~p", [State#state.index]),
     State2 = destroy_trees(State),
-    IndexNs = riak_kv_util:responsible_preflists(Index),
+    IndexNs = riak_kv_util:responsible_preflists(Index) ++
+    %% If initialized with 2i tree, re-create it
+    [?INDEX_2I_N || has_index_tree(Trees)],
     State3 = init_trees(IndexNs, State2#state{trees=orddict:new()}),
     State3#state{built=false}.
 
