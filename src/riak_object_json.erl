@@ -26,6 +26,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 -include("riak_kv_wm_raw.hrl").
+-include("riak_object.hrl").
 
 -export([encode/1,decode/1]).
 
@@ -69,22 +70,25 @@ decode(Obj) ->
     riak_object:set_contents(RObj1, dejsonify_values(Values, [])).
 
 jsonify_metadata(MD) ->
-    MDJS = fun({LastMod, Now={_,_,_}}) ->
-                   %% convert Now to JS-readable time string
-                   {LastMod, list_to_binary(
-                               httpd_util:rfc1123_date(
-                                 calendar:now_to_local_time(Now)))};
-              %% When the user metadata is empty, it should still be a struct
-              ({?MD_USERMETA, []}) ->
-                   {?MD_USERMETA, {struct, []}};
-              ({?MD_LINKS, Links}) ->
-                   {?MD_LINKS, [ [B, K, T] || {{B, K}, T} <- Links ]};
-              ({Name, List=[_|_]}) ->
-                   {Name, jsonify_metadata_list(List)};
-              ({Name, Value}) ->
-                   {Name, Value}
-           end,
-    {struct, lists:map(MDJS, dict:to_list(MD))}.
+    L = [jsonify_pair(Pair) || {Key,_}=Pair <- dict:to_list(MD),
+                               Key /= ?DOT],
+    {struct, L}.
+
+-spec jsonify_pair({term(), term()}) -> {term(), term()}.
+jsonify_pair({LastMod, Now={_,_,_}}) ->
+    %% convert Now to JS-readable time string
+    {LastMod, list_to_binary(
+                httpd_util:rfc1123_date(
+                  calendar:now_to_local_time(Now)))};
+jsonify_pair({?MD_USERMETA, []}) ->
+    %% When the user metadata is empty, it should still be a struct
+    {?MD_USERMETA, {struct, []}};
+jsonify_pair({?MD_LINKS, Links}) ->
+    {?MD_LINKS, [ [B, K, T] || {{B, K}, T} <- Links ]};
+jsonify_pair({Name, List=[_|_]}) ->
+    {Name, jsonify_metadata_list(List)};
+jsonify_pair({Name, Value}) ->
+    {Name, Value}.
 
 %% @doc convert strings to binaries, and proplists to JSON objects
 jsonify_metadata_list([]) -> [];
