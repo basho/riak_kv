@@ -48,7 +48,8 @@ transfers() ->
 vnode_status() ->
     %% Get the kv vnode indexes and the associated pids for the node.
     PrefLists = riak_core_vnode_manager:all_index_pid(riak_kv_vnode),
-    riak_kv_vnode:vnode_status(PrefLists).
+    %% Using the Pids for this request byepasses overload protection
+    riak_kv_vnode:vnode_status([{Idx, node()} || {Idx, _Pid} <- PrefLists]).
 
 %% @doc Get status of 2i reformat. If the backend requires reformatting, a boolean
 %%      value is returned indicating if all partitions on the node have completed
