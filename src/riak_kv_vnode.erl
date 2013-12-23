@@ -1209,6 +1209,7 @@ do_crdt_update(RObj, VId, CRDTOp) ->
     riak_kv_stat:update({vnode_dt_update, get_crdt_mod(CRDTOp), Time}),
     Value.
 
+get_crdt_mod(Int) when is_integer(Int) -> ?COUNTER_TYPE;
 get_crdt_mod(#crdt_op{mod=Mod}) -> Mod;
 get_crdt_mod(Atom) when is_atom(Atom) -> Atom.
 
