@@ -1,5 +1,7 @@
 .PHONY: deps test
 
+has_eqc := $(shell erl -eval 'try eqc:version(), io:format("true") catch _:_ -> io:format(false) end' -noshell -s init stop)
+
 all: deps compile
 
 compile: deps
@@ -15,10 +17,12 @@ clean:
 distclean: clean
 	./rebar delete-deps
 
-# FIXME: This target is necessary so that riak_kv_crdt:eqc_test_ will find
-# the appropriate generators.
 test-compile:
+ifeq (${has_eqc}, true)
 	cd deps/riak_dt; ./rebar -DEQC -DTEST clean compile
+else
+	@echo "EQC not present, skipping recompile of riak_dt"
+endif
 
 test: all test-compile
 	./rebar skip_deps=true eunit
