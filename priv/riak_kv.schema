@@ -279,7 +279,7 @@
 %% the simple size * vnode_count calculation would imply.
 {mapping, "md_cache_size", "riak_kv.vnode_md_cache_size", [
   {datatype, bytesize},
-  {default, "512KB"}
+  {default, "0"} %% disabled by default, to ship with this live, change to 512KB
 ]}.
 
 

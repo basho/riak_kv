@@ -85,7 +85,7 @@
 -export([merge/2, apply_updates/1, syntactic_merge/2]).
 -export([to_json/1, from_json/1]).
 -export([index_data/1, diff_index_data/2]).
--export([index_specs/1, diff_index_specs/2, diff_specs_direct/2]).
+-export([index_specs/1, diff_index_specs/2]).
 -export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 -export([is_robject/1]).
@@ -636,13 +636,6 @@ diff_index_specs(Obj, OldObj) ->
 diff_index_data(OldIndexes, AllIndexes) ->
     OldIndexSet = ordsets:from_list(OldIndexes),
     AllIndexSet = ordsets:from_list(AllIndexes),
-    diff_specs_core(AllIndexSet, OldIndexSet).
-
-diff_specs_direct(AllList, OldList) ->
-    AllIndexes =  [{Index, Value} || {_Op, Index, Value} <- AllList],
-    OldIndexes =  [{Index, Value} || {_Op, Index, Value} <- OldList],
-    AllIndexSet = ordsets:from_list(AllIndexes),
-    OldIndexSet = ordsets:from_list(OldIndexes),    
     diff_specs_core(AllIndexSet, OldIndexSet).
 
 

@@ -401,11 +401,11 @@ init([Index]) ->
         case MDCacheSize of
             N when is_integer(N),
                    N > 0 ->
-                lager:info("Initializing metadata cache with size limit: ~p bytes", 
+                lager:debug("Initializing metadata cache with size limit: ~p bytes", 
                            [MDCacheSize]),
                 new_md_cache(VId);
             _ -> 
-                lager:info("No metadata cache size defined, not starting"),
+                lager:debug("No metadata cache size defined, not starting"),
                 undefined
         end,
     case catch Mod:start(Index, Configuration) of
@@ -1078,9 +1078,6 @@ handle_info({raw_put, Key, Obj}, State) ->
     {_, State2} = actual_put(Key, Obj, Obj, [], false, undefined, State),
     {ok, State2};
 
-handle_info(recreate_md_cache, State=#state{vnodeid=VId}) ->
-    lager:info("md_cache died and was recreated"),
-    {ok, State#state{md_cache=new_md_cache(VId)}};
 handle_info(retry_create_hashtree, State=#state{hashtrees=undefined}) ->
     State2 = maybe_create_hashtrees(State),
     case State2#state.hashtrees of
@@ -1104,6 +1101,7 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
                    {ok, RObj} ->
                        case delete_hash(RObj) of
                            RObjHash ->
+                               maybe_cache_evict(BKey, State),
                                do_backend_delete(BKey, RObj, State);
                          _ ->
                                State
@@ -1243,13 +1241,8 @@ prepare_put(#state{vnodeid=VId,
                              prunetime=PruneTime,
                              crdt_op = CRDTOp},
             IndexBackend) ->
-    {CacheClock, CacheSpecs} = 
-        case MDCache of
-            undefined ->
-                {undefined, undefined};
-            _ ->
-                check_md_cache(MDCache, BKey)
-        end,
+    {CacheClock, CacheData} = maybe_check_md_cache(MDCache, BKey),
+
     RequiresGet = 
         case CacheClock of
             undefined ->
@@ -1301,12 +1294,12 @@ prepare_put(#state{vnodeid=VId,
                     AMObj = enforce_allow_mult(NewObj, BProps),
                     IndexSpecs = case IndexBackend of
                                      true ->
-                                         case CacheSpecs /= undefined andalso
+                                         case CacheData /= undefined andalso
                                              RequiresGet == false of
                                              true ->
-                                                 NewSpecs = riak_object:index_specs(AMObj),
-                                                 riak_object:diff_specs_direct(NewSpecs,
-                                                                               CacheSpecs);
+                                                 NewData = riak_object:index_data(AMObj),
+                                                 riak_object:diff_index_data(NewData,
+                                                                             CacheData);
                                              false ->
                                                  riak_object:diff_index_specs(AMObj,
                                                                               OldObj)
@@ -1397,20 +1390,11 @@ perform_put({true, Obj},
 actual_put(BKey={Bucket, Key}, Obj, MaybeFake, IndexSpecs, RB, ReqID,
            State=#state{idx=Idx,
                         mod=Mod,
-                        modstate=ModState,
-                        md_cache=MDCache,
-                        md_cache_size=MDCacheSize}) ->
-    case MDCache of 
-        undefined ->
-            ok;
-        _ ->
-            VClock = riak_object:vclock(Obj),
-            Specs = riak_object:index_specs(Obj),
-            insert_md_cache(MDCache, MDCacheSize, BKey, {VClock, Specs})
-    end,
+                        modstate=ModState}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) of
         {{ok, UpdModState}, _EncodedVal} ->
             update_hashtree(Bucket, Key, Obj, State),
+            maybe_cache_object(BKey, MaybeFake, State),
             ?INDEX(Obj, put, Idx),
             case RB of
                 true ->
@@ -1513,17 +1497,12 @@ put_merge(true, false, LocalObj, PutObj, VId, StartTime) -> %% Coordinating=true
 
 %% @private
 do_get(_Sender, BKey, ReqID,
-       State=#state{idx=Idx,mod=Mod,modstate=ModState,
-                    md_cache=MDCache, md_cache_size=MDCacheSize}) ->
+       State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
     StartTS = os:timestamp(),
     Retval = do_get_term(BKey, Mod, ModState),                
-    case {MDCache, Retval} of
-        {undefined, _} ->
-            ok;
-        {_, {ok, Obj}} ->
-            VClock = riak_object:vclock(Obj),
-            Specs = riak_object:index_specs(Obj),
-            insert_md_cache(MDCache, MDCacheSize, BKey, {VClock, Specs});
+    case Retval of
+        {ok, Obj} ->
+            maybe_cache_object(BKey, Obj, State);
         _ ->
             ok
     end,
@@ -1801,13 +1780,14 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
 
 %% @private
 %% upon receipt of a handoff datum, there is no client FSM
-do_diffobj_put({Bucket, Key}, DiffObj,
+do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                StateData=#state{mod=Mod,
                                 modstate=ModState,
                                 idx=Idx}) ->
     StartTS = os:timestamp(),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
+    maybe_cache_evict(BKey, StateData),
     case do_get_object(Bucket, Key, Mod, ModState) of
         {error, not_found, _UpdModState} ->
             case IndexBackend of
@@ -2209,22 +2189,41 @@ try_set_concurrency_limit(Lock, Limit, true) ->
             ok
     end.
 
-check_md_cache(Table, BKey) ->
-    case catch ets:lookup(Table, BKey) of
-        [{_TS, BKey, MD}] -> 
-            MD;
-        [] -> 
+maybe_check_md_cache(Table, BKey) ->
+    case Table of
+        undefined ->
             {undefined, undefined};
-        {'EXIT', _} ->
-            %% cache table is gone for some reason
-            %% return undefined, async recreate
-            self() ! recreate_md_cache,
-            {undefined, undefined}
+        _ ->
+            case ets:lookup(Table, BKey) of
+                [{_TS, BKey, MD}] -> 
+                    MD;
+                [] -> 
+                    {undefined, undefined}
+            end
+    end.
+
+maybe_cache_object(BKey, Obj, #state{md_cache = MDCache,
+                                     md_cache_size = MDCacheSize}) ->
+    case MDCache of
+        undefined ->
+            ok;
+        _ ->
+            VClock = riak_object:vclock(Obj),
+            IndexData = riak_object:index_data(Obj),
+            insert_md_cache(MDCache, MDCacheSize, BKey, {VClock, IndexData})
+    end.
+
+maybe_cache_evict(BKey, #state{md_cache = MDCache}) ->
+    case MDCache of
+        undefined ->
+            ok;
+        _ ->
+            ets:delete(MDCache, BKey)
     end.
 
 insert_md_cache(Table, MaxSize, BKey, MD) ->
     TS = os:timestamp(),
-    case catch ets:insert(Table, {TS, BKey, MD}) of
+    case ets:insert(Table, {TS, BKey, MD}) of
         true ->
             Size = ets:info(Table, memory),
             case Size > MaxSize of
@@ -2232,12 +2231,7 @@ insert_md_cache(Table, MaxSize, BKey, MD) ->
                     trim_md_cache(Table, MaxSize);
                 false ->
                     ok
-            end;
-        {'EXIT', _} ->
-            %% cache table is gone for some reason
-            %% return ok, async recreate
-            self() ! recreate_md_cache,
-            ok
+            end
     end.
 
 trim_md_cache(Table, MaxSize) ->
