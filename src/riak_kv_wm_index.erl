@@ -44,6 +44,9 @@
 %%   * return_terms=true
 %%         when querying with a range, returns the value of the index
 %%         along with the key.
+%%   * pagination_sort=true|false
+%%         whether the results will be sorted. Ignored when max_results
+%%         is set, as pagination requires sorted results.
 
 -module(riak_kv_wm_index).
 
@@ -70,6 +73,7 @@
           max_results :: all | pos_integer(), %% maximum number of 2i results to return, the page size.
           return_terms = false :: boolean(), %% should the index values be returned
           timeout :: non_neg_integer() | undefined | infinity,
+          pagination_sort :: boolean() | undefined,
           security        %% security context
          }).
 
@@ -77,6 +81,7 @@
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
+-include("riak_kv_index.hrl").
 
 %% @spec init(proplist()) -> {ok, context()}
 %% @doc Initialize this resource.
@@ -152,42 +157,104 @@ malformed_request(RD, Ctx) ->
     Args1 = wrq:path_tokens(RD),
     Args2 = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
     ReturnTerms0 = wrq:get_qs_value(?Q_2I_RETURNTERMS, "false", RD),
-    ReturnTerms = normalize_boolean(string:to_lower(ReturnTerms0)),
-    MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, ?ALL_2I_RESULTS, RD),
+    ReturnTerms1 = normalize_boolean(string:to_lower(ReturnTerms0)),
     Continuation = wrq:get_qs_value(?Q_2I_CONTINUATION, undefined, RD),
+    PgSort0 = wrq:get_qs_value(?Q_2I_PAGINATION_SORT, RD),
+    PgSort = case PgSort0 of
+        undefined -> undefined;
+        _ -> normalize_boolean(string:to_lower(PgSort0))
+    end,
+    MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, ?ALL_2I_RESULTS, RD),
+    TermRegex = wrq:get_qs_value(?Q_2I_TERM_REGEX, undefined, RD),
     Timeout0 =  wrq:get_qs_value("timeout", undefined, RD),
+    {Start, End} = case {IndexField, Args2} of
+                       {<<"$bucket">>, _} -> {undefined, undefined};
+                       {_, []} -> {undefined, undefined};
+                       {_, [S]} -> {S, S};
+                       {_, [S, E]} -> {S, E}
+                   end,
+    IsEqualOp = length(Args1) == 1,
+    InternalReturnTerms = not( IsEqualOp orelse IndexField == <<"$field">> ),
+    MaxVal = validate_max(MaxResults0),
+    QRes = riak_index:to_index_query(
+             [
+                {field, IndexField}, {start_term, Start}, {end_term, End},
+                {return_terms, InternalReturnTerms},
+                {continuation, Continuation},
+                {term_regex, TermRegex}
+             ]
+             ++ [{max_results, MaxResults} || {true, MaxResults} <- [MaxVal]]
+            ),
+    ValRe = case TermRegex of
+        undefined ->
+            ok;
+        _ ->
+            re:compile(TermRegex)
+    end,
 
-    case {ReturnTerms, validate_timeout(Timeout0), validate_max(MaxResults0), riak_index:to_index_query(IndexField, Args2, Continuation)} of
-        {malformed, _, _, _} ->
+    case {PgSort,
+          ReturnTerms1,
+          validate_timeout(Timeout0),
+          MaxVal,
+          QRes,
+          ValRe} of
+        {malformed, _, _, _, _, _} ->
+             {true,
+             wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
+                                             [?Q_2I_PAGINATION_SORT, PgSort0]),
+                               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, malformed, _, _, _, _} ->
              {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
                                              [?Q_2I_RETURNTERMS, ReturnTerms0]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, {true, Timeout}, {true, MaxResults}, {ok, Query}} ->
+        {_, _, _, _, {ok, ?KV_INDEX_Q{start_term=NormStart}}, {ok, _CompiledRe}}
+         when is_integer(NormStart) ->
+            {true,
+             wrq:set_resp_body("Can not use term regular expressions"
+                               " on integer queries",
+                               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, _, _, _, _, {error, ReError}} ->
+            {true,
+             wrq:set_resp_body(
+                    io_lib:format("Invalid term regular expression ~p : ~p",
+                                  [TermRegex, ReError]),
+                    wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, _, {true, Timeout}, {true, MaxResults}, {ok, Query}, _} ->
             %% Request is valid.
-            ReturnTerms1 = riak_index:return_terms(ReturnTerms, Query),
+            ReturnTerms2 = riak_index:return_terms(ReturnTerms1, Query),
+            %% Special case: a continuation implies pagination sort
+            %% even if no max_results was given.
+            PgSortFinal = case Continuation of
+                              undefined -> PgSort;
+                              _ -> true
+                          end,
             NewCtx = Ctx#ctx{
                        bucket = Bucket,
                        index_query = Query,
                        max_results = MaxResults,
-                       return_terms = ReturnTerms1,
-                       timeout=Timeout
+                       return_terms = ReturnTerms2,
+                       timeout=Timeout,
+                       pagination_sort = PgSortFinal
                       },
             {false, RD, NewCtx};
-        {_, _, _, {error, Reason}} ->
+        {_, _, _, _, {error, Reason}, _} ->
             {true,
              wrq:set_resp_body(
                io_lib:format("Invalid query: ~p~n", [Reason]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, {false, BadVal}, _} ->
+        {_, _, _, {false, BadVal}, _, _} ->
             {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a positive integer",
                                              [?Q_2I_MAX_RESULTS, BadVal]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, {error, Input}, _, _} ->
+        {_, _, {error, Input}, _, _, _} ->
             {true, wrq:append_to_resp_body(io_lib:format("Bad timeout "
                                                            "value ~p. Must be a non-negative integer~n",
                                                            [Input]),
@@ -265,6 +332,7 @@ handle_streaming_index_query(RD, Ctx) ->
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,
     Timeout = Ctx#ctx.timeout,
+    PgSort = Ctx#ctx.pagination_sort,
 
     %% Create a new multipart/mixed boundary
     Boundary = riak_core_util:unique_id_62(),
@@ -273,7 +341,8 @@ handle_streaming_index_query(RD, Ctx) ->
                 "multipart/mixed;boundary="++Boundary,
                 RD),
 
-    Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults}]),
+    Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
+    Opts = riak_index:add_timeout_opt(Timeout, Opts0), 
 
     {ok, ReqID, FSMPid} =  Client:stream_get_index(Bucket, Query, Opts),
     StreamFun = index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, proplists:get_value(timeout, Opts), undefined, 0),
@@ -357,9 +426,11 @@ handle_all_in_memory_index_query(RD, Ctx) ->
     Query = Ctx#ctx.index_query,
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,
+    PgSort = Ctx#ctx.pagination_sort,
     Timeout = Ctx#ctx.timeout,
 
-    Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults}]),
+    Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
+    Opts = riak_index:add_timeout_opt(Timeout, Opts0), 
 
     %% Do the index lookup...
     case Client:get_index(Bucket, Query, Opts) of
