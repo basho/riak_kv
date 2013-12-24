@@ -157,7 +157,11 @@ maybe_create_hashtrees(true, State=#state{idx=Index,
             RP = riak_kv_util:responsible_preflists(Index),
             {ok, ModCaps} = Mod:capabilities(ModState),
             RP2 = add_2i_index_rp(RP, ModCaps),
-            case riak_kv_index_hashtree:start(Index, RP2, self()) of
+            Empty = case is_empty(State) of
+                        {true, _}     -> true;
+                        {false, _, _} -> false
+                    end,
+            case riak_kv_index_hashtree:start(Index, RP2, self(), Empty) of
                 {ok, Trees} ->
                     monitor(process, Trees),
                     State#state{hashtrees=Trees};
