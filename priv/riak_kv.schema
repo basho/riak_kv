@@ -122,6 +122,48 @@
   {datatype, integer}
 ]}.
 
+%% @doc If on, this item will disable the AAE distributed throttle mechanism
+%% used by riak_kv_exchange_fsm.erl.
+{mapping, "anti_entropy.throttle.kill_switch", "riak_kv.aae_throttle_kill_switch", [
+  {default, off},
+  {datatype, {enum, [on, off]}},
+  {level, advanced}
+]}.
+
+{ translation,
+  "riak_kv.aae_throttle_kill_switch",
+  fun(Conf) ->
+    Setting = cuttlefish:conf_get("anti_entropy.throttle.kill_switch", Conf),
+    case Setting of
+      on -> true;
+      off -> false;
+      _Default -> true
+    end
+  end}.
+
+%% @doc Override the default AAE distributed throttle mechanism defaults
+%% from riak_kv.app.  For example, if a sleep time of 5 milliseconds is
+%% desired when the largest vnode mailbox length is 40, include the setting
+%% of 'anti_entropy.throttle.limits.40 = 5'.
+%%
+%% Note that you must include a setting for
+%% 'anti_entropy.throttle.limits.-1 = N", where N is usually 0.
+{mapping, "anti_entropy.throttle.limits.$length", "riak_kv.aae_throttle_limits", [
+  {datatype, {duration, ms}},
+  %% We need the empty list as a signal to use a more complex default list
+  %% than Cuttlefish's default allows ... so no default or include_default
+  %% here.
+  {level, basic}
+]}.
+
+{translation,
+ "riak_kv.aae_throttle_limits",
+ fun(Conf) ->
+   Values = cuttlefish_variable:filter_by_prefix("anti_entropy.throttle.limits", Conf),
+   [ {list_to_integer(QLen), SleepMillis} || {["anti_entropy", "throttle", "limits", QLen], SleepMillis} <- Values]
+ end
+}.
+
 %% @doc mapred_name is URL used to submit map/reduce requests to Riak.
 {mapping, "mapred_name", "riak_kv.mapred_name",  [
   {default, "mapred"}
@@ -373,7 +415,7 @@
 { translation,
   "riak_kv.dvv_enabled",
   fun(Conf) ->
-    Setting = cuttlefish_util:conf_get_value("dvv", Conf),
+    Setting = cuttlefish:conf_get("dvv", Conf),
     case Setting of
       on -> true;
       off -> false;
