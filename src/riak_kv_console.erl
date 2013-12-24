@@ -35,6 +35,7 @@
          cluster_info/1,
          down/1,
          aae_status/1,
+         repair_2i/1,
          reformat_indexes/1,
          reformat_objects/1,
          reload_code/1,
@@ -547,9 +548,154 @@ bucket_type_print_list(It) ->
             bucket_type_print_list(riak_core_bucket_type:itr_next(It))
     end.
 
+repair_2i(["status"]) ->
+    try
+        Status = riak_kv_2i_aae:get_status(),
+        Report = riak_kv_2i_aae:to_report(Status),
+        io:format("2i repair status is running:\n~s", [Report]),
+        ok
+    catch
+        exit:{noproc, _NoProcErr} ->
+            io:format("2i repair is not running\n", []),
+            ok
+    end;
+repair_2i(["kill"]) ->
+    case whereis(riak_kv_2i_aae) of
+        Pid when is_pid(Pid) ->
+            try
+                riak_kv_2i_aae:stop(60000)
+            catch
+                _:_->
+                    lager:warning("Asking nicely did not work."
+                                  " Will try a hammer"),
+                    ok
+            end,
+            Mon = monitor(process, riak_kv_2i_aae),
+            exit(Pid, kill),
+            receive
+                {'DOWN', Mon, _, _, _} ->
+                    lager:info("2i repair process has been killed by user"
+                               " request"),
+                    io:format("The 2i repair process has ceased to be.\n"
+                              "Since it was killed forcibly, you may have to "
+                              "wait some time\n"
+                              "for all internal locks to be released before "
+                              "trying again\n", []),
+                    ok
+            end;
+        undefined ->
+            io:format("2i repair is not running\n"),
+            ok
+    end;
+repair_2i(Args) ->
+    case validate_repair_2i_args(Args) of
+        {ok, IdxList, DutyCycle} ->
+            case length(IdxList) < 5 of
+                true ->
+                    io:format("Will repair 2i on these partitions:\n", []),
+                    [io:format("\t~p\n", [Idx]) || Idx <- IdxList];
+                false ->
+                    io:format("Will repair 2i data on ~p partitions\n", [length(IdxList)])
+            end,
+            Ret = riak_kv_2i_aae:start(IdxList, DutyCycle),
+            case Ret of
+                {ok, _Pid} ->
+                    io:format("Watch the logs for 2i repair progress reports\n", []),
+                    ok;
+                {error, {lock_failed, not_built}} ->
+                    io:format("Error: The AAE tree for that partition has not been built yet\n", []),
+                    error;
+                {error, {lock_failed, LockErr}} ->
+                    io:format("Error: Could not get a lock on AAE tree for"
+                              " partition ~p : ~p\n", [hd(IdxList), LockErr]),
+                    error;
+                {error, already_running} ->
+                    io:format("Error: 2i repair is already running. Check the logs for progress\n", []),
+                    error;
+                {error, early_exit} ->
+                    io:format("Error: 2i repair finished immediately. Check the logs for details\n", []),
+                    error;
+                {error, Reason} ->
+                    io:format("Error running 2i repair : ~p\n", [Reason]),
+                    error
+            end;
+        {error, aae_disabled} ->
+            io:format("Error: AAE is currently not enabled\n", []),
+            error;
+        {error, Reason} ->
+            io:format("Error: ~p\n", [Reason]),
+            io:format("Usage: riak-admin repair-2i [--speed [1-100]] <Idx> ...\n", []),
+            io:format("Speed defaults to 100 (full speed)\n", []),
+            io:format("If no partitions are given, all partitions in the\n"
+                      "node are repaired\n", []),
+            error
+    end.
+
 %%%===================================================================
 %%% Private
 %%%===================================================================
+
+validate_repair_2i_args(Args) ->
+    case riak_kv_entropy_manager:enabled() of
+        true ->
+            parse_repair_2i_args(Args);
+        false ->
+            {error, aae_disabled}
+    end.
+
+parse_repair_2i_args(["--speed", DutyCycleStr | Partitions]) ->
+    DutyCycle = parse_int(DutyCycleStr),
+    case DutyCycle of
+        undefined ->
+            {error, io_lib:format("Invalid speed value (~s). It should be a " ++
+                                  "number between 1 and 100",
+                                  [DutyCycleStr])};
+        _ ->
+            parse_repair_2i_args(DutyCycle, Partitions)
+    end;
+parse_repair_2i_args(Partitions) ->
+    parse_repair_2i_args(100, Partitions).
+
+parse_repair_2i_args(DutyCycle, Partitions) ->
+    case get_2i_repair_indexes(Partitions) of
+        {ok, IdxList} ->
+            {ok, IdxList, DutyCycle};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+get_2i_repair_indexes([]) ->
+    AllVNodes = riak_core_vnode_manager:all_vnodes(riak_kv_vnode),
+    {ok, [Idx || {riak_kv_vnode, Idx, _} <- AllVNodes]};
+get_2i_repair_indexes(IntStrs) ->
+    {ok, NodeIdxList} = get_2i_repair_indexes([]),
+    F =
+    fun(_, {error, Reason}) ->
+            {error, Reason};
+       (IntStr, Acc) ->
+            case parse_int(IntStr) of
+                undefined ->
+                    {error, io_lib:format("~s is not an integer\n", [IntStr])};
+                Int ->
+                    case lists:member(Int, NodeIdxList) of
+                        true ->
+                            Acc ++ [Int];
+                        false ->
+                            {error,
+                             io_lib:format("Partition ~p does not belong"
+                                           ++ " to this node\n",
+                                           [Int])}
+                    end
+            end
+    end,
+    IdxList = lists:foldl(F, [], IntStrs),
+    case IdxList of
+        {error, Reason} ->
+            {error, Reason};
+        _ ->
+            {ok, IdxList}
+    end.
+
 format_stats([], Acc) ->
     lists:reverse(Acc);
 format_stats([{Stat, V}|T], Acc) ->

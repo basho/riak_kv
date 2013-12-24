@@ -64,11 +64,19 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 process(Req=#rpbcsbucketreq{}, State) ->
-    #rpbcsbucketreq{type=T, bucket=B, start_key=StartKey,
+    #rpbcsbucketreq{start_key=StartKey,
                     start_incl=StartIncl, continuation=Continuation,
                     end_key=EndKey, end_incl=EndIncl} = Req,
-    Bucket = maybe_bucket_type(T, B),
-    Query = riak_index:to_index_query(<<"$bucket">>, [Bucket], Continuation, true, {StartKey, StartIncl}, {EndKey, EndIncl}),
+    Query = riak_index:to_index_query([
+                {field,<<"$bucket">>},
+                {start_term, StartKey},
+                {start_inclusive, StartIncl},
+                {end_term, EndKey},
+                {end_inclusive, EndIncl},
+                {start_key, StartKey},
+                {return_body, true},
+                {continuation, Continuation}
+                ]),
     maybe_perform_query(Query, Req, State).
 
 maybe_perform_query({error, Reason}, _Req, State) ->
@@ -77,7 +85,8 @@ maybe_perform_query({ok, Query}, Req, State) ->
     #rpbcsbucketreq{type=T, bucket=B, max_results=MaxResults, timeout=Timeout} = Req,
     #state{client=Client} = State,
     Bucket = maybe_bucket_type(T, B),
-    Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults}]),
+    Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults},
+                                                {pagination_sort, true}]),
     {ok, ReqId, _FSMPid} = Client:stream_get_index(Bucket, Query, Opts),
     {reply, {stream, ReqId}, State#state{req_id=ReqId, req=Req}}.
 

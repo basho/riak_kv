@@ -175,6 +175,8 @@ do_update({vnode_put, Idx, USecs}) ->
     folsom_metrics:notify_existing_metric({?APP, vnode, puts}, 1, spiral),
     create_or_update({?APP, vnode, puts, time}, USecs, histogram),
     do_per_index(puts, Idx, USecs);
+do_update(vnode_index_refresh) ->
+    folsom_metrics:notify_existing_metric({?APP, vnode, index, refreshes}, 1, spiral);
 do_update(vnode_index_read) ->
     folsom_metrics:notify_existing_metric({?APP, vnode, index, reads}, 1, spiral);
 do_update({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
@@ -403,6 +405,7 @@ stats() ->
      {[vnode, gets, time], histogram},
      {[vnode, puts], spiral},
      {[vnode, puts, time], histogram},
+     {[vnode, index, refreshes], spiral},
      {[vnode, index, reads], spiral},
      {[vnode, index ,writes], spiral},
      {[vnode, index, writes, postings], spiral},
@@ -602,6 +605,8 @@ stats_from_update_arg({vnode_get, _, _}) ->
     riak_core_stat_q:names_and_types([?APP, vnode, gets]);
 stats_from_update_arg({vnode_put, _, _}) ->
     riak_core_stat_q:names_and_types([?APP, vnode, puts]);
+stats_from_update_arg(vnode_index_refresh) ->
+    riak_core_stat_q:names_and_types([?APP, vnode, index, refreshes]);
 stats_from_update_arg(vnode_index_read) ->
     riak_core_stat_q:names_and_types([?APP, vnode, index, reads]);
 stats_from_update_arg({vnode_index_write, _, _}) ->
