@@ -334,8 +334,8 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                 {_, true} ->
                     %% This node is not in the preference list
                     %% forward on to a random node
-                    ListPos = random:uniform_s(length(Preflist2)+1, os:timestamp()),
-                    {{_Idx, CoordNode},_Type} = lists:nth(ListPos, Preflist2), 
+                    {ListPos, _} = random:uniform_s(length(Preflist2), os:timestamp()),
+                    {{_Idx, CoordNode},_Type} = lists:nth(ListPos, Preflist2),
                     ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [1],
                             ["prepare", atom2list(CoordNode)]),
                     try
