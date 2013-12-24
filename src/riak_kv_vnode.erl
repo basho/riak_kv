@@ -118,13 +118,16 @@
                 in_handoff = false :: boolean(),
                 handoff_target :: node(),
                 forward :: node() | [{integer(), node()}],
-                hashtrees :: pid() }).
+                hashtrees :: pid(),
+                md_cache :: ets:tab(), 
+                md_cache_size :: pos_integer() }).
 
 -type index_op() :: add | remove.
 -type index_value() :: integer() | binary().
 -type index() :: non_neg_integer().
 -type state() :: #state{}.
 
+-define(MD_CACHE_BASE, "riak_kv_vnode_md_cache").
 -define(DEFAULT_HASHTREE_TOKENS, 90).
 
 -record(putargs, {returnbody :: boolean(),
@@ -397,6 +400,18 @@ init([Index]) ->
     {ok, VId} = get_vnodeid(Index),
     DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
     AsyncFolding = app_helper:get_env(riak_kv, async_folds, true) == true,
+    MDCacheSize = app_helper:get_env(riak_kv, vnode_md_cache_size), 
+    MDCache = 
+        case MDCacheSize of
+            N when is_integer(N),
+                   N > 0 ->
+                lager:debug("Initializing metadata cache with size limit: ~p bytes", 
+                           [MDCacheSize]),
+                new_md_cache(VId);
+            _ -> 
+                lager:debug("No metadata cache size defined, not starting"),
+                undefined
+        end,
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
@@ -409,7 +424,9 @@ init([Index]) ->
                            bucket_buf_size=BucketBufSize,
                            index_buf_size=IndexBufSize,
                            key_buf_size=KeyBufSize,
-                           mrjobs=dict:new()},
+                           mrjobs=dict:new(),
+                           md_cache=MDCache,
+                           md_cache_size=MDCacheSize},
             try_set_vnode_lock_limit(Index),
             case AsyncFolding of
                 true ->
@@ -1088,6 +1105,7 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
                    {ok, RObj} ->
                        case delete_hash(RObj) of
                            RObjHash ->
+                               maybe_cache_evict(BKey, State),
                                do_backend_delete(BKey, RObj, State);
                          _ ->
                                State
@@ -1216,8 +1234,9 @@ prepare_put(State=#state{vnodeid=VId,
 prepare_put(#state{vnodeid=VId,
                    mod=Mod,
                    modstate=ModState,
-                   idx=Idx},
-            PutArgs=#putargs{bkey={Bucket, Key},
+                   idx=Idx,
+                   md_cache=MDCache},
+            PutArgs=#putargs{bkey={Bucket, Key}=BKey,
                              robj=RObj,
                              bprops=BProps,
                              coord=Coord,
@@ -1226,12 +1245,33 @@ prepare_put(#state{vnodeid=VId,
                              prunetime=PruneTime,
                              crdt_op = CRDTOp},
             IndexBackend) ->
+    {CacheClock, CacheData} = maybe_check_md_cache(MDCache, BKey),
+
+    RequiresGet = 
+        case CacheClock of
+            undefined ->
+                true;
+            Clock ->
+                case vclock:descends(riak_object:vclock(RObj), Clock) of
+                    true ->
+                        false;
+                    _ ->
+                        true
+                end
+        end,
     GetReply =
-        case do_get_object(Bucket, Key, Mod, ModState) of
-            {error, not_found, _UpdModState} ->
-                ok;
-            {ok, TheOldObj, _UpdModState} ->
-                {ok, TheOldObj}
+        case RequiresGet of 
+            true ->
+                case do_get_object(Bucket, Key, Mod, ModState) of
+                    {error, not_found, _UpdModState} ->
+                        ok;
+                    {ok, TheOldObj, _UpdModState} ->
+                        {ok, TheOldObj}
+                end;
+            false ->
+                FakeObj0 = riak_object:new(Bucket, Key, <<>>),
+                FakeObj = riak_object:set_vclock(FakeObj0, CacheClock),
+                {ok, FakeObj}
         end,
     case GetReply of
         ok ->
@@ -1258,9 +1298,17 @@ prepare_put(#state{vnodeid=VId,
                     AMObj = enforce_allow_mult(NewObj, BProps),
                     IndexSpecs = case IndexBackend of
                                      true ->
-                                         riak_object:diff_index_specs(AMObj,
-                                                             OldObj);
-                                     false ->
+                                         case CacheData /= undefined andalso
+                                             RequiresGet == false of
+                                             true ->
+                                                 NewData = riak_object:index_data(AMObj),
+                                                 riak_object:diff_index_data(NewData,
+                                                                             CacheData);
+                                             false ->
+                                                 riak_object:diff_index_specs(AMObj,
+                                                                              OldObj)
+                                         end;
+                                    false ->
                                          []
                     end,
                     ObjToStore = case PruneTime of
@@ -1331,7 +1379,7 @@ perform_put({true, Obj},
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
 
-    %% Avoid the riak_kv_mutator code path is no mutators are
+    %% Avoid the riak_kv_mutator code path if no mutators are
     %% registered.
     {Obj2, Fake} = case riak_kv_mutator:get() of
         {ok, []} ->
@@ -1343,12 +1391,14 @@ perform_put({true, Obj},
     {Reply, State2} = actual_put(BKey, Obj2, Fake, IndexSpecs, RB, ReqID, State),
     {Reply, State2}.
 
-actual_put({Bucket, Key}, Obj, MaybeFake, IndexSpecs, RB, ReqID, State=#state{idx=Idx,
-                                                                              mod=Mod,
-                                                                              modstate=ModState}) ->
+actual_put(BKey={Bucket, Key}, Obj, MaybeFake, IndexSpecs, RB, ReqID,
+           State=#state{idx=Idx,
+                        mod=Mod,
+                        modstate=ModState}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) of
         {{ok, UpdModState}, _EncodedVal} ->
             update_hashtree(Bucket, Key, Obj, State),
+            maybe_cache_object(BKey, MaybeFake, State),
             ?INDEX(Obj, put, Idx),
             case RB of
                 true ->
@@ -1451,9 +1501,15 @@ put_merge(true, false, LocalObj, PutObj, VId, StartTime) -> %% Coordinating=true
 
 %% @private
 do_get(_Sender, BKey, ReqID,
-       State=#state{idx=Idx,mod=Mod,modstate=ModState}) ->
+       State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
     StartTS = os:timestamp(),
-    Retval = do_get_term(BKey, Mod, ModState),
+    Retval = do_get_term(BKey, Mod, ModState),                
+    case Retval of
+        {ok, Obj} ->
+            maybe_cache_object(BKey, Obj, State);
+        _ ->
+            ok
+    end,
     update_vnode_stats(vnode_get, Idx, StartTS),
     {reply, {r, Retval, Idx, ReqID}, State}.
 
@@ -1728,13 +1784,14 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
 
 %% @private
 %% upon receipt of a handoff datum, there is no client FSM
-do_diffobj_put({Bucket, Key}, DiffObj,
+do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                StateData=#state{mod=Mod,
                                 modstate=ModState,
                                 idx=Idx}) ->
     StartTS = os:timestamp(),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
+    maybe_cache_evict(BKey, StateData),
     case do_get_object(Bucket, Key, Mod, ModState) of
         {error, not_found, _UpdModState} ->
             case IndexBackend of
@@ -2135,6 +2192,73 @@ try_set_concurrency_limit(Lock, Limit, true) ->
             lager:debug("Registered lock: ~p", [Lock]),
             ok
     end.
+
+maybe_check_md_cache(Table, BKey) ->
+    case Table of
+        undefined ->
+            {undefined, undefined};
+        _ ->
+            case ets:lookup(Table, BKey) of
+                [{_TS, BKey, MD}] -> 
+                    MD;
+                [] -> 
+                    {undefined, undefined}
+            end
+    end.
+
+maybe_cache_object(BKey, Obj, #state{md_cache = MDCache,
+                                     md_cache_size = MDCacheSize}) ->
+    case MDCache of
+        undefined ->
+            ok;
+        _ ->
+            VClock = riak_object:vclock(Obj),
+            IndexData = riak_object:index_data(Obj),
+            insert_md_cache(MDCache, MDCacheSize, BKey, {VClock, IndexData})
+    end.
+
+maybe_cache_evict(BKey, #state{md_cache = MDCache}) ->
+    case MDCache of
+        undefined ->
+            ok;
+        _ ->
+            ets:delete(MDCache, BKey)
+    end.
+
+insert_md_cache(Table, MaxSize, BKey, MD) ->
+    TS = os:timestamp(),
+    case ets:insert(Table, {TS, BKey, MD}) of
+        true ->
+            Size = ets:info(Table, memory),
+            case Size > MaxSize of
+                true ->
+                    trim_md_cache(Table, MaxSize);
+                false ->
+                    ok
+            end
+    end.
+
+trim_md_cache(Table, MaxSize) ->
+    Oldest = ets:first(Table),
+    case Oldest of 
+        '$end_of_table' ->
+            ok;
+        BKey ->
+            ets:delete(Table, BKey),
+            Size = ets:info(Table, memory),
+            case Size > MaxSize of
+                true ->
+                    trim_md_cache(Table, MaxSize);
+                false ->
+                    ok
+            end
+    end.
+        
+new_md_cache(VId) ->                
+    MDCacheName = list_to_atom(?MD_CACHE_BASE ++ integer_to_list(binary:decode_unsigned(VId))),
+    %% ordered set to make sure that the first key is the oldest
+    %% term format is {TimeStamp, Key, ValueTuple}
+    ets:new(MDCacheName, [ordered_set, {keypos,2}]).
 
 -ifdef(TEST).
 
