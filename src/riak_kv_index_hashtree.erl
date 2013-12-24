@@ -78,6 +78,11 @@
 %% Time from build to expiration of tree, in millseconds
 -define(DEFAULT_EXPIRE, 604800000). %% 1 week
 
+%% Throttle used when folding over K/V data to build AAE trees: {Limit, Wait}.
+%% After traversing Limit bytes, the fold will sleep for Wait milliseconds.
+%% Default: 1 MB limit / 100 ms wait
+-define(DEFAULT_BUILD_THROTTLE, {1000000, 100}).
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -246,10 +251,13 @@ init([Index, IndexNs, VNPid, VNEmpty]) ->
                            path=Path},
             State2 = init_trees(IndexNs, State),
             %% If vnode is empty, mark tree as built without performing fold
-            [begin
-                 lager:debug("Built empty AAE tree for ~p", [Index]),
-                 gen_server:cast(self(), build_finished)
-             end || VNEmpty =:= true],
+            case VNEmpty of
+                true ->
+                    lager:debug("Built empty AAE tree for ~p", [Index]),
+                    gen_server:cast(self(), build_finished);
+                _ ->
+                    ok
+            end,
             {ok, State2}
     end.
 
@@ -316,6 +324,7 @@ handle_call(clear, _From, State) ->
 
 handle_call(expire, _From, State) ->
     State2 = State#state{expired=true},
+    lager:info("Manually expired tree: ~p", [State#state.index]),
     {reply, ok, State2};
 
 handle_call(_Request, _From, State) ->
@@ -437,7 +446,7 @@ hash_object({Bucket, Key}, RObjBin) ->
 fold_keys(Partition, Tree) ->
     {Limit, Wait} = app_helper:get_env(riak_kv,
                                        anti_entropy_build_throttle,
-                                       {1000000, 100}),
+                                       ?DEFAULT_BUILD_THROTTLE),
     Req = riak_core_util:make_fold_req(
             fun(BKey={Bucket,Key}, RObjBin, Acc) ->
                     ObjSize = byte_size(RObjBin),
@@ -667,7 +676,7 @@ do_poke(State) ->
     State2.
 
 -spec maybe_expire(state()) -> state().
-maybe_expire(State=#state{lock=undefined, built=true}) ->
+maybe_expire(State=#state{lock=undefined, built=true, expired=false}) ->
     Diff = timer:now_diff(os:timestamp(), State#state.build_time),
     Expire = app_helper:get_env(riak_kv,
                                 anti_entropy_expire,
@@ -675,6 +684,7 @@ maybe_expire(State=#state{lock=undefined, built=true}) ->
     %% Need to convert from millsec to microsec
     case (Expire =/= never) andalso (Diff > (Expire * 1000)) of
         true ->
+            lager:debug("Tree expired: ~p", [State#state.index]),
             State#state{expired=true};
         false ->
             State
