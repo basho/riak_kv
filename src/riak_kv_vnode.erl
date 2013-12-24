@@ -137,10 +137,9 @@ maybe_create_hashtrees(true, State=#state{idx=Index,
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     case riak_core_ring:vnode_type(Ring, Index) of
         primary ->
-            RP = riak_kv_util:responsible_preflists(Index),
             {ok, ModCaps} = Mod:capabilities(ModState),
-            RP2 = add_2i_index_rp(RP, ModCaps),
-            case riak_kv_index_hashtree:start(Index, RP2, self()) of
+            Opts = [use_2i || lists:member(indexes, ModCaps)],
+            case riak_kv_index_hashtree:start(Index, self(), Opts) of
                 {ok, Trees} ->
                     monitor(process, Trees),
                     State#state{hashtrees=Trees};
@@ -152,16 +151,6 @@ maybe_create_hashtrees(true, State=#state{idx=Index,
             end;
         _ ->
             State
-    end.
-
-%% Use special magic index_n for
-%% 2i index specs hashtree ID.
-add_2i_index_rp(RP, Capabilities) ->
-    case lists:member(indexes, Capabilities) of
-        true ->
-            [riak_kv_index_hashtree:index_2i_n() | RP];
-        false ->
-            RP
     end.
 
 %% API

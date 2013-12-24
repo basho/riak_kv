@@ -69,7 +69,8 @@
                 lock :: undefined | reference(),
                 path,
                 build_time,
-                trees}).
+                trees,
+                use_2i = false :: boolean()}).
 
 -type state() :: #state{}.
 
@@ -84,17 +85,15 @@
 
 %% @doc Spawn an index_hashtree process that manages the hashtrees (one
 %%      for each `index_n') for the specified partition index.
--spec start(index(), nonempty_list(index_n()), pid()) -> {ok, pid()} | 
-                                                         {error, term()}.
-start(Index, IndexNs=[_|_], VNPid) ->
-    gen_server:start(?MODULE, [Index, IndexNs, VNPid], []).
+-spec start(index(), pid(), proplist()) -> {ok, pid()} | {error, term()}.
+start(Index, VNPid, Opts) ->
+    gen_server:start(?MODULE, [Index, VNPid, Opts], []).
 
 %% @doc Spawn an index_hashtree process that manages the hashtrees (one
 %%      for each `index_n') for the specified partition index.
--spec start_link(index(), nonempty_list(index_n()), pid()) -> {ok, pid()} |
-                                                              {error, term()}.
-start_link(Index, IndexNs=[_|_], VNPid) ->
-    gen_server:start_link(?MODULE, [Index, IndexNs, VNPid], []).
+-spec start_link(index(), pid(), proplist()) -> {ok, pid()} | {error, term()}.
+start_link(Index, VNPid, Opts) ->
+    gen_server:start_link(?MODULE, [Index, VNPid, Opts], []).
 
 %%      Valid options:
 %%       ``if_missing'' :: Only insert the key/hash pair if the key does not
@@ -193,7 +192,7 @@ destroy(Tree) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init([Index, IndexNs, VNPid]) ->
+init([Index, VNPid, Opts]) ->
     case determine_data_root() of
         undefined ->
             case riak_kv_entropy_manager:enabled() of
@@ -209,12 +208,14 @@ init([Index, IndexNs, VNPid]) ->
         Root ->
             Path = filename:join(Root, integer_to_list(Index)),
             monitor(process, VNPid),
-
+            Use2i = lists:member(use_2i, Opts),
             State = #state{index=Index,
                            vnode_pid=VNPid,
                            trees=orddict:new(),
                            built=false,
+                           use_2i=Use2i,
                            path=Path},
+            IndexNs = responsible_preflists(State),
             State2 = init_trees(IndexNs, State),
             {ok, State2}
     end.
@@ -624,9 +625,15 @@ do_delete_expanded([{Id, Key}|Rest], State=#state{trees=Trees}) ->
     end,
     do_delete_expanded(Rest, State2).
 
+-spec responsible_preflists(#state{}) -> [index_n()].
+responsible_preflists(#state{index=Partition, use_2i=Use2i}) ->
+    RP = riak_kv_util:responsible_preflists(Partition) ++
+    [?INDEX_2I_N || Use2i],
+    RP.
+
 -spec handle_unexpected_key(index_n(), binary(), state()) -> state().
 handle_unexpected_key(Id, Key, State=#state{index=Partition}) ->
-    RP = riak_kv_util:responsible_preflists(Partition),
+    RP = responsible_preflists(State),
     case lists:member(Id, RP) of
         false ->
             %% The encountered object does not belong to any preflists that
@@ -731,12 +738,10 @@ maybe_clear(State) ->
     State.
 
 -spec clear_tree(state()) -> state().
-clear_tree(State=#state{index=Index, trees=Trees}) ->
-    lager:debug("Clearing tree ~p", [State#state.index]),
+clear_tree(State=#state{index=Index}) ->
+    lager:debug("Clearing tree ~p", [Index]),
+    IndexNs = responsible_preflists(State),
     State2 = destroy_trees(State),
-    IndexNs = riak_kv_util:responsible_preflists(Index) ++
-    %% If initialized with 2i tree, re-create it
-    [?INDEX_2I_N || has_index_tree(Trees)],
     State3 = init_trees(IndexNs, State2#state{trees=orddict:new()}),
     State3#state{built=false}.
 
