@@ -204,7 +204,7 @@ init([]) ->
 
 handle_call({set_mode, Mode}, _From, State=#state{mode=CurrentMode}) ->
     State2 = case {CurrentMode, Mode} of
-                 {auto, manual} ->
+                 {automatic, manual} ->
                      %% Clear exchange queue when switching to manual mode
                      State#state{exchange_queue=[]};
                  _ ->
