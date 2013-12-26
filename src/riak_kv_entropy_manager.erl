@@ -330,7 +330,7 @@ handle_info({'DOWN', _, _, Pid, Status}, #state{vnode_status_pid=Pid}=State) ->
             State2 = query_and_set_aae_throttle3(RES, State#state{vnode_status_pid=undefined}),
             {noreply, State2};
         Else ->
-            error_logger:error("query_and_set_aae_throttle error: ~p\n",[Else]),
+            lager:error("query_and_set_aae_throttle error: ~p",[Else]),
             {noreply, State}
     end;
 handle_info({'DOWN', Ref, _, Obj, Status}, State) ->
