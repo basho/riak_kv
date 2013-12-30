@@ -433,8 +433,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                    need, MinVnodes}}, StateData0);
         true ->
             AllowMult = get_option(allow_mult, BucketProps),
-            Options = flatten_options(proplists:unfold(Options0 ++ 
-                                                           ?DEFAULT_OPTS), []), 
+            Options = flatten_options(Options0 ++ ?DEFAULT_OPTS, []),
             Disable = get_option(disable_hooks, Options),
             Precommit =
                 if Disable -> [];
