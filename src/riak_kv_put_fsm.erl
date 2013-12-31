@@ -230,10 +230,11 @@ test_link(From, Object, PutOptions, StateProps) ->
 %% ====================================================================
 
 %% @private
-init([From, RObj, Options, Monitor]) ->
+init([From, RObj, Options0, Monitor]) ->
     BKey = {Bucket, Key} = {riak_object:bucket(RObj), riak_object:key(RObj)},
     CoordTimeout = get_put_coordinator_failure_timeout(),
     Trace = application:get_env(riak_kv, fsm_trace_enabled),
+    Options = proplists:unfold(Options0),
     StateData = #state{from = From,
                        robj = RObj,
                        bkey = BKey,
@@ -432,8 +433,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                    need, MinVnodes}}, StateData0);
         true ->
             AllowMult = get_option(allow_mult, BucketProps),
-            Options = flatten_options(proplists:unfold(Options0 ++ 
-                                                           ?DEFAULT_OPTS), []), 
+            Options = flatten_options(Options0 ++ ?DEFAULT_OPTS, []),
             Disable = get_option(disable_hooks, Options),
             Precommit =
                 if Disable -> [];
