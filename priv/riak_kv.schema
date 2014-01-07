@@ -129,20 +129,9 @@
 %% mechanism used by riak_kv_exchange_fsm.erl.
 {mapping, "anti_entropy.throttle.kill_switch", "riak_kv.aae_throttle_kill_switch", [
   {default, off},
-  {datatype, {enum, [on, off]}},
+  {datatype, flag},
   {level, advanced}
 ]}.
-
-{ translation,
-  "riak_kv.aae_throttle_kill_switch",
-  fun(Conf) ->
-    Setting = cuttlefish:conf_get("anti_entropy.throttle.kill_switch", Conf),
-    case Setting of
-      on -> true;
-      off -> false;
-      _Default -> true
-    end
-  end}.
 
 %% @doc Override the default AAE distributed throttle mechanism
 %% defaults from riak_kv.app.  For example, if a sleep time of 5
@@ -150,13 +139,10 @@
 %% 40, include the setting of 'anti_entropy.throttle.limits.40 = 5'.
 %%
 %% Note that you must include a setting for
-%% 'anti_entropy.throttle.limits.-1 = N", where N is usually 0.
+%% 'anti_entropy.throttle.limits.-1 = N', where N is usually 0.
 {mapping, "anti_entropy.throttle.limits.$length", "riak_kv.aae_throttle_limits", [
   {datatype, {duration, ms}},
-  %% We need the empty list as a signal to use a more complex default list
-  %% than Cuttlefish's default allows ... so no default or include_default
-  %% here.
-  {level, basic}
+  {level, advanced}
 ]}.
 
 {translation,
@@ -170,19 +156,9 @@
 %% @see leveldb.bloomfilter
 {mapping, "anti_entropy.bloomfilter", "riak_kv.anti_entropy_leveldb_opts.use_bloomfilter", [
   {default, on},
-  {enum, [on, off]},
+  {datatype, flag},
   {level, advanced}
 ]}.
-
-{translation,
- "riak_kv.anti_entropy_leveldb_opts.use_bloomfilter",
- fun(Conf) ->
-     case cuttlefish:conf_get("anti_entropy.bloomfilter", Conf) of
-         on -> true;
-         off -> false;
-         _ -> true
-     end
- end}.
 
 %% @doc How many JavaScript virtual machines are available for
 %% executing map functions.
@@ -217,9 +193,9 @@
 ]}.
 
 {translation,
- "javascript.maximum_heap_size",
+ "riak_kv.js_max_vm_mem",
  fun(Conf) ->
-     cuttlefish:ceiling(cuttlefish:conf_get("javascript.maximum_heap_size", Conf) / 1048576)
+     cuttlefish_util:ceiling(cuttlefish:conf_get("javascript.maximum_heap_size", Conf) / 1048576)
  end}.
 
 %% @doc The maximum amount of thread stack memory to allocate
@@ -231,9 +207,9 @@
 ]}.
 
 {translation,
- "javascript.maximum_stack_size",
+ "riak_kv.js_thread_stack",
  fun(Conf) ->
-     cuttlefish:ceiling(cuttlefish:conf_get("javascript.maximum_stack_size", Conf) / 1048576)
+     cuttlefish_util:ceiling(cuttlefish:conf_get("javascript.maximum_stack_size", Conf) / 1048576)
  end}.
 
 %% @doc A directory containing Javascript source files which will be
@@ -275,33 +251,22 @@
 %%   * off = Riak 1.x behavior
 {mapping, "retry_put_coordinator_failure", "riak_kv.retry_put_coordinator_failure", [
   {default, on},
-  {datatype, {enum, [on, off]}},
+  {datatype, flag},
   {level, advanced}
 ]}.
-
-{translation,
- "riak_kv.retry_put_coordinator_failure",
- fun(Conf) ->
-     case cuttlefish:conf_get("retry_put_coordinator_failure", Conf) of
-         on -> true;
-         off -> false;
-         _ -> true
-     end
- end}.
-
 
 %% @doc Controls which binary representation of a riak value is stored
 %% on disk.
 %% * 0: Original erlang:term_to_binary format. Higher space overhead.
 %% * 1: New format for more compact storage of small values.
-{mapping, "object_format_version", "riak_kv.object_format", [
+{mapping, "object.format", "riak_kv.object_format", [
   {default, 1},
   {datatype, [{integer, 1}, {integer, 0}]}
 ]}.
 
 {translation, "riak_kv.object_format",
  fun(Conf) ->
-   case cuttlefish:conf_get("object_format_version", Conf) of
+   case cuttlefish:conf_get("object.format", Conf) of
        0 -> v0;
        1 -> v1;
        _ -> throw(error)
@@ -311,15 +276,25 @@
 
 %% @doc md_cache_size controls how large the md cache is allowed to be
 %% it defaults to 1MB, set to 0 to disable the cache.  This shouldn't
-%% be neccessary on-disk based backends, but can help performance in some
-%% cases (i.e. memory backend, data fits in block cache, etc).
-%% note that this is the size of the ETS table, rather than the actual data,
-%% to keep the size calculation simple, thus more space may be used than
-%% the simple size * vnode_count calculation would imply.
+%% be neccessary on-disk based backends, but can help performance in
+%% some cases (i.e. memory backend, data fits in block cache, etc).
+%% note that this is the size of the ETS table, rather than the actual
+%% data, to keep the size calculation simple, thus more space may be
+%% used than the simple size * vnode_count calculation would imply.
 {mapping, "md_cache_size", "riak_kv.vnode_md_cache_size", [
-  {datatype, bytesize},
-  {default, "0"} %% disabled by default, to ship with this live, change to 512KB
+  {datatype, [{atom, off}, bytesize]},
+  {default, off} %% disabled by default, to ship with this live, change to 512KB
 ]}.
+
+{ translation,
+  "riak_kv.vnode_md_cache_size",
+  fun(Conf) ->
+    case cuttlefish:conf_get("md_cache_size", Conf) of
+        off -> 0;
+        Size -> Size
+    end
+  end
+}.
 
 %%%% Memory backend section
 %% @doc The maximum amount of memory consumed per vnode by the memory
@@ -329,10 +304,16 @@
   {level, advanced}
 ]}.
 
+%% @see memory_backend.max_memory
+{mapping, "multi_backend.$name.memory_backend.max_memory_per_vnode", "riak_kv.multi_backend", [
+  {datatype, bytesize},
+  {level, advanced}
+]}.
+
 {translation,
  "riak_kv.memory_backend.max_memory",
  fun(Conf) ->
-  Bytes = cuttlefish:conf_get("memory_backend.max_memory", Conf),
+  Bytes = cuttlefish:conf_get("memory_backend.max_memory_per_vnode", Conf),
   cuttlefish_util:ceiling(Bytes / 1048576)
  end
 }.
@@ -345,27 +326,22 @@
   {level, advanced}
 ]}.
 
+%% @see memory_backend.ttl
+{mapping, "multi_backend.$name.memory_backend.ttl", "riak_kv.multi_backend", [
+  {datatype, {duration, s}},
+  {level, advanced}
+]}.
+
 %% @doc Measures were added to Riak 1.2 to counteract cross-site
 %% scripting and request-forgery attacks. Some reverse-proxies cannot
 %% remove the Referer header and makes serving data directly from Riak
 %% impossible. Turning secure_referer_check = off disables this
 %% security check.
 {mapping, "secure_referer_check", "riak_kv.secure_referer_check", [
-  {datatype, {enum, [on, off]}},
+  {datatype, flag},
   {default, on},
   {level, advanced}
 ]}.
-
-{translation,
- "riak_kv.secure_referer_check",
- fun(Conf) ->
-  case cuttlefish:conf_get("secure_referer_check", Conf) of
-    off -> false;
-    on -> true;
-    _ -> true
-  end
- end
-}.
 
 %% @doc Reading or writing objects bigger than this size will write a
 %% warning in the logs.
@@ -404,20 +380,9 @@
 
 {mapping, "dvv", "riak_kv.dvv_enabled", [
   {default, on},
-  {datatype, {enum, [on, off]}},
+  {datatype, flag},
   {level, advanced}
 ]}.
-
-{ translation,
-  "riak_kv.dvv_enabled",
-  fun(Conf) ->
-    Setting = cuttlefish:conf_get("dvv", Conf),
-    case Setting of
-      on -> true;
-      off -> false;
-      _Default -> true
-    end
-end}.
 
 %% @doc The number of primary replicas (non-fallback) that must reply
 %% to a read request.
@@ -489,21 +454,10 @@ end}.
 %% @doc Whether or not siblings are allowed.  Note: See Vector Clocks
 %% for a discussion of sibling resolution.
 {mapping, "buckets.default.allow_mult", "riak_core.default_bucket_props.allow_mult", [
-  {datatype, {enum, [on, off]}},
-  {default, on},
+  {datatype, {enum, [true, false]}},
+  {default, true},
   {level, advanced}
 ]}.
-
-{translation,
- "riak_core.default_bucket_props.allow_mult",
- fun(Conf) ->
-  Setting = cuttlefish:conf_get("buckets.default.allow_mult", Conf),
-    case Setting of
-      on -> true;
-      off -> false;
-      _Default -> true
-    end
- end}.
 
 %% @doc Whether conflicting writes resolve via timestamp.
 {mapping,
@@ -514,19 +468,16 @@ end}.
   {level, advanced}
 ]}.
 
-%% TODO?
-%% Idea:
-%%  space-separated in one setting
-%%  module:function for Erlang
-%%  anythingelse for Javascript javascript""
-%% e.g. Module:Fun Module2:Fun2 slow:JavascriptFun
+%% needs better docs
 {mapping, "buckets.default.precommit", "riak_core.default_bucket_props.precommit", [
   {level, advanced}
-]},
+]}.
 
 {translation, "riak_core.default_bucket_props.precommit",
  fun(Conf) ->
-  RawString = cuttlefish:conf_get("bucket.default.precommit", Conf),
+  RawString = cuttlefish:conf_get("buckets.default.precommit", Conf, []),
+  io:format("~p", [RawString]),
+  io:format("~p", [lists:reverse(Conf)]),
   StringList = string:tokens(RawString, " "),
   [ begin
     case string:tokens(String, ":") of
@@ -547,12 +498,12 @@ end}.
 
 {mapping, "buckets.default.postcommit", "riak_core.default_bucket_props.postcommit", [
   {level, advanced}
-]},
+]}.
 
 %% Erlang Only
 {translation, "riak_core.default_bucket_props.postcommit",
  fun(Conf) ->
-   RawString = cuttlefish:conf_get("bucket.default.postcommit", Conf),
+   RawString = cuttlefish:conf_get("buckets.default.postcommit", Conf, []),
    StringList = string:tokens(RawString, " "),
    [ begin
      case string:tokens(String, ":") of
@@ -561,7 +512,7 @@ end}.
                        {<<"mod">>, list_to_binary(Module)},
                        {<<"fun">>, list_to_binary(Function)}
                       ]};
-         _ -> throw(error) ->
+         _ -> throw(error)
      end
    end ||  String <- StringList]
  end

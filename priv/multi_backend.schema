@@ -52,7 +52,7 @@
           {Key -- BackendConfigName, Value}
         end || {Key, Value} <- cuttlefish_variable:filter_by_prefix(BackendConfigPrefix, Conf)],
         BackendProplist = cuttlefish_generator:map(Schema, SubConf),
-        {riak_kv_memory_backend, proplists:get_value(memory_backend, proplists:get_value(riak_kv, BackendProplist))}
+        {riak_kv_memory_backend, proplists:get_value(memory_backend, proplists:get_value(riak_kv, BackendProplist), [])}
     end,
     {list_to_binary(Name),  BackendModule, BackendConfig}
   end || {"$name", Name} <- BackendNames],
@@ -62,17 +62,3 @@
   end
  end
 }.
-
-%%%% Memory backend section
-
-%% @see memory_backend.max_memory
-{mapping, "multi_backend.$name.memory_backend.max_memory", "riak_kv.multi_backend", [
-  {datatype, bytesize},
-  {level, advanced}
-]}.
-
-%% @see memory_backend.ttl
-{mapping, "multi_backend.$name.memory_backend.ttl", "riak_kv.multi_backend", [
-  {datatype, {duration, s}},
-  {level, advanced}
-]}.
