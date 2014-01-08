@@ -76,9 +76,11 @@ override_non_multi_backend_schema_test() ->
         {["anti_entropy", "data_dir"], "/absolute/data/anti_entropy"},
         {["anti_entropy", "write_buffer_size"], "8MB"},
         {["anti_entropy", "max_open_files"], 30},
-        {["anti_entropy", "throttle", "kill_switch"], on},
-        {["anti_entropy", "throttle", "limits", "-1"], "1d"},
-        {["anti_entropy", "throttle", "limits", "10"], "10d"},
+        {["anti_entropy", "throttle"], off},
+        {["anti_entropy", "throttle", "tier1", "mailbox_size"], 0},
+        {["anti_entropy", "throttle", "tier1", "delay"], "1d"},
+        {["anti_entropy", "throttle", "tier2", "mailbox_size"], 11},
+        {["anti_entropy", "throttle", "tier2", "delay"], "10d"},
         {["anti_entropy", "bloomfilter"], off},
         {["javascript", "map_pool_size"], 16},
         {["javascript", "reduce_pool_size"], 12},
@@ -97,6 +99,7 @@ override_non_multi_backend_schema_test() ->
         {["object", "size", "maximum"], "100MB"},
         {["object", "siblings", "warning_threshold"], 250},
         {["object", "siblings", "maximum"], 1000},
+        {["object", "merge_strategy"], '1'},
         %% Default Bucket Properties
         {["buckets", "default", "pr"], quorum},
         {["buckets", "default", "r"], 2},
@@ -125,7 +128,7 @@ override_non_multi_backend_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy_leveldb_opts.write_buffer_size", 8388608),
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy_leveldb_opts.max_open_files", 30),
     cuttlefish_unit:assert_config(Config, "riak_kv.aae_throttle_kill_switch", true),
-    cuttlefish_unit:assert_config(Config, "riak_kv.aae_throttle_limits", [{10, 864000000}, {-1, 86400000}]),
+    cuttlefish_unit:assert_config(Config, "riak_kv.aae_throttle_limits", [{-1, 86400000}, {10, 864000000}]),
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy_leveldb_opts.use_bloomfilter", false),
     cuttlefish_unit:assert_config(Config, "riak_kv.map_js_vm_count", 16),
     cuttlefish_unit:assert_config(Config, "riak_kv.reduce_js_vm_count", 12),
@@ -148,6 +151,7 @@ override_non_multi_backend_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.max_object_size", 104857600),
     cuttlefish_unit:assert_config(Config, "riak_kv.warn_siblings", 250),
     cuttlefish_unit:assert_config(Config, "riak_kv.max_siblings", 1000),
+    cuttlefish_unit:assert_config(Config, "riak_kv.dvv_enabled", false),
 
     %% Default Bucket Properties
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.pr", quorum),
@@ -244,6 +248,21 @@ multi_backend_test() ->
     ],
     cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend", ExpectedMutliConfig),
     ok.
+
+commit_hooks_test() ->
+    Conf = [
+            {["buckets", "default", "precommit"], "bad:mod:fun"},
+            {["buckets", "default", "postcommit"], "jsLOL"}
+           ],
+    Config = cuttlefish_unit:generate_templated_config(
+               ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context()),
+    ?assertEqual({error, apply_translations,
+                  {error, [
+                           {error, "Translation for 'riak_core.default_bucket_props.postcommit'"
+                            " found invalid configuration: incorrect hook format 'jsLOL'"},
+                           {error, "Translation for 'riak_core.default_bucket_props.precommit'"
+                            " found invalid configuration: incorrect hook format 'bad:mod:fun'"}
+                           ]}}, Config).
 
 %% this context() represents the substitution variables that rebar
 %% will use during the build process.  riak_core's schema file is
