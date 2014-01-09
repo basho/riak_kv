@@ -33,13 +33,13 @@ docs:
 APPS = kernel stdlib sasl erts ssl tools os_mon runtime_tools crypto inets \
 	xmerl webtool snmp public_key mnesia eunit syntax_tools compiler \
 	deps/**/ebin
-COMBO_PLT = $(HOME)/.riak_kv_dialyzer_plt
+PLT ?= $(HOME)/.riak_kv_dialyzer_plt
 
 check_plt: compile
-	dialyzer --check_plt --plt $(COMBO_PLT) --apps $(APPS) ebin
+	dialyzer --check_plt --plt $(PLT) --apps $(APPS) ebin
 
 build_plt: compile
-	dialyzer --build_plt --output_plt $(COMBO_PLT) --apps $(APPS) ebin
+	dialyzer --build_plt --output_plt $(PLT) --apps $(APPS) ebin
 
 dialyzer: compile
 	@echo
@@ -48,13 +48,13 @@ dialyzer: compile
 	@echo
 	@sleep 1
 	dialyzer -Wunmatched_returns -Werror_handling -Wrace_conditions \
-		-Wunderspecs --plt $(COMBO_PLT) ebin
+		-Wunderspecs --plt $(PLT) ebin
 
 cleanplt:
 	@echo
 	@echo "Are you sure?  It takes about 1/2 hour to re-build."
-	@echo Deleting $(COMBO_PLT) in 5 seconds.
+	@echo Deleting $(PLT) in 5 seconds.
 	@ech
 	sleep 5
-	rm $(COMBO_PLT)
+	rm $(PLT)
 
