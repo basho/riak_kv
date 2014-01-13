@@ -160,17 +160,73 @@ get() ->
 %% a crash.
 -spec mutate_get(Object :: riak_object:riak_object()) -> riak_object:riak_object().
 mutate_get(Object) ->
-    [Meta | _] = riak_object:get_metadatas(Object),
+    maybe_do_split_mutate_get(Object, riak_object:get_contents(Object)).
+
+maybe_do_split_mutate_get(Object, [Contents]) ->
+    {Meta, _} = Contents,
     case dict:find(mutators_applied, Meta) of
         error ->
             Object;
         {ok, Applied} ->
             DeMutateOrder = lists:reverse(Applied),
             mutate_get(Object, DeMutateOrder)
+    end;
+
+maybe_do_split_mutate_get(Object, Contents) ->
+    Objects = split_by_mutators(Object, Contents),
+    Demutated = lists:map(fun(SplitObj) ->
+        [Meta | _] = riak_object:get_metadatas(SplitObj),
+        case dict:find(mutators_applied, Meta) of
+            error ->
+                riak_object:get_contents(SplitObj);
+            {ok, Applied} ->
+                DeMutateOrder = lists:reverse(Applied),
+                riak_object:get_contents(mutate_get(SplitObj, DeMutateOrder))
+        end
+    end, Objects),
+    % now put humpty dumpty back together again
+    DemutatedContents = merge_mutate_get_contents(Demutated),
+    riak_object:set_contents(Object, DemutatedContents).
+
+merge_mutate_get_contents(ListOfContentLists) ->
+    lists:foldl(fun(Contents, Acc) ->
+        Contents2 = [{dict:erase(mutators_applied, Meta), Value} || {Meta, Value} <- Contents],
+        Acc ++ Contents2
+    end, [], ListOfContentLists).
+
+split_by_mutators(Object, Contents) ->
+    split_by_mutators(Object, Contents, orddict:new()).
+
+split_by_mutators(Object, [], Acc) ->
+    lists:map(fun({_, Contents}) ->
+        riak_object:set_contents(Object, Contents)
+    end, Acc);
+
+split_by_mutators(Object, [{Meta, Content} | Tail], Acc) ->
+    {Key, Append} = case dict:find(mutators_applied, Meta) of
+        error ->
+            {undefined, {Meta, Content}};
+        {ok, Applied} ->
+            {Applied, {Meta, Content}}
+    end,
+    Acc2 = append_to_maybe_key(Key, Append, Acc),
+    split_by_mutators(Object, Tail, Acc2).
+
+append_to_maybe_key(Key, Append, Orddict) ->
+    case orddict:find(Key, Orddict) of
+        error ->
+            orddict:store(Key, [Append], Orddict);
+        {ok, Value} ->
+            orddict:store(Key, Value ++ [Append], Orddict)
     end.
 
 mutate_get(Object, []) ->
-    Object;
+    Contents = riak_object:get_contents(Object),
+    FixedContents = lists:map(fun({Meta, Value}) ->
+        {dict:erase(mutators_applied, Meta), Value}
+    end, Contents),
+    riak_object:set_contents(Object, FixedContents);
+
 mutate_get(Object, [Mutator | Tail]) ->
     % so event though the mutate_put callback has to return
     % {Meta, Value, Exposed} values, the get callback gets away with just
