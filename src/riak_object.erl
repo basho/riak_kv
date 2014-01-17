@@ -705,7 +705,7 @@ is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
 update(true, _OldObject, NewObject, Actor, Timestamp) ->
     increment_vclock(NewObject, Actor, Timestamp);
 update(false, OldObject, NewObject, Actor, Timestamp) ->
-    %% Get the vclock we have for the local / old object stored on
+    %% Get the vclock we have for the local / old object
     LocalVC = vclock(OldObject),
     %% get the vclock from the new object
     PutVC = vclock(NewObject),
