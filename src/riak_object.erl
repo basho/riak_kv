@@ -80,7 +80,7 @@
 -export([hash/1, approximate_size/2]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
 -export([encode_vclock/2, decode_vclock/2]).
--export([update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
+-export([update/5, update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([merge/2, apply_updates/1, syntactic_merge/2]).
 -export([to_json/1, from_json/1]).
@@ -91,7 +91,6 @@
 -export([is_robject/1]).
 -export([update_last_modified/1]).
 -export([strict_descendant/2]).
--export([assign_dot/2]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -579,18 +578,6 @@ increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
     %% when we increment, so add the dot here.
     assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled()).
 
-%% @doc assign an event Dot to the value of the object.  Must be
-%% exactly one value for this object. Does not update the vector
-%% clock. Dot must be a valid vclock entry or an error is thrown.
--spec assign_dot(riak_object(), vclock:dot()) -> riak_object().
-assign_dot(Object, Dot) ->
-    case vclock:valid_entry(Dot) of
-        true ->
-            assign_dot(Object, Dot,  dvv_enabled());
-        false ->
-            throw({error, invalid_dot})
-    end.
-
 %% @private assign the dot to the value only if DVV is enabled. Only
 %% call with a valid dot. Only assign dot when there is a single value
 %% in contents.
@@ -708,6 +695,38 @@ is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
             end
     end.
 
+%% @doc a Put merge. Update a stored riak_object with the value from a
+%% new riak_object that has been put. Must be serialised by the
+%% `Actor' provided.
+-spec update(LWW :: boolean(), LocalObj :: riak_object(),
+             NewObj :: riak_object(), Actor ::vclock:vclock_node(),
+             TimeStamp :: vclock:timestamp()) ->
+                    riak_object().
+update(true, _OldObject, NewObject, Actor, Timestamp) ->
+    increment_vclock(NewObject, Actor, Timestamp);
+update(false, OldObject, NewObject, Actor, Timestamp) ->
+    %% Get the vclock we have for the local / old object stored on
+    LocalVC = vclock(OldObject),
+    %% get the vclock from the new object
+    PutVC = vclock(NewObject),
+
+    %% Optimisation: if the new object's vclock descends from the old
+    %% object's vclock, then don't merge values, just increment the
+    %% clock and overwrite.
+    case vclock:descends(PutVC, LocalVC) of
+        true ->
+            increment_vclock(NewObject, Actor, Timestamp);
+        false ->
+            %% The new object is concurrent with some other value, so
+            %% merge the new object and the old object.
+            MergedClock = vclock:merge([PutVC, LocalVC]),
+            FrontierClock = vclock:increment(Actor, Timestamp, MergedClock),
+            {ok, Dot} = vclock:get_entry(Actor, FrontierClock),
+            %% Assign an event to the new value
+            DottedPutObject = assign_dot(NewObject, Dot, dvv_enabled()),
+            MergedObject = merge(DottedPutObject, OldObject),
+            set_vclock(MergedObject, FrontierClock)
+    end.
 
 -spec syntactic_merge(riak_object(), riak_object()) -> riak_object().
 syntactic_merge(CurrentObject, NewObject) ->

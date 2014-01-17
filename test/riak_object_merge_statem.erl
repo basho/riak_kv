@@ -51,6 +51,7 @@
         eqc:on_output(fun(Str, Args) ->
                               io:format(user, Str, Args) end, P)).
 
+
 run(Module, Count) ->
     {atom_to_list(Module), {timeout, 120, [?_assert(prop_merge(Count))]}}.
 
@@ -199,23 +200,7 @@ coord_put(VNode, Value, Time, VNodeData) ->
 coord_put_ro(VNode, NewObj, undefined, Time) ->
     riak_object:increment_vclock(NewObj, VNode, Time);
 coord_put_ro(VNode, NewObj, OldObj, Time) ->
-    LocalVC = riak_object:vclock(OldObj),
-    PutVC = riak_object:vclock(NewObj),
-
-    case vclock:descends(PutVC, LocalVC) of
-        true ->
-            riak_object:increment_vclock(NewObj, VNode, Time);
-        false ->
-            %% The PUT object is concurrent with some other PUT,
-            %% so merge the PUT object and the local object.
-            MergedClock = vclock:merge([PutVC, LocalVC]),
-            FrontierClock = vclock:increment(VNode, Time, MergedClock),
-            {ok, Dot} = vclock:get_entry(VNode, FrontierClock),
-
-            DottedPutObject = riak_object:assign_dot(NewObj, Dot),
-            MergedObject = riak_object:merge(DottedPutObject, OldObj),
-            riak_object:set_vclock(MergedObject, FrontierClock)
-    end.
+    riak_object:update(false, OldObj, NewObj, VNode, Time).
 
 %% So much simpler!
 coord_put_dvv(VNode, DVV, undefined) ->
