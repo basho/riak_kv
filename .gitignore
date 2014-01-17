@@ -9,3 +9,4 @@ test.*-temp-data
 ebin
 /.eqc-info
 /current_counterexample.eqc
+.local_dialyzer_plt
