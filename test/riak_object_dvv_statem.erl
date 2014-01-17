@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_object_merge_statem: EQC that the riak_object merge functions
+%% riak_object_dvv_statem: EQC that the riak_object merge functions
 %%                           are equivalent to the DVVSet ones.
 %%
 %% TODO DVV disabled? Get, interleave writes, Put
@@ -22,7 +22,7 @@
 %%
 %% -------------------------------------------------------------------
 
--module(riak_object_merge_statem).
+-module(riak_object_dvv_statem).
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -193,16 +193,13 @@ coord_put(VNode, Value, Time, VNodeData) ->
     DVV2 = coord_put_dvv(VNode, dvvset:new(Value), DVV),
     {RObj2, DVV2}.
 
-%% This copies directly from riak_kv_vnode put_merge.  This is the
-%% second test that does this, clearly this code needs refactoring
-%% into riak_obect, at least the second clause here (where there is a
-%% local value)
+%% Update the riak_object, as if in the co-ordinating vnode
 coord_put_ro(VNode, NewObj, undefined, Time) ->
     riak_object:increment_vclock(NewObj, VNode, Time);
 coord_put_ro(VNode, NewObj, OldObj, Time) ->
     riak_object:update(false, OldObj, NewObj, VNode, Time).
 
-%% So much simpler!
+%% Update the DVVSet as if in a co-ordinating vnode
 coord_put_dvv(VNode, DVV, undefined) ->
     dvvset:update(DVV, VNode);
 coord_put_dvv(VNode, NewDVV, OldDVV) ->
