@@ -297,7 +297,8 @@ end
 %% * 1: New format for more compact storage of small values.
 {mapping, "object.format", "riak_kv.object_format", [
   {default, 1},
-  {datatype, [{integer, 1}, {integer, 0}]}
+  {datatype, [{integer, 1}, {integer, 0}]},
+  {level, advanced}
 ]}.
 
 {translation, "riak_kv.object_format",
