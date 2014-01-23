@@ -330,23 +330,35 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
     #merge_acc{drop=Drop, keep=Keep, crdt=CRDT, error=Error} = MergeAcc,
     case get_dot(Dict) of
         {ok, Dot} ->
-            case {vclock:descends_dot(Clock, Dot), orddict:is_key(Dot, Drop)} of
+            case {vclock:descends_dot(Clock, Dot), is_drop_candidate(Dot, Drop)} of
                 {true, true} ->
                     %% When the exact same dot is present in both
                     %% objects siblings, we keep that value. Without
                     %% this merging an object with itself would result
                     %% in an object with no values at all, since an
                     %% object's vector clock always dominates all its
-                    %% dots.
+                    %% dots. However, due to riak_kv#679, and
+                    %% backup-restore it is possible for two objects
+                    %% to have dots with the same {id, count} but
+                    %% different timestamps (@see is_drop_candidate/2
+                    %% below), and for the referenced values to be
+                    %% _different_ too. We need to include both dotted
+                    %% values, and let the ordset ensure that only one
+                    %% sibling for a pair of normal dots is returned.
                     Content = convert_to_dict_list(C0),
-                    MergeAcc#merge_acc{keep=ordsets:add_element(Content, Keep)};
+                    %% Now get the other dots contents, should be
+                    %% identical, but Skewed Dots mean we can't
+                    %% guarantee that, the ordset will dedupe for us.
+                    DC = get_drop_candidate(Dot, Drop),
+                    C2 = convert_to_dict_list(DC),
+                    MergeAcc#merge_acc{keep=ordsets:add_element(C2, ordsets:add_element(Content, Keep))};
                 {true, false} ->
                     %% The `dot' is dominated by the other object's
                     %% vclock. This means that the other object has a
                     %% value that is the result of a PUT that
                     %% reconciled this sibling value, we can therefore
-                    %% drop this value.
-                    MergeAcc#merge_acc{drop=orddict:store(Dot, C0, Drop)};
+                    %% (potentialy, see above) drop this value.
+                    MergeAcc#merge_acc{drop=add_drop_candidate(Dot, C0, Drop)};
                 {false, _} ->
                     %% The other object's vclock does not contain (or
                     %% dominate) this sibling's `dot'. That means this
@@ -381,7 +393,7 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                 {CRDT, [], [E]} ->
                     %% An error occurred trying to merge this sibling
                     %% value. This means it was CRDT with some
-                    %% corruption of teh binary format, or maybe a
+                    %% corruption of the binary format, or maybe a
                     %% user's opaque binary that happens to match the
                     %% CRDT binary start tag. Either way, gather the
                     %% error for later logging.
@@ -398,6 +410,25 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     MergeAcc#merge_acc{crdt=CRDT2}
             end
     end.
+
+%% turns out, due to weirdness, it is possible to have two dots with
+%% the same id and counter, but different timestamps (backup and
+%% restore, riak_kv#679). In that case, it is possible to drop both
+%% dots, as both are dominted, but not equal. Here we strip the
+%% timestamp component when comparing dots.  This is bad as it _knows_
+%% about the internal structure of the vclock entry.
+%%
+%% @see is_drop_candidate/2
+add_drop_candidate({Id, {Cnt, _TS}}, Contents,  Dict) ->
+    orddict:store({Id, Cnt}, Contents, Dict).
+
+%% compare dots by Id and Counter alone, so making equal "skewed dots"
+is_drop_candidate({Id, {Cnt, _TS}}, Dict) ->
+    orddict:is_key({Id, Cnt}, Dict).
+
+%% fetch a drop candidate by it's dot
+get_drop_candidate({Id, {Cnt, _TS}}, Dict) ->
+    orddict:fetch({Id, Cnt}, Dict).
 
 %% @private Transform a `merge_acc()' to a list of `r_content()'. The
 %% merge accumulator contains a list of non CRDT (opaque) sibling
@@ -1021,6 +1052,17 @@ ancestor_test() ->
     ?assertMatch({Actor, {1, _}}, dict:fetch(?DOT, MD)),
     {O,O3}.
 
+ancestor_weird_clocks_test() ->
+    %% make objects with dots / clocks that are causally the same but
+    %% with different timestamps (backup - restore, riak_kv#679)
+    {B, K} = {<<"b">>, <<"k">>},
+    A = riak_object:increment_vclock(riak_object:new(B, K, <<"a">>), a, 100),
+    AWat = riak_object:increment_vclock(riak_object:new(B, K, <<"b">>), a, 1000),
+    %% reconcile should neither as neither dominates the other (even
+    %% though they're not equal)
+    Ancestors = ancestors([A, AWat]),
+    ?assertEqual(0, length(Ancestors)).
+
 reconcile_test() ->
     {O,O3} = ancestor_test(),
     O3 = riak_object:reconcile([O,O3],true),
@@ -1270,6 +1312,15 @@ dotted_values_reconcile_test() ->
     ?assertEqual(2, vclock:get_counter(c, Vclock)),
     ?assertEqual(2, vclock:get_counter(z, Vclock)),
     ?assertEqual(3, length(Vclock)).
+
+weird_clocks_weird_dots_test() ->
+    %% make objects with dots / clocks that are causally the same but
+    %% with different timestamps (backup - restore, riak_kv#679)
+    {B, K} = {<<"b">>, <<"k">>},
+    A = riak_object:increment_vclock(riak_object:new(B, K, <<"a">>), a, 100),
+    AWat = riak_object:increment_vclock(riak_object:new(B, K, <<"a">>), a, 1000),
+    O = riak_object:syntactic_merge(A, AWat),
+    ?assertEqual(2, riak_object:value_count(O)).
 
 %% Test the case where an object with undotted values is merged with
 %% an object with dotted values.
