@@ -82,7 +82,7 @@
 %% milliseconds.
 {mapping, "anti_entropy.tree.expiry", "riak_kv.anti_entropy_expire", [
   {default, "1w"},
-  {datatype, {duration, ms}},
+  {datatype, [{duration, ms}, {atom, never}]},
   {level, advanced}
 ]}.
 
