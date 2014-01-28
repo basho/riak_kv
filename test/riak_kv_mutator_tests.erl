@@ -101,7 +101,6 @@ functionality_test_() ->
             Got = riak_kv_mutator:mutate_get(Object),
             ?assertEqual(Data, riak_object:get_value(Got)),
             ?assertEqual(0, dict:fetch(<<"mutations">>, riak_object:get_metadata(Got)))
-
         end} end,
 
         fun(_) -> {"mutate a get", fun() ->
@@ -112,7 +111,8 @@ functionality_test_() ->
             ExpectedVal = <<"mutatedwarble">>,
             ExpectedMetaMutations = 2,
             ?assertEqual(ExpectedVal, riak_object:get_value(Object3)),
-            ?assertEqual(ExpectedMetaMutations, dict:fetch(<<"mutations">>, riak_object:get_metadata(Object3)))
+            ?assertEqual(ExpectedMetaMutations, dict:fetch(<<"mutations">>, riak_object:get_metadata(Object3))),
+            ?assertEqual(error, dict:find(mutators_applied, riak_object:get_metadata(Object3)))
         end} end,
 
         fun(_) -> {"get mutations are reversed order from put mutators", fun() ->
@@ -229,6 +229,57 @@ functionality_test_() ->
             Obj3 = riak_kv_mutator:mutate_get(Obj2),
             ?assertEqual(notfound, Obj3),
             meck:unload([m1,m2])
+        end} end,
+
+        fun(_) -> {"sibling'ed object with different mutators gets a sibling'ed object back", fun() ->
+            InitialObj = riak_object:new(<<"bucket">>, <<"key">>, <<"data">>),
+            {NoMutators, _Faked} = riak_kv_mutator:mutate_put(InitialObj, []),
+
+            meck:new(m1, [non_strict]),
+            meck:expect(m1, mutate_put, fun(Meta, Value, MetaChanges, _Object, _Props) ->
+                {Meta, <<"m1 ", Value/binary>>, MetaChanges}
+            end),
+            meck:expect(m1, mutate_get, fun(Object) ->
+                <<"m1 ", Real/binary>> = riak_object:get_value(Object),
+                UpedObj = riak_object:update_value(Object, Real),
+                riak_object:apply_updates(UpedObj)
+            end),
+
+            meck:new(m2, [non_strict]),
+            meck:expect(m2, mutate_put, fun(Meta, Value, MetaChanges, _Object, _Props) ->
+                {Meta, <<"m2 ", Value/binary>>, MetaChanges}
+            end),
+            meck:expect(m2, mutate_get, fun(Object) ->
+                <<"m2 ", Real/binary>> = riak_object:get_value(Object),
+                UpedObj = riak_object:update_value(Object, Real),
+                riak_object:apply_updates(UpedObj)
+            end),
+
+            riak_kv_mutator:register(m1),
+            {M1Mutated, _} = riak_kv_mutator:mutate_put(InitialObj, []),
+
+            riak_kv_mutator:unregister(m1),
+            riak_kv_mutator:register(m2),
+            {M2Mutated, _} = riak_kv_mutator:mutate_put(InitialObj, []),
+
+            NoMutatesContents = riak_object:get_contents(NoMutators),
+            M1Contents = riak_object:get_contents(M1Mutated),
+            M2Contents = riak_object:get_contents(M2Mutated),
+
+            NewContents = NoMutatesContents ++ M1Contents ++ M2Contents,
+            SiblingedObject = riak_object:set_contents(InitialObj, NewContents),
+
+            ExpectMeta = riak_object:get_metadata(InitialObj),
+            ExpectData = <<"data">>,
+            ExpectContents = lists:map(fun(_) ->
+                {ExpectMeta, ExpectData}
+            end, lists:seq(1, 3)),
+            ExpectObject = riak_object:set_contents(InitialObj, ExpectContents),
+            GotObj = riak_kv_mutator:mutate_get(SiblingedObject),
+
+            ?assertEqual(ExpectObject, GotObj),
+
+            meck:unload([m1, m2])
         end} end
 
     ]}.
