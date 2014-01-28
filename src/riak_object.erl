@@ -77,6 +77,7 @@
 -export([index_specs/1, diff_index_specs/2]).
 -export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
+-export([is_robject/1]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -109,6 +110,11 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
                               contents=Contents,vclock=vclock:fresh()}
             end
     end.
+
+is_robject(#r_object{}) ->
+        true;
+is_robject(_) ->
+        false.
 
 %% @doc Ensure the incoming term is a riak_object.
 -spec ensure_robject(any()) -> riak_object().
