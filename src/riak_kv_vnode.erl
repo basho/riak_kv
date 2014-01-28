@@ -1039,7 +1039,7 @@ handle_info({ensemble_put, Key, Obj, From}, State=#state{handoff_target=HOTarget
                                                          forward=Fwd}) ->
     case Fwd of
         undefined ->
-            {Result, State2} = actual_put(Key, Obj, Obj, [], false, undefined, State),
+            {Result, State2} = actual_put(Key, Obj, [], false, undefined, State),
             Reply = case Result of
                         {dw, _Idx, _Obj, _ReqID} ->
                             Obj;
@@ -1057,7 +1057,7 @@ handle_info({ensemble_put, Key, Obj, From}, State=#state{handoff_target=HOTarget
     end;
 
 handle_info({raw_forward_put, Key, Obj, From}, State) ->
-    {Result, State2} = actual_put(Key, Obj, Obj, [], false, undefined, State),
+    {Result, State2} = actual_put(Key, Obj, [], false, undefined, State),
     Reply = case Result of
                 {dw, _Idx, _Obj, _ReqID} ->
                     Obj;
@@ -1079,7 +1079,7 @@ handle_info({raw_forward_get, Key, From}, State) ->
     riak_kv_ensemble_backend:reply(From, Reply),
     {ok, State2};
 handle_info({raw_put, Key, Obj}, State) ->
-    {_, State2} = actual_put(Key, Obj, Obj, [], false, undefined, State),
+    {_, State2} = actual_put(Key, Obj, [], false, undefined, State),
     {ok, State2};
 
 handle_info(retry_create_hashtree, State=#state{hashtrees=undefined}) ->
@@ -1375,34 +1375,23 @@ perform_put({true, Obj},
             State,
             #putargs{returnbody=RB,
                      bkey=BKey,
-                     bprops=BProps,
                      reqid=ReqID,
                      index_specs=IndexSpecs}) ->
-
-    %% Avoid the riak_kv_mutator code path if no mutators are
-    %% registered.
-    {Obj2, Fake} = case riak_kv_mutator:get() of
-        {ok, []} ->
-            {Obj, Obj};
-        {ok, Mutators} ->
-            riak_kv_mutator:mutate_put(Obj, BProps, Mutators)
-    end,
-
-    {Reply, State2} = actual_put(BKey, Obj2, Fake, IndexSpecs, RB, ReqID, State),
+    {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State),
     {Reply, State2}.
 
-actual_put(BKey={Bucket, Key}, Obj, MaybeFake, IndexSpecs, RB, ReqID,
+actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
            State=#state{idx=Idx,
                         mod=Mod,
                         modstate=ModState}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) of
-        {{ok, UpdModState}, _EncodedVal} ->
-            update_hashtree(Bucket, Key, Obj, State),
-            maybe_cache_object(BKey, MaybeFake, State),
+        {{ok, UpdModState}, EncodedVal} ->
+            update_hashtree(Bucket, Key, EncodedVal, State),
+            maybe_cache_object(BKey, Obj, State),
             ?INDEX(Obj, put, Idx),
             case RB of
                 true ->
-                    Reply = {dw, Idx, MaybeFake, ReqID};
+                    Reply = {dw, Idx, Obj, ReqID};
                 false ->
                     Reply = {dw, Idx, ReqID}
             end;
@@ -1517,12 +1506,7 @@ do_get(_Sender, BKey, ReqID,
 do_get_term({Bucket, Key}, Mod, ModState) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
         {ok, Obj, _UpdModState} ->
-            case riak_kv_mutator:mutate_get(Obj) of
-                notfound ->
-                    {error, notfound};
-                Obj2 ->
-                    {ok, Obj2}
-            end;
+            {ok, Obj};
         %% @TODO Eventually it would be good to
         %% make the use of not_found or notfound
         %% consistent throughout the code.
