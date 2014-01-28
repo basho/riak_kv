@@ -96,7 +96,9 @@
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
 new({T, B}, K, V) when is_binary(T), is_binary(B), is_binary(K) ->
-    new_int({T, B}, K, V, no_initial_metadata);
+    BTHash = riak_core_bucket_type:property_hash(riak_core_bucket_type:get(T)),
+    InitialMD = dict:store(bucket_type_hash, BTHash, dict:new()),
+    new_int({T, B}, K, V, InitialMD);
 new(B, K, V) when is_binary(B), is_binary(K) ->
     new_int(B, K, V, no_initial_metadata).
 
@@ -104,7 +106,9 @@ new(B, K, V) when is_binary(B), is_binary(K) ->
 -spec new(Bucket::bucket(), Key::key(), Value::value(),
           string() | dict() | no_initial_metadata) -> riak_object().
 new({T, B}, K, V, C) when is_binary(T), is_binary(B), is_binary(K), is_list(C) ->
-    new_int({T, B}, K, V, dict:from_list([{?MD_CTYPE, C}]));
+    BTHash = riak_core_bucket_type:property_hash(riak_core_bucket_type:get(T)),
+    new_int({T, B}, K, V, dict:from_list([{bucket_type_hash, BTHash},
+                                          {?MD_CTYPE, C}]));
 new(B, K, V, C) when is_binary(B), is_binary(K), is_list(C) ->
     new_int(B, K, V, dict:from_list([{?MD_CTYPE, C}]));
 
@@ -723,12 +727,12 @@ vclock_header(Doc) ->
 to_json(Obj) ->
     lager:warning("Change uses of riak_object:to_json/1 to riak_object_json:encode/1"),
     riak_object_json:encode(Obj).
- 
+
 %% @deprecated Use `riak_object_json:decode' now.
 from_json(JsonObj) ->
     lager:warning("Change uses of riak_object:from_json/1 to riak_object_json:decode/1"),
     riak_object_json:decode(JsonObj).
- 
+
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
     case dict:find(clean, M) of
         error -> true;
