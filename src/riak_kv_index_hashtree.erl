@@ -381,7 +381,9 @@ hash_object({Bucket, Key}, RObj0) ->
         end,
         Hash = riak_object:hash(RObj),
         term_to_binary(Hash)
-    catch _:_ ->
+    catch
+        Err:ErrClass ->
+            lager:error("Failed to hash ~p : ~p/~p", [{Bucket, Key}, Err, ErrClass]),
             Null = erlang:phash2(<<>>),
             term_to_binary(Null)
     end.
