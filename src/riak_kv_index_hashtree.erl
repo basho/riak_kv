@@ -374,16 +374,25 @@ load_built(#state{trees=Trees}) ->
 -spec hash_object({riak_object:bucket(), riak_object:key()},
                   riak_object_t2b() | riak_object:riak_object()) -> binary().
 hash_object({Bucket, Key}, RObj0) ->
-    try
-        RObj = case riak_object:is_robject(RObj0) of
-            true -> RObj0;
-            false -> riak_object:from_binary(Bucket, Key, RObj0)
-        end,
-        Hash = riak_object:hash(RObj),
-        term_to_binary(Hash)
-    catch
-        Err:ErrClass ->
-            lager:error("Failed to hash ~p : ~p/~p", [{Bucket, Key}, Err, ErrClass]),
+    MaybeRObj =
+    case riak_object:is_robject(RObj0) of
+        true ->
+            {ok, RObj0};
+        false ->
+            try
+                {ok, riak_object:from_binary(Bucket, Key, RObj0)}
+            catch
+                _:_ ->
+                    lager:error("Failed to convert from binary ~p/~p",
+                                [Bucket, Key]),
+                    {error, bad_binary}
+            end
+    end,
+    case MaybeRObj of
+        {ok, RObj} ->
+            Hash = riak_object:hash(RObj),
+            term_to_binary(Hash);
+        {error, _} ->
             Null = erlang:phash2(<<>>),
             term_to_binary(Null)
     end.
