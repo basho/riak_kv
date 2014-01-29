@@ -1291,6 +1291,16 @@ do_get_object(Bucket, Key, Mod, ModState) ->
         false ->
             case do_get_binary(Bucket, Key, Mod, ModState) of
                 {ok, ObjBin, _UpdModState} ->
+                    ObjSize = size(ObjBin),
+                    WarnObjSize = app_helper:get_env(riak_kv, warn_object_size),
+                    case ObjSize > WarnObjSize of
+                        true ->
+                            lager:warning("Reading large object of size ~p from ~p/~p",
+                                          [ObjSize, Bucket, Key]);
+                        false ->
+                            ok
+                    end,
+
                     try
                         case riak_object:from_binary(Bucket, Key, ObjBin) of
                             {error, Reason} ->
@@ -1768,13 +1778,53 @@ return_encoded_binary_object(Method, EncodedObject) ->
            {{error, Reason::term(), UpdModState::term()}, EncodedObj::binary()}.
 
 encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
+    NumSiblings = riak_object:value_count(Obj),
+    case NumSiblings > app_helper:get_env(riak_kv, max_siblings) of
+        true ->
+            lager:error("Too many siblings for object ~p/~p (~p)",
+                        [Bucket, Key, NumSiblings]),
+            {{error, {too_many_siblings, NumSiblings}, ModState},
+             undefined};
+        false ->
+            case NumSiblings > app_helper:get_env(riak_kv, warn_siblings) of
+                true ->
+                    lager:warning("Too many siblings for object ~p/~p (~p)",
+                                  [Bucket, Key, NumSiblings]);
+                false ->
+                    ok
+            end,
+            encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState)
+    end.
+
+encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
     case uses_r_object(Mod, ModState, Bucket) of
         true ->
             Mod:put_object(Bucket, Key, IndexSpecs, Obj, ModState);
         false ->
             ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
             EncodedVal = riak_object:to_binary(ObjFmt, Obj),
-            {Mod:put(Bucket, Key, IndexSpecs, EncodedVal, ModState), EncodedVal}
+            BinSize = size(EncodedVal),
+            %% Report or fail on large objects
+            case BinSize > app_helper:get_env(riak_kv, max_object_size) of
+                true ->
+                    lager:error("Object too large to write: ~p/~p ~p bytes",
+                                [Bucket, Key, BinSize]),
+                    {{error, {too_large, BinSize}, ModState},
+                     EncodedVal};
+                false ->
+                    WarnSize = app_helper:get_env(riak_kv, warn_object_size),
+                    case BinSize > WarnSize of
+                       true ->
+                            lager:warning("Writing very large object " ++
+                                          "(~p bytes) to ~p/~p",
+                                          [BinSize, Bucket, Key]);
+                        false ->
+                            ok
+                    end,
+                    PutRet = Mod:put(Bucket, Key, IndexSpecs, EncodedVal,
+                                     ModState),
+                    {PutRet, EncodedVal}
+            end
     end.
 
 uses_r_object(Mod, ModState, Bucket) ->

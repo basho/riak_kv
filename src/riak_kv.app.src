@@ -47,6 +47,12 @@
          %% This will allow arbitrary Erlang code to be submitted
          %% through the REST and Protocol Buffers interfaces. This
          %% should only be used for development purposes.
-         {allow_strfun, false}
+         {allow_strfun, false},
+
+         %% Log a warning if object bigger than this
+         {warn_object_size, 5000000},
+         %% Log a warning if # of siblings bigger than this
+         {warn_siblings, 25}
+
         ]}
  ]}.
