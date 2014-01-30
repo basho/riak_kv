@@ -91,13 +91,12 @@
 -export([is_robject/1]).
 -export([update_last_modified/1]).
 -export([strict_descendant/2]).
+-export([bucket_type_hashes/1, get_metadatas_entry/2]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
 new({T, B}, K, V) when is_binary(T), is_binary(B), is_binary(K) ->
-    BTHash = riak_core_bucket_type:property_hash(riak_core_bucket_type:get(T)),
-    InitialMD = dict:store(bucket_type_hash, BTHash, dict:new()),
-    new_int({T, B}, K, V, InitialMD);
+    new_int({T, B}, K, V, dict:new());
 new(B, K, V) when is_binary(B), is_binary(K) ->
     new_int(B, K, V, no_initial_metadata).
 
@@ -105,9 +104,7 @@ new(B, K, V) when is_binary(B), is_binary(K) ->
 -spec new(Bucket::bucket(), Key::key(), Value::value(),
           string() | dict() | no_initial_metadata) -> riak_object().
 new({T, B}, K, V, C) when is_binary(T), is_binary(B), is_binary(K), is_list(C) ->
-    BTHash = riak_core_bucket_type:property_hash(riak_core_bucket_type:get(T)),
-    new_int({T, B}, K, V, dict:from_list([{bucket_type_hash, BTHash},
-                                          {?MD_CTYPE, C}]));
+    new_int({T, B}, K, V, dict:from_list([{?MD_CTYPE, C}]));
 new(B, K, V, C) when is_binary(B), is_binary(K), is_list(C) ->
     new_int(B, K, V, dict:from_list([{?MD_CTYPE, C}]));
 
@@ -501,14 +498,57 @@ apply_updates(Object=#r_object{}) ->
              error ->
                  [dict:erase(clean,Object#r_object.updatemetadata) || _X <- VL]
          end,
-    Contents = [#r_content{metadata=M,value=V} || {M,V} <- lists:zip(MD, VL)],
+    BTHash = calculate_bucket_type_hash(type(Object)),
+    Contents = [begin
+                    M1 = maybe_add_bucket_type_hash(M, BTHash),
+                    #r_content{metadata=M1, value=V}
+                end || {M,V} <- lists:zip(MD, VL)],
     Object#r_object{contents=Contents,
                     updatemetadata=dict:store(clean, true, dict:new()),
                     updatevalue=undefined}.
 
+-spec calculate_bucket_type_hash(undefined | binary()) -> undefined | integer().
+calculate_bucket_type_hash(undefined) ->
+    undefined;
+calculate_bucket_type_hash(Type) ->
+    riak_core_bucket_type:property_hash(riak_core_bucket_type:get(Type)).
+
+-spec maybe_add_bucket_type_hash(dict(), undefined | integer()) -> dict().
+maybe_add_bucket_type_hash(MD, undefined) ->
+    MD;
+maybe_add_bucket_type_hash(MD, Hash) ->
+    dict:store(bucket_type_hash, Hash, MD).
+
 %% @doc Return the containing bucket for this riak_object.
 -spec bucket(riak_object()) -> bucket().
 bucket(#r_object{bucket=Bucket}) -> Bucket.
+
+%% @doc Return a list of unique bucket_type_hash values contained in
+%% the metadata dictionaries associated with each value in a
+%% riak_object.
+-spec bucket_type_hashes(riak_object()) -> undefined | [integer()].
+bucket_type_hashes(RObj) ->
+    get_metadatas_entry(bucket_type_hash, RObj).
+
+%% @doc Return a list of values for a particular key contained in
+%% the metadata dictionaries associated with each value in a
+%% riak_object.
+-spec get_metadatas_entry(term(), riak_object()) -> [term()].
+get_metadatas_entry(Key, #r_object{contents=Contents}) ->
+    ordsets:to_list(
+      lists:foldl(get_metadatas_entry_fold_fun(Key), ordsets:new(), Contents)).
+
+-type metadatas_entry_fold_fun() :: fun((term(), ordsets:ordset()) -> ordsets:ordset()).
+-spec get_metadatas_entry_fold_fun(term()) -> metadatas_entry_fold_fun().
+get_metadatas_entry_fold_fun(Key) ->
+    fun(Content, Acc) ->
+            case dict:find(Key, Content#r_content.metadata) of
+                {ok, Value} ->
+                    ordsets:add_element(Value, Acc);
+                error ->
+                    Acc
+            end
+    end.
 
 %% @doc Return the containing bucket for this riak_object without any type
 %% information, if present.
