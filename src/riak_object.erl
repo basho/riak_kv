@@ -511,7 +511,7 @@ apply_updates(Object=#r_object{}) ->
 calculate_bucket_type_hash(undefined) ->
     undefined;
 calculate_bucket_type_hash(Type) ->
-    riak_core_bucket_type:property_hash(riak_core_bucket_type:get(Type)).
+    riak_core_bucket_type:property_hash(Type).
 
 -spec maybe_add_bucket_type_hash(dict(), undefined | integer()) -> dict().
 maybe_add_bucket_type_hash(MD, undefined) ->
@@ -1126,7 +1126,7 @@ object_test_setup() ->
              riak_object:update_value(O1, V2)),
            Actor),
     meck:new(riak_core_bucket_type, [passthrough]),
-    meck:expect(riak_core_bucket_type, get, fun(_) -> [false] end),
+    meck:expect(riak_core_bucket_type, property_hash, fun(_) -> 12345 end),
     TypeO2 = riak_object:increment_vclock(
            riak_object:apply_updates(
              riak_object:update_value(TypeO1, V2)),
