@@ -577,24 +577,24 @@ end
     is_boolean(Value) orelse (is_integer(Value) andalso Value =< 9 andalso Value >= 0)
  end}.
 
-%% @doc Enable or skip using the background manager during KV handoff.
-%% This will help to prevent system response degradation under times of
-%% heavy load from multiple background tasks that contend for the same
-%% vnode. To disable background coordination, set this parameter to false.
-%% Riak 2.0+.
-{mapping, "handoff.use_bg_manager", "riak_kv.handoff_use_background_manager", [
-    {datatype, {enum, [true, false]}},
+%% @doc Whether to use the background manager to limit KV handoff.
+%% This will help to prevent system response degradation under times
+%% of heavy load from multiple background tasks that contend for the
+%% same resources.
+%% @see background_manager
+{mapping, "handoff.use_background_manager", "riak_kv.handoff_use_background_manager", [
+    {datatype, flag},    
     {level, advanced},
-    {default, true}
+    {default, on}
 ]}.
 
-%% @doc Enable or skip using the background manager during AAE tree rebuilds.
-%% This will help to prevent system response degradation under times of
-%% heavy load from multiple background tasks that contend for the same
-%% vnode. To disable background coordination, set this parameter to false.
-%% Riak 2.0+.
-{mapping, "anti_entropy.use_bg_manager", "riak_kv.aae_use_background_manager", [
-    {datatype, {enum, [true, false]}},
+%% @doc Whether to use the background manager to limit AAE tree
+%% rebuilds. This will help to prevent system response degradation
+%% under times of heavy load from multiple background tasks that
+%% contend for the same resources.
+%% @see background_manager
+{mapping, "anti_entropy.use_background_manager", "riak_kv.aae_use_background_manager", [
+    {datatype, flag},
     {level, advanced},
-    {default, true}
+    {default, on}
 ]}.

@@ -61,6 +61,8 @@ basic_schema_test() ->
     cuttlefish_unit:assert_not_configured(Config, "riak_core.default_bucket_props.precommit"),
     cuttlefish_unit:assert_not_configured(Config, "riak_core.default_bucket_props.postcommit"),
     cuttlefish_unit:assert_config(Config, "riak_dt.binary_compression", 1),
+    cuttlefish_unit:assert_config(Config, "riak_kv.handoff_use_background_manager", true),
+    cuttlefish_unit:assert_config(Config, "riak_kv.aae_use_background_manager", true),
     ok.
 
 override_non_multi_backend_schema_test() ->
@@ -114,7 +116,9 @@ override_non_multi_backend_schema_test() ->
         {["buckets", "default", "last_write_wins"], true},
         {["buckets", "default", "precommit"], "module:function javascriptFunction"},
         {["buckets", "default", "postcommit"], "module2:function2"},
-        {["datatypes", "compression_level"], "off"}
+        {["datatypes", "compression_level"], "off"},
+        {["handoff", "use_background_manager"], off},
+        {["anti_entropy", "use_background_manager"], off}
     ],
 
     Config = cuttlefish_unit:generate_templated_config(
@@ -181,6 +185,9 @@ override_non_multi_backend_schema_test() ->
                ]}
     ]),
     cuttlefish_unit:assert_config(Config, "riak_dt.binary_compression", false),
+    cuttlefish_unit:assert_config(Config, "riak_kv.handoff_use_background_manager", false),
+    cuttlefish_unit:assert_config(Config, "riak_kv.aae_use_background_manager", false),
+
     ok.
 
 multi_backend_test() ->
