@@ -446,7 +446,13 @@ run_reformat(M, F, A) ->
 bucket_type_status([TypeStr]) ->
     Type = list_to_binary(TypeStr),
     bucket_type_print_status(Type, riak_core_bucket_type:status(Type)),
-    bucket_type_print_props(riak_core_claimant:get_bucket_type(Type, undefined, false)).
+    bucket_type_print_props(bucket_type_raw_props(Type)).
+
+
+bucket_type_raw_props(<<"default">>) ->
+    riak_core_bucket_props:defaults();
+bucket_type_raw_props(Type) ->
+    riak_core_claimant:get_bucket_type(Type, undefined, false).
 
 bucket_type_print_status(Type, undefined) ->
     io:format("~s is not an existing bucket type~n", [Type]);
@@ -532,6 +538,7 @@ bucket_type_print_reset_result(Type, {error, Reason}) ->
 
 bucket_type_list([]) ->
     It = riak_core_bucket_type:iterator(),
+    io:format("default (active)~n"),
     bucket_type_print_list(It).
 
 bucket_type_print_list(It) ->
