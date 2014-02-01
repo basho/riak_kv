@@ -56,7 +56,7 @@ basic_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.rw", quorum),
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.notfound_ok", true),
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.basic_quorum", false),
-    cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.allow_mult", true),
+    cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.allow_mult", false),
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.last_write_wins", false),
     cuttlefish_unit:assert_not_configured(Config, "riak_core.default_bucket_props.precommit"),
     cuttlefish_unit:assert_not_configured(Config, "riak_core.default_bucket_props.postcommit"),
@@ -109,7 +109,7 @@ override_non_multi_backend_schema_test() ->
         {["buckets", "default", "rw"], 1},
         {["buckets", "default", "notfound_ok"], false},
         {["buckets", "default", "basic_quorum"], true},
-        {["buckets", "default", "allow_mult"], false},
+        {["buckets", "default", "allow_mult"], true},
         {["buckets", "default", "last_write_wins"], true},
         {["buckets", "default", "precommit"], "module:function javascriptFunction"},
         {["buckets", "default", "postcommit"], "module2:function2"}
@@ -162,7 +162,7 @@ override_non_multi_backend_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.rw", 1),
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.notfound_ok", false),
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.basic_quorum", true),
-    cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.allow_mult", false),
+    cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.allow_mult", true),
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.last_write_wins", true),
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.precommit", [
       {struct, [
@@ -235,7 +235,7 @@ multi_backend_test() ->
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.rw", quorum),
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.notfound_ok", true),
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.basic_quorum", false),
-    cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.allow_mult", true),
+    cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.allow_mult", false),
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.last_write_wins", false),
     cuttlefish_unit:assert_not_configured(Config, "riak_core.default_bucket_props.precommit"),
     cuttlefish_unit:assert_not_configured(Config, "riak_core.default_bucket_props.postcommit"),
