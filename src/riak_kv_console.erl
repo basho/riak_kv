@@ -538,6 +538,7 @@ bucket_type_print_reset_result(Type, {error, Reason}) ->
 
 bucket_type_list([]) ->
     It = riak_core_bucket_type:iterator(),
+    io:format("default (active)~n"),
     bucket_type_print_list(It).
 
 bucket_type_print_list(It) ->
