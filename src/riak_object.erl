@@ -74,6 +74,8 @@
                          %% Shanley's(11) + Joe's(42)
 -define(EMPTY_VTAG_BIN, <<"e">>).
 
+-define(DEFAULT_HASH_BUCKET_PROPS, [consistent, datatype, n_val, allow_mult, last_write_wins]).
+
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
@@ -512,7 +514,7 @@ apply_updates(Object=#r_object{}) ->
 calculate_bucket_type_hash(undefined) ->
     undefined;
 calculate_bucket_type_hash(Type) ->
-    riak_core_bucket_type:property_hash(Type).
+    riak_core_bucket_type:property_hash(Type, ?DEFAULT_HASH_BUCKET_PROPS).
 
 -spec maybe_add_bucket_type_hash(dict(), undefined | integer()) -> dict().
 maybe_add_bucket_type_hash(MD, undefined) ->
@@ -1107,7 +1109,7 @@ object_test_setup() ->
              riak_object:update_value(O1, V2)),
            Actor),
     meck:new(riak_core_bucket_type, [passthrough]),
-    meck:expect(riak_core_bucket_type, property_hash, fun(_) -> 12345 end),
+    meck:expect(riak_core_bucket_type, property_hash, fun(_, _) -> 12345 end),
     TypeO2 = riak_object:increment_vclock(
            riak_object:apply_updates(
              riak_object:update_value(TypeO1, V2)),
