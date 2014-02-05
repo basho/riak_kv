@@ -445,7 +445,9 @@ hash_index_data(IndexData) when is_list(IndexData) ->
 fold_keys(Partition, Tree, HasIndexTree) ->
     FoldFun = fold_fun(Tree, HasIndexTree),
     Req = riak_core_util:make_fold_req(FoldFun,
-                                       0, false, [aae_reconstruction]),
+                                       0, false, 
+                                       [aae_reconstruction,
+                                        {iterator_refresh, true}]),
     riak_core_vnode_master:sync_command({Partition, node()},
                                         Req,
                                         riak_kv_vnode_master, infinity),

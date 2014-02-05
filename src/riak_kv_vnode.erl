@@ -1736,13 +1736,8 @@ do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
                                                  mod=Mod,
                                                  modstate=ModState}) ->
     {ok, Capabilities} = Mod:capabilities(ModState),
-    AsyncBackend = lists:member(async_fold, Capabilities),
-    case AsyncFolding andalso AsyncBackend of
-        true ->
-            Opts = [async_fold|ReqOpts];
-        false ->
-            Opts = ReqOpts
-    end,
+    Opts0 = maybe_enable_async_fold(AsyncFolding, Capabilities, ReqOpts),
+    Opts = maybe_enable_iterator_refresh(Capabilities, Opts0),
     case Mod:fold_objects(Fun, Acc0, Opts, ModState) of
         {ok, Acc} ->
             {reply, Acc, State};
@@ -1754,6 +1749,25 @@ do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
             {async, {fold, Work, FinishFun}, Sender, State};
         ER ->
             {reply, ER, State}
+    end.
+
+%% @private
+maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
+    AsyncBackend = lists:member(async_fold, Capabilities),
+    case AsyncFolding andalso AsyncBackend of
+        true ->
+            [async_fold|Opts];
+        false ->
+            Opts
+    end.
+
+%% @private
+maybe_enable_iterator_refresh(Capabilities, Opts) ->
+    case lists:member(iterator_refresh, Capabilities) of
+        true ->
+            Opts;
+        false ->
+            lists:keydelete(iterator_refresh, 1, Opts)
     end.
 
 %% @private

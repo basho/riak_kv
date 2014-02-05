@@ -59,7 +59,8 @@
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold, indexes, index_reformat, size]).
+-define(CAPABILITIES, [async_fold, indexes, index_reformat, size,
+        iterator_refresh]).
 -define(FIXED_INDEXES_KEY, fixed_indexes).
 
 -record(state, {ref :: reference(),
@@ -466,9 +467,15 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
            true            -> undefined
         end,
 
+    IteratorRefresh =
+        case lists:keyfind(iterator_refresh, 1, Opts) of
+            false -> [];
+            Tuple -> [Tuple]
+        end,
+
     %% Set up the fold...
     FirstKey = to_first_key(Limiter),
-    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    FoldOpts1 = IteratorRefresh ++ [{first_key, FirstKey} | FoldOpts],
     FoldFun = fold_objects_fun(FoldObjectsFun, Limiter),
 
     ObjectFolder =
