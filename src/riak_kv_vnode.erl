@@ -37,6 +37,7 @@
          readrepair/6,
          list_keys/4,
          fold/3,
+         fold/4,
          get_vclocks/2,
          vnode_status/1,
          ack_keys/1,
@@ -301,6 +302,12 @@ list_keys(Preflist, ReqId, Caller, Bucket) ->
 
 fold(Preflist, Fun, Acc0) ->
     Req = riak_core_util:make_fold_req(Fun, Acc0),
+    riak_core_vnode_master:sync_spawn_command(Preflist,
+                                              Req,
+                                              riak_kv_vnode_master).
+
+fold(Preflist, Fun, Acc0, Options) ->
+    Req = riak_core_util:make_fold_req(Fun, Acc0, false, Options),
     riak_core_vnode_master:sync_spawn_command(Preflist,
                                               Req,
                                               riak_kv_vnode_master).
@@ -926,10 +933,13 @@ handoff_starting({_HOType, TargetNode}=_X, State) ->
     end.
 
 %% @doc Optional callback that is exported, but not part of the behaviour.
-handoff_started({SrcPartition, _SrcNode}, WorkerPid) ->
+handoff_started(SrcPartition, WorkerPid) ->
     case maybe_get_vnode_lock(SrcPartition, WorkerPid) of
-        ok -> true;
-        Error -> Error
+        ok ->
+            Refresh = app_helper:get_env(riak_kv, iterator_refresh, true),
+            FoldOpts = [{iterator_refresh, Refresh}],
+            {ok, FoldOpts};
+        max_concurrency -> {error, max_concurrency}
     end.
 
 handoff_cancelled(State) ->
@@ -1714,13 +1724,8 @@ do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
                                                  mod=Mod,
                                                  modstate=ModState}) ->
     {ok, Capabilities} = Mod:capabilities(ModState),
-    AsyncBackend = lists:member(async_fold, Capabilities),
-    case AsyncFolding andalso AsyncBackend of
-        true ->
-            Opts = [async_fold|ReqOpts];
-        false ->
-            Opts = ReqOpts
-    end,
+    Opts0 = maybe_enable_async_fold(AsyncFolding, Capabilities, ReqOpts),
+    Opts = maybe_enable_iterator_refresh(Capabilities, Opts0),
     case Mod:fold_objects(Fun, Acc0, Opts, ModState) of
         {ok, Acc} ->
             {reply, Acc, State};
@@ -1732,6 +1737,25 @@ do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
             {async, {fold, Work, FinishFun}, Sender, State};
         ER ->
             {reply, ER, State}
+    end.
+
+%% @private
+maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
+    AsyncBackend = lists:member(async_fold, Capabilities),
+    case AsyncFolding andalso AsyncBackend of
+        true ->
+            [async_fold|Opts];
+        false ->
+            Opts
+    end.
+
+%% @private
+maybe_enable_iterator_refresh(Capabilities, Opts) ->
+    case lists:member(iterator_refresh, Capabilities) of
+        true ->
+            Opts;
+        false ->
+            lists:keydelete(iterator_refresh, 1, Opts)
     end.
 
 %% @private
