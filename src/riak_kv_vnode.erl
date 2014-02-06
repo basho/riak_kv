@@ -36,6 +36,7 @@
          readrepair/6,
          list_keys/4,
          fold/3,
+         fold/4,
          get_vclocks/2,
          vnode_status/1,
          ack_keys/1,
@@ -299,6 +300,12 @@ list_keys(Preflist, ReqId, Caller, Bucket) ->
 
 fold(Preflist, Fun, Acc0) ->
     Req = riak_core_util:make_fold_req(Fun, Acc0),
+    riak_core_vnode_master:sync_spawn_command(Preflist,
+                                              Req,
+                                              riak_kv_vnode_master).
+
+fold(Preflist, Fun, Acc0, Options) ->
+    Req = riak_core_util:make_fold_req(Fun, Acc0, false, Options),
     riak_core_vnode_master:sync_spawn_command(Preflist,
                                               Req,
                                               riak_kv_vnode_master).
