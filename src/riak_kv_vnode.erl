@@ -932,10 +932,12 @@ handoff_starting({_HOType, TargetNode}=_X, State) ->
     end.
 
 %% @doc Optional callback that is exported, but not part of the behaviour.
-handoff_started({SrcPartition, _SrcNode}, WorkerPid) ->
+handoff_started(SrcPartition, WorkerPid) ->
     case maybe_get_vnode_lock(SrcPartition, WorkerPid) of
-        ok -> true;
-        Error -> Error
+        ok ->
+            FoldOpts = [{iterator_refresh, true}],
+            {ok, FoldOpts};
+        max_concurrency -> {error, max_concurrency}
     end.
 
 handoff_cancelled(State) ->
