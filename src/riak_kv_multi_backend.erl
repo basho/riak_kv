@@ -52,7 +52,7 @@
 
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold, index_reformat]).
--define(ANY_CAPABILITIES, [indexes]).
+-define(ANY_CAPABILITIES, [indexes, iterator_refresh]).
 
 -record (state, {backends :: [{atom(), atom(), term()}],
                  default_backend :: atom()}).
