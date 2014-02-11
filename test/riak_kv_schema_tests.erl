@@ -9,7 +9,7 @@ basic_schema_test() ->
     %% The defaults are defined in ../priv/riak_kv.schema and multi_backend.schema.
     %% they are the files under test.
     Config = cuttlefish_unit:generate_templated_config(
-        ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], [], context()),
+        ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], [], context(), predefined_schema()),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy", {on, []}),
     cuttlefish_unit:assert_config(Config, "riak_kv.storage_backend", riak_kv_bitcask_backend),
@@ -116,7 +116,7 @@ override_non_multi_backend_schema_test() ->
     ],
 
     Config = cuttlefish_unit:generate_templated_config(
-        ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context()),
+        ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context(), predefined_schema()),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy", {on, [debug]}),
     cuttlefish_unit:assert_config(Config, "riak_kv.storage_backend", riak_kv_eleveldb_backend),
@@ -192,7 +192,7 @@ multi_backend_test() ->
     ],
 
     Config = cuttlefish_unit:generate_templated_config(
-        ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context()),
+        ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context(), predefined_schema()),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy", {on, []}),
     cuttlefish_unit:assert_config(Config, "riak_kv.storage_backend", riak_kv_multi_backend),
@@ -255,7 +255,7 @@ commit_hooks_test() ->
             {["buckets", "default", "postcommit"], "jsLOL"}
            ],
     Config = cuttlefish_unit:generate_templated_config(
-               ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context()),
+               ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context(), predefined_schema()),
     ?assertEqual({error, apply_translations,
                   {error, [
                            {error, "Translation for 'riak_core.default_bucket_props.postcommit'"
@@ -278,3 +278,14 @@ context() ->
         {reduce_js_vms, 6},
         {hook_js_vms, 2}
     ].
+
+%% This predefined schema covers riak_kv's dependency on
+%% platform_data_dir
+predefined_schema() ->
+    Mapping = cuttlefish_mapping:parse({mapping,
+                                        "platform_data_dir",
+                                        "riak_core.platform_data_dir", [
+                                            {default, "./data"},
+                                            {datatype, directory}
+                                       ]}),
+    {[], [Mapping], []}.
