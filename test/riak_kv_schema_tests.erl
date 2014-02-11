@@ -273,7 +273,6 @@ commit_hooks_test() ->
 context() ->
     [
         {storage_backend, "bitcask"},
-        {platform_data_dir, "./data"},
         {map_js_vms,   8},
         {reduce_js_vms, 6},
         {hook_js_vms, 2}
