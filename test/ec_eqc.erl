@@ -895,29 +895,7 @@ syntactic_put_merge(CurObj, UpdObj) ->
 coord_put_merge(undefined, UpdObj, NodeId, Timestamp) ->
     riak_object:increment_vclock(UpdObj, NodeId, Timestamp);
 coord_put_merge(LocalObj, PutObj, NodeId, Timestamp) ->
-  %% Get the vclock we have the object stored on disk at this replica
-    LocalVC = riak_object:vclock(LocalObj),
-    %% get the vclock from the put
-    PutVC = riak_object:vclock(PutObj),
-
-    %% Optimisation: if the put object's vclock descends from the
-    %% local object's vclock, then don't merge with local value, just
-    %% increment the clock and overwrite.
-    case vclock:descends(PutVC, LocalVC) of
-        true ->
-            riak_object:increment_vclock(PutObj, NodeId, Timestamp);
-        false ->
-            %% The PUT object is concurrent with some other PUT,
-            %% so merge the PUT object and the local object.
-            MergedClock = vclock:merge([PutVC, LocalVC]),
-            FrontierClock = vclock:increment(NodeId, Timestamp, MergedClock),
-            {ok, Dot} = vclock:get_entry(NodeId, FrontierClock),
-            %% Asign an event to the put value
-            DottedPutObject = riak_object:assign_dot(PutObj, Dot),
-            MergedObject = riak_object:merge(DottedPutObject, LocalObj),
-            riak_object:set_vclock(MergedObject, FrontierClock)
-    end.
-
+    riak_object:update(false, LocalObj, PutObj, NodeId, Timestamp).
 
 get_counter(Id, VC) ->            
     case lists:keyfind(Id, 1, VC) of
