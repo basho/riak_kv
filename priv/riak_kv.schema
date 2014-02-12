@@ -323,7 +323,7 @@ end
 {mapping, "metadata_cache_size", "riak_kv.vnode_md_cache_size", [
   {datatype, [{atom, off}, bytesize]},
   {default, off}, %% disabled by default, 256KB is a reasonable value
-  {level, advanced}
+  hidden
 ]}.
 
 { translation,
