@@ -471,13 +471,22 @@ bucket_type_print_props(Props) ->
 
 bucket_type_activate([TypeStr]) ->
     Type = list_to_binary(TypeStr),
-    bucket_type_print_activate_result(Type, riak_core_bucket_type:activate(Type)).
+    IsFirst = bucket_type_is_first(),
+    bucket_type_print_activate_result(Type, riak_core_bucket_type:activate(Type), IsFirst).
 
-bucket_type_print_activate_result(Type, ok) ->
-    io:format("~s has been activated~n", [Type]);
-bucket_type_print_activate_result(Type, {error, undefined}) ->
+bucket_type_print_activate_result(Type, ok, IsFirst) ->
+    io:format("~s has been activated~n", [Type]),
+    case IsFirst of
+        true ->
+            io:format("~n"),
+            io:format("WARNING: Nodes in this cluster can no longer be~n"
+                      "downgraded to a version of Riak prior to 2.0~n");
+        false ->
+            ok
+    end;
+bucket_type_print_activate_result(Type, {error, undefined}, _IsFirst) ->
     bucket_type_print_status(Type, undefined);
-bucket_type_print_activate_result(Type, {error, not_ready}) ->
+bucket_type_print_activate_result(Type, {error, not_ready}, _IsFirst) ->
     bucket_type_print_status(Type, created).
 
 bucket_type_create([TypeStr, PropsStr]) ->
@@ -498,7 +507,16 @@ bucket_type_create(Type, _) ->
     error.
 
 bucket_type_print_create_result(Type, ok) ->
-    io:format("~s created~n", [Type]);
+    io:format("~s created~n", [Type]),
+    case bucket_type_is_first() of
+        true ->
+            io:format("~n"),
+            io:format("WARNING: After activating ~s, nodes in this cluster~n"
+                      "can no longer be downgraded to a version of Riak "
+                      "prior to 2.0~n", [Type]);
+        false ->
+            ok
+    end;
 bucket_type_print_create_result(Type, {error, Reason}) ->
     io:format("Error creating bucket type ~s: ~p~n", [Type, Reason]),
     error.
@@ -553,6 +571,26 @@ bucket_type_print_list(It) ->
                         end,
             io:format("~s (~s)~n", [Type, ActiveStr]),
             bucket_type_print_list(riak_core_bucket_type:itr_next(It))
+    end.
+
+bucket_type_is_first() ->
+    It = riak_core_bucket_type:iterator(),
+    bucket_type_is_first(It, false).
+
+bucket_type_is_first(It, true) ->
+    %% found an active bucket type
+    riak_core_bucket_type:itr_close(It),
+    false;
+bucket_type_is_first(It, false) ->
+    case riak_core_bucket_type:itr_done(It) of
+        true ->
+            %% no active bucket types found
+            ok = riak_core_bucket_type:itr_close(It),
+            true;
+        false ->
+            {_, Props} = riak_core_bucket_type:itr_value(It),
+            Active = proplists:get_value(active, Props, false),
+            bucket_type_is_first(riak_core_bucket_type:itr_next(It), Active)
     end.
 
 repair_2i(["status"]) ->
