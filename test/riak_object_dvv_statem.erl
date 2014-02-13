@@ -330,9 +330,9 @@ merge_put_dvv(Old, New) ->
 update_ro(Value, undefined, Time) ->
     new_riak_object(Value, Time);
 update_ro(Value, RObj, Time) ->
-    RObj2 = riak_object:update_value(RObj, Value),
-    RObj3 = riak_object:update_metadata(RObj2, dict:store(<<"X-Riak-Last-Modified">>, Time, dict:new())),
-    riak_object:apply_updates(RObj3).
+    VClock = riak_object:vclock(RObj),
+    RO = new_riak_object(Value, Time),
+    riak_object:set_vclock(RO, VClock).
 
 %% Ensure the context data is maintained
 update_dvv(Value, undefined) ->

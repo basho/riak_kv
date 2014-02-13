@@ -401,8 +401,8 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                             %% drop dots from both dicts and compare
                             %% them, if equal, store a single, dotless
                             %% value
-                            case lists:usort(dict:to_list(dict:erase(?DOT, D1))) ==
-                                lists:usort(dict:to_list(dict:erase(?DOT, Dict))) of
+                            case lists:sort(dict:to_list(dict:erase(?DOT, D1))) ==
+                                lists:sort(dict:to_list(dict:erase(?DOT, Dict))) of
                                 true ->
                                     MergeAcc#merge_acc{keep=[{r_content, dict:erase(?DOT, D1), Value} | Keep2]};
                                 false ->
