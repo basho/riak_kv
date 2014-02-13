@@ -1781,7 +1781,7 @@ encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
     NumSiblings = riak_object:value_count(Obj),
     case NumSiblings > app_helper:get_env(riak_kv, max_siblings) of
         true ->
-            lager:error("Too many siblings for object ~p/~p (~p)",
+            lager:error("Put failure: too many siblings for object ~p/~p (~p)",
                         [Bucket, Key, NumSiblings]),
             {{error, {too_many_siblings, NumSiblings}, ModState},
              undefined};
@@ -1807,7 +1807,7 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
             %% Report or fail on large objects
             case BinSize > app_helper:get_env(riak_kv, max_object_size) of
                 true ->
-                    lager:error("Object too large to write: ~p/~p ~p bytes",
+                    lager:error("Put failure: object too large to write ~p/~p ~p bytes",
                                 [Bucket, Key, BinSize]),
                     {{error, {too_large, BinSize}, ModState},
                      EncodedVal};
