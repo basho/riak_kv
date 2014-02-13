@@ -138,6 +138,9 @@ process_stream({ReqId, From, {keys, Keys}}, ReqId,
 process_stream({ReqId, {keys, Keys}}, ReqId,
                State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     {reply, #rpblistkeysresp{keys = Keys}, State};
+process_stream({ReqId, {error, Error}}, ReqId,
+               State=#state{ req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
+    {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}};
 process_stream({ReqId, Error}, ReqId,
                State=#state{ req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}};
@@ -151,6 +154,9 @@ process_stream({ReqId, {buckets_stream, []}}, ReqId,
 process_stream({ReqId, {buckets_stream, Buckets}}, ReqId,
                State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {reply, #rpblistbucketsresp{buckets = Buckets}, State};
+process_stream({ReqId, {error, Error}}, ReqId,
+               State=#state{ req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
+    {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}};
 process_stream({ReqId, Error}, ReqId,
                State=#state{ req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}}.
