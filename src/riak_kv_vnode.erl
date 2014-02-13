@@ -1384,7 +1384,8 @@ actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
            State=#state{idx=Idx,
                         mod=Mod,
                         modstate=ModState}) ->
-    case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) of
+    case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
+                       do_max_check) of
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             maybe_cache_object(BKey, Obj, State),
@@ -1777,7 +1778,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                     IndexSpecs = []
             end,
             case encode_and_put(DiffObj, Mod, Bucket, Key,
-                                IndexSpecs, ModState) of
+                                IndexSpecs, ModState, no_max_check) of
                 {{ok, _UpdModState} = InnerRes, _EncodedVal} ->
                     update_hashtree(Bucket, Key, DiffObj, StateData),
                     update_index_write_stats(IndexBackend, IndexSpecs),
@@ -1803,7 +1804,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                             IndexSpecs = []
                     end,
                     case encode_and_put(AMObj, Mod, Bucket, Key,
-                                        IndexSpecs, ModState) of
+                                        IndexSpecs, ModState, no_max_check) of
                         {{ok, _UpdModState} = InnerRes, _EncodedVal} ->
                             update_hashtree(Bucket, Key, AMObj, StateData),
                             update_index_write_stats(IndexBackend, IndexSpecs),
@@ -2052,15 +2053,18 @@ return_encoded_binary_object(Method, EncodedObject) ->
 
 -spec encode_and_put(
       Obj::riak_object:riak_object(), Mod::term(), Bucket::riak_object:bucket(),
-      Key::riak_object:key(), IndexSpecs::list(), ModState::term()) ->
+      Key::riak_object:key(), IndexSpecs::list(), ModState::term(),
+       MaxCheckFlag::no_max_check | do_max_check) ->
            {{ok, UpdModState::term()}, EncodedObj::binary()} |
            {{error, Reason::term(), UpdModState::term()}, EncodedObj::binary()}.
 
-encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
+encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag) ->
+    DoMaxCheck = MaxCheckFlag == do_max_check,
     NumSiblings = riak_object:value_count(Obj),
-    case NumSiblings > app_helper:get_env(riak_kv, max_siblings) of
+    case DoMaxCheck andalso
+         NumSiblings > app_helper:get_env(riak_kv, max_siblings) of
         true ->
-            lager:error("Too many siblings for object ~p/~p (~p)",
+            lager:error("Put failure: too many siblings for object ~p/~p (~p)",
                         [Bucket, Key, NumSiblings]),
             {{error, {too_many_siblings, NumSiblings}, ModState},
              undefined};
@@ -2072,10 +2076,13 @@ encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
                 false ->
                     ok
             end,
-            encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState)
+            encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs,
+                                        ModState, MaxCheckFlag)
     end.
 
-encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
+encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
+                            MaxCheckFlag) ->
+    DoMaxCheck = MaxCheckFlag == do_max_check,
     case uses_r_object(Mod, ModState, Bucket) of
         true ->
             %% Non binary returning backends will have to handle size warnings
@@ -2086,9 +2093,10 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState) ->
             EncodedVal = riak_object:to_binary(ObjFmt, Obj),
             BinSize = size(EncodedVal),
             %% Report or fail on large objects
-            case BinSize > app_helper:get_env(riak_kv, max_object_size) of
+            case DoMaxCheck andalso
+                 BinSize > app_helper:get_env(riak_kv, max_object_size) of
                 true ->
-                    lager:error("Object too large to write: ~p/~p ~p bytes",
+                    lager:error("Put failure: object too large to write ~p/~p ~p bytes",
                                 [Bucket, Key, BinSize]),
                     {{error, {too_large, BinSize}, ModState},
                      EncodedVal};
