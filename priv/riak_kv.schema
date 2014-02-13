@@ -56,14 +56,14 @@
 {mapping, "anti_entropy.tree.build_limit.number", "riak_kv.anti_entropy_build_limit", [
   {default, 1},
   {datatype, integer},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @see anti_entropy.build_limit.number
 {mapping, "anti_entropy.tree.build_limit.per_timespan", "riak_kv.anti_entropy_build_limit", [
   {default, "1h"},
   {datatype, {duration, ms}},
-  {level, advanced}
+  hidden
 ]}.
 
 {translation,
@@ -83,14 +83,14 @@
 {mapping, "anti_entropy.tree.expiry", "riak_kv.anti_entropy_expire", [
   {default, "1w"},
   {datatype, [{duration, ms}, {atom, never}]},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc Limit how many AAE exchanges or builds can happen concurrently.
 {mapping, "anti_entropy.concurrency_limit", "riak_kv.anti_entropy_concurrency", [
   {default, 2},
   {datatype, integer},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc The tick determines how often the AAE manager looks for work
@@ -101,13 +101,13 @@
 {mapping, "anti_entropy.trigger_interval", "riak_kv.anti_entropy_tick", [
   {default, "15s"},
   {datatype, {duration, ms}},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc The directory where AAE hash trees are stored.
 {mapping, "anti_entropy.data_dir", "riak_kv.anti_entropy_data_dir", [
-  {default, "{{platform_data_dir}}/anti_entropy"},
-  {level, basic},
+  {default, "#(platform_data_dir)/anti_entropy"},
+  hidden,
   {datatype, directory}
 ]}.
 
@@ -117,13 +117,13 @@
 {mapping, "anti_entropy.write_buffer_size", "riak_kv.anti_entropy_leveldb_opts.write_buffer_size", [
   {default, "4MB"},
   {datatype, bytesize},
-  {level, advanced}
+  hidden
 ]}.
 
 {mapping, "anti_entropy.max_open_files", "riak_kv.anti_entropy_leveldb_opts.max_open_files", [
   {default, 20},
   {datatype, integer},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc Whether the distributed throttle for active anti-entropy is
@@ -131,7 +131,7 @@
 {mapping, "anti_entropy.throttle", "riak_kv.aae_throttle_kill_switch", [
   {default, on},
   {datatype, {flag, off, on}},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc Sets the throttling tiers for active anti-entropy. Each tier
@@ -150,7 +150,7 @@
  "anti_entropy.throttle.$tier.mailbox_size",
  "riak_kv.aae_throttle_limits", [
   {datatype, integer},
-  {level, advanced},
+  hidden,
   {validators, ["non_negative"]}
 ]}.
 
@@ -159,7 +159,7 @@
  "anti_entropy.throttle.$tier.delay",
  "riak_kv.aae_throttle_limits", [
   {datatype, {duration, ms}},
-  {level, advanced}
+  hidden
 ]}.
 
 {validator,
@@ -194,7 +194,7 @@ end
 {mapping, "anti_entropy.bloomfilter", "riak_kv.anti_entropy_leveldb_opts.use_bloomfilter", [
   {default, on},
   {datatype, flag},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc How many JavaScript virtual machines are available for
@@ -202,7 +202,7 @@ end
 {mapping, "javascript.map_pool_size", "riak_kv.map_js_vm_count", [
   {default, {{map_js_vms}} },
   {datatype, integer},
-  {level, caremad}
+  hidden
 ]}.
 
 %% @doc How many JavaScript virtual machines are available for
@@ -210,7 +210,7 @@ end
 {mapping, "javascript.reduce_pool_size", "riak_kv.reduce_js_vm_count", [
   {default, {{reduce_js_vms}} },
   {datatype, integer},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc How many JavaScript virtual machines are available for
@@ -218,7 +218,7 @@ end
 {mapping, "javascript.hook_pool_size", "riak_kv.hook_js_vm_count", [
   {default, {{hook_js_vms}} },
   {datatype, integer},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc The maximum amount of memory allocated to each JavaScript
@@ -226,7 +226,7 @@ end
 {mapping, "javascript.maximum_heap_size", "riak_kv.js_max_vm_mem", [
   {default, "8MB"},
   {datatype, bytesize},
-  {level, advanced}
+  hidden
 ]}.
 
 {translation,
@@ -240,7 +240,7 @@ end
 {mapping, "javascript.maximum_stack_size", "riak_kv.js_thread_stack", [
   {default, "16MB"},
   {datatype, bytesize},
-  {level, advanced}
+  hidden
 ]}.
 
 {translation,
@@ -254,7 +254,7 @@ end
 {mapping, "javascript.source_dir", "riak_kv.js_source_dir", [
   {commented, "/tmp/js_source"},
   {datatype, directory},
-  {level, advanced}
+  hidden
 ]}.
 
 %% We left riak_kv.add_paths out on purpose.
@@ -267,7 +267,7 @@ end
 {mapping, "max_concurrent_requests", "riak_kv.fsm_limit", [
   {default, 50000},
   {datatype, [integer, {atom, infinite}]},
-  {level, advanced}
+  hidden
 ]}.
 
 {translation, "riak_kv.fsm_limit",
@@ -289,7 +289,7 @@ end
 {mapping, "retry_put_coordinator_failure", "riak_kv.retry_put_coordinator_failure", [
   {default, on},
   {datatype, flag},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc Controls which binary representation of a riak value is stored
@@ -338,13 +338,13 @@ end
 %% storage backend.  Minimum: 1MB
 {mapping, "memory_backend.max_memory_per_vnode", "riak_kv.memory_backend.max_memory", [
   {datatype, bytesize},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @see memory_backend.max_memory
 {mapping, "multi_backend.$name.memory_backend.max_memory_per_vnode", "riak_kv.multi_backend", [
   {datatype, bytesize},
-  {level, advanced}
+  hidden
 ]}.
 
 {translation,
@@ -360,13 +360,13 @@ end
 %% next read of its key. Minimum: 1s
 {mapping, "memory_backend.ttl", "riak_kv.memory_backend.ttl", [
   {datatype, {duration, s}},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @see memory_backend.ttl
 {mapping, "multi_backend.$name.memory_backend.ttl", "riak_kv.multi_backend", [
   {datatype, {duration, s}},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc Measures were added to Riak 1.2 to counteract cross-site
@@ -377,7 +377,7 @@ end
 {mapping, "secure_referer_check", "riak_kv.secure_referer_check", [
   {datatype, flag},
   {default, on},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc Reading or writing objects bigger than this size will write a
@@ -418,7 +418,7 @@ end
 {mapping, "object.merge_strategy", "riak_kv.dvv_enabled", [
   {default, '2'},
   {datatype, {flag, '2', '1'}},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc The number of primary replicas (non-fallback) that must reply
@@ -426,14 +426,14 @@ end
 {mapping, "buckets.default.pr", "riak_core.default_bucket_props.pr", [
   {datatype, [integer, {enum, [quorum, all]}]},
   {default, 0},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc The number of replicas which must reply to a read request.
 {mapping, "buckets.default.r", "riak_core.default_bucket_props.r", [
   {datatype, [{enum, [quorum, all]}, integer]},
   {default, quorum},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc The number of replicas which must reply to a write request,
@@ -441,7 +441,7 @@ end
 {mapping, "buckets.default.w", "riak_core.default_bucket_props.w", [
   {datatype, [{enum, [quorum, all]}, integer]},
   {default, quorum},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc The number of primary replicas (non-fallback) which must reply
@@ -449,7 +449,7 @@ end
 {mapping, "buckets.default.pw", "riak_core.default_bucket_props.pw", [
   {datatype, [integer, {enum, [quorum, all]}]},
   {default, 0},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc The number of replicas which must reply to a write request,
@@ -457,14 +457,14 @@ end
 {mapping, "buckets.default.dw", "riak_core.default_bucket_props.dw", [
   {datatype, [{enum, [quorum, all]}, integer]},
   {default, quorum},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc The number of replicas which must reply to a delete request.
 {mapping, "buckets.default.rw", "riak_core.default_bucket_props.rw", [
   {datatype, [{enum, [quorum, all]}, integer]},
   {default, quorum},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc Whether not-founds will count toward a quorum of reads.
@@ -473,7 +473,7 @@ end
  "riak_core.default_bucket_props.notfound_ok", [
   {default, true},
   {datatype, {enum, [true, false]}},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc Whether not-founds will invoke the "basic quorum"
@@ -485,7 +485,7 @@ end
  "riak_core.default_bucket_props.basic_quorum", [
  {default, false},
  {datatype, {enum, [true, false]}},
- {level, advanced}
+ hidden
 ]}.
 
 %% @doc Whether or not siblings are allowed.  Note: See Vector Clocks
@@ -493,7 +493,7 @@ end
 {mapping, "buckets.default.allow_mult", "riak_core.default_bucket_props.allow_mult", [
   {datatype, {enum, [true, false]}},
   {default, true},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc Whether conflicting writes resolve via timestamp.
@@ -502,7 +502,7 @@ end
   "riak_core.default_bucket_props.last_write_wins", [
   {datatype, {enum, [true, false]}},
   {default, false},
-  {level, advanced}
+  hidden
 ]}.
 
 %% @doc A space delimited list of functions that will be run before a
@@ -510,7 +510,7 @@ end
 %% functions, use "module:function" and for JavaScript, use
 %% "functionName".
 {mapping, "buckets.default.precommit", "riak_core.default_bucket_props.precommit", [
-  {level, advanced}
+  hidden
 ]}.
 
 {translation, "riak_core.default_bucket_props.precommit",
@@ -538,7 +538,7 @@ end
 %% value is stored. Only Erlang functions are allowed, using the
 %% "module:function" format.
 {mapping, "buckets.default.postcommit", "riak_core.default_bucket_props.postcommit", [
-  {level, advanced}
+  hidden
 ]}.
 
 {translation, "riak_core.default_bucket_props.postcommit",

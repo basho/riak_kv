@@ -2,7 +2,7 @@
 
 %% @doc The default name of a backend when one is not specified.
 {mapping, "multi_backend.default", "riak_kv.multi_backend_default", [
-  {level, advanced}
+  hidden
 ]}.
 
 {translation,
@@ -16,7 +16,7 @@
 {mapping, "multi_backend.$name.storage_backend", "riak_kv.multi_backend", [
   {default, bitcask},
   {datatype, {enum, [bitcask, leveldb, memory]}},
-  {level, advanced}
+  hidden
 ]}.
 
 {translation,
