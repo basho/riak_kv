@@ -31,11 +31,24 @@ largenat() ->
     ?LET(X, largeint(), abs(X)).
 
 bkey() ->
+    frequency([{1, untyped_bkey()}, {4, typed_bkey()}]).
+
+untyped_bkey() ->
     %%TODO: "make this nastier"
     %%TODO: once json encoding of bkeys as binaries rather than utf8 strings
     %%      start creating general binaries instead
     {non_blank_string(),  %% bucket
      non_blank_string()}. %% key
+
+typed_bkey() ->
+    %%TODO: "make this nastier"
+    %%TODO: once json encoding of bkeys as binaries rather than utf8 strings
+    %%      start creating general binaries instead
+    {{bucket_type(), non_blank_string()},  %% type, bucket
+     non_blank_string()}. %% key
+
+bucket_type() ->
+    default(<<"default">>, non_blank_string()).
 
 non_blank_string() ->
     ?LET(X,not_empty(list(lower_char())), list_to_binary(X)).
@@ -114,7 +127,7 @@ partvals() ->
 %%
 riak_objects() ->
     ?LET({{Bucket,Key},AncestorVclock0,Tombstones},
-         {noshrink(bkey()),vclock(),vector(5, maybe_tombstone())},
+         {noshrink(untyped_bkey()),vclock(),vector(5, maybe_tombstone())},
     begin
         AncestorVclock = vclock:increment(<<"dad">>, AncestorVclock0),
         BrotherVclock  = vclock:increment(<<"bro!">>, AncestorVclock),

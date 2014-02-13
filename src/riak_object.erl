@@ -74,6 +74,8 @@
                          %% Shanley's(11) + Joe's(42)
 -define(EMPTY_VTAG_BIN, <<"e">>).
 
+-define(DEFAULT_HASH_BUCKET_PROPS, [consistent, datatype, n_val, allow_mult, last_write_wins]).
+
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
@@ -91,11 +93,12 @@
 -export([is_robject/1]).
 -export([update_last_modified/1]).
 -export([strict_descendant/2]).
+-export([bucket_type_hashes/1, get_metadatas_entry/2]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
 new({T, B}, K, V) when is_binary(T), is_binary(B), is_binary(K) ->
-    new_int({T, B}, K, V, no_initial_metadata);
+    new_int({T, B}, K, V, dict:new());
 new(B, K, V) when is_binary(B), is_binary(K) ->
     new_int(B, K, V, no_initial_metadata).
 
@@ -497,14 +500,57 @@ apply_updates(Object=#r_object{}) ->
              error ->
                  [dict:erase(clean,Object#r_object.updatemetadata) || _X <- VL]
          end,
-    Contents = [#r_content{metadata=M,value=V} || {M,V} <- lists:zip(MD, VL)],
+    BTHash = calculate_bucket_type_hash(type(Object)),
+    Contents = [begin
+                    M1 = maybe_add_bucket_type_hash(M, BTHash),
+                    #r_content{metadata=M1, value=V}
+                end || {M,V} <- lists:zip(MD, VL)],
     Object#r_object{contents=Contents,
                     updatemetadata=dict:store(clean, true, dict:new()),
                     updatevalue=undefined}.
 
+-spec calculate_bucket_type_hash(undefined | binary()) -> undefined | integer().
+calculate_bucket_type_hash(undefined) ->
+    undefined;
+calculate_bucket_type_hash(Type) ->
+    riak_core_bucket_type:property_hash(Type, ?DEFAULT_HASH_BUCKET_PROPS).
+
+-spec maybe_add_bucket_type_hash(dict(), undefined | integer()) -> dict().
+maybe_add_bucket_type_hash(MD, undefined) ->
+    MD;
+maybe_add_bucket_type_hash(MD, Hash) ->
+    dict:store(bucket_type_hash, Hash, MD).
+
 %% @doc Return the containing bucket for this riak_object.
 -spec bucket(riak_object()) -> bucket().
 bucket(#r_object{bucket=Bucket}) -> Bucket.
+
+%% @doc Return a list of unique bucket_type_hash values contained in
+%% the metadata dictionaries associated with each value in a
+%% riak_object.
+-spec bucket_type_hashes(riak_object()) -> undefined | [integer()].
+bucket_type_hashes(RObj) ->
+    get_metadatas_entry(bucket_type_hash, RObj).
+
+%% @doc Return a list of values for a particular key contained in
+%% the metadata dictionaries associated with each value in a
+%% riak_object.
+-spec get_metadatas_entry(term(), riak_object()) -> [term()].
+get_metadatas_entry(Key, #r_object{contents=Contents}) ->
+    ordsets:to_list(
+      lists:foldl(get_metadatas_entry_fold_fun(Key), ordsets:new(), Contents)).
+
+-type metadatas_entry_fold_fun() :: fun((term(), ordsets:ordset()) -> ordsets:ordset()).
+-spec get_metadatas_entry_fold_fun(term()) -> metadatas_entry_fold_fun().
+get_metadatas_entry_fold_fun(Key) ->
+    fun(Content, Acc) ->
+            case dict:find(Key, Content#r_content.metadata) of
+                {ok, Value} ->
+                    ordsets:add_element(Value, Acc);
+                error ->
+                    Acc
+            end
+    end.
 
 %% @doc Return the containing bucket for this riak_object without any type
 %% information, if present.
@@ -710,12 +756,12 @@ vclock_header(Doc) ->
 to_json(Obj) ->
     lager:warning("Change uses of riak_object:to_json/1 to riak_object_json:encode/1"),
     riak_object_json:encode(Obj).
- 
+
 %% @deprecated Use `riak_object_json:decode' now.
 from_json(JsonObj) ->
     lager:warning("Change uses of riak_object:from_json/1 to riak_object_json:decode/1"),
     riak_object_json:decode(JsonObj).
- 
+
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
     case dict:find(clean, M) of
         error -> true;
@@ -1041,35 +1087,208 @@ decode_vclock(Method, VClock) ->
 
 -ifdef(TEST).
 
-object_test() ->
-    B = <<"buckets_are_binaries">>,
-    K = <<"keys are binaries">>,
+-record(object_test_state, {type_bucket_key1 :: {binary(), binary(), binary()},
+                            type_bucket_key2 :: {binary(), binary(), binary()},
+                            value1 :: term(),
+                            value2 :: term(),
+                            object1 :: riak_object(),
+                            object2 :: riak_object(),
+                            bucket_type_object1 :: riak_object(),
+                            bucket_type_object2 :: riak_object(),
+                            actor :: pid()}
+       ).
+
+object_test_() ->
+    {spawn,
+     [{setup,
+       fun object_test_setup/0,
+       fun object_test_cleanup/1,
+       [{"basic object test", fun basic_object_test_case/0},
+        {"update test", fun update_test_case/0},
+        {"ancestor test", fun ancestor_test_case/0},
+        {"reconcile test", fun reconcile_test_case/0},
+        {"merge test 1", fun merge1_test_case/0},
+        {"merge test 2", fun merge2_test_case/0},
+        {"merge test 3", fun merge3_test_case/0},
+        {"date reconcile test case", fun date_reconcile_test_case/0}
+       ]}
+     ]}.
+
+object_test_setup() ->
+    TBK1 = {T, B, K} =  {<<"types_are_binaries">>,
+                         <<"buckets_are_binaries">>,
+                         <<"keys are binaries">>},
     V = <<"values are anything">>,
-    O = riak_object:new(B,K,V),
-    B = riak_object:bucket(O),
-    K = riak_object:key(O),
-    V = riak_object:get_value(O),
-    1 = riak_object:value_count(O),
-    1 = length(riak_object:get_values(O)),
-    1 = length(riak_object:get_metadatas(O)),
-    O.
-
-update_test() ->
-    O = object_test(),
     V2 = <<"testvalue2">>,
-    O1 = riak_object:update_value(O, V2),
-    O2 = riak_object:apply_updates(O1),
-    V2 = riak_object:get_value(O2),
-    {O,O2}.
-
-ancestor_test() ->
+    O1 = riak_object:new(B, K, V),
+    TypeO1 = riak_object:new({T, B}, K, V),
     Actor = self(),
-    {O,O2} = update_test(),
-    O3 = riak_object:increment_vclock(O2, Actor),
-    [O] = riak_object:ancestors([O,O3]),
-    MD = riak_object:get_metadata(O3),
-    ?assertMatch({Actor, {1, _}}, dict:fetch(?DOT, MD)),
-    {O,O3}.
+    O2 = riak_object:increment_vclock(
+           riak_object:apply_updates(
+             riak_object:update_value(O1, V2)),
+           Actor),
+    meck:new(riak_core_bucket_type, [passthrough]),
+    meck:expect(riak_core_bucket_type, property_hash, fun(_, _) -> 12345 end),
+    TypeO2 = riak_object:increment_vclock(
+           riak_object:apply_updates(
+             riak_object:update_value(TypeO1, V2)),
+           Actor),
+    #object_test_state{type_bucket_key1=TBK1,
+                       value1=V,
+                       value2=V2,
+                       object1=O1,
+                       object2=O2,
+                       bucket_type_object1=TypeO1,
+                       bucket_type_object2=TypeO2,
+                       actor=Actor}.
+
+object_test_cleanup(_) ->
+    meck:unload().
+
+basic_object_test_case() ->
+    fun(#object_test_state{type_bucket_key1={T, B, K},
+                           value1=V,
+                           object1=O1,
+                           bucket_type_object1=TypeO1}) ->
+            ?assertEqual(B, riak_object:bucket(O1)),
+            ?assertEqual(K, riak_object:key(O1)),
+            ?assertEqual(V, riak_object:get_value(O1)),
+            ?assertEqual(1, riak_object:value_count(O1)),
+            ?assertEqual(1, length(riak_object:get_values(O1))),
+            ?assertEqual(1, length(riak_object:get_metadatas(O1))),
+            ?assertEqual(T, riak_object:type(TypeO1)),
+            ?assertEqual(B, riak_object:bucket_only(TypeO1)),
+            ?assertEqual({T,B}, riak_object:bucket(TypeO1)),
+            ?assertEqual(K, riak_object:key(TypeO1)),
+            ?assertEqual(V, riak_object:get_value(TypeO1)),
+            ?assertEqual(1, riak_object:value_count(TypeO1)),
+            ?assertEqual(1, length(riak_object:get_values(TypeO1))),
+            ?assertEqual(1, length(riak_object:get_metadatas(TypeO1)))
+    end.
+
+update_test_case() ->
+    fun(#object_test_state{value2=V2,
+                           object1=O1,
+                           bucket_type_object1=TypeO1}) ->
+            ?assertEqual(V2, riak_object:get_value(
+                               riak_object:apply_updates(
+                                 riak_object:update_value(O1, V2)))),
+            ?assertEqual(V2, riak_object:get_value(
+                               riak_object:apply_updates(
+                                 riak_object:update_value(TypeO1, V2))))
+    end.
+
+ancestor_test_case() ->
+    fun(#object_test_state{object1=O1,
+                           object2=O2,
+                           bucket_type_object1=TypeO1,
+                           bucket_type_object2=TypeO2,
+                           actor=Actor}) ->
+            ?assertEqual([O1], riak_object:ancestors([O1, O2])),
+            ?assertMatch({Actor, {1, _}}, dict:fetch(?DOT, riak_object:get_metadata(O2))),
+            ?assertEqual([TypeO1], riak_object:ancestors([TypeO1, TypeO2])),
+            ?assertMatch({Actor, {1, _}}, dict:fetch(?DOT, riak_object:get_metadata(TypeO2)))
+    end.
+
+reconcile_test_case() ->
+    fun(#object_test_state{object1=O1,
+                           object2=O2,
+                           bucket_type_object1=TypeO1,
+                           bucket_type_object2=TypeO2}) ->
+            ?assertEqual(O2, riak_object:reconcile([O1, O2], true)),
+            ?assertEqual(O2, riak_object:reconcile([O1, O2], false)),
+            ?assertEqual(TypeO2, riak_object:reconcile([TypeO1, TypeO2], true)),
+            ?assertEqual(TypeO2, riak_object:reconcile([TypeO1, TypeO2], false))
+    end.
+
+merge1_test_case() ->
+    fun(#object_test_state{object1=O1,
+                           object2=O2,
+                           bucket_type_object1=TypeO1,
+                           bucket_type_object2=TypeO2}) ->
+            ?assertEqual(O2, riak_object:syntactic_merge(O1, O2)),
+            ?assertEqual(TypeO2, riak_object:syntactic_merge(TypeO1, TypeO2))
+    end.
+
+merge2_test_case() ->
+    fun(#object_test_state{type_bucket_key1={_, B, K},
+                           value2=V2,
+                           object1=O,
+                           bucket_type_object1=TypeO}) ->
+            O1 = riak_object:increment_vclock(O, node1),
+            O2 = riak_object:increment_vclock(riak_object:new(B,K,V2), node2),
+            O3 = riak_object:syntactic_merge(O1, O2),
+            ?assertEqual([node1, node2], [N || {N,_} <- riak_object:vclock(O3)]),
+            ?assertEqual(2, riak_object:value_count(O3)),
+            TypeO1 = riak_object:increment_vclock(TypeO, node1),
+            TypeO2 = riak_object:increment_vclock(riak_object:new(B,K,V2), node2),
+            TypeO3 = riak_object:syntactic_merge(TypeO1, TypeO2),
+            ?assertEqual([node1, node2], [N || {N,_} <- riak_object:vclock(TypeO3)]),
+            ?assertEqual(2, riak_object:value_count(TypeO3))
+    end.
+
+merge3_test_case() ->
+    fun(#object_test_state{type_bucket_key1={_, B, K},
+                           value2=V2,
+                           object1=O,
+                           bucket_type_object1=TypeO}) ->
+            O1 = riak_object:increment_vclock(O, node1),
+            O2 = riak_object:increment_vclock(riak_object:new(B, K, V2), node2),
+            TypeO1 = riak_object:increment_vclock(TypeO, node1),
+            TypeO2 = riak_object:increment_vclock(riak_object:new(B, K, V2), node2),
+            ?assertEqual(riak_object:syntactic_merge(O1, O2),
+                         riak_object:syntactic_merge(O2, O1)),
+            ?assertEqual(riak_object:syntactic_merge(TypeO1, TypeO2),
+                         riak_object:syntactic_merge(TypeO2, TypeO1))
+    end.
+
+date_reconcile_test_case() ->
+    fun(#object_test_state{object1=O,
+                           object2=O3,
+                           bucket_type_object1=TypeO,
+                           bucket_type_object2=TypeO3}) ->
+            D = calendar:datetime_to_gregorian_seconds(
+                  httpd_util:convert_request_date(
+                    httpd_util:rfc1123_date())),
+            O2 = apply_updates(
+                   riak_object:update_metadata(
+                     increment_vclock(O, date),
+                     dict:store(
+                       <<"X-Riak-Last-Modified">>,
+                       httpd_util:rfc1123_date(
+                         calendar:gregorian_seconds_to_datetime(D)),
+                       get_metadata(O)))),
+            O4 = apply_updates(
+                   riak_object:update_metadata(
+                     O3,
+                     dict:store(
+                       <<"X-Riak-Last-Modified">>,
+                       httpd_util:rfc1123_date(
+                         calendar:gregorian_seconds_to_datetime(D+1)),
+                       get_metadata(O3)))),
+            O5 = riak_object:reconcile([O2, O4], false),
+            TypeO2 = apply_updates(
+                       riak_object:update_metadata(
+                         increment_vclock(TypeO, date),
+                         dict:store(
+                           <<"X-Riak-Last-Modified">>,
+                           httpd_util:rfc1123_date(
+                             calendar:gregorian_seconds_to_datetime(D)),
+                           get_metadata(TypeO)))),
+            TypeO4 = apply_updates(
+                       riak_object:update_metadata(
+                         TypeO3,
+                         dict:store(
+                           <<"X-Riak-Last-Modified">>,
+                           httpd_util:rfc1123_date(
+                             calendar:gregorian_seconds_to_datetime(D+1)),
+                           get_metadata(TypeO3)))),
+            TypeO5 = riak_object:reconcile([TypeO2, TypeO4], false),
+            ?assert(not riak_object:equal(O2, O5)),
+            ?assert(not riak_object:equal(O4, O5)),
+            ?assert(not riak_object:equal(TypeO2, TypeO5)),
+            ?assert(not riak_object:equal(TypeO4, TypeO5))
+    end.
 
 ancestor_weird_clocks_test() ->
     %% make objects with dots / clocks that are causally the same but
@@ -1082,33 +1301,12 @@ ancestor_weird_clocks_test() ->
     Ancestors = ancestors([A, AWat]),
     ?assertEqual(0, length(Ancestors)).
 
-reconcile_test() ->
-    {O,O3} = ancestor_test(),
-    O3 = riak_object:reconcile([O,O3],true),
-    O3 = riak_object:reconcile([O,O3],false),
-    {O,O3}.
-
-merge1_test() ->
-    {O,O3} = reconcile_test(),
-    O3 = riak_object:syntactic_merge(O,O3),
-    {O,O3}.
-
-merge2_test() ->
-    B = <<"buckets_are_binaries">>,
-    K = <<"keys are binaries">>,
-    V = <<"testvalue2">>,
-    O1 = riak_object:increment_vclock(object_test(), node1),
-    O2 = riak_object:increment_vclock(riak_object:new(B,K,V), node2),
-    O3 = riak_object:syntactic_merge(O1, O2),
-    [node1, node2] = [N || {N,_} <- riak_object:vclock(O3)],
-    2 = riak_object:value_count(O3).
-
-merge3_test() ->
+merge4_test() ->
     O0 = riak_object:new(<<"test">>, <<"test">>, hi),
     O1 = riak_object:increment_vclock(O0, x),
     ?assertEqual(O1, riak_object:syntactic_merge(O1, O1)).
 
-merge4_test() ->
+merge5_test() ->
     O0 = riak_object:new(<<"test">>, <<"test">>, hi),
     O1 = riak_object:increment_vclock(
            riak_object:update_value(O0, bye), x),
@@ -1119,15 +1317,6 @@ merge4_test() ->
     OMp = riak_object:syntactic_merge(O1, O0),
     ?assertEqual(OM, OMp), %% merge should be symmetric here
     {O0, O1}.
-
-merge5_test() ->
-    B = <<"buckets_are_binaries">>,
-    K = <<"keys are binaries">>,
-    V = <<"testvalue2">>,
-    O1 = riak_object:increment_vclock(object_test(), node1),
-    O2 = riak_object:increment_vclock(riak_object:new(B,K,V), node2),
-    ?assertEqual(riak_object:syntactic_merge(O1, O2),
-                 riak_object:syntactic_merge(O2, O1)).
 
 equality1_test() ->
     MD0 = dict:new(),
@@ -1193,31 +1382,6 @@ largekey_test() ->
     catch throw:{error, key_too_large} ->
             ok
     end.
-
-date_reconcile_test() ->
-    {O,O3} = reconcile_test(),
-    D = calendar:datetime_to_gregorian_seconds(
-          httpd_util:convert_request_date(
-            httpd_util:rfc1123_date())),
-    O2 = apply_updates(
-           riak_object:update_metadata(
-             increment_vclock(O, date),
-             dict:store(
-               <<"X-Riak-Last-Modified">>,
-               httpd_util:rfc1123_date(
-                 calendar:gregorian_seconds_to_datetime(D)),
-               get_metadata(O)))),
-    O4 = apply_updates(
-           riak_object:update_metadata(
-             O3,
-             dict:store(
-               <<"X-Riak-Last-Modified">>,
-               httpd_util:rfc1123_date(
-                 calendar:gregorian_seconds_to_datetime(D+1)),
-               get_metadata(O3)))),
-    O5 = riak_object:reconcile([O2,O4], false),
-    false = riak_object:equal(O2, O5),
-    false = riak_object:equal(O4, O5).
 
 get_update_value_test() ->
     O = riak_object:new(<<"test">>, <<"test">>, old_val),
