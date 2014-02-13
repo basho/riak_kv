@@ -187,7 +187,7 @@ update_args(#state{last_get=LastGet, vnodes=VNodes, vnode_data=VNodeData, time=T
 %% hopefully this simulates stale / conflicting puts
 update(Value, {GotObj0, GotDVV0}, Coord, VNodeData, Time) ->
     {RObj, DVV} = get(Coord, VNodeData),
-    GotObj = update_ro(Value, GotObj0, Time),
+    GotObj = update_ro(Value, GotObj0),
     GotDVV = update_dvv(Value, GotDVV0),
     RObj2 = coord_put_ro(Coord, GotObj, RObj, Time),
     DVV2 = coord_put_dvv(Coord, GotDVV, DVV),
@@ -216,7 +216,7 @@ get_put_args(#state{vnodes=VNodes, vnode_data=VNodeData, r=R, time=Time}) ->
 %% A well behaved client. Get, mutate, put.
 get_put(Value, ReadVNode, R, WriteVNode, VNodes, VNodeData, Time) ->
     {RObj, DVV} = get(ReadVNode, R, VNodes, VNodeData),
-    RObj1 = update_ro(Value, RObj, Time),
+    RObj1 = update_ro(Value, RObj),
     DVV1 = update_dvv(Value, DVV),
     {OldObj, OldDVV} = get(WriteVNode, VNodeData),
     ROBj2 = coord_put_ro(WriteVNode, RObj1, OldObj, Time),
@@ -237,6 +237,11 @@ replicate_args(#state{vnodes=VNodes, vnode_data=VNodeData, time=Time}) ->
      VNodeData,
      Time
     ].
+
+replicate_pre(_S, [VN, VN, _, _]) ->
+    false;
+replicate_pre(_S, [_VN1, _VN2, _, _]) ->
+    true.
 
 %% Mutating multiple elements in vnode_data in place is bad idea
 %% (symbolic vs dynamic state), so instead of treating Put and
@@ -286,9 +291,10 @@ prop_merge() ->
 %% -----------
 %% Helpers
 %% ----------
-new_riak_object(Value, Time) ->
-    MD = dict:store(<<"X-Riak-Last-Modified">>, Time, dict:new()),
-    riak_object:new(?B, ?K, Value, MD).
+new_riak_object(Value) ->
+    RO = riak_object:new(?B, ?K, Value),
+    RO1 = riak_object:update_last_modified(RO),
+    riak_object:apply_updates(RO1).
 
 vnodes_ready(#state{vnodes=VNodes, n=N}) ->
     length(VNodes) >= N andalso N > 0.
@@ -296,7 +302,7 @@ vnodes_ready(#state{vnodes=VNodes, n=N}) ->
 %% Perform a riak_object and DVV coordinated put
 coord_put(VNode, Value, Time, VNodeData) ->
     {RObj, DVV} = get(VNode, VNodeData),
-    RObj2 = coord_put_ro(VNode, new_riak_object(Value, Time), RObj, Time),
+    RObj2 = coord_put_ro(VNode, new_riak_object(Value), RObj, Time),
     DVV2 = coord_put_dvv(VNode, dvvset:new(Value), DVV),
     {RObj2, DVV2}.
 
@@ -327,11 +333,11 @@ merge_put_dvv(Old, New) ->
     dvvset:sync([Old, New]).
 
 %% Ensure the context data is added to the put object.
-update_ro(Value, undefined, Time) ->
-    new_riak_object(Value, Time);
-update_ro(Value, RObj, Time) ->
+update_ro(Value, undefined) ->
+    new_riak_object(Value);
+update_ro(Value, RObj) ->
     VClock = riak_object:vclock(RObj),
-    RO = new_riak_object(Value, Time),
+    RO = new_riak_object(Value),
     riak_object:set_vclock(RO, VClock).
 
 %% Ensure the context data is maintained
