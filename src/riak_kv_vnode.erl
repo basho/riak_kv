@@ -1169,8 +1169,8 @@ perform_put({true, Obj},
                 false ->
                     Reply = {dw, Idx, ReqID}
             end;
-        {{error, _Reason, UpdModState}, _EncodedVal} ->
-            Reply = {fail, Idx, ReqID}
+        {{error, Reason, UpdModState}, _EncodedVal} ->
+            Reply = {fail, Idx, Reason}
     end,
     {Reply, State#state{modstate=UpdModState}}.
 
