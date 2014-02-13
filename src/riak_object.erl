@@ -385,7 +385,31 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% dominate) this sibling's `dot'. That means this
                     %% is a genuinely concurrent (or sibling) value
                     %% and should be kept for the user to reconcile.
-                    MergeAcc#merge_acc{keep=[C0|Keep]}
+                    %% UNLESS there is already a value that is
+                    %% _IDENTICAL_ to this in everyway (except the
+                    %% dot) in the accumulator, then we drop the dots
+                    %% on both values, knowing that a umerge later
+                    %% will bring them down to a single value. WHY?
+                    %% When a PUT is forwarded we actually do it
+                    %% twice, it is coordinated by two vnodes so it is
+                    %% actually concurrent with itself, we're trying
+                    %% to avoid that. (At what risk? I don't know,
+                    %% since this breaks the DVV model it is very hard
+                    %% to test.)
+                    case lists:keytake(Value, 3, Keep) of
+                        {value, {r_content, D1, Value}, Keep2} ->
+                            %% drop dots from both dicts and compare
+                            %% them, if equal, store a single, dotless
+                            %% value
+                            case lists:usort(dict:to_list(dict:erase(?DOT, D1))) ==
+                                lists:usort(dict:to_list(dict:erase(?DOT, Dict))) of
+                                true ->
+                                    MergeAcc#merge_acc{keep=[{r_content, dict:erase(?DOT, D1), Value} | Keep2]};
+                                false ->
+                                    MergeAcc#merge_acc{keep=[C0 | Keep]}
+                            end;
+                        false -> MergeAcc#merge_acc{keep=[C0 | Keep]}
+                    end
             end;
         undefined ->
             %% Both CRDTs and legacy data don't have dots. Legacy data
@@ -1377,11 +1401,27 @@ mixed_merge2_test() ->
     AZ = riak_object:merge(A1, Z),
     AZ2 = riak_object:merge(AZ, AZ),
     ?assertEqual(AZ2, AZ),
-    ?assertEqual(2, riak_object:value_count(AZ2)),
+    %% Same value, same meta, different dot, @see
+    %% forward_put_sibling_merge_test/0
+    ?assertEqual(1, riak_object:value_count(AZ2)),
     AZ3 = riak_object:set_contents(AZ2, [{dict:new(), <<"undotted">>} | riak_object:get_contents(AZ2)]),
     AZ4 = riak_object:syntactic_merge(AZ3, AZ2),
-    ?assertEqual(AZ3, AZ4),
-    ?assertEqual(3, riak_object:value_count(AZ4)).
+    ?assert(equal(AZ3, AZ4)),
+    ?assertEqual(2, riak_object:value_count(AZ4)).
+
+%% Tests the case where two objects are _identical_ except that they
+%% have different dots, we drop the dots and return a single
+%% value. Why would we do this? Riak < 2.0 did this, so we've decided
+%% to hack it into the current system. Sorry.
+forward_put_sibling_merge_test() ->
+    {B, K} = {<<"b">>, <<"k">>},
+    A = riak_object:new(B, K, <<"a">>),
+    A1 = riak_object:increment_vclock(A, a),
+    Z = riak_object:increment_vclock(A, z),
+    AZ = riak_object:merge(A1, Z),
+    ?assertEqual(1, riak_object:value_count(AZ)),
+    ?assertEqual(<<"a">>, riak_object:get_value(AZ)),
+    ?assertEqual(error, dict:find(?DOT, riak_object:get_metadata(AZ))).
 
 verify_contents([], []) ->
     ?assert(true);

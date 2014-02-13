@@ -187,7 +187,7 @@ update_args(#state{last_get=LastGet, vnodes=VNodes, vnode_data=VNodeData, time=T
 %% hopefully this simulates stale / conflicting puts
 update(Value, {GotObj0, GotDVV0}, Coord, VNodeData, Time) ->
     {RObj, DVV} = get(Coord, VNodeData),
-    GotObj = update_ro(Value, GotObj0),
+    GotObj = update_ro(Value, GotObj0, Time),
     GotDVV = update_dvv(Value, GotDVV0),
     RObj2 = coord_put_ro(Coord, GotObj, RObj, Time),
     DVV2 = coord_put_dvv(Coord, GotDVV, DVV),
@@ -216,7 +216,7 @@ get_put_args(#state{vnodes=VNodes, vnode_data=VNodeData, r=R, time=Time}) ->
 %% A well behaved client. Get, mutate, put.
 get_put(Value, ReadVNode, R, WriteVNode, VNodes, VNodeData, Time) ->
     {RObj, DVV} = get(ReadVNode, R, VNodes, VNodeData),
-    RObj1 = update_ro(Value, RObj),
+    RObj1 = update_ro(Value, RObj, Time),
     DVV1 = update_dvv(Value, DVV),
     {OldObj, OldDVV} = get(WriteVNode, VNodeData),
     ROBj2 = coord_put_ro(WriteVNode, RObj1, OldObj, Time),
@@ -286,13 +286,17 @@ prop_merge() ->
 %% -----------
 %% Helpers
 %% ----------
+new_riak_object(Value, Time) ->
+    MD = dict:store(<<"X-Riak-Last-Modified">>, Time, dict:new()),
+    riak_object:new(?B, ?K, Value, MD).
+
 vnodes_ready(#state{vnodes=VNodes, n=N}) ->
     length(VNodes) >= N andalso N > 0.
 
 %% Perform a riak_object and DVV coordinated put
 coord_put(VNode, Value, Time, VNodeData) ->
     {RObj, DVV} = get(VNode, VNodeData),
-    RObj2 = coord_put_ro(VNode, riak_object:new(?B, ?K, Value), RObj, Time),
+    RObj2 = coord_put_ro(VNode, new_riak_object(Value, Time), RObj, Time),
     DVV2 = coord_put_dvv(VNode, dvvset:new(Value), DVV),
     {RObj2, DVV2}.
 
@@ -323,11 +327,12 @@ merge_put_dvv(Old, New) ->
     dvvset:sync([Old, New]).
 
 %% Ensure the context data is added to the put object.
-update_ro(Value, undefined) ->
-    riak_object:new(?B, ?K, Value);
-update_ro(Value, RObj) ->
+update_ro(Value, undefined, Time) ->
+    new_riak_object(Value, Time);
+update_ro(Value, RObj, Time) ->
     RObj2 = riak_object:update_value(RObj, Value),
-    riak_object:apply_updates(RObj2).
+    RObj3 = riak_object:update_metadata(RObj2, dict:store(<<"X-Riak-Last-Modified">>, Time, dict:new())),
+    riak_object:apply_updates(RObj3).
 
 %% Ensure the context data is maintained
 update_dvv(Value, undefined) ->
