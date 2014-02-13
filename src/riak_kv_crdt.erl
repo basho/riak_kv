@@ -26,6 +26,8 @@
          supported/1, to_mod/1, from_mod/1]).
 -export([to_binary/2, to_binary/1, from_binary/1]).
 -export([log_merge_errors/4, meta/2, merge_value/2]).
+%% MR helper funs
+-export([value/1, counter_value/1, set_value/1, map_value/1]).
 
 -include("riak_kv_wm_raw.hrl").
 -include("riak_object.hrl").
@@ -85,6 +87,46 @@ value(RObj, Type) ->
     DType = orddict:find(Type, CRDTs),
     {crdt_value(Type, DType), crdt_stats(Type, DType)}.
 
+%% @doc convenience function for (e.g.) MapReduce. Attempt to get a
+%% CRDT value for a given object. Checks the bucket props for the
+%% object, if it has a datatype entry, uses that to get value. Returns
+%% either a tuple of `{Type, Value}' or `undefined' if not a 2.0 CRDT.
+-spec value(riak_object:riak_object()) -> {atom(), term()} | undefined.
+value(RObj) ->
+    Bucket = riak_object:bucket(RObj),
+    case riak_core_bucket:get_bucket(Bucket) of
+        BProps when is_list(BProps) ->
+            Type = proplists:get_value(datatype, BProps),
+            Mod = riak_kv_crdt:to_mod(Type),
+            case supported(Mod) of
+                true ->
+                    {{_Ctx, V}, _Stats} = value(RObj, Mod),
+                    {Type, V};
+                false ->
+                    undefined
+            end
+    end.
+
+%% @doc convenience for (e.g.) MapReduce functions. Pass an object,
+%% get a 2.0+ counter type value, or zero if no counter is present.
+-spec counter_value(riak_object:riak_object()) -> integer().
+counter_value(RObj) ->
+    {{_Ctx, Count}, _Stats}  = crdt_value(RObj, ?COUNTER_TYPE),
+    Count.
+
+%% @doc convenience for (e.g.) MapReduce functions. Pass an object,
+%% get a 2.0+ Set type value, or `[]' if no Set is present.
+-spec set_value(riak_object:riak_object()) -> list().
+set_value(RObj) ->
+    {{_Ctx, Set}, _Stats}  = crdt_value(RObj, ?SET_TYPE),
+    Set.
+
+%% @doc convenience for (e.g.) MapReduce functions. Pass an object,
+%% get a 2.0+ Map type value, or `[]' if no Map is present.
+-spec map_value(riak_object:riak_object()) -> proplist:proplist().
+map_value(RObj) ->
+    {{_Ctx, Map}, _Stats}  = crdt_value(RObj, ?MAP_TYPE),
+    Map.
 
 %% @TODO in riak_dt change value to query allow query to take an
 %% argument, (so as to query subfields of map, or set membership etc)
