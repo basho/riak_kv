@@ -2366,10 +2366,6 @@ list_buckets_test_() ->
              application:start(folsom),
              riak_core_stat_cache:start_link(),
              riak_kv_stat:register_stats(),
-             {ok, P} = riak_core_table_manager:start_link(
-                        [{?BG_INFO_ETS_TABLE, ?BG_INFO_ETS_OPTS},
-                         {?BG_ENTRY_ETS_TABLE, ?BG_ENTRY_ETS_OPTS}]),
-             unlink(P),
              {ok, _} = riak_core_bg_manager:start(),
              riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
              Env
@@ -2379,7 +2375,6 @@ list_buckets_test_() ->
              riak_core_stat_cache:stop(),
              riak_kv_test_util:stop_process(riak_core_metadata_manager),
              riak_kv_test_util:stop_process(riak_core_bg_manager),
-             riak_kv_test_util:stop_process(riak_core_table_manager),
              application:stop(folsom),
              application:stop(sasl),
              [application:unset_env(riak_kv, K) ||
@@ -2432,10 +2427,6 @@ filter_keys_test() ->
     riak_core_ring_manager:setup_ets(test),
     clean_test_dirs(),
     riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
-    {ok, P} = riak_core_table_manager:start_link(
-            [{?BG_INFO_ETS_TABLE, ?BG_INFO_ETS_OPTS},
-             {?BG_ENTRY_ETS_TABLE, ?BG_ENTRY_ETS_OPTS}]),
-    unlink(P),
     riak_core_bg_manager:start(),
     {S, B, K} = backend_with_known_key(riak_kv_memory_backend),
     Caller1 = new_result_listener(keys),
@@ -2459,7 +2450,6 @@ filter_keys_test() ->
     riak_core_ring_manager:cleanup_ets(test),
     riak_kv_test_util:stop_process(riak_core_metadata_manager),
     riak_kv_test_util:stop_process(riak_core_bg_manager),
-    riak_kv_test_util:stop_process(riak_core_table_manager),
     flush_msgs().
 
 %% include bitcask.hrl for HEADER_SIZE macro
@@ -2470,10 +2460,6 @@ filter_keys_test() ->
 bitcask_badcrc_test() ->
     riak_core_ring_manager:setup_ets(test),
     riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
-    {ok, P} = riak_core_table_manager:start_link(
-            [{?BG_INFO_ETS_TABLE, ?BG_INFO_ETS_OPTS},
-             {?BG_ENTRY_ETS_TABLE, ?BG_ENTRY_ETS_OPTS}]),
-    unlink(P),
     riak_core_bg_manager:start(),
     clean_test_dirs(),
     {S, B, K} = backend_with_known_key(riak_kv_bitcask_backend),
@@ -2493,7 +2479,6 @@ bitcask_badcrc_test() ->
     riak_core_ring_manager:cleanup_ets(test),
     riak_kv_test_util:stop_process(riak_core_metadata_manager),
     riak_kv_test_util:stop_process(riak_core_bg_manager),
-    riak_kv_test_util:stop_process(riak_core_table_manager),
     flush_msgs().
 
 
