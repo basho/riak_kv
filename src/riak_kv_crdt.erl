@@ -111,21 +111,21 @@ value(RObj) ->
 %% get a 2.0+ counter type value, or zero if no counter is present.
 -spec counter_value(riak_object:riak_object()) -> integer().
 counter_value(RObj) ->
-    {{_Ctx, Count}, _Stats}  = crdt_value(RObj, ?COUNTER_TYPE),
+    {{_Ctx, Count}, _Stats}  = value(RObj, ?COUNTER_TYPE),
     Count.
 
 %% @doc convenience for (e.g.) MapReduce functions. Pass an object,
 %% get a 2.0+ Set type value, or `[]' if no Set is present.
 -spec set_value(riak_object:riak_object()) -> list().
 set_value(RObj) ->
-    {{_Ctx, Set}, _Stats}  = crdt_value(RObj, ?SET_TYPE),
+    {{_Ctx, Set}, _Stats}  = value(RObj, ?SET_TYPE),
     Set.
 
 %% @doc convenience for (e.g.) MapReduce functions. Pass an object,
 %% get a 2.0+ Map type value, or `[]' if no Map is present.
 -spec map_value(riak_object:riak_object()) -> proplist:proplist().
 map_value(RObj) ->
-    {{_Ctx, Map}, _Stats}  = crdt_value(RObj, ?MAP_TYPE),
+    {{_Ctx, Map}, _Stats}  = value(RObj, ?MAP_TYPE),
     Map.
 
 %% @TODO in riak_dt change value to query allow query to take an
