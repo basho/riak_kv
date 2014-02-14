@@ -488,11 +488,11 @@ end
  hidden
 ]}.
 
-%% @doc Whether or not siblings are allowed.  Note: See Vector Clocks
-%% for a discussion of sibling resolution.
+%% @doc Whether or not siblings are allowed, by default, for untyped buckets.
+%% Note: See Vector Clocks for a discussion of sibling resolution.
 {mapping, "buckets.default.allow_mult", "riak_core.default_bucket_props.allow_mult", [
   {datatype, {enum, [true, false]}},
-  {default, true},
+  {default, false},
   hidden
 ]}.
 
