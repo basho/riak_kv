@@ -168,9 +168,8 @@ next_partition(State=#state{remaining=[Partition|_]}) ->
 
 %% @doc Waiting for vnode to send back the Pid of the AAE tree process.
 wait_for_aae_pid(aae_pid_timeout, State) ->
-    Err = {error, no_aae_pid},
-    State2 = maybe_notify(State, Err),
-    State3 = add_result(Err, State2),
+    State2 = maybe_notify(State, {error, no_aae_pid}),
+    State3 = add_result(#partition_result{status=error, error=no_aae_pid}, State2),
     next_partition(State3#state{aae_pid_timer=undefined});
 % This is apparently a weird condition seen in the wild, change to error.
 wait_for_aae_pid({ReqId, {ok, undefined}},
@@ -180,9 +179,9 @@ wait_for_aae_pid({ReqId, {error, Err}}, State=#state{aae_pid_req_id=ReqId,
                                                      aae_pid_timer=Timer}) ->
     gen_fsm:cancel_timer(Timer),
     State2 = State#state{aae_pid_timer=undefined},
-    Err = {error, {no_aae_pid, Err}},
-    State3 = maybe_notify(State2, Err),
-    next_partition(State3);
+    State3 = add_result(#partition_result{status=error, error={no_aae_pid, Err}}, State2),
+    State4 = maybe_notify(State3, {error, {no_aae_pid, Err}}),
+    next_partition(State4);
 wait_for_aae_pid({ReqId, {ok, TreePid}},
                  State=#state{aae_pid_req_id=ReqId, speed=Speed,
                               aae_pid_timer=Timer,
