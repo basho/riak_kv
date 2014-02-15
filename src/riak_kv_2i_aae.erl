@@ -170,6 +170,7 @@ next_partition(State=#state{remaining=[Partition|_]}) ->
 wait_for_aae_pid(aae_pid_timeout, State) ->
     State2 = maybe_notify(State, {error, no_aae_pid}),
     State3 = add_result(#partition_result{status=error, error=no_aae_pid}, State2),
+    lager:error("AAE pid request timed out"),
     next_partition(State3#state{aae_pid_timer=undefined});
 % This is apparently a weird condition seen in the wild, change to error.
 wait_for_aae_pid({ReqId, {ok, undefined}},
@@ -181,6 +182,7 @@ wait_for_aae_pid({ReqId, {error, Err}}, State=#state{aae_pid_req_id=ReqId,
     State2 = State#state{aae_pid_timer=undefined},
     State3 = add_result(#partition_result{status=error, error={no_aae_pid, Err}}, State2),
     State4 = maybe_notify(State3, {error, {no_aae_pid, Err}}),
+    lager:error("AAE pid request failed"),
     next_partition(State4);
 wait_for_aae_pid({ReqId, {ok, TreePid}},
                  State=#state{aae_pid_req_id=ReqId, speed=Speed,
