@@ -27,6 +27,7 @@
 -export([start_vnode/1,
          start_vnodes/1,
          get/3,
+         get/4,
          del/3,
          put/6,
          local_get/2,
