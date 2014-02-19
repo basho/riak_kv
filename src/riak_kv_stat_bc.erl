@@ -155,7 +155,8 @@ produce_stats() ->
        ring_stats(),
        config_stats(),
        app_stats(),
-       memory_stats()
+       memory_stats(),
+       yz_stats()
       ]).
 
 %% Stats in folsom are stored with tuples as keys, the
@@ -551,6 +552,15 @@ config_stats() ->
 %% with those stats already in the blob
 pipe_stats() ->
     lists:flatten([bc_stat(Name, Val) || {Name, Val} <- riak_pipe_stat:get_stats()]).
+
+%% @doc add the yz stats to the blob in a style consistent
+%% with those stats already in the blob
+yz_stats() ->
+    {Legacy, _Calculated} = lists:foldl(fun({Old, New, Type}, {Acc, Cache}) ->
+                                                bc_stat({Old, New, Type}, Acc, Cache) end,
+                                        {[], []},
+                                        yz_stat:stats_map()),
+    lists:reverse(Legacy).
 
 %% old style blob stats don't have the app name
 %% and they have underscores, not commas
