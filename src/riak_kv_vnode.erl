@@ -347,7 +347,7 @@ repair_filter(Target) ->
                                 riak_core_bucket:default_object_nval(),
                                 fun object_info/1).
 
--spec hashtree_pid(index()) -> {ok, pid()}.
+-spec hashtree_pid(index()) -> {ok, pid()} | {error, wrong_node}.
 hashtree_pid(Partition) ->
     riak_core_vnode_master:sync_command({Partition, node()},
                                         {hashtree_pid, node()},
