@@ -318,9 +318,12 @@ end
 %% of the ETS table, rather than the actual data, to keep the size
 %% calculation simple, thus more space may be used than the simple
 %% size * vnode_count calculation would imply.
+%%
+%% Caution: Do not use without extensive benchmarking.
 {mapping, "metadata_cache_size", "riak_kv.vnode_md_cache_size", [
   {datatype, [{atom, off}, bytesize]},
-  {default, off} %% disabled by default, to ship with this live, change to 512KB
+  {default, off}, %% disabled by default, 256KB is a reasonable value
+  hidden
 ]}.
 
 { translation,
