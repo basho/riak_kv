@@ -36,7 +36,6 @@
 -spec(statistics() -> [any()]).
 statistics() ->
     riak_kv_stat:get_stats().
-%%    riak_kv_stat:get_stats() ++ yz_stat:get_formatted_stats().
 
 ringready() ->
     riak_core_status:ringready().
