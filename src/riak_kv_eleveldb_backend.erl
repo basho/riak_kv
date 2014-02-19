@@ -41,6 +41,7 @@
          fold_keys/4,
          fold_objects/4,
          fold_indexes/4,
+         handoff_started/2,
          is_empty/1,
          status/1,
          callback/3]).
@@ -324,6 +325,11 @@ delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref,
         {error, Reason} ->
             {error, Reason, State}
     end.
+
+%% @doc Return options needed for handoff fold requests
+-spec handoff_started(integer(), pid()) -> {ok, list()}.
+handoff_started(_SrcPartition, _WorkerPid) ->
+        {ok, [{iterator_refresh, true}]}.
 
 %% @doc Fold over all the buckets
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
