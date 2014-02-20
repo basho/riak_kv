@@ -935,7 +935,8 @@ handoff_starting({_HOType, TargetNode}=_X, State) ->
 handoff_started(SrcPartition, WorkerPid) ->
     case maybe_get_vnode_lock(SrcPartition, WorkerPid) of
         ok ->
-            FoldOpts = [{iterator_refresh, true}],
+            Refresh = app_helper:get_env(riak_kv, iterator_refresh, true),
+            FoldOpts = [{iterator_refresh, Refresh}],
             {ok, FoldOpts};
         max_concurrency -> {error, max_concurrency}
     end.

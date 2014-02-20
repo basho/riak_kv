@@ -444,10 +444,11 @@ hash_index_data(IndexData) when is_list(IndexData) ->
 -spec fold_keys(index(), pid(), boolean()) -> ok.
 fold_keys(Partition, Tree, HasIndexTree) ->
     FoldFun = fold_fun(Tree, HasIndexTree),
+    Refresh = app_helper:get_env(riak_kv, iterator_refresh, true),
     Req = riak_core_util:make_fold_req(FoldFun,
                                        0, false, 
                                        [aae_reconstruction,
-                                        {iterator_refresh, true}]),
+                                        {iterator_refresh, Refresh}]),
     riak_core_vnode_master:sync_command({Partition, node()},
                                         Req,
                                         riak_kv_vnode_master, infinity),
