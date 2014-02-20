@@ -27,15 +27,24 @@
 %%      restore will reconcile values with the existing data.
 
 -module(riak_kv_backup).
--export ([backup/3, restore/2]).
+-export ([backup/3, restore/2, deprecated_backup/3]).
 -define (TABLE, riak_kv_backup_table).
 
 %%% BACKUP %%%
 
-%% @doc 
-%% Connect to the cluster of which EntryNode is a member, 
+%% @doc
+%% original entry point for legacy backup, now deprecated.
+%% @see deprecated_backup/3
+backup(_EntryNode, _BaseFilename, _Mode) ->
+    io:format("riak-admin backup has been deprecated and its use is not recommended.~n"
+              "please see the documentation for more information on how to safely backup a cluster.~n").
+
+%% @doc
+%% Legacy Backup. Use with Caution
+%%
+%% Connect to the cluster of which EntryNode is a member,
 %% read data from the cluster, and save the data in the specified file.
-backup(EntryNode, BaseFilename, Mode) -> 
+deprecated_backup(EntryNode, BaseFilename, Mode) ->
     % Make sure we can reach the node...
     ensure_connected(EntryNode),
 
