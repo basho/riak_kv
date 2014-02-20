@@ -60,6 +60,7 @@ basic_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.last_write_wins", false),
     cuttlefish_unit:assert_not_configured(Config, "riak_core.default_bucket_props.precommit"),
     cuttlefish_unit:assert_not_configured(Config, "riak_core.default_bucket_props.postcommit"),
+    cuttlefish_unit:assert_config(Config, "riak_dt.binary_compression", 1),
     ok.
 
 override_non_multi_backend_schema_test() ->
@@ -112,7 +113,8 @@ override_non_multi_backend_schema_test() ->
         {["buckets", "default", "allow_mult"], true},
         {["buckets", "default", "last_write_wins"], true},
         {["buckets", "default", "precommit"], "module:function javascriptFunction"},
-        {["buckets", "default", "postcommit"], "module2:function2"}
+        {["buckets", "default", "postcommit"], "module2:function2"},
+        {["datatypes", "compression_level"], "off"}
     ],
 
     Config = cuttlefish_unit:generate_templated_config(
@@ -178,7 +180,7 @@ override_non_multi_backend_schema_test() ->
                 {<<"fun">>, <<"function2">>}
                ]}
     ]),
-
+    cuttlefish_unit:assert_config(Config, "riak_dt.binary_compression", false),
     ok.
 
 multi_backend_test() ->
@@ -239,6 +241,7 @@ multi_backend_test() ->
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.last_write_wins", false),
     cuttlefish_unit:assert_not_configured(Config, "riak_core.default_bucket_props.precommit"),
     cuttlefish_unit:assert_not_configured(Config, "riak_core.default_bucket_props.postcommit"),
+    cuttlefish_unit:assert_config(Config, "riak_dt.binary_compression", 1),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend_default", <<"backend_one">>),
 
@@ -263,6 +266,13 @@ commit_hooks_test() ->
                            {error, "Translation for 'riak_core.default_bucket_props.precommit'"
                             " found invalid configuration: incorrect hook format 'bad:mod:fun'"}
                            ]}}, Config).
+
+datatype_compression_validator_test() ->
+    Conf = [{["datatypes", "compression_level"], 10}],
+    Config = cuttlefish_unit:generate_templated_config(
+               ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context(), predefined_schema()),
+    cuttlefish_unit:assert_error_in_phase(Config, validation),
+    ok.
 
 %% this context() represents the substitution variables that rebar
 %% will use during the build process.  riak_core's schema file is

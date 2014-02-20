@@ -560,3 +560,19 @@ end
    end ||  String <- StringList]
  end
 }.
+
+%% @doc Whether serialized datatypes will use compression, and at what
+%% level. When an integer, this refers to the aggressiveness (and
+%% slowness) of compression, on a scale from 0 to 9. 'on' is
+%% equivalent to 6, 'off' is equivalent to 0.
+{mapping, "datatypes.compression_level", "riak_dt.binary_compression", [
+    {datatype, [integer, flag]},
+    {default, 1},
+    {validators, ["is_compression_value"]},
+    hidden
+]}.
+
+{validator, "is_compression_value", "must be on/off or a value between 0 and 9",
+ fun(Value)->
+    is_boolean(Value) orelse (is_integer(Value) andalso Value =< 9 andalso Value >= 0)
+ end}.
