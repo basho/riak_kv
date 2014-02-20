@@ -42,7 +42,6 @@
          status/1,
          callback/3,
          fix_index/3,
-         handoff_started/2,
          set_legacy_indexes/2,
          mark_indexes_fixed/2,
          fixed_index_status/1]).
@@ -256,11 +255,6 @@ delete(Bucket, Key, IndexSpecs, State) ->
             NewState = update_backend_state(Name, Module, NewSubState, State),
             {error, Reason, NewState}
     end.
-
-%% @doc Return options needed for handoff fold requests
--spec handoff_started(integer(), pid()) -> {ok, list()}.
-handoff_started(_SrcPartition, _WorkerPid) ->
-        {ok, [{iterator_refresh, true}]}.
 
 %% @doc Fold over all the buckets
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
