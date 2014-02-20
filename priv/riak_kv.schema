@@ -583,9 +583,9 @@ end
 %% same resources.
 %% @see background_manager
 {mapping, "handoff.use_background_manager", "riak_kv.handoff_use_background_manager", [
-    {datatype, flag},    
-    {level, advanced},
-    {default, on}
+    {datatype, flag},
+    {default, on},
+    hidden
 ]}.
 
 %% @doc Whether to use the background manager to limit AAE tree
@@ -595,6 +595,6 @@ end
 %% @see background_manager
 {mapping, "anti_entropy.use_background_manager", "riak_kv.aae_use_background_manager", [
     {datatype, flag},
-    {level, advanced},
-    {default, on}
+    {default, on},
+    hidden
 ]}.
