@@ -121,7 +121,7 @@
                 handoff_target :: node(),
                 forward :: node() | [{integer(), node()}],
                 hashtrees :: pid(),
-                md_cache :: ets:tab(), 
+                md_cache :: ets:tab(),
                 md_cache_size :: pos_integer() }).
 
 -type index_op() :: add | remove.
@@ -402,15 +402,15 @@ init([Index]) ->
     {ok, VId} = get_vnodeid(Index),
     DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
     AsyncFolding = app_helper:get_env(riak_kv, async_folds, true) == true,
-    MDCacheSize = app_helper:get_env(riak_kv, vnode_md_cache_size), 
-    MDCache = 
+    MDCacheSize = app_helper:get_env(riak_kv, vnode_md_cache_size),
+    MDCache =
         case MDCacheSize of
             N when is_integer(N),
                    N > 0 ->
-                lager:debug("Initializing metadata cache with size limit: ~p bytes", 
+                lager:debug("Initializing metadata cache with size limit: ~p bytes",
                            [MDCacheSize]),
                 new_md_cache(VId);
-            _ -> 
+            _ ->
                 lager:debug("No metadata cache size defined, not starting"),
                 undefined
         end,
@@ -458,9 +458,8 @@ handle_overload_command(?KV_GET_REQ{req_id=ReqID}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqID});
 handle_overload_command(?KV_VNODE_STATUS_REQ{}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {vnode_status, Idx, [{error, overload}]});
-handle_overload_command(_, _, _) ->
-    %% not handled yet
-    ok.
+handle_overload_command(_, Sender, _) ->
+    riak_core_vnode:reply(Sender, {error, mailbox_overload}).
 
 handle_command(?KV_PUT_REQ{bkey=BKey,
                            object=Object,
@@ -599,7 +598,7 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
                     {false, undefined, []}
             end,
             IndexSpecs = riak_object:diff_index_data(OldIdxData, IdxData),
-            {Reply, UpModState} = 
+            {Reply, UpModState} =
             case Mod:put(Bucket, Key, IndexSpecs, undefined, ModState) of
                 {ok, ModState2} ->
                     riak_kv_stat:update(vnode_index_refresh),
@@ -943,7 +942,7 @@ handle_handoff_data(BinObj, State) ->
     try
         {BKey, Val} = decode_binary_object(BinObj),
         {B, K} = BKey,
-        case do_diffobj_put(BKey, riak_object:from_binary(B, K, Val), 
+        case do_diffobj_put(BKey, riak_object:from_binary(B, K, Val),
                             State) of
             {ok, UpdModState} ->
                 {reply, ok, State#state{modstate=UpdModState}};
@@ -1249,7 +1248,7 @@ prepare_put(#state{vnodeid=VId,
             IndexBackend) ->
     {CacheClock, CacheData} = maybe_check_md_cache(MDCache, BKey),
 
-    RequiresGet = 
+    RequiresGet =
         case CacheClock of
             undefined ->
                 true;
@@ -1262,7 +1261,7 @@ prepare_put(#state{vnodeid=VId,
                 end
         end,
     GetReply =
-        case RequiresGet of 
+        case RequiresGet of
             true ->
                 case do_get_object(Bucket, Key, Mod, ModState) of
                     {error, not_found, _UpdModState} ->
@@ -1471,7 +1470,7 @@ put_merge(true, LWW, CurObj, UpdObj, VId, StartTime) ->
 do_get(_Sender, BKey, ReqID,
        State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
     StartTS = os:timestamp(),
-    Retval = do_get_term(BKey, Mod, ModState),                
+    Retval = do_get_term(BKey, Mod, ModState),
     case Retval of
         {ok, Obj} ->
             maybe_cache_object(BKey, Obj, State);
@@ -2162,9 +2161,9 @@ maybe_check_md_cache(Table, BKey) ->
             {undefined, undefined};
         _ ->
             case ets:lookup(Table, BKey) of
-                [{_TS, BKey, MD}] -> 
+                [{_TS, BKey, MD}] ->
                     MD;
-                [] -> 
+                [] ->
                     {undefined, undefined}
             end
     end.
@@ -2203,7 +2202,7 @@ insert_md_cache(Table, MaxSize, BKey, MD) ->
 
 trim_md_cache(Table, MaxSize) ->
     Oldest = ets:first(Table),
-    case Oldest of 
+    case Oldest of
         '$end_of_table' ->
             ok;
         BKey ->
@@ -2216,8 +2215,8 @@ trim_md_cache(Table, MaxSize) ->
                     ok
             end
     end.
-        
-new_md_cache(VId) ->                
+
+new_md_cache(VId) ->
     MDCacheName = list_to_atom(?MD_CACHE_BASE ++ integer_to_list(binary:decode_unsigned(VId))),
     %% ordered set to make sure that the first key is the oldest
     %% term format is {TimeStamp, Key, ValueTuple}

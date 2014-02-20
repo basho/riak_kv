@@ -68,13 +68,16 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
 
 process_results(done, StateData) ->
     {done, StateData};
+process_results({error, Reason}, _State) ->
+    ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [-1], []),
+    {error, Reason};
 process_results(Buckets0,
                 StateData=#state{buckets=BucketAcc, from=From, stream=true}) ->
     Buckets = filter_buckets(Buckets0, StateData#state.type),
     ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [length(Buckets)], []),
     BucketsToSend = [ B  || B <- Buckets,
                              not sets:is_element(B, BucketAcc) ],
-    if 
+    if
         BucketsToSend =/= [] ->
             reply({buckets_stream, BucketsToSend}, From);
         true -> ok
@@ -84,12 +87,9 @@ process_results(Buckets0,
                 StateData=#state{buckets=BucketAcc, stream=false}) ->
     Buckets = filter_buckets(Buckets0, StateData#state.type),
     ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [length(Buckets)], []),
-    {ok, StateData#state{buckets=accumulate(Buckets, BucketAcc)}};
-process_results({error, Reason}, _State) ->
-    ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [-1], []),
-    {error, Reason}.
+    {ok, StateData#state{buckets=accumulate(Buckets, BucketAcc)}}.
 
-finish({error, Error},
+finish({error, _}=Error,
        StateData=#state{from=From}) ->
     ?DTRACE(?C_BUCKETS_FINISH, [-1], []),
     %% Notify the requesting client that an error
@@ -99,7 +99,7 @@ finish({error, Error},
 finish(clean, StateData=#state{from=From, stream=true}) ->
     ?DTRACE(?C_BUCKETS_FINISH, [0], []),
     reply(done, From),
-    {stop, normal, StateData};    
+    {stop, normal, StateData};
 finish(clean,
        StateData=#state{buckets=Buckets,
                         from=From,

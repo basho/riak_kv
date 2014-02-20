@@ -461,9 +461,9 @@ list_keys(Bucket, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 list_keys(Bucket, Filter, Timeout0, {?MODULE, [Node, _ClientId]}) ->
-    Timeout = 
+    Timeout =
         case Timeout0 of
-            T when is_integer(T) -> T; 
+            T when is_integer(T) -> T;
             _ -> ?DEFAULT_TIMEOUT*8
         end,
     Me = self(),
@@ -588,9 +588,9 @@ list_buckets(Filter, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
 list_buckets(Filter, Timeout, Type, {?MODULE, [Node, _ClientId]}) ->
     Me = self(),
     ReqId = mk_reqid(),
-    {ok, _Pid} = riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, 
-                                                           [{raw, ReqId, Me}, 
-                                                            [Filter, Timeout, 
+    {ok, _Pid} = riak_kv_buckets_fsm_sup:start_buckets_fsm(Node,
+                                                           [{raw, ReqId, Me},
+                                                            [Filter, Timeout,
                                                              false, Type]]),
     wait_for_listbuckets(ReqId).
 
@@ -607,10 +607,10 @@ stream_list_buckets({?MODULE, [_Node, _ClientId]}=THIS) ->
 
 stream_list_buckets(undefined, {?MODULE, [_Node, _ClientId]}=THIS) ->
     stream_list_buckets(none, ?DEFAULT_TIMEOUT, THIS);
-stream_list_buckets(Timeout, {?MODULE, [_Node, _ClientId]}=THIS) 
+stream_list_buckets(Timeout, {?MODULE, [_Node, _ClientId]}=THIS)
   when is_integer(Timeout) ->
     stream_list_buckets(none, Timeout, THIS);
-stream_list_buckets(Filter, {?MODULE, [_Node, _ClientId]}=THIS) 
+stream_list_buckets(Filter, {?MODULE, [_Node, _ClientId]}=THIS)
   when is_function(Filter) ->
     stream_list_buckets(Filter, ?DEFAULT_TIMEOUT, THIS).
 
@@ -629,7 +629,7 @@ stream_list_buckets(Filter, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      out of date if called immediately after any operation that
 %%      either adds the first key or removes the last remaining key from
 %%      a bucket.
-stream_list_buckets(Filter, Timeout, Client, 
+stream_list_buckets(Filter, Timeout, Client,
                     {?MODULE, [_Node, _ClientId]}=THIS) when is_pid(Client) ->
     stream_list_buckets(Filter, Timeout, Client, <<"default">>, THIS);
 stream_list_buckets(Filter, Timeout, Type,
@@ -640,10 +640,10 @@ stream_list_buckets(Filter, Timeout, Type,
 stream_list_buckets(Filter, Timeout, Client, Type,
                     {?MODULE, [Node, _ClientId]}) ->
     ReqId = mk_reqid(),
-    {ok, _Pid} = riak_kv_buckets_fsm_sup:start_buckets_fsm(Node, 
-                                                           [{raw, ReqId, 
-                                                             Client}, 
-                                                            [Filter, Timeout, 
+    {ok, _Pid} = riak_kv_buckets_fsm_sup:start_buckets_fsm(Node,
+                                                           [{raw, ReqId,
+                                                             Client},
+                                                            [Filter, Timeout,
                                                              true, Type]]),
     {ok, ReqId}.
 
@@ -781,15 +781,16 @@ wait_for_listkeys(ReqId, Acc) ->
             riak_kv_keys_fsm:ack_keys(From),
             wait_for_listkeys(ReqId, [Res|Acc]);
         {ReqId,{keys,Res}} -> wait_for_listkeys(ReqId, [Res|Acc]);
-        {ReqId, {error, Error}} -> {error, Error}
+        {ReqId, {error, Error}} ->
+            {error, Error}
     end.
 
 %% @private
 wait_for_listbuckets(ReqId) ->
     receive
-        {ReqId,{buckets, Buckets}} -> 
+        {ReqId,{buckets, Buckets}} ->
             {ok, Buckets};
-        {ReqId, Error} -> 
+        {ReqId, {error, Error}} ->
             {error, Error}
     end.
 
