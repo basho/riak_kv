@@ -31,8 +31,7 @@
 -compile(export_all).
 
 roundtrip_eqc_test_() ->
-    error_logger:tty(false),
-    Res = eqc:quickcheck(eqc:testing_time(15, ?QC_OUT(prop_roundtrip()))),
+    Res = eqc:quickcheck(numtests(1000, ?QC_OUT(prop_roundtrip()))),
     ?_assertEqual(true, Res).
 
 %% deserializing a binary representation of a riak_object and
