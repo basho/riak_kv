@@ -86,4 +86,4 @@ pretty_print(RD1, C1=#ctx{}) ->
 get_stats() ->
     {value, {disk, Disk}, Stats} = lists:keytake(disk, 1, riak_kv_stat:get_stats()),
     DiskFlat = [{struct, [{id, list_to_binary(Id)}, {size, Size}, {used, Used}]} || {Id, Size, Used} <- Disk],
-    lists:append([Stats, [{disk, DiskFlat}], riak_core_stat:get_stats(), yz_stat:get_stats()]).
+    lists:append([Stats, [{disk, DiskFlat}], riak_core_stat:get_stats(), yz_stat:search_stats()]).
