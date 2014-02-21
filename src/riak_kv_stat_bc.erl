@@ -155,7 +155,8 @@ produce_stats() ->
        ring_stats(),
        config_stats(),
        app_stats(),
-       memory_stats()
+       memory_stats(),
+       yz_stat:search_stats()
       ]).
 
 %% Stats in folsom are stored with tuples as keys, the
