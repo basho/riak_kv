@@ -936,8 +936,7 @@ handoff_starting({_HOType, TargetNode}=_X, State) ->
 handoff_started(SrcPartition, WorkerPid) ->
     case maybe_get_vnode_lock(SrcPartition, WorkerPid) of
         ok ->
-            Refresh = app_helper:get_env(riak_kv, iterator_refresh, true),
-            FoldOpts = [{iterator_refresh, Refresh}],
+            FoldOpts = [{iterator_refresh, true}],
             {ok, FoldOpts};
         max_concurrency -> {error, max_concurrency}
     end.
@@ -1751,7 +1750,8 @@ maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
 
 %% @private
 maybe_enable_iterator_refresh(Capabilities, Opts) ->
-    case lists:member(iterator_refresh, Capabilities) of
+    Refresh = app_helper:get_env(riak_kv, iterator_refresh, true),
+    case Refresh andalso lists:member(iterator_refresh, Capabilities) of
         true ->
             Opts;
         false ->
