@@ -37,7 +37,7 @@
 %% @see deprecated_backup/3
 backup(_EntryNode, _BaseFilename, _Mode) ->
     io:format("riak-admin backup has been deprecated and its use is not recommended.~n"
-              "please see the documentation for more information on how to safely backup a cluster.~n").
+              "Please see the documentation for more information on how to safely backup a cluster.~n").
 
 %% @doc
 %% Legacy Backup. Use with Caution
