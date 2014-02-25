@@ -261,5 +261,5 @@ stream_keys(ReqId) ->
         {ReqId, {keys, Keys}} ->
             {mochijson2:encode({struct, [{<<"keys">>, Keys}]}), fun() -> stream_keys(ReqId) end};
         {ReqId, done} -> {mochijson2:encode({struct, [{<<"keys">>, []}]}), done};
-        {ReqId, timeout} -> {mochijson2:encode({struct, [{error, timeout}]}), done}
+        {ReqId, {error, timeout}} -> {mochijson2:encode({struct, [{error, timeout}]}), done}
     end.
