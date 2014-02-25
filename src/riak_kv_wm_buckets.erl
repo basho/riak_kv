@@ -222,5 +222,5 @@ stream_buckets(ReqId) ->
         {ReqId, {buckets_stream, Buckets}} ->
             {mochijson2:encode({struct, [{<<"buckets">>, Buckets}]}),
              fun() -> stream_buckets(ReqId) end};
-        {ReqId, timeout} -> {mochijson2:encode({struct, [{error, timeout}]}), done}
+        {ReqId, {error, timeout}} -> {mochijson2:encode({struct, [{error, timeout}]}), done}
     end.
