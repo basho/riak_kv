@@ -6,6 +6,11 @@
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(PUTS_ACTIVE, {riak_kv, node, puts, fsm, active}).
+-define(GETS_ACTIVE, {riak_kv, node, gets, fsm, active}).
+-define(PUTS_ERRORS, {riak_kv, node, puts, fsm, errors}).
+-define(GETS_ERRORS, {riak_kv, node, gets, fsm, errors}).
+
 -compile([export_all]).
 
 -record(state, {
@@ -23,7 +28,7 @@ eqc_test_() ->
                     ok
             end,
      fun(_) ->
-             [maybe_stop_and_wait(Server) || Server <- [riak_core_stat_cache, riak_kv_stat]]
+             ok
      end, [
            {timeout, 120, ?_assertEqual(true, quickcheck(numtests(100, ?QC_OUT(prop()))))}
           ]}.
@@ -38,9 +43,10 @@ check() ->
     check(prop(), current_counterexample()).
 
 prop() ->
+    error_logger:tty(false),
+    crypto:start(),
     ?FORALL(Cmds, commands(?MODULE), begin
-        crypto:start(),
-        application:start(folsom),        
+        reset_test_state(),
         {_,State,Res} = run_commands(?MODULE, Cmds),
         case Res of
             ok ->
@@ -53,17 +59,21 @@ prop() ->
         aggregate(command_names(Cmds), Res == ok)
     end).
 
+reset_test_state() ->
+    [maybe_stop_and_wait(Server) || Server <- [riak_core_stat_cache, riak_kv_stat]],
+    application:stop(folsom),
+    application:start(folsom),
+    {ok, Cache} = riak_core_stat_cache:start_link(),
+    {ok, Pid} = riak_kv_stat:start_link(),
+    unlink(Pid),
+    unlink(Cache).
+
+
 %% ====================================================================
 %% eqc_statem callbacks
 %% ====================================================================
 
 initial_state() ->
-    [maybe_stop_and_wait(Server) || Server <- [riak_core_stat_cache, riak_kv_stat]],
-    application:start(folsom),
-    {ok, Cache} = riak_core_stat_cache:start_link(),
-    {ok, Pid} = riak_kv_stat:start_link(),
-    unlink(Pid),
-    unlink(Cache),
     #state{}.
 
 command(S) ->
@@ -129,66 +139,39 @@ next_state(S, _Res, {call, _, _, [put, Pid]}) ->
     Puts2 = ordsets:del_element(Pid, S#state.put_fsm),
     S#state{put_fsm = Puts2}.
 
+postcondition(_, _, _) ->
+    true.
 
-postcondition(S, {call, _Mod, put_fsm_started, _Args}, Res) ->
-    check_state(S#state{put_fsm = [Res | S#state.put_fsm]});
-
-postcondition(S, {call, _Mod, get_fsm_started, _Args}, Res) ->
-    check_state(S#state{get_fsm = [Res | S#state.get_fsm]});
-
-postcondition(S, {call, _Mod, put_fsm_noproc, _Args}, _Res) ->
-    check_state(S);
-
-postcondition(S, {call, _Mod, get_fsm_noproc, _Args}, _Res) ->
-    check_state(S);
-
-postcondition(S, {call, _Mod, put_fsm_exit_error, _Args}, Res) ->
-    S2 = S#state{
-        put_fsm = ordsets:del_element(Res, S#state.put_fsm),
-        put_errors = S#state.put_errors + 1
-    },
-    check_state(S2);
-
-postcondition(S, {call, _Mod, get_fsm_exit_error, _Args}, Res) ->
-    S2 = S#state{
-        get_fsm = ordsets:del_element(Res, S#state.get_fsm),
-        get_errors = S#state.get_errors + 1
-    },
-    check_state(S2);
-
-postcondition(S, {call, _Mod, _NiceShutdown, [put, _]}, Res) ->
-    S2 = S#state{
-        put_fsm = ordsets:del_element(Res, S#state.put_fsm)
-    },
-    check_state(S2);
-
-postcondition(S, {call, _Mod, _NiceShutdown, [get, _]}, Res) ->
-    S2 = S#state{
-        get_fsm = ordsets:del_element(Res, S#state.get_fsm)
-    },
-    check_state(S2).
-
-
-check_state(S) ->
+invariant(S) ->
     #state{put_errors = PutErrCount, get_errors = GetErrCount,
         put_fsm = PutList, get_fsm = GetList} = S,
-    % wait for folsom stats to settle; if we check too quick, folsom won't have
-    % finished updating. Timers suck, so maybe something better will come along
-    timer:sleep(10),
 
     % with a timetrap of 60 seconds, the spiral will never have values slide off
     MetricExpects = [
-        {{riak_kv, node, puts, fsm, active}, length(PutList)},
-        {{riak_kv, node, gets, fsm, active}, length(GetList)},
-        {{riak_kv, node, puts, fsm, errors}, [{count, PutErrCount}, {one, PutErrCount}]},
-        {{riak_kv, node, gets, fsm, errors}, [{count, GetErrCount}, {one, GetErrCount}]}
+        {?PUTS_ACTIVE, length(PutList)},
+        {?GETS_ACTIVE, length(GetList)},
+        {?PUTS_ERRORS, [{count, PutErrCount}, {one, PutErrCount}]},
+        {?GETS_ERRORS, [{count, GetErrCount}, {one, GetErrCount}]}
     ],
 
     [ begin
-        ?assertEqual(Expected, folsom_metrics:get_metric_value(Metric))
-    end || {Metric, Expected} <- MetricExpects],
+        Val = folsom_metrics:get_metric_value(Metric),
+        case Val of 
+            Expected -> ok;
+            _ -> io:format(user, "Failed Metric = ~p~n", [Metric])
+        end,
+        ?assertEqual(Expected, Val)
+      end || {Metric, Expected} <- MetricExpects],
 
     true.
+
+poll_stat_change(Metric, OriginalValue) ->
+    case folsom_metrics:get_metric_value(Metric) of
+        OriginalValue -> 
+            poll_stat_change(Metric, OriginalValue);
+        _ ->
+            ok
+    end.
 
 %% wait for all fake fsms to finish, so the monitors
 %% get to finish before folsom is stopped.
@@ -202,51 +185,64 @@ exit_gracefully(S) ->
 
 get_fsm_started() ->
     Pid = fake_fsm(),
+    Original = folsom_metrics:get_metric_value(?GETS_ACTIVE),
     riak_kv_get_put_monitor:get_fsm_spawned(Pid),
+    poll_stat_change(?GETS_ACTIVE, Original),
     Pid.
 
 get_fsm_noproc() ->
     Pid = fake_fsm(),
     end_and_wait(Pid, normal),
     riak_kv_get_put_monitor:get_fsm_spawned(Pid),
-    % ugh, sleep; need to give time for the down message to get to the monitor.
-    timer:sleep(10),
     Pid.
 
 get_fsm_exit_normal(get, Pid) ->
+    Original = folsom_metrics:get_metric_value(?GETS_ACTIVE),
     end_and_wait(Pid, normal),
+    poll_stat_change(?GETS_ACTIVE, Original),
     Pid.
 
 get_fsm_exit_shutdown(get, Pid) ->
+    Original = folsom_metrics:get_metric_value(?GETS_ACTIVE),
     end_and_wait(Pid, shutdown),
+    poll_stat_change(?GETS_ACTIVE, Original),
     Pid.
 
 get_fsm_exit_error(get, Pid) ->
+    Original = folsom_metrics:get_metric_value(?GETS_ERRORS),
     end_and_wait(Pid, unnatural),
+    poll_stat_change(?GETS_ERRORS, Original),
     Pid.
 
 put_fsm_started() ->
+    Original = folsom_metrics:get_metric_value(?PUTS_ACTIVE),
     Pid = fake_fsm(),
     riak_kv_get_put_monitor:put_fsm_spawned(Pid),
+    poll_stat_change(?PUTS_ACTIVE, Original),
     Pid.
 
 put_fsm_noproc() ->
     Pid = fake_fsm(),
     end_and_wait(Pid, normal),
     riak_kv_get_put_monitor:put_fsm_spawned(Pid),
-    timer:sleep(20),
     Pid.
 
 put_fsm_exit_normal(put, Pid) ->
+    Original = folsom_metrics:get_metric_value(?PUTS_ACTIVE),
     end_and_wait(Pid, normal),
+    poll_stat_change(?PUTS_ACTIVE, Original),
     Pid.
 
 put_fsm_exit_shutdown(put, Pid) ->
+    Original = folsom_metrics:get_metric_value(?PUTS_ACTIVE),
     end_and_wait(Pid, shutdown),
+    poll_stat_change(?PUTS_ACTIVE, Original),
     Pid.
 
 put_fsm_exit_error(put, Pid) ->
+    Original = folsom_metrics:get_metric_value(?PUTS_ERRORS),
     end_and_wait(Pid, unnatural),
+    poll_stat_change(?PUTS_ERRORS, Original),
     Pid.
 
 %% ====================================================================
@@ -262,8 +258,8 @@ fake_fsm_loop() ->
     end.
 
 end_and_wait(Pid, Cause) ->
-    Pid ! Cause,
     Monref = erlang:monitor(process, Pid),
+    Pid ! Cause,
     receive
         {'DOWN', Monref, process, Pid, _} ->
             ok
