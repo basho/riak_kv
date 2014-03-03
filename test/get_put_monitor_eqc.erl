@@ -30,7 +30,7 @@ eqc_test_() ->
      fun(_) ->
              ok
      end, [
-           {timeout, 120, ?_assertEqual(true, quickcheck(numtests(100, ?QC_OUT(prop()))))}
+           {timeout, 360, ?_assertEqual(true, quickcheck(numtests(5000, ?QC_OUT(prop()))))}
           ]}.
 
 test() ->
@@ -154,16 +154,14 @@ invariant(S) ->
         {?GETS_ERRORS, [{count, GetErrCount}, {one, GetErrCount}]}
     ],
 
-    [ begin
-        Val = folsom_metrics:get_metric_value(Metric),
-        case Val of 
-            Expected -> ok;
-            _ -> io:format(user, "Failed Metric = ~p~n", [Metric])
-        end,
-        ?assertEqual(Expected, Val)
-      end || {Metric, Expected} <- MetricExpects],
-
-    true.
+    Zipped = [{Metric, Expected, folsom_metrics:get_metric_value(Metric)} ||
+        {Metric, Expected} <- MetricExpects],
+    Bad = [{Metric, {expected, Expected}, {actual, Actual}} || 
+        {Metric, Expected, Actual} <- Zipped, Expected /= Actual],
+    case Bad of
+        [] -> true;
+        _ -> Bad
+    end.
 
 poll_stat_change(Metric, OriginalValue) ->
     case folsom_metrics:get_metric_value(Metric) of
@@ -193,7 +191,7 @@ get_fsm_started() ->
 get_fsm_noproc() ->
     Pid = fake_fsm(),
     end_and_wait(Pid, normal),
-    riak_kv_get_put_monitor:get_fsm_spawned(Pid),
+    riak_kv_get_put_monitor:spawned(gets, Pid),
     Pid.
 
 get_fsm_exit_normal(get, Pid) ->
@@ -209,9 +207,11 @@ get_fsm_exit_shutdown(get, Pid) ->
     Pid.
 
 get_fsm_exit_error(get, Pid) ->
-    Original = folsom_metrics:get_metric_value(?GETS_ERRORS),
+    OriginalActive = folsom_metrics:get_metric_value(?GETS_ACTIVE),
+    OriginalErrors = folsom_metrics:get_metric_value(?GETS_ERRORS),
     end_and_wait(Pid, unnatural),
-    poll_stat_change(?GETS_ERRORS, Original),
+    poll_stat_change(?GETS_ACTIVE, OriginalActive),
+    poll_stat_change(?GETS_ERRORS, OriginalErrors),
     Pid.
 
 put_fsm_started() ->
@@ -224,7 +224,7 @@ put_fsm_started() ->
 put_fsm_noproc() ->
     Pid = fake_fsm(),
     end_and_wait(Pid, normal),
-    riak_kv_get_put_monitor:put_fsm_spawned(Pid),
+    riak_kv_get_put_monitor:spawned(puts, Pid),
     Pid.
 
 put_fsm_exit_normal(put, Pid) ->
@@ -240,9 +240,11 @@ put_fsm_exit_shutdown(put, Pid) ->
     Pid.
 
 put_fsm_exit_error(put, Pid) ->
-    Original = folsom_metrics:get_metric_value(?PUTS_ERRORS),
+    OriginalActive = folsom_metrics:get_metric_value(?PUTS_ACTIVE),
+    OriginalErrors = folsom_metrics:get_metric_value(?PUTS_ERRORS),
     end_and_wait(Pid, unnatural),
-    poll_stat_change(?PUTS_ERRORS, Original),
+    poll_stat_change(?PUTS_ACTIVE, OriginalActive),
+    poll_stat_change(?PUTS_ERRORS, OriginalErrors),
     Pid.
 
 %% ====================================================================
