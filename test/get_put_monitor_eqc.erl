@@ -25,12 +25,15 @@
 
 eqc_test_() ->
     {setup, fun() ->
-                    ok
+                error_logger:tty(false),
+                crypto:start(),
+                ok
             end,
      fun(_) ->
-             ok
+             cleanup() 
      end, [
-           {timeout, 360, ?_assertEqual(true, quickcheck(numtests(5000, ?QC_OUT(prop()))))}
+           {timeout, 360, ?_assertEqual(true, quickcheck(numtests(5000,
+                           ?QC_OUT(prop()))))}
           ]}.
 
 test() ->
@@ -43,21 +46,28 @@ check() ->
     check(prop(), current_counterexample()).
 
 prop() ->
-    error_logger:tty(false),
-    crypto:start(),
     ?FORALL(Cmds, commands(?MODULE), begin
         reset_test_state(),
-        {_,State,Res} = run_commands(?MODULE, Cmds),
-        case Res of
-            ok ->
-                %% what about all the prcesses started?
-                %% can we wait for the all to end, please?
-                exit_gracefully(State),
-                ok;
-            _ -> io:format(user, "QC result: ~p\n", [Res])
-        end,
-        aggregate(command_names(Cmds), Res == ok)
+        {_,State,Res} = C = run_commands(?MODULE, Cmds),
+        Prop = eqc_statem:pretty_commands(?MODULE, Cmds, C, 
+            begin 
+                    exit_gracefully(State), 
+                    Res =:= ok 
+            end),
+        aggregate(command_names(Cmds), Prop)
     end).
+
+%% wait for all fake fsms to finish, so the monitors
+%% get to finish before folsom is stopped.
+exit_gracefully(S) ->
+    #state{put_fsm = PutList, get_fsm = GetList} = S,
+    [end_and_wait(Pid, normal) || Pid <- PutList ++ GetList].
+
+cleanup() ->
+    crypto:stop(),
+    error_logger:tty(true),
+    application:stop(folsom),
+    true.
 
 reset_test_state() ->
     [maybe_stop_and_wait(Server) || Server <- [riak_core_stat_cache, riak_kv_stat]],
@@ -170,12 +180,6 @@ poll_stat_change(Metric, OriginalValue) ->
         _ ->
             ok
     end.
-
-%% wait for all fake fsms to finish, so the monitors
-%% get to finish before folsom is stopped.
-exit_gracefully(S) ->
-    #state{put_fsm = PutList, get_fsm = GetList} = S,
-    [end_and_wait(Pid, normal) || Pid <- PutList ++ GetList].
 
 %% ====================================================================
 %% Calls
