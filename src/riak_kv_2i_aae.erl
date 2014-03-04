@@ -26,7 +26,7 @@
 
 -export([start/2, stop/1, get_status/0, to_report/1]).
 
--export([next_partition/2, wait_for_aae_pid/2, wait_for_repair/3,
+-export([first_partition/2, wait_for_aae_pid/2, wait_for_repair/3,
          wait_for_repair/2]).
 
 %% gen_fsm callbacks
@@ -74,13 +74,14 @@
          caller :: pid(),
          reply_to,
          early_reply,
-         aae_pid_req_id :: pid() | undefined,
+         aae_pid_req_id :: reference() | undefined,
+         aae_pid_timer :: reference() | undefined,
          worker_monitor :: reference() | undefined,
          worker_status :: worker_status(),
          index_scan_count = 0 :: integer(),
          hashtree_population_count = 0 :: integer(),
          exchange_count = 0 :: integer(),
-         open_dbs = [] :: [reference()]
+         open_dbs = [] :: [eleveldb:db_ref()]
         }).
 
 -record(partition_result, {
@@ -137,8 +138,8 @@ init([Partitions, Speed, Caller]) ->
     process_flag(trap_exit, true),
     lager:info("Starting 2i repair at speed ~p for partitions ~p",
                [Speed, Partitions]),
-    {ok, next_partition, #state{partitions=Partitions, remaining=Partitions,
-                                speed=Speed, caller=Caller}, 0}.
+    {ok, first_partition, #state{partitions=Partitions, remaining=Partitions,
+                                 speed=Speed, caller=Caller}, 0}.
 
 %% @doc Notifies caller for certain cases involving a single partition
 %% so the user sees an error condition from the command line.
@@ -148,37 +149,61 @@ maybe_notify(State=#state{reply_to=From}, Reply) ->
     gen_fsm:reply(From, Reply),
     State#state{reply_to=undefined}.
 
+first_partition(timeout, State) ->
+    next_partition(State).
 
 %% @doc Process next partition or finish if no more remaining.
-next_partition(timeout, State=#state{remaining=[]}) ->
+next_partition(State=#state{remaining=[]}) ->
     %% We are done. Report results
     Status = to_simple_state(State),
     Report = to_report(Status),
     lager:info("Finished 2i repair:\n~s", [Report]),
     {stop, normal, State};
-next_partition(timeout, State=#state{remaining=[Partition|_]}) ->
+next_partition(State=#state{remaining=[Partition|_]}) ->
     ReqId = make_ref(),
     riak_kv_vnode:request_hashtree_pid(Partition, {fsm, ReqId, self()}),
-    {next_state, wait_for_aae_pid, State#state{aae_pid_req_id=ReqId}, ?AAE_PID_TIMEOUT}.
+    Timer = gen_fsm:send_event_after(?AAE_PID_TIMEOUT, aae_pid_timeout),
+    {next_state, wait_for_aae_pid, State#state{aae_pid_req_id=ReqId,
+                                               aae_pid_timer=Timer}}.
 
 %% @doc Waiting for vnode to send back the Pid of the AAE tree process.
-wait_for_aae_pid(timeout, State) ->
+wait_for_aae_pid(aae_pid_timeout, State) ->
     State2 = maybe_notify(State, {error, no_aae_pid}),
-    {stop, no_aae_pid, State2};
-wait_for_aae_pid({ReqId, {error, Err}}, State=#state{aae_pid_req_id=ReqId}) ->
-    State2 = maybe_notify(State, {error, {no_aae_pid, Err}}),
-    {stop, no_aae_pid, State2};
+    State3 = add_result(#partition_result{status=error, error=no_aae_pid}, State2),
+    lager:error("AAE pid request timed out"),
+    next_partition(State3#state{aae_pid_timer=undefined});
+% This is apparently a weird condition seen in the wild, change to error.
+wait_for_aae_pid({ReqId, {ok, undefined}},
+                 State=#state{aae_pid_req_id=ReqId}) ->
+    wait_for_aae_pid({ReqId, {error, undefined_aae_pid}}, State);
+wait_for_aae_pid({ReqId, {error, Err}}, State=#state{aae_pid_req_id=ReqId,
+                                                     aae_pid_timer=Timer}) ->
+    _ = gen_fsm:cancel_timer(Timer),
+    State2 = State#state{aae_pid_timer=undefined},
+    State3 = add_result(#partition_result{status=error, error={no_aae_pid, Err}}, State2),
+    State4 = maybe_notify(State3, {error, {no_aae_pid, Err}}),
+    lager:error("AAE pid request failed"),
+    next_partition(State4);
 wait_for_aae_pid({ReqId, {ok, TreePid}},
                  State=#state{aae_pid_req_id=ReqId, speed=Speed,
-                              remaining=[Partition|_]}) ->
+                              aae_pid_timer=Timer,
+                              remaining=[Partition|_]}) 
+  when is_pid(TreePid) ->
+    _ = gen_fsm:cancel_timer(Timer),
     WorkerFun =
     fun() ->
             Res =
             repair_partition(Partition, Speed, ?MODULE, TreePid),
-            gen_fsm:sync_send_event(?MODULE, {repair_result, Res}, infinity)
+            gen_fsm:sync_send_event(?MODULE, {repair_result, Res}, infinity),
+            ok
     end,
     Mon = monitor(process, spawn_link(WorkerFun)),
-    {next_state, wait_for_repair, State#state{worker_monitor=Mon}}.
+    {next_state, wait_for_repair, State#state{worker_monitor=Mon,
+                                             aae_pid_timer=undefined}}.
+
+add_result(Result, State=#state{remaining=[Partition|Rem],
+                                results=Results}) ->
+    State#state{remaining=Rem, results=[{Partition, Result}|Results]}.
 
 %% @doc Waiting for a partition repair process to finish
 wait_for_repair({lock_acquired, Partition},
@@ -187,10 +212,8 @@ wait_for_repair({lock_acquired, Partition},
     State2 = maybe_notify(State, lock_acquired),
     {reply, ok, wait_for_repair, State2};
 wait_for_repair({repair_result, Res},
-                _From,
-                State=#state{remaining=[Partition|Rem],
-                             results=Results,
-                             worker_monitor=Mon}) ->
+                From,
+                State=#state{worker_monitor=Mon}) ->
     State2 =
     case Res of
         {error, {lock_failed, LockErr}} ->
@@ -199,15 +222,13 @@ wait_for_repair({repair_result, Res},
             State
     end,
     demonitor(Mon, [flush]),
-    {reply, ok, next_partition,
-     State2#state{remaining=Rem,
-                  results=[{Partition, Res}|Results],
-                  worker_monitor=undefined,
-                  worker_status=starting,
-                  index_scan_count=0,
-                  hashtree_population_count=0,
-                  exchange_count=0},
-     0}.
+    gen_fsm:reply(From, ok),
+    State3 = add_result(Res, State2),
+    next_partition(State3#state{worker_monitor=undefined,
+                                worker_status=starting,
+                                index_scan_count=0,
+                                hashtree_population_count=0,
+                                exchange_count=0}).
 
 %% @doc Process async worker status updates during a repair
 wait_for_repair({index_scan_update, Count}, State) ->
@@ -230,7 +251,7 @@ wait_for_repair({close_db, DBRef}, State = #state{open_dbs=DBs}) ->
      State#state{open_dbs=lists:delete(DBRef, DBs)}}.
 
 %% @doc Performs the actual repair work, called from a spawned process.
--spec repair_partition(integer(), integer(), {pid(), any()}, pid()) ->
+-spec repair_partition(integer(), integer()|undefined, atom()|pid(), pid()) ->
     #partition_result{}.
 repair_partition(Partition, DutyCycle, From, TreePid) ->
     case get_hashtree_lock(TreePid, ?LOCK_RETRIES) of
@@ -265,7 +286,7 @@ repair_partition(Partition, DutyCycle, From, TreePid) ->
                                               error=BuildTreeErr,
                                               index_scan_count=IndexDBCount}
                     end,
-                    destroy_index_data_db(DBDir, DBRef),
+                    _ = destroy_index_data_db(DBDir, DBRef),
                     lager:info("Finished repairing indexes in partition ~p",
                                [Partition]),
                     Res;
@@ -350,7 +371,7 @@ create_index_data_db(Partition, DutyCycle, DBDir, DBRef) ->
     NumFound = wait_for_index_scan(Ref, BatchRef, StartTime, WaitFactor),
     case NumFound of
         {error, _} = Err ->
-            destroy_index_data_db(DBDir, DBRef),
+            _ = destroy_index_data_db(DBDir, DBRef),
             Err;
         _ ->
             lager:info("Grabbed ~p index data entries from partition ~p",
@@ -403,7 +424,7 @@ wait_for_index_scan(Ref, BatchRef, StartTime, WaitFactor) ->
             {error, index_scan_timeout}
     end.
 
--spec fetch_index_data(BK :: binary(), reference()) -> term().
+-spec fetch_index_data(BK :: binary(), eleveldb:db_ref()) -> term().
 fetch_index_data(BK, DBRef) ->
     % Let it crash on leveldb error
     case eleveldb:get(DBRef, BK, []) of
@@ -657,6 +678,7 @@ handle_sync_event(early_ack, _From, StateName,
 handle_sync_event(status, _From, StateName, State) ->
     {reply, to_simple_state(State), StateName, State};
 handle_sync_event(stop, From, _StateName, State=#state{open_dbs=DBs}) ->
+    _ =
     [try
          eleveldb:close(DB)
      catch
