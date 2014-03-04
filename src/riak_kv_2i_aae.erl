@@ -74,14 +74,14 @@
          caller :: pid(),
          reply_to,
          early_reply,
-         aae_pid_req_id :: pid() | undefined,
+         aae_pid_req_id :: reference() | undefined,
          aae_pid_timer :: reference() | undefined,
          worker_monitor :: reference() | undefined,
          worker_status :: worker_status(),
          index_scan_count = 0 :: integer(),
          hashtree_population_count = 0 :: integer(),
          exchange_count = 0 :: integer(),
-         open_dbs = [] :: [reference()]
+         open_dbs = [] :: [eleveldb:db_ref()]
         }).
 
 -record(partition_result, {
@@ -178,7 +178,7 @@ wait_for_aae_pid({ReqId, {ok, undefined}},
     wait_for_aae_pid({ReqId, {error, undefined_aae_pid}}, State);
 wait_for_aae_pid({ReqId, {error, Err}}, State=#state{aae_pid_req_id=ReqId,
                                                      aae_pid_timer=Timer}) ->
-    gen_fsm:cancel_timer(Timer),
+    _ = gen_fsm:cancel_timer(Timer),
     State2 = State#state{aae_pid_timer=undefined},
     State3 = add_result(#partition_result{status=error, error={no_aae_pid, Err}}, State2),
     State4 = maybe_notify(State3, {error, {no_aae_pid, Err}}),
@@ -187,13 +187,15 @@ wait_for_aae_pid({ReqId, {error, Err}}, State=#state{aae_pid_req_id=ReqId,
 wait_for_aae_pid({ReqId, {ok, TreePid}},
                  State=#state{aae_pid_req_id=ReqId, speed=Speed,
                               aae_pid_timer=Timer,
-                              remaining=[Partition|_]}) ->
-    gen_fsm:cancel_timer(Timer),
+                              remaining=[Partition|_]}) 
+  when is_pid(TreePid) ->
+    _ = gen_fsm:cancel_timer(Timer),
     WorkerFun =
     fun() ->
             Res =
             repair_partition(Partition, Speed, ?MODULE, TreePid),
-            gen_fsm:sync_send_event(?MODULE, {repair_result, Res}, infinity)
+            gen_fsm:sync_send_event(?MODULE, {repair_result, Res}, infinity),
+            ok
     end,
     Mon = monitor(process, spawn_link(WorkerFun)),
     {next_state, wait_for_repair, State#state{worker_monitor=Mon,
@@ -249,7 +251,7 @@ wait_for_repair({close_db, DBRef}, State = #state{open_dbs=DBs}) ->
      State#state{open_dbs=lists:delete(DBRef, DBs)}}.
 
 %% @doc Performs the actual repair work, called from a spawned process.
--spec repair_partition(integer(), integer(), {pid(), any()}, pid()) ->
+-spec repair_partition(integer(), integer()|undefined, atom()|pid(), pid()) ->
     #partition_result{}.
 repair_partition(Partition, DutyCycle, From, TreePid) ->
     case get_hashtree_lock(TreePid, ?LOCK_RETRIES) of
@@ -284,7 +286,7 @@ repair_partition(Partition, DutyCycle, From, TreePid) ->
                                               error=BuildTreeErr,
                                               index_scan_count=IndexDBCount}
                     end,
-                    destroy_index_data_db(DBDir, DBRef),
+                    _ = destroy_index_data_db(DBDir, DBRef),
                     lager:info("Finished repairing indexes in partition ~p",
                                [Partition]),
                     Res;
@@ -369,7 +371,7 @@ create_index_data_db(Partition, DutyCycle, DBDir, DBRef) ->
     NumFound = wait_for_index_scan(Ref, BatchRef, StartTime, WaitFactor),
     case NumFound of
         {error, _} = Err ->
-            destroy_index_data_db(DBDir, DBRef),
+            _ = destroy_index_data_db(DBDir, DBRef),
             Err;
         _ ->
             lager:info("Grabbed ~p index data entries from partition ~p",
@@ -422,7 +424,7 @@ wait_for_index_scan(Ref, BatchRef, StartTime, WaitFactor) ->
             {error, index_scan_timeout}
     end.
 
--spec fetch_index_data(BK :: binary(), reference()) -> term().
+-spec fetch_index_data(BK :: binary(), eleveldb:db_ref()) -> term().
 fetch_index_data(BK, DBRef) ->
     % Let it crash on leveldb error
     case eleveldb:get(DBRef, BK, []) of
@@ -676,6 +678,7 @@ handle_sync_event(early_ack, _From, StateName,
 handle_sync_event(status, _From, StateName, State) ->
     {reply, to_simple_state(State), StateName, State};
 handle_sync_event(stop, From, _StateName, State=#state{open_dbs=DBs}) ->
+    _ =
     [try
          eleveldb:close(DB)
      catch
