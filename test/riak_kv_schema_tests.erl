@@ -92,7 +92,7 @@ override_non_multi_backend_schema_test() ->
         {["max_concurrent_requests"], 100000},
         {["retry_put_coordinator_failure"], off},
         {["object", "format"], 0},
-        {["md_cache_size"], "512KB"},
+        {["metadata_cache_size"], "512KB"},
         {["memory_backend", "max_memory_per_vnode"], "8GB"},
         {["memory_backend", "ttl"], "1d"},
         {["secure_referer_check"], off},

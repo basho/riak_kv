@@ -106,7 +106,7 @@
 
 %% @doc The directory where AAE hash trees are stored.
 {mapping, "anti_entropy.data_dir", "riak_kv.anti_entropy_data_dir", [
-  {default, "#(platform_data_dir)/anti_entropy"},
+  {default, "$(platform_data_dir)/anti_entropy"},
   hidden,
   {datatype, directory}
 ]}.
