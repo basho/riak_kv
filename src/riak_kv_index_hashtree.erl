@@ -42,6 +42,7 @@
          compare/5,
          determine_data_root/0,
          exchange_bucket/4,
+         exchange_buckets/2,
          exchange_segment/3,
          hash_index_data/1,
          hash_object/2,
@@ -148,6 +149,12 @@ update(Id, Tree) ->
 -spec exchange_bucket(index_n(), integer(), integer(), pid()) -> orddict().
 exchange_bucket(Id, Level, Bucket, Tree) ->
     gen_server:call(Tree, {exchange_bucket, Id, Level, Bucket}, infinity).
+
+%% @doc Return all hash buckets from the tree identified by the given
+%%      tree id that is managed by the provided index_hashtree.
+-spec exchange_buckets(index_n(), pid()) -> orddict().
+exchange_buckets(Id, Tree) ->
+    gen_server:call(Tree, {exchange_buckets, Id}, infinity).
 
 %% @doc Return a segment from the tree identified by the given tree id that
 %%      is managed by the provided index_hashtree.
@@ -287,6 +294,14 @@ handle_call({exchange_bucket, Id, Level, Bucket}, _From, State) ->
     apply_tree(Id,
                fun(Tree) ->
                        Result = hashtree:get_bucket(Level, Bucket, Tree),
+                       {Result, Tree}
+               end,
+               State);
+
+handle_call({exchange_buckets, Id}, _From, State) ->
+    apply_tree(Id,
+               fun(Tree) ->
+                       Result = hashtree:get_buckets(Tree),
                        {Result, Tree}
                end,
                State);
