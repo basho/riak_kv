@@ -54,6 +54,17 @@
          %% should only be used for development purposes.
          {allow_strfun, false},
 
+         %% Log a warning if object bigger than 5MB
+         {warn_object_size, 5242880},
+         % Writing an object bigger than 50MB will send a failure to the client
+         {max_object_size, 52428800},
+         %% Log a warning if # of siblings bigger than this
+         {warn_siblings, 25},
+         % Writing an object with more than this number of siblings will
+         % generate a warning in the logs
+         {max_siblings, 100},
+
+
          %% @doc http_url_encoding determines how Riak treats URL encoded
          %% buckets, keys, and links over the REST API. When set to 'on' Riak
          %% always decodes encoded values sent as URLs and Headers.  Otherwise,
