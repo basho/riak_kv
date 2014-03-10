@@ -304,10 +304,10 @@ aae_status([]) ->
     aae_exchange_status(ExchangeInfo),
     io:format("~n"),
     aae_tree_status(),
-    io:format("~n"), 
+    io:format("~n"),
     aae_repair_status(ExchangeInfo).
 
-aae_exchange_status(ExchangeInfo) -> 
+aae_exchange_status(ExchangeInfo) ->
     io:format("~s~n", [string:centre(" Exchanges ", 79, $=)]),
     io:format("~-49s  ~-12s  ~-12s~n", ["Index", "Last (ago)", "All (ago)"]),
     io:format("~79..-s~n", [""]),
@@ -444,7 +444,7 @@ run_reformat(M, F, A) ->
     end.
 
 bucket_type_status([TypeStr]) ->
-    Type = list_to_binary(TypeStr),
+    Type = unicode:characters_to_binary(TypeStr, utf8),
     bucket_type_print_status(Type, riak_core_bucket_type:status(Type)),
     bucket_type_print_props(bucket_type_raw_props(Type)).
 
@@ -455,13 +455,17 @@ bucket_type_raw_props(Type) ->
     riak_core_claimant:get_bucket_type(Type, undefined, false).
 
 bucket_type_print_status(Type, undefined) ->
-    io:format("~s is not an existing bucket type~n", [Type]);
+    io:setopts([{encoding, unicode}]),
+    io:format("~ts is not an existing bucket type~n", [Type]);
 bucket_type_print_status(Type, created) ->
-    io:format("~s has been created but cannot be activated yet~n", [Type]);
+    io:setopts([{encoding, unicode}]),
+    io:format("~ts has been created but cannot be activated yet~n", [Type]);
 bucket_type_print_status(Type, ready) ->
-    io:format("~s has been created and may be activated~n", [Type]);
+    io:setopts([{encoding, unicode}]),
+    io:format("~ts has been created and may be activated~n", [Type]);
 bucket_type_print_status(Type, active) ->
-    io:format("~s is active~n", [Type]).
+    io:setopts([{encoding, unicode}]),
+    io:format("~ts is active~n", [Type]).
 
 bucket_type_print_props(undefined) ->
     ok;
@@ -470,12 +474,13 @@ bucket_type_print_props(Props) ->
     [io:format("~p: ~p~n", [K, V]) || {K, V} <- Props].
 
 bucket_type_activate([TypeStr]) ->
-    Type = list_to_binary(TypeStr),
+    Type = unicode:characters_to_binary(TypeStr, utf8),
     IsFirst = bucket_type_is_first(),
     bucket_type_print_activate_result(Type, riak_core_bucket_type:activate(Type), IsFirst).
 
 bucket_type_print_activate_result(Type, ok, IsFirst) ->
-    io:format("~s has been activated~n", [Type]),
+    io:setopts([{encoding, unicode}]),
+    io:format("~ts has been activated~n", [Type]),
     case IsFirst of
         true ->
             io:format("~n"),
@@ -490,7 +495,7 @@ bucket_type_print_activate_result(Type, {error, not_ready}, _IsFirst) ->
     bucket_type_print_status(Type, created).
 
 bucket_type_create([TypeStr, PropsStr]) ->
-    Type = list_to_binary(TypeStr),
+    Type = unicode:characters_to_binary(TypeStr, utf8),
     bucket_type_create(Type, catch mochijson2:decode(PropsStr)).
 
 bucket_type_create(Type, {struct, Fields}) ->
@@ -499,30 +504,34 @@ bucket_type_create(Type, {struct, Fields}) ->
             ErlProps = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props],
             bucket_type_print_create_result(Type, riak_core_bucket_type:create(Type, ErlProps));
         _ ->
-            io:format("Cannot create bucket type ~s: no props field found in json~n", [Type]),
+            io:setopts([{encoding, unicode}]),
+            io:format("Cannot create bucket type ~ts: no props field found in json~n", [Type]),
             error
     end;
 bucket_type_create(Type, _) ->
-    io:format("Cannot create bucket type ~s: invalid json~n", [Type]),
+    io:setopts([{encoding, unicode}]),
+    io:format("Cannot create bucket type ~ts: invalid json~n", [Type]),
     error.
 
 bucket_type_print_create_result(Type, ok) ->
-    io:format("~s created~n", [Type]),
+    io:setopts([{encoding, unicode}]),
+    io:format("~ts created~n", [Type]),
     case bucket_type_is_first() of
         true ->
             io:format("~n"),
-            io:format("WARNING: After activating ~s, nodes in this cluster~n"
+            io:format("WARNING: After activating ~ts, nodes in this cluster~n"
                       "can no longer be downgraded to a version of Riak "
                       "prior to 2.0~n", [Type]);
         false ->
             ok
     end;
 bucket_type_print_create_result(Type, {error, Reason}) ->
-    io:format("Error creating bucket type ~s: ~p~n", [Type, Reason]),
+    io:setopts([{encoding, unicode}]),
+    io:format("Error creating bucket type ~ts: ~p~n", [Type, Reason]),
     error.
 
 bucket_type_update([TypeStr, PropsStr]) ->
-    Type = list_to_binary(TypeStr),
+    Type = unicode:characters_to_binary(TypeStr, utf8),
     bucket_type_update(Type, catch mochijson2:decode(PropsStr)).
 
 bucket_type_update(Type, {struct, Fields}) ->
@@ -531,27 +540,33 @@ bucket_type_update(Type, {struct, Fields}) ->
             ErlProps = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props],
             bucket_type_print_update_result(Type, riak_core_bucket_type:update(Type, ErlProps));
         _ ->
-            io:format("Cannot create bucket type ~s: no props field found in json~n", [Type]),
+            io:setopts([{encoding, unicode}]),
+            io:format("Cannot create bucket type ~ts: no props field found in json~n", [Type]),
             error
     end;
 bucket_type_update(Type, _) ->
-    io:format("Cannot update bucket type: ~s: invalid json~n", [Type]),
+    io:setopts([{encoding, unicode}]),
+    io:format("Cannot update bucket type: ~ts: invalid json~n", [Type]),
     error.
 
 bucket_type_print_update_result(Type, ok) ->
-    io:format("~s updated~n", [Type]);
+    io:setopts([{encoding, unicode}]),
+    io:format("~ts updated~n", [Type]);
 bucket_type_print_update_result(Type, {error, Reason}) ->
-    io:format("Error updating bucket type ~s: ~p~n", [Type, Reason]),
+    io:setopts([{encoding, unicode}]),
+    io:format("Error updating bucket type ~ts: ~p~n", [Type, Reason]),
     error.
 
 bucket_type_reset([TypeStr]) ->
-    Type = list_to_binary(TypeStr),
+    Type = unicode:characters_to_binary(TypeStr, utf8),
     bucket_type_print_reset_result(Type, riak_core_bucket_type:reset(Type)).
 
 bucket_type_print_reset_result(Type, ok) ->
-    io:format("~s reset~n", [Type]);
+    io:setopts([{encoding, unicode}]),
+    io:format("~ts reset~n", [Type]);
 bucket_type_print_reset_result(Type, {error, Reason}) ->
-    io:format("Error updating bucket type ~s: ~p~n", [Type, Reason]),
+    io:setopts([{encoding, unicode}]),
+    io:format("Error updating bucket type ~ts: ~p~n", [Type, Reason]),
     error.
 
 bucket_type_list([]) ->
@@ -569,7 +584,9 @@ bucket_type_print_list(It) ->
                             true -> "active";
                             false -> "not active"
                         end,
-            io:format("~s (~s)~n", [Type, ActiveStr]),
+
+            io:setopts([{encoding, unicode}]),
+            io:format("~ts (~s)~n", [Type, ActiveStr]),
             bucket_type_print_list(riak_core_bucket_type:itr_next(It))
     end.
 
