@@ -10,6 +10,7 @@
 -define(GETS_ACTIVE, {riak_kv, node, gets, fsm, active}).
 -define(PUTS_ERRORS, {riak_kv, node, puts, fsm, errors}).
 -define(GETS_ERRORS, {riak_kv, node, gets, fsm, errors}).
+-define(POLL_TIMEOUT, 10). %% seconds
 
 -compile([export_all]).
 
@@ -24,17 +25,17 @@
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
 eqc_test_() ->
-    {setup, fun() ->
-                error_logger:tty(false),
-                crypto:start(),
-                ok
-            end,
-     fun(_) ->
-             cleanup() 
-     end, [
-           {timeout, 360, ?_assertEqual(true, quickcheck(numtests(5000,
-                           ?QC_OUT(prop()))))}
-          ]}.
+    error_logger:tty(false),
+    catch code:purge(riak_kv_stat_sj),
+    catch code:delete(riak_kv_stat_sj),
+    net_kernel:stop(),
+    net_kernel:start(['test-master@127.0.0.1', 'longnames']),
+    erlang:set_cookie(node(), ayo),
+    {node, 'tester@127.0.0.1', "-setcookie ayo", 
+     [
+         {timeout, 120, [?_assertEqual(true, quickcheck(eqc:testing_time(90,
+                           ?QC_OUT(prop()))))]}
+       ]}.
 
 test() ->
     test(100).
@@ -63,12 +64,6 @@ exit_gracefully(S) ->
     #state{put_fsm = PutList, get_fsm = GetList} = S,
     [end_and_wait(Pid, normal) || Pid <- PutList ++ GetList].
 
-cleanup() ->
-    crypto:stop(),
-    error_logger:tty(true),
-    application:stop(folsom),
-    true.
-
 reset_test_state() ->
     [maybe_stop_and_wait(Server) || Server <- [riak_core_stat_cache, riak_kv_stat]],
     application:stop(folsom),
@@ -77,7 +72,6 @@ reset_test_state() ->
     {ok, Pid} = riak_kv_stat:start_link(),
     unlink(Pid),
     unlink(Cache).
-
 
 %% ====================================================================
 %% eqc_statem callbacks
@@ -110,9 +104,9 @@ g_get_pid(#state{get_fsm = []}) ->
 g_get_pid(#state{get_fsm = L}) ->
     oneof(L).
 
-precondition(#state{get_fsm = []}, {call, _, _Command, [get, _]}) ->
+precondition(#state{get_fsm = []}, {call, _, _Command, [get, undefined]}) ->
     false;
-precondition(#state{put_fsm = []}, {call, _, _Command, [put, _]}) ->
+precondition(#state{put_fsm = []}, {call, _, _Command, [put, undefined]}) ->
     false;
 precondition(_,_) ->
     true.
@@ -174,11 +168,21 @@ invariant(S) ->
     end.
 
 poll_stat_change(Metric, OriginalValue) ->
-    case folsom_metrics:get_metric_value(Metric) of
-        OriginalValue -> 
-            poll_stat_change(Metric, OriginalValue);
-        _ ->
-            ok
+    {_, Secs, _} = os:timestamp(),
+    poll_stat_change(Metric, OriginalValue, Secs+?POLL_TIMEOUT).
+
+poll_stat_change(Metric, OriginalValue, ExpireSecs) ->
+    {_, Secs, _} = os:timestamp(),
+    case Secs > ExpireSecs of
+        true ->
+            throw({error, {expired, Metric, OriginalValue}});
+        false ->
+            case folsom_metrics:get_metric_value(Metric) of
+                OriginalValue -> 
+                    poll_stat_change(Metric, OriginalValue, ExpireSecs);
+                _ ->
+                    ok
+            end
     end.
 
 %% ====================================================================
@@ -270,15 +274,6 @@ end_and_wait(Pid, Cause) ->
         {'DOWN', Monref, process, Pid, _} ->
             ok
     end.
-
-lists_random([]) ->
-    erlang:error(badarg);
-lists_random([E]) ->
-    E;
-lists_random(List) ->
-    Max = length(List),
-    Nth = crypto:rand_uniform(1, Max),
-    lists:nth(Nth, List).
 
 %% Make sure `Server' is not running
 %% `Server' _MUST_ have an exported fun `stop/0'
