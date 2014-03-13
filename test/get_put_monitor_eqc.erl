@@ -25,14 +25,13 @@
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
 eqc_test_() ->
-    error_logger:tty(false),
-    catch code:purge(riak_kv_stat_sj),
-    catch code:delete(riak_kv_stat_sj),
-    net_kernel:stop(),
-    net_kernel:start(['test-master@127.0.0.1', 'longnames']),
-    erlang:set_cookie(node(), ayo),
-    {node, 'tester@127.0.0.1', "-setcookie ayo", 
-     [
+    {setup, 
+        fun() -> 
+            error_logger:tty(false),
+            catch code:purge(riak_kv_stat_sj),
+            catch code:delete(riak_kv_stat_sj)
+        end, 
+        [
          {timeout, 120, [?_assertEqual(true, quickcheck(eqc:testing_time(90,
                            ?QC_OUT(prop()))))]}
        ]}.
