@@ -45,7 +45,8 @@ handle_work({fold, FoldFun, FinishFun}, _Sender, State) ->
     try
         FinishFun(FoldFun())
     catch
-        receiver_down -> ok;
-        stop_fold -> ok
+        throw:receiver_down -> ok;
+        throw:stop_fold     -> ok;
+        throw:PrematureAcc  -> FinishFun(PrematureAcc)
     end,
     {noreply, State}.
