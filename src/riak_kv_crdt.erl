@@ -245,31 +245,39 @@ update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op, ctx=undefined}) ->
     end;
 update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx}) when Mod==?MAP_TYPE;
                                                                     Mod==?SET_TYPE->
-    Ctx = context_to_crdt(Mod, OpCtx),
-    {PreOps, PostOps} = split_ops(Ops),
-    %% Apply Pre (remove) ops to the context
-    case Mod:update(PreOps, Actor, Ctx) of
-        {error, _}=E -> E;
-        {ok, InitialVal} ->
-            %% Merge with local replica and then apply post (add) ops
-            case orddict:find(Mod, Dict) of
-                error ->
+    case orddict:find(Mod, Dict) of
+        error ->
+            %% No local replica of this CRDT, apply the ops to a new
+            %% instance
+            case update_crdt(Mod, Ops, Actor, Mod:new(), OpCtx) of
+                {ok, InitialVal} ->
                     orddict:store(Mod, {undefined, to_record(Mod, InitialVal)}, Dict);
-                {ok, {Meta, LocalCRDT=?CRDT{value=LocalReplica}}} ->
-                    case Mod:update(PostOps, Actor, LocalReplica) of
-                        {error, _}=E -> E;
-                        {ok, NewVal} ->
-                            Merged = Mod:merge(InitialVal, NewVal),
-                            orddict:store(Mod, {Meta, LocalCRDT?CRDT{value=Merged}}, Dict)
-                    end
+                E ->
+                    E
+            end;
+        {ok, {Meta, LocalCRDT=?CRDT{value=LocalReplica}}} ->
+            case update_crdt(Mod, Ops, Actor, LocalReplica, OpCtx) of
+                {error, _}=E -> E;
+                {ok, NewVal} ->
+                    orddict:store(Mod, {Meta, LocalCRDT?CRDT{value=NewVal}}, Dict)
             end
     end.
 
--spec context_to_crdt(module(), undefined | binary()) -> riak_dt:crdt().
-context_to_crdt(Mod, undefined) ->
-    Mod:new();
-context_to_crdt(Mod, Ctx) ->
-    Mod:from_binary(Ctx).
+%% @private call update/3 or update/4 depending on context value
+-spec update_crdt(module(), term(), riak_dt:actor(), term(),
+                  undefined | riak_dt_vclock:vclock()) ->
+                         term().
+update_crdt(Mod, Ops, Actor, CRDT, undefined) ->
+    Mod:update(Ops, Actor, CRDT);
+update_crdt(Mod, Ops, Actor, CRDT, Ctx0) ->
+    Ctx = get_context(Ctx0),
+    Mod:update(Ops, Actor, CRDT, Ctx).
+
+-spec get_context(undefined | binary()) -> riak_dt_vclock:vclock().
+get_context(undefined) ->
+    undefined;
+get_context(Bin) ->
+    riak_dt_vclock:from_binary(Bin).
 
 %% @doc get the merged CRDT for type `Mod' from the dictionary. If it
 %% is not present generate a default entry
@@ -282,62 +290,6 @@ fetch_with_default(Mod, Dict) ->
             {Meta, Record, Value}
     end.
 
-%% @private Takes an update operation and splits it into two update
-%% operations.  returns {pre, post} where pre is an update operation
-%% that must be a applied to a context _before_ it is merged with
-%% local replica state and post is an update operation that must be
-%% applied after the context has been merged with the local replica
-%% state.
-%%
-%% Why?  When fields are removed from Maps or elements from Sets the
-%% remove must be applied to the state observed by the client.  If a
-%% client as seen a field or element in a set, but the replica
-%% handling the remove has not then a confusing preconditione failed
-%% error will be generated for the user.
-%%
-%% The reason for applying remove type operations to the context
-%% before the merge is to ensure that only the adds seen by the client
-%% are removed, and not adds that happen to be present at this
-%% replica.
-%%
-%% @TODO optimise the case where either Pre or Post comes back
-%% essentially as a No Op (for example, and update to a nested Map
-%% that has no operations. While this does not affect correctness, it
-%% is not ideal.
-split_ops({AddOp, _}=Op) when AddOp == add;
-                              AddOp == add_all ->
-    {{update, []}, {update, [Op]}};
-split_ops({RemOp, _}=Op) when RemOp == remove;
-                              RemOp == remove_all ->
-    {{update, [Op]}, {update, []}};
-split_ops({update, Ops}) ->
-    %% Map or Set update list
-    {Pre, Post} = split_ops(Ops, [], []),
-    {{update, Pre}, {update, Post}}.
-
-split_ops([], Pre, Post) ->
-    {lists:reverse(Pre), lists:reverse(Post)};
-split_ops([{remove, _Key}=Op | Rest], Pre, Post) ->
-    split_ops(Rest, [Op | Pre], Post);
-split_ops([{remove_all, _Elems}=Op | Rest], Pre, Post) ->
-    split_ops(Rest, [Op | Pre], Post);
-split_ops([{update, Key, {remove, _}}=Op | Rest], Pre, Post) ->
-    split_ops(Rest, [Op | Pre], [{add, Key} | Post]);
-split_ops([{update, Key, {remove_all, _}}=Op | Rest], Pre, Post) ->
-    split_ops(Rest, [Op | Pre], [{add, Key} | Post]);
-split_ops([{update, {_Name, _}=Key, {update, Ops}} | Rest], Pre0, Post0) when is_list(Ops) ->
-    {Pre, Post} = split_ops(Ops,[], []),
-    Pre1 = maybe_prepend(Key, Pre, Pre0),
-    Post1 = maybe_prepend(Key, Post, Post0),
-    split_ops(Rest, Pre1, [{add, Key} | Post1]);
-split_ops([Op | Rest], Pre, Post) ->
-    split_ops(Rest, Pre, [Op | Post]).
-
-
-maybe_prepend(_Key, [], Acc) ->
-    Acc;
-maybe_prepend(Key, Ops, Acc) ->
-    [{update,Key,{update, Ops}} | Acc].
 %% This uses an exported but marked INTERNAL
 %% function of `riak_object:set_contents' to preserve
 %% non-crdt sibling values and Metadata
@@ -489,7 +441,7 @@ from_mod(Mod) ->
 %% a smaller than Type:to_binary(Value) binary context.
 get_context(Type, Value) ->
     case lists:member({precondition_context, 1}, Type:module_info(exports)) of
-        true -> Type:to_binary(Type:precondition_context(Value));
+        true -> riak_dt_vclock:to_binary(Type:precondition_context(Value));
         false -> <<>>
     end.
 
@@ -498,45 +450,6 @@ get_context(Type, Value) ->
 %% ===================================================================
 -ifdef(TEST).
 
-pre_post_test() ->
-    M = riak_dt_map:new(),
-    {ok, M2} = riak_dt_map:update({update, [{update, {<<"s">>, riak_dt_orswot}, {add_all, [<<"a">>, <<"b">>, <<"c">>]}}]}, a, M),
-    Context = M2,
-    {ok, M3} = riak_dt_map:update({update, [{update, {<<"s">>, riak_dt_orswot}, {add, [<<"d">>]}}]}, a, M2),
-    {ok, M4} = riak_dt_map:update({update, [{remove, {<<"s">>, riak_dt_orswot}}]}, a, M3),
-    Op = {update, [{update, {<<"s">>, riak_dt_orswot}, {remove, <<"a">>}}]},
-    {Pre, Post} = split_ops(Op),
-    ?debugFmt("Pre ~p~n post ~p~n", [Pre,Post]),
-    {ok, PreMerge} = riak_dt_map:update(Pre, a, Context),
-    Local = M4,
-    {ok, Local2} = riak_dt_map:update(Post, a, Local),
-    PostMerge = riak_dt_map:merge(PreMerge, Local2),
-    ?debugFmt("local ~p~n", [PostMerge]),
-    %% Set field should be present, since it's a field update (an
-    %% element remove) "concurrent" with field removal.
-    %% Expect the field to be present, and it's value to be [b,c]
-    Set = riak_dt_map:value({get, {<<"s">>, riak_dt_orswot}}, PostMerge),
-    ?assertNot(error == Set),
-    ?assertEqual([<<"b">>, <<"c">>], lists:sort(Set)).
-
-pre_post_empty_test() ->
-    M = riak_dt_map:new(),
-    {ok, M2} = riak_dt_map:update({update, [{update, {<<"s">>, riak_dt_orswot}, {add_all, [<<"a">>, <<"b">>, <<"c">>]}}]}, a, M),
-    Context = M2,
-    Op = {update, [{update, {<<"s">>, riak_dt_orswot}, {remove, <<"a">>}}]},
-    {Pre, Post} = split_ops(Op),
-    ?debugFmt("Pre ~p~n post ~p~n", [Pre,Post]),
-    {ok, PreMerge} = riak_dt_map:update(Pre, a, Context),
-    Local = M,
-    {ok, Local2} = riak_dt_map:update(Post, a, Local),
-    PostMerge = riak_dt_map:merge(PreMerge, Local2),
-    ?debugFmt("local ~p~n", [PostMerge]),
-    %% Set field should be present, since it's a field update (an
-    %% element remove) "concurrent" with field removal.
-    %% Expect the field to be present, and it's value to be [b,c]
-    Set = riak_dt_map:value({get, {<<"s">>, riak_dt_orswot}}, PostMerge),
-    ?assertNot(error == Set),
-    ?assertEqual([<<"b">>, <<"c">>], lists:sort(Set)).
 
 -ifdef(EQC).
 -define(QC_OUT(P),
@@ -545,88 +458,6 @@ pre_post_empty_test() ->
 
 -define(TEST_TIME_SECONDS, 10).
 
-eqc_test_() ->
-    {timeout, ?TEST_TIME_SECONDS+5, [?_assert(test_split() =:= true)]}.
-
-test_split() ->
-    test_split(?TEST_TIME_SECONDS).
-
-test_split(TestTimeSeconds) ->
-    eqc:quickcheck(eqc:testing_time(TestTimeSeconds, ?QC_OUT(prop_split()))).
-
-prop_split() ->
-    ?FORALL(Ops, oneof([riak_dt_map:gen_op(), riak_dt_orswot:gen_op()]),
-            begin
-                {Pre, Post} = split_ops(Ops),
-                AgOps = to_list(Ops),
-                ?WHENFAIL(
-                   begin
-                       io:format("Generated Ops ~p~n", [Ops]),
-                       io:format("Split Pre ~p~n", [Pre]),
-                       io:format("Split Post ~p~n", [Post])
-                   end,
-                   collect(with_title("operation length"), length(AgOps),
-                           collect(with_title("operation depth"), depth(AgOps, 0),
-                                   conjunction([
-                                                {pre, only_rem_ops(Pre)},
-                                                {post, only_add_ops(Post)}
-                                               ])))
-                  )
-            end).
-
-to_list({update, Ops}) ->
-    Ops;
-to_list(Op) ->
-    [Op].
-
-depth({update, Ops}, Depth) ->
-    depth(Ops, Depth);
-depth([], Depth) ->
-    Depth;
-depth([{update, {_Name, ?MAP_TYPE}, {update, Ops}}| Rest], Depth) ->
-    max(depth(Ops, Depth +1), depth(Rest, Depth));
-depth([_Op | Rest], Depth) ->
-    depth(Rest, Depth).
-
-only_type_ops(_TestFun, []) ->
-    true;
-only_type_ops(TestFun, [Op | Rest]) ->
-    case TestFun(Op) of
-        false ->
-            false;
-        true ->
-            only_type_ops(TestFun, Rest)
-    end.
-
-only_add_ops({update, Ops}) ->
-    only_add_ops(Ops);
-only_add_ops(Ops) ->
-    only_type_ops(fun is_add_op/1, Ops).
-
-only_rem_ops({update, Ops}) ->
-    only_rem_ops(Ops);
-only_rem_ops(Ops) ->
-    only_type_ops(fun is_rem_op/1, Ops).
-
-is_add_op({update, {_Name, _}, {update, Ops}}) ->
-    only_add_ops(Ops);
-is_add_op(Op) ->
-    not is_rem_op(Op).
-
-is_rem_op({update, {_Name, _}, {update, Ops}}) ->
-    only_rem_ops(Ops);
-is_rem_op({update, {_Name, _}, {remove, _E}}) ->
-    true;
-is_rem_op({update, {_Name, _}, {remove_all, _Es}}) ->
-    true;
-is_rem_op({remove, _Key}) ->
-    true;
-is_rem_op({remove_all, _Elems}) ->
-    true;
-is_rem_op({update, _Key, {remove, _Elem}}) ->
-    true;
-is_rem_op(_Op) ->
-    false.
 
 -endif.
 -endif.
