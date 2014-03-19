@@ -455,16 +455,12 @@ bucket_type_raw_props(Type) ->
     riak_core_claimant:get_bucket_type(Type, undefined, false).
 
 bucket_type_print_status(Type, undefined) ->
-    io:setopts([{encoding, unicode}]),
     io:format("~ts is not an existing bucket type~n", [Type]);
 bucket_type_print_status(Type, created) ->
-    io:setopts([{encoding, unicode}]),
     io:format("~ts has been created but cannot be activated yet~n", [Type]);
 bucket_type_print_status(Type, ready) ->
-    io:setopts([{encoding, unicode}]),
     io:format("~ts has been created and may be activated~n", [Type]);
 bucket_type_print_status(Type, active) ->
-    io:setopts([{encoding, unicode}]),
     io:format("~ts is active~n", [Type]).
 
 bucket_type_print_props(undefined) ->
@@ -479,7 +475,6 @@ bucket_type_activate([TypeStr]) ->
     bucket_type_print_activate_result(Type, riak_core_bucket_type:activate(Type), IsFirst).
 
 bucket_type_print_activate_result(Type, ok, IsFirst) ->
-    io:setopts([{encoding, unicode}]),
     io:format("~ts has been activated~n", [Type]),
     case IsFirst of
         true ->
@@ -504,17 +499,14 @@ bucket_type_create(Type, {struct, Fields}) ->
             ErlProps = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props],
             bucket_type_print_create_result(Type, riak_core_bucket_type:create(Type, ErlProps));
         _ ->
-            io:setopts([{encoding, unicode}]),
             io:format("Cannot create bucket type ~ts: no props field found in json~n", [Type]),
             error
     end;
 bucket_type_create(Type, _) ->
-    io:setopts([{encoding, unicode}]),
     io:format("Cannot create bucket type ~ts: invalid json~n", [Type]),
     error.
 
 bucket_type_print_create_result(Type, ok) ->
-    io:setopts([{encoding, unicode}]),
     io:format("~ts created~n", [Type]),
     case bucket_type_is_first() of
         true ->
@@ -526,7 +518,6 @@ bucket_type_print_create_result(Type, ok) ->
             ok
     end;
 bucket_type_print_create_result(Type, {error, Reason}) ->
-    io:setopts([{encoding, unicode}]),
     io:format("Error creating bucket type ~ts: ~p~n", [Type, Reason]),
     error.
 
@@ -540,20 +531,16 @@ bucket_type_update(Type, {struct, Fields}) ->
             ErlProps = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props],
             bucket_type_print_update_result(Type, riak_core_bucket_type:update(Type, ErlProps));
         _ ->
-            io:setopts([{encoding, unicode}]),
             io:format("Cannot create bucket type ~ts: no props field found in json~n", [Type]),
             error
     end;
 bucket_type_update(Type, _) ->
-    io:setopts([{encoding, unicode}]),
     io:format("Cannot update bucket type: ~ts: invalid json~n", [Type]),
     error.
 
 bucket_type_print_update_result(Type, ok) ->
-    io:setopts([{encoding, unicode}]),
     io:format("~ts updated~n", [Type]);
 bucket_type_print_update_result(Type, {error, Reason}) ->
-    io:setopts([{encoding, unicode}]),
     io:format("Error updating bucket type ~ts: ~p~n", [Type, Reason]),
     error.
 
@@ -562,10 +549,8 @@ bucket_type_reset([TypeStr]) ->
     bucket_type_print_reset_result(Type, riak_core_bucket_type:reset(Type)).
 
 bucket_type_print_reset_result(Type, ok) ->
-    io:setopts([{encoding, unicode}]),
     io:format("~ts reset~n", [Type]);
 bucket_type_print_reset_result(Type, {error, Reason}) ->
-    io:setopts([{encoding, unicode}]),
     io:format("Error updating bucket type ~ts: ~p~n", [Type, Reason]),
     error.
 
@@ -585,7 +570,6 @@ bucket_type_print_list(It) ->
                             false -> "not active"
                         end,
 
-            io:setopts([{encoding, unicode}]),
             io:format("~ts (~s)~n", [Type, ActiveStr]),
             bucket_type_print_list(riak_core_bucket_type:itr_next(It))
     end.
