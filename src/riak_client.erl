@@ -50,7 +50,16 @@
 -define(DEFAULT_TIMEOUT, 60000).
 -define(DEFAULT_ERRTOL, 0.00003).
 
+%% TODO: This type needs to be better specified and validated against
+%%       any dependents on riak_kv.
+%%
+%%       We want this term to be opaque, but can't because Dialyzer
+%%       doesn't like the way it's specified.
+%%
+%%       opaque type riak_client() is underspecified and therefore meaningless
 -type riak_client() :: term().
+
+-export_type([riak_client/0]).
 
 %% @spec new(Node, ClientId) -> riak_client().
 %% @doc Return a riak client instance.
