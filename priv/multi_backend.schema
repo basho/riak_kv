@@ -22,6 +22,29 @@
 {translation,
  "riak_kv.multi_backend",
  fun(Conf, Schema) ->
+
+
+  GenerateSubConfig = fun(Name, Prefix, ProplistKey, ModuleName) ->
+      BackendConfigName = ["multi_backend", Name],
+      BackendConfigPrefix = BackendConfigName ++ [Prefix],
+      SubConf = [ begin
+          {Key -- BackendConfigName, Value}
+      end || {Key, Value} <- cuttlefish_variable:filter_by_prefix(BackendConfigPrefix, Conf)],
+
+      case cuttlefish_generator:map(Schema, SubConf) of
+        {error, _Phase, _Errors} ->
+            cuttlefish:invalid("Error running recursive call to cuttlefish_generator:map/2");
+        BackendProplist ->
+          Proplist = lists:foldl(
+          fun(K, Acc) ->
+            NewAcc = proplists:get_value(K, Acc, []),
+            NewAcc
+          end,
+          BackendProplist, ProplistKey),
+
+          {ModuleName, Proplist}
+      end
+  end,
   %% group by $name into list, also cut the "multi_backend.$name" off every key
   BackendNames = cuttlefish_variable:fuzzy_matches(["multi_backend","$name","storage_backend"], Conf),
   %% for each in list, case statement on backend type
@@ -29,31 +52,12 @@
     BackendConfigName = ["multi_backend", Name],
     {BackendModule, BackendConfig} = case cuttlefish:conf_get(BackendConfigName ++ ["storage_backend"], Conf) of
       bitcask ->
-        BackendConfigPrefix = BackendConfigName ++ ["bitcask"],
-        SubConf = [ begin
-          {Key -- BackendConfigName, Value}
-        end || {Key, Value} <- cuttlefish_variable:filter_by_prefix(BackendConfigPrefix, Conf)],
-
-        BackendProplist = cuttlefish_generator:map(Schema, SubConf),
-
-        {riak_kv_bitcask_backend, proplists:get_value(bitcask, BackendProplist)};
+        GenerateSubConfig(Name, "bitcask", [bitcask], riak_kv_bitcask_backend);
       leveldb ->
-        BackendConfigPrefix = BackendConfigName ++ ["leveldb"],
-        SubConf = [ begin
-          {Key -- BackendConfigName, Value}
-        end || {Key, Value} <- cuttlefish_variable:filter_by_prefix(BackendConfigPrefix, Conf)],
-
-        BackendProplist = cuttlefish_generator:map(Schema, SubConf),
-
-        {riak_kv_eleveldb_backend, proplists:get_value(eleveldb, BackendProplist)};
+        GenerateSubConfig(Name, "leveldb", [eleveldb], riak_kv_eleveldb_backend);
       memory ->
-        BackendConfigPrefix = BackendConfigName ++ ["memory_backend"],
-        SubConf = [ begin
-          {Key -- BackendConfigName, Value}
-        end || {Key, Value} <- cuttlefish_variable:filter_by_prefix(BackendConfigPrefix, Conf)],
-        BackendProplist = cuttlefish_generator:map(Schema, SubConf),
-        {riak_kv_memory_backend, proplists:get_value(memory_backend, proplists:get_value(riak_kv, BackendProplist), [])}
-    end,
+        GenerateSubConfig(Name, "memory_backend", [riak_kv, memory_backend], riak_kv_memory_backend)
+      end,
     {list_to_binary(Name),  BackendModule, BackendConfig}
   end || {"$name", Name} <- BackendNames],
   case Backends of

@@ -274,6 +274,91 @@ datatype_compression_validator_test() ->
     cuttlefish_unit:assert_error_in_phase(Config, validation),
     ok.
 
+correct_error_handingling_by_multibackend_test() ->
+    Conf = [
+        {["multi_backend", "default", "storage_backend"], bitcask},
+        {["multi_backend", "default", "bitcask", "data_root"], "/data/default_bitcask"}
+    ],
+
+    Config = cuttlefish_unit:generate_templated_config([
+        "../priv/riak_kv.schema",
+        "../priv/multi_backend.schema",
+        "../deps/bitcask/priv/bitcask.schema",
+        "../deps/bitcask/priv/bitcask_multi.schema",
+        "../deps/eleveldb/priv/eleveldb.schema",
+        "../deps/eleveldb/priv/eleveldb_multi.schema",
+        "../test/bad_bitcask_multi.schema"
+        ],
+        Conf, context(), predefined_schema()),
+
+
+    ?assertMatch({error, apply_translations, {error, _}}, Config),
+    {error, apply_translations, {error, [Error]}} = Config,
+
+    ?assertNotEqual({error,"Error running translation for riak_kv.multi_backend, [error, function_clause]."}, Error),
+    ok.
+
+all_backend_multi_test() ->
+    Conf = [
+        {["storage_backend"], multi},
+        {["multi_backend", "default"], "bitcask1"},
+        {["multi_backend", "bitcask1", "storage_backend"], bitcask},
+        {["multi_backend", "bitcask1", "bitcask", "data_root"], "/data/bitcask1"},
+        {["multi_backend", "bitcask2", "storage_backend"], bitcask},
+        {["multi_backend", "bitcask2", "bitcask", "data_root"], "/data/bitcask2"},
+        {["multi_backend", "level3", "storage_backend"], leveldb},
+        {["multi_backend", "level3", "leveldb", "data_root"], "/data/level3"},
+        {["multi_backend", "level4", "storage_backend"], leveldb},
+        {["multi_backend", "level4", "leveldb", "data_root"], "/data/level4"},
+        {["multi_backend", "memory5", "storage_backend"], "memory"},
+        {["multi_backend", "memory5", "memory_backend", "max_memory_per_vnode"], "8GB"},
+        {["multi_backend", "memory6", "memory_backend", "ttl"], "1d"},
+        {["multi_backend", "memory6", "storage_backend"], "memory"}
+
+    ],
+
+    Config = cuttlefish_unit:generate_templated_config([
+        "../priv/riak_kv.schema",
+        "../priv/multi_backend.schema",
+        "../deps/bitcask/priv/bitcask.schema",
+        "../deps/bitcask/priv/bitcask_multi.schema",
+        "../deps/eleveldb/priv/eleveldb.schema",
+        "../deps/eleveldb/priv/eleveldb_multi.schema"
+        ],
+        Conf, context(), predefined_schema()),
+
+
+    MultiBackendConfig = proplists:get_value(multi_backend, proplists:get_value(riak_kv, Config)),
+
+    {<<"bitcask1">>, riak_kv_bitcask_backend,  B1} = lists:keyfind(<<"bitcask1">>, 1, MultiBackendConfig),
+    {<<"bitcask2">>, riak_kv_bitcask_backend,  B2} = lists:keyfind(<<"bitcask2">>, 1, MultiBackendConfig),
+    {<<"level3">>,   riak_kv_eleveldb_backend, L3} = lists:keyfind(<<"level3">>,   1, MultiBackendConfig),
+    {<<"level4">>,   riak_kv_eleveldb_backend, L4} = lists:keyfind(<<"level4">>,   1, MultiBackendConfig),
+    {<<"memory5">>,  riak_kv_memory_backend,   M5} = lists:keyfind(<<"memory5">>,  1, MultiBackendConfig),
+    {<<"memory6">>,  riak_kv_memory_backend,   M6} = lists:keyfind(<<"memory6">>,  1, MultiBackendConfig),
+
+
+    %% Check B1
+    cuttlefish_unit:assert_config(B1, "data_root", "/data/bitcask1"),
+
+    %% Check B2
+    cuttlefish_unit:assert_config(B2, "data_root", "/data/bitcask2"),
+
+    %% Check L3
+    cuttlefish_unit:assert_config(L3, "data_root", "/data/level3"),
+
+    %% Check L4
+    cuttlefish_unit:assert_config(L4, "data_root", "/data/level4"),
+
+    %% Check M5
+    cuttlefish_unit:assert_not_configured(M5, "ttl"),
+    cuttlefish_unit:assert_config(M5, "max_memory", 8192),
+
+    %% Check M6
+    cuttlefish_unit:assert_config(M6, "ttl", 86400),
+    cuttlefish_unit:assert_not_configured(M6, "max_memory"),
+    ok.
+
 %% this context() represents the substitution variables that rebar
 %% will use during the build process.  riak_core's schema file is
 %% written with some {{mustache_vars}} for substitution during
