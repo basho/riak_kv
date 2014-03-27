@@ -46,6 +46,11 @@
          bucket_type_reset/1,
          bucket_type_list/1]).
 
+%% Reused by Yokozuna for printing AAE status.
+-export([aae_exchange_status/1,
+         aae_repair_status/1,
+         aae_tree_status/1]).
+
 join([NodeStr]) ->
     join(NodeStr, fun riak_core:join/1,
          "Sent join request to ~s~n", [NodeStr]).
@@ -303,8 +308,9 @@ aae_status([]) ->
     ExchangeInfo = riak_kv_entropy_info:compute_exchange_info(),
     aae_exchange_status(ExchangeInfo),
     io:format("~n"),
-    aae_tree_status(),
-    io:format("~n"), 
+    TreeInfo = riak_kv_entropy_info:compute_tree_info(),
+    aae_tree_status(TreeInfo),
+    io:format("~n"),
     aae_repair_status(ExchangeInfo).
 
 aae_exchange_status(ExchangeInfo) -> 
@@ -336,8 +342,7 @@ aae_repair_status(ExchangeInfo) ->
      end || {Index, _, _, {Last,_Min,Max,Mean}} <- ExchangeInfo],
     ok.
 
-aae_tree_status() ->
-    TreeInfo = riak_kv_entropy_info:compute_tree_info(),
+aae_tree_status(TreeInfo) ->
     io:format("~s~n", [string:centre(" Entropy Trees ", 79, $=)]),
     io:format("~-49s  Built (ago)~n", ["Index"]),
     io:format("~79..-s~n", [""]),
