@@ -22,8 +22,6 @@
 {translation,
  "riak_kv.multi_backend",
  fun(Conf, Schema) ->
-
-
   GenerateSubConfig = fun(Name, Prefix, ProplistKey, ModuleName) ->
       BackendConfigName = ["multi_backend", Name],
       BackendConfigPrefix = BackendConfigName ++ [Prefix],
@@ -33,15 +31,15 @@
 
       case cuttlefish_generator:map(Schema, SubConf) of
         {error, _Phase, _Errors} ->
-            cuttlefish:invalid("Error running recursive call to cuttlefish_generator:map/2");
+            cuttlefish:invalid(
+              lists:flatten(io_lib:format(
+                "Error processing multi_backend configuration for backend ~s", [Name])));
         BackendProplist ->
           Proplist = lists:foldl(
           fun(K, Acc) ->
-            NewAcc = proplists:get_value(K, Acc, []),
-            NewAcc
+            proplists:get_value(K, Acc, [])
           end,
           BackendProplist, ProplistKey),
-
           {ModuleName, Proplist}
       end
   end,
