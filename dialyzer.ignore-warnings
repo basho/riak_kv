@@ -1,0 +1,4 @@
+cluster_info:dump_all_connected/1
+cluster_info:dump_nodes/2
+cluster_info:format/3
+cluster_info:register_app/1
