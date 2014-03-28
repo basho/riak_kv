@@ -317,7 +317,7 @@ aae_exchange_status(ExchangeInfo) ->
     io:format("~s~n", [string:centre(" Exchanges ", 79, $=)]),
     io:format("~-49s  ~-12s  ~-12s~n", ["Index", "Last (ago)", "All (ago)"]),
     io:format("~79..-s~n", [""]),
-    [begin
+    _ = [begin
          Now = os:timestamp(),
          LastStr = format_timestamp(Now, LastTS),
          AllStr = format_timestamp(Now, AllTS),
@@ -333,7 +333,7 @@ aae_repair_status(ExchangeInfo) ->
                                       string:centre("Mean", 8),
                                       string:centre("Max", 8)]),
     io:format("~79..-s~n", [""]),
-    [begin
+    _ = [begin
          io:format("~-49b  ~s  ~s  ~s~n", [Index,
                                            string:centre(integer_to_list(Last), 8),
                                            string:centre(integer_to_list(Mean), 8),
@@ -346,7 +346,7 @@ aae_tree_status(TreeInfo) ->
     io:format("~s~n", [string:centre(" Entropy Trees ", 79, $=)]),
     io:format("~-49s  Built (ago)~n", ["Index"]),
     io:format("~79..-s~n", [""]),
-    [begin
+    _ = [begin
          Now = os:timestamp(),
          BuiltStr = format_timestamp(Now, BuiltTS),
          io:format("~-49b  ~s~n", [Index, BuiltStr]),
@@ -643,9 +643,12 @@ repair_2i(Args) ->
             case length(IdxList) < 5 of
                 true ->
                     io:format("Will repair 2i on these partitions:\n", []),
-                    [io:format("\t~p\n", [Idx]) || Idx <- IdxList];
+                    _ = [io:format("\t~p\n", [Idx]) || Idx <- IdxList],
+                    ok;
                 false ->
-                    io:format("Will repair 2i data on ~p partitions\n", [length(IdxList)])
+                    io:format("Will repair 2i data on ~p partitions\n", 
+                              [length(IdxList)]),
+                    ok
             end,
             Ret = riak_kv_2i_aae:start(IdxList, DutyCycle),
             case Ret of
