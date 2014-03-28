@@ -253,7 +253,7 @@ do_update({fsm_spawned, Type}) when Type =:= gets; Type =:= puts ->
 do_update({fsm_exit, Type}) when Type =:= gets; Type =:= puts  ->
     ok = folsom_metrics:notify_existing_metric({?APP, node, Type, fsm,  active}, {dec, 1}, counter);
 do_update({fsm_error, Type}) when Type =:= gets; Type =:= puts ->
-    do_update({fsm_exit, Type}),
+    ok = do_update({fsm_exit, Type}),
     ok = folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, errors}, 1, spiral);
 do_update({index_create, Pid}) ->
     ok = folsom_metrics:notify_existing_metric({?APP, index, fsm, create}, 1, spiral),
@@ -285,7 +285,7 @@ monitor_loop(Type) ->
             erlang:monitor(process, Pid),
             ok;
         {'DOWN', _Ref, process, _Pid, _Reason} ->
-            do_update({fsm_destroy, Type}),
+            ok = do_update({fsm_destroy, Type}),
             ok
     end,
     monitor_loop(Type).
