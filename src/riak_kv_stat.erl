@@ -486,7 +486,7 @@ do_register_stat(Name, histogram) ->
     folsom_metrics:new_histogram(Name, SampleType, SampleArgs);
 do_register_stat(Name, {function, F}) ->
     %% store the function in a gauge metric
-    folsom_metrics:new_gauge(Name),
+    ok = folsom_metrics:new_gauge(Name),
     folsom_metrics:notify({Name, F}).
 
 %% @doc the histogram sample type may be set in app.config
