@@ -169,110 +169,110 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% @doc Update the given stat
 do_update({vnode_get, Idx, USecs}) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode, gets}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, vnode, gets}, 1, spiral),
     create_or_update({?APP, vnode, gets, time}, USecs, histogram),
     do_per_index(gets, Idx, USecs);
 do_update({vnode_put, Idx, USecs}) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode, puts}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, vnode, puts}, 1, spiral),
     create_or_update({?APP, vnode, puts, time}, USecs, histogram),
     do_per_index(puts, Idx, USecs);
 do_update(vnode_index_refresh) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode, index, refreshes}, 1, spiral);
+    ok = folsom_metrics:notify_existing_metric({?APP, vnode, index, refreshes}, 1, spiral);
 do_update(vnode_index_read) ->
     folsom_metrics:notify_existing_metric({?APP, vnode, index, reads}, 1, spiral);
 do_update({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode, index, writes}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, vnode, index, writes, postings}, PostingsAdded, spiral),
-    folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes, postings}, PostingsRemoved, spiral);
+    ok = folsom_metrics:notify_existing_metric({?APP, vnode, index, writes}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, vnode, index, writes, postings}, PostingsAdded, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes, postings}, PostingsRemoved, spiral);
 do_update({vnode_index_delete, Postings}) ->
-    folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes}, Postings, spiral),
-    folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes, postings}, Postings, spiral);
+    ok = folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes}, Postings, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, vnode, index, deletes, postings}, Postings, spiral);
 do_update({vnode_dt_update, Mod, Micros}) ->
     Type = riak_kv_crdt:from_mod(Mod),
-    folsom_metrics:notify_existing_metric({?APP, vnode, Type, update}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, vnode, Type, update, time}, Micros, histogram);
+    ok = folsom_metrics:notify_existing_metric({?APP, vnode, Type, update}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, vnode, Type, update, time}, Micros, histogram);
 do_update({riak_object_merge, undefined,  Micros}) ->
-    folsom_metrics:notify_existing_metric({?APP, object, merge}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, object, merge, time}, Micros, histogram);
+    ok = folsom_metrics:notify_existing_metric({?APP, object, merge}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, object, merge, time}, Micros, histogram);
 do_update({riak_object_merge, Mod, Micros}) ->
     Type = riak_kv_crdt:from_mod(Mod),
-    folsom_metrics:notify_existing_metric({?APP, object, Type, merge}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, object, Type, merge, time}, Micros, histogram);
+    ok = folsom_metrics:notify_existing_metric({?APP, object, Type, merge}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, object, Type, merge, time}, Micros, histogram);
 do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket, undefined}) ->
-    folsom_metrics:notify_existing_metric({?APP, node, gets}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, node, gets, time}, Microsecs, histogram),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, gets}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, time}, Microsecs, histogram),
     do_stages([?APP, node, gets, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined});
 do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket, undefined}) ->
-    folsom_metrics:notify_existing_metric({?APP, node, gets}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, node, gets, time}, Microsecs, histogram),
-    folsom_metrics:notify_existing_metric({?APP, node, gets, siblings}, NumSiblings, histogram),
-    folsom_metrics:notify_existing_metric({?APP, node, gets, objsize}, ObjSize, histogram),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, gets}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, time}, Microsecs, histogram),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, siblings}, NumSiblings, histogram),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, objsize}, ObjSize, histogram),
     do_stages([?APP, node, gets, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize});
 do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket, CRDTMod}) ->
     Type = riak_kv_crdt:from_mod(CRDTMod),
-    folsom_metrics:notify_existing_metric({?APP, node, gets, Type}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, node, gets, Type, time}, Microsecs, histogram),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Type}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Type, time}, Microsecs, histogram),
     do_stages([?APP, node, gets, Type, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined, Type});
 do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket, CRDTMod}) ->
     Type = riak_kv_crdt:from_mod(CRDTMod),
-    folsom_metrics:notify_existing_metric({?APP, node, gets, Type}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, node, gets, Type, time}, Microsecs, histogram),
-    folsom_metrics:notify_existing_metric({?APP, node, gets, Type, siblings}, NumSiblings, histogram),
-    folsom_metrics:notify_existing_metric({?APP, node, gets, Type, objsize}, ObjSize, histogram),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Type}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Type, time}, Microsecs, histogram),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Type, siblings}, NumSiblings, histogram),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Type, objsize}, ObjSize, histogram),
     do_stages([?APP, node, gets, Type, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type});
 do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, undefined}) ->
-    folsom_metrics:notify_existing_metric({?APP, node, puts}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, node, puts, time}, Microsecs, histogram),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, puts}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, puts, time}, Microsecs, histogram),
     do_stages([?APP, node, puts, time], Stages),
     do_put_bucket(PerBucket, {Bucket, Microsecs, Stages});
 do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, CRDTMod}) ->
     Type = riak_kv_crdt:from_mod(CRDTMod),
-    folsom_metrics:notify_existing_metric({?APP, node, puts, Type}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, node, puts, Type, time}, Microsecs, histogram),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, puts, Type}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, puts, Type, time}, Microsecs, histogram),
     do_stages([?APP, node, puts, Type, time], Stages),
     do_put_bucket(PerBucket, {Bucket, Microsecs, Stages, Type});
 do_update({read_repairs, Indices, Preflist}) ->
-    folsom_metrics:notify_existing_metric({?APP, node, gets, read_repairs}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, node, gets, read_repairs}, 1, spiral),
     do_repairs(Indices, Preflist);
 do_update(coord_redir) ->
-    folsom_metrics:notify_existing_metric({?APP, node, puts, coord_redirs}, {inc, 1}, counter);
+    ok = folsom_metrics:notify_existing_metric({?APP, node, puts, coord_redirs}, {inc, 1}, counter);
 do_update(mapper_start) ->
-    folsom_metrics:notify_existing_metric({?APP, mapper_count}, {inc, 1}, counter);
+    ok = folsom_metrics:notify_existing_metric({?APP, mapper_count}, {inc, 1}, counter);
 do_update(mapper_end) ->
-    folsom_metrics:notify_existing_metric({?APP, mapper_count}, {dec, 1}, counter);
+    ok = folsom_metrics:notify_existing_metric({?APP, mapper_count}, {dec, 1}, counter);
 do_update(precommit_fail) ->
-    folsom_metrics:notify_existing_metric({?APP, precommit_fail}, {inc, 1}, counter);
+    ok = folsom_metrics:notify_existing_metric({?APP, precommit_fail}, {inc, 1}, counter);
 do_update(postcommit_fail) ->
-    folsom_metrics:notify_existing_metric({?APP, postcommit_fail}, {inc, 1}, counter);
+    ok = folsom_metrics:notify_existing_metric({?APP, postcommit_fail}, {inc, 1}, counter);
 do_update({fsm_spawned, Type}) when Type =:= gets; Type =:= puts ->
-    folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, active}, {inc, 1}, counter);
+    ok = folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, active}, {inc, 1}, counter);
 do_update({fsm_exit, Type}) when Type =:= gets; Type =:= puts  ->
-    folsom_metrics:notify_existing_metric({?APP, node, Type, fsm,  active}, {dec, 1}, counter);
+    ok = folsom_metrics:notify_existing_metric({?APP, node, Type, fsm,  active}, {dec, 1}, counter);
 do_update({fsm_error, Type}) when Type =:= gets; Type =:= puts ->
     do_update({fsm_exit, Type}),
-    folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, errors}, 1, spiral);
+    ok = folsom_metrics:notify_existing_metric({?APP, node, Type, fsm, errors}, 1, spiral);
 do_update({index_create, Pid}) ->
-    folsom_metrics:notify_existing_metric({?APP, index, fsm, create}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, index, fsm, active}, {inc, 1}, counter),
+    ok = folsom_metrics:notify_existing_metric({?APP, index, fsm, create}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, index, fsm, active}, {inc, 1}, counter),
     add_monitor(index, Pid),
     ok;
 do_update(index_create_error) ->
-    folsom_metrics:notify_existing_metric({?APP, index, fsm, create, error}, 1, spiral);
+    ok = folsom_metrics:notify_existing_metric({?APP, index, fsm, create, error}, 1, spiral);
 do_update({list_create, Pid}) ->
-    folsom_metrics:notify_existing_metric({?APP, list, fsm, create}, 1, spiral),
-    folsom_metrics:notify_existing_metric({?APP, list, fsm, active}, {inc, 1}, counter),
+    ok = folsom_metrics:notify_existing_metric({?APP, list, fsm, create}, 1, spiral),
+    ok = folsom_metrics:notify_existing_metric({?APP, list, fsm, active}, {inc, 1}, counter),
     add_monitor(list, Pid),
     ok;
 do_update(list_create_error) ->
-    folsom_metrics:notify_existing_metric({?APP, list, fsm, create, error}, 1, spiral);
+    ok = folsom_metrics:notify_existing_metric({?APP, list, fsm, create, error}, 1, spiral);
 do_update({fsm_destroy, Type}) ->
-    folsom_metrics:notify_existing_metric({?APP, Type, fsm, active}, {dec, 1}, counter);
+    ok = folsom_metrics:notify_existing_metric({?APP, Type, fsm, active}, {dec, 1}, counter);
 do_update({Type, actor_count, Count}) ->
-    folsom_metrics:notify_existing_metric({?APP, Type, actor_count}, Count, histogram).
+    ok = folsom_metrics:notify_existing_metric({?APP, Type, actor_count}, Count, histogram).
 
 %% private
 
@@ -300,7 +300,7 @@ do_get_bucket(false, _) ->
 do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize}=Args) ->
     case (catch folsom_metrics:notify_existing_metric({?APP, node, gets, Bucket}, 1, spiral)) of
         ok ->
-            [folsom_metrics:notify_existing_metric({?APP, node, gets, Dimension, Bucket}, Arg, histogram)
+            _ = [ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Dimension, Bucket}, Arg, histogram)
              || {Dimension, Arg} <- [{time, Microsecs},
                                      {siblings, NumSiblings},
                                      {objsize, ObjSize}], Arg /= undefined],
@@ -315,7 +315,7 @@ do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize}=Args) ->
 do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type}=Args) ->
     case (catch folsom_metrics:notify_existing_metric({?APP, node, gets, Type, Bucket}, 1, spiral)) of
         ok ->
-            [folsom_metrics:notify_existing_metric({?APP, node, gets, Type, Dimension, Bucket}, Arg, histogram)
+            _ = [ok = folsom_metrics:notify_existing_metric({?APP, node, gets, Type, Dimension, Bucket}, Arg, histogram)
              || {Dimension, Arg} <- [{time, Microsecs},
                                      {siblings, NumSiblings},
                                      {objsize, ObjSize}], Arg /= undefined],
@@ -335,7 +335,7 @@ do_put_bucket(false, _) ->
 do_put_bucket(true, {Bucket, Microsecs, Stages}=Args) ->
     case (catch folsom_metrics:notify_existing_metric({?APP, node, puts, Bucket}, 1, spiral)) of
         ok ->
-            folsom_metrics:notify_existing_metric({?APP, node, puts, time, Bucket}, Microsecs, histogram),
+            ok = folsom_metrics:notify_existing_metric({?APP, node, puts, time, Bucket}, Microsecs, histogram),
             do_stages([?APP, node, puts, time, Bucket], Stages);
         {'EXIT', _} ->
             register_stat({?APP, node, puts, Bucket}, spiral),
@@ -345,7 +345,7 @@ do_put_bucket(true, {Bucket, Microsecs, Stages}=Args) ->
 do_put_bucket(true, {Bucket, Microsecs, Stages, Type}=Args) ->
     case (catch folsom_metrics:notify_existing_metric({?APP, node, puts, Type, Bucket}, 1, spiral)) of
         ok ->
-            folsom_metrics:notify_existing_metric({?APP, node, puts, Type, time, Bucket}, Microsecs, histogram),
+            ok = folsom_metrics:notify_existing_metric({?APP, node, puts, Type, time, Bucket}, Microsecs, histogram),
             do_stages([?APP, node, puts, Type, time, Bucket], Stages);
         {'EXIT', _} ->
             register_stat({?APP, node, puts, Type, Bucket}, spiral),
