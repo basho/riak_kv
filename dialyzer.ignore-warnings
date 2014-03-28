@@ -2,3 +2,4 @@ cluster_info:dump_all_connected/1
 cluster_info:dump_nodes/2
 cluster_info:format/3
 cluster_info:register_app/1
+riak_kv_console.erl:152: The pattern {'error', 'legacy_mode'} can never match the type {'error','is_up' | 'not_member' | 'only_member'}
