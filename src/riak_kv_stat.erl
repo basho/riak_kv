@@ -590,10 +590,11 @@ re_register_stat(Arg) ->
     case (catch do_update(Arg)) of
         {'EXIT', _} ->
             Stats = stats_from_update_arg(Arg),
-            [begin
+            _ = [begin
                  (catch folsom_metrics:delete_metric(Name)),
                  do_register_stat(Name, Type)
-             end || {Name, {metric, _, Type, _}} <- Stats];
+             end || {Name, {metric, _, Type, _}} <- Stats],
+            ok;
         ok ->
             ok
     end.
