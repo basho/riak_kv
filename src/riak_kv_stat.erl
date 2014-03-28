@@ -282,9 +282,11 @@ add_monitor(Type, Pid) ->
 monitor_loop(Type) ->
     receive
         {add_pid, Pid} ->
-            erlang:monitor(process, Pid);
+            erlang:monitor(process, Pid),
+            ok;
         {'DOWN', _Ref, process, _Pid, _Reason} ->
-            do_update({fsm_destroy, Type})
+            do_update({fsm_destroy, Type}),
+            ok
     end,
     monitor_loop(Type).
 
