@@ -274,7 +274,7 @@ datatype_compression_validator_test() ->
     cuttlefish_unit:assert_error_in_phase(Config, validation),
     ok.
 
-correct_error_handingling_by_multibackend_test() ->
+correct_error_handling_by_multibackend_test() ->
     Conf = [
         {["multi_backend", "default", "storage_backend"], bitcask},
         {["multi_backend", "default", "bitcask", "data_root"], "/data/default_bitcask"}

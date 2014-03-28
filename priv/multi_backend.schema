@@ -28,7 +28,7 @@
       BackendConfigName = ["multi_backend", Name],
       BackendConfigPrefix = BackendConfigName ++ [Prefix],
       SubConf = [ begin
-          {Key -- BackendConfigName, Value}
+          {lists:nthtail(2, Key), Value}
       end || {Key, Value} <- cuttlefish_variable:filter_by_prefix(BackendConfigPrefix, Conf)],
 
       case cuttlefish_generator:map(Schema, SubConf) of
