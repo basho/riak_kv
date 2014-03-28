@@ -322,7 +322,7 @@ do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type}=Args
             do_stages([?APP, node, gets, Type, time, Bucket], Stages);
         {'EXIT', _} ->
             folsom_metrics:new_spiral({?APP, node, gets, Type, Bucket}),
-            [register_stat({?APP, node, gets, Type, Dimension, Bucket}, histogram) || Dimension <- [time,
+            _ = [register_stat({?APP, node, gets, Type, Dimension, Bucket}, histogram) || Dimension <- [time,
                                                                                   siblings,
                                                                                   objsize]],
             do_get_bucket(true, Args)
