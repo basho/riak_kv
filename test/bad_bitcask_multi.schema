@@ -1,0 +1,6 @@
+%% @see bitcask.merge.thresholds.small_file
+{mapping, "multi_backend.$name.bitcask.thresholds.small_file", "riak_kv.multi_backend", [
+  {datatype, bytesize},
+  hidden,
+  {default, "10MB"}
+]}.
