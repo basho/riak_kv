@@ -513,8 +513,8 @@ index_fold_fun(Tree) ->
                    [if_missing], Tree)
     end.
 
-%% @Doc the 2i index hashtree as a Magic index_n of {0, 0}
--spec index_2i_n() -> index_n().
+%% @doc the 2i index hashtree as a Magic index_n of {0, 0}
+-spec index_2i_n() -> ?INDEX_2I_N.
 index_2i_n() ->
     ?INDEX_2I_N.
 
