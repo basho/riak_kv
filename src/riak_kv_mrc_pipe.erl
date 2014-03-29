@@ -1067,7 +1067,7 @@ compat_fun(66856669, 6, Fun) ->
     {ok, fun({ok, Input, _Keydata}, Partition, FittingDetails) ->
                  Results = riak_kv_mrc_map:link_phase(
                              Input, undefined, {Bucket, Tag}),
-                 [ riak_pipe_vnode_worker:send_output(
+                 _ = [ riak_pipe_vnode_worker:send_output(
                      R, Partition, FittingDetails)
                    || R <- Results ],
                  ok;
