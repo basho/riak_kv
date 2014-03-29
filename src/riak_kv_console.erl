@@ -296,7 +296,7 @@ reload_file(Filename) ->
     case code:is_loaded(Mod) of
         {file, Filename} ->
             code:soft_purge(Mod),
-            code:load_file(Mod),
+            {module, Mod} = code:load_file(Mod),
             io:format("Reloaded module ~w from ~s.~n", [Mod, Filename]);
         {file, Other} ->
             io:format("CONFLICT: Module ~w originally loaded from ~s, won't reload from ~s.~n", [Mod, Other, Filename]);
