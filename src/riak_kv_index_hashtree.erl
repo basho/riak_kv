@@ -846,7 +846,7 @@ build_or_rehash(Self, Locked, Type, #state{index=Index, trees=Trees}) ->
             gen_server:cast(Self, build_finished);
         {true, rehash} ->
             lager:debug("Starting rehash: ~p", [Index]),
-            [hashtree:rehash_tree(T) || {_,T} <- Trees],
+            _ = [hashtree:rehash_tree(T) || {_,T} <- Trees],
             lager:debug("Finished rehash (a): ~p", [Index]),
             gen_server:cast(Self, build_finished);
         _ ->
