@@ -276,7 +276,7 @@ handle_call({update_tree, Id}, From, State) ->
                fun(Tree) ->
                        {SnapTree, Tree2} = hashtree:update_snapshot(Tree),
                        spawn_link(fun() ->
-                                          hashtree:update_perform(SnapTree),
+                                          _ = hashtree:update_perform(SnapTree),
                                           gen_server:reply(From, ok)
                                   end),
                        {noreply, Tree2}
