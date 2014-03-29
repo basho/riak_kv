@@ -224,7 +224,7 @@ reip([OldNode, NewNode]) ->
         io:format("Backed up existing ring file to ~p~n", [BackupFN]),
         Ring = riak_core_ring_manager:read_ringfile(RingFile),
         NewRing = riak_core_ring:rename_node(Ring, OldNode, NewNode),
-        riak_core_ring_manager:do_write_ringfile(NewRing),
+        ok = riak_core_ring_manager:do_write_ringfile(NewRing),
         io:format("New ring file written to ~p~n",
             [element(2, riak_core_ring_manager:find_latest_ringfile())])
     catch
@@ -282,7 +282,7 @@ cluster_info([OutFile|Rest]) ->
 reload_code([]) ->
     case app_helper:get_env(riak_kv, add_paths) of
         List when is_list(List) ->
-            [ reload_path(filename:absname(Path)) || Path <- List ],
+            _ = [ reload_path(filename:absname(Path)) || Path <- List ],
             ok;
         _ -> ok
     end.
