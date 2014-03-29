@@ -787,7 +787,7 @@ wait_for_listkeys(ReqId, Acc) ->
     receive
         {ReqId, done} -> {ok, lists:flatten(Acc)};
         {ReqId, From, {keys, Res}} ->
-            riak_kv_keys_fsm:ack_keys(From),
+            _ = riak_kv_keys_fsm:ack_keys(From),
             wait_for_listkeys(ReqId, [Res|Acc]);
         {ReqId,{keys,Res}} -> wait_for_listkeys(ReqId, [Res|Acc]);
         {ReqId, {error, Error}} ->
