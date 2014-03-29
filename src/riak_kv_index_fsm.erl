@@ -124,14 +124,14 @@ process_results(VNode, {From, Bucket, Results}, State) ->
             VNodeCount = dict:fetch(VNode, PerNode),
             case VNodeCount < MaxResults of
                 true ->
-                    riak_kv_vnode:ack_keys(From),
+                    _ = riak_kv_vnode:ack_keys(From),
                     {ok, State2};
                 false ->
                     riak_kv_vnode:stop_fold(From),
                     {done, State2}
             end;
         {ok, State2} ->
-            riak_kv_vnode:ack_keys(From),
+            _ = riak_kv_vnode:ack_keys(From),
             {ok, State2};
         {done, State2} ->
             riak_kv_vnode:stop_fold(From),
@@ -188,7 +188,7 @@ process_results({error, Reason}, _State) ->
 process_results({From, Bucket, Results},
                 StateData=#state{from={raw, ReqId, ClientPid}}) ->
     process_query_results(Bucket, Results, ReqId, ClientPid),
-    riak_kv_vnode:ack_keys(From), % tell that vnode we're ready for more
+    _ = riak_kv_vnode:ack_keys(From), % tell that vnode we're ready for more
     {ok, StateData};
 process_results({Bucket, Results},
                 StateData=#state{from={raw, ReqId, ClientPid}}) ->
