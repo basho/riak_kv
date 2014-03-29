@@ -811,7 +811,7 @@ clear_tree(State=#state{index=Index}) ->
 destroy_trees(State) ->
     State2 = close_trees(State),
     {_,Tree0} = hd(State2#state.trees),
-    hashtree:destroy(Tree0),
+    _ = hashtree:destroy(Tree0),
     State2.
 
 -spec maybe_build(state()) -> state().
