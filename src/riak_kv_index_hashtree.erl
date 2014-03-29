@@ -586,8 +586,8 @@ do_build_finished(State=#state{index=Index, built=_Pid}) ->
     lager:debug("Finished build (b): ~p", [Index]),
     {_,Tree0} = hd(State#state.trees),
     BuildTime = get_build_time(Tree0),
-    hashtree:write_meta(<<"built">>, <<1>>, Tree0),
-    hashtree:write_meta(<<"build_time">>, term_to_binary(BuildTime), Tree0),
+    _ = hashtree:write_meta(<<"built">>, <<1>>, Tree0),
+    _ = hashtree:write_meta(<<"build_time">>, term_to_binary(BuildTime), Tree0),
     riak_kv_entropy_info:tree_built(Index, BuildTime),
     State#state{built=true, build_time=BuildTime, expired=false}.
 
