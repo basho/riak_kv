@@ -284,7 +284,7 @@ mapred_stream_sink(Inputs, Query, Timeout) ->
                           timer={Timer,PipeRef},
                           keeps=NumKeeps}}
     catch throw:{badarg, Fitting, Reason} ->
-            riak_kv_mrc_sink:stop(Sink),
+            _ = riak_kv_mrc_sink:stop(Sink),
             {error, {Fitting, Reason}}
     end.
     
@@ -873,7 +873,7 @@ cleanup_sink({SinkPid, SinkMon}) when is_pid(SinkPid),
                                       is_reference(SinkMon) ->
     erlang:demonitor(SinkMon, [flush]),
     %% killing the sink should tear down the pipe
-    riak_kv_mrc_sink:stop(SinkPid),
+    _ = riak_kv_mrc_sink:stop(SinkPid),
     %% receive just in case the sink had sent us one last response
     receive #kv_mrc_sink{} -> ok after 0 -> ok end;
 cleanup_sink(undefined) ->
