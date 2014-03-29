@@ -1017,11 +1017,11 @@ example_setup() ->
 example_setup(Num) when Num > 0 ->
     {ok, C} = riak:local_client(),
     C:put(riak_object:new(<<"foo">>, <<"bar">>, <<"what did you expect?">>)),
-    [C:put(riak_object:new(<<"foo">>,
+    _ = [C:put(riak_object:new(<<"foo">>,
                            list_to_binary("bar"++integer_to_list(X)),
                            list_to_binary("bar val "++integer_to_list(X))))
      || X <- lists:seq(1, Num)],
-    [C:put(riak_object:new(<<"foonum">>,
+    _ = [C:put(riak_object:new(<<"foonum">>,
                            list_to_binary("bar"++integer_to_list(X)),
                            X)) ||
         X <- lists:seq(1, Num)],
