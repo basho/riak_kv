@@ -36,17 +36,17 @@
 %% -type bkey() :: {bucket(), key()}.
 -type value() :: term().
 
-%% Used by the merge function to accumulate contents
--record(merge_acc, {
-          drop=orddict:new() :: orddict:orddict(),
-          keep=ordsets:new() :: ordset:ordset(),
-          crdt=orddict:new() :: orddict:orddict(),
-          error=[] :: list(binary())
-         }).
-
 -record(r_content, {
           metadata :: dict() | list(),
           value :: term()
+         }).
+
+%% Used by the merge function to accumulate contents
+-record(merge_acc, {
+          drop=orddict:new() :: orddict:orddict(),
+          keep=ordsets:new() :: ordsets:ordset(#r_content{}),
+          crdt=orddict:new() :: orddict:orddict(),
+          error=[] :: list(binary())
          }).
 
 %% Opaque container for Riak objects, a.k.a. riak_object()
