@@ -205,7 +205,7 @@ start_backend(Name, Module, Partition, Config) ->
 %% @doc Stop the backends
 -spec stop(state()) -> ok.
 stop(#state{backends=Backends}) ->
-    [Module:stop(SubState) || {_, Module, SubState} <- Backends],
+    _ = [Module:stop(SubState) || {_, Module, SubState} <- Backends],
     ok.
 
 %% @doc Retrieve an object from the backend
@@ -351,7 +351,7 @@ status(#state{backends=Backends}) ->
 callback(Ref, Msg, #state{backends=Backends}=State) ->
     %% Pass the callback on to all submodules - their responsbility to
     %% filter out if they need it.
-    [Mod:callback(Ref, Msg, ModState) || {_N, Mod, ModState} <- Backends],
+    _ = [Mod:callback(Ref, Msg, ModState) || {_N, Mod, ModState} <- Backends],
     {ok, State}.
 
 set_legacy_indexes(State=#state{backends=Backends}, WriteLegacy) ->
