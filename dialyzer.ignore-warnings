@@ -4,4 +4,5 @@ cluster_info:format/3
 cluster_info:register_app/1
 riak_kv_console.erl:152: The pattern {'error', 'legacy_mode'} can never match the type {'error','is_up' | 'not_member' | 'only_member'}
 Callback info about the riak_pipe_vnode_worker behaviour is not available
+Callback info about the riak_core_vnode_worker behaviour is not available
 Callback info about the riak_core_coverage_fsm behaviour is not available
