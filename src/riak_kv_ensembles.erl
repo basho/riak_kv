@@ -30,6 +30,13 @@
 %% API
 -export([start_link/0]).
 
+%% Support API
+-export([ensembles/0,
+         check_quorum/0,
+         count_quorum/0,
+         check_membership/0,
+         check_membership2/0]).
+
 %% Exported for debugging
 -export([required_ensembles/1,
          required_members/2]).
@@ -46,6 +53,31 @@
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+
+ensembles() ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    required_ensembles(Ring).
+
+check_quorum() ->
+    [riak_ensemble_manager:check_quorum(Ens, 2000) || Ens <- ensembles()].
+
+count_quorum() ->
+    [riak_ensemble_manager:count_quorum(Ens, 10000) || Ens <- ensembles()].
+
+check_membership() ->
+    {ok, Ring, CHBin} = riak_core_ring_manager:get_raw_ring_chashbin(),
+    Ensembles = required_ensembles(Ring),
+    [check_membership(Ensemble, CHBin) || Ensemble <- Ensembles].
+
+check_membership2() ->
+    {ok, Ring, CHBin} = riak_core_ring_manager:get_raw_ring_chashbin(),
+    Ensembles = required_ensembles(Ring),
+    [{Ens, check_membership(Ens, CHBin)} || Ens <- Ensembles].
+
+check_membership(Ensemble, CHBin) ->
+    Current = riak_ensemble_manager:get_members(Ensemble),
+    Required = required_members(Ensemble, CHBin),
+    lists:sort(Current) == lists:sort(Required).
 
 %%%===================================================================
 %%% gen_server callbacks
