@@ -276,11 +276,11 @@ merge(OldObject, NewObject) ->
 %% @doc Merge the r_objects contents by converting the inner dict to
 %%      a list, ensuring a sane order, and merging into a unique list.
 merge_contents(NewObject, OldObject, false) ->
-    OldContents = lists:map(fun convert_to_dict_list/1, OldObject#r_object.contents),
-    NewContents = lists:map(fun convert_to_dict_list/1, NewObject#r_object.contents),
-    Result = lists:umerge(lists:usort(NewContents),
-                          lists:usort(OldContents)),
-    {undefined, lists:map(fun convert_from_dict_list/1, Result)};
+    Result = lists:umerge(fun compare/2,
+                          lists:usort(fun compare/2, NewObject#r_object.contents),
+                          lists:usort(fun compare/2, OldObject#r_object.contents)),
+    {undefined, Result};
+
 %% @private with DVV enabled, use event dots in sibling metadata to
 %% remove dominated siblings and stop fake concurrency that causes
 %% sibling explsion. Also, since every sibling is iterated over (some
@@ -293,6 +293,29 @@ merge_contents(NewObject, OldObject, true) ->
     #merge_acc{crdt=CRDT, error=Error} = MergeAcc,
     riak_kv_crdt:log_merge_errors(Bucket, Key, CRDT, Error),
     merge_acc_to_contents(MergeAcc).
+
+%% Return true if A =< B, false otherwise
+compare(A=#r_content{value=VA}, B=#r_content{value=VB}) ->
+    if VA < VB ->
+            true;
+       VA > VB ->
+            false;
+       true ->
+            %% values are equal, compare metadata
+            compare_metadata(A, B)
+    end.
+
+compare_metadata(#r_content{metadata=MA}, #r_content{metadata=MB}) ->
+    ASize = dict:size(MA),
+    BSize = dict:size(MB),
+    if ASize < BSize ->
+            true;
+       ASize > BSize ->
+            false;
+       true ->
+            %% same size metadata, need to do actual compare
+            lists:sort(dict:to_list(MA)) =< lists:sort(dict:to_list(MB))
+    end.
 
 %% @private de-duplicates, removes dominated siblings, merges CRDTs
 -spec prune_object_siblings(riak_object(), vclock:vclock()) -> merge_acc().
@@ -331,7 +354,7 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
         {ok, Dot} ->
             case {vclock:descends_dot(Clock, Dot), is_drop_candidate(Dot, Drop)} of
                 {true, true} ->
-                    %% When the exact same dot is present in both
+                   %% When the exact same dot is present in both
                     %% objects siblings, we keep that value. Without
                     %% this merging an object with itself would result
                     %% in an object with no values at all, since an
@@ -342,15 +365,14 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% different timestamps (@see is_drop_candidate/2
                     %% below), and for the referenced values to be
                     %% _different_ too. We need to include both dotted
-                    %% values, and let the ordset ensure that only one
-                    %% sibling for a pair of normal dots is returned.
-                    Content = convert_to_dict_list(C0),
-                    %% Now get the other dots contents, should be
-                    %% identical, but Skewed Dots mean we can't
-                    %% guarantee that, the ordset will dedupe for us.
+                    %% values, and let the list sort/merge ensure that
+                    %% only one sibling for a pair of normal dots is
+                    %% returned.  Hence get the other dots contents,
+                    %% should be identical, but Skewed Dots mean we
+                    %% can't guarantee that, the merge will dedupe for
+                    %% us.
                     DC = get_drop_candidate(Dot, Drop),
-                    C2 = convert_to_dict_list(DC),
-                    MergeAcc#merge_acc{keep=ordsets:add_element(C2, ordsets:add_element(Content, Keep))};
+                    MergeAcc#merge_acc{keep=[C0, DC | Keep]};
                 {true, false} ->
                     %% The `dot' is dominated by the other object's
                     %% vclock. This means that the other object has a
@@ -363,8 +385,7 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% dominate) this sibling's `dot'. That means this
                     %% is a genuinely concurrent (or sibling) value
                     %% and should be kept for the user to reconcile.
-                    Content = convert_to_dict_list(C0),
-                    MergeAcc#merge_acc{keep=ordsets:add_element(Content, Keep)}
+                    MergeAcc#merge_acc{keep=[C0|Keep]}
             end;
         undefined ->
             %% Both CRDTs and legacy data don't have dots. Legacy data
@@ -401,8 +422,7 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% The sibling value was not a CRDT, but a
                     %% (legacy?) un-dotted user opaque value. Add it
                     %% to the list of values to keep.
-                    Content = convert_to_dict_list(C0),
-                    MergeAcc#merge_acc{keep=ordsets:add_element(Content, Keep)};
+                    MergeAcc#merge_acc{keep=[C0|Keep]};
                 {CRDT2, [], []} ->
                     %% The sibling was a CRDT and the CRDT accumulator
                     %% has been updated.
@@ -439,7 +459,12 @@ get_drop_candidate({Id, {Cnt, _TS}}, Dict) ->
 merge_acc_to_contents(MergeAcc) ->
     #merge_acc{keep=Keep, crdt=CRDTs} = MergeAcc,
     %% Convert the non-CRDT sibling values back to dict metadata values.
-    Keep2 = lists:map(fun convert_from_dict_list/1, ordsets:to_list(Keep)),
+    %%
+    %% For improved performance, fold_contents/3 does not check for duplicates
+    %% when constructing the "Keep" list (eg. using an ordset), but instead
+    %% simply prepends kept siblings to the list. Here, we convert Keep into an
+    %% ordset equivalent with reverse/unique sort.
+    Keep2 = lists:usort(fun compare/2, lists:reverse(Keep)),
     %% Iterate the set of converged CRDT values and turn them into
     %% `r_content' entries.  by generating their metadata entry and
     %% binary encoding their contents. Bucket Types should ensure this
@@ -467,15 +492,6 @@ get_dot(Dict) ->
         error ->
             undefined
     end.
-
-%% @doc Convert a r_content's inner dictionary to a list, and sort it to
-%%      ensure we can do comparsions between r_contents.
-convert_to_dict_list({r_content, Dict, Value}) ->
-    {r_content, lists:usort(dict:to_list(Dict)), Value}.
-
-%% @doc Convert a r_content's inner dictionary from a list to a dict.
-convert_from_dict_list({r_content, Dict, Value}) ->
-    {r_content, dict:from_list(Dict), Value}.
 
 %% @doc  Promote pending updates (made with the update_value() and
 %%       update_metadata() calls) to this riak_object.
