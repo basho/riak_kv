@@ -163,6 +163,7 @@ sync(_, State) ->
 
 -spec tick(epoch(), seq(), peer_id(), views(), state()) -> state().
 tick(_Epoch, _Seq, _Leader, Views, State=#state{id=Id}) ->
+    %% TODO: Should this entire function be async?
     {{kv, Idx, N, _}, _} = Id,
     Latest = hd(Views),
     {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
