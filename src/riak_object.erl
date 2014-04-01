@@ -354,7 +354,7 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
         {ok, Dot} ->
             case {vclock:descends_dot(Clock, Dot), is_drop_candidate(Dot, Drop)} of
                 {true, true} ->
-                   %% When the exact same dot is present in both
+                    %% When the exact same dot is present in both
                     %% objects siblings, we keep that value. Without
                     %% this merging an object with itself would result
                     %% in an object with no values at all, since an
