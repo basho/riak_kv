@@ -190,6 +190,11 @@ get_required_permissions(Inputs, _Query) ->
                                is_list(Filters) ->
             [{"riak_kv.list_keys", {<<"default">>, Bucket}},
              {"riak_kv.mapreduce", {<<"default">>, Bucket}}];
+        {{Type, Bucket}, Filters} when is_binary(Type),
+                                       is_binary(Bucket),
+                                       is_list(Filters) ->
+            [{"riak_kv.list_keys", {Type, Bucket}},
+             {"riak_kv.mapreduce", {Type, Bucket}}];
         Targets when is_list(Targets) ->
             %% MR over a list of bucket/key pairs, with
             %% optional keydata.
