@@ -238,6 +238,11 @@ replicate_args(#state{vnodes=VNodes, vnode_data=VNodeData, time=Time}) ->
      Time
     ].
 
+replicate_pre(_S, [VN, VN, _, _]) ->
+    false;
+replicate_pre(_S, [_VN1, _VN2, _, _]) ->
+    true.
+
 %% Mutating multiple elements in vnode_data in place is bad idea
 %% (symbolic vs dynamic state), so instead of treating Put and
 %% replicate as the same action, this command handles the replicate
@@ -286,13 +291,18 @@ prop_merge() ->
 %% -----------
 %% Helpers
 %% ----------
+new_riak_object(Value) ->
+    RO = riak_object:new(?B, ?K, Value),
+    RO1 = riak_object:update_last_modified(RO),
+    riak_object:apply_updates(RO1).
+
 vnodes_ready(#state{vnodes=VNodes, n=N}) ->
     length(VNodes) >= N andalso N > 0.
 
 %% Perform a riak_object and DVV coordinated put
 coord_put(VNode, Value, Time, VNodeData) ->
     {RObj, DVV} = get(VNode, VNodeData),
-    RObj2 = coord_put_ro(VNode, riak_object:new(?B, ?K, Value), RObj, Time),
+    RObj2 = coord_put_ro(VNode, new_riak_object(Value), RObj, Time),
     DVV2 = coord_put_dvv(VNode, dvvset:new(Value), DVV),
     {RObj2, DVV2}.
 
@@ -324,10 +334,11 @@ merge_put_dvv(Old, New) ->
 
 %% Ensure the context data is added to the put object.
 update_ro(Value, undefined) ->
-    riak_object:new(?B, ?K, Value);
+    new_riak_object(Value);
 update_ro(Value, RObj) ->
-    RObj2 = riak_object:update_value(RObj, Value),
-    riak_object:apply_updates(RObj2).
+    VClock = riak_object:vclock(RObj),
+    RO = new_riak_object(Value),
+    riak_object:set_vclock(RO, VClock).
 
 %% Ensure the context data is maintained
 update_dvv(Value, undefined) ->
