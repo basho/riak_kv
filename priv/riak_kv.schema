@@ -414,12 +414,12 @@ end
 %% @doc The strategy used when merging objects that potentially have
 %% conflicts.
 %%
-%% * 2: Riak 2.0 default - reduces sibling creation through additional
+%% * 2: Riak 2.0 typed bucket default - reduces sibling creation through additional
 %%      metadata on each sibling (also known as dotted version vectors)
-%% * 1: Riak 1.4 and earlier default - may duplicate siblings that
-%%      originated in the same write
-{mapping, "object.merge_strategy", "riak_kv.dvv_enabled", [
-  {default, '2'},
+%% * 1: Riak 1.4, default buckets, and earlier default - may duplicate siblings
+%%      from interleaved writes (sibling explosion.)
+{mapping, "buckets.default.merge_strategy", "riak_core.default_bucket_props.dvv_enabled", [
+  {default, '1'},
   {datatype, {flag, '2', '1'}},
   hidden
 ]}.
