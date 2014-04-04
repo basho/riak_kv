@@ -64,10 +64,16 @@ setup() ->
     %% Start up mock servers and dependencies
     fsm_eqc_util:start_mock_servers(),
     fsm_eqc_util:start_fake_rng(?MODULE),
+    meck:new(riak_core_bucket),
+    meck:expect(riak_core_bucket, get_bucket,
+                fun(_Bucket) ->
+                        [dvv_enabled]
+                end),
     ok.
 
 cleanup(_) ->
     fsm_eqc_util:cleanup_mock_servers(),
+    meck:unload(riak_core_bucket),
     ok.
 
 %% Call unused callback functions to clear them in the coverage

@@ -53,8 +53,22 @@
         eqc:on_output(fun(Str, Args) ->
                               io:format(user, Str, Args) end, P)).
 
+%%====================================================================
+%% eunit test
+%%====================================================================
+
 eqc_test_() ->
-    {timeout, 60, ?_assertEqual(true, eqc:quickcheck(eqc:numtests(1000, ?QC_OUT(prop_merge()))))}.
+    {setup,
+     fun() ->
+             meck:new(riak_core_bucket),
+             meck:expect(riak_core_bucket, get_bucket,
+                         fun(_Bucket) -> [dvv_enabled] end)
+     end,
+     fun(_) ->
+             meck:unload(riak_core_bucket)
+     end,
+     [{timeout, 60, ?_assertEqual(true, eqc:quickcheck(eqc:numtests(1000, ?QC_OUT(prop_merge()))))}]
+    }.
 
 run() ->
     run(?NUMTESTS).
@@ -260,7 +274,6 @@ replicate_next(S, Res, Args) ->
 prop_merge() ->
     ?FORALL(Cmds,commands(?MODULE),
             begin
-                application:set_env(riak_kv, dvv_enabled, true), %% set false for fails
                 {H, S=#state{vnodes=VNodes, vnode_data=VNodeData}, Res} = run_commands(?MODULE,Cmds),
                 %% Check that collapsing all values leads to the same results for dvv and riak_object
                 {OValues, DVVValues} = case VNodes of

@@ -263,7 +263,8 @@ compare_content_dates(C1,C2) ->
 -spec merge(riak_object(), riak_object()) -> riak_object().
 merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
-    DVV = dvv_enabled(),
+    Bucket = bucket(OldObject),
+    DVV = dvv_enabled(Bucket),
     {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
     riak_kv_stat:update({riak_object_merge, CRDT, Time}),
     OldObject#r_object{contents=Contents,
@@ -276,11 +277,11 @@ merge(OldObject, NewObject) ->
 %% @doc Merge the r_objects contents by converting the inner dict to
 %%      a list, ensuring a sane order, and merging into a unique list.
 merge_contents(NewObject, OldObject, false) ->
-    OldContents = lists:map(fun convert_to_dict_list/1, OldObject#r_object.contents),
-    NewContents = lists:map(fun convert_to_dict_list/1, NewObject#r_object.contents),
-    Result = lists:umerge(lists:usort(NewContents),
-                          lists:usort(OldContents)),
-    {undefined, lists:map(fun convert_from_dict_list/1, Result)};
+    Result = lists:umerge(fun compare/2,
+                          lists:usort(fun compare/2, NewObject#r_object.contents),
+                          lists:usort(fun compare/2, OldObject#r_object.contents)),
+    {undefined, Result};
+
 %% @private with DVV enabled, use event dots in sibling metadata to
 %% remove dominated siblings and stop fake concurrency that causes
 %% sibling explsion. Also, since every sibling is iterated over (some
@@ -293,6 +294,41 @@ merge_contents(NewObject, OldObject, true) ->
     #merge_acc{crdt=CRDT, error=Error} = MergeAcc,
     riak_kv_crdt:log_merge_errors(Bucket, Key, CRDT, Error),
     merge_acc_to_contents(MergeAcc).
+
+%% Optimisation. To save converting every meta dict to a list sorting,
+%% comapring, and coverting back again, we use this optimisation, that
+%% shortcuts out the meta_data comparison, if the obects aren't equal,
+%% we needn't compare meta_data at all. `compare/2' is an "ordering
+%% fun". Return true if A =< B, false otherwise.
+%%
+%% @see lists:usort/2
+compare(A=#r_content{value=VA}, B=#r_content{value=VB}) ->
+    if VA < VB ->
+            true;
+       VA > VB ->
+            false;
+       true ->
+            %% values are equal, compare metadata
+            compare_metadata(A, B)
+    end.
+
+%% Optimisation. Used by `compare/2' ordering fun. Only convert, sort,
+%% and compare the meta_data dictionaries if they are the same
+%% size. Called by an ordering function, this too is an ordering
+%% function.
+%%
+%% @see compare/2, lists:usort/3
+compare_metadata(#r_content{metadata=MA}, #r_content{metadata=MB}) ->
+    ASize = dict:size(MA),
+    BSize = dict:size(MB),
+    if ASize < BSize ->
+            true;
+       ASize > BSize ->
+            false;
+       true ->
+            %% same size metadata, need to do actual compare
+            lists:sort(dict:to_list(MA)) =< lists:sort(dict:to_list(MB))
+    end.
 
 %% @private de-duplicates, removes dominated siblings, merges CRDTs
 -spec prune_object_siblings(riak_object(), vclock:vclock()) -> merge_acc().
@@ -342,15 +378,14 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% different timestamps (@see is_drop_candidate/2
                     %% below), and for the referenced values to be
                     %% _different_ too. We need to include both dotted
-                    %% values, and let the ordset ensure that only one
-                    %% sibling for a pair of normal dots is returned.
-                    Content = convert_to_dict_list(C0),
-                    %% Now get the other dots contents, should be
-                    %% identical, but Skewed Dots mean we can't
-                    %% guarantee that, the ordset will dedupe for us.
+                    %% values, and let the list sort/merge ensure that
+                    %% only one sibling for a pair of normal dots is
+                    %% returned.  Hence get the other dots contents,
+                    %% should be identical, but Skewed Dots mean we
+                    %% can't guarantee that, the merge will dedupe for
+                    %% us.
                     DC = get_drop_candidate(Dot, Drop),
-                    C2 = convert_to_dict_list(DC),
-                    MergeAcc#merge_acc{keep=ordsets:add_element(C2, ordsets:add_element(Content, Keep))};
+                    MergeAcc#merge_acc{keep=[C0, DC | Keep]};
                 {true, false} ->
                     %% The `dot' is dominated by the other object's
                     %% vclock. This means that the other object has a
@@ -363,8 +398,7 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% dominate) this sibling's `dot'. That means this
                     %% is a genuinely concurrent (or sibling) value
                     %% and should be kept for the user to reconcile.
-                    Content = convert_to_dict_list(C0),
-                    MergeAcc#merge_acc{keep=ordsets:add_element(Content, Keep)}
+                    MergeAcc#merge_acc{keep=[C0|Keep]}
             end;
         undefined ->
             %% Both CRDTs and legacy data don't have dots. Legacy data
@@ -401,8 +435,7 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% The sibling value was not a CRDT, but a
                     %% (legacy?) un-dotted user opaque value. Add it
                     %% to the list of values to keep.
-                    Content = convert_to_dict_list(C0),
-                    MergeAcc#merge_acc{keep=ordsets:add_element(Content, Keep)};
+                    MergeAcc#merge_acc{keep=[C0|Keep]};
                 {CRDT2, [], []} ->
                     %% The sibling was a CRDT and the CRDT accumulator
                     %% has been updated.
@@ -439,7 +472,12 @@ get_drop_candidate({Id, {Cnt, _TS}}, Dict) ->
 merge_acc_to_contents(MergeAcc) ->
     #merge_acc{keep=Keep, crdt=CRDTs} = MergeAcc,
     %% Convert the non-CRDT sibling values back to dict metadata values.
-    Keep2 = lists:map(fun convert_from_dict_list/1, ordsets:to_list(Keep)),
+    %%
+    %% For improved performance, fold_contents/3 does not check for duplicates
+    %% when constructing the "Keep" list (eg. using an ordset), but instead
+    %% simply prepends kept siblings to the list. Here, we convert Keep into an
+    %% ordset equivalent with reverse/unique sort.
+    Keep2 = lists:usort(fun compare/2, lists:reverse(Keep)),
     %% Iterate the set of converged CRDT values and turn them into
     %% `r_content' entries.  by generating their metadata entry and
     %% binary encoding their contents. Bucket Types should ensure this
@@ -467,15 +505,6 @@ get_dot(Dict) ->
         error ->
             undefined
     end.
-
-%% @doc Convert a r_content's inner dictionary to a list, and sort it to
-%%      ensure we can do comparsions between r_contents.
-convert_to_dict_list({r_content, Dict, Value}) ->
-    {r_content, lists:usort(dict:to_list(Dict)), Value}.
-
-%% @doc Convert a r_content's inner dictionary from a list to a dict.
-convert_from_dict_list({r_content, Dict, Value}) ->
-    {r_content, dict:from_list(Dict), Value}.
 
 %% @doc  Promote pending updates (made with the update_value() and
 %%       update_metadata() calls) to this riak_object.
@@ -594,20 +623,20 @@ set_vclock(Object=#r_object{}, VClock) -> Object#r_object{vclock=VClock}.
 %% @doc  Increment the entry for ClientId in O's vclock.
 -spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object().
 %% @spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object()
-increment_vclock(Object=#r_object{}, ClientId) ->
+increment_vclock(Object=#r_object{bucket=B}, ClientId) ->
     NewClock = vclock:increment(ClientId, Object#r_object.vclock),
     {ok, Dot} = vclock:get_entry(ClientId, NewClock),
-    assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled()).
+    assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled(B)).
 
 %% @doc  Increment the entry for ClientId in O's vclock.
 -spec increment_vclock(riak_object(), vclock:vclock_node(), vclock:timestamp()) -> riak_object().
-increment_vclock(Object=#r_object{}, ClientId, Timestamp) ->
+increment_vclock(Object=#r_object{bucket=B}, ClientId, Timestamp) ->
     NewClock = vclock:increment(ClientId, Timestamp, Object#r_object.vclock),
     {ok, Dot} = vclock:get_entry(ClientId, NewClock),
     %% If it is true that we only ever increment the vclock to create
     %% a frontier object, then there must only ever be a single value
     %% when we increment, so add the dot here.
-    assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled()).
+    assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled(B)).
 
 %% @private assign the dot to the value only if DVV is enabled. Only
 %% call with a valid dot. Only assign dot when there is a single value
@@ -620,9 +649,13 @@ assign_dot(Object, _Dot, _DVVEnabled) ->
     Object.
 
 %% @private is dvv enabled on this node?
--spec dvv_enabled() -> boolean().
-dvv_enabled() ->
-    app_helper:get_env(riak_kv, dvv_enabled, true).
+-spec dvv_enabled(bucket()) -> boolean().
+dvv_enabled(Bucket) ->
+    BProps = riak_core_bucket:get_bucket(Bucket),
+    %% default to `true`, since legacy buckets should have `false` by
+    %% default, and typed should have `true` and `undefined` is not a
+    %% valid return.
+    proplists:get_value(dvv_enabled, BProps, true).
 
 %% @doc Prepare a list of index specifications
 %% to pass to the backend. This function is for
@@ -754,7 +787,8 @@ update(false, OldObject, NewObject, Actor, Timestamp) ->
             FrontierClock = vclock:increment(Actor, Timestamp, MergedClock),
             {ok, Dot} = vclock:get_entry(Actor, FrontierClock),
             %% Assign an event to the new value
-            DottedPutObject = assign_dot(NewObject, Dot, dvv_enabled()),
+            Bucket = bucket(OldObject),
+            DottedPutObject = assign_dot(NewObject, Dot, dvv_enabled(Bucket)),
             MergedObject = merge(DottedPutObject, OldObject),
             set_vclock(MergedObject, FrontierClock)
     end.
@@ -1062,7 +1096,36 @@ update_test() ->
     V2 = riak_object:get_value(O2),
     {O,O2}.
 
-ancestor_test() ->
+bucket_prop_needers_test_() ->
+    {setup,
+     fun() ->
+             meck:new(riak_core_bucket),
+             meck:expect(riak_core_bucket, get_bucket,
+                         fun(_) ->
+                                 []
+                         end)
+     end,
+     fun(_) ->
+             meck:unload(riak_core_bucket)
+     end,
+     [{"Ancestor", fun ancestor/0},
+      {"Ancestor Weird Clocks", fun ancestor_weird_clocks/0},
+      {"Reconcile", fun reconcile/0},
+      {"Merge 1", fun merge1/0},
+      {"Merge 2", fun merge2/0},
+      {"Merge 3", fun merge3/0},
+      {"Merge 4", fun merge4/0},
+      {"Merge 5", fun merge5/0},
+      {"Inequality", fun inequality1/0},
+      {"Inequality Vclock", fun inequality_vclock/0},
+      {"Date Reconcile", fun date_reconcile/0},
+      {"Dotted values reconcile", fun dotted_values_reconcile/0},
+      {"Weird Clocks, Weird Dots", fun weird_clocks_weird_dots/0},
+      {"Mixed Merge", fun mixed_merge/0},
+      {"Mixed Merge 2", fun mixed_merge2/0}]
+    }.
+
+ancestor() ->
     Actor = self(),
     {O,O2} = update_test(),
     O3 = riak_object:increment_vclock(O2, Actor),
@@ -1071,7 +1134,7 @@ ancestor_test() ->
     ?assertMatch({Actor, {1, _}}, dict:fetch(?DOT, MD)),
     {O,O3}.
 
-ancestor_weird_clocks_test() ->
+ancestor_weird_clocks() ->
     %% make objects with dots / clocks that are causally the same but
     %% with different timestamps (backup - restore, riak_kv#679)
     {B, K} = {<<"b">>, <<"k">>},
@@ -1082,18 +1145,18 @@ ancestor_weird_clocks_test() ->
     Ancestors = ancestors([A, AWat]),
     ?assertEqual(0, length(Ancestors)).
 
-reconcile_test() ->
-    {O,O3} = ancestor_test(),
+reconcile() ->
+    {O,O3} = ancestor(),
     O3 = riak_object:reconcile([O,O3],true),
     O3 = riak_object:reconcile([O,O3],false),
     {O,O3}.
 
-merge1_test() ->
-    {O,O3} = reconcile_test(),
+merge1() ->
+    {O,O3} = reconcile(),
     O3 = riak_object:syntactic_merge(O,O3),
     {O,O3}.
 
-merge2_test() ->
+merge2() ->
     B = <<"buckets_are_binaries">>,
     K = <<"keys are binaries">>,
     V = <<"testvalue2">>,
@@ -1103,12 +1166,12 @@ merge2_test() ->
     [node1, node2] = [N || {N,_} <- riak_object:vclock(O3)],
     2 = riak_object:value_count(O3).
 
-merge3_test() ->
+merge3() ->
     O0 = riak_object:new(<<"test">>, <<"test">>, hi),
     O1 = riak_object:increment_vclock(O0, x),
     ?assertEqual(O1, riak_object:syntactic_merge(O1, O1)).
 
-merge4_test() ->
+merge4() ->
     O0 = riak_object:new(<<"test">>, <<"test">>, hi),
     O1 = riak_object:increment_vclock(
            riak_object:update_value(O0, bye), x),
@@ -1120,7 +1183,7 @@ merge4_test() ->
     ?assertEqual(OM, OMp), %% merge should be symmetric here
     {O0, O1}.
 
-merge5_test() ->
+merge5() ->
     B = <<"buckets_are_binaries">>,
     K = <<"keys are binaries">>,
     V = <<"testvalue2">>,
@@ -1129,7 +1192,7 @@ merge5_test() ->
     ?assertEqual(riak_object:syntactic_merge(O1, O2),
                  riak_object:syntactic_merge(O2, O1)).
 
-equality1_test() ->
+inequality1() ->
     MD0 = dict:new(),
     MD = dict:store("X-Riak-Test", "value", MD0),
     O1 = riak_object:new(<<"test">>, <<"a">>, "value"),
@@ -1166,7 +1229,7 @@ inequality_key_test() ->
     O2 = riak_object:new(<<"test">>, <<"b">>, "value"),
     false = riak_object:equal(O1, O2).
 
-inequality_vclock_test() ->
+inequality_vclock() ->
     O1 = riak_object:new(<<"test">>, <<"a">>, "value"),
     false = riak_object:equal(O1, riak_object:increment_vclock(O1, foo)).
 
@@ -1194,8 +1257,8 @@ largekey_test() ->
             ok
     end.
 
-date_reconcile_test() ->
-    {O,O3} = reconcile_test(),
+date_reconcile() ->
+    {O,O3} = reconcile(),
     D = calendar:datetime_to_gregorian_seconds(
           httpd_util:convert_request_date(
             httpd_util:rfc1123_date())),
@@ -1314,7 +1377,7 @@ vclock_codec_test() ->
     [ ?assertEqual({Method, VC}, {Method, decode_vclock(encode_vclock(Method, VC))})
      || VC <- VCs, Method <- [encode_raw, encode_zlib]].
 
-dotted_values_reconcile_test() ->
+dotted_values_reconcile() ->
     {B, K} = {<<"b">>, <<"k">>},
     A = riak_object:increment_vclock(riak_object:new(B, K, <<"a">>), a),
     C = riak_object:increment_vclock(riak_object:new(B, K, <<"c">>), c),
@@ -1332,7 +1395,7 @@ dotted_values_reconcile_test() ->
     ?assertEqual(2, vclock:get_counter(z, Vclock)),
     ?assertEqual(3, length(Vclock)).
 
-weird_clocks_weird_dots_test() ->
+weird_clocks_weird_dots() ->
     %% make objects with dots / clocks that are causally the same but
     %% with different timestamps (backup - restore, riak_kv#679)
     {B, K} = {<<"b">>, <<"k">>},
@@ -1343,7 +1406,7 @@ weird_clocks_weird_dots_test() ->
 
 %% Test the case where an object with undotted values is merged with
 %% an object with dotted values.
-mixed_merge_test() ->
+mixed_merge() ->
     {B, K} = {<<"b">>, <<"k">>},
     A_VC = vclock:fresh(a, 3),
     Z_VC = vclock:fresh(b, 2),
@@ -1353,7 +1416,7 @@ mixed_merge_test() ->
     ACZ = riak_object:reconcile([A, C, Z], true),
     ?assertEqual(3, riak_object:value_count(ACZ)).
 
-mixed_merge2_test() ->
+mixed_merge2() ->
     {B, K} = {<<"b">>, <<"k">>},
     A = riak_object:new(B, K, <<"a">>),
     A1 = riak_object:increment_vclock(A, a),
@@ -1364,8 +1427,8 @@ mixed_merge2_test() ->
     ?assertEqual(2, riak_object:value_count(AZ2)),
     AZ3 = riak_object:set_contents(AZ2, [{dict:new(), <<"undotted">>} | riak_object:get_contents(AZ2)]),
     AZ4 = riak_object:syntactic_merge(AZ3, AZ2),
-    ?assertEqual(AZ3, AZ4),
-    ?assertEqual(3, riak_object:value_count(AZ4)).
+    ?assertEqual(3, riak_object:value_count(AZ4)),
+    ?assert(equal(AZ3, AZ4)).
 
 verify_contents([], []) ->
     ?assert(true);
