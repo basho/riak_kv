@@ -294,7 +294,13 @@ merge_contents(NewObject, OldObject, true) ->
     riak_kv_crdt:log_merge_errors(Bucket, Key, CRDT, Error),
     merge_acc_to_contents(MergeAcc).
 
-%% Return true if A =< B, false otherwise
+%% Optimisation. To save converting every meta dict to a list sorting,
+%% comapring, and coverting back again, we use this optimisation, that
+%% shortcuts out the meta_data comparison, if the obects aren't equal,
+%% we needn't compare meta_data at all. `compare/2' is an "ordering
+%% fun". Return true if A =< B, false otherwise.
+%%
+%% @see lists:usort/2
 compare(A=#r_content{value=VA}, B=#r_content{value=VB}) ->
     if VA < VB ->
             true;
@@ -305,6 +311,12 @@ compare(A=#r_content{value=VA}, B=#r_content{value=VB}) ->
             compare_metadata(A, B)
     end.
 
+%% Optimisation. Used by `compare/2' ordering fun. Only convert, sort,
+%% and compare the meta_data dictionaries if they are the same
+%% size. Called by an ordering function, this too is an ordering
+%% function.
+%%
+%% @see compare/2, lists:usort/3
 compare_metadata(#r_content{metadata=MA}, #r_content{metadata=MB}) ->
     ASize = dict:size(MA),
     BSize = dict:size(MB),
