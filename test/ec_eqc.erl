@@ -11,15 +11,21 @@
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
 %%====================================================================
-%% eunit test 
+%% eunit test
 %%====================================================================
 
 eqc_test_() ->
     {setup,
-     fun() -> ok end,
+     fun() ->
+             meck:new(riak_core_bucket),
+             meck:expect(riak_core_bucket, get_bucket,
+                         fun(_Bucket) ->
+                                 [dvv_enabled]
+                         end)
+     end,
      fun(_) ->
-             %% re-instate the dvv_enabled default
-             application:set_env(riak_kv, dvv_enabled, true) end,
+             meck:unload(riak_core_bucket)
+     end,
      [
       {timeout, 300000, ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop()))))}
      ]}.

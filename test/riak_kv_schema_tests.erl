@@ -45,7 +45,6 @@ basic_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.max_object_size", 52428800),
     cuttlefish_unit:assert_config(Config, "riak_kv.warn_siblings", 25),
     cuttlefish_unit:assert_config(Config, "riak_kv.max_siblings", 100),
-    cuttlefish_unit:assert_config(Config, "riak_kv.dvv_enabled", true),
 
     %% Default Bucket Properties
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.pr", 0),
@@ -60,6 +59,7 @@ basic_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.last_write_wins", false),
     cuttlefish_unit:assert_not_configured(Config, "riak_core.default_bucket_props.precommit"),
     cuttlefish_unit:assert_not_configured(Config, "riak_core.default_bucket_props.postcommit"),
+    cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.dvv_enabled", false),
     cuttlefish_unit:assert_config(Config, "riak_dt.binary_compression", 1),
     ok.
 
@@ -100,7 +100,7 @@ override_non_multi_backend_schema_test() ->
         {["object", "size", "maximum"], "100MB"},
         {["object", "siblings", "warning_threshold"], 250},
         {["object", "siblings", "maximum"], 1000},
-        {["object", "merge_strategy"], '1'},
+        {["buckets", "default",  "merge_strategy"], '2'},
         %% Default Bucket Properties
         {["buckets", "default", "pr"], quorum},
         {["buckets", "default", "r"], 2},
@@ -153,7 +153,6 @@ override_non_multi_backend_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.max_object_size", 104857600),
     cuttlefish_unit:assert_config(Config, "riak_kv.warn_siblings", 250),
     cuttlefish_unit:assert_config(Config, "riak_kv.max_siblings", 1000),
-    cuttlefish_unit:assert_config(Config, "riak_kv.dvv_enabled", false),
 
     %% Default Bucket Properties
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.pr", quorum),
@@ -166,6 +165,7 @@ override_non_multi_backend_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.basic_quorum", true),
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.allow_mult", true),
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.last_write_wins", true),
+    cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.dvv_enabled", true),
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.precommit", [
       {struct, [
                 {<<"mod">>, <<"module">>},
@@ -226,7 +226,6 @@ multi_backend_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.max_object_size", 52428800),
     cuttlefish_unit:assert_config(Config, "riak_kv.warn_siblings", 25),
     cuttlefish_unit:assert_config(Config, "riak_kv.max_siblings", 100),
-    cuttlefish_unit:assert_config(Config, "riak_kv.dvv_enabled", true),
 
     %% Default Bucket Properties
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.pr", 0),
@@ -241,6 +240,7 @@ multi_backend_test() ->
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.last_write_wins", false),
     cuttlefish_unit:assert_not_configured(Config, "riak_core.default_bucket_props.precommit"),
     cuttlefish_unit:assert_not_configured(Config, "riak_core.default_bucket_props.postcommit"),
+    cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.dvv_enabled", false),
     cuttlefish_unit:assert_config(Config, "riak_dt.binary_compression", 1),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.multi_backend_default", <<"backend_one">>),

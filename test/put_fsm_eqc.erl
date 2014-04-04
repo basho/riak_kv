@@ -116,6 +116,13 @@ setup() ->
 
     %% Start up mock servers and dependencies
     fsm_eqc_util:start_mock_servers(),
+
+    meck:new(riak_core_bucket),
+    meck:expect(riak_core_bucket, get_bucket,
+                fun(_Bucket) ->
+                        [dvv_enabled]
+                end),
+
     start_javascript(),
     State.
 
@@ -123,6 +130,7 @@ cleanup(running) ->
     application:stop(lager),
     application:unload(lager),
     cleanup_javascript(),
+    meck:unload(riak_core_bucket),
     fsm_eqc_util:cleanup_mock_servers(),
     %% Cleanup the JS manager process
     %% since it tends to hang around too long.
