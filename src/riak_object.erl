@@ -296,7 +296,7 @@ merge_contents(NewObject, OldObject, true) ->
     merge_acc_to_contents(MergeAcc).
 
 %% Optimisation. To save converting every meta dict to a list sorting,
-%% comapring, and coverting back again, we use this optimisation, that
+%% comparing, and coverting back again, we use this optimisation, that
 %% shortcuts out the meta_data comparison, if the obects aren't equal,
 %% we needn't compare meta_data at all. `compare/2' is an "ordering
 %% fun". Return true if A =< B, false otherwise.
