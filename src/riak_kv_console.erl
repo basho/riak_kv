@@ -444,7 +444,7 @@ run_reformat(M, F, A) ->
     end.
 
 bucket_type_status([TypeStr]) ->
-    Type = unicode:characters_to_binary(TypeStr, utf8),
+    Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
     bucket_type_print_status(Type, riak_core_bucket_type:status(Type)),
     bucket_type_print_props(bucket_type_raw_props(Type)).
 
@@ -470,7 +470,7 @@ bucket_type_print_props(Props) ->
     [io:format("~p: ~p~n", [K, V]) || {K, V} <- Props].
 
 bucket_type_activate([TypeStr]) ->
-    Type = unicode:characters_to_binary(TypeStr, utf8),
+    Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
     IsFirst = bucket_type_is_first(),
     bucket_type_print_activate_result(Type, riak_core_bucket_type:activate(Type), IsFirst).
 
@@ -490,7 +490,7 @@ bucket_type_print_activate_result(Type, {error, not_ready}, _IsFirst) ->
     bucket_type_print_status(Type, created).
 
 bucket_type_create([TypeStr, PropsStr]) ->
-    Type = unicode:characters_to_binary(TypeStr, utf8),
+    Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
     bucket_type_create(Type, catch mochijson2:decode(PropsStr)).
 
 bucket_type_create(Type, {struct, Fields}) ->
@@ -522,7 +522,7 @@ bucket_type_print_create_result(Type, {error, Reason}) ->
     error.
 
 bucket_type_update([TypeStr, PropsStr]) ->
-    Type = unicode:characters_to_binary(TypeStr, utf8),
+    Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
     bucket_type_update(Type, catch mochijson2:decode(PropsStr)).
 
 bucket_type_update(Type, {struct, Fields}) ->
@@ -545,7 +545,7 @@ bucket_type_print_update_result(Type, {error, Reason}) ->
     error.
 
 bucket_type_reset([TypeStr]) ->
-    Type = unicode:characters_to_binary(TypeStr, utf8),
+    Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
     bucket_type_print_reset_result(Type, riak_core_bucket_type:reset(Type)).
 
 bucket_type_print_reset_result(Type, ok) ->
