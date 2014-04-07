@@ -489,6 +489,10 @@ bucket_type_print_activate_result(Type, {error, undefined}, _IsFirst) ->
 bucket_type_print_activate_result(Type, {error, not_ready}, _IsFirst) ->
     bucket_type_print_status(Type, created).
 
+bucket_type_create([TypeStr, ""]) ->
+    Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
+    EmptyProps = {struct, [{<<"props">>, {struct, []}}]},
+    bucket_type_create(Type, EmptyProps);
 bucket_type_create([TypeStr, PropsStr]) ->
     Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
     bucket_type_create(Type, catch mochijson2:decode(PropsStr)).
