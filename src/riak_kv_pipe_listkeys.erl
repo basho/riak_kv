@@ -99,7 +99,7 @@ keysend_loop(ReqId, Partition, FittingDetails) ->
             Result = keysend(Bucket, Keys, Partition, FittingDetails),
             case Result of
                 ok ->
-                    riak_kv_vnode:ack_keys(From),
+                    _ = riak_kv_vnode:ack_keys(From),
                     keysend_loop(ReqId, Partition, FittingDetails);
                 Error ->
                     Error

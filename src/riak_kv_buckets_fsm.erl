@@ -77,10 +77,11 @@ process_results(Buckets0,
     ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [length(Buckets)], []),
     BucketsToSend = [ B  || B <- Buckets,
                              not sets:is_element(B, BucketAcc) ],
-    if
-        BucketsToSend =/= [] ->
+    case BucketsToSend =/= [] of
+        true ->
             reply({buckets_stream, BucketsToSend}, From);
-        true -> ok
+        false ->
+            ok
     end,
     {ok, StateData#state{buckets=accumulate(Buckets, BucketAcc)}};
 process_results(Buckets0,
@@ -109,7 +110,8 @@ finish(clean,
     {stop, normal, StateData}.
 
 reply(Msg, {raw, ReqId, ClientPid}) ->
-    ClientPid ! {ReqId, Msg}.
+    ClientPid ! {ReqId, Msg},
+    ok.
 
 accumulate(Entries, Set) ->
     sets:union(sets:from_list(Entries),Set).

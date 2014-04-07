@@ -133,7 +133,7 @@ maybe_fetch(false, _Req, State) ->
 process_fetch_response({ok, O}, State) ->
     #state{type=Type, mod=Mod, return_ctx=ReturnCtx} = State,
     {{Ctx0, Value}, Stats} = riak_kv_crdt:value(O, Mod),
-    [ riak_kv_stat:update(S) || S <- Stats ],
+    _ = [ riak_kv_stat:update(S) || S <- Stats ],
     Ctx = get_context(Ctx0, ReturnCtx),
     Resp = riak_pb_dt_codec:encode_fetch_response(Type, Value, Ctx, ?MOD_MAP),
     {reply, Resp, State};

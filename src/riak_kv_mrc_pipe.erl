@@ -284,7 +284,7 @@ mapred_stream_sink(Inputs, Query, Timeout) ->
                           timer={Timer,PipeRef},
                           keeps=NumKeeps}}
     catch throw:{badarg, Fitting, Reason} ->
-            riak_kv_mrc_sink:stop(Sink),
+            _ = riak_kv_mrc_sink:stop(Sink),
             {error, {Fitting, Reason}}
     end.
     
@@ -873,7 +873,7 @@ cleanup_sink({SinkPid, SinkMon}) when is_pid(SinkPid),
                                       is_reference(SinkMon) ->
     erlang:demonitor(SinkMon, [flush]),
     %% killing the sink should tear down the pipe
-    riak_kv_mrc_sink:stop(SinkPid),
+    _ = riak_kv_mrc_sink:stop(SinkPid),
     %% receive just in case the sink had sent us one last response
     receive #kv_mrc_sink{} -> ok after 0 -> ok end;
 cleanup_sink(undefined) ->
@@ -1017,11 +1017,11 @@ example_setup() ->
 example_setup(Num) when Num > 0 ->
     {ok, C} = riak:local_client(),
     C:put(riak_object:new(<<"foo">>, <<"bar">>, <<"what did you expect?">>)),
-    [C:put(riak_object:new(<<"foo">>,
+    _ = [C:put(riak_object:new(<<"foo">>,
                            list_to_binary("bar"++integer_to_list(X)),
                            list_to_binary("bar val "++integer_to_list(X))))
      || X <- lists:seq(1, Num)],
-    [C:put(riak_object:new(<<"foonum">>,
+    _ = [C:put(riak_object:new(<<"foonum">>,
                            list_to_binary("bar"++integer_to_list(X)),
                            X)) ||
         X <- lists:seq(1, Num)],
@@ -1067,7 +1067,7 @@ compat_fun(66856669, 6, Fun) ->
     {ok, fun({ok, Input, _Keydata}, Partition, FittingDetails) ->
                  Results = riak_kv_mrc_map:link_phase(
                              Input, undefined, {Bucket, Tag}),
-                 [ riak_pipe_vnode_worker:send_output(
+                 _ = [ riak_pipe_vnode_worker:send_output(
                      R, Partition, FittingDetails)
                    || R <- Results ],
                  ok;

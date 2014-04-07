@@ -215,7 +215,7 @@ init([]) ->
         ok ->
             ok;
         {error, DiagProps} ->
-            [lager:error("aae_throttle_limits/anti_entropy.throttle.limits "
+            _ = [lager:error("aae_throttle_limits/anti_entropy.throttle.limits "
                          "list fails this test: ~p\n", [Check]) ||
                 {Check, false} <- DiagProps],
             error(invalid_aae_throttle_limits)
@@ -259,7 +259,7 @@ handle_call(enable, _From, State) ->
 handle_call(disable, _From, State) ->
     {_, Opts} = settings(),
     application:set_env(riak_kv, anti_entropy, {off, Opts}),
-    [riak_kv_index_hashtree:stop(T) || {_,T} <- State#state.trees],
+    _ = [riak_kv_index_hashtree:stop(T) || {_,T} <- State#state.trees],
     {reply, ok, State};
 handle_call({get_lock, Type, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Pid, State),
@@ -392,7 +392,7 @@ reload_hashtrees(Ring, State=#state{trees=Trees}) ->
     Existing = dict:from_list(Trees),
     MissingIdx = [Idx || Idx <- Indices,
                          not dict:is_key(Idx, Existing)],
-    [riak_kv_vnode:request_hashtree_pid(Idx) || Idx <- MissingIdx],
+    _ = [riak_kv_vnode:request_hashtree_pid(Idx) || Idx <- MissingIdx],
     State.
 
 add_hashtree_pid(Index, Pid, State) ->
@@ -499,7 +499,7 @@ maybe_tick(State) ->
         false ->
             %% Ensure we do not have any running index_hashtrees, which can
             %% happen when disabling anti-entropy on a live system.
-            [riak_kv_index_hashtree:stop(T) || {_,T} <- State#state.trees],
+            _ = [riak_kv_index_hashtree:stop(T) || {_,T} <- State#state.trees],
             NextState = State
     end,
     schedule_tick(),

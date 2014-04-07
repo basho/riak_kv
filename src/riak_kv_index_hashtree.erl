@@ -276,7 +276,7 @@ handle_call({update_tree, Id}, From, State) ->
                fun(Tree) ->
                        {SnapTree, Tree2} = hashtree:update_snapshot(Tree),
                        spawn_link(fun() ->
-                                          hashtree:update_perform(SnapTree),
+                                          _ = hashtree:update_perform(SnapTree),
                                           gen_server:reply(From, ok)
                                   end),
                        {noreply, Tree2}
@@ -513,8 +513,8 @@ index_fold_fun(Tree) ->
                    [if_missing], Tree)
     end.
 
-%% @Doc the 2i index hashtree as a Magic index_n of {0, 0}
--spec index_2i_n() -> index_n().
+%% @doc the 2i index hashtree as a Magic index_n of {0, 0}
+-spec index_2i_n() -> ?INDEX_2I_N.
 index_2i_n() ->
     ?INDEX_2I_N.
 
@@ -586,8 +586,8 @@ do_build_finished(State=#state{index=Index, built=_Pid}) ->
     lager:debug("Finished build (b): ~p", [Index]),
     {_,Tree0} = hd(State#state.trees),
     BuildTime = get_build_time(Tree0),
-    hashtree:write_meta(<<"built">>, <<1>>, Tree0),
-    hashtree:write_meta(<<"build_time">>, term_to_binary(BuildTime), Tree0),
+    _ = hashtree:write_meta(<<"built">>, <<1>>, Tree0),
+    _ = hashtree:write_meta(<<"build_time">>, term_to_binary(BuildTime), Tree0),
     riak_kv_entropy_info:tree_built(Index, BuildTime),
     State#state{built=true, build_time=BuildTime, expired=false}.
 
@@ -811,7 +811,7 @@ clear_tree(State=#state{index=Index}) ->
 destroy_trees(State) ->
     State2 = close_trees(State),
     {_,Tree0} = hd(State2#state.trees),
-    hashtree:destroy(Tree0),
+    _ = hashtree:destroy(Tree0),
     State2.
 
 -spec maybe_build(state()) -> state().
@@ -846,7 +846,7 @@ build_or_rehash(Self, Locked, Type, #state{index=Index, trees=Trees}) ->
             gen_server:cast(Self, build_finished);
         {true, rehash} ->
             lager:debug("Starting rehash: ~p", [Index]),
-            [hashtree:rehash_tree(T) || {_,T} <- Trees],
+            _ = [hashtree:rehash_tree(T) || {_,T} <- Trees],
             lager:debug("Finished rehash (a): ~p", [Index]),
             gen_server:cast(Self, build_finished);
         _ ->

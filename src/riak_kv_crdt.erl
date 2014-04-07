@@ -230,7 +230,7 @@ counter_op(N) ->
 %%
 %% @see split_ops/1 for more explanation
 -spec update_crdt(orddict:orddict(), riak_dt:actor(), crdt_op() | non_neg_integer()) ->
-                         orddict:ordddict() | precondition_error().
+                         orddict:orddict() | precondition_error().
 update_crdt(Dict, Actor, Amt) when is_integer(Amt) ->
     %% Handle legacy 1.4 counter operation, upgrade to current OP
     CounterOp = counter_op(Amt),

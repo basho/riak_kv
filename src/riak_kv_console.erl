@@ -216,7 +216,7 @@ reip([OldNode, NewNode]) ->
         %%
         %% Do *not* convert to use riak_core_ring_manager:ring_trans.
         %%
-        application:load(riak_core),
+        ok = application:load(riak_core),
         RingStateDir = app_helper:get_env(riak_core, ring_state_dir),
         {ok, RingFile} = riak_core_ring_manager:find_latest_ringfile(),
         BackupFN = filename:join([RingStateDir, filename:basename(RingFile)++".BAK"]),
@@ -224,7 +224,7 @@ reip([OldNode, NewNode]) ->
         io:format("Backed up existing ring file to ~p~n", [BackupFN]),
         Ring = riak_core_ring_manager:read_ringfile(RingFile),
         NewRing = riak_core_ring:rename_node(Ring, OldNode, NewNode),
-        riak_core_ring_manager:do_write_ringfile(NewRing),
+        ok = riak_core_ring_manager:do_write_ringfile(NewRing),
         io:format("New ring file written to ~p~n",
             [element(2, riak_core_ring_manager:find_latest_ringfile())])
     catch
@@ -282,7 +282,7 @@ cluster_info([OutFile|Rest]) ->
 reload_code([]) ->
     case app_helper:get_env(riak_kv, add_paths) of
         List when is_list(List) ->
-            [ reload_path(filename:absname(Path)) || Path <- List ],
+            _ = [ reload_path(filename:absname(Path)) || Path <- List ],
             ok;
         _ -> ok
     end.
@@ -296,7 +296,7 @@ reload_file(Filename) ->
     case code:is_loaded(Mod) of
         {file, Filename} ->
             code:soft_purge(Mod),
-            code:load_file(Mod),
+            {module, Mod} = code:load_file(Mod),
             io:format("Reloaded module ~w from ~s.~n", [Mod, Filename]);
         {file, Other} ->
             io:format("CONFLICT: Module ~w originally loaded from ~s, won't reload from ~s.~n", [Mod, Other, Filename]);
@@ -317,7 +317,7 @@ aae_exchange_status(ExchangeInfo) ->
     io:format("~s~n", [string:centre(" Exchanges ", 79, $=)]),
     io:format("~-49s  ~-12s  ~-12s~n", ["Index", "Last (ago)", "All (ago)"]),
     io:format("~79..-s~n", [""]),
-    [begin
+    _ = [begin
          Now = os:timestamp(),
          LastStr = format_timestamp(Now, LastTS),
          AllStr = format_timestamp(Now, AllTS),
@@ -333,7 +333,7 @@ aae_repair_status(ExchangeInfo) ->
                                       string:centre("Mean", 8),
                                       string:centre("Max", 8)]),
     io:format("~79..-s~n", [""]),
-    [begin
+    _ = [begin
          io:format("~-49b  ~s  ~s  ~s~n", [Index,
                                            string:centre(integer_to_list(Last), 8),
                                            string:centre(integer_to_list(Mean), 8),
@@ -346,7 +346,7 @@ aae_tree_status(TreeInfo) ->
     io:format("~s~n", [string:centre(" Entropy Trees ", 79, $=)]),
     io:format("~-49s  Built (ago)~n", ["Index"]),
     io:format("~79..-s~n", [""]),
-    [begin
+    _ = [begin
          Now = os:timestamp(),
          BuiltStr = format_timestamp(Now, BuiltTS),
          io:format("~-49b  ~s~n", [Index, BuiltStr]),
@@ -643,9 +643,12 @@ repair_2i(Args) ->
             case length(IdxList) < 5 of
                 true ->
                     io:format("Will repair 2i on these partitions:\n", []),
-                    [io:format("\t~p\n", [Idx]) || Idx <- IdxList];
+                    _ = [io:format("\t~p\n", [Idx]) || Idx <- IdxList],
+                    ok;
                 false ->
-                    io:format("Will repair 2i data on ~p partitions\n", [length(IdxList)])
+                    io:format("Will repair 2i data on ~p partitions\n", 
+                              [length(IdxList)]),
+                    ok
             end,
             Ret = riak_kv_2i_aae:start(IdxList, DutyCycle),
             case Ret of
