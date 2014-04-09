@@ -65,7 +65,8 @@ fetch_response_to_json(Type, Value, Context, Mods) ->
 -spec update_request_from_json(toplevel_type(), mochijson2:json_term(), type_mappings()) -> update().
 update_request_from_json(Type, JSON0, Mods) ->
     {JSON, Context} = extract_context(JSON0),
-    {Type, op_from_json(Type, JSON, Mods), Context}.
+    {ok, Updates, Dependents} = op_from_json(Type, JSON, Mods),
+    {Type, Updates, Dependents, Context}.
 
 %% NB we assume that the internal format is well-formed and don't guard it.
 value_to_json(counter, Int, _) -> Int;
@@ -135,10 +136,10 @@ field_from_json(Bin) when is_binary(Bin) ->
     end.
 
 -spec op_from_json(embedded_type(), mochijson2:json_term(), type_mappings()) -> embedded_type_op().
-op_from_json(flag, Op, _Mods) -> flag_op_from_json(Op);
-op_from_json(register, Op, _Mods) -> register_op_from_json(Op);
-op_from_json(counter, Op, _Mods) -> counter_op_from_json(Op);
-op_from_json(set, Op, _Mods) -> set_op_from_json(Op);
+op_from_json(flag, Op, _Mods) -> {ok, flag_op_from_json(Op), []};
+op_from_json(register, Op, _Mods) -> {ok, register_op_from_json(Op), []};
+op_from_json(counter, Op, _Mods) -> {ok, counter_op_from_json(Op), []};
+op_from_json(set, Op, _Mods) -> {ok, set_op_from_json(Op), []};
 op_from_json(map, Op, Mods) -> map_op_from_json(Op, Mods).
 
 %% Map: {"update":{Field:Op, ...}}
@@ -162,18 +163,52 @@ map_op_from_json({struct, Ops0}=InOp, Mods) ->
                RemoveList when is_list(RemoveList) -> RemoveList;
                _ -> bad_op(map, InOp)
            end,
-    {update, [ {remove, field_to_mod(field_from_json(Field), Mods)} || Field <- Removes ] ++
-             [ {add, field_to_mod(field_from_json(Field), Mods)} || Field <- Adds ] ++
-         [ map_update_op_from_json(Update, Mods) || Update <- Updates ]};
+    AddOps = generate_add_operations(Adds, Mods),
+    RemoveOps = generate_remove_operations(Removes, Mods),
+    {UpdateOps, DependentOps} = generate_update_operations(Updates, Mods),
+    lager:warning("UpdateOps: ~p", [UpdateOps]),
+    lager:warning("DependentOps: ~p", [DependentOps]),
+    {ok, {update, RemoveOps ++ AddOps ++ UpdateOps}, DependentOps};
 map_op_from_json(Op, _Mods) ->
     bad_op(map, Op).
 
+generate_add_operations(Adds, Mods) ->
+    [{add, field_to_mod(field_from_json(Field), Mods)} || Field <- Adds].
 
--spec map_update_op_from_json({mochijson2:json_string(), mochijson2:json_term()}, type_mappings()) ->
-                                     {update, map_field(), embedded_type_op()}.
+generate_remove_operations(Removes, Mods) ->
+    [{remove, field_to_mod(field_from_json(Field), Mods)} || Field <- Removes].
+
+generate_update_operations(Updates0, Mods) ->
+    lists:foldl(fun(Update, {Updates, Dependencies}) ->
+                {U, D} = map_update_op_from_json(Update, Mods),
+                {Updates ++ [U], Dependencies ++ [D]}
+        end, {[], []}, Updates0).
+
 map_update_op_from_json({JSONField, Op}, Mods) ->
-    Field = {_Name, Type} = field_from_json(JSONField),
-    {update, field_to_mod(Field, Mods), op_from_json(Type, Op, Mods)}.
+    Field = {Name, Type} = field_from_json(JSONField),
+
+    %% Legacy, composition by embedding.
+    {ok, PreviousOp, []} = op_from_json(Type, Op, Mods),
+    Previous = {update,
+                field_to_mod(Field, Mods),
+                PreviousOp},
+    lager:warning("Previous: ~p", [Previous]),
+
+    %% Updated, composition by reference.
+    FieldMod = field_to_mod({Name, riak_dt_lwwreg}, Mods),
+    Reference = crypto:hash(sha, term_to_binary(FieldMod)),
+    {_, ReferencedType} = field_to_mod(Field, Mods),
+    Current = {update, FieldMod, {assign, {reference, ReferencedType, Reference}}},
+    lager:warning("Current: ~p", [Current]),
+
+    %% Dependent write, related to the value which has been composed by
+    %% reference.
+    {ok, DependentOp, []} = op_from_json(Type, Op, Mods),
+    {_DependentName, DependentType} = field_to_mod(Field, Mods),
+    Dependent = {DependentType, Reference, DependentOp},
+    lager:warning("Dependent: ~p", [Dependent]),
+
+    {Current, Dependent}.
 
 -spec flag_op_from_json(binary()) -> flag_op().
 flag_op_from_json(<<"enable">>) -> enable;

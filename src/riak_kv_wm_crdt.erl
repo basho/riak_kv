@@ -362,44 +362,118 @@ process_post(RD0, Ctx0=#ctx{client=C, bucket_type=T, bucket=B, module=Mod}) ->
     case check_post_body(RD0, Ctx0) of
         {error, RD} ->
             {{halt, 400}, RD, Ctx0};
-        {ok, {_Type, Op, OpCtx}} ->
+        {ok, {_Type, Op, DepOps, OpCtx}} ->
+            %% Setup options for all writes.
+            Options = make_options(Ctx0),
+
+            %% Update dependent objects.
+            Results = [write_dependency(C,
+                                        {T, B},
+                                        Key,
+                                        Ops,
+                                        Type,
+                                        Options,
+                                        OpCtx)
+                       || {Type, Key, Ops} <- DepOps],
+            lager:warning("Dependent write results: ~p", [Results]),
+
+            %% Setup manifest write.
             {RD, Ctx} = maybe_generate_key(RD0, Ctx0),
             O = riak_kv_crdt:new({T, B}, Ctx#ctx.key, Mod),
-            Options0 = make_options(Ctx),
             CrdtOp = make_operation(Mod, Op, OpCtx),
-            Options = [{crdt_op, CrdtOp},
-                       {retry_put_coordinator_failure,false}|Options0],
-            case C:put(O, Options) of
-                ok ->
-                    {true, RD, Ctx};
-                {ok, RObj} ->
-                    {Body, RD1, Ctx1} = produce_json(RD, Ctx#ctx{data=RObj}),
-                    {true,
-                     wrq:set_resp_body(Body, wrq:set_resp_header(
-                                               ?HEAD_CTYPE, "application/json",
-                                               RD1)),
-                     Ctx1};
-                {error, Reason} ->
-                    handle_common_error(Reason, RD, Ctx)
+            PutOptions = [{crdt_op, CrdtOp},
+                          {retry_put_coordinator_failure,false}|Options],
+
+            %% Verify the dependent writes don't fail.
+            case lists:any(fun(E) -> E =:= error end, Results) of
+                true ->
+                    halt_with_message(503,
+                                      "Too many write failures to satisfy W/DW\n",
+                                      RD,
+                                      Ctx);
+                false ->
+                    %% Update manifest object.
+                    case C:put(O, PutOptions) of
+                        ok ->
+                            {true, RD, Ctx};
+                        {ok, RObj} ->
+                            {Body, RD1, Ctx1} = produce_json(RD, Ctx#ctx{data=RObj}),
+                            {true,
+                             wrq:set_resp_body(Body, wrq:set_resp_header(
+                                                       ?HEAD_CTYPE, "application/json",
+                                                       RD1)),
+                             Ctx1};
+                        {error, Reason} ->
+                            handle_common_error(Reason, RD, Ctx)
+                    end
             end
+    end.
+
+write_dependency(C, {T, B}, Key, Op, Mod, Options, OpCtx) ->
+    lager:warning("Key: ~p Op: ~p Mod: ~p", [Key, Op, Mod]),
+
+    %% TODO: Need system buckets for bucket type support.
+    O = riak_kv_crdt:new({T, B}, Key, Mod),
+    CrdtOp = make_operation(Mod, Op, OpCtx),
+    PutOptions = [{crdt_op, CrdtOp},
+                  {retry_put_coordinator_failure,false}|Options],
+
+    case C:put(O, PutOptions) of
+        ok ->
+            lager:warning("Dependency write succeeded!", []),
+            ok;
+        {ok, _RObj} ->
+            lager:warning("Dependency write succeeded!", []),
+            ok;
+        {error, Reason} ->
+            lager:warning("Dependency write failed: ~p", [Reason]),
+            error
     end.
 
 produce_json(RD, Ctx=#ctx{module=Mod, data=RObj, include_context=I}) ->
     Type = riak_kv_crdt:from_mod(Mod),
     {{RespCtx, Value}, Stats} = riak_kv_crdt:value(RObj, Mod),
+
+    %% Retrieve dependent objects.
+    lager:warning("CRDT Value: ~p", [Value]),
+    Dereferenced = [maybe_retrieve_reference(Ctx, V) || V <- Value],
+    lager:warning("CRDT Dereferenced Value: ~p", [Dereferenced]),
+
     [ riak_kv_stat:update(S) || S <- Stats ],
     Body = riak_kv_crdt_json:fetch_response_to_json(
-                     Type, Value, get_context(RespCtx,I), ?MOD_MAP),
+                     Type, Dereferenced, get_context(RespCtx,I), ?MOD_MAP),
     {mochijson2:encode(Body), RD, Ctx}.
+
+maybe_retrieve_reference(Ctx=#ctx{client=C, bucket_type=T, bucket=B, module=Mod},
+                         {{Name, riak_dt_lwwreg}, {reference, Type, Reference}}) ->
+    lager:warning("Found reference: ~p", [Reference]),
+
+    Options = make_options(Ctx),
+    Value = case C:get({T,B}, Reference, [{crdt_op, Mod}|Options]) of
+        {ok, O} ->
+            lager:warning("Found object: ~p", [O]),
+            {{_RespCtx, V}, _Stats} = riak_kv_crdt:value(O, Type),
+            lager:warning("Found value: ~p", [V]),
+            V;
+        {error, Reason} ->
+            lager:warning("Found error: ~p", [Reason]),
+            riak_kv_crdt:new({T, B}, Name, Type)
+    end,
+
+    {{Name, Type}, Value};
+maybe_retrieve_reference(_Ctx, Object) ->
+    Object.
 
 %% Internal functions
 
 check_post_body(RD, #ctx{crdt_type=CRDTType}) ->
     try
         JSON = mochijson2:decode(wrq:req_body(RD)),
-        Data = {CRDTType, _Op, _Context} =
-            riak_kv_crdt_json:update_request_from_json(CRDTType, JSON,
+        Data = {CRDTType, _Ops, _DependentOps, _Context} =
+            riak_kv_crdt_json:update_request_from_json(CRDTType,
+                                                       JSON,
                                                        ?MOD_MAP),
+        lager:warning("Data: ~p", [Data]),
         {ok, Data}
     catch
         throw:{invalid_operation, {BadType, BadOp}} ->
