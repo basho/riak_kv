@@ -77,7 +77,7 @@ forbidden(RD, State) ->
                                 {false, Error, _} ->
                                     RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
                                     {true, wrq:append_to_resp_body(
-                                             list_to_binary(Error), RD1), State};
+                                             unicode:characters_to_binary(Error, utf8, utf8), RD1), State};
                                 {true, _} ->
                                     {false, RD, State}
                             end;

@@ -139,7 +139,7 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
             case Res of
                 {false, Error, _} ->
                     RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
-                    {true, wrq:append_to_resp_body(list_to_binary(Error), RD1), Ctx};
+                    {true, wrq:append_to_resp_body(unicode:characters_to_binary(Error, utf8, utf8), RD1), Ctx};
                 {true, _} ->
                     forbidden_check_bucket_type(RD, Ctx)
             end
