@@ -67,7 +67,9 @@ eqc_test_() ->
      fun(_) ->
              meck:unload(riak_core_bucket)
      end,
-     [{timeout, 60, ?_assertEqual(true, eqc:quickcheck(eqc:numtests(1000, ?QC_OUT(prop_merge()))))}]
+     %% Kelly and Andrew T. have both recommended setting the eunit
+     %% timeout at 2x the `eqc:testing_time'.
+     [{timeout, 120, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(60, ?QC_OUT(prop_merge()))))}]
     }.
 
 run() ->
