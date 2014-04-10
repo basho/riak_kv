@@ -29,6 +29,7 @@
          compute_exchange_info/2,
          compute_tree_info/0,
          compute_tree_info/1,
+         exchanges/2,
          all_exchanges/2]).
 
 -define(ETS, ets_riak_kv_entropy).
@@ -131,6 +132,20 @@ compute_tree_info(Type) ->
     KnownInfo = [{Index, Info#index_info.build_time}
                  || {{Type2, Index}, Info} <- all_index_info(), Type2 == Type],
     merge_to_first(KnownInfo, Defaults).
+
+%% Return information about all exchanges for given index/index_n
+exchanges(Index, IndexN) ->
+    case lists:keyfind({riak_kv, Index}, 1, all_index_info()) of
+        {_, #index_info{exchanges=Exchanges}} ->
+            [{Idx, Time, Repaired}
+             || {{Idx,IdxN}, #exchange_info{time=Time,
+                                            repaired=Repaired}} <- Exchanges,
+                IdxN =:= IndexN,
+                Time =/= undefined];
+        _ ->
+            %% TODO: Should this really be empty list?
+            []
+    end.
 
 %%%===================================================================
 %%% Internal functions

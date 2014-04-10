@@ -579,6 +579,18 @@ handle_command({rehash, Bucket, Key}, _, State=#state{mod=Mod, modstate=ModState
             delete_from_hashtree(Bucket, Key, State)
     end,
     {noreply, State};
+handle_command({ensemble_repair, BKey, Target, From}, _Sender,
+               State=#state{mod=Mod, modstate=ModState}) ->
+    case do_get_term(BKey, Mod, ModState) of
+        {ok, Obj} ->
+            {Partition, Node} = Target,
+            Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Partition),
+            {Proxy, Node} ! {ensemble_repair, BKey, Obj, From};
+        _ ->
+            %% TODO: Send back actual error/reason?
+            riak_kv_ensemble_backend:reply(From, {failed, local_get_failed})
+    end,
+    {noreply, State};
 
 handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
                State=#state{mod=Mod, modstate=ModState}) ->
@@ -1017,6 +1029,11 @@ handle_info({set_concurrency_limit, Lock, Limit}, State) ->
     try_set_concurrency_limit(Lock, Limit),
     {ok, State};
 
+handle_info({ensemble_sync, From}, State) ->
+    %% TODO: Maybe check AAE tree here?
+    riak_kv_ensemble_backend:reply(From, ok),
+    {ok, State};
+
 handle_info({ensemble_ping, From}, State) ->
     riak_ensemble_backend:pong(From),
     {ok, State};
@@ -1057,6 +1074,33 @@ handle_info({ensemble_put, Key, Obj, From}, State=#state{handoff_target=HOTarget
             {ok, State2};
         Fwd when is_atom(Fwd) ->
             forward_put({Idx, Fwd}, Key, Obj, From),
+            {ok, State}
+    end;
+
+handle_info({ensemble_repair, Key, Obj, From}, State=#state{idx=_Idx, forward=Fwd}) ->
+    case Fwd of
+        undefined ->
+            %% TODO: Cleanup
+            {reply, {r, Retval, _, _}, State2} = do_get(undefined, Key, undefined, State),
+            case Retval of
+                {ok, Current} ->
+                    case riak_kv_ensemble_backend:obj_newer(Obj, Current) of
+                        true ->
+                            %% TODO: Refactor
+                            handle_info({ensemble_put, Key, Obj, From}, State2);
+                        false ->
+                            riak_kv_ensemble_backend:reply(From, Current),
+                            {ok, State2}
+                    end;
+                {error, notfound} ->
+                    handle_info({ensemble_put, Key, Obj, From}, State2);
+                Error ->
+                    riak_kv_ensemble_backend:reply(From, {failed, {remote, Error}}),
+                    {ok, State2}
+            end;
+        _Fwd ->
+            %% TODO: Actually forward
+            riak_kv_ensemble_backend:reply(From, {failed, forwarding}),
             {ok, State}
     end;
 
