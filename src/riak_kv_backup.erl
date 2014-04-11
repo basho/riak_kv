@@ -152,30 +152,9 @@ traverse_backup({Cont, Terms}, VisitorFun, Count) when is_list(Terms) ->
 
 read_and_restore_function(Client, BinTerm) ->
     Obj = binary_to_term(BinTerm),
-    Bucket = riak_object:bucket(Obj),
-    Key = riak_object:key(Obj),
-    % Data Cleaning...
-    Obj1 = make_binary_bucket(Bucket, Key, Obj),
-
     %% Store the object; be sure to tell the FSM not to update last modified!
-    Response = Client:put(Obj1,1,1,1200000, [asis,{update_last_modified, false}]),
+    Response = Client:put(Obj,1,1,1200000, [asis,{update_last_modified, false}]),
     {continue, Response}.
-   
-%%% DATA CLEANING %%% 
-    
-%% If the bucket name is an atom, convert it to a binary...
-make_binary_bucket(Bucket, Key, OriginalObj) when is_atom(Bucket) ->
-    Bucket1 = list_to_binary(atom_to_list(Bucket)),
-    OriginalContents = riak_object:get_contents(OriginalObj),
-    OriginalVClock = riak_object:vclock(OriginalObj),
-
-    % We can't change the bucket name without creating a new object...
-    NewObj = riak_object:new(Bucket1, Key, placeholder),
-    NewObj1 = riak_object:set_contents(NewObj, OriginalContents),
-    _NewObj2 = riak_object:set_vclock(NewObj1, OriginalVClock);
-    
-%% If the bucket name is a binary, just pass it on through...
-make_binary_bucket(Bucket, _Key, Obj) when is_binary(Bucket) -> Obj.
 
 %% @private
 %% Try to reach the specified node, throw exception on failure.
