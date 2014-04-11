@@ -36,7 +36,8 @@
 -endif.
 
 -type prop() :: {PropName::atom(), PropValue::any()}.
--type error() :: {PropName::atom(), ErrorReason::atom()}.
+-type error_reason() :: atom() | string().
+-type error() :: {PropName::atom(), ErrorReason::error_reason()}.
 -type props() :: [prop()].
 -type errors() :: [error()].
 
@@ -384,7 +385,7 @@ validate_update_dt_props(New, Valid, Invalid) ->
 end.
 
 %% @private just grab the allow_mult value if it exists
--spec allow_mult(props()) -> boolean().
+-spec allow_mult(props()) -> boolean() | 'undefined' | 'error'.
 allow_mult(Props) ->
     case proplists:get_value(allow_mult, Props) of
         undefined ->
