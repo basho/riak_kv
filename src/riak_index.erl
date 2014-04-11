@@ -74,8 +74,7 @@
 -type last_result() :: {value(), key()} | key().
 -type value() :: binary() | integer().
 -type key() :: binary().
--opaque continuation() :: binary() | undefined. %% encoded last_result().
--export_type([continuation/0]).
+-type continuation() :: binary() | undefined. %% encoded last_result().
 
 -type query_version() :: v1 | v2 | v3.
 mapred_index(Dest, Args) ->
