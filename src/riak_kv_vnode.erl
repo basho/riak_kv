@@ -1016,6 +1016,10 @@ handle_info({set_concurrency_limit, Lock, Limit}, State) ->
     try_set_concurrency_limit(Lock, Limit),
     {ok, State};
 
+handle_info({ensemble_ping, From}, State) ->
+    riak_ensemble_backend:pong(From),
+    {ok, State};
+
 handle_info({ensemble_get, Key, From}, State=#state{idx=Idx, forward=Fwd}) ->
     case Fwd of
         undefined ->

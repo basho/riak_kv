@@ -22,7 +22,6 @@
 %% Implementation of {@link riak_ensemble_backend} behavior that
 %% connects riak_ensemble to riak_kv vnodes. 
 %%
-%% TODO: Move to riak_kv. Before PR, document more.
 
 -module(riak_kv_ensemble_backend).
 -behaviour(riak_ensemble_backend).
@@ -30,7 +29,7 @@
 -export([init/3, new_obj/4]).
 -export([obj_epoch/1, obj_seq/1, obj_key/1, obj_value/1]).
 -export([set_obj_epoch/2, set_obj_seq/2, set_obj_value/2]).
--export([get/3, put/4, tick/5]).
+-export([get/3, put/4, tick/5, ping/2]).
 -export([sync_request/2, sync/2]).
 -export([reply/2]).
 
@@ -164,6 +163,7 @@ sync(_, State) ->
 
 -spec tick(epoch(), seq(), peer_id(), views(), state()) -> state().
 tick(_Epoch, _Seq, _Leader, Views, State=#state{id=Id}) ->
+    %% TODO: Should this entire function be async?
     {{kv, Idx, N, _}, _} = Id,
     Latest = hd(Views),
     {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
@@ -194,3 +194,9 @@ maybe_async_update(Changes, State=#state{async=Async}) ->
                            end),
             State#state{async=Async2}
     end.
+
+%%===================================================================
+
+ping(From, State=#state{proxy=Proxy}) ->
+    catch Proxy ! {ensemble_ping, From},
+    {async, State}.
