@@ -61,7 +61,7 @@
          get_build_time/1]).
 
 -type index() :: non_neg_integer().
--type index_n() :: {index(), pos_integer()}.
+-type index_n() :: {index(), non_neg_integer()}.
 -type orddict() :: orddict:orddict().
 -type proplist() :: proplists:proplist().
 -type riak_object_t2b() :: binary().
