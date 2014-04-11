@@ -185,7 +185,7 @@ maybe_log_sibling_crdts(_, _, _) ->
 %% type-to-type and store a single sibling per-type If a non-CRDT data
 %% are present, keep them as sibling values
 -spec merge_contents(ro_contents()) ->
-                            {crdts(), ro_contents()}.
+    {crdts(), ro_contents(), Errors::list()}.
 merge_contents(Contents) ->
     lists:foldl(fun merge_value/2,
                 {orddict:new(), [], []},
@@ -193,8 +193,8 @@ merge_contents(Contents) ->
 
 %% @doc if the content is a CRDT, de-binary it, merge it and store the
 %% most merged value in the accumulator dictionary.
--spec merge_value(ro_content(), {crdts(), ro_contents()}) ->
-                         {crdts(), ro_contents()}.
+-spec merge_value(ro_content(), {crdts(), ro_contents(), Errors::list()}) ->
+    {crdts(), ro_contents(), Errors::list()}.
 merge_value({MD, <<?TAG:8/integer, Version:8/integer, CRDTBin/binary>>=Content},
             {Dict, NonCRDTSiblings, Errors}) ->
     case deserialize_crdt(Version, CRDTBin) of
