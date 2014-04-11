@@ -156,7 +156,7 @@ init([From, Bucket, Key, Options0, Monitor]) ->
                        timing = riak_kv_fsm_timing:add_timing(prepare, []),
                        startnow = StartNow},
     (Monitor =:= true) andalso riak_kv_get_put_monitor:get_fsm_spawned(self()),
-    Trace = application:get_env(riak_kv, fsm_trace_enabled),
+    Trace = app_helper:get_env(riak_kv, fsm_trace_enabled),
     case Trace of 
         true ->
             riak_core_dtrace:put_tag([Bucket, $,, Key]),
@@ -315,7 +315,7 @@ preflist_for_tracing(Preflist) ->
     %% TODO: We can see entire preflist (more than 4 nodes) if we concatenate
     %%       all info into a single string.
     [if is_atom(Nd) ->
-             [atom2list(Nd), $,, integer_to_list(Idx)];
+             [atom_to_list(Nd), $,, integer_to_list(Idx)];
         true ->
              <<>>                          % eunit test
      end || {Idx, Nd} <- lists:sublist(Preflist, 4)].
@@ -615,11 +615,6 @@ add_timing(Stage, State = #state{timing = Timing}) ->
 details() ->
     [timing,
      vnodes].
-
-atom2list(A) when is_atom(A) ->
-    atom_to_list(A);
-atom2list(P) when is_pid(P)->
-    pid_to_list(P).                             % eunit tests
 
 -ifdef(TEST).
 -define(expect_msg(Exp,Timeout),
