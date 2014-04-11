@@ -234,17 +234,12 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val,
 %% secondary indexing and the_IndexSpecs parameter
 %% is ignored.
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
-                    {ok, state()} |
-                    {error, term(), state()}.
+                    {ok, state()}.
 delete(Bucket, Key, _IndexSpecs, 
        #state{ref=Ref, key_vsn=KeyVsn}=State) ->
     BitcaskKey = make_bk(KeyVsn, Bucket, Key),
-    case bitcask:delete(Ref, BitcaskKey) of
-        ok ->
-            {ok, State};
-        {error, Reason} ->
-            {error, Reason, State}
-    end.
+    ok = bitcask:delete(Ref, BitcaskKey),
+    {ok, State}.
 
 %% @doc Fold over all the buckets.
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
