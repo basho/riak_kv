@@ -585,12 +585,13 @@ handle_command({ensemble_repair, BKey, Target, From}, _Sender,
         {ok, Obj} ->
             {Partition, Node} = Target,
             Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Partition),
-            {Proxy, Node} ! {ensemble_repair, BKey, Obj, From};
+            {Proxy, Node} ! {ensemble_repair, BKey, Obj, From},
+            {noreply, State};
         _ ->
             %% TODO: Send back actual error/reason?
-            riak_kv_ensemble_backend:reply(From, {failed, local_get_failed})
-    end,
-    {noreply, State};
+            riak_kv_ensemble_backend:reply(From, {failed, local_get_failed}),
+            {noreply, State}
+    end;
 
 handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
                State=#state{mod=Mod, modstate=ModState}) ->
