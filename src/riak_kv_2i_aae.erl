@@ -492,7 +492,7 @@ remove_tmp_tree(Partition, Tree) ->
     hashtree:destroy(Tree).
 
 %% @doc Run exchange between the temporary 2i tree and the vnode's 2i tree.
--spec do_exchange(integer(), reference(), hashtree:hashtree(), pid()) ->
+-spec do_exchange(integer(), eleveldb:db_ref(), hashtree:hashtree(), pid()) ->
     {ok, integer()} | {error, any()}.
 do_exchange(Partition, DBRef, TmpTree0, TreePid) ->
     lager:info("Reconciling 2i data"),
