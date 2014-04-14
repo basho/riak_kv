@@ -864,7 +864,8 @@ binary_version(<<131,_/binary>>) -> v0;
 binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 
 %% @doc Convert binary object to riak object
--spec from_binary(bucket(),key(),binary()) -> riak_object().
+-spec from_binary(bucket(),key(),binary()) ->
+    riak_object() | {error, 'bad_object_format'}.
 from_binary(_B,_K,<<131, _Rest/binary>>=ObjTerm) ->
     binary_to_term(ObjTerm);
 from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
