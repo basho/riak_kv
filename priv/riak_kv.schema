@@ -598,3 +598,25 @@ end
     {default, off},
     hidden
 ]}.
+
+%% @doc Time in between the checks that trigger Bitcask merges.
+{mapping, "bitcask.merge_check_interval", "riak_kv.bitcask_merge_check_interval", [
+  {default, "3m"},
+  {datatype, {duration, ms}},
+  hidden
+]}.
+
+%% @doc Jitter used to randomize the time in between the checks that trigger
+%% Bitcask merges.
+{mapping, "bitcask.merge_check_jitter", "riak_kv.bitcask_merge_check_jitter", [
+  {default, "30%"},
+  {datatype, {percent, float}},
+  hidden
+]}.
+
+%% @doc Maximum amount of data to merge in one go in the Bitcask backend.
+{mapping, "bitcask.max_merge_size", "riak_kv.bitcask_max_merge_size", [
+  {default, "100GB"},
+  {datatype, bytesize},
+  hidden
+]}.
