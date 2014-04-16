@@ -1,9 +1,106 @@
+riak_core_pb.erl:46: Guard test is_list(Records::tuple()) can never succeed
+riak_core_pb.erl:69: The pattern <_, 'optional', 'undefined', _, _> can never match the type <1 | 2 | 3,'required',_,'bytes',[]>
+riak_core_pb.erl:71: The pattern <_, 'repeated', 'undefined', _, _> can never match the type <1 | 2 | 3,'required',_,'bytes',[]>
+riak_core_pb.erl:73: The pattern <_, 'repeated_packed', 'undefined', _, _> can never match the type <1 | 2 | 3,'required',_,'bytes',[]>
+riak_core_pb.erl:74: The pattern <_, 'repeated_packed', [], _, _> can never match the type <1 | 2 | 3,'required',_,'bytes',[]>
+riak_core_pb.erl:79: The pattern <_, 'repeated', [], _, Acc> can never match the type <1 | 2 | 3,'required',_,'bytes',[]>
+riak_core_pb.erl:82: The pattern <FNum, 'repeated', [Head | Tail], Type, Acc> can never match the type <1 | 2 | 3,'required',_,'bytes',[]>
+riak_core_pb.erl:85: The pattern <FNum, 'repeated_packed', Data, Type, _> can never match the type <1 | 2 | 3,'required',_,'bytes',[]>
+riak_core_pb.erl:100: The call riak_core_pb:enum_to_int(Type::'bytes',Data::atom()) will never return since it differs in the 1st argument from the success typing arguments: ('pikachu','value')
+riak_core_pb.erl:102: Function enum_to_int/2 has no local return
+riak_core_pb.erl:102: The pattern <'pikachu', 'value'> can never match the type <'bytes',atom()>
+riak_core_pb.erl:147: The pattern 'true' can never match the type 'false'
+riak_core_pb.erl:153: The pattern 'true' can never match the type 'false'
+riak_core_pb.erl:162: The pattern 'true' can never match the type 'false'
+riak_core_pb.erl:174: The pattern {_, _, Dict} can never match the type 'false'
+riak_core_pb.erl:192: The pattern 'true' can never match the type 'false'
+riak_core_pb.erl:201: The pattern <Binary, 'string'> can never match the type <_,'bytes'>
+riak_core_pb.erl:221: The pattern <Types, [{Fnum, Bytes} | Tail], Acc> can never match the type <_,[],[{_,_}]>
+riak_kv_bitcask_backend.erl:600: Guard test Dir1TS::nonempty_string() == [] can never succeed
+riak_kv_bitcask_backend.erl:602: Guard test Dir2TS::nonempty_string() == [] can never succeed
+riak_kv_entropy_info.erl:78: Function exchange_complete/4 has no local return
+riak_kv_entropy_info.erl:83: Function exchange_complete/5 has no local return
+riak_kv_entropy_info.erl:84: The call riak_kv_entropy_info:update_index_info({_,_},{'exchange_complete',_,_,_}) will never return since it differs in the 2nd argument from the success typing arguments: ({_,_},{'tree_built',_})
+riak_kv_entropy_info.erl:161: Record construction #index_info{exchanges::[]} violates the declared type of field repaired::pos_integer() and last_exchange::{non_neg_integer(),{non_neg_integer(),pos_integer()}}
+riak_kv_entropy_info.erl:194: The call riak_kv_entropy_info:update_simple_stat(Repaired::'undefined' | pos_integer(),pos_integer()) will never return since it differs in the 2nd argument from the success typing arguments: (any(),'undefined' | #simple_stat{count::number(),sum::number()})
+riak_kv_entropy_info.erl:208: Function compute_exchange_info/4 has no local return
+riak_kv_entropy_info.erl:218: The call riak_kv_entropy_info:stat_tuple(Repaired::pos_integer()) will never return since it differs in the 1st argument from the success typing arguments: ('undefined' | #simple_stat{count::integer(),sum::integer()})
+riak_kv_entropy_info.erl:225: Function update_simple_stat/2 has no local return
+riak_kv_entropy_info.erl:225: The pattern <Value, 'undefined'> can never match the type <'undefined' | pos_integer(),pos_integer()>
+riak_kv_entropy_info.erl:227: The pattern <Value, Stat = {'simple_stat', _, Min, Max, Cnt, Sum}> can never match the type <'undefined' | pos_integer(),pos_integer()>
+riak_kv_entropy_info.erl:234: Function stat_tuple/1 has no local return
+riak_kv_entropy_info.erl:234: The pattern 'undefined' can never match the type pos_integer()
+riak_kv_entropy_info.erl:236: The pattern {'simple_stat', Last, Min, Max, Cnt, Sum} can never match the type pos_integer()
+riak_kv_exchange_fsm.erl:379: Function exchange_complete/4 has no local return
+riak_kv_gcounter.erl:64: Invalid type specification for function riak_kv_gcounter:new/2. The success typing is (_,pos_integer()) -> {'ok',riak_kv_gcounter:gcounter()}
+riak_kv_gcounter.erl:75: Invalid type specification for function riak_kv_gcounter:update/3. The success typing is ('increment' | {'increment',pos_integer()},_,riak_kv_gcounter:gcounter()) -> {'ok',riak_kv_gcounter:gcounter()}
+riak_kv_gcounter.erl:85: Function merge/2 has no local return
+riak_kv_gcounter.erl:86: The call riak_kv_gcounter:merge(GCnt1::any(),GCnt2::any(),[]) does not have an opaque term of type riak_kv_gcounter:gcounter() as 3rd argument
+riak_kv_gcounter.erl:99: The call riak_kv_gcounter:merge(Rest::any(),RestOfClock2::[tuple()],[{_,_},...]) does not have opaque terms as 2nd and 3rd arguments
+riak_kv_gcounter.erl:101: The call riak_kv_gcounter:merge(Rest::any(),Clock2::[tuple()],[{_,_},...]) does not have opaque terms as 2nd and 3rd arguments
+riak_kv_pb_crdt.erl:138: The call riak_pb_dt_codec:encode_fetch_response(Type::any(),Value::any(),Ctx::'undefined' | binary(),[{'counter','riak_dt_pncounter'} | {'flag','riak_dt_od_flag'} | {'map','riak_dt_map'} | {'register','riak_dt_lwwreg'} | {'set','riak_dt_orswot'},...]) does not have an opaque term of type riak_pb_dt_codec:context() as 3rd argument
+riak_kv_pb_crdt.erl:142: The call riak_pb_dt_codec:encode_fetch_response(Type::any(),'undefined','undefined') breaks the contract (toplevel_type(),toplevel_value(),context()) -> #dtfetchresp{}
+riak_kv_pb_crdt.erl:189: The call riak_pb_dt_codec:encode_update_response(Type::any(),Value::any(),Key::'undefined' | binary(),'undefined' | binary(),[{'counter','riak_dt_pncounter'} | {'flag','riak_dt_od_flag'} | {'map','riak_dt_map'} | {'register','riak_dt_lwwreg'} | {'set','riak_dt_orswot'},...]) does not have an opaque term of type riak_pb_dt_codec:context() as 4th argument
+riak_kv_pb_crdt.erl:337: The call riak_pb_dt_codec:encode_fetch_response('counter' | 'flag' | 'map' | 'register' | 'set' | 'undefined',Val::any(),'undefined',[{'counter','riak_dt_pncounter'} | {'flag','riak_dt_od_flag'} | {'map','riak_dt_map'} | {'register','riak_dt_lwwreg'} | {'set','riak_dt_orswot'},...]) does not have an opaque term of type riak_pb_dt_codec:context() as 3rd argument
+riak_kv_pb_index.erl:93: Clause guard cannot succeed. The pattern {'ok', {'riak_kv_index_v3', _, _, Start, _, _, _, _, _, Re, _}} was matched against the type {'error',{'field_parsing_failed',{_,_}} | {'unknown_field_type',binary()} | {'downgrade_not_supported',_,{_,_,_} | {_,_,_,_} | {_,_,_,_,_,_,_,_,_} | {_,_,_,_,_,_,_,_,_,_,_}} | {'invalid_continuation',{_,_},{_,_,_,_,_,_,_,_,_,_,_}}} | {'ok',{'eq',binary(),'undefined' | binary()} | {'range',binary(),'undefined' | binary(),'undefined' | binary()} | #riak_kv_index_v2{start_key::binary(),filter_field::binary(),start_term::'undefined' | binary(),end_term::'undefined' | binary(),return_terms::boolean(),start_inclusive::boolean(),end_inclusive::boolean(),return_body::boolean()} | #riak_kv_index_v3{start_key::binary(),filter_field::binary(),start_term::'undefined' | binary(),end_term::'undefined' | binary(),return_terms::boolean(),start_inclusive::boolean(),end_inclusive::boolean(),return_body::boolean(),term_regex::'undefined' | binary(),max_results::'undefined' | integer()}}
+riak_kv_pb_index.erl:110: The pattern <{'error', Reason}, _Req, State> can never match the type <{'ok',{'eq',binary(),'undefined' | binary()} | {'range',binary(),'undefined' | binary(),'undefined' | binary()} | #riak_kv_index_v2{start_key::binary(),filter_field::binary(),start_term::'undefined' | binary(),end_term::'undefined' | binary(),return_terms::boolean(),start_inclusive::boolean(),end_inclusive::boolean(),return_body::boolean()} | #riak_kv_index_v3{start_key::binary(),filter_field::binary(),start_term::'undefined' | binary(),end_term::'undefined' | binary(),return_terms::boolean(),start_inclusive::boolean(),end_inclusive::boolean(),return_body::boolean(),term_regex::'undefined' | binary(),max_results::'undefined' | integer()}},#rpbindexreq{term_regex::'undefined' | binary() | maybe_improper_list(binary() | maybe_improper_list(any(),binary() | []) | byte(),binary() | [])},_>
+riak_kv_pipe_index.erl:155: Function queue_existing_pipe/4 has no local return
+riak_kv_pipe_listkeys.erl:159: Function queue_existing_pipe/3 has no local return
+riak_kv_pncounter.erl:100: Function merge/2 has no local return
+riak_kv_put_fsm.erl:233: Function init/1 has no local return
+riak_kv_put_fsm.erl:238: Record construction #state{robj::riak_object:riak_object(),options::[any()],bkey::{binary() | {binary(),binary()},binary()},vnode_options::[],precommit::[],postcommit::[],timing::[{atom(),{non_neg_integer(),non_neg_integer(),non_neg_integer()}},...],trace::'undefined' | {'ok',_},tracked_bucket::'false',bad_coordinators::[]} violates the declared type of field trace::boolean()
+riak_kv_put_fsm.erl:269: The created fun has no local return
+riak_kv_put_fsm.erl:818: The pattern <[COP = {'counter_op', _Amt} | T], Acc> can never match the type <[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()},...],[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()}]>
+riak_kv_put_fsm.erl:821: The pattern <[COP = {'crdt_op', _Op} | T], Acc> can never match the type <[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()},...],[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()}]>
+riak_kv_util.erl:294: The pattern 'error' can never match the type 'ok' | 'undefined'
+riak_kv_vnode.erl:23: Callback info about the riak_core_vnode behaviour is not available
+riak_kv_vnode.erl:766: The call riak_kv_coverage_filter:build_filter('all',ItemFilter::'undefined' | fun(),'undefined') breaks the contract (bucket(),filter(),[index()]) -> filter()
+riak_kv_vnode.erl:817: The pattern Q = {'riak_kv_index_v3', _, _, _, _, _, _, _, _, RE, _} can never match the type 'undefined' | {_,_}
+riak_kv_vnode.erl:827: The pattern <{'riak_kv_index_v3', _, _, _, _, _, _, _, _, _, N}, DefaultSize> can never match the type <'undefined' | {_,_},'undefined' | pos_integer()>
+riak_kv_vnode.erl:962: The variable Err can never match since previous clauses completely covered the type {'ok',_} | {'error',_,_}
+riak_kv_vnode.erl:1072: The call riak_kv_vnode:raw_put(HOTarget::atom(),Key::{binary() | {binary(),binary()},binary()},Obj::riak_object:riak_object()) will never return since it differs in the 1st argument from the success typing arguments: ({_,_},any(),any())
+riak_kv_vnode.erl:1189: Function raw_put/3 has no local return
+riak_kv_vnode.erl:1189: The pattern <{Idx, Node}, Key, Obj> can never match the type <atom(),{binary() | {binary(),binary()},binary()},riak_object:riak_object()>
+riak_kv_vnode.erl:1229: Function do_backend_delete/3 has no local return
+riak_kv_vnode.erl:1655: Function result_fun/1 will never be called
+riak_kv_vnode.erl:1656: The created fun has no local return
+riak_kv_vnode.erl:1680: The pattern <_, _, _> can never match since previous clauses completely covered the type <'keys','undefined' | integer(),_>
+riak_kv_vnode.erl:1886: Function delete_from_hashtree/3 has no local return
+riak_kv_vnode.erl:1890: The call riak_kv_index_hashtree:async_delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ({binary(),binary()} | [{binary(),binary()}],pid()) -> 'ok'
+riak_kv_vnode.erl:1893: The call riak_kv_index_hashtree:delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ([{binary(),binary()}],pid()) -> 'ok'
+riak_kv_vnode.erl:2029: Function update_index_delete_stats/1 will never be called
+riak_kv_wm_counter.erl:186: The call riak_core_security:check_permission({[46 | 95 | 97 | 101 | 103 | 105 | 107 | 112 | 114 | 116 | 117 | 118,...],{<<_:56>>,_}},Security::any()) breaks the contract (Permission::permission(),Context::context()) -> {'true',context()} | {'false',binary(),context()}
+riak_kv_wm_crdt.erl:387: Function produce_json/2 has no local return
+riak_kv_wm_crdt.erl:391: The call riak_kv_crdt_json:fetch_response_to_json(Type::'counter' | 'flag' | 'map' | 'register' | 'set' | 'undefined',Value::any(),'undefined' | binary(),[{'counter','riak_dt_pncounter'} | {'flag','riak_dt_od_flag'} | {'map','riak_dt_map'} | {'register','riak_dt_lwwreg'} | {'set','riak_dt_orswot'},...]) does not have an opaque term of type riak_kv_crdt_json:context() as 3rd argument
+riak_kv_wm_index.erl:135: The call riak_core_security:check_permission({[46 | 95 | 97 | 100 | 101 | 105 | 107 | 110 | 114 | 118 | 120,...],{<<_:56>>,binary()}},any()) breaks the contract (Permission::permission(),Context::context()) -> {'true',context()} | {'false',binary(),context()}
+riak_kv_wm_index.erl:214: Guard test is_integer(NormStart::'undefined' | binary()) can never succeed
+riak_kv_wm_keylist.erl:137: The call riak_core_security:check_permission({[46 | 95 | 97 | 101 | 105 | 107 | 108 | 114 | 115 | 116 | 118 | 121,...],{<<_:56>>,_}},any()) breaks the contract (Permission::permission(),Context::context()) -> {'true',context()} | {'false',binary(),context()}
+riak_kv_wm_utils.erl:283: The pattern {Scheme, _, Host, Port, _, _} can never match the type {'error','no_scheme' | {_,atom(),_}}
 cluster_info:dump_all_connected/1
 cluster_info:dump_nodes/2
 cluster_info:format/3
 cluster_info:register_app/1
 riak_kv_console.erl:152: The pattern {'error', 'legacy_mode'} can never match the type {'error','is_up' | 'not_member' | 'only_member'}
+# Callback info not available
 Callback info about the riak_pipe_vnode_worker behaviour is not available
 Callback info about the riak_core_vnode_worker behaviour is not available
+Callback info about the riak_core_vnode behaviour is not available
 Callback info about the riak_core_coverage_fsm behaviour is not available
 Callback info about the riak_kv_backend behaviour is not available
+Unknown functions:
+  dtrace:init/0
+  yz_kv:index/3
+  yz_kv:should_handoff/1
+  yz_stat:search_stats/0
+Unknown types:
+  base64:ascii_binary/0
+  calendar:t_now/0
+  mochijson2:json_object/0
+  mochijson2:json_string/0
+  mochijson2:json_term/0
+  mochijson2:json_value/0
+  proplist:proplist/0
+  riak_core_apl:preflist2/0
+  riak_dt:operation/0
+  riak_dt:value/0
+  wrq:reqdata/0

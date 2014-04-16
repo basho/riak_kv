@@ -1,5 +1,7 @@
 .PHONY: deps test
 
+DIALYZER_FLAGS =
+
 all: deps compile
 
 compile: deps
