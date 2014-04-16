@@ -107,8 +107,6 @@ process(#rpbindexreq{} = Req, State) ->
             maybe_perform_query(QueryVal, Req, State)
     end.
 
-maybe_perform_query({error, Reason}, _Req, State) ->
-    {error, {format, Reason}, State};
 maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
     #rpbindexreq{type=T, bucket=B, max_results=MaxResults, timeout=Timeout,
                  pagination_sort=PgSort0, continuation=Continuation} = Req,
