@@ -364,8 +364,8 @@ prune_object_siblings(Object, Clock, MergeAcc) ->
 fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
     #merge_acc{drop=Drop, keep=Keep, crdt=CRDT, error=Error} = MergeAcc,
     case get_dot(Dict) of
-        {ok, Dot} ->
-            case {vclock:descends_dot(Clock, Dot), is_drop_candidate(Dot, Drop)} of
+        {ok, {Dot, PureDot}} ->
+            case {vclock:descends_dot(Clock, Dot), is_drop_candidate(PureDot, Drop)} of
                 {true, true} ->
                     %% When the exact same dot is present in both
                     %% objects siblings, we keep that value. Without
@@ -384,7 +384,7 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% should be identical, but Skewed Dots mean we
                     %% can't guarantee that, the merge will dedupe for
                     %% us.
-                    DC = get_drop_candidate(Dot, Drop),
+                    DC = get_drop_candidate(PureDot, Drop),
                     MergeAcc#merge_acc{keep=[C0, DC | Keep]};
                 {true, false} ->
                     %% The `dot' is dominated by the other object's
@@ -392,7 +392,7 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% value that is the result of a PUT that
                     %% reconciled this sibling value, we can therefore
                     %% (potentialy, see above) drop this value.
-                    MergeAcc#merge_acc{drop=add_drop_candidate(Dot, C0, Drop)};
+                    MergeAcc#merge_acc{drop=add_drop_candidate(PureDot, C0, Drop)};
                 {false, _} ->
                     %% The other object's vclock does not contain (or
                     %% dominate) this sibling's `dot'. That means this
@@ -443,24 +443,20 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
             end
     end.
 
-%% turns out, due to weirdness, it is possible to have two dots with
-%% the same id and counter, but different timestamps (backup and
-%% restore, riak_kv#679). In that case, it is possible to drop both
-%% dots, as both are dominted, but not equal. Here we strip the
-%% timestamp component when comparing dots.  This is bad as it _knows_
-%% about the internal structure of the vclock entry.
+%% Store a pure dot and it's contents as a possible candidate to be
+%% dropped.
 %%
 %% @see is_drop_candidate/2
-add_drop_candidate({Id, {Cnt, _TS}}, Contents,  Dict) ->
-    orddict:store({Id, Cnt}, Contents, Dict).
+add_drop_candidate(Dot, Contents,  Dict) ->
+    orddict:store(Dot, Contents, Dict).
 
-%% compare dots by Id and Counter alone, so making equal "skewed dots"
-is_drop_candidate({Id, {Cnt, _TS}}, Dict) ->
-    orddict:is_key({Id, Cnt}, Dict).
+%% Check if a pure dot is already present as a drop candidate.
+is_drop_candidate(Dot, Dict) ->
+    orddict:is_key(Dot, Dict).
 
-%% fetch a drop candidate by it's dot
-get_drop_candidate({Id, {Cnt, _TS}}, Dict) ->
-    orddict:fetch({Id, Cnt}, Dict).
+%% fetch a drop candidate by it's pure dot
+get_drop_candidate(Dot, Dict) ->
+    orddict:fetch(Dot, Dict).
 
 %% @private Transform a `merge_acc()' to a list of `r_content()'. The
 %% merge accumulator contains a list of non CRDT (opaque) sibling
@@ -490,15 +486,23 @@ merge_acc_to_contents(MergeAcc) ->
                  {undefined, Keep2},
                  CRDTs).
 
-%% @private Get the dot from the passed metadata dict
-%% (if present and valid).
--spec get_dot(dict()) -> {ok, vclock:dot()} | undefined.
+%% @private Get the dot from the passed metadata dict (if present and
+%% valid). It turns out, due to weirdness, it is possible to have two
+%% dots with the same id and counter, but different timestamps (backup
+%% and restore, riak_kv#679). In that case, it is possible to drop
+%% both dots, as both are dominted, but not equal. Here we strip the
+%% timestamp component when comparing dots. A `dot' in riak_object is
+%% just a {binary(), pos_integer()} pair.
+%%
+%% @see vclock:destructure_dot/1
+-spec get_dot(dict()) -> {ok, {vclock:vclock_node(), pos_integer()}} | undefined.
 get_dot(Dict) ->
     case dict:find(?DOT, Dict) of
         {ok, Dot} ->
-            case vclock:valid_entry(Dot) of
+            case vclock:valid_dot(Dot) of
                 true ->
-                    {ok, Dot};
+                    PureDot = vclock:pure_dot(Dot),
+                    {ok, {Dot, PureDot}};
                 false ->
                     undefined
             end;
@@ -625,14 +629,14 @@ set_vclock(Object=#r_object{}, VClock) -> Object#r_object{vclock=VClock}.
 %% @spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object()
 increment_vclock(Object=#r_object{bucket=B}, ClientId) ->
     NewClock = vclock:increment(ClientId, Object#r_object.vclock),
-    {ok, Dot} = vclock:get_entry(ClientId, NewClock),
+    {ok, Dot} = vclock:get_dot(ClientId, NewClock),
     assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled(B)).
 
 %% @doc  Increment the entry for ClientId in O's vclock.
 -spec increment_vclock(riak_object(), vclock:vclock_node(), vclock:timestamp()) -> riak_object().
 increment_vclock(Object=#r_object{bucket=B}, ClientId, Timestamp) ->
     NewClock = vclock:increment(ClientId, Timestamp, Object#r_object.vclock),
-    {ok, Dot} = vclock:get_entry(ClientId, NewClock),
+    {ok, Dot} = vclock:get_dot(ClientId, NewClock),
     %% If it is true that we only ever increment the vclock to create
     %% a frontier object, then there must only ever be a single value
     %% when we increment, so add the dot here.
@@ -786,7 +790,7 @@ update(false, OldObject, NewObject, Actor, Timestamp) ->
             %% merge the new object and the old object.
             MergedClock = vclock:merge([PutVC, LocalVC]),
             FrontierClock = vclock:increment(Actor, Timestamp, MergedClock),
-            {ok, Dot} = vclock:get_entry(Actor, FrontierClock),
+            {ok, Dot} = vclock:get_dot(Actor, FrontierClock),
             %% Assign an event to the new value
             Bucket = bucket(OldObject),
             DottedPutObject = assign_dot(NewObject, Dot, dvv_enabled(Bucket)),
