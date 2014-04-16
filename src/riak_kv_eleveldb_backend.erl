@@ -63,7 +63,7 @@
         iterator_refresh]).
 -define(FIXED_INDEXES_KEY, fixed_indexes).
 
--record(state, {ref :: reference(),
+-record(state, {ref :: eleveldb:db_ref(),
                 data_root :: string(),
                 open_opts = [],
                 config :: config(),
@@ -794,9 +794,7 @@ fold_keys_fun(FoldKeysFun, {index, incorrect_format, ForUpgrade}) when is_boolea
 fold_keys_fun(FoldKeysFun, {index, Bucket, V1Q}) ->
     %% Handle legacy queries
     Q = riak_index:upgrade_query(V1Q),
-    fold_keys_fun(FoldKeysFun, {index, Bucket, Q});
-fold_keys_fun(_FoldKeysFun, Other) ->
-    throw({unknown_limiter, Other}).
+    fold_keys_fun(FoldKeysFun, {index, Bucket, Q}).
 
 %% @private
 %% To stop a fold in progress when pagination limit is reached.

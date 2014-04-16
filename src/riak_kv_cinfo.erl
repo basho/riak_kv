@@ -46,7 +46,9 @@ cluster_info_generator_funs() ->
     ].
 
 aae_throttle(CPid) ->
-    {Throttle, ThrottleLimits} = get_aae_throttle(),
+    Props = get_aae_throttle(),
+    Throttle = proplists:get_value(current_throttle, Props),
+    ThrottleLimits = proplists:get_value(limits, Props),
     cluster_info:format(CPid, "Current throttle: ~p msec\n", [Throttle]),
     cluster_info:format(CPid, "Limit AAE throttle parameters: ~p\n",
                         [ThrottleLimits]).

@@ -1865,7 +1865,9 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
             end
     end.
 
--spec update_hashtree(binary(), binary(), binary(), state()) -> ok.
+-spec update_hashtree(binary(), binary(),
+                      riak_object:riak_object() | binary(),
+                      state()) -> ok.
 update_hashtree(Bucket, Key, BinObj, State) when is_binary(BinObj) ->
     RObj = riak_object:from_binary(Bucket, Key, BinObj),
     update_hashtree(Bucket, Key, RObj, State);

@@ -207,9 +207,10 @@ consistent_put(RObj, Options, {?MODULE, [Node, _ClientId]}) ->
                  update ->
                      riak_ensemble_client:kupdate(Node, Ensemble, BKey, RObj, NewObj, Timeout);
                  put_once ->
-                     riak_ensemble_client:kput_once(Node, Ensemble, BKey, NewObj, Timeout);
-                 overwrite ->
-                     riak_ensemble_client:kover(Node, Ensemble, BKey, NewObj, Timeout)
+                     riak_ensemble_client:kput_once(Node, Ensemble, BKey, NewObj, Timeout)
+                %% TODO: Expose client option to explicitly request overwrite
+                 %overwrite ->
+                     %riak_ensemble_client:kover(Node, Ensemble, BKey, NewObj, Timeout)
              end,
     ReturnBody = lists:member(returnbody, Options),
     case Result of

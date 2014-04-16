@@ -162,7 +162,7 @@ update_index_info(Key, Cmd) ->
                [{_, I}] ->
                    I
            end,
-    Info2 = handle_index_info(Cmd, Key, Info),
+    Info2 = handle_index_info(Cmd, Info),
     ets:insert(?ETS, {{index, Key}, Info2}),
     ok.
 
@@ -182,11 +182,11 @@ filter_index_info() ->
     ok.
 
 %% Update provided index info based on request.
--spec handle_index_info(term(), index(), index_info()) -> index_info().
-handle_index_info({tree_built, Time}, _, Info) ->
+-spec handle_index_info(term(), index_info()) -> index_info().
+handle_index_info({tree_built, Time}, Info) ->
     Info#index_info{build_time=Time};
 
-handle_index_info({exchange_complete, RemoteIdx, IndexN, Repaired}, _, Info) ->
+handle_index_info({exchange_complete, RemoteIdx, IndexN, Repaired}, Info) ->
     ExInfo = #exchange_info{time=os:timestamp(),
                             repaired=Repaired},
     ExId = {RemoteIdx, IndexN},

@@ -42,10 +42,6 @@
 
 -export([data_size/1]).
 
-%% Helper API
--export([key_counts/0,
-         key_counts/1]).
-
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -234,17 +230,12 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val,
 %% secondary indexing and the_IndexSpecs parameter
 %% is ignored.
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
-                    {ok, state()} |
-                    {error, term(), state()}.
+                    {ok, state()}.
 delete(Bucket, Key, _IndexSpecs, 
        #state{ref=Ref, key_vsn=KeyVsn}=State) ->
     BitcaskKey = make_bk(KeyVsn, Bucket, Key),
-    case bitcask:delete(Ref, BitcaskKey) of
-        ok ->
-            {ok, State};
-        {error, Reason} ->
-            {error, Reason, State}
-    end.
+    ok = bitcask:delete(Ref, BitcaskKey),
+    {ok, State}.
 
 %% @doc Fold over all the buckets.
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
@@ -450,23 +441,6 @@ callback(Ref,
 %% Ignore callbacks for other backends so multi backend works
 callback(_Ref, _Msg, State) ->
     {ok, State}.
-
--spec key_counts() -> [{string(), non_neg_integer()}] |
-                      {error, data_root_not_set}.
-key_counts() ->
-    case application:get_env(bitcask, data_root) of
-        {ok, RootDir} ->
-            key_counts(RootDir);
-        undefined ->
-            {error, data_root_not_set}
-    end.
-
--spec key_counts(string()) -> [{string(), non_neg_integer()}].
-key_counts(RootDir) ->
-    [begin
-         [{key_count, Keys} | _] = status(#state{root=filename:join(RootDir, Dir)}),
-         {Dir, Keys}
-     end || Dir <- element(2, file:list_dir(RootDir))].
 
 %% ===================================================================
 %% Internal functions

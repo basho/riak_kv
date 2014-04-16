@@ -78,7 +78,7 @@ value({Incr, Decr}) ->
 %% `Actor' is any term, and the 3rd argument is the `pncounter()' to update.
 %%
 %% returns the updated `pncounter()'
--spec update(pncounter_op(), term(), pncounter()) -> pncounter().
+-spec update(pncounter_op(), term(), pncounter()) -> {ok, pncounter()}.
 update(increment, Actor, {Incr, Decr}) ->
     {ok, GC}  = riak_kv_gcounter:update(increment, Actor, Incr),
     {ok, {GC, Decr}};
