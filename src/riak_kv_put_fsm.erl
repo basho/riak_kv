@@ -726,6 +726,8 @@ handle_sync_event(_Event, _From, _StateName, StateData) ->
 
 handle_info(request_timeout, StateName, StateData) ->
     ?MODULE:StateName(request_timeout, StateData);
+handle_info({ack, _Node, now_executing}, StateName, StateData) ->
+    {next_state, StateName, StateData};
 handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
