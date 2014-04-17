@@ -626,7 +626,6 @@ set_vclock(Object=#r_object{}, VClock) -> Object#r_object{vclock=VClock}.
 
 %% @doc  Increment the entry for ClientId in O's vclock.
 -spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object().
-%% @spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object()
 increment_vclock(Object=#r_object{bucket=B}, ClientId) ->
     NewClock = vclock:increment(ClientId, Object#r_object.vclock),
     {ok, Dot} = vclock:get_dot(ClientId, NewClock),
@@ -734,7 +733,7 @@ assemble_index_specs(Indexes, IndexOp) ->
 set_contents(Object=#r_object{}, MVs) when is_list(MVs) ->
     Object#r_object{contents=[#r_content{metadata=M,value=V} || {M, V} <- MVs]}.
 
-%% @spec vclock_header(riak_object()) -> {Name::string(), Value::string()}
+-spec vclock_header(riak_object()) -> {Name::string(), Value::string()}.
 %% @doc Transform the Erlang representation of the document's vclock
 %%      into something suitable for an HTTP header
 vclock_header(Doc) ->

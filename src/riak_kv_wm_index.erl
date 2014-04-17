@@ -63,7 +63,6 @@
          produce_index_results/2
         ]).
 
-%% @type context() = term()
 -record(ctx, {
           client,       %% riak_client() - the store client
           riak,         %% local | {node(), atom()} - params for riak client
@@ -76,6 +75,7 @@
           pagination_sort :: boolean() | undefined,
           security        %% security context
          }).
+-type context() :: #ctx{}.
 
 -define(ALL_2I_RESULTS, all).
 
@@ -83,7 +83,7 @@
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_index.hrl").
 
-%% @spec init(proplist()) -> {ok, context()}
+-spec init(proplists:proplist()) -> {ok, context()}.
 %% @doc Initialize this resource.
 init(Props) ->
     {ok, #ctx{
@@ -92,8 +92,8 @@ init(Props) ->
       }}.
 
 
-%% @spec service_available(reqdata(), context()) ->
-%%          {boolean(), reqdata(), context()}
+-spec service_available(#wm_reqdata{}, context()) ->
+    {boolean(), #wm_reqdata{}, context()}.
 %% @doc Determine whether or not a connection to Riak
 %%      can be established. Also, extract query params.
 service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
@@ -145,8 +145,8 @@ forbidden(RD, Ctx) ->
             end
     end.
 
-%% @spec malformed_request(reqdata(), context()) ->
-%%          {boolean(), reqdata(), context()}
+-spec malformed_request(#wm_reqdata{}, context()) ->
+    {boolean(), #wm_reqdata{}, context()}.
 %% @doc Determine whether query parameters are badly-formed.
 %%      Specifically, we check that the index operation is of
 %%      a known type.
@@ -296,16 +296,16 @@ normalize_boolean("true") ->
 normalize_boolean(_) ->
     malformed.
 
-%% @spec content_types_provided(reqdata(), context()) ->
-%%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
+-spec content_types_provided(#wm_reqdata{}, context()) ->
+    {[{ContentType::string(), Producer::atom()}], #wm_reqdata{}, context()}.
 %% @doc List the content types available for representing this resource.
 %%      "application/json" is the content-type for bucket lists.
 content_types_provided(RD, Ctx) ->
     {[{"application/json", produce_index_results}], RD, Ctx}.
 
 
-%% @spec encodings_provided(reqdata(), context()) ->
-%%          {[{Encoding::string(), Producer::function()}], reqdata(), context()}
+-spec encodings_provided(#wm_reqdata{}, context()) ->
+    {[{Encoding::string(), Producer::function()}], #wm_reqdata{}, context()}.
 %% @doc List the encodings available for representing this resource.
 %%      "identity" and "gzip" are available for bucket lists.
 encodings_provided(RD, Ctx) ->
@@ -315,7 +315,8 @@ encodings_provided(RD, Ctx) ->
 resource_exists(RD, #ctx{bucket_type=BType}=Ctx) ->
     {riak_kv_wm_utils:bucket_type_exists(BType), RD, Ctx}.
 
-%% @spec produce_index_results(reqdata(), context()) -> {binary(), reqdata(), context()}
+-spec produce_index_results(#wm_reqdata{}, context()) ->
+    {binary(), #wm_reqdata{}, context()}.
 %% @doc Produce the JSON response to an index lookup.
 produce_index_results(RD, Ctx) ->
     case wrq:get_qs_value("stream", "false", RD) of

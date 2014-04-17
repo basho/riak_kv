@@ -47,6 +47,10 @@
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
 
+-type jsonpropvalue() :: integer()|string()|boolean()|{struct,[jsonmodfun()]}.
+-type jsonmodfun() :: {ModBinary :: term(), binary()}|{FunBinary :: term(), binary()}.
+-type erlpropvalue() :: integer()|string()|boolean().
+
 maybe_decode_uri(RD, Val) ->
     case application:get_env(riak_kv, http_url_encoding) of
         {ok, on} ->
@@ -60,8 +64,8 @@ maybe_decode_uri(RD, Val) ->
             end
     end.
 
-%% @spec get_riak_client(local|{node(),Cookie::atom()}, term()) ->
-%%          {ok, riak_client()} | error()
+-spec get_riak_client(local|{node(),Cookie::atom()}, term()) ->
+    {ok, RiakClient :: term()} | {error, term()}.
 %% @doc Get a riak_client.
 get_riak_client(local, ClientId) ->
     riak:local_client(ClientId);
@@ -69,7 +73,7 @@ get_riak_client({Node, Cookie}, ClientId) ->
     erlang:set_cookie(node(), Cookie),
     riak:client_connect(Node, ClientId).
 
-%% @spec get_client_id(reqdata()) -> term()
+-spec get_client_id(#wm_reqdata{}) -> term().
 %% @doc Extract the request's preferred client id from the
 %%      X-Riak-ClientId header.  Return value will be:
 %%        'undefined' if no header was found
@@ -88,13 +92,14 @@ get_client_id(RD) ->
     end.
 
 
-%% @spec default_encodings() -> [{Encoding::string(), Producer::function()}]
+-spec default_encodings() -> [{Encoding::string(), Producer::function()}].
 %% @doc The default encodings available: identity and gzip.
 default_encodings() ->
     [{"identity", fun(X) -> X end},
      {"gzip", fun(X) -> zlib:gzip(X) end}].
 
-%% @spec multipart_encode_body(string(), binary(), {dict(), binary()}) -> iolist()
+-spec multipart_encode_body(string(), binary(), {dict(), binary()}, term()) ->
+    iolist().
 %% @doc Produce one part of a multipart body, representing one sibling
 %%      of a multi-valued document.
 multipart_encode_body(Prefix, Bucket, {MD, V}, APIVersion) ->
@@ -195,7 +200,7 @@ format_uri(Type, Bucket, Key, _Prefix, 3) ->
     io_lib:format("/types/~s/buckets/~s/keys/~s", [Type, Bucket, Key]).
 
 
-%% @spec get_ctype(dict(), term()) -> string()
+-spec get_ctype(dict(), term()) -> string().
 %% @doc Work out the content type for this object - use the metadata if provided
 get_ctype(MD,V) ->
     case dict:find(?MD_CTYPE, MD) of
@@ -207,7 +212,7 @@ get_ctype(MD,V) ->
             "application/x-erlang-binary"
     end.
 
-%% @spec encode_value(term()) -> binary()
+-spec encode_value(term()) -> binary().
 %% @doc Encode the object value as a binary - content type can be used
 %%      to decode
 encode_value(V) when is_binary(V) ->
@@ -215,7 +220,7 @@ encode_value(V) when is_binary(V) ->
 encode_value(V) ->
     term_to_binary(V).
 
-%% @spec accept_value(string(), binary()) -> term()
+-spec accept_value(string(), binary()) -> term().
 %% @doc Accept the object value as a binary - content type can be used
 %%      to decode
 accept_value("application/x-erlang-binary",V) ->
@@ -287,12 +292,9 @@ referer_tuple(RD) ->
             end
     end.
 
-%% @spec jsonify_bucket_prop({Property::atom(), erlpropvalue()}) ->
-%%           {Property::binary(), jsonpropvalue()}
-%% @type erlpropvalue() = integer()|string()|boolean()|
+-spec jsonify_bucket_prop({Property::atom(), erlpropvalue()}) ->
+    {Property::binary(), jsonpropvalue()}.
 %%                        {modfun, atom(), atom()}|{atom(), atom()}
-%% @type jsonpropvalue() = integer()|string()|boolean()|{struct,[jsonmodfun()]}
-%% @type jsonmodfun() = {mod_binary(), binary()}|{fun_binary(), binary()}
 %% @doc Convert erlang bucket properties to JSON bucket properties.
 %%      Property names are converted from atoms to binaries.
 %%      Integer, string, and boolean property values are left as integer,
@@ -352,8 +354,8 @@ jsonify_bucket_prop({name, {_T, B}}) ->
 jsonify_bucket_prop({Prop, Value}) ->
     {atom_to_binary(Prop, utf8), Value}.
 
-%% @spec erlify_bucket_prop({Property::binary(), jsonpropvalue()}) ->
-%%          {Property::atom(), erlpropvalue()}
+-spec erlify_bucket_prop({Property::binary(), jsonpropvalue()}) ->
+          {Property::atom(), erlpropvalue()}.
 %% @doc The reverse of jsonify_bucket_prop/1.  Converts JSON representation
 %%      of bucket properties to their Erlang form.
 erlify_bucket_prop({?JSON_DATATYPE, Type}) when is_binary(Type) ->
