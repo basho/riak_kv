@@ -84,7 +84,6 @@
          to_text/2
         ]).
 
-%% @type context() = term()
 -record(ctx, {api_version,  %% integer() - Determine which version of the API to use.
               bucket,       %% binary() - Bucket name (from uri)
               key,          %% binary() - Key (from uri)
@@ -105,15 +104,14 @@
               counter_op    :: integer() | undefined, %% The amount to add to the counter
               security      %% security context
              }).
-%% @type link() = {{Bucket::binary(), Key::binary()}, Tag::binary()}
-%% @type index_field() = {Key::string(), Value::string()}
+-type context() :: #ctx{}.
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_types.hrl").
 
 
-%% @spec init(proplist()) -> {ok, context()}
+-spec init(proplists:proplist()) -> {ok, context()}.
 %% @doc Initialize this resource.  This function extracts the
 %%      'prefix' and 'riak' properties from the dispatch args.
 init(Props) ->

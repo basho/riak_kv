@@ -36,12 +36,13 @@
 -include_lib("webmachine/include/webmachine.hrl").
 
 -record(ctx, {}).
+-type context() :: #ctx{}.
 
 init(_) ->
     {ok, #ctx{}}.
 
-%% @spec encodings_provided(webmachine:wrq(), context()) ->
-%%         {[encoding()], webmachine:wrq(), context()}
+-spec encodings_provided(#wm_reqdata{}, context()) ->
+         {[term()], #wm_reqdata{}, context()}.
 %% @doc Get the list of encodings this resource provides.
 %%      "identity" is provided for all methods, and "gzip" is
 %%      provided for GET as well
@@ -54,8 +55,8 @@ encodings_provided(ReqData, Context) ->
             {[{"identity", fun(X) -> X end}], ReqData, Context}
     end.
 
-%% @spec content_types_provided(webmachine:wrq(), context()) ->
-%%          {[ctype()], webmachine:wrq(), context()}
+-spec content_types_provided(#wm_reqdata{}, context()) ->
+    {[term()], #wm_reqdata{}, context()}.
 %% @doc Get the list of content types this resource provides.
 %%      "application/json" and "text/plain" are both provided
 %%      for all requests.  "text/plain" is a "pretty-printed"
@@ -76,8 +77,8 @@ produce_body(ReqData, Ctx) ->
     Body = mochijson2:encode({struct, get_stats()}),
     {Body, ReqData, Ctx}.
 
-%% @spec pretty_print(webmachine:wrq(), context()) ->
-%%          {string(), webmachine:wrq(), context()}
+-spec pretty_print(#wm_reqdata{}, context()) ->
+          {string(), #wm_reqdata{}, context()}.
 %% @doc Format the respons JSON object is a "pretty-printed" style.
 pretty_print(RD1, C1=#ctx{}) ->
     {Json, RD2, C2} = produce_body(RD1, C1),

@@ -49,7 +49,6 @@
          malformed_request/2
         ]).
 
-%% @type context() = term()
 -record(ctx, {
           bucket_type,  %% binary() - bucket type (from uri)
           api_version,  %% integer() - Determine which version of the API to use.
@@ -60,13 +59,14 @@
           timeout,      %% integer() - list buckets timeout
           security     %% security context
          }).
+-type context() :: #ctx{}.
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
 
 -define(DEFAULT_TIMEOUT, 5 * 60000).
 
-%% @spec init(proplist()) -> {ok, context()}
+-spec init(proplists:proplist()) -> {ok, context()}.
 %% @doc Initialize this resource.  This function extracts the
 %%      'prefix' and 'riak' properties from the dispatch args.
 init(Props) ->
@@ -78,8 +78,8 @@ init(Props) ->
       }}.
 
 
-%% @spec service_available(reqdata(), context()) ->
-%%          {boolean(), reqdata(), context()}
+-spec service_available(#wm_reqdata{}, context()) ->
+          {boolean(), #wm_reqdata{}, context()}.
 %% @doc Determine whether or not a connection to Riak
 %%      can be established.  This function also takes this
 %%      opportunity to extract the 'bucket' and 'key' path
@@ -137,16 +137,16 @@ forbidden(RD, Ctx) ->
             end
     end.
 
-%% @spec content_types_provided(reqdata(), context()) ->
-%%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
+-spec content_types_provided(#wm_reqdata{}, context()) ->
+    {[{ContentType::string(), Producer::atom()}], #wm_reqdata{}, context()}.
 %% @doc List the content types available for representing this resource.
 %%      "application/json" is the content-type for bucket lists.
 content_types_provided(RD, Ctx) ->
     {[{"application/json", produce_bucket_list}], RD, Ctx}.
 
 
-%% @spec encodings_provided(reqdata(), context()) ->
-%%          {[{Encoding::string(), Producer::function()}], reqdata(), context()}
+-spec encodings_provided(#wm_reqdata{}, context()) ->
+    {[{Encoding::string(), Producer::function()}], #wm_reqdata{}, context()}.
 %% @doc List the encodings available for representing this resource.
 %%      "identity" and "gzip" are available for bucket lists.
 encodings_provided(RD, Ctx) ->
@@ -155,8 +155,8 @@ encodings_provided(RD, Ctx) ->
 malformed_request(RD, Ctx) ->
     malformed_timeout_param(RD, Ctx).
 
-%% @spec malformed_timeout_param(reqdata(), context()) ->
-%%          {boolean(), reqdata(), context()}
+-spec malformed_timeout_param(#wm_reqdata{}, context()) ->
+    {boolean(), #wm_reqdata{}, context()}.
 %% @doc Check that the timeout parameter is are a
 %%      string-encoded integer.  Store the integer value
 %%      in context() if so.
@@ -183,7 +183,8 @@ malformed_timeout_param(RD, Ctx) ->
 resource_exists(RD, #ctx{bucket_type=BType}=Ctx) ->
     {riak_kv_wm_utils:bucket_type_exists(BType), RD, Ctx}.
 
-%% @spec produce_bucket_list(reqdata(), context()) -> {binary(), reqdata(), context()}
+-spec produce_bucket_list(#wm_reqdata{}, context()) ->
+    {binary(), #wm_reqdata{}, context()}.
 %% @doc Produce the JSON response to a bucket-level GET.
 %%      Includes a list of known buckets if the "buckets=true" query
 %%      param is specified.

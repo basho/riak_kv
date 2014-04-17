@@ -61,7 +61,6 @@
          accept_bucket_type_body/2
         ]).
 
-%% @type context() = term()
 -record(ctx, {bucket_type,  %% binary() - Bucket type (from uri)
               client,       %% riak_client() - the store client
               prefix,       %% string() - prefix for resource uris
@@ -71,11 +70,12 @@
               api_version,  %% non_neg_integer() - old or new http api
               security     %% security context
              }).
+-type context() :: #ctx{}.
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
 
-%% @spec init(proplist()) -> {ok, context()}
+-spec init(proplists:proplist()) -> {ok, context()}.
 %% @doc Initialize this resource.  This function extracts the
 %%      'prefix' and 'riak' properties from the dispatch args.
 init(Props) ->
@@ -86,8 +86,8 @@ init(Props) ->
             bucket_type=proplists:get_value(bucket_type, Props)
            }}.
 
-%% @spec service_available(reqdata(), context()) ->
-%%          {boolean(), reqdata(), context()}
+-spec service_available(#wm_reqdata{}, context()) ->
+    {boolean(), #wm_reqdata{}, context()}.
 %% @doc Determine whether or not a connection to Riak can be
 %%      established.  This function also takes this opportunity to extract
 %%      the 'bucket' bindings from the dispatch.
@@ -163,15 +163,15 @@ forbidden_check_bucket_type(RD, Ctx) ->
     {false, RD, Ctx}.
 
 
-%% @spec allowed_methods(reqdata(), context()) ->
-%%          {[method()], reqdata(), context()}
+-spec allowed_methods(#wm_reqdata{}, context()) ->
+    {[atom()], #wm_reqdata{}, context()}.
 %% @doc Get the list of methods this resource supports.
 %%      Properties allows HEAD, GET, and PUT.
 allowed_methods(RD, Ctx) when Ctx#ctx.api_version =:= 3 ->
     {['HEAD', 'GET', 'PUT'], RD, Ctx}.
 
-%% @spec malformed_request(reqdata(), context()) ->
-%%          {boolean(), reqdata(), context()}
+-spec malformed_request(#wm_reqdata{}, context()) ->
+    {boolean(), #wm_reqdata{}, context()}.
 %% @doc Determine whether query parameters, request headers,
 %%      and request body are badly-formed.
 %%      Body format is checked to be valid JSON, including
@@ -181,8 +181,8 @@ malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'PUT' ->
 malformed_request(RD, Ctx) ->
     {false, RD, Ctx}.
 
-%% @spec malformed_bucket_put(reqdata(), context()) ->
-%%          {boolean(), reqdata(), context()}
+-spec malformed_props(#wm_reqdata{}, context()) ->
+    {boolean(), #wm_reqdata{}, context()}.
 %% @doc Check the JSON format of a bucket-level PUT.
 %%      Must be a valid JSON object, containing a "props" object.
 malformed_props(RD, Ctx) ->
@@ -198,9 +198,9 @@ malformed_props(RD, Ctx) ->
             {true, props_format_message(RD), Ctx}
     end.
 
-%% @spec bucket_format_message(reqdata()) -> reqdata()
+-spec props_format_message(#wm_reqdata{}) -> #wm_reqdata{}.
 %% @doc Put an error about the format of the bucket-PUT body
-%%      in the response body of the reqdata().
+%%      in the response body of the #wm_reqdata{}.
 props_format_message(RD) ->
     wrq:append_to_resp_body(
       ["bucket type PUT must be a JSON object of the form:\n",
@@ -211,29 +211,30 @@ props_format_message(RD) ->
 resource_exists(RD, Ctx) ->
     {riak_kv_wm_utils:bucket_type_exists(Ctx#ctx.bucket_type), RD, Ctx}.
 
-%% @spec content_types_provided(reqdata(), context()) ->
-%%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
+-spec content_types_provided(#wm_reqdata{}, context()) ->
+    {[{ContentType::string(), Producer::atom()}], #wm_reqdata{}, context()}.
 %% @doc List the content types available for representing this resource.
 %%      "application/json" is the content-type for props requests.
 content_types_provided(RD, Ctx) ->
     {[{"application/json", produce_bucket_type_body}], RD, Ctx}.
 
-%% @spec encodings_provided(reqdata(), context()) ->
-%%          {[{Encoding::string(), Producer::function()}], reqdata(), context()}
+-spec encodings_provided(#wm_reqdata{}, context()) ->
+    {[{Encoding::string(), Producer::function()}], #wm_reqdata{}, context()}.
 %% @doc List the encodings available for representing this resource.
 %%      "identity" and "gzip" are available for props requests.
 encodings_provided(RD, Ctx) ->
     {riak_kv_wm_utils:default_encodings(), RD, Ctx}.
 
-%% @spec content_types_accepted(reqdata(), context()) ->
-%%          {[{ContentType::string(), Acceptor::atom()}],
-%%           reqdata(), context()}
+-spec content_types_accepted(#wm_reqdata{}, context()) ->
+    {[{ContentType::string(), Acceptor::atom()}],
+     #wm_reqdata{}, context()}.
 %% @doc Get the list of content types this resource will accept.
 %%      "application/json" is the only type accepted for props PUT.
 content_types_accepted(RD, Ctx) ->
     {[{"application/json", accept_bucket_type_body}], RD, Ctx}.
 
-%% @spec produce_bucket_body(reqdata(), context()) -> {binary(), reqdata(), context()}
+-spec produce_bucket_type_body(#wm_reqdata{}, context()) ->
+    {binary(), #wm_reqdata{}, context()}.
 %% @doc Produce the bucket properties as JSON.
 produce_bucket_type_body(RD, Ctx) ->
     Props = riak_core_bucket_type:get(Ctx#ctx.bucket_type),
@@ -245,7 +246,8 @@ produce_bucket_type_body(RD, Ctx) ->
                    ]}),
     {JsonProps, RD, Ctx}.
 
-%% @spec accept_bucket_body(reqdata(), context()) -> {true, reqdata(), context()}
+-spec accept_bucket_type_body(#wm_reqdata{}, context()) ->
+    {true, #wm_reqdata{}, context()}.
 %% @doc Modify the bucket properties according to the body of the
 %%      bucket-level PUT request.
 accept_bucket_type_body(RD, Ctx=#ctx{bucket_type=T, bucketprops=Props}) ->
