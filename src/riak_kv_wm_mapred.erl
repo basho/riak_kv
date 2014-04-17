@@ -94,8 +94,8 @@ forbidden(RD, State) ->
 allowed_methods(RD, State) ->
     {['GET','HEAD','POST'], RD, State}.
 
--spec known_content_type(wrq:reqdata(), state()) ->
-    {boolean(), wrq:reqdata(), state()}.
+-spec known_content_type(#wm_reqdata{}, state()) ->
+    {boolean(), #wm_reqdata{}, state()}.
 known_content_type(RD, State) ->
     {ctype_ok(RD), RD, State}.
 
@@ -125,13 +125,13 @@ format_error({error, Error}) when is_list(Error) ->
 format_error(_Error) ->
     mochijson2:encode({struct, [{error, map_reduce_error}]}).
 
--spec ctype_ok(wrq:reqdata()) -> boolean().
+-spec ctype_ok(#wm_reqdata{}) -> boolean().
 %% @doc Return true if the content type from
 %% this request is appropriate.
 ctype_ok(RD) ->
     valid_ctype(get_base_ctype(RD)).
 
--spec get_base_ctype(wrq:reqdata()) -> string().
+-spec get_base_ctype(#wm_reqdata{}) -> string().
 %% @doc Return the "base" content-type, that
 %% is, not including the subtype parameters
 get_base_ctype(RD) ->

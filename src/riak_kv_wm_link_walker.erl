@@ -137,7 +137,6 @@
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
 
-%% @type context() = term()
 -record(ctx, {api_version, %% integer() - Determine which version of the API to use.
               prefix,      %% string() - prefix for resource urls
               riak,        %% local | {node(), atom()} - params for riak client
@@ -149,10 +148,15 @@
               cache_secs,  %% integer() - number of seconds to add for expires header
               client       %% riak_client() - the store client
              }).
+-type context() :: #ctx{}.
 
-%% @spec mapreduce_linkfun({error, notfound}|riak_object(), term(), {binary(), binary()}) ->
-%%          [link()]
-%% @type link() = {{Bucket::binary(), Key::binary()}, Tag::binary()}
+-type link() :: {{Bucket::binary(), Key::binary()}, Tag::binary()}.
+-type linkquery() :: {Bucket::binary()|'_', Tag::binary()|'_', Acc::boolean()}.
+-type tokenizedlink() :: [string()].
+
+-spec mapreduce_linkfun({error, notfound}|riak_object:riak_object(), term(),
+                        {binary(), binary()}) ->
+    [link()].
 %% @doc Extract the links from Object that match {Bucket, Tag}.
 %%      Set this function as the bucket property linkfun to enable
 %%      {link, Bucket, Key, Acc} syntax in mapreduce queries on the bucket.
@@ -162,7 +166,7 @@ mapreduce_linkfun({error, notfound}, _, _) -> [];
 mapreduce_linkfun(Object, _, {Bucket, Tag}) ->
     links(Object, Bucket, Tag).
 
-%% @spec links(riak_object()) -> [link()]
+-spec links(riak_object:riak_object()) -> [link()].
 %% @doc Get all of the links that Object has.
 links(Object) ->
     MDs = riak_object:get_metadatas(Object),
@@ -174,7 +178,8 @@ links(Object) ->
         end
         || MD <- MDs ]).
 
-%% @spec links(riak_object(), binary()|'_', binary()|'_') -> [link()]
+-spec links(riak_object:riak_object(), binary()|'_', binary()|'_') ->
+    [link()].
 %% @doc Get all of the links Object has that match Bucket and Tag.
 %%      Pass binaries for Bucket or Tag to match the bucket or
 %%      tag of the link exactly.  Pass the atom '_' to match any
@@ -182,7 +187,7 @@ links(Object) ->
 links(Object, Bucket, Tag) ->
     lists:filter(link_match_fun(Bucket, Tag), links(Object)).
 
-%% @spec link_match_fun(binary()|'_', binary()|'_') -> function()
+-spec link_match_fun(binary()|'_', binary()|'_') -> function().
 %% @doc Create a function suitable for lists:filter/2 for filtering
 %%      links by Bucket and Tag.
 link_match_fun('_', '_') ->
@@ -194,7 +199,7 @@ link_match_fun(Bucket, '_') ->
 link_match_fun(Bucket, Tag) ->
     fun([B, _K, T]) -> Bucket == B andalso Tag == T end.
 
-%% @spec init(proplist()) -> {ok, context()}
+-spec init(proplists:proplist()) -> {ok, context()}.
 %% @doc Initialize the resource.  This function extacts the 'prefix',
 %%      'riak', and 'chache_secs' properties from the dispatch args.
 init(Props) ->
@@ -205,8 +210,8 @@ init(Props) ->
               bucket_type=proplists:get_value(bucket_type, Props)
              }}.
 
-%% @spec malformed_request(reqdata(), context()) ->
-%%           {boolean(), reqdata(), context()}
+-spec malformed_request(#wm_reqdata{}, context()) ->
+    {boolean(), #wm_reqdata{}, context()}.
 %% @doc Parse link walk query and determine if it's
 %%      valid.
 malformed_request(RD, Ctx) ->
@@ -225,8 +230,8 @@ malformed_request(RD, Ctx) ->
     end.
 
 
-%% @spec service_available(reqdata(), context()) ->
-%%          {boolean(), reqdata(), context()}
+-spec service_available(#wm_reqdata{}, context()) ->
+    {boolean(), #wm_reqdata{}, context()}.
 %% @doc Determine whether or not a connection to Riak
 %%      can be established.  This function also takes this
 %%      opportunity to extract the 'bucket' and 'key' path
@@ -275,8 +280,8 @@ forbidden(RD, Ctx) ->
             end
     end.
 
-%% @spec allowed_methods(reqdata(), context()) ->
-%%          {[method()], reqdata(), context()}
+-spec allowed_methods(#wm_reqdata{}, context()) ->
+    {[atom()], #wm_reqdata{}, context()}.
 %% @doc Get the list of methods this resource supports.
 %%      HEAD, GET, and POST are supported.  POST does nothing,
 %%      though, and is only exposed for browser-cache-clearing
@@ -284,8 +289,8 @@ forbidden(RD, Ctx) ->
 allowed_methods(RD, Ctx) ->
     {['GET', 'HEAD', 'POST'], RD, Ctx}.
 
-%% @spec content_types_provided(reqdata(), context()) ->
-%%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
+-spec content_types_provided(#wm_reqdata{}, context()) ->
+    {[{ContentType::string(), Producer::atom()}], #wm_reqdata{}, context()}.
 %% @doc List the content types available for representing this
 %%      resource.  Currently only multipart/mixed is supported.
 content_types_provided(RD, Ctx) ->
@@ -297,7 +302,8 @@ expires(RD, Ctx=#ctx{cache_secs=Secs}) ->
               calendar:universal_time())),
      RD, Ctx}.
 
-%% @spec resource_exists(reqdata(), context()) -> {boolean(), reqdata(), context()}
+-spec resource_exists(#wm_reqdata{}, context()) ->
+    {boolean(), #wm_reqdata{}, context()}.
 %% @doc This resource exists if Riak returns {ok, riak_object()} from
 %%      a get of the starting document.
 resource_exists(RD, Ctx=#ctx{bucket=B, key=K, client=C}) ->
@@ -308,7 +314,8 @@ resource_exists(RD, Ctx=#ctx{bucket=B, key=K, client=C}) ->
             {false, RD, Ctx}
     end.
 
-%% @spec to_multipart_mixed(reqdata(), context()) -> {iolist(), reqdata(), context()}
+-spec to_multipart_mixed(#wm_reqdata{}, context()) ->
+    {iolist(), #wm_reqdata{}, context()}.
 %% @doc Execute the link walking query, and build the response body.
 %%      This function has to explicitly set the Content-Type header,
 %%      because Webmachine doesn't know to add the "boundary" parameter to it.
@@ -322,9 +329,8 @@ to_multipart_mixed(RD, Ctx=#ctx{linkquery=Query, start=Start}) ->
                          RD),
      Ctx}.
 
-%% @spec execute_query([riak_object()], [linkquery()]) ->
-%%          [[riak_object()]]
-%% @type linkquery() = {Bucket::binary()|'_', Tag::binary()|'_', Acc::boolean()}
+-spec execute_query([riak_object:riak_object()], [linkquery()]) ->
+    [[riak_object:riak_object()]].
 %% @doc Execute the link query.  Return a list of link step results,
 %%      each link step result being a list of Riak objects.  Link
 %%      step results are only returns for those steps that specify
@@ -348,8 +354,8 @@ execute_query(StartObjects, [{Bucket, Tag, Acc}|RestQuery]) ->
      end,
     [SegResults|execute_query(SegResults,Leftover)].
 
-%% @spec execute_segment([bkeytag()], [linkquery()]) ->
-%%          [riak_object()]
+-spec execute_segment([BKeyTag :: term()], [linkquery()]) ->
+    [riak_object:riak_object()].
 %% @doc Execute a string of link steps, where only the last step's
 %%      result will be kept for later.
 execute_segment(Start, Steps) ->
@@ -366,7 +372,7 @@ execute_segment(Start, Steps) ->
                   [],
                   Objects)).
 
-%% @spec extract_query(reqdata()) -> [linkquery()]
+-spec extract_query(#wm_reqdata{}) -> [linkquery()].
 %% @doc Extract the link-walking query from the URL chunk after the
 %%      bucket and key.
 extract_query(RD) ->
@@ -374,9 +380,8 @@ extract_query(RD) ->
     Parts = [ string:tokens(P, ",") || P <- string:tokens(Path, "/") ],
     parts_to_query(Parts, []).
 
-%% @spec parts_to_query([toeknizedlink()], [linkquery()]) ->
-%%          [linkquery()]
-%% @type tokenizedlink() = [string()]
+-spec parts_to_query([tokenizedlink()], [linkquery()]) ->
+    [linkquery()].
 %% @doc Translate each token-ized string link query to the real link
 %%      query format.
 parts_to_query([], Acc) -> lists:reverse(Acc);
@@ -397,13 +402,16 @@ parts_to_query([[B,T,A]|Rest], Acc) ->
                      end}
                     |Acc]).
 
-%% @spec process_post(reqdata(), context()) -> {true, reqdata(), context()}
+-spec process_post(#wm_reqdata{}, context()) ->
+    {true, #wm_reqdata{}, context()}.
 %% @doc do nothing with POST
 %%      just allow client to use it to invalidate browser cache
 process_post(RD, Ctx) ->
     {true, RD, Ctx}.
 
-%% @spec multipart_mixed_encode([riak_object()]|[[riak_object()]], string(), context()) -> iolist()
+-spec multipart_mixed_encode([riak_object:riak_object()]|
+                             [[riak_object:riak_object()]],
+                             string(), context()) -> iolist().
 %% @doc Encode the list of result lists, or a single result list in a
 %%      multipart body.
 multipart_mixed_encode(WalkResults, Boundary, Ctx) ->
@@ -411,7 +419,9 @@ multipart_mixed_encode(WalkResults, Boundary, Ctx) ->
       || R <- WalkResults],
      "\r\n--",Boundary,"--\r\n"].
 
-%% @spec multipart_encode_body(riak_object()|[riak_object()], context()) -> iolist()
+-spec multipart_encode_body(riak_object:riak_object()|
+                            [riak_object:riak_object()], context()) ->
+    iolist().
 %% @doc Encode a riak object (as an HTTP response much like what riak_kv_wm_object
 %%      would produce) or a result list (as a multipart/mixed document).
 %%      Riak object body will include a Location header to describe where to find
