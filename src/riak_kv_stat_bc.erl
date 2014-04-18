@@ -505,7 +505,9 @@ system_stats() ->
      {sys_global_heaps_size, safe_global_heap_size()},
      {sys_heap_type, erlang:system_info(heap_type)},
      {sys_logical_processors, erlang:system_info(logical_processors)},
+     {sys_monitor_count, sys_monitor_count()},
      {sys_otp_release, list_to_binary(erlang:system_info(otp_release))},
+     {sys_port_count, erlang:system_info(port_count)},
      {sys_process_count, erlang:system_info(process_count)},
      {sys_smp_support, erlang:system_info(smp_support)},
      {sys_system_version, list_to_binary(string:strip(erlang:system_info(system_version), right, $\n))},
@@ -521,6 +523,18 @@ safe_global_heap_size() ->
         error:badarg ->
             deprecated
     end.
+
+%% Count up all monitors, unfortunately has to obtain process_info
+%% from all processes to work it out.
+sys_monitor_count() ->
+    lists:foldl(fun(Pid, Count) ->
+                        case erlang:process_info(Pid, monitors) of
+                            {monitors, Mons} ->
+                                Count + length(Mons);
+                            _ ->
+                                Count
+                        end
+                end, 0, processes()).
 
 app_stats() ->
     [{list_to_atom(atom_to_list(A) ++ "_version"), list_to_binary(V)}
