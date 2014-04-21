@@ -64,11 +64,10 @@ riak_kv_vnode.erl:1189: The pattern <{Idx, Node}, Key, Obj> can never match the 
 riak_kv_vnode.erl:1229: Function do_backend_delete/3 has no local return
 riak_kv_vnode.erl:1655: Function result_fun/1 will never be called
 riak_kv_vnode.erl:1656: The created fun has no local return
-riak_kv_vnode.erl:1680: The pattern <_, _, _> can never match since previous clauses completely covered the type <'keys','undefined' | integer(),_>
-riak_kv_vnode.erl:1886: Function delete_from_hashtree/3 has no local return
-riak_kv_vnode.erl:1890: The call riak_kv_index_hashtree:async_delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ({binary(),binary()} | [{binary(),binary()}],pid()) -> 'ok'
-riak_kv_vnode.erl:1893: The call riak_kv_index_hashtree:delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ([{binary(),binary()}],pid()) -> 'ok'
-riak_kv_vnode.erl:2029: Function update_index_delete_stats/1 will never be called
+riak_kv_vnode.erl:1884: Function delete_from_hashtree/3 has no local return
+riak_kv_vnode.erl:1888: The call riak_kv_index_hashtree:async_delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ({binary(),binary()} | [{binary(),binary()}],pid()) -> 'ok'
+riak_kv_vnode.erl:1891: The call riak_kv_index_hashtree:delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ([{binary(),binary()}],pid()) -> 'ok'
+riak_kv_vnode.erl:2027: Function update_index_delete_stats/1 will never be called
 riak_kv_wm_counter.erl:184: The call riak_core_security:check_permission({[46 | 95 | 97 | 101 | 103 | 105 | 107 | 112 | 114 | 116 | 117 | 118,...],{<<_:56>>,_}},Security::any()) breaks the contract (Permission::permission(),Context::context()) -> {'true',context()} | {'false',binary(),context()}
 riak_kv_wm_crdt.erl:387: Function produce_json/2 has no local return
 riak_kv_wm_crdt.erl:391: The call riak_kv_crdt_json:fetch_response_to_json(Type::'counter' | 'flag' | 'map' | 'register' | 'set' | 'undefined',Value::any(),'undefined' | binary(),[{'counter','riak_dt_pncounter'} | {'flag','riak_dt_od_flag'} | {'map','riak_dt_map'} | {'register','riak_dt_lwwreg'} | {'set','riak_dt_orswot'},...]) does not have an opaque term of type riak_kv_crdt_json:context() as 3rd argument

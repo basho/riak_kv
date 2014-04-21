@@ -514,7 +514,7 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
                 fun(Results) ->
                         Caller ! {ReqId, {kl, Idx, Results}}
                 end,
-            Extras = fold_extras(keys, Idx, Bucket),
+            Extras = fold_extras_keys(Idx, Bucket),
             FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
             ModFun = fold_keys
     end,
@@ -883,7 +883,7 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     BufferMod = riak_kv_fold_buffer,
     BufferSize = proplists:get_value(buffer_size, Opts0, DefaultBufSz),
     Buffer = BufferMod:new(BufferSize, ResultFun),
-    Extras = fold_extras(keys, Index, Bucket),
+    Extras = fold_extras_keys(Index, Bucket),
     FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
@@ -1663,7 +1663,7 @@ result_fun(Bucket, Sender) ->
             riak_core_vnode:reply(Sender, {Bucket, Items})
     end.
 
-fold_extras(keys, Index, Bucket) ->
+fold_extras_keys(Index, Bucket) ->
     case app_helper:get_env(riak_kv, fold_preflist_filter, false) of
         true ->
             {ok, R} = riak_core_ring_manager:get_my_ring(),
@@ -1676,9 +1676,7 @@ fold_extras(keys, Index, Bucket) ->
             {Bucket, Index, N, NumPartitions};
         false ->
             undefined
-    end;
-fold_extras(_, _, _) ->
-    undefined.
+    end.
 
 %% wait for acknowledgement that results were received before
 %% continuing, as a way of providing backpressure for processes that
