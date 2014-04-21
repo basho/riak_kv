@@ -35,7 +35,8 @@
          check_quorum/0,
          count_quorum/0,
          check_membership/0,
-         check_membership2/0]).
+         check_membership2/0,
+         local_ensembles/0]).
 
 %% Exported for debugging
 -export([required_ensembles/1,
@@ -54,6 +55,19 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
+
+local_ensembles() ->
+    Node = node(),
+    lists:foldl(fun(Ensemble, Acc) ->
+                    Members = riak_ensemble_manager:get_members(Ensemble),
+                    case lists:keyfind(Node, 2, Members) of
+                        false ->
+                            Acc;
+                        _ ->
+                            [Ensemble | Acc]
+                    end
+                end, [], ensembles()).
+                    
 ensembles() ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     required_ensembles(Ring).
