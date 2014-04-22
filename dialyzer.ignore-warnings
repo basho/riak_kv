@@ -54,7 +54,6 @@ riak_kv_put_fsm.erl:818: The pattern <[COP = {'counter_op', _Amt} | T], Acc> can
 riak_kv_put_fsm.erl:821: The pattern <[COP = {'crdt_op', _Op} | T], Acc> can never match the type <[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()},...],[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()}]>
 riak_kv_util.erl:294: The pattern 'error' can never match the type 'ok' | 'undefined'
 riak_kv_vnode.erl:23: Callback info about the riak_core_vnode behaviour is not available
-riak_kv_vnode.erl:766: The call riak_kv_coverage_filter:build_filter('all',ItemFilter::'undefined' | fun(),'undefined') breaks the contract (bucket(),filter(),[index()]) -> filter()
 riak_kv_vnode.erl:817: The pattern Q = {'riak_kv_index_v3', _, _, _, _, _, _, _, _, RE, _} can never match the type 'undefined' | {_,_}
 riak_kv_vnode.erl:827: The pattern <{'riak_kv_index_v3', _, _, _, _, _, _, _, _, _, N}, DefaultSize> can never match the type <'undefined' | {_,_},'undefined' | pos_integer()>
 riak_kv_vnode.erl:962: The variable Err can never match since previous clauses completely covered the type {'ok',_} | {'error',_,_}

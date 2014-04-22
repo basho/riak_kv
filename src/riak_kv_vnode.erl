@@ -763,7 +763,7 @@ handle_coverage(?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
                              mod=Mod,
                              modstate=ModState}) ->
     %% Construct the filter function
-    Filter = riak_kv_coverage_filter:build_filter(all, ItemFilter, undefined),
+    Filter = riak_kv_coverage_filter:build_filter(ItemFilter),
     BufferMod = riak_kv_fold_buffer,
 
     Buffer = BufferMod:new(BufferSize, result_fun(Sender)),
