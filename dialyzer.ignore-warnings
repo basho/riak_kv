@@ -18,20 +18,6 @@ riak_core_pb.erl:201: The pattern <Binary, 'string'> can never match the type <_
 riak_core_pb.erl:221: The pattern <Types, [{Fnum, Bytes} | Tail], Acc> can never match the type <_,[],[{_,_}]>
 riak_kv_bitcask_backend.erl:600: Guard test Dir1TS::nonempty_string() == [] can never succeed
 riak_kv_bitcask_backend.erl:602: Guard test Dir2TS::nonempty_string() == [] can never succeed
-riak_kv_entropy_info.erl:78: Function exchange_complete/4 has no local return
-riak_kv_entropy_info.erl:83: Function exchange_complete/5 has no local return
-riak_kv_entropy_info.erl:84: The call riak_kv_entropy_info:update_index_info({_,_},{'exchange_complete',_,_,_}) will never return since it differs in the 2nd argument from the success typing arguments: ({_,_},{'tree_built',_})
-riak_kv_entropy_info.erl:161: Record construction #index_info{exchanges::[]} violates the declared type of field repaired::pos_integer() and last_exchange::{non_neg_integer(),{non_neg_integer(),pos_integer()}}
-riak_kv_entropy_info.erl:194: The call riak_kv_entropy_info:update_simple_stat(Repaired::'undefined' | pos_integer(),pos_integer()) will never return since it differs in the 2nd argument from the success typing arguments: (any(),'undefined' | #simple_stat{count::number(),sum::number()})
-riak_kv_entropy_info.erl:208: Function compute_exchange_info/4 has no local return
-riak_kv_entropy_info.erl:218: The call riak_kv_entropy_info:stat_tuple(Repaired::pos_integer()) will never return since it differs in the 1st argument from the success typing arguments: ('undefined' | #simple_stat{count::integer(),sum::integer()})
-riak_kv_entropy_info.erl:225: Function update_simple_stat/2 has no local return
-riak_kv_entropy_info.erl:225: The pattern <Value, 'undefined'> can never match the type <'undefined' | pos_integer(),pos_integer()>
-riak_kv_entropy_info.erl:227: The pattern <Value, Stat = {'simple_stat', _, Min, Max, Cnt, Sum}> can never match the type <'undefined' | pos_integer(),pos_integer()>
-riak_kv_entropy_info.erl:234: Function stat_tuple/1 has no local return
-riak_kv_entropy_info.erl:234: The pattern 'undefined' can never match the type pos_integer()
-riak_kv_entropy_info.erl:236: The pattern {'simple_stat', Last, Min, Max, Cnt, Sum} can never match the type pos_integer()
-riak_kv_exchange_fsm.erl:379: Function exchange_complete/4 has no local return
 riak_kv_gcounter.erl:64: Invalid type specification for function riak_kv_gcounter:new/2. The success typing is (_,pos_integer()) -> {'ok',riak_kv_gcounter:gcounter()}
 riak_kv_gcounter.erl:75: Invalid type specification for function riak_kv_gcounter:update/3. The success typing is ('increment' | {'increment',pos_integer()},_,riak_kv_gcounter:gcounter()) -> {'ok',riak_kv_gcounter:gcounter()}
 riak_kv_gcounter.erl:85: Function merge/2 has no local return
