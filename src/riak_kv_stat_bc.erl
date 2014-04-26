@@ -269,7 +269,8 @@ legacy_stat_map() ->
      {list_fsm_active, {riak_kv, list, fsm, active}, counter},
      {pbc_active, {riak_api, pbc_connects, active}, function},
      {pbc_connects, {{riak_api, pbc_connects}, one}, spiral},
-     {pbc_connects_total, {{riak_api, pbc_connects}, count}, spiral}] ++ legacy_fsm_stats().
+     {pbc_connects_total, {{riak_api, pbc_connects}, count}, spiral},
+     {late_put_fsm_coordinator_ack, {riak_kv, late_put_fsm_coordinator_ack}, counter}] ++ legacy_fsm_stats().
 
 legacy_fsm_stats() ->
     %% When not using sidejob to manage FSMs, include the legacy FSM stats.

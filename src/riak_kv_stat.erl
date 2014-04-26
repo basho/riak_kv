@@ -238,7 +238,11 @@ do_update({list_create, Pid}) ->
 do_update(list_create_error) ->
     folsom_metrics:notify_existing_metric({?APP, list, fsm, create, error}, 1, spiral);
 do_update({fsm_destroy, Type}) ->
-    folsom_metrics:notify_existing_metric({?APP, Type, fsm, active}, {dec, 1}, counter).
+    folsom_metrics:notify_existing_metric({?APP, Type, fsm, active}, {dec, 1}, counter);
+do_update({Type, actor_count, Count}) ->
+    folsom_metrics:notify_existing_metric({?APP, Type, actor_count}, Count, histogram);
+do_update(late_put_fsm_coordinator_ack) ->
+    folsom_metrics:notify_existing_metric({?APP, late_put_fsm_coordinator_ack}, {inc, 1}, counter).
 
 %% private
 
@@ -374,7 +378,9 @@ stats() ->
      {precommit_fail, counter},
      {postcommit_fail, counter},
      {[vnode, backend, leveldb, read_block_error],
-      {function, {function, ?MODULE, leveldb_read_block_errors}}}].
+      {function, {function, ?MODULE, leveldb_read_block_errors}}},
+     {late_put_fsm_coordinator_ack, counter}
+    ].
 
 %% @doc register a stat with folsom
 do_register_stat(Name, spiral) ->
@@ -547,6 +553,8 @@ stats_from_update_arg({list_create, _Pid}) ->
      {{?APP, list, fsm, active}, {metric, [], counter, undefined}}];
 stats_from_update_arg(list_create_error) ->
     [{{?APP, list, fsm, create, error}, {metric, [], spiral, undefined}}];
+stats_from_update_arg(late_put_fsm_coordinator_ack) ->
+    [{{?APP, late_put_fsm_coordinator_ack}, {metric,[],counter,undefined}}];
 stats_from_update_arg(_) ->
     [].
 
