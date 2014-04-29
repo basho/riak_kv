@@ -450,8 +450,9 @@ run_reformat(M, F, A) ->
 
 bucket_type_status([TypeStr]) ->
     Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
-    bucket_type_print_status(Type, riak_core_bucket_type:status(Type)),
-    bucket_type_print_props(bucket_type_raw_props(Type)).
+    Return = bucket_type_print_status(Type, riak_core_bucket_type:status(Type)),
+    bucket_type_print_props(bucket_type_raw_props(Type)),
+    Return.
 
 
 bucket_type_raw_props(<<"default">>) ->
@@ -460,13 +461,17 @@ bucket_type_raw_props(Type) ->
     riak_core_claimant:get_bucket_type(Type, undefined, false).
 
 bucket_type_print_status(Type, undefined) ->
-    io:format("~ts is not an existing bucket type~n", [Type]);
+    io:format("~ts is not an existing bucket type~n", [Type]),
+    {error, undefined};
 bucket_type_print_status(Type, created) ->
-    io:format("~ts has been created but cannot be activated yet~n", [Type]);
+    io:format("~ts has been created but cannot be activated yet~n", [Type]),
+    {error, not_ready};
 bucket_type_print_status(Type, ready) ->
-    io:format("~ts has been created and may be activated~n", [Type]);
+    io:format("~ts has been created and may be activated~n", [Type]),
+    ok;
 bucket_type_print_status(Type, active) ->
-    io:format("~ts is active~n", [Type]).
+    io:format("~ts is active~n", [Type]),
+    ok.
 
 bucket_type_print_props(undefined) ->
     ok;
