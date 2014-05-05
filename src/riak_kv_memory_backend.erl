@@ -211,7 +211,7 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
         _ ->
             {{ts, Now}, Val}
     end,
-    OldSize = 
+    OldSize =
         case ets:lookup(DataRef, {Bucket, PrimaryKey}) of
             [] ->
                 0;
@@ -244,7 +244,6 @@ delete(Bucket, Key, IndexSpecs, State=#state{data_ref=DataRef,
                                              index_ref=IndexRef,
                                              time_ref=TimeRef,
                                              used_memory=UsedMemory}) ->
-    
     [Object] = ets:lookup(DataRef, {Bucket, Key}),
     case TimeRef of
         undefined ->
