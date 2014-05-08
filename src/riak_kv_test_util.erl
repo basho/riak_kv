@@ -2,7 +2,7 @@
 %%
 %% riak_test_util: utilities for test scripts
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2014 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -29,6 +29,7 @@
 -export([call_unused_fsm_funs/1,
          stop_process/1,
          wait_for_pid/1,
+         wait_for_unregister/1,
          wait_for_children/1,
          common_setup/1,
          common_setup/2,
@@ -98,6 +99,24 @@ wait_for_pid(Pid) ->
     after
         5000 ->
             {error, didnotexit, Pid, erlang:process_info(Pid)}
+    end.
+
+%% @doc Wait for registered process to exit.
+-spec wait_for_unregister(Mod::atom()) ->
+                                 ok |
+                                 {error, didnotexit, pid(), term()}.
+wait_for_unregister(Mod) ->
+    case whereis(Mod) of
+        undefined ->
+            ok;
+        Pid ->
+            case erlang:function_exported(Mod, stop, 0) of
+                true ->
+                    Mod:stop(),
+                    wait_for_pid(Pid);
+                false ->
+                    stop_process(Pid)
+            end
     end.
 
 %% Wait for children that were spawned with proc_lib.
@@ -194,6 +213,12 @@ cleanup(Test, CleanupFun, StartedApps) ->
     catch exit(whereis(riak_kv_vnode_master), kill),
     catch exit(whereis(riak_sysmon_filter), kill),
     catch riak_core_stat_cache:stop(),
+    %% Need to specifically wait for riak_kv_stat to unregister, since
+    %% otherwise we get a specific error
+    %% {{already_started,Pid},#child{...}}  from supervisor:start_child/2
+    %% where riak_kv_stat is already started by another supervisor from a
+    %% previous test.
+    wait_for_unregister(riak_kv_stat),
 
     %% Stop distributed Erlang
     net_kernel:stop(),
@@ -248,7 +273,7 @@ dep_apps(Test, Extra) ->
         end,
 
     [sasl, Silencer, runtime_tools, erlang_js, mochiweb, webmachine,
-     sidejob, poolboy, basho_stats, bitcask, lager, folsom, protobuffs,
+     sidejob, poolboy, basho_stats, bitcask, goldrush, lager, folsom, protobuffs,
      eleveldb, riak_core, riak_pipe, riak_api, riak_dt, riak_pb, riak_kv,
      DefaultSetupFun, Extra].
 
@@ -315,6 +340,5 @@ start_app_and_deps(Application, Started) ->
                     {error, Reason}
             end
     end.
-
 
 -endif. % TEST

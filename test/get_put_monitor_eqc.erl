@@ -64,9 +64,10 @@ exit_gracefully(S) ->
     [end_and_wait(Pid, normal) || Pid <- PutList ++ GetList].
 
 reset_test_state() ->
-    [maybe_stop_and_wait(Server) || Server <- [riak_core_stat_cache, riak_kv_stat]],
+    Servers = [riak_kv_stat, riak_core_stat_cache],
+    [riak_kv_test_util:wait_for_unregister(Server) || Server <- Servers],
     application:stop(folsom),
-    application:start(folsom),
+    ok = application:start(folsom),
     {ok, Cache} = riak_core_stat_cache:start_link(),
     {ok, Pid} = riak_kv_stat:start_link(),
     unlink(Pid),
@@ -149,7 +150,7 @@ invariant(S) ->
     #state{put_errors = PutErrCount, get_errors = GetErrCount,
         put_fsm = PutList, get_fsm = GetList} = S,
 
-    % with a timetrap of 60 seconds, the spiral will never have values slide off
+    %% with a timetrap of 60 seconds, the spiral will never have values slide off
     MetricExpects = [
         {?PUTS_ACTIVE, length(PutList)},
         {?GETS_ACTIVE, length(GetList)},
@@ -274,15 +275,4 @@ end_and_wait(Pid, Cause) ->
             ok
     end.
 
-%% Make sure `Server' is not running
-%% `Server' _MUST_ have an exported fun `stop/0'
-%% that stopes the server
-maybe_stop_and_wait(Server) ->
-    case whereis(Server) of
-        undefined ->
-            ok;
-        Pid ->
-            Server:stop(),
-            riak_kv_test_util:wait_for_pid(Pid)
-    end.
 -endif.
