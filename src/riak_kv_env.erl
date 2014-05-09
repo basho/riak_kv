@@ -139,7 +139,6 @@ check_erlang_limits() ->
     PortLimit = erlang:system_info(port_limit),
     PortMsg = case PortLimit < 64000 of
                   true ->
-                      %% needs to be revisited for R16+
                       {warn, "Erlang ports limit of ~p is low, at least "
                        "64000 is recommended", [PortLimit]};
                   false ->
