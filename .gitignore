@@ -13,3 +13,4 @@ ebin
 dialyzer_unhandled_warnings
 dialyzer_warnings
 tags
+erln8.config

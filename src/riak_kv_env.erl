@@ -136,10 +136,7 @@ check_erlang_limits() ->
                     {info,"Erlang process limit: ~p", [PL2]}
             end,
     %% ports
-    PortLimit = case os:getenv("ERL_MAX_PORTS") of
-                    false -> 1024;
-                    PL -> list_to_integer(PL)
-                end,
+    PortLimit = erlang:system_info(port_limit),
     PortMsg = case PortLimit < 64000 of
                   true ->
                       %% needs to be revisited for R16+
@@ -150,10 +147,7 @@ check_erlang_limits() ->
               end,
 
     %% ets tables
-    ETSLimit = case os:getenv("ERL_MAX_ETS_TABLES") of
-                   false -> 1400;
-                   Limit -> list_to_integer(Limit)
-               end,
+    ETSLimit = erlang:system_info(ets_limit),
     ETSMsg = case ETSLimit < 256000 of
                  true ->
                      {warn,"ETS table count limit of ~p is low, at least "
