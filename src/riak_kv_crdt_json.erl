@@ -211,7 +211,7 @@ set_op_from_json({Verb, BinList}=Op) when is_list(BinList), (Verb == <<"add_all"
                                                              Verb == <<"remove_all">>)->
     case check_set_members(BinList) of
         true ->
-            {binary_to_existing_atom(Verb, utf8), BinList};
+            {binary_to_atom(Verb, utf8), BinList};
         false ->
             bad_op(set, Op)
     end;
