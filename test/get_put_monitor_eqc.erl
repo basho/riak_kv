@@ -32,7 +32,7 @@ eqc_test_() ->
             catch code:delete(riak_kv_stat_sj)
         end, 
         [
-         {timeout, 120, [?_assertEqual(true, quickcheck(eqc:testing_time(90,
+         {timeout, 150, [?_assertEqual(true, quickcheck(eqc:testing_time(90,
                            ?QC_OUT(prop()))))]}
        ]}.
 
@@ -151,20 +151,34 @@ invariant(S) ->
         put_fsm = PutList, get_fsm = GetList} = S,
 
     %% with a timetrap of 60 seconds, the spiral will never have values slide off
-    MetricExpects = [
-        {?PUTS_ACTIVE, length(PutList)},
-        {?GETS_ACTIVE, length(GetList)},
-        {?PUTS_ERRORS, [{count, PutErrCount}, {one, PutErrCount}]},
-        {?GETS_ERRORS, [{count, GetErrCount}, {one, GetErrCount}]}
-    ],
+    Metrics = [?PUTS_ACTIVE, ?GETS_ACTIVE, ?PUTS_ERRORS, ?GETS_ERRORS],
+    Expects = [length(PutList), length(GetList),
+               [{count, PutErrCount}, {one, PutErrCount}],
+               [{count, GetErrCount}, {one, GetErrCount}]],
+    MetricExpects = lists:zip(Metrics, Expects),
+
+    wait_for_non_negative_metrics(Metrics, 10),
 
     Zipped = [{Metric, Expected, folsom_metrics:get_metric_value(Metric)} ||
         {Metric, Expected} <- MetricExpects],
-    Bad = [{Metric, {expected, Expected}, {actual, Actual}} || 
+    Bad = [{Metric, {expected, Expected}, {actual, Actual}} ||
         {Metric, Expected, Actual} <- Zipped, Expected /= Actual],
     case Bad of
         [] -> true;
         _ -> Bad
+    end.
+
+wait_for_non_negative_metrics(_, 0) ->
+    ok;
+wait_for_non_negative_metrics([], _) ->
+    ok;
+wait_for_non_negative_metrics([Metric|MetricsRest]=Metrics, Count) ->
+    case folsom_metrics:get_metric_value(Metric) < 0 of
+        true ->
+            timer:sleep(1),
+            wait_for_non_negative_metrics(Metrics, Count-1);
+        false ->
+            wait_for_non_negative_metrics(MetricsRest, Count)
     end.
 
 poll_stat_change(Metric, OriginalValue) ->
