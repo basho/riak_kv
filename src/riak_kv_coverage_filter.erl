@@ -30,7 +30,7 @@
 -module(riak_kv_coverage_filter).
 
 %% API
--export([build_filter/3]).
+-export([build_filter/1, build_filter/3]).
 
 -export_type([filter/0]).
 
@@ -53,6 +53,11 @@
 %% module. The list of tuples is composed into a function that is
 %% used to determine if an item should be included in the final 
 %% result set.
+-spec build_filter(filter()) -> filter().
+build_filter(Filter) ->
+    build_item_filter(Filter).
+
+
 -spec build_filter(bucket(), filter(), [index()]) -> filter().
 build_filter(Bucket, ItemFilterInput, FilterVNode) ->
     ItemFilter = build_item_filter(ItemFilterInput),
