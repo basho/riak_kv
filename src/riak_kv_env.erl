@@ -146,16 +146,18 @@ check_erlang_limits() ->
               end,
 
     %% ets tables
-    ETSLimit = erlang:system_info(ets_limit),
-    ETSMsg = case ETSLimit < 256000 of
-                 true ->
-                     {warn,"ETS table count limit of ~p is low, at least "
-                      "256000 is recommended.", [ETSLimit]};
-                 false ->
-                     {info, "ETS table count limit: ~p",
-                      [ETSLimit]}
-             end,
-
+    ETSMsg = try erlang:system_info(ets_limit) of
+        ETSLimit when ETSLimit < 256000 ->
+            {warn,"ETS table count limit of ~p is low, at least "
+                  "256000 is recommended.", [ETSLimit]};
+        ETSLimit ->
+            {info, "ETS table count limit: ~p",
+                   [ETSLimit]}
+    catch
+        error:badarg ->
+            {warn, "ETS table count limit cannot be determined on this "
+                   "version of Erlang", []}
+    end,
     %% fullsweep_after
     {fullsweep_after, GCGens} = erlang:system_info(fullsweep_after),
     GCMsg = {info, "Generations before full sweep: ~p", [GCGens]},
