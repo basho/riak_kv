@@ -412,7 +412,8 @@ legacy_stat_map() ->
      {map_actor_counts_median, {{riak_kv,map,actor_count}, median}, histogram},
      {map_actor_counts_95,  {{riak_kv,map,actor_count}, 95}, histogram_percentile},
      {map_actor_counts_99,  {{riak_kv,map,actor_count}, 99}, histogram_percentile},
-     {map_actor_counts_100, {{riak_kv,map,actor_count}, max}, histogram}] ++ legacy_fsm_stats().
+     {map_actor_counts_100, {{riak_kv,map,actor_count}, max}, histogram},
+     {late_put_fsm_coordinator_ack, {riak_kv, late_put_fsm_coordinator_ack}, counter}] ++ legacy_fsm_stats().
 
 legacy_fsm_stats() ->
     %% When not using sidejob to manage FSMs, include the legacy FSM stats.
