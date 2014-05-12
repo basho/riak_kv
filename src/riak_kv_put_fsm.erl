@@ -726,6 +726,10 @@ handle_sync_event(_Event, _From, _StateName, StateData) ->
 
 handle_info(request_timeout, StateName, StateData) ->
     ?MODULE:StateName(request_timeout, StateData);
+handle_info({ack, Node, now_executing}, StateName, StateData) ->
+    late_put_fsm_coordinator_ack(Node),
+    riak_kv_stat:update(late_put_fsm_coordinator_ack),
+    {next_state, StateName, StateData};
 handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
@@ -1045,3 +1049,7 @@ atom2list(P) when is_pid(P)->
 
 dtrace_errstr(Term) ->
     io_lib:format("~P", [Term, 12]).
+
+%% This function is for dbg tracing purposes
+late_put_fsm_coordinator_ack(_Node) ->
+    ok.
