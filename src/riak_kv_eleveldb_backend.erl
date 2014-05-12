@@ -2,7 +2,7 @@
 %%
 %% riak_kv_eleveldb_backend: Backend Driver for LevelDB
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2014 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -935,7 +935,10 @@ custom_config_test_() ->
     application:set_env(eleveldb, data_root, ""),
     riak_kv_backend:standard_test(?MODULE, [{data_root, "test/eleveldb-backend"}]).
 
-retry_test() ->
+retry_test_() ->
+    {spawn, [fun retry/0, fun retry_fail/0]}.
+
+retry() ->
     Root = "/tmp/eleveldb_retry_test",
     try
         {ok, State1} = start(42, [{data_root, Root}]),
@@ -986,7 +989,7 @@ retry_test() ->
         os:cmd("rm -rf " ++ Root)
     end.
 
-retry_fail_test() ->
+retry_fail() ->
     Root = "/tmp/eleveldb_fail_retry_test",
     try
         application:set_env(riak_kv, eleveldb_open_retries, 3), % 3 times, 1ms a time
