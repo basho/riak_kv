@@ -813,12 +813,13 @@ syntactic_merge(CurrentObject, NewObject) ->
                   end,
 
     case ancestors([UpdatedCurr, UpdatedNew]) of
-        [] -> merge(UpdatedCurr, UpdatedNew);
         [Ancestor] ->
             case equal(Ancestor, UpdatedCurr) of
                 true  -> UpdatedNew;
                 false -> UpdatedCurr
-            end
+            end;
+        _ ->
+            merge(UpdatedCurr, UpdatedNew)
     end.
 
 %% @doc Get an approximation of object size by adding together the bucket, key,
