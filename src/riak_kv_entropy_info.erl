@@ -135,8 +135,8 @@ compute_tree_info(Type) ->
 
 %% Return information about all exchanges for given index/index_n
 exchanges(Index, IndexN) ->
-    case lists:keyfind({riak_kv, Index}, 1, all_index_info()) of
-        {_, #index_info{exchanges=Exchanges}} ->
+    case ets:lookup(?ETS, {index, {riak_kv, Index}}) of
+        [{_, #index_info{exchanges=Exchanges}}] ->
             [{Idx, Time, Repaired}
              || {{Idx,IdxN}, #exchange_info{time=Time,
                                             repaired=Repaired}} <- Exchanges,
