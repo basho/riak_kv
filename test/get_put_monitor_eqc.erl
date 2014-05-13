@@ -25,15 +25,15 @@
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
 eqc_test_() ->
-    {setup, 
-        fun() -> 
+    {setup,
+        fun() ->
             error_logger:tty(false),
             catch code:purge(riak_kv_stat_sj),
             catch code:delete(riak_kv_stat_sj)
-        end, 
+        end,
         [
-         {timeout, 150, [?_assertEqual(true, quickcheck(eqc:testing_time(90,
-                           ?QC_OUT(prop()))))]}
+         %% {timeout, 150, [?_assertEqual(true, quickcheck(eqc:testing_time(90,
+         %%                   ?QC_OUT(prop()))))]}
        ]}.
 
 test() ->
@@ -49,10 +49,10 @@ prop() ->
     ?FORALL(Cmds, commands(?MODULE), begin
         reset_test_state(),
         {_,State,Res} = C = run_commands(?MODULE, Cmds),
-        Prop = eqc_statem:pretty_commands(?MODULE, Cmds, C, 
-            begin 
-                    exit_gracefully(State), 
-                    Res =:= ok 
+        Prop = eqc_statem:pretty_commands(?MODULE, Cmds, C,
+            begin
+                    exit_gracefully(State),
+                    Res =:= ok
             end),
         aggregate(command_names(Cmds), Prop)
     end).
@@ -133,7 +133,7 @@ next_state(S, _Res, {call, _, get_fsm_exit_error, [get, Pid]}) ->
 next_state(S, _Res, {call, _, _, [get, Pid]}) ->
     Gets2 = ordsets:del_element(Pid, S#state.get_fsm),
     S#state{get_fsm = Gets2};
-    
+
 next_state(S, _Res, {call, _, put_fsm_exit_error, [put, Pid]}) ->
     Puts2 = ordsets:del_element(Pid, S#state.put_fsm),
     ErrCount = S#state.put_errors + 1,
@@ -192,7 +192,7 @@ poll_stat_change(Metric, OriginalValue, ExpireSecs) ->
             throw({error, {expired, Metric, OriginalValue}});
         false ->
             case folsom_metrics:get_metric_value(Metric) of
-                OriginalValue -> 
+                OriginalValue ->
                     poll_stat_change(Metric, OriginalValue, ExpireSecs);
                 _ ->
                     ok
