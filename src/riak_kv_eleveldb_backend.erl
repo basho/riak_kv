@@ -1041,7 +1041,7 @@ eqc_test_() ->
          fun setup/0,
          fun cleanup/1,
          [
-          {timeout, 60000,
+          {timeout, 180,
             [?_assertEqual(true,
                           backend_eqc:test(?MODULE, false,
                                            [{data_root,

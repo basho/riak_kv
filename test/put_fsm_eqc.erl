@@ -80,8 +80,8 @@ eqc_test_() ->
                                                              <<"function() { return 123; }">>},
                                                             []}, 5)),
         %% Run the quickcheck tests
-        {timeout, 60000, % do not trust the docs - timeout is in msec
-         ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(prop_basic_put()))))}
+        {timeout, 70,
+         ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(60, ?QC_OUT(prop_basic_put()))))}
        ]
       }
      ]
