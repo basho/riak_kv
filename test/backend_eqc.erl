@@ -61,7 +61,7 @@
          delete/5,
          init_backend/3]).
 
--define(TEST_ITERATIONS, 250).
+-define(TEST_SECONDS, 120).
 
 -record(qcst, {backend, % Backend module under test
                volatile, % Indicates if backend is volatile
@@ -86,7 +86,7 @@ test(Backend, Volatile, Config) ->
                    fun(BeState,_Olds) -> catch(Backend:stop(BeState)) end)).
 
 test(Backend, Volatile, Config, Cleanup) ->
-    test2(property(Backend, Volatile, Config, Cleanup, ?TEST_ITERATIONS)).
+    test2(property(Backend, Volatile, Config, Cleanup, ?TEST_SECONDS)).
 
 test(Backend, Volatile, Config, Cleanup, NumTests) ->
     test2(property(Backend, Volatile, Config, Cleanup, NumTests)).
@@ -105,11 +105,11 @@ property(Backend, Volatile, Config) ->
                 catch(Backend:stop(BeState)) end).
 
 property(Backend, Volatile, Config, Cleanup) ->
-    property(Backend, Volatile, Config, Cleanup, ?TEST_ITERATIONS).
+    property(Backend, Volatile, Config, Cleanup, ?TEST_SECONDS).
 
-property(Backend, Volatile, Config, Cleanup, NumTests) ->
-    eqc:numtests(NumTests,
-                 prop_backend(Backend, Volatile, Config, Cleanup)).
+property(Backend, Volatile, Config, Cleanup, NumSeconds) ->
+    eqc:testing_time(NumSeconds,
+                     prop_backend(Backend, Volatile, Config, Cleanup)).
 
 %% ====================================================================
 %% eqc property

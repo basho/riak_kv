@@ -46,8 +46,8 @@ eqc_test_() ->
        fun setup/0,
        fun cleanup/1,
        [%% Run the quickcheck tests
-        {timeout, 60000, % do not trust the docs - timeout is in msec
-         ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(prop_basic_get()))))}
+        {timeout, 70,
+         ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(60, ?QC_OUT(prop_basic_get()))))}
        ]
       }
      ]
