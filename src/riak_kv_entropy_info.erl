@@ -43,6 +43,8 @@
 
 -record(simple_stat, {last, min, max, count, sum}).
 
+-type simple_stat() :: #simple_stat{}.
+
 -type repair_stats() :: {Last :: pos_integer(),
                          Min  :: pos_integer(),
                          Max  :: pos_integer(),
@@ -53,10 +55,10 @@
 
 -type exchange_info() :: #exchange_info{}.
 
--record(index_info, {build_time    = undefined     :: t_now(),
-                     repaired      = undefined     :: pos_integer(),
+-record(index_info, {build_time    :: t_now(),
+                     repaired      :: simple_stat(),
                      exchanges     = orddict:new() :: orddict(exchange_id(), exchange_info()),
-                     last_exchange = undefined     :: exchange_id()}).
+                     last_exchange :: exchange_id()}).
 
 -type index_info() :: #index_info{}.
 
