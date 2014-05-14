@@ -576,3 +576,25 @@ end
  fun(Value)->
     is_boolean(Value) orelse (is_integer(Value) andalso Value =< 9 andalso Value >= 0)
  end}.
+
+%% @doc Whether to use the background manager to limit KV handoff.
+%% This will help to prevent system response degradation under times
+%% of heavy load from multiple background tasks that contend for the
+%% same resources.
+%% @see background_manager
+{mapping, "handoff.use_background_manager", "riak_kv.handoff_use_background_manager", [
+    {datatype, flag},
+    {default, on},
+    hidden
+]}.
+
+%% @doc Whether to use the background manager to limit AAE tree
+%% rebuilds. This will help to prevent system response degradation
+%% under times of heavy load from multiple background tasks that
+%% contend for the same resources.
+%% @see background_manager
+{mapping, "anti_entropy.use_background_manager", "riak_kv.aae_use_background_manager", [
+    {datatype, flag},
+    {default, on},
+    hidden
+]}.
