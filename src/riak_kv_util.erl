@@ -43,6 +43,7 @@
          puts_active/0,
          exact_puts_active/0,
          gets_active/0,
+         get_backend_config/3,
          overload_reply/1]).
 
 -include_lib("riak_kv_vnode.hrl").
@@ -372,6 +373,22 @@ gets_active() ->
         _ ->
             sidejob_resource_stats:usage(riak_kv_get_fsm_sj)
     end.
+
+%% @doc Get backend config for backends without an associated application
+%% eg, yessir, memory
+get_backend_config(Key, Config, Category) ->
+    case proplists:get_value(Key, Config) of
+        undefined ->
+            case proplists:get_value(Category, Config) of
+                undefined ->
+                    undefined;
+                InnerConfig ->
+                    proplists:get_value(Key, InnerConfig)
+            end;
+        Val ->
+            Val
+    end.
+
 
 %% ===================================================================
 %% EUnit tests
