@@ -51,7 +51,7 @@
                          Mean :: pos_integer()}.
 
 -record(exchange_info, {time :: t_now(),
-                        repaired :: pos_integer()}).
+                        repaired :: non_neg_integer()}).
 
 -type exchange_info() :: #exchange_info{}.
 
@@ -76,12 +76,12 @@ tree_built(Type, Index, Time) ->
     update_index_info({Type, Index}, {tree_built, Time}).
 
 %% @see exchange_complete/5
--spec exchange_complete(index(), index(), index_n(), pos_integer()) -> ok.
+-spec exchange_complete(index(), index(), index_n(), non_neg_integer()) -> ok.
 exchange_complete(Index, RemoteIdx, IndexN, Repaired) ->
     exchange_complete(riak_kv, Index, RemoteIdx, IndexN, Repaired).
 
 %% @doc Store information about a just-completed AAE exchange
--spec exchange_complete(atom(), index(), index(), index_n(), pos_integer()) -> ok.
+-spec exchange_complete(atom(), index(), index(), index_n(), non_neg_integer()) -> ok.
 exchange_complete(Type, Index, RemoteIdx, IndexN, Repaired) ->
     update_index_info({Type, Index},
                       {exchange_complete, RemoteIdx, IndexN, Repaired}).
