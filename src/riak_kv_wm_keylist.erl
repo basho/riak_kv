@@ -133,7 +133,7 @@ forbidden(RD, Ctx) ->
             {true, RD, Ctx};
         false ->
             Res = riak_core_security:check_permission({"riak_kv.list_keys",
-                                                       {<<"default">>,
+                                                       {Ctx#ctx.bucket_type,
                                                         Ctx#ctx.bucket}},
                                                       Ctx#ctx.security),
             case Res of
