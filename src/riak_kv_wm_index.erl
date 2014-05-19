@@ -133,7 +133,7 @@ forbidden(RD, Ctx) ->
         false ->
             Bucket = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(bucket, RD))),
             Res = riak_core_security:check_permission({"riak_kv.index",
-                                                       {<<"default">>,
+                                                       {Ctx#ctx.bucket_type,
                                                         Bucket}},
                                                       Ctx#ctx.security),
             case Res of
