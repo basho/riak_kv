@@ -19,12 +19,16 @@
 %% Internal Only Key->Map->Field->Type types
 -define(FLAG_TYPE, riak_dt_od_flag).
 -define(REG_TYPE, riak_dt_lwwreg).
-
+-define(EMCNTR_TYPE, riak_dt_emcntr).
 
 -define(V1_TOP_LEVEL_TYPES, [pncounter]).
 -define(V2_TOP_LEVEL_TYPES, [?COUNTER_TYPE, ?SET_TYPE, ?MAP_TYPE]).
 -define(TOP_LEVEL_TYPES, ?V1_TOP_LEVEL_TYPES ++ ?V2_TOP_LEVEL_TYPES).
 -define(ALL_TYPES, ?TOP_LEVEL_TYPES ++ [?FLAG_TYPE, ?REG_TYPE]).
+-define(EMBEDDED_TYPES, [{map, ?MAP_TYPE}, {set, ?SET_TYPE},
+                         {counter, ?EMCNTR_TYPE}, {flag, ?FLAG_TYPE},
+                         {register, ?REG_TYPE}],
+
 -define(MOD_MAP, [{map, ?MAP_TYPE}, {set, ?SET_TYPE},
                   {counter, ?COUNTER_TYPE}, {flag, ?FLAG_TYPE},
                   {register, ?REG_TYPE}]).
