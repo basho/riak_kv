@@ -89,12 +89,14 @@ init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout]) ->
     ?DTRACE(?C_KEYS_INIT, [2, FilterX],
             [<<"other">>, ClientNode, PidStr]),
     %% Get the bucket n_val for use in creating a coverage plan
-    BucketProps = riak_core_bucket:get_bucket(Bucket),
-    NVal = proplists:get_value(n_val, BucketProps),
-    %% Construct the key listing request
-    Req = req(Bucket, ItemFilter),
-    {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{from=From}}.
+    case riak_core_bucket:get_bucket(Bucket) of
+	{error, Reason} -> {error, Reason}; 
+	BucketProps ->
+	    NVal = proplists:get_value(n_val, BucketProps),
+	    %% Construct the key listing request
+	    Req = req(Bucket, ItemFilter),
+	    {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout, #state{from=From}}
+    end.
 
 process_results({From, Bucket, Keys},
                 StateData=#state{from={raw, ReqId, ClientPid}}) ->
@@ -103,6 +105,7 @@ process_results({From, Bucket, Keys},
     process_keys(Bucket, Keys, ReqId, ClientPid),
     _ = riak_kv_vnode:ack_keys(From), % tell that vnode we're ready for more
     {ok, StateData};
+
 process_results({error, Reason}, _State) ->
     ?DTRACE(?C_KEYS_PROCESS_RESULTS, [-1], []),
     {error, Reason};
