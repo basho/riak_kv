@@ -135,7 +135,8 @@ process_fetch_response({ok, O}, State) ->
     {{Ctx0, Value}, Stats} = riak_kv_crdt:value(O, Mod),
     _ = [ riak_kv_stat:update(S) || S <- Stats ],
     Ctx = get_context(Ctx0, ReturnCtx),
-    Resp = riak_pb_dt_codec:encode_fetch_response(Type, Value, Ctx, ?MOD_MAP),
+    ModMap = riak_kv_crdt:mod_map(Type),
+    Resp = riak_pb_dt_codec:encode_fetch_response(Type, Value, Ctx, ModMap),
     {reply, Resp, State};
 process_fetch_response({error, notfound}, State) ->
     #state{type=Type} = State,
@@ -147,7 +148,8 @@ process_fetch_response({error, Reason}, State) ->
 update_type({ok, {true, Type}}, #dtupdatereq{op=Op0}=Req, State0) ->
     Mod = riak_kv_crdt:to_mod(Type),
     Supported = riak_kv_crdt:supported(Mod),
-    Op = riak_pb_dt_codec:decode_operation(Op0, ?MOD_MAP),
+    ModMap = riak_kv_crdt:mod_map(Type),
+    Op = riak_pb_dt_codec:decode_operation(Op0, ModMap),
     OpType = riak_pb_dt_codec:operation_type(Op0),
     ModsMatch = mods_match(Mod, OpType),
     State = State0#state{mod=Mod, type=Type, op=Op, op_type=OpType},

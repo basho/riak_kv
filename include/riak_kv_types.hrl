@@ -27,11 +27,10 @@
 -define(ALL_TYPES, ?TOP_LEVEL_TYPES ++ [?FLAG_TYPE, ?REG_TYPE]).
 -define(EMBEDDED_TYPES, [{map, ?MAP_TYPE}, {set, ?SET_TYPE},
                          {counter, ?EMCNTR_TYPE}, {flag, ?FLAG_TYPE},
-                         {register, ?REG_TYPE}],
+                         {register, ?REG_TYPE}]).
 
 -define(MOD_MAP, [{map, ?MAP_TYPE}, {set, ?SET_TYPE},
-                  {counter, ?COUNTER_TYPE}, {flag, ?FLAG_TYPE},
-                  {register, ?REG_TYPE}]).
+                  {counter, ?COUNTER_TYPE}]).
 
 -define(DATATYPE_STATS_DEFAULTS, [actor_count]).
 
