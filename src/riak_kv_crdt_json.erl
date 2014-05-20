@@ -35,7 +35,7 @@
 
 %% Mostly copied from riak_pb_dt_codec
 %% Value types
--opaque context() :: binary().
+-type context() :: binary().
 -type map_field() :: {binary(), embedded_type()}.
 -type embedded_type() :: counter | set | register | flag | map.
 -type toplevel_type() :: counter | set | map.
