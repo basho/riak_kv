@@ -266,7 +266,7 @@ encode_fetch_response_test_() ->
                                              {update, {<<"b">>, ?FLAG_TYPE}, enable},
                                              {update, {<<"c">>, ?REG_TYPE}, {assign, <<"sean">>}},
                                              {update, {<<"d">>, ?MAP_TYPE},
-                                              {update, [{update, {<<"e">>, ?COUNTER_TYPE}, {increment,5}}]}}
+                                              {update, [{update, {<<"e">>, ?EMCNTR_TYPE}, {increment,5}}]}}
                                             ]}, a, ?MAP_TYPE:new()),
               ?assertEqual({struct, [
                                      {<<"type">>, <<"map">>},
@@ -278,12 +278,12 @@ encode_fetch_response_test_() ->
                                         {<<"b_flag">>, true},
                                         {<<"a_set">>, [<<"a">>, <<"b">>, <<"c">>]}]}}
                                      ]},
-                           fetch_response_to_json(map, ?MAP_TYPE:value(Map), undefined, ?MOD_MAP)
+                           fetch_response_to_json(map, ?MAP_TYPE:value(Map), undefined, ?EMBEDDED_TYPES)
                            ),
               ?assertMatch({struct, [_Type, _Value, {<<"context">>, Bin}]} when is_binary(Bin),
                            fetch_response_to_json(map, ?MAP_TYPE:value(Map),
                                                   ?MAP_TYPE:to_binary(?MAP_TYPE:precondition_context(Map)),
-                                                  ?MOD_MAP))
+                                                  ?EMBEDDED_TYPES))
       end}
     ].
 
@@ -347,21 +347,22 @@ decode_update_request_test_() ->
       end},
      {"decode map ops",
       fun() ->
+              ModMap = riak_kv_crdt:mod_map(map),
               %% Simple ops
-              ?assertEqual({map, {update, [{add, {<<"a">>, ?COUNTER_TYPE}}]}, undefined},
-                           update_request_from_json(map, {struct, [{<<"add">>, <<"a_counter">>}]}, ?MOD_MAP)),
-              ?assertEqual({map, {update, [{add, {<<"a">>, ?COUNTER_TYPE}}, {add, {<<"a">>, ?SET_TYPE}}]}, undefined},
-                           update_request_from_json(map, {struct, [{<<"add">>, [<<"a_counter">>, <<"a_set">>]}]}, ?MOD_MAP)),
-              ?assertEqual({map, {update, [{remove, {<<"a">>, ?COUNTER_TYPE}}]}, undefined},
-                           update_request_from_json(map, {struct, [{<<"remove">>, <<"a_counter">>}]}, ?MOD_MAP)),
-              ?assertEqual({map, {update, [{remove, {<<"a">>, ?COUNTER_TYPE}}, {remove, {<<"a">>, ?SET_TYPE}}]}, undefined},
-                           update_request_from_json(map, {struct, [{<<"remove">>, [<<"a_counter">>, <<"a_set">>]}]}, ?MOD_MAP)),
+              ?assertEqual({map, {update, [{add, {<<"a">>, ?EMCNTR_TYPE}}]}, undefined},
+                           update_request_from_json(map, {struct, [{<<"add">>, <<"a_counter">>}]}, ModMap)),
+              ?assertEqual({map, {update, [{add, {<<"a">>, ?EMCNTR_TYPE}}, {add, {<<"a">>, ?SET_TYPE}}]}, undefined},
+                           update_request_from_json(map, {struct, [{<<"add">>, [<<"a_counter">>, <<"a_set">>]}]}, ModMap)),
+              ?assertEqual({map, {update, [{remove, {<<"a">>, ?EMCNTR_TYPE}}]}, undefined},
+                           update_request_from_json(map, {struct, [{<<"remove">>, <<"a_counter">>}]}, ModMap)),
+              ?assertEqual({map, {update, [{remove, {<<"a">>, ?EMCNTR_TYPE}}, {remove, {<<"a">>, ?SET_TYPE}}]}, undefined},
+                           update_request_from_json(map, {struct, [{<<"remove">>, [<<"a_counter">>, <<"a_set">>]}]}, ModMap)),
               %% Removes get ordered before adds, multiple ops extracted
-              ?assertEqual({map, {update, [{remove, {<<"a">>, ?COUNTER_TYPE}}, {add, {<<"a">>, ?SET_TYPE}}]}, undefined},
-                           update_request_from_json(map, {struct, [{<<"add">>, [<<"a_set">>]}, {<<"remove">>, [<<"a_counter">>]}]}, ?MOD_MAP)),
+              ?assertEqual({map, {update, [{remove, {<<"a">>, ?EMCNTR_TYPE}}, {add, {<<"a">>, ?SET_TYPE}}]}, undefined},
+                           update_request_from_json(map, {struct, [{<<"add">>, [<<"a_set">>]}, {<<"remove">>, [<<"a_counter">>]}]}, ModMap)),
               %% Nested updates
-              ?assertEqual({map, {update, [{update, {<<"a">>, ?COUNTER_TYPE}, increment}]}, undefined},
-                           update_request_from_json(map, {struct, [{<<"update">>, {struct, [{<<"a_counter">>, <<"increment">>}]}}]}, ?MOD_MAP)),
+              ?assertEqual({map, {update, [{update, {<<"a">>, ?EMCNTR_TYPE}, increment}]}, undefined},
+                           update_request_from_json(map, {struct, [{<<"update">>, {struct, [{<<"a_counter">>, <<"increment">>}]}}]}, ModMap)),
 
               ?assertEqual({map, {update, [{update, {<<"b">>, ?MAP_TYPE}, 
                                             {update, [{update, {<<"c">>, ?REG_TYPE}, {assign, <<"foo">>}}]}}]}, undefined},
@@ -369,14 +370,14 @@ decode_update_request_test_() ->
                                                                     {struct, [{<<"b_map">>, 
                                                                                {struct, [{<<"update">>, 
                                                                                           {struct, [{<<"c_register">>, <<"foo">>}]}}]}}]}}]}, 
-                                                    ?MOD_MAP)),
+                                                    ModMap)),
               ?assertEqual({map, {update, [{update, {<<"b">>, ?MAP_TYPE}, 
                                             {update, [{update, {<<"c">>, ?FLAG_TYPE}, enable}]}}]}, undefined},
                            update_request_from_json(map, {struct, [{<<"update">>, 
                                                                     {struct, [{<<"b_map">>, 
                                                                                {struct, [{<<"update">>, 
                                                                                           {struct, [{<<"c_flag">>, <<"enable">>}]}}]}}]}}]}, 
-                                                    ?MOD_MAP)),
+                                                    ModMap)),
 
               %% Extract context
               {ok, Map} = ?MAP_TYPE:update({update,
@@ -385,46 +386,46 @@ decode_update_request_test_() ->
                                              {update, {<<"b">>, ?FLAG_TYPE}, enable},
                                              {update, {<<"c">>, ?REG_TYPE}, {assign, <<"sean">>}},
                                              {update, {<<"d">>, ?MAP_TYPE},
-                                              {update, [{update, {<<"e">>, ?COUNTER_TYPE}, {increment,5}}]}}
+                                              {update, [{update, {<<"e">>, ?EMCNTR_TYPE}, {increment,5}}]}}
                                             ]}, a, ?MAP_TYPE:new()),
               BinContext = ?MAP_TYPE:to_binary(?MAP_TYPE:precondition_context(Map)),
               {struct, [_Type, _Value, {<<"context">>, JSONCtx}]} = fetch_response_to_json(set, ?MAP_TYPE:value(Map),
                                                                                            BinContext,
-                                                                                           ?MOD_MAP),
+                                                                                           ModMap),
               ?assertMatch({map, {update, [{remove, {<<"a">>, ?SET_TYPE}}]}, BinContext},
-                           update_request_from_json(map, {struct, [{<<"remove">>, <<"a_set">>}, {<<"context">>, JSONCtx}]}, ?MOD_MAP)),
+                           update_request_from_json(map, {struct, [{<<"remove">>, <<"a_set">>}, {<<"context">>, JSONCtx}]}, ModMap)),
                            
               %% Invalid field names
-              ?assertThrow({invalid_field_name, <<"a_hash">>}, update_request_from_json(map, {struct, [{<<"add">>, <<"a_hash">>}]}, ?MOD_MAP)),
-              ?assertThrow({invalid_field_name, <<"foo">>}, update_request_from_json(map, {struct, [{<<"remove">>, <<"foo">>}]}, ?MOD_MAP)),
+              ?assertThrow({invalid_field_name, <<"a_hash">>}, update_request_from_json(map, {struct, [{<<"add">>, <<"a_hash">>}]}, ModMap)),
+              ?assertThrow({invalid_field_name, <<"foo">>}, update_request_from_json(map, {struct, [{<<"remove">>, <<"foo">>}]}, ModMap)),
               ?assertThrow({invalid_field_name, <<"b_blob">>}, 
                            update_request_from_json(map, {struct, 
                                                           [{<<"update">>, 
                                                             {struct, [{<<"a_map">>, 
-                                                                       {struct, [{<<"remove">>, <<"b_blob">>}]}}]}}]}, ?MOD_MAP)),
+                                                                       {struct, [{<<"remove">>, <<"b_blob">>}]}}]}}]}, ModMap)),
               %% Invalid operations for maps
               ?assertThrow({invalid_operation, {map, _}},
-                           update_request_from_json(map, <<"increment">>, ?MOD_MAP)),
+                           update_request_from_json(map, <<"increment">>, ModMap)),
               ?assertThrow({invalid_operation, {map, _}},
-                           update_request_from_json(map, {struct, [{<<"increment">>, 5}]}, ?MOD_MAP)),
+                           update_request_from_json(map, {struct, [{<<"increment">>, 5}]}, ModMap)),
               ?assertThrow({invalid_operation, {map, _}},
-                           update_request_from_json(map, {struct, [{<<"add_all">>, [<<"foo">>]}]}, ?MOD_MAP)),
+                           update_request_from_json(map, {struct, [{<<"add_all">>, [<<"foo">>]}]}, ModMap)),
               %% Invalid operations for nested types
               ?assertThrow({invalid_operation, {counter, _}},
                            update_request_from_json(map, 
-                                                    {struct, [{<<"update">>, {struct, [{<<"a_counter">>, <<"poke">>}]}}]}, ?MOD_MAP)),
+                                                    {struct, [{<<"update">>, {struct, [{<<"a_counter">>, <<"poke">>}]}}]}, ModMap)),
               ?assertThrow({invalid_operation, {flag, _}},
                            update_request_from_json(map, 
-                                                    {struct, [{<<"update">>, {struct, [{<<"a_flag">>, 5}]}}]}, ?MOD_MAP)),
+                                                    {struct, [{<<"update">>, {struct, [{<<"a_flag">>, 5}]}}]}, ModMap)),
               ?assertThrow({invalid_operation, {register, _}},
                            update_request_from_json(map, 
-                                                    {struct, [{<<"update">>, {struct, [{<<"a_register">>, true}]}}]}, ?MOD_MAP)),
+                                                    {struct, [{<<"update">>, {struct, [{<<"a_register">>, true}]}}]}, ModMap)),
               ?assertThrow({invalid_operation, {set, _}},
                            update_request_from_json(map, 
-                                                    {struct, [{<<"update">>, {struct, [{<<"a_set">>, {struct, [{<<"delete">>, <<"bar">>}]}}]}}]}, ?MOD_MAP)),
+                                                    {struct, [{<<"update">>, {struct, [{<<"a_set">>, {struct, [{<<"delete">>, <<"bar">>}]}}]}}]}, ModMap)),
               ?assertThrow({invalid_operation, {map, _}},
                            update_request_from_json(map, 
-                                                    {struct, [{<<"update">>, {struct, [{<<"a_map">>, {struct, [{<<"delete">>, <<"bar">>}]}}]}}]}, ?MOD_MAP))
+                                                    {struct, [{<<"update">>, {struct, [{<<"a_map">>, {struct, [{<<"delete">>, <<"bar">>}]}}]}}]}, ModMap))
 
       end}
     ].
