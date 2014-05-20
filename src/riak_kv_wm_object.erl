@@ -264,14 +264,15 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
                              unicode:characters_to_binary(Error, utf8, utf8),
                              RD1), Ctx};
                 {true, _} ->
-                    case Perm of
-                        "riak_kv.get" ->
+                    case (Perm == "riak_kv.get" orelse
+                          Perm == "riak_kv.delete") of
+                        true ->
                             %% Ensure the key is here, otherwise 404
                             %% we do this early as it used to be done in the
                             %% malformed check, so the rest of the resource
                             %% assumes that the key is present.
                             forbidden_check_doc(RD, Ctx);
-                        _ ->
+                        false ->
                             %% Ensure the bucket type exists, otherwise 404 early.
                             forbidden_check_bucket_type(RD, Ctx)
                     end

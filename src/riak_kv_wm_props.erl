@@ -153,7 +153,9 @@ forbidden(RD, Ctx=#ctx{security=Security}) ->
                 'GET' ->
                     "riak_core.get_bucket";
                 'HEAD' ->
-                    "riak_core.get_bucket"
+                    "riak_core.get_bucket";
+		'DELETE' ->
+                    "riak_core.set_bucket"
             end,
 
             Res = riak_core_security:check_permission({Perm,
