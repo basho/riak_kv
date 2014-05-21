@@ -91,7 +91,7 @@ init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout]) ->
     %% Get the bucket n_val for use in creating a coverage plan
     ModState = #state{from=From},
     case riak_core_bucket:get_bucket(Bucket) of
-	{error, Reason} -> {error, Reason, ModState}; 
+	{error, Reason} -> finish({error, Reason}, ModState); 
 	BucketProps ->
 	    NVal = proplists:get_value(n_val, BucketProps),
 	    %% Construct the key listing request
