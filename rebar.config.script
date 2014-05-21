@@ -1,3 +1,4 @@
+CONFIG2 =
 case erlang:system_info(otp_release) =< "R15B01" of
     true  ->
         HashDefine = [{d,old_hash}],
@@ -8,4 +9,13 @@ case erlang:system_info(otp_release) =< "R15B01" of
                 CONFIG ++ [{erl_opts, HashDefine}]
         end;
     false -> CONFIG
-end.
+end,
+
+%% Add all of the Erlang source modules in the priv/tracers directory
+%% to rebar's list of stuff to compile.
+
+First = proplists:get_value(erl_first_files, CONFIG2, []),
+TracerSrc = filelib:wildcard("priv/tracers/*.erl"),
+%% io:format("Ts: ~p\n", [TracerSrc]),
+lists:keyreplace(erl_first_files, 1, CONFIG2, {erl_first_files,
+                                               First ++ TracerSrc}).
