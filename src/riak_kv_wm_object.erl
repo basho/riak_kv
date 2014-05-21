@@ -219,69 +219,61 @@ is_authorized(ReqData, Ctx) ->
                     "instead.">>, ReqData), Ctx}
     end.
 
-forbidden(RD, Ctx=#ctx{security=undefined}) ->
+-spec forbidden(#wm_reqdata{}, context()) -> term().
+forbidden(RD, Ctx) ->
     case riak_kv_wm_utils:is_forbidden(RD) of
         true ->
             {true, RD, Ctx};
         false ->
-            %% If it is a put or a post, don't require the object to already
-            %% exist, but the bucket type must exist.
-            case Ctx#ctx.method of
-                'POST' ->
-                    forbidden_check_bucket_type(RD, Ctx);
-                'PUT' ->
-                    forbidden_check_bucket_type(RD, Ctx);
-                _ ->
-                    forbidden_check_doc(RD, Ctx)
-            end
-    end;
-forbidden(RD, Ctx=#ctx{security=Security}) ->
-    case riak_kv_wm_utils:is_forbidden(RD) of
-        true ->
-            {true, RD, Ctx};
-        false ->
-            Perm = case Ctx#ctx.method of
-                'POST' ->
-                    "riak_kv.put";
-                'PUT' ->
-                    "riak_kv.put";
-                'HEAD' ->
-                    "riak_kv.get";
-                'GET' ->
-                    "riak_kv.get";
-                'DELETE' ->
-                    "riak_kv.delete"
-            end,
-
-            Res = riak_core_security:check_permission({Perm,
-                                                           {Ctx#ctx.bucket_type,
-                                                            Ctx#ctx.bucket}},
-                                                           Security),
-            case Res of
-                {false, Error, _} ->
-                    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
-                    {true, wrq:append_to_resp_body(
-                             unicode:characters_to_binary(Error, utf8, utf8),
-                             RD1), Ctx};
-                {true, _} ->
-                    case (Perm == "riak_kv.get" orelse
-                          Perm == "riak_kv.delete") of
-                        true ->
-                            %% Ensure the key is here, otherwise 404
-                            %% we do this early as it used to be done in the
-                            %% malformed check, so the rest of the resource
-                            %% assumes that the key is present.
-                            forbidden_check_doc(RD, Ctx);
-                        false ->
-                            %% Ensure the bucket type exists, otherwise 404 early.
-                            forbidden_check_bucket_type(RD, Ctx)
-                    end
-            end
+            validate_unforbidden(RD, Ctx)
     end.
+
+-spec validate_unforbidden(#wm_reqdata{}, context()) -> term().
+validate_unforbidden(RD, Ctx=#ctx{security=undefined}) ->
+    validate_resource(RD, Ctx, method_to_perm(Ctx#ctx.method));
+validate_unforbidden(RD, Ctx=#ctx{security=Security}) ->
+    Perm = method_to_perm(Ctx#ctx.method),
+    Res = riak_core_security:check_permission({Perm,
+                                              {Ctx#ctx.bucket_type,
+                                              Ctx#ctx.bucket}},
+                                              Security),
+    maybe_validate_resource(Res, RD, Ctx, Perm).
+
+-spec maybe_validate_resource(term(), #wm_reqdata{}, context(), string()) -> term().
+maybe_validate_resource({false, Error, _}, RD, Ctx, _Perm) ->
+    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
+    {true, wrq:append_to_resp_body(
+             unicode:characters_to_binary(Error, utf8, utf8),
+             RD1), Ctx};
+maybe_validate_resource({true, _}, RD, Ctx, Perm) ->
+    validate_resource(RD, Ctx, Perm).
+
+-spec validate_resource(#wm_reqdata{}, context(), string()) -> term().
+validate_resource(RD, Ctx, Perm) when (Perm == "riak_kv.get" orelse Perm == "riak_kv.delete") ->
+    %% Ensure the key is here, otherwise 404
+    %% we do this early as it used to be done in the
+    %% malformed check, so the rest of the resource
+    %% assumes that the key is present.
+    validate_doc(RD, Ctx);
+validate_resource(RD, Ctx, _Perm) ->
+    %% Ensure the bucket type exists, otherwise 404 early.
+    validate_bucket_type(RD, Ctx).
+
+-spec method_to_perm(atom()) -> string().
+method_to_perm(Method) when Method == 'POST' ->
+                    "riak_kv.put";
+method_to_perm(Method) when Method == 'PUT' ->
+                    "riak_kv.put";
+method_to_perm(Method) when Method == 'HEAD' ->
+                    "riak_kv.get";
+method_to_perm(Method) when Method == 'GET' ->
+                    "riak_kv.get";
+method_to_perm(Method) when Method == 'DELETE' ->
+                    "riak_kv.delete".
 
 %% @doc Detects whether fetching the requested object results in an
 %% error.
-forbidden_check_doc(RD, Ctx) ->
+validate_doc(RD, Ctx) ->
     DocCtx = ensure_doc(Ctx),
     case DocCtx#ctx.doc of
         {error, Reason} ->
@@ -291,7 +283,7 @@ forbidden_check_doc(RD, Ctx) ->
     end.
 
 %% @doc Detects whether the requested object's bucket-type exists.
-forbidden_check_bucket_type(RD, Ctx) ->
+validate_bucket_type(RD, Ctx) ->
     case riak_kv_wm_utils:bucket_type_exists(Ctx#ctx.bucket_type) of
         true ->
             {false, RD, Ctx};
