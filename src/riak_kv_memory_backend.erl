@@ -116,13 +116,19 @@ capabilities(_, _) ->
 %% @doc Start the memory backend
 -spec start(integer(), config()) -> {ok, state()}.
 start(Partition, Config) ->
-    TTL = app_helper:get_prop_or_env(ttl, Config, memory_backend),
-    MemoryMB = app_helper:get_prop_or_env(max_memory, Config, memory_backend),
+    TTL = riak_kv_util:get_backend_config(ttl, Config, memory_backend),
+    MemoryMB = riak_kv_util:get_backend_config(max_memory, Config, memory_backend),
+    %% leave this one alone, it is only for testing
+    NormalTableOpts = [ordered_set],
+    TestTableOpts = app_helper:get_prop_or_env(test_table_opts,
+                                               Config,
+                                               memory_backend,
+                                               [named_table, public]),
     TableOpts = case app_helper:get_prop_or_env(test, Config, memory_backend) of
                     true ->
-                        [ordered_set, public, named_table];
+                        NormalTableOpts ++ TestTableOpts;
                     _ ->
-                        [ordered_set]
+                        NormalTableOpts
                 end,
     case MemoryMB of
         undefined ->
@@ -211,6 +217,13 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
         _ ->
             {{ts, Now}, Val}
     end,
+    OldSize =
+        case ets:lookup(DataRef, {Bucket, PrimaryKey}) of
+            [] ->
+                0;
+            [OldObject] ->
+                object_size(OldObject)
+        end,
     {ok, Size} = do_put(Bucket, PrimaryKey, Val1, IndexSpecs, DataRef, IndexRef),
     NoMemChange = (MaxMemory =:= undefined) orelse (Val =:= undefined),
     UsedMemory1 =
@@ -227,7 +240,8 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
                                     0),
             UsedMemory + Size - Freed
     end,
-    {ok, State#state{used_memory=UsedMemory1}}.
+    UsedMemory2 = UsedMemory1 - OldSize,
+    {ok, State#state{used_memory=UsedMemory2}}.
 
 %% @doc Delete an object from the memory backend
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
@@ -236,22 +250,22 @@ delete(Bucket, Key, IndexSpecs, State=#state{data_ref=DataRef,
                                              index_ref=IndexRef,
                                              time_ref=TimeRef,
                                              used_memory=UsedMemory}) ->
+    [Object] = ets:lookup(DataRef, {Bucket, Key}),
     case TimeRef of
         undefined ->
-            UsedMemory1 = UsedMemory;
+            ok;
         _ ->
             %% Lookup the object so we can delete its
             %% entry from the time table and account
             %% for the memory used.
-            [Object] = ets:lookup(DataRef, {Bucket, Key}),
             case Object of
                 {_, {{ts, Timestamp}, _}} ->
-                    ets:delete(TimeRef, Timestamp),
-                    UsedMemory1 = UsedMemory - object_size(Object);
+                    ets:delete(TimeRef, Timestamp);
                 _ ->
-                    UsedMemory1 = UsedMemory
+                    ok
             end
     end,
+    UsedMemory1 = UsedMemory - object_size(Object),
     update_indexes(Bucket, Key, IndexSpecs, IndexRef),
     ets:delete(DataRef, {Bucket, Key}),
     {ok, State#state{used_memory=UsedMemory1}}.
