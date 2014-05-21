@@ -41,7 +41,8 @@
          erlify_bucket_prop/1,
          ensure_bucket_type/3,
          bucket_type_exists/1,
-         maybe_bucket_type/2
+         maybe_bucket_type/2,
+         method_to_perm/1
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -420,3 +421,16 @@ maybe_bucket_type(<<"default">>, B) ->
     B;
 maybe_bucket_type(T, B) ->
     {T, B}.
+
+%% @doc Maps an HTTP method to an internal permission
+%%-spec method_to_perm(atom()) -> string().
+method_to_perm('POST') ->
+    "riak_kv.put";
+method_to_perm('PUT') ->
+    "riak_kv.put";
+method_to_perm('HEAD') ->
+    "riak_kv.get";
+method_to_perm('GET') ->
+    "riak_kv.get";
+method_to_perm('DELETE') ->
+    "riak_kv.delete".

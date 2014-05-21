@@ -84,3 +84,4 @@ Unknown types:
   riak_core_apl:preflist2/0
   riak_dt:operation/0
   riak_dt:value/0
+riak_kv_wm_utils.erl:289: The pattern {Scheme, _, Host, Port, _, _} can never match the type {'error','no_scheme' | {_,atom(),_}}
