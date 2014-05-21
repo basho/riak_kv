@@ -225,14 +225,14 @@ forbidden(RD, Ctx) ->
         true ->
             {true, RD, Ctx};
         false ->
-            validate_unforbidden(RD, Ctx)
+            validate(RD, Ctx)
     end.
 
--spec validate_unforbidden(#wm_reqdata{}, context()) -> term().
-validate_unforbidden(RD, Ctx=#ctx{security=undefined}) ->
-    validate_resource(RD, Ctx, method_to_perm(Ctx#ctx.method));
-validate_unforbidden(RD, Ctx=#ctx{security=Security}) ->
-    Perm = method_to_perm(Ctx#ctx.method),
+-spec validate(#wm_reqdata{}, context()) -> term().
+validate(RD, Ctx=#ctx{security=undefined}) ->
+    validate_resource(RD, Ctx, riak_kv_wm_utils:method_to_perm(Ctx#ctx.method));
+validate(RD, Ctx=#ctx{security=Security}) ->
+    Perm = riak_kv_wm_utils:method_to_perm(Ctx#ctx.method),
     Res = riak_core_security:check_permission({Perm,
                                               {Ctx#ctx.bucket_type,
                                               Ctx#ctx.bucket}},
@@ -258,18 +258,6 @@ validate_resource(RD, Ctx, Perm) when (Perm == "riak_kv.get" orelse Perm == "ria
 validate_resource(RD, Ctx, _Perm) ->
     %% Ensure the bucket type exists, otherwise 404 early.
     validate_bucket_type(RD, Ctx).
-
--spec method_to_perm(atom()) -> string().
-method_to_perm(Method) when Method == 'POST' ->
-                    "riak_kv.put";
-method_to_perm(Method) when Method == 'PUT' ->
-                    "riak_kv.put";
-method_to_perm(Method) when Method == 'HEAD' ->
-                    "riak_kv.get";
-method_to_perm(Method) when Method == 'GET' ->
-                    "riak_kv.get";
-method_to_perm(Method) when Method == 'DELETE' ->
-                    "riak_kv.delete".
 
 %% @doc Detects whether fetching the requested object results in an
 %% error.
