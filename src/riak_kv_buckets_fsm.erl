@@ -64,7 +64,7 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
     %% Construct the bucket listing request
     ModState =  #state{from=From, stream=Stream, type=BucketType},
     case riak_core_bucket_type:get(BucketType) of
-	{error, _}=Error -> finish(Error, ModState);
+	undefined -> finish({error, no_type}, ModState);
 	_ ->
 	    Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
 	    {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
