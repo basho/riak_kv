@@ -64,7 +64,7 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
 
     %% Construct the bucket listing request
     ModState = #state{from=From, stream=Stream, type=BucketType},
-    Exists = fun(_) ->
+    Exists = fun([]) ->
   	    Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
 	    {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
 	    ModState}
