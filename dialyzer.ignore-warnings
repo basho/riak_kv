@@ -84,4 +84,3 @@ Unknown types:
   riak_core_apl:preflist2/0
   riak_dt:operation/0
   riak_dt:value/0
-
