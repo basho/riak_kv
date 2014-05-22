@@ -73,7 +73,7 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
 	    finish(Error, ModState) 
     end,
 
-    maybe_bucket_type_exists(BucketType, Exists, DoesNotExist).
+    maybe_bucket_type_exists(riak_core_bucket_type:get(BucketType), Exists, DoesNotExist).
 
 
 %% private
@@ -82,9 +82,7 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
 maybe_bucket_type_exists([]=BucketType, ExistsFun, _DoesNotExistFun) ->
     ExistsFun(BucketType);
 maybe_bucket_type_exists(undefined, _ExistsFun, DoesNotExistFun) ->
-    DoesNotExistFun({error, no_type});
-maybe_bucket_type_exists(BucketType, ExistsFun, DoesNotExistFun) ->
-    maybe_bucket_type_exists(riak_core_bucket_type:get(BucketType), ExistsFun, DoesNotExistFun).
+    DoesNotExistFun({error, no_type}).
 
 
 process_results(done, StateData) ->
