@@ -286,8 +286,6 @@ referer_tuple(RD) ->
             case http_uri:parse(Url) of
                 {ok, {Scheme, _, Host, Port, _, _}} -> %R15+
                     {Scheme, Host, Port};
-                {Scheme, _, Host, Port, _, _} -> % R14 and below
-                    {Scheme, Host, Port};
                 {error, _} ->
                     {invalid, Url}
             end
