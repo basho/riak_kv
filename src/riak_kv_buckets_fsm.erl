@@ -79,13 +79,9 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
 %% TODO Move to the riak_core_bucket_type module as part of 2.1 clean up
 %%      See https://github.com/basho/riak_kv/issues/954 for more details
 maybe_bucket_type_exists(undefined, _ExistsFun, DoesNotExistFun) ->
-<<<<<<< HEAD
     DoesNotExistFun({error, no_type});
 maybe_bucket_type_exists(_=BucketType, ExistsFun, _DoesNotExistFun) ->
     ExistsFun(BucketType).
-=======
-    DoesNotExistFun({error, no_type}).
->>>>>>> - Modified the riak_kv_buckets_fsm:init/3 function to directly call
 
 
 process_results(done, StateData) ->
