@@ -650,11 +650,11 @@ stream_list_buckets(Filter, Timeout, Type,
 stream_list_buckets(Filter, Timeout, Client, Type,
                     {?MODULE, [Node, _ClientId]}) ->
     ReqId = mk_reqid(),
-    {ok, _Pid} = riak_kv_buckets_fsm_sup:start_buckets_fsm(Node,
-                                                           [{raw, ReqId,
-                                                             Client},
-                                                            [Filter, Timeout,
-                                                             true, Type]]),
+    riak_kv_buckets_fsm_sup:start_buckets_fsm(Node,
+                                              [{raw, ReqId,
+                                                Client},
+                                              [Filter, Timeout,
+                                                true, Type]]),
     {ok, ReqId}.
 
 %% @spec get_index(Bucket :: binary(),
