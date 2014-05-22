@@ -64,16 +64,16 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
 
     %% Construct the bucket listing request
     ModState = #state{from=From, stream=Stream, type=BucketType},
-    exists = fun(_) ->
+    Exists = fun(_) ->
   	    Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
 	    {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
 	    ModState}
     end,
-    does_not_exist = fun({error, _}=Error) -> 
+    DoesNotExist = fun({error, _}=Error) -> 
 	    finish(Error, ModState) 
     end,
 
-    maybe_bucket_type_exists(BucketType, exists, does_not_exist).
+    maybe_bucket_type_exists(BucketType, Exists, DoesNotExist).
 
 
 %% private
