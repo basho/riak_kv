@@ -62,9 +62,14 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
     ?DTRACE(?C_BUCKETS_INIT, [2, FilterX],
             [<<"other">>, ClientNode, PidStr]),
     %% Construct the bucket listing request
-    Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
-    {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{from=From, stream=Stream, type=BucketType}}.
+    ModState =  #state{from=From, stream=Stream, type=BucketType},
+    case riak_core_bucket_type:get(BucketType) of
+	{error, _}=Error -> finish(Error, ModState);
+	_ ->
+	    Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
+	    {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
+	    ModState}
+    end.
 
 process_results(done, StateData) ->
     {done, StateData};
