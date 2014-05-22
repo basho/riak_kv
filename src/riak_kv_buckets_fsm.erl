@@ -61,15 +61,19 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
     %% which case, the string "mapred" would appear
     ?DTRACE(?C_BUCKETS_INIT, [2, FilterX],
             [<<"other">>, ClientNode, PidStr]),
+
     %% Construct the bucket listing request
-    ModState =  #state{from=From, stream=Stream, type=BucketType},
-    case riak_core_bucket_type:get(BucketType) of
-	undefined -> finish({error, no_type}, ModState);
-	_ ->
-	    Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
+    ModState = #state{from=From, stream=Stream, type=BucketType},
+    exists = fun(_) ->
+  	    Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
 	    {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
 	    ModState}
-    end.
+    end,
+    does_not_exist = fun(Error) -> 
+	    finish(Error, ModState) 
+    end,
+
+    riak_core_bucket_type:maybe_bucket_type_exists(BucketType, exists, does_not_exist).
 
 process_results(done, StateData) ->
     {done, StateData};
