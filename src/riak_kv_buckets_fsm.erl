@@ -73,13 +73,27 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
 	    finish(Error, ModState) 
     end,
 
-    riak_core_bucket_type:maybe_bucket_type_exists(BucketType, exists, does_not_exist).
+    maybe_bucket_type_exists(BucketType, exists, does_not_exist).
+
+
+%% private
+%% TODO Move to the riak_core_bucket_type module as part of 2.1 clean up
+%%      See https://github.com/basho/riak_kv/issues/954 for more details
+maybe_bucket_type_exists([]=BucketType, ExistsFun, _DoesNotExistFun) ->
+    ExistsFun(BucketType);
+maybe_bucket_type_exists(undefined, _ExistsFun, DoesNotExistFun) ->
+    DoesNotExistFun({error, no_type});
+maybe_bucket_type_exists(BucketType, ExistsFun, DoesNotExistFun) ->
+    maybe_bucket_type_exists(riak_core_bucket_type:get(BucketType), ExistsFun, DoesNotExistFun).
+
 
 process_results(done, StateData) ->
     {done, StateData};
 process_results({error, Reason}, _State) ->
     ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [-1], []),
     {error, Reason};
+
+
 process_results(Buckets0,
                 StateData=#state{buckets=BucketAcc, from=From, stream=true}) ->
     Buckets = filter_buckets(Buckets0, StateData#state.type),
