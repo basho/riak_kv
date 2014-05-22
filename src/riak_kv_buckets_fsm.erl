@@ -69,7 +69,7 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
 	    {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
 	    ModState}
     end,
-    does_not_exist = fun(Error) -> 
+    does_not_exist = fun({error, _}=Error) -> 
 	    finish(Error, ModState) 
     end,
 
