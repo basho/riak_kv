@@ -61,16 +61,36 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
     %% which case, the string "mapred" would appear
     ?DTRACE(?C_BUCKETS_INIT, [2, FilterX],
             [<<"other">>, ClientNode, PidStr]),
+
     %% Construct the bucket listing request
-    Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
-    {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{from=From, stream=Stream, type=BucketType}}.
+    ModState = #state{from=From, stream=Stream, type=BucketType},
+    Exists = fun(_) ->
+      Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
+      {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
+        ModState}
+    end,
+    DoesNotExist = fun({error, _}=Error) -> 
+      finish(Error, ModState)
+    end,
+    maybe_bucket_type_exists(riak_core_bucket_type:get(BucketType), Exists, DoesNotExist).
+
+
+%% private
+%% TODO Move to the riak_core_bucket_type module as part of 2.1 clean up
+%%      See https://github.com/basho/riak_kv/issues/954 for more details
+maybe_bucket_type_exists(undefined, _ExistsFun, DoesNotExistFun) ->
+    DoesNotExistFun({error, no_type});
+maybe_bucket_type_exists(_=BucketType, ExistsFun, _DoesNotExistFun) ->
+    ExistsFun(BucketType).
+
 
 process_results(done, StateData) ->
     {done, StateData};
 process_results({error, Reason}, _State) ->
     ?DTRACE(?C_BUCKETS_PROCESS_RESULTS, [-1], []),
     {error, Reason};
+
+
 process_results(Buckets0,
                 StateData=#state{buckets=BucketAcc, from=From, stream=true}) ->
     Buckets = filter_buckets(Buckets0, StateData#state.type),
