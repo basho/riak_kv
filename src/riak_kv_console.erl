@@ -532,7 +532,9 @@ bucket_type_print_create_result(Type, ok) ->
             ok
     end;
 bucket_type_print_create_result(Type, {error, Reason}) ->
-    io:format("Error creating bucket type ~ts: ~p~n", [Type, Reason]),
+    io:format("Error creating bucket type ~ts:~n", [Type]),
+    io:format(bucket_error_xlate(Reason)),
+    io:format("~n"),
     error.
 
 bucket_type_update([TypeStr, PropsStr]) ->
@@ -805,3 +807,27 @@ print_vnode_status([StatusItem | RestStatusItems]) ->
             io:format("Status: ~n~p~n", [StatusItem])
     end,
     print_vnode_status(RestStatusItems).
+
+bucket_error_xlate(Errors) when is_list(Errors) ->
+    string:join(
+      lists:map(fun bucket_error_xlate/1, Errors),
+      "~n");
+bucket_error_xlate({Property, not_integer}) ->
+    [atom_to_list(Property), " must be an integer"];
+
+%% `riak_kv_bucket:coerce_bool/1` allows for other values but let's
+%% not encourage bad behavior
+bucket_error_xlate({Property, not_boolean}) ->
+    [atom_to_list(Property), " should be \"true\" or \"false\""];
+
+bucket_error_xlate({Property, not_valid_quorum}) ->
+    [atom_to_list(Property), " must be an integer or (one|quorum|all)"];
+bucket_error_xlate({_Property, Error}) when is_list(Error)
+                                            orelse is_binary(Error) ->
+    Error;
+bucket_error_xlate({Property, Error}) when is_atom(Error) ->
+    [atom_to_list(Property), ": ", atom_to_list(Error)];
+bucket_error_xlate({Property, Error}) ->
+    [atom_to_list(Property), ": ", io_lib:format("~p", [Error])];
+bucket_error_xlate(X) ->
+    io_lib:format("~p", [X]).

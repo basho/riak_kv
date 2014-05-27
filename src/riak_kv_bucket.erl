@@ -268,7 +268,7 @@ validate_create_consistent_props(false, New) ->
 validate_create_consistent_props(undefined, New) ->
     {New, [], []};
 validate_create_consistent_props(Invalid, New) ->
-    Err = lists:flatten(io_lib:format("~p is not a valid value for consistent. use \"true\" or \"false\"", [Invalid])),
+    Err = lists:flatten(io_lib:format("~p is not a valid value for consistent. Use \"true\" or \"false\"", [Invalid])),
     {lists:keydelete(consistent, 1, New), [], [{consistent, Err}]}.
 
 
