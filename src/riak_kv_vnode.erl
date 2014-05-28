@@ -529,21 +529,22 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
     IndexCap = lists:member(indexes, Caps),
     case IndexCap of
         true ->
-            {Exists, RObj, IdxData} =
+            {Exists, RObj, IdxData, ModState2} =
             case do_get_term(BKey, Mod, ModState) of
-                {ok, ExistingObj} ->
-                    {true, ExistingObj, riak_object:index_data(ExistingObj)};
-                _ ->
-                    {false, undefined, []}
+                {{ok, ExistingObj}, UpModState} ->
+                    {true, ExistingObj, riak_object:index_data(ExistingObj),
+                     UpModState};
+                {{error, _}, UpModState} ->
+                    {false, undefined, [], UpModState}
             end,
             IndexSpecs = riak_object:diff_index_data(OldIdxData, IdxData),
-            {Reply, UpModState} = 
-            case Mod:put(Bucket, Key, IndexSpecs, undefined, ModState) of
-                {ok, ModState2} ->
+            {Reply, ModState3} =
+            case Mod:put(Bucket, Key, IndexSpecs, undefined, ModState2) of
+                {ok, UpModState2} ->
                     riak_kv_stat:update(vnode_index_refresh),
-                    {ok, ModState2};
-                {error, Reason, ModState2} ->
-                    {{error, Reason}, ModState2}
+                    {ok, UpModState2};
+                {error, Reason, UpModState2} ->
+                    {{error, Reason}, UpModState2}
             end,
             case Exists of
                 true ->
@@ -552,7 +553,7 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
                     delete_from_hashtree(Bucket, Key, State)
             end,
             riak_core_vnode:reply(Sender, Reply),
-            {noreply, State#state{modstate=UpModState}};
+            {noreply, State#state{modstate=ModState3}};
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
     end;
