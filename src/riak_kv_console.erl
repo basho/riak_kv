@@ -557,7 +557,9 @@ bucket_type_update(Type, _) ->
 bucket_type_print_update_result(Type, ok) ->
     io:format("~ts updated~n", [Type]);
 bucket_type_print_update_result(Type, {error, Reason}) ->
-    io:format("Error updating bucket type ~ts: ~p~n", [Type, Reason]),
+    io:format("Error updating bucket type ~ts:~n", [Type]),
+    io:format(bucket_error_xlate(Reason)),
+    io:format("~n"),
     error.
 
 bucket_type_reset([TypeStr]) ->
