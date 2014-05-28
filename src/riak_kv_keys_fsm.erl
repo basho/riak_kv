@@ -89,12 +89,18 @@ init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout]) ->
     ?DTRACE(?C_KEYS_INIT, [2, FilterX],
             [<<"other">>, ClientNode, PidStr]),
     %% Get the bucket n_val for use in creating a coverage plan
-    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    ModState = #state{from=From},
+    maybe_complete_init(Bucket, ItemFilter, Timeout, ModState, riak_core_bucket:get_bucket(Bucket)).
+
+%% @private
+maybe_complete_init(_Bucket, _ItemFilter, _Timeout, ModState, {error, _}=Error) ->
+    finish(Error, ModState);
+maybe_complete_init(Bucket, ItemFilter, Timeout, ModState, BucketProps) ->
     NVal = proplists:get_value(n_val, BucketProps),
     %% Construct the key listing request
     Req = req(Bucket, ItemFilter),
-    {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{from=From}}.
+    {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout, ModState}.
+
 
 process_results({From, Bucket, Keys},
                 StateData=#state{from={raw, ReqId, ClientPid}}) ->
