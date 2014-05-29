@@ -47,7 +47,7 @@
 -type set_op() :: simple_set_op() | {update, [simple_set_op()]}.
 -type flag_op() :: enable | disable.
 -type register_op() :: {assign, binary()}.
--type simple_map_op() :: {add, map_field()} | {remove, map_field()} | {update, map_field(), embedded_type_op()}.
+-type simple_map_op() :: {remove, map_field()} | {update, map_field(), embedded_type_op()}.
 -type map_op() :: simple_map_op() | {update, [simple_map_op()]}.
 -type embedded_type_op() :: counter_op() | set_op() | register_op() | flag_op() | map_op().
 -type toplevel_op() :: counter_op() | set_op() | map_op().
@@ -145,17 +145,10 @@ op_from_json(map, Op, Mods) -> map_op_from_json(Op, Mods).
 -spec map_op_from_json(mochijson2:json_object(), type_mappings()) -> map_op().
 map_op_from_json({struct, Ops0}=InOp, Mods) ->
     Ops = lists:keymap(fun(<<"update">>) -> update;
-                          (<<"add">>) -> add;
                           (<<"remove">>) -> remove;
                           (Op) -> bad_op(map, Op)
                        end, 1, Ops0),
     {struct, Updates} = proplists:get_value(update, Ops, {struct, []}),
-    Adds = case proplists:get_value(add, Ops, []) of
-               AddBin when is_binary(AddBin) ->
-                   [AddBin];
-               AddList when is_list(AddList) -> AddList;
-               _ -> bad_op(map, InOp)
-           end,
     Removes = case proplists:get_value(remove, Ops, []) of
                RemoveBin when is_binary(RemoveBin) ->
                    [RemoveBin];
@@ -163,7 +156,6 @@ map_op_from_json({struct, Ops0}=InOp, Mods) ->
                _ -> bad_op(map, InOp)
            end,
     {update, [ {remove, field_to_mod(field_from_json(Field), Mods)} || Field <- Removes ] ++
-             [ {add, field_to_mod(field_from_json(Field), Mods)} || Field <- Adds ] ++
          [ map_update_op_from_json(Update, Mods) || Update <- Updates ]};
 map_op_from_json(Op, _Mods) ->
     bad_op(map, Op).
@@ -349,17 +341,10 @@ decode_update_request_test_() ->
       fun() ->
               ModMap = riak_kv_crdt:mod_map(map),
               %% Simple ops
-              ?assertEqual({map, {update, [{add, {<<"a">>, ?EMCNTR_TYPE}}]}, undefined},
-                           update_request_from_json(map, {struct, [{<<"add">>, <<"a_counter">>}]}, ModMap)),
-              ?assertEqual({map, {update, [{add, {<<"a">>, ?EMCNTR_TYPE}}, {add, {<<"a">>, ?SET_TYPE}}]}, undefined},
-                           update_request_from_json(map, {struct, [{<<"add">>, [<<"a_counter">>, <<"a_set">>]}]}, ModMap)),
               ?assertEqual({map, {update, [{remove, {<<"a">>, ?EMCNTR_TYPE}}]}, undefined},
                            update_request_from_json(map, {struct, [{<<"remove">>, <<"a_counter">>}]}, ModMap)),
               ?assertEqual({map, {update, [{remove, {<<"a">>, ?EMCNTR_TYPE}}, {remove, {<<"a">>, ?SET_TYPE}}]}, undefined},
                            update_request_from_json(map, {struct, [{<<"remove">>, [<<"a_counter">>, <<"a_set">>]}]}, ModMap)),
-              %% Removes get ordered before adds, multiple ops extracted
-              ?assertEqual({map, {update, [{remove, {<<"a">>, ?EMCNTR_TYPE}}, {add, {<<"a">>, ?SET_TYPE}}]}, undefined},
-                           update_request_from_json(map, {struct, [{<<"add">>, [<<"a_set">>]}, {<<"remove">>, [<<"a_counter">>]}]}, ModMap)),
               %% Nested updates
               ?assertEqual({map, {update, [{update, {<<"a">>, ?EMCNTR_TYPE}, increment}]}, undefined},
                            update_request_from_json(map, {struct, [{<<"update">>, {struct, [{<<"a_counter">>, <<"increment">>}]}}]}, ModMap)),
@@ -394,9 +379,9 @@ decode_update_request_test_() ->
                                                                                            ModMap),
               ?assertMatch({map, {update, [{remove, {<<"a">>, ?SET_TYPE}}]}, BinContext},
                            update_request_from_json(map, {struct, [{<<"remove">>, <<"a_set">>}, {<<"context">>, JSONCtx}]}, ModMap)),
-                           
+
               %% Invalid field names
-              ?assertThrow({invalid_field_name, <<"a_hash">>}, update_request_from_json(map, {struct, [{<<"add">>, <<"a_hash">>}]}, ModMap)),
+              ?assertThrow({invalid_field_name, <<"a_hash">>}, update_request_from_json(map, {struct, [{<<"update">>, {struct, [{<<"a_hash">>, <<"increment">>}]}}]}, ModMap)),
               ?assertThrow({invalid_field_name, <<"foo">>}, update_request_from_json(map, {struct, [{<<"remove">>, <<"foo">>}]}, ModMap)),
               ?assertThrow({invalid_field_name, <<"b_blob">>}, 
                            update_request_from_json(map, {struct, 
