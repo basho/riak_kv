@@ -102,6 +102,9 @@ parse_inputs(Inputs = {search, _Bucket, _Query, _Filter}) ->
     {ok, Inputs};
 parse_inputs(Inputs = {Bucket, Filters}) when is_binary(Bucket), is_list(Filters) ->
     {ok, Inputs};
+parse_inputs(Inputs = {{Type, Bucket}, Filters})
+  when is_binary(Type), is_binary(Bucket), is_list(Filters) ->
+    {ok, Inputs};
 parse_inputs(Invalid) ->
     {error, {"Inputs must be a binary bucket, a tuple of bucket and key-filters, a list of target tuples, or a search, index, or modfun tuple:", Invalid}}.
 
