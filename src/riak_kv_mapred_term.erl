@@ -102,6 +102,9 @@ parse_inputs(Inputs = {search, _Bucket, _Query, _Filter}) ->
     {ok, Inputs};
 parse_inputs(Inputs = {Bucket, Filters}) when is_binary(Bucket), is_list(Filters) ->
     {ok, Inputs};
+parse_inputs(Inputs = {{Type, Bucket}, Filters})
+  when is_binary(Type), is_binary(Bucket), is_list(Filters) ->
+    {ok, Inputs};
 parse_inputs(Invalid) ->
     {error, {"Inputs must be a binary bucket, a tuple of bucket and key-filters, a list of target tuples, or a search, index, or modfun tuple:", Invalid}}.
 
@@ -190,6 +193,11 @@ get_required_permissions(Inputs, _Query) ->
                                is_list(Filters) ->
             [{"riak_kv.list_keys", {<<"default">>, Bucket}},
              {"riak_kv.mapreduce", {<<"default">>, Bucket}}];
+        {{Type, Bucket}, Filters} when is_binary(Type),
+                                       is_binary(Bucket),
+                                       is_list(Filters) ->
+            [{"riak_kv.list_keys", {Type, Bucket}},
+             {"riak_kv.mapreduce", {Type, Bucket}}];
         Targets when is_list(Targets) ->
             %% MR over a list of bucket/key pairs, with
             %% optional keydata.
