@@ -599,21 +599,22 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
     IndexCap = lists:member(indexes, Caps),
     case IndexCap of
         true ->
-            {Exists, RObj, IdxData} =
+            {Exists, RObj, IdxData, ModState2} =
             case do_get_term(BKey, Mod, ModState) of
-                {ok, ExistingObj} ->
-                    {true, ExistingObj, riak_object:index_data(ExistingObj)};
-                _ ->
-                    {false, undefined, []}
+                {{ok, ExistingObj}, UpModState} ->
+                    {true, ExistingObj, riak_object:index_data(ExistingObj),
+                     UpModState};
+                {{error, _}, UpModState} ->
+                    {false, undefined, [], UpModState}
             end,
             IndexSpecs = riak_object:diff_index_data(OldIdxData, IdxData),
-            {Reply, UpModState} =
-            case Mod:put(Bucket, Key, IndexSpecs, undefined, ModState) of
-                {ok, ModState2} ->
+            {Reply, ModState3} =
+            case Mod:put(Bucket, Key, IndexSpecs, undefined, ModState2) of
+                {ok, UpModState2} ->
                     riak_kv_stat:update(vnode_index_refresh),
-                    {ok, ModState2};
-                {error, Reason, ModState2} ->
-                    {{error, Reason}, ModState2}
+                    {ok, UpModState2};
+                {error, Reason, UpModState2} ->
+                    {{error, Reason}, UpModState2}
             end,
             case Exists of
                 true ->
@@ -622,7 +623,7 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
                     delete_from_hashtree(Bucket, Key, State)
             end,
             riak_core_vnode:reply(Sender, Reply),
-            {noreply, State#state{modstate=UpModState}};
+            {noreply, State#state{modstate=ModState3}};
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
     end;
@@ -1150,15 +1151,15 @@ handle_info({'DOWN', _, _, _, _}, State) ->
     {ok, State};
 handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=ModState}) ->
     UpdState = case do_get_term(BKey, Mod, ModState) of
-                   {ok, RObj} ->
+                   {{ok, RObj}, ModState1} ->
                        case delete_hash(RObj) of
                            RObjHash ->
-                               do_backend_delete(BKey, RObj, State);
+                               do_backend_delete(BKey, RObj, State#state{modstate=ModState1});
                          _ ->
                                State
                        end;
-                   _ ->
-                       State
+                   {{error, _}, ModState1} ->
+                       State#state{modstate=ModState1}
                end,
     {ok, UpdState}.
 
@@ -1518,7 +1519,7 @@ put_merge(true, LWW, CurObj, UpdObj, VId, StartTime) ->
 do_get(_Sender, BKey, ReqID,
        State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
     StartTS = os:timestamp(),
-    Retval = do_get_term(BKey, Mod, ModState),
+    {Retval, ModState1} = do_get_term(BKey, Mod, ModState),
     case Retval of
         {ok, Obj} ->
             maybe_cache_object(BKey, Obj, State);
@@ -1526,20 +1527,20 @@ do_get(_Sender, BKey, ReqID,
             ok
     end,
     update_vnode_stats(vnode_get, Idx, StartTS),
-    {reply, {r, Retval, Idx, ReqID}, State}.
+    {reply, {r, Retval, Idx, ReqID}, State#state{modstate=ModState1}}.
 
 %% @private
 do_get_term({Bucket, Key}, Mod, ModState) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
-        {ok, Obj, _UpdModState} ->
-            {ok, Obj};
+        {ok, Obj, UpdModState} ->
+            {{ok, Obj}, UpdModState};
         %% @TODO Eventually it would be good to
         %% make the use of not_found or notfound
         %% consistent throughout the code.
-        {error, not_found, _UpdatedModstate} ->
-            {error, notfound};
-        {error, Reason, _UpdatedModstate} ->
-            {error, Reason};
+        {error, not_found, UpdModState} ->
+            {{error, notfound}, UpdModState};
+        {error, Reason, UpdModState} ->
+            {{error, Reason}, UpdModState};
         Err ->
             Err
     end.
@@ -1727,16 +1728,18 @@ do_delete(BKey, State) ->
 
     %% Get the existing object.
     case do_get_term(BKey, Mod, ModState) of
-        {ok, RObj} ->
+        {{ok, RObj}, UpdModState} ->
             %% Object exists, check if it should be deleted.
             case riak_kv_util:obj_not_deleted(RObj) of
                 undefined ->
                     case DeleteMode of
                         keep ->
                             %% keep tombstones indefinitely
-                            {reply, {fail, Idx, del_mode_keep}, State};
+                            {reply, {fail, Idx, del_mode_keep},
+                             State#state{modstate=UpdModState}};
                         immediate ->
-                            UpdState = do_backend_delete(BKey, RObj, State),
+                            UpdState = do_backend_delete(BKey, RObj,
+                                                         State#state{modstate=UpdModState}),
                             {reply, {del, Idx, del_mode_immediate}, UpdState};
                         Delay when is_integer(Delay) ->
                             erlang:send_after(Delay, self(),
@@ -1744,7 +1747,8 @@ do_delete(BKey, State) ->
                                                delete_hash(RObj)}),
                             %% Nothing checks these messages - will just reply
                             %% del for now until we can refactor.
-                            {reply, {del, Idx, del_mode_delayed}, State}
+                            {reply, {del, Idx, del_mode_delayed},
+                             State#state{modstate=UpdModState}}
                     end;
                 _ ->
                     %% not a tombstone or not all siblings are tombstones

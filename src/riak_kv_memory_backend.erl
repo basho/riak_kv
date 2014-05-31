@@ -217,6 +217,13 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
         _ ->
             {{ts, Now}, Val}
     end,
+    OldSize =
+        case ets:lookup(DataRef, {Bucket, PrimaryKey}) of
+            [] ->
+                0;
+            [OldObject] ->
+                object_size(OldObject)
+        end,
     {ok, Size} = do_put(Bucket, PrimaryKey, Val1, IndexSpecs, DataRef, IndexRef),
     NoMemChange = (MaxMemory =:= undefined) orelse (Val =:= undefined),
     UsedMemory1 =
@@ -233,7 +240,8 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
                                     0),
             UsedMemory + Size - Freed
     end,
-    {ok, State#state{used_memory=UsedMemory1}}.
+    UsedMemory2 = UsedMemory1 - OldSize,
+    {ok, State#state{used_memory=UsedMemory2}}.
 
 %% @doc Delete an object from the memory backend
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
@@ -242,24 +250,28 @@ delete(Bucket, Key, IndexSpecs, State=#state{data_ref=DataRef,
                                              index_ref=IndexRef,
                                              time_ref=TimeRef,
                                              used_memory=UsedMemory}) ->
-    case TimeRef of
-        undefined ->
-            UsedMemory1 = UsedMemory;
-        _ ->
-            %% Lookup the object so we can delete its
-            %% entry from the time table and account
-            %% for the memory used.
-            [Object] = ets:lookup(DataRef, {Bucket, Key}),
-            case Object of
-                {_, {{ts, Timestamp}, _}} ->
-                    ets:delete(TimeRef, Timestamp),
-                    UsedMemory1 = UsedMemory - object_size(Object);
+    case ets:lookup(DataRef, {Bucket, Key}) of
+        [Object] ->
+            case TimeRef of
+                undefined ->
+                    ok;
                 _ ->
-                    UsedMemory1 = UsedMemory
-            end
+                    %% Lookup the object so we can delete its
+                    %% entry from the time table and account
+                    %% for the memory used.
+                    case Object of
+                        {_, {{ts, Timestamp}, _}} ->
+                            ets:delete(TimeRef, Timestamp);
+                        _ ->
+                            ok
+                    end
+            end,
+            UsedMemory1 = UsedMemory - object_size(Object),
+            update_indexes(Bucket, Key, IndexSpecs, IndexRef),
+            ets:delete(DataRef, {Bucket, Key});
+        [] -> 
+            UsedMemory1 = UsedMemory
     end,
-    update_indexes(Bucket, Key, IndexSpecs, IndexRef),
-    ets:delete(DataRef, {Bucket, Key}),
     {ok, State#state{used_memory=UsedMemory1}}.
 
 %% @doc Fold over all the buckets.
