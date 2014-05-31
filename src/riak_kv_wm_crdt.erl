@@ -76,8 +76,8 @@
 %%                     `"remove"', `"remove_all"' fields. `"add"' and `"remove"' should refer to
 %%                     single string values, while `"add_all"' and `"remove_all"' should be arrays
 %%                     of strings. The `"context"' field may be included.</dd>
-%%     <dt>map</dt><dd>An object containing any of the fields `"add"', `"remove"', or `"update"'.
-%%                     `"add"' and `"remove"' should be lists of field names as described above.
+%%     <dt>map</dt><dd>An object containing any of the fields `"remove"', or `"update"'.
+%%                     `"remove"' should be a list of field names as described above.
 %%                     `"update"` should be an object containing fields and the operation to apply
 %%                     to the type associated with the field.</dd>
 %%     <dt>register (embedded in map only)</dt><dd>`{"assign":Value}' where `Value' is the new string
@@ -388,8 +388,9 @@ produce_json(RD, Ctx=#ctx{module=Mod, data=RObj, include_context=I}) ->
     Type = riak_kv_crdt:from_mod(Mod),
     {{RespCtx, Value}, Stats} = riak_kv_crdt:value(RObj, Mod),
     _ = [ riak_kv_stat:update(S) || S <- Stats ],
+    ModMap = riak_kv_crdt:mod_map(Type),
     Body = riak_kv_crdt_json:fetch_response_to_json(
-                     Type, Value, get_context(RespCtx,I), ?MOD_MAP),
+                     Type, Value, get_context(RespCtx,I), ModMap),
     {mochijson2:encode(Body), RD, Ctx}.
 
 %% Internal functions
@@ -397,9 +398,10 @@ produce_json(RD, Ctx=#ctx{module=Mod, data=RObj, include_context=I}) ->
 check_post_body(RD, #ctx{crdt_type=CRDTType}) ->
     try
         JSON = mochijson2:decode(wrq:req_body(RD)),
+        ModMap = riak_kv_crdt:mod_map(CRDTType),
         Data = {CRDTType, _Op, _Context} =
             riak_kv_crdt_json:update_request_from_json(CRDTType, JSON,
-                                                       ?MOD_MAP),
+                                                       ModMap),
         {ok, Data}
     catch
         throw:{invalid_operation, {BadType, BadOp}} ->

@@ -23,7 +23,7 @@
 -module(riak_kv_crdt).
 
 -export([update/3, merge/1, value/2, new/3,
-         supported/1, to_mod/1, from_mod/1]).
+         supported/1, to_mod/1, from_mod/1, mod_map/1]).
 -export([to_binary/2, to_binary/1, from_binary/1]).
 -export([log_merge_errors/4, meta/2, merge_value/2]).
 %% MR helper funs
@@ -435,6 +435,16 @@ from_mod(Mod) ->
         false ->
             undefined
     end.
+%% @doc mapping of atom/shortname types (map, set, counter etc) to
+%% actual modules that implement them. Notice the mod map for maps is
+%% different since embedded types are different.
+-spec mod_map(atom()) -> [{atom(), atom()}].
+mod_map(map) ->
+    ?EMBEDDED_TYPES;
+mod_map(_) ->
+    ?MOD_MAP.
+
+
 
 %% @Doc the update context can be empty for some types.
 %% Those that support an precondition_context should supply
