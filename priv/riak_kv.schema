@@ -584,7 +584,7 @@ end
 %% @see background_manager
 {mapping, "handoff.use_background_manager", "riak_kv.handoff_use_background_manager", [
     {datatype, flag},
-    {default, on},
+    {default, off},
     hidden
 ]}.
 
@@ -595,6 +595,6 @@ end
 %% @see background_manager
 {mapping, "anti_entropy.use_background_manager", "riak_kv.aae_use_background_manager", [
     {datatype, flag},
-    {default, on},
+    {default, off},
     hidden
 ]}.
