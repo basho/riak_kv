@@ -581,15 +581,15 @@ handle_command({rehash, Bucket, Key}, _, State=#state{mod=Mod, modstate=ModState
 handle_command({ensemble_repair, BKey, Target, From}, _Sender,
                State=#state{mod=Mod, modstate=ModState}) ->
     case do_get_term(BKey, Mod, ModState) of
-        {ok, Obj} ->
+        {{ok, Obj}, UpdModState} ->
             {Partition, Node} = Target,
             Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Partition),
             {Proxy, Node} ! {ensemble_repair, BKey, Obj, From},
-            {noreply, State};
-        _ ->
+            {noreply, State#state{modstate=UpdModState}};
+        {{error, _Reason}, UpdModState} ->
             %% TODO: Send back actual error/reason?
             riak_kv_ensemble_backend:reply(From, {failed, local_get_failed}),
-            {noreply, State}
+            {noreply, State#state{modstate=UpdModState}}
     end;
 
 handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
@@ -959,9 +959,7 @@ handle_handoff_data(BinObj, State) ->
             {ok, UpdModState} ->
                 {reply, ok, State#state{modstate=UpdModState}};
             {error, Reason, UpdModState} ->
-                {reply, {error, Reason}, State#state{modstate=UpdModState}};
-            Err ->
-                {reply, {error, Err}, State}
+                {reply, {error, Reason}, State#state{modstate=UpdModState}}
         end
     catch Error:Reason2 ->
             lager:warning("Unreadable object discarded in handoff: ~p:~p",
@@ -1156,7 +1154,7 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
                            RObjHash ->
                                do_backend_delete(BKey, RObj, State#state{modstate=ModState1});
                          _ ->
-                               State
+                               State#state{modstate=ModState1}
                        end;
                    {{error, _}, ModState1} ->
                        State#state{modstate=ModState1}
@@ -1530,6 +1528,10 @@ do_get(_Sender, BKey, ReqID,
     {reply, {r, Retval, Idx, ReqID}, State#state{modstate=ModState1}}.
 
 %% @private
+-spec do_get_term({binary(), binary()}, atom(), tuple()) ->
+                         {{ok, riak_object:riak_object()}, tuple()} |
+                         {{error, not_found}, tuple()} |
+                         {{error, any()}, tuple()}.
 do_get_term({Bucket, Key}, Mod, ModState) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
         {ok, Obj, UpdModState} ->
@@ -1752,11 +1754,11 @@ do_delete(BKey, State) ->
                     end;
                 _ ->
                     %% not a tombstone or not all siblings are tombstones
-                    {reply, {fail, Idx, not_tombstone}, State}
+                    {reply, {fail, Idx, not_tombstone}, State#state{modstate=UpdModState}}
             end;
-        _ ->
+        {{error, not_found}, UpdModState} ->
             %% does not exist in the backend
-            {reply, {fail, Idx, not_found}, State}
+            {reply, {fail, Idx, not_found}, State#state{modstate=UpdModState}}
     end.
 
 %% @private
