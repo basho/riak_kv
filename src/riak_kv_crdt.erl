@@ -23,7 +23,7 @@
 -module(riak_kv_crdt).
 
 -export([update/3, merge/1, value/2, new/3,
-         supported/1, to_mod/1, from_mod/1, mod_map/1]).
+         supported/1, to_mod/1, from_mod/1, from_mod/2,  mod_map/1]).
 -export([to_binary/2, to_binary/1, from_binary/1]).
 -export([log_merge_errors/4, meta/2, merge_value/2]).
 %% MR helper funs
@@ -429,12 +429,16 @@ to_mod(Type) ->
     proplists:get_value(Type, ?MOD_MAP).
 
 from_mod(Mod) ->
-    case lists:keyfind(Mod, 2, ?MOD_MAP) of
+    from_mod(Mod, ?MOD_MAP).
+
+from_mod(Mod, ModMap) ->
+    case lists:keyfind(Mod, 2, ModMap) of
         {Type, Mod} ->
             Type;
         false ->
             undefined
     end.
+
 %% @doc mapping of atom/shortname types (map, set, counter etc) to
 %% actual modules that implement them. Notice the mod map for maps is
 %% different since embedded types are different.
