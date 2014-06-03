@@ -95,17 +95,19 @@ encode(Message) ->
 %% @doc process/2 callback. Handles an incoming request message.
 process(#rpblistbucketsreq{type = Type, timeout=T, stream=S}=Req,
         #state{client=C} = State) -> 
-    case S of 
-        true -> 
-            {ok, ReqId} = C:stream_list_buckets(none, T, Type),
-            {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
+    case {maybe_bucket_type_exists(Type), S} of
+       {true, true} ->
+	   {ok, ReqId} = C:stream_list_buckets(none, T, Type),
+	   {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
+       {true, false} ->
+	   case C:list_buckets(none, T, Type) of
+	       {ok, Buckets} ->
+		   {reply, #rpblistbucketsresp{buckets = Buckets}, State};
+		   {error, Reason} ->
+			   {error, {format, Reason}, State}
+	   end;
         _ ->
-            case C:list_buckets(none, T, Type) of
-                {ok, Buckets} ->
-                    {reply, #rpblistbucketsresp{buckets = Buckets}, State};
-                {error, Reason} ->
-                    {error, {format, Reason}, State}
-            end
+	    {error, {format, "No bucket-type named '~s'", [Type]}, State}
     end;
 
 %% this should remain for backwards compatibility
@@ -115,9 +117,13 @@ process(rpblistbucketsreq, State) ->
 %% Start streaming in list keys
 process(#rpblistkeysreq{type = Type, bucket=B,timeout=T}=Req, #state{client=C} = State) ->
     %% stream_list_keys results will be processed by process_stream/3
-    Bucket = maybe_create_bucket_type(Type, B),
-    {ok, ReqId} = C:stream_list_keys(Bucket, T),
-    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}}.
+    case maybe_create_bucket_type(Type, B) of
+	{error, no_type} ->
+	    {error, {format, "No bucket-type named '~s'", [Type]}, State};
+	Bucket ->
+	    {ok, ReqId} = C:stream_list_keys(Bucket, T),
+	    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}}
+    end.
 
 %% @doc process_stream/3 callback. Handles streaming keys messages and
 %% streaming buckets.
@@ -161,11 +167,25 @@ process_stream({ReqId, Error}, ReqId,
                State=#state{ req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}}.
 
+-spec maybe_bucket_type_exists(BucketExists :: atom() | binary() | list()) -> atom().
+maybe_bucket_type_exists(undefined) ->
+    false;
+maybe_bucket_type_exists(Type) when is_list(Type) ->
+    true;
+maybe_bucket_type_exists(Type) when is_binary(Type) ->
+    maybe_bucket_type_exists(riak_core_bucket_type:get(Type)).
 
+-spec maybe_create_bucket_type(Type :: binary() | atom(), Bucket :: binary()) -> any() | { binary(), list() } | { atom() | atom() }.
 maybe_create_bucket_type(<<"default">>, Bucket) ->
     Bucket;
 maybe_create_bucket_type(undefined, Bucket) ->
     Bucket;
-maybe_create_bucket_type(Type, Bucket) ->
-    {Type, Bucket}.
+maybe_create_bucket_type(Type, Bucket) when is_binary(Type) ->
+    maybe_create_bucket_type(maybe_bucket_type_exists(Type), Type, Bucket).
+
+-spec maybe_create_bucket_type(BucketExists :: boolean(), Type :: binary() | any(), Bucket :: list() | any()) -> { binary(), list() } | { atom() | atom() }.
+maybe_create_bucket_type(true, Type, Bucket) when is_binary(Type) ->
+    {Type, Bucket};
+maybe_create_bucket_type(false, _Type, _Bucket) ->
+    {error, no_type}.
 
