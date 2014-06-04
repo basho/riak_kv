@@ -43,11 +43,12 @@
                 local_tree  :: pid(),
                 remote_tree :: pid(),
                 built       :: non_neg_integer(),
+                timer       :: reference(),
                 timeout     :: pos_integer()
                }).
 
 %% Per state transition timeout used by certain transitions
--define(DEFAULT_ACTION_TIMEOUT, 300000). %% 5 minutes
+-define(DEFAULT_ACTION_TIMEOUT, 60000). %% 1 minute
 
 %% Use occasional calls to disk_log:log() for some backpressure periodically
 -define(LOG_BATCH_SIZE, 5000).
@@ -114,7 +115,9 @@ prepare_exchange(start_exchange, State=#state{remote=RemoteVN,
                                                  local_fsm) of
                 ok ->
                     remote_exchange_request(RemoteVN, IndexN),
-                    next_state_with_timeout(prepare_exchange, State);
+                    Timer = gen_fsm:send_event_after(State#state.timeout,
+                                                     timeout),
+                    {next_state, prepare_exchange, State#state{timer=Timer}};
                 _ ->
                     send_exchange_status(already_locked, State),
                     {stop, normal, State}
@@ -126,12 +129,14 @@ prepare_exchange(start_exchange, State=#state{remote=RemoteVN,
 prepare_exchange(timeout, State) ->
     do_timeout(State);
 prepare_exchange({remote_exchange, Pid}, State) when is_pid(Pid) ->
+    _ = gen_fsm:cancel_timer(State#state.timer),
     monitor(process, Pid),
-    State2 = State#state{remote_tree=Pid},
+    State2 = State#state{remote_tree=Pid, timer=undefined},
     update_trees(start_exchange, State2);
 prepare_exchange({remote_exchange, Error}, State) ->
+    _ = gen_fsm:cancel_timer(State#state.timer),
     send_exchange_status({remote, Error}, State),
-    {stop, normal, State}.
+    {stop, normal, State#state{timer=undefined}}.
 
 %% @doc Now that locks have been acquired, ask both the local and remote
 %%      hashtrees to perform a tree update. If updates do not occur within
@@ -362,19 +367,13 @@ do_timeout(State=#state{local=LocalVN,
     lager:info("Timeout during exchange between (local) ~p and (remote) ~p, "
                "(preflist) ~p", [LocalVN, RemoteVN, IndexN]),
     send_exchange_status({timeout, RemoteVN, IndexN}, State),
-    {stop, normal, State}.
+    {stop, normal, State#state{timer=undefined}}.
 
 %% @private
 send_exchange_status(Status, #state{local=LocalVN,
                                     remote=RemoteVN,
                                     index_n=IndexN}) ->
     riak_kv_entropy_manager:exchange_status(LocalVN, RemoteVN, IndexN, Status).
-
-%% @private
-next_state_with_timeout(StateName, State) ->
-    next_state_with_timeout(StateName, State, State#state.timeout).
-next_state_with_timeout(StateName, State, Timeout) ->
-    {next_state, StateName, State, Timeout}.
 
 exchange_complete({LocalIdx, _}, {RemoteIdx, RemoteNode}, IndexN, Repaired) ->
     riak_kv_entropy_info:exchange_complete(LocalIdx, RemoteIdx, IndexN, Repaired),
