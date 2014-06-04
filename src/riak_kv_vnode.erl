@@ -71,7 +71,8 @@
          handle_handoff_data/2,
          encode_handoff_item/2,
          handle_exit/3,
-         handle_info/2]).
+         handle_info/2,
+         ready_to_exit/0]). %% Note: optional function of the behaviour
 
 -export([handoff_data_encoding_method/0]).
 -export([set_vnode_forwarding/2]).
@@ -1171,6 +1172,11 @@ handle_exit(_Pid, Reason, State) ->
     %% queue and never being processed.
     lager:error("Linked process exited. Reason: ~p", [Reason]),
     {stop, linked_process_crash, State}.
+
+%% Optional Callback. A node is about to exit. Ensure that this node doesn't
+%% have any current ensemble members.
+ready_to_exit() ->
+    [] =:= riak_kv_ensembles:local_ensembles().
 
 %% @private
 forward_put({Idx, Node}, Key, Obj, From) ->
