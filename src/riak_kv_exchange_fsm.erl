@@ -179,14 +179,12 @@ key_exchange(timeout, State=#state{local=LocalVN,
     lager:debug("Starting key exchange between ~p and ~p", [LocalVN, RemoteVN]),
     lager:debug("Exchanging hashes for preflist ~p", [IndexN]),
 
-    TmpDir = app_helper:get_env(riak_core, platform_data_dir, "/tmp"),
+    TmpDir = tmp_dir(),
     {NA, NB, NC} = Now = WriteLog = now(),
-    LogFile1 = lists:flatten(io_lib:format("~s/~s/in.~p.~p.~p",
-                                           [TmpDir, ?MODULE, NA, NB, NC])),
-    ok = filelib:ensure_dir(LogFile1),
-    LogFile2 = lists:flatten(io_lib:format("~s/~s/out.~p.~p.~p",
-                                           [TmpDir, ?MODULE, NA, NB, NC])),
-    ok = filelib:ensure_dir(LogFile2),
+    LogFile1 = lists:flatten(io_lib:format("~s/in.~p.~p.~p",
+                                           [TmpDir, NA, NB, NC])),
+    LogFile2 = lists:flatten(io_lib:format("~s/out.~p.~p.~p",
+                                           [TmpDir, NA, NB, NC])),
     Remote = fun(get_bucket, {L, B}) ->
                      exchange_bucket(RemoteTree, IndexN, L, B);
                 (key_hashes, Segment) ->
@@ -393,7 +391,7 @@ sort_disk_log(InputFile, OutputFile) ->
     Input = sort_disk_log_input(ReadLog),
     Output = sort_disk_log_output(WriteLog),
     try
-        file_sorter:sort(Input, Output, {format, term})
+        file_sorter:sort(Input, Output, [{format, term}, {tmpdir, tmp_dir()}])
     after
         ok = disk_log:close(ReadLog),
         ok = disk_log:close(WriteLog)
@@ -449,3 +447,10 @@ fold_disk_log({Cont, Terms}, Fun, Acc, DiskLog) ->
             Acc
     end,
     fold_disk_log(disk_log:chunk(DiskLog, Cont), Fun, Acc2, DiskLog).
+
+tmp_dir() ->
+    PDD = app_helper:get_env(riak_core, platform_data_dir, "/tmp"),
+    TmpDir = filename:join(PDD, ?MODULE),
+    TmpCanary = filename:join(TmpDir, "canary"),
+    ok = filelib:ensure_dir(TmpCanary),
+    TmpDir.
