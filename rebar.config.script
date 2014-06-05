@@ -1,3 +1,4 @@
+CONFIG2 =
 case erlang:system_info(otp_release) =< "R15B01" of
     true  ->
         HashDefine = [{d,old_hash}],
@@ -8,4 +9,5 @@ case erlang:system_info(otp_release) =< "R15B01" of
                 CONFIG ++ [{erl_opts, HashDefine}]
         end;
     false -> CONFIG
-end.
+end,
+CONFIG2.
