@@ -813,8 +813,9 @@ bitcask_version() ->
 
 -spec bitcask_version_str() -> string().
 bitcask_version_str() ->
-    [BitcaskVsn] =
-        [Vsn || {bitcask, _, Vsn} <- application:which_applications()],
+    Apps = application:which_applications(),
+    % For tests, etc without the app, use big version number to avoid upgrades
+    BitcaskVsn = hd([Vsn || {bitcask, _, Vsn} <- Apps] ++ ["999.999.999"]),
     BitcaskVsn.
 
 -spec version_to_str(version()) -> string().
