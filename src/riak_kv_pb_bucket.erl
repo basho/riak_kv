@@ -163,7 +163,7 @@ process_stream({ReqId, Error}, ReqId,
 do_list_buckets(Type, Timeout, true, Req, #state{client=C}=State) ->
     {ok, ReqId} = C:stream_list_buckets(none, Timeout, Type),
     {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
-do_list_buckets(Type, Timeout, false, _Req, #state{client=C}=State) ->
+do_list_buckets(Type, Timeout, _Stream, _Req, #state{client=C}=State) ->
     case C:list_buckets(none, Timeout, Type) of
         {ok, Buckets} ->
             {reply, #rpblistbucketsresp{buckets = Buckets}, State};
