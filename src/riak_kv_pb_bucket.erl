@@ -41,6 +41,7 @@
 
 -module(riak_kv_pb_bucket).
 
+-type optional(A) :: A | undefined.
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 
 -behaviour(riak_api_pb_service).
@@ -160,6 +161,9 @@ process_stream({ReqId, Error}, ReqId,
     {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}}.
 
 
+-spec do_list_buckets(binary(), optional(pos_integer()), optional(boolean()), #rpblistbucketsreq{}, #state{}) ->
+                             {reply, tuple(), #state{}} |
+                             {error, {format, iodata()}, #state{}}.
 do_list_buckets(Type, Timeout, true, Req, #state{client=C}=State) ->
     {ok, ReqId} = C:stream_list_buckets(none, Timeout, Type),
     {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
@@ -171,6 +175,7 @@ do_list_buckets(Type, Timeout, _Stream, _Req, #state{client=C}=State) ->
             {error, {format, Reason}, State}
     end.
 
+-spec check_bucket_type(optional(binary())) -> {ok, binary()} | error.
 check_bucket_type(undefined) -> {ok, <<"default">>};
 check_bucket_type(<<"default">>) -> {ok, <<"default">>};
 check_bucket_type(Type) ->
@@ -181,6 +186,7 @@ check_bucket_type(Type) ->
             error
     end.
 
+-spec maybe_create_bucket_type(binary(), binary()) -> binary() | {binary(), binary()}.
 maybe_create_bucket_type(<<"default">>, Bucket) ->
     Bucket;
 maybe_create_bucket_type(Type, Bucket) when is_binary(Type) ->
