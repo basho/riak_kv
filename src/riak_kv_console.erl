@@ -216,7 +216,11 @@ reip([OldNode, NewNode]) ->
         %%
         %% Do *not* convert to use riak_core_ring_manager:ring_trans.
         %%
-        ok = application:load(riak_core),
+        case application:load(riak_core) of
+            %% a process, such as cuttlefish, may have already loaded riak_core
+            {error,{already_loaded,riak_core}} -> ok;
+            ok -> ok
+        end,
         RingStateDir = app_helper:get_env(riak_core, ring_state_dir),
         {ok, RingFile} = riak_core_ring_manager:find_latest_ringfile(),
         BackupFN = filename:join([RingStateDir, filename:basename(RingFile)++".BAK"]),
@@ -229,9 +233,7 @@ reip([OldNode, NewNode]) ->
             [element(2, riak_core_ring_manager:find_latest_ringfile())])
     catch
         Exception:Reason ->
-            lager:error("Reip failed ~p:~p", [Exception,
-                    Reason]),
-            io:format("Reip failed, see log for details~n"),
+            io:format("Reip failed ~p:~p", [Exception, Reason]),
             error
     end.
 
