@@ -46,6 +46,8 @@
          bucket_type_reset/1,
          bucket_type_list/1]).
 
+-export([ensemble_status/1]).
+
 %% Reused by Yokozuna for printing AAE status.
 -export([aae_exchange_status/1,
          aae_repair_status/1,
@@ -697,6 +699,14 @@ repair_2i(Args) ->
                       "node are repaired\n", []),
             error
     end.
+
+ensemble_status([]) ->
+    riak_kv_ensemble_console:ensemble_overview();
+ensemble_status(["root"]) ->
+    riak_kv_ensemble_console:ensemble_detail(root);
+ensemble_status([Str]) ->
+    N = list_to_integer(Str),
+    riak_kv_ensemble_console:ensemble_detail(N).
 
 %%%===================================================================
 %%% Private
