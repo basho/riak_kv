@@ -705,8 +705,13 @@ ensemble_status([]) ->
 ensemble_status(["root"]) ->
     riak_kv_ensemble_console:ensemble_detail(root);
 ensemble_status([Str]) ->
-    N = list_to_integer(Str),
-    riak_kv_ensemble_console:ensemble_detail(N).
+    N = parse_int(Str),
+    case N of
+        undefined ->
+            io:format("No such ensemble: ~s~n", [Str]);
+        _ ->
+            riak_kv_ensemble_console:ensemble_detail(N)
+    end.
 
 %%%===================================================================
 %%% Private

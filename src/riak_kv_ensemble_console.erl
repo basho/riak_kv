@@ -238,11 +238,16 @@ format_info(Label, Peer, PeerInfo) ->
 
 get_details() ->
     {ok, Ring} = riak_core_ring_manager:get_raw_ring(),
-    #details{enabled     = riak_core_sup:ensembles_enabled(),
+    Enabled = riak_core_sup:ensembles_enabled(),
+    Ensembles = case Enabled of
+                    true -> ordered_ensembles();
+                    _ -> []
+                end,
+    #details{enabled     = Enabled,
              active      = riak_ensemble_manager:enabled(),
              paranoia    = medium,
              aae_enabled = riak_kv_entropy_manager:enabled(),
-             ensembles   = ordered_ensembles(),
+             ensembles   = Ensembles,
              quorums     = [],
              nodes       = riak_core_ring:ready_members(Ring),
              ring_ready  = riak_core_ring:ring_ready(Ring)}.
