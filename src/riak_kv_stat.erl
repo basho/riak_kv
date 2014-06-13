@@ -691,6 +691,10 @@ stats_from_update_arg({DT, actor_count, _Value}) ->
     [{{?APP, DT, actor_count}, {metric, [], histogram, undefined}}];
 stats_from_update_arg(late_put_fsm_coordinator_ack) ->
     [{{?APP, late_put_fsm_coordinator_ack}, {metric,[],counter,undefined}}];
+stats_from_update_arg({consistent_get, _Bucket, _Microsecs, _ObjSize}) ->
+    riak_core_stat_q:names_and_types([?APP, consistent, gets]);
+stats_from_update_arg({consistent_put, _Bucket, _Microsecs, _ObjSize}) ->
+    riak_core_stat_q:names_and_types([?APP, consistent, puts]);
 stats_from_update_arg(_) ->
     [].
 
