@@ -83,9 +83,8 @@ print_overview(#details{enabled=Enabled,
                         ring_ready=RingReady}) ->
     NumNodes = length(Nodes),
     ParanoiaMsg = case Paranoia of
-                      %% Uncomment after we enable configurable paranoia
-                      %% low ->
-                      %%     "low (syncing not required)";
+                      low ->
+                          "low (syncing not required)";
                       medium ->
                           "medium (AAE syncing required)"
                   end,
@@ -245,7 +244,7 @@ get_details() ->
                 end,
     #details{enabled     = Enabled,
              active      = riak_ensemble_manager:enabled(),
-             paranoia    = medium,
+             paranoia    = riak_kv_ensemble_backend:paranoia(),
              aae_enabled = riak_kv_entropy_manager:enabled(),
              ensembles   = Ensembles,
              quorums     = [],
