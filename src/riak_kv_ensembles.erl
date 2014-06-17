@@ -161,10 +161,10 @@ maybe_bootstrap_ensembles() ->
             end
     end.
 
--spec maybe_aae_configuration_valid(atom() | any()) -> boolean().
-maybe_aae_configuration_valid(on) ->
+-spec maybe_aae_configuration_valid({on|off,_}) -> boolean().
+maybe_aae_configuration_valid({on, _}) ->
     true;
-maybe_aae_configuration_valid(_) ->
+maybe_aae_configuration_valid({off, _}) ->
     lager:warning("Strong consistency has been enabled without AAE -- all consistent operations will timeout until AAE is enabled."),
     false.
 
