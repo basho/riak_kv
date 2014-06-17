@@ -20,7 +20,7 @@
 
 %% @doc
 %% Implementation of {@link riak_ensemble_backend} behavior that
-%% connects riak_ensemble to riak_kv vnodes. 
+%% connects riak_ensemble to riak_kv vnodes.
 %%
 
 -module(riak_kv_ensemble_backend).
@@ -33,12 +33,15 @@
 -export([trusted/1, sync_request/2, sync/2]).
 -export([reply/2]).
 -export([obj_newer/2]).
+-export([handle_down/4]).
 
 -include_lib("riak_ensemble/include/riak_ensemble_types.hrl").
 
 -record(state, {ensemble  :: ensemble_id(),
                 id        :: peer_id(),
                 proxy     :: atom(),
+                proxy_ref :: reference(),
+                vnode_ref :: reference(),
                 async     :: pid()}).
 
 -type obj()    :: riak_object:riak_object().
@@ -52,9 +55,14 @@
 init(Ensemble, Id, []) ->
     {{kv, _PL, _N, Idx}, _} = Id,
     Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx),
+    ProxyRef = erlang:monitor(process, Proxy),
+    {ok, Vnode} = riak_core_vnode_manager:get_vnode_pid(Idx, riak_kv_vnode),
+    VnodeRef = erlang:monitor(process, Vnode),
     #state{ensemble=Ensemble,
            id=Id,
-           proxy=Proxy}.
+           proxy=Proxy,
+           proxy_ref=ProxyRef,
+           vnode_ref=VnodeRef}.
 
 %%===================================================================
 
@@ -171,7 +179,7 @@ sync(Replies, State=#state{ensemble=_Ensemble, id=Id}) ->
     Peers0 = [{Idx, PeerId} || {PeerId={{kv,_PL,_N,Idx},_Node},_Reply} <- Replies],
     Peers = orddict:from_list(Peers0),
     {{kv, PL, N, Idx}, _} = Id,
-    IndexN = {PL,N}, 
+    IndexN = {PL,N},
     %% Sort to remove duplicates when changing ownership / forwarded response
     Siblings0 = lists:usort([I || {{{kv,_PL,_N,I},_Node},_Reply} <- Replies]),
     %% Just in case, remove self from list
@@ -215,6 +223,35 @@ wait_for_sync(Idx, IndexN, Pid, T0, Siblings, Peers) ->
 local_partition(Index) ->
     {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
     chashbin:index_owner(Index, CHBin) =:= node().
+
+%%===================================================================
+
+-spec handle_down(reference(), pid(), term(), state()) -> false |
+                                                          {reset, state()}.
+handle_down(Ref, _Pid, Reason, #state{id=Id,
+                                      proxy=Proxy,
+                                      vnode_ref=VnodeRef,
+                                      proxy_ref=ProxyRef}=State) ->
+    {{kv, _PL, _N, Idx}, _} = Id,
+    case Ref of
+        VnodeRef ->
+            lager:warning("Vnode for Idx: ~p crashed with reason: ~p.",
+                [Idx, Reason]),
+            %% There are some races here. The vnode may not have been restarted yet
+            %% or the manager itself could be down.
+            %% TODO: Add a timer:sleep()? Something else?
+            {ok, Vnode} =
+                riak_core_vnode_manager:get_vnode_pid(Idx, riak_kv_vnode),
+            VnodeRef2 = erlang:monitor(process, Vnode),
+            {reset, State#state{vnode_ref=VnodeRef2}};
+        ProxyRef ->
+            lager:warning("Vnode Proxy for Idx: ~p crashed with reason: ~p.",
+                [Idx, Reason]),
+            ProxyRef2 = erlang:monitor(process, Proxy),
+            {reset, State#state{proxy_ref=ProxyRef2}};
+        _ ->
+            false
+    end.
 
 %%===================================================================
 
