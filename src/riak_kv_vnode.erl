@@ -1536,7 +1536,7 @@ do_get(_Sender, BKey, ReqID,
 %% @private
 -spec do_get_term({binary(), binary()}, atom(), tuple()) ->
                          {{ok, riak_object:riak_object()}, tuple()} |
-                         {{error, not_found}, tuple()} |
+                         {{error, notfound}, tuple()} |
                          {{error, any()}, tuple()}.
 do_get_term({Bucket, Key}, Mod, ModState) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
@@ -1762,7 +1762,7 @@ do_delete(BKey, State) ->
                     %% not a tombstone or not all siblings are tombstones
                     {reply, {fail, Idx, not_tombstone}, State#state{modstate=UpdModState}}
             end;
-        {{error, not_found}, UpdModState} ->
+        {{error, notfound}, UpdModState} ->
             %% does not exist in the backend
             {reply, {fail, Idx, not_found}, State#state{modstate=UpdModState}}
     end.
