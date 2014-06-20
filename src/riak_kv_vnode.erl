@@ -72,6 +72,7 @@
          encode_handoff_item/2,
          handle_exit/3,
          handle_info/2,
+         handle_overload_info/2,
          ready_to_exit/0]). %% Note: optional function of the behaviour
 
 -export([handoff_data_encoding_method/0]).
@@ -457,6 +458,25 @@ handle_overload_command(?KV_VNODE_STATUS_REQ{}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {vnode_status, Idx, [{error, overload}]});
 handle_overload_command(_, Sender, _) ->
     riak_core_vnode:reply(Sender, {error, mailbox_overload}).
+
+%% Handle all SC overload messages here
+handle_overload_info({ensemble_sync, From}, _Idx) ->
+    riak_kv_ensemble_backend:reply(From, {error, vnode_overload});
+handle_overload_info({ensemble_ping, _From}, _Idx) ->
+    %% Don't respond to pings in overload
+    ok;
+handle_overload_info({ensemble_get, _, From}, _Idx) ->
+    riak_kv_ensemble_backend:reply(From, {error, vnode_overload});
+handle_overload_info({ensemble_put, _, _, From}, _Idx) ->
+    riak_kv_ensemble_backend:reply(From, {error, vnode_overload});
+handle_overload_info({ensemble_repair, _, _, From}, _Idx) ->
+    riak_kv_ensemble_backend:reply(From, {error, vnode_overload});
+handle_overload_info({raw_forward_put, _, _, From}, _Idx) ->
+    riak_kv_ensemble_backend:reply(From, {error, vnode_overload});
+handle_overload_info({raw_forward_get, _, From}, _Idx) ->
+    riak_kv_ensemble_backend:reply(From, {error, vnode_overload});
+handle_overload_info(_, _) ->
+    ok.
 
 handle_command(?KV_PUT_REQ{bkey=BKey,
                            object=Object,
