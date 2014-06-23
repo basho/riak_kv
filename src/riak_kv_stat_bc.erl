@@ -413,7 +413,8 @@ legacy_stat_map() ->
      {map_actor_counts_95,  {{riak_kv,map,actor_count}, 95}, histogram_percentile},
      {map_actor_counts_99,  {{riak_kv,map,actor_count}, 99}, histogram_percentile},
      {map_actor_counts_100, {{riak_kv,map,actor_count}, max}, histogram},
-     {late_put_fsm_coordinator_ack, {riak_kv, late_put_fsm_coordinator_ack}, counter}] ++ legacy_fsm_stats().
+     {late_put_fsm_coordinator_ack, {riak_kv, late_put_fsm_coordinator_ack}, counter}]
+        ++ legacy_fsm_stats() ++ consistent_stats().
 
 legacy_fsm_stats() ->
     %% When not using sidejob to manage FSMs, include the legacy FSM stats.
@@ -438,6 +439,35 @@ legacy_put_fsm_stats() ->
         _ ->
             []
     end.
+
+consistent_stats() ->
+    [%% consistent gets
+     {consistent_gets, {{riak_kv,consistent,gets}, one}, spiral},
+     {consistent_gets_total, {{riak_kv,consistent,gets}, count}, spiral},
+     {consistent_get_objsize_mean, {{riak_kv,consistent,gets,objsize}, arithmetic_mean}, histogram},
+     {consistent_get_objsize_median, {{riak_kv,consistent,gets,objsize}, median}, histogram},
+     {consistent_get_objsize_95, {{riak_kv,consistent,gets,objsize}, 95}, histogram_percentile},
+     {consistent_get_objsize_99, {{riak_kv,consistent,gets,objsize}, 99}, histogram_percentile},
+     {consistent_get_objsize_100, {{riak_kv,consistent,gets,objsize}, max}, histogram},
+     {consistent_get_time_mean, {{riak_kv,consistent,gets,time}, arithmetic_mean}, histogram},
+     {consistent_get_time_median, {{riak_kv,consistent,gets,time}, median}, histogram},
+     {consistent_get_time_95, {{riak_kv,consistent,gets,time}, 95}, histogram_percentile},
+     {consistent_get_time_99, {{riak_kv,consistent,gets,time}, 99}, histogram_percentile},
+     {consistent_get_time_100, {{riak_kv,consistent,gets,time}, max}, histogram},
+
+     %% consistent puts
+     {consistent_puts, {{riak_kv,consistent,puts}, one}, spiral},
+     {consistent_puts_total, {{riak_kv,consistent,puts}, count}, spiral},
+     {consistent_put_objsize_mean, {{riak_kv,consistent,puts,objsize}, arithmetic_mean}, histogram},
+     {consistent_put_objsize_median, {{riak_kv,consistent,puts,objsize}, median}, histogram},
+     {consistent_put_objsize_95, {{riak_kv,consistent,puts,objsize}, 95}, histogram_percentile},
+     {consistent_put_objsize_99, {{riak_kv,consistent,puts,objsize}, 99}, histogram_percentile},
+     {consistent_put_objsize_100, {{riak_kv,consistent,puts,objsize}, max}, histogram},
+     {consistent_put_time_mean, {{riak_kv,consistent,puts,time}, arithmetic_mean}, histogram},
+     {consistent_put_time_median, {{riak_kv,consistent,puts,time}, median}, histogram},
+     {consistent_put_time_95, {{riak_kv,consistent,puts,time}, 95}, histogram_percentile},
+     {consistent_put_time_99, {{riak_kv,consistent,puts,time}, 99}, histogram_percentile},
+     {consistent_put_time_100, {{riak_kv,consistent,puts,time}, max}, histogram}].
 
 sidejob_stats() ->
     sidejob_get_fsm_stats() ++ sidejob_put_fsm_stats().

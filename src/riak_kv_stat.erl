@@ -274,9 +274,25 @@ do_update({fsm_destroy, Type}) ->
 do_update({Type, actor_count, Count}) ->
     ok = folsom_metrics:notify_existing_metric({?APP, Type, actor_count}, Count, histogram);
 do_update(late_put_fsm_coordinator_ack) ->
-    ok = folsom_metrics:notify_existing_metric({?APP, late_put_fsm_coordinator_ack}, {inc, 1}, counter).
+    ok = folsom_metrics:notify_existing_metric({?APP, late_put_fsm_coordinator_ack}, {inc, 1}, counter);
+do_update({consistent_get, _Bucket, Microsecs, ObjSize}) ->
+    ok = notify_existing({?APP, consistent, gets}, 1, spiral),
+    ok = notify_existing({?APP, consistent, gets, time}, Microsecs, histogram),
+    ok = maybe_notify_existing({?APP, consistent, gets, objsize}, ObjSize, histogram);
+do_update({consistent_put, _Bucket, Microsecs, ObjSize}) ->
+    ok = notify_existing({?APP, consistent, puts}, 1, spiral),
+    ok = notify_existing({?APP, consistent, puts, time}, Microsecs, histogram),
+    ok = maybe_notify_existing({?APP, consistent, puts, objsize}, ObjSize, histogram).
 
 %% private
+
+notify_existing(Name, Event, Type) ->
+    folsom_metrics:notify_existing_metric(Name, Event, Type).
+
+maybe_notify_existing(_, undefined, _) ->
+    ok;
+maybe_notify_existing(Name, Event, Type) ->
+    notify_existing(Name, Event, Type).
 
 add_monitor(Type, Pid) ->
     gen_server:cast(?SERVER, {monitor, Type, Pid}).
@@ -477,7 +493,13 @@ stats() ->
      {[object, set, merge, time], histogram},
      {[object, map, merge], spiral},
      {[object, map, merge, time], histogram},
-     {late_put_fsm_coordinator_ack, counter}
+     {late_put_fsm_coordinator_ack, counter},
+     {[consistent, gets], spiral},
+     {[consistent, gets, time], histogram},
+     {[consistent, gets, objsize], histogram},
+     {[consistent, puts], spiral},
+     {[consistent, puts, time], histogram},
+     {[consistent, puts, objsize], histogram}
     ].
 
 %% @doc register a stat with folsom
@@ -669,6 +691,10 @@ stats_from_update_arg({DT, actor_count, _Value}) ->
     [{{?APP, DT, actor_count}, {metric, [], histogram, undefined}}];
 stats_from_update_arg(late_put_fsm_coordinator_ack) ->
     [{{?APP, late_put_fsm_coordinator_ack}, {metric,[],counter,undefined}}];
+stats_from_update_arg({consistent_get, _Bucket, _Microsecs, _ObjSize}) ->
+    riak_core_stat_q:names_and_types([?APP, consistent, gets]);
+stats_from_update_arg({consistent_put, _Bucket, _Microsecs, _ObjSize}) ->
+    riak_core_stat_q:names_and_types([?APP, consistent, puts]);
 stats_from_update_arg(_) ->
     [].
 
