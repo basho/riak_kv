@@ -29,7 +29,7 @@
 -export([init/3, new_obj/4]).
 -export([obj_epoch/1, obj_seq/1, obj_key/1, obj_value/1]).
 -export([set_obj_epoch/2, set_obj_seq/2, set_obj_value/2]).
--export([get/3, put/4, tick/5, ping/2]).
+-export([get/3, put/4, tick/5, ping/2, ready_to_start/0]).
 -export([trusted/1, sync_request/2, sync/2]).
 -export([reply/2]).
 -export([obj_newer/2]).
@@ -294,3 +294,8 @@ maybe_async_update(Changes, State=#state{async=Async}) ->
 ping(From, State=#state{proxy=Proxy}) ->
     catch Proxy ! {ensemble_ping, From},
     {async, State}.
+
+-spec ready_to_start() -> boolean().
+ready_to_start() ->
+    lists:member(riak_kv, riak_core_node_watcher:services(node())).
+
