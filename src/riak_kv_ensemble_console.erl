@@ -34,7 +34,7 @@
 -record(details, {enabled     :: boolean(),
                   active      :: boolean(),
                   aae_enabled :: boolean(),
-                  paranoia    :: low | medium,
+                  trust       :: high | medium,
                   ensembles   :: ensembles(),
                   quorums     :: quorums(),
                   peer_info   :: orddict(peer_id(), peer_info()),
@@ -77,14 +77,14 @@ ensemble_detail(N) ->
 
 print_overview(#details{enabled=Enabled,
                         active=Active,
-                        paranoia=Paranoia,
+                        trust=Trust,
                         aae_enabled=AAE,
                         nodes=Nodes,
                         ring_ready=RingReady}) ->
     NumNodes = length(Nodes),
-    ParanoiaMsg = case Paranoia of
-                      low ->
-                          "low (syncing not required)";
+    TrustMsg = case Trust of
+                      high ->
+                          "high (syncing not required)";
                       medium ->
                           "medium (AAE syncing required)"
                   end,
@@ -93,15 +93,15 @@ print_overview(#details{enabled=Enabled,
     io:format("Enabled:     ~s~n"
               "Active:      ~s~n"
               "Ring Ready:  ~s~n"
-              "Paranoia:    ~s~n"
+              "Trust:       ~s~n"
               "AAE enabled: ~s~n~n",
-              [Enabled, Active, RingReady, ParanoiaMsg, AAE]),
+              [Enabled, Active, RingReady, TrustMsg, AAE]),
     if Enabled == false ->
             io:format("Note: The consensus subsystem is not enabled.~n~n");
        (Active == false) and (NumNodes < 3) ->
             io:format(cluster_warning());
-       (AAE == false) and (Paranoia == medium) ->
-            io:format(aae_warning(), [Paranoia]);
+       (AAE == false) and (Trust == medium) ->
+            io:format(aae_warning(), [Trust]);
        true ->
             ok
     end,
@@ -112,7 +112,7 @@ cluster_warning() ->
      "      than three nodes in this cluster.~n~n").
 
 aae_warning() ->
-    ("Warning: Paranoia level is ~s, but AAE is not enabled. Ensembles will be~n"
+    ("Warning: Trust level is ~s, but AAE is not enabled. Ensembles will be~n"
      "         unable to become trusted and will never reach quorum.~n~n").
 
 %%%===================================================================
@@ -244,7 +244,7 @@ get_details() ->
                 end,
     #details{enabled     = Enabled,
              active      = riak_ensemble_manager:enabled(),
-             paranoia    = riak_kv_ensemble_backend:paranoia(),
+             trust       = riak_kv_ensemble_backend:trust(),
              aae_enabled = riak_kv_entropy_manager:enabled(),
              ensembles   = Ensembles,
              quorums     = [],
@@ -370,7 +370,7 @@ print_variations() ->
     Details = #details{enabled     = false,
                        active      = false,
                        aae_enabled = false,
-                       paranoia    = medium,
+                       trust       = medium,
                        ensembles   = [],
                        quorums     = [],
                        ring_ready  = true,

@@ -34,7 +34,7 @@
 -export([reply/2]).
 -export([obj_newer/2]).
 -export([handle_down/4]).
--export([paranoia/0]).
+-export([trust/0]).
 
 -include_lib("riak_ensemble/include/riak_ensemble_types.hrl").
 
@@ -162,14 +162,14 @@ reply(From, Reply) ->
 
 %%===================================================================
 
-paranoia() ->
-    app_helper:get_env(riak_kv, consistency_paranoia, medium).
+trust() ->
+    app_helper:get_env(riak_kv, consistency_trust, medium).
 
 trusted(#state{id=Id}) ->
     {{kv, _PL, _N, Idx}, _} = Id,
     {ok, Pid} = riak_core_vnode_manager:get_vnode_pid(Idx, riak_kv_vnode),
-    case paranoia() of
-        low ->
+    case trust() of
+        high ->
             {true, Pid};
         medium ->
             {false, Pid}
