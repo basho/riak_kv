@@ -1,19 +1,4 @@
-riak_core_pb.erl:47: Guard test is_list(Records::tuple()) can never succeed
-riak_core_pb.erl:70: The pattern <_, 'optional', 'undefined', _, _> can never match the type <1 | 2 | 3,'required',_,'bytes',[]>
-riak_core_pb.erl:72: The pattern <_, 'repeated', 'undefined', _, _> can never match the type <1 | 2 | 3,'required',_,'bytes',[]>
-riak_core_pb.erl:74: The pattern <_, 'repeated_packed', 'undefined', _, _> can never match the type <1 | 2 | 3,'required',_,'bytes',[]>
-riak_core_pb.erl:75: The pattern <_, 'repeated_packed', [], _, _> can never match the type <1 | 2 | 3,'required',_,'bytes',[]>
-riak_core_pb.erl:80: The pattern <_, 'repeated', [], _, Acc> can never match the type <1 | 2 | 3,'required',_,'bytes',[]>
-riak_core_pb.erl:83: The pattern <FNum, 'repeated', [Head | Tail], Type, Acc> can never match the type <1 | 2 | 3,'required',_,'bytes',[]>
-riak_core_pb.erl:86: The pattern <FNum, 'repeated_packed', Data, Type, _> can never match the type <1 | 2 | 3,'required',_,'bytes',[]>
-riak_core_pb.erl:101: The call riak_core_pb:enum_to_int(Type::'bytes',Data::atom()) will never return since it differs in the 1st argument from the success typing arguments: ('pikachu','value')
-riak_core_pb.erl:148: The pattern 'true' can never match the type 'false'
-riak_core_pb.erl:154: The pattern 'true' can never match the type 'false'
-riak_core_pb.erl:163: The pattern 'true' can never match the type 'false'
-riak_core_pb.erl:175: The pattern {_, _, Dict} can never match the type 'false'
-riak_core_pb.erl:193: The pattern 'true' can never match the type 'false'
-riak_core_pb.erl:202: The pattern <Binary, 'string'> can never match the type <_,'bytes'>
-riak_core_pb.erl:222: The pattern <Types, [{Fnum, Bytes} | Tail], Acc> can never match the type <_,[],[{_,_}]>
+riak_core_pb.erl
 riak_kv_bitcask_backend.erl:600: Guard test Dir1TS::nonempty_string() == [] can never succeed
 riak_kv_bitcask_backend.erl:602: Guard test Dir2TS::nonempty_string() == [] can never succeed
 riak_kv_gcounter.erl:64: Invalid type specification for function riak_kv_gcounter:new/2. The success typing is (_,pos_integer()) -> {'ok',riak_kv_gcounter:gcounter()}
