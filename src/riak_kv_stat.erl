@@ -456,8 +456,6 @@ stats() ->
      {[consistent, puts, objsize], histogram}
     ].
 
->>>>>>> after rebase; testing
-
 do_register_stat(Name, histogram) ->
     %% get the global default histo type
     Opts = get_histogram_opts(Name),
