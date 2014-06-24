@@ -34,8 +34,12 @@
 -export([new_entry/3]).
 
 %% Callback API
--export([new/3, delete/3, get_value/4, update/4, reset/3, sample/3,
+-export([behaviour/0,
+	 new/3, delete/3, get_value/4, update/4, reset/3, sample/3,
          get_datapoints/3, setopts/4]).
+
+behaviour() ->
+    entry.
 
 new_entry(Name, SjName, Opts) ->
     exometer:new(Name, sidejob, [{sj_name, SjName}|Opts]).
@@ -72,4 +76,3 @@ filter_datapoints(Stats, default) ->
 filter_datapoints(Stats, DPs) ->
     [S || {K, _} = S <- Stats,
           lists:member(K, DPs)].
-
