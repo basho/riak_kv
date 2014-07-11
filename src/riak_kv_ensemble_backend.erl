@@ -30,6 +30,7 @@
 -export([obj_epoch/1, obj_seq/1, obj_key/1, obj_value/1]).
 -export([set_obj_epoch/2, set_obj_seq/2, set_obj_value/2]).
 -export([get/3, put/4, tick/5, ping/2, ready_to_start/0]).
+-export([synctree_path/2]).
 -export([reply/2]).
 -export([obj_newer/2]).
 -export([handle_down/4]).
@@ -239,3 +240,10 @@ ping(From, State=#state{proxy=Proxy}) ->
 ready_to_start() ->
     lists:member(riak_kv, riak_core_node_watcher:services(node())).
 
+synctree_path(_Ensemble, Id) ->
+    {{kv, PL, N, Idx}, _} = Id,
+    Bin = term_to_binary({PL, N}),
+    %% Use a prefix byte to leave open the possibility of different
+    %% tree id encodings (eg. not term_to_binary) in the future.
+    TreeId = <<0, Bin/binary>>,
+    {TreeId, "kv_" ++ integer_to_list(Idx)}.
