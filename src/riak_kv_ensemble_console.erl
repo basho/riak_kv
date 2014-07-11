@@ -293,7 +293,7 @@ get_quorums(Ensemble, Details) ->
     Quorums = [ping_quorum(Ensemble)],
     Details#details{quorums=Quorums}.
 
--spec ping_quorum(ensemble_id()) -> {ensemble_id(), {leader_id(), [peer_id()]}}.
+-spec ping_quorum(ensemble_id()) -> {ensemble_id(), {leader_id(), boolean(), [peer_id()]}}.
 ping_quorum(Ens) ->
     case riak_ensemble_peer:ping_quorum(Ens, 10000) of
         timeout ->
