@@ -460,8 +460,6 @@ handle_overload_command(_, Sender, _) ->
     riak_core_vnode:reply(Sender, {error, mailbox_overload}).
 
 %% Handle all SC overload messages here
-handle_overload_info({ensemble_sync, From}, _Idx) ->
-    riak_kv_ensemble_backend:reply(From, {error, vnode_overload});
 handle_overload_info({ensemble_ping, _From}, _Idx) ->
     %% Don't respond to pings in overload
     ok;
@@ -1047,11 +1045,6 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
 
 handle_info({set_concurrency_limit, Lock, Limit}, State) ->
     try_set_concurrency_limit(Lock, Limit),
-    {ok, State};
-
-handle_info({ensemble_sync, From}, State) ->
-    %% TODO: Maybe check AAE tree here?
-    riak_kv_ensemble_backend:reply(From, ok),
     {ok, State};
 
 handle_info({ensemble_ping, From}, State) ->
