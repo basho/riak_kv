@@ -34,7 +34,6 @@
 -export([reply/2]).
 -export([obj_newer/2]).
 -export([handle_down/4]).
--export([trust/0]).
 
 -include_lib("riak_ensemble/include/riak_ensemble_types.hrl").
 
@@ -159,11 +158,6 @@ send_msg(Proxy, From, Msg) ->
 reply(From, Reply) ->
     riak_ensemble_backend:reply(From, Reply),
     ok.
-
-%%===================================================================
-
-trust() ->
-    app_helper:get_env(riak_kv, consistency_trust, medium).
 
 %%===================================================================
 

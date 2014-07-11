@@ -26,7 +26,7 @@
 -compile(export_all).
 
 -type ensembles() :: [{ensemble_id(), ensemble_info()}].
--type quorums() :: orddict(ensemble_id(), {leader_id(), [peer_id()]}).
+-type quorums() :: orddict(ensemble_id(), {leader_id(), boolean(), [peer_id()]}).
 -type counts() :: orddict(node(), pos_integer()).
 -type labels() :: [{pos_integer(), peer_id()}].
 -type names() :: [{peer_id(), string()}].
@@ -34,7 +34,8 @@
 -record(details, {enabled     :: boolean(),
                   active      :: boolean(),
                   aae_enabled :: boolean(),
-                  trust       :: high | medium,
+                  validation  :: strong | weak,
+                  metadata    :: async  | sync,
                   ensembles   :: ensembles(),
                   quorums     :: quorums(),
                   peer_info   :: orddict(peer_id(), peer_info()),
@@ -77,31 +78,34 @@ ensemble_detail(N) ->
 
 print_overview(#details{enabled=Enabled,
                         active=Active,
-                        trust=Trust,
-                        aae_enabled=AAE,
+                        validation=Validation,
+                        metadata=Metadata,
                         nodes=Nodes,
                         ring_ready=RingReady}) ->
     NumNodes = length(Nodes),
-    TrustMsg = case Trust of
-                      high ->
-                          "high (syncing not required)";
-                      medium ->
-                          "medium (AAE syncing required)"
+    ValidationMsg = case Validation of
+                        strong ->
+                            "strong (trusted majority required)";
+                        weak ->
+                            "weak (simple majority required)"
+                    end,
+    MetadataMsg = case Metadata of
+                      sync ->
+                          "guaranteed replication (synchronous)";
+                      async ->
+                          "best-effort replication (asynchronous)"
                   end,
-
     io:format("~s~n", [string:centre(" Consensus System ", 79, $=)]),
     io:format("Enabled:     ~s~n"
               "Active:      ~s~n"
               "Ring Ready:  ~s~n"
-              "Trust:       ~s~n"
-              "AAE enabled: ~s~n~n",
-              [Enabled, Active, RingReady, TrustMsg, AAE]),
+              "Validation:  ~s~n"
+              "Metadata:    ~s~n~n",
+              [Enabled, Active, RingReady, ValidationMsg, MetadataMsg]),
     if Enabled == false ->
             io:format("Note: The consensus subsystem is not enabled.~n~n");
        (Active == false) and (NumNodes < 3) ->
             io:format(cluster_warning());
-       (AAE == false) and (Trust == medium) ->
-            io:format(aae_warning(), [Trust]);
        true ->
             ok
     end,
@@ -110,10 +114,6 @@ print_overview(#details{enabled=Enabled,
 cluster_warning() ->
     ("Note: The consensus subsystem will not be activated until there are more~n"
      "      than three nodes in this cluster.~n~n").
-
-aae_warning() ->
-    ("Warning: Trust level is ~s, but AAE is not enabled. Ensembles will be~n"
-     "         unable to become trusted and will never reach quorum.~n~n").
 
 %%%===================================================================
 
@@ -133,7 +133,7 @@ print_ensembles([], _, _) ->
 print_ensembles([{Ens, Info}|T], N, AllOnline) ->
     #ensemble_info{views=Views} = Info,
     Names = peer_names(Views),
-    {Leader, Online} = orddict:fetch(Ens, AllOnline),
+    {Leader, _, Online} = orddict:fetch(Ens, AllOnline),
     Label = case Ens of
                 root -> "root";
                 _    -> N
@@ -180,16 +180,17 @@ print_detail(N, #details{ensembles=L3, quorums=Quorums, peer_info=PeerInfo}) ->
     {Counts, Labels} = label_peers(Views),
     Names = peer_names(Counts, Labels),
 
-    {LeaderId, _} = orddict:fetch(Id, Quorums),
+    {LeaderId, Ready, _} = orddict:fetch(Id, Quorums),
     Leader = orddict:fetch(LeaderId, Names),
 
     Peers = [format_info(Label, Peer, PeerInfo) || {Label, Peer} <- Labels],
 
     Header = string:centre(" Ensemble #" ++ integer_to_list(N) ++ " ", 79, $=),
     io:format("~s~n", [Header]),
-    io:format("Id:       ~p~n"
-              "Leader:   ~s~n~n",
-              [Id, Leader]),
+    io:format("Id:           ~p~n"
+              "Leader:       ~s~n"
+              "Leader ready: ~p~n~n",
+              [Id, Leader, Ready]),
     io:format("~s~n", [string:centre(" Peers ", 79, $=)]),
     io:format(" Peer  Status     Trusted          Epoch         Node~n"),
     print_detail_view(Views, Peers),
@@ -242,10 +243,22 @@ get_details() ->
                     true -> ordered_ensembles();
                     _ -> []
                 end,
+    Validation = case riak_ensemble_config:tree_validation() of
+                     false ->
+                         weak;
+                     _ ->
+                         strong
+                 end,
+    Metadata = case riak_ensemble_config:synchronous_tree_updates() of
+                   true ->
+                       sync;
+                   _ ->
+                       async
+               end,
     #details{enabled     = Enabled,
              active      = riak_ensemble_manager:enabled(),
-             trust       = riak_kv_ensemble_backend:trust(),
-             aae_enabled = riak_kv_entropy_manager:enabled(),
+             validation  = Validation,
+             metadata    = Metadata,
              ensembles   = Ensembles,
              quorums     = [],
              nodes       = riak_core_ring:ready_members(Ring),
@@ -284,9 +297,9 @@ get_quorums(Ensemble, Details) ->
 ping_quorum(Ens) ->
     case riak_ensemble_peer:ping_quorum(Ens, 10000) of
         timeout ->
-            {Ens, {undefined, []}};
-        {Leader, Peers} ->
-            {Ens, {Leader, Peers}}
+            {Ens, {undefined, false, []}};
+        {Leader, Ready, Peers} ->
+            {Ens, {Leader, Ready, Peers}}
     end.
 
 get_peer_info(N, Details=#details{ensembles=Ensembles}) ->
@@ -369,8 +382,8 @@ peer_names(Counts, Labels) ->
 print_variations() ->
     Details = #details{enabled     = false,
                        active      = false,
-                       aae_enabled = false,
-                       trust       = medium,
+                       validation  = strong,
+                       metadata    = async,
                        ensembles   = [],
                        quorums     = [],
                        ring_ready  = true,
@@ -386,17 +399,11 @@ print_variations() ->
     ensemble_overview(Details2),
     io:format("~n~n"),
 
-    %% Enabled, enough nodes, but AAE not enabled
-    io:format("(*** AAE disabled when required ***)~n~n"),
-    Details3 = Details2#details{nodes=['dev1@127.0.0.1',
+    %% Enabled, enough nodes, but not yet active
+    Details4 = Details2#details{nodes=['dev1@127.0.0.1',
                                        'dev2@127.0.0.1',
                                        'dev3@127.0.0.1']},
-    ensemble_overview(Details3),
-    io:format("~n~n"),
-
-    %% Enabled, enough nodes, AAE enabled, but not yet active
     io:format("(*** All good, waiting on activation ***)~n~n"),
-    Details4 = Details3#details{aae_enabled=true},
     ensemble_overview(Details4),
     io:format("~n~n"),
 
@@ -423,9 +430,10 @@ print_variations() ->
                                             {test2, Dev3}]]}
                  }],
     Quorums = [{test, {{test, Dev1},
+                       true,
                        [{test, Dev1},
                         {test, Dev2}]}},
-               {test2, {undefined, []}}],
+               {test2, {undefined, false, []}}],
     Details6 = Details5#details{ensembles=Ensembles, quorums=Quorums},
     ensemble_overview(Details6),
     io:format("~n~n"),
@@ -445,10 +453,6 @@ print_variations() ->
                                              {test2, Dev2},
                                              {test2, Dev3}]]}
                   }],
-    Quorums = [{test, {{test, Dev1},
-                       [{test, Dev1},
-                        {test, Dev2}]}},
-               {test2, {undefined, []}}],
     Details7 = Details5#details{ensembles=Ensembles2, quorums=Quorums},
     ensemble_overview(Details7),
     io:format("~n~n"),
