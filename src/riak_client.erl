@@ -44,6 +44,7 @@
 -export([get_stats/2]).
 -export([get_client_id/1]).
 -export([for_dialyzer_only_ignore/3]).
+-export([ensemble/1]).
 
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000

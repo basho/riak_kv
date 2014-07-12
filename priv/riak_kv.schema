@@ -25,22 +25,6 @@
   end
 }.
 
-%% @doc Level of trust that the strong consistency system places on durable
-%% storage.
-%%
-%% * high: assumes that vnodes are durable -- that once data has been committed
-%%   to a vnode, that data will never be silently lost.  In this mode, K/V
-%%   ensembles are not required to perform an AAE exchange before being trusted.
-%% * medium: assumes that vnodes are not durable, and that they may silently
-%%   lose data without detection. This mode requires all K/V peers that
-%%   restart/crash to first perform an AAE exchange with a majority of other
-%%   peers before being trusted.
-{mapping, "strong_consistency.trust", "riak_kv.consistency_trust", [
-  {datatype, {enum, [medium, high]}},
-  {default, medium},
-  {commented, medium}
-]}.
-
 %% @doc Specifies the storage engine used for Riak's key-value data
 %% and secondary indexes (if supported).
 {mapping, "storage_backend", "riak_kv.storage_backend", [
