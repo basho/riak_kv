@@ -303,6 +303,14 @@ do_update(late_put_fsm_coordinator_ack) ->
 
 %% private
 
+notify_existing(Name, Event) ->
+    exometer:update([riak_core_stat:prefix() | Name], Event).
+
+maybe_notify_existing(_, undefined) ->
+    ok;
+maybe_notify_existing(Name, Event) ->
+    notify_existing(Name, Event).
+
 add_monitor(Type, Pid) ->
     gen_server:cast(?SERVER, {monitor, Type, Pid}).
 
@@ -356,7 +364,6 @@ do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type}=Args
 	     || Dimension <- [time, siblings, objsize]],
 	    do_get_bucket(true, Args)
     end.
-
 
 %% per bucket put_fsm stats
 do_put_bucket(false, _) ->
@@ -470,12 +477,6 @@ stats() ->
      {[node, puts, fsm, active], counter},
      {[node, puts, fsm, errors], spiral},
      {[node, puts, time], histogram},
-     {[node, puts, counter], spiral},
-     {[node, puts, counter, time], histogram},
-     {[node, puts, set], spiral},
-     {[node, puts, set, time], histogram},
-     {[node, puts, map], spiral},
-     {[node, puts, map, time], histogram},
      {[index, fsm, create], spiral},
      {[index, fsm, create, error], spiral},
      {[index, fsm, active], counter},
