@@ -44,6 +44,7 @@
 -export([get_stats/2]).
 -export([get_client_id/1]).
 -export([for_dialyzer_only_ignore/3]).
+-export([ensemble/1]).
 
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
@@ -97,16 +98,36 @@ consistent_get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}) ->
     BKey = {Bucket, Key},
     Ensemble = ensemble(BKey),
     Timeout = recv_timeout(Options),
-    case riak_ensemble_client:kget(Node, Ensemble, BKey, Timeout) of
-        {error, _}=Err ->
-            Err;
-        {ok, Obj} ->
-            case riak_object:get_value(Obj) of
-                notfound ->
-                    {error, notfound};
-                _ ->
-                    {ok, Obj}
-            end
+    StartTS = os:timestamp(),
+    Result = case riak_ensemble_client:kget(Node, Ensemble, BKey, Timeout) of
+                 {error, _}=Err ->
+                     Err;
+                 {ok, Obj} ->
+                     case riak_object:get_value(Obj) of
+                         notfound ->
+                             {error, notfound};
+                         _ ->
+                             {ok, Obj}
+                     end
+             end,
+    maybe_update_consistent_stat(Node, consistent_get, Bucket, StartTS, Result),
+    Result.
+
+maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
+    case node() of
+        Node ->
+            Duration = timer:now_diff(os:timestamp(), StartTS),
+            ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
+            ObjSize = case Result of
+                          {ok, Obj} ->
+                              riak_object:approximate_size(ObjFmt, Obj);
+                          _ ->
+                              undefined
+                      end,
+            riak_kv_stat:update({Stat, Bucket, Duration, ObjSize}),
+            ok;
+        _ ->
+            ok
     end.
 
 %% @spec get(riak_object:bucket(), riak_object:key(), options(), riak_client()) ->
@@ -199,10 +220,12 @@ normal_put(RObj, Options, {?MODULE, [Node, ClientId]}) ->
     wait_for_reqid(ReqId, Timeout).
 
 consistent_put(RObj, Options, {?MODULE, [Node, _ClientId]}) ->
-    BKey = {riak_object:bucket(RObj), riak_object:key(RObj)},
+    Bucket = riak_object:bucket(RObj),
+    BKey = {Bucket, riak_object:key(RObj)},
     Ensemble = ensemble(BKey),
     NewObj = riak_object:apply_updates(RObj),
     Timeout = recv_timeout(Options),
+    StartTS = os:timestamp(),
     Result = case consistent_put_type(RObj, Options) of
                  update ->
                      riak_ensemble_client:kupdate(Node, Ensemble, BKey, RObj, NewObj, Timeout);
@@ -212,6 +235,7 @@ consistent_put(RObj, Options, {?MODULE, [Node, _ClientId]}) ->
                  %overwrite ->
                      %riak_ensemble_client:kover(Node, Ensemble, BKey, NewObj, Timeout)
              end,
+    maybe_update_consistent_stat(Node, consistent_put, Bucket, StartTS, Result),
     ReturnBody = lists:member(returnbody, Options),
     case Result of
         {error, _}=Error ->

@@ -72,6 +72,7 @@
          encode_handoff_item/2,
          handle_exit/3,
          handle_info/2,
+         handle_overload_info/2,
          ready_to_exit/0]). %% Note: optional function of the behaviour
 
 -export([handoff_data_encoding_method/0]).
@@ -458,6 +459,21 @@ handle_overload_command(?KV_VNODE_STATUS_REQ{}, Sender, Idx) ->
 handle_overload_command(_, Sender, _) ->
     riak_core_vnode:reply(Sender, {error, mailbox_overload}).
 
+%% Handle all SC overload messages here
+handle_overload_info({ensemble_ping, _From}, _Idx) ->
+    %% Don't respond to pings in overload
+    ok;
+handle_overload_info({ensemble_get, _, From}, _Idx) ->
+    riak_kv_ensemble_backend:reply(From, {error, vnode_overload});
+handle_overload_info({ensemble_put, _, _, From}, _Idx) ->
+    riak_kv_ensemble_backend:reply(From, {error, vnode_overload});
+handle_overload_info({raw_forward_put, _, _, From}, _Idx) ->
+    riak_kv_ensemble_backend:reply(From, {error, vnode_overload});
+handle_overload_info({raw_forward_get, _, From}, _Idx) ->
+    riak_kv_ensemble_backend:reply(From, {error, vnode_overload});
+handle_overload_info(_, _) ->
+    ok.
+
 handle_command(?KV_PUT_REQ{bkey=BKey,
                            object=Object,
                            req_id=ReqId,
@@ -579,19 +595,6 @@ handle_command({rehash, Bucket, Key}, _, State=#state{mod=Mod, modstate=ModState
             delete_from_hashtree(Bucket, Key, State)
     end,
     {noreply, State};
-handle_command({ensemble_repair, BKey, Target, From}, _Sender,
-               State=#state{mod=Mod, modstate=ModState}) ->
-    case do_get_term(BKey, Mod, ModState) of
-        {{ok, Obj}, UpdModState} ->
-            {Partition, Node} = Target,
-            Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Partition),
-            {Proxy, Node} ! {ensemble_repair, BKey, Obj, From},
-            {noreply, State#state{modstate=UpdModState}};
-        {{error, _Reason}, UpdModState} ->
-            %% TODO: Send back actual error/reason?
-            riak_kv_ensemble_backend:reply(From, {failed, local_get_failed}),
-            {noreply, State#state{modstate=UpdModState}}
-    end;
 
 handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
                State=#state{mod=Mod, modstate=ModState}) ->
@@ -1029,11 +1032,6 @@ handle_info({set_concurrency_limit, Lock, Limit}, State) ->
     try_set_concurrency_limit(Lock, Limit),
     {ok, State};
 
-handle_info({ensemble_sync, From}, State) ->
-    %% TODO: Maybe check AAE tree here?
-    riak_kv_ensemble_backend:reply(From, ok),
-    {ok, State};
-
 handle_info({ensemble_ping, From}, State) ->
     riak_ensemble_backend:pong(From),
     {ok, State};
@@ -1060,7 +1058,7 @@ handle_info({ensemble_put, Key, Obj, From}, State=#state{handoff_target=HOTarget
                                                          forward=Fwd}) ->
     case Fwd of
         undefined ->
-            {Result, State2} = actual_put(Key, Obj, [], false, undefined, State),
+            {Result, State2} = actual_put_tracked(Key, Obj, [], false, undefined, State),
             Reply = case Result of
                         {dw, _Idx, _Obj, _ReqID} ->
                             Obj;
@@ -1077,35 +1075,8 @@ handle_info({ensemble_put, Key, Obj, From}, State=#state{handoff_target=HOTarget
             {ok, State}
     end;
 
-handle_info({ensemble_repair, Key, Obj, From}, State=#state{idx=_Idx, forward=Fwd}) ->
-    case Fwd of
-        undefined ->
-            %% TODO: Cleanup
-            {reply, {r, Retval, _, _}, State2} = do_get(undefined, Key, undefined, State),
-            case Retval of
-                {ok, Current} ->
-                    case riak_kv_ensemble_backend:obj_newer(Obj, Current) of
-                        true ->
-                            %% TODO: Refactor
-                            handle_info({ensemble_put, Key, Obj, From}, State2);
-                        false ->
-                            riak_kv_ensemble_backend:reply(From, Current),
-                            {ok, State2}
-                    end;
-                {error, notfound} ->
-                    handle_info({ensemble_put, Key, Obj, From}, State2);
-                Error ->
-                    riak_kv_ensemble_backend:reply(From, {failed, {remote, Error}}),
-                    {ok, State2}
-            end;
-        _Fwd ->
-            %% TODO: Actually forward
-            riak_kv_ensemble_backend:reply(From, {failed, forwarding}),
-            {ok, State}
-    end;
-
 handle_info({raw_forward_put, Key, Obj, From}, State) ->
-    {Result, State2} = actual_put(Key, Obj, [], false, undefined, State),
+    {Result, State2} = actual_put_tracked(Key, Obj, [], false, undefined, State),
     Reply = case Result of
                 {dw, _Idx, _Obj, _ReqID} ->
                     Obj;
@@ -1127,7 +1098,7 @@ handle_info({raw_forward_get, Key, From}, State) ->
     riak_kv_ensemble_backend:reply(From, Reply),
     {ok, State2};
 handle_info({raw_put, Key, Obj}, State) ->
-    {_, State2} = actual_put(Key, Obj, [], false, undefined, State),
+    {_, State2} = actual_put_tracked(Key, Obj, [], false, undefined, State),
     {ok, State2};
 
 handle_info(retry_create_hashtree, State=#state{hashtrees=undefined}) ->
@@ -1454,6 +1425,12 @@ actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
     end,
     {Reply, State#state{modstate=UpdModState}}.
 
+actual_put_tracked(BKey, Obj, IndexSpecs, RB, ReqId, State) ->
+    StartTS = os:timestamp(),
+    Result = actual_put(BKey, Obj, IndexSpecs, RB, ReqId, State),
+    update_vnode_stats(vnode_put, State#state.idx, StartTS),
+    Result.
+
 do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
         {error, not_found, _UpdModState} ->
@@ -1536,7 +1513,7 @@ do_get(_Sender, BKey, ReqID,
 %% @private
 -spec do_get_term({binary(), binary()}, atom(), tuple()) ->
                          {{ok, riak_object:riak_object()}, tuple()} |
-                         {{error, not_found}, tuple()} |
+                         {{error, notfound}, tuple()} |
                          {{error, any()}, tuple()}.
 do_get_term({Bucket, Key}, Mod, ModState) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
@@ -1762,7 +1739,7 @@ do_delete(BKey, State) ->
                     %% not a tombstone or not all siblings are tombstones
                     {reply, {fail, Idx, not_tombstone}, State#state{modstate=UpdModState}}
             end;
-        {{error, not_found}, UpdModState} ->
+        {{error, notfound}, UpdModState} ->
             %% does not exist in the backend
             {reply, {fail, Idx, not_found}, State#state{modstate=UpdModState}}
     end.

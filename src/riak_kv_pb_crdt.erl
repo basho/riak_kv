@@ -188,8 +188,9 @@ process_update_response({ok, RObj}, State) ->
     #state{type=Type, mod=Mod, return_key=Key, return_ctx=ReturnCtx} = State,
     {{Ctx, Value}, Stats} = riak_kv_crdt:value(RObj, Mod),
     [ riak_kv_stat:update(S) || S <- Stats ],
+    ModMap = riak_kv_crdt:mod_map(Type),
     Resp = riak_pb_dt_codec:encode_update_response(Type, Value, Key,
-                                                   get_context(Ctx, ReturnCtx), ?MOD_MAP),
+                                                   get_context(Ctx, ReturnCtx), ModMap),
     {reply, Resp, State};
 process_update_response({error, notfound}, State) ->
     {reply, #dtupdateresp{}, State};

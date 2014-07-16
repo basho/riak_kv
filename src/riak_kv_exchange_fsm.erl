@@ -278,7 +278,7 @@ exchange_segment(Tree, IndexN, Segment) ->
     riak_kv_index_hashtree:exchange_segment(IndexN, Segment, Tree).
 
 %% @private
-read_repair_keydiff(RC, LocalVN, RemoteVN, {Bucket, Key, Reason}) ->
+read_repair_keydiff(RC, LocalVN, RemoteVN, {Bucket, Key, _Reason}) ->
     %% TODO: Even though this is at debug level, it's still extremely
     %%       spammy. Should this just be removed? We can always use
     %%       redbug to trace read_repair_keydiff when needed. Of course,
@@ -287,15 +287,7 @@ read_repair_keydiff(RC, LocalVN, RemoteVN, {Bucket, Key, Reason}) ->
     case riak_kv_util:consistent_object(Bucket) of
         true ->
             BKey = {Bucket, Key},
-            case Reason of
-                missing ->
-                    repair_consistent(BKey, RemoteVN, LocalVN);
-                remote_missing ->
-                    repair_consistent(BKey, LocalVN, RemoteVN);
-                different ->
-                    repair_consistent(BKey, RemoteVN, LocalVN),
-                    repair_consistent(BKey, LocalVN, RemoteVN)
-            end;
+            repair_consistent(BKey);
         false ->
             RC:get(Bucket, Key)
     end,
@@ -304,31 +296,11 @@ read_repair_keydiff(RC, LocalVN, RemoteVN, {Bucket, Key, Reason}) ->
     timer:sleep(riak_kv_entropy_manager:get_aae_throttle()),
     ok.
 
-repair_consistent(BKey, LocalVN, RemoteVN) ->
-    %% TODO: Move into riak_kv_vnode?
-    Ref = make_ref(),
-    From = {{self(), Ref}, undefined},
-    riak_core_vnode_master:command(LocalVN,
-                                   {ensemble_repair, BKey, RemoteVN, From},
-                                   undefined,
-                                   riak_kv_vnode_master),
-    receive
-        {Ref, Reply} ->
-            case Reply of
-                failed ->
-                    %% lager:info("repair_consistent: failed"),
-                    exit(self(), kill);
-                {failed, _Error} ->
-                    %% lager:info("repair_consistent: ~p", [_Error]),
-                    exit(self(), kill);
-                _Obj ->
-                    ok
-            end
-    after 10000 ->
-            %% TODO: Timeout should be configurable
-            %% lager:info("repair_consistent timeout"),
-            exit(self(), kill)
-    end.
+repair_consistent(BKey) ->
+    Ensemble = riak_client:ensemble(BKey),
+    Timeout = 60000,
+    _ = riak_ensemble_client:kget(node(), Ensemble, BKey, Timeout, [read_repair]),
+    ok.
 
 %% @private
 update_request(Tree, {Index, _}, IndexN) ->

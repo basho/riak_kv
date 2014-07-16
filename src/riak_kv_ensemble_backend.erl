@@ -20,7 +20,7 @@
 
 %% @doc
 %% Implementation of {@link riak_ensemble_backend} behavior that
-%% connects riak_ensemble to riak_kv vnodes. 
+%% connects riak_ensemble to riak_kv vnodes.
 %%
 
 -module(riak_kv_ensemble_backend).
@@ -29,16 +29,19 @@
 -export([init/3, new_obj/4]).
 -export([obj_epoch/1, obj_seq/1, obj_key/1, obj_value/1]).
 -export([set_obj_epoch/2, set_obj_seq/2, set_obj_value/2]).
--export([get/3, put/4, tick/5, ping/2]).
--export([trusted/1, sync_request/2, sync/2]).
+-export([get/3, put/4, tick/5, ping/2, ready_to_start/0]).
+-export([synctree_path/2]).
 -export([reply/2]).
 -export([obj_newer/2]).
+-export([handle_down/4]).
 
 -include_lib("riak_ensemble/include/riak_ensemble_types.hrl").
 
 -record(state, {ensemble  :: ensemble_id(),
                 id        :: peer_id(),
                 proxy     :: atom(),
+                proxy_ref :: reference(),
+                vnode_ref :: reference(),
                 async     :: pid()}).
 
 -type obj()    :: riak_object:riak_object().
@@ -52,9 +55,14 @@
 init(Ensemble, Id, []) ->
     {{kv, _PL, _N, Idx}, _} = Id,
     Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx),
+    ProxyRef = erlang:monitor(process, Proxy),
+    {ok, Vnode} = riak_core_vnode_manager:get_vnode_pid(Idx, riak_kv_vnode),
+    VnodeRef = erlang:monitor(process, Vnode),
     #state{ensemble=Ensemble,
            id=Id,
-           proxy=Proxy}.
+           proxy=Proxy,
+           proxy_ref=ProxyRef,
+           vnode_ref=VnodeRef}.
 
 %%===================================================================
 
@@ -153,68 +161,32 @@ reply(From, Reply) ->
 
 %%===================================================================
 
-trusted(#state{id=Id}) ->
+-spec handle_down(reference(), pid(), term(), state()) -> false |
+                                                          {reset, state()}.
+handle_down(Ref, _Pid, Reason, #state{id=Id,
+                                      proxy=Proxy,
+                                      vnode_ref=VnodeRef,
+                                      proxy_ref=ProxyRef}=State) ->
     {{kv, _PL, _N, Idx}, _} = Id,
-    {ok, Pid} = riak_core_vnode_manager:get_vnode_pid(Idx, riak_kv_vnode),
-    {false, Pid}.
-
--spec sync_request(riak_ensemble_backend:from(), state()) -> state().
-sync_request(From, State=#state{proxy=Proxy}) ->
-    %% TODO: Do we care about this being dropped when overloaded?
-    catch Proxy ! {ensemble_sync, From},
-    State.
-
--spec sync([{peer_id(), orddict:orddict()}], state()) -> {ok, state()}       |
-                                                         {async, state()}    |
-                                                         {{error,_}, state()}.
-sync(Replies, State=#state{ensemble=_Ensemble, id=Id}) ->
-    Peers0 = [{Idx, PeerId} || {PeerId={{kv,_PL,_N,Idx},_Node},_Reply} <- Replies],
-    Peers = orddict:from_list(Peers0),
-    {{kv, PL, N, Idx}, _} = Id,
-    IndexN = {PL,N}, 
-    %% Sort to remove duplicates when changing ownership / forwarded response
-    Siblings0 = lists:usort([I || {{{kv,_PL,_N,I},_Node},_Reply} <- Replies]),
-    %% Just in case, remove self from list
-    Siblings = Siblings0 -- [Idx],
-
-    case local_partition(Idx) of
-        true ->
-            T0 = erlang:now(),
-            Pid = self(),
-            spawn_link(fun() ->
-                               wait_for_sync(Idx, IndexN, Pid, T0, Siblings, Peers)
-                       end),
-            {async, State};
-        false ->
-            {ok, State}
+    case Ref of
+        VnodeRef ->
+            lager:warning("Vnode for Idx: ~p crashed with reason: ~p.",
+                [Idx, Reason]),
+            %% There are some races here. The vnode may not have been restarted yet
+            %% or the manager itself could be down.
+            %% TODO: Add a timer:sleep()? Something else?
+            {ok, Vnode} =
+                riak_core_vnode_manager:get_vnode_pid(Idx, riak_kv_vnode),
+            VnodeRef2 = erlang:monitor(process, Vnode),
+            {reset, State#state{vnode_ref=VnodeRef2}};
+        ProxyRef ->
+            lager:warning("Vnode Proxy for Idx: ~p crashed with reason: ~p.",
+                [Idx, Reason]),
+            ProxyRef2 = erlang:monitor(process, Proxy),
+            {reset, State#state{proxy_ref=ProxyRef2}};
+        _ ->
+            false
     end.
-
-wait_for_sync(Idx, IndexN, Pid, T0, Siblings, Peers) ->
-    Exchanges = riak_kv_entropy_info:exchanges(Idx, IndexN),
-    Recent = [OtherIdx || {OtherIdx, T1, _} <- Exchanges,
-                          T1 > T0],
-    %% lager:info("~p/~p: Exchanges: ~p~nT0: ~p~nRecent: ~p~nSibs: ~p",
-    %%            [Idx, IndexN, Exchanges, T0, Recent, Siblings]),
-    %% Need = length(Siblings),
-    %% Finished = length(Recent),
-    Local = local_partition(Idx),
-    Complete = ((Siblings -- Recent) =:= []),
-    if not Local ->
-            %% lager:info("Partition ownership changed. No need to sync."),
-            riak_ensemble_backend:sync_complete(Pid, []);
-       Complete ->
-            %% lager:info("Complete ~b/~b :: ~p -> ~p~n", [Finished, Need, Idx, Pid]),
-            SyncPeers = [orddict:fetch(PeerIdx, Peers) || PeerIdx <- Siblings],
-            riak_ensemble_backend:sync_complete(Pid, SyncPeers);
-       true ->
-            %% lager:info("Not yet ~b/~b :: ~p", [Finished, Need, Idx]),
-            timer:sleep(1000),
-            wait_for_sync(Idx, IndexN, Pid, T0, Siblings, Peers)
-    end.
-
-local_partition(Index) ->
-    {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
-    chashbin:index_owner(Index, CHBin) =:= node().
 
 %%===================================================================
 
@@ -257,3 +229,15 @@ maybe_async_update(Changes, State=#state{async=Async}) ->
 ping(From, State=#state{proxy=Proxy}) ->
     catch Proxy ! {ensemble_ping, From},
     {async, State}.
+
+-spec ready_to_start() -> boolean().
+ready_to_start() ->
+    lists:member(riak_kv, riak_core_node_watcher:services(node())).
+
+synctree_path(_Ensemble, Id) ->
+    {{kv, PL, N, Idx}, _} = Id,
+    Bin = term_to_binary({PL, N}),
+    %% Use a prefix byte to leave open the possibility of different
+    %% tree id encodings (eg. not term_to_binary) in the future.
+    TreeId = <<0, Bin/binary>>,
+    {TreeId, "kv_" ++ integer_to_list(Idx)}.
