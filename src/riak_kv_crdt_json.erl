@@ -47,10 +47,11 @@
 -type set_op() :: simple_set_op() | {update, [simple_set_op()]}.
 -type flag_op() :: enable | disable.
 -type register_op() :: {assign, binary()}.
+-type intreg_op() :: {assign, integer()}. %% for maxreg, minreg and rangereg
 -type simple_map_op() :: {remove, map_field()} | {update, map_field(), embedded_type_op()}.
 -type map_op() :: simple_map_op() | {update, [simple_map_op()]}.
--type embedded_type_op() :: counter_op() | set_op() | register_op() | flag_op() | map_op().
--type toplevel_op() :: counter_op() | set_op() | map_op().
+-type embedded_type_op() :: counter_op() | set_op() | register_op() | flag_op() | map_op() | intreg_op().
+-type toplevel_op() :: counter_op() | set_op() | map_op() | intreg_op().
 -type update() :: {toplevel_type(), toplevel_op(), context()}.
 
 %% @doc Encodes a fetch response as a JSON struct, ready for
@@ -72,6 +73,14 @@ value_to_json(counter, Int, _) -> Int;
 value_to_json(set, List, _) -> List;
 value_to_json(flag, Bool, _) -> Bool;
 value_to_json(register, Bin, _) -> Bin;
+value_to_json(IntReg, Int, _) when IntReg =:= maxreg;
+                                   IntReg =:= minreg ->
+    Int;
+value_to_json(rangereg, RR, _) ->
+    {struct,
+     [ {atom_to_binary(Key, utf8), undefined_to_null(Value)} ||
+         {Key, Value} <- RR
+     ]};
 value_to_json(map, Pairs, Mods) ->
     {struct,
      [ begin
@@ -137,6 +146,10 @@ field_from_json(Bin) when is_binary(Bin) ->
 -spec op_from_json(embedded_type(), mochijson2:json_term(), type_mappings()) -> embedded_type_op().
 op_from_json(flag, Op, _Mods) -> flag_op_from_json(Op);
 op_from_json(register, Op, _Mods) -> register_op_from_json(Op);
+op_from_json(IntReg, Op, _Mods) when IntReg == maxreg;
+                                     IntReg == minreg;
+                                     IntReg == rangereg ->
+    intreg_op_from_json(Op, IntReg);
 op_from_json(counter, Op, _Mods) -> counter_op_from_json(Op);
 op_from_json(set, Op, _Mods) -> set_op_from_json(Op);
 op_from_json(map, Op, Mods) -> map_op_from_json(Op, Mods).
@@ -176,6 +189,11 @@ flag_op_from_json(Op) -> bad_op(flag, Op).
 register_op_from_json({struct, [{<<"assign">>, Value}]}) when is_binary(Value) -> {assign, Value};
 register_op_from_json(Value) when is_binary(Value) -> {assign, Value};
 register_op_from_json(Op) -> bad_op(register, Op).
+
+-spec intreg_op_from_json(mochijson2:json_object(), atom()) -> intreg_op().
+intreg_op_from_json({struct, [{<<"assign">>, Value}]}, _Type) when is_integer(Value) -> {assign, Value};
+intreg_op_from_json(Value, _Type) when is_integer(Value) -> {assign, Value};
+intreg_op_from_json(Op, Type) -> bad_op(Type, Op).
 
 -spec counter_op_from_json(mochijson2:json_term()) -> counter_op().
 counter_op_from_json(Int) when is_integer(Int), Int >= 0 -> {increment, Int};
@@ -225,10 +243,51 @@ bad_op(Type, Op) ->
 bad_field(Bin) ->
     throw({invalid_field_name, Bin}).
 
+%% @doc Converts 'undefined' to 'null', and leaves all other terms intact,
+%% useful because JSON allows null, which is used where Erlang/OTP would use
+%% undefined.
+-spec undefined_to_null(term()) -> term().
+undefined_to_null(undefined) -> null;
+undefined_to_null(Term)      -> Term.
+
 -ifdef(TEST).
 
 encode_fetch_response_test_() ->
     [
+     {"encode maxreg",
+      fun() ->
+              {ok, Reg} = ?MAXREG_TYPE:update({assign, 0}, a, ?MAXREG_TYPE:new()),
+              ?assertEqual({struct, [{<<"type">>, <<"maxreg">>},
+                                     {<<"value">>, 0}]},
+                           fetch_response_to_json(maxreg, ?MAXREG_TYPE:value(Reg), undefined, ?MOD_MAP)),
+              ?assertEqual({struct, [{<<"type">>, <<"maxreg">>},
+                                     {<<"value">>, 0}]},
+                           fetch_response_to_json(maxreg, ?MAXREG_TYPE:value(Reg), <<>>, ?MOD_MAP))
+      end},
+     {"encode minreg",
+      fun() ->
+              {ok, Reg} = ?MINREG_TYPE:update({assign, 0}, a, ?MINREG_TYPE:new()),
+              ?assertEqual({struct, [{<<"type">>, <<"minreg">>},
+                                     {<<"value">>, 0}]},
+                           fetch_response_to_json(minreg, ?MINREG_TYPE:value(Reg), undefined, ?MOD_MAP)),
+              ?assertEqual({struct, [{<<"type">>, <<"minreg">>},
+                                     {<<"value">>, 0}]},
+                           fetch_response_to_json(minreg, ?MINREG_TYPE:value(Reg), <<>>, ?MOD_MAP))
+      end},
+     {"encode rangereg",
+      fun() ->
+              {ok, RR} = ?RANGEREG_TYPE:update({assign, 0}, a, ?RANGEREG_TYPE:new()),
+              ?assertEqual({struct, [{<<"type">>, <<"rangereg">>},
+                                     {<<"value">>,
+                                      {struct,
+                                       [
+                                        {<<"max">>, 0},
+                                        {<<"min">>, 0},
+                                        {<<"first">>, 0},
+                                        {<<"last">>, 0}]}
+                                     }]},
+                           fetch_response_to_json(rangereg, ?RANGEREG_TYPE:value(RR), undefined, ?MOD_MAP))
+      end},
      {"encode counter",
       fun() ->
               {ok, Counter} = ?COUNTER_TYPE:update({increment, 5}, a, ?COUNTER_TYPE:new()),

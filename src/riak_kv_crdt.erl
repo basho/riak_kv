@@ -27,7 +27,8 @@
 -export([to_binary/2, to_binary/1, from_binary/1]).
 -export([log_merge_errors/4, meta/2, merge_value/2]).
 %% MR helper funs
--export([value/1, counter_value/1, set_value/1, map_value/1]).
+-export([value/1, counter_value/1, set_value/1, map_value/1,
+         maxreg_value/1, minreg_value/1, rangereg_value/1]).
 
 -include("riak_kv_wm_raw.hrl").
 -include("riak_object.hrl").
@@ -107,26 +108,41 @@ value(RObj) ->
             end
     end.
 
+-spec simple_value(riak_object:riak_object(), atom()) -> term().
+simple_value(RObj, Type) ->
+    {{_Ctx, Thing}, _Stats} = value(RObj, Type),
+    Thing.
+
 %% @doc convenience for (e.g.) MapReduce functions. Pass an object,
 %% get a 2.0+ counter type value, or zero if no counter is present.
 -spec counter_value(riak_object:riak_object()) -> integer().
 counter_value(RObj) ->
-    {{_Ctx, Count}, _Stats}  = value(RObj, ?COUNTER_TYPE),
-    Count.
+    simple_value(RObj, ?COUNTER_TYPE).
 
 %% @doc convenience for (e.g.) MapReduce functions. Pass an object,
 %% get a 2.0+ Set type value, or `[]' if no Set is present.
 -spec set_value(riak_object:riak_object()) -> list().
 set_value(RObj) ->
-    {{_Ctx, Set}, _Stats}  = value(RObj, ?SET_TYPE),
-    Set.
+    simple_value(RObj, ?SET_TYPE).
 
 %% @doc convenience for (e.g.) MapReduce functions. Pass an object,
 %% get a 2.0+ Map type value, or `[]' if no Map is present.
 -spec map_value(riak_object:riak_object()) -> proplist:proplist().
 map_value(RObj) ->
-    {{_Ctx, Map}, _Stats}  = value(RObj, ?MAP_TYPE),
-    Map.
+    simple_value(RObj, ?MAP_TYPE).
+
+-spec maxreg_value(riak_object:riak_object()) -> integer() | undefined.
+maxreg_value(RObj) ->
+    simple_value(RObj, ?MAXREG_TYPE).
+
+-spec minreg_value(riak_object:riak_object()) -> integer() | undefined.
+minreg_value(RObj) ->
+    simple_value(RObj, ?MINREG_TYPE).
+
+-spec rangereg_value(riak_object:riak_object()) -> proplist:proplist().
+rangereg_value(RObj) ->
+    simple_value(RObj, ?RANGEREG_TYPE).
+
 
 %% @TODO in riak_dt change value to query allow query to take an
 %% argument, (so as to query subfields of map, or set membership etc)
@@ -408,7 +424,14 @@ to_record(?COUNTER_TYPE, Val) ->
 to_record(?MAP_TYPE, Val) ->
     ?MAP_TYPE(Val);
 to_record(?SET_TYPE, Val) ->
-    ?SET_TYPE(Val).
+    ?SET_TYPE(Val);
+to_record(?MAXREG_TYPE, Val) ->
+    ?MAXREG_TYPE(Val);
+to_record(?MINREG_TYPE, Val) ->
+    ?MINREG_TYPE(Val);
+to_record(?RANGEREG_TYPE, Val) ->
+    ?RANGEREG_TYPE(Val).
+
 
 %% @doc Check cluster capability for crdt support
 %% @TODO what does this mean for Maps?
@@ -423,6 +446,12 @@ to_mod("counters") ->
     ?COUNTER_TYPE;
 to_mod("maps") ->
     ?MAP_TYPE;
+to_mod("maxregs") ->
+    ?MAXREG_TYPE;
+to_mod("minregs") ->
+    ?MINREG_TYPE;
+to_mod("rangeregs") ->
+    ?RANGEREG_TYPE;
 to_mod(?CRDT{mod=Mod}) ->
     Mod;
 to_mod(Type) ->
