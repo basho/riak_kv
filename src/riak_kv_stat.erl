@@ -55,6 +55,7 @@
 
 -define(SERVER, ?MODULE).
 -define(APP, riak_kv).
+-define(PFX, riak_core_stat:prefix()).
 
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
@@ -107,13 +108,11 @@ untrack_bucket(Bucket) when is_binary(Bucket) ->
 
 %% The current number of active get fsms in riak
 active_gets() ->
-    exometer:get_value([riak_core_stat:prefix(),
-                        ?APP, node, gets, fsm, active]).
+    exometer:get_value([?PFX, ?APP, node, gets, fsm, active]).
 
 %% The current number of active put fsms in riak
 active_puts() ->
-    exometer:get_value([riak_core_stat:prefix(),
-                        ?APP, node, puts, fsm, active]).
+    exometer:get_value([?PFX, ?APP, node, puts, fsm, active]).
 
 stop() ->
     gen_server:cast(?SERVER, stop).
@@ -170,36 +169,51 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% @doc Update the given stat
 do_update({vnode_get, Idx, USecs}) ->
-    P = riak_core_stat:prefix(),
+    P = ?PFX,
     exometer:update([P, ?APP, vnode, gets], 1),
     create_or_update([P, ?APP, vnode, gets, time], USecs, histogram),
     do_per_index(gets, Idx, USecs);
 do_update({vnode_put, Idx, USecs}) ->
-    P = riak_core_stat:prefix(),
+    P = ?PFX,
     exometer:update([P, ?APP, vnode, puts], 1),
     create_or_update([P, ?APP, vnode, puts, time], USecs, histogram),
     do_per_index(puts, Idx, USecs);
+do_update(vnode_index_refresh) ->
+    P = ?PFX,
+    exometer:update([P, ?APP, vnode, index, refreshes], 1);
 do_update(vnode_index_read) ->
-    P = riak_core_stat:prefix(),
+    P = ?PFX,
     exometer:update([P, ?APP, vnode, index, reads], 1);
 do_update({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
-    P = riak_core_stat:prefix(),
+    P = ?PFX,
     exometer:update([P, ?APP, vnode, index, writes], 1),
-    exometer:update([P, ?APP, vnode, index, writes, postings],
-                    PostingsAdded),
-    exometer:update([P, ?APP, vnode, index, deletes, postings],
-                    PostingsRemoved);
+    exometer:update([P, ?APP, vnode, index, writes, postings], PostingsAdded),
+    exometer:update([P, ?APP, vnode, index, deletes, postings], PostingsRemoved);
 do_update({vnode_index_delete, Postings}) ->
     P = riak_core_stat:prefix(),
     exometer:update([P, ?APP, vnode, index, deletes], Postings),
     exometer:update([P, ?APP, vnode, index, deletes, postings], Postings);
-do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket}) ->
+do_update({vnode_dt_update, Mod, Micros}) ->
+    P = ?PFX,
+    Type = riak_kv_crdt:from_mod(Mod),
+    exometer:update([P, ?APP, vnode, Type, update], 1),
+    exometer:update([P, ?APP, vnode, Type, update, time], Micros);
+do_update({riak_object_merge, undefined, Micros}) ->
+    P = ?PFX,
+    exometer:update([P, ?APP, object, merge], 1),
+    exometer:update([P, ?APP, object, merge, time], Micros);
+do_update({riak_object_merge, Mod, Micros}) ->
+    P = ?PFX,
+    Type = riak_kv_crdt:from_mod(Mod),
+    exometer:update([P, ?APP, object, Type, merge], 1),
+    exometer:update([P, ?APP, object, Type, merge, time], Micros);
+do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket, undefined}) ->
     P = riak_core_stat:prefix(),
     exometer:update([P, ?APP, node, gets], 1),
     exometer:update([P, ?APP, node, gets, time], Microsecs),
     do_stages([P, ?APP, node, gets, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined});
-do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket}) ->
+do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket, undefined}) ->
     P = riak_core_stat:prefix(),
     exometer:update([P, ?APP, node, gets], 1),
     exometer:update([P, ?APP, node, gets, time], Microsecs),
@@ -207,62 +221,85 @@ do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket})
     exometer:update([P, ?APP, node, gets, objsize], ObjSize),
     do_stages([P, ?APP, node, gets, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize});
-do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket}) ->
+do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket, CRDTMod}) ->
     P = riak_core_stat:prefix(),
+    Type = riak_kv_crdt:from_mod(CRDTMod),
+    exometer:update([P, ?APP, node, gets, Type], 1),
+    exometer:update([P, ?APP, node, gets, Type, time], Microsecs),
+    do_stages([P, ?APP, node, gets, Type, time], Stages),
+    do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined, Type});
+do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket, undefined}) ->
+    P = ?PFX,
+    exometer:update([P, ?APP, node, gets], 1),
+    exometer:update([P, ?APP, node, gets, time], Microsecs),
+    exometer:update([P, ?APP, node, gets, siblings], NumSiblings),
+    exometer:update([P, ?APP, node, gets, objsize], ObjSize),
+    do_stages([P, ?APP, node, gets, time], Stages),
+    do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize});
+do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket, CRDTMod}) ->
+    P = ?PFX,
+    Type = riak_kv_crdt:from_mod(CRDTMod),
+    exometer:update([P, ?APP, node, gets, Type], 1),
+    exometer:update([P, ?APP, node, gets, Type, time], Microsecs),
+    exometer:update([P, ?APP, node, gets, Type, siblings], NumSiblings),
+    exometer:update([P, ?APP, node, gets, Type, objsize], ObjSize),
+    do_stages([P, ?APP, node, gets, Type, time], Stages),
+    do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type});
+do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, undefined}) ->
+    P = ?PFX,
     exometer:update([P, ?APP, node, puts], 1),
     exometer:update([P, ?APP, node, puts, time], Microsecs),
     do_stages([P, ?APP, node, puts, time], Stages),
     do_put_bucket(PerBucket, {Bucket, Microsecs, Stages});
+do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, CRDTMod}) ->
+    P = ?PFX,
+    Type = riak_kv_crdt:from_mod(CRDTMod),
+    exometer:update([P, ?APP, node, puts, Type], 1),
+    exometer:update([P, ?APP, node, puts, Type, time], Microsecs),
+    do_stages([P, ?APP, node, puts, Type, time], Stages),
+    do_put_bucket(PerBucket, {Bucket, Microsecs, Stages, Type});
 do_update({read_repairs, Indices, Preflist}) ->
-    P = riak_core_stat:prefix(),
-    exometer:update([P, ?APP, node, gets, read_repairs], 1),
+    exometer:update([?PFX, ?APP, node, gets, read_repairs], 1),
     do_repairs(Indices, Preflist);
 do_update(coord_redir) ->
-    P = riak_core_stat:prefix(),
-    exometer:update([P, ?APP, node, puts, coord_redirs], 1);
+    exometer:update([?PFX, ?APP, node, puts, coord_redirs], 1);
 do_update(mapper_start) ->
-    P = riak_core_stat:prefix(),
-    exometer:update([P, ?APP, mapper_count], 1);
+    exometer:update([?PFX, ?APP, mapper_count], 1);
 do_update(mapper_end) ->
-    P = riak_core_stat:prefix(),
-    exometer:update([P, ?APP, mapper_count], -1);
+    exometer:update([?PFX, ?APP, mapper_count], -1);
 do_update(precommit_fail) ->
-    P = riak_core_stat:prefix(),
-    exometer:update([P, ?APP, precommit_fail], 1);
+    exometer:update([?PFX, ?APP, precommit_fail], 1);
 do_update(postcommit_fail) ->
-    P = riak_core_stat:prefix(),
-    exometer:update([P, ?APP, postcommit_fail], 1);
+    exometer:update([?PFX, ?APP, postcommit_fail], 1);
 do_update({fsm_spawned, Type}) when Type =:= gets; Type =:= puts ->
-    P = riak_core_stat:prefix(),
-    exometer:update([P, ?APP, node, Type, fsm, active], 1);
+    exometer:update([?PFX, ?APP, node, Type, fsm, active], 1);
 do_update({fsm_exit, Type}) when Type =:= gets; Type =:= puts  ->
-    P = riak_core_stat:prefix(),
-    exometer:update([P, ?APP, node, Type, fsm, active], -1);
+    exometer:update([?PFX, ?APP, node, Type, fsm, active], -1);
 do_update({fsm_error, Type}) when Type =:= gets; Type =:= puts ->
-    P = riak_core_stat:prefix(),
     do_update({fsm_exit, Type}),
-    exometer:update([P, ?APP, node, Type, fsm, errors], 1);
+    exometer:update([?PFX, ?APP, node, Type, fsm, errors], 1);
 do_update({index_create, Pid}) ->
-    P = riak_core_stat:prefix(),
+    P = ?PFX,
     exometer:update([P, ?APP, index, fsm, create], 1),
     exometer:update([P, ?APP, index, fsm, active], 1),
     add_monitor(index, Pid),
     ok;
 do_update(index_create_error) ->
-    P = riak_core_stat:prefix(),
-    exometer:update([P, ?APP, index, fsm, create, error], 1);
+    exometer:update([?PFX, ?APP, index, fsm, create, error], 1);
 do_update({list_create, Pid}) ->
-    P = riak_core_stat:prefix(),
+    P = ?PFX,
     exometer:update([P, ?APP, list, fsm, create], 1),
     exometer:update([P, ?APP, list, fsm, active], 1),
     add_monitor(list, Pid),
     ok;
 do_update(list_create_error) ->
-    P = riak_core_stat:prefix(),
-    exometer:update([P, ?APP, list, fsm, create, error], 1);
+    exometer:update([?PFX, ?APP, list, fsm, create, error], 1);
 do_update({fsm_destroy, Type}) ->
-    P = riak_core_stat:prefix(),
-    exometer:update([P, ?APP, Type, fsm, active], -1).
+    exometer:update([?PFX, ?APP, Type, fsm, active], -1);
+do_update({Type, actor_count, Count}) ->
+    exometer:update([?PFX, ?APP, Type, actor_count], Count);
+do_update(late_put_fsm_coordinator_ack) ->
+    exometer:update([?PFX, ?APP, late_put_fsm_coordinator_ack], 1).
 
 %% private
 
@@ -303,7 +340,23 @@ do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize}=Args) ->
                                                                                                  siblings,
                                                                                                  objsize]],
             do_get_bucket(true, Args)
+    end;
+do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type}=Args) ->
+    P = riak_core_stat:prefix(),
+    case exometer:update([P, ?APP, node, gets, Type, Bucket], 1) of
+	ok ->
+	    [exometer:update([P, ?APP, node, gets, Dimension, Bucket], Arg)
+	     || {Dimension, Arg} <- [{time, Microsecs},
+				     {siblings, NumSiblings},
+				     {objsize, ObjSize}], Arg /= undefined],
+	    do_stages([P, ?APP, node, gets, Type, time, Bucket], Stages);
+	{error, not_found} ->
+	    exometer:new([P, ?APP, node, gets, Type, Bucket], spiral),
+	    [register_stat([P, ?APP, node, gets, Type, Dimension, Bucket], histogram)
+	     || Dimension <- [time, siblings, objsize]],
+	    do_get_bucket(true, Args)
     end.
+
 
 %% per bucket put_fsm stats
 do_put_bucket(false, _) ->
@@ -318,7 +371,19 @@ do_put_bucket(true, {Bucket, Microsecs, Stages}=Args) ->
             register_stat([P, ?APP, node, puts, Bucket], spiral),
             register_stat([P, ?APP, node, puts, time, Bucket], histogram),
             do_put_bucket(true, Args)
+    end;
+do_put_bucket(true, {Bucket, Microsecs, Stages, Type}=Args) ->
+    P = riak_core_stat:prefix(),
+    case exometer:update([P, ?APP, node, puts, Type, Bucket], 1) of
+	ok ->
+	    exometer:update([P, ?APP, node, puts, Type, time, Bucket], Microsecs),
+	    do_stages([P, ?APP, node, puts, Type, time, Bucket], Stages);
+	{error, not_found} ->
+	    register_stat([P, ?APP, node, puts, Type, Bucket], spiral),
+	    register_stat([P, ?APP, node, puts, Type, time, Bucket], histogram),
+	    do_put_bucket(true, Args)
     end.
+
 
 %% Path is list that provides a conceptual path to a stat
 %% folsom uses the tuple as flat name
@@ -361,6 +426,7 @@ create_or_update(Name, UpdateVal, Type) ->
 %% @doc list of {Name, Type} for static
 %% stats that we can register at start up
 stats() ->
+    Pfx = riak_core_stat:prefix(),
     [{[vnode, gets], spiral},
      {[vnode, gets, time], histogram},
      {[vnode, puts], spiral},
@@ -404,6 +470,12 @@ stats() ->
      {[node, puts, fsm, active], counter},
      {[node, puts, fsm, errors], spiral},
      {[node, puts, time], histogram},
+     {[node, puts, counter], spiral},
+     {[node, puts, counter, time], histogram},
+     {[node, puts, set], spiral},
+     {[node, puts, set, time], histogram},
+     {[node, puts, map], spiral},
+     {[node, puts, map, time], histogram},
      {[index, fsm, create], spiral},
      {[index, fsm, create, error], spiral},
      {[index, fsm, active], counter},
@@ -427,6 +499,15 @@ stats() ->
      {[object, map, merge], spiral},
      {[object, map, merge, time], histogram},
      {late_put_fsm_coordinator_ack, counter}
+     | read_repair_aggr_stats(Pfx)].
+
+read_repair_aggr_stats(Pfx) ->
+    [{[read_repairs,Type,Reason],
+      {function,exometer,aggregate,
+       [ [{{[Pfx,?APP,node,gets,read_repairs,'_',Type,Reason],'_','_'},
+	   [], [true]}], [one,count] ], value, [one,count]}}
+     || Type <- [primary, fallback],
+	Reason <- [notfound, outofdate]
     ].
 
 

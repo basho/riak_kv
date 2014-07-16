@@ -181,7 +181,7 @@ t(L, F) ->
     Res = F(),
     T2 = os:timestamp(),
     {L, timer:now_diff(T2, T1), Res}.
-     
+
 
 %% Stats in folsom are stored with tuples as keys, the
 %% tuples mimic an hierarchical structure. To be free of legacy
@@ -203,18 +203,18 @@ get_stat(Name, Type, Cache) ->
 get_stat(Name, Type, Cache, ValFun) ->
     case proplists:get_value(Name, Cache) of
         undefined ->
-            case riak_core_stat_q:calc_stat({Name, Type}) of
-                unavailable -> {unavailable, Cache};
-                Stat ->
-                    {ValFun(Stat), [{Name, Stat} | Cache]}
-            end;
+            Value = case riak_core_stat_q:calc_stat({Name, Type}) of
+			unavailable -> [];
+			Stat        -> Stat
+		    end,
+	    {ValFun(Value), [{Name, Value} | Cache]};
         Cached -> {ValFun(Cached), Cache}
     end.
 
 bc_stat({Old, {NewName, Field}, histogram} = _X, Acc, Cache) ->
     try
     ValFun = fun(Stat) ->
-                     trunc(proplists:get_value(Field, Stat)) end,
+                     trunc(proplists:get_value(Field, Stat, 0)) end,
     {Val, Cache1} = get_stat(NewName, histogram, Cache, ValFun),
     {[{Old, Val} | Acc], Cache1}
     catch
@@ -222,13 +222,13 @@ bc_stat({Old, {NewName, Field}, histogram} = _X, Acc, Cache) ->
     end;
 bc_stat({Old, {NewName, Field}, histogram_percentile}, Acc, Cache) ->
     ValFun = fun(Stat) ->
-                     Val = proplists:get_value(Field, Stat),
+                     Val = proplists:get_value(Field, Stat, 0),
                      trunc(Val) end,
     {Val, Cache1} = get_stat(NewName, histogram, Cache, ValFun),
     {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, {NewName, Field}, spiral}, Acc, Cache) ->
     ValFun = fun(Stat) ->
-                     proplists:get_value(Field, Stat)
+                     proplists:get_value(Field, Stat, 0)
              end,
     {Val, Cache1} = get_stat(NewName, spiral, Cache, ValFun),
     {[{Old, Val} | Acc], Cache1};
@@ -255,6 +255,8 @@ legacy_stat_map() ->
      {vnode_index_refreshes_total, {{riak_kv, vnode, index, refreshes}, count}, spiral},
      {vnode_index_reads, {{riak_kv, vnode, index, reads}, one}, spiral},
      {vnode_index_reads_total, {{riak_kv, vnode, index, reads}, count}, spiral},
+     {vnode_index_refreshes, {{riak_kv, vnode, index, refreshes}, one}, spiral},
+     {vnode_index_refreshes_total, {{riak_kv, vnode, index, refreshes}, count}, spiral},
      {vnode_index_writes, {{riak_kv, vnode, index, writes}, one}, spiral},
      {vnode_index_writes_total, {{riak_kv, vnode, index, writes}, count}, spiral},
      {vnode_index_writes_postings, {{riak_kv,vnode,index,writes,postings}, one}, spiral},
