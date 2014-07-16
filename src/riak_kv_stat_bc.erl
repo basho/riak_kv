@@ -216,10 +216,13 @@ bc_stat({Old, NewName, function}, Acc, Cache) ->
 %% concatenation of the elements in the new stat key would not suffice
 %% applications depend on these exact legacy names.
 legacy_stat_map() ->
-    [{vnode_gets, {{riak_kv, vnode, gets}, one}, spiral},
+    [%% vnode stats: gets & puts
+     {vnode_gets, {{riak_kv, vnode, gets}, one}, spiral},
      {vnode_gets_total, {{riak_kv, vnode, gets}, count}, spiral},
      {vnode_puts, {{riak_kv, vnode, puts}, one}, spiral},
      {vnode_puts_total, {{riak_kv, vnode, puts}, count}, spiral},
+
+     %% vnode stats: indexes
      {vnode_index_refreshes, {{riak_kv, vnode, index, refreshes}, one}, spiral},
      {vnode_index_refreshes_total, {{riak_kv, vnode, index, refreshes}, count}, spiral},
      {vnode_index_reads, {{riak_kv, vnode, index, reads}, one}, spiral},
@@ -232,6 +235,8 @@ legacy_stat_map() ->
      {vnode_index_deletes_total, {{riak_kv,vnode,index,deletes}, count}, spiral},
      {vnode_index_deletes_postings, {{riak_kv,vnode,index,deletes,postings}, one}, spiral},
      {vnode_index_deletes_postings_total, {{riak_kv,vnode,index,deletes,postings}, count}, spiral},
+
+     %% datatype stats: counters
      {object_counter_merge, {{riak_kv, object, counter, merge}, one}, spiral},
      {object_counter_merge_total, {{riak_kv, object, counter, merge}, count}, spiral},
      {object_counter_merge_time_mean, {{riak_kv, object, counter, merge, time}, arithmetic_mean}, histogram},
@@ -246,6 +251,8 @@ legacy_stat_map() ->
      {vnode_counter_update_time_95, {{riak_kv, vnode, counter, update, time}, 95}, histogram_percentile},
      {vnode_counter_update_time_99, {{riak_kv, vnode, counter, update, time}, 99}, histogram_percentile},
      {vnode_counter_update_time_100, {{riak_kv, vnode, counter, update, time}, max}, histogram},
+
+     %% datatype stats: sets
      {object_set_merge, {{riak_kv, object, set, merge}, one}, spiral},
      {object_set_merge_total, {{riak_kv, object, set, merge}, count}, spiral},
      {object_set_merge_time_mean, {{riak_kv, object, set, merge, time}, arithmetic_mean}, histogram},
@@ -260,6 +267,8 @@ legacy_stat_map() ->
      {vnode_set_update_time_95, {{riak_kv, vnode, set, update, time}, 95}, histogram_percentile},
      {vnode_set_update_time_99, {{riak_kv, vnode, set, update, time}, 99}, histogram_percentile},
      {vnode_set_update_time_100, {{riak_kv, vnode, set, update, time}, max}, histogram},
+
+     %% datatype stats: maps
      {object_map_merge, {{riak_kv, object, map, merge}, one}, spiral},
      {object_map_merge_total, {{riak_kv, object, map, merge}, count}, spiral},
      {object_map_merge_time_mean, {{riak_kv, object, map, merge, time}, arithmetic_mean}, histogram},
@@ -267,13 +276,6 @@ legacy_stat_map() ->
      {object_map_merge_time_95, {{riak_kv, object, map, merge, time}, 95}, histogram_percentile},
      {object_map_merge_time_99, {{riak_kv, object, map, merge, time}, 99}, histogram_percentile},
      {object_map_merge_time_100, {{riak_kv, object, map, merge, time}, max}, histogram},
-     {object_merge, {{riak_kv, object, merge}, one}, spiral},
-     {object_merge_total, {{riak_kv, object, merge}, count}, spiral},
-     {object_merge_time_mean, {{riak_kv, object, merge, time}, arithmetic_mean}, histogram},
-     {object_merge_time_median, {{riak_kv, object, merge, time}, median}, histogram},
-     {object_merge_time_95, {{riak_kv, object, merge, time}, 95}, histogram_percentile},
-     {object_merge_time_99, {{riak_kv, object, merge, time}, 99}, histogram_percentile},
-     {object_merge_time_100, {{riak_kv, object, merge, time}, max}, histogram},
      {vnode_map_update, {{riak_kv, vnode, map, update}, one}, spiral},
      {vnode_map_update_total, {{riak_kv, vnode, map, update}, count}, spiral},
      {vnode_map_update_time_mean, {{riak_kv, vnode, map, update, time}, arithmetic_mean}, histogram},
@@ -281,6 +283,33 @@ legacy_stat_map() ->
      {vnode_map_update_time_95, {{riak_kv, vnode, map, update, time}, 95}, histogram_percentile},
      {vnode_map_update_time_99, {{riak_kv, vnode, map, update, time}, 99}, histogram_percentile},
      {vnode_map_update_time_100, {{riak_kv, vnode, map, update, time}, max}, histogram},
+
+     %% datatype stats: rangeregs
+     {object_rangereg_merge, {{riak_kv, object, rangereg, merge}, one}, spiral},
+     {object_rangereg_merge_total, {{riak_kv, object, rangereg, merge}, count}, spiral},
+     {object_rangereg_merge_time_mean, {{riak_kv, object, rangereg, merge, time}, arithmetic_mean}, histogram},
+     {object_rangereg_merge_time_median, {{riak_kv, object, rangereg, merge, time}, median}, histogram},
+     {object_rangereg_merge_time_95, {{riak_kv, object, rangereg, merge, time}, 95}, histogram_percentile},
+     {object_rangereg_merge_time_99, {{riak_kv, object, rangereg, merge, time}, 99}, histogram_percentile},
+     {object_rangereg_merge_time_100, {{riak_kv, object, rangereg, merge, time}, max}, histogram},
+     {vnode_rangereg_update, {{riak_kv, vnode, rangereg, update}, one}, spiral},
+     {vnode_rangereg_update_total, {{riak_kv, vnode, rangereg, update}, count}, spiral},
+     {vnode_rangereg_update_time_mean, {{riak_kv, vnode, rangereg, update, time}, arithmetic_mean}, histogram},
+     {vnode_rangereg_update_time_median, {{riak_kv, vnode, rangereg, update, time}, median}, histogram},
+     {vnode_rangereg_update_time_95, {{riak_kv, vnode, rangereg, update, time}, 95}, histogram_percentile},
+     {vnode_rangereg_update_time_99, {{riak_kv, vnode, rangereg, update, time}, 99}, histogram_percentile},
+     {vnode_rangereg_update_time_100, {{riak_kv, vnode, rangereg, update, time}, max}, histogram},
+
+     %% datatype stats: all merges
+     {object_merge, {{riak_kv, object, merge}, one}, spiral},
+     {object_merge_total, {{riak_kv, object, merge}, count}, spiral},
+     {object_merge_time_mean, {{riak_kv, object, merge, time}, arithmetic_mean}, histogram},
+     {object_merge_time_median, {{riak_kv, object, merge, time}, median}, histogram},
+     {object_merge_time_95, {{riak_kv, object, merge, time}, 95}, histogram_percentile},
+     {object_merge_time_99, {{riak_kv, object, merge, time}, 99}, histogram_percentile},
+     {object_merge_time_100, {{riak_kv, object, merge, time}, max}, histogram},
+
+     %% node stats: gets
      {node_gets, {{riak_kv,node,gets}, one}, spiral},
      {node_gets_total, {{riak_kv,node,gets}, count}, spiral},
      {node_get_fsm_siblings_mean, {{riak_kv,node,gets,siblings}, arithmetic_mean}, histogram},
@@ -298,6 +327,8 @@ legacy_stat_map() ->
      {node_get_fsm_time_95, {{riak_kv,node,gets,time}, 95}, histogram_percentile},
      {node_get_fsm_time_99, {{riak_kv,node,gets,time}, 99}, histogram_percentile},
      {node_get_fsm_time_100, {{riak_kv,node,gets,time}, max}, histogram},
+
+     %% node stats: gets: counters
      {node_gets_counter, {{riak_kv,node,gets,counter}, one}, spiral},
      {node_gets_counter_total, {{riak_kv,node,gets,counter}, count}, spiral},
      {node_get_fsm_counter_siblings_mean, {{riak_kv,node,gets,counter,siblings}, arithmetic_mean}, histogram},
@@ -315,6 +346,8 @@ legacy_stat_map() ->
      {node_get_fsm_counter_time_95, {{riak_kv,node,gets,counter,time}, 95}, histogram_percentile},
      {node_get_fsm_counter_time_99, {{riak_kv,node,gets,counter,time}, 99}, histogram_percentile},
      {node_get_fsm_counter_time_100, {{riak_kv,node,gets,counter,time}, max}, histogram},
+
+     %% node stats: gets: sets
      {node_gets_set, {{riak_kv,node,gets,set}, one}, spiral},
      {node_gets_set_total, {{riak_kv,node,gets,set}, count}, spiral},
      {node_get_fsm_set_siblings_mean, {{riak_kv,node,gets,set,siblings}, arithmetic_mean}, histogram},
@@ -332,6 +365,8 @@ legacy_stat_map() ->
      {node_get_fsm_set_time_95, {{riak_kv,node,gets,set,time}, 95}, histogram_percentile},
      {node_get_fsm_set_time_99, {{riak_kv,node,gets,set,time}, 99}, histogram_percentile},
      {node_get_fsm_set_time_100, {{riak_kv,node,gets,set,time}, max}, histogram},
+
+     %% node stats: gets: maps
      {node_gets_map, {{riak_kv,node,gets,map}, one}, spiral},
      {node_gets_map_total, {{riak_kv,node,gets,map}, count}, spiral},
      {node_get_fsm_map_siblings_mean, {{riak_kv,node,gets,map,siblings}, arithmetic_mean}, histogram},
@@ -349,6 +384,27 @@ legacy_stat_map() ->
      {node_get_fsm_map_time_95, {{riak_kv,node,gets,map,time}, 95}, histogram_percentile},
      {node_get_fsm_map_time_99, {{riak_kv,node,gets,map,time}, 99}, histogram_percentile},
      {node_get_fsm_map_time_100, {{riak_kv,node,gets,map,time}, max}, histogram},
+
+     %% node stats: gets: rangeregs
+     {node_gets_rangereg, {{riak_kv,node,gets,rangereg}, one}, spiral},
+     {node_gets_rangereg_total, {{riak_kv,node,gets,rangereg}, count}, spiral},
+     {node_get_fsm_rangereg_siblings_mean, {{riak_kv,node,gets,rangereg,siblings}, arithmetic_mean}, histogram},
+     {node_get_fsm_rangereg_siblings_median, {{riak_kv,node,gets,rangereg,siblings}, median}, histogram},
+     {node_get_fsm_rangereg_siblings_95, {{riak_kv,node,gets,rangereg,siblings}, 95}, histogram_percentile},
+     {node_get_fsm_rangereg_siblings_99, {{riak_kv,node,gets,rangereg,siblings}, 99}, histogram_percentile},
+     {node_get_fsm_rangereg_siblings_100, {{riak_kv,node,gets,rangereg,siblings}, max}, histogram},
+     {node_get_fsm_rangereg_objsize_mean, {{riak_kv,node,gets,rangereg,objsize}, arithmetic_mean}, histogram},
+     {node_get_fsm_rangereg_objsize_median, {{riak_kv,node,gets,rangereg,objsize}, median}, histogram},
+     {node_get_fsm_rangereg_objsize_95, {{riak_kv,node,gets,rangereg,objsize}, 95}, histogram_percentile},
+     {node_get_fsm_rangereg_objsize_99, {{riak_kv,node,gets,rangereg,objsize}, 99}, histogram_percentile},
+     {node_get_fsm_rangereg_objsize_100, {{riak_kv,node,gets,rangereg,objsize}, max}, histogram},
+     {node_get_fsm_rangereg_time_mean, {{riak_kv,node,gets,rangereg,time}, arithmetic_mean}, histogram},
+     {node_get_fsm_rangereg_time_median, {{riak_kv,node,gets,rangereg,time}, median}, histogram},
+     {node_get_fsm_rangereg_time_95, {{riak_kv,node,gets,rangereg,time}, 95}, histogram_percentile},
+     {node_get_fsm_rangereg_time_99, {{riak_kv,node,gets,rangereg,time}, 99}, histogram_percentile},
+     {node_get_fsm_rangereg_time_100, {{riak_kv,node,gets,rangereg,time}, max}, histogram},
+
+     %% node stats: puts
      {node_puts, {{riak_kv,node, puts}, one}, spiral},
      {node_puts_total, {{riak_kv,node, puts}, count}, spiral},
      {node_put_fsm_time_mean, {{riak_kv,node, puts, time}, arithmetic_mean}, histogram},
@@ -356,6 +412,8 @@ legacy_stat_map() ->
      {node_put_fsm_time_95,  {{riak_kv,node, puts, time}, 95}, histogram_percentile},
      {node_put_fsm_time_99,  {{riak_kv,node, puts, time}, 99}, histogram_percentile},
      {node_put_fsm_time_100, {{riak_kv,node, puts, time}, max}, histogram},
+
+     %% node stats: puts: counters
      {node_puts_counter, {{riak_kv,node, puts, counter}, one}, spiral},
      {node_puts_counter_total, {{riak_kv,node, puts, counter}, count}, spiral},
      {node_put_fsm_counter_time_mean, {{riak_kv,node, puts, counter, time}, arithmetic_mean}, histogram},
@@ -363,6 +421,8 @@ legacy_stat_map() ->
      {node_put_fsm_counter_time_95,  {{riak_kv,node, puts, counter, time}, 95}, histogram_percentile},
      {node_put_fsm_counter_time_99,  {{riak_kv,node, puts, counter, time}, 99}, histogram_percentile},
      {node_put_fsm_counter_time_100, {{riak_kv,node, puts, counter, time}, max}, histogram},
+
+     %% node stats: puts: sets
      {node_puts_set, {{riak_kv,node, puts, set}, one}, spiral},
      {node_puts_set_total, {{riak_kv,node, puts, set}, count}, spiral},
      {node_put_fsm_set_time_mean, {{riak_kv,node, puts, set, time}, arithmetic_mean}, histogram},
@@ -370,6 +430,8 @@ legacy_stat_map() ->
      {node_put_fsm_set_time_95,  {{riak_kv,node, puts, set, time}, 95}, histogram_percentile},
      {node_put_fsm_set_time_99,  {{riak_kv,node, puts, set, time}, 99}, histogram_percentile},
      {node_put_fsm_set_time_100, {{riak_kv,node, puts, set, time}, max}, histogram},
+
+     %% node stats: puts: maps
      {node_puts_map, {{riak_kv,node, puts, map}, one}, spiral},
      {node_puts_map_total, {{riak_kv,node, puts, map}, count}, spiral},
      {node_put_fsm_map_time_mean, {{riak_kv,node, puts, map, time}, arithmetic_mean}, histogram},
@@ -377,6 +439,17 @@ legacy_stat_map() ->
      {node_put_fsm_map_time_95,  {{riak_kv,node, puts, map, time}, 95}, histogram_percentile},
      {node_put_fsm_map_time_99,  {{riak_kv,node, puts, map, time}, 99}, histogram_percentile},
      {node_put_fsm_map_time_100, {{riak_kv,node, puts, map, time}, max}, histogram},
+
+     %% node stats: puts: rangeregs
+     {node_puts_rangereg, {{riak_kv,node, puts, rangereg}, one}, spiral},
+     {node_puts_rangereg_total, {{riak_kv,node, puts, rangereg}, count}, spiral},
+     {node_put_fsm_rangereg_time_mean, {{riak_kv,node, puts, rangereg, time}, arithmetic_mean}, histogram},
+     {node_put_fsm_rangereg_time_median, {{riak_kv,node, puts, rangereg, time}, median}, histogram},
+     {node_put_fsm_rangereg_time_95,  {{riak_kv,node, puts, rangereg, time}, 95}, histogram_percentile},
+     {node_put_fsm_rangereg_time_99,  {{riak_kv,node, puts, rangereg, time}, 99}, histogram_percentile},
+     {node_put_fsm_rangereg_time_100, {{riak_kv,node, puts, rangereg, time}, max}, histogram},
+
+     %% puts: read repairs
      {read_repairs, {{riak_kv,node,gets,read_repairs}, one}, spiral},
      {read_repairs_total, {{riak_kv,node,gets,read_repairs}, count}, spiral},
      {read_repairs_counter, {{riak_kv,node,gets,counter,read_repairs}, one}, spiral},
@@ -385,35 +458,52 @@ legacy_stat_map() ->
      {read_repairs_set_total, {{riak_kv,node,gets,set,read_repairs}, count}, spiral},
      {read_repairs_map, {{riak_kv,node,gets,map,read_repairs}, one}, spiral},
      {read_repairs_map_total, {{riak_kv,node,gets,map,read_repairs}, count}, spiral},
+     {read_repairs_rangereg, {{riak_kv,node,gets,rangereg,read_repairs}, one}, spiral},
+     {read_repairs_rangereg_total, {{riak_kv,node,gets,rangereg,read_repairs}, count}, spiral},
+
+     %% puts: misc stats
      {coord_redirs_total, {riak_kv,node,puts,coord_redirs}, counter},
+     {late_put_fsm_coordinator_ack, {riak_kv, late_put_fsm_coordinator_ack}, counter},
+
+     %% misc stats
      {executing_mappers, {riak_kv,mapper_count}, counter},
      {precommit_fail, {riak_kv, precommit_fail}, counter},
      {postcommit_fail, {riak_kv, postcommit_fail}, counter},
+
+     %% index & list{keys,buckets} stats
      {index_fsm_create, {{riak_kv, index, fsm, create}, one}, spiral},
      {index_fsm_create_error, {{riak_kv, index, fsm, create, error}, one}, spiral},
      {index_fsm_active, {riak_kv, index, fsm, active}, counter},
      {list_fsm_create, {{riak_kv, list, fsm, create}, one}, spiral},
      {list_fsm_create_error, {{riak_kv, list, fsm, create, error}, one}, spiral},
      {list_fsm_active, {riak_kv, list, fsm, active}, counter},
+
+     %% pb connection stats
      {pbc_active, {riak_api, pbc_connects, active}, function},
      {pbc_connects, {{riak_api, pbc_connects}, one}, spiral},
      {pbc_connects_total, {{riak_api, pbc_connects}, count}, spiral},
+
+     %% datatype stats: counters
      {counter_actor_counts_mean, {{riak_kv,counter,actor_count}, arithmetic_mean}, histogram},
      {counter_actor_counts_median, {{riak_kv,counter,actor_count}, median}, histogram},
      {counter_actor_counts_95,  {{riak_kv,counter,actor_count}, 95}, histogram_percentile},
      {counter_actor_counts_99,  {{riak_kv,counter,actor_count}, 99}, histogram_percentile},
      {counter_actor_counts_100, {{riak_kv,counter,actor_count}, max}, histogram},
+
+     %% datatype stats: sets
      {set_actor_counts_mean, {{riak_kv,set,actor_count}, arithmetic_mean}, histogram},
      {set_actor_counts_median, {{riak_kv,set,actor_count}, median}, histogram},
      {set_actor_counts_95,  {{riak_kv,set,actor_count}, 95}, histogram_percentile},
      {set_actor_counts_99,  {{riak_kv,set,actor_count}, 99}, histogram_percentile},
      {set_actor_counts_100, {{riak_kv,set,actor_count}, max}, histogram},
+
+     %% datatype stats: maps
      {map_actor_counts_mean, {{riak_kv,map,actor_count}, arithmetic_mean}, histogram},
      {map_actor_counts_median, {{riak_kv,map,actor_count}, median}, histogram},
      {map_actor_counts_95,  {{riak_kv,map,actor_count}, 95}, histogram_percentile},
      {map_actor_counts_99,  {{riak_kv,map,actor_count}, 99}, histogram_percentile},
-     {map_actor_counts_100, {{riak_kv,map,actor_count}, max}, histogram},
-     {late_put_fsm_coordinator_ack, {riak_kv, late_put_fsm_coordinator_ack}, counter}]
+     {map_actor_counts_100, {{riak_kv,map,actor_count}, max}, histogram}]
+
         ++ legacy_fsm_stats() ++ consistent_stats().
 
 legacy_fsm_stats() ->

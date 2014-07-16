@@ -301,7 +301,7 @@ validate_create_dt_props(undefined, New) ->
 validate_create_dt_props(DataType, New) ->
     Unvalidated = lists:keydelete(datatype, 1, New),
     Mod = riak_kv_crdt:to_mod(DataType),
-    case lists:member(Mod, ?V2_TOP_LEVEL_TYPES) of
+    case lists:member(Mod, ?V3_TOP_LEVEL_TYPES) of
         true ->
             validate_create_dt_props(Unvalidated, [{datatype, DataType}], []);
         false ->
@@ -663,7 +663,7 @@ gen_datatype_property() ->
     ?LET(Datattype, oneof([gen_datatype(), notadatatype]), [{datatype, Datattype}]).
 
 gen_datatype() ->
-    ?LET(Datamod, oneof(?V2_TOP_LEVEL_TYPES), riak_kv_crdt:from_mod(Datamod)).
+    ?LET(Datamod, oneof(?V3_TOP_LEVEL_TYPES), riak_kv_crdt:from_mod(Datamod)).
 %% helpers
 
 immutable(create, _,  _, _) ->
@@ -779,7 +779,7 @@ only_create_if_valid({Good, Bad}, New) ->
         %% then the datatype must be valid
         {Datatype, true, Consistent} when Consistent =:= false orelse
                                           Consistent =:= undefined ->
-            case lists:member(riak_kv_crdt:to_mod(Datatype), ?V2_TOP_LEVEL_TYPES) of
+            case lists:member(riak_kv_crdt:to_mod(Datatype), ?V3_TOP_LEVEL_TYPES) of
                 true ->
                     has_datatype(Good) andalso has_allow_mult(Good);
                 false ->
@@ -790,7 +790,7 @@ only_create_if_valid({Good, Bad}, New) ->
         %% is valid
         {Datatype, _, Consistent} when Consistent =:= false orelse
                                        Consistent =:= undefined->
-            case lists:member(riak_kv_crdt:to_mod(Datatype), ?V2_TOP_LEVEL_TYPES) of
+            case lists:member(riak_kv_crdt:to_mod(Datatype), ?V3_TOP_LEVEL_TYPES) of
                 true ->
                     has_allow_mult(Bad) andalso has_datatype(Good);
                 false ->
@@ -813,7 +813,7 @@ has_allow_mult(Props) ->
 
 valid_datatype(Props) ->
     Datatype = proplists:get_value(datatype, Props),
-    lists:member(riak_kv_crdt:to_mod(Datatype), ?V2_TOP_LEVEL_TYPES).
+    lists:member(riak_kv_crdt:to_mod(Datatype), ?V3_TOP_LEVEL_TYPES).
 
 has_consistent(Props) ->
     proplists:get_value(consistent, Props) /= undefined.

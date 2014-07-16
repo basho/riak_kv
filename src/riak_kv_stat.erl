@@ -422,7 +422,8 @@ stat_name(Name) when is_atom(Name) ->
 %% @doc list of {Name, Type} for static
 %% stats that we can register at start up
 stats() ->
-    [{[vnode, gets], spiral},
+    [%% vnode stats
+     {[vnode, gets], spiral},
      {[vnode, gets, time], histogram},
      {[vnode, puts], spiral},
      {[vnode, puts, time], histogram},
@@ -438,6 +439,10 @@ stats() ->
      {[vnode, set, update, time], histogram},
      {[vnode, map, update], spiral},
      {[vnode, map, update, time], histogram},
+     {[vnode, rangereg, update], spiral},
+     {[vnode, rangereg, update, time], histogram},
+
+     %% node stats: gets
      {[node, gets], spiral},
      {[node, gets, fsm, active], counter},
      {[node, gets, fsm, errors], spiral},
@@ -460,6 +465,13 @@ stats() ->
      {[node, gets, map, read_repairs], spiral},
      {[node, gets, map, siblings], histogram},
      {[node, gets, map, time], histogram},
+     {[node, gets, rangereg], spiral},
+     {[node, gets, rangereg, objsize], histogram},
+     {[node, gets, rangereg, read_repairs], spiral},
+     {[node, gets, rangereg, siblings], histogram},
+     {[node, gets, rangereg, time], histogram},
+
+     %% node stats: puts
      {[node, puts], spiral},
      {[node, puts, coord_redirs], counter},
      {[node, puts, fsm, active], counter},
@@ -471,17 +483,26 @@ stats() ->
      {[node, puts, set, time], histogram},
      {[node, puts, map], spiral},
      {[node, puts, map, time], histogram},
+     {[node, puts, rangereg], spiral},
+     {[node, puts, rangereg, time], histogram},
+
+     %% index & list{keys,buckets} stats
      {[index, fsm, create], spiral},
      {[index, fsm, create, error], spiral},
      {[index, fsm, active], counter},
      {[list, fsm, create], spiral},
      {[list, fsm, create, error], spiral},
      {[list, fsm, active], counter},
+
+     %% misc stats
      {mapper_count, counter},
      {precommit_fail, counter},
      {postcommit_fail, counter},
      {[vnode, backend, leveldb, read_block_error],
       {function, {function, ?MODULE, leveldb_read_block_errors}}},
+     {late_put_fsm_coordinator_ack, counter},
+
+     %% datatype stats
      {[counter, actor_count], histogram},
      {[set, actor_count], histogram},
      {[map, actor_count], histogram},
@@ -493,7 +514,10 @@ stats() ->
      {[object, set, merge, time], histogram},
      {[object, map, merge], spiral},
      {[object, map, merge, time], histogram},
-     {late_put_fsm_coordinator_ack, counter},
+     {[object, rangereg, merge], spiral},
+     {[object, rangereg, merge, time], histogram},
+
+     %% strong consistency stats
      {[consistent, gets], spiral},
      {[consistent, gets, time], histogram},
      {[consistent, gets, objsize], histogram},

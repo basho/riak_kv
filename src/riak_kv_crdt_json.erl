@@ -38,8 +38,9 @@
 -type context() :: binary().
 -type map_field() :: {binary(), embedded_type()}.
 -type embedded_type() :: counter | set | register | flag | map.
--type toplevel_type() :: counter | set | map.
--type type_mappings() :: [{embedded_type(), module()}].
+-type toplevel_type() :: counter | set | map | rangereg.
+-type all_type() :: toplevel_type() | register | flag.
+-type type_mappings() :: [{all_type(), module()}].
 
 %% Operations
 -type counter_op() :: increment | decrement | {increment | decrement, integer()}.
@@ -47,10 +48,12 @@
 -type set_op() :: simple_set_op() | {update, [simple_set_op()]}.
 -type flag_op() :: enable | disable.
 -type register_op() :: {assign, binary()}.
+-type rangereg_op() :: {assign, integer()}.
 -type simple_map_op() :: {remove, map_field()} | {update, map_field(), embedded_type_op()}.
 -type map_op() :: simple_map_op() | {update, [simple_map_op()]}.
 -type embedded_type_op() :: counter_op() | set_op() | register_op() | flag_op() | map_op().
--type toplevel_op() :: counter_op() | set_op() | map_op().
+-type toplevel_op() :: counter_op() | set_op() | map_op() | rangereg_op().
+-type all_type_op() :: toplevel_op() | register_op() | flag_op().
 -type update() :: {toplevel_type(), toplevel_op(), context()}.
 
 %% @doc Encodes a fetch response as a JSON struct, ready for
@@ -68,10 +71,16 @@ update_request_from_json(Type, JSON0, Mods) ->
     {Type, op_from_json(Type, JSON, Mods), Context}.
 
 %% NB we assume that the internal format is well-formed and don't guard it.
+-spec value_to_json(all_type(), term(), type_mappings()) -> term().
 value_to_json(counter, Int, _) -> Int;
 value_to_json(set, List, _) -> List;
 value_to_json(flag, Bool, _) -> Bool;
 value_to_json(register, Bin, _) -> Bin;
+value_to_json(rangereg, RR, _) ->
+    {struct,
+     [ {atom_to_binary(Key, utf8), undefined_to_null(Value)} ||
+         {Key, Value} <- RR
+     ]};
 value_to_json(map, Pairs, Mods) ->
     {struct,
      [ begin
@@ -102,7 +111,7 @@ decode_context(Bin) when is_binary(Bin) ->
             throw({invalid_context, Bin})
     end.
 
--spec field_to_mod({binary(), toplevel_type()}, type_mappings()) -> {binary(), module()}.
+-spec field_to_mod(map_field(), type_mappings()) -> {binary(), module()}.
 field_to_mod({Name, Type}=Field, Mods) ->
     case lists:keyfind(Type, 1, Mods) of
         false ->
@@ -111,7 +120,7 @@ field_to_mod({Name, Type}=Field, Mods) ->
             {Name, Mod}
     end.
 
--spec field_to_type({binary(), module()}, type_mappings()) -> {binary(), toplevel_type()}.
+-spec field_to_type({binary(), module()}, type_mappings()) -> map_field().
 field_to_type({Name, Mod}=Field, Mods) ->
     case lists:keyfind(Mod, 2, Mods) of
         false ->
@@ -134,9 +143,10 @@ field_from_json(Bin) when is_binary(Bin) ->
             bad_field(Bin)
     end.
 
--spec op_from_json(embedded_type(), mochijson2:json_term(), type_mappings()) -> embedded_type_op().
+-spec op_from_json(all_type(), mochijson2:json_term(), type_mappings()) -> all_type_op().
 op_from_json(flag, Op, _Mods) -> flag_op_from_json(Op);
 op_from_json(register, Op, _Mods) -> register_op_from_json(Op);
+op_from_json(rangereg, Op, _Mods) -> rangereg_op_from_json(Op);
 op_from_json(counter, Op, _Mods) -> counter_op_from_json(Op);
 op_from_json(set, Op, _Mods) -> set_op_from_json(Op);
 op_from_json(map, Op, Mods) -> map_op_from_json(Op, Mods).
@@ -176,6 +186,11 @@ flag_op_from_json(Op) -> bad_op(flag, Op).
 register_op_from_json({struct, [{<<"assign">>, Value}]}) when is_binary(Value) -> {assign, Value};
 register_op_from_json(Value) when is_binary(Value) -> {assign, Value};
 register_op_from_json(Op) -> bad_op(register, Op).
+
+-spec rangereg_op_from_json(mochijson2:json_object()) -> rangereg_op().
+rangereg_op_from_json({struct, [{<<"assign">>, Value}]}) when is_integer(Value) -> {assign, Value};
+rangereg_op_from_json(Value) when is_integer(Value) -> {assign, Value};
+rangereg_op_from_json(Op) -> bad_op(rangereg, Op).
 
 -spec counter_op_from_json(mochijson2:json_term()) -> counter_op().
 counter_op_from_json(Int) when is_integer(Int), Int >= 0 -> {increment, Int};
@@ -225,10 +240,31 @@ bad_op(Type, Op) ->
 bad_field(Bin) ->
     throw({invalid_field_name, Bin}).
 
+%% @doc Converts 'undefined' to 'null', and leaves all other terms intact,
+%% useful because JSON allows null, which is used where Erlang/OTP would use
+%% undefined.
+-spec undefined_to_null(term()) -> term().
+undefined_to_null(undefined) -> null;
+undefined_to_null(Term)      -> Term.
+
 -ifdef(TEST).
 
 encode_fetch_response_test_() ->
     [
+     {"encode rangereg",
+      fun() ->
+              {ok, RR} = ?RANGEREG_TYPE:update({assign, 0}, a, ?RANGEREG_TYPE:new()),
+              ?assertEqual({struct, [{<<"type">>, <<"rangereg">>},
+                                     {<<"value">>,
+                                      {struct,
+                                       [
+                                        {<<"max">>, 0},
+                                        {<<"min">>, 0},
+                                        {<<"first">>, 0},
+                                        {<<"last">>, 0}]}
+                                     }]},
+                           fetch_response_to_json(rangereg, ?RANGEREG_TYPE:value(RR), undefined, ?MOD_MAP))
+      end},
      {"encode counter",
       fun() ->
               {ok, Counter} = ?COUNTER_TYPE:update({increment, 5}, a, ?COUNTER_TYPE:new()),
