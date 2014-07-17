@@ -309,9 +309,8 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(tick, State) ->
-    State1 = query_and_set_aae_throttle(State),
-    State2 = maybe_tick(State1),
-    {noreply, State2};
+    State1 = maybe_tick(State),
+    {noreply, State1};
 handle_info(reset_build_tokens, State) ->
     State2 = reset_build_tokens(State),
     schedule_reset_build_tokens(),
@@ -508,7 +507,8 @@ maybe_tick(State) ->
 -spec tick(state()) -> state().
 tick(State) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    State2 = maybe_reload_hashtrees(Ring, State),
+    State1 = query_and_set_aae_throttle(State),
+    State2 = maybe_reload_hashtrees(Ring, State1),
     State3 = lists:foldl(fun(_,S) ->
                                  maybe_poke_tree(S)
                          end, State2, lists:seq(1,10)),
