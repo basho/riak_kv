@@ -555,7 +555,7 @@ enqueue_exchange(E={Index, _RemoteIdx, _IndexN}, State) ->
         false ->
             State
     end;
-enqueue_exchange({Index, IndexN}, State) -> 
+enqueue_exchange({Index, IndexN}, State) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Exchanges = all_pairwise_exchanges(Index, Ring),
     Exchanges2 = [Exchange || Exchange={_, _, IdxN} <- Exchanges,

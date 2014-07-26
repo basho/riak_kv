@@ -49,13 +49,19 @@ start(_Type, _StartArgs) ->
     riak_core_util:start_app_deps(riak_kv),
 
     FSM_Limit = app_helper:get_env(riak_kv, fsm_limit, ?DEFAULT_FSM_LIMIT),
-    case FSM_Limit of
-        undefined ->
-            ok;
-        _ ->
-            sidejob:new_resource(riak_kv_put_fsm_sj, sidejob_supervisor, FSM_Limit),
-            sidejob:new_resource(riak_kv_get_fsm_sj, sidejob_supervisor, FSM_Limit)
-    end,
+    Status = case FSM_Limit of
+                 undefined ->
+                     disabled;
+                 _ ->
+                     sidejob:new_resource(riak_kv_put_fsm_sj, sidejob_supervisor, FSM_Limit),
+                     sidejob:new_resource(riak_kv_get_fsm_sj, sidejob_supervisor, FSM_Limit),
+                     enabled
+             end,
+    Base = [riak_core_stat:prefix(), riak_kv],
+    riak_kv_exometer_sidejob:new_entry(Base ++ [put_fsm, sidejob],
+                                       riak_kv_put_fsm_sj, [{status, Status}]),
+    riak_kv_exometer_sidejob:new_entry(Base ++ [get_fsm, sidejob],
+                                       riak_kv_get_fsm_sj, [{status, Status}]),
 
     case app_helper:get_env(riak_kv, direct_stats, false) of
         true ->
