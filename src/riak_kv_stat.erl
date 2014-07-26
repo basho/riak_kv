@@ -314,7 +314,6 @@ do_update({consistent_put, _Bucket, Microsecs, ObjSize}) ->
     ok = create_or_update([P, ?APP, consistent, puts, objsize], ObjSize, histogram).
 
 
-
 %% private
 
 add_monitor(Type, Pid) ->
@@ -486,12 +485,6 @@ stats() ->
      {[node, puts, fsm, active], counter},
      {[node, puts, fsm, errors], spiral},
      {[node, puts, time], histogram},
-     {[node, puts, counter], spiral},
-     {[node, puts, counter, time], histogram},
-     {[node, puts, set], spiral},
-     {[node, puts, set, time], histogram},
-     {[node, puts, map], spiral},
-     {[node, puts, map, time], histogram},
      {[index, fsm, create], spiral},
      {[index, fsm, create, error], spiral},
      {[index, fsm, active], counter},
@@ -715,7 +708,7 @@ stats_from_update_arg(_) ->
                                        []}]}]).
 -define(MULTI_STATUS(Idx, Val), [{Idx,  [{backend_status, riak_kv_multi_backend, Val}]}]).
 
-leveldb_rbe_test_() ->
+leveldb_rbe_test_int() ->
     {foreach,
      fun() ->
 	     exometer:start(),
