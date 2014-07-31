@@ -692,15 +692,17 @@ stats_from_update_arg(_) ->
                                        []}]}]).
 -define(MULTI_STATUS(Idx, Val), [{Idx,  [{backend_status, riak_kv_multi_backend, Val}]}]).
 
-leveldb_rbe_test_int() ->
+leveldb_rbe_test_() ->
     {foreach,
      fun() ->
+	     exometer:start(),
              meck:new(riak_core_ring_manager),
              meck:new(riak_core_ring),
              meck:new(riak_kv_vnode),
              meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, [fake_ring]} end)
      end,
      fun(_) ->
+	     exometer:stop(),
              meck:unload(riak_kv_vnode),
              meck:unload(riak_core_ring),
              meck:unload(riak_core_ring_manager)

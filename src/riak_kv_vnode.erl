@@ -2424,7 +2424,7 @@ list_buckets_test_() ->
              clean_test_dirs(),
              application:start(sasl),
              Env = application:get_all_env(riak_kv),
-             application:start(folsom),
+	     exometer:start(),
              riak_core_stat_cache:start_link(),
              riak_kv_stat:register_stats(),
              {ok, _} = riak_core_bg_manager:start(),
@@ -2436,7 +2436,7 @@ list_buckets_test_() ->
              riak_core_stat_cache:stop(),
              riak_kv_test_util:stop_process(riak_core_metadata_manager),
              riak_kv_test_util:stop_process(riak_core_bg_manager),
-             application:stop(folsom),
+	     exometer:start(),
              application:stop(sasl),
              [application:unset_env(riak_kv, K) ||
                  {K, _V} <- application:get_all_env(riak_kv)],

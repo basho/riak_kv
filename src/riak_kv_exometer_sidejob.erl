@@ -42,7 +42,9 @@ behaviour() ->
     entry.
 
 new_entry(Name, SjName, Opts) ->
-    exometer:new(Name, sidejob, [{sj_name, SjName}|Opts]).
+    exometer:new(Name, ad_hoc, [{module, ?MODULE},
+				{type, sidejob},
+				{sj_name, SjName}|Opts]).
 
 -define(UNSUP, {error, unsupported}).
 

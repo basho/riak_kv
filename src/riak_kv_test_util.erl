@@ -254,7 +254,6 @@ dep_apps(Test, Extra) ->
                        error_logger:tty(false);
                   (_) -> ok
                end,
-
     DefaultSetupFun =
         fun(load) ->
                 %% Set some missing env vars that are normally part of
@@ -272,8 +271,8 @@ dep_apps(Test, Extra) ->
            (_) -> ok
         end,
 
-    [sasl, Silencer, runtime_tools, erlang_js, mochiweb, webmachine,
-     sidejob, poolboy, basho_stats, bitcask, goldrush, lager, folsom, protobuffs,
+    [sasl, Silencer, goldrush, lager, exometer, runtime_tools, erlang_js,
+     mochiweb, webmachine, sidejob, poolboy, basho_stats, bitcask, protobuffs,
      eleveldb, riak_core, riak_pipe, riak_api, riak_dt, riak_pb, riak_kv,
      DefaultSetupFun, Extra].
 
@@ -286,7 +285,7 @@ do_dep_apps(start, Apps) ->
     lists:foldl(fun(A, Acc) when is_atom(A) ->
                         case include_app_phase(start, A) of
                             true ->
-                                {ok, Started} = start_app_and_deps(A, Acc),
+				{ok, Started} = start_app_and_deps(A, Acc),
                                 Started;
                             _ ->
                                 Acc
@@ -312,7 +311,6 @@ do_dep_apps(LoadStop, Apps) ->
 %% loaded, started, or stopped by `do_dep_apps/2'.
 -spec include_app_phase(Phase::load | start | stop, Application::atom()) -> true | false.
 include_app_phase(stop, crypto) -> false;
-include_app_phase(start, folsom) -> false;
 include_app_phase(_Phase, _App) -> true.
 
 %% Make sure an application and all of its dependent applications are started.
