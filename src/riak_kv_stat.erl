@@ -708,7 +708,7 @@ stats_from_update_arg(_) ->
                                        []}]}]).
 -define(MULTI_STATUS(Idx, Val), [{Idx,  [{backend_status, riak_kv_multi_backend, Val}]}]).
 
-leveldb_rbe_test_int() ->
+leveldb_rbe_test_() ->
     {foreach,
      fun() ->
 	     exometer:start(),
