@@ -28,7 +28,8 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0]).
+-export([start_link/0,
+         possible_change/0]).
 
 %% Support API
 -export([ensembles/0,
@@ -55,6 +56,8 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
+possible_change() ->
+    ?MODULE ! reset_ring_id.
 
 local_ensembles() ->
     Node = node(),
@@ -67,7 +70,7 @@ local_ensembles() ->
                             [Ensemble | Acc]
                     end
                 end, [], ensembles()).
-                    
+
 ensembles() ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     required_ensembles(Ring).
@@ -191,10 +194,34 @@ bootstrap_preflists(Ring, CHBin) ->
     ok.
 
 required_ensembles(Ring) ->
-    AllN = riak_core_bucket:all_n(Ring),
+    AllN0 = riak_core_bucket:all_n(Ring),
+    BucketTypeNs = bucket_type_all_n(Ring),
+    AllN = sets:to_list(sets:union(sets:from_list(AllN0), BucketTypeNs)),
     Owners = riak_core_ring:all_owners(Ring),
     [{kv, Idx, N} || {Idx, _} <- Owners,
                      N <- AllN].
+
+bucket_type_all_n(Ring) ->
+    Itr = riak_core_bucket_type:iterator(),
+    bucket_type_all_n(Ring, Itr, sets:new()).
+
+bucket_type_all_n(Ring, Itr, NValSet) ->
+    case riak_core_bucket_type:itr_done(Itr) of
+        true ->
+            riak_core_bucket_type:itr_close(Itr),
+            NValSet;
+        false ->
+            {_BT, Props} = riak_core_bucket_type:itr_value(Itr),
+            Itr2 = riak_core_bucket_type:itr_next(Itr),
+            case lists:member({active, true}, Props) andalso
+                 lists:keyfind(n_val, 1, Props) of
+                {n_val, NVal} ->
+                    NewSet = sets:add_element(NVal, NValSet),
+                    bucket_type_all_n(Ring, Itr2, NewSet);
+                false ->
+                    bucket_type_all_n(Ring, Itr2, NValSet)
+            end
+    end.
 
 required_members({kv, Idx, N}, CHBin) ->
     {PL, _} = chashbin:itr_pop(N, chashbin:exact_iterator(Idx, CHBin)),
