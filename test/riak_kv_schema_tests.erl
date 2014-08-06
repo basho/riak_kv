@@ -35,6 +35,7 @@ basic_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.vnode_md_cache_size", 0),
     cuttlefish_unit:assert_not_configured(Config, "riak_kv.memory_backend.max_memory"),
     cuttlefish_unit:assert_not_configured(Config, "riak_kv.memory_backend.ttl"),
+    cuttlefish_unit:assert_config(Config, "riak_kv.handoff_rejected_max", 6),
 
     %% make sure multi backend is not on by shell_default
     cuttlefish_unit:assert_not_configured(Config, "riak_kv.multi_backend_default"),
@@ -118,6 +119,7 @@ override_non_multi_backend_schema_test() ->
         {["buckets", "default", "postcommit"], "module2:function2"},
         {["datatypes", "compression_level"], "off"},
         {["handoff", "use_background_manager"], on},
+        {["handoff", "max_rejects"], 10},
         {["anti_entropy", "use_background_manager"], on}
     ],
 
@@ -147,6 +149,7 @@ override_non_multi_backend_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.object_format", v0),
     cuttlefish_unit:assert_config(Config, "riak_kv.memory_backend.max_memory", 8192),
     cuttlefish_unit:assert_config(Config, "riak_kv.memory_backend.ttl", 86400),
+    cuttlefish_unit:assert_config(Config, "riak_kv.handoff_rejected_max", 10),
 
     %% make sure multi backend is not on by shell_default
     cuttlefish_unit:assert_not_configured(Config, "riak_kv.multi_backend_default"),
