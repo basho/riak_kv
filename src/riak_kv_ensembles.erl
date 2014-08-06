@@ -28,8 +28,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0,
-         possible_change/0]).
+-export([start_link/0]).
 
 %% Support API
 -export([ensembles/0,
@@ -47,7 +46,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--record(state, {last_ring_id :: term()}).
+-record(state, {}).
 
 %%%===================================================================
 %%% API
@@ -55,9 +54,6 @@
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
-
-possible_change() ->
-    ?MODULE ! reset_ring_id.
 
 local_ensembles() ->
     Node = node(),
@@ -102,7 +98,7 @@ check_membership(Ensemble, CHBin) ->
 
 init([]) ->
     schedule_tick(),
-    {ok, #state{last_ring_id = undefined}}.
+    {ok, #state{}}.
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
@@ -111,13 +107,9 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(tick, State) ->
-    State2 = tick(State),
+    _ = tick(State),
     schedule_tick(),
-    {noreply, State2};
-
-handle_info(reset_ring_id, State) ->
-    State2 = State#state{last_ring_id=undefined},
-    {noreply, State2};
+    {noreply, State};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -135,17 +127,9 @@ code_change(_OldVsn, State, _Extra) ->
 schedule_tick() ->
     erlang:send_after(10000, self(), tick).
 
-reset_ring_id() ->
-    self() ! reset_ring_id.
-
-tick(State=#state{last_ring_id=LastID}) ->
-    case riak_core_ring_manager:get_ring_id() of
-        LastID ->
-            State;
-        RingID ->
-            maybe_bootstrap_ensembles(),
-            State#state{last_ring_id=RingID}
-    end.
+tick(State) ->
+    maybe_bootstrap_ensembles(),
+    State.
 
 maybe_bootstrap_ensembles() ->
     case riak_ensemble_manager:enabled() of
@@ -183,14 +167,11 @@ bootstrap_preflists(Ring, CHBin) ->
                 end,
     Known = orddict:fetch_keys(Ensembles),
     Need = Required -- Known,
-    L = [begin
+    _ = [begin
              Peers = required_members(Ensemble, CHBin),
              riak_ensemble_manager:create_ensemble(Ensemble, undefined, Peers,
                                                    riak_kv_ensemble_backend, [])
          end || Ensemble <- Need],
-    Failed = [Result || Result <- L,
-                        Result =/= ok],
-    (Failed =:= []) orelse reset_ring_id(),
     ok.
 
 required_ensembles(Ring) ->
