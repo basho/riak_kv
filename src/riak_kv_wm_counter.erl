@@ -55,12 +55,12 @@
 %%
 %%   Quorum values (r/pr/w/pw/dw):
 %%     <dl>
-%%       <dt>default</dt<dd>Whatever the bucket default is. This is the value used
+%%       <dt>default</dt><dd>Whatever the bucket default is. This is the value used
 %%                          for any absent value.</dd>
 %%      <dt>quorum</dt><dd>(Bucket N val / 2) + 1</dd>
 %%      <dt>all</dt><dd>All replicas must respond</dd>
 %%      <dt>one</dt><dd>Any one response is enough</dd>
-%%      <dt>Integer</dt><dd>That specific number of vnodes must respond. Must be =< N</dd>
+%%      <dt>Integer</dt><dd>That specific number of vnodes must respond. Must be `=<' N</dd>
 %%    </dl>
 %% Please see http://docs.basho.com for details of all the quorum values and there effect.
 
