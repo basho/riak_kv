@@ -57,16 +57,16 @@
 %% it did before the FSM timeout bug was "fixed"
 -define(DEFAULT_TIMEOUT, infinity).
 
-%% @type data_type_defs()  :: [data_type_def()].
-%% @type data_type_def()   :: {MatchFunction::function(), ParseFunction::function()}.
-%% @type failure_reason()  :: {unknown_field_type, Field :: binary()}
+%% @type data_type_defs()  = [data_type_def()].
+%% @type data_type_def()   = {MatchFunction :: function(), ParseFunction :: function()}.
+%% @type failure_reason()  = {unknown_field_type, Field :: binary()}
 %%                          | {field_parsing_failed, {Field :: binary(), Value :: binary()}}.
 
-%% @type bucketname()      :: binary().
-%% @type index_field()     :: binary().
-%% @type index_value()     :: binary() | integer().
-%% @type query_element()   :: {eq,    index_field(), [index_value()]},
-%%                         :: {range, index_field(), [index_value(), index_value()}
+%% @type bucketname()      = binary().
+%% @type index_field()     = binary().
+%% @type index_value()     = binary() | integer().
+%% @type query_element()   = {eq,    index_field(), index_value()} |
+%%                           {range, index_field(), index_value(), index_value()}
 
 -type query_def() :: {ok, term()} | {error, term()} | {term(), {error, term()}}.
 -export_type([query_def/0]).
@@ -85,14 +85,13 @@ mapred_index(_Pipe, [Bucket, Query], Timeout) ->
     {ok, Bucket, ReqId}.
 
 %% @spec parse_object_hook(riak_object:riak_object()) ->
-%%         riak_object:riak_object() | {fail, [failure_reason()]}.
-%%
+%%         riak_object:riak_object() | {fail, [failure_reason()]}
 %% @doc Parse the index fields stored in object metadata. Conforms to
 %%      the pre-commit hook interface. Return the new object with
 %%      parsed fields stuffed into the matadata if validation was
 %%      successful, or {fail, [Reasons]} if validation failed. Reason
-%%      is either `{unknown_field_type, Field}` or
-%%      `{field_parsing_failed, {Field, Value}}.`
+%%      is either `{unknown_field_type, Field}' or
+%%      `{field_parsing_failed, {Field, Value}}.'
 parse_object_hook(RObj) ->
     %% Ensure that the object only has a single metadata, or fail
     %% loudly.
@@ -118,13 +117,12 @@ parse_object_hook(RObj) ->
     end.
 
 %% @spec parse_object(riak_object:riak_object()) -> {ok, [{Field::binary(), Val :: term()}]}
-%%                                                | {error, [failure_reason()]}.
-%%
+%%                                                | {error, [failure_reason()]}
 %% @doc Pull out index fields stored in the metadata of the provided
 %%      Riak Object. Parse the fields, and return {ok, [{Field,
 %%      Value}]} if successful, or {error, [Reasons]} on error. Reason
-%%      is either `{unknown_field_type, Field}` or
-%%      `{field_parsing_failed, {Field, Value}}.`
+%%      is either `{unknown_field_type, Field}' or
+%%      `{field_parsing_failed, {Field, Value}}.'
 parse_object(RObj) ->
     %% For each object metadata, pull out any IndexFields. This could
     %% be called on a write with siblings, so we need to examine *all*
@@ -142,13 +140,12 @@ parse_object(RObj) ->
     %% Now parse the fields, returning the result.
     parse_fields(IndexFields).
 
-%% @spec parse_fields([Field :: {Key:binary(), Value :: binary()}]) ->
-%%       {ok, [{Field :: binary(), Value :: term()}]} | {error, [failure_reason()]}.
-%%
+%% @spec parse_fields([Field :: {Key :: binary(), Value :: binary()}]) ->
+%%       {ok, [{Field :: binary(), Value :: term()}]} | {error, [failure_reason()]}
 %% @doc Parse the provided index fields. Returns {ok, Fields} if the
 %%      parsing was successful, or {error, Reasons} if parsing
-%%      failed. Reason is either `{unknown_field_type, Field}` or
-%%      `{field_parsing_failed, {Field, Value}}.`
+%%      failed. Reason is either `{unknown_field_type, Field}' or
+%%      `{field_parsing_failed, {Field, Value}}.'
 parse_fields(IndexFields) ->
     %% Call parse_field on each field, and accumulate in ResultAcc or
     %% ErrorAcc, depending on whether the operation was successful.
@@ -174,12 +171,11 @@ parse_fields(IndexFields) ->
 
 
 %% @spec parse_field(Key::binary(), Value::binary(), Types::data_type_defs()) ->
-%%         {ok, Value} | {error, Reason}.
-%%
+%%         {ok, Value} | {error, Reason}
 %% @doc Parse an index field. Return {ok, Value} on success, or
 %%      {error, Reason} if there is a problem. Reason is either
-%%      `{unknown_field_type, Field}` or `{field_parsing_failed,
-%%      {Field, Value}}.`
+%%      `{unknown_field_type, Field}' or `{field_parsing_failed,
+%%      {Field, Value}}.'
 parse_field(Key, Value, [Type|Types]) ->
     %% Run the regex to check if the key suffix matches this data
     %% type.
@@ -205,8 +201,7 @@ parse_field(Key, _Value, []) ->
 
 
 %% @private
-%% @spec is_field_match(Key :: binary(), Suffix :: binary()) -> boolean().
-%% 
+%% @spec is_field_match(Key :: binary(), Suffix :: binary()) -> boolean()
 %% @doc Return true if the Key matches the suffix. Special case for $bucket
 %% and $key.
 is_field_match(Key, ?BUCKETFIELD) ->
@@ -228,8 +223,7 @@ is_field_match(Key, Suffix) when size(Suffix) < size(Key) ->
 is_field_match(_, _) ->
     false.
 
-%% @spec format_failure_reason(FailureReason :: {atom(), term()}) -> string().
-%%
+%% @spec format_failure_reason(FailureReason :: {atom(), term()}) -> string()
 %% @doc Given a failure reason, turn it into a human-readable string.
 format_failure_reason(FailureReason) ->
     case FailureReason of
@@ -239,8 +233,7 @@ format_failure_reason(FailureReason) ->
             io_lib:format("Could not parse field '~s', value '~s'.~n", [Field, Value])
     end.
 
-%% @spec timestamp() -> integer().
-%%
+%% @spec timestamp() -> integer()
 %% @doc Get a timestamp, the number of milliseconds returned by
 %%      erlang:now().
 timestamp() ->
@@ -518,8 +511,7 @@ add_timeout_opt(0, Opts) ->
 add_timeout_opt(Timeout, Opts) ->
     [{timeout, Timeout} | Opts].
 
-%% @spec field_types() -> data_type_defs().
-%%
+%% @spec field_types() -> data_type_defs()
 %% @doc Return a list of {MatchFunction, ParseFunction} tuples that
 %%      map a field name to a field type.
 field_types() ->
