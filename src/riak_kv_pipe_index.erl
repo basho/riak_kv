@@ -119,7 +119,7 @@ keysend(Bucket, [Key | Keys], Partition, FittingDetails) ->
             ER
     end.
 
-%% @Doc remove the index term from the
+%% @doc remove the index term from the
 %% 2i result
 strip_index({_IndexTerm, Key}) ->
     Key;
