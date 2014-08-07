@@ -25,7 +25,7 @@
 %% one for decrements. The value of the counter is the difference between the value of the
 %% Positive G-Counter and the value of the Negative G-Counter.
 %%
-%% @see riak_kv_gcounter.erl
+%% @see riak_kv_gcounter
 %%
 %% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek Zawirski (2011) A comprehensive study of
 %% Convergent and Commutative Replicated Data Types. http://hal.upmc.fr/inria-00555588/
