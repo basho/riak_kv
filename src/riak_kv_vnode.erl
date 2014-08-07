@@ -1355,7 +1355,7 @@ prepare_put(#state{vnodeid=VId,
             end
     end.
 
-%% @Doc in the case that this a co-ordinating put, prepare the object.
+%% @doc in the case that this a co-ordinating put, prepare the object.
 prepare_new_put(true, RObj, VId, StartTime, undefined) ->
     riak_object:increment_vclock(RObj, VId, StartTime);
 prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->

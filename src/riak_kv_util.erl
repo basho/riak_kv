@@ -364,7 +364,7 @@ md5(Bin) ->
     crypto:md5(Bin).
 -endif.
 
-%% @Doc vtag creation function
+%% @doc vtag creation function
 -spec make_vtag(erlang:timestamp()) -> list().
 make_vtag(Now) ->
     <<HashAsNum:128/integer>> = md5(term_to_binary({node(), Now})),
