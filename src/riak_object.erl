@@ -317,7 +317,8 @@ compare(A=#r_content{value=VA}, B=#r_content{value=VB}) ->
 %% size. Called by an ordering function, this too is an ordering
 %% function.
 %%
-%% @see compare/2, lists:usort/3
+%% @see compare/2
+%% @see lists:usort/3
 compare_metadata(#r_content{metadata=MA}, #r_content{metadata=MB}) ->
     ASize = dict:size(MA),
     BSize = dict:size(MB),
