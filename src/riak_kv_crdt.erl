@@ -228,7 +228,7 @@ counter_op(N) ->
 %% the operation then apply the operation to the local merged replica,
 %% and risk precondition errors and unexpected behaviour.
 %%
-%% @see split_ops/1 for more explanation
+%% @see split_ops/1
 -spec update_crdt(orddict:orddict(), riak_dt:actor(), crdt_op() | non_neg_integer()) ->
                          orddict:orddict() | precondition_error().
 update_crdt(Dict, Actor, Amt) when is_integer(Amt) ->
@@ -450,7 +450,7 @@ mod_map(_) ->
 
 
 
-%% @Doc the update context can be empty for some types.
+%% @doc the update context can be empty for some types.
 %% Those that support an precondition_context should supply
 %% a smaller than Type:to_binary(Value) binary context.
 get_context(Type, Value) ->

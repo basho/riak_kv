@@ -27,7 +27,7 @@
 %% can only be incremented. Borrows liberally from argv0 and Justin Sheehy's vclock module
 %% in implementation.
 %%
-%% @see riak_kv_pncounter.erl for a counter that can be decremented
+%% @see riak_kv_pncounter
 %%
 %% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek Zawirski (2011) A comprehensive study of
 %% Convergent and Commutative Replicated Data Types. http://hal.upmc.fr/inria-00555588/

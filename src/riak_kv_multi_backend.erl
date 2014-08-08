@@ -20,6 +20,35 @@
 %%
 %% -------------------------------------------------------------------
 
+%% @doc riak_kv_multi_backend allows you to run multiple backends within a
+%% single Riak instance. The 'backend' property of a bucket specifies
+%% the backend in which the object should be stored. If no 'backend'
+%% is specified, then the 'multi_backend_default' setting is used.
+%% If this is unset, then the first defined backend is used.
+%%
+%% === Configuration ===
+%%
+%%     {storage_backend, riak_kv_multi_backend},
+%%     {multi_backend_default, first_backend},
+%%     {multi_backend, [
+%%       % format: {name, module, [Configs]}
+%%       {first_backend, riak_xxx_backend, [
+%%         {config1, ConfigValue1},
+%%         {config2, ConfigValue2}
+%%       ]},
+%%       {second_backend, riak_yyy_backend, [
+%%         {config1, ConfigValue1},
+%%         {config2, ConfigValue2}
+%%       ]}
+%%     ]}
+%%
+%%
+%% Then, tell a bucket which one to use...
+%%
+%%     riak_core_bucket:set_bucket(&lt;&lt;"MY_BUCKET"&gt;&gt;, [{backend, second_backend}])
+%%
+%%
+
 -module (riak_kv_multi_backend).
 -behavior(riak_kv_backend).
 
@@ -59,35 +88,6 @@
 
 -type state() :: #state{}.
 -type config() :: [{atom(), term()}].
-
-%% @doc riak_kv_multi_backend allows you to run multiple backends within a
-%% single Riak instance. The 'backend' property of a bucket specifies
-%% the backend in which the object should be stored. If no 'backend'
-%% is specified, then the 'multi_backend_default' setting is used.
-%% If this is unset, then the first defined backend is used.
-%%
-%% === Configuration ===
-%%
-%%     {storage_backend, riak_kv_multi_backend},
-%%     {multi_backend_default, first_backend},
-%%     {multi_backend, [
-%%       % format: {name, module, [Configs]}
-%%       {first_backend, riak_xxx_backend, [
-%%         {config1, ConfigValue1},
-%%         {config2, ConfigValue2}
-%%       ]},
-%%       {second_backend, riak_yyy_backend, [
-%%         {config1, ConfigValue1},
-%%         {config2, ConfigValue2}
-%%       ]}
-%%     ]}
-%%
-%%
-%% Then, tell a bucket which one to use...
-%%
-%%     riak_core_bucket:set_bucket(&lt;&lt;"MY_BUCKET"&gt;&gt;, [{backend, second_backend}])
-%%
-%%
 
 %% ===================================================================
 %% Public API
@@ -598,7 +598,6 @@ backend_can_index_reformat(Mod, ModState) ->
 %% ===================================================================
 -ifdef(TEST).
 
-%% @private
 multi_backend_test_() ->
     {foreach,
      fun() ->
@@ -674,7 +673,6 @@ multi_backend_test_() ->
 
 -ifdef(EQC).
 
-%% @private
 eqc_test_() ->
     {spawn,
      [{inorder,

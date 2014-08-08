@@ -88,7 +88,8 @@
 %%
 %% There is no way to _remove_ a property
 %%
-%% @see validate_dt_props/3, assert_no_datatype/1
+%% @see validate_dt_props/3
+%% @see assert_no_datatype/1
 -spec validate(create | update,
                {riak_core_bucket_type:bucket_type(), undefined | binary()} | binary(),
                undefined | props(),

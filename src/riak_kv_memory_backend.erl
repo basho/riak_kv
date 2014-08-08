@@ -732,7 +732,6 @@ ttl_test_() ->
      ?_assertEqual({error, not_found, State}, get(Bucket, Key, State))
     ].
 
-%% @private
 max_memory_test_() ->
     %% Set max size to 1.5kb
     Config = [{max_memory, 1.5 * (1 / 1024)}],

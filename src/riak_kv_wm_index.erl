@@ -481,7 +481,7 @@ last_result([]) ->
 last_result(L) ->
     lists:last(L).
 
-%% @Doc if this is a paginated query make a continuation
+%% @doc if this is a paginated query make a continuation
 -spec make_continuation(Max::non_neg_integer() | undefined,
                         list(),
                         ResultCount::non_neg_integer()) -> binary() | undefined.
