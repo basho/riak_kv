@@ -23,8 +23,9 @@
 %% @doc Raw link walker resource provides an interface to riak object
 %%      linkwalking over HTTP.  The interface exposed is:
 %%
-%%      /riak/Bucket/Key[/b,t,acc] (OLD)
-%%      /buckets/Bucket/keys/Key[/b,t,acc] (NEW)
+%%      `/riak/Bucket/Key[/b,t,acc]' (OLD)
+%%
+%%      `/buckets/Bucket/keys/Key[/b,t,acc]' (NEW)
 %%
 %%      where:
 %%
@@ -33,7 +34,9 @@
 %%      each /b,t,acc segment is a request to follow some links
 %%
 %%      b is a filter on buckets
+%%
 %%      t is a filter on tags
+%%
 %%      acc is whether or not to return the objects from that step
 %%
 %%      each of b,t,acc may be underscore, to signify wildcard
@@ -42,76 +45,83 @@
 %%      for the final /b,t,acc segment, for which it is by default '1'
 %%      (return the objects)
 %%
-%%      Return from the walker resource is a multipart/mixed body each
+%%      Return from the walker resource is a multipart/mixed body, each
 %%      portion of that body being a list of results for the
 %%      corresponding link step (itself a multipart/mixed list, each
 %%      portion of which is a matching object, encoded as an HTTP
-%%      request would have been from the riak_kv_wm_raw).
+%%      request would have been from the `riak_kv_wm_raw').
 %%
 %%      so:
 %%
-%%      /riak/foo/123/bar,_,_ : returns all bar objects
+%%      `/riak/foo/123/bar,_,_' : returns all bar objects
 %%      attached to foo 123:
-%%        Content-type: multipart/mixed; boundary=ABC
+%% ```
+%% Content-type: multipart/mixed; boundary=ABC
 %%
-%%        --ABC
-%%        Content-type: multipart/mixed; boundary=XYZ
+%% --ABC
+%% Content-type: multipart/mixed; boundary=XYZ
 %%
-%%        --XYZ
-%%        Content-type: bar1-content-type
+%% --XYZ
+%% Content-type: bar1-content-type
 %%
-%%        bar1-body
-%%        --XYZ
-%%        Content-type: bar2-content-type
+%% bar1-body
+%% --XYZ
+%% Content-type: bar2-content-type
 %%
-%%        bar2-body
-%%        --XYZ--
-%%      --ABC--
+%% bar2-body
+%% --XYZ--
+%% --ABC--
+%% '''
 %%
-%%      /riak/foo/123/bar,_,1/_,_,_ : returns all
+%%      `/riak/foo/123/bar,_,1/_,_,_' : returns all
 %%      bar objects attached to foo 123, and all objects attached
 %%      to those bar objects:
-%%        Content-type: multipart/mixed; boundary=ABC
 %%
-%%        --ABC
-%%        Content-type: multipart/mixed; boundary=XYZ
+%% ```
+%% Content-type: multipart/mixed; boundary=ABC
 %%
-%%        --XYZ
-%%        Content-type: bar1-content-type
+%% --ABC
+%% Content-type: multipart/mixed; boundary=XYZ
 %%
-%%        bar1-body
-%%        --XYZ
-%%        Content-type: bar2-content-type
+%% --XYZ
+%% Content-type: bar1-content-type
 %%
-%%        bar2-body
-%%        --XYZ--
-%%        --ABC
-%%        Content-type: multipart/mixed; boundary=QRS
+%% bar1-body
+%% --XYZ
+%% Content-type: bar2-content-type
 %%
-%%        --QRS
-%%        Content-type: baz1-content-type
+%% bar2-body
+%% --XYZ--
+%% --ABC
+%% Content-type: multipart/mixed; boundary=QRS
 %%
-%%        baz1-body
-%%        --QRS
-%%        Content-type: quux2-content-type
+%% --QRS
+%% Content-type: baz1-content-type
 %%
-%%        quux2-body
-%%        --QRS--
-%%      --ABC--
+%% baz1-body
+%% --QRS
+%% Content-type: quux2-content-type
+%%
+%% quux2-body
+%% --QRS--
+%% --ABC--
+%% '''
 %%
 %% Webmachine dispatch line for this resource should look like:
 %%
+%% ```
 %%  {["riak", bucket, key, '*'],
 %%   riak_kv_wm_raw,
 %%   [{prefix, "riak"},
 %%    {riak, local}, %% or {riak, {'riak@127.0.0.1', riak_cookie}}
 %%    {cache_secs, 60}
 %%   ]}.
+%% '''
 %%
 %% These example dispatch lines will expose this resource at
-%% /riak/Bucket/Key/*.  The resource will attempt to
+%% `/riak/Bucket/Key/*'.  The resource will attempt to
 %% connect to Riak on the same Erlang node one which the resource
-%% is executing.  Using the alternate {riak, {Node, Cookie}} form
+%% is executing.  Using the alternate `{riak, {Node, Cookie}}' form
 %% will cause the resource to connect to riak on the specified
 %% Node with the specified Cookie.  The Expires header will be
 %% set 60 seconds in the future (default is 600 seconds).

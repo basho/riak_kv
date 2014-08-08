@@ -20,6 +20,9 @@
 %%
 %% -------------------------------------------------------------------
 
+%%
+%% @doc Streaming merge sort
+
 -module(sms).
 
 -define(DICTMODULE, orddict).

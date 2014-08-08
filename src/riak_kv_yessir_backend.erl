@@ -24,21 +24,26 @@
 %%      any disk I/O or RAM constraints.
 %%
 %% Riak: "Store this key/value pair."
+%%
 %% Backend: "Yes, sir!"
+%%
 %% Riak: "Get me that key/value pair."
+%%
 %% Backend: "Yes, sir!"
 %%
 %% This backend uses zero disk resources and uses constant memory.
 %%
-%% * All put requests are immediately acknowledged 'ok'.  No
-%%   data about the put request is stored.
-%% * All get requests are fulfilled by creating a constant binary for
-%%   the value.  No attempt is made to correlate get keys with
-%%   previously-put keys or to correlate get values with previously-put
-%%   values.
-%%   - Get operation keys that are formatted in with the convention
-%%     `<<"yessir.{integer}.anything">>' will use integer (interpreted in
-%%     base 10) as the returned binary's Size.
+%% All put requests are immediately acknowledged 'ok'.  No
+%% data about the put request is stored.
+%%
+%% All get requests are fulfilled by creating a constant binary for
+%% the value.  No attempt is made to correlate get keys with
+%% previously-put keys or to correlate get values with previously-put
+%% values.
+%%
+%% Get operation keys that are formatted in with the convention
+%% `<<"yessir.{integer}.anything">>' will use integer (interpreted in
+%% base 10) as the returned binary's Size.
 %%
 %% fold_keys and fold_objects are implemented for both sync and async.
 %% Each will return the same deterministic set of results for every call,
@@ -98,14 +103,17 @@
 %%
 %% TODO list:
 %%
-%% * Add configuration option for random percent of not_found replies for get
-%%   - Anything non-zero would trigger read-repair, which could be useful
-%%     for some simulations.
-%% * Is there a need for simulations for get to return different vclocks?
-%% * Add variable latency before responding.  This callback API is
-%%   synchronous, but adding constant- and uniform- and pareto-distributed
-%%   delays would simulate disk `I/O' latencies because all other backend
-%%   APIs are also synchronous.
+%% <ul>
+%%   <li>Add configuration option for random percent of not_found
+%%   replies for get. Anything non-zero would trigger read-repair,
+%%   which could be useful for some simulations.</li>
+%%   <li>Is there a need for simulations for get to return different
+%%   vclocks?</li>
+%%   <li>Add variable latency before responding.  This callback API is
+%%   synchronous, but adding constant- and uniform- and
+%%   pareto-distributed delays would simulate disk `I/O' latencies
+%%   because all other backend APIs are also synchronous.</li>
+%% </ul>
 
 -module(riak_kv_yessir_backend).
 -behavior(riak_kv_backend).

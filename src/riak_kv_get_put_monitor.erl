@@ -21,17 +21,17 @@
 %% -------------------------------------------------------------------
 
 %% @doc Monitor reporting processes and notify folsom about live and error
-%% exits. It is up to the fsm to report it's existence to the monitor. If this
+%% exits. It is up to the fsm to report its existence to the monitor. If this
 %% module exits unexpectadly, the stats in folsom are not lost; a clean exit
 %% will reset the stats.
 %%
 %% The stat names are all 4 element tuples, the first two elements being
-%% 'riak_kv', then the local node. The third is either 'get' or 'put' depending
-%% on if the fsm reporting in was for a get or a put action.  The final element
-%% is either 'active' or 'errors'.
+%% `riak_kv', then the local node. The third is either `get' or `put' depending
+%% on if the fsm reporting it was executing a get or a put action.  The final element
+%% is either `active' or `errors'.
 %%
-%% The 'active' is a simple counter reporting the number of get or put fsm's
-%% currently alive.  'errors' is a spiral for all fsm's that exited with a
+%% The `active' is a simple counter reporting the number of get or put fsm's
+%% currently alive.  `errors' is a spiral for all fsm's that exited with a
 %% reason other than normal or shutdown.
 -module(riak_kv_get_put_monitor).
 

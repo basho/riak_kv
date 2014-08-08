@@ -23,13 +23,15 @@
 %%
 %% Available operations:
 %%
-%% GET /types/BucketType/buckets/Bucket/datatypes/Key
+%% `GET /types/BucketType/buckets/Bucket/datatypes/Key'
+%%
 %%   Get the current value of the data-type at `BucketType', `Bucket', `Key'.
+%%
 %%   Result is a JSON body with a structured value, or `404 Not Found' if no
 %%   datatype exists at that resource location.
 %%
 %%   The format of the JSON response will be roughly
-%%   <code>{"type":..., "value":..., "context":...}</code>, where the
+%%   `{"type":..., "value":..., "context":...}', where the
 %%   `type' is a string designating which data-type is presented, the
 %%   `value' is a representation of the data-type's value (see below),
 %%   and the `context' is the opaque context, if needed or requested.
@@ -61,8 +63,10 @@
 %%                                 safe removal, include it in the response. Defaults to `true'.</dd>
 %%   </dl>
 %%
+%% ```
 %% POST /types/BucketType/buckets/Bucket/datatypes
-%% POST /types/BucketType/buckets/Bucket/datatypes/Key
+%% POST /types/BucketType/buckets/Bucket/datatypes/Key'''
+%%
 %%   Mutate the data-type at `BucketType', `Bucket', `Key' by applying
 %%   the submitted operation contained in a JSON payload. If `Key' is
 %%   not specified, one will be generated for the client and included
@@ -85,7 +89,7 @@
 %%     <dt>flag (embedded in map only)</dt><dd>The string "enable" or "disable".</dd>
 %%   </dl>
 %%
-%%   The following query params are accepted (@see `riak_kv_wm_object' docs, too):
+%%   The following query params are accepted (see {@link riak_kv_wm_object} docs, too):
 %%
 %%   <dl>
 %%     <dt>w</dt><dd>The write quorum. See below for defaults and values.</dd>
@@ -97,7 +101,7 @@
 %%                             and `returnbody' is `true', the opaque context will be included.</dd>
 %%   </dl>
 %%
-%%   Quorum values (r/pr/w/pw/dw):
+%%   == Quorum values (r/pr/w/pw/dw) ==
 %%     <dl>
 %%      <dt>default</dt><dd>Whatever the bucket default is. This is the value used
 %%                          for any absent value.</dd>
@@ -107,7 +111,7 @@
 %%      <dt>Integer</dt><dd>That specific number of vnodes must respond. Must be `=<' N</dd>
 %%    </dl>
 %%
-%% Please see http://docs.basho.com for details of all the quorum values and their effects.
+%% Please see [http://docs.basho.com] for details of all the quorum values and their effects.
 
 -module(riak_kv_wm_crdt).
 -record(ctx, {

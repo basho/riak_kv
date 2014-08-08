@@ -24,29 +24,35 @@
 %%
 %% Available operations:
 %%
+%% ```
 %% GET /buckets/Bucket/index/IndexName/Key
-%% GET /buckets/Bucket/index/IndexName/Start/End
+%% GET /buckets/Bucket/index/IndexName/Start/End'''
+%%
 %%   Run an index lookup, return the results as JSON.
 %%
+%% ```
 %% GET /types/Type/buckets/Bucket/index/IndexName/Key
-%% GET /types/Type/buckets/Bucket/index/IndexName/Start/End
+%% GET /types/Type/buckets/Bucket/index/IndexName/Start/End'''
+%%
 %%   Run an index lookup over the Bucket in BucketType, returning the
 %%   results in JSON.
 %%
 %% Both URL formats support the following query-string options:
-%%   * max_results=Integer
-%%         limits the number of results returned
-%%   * stream=true
-%%         streams the results back in multipart/mixed chunks
-%%   * continuation=C
+%% <ul>
+%%   <li><tt>max_results=Integer</tt><br />
+%%         limits the number of results returned</li>
+%%   <li><tt>stream=true</tt><br />
+%%         streams the results back in multipart/mixed chunks</li>
+%%   <li><tt>continuation=C</tt><br />
 %%         the continuation returned from the last query, used to
-%%         fetch the next "page" of results.
-%%   * return_terms=true
+%%         fetch the next "page" of results.</li>
+%%   <li><tt>return_terms=true</tt><br />
 %%         when querying with a range, returns the value of the index
-%%         along with the key.
-%%   * pagination_sort=true|false
+%%         along with the key.</li>
+%%   <li><tt>pagination_sort=true|false</tt><br />
 %%         whether the results will be sorted. Ignored when max_results
-%%         is set, as pagination requires sorted results.
+%%         is set, as pagination requires sorted results.</li>
+%% </ul>
 
 -module(riak_kv_wm_index).
 

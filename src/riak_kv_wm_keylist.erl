@@ -23,20 +23,29 @@
 
 %% @doc Resource for listing bucket keys over HTTP.
 %%
-%% Available operations:
+%% URLs that begin with `/types' are necessary for the new bucket
+%% types implementation in Riak 2.0, those that begin with `/buckets'
+%% are for the default bucket type, and `/riak' is an old URL style,
+%% also only works for the default bucket type.
 %%
-%% GET /types/Type/buckets/Bucket/keys?keys=true|stream (with bucket-type)
-%% GET /buckets/Bucket/keys?keys=true|stream (NEW)
-%% GET /Prefix/Bucket?keys=true|stream (OLD)
+%% It is possible to reconfigure the `/riak' prefix but that seems to
+%% be rarely if ever used.
+%%
+%% ```
+%% GET /types/Type/buckets/Bucket/keys?keys=true|stream
+%% GET /buckets/Bucket/keys?keys=true|stream
+%% GET /riak/Bucket?keys=true|stream'''
+%%
 %%   Get the keys for a bucket. This is an expensive operation.
 %%
-%%   Keys are returned in JSON form: {"keys":[Key1,Key2,...]}.
+%%   Keys are returned in JSON form: `{"keys":[Key1,Key2,...]}'
 %%
-%%   If the "keys" param is set to "true", then keys are send back in
+%%   If the `keys' param is set to `true', then keys are sent back in
 %%   a single JSON structure. If set to "stream" then keys are
 %%   streamed in multiple JSON snippets. Otherwise, no keys are sent.
-%%   If the 'allow_props_param' context setting is 'true', then
-%%   the user can also specify a 'props=true' to include props in the
+%%
+%%   If the `allow_props_param' context setting is `true', then
+%%   the user can also specify a `props=true' to include props in the
 %%   JSON response. This provides backward compatibility with the
 %%   old HTTP API.
 %%

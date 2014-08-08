@@ -85,7 +85,7 @@ encode(Message) ->
 %% @doc process/2 callback. Handles an incoming request message.
 process(#dtfetchreq{type=?DEFAULT_BUCKET}=Req0, State) ->
     %% Handle a typeless message
-    %% @see downgrade_request/1 etc below for details
+    %% See downgrade_request/1 etc below for details
     Req = downgrade_request(Req0),
     process_legacy_counter(Req, State);
 process(#dtfetchreq{bucket=B, type=BType}=Req, State) ->
@@ -93,7 +93,7 @@ process(#dtfetchreq{bucket=B, type=BType}=Req, State) ->
     fetch_type(bucket_type_to_type(B, BType), Req, State);
 process(#dtupdatereq{type=?DEFAULT_BUCKET}=Req0, State) ->
     %% Handle a typeless update message
-    %% @see downgrade_request/1 etc below for details
+    %% See downgrade_request/1 etc below for details
     Req = downgrade_request(Req0),
     process_legacy_counter(Req, State);
 process(#dtupdatereq{bucket=B, type=BType}=Req, State) ->
