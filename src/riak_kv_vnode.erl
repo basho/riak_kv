@@ -219,7 +219,23 @@ put(Preflist, BKey, Obj, ReqId, StartTime, Options) when is_integer(StartTime) -
 
 put(Preflist, BKey, Obj, ReqId, StartTime, Options, Sender)
   when is_integer(StartTime) ->
-    riak_core_vnode_master:command(Preflist,
+    %% Reminder: command_unreliable() = "even more unreliable"
+    %%
+    %% If the Riak put FSM is our caller, then the "unreliable" use is
+    %% ok: a new coordinator will be chosen if this message is
+    %% dropped.
+    %%
+    %% If the local put coordinator is our caller, then it has already
+    %% done its local write successfully before we reached here.  If
+    %% the coordinator were to block on a regular command() to the 1st
+    %% in the preflist after its own entry, then that message send can
+    %% hang and prevent sending the put op to the rest of the preflist
+    %% ... thus blocking the coordinator.  If later vnodes in the
+    %% preflist *could* satisfy the d/dw/pw conditions but, we need to
+    %% give them their chance by allowing the coordinator to proceed
+    %% without blocking here.
+    riak_core_vnode_master:command_unreliable(
+                                   Preflist,
                                    ?KV_PUT_REQ{
                                       bkey = sanitize_bkey(BKey),
                                       object = Obj,
