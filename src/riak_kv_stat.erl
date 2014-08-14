@@ -299,7 +299,19 @@ do_update({fsm_destroy, Type}) ->
 do_update({Type, actor_count, Count}) ->
     exometer:update([?PFX, ?APP, Type, actor_count], Count);
 do_update(late_put_fsm_coordinator_ack) ->
-    exometer:update([?PFX, ?APP, late_put_fsm_coordinator_ack], 1).
+    exometer:update([?PFX, ?APP, late_put_fsm_coordinator_ack], 1);
+do_update({consistent_get, _Bucket, Microsecs, ObjSize}) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, consistent, gets], 1),
+    ok = exometer:update([P, ?APP, consistent, gets, time], Microsecs),
+    ok = create_or_update([P, ?APP, consistent, gets, objsize], ObjSize, histogram);
+do_update({consistent_put, _Bucket, Microsecs, ObjSize}) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, consistent, puts], 1),
+    ok = exometer:update([P, ?APP, consistent, puts, time], Microsecs),
+    ok = create_or_update([P, ?APP, consistent, puts, objsize], ObjSize, histogram).
+
+
 
 %% private
 
@@ -469,6 +481,12 @@ stats() ->
      {[node, puts, fsm, active], counter},
      {[node, puts, fsm, errors], spiral},
      {[node, puts, time], histogram},
+     {[node, puts, counter], spiral},
+     {[node, puts, counter, time], histogram},
+     {[node, puts, set], spiral},
+     {[node, puts, set, time], histogram},
+     {[node, puts, map], spiral},
+     {[node, puts, map, time], histogram},
      {[index, fsm, create], spiral},
      {[index, fsm, create, error], spiral},
      {[index, fsm, active], counter},
