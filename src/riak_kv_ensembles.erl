@@ -149,7 +149,6 @@ maybe_bootstrap_ensembles() ->
         false ->
             ok;
         true ->
-	    _ = maybe_aae_configuration_valid(app_helper:get_env(riak_kv, anti_entropy)),
             {ok, Ring, CHBin} = riak_core_ring_manager:get_raw_ring_chashbin(),
             IsClaimant = (riak_core_ring:claimant(Ring) == node()),
             IsReady = riak_core_ring:ring_ready(Ring),
@@ -160,13 +159,6 @@ maybe_bootstrap_ensembles() ->
                     ok
             end
     end.
-
--spec maybe_aae_configuration_valid({on|off,_}) -> boolean().
-maybe_aae_configuration_valid({on, _}) ->
-    true;
-maybe_aae_configuration_valid({off, _}) ->
-    lager:warning("Strong consistency has been enabled without AAE -- all consistent operations will timeout until AAE is enabled."),
-    false.
 
 bootstrap_preflists(Ring, CHBin) ->
     %% TODO: We have no notion of deleting ensembles. Nor do we check if
