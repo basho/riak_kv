@@ -28,6 +28,7 @@
 %%
 %% === Configuration ===
 %%
+%% ```
 %%     {storage_backend, riak_kv_multi_backend},
 %%     {multi_backend_default, first_backend},
 %%     {multi_backend, [
@@ -41,12 +42,13 @@
 %%         {config2, ConfigValue2}
 %%       ]}
 %%     ]}
-%%
+%% '''
 %%
 %% Then, tell a bucket which one to use...
 %%
-%%     riak_core_bucket:set_bucket(&lt;&lt;"MY_BUCKET"&gt;&gt;, [{backend, second_backend}])
-%%
+%% ```
+%%     riak_core_bucket:set_bucket(<<"MY_BUCKET">>, [{backend, second_backend}])
+%% '''
 %%
 
 -module (riak_kv_multi_backend).

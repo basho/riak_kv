@@ -51,9 +51,12 @@
 -type precondition_error() :: {error, {precondition, {not_present, term()}}}.
 
 %% @doc applies the given `Operation' to the merged value.  first
-%% performs a merge (@see merge/1), and then applies the update.
-%% NOTE: operation needs to be a ?CRDT_OP in case of siblings of different
+%% performs a merge, and then applies the update.
+%%
+%% NOTE: operation needs to be a `?CRDT_OP' in case of siblings of different
 %% types
+%%
+%% @see merge/1
 -spec update(riak_object:riak_object(), riak_dt:actor(), riak_dt:operation()) ->
                     riak_object:riak_object() | precondition_error().
 update(RObj, Actor, Operation) ->
@@ -80,7 +83,8 @@ merge(RObj) ->
 %% @doc for the given riak_object `RObj' and the provided `Type',
 %% which must be a support riak_dt crdt module, returns an update
 %% context, and user value. Performs a merge, then gets the CRDT end
-%% user value.  @see merge/1
+%% user value.
+%% @see merge/1
 -spec value(riak_object:riak_object(), module()) -> {{binary(), riak_dt:value()}, [{atom(), atom(), number()}]}.
 value(RObj, Type) ->
     {CRDTs, _NonCRDTSiblings} = merge_object(RObj),

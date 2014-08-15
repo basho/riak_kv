@@ -20,7 +20,7 @@
 
 %% @doc Riak KV MapReduce / Riak Pipe Compatibility
 %%
-%% == About using `{modfun, Mod, Fun, Arg}' generator to a MapReduce job ==
+%% == About using {modfun, Mod, Fun, Arg} generator to a MapReduce job ==
 %%
 %% The six methods of specifying input for a MapReduce job are:
 %%
@@ -55,8 +55,8 @@
 %% '''
 %%
 %% This generator function is responsible for using {@link
-%% riak_pipe:queue_work/2} to send any data to the pipe, and it is
-%% responsible for calling {@link riak_pipe:eoi/2} to signal the end
+%% //riak_pipe/riak_pipe:queue_work/2} to send any data to the pipe, and it is
+%% responsible for calling {@link //riak_pipe/riak_pipe:eoi/2} to signal the end
 %% of input.
 %%
 %% == About reduce phase compatibility ==
@@ -366,7 +366,7 @@ mr2pipe_phase({link,Bucket,Tag,Keep}, I, _ConstHash, QueryT)->
 %%    the input key.</li>
 %%    <li>A required {@link riak_kv_mrc_map} to run the given query
 %%    function on that data.</li>
-%%    <li>An optional {@link riak_pipe_w_tee} if `keep=true'.</li>
+%%    <li>An optional {@link //riak_pipe/riak_pipe_w_tee} if `keep=true'.</li>
 %%    <li>An optional {@link riak_kv_w_reduce} if it is determined
 %%    that results should be prereduced before being sent on.</li>
 %% </ol>
@@ -450,7 +450,7 @@ query_type(Idx, QueryT) ->
 %% <ol>
 %%    <li>A required {@link riak_kv_w_reduce} to run the given query
 %%    function on the input data.</li>
-%%    <li>An optional {@link riak_pipe_w_tee} if `keep=true'.</li>
+%%    <li>An optional {@link //riak_pipe/riak_pipe_w_tee} if `keep=true'.</li>
 %% </ol>
 %%
 %% A constant has is used to get all of the inputs for the reduce to
@@ -478,9 +478,9 @@ reduce2pipe(FunSpec, Arg, Keep, I, Hash) ->
 %% <ol>
 %%    <li>A required {@link riak_kv_pipe_get} to fetch the data for
 %%    the input key.</li>
-%%    <li>A required {@link riak_pipe_w_xform} to perform the link
+%%    <li>A required {@link //riak_pipe/riak_pipe_w_xform} to perform the link
 %%    extraction</li>
-%%    <li>An optional {@link riak_pipe_w_tee} if `keep=true'.</li>
+%%    <li>An optional {@link //riak_pipe/riak_pipe_w_tee} if `keep=true'.</li>
 %% </ol>
 -spec link2pipe(link_match(), link_match(), boolean(),
                 Index :: integer(), Query :: tuple()) ->

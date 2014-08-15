@@ -133,11 +133,11 @@ handle_call({register, Name, Type}, _From, State) ->
 
 handle_cast({re_register_stat, Arg}, State) ->
     %% To avoid massive message queues
-    %% riak_kv stats are updated in the calling process
-    %% @see `update/1'.
+    %% riak_kv stats are updated in the calling process.
+    %% See update/1.
     %% The downside is that errors updating a stat don't crash
     %% the server, so broken stats stay broken.
-    %% This re-creates the same behaviour as when a brokwn stat
+    %% This re-creates the same behaviour as when a broken stat
     %% crashes the gen_server by re-registering that stat.
     #state{repair_mon={Pid, _Mon}} = State,
     Pid ! {re_register_stat, Arg},

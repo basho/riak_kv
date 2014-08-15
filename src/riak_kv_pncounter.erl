@@ -1,3 +1,4 @@
+%% -*- coding: utf-8 -*-
 %% -------------------------------------------------------------------
 %%
 %% riak_kv_pncounter: A convergent, replicated, state based PN counter
@@ -27,8 +28,8 @@
 %%
 %% @see riak_kv_gcounter
 %%
-%% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek Zawirski (2011) A comprehensive study of
-%% Convergent and Commutative Replicated Data Types. http://hal.upmc.fr/inria-00555588/
+%% @reference Marc Shapiro, Nuno Preguiça, Carlos Baquero, Marek Zawirski (2011) A comprehensive study of
+%% Convergent and Commutative Replicated Data Types. [http://hal.upmc.fr/inria-00555588/]
 %%
 %% @end
 

@@ -22,81 +22,108 @@
 
 %% @doc Resource for serving Riak objects over HTTP.
 %%
-%% Available operations:
+%% URLs that begin with `/types' are necessary for the new bucket
+%% types implementation in Riak 2.0, those that begin with `/buckets'
+%% are for the default bucket type, and `/riak' is an old URL style,
+%% also only works for the default bucket type.
 %%
-%% POST /types/Type/buckets/Bucket/keys (with bucket-type)
-%% POST /buckets/Bucket/keys (NEW)
-%% POST /Prefix/Bucket (OLD)
-%%   Equivalent to "PUT /Prefix/Bucket/Key" where Key is chosen
-%%   by the server.
+%% It is possible to reconfigure the `/riak' prefix but that seems to
+%% be rarely if ever used.
 %%
-%% GET /types/Type/buckets/Bucket/keys/Key (with bucket-type)
-%% GET /buckets/Bucket/keys/Key (NEW)
-%% GET /Prefix/Bucket/Key (OLD)
+%% ```
+%% POST /types/Type/buckets/Bucket/keys
+%% POST /buckets/Bucket/keys
+%% POST /riak/Bucket'''
+%%
+%%   Allow the server to choose a key for the data.
+%%
+%% ```
+%% GET /types/Type/buckets/Bucket/keys/Key
+%% GET /buckets/Bucket/keys/Key
+%% GET /riak/Bucket/Key'''
+%%
 %%   Get the data stored in the named Bucket under the named Key.
-%%   Content-type of the response will be whatever incoming
+%%
+%%   Content-type of the response will be taken from the
 %%   Content-type was used in the request that stored the data.
+%%
 %%   Additional headers will include:
-%%     X-Riak-Vclock: The vclock of the object.
-%%     Link: The links the object has
-%%     Etag: The Riak "vtag" metadata of the object
-%%     Last-Modified: The last-modified time of the object
-%%     Encoding: The value of the incoming Encoding header from
-%%       the request that stored the data.
-%%     X-Riak-Meta-: Any headers prefixed by X-Riak-Meta- supplied
-%%       on PUT are returned verbatim
-%%   Specifying the query param "r=R", where R is an integer will
-%%   cause Riak to use R as the r-value for the read request. A
+%% <ul>
+%%     <li>`X-Riak-Vclock': The vclock of the object</li>
+%%     <li>`Link': The links the object has</li>
+%%     <li>`Etag': The Riak "vtag" metadata of the object</li>
+%%     <li>`Last-Modified': The last-modified time of the object</li>
+%%     <li>`Encoding': The value of the incoming Encoding header from
+%%       the request that stored the data.</li>
+%%     <li>`X-Riak-Meta-': Any headers prefixed by X-Riak-Meta- supplied
+%%       on PUT are returned verbatim</li>
+%% </ul>
+%%
+%%   Specifying the query param `r=R', where `R' is an integer will
+%%   cause Riak to use `R' as the r-value for the read request. A
 %%   default r-value of 2 will be used if none is specified.
+%%
 %%   If the object is found to have siblings (only possible if the
-%%   bucket property "allow_mult" has been set to true), then
-%%   Content-type will be text/plain; Link, Etag, and Last-Modified
+%%   bucket property `allow_mult' is true), then
+%%   Content-type will be `text/plain'; `Link', `Etag', and `Last-Modified'
 %%   headers will be omitted; and the body of the response will
 %%   be a list of the vtags of each sibling.  To request a specific
-%%   sibling, include the query param "vtag=V", where V is the vtag
+%%   sibling, include the query param `vtag=V', where `V' is the vtag
 %%   of the sibling you want.
 %%
-%% PUT /types/Type/buckets/Bucket/keys/Key (with bucket-type)
-%% PUT /buckets/Bucket/keys/Key (NEW)
-%% PUT /Prefix/Bucket/Key (OLD)
+%% ```
+%% PUT /types/Type/buckets/Bucket/keys/Key
+%% PUT /buckets/Bucket/keys/Key
+%% PUT /riak/Bucket/Key'''
+%%
 %%   Store new data in the named Bucket under the named Key.
+%%
 %%   A Content-type header *must* be included in the request.  The
 %%   value of this header will be used in the response to subsequent
 %%   GET requests.
+%%
 %%   The body of the request will be stored literally as the value
 %%   of the riak_object, and will be served literally as the body of
 %%   the response to subsequent GET requests.
+%%
 %%   Include an X-Riak-Vclock header to modify data without creating
 %%   siblings.
+%%
 %%   Include a Link header to set the links of the object.
+%%
 %%   Include an Encoding header if you would like an Encoding header
 %%   to be included in the response to subsequent GET requests.
+%%
 %%   Include custom metadata using headers prefixed with X-Riak-Meta-.
 %%   They will be returned verbatim on subsequent GET requests.
-%%   Specifying the query param "w=W", where W is an integer will
+%%
+%%   Specifying the query param `w=W', where W is an integer will
 %%   cause Riak to use W as the w-value for the write request. A
 %%   default w-value of 2 will be used if none is specified.
-%%   Specifying the query param "dw=DW", where DW is an integer will
+%%
+%%   Specifying the query param `dw=DW', where DW is an integer will
 %%   cause Riak to use DW as the dw-value for the write request. A
-%%   default dw-value of 0 will be used if none is specified.
-%%   Specifying the query param "r=R", where R is an integer will
+%%   default dw-value of 2 will be used if none is specified.
+%%
+%%   Specifying the query param `r=R', where R is an integer will
 %%   cause Riak to use R as the r-value for the read request (used
 %%   to determine whether or not the resource exists). A default
 %%   r-value of 2 will be used if none is specified.
 %%
-%% POST /types/Type/buckets/Bucket/keys/Key (with bucket-type)
-%% POST /buckets/Bucket/keys/Key (NEW)
-%% POST /Prefix/Bucket/Key (OLD)
-%%   Equivalent to "PUT /Prefix/Bucket/Key" (useful for clients that
+%% ```
+%% POST /types/Type/buckets/Bucket/keys/Key
+%% POST /buckets/Bucket/keys/Key
+%% POST /riak/Bucket/Key'''
+%%
+%%   Equivalent to `PUT /riak/Bucket/Key' (useful for clients that
 %%   do not support the PUT method).
 %%
+%% ```
 %% DELETE /types/Type/buckets/Bucket/keys/Key (with bucket-type)
 %% DELETE /buckets/Bucket/keys/Key (NEW)
-%% DELETE /Prefix/Bucket/Key (OLD)
+%% DELETE /riak/Bucket/Key (OLD)'''
+%%
 %%   Delete the data stored in the named Bucket under the named Key.
-%%   Specifying the query param "rw=RW", where RW is an integer will
-%%   cause Riak to use RW as the rw-value for the delete request. A
-%%   default rw-value of 2 will be used if none is specified.
 
 -module(riak_kv_wm_object).
 
