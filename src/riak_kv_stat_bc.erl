@@ -510,10 +510,15 @@ sidejob_put_fsm_stats() ->
 %% @doc Get stats on the cpu, as given by the cpu_sup module
 %%      of the os_mon application.
 cpu_stats() ->
-    [{cpu_nprocs, cpu_sup:nprocs()},
-     {cpu_avg1, cpu_sup:avg1()},
-     {cpu_avg5, cpu_sup:avg5()},
-     {cpu_avg15, cpu_sup:avg15()}].
+    case app_helper:get_env(riak_kv, disable_cpu_stats, false) of
+        true ->
+            [];
+        _ ->
+            [{cpu_nprocs, cpu_sup:nprocs()},
+             {cpu_avg1, cpu_sup:avg1()},
+             {cpu_avg5, cpu_sup:avg5()},
+             {cpu_avg15, cpu_sup:avg15()}]
+    end.
 
 %% @spec mem_stats() -> proplist()
 %% @doc Get stats on the memory, as given by the memsup module
