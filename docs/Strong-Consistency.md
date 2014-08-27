@@ -23,7 +23,7 @@ Ensembles are mapped to preference lists, the replication groups assigned to an 
 
 # Managing Ensembles
 
-An ensemble is created for each primary preference list. Unlike eventually consistent Riak, fallback vnodes never participate in consistent operations.  For example, if there are buckets with a replication factor (n_val) of 2 and some with 3, two ensembles will be created for each partition of the ring.  For partition zero, for example, we will have {0, 2} and {0, 3}.
+An ensemble is created for each primary preference list. Unlike eventually consistent Riak, fallback vnodes never participate in consistent operations.  For example, if there are buckets with a replication factor (n_val) of 3 and some with 5, two ensembles will be created for each partition of the ring.  For partition zero, for example, we will have `{kv, 0, 3}` and `{kv, 0, 5}`.
 
 The riak_kv_ensembles process (1) in the claimant node (2) polls the ring for changes at regular intervals and creates any ensembles that are missing (3) (4).  Notice that there is no way to delete an ensemble yet. Also, vnodes moving to different nodes are not detected here. That happens on the backend tick, called periodically by each ensemble leader (5). If vnodes in the preference list have moved to other nodes, it asynchronously requests the leader to remove the orphaned peers and add new ones corresponding to the new location of the vnodes (6).
 
