@@ -200,6 +200,10 @@ key_exchange(timeout, State=#state{local=LocalVN,
                      ok = disk_log:sync(Now),
                      ok = disk_log:close(Now),
                      ok;
+                (start_exchange_level, {_Level, _Buckets}) ->
+                     ok;
+                (start_exchange_segments, _Segments) ->
+                     ok;
                 (_X, _Y) ->
                      lager:error("~s LINE ~p: ~p ~p", [?MODULE, ?LINE, _X, _Y]),
                      ok

@@ -769,7 +769,7 @@ do_compare(Id, Remote, AccFun, Acc, From, State) ->
         {ok, Tree} ->
             spawn_link(fun() ->
                                Remote(init, self()),
-                               Result = hashtree:compare(Tree, Remote,
+                               Result = hashtree:compare2(Tree, Remote,
                                                          AccFun, Acc),
                                Remote(final, self()),
                                gen_server:reply(From, Result)
