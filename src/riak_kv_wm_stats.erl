@@ -30,7 +30,8 @@
          service_available/2,
          forbidden/2,
          produce_body/2,
-         pretty_print/2
+         pretty_print/2,
+	 legacy_report_map/0
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -120,6 +121,15 @@ legacy_stats(Map) ->
               end
       end, [], Map).
 
+legacy_report_map() ->
+    P = riak_core_stat:prefix(),
+    Map = legacy_stat_map1(),
+    I = app_helper:get_env(riak_kv, report_interval, 10000),
+    lists:flatmap(
+      fun({E, DPs}) ->
+	      E1 = [P|E],
+	      [{main, E1, D, I, true} || {D,_} <- DPs]
+      end, Map).
 
 legacy_stat_map1() ->
     [

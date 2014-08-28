@@ -47,6 +47,8 @@
 -export([track_bucket/1, untrack_bucket/1]).
 -export([active_gets/0, active_puts/0]).
 
+-export([report_legacy/0]).
+
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, monitor_loop/1]).
@@ -434,6 +436,9 @@ create_or_update(Name, UpdateVal, Type) ->
             exometer:update(Name, UpdateVal)
     end.
 
+report_legacy() ->
+    riak_kv_wm_stats:legacy_report_map().
+
 %% @doc list of {Name, Type} for static
 %% stats that we can register at start up
 stats() ->
@@ -516,7 +521,7 @@ stats() ->
      {[consistent, puts], spiral},
      {[consistent, puts, time], histogram},
      {[consistent, puts, objsize], histogram},
-     {[storage_backend], {function, app_helper, get_env, [riak_kv, storage_backend], value, [value]}},
+     {[storage_backend], {function, app_helper, get_env, [riak_kv, storage_backend], match, value}},
      {[ring_stats], {function, riak_kv_stat_bc, ring_stats, [], proplist, [ring_members,
 									   ring_num_partitions,
 									   ring_ownership]}}

@@ -633,7 +633,3 @@ end
   {datatype, bytesize},
   hidden
 ]}.
-
-%% @doc Exometer entry defaults.
-{mapping, "exometer.template.sidejob.module", "exometer.defaults",
- [{default, "riak_kv_exometer_sidejob"}]}.
