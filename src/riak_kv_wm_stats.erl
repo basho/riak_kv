@@ -33,6 +33,7 @@
          pretty_print/2,
 	 legacy_report_map/0
         ]).
+-export([get_stats/0]).
 
 -include_lib("webmachine/include/webmachine.hrl").
 
@@ -163,6 +164,8 @@ legacy_stat_map1() ->
                                       {count, vnode_index_deletes_total}]},
      {[riak_kv,vnode,index,deletes,postings], [{one  , vnode_index_deletes_postings},
                                                {count, vnode_index_deletes_postings_total}]},
+     {[riak_kv,vnode,backend,leveldb,read_block_error],
+      [{value, leveldb_read_block_error}]},
      {[riak_kv,object,map,merge,time], [{mean  , object_map_merge_time_mean},
 					{median, object_map_merge_time_median},
 					{95    , object_map_merge_time_95},
@@ -266,6 +269,30 @@ legacy_stat_map1() ->
      {[riak_kv,index,fsm,active], [{value, index_fsm_active}]},
      {[riak_kv,list,fsm,active], [{value, list_fsm_active}]},
      {[riak_kv,list,fsm,error], [{value, list_fsm_error}]},
+     {[riak_kv,consistent,gets], [{one, consistent_gets},
+				  {count, consistent_gets_total}]},
+     {[riak_kv,consistent,gets,objsize], [{mean  , consistent_get_objsize_mean},
+					  {median, consistent_get_objsize_median},
+					  {95    , consistent_get_objsize_95},
+					  {99    , consistent_get_objsize_99},
+					  {max   , consistent_get_objsize_max}]},
+     {[riak_kv,consistent,gets,time], [{mean  , consistent_get_time_mean},
+				       {median, consistent_get_time_median},
+				       {95    , consistent_get_time_95},
+				       {99    , consistent_get_time_99},
+				       {max   , consistent_get_time_max}]},
+     {[riak_kv,consistent,puts], [{one, consistent_puts},
+				  {count, consistent_puts_total}]},
+     {[riak_kv,consistent,puts,objsize], [{mean  , consistent_put_objsize_mean},
+					  {median, consistent_put_objsize_median},
+					  {95    , consistent_put_objsize_95},
+					  {99    , consistent_put_objsize_99},
+					  {max   , consistent_put_objsize_100}]},
+     {[riak_kv,consistent,puts,time], [{mean  , consistent_put_time_mean},
+				       {median, consistent_put_time_median},
+				       {95    , consistent_put_time_95},
+				       {99    , consistent_put_time_99},
+				       {max   , consistent_put_time_100}]},
      {[riak_api,pbc_connects,active], [{value, pbc_active}]},
      {[riak_api,pbc_connects], [{one, pbc_connects},
                                 {count, pbc_connects_total}]},
@@ -312,6 +339,12 @@ legacy_stat_map1() ->
 					     {count, read_repairs_set_total}]},
      {[riak_kv,node,gets,map,read_repairs,map], [{one  , read_repairs_map},
 						 {count, read_repairs_map_total}]},
+     {[riak_kv,node,gets,read_repairs,primary,notfound],
+      [{one  , read_repairs_primary_notfound_one},
+       {count, read_repairs_primary_notfound_count}]},
+     {[riak_kv,node,gets,read_repairs,primary,outofdate],
+      [{one  , read_repairs_primary_outofdate_one},
+       {count, read_repairs_primary_outofdate_count}]},
      {[riak_kv,list,fsm,create], [{one  , list_fsm_create},
 				  {count, list_fsm_create_total}]},
      {[riak_kv,list,fsm,create,error], [{one  , list_fsm_create_error},
@@ -358,7 +391,10 @@ legacy_stat_map1() ->
      {[common,cpu_stats], [{nprocs, cpu_nprocs},
 			   {avg1  , cpu_avg1},
 			   {avg5  , cpu_avg5},
-			   {avg15 , cpu_avg15}]}
+			   {avg15 , cpu_avg15}]},
+     {[riak_core_stat_ts], [{value, riak_core_stat_ts}]},
+     {[riak_kv_stat_ts]  , [{value, riak_kv_stat_ts}]},
+     {[riak_pipe_stat_ts], [{value, riak_pipe_stat_ts}]}
     ].
 
 
