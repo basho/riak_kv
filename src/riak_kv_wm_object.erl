@@ -782,12 +782,18 @@ extract_content_type(RD) ->
 %% @doc Extract headers prefixed by X-Riak-Meta- in the client's PUT request
 %%      to be returned by subsequent GET requests.
 extract_user_meta(RD) ->
-    lists:filter(fun({K,_V}) ->
+    List = lists:filter(fun({K,_V}) ->
                     lists:prefix(
                         ?HEAD_USERMETA_PREFIX,
                         string:to_lower(riak_kv_wm_utils:any_to_list(K)))
                 end,
-                mochiweb_headers:to_list(wrq:req_headers(RD))).
+                mochiweb_headers:to_list(wrq:req_headers(RD))),
+    case application:get_env(riak_kv, strip_http_user_metadata_prefix) of
+        {ok, true} ->
+            [{string:sub_string(A, 13),B} || {A,B} <- List];
+        _ ->
+            List
+    end.
 
 -spec multiple_choices(#wm_reqdata{}, context()) ->
           {boolean(), #wm_reqdata{}, context()}.
@@ -851,7 +857,12 @@ produce_doc_body(RD, Ctx) ->
             UserMetaRD = case dict:find(?MD_USERMETA, MD) of
                         {ok, UserMeta} ->
                             lists:foldl(fun({K,V},Acc) ->
-                                            wrq:merge_resp_headers([{K,V}],Acc)
+                                            case application:get_env(riak_kv, strip_http_user_metadata_prefix) of
+                                                {ok, true} ->
+                                                    wrq:merge_resp_headers([{?HEAD_USERMETA_PREFIX ++ K,V}],Acc);
+                                                _ ->
+                                                    wrq:merge_resp_headers([{K,V}],Acc)
+                                            end
                                         end,
                                         LinkRD, UserMeta);
                         error -> LinkRD
