@@ -133,7 +133,7 @@ map_value(RObj) ->
 %% @doc convenience for (e.g.) MapReduce functions. Pass an object,
 %% get a 2.1+ RangeReg type value, or [] if no RangeReg is present.
 -spec range_value(riak_object:riak_object()) -> proplist:proplist().
-rangg_value(RObj) ->
+range_value(RObj) ->
     simple_value(RObj, ?RANGE_TYPE).
 
 
