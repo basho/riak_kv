@@ -588,6 +588,19 @@ end
     hidden
 ]}.
 
+%% @doc The maximum number of times that a secondary system like Riak
+%% Search 2.0 can block handoff of primary key-value data. The
+%% approximate maximum duration handoff of a vnode can be blocked for
+%% can be determined by multiplying this number by the value of
+%% "vnode_management_timer". To prevent handoff from ever being
+%% blocked by a secondary system set this value to 0.
+%% @see vnode_management_timer
+{mapping, "handoff.max_rejects", "riak_kv.handoff_rejected_max", [
+    {datatype, integer},
+    {default, "6"},
+    hidden
+]}.
+
 %% @doc Whether to use the background manager to limit AAE tree
 %% rebuilds. This will help to prevent system response degradation
 %% under times of heavy load from multiple background tasks that
