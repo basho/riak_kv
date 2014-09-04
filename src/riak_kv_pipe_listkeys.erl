@@ -64,10 +64,19 @@ init(Partition, FittingDetails) ->
 -spec process(term(), boolean(), state()) -> {ok | {error, term()}, state()}.
 process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
     case Input of
+        {cover, FilterVNodes, {T, B}} when is_binary(T), is_binary(B) ->
+            %% bucket and type
+            Bucket = {T, B},
+            Filters = [];
         {cover, FilterVNodes, {Bucket, Filters}} ->
             ok;
         {cover, FilterVNodes, Bucket} ->
             Filters = [];
+        {T, B} when is_binary(T), is_binary(B) ->
+            %% bucket and type
+            Bucket = {T, B},
+            Filters = [],
+            FilterVNodes = [];
         {Bucket, Filters} ->
             FilterVNodes = [];
         Bucket ->
@@ -90,7 +99,7 @@ keysend_loop(ReqId, Partition, FittingDetails) ->
             Result = keysend(Bucket, Keys, Partition, FittingDetails),
             case Result of
                 ok ->
-                    riak_kv_vnode:ack_keys(From),
+                    _ = riak_kv_vnode:ack_keys(From),
                     keysend_loop(ReqId, Partition, FittingDetails);
                 Error ->
                     Error
@@ -110,8 +119,14 @@ keysend_loop(ReqId, Partition, FittingDetails) ->
 keysend(_Bucket, [], _Partition, _FittingDetails) ->
     ok;
 keysend(Bucket, [Key | Keys], Partition, FittingDetails) ->
+    Out = if
+        is_tuple(Bucket) ->
+            {{Bucket, Key}, undefined};
+        true ->
+            {Bucket, Key}
+    end,
     case riak_pipe_vnode_worker:send_output(
-           {Bucket, Key}, Partition, FittingDetails) of
+           Out, Partition, FittingDetails) of
         ok ->
             keysend(Bucket, Keys, Partition, FittingDetails);
         ER ->
@@ -141,7 +156,18 @@ done(_State) ->
                           bucket_or_filter(),
                           timeout()) ->
          ok | {error, Reason :: term()}.
-queue_existing_pipe(Pipe, Bucket, Timeout) ->
+queue_existing_pipe(Pipe, Input, Timeout) ->
+    Bucket = case Input of
+                 {T, B} when is_binary(T), is_binary(B) ->
+                     %% type and bucket
+                     {T, B};
+                 B when is_binary(B) ->
+                     %% just bucket
+                     B;
+                 {B, Filter} when is_list(Filter) ->
+                     %% bucket with filter
+                     B
+             end,
     %% make our tiny pipe
     [{_Name, Head}|_] = Pipe#pipe.fittings,
     Period = riak_kv_mrc_pipe:sink_sync_period(),
@@ -159,7 +185,7 @@ queue_existing_pipe(Pipe, Bucket, Timeout) ->
     NVal = proplists:get_value(n_val, BucketProps),
     {ok, Sender} = riak_pipe_qcover_sup:start_qcover_fsm(
                      [{raw, ReqId, self()},
-                      [LKP, Bucket, NVal]]),
+                      [LKP, Input, NVal]]),
 
     %% wait for cover to hit everything
     {RealTO, TOReason} =

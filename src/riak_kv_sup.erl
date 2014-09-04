@@ -44,6 +44,7 @@ init([]) ->
     catch dtrace:init(),                   % NIF load trigger (R14B04)
     catch dyntrace:p(),                    % NIF load trigger (R15B01+)
     riak_kv_entropy_info:create_table(),
+    riak_kv_hooks:create_table(),
     VMaster = {riak_kv_vnode_master,
                {riak_core_vnode_master, start_link,
                 [riak_kv_vnode, riak_kv_legacy_vnode, riak_kv]},
@@ -88,6 +89,10 @@ init([]) ->
                       {riak_kv_entropy_manager, start_link, []},
                       permanent, 30000, worker, [riak_kv_entropy_manager]},
 
+    EnsemblesKV =  {riak_kv_ensembles,
+                    {riak_kv_ensembles, start_link, []},
+                    permanent, 30000, worker, [riak_kv_ensembles]},
+
     % Figure out which processes we should run...
     HasStorageBackend = (app_helper:get_env(riak_kv, storage_backend) /= undefined),
 
@@ -102,6 +107,7 @@ init([]) ->
         KeysFsmSup,
         IndexFsmSup,
         EntropyManager,
+        [EnsemblesKV || riak_core_sup:ensembles_enabled()],
         JSSup,
         MapJSPool,
         ReduceJSPool,

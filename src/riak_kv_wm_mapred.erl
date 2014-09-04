@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_mapred: webmachine resource for mapreduce requests
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,7 +24,7 @@
 
 -module(riak_kv_wm_mapred).
 
--export([init/1,allowed_methods/2, known_content_type/2, forbidden/2]).
+-export([init/1,allowed_methods/2, known_content_type/2, is_authorized/2, forbidden/2]).
 -export([malformed_request/2, process_post/2, content_types_provided/2]).
 -export([nop/2]).
 
@@ -36,20 +36,66 @@
 -define(DEFAULT_TIMEOUT, 60000).
 
 
--record(state, {inputs, timeout, mrquery, boundary}).
+-record(state, {inputs, timeout, mrquery, boundary, security}).
 -type state() :: #state{}.
 
 init(_) ->
     {ok, #state{}}.
 
+is_authorized(ReqData, State) ->
+    case riak_api_web_security:is_authorized(ReqData) of
+        false ->
+            {"Basic realm=\"Riak\"", ReqData, State};
+        {true, SecContext} ->
+            {true, ReqData, State#state{security=SecContext}};
+        insecure ->
+            %% XXX 301 may be more appropriate here, but since the http and
+            %% https port are different and configurable, it is hard to figure
+            %% out the redirect URL to serve.
+            {{halt, 426}, wrq:append_to_resp_body(<<"Security is enabled and "
+                    "Riak does not accept credentials over HTTP. Try HTTPS "
+                    "instead.">>, ReqData), State}
+    end.
+
+forbidden(RD, State = #state{security=undefined}) ->
+    {riak_kv_wm_utils:is_forbidden(RD), RD, State};
 forbidden(RD, State) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, State}.
+    case riak_kv_wm_utils:is_forbidden(RD) of
+        true ->
+            {true, RD, State};
+        false ->
+            case {wrq:method(RD), wrq:req_body(RD)} of
+                {'POST', Body} when Body /= undefined ->
+                    case riak_kv_mapred_json:parse_request(Body) of
+                        {ok, ParsedInputs, _ParsedQuery, _Timeout} ->
+                            Permissions = riak_kv_mapred_term:get_required_permissions(ParsedInputs,
+                                                                                       _ParsedQuery),
+                            Res = riak_core_security:check_permissions(
+                                    Permissions,
+                                    State#state.security),
+                            case Res of
+                                {false, Error, _} ->
+                                    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
+                                    {true, wrq:append_to_resp_body(
+                                             unicode:characters_to_binary(Error, utf8, utf8), RD1), State};
+                                {true, _} ->
+                                    {false, RD, State}
+                            end;
+                        _ ->
+                            %% bad input, will be caught in verify_body
+                            {false, RD, State}
+                    end;
+                _ ->
+                    %% bad input, will be caught in verify_body
+                    {false, RD, State}
+            end
+    end.
 
 allowed_methods(RD, State) ->
     {['GET','HEAD','POST'], RD, State}.
 
--spec known_content_type(wrq:reqdata(), state()) ->
-    {boolean(), wrq:reqdata(), state()}.
+-spec known_content_type(#wm_reqdata{}, state()) ->
+    {boolean(), #wm_reqdata{}, state()}.
 known_content_type(RD, State) ->
     {ctype_ok(RD), RD, State}.
 
@@ -79,13 +125,13 @@ format_error({error, Error}) when is_list(Error) ->
 format_error(_Error) ->
     mochijson2:encode({struct, [{error, map_reduce_error}]}).
 
--spec ctype_ok(wrq:reqdata()) -> boolean().
+-spec ctype_ok(#wm_reqdata{}) -> boolean().
 %% @doc Return true if the content type from
 %% this request is appropriate.
 ctype_ok(RD) ->
     valid_ctype(get_base_ctype(RD)).
 
--spec get_base_ctype(wrq:reqdata()) -> string().
+-spec get_base_ctype(#wm_reqdata{}) -> string().
 %% @doc Return the "base" content-type, that
 %% is, not including the subtype parameters
 get_base_ctype(RD) ->
@@ -169,7 +215,7 @@ pipe_mapred(RD,
                     pipe_mapred_nonchunked(RD, State, Mrc)
             end;
         {error, {Fitting, Reason}} ->
-            {{halt, 400}, 
+            {{halt, 400},
              send_error({error, [{phase, Fitting},
                                  {error, iolist_to_binary(Reason)}]}, RD),
              State}
@@ -208,9 +254,10 @@ pipe_mapred_nonchunked(RD, State, Mrc) ->
         {error, timeout} ->
             riak_kv_mrc_pipe:destroy_sink(Mrc),
             {{halt, 500}, send_error({error, timeout}, RD), State};
-        {error, {_From, {Error, _Input}}} ->
+        {error, {From, Info}} ->
             riak_kv_mrc_pipe:destroy_sink(Mrc),
-            {{halt, 500}, send_error({error, Error}, RD), State}
+            Json = riak_kv_mapred_json:jsonify_pipe_error(From, Info),
+            {{halt, 500}, send_error({error, Json}, RD), State}
     end.
 
 pipe_mapred_chunked(RD, State, Mrc) ->
@@ -227,7 +274,7 @@ pipe_mapred_chunked(RD, State, Mrc) ->
      BoundaryState}.
 
 pipe_stream_mapred_results(RD,
-                           #state{boundary=Boundary}=State, 
+                           #state{boundary=Boundary}=State,
                            Mrc) ->
     case riak_kv_mrc_pipe:receive_sink(Mrc) of
         {ok, Done, Outputs} ->
@@ -265,9 +312,10 @@ pipe_stream_mapred_results(RD,
             %% detroyed the pipe
             riak_kv_mrc_pipe:cleanup_sink(Mrc),
             {format_error(Error), done};
-        {error, {_From, {Error, _Input}}, _} ->
+        {error, {From, Info}, _} ->
             riak_kv_mrc_pipe:destroy_sink(Mrc),
-            {format_error({error, Error}), done}
+            Json = riak_kv_mapred_json:jsonify_pipe_error(From, Info),
+            {format_error({error, Json}), done}
     end.
 
 result_part({PhaseId, Results}, HasMRQuery, Boundary) ->

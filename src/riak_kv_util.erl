@@ -43,8 +43,10 @@
          puts_active/0,
          exact_puts_active/0,
          gets_active/0,
+         consistent_object/1,
          overload_reply/1,
-         get_backend_config/3]).
+         get_backend_config/3,
+         is_modfun_allowed/2]).
 
 -include_lib("riak_kv_vnode.hrl").
 
@@ -130,11 +132,9 @@ make_request(Request, Index) ->
                                         Index).
 
 get_bucket_option(Type, BucketProps) ->
-    case proplists:get_value(Type, BucketProps, default) of
-        default ->
-            {ok, DefaultProps} = application:get_env(riak_core, default_bucket_props),
-            proplists:get_value(Type, DefaultProps, error);
-        Val -> Val
+    case lists:keyfind(Type, 1, BucketProps) of
+        {Type, Val} -> Val;
+        _ -> throw(unknown_bucket_option)
     end.
 
 expand_value(Type, default, BucketProps) ->
@@ -159,6 +159,15 @@ normalize_rw_value(one, _N) -> 1;
 normalize_rw_value(quorum, N) -> erlang:trunc((N/2)+1);
 normalize_rw_value(all, N) -> N;
 normalize_rw_value(_, _) -> error.
+
+-spec consistent_object(binary() | {binary(),binary()}) -> true | false | {error,_}.
+consistent_object(Bucket) ->
+    case riak_core_bucket:get_bucket(Bucket) of
+        Props when is_list(Props) ->
+            lists:member({consistent, true}, Props);
+        {error, _}=Err ->
+            Err
+    end.
 
 %% ===================================================================
 %% Preflist utility functions
@@ -403,6 +412,39 @@ get_backend_config(Key, Config, Category) ->
             end;
         Val ->
             Val
+    end.
+
+%% @doc Is the Module/Function from a mapreduce {modfun, ...} tuple allowed by
+%% the security rules? This is to help prevent against attacks like the one
+%% described in
+%% http://aphyr.com/posts/224-do-not-expose-riak-directly-to-the-internet
+%% by whitelisting the code path for 'allowed' mapreduce modules, which we
+%% assume the user has written securely.
+is_modfun_allowed(riak_kv_mapreduce, _) ->
+    %% these are common mapreduce helpers, provided by riak KV, we trust them
+    true;
+is_modfun_allowed(Mod, _Fun) ->
+    case riak_core_security:is_enabled() of
+        true ->
+            Paths = [filename:absname(N)
+                     || N <- app_helper:get_env(riak_kv, add_paths, [])],
+            case code:which(Mod) of
+                non_existing ->
+                    {error, {non_existing, Mod}};
+                Path when is_list(Path) ->
+                    %% ensure that the module is in one of the paths
+                    %% explicitly configured for third party code
+                    case lists:member(filename:dirname(Path), Paths) of
+                        true ->
+                            true;
+                        _ ->
+                            {error, {insecure_module_path, Path}}
+                    end;
+                Reason ->
+                    {error, {illegal_module, Mod, Reason}}
+            end;
+        _ ->
+            true
     end.
 
 %% ===================================================================

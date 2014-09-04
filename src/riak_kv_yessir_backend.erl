@@ -2,7 +2,7 @@
 %%
 %% riak_kv_yessir_backend: simulation backend for Riak
 %%
-%% Copyright (c) 2012 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2012-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -61,8 +61,37 @@
 %% app.config file.
 %%
 %% <ul>
+%% <li>`yessir_return_same_r_obj' - Fastest and dumbest mode.  Return
+%%                                  exactly the same object, regardless of
+%%                                  the BKey asked for.  The returned object's
+%%                                  BKey is constant, so any part of Riak that
+%%                                  cares about matching/valid BKey inside of
+%%                                  the object will be confused and/or break.
+%% <li>`yessir_aae_mode_encoding' - Specify which mode of behavior to
+%%                                  use when interacting with Riak KV's
+%%                                  anti-entropy mode for put & put_object
+%%                                  calls.
+%%   <ul>
+%%   <li>`constant_binary' - The default mode: lie to AAE by returning
+%%                           a constant binary, <<>>.</li>  This will cause
+%%                           AAE to maintain a tiny tree of order-size(1).
+%%                           This is the fastest mode but also causes the
+%%                           least amount of AAE work and thus may or may
+%%                           not meet all users' needs. </li>
+%%   <li>`bkey' </li> - Return term_to_binary({Bucket, Key}), which will
+%%                      cause AAE's tree to churn with order-size(NumKeys)
+%%                      but will be much smaller than the entire serialized
+%%                      #r_object{}, so AAE will spend less CPU time during
+%%                      its processing. </li>
+%%   <li>`r_object' </li> - Serialize the entire #r_object{}, like Riak KV
+%%                          does in normal operation.  This mode has the
+%%                          highest overhead per operation. </li>
+%%   </ul>
 %% <li>`yessir_default_size' - The number of bytes of generated data for the value.</li>
 %% <li>`yessir_key_count'    - The number of keys that will be folded over, e.g. list_keys().</li>
+%% <li>`yessir_bucket_prefix_list'  - A list {BucketPrefixBin, {Module, Fun}}
+%%                              tuples, where Module:Fun/3 is called if a
+%%                              Bucket's name matches BucketPrefixBin.</li>
 %% </ul>
 %%
 %% TODO list:
@@ -85,8 +114,10 @@
          capabilities/2,
          start/2,
          stop/1,
-         get/3,
+         get/3,                                 % Old Riak KV API
+         get_object/4,                          % New Riak KV API
          put/5,
+         put_object/5,
          delete/4,
          drop/1,
          fold_buckets/4,
@@ -95,18 +126,24 @@
          is_empty/1,
          status/1,
          callback/3]).
+-export([make_riak_safe_obj/3, make_riak_safe_obj/4]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold]).
+-define(CAPABILITIES, [uses_r_object, async_fold]).
 
 -record(state, {
+          aae_mode :: atom(),
+          constant_r_object,
+          same_r_object,
+          same_r_object_bin,
           default_get = <<>>,
           default_size = 0,
           key_count = 0,
+          bprefix_list = [],
           op_get = 0,
           op_put = 0,
           op_delete = 0
@@ -137,7 +174,14 @@ capabilities(_, _) ->
 %% @doc Start this backend, yes, sir!
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(_Partition, Config) ->
-    DefaultLen = case riak_kv_util:get_backend_config(
+    AAE_Mode = case app_helper:get_prop_or_env(
+                      yessir_aae_mode_encoding, Config, yessir_backend) of
+                   undefined           -> constant_binary;
+                   constant_binary = X -> X;
+                   bkey = X            -> X;
+                   r_object = X        -> X
+               end,
+    DefaultLen = case app_helper:get_prop_or_env(
                         yessir_default_size, Config, yessir_backend) of
                      undefined -> 1024;
                      Len       -> Len
@@ -147,9 +191,29 @@ start(_Partition, Config) ->
                    undefined -> 1024;
                    Count     -> Count
                end,
-    {ok, #state{default_get = <<42:(DefaultLen*8)>>,
+    BPrefixList = case app_helper:get_prop_or_env(
+                        yessir_bucket_prefix_list, Config, yessir_backend) of
+                     undefined -> [];
+                     BPL       -> BPL
+                 end,
+    DefaultValue = <<42:(DefaultLen*8)>>,
+    {SameRObj, SameRObjBin} =
+        case app_helper:get_prop_or_env(
+               yessir_return_same_r_obj, Config, yessir_backend) of
+            true ->
+                RObj = make_riak_safe_obj(<<>>, <<>>, DefaultValue),
+                {RObj, riak_object:to_binary(v0, RObj)};
+            _ ->
+                {undefined, undefined}
+        end,
+    {ok, #state{aae_mode = AAE_Mode,
+                constant_r_object = riak_object:new(<<>>, <<>>, <<>>),
+                same_r_object = SameRObj,
+                same_r_object_bin = SameRObjBin,
+                default_get = DefaultValue,
                 default_size = DefaultLen,
-                key_count = KeyCount}}.
+                key_count = KeyCount,
+                bprefix_list = BPrefixList}}.
 
 %% @doc Stop this backend, yes, sir!
 -spec stop(state()) -> ok.
@@ -159,17 +223,37 @@ stop(_State) ->
 %% @doc Get a fake object, yes, sir!
 -spec get(riak_object:bucket(), riak_object:key(), state()) ->
                  {ok, any(), state()}.
-get(Bucket, Key, #state{op_get = Gets} = S) ->
-    Bin = case get_binsize(Key) of
-              undefined    -> S#state.default_get;
-              N            -> <<42:(N*8)>>
-          end,
-    Meta = dict:new(),
-    Meta1 = dict:store(<<"X-Riak-Last-Modified">>, erlang:now(), Meta),
-    Meta2 = dict:store(<<"X-Riak-VTag">>, riak_kv_util:make_vtag(erlang:now()), Meta1),
-    O = riak_object:increment_vclock(riak_object:new(Bucket, Key, Bin, Meta2),
-                                     <<"yessir!">>, 1),
-    {ok, riak_object:to_binary(v0, O), S#state{op_get = Gets + 1}}.
+get(_Bucket, _Key, #state{same_r_object_bin=RObjBin})
+  when RObjBin /= undefined ->
+    RObjBin;
+get(Bucket, Key, S) ->
+    RObj = make_get_object(Bucket, Key, S),
+    make_get_return_val(RObj, true, S).
+
+get_object(Bucket, Key, WantsBinary, S) ->
+    get_object_bprefix(S#state.bprefix_list, Bucket, Key, WantsBinary, S).
+
+get_object_bprefix([], Bucket, Key, WantsBinary, S) ->
+    get_object_default(Bucket, Key, WantsBinary, S);
+get_object_bprefix([{P, {Mod, Fun}}|Ps], Bucket, Key, WantsBinary, S) ->
+    P_len = byte_size(P),
+    case Bucket of
+        <<P:P_len/binary, Rest/binary>> ->
+            make_get_return_val(Mod:Fun(Rest, Bucket, Key), WantsBinary, S);
+        _ ->
+            get_object_bprefix(Ps, Bucket, Key, WantsBinary, S)
+    end.
+
+get_object_default(Bucket, Key, WantsBinary, S) ->
+    make_get_return_val(make_get_object(Bucket, Key, S), WantsBinary, S).
+
+make_get_return_val(Error, _WantsBinary, #state{op_get = Gets} = S)
+  when Error == not_found; Error == bad_crc ->
+    {error, Error, S#state{op_get = Gets + 1}};
+make_get_return_val(RObj, true = _WantsBinary, #state{op_get = Gets} = S) ->
+    {ok, riak_object:to_binary(v0, RObj), S#state{op_get = Gets + 1}};
+make_get_return_val(RObj, false = _WantsBinary, #state{op_get = Gets} = S) ->
+    {ok, RObj, S#state{op_get = Gets + 1}}.
 
 %% @doc Store an object, yes, sir!
 -type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
@@ -177,6 +261,19 @@ get(Bucket, Key, #state{op_get = Gets} = S) ->
                  {ok, state()}.
 put(_Bucket, _PKey, _IndexSpecs, _Val, #state{op_put = Puts} = S) ->
     {ok, S#state{op_put = Puts + 1}}.
+
+put_object(Bucket, PKey, _IndexSpecs, RObj, #state{op_put = Puts} = S) ->
+    EncodedVal = case S#state.aae_mode of
+                     constant_binary ->
+                         S#state.constant_r_object;
+                     bkey ->
+                         term_to_binary(riak_object:new(Bucket, PKey, <<>>));
+                     r_object ->
+                         ObjFmt = riak_core_capability:get(
+                                    {riak_kv, object_format}, v0),
+                         riak_object:to_binary(ObjFmt, RObj)
+                 end,
+    {{ok, S#state{op_put = Puts + 1}}, EncodedVal}.
 
 %% @doc Delete an object, yes, sir!
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
@@ -306,11 +403,7 @@ fold_keys_fun(FoldKeysFun, Bucket) ->
 fold_objects_fun(FoldObjectsFun, Bucket, Size) ->
     fun(Key, VR, Acc) when Key /= undefined ->
             Bin = value_for_random(VR, Size),
-            Meta = dict:new(),
-            Meta1 = dict:store(<<"X-Riak-Last-Modified">>, erlang:now(), Meta),
-            Meta2 = dict:store(<<"X-Riak-VTag">>, riak_kv_util:make_vtag(erlang:now()), Meta1),
-            O = riak_object:increment_vclock(riak_object:new(Bucket, Key, Bin, Meta2),
-                                             <<"yessir!">>, 1),
+            O = make_riak_safe_obj(Bucket, Key, Bin),
             FoldObjectsFun(Bucket, Key, riak_object:to_binary(v0, O), Acc);
        (_, _, Acc) ->
             Acc
@@ -326,10 +419,47 @@ get_binsize(<<X:8, Rest/binary>>, Val) when $0 =< X, X =< $9->
 get_binsize(_, Val) ->
     Val.
 
+make_get_object(_Bucket, _Key, #state{same_r_object=RObj})
+  when RObj /= undefined ->
+    RObj;
+make_get_object(Bucket, Key, S) ->
+    Bin = case get_binsize(Key) of
+              undefined    -> S#state.default_get;
+              N            -> <<42:(N*8)>>
+          end,
+    make_riak_safe_obj(Bucket, Key, Bin).
+
+make_riak_safe_obj(Bucket, Key, Bin) when is_binary(Bin) ->
+    make_riak_safe_obj(Bucket, Key, Bin, []).
+
+make_riak_safe_obj(Bucket, Key, Bin, Metas)
+  when is_binary(Bin), is_list(Metas) ->
+    Meta = dict:from_list(
+             [{<<"X-Riak-Meta">>, Metas},
+              {<<"X-Riak-Last-Modified">>, {44, 45, 46}},
+              {<<"X-Riak-VTag">>, riak_kv_util:make_vtag({42,42,42})}]),
+    RObj = riak_object:new(Bucket, Key, Bin, Meta),
+    riak_object:increment_vclock(RObj, <<"yessir!">>, 1).
+
 %%
 %% Test
 %%
+
 -ifdef(USE_BROKEN_TESTS).
+
+t0() ->
+    B0 = <<"foo">>,
+    {ok, S0} = start(0, [{yessir_aae_mode_encoding, constant_binary},
+                         {yessir_default_size, 2},
+                         {yessir_key_count, 5},
+                         {yessir_bucket_prefix_list,
+                          [{B0, {?MODULE, t0_number1}}]
+                         }]),
+    get_object(B0, <<"key">>, true, S0).
+
+t0_number1(_BucketSuffix, Bucket, Key) ->
+    riak_object:new(Bucket, Key, <<"HEYHEY!">>).
+
 -ifdef(TEST).
 simple_test() ->
    Config = [],

@@ -72,6 +72,9 @@ parse_request(Req) ->
             {error, not_json}
     end.
 
+parse_inputs([Type, Bucket]) when is_binary(Type),
+                                  is_binary(Bucket) ->
+    {ok, {Type, Bucket}};
 parse_inputs(Bucket) when is_binary(Bucket) ->
     {ok, Bucket};
 parse_inputs(Targets) when is_list(Targets) ->
@@ -147,6 +150,10 @@ parse_inputs([], Accum) ->
 parse_inputs([[Bucket, Key]|T], Accum) when is_binary(Bucket),
                                              is_binary(Key) ->
     parse_inputs(T, [{Bucket, Key}|Accum]);
+parse_inputs([[Bucket, Key, KeyData, Type]|T], Accum) when is_binary(Type),
+                                                           is_binary(Bucket),
+                                                           is_binary(Key) ->
+    parse_inputs(T, [{{{Type,Bucket}, Key}, KeyData}|Accum]);
 parse_inputs([[Bucket, Key, KeyData]|T], Accum) when is_binary(Bucket),
                                                       is_binary(Key) ->
     parse_inputs(T, [{{Bucket, Key}, KeyData}|Accum]);
@@ -161,26 +168,33 @@ is_modfun_input(Inputs) when is_list(Inputs) ->
 is_modfun_input(_) -> false.
 
 parse_modfun_input(Inputs) ->
-    Module = proplists:get_value(<<"module">>, Inputs),
-    Function = proplists:get_value(<<"function">>, Inputs),
+    Module = binary_to_atom(proplists:get_value(<<"module">>, Inputs), utf8),
+    Function = binary_to_atom(proplists:get_value(<<"function">>, Inputs), utf8),
     Arg = proplists:get_value(<<"arg">>, Inputs),
 
-    {ok, {modfun,
-          binary_to_atom(Module, utf8),
-          binary_to_atom(Function, utf8),
-          Arg}}.
+    case riak_kv_util:is_modfun_allowed(Module, Function) of
+        true ->
+            {ok, {modfun,
+                  Module,
+                  Function,
+                  Arg}};
+        Error ->
+            Error
+    end.
 
 is_search_input(Inputs) when is_list(Inputs) ->
     HasBucket = proplists:get_value(<<"bucket">>, Inputs) /= undefined,
+    HasIndex = proplists:get_value(<<"index">>, Inputs) /= undefined,
     HasQuery = proplists:get_value(<<"query">>, Inputs) /= undefined,
-    HasBucket andalso HasQuery;
+    (HasBucket orelse HasIndex) andalso HasQuery;
 is_search_input(_) -> false.
 
 parse_search_input(Inputs) ->
     Bucket = proplists:get_value(<<"bucket">>, Inputs),
     Query = proplists:get_value(<<"query">>, Inputs),
     Filter = proplists:get_value(<<"filter">>, Inputs, []),
-    {ok, {search, Bucket, Query, Filter}}.
+    Index = proplists:get_value(<<"index">>, Inputs, Bucket),
+    {ok, {search, Index, Query, Filter}}.
 
 %% Allowed forms:
 %% {"input":{"bucket":BucketName, "index":IndexName, "key":SecondaryKey},
@@ -206,7 +220,7 @@ is_index_input(Inputs) when is_list(Inputs)->
 is_index_input(_) -> false.
 
 parse_index_input(Inputs) ->
-    Bucket   = proplists:get_value(<<"bucket">>, Inputs),
+    Bucket   = normalize_bucket_and_type(proplists:get_value(<<"bucket">>, Inputs)),
     Index    = proplists:get_value(<<"index">>, Inputs),
     Key      = proplists:get_value(<<"key">>, Inputs),
     StartKey = proplists:get_value(<<"start">>, Inputs),
@@ -233,6 +247,12 @@ parse_index_input(Inputs) ->
             invalid_input_error(Inputs)
     end.
 
+normalize_bucket_and_type(Bucket) when is_binary(Bucket) ->
+    Bucket;
+normalize_bucket_and_type([Type, Bucket]) when is_binary(Bucket),
+                                               is_binary(Type) ->
+    {Type, Bucket}.
+
 is_keyfilter_input(Inputs) when is_list(Inputs) ->
     HasBucket = proplists:get_value(<<"bucket">>, Inputs) /= undefined,
     HasKeyFilters = proplists:get_value(<<"key_filters">>, Inputs) /= undefined,
@@ -240,7 +260,7 @@ is_keyfilter_input(Inputs) when is_list(Inputs) ->
 is_keyfilter_input(_) -> false.
 
 parse_keyfilter_input(Inputs) ->
-    Bucket = proplists:get_value(<<"bucket">>, Inputs),
+    Bucket = normalize_bucket_and_type(proplists:get_value(<<"bucket">>, Inputs)),
     KeyFilters = proplists:get_value(<<"key_filters">>, Inputs),
 
     case length(KeyFilters) >= 1 of
@@ -304,6 +324,12 @@ parse_query(Invalid, _Accum) ->
              "   ",mochijson2:encode(Invalid),"\n"]}.
 
 dejsonify_not_found({struct, [{<<"not_found">>,
+                               {struct, [{<<"bucket_type">>, BType},
+                                         {<<"bucket">>, Bucket},
+                                         {<<"key">>, Key},
+                                         {<<"keydata">>, KeyData}]}}]}) ->
+    {not_found, {{BType, Bucket}, Key}, KeyData};
+dejsonify_not_found({struct, [{<<"not_found">>,
                      {struct, [{<<"bucket">>, Bucket},
                                {<<"key">>, Key},
                                {<<"keydata">>, KeyData}]}}]}) ->
@@ -311,6 +337,11 @@ dejsonify_not_found({struct, [{<<"not_found">>,
 dejsonify_not_found(Data) ->
     Data.
 
+jsonify_not_found({not_found, {{BType, Bucket}, Key}, KeyData}) ->
+    {struct, [{not_found, {struct, [{<<"bucket_type">>, BType},
+                                    {<<"bucket">>, Bucket},
+                                    {<<"key">>, Key},
+                                    {<<"keydata">>, KeyData}]}}]};
 jsonify_not_found({not_found, {Bucket, Key}, KeyData}) ->
     {struct, [{not_found, {struct, [{<<"bucket">>, Bucket},
                                     {<<"key">>, Key},
@@ -322,6 +353,17 @@ jsonify_bkeys(Results, HasMRQuery) when HasMRQuery == true ->
     Results;
 jsonify_bkeys(Results, HasMRQuery) when HasMRQuery == false ->
     jsonify_bkeys_1(Results, []).
+
+%% @doc Translate undefined to null, which mochijson will translate to JS null 
+maybe_null(undefined) ->
+    null;
+maybe_null(V) ->
+    V.
+
+jsonify_bkeys_1([{{{T,B},K},D}|Rest], Acc) ->
+    jsonify_bkeys_1(Rest, [[B,K,maybe_null(D),T]|Acc]);
+jsonify_bkeys_1([{{B, K}, undefined}|Rest], Acc) ->
+    jsonify_bkeys_1(Rest, [[B,K]|Acc]);
 jsonify_bkeys_1([{{B, K},D}|Rest], Acc) ->
     jsonify_bkeys_1(Rest, [[B,K,D]|Acc]);
 jsonify_bkeys_1([{B, K}|Rest], Acc) ->
@@ -397,7 +439,12 @@ parse_step(<<"erlang">>, StepDef) ->
         {bucket_key, {Bucket, Key}} ->
             {ok, {strfun, {Bucket, Key}}};
         {modfun, M, F} ->
-            {ok, {modfun, M, F}};
+            case riak_kv_util:is_modfun_allowed(M, F) of
+                true ->
+                    {ok, {modfun, M, F}};
+                Error ->
+                    Error
+            end;
         Else -> Else
     end;
 parse_step(undefined, StepDef) ->
@@ -556,7 +603,16 @@ key_input_test() ->
                       {{<<"b2">>, <<"k2">>}, <<"v2">>},
                       {{<<"b3">>, <<"k3">>}, <<"v3">>}
                      ]},
-    ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))).
+    ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))),
+
+    %% Test parsing bucket types
+    JSON3 = <<"[[\"b1\", \"k1\", \"v1\", \"t1\"], [\"b2\", \"k2\", \"v2\", \"t2\"], [\"b3\", \"k3\", \"v3\", \"t3\"]]">>,
+    Expected3 = {ok, [
+                      {{{<<"t1">>, <<"b1">>}, <<"k1">>}, <<"v1">>},
+                      {{{<<"t2">>, <<"b2">>}, <<"k2">>}, <<"v2">>},
+                      {{{<<"t3">>, <<"b3">>}, <<"k3">>}, <<"v3">>}
+                     ]},
+    ?assertEqual(Expected3, parse_inputs(mochijson2:decode(JSON3))).
 
 modfun_input_test() ->
     JSON = <<"{\"module\":\"mymod\",\"function\":\"myfun\",\"arg\":[1,2,3]}">>,
@@ -579,12 +635,21 @@ index_input_test() ->
 
     JSON2 = <<"{\"bucket\":\"mybucket\",\"index\":\"myindex_bin\", \"start\":\"vala\", \"end\":\"valb\"}">>,
     Expected2 = {ok, {index, <<"mybucket">>, <<"myindex_bin">>, <<"vala">>, <<"valb">>}},
-    ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))).
+    ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))),
+
+    JSON3 = <<"{\"bucket\":[\"mytype\",\"mybucket\"],\"index\":\"myindex_bin\", \"start\":\"vala\", \"end\":\"valb\"}">>,
+    Expected3 = {ok, {index, {<<"mytype">>,<<"mybucket">>}, <<"myindex_bin">>, <<"vala">>, <<"valb">>}},
+    ?assertEqual(Expected3, parse_inputs(mochijson2:decode(JSON3))).
 
 keyfilter_input_test() ->
-    JSON = <<"{\"bucket\":\"mybucket\",\"key_filters\":[[\"match\", \"key.*\"]]}">>,
-    Expected = {ok, {<<"mybucket">>, [[<<"match">>, <<"key.*">>]]}},
-    ?assertEqual(Expected, parse_inputs(mochijson2:decode(JSON))).
+    JSON = <<"{\"bucket\":\"mybucket\",\"key_filters\":[[\"matches\", \"key.*\"]]}">>,
+    Expected = {ok, {<<"mybucket">>, [[<<"matches">>, <<"key.*">>]]}},
+    ?assertEqual(Expected, parse_inputs(mochijson2:decode(JSON))),
+
+    JSON2 = <<"{\"bucket\":[\"mytype\", \"mybucket\"],\"key_filters\":[[\"matches\", \"key.*\"]]}">>,
+    Expected2 = {ok, {{<<"mytype">>,<<"mybucket">>}, [[<<"matches">>, <<"key.*">>]]}},
+    ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))).
+
 
 -define(DISCRETE_ERLANG_JOB, <<"{\"inputs\": [[\"foo\", \"bar\"]], \"query\":[{\"map\":{\"language\":\"erlang\","
                               "\"module\":\"foo\", \"function\":\"bar\", \"keep\": false}}]}">>).

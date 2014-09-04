@@ -42,7 +42,7 @@ new(Vnodes) ->
 
 %% @doc Append `Results' to existing buffer for `VnodeID' in
 %% `Data'
--spec add_results(non_neg_integer(), list(), sms()) -> sms().
+-spec add_results(non_neg_integer(), list() | atom(), sms()) -> sms().
 add_results(VnodeID, done, Data) ->
     UpdateFun = fun({_, Prev}) -> {done, Prev} end,
     update(VnodeID, UpdateFun, Data);

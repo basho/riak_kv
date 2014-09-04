@@ -36,6 +36,7 @@
          fold_buckets/4,
          fold_keys/4,
          fold_objects/4,
+         fold_indexes/4,
          is_empty/1,
          data_size/1,
          status/1,
@@ -51,6 +52,7 @@
 
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold, index_reformat]).
+-define(ANY_CAPABILITIES, [indexes, iterator_refresh]).
 
 -record (state, {backends :: [{atom(), atom(), term()}],
                  default_backend :: atom()}).
@@ -111,7 +113,10 @@ capabilities(State) ->
     Caps1 = ordsets:intersection(AllCaps),
     Caps2 = ordsets:to_list(Caps1),
 
-    Capabilities = lists:usort(?CAPABILITIES ++ Caps2),
+    % Some caps we choose if ANY backend has them
+    AnyCaps = ordsets:intersection(ordsets:union(AllCaps),
+                                    ordsets:from_list(?ANY_CAPABILITIES)),
+    Capabilities = lists:usort(?CAPABILITIES ++ Caps2 ++ AnyCaps),
     {ok, Capabilities}.
 
 %% @doc Return the capabilities of the backend.
@@ -200,7 +205,7 @@ start_backend(Name, Module, Partition, Config) ->
 %% @doc Stop the backends
 -spec stop(state()) -> ok.
 stop(#state{backends=Backends}) ->
-    [Module:stop(SubState) || {_, Module, SubState} <- Backends],
+    _ = [Module:stop(SubState) || {_, Module, SubState} <- Backends],
     ok.
 
 %% @doc Retrieve an object from the backend
@@ -257,7 +262,13 @@ delete(Bucket, Key, IndexSpecs, State) ->
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()} | {error, term()}.
 fold_buckets(FoldBucketsFun, Acc, Opts, State) ->
-    fold_all(fold_buckets, FoldBucketsFun, Acc, Opts, State).
+    fold_all(fold_buckets, FoldBucketsFun, Acc, Opts, State,
+             fun default_backend_filter/4).
+
+%% @doc Fold only over index data in the backend, for all buckets.
+fold_indexes(FoldIndexFun, Acc, Opts, State) ->
+    fold_all(fold_indexes, FoldIndexFun, Acc, Opts, State,
+            fun indexes_filter/4).
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
@@ -267,7 +278,8 @@ fold_buckets(FoldBucketsFun, Acc, Opts, State) ->
 fold_keys(FoldKeysFun, Acc, Opts, State) ->
     case proplists:get_value(bucket, Opts) of
         undefined ->
-            fold_all(fold_keys, FoldKeysFun, Acc, Opts, State);
+            fold_all(fold_keys, FoldKeysFun, Acc, Opts, State,
+                    fun default_backend_filter/4);
         Bucket ->
             fold_in_bucket(Bucket, fold_keys, FoldKeysFun, Acc, Opts, State)
     end.
@@ -280,7 +292,8 @@ fold_keys(FoldKeysFun, Acc, Opts, State) ->
 fold_objects(FoldObjectsFun, Acc, Opts, State) ->
     case proplists:get_value(bucket, Opts) of
         undefined ->
-            fold_all(fold_objects, FoldObjectsFun, Acc, Opts, State);
+            fold_all(fold_objects, FoldObjectsFun, Acc, Opts, State,
+                    fun default_backend_filter/4);
         Bucket ->
             fold_in_bucket(Bucket, fold_objects, FoldObjectsFun, Acc, Opts, State)
     end.
@@ -338,7 +351,7 @@ status(#state{backends=Backends}) ->
 callback(Ref, Msg, #state{backends=Backends}=State) ->
     %% Pass the callback on to all submodules - their responsbility to
     %% filter out if they need it.
-    [Mod:callback(Ref, Msg, ModState) || {_N, Mod, ModState} <- Backends],
+    _ = [Mod:callback(Ref, Msg, ModState) || {_N, Mod, ModState} <- Backends],
     {ok, State}.
 
 set_legacy_indexes(State=#state{backends=Backends}, WriteLegacy) ->
@@ -457,7 +470,7 @@ update_backend_state(Backend,
 
 %% @private
 %% @doc Shared code used by all the backend fold functions.
-fold_all(ModFun, FoldFun, Acc, Opts, State) ->
+fold_all(ModFun, FoldFun, Acc, Opts, State, BackendFilter) ->
     Backends = State#state.backends,
     try
         AsyncFold = lists:member(async_fold, Opts),
@@ -465,7 +478,8 @@ fold_all(ModFun, FoldFun, Acc, Opts, State) ->
             lists:foldl(backend_fold_fun(ModFun,
                                          FoldFun,
                                          Opts,
-                                         AsyncFold),
+                                         AsyncFold,
+                                         BackendFilter),
                         {Acc, []},
                         Backends),
 
@@ -496,22 +510,33 @@ fold_in_bucket(Bucket, ModFun, FoldFun, Acc, Opts, State) ->
                   Opts,
                   SubState).
 
+%% @doc Skips folding if index reformat operation on
+%% non-index reformat capable backend.
+default_backend_filter(Opts, _Module, _SubState, ModCaps) ->
+    Indexes = lists:keyfind(index, 1, Opts),
+    CanReformatIndex = lists:member(index_reformat, ModCaps),
+    case {Indexes, CanReformatIndex} of
+        {{index, incorrect_format, _ForUpgrade}, false} ->
+            false;
+        _ ->
+            true
+    end.
+
+%% @doc Skips folding on backends that do not support indexes.
+indexes_filter(_Opts, _Module, _SubState, ModCaps) ->
+    lists:member(indexes, ModCaps).
+
 %% @private
-backend_fold_fun(ModFun, FoldFun, Opts, AsyncFold) ->
+backend_fold_fun(ModFun, FoldFun, Opts, AsyncFold, BackendFilter) ->
     fun({_, Module, SubState}, {Acc, WorkList}) ->
             %% Get the backend capabilities to determine
             %% if it supports asynchronous folding.
             {ok, ModCaps} = Module:capabilities(SubState),
             DoAsync = AsyncFold andalso lists:member(async_fold, ModCaps),
-            Indexes = lists:keyfind(index, 1, Opts),
-            case Indexes of
-                {index, incorrect_format, _ForUpgrade} ->
-                    case lists:member(index_reformat, ModCaps) of
-                        true -> backend_fold_fun(Module, ModFun, SubState, FoldFun,
-                                                 Opts, {Acc, WorkList}, DoAsync);
-                        false -> {Acc, WorkList}
-                    end;
-                _ ->
+            case BackendFilter(Opts, Module, SubState, ModCaps) of
+                false ->
+                    {Acc, WorkList};
+                true ->
                     backend_fold_fun(Module,
                                      ModFun,
                                      SubState,

@@ -200,7 +200,7 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                           [];
                       _ -> % ok or tombstone
                           [{Idx, outofdate} || {Idx, {ok, RObj}} <- Results,
-                                  strict_descendant(MObj, RObj)] ++
+                                  riak_object:strict_descendant(MObj, RObj)] ++
                               [{Idx, notfound} || {Idx, {error, notfound}} <- Results]
                   end,
     Action = case ReadRepairs of
@@ -242,11 +242,6 @@ info(#getcore{num_ok = NumOks, num_fail = NumFail, results = Results}) ->
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
-
-strict_descendant(O1, O2) ->
-    vclock:descends(riak_object:vclock(O1),riak_object:vclock(O2)) andalso
-    not vclock:descends(riak_object:vclock(O2),riak_object:vclock(O1)).
-
 merge(Replies, AllowMult) ->
     RObjs = [RObj || {_I, {ok, RObj}} <- Replies],
     case RObjs of

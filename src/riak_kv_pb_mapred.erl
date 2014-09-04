@@ -61,7 +61,22 @@ init() ->
     #state{}.
 
 decode(Code, Bin) ->
-    {ok, riak_pb_codec:decode(Code, Bin)}.
+    Msg = riak_pb_codec:decode(Code, Bin),
+    case Msg of
+        #rpbmapredreq{} ->
+            %% I know we decode it in process() too, but we need to figure out
+            %% what permissions this mapreduce will require
+            #rpbmapredreq{request=MrReq, content_type=ContentType}=Msg,
+            case decode_mapred_query(MrReq, ContentType) of
+                {error, _} ->
+                    %% can't decode it, so we can't apply permissions to it.
+                    %% This doesn't matter since process() will fail anyway.
+                    {ok, Msg};
+                {ok, Inputs, Query, _} ->
+                    {ok, Msg, riak_kv_mapred_term:get_required_permissions(Inputs,
+                                                                           Query)}
+            end
+    end.
 
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
@@ -73,7 +88,19 @@ process(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
         {error, Reason} ->
             {error, {format, Reason}, State};
         {ok, Inputs, Query, Timeout} ->
-            pipe_mapreduce(Req, State, Inputs, Query, Timeout)
+            %% check for link walk queries when security is enabled,
+            %% we don't allow them.
+            case {riak_core_security:is_enabled(),
+                  lists:keyfind(link, 1, Query)} of
+                {true, Links} when Links /= false ->
+                    %% we don't support link walking when security is
+                    %% enabled, return an error of some kind
+                    {error, {format, "Link walking is"
+                             " deprecated in Riak 2.0 and is"
+                             " not compatible with security."}, State};
+                _ ->
+                    pipe_mapreduce(Req, State, Inputs, Query, Timeout)
+            end
     end.
 
 process_stream(#kv_mrc_sink{ref=ReqId,

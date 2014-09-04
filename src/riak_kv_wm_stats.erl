@@ -1,8 +1,8 @@
 %% -------------------------------------------------------------------
 %%
-%% stats_http_resource: publishing Riak runtime stats via HTTP
+%% riak_kv_wm_stats: publishing Riak runtime stats via HTTP
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -36,12 +36,13 @@
 -include_lib("webmachine/include/webmachine.hrl").
 
 -record(ctx, {}).
+-type context() :: #ctx{}.
 
 init(_) ->
     {ok, #ctx{}}.
 
-%% @spec encodings_provided(webmachine:wrq(), context()) ->
-%%         {[encoding()], webmachine:wrq(), context()}
+-spec encodings_provided(#wm_reqdata{}, context()) ->
+         {[term()], #wm_reqdata{}, context()}.
 %% @doc Get the list of encodings this resource provides.
 %%      "identity" is provided for all methods, and "gzip" is
 %%      provided for GET as well
@@ -54,8 +55,8 @@ encodings_provided(ReqData, Context) ->
             {[{"identity", fun(X) -> X end}], ReqData, Context}
     end.
 
-%% @spec content_types_provided(webmachine:wrq(), context()) ->
-%%          {[ctype()], webmachine:wrq(), context()}
+-spec content_types_provided(#wm_reqdata{}, context()) ->
+    {[term()], #wm_reqdata{}, context()}.
 %% @doc Get the list of content types this resource provides.
 %%      "application/json" and "text/plain" are both provided
 %%      for all requests.  "text/plain" is a "pretty-printed"
@@ -76,8 +77,8 @@ produce_body(ReqData, Ctx) ->
     Body = mochijson2:encode({struct, get_stats()}),
     {Body, ReqData, Ctx}.
 
-%% @spec pretty_print(webmachine:wrq(), context()) ->
-%%          {string(), webmachine:wrq(), context()}
+-spec pretty_print(#wm_reqdata{}, context()) ->
+          {string(), #wm_reqdata{}, context()}.
 %% @doc Format the respons JSON object is a "pretty-printed" style.
 pretty_print(RD1, C1=#ctx{}) ->
     {Json, RD2, C2} = produce_body(RD1, C1),
@@ -86,4 +87,4 @@ pretty_print(RD1, C1=#ctx{}) ->
 get_stats() ->
     {value, {disk, Disk}, Stats} = lists:keytake(disk, 1, riak_kv_stat:get_stats()),
     DiskFlat = [{struct, [{id, list_to_binary(Id)}, {size, Size}, {used, Used}]} || {Id, Size, Used} <- Disk],
-    lists:append([Stats, [{disk, DiskFlat}], riak_core_stat:get_stats()]).
+    lists:append([Stats, [{disk, DiskFlat}], riak_core_stat:get_stats(), yz_stat:search_stats()]).

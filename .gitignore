@@ -2,9 +2,15 @@
 deps/*
 priv/*
 *.o
+include/*_pb.hrl
 *.beam
 doc
 test.*-temp-data
 ebin
 /.eqc-info
 /current_counterexample.eqc
+.local_dialyzer_plt
+dialyzer_unhandled_warnings
+dialyzer_warnings
+tags
+erln8.config

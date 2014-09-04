@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_buckets - Webmachine resource for listing buckets.
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,10 +24,15 @@
 %%
 %% Available operations:
 %%
-%% GET /buckets?buckets=true (NEW) 
+%% GET /types/Type/buckets?buckets=true (with bucket-type)
+%% GET /types/Type/buckets?buckets=stream
+%% GET /buckets?buckets=true (NEW)
+%% GET /buckets?buckets=stream
 %% GET /Prefix?buckets=true
 %%   Get information about available buckets. Note that generating the
-%%   bucket list is expensive, so we require the "buckets=true" arg.
+%%   bucket list is expensive, so we require the "buckets=true" or
+%%   "buckets=stream" arg.
+%%
 
 -module(riak_kv_wm_buckets).
 
@@ -35,52 +40,58 @@
 -export([
          init/1,
          service_available/2,
+         is_authorized/2,
          forbidden/2,
+         resource_exists/2,
          content_types_provided/2,
          encodings_provided/2,
          produce_bucket_list/2,
          malformed_request/2
         ]).
 
-%% @type context() = term()
 -record(ctx, {
+          bucket_type,  %% binary() - bucket type (from uri)
           api_version,  %% integer() - Determine which version of the API to use.
           client,       %% riak_client() - the store client
           prefix,       %% string() - prefix for resource uris
           riak,         %% local | {node(), atom()} - params for riak client
           method,       %% atom() - HTTP method for the request
-          timeout       %% integer() - list buckets timeout
+          timeout,      %% integer() - list buckets timeout
+          security     %% security context
          }).
+-type context() :: #ctx{}.
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
 
 -define(DEFAULT_TIMEOUT, 5 * 60000).
 
-%% @spec init(proplist()) -> {ok, context()}
+-spec init(proplists:proplist()) -> {ok, context()}.
 %% @doc Initialize this resource.  This function extracts the
 %%      'prefix' and 'riak' properties from the dispatch args.
 init(Props) ->
     {ok, #ctx{
        api_version=proplists:get_value(api_version, Props),
        prefix=proplists:get_value(prefix, Props),
-       riak=proplists:get_value(riak, Props)
+       riak=proplists:get_value(riak, Props),
+       bucket_type=proplists:get_value(bucket_type, Props)
       }}.
 
 
-%% @spec service_available(reqdata(), context()) ->
-%%          {boolean(), reqdata(), context()}
+-spec service_available(#wm_reqdata{}, context()) ->
+          {boolean(), #wm_reqdata{}, context()}.
 %% @doc Determine whether or not a connection to Riak
 %%      can be established.  This function also takes this
 %%      opportunity to extract the 'bucket' and 'key' path
 %%      bindings from the dispatch, as well as any vtag
 %%      query parameter.
-service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
+service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
+    Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
-            {true, 
+            {true,
              RD,
-             Ctx#ctx{ 
+             Ctx#ctx{
                method=wrq:method(RD),
                client=C
               }};
@@ -92,19 +103,50 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
              Ctx}
     end.
 
-forbidden(RD, Ctx) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
+is_authorized(ReqData, Ctx) ->
+    case riak_api_web_security:is_authorized(ReqData) of
+        false ->
+            {"Basic realm=\"Riak\"", ReqData, Ctx};
+        {true, SecContext} ->
+            {true, ReqData, Ctx#ctx{security=SecContext}};
+        insecure ->
+            %% XXX 301 may be more appropriate here, but since the http and
+            %% https port are different and configurable, it is hard to figure
+            %% out the redirect URL to serve.
+            {{halt, 426}, wrq:append_to_resp_body(<<"Security is enabled and "
+                    "Riak does not accept credentials over HTTP. Try HTTPS "
+                    "instead.">>, ReqData), Ctx}
+    end.
 
-%% @spec content_types_provided(reqdata(), context()) ->
-%%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
+forbidden(RD, Ctx = #ctx{security=undefined}) ->
+    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
+forbidden(RD, Ctx) ->
+    case riak_kv_wm_utils:is_forbidden(RD) of
+        true ->
+            {true, RD, Ctx};
+        false ->
+            Res = riak_core_security:check_permission({"riak_kv.list_buckets",
+                                                       Ctx#ctx.bucket_type},
+                                                      Ctx#ctx.security),
+            case Res of
+                {false, Error, _} ->
+                    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
+                    {true, wrq:append_to_resp_body(unicode:characters_to_binary(Error, utf8, utf8), RD1), Ctx};
+                {true, _} ->
+                    {false, RD, Ctx}
+            end
+    end.
+
+-spec content_types_provided(#wm_reqdata{}, context()) ->
+    {[{ContentType::string(), Producer::atom()}], #wm_reqdata{}, context()}.
 %% @doc List the content types available for representing this resource.
 %%      "application/json" is the content-type for bucket lists.
 content_types_provided(RD, Ctx) ->
     {[{"application/json", produce_bucket_list}], RD, Ctx}.
 
 
-%% @spec encodings_provided(reqdata(), context()) ->
-%%          {[{Encoding::string(), Producer::function()}], reqdata(), context()}
+-spec encodings_provided(#wm_reqdata{}, context()) ->
+    {[{Encoding::string(), Producer::function()}], #wm_reqdata{}, context()}.
 %% @doc List the encodings available for representing this resource.
 %%      "identity" and "gzip" are available for bucket lists.
 encodings_provided(RD, Ctx) ->
@@ -113,8 +155,8 @@ encodings_provided(RD, Ctx) ->
 malformed_request(RD, Ctx) ->
     malformed_timeout_param(RD, Ctx).
 
-%% @spec malformed_timeout_param(reqdata(), context()) ->
-%%          {boolean(), reqdata(), context()}
+-spec malformed_timeout_param(#wm_reqdata{}, context()) ->
+    {boolean(), #wm_reqdata{}, context()}.
 %% @doc Check that the timeout parameter is are a
 %%      string-encoded integer.  Store the integer value
 %%      in context() if so.
@@ -122,7 +164,7 @@ malformed_timeout_param(RD, Ctx) ->
     case wrq:get_qs_value("timeout", none, RD) of
         none ->
             {false, RD, Ctx};
-        TimeoutStr -> 
+        TimeoutStr ->
             try
                 Timeout = list_to_integer(TimeoutStr),
                 {false, RD, Ctx#ctx{timeout=Timeout}}
@@ -132,20 +174,24 @@ malformed_timeout_param(RD, Ctx) ->
                      wrq:append_to_resp_body(io_lib:format("Bad timeout "
                                                            "value ~p~n",
                                                            [TimeoutStr]),
-                                             wrq:set_resp_header(?HEAD_CTYPE, 
+                                             wrq:set_resp_header(?HEAD_CTYPE,
                                                                  "text/plain", RD)),
                      Ctx}
             end
     end.
 
+resource_exists(RD, #ctx{bucket_type=BType}=Ctx) ->
+    {riak_kv_wm_utils:bucket_type_exists(BType), RD, Ctx}.
 
-%% @spec produce_bucket_list(reqdata(), context()) -> {binary(), reqdata(), context()}
+-spec produce_bucket_list(#wm_reqdata{}, context()) ->
+    {binary(), #wm_reqdata{}, context()}.
 %% @doc Produce the JSON response to a bucket-level GET.
 %%      Includes a list of known buckets if the "buckets=true" query
 %%      param is specified.
 produce_bucket_list(RD, #ctx{client=Client,
-                             timeout=Timeout0}=Ctx) ->
-    Timeout = 
+                             timeout=Timeout0,
+                             bucket_type=BType}=Ctx) ->
+    Timeout =
         case Timeout0 of
             undefined -> ?DEFAULT_TIMEOUT;
             Set -> Set
@@ -153,12 +199,12 @@ produce_bucket_list(RD, #ctx{client=Client,
     case wrq:get_qs_value(?Q_BUCKETS, RD) of
         ?Q_TRUE ->
             %% Get the buckets.
-            {ok, Buckets} = Client:list_buckets(Timeout),
-            {mochijson2:encode({struct, [{?JSON_BUCKETS, Buckets}]}), 
+            {ok, Buckets} = Client:list_buckets(none, Timeout, BType),
+            {mochijson2:encode({struct, [{?JSON_BUCKETS, Buckets}]}),
              RD, Ctx};
         ?Q_STREAM ->
             F = fun() ->
-                        {ok, ReqId} = Client:stream_list_buckets(Timeout),
+                        {ok, ReqId} = Client:stream_list_buckets(none, Timeout, BType),
                         stream_buckets(ReqId)
                 end,
             {{stream, {[], F}}, RD, Ctx};
@@ -168,14 +214,14 @@ produce_bucket_list(RD, #ctx{client=Client,
 
 stream_buckets(ReqId) ->
     receive
-        {ReqId, done} -> 
-                {mochijson2:encode({struct, 
+        {ReqId, done} ->
+                {mochijson2:encode({struct,
                                     [{<<"buckets">>, []}]}), done};
         {ReqId, _From, {buckets_stream, Buckets}} ->
-            {mochijson2:encode({struct, [{<<"buckets">>, Buckets}]}), 
+            {mochijson2:encode({struct, [{<<"buckets">>, Buckets}]}),
              fun() -> stream_buckets(ReqId) end};
         {ReqId, {buckets_stream, Buckets}} ->
             {mochijson2:encode({struct, [{<<"buckets">>, Buckets}]}),
              fun() -> stream_buckets(ReqId) end};
-        {ReqId, timeout} -> {mochijson2:encode({struct, [{error, timeout}]}), done}
+        {ReqId, {error, timeout}} -> {mochijson2:encode({struct, [{error, timeout}]}), done}
     end.

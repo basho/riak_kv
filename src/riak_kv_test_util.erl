@@ -2,7 +2,7 @@
 %%
 %% riak_test_util: utilities for test scripts
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2014 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -29,6 +29,7 @@
 -export([call_unused_fsm_funs/1,
          stop_process/1,
          wait_for_pid/1,
+         wait_for_unregister/1,
          wait_for_children/1,
          common_setup/1,
          common_setup/2,
@@ -100,6 +101,24 @@ wait_for_pid(Pid) ->
             {error, didnotexit, Pid, erlang:process_info(Pid)}
     end.
 
+%% @doc Wait for registered process to exit.
+-spec wait_for_unregister(Mod::atom()) ->
+                                 ok |
+                                 {error, didnotexit, pid(), term()}.
+wait_for_unregister(Mod) ->
+    case whereis(Mod) of
+        undefined ->
+            ok;
+        Pid ->
+            case erlang:function_exported(Mod, stop, 0) of
+                true ->
+                    Mod:stop(),
+                    wait_for_pid(Pid);
+                false ->
+                    stop_process(Pid)
+            end
+    end.
+
 %% Wait for children that were spawned with proc_lib.
 %% They have an '$ancestors' entry in their dictionary
 wait_for_children(PPid) ->
@@ -162,12 +181,12 @@ setup(TestName, SetupFun) ->
     net_kernel:start([TestNode, longnames]),
 
     %% Start dependent applications
-    do_dep_apps(start, Deps),
+    AllApps = do_dep_apps(start, Deps),
 
     %% Wait for KV to be ready
     riak_core:wait_for_application(riak_kv),
     riak_core:wait_for_service(riak_kv),
-    ok.
+    AllApps.
 
 %% @doc Performs generic, riak_kv-specific and test-specific cleanup
 %% when used within a test fixture. This includes stopping dependent
@@ -180,17 +199,26 @@ setup(TestName, SetupFun) ->
 cleanup(Test, CleanupFun, setup) ->
     %% Remove existing ring files so we have a fresh ring
     os:cmd("rm -rf " ++ Test ++ "/ring"),
-    cleanup(Test, CleanupFun, ok);
-cleanup(Test, CleanupFun, _) ->
+    cleanup(Test, CleanupFun, []);
+cleanup(Test, CleanupFun, StartedApps) ->
     Deps = lists:reverse(dep_apps(Test, CleanupFun)),
+    Apps = Deps ++ lists:filtermap(fun(A) ->
+                                           not lists:member(A, Deps)
+                                   end, lists:reverse(StartedApps)),
 
-    %% Stop the applications in reverse order
-    do_dep_apps(stop, Deps),
+    %% Stop the applications in reverse order.
+    do_dep_apps(stop, Apps),
 
     %% Cleanup potentially runaway processes
     catch exit(whereis(riak_kv_vnode_master), kill),
     catch exit(whereis(riak_sysmon_filter), kill),
     catch riak_core_stat_cache:stop(),
+    %% Need to specifically wait for riak_kv_stat to unregister, since
+    %% otherwise we get a specific error
+    %% {{already_started,Pid},#child{...}}  from supervisor:start_child/2
+    %% where riak_kv_stat is already started by another supervisor from a
+    %% previous test.
+    wait_for_unregister(riak_kv_stat),
 
     %% Stop distributed Erlang
     net_kernel:stop(),
@@ -244,23 +272,39 @@ dep_apps(Test, Extra) ->
            (_) -> ok
         end,
 
-    [sasl, Silencer, crypto, public_key, ssl, riak_sysmon, os_mon,
-     runtime_tools, erlang_js, inets, mochiweb, webmachine, sidejob,
-     basho_stats, bitcask, compiler, syntax_tools, lager, folsom,
-     riak_core, riak_pipe, riak_api, riak_kv, DefaultSetupFun, Extra].
+    [sasl, Silencer, runtime_tools, erlang_js, mochiweb, webmachine,
+     sidejob, poolboy, basho_stats, bitcask, goldrush, lager, folsom, protobuffs,
+     eleveldb, riak_core, riak_pipe, riak_api, riak_dt, riak_pb, riak_kv,
+     DefaultSetupFun, Extra].
 
 
 %% @doc Runs the application-lifecycle phase across all of the given
 %% applications and functions.
 %% @see dep_apps/2
 -spec do_dep_apps(load | start | stop, [ atom() | fun() ]) -> [ any() ].
-do_dep_apps(StartStop, Apps) ->
+do_dep_apps(start, Apps) ->
+    lists:foldl(fun(A, Acc) when is_atom(A) ->
+                        case include_app_phase(start, A) of
+                            true ->
+                                {ok, Started} = start_app_and_deps(A, Acc),
+                                Started;
+                            _ ->
+                                Acc
+                        end;
+                    (F, Acc) ->
+                       F(start),
+                       Acc
+               end, [], Apps);
+do_dep_apps(LoadStop, Apps) ->
     lists:map(fun(A) when is_atom(A) ->
-                      case include_app_phase(StartStop, A) of
-                          true -> application:StartStop(A);
-                          _ -> ok
+                      case include_app_phase(LoadStop, A) of
+                          true ->
+                              application:LoadStop(A);
+                          _ ->
+                              ok
                       end;
-                 (F)                 -> F(StartStop)
+                 (F) ->
+                      F(LoadStop)
               end, Apps).
 
 %% @doc Determines whether a given application should be modified in
@@ -271,5 +315,30 @@ include_app_phase(stop, crypto) -> false;
 include_app_phase(start, folsom) -> false;
 include_app_phase(_Phase, _App) -> true.
 
+%% Make sure an application and all of its dependent applications are started.
+%% Similar to application:ensure_all_started/1 available in R16B02.
+-spec start_app_and_deps(Application::atom(), [atom()]) -> {ok, [atom()]} | {error, term()}.
+start_app_and_deps(Application, Started) ->
+    case lists:member(Application, Started) of
+        true ->
+            {ok, Started};
+        false ->
+            case application:start(Application) of
+                ok ->
+                    {ok, [Application|Started]};
+                {error, {already_started, Application}} ->
+                    {ok, Started};
+                {error, {not_started, Dep}} ->
+                    case start_app_and_deps(Dep, Started) of
+                        {ok, NStarted} ->
+                            start_app_and_deps(Application, NStarted);
+                        Error ->
+                            Error
+                    end;
+                {error, Reason} ->
+                    [application:stop(App) || App <- Started],
+                    {error, Reason}
+            end
+    end.
 
 -endif. % TEST

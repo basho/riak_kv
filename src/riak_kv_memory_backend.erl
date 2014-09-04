@@ -52,6 +52,7 @@
          fold_buckets/4,
          fold_keys/4,
          fold_objects/4,
+         fold_indexes/4,
          is_empty/1,
          status/1,
          callback/3]).
@@ -118,11 +119,16 @@ start(Partition, Config) ->
     TTL = riak_kv_util:get_backend_config(ttl, Config, memory_backend),
     MemoryMB = riak_kv_util:get_backend_config(max_memory, Config, memory_backend),
     %% leave this one alone, it is only for testing
+    NormalTableOpts = [ordered_set],
+    TestTableOpts = app_helper:get_prop_or_env(test_table_opts,
+                                               Config,
+                                               memory_backend,
+                                               [named_table, public]),
     TableOpts = case app_helper:get_prop_or_env(test, Config, memory_backend) of
                     true ->
-                        [ordered_set, public];
+                        NormalTableOpts ++ TestTableOpts;
                     _ ->
-                        [ordered_set]
+                        NormalTableOpts
                 end,
     case MemoryMB of
         undefined ->
@@ -203,16 +209,27 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
                                                       ttl=TTL,
                                                       used_memory=UsedMemory}) ->
     Now = os:timestamp(),
-    case TTL of
-        undefined ->
-            Val1 = Val;
+    NoValChange = (TTL =:= undefined) orelse (Val =:= undefined),
+    Val1 =
+    case NoValChange of
+        true ->
+            Val;
         _ ->
-            Val1 = {{ts, Now}, Val}
+            {{ts, Now}, Val}
     end,
+    OldSize =
+        case ets:lookup(DataRef, {Bucket, PrimaryKey}) of
+            [] ->
+                0;
+            [OldObject] ->
+                object_size(OldObject)
+        end,
     {ok, Size} = do_put(Bucket, PrimaryKey, Val1, IndexSpecs, DataRef, IndexRef),
-    case MaxMemory of
-        undefined ->
-            UsedMemory1 = UsedMemory;
+    NoMemChange = (MaxMemory =:= undefined) orelse (Val =:= undefined),
+    UsedMemory1 =
+    case NoMemChange of
+        true ->
+            UsedMemory;
         _ ->
             time_entry(Bucket, PrimaryKey, Now, TimeRef),
             Freed = trim_data_table(MaxMemory,
@@ -221,9 +238,10 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
                                     TimeRef,
                                     IndexRef,
                                     0),
-            UsedMemory1 = UsedMemory + Size - Freed
+            UsedMemory + Size - Freed
     end,
-    {ok, State#state{used_memory=UsedMemory1}}.
+    UsedMemory2 = UsedMemory1 - OldSize,
+    {ok, State#state{used_memory=UsedMemory2}}.
 
 %% @doc Delete an object from the memory backend
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
@@ -232,24 +250,28 @@ delete(Bucket, Key, IndexSpecs, State=#state{data_ref=DataRef,
                                              index_ref=IndexRef,
                                              time_ref=TimeRef,
                                              used_memory=UsedMemory}) ->
-    case TimeRef of
-        undefined ->
-            UsedMemory1 = UsedMemory;
-        _ ->
-            %% Lookup the object so we can delete its
-            %% entry from the time table and account
-            %% for the memory used.
-            [Object] = ets:lookup(DataRef, {Bucket, Key}),
-            case Object of
-                {_, {{ts, Timestamp}, _}} ->
-                    ets:delete(TimeRef, Timestamp),
-                    UsedMemory1 = UsedMemory - object_size(Object);
+    case ets:lookup(DataRef, {Bucket, Key}) of
+        [Object] ->
+            case TimeRef of
+                undefined ->
+                    ok;
                 _ ->
-                    UsedMemory1 = UsedMemory
-            end
+                    %% Lookup the object so we can delete its
+                    %% entry from the time table and account
+                    %% for the memory used.
+                    case Object of
+                        {_, {{ts, Timestamp}, _}} ->
+                            ets:delete(TimeRef, Timestamp);
+                        _ ->
+                            ok
+                    end
+            end,
+            UsedMemory1 = UsedMemory - object_size(Object),
+            update_indexes(Bucket, Key, IndexSpecs, IndexRef),
+            ets:delete(DataRef, {Bucket, Key});
+        [] -> 
+            UsedMemory1 = UsedMemory
     end,
-    update_indexes(Bucket, Key, IndexSpecs, IndexRef),
-    ets:delete(DataRef, {Bucket, Key}),
     {ok, State#state{used_memory=UsedMemory1}}.
 
 %% @doc Fold over all the buckets.
@@ -321,6 +343,26 @@ fold(FoldTypeFun, FoldFun0, Acc, Opts, #state{data_ref=DataRef, index_ref=IndexR
         false ->
             {ok, Folder()}
     end.
+
+fold_indexes(FoldIndexFun, Acc0, _Opts, #state{index_ref=IndexRef}) ->
+    Bucket = undefined, FF = undefined, StartKey = undefined,
+    Min = undefined, Max = undefined, Incl = true,
+    %% Adapt input fold function to our internal one that keys the entire
+    %% field from the ETS table
+    AdaptedFoldFun =
+    fun({{FoldBucket, FoldField, FoldVal, FoldKey}, _}, Acc) ->
+            FoldIndexFun(FoldBucket, FoldKey, FoldField, FoldVal, Acc)
+    end,
+
+    Folder =
+    fun() ->
+            index_range_folder(AdaptedFoldFun, Acc0, IndexRef,
+                               {Bucket, FF, Min, StartKey},
+                               {Bucket, FF, Min, Max, StartKey, Incl})
+    end,
+    {async, Folder}.
+
+
 %% @doc Delete all objects from this memory backend
 -spec drop(state()) -> {ok, state()}.
 drop(State=#state{data_ref=DataRef,
@@ -435,9 +477,31 @@ fold_keys_fun(FoldKeysFun, {bucket, FilterBucket}) ->
 fold_keys_fun(FoldKeysFun, {index, FilterBucket, ?KV_INDEX_Q{filter_field=FF}}) when
       FF == <<"$bucket">>; FF == <<"$key">> ->
     fold_keys_fun(FoldKeysFun, {bucket, FilterBucket});
-fold_keys_fun(FoldKeysFun, {index, _FilterBucket, ?KV_INDEX_Q{}}) ->
+fold_keys_fun(FoldKeysFun, {index, _FilterBucket,
+                            ?KV_INDEX_Q{term_regex=Re, return_terms=Terms}})
+    when Re /= undefined ->
     fun({{Bucket, _FilterField, FilterTerm, Key}, _}, Acc) ->
-            FoldKeysFun(Bucket, {FilterTerm, Key}, Acc);
+            case re:run(FilterTerm, Re) of
+                nomatch ->
+                    Acc;
+                {match, _} ->
+                    Val = if
+                        Terms -> {FilterTerm, Key};
+                        true -> Key
+                    end,
+                    FoldKeysFun(Bucket, Val, Acc)
+            end;
+       (_, Acc) ->
+            Acc
+    end;
+fold_keys_fun(FoldKeysFun, {index, _FilterBucket,
+                            ?KV_INDEX_Q{return_terms=Terms}}) ->
+    fun({{Bucket, _FilterField, FilterTerm, Key}, _}, Acc) ->
+                    Val = if
+                        Terms -> {FilterTerm, Key};
+                        true -> Key
+                    end,
+            FoldKeysFun(Bucket, Val, Acc);
        (_, Acc) ->
             Acc
     end;
@@ -481,7 +545,6 @@ get_folder(FoldFun, Acc, DataRef) ->
     end.
 
 %% @private
-%% V2 2i
 get_index_folder(Folder, Acc0, {index, Bucket, Q=?KV_INDEX_Q{filter_field=FF, start_key=StartKey}}, DataRef, _)
   when FF == <<"$bucket">>; FF == <<"$key">> ->
     fun() ->
@@ -531,7 +594,11 @@ key_range_folder(_Folder, Acc, _DataRef, _DataKey, _Query) ->
 
 %% Iterates over a range of index postings
 index_range_folder(Folder, Acc0, IndexRef, {B, I, V, _K}=IndexKey,
-                   {B, I, Min, Max, StartKey, Incl}=Query) when V >= Min, V =< Max ->
+                   {QueryB, QueryI, Min, Max, StartKey, Incl}=Query) 
+  when ((QueryB =:= undefined) orelse (QueryB =:= B)),
+       ((QueryI =:= undefined) orelse (QueryI =:= I)),
+       ((Min =:= undefined) orelse (V >= Min)),
+       ((Max =:= undefined) orelse (V =< Max)) ->
     case {Incl, ets:lookup(IndexRef, IndexKey)} of
         {_, []} ->
             %% This will happen on the first iteration, where the key
@@ -554,10 +621,17 @@ index_range_folder(_Folder, Acc, _IndexRef, _IndexKey, _Query) ->
 
 %% @private
 do_put(Bucket, Key, Val, IndexSpecs, DataRef, IndexRef) ->
-    Object = {{Bucket, Key}, Val},
-    true = ets:insert(DataRef, Object),
+    ObjSize =
+    case Val of
+        undefined ->
+            undefined;
+        _ ->
+            Object = {{Bucket, Key}, Val},
+            true = ets:insert(DataRef, Object),
+            object_size(Object)
+    end,
     update_indexes(Bucket, Key, IndexSpecs, IndexRef),
-    {ok, object_size(Object)}.
+    {ok, ObjSize}.
 
 %% Check if this timestamp is past the ttl setting.
 exceeds_ttl(Timestamp, TTL) ->
@@ -632,8 +706,8 @@ object_size(Object) ->
 -ifdef(TEST).
 
 simple_test_() ->
-    application:set_env(memory_backend, test, true),
-    riak_kv_backend:standard_test(?MODULE, []).
+    Config = [{test, true}, {test_table_opts, [public]}],
+    riak_kv_backend:standard_test(?MODULE, Config).
 
 ttl_test_() ->
     Config = [{ttl, 15}],

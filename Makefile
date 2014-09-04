@@ -1,8 +1,10 @@
 .PHONY: deps test
 
+DIALYZER_FLAGS =
+
 all: deps compile
 
-compile:
+compile: deps
 	./rebar compile
 
 deps:
@@ -12,20 +14,10 @@ clean:
 	./rebar clean
 	rm -rf test.*-temp-data
 
-distclean: clean 
+distclean: clean
 	./rebar delete-deps
 
-test: all	
-	./rebar skip_deps=true eunit
+DIALYZER_APPS = kernel stdlib sasl erts ssl tools os_mon runtime_tools crypto inets \
+	xmerl webtool snmp public_key mnesia eunit syntax_tools compiler
 
-deps:
-	./rebar get-deps
-
-
-docs:
-	./rebar skip_deps=true doc
-
-dialyzer: compile
-	@dialyzer -Wno_return -c apps/riak_kv/ebin
-
-
+include tools.mk

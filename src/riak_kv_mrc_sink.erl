@@ -328,7 +328,7 @@ send_to_owner(#state{owner=Owner, ref=Ref,
                          results=finish_results(Results),
                          logs=lists:reverse(Logs),
                          done=Done},
-    [ gen_fsm:reply(From, ok) || From <- Delayed ],
+    _ = [ gen_fsm:reply(From, ok) || From <- Delayed ],
     State#state{results=[], logs=[],
                 buffer_left=Max, delayed_acks=[]}.
 

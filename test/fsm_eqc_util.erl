@@ -44,7 +44,7 @@ non_blank_string() ->
 %% with utf8 conversion.
 lower_char() ->
     choose(16#20, 16#7f).
-    
+
 
 vclock() ->
     ?LET(VclockSym, vclock_sym(), eval(VclockSym)).
@@ -80,10 +80,10 @@ maybe_tombstone() ->
 %%  brother   sister otherbrother
 %%       \     |    /
 %%         current
-%%    
+%%
 lineage() ->
     elements([current, ancestor, brother, sister, otherbrother]).
- 
+
 merge(ancestor, Lineage) -> Lineage;  % order should match Clocks list in riak_objects
 merge(Lineage, ancestor) -> Lineage;  % as last modified is used as tie breaker with
 merge(_, current)        -> current;  % allow_mult=false
@@ -111,9 +111,9 @@ partvals() ->
     not_empty(fsm_eqc_util:longer_list(2, partval())).
 
 %% Generate 5 riak objects with the same bkey
-%% 
+%%
 riak_objects() ->
-    ?LET({{Bucket,Key},AncestorVclock0,Tombstones}, 
+    ?LET({{Bucket,Key},AncestorVclock0,Tombstones},
          {noshrink(bkey()),vclock(),vector(5, maybe_tombstone())},
     begin
         AncestorVclock = vclock:increment(<<"dad">>, AncestorVclock0),
@@ -144,7 +144,7 @@ add_tombstone(Obj) ->
     [{M,V}] = riak_object:get_contents(Obj),
     NewM = dict:store(<<"X-Riak-Deleted">>, true, M),
     riak_object:set_contents(Obj, [{NewM, V}]).
-                
+
 
 some_up_node_status(NumNodes) ->
     at_least_one_up(nodes_status(NumNodes)).
@@ -186,6 +186,7 @@ start_mock_servers() ->
     start_fake_get_put_monitor(),
     riak_core_stat_cache:start_link(),
     riak_kv_stat:register_stats(),
+    riak_core_metadata_manager:start_link([{data_dir, "fsm_eqc_test_data"}]),
     riak_core_ring_events:start_link(),
     riak_core_node_watcher_events:start_link(),
     riak_core_node_watcher:start_link(),
@@ -194,6 +195,7 @@ start_mock_servers() ->
 
 cleanup_mock_servers() ->
     stop_fake_get_put_monitor(),
+    riak_kv_test_util:stop_process(riak_core_metadata_manager),
     application:stop(folsom),
     application:stop(riak_core).
 

@@ -39,22 +39,29 @@
 -export([get_lock/2,
          compare/3,
          compare/4,
+         compare/5,
+         determine_data_root/0,
          exchange_bucket/4,
          exchange_segment/3,
+         hash_index_data/1,
+         hash_object/2,
          update/2,
          start_exchange_remote/4,
          delete/2,
-         insert/4,
-         insert/5,
-         insert_object/3,
-         async_insert_object/3,
+         async_delete/2,
+         insert/3,
+         async_insert/3,
          stop/1,
-         destroy/1]).
+         clear/1,
+         expire/1,
+         destroy/1,
+         index_2i_n/0]).
 
--export([poke/1]).
+-export([poke/1,
+         get_build_time/1]).
 
 -type index() :: non_neg_integer().
--type index_n() :: {index(), pos_integer()}.
+-type index_n() :: {index(), non_neg_integer()}.
 -type orddict() :: orddict:orddict().
 -type proplist() :: proplists:proplist().
 -type riak_object_t2b() :: binary().
@@ -63,15 +70,24 @@
 -record(state, {index,
                 vnode_pid,
                 built,
+                expired :: boolean(),
                 lock :: undefined | reference(),
                 path,
                 build_time,
-                trees}).
+                trees,
+                use_2i = false :: boolean()}).
 
 -type state() :: #state{}.
 
 %% Time from build to expiration of tree, in millseconds
 -define(DEFAULT_EXPIRE, 604800000). %% 1 week
+%% Magic Tree id for 2i data.
+-define(INDEX_2I_N, {0, 0}).
+
+%% Throttle used when folding over K/V data to build AAE trees: {Limit, Wait}.
+%% After traversing Limit bytes, the fold will sleep for Wait milliseconds.
+%% Default: 1 MB limit / 100 ms wait
+-define(DEFAULT_BUILD_THROTTLE, {1000000, 100}).
 
 %%%===================================================================
 %%% API
@@ -79,57 +95,42 @@
 
 %% @doc Spawn an index_hashtree process that manages the hashtrees (one
 %%      for each `index_n') for the specified partition index.
--spec start(index(), nonempty_list(index_n()), pid()) -> {ok, pid()} | 
-                                                         {error, term()}.
-start(Index, IndexNs=[_|_], VNPid) ->
-    gen_server:start(?MODULE, [Index, IndexNs, VNPid], []).
+-spec start(index(), pid(), proplist()) -> {ok, pid()} | {error, term()}.
+start(Index, VNPid, Opts) ->
+    gen_server:start(?MODULE, [Index, VNPid, Opts], []).
 
 %% @doc Spawn an index_hashtree process that manages the hashtrees (one
 %%      for each `index_n') for the specified partition index.
--spec start_link(index(), nonempty_list(index_n()), pid()) -> {ok, pid()} |
-                                                              {error, term()}.
-start_link(Index, IndexNs=[_|_], VNPid) ->
-    gen_server:start_link(?MODULE, [Index, IndexNs, VNPid], []).
+-spec start_link(index(), pid(), proplist()) -> {ok, pid()} | {error, term()}.
+start_link(Index, VNPid, Opts) ->
+    gen_server:start_link(?MODULE, [Index, VNPid, Opts], []).
 
-%% @doc Add a key/hash pair to the tree identified by the given tree id
-%%      that is managed by the provided index_hashtree pid.
--spec insert(index_n(), binary(), binary(), pid()) -> ok.
-insert(Id, Key, Hash, Tree) ->
-    insert(Id, Key, Hash, Tree, []).
-
-%% @doc A variant of {@link insert/4} that accepts a list of options.
 %%      Valid options:
 %%       ``if_missing'' :: Only insert the key/hash pair if the key does not
 %%                         already exist in the hashtree.
--spec insert(index_n(), binary(), binary(), pid(), proplist()) -> ok.
-insert(_Id, _Key, _Hash, undefined, _Options) ->
+insert(Items, _Opts, Tree) when Tree =:= undefined; Items =:= [] ->
     ok;
-insert(Id, Key, Hash, Tree, Options) ->
-    catch gen_server:call(Tree, {insert, Id, Key, Hash, Options}, infinity).
+insert(Items=[_|_], Opts, Tree) ->
+    catch gen_server:call(Tree, {insert, Items, Opts}, infinity).
 
-%% @doc Add an encoded (binary) riak_object associated with a given
-%%      bucket/key to the appropriate hashtree managed by the provided
-%%      index_hashtree pid. The hash value is generated using
-%%      {@link hash_object/2}. Any encoding version is supported. The encoding
-%%      will be changed to the appropriate version before hashing the object.
--spec insert_object({binary(), binary()}, riak_object_t2b(), pid()) -> ok.
-insert_object(_BKey, _RObj, undefined) ->
+async_insert(Items, _Opts, Tree) when Tree =:= undefined; Items =:= [] ->
     ok;
-insert_object(BKey, RObj, Tree) ->
-    catch gen_server:call(Tree, {insert_object, BKey, RObj}, infinity).
+async_insert(Items=[_|_], Opts, Tree) ->
+    gen_server:cast(Tree, {insert, Items, Opts}).
 
-%% @doc Asynchronous version of {@link insert_object/3}.
-async_insert_object(BKey, RObj, Tree) ->
-    gen_server:cast(Tree, {insert_object, BKey, RObj}).
-
-%% @doc Remove the key/hash pair associated with a given bucket/key from the
-%%      appropriate hashtree managed by the provided index_hashtree pid.
--spec delete({binary(), binary()}, pid()) -> ok.
-delete(_BKey, undefined) ->
+-spec delete([{binary(), binary()}], pid()) -> ok.
+delete(Items, Tree) when Tree =:= undefined; Items =:= [] ->
     ok;
-delete(BKey, Tree) ->
-    catch gen_server:call(Tree, {delete, BKey}, infinity).
+delete(Items=[{_Id, _Key}|_], Tree) ->
+    catch gen_server:call(Tree, {delete, Items}, infinity).
 
+-spec async_delete({binary(), binary()}|[{binary(), binary()}], pid()) -> ok.
+async_delete(Items, Tree) when Tree =:= undefined; Items =:= [] ->
+    ok;
+async_delete(Items=[{_Id, _Key}|_], Tree) ->
+    catch gen_server:cast(Tree, {delete, Items}).
+
+%
 %% @doc Called by the entropy manager to finish the process used to acquire
 %%      remote vnode locks when starting an exchange. For more details,
 %%      see {@link riak_kv_entropy_manager:start_exchange_remote/3}
@@ -166,7 +167,14 @@ compare(Id, Remote, Tree) ->
 -spec compare(index_n(), hashtree:remote_fun(),
               undefined | hashtree:acc_fun(T), pid()) -> T.
 compare(Id, Remote, AccFun, Tree) ->
-    gen_server:call(Tree, {compare, Id, Remote, AccFun}, infinity).
+    compare(Id, Remote, AccFun, [], Tree).
+
+%% @doc A variant of {@link compare/3} that takes a key difference accumulator
+%%      function as an additional parameter.
+-spec compare(index_n(), hashtree:remote_fun(),
+              undefined | hashtree:acc_fun(T), any(), pid()) -> T.
+compare(Id, Remote, AccFun, Acc, Tree) ->
+    gen_server:call(Tree, {compare, Id, Remote, AccFun, Acc}, infinity).
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the calling process.
@@ -197,11 +205,19 @@ stop(Tree) ->
 destroy(Tree) ->
     gen_server:call(Tree, destroy, infinity).
 
+%% @doc Clear the specified index_hashtree, clearing all associated hashtrees
+clear(Tree) ->
+    gen_server:call(Tree, clear, infinity).
+
+%% @doc Expire the specified index_hashtree
+expire(Tree) ->
+    gen_server:call(Tree, expire, infinity).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
-init([Index, IndexNs, VNPid]) ->
+init([Index, VNPid, Opts]) ->
     case determine_data_root() of
         undefined ->
             case riak_kv_entropy_manager:enabled() of
@@ -217,13 +233,24 @@ init([Index, IndexNs, VNPid]) ->
         Root ->
             Path = filename:join(Root, integer_to_list(Index)),
             monitor(process, VNPid),
-
+            Use2i = lists:member(use_2i, Opts),
+            VNEmpty = lists:member(vnode_empty, Opts),
             State = #state{index=Index,
                            vnode_pid=VNPid,
                            trees=orddict:new(),
                            built=false,
+                           use_2i=Use2i,
                            path=Path},
+            IndexNs = responsible_preflists(State),
             State2 = init_trees(IndexNs, State),
+            %% If vnode is empty, mark tree as built without performing fold
+            case VNEmpty of
+                true ->
+                    lager:debug("Built empty AAE tree for ~p", [Index]),
+                    gen_server:cast(self(), build_finished);
+                _ ->
+                    ok
+            end,
             {ok, State2}
     end.
 
@@ -235,16 +262,12 @@ handle_call({get_lock, Type, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Pid, State),
     {reply, Reply, State2};
 
-handle_call({insert, Id, Key, Hash, Options}, _From, State) ->
-    State2 = do_insert(Id, Key, Hash, Options, State),
+handle_call({insert, Items, Options}, _From, State) ->
+    State2 = do_insert(Items, Options, State),
     {reply, ok, State2};
-handle_call({insert_object, BKey, RObj}, _From, State) ->
-    IndexN = riak_kv_util:get_index_n(BKey),
-    State2 = do_insert(IndexN, term_to_binary(BKey), hash_object(BKey, RObj), [], State),
-    {reply, ok, State2};
-handle_call({delete, BKey}, _From, State) ->
-    IndexN = riak_kv_util:get_index_n(BKey),
-    State2 = do_delete(IndexN, term_to_binary(BKey), State),
+
+handle_call({delete, Items}, _From, State) ->
+    State2 = do_delete(Items, State),
     {reply, ok, State2};
 
 handle_call({update_tree, Id}, From, State) ->
@@ -253,7 +276,7 @@ handle_call({update_tree, Id}, From, State) ->
                fun(Tree) ->
                        {SnapTree, Tree2} = hashtree:update_snapshot(Tree),
                        spawn_link(fun() ->
-                                          hashtree:update_perform(SnapTree),
+                                          _ = hashtree:update_perform(SnapTree),
                                           gen_server:reply(From, ok)
                                   end),
                        {noreply, Tree2}
@@ -276,13 +299,22 @@ handle_call({exchange_segment, Id, Segment}, _From, State) ->
                end,
                State);
 
-handle_call({compare, Id, Remote, AccFun}, From, State) ->
-    do_compare(Id, Remote, AccFun, From, State),
+handle_call({compare, Id, Remote, AccFun, Acc}, From, State) ->
+    do_compare(Id, Remote, AccFun, Acc, From, State),
     {noreply, State};
 
 handle_call(destroy, _From, State) ->
     State2 = destroy_trees(State),
     {stop, normal, ok, State2};
+
+handle_call(clear, _From, State) ->
+    State2 = clear_tree(State),
+    {reply, ok, State2};
+
+handle_call(expire, _From, State) ->
+    State2 = State#state{expired=true},
+    lager:info("Manually expired tree: ~p", [State#state.index]),
+    {reply, ok, State2};
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -296,9 +328,12 @@ handle_cast(stop, State) ->
     close_trees(State),
     {stop, normal, State};
 
-handle_cast({insert_object, BKey, RObj}, State) ->
-    IndexN = riak_kv_util:get_index_n(BKey),
-    State2 = do_insert(IndexN, term_to_binary(BKey), hash_object(BKey, RObj), [], State),
+handle_cast({insert, Items, Options}, State) ->
+    State2 = do_insert(Items, Options, State),
+    {noreply, State2};
+
+handle_cast({delete, Items}, State) ->
+    State2 = do_delete(Items, State),
     {noreply, State2};
 
 handle_cast(build_failed, State) ->
@@ -334,7 +369,8 @@ handle_info({'DOWN', Ref, _, _, _}, State) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_Reason, _) ->
+terminate(_Reason, State) ->
+    close_trees(State),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -366,7 +402,7 @@ init_trees(IndexNs, State) ->
     State2 = lists:foldl(fun(Id, StateAcc) ->
                                  do_new_tree(Id, StateAcc)
                          end, State, IndexNs),
-    State2#state{built=false}.
+    State2#state{built=false, expired=false}.
 
 -spec load_built(state()) -> boolean().
 load_built(#state{trees=Trees}) ->
@@ -378,13 +414,25 @@ load_built(#state{trees=Trees}) ->
             false
     end.
 
-%% Generate a hash value for a binary-encoded `riak_object'
--spec hash_object({riak_object:bucket(), riak_object:key()}, riak_object_t2b()) -> binary().
-hash_object({Bucket, Key}, RObjBin) ->
-    %% Normalize the `riak_object' vector clock before hashing
-    RObj = riak_object:from_binary(Bucket, Key, RObjBin),
-    Hash = riak_object:hash(RObj),
-    term_to_binary(Hash).
+%% Generate a hash value for a `riak_object'
+-spec hash_object({riak_object:bucket(), riak_object:key()},
+                  riak_object_t2b() | riak_object:riak_object()) -> binary().
+hash_object({Bucket, Key}, RObj0) ->
+    try
+        RObj = case riak_object:is_robject(RObj0) of
+            true -> RObj0;
+            false -> riak_object:from_binary(Bucket, Key, RObj0)
+        end,
+        Hash = riak_object:hash(RObj),
+        term_to_binary(Hash)
+    catch _:_ ->
+            Null = erlang:phash2(<<>>),
+            term_to_binary(Null)
+    end.
+
+hash_index_data(IndexData) when is_list(IndexData) ->
+    Bin = term_to_binary(lists:usort(IndexData)),
+    riak_core_util:sha(Bin).
 
 %% Fold over a given vnode's data, inserting each object into the appropriate
 %% hashtree. Use the `if_missing' option to only insert the key/hash pair if
@@ -393,20 +441,82 @@ hash_object({Bucket, Key}, RObjBin) ->
 %% incoming write triggers a real-time insert of a key/hash pair for an object
 %% before the fold reaches the now out-of-date version of the object, the old
 %% key/hash pair will be ignored.
--spec fold_keys(index(), pid()) -> ok.
-fold_keys(Partition, Tree) ->
-    Req = riak_core_util:make_fold_req(
-            fun(BKey={Bucket,Key}, RObj, _) ->
-                    IndexN = riak_kv_util:get_index_n({Bucket, Key}),
-                    insert(IndexN, term_to_binary(BKey), hash_object(BKey, RObj),
-                           Tree, [if_missing]),
-                    ok
-            end,
-            ok, false, [aae_reconstruction]),
+%% If `HasIndexTree` is true, also update the index spec tree.
+-spec fold_keys(index(), pid(), boolean()) -> ok.
+fold_keys(Partition, Tree, HasIndexTree) ->
+    FoldFun = fold_fun(Tree, HasIndexTree),
+    Req = riak_core_util:make_fold_req(FoldFun,
+                                       0, false, 
+                                       [aae_reconstruction,
+                                        {iterator_refresh, true}]),
     riak_core_vnode_master:sync_command({Partition, node()},
                                         Req,
                                         riak_kv_vnode_master, infinity),
     ok.
+
+get_build_throttle() ->
+    app_helper:get_env(riak_kv,
+                       anti_entropy_build_throttle,
+                       ?DEFAULT_BUILD_THROTTLE).
+
+maybe_throttle_build(RObjBin, Limit, Wait, Acc) ->
+    ObjSize = byte_size(RObjBin),
+    Acc2 = Acc + ObjSize,
+    if (Limit =/= 0) andalso (Acc2 > Limit) ->
+            lager:debug("Throttling AAE build for ~b ms", [Wait]),
+            timer:sleep(Wait),
+            0;
+       true ->
+            Acc2
+    end.
+
+%% @doc Generate the folding function
+%% for a riak fold_req
+-spec fold_fun(pid(), boolean()) -> fun().
+fold_fun(Tree, _HasIndexTree = false) ->
+    ObjectFoldFun = object_fold_fun(Tree),
+    {Limit, Wait} = get_build_throttle(),
+    fun(BKey, RObj, Acc) ->
+            BinBKey = term_to_binary(BKey),
+            ObjectFoldFun(BKey, RObj, BinBKey),
+            Acc2 = maybe_throttle_build(RObj, Limit, Wait, Acc),
+            Acc2
+    end;
+fold_fun(Tree, _HasIndexTree = true) ->
+    %% Index AAE backend, so hash the indexes
+    ObjectFoldFun = object_fold_fun(Tree),
+    IndexFoldFun = index_fold_fun(Tree),
+    {Limit, Wait} = get_build_throttle(),
+    fun(BKey = {Bucket, Key}, BinObj, Acc) ->
+            RObj = riak_object:from_binary(Bucket, Key, BinObj),
+            BinBKey = term_to_binary(BKey),
+            ObjectFoldFun(BKey, RObj, BinBKey),
+            IndexFoldFun(RObj, BinBKey),
+            Acc2 = maybe_throttle_build(BinObj, Limit, Wait, Acc),
+            Acc2
+    end.
+
+-spec object_fold_fun(pid()) -> fun().
+object_fold_fun(Tree) ->
+    fun(BKey={Bucket,Key}, RObj, BinBKey) ->
+            IndexN = riak_kv_util:get_index_n({Bucket, Key}),
+            insert([{IndexN, BinBKey, hash_object(BKey, RObj)}],
+                   [if_missing],
+                   Tree)
+    end.
+
+-spec index_fold_fun(pid()) -> fun().
+index_fold_fun(Tree) ->
+    fun(RObj, BinBKey) ->
+            IndexData = riak_object:index_data(RObj),
+            insert([{?INDEX_2I_N, BinBKey, hash_index_data(IndexData)}],
+                   [if_missing], Tree)
+    end.
+
+%% @doc the 2i index hashtree as a Magic index_n of {0, 0}
+-spec index_2i_n() -> ?INDEX_2I_N.
+index_2i_n() ->
+    ?INDEX_2I_N.
 
 %% Generate a new {@link hashtree} for the specified `index_n'. If this is
 %% the first hashtree created by this index_hashtree, then open/create a new
@@ -476,10 +586,10 @@ do_build_finished(State=#state{index=Index, built=_Pid}) ->
     lager:debug("Finished build (b): ~p", [Index]),
     {_,Tree0} = hd(State#state.trees),
     BuildTime = get_build_time(Tree0),
-    hashtree:write_meta(<<"built">>, <<1>>, Tree0),
-    hashtree:write_meta(<<"build_time">>, term_to_binary(BuildTime), Tree0),
+    _ = hashtree:write_meta(<<"built">>, <<1>>, Tree0),
+    _ = hashtree:write_meta(<<"build_time">>, term_to_binary(BuildTime), Tree0),
     riak_kv_entropy_info:tree_built(Index, BuildTime),
-    State#state{built=true, build_time=BuildTime}.
+    State#state{built=true, build_time=BuildTime, expired=false}.
 
 %% Determine the build time for all trees associated with this
 %% index. The build time is stored as metadata in the on-disk file. If
@@ -506,36 +616,94 @@ valid_time({X,Y,Z}) when is_integer(X) and is_integer(Y) and is_integer(Z) ->
 valid_time(_) ->
     false.
 
--spec do_insert(index_n(), binary(), binary(), proplist(), state()) -> state().
-do_insert(Id, Key, Hash, Opts, State=#state{trees=Trees}) ->
+do_insert(Items, Opts, State=#state{trees=Trees}) ->
+    HasIndex = has_index_tree(Trees),
+    do_insert_expanded(expand_items(HasIndex, Items), Opts, State).
+
+expand_items(HasIndex, Items) ->
+    lists:foldl(fun(I, Acc) ->
+                        expand_item(HasIndex, I, Acc)
+                end, [], Items).
+
+expand_item(Has2ITree, {object, BKey, RObj}, Others) ->
+    IndexN = riak_kv_util:get_index_n(BKey),
+    BinBKey = term_to_binary(BKey),
+    ObjHash = hash_object(BKey, RObj),
+    Item0 = {IndexN, BinBKey, ObjHash},
+    case Has2ITree of
+        false ->
+            [Item0 | Others];
+        true ->
+            IndexData = riak_object:index_data(RObj),
+            Hash2i =  hash_index_data(IndexData),
+            [Item0, {?INDEX_2I_N, BinBKey, Hash2i} | Others]
+    end;
+expand_item(_, Item, Others) ->
+    [Item | Others].
+
+-spec do_insert_expanded([{index_n(), binary(), binary()}], proplist(),
+                         state()) -> state().
+do_insert_expanded([], _Opts, State) ->
+    State;
+do_insert_expanded([{Id, Key, Hash}|Rest], Opts, State=#state{trees=Trees}) ->
+    State2 = 
     case orddict:find(Id, Trees) of
         {ok, Tree} ->
             Tree2 = hashtree:insert(Key, Hash, Tree, Opts),
             Trees2 = orddict:store(Id, Tree2, Trees),
             State#state{trees=Trees2};
         _ ->
-            State2 = handle_unexpected_key(Id, Key, State),
-            State2
+            handle_unexpected_key(Id, Key, State)
+    end,
+    do_insert_expanded(Rest, Opts, State2).
+
+do_delete(Items, State=#state{trees=Trees}) ->
+    HasIndex = has_index_tree(Trees),
+    do_delete_expanded(expand_delete_items(HasIndex, Items), State).
+
+expand_delete_items(HasIndex, Items) ->
+    lists:foldl(fun(I, Acc) ->
+                        expand_delete_item(HasIndex, I, Acc)
+                end, [], Items).
+
+expand_delete_item(Has2ITree, {object, BKey}, Others) ->
+    IndexN = riak_kv_util:get_index_n(BKey),
+    BinKey = term_to_binary(BKey),
+    Item0 = {IndexN, BinKey},
+    case Has2ITree of
+        false ->
+            [Item0 | Others];
+        true ->
+            [Item0, {?INDEX_2I_N, BinKey} | Others]
     end.
 
--spec do_delete(index_n(), binary(), state()) -> state().
-do_delete(Id, Key, State=#state{trees=Trees}) ->
+-spec do_delete_expanded(list(), state()) -> state().
+do_delete_expanded([], State) ->
+    State;
+do_delete_expanded([{Id, Key}|Rest], State=#state{trees=Trees}) ->
+    State2 =
     case orddict:find(Id, Trees) of
         {ok, Tree} ->
             Tree2 = hashtree:delete(Key, Tree),
             Trees2 = orddict:store(Id, Tree2, Trees),
             State#state{trees=Trees2};
         _ ->
-            State2 = handle_unexpected_key(Id, Key, State),
-            State2
-    end.
+            handle_unexpected_key(Id, Key, State)
+    end,
+    do_delete_expanded(Rest, State2).
+
+-spec responsible_preflists(#state{}) -> [index_n()].
+responsible_preflists(#state{index=Partition, use_2i=Use2i}) ->
+    RP = riak_kv_util:responsible_preflists(Partition) ++
+    [?INDEX_2I_N || Use2i],
+    RP.
 
 -spec handle_unexpected_key(index_n(), binary(), state()) -> state().
 handle_unexpected_key(Id, Key, State=#state{index=Partition}) ->
-    RP = riak_kv_util:responsible_preflists(Partition),
+    RP = responsible_preflists(State),
     case lists:member(Id, RP) of
         false ->
-            %% The encountered object does not belong to any preflists thata
+            %% The encountered object does not belong to any preflists that
             %% this partition is associated with. Under normal Riak operation,
             %% this should only happen when the `n_val' for an object is
             %% reduced. For example, write an object with N=3, then change N to
@@ -590,8 +758,8 @@ tree_id(_) ->
     erlang:error(badarg).
 
 -spec do_compare(index_n(), hashtree:remote_fun(), hashtree:acc_fun(any()),
-                 term(), state()) -> ok.
-do_compare(Id, Remote, AccFun, From, State) ->
+                 any(), term(), state()) -> ok.
+do_compare(Id, Remote, AccFun, Acc, From, State) ->
     case orddict:find(Id, State#state.trees) of
         error ->
             %% This case shouldn't happen, but might as well safely handle it.
@@ -601,12 +769,8 @@ do_compare(Id, Remote, AccFun, From, State) ->
         {ok, Tree} ->
             spawn_link(fun() ->
                                Remote(init, self()),
-                               Result = case AccFun of
-                                            undefined ->
-                                                hashtree:compare(Tree, Remote);
-                                            _ ->
-                                                hashtree:compare(Tree, Remote, AccFun)
-                                        end,
+                               Result = hashtree:compare(Tree, Remote,
+                                                         AccFun, Acc),
                                Remote(final, self()),
                                gen_server:reply(From, Result)
                        end)
@@ -615,39 +779,39 @@ do_compare(Id, Remote, AccFun, From, State) ->
 
 -spec do_poke(state()) -> state().
 do_poke(State) ->
-    State1 = maybe_clear(State),
+    State1 = maybe_rebuild(maybe_expire(State)),
     State2 = maybe_build(State1),
     State2.
 
-%% If past expiration, clear all hashtrees.
--spec maybe_clear(state()) -> state().
-maybe_clear(State=#state{lock=undefined, built=true}) ->
+-spec maybe_expire(state()) -> state().
+maybe_expire(State=#state{lock=undefined, built=true, expired=false}) ->
     Diff = timer:now_diff(os:timestamp(), State#state.build_time),
     Expire = app_helper:get_env(riak_kv,
                                 anti_entropy_expire,
                                 ?DEFAULT_EXPIRE),
     %% Need to convert from millsec to microsec
-    case Diff > (Expire * 1000) of
+    case (Expire =/= never) andalso (Diff > (Expire * 1000)) of
         true ->
-            clear_tree(State);
+            lager:debug("Tree expired: ~p", [State#state.index]),
+            State#state{expired=true};
         false ->
             State
     end;
-maybe_clear(State) ->
+maybe_expire(State) ->
     State.
 
 -spec clear_tree(state()) -> state().
 clear_tree(State=#state{index=Index}) ->
-    lager:debug("Clearing tree ~p", [State#state.index]),
+    lager:debug("Clearing tree ~p", [Index]),
+    IndexNs = responsible_preflists(State),
     State2 = destroy_trees(State),
-    IndexNs = riak_kv_util:responsible_preflists(Index),
     State3 = init_trees(IndexNs, State2#state{trees=orddict:new()}),
-    State3#state{built=false}.
+    State3#state{built=false, expired=false}.
 
 destroy_trees(State) ->
     State2 = close_trees(State),
     {_,Tree0} = hd(State2#state.trees),
-    hashtree:destroy(Tree0),
+    _ = hashtree:destroy(Tree0),
     State2.
 
 -spec maybe_build(state()) -> state().
@@ -665,27 +829,103 @@ maybe_build(State) ->
 %% a fold/build. Otherwise, trigger a rehash to ensure the hashtrees match the
 %% current on-disk segments.
 -spec build_or_rehash(pid(), state()) -> ok.
-build_or_rehash(Self, State=#state{index=Index, trees=Trees}) ->
+build_or_rehash(Self, State=#state{index=Index}) ->
     Type = case load_built(State) of
                false -> build;
                true  -> rehash
            end,
-    Lock = riak_kv_entropy_manager:get_lock(Type),
-    case {Lock, Type} of
-        {ok, build} ->
+    Locked = get_all_locks(Type, Index, self()),
+    build_or_rehash(Self, Locked, Type, State).
+
+build_or_rehash(Self, Locked, Type, #state{index=Index, trees=Trees}) ->
+    case {Locked, Type} of
+        {true, build} ->
             lager:debug("Starting build: ~p", [Index]),
-            fold_keys(Index, Self),
+            fold_keys(Index, Self, has_index_tree(Trees)),
             lager:debug("Finished build (a): ~p", [Index]), 
             gen_server:cast(Self, build_finished);
-        {ok, rehash} ->
+        {true, rehash} ->
             lager:debug("Starting rehash: ~p", [Index]),
-            [hashtree:rehash_tree(T) || {_,T} <- Trees],
+            _ = [hashtree:rehash_tree(T) || {_,T} <- Trees],
             lager:debug("Finished rehash (a): ~p", [Index]),
             gen_server:cast(Self, build_finished);
-        {_Error, _} ->
+        _ ->
             gen_server:cast(Self, build_failed)
     end.
 
+-spec maybe_rebuild(state()) -> state().
+maybe_rebuild(State=#state{lock=undefined, built=true, expired=true, index=Index}) ->
+    Self = self(),
+    Pid = spawn_link(fun() ->
+                             receive
+                                 {lock, Locked, State2} ->
+                                     build_or_rehash(Self, Locked, build, State2);
+                                 stop ->
+                                     ok
+                             end
+                     end),
+    Locked = get_all_locks(build, Index, Pid),
+    case Locked of
+        true ->
+            State2 = clear_tree(State),
+            Pid ! {lock, Locked, State2},
+            State2#state{built=Pid};
+        _ ->
+            Pid ! stop,
+            State
+    end;
+maybe_rebuild(State) ->
+    State.
+
+%% Check if the trees contain the magic index tree
+-spec has_index_tree(orddict()) -> boolean().
+has_index_tree(Trees) ->
+    orddict:is_key(?INDEX_2I_N, Trees).
+
 close_trees(State=#state{trees=Trees}) ->
-    Trees2 = [{IdxN, hashtree:close(Tree)} || {IdxN, Tree} <- Trees],
-    State#state{trees=Trees2}.
+    Trees2 = [begin
+                  NewTree = try
+                                hashtree:flush_buffer(Tree)
+                            catch _:_ ->
+                                    Tree
+                            end,
+                  {IdxN, NewTree}
+              end || {IdxN, Tree} <- Trees],
+    Trees3 = [{IdxN, hashtree:close(Tree)} || {IdxN, Tree} <- Trees2],
+    State#state{trees=Trees3}.
+
+get_all_locks(Type, Index, Pid) ->
+    case riak_kv_entropy_manager:get_lock(Type, Pid) of
+        ok ->
+            case maybe_get_vnode_lock(Type, Index, Pid) of
+                ok ->
+                    true;
+                _ ->
+                    false
+            end;
+        _ ->
+            false
+    end.
+
+maybe_get_vnode_lock(rehash, _Partition, _Pid) ->
+    %% rehash operations do not need a vnode lock
+    ok;
+maybe_get_vnode_lock(build, Partition, Pid) ->
+    maybe_get_vnode_lock(Partition, Pid).
+
+%% @private
+%% @doc Unless skipping the background manager, try to acquire the per-vnode lock.
+%%      Sets our task meta-data in the lock as 'aae_rebuild', which is useful for
+%%      seeing what's holding the lock via @link riak_core_background_mgr:ps/0.
+-spec maybe_get_vnode_lock(SrcPartition::index(), pid()) -> ok | max_concurrency.
+maybe_get_vnode_lock(SrcPartition, Pid) ->
+    case riak_core_bg_manager:use_bg_mgr(riak_kv, aae_use_background_manager) of
+        true  ->
+            Lock = ?KV_VNODE_LOCK(SrcPartition),
+            case riak_core_bg_manager:get_lock(Lock, Pid, [{task, aae_rebuild}]) of
+                {ok, _Ref} -> ok;
+                max_concurrency -> max_concurrency
+            end;
+        false ->
+            ok
+    end.

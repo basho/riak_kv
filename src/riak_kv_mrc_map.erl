@@ -74,15 +74,18 @@
 %% `Partition' and the rest of `FittingDetails' for use during
 %% processing.
 -spec init(riak_pipe_vnode:partition(), riak_pipe_fitting:details()) ->
-         {ok, state()} | {error, Reason :: term()}.
+         {ok, state()}.
 init(Partition, #fitting_details{arg={Phase, Arg}}=FittingDetails) ->
-    case init_phase(Phase) of
-        {ok, LocalPhase} ->
-            {ok, #state{p=Partition, fd=FittingDetails,
-                        phase=LocalPhase, arg=Arg}};
-        {error, Error} ->
-            {error, Error}
-    end.
+    %% `init_phase/`' may return an error tuple, but we purposely
+    %% don't pattern match on it at the moment. If it returns an
+    %% error tuple, a badmatch exception will be thrown, and will be
+    %% caught inside of `riak_pipe_vnode_worker:init/1'. This will
+    %% cause the pipe worker to return `{stop, {init_failed, ...}}'.
+    %% A longer-term fix might be to update the callback spec
+    %% for init to allow for an error-tuple to be returned.
+    {ok, LocalPhase} =  init_phase(Phase),
+    {ok, #state{p=Partition, fd=FittingDetails,
+                phase=LocalPhase, arg=Arg}}.
 
 %% @doc Perform any one-time initialization of the phase that's
 %% possible/needed.  This currently includes looking up functions from
@@ -156,7 +159,7 @@ process(Input, _Last,
         
 %% @doc Evaluate the map function.
 -spec map(riak_kv_mrc_pipe:map_query_fun(), term(), term())
-         -> {ok, [term()]}
+         -> {ok, term()}
           | {forward_preflist, Reason :: term()}
           | {error, Reason :: term()}.
 map({modfun, Module, Function}, Arg, Input0) ->

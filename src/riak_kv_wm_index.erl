@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_index - Webmachine resource for running index queries.
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,8 +24,29 @@
 %%
 %% Available operations:
 %%
-%% GET /buckets/bucket/indexes/index/op/arg1...
+%% GET /buckets/Bucket/index/IndexName/Key
+%% GET /buckets/Bucket/index/IndexName/Start/End
 %%   Run an index lookup, return the results as JSON.
+%%
+%% GET /types/Type/buckets/Bucket/index/IndexName/Key
+%% GET /types/Type/buckets/Bucket/index/IndexName/Start/End
+%%   Run an index lookup over the Bucket in BucketType, returning the
+%%   results in JSON.
+%%
+%% Both URL formats support the following query-string options:
+%%   * max_results=Integer
+%%         limits the number of results returned
+%%   * stream=true
+%%         streams the results back in multipart/mixed chunks
+%%   * continuation=C
+%%         the continuation returned from the last query, used to
+%%         fetch the next "page" of results.
+%%   * return_terms=true
+%%         when querying with a range, returns the value of the index
+%%         along with the key.
+%%   * pagination_sort=true|false
+%%         whether the results will be sorted. Ignored when max_results
+%%         is set, as pagination requires sorted results.
 
 -module(riak_kv_wm_index).
 
@@ -33,42 +54,50 @@
 -export([
          init/1,
          service_available/2,
+         is_authorized/2,
          forbidden/2,
          malformed_request/2,
          content_types_provided/2,
          encodings_provided/2,
+         resource_exists/2,
          produce_index_results/2
         ]).
 
-%% @type context() = term()
 -record(ctx, {
           client,       %% riak_client() - the store client
           riak,         %% local | {node(), atom()} - params for riak client
+          bucket_type,  %% Bucket type (from uri)
           bucket,       %% The bucket to query.
           index_query,   %% The query..
           max_results :: all | pos_integer(), %% maximum number of 2i results to return, the page size.
           return_terms = false :: boolean(), %% should the index values be returned
-          timeout :: non_neg_integer() | undefined | infinity
+          timeout :: non_neg_integer() | undefined | infinity,
+          pagination_sort :: boolean() | undefined,
+          security        %% security context
          }).
+-type context() :: #ctx{}.
 
 -define(ALL_2I_RESULTS, all).
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
+-include("riak_kv_index.hrl").
 
-%% @spec init(proplist()) -> {ok, context()}
+-spec init(proplists:proplist()) -> {ok, context()}.
 %% @doc Initialize this resource.
 init(Props) ->
     {ok, #ctx{
-       riak=proplists:get_value(riak, Props)
+       riak=proplists:get_value(riak, Props),
+       bucket_type=proplists:get_value(bucket_type, Props)
       }}.
 
 
-%% @spec service_available(reqdata(), context()) ->
-%%          {boolean(), reqdata(), context()}
+-spec service_available(#wm_reqdata{}, context()) ->
+    {boolean(), #wm_reqdata{}, context()}.
 %% @doc Determine whether or not a connection to Riak
 %%      can be established. Also, extract query params.
-service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
+service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
+    Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
             {true, RD, Ctx#ctx { client=C }};
@@ -80,11 +109,44 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
              Ctx}
     end.
 
-forbidden(RD, Ctx) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
+is_authorized(ReqData, Ctx) ->
+    case riak_api_web_security:is_authorized(ReqData) of
+        false ->
+            {"Basic realm=\"Riak\"", ReqData, Ctx};
+        {true, SecContext} ->
+            {true, ReqData, Ctx#ctx{security=SecContext}};
+        insecure ->
+            %% XXX 301 may be more appropriate here, but since the http and
+            %% https port are different and configurable, it is hard to figure
+            %% out the redirect URL to serve.
+            {{halt, 426}, wrq:append_to_resp_body(<<"Security is enabled and "
+                    "Riak does not accept credentials over HTTP. Try HTTPS "
+                    "instead.">>, ReqData), Ctx}
+    end.
 
-%% @spec malformed_request(reqdata(), context()) ->
-%%          {boolean(), reqdata(), context()}
+forbidden(RD, Ctx = #ctx{security=undefined}) ->
+    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
+forbidden(RD, Ctx) ->
+    case riak_kv_wm_utils:is_forbidden(RD) of
+        true ->
+            {true, RD, Ctx};
+        false ->
+            Bucket = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(bucket, RD))),
+            Res = riak_core_security:check_permission({"riak_kv.index",
+                                                       {Ctx#ctx.bucket_type,
+                                                        Bucket}},
+                                                      Ctx#ctx.security),
+            case Res of
+                {false, Error, _} ->
+                    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
+                    {true, wrq:append_to_resp_body(unicode:characters_to_binary(Error, utf8, utf8), RD1), Ctx};
+                {true, _} ->
+                    {false, RD, Ctx}
+            end
+    end.
+
+-spec malformed_request(#wm_reqdata{}, context()) ->
+    {boolean(), #wm_reqdata{}, context()}.
 %% @doc Determine whether query parameters are badly-formed.
 %%      Specifically, we check that the index operation is of
 %%      a known type.
@@ -95,42 +157,104 @@ malformed_request(RD, Ctx) ->
     Args1 = wrq:path_tokens(RD),
     Args2 = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
     ReturnTerms0 = wrq:get_qs_value(?Q_2I_RETURNTERMS, "false", RD),
-    ReturnTerms = normalize_boolean(string:to_lower(ReturnTerms0)),
-    MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, ?ALL_2I_RESULTS, RD),
+    ReturnTerms1 = normalize_boolean(string:to_lower(ReturnTerms0)),
     Continuation = wrq:get_qs_value(?Q_2I_CONTINUATION, undefined, RD),
+    PgSort0 = wrq:get_qs_value(?Q_2I_PAGINATION_SORT, RD),
+    PgSort = case PgSort0 of
+        undefined -> undefined;
+        _ -> normalize_boolean(string:to_lower(PgSort0))
+    end,
+    MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, ?ALL_2I_RESULTS, RD),
+    TermRegex = wrq:get_qs_value(?Q_2I_TERM_REGEX, undefined, RD),
     Timeout0 =  wrq:get_qs_value("timeout", undefined, RD),
+    {Start, End} = case {IndexField, Args2} of
+                       {<<"$bucket">>, _} -> {undefined, undefined};
+                       {_, []} -> {undefined, undefined};
+                       {_, [S]} -> {S, S};
+                       {_, [S, E]} -> {S, E}
+                   end,
+    IsEqualOp = length(Args1) == 1,
+    InternalReturnTerms = not( IsEqualOp orelse IndexField == <<"$field">> ),
+    MaxVal = validate_max(MaxResults0),
+    QRes = riak_index:to_index_query(
+             [
+                {field, IndexField}, {start_term, Start}, {end_term, End},
+                {return_terms, InternalReturnTerms},
+                {continuation, Continuation},
+                {term_regex, TermRegex}
+             ]
+             ++ [{max_results, MaxResults} || {true, MaxResults} <- [MaxVal]]
+            ),
+    ValRe = case TermRegex of
+        undefined ->
+            ok;
+        _ ->
+            re:compile(TermRegex)
+    end,
 
-    case {ReturnTerms, validate_timeout(Timeout0), validate_max(MaxResults0), riak_index:to_index_query(IndexField, Args2, Continuation)} of
-        {malformed, _, _, _} ->
+    case {PgSort,
+          ReturnTerms1,
+          validate_timeout(Timeout0),
+          MaxVal,
+          QRes,
+          ValRe} of
+        {malformed, _, _, _, _, _} ->
+             {true,
+             wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
+                                             [?Q_2I_PAGINATION_SORT, PgSort0]),
+                               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, malformed, _, _, _, _} ->
              {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
                                              [?Q_2I_RETURNTERMS, ReturnTerms0]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, {true, Timeout}, {true, MaxResults}, {ok, Query}} ->
+        {_, _, _, _, {ok, ?KV_INDEX_Q{start_term=NormStart}}, {ok, _CompiledRe}}
+         when is_integer(NormStart) ->
+            {true,
+             wrq:set_resp_body("Can not use term regular expressions"
+                               " on integer queries",
+                               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, _, _, _, _, {error, ReError}} ->
+            {true,
+             wrq:set_resp_body(
+                    io_lib:format("Invalid term regular expression ~p : ~p",
+                                  [TermRegex, ReError]),
+                    wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, _, {true, Timeout}, {true, MaxResults}, {ok, Query}, _} ->
             %% Request is valid.
-            ReturnTerms1 = riak_index:return_terms(ReturnTerms, Query),
+            ReturnTerms2 = riak_index:return_terms(ReturnTerms1, Query),
+            %% Special case: a continuation implies pagination sort
+            %% even if no max_results was given.
+            PgSortFinal = case Continuation of
+                              undefined -> PgSort;
+                              _ -> true
+                          end,
             NewCtx = Ctx#ctx{
                        bucket = Bucket,
                        index_query = Query,
                        max_results = MaxResults,
-                       return_terms = ReturnTerms1,
-                       timeout=Timeout
+                       return_terms = ReturnTerms2,
+                       timeout=Timeout,
+                       pagination_sort = PgSortFinal
                       },
             {false, RD, NewCtx};
-        {_, _, _, {error, Reason}} ->
+        {_, _, _, _, {error, Reason}, _} ->
             {true,
              wrq:set_resp_body(
                io_lib:format("Invalid query: ~p~n", [Reason]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, {false, BadVal}, _} ->
+        {_, _, _, {false, BadVal}, _, _} ->
             {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a positive integer",
                                              [?Q_2I_MAX_RESULTS, BadVal]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, {error, Input}, _, _} ->
+        {_, _, {error, Input}, _, _, _} ->
             {true, wrq:append_to_resp_body(io_lib:format("Bad timeout "
                                                            "value ~p. Must be a non-negative integer~n",
                                                            [Input]),
@@ -172,23 +296,27 @@ normalize_boolean("true") ->
 normalize_boolean(_) ->
     malformed.
 
-%% @spec content_types_provided(reqdata(), context()) ->
-%%          {[{ContentType::string(), Producer::atom()}], reqdata(), context()}
+-spec content_types_provided(#wm_reqdata{}, context()) ->
+    {[{ContentType::string(), Producer::atom()}], #wm_reqdata{}, context()}.
 %% @doc List the content types available for representing this resource.
 %%      "application/json" is the content-type for bucket lists.
 content_types_provided(RD, Ctx) ->
     {[{"application/json", produce_index_results}], RD, Ctx}.
 
 
-%% @spec encodings_provided(reqdata(), context()) ->
-%%          {[{Encoding::string(), Producer::function()}], reqdata(), context()}
+-spec encodings_provided(#wm_reqdata{}, context()) ->
+    {[{Encoding::string(), Producer::function()}], #wm_reqdata{}, context()}.
 %% @doc List the encodings available for representing this resource.
 %%      "identity" and "gzip" are available for bucket lists.
 encodings_provided(RD, Ctx) ->
     {riak_kv_wm_utils:default_encodings(), RD, Ctx}.
 
 
-%% @spec produce_index_results(reqdata(), context()) -> {binary(), reqdata(), context()}
+resource_exists(RD, #ctx{bucket_type=BType}=Ctx) ->
+    {riak_kv_wm_utils:bucket_type_exists(BType), RD, Ctx}.
+
+-spec produce_index_results(#wm_reqdata{}, context()) ->
+    {binary(), #wm_reqdata{}, context()}.
 %% @doc Produce the JSON response to an index lookup.
 produce_index_results(RD, Ctx) ->
     case wrq:get_qs_value("stream", "false", RD) of
@@ -200,11 +328,12 @@ produce_index_results(RD, Ctx) ->
 
 handle_streaming_index_query(RD, Ctx) ->
     Client = Ctx#ctx.client,
-    Bucket = Ctx#ctx.bucket,
+    Bucket = riak_kv_wm_utils:maybe_bucket_type(Ctx#ctx.bucket_type, Ctx#ctx.bucket),
     Query = Ctx#ctx.index_query,
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,
     Timeout = Ctx#ctx.timeout,
+    PgSort = Ctx#ctx.pagination_sort,
 
     %% Create a new multipart/mixed boundary
     Boundary = riak_core_util:unique_id_62(),
@@ -213,13 +342,14 @@ handle_streaming_index_query(RD, Ctx) ->
                 "multipart/mixed;boundary="++Boundary,
                 RD),
 
-    Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults}]),
+    Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
+    Opts = riak_index:add_timeout_opt(Timeout, Opts0), 
 
-    {ok, ReqID} =  Client:stream_get_index(Bucket, Query, Opts),
-    StreamFun = index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, undefined, 0),
+    {ok, ReqID, FSMPid} =  Client:stream_get_index(Bucket, Query, Opts),
+    StreamFun = index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, proplists:get_value(timeout, Opts), undefined, 0),
     {{stream, {<<>>, StreamFun}}, CTypeRD, Ctx}.
 
-index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count) ->
+index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult, Count) ->
     fun() ->
             receive
                 {ReqID, done} ->
@@ -234,7 +364,7 @@ index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)
                             end,
                     {iolist_to_binary(Final), done};
                 {ReqID, {results, []}} ->
-                    {<<>>, index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)};
+                    {<<>>, index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult, Count)};
                 {ReqID, {results, Results}} ->
                     %% JSONify the results
                     JsonResults = encode_results(ReturnTerms, Results),
@@ -244,29 +374,64 @@ index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult, Count)
                     LastResult1 = last_result(Results),
                     Count1 = Count + length(Results),
                     {iolist_to_binary(Body),
-                     index_stream_helper(ReqID, Boundary, ReturnTerms, MaxResults, LastResult1, Count1)};
+                     index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult1, Count1)};
                 {ReqID, Error} ->
-                    lager:error("Error in index wm: ~p", [Error]),
-                    ErrorJson = mochijson2:encode({struct, [{error, Error}]}),
-                    Body = ["\r\n--", Boundary, "\r\n",
-                            "Content-Type: application/json\r\n\r\n",
-                            ErrorJson,
-                            "\r\n--", Boundary, "--\r\n"],
-                    {iolist_to_binary(Body), done}
-            after 60000 ->
-                    {error, timeout}
+                    stream_error(Error, Boundary)
+            after Timeout ->
+                    whack_index_fsm(ReqID, FSMPid),
+                    stream_error({error, timeout}, Boundary)
             end
     end.
 
+whack_index_fsm(ReqID, Pid) ->
+    wait_for_death(Pid),
+    clear_index_fsm_msgs(ReqID).
+
+wait_for_death(Pid) ->
+    Ref = erlang:monitor(process, Pid),
+    exit(Pid, kill),
+    receive
+        {'DOWN', Ref, process, Pid, _Info} ->
+            ok
+    end.
+
+clear_index_fsm_msgs(ReqID) ->
+    receive
+        {ReqID, _} ->
+            clear_index_fsm_msgs(ReqID)
+    after
+        0 ->
+            ok
+    end.
+
+stream_error(Error, Boundary) ->
+    lager:error("Error in index wm: ~p", [Error]),
+    ErrorJson = encode_error(Error),
+    Body = ["\r\n--", Boundary, "\r\n",
+            "Content-Type: application/json\r\n\r\n",
+            ErrorJson,
+            "\r\n--", Boundary, "--\r\n"],
+    {iolist_to_binary(Body), done}.
+
+encode_error({error, E}) ->
+    encode_error(E);
+encode_error(Error) when is_atom(Error); is_binary(Error) ->
+    mochijson2:encode({struct, [{error, Error}]});
+encode_error(Error) ->
+    E = io_lib:format("~p",[Error]),
+    mochijson2:encode({struct, [{error, erlang:iolist_to_binary(E)}]}).
+
 handle_all_in_memory_index_query(RD, Ctx) ->
     Client = Ctx#ctx.client,
-    Bucket = Ctx#ctx.bucket,
+    Bucket = riak_kv_wm_utils:maybe_bucket_type(Ctx#ctx.bucket_type, Ctx#ctx.bucket),
     Query = Ctx#ctx.index_query,
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,
+    PgSort = Ctx#ctx.pagination_sort,
     Timeout = Ctx#ctx.timeout,
 
-    Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults}]),
+    Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
+    Opts = riak_index:add_timeout_opt(Timeout, Opts0), 
 
     %% Do the index lookup...
     case Client:get_index(Bucket, Query, Opts) of
@@ -274,6 +439,13 @@ handle_all_in_memory_index_query(RD, Ctx) ->
             Continuation = make_continuation(MaxResults, Results, length(Results)),
             JsonResults = encode_results(ReturnTerms, Results, Continuation),
             {JsonResults, RD, Ctx};
+        {error, timeout} ->
+            {{halt, 503},
+             wrq:set_resp_header("Content-Type", "text/plain",
+                                 wrq:append_to_response_body(
+                                   io_lib:format("request timed out~n",[]),
+                                   RD)),
+             Ctx};
         {error, Reason} ->
             {{error, Reason}, RD, Ctx}
     end.

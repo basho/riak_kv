@@ -25,16 +25,20 @@
 -export([doc_env/0]).
 
 -define(LINUX_PARAMS, [
-                       {"vm.swappiness",                        0, gte}, 
+                       {"vm.swappiness",                        0, gte},
                        {"net.core.wmem_default",          8388608, lte},
                        {"net.core.rmem_default",          8388608, lte},
                        {"net.core.wmem_max",              8388608, lte},
                        {"net.core.rmem_max",              8388608, lte},
                        {"net.core.netdev_max_backlog",      10000, lte},
-                       {"net.core.somaxconn",                4000, lte},
+                       {"net.core.somaxconn",               40000, lte},
                        {"net.ipv4.tcp_max_syn_backlog",     40000, lte},
                        {"net.ipv4.tcp_fin_timeout",            15, gte},
-                       {"net.ipv4.tcp_tw_reuse",                1, eq}
+                       {"net.ipv4.tcp_keepalive_intvl",        30, gte},
+                       {"net.ipv4.tcp_sack",                    1, eq},
+                       {"net.ipv4.tcp_moderate_rcvbuf",         1, eq},
+                       {"net.ipv4.tcp_tw_reuse",                1, eq},
+                       {"net.ipv4.tcp_window_scaling",          1, eq}
                       ]).
 
 
@@ -49,7 +53,7 @@ doc_env() ->
                        [];
                    {unix, sunos} ->
                        [];
-                   _ -> 
+                   _ ->
                        [{warn, "Unknown OS type, no platform specific info", []}]
                end,
     lists:map(fun({F, Fmt, Args}) ->
@@ -68,34 +72,34 @@ doc_env() ->
 check_ulimits() ->
     %% file ulimit
     FileLimit0 = string:strip(os:cmd("ulimit -n"), right, $\n),
-    FLMsg = case FileLimit0 of 
-                "unlimited" -> 
+    FLMsg = case FileLimit0 of
+                "unlimited" ->
                     %% check the OS limit;
-                    OSLimit = case os:type() of 
+                    OSLimit = case os:type() of
                                   {unix, linux} ->
-                                      string:strip(os:cmd("sysctl -n fs.file-max"), 
+                                      string:strip(os:cmd("sysctl -n fs.file-max"),
                                                    right, $\n);
                                   _ -> unknown
                               end,
                     case OSLimit of
-                        unknown -> 
+                        unknown ->
                             {warn, "Open file limit unlimited but actual limit "
                              ++ "could not be ascertained", []};
-                        _ -> 
+                        _ ->
                             test_file_limit(OSLimit)
                     end;
-                _ -> 
+                _ ->
                     test_file_limit(FileLimit0)
-            end, 
+            end,
     CoreLimit0 = string:strip(os:cmd("ulimit -c"), right, $\n),
-    CLMsg = case CoreLimit0 of 
-                "unlimited" -> 
+    CLMsg = case CoreLimit0 of
+                "unlimited" ->
                     {info, "No core size limit", []};
                 _  ->
                     CoreLimit = list_to_integer(CoreLimit0),
-                    case CoreLimit == 0 of 
+                    case CoreLimit == 0 of
                         true ->
-                            {warn, "Cores are disabled, this may " 
+                            {warn, "Cores are disabled, this may "
                              ++ "hinder debugging", []};
                         false ->
                             {info, "Core size limit: ~p", [CoreLimit]}
@@ -107,19 +111,19 @@ check_ulimits() ->
 test_file_limit(FileLimit0) ->
     FileLimit = (catch list_to_integer(FileLimit0)),
     case FileLimit of
-        {'EXIT', {badarg,_}} -> 
+        {'EXIT', {badarg,_}} ->
             {warn, "Open file limit was read as non-integer string: ~s",
              [FileLimit0]};
-    
-        _ -> 
-            case FileLimit < 4096 of 
+
+        _ ->
+            case FileLimit < 4096 of
                 true ->
                     {warn, "Open file limit of ~p is low, at least "
                      ++ "4096 is recommended", [FileLimit]};
-                false -> 
+                false ->
                     {info, "Open file limit: ~p", [FileLimit]}
             end
-    end.      
+    end.
 
 %% @private
 check_erlang_limits() ->
@@ -132,33 +136,28 @@ check_erlang_limits() ->
                     {info,"Erlang process limit: ~p", [PL2]}
             end,
     %% ports
-    PortLimit = case os:getenv("ERL_MAX_PORTS") of
-                    false -> 1024;
-                    PL -> list_to_integer(PL)
-                end,
+    PortLimit = erlang:system_info(port_limit),
     PortMsg = case PortLimit < 64000 of
                   true ->
-                      %% needs to be revisited for R16+
                       {warn, "Erlang ports limit of ~p is low, at least "
                        "64000 is recommended", [PortLimit]};
                   false ->
                       {info, "Erlang ports limit: ~p", [PortLimit]}
               end,
-    
-    %% ets tables
-    ETSLimit = case os:getenv("ERL_MAX_ETS_TABLES") of
-                   false -> 1400;
-                   Limit -> list_to_integer(Limit)
-               end,
-    ETSMsg = case ETSLimit < 256000 of
-                 true ->
-                     {warn,"ETS table count limit of ~p is low, at least "
-                      "256000 is recommended.", [ETSLimit]};
-                 false ->
-                     {info, "ETS table count limit: ~p",
-                      [ETSLimit]}
-             end,
 
+    %% ets tables
+    ETSMsg = try erlang:system_info(ets_limit) of
+        ETSLimit when ETSLimit < 256000 ->
+            {warn,"ETS table count limit of ~p is low, at least "
+                  "256000 is recommended.", [ETSLimit]};
+        ETSLimit ->
+            {info, "ETS table count limit: ~p",
+                   [ETSLimit]}
+    catch
+        error:badarg ->
+            {warn, "ETS table count limit cannot be determined on this "
+                   "version of Erlang", []}
+    end,
     %% fullsweep_after
     {fullsweep_after, GCGens} = erlang:system_info(fullsweep_after),
     GCMsg = {info, "Generations before full sweep: ~p", [GCGens]},
@@ -179,7 +178,7 @@ check_erlang_limits() ->
                    {warn, "Running ~p schedulers for ~p cores, "
                     "these should match", [Schedulers, Cores]};
                false ->
-                   {info, "Schedulers: ~p for ~p cores", 
+                   {info, "Schedulers: ~p for ~p cores",
                     [Schedulers, Cores]}
     end,
     [PLMsg, PortMsg, ETSMsg, TPSMsg, GCMsg, SMsg].
@@ -194,24 +193,24 @@ check_sysctls(Checklist) ->
                             lte -> Actual >= Val;
                             eq -> Actual == Val
                         end,
-                 case Good of 
+                 case Good of
                      true ->
-                         {info , "sysctl ~s is ~p ~s ~p)", 
-                          [Param, Actual, 
-                           direction_to_word(Direction), 
+                         {info , "sysctl ~s is ~p ~s ~p)",
+                          [Param, Actual,
+                           direction_to_word(Direction),
                            Val]};
-                     false -> 
-                         {warn, "sysctl ~s is ~p, should be ~s~p)", 
-                          [Param, Actual, 
-                           direction_to_word2(Direction), 
+                     false ->
+                         {warn, "sysctl ~s is ~p, should be ~s~p)",
+                          [Param, Actual,
+                           direction_to_word2(Direction),
                            Val]}
                  end
          end,
     lists:map(Fn, Checklist).
-                 
+
 %% @private
 direction_to_word(Direction) ->
-    case Direction of 
+    case Direction of
         gte -> "greater than or equal to";
         lte -> "lesser than or equal to";
         eq  -> "equal to"
@@ -219,7 +218,7 @@ direction_to_word(Direction) ->
 
 %% @private
 direction_to_word2(Direction) ->
-    case Direction of 
+    case Direction of
         gte -> "no more than ";
         lte -> "at least ";
         eq  -> ""

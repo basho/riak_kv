@@ -3,7 +3,7 @@
 {application, riak_kv,
  [
   {description, "Riak Key/Value Store"},
-  {vsn, "1.4.1"},
+  {vsn, git},
   {applications, [
                   kernel,
                   stdlib,
@@ -16,7 +16,9 @@
                   mochiweb,
                   webmachine,
                   os_mon,
-                  riak_pipe
+                  riak_pipe,
+                  riak_dt,
+                  riak_pb
                  ]},
   {registered, []},
   {mod, {riak_kv_app, []}},
@@ -40,6 +42,9 @@
          %% Disable active anti-entropy by default
          {anti_entropy, {off, []}},
 
+         %% Enable DVV by default
+         {dvv_enabled, true},
+
          %% Allow Erlang MapReduce functions to be specified as
          %% strings.
          %%
@@ -47,6 +52,32 @@
          %% This will allow arbitrary Erlang code to be submitted
          %% through the REST and Protocol Buffers interfaces. This
          %% should only be used for development purposes.
-         {allow_strfun, false}
+         {allow_strfun, false},
+
+         %% Log a warning if object bigger than 5MB
+         {warn_object_size, 5242880},
+         % Writing an object bigger than 50MB will send a failure to the client
+         {max_object_size, 52428800},
+         %% Log a warning if # of siblings bigger than this
+         {warn_siblings, 25},
+         % Writing an object with more than this number of siblings will
+         % generate a warning in the logs
+         {max_siblings, 100},
+
+
+         %% @doc http_url_encoding determines how Riak treats URL encoded
+         %% buckets, keys, and links over the REST API. When set to 'on' Riak
+         %% always decodes encoded values sent as URLs and Headers.  Otherwise,
+         %% Riak defaults to compatibility mode where links are decoded, but
+         %% buckets and keys are not. The compatibility mode will be removed in
+         %% a future release.
+         {http_url_encoding, on},
+
+         %% @doc mapred_2i_pipe indicates whether secondary-index
+         %% MapReduce inputs are queued in parallel via their own
+         %% pipe ('true'), or serially via a helper process
+         %% ('false' or undefined).  Set to 'false' or leave
+         %% undefined during a rolling upgrade from 1.0.
+         {mapred_2i_pipe, true}
         ]}
  ]}.

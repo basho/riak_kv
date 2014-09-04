@@ -80,8 +80,8 @@ eqc_test_() ->
                                                              <<"function() { return 123; }">>},
                                                             []}, 5)),
         %% Run the quickcheck tests
-        {timeout, 60000, % do not trust the docs - timeout is in msec
-         ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(prop_basic_put()))))}
+        {timeout, 70,
+         ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(60, ?QC_OUT(prop_basic_put()))))}
        ]
       }
      ]
@@ -104,6 +104,7 @@ setup() ->
     %% Shut logging up - too noisy.
     application:load(sasl),
     application:set_env(sasl, sasl_error_logger, {file, "put_fsm_eqc_sasl.log"}),
+    application:set_env(riak_kv, fsm_trace_enabled, true),
     error_logger:tty(false),
     error_logger:logfile({open, "put_fsm_eqc.log"}),
 
@@ -115,6 +116,13 @@ setup() ->
 
     %% Start up mock servers and dependencies
     fsm_eqc_util:start_mock_servers(),
+
+    meck:new(riak_core_bucket),
+    meck:expect(riak_core_bucket, get_bucket,
+                fun(_Bucket) ->
+                        [dvv_enabled]
+                end),
+
     start_javascript(),
     State.
 
@@ -122,6 +130,7 @@ cleanup(running) ->
     application:stop(lager),
     application:unload(lager),
     cleanup_javascript(),
+    meck:unload(riak_core_bucket),
     fsm_eqc_util:cleanup_mock_servers(),
     %% Cleanup the JS manager process
     %% since it tends to hang around too long.

@@ -22,6 +22,7 @@
 
 -module(riak_kv_cinfo).
 -export([cluster_info_init/0, cluster_info_generator_funs/0]).
+-export([get_aae_throttle/0]).
 
 %% @spec () -> term()
 %% @doc Required callback function for cluster_info: initialization.
@@ -40,8 +41,22 @@ cluster_info_generator_funs() ->
     [
      {"Riak KV status", fun status/1},
      {"Riak KV ringready", fun ringready/1},
-     {"Riak KV transfers", fun transfers/1}
+     {"Riak KV transfers", fun transfers/1},
+     {"Riak KV anti-entropy throttle", fun aae_throttle/1}
     ].
+
+aae_throttle(CPid) ->
+    Props = get_aae_throttle(),
+    Throttle = proplists:get_value(current_throttle, Props),
+    ThrottleLimits = proplists:get_value(limits, Props),
+    cluster_info:format(CPid, "Current throttle: ~p msec\n", [Throttle]),
+    cluster_info:format(CPid, "Limit AAE throttle parameters: ~p\n",
+                        [ThrottleLimits]).
+
+get_aae_throttle() ->
+    [{throttle_kill, riak_kv_entropy_manager:get_aae_throttle_kill()},
+     {current_throttle, riak_kv_entropy_manager:get_aae_throttle()},
+     {limits, riak_kv_entropy_manager:get_aae_throttle_limits()}].
 
 status(CPid) -> % CPid is the data collector's pid.
     cluster_info:format(CPid, "~p\n", [riak_kv_status:statistics()]).

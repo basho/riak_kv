@@ -1,0 +1,635 @@
+%%-*- mode: erlang -*-
+
+%% @doc How Riak will repair out-of-sync keys. Some features require
+%% this to be set to 'active', including search.
+%%
+%% * active: out-of-sync keys will be repaired in the background
+%% * passive: out-of-sync keys are only repaired on read
+%% * active-debug: like active, but outputs verbose debugging
+%%   information
+{mapping, "anti_entropy", "riak_kv.anti_entropy", [
+  {datatype, {enum, [active, passive, 'active-debug']}},
+  {default, active}
+]}.
+
+{translation,
+ "riak_kv.anti_entropy",
+ fun(Conf) ->
+    Setting = cuttlefish:conf_get("anti_entropy", Conf),
+    case Setting of
+      active -> {on, []};
+      'active-debug' -> {on, [debug]};
+      passive -> {off, []};
+      _Default -> {on, []}
+    end
+  end
+}.
+
+%% @doc Specifies the storage engine used for Riak's key-value data
+%% and secondary indexes (if supported).
+{mapping, "storage_backend", "riak_kv.storage_backend", [
+  {default, {{storage_backend}} },
+  {datatype, {enum, [bitcask, leveldb, memory, multi]}}
+]}.
+
+{translation,
+ "riak_kv.storage_backend",
+ fun(Conf) ->
+    Setting = cuttlefish:conf_get("storage_backend", Conf),
+    case Setting of
+      bitcask -> riak_kv_bitcask_backend;
+      leveldb -> riak_kv_eleveldb_backend;
+      memory -> riak_kv_memory_backend;
+      multi -> riak_kv_multi_backend;
+      _Default -> riak_kv_bitcask_backend
+    end
+ end}.
+
+%% @doc Restrict how fast AAE can build hash trees. Building the tree
+%% for a given partition requires a full scan over that partition's
+%% data. Once built, trees stay built until they are expired.
+%% * .number is the number of builds
+%% * .per_timespan is the amount of time in which that .number of builds
+%%   occurs
+%%
+%% Default is 1 build per hour.
+{mapping, "anti_entropy.tree.build_limit.number", "riak_kv.anti_entropy_build_limit", [
+  {default, 1},
+  {datatype, integer},
+  hidden
+]}.
+
+%% @see anti_entropy.build_limit.number
+{mapping, "anti_entropy.tree.build_limit.per_timespan", "riak_kv.anti_entropy_build_limit", [
+  {default, "1h"},
+  {datatype, {duration, ms}},
+  hidden
+]}.
+
+{translation,
+ "riak_kv.anti_entropy_build_limit",
+ fun(Conf) ->
+    {cuttlefish:conf_get("anti_entropy.tree.build_limit.number", Conf),
+     cuttlefish:conf_get("anti_entropy.tree.build_limit.per_timespan", Conf)}
+ end}.
+
+%% @doc Determine how often hash trees are expired after being built.
+%% Periodically expiring a hash tree ensures the on-disk hash tree
+%% data stays consistent with the actual k/v backend data. It also
+%% helps Riak identify silent disk failures and bit rot. However,
+%% expiration is not needed for normal AAE operation and should be
+%% infrequent for performance reasons. The time is specified in
+%% milliseconds.
+{mapping, "anti_entropy.tree.expiry", "riak_kv.anti_entropy_expire", [
+  {default, "1w"},
+  {datatype, [{duration, ms}, {atom, never}]},
+  hidden
+]}.
+
+%% @doc Limit how many AAE exchanges or builds can happen concurrently.
+{mapping, "anti_entropy.concurrency_limit", "riak_kv.anti_entropy_concurrency", [
+  {default, 2},
+  {datatype, integer},
+  hidden
+]}.
+
+%% @doc The tick determines how often the AAE manager looks for work
+%% to do (building/expiring trees, triggering exchanges, etc).
+%% The default is every 15 seconds. Lowering this value will
+%% speedup the rate that all replicas are synced across the cluster.
+%% Increasing the value is not recommended.
+{mapping, "anti_entropy.trigger_interval", "riak_kv.anti_entropy_tick", [
+  {default, "15s"},
+  {datatype, {duration, ms}},
+  hidden
+]}.
+
+%% @doc The directory where AAE hash trees are stored.
+{mapping, "anti_entropy.data_dir", "riak_kv.anti_entropy_data_dir", [
+  {default, "$(platform_data_dir)/anti_entropy"},
+  hidden,
+  {datatype, directory}
+]}.
+
+%% @doc The LevelDB options used by AAE to generate the LevelDB-backed
+%% on-disk hashtrees.
+%% @see leveldb.write_buffer_size
+{mapping, "anti_entropy.write_buffer_size", "riak_kv.anti_entropy_leveldb_opts.write_buffer_size", [
+  {default, "4MB"},
+  {datatype, bytesize},
+  hidden
+]}.
+
+{mapping, "anti_entropy.max_open_files", "riak_kv.anti_entropy_leveldb_opts.max_open_files", [
+  {default, 20},
+  {datatype, integer},
+  hidden
+]}.
+
+%% @doc Whether the distributed throttle for active anti-entropy is
+%% enabled.
+{mapping, "anti_entropy.throttle", "riak_kv.aae_throttle_kill_switch", [
+  {default, on},
+  {datatype, {flag, off, on}},
+  hidden
+]}.
+
+%% @doc Sets the throttling tiers for active anti-entropy. Each tier
+%% is a minimum vnode mailbox size and a time-delay that the throttle
+%% should observe at that size and above. For example:
+%%
+%%     anti_entropy.throttle.tier1.mailbox_size = 0
+%%     anti_entropy.throttle.tier1.delay = 0ms
+%%     anti_entropy.throttle.tier2.mailbox_size = 40
+%%     anti_entropy.throttle.tier2.delay = 5ms
+%%
+%% If configured, there must be a tier which includes a mailbox size
+%% of 0. Both .mailbox_size and .delay must be set for each tier.
+%% @see anti_entropy.throttle
+{mapping,
+ "anti_entropy.throttle.$tier.mailbox_size",
+ "riak_kv.aae_throttle_limits", [
+  {datatype, integer},
+  hidden,
+  {validators, ["non_negative"]}
+]}.
+
+%% @see anti_entropy.throttle.$tier.mailbox_size
+{mapping,
+ "anti_entropy.throttle.$tier.delay",
+ "riak_kv.aae_throttle_limits", [
+  {datatype, {duration, ms}},
+  hidden
+]}.
+
+{validator,
+ "non_negative",
+ "must be greater than or equal to 0",
+ fun(Value) -> Value >= 0 end}.
+
+{translation,
+ "riak_kv.aae_throttle_limits",
+ fun(Conf) ->
+   %% Grab all of the possible names of tiers so we can ensure that
+   %% both mailbox_size and delay are included for each tier.
+   TierNamesM = cuttlefish_variable:fuzzy_matches(["anti_entropy", "throttle", "$tier", "mailbox_size"], Conf),
+   TierNamesD = cuttlefish_variable:fuzzy_matches(["anti_entropy", "throttle", "$tier", "delay"], Conf),
+   TierNames = lists:usort(TierNamesM ++ TierNamesD),
+   Throttles = lists:sort(lists:foldl(
+     fun({"$tier", Tier}, Settings) ->
+         Mbox = cuttlefish:conf_get(["anti_entropy", "throttle", Tier, "mailbox_size"], Conf),
+         Delay = cuttlefish:conf_get(["anti_entropy", "throttle", Tier, "delay"], Conf),
+         [{Mbox - 1, Delay}|Settings]
+     end, [], TierNames)),
+   case Throttles of
+       %% -1 is a magic "minimum" bound and must be included, so if it
+       %% isn't present we call it invalid
+       [{-1,_}|_] -> Throttles;
+       _ -> cuttlefish:invalid("anti_entropy.throttle tiers must include a tier with mailbox_size 0")
+   end
+end
+}.
+
+%% @see leveldb.bloomfilter
+{mapping, "anti_entropy.bloomfilter", "riak_kv.anti_entropy_leveldb_opts.use_bloomfilter", [
+  {default, on},
+  {datatype, flag},
+  hidden
+]}.
+
+%% @doc How many JavaScript virtual machines are available for
+%% executing map functions.
+{mapping, "javascript.map_pool_size", "riak_kv.map_js_vm_count", [
+  {default, {{map_js_vms}} },
+  {datatype, integer},
+  hidden
+]}.
+
+%% @doc How many JavaScript virtual machines are available for
+%% executing reduce functions.
+{mapping, "javascript.reduce_pool_size", "riak_kv.reduce_js_vm_count", [
+  {default, {{reduce_js_vms}} },
+  {datatype, integer},
+  hidden
+]}.
+
+%% @doc How many JavaScript virtual machines are available for
+%% executing pre-commit hook functions.
+{mapping, "javascript.hook_pool_size", "riak_kv.hook_js_vm_count", [
+  {default, {{hook_js_vms}} },
+  {datatype, integer},
+  hidden
+]}.
+
+%% @doc The maximum amount of memory allocated to each JavaScript
+%% virtual machine.
+{mapping, "javascript.maximum_heap_size", "riak_kv.js_max_vm_mem", [
+  {default, "8MB"},
+  {datatype, bytesize},
+  hidden
+]}.
+
+{translation,
+ "riak_kv.js_max_vm_mem",
+ fun(Conf) ->
+     cuttlefish_util:ceiling(cuttlefish:conf_get("javascript.maximum_heap_size", Conf) / 1048576)
+ end}.
+
+%% @doc The maximum amount of thread stack memory to allocate
+%% to each JavaScript virtual machine.
+{mapping, "javascript.maximum_stack_size", "riak_kv.js_thread_stack", [
+  {default, "16MB"},
+  {datatype, bytesize},
+  hidden
+]}.
+
+{translation,
+ "riak_kv.js_thread_stack",
+ fun(Conf) ->
+     cuttlefish_util:ceiling(cuttlefish:conf_get("javascript.maximum_stack_size", Conf) / 1048576)
+ end}.
+
+%% @doc A directory containing Javascript source files which will be
+%% loaded by Riak when it initializes Javascript VMs.
+{mapping, "javascript.source_dir", "riak_kv.js_source_dir", [
+  {commented, "/tmp/js_source"},
+  {datatype, directory},
+  hidden
+]}.
+
+%% We left riak_kv.add_paths out on purpose.
+
+%% @doc The maximum number of concurrent requests of each type (get or
+%% put) that is allowed. Setting this value to infinite disables
+%% overload protection. The 'erlang.process_limit' should be at least
+%% 3 times more than this setting.
+%% @see erlang.process_limit
+{mapping, "max_concurrent_requests", "riak_kv.fsm_limit", [
+  {default, 50000},
+  {datatype, [integer, {atom, infinite}]},
+  hidden
+]}.
+
+{translation, "riak_kv.fsm_limit",
+ fun(Conf) ->
+  TheLimit = cuttlefish:conf_get("max_concurrent_requests", Conf),
+  case TheLimit of
+      infinite -> undefined;
+      Int when is_integer(Int) -> Int;
+      _ ->
+          cuttlefish:invalid("max_concurrent_requests must be an integer or 'infinite'")
+  end
+ end
+}.
+
+%% @doc If forwarding to a replica-local coordinator on PUT fails,
+%% this setting will retry the operation when set to 'on'.
+%%   * on = Riak 2.0 behavior (strongly recommended)
+%%   * off = Riak 1.x behavior
+{mapping, "retry_put_coordinator_failure", "riak_kv.retry_put_coordinator_failure", [
+  {default, on},
+  {datatype, flag},
+  hidden
+]}.
+
+%% @doc Controls which binary representation of a riak value is stored
+%% on disk.
+%% * 0: Original erlang:term_to_binary format. Higher space overhead.
+%% * 1: New format for more compact storage of small values.
+{mapping, "object.format", "riak_kv.object_format", [
+  {default, 1},
+  {datatype, [{integer, 1}, {integer, 0}]}
+]}.
+
+{translation, "riak_kv.object_format",
+ fun(Conf) ->
+   case cuttlefish:conf_get("object.format", Conf) of
+       0 -> v0;
+       1 -> v1;
+       _ -> cuttlefish:invalid("invalid object format version")
+   end
+ end
+}.
+
+%% @doc Controls the size of the metadata cache for each vnode. Set to
+%% 'off' to disable the cache.  This shouldn't be necessary on-disk
+%% based backends, but can help performance in some cases (i.e. memory
+%% backend, data fits in block cache, etc). Note that this is the size
+%% of the ETS table, rather than the actual data, to keep the size
+%% calculation simple, thus more space may be used than the simple
+%% size * vnode_count calculation would imply.
+%%
+%% Caution: Do not use without extensive benchmarking.
+{mapping, "metadata_cache_size", "riak_kv.vnode_md_cache_size", [
+  {datatype, [{atom, off}, bytesize]},
+  {default, off}, %% disabled by default, 256KB is a reasonable value
+  hidden
+]}.
+
+{ translation,
+  "riak_kv.vnode_md_cache_size",
+  fun(Conf) ->
+    case cuttlefish:conf_get("metadata_cache_size", Conf) of
+        off -> 0;
+        Size -> Size
+    end
+  end
+}.
+
+%%%% Memory backend section
+%% @doc The maximum amount of memory consumed per vnode by the memory
+%% storage backend.  Minimum: 1MB
+{mapping, "memory_backend.max_memory_per_vnode", "riak_kv.memory_backend.max_memory", [
+  {datatype, bytesize},
+  hidden
+]}.
+
+%% @see memory_backend.max_memory
+{mapping, "multi_backend.$name.memory_backend.max_memory_per_vnode", "riak_kv.multi_backend", [
+  {datatype, bytesize},
+  hidden
+]}.
+
+{translation,
+ "riak_kv.memory_backend.max_memory",
+ fun(Conf) ->
+  Bytes = cuttlefish:conf_get("memory_backend.max_memory_per_vnode", Conf),
+  cuttlefish_util:ceiling(Bytes / 1048576)
+ end
+}.
+
+%% @doc Each value written will be written with this "time to
+%% live". Once that object's time is up, it will be deleted on the
+%% next read of its key. Minimum: 1s
+{mapping, "memory_backend.ttl", "riak_kv.memory_backend.ttl", [
+  {datatype, {duration, s}},
+  hidden
+]}.
+
+%% @see memory_backend.ttl
+{mapping, "multi_backend.$name.memory_backend.ttl", "riak_kv.multi_backend", [
+  {datatype, {duration, s}},
+  hidden
+]}.
+
+%% @doc Measures were added to Riak 1.2 to counteract cross-site
+%% scripting and request-forgery attacks. Some reverse-proxies cannot
+%% remove the Referer header and make serving data directly from Riak
+%% impossible. Turning secure_referer_check = off disables this
+%% security check.
+{mapping, "secure_referer_check", "riak_kv.secure_referer_check", [
+  {datatype, flag},
+  {default, on},
+  hidden
+]}.
+
+%% @doc Reading or writing objects bigger than this size will write a
+%% warning in the logs.
+{mapping, "object.size.warning_threshold", "riak_kv.warn_object_size", [
+  {datatype, bytesize},
+  {default, "5MB"}
+]}.
+
+%% @doc Writing an object bigger than this will send a failure to the
+%% client.
+{mapping, "object.size.maximum", "riak_kv.max_object_size", [
+  {datatype, bytesize},
+  {default, "50MB"}
+]}.
+
+%% @doc Writing an object with more than this number of siblings will
+%% generate a warning in the logs.
+{mapping, "object.siblings.warning_threshold", "riak_kv.warn_siblings", [
+  {datatype, integer},
+  {default, 25}
+]}.
+
+%% @doc Writing an object with more than this number of siblings will
+%% send a failure to the client.
+{mapping, "object.siblings.maximum", "riak_kv.max_siblings", [
+  {datatype, integer},
+  {default, 100}
+]}.
+
+%% @doc The strategy used when merging objects that potentially have
+%% conflicts.
+%%
+%% * 2: Riak 2.0 typed bucket default - reduces sibling creation through additional
+%%      metadata on each sibling (also known as dotted version vectors)
+%% * 1: Riak 1.4, default buckets, and earlier default - may duplicate siblings
+%%      from interleaved writes (sibling explosion.)
+{mapping, "buckets.default.merge_strategy", "riak_core.default_bucket_props.dvv_enabled", [
+  {default, '1'},
+  {datatype, {flag, '2', '1'}},
+  hidden
+]}.
+
+%% @doc The number of primary replicas (non-fallback) that must reply
+%% to a read request.
+{mapping, "buckets.default.pr", "riak_core.default_bucket_props.pr", [
+  {datatype, [integer, {enum, [quorum, all]}]},
+  {default, 0},
+  hidden
+]}.
+
+%% @doc The number of replicas which must reply to a read request.
+{mapping, "buckets.default.r", "riak_core.default_bucket_props.r", [
+  {datatype, [{enum, [quorum, all]}, integer]},
+  {default, quorum},
+  hidden
+]}.
+
+%% @doc The number of replicas which must reply to a write request,
+%% indicating that the write was received.
+{mapping, "buckets.default.w", "riak_core.default_bucket_props.w", [
+  {datatype, [{enum, [quorum, all]}, integer]},
+  {default, quorum},
+  hidden
+]}.
+
+%% @doc The number of primary replicas (non-fallback) which must reply
+%% to a write request.
+{mapping, "buckets.default.pw", "riak_core.default_bucket_props.pw", [
+  {datatype, [integer, {enum, [quorum, all]}]},
+  {default, 0},
+  hidden
+]}.
+
+%% @doc The number of replicas which must reply to a write request,
+%% indicating that the write was committed to durable storage.
+{mapping, "buckets.default.dw", "riak_core.default_bucket_props.dw", [
+  {datatype, [{enum, [quorum, all]}, integer]},
+  {default, quorum},
+  hidden
+]}.
+
+%% @doc The number of replicas which must reply to a delete request.
+{mapping, "buckets.default.rw", "riak_core.default_bucket_props.rw", [
+  {datatype, [{enum, [quorum, all]}, integer]},
+  {default, quorum},
+  hidden
+]}.
+
+%% @doc Whether not-founds will count toward a quorum of reads.
+{mapping,
+ "buckets.default.notfound_ok",
+ "riak_core.default_bucket_props.notfound_ok", [
+  {default, true},
+  {datatype, {enum, [true, false]}},
+  hidden
+]}.
+
+%% @doc Whether not-founds will invoke the "basic quorum"
+%% optimization. This setting will short-circuit fetches where the
+%% majority of replicas report that the key is not found. Only used
+%% when notfound_ok = false.
+{mapping,
+ "buckets.default.basic_quorum",
+ "riak_core.default_bucket_props.basic_quorum", [
+ {default, false},
+ {datatype, {enum, [true, false]}},
+ hidden
+]}.
+
+%% @doc Whether or not siblings are allowed, by default, for untyped buckets.
+%% Note: See Vector Clocks for a discussion of sibling resolution.
+{mapping, "buckets.default.allow_mult", "riak_core.default_bucket_props.allow_mult", [
+  {datatype, {enum, [true, false]}},
+  {default, false},
+  hidden
+]}.
+
+%% @doc Whether conflicting writes resolve via timestamp.
+{mapping,
+  "buckets.default.last_write_wins",
+  "riak_core.default_bucket_props.last_write_wins", [
+  {datatype, {enum, [true, false]}},
+  {default, false},
+  hidden
+]}.
+
+%% @doc A space delimited list of functions that will be run before a
+%% value is stored, and that can abort the write. For Erlang
+%% functions, use "module:function" and for JavaScript, use
+%% "functionName".
+{mapping, "buckets.default.precommit", "riak_core.default_bucket_props.precommit", [
+  hidden
+]}.
+
+{translation, "riak_core.default_bucket_props.precommit",
+ fun(Conf) ->
+  RawString = cuttlefish:conf_get("buckets.default.precommit", Conf, []),
+  StringList = string:tokens(RawString, " "),
+  [ begin
+    case string:tokens(String, ":") of
+        %% Javascript make this:  {struct, [{<<"name">>, <<"SomeJS.nonsense">>}]}
+        [JavascriptFunction] ->
+            {struct, [{<<"name">>, list_to_binary(JavascriptFunction)}]};
+        %% Erlang make this: {struct, [{<<"mod">>, <<"module">>}, {<<"fun">>,<<"function">>}]}
+        [Module, Function] ->
+            {struct, [
+                      {<<"mod">>, list_to_binary(Module)},
+                      {<<"fun">>, list_to_binary(Function)}
+                     ]};
+        _ -> cuttlefish:invalid("incorrect hook format '" ++ String ++ "'")
+    end
+  end || String <- StringList]
+ end
+}.
+
+%% @doc A space delimited list of functions that will be run after a
+%% value is stored. Only Erlang functions are allowed, using the
+%% "module:function" format.
+{mapping, "buckets.default.postcommit", "riak_core.default_bucket_props.postcommit", [
+  hidden
+]}.
+
+{translation, "riak_core.default_bucket_props.postcommit",
+ fun(Conf) ->
+   RawString = cuttlefish:conf_get("buckets.default.postcommit", Conf, []),
+   StringList = string:tokens(RawString, " "),
+   [ begin
+     case string:tokens(String, ":") of
+         [Module, Function] ->
+             {struct, [
+                       {<<"mod">>, list_to_binary(Module)},
+                       {<<"fun">>, list_to_binary(Function)}
+                      ]};
+         _ -> cuttlefish:invalid("incorrect hook format '" ++ String ++ "'")
+     end
+   end ||  String <- StringList]
+ end
+}.
+
+%% @doc Whether serialized datatypes will use compression, and at what
+%% level. When an integer, this refers to the aggressiveness (and
+%% slowness) of compression, on a scale from 0 to 9. 'on' is
+%% equivalent to 6, 'off' is equivalent to 0.
+{mapping, "datatypes.compression_level", "riak_dt.binary_compression", [
+    {datatype, [integer, flag]},
+    {default, 1},
+    {validators, ["is_compression_value"]},
+    hidden
+]}.
+
+{validator, "is_compression_value", "must be on/off or a value between 0 and 9",
+ fun(Value)->
+    is_boolean(Value) orelse (is_integer(Value) andalso Value =< 9 andalso Value >= 0)
+ end}.
+
+%% @doc Whether to use the background manager to limit KV handoff.
+%% This will help to prevent system response degradation under times
+%% of heavy load from multiple background tasks that contend for the
+%% same resources.
+%% @see background_manager
+{mapping, "handoff.use_background_manager", "riak_kv.handoff_use_background_manager", [
+    {datatype, flag},
+    {default, off},
+    hidden
+]}.
+
+%% @doc The maximum number of times that a secondary system like Riak
+%% Search 2.0 can block handoff of primary key-value data. The
+%% approximate maximum duration handoff of a vnode can be blocked for
+%% can be determined by multiplying this number by the value of
+%% "vnode_management_timer". To prevent handoff from ever being
+%% blocked by a secondary system set this value to 0.
+%% @see vnode_management_timer
+{mapping, "handoff.max_rejects", "riak_kv.handoff_rejected_max", [
+    {datatype, integer},
+    {default, "6"},
+    hidden
+]}.
+
+%% @doc Whether to use the background manager to limit AAE tree
+%% rebuilds. This will help to prevent system response degradation
+%% under times of heavy load from multiple background tasks that
+%% contend for the same resources.
+%% @see background_manager
+{mapping, "anti_entropy.use_background_manager", "riak_kv.aae_use_background_manager", [
+    {datatype, flag},
+    {default, off},
+    hidden
+]}.
+
+%% @doc Time in between the checks that trigger Bitcask merges.
+{mapping, "bitcask.merge_check_interval", "riak_kv.bitcask_merge_check_interval", [
+  {default, "3m"},
+  {datatype, {duration, ms}},
+  hidden
+]}.
+
+%% @doc Jitter used to randomize the time in between the checks that trigger
+%% Bitcask merges.
+{mapping, "bitcask.merge_check_jitter", "riak_kv.bitcask_merge_check_jitter", [
+  {default, "30%"},
+  {datatype, {percent, float}},
+  hidden
+]}.
+
+%% @doc Maximum amount of data to merge in one go in the Bitcask backend.
+{mapping, "bitcask.max_merge_size", "riak_kv.bitcask_max_merge_size", [
+  {default, "100GB"},
+  {datatype, bytesize},
+  hidden
+]}.

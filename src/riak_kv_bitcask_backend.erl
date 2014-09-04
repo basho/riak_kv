@@ -42,10 +42,6 @@
 
 -export([data_size/1]).
 
-%% Helper API
--export([key_counts/0,
-         key_counts/1]).
-
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -53,17 +49,31 @@
 -include_lib("bitcask/include/bitcask.hrl").
 
 -define(MERGE_CHECK_INTERVAL, timer:minutes(3)).
+-define(MERGE_CHECK_JITTER, 0.3).
+-define(UPGRADE_CHECK_INTERVAL, timer:seconds(10)).
+-define(UPGRADE_MERGE_BATCH_SIZE, 5).
+-define(UPGRADE_FILE, "upgrade.txt").
+-define(MERGE_FILE, "merge.txt").
+-define(VERSION_FILE, "version.txt").
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold,size]).
+
+%% must not be 131, otherwise will match t2b in error
+%% yes, I know that this is horrible.
+-define(VERSION_1, 1).
+-define(VERSION_BYTE, ?VERSION_1).
+-define(CURRENT_KEY_TRANS, fun key_transform_to_1/1).
 
 -record(state, {ref :: reference(),
                 data_dir :: string(),
                 opts :: [{atom(), term()}],
                 partition :: integer(),
-                root :: string()}).
+                root :: string(),
+                key_vsn :: integer()}).
 
 -type state() :: #state{}.
 -type config() :: [{atom(), term()}].
+-type version() :: {non_neg_integer(), non_neg_integer(), non_neg_integer()}.
 
 %% ===================================================================
 %% Public API
@@ -85,10 +95,61 @@ capabilities(_) ->
 capabilities(_, _) ->
     {ok, ?CAPABILITIES}.
 
+%% @doc Transformation functions for the keys coming off the disk.
+key_transform_to_1(<<?VERSION_1:7, _:1, _Rest/binary>> = Key) ->
+    Key;
+key_transform_to_1(<<131:8,_Rest/bits>> = Key0) ->
+    {Bucket, Key} = binary_to_term(Key0),
+    make_bk(?VERSION_BYTE, Bucket, Key).
+
+key_transform_to_0(<<?VERSION_1:7,_Rest/bits>> = Key0) ->
+    term_to_binary(bk_to_tuple(Key0));
+key_transform_to_0(<<131:8,_Rest/binary>> = Key) ->
+    Key.
+
+bk_to_tuple(<<?VERSION_1:7, HasType:1, Sz:16/integer,
+             TypeOrBucket:Sz/bytes, Rest/binary>>) ->
+    case HasType of
+        0 ->
+            %% no type, first field is bucket
+            {TypeOrBucket, Rest};
+        1 ->
+            %% has a tyoe, extract bucket as well
+            <<BucketSz:16/integer, Bucket:BucketSz/bytes, Key/binary>> = Rest,
+            {{TypeOrBucket, Bucket}, Key}
+    end;
+bk_to_tuple(<<131:8,_Rest/binary>> = BK) ->
+    binary_to_term(BK).
+
+make_bk(0, Bucket, Key) ->
+    term_to_binary({Bucket, Key});
+make_bk(1, {Type, Bucket}, Key) ->
+    TypeSz = size(Type),
+    BucketSz = size(Bucket),
+    <<?VERSION_BYTE:7, 1:1, TypeSz:16/integer, Type/binary,
+      BucketSz:16/integer, Bucket/binary, Key/binary>>;
+make_bk(1, Bucket, Key) ->
+    BucketSz = size(Bucket),
+    <<?VERSION_BYTE:7, 0:1, BucketSz:16/integer,
+     Bucket/binary, Key/binary>>.
+
 %% @doc Start the bitcask backend
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
-start(Partition, Config) ->
-    %% Get the data root directory
+start(Partition, Config0) ->
+    random:seed(erlang:now()),
+    {Config, KeyVsn} = 
+        case app_helper:get_prop_or_env(small_keys, Config0, bitcask) of
+            false -> 
+                C0 = proplists:delete(small_keys, Config0),
+                C1 = C0 ++ [{key_transform, fun key_transform_to_0/1}],
+                {C1, 0};
+            _ ->
+                C0 = proplists:delete(small_keys, Config0),
+                C1 = C0 ++ [{key_transform, ?CURRENT_KEY_TRANS}],
+                {C1, ?VERSION_BYTE}
+        end,
+        
+    %% Get the data root directory  
     case app_helper:get_prop_or_env(data_root, Config, bitcask) of
         undefined ->
             lager:error("Failed to create bitcask dir: data_root is not set"),
@@ -98,17 +159,21 @@ start(Partition, Config) ->
             PartitionStr = integer_to_list(Partition),
             case get_data_dir(DataRoot, PartitionStr) of
                 {ok, DataDir} ->
+                    BitcaskDir = filename:join(DataRoot, DataDir),
+                    UpgradeRet = maybe_start_upgrade(BitcaskDir),
                     BitcaskOpts = set_mode(read_write, Config),
-                    case bitcask:open(filename:join(DataRoot, DataDir), BitcaskOpts) of
+                    case bitcask:open(BitcaskDir, BitcaskOpts) of
                         Ref when is_reference(Ref) ->
                             check_fcntl(),
                             schedule_merge(Ref),
                             maybe_schedule_sync(Ref),
+                            maybe_schedule_upgrade_check(Ref, UpgradeRet),
                             {ok, #state{ref=Ref,
                                         data_dir=DataDir,
                                         root=DataRoot,
                                         opts=BitcaskOpts,
-                                        partition=Partition}};
+                                        partition=Partition,
+                                        key_vsn=KeyVsn}};
                         {error, Reason1} ->
                             lager:error("Failed to start bitcask backend: ~p\n",
                                         [Reason1]),
@@ -136,12 +201,16 @@ stop(#state{ref=Ref}) ->
                  {ok, any(), state()} |
                  {error, not_found, state()} |
                  {error, term(), state()}.
-get(Bucket, Key, #state{ref=Ref}=State) ->
-    BitcaskKey = term_to_binary({Bucket, Key}),
+get(Bucket, Key, #state{ref=Ref, key_vsn=KVers}=State) ->
+    BitcaskKey = make_bk(KVers, Bucket, Key),
     case bitcask:get(Ref, BitcaskKey) of
         {ok, Value} ->
             {ok, Value, State};
         not_found  ->
+            {error, not_found, State};
+        {error, bad_crc}  ->
+            lager:warning("Unreadable object ~p/~p discarded",
+                          [Bucket,Key]),
             {error, not_found, State};
         {error, nofile}  ->
             {error, not_found, State};
@@ -157,8 +226,9 @@ get(Bucket, Key, #state{ref=Ref}=State) ->
 -spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
-put(Bucket, PrimaryKey, _IndexSpecs, Val, #state{ref=Ref}=State) ->
-    BitcaskKey = term_to_binary({Bucket, PrimaryKey}),
+put(Bucket, PrimaryKey, _IndexSpecs, Val, 
+    #state{ref=Ref, key_vsn=KeyVsn}=State) ->
+    BitcaskKey = make_bk(KeyVsn, Bucket, PrimaryKey),
     case bitcask:put(Ref, BitcaskKey, Val) of
         ok ->
             {ok, State};
@@ -171,16 +241,12 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val, #state{ref=Ref}=State) ->
 %% secondary indexing and the_IndexSpecs parameter
 %% is ignored.
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
-                    {ok, state()} |
-                    {error, term(), state()}.
-delete(Bucket, Key, _IndexSpecs, #state{ref=Ref}=State) ->
-    BitcaskKey = term_to_binary({Bucket, Key}),
-    case bitcask:delete(Ref, BitcaskKey) of
-        ok ->
-            {ok, State};
-        {error, Reason} ->
-            {error, Reason, State}
-    end.
+                    {ok, state()}.
+delete(Bucket, Key, _IndexSpecs, 
+       #state{ref=Ref, key_vsn=KeyVsn}=State) ->
+    BitcaskKey = make_bk(KeyVsn, Bucket, Key),
+    ok = bitcask:delete(Ref, BitcaskKey),
+    {ok, State}.
 
 %% @doc Fold over all the buckets.
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
@@ -195,10 +261,10 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{opts=BitcaskOpts,
     case lists:member(async_fold, Opts) of
         true ->
             ReadOpts = set_mode(read_only, BitcaskOpts),
+            
             BucketFolder =
                 fun() ->
-                        case bitcask:open(filename:join(DataRoot, DataFile),
-                                          ReadOpts) of
+                        case bitcask:open(filename:join(DataRoot, DataFile), ReadOpts) of
                             Ref1 when is_reference(Ref1) ->
                                 try
                                     {Acc1, _} =
@@ -241,8 +307,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{opts=BitcaskOpts,
             ReadOpts = set_mode(read_only, BitcaskOpts),
             KeyFolder =
                 fun() ->
-                        case bitcask:open(filename:join(DataRoot, DataFile),
-                                          ReadOpts) of
+                        case bitcask:open(filename:join(DataRoot, DataFile), ReadOpts) of
                             Ref1 when is_reference(Ref1) ->
                                 try
                                     bitcask:fold_keys(Ref1, FoldFun, Acc)
@@ -280,8 +345,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{opts=BitcaskOpts,
             ReadOpts = set_mode(read_only, BitcaskOpts),
             ObjectFolder =
                 fun() ->
-                        case bitcask:open(filename:join(DataRoot, DataFile),
-                                          ReadOpts) of
+                        case bitcask:open(filename:join(DataRoot, DataFile), ReadOpts) of
                             Ref1 when is_reference(Ref1) ->
                                 try
                                     bitcask:fold(Ref1, FoldFun, Acc)
@@ -315,23 +379,6 @@ drop(#state{ref=Ref,
 
     PartitionStr = integer_to_list(Partition),
     PartitionDir = filename:join([DataRoot, PartitionStr]),
-    %% Check for any existing directories for the partition
-    %% and select the most recent as the active data directory
-    %% if any exist.
-    PartitionDirs = existing_partition_dirs(PartitionDir),
-
-    %% Move the older data directories to an automatic cleanup
-    %% directory and log their existence.
-    CleanupDir = check_for_cleanup_dir(DataRoot, auto),
-    move_unused_dirs(CleanupDir, PartitionDirs),
-
-    %% Spawn a process to cleanup the old data files.
-    %% The use of spawn is intentional. We do not
-    %% care if this process dies since any lingering
-    %% files will be cleaned up on the next drop.
-    %% The worst case is that the files hang
-    %% around and take up some disk space.
-    spawn(drop_data_cleanup(PartitionStr, CleanupDir)),
 
     %% Make sure the data directory is now empty
     data_directory_cleanup(PartitionDir),
@@ -376,39 +423,64 @@ callback(Ref,
                 data_dir=DataDir,
                 opts=BitcaskOpts,
                 root=DataRoot}=State) when is_reference(Ref) ->
-    case bitcask:needs_merge(Ref) of
-        {true, Files} ->
+    case lists:member(riak_kv, riak_core_node_watcher:services(node())) of
+        true ->
             BitcaskRoot = filename:join(DataRoot, DataDir),
-            bitcask_merge_worker:merge(BitcaskRoot, BitcaskOpts, Files);
+            merge_check(Ref, BitcaskRoot, BitcaskOpts);
         false ->
+            lager:debug("Skipping merge check: KV service not yet up"),
             ok
     end,
     schedule_merge(Ref),
     {ok, State};
+callback(Ref,
+         upgrade_check,
+         #state{ref=Ref,
+                data_dir=DataDir,
+                root=DataRoot}=State) when is_reference(Ref) ->
+    BitcaskRoot = filename:join(DataRoot, DataDir),
+    case check_upgrade(BitcaskRoot) of
+        finished ->
+            case finalize_upgrade(BitcaskRoot) of
+                {ok, Vsn} ->
+                    lager:info("Finished upgrading to Bitcask ~s in ~s",
+                               [version_to_str(Vsn), BitcaskRoot]),
+                    {ok, State};
+                {error, EndErr} ->
+                    lager:error("Finalizing backend upgrade : ~p", [EndErr]),
+                    {ok, State}
+            end;
+        pending ->
+            _ = schedule_upgrade_check(Ref),
+            {ok, State};
+        {error, Reason} ->
+            lager:error("Aborting upgrade in ~s : ~p", [BitcaskRoot, Reason]),
+            {ok, State}
+    end;
 %% Ignore callbacks for other backends so multi backend works
 callback(_Ref, _Msg, State) ->
     {ok, State}.
 
--spec key_counts() -> [{string(), non_neg_integer()}] |
-                      {error, data_root_not_set}.
-key_counts() ->
-    case application:get_env(bitcask, data_root) of
-        {ok, RootDir} ->
-            key_counts(RootDir);
-        undefined ->
-            {error, data_root_not_set}
-    end.
-
--spec key_counts(string()) -> [{string(), non_neg_integer()}].
-key_counts(RootDir) ->
-    [begin
-         [{key_count, Keys} | _] = status(#state{root=filename:join(RootDir, Dir)}),
-         {Dir, Keys}
-     end || Dir <- element(2, file:list_dir(RootDir))].
-
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
+% @private If no pending merges, check if files need to be merged.
+merge_check(Ref, BitcaskRoot, BitcaskOpts) ->
+    case bitcask_merge_worker:status() of
+        {0, _} ->
+            MaxMergeSize = app_helper:get_env(riak_kv,
+                                              bitcask_max_merge_size),
+            case bitcask:needs_merge(Ref, [{max_merge_size, MaxMergeSize}]) of
+                {true, Files} ->
+                    bitcask_merge_worker:merge(BitcaskRoot, BitcaskOpts, Files);
+                false ->
+                    ok
+            end;
+        _ ->
+            lager:debug("Skipping merge check: Pending merges"),
+            ok
+    end.
 
 %% @private
 %% On linux there is a kernel bug that won't allow fcntl to add O_SYNC
@@ -433,7 +505,7 @@ check_fcntl() ->
 %% Return a function to fold over the buckets on this backend
 fold_buckets_fun(FoldBucketsFun) ->
     fun(#bitcask_entry{key=BK}, {Acc, BucketSet}) ->
-            {Bucket, _} = binary_to_term(BK),
+            {Bucket, _} = bk_to_tuple(BK),
             case sets:is_element(Bucket, BucketSet) of
                 true ->
                     {Acc, BucketSet};
@@ -447,12 +519,12 @@ fold_buckets_fun(FoldBucketsFun) ->
 %% Return a function to fold over keys on this backend
 fold_keys_fun(FoldKeysFun, undefined) ->
     fun(#bitcask_entry{key=BK}, Acc) ->
-            {Bucket, Key} = binary_to_term(BK),
+            {Bucket, Key} = bk_to_tuple(BK),
             FoldKeysFun(Bucket, Key, Acc)
     end;
 fold_keys_fun(FoldKeysFun, Bucket) ->
     fun(#bitcask_entry{key=BK}, Acc) ->
-            {B, Key} = binary_to_term(BK),
+            {B, Key} = bk_to_tuple(BK),
             case B =:= Bucket of
                 true ->
                     FoldKeysFun(B, Key, Acc);
@@ -465,12 +537,12 @@ fold_keys_fun(FoldKeysFun, Bucket) ->
 %% Return a function to fold over keys on this backend
 fold_objects_fun(FoldObjectsFun, undefined) ->
     fun(BK, Value, Acc) ->
-            {Bucket, Key} = binary_to_term(BK),
+            {Bucket, Key} = bk_to_tuple(BK),
             FoldObjectsFun(Bucket, Key, Value, Acc)
     end;
 fold_objects_fun(FoldObjectsFun, Bucket) ->
     fun(BK, Value, Acc) ->
-            {B, Key} = binary_to_term(BK),
+            {B, Key} = bk_to_tuple(BK),
             case B =:= Bucket of
                 true ->
                     FoldObjectsFun(B, Key, Value, Acc);
@@ -502,131 +574,32 @@ schedule_sync(Ref, SyncIntervalMs) when is_reference(Ref) ->
     riak_kv_backend:callback_after(SyncIntervalMs, Ref, {sync, SyncIntervalMs}).
 
 schedule_merge(Ref) when is_reference(Ref) ->
-    riak_kv_backend:callback_after(?MERGE_CHECK_INTERVAL, Ref, merge_check).
+    Interval = app_helper:get_env(riak_kv, bitcask_merge_check_interval,
+                                  ?MERGE_CHECK_INTERVAL),
+    JitterPerc = app_helper:get_env(riak_kv, bitcask_merge_check_jitter,
+                                    ?MERGE_CHECK_JITTER),
+    Jitter = Interval * JitterPerc,
+    FinalInterval = Interval + trunc(2 * random:uniform() * Jitter - Jitter),
+    lager:debug("Scheduling Bitcask merge check in ~pms", [FinalInterval]),
+    riak_kv_backend:callback_after(FinalInterval, Ref, merge_check).
+
+-spec schedule_upgrade_check(reference()) -> reference().
+schedule_upgrade_check(Ref) when is_reference(Ref) ->
+    riak_kv_backend:callback_after(?UPGRADE_CHECK_INTERVAL, Ref,
+                                   upgrade_check).
+
+-spec maybe_schedule_upgrade_check(reference(),
+                                   {upgrading, version()} | no_upgrade) -> ok.
+maybe_schedule_upgrade_check(Ref, {upgrading, _}) ->
+    _ = schedule_upgrade_check(Ref),
+    ok;
+maybe_schedule_upgrade_check(_Ref, no_upgrade) ->
+    ok.
 
 %% @private
 get_data_dir(DataRoot, Partition) ->
     PartitionDir = filename:join([DataRoot, Partition]),
-    %% Check for any existing directories for the partition
-    %% and select the most recent as the active data directory
-    %% if any exist.
-    ExistingPartitionDirs = existing_partition_dirs(PartitionDir),
-    case ExistingPartitionDirs of
-        [] ->
-            make_data_dir(PartitionDir);
-        PartitionDirs ->
-            %% Sort the existing data directories
-            [MostRecentDataDir | RestDataDirs] = sort_data_dirs(PartitionDirs),
-
-            %% Move the older data directories to a manual cleanup directory and
-            %% log their existence. These will not be automatically cleaned up to
-            %% avoid data loss in the rare case where the heuristic for selecting
-            %% the most recent data directory fails.
-            CleanupDir = check_for_cleanup_dir(DataRoot, manual),
-
-            move_unused_dirs(CleanupDir, RestDataDirs),
-            log_unused_partition_dirs(Partition, RestDataDirs),
-
-            %% Rename the most recent data directory to the bare
-            %% partition name if it is not already so named.
-            case MostRecentDataDir == PartitionDir of
-                true ->
-                    ok;
-                false ->
-                    file:rename(MostRecentDataDir, PartitionDir)
-            end,
-            {ok, filename:basename(PartitionDir)}
-    end.
-
-%% @private
-existing_partition_dirs(PartitionDir) ->
-    ExistingDataDirs = filelib:wildcard(PartitionDir ++ "-*"),
-    case filelib:is_dir(PartitionDir) of
-        true ->
-            [PartitionDir | ExistingDataDirs];
-        false ->
-            ExistingDataDirs
-    end.
-
-%% @private
-sort_data_dirs(PartitionDirs) ->
-    LastModSortFun =
-        fun(Dir1, Dir2) ->
-                Dir1LastMod = filelib:last_modified(Dir1),
-                Dir2LastMod = filelib:last_modified(Dir2),
-                case Dir1LastMod == Dir2LastMod of
-                    true ->
-                        try
-                            [_ | [Dir1TS]] =
-                                string:tokens(filename:basename(Dir1), "-"),
-                            [_ | [Dir2TS]] =
-                                string:tokens(filename:basename(Dir2), "-"),
-                            if Dir1TS == [] ->
-                                    true;
-                               Dir2TS == [] ->
-                                    false;
-                               true ->
-                                    list_to_integer(Dir1TS) <
-                                        list_to_integer(Dir2TS)
-                            end
-                        catch _:_ ->
-                                Dir1 < Dir2
-                        end;
-                    false ->
-                        Dir1LastMod < Dir2LastMod
-                end
-        end,
-    LastModSortResults = lists:reverse(lists:sort(LastModSortFun, PartitionDirs)),
-    TimestampSortResults = lists:reverse(lists:sort(PartitionDirs)),
-    %% Check if the head of the last-modified sort results
-    %% is the same as the head of the timestamp sort results.
-    %% This is to achieve a better correlation that the most
-    %% recent data directory has been found. In the case that they
-    %% do no match the head of the last-modified sort is chosen
-    %% and a warning is logged.
-    case hd(LastModSortResults) == hd(TimestampSortResults) of
-        true ->
-            ok;
-        false ->
-            %% Log the mismatch
-            lager:warning("The most recently modified data directory is not the \
-same as the data directory with the most recent timestamp appended. The most \
-recently modified directory has been selected, but the other data directories\
- have been preserved in the manual_cleanup directory.")
-    end,
-    LastModSortResults.
-
-%% @private
-check_for_cleanup_dir(PartitionDir, Type) ->
-    CleanupDir = filename:join([PartitionDir, atom_to_list(Type) ++ "_cleanup"]),
-    filelib:ensure_dir(filename:join([CleanupDir, dummy])),
-    CleanupDir.
-
-%% @private
-move_unused_dirs(_, []) ->
-    ok;
-move_unused_dirs(DestinationDir, [PartitionDir | RestPartitionDirs]) ->
-    case file:rename(PartitionDir,
-                     filename:join([DestinationDir,
-                                    filename:basename(PartitionDir)])) of
-        ok ->
-            move_unused_dirs(DestinationDir, RestPartitionDirs);
-        {error, Reason} ->
-            lager:error("Failed to move unused data directory ~p. Reason: ~p",
-                        [PartitionDir, Reason]),
-            move_unused_dirs(DestinationDir, RestPartitionDirs)
-    end.
-
-%% @private
-log_unused_partition_dirs(Partition, PartitionDirs) ->
-    case PartitionDirs of
-        [] ->
-            ok;
-        _ ->
-            %% Inform the user in case they want to do some cleanup.
-            lager:notice("Unused data directories exist for partition ~p: ~p",
-                         [Partition, PartitionDirs])
-    end.
+    make_data_dir(PartitionDir).
 
 %% @private
 make_data_dir(PartitionFile) ->
@@ -639,24 +612,6 @@ make_data_dir(PartitionFile) ->
             lager:error("Failed to create bitcask dir ~s: ~p",
                         [DataDir, Reason]),
             {error, Reason}
-    end.
-
-%% @private
-drop_data_cleanup(Partition, CleanupDir) ->
-    fun() ->
-            %% List all the directories in the cleanup directory
-            case file:list_dir(CleanupDir) of
-                {ok, Dirs} ->
-                    %% Delete the contents of each directory and
-                    %% the directory itself excluding the
-                    %% current data directory.
-                    [data_directory_cleanup(filename:join(CleanupDir, Dir)) ||
-                        Dir <- Dirs,
-                        (Dir =:= Partition) or
-                        (string:left(Dir, length(Partition) + 1) =:= (Partition ++ "-"))];
-                {error, _} ->
-                    ignore
-            end
     end.
 
 %% @private
@@ -677,6 +632,223 @@ set_mode(read_write, Config) ->
     Config1 = lists:keystore(read_write, 1, Config, {read_write, true}),
     lists:keydelete(read_only, 1, Config1).
 
+-spec read_version(File::string()) -> undefined | version().
+read_version(File) ->
+    case file:read_file(File) of
+        {ok, VsnContents} ->
+            % Crude parser to ignore common user introduced variations
+            VsnLines = [binary:replace(B, [<<" ">>, <<"\t">>], <<>>, [global])
+                        || B <- binary:split(VsnContents,
+                                             [<<"\n">>, <<"\r">>, <<"\r\n">>])],
+            VsnLine = [L || L <- VsnLines, L /= <<>>],
+            case VsnLine of
+                [VsnStr] ->
+                    try
+                        version_from_str(binary_to_list(VsnStr))
+                    catch
+                        _:_ ->
+                            undefined
+                    end;
+                _ ->
+                    undefined
+            end;
+        {error, _} ->
+            undefined
+    end.
+
+-spec bitcask_files(string()) -> {ok, [string()]} | {error, term()}.
+bitcask_files(Dir) ->
+    case file:list_dir(Dir) of
+        {ok, Files} ->
+            BitcaskFiles = [F || F <- Files, lists:suffix(".bitcask.data", F)],
+            {ok, BitcaskFiles};
+        {error, Err} ->
+            {error, Err}
+    end.
+
+-spec has_bitcask_files(string()) -> boolean() | {error, term()}.
+has_bitcask_files(Dir) ->
+    case bitcask_files(Dir) of
+        {ok, Files} ->
+            case Files of
+                [] -> false;
+                _ -> true
+            end;
+        {error, Err} ->
+            {error, Err}
+    end.
+
+-spec needs_upgrade(version() | undefined, version()) -> boolean().
+needs_upgrade(undefined, _) ->
+    true;
+needs_upgrade({A1, B1, _}, {A2, B2, _})
+  when {A1, B1} =< {1, 6}, {A2, B2} > {1, 6} ->
+    true;
+needs_upgrade(_, _) ->
+    false.
+
+-spec maybe_start_upgrade(string()) -> no_upgrade | {upgrading, version()}.
+maybe_start_upgrade(Dir) ->
+    % Are we already upgrading?
+    UpgradeFile = filename:join(Dir, ?UPGRADE_FILE),
+    UpgradingVsn = read_version(UpgradeFile),
+    case UpgradingVsn of
+        undefined ->
+            % No, maybe if previous data needs upgrade
+            maybe_start_upgrade_if_bitcask_files(Dir);
+        _ ->
+            lager:info("Continuing upgrade to version ~s in ~s",
+                       [version_to_str(UpgradingVsn), Dir]),
+            {upgrading, UpgradingVsn}
+    end.
+
+-spec maybe_start_upgrade_if_bitcask_files(string()) ->
+    no_upgrade | {upgrading, version()}.
+maybe_start_upgrade_if_bitcask_files(Dir) ->
+    NewVsn = bitcask_version(),
+    VersionFile = filename:join(Dir, ?VERSION_FILE),
+    CurrentVsn = read_version(VersionFile),
+    case has_bitcask_files(Dir) of
+        true ->
+            case needs_upgrade(CurrentVsn, NewVsn) of
+                true ->
+                    NewVsnStr = version_to_str(NewVsn),
+                    case start_upgrade(Dir, CurrentVsn, NewVsn) of
+                        ok ->
+                            UpgradeFile = filename:join(Dir, ?UPGRADE_FILE),
+                            write_version(UpgradeFile, NewVsn),
+                            lager:info("Starting upgrade to version ~s in ~s",
+                                       [NewVsnStr, Dir]),
+                            {upgrading, NewVsn};
+                        {error, UpgradeErr} ->
+                            lager:error("Failed to start upgrade to version ~s"
+                                        " in ~s : ~p",
+                                        [NewVsnStr, Dir, UpgradeErr]),
+                            no_upgrade
+                    end;
+                false ->
+                    case CurrentVsn == NewVsn of
+                        true ->
+                            no_upgrade;
+                        false ->
+                            write_version(VersionFile, NewVsn),
+                            no_upgrade
+                    end
+            end;
+        false ->
+            write_version(VersionFile, NewVsn),
+            no_upgrade;
+        {error, Err} ->
+            lager:error("Failed to check for bitcask files in ~s."
+                        " Can not determine if an upgrade is needed : ~p",
+                        [Dir, Err]),
+            no_upgrade
+    end.
+
+% @doc Start the upgrade process for the given old/new version pair.
+-spec start_upgrade(string(), version() | undefined, version()) ->
+    ok | {error, term()}.
+start_upgrade(Dir, OldVsn, NewVsn)
+  when OldVsn < {1, 7, 0}, NewVsn >= {1, 7, 0} ->
+    % NOTE: The guard handles old version being undefined, as atom < tuple
+    % That is always the case with versions < 1.7.0 anyway.
+    case bitcask_files(Dir) of
+        {ok, Files} ->
+            % Write merge.txt with a list of all bitcask files to merge
+            MergeFile = filename:join(Dir, ?MERGE_FILE),
+            MergeList = to_merge_list(Files, ?UPGRADE_MERGE_BATCH_SIZE),
+            case riak_core_util:replace_file(MergeFile, MergeList) of
+                ok ->
+                    ok;
+                {error, WriteErr} ->
+                    {error, WriteErr}
+            end;
+        {error, BitcaskReadErr} ->
+            {error, BitcaskReadErr}
+    end.
+
+% @doc Transform to contents of merge.txt, with an empty line every
+% Batch files, which delimits the merge batches.
+-spec to_merge_list([string()], pos_integer()) -> iodata().
+to_merge_list(L, Batch) ->
+    N = length(L),
+    LN = lists:zip(L, lists:seq(1, N)),
+    [case I rem Batch == 0 of
+         true ->
+             [E, "\n\n"];
+         false ->
+             [E, "\n"]
+     end || {E, I} <- LN].
+
+%% @doc Checks progress of an ongoing backend upgrade.
+-spec check_upgrade(Dir :: string()) -> pending | finished | {error, term()}.
+check_upgrade(Dir) ->
+    UpgradeFile = filename:join(Dir, ?UPGRADE_FILE),
+    case filelib:is_regular(UpgradeFile) of
+        true ->
+            % Look for merge file. When all merged, Bitcask deletes it.
+            MergeFile = filename:join(Dir, ?MERGE_FILE),
+            case filelib:is_regular(MergeFile) of
+                true ->
+                    pending;
+                false ->
+                    finished
+            end;
+        false ->
+            % Flattening so it prints like a string
+            Reason = lists:flatten(io_lib:format("Missing upgrade file ~s",
+                                                 [UpgradeFile])),
+            {error, Reason}
+    end.
+
+-spec version_from_str(string()) -> version().
+version_from_str(VsnStr) ->
+    [Major, Minor, Patch] =
+        [list_to_integer(Tok) || Tok <- string:tokens(VsnStr, ".")],
+    {Major, Minor, Patch}.
+
+-spec bitcask_version() -> version().
+bitcask_version() ->
+    version_from_str(bitcask_version_str()).
+
+-spec bitcask_version_str() -> string().
+bitcask_version_str() ->
+    Apps = application:which_applications(),
+    % For tests, etc without the app, use big version number to avoid upgrades
+    BitcaskVsn = hd([Vsn || {bitcask, _, Vsn} <- Apps] ++ ["999.999.999"]),
+    BitcaskVsn.
+
+-spec version_to_str(version()) -> string().
+version_to_str({Major, Minor, Patch}) ->
+    io_lib:format("~p.~p.~p", [Major, Minor, Patch]).
+
+-spec write_version(File::string(), Vsn::string() | version()) ->
+    ok | {error, term()}.
+write_version(File, {_, _, _} = Vsn) ->
+    write_version(File, version_to_str(Vsn));
+write_version(File, Vsn) ->
+    riak_core_util:replace_file(File, Vsn).
+
+-spec finalize_upgrade(Dir :: string()) -> {ok, version()} | {error, term()}.
+finalize_upgrade(Dir) ->
+    UpgradeFile = filename:join(Dir, ?UPGRADE_FILE),
+    case read_version(UpgradeFile) of
+        undefined ->
+            {error, no_upgrade_version};
+        Vsn ->
+            VsnFile = filename:join(Dir, ?VERSION_FILE),
+            case write_version(VsnFile, Vsn) of
+                ok ->
+                    case file:delete(UpgradeFile) of
+                        ok ->
+                            {ok, Vsn};
+                        {error, DelErr} ->
+                            {error, DelErr}
+                    end;
+                {error, WriteErr} ->
+                    {error, WriteErr}
+            end
+    end.
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
@@ -698,24 +870,14 @@ startup_data_dir_test() ->
     os:cmd("rm -rf test/bitcask-backend/*"),
     Path = "test/bitcask-backend",
     Config = [{data_root, Path}],
-    %% Create a set of timestamped partition directories
-    TSPartitionDirs =
-        [filename:join(["42-" ++ integer_to_list(X)]) ||
-                          X <- lists:seq(1, 10)],
-    [begin
-         filelib:ensure_dir(filename:join([Path, Dir, dummy]))
-     end || Dir <- TSPartitionDirs],
     %% Start the backend
     {ok, State} = start(42, Config),
     %% Stop the backend
     ok = stop(State),
     %% Ensure the timestamped directories have been moved
     {ok, DataDirs} = file:list_dir(Path),
-    {ok, RemovalDirs} = file:list_dir(filename:join([Path, "manual_cleanup"])),
-    [_ | RemovalPartitionDirs] = lists:reverse(TSPartitionDirs),
     os:cmd("rm -rf test/bitcask-backend/*"),
-    ?assertEqual(["42", "manual_cleanup"], lists:sort(DataDirs)),
-    ?assertEqual(lists:sort(RemovalPartitionDirs), lists:sort(RemovalDirs)).
+    ?assertEqual(["42"], DataDirs).
 
 drop_test() ->
     os:cmd("rm -rf test/bitcask-backend/*"),
@@ -727,23 +889,11 @@ drop_test() ->
     {ok, State1} = drop(State),
     %% Ensure the timestamped directories have been moved
     {ok, DataDirs} = file:list_dir(Path),
-    {ok, RemovalDirs} = file:list_dir(filename:join([Path, "auto_cleanup"])),
     %% RemovalPartitionDirs = lists:reverse(TSPartitionDirs),
     %% Stop the backend
     ok = stop(State1),
     os:cmd("rm -rf test/bitcask-backend/*"),
-    ?assertEqual(["auto_cleanup"], lists:sort(DataDirs)),
-    %% The drop cleanup happens in a separate process so
-    %% there is no guarantee it has happened yet when
-    %% this test runs.
-    case RemovalDirs of
-        [] ->
-            ?assert(true);
-        ["42"] ->
-            ?assert(true);
-        _ ->
-            ?assert(false)
-    end.
+    ?assertEqual([], DataDirs).
 
 get_data_dir_test() ->
     %% Cleanup
@@ -760,23 +910,48 @@ get_data_dir_test() ->
     %% Check the results
     ?assertEqual({ok, "21"}, get_data_dir(Path, "21")).
 
-existing_partition_dirs_test() ->
-    %% Cleanup
-    os:cmd("rm -rf test/bitcask-backend/*"),
-    Path = "test/bitcask-backend",
-    %% Create a set of timestamped partition directories
-    %% plus some base directories for other partitions
-    TSPartitionDirs =
-        [filename:join([Path, "21-" ++ integer_to_list(X)]) ||
-                          X <- lists:seq(1, 10)],
-    OtherPartitionDirs = [integer_to_list(X) || X <- [2, 23, 210]],
-    [filelib:ensure_dir(filename:join([Dir, dummy]))
-     || Dir <- TSPartitionDirs ++ OtherPartitionDirs],
-    %% Check the results
-    ?assertEqual(lists:sort(TSPartitionDirs),
-                 existing_partition_dirs(filename:join([Path, "21"]))).
+key_version_test() ->
+    FoldKeysFun =
+        fun(Bucket, Key, Acc) ->
+                [{Bucket, Key} | Acc]
+        end,
 
+    ?assertCmd("rm -rf test/bitcask-backend"),
+    application:set_env(bitcask, data_root, "test/bitcask-backend"),
+    application:set_env(bitcask, small_keys, true),
+    {ok, S} = ?MODULE:start(42, []),
+    ?MODULE:put(<<"b1">>, <<"k1">>, [], <<"v1">>, S),
+    ?MODULE:put(<<"b2">>, <<"k1">>, [], <<"v2">>, S),
+    ?MODULE:put(<<"b3">>, <<"k1">>, [], <<"v3">>, S),
 
+    ?assertMatch({ok, <<"v2">>, _}, ?MODULE:get(<<"b2">>, <<"k1">>, S)),
+
+    ?MODULE:stop(S),
+    application:set_env(bitcask, small_keys, false),
+    {ok, S1} = ?MODULE:start(42, []),
+    %%{ok, L0} = ?MODULE:fold_keys(FoldKeysFun, [], [], S1),
+    %%io:format("~p~n", [L0]),
+
+    ?assertMatch({ok, <<"v2">>, _}, ?MODULE:get(<<"b2">>, <<"k1">>, S1)),
+
+    ?MODULE:put(<<"b4">>, <<"k1">>, [], <<"v4">>, S1),
+    ?MODULE:put(<<"b5">>, <<"k1">>, [], <<"v5">>, S1),
+
+    ?MODULE:stop(S1),
+    application:set_env(bitcask, small_keys, true),
+    {ok, S2} = ?MODULE:start(42, []),
+
+    {ok, L0} = ?MODULE:fold_keys(FoldKeysFun, [], [], S2),
+    L = lists:sort(L0),
+    ?_assertEqual([
+                   {<<"b1">>, <<"k1">>},
+                   {<<"b2">>, <<"k1">>},
+                   {<<"b3">>, <<"k1">>},                   
+                   {<<"b4">>, <<"k1">>},
+                   {<<"b5">>, <<"k1">>}
+                  ],
+                  L).
+    
 -ifdef(EQC).
 
 eqc_test_() ->
@@ -786,7 +961,7 @@ eqc_test_() ->
          fun setup/0,
          fun cleanup/1,
          [
-          {timeout, 60000,
+          {timeout, 180,
            [?_assertEqual(true,
                           backend_eqc:test(?MODULE,
                                            false,

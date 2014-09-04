@@ -284,7 +284,7 @@ mapred_stream_sink(Inputs, Query, Timeout) ->
                           timer={Timer,PipeRef},
                           keeps=NumKeeps}}
     catch throw:{badarg, Fitting, Reason} ->
-            riak_kv_mrc_sink:stop(Sink),
+            _ = riak_kv_mrc_sink:stop(Sink),
             {error, {Fitting, Reason}}
     end.
     
@@ -587,6 +587,8 @@ send_inputs(Pipe, BucketKeyList, _Timeout) when is_list(BucketKeyList) ->
     end;
 send_inputs(Pipe, Bucket, Timeout) when is_binary(Bucket) ->
     riak_kv_pipe_listkeys:queue_existing_pipe(Pipe, Bucket, Timeout);
+send_inputs(Pipe, {Type, Bucket}, Timeout) when is_binary(Type), is_binary(Bucket) ->
+    riak_kv_pipe_listkeys:queue_existing_pipe(Pipe, {Type, Bucket}, Timeout);
 send_inputs(Pipe, {Bucket, FilterExprs}, Timeout) ->
     case riak_kv_mapred_filters:build_filter(FilterExprs) of
         {ok, Filters} ->
@@ -618,11 +620,21 @@ send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey}, Timeout) ->
             send_inputs(Pipe, NewInput, Timeout)
     end;
 send_inputs(Pipe, {search, Bucket, Query}, Timeout) ->
-    NewInput = {modfun, riak_search, mapred_search, [Bucket, Query, []]},
-    send_inputs(Pipe, NewInput, Timeout);
+    case search_module() of
+        {ok, Mod} ->
+            NewInput = {modfun, Mod, mapred_search, [Bucket, Query, []]},
+            send_inputs(Pipe, NewInput, Timeout);
+        {error, _}=Error ->
+            Error
+    end;
 send_inputs(Pipe, {search, Bucket, Query, Filter}, Timeout) ->
-    NewInput = {modfun, riak_search, mapred_search, [Bucket, Query, Filter]},
-    send_inputs(Pipe, NewInput, Timeout);
+    case search_module() of
+        {ok, Mod} ->
+            NewInput = {modfun, Mod, mapred_search, [Bucket, Query, Filter]},
+            send_inputs(Pipe, NewInput, Timeout);
+        {error, _}=Error ->
+            Error
+    end;
 send_inputs(Pipe, {modfun, Mod, Fun, Arg} = Modfun, Timeout) ->
     try Mod:Fun(Pipe, Arg, Timeout) of
         {ok, Bucket, ReqId} ->
@@ -633,6 +645,34 @@ send_inputs(Pipe, {modfun, Mod, Fun, Arg} = Modfun, Timeout) ->
         X:Y ->
             {Modfun, X, Y, erlang:get_stacktrace()}
     end.
+
+%% decide whether yokozuna or riak_search should be used for
+%% {search, ...} inputs
+search_module() ->
+    case {enabled(yokozuna), enabled(riak_search)} of
+        {true, true} ->
+            case application:get_env(riak_kv, mapred_search) of
+                %% being explicit here to help find typo errors earlier
+                {ok, yokozuna} ->
+                    {ok, yokozuna};
+                {ok, riak_search} ->
+                    {ok, riak_search};
+                undefined ->
+                    {ok, riak_search};
+                Other ->
+                    {error, {unknown_mapred_provider, Other}}
+            end;
+        {true, _} ->
+            {ok, yokozuna};
+        {_, true} ->
+            {ok, riak_search};
+        _ ->
+            {error, "search not enabled"}
+    end.
+
+%% riak_search and yokozuna both use an `enabled' appenv setting
+enabled(App) ->
+    {ok, true} == application:get_env(App, enabled).
 
 %% @doc Helper function used to redirect the results of
 %% index/search/etc. queries into the MapReduce pipe.  The function
@@ -833,7 +873,7 @@ cleanup_sink({SinkPid, SinkMon}) when is_pid(SinkPid),
                                       is_reference(SinkMon) ->
     erlang:demonitor(SinkMon, [flush]),
     %% killing the sink should tear down the pipe
-    riak_kv_mrc_sink:stop(SinkPid),
+    _ = riak_kv_mrc_sink:stop(SinkPid),
     %% receive just in case the sink had sent us one last response
     receive #kv_mrc_sink{} -> ok after 0 -> ok end;
 cleanup_sink(undefined) ->
@@ -977,11 +1017,11 @@ example_setup() ->
 example_setup(Num) when Num > 0 ->
     {ok, C} = riak:local_client(),
     C:put(riak_object:new(<<"foo">>, <<"bar">>, <<"what did you expect?">>)),
-    [C:put(riak_object:new(<<"foo">>,
+    _ = [C:put(riak_object:new(<<"foo">>,
                            list_to_binary("bar"++integer_to_list(X)),
                            list_to_binary("bar val "++integer_to_list(X))))
      || X <- lists:seq(1, Num)],
-    [C:put(riak_object:new(<<"foonum">>,
+    _ = [C:put(riak_object:new(<<"foonum">>,
                            list_to_binary("bar"++integer_to_list(X)),
                            X)) ||
         X <- lists:seq(1, Num)],
@@ -1027,7 +1067,7 @@ compat_fun(66856669, 6, Fun) ->
     {ok, fun({ok, Input, _Keydata}, Partition, FittingDetails) ->
                  Results = riak_kv_mrc_map:link_phase(
                              Input, undefined, {Bucket, Tag}),
-                 [ riak_pipe_vnode_worker:send_output(
+                 _ = [ riak_pipe_vnode_worker:send_output(
                      R, Partition, FittingDetails)
                    || R <- Results ],
                  ok;

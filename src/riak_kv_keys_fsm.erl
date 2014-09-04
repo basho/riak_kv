@@ -101,20 +101,20 @@ process_results({From, Bucket, Keys},
     %% TODO: have caller give us the Idx number.
     ?DTRACE(?C_KEYS_PROCESS_RESULTS, [length(Keys)], []),
     process_keys(Bucket, Keys, ReqId, ClientPid),
-    riak_kv_vnode:ack_keys(From), % tell that vnode we're ready for more
+    _ = riak_kv_vnode:ack_keys(From), % tell that vnode we're ready for more
     {ok, StateData};
+process_results({error, Reason}, _State) ->
+    ?DTRACE(?C_KEYS_PROCESS_RESULTS, [-1], []),
+    {error, Reason};
 process_results({Bucket, Keys},
                 StateData=#state{from={raw, ReqId, ClientPid}}) ->
     ?DTRACE(?C_KEYS_PROCESS_RESULTS, [length(Keys)], []),
     process_keys(Bucket, Keys, ReqId, ClientPid),
     {ok, StateData};
 process_results(done, StateData) ->
-    {done, StateData};
-process_results({error, Reason}, _State) ->
-    ?DTRACE(?C_KEYS_PROCESS_RESULTS, [-1], []),
-    {error, Reason}.
+    {done, StateData}.
 
-finish({error, Error},
+finish({error, _}=Error,
        StateData=#state{from={raw, ReqId, ClientPid}}) ->
     ?DTRACE(?C_KEYS_FINISH, [-1], []),
     %% Notify the requesting client that an error

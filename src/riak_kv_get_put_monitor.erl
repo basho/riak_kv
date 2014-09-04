@@ -48,7 +48,7 @@
 
 
 %% @doc Begin monitoring the passed pid and tag its stats for a get fsm.
--spec get_fsm_spawned(Pid :: pid()) -> 'ok'.
+-spec get_fsm_spawned(Pid :: pid()) -> pid().
 get_fsm_spawned(Pid) ->
     spawn(?MODULE, spawned, [gets, Pid]).
 
@@ -69,7 +69,7 @@ monitor_loop(MonRef, Pid, Type) ->
     end.
 
 %% @doc Begin monitoring the passed pid and tag its stats for a put fsm.
--spec put_fsm_spawned(Pid :: pid()) -> 'ok'.
+-spec put_fsm_spawned(Pid :: pid()) -> pid().
 put_fsm_spawned(Pid) ->
     spawn(?MODULE, spawned, [puts, Pid]).
 
