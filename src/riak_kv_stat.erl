@@ -439,8 +439,8 @@ stats() ->
      {[vnode, set, update, time], histogram},
      {[vnode, map, update], spiral},
      {[vnode, map, update, time], histogram},
-     {[vnode, rangereg, update], spiral},
-     {[vnode, rangereg, update, time], histogram},
+     {[vnode, range, update], spiral},
+     {[vnode, range, update, time], histogram},
 
      %% node stats: gets
      {[node, gets], spiral},
@@ -465,11 +465,11 @@ stats() ->
      {[node, gets, map, read_repairs], spiral},
      {[node, gets, map, siblings], histogram},
      {[node, gets, map, time], histogram},
-     {[node, gets, rangereg], spiral},
-     {[node, gets, rangereg, objsize], histogram},
-     {[node, gets, rangereg, read_repairs], spiral},
-     {[node, gets, rangereg, siblings], histogram},
-     {[node, gets, rangereg, time], histogram},
+     {[node, gets, range], spiral},
+     {[node, gets, range, objsize], histogram},
+     {[node, gets, range, read_repairs], spiral},
+     {[node, gets, range, siblings], histogram},
+     {[node, gets, range, time], histogram},
 
      %% node stats: puts
      {[node, puts], spiral},
@@ -483,8 +483,8 @@ stats() ->
      {[node, puts, set, time], histogram},
      {[node, puts, map], spiral},
      {[node, puts, map, time], histogram},
-     {[node, puts, rangereg], spiral},
-     {[node, puts, rangereg, time], histogram},
+     {[node, puts, range], spiral},
+     {[node, puts, range, time], histogram},
 
      %% index & list{keys,buckets} stats
      {[index, fsm, create], spiral},
@@ -514,8 +514,8 @@ stats() ->
      {[object, set, merge, time], histogram},
      {[object, map, merge], spiral},
      {[object, map, merge, time], histogram},
-     {[object, rangereg, merge], spiral},
-     {[object, rangereg, merge, time], histogram},
+     {[object, range, merge], spiral},
+     {[object, range, merge, time], histogram},
 
      %% strong consistency stats
      {[consistent, gets], spiral},

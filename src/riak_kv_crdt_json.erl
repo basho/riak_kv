@@ -23,7 +23,7 @@
 -export([update_request_from_json/3, fetch_response_to_json/4]).
 -compile([{inline, [bad_op/2, bad_field/1]}]).
 
--define(FIELD_PATTERN, "^(.*)_(counter|set|register|flag|map)$").
+-define(FIELD_PATTERN, "^(.*)_(counter|set|register|flag|map|range)$").
 
 -ifdef(TEST).
 -compile(export_all).
@@ -37,8 +37,8 @@
 %% Value types
 -type context() :: binary().
 -type map_field() :: {binary(), embedded_type()}.
--type embedded_type() :: counter | set | register | flag | map.
--type toplevel_type() :: counter | set | map | rangereg.
+-type embedded_type() :: counter | set | register | flag | map | range.
+-type toplevel_type() :: counter | set | map | range.
 -type all_type() :: toplevel_type() | register | flag.
 -type type_mappings() :: [{all_type(), module()}].
 
@@ -48,11 +48,11 @@
 -type set_op() :: simple_set_op() | {update, [simple_set_op()]}.
 -type flag_op() :: enable | disable.
 -type register_op() :: {assign, binary()}.
--type rangereg_op() :: {assign, integer()}.
+-type range_op() :: {add, integer()}.
 -type simple_map_op() :: {remove, map_field()} | {update, map_field(), embedded_type_op()}.
 -type map_op() :: simple_map_op() | {update, [simple_map_op()]}.
--type embedded_type_op() :: counter_op() | set_op() | register_op() | flag_op() | map_op().
--type toplevel_op() :: counter_op() | set_op() | map_op() | rangereg_op().
+-type embedded_type_op() :: counter_op() | set_op() | register_op() | flag_op() | map_op() | range_op().
+-type toplevel_op() :: counter_op() | set_op() | map_op() | range_op().
 -type all_type_op() :: toplevel_op() | register_op() | flag_op().
 -type update() :: {toplevel_type(), toplevel_op(), context()}.
 
@@ -76,10 +76,10 @@ value_to_json(counter, Int, _) -> Int;
 value_to_json(set, List, _) -> List;
 value_to_json(flag, Bool, _) -> Bool;
 value_to_json(register, Bin, _) -> Bin;
-value_to_json(rangereg, RR, _) ->
+value_to_json(range, Range, _) ->
     {struct,
      [ {atom_to_binary(Key, utf8), undefined_to_null(Value)} ||
-         {Key, Value} <- RR
+         {Key, Value} <- Range
      ]};
 value_to_json(map, Pairs, Mods) ->
     {struct,
@@ -146,7 +146,7 @@ field_from_json(Bin) when is_binary(Bin) ->
 -spec op_from_json(all_type(), mochijson2:json_term(), type_mappings()) -> all_type_op().
 op_from_json(flag, Op, _Mods) -> flag_op_from_json(Op);
 op_from_json(register, Op, _Mods) -> register_op_from_json(Op);
-op_from_json(rangereg, Op, _Mods) -> rangereg_op_from_json(Op);
+op_from_json(range, Op, _Mods) -> range_op_from_json(Op);
 op_from_json(counter, Op, _Mods) -> counter_op_from_json(Op);
 op_from_json(set, Op, _Mods) -> set_op_from_json(Op);
 op_from_json(map, Op, Mods) -> map_op_from_json(Op, Mods).
@@ -187,10 +187,10 @@ register_op_from_json({struct, [{<<"assign">>, Value}]}) when is_binary(Value) -
 register_op_from_json(Value) when is_binary(Value) -> {assign, Value};
 register_op_from_json(Op) -> bad_op(register, Op).
 
--spec rangereg_op_from_json(mochijson2:json_object()) -> rangereg_op().
-rangereg_op_from_json({struct, [{<<"assign">>, Value}]}) when is_integer(Value) -> {assign, Value};
-rangereg_op_from_json(Value) when is_integer(Value) -> {assign, Value};
-rangereg_op_from_json(Op) -> bad_op(rangereg, Op).
+-spec range_op_from_json(mochijson2:json_object()) -> range_op().
+range_op_from_json({struct, [{<<"add">>, Value}]}) when is_integer(Value) -> {add, Value};
+range_op_from_json(Value) when is_integer(Value) -> {add, Value};
+range_op_from_json(Op) -> bad_op(range, Op).
 
 -spec counter_op_from_json(mochijson2:json_term()) -> counter_op().
 counter_op_from_json(Int) when is_integer(Int), Int >= 0 -> {increment, Int};
@@ -251,10 +251,10 @@ undefined_to_null(Term)      -> Term.
 
 encode_fetch_response_test_() ->
     [
-     {"encode rangereg",
+     {"encode range",
       fun() ->
-              {ok, RR} = ?RANGEREG_TYPE:update({assign, 0}, a, ?RANGEREG_TYPE:new()),
-              ?assertEqual({struct, [{<<"type">>, <<"rangereg">>},
+              {ok, RR} = ?RANGE_TYPE:update({add, 0}, a, ?RANGE_TYPE:new()),
+              ?assertEqual({struct, [{<<"type">>, <<"range">>},
                                      {<<"value">>,
                                       {struct,
                                        [
@@ -263,7 +263,7 @@ encode_fetch_response_test_() ->
                                         {<<"first">>, 0},
                                         {<<"last">>, 0}]}
                                      }]},
-                           fetch_response_to_json(rangereg, ?RANGEREG_TYPE:value(RR), undefined, ?MOD_MAP))
+                           fetch_response_to_json(range, ?RANGE_TYPE:value(RR), undefined, ?MOD_MAP))
       end},
      {"encode counter",
       fun() ->
@@ -294,13 +294,20 @@ encode_fetch_response_test_() ->
                                              {update, {<<"b">>, ?FLAG_TYPE}, enable},
                                              {update, {<<"c">>, ?REG_TYPE}, {assign, <<"sean">>}},
                                              {update, {<<"d">>, ?MAP_TYPE},
-                                              {update, [{update, {<<"e">>, ?EMCNTR_TYPE}, {increment,5}}]}}
+                                              {update, [{update, {<<"e">>, ?EMCNTR_TYPE}, {increment,5}}]}},
+                                             {update, {<<"e">>, ?RANGE_TYPE}, {assign, 0}}
                                             ]}, a, ?MAP_TYPE:new()),
               ?assertEqual({struct, [
                                      {<<"type">>, <<"map">>},
                                      {<<"value">>,
                                       {struct,
                                        [ % NB inverse order from the order of update-application
+                                         {<<"e_range">>, {struct, [
+                                                                      {<<"max">>, 0},
+                                                                      {<<"min">>, 0},
+                                                                      {<<"first">>, 0},
+                                                                      {<<"last">>, 0}
+                                                                     ]}},
                                         {<<"d_map">>, {struct, [{<<"e_counter">>, 5}]}},
                                         {<<"c_register">>, <<"sean">>},
                                         {<<"b_flag">>, true},
@@ -317,6 +324,13 @@ encode_fetch_response_test_() ->
 
 decode_update_request_test_() ->
     [
+     {"decode range ops",
+      fun() ->
+              ?assertEqual({range, {add, 0}, undefined},
+                           update_request_from_json(range, 0, ?MOD_MAP)),
+              ?assertThrow({invalid_operation, {range, _}},
+                           update_request_from_json(range, <<"foo">>, ?MOD_MAP))
+      end},
      {"decode counter ops",
       fun() ->
               ?assertEqual({counter, increment, undefined},
@@ -400,6 +414,9 @@ decode_update_request_test_() ->
                                                                                           {struct, [{<<"c_flag">>, <<"enable">>}]}}]}}]}}]}, 
                                                     ModMap)),
 
+              ?assertEqual({map, {update, [{update, {<<"a">>, ?RANGE_TYPE}, {add, 0}}]}, undefined},
+                          update_request_from_json(map, {struct, [{<<"update">>, {struct, [{<<"a_range">>, 0}]}}]}, ModMap)),
+
               %% Extract context
               {ok, Map} = ?MAP_TYPE:update({update,
                                             [
@@ -446,7 +463,10 @@ decode_update_request_test_() ->
                                                     {struct, [{<<"update">>, {struct, [{<<"a_set">>, {struct, [{<<"delete">>, <<"bar">>}]}}]}}]}, ModMap)),
               ?assertThrow({invalid_operation, {map, _}},
                            update_request_from_json(map, 
-                                                    {struct, [{<<"update">>, {struct, [{<<"a_map">>, {struct, [{<<"delete">>, <<"bar">>}]}}]}}]}, ModMap))
+                                                    {struct, [{<<"update">>, {struct, [{<<"a_map">>, {struct, [{<<"delete">>, <<"bar">>}]}}]}}]}, ModMap)),
+              ?assertThrow({invalid_operation, {range, _}},
+                           update_request_from_json(map,
+                                                   {struct, [{<<"update">>, {struct, [{<<"a_range">>, <<"foo">>}]}}]}, ModMap))
 
       end}
     ].

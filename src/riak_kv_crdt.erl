@@ -27,7 +27,7 @@
 -export([to_binary/2, to_binary/1, from_binary/1]).
 -export([log_merge_errors/4, meta/2, merge_value/2]).
 %% MR helper funs
--export([value/1, counter_value/1, set_value/1, map_value/1, rangereg_value/1]).
+-export([value/1, counter_value/1, set_value/1, map_value/1, range_value/1]).
 
 -include("riak_kv_wm_raw.hrl").
 -include("riak_object.hrl").
@@ -132,9 +132,9 @@ map_value(RObj) ->
 
 %% @doc convenience for (e.g.) MapReduce functions. Pass an object,
 %% get a 2.1+ RangeReg type value, or [] if no RangeReg is present.
--spec rangereg_value(riak_object:riak_object()) -> proplist:proplist().
-rangereg_value(RObj) ->
-    simple_value(RObj, ?RANGEREG_TYPE).
+-spec range_value(riak_object:riak_object()) -> proplist:proplist().
+rangg_value(RObj) ->
+    simple_value(RObj, ?RANGE_TYPE).
 
 
 %% @TODO in riak_dt change value to query allow query to take an
@@ -418,8 +418,8 @@ to_record(?MAP_TYPE, Val) ->
     ?MAP_TYPE(Val);
 to_record(?SET_TYPE, Val) ->
     ?SET_TYPE(Val);
-to_record(?RANGEREG_TYPE, Val) ->
-    ?RANGEREG_TYPE(Val).
+to_record(?RANGE_TYPE, Val) ->
+    ?RANGE_TYPE(Val).
 
 
 %% @doc Check cluster capability for crdt support
@@ -435,8 +435,8 @@ to_mod("counters") ->
     ?COUNTER_TYPE;
 to_mod("maps") ->
     ?MAP_TYPE;
-to_mod("rangeregs") ->
-    ?RANGEREG_TYPE;
+to_mod("ranges") ->
+    ?RANGE_TYPE;
 to_mod(?CRDT{mod=Mod}) ->
     Mod;
 to_mod(Type) ->
