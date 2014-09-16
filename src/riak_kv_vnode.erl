@@ -181,6 +181,11 @@ get(Preflist, BKey, ReqId, Sender) ->
 del(Preflist, BKey, ReqId) ->
     del(Preflist, BKey, ReqId, undefined).
 
+del(Preflist, BKey, ReqId, undefined) ->
+    riak_core_vnode_master:command(Preflist,
+                                   #riak_kv_delete_req_v1{bkey=BKey,
+                                                          req_id=ReqId},
+                                   riak_kv_vnode_master);
 del(Preflist, BKey, ReqId, DeleteMode) ->
     riak_core_vnode_master:command(Preflist,
                                    ?KV_DELETE_REQ{bkey=BKey,
