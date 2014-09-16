@@ -143,7 +143,8 @@
               links,        %% [link()] - links of the object
               index_fields, %% [index_field()]
               method,       %% atom() - HTTP method for the request
-              timeout       %% integer() - passed-in timeout value in ms
+              timeout,      %% integer() - passed-in timeout value in ms
+              delete_mode   %% keep | immediate | Time
              }).
 %% @type link() = {{Bucket::binary(), Key::binary()}, Tag::binary()}
 %% @type index_field() = {Key::string(), Value::string()}
@@ -233,6 +234,11 @@ malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'POST'
                        fun malformed_link_headers/2,
                        fun malformed_index_headers/2],
                       RD, Ctx);
+malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'DELETE' ->
+    malformed_request([fun malformed_timeout_param/2,
+                       fun malformed_deletemode_param/2,
+                       fun malformed_rw_params/2,
+                       fun malformed_check_doc/2], RD, Ctx);
 malformed_request(RD, Ctx) ->
     malformed_request([fun malformed_timeout_param/2,
                        fun malformed_rw_params/2,
@@ -296,6 +302,36 @@ malformed_timeout_param(RD, Ctx) ->
                      Ctx}
             end
     end.
+
+%% @spec malformed_deletemode_param(reqdata(), context()) ->
+%%          {boolean(), reqdata(), context()}
+%% @doc Check that the timeout parameter is are a
+%%      string-encoded integer.  Store the integer value
+%%      in context() if so.
+malformed_deletemode_param(RD, Ctx) ->
+    case wrq:get_qs_value("delete_mode", none, RD) of
+        none ->
+            {false, RD, Ctx};
+        "keep" ->
+            {false, RD, Ctx#ctx{ delete_mode=keep }};
+        "immediate" ->
+            {false, RD, Ctx#ctx{ delete_mode=immediate }};
+        TimeoutStr ->
+            try
+                Timeout = list_to_integer(TimeoutStr),
+                {false, RD, Ctx#ctx{delete_mode=Timeout}}
+            catch
+                _:_ ->
+                    {true,
+                     wrq:append_to_resp_body(io_lib:format("Bad delete_mode "
+                                                           "value ~p (should be keep, immediate, or DelayTime)~n",
+                                                           [TimeoutStr]),
+                                             wrq:set_resp_header(?HEAD_CTYPE,
+                                                                 "text/plain", RD)),
+                     Ctx}
+            end
+    end.
+
 
 %% @spec malformed_rw_params(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
@@ -1113,7 +1149,7 @@ handle_common_error(Reason, RD, Ctx) ->
 make_options(Prev, Ctx) ->
     NewOpts0 = [{rw, Ctx#ctx.rw}, {r, Ctx#ctx.r}, {w, Ctx#ctx.w},
                 {pr, Ctx#ctx.pr}, {pw, Ctx#ctx.pw}, {dw, Ctx#ctx.dw},
-                {timeout, Ctx#ctx.timeout}, {asis, Ctx#ctx.asis}],
+                {timeout, Ctx#ctx.timeout}, {asis, Ctx#ctx.asis}, {delete_mode, Ctx#ctx.delete_mode}],
     NewOpts = [ {Opt, Val} || {Opt, Val} <- NewOpts0,
                               Val /= undefined, Val /= default ],
     Prev ++ NewOpts.

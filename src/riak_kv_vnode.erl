@@ -32,6 +32,7 @@
          get/3,
          get/4,
          del/3,
+         del/4,
          put/6,
          local_get/2,
          local_put/2,
@@ -178,9 +179,13 @@ get(Preflist, BKey, ReqId, Sender) ->
                                    riak_kv_vnode_master).
 
 del(Preflist, BKey, ReqId) ->
+    del(Preflist, BKey, ReqId, undefined).
+
+del(Preflist, BKey, ReqId, DeleteMode) ->
     riak_core_vnode_master:command(Preflist,
                                    ?KV_DELETE_REQ{bkey=BKey,
-                                                  req_id=ReqId},
+                                                  req_id=ReqId,
+                                                  delete_mode=DeleteMode},
                                    riak_kv_vnode_master).
 
 %% Issue a put for the object to the preflist, expecting a reply
@@ -481,8 +486,10 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
         _ ->
             {noreply, State}
     end;
-handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId}, _Sender, State) ->
-    do_delete(BKey, ReqId, State);
+handle_command(?KV_DELETE_REQ{bkey=BKey, req_id=ReqId, delete_mode=DeleteMode}, _Sender, State) ->
+    do_delete(BKey, ReqId, DeleteMode, State);
+handle_command(#riak_kv_delete_req_v1{bkey=BKey, req_id=ReqId }, _Sender, State) ->
+    do_delete(BKey, ReqId, undefined, State);
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
     {reply, do_get_vclocks(BKeys, State), State};
 handle_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0}, Sender, State) ->
@@ -1413,11 +1420,14 @@ finish_fold(BufferMod, Buffer, Sender) ->
     riak_core_vnode:reply(Sender, done).
 
 %% @private
-do_delete(BKey, ReqId, State) ->
+do_delete(BKey, ReqId, Mode, State) ->
     Mod = State#state.mod,
     ModState = State#state.modstate,
     Idx = State#state.idx,
-    DeleteMode = State#state.delete_mode,
+    DeleteMode = case Mode of
+                     undefined -> State#state.delete_mode;
+                     Mode -> Mode
+                 end,
 
     %% Get the existing object.
     case do_get_term(BKey, Mod, ModState) of

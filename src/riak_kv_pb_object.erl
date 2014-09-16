@@ -63,7 +63,7 @@
          process/2,
          process_stream/3]).
 
--import(riak_pb_kv_codec, [decode_quorum/1]).
+-import(riak_pb_kv_codec, [decode_quorum/1, decode_delete_mode/1]).
 
 -record(state, {client,    % local client
                 req,       % current request (for multi-message requests like list keys)
@@ -250,7 +250,7 @@ process(#rpbputreq{bucket=B, key=K, vclock=PbVC, content=RpbContent,
 
 process(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
                    r=R0, w=W0, pr=PR0, pw=PW0, dw=DW0, rw=RW0,
-                   timeout=Timeout, n_val=N_val, sloppy_quorum=SloppyQuorum},
+                   timeout=Timeout, n_val=N_val, sloppy_quorum=SloppyQuorum, delete_mode=DM0},
         #state{client=C} = State) ->
     W = decode_quorum(W0),
     PW = decode_quorum(PW0),
@@ -258,10 +258,11 @@ process(#rpbdelreq{bucket=B, key=K, vclock=PbVc,
     R = decode_quorum(R0),
     PR = decode_quorum(PR0),
     RW = decode_quorum(RW0),
+    DeleteMode = decode_delete_mode(DM0),
 
     Options = make_options([{r, R}, {w, W}, {rw, RW}, {pr, PR}, {pw, PW}, 
                             {dw, DW}, {timeout, Timeout}, {n_val, N_val},
-                            {sloppy_quorum, SloppyQuorum}]),
+                            {sloppy_quorum, SloppyQuorum}, {delete_mode, DeleteMode}]),
     Result = case PbVc of
                  undefined ->
                      C:delete(B, K, Options);
