@@ -336,10 +336,13 @@ handle_call(estimate_keys, _From,  State=#state{trees=Trees}) ->
     {reply, {ok, EstimateNrKeys}, State};
 
 handle_call({estimate_keys, IndexN}, _From,  State=#state{trees=Trees}) ->
-    {ok, Tree} = orddict:find(IndexN, Trees),
-     lager:info("emiklix ~p ~p ~p", [IndexN, Trees, Tree]),
-    {ok, EstimateNrKeys} = hashtree:estimate_keys(Tree),
-    {reply, {ok, EstimateNrKeys}, State};
+    case orddict:find(IndexN, Trees) of
+        {ok, Tree} ->
+            {ok, EstimateNrKeys} = hashtree:estimate_keys(Tree),
+            {reply, {ok, EstimateNrKeys}, State};
+        error ->
+            {reply, not_responsible, State}
+    end;
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
