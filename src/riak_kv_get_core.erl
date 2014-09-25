@@ -199,6 +199,13 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                       notfound ->
                           [];
                       _ -> % ok or tombstone
+                          %% Any object that is strictly descended by
+                          %% the merge result must be read-repaired,
+                          %% this ensures even tombstones get repaired
+                          %% so reap will work. We join the list of
+                          %% dominated (in need of repair) indexes and
+                          %% the list of not_found (in need of repair)
+                          %% indexes.
                           [{Idx, outofdate} || {Idx, {ok, RObj}} <- Results,
                                   riak_object:strict_descendant(MObj, RObj)] ++
                               [{Idx, notfound} || {Idx, {error, notfound}} <- Results]
