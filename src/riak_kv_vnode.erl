@@ -677,9 +677,10 @@ handle_command(?KV_VNODE_STATUS_REQ{},
                _Sender,
                State=#state{idx=Index,
                             mod=Mod,
-                            modstate=ModState}) ->
+                            modstate=ModState,
+                            vnodeid=VId}) ->
     BackendStatus = {backend_status, Mod, Mod:status(ModState)},
-    VNodeStatus = [BackendStatus],
+    VNodeStatus = [BackendStatus, {vnodeid, VId}],
     {reply, {vnode_status, Index, VNodeStatus}, State};
 handle_command({reformat_object, BKey}, _Sender, State) ->
     {Reply, UpdState} = do_reformat(BKey, State),
@@ -1909,7 +1910,9 @@ get_vnodeid(Index) ->
     F = fun(Status) ->
                 case proplists:get_value(vnodeid, Status, undefined) of
                     undefined ->
-                        assign_vnodeid(os:timestamp(),
+                        %% using now as we want different values per
+                        %% vnode id on a node
+                        assign_vnodeid(erlang:now(),
                                        riak_core_nodeid:get(),
                                        Status);
                     VnodeId ->
@@ -1921,8 +1924,8 @@ get_vnodeid(Index) ->
 %% Assign a unique vnodeid, making sure the timestamp is unique by incrementing
 %% into the future if necessary.
 assign_vnodeid(Now, NodeId, Status) ->
-    {Mega, Sec, _Micro} = Now,
-    NowEpoch = 1000000*Mega + Sec,
+    {_Mega, Sec, Micro} = Now,
+    NowEpoch = 1000000*Sec + Micro,
     LastVnodeEpoch = proplists:get_value(last_epoch, Status, 0),
     VnodeEpoch = erlang:max(NowEpoch, LastVnodeEpoch+1),
     VnodeId = <<NodeId/binary, VnodeEpoch:32/integer>>,
@@ -2287,43 +2290,44 @@ new_md_cache(VId) ->
 
 %% Check assigning a vnodeid twice in the same second
 assign_vnodeid_restart_same_ts_test() ->
-    Now1 = {1314,224520,343446}, %% TS=1314224520
-    Now2 = {1314,224520,345865}, %% as unsigned net-order int <<78,85,121,136>>
+    Now1 = {1314,224520,343446}, %% TS=(224520 * 100000) + 343446
+    Now2 = {1314,224520,343446}, %% as unsigned net-order int <<70,116,143,150>>
     NodeId = <<1, 2, 3, 4>>,
     {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
-    ?assertEqual(<<1, 2, 3, 4, 78, 85, 121, 136>>, Vid1),
+    ?assertEqual(<<1, 2, 3, 4, 70, 116, 143, 150>>, Vid1),
     %% Simulate clear
     Status2 = proplists:delete(vnodeid, Status1),
     %% Reassign
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
-    ?assertEqual(<<1, 2, 3, 4, 78, 85, 121, 137>>, Vid2).
+    ?assertEqual(<<1, 2, 3, 4, 70, 116, 143, 151>>, Vid2).
 
-%% Check assigning a vnodeid with a later date
+%% Check assigning a vnodeid with a later date, but less than 11.57
+%% days later!
 assign_vnodeid_restart_later_ts_test() ->
-    Now1 = {1000,000000,0}, %% <<59,154,202,0>>
-    Now2 = {2000,000000,0}, %% <<119,53,148,0>>
+    Now1 = {1000,224520,343446}, %% <<70,116,143,150>>
+    Now2 = {1000,224520,343546}, %% <<70,116,143,250>>
     NodeId = <<1, 2, 3, 4>>,
     {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
-    ?assertEqual(<<1, 2, 3, 4, 59,154,202,0>>, Vid1),
+    ?assertEqual(<<1, 2, 3, 4, 70,116,143,150>>, Vid1),
     %% Simulate clear
     Status2 = proplists:delete(vnodeid, Status1),
     %% Reassign
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
-    ?assertEqual(<<1, 2, 3, 4, 119,53,148,0>>, Vid2).
+    ?assertEqual(<<1, 2, 3, 4, 70,116,143,250>>, Vid2).
 
-%% Check assigning a vnodeid with a later date - just in case of clock skew
+%% Check assigning a vnodeid with a earlier date - just in case of clock skew
 assign_vnodeid_restart_earlier_ts_test() ->
-    Now1 = {2000,000000,0}, %% <<119,53,148,0>>
-    Now2 = {1000,000000,0}, %% <<59,154,202,0>>
+    Now1 = {1000,224520,343546}, %% <<70,116,143,150>>
+    Now2 = {1000,224520,343446}, %% <<70,116,143,250>>
     NodeId = <<1, 2, 3, 4>>,
     {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
-    ?assertEqual(<<1, 2, 3, 4, 119,53,148,0>>, Vid1),
+    ?assertEqual(<<1, 2, 3, 4, 70,116,143,250>>, Vid1),
     %% Simulate clear
     Status2 = proplists:delete(vnodeid, Status1),
     %% Reassign
     %% Should be greater than last offered - which is the 2mil timestamp
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
-    ?assertEqual(<<1, 2, 3, 4, 119,53,148,1>>, Vid2).
+    ?assertEqual(<<1, 2, 3, 4, 70,116,143,251>>, Vid2).
 
 %% Test
 vnode_status_test_() ->
