@@ -36,7 +36,7 @@
 %% Callback API
 -export([behaviour/0,
 	 new/3, delete/3, get_value/4, update/4, reset/3, sample/3,
-         get_datapoints/3, setopts/4]).
+         get_datapoints/3, setopts/3]).
 
 behaviour() ->
     entry.
@@ -71,7 +71,7 @@ get_datapoints(_, _, _) ->
 update(_Name, _Type, _Ref, _Value) -> ?UNSUP.
 reset(_Name, _Type, _Ref)  -> ?UNSUP.
 sample(_Name, _Type, _Ref) -> ?UNSUP.
-setopts(_Name, _Options, _Type, _Ref) -> ?UNSUP.
+setopts(_Entry, _Options, _NewStatus) -> ok.
 
 filter_datapoints(Stats, default) ->
     Stats;
