@@ -90,19 +90,20 @@
 %% to LevelDB using a single batch write. Writes are flushed whenever the
 %% buffer becomes full, as well as before updating the hashtree.
 %%
-%% Tree exchange is provided by the ``compare/2'' and ``compare/3'' functions.
-%% The behavior of these functions is determined through a provided function
+%% Tree exchange is provided by the ``compare/4'' function.
+%% The behavior of this function is determined through a provided function
 %% that implements logic to get buckets and segments for a given remote tree,
 %% as well as a callback invoked as key differences are determined. This
 %% generic interface allows for tree exchange to be implemented in a variety
 %% of ways, including directly against to local hash tree instances, over
 %% distributed Erlang, or over a custom protocol over a TCP socket. See
-%% ``local_compare/2'' and ``do_remote/1'' for examples.
+%% ``local_compare/2'' and ``do_remote/1'' for examples (-ifdef(TEST) only).
 
 -module(hashtree).
 
 -export([new/0,
          new/2,
+         new/3,
          insert/3,
          insert/4,
          delete/2,
@@ -110,13 +111,11 @@
          update_snapshot/1,
          update_perform/1,
          rehash_tree/1,
+         flush_buffer/1,
          close/1,
          destroy/1,
          read_meta/2,
          write_meta/3,
-         local_compare/2,
-         compare/2,
-         compare/3,
          compare/4,
          top_hash/1,
          get_bucket/3,
@@ -125,7 +124,10 @@
          segments/1,
          width/1,
          mem_levels/1]).
+-export([compare2/4]).
 
+-ifdef(TEST).
+-export([local_compare/2]).
 -export([run_local/0,
          run_local/1,
          run_concurrent_build/0,
@@ -134,6 +136,7 @@
          run_multiple/2,
          run_remote/0,
          run_remote/1]).
+-endif. % TEST
 
 -ifdef(EQC).
 -export([prop_correct/0]).
@@ -159,8 +162,8 @@
 
 -type keydiff() :: {missing | remote_missing | different, binary()}.
 
--type remote_fun() :: fun((get_bucket | key_hashes,
-                           {integer(), integer()}) -> any()).
+-type remote_fun() :: fun((get_bucket | key_hashes | init | final,
+                           {integer(), integer()} | integer() | term()) -> any()).
 
 -type acc_fun(Acc) :: fun(([keydiff()], Acc) -> Acc).
 
@@ -176,7 +179,7 @@
                 ref            :: term(),
                 path           :: string(),
                 itr            :: term(),
-                write_buffer   :: [{binary(), binary()}],
+                write_buffer   :: [{put, binary(), binary()} | {delete, binary()}],
                 write_buffer_count :: integer(),
                 dirty_segments :: array()
                }).
@@ -254,7 +257,9 @@ close_iterator(Itr) ->
             ok
     end.
 
--spec destroy(hashtree()) -> hashtree().
+-spec destroy(string() | hashtree()) -> ok | hashtree().
+destroy(Path) when is_list(Path) ->
+    ok = eleveldb:destroy(Path, []);
 destroy(State) ->
     %% Assumption: close was already called on all hashtrees that
     %%             use this LevelDB instance,
@@ -384,26 +389,6 @@ rehash_perform(State) ->
 top_hash(State) ->
     get_bucket(1, 0, State).
 
--spec local_compare(hashtree(), hashtree()) -> [keydiff()].
-local_compare(T1, T2) ->
-    Remote = fun(get_bucket, {L, B}) ->
-                     get_bucket(L, B, T2);
-                (key_hashes, Segment) ->
-                     [{_, KeyHashes2}] = key_hashes(T2, Segment),
-                     KeyHashes2
-             end,
-    compare(T1, Remote).
-
--spec compare(hashtree(), remote_fun()) -> [keydiff()].
-compare(Tree, Remote) ->
-    compare(Tree, Remote, fun(Keys, KeyAcc) ->
-                                  Keys ++ KeyAcc
-                          end).
-
--spec compare(hashtree(), remote_fun(), acc_fun(X)) -> X.
-compare(Tree, Remote, AccFun) ->
-    compare(1, 0, Tree, Remote, AccFun, []).
-
 compare(Tree, Remote, AccFun, Acc) ->
     compare(1, 0, Tree, Remote, AccFun, Acc).
 
@@ -473,7 +458,7 @@ new_segment_store(Opts, State) ->
     DataDir = case proplists:get_value(segment_path, Opts) of
                   undefined ->
                       Root = "/tmp/anti/level",
-                      <<P:128/integer>> = crypto:md5(term_to_binary(erlang:now())),
+                      <<P:128/integer>> = crypto:md5(term_to_binary({erlang:now(), make_ref()})),
                       filename:join(Root, integer_to_list(P));
                   SegmentPath ->
                       SegmentPath
@@ -501,7 +486,7 @@ new_segment_store(Opts, State) ->
     Config6 = orddict:store(use_bloomfilter, true, Config5),
     Options = orddict:store(create_if_missing, true, Config6),
 
-    filelib:ensure_dir(DataDir),
+    ok = filelib:ensure_dir(DataDir),
     {ok, Ref} = eleveldb:open(DataDir, Options),
     State#state{ref=Ref, path=DataDir}.
 
@@ -515,7 +500,7 @@ hash(X) ->
     sha(term_to_binary(X)).
 
 sha(Bin) ->
-    Chunk = app_helper:get_env(riak_kv, anti_entropy_sha_chunk, 4096),
+    Chunk = get_env(anti_entropy_sha_chunk, 4096),
     sha(Chunk, Bin).
 
 sha(Chunk, Bin) ->
@@ -533,6 +518,10 @@ sha(Chunk, Bin, Ctx) ->
             Ctx2 = crypto:sha_update(Ctx, Data),
             Ctx2
     end.
+
+get_env(Key, Default) ->
+    CoreEnv = app_helper:get_env(riak_core, Key, Default),
+    app_helper:get_env(riak_kv, Key, CoreEnv).
 
 -spec update_levels(integer(),
                     [{integer(), [{integer(), binary()}]}],
@@ -609,7 +598,7 @@ get_disk_bucket(Level, Bucket, #state{id=Id, ref=Ref}) ->
 set_disk_bucket(Level, Bucket, Val, State=#state{id=Id, ref=Ref}) ->
     HKey = encode_bucket(Id, Level, Bucket),
     Bin = term_to_binary(Val),
-    eleveldb:put(Ref, HKey, Bin, []),
+    ok = eleveldb:put(Ref, HKey, Bin, []),
     State.
 
 -spec encode_id(binary() | non_neg_integer()) -> tree_id_bin().
@@ -756,6 +745,59 @@ iterate({ok, K, V}, IS=#itr_state{itr=Itr,
             IS
     end.
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% level-by-level exchange (BFS instead of DFS)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+compare2(Tree, Remote, AccFun, Acc) ->
+    Final = Tree#state.levels + 1,
+    Local = fun(get_bucket, {L, B}) ->
+                    get_bucket(L, B, Tree);
+               (key_hashes, Segment) ->
+                    [{_, KeyHashes2}] = key_hashes(Tree, Segment),
+                    KeyHashes2
+            end,
+    Opts = [],
+    exchange(1, [0], Final, Local, Remote, AccFun, Acc, Opts).
+
+exchange(_Level, [], _Final, _Local, _Remote, _AccFun, Acc, _Opts) ->
+    Acc;
+exchange(Level, Diff, Final, Local, Remote, AccFun, Acc, Opts) ->
+    if Level =:= Final ->
+            exchange_final(Level, Diff, Local, Remote, AccFun, Acc, Opts);
+       true ->
+            Diff2 = exchange_level(Level, Diff, Local, Remote, Opts),
+            exchange(Level+1, Diff2, Final, Local, Remote, AccFun, Acc, Opts)
+    end.
+
+exchange_level(Level, Buckets, Local, Remote, _Opts) ->
+    Remote(start_exchange_level, {Level, Buckets}),
+    lists:flatmap(fun(Bucket) ->
+                          A = Local(get_bucket, {Level, Bucket}),
+                          B = Remote(get_bucket, {Level, Bucket}),
+                          Delta = orddict_delta(lists:keysort(1, A),
+                                                lists:keysort(1, B)),
+                          Diffs = Delta,
+                          [BK || {BK, _} <- Diffs]
+                  end, Buckets).
+
+exchange_final(_Level, Segments, Local, Remote, AccFun, Acc0, _Opts) ->
+    Remote(start_exchange_segments, Segments),
+    lists:foldl(fun(Segment, Acc) ->
+                        A = Local(key_hashes, Segment),
+                        B = Remote(key_hashes, Segment),
+                        Delta = orddict_delta(lists:keysort(1, A),
+                                              lists:keysort(1, B)),
+                        Keys = [begin
+                                    {_Id, Segment, Key} = decode(KBin),
+                                    Type = key_diff_type(Diff),
+                                    {Type, Key}
+                                end || {KBin, Diff} <- Delta],
+                        AccFun(Keys, Acc)
+                end, Acc0, Segments).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 -spec compare(integer(), integer(), hashtree(), remote_fun(), acc_fun(X), X) -> X.
 compare(Level, Bucket, Tree, Remote, AccFun, KeyAcc) when Level == Tree#state.levels+1 ->
     Keys = compare_segments(Bucket, Tree, Remote),
@@ -811,12 +853,14 @@ orddict_delta([{K1,V1}|D1], [{_K2,V2}|D2], Acc) -> %K1 == K2
             Acc2 = [{K1,{V1,V2}} | Acc],
             orddict_delta(D1, D2, Acc2)
     end;
-orddict_delta([], D2, Acc) ->
-    L = [{K2,{'$none',V2}} || {K2,V2} <- D2],
-    L ++ Acc;
-orddict_delta(D1, [], Acc) ->
-    L = [{K1,{V1,'$none'}} || {K1,V1} <- D1],
-    L ++ Acc.
+orddict_delta([], [{K2,V2}|D2], Acc) ->
+    Acc2 = [{K2,{'$none',V2}} | Acc],
+    orddict_delta([], D2, Acc2);
+orddict_delta([{K1,V1}|D1], [], Acc) ->
+    Acc2 = [{K1,{V1,'$none'}} | Acc],
+    orddict_delta(D1, [], Acc2);
+orddict_delta([], [], Acc) ->
+    lists:reverse(Acc).
 
 %%%===================================================================
 %%% bitarray
@@ -862,6 +906,8 @@ expand(V, N, Acc) ->
 %%%===================================================================
 %%% Experiments
 %%%===================================================================
+
+-ifdef(TEST).
 
 run_local() ->
     run_local(10000).
@@ -959,6 +1005,10 @@ do_remote(N) ->
     Remote = fun(get_bucket, {L, B}) ->
                      Other ! {get_bucket, self(), L, B},
                      receive {remote, X} -> X end;
+                (start_exchange_level, {_Level, _Buckets}) ->
+                     ok;
+                (start_exchange_segments, _Segments) ->
+                     ok;
                 (key_hashes, Segment) ->
                      Other ! {key_hashes, self(), Segment},
                      receive {remote, X} -> X end
@@ -1016,7 +1066,32 @@ peval(L) ->
 %%% EUnit
 %%%===================================================================
 
--ifdef(TEST).
+-spec local_compare(hashtree(), hashtree()) -> [keydiff()].
+local_compare(T1, T2) ->
+    Remote = fun(get_bucket, {L, B}) ->
+                     get_bucket(L, B, T2);
+                (start_exchange_level, {_Level, _Buckets}) ->
+                     ok;
+                (start_exchange_segments, _Segments) ->
+                     ok;
+                (key_hashes, Segment) ->
+                     [{_, KeyHashes2}] = key_hashes(T2, Segment),
+                     KeyHashes2
+             end,
+    AccFun = fun(Keys, KeyAcc) ->
+                     Keys ++ KeyAcc
+             end,
+    compare2(T1, Remote, AccFun, []).
+
+-spec compare(hashtree(), remote_fun()) -> [keydiff()].
+compare(Tree, Remote) ->
+    compare(Tree, Remote, fun(Keys, KeyAcc) ->
+                                  Keys ++ KeyAcc
+                          end).
+
+-spec compare(hashtree(), remote_fun(), acc_fun(X)) -> X.
+compare(Tree, Remote, AccFun) ->
+    compare(Tree, Remote, AccFun, []).
 
 %% Verify that `update_tree/1' generates a snapshot of the underlying
 %% LevelDB store that is used by `compare', therefore isolating the
@@ -1053,24 +1128,34 @@ delta_test() ->
 
 -ifdef(EQC).
 sha_test_() ->
-    {timeout, 60,
-     fun() ->
-             ?assert(eqc:quickcheck(eqc:testing_time(4, prop_sha())))
-     end
-    }.
+    {spawn,
+     {timeout, 120,
+      fun() ->
+              ?assert(eqc:quickcheck(eqc:testing_time(4, prop_sha())))
+      end
+     }}.
 
 prop_sha() ->
-    ?FORALL(Size, choose(256, 1024*1024),
-            ?FORALL(Chunk, choose(1, Size),
+    %% NOTE: Generating 1MB (1024 * 1024) size binaries is incredibly slow
+    %% with EQC and was using over 2GB of memory
+    ?FORALL({Size, NumChunks}, {choose(1, 1024), choose(1, 16)},
                     ?FORALL(Bin, binary(Size),
-                            sha(Chunk, Bin) =:= crypto:sha(Bin)))).
+                            begin
+                                %% we need at least one chunk,
+                                %% and then we divide the binary size
+                                %% into the number of chunks (as a natural
+                                %% number)
+                                ChunkSize = max(1, (Size div NumChunks)),
+                                sha(ChunkSize, Bin) =:= esha(Bin)
+                            end)).
 
 eqc_test_() ->
-    {timeout, 5,
-     fun() ->
-             ?assert(eqc:quickcheck(eqc:testing_time(4, prop_correct())))
-     end
-    }.
+    {spawn,
+     {timeout, 120,
+      fun() ->
+              ?assert(eqc:quickcheck(eqc:testing_time(4, prop_correct())))
+      end
+     }}.
 
 objects() ->
     ?SIZED(Size, objects(Size+3)).
