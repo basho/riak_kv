@@ -317,7 +317,8 @@ compare(A=#r_content{value=VA}, B=#r_content{value=VB}) ->
 %% size. Called by an ordering function, this too is an ordering
 %% function.
 %%
-%% @see compare/2, lists:usort/3
+%% @see compare/2
+%% @see lists:usort/3
 compare_metadata(#r_content{metadata=MA}, #r_content{metadata=MB}) ->
     ASize = dict:size(MA),
     BSize = dict:size(MB),
@@ -348,7 +349,7 @@ prune_object_siblings(Object, Clock, MergeAcc) ->
 %% remove duplicate values, and merge CRDT values down to a single
 %% value.
 %%
-%% When a Riak takes a PUT, a `dot' is generated. (@See assign_dot/2)
+%% When a Riak takes a PUT, a `dot' is generated. (See assign_dot/2)
 %% for the PUT and placed in `riak_object' metadata. The cases below
 %% use this `dot' to decide if a sibling value has been superceded,
 %% and should therefore be dropped.
@@ -375,7 +376,7 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% dots. However, due to riak_kv#679, and
                     %% backup-restore it is possible for two objects
                     %% to have dots with the same {id, count} but
-                    %% different timestamps (@see is_drop_candidate/2
+                    %% different timestamps (see is_drop_candidate/2
                     %% below), and for the referenced values to be
                     %% _different_ too. We need to include both dotted
                     %% values, and let the list sort/merge ensure that

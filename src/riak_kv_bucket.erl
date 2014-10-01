@@ -88,7 +88,8 @@
 %%
 %% There is no way to _remove_ a property
 %%
-%% @see validate_dt_props/3, assert_no_datatype/1
+%% @see validate_dt_props/3
+%% @see assert_no_datatype/1
 -spec validate(create | update,
                {riak_core_bucket_type:bucket_type(), undefined | binary()} | binary(),
                undefined | props(),
@@ -283,7 +284,7 @@ validate_create_consistent_props(Invalid, New) ->
 %% that way is the "special" property name `datatype'.
 %%
 %% Since we don't ever want sibling CRDT types (though we can handle
-%% them @see riak_kv_crdt), `datatype' is an immutable property. Once
+%% them: see riak_kv_crdt), `datatype' is an immutable property. Once
 %% you create a bucket with a certain datatype you can't change
 %% it. The `update' bucket type path enforces this. It doesn't
 %% validate the correctness of the type, since it assumes that was

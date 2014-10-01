@@ -22,35 +22,51 @@
 
 %% @doc Resource for serving Riak bucket properties over HTTP.
 %%
-%% Available operations:
+%% URLs that begin with `/types' are necessary for the new bucket
+%% types implementation in Riak 2.0, those that begin with `/buckets'
+%% are for the default bucket type, and `/riak' is an old URL style,
+%% also only works for the default bucket type.
 %%
-%% GET /types/Type/buckets/Bucket/props (with bucket-type)
-%% GET /buckets/Bucket/props (NEW)
-%% GET /Prefix/Bucket (OLD)
+%% It is possible to reconfigure the `/riak' prefix but that seems to
+%% be rarely if ever used.
+%%
+%% ```
+%% GET /types/Type/buckets/Bucket/props
+%% GET /buckets/Bucket/props
+%% GET /riak/Bucket'''
+%%
 %%   Get information about the named Bucket, in JSON form:
-%%     {"props":{Prop1:Val1,Prop2:Val2,...}}
-%%   Each bucket property will be included in the "props" object.
-%%   "linkfun" and "chash_keyfun" properties will be encoded as
+%%     `{"props":{Prop1:Val1,Prop2:Val2,...}}'
+%%
+%%   Each bucket property will be included in the `props' object.
+%%   `linkfun' and `chash_keyfun' properties will be encoded as
 %%   JSON objects of the form:
+%% ```
 %%     {"mod":ModuleName,
-%%      "fun":FunctionName}
+%%      "fun":FunctionName}'''
+%%
 %%   Where ModuleName and FunctionName are each strings representing
 %%   a module and function.
 %%
-%% PUT /types/Type/buckets/Bucket/props (with bucket-type)
+%% ```
+%% PUT /types/Type/buckets/Bucket/props
 %% PUT /buckets/Bucket/props
-%% PUT /Prefix/Bucket (OLD)
+%% PUT /riak/Bucket'''
+%%
 %%   Modify bucket properties.
-%%   Content-type must be application/json, and the body must have
+%%
+%%   Content-type must be `application/json', and the body must have
 %%   the form:
-%%     {"props":{Prop:Val}}
-%%   Where the "props" object takes the same form as returned from
+%%     `{"props":{Prop:Val}}'
+%%
+%%   Where the `props' object takes the same form as returned from
 %%   a GET of the same resource.
 %%
-%% DELETE /types/Type/buckets/Bucket/props (with bucket-type)
-%% DELETE /buckets/Bucket/props
+%% ```
+%% DELETE /types/Type/buckets/Bucket/props
+%% DELETE /buckets/Bucket/props'''
+%%
 %%   Reset bucket properties back to the default settings
-%%   not supported by the OLD API
 
 -module(riak_kv_wm_props).
 

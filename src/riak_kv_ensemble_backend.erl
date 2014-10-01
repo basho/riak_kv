@@ -19,7 +19,7 @@
 %% -------------------------------------------------------------------
 
 %% @doc
-%% Implementation of {@link riak_ensemble_backend} behavior that
+%% Implementation of {@link //riak_ensemble/riak_ensemble_backend} behavior that
 %% connects riak_ensemble to riak_kv vnodes.
 %%
 

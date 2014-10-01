@@ -23,7 +23,7 @@
 
 %% @doc riak_kv_stat_bc is a module that maps the new riak_kv_stats metrics
 %% to the old set of stats. It exists to maintain backwards compatibility for
-%% those using the `/stats` endpoint and `riak-admin status`. This module
+%% those using the `/stats' endpoint and `riak-admin status'. This module
 %% should be considered soon to be deprecated and temporary.
 %%
 %%      Legacy stats:
@@ -38,7 +38,7 @@
 %%<dt> vnode_index_reads
 %%</dt><dd> The number of index reads handled by all vnodes on this node.
 %%          Each query counts as an index read.
-%%</dd><
+%%</dd>
 %%<dt> vnode_index_writes
 %%</dt><dd> The number of batched writes handled by all vnodes on this node.
 %%</dd>
@@ -138,7 +138,7 @@
 
 -compile(export_all).
 
-%% @spec produce_stats(state(), integer()) -> proplist()
+%% @spec produce_stats() -> proplist()
 %% @doc Produce a proplist-formatted view of the current aggregation
 %%      of stats.
 produce_stats() ->

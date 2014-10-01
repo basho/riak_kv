@@ -24,22 +24,32 @@
 %%
 %% Available operations:
 %%
-%% GET /types/Type/props
-%%   Get information about the named Type, in JSON form:
-%%     {"props":{Prop1:Val1,Prop2:Val2,...}}
+%% `GET /types/Type/props'
+%%
+%%  Get information about the named Type, in JSON form:
+%%     `{"props":{Prop1:Val1,Prop2:Val2,...}}'
+%%
 %%   Each bucket-type property will be included in the "props" object.
-%%   "linkfun" and "chash_keyfun" properties will be encoded as
+%%
+%%   `linkfun' and `chash_keyfun' properties will be encoded as
 %%   JSON objects of the form:
+%%
+%% ```
 %%     {"mod":ModuleName,
-%%      "fun":FunctionName}
+%%      "fun":FunctionName}'''
+%%
 %%   Where ModuleName and FunctionName are each strings representing
 %%   a module and function.
 %%
-%% POST|PUT /types/Type/props
+%% `POST|PUT /types/Type/props'
+%%
 %%   Modify bucket-type properties.
-%%   Content-type must be application/json, and the body must have
+%%
+%%   Content-type must be `application/json', and the body must have
 %%   the form:
-%%     {"props":{Prop:Val}}
+%%
+%%     `{"props":{Prop:Val}}'
+%%
 %%   Where the "props" object takes the same form as returned from
 %%   a GET of the same resource.
 

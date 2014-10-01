@@ -24,7 +24,7 @@
 %% @doc Backwards compatibility with 1.4 counters `value' function as
 %% used in the CRDT cookbook.
 %%
-%% @see riak_kv_crdt.erl
+%% @see riak_kv_crdt
 %% @end
 
 -module(riak_kv_counter).

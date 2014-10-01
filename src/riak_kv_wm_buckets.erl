@@ -22,16 +22,24 @@
 
 %% @doc Resource for listing Riak buckets over HTTP.
 %%
-%% Available operations:
+%% URLs that begin with `/types' are necessary for the new bucket
+%% types implementation in Riak 2.0, those that begin with `/buckets'
+%% are for the default bucket type, and `/riak' is an old URL style,
+%% also only works for the default bucket type.
 %%
-%% GET /types/Type/buckets?buckets=true (with bucket-type)
+%% It is possible to reconfigure the `/riak' prefix but that seems to
+%% be rarely if ever used.
+%%
+%% ```
+%% GET /types/Type/buckets?buckets=true
 %% GET /types/Type/buckets?buckets=stream
-%% GET /buckets?buckets=true (NEW)
+%% GET /buckets?buckets=true
 %% GET /buckets?buckets=stream
-%% GET /Prefix?buckets=true
+%% GET /riak?buckets=true
+%% '''
 %%   Get information about available buckets. Note that generating the
-%%   bucket list is expensive, so we require the "buckets=true" or
-%%   "buckets=stream" arg.
+%%   bucket list is expensive, so we require the `buckets=true' or
+%%   `buckets=stream' argument.
 %%
 
 -module(riak_kv_wm_buckets).

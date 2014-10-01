@@ -20,7 +20,7 @@
 
 %% @doc
 %% This module implements a gen_server process that manages a set of hashtrees
-%% (see {@link hashtree}) containing key/hash pairs for all data owned by a
+%% (see {@link //riak_core/hashtree}) containing key/hash pairs for all data owned by a
 %% given partition. Each riak_kv vnode spawns its own index_hashtree. These
 %% hashtrees are used for active anti-entropy exchange between vnodes.
 
@@ -518,7 +518,7 @@ index_fold_fun(Tree) ->
 index_2i_n() ->
     ?INDEX_2I_N.
 
-%% Generate a new {@link hashtree} for the specified `index_n'. If this is
+%% Generate a new {@link //riak_core/hashtree} for the specified `index_n'. If this is
 %% the first hashtree created by this index_hashtree, then open/create a new
 %% on-disk store at `segment_path'. Otherwise, re-use the store from the first
 %% tree. In other words, all hashtrees for a given index_hashtree are stored in
@@ -915,8 +915,8 @@ maybe_get_vnode_lock(build, Partition, Pid) ->
 
 %% @private
 %% @doc Unless skipping the background manager, try to acquire the per-vnode lock.
-%%      Sets our task meta-data in the lock as 'aae_rebuild', which is useful for
-%%      seeing what's holding the lock via @link riak_core_background_mgr:ps/0.
+%%      Sets our task meta-data in the lock as `aae_rebuild', which is useful for
+%%      seeing what's holding the lock via {@link riak_core_background_mgr:ps/0}.
 -spec maybe_get_vnode_lock(SrcPartition::index(), pid()) -> ok | max_concurrency.
 maybe_get_vnode_lock(SrcPartition, Pid) ->
     case riak_core_bg_manager:use_bg_mgr(riak_kv, aae_use_background_manager) of

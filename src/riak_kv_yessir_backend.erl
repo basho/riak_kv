@@ -24,21 +24,26 @@
 %%      any disk I/O or RAM constraints.
 %%
 %% Riak: "Store this key/value pair."
+%%
 %% Backend: "Yes, sir!"
+%%
 %% Riak: "Get me that key/value pair."
+%%
 %% Backend: "Yes, sir!"
 %%
 %% This backend uses zero disk resources and uses constant memory.
 %%
-%% * All put requests are immediately acknowledged 'ok'.  No
-%%   data about the put request is stored.
-%% * All get requests are fulfilled by creating a constant binary for
-%%   the value.  No attempt is made to correlate get keys with
-%%   previously-put keys or to correlate get values with previously-put
-%%   values.
-%%   - Get operation keys that are formatted in with the convention
-%%     <<"yessir.{integer}.anything">> will use integer (interpreted in
-%%     base 10) as the returned binary's Size.
+%% All put requests are immediately acknowledged 'ok'.  No
+%% data about the put request is stored.
+%%
+%% All get requests are fulfilled by creating a constant binary for
+%% the value.  No attempt is made to correlate get keys with
+%% previously-put keys or to correlate get values with previously-put
+%% values.
+%%
+%% Get operation keys that are formatted in with the convention
+%% `<<"yessir.{integer}.anything">>' will use integer (interpreted in
+%% base 10) as the returned binary's Size.
 %%
 %% fold_keys and fold_objects are implemented for both sync and async.
 %% Each will return the same deterministic set of results for every call,
@@ -51,8 +56,10 @@
 %%
 %% This backend is the Riak storage manager equivalent of:
 %%
-%% * cat > /dev/null
-%% * cat < /dev/zero
+%% <ul>
+%% <li>`cat > /dev/null'</li>
+%% <li>`cat < /dev/zero'</li>
+%% </ul>
 %%
 %% === Configuration Options ===
 %%
@@ -66,27 +73,27 @@
 %%                                  the BKey asked for.  The returned object's
 %%                                  BKey is constant, so any part of Riak that
 %%                                  cares about matching/valid BKey inside of
-%%                                  the object will be confused and/or break.
+%%                                  the object will be confused and/or break.</li>
 %% <li>`yessir_aae_mode_encoding' - Specify which mode of behavior to
 %%                                  use when interacting with Riak KV's
-%%                                  anti-entropy mode for put & put_object
+%%                                  anti-entropy mode for put and put_object
 %%                                  calls.
 %%   <ul>
 %%   <li>`constant_binary' - The default mode: lie to AAE by returning
-%%                           a constant binary, <<>>.</li>  This will cause
+%%                           a constant binary, `<<>>'. This will cause
 %%                           AAE to maintain a tiny tree of order-size(1).
 %%                           This is the fastest mode but also causes the
 %%                           least amount of AAE work and thus may or may
 %%                           not meet all users' needs. </li>
-%%   <li>`bkey' </li> - Return term_to_binary({Bucket, Key}), which will
+%%   <li>`bkey' - Return term_to_binary({Bucket, Key}), which will
 %%                      cause AAE's tree to churn with order-size(NumKeys)
 %%                      but will be much smaller than the entire serialized
 %%                      #r_object{}, so AAE will spend less CPU time during
 %%                      its processing. </li>
-%%   <li>`r_object' </li> - Serialize the entire #r_object{}, like Riak KV
+%%   <li>`r_object' - Serialize the entire #r_object{}, like Riak KV
 %%                          does in normal operation.  This mode has the
 %%                          highest overhead per operation. </li>
-%%   </ul>
+%%   </ul></li>
 %% <li>`yessir_default_size' - The number of bytes of generated data for the value.</li>
 %% <li>`yessir_key_count'    - The number of keys that will be folded over, e.g. list_keys().</li>
 %% <li>`yessir_bucket_prefix_list'  - A list {BucketPrefixBin, {Module, Fun}}
@@ -96,14 +103,17 @@
 %%
 %% TODO list:
 %%
-%% * Add configuration option for random percent of not_found replies for get
-%%   - Anything non-zero would trigger read-repair, which could be useful
-%%     for some simulations.
-%% * Is there a need for simulations for get to return different vclocks?
-%% * Add variable latency before responding.  This callback API is
-%%   synchronous, but adding constant- & uniform- & pareto-distributed
-%%   delays would simulate disk I/O latencies because all other backend
-%%   APIs are also synchronous.
+%% <ul>
+%%   <li>Add configuration option for random percent of not_found
+%%   replies for get. Anything non-zero would trigger read-repair,
+%%   which could be useful for some simulations.</li>
+%%   <li>Is there a need for simulations for get to return different
+%%   vclocks?</li>
+%%   <li>Add variable latency before responding.  This callback API is
+%%   synchronous, but adding constant- and uniform- and
+%%   pareto-distributed delays would simulate disk `I/O' latencies
+%%   because all other backend APIs are also synchronous.</li>
+%% </ul>
 
 -module(riak_kv_yessir_backend).
 -behavior(riak_kv_backend).

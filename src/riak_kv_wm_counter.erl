@@ -24,12 +24,14 @@
 %%
 %% Available operations:
 %%
-%% POST /buckets/Bucket/counters/Key
+%% `POST /buckets/Bucket/counters/Key'
+%%
 %%   Increment the counter at `Bucket', `Key' by
 %%   the integer amount of the request body. If the request body cannot be
-%%   parsed (by erlang `list_to_integer/1') then a `400 bad request'
+%%   parsed (by Erlang's `list_to_integer/1') then a `400 bad request'
 %%   is the result.
-%%   The following query params are accepted (@see `riak_kv_wm_object' docs, too):
+%%
+%%   The following query params are accepted (see {@link riak_kv_wm_object} docs, too):
 %%
 %%   <dl>
 %%     <dt>w</dt><dd>The write quorum. See below for defaults and values.</dd>
@@ -39,9 +41,11 @@
 %%                             the response body will be the value of the counter.</dd>
 %%   </dl>
 %%
-%%  GET /buckets/Bucket/counters/Key
+%%  `GET /buckets/Bucket/counters/Key'
+%%
 %%    Get the current value of the counter at `Bucket', `Key'. Result is a text/plain
 %%    body with an integer value, or `not_found' if no counter exists at that resource location.
+%%
 %%    The following query params are accepted:
 %%
 %%    <dl>
@@ -53,16 +57,16 @@
 %%                              `r' quorum if true. Default is the bucket default, if absent.</dd>
 %%    </dl>
 %%
-%%   Quorum values (r/pr/w/pw/dw):
+%%   == Quorum values (r/pr/w/pw/dw) ==
 %%     <dl>
-%%       <dt>default</dt<dd>Whatever the bucket default is. This is the value used
+%%       <dt>default</dt><dd>Whatever the bucket default is. This is the value used
 %%                          for any absent value.</dd>
 %%      <dt>quorum</dt><dd>(Bucket N val / 2) + 1</dd>
 %%      <dt>all</dt><dd>All replicas must respond</dd>
 %%      <dt>one</dt><dd>Any one response is enough</dd>
-%%      <dt>Integer</dt><dd>That specific number of vnodes must respond. Must be =< N</dd>
+%%      <dt>Integer</dt><dd>That specific number of vnodes must respond. Must be `=<' N</dd>
 %%    </dl>
-%% Please see http://docs.basho.com for details of all the quorum values and there effect.
+%% Please see [http://docs.basho.com] for details of all the quorum values and there effect.
 
 
 

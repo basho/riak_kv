@@ -122,6 +122,7 @@
                 async_folding :: boolean(),
                 in_handoff = false :: boolean(),
                 handoff_target :: node(),
+                handoffs_rejected = 0 :: integer(),
                 forward :: node() | [{integer(), node()}],
                 hashtrees :: pid(),
                 md_cache :: ets:tab(),
@@ -931,12 +932,13 @@ request_hash(?KV_DELETE_REQ{bkey=BKey}) ->
 request_hash(_Req) ->
     undefined.
 
-handoff_starting({_HOType, TargetNode}=_X, State) ->
-    case ?YZ_SHOULD_HANDOFF(_X) of
+handoff_starting({_HOType, TargetNode}=_X, State=#state{handoffs_rejected=RejectCount}) ->
+    MaxRejects = app_helper:get_env(riak_kv, handoff_rejected_max, 6),
+    case MaxRejects =< RejectCount orelse ?YZ_SHOULD_HANDOFF(_X) of
         true ->
             {true, State#state{in_handoff=true, handoff_target=TargetNode}};
         false ->
-            {false, State#state{in_handoff=false, handoff_target=undefined}}
+            {false, State#state{in_handoff=false, handoff_target=undefined, handoffs_rejected=RejectCount + 1 }}
     end.
 
 %% @doc Optional callback that is exported, but not part of the behaviour.
@@ -1355,7 +1357,7 @@ prepare_put(#state{vnodeid=VId,
             end
     end.
 
-%% @Doc in the case that this a co-ordinating put, prepare the object.
+%% @doc in the case that this a co-ordinating put, prepare the object.
 prepare_new_put(true, RObj, VId, StartTime, undefined) ->
     riak_object:increment_vclock(RObj, VId, StartTime);
 prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->

@@ -233,7 +233,7 @@ test_link(From, Object, PutOptions, StateProps) ->
 init([From, RObj, Options0, Monitor]) ->
     BKey = {Bucket, Key} = {riak_object:bucket(RObj), riak_object:key(RObj)},
     CoordTimeout = get_put_coordinator_failure_timeout(),
-    Trace = application:get_env(riak_kv, fsm_trace_enabled),
+    Trace = app_helper:get_env(riak_kv, fsm_trace_enabled),
     Options = proplists:unfold(Options0),
     StateData = #state{from = From,
                        robj = RObj,

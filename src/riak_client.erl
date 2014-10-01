@@ -62,7 +62,7 @@
 
 -export_type([riak_client/0]).
 
-%% @spec new(Node, ClientId) -> riak_client().
+%% @spec new(Node, ClientId) -> riak_client()
 %% @doc Return a riak client instance.
 new(Node, ClientId) ->
     {?MODULE, [Node,ClientId]}.
@@ -262,7 +262,7 @@ consistent_put_type(RObj, Options) ->
             put_once
     end.
 
-%% @spec put(RObj :: riak_object:riak_object(), riak_kv_put_fsm::options(), riak_client()) ->
+%% @spec put(RObj :: riak_object:riak_object(), riak_kv_put_fsm:options(), riak_client()) ->
 %%       ok |
 %%       {ok, details()} |
 %%       {ok, riak_object:riak_object()} |
@@ -270,7 +270,7 @@ consistent_put_type(RObj, Options) ->
 %%       {error, notfound} |
 %%       {error, timeout} |
 %%       {error, {n_val_violation, N::integer()}} |
-%%       {error, Err :: term()}
+%%       {error, Err :: term()} |
 %%       {error, Err :: term(), details()}
 %% @doc Store RObj in the cluster.
 put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
@@ -408,7 +408,7 @@ consistent_delete(Bucket, Key, Options, _Timeout, {?MODULE, [Node, _ClientId]}) 
 delete_vclock(Bucket,Key,VClock,{?MODULE, [_Node, _ClientId]}=THIS) ->
     delete_vclock(Bucket,Key,VClock,[{rw,default}],?DEFAULT_TIMEOUT,THIS).
 
-%% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock::vclock(),
+%% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock:vclock(),
 %%                     RW :: integer(), riak_client()) ->
 %%        ok |
 %%       {error, too_many_fails} |
@@ -487,7 +487,8 @@ list_keys(Bucket, {?MODULE, [_Node, _ClientId]}=THIS) ->
 list_keys(Bucket, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
     list_keys(Bucket, none, Timeout, THIS).
 
-%% @spec list_keys(riak_object:bucket(), TimeoutMillisecs :: integer(), riak_client()) ->
+%% @spec list_keys(riak_object:bucket(), Filter :: term(),
+%% TimeoutMillisecs :: integer(), riak_client()) ->
 %%       {ok, [Key :: riak_object:key()]} |
 %%       {error, timeout} |
 %%       {error, Err :: term()}
@@ -567,7 +568,7 @@ stream_list_keys(Input, Timeout, Client, {?MODULE, [Node, _ClientId]}) when is_p
 filter_keys(Bucket, Fun, {?MODULE, [_Node, _ClientId]}=THIS) ->
     list_keys(Bucket, Fun, ?DEFAULT_TIMEOUT, THIS).
 
-%% @spec filter_keys(riak_object:bucket(), Fun :: function(), TimeoutMillisecs :: integer()
+%% @spec filter_keys(riak_object:bucket(), Fun :: function(), TimeoutMillisecs :: integer(),
 %%                   riak_client()) ->
 %%       {ok, [Key :: riak_object:key()]} |
 %%       {error, timeout} |
@@ -592,7 +593,7 @@ filter_keys(Bucket, Fun, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
 list_buckets({?MODULE, [_Node, _ClientId]}=THIS) ->
     list_buckets(none, ?DEFAULT_TIMEOUT, <<"default">>, THIS).
 
-%% @spec list_buckets(timeout()) ->
+%% @spec list_buckets(timeout(), riak_client()) ->
 %%       {ok, [Bucket :: riak_object:bucket()]} |
 %%       {error, timeout} |
 %%       {error, Err :: term()}
@@ -607,7 +608,8 @@ list_buckets(undefined, {?MODULE, [_Node, _ClientId]}=THIS) ->
 list_buckets(Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
     list_buckets(none, Timeout, <<"default">>, THIS).
 
-%% @spec list_buckets(TimeoutMillisecs :: integer(), riak_client()) ->
+%% @spec list_buckets(TimeoutMillisecs :: integer(), Filter :: term(),
+%% riak_client()) ->
 %%       {ok, [Bucket :: riak_object:bucket()]} |
 %%       {error, timeout} |
 %%       {error, Err :: term()}
@@ -654,7 +656,8 @@ stream_list_buckets(Filter, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
 
 %% @spec stream_list_buckets(FilterFun :: fun(),
 %%                           TimeoutMillisecs :: integer(),
-%%                           Client :: pid()) ->
+%%                           Client :: pid(),
+%%                           riak_client()) ->
 %%       {ok, [Bucket :: riak_object:bucket()]} |
 %%       {error, timeout} |
 %%       {error, Err :: term()}
@@ -686,8 +689,7 @@ stream_list_buckets(Filter, Timeout, Client, Type,
 %%                 riak_client()) ->
 %%       {ok, [Key :: riak_object:key()]} |
 %%       {error, timeout} |
-%%       {error, Err :: term()}.
-%%
+%%       {error, Err :: term()}
 %% @doc Run the provided index query.
 get_index(Bucket, Query, {?MODULE, [_Node, _ClientId]}=THIS) ->
     get_index(Bucket, Query, [{timeout, ?DEFAULT_TIMEOUT}], THIS).
@@ -698,8 +700,7 @@ get_index(Bucket, Query, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%                 riak_client()) ->
 %%       {ok, [Key :: riak_object:key()]} |
 %%       {error, timeout} |
-%%       {error, Err :: term()}.
-%%
+%%       {error, Err :: term()}
 %% @doc Run the provided index query.
 get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
     Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),

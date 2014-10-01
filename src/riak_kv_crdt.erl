@@ -51,9 +51,12 @@
 -type precondition_error() :: {error, {precondition, {not_present, term()}}}.
 
 %% @doc applies the given `Operation' to the merged value.  first
-%% performs a merge (@see merge/1), and then applies the update.
-%% NOTE: operation needs to be a ?CRDT_OP in case of siblings of different
+%% performs a merge, and then applies the update.
+%%
+%% NOTE: operation needs to be a `?CRDT_OP' in case of siblings of different
 %% types
+%%
+%% @see merge/1
 -spec update(riak_object:riak_object(), riak_dt:actor(), riak_dt:operation()) ->
                     riak_object:riak_object() | precondition_error().
 update(RObj, Actor, Operation) ->
@@ -80,7 +83,8 @@ merge(RObj) ->
 %% @doc for the given riak_object `RObj' and the provided `Type',
 %% which must be a support riak_dt crdt module, returns an update
 %% context, and user value. Performs a merge, then gets the CRDT end
-%% user value.  @see merge/1
+%% user value.
+%% @see merge/1
 -spec value(riak_object:riak_object(), module()) -> {{binary(), riak_dt:value()}, [{atom(), atom(), number()}]}.
 value(RObj, Type) ->
     {CRDTs, _NonCRDTSiblings} = merge_object(RObj),
@@ -228,7 +232,7 @@ counter_op(N) ->
 %% the operation then apply the operation to the local merged replica,
 %% and risk precondition errors and unexpected behaviour.
 %%
-%% @see split_ops/1 for more explanation
+%% @see split_ops/1
 -spec update_crdt(orddict:orddict(), riak_dt:actor(), crdt_op() | non_neg_integer()) ->
                          orddict:orddict() | precondition_error().
 update_crdt(Dict, Actor, Amt) when is_integer(Amt) ->
@@ -450,7 +454,7 @@ mod_map(_) ->
 
 
 
-%% @Doc the update context can be empty for some types.
+%% @doc the update context can be empty for some types.
 %% Those that support an precondition_context should supply
 %% a smaller than Type:to_binary(Value) binary context.
 get_context(Type, Value) ->
