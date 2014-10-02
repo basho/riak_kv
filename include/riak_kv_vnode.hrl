@@ -45,6 +45,11 @@
           bkey :: {binary(), binary()},
           req_id :: non_neg_integer()}).
 
+-record(riak_kv_delete_req_v2, {
+          bkey :: {binary(), binary()},
+          req_id :: non_neg_integer(),
+          delete_mode :: undefined | keep | immediate | pos_integer() }).
+
 -record(riak_kv_map_req_v1, {
           bkey :: {binary(), binary()},
           qterm :: term(),
@@ -61,7 +66,7 @@
 -define(KV_LISTKEYS_REQ, #riak_kv_listkeys_req_v4).
 -define(KV_INDEX_REQ, #riak_kv_index_req_v2).
 -define(KV_VNODE_STATUS_REQ, #riak_kv_vnode_status_req_v1).
--define(KV_DELETE_REQ, #riak_kv_delete_req_v1).
+-define(KV_DELETE_REQ, #riak_kv_delete_req_v2).
 -define(KV_MAP_REQ, #riak_kv_map_req_v1).
 -define(KV_VCLOCK_REQ, #riak_kv_vclock_req_v1).
 
