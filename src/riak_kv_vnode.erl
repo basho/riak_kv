@@ -112,12 +112,15 @@
 
 -record(counter_state, {
           %% The number of writes co-ordinated by this vnode
-          counter :: non_neg_integer(),
+          cnt = 0 :: non_neg_integer(),
           %% Counter leased up-to. For totally new state/id
           %% this will be that flush threshold See config value
           %% `{riak_kv, counter_lease_size}'
-          counter_lease :: non_neg_integer(),
-          counter_lease_size :: non_neg_integer()}).
+          lease = 0 :: non_neg_integer(),
+          lease_size = 0 :: non_neg_integer(),
+          %% Has a lease been requested but not granted yet
+          leasing = false :: boolean()
+         }).
 
 -record(state, {idx :: partition(),
                 mod :: module(),
@@ -151,6 +154,10 @@
 
 %% default value for `counter_lease' in `#counter_state{}'
 -define(DEFAULT_CNTR_LEASE, 1000).
+-define(DEFAULT_CNTR_LEASE_ERRS, 20).
+-define(DEFAULT_CNTR_LEASE_TO, 5000). % 5 seconds!
+%% only 32 bits per counter, when you hit that, get a new vnode id
+-define(MAX_CNTR, 4294967295).
 
 -record(putargs, {returnbody :: boolean(),
                   coord:: boolean(),
@@ -415,7 +422,7 @@ init([Index]) ->
     KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
     WorkerPoolSize = app_helper:get_env(riak_kv, worker_pool_size, 10),
     CounterLeaseSize = app_helper:get_env(riak_kv, counter_lease_size, ?DEFAULT_CNTR_LEASE),
-    {ok, StatusMgr} = riak_kv_vnode_status_mgr:start_link(Index),
+    {ok, StatusMgr} = riak_kv_vnode_status_mgr:start_link(self(), Index),
     {ok, {VId, CounterState}} = get_vnodeid_and_counter(StatusMgr, CounterLeaseSize),
     DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
     AsyncFolding = app_helper:get_env(riak_kv, async_folds, true) == true,
@@ -698,9 +705,15 @@ handle_command(?KV_VNODE_STATUS_REQ{},
                State=#state{idx=Index,
                             mod=Mod,
                             modstate=ModState,
+                            counter=CS,
                             vnodeid=VId}) ->
     BackendStatus = {backend_status, Mod, Mod:status(ModState)},
-    VNodeStatus = [BackendStatus, {vnodeid, VId}],
+    #counter_state{cnt=Cnt, lease=Lease, lease_size=LeaseSize, leasing=Leasing} = CS,
+    CounterStatus = [{counter, Cnt}, {counter_lease, Lease},
+                     {counter_lease_size, LeaseSize}, {counter_leasing, Leasing}],
+    %% @TODO remove the counter/vnodeid, or at least make it _work_
+    %% with the stats code
+    VNodeStatus = [{backend, BackendStatus}, {vnodeid, VId} | CounterStatus],
     {reply, {vnode_status, Index, VNodeStatus}, State};
 handle_command({reformat_object, BKey}, _Sender, State) ->
     {Reply, UpdState} = do_reformat(BKey, State),
@@ -1154,8 +1167,29 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
                    {{error, _}, ModState1} ->
                        State#state{modstate=ModState1}
                end,
-    {ok, UpdState}.
+    {ok, UpdState};
+handle_info({counter_lease, {ok, NewLease}}, State) ->
+    #state{counter=CounterState} = State,
+    #counter_state{lease=OldLease} = CounterState,
+    Lease = max(NewLease, OldLease),
+    CS1 = CounterState#counter_state{lease=Lease, leasing=false},
+    State2 = State#state{counter=CS1},
+    {ok, State2}.
 
+handle_exit(Pid, Reason, State=#state{status_mgr_pid=Pid, idx=Index, counter=CntrState}) ->
+    lager:error("Vnode status manager exit ~p", [Reason]),
+    %% The status manager died, start a new one
+    #counter_state{lease=Lease, lease_size=LeaseSize, leasing=Leasing} = CntrState,
+    {ok, NewPid} = riak_kv_vnode_status_mgr:start_link(Index, self()),
+
+    case Leasing of
+        false ->
+            ok;
+        true ->
+            %% Crashed when getting a lease, try again
+            ok = riak_kv_vnode_status_mgr:aysnc_lease_counter(NewPid, Lease, LeaseSize)
+    end,
+    {noreply, State#state{status_mgr_pid=NewPid}};
 handle_exit(_Pid, Reason, State) ->
     %% A linked processes has died so the vnode
     %% process should take appropriate action here.
@@ -1193,7 +1227,7 @@ raw_put({Idx, Node}, Key, Obj) ->
 
 %% @private
 %% upon receipt of a client-initiated put
-do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
+do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State0) ->
     BProps =  case proplists:get_value(bucket_props, Options) of
                   undefined ->
                       riak_core_bucket:get_bucket(Bucket);
@@ -1207,6 +1241,10 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                         StartTime
                 end,
     Coord = proplists:get_value(coord, Options, false),
+    %% @TODO - Or should we only do this when a new key epoch is
+    %% needed? Keeps the count lower. With the added difficulty of
+    %% threading the state through the calls.
+    State = maybe_update_counter(Coord, State0),
     CRDTOp = proplists:get_value(counter_op, Options, proplists:get_value(crdt_op, Options, undefined)),
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
                        coord=Coord,
@@ -1282,7 +1320,8 @@ prepare_put(#state{vnodeid=VId,
                    mod=Mod,
                    modstate=ModState,
                    idx=Idx,
-                   md_cache=MDCache},
+                   md_cache=MDCache,
+                   counter=#counter_state{cnt=Cntr}},
             PutArgs=#putargs{bkey={Bucket, Key}=BKey,
                              robj=RObj,
                              bprops=BProps,
@@ -1299,12 +1338,12 @@ prepare_put(#state{vnodeid=VId,
             undefined ->
                 true;
             Clock ->
-                case vclock:descends(riak_object:vclock(RObj), Clock) of
-                    true ->
-                        false;
-                    _ ->
-                        true
-                end
+                %% We need to perform a local get, to merge contents,
+                %% if the local object has events unseen by the
+                %% incoming object. If the incoming object descends
+                %% the cache (i.e. hs seen all its events) no need to
+                %% do a local get and merge, just overwrite.
+                not riak_object:descends(RObj, Clock)
         end,
     GetReply =
         case RequiresGet of
@@ -1328,7 +1367,9 @@ prepare_put(#state{vnodeid=VId,
                 false ->
                     IndexSpecs = []
             end,
-            case prepare_new_put(Coord, RObj, VId, StartTime, CRDTOp) of
+            EpochId = key_epoch_actor(VId, Cntr),
+            %%% local not found, use the counter to start a per key epoch
+            case prepare_new_put(Coord, RObj, EpochId, StartTime, CRDTOp) of
                 {error, E} ->
                     {{fail, Idx, E}, PutArgs};
                 ObjToStore ->
@@ -1341,7 +1382,6 @@ prepare_put(#state{vnodeid=VId,
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs};
                 {newobj, NewObj} ->
-                    VC = riak_object:vclock(NewObj),
                     AMObj = enforce_allow_mult(NewObj, BProps),
                     IndexSpecs = case IndexBackend of
                                      true ->
@@ -1362,10 +1402,7 @@ prepare_put(#state{vnodeid=VId,
                                      undefined ->
                                          AMObj;
                                      _ ->
-                                         riak_object:set_vclock(AMObj,
-                                                                vclock:prune(VC,
-                                                                             PruneTime,
-                                                                             BProps))
+                                         riak_object:prune_vclock(AMObj, PruneTime, BProps)
                     end,
                     case handle_crdt(Coord, CRDTOp, VId, ObjToStore) of
                         {error, E} ->
@@ -1379,6 +1416,7 @@ prepare_put(#state{vnodeid=VId,
     end.
 
 %% @Doc in the case that this a co-ordinating put, prepare the object.
+%% NOTE the `VId' is a new epoch actor for this object
 prepare_new_put(true, RObj, VId, StartTime, undefined) ->
     riak_object:increment_vclock(RObj, VId, StartTime);
 prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
@@ -1388,6 +1426,8 @@ prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
     %% Make a new crdt, stuff it in the riak_object
     do_crdt_update(VClockUp, VId, CRDTOp);
 prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
+    %% @TODO Not coordindating, not found local, is there an entry for
+    %% us in the clock? If so, mark as dirty
     RObj.
 
 handle_crdt(_, undefined, _VId, RObj) ->
@@ -1504,11 +1544,19 @@ select_newest_content(Mult) ->
 
 %% @private
 put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
+    %% @TODO Do we need to mark the clock dirty here? I think so
+    %% @TODO Check the clock of the incoming object, if it is more advanced
+    %% for our actor than we are then something is amiss, and we need
+    %% to mark the actor as dirty for this key
     {newobj, UpdObj};
 put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
     %% a downstream merge, or replication of a coordinated PUT
     %% Merge the value received with local replica value
     %% and store the value IFF it is different to what we already have
+    %%
+    %% @TODO Check the clock of the incoming object, if it is more advanced
+    %% for our actor than we are then something is amiss, and we need
+    %% to mark the actor as dirty for this key
     ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
     case riak_object:equal(ResObj, CurObj) of
         true ->
@@ -1517,7 +1565,11 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
             {newobj, ResObj}
     end;
 put_merge(true, LWW, CurObj, UpdObj, VId, StartTime) ->
-    {newobj, riak_object:update(LWW, CurObj, UpdObj, VId, StartTime)}.
+    %% @TODO If the current object has a dirty clock, we need to start
+    %% a new per key epoch and mark clock as clean, we also have to
+    %% use the correct actor
+    Actor = highest_actor(VId, [CurObj, UpdObj]),
+    {newobj, riak_object:update(LWW, CurObj, UpdObj, Actor, StartTime)}.
 
 %% @private
 do_get(_Sender, BKey, ReqID,
@@ -1926,14 +1978,17 @@ max_hashtree_tokens() ->
 
 %% @private Get the vnodeid, assigning and storing if necessary.  Also
 %% get the current op counter, using the (new?) threshold to assign
-%% and store a new leased counter if needed.  @todo document the need
-%% for, and invariants of the counter
+%% and store a new leased counter if needed. NOTE: this is different
+%% to the previous function, as it will now _always_ store a new
+%% status to disk as it will grab a new lease.
+%%
+%%  @TODO document the need for, and invariants of the counter
 -spec get_vnodeid_and_counter(pid(), non_neg_integer()) ->
-                         {ok, {vnodeid(), #counter_state{}}} |
-                         {error, Reason::term()}.
-get_vnodeid_and_counter(StatusMgr, CounterThreshold) ->
-    {ok, {VId, Counter, Lease}} = riak_kv_vnode_status_mgr:get_vnodeid_and_counter(StatusMgr, CounterThreshold),
-    {ok, {VId, #counter_state{counter=Counter, counter_lease=Lease}}}.
+                                     {ok, {vnodeid(), #counter_state{}}} |
+                                     {error, Reason::term()}.
+get_vnodeid_and_counter(StatusMgr, CounterLeaseSize) ->
+    {ok, {VId, Counter, Lease}} = riak_kv_vnode_status_mgr:get_vnodeid_and_counter(StatusMgr, CounterLeaseSize),
+    {ok, {VId, #counter_state{cnt=Counter, lease=Lease, lease_size=CounterLeaseSize}}}.
 
 %% Clear the vnodeid - returns {ok, cleared}
 clear_vnodeid(StatusMgr) ->
@@ -2234,6 +2289,115 @@ new_md_cache(VId) ->
     %% ordered set to make sure that the first key is the oldest
     %% term format is {TimeStamp, Key, ValueTuple}
     ets:new(MDCacheName, [ordered_set, {keypos,2}]).
+
+%% @private increment the per vnode coordinating put counter,
+%% flushing/leasing if needed
+-spec maybe_update_counter(boolean(), state()) -> state().
+maybe_update_counter(false, State) ->
+    %% Only increment on coordinating puts
+    State;
+maybe_update_counter(true, State=#state{counter=CounterState}) ->
+    #counter_state{cnt=Counter0} = CounterState,
+    Counter = Counter0 +  1,
+    maybe_lease_counter(State#state{counter=CounterState#counter_state{cnt=Counter}}).
+
+
+%% @private we can never use a counter that is greater or equal to the
+%% one fysnced to disk. If the incremented counter is == to the
+%% current Lease, we must block until the new Lease is stored. If the
+%% current counter is 80% through the current lease, and we have not
+%% asked for a new lease, ask for one.  if we're less than 80% through
+%% the lease, do nothing.  if not yet blocking(equal) and we already
+%% asked for a new lease, do nothing.
+%%
+%% @TODO If the Cntr is within N of ?MAX_CNTR, we need a new ID, aysnc
+%% ask for a new ID. If Cntr is at ?MAX_CNTR, we must block until we
+%% get a new ID and a new lease.
+maybe_lease_counter(State=#state{counter=#counter_state{cnt=Lease, lease=Lease}}) ->
+    %% Block until we get a new lease, or crash
+    {ok, NewState} = blocking_lease_counter(State),
+    NewState;
+maybe_lease_counter(State=#state{counter=#counter_state{leasing=true}}) ->
+    %% not yet at the blocking stage, waiting on a lease
+    State;
+maybe_lease_counter(State) ->
+    #state{status_mgr_pid=MgrPid, counter=CS=#counter_state{cnt=Cnt, lease=Lease, lease_size=LeaseSize}} = State,
+    %% has more than 80% of the lease been used?
+    CS2 = case (Lease - Cnt) =< 0.2 * LeaseSize of
+        true ->
+            ok = riak_kv_vnode_status_mgr:aysnc_lease_counter(MgrPid, Lease, LeaseSize),
+            CS#counter_state{leasing=true};
+        false ->
+            CS
+          end,
+    State#state{counter=CS2}.
+
+%% @private by now, we have to be waiting for a lease, or an exit,
+%% from the mgr. Block until we receive a lease. if we get an exit,
+%% retry a number of times. If we get neither in a reasonable time,
+%% crash.
+blocking_lease_counter(State) ->
+    MaxErrs = app_helper:get_env(riak_kv, counter_lease_errors, ?DEFAULT_CNTR_LEASE_ERRS),
+    MaxTime = app_helper:get_env(riak_kv, counter_lease_timeout, ?DEFAULT_CNTR_LEASE_TO),
+    blocking_lease_counter(State, {0, MaxErrs, MaxTime}).
+
+blocking_lease_counter(State, {MaxErrs, MaxErrs, _}) ->
+    {error, counter_lease_max_errors, State};
+blocking_lease_counter(State, {ErrCnt, MaxErrors, MaxTime}) ->
+    #state{idx=Index, status_mgr_pid=Pid, counter=CounterState} = State,
+    #counter_state{lease=Lease, lease_size=LeaseSize} = CounterState,
+    Start = os:timestamp(),
+    receive
+        {'EXIT', Pid, Reason} ->
+            lager:error("Failed to lease counter ~p", [Reason]),
+            Elapsed = timer:now_diff(os:timestamp(), Start),
+            {ok, NewPid} = riak_kv_vnode_status_mgr:start_link(Index, self()),
+            ok = riak_kv_vnode_status_mgr:async_lease_counter(NewPid, Lease, LeaseSize),
+            NewState = State#state{status_mgr_pid=NewPid},
+            blocking_lease_counter(NewState, {ErrCnt+1, MaxErrors, MaxTime - Elapsed});
+        {counter_lease, {ok, NewLease}} ->
+            NewCS = CounterState#counter_state{lease=NewLease, leasing=false},
+            {ok, State#state{counter=NewCS}}
+    after
+        MaxTime ->
+            {error, counter_lease_timeout, State}
+    end.
+
+%% @private generate a new epoch ID for a key
+-spec key_epoch_actor(vnodeid(), pos_integer()) -> binary().
+key_epoch_actor(ActorBin, Cntr) when is_binary(ActorBin),
+                                     is_integer(Cntr),
+                                     Cntr =< ?MAX_CNTR ->
+    <<ActorBin/binary, Cntr:32/integer>>.
+
+%% @private highest actor is the latest/greatest epoch actor for a
+%% key. It is the actor we want to increment for the current event,
+%% given that we are not starting a new epoch for the key.  Must work
+%% with non-epochal and epochal actors.
+-spec highest_actor(binary(), [riak_object:riak_object()]) ->
+    binary().
+highest_actor(ActorBase, Objs) ->
+    Actors = lists:foldl(fun(Obj, Actors) ->
+                                 lists:umerge(riak_object:all_actors(Obj), Actors)
+                         end,
+                         [],
+                         Objs),
+    highest_actor(ActorBase, Actors, ActorBase, 0).
+
+-spec highest_actor(binary(), [binary()], binary(), non_neg_integer()) -> binary().
+highest_actor(_ActorBase, [], Actor, _MaxEpoch) ->
+    Actor;
+highest_actor(ActorBase, [<<ActorBase:64/binary, EpochCntr:32/integer>>=A | Rest], _HighestActor, MaxEpoch) when
+      EpochCntr > MaxEpoch ->
+    highest_actor(ActorBase, Rest, A, EpochCntr);
+highest_actor(ActorBase, [<<ActorBase:64/binary, EpochCntr:32/integer>> | Rest], HighestActor, MaxEpoch) when
+      EpochCntr =< MaxEpoch ->
+    highest_actor(ActorBase, Rest, HighestActor, MaxEpoch);
+%% Since an actor without an epoch is lower than an actor with one,
+%% this means in the unmatched case, the ActorBase passes through as
+%% the highest actor
+highest_actor(ActorBase, [_ | Rest], HighestActor, MaxEpoch) ->
+    highest_actor(ActorBase, Rest, HighestActor, MaxEpoch).
 
 -ifdef(TEST).
 
