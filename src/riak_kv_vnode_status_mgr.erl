@@ -1,4 +1,3 @@
-
 %% -------------------------------------------------------------------
 %%
 %% riak_kv_vnode_status_mgr: Manages persistence of vnode status data
@@ -26,12 +25,15 @@
 -behaviour(gen_server).
 
 -ifdef(TEST).
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-endif.
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
 
 %% API
--export([start_link/1, get_vnodeid_and_counter/2]).
+-export([start_link/2, get_vnodeid_and_counter/2, lease_counter/3, clear_vnodeid/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -41,10 +43,14 @@
 
 -record(state, {
           %% vnode status directory
-          status_file :: file:filename(),
+          status_file :: undefined | file:filename(),
           %% vnode index
-          index :: non_neg_integer()
+          index :: undefined | non_neg_integer(),
+          %% The vnode pid this mgr belongs to
+          vnode_pid :: undefined | pid()
          }).
+
+-type status() :: [proplists:property()].
 
 %%%===================================================================
 %%% API
@@ -57,8 +63,8 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(Index) ->
-    gen_server:start_link(?MODULE, [Index], []).
+start_link(VnodePid, Index) ->
+    gen_server:start_link(?MODULE, [VnodePid, Index], []).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -69,6 +75,22 @@ start_link(Index) ->
 %%--------------------------------------------------------------------
 get_vnodeid_and_counter(Pid, CounterThreshold) ->
     gen_server:call(Pid, {vnodeid, CounterThreshold}, infinity).
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Starts the server
+%%
+%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
+%% @end
+%%--------------------------------------------------------------------
+lease_counter(Pid, Lease, LeaseSize) when is_integer(LeaseSize),
+                                          LeaseSize > 0 ->
+    %% How long to time out on this, default 5 seconds ok?
+    gen_server:cast(Pid, {lease, Lease, LeaseSize}).
+
+clear_vnodeid(Pid) ->
+    gen_server:call(Pid, clear).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -85,9 +107,9 @@ get_vnodeid_and_counter(Pid, CounterThreshold) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([Index]) ->
+init([VnodePid, Index]) ->
     StatusFilename = vnode_status_filename(Index),
-    {ok, #state{status_file=StatusFilename, index=Index}}.
+    {ok, #state{status_file=StatusFilename, index=Index, vnode_pid=VnodePid}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -104,110 +126,89 @@ init([Index]) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_call({vnodeid, CounterThreshold}, _From, State) ->
-    #state{index=Index} = State,
-    F = fun(Status) ->
-                case {proplists:get_value(vnodeid, Status, undefined),
-                      proplists:get_value(counter, Status, undefined)} of
-                    V when element(1, V) == undefined;
-                           element(2, V) == undefined  ->
-                        %% If the counter is missing we need a new
-                        %% vnodeid as we have no idea what the count
-                        %% for this vnodeid is. Should only be
-                        %% possible in the case of an upgrade or bad
-                        %% file on disk.
-                        Counter = 0,
-                        {VnodeId, Status2} = assign_vnodeid(erlang:now(), %%Using now as we want
-                                                            %% different values per vnode id on a node
-                                                            riak_core_nodeid:get(),
-                                                            Status),
-                        {LeaseTo, Status3} = get_counter_lease(Counter, CounterThreshold, Status2),
-                        {{VnodeId, Counter, LeaseTo}, Status3};
-                    {VnodeId, Counter} ->
-                        %% Note: this is subtle change to this
-                        %% function, now it will _always_ trigger a
-                        %% store of the new status, since the lease
-                        %% will always be moving upwards. A vnode that
-                        %% starts, and crashes, and starts, and
-                        %% crashes over and over will burn through a
-                        %% lot of counter.
-                        {LeaseTo, Status2} = get_counter_lease(Counter, CounterThreshold, Status),
-                        {{VnodeId, Counter, LeaseTo}, Status2}
-                end
-        end,
-    Res = update_vnode_status(F, Index),
+    #state{status_file=File} = State,
+    {ok, Status} = read_vnode_status(File),
+    {VnodeId, Counter, Status2} = case {proplists:get_value(vnodeid, Status, undefined),
+                                        proplists:get_value(counter, Status, undefined)} of
+                                      V when element(1, V) == undefined;
+                                             element(2, V) == undefined ->
+                                          %% If the counter is missing we need a new
+                                          %% vnodeid as we have no idea what the count
+                                          %% for this vnodeid is. Should only be
+                                          %% possible in the case of an upgrade or bad
+                                          %% file on disk.
+                                          {VId, Status1} = assign_vnodeid(erlang:now(),
+                                                                              %%Using now as we want
+                                                                              %% different values per vnode id on a node
+                                                                              riak_core_nodeid:get(),
+                                                                              Status),
+                                          {VId, 0, Status1};
+                                      {VId, Cntr} ->
+                                          {VId, Cntr, Status}
+                                  end,
+    %% Note: this is subtle change to this
+    %% function, now it will _always_ trigger a
+    %% store of the new status, since the lease
+    %% will always be moving upwards. A vnode that
+    %% starts, and crashes, and starts, and
+    %% crashes over and over will burn through a
+    %% lot of counter.
+    {LeaseTo, Status3} = get_counter_lease(Status2, Counter, CounterThreshold),
+    ok = write_vnode_status(Status3, File),
+    Res = {ok, {VnodeId, Counter, LeaseTo}},
     {reply, Res, State};
+handle_call(clear, _From, State) ->
+    #state{status_file=File} = State,
+    {ok, Status} = read_vnode_status(File),
+    Status2 = proplists:delete(counter, proplists:delete(vnodeid, Status)),
+    ok = write_vnode_status(Status2, File),
+    {reply, {ok, cleared}, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
-%% @doc
-%% Handling cast messages
-%%
-%% @spec handle_cast(Msg, State) -> {noreply, State} |
-%%                                  {noreply, State, Timeout} |
-%%                                  {stop, Reason, State}
-%% @end
 %%--------------------------------------------------------------------
+handle_cast({lease, Lease, LeaseSize}, State) ->
+    #state{status_file=File, vnode_pid=Pid} = State,
+    Status = read_vnode_status(File),
+    {LeaseTo, UpdStatus} = get_counter_lease(Status, Lease, LeaseSize),
+    ok = write_vnode_status(UpdStatus, File),
+    Pid ! {counter_lease, {ok, LeaseTo}},
+    {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling all non call/cast messages
-%%
-%% @spec handle_info(Info, State) -> {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
 handle_info(_Info, State) ->
     {noreply, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called by a gen_server when it is about to
-%% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_server terminates
-%% with Reason. The return value is ignored.
-%%
-%% @spec terminate(Reason, State) -> void()
-%% @end
-%%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
     ok.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Convert process state when code is changed
-%%
-%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
-%% @end
-%%--------------------------------------------------------------------
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% @private monotonically advance the counter lease
+-spec lease_counter(status(), non_neg_integer(), non_neg_integer()) ->
+                           {non_neg_integer(), status()}.
+get_counter_lease(Status, Lease, LeaseSize) when is_integer(LeaseSize),
+                                                 LeaseSize > 0  ->
+    CurrentLease = proplists:get_value(counter, Status, Lease),
+    LeaseTo = max(Lease, CurrentLease) + LeaseSize,
+    {LeaseTo, [{counter, LeaseTo} | proplists:delete(counter, Status)]}.
+
 vnode_status_filename(Index) ->
     P_DataDir = app_helper:get_env(riak_core, platform_data_dir),
     VnodeStatusDir = app_helper:get_env(riak_kv, vnode_status,
                                         filename:join(P_DataDir, "kv_vnode")),
-    filename:join(VnodeStatusDir, integer_to_list(Index)).
-
-
-%% @private get the current counter lease, and update the status
-%% proplist with same for persisting
--spec get_counter_lease(non_neg_integer(), non_neg_integer(), [proplists:property()]) ->
-                         {non_neg_integer(), non_neg_integer(), [proplists:property()]}.
-get_counter_lease(Counter, CounterThreshold, Status) ->
-    Leased = Counter + CounterThreshold,
-    {Leased, [{counter, Leased} | proplists:delete(counter, Status)]}.
+    Filename = filename:join(VnodeStatusDir, integer_to_list(Index)),
+    ok = filelib:ensure_dir(Filename),
+    Filename.
 
 %% Assign a unique vnodeid, making sure the timestamp is unique by incrementing
 %% into the future if necessary.
@@ -224,52 +225,30 @@ assign_vnodeid(Now, NodeId, Status) ->
                                   proplists:delete(last_epoch, Status))],
     {VnodeId, UpdStatus}.
 
-update_vnode_status(F, Index) ->
-    VnodeFile = vnode_status_filename(Index),
-    ok = filelib:ensure_dir(VnodeFile),
-    case read_vnode_status(VnodeFile) of
-        {ok, Status} ->
-            update_vnode_status2(F, Status, VnodeFile);
-        {error, enoent} ->
-            update_vnode_status2(F, [], VnodeFile);
-        ER ->
-            ER
-    end.
-
-update_vnode_status2(F, Status, VnodeFile) ->
-    case F(Status) of
-        {Ret, Status} -> % No change
-            {ok, Ret};
-        {Ret, UpdStatus} ->
-            case write_vnode_status(UpdStatus, VnodeFile) of
-                ok ->
-                    {ok, Ret};
-                ER ->
-                    ER
-            end
-    end.
-
 read_vnode_status(File) ->
     case file:consult(File) of
         {ok, [Status]} when is_list(Status) ->
             {ok, proplists:delete(version, Status)};
-        ER ->
-            ER
+        {error, enoent} ->
+            %% doesn't exist? same as empty list
+            {ok, []};
+        Er ->
+            Er
     end.
 
 -define(VNODE_STATUS_VERSION, 2).
 
 write_vnode_status(Status, File) ->
     VersionedStatus = [{version, ?VNODE_STATUS_VERSION} | proplists:delete(version, Status)],
-    TmpFile = File ++ "~",
-    case file:write_file(TmpFile, io_lib:format("~p.", [VersionedStatus])) of
-        ok ->
-            file:rename(TmpFile, File);
-        ER ->
-            ER
-    end.
+    riak_core_util:replace_file(File, io_lib:format("~p.", [VersionedStatus])).
 
 -ifdef(TEST).
+
+-ifdef(EQC).
+%% prop_monotonic_counter() ->
+%%     ok.
+
+-endif.
 
 %% Check assigning a vnodeid twice in the same second
 assign_vnodeid_restart_same_ts_test() ->
@@ -332,36 +311,28 @@ vnode_status_test_() ->
                  ?cmd("rm -rf kv_vnode_status_test || true"),
                  ?cmd("mkdir kv_vnode_status_test"),
                  ?cmd("chmod -w kv_vnode_status_test"),
-                 F = fun([]) ->
-                             {shouldfail, [badperm]}
-                     end,
                  Index = 0,
-                 ?assertEqual({error, eacces},  update_vnode_status(F, Index))
+                 File = vnode_status_filename(Index),
+                 ?assertEqual({error, eacces}, write_vnode_status([], File))
              end),
       ?_test(begin % create successfully
                  ?cmd("chmod +w kv_vnode_status_test"),
-
-                 F = fun([]) ->
-                             {created, [created]}
-                     end,
                  Index = 0,
-                 ?assertEqual({ok, created}, update_vnode_status(F, Index))
+                 File = vnode_status_filename(Index),
+                 ?assertEqual(ok, write_vnode_status([created], File))
              end),
       ?_test(begin % update successfully
-                 F = fun([created]) ->
-                             {updated, [updated]}
-                     end,
                  Index = 0,
-                 ?assertEqual({ok, updated}, update_vnode_status(F, Index))
+                 File = vnode_status_filename(Index),
+                 {ok, [created]} = read_vnode_status(File),
+                 ?assertEqual(ok, write_vnode_status([updated], File))
              end),
       ?_test(begin % update failure
                  ?cmd("chmod 000 kv_vnode_status_test/0"),
                  ?cmd("chmod 500 kv_vnode_status_test"),
-                 F = fun([updated]) ->
-                             {shouldfail, [updatedagain]}
-                     end,
                  Index = 0,
-                 ?assertEqual({error, eacces},  update_vnode_status(F, Index))
+                 File = vnode_status_filename(Index),
+                 ?assertEqual({error, eacces},  read_vnode_status(File))
              end)
 
      ]}.
