@@ -68,7 +68,14 @@ register_stats() ->
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
 get_stats() ->
+<<<<<<< HEAD
     riak_kv_wm_stats:get_stats().
+=======
+    lists:append(
+      [riak_core_stat:get_stats(?APP),
+       riak_kv_stat_bc:other_stats(),
+       riak_core_stat:get_stats(common)]).
+>>>>>>> 1846ad7236b43334e5be3ceed3972637a9f3f17d
 
 
 %% Creation of a dynamic stat _must_ be serialized.
@@ -311,6 +318,10 @@ do_update({consistent_put, _Bucket, Microsecs, ObjSize}) ->
     ok = create_or_update([P, ?APP, consistent, puts, objsize], ObjSize, histogram).
 
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> 1846ad7236b43334e5be3ceed3972637a9f3f17d
 %% private
 
 add_monitor(Type, Pid) ->
