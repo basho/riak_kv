@@ -90,9 +90,7 @@ pretty_print(RD1, C1=#ctx{}) ->
 get_stats() ->
     legacy_stats(legacy_stat_map1())
         ++ riak_kv_stat_bc:read_repair_stats()
-        %% ++ riak_kv_stat_bc:level_stats()
         ++ legacy_stats(legacy_pipe_stat_map())
-        %% ++ riak_kv_stat_bc:cpu_stats()
         ++ riak_kv_stat_bc:mem_stats()
         ++ riak_kv_stat_bc:system_stats()
         ++ riak_kv_stat_bc:app_stats()

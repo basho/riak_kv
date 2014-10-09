@@ -68,10 +68,7 @@ register_stats() ->
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
 get_stats() ->
-    lists:append(
-      [riak_core_stat:get_stats(?APP),
-       riak_kv_stat_bc:other_stats(),
-       riak_core_stat:get_stats(common)]).
+    riak_kv_wm_stats:get_stats().
 
 
 %% Creation of a dynamic stat _must_ be serialized.
