@@ -1352,7 +1352,7 @@ prepare_put(#state{vnodeid=VId,
                 %% incoming object. If the incoming object descends
                 %% the cache (i.e. hs seen all its events) no need to
                 %% do a local get and merge, just overwrite.
-                not riak_object:descends(RObj, Clock)
+                not riak_object:vclock_descends(RObj, Clock)
         end,
     GetReply =
         case RequiresGet of
@@ -1434,17 +1434,9 @@ prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
     %% creating + updating the crdt.
     %% Make a new crdt, stuff it in the riak_object
     do_crdt_update(VClockUp, VId, CRDTOp);
-prepare_new_put(false, RObj, VId, _StartTime, _CounterOp) ->
+prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
     %% @TODO Not coordindating, not found local, is there an entry for
     %% us in the clock? If so, mark as dirty
-    %% RObj2 = case is_previous_actor(VId, RObj) of
-    %%             {true, ActorBase} ->
-    %%                 riak_object:needs_key_epoch(ActorBase, RObj);
-    %%             false ->
-    %%                 RObj
-    %%         end,
-    %% RObj2.
-    lager:error("is prev actor ~p? ~p", [is_previous_actor(VId, RObj)]),
     RObj.
 
 handle_crdt(_, undefined, _VId, RObj) ->
@@ -2409,7 +2401,7 @@ non_neg_env(App, EnvVar, Default) when is_integer(Default),
                N > 0 ->
             N;
         X ->
-            lager:warn("Non-integer/Negative integer ~p for vnode counter config ~p", [X, EnvVar]),
+            lager:warning("Non-integer/Negative integer ~p for vnode counter config ~p", [X, EnvVar]),
             Default
     end.
 
@@ -2451,23 +2443,6 @@ highest_actor(ActorBase, [<<ActorBase:8/binary, EpochCntr:32/integer>> | Rest], 
 %% the highest actor
 highest_actor(ActorBase, [_ | Rest], HighestActor, MaxEpoch) ->
     highest_actor(ActorBase, Rest, HighestActor, MaxEpoch).
-
-is_previous_actor(<<ActorBase:8/binary, _/binary>>, RObj) ->
-    AllActors = riak_object:all_actors(RObj),
-    is_previous_actor2(ActorBase, AllActors).
-
-%% @private check if the given `ActorBase' has already acted on this
-%% key. @TODO is there something we can do too optimise this? Either
-%% take advantage of sorting? Or cache actor bases in riak_object
-%% metadata?
-is_previous_actor2(_, []) ->
-    false;
-is_previous_actor2(ActorBase, [<<ActorBase:8/binary, _/binary>> | _Rest]) ->
-    {true, ActorBase};
-is_previous_actor2(ActorBase, [_ | Rest]) ->
-    is_previous_actor2(ActorBase, Rest).
-
-
 
 -ifdef(TEST).
 
