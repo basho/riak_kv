@@ -33,7 +33,7 @@
 
 
 %% API
--export([start_link/2, get_vnodeid_and_counter/2, lease_counter/3, clear_vnodeid/1]).
+-export([start_link/2, get_vnodeid_and_counter/2, lease_counter/2, clear_vnodeid/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -52,6 +52,9 @@
 
 -type status() :: [proplists:property()].
 
+%% only 32 bits per counter, when you hit that, get a new vnode id
+-define(MAX_CNTR, 4294967295).
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -67,27 +70,32 @@ start_link(VnodePid, Index) ->
     gen_server:start_link(?MODULE, [VnodePid, Index], []).
 
 %%--------------------------------------------------------------------
+%% @doc You can't ever have a `LeaseSize' greater than the maximum 32
+%% bit unsigned integer, since that would involve breaking the
+%% invariant of an vnodeid+cntr pair being used more than once to
+%% start a key epoch, the counter is encoded in a 32 bit binary, and
+%% going over 4billion+etc would wrap around and re-use integers.
+%%
+%% @end
+%%--------------------------------------------------------------------
+get_vnodeid_and_counter(Pid, LeaseSize) when is_integer(LeaseSize),
+                                          LeaseSize > 0,
+                                          LeaseSize =< ?MAX_CNTR ->
+    %% @TODO decide on a sane timeout for getting a vnodeid/cntr pair
+    %% onto disk.
+    gen_server:call(Pid, {vnodeid, LeaseSize}).
+
+%%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
 %%
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-get_vnodeid_and_counter(Pid, CounterThreshold) ->
-    gen_server:call(Pid, {vnodeid, CounterThreshold}, infinity).
-
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
-%% @end
-%%--------------------------------------------------------------------
-lease_counter(Pid, Lease, LeaseSize) when is_integer(LeaseSize),
-                                          LeaseSize > 0 ->
-    %% How long to time out on this, default 5 seconds ok?
-    gen_server:cast(Pid, {lease, Lease, LeaseSize}).
+lease_counter(Pid, LeaseSize) when is_integer(LeaseSize),
+                                          LeaseSize > 0,
+                                          LeaseSize =< ?MAX_CNTR ->
+    gen_server:cast(Pid, {lease, LeaseSize}).
 
 clear_vnodeid(Pid) ->
     gen_server:call(Pid, clear).
@@ -125,36 +133,19 @@ init([VnodePid, Index]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({vnodeid, CounterThreshold}, _From, State) ->
+handle_call({vnodeid, LeaseSize}, _From, State) ->
     #state{status_file=File} = State,
     {ok, Status} = read_vnode_status(File),
-    {VnodeId, Counter, Status2} = case {proplists:get_value(vnodeid, Status, undefined),
-                                        proplists:get_value(counter, Status, undefined)} of
-                                      V when element(1, V) == undefined;
-                                             element(2, V) == undefined ->
-                                          %% If the counter is missing we need a new
-                                          %% vnodeid as we have no idea what the count
-                                          %% for this vnodeid is. Should only be
-                                          %% possible in the case of an upgrade or bad
-                                          %% file on disk.
-                                          {VId, Status1} = assign_vnodeid(erlang:now(),
-                                                                              %%Using now as we want
-                                                                              %% different values per vnode id on a node
-                                                                              riak_core_nodeid:get(),
-                                                                              Status),
-                                          {VId, 0, Status1};
-                                      {VId, Cntr} ->
-                                          {VId, Cntr, Status}
-                                  end,
-    %% Note: this is subtle change to this
-    %% function, now it will _always_ trigger a
-    %% store of the new status, since the lease
-    %% will always be moving upwards. A vnode that
-    %% starts, and crashes, and starts, and
-    %% crashes over and over will burn through a
-    %% lot of counter.
-    {LeaseTo, Status3} = get_counter_lease(Status2, Counter, CounterThreshold),
-    ok = write_vnode_status(Status3, File),
+    %% Note: this is subtle change to this function, now it will
+    %% _always_ trigger a store of the new status, since the lease
+    %% will always be moving upwards. A vnode that starts, and
+    %% crashes, and starts, and crashes over and over will burn
+    %% through a lot of counter (or vnode ids (if the leases are very
+    %% large.)) See get_counter_lease for the meaning of ?MAX_CNTR
+    %% here. It means that the counter is `undefined', so we need a
+    %% new vnodeid, and start the counter from zero.
+    {Counter, LeaseTo, VnodeId, Status2} = get_counter_lease(Status, LeaseSize),
+    ok = write_vnode_status(Status2, File),
     Res = {ok, {VnodeId, Counter, LeaseTo}},
     {reply, Res, State};
 handle_call(clear, _From, State) ->
@@ -170,12 +161,12 @@ handle_call(_Request, _From, State) ->
 %%--------------------------------------------------------------------
 %% @private
 %%--------------------------------------------------------------------
-handle_cast({lease, Lease, LeaseSize}, State) ->
+handle_cast({lease, LeaseSize}, State) ->
     #state{status_file=File, vnode_pid=Pid} = State,
-    Status = read_vnode_status(File),
-    {LeaseTo, UpdStatus} = get_counter_lease(Status, Lease, LeaseSize),
+    {ok, Status} = read_vnode_status(File),
+    {_Counter, LeaseTo, VnodeId, UpdStatus} = get_counter_lease(Status, LeaseSize),
     ok = write_vnode_status(UpdStatus, File),
-    Pid ! {counter_lease, {ok, LeaseTo}},
+    Pid ! {counter_lease, {VnodeId, LeaseTo}},
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -193,14 +184,40 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-%% @private monotonically advance the counter lease
--spec lease_counter(status(), non_neg_integer(), non_neg_integer()) ->
+%% @private monotonically advance the counter lease. Guarded at
+%% interface to server.
+-spec get_counter_lease(status(),  non_neg_integer()) ->
                            {non_neg_integer(), status()}.
-get_counter_lease(Status, Lease, LeaseSize) when is_integer(LeaseSize),
-                                                 LeaseSize > 0  ->
-    CurrentLease = proplists:get_value(counter, Status, Lease),
-    LeaseTo = max(Lease, CurrentLease) + LeaseSize,
-    {LeaseTo, [{counter, LeaseTo} | proplists:delete(counter, Status)]}.
+get_counter_lease(Status, LeaseSize) ->
+    Lease = proplists:get_value(counter, Status, ?MAX_CNTR),
+    VnodeId0 = proplists:get_value(vnodeid, Status, undefined),
+    if
+        (VnodeId0 == undefined) or (Lease == ?MAX_CNTR) ->
+            {VnodeId, Status2} = assign_vnodeid(erlang:now(),
+                                                riak_core_nodeid:get(),
+                                                Status),
+            {0, LeaseSize, VnodeId, replace(counter, LeaseSize, Status2)};
+        true ->
+            %% Make a lease that is greater than that on disk, but not
+            %%  larger than the 32 bit int limit.  This may be a lease
+            %%  smaller than request. Say LeaseSize is 4 billion, and
+            %%  this is the second lease, you're only getting a lease
+            %%  of 500million-ish. I thought this made more sense than
+            %%  giving the full size lease by generating a new
+            %%  vnodeid, since a new vnodeid means more actors for all
+            %%  keys touched by the vnode. A very badly configured
+            %%  vnode (trigger lease at 1% usage, lease size of
+            %%  4billion) will casue many vnode ids to be generated if
+            %%  we don't use this "best lease" scheme.
+            LeaseTo = min(Lease + LeaseSize, ?MAX_CNTR),
+            {Lease, LeaseTo, VnodeId0, replace(counter, LeaseTo, Status)}
+    end.
+
+%% @private replace tuple with `Key' with in proplist `Status' with a
+%% tuple of `{Key, Value}'.
+-spec replace(term(), term(), [proplist:property()]) -> [proplist:property()].
+replace(Key, Value, Status) ->
+    [{Key, Value} | proplists:delete(Key, Status)].
 
 vnode_status_filename(Index) ->
     P_DataDir = app_helper:get_env(riak_core, platform_data_dir),
@@ -220,9 +237,7 @@ assign_vnodeid(Now, NodeId, Status) ->
     LastVnodeEpoch = proplists:get_value(last_epoch, Status, 0),
     VnodeEpoch = erlang:max(NowEpoch, LastVnodeEpoch+1),
     VnodeId = <<NodeId/binary, VnodeEpoch:32/integer>>,
-    UpdStatus = [{vnodeid, VnodeId}, {last_epoch, VnodeEpoch} |
-                 proplists:delete(vnodeid,
-                                  proplists:delete(last_epoch, Status))],
+    UpdStatus = replace(vnodeid, VnodeId, replace(last_epoch, VnodeEpoch, Status)),
     {VnodeId, UpdStatus}.
 
 read_vnode_status(File) ->
@@ -239,7 +254,7 @@ read_vnode_status(File) ->
 -define(VNODE_STATUS_VERSION, 2).
 
 write_vnode_status(Status, File) ->
-    VersionedStatus = [{version, ?VNODE_STATUS_VERSION} | proplists:delete(version, Status)],
+    VersionedStatus = replace(version, ?VNODE_STATUS_VERSION, Status),
     riak_core_util:replace_file(File, io_lib:format("~p.", [VersionedStatus])).
 
 -ifdef(TEST).
@@ -250,6 +265,11 @@ write_vnode_status(Status, File) ->
 
 -endif.
 
+
+replace_test() ->
+    Status = [],
+    ?assertEqual([{rdb, yay}], replace(rdb, yay, Status)).
+
 %% Check assigning a vnodeid twice in the same second
 assign_vnodeid_restart_same_ts_test() ->
     Now1 = {1314,224520,343446}, %% TS=(224520 * 100000) + 343446
@@ -259,6 +279,7 @@ assign_vnodeid_restart_same_ts_test() ->
     ?assertEqual(<<1, 2, 3, 4, 70, 116, 143, 150>>, Vid1),
     %% Simulate clear
     Status2 = proplists:delete(vnodeid, Status1),
+    ?debugFmt("Status ~p", [Status2]),
     %% Reassign
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
     ?assertEqual(<<1, 2, 3, 4, 70, 116, 143, 151>>, Vid2).
