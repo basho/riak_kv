@@ -87,7 +87,7 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("riak_core/include/riak_core_bg_manager.hrl").
--export([put_merge/6]). %% For fsm_eqc_vnode
+-export([put_merge/7]). %% For fsm_eqc_vnode
 -endif.
 
 %% N.B. The ?INDEX macro should be called any time the object bytes on
@@ -153,11 +153,16 @@
 -define(DEFAULT_HASHTREE_TOKENS, 90).
 
 %% default value for `counter_lease' in `#counter_state{}'
+%% NOTE: these MUST be positive integers!
+%% @see non_neg_env/3
 -define(DEFAULT_CNTR_LEASE, 1000).
+%% Should these cuttlefish-able?  If it takes more than 20 attempts to
+%% fsync the vnode counter to disk, die. (NOTE this is not ERRS*TO but
+%% first to trip see blocking_lease_counter/3)
 -define(DEFAULT_CNTR_LEASE_ERRS, 20).
+%% If it takes more than 5 seconds to fsync the vnode counter to disk,
+%% die
 -define(DEFAULT_CNTR_LEASE_TO, 5000). % 5 seconds!
-%% only 32 bits per counter, when you hit that, get a new vnode id
--define(MAX_CNTR, 4294967295).
 
 -record(putargs, {returnbody :: boolean(),
                   coord:: boolean(),
@@ -421,7 +426,9 @@ init([Index]) ->
     IndexBufSize = app_helper:get_env(riak_kv, index_buffer_size, 100),
     KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
     WorkerPoolSize = app_helper:get_env(riak_kv, worker_pool_size, 10),
-    CounterLeaseSize = app_helper:get_env(riak_kv, counter_lease_size, ?DEFAULT_CNTR_LEASE),
+    %%  This _has_ to be a non_neg_integer(), and really, if it is
+    %%  zero, you are fysncing every.single.key epoch.
+    CounterLeaseSize = non_neg_env(riak_kv, counter_lease_size, ?DEFAULT_CNTR_LEASE),
     {ok, StatusMgr} = riak_kv_vnode_status_mgr:start_link(self(), Index),
     {ok, {VId, CounterState}} = get_vnodeid_and_counter(StatusMgr, CounterLeaseSize),
     DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
@@ -446,8 +453,8 @@ init([Index]) ->
                            mod=Mod,
                            modstate=ModState,
                            vnodeid=VId,
-                           counter = CounterState,
-                           status_mgr_pid = StatusMgr,
+                           counter=CounterState,
+                           status_mgr_pid=StatusMgr,
                            delete_mode=DeleteMode,
                            bucket_buf_size=BucketBufSize,
                            index_buf_size=IndexBufSize,
@@ -1168,18 +1175,20 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
                        State#state{modstate=ModState1}
                end,
     {ok, UpdState};
-handle_info({counter_lease, {ok, NewLease}}, State) ->
+handle_info({counter_lease, {VnodeId, NewLease}}, State) ->
     #state{counter=CounterState} = State,
     #counter_state{lease=OldLease} = CounterState,
+    %% Paranoia? If the NewLease < OldLease something is very broken,
+    %% maybe crash here?
     Lease = max(NewLease, OldLease),
     CS1 = CounterState#counter_state{lease=Lease, leasing=false},
-    State2 = State#state{counter=CS1},
+    State2 = State#state{counter=CS1, vnodeid=VnodeId},
     {ok, State2}.
 
 handle_exit(Pid, Reason, State=#state{status_mgr_pid=Pid, idx=Index, counter=CntrState}) ->
     lager:error("Vnode status manager exit ~p", [Reason]),
     %% The status manager died, start a new one
-    #counter_state{lease=Lease, lease_size=LeaseSize, leasing=Leasing} = CntrState,
+    #counter_state{lease_size=LeaseSize, leasing=Leasing} = CntrState,
     {ok, NewPid} = riak_kv_vnode_status_mgr:start_link(Index, self()),
 
     case Leasing of
@@ -1187,7 +1196,7 @@ handle_exit(Pid, Reason, State=#state{status_mgr_pid=Pid, idx=Index, counter=Cnt
             ok;
         true ->
             %% Crashed when getting a lease, try again
-            ok = riak_kv_vnode_status_mgr:aysnc_lease_counter(NewPid, Lease, LeaseSize)
+            ok = riak_kv_vnode_status_mgr:lease_counter(NewPid, LeaseSize)
     end,
     {noreply, State#state{status_mgr_pid=NewPid}};
 handle_exit(_Pid, Reason, State) ->
@@ -1378,7 +1387,7 @@ prepare_put(#state{vnodeid=VId,
                                      is_index=IndexBackend}}
             end;
         {ok, OldObj} ->
-            case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
+            case put_merge(Coord, LWW, OldObj, RObj, VId, Cntr, StartTime) of
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs};
                 {newobj, NewObj} ->
@@ -1425,9 +1434,17 @@ prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
     %% creating + updating the crdt.
     %% Make a new crdt, stuff it in the riak_object
     do_crdt_update(VClockUp, VId, CRDTOp);
-prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
+prepare_new_put(false, RObj, VId, _StartTime, _CounterOp) ->
     %% @TODO Not coordindating, not found local, is there an entry for
     %% us in the clock? If so, mark as dirty
+    %% RObj2 = case is_previous_actor(VId, RObj) of
+    %%             {true, ActorBase} ->
+    %%                 riak_object:needs_key_epoch(ActorBase, RObj);
+    %%             false ->
+    %%                 RObj
+    %%         end,
+    %% RObj2.
+    lager:error("is prev actor ~p? ~p", [is_previous_actor(VId, RObj)]),
     RObj.
 
 handle_crdt(_, undefined, _VId, RObj) ->
@@ -1543,13 +1560,13 @@ select_newest_content(Mult) ->
          Mult)).
 
 %% @private
-put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
+put_merge(false, true, _CurObj, UpdObj, _VId, _Cntr, _StartTime) -> % coord=false, LWW=true
     %% @TODO Do we need to mark the clock dirty here? I think so
     %% @TODO Check the clock of the incoming object, if it is more advanced
     %% for our actor than we are then something is amiss, and we need
     %% to mark the actor as dirty for this key
     {newobj, UpdObj};
-put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
+put_merge(false, false, CurObj, UpdObj, _VId, _Cntr, _StartTime) -> % coord=false, LWW=false
     %% a downstream merge, or replication of a coordinated PUT
     %% Merge the value received with local replica value
     %% and store the value IFF it is different to what we already have
@@ -1564,11 +1581,21 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
         false ->
             {newobj, ResObj}
     end;
-put_merge(true, LWW, CurObj, UpdObj, VId, StartTime) ->
+put_merge(true, LWW, CurObj, UpdObj, VId, Cntr, StartTime) ->
     %% @TODO If the current object has a dirty clock, we need to start
-    %% a new per key epoch and mark clock as clean, we also have to
-    %% use the correct actor
-    Actor = highest_actor(VId, [CurObj, UpdObj]),
+    %% a new per key epoch and mark clock as clean.
+    %%
+    %% If this is the first time VId has acted on this key, we need a
+    %% new epoch, See `highest_actor/2', it returns the given base VId
+    %% if the actor has never acted on the objects. This is like a
+    %% `not_found' in the sense this actor has never acted on this
+    %% key.
+    Actor = case highest_actor(VId, [CurObj, UpdObj]) of
+                VId ->
+                    key_epoch_actor(VId, Cntr);
+                Existing ->
+                    Existing
+            end,
     {newobj, riak_object:update(LWW, CurObj, UpdObj, Actor, StartTime)}.
 
 %% @private
@@ -1902,7 +1929,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
             %% Merge handoff values with the current - possibly discarding
             %% if out of date.  Ok to set VId/Starttime undefined as
             %% they are not used for non-coordinating puts.
-            case put_merge(false, false, OldObj, DiffObj, undefined, undefined) of
+            case put_merge(false, false, OldObj, DiffObj, 0, undefined, undefined) of
                 {oldobj, _} ->
                     {ok, ModState};
                 {newobj, NewObj} ->
@@ -2306,13 +2333,9 @@ maybe_update_counter(true, State=#state{counter=CounterState}) ->
 %% one fysnced to disk. If the incremented counter is == to the
 %% current Lease, we must block until the new Lease is stored. If the
 %% current counter is 80% through the current lease, and we have not
-%% asked for a new lease, ask for one.  if we're less than 80% through
-%% the lease, do nothing.  if not yet blocking(equal) and we already
+%% asked for a new lease, ask for one.  If we're less than 80% through
+%% the lease, do nothing.  If not yet blocking(equal) and we already
 %% asked for a new lease, do nothing.
-%%
-%% @TODO If the Cntr is within N of ?MAX_CNTR, we need a new ID, aysnc
-%% ask for a new ID. If Cntr is at ?MAX_CNTR, we must block until we
-%% get a new ID and a new lease.
 maybe_lease_counter(State=#state{counter=#counter_state{cnt=Lease, lease=Lease}}) ->
     %% Block until we get a new lease, or crash
     {ok, NewState} = blocking_lease_counter(State),
@@ -2322,10 +2345,11 @@ maybe_lease_counter(State=#state{counter=#counter_state{leasing=true}}) ->
     State;
 maybe_lease_counter(State) ->
     #state{status_mgr_pid=MgrPid, counter=CS=#counter_state{cnt=Cnt, lease=Lease, lease_size=LeaseSize}} = State,
+    %% @TODO configurable??
     %% has more than 80% of the lease been used?
     CS2 = case (Lease - Cnt) =< 0.2 * LeaseSize of
         true ->
-            ok = riak_kv_vnode_status_mgr:aysnc_lease_counter(MgrPid, Lease, LeaseSize),
+            ok = riak_kv_vnode_status_mgr:lease_counter(MgrPid, LeaseSize),
             CS#counter_state{leasing=true};
         false ->
             CS
@@ -2333,41 +2357,65 @@ maybe_lease_counter(State) ->
     State#state{counter=CS2}.
 
 %% @private by now, we have to be waiting for a lease, or an exit,
-%% from the mgr. Block until we receive a lease. if we get an exit,
+%% from the mgr. Block until we receive a lease. If we get an exit,
 %% retry a number of times. If we get neither in a reasonable time,
-%% crash.
+%% return an error.
 blocking_lease_counter(State) ->
-    MaxErrs = app_helper:get_env(riak_kv, counter_lease_errors, ?DEFAULT_CNTR_LEASE_ERRS),
-    MaxTime = app_helper:get_env(riak_kv, counter_lease_timeout, ?DEFAULT_CNTR_LEASE_TO),
+    {MaxErrs, MaxTime} = get_counter_wait_values(),
     blocking_lease_counter(State, {0, MaxErrs, MaxTime}).
 
 blocking_lease_counter(State, {MaxErrs, MaxErrs, _}) ->
     {error, counter_lease_max_errors, State};
 blocking_lease_counter(State, {ErrCnt, MaxErrors, MaxTime}) ->
     #state{idx=Index, status_mgr_pid=Pid, counter=CounterState} = State,
-    #counter_state{lease=Lease, lease_size=LeaseSize} = CounterState,
+    #counter_state{lease_size=LeaseSize} = CounterState,
     Start = os:timestamp(),
     receive
         {'EXIT', Pid, Reason} ->
             lager:error("Failed to lease counter ~p", [Reason]),
-            Elapsed = timer:now_diff(os:timestamp(), Start),
             {ok, NewPid} = riak_kv_vnode_status_mgr:start_link(Index, self()),
-            ok = riak_kv_vnode_status_mgr:async_lease_counter(NewPid, Lease, LeaseSize),
+            ok = riak_kv_vnode_status_mgr:lease_counter(NewPid, LeaseSize),
             NewState = State#state{status_mgr_pid=NewPid},
+            Elapsed = timer:now_diff(os:timestamp(), Start),
             blocking_lease_counter(NewState, {ErrCnt+1, MaxErrors, MaxTime - Elapsed});
-        {counter_lease, {ok, NewLease}} ->
+        {counter_lease, {VnodeId, NewLease}} ->
             NewCS = CounterState#counter_state{lease=NewLease, leasing=false},
-            {ok, State#state{counter=NewCS}}
+            {ok, State#state{counter=NewCS, vnodeid=VnodeId}}
     after
         MaxTime ->
             {error, counter_lease_timeout, State}
     end.
 
+%% @private get the configured values for blocking waiting on
+%% lease/ID. Ensure that non invalid values come in.
+-spec get_counter_wait_values() ->
+                                     {MaxErrors :: non_neg_integer(),
+                                      MaxTime :: non_neg_integer()}.
+get_counter_wait_values() ->
+    MaxErrors = non_neg_env(riak_kv, counter_lease_errors, ?DEFAULT_CNTR_LEASE_ERRS),
+    MaxTime = non_neg_env(riak_kv, counter_lease_errors, ?DEFAULT_CNTR_LEASE_ERRS),
+    {MaxErrors, MaxTime}.
+
+%% @private we don't want to crash riak because of a dodgy config
+%% value, and by this point, cuttlefish be praised, we should have
+%% sane values. However, if not, ignore negative values for timeout
+%% and max errors, use the defaults, and log the insanity. Note this
+%% expects the macro configured defaults to be positive integers!
+-spec non_neg_env(atom(), atom(), pos_integer()) -> pos_integer().
+non_neg_env(App, EnvVar, Default) when is_integer(Default),
+                                       Default > 0 ->
+    case app_helper:get_env(App, EnvVar, Default) of
+        N when is_integer(N),
+               N > 0 ->
+            N;
+        X ->
+            lager:warn("Non-integer/Negative integer ~p for vnode counter config ~p", [X, EnvVar]),
+            Default
+    end.
+
 %% @private generate a new epoch ID for a key
 -spec key_epoch_actor(vnodeid(), pos_integer()) -> binary().
-key_epoch_actor(ActorBin, Cntr) when is_binary(ActorBin),
-                                     is_integer(Cntr),
-                                     Cntr =< ?MAX_CNTR ->
+key_epoch_actor(ActorBin, Cntr) ->
     <<ActorBin/binary, Cntr:32/integer>>.
 
 %% @private highest actor is the latest/greatest epoch actor for a
@@ -2384,13 +2432,18 @@ highest_actor(ActorBase, Objs) ->
                          Objs),
     highest_actor(ActorBase, Actors, ActorBase, 0).
 
+%% @private find the highest actor for the `ActorBase'. If it is not
+%% present then return the `ActorBase'
+%%
+%% @TODO what if the actor is not present? Does that mean something?
+%% Need to dirty up?
 -spec highest_actor(binary(), [binary()], binary(), non_neg_integer()) -> binary().
 highest_actor(_ActorBase, [], Actor, _MaxEpoch) ->
     Actor;
-highest_actor(ActorBase, [<<ActorBase:64/binary, EpochCntr:32/integer>>=A | Rest], _HighestActor, MaxEpoch) when
+highest_actor(ActorBase, [<<ActorBase:8/binary, EpochCntr:32/integer>>=A | Rest], _HighestActor, MaxEpoch) when
       EpochCntr > MaxEpoch ->
     highest_actor(ActorBase, Rest, A, EpochCntr);
-highest_actor(ActorBase, [<<ActorBase:64/binary, EpochCntr:32/integer>> | Rest], HighestActor, MaxEpoch) when
+highest_actor(ActorBase, [<<ActorBase:8/binary, EpochCntr:32/integer>> | Rest], HighestActor, MaxEpoch) when
       EpochCntr =< MaxEpoch ->
     highest_actor(ActorBase, Rest, HighestActor, MaxEpoch);
 %% Since an actor without an epoch is lower than an actor with one,
@@ -2398,6 +2451,23 @@ highest_actor(ActorBase, [<<ActorBase:64/binary, EpochCntr:32/integer>> | Rest],
 %% the highest actor
 highest_actor(ActorBase, [_ | Rest], HighestActor, MaxEpoch) ->
     highest_actor(ActorBase, Rest, HighestActor, MaxEpoch).
+
+is_previous_actor(<<ActorBase:8/binary, _/binary>>, RObj) ->
+    AllActors = riak_object:all_actors(RObj),
+    is_previous_actor2(ActorBase, AllActors).
+
+%% @private check if the given `ActorBase' has already acted on this
+%% key. @TODO is there something we can do too optimise this? Either
+%% take advantage of sorting? Or cache actor bases in riak_object
+%% metadata?
+is_previous_actor2(_, []) ->
+    false;
+is_previous_actor2(ActorBase, [<<ActorBase:8/binary, _/binary>> | _Rest]) ->
+    {true, ActorBase};
+is_previous_actor2(ActorBase, [_ | Rest]) ->
+    is_previous_actor2(ActorBase, Rest).
+
+
 
 -ifdef(TEST).
 

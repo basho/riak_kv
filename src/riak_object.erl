@@ -653,9 +653,16 @@ prune_vclock(Obj=#r_object{vclock=VC}, PruneTime, BucketProps) ->
 vclock_descends(#r_object{vclock=ObjVC}, VC) ->
     vclock:descends(ObjVC, VC).
 
-
+%% @doc get the list of all actors that have touched this object.
+-spec all_actors(riak_object()) -> [binary()] | [].
 all_actors(#r_object{vclock=VC}) ->
     vclock:all_nodes(VC).
+
+%% @doc When the next coordinating write from the `Actor' will require
+%% a new per-key-epoch. Marks the `Actor' as `dirty'.
+%% -spec needs_key_epoch(vclock:vclock_node(), riak_object()) -> riak_object().
+%% needs_key_epoch(Actor, RObj) ->
+
 
 %% @private assign the dot to the value only if DVV is enabled. Only
 %% call with a valid dot. Only assign dot when there is a single value
