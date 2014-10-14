@@ -215,7 +215,7 @@ get_counter_lease(LeaseSize, Status) ->
 
 %% @private replace tuple with `Key' with in proplist `Status' with a
 %% tuple of `{Key, Value}'.
--spec replace(term(), term(), [proplist:property()]) -> [proplist:property()].
+-spec replace(term(), term(), status()) -> status().
 replace(Key, Value, Status) ->
     [{Key, Value} | proplists:delete(Key, Status)].
 
@@ -229,8 +229,8 @@ vnode_status_filename(Index) ->
 
 %% Assign a unique vnodeid, making sure the timestamp is unique by incrementing
 %% into the future if necessary.
--spec assign_vnodeid(erlang:timestamp(), binary(), proplists:proplist()) ->
-                            {binary(), [proplist:property()]}.
+-spec assign_vnodeid(erlang:timestamp(), binary(), status()) ->
+                            {binary(), status()}.
 assign_vnodeid(Now, NodeId, Status) ->
     {_Mega, Sec, Micro} = Now,
     NowEpoch = 1000000*Sec + Micro,
