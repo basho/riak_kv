@@ -50,7 +50,7 @@
           vnode_pid :: undefined | pid()
          }).
 
--type status() :: [proplists:property()].
+-type status() :: [proplists:property()] | [].
 
 %% only 32 bits per counter, when you hit that, get a new vnode id
 -define(MAX_CNTR, 4294967295).
@@ -144,7 +144,7 @@ handle_call({vnodeid, LeaseSize}, _From, State) ->
     %% large.)) See get_counter_lease for the meaning of ?MAX_CNTR
     %% here. It means that the counter is `undefined', so we need a
     %% new vnodeid, and start the counter from zero.
-    {Counter, LeaseTo, VnodeId, Status2} = get_counter_lease(Status, LeaseSize),
+    {Counter, LeaseTo, VnodeId, Status2} = get_counter_lease(LeaseSize, Status),
     ok = write_vnode_status(Status2, File),
     Res = {ok, {VnodeId, Counter, LeaseTo}},
     {reply, Res, State};
@@ -164,7 +164,7 @@ handle_call(_Request, _From, State) ->
 handle_cast({lease, LeaseSize}, State) ->
     #state{status_file=File, vnode_pid=Pid} = State,
     {ok, Status} = read_vnode_status(File),
-    {_Counter, LeaseTo, VnodeId, UpdStatus} = get_counter_lease(Status, LeaseSize),
+    {_Counter, LeaseTo, VnodeId, UpdStatus} = get_counter_lease(LeaseSize, Status),
     ok = write_vnode_status(UpdStatus, File),
     Pid ! {counter_lease, {VnodeId, LeaseTo}},
     {noreply, State};
@@ -186,13 +186,13 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% @private monotonically advance the counter lease. Guarded at
 %% interface to server.
--spec get_counter_lease(status(),  non_neg_integer()) ->
-                           {non_neg_integer(), status()}.
-get_counter_lease(Status, LeaseSize) ->
-    Lease = proplists:get_value(counter, Status, ?MAX_CNTR),
+-spec get_counter_lease(non_neg_integer(), status()) ->
+                           {non_neg_integer(), non_neg_integer(), binary(), status()}.
+get_counter_lease(LeaseSize, Status) ->
+    PrevLease = proplists:get_value(counter, Status, ?MAX_CNTR),
     VnodeId0 = proplists:get_value(vnodeid, Status, undefined),
     if
-        (VnodeId0 == undefined) or (Lease == ?MAX_CNTR) ->
+        (VnodeId0 == undefined) or (PrevLease == ?MAX_CNTR) ->
             {VnodeId, Status2} = assign_vnodeid(erlang:now(),
                                                 riak_core_nodeid:get(),
                                                 Status),
@@ -209,8 +209,8 @@ get_counter_lease(Status, LeaseSize) ->
             %%  vnode (trigger lease at 1% usage, lease size of
             %%  4billion) will casue many vnode ids to be generated if
             %%  we don't use this "best lease" scheme.
-            LeaseTo = min(Lease + LeaseSize, ?MAX_CNTR),
-            {Lease, LeaseTo, VnodeId0, replace(counter, LeaseTo, Status)}
+            LeaseTo = min(PrevLease + LeaseSize, ?MAX_CNTR),
+            {PrevLease, LeaseTo, VnodeId0, replace(counter, LeaseTo, Status)}
     end.
 
 %% @private replace tuple with `Key' with in proplist `Status' with a
