@@ -50,7 +50,8 @@
          request_hashtree_pid/1,
          request_hashtree_pid/2,
          reformat_object/2,
-         stop_fold/1]).
+         stop_fold/1,
+         vnodeid/1]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -320,6 +321,19 @@ vnode_status(PrefLists) ->
                                    riak_kv_vnode_master),
     wait_for_vnode_status_results(PrefLists, ReqId, []).
 
+ %% @doc Get vnodeids for the preflist's vnodes
+-spec vnodeid(riak_core_apl:preflist()) ->
+                     [] |
+                     [{partition(), binary() | error_overload}].
+vnodeid(PrefLists) ->
+     ReqId = erlang:phash2({self(), os:timestamp()}),
+     %% Get the vnodeid of each vnode
+     riak_core_vnode_master:command(PrefLists,
+                                    vnodeid,
+                                    {raw, ReqId, self()},
+                                    riak_kv_vnode_master),
+    wait_for_vnode_status_results(PrefLists, ReqId, []).
+
 %% @doc Repair the given `Partition'.
 -spec repair(partition()) ->
                     {ok, Pairs::[{partition(), node()}]} |
@@ -457,8 +471,11 @@ handle_overload_command(?KV_GET_REQ{req_id=ReqID}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqID});
 handle_overload_command(?KV_VNODE_STATUS_REQ{}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {vnode_status, Idx, [{error, overload}]});
+handle_overload_command(vnodeid, Sender, Idx) ->
+    riak_core_vnode:reply(Sender, {vnodeid, Idx, error_overload});
 handle_overload_command(_, Sender, _) ->
     riak_core_vnode:reply(Sender, {error, mailbox_overload}).
+
 
 %% Handle all SC overload messages here
 handle_overload_info({ensemble_ping, _From}, _Idx) ->
@@ -677,10 +694,9 @@ handle_command(?KV_VNODE_STATUS_REQ{},
                _Sender,
                State=#state{idx=Index,
                             mod=Mod,
-                            modstate=ModState,
-                            vnodeid=VId}) ->
+                            modstate=ModState}) ->
     BackendStatus = {backend_status, Mod, Mod:status(ModState)},
-    VNodeStatus = [BackendStatus, {vnodeid, VId}],
+    VNodeStatus = [BackendStatus],
     {reply, {vnode_status, Index, VNodeStatus}, State};
 handle_command({reformat_object, BKey}, _Sender, State) ->
     {Reply, UpdState} = do_reformat(BKey, State),
@@ -756,7 +772,10 @@ handle_command({get_index_entries, Opts},
         false ->
             lager:error("Backend ~p does not support incorrect index query", [Mod]),
             {reply, ignore, State}
-    end.
+    end;
+handle_command(vnodeid, _Sender, State=#state{vnodeid=VId, idx=Idx}) ->
+    {reply, {vnodeid, Idx, VId}, State}.
+
 
 %% @doc Handle a coverage request.
 %% More information about the specification for the ItemFilter
@@ -1995,7 +2014,8 @@ wait_for_vnode_status_results([], _ReqId, Acc) ->
     Acc;
 wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
     receive
-        {ReqId, {vnode_status, Index, Status}} ->
+        {ReqId, {Resp, Index, Status}} when Resp == vnode_status;
+                                            Resp == vnodeid ->
             UpdPrefLists = proplists:delete(Index, PrefLists),
             wait_for_vnode_status_results(UpdPrefLists,
                                           ReqId,
