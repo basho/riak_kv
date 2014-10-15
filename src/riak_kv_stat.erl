@@ -558,8 +558,13 @@ leveldb_read_block_errors() ->
 
 vnode_status(Idx) ->
     PList = [{Idx, node()}],
-    [{Idx, [Status]}] = riak_kv_vnode:vnode_status(PList),
-    Status.
+    [{Idx, Status}] = riak_kv_vnode:vnode_status(PList),
+    case lists:keyfind(backend_status, 1, Status) of
+        false ->
+            {error, no_backend_status};
+        BEStatus ->
+            BEStatus
+    end.
 
 leveldb_read_block_errors({backend_status, riak_kv_eleveldb_backend, Status}) ->
     rbe_val(proplists:get_value(read_block_error, Status));
