@@ -26,4 +26,5 @@ docs:
 dialyzer: compile
 	@dialyzer -Wno_return -c apps/riak_kv/ebin
 
-
+xref:
+	@echo "Not implemented for 1.4 branch.  Sorry buildbot.  (skipping)"
