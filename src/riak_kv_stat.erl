@@ -561,6 +561,8 @@ vnode_status(Idx) ->
     [{Idx, Status}] = riak_kv_vnode:vnode_status(PList),
     case lists:keyfind(backend_status, 1, Status) of
         false ->
+            %% if for some reason backend_status is absent from the
+            %% status list
             {error, no_backend_status};
         BEStatus ->
             BEStatus
