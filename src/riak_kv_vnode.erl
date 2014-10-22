@@ -20,9 +20,6 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_vnode).
--author('Kevin Smith <kevin@basho.com>').
--author('John Muellerleile <johnm@basho.com>').
-
 -behaviour(riak_core_vnode).
 
 %% API
@@ -140,7 +137,12 @@ maybe_create_hashtrees(true, State=#state{idx=Index,
     case riak_core_ring:vnode_type(Ring, Index) of
         primary ->
             {ok, ModCaps} = Mod:capabilities(ModState),
-            Opts = [use_2i || lists:member(indexes, ModCaps)],
+            Empty = case is_empty(State) of
+                        {true, _}     -> true;
+                        {false, _, _} -> false
+                    end,
+            Opts = [use_2i || lists:member(indexes, ModCaps)]
+                   ++ [vnode_empty || Empty],
             case riak_kv_index_hashtree:start(Index, self(), Opts) of
                 {ok, Trees} ->
                     monitor(process, Trees),
@@ -415,13 +417,13 @@ init([Index]) ->
                     {ok, State}
             end;
         {error, Reason} ->
-            lager:error("Failed to start ~p Reason: ~p",
-                        [Mod, Reason]),
+            lager:error("Failed to start ~p backend for index ~p error: ~p",
+                        [Mod, Index, Reason]),
             riak:stop("backend module failed to start."),
             {error, Reason};
         {'EXIT', Reason1} ->
-            lager:error("Failed to start ~p Reason: ~p",
-                        [Mod, Reason1]),
+            lager:error("Failed to start ~p backend for index ~p crash: ~p",
+                        [Mod, Index, Reason1]),
             riak:stop("backend module failed to start."),
             {error, Reason1}
     end.
@@ -990,7 +992,7 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
                            RObjHash ->
                                do_backend_delete(BKey, RObj, State#state{modstate=ModState1});
                          _ ->
-                               State
+                               State#state{modstate=ModState1}
                        end;
                    {{error, _}, ModState1} ->
                        State#state{modstate=ModState1}
@@ -1573,7 +1575,9 @@ do_diffobj_put({Bucket, Key}, DiffObj,
             end
     end.
 
--spec update_hashtree(binary(), binary(), binary(), state()) -> ok.
+-spec update_hashtree(binary(), binary(),
+                      riak_object:riak_object() | binary(),
+                      state()) -> ok.
 update_hashtree(Bucket, Key, BinObj, State) when is_binary(BinObj) ->
     RObj = riak_object:from_binary(Bucket, Key, BinObj),
     update_hashtree(Bucket, Key, RObj, State);
