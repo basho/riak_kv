@@ -63,7 +63,7 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 register_stats() ->
-    riak_core_stat:register_stats(?APP, stats()).
+    riak_core_stat:register_stats(?APP, [{N,T} || {N,_,T} <- stats()]).
 
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
@@ -90,9 +90,9 @@ update(Arg) ->
 perform_update(Arg) ->
     try do_update(Arg) of
         ok -> ok;
-        {error, not_found} ->
-            lager:warning("{error,not_found} updating stat ~p.", [Arg]),
-            gen_server:cast(?SERVER, {re_register_stat, Arg})
+        Other->
+            lager:warning("~p updating stat ~p.", [Other, Arg]),
+	    Other
     catch
         ErrClass:Err ->
             lager:warning("~p:~p updating stat ~p.", [ErrClass, Err, Arg]),
@@ -227,14 +227,6 @@ do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket, 
     exometer:update([P, ?APP, node, gets, Type, time], Microsecs),
     do_stages([P, ?APP, node, gets, Type, time], Stages),
     do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined, Type});
-do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket, undefined}) ->
-    P = ?PFX,
-    exometer:update([P, ?APP, node, gets], 1),
-    exometer:update([P, ?APP, node, gets, time], Microsecs),
-    exometer:update([P, ?APP, node, gets, siblings], NumSiblings),
-    exometer:update([P, ?APP, node, gets, objsize], ObjSize),
-    do_stages([P, ?APP, node, gets, time], Stages),
-    do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize});
 do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket, CRDTMod}) ->
     P = ?PFX,
     Type = riak_kv_crdt:from_mod(CRDTMod),
@@ -411,12 +403,13 @@ do_stages(Path, [{Stage, Time}|Stages]) ->
 %% The indexes are from get core [{Index, Reason::notfound|outofdate}]
 %% preflist is a preflist of [{{Index, Node}, Type::primary|fallback}]
 do_repairs(Indices, Preflist) ->
+    Pfx = riak_core_stat:prefix(),
     lists:foreach(fun({{Idx, Node}, Type}) ->
                           case proplists:get_value(Idx, Indices) of
                               undefined ->
                                   ok;
                               Reason ->
-                                  create_or_update([?APP, node, gets,  read_repairs, Node, Type, Reason], 1, spiral)
+                                  create_or_update([Pfx, ?APP, node, gets, read_repairs, Node, Type, Reason], 1, spiral)
                           end
                   end,
                   Preflist).
@@ -533,27 +526,8 @@ read_repair_aggr_stats(Pfx) ->
     ].
 
 
-do_register_stat(Name, histogram) ->
-    %% get the global default histo type
-    Opts = get_histogram_opts(Name),
-    exometer:new(Name, histogram, Opts);
 do_register_stat(Name, Type) ->
     exometer:new(Name, Type).
-
-%% @doc the histogram sample type may be set in app.config
-%% use key `stat_sample_type' in the `riak_kv' section. Or the
-%% name of an `histogram' stat.
-%% Check the folsom homepage for available types.
-%% Defaults to `{slide_uniform, {60, 1028}}' (a uniform sliding window
-%% of 60 seconds, with a uniform sample of at most 1028 entries)
-get_histogram_opts(Name) ->
-    SampleType0 = app_helper:get_env(riak_kv, stat_sample_type, {slide_uniform, {60, 1028}}),
-    case app_helper:get_env(riak_kv, Name, SampleType0) of
-        {Type, {SpanSeconds, MaxEntries}} ->
-            [{type, Type},
-             {time_span, SpanSeconds * 1000},
-             {max_elements, MaxEntries}]
-    end.
 
 %% @doc produce the legacy blob of stats for display.
 produce_stats() ->
@@ -646,61 +620,101 @@ re_register_stat(Arg) ->
     case (catch do_update(Arg)) of
         {'EXIT', _} ->
             Stats = stats_from_update_arg(Arg),
-            [exometer:re_register(Name, Type)
-             || {Name, {metric, _, Type, _}} <- Stats];
+            [try exometer:repair(Name) catch _:_ -> ok end || Name <- Stats];
         ok ->
             ok
     end.
+
+select_names(Pat) ->
+    exometer:select([{ {Pat,'_','_'}, [], ['$name'] }]).
 
 %% Map from application argument used in call to `update/1' to
 %% folsom stat names and types.
 %% Updates that create dynamic stats must select all
 %% related stats.
 stats_from_update_arg({vnode_get, _, _}) ->
-    riak_core_stat_q:names_and_types([?APP, vnode, gets]);
+    select_names([?PFX,?APP,vnode,gets|'_']);
 stats_from_update_arg({vnode_put, _, _}) ->
-    riak_core_stat_q:names_and_types([?APP, vnode, puts]);
+    select_names([?PFX, ?APP, vnode, puts|'_']);
+stats_from_update_arg(vnode_index_refresh) ->
+    [[?PFX, ?APP, vnode, index, refreshes]];
 stats_from_update_arg(vnode_index_read) ->
-    riak_core_stat_q:names_and_types([?APP, vnode, index, reads]);
+    [[?PFX, ?APP, vnode, index, reads]];
 stats_from_update_arg({vnode_index_write, _, _}) ->
-    riak_core_stat_q:names_and_types([?APP, vnode, index, writes]) ++
-        riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
+    P = ?PFX,
+    exometer:select(
+      [{ {[P, ?APP, vnode, index, writes|'_'] ,'_','_'}, [], ['$name'] },
+       { {[P, ?APP, vnode, index, deletes],'_','_'}, [], ['$name'] }]);
 stats_from_update_arg({vnode_index_delete, _}) ->
-    riak_core_stat_q:names_and_types([?APP, vnode, index, deletes]);
-stats_from_update_arg({get_fsm, _, _, _, _, _, _}) ->
-    riak_core_stat_q:names_and_types([?APP, node, gets]);
+    select_names([?PFX, ?APP, vnode, index, deletes|'_']);
+stats_from_update_arg({vnode_dt_update, Mod, _}) ->
+    Type = riak_kv_crdt:from_mod(Mod),
+    select_names([?PFX, ?APP, vnode, Type, update|'_']);
+stats_from_update_arg({riak_object_merge, undefined, _}) ->
+    select_names([?PFX, ?APP, object, merge|'_']);
+stats_from_update_arg({riak_object_merge, Mod, _}) ->
+    Type = riak_kv_crdt:from_mod(Mod),
+    select_names([?PFX, ?APP, object, Type, merge|'_']);
+stats_from_update_arg({get_fsm, Bucket, _, _, NumSib, ObjSz, _, undefined}) ->
+    P = ?PFX,
+    exometer:select(
+      [{ {[P,?APP,node,gets],'_','_'},[],['$name'] },
+       { {[P,?APP,node,gets,time|'_'],'_','_'},[],['$name'] },
+       { {[P,?APP,node,gets,Bucket],'_','_'},[],['$name'] },
+       { {[P,?APP,node,gets,'_',Bucket|'_'],'_','_'},[],['$name'] }]
+      ++ [{ {[P,?APP,node,gets,siblings],'_','_'},[],['$name'] }
+	  || NumSib =/= undefined]
+      ++ [{ {[P,?APP,node,gets,objsize],'_','_'},[],['$name'] }
+	  || ObjSz =/= undefined]);
+stats_from_update_arg({get_fsm, Bucket, _, _, NumSib, ObjSz, _, Mod}) ->
+    P = ?PFX,
+    Type = riak_kv_crdt:from_mod(Mod),
+    exometer:select(
+      [{ {[P,?APP,node,gets,Type],'_','_'},[],['$name'] },
+       { {[P,?APP,node,gets,Type,time|'_'],'_','_'},[],['$name'] },
+       { {[P,?APP,node,gets,Bucket],'_','_'},[],['$name'] },
+       { {[P,?APP,node,gets,'_',Bucket|'_'],'_','_'},[],['$name'] }]
+      ++ [{ {[P,?APP,node,gets,Type,siblings],'_','_'},[],['$name'] }
+	  || NumSib =/= undefined]
+      ++ [{ {[P,?APP,node,gets,Type,objsize],'_','_'},[],['$name'] }
+	  || ObjSz =/= undefined]);
 stats_from_update_arg({put_fsm_time, _, _, _, _}) ->
-    riak_core_stat_q:names_and_types([?APP, node, puts]);
+    select_names([?PFX, ?APP, node, puts|'_']);
 stats_from_update_arg({read_repairs, _, _}) ->
-    riak_core_stat_q:names_and_types([?APP, nodes, gets, read_repairs]);
+    select_names([?PFX, ?APP, node, gets, read_repairs|'_']);
 %% continue here
-stats_from_update_arg(coord_redirs) ->
-    [{{?APP, node, puts, coord_redirs}, {metric,[],counter,undefined}}];
+stats_from_update_arg(coord_redir) ->
+    [[?PFX, ?APP, node, puts, coord_redirs]];
 stats_from_update_arg(mapper_start) ->
-    [{{?APP, mapper_count}, {metric,[],counter,undefined}}];
+    [[?PFX, ?APP, mapper_count]];
 stats_from_update_arg(mapper_end) ->
-    stats_from_update_arg(mapper_start);
+    [[?PFX, ?APP, mapper_count]];
 stats_from_update_arg(precommit_fail) ->
-    [{{?APP, precommit_fail}, {metric,[],counter,undefined}}];
+    [[?PFX, ?APP, precommit_fail]];
 stats_from_update_arg(postcommit_fail) ->
-    [{{?APP, postcommit_fail}, {metric,[],counter,undefined}}];
+    [[?PFX, ?APP, postcommit_fail]];
 stats_from_update_arg({fsm_spawned, Type}) ->
-    [{{?APP, node, Type, fsm, active}, {metric,[],counter,undefined}}];
+    [[?PFX, ?APP, node, Type, fsm, active]];
 stats_from_update_arg({fsm_exit, Type}) ->
-    stats_from_update_arg({fsm_spawned, Type});
+    [[?PFX, ?APP, node, Type, fsm, active]];
 stats_from_update_arg({fsm_error, Type}) ->
-    stats_from_update_arg({fsm_spawned, Type}) ++
-        [{{?APP, node, Type, fsm, errors}, {metric,[], spiral, undefined}}];
+    stats_from_update_arg({fsm_exit, Type});
 stats_from_update_arg({index_create, _Pid}) ->
-    [{{?APP, index, fsm, create}, {metric, [], spiral, undefined}},
-     {{?APP, index, fsm, active}, {metric, [], counter, undefined}}];
+    P = ?PFX,
+    [ [P, ?APP, index, fsm, create],
+      [P, ?APP, index, fsm, active] ];
 stats_from_update_arg(index_create_error) ->
-    [{{?APP, index, fsm, create, error}, {metric, [], spiral, undefined}}];
+    [[?PFX, ?APP, index, fsm, create, error]];
 stats_from_update_arg({list_create, _Pid}) ->
-    [{{?APP, list, fsm, create}, {metric, [], spiral, undefined}},
-     {{?APP, list, fsm, active}, {metric, [], counter, undefined}}];
+    P = ?PFX,
+    [ [P, ?APP, list, fsm, create],
+      [P, ?APP, list, fsm, active] ];
 stats_from_update_arg(list_create_error) ->
-    [{{?APP, list, fsm, create, error}, {metric, [], spiral, undefined}}];
+    [[?PFX, ?APP, list, fsm, create, error]];
+stats_from_update_arg({consistent_get, _Bucket, _Microsecs, _Objsize}) ->
+    select_names([?PFX, ?APP, consistent, gets|'_']);
+stats_from_update_arg({consistent_put, _Bucket, _Microsecs, _ObjSize}) ->
+    select_names([?PFX, ?APP, consistent, puts|'_']);
 stats_from_update_arg(_) ->
     [].
 

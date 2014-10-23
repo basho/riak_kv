@@ -393,6 +393,8 @@ legacy_stat_map1() ->
      {[riak_core_stat_ts], [{value, riak_core_stat_ts}]},
      {[riak_kv_stat_ts]  , [{value, riak_kv_stat_ts}]},
      {[riak_pipe_stat_ts], [{value, riak_pipe_stat_ts}]},
+     {[yokozuna,index,fail], [{count,search_index_fail_count},
+			      {one  ,search_index_fail_one}]},
      {[yokozuna,index,latency], [{95    , search_index_latency_95},
 				 {99    , search_index_latency_99},
 				 {999   , search_index_latency_999},
