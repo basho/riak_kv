@@ -75,7 +75,7 @@ forbidden(RD, Ctx) ->
     {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
 
 produce_body(ReqData, Ctx) ->
-    Stats= get_stats(),
+    Stats= riak_kv_http_cache:get_stats(),
     Body = mochijson2:encode({struct, Stats}),
     {Body, ReqData, Ctx}.
 
