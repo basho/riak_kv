@@ -63,7 +63,7 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 register_stats() ->
-    riak_core_stat:register_stats(?APP, [{N,T} || {N,_,T} <- stats()]).
+    riak_core_stat:register_stats(?APP, stats()).
 
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
