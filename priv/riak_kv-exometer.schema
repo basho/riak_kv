@@ -1,0 +1,173 @@
+%%-*- mode: erlang -*-
+
+%% @doc Name an exometer reporter
+{mapping, "reporter", "exometer.reporters",
+ [{default, main},
+  {datatype, atom},
+  merge
+ ]}.
+
+%% @doc Set the status (enabled|disabled) of a named reporter.
+{mapping, "reporter.$name.status", "exometer.reporters",
+ [ {default, "disabled"},
+   {datatype, {enum, [disabled, enabled]}},
+   {include_default, "main"}]}.
+
+%% @doc Specify reporter backend.
+%%
+%% Recognized values:
+%%     collectd | statsd | tty | lager | ModuleName
+%%
+%% where ModuleName is an exometer reporter plugin.
+%%
+{mapping, "reporter.$name.backend", "exometer.reporters",
+ [ {default, collectd},
+   {datatype, atom},
+   {include_default, "main"}
+ ]}.
+
+%% @doc Socket path for reporter.
+%%
+%% This parameter is only relevant for collectd reporters,
+%% and identifies the location of the collectd Domain Socket
+{mapping, "reporter.$name.path", "exometer.reporters",
+ [ {default, "/var/run/collectd-unixsock"},
+   {datatype, string},
+   {include_default, "main"}
+ ]}.
+
+%% @doc Named interval for reporter.
+%%
+%% Syntax: `Name:Time:Delay`
+%%
+%% Delay can be omitted, and will then default to 0.
+%%
+%% `Name` is the name of the reporter.
+%% `Time` is the interval in milliseconds. `Delay` is how long
+%% to wait before starting the timer for the first time.
+%%
+{mapping, "reporter.$name.interval", "exometer.reporters",
+ [ {default, "normal:10000:0"},
+   {datatype, string},
+   {include_default, "main"}
+ ]}.
+
+%% @doc Hostname for e.g. statsd reporter
+%%
+{mapping, "reporter.$name.hostname", "exometer.reporters",
+ [ {datatype, string} ]}.
+
+%% @doc Port for e.g. statsd reporter
+{mapping, "reporter.$name.port", "exometer.reporters",
+ [ {datatype, string} ]}.
+
+%% @doc Connection timeout (ms) for e.g. collectd reporter
+{mapping, "reporter.$name.connect_timeout", "exometer.reporters",
+ [ {datatype, integer} ]}.
+
+%% @doc Connection retries for e.g. collectd reporter
+{mapping, "reporter.$name.connect_retries", "exometer.reporters",
+ [ {datatype, integer} ]}.
+
+%% @doc Socket read timeout for e.g. collectd reporter.
+{mapping, "reporter.$name.read_timeout", "exometer.reporters",
+ [ {datatype, integer} ]}.
+
+%% @doc Metrics refresh interval for e.g. collectd reporter.
+%%
+%% Collectd wants metrics to be refreshed after a certain time.
+%% Use this if reporting interval exceeds the refresh time in collectd.
+{mapping, "reporter.$name.refresh_interval", "exometer.reporters",
+ [ {datatype, integer} ]}.
+
+%% @doc Subscriber(s) for named reporter
+%%
+%% Syntax: Entry:DataPoint:Interval[:Retry]
+%% `Entry` is the name of the metric, either as a dotted string
+%% (e.g. `riak.riak_kv.gets.time`) or as an Erlang list
+%% (e.g. `[riak,riak_kv,gets,time]`)
+%%
+%% `DataPoint` is either `default` (expands to all datapoints)
+%% or the name of a supported datapoint (e.g. `value`)
+%%
+%% `Interval` is either a named interval (@see reporter.$name.interval)
+%% or a time value in milliseconds. This gives the reporting interval.
+%%
+%% `Retry` (`true` or `false`) indicates whether to keep trying to report
+%% a metric even if it can't be fetched. Default is `true`, and this is
+%% the most promising setting, given that static subscriptions are usually
+%% created before the corresponding metrics are.
+{mapping, "subscriber.$name", "exometer.subscribers",
+ [ {default, "apply:riak_kv_stat:report_legacy"},
+   {datatype, string},
+   {include_default, "main"},
+   merge
+ ]}.
+
+{translation, "exometer.reporters",
+ fun(Conf) ->
+	 Parse = fun(S) when is_list(S) ->
+			 try  {ok,Ts,_} = erl_scan:string(S),
+			      {ok,T} = erl_parse:parse_term(Ts ++ [{dot,1}]),
+			      T
+			 catch error:_ -> S
+			 end;
+		   (A) when is_atom(A) -> A
+		end,
+	 Backend = fun(collectd) -> exometer_report_collectd;
+		      (statsd  ) -> exometer_report_statsd;
+		      (tty     ) -> exometer_report_tty;
+		      (lager   ) -> exometer_report_lager;
+		      (B       ) -> B
+		   end,
+	 Interval =
+	     fun(S) ->
+		     case string:tokens(S, ":") of
+			 [N,T] -> {list_to_atom(N), list_to_integer(T)};
+			 [N,T,D] -> {list_to_atom(N),
+				     list_to_integer(T),
+				     list_to_integer(D)}
+		     end
+	     end,
+	 MapOpt = fun(status, V) -> {status, Parse(V)};
+		     (backend, B) -> {module, Backend(B)};
+		     (interval,I) -> {interval, Interval(I)};
+		     (K, V) -> {K, V}
+		  end,
+	 Opt = fun(R) ->
+		       Filtered =
+			   lists:ukeysort(
+			     1,cuttlefish_variable:filter_by_prefix(
+			     ["reporter",atom_to_list(R)], Conf)),
+		       [MapOpt(Parse(lists:last(K)), V) ||
+			   {K,V} <-
+			       Filtered]
+	       end,
+	 [{R, Opt(R)} || {["reporter"],R} <- Conf]
+ end}.
+
+{translation, "exometer.subscribers",
+ fun(Conf) ->
+	 Bool = fun("true") -> true;
+		   ("false") -> false
+		end,
+	 Entry = fun(S) ->
+			 Parts = string:tokens(S, "."),
+			 [list_to_atom(P) || P <- Parts]
+		 end,
+	 Val = fun(R,S) ->
+		       case string:tokens(S, ":") of
+			   ["apply",M,F] ->
+			       {apply, {list_to_atom(M), list_to_atom(F), []}};
+			   [E,D,I] ->
+			       {R,Entry(E),list_to_atom(D),list_to_integer(I)};
+			   [E,D,I,Retry] ->
+			       {R,Entry(E),list_to_atom(D),list_to_integer(I),
+				Bool(Retry)};
+			   [E,D,I,Retry,X] ->
+			       {R,Entry(E),list_to_atom(D),list_to_integer(I),
+				Bool(Retry),X}
+		       end
+	       end,
+	 [Val(list_to_atom(R),S) || {["subscriber",R],S} <- Conf]
+ end}.
