@@ -417,13 +417,7 @@ do_repairs(Indices, Preflist) ->
 %% for dynamically created / dimensioned stats
 %% that can't be registered at start up
 create_or_update(Name, UpdateVal, Type) ->
-    case exometer:update(Name, UpdateVal) of
-        ok ->
-            ok;
-        {error, not_found} ->
-            register_stat(Name, Type),
-            exometer:update(Name, UpdateVal)
-    end.
+    exometer:update_or_create(Name, UpdateVal, Type, []).
 
 report_legacy() ->
     riak_kv_wm_stats:legacy_report_map().
