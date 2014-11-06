@@ -89,7 +89,6 @@ pretty_print(RD1, C1=#ctx{}) ->
 
 get_stats() ->
     legacy_stats(legacy_stat_map1())
-        ++ riak_kv_stat_bc:read_repair_stats()
         ++ legacy_stats(legacy_pipe_stat_map())
         ++ riak_kv_stat_bc:mem_stats()
         ++ riak_kv_stat_bc:system_stats()
@@ -113,9 +112,13 @@ legacy_stats(Map) ->
                                           {_,N} = lists:keyfind(D,1,DPs),
                                           [{N,V}|Acc1]
                                   end, Acc, Vs);
-                  _ ->
+                  Other ->
+		      Val = case Other of
+				{ok, disabled} -> undefined;
+				_ -> 0
+			    end,
                       lists:foldr(fun({_,N}, Acc1) ->
-                                          [{N,0}|Acc1]
+                                          [{N,Val}|Acc1]
                                   end, Acc, DPs)
               end
       end, [], Map).
@@ -266,7 +269,6 @@ legacy_stat_map1() ->
      {[riak_kv,index,fsm,create,error], [{one, index_fsm_create_error}]},
      {[riak_kv,index,fsm,active], [{value, index_fsm_active}]},
      {[riak_kv,list,fsm,active], [{value, list_fsm_active}]},
-     {[riak_kv,list,fsm,error], [{value, list_fsm_error}]},
      {[riak_kv,consistent,gets], [{one, consistent_gets},
 				  {count, consistent_gets_total}]},
      {[riak_kv,consistent,gets,objsize], [{mean  , consistent_get_objsize_mean},
@@ -376,13 +378,11 @@ legacy_stat_map1() ->
 				   {count, vnode_set_update_total}]},
      {[riak_kv,vnode,set,update,time], [{mean  , vnode_set_update_time_mean},
 					{median, vnode_set_update_time_median},
-					{median, vnode_set_update_time_median},
 					{95    , vnode_set_update_time_95},
 					{99    , vnode_set_update_time_99},
 					{max   , vnode_set_update_time_100}]},
      {[riak_kv,ring_stats], [{ring_members       , ring_members},
 			     {ring_num_partitions, ring_num_partitions},
-			     {ring_ownership     , ring_ownership},
 			     {ring_ownership     , ring_ownership}]},
      {[riak_core,ring_creation_size], [{value, ring_creation_size}]},
      {[riak_kv,storage_backend], [{value, storage_backend}]},

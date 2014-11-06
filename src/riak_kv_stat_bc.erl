@@ -660,7 +660,7 @@ level_stats() ->
 %% which are elements 6 and 7 in the key.
 read_repair_stats() ->
     Pfx = riak_core_stat:prefix(),
-    aggregate(read_repairs, [Pfx, riak_kv, node, gets, read_repairs, '_', '_', '_'], [5,6,7]).
+    aggregate(read_repairs, [Pfx, riak_kv, node, gets, read_repairs, '_', '_', '_'], [7,8]).
 
 %% TODO generalise for riak_core_stat_q
 %% aggregates spiral values for stats retrieved by `Query'
