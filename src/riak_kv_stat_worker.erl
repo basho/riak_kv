@@ -48,9 +48,10 @@ handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({update, Arg}, State) ->
-    riak_kv_stat:perform_update(Arg),
+    try riak_kv_stat:perform_update(Arg) catch Class:Error ->
+        riak_kv_stat:stat_update_error(Arg, Class, Error)
+    end,
     {noreply, State}.
-
 handle_info(_Info, State) ->
     {noreply, State}.
 
