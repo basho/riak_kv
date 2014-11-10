@@ -148,7 +148,7 @@ produce_stats() ->
        read_repair_stats(),
        level_stats(),
        pipe_stats(),
-       cpu_stats(),
+       %% cpu_stats(),
        mem_stats(),
        disk_stats(),
        system_stats(),
@@ -158,6 +158,22 @@ produce_stats() ->
        memory_stats(),
        yz_stat:search_stats()
       ]).
+
+%% This is a temporary fix. We should be able to get these through exometer
+%% (actually, read_repair_stats() *are* - only not aggregated)
+other_stats() ->
+    S = [sidejob_stats(),
+         read_repair_stats(),
+         level_stats(),
+         pipe_stats(),
+         mem_stats(),
+	 disk_stats(),
+         system_stats(),
+         ring_stats(),
+         config_stats(),
+         app_stats(),
+         memory_stats()],
+    lists:append(S).
 
 %% Stats in folsom are stored with tuples as keys, the
 %% tuples mimic an hierarchical structure. To be free of legacy
@@ -179,33 +195,40 @@ get_stat(Name, Type, Cache) ->
 get_stat(Name, Type, Cache, ValFun) ->
     case proplists:get_value(Name, Cache) of
         undefined ->
-            case riak_core_stat_q:calc_stat({Name, Type}) of
-                unavailable -> {unavailable, Cache};
-                Stat ->
-                    {ValFun(Stat), [{Name, Stat} | Cache]}
-            end;
+            Value = case riak_core_stat_q:calc_stat({Name, Type}) of
+			unavailable -> [];
+			Stat        -> Stat
+		    end,
+	    {ValFun(Value), [{Name, Value} | Cache]};
         Cached -> {ValFun(Cached), Cache}
     end.
 
-bc_stat({Old, {NewName, Field}, histogram}, Acc, Cache) ->
-    ValFun = fun(Stat) -> trunc(proplists:get_value(Field, Stat)) end,
+bc_stat({Old, {NewName, Field}, histogram} = _X, Acc, Cache) ->
+    try
+    ValFun = fun(Stat) ->
+                     trunc(proplists:get_value(Field, Stat, 0)) end,
     {Val, Cache1} = get_stat(NewName, histogram, Cache, ValFun),
-    {[{Old, Val} | Acc], Cache1};
+    {[{Old, Val} | Acc], Cache1}
+    catch
+        error:_ -> {[{Old,error} | Acc], Cache}
+    end;
 bc_stat({Old, {NewName, Field}, histogram_percentile}, Acc, Cache) ->
     ValFun = fun(Stat) ->
-                     Percentile = proplists:get_value(percentile, Stat),
-                     Val = proplists:get_value(Field, Percentile),
+                     Val = proplists:get_value(Field, Stat, 0),
                      trunc(Val) end,
     {Val, Cache1} = get_stat(NewName, histogram, Cache, ValFun),
     {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, {NewName, Field}, spiral}, Acc, Cache) ->
     ValFun = fun(Stat) ->
-                     proplists:get_value(Field, Stat)
+                     proplists:get_value(Field, Stat, 0)
              end,
     {Val, Cache1} = get_stat(NewName, spiral, Cache, ValFun),
     {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, NewName, counter}, Acc, Cache) ->
-    {Val, Cache1} = get_stat(NewName, counter, Cache),
+    ValFun = fun(Stat) ->
+                     proplists:get_value(value, Stat, 0)
+             end,
+    {Val, Cache1} = get_stat(NewName, counter, Cache, ValFun),
     {[{Old, Val} | Acc], Cache1};
 bc_stat({Old, NewName, function}, Acc, Cache) ->
     {Val, Cache1} = get_stat(NewName, gauge, Cache),
@@ -224,6 +247,8 @@ legacy_stat_map() ->
      {vnode_index_refreshes_total, {{riak_kv, vnode, index, refreshes}, count}, spiral},
      {vnode_index_reads, {{riak_kv, vnode, index, reads}, one}, spiral},
      {vnode_index_reads_total, {{riak_kv, vnode, index, reads}, count}, spiral},
+     {vnode_index_refreshes, {{riak_kv, vnode, index, refreshes}, one}, spiral},
+     {vnode_index_refreshes_total, {{riak_kv, vnode, index, refreshes}, count}, spiral},
      {vnode_index_writes, {{riak_kv, vnode, index, writes}, one}, spiral},
      {vnode_index_writes_total, {{riak_kv, vnode, index, writes}, count}, spiral},
      {vnode_index_writes_postings, {{riak_kv,vnode,index,writes,postings}, one}, spiral},
@@ -283,17 +308,17 @@ legacy_stat_map() ->
      {vnode_map_update_time_100, {{riak_kv, vnode, map, update, time}, max}, histogram},
      {node_gets, {{riak_kv,node,gets}, one}, spiral},
      {node_gets_total, {{riak_kv,node,gets}, count}, spiral},
-     {node_get_fsm_siblings_mean, {{riak_kv,node,gets,siblings}, arithmetic_mean}, histogram},
+     {node_get_fsm_siblings_mean, {{riak_kv,node,gets,siblings}, mean}, histogram},
      {node_get_fsm_siblings_median, {{riak_kv,node,gets,siblings}, median}, histogram},
      {node_get_fsm_siblings_95, {{riak_kv,node,gets,siblings}, 95}, histogram_percentile},
      {node_get_fsm_siblings_99, {{riak_kv,node,gets,siblings}, 99}, histogram_percentile},
      {node_get_fsm_siblings_100, {{riak_kv,node,gets,siblings}, max}, histogram},
-     {node_get_fsm_objsize_mean, {{riak_kv,node,gets,objsize}, arithmetic_mean}, histogram},
+     {node_get_fsm_objsize_mean, {{riak_kv,node,gets,objsize}, mean}, histogram},
      {node_get_fsm_objsize_median, {{riak_kv,node,gets,objsize}, median}, histogram},
      {node_get_fsm_objsize_95, {{riak_kv,node,gets,objsize}, 95}, histogram_percentile},
      {node_get_fsm_objsize_99, {{riak_kv,node,gets,objsize}, 99}, histogram_percentile},
      {node_get_fsm_objsize_100, {{riak_kv,node,gets,objsize}, max}, histogram},
-     {node_get_fsm_time_mean, {{riak_kv,node,gets,time}, arithmetic_mean}, histogram},
+     {node_get_fsm_time_mean, {{riak_kv,node,gets,time}, mean}, histogram},
      {node_get_fsm_time_median, {{riak_kv,node,gets,time}, median}, histogram},
      {node_get_fsm_time_95, {{riak_kv,node,gets,time}, 95}, histogram_percentile},
      {node_get_fsm_time_99, {{riak_kv,node,gets,time}, 99}, histogram_percentile},
@@ -351,7 +376,7 @@ legacy_stat_map() ->
      {node_get_fsm_map_time_100, {{riak_kv,node,gets,map,time}, max}, histogram},
      {node_puts, {{riak_kv,node, puts}, one}, spiral},
      {node_puts_total, {{riak_kv,node, puts}, count}, spiral},
-     {node_put_fsm_time_mean, {{riak_kv,node, puts, time}, arithmetic_mean}, histogram},
+     {node_put_fsm_time_mean, {{riak_kv,node, puts, time}, mean}, histogram},
      {node_put_fsm_time_median, {{riak_kv,node, puts, time}, median}, histogram},
      {node_put_fsm_time_95,  {{riak_kv,node, puts, time}, 95}, histogram_percentile},
      {node_put_fsm_time_99,  {{riak_kv,node, puts, time}, 99}, histogram_percentile},
@@ -510,10 +535,15 @@ sidejob_put_fsm_stats() ->
 %% @doc Get stats on the cpu, as given by the cpu_sup module
 %%      of the os_mon application.
 cpu_stats() ->
-    [{cpu_nprocs, cpu_sup:nprocs()},
-     {cpu_avg1, cpu_sup:avg1()},
-     {cpu_avg5, cpu_sup:avg5()},
-     {cpu_avg15, cpu_sup:avg15()}].
+    DPs = case exometer:get_value([riak_core_stat:prefix(),common,cpu_stats]) of
+              {ok, L} -> L;
+              _ -> []
+          end,
+    [{N, proplists:get_value(K,DPs,0)} ||
+        {N,K} <- [{cpu_nprocs, nprocs},
+                  {cpu_avg1, avg1},
+                  {cpu_avg5, avg5},
+                  {cpu_avg15, avg15}]].
 
 %% @spec mem_stats() -> proplist()
 %% @doc Get stats on the memory, as given by the memsup module
@@ -612,7 +642,7 @@ bc_stat(Name, Val) ->
 %% would be two stats, of NAME_count and NAME_one
 %% let's do that
 bc_stat_val(StatName, Val) when is_list(Val) ->
-    [{join([StatName, ValName]), ValVal} || {ValName, ValVal} <- Val];
+    [{join(StatName ++ [ValName]), ValVal} || {ValName, ValVal} <- Val];
 bc_stat_val(StatName, Val) ->
     {StatName, Val}.
 
@@ -629,7 +659,8 @@ level_stats() ->
 %% The CSEs are only interested in aggregations of Type and Reason
 %% which are elements 6 and 7 in the key.
 read_repair_stats() ->
-    aggregate(read_repairs, [riak_kv, node, gets, read_repairs, '_', '_', '_'], [6,7]).
+    Pfx = riak_core_stat:prefix(),
+    aggregate(read_repairs, [Pfx, riak_kv, node, gets, read_repairs, '_', '_', '_'], [7,8]).
 
 %% TODO generalise for riak_core_stat_q
 %% aggregates spiral values for stats retrieved by `Query'
@@ -637,14 +668,14 @@ read_repair_stats() ->
 %% produces a flat list of `BaseName_NameOfFieldAtIndex[_count]'
 %% to fit in with the existing naming convention in the legacy stat blob
 aggregate(BaseName, Query, Fields) ->
-    Stats = riak_core_stat_q:get_stats(Query),
+    Stats = exometer:get_values(Query),
     Aggregates = do_aggregate(Stats, Fields),
     FlatStats = flatten_aggregate_stats(BaseName, Aggregates),
     lists:flatten(FlatStats).
 
 do_aggregate(Stats, Fields) ->
     lists:foldl(fun({Name, [{count, C0}, {one, O0}]}, Acc) ->
-                        Key = key_from_fields(Name, Fields),
+                        Key = key_from_fields(list_to_tuple(Name), Fields),
                         [{count, C}, {one, O}] = case orddict:find(Key, Acc) of
                                                      error -> [{count, 0}, {one, 0}];
                                                      {ok, V} -> V
