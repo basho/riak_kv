@@ -80,10 +80,11 @@ update(Arg) ->
     case erlang:module_loaded(riak_kv_stat_sj) of
         true ->
             %% Dispatch request to sidejob worker
-            riak_kv_stat_worker:update(Arg);
+            ok = riak_kv_stat_worker:update(Arg);
         false ->
-            perform_update(Arg)
-    end.
+            ok = perform_update(Arg)
+    end,
+    ok.
 
 %% @doc
 %% Callback used by a {@link riak_kv_stat_worker} to perform actual update
