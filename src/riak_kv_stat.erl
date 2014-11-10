@@ -43,7 +43,7 @@
 %% API
 -export([start_link/0, get_stats/0,
          update/1, perform_update/1, register_stats/0, produce_stats/0,
-         leveldb_read_block_errors/0, stop/0]).
+         leveldb_read_block_errors/0, stat_update_error/3, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
 -export([active_gets/0, active_puts/0]).
 
@@ -77,14 +77,18 @@ register_stat(Name, Type) ->
 %% gen_server:call(?SERVER, {register, Name, Type}).
 
 update(Arg) ->
-    case erlang:module_loaded(riak_kv_stat_sj) of
-        true ->
-            %% Dispatch request to sidejob worker
-            ok = riak_kv_stat_worker:update(Arg);
-        false ->
-            ok = perform_update(Arg)
+    maybe_dispatch_to_sidejob(erlang:module_loaded(riak_kv_stat_sj), Arg).
+
+maybe_dispatch_to_sidejob(true, Arg) ->
+    riak_kv_stat_worker:update(Arg);
+maybe_dispatch_to_sidejob(false, Arg) ->
+    try perform_update(Arg) catch Class:Error ->
+       stat_update_error(Arg, Class, Error)
     end,
     ok.
+
+stat_update_error(Arg, Class, Error) ->
+    lager:error("Failed to update stat ~p due to (~p) ~p.", [Arg, Class, Error]).
 
 %% @doc
 %% Callback used by a {@link riak_kv_stat_worker} to perform actual update
