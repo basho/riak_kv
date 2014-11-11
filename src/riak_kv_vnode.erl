@@ -718,9 +718,7 @@ handle_command(?KV_VNODE_STATUS_REQ{},
     #counter_state{cnt=Cnt, lease=Lease, lease_size=LeaseSize, leasing=Leasing} = CS,
     CounterStatus = [{counter, Cnt}, {counter_lease, Lease},
                      {counter_lease_size, LeaseSize}, {counter_leasing, Leasing}],
-    %% @TODO remove the counter/vnodeid, or at least make it _work_
-    %% with the stats code
-    VNodeStatus = [{backend, BackendStatus}, {vnodeid, VId} | CounterStatus],
+    VNodeStatus = [BackendStatus, {vnodeid, VId} | CounterStatus],
     {reply, {vnode_status, Index, VNodeStatus}, State};
 handle_command({reformat_object, BKey}, _Sender, State) ->
     {Reply, UpdState} = do_reformat(BKey, State),
