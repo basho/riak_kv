@@ -706,11 +706,11 @@ stats_from_update_arg(_) ->
     [].
 
 -ifdef(TEST).
--define(LEVEL_STATUS(Idx, Val),  [{Idx, [{backend, {backend_status, riak_kv_eleveldb_backend,
-                                                      [{read_block_error, Val}]}}]}]).
--define(BITCASK_STATUS(Idx),  [{Idx, [{backend, {backend_status, riak_kv_bitcask_backend,
-                                                      []}}]}]).
--define(MULTI_STATUS(Idx, Val), [{Idx,  [{backend, {backend_status, riak_kv_multi_backend, Val}}]}]).
+-define(LEVEL_STATUS(Idx, Val),  [{Idx, [{backend_status, riak_kv_eleveldb_backend,
+                                                      [{read_block_error, Val}]}]}]).
+-define(BITCASK_STATUS(Idx),  [{Idx, [{backend_status, riak_kv_bitcask_backend,
+                                                      []}]}]).
+-define(MULTI_STATUS(Idx, Val), [{Idx,  [{backend_status, riak_kv_multi_backend, Val}]}]).
 
 leveldb_rbe_test_() ->
     {foreach,
