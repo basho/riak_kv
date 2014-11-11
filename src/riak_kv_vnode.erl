@@ -1910,9 +1910,9 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
             %% they are not used for non-coordinating puts.
             case put_merge(false, false, OldObj, DiffObj, undefined, undefined) of
                 %% Only coordinating puts mutate vnode state, so ignore returned state
-                {oldobj, _, StateData} ->
+                {oldobj, _} ->
                     {ok, ModState};
-                {newobj, NewObj, StateData} ->
+                {newobj, NewObj} ->
                     AMObj = enforce_allow_mult(NewObj, riak_core_bucket:get_bucket(Bucket)),
                     case IndexBackend of
                         true ->
@@ -2443,7 +2443,7 @@ key_epoch_actor(ActorBin, Cntr) ->
 %% given that we are not starting a new epoch for the key.  Must work
 %% with non-epochal and epochal actors.
 -spec highest_actor(binary(), riak_object:riak_object()) ->
-    binary().
+    {binary(), non_neg_integer()}.
 highest_actor(ActorBase, Obj) ->
     Actors = riak_object:all_actors(Obj),
     highest_actor(ActorBase, Actors, ActorBase, 0).
