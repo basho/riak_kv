@@ -285,5 +285,5 @@ put_merge(CurObj, UpdObj, Options) ->
     Coord = proplists:get_value(coord, Options, false),
     VnodeId = <<1, 1, 1, 1, 1, 1, 1, 1>>,
     Ts = vclock:timestamp(),
-    {_, ResObj} = riak_kv_vnode:put_merge(Coord, false, CurObj, UpdObj, VnodeId, 1, Ts),
+    {_, ResObj} = riak_kv_vnode:put_merge(Coord, false, CurObj, UpdObj, VnodeId, Ts),
     ResObj.

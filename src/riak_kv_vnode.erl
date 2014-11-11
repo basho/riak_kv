@@ -87,7 +87,7 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("riak_core/include/riak_core_bg_manager.hrl").
--export([put_merge/7]). %% For fsm_eqc_vnode
+-export([put_merge/6]). %% For fsm_eqc_vnode
 -endif.
 
 %% N.B. The ?INDEX macro should be called any time the object bytes on
@@ -1236,7 +1236,7 @@ raw_put({Idx, Node}, Key, Obj) ->
 
 %% @private
 %% upon receipt of a client-initiated put
-do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State0) ->
+do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     BProps =  case proplists:get_value(bucket_props, Options) of
                   undefined ->
                       riak_core_bucket:get_bucket(Bucket);
@@ -1250,10 +1250,6 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State0) ->
                         StartTime
                 end,
     Coord = proplists:get_value(coord, Options, false),
-    %% @TODO - Or should we only do this when a new key epoch is
-    %% needed? Keeps the count lower. With the added difficulty of
-    %% threading the state through the calls.
-    State = maybe_update_counter(Coord, State0),
     CRDTOp = proplists:get_value(counter_op, Options, proplists:get_value(crdt_op, Options, undefined)),
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
                        coord=Coord,
@@ -1265,8 +1261,8 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State0) ->
                        starttime=StartTime,
                        prunetime=PruneTime,
                        crdt_op = CRDTOp},
-    {PrepPutRes, UpdPutArgs} = prepare_put(State, PutArgs),
-    {Reply, UpdState} = perform_put(PrepPutRes, State, UpdPutArgs),
+    {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
+    {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
 
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
@@ -1317,20 +1313,21 @@ prepare_put(State=#state{vnodeid=VId,
             ObjToStore =
                 case Coord of
                     true ->
+                        %% Do we need to use epochs here? I guess we
+                        %% don't care, and since we don't read, we
+                        %% can't.
                         riak_object:increment_vclock(RObj, VId, StartTime);
                     false ->
                         RObj
                 end,
-            {{true, ObjToStore}, PutArgs#putargs{is_index = false}};
+            {{true, ObjToStore}, PutArgs#putargs{is_index = false}, State};
         false ->
             prepare_put(State, PutArgs, IndexBackend)
     end.
-prepare_put(#state{vnodeid=VId,
-                   mod=Mod,
-                   modstate=ModState,
-                   idx=Idx,
-                   md_cache=MDCache,
-                   counter=#counter_state{cnt=Cntr}},
+prepare_put(State=#state{mod=Mod,
+                         modstate=ModState,
+                         idx=Idx,
+                         md_cache=MDCache},
             PutArgs=#putargs{bkey={Bucket, Key}=BKey,
                              robj=RObj,
                              bprops=BProps,
@@ -1350,7 +1347,7 @@ prepare_put(#state{vnodeid=VId,
                 %% We need to perform a local get, to merge contents,
                 %% if the local object has events unseen by the
                 %% incoming object. If the incoming object descends
-                %% the cache (i.e. hs seen all its events) no need to
+                %% the cache (i.e. has seen all its events) no need to
                 %% do a local get and merge, just overwrite.
                 not riak_object:vclock_descends(RObj, Clock)
         end,
@@ -1376,20 +1373,21 @@ prepare_put(#state{vnodeid=VId,
                 false ->
                     IndexSpecs = []
             end,
-            EpochId = key_epoch_actor(VId, Cntr),
-            %%% local not found, use the counter to start a per key epoch
+            %% local not found, start a per key epoch
+            {EpochId, State2} = new_key_epoch(State),
             case prepare_new_put(Coord, RObj, EpochId, StartTime, CRDTOp) of
                 {error, E} ->
-                    {{fail, Idx, E}, PutArgs};
+                    {{fail, Idx, E}, PutArgs, State2};
                 ObjToStore ->
                     {{true, ObjToStore},
                      PutArgs#putargs{index_specs=IndexSpecs,
-                                     is_index=IndexBackend}}
+                                     is_index=IndexBackend}, State2}
             end;
         {ok, OldObj} ->
-            case put_merge(Coord, LWW, OldObj, RObj, VId, Cntr, StartTime) of
+            {ActorId, State2} = maybe_new_key_epoch(Coord, State, OldObj, RObj),
+            case put_merge(Coord, LWW, OldObj, RObj, ActorId, StartTime) of
                 {oldobj, OldObj1} ->
-                    {{false, OldObj1}, PutArgs};
+                    {{false, OldObj1}, PutArgs, State2};
                 {newobj, NewObj} ->
                     AMObj = enforce_allow_mult(NewObj, BProps),
                     IndexSpecs = case IndexBackend of
@@ -1404,22 +1402,23 @@ prepare_put(#state{vnodeid=VId,
                                                  riak_object:diff_index_specs(AMObj,
                                                                               OldObj)
                                          end;
-                                    false ->
+                                     false ->
                                          []
-                    end,
+                                 end,
                     ObjToStore = case PruneTime of
                                      undefined ->
                                          AMObj;
                                      _ ->
                                          riak_object:prune_vclock(AMObj, PruneTime, BProps)
-                    end,
-                    case handle_crdt(Coord, CRDTOp, VId, ObjToStore) of
+                                 end,
+                    %% @todo What ID for CRDTs? The Epoch ID? The bare vnode id?
+                    case handle_crdt(Coord, CRDTOp, ActorId, ObjToStore) of
                         {error, E} ->
-                            {{fail, Idx, E}, PutArgs};
+                            {{fail, Idx, E}, PutArgs, State2};
                         ObjToStore2 ->
                             {{true, ObjToStore2},
                              PutArgs#putargs{index_specs=IndexSpecs,
-                                             is_index=IndexBackend}}
+                                             is_index=IndexBackend}, State2}
                     end
             end
     end.
@@ -1552,13 +1551,13 @@ select_newest_content(Mult) ->
          Mult)).
 
 %% @private
-put_merge(false, true, _CurObj, UpdObj, _VId, _Cntr, _StartTime) -> % coord=false, LWW=true
+put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
     %% @TODO Do we need to mark the clock dirty here? I think so
     %% @TODO Check the clock of the incoming object, if it is more advanced
     %% for our actor than we are then something is amiss, and we need
     %% to mark the actor as dirty for this key
     {newobj, UpdObj};
-put_merge(false, false, CurObj, UpdObj, _VId, _Cntr, _StartTime) -> % coord=false, LWW=false
+put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
     %% a downstream merge, or replication of a coordinated PUT
     %% Merge the value received with local replica value
     %% and store the value IFF it is different to what we already have
@@ -1573,22 +1572,10 @@ put_merge(false, false, CurObj, UpdObj, _VId, _Cntr, _StartTime) -> % coord=fals
         false ->
             {newobj, ResObj}
     end;
-put_merge(true, LWW, CurObj, UpdObj, VId, Cntr, StartTime) ->
+put_merge(true, LWW, CurObj, UpdObj, VId, StartTime) ->
     %% @TODO If the current object has a dirty clock, we need to start
     %% a new per key epoch and mark clock as clean.
-    %%
-    %% If this is the first time VId has acted on this key, we need a
-    %% new epoch, See `highest_actor/2', it returns the given base VId
-    %% if the actor has never acted on the objects. This is like a
-    %% `not_found' in the sense this actor has never acted on this
-    %% key.
-    Actor = case highest_actor(VId, [CurObj, UpdObj]) of
-                VId ->
-                    key_epoch_actor(VId, Cntr);
-                Existing ->
-                    Existing
-            end,
-    {newobj, riak_object:update(LWW, CurObj, UpdObj, Actor, StartTime)}.
+    {newobj, riak_object:update(LWW, CurObj, UpdObj, VId, StartTime)}.
 
 %% @private
 do_get(_Sender, BKey, ReqID,
@@ -1921,10 +1908,11 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
             %% Merge handoff values with the current - possibly discarding
             %% if out of date.  Ok to set VId/Starttime undefined as
             %% they are not used for non-coordinating puts.
-            case put_merge(false, false, OldObj, DiffObj, 0, undefined, undefined) of
-                {oldobj, _} ->
+            case put_merge(false, false, OldObj, DiffObj, undefined, undefined) of
+                %% Only coordinating puts mutate vnode state, so ignore returned state
+                {oldobj, _, StateData} ->
                     {ok, ModState};
-                {newobj, NewObj} ->
+                {newobj, NewObj, StateData} ->
                     AMObj = enforce_allow_mult(NewObj, riak_core_bucket:get_bucket(Bucket)),
                     case IndexBackend of
                         true ->
@@ -2311,11 +2299,8 @@ new_md_cache(VId) ->
 
 %% @private increment the per vnode coordinating put counter,
 %% flushing/leasing if needed
--spec maybe_update_counter(boolean(), state()) -> state().
-maybe_update_counter(false, State) ->
-    %% Only increment on coordinating puts
-    State;
-maybe_update_counter(true, State=#state{counter=CounterState}) ->
+-spec update_counter(state()) -> state().
+update_counter(State=#state{counter=CounterState}) ->
     #counter_state{cnt=Counter0} = CounterState,
     Counter = Counter0 +  1,
     maybe_lease_counter(State#state{counter=CounterState#counter_state{cnt=Counter}}).
@@ -2405,6 +2390,49 @@ non_neg_env(App, EnvVar, Default) when is_integer(Default),
             Default
     end.
 
+%% @private to keep put_merge/6 side effect free (as it is exported
+%% for testing) introspect the state and local/incoming objects and
+%% return the actor ID for a put, and possibly updated state. NOTE
+%% side effects, in that the vnode status on disk can change.
+-spec maybe_new_key_epoch(boolean(), #state{},
+                          riak_object:riak_object(),
+                          riak_object:riak_object()) ->
+                                 {binary(), #state{}}.
+maybe_new_key_epoch(false, State, _, _) ->
+    {State#state.vnodeid, State};
+maybe_new_key_epoch(true, State, LocalObj, IncomingObj) ->
+    #state{vnodeid=VId} = State,
+    %% @TODO (rdb) maybe optimise since highly likey both objects
+    %% share the majority of actors, maybe a single umerged list of
+    %% actors, somehow tagged by local | incoming?
+    case highest_actor(VId, LocalObj) of
+        {LocalId, LocalEpoch} when LocalEpoch == 0,
+                                   LocalId == VId ->
+            %% Never acted on this object before, new epoch!
+            new_key_epoch(State);
+        {LocalId, LocalEpoch} ->
+            case highest_actor(VId, IncomingObj) of
+                {_InId, InEpoch} when InEpoch > LocalEpoch ->
+                    %% In coming actor greater than local, some
+                    %% byzantine failure, new epoch!
+                    %% @TODO (rdb) do we log/stat here?
+                    new_key_epoch(State);
+                _ ->
+                    %% Return the highest local epoch'd ID for this
+                    %% key. This means that objects written
+                    %% pre-key-epochs will get a new actor ID
+                    %% (automatic upgrade)
+                    {LocalId, State}
+            end
+    end.
+
+%% @private generate an epoch actor, and update the vnode state.
+-spec new_key_epoch(#state{}) -> {EpochActor :: binary(), #state{}}.
+new_key_epoch(State) ->
+    NewState=#state{counter=#counter_state{cnt=Cntr}, vnodeid=VId} = update_counter(State),
+    EpochId = key_epoch_actor(VId, Cntr),
+    {EpochId, NewState}.
+
 %% @private generate a new epoch ID for a key
 -spec key_epoch_actor(vnodeid(), pos_integer()) -> binary().
 key_epoch_actor(ActorBin, Cntr) ->
@@ -2414,24 +2442,17 @@ key_epoch_actor(ActorBin, Cntr) ->
 %% key. It is the actor we want to increment for the current event,
 %% given that we are not starting a new epoch for the key.  Must work
 %% with non-epochal and epochal actors.
--spec highest_actor(binary(), [riak_object:riak_object()]) ->
+-spec highest_actor(binary(), riak_object:riak_object()) ->
     binary().
-highest_actor(ActorBase, Objs) ->
-    Actors = lists:foldl(fun(Obj, Actors) ->
-                                 lists:umerge(riak_object:all_actors(Obj), Actors)
-                         end,
-                         [],
-                         Objs),
+highest_actor(ActorBase, Obj) ->
+    Actors = riak_object:all_actors(Obj),
     highest_actor(ActorBase, Actors, ActorBase, 0).
 
-%% @private find the highest actor for the `ActorBase'. If it is not
-%% present then return the `ActorBase'
-%%
-%% @TODO what if the actor is not present? Does that mean something?
-%% Need to dirty up?
--spec highest_actor(binary(), [binary()], binary(), non_neg_integer()) -> binary().
-highest_actor(_ActorBase, [], Actor, _MaxEpoch) ->
-    Actor;
+%% @private find the highest actor and epoch for the `ActorBase'. If
+%% it is not present then return the `ActorBase' and zero.
+-spec highest_actor(binary(), [binary()], binary(), non_neg_integer()) -> {binary(), non_neg_integer()}.
+highest_actor(_ActorBase, [], Actor, MaxEpoch) ->
+    {Actor, MaxEpoch};
 highest_actor(ActorBase, [<<ActorBase:8/binary, EpochCntr:32/integer>>=A | Rest], _HighestActor, MaxEpoch) when
       EpochCntr > MaxEpoch ->
     highest_actor(ActorBase, Rest, A, EpochCntr);
@@ -2440,7 +2461,7 @@ highest_actor(ActorBase, [<<ActorBase:8/binary, EpochCntr:32/integer>> | Rest], 
     highest_actor(ActorBase, Rest, HighestActor, MaxEpoch);
 %% Since an actor without an epoch is lower than an actor with one,
 %% this means in the unmatched case, the ActorBase passes through as
-%% the highest actor
+%% the highest actor, and the epoch (of zero) passes through too.
 highest_actor(ActorBase, [_ | Rest], HighestActor, MaxEpoch) ->
     highest_actor(ActorBase, Rest, HighestActor, MaxEpoch).
 
