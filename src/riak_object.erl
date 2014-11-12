@@ -76,6 +76,7 @@
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
+-export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([hash/1, approximate_size/2]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
@@ -658,11 +659,11 @@ vclock_descends(#r_object{vclock=ObjVC}, VC) ->
 all_actors(#r_object{vclock=VC}) ->
     vclock:all_nodes(VC).
 
-%% @doc When the next coordinating write from the `Actor' will require
-%% a new per-key-epoch. Marks the `Actor' as `dirty'.
-%% -spec needs_key_epoch(vclock:vclock_node(), riak_object()) -> riak_object().
-%% needs_key_epoch(Actor, RObj) ->
-
+%%$ @doc get the counter for the given actor, 0 if not present
+-spec actor_counter(vclock:vclock_node(), riak_object()) ->
+                           non_neg_integer().
+actor_counter(Actor, #r_object{vclock=VC}) ->
+    vclock:get_counter(Actor, VC).
 
 %% @private assign the dot to the value only if DVV is enabled. Only
 %% call with a valid dot. Only assign dot when there is a single value
