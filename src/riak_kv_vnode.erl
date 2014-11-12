@@ -2392,6 +2392,11 @@ non_neg_env(App, EnvVar, Default) when is_integer(Default),
 %% for testing) introspect the state and local/incoming objects and
 %% return the actor ID for a put, and possibly updated state. NOTE
 %% side effects, in that the vnode status on disk can change.
+%% Why might we need a new key epoch?
+%% 1. local not found (handled in prepare_put/3
+%% 2. local found, but never acted on this key before (or don't remember it!)
+%% 3. local found, local acted, but incoming has greater count or actor epoch
+%%    This one is tricky, since it indicates some byzantine failure somewhere.
 -spec maybe_new_key_epoch(boolean(), #state{},
                           riak_object:riak_object(),
                           riak_object:riak_object()) ->
@@ -2404,22 +2409,23 @@ maybe_new_key_epoch(true, State, LocalObj, IncomingObj) ->
     %% share the majority of actors, maybe a single umerged list of
     %% actors, somehow tagged by local | incoming?
     case highest_actor(VId, LocalObj) of
-        {LocalId, LocalEpoch} when LocalEpoch == 0,
-                                   LocalId == VId ->
-            %% Never acted on this object before, new epoch!
+        {undefined, 0, 0} -> %% Not present locally
+            %% Never acted on this object before, new epoch.
             new_key_epoch(State);
-        {LocalId, LocalEpoch} ->
+        {LocalId, LocalEpoch, LocalCntr} -> %% Present locally
             case highest_actor(VId, IncomingObj) of
-                {_InId, InEpoch} when InEpoch > LocalEpoch ->
-                    %% In coming actor greater than local, some
-                    %% byzantine failure, new epoch!
+                {_InId, InEpoch, InCntr} when InEpoch > LocalEpoch;
+                                              InCntr > LocalCntr ->
+                    %% In coming actor-epoch or counter greater than
+                    %% local, some byzantine failure, new epoch.
+                    %%
                     %% @TODO (rdb) do we log/stat here?
                     new_key_epoch(State);
-                _ ->
-                    %% Return the highest local epoch'd ID for this
-                    %% key. This means that objects written
-                    %% pre-key-epochs will get a new actor ID
-                    %% (automatic upgrade)
+                _ -> %% just use local id
+                    %% Return the highest local epoch ID for this
+                    %% key. This may be the pre-epoch ID (i.e. no
+                    %% epoch), which is good, no reason to force a new
+                    %% epoch on all old keys.
                     {LocalId, State}
             end
     end.
@@ -2441,14 +2447,15 @@ key_epoch_actor(ActorBin, Cntr) ->
 %% given that we are not starting a new epoch for the key.  Must work
 %% with non-epochal and epochal actors.
 -spec highest_actor(binary(), riak_object:riak_object()) ->
-    {binary(), non_neg_integer()}.
+    {binary() | undefined, non_neg_integer(), non_neg_integer()}.
 highest_actor(ActorBase, Obj) ->
     Actors = riak_object:all_actors(Obj),
-    highest_actor(ActorBase, Actors, ActorBase, 0).
+    {Actor, Epoch} = highest_actor(ActorBase, Actors, undefined, 0),
+    {Actor, Epoch, riak_object:actor_counter(Actor, Obj)}.
 
 %% @private find the highest actor and epoch for the `ActorBase'. If
 %% it is not present then return the `ActorBase' and zero.
--spec highest_actor(binary(), [binary()], binary(), non_neg_integer()) -> {binary(), non_neg_integer()}.
+-spec highest_actor(binary(), [binary()], binary() | undefined, non_neg_integer()) -> {binary() | undefined, non_neg_integer()}.
 highest_actor(_ActorBase, [], Actor, MaxEpoch) ->
     {Actor, MaxEpoch};
 highest_actor(ActorBase, [<<ActorBase:8/binary, EpochCntr:32/integer>>=A | Rest], _HighestActor, MaxEpoch) when
