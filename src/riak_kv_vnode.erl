@@ -111,7 +111,10 @@
                 target :: pid()}).
 
 -record(counter_state, {
-          %% The number of writes co-ordinated by this vnode
+          %% The number of new epoch writes co-ordinated by this vnode
+          %% What even is a "key epoch?" It is any time a key is
+          %% (re)created. A new write, a write not yet coordinated by
+          %% this vnode, a write where local state is unreadable.
           cnt = 0 :: non_neg_integer(),
           %% Counter leased up-to. For totally new state/id
           %% this will be that flush threshold See config value
@@ -148,6 +151,7 @@
 -type index() :: non_neg_integer().
 -type state() :: #state{}.
 -type vnodeid() :: binary().
+-type counter_lease_error() :: {error, counter_lease_max_errors | counter_lease_timeout}.
 
 -define(MD_CACHE_BASE, "riak_kv_vnode_md_cache").
 -define(DEFAULT_HASHTREE_TOKENS, 90).
@@ -1409,7 +1413,6 @@ prepare_put(State=#state{mod=Mod,
                                      _ ->
                                          riak_object:prune_vclock(AMObj, PruneTime, BProps)
                                  end,
-                    %% @todo What ID for CRDTs? The Epoch ID? The bare vnode id?
                     case handle_crdt(Coord, CRDTOp, ActorId, ObjToStore) of
                         {error, E} ->
                             {{fail, Idx, E}, PutArgs, State2};
@@ -1907,7 +1910,6 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
             %% if out of date.  Ok to set VId/Starttime undefined as
             %% they are not used for non-coordinating puts.
             case put_merge(false, false, OldObj, DiffObj, undefined, undefined) of
-                %% Only coordinating puts mutate vnode state, so ignore returned state
                 {oldobj, _} ->
                     {ok, ModState};
                 {newobj, NewObj} ->
@@ -2312,7 +2314,7 @@ update_counter(State=#state{counter=CounterState}) ->
 %% the lease, do nothing.  If not yet blocking(equal) and we already
 %% asked for a new lease, do nothing.
 maybe_lease_counter(State=#state{counter=#counter_state{cnt=Lease, lease=Lease}}) ->
-    %% Block until we get a new lease, or crash
+    %% Block until we get a new lease, or crash the vnode
     {ok, NewState} = blocking_lease_counter(State),
     NewState;
 maybe_lease_counter(State=#state{counter=#counter_state{leasing=true}}) ->
@@ -2335,12 +2337,21 @@ maybe_lease_counter(State) ->
 %% from the mgr. Block until we receive a lease. If we get an exit,
 %% retry a number of times. If we get neither in a reasonable time,
 %% return an error.
+-spec blocking_lease_counter(#state{}) ->
+                                    {ok, #state{}} |
+                                    counter_lease_error().
 blocking_lease_counter(State) ->
     {MaxErrs, MaxTime} = get_counter_wait_values(),
     blocking_lease_counter(State, {0, MaxErrs, MaxTime}).
 
-blocking_lease_counter(State, {MaxErrs, MaxErrs, _}) ->
-    {error, counter_lease_max_errors, State};
+-spec blocking_lease_counter(#state{}, {Errors :: non_neg_integer(),
+                                        MaxErrors :: non_neg_integer(),
+                                        TimeRemainingMillis :: non_neg_integer()}
+                            ) ->
+                                    {ok, #state{}} |
+                                    counter_lease_error().
+blocking_lease_counter(_State, {MaxErrs, MaxErrs, _}) ->
+    {error, counter_lease_max_errors};
 blocking_lease_counter(State, {ErrCnt, MaxErrors, MaxTime}) ->
     #state{idx=Index, status_mgr_pid=Pid, counter=CounterState} = State,
     #counter_state{lease_size=LeaseSize} = CounterState,
@@ -2358,7 +2369,7 @@ blocking_lease_counter(State, {ErrCnt, MaxErrors, MaxTime}) ->
             {ok, State#state{counter=NewCS, vnodeid=VnodeId}}
     after
         MaxTime ->
-            {error, counter_lease_timeout, State}
+            {error, counter_lease_timeout}
     end.
 
 %% @private get the configured values for blocking waiting on
@@ -2368,7 +2379,7 @@ blocking_lease_counter(State, {ErrCnt, MaxErrors, MaxTime}) ->
                                       MaxTime :: non_neg_integer()}.
 get_counter_wait_values() ->
     MaxErrors = non_neg_env(riak_kv, counter_lease_errors, ?DEFAULT_CNTR_LEASE_ERRS),
-    MaxTime = non_neg_env(riak_kv, counter_lease_errors, ?DEFAULT_CNTR_LEASE_ERRS),
+    MaxTime = non_neg_env(riak_kv, counter_lease_timeout, ?DEFAULT_CNTR_LEASE_TO),
     {MaxErrors, MaxTime}.
 
 %% @private we don't want to crash riak because of a dodgy config
@@ -2384,7 +2395,9 @@ non_neg_env(App, EnvVar, Default) when is_integer(Default),
                N > 0 ->
             N;
         X ->
-            lager:warning("Non-integer/Negative integer ~p for vnode counter config ~p", [X, EnvVar]),
+            lager:warning("Non-integer/Negative integer ~p for vnode counter config ~p."
+                          " Using default ~p",
+                          [X, EnvVar, Default]),
             Default
     end.
 
@@ -2402,6 +2415,8 @@ non_neg_env(App, EnvVar, Default) when is_integer(Default),
                           riak_object:riak_object()) ->
                                  {binary(), #state{}}.
 maybe_new_key_epoch(false, State, _, _) ->
+    %% Never add a new key epoch when not coordinating
+    %% @TODO (rdb) need to mark actor as dirty though.
     {State#state.vnodeid, State};
 maybe_new_key_epoch(true, State, LocalObj, IncomingObj) ->
     #state{vnodeid=VId} = State,
@@ -2445,12 +2460,19 @@ key_epoch_actor(ActorBin, Cntr) ->
 %% @private highest actor is the latest/greatest epoch actor for a
 %% key. It is the actor we want to increment for the current event,
 %% given that we are not starting a new epoch for the key.  Must work
-%% with non-epochal and epochal actors.
+%% with non-epochal and epochal actors.  The return tuple is
+%% `{ActorId, Epoch, Counter}' where `ActorId' is the highest ID
+%% starting with `ActorBase' that has acted on this key, undefined if
+%% never acted before. `KeyEpoch' is the highest epoch for the
+%% `ActorBase'. `Counter' is the greatest event seen by the `VnodeId'.
 -spec highest_actor(binary(), riak_object:riak_object()) ->
-    {binary() | undefined, non_neg_integer(), non_neg_integer()}.
+    {ActorId :: binary() | undefined,
+     KeyEpoch :: non_neg_integer(),
+     Counter :: non_neg_integer()}.
 highest_actor(ActorBase, Obj) ->
     Actors = riak_object:all_actors(Obj),
     {Actor, Epoch} = highest_actor(ActorBase, Actors, undefined, 0),
+    %% get the greatest event for the highest/latest actor
     {Actor, Epoch, riak_object:actor_counter(Actor, Obj)}.
 
 %% @private find the highest actor and epoch for the `ActorBase'. If
