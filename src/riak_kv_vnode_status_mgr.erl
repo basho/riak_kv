@@ -279,7 +279,6 @@ assign_vnodeid_restart_same_ts_test() ->
     ?assertEqual(<<1, 2, 3, 4, 70, 116, 143, 150>>, Vid1),
     %% Simulate clear
     Status2 = proplists:delete(vnodeid, Status1),
-    ?debugFmt("Status ~p", [Status2]),
     %% Reassign
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
     ?assertEqual(<<1, 2, 3, 4, 70, 116, 143, 151>>, Vid2).
