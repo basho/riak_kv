@@ -255,7 +255,7 @@ assign_vnodeid(Now, NodeId, Status) ->
 %% status()}' or `{error, Reason}'. If the file does not exist, and
 %% empty status is returned.
 -spec read_vnode_status(file:filename()) -> {ok, status()} |
-                                            {error, term()}.
+                                       {error, term()}.
 read_vnode_status(File) ->
     case file:consult(File) of
         {ok, [Status]} when is_list(Status) ->
@@ -271,7 +271,7 @@ read_vnode_status(File) ->
 %% @private write the vnode status. This is why the file is guarded by
 %% the process. This file should have no concurrent access, and MUST
 %% not be written at any other place/time in the system.
--spec write_vnode_status(status(), file:filname()) -> ok.
+-spec write_vnode_status(status(), file:filename()) -> ok.
 write_vnode_status(Status, File) ->
     VersionedStatus = replace(version, ?VNODE_STATUS_VERSION, Status),
     riak_core_util:replace_file(File, io_lib:format("~p.", [VersionedStatus])).
