@@ -31,7 +31,6 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-
 %% API
 -export([start_link/2, get_vnodeid_and_counter/2, lease_counter/2, clear_vnodeid/1]).
 
@@ -51,6 +50,9 @@
          }).
 
 -type status() :: [proplists:property()] | [].
+-type init_args() :: [init_arg()].
+-type init_arg() :: pid() | non_neg_integer().
+-type blocking_req() :: clear | {vnodeid, LeaseSize :: non_neg_integer()}.
 
 %% only 32 bits per counter, when you hit that, get a new vnode id
 -define(MAX_CNTR, 4294967295).
@@ -63,9 +65,9 @@
 %% @doc
 %% Starts the server
 %%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
+-spec start_link(pid(), non_neg_integer()) -> {ok, pid()} | {error, term()}.
 start_link(VnodePid, Index) ->
     gen_server:start_link(?MODULE, [VnodePid, Index], []).
 
@@ -78,6 +80,10 @@ start_link(VnodePid, Index) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
+-spec get_vnodeid_and_counter(pid(), non_neg_integer()) ->
+                                     {ok, {VnodeId :: binary(),
+                                           Counter :: non_neg_integer(),
+                                           LeaseSize :: non_neg_integer()}}.
 get_vnodeid_and_counter(Pid, LeaseSize) when is_integer(LeaseSize),
                                           LeaseSize > 0,
                                           LeaseSize =< ?MAX_CNTR ->
@@ -86,17 +92,31 @@ get_vnodeid_and_counter(Pid, LeaseSize) when is_integer(LeaseSize),
     gen_server:call(Pid, {vnodeid, LeaseSize}).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
+%% @doc Asynchronously lease increments for a counter. `Pid' is the
+%% server pid, and `LeaseSize' is the number of increments to lease. A
+%% `LeaseSize' of 10,000 means that a vnode can handle 10,000 new key
+%% epochs before asking for a new counter. The trade-off here is
+%% between the frequency of flushing and the speed with which a
+%% frequently crashing vnode burns through the 32bit integer space,
+%% thus requiring a new vnodeid. The calling vnode should handle the
+%% response message of `{counter_lease, {From :: pid(), VnodeId ::
+%% binary(), NewLease :: non_neg_integer()}}'
 %%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
+-spec lease_counter(pid(), non_neg_integer()) -> ok.
 lease_counter(Pid, LeaseSize) when is_integer(LeaseSize),
                                           LeaseSize > 0,
                                           LeaseSize =< ?MAX_CNTR ->
     gen_server:cast(Pid, {lease, LeaseSize}).
 
+%%--------------------------------------------------------------------
+%% @doc Blocking call to remove the vnode id and counter and from
+%% disk. Used when a vnode has finished and will not act again.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec clear_vnodeid(pid()) -> {ok, cleared}.
 clear_vnodeid(Pid) ->
     gen_server:call(Pid, clear).
 
@@ -106,33 +126,26 @@ clear_vnodeid(Pid) ->
 
 %%--------------------------------------------------------------------
 %% @private
-%% @doc
-%% Initializes the server
+%% @doc Initializes the server, Init Args must be `[VnodePid
+%% :: pid(), Index :: non_neg_integer()]' where the first element is
+%% the pid of the vnode this manager works for, and the second is the
+%% vnode's index/partition number (used for locating the status file.)
 %%
-%% @spec init(Args) -> {ok, State} |
-%%                     {ok, State, Timeout} |
-%%                     ignore |
-%%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
+-spec init(Args :: init_args()) -> {ok, #state{}}.
 init([VnodePid, Index]) ->
     StatusFilename = vnode_status_filename(Index),
     {ok, #state{status_file=StatusFilename, index=Index, vnode_pid=VnodePid}}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling call messages
-%%
-%% @spec handle_call(Request, From, State) ->
-%%                                   {reply, Reply, State} |
-%%                                   {reply, Reply, State, Timeout} |
-%%                                   {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, Reply, State} |
-%%                                   {stop, Reason, State}
-%% @end
+%% @private handle calls
 %%--------------------------------------------------------------------
+-spec handle_call(blocking_req(), {pid(), term()}, #state{}) ->
+                         {reply, {ok, {VnodeId :: binary(),
+                                       Counter :: non_neg_integer(),
+                                       LeaseTo :: non_neg_integer()}},
+                          #state{}}.
 handle_call({vnodeid, LeaseSize}, _From, State) ->
     #state{status_file=File} = State,
     {ok, Status} = read_vnode_status(File),
@@ -141,9 +154,7 @@ handle_call({vnodeid, LeaseSize}, _From, State) ->
     %% will always be moving upwards. A vnode that starts, and
     %% crashes, and starts, and crashes over and over will burn
     %% through a lot of counter (or vnode ids (if the leases are very
-    %% large.)) See get_counter_lease for the meaning of ?MAX_CNTR
-    %% here. It means that the counter is `undefined', so we need a
-    %% new vnodeid, and start the counter from zero.
+    %% large.))
     {Counter, LeaseTo, VnodeId, Status2} = get_counter_lease(LeaseSize, Status),
     ok = write_vnode_status(Status2, File),
     Res = {ok, {VnodeId, Counter, LeaseTo}},
@@ -153,22 +164,19 @@ handle_call(clear, _From, State) ->
     {ok, Status} = read_vnode_status(File),
     Status2 = proplists:delete(counter, proplists:delete(vnodeid, Status)),
     ok = write_vnode_status(Status2, File),
-    {reply, {ok, cleared}, State};
-handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
+    {reply, {ok, cleared}, State}.
 
 %%--------------------------------------------------------------------
 %% @private
 %%--------------------------------------------------------------------
+-spec handle_cast({lease, non_neg_integer()}, #state{}) ->
+                         {noreply, #state{}}.
 handle_cast({lease, LeaseSize}, State) ->
     #state{status_file=File, vnode_pid=Pid} = State,
     {ok, Status} = read_vnode_status(File),
     {_Counter, LeaseTo, VnodeId, UpdStatus} = get_counter_lease(LeaseSize, Status),
     ok = write_vnode_status(UpdStatus, File),
-    Pid ! {counter_lease, {VnodeId, LeaseTo}},
-    {noreply, State};
-handle_cast(_Msg, State) ->
+    Pid ! {counter_lease, {self(), VnodeId, LeaseTo}},
     {noreply, State}.
 
 handle_info(_Info, State) ->
@@ -219,6 +227,9 @@ get_counter_lease(LeaseSize, Status) ->
 replace(Key, Value, Status) ->
     [{Key, Value} | proplists:delete(Key, Status)].
 
+%% @private generate a file name for the vnode status, and ensure the
+%% path to exixts.
+-spec vnode_status_filename(non_neg_integer()) -> file:filename().
 vnode_status_filename(Index) ->
     P_DataDir = app_helper:get_env(riak_core, platform_data_dir),
     VnodeStatusDir = app_helper:get_env(riak_kv, vnode_status,
@@ -227,8 +238,8 @@ vnode_status_filename(Index) ->
     ok = filelib:ensure_dir(Filename),
     Filename.
 
-%% Assign a unique vnodeid, making sure the timestamp is unique by incrementing
-%% into the future if necessary.
+%% @private Assign a unique vnodeid, making sure the timestamp is
+%% unique by incrementing into the future if necessary.
 -spec assign_vnodeid(erlang:timestamp(), binary(), status()) ->
                             {binary(), status()}.
 assign_vnodeid(Now, NodeId, Status) ->
@@ -240,6 +251,11 @@ assign_vnodeid(Now, NodeId, Status) ->
     UpdStatus = replace(vnodeid, VnodeId, replace(last_epoch, VnodeEpoch, Status)),
     {VnodeId, UpdStatus}.
 
+%% @private read the vnode status from `File'. Returns `{ok,
+%% status()}' or `{error, Reason}'. If the file does not exist, and
+%% empty status is returned.
+-spec read_vnode_status(file:filename()) -> {ok, status()} |
+                                            {error, term()}.
 read_vnode_status(File) ->
     case file:consult(File) of
         {ok, [Status]} when is_list(Status) ->
@@ -252,7 +268,10 @@ read_vnode_status(File) ->
     end.
 
 -define(VNODE_STATUS_VERSION, 2).
-
+%% @private write the vnode status. This is why the file is guarded by
+%% the process. This file should have no concurrent access, and MUST
+%% not be written at any other place/time in the system.
+-spec write_vnode_status(status(), file:filname()) -> ok.
 write_vnode_status(Status, File) ->
     VersionedStatus = replace(version, ?VNODE_STATUS_VERSION, Status),
     riak_core_util:replace_file(File, io_lib:format("~p.", [VersionedStatus])).

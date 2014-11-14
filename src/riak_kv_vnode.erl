@@ -1177,10 +1177,10 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
                        State#state{modstate=ModState1}
                end,
     {ok, UpdState};
-handle_info({counter_lease, {VnodeId, NewLease}}, State) ->
+handle_info({counter_lease, {FromPid, VnodeId, NewLease}}, State=#state{status_mgr_pid=FromPid}) ->
     #state{counter=CounterState} = State,
     #counter_state{lease=OldLease} = CounterState,
-    %% Paranoia? If the NewLease < OldLease something is very broken,
+    %% @TODO (rdb) Paranoia? If the NewLease < OldLease something is very broken,
     %% maybe crash here?
     Lease = max(NewLease, OldLease),
     CS1 = CounterState#counter_state{lease=Lease, leasing=false},
@@ -1191,7 +1191,7 @@ handle_exit(Pid, Reason, State=#state{status_mgr_pid=Pid, idx=Index, counter=Cnt
     lager:error("Vnode status manager exit ~p", [Reason]),
     %% The status manager died, start a new one
     #counter_state{lease_size=LeaseSize, leasing=Leasing} = CntrState,
-    {ok, NewPid} = riak_kv_vnode_status_mgr:start_link(Index, self()),
+    {ok, NewPid} = riak_kv_vnode_status_mgr:start_link(self(), Index),
 
     case Leasing of
         false ->
@@ -2350,7 +2350,7 @@ blocking_lease_counter(State) ->
                             ) ->
                                     {ok, #state{}} |
                                     counter_lease_error().
-blocking_lease_counter(_State, {MaxErrs, MaxErrs, _}) ->
+blocking_lease_counter(_State, {MaxErrs, MaxErrs, _MaxTime}) ->
     {error, counter_lease_max_errors};
 blocking_lease_counter(State, {ErrCnt, MaxErrors, MaxTime}) ->
     #state{idx=Index, status_mgr_pid=Pid, counter=CounterState} = State,
@@ -2359,12 +2359,12 @@ blocking_lease_counter(State, {ErrCnt, MaxErrors, MaxTime}) ->
     receive
         {'EXIT', Pid, Reason} ->
             lager:error("Failed to lease counter ~p", [Reason]),
-            {ok, NewPid} = riak_kv_vnode_status_mgr:start_link(Index, self()),
+            {ok, NewPid} = riak_kv_vnode_status_mgr:start_link(self(), Index),
             ok = riak_kv_vnode_status_mgr:lease_counter(NewPid, LeaseSize),
             NewState = State#state{status_mgr_pid=NewPid},
             Elapsed = timer:now_diff(os:timestamp(), Start),
             blocking_lease_counter(NewState, {ErrCnt+1, MaxErrors, MaxTime - Elapsed});
-        {counter_lease, {VnodeId, NewLease}} ->
+        {counter_lease, {Pid, VnodeId, NewLease}} ->
             NewCS = CounterState#counter_state{lease=NewLease, leasing=false},
             {ok, State#state{counter=NewCS, vnodeid=VnodeId}}
     after
