@@ -32,7 +32,7 @@
 -endif.
 
 %% API
--export([start_link/2, get_vnodeid_and_counter/2, lease_counter/2, clear_vnodeid/1]).
+-export([start_link/2, get_vnodeid_and_counter/2, lease_counter/2, clear_vnodeid/1, status/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -120,6 +120,9 @@ lease_counter(Pid, LeaseSize) when is_integer(LeaseSize),
 clear_vnodeid(Pid) ->
     gen_server:call(Pid, clear).
 
+status(Pid) ->
+    gen_server:call(Pid, status).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -164,7 +167,11 @@ handle_call(clear, _From, State) ->
     {ok, Status} = read_vnode_status(File),
     Status2 = proplists:delete(counter, proplists:delete(vnodeid, Status)),
     ok = write_vnode_status(Status2, File),
-    {reply, {ok, cleared}, State}.
+    {reply, {ok, cleared}, State};
+handle_call(status, _From, State) ->
+    #state{status_file=File} = State,
+    {ok, Status} = read_vnode_status(File),
+    {reply, {ok, Status}, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -206,6 +213,10 @@ get_counter_lease(LeaseSize, Status) ->
                                                 Status),
             {0, LeaseSize, VnodeId, replace(counter, LeaseSize, Status2)};
         true ->
+            %% The lease on disk exists, and is less than the max.
+            %% @TODO (rdb) fudge factor? Should it be at least N greater than max?
+            %% otherwise you might flush, only to hand out a lease of 1!
+            %%
             %% Make a lease that is greater than that on disk, but not
             %%  larger than the 32 bit int limit.  This may be a lease
             %%  smaller than request. Say LeaseSize is 4 billion, and
