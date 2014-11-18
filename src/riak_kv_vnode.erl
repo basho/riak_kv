@@ -445,7 +445,7 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
                Sender, State=#state{idx=Idx}) ->
     StartTS = os:timestamp(),
     riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
-    UpdState = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
+    {_Reply, UpdState} = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
     update_vnode_stats(vnode_put, Idx, StartTS),
     {noreply, UpdState};
 
@@ -860,17 +860,52 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
             {noreply, State}
     end.
 
-%% While in handoff, vnodes have the option of returning {forward, State}
-%% which will cause riak_core to forward the request to the handoff target
-%% node. For riak_kv, we issue a put locally as well as forward it in case
-%% the vnode has already handed off the previous version. All other requests
-%% are handled locally and not forwarded since the relevant data may not have
-%% yet been handed off to the target node. Since we do not forward deletes it
-%% is possible that we do not clear a tombstone that was already handed off.
-%% This is benign as the tombstone will eventually be re-deleted.
+%% While in handoff, vnodes have the option of returning {forward,
+%% State}, or indeed, {forward, Req, State} which will cause riak_core
+%% to forward the request to the handoff target node. For riak_kv, we
+%% issue a put locally as well as forward it in case the vnode has
+%% already handed off the previous version. All other requests are
+%% handled locally and not forwarded since the relevant data may not
+%% have yet been handed off to the target node. Since we do not
+%% forward deletes it is possible that we do not clear a tombstone
+%% that was already handed off.  This is benign as the tombstone will
+%% eventually be re-deleted. NOTE: this makes write requests N+M where
+%% M is the number of vnodes forwarding.
 handle_handoff_command(Req=?KV_PUT_REQ{}, Sender, State) ->
-    {noreply, NewState} = handle_command(Req, Sender, State),
-    {forward, NewState};
+    ?KV_PUT_REQ{options=Options} = Req,
+    case proplists:get_value(coord, Options, false) of
+        false ->
+            {noreply, NewState} = handle_command(Req, Sender, State),
+            {forward, NewState};
+        true ->
+            %% riak_kv#1046 - don't make fake siblings. Perform the
+            %% put, and create a new request to forward on, that
+            %% contains the frontier, much like the value returned to
+            %% a put fsm, then replicated.
+            #state{idx=Idx} = State,
+            ?KV_PUT_REQ{bkey=BKey,
+                        object=Object,
+                        req_id=ReqId,
+                        start_time=StartTime,
+                        options=Options} = Req,
+            StartTS = os:timestamp(),
+            riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
+            {Reply, UpdState} = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
+            update_vnode_stats(vnode_put, Idx, StartTS),
+
+            case Reply of
+                %%  NOTE: Coord is always `returnbody` as a put arg
+                {dw, Idx, NewObj, ReqId} ->
+                    %% DO NOT coordinate again at the next owner!
+                    NewReq = Req?KV_PUT_REQ{options=proplists:delete(coord, Options),
+                                            object=NewObj},
+                    {forward, NewReq, UpdState};
+                _Error ->
+                    %% Don't forward a failed attempt to put, as you
+                    %% need the successful object
+                    {noreply, UpdState}
+            end
+    end;
 %% Handle all unspecified cases locally without forwarding
 handle_handoff_command(Req, Sender, State) ->
     handle_command(Req, Sender, State).
@@ -1042,7 +1077,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     riak_core_vnode:reply(Sender, Reply),
 
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
-    UpdState.
+    {Reply, UpdState}.
 
 do_backend_delete(BKey, RObj, State = #state{mod = Mod, modstate = ModState}) ->
     %% object is a tombstone or all siblings are tombstones
