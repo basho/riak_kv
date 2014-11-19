@@ -32,7 +32,7 @@
 -endif.
 
 %% API
--export([start_link/2, get_vnodeid_and_counter/2, lease_counter/2, clear_vnodeid/1, status/1]).
+-export([start_link/2, get_vnodeid_and_counter/2, lease_counter/2, clear_vnodeid/1, status/1, stop/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -123,6 +123,9 @@ clear_vnodeid(Pid) ->
 status(Pid) ->
     gen_server:call(Pid, status).
 
+stop(Pid) ->
+    gen_server:call(Pid, stop).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -171,7 +174,9 @@ handle_call(clear, _From, State) ->
 handle_call(status, _From, State) ->
     #state{status_file=File} = State,
     {ok, Status} = read_vnode_status(File),
-    {reply, {ok, Status}, State}.
+    {reply, {ok, Status}, State};
+handle_call(stop, _From, State) ->
+    {stop, normal, ok, State}.
 
 %%--------------------------------------------------------------------
 %% @private
