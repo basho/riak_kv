@@ -1127,6 +1127,10 @@ delta_test() ->
 %%%===================================================================
 
 -ifdef(EQC).
+
+esha(Bin) ->
+        crypto:sha(Bin).
+
 sha_test_() ->
     {spawn,
      {timeout, 120,
