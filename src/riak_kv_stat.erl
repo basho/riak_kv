@@ -88,7 +88,7 @@ maybe_dispatch_to_sidejob(false, Arg) ->
     ok.
 
 stat_update_error(Arg, Class, Error) ->
-    lager:error("Failed to update stat ~p due to (~p) ~p.", [Arg, Class, Error]).
+    lager:debug("Failed to update stat ~p due to (~p) ~p.", [Arg, Class, Error]).
 
 %% @doc
 %% Callback used by a {@link riak_kv_stat_worker} to perform actual update
@@ -245,6 +245,8 @@ do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, CRDTMod}) ->
 do_update({read_repairs, Indices, Preflist}) ->
     ok = exometer:update([?PFX, ?APP, node, gets, read_repairs], 1),
     do_repairs(Indices, Preflist);
+do_update(skipped_read_repairs) ->
+    ok = exometer:update([?PFX, ?APP, node, gets, skipped_read_repairs], 1);
 do_update(coord_redir) ->
     exometer:update([?PFX, ?APP, node, puts, coord_redirs], 1);
 do_update(mapper_start) ->
@@ -440,6 +442,7 @@ stats() ->
      {[node, gets, fsm, errors], spiral},
      {[node, gets, objsize], histogram},
      {[node, gets, read_repairs], spiral},
+     {[node, gets, skipped_read_repairs], spiral},
      {[node, gets, siblings], histogram},
      {[node, gets, time], histogram},
      {[node, gets, counter], spiral},
