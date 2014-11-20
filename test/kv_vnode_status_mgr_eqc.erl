@@ -26,28 +26,29 @@ initial_state() ->
 
 %% ------ Grouped operator: lease_counter
 lease_counter_args(_S) ->
-    [?SUCHTHAT(Lease, ?LET(I, largeint(), abs(I)), Lease =< ?MAX_INT)].
+    [?SUCHTHAT(Lease, ?LET(I, largeint(), abs(I)), Lease =< ?MAX_INT andalso Lease > 0)].
 
 lease_counter(Lease) ->
     %% @TODO (rdb) handle the 32 bit threshold, roll over to new
     %% id. Basics first.
     [{status, Id, MoCnt, Pid}] = ets:lookup(vnode_status, status),
-    NewLease = MoCnt + Lease,
-    {_, _, NewCntrModel, _}=NewRec = case {MoCnt == ?MAX_INT, NewLease >= ?MAX_INT} of
+    NewMoLease = MoCnt + Lease,
+    {_, _, NewCntrModel, _}=NewRec = case {MoCnt == ?MAX_INT, NewMoLease >=  ?MAX_INT} of
                  {true, _} ->
                      {status, Id, Lease, Pid};
                  {false, true} ->
                      {status, Id, ?MAX_INT, Pid};
                  {false, false} ->
-                     {status, Id, NewLease, Pid}
+                     {status, Id, NewMoLease, Pid}
              end,
     ets:insert(vnode_status, NewRec),
     ok = riak_kv_vnode_status_mgr:lease_counter(Pid, Lease),
     NewCntr = receive
-                  {counter_lease, {Pid, _VnodeId, NewLease}} ->
+                  {counter_lease, {_, _VnodeId, NewLease}} ->
                       NewLease
               after
                   5000 -> %% 5 seconds (is this ok?)
+%%                      io:format("Expected message from ~p to ~p~n", [Pid, self()]),
                       timeout
               end,
     {NewCntrModel, NewCntr}.
@@ -76,7 +77,7 @@ prop_monotonic() ->
                 {H, S, Res} = run_commands(?MODULE,Cmds),
                 [{status, _, MoCntr, Pid}] = ets:lookup(vnode_status, status),
                 {ok, Status} = riak_kv_vnode_status_mgr:status(Pid),
-                Cnt = proplists:get_value(counter, Status),
+                Cnt = proplists:get_value(counter, Status, 0),
 
                 ets:delete(vnode_status),
                 riak_kv_vnode_status_mgr:clear_vnodeid(Pid),
@@ -90,3 +91,4 @@ prop_monotonic() ->
                                          )
                          )
             end).
+
