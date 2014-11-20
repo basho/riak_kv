@@ -1,7 +1,7 @@
 .PHONY: deps test
 
 # Limit exometer dependencies
-EXOMETER_PACKAGES="(basic), +afunix"
+EXOMETER_PACKAGES="(basic)"
 export EXOMETER_PACKAGES
 
 DIALYZER_FLAGS =
