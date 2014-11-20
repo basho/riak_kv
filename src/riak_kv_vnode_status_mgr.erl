@@ -188,6 +188,7 @@ handle_cast({lease, LeaseSize}, State) ->
     {ok, Status} = read_vnode_status(File),
     {_Counter, LeaseTo, VnodeId, UpdStatus} = get_counter_lease(LeaseSize, Status),
     ok = write_vnode_status(UpdStatus, File),
+%%    io:format("sending lease of ~p from ~p to ~p~n", [LeaseTo, self(), Pid]),
     Pid ! {counter_lease, {self(), VnodeId, LeaseTo}},
     {noreply, State}.
 
