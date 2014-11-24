@@ -168,6 +168,11 @@
 %% die
 -define(DEFAULT_CNTR_LEASE_TO, 5000). % 5 seconds!
 
+%% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
+%% brain. It scans as if true -> thing; true -> thang end. So, here is
+%% a macro, ?ELSE to use in if statements. You're welcome.
+-define(ELSE, true).
+
 -record(putargs, {returnbody :: boolean(),
                   coord:: boolean(),
                   lww :: boolean(),
@@ -1179,11 +1184,7 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
     {ok, UpdState};
 handle_info({counter_lease, {FromPid, VnodeId, NewLease}}, State=#state{status_mgr_pid=FromPid}) ->
     #state{counter=CounterState} = State,
-    #counter_state{lease=OldLease} = CounterState,
-    %% @TODO (rdb) Paranoia? If the NewLease < OldLease something is very broken,
-    %% maybe crash here?
-    Lease = max(NewLease, OldLease),
-    CS1 = CounterState#counter_state{lease=Lease, leasing=false},
+    CS1 = CounterState#counter_state{lease=NewLease, leasing=false},
     State2 = State#state{counter=CS1, vnodeid=VnodeId},
     {ok, State2}.
 
@@ -1193,12 +1194,11 @@ handle_exit(Pid, Reason, State=#state{status_mgr_pid=Pid, idx=Index, counter=Cnt
     #counter_state{lease_size=LeaseSize, leasing=Leasing} = CntrState,
     {ok, NewPid} = riak_kv_vnode_status_mgr:start_link(self(), Index),
 
-    case Leasing of
-        false ->
-            ok;
-        true ->
+    if Leasing ->
             %% Crashed when getting a lease, try again
-            ok = riak_kv_vnode_status_mgr:lease_counter(NewPid, LeaseSize)
+            ok = riak_kv_vnode_status_mgr:lease_counter(NewPid, LeaseSize);
+       ?ELSE ->
+            ok
     end,
     {noreply, State#state{status_mgr_pid=NewPid}};
 handle_exit(_Pid, Reason, State) ->
@@ -2313,7 +2313,8 @@ update_counter(State=#state{counter=CounterState}) ->
 %% asked for a new lease, ask for one.  If we're less than 80% through
 %% the lease, do nothing.  If not yet blocking(equal) and we already
 %% asked for a new lease, do nothing.
-maybe_lease_counter(State=#state{counter=#counter_state{cnt=Lease, lease=Lease}}) ->
+maybe_lease_counter(State=#state{counter=#counter_state{cnt=Lease, lease=Lease,
+                                                        leasing=true}}) ->
     %% Block until we get a new lease, or crash the vnode
     {ok, NewState} = blocking_lease_counter(State),
     NewState;
@@ -2322,14 +2323,13 @@ maybe_lease_counter(State=#state{counter=#counter_state{leasing=true}}) ->
     State;
 maybe_lease_counter(State) ->
     #state{status_mgr_pid=MgrPid, counter=CS=#counter_state{cnt=Cnt, lease=Lease, lease_size=LeaseSize}} = State,
-    %% @TODO configurable??
+    %% @TODO (rdb) configurable??
     %% has more than 80% of the lease been used?
-    CS2 = case (Lease - Cnt) =< 0.2 * LeaseSize of
-        true ->
-            ok = riak_kv_vnode_status_mgr:lease_counter(MgrPid, LeaseSize),
-            CS#counter_state{leasing=true};
-        false ->
-            CS
+    CS2 = if (Lease - Cnt) =< 0.2 * LeaseSize  ->
+                  ok = riak_kv_vnode_status_mgr:lease_counter(MgrPid, LeaseSize),
+                  CS#counter_state{leasing=true};
+             ?ELSE ->
+                  CS
           end,
     State#state{counter=CS2}.
 
@@ -2470,27 +2470,31 @@ key_epoch_actor(ActorBin, Cntr) ->
      KeyEpoch :: non_neg_integer(),
      Counter :: non_neg_integer()}.
 highest_actor(ActorBase, Obj) ->
+    ActorSize = size(ActorBase),
     Actors = riak_object:all_actors(Obj),
-    {Actor, Epoch} = highest_actor(ActorBase, Actors, undefined, 0),
+
+    {Actor, Epoch} = lists:foldl(fun(Actor, {HighestActor, HighestEpoch}) ->
+                                         case Actor of
+                                             <<ActorBase:ActorSize/binary, Epoch:32/integer>>
+                                               when Epoch > HighestEpoch ->
+                                                 {Actor, Epoch};
+                                             %% Since an actor without
+                                             %% an epoch is lower than
+                                             %% an actor with one,
+                                             %% this means in the
+                                             %% unmatched case, the
+                                             %% ActorBase passes
+                                             %% through as the highest
+                                             %% actor, and the epoch
+                                             %% (of zero) passes
+                                             %% through too.
+                                             _ ->  {HighestActor, HighestEpoch}
+                                         end
+                                 end,
+                                 {undefined, 0},
+                                 Actors),
     %% get the greatest event for the highest/latest actor
     {Actor, Epoch, riak_object:actor_counter(Actor, Obj)}.
-
-%% @private find the highest actor and epoch for the `ActorBase'. If
-%% it is not present then return the `ActorBase' and zero.
--spec highest_actor(binary(), [binary()], binary() | undefined, non_neg_integer()) -> {binary() | undefined, non_neg_integer()}.
-highest_actor(_ActorBase, [], Actor, MaxEpoch) ->
-    {Actor, MaxEpoch};
-highest_actor(ActorBase, [<<ActorBase:8/binary, EpochCntr:32/integer>>=A | Rest], _HighestActor, MaxEpoch) when
-      EpochCntr > MaxEpoch ->
-    highest_actor(ActorBase, Rest, A, EpochCntr);
-highest_actor(ActorBase, [<<ActorBase:8/binary, EpochCntr:32/integer>> | Rest], HighestActor, MaxEpoch) when
-      EpochCntr =< MaxEpoch ->
-    highest_actor(ActorBase, Rest, HighestActor, MaxEpoch);
-%% Since an actor without an epoch is lower than an actor with one,
-%% this means in the unmatched case, the ActorBase passes through as
-%% the highest actor, and the epoch (of zero) passes through too.
-highest_actor(ActorBase, [_ | Rest], HighestActor, MaxEpoch) ->
-    highest_actor(ActorBase, Rest, HighestActor, MaxEpoch).
 
 -ifdef(TEST).
 
