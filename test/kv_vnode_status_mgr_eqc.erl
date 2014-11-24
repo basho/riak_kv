@@ -26,31 +26,38 @@ initial_state() ->
 
 %% ------ Grouped operator: lease_counter
 lease_counter_args(_S) ->
-    [?SUCHTHAT(Lease, ?LET(I, largeint(), abs(I)), Lease =< ?MAX_INT andalso Lease > 0)].
+    [
+
+     frequency([{5, ?SUCHTHAT(Lease, ?LET(I, largeint(), abs(I)), Lease =< ?MAX_INT andalso Lease > 0)},
+                {5, ?SUCHTHAT(Lease, ?LET(I, int(), abs(I)), Lease =< ?MAX_INT andalso Lease > 0)}])
+    ].
 
 lease_counter(Lease) ->
     %% @TODO (rdb) handle the 32 bit threshold, roll over to new
     %% id. Basics first.
-    [{status, Id, MoCnt, Pid}] = ets:lookup(vnode_status, status),
+    [{status, LastId, MoCnt, Pid}] = ets:lookup(vnode_status, status),
     NewMoLease = MoCnt + Lease,
-    {_, _, NewCntrModel, _}=NewRec = case {MoCnt == ?MAX_INT, NewMoLease >=  ?MAX_INT} of
-                 {true, _} ->
-                     {status, Id, Lease, Pid};
-                 {false, true} ->
-                     {status, Id, ?MAX_INT, Pid};
-                 {false, false} ->
-                     {status, Id, NewMoLease, Pid}
-             end,
-    ets:insert(vnode_status, NewRec),
+    {NewMoId, NewCntrModel} = case {MoCnt == ?MAX_INT, NewMoLease >=  ?MAX_INT} of
+                                  {true, _} ->
+                                      %% New Id
+                                      {LastId+1, Lease};
+                                  {false, true} ->
+                                      {LastId, ?MAX_INT};
+                                  {false, false} ->
+                                      {LastId, NewMoLease}
+                              end,
     ok = riak_kv_vnode_status_mgr:lease_counter(Pid, Lease),
-    NewCntr = receive
-                  {counter_lease, {_, _VnodeId, NewLease}} ->
-                      NewLease
-              after
-                  5000 -> %% 5 seconds (is this ok?)
-%%                      io:format("Expected message from ~p to ~p~n", [Pid, self()]),
-                      timeout
-              end,
+    {VnodeId, NewCntr} = receive
+                             {counter_lease, {_, Id, NewLease}} ->
+                                 {Id, NewLease}
+                         after
+                             5000 -> %% 5 seconds (is this ok?)
+                                 io:format("timeout!!!! ~p ~n", [erlang:is_process_alive(Pid)]),
+                                 timeout
+                         end,
+
+    true = ets:insert(vnode_status, {status, NewMoId, NewCntrModel, Pid}),
+    true = ets:insert(vnodeids, {VnodeId}),
     {NewCntrModel, NewCntr}.
 
 %% @doc lease_counter_post - Postcondition for lease_counter
@@ -69,26 +76,33 @@ weight(_S, _Cmd) -> 1.
 %% @doc Default generated property
 -spec prop_monotonic() -> eqc:property().
 prop_monotonic() ->
-    ?FORALL(Cmds, commands(?MODULE),
+    ?FORALL(Cmds, non_empty(commands(?MODULE)),
             begin
                 ets:new(vnode_status, [named_table, set]),
+                ets:new(vnodeids, [named_table, set]),
                 {ok, Pid} = riak_kv_vnode_status_mgr:start_link(self(), 1),
-                ets:insert(vnode_status, {status, <<>>, 0, Pid}),
+                ets:insert(vnode_status, {status, 1, 0, Pid}),
+
                 {H, S, Res} = run_commands(?MODULE,Cmds),
-                [{status, _, MoCntr, Pid}] = ets:lookup(vnode_status, status),
+                [{status, Id, MoCntr, Pid}] = ets:lookup(vnode_status, status),
+                VnodeIds = ets:info(vnodeids, size),
                 {ok, Status} = riak_kv_vnode_status_mgr:status(Pid),
                 Cnt = proplists:get_value(counter, Status, 0),
 
                 ets:delete(vnode_status),
+                ets:delete(vnodeids),
                 riak_kv_vnode_status_mgr:clear_vnodeid(Pid),
                 ok = riak_kv_vnode_status_mgr:stop(Pid),
 
-                aggregate(command_names(Cmds),
-                          pretty_commands(?MODULE, Cmds, {H, S, Res},
-                                          conjunction([{result, equals(Res, ok)},
-                                                        {values, equals(MoCntr, Cnt)}
-                                                      ])
-                                         )
-                         )
+                measure(vnodeid_changes, Id,
+                        aggregate(command_names(Cmds),
+                                  pretty_commands(?MODULE, Cmds, {H, S, Res},
+                                                  conjunction([{result, equals(Res, ok)},
+                                                               {values, equals(MoCntr, Cnt)},
+                                                               {ids, equals(Id, VnodeIds)}
+                                                              ])
+                                                 )
+                                 )
+                       )
             end).
 

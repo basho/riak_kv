@@ -49,9 +49,8 @@
           vnode_pid :: undefined | pid()
          }).
 
--type status() :: [proplists:property()] | [].
--type init_args() :: [init_arg()].
--type init_arg() :: pid() | non_neg_integer().
+-type status() :: orddict:orddict().
+-type init_args() :: {pid(), non_neg_integer()}.
 -type blocking_req() :: clear | {vnodeid, LeaseSize :: non_neg_integer()}.
 
 %% only 32 bits per counter, when you hit that, get a new vnode id
@@ -69,7 +68,7 @@
 %%--------------------------------------------------------------------
 -spec start_link(pid(), non_neg_integer()) -> {ok, pid()} | {error, term()}.
 start_link(VnodePid, Index) ->
-    gen_server:start_link(?MODULE, [VnodePid, Index], []).
+    gen_server:start_link(?MODULE, {VnodePid, Index}, []).
 
 %%--------------------------------------------------------------------
 %% @doc You can't ever have a `LeaseSize' greater than the maximum 32
@@ -140,7 +139,7 @@ stop(Pid) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec init(Args :: init_args()) -> {ok, #state{}}.
-init([VnodePid, Index]) ->
+init({VnodePid, Index}) ->
     StatusFilename = vnode_status_filename(Index),
     {ok, #state{status_file=StatusFilename, index=Index, vnode_pid=VnodePid}}.
 
@@ -168,7 +167,7 @@ handle_call({vnodeid, LeaseSize}, _From, State) ->
 handle_call(clear, _From, State) ->
     #state{status_file=File} = State,
     {ok, Status} = read_vnode_status(File),
-    Status2 = proplists:delete(counter, proplists:delete(vnodeid, Status)),
+    Status2 = orddict:erase(counter, orddict:erase(vnodeid, Status)),
     ok = write_vnode_status(Status2, File),
     {reply, {ok, cleared}, State};
 handle_call(status, _From, State) ->
@@ -188,7 +187,6 @@ handle_cast({lease, LeaseSize}, State) ->
     {ok, Status} = read_vnode_status(File),
     {_Counter, LeaseTo, VnodeId, UpdStatus} = get_counter_lease(LeaseSize, Status),
     ok = write_vnode_status(UpdStatus, File),
-%%    io:format("sending lease of ~p from ~p to ~p~n", [LeaseTo, self(), Pid]),
     Pid ! {counter_lease, {self(), VnodeId, LeaseTo}},
     {noreply, State}.
 
@@ -210,14 +208,14 @@ code_change(_OldVsn, State, _Extra) ->
 -spec get_counter_lease(non_neg_integer(), status()) ->
                            {non_neg_integer(), non_neg_integer(), binary(), status()}.
 get_counter_lease(LeaseSize, Status) ->
-    PrevLease = proplists:get_value(counter, Status, ?MAX_CNTR),
-    VnodeId0 = proplists:get_value(vnodeid, Status, undefined),
+    PrevLease = get_status_item(counter, Status, ?MAX_CNTR),
+    VnodeId0 = get_status_item(vnodeid, Status, undefined),
     if
         (VnodeId0 == undefined) or (PrevLease == ?MAX_CNTR) ->
             {VnodeId, Status2} = assign_vnodeid(erlang:now(),
                                                 riak_core_nodeid:get(),
                                                 Status),
-            {0, LeaseSize, VnodeId, replace(counter, LeaseSize, Status2)};
+            {0, LeaseSize, VnodeId, orddict:store(counter, LeaseSize, Status2)};
         true ->
             %% The lease on disk exists, and is less than the max.
             %% @TODO (rdb) fudge factor? Should it be at least N greater than max?
@@ -235,14 +233,19 @@ get_counter_lease(LeaseSize, Status) ->
             %%  4billion) will casue many vnode ids to be generated if
             %%  we don't use this "best lease" scheme.
             LeaseTo = min(PrevLease + LeaseSize, ?MAX_CNTR),
-            {PrevLease, LeaseTo, VnodeId0, replace(counter, LeaseTo, Status)}
+            {PrevLease, LeaseTo, VnodeId0, orddict:store(counter, LeaseTo, Status)}
     end.
 
-%% @private replace tuple with `Key' with in proplist `Status' with a
-%% tuple of `{Key, Value}'.
--spec replace(term(), term(), status()) -> status().
-replace(Key, Value, Status) ->
-    [{Key, Value} | proplists:delete(Key, Status)].
+%% @private Provide a `proplists:get_value/3' like function for status
+%% orddict.
+-spec get_status_item(term(), status(), term()) -> term().
+get_status_item(Item, Status, Default) ->
+    case orddict:find(Item, Status) of
+        {ok, Val} ->
+            Val;
+        error ->
+            Default
+    end.
 
 %% @private generate a file name for the vnode status, and ensure the
 %% path to exixts.
@@ -262,10 +265,11 @@ vnode_status_filename(Index) ->
 assign_vnodeid(Now, NodeId, Status) ->
     {_Mega, Sec, Micro} = Now,
     NowEpoch = 1000000*Sec + Micro,
-    LastVnodeEpoch = proplists:get_value(last_epoch, Status, 0),
+    LastVnodeEpoch = get_status_item(last_epoch, Status, 0),
     VnodeEpoch = erlang:max(NowEpoch, LastVnodeEpoch+1),
     VnodeId = <<NodeId/binary, VnodeEpoch:32/integer>>,
-    UpdStatus = replace(vnodeid, VnodeId, replace(last_epoch, VnodeEpoch, Status)),
+    UpdStatus = orddict:store(vnodeid, VnodeId,
+                              orddict:store(last_epoch, VnodeEpoch, Status)),
     {VnodeId, UpdStatus}.
 
 %% @private read the vnode status from `File'. Returns `{ok,
@@ -276,10 +280,10 @@ assign_vnodeid(Now, NodeId, Status) ->
 read_vnode_status(File) ->
     case file:consult(File) of
         {ok, [Status]} when is_list(Status) ->
-            {ok, proplists:delete(version, Status)};
+            {ok, orddict:erase(version, orddict:from_list(Status))};
         {error, enoent} ->
             %% doesn't exist? same as empty list
-            {ok, []};
+            {ok, orddict:new()};
         Er ->
             Er
     end.
@@ -290,21 +294,10 @@ read_vnode_status(File) ->
 %% not be written at any other place/time in the system.
 -spec write_vnode_status(status(), file:filename()) -> ok.
 write_vnode_status(Status, File) ->
-    VersionedStatus = replace(version, ?VNODE_STATUS_VERSION, Status),
-    riak_core_util:replace_file(File, io_lib:format("~p.", [VersionedStatus])).
+    VersionedStatus = orddict:store(version, ?VNODE_STATUS_VERSION, Status),
+    riak_core_util:replace_file(File, io_lib:format("~p.", [orddict:to_list(VersionedStatus)])).
 
 -ifdef(TEST).
-
--ifdef(EQC).
-%% prop_monotonic_counter() ->
-%%     ok.
-
--endif.
-
-
-replace_test() ->
-    Status = [],
-    ?assertEqual([{rdb, yay}], replace(rdb, yay, Status)).
 
 %% Check assigning a vnodeid twice in the same second
 assign_vnodeid_restart_same_ts_test() ->
@@ -314,7 +307,7 @@ assign_vnodeid_restart_same_ts_test() ->
     {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
     ?assertEqual(<<1, 2, 3, 4, 70, 116, 143, 150>>, Vid1),
     %% Simulate clear
-    Status2 = proplists:delete(vnodeid, Status1),
+    Status2 = orddict:erase(vnodeid, Status1),
     %% Reassign
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
     ?assertEqual(<<1, 2, 3, 4, 70, 116, 143, 151>>, Vid2).
@@ -328,7 +321,7 @@ assign_vnodeid_restart_later_ts_test() ->
     {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
     ?assertEqual(<<1, 2, 3, 4, 70,116,143,150>>, Vid1),
     %% Simulate clear
-    Status2 = proplists:delete(vnodeid, Status1),
+    Status2 = orddict:erase(vnodeid, Status1),
     %% Reassign
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
     ?assertEqual(<<1, 2, 3, 4, 70,116,143,250>>, Vid2).
@@ -341,7 +334,7 @@ assign_vnodeid_restart_earlier_ts_test() ->
     {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
     ?assertEqual(<<1, 2, 3, 4, 70,116,143,250>>, Vid1),
     %% Simulate clear
-    Status2 = proplists:delete(vnodeid, Status1),
+    Status2 = orddict:erase(vnodeid, Status1),
     %% Reassign
     %% Should be greater than last offered - which is the 2mil timestamp
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
@@ -369,19 +362,19 @@ vnode_status_test_() ->
                  ?cmd("chmod -w kv_vnode_status_test"),
                  Index = 0,
                  File = vnode_status_filename(Index),
-                 ?assertEqual({error, eacces}, write_vnode_status([], File))
+                 ?assertEqual({error, eacces}, write_vnode_status(orddict:new(), File))
              end),
       ?_test(begin % create successfully
                  ?cmd("chmod +w kv_vnode_status_test"),
                  Index = 0,
                  File = vnode_status_filename(Index),
-                 ?assertEqual(ok, write_vnode_status([created], File))
+                 ?assertEqual(ok, write_vnode_status([{created, true}], File))
              end),
       ?_test(begin % update successfully
                  Index = 0,
                  File = vnode_status_filename(Index),
-                 {ok, [created]} = read_vnode_status(File),
-                 ?assertEqual(ok, write_vnode_status([updated], File))
+                 {ok, [{created, true}]} = read_vnode_status(File),
+                 ?assertEqual(ok, write_vnode_status([{updated, true}], File))
              end),
       ?_test(begin % update failure
                  ?cmd("chmod 000 kv_vnode_status_test/0"),
