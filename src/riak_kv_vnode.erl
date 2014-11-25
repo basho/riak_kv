@@ -616,7 +616,7 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
             {Reply, ModState3} =
             case Mod:put(Bucket, Key, IndexSpecs, undefined, ModState2) of
                 {ok, UpModState2} ->
-                    riak_kv_stat:update(vnode_index_refresh),
+                    ok = riak_kv_stat:update(vnode_index_refresh),
                     {ok, UpModState2};
                 {error, Reason, UpModState2} ->
                     {{error, Reason}, UpModState2}
@@ -848,7 +848,7 @@ handle_coverage_index(Bucket, ItemFilter, Query,
     case IndexBackend of
         true ->
             %% Update stats...
-            riak_kv_stat:update(vnode_index_read),
+            ok = riak_kv_stat:update(vnode_index_read),
 
             ResultFun = ResultFunFun(Bucket, Sender),
             BufSize = buffer_size_for_index_query(Query, DefaultBufSz),
@@ -1379,7 +1379,7 @@ handle_crdt(false, _CRDTOp, _Vid, RObj) ->
 
 do_crdt_update(RObj, VId, CRDTOp) ->
     {Time, Value} = timer:tc(riak_kv_crdt, update, [RObj, VId, CRDTOp]),
-    riak_kv_stat:update({vnode_dt_update, get_crdt_mod(CRDTOp), Time}),
+    ok = riak_kv_stat:update({vnode_dt_update, get_crdt_mod(CRDTOp), Time}),
     Value.
 
 get_crdt_mod(Int) when is_integer(Int) -> ?COUNTER_TYPE;
@@ -2008,19 +2008,19 @@ wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
 -spec update_vnode_stats(vnode_get | vnode_put, partition(), erlang:timestamp()) ->
                                 ok.
 update_vnode_stats(Op, Idx, StartTS) ->
-    riak_kv_stat:update({Op, Idx, timer:now_diff( os:timestamp(), StartTS)}).
+    ok = riak_kv_stat:update({Op, Idx, timer:now_diff( os:timestamp(), StartTS)}).
 
 %% @private
 update_index_write_stats(false, _IndexSpecs) ->
     ok;
 update_index_write_stats(true, IndexSpecs) ->
     {Added, Removed} = count_index_specs(IndexSpecs),
-    riak_kv_stat:update({vnode_index_write, Added, Removed}).
+    ok = riak_kv_stat:update({vnode_index_write, Added, Removed}).
 
 %% @private
 update_index_delete_stats(IndexSpecs) ->
     {_Added, Removed} = count_index_specs(IndexSpecs),
-    riak_kv_stat:update({vnode_index_delete, Removed}).
+    ok = riak_kv_stat:update({vnode_index_delete, Removed}).
 
 %% @private
 %% @doc Given a list of index specs, return the number to add and

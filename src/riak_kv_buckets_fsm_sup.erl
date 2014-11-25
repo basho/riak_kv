@@ -33,10 +33,10 @@
 start_buckets_fsm(Node, Args) ->
     case supervisor:start_child({?MODULE, Node}, Args) of
         {ok, Pid} ->
-            riak_kv_stat:update({list_create, Pid}),
+            ok = riak_kv_stat:update({list_create, Pid}),
             {ok, Pid};
         Error ->
-            riak_kv_stat:update(list_create_error),
+            ok = riak_kv_stat:update(list_create_error),
             Error
     end.
 
