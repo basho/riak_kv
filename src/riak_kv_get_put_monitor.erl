@@ -54,16 +54,16 @@ get_fsm_spawned(Pid) ->
 
 spawned(Type, Pid) ->
     MonRef = monitor(process, Pid),
-    riak_kv_stat:update({fsm_spawned, Type}),
+    ok = riak_kv_stat:update({fsm_spawned, Type}),
     monitor_loop(MonRef, Pid, Type).
 
 monitor_loop(MonRef, Pid, Type) ->
     receive
         {'DOWN', MonRef, process, Pid, Cause}
           when Cause == normal; Cause == shutdown; Cause == noproc ->
-            riak_kv_stat:update({fsm_exit, Type});
+            ok = riak_kv_stat:update({fsm_exit, Type});
         {'DOWN', MonRef, process, Pid, _Cause} ->
-            riak_kv_stat:update({fsm_error, Type});
+            ok = riak_kv_stat:update({fsm_error, Type});
         _ ->
             monitor_loop(MonRef, Pid, Type)
     end.
