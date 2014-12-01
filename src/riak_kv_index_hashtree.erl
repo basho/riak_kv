@@ -583,7 +583,7 @@ apply_tree(Id, Fun, State=#state{trees=Trees}) ->
 
 -spec do_build_finished(state()) -> state().
 do_build_finished(State=#state{index=Index, built=_Pid}) ->
-    lager:debug("Finished build (b): ~p", [Index]),
+    lager:debug("Finished build: ~p", [Index]),
     {_,Tree0} = hd(State#state.trees),
     BuildTime = get_build_time(Tree0),
     _ = hashtree:write_meta(<<"built">>, <<1>>, Tree0),
@@ -802,7 +802,7 @@ maybe_expire(State) ->
 
 -spec clear_tree(state()) -> state().
 clear_tree(State=#state{index=Index}) ->
-    lager:debug("Clearing tree ~p", [Index]),
+    lager:info("Clearing AAE tree: ~p", [Index]),
     IndexNs = responsible_preflists(State),
     State2 = destroy_trees(State),
     State3 = init_trees(IndexNs, State2#state{trees=orddict:new()}),
@@ -840,14 +840,14 @@ build_or_rehash(Self, State=#state{index=Index}) ->
 build_or_rehash(Self, Locked, Type, #state{index=Index, trees=Trees}) ->
     case {Locked, Type} of
         {true, build} ->
-            lager:debug("Starting build: ~p", [Index]),
+            lager:info("Starting AAE tree build: ~p", [Index]),
             fold_keys(Index, Self, has_index_tree(Trees)),
-            lager:debug("Finished build (a): ~p", [Index]), 
+            lager:info("Finished AAE tree build: ~p", [Index]), 
             gen_server:cast(Self, build_finished);
         {true, rehash} ->
-            lager:debug("Starting rehash: ~p", [Index]),
+            lager:debug("Starting AAE tree rehash: ~p", [Index]),
             _ = [hashtree:rehash_tree(T) || {_,T} <- Trees],
-            lager:debug("Finished rehash (a): ~p", [Index]),
+            lager:debug("Finished AAE tree rehash: ~p", [Index]),
             gen_server:cast(Self, build_finished);
         _ ->
             gen_server:cast(Self, build_failed)
