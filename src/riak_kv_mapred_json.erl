@@ -72,6 +72,8 @@ parse_request(Req) ->
             {error, not_json}
     end.
 
+parse_inputs([<<"default">>, Bucket]) when is_binary(Bucket) ->
+    {ok, Bucket};
 parse_inputs([Type, Bucket]) when is_binary(Type),
                                   is_binary(Bucket) ->
     {ok, {Type, Bucket}};
@@ -111,33 +113,40 @@ invalid_input_error(Invalid) ->
       "Key List with Key Data:\n",
       "  - Map/Reduce over the provided set of keys.\n",
       "  - {\"inputs\":[[\"mybucket\",\"mykey1\", \"mykeydata1\"], [\"mybucket\",\"mykey2\", \"mykeydata1\"], ...]}\n",
+      "  - {\"inputs\":[[\"mybucket\",\"mykey1\", \"mykeydata1\", \"mybuckettype\"], [\"mybucket\",\"mykey2\", \"mykeydata2\", \"mybuckettype\"], ...]}\n",
       "\n",
       "Index Query - Exact Match:\n",
       "  - Indexing backend must be enabled.\n",
       "  - {\"inputs\":{\"bucket\":\"mybucket\", \"index\":\"myindex_bin\", \"key\":\"mykey\"}}\n",
+      "  - {\"inputs\":{\"bucket\":[\"mybuckettype\", \"mybucket\"], \"index\":\"myindex_bin\", \"key\":\"mykey\"}}\n",
       "\n",
       "Index Query - Range Search:\n",
       "  - Indexing backend must be enabled.\n",
       "  - Use secondary indexes to generate a starting set of keys.\n",
       "  - {\"inputs\":{\"bucket\":\"mybucket\", \"index\":\"myindex_bin\", \"start\":\"key1\", \"end\":\"key2\"}}\n",
+      "  - {\"inputs\":{\"bucket\":[\"mybuckettype\", \"mybucket\"], \"index\":\"myindex_bin\", \"start\":\"key1\", \"end\":\"key2\"}}\n",
       "\n",
       "Search Query:\n",
       "  - Riak Search must be enabled and bucket hook installed.\n",
       "  - {\"inputs\":{\"bucket\":\"mybucket\", \"query\":\"foo OR bar\"}}\n",
+      "  - {\"inputs\":{\"index\":\"myindex\", \"query\":\"foo OR bar\"}}\n",
       "\n",
       "Search Query With Filter:\n",
       "  - Riak Search must be enabled and bucket hook installed.\n",
       "  - {\"inputs\":{\"bucket\":\"mybucket\", \"query\":\"field1:(foo OR bar)\", \"filter\":\"field2:baz\"}}\n",
+      "  - {\"inputs\":{\"index\":\"myindex\", \"query\":\"field1:(foo OR bar)\", \"filter\":\"field2:baz\"}}\n",
       "\n",
       "Bucket:\n",
       "  - Map/Reduce over all keys in the provided bucket.\n",
       "  - WARNING: THIS CAN BE A SLOW OPERATION!\n",
       "  - {\"inputs\":\"mybucket\"}\n"
+      "  - {\"inputs\":[\"mybuckettype\", \"mybucket\"]}\n"
       "\n",
       "Bucket With Key Filter:\n",
       "  - Filter keys in a bucket, then Map/Reduce.\n",
       "  - WARNING: THIS CAN BE A SLOW OPERATION!\n",
       "  - {\"inputs\":{\"bucket\":\"mybucket\", \"key_filters\":[[\"matches\", \"foo.*\"]]}}\n\n"
+      "  - {\"inputs\":{\"bucket\":[\"mybuckettype\", \"mybucket\"], \"key_filters\":[[\"matches\", \"foo.*\"]]}}\n\n"
      ]}.
 
 parse_inputs([], Accum) ->
@@ -150,6 +159,9 @@ parse_inputs([], Accum) ->
 parse_inputs([[Bucket, Key]|T], Accum) when is_binary(Bucket),
                                              is_binary(Key) ->
     parse_inputs(T, [{Bucket, Key}|Accum]);
+parse_inputs([[Bucket, Key, KeyData, <<"default">>]|T], Accum) when is_binary(Bucket),
+                                                           is_binary(Key) ->
+    parse_inputs(T, [{{Bucket, Key}, KeyData}|Accum]);
 parse_inputs([[Bucket, Key, KeyData, Type]|T], Accum) when is_binary(Type),
                                                            is_binary(Bucket),
                                                            is_binary(Key) ->
@@ -248,6 +260,8 @@ parse_index_input(Inputs) ->
     end.
 
 normalize_bucket_and_type(Bucket) when is_binary(Bucket) ->
+    Bucket;
+normalize_bucket_and_type([<<"default">>, Bucket]) when is_binary(Bucket) ->
     Bucket;
 normalize_bucket_and_type([Type, Bucket]) when is_binary(Bucket),
                                                is_binary(Type) ->
@@ -584,7 +598,17 @@ bucket_input_test() ->
     %% Test parsing a bucket input.
     JSON = <<"\"mybucket\"">>,
     Expected = {ok, <<"mybucket">>},
-    ?assertEqual(Expected, parse_inputs(mochijson2:decode(JSON))).
+    ?assertEqual(Expected, parse_inputs(mochijson2:decode(JSON))),
+
+    %% Test parsing a bucket input with default bucket type.
+    JSON2 = <<"[\"default\", \"mybucket\"]">>,
+    Expected2 = {ok, <<"mybucket">>},
+    ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))),
+
+    %% Test parsing a bucket input with bucket type.
+    JSON3 = <<"[\"mytype\", \"mybucket\"]">>,
+    Expected3 = {ok, {<<"mytype">>, <<"mybucket">>}},
+    ?assertEqual(Expected3, parse_inputs(mochijson2:decode(JSON3))).
 
 key_input_test() ->
     %% Test parsing bkey inputs without keydata.
@@ -605,14 +629,23 @@ key_input_test() ->
                      ]},
     ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))),
 
-    %% Test parsing bucket types
+    %% Test parsing bucket types.
     JSON3 = <<"[[\"b1\", \"k1\", \"v1\", \"t1\"], [\"b2\", \"k2\", \"v2\", \"t2\"], [\"b3\", \"k3\", \"v3\", \"t3\"]]">>,
     Expected3 = {ok, [
                       {{{<<"t1">>, <<"b1">>}, <<"k1">>}, <<"v1">>},
                       {{{<<"t2">>, <<"b2">>}, <<"k2">>}, <<"v2">>},
                       {{{<<"t3">>, <<"b3">>}, <<"k3">>}, <<"v3">>}
                      ]},
-    ?assertEqual(Expected3, parse_inputs(mochijson2:decode(JSON3))).
+    ?assertEqual(Expected3, parse_inputs(mochijson2:decode(JSON3))),
+
+    %% Test parsing default bucket type.
+    JSON4 = <<"[[\"b1\", \"k1\", \"v1\", \"default\"], [\"b2\", \"k2\", \"v2\", \"default\"], [\"b3\", \"k3\", \"v3\", \"default\"]]">>,
+    Expected4 = {ok, [
+                      {{<<"b1">>, <<"k1">>}, <<"v1">>},
+                      {{<<"b2">>, <<"k2">>}, <<"v2">>},
+                      {{<<"b3">>, <<"k3">>}, <<"v3">>}
+                     ]},
+    ?assertEqual(Expected4, parse_inputs(mochijson2:decode(JSON4))).
 
 modfun_input_test() ->
     JSON = <<"{\"module\":\"mymod\",\"function\":\"myfun\",\"arg\":[1,2,3]}">>,
@@ -637,18 +670,30 @@ index_input_test() ->
     Expected2 = {ok, {index, <<"mybucket">>, <<"myindex_bin">>, <<"vala">>, <<"valb">>}},
     ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))),
 
+    %% Test parsing bucket types.
     JSON3 = <<"{\"bucket\":[\"mytype\",\"mybucket\"],\"index\":\"myindex_bin\", \"start\":\"vala\", \"end\":\"valb\"}">>,
     Expected3 = {ok, {index, {<<"mytype">>,<<"mybucket">>}, <<"myindex_bin">>, <<"vala">>, <<"valb">>}},
-    ?assertEqual(Expected3, parse_inputs(mochijson2:decode(JSON3))).
+    ?assertEqual(Expected3, parse_inputs(mochijson2:decode(JSON3))),
+
+    %% Test parsing default bucket type.
+    JSON4 = <<"{\"bucket\":[\"default\",\"mybucket\"],\"index\":\"myindex_bin\", \"start\":\"vala\", \"end\":\"valb\"}">>,
+    Expected4 = {ok, {index, <<"mybucket">>, <<"myindex_bin">>, <<"vala">>, <<"valb">>}},
+    ?assertEqual(Expected4, parse_inputs(mochijson2:decode(JSON4))).
 
 keyfilter_input_test() ->
     JSON = <<"{\"bucket\":\"mybucket\",\"key_filters\":[[\"matches\", \"key.*\"]]}">>,
     Expected = {ok, {<<"mybucket">>, [[<<"matches">>, <<"key.*">>]]}},
     ?assertEqual(Expected, parse_inputs(mochijson2:decode(JSON))),
 
+    %% Test parsing bucket types.
     JSON2 = <<"{\"bucket\":[\"mytype\", \"mybucket\"],\"key_filters\":[[\"matches\", \"key.*\"]]}">>,
     Expected2 = {ok, {{<<"mytype">>,<<"mybucket">>}, [[<<"matches">>, <<"key.*">>]]}},
-    ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))).
+    ?assertEqual(Expected2, parse_inputs(mochijson2:decode(JSON2))),
+
+    %% Test parsing default bucket type.
+    JSON3 = <<"{\"bucket\":[\"default\", \"mybucket\"],\"key_filters\":[[\"matches\", \"key.*\"]]}">>,
+    Expected3 = {ok, {<<"mybucket">>, [[<<"matches">>, <<"key.*">>]]}},
+    ?assertEqual(Expected3, parse_inputs(mochijson2:decode(JSON3))).
 
 
 -define(DISCRETE_ERLANG_JOB, <<"{\"inputs\": [[\"foo\", \"bar\"]], \"query\":[{\"map\":{\"language\":\"erlang\","
