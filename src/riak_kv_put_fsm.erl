@@ -347,7 +347,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                       [From,RObj,Options2]),
                         ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [2],
                                 ["prepare", atom2list(CoordNode)]),
-                        riak_kv_stat:update(coord_redir),
+                        ok = riak_kv_stat:update(coord_redir),
                         monitor_remote_coordinator(UseAckP, MiddleMan,
                                                    CoordNode, StateData0)
                     catch
@@ -694,8 +694,8 @@ finish(timeout, StateData = #state{timing = Timing, reply = Reply,
                 _ -> undefined
             end,
             {Duration, Stages} = riak_kv_fsm_timing:calc_timing(Timing),
-            riak_kv_stat:update({put_fsm_time, Bucket, Duration,
-                                 Stages, StatTracked, CRDTMod}), 
+            ok = riak_kv_stat:update({put_fsm_time, Bucket, Duration,
+                                      Stages, StatTracked, CRDTMod}),
             ?DTRACE(Trace, ?C_PUT_FSM_FINISH, [0, Duration], [])
     end,
     {stop, normal, StateData};
@@ -728,7 +728,7 @@ handle_info(request_timeout, StateName, StateData) ->
     ?MODULE:StateName(request_timeout, StateData);
 handle_info({ack, Node, now_executing}, StateName, StateData) ->
     late_put_fsm_coordinator_ack(Node),
-    riak_kv_stat:update(late_put_fsm_coordinator_ack),
+    ok = riak_kv_stat:update(late_put_fsm_coordinator_ack),
     {next_state, StateName, StateData};
 handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
@@ -869,21 +869,21 @@ decode_precommit({erlang, {Mod, Fun}, Result}, Trace) ->
     case Result of
         fail ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-1], []),
-            riak_kv_stat:update(precommit_fail),
+            ok = riak_kv_stat:update(precommit_fail),
             lager:debug("Pre-commit hook ~p:~p failed, no reason given",
                         [Mod, Fun]),
             fail;
         {fail, Reason} ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-2], 
                     [dtrace_errstr(Reason)]),
-            riak_kv_stat:update(precommit_fail),
+            ok = riak_kv_stat:update(precommit_fail),
             lager:debug("Pre-commit hook ~p:~p failed with reason ~p",
                         [Mod, Fun, Reason]),
             Result;
         {'EXIT',  Mod, Fun, Class, Exception} ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-3],
                     [dtrace_errstr({Mod, Fun, Class, Exception})]),
-            riak_kv_stat:update(precommit_fail),
+            ok = riak_kv_stat:update(precommit_fail),
             lager:debug("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
                         [Mod,Fun,Class,Exception, erlang:get_stacktrace()]),
             {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
@@ -893,7 +893,7 @@ decode_precommit({erlang, {Mod, Fun}, Result}, Trace) ->
             catch X:Y ->
                     ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-4],
                                     [dtrace_errstr({Mod, Fun, X, Y})]),
-                    riak_kv_stat:update(precommit_fail),
+                    ok = riak_kv_stat:update(precommit_fail),
                     lager:debug("Problem invoking pre-commit hook ~p:~p,"
                                 " invalid return ~p",
                                 [Mod, Fun, Result]),
@@ -905,14 +905,14 @@ decode_precommit({js, JSName, Result}, Trace) ->
     case Result of
         {ok, <<"fail">>} ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-5], []),
-            riak_kv_stat:update(precommit_fail),
+            ok = riak_kv_stat:update(precommit_fail),
             lager:debug("Pre-commit hook ~p failed, no reason given",
                         [JSName]),
             fail;
         {ok, [{<<"fail">>, Message}]} ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-6],
                     [dtrace_errstr(Message)]),
-            riak_kv_stat:update(precommit_fail),
+            ok = riak_kv_stat:update(precommit_fail),
             lager:debug("Pre-commit hook ~p failed with reason ~p",
                         [JSName, Message]),
             {fail, Message};
@@ -925,7 +925,7 @@ decode_precommit({js, JSName, Result}, Trace) ->
                     Obj
             end;
         {error, Error} ->
-            riak_kv_stat:update(precommit_fail),
+            ok = riak_kv_stat:update(precommit_fail),
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-7], 
                     [dtrace_errstr(Error)]),
             lager:debug("Problem invoking pre-commit hook: ~p", [Error]),
@@ -934,7 +934,7 @@ decode_precommit({js, JSName, Result}, Trace) ->
 decode_precommit({error, Reason}, Trace) ->
     ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-8], 
             [dtrace_errstr(Reason)]),
-    riak_kv_stat:update(precommit_fail),
+    ok = riak_kv_stat:update(precommit_fail),
     lager:debug("Problem invoking pre-commit hook: ~p", [Reason]),
     {fail, Reason}.
 
@@ -942,19 +942,19 @@ decode_postcommit({erlang, {M,F}, Res}, Trace) ->
     case Res of
         fail ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_POSTCOMMIT, [-1], []),
-            riak_kv_stat:update(postcommit_fail),
+            ok = riak_kv_stat:update(postcommit_fail),
             lager:debug("Post-commit hook ~p:~p failed, no reason given",
                        [M, F]);
         {fail, Reason} ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_POSTCOMMIT, [-2],
                     [dtrace_errstr(Reason)]),
-            riak_kv_stat:update(postcommit_fail),
+            ok = riak_kv_stat:update(postcommit_fail),
             lager:debug("Post-commit hook ~p:~p failed with reason ~p",
                         [M, F, Reason]);
         {'EXIT', _, _, Class, Ex} ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_POSTCOMMIT, [-3],
                     [dtrace_errstr({M, F, Class, Ex})]),
-            riak_kv_stat:update(postcommit_fail),
+            ok = riak_kv_stat:update(postcommit_fail),
             Stack = erlang:get_stacktrace(),
             lager:debug("Problem invoking post-commit hook ~p:~p -> ~p:~p~n~p",
                         [M, F, Class, Ex, Stack]),
@@ -964,7 +964,7 @@ decode_postcommit({erlang, {M,F}, Res}, Trace) ->
     end;
 decode_postcommit({error, {invalid_hook_def, Def}}, Trace) ->
     ?DTRACE(Trace, ?C_PUT_FSM_DECODE_POSTCOMMIT, [-4], [dtrace_errstr(Def)]),
-    riak_kv_stat:update(postcommit_fail),
+    ok = riak_kv_stat:update(postcommit_fail),
     lager:debug("Invalid post-commit hook definition ~p", [Def]).
 
 
