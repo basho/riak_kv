@@ -52,7 +52,7 @@ prop_driver_api() ->
                 %% TODO: Much less kludgy way of cleanup
                 file:delete("undefined/kv_vnode/0"),
                 {ok, Pid} = vnode_status_mgr_driver:start_link(10),
-                MgrPid = element(4, vnode_status_mgr_driver:status(Pid)),
+                MgrPid = status_mgr_pid(vnode_status_mgr_driver:status(Pid)),
                 {H, S, Res} = run_commands(?MODULE, Cmds, [{driver_pid, Pid},
                                                            {status_mgr_pid, MgrPid},
                                                            {lease_size, 10}]),
@@ -183,10 +183,38 @@ stop_post(S, _Args, ok) ->
 stop_post(_S, _Args, _) ->
     false.
 
+kill_status_mgr_pre(S, _Args) ->
+    S#state.driver_pid =/= undefined.
+
+kill_status_mgr_args(S) ->
+    [S#state.driver_pid,
+     S#state.status_mgr_pid].
+
+kill_status_mgr(DriverPid, MgrPid) ->
+    _ = exit(MgrPid, kill),
+    %%TODO Replace this with a driver API call to wait until the EXIT
+    %%message is handled and avoid postcondition failures.
+    timer:sleep(200),
+    vnode_status_mgr_driver:status(DriverPid).
+
+kill_status_mgr_next(S, _R, _A) ->
+    S.
+
+kill_status_mgr_post(#state{counter=Counter},
+               [_, OldMgrPid],
+               DriverStatus) ->
+    Counter =:= driver_counter(DriverStatus)
+        andalso not is_process_alive(OldMgrPid)
+        andalso is_process_alive(status_mgr_pid(DriverStatus))
+        andalso not leasing(DriverStatus);
+kill_status_mgr_post(_S, _Args, _) ->
+    false.
+
 -spec weight(S :: eqc_statem:symbolic_state(), Command :: atom()) -> integer().
 weight(_S, increment) -> 25;
 weight(_S, clear) -> 2;
-weight(_S, stop) -> 1.
+weight(_S, stop) -> 1;
+weight(_S, kill_status_mgr) -> 3.
 
 %%%===================================================================
 %%% wee little helpers
@@ -219,5 +247,8 @@ counter_cleared(Status) ->
 
 vnodeid_cleared(Status) ->
     orddict:find(vnodeid, orddict:from_list(Status)) =:= error.
+
+status_mgr_pid(DriverStatus) ->
+    element(4, DriverStatus).
 
 -endif.

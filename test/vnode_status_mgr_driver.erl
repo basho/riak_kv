@@ -151,7 +151,7 @@ handle_info({'EXIT', Pid, Reason}, State=#state{status_mgr_pid=Pid, counter=Cntr
     #counter_state{lease_size=LeaseSize, leasing=Leasing} = CntrState,
     {ok, NewPid} = riak_kv_vnode_status_mgr:start_link(self(), 0),
 
-    if Leasing ->
+   if Leasing ->
             %% Crashed when getting a lease, try again
             ok = riak_kv_vnode_status_mgr:lease_counter(NewPid, LeaseSize);
        ?ELSE ->
