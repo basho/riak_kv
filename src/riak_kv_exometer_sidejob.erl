@@ -31,7 +31,7 @@
 -behaviour(exometer_entry).
 
 %% API
--export([new_entry/3]).
+-export([new_entry/3, new_entry/4]).
 
 %% Callback API
 -export([behaviour/0,
@@ -42,9 +42,30 @@ behaviour() ->
     entry.
 
 new_entry(Name, SjName, Opts) ->
+    exometer_new(Name, SjName, Opts).
+
+new_entry(Name, SjName, AliasPrefix, Opts) ->
+    exometer_new(Name, SjName, [{aliases, aliases(AliasPrefix)}|Opts]).
+
+exometer_new(Name, SjName, Opts) ->
     exometer:new(Name, ad_hoc, [{module, ?MODULE},
 				{type, sidejob},
 				{sj_name, SjName}|Opts]).
+
+aliases(Prefix) ->
+    [{DP, join(Prefix, Suffix)}
+     || {DP, Suffix} <- [
+			 {usage         , "_active"},
+			 {usage_60s     , "_active_60s"},
+			 {in_rate       , "_in_rate"},
+			 {out_rate      , "_out_rate"},
+			 {rejected      , "_rejected"},
+			 {rejected_60s  , "_rejected_60s"},
+			 {rejected_total, "_rejected_total"}
+			]].
+
+join(Prefix, Suffix) ->
+    list_to_atom(Prefix ++ Suffix).
 
 -define(UNSUP, {error, unsupported}).
 
