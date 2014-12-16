@@ -265,10 +265,11 @@ encode_fetch_response_test_() ->
                                      {<<"value">>,
                                       {struct,
                                        [% NB map sorts its keys
-                                        {<<"a_set">>, [<<"a">>, <<"b">>, <<"c">>]}]}},
+                                        {<<"a_set">>, [<<"a">>, <<"b">>, <<"c">>]},
                                         {<<"b_flag">>, true},
                                         {<<"c_register">>, <<"sean">>},
                                         {<<"d_map">>, {struct, [{<<"e_counter">>, 5}]}}
+                                       ]}}
                                      ]},
                            fetch_response_to_json(map, ?MAP_TYPE:value(Map), undefined, ?EMBEDDED_TYPES)
                            ),
