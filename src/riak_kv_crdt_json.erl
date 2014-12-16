@@ -264,11 +264,11 @@ encode_fetch_response_test_() ->
                                      {<<"type">>, <<"map">>},
                                      {<<"value">>,
                                       {struct,
-                                       [ % NB inverse order from the order of update-application
-                                        {<<"d_map">>, {struct, [{<<"e_counter">>, 5}]}},
-                                        {<<"c_register">>, <<"sean">>},
+                                       [% NB map sorts its keys
+                                        {<<"a_set">>, [<<"a">>, <<"b">>, <<"c">>]}]}},
                                         {<<"b_flag">>, true},
-                                        {<<"a_set">>, [<<"a">>, <<"b">>, <<"c">>]}]}}
+                                        {<<"c_register">>, <<"sean">>},
+                                        {<<"d_map">>, {struct, [{<<"e_counter">>, 5}]}}
                                      ]},
                            fetch_response_to_json(map, ?MAP_TYPE:value(Map), undefined, ?EMBEDDED_TYPES)
                            ),
