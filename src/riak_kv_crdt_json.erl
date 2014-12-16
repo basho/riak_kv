@@ -247,7 +247,7 @@ encode_fetch_response_test_() ->
                            fetch_response_to_json(set, ?SET_TYPE:value(Set), undefined, ?MOD_MAP)),
               ?assertMatch({struct, [_Type, _Value, {<<"context">>, Bin}]} when is_binary(Bin),
                            fetch_response_to_json(set, ?SET_TYPE:value(Set),
-                                                  ?SET_TYPE:to_binary(?SET_TYPE:precondition_context(Set)),
+                                                  riak_dt_vclock:to_binary(?SET_TYPE:precondition_context(Set)),
                                                   ?MOD_MAP))
       end},
      {"encode map",
@@ -274,7 +274,7 @@ encode_fetch_response_test_() ->
                            ),
               ?assertMatch({struct, [_Type, _Value, {<<"context">>, Bin}]} when is_binary(Bin),
                            fetch_response_to_json(map, ?MAP_TYPE:value(Map),
-                                                  ?MAP_TYPE:to_binary(?MAP_TYPE:precondition_context(Map)),
+                                                  riak_dt_vclock:to_binary(?MAP_TYPE:precondition_context(Map)),
                                                   ?EMBEDDED_TYPES))
       end}
     ].
@@ -330,7 +330,7 @@ decode_update_request_test_() ->
                            update_request_from_json(set, {struct, [{<<"increment">>, 5}]}, ?MOD_MAP)),
               %% Context should be extracted properly
               {ok, Set} = ?SET_TYPE:update({add_all, [<<"a">>, <<"b">>, <<"c">>]}, a, ?SET_TYPE:new()),
-              BinContext = ?SET_TYPE:to_binary(?SET_TYPE:precondition_context(Set)),
+              BinContext = riak_dt_vclock:to_binary(?SET_TYPE:precondition_context(Set)),
               {struct, [_Type, _Value, {<<"context">>, JSONCtx}]} = fetch_response_to_json(set, ?SET_TYPE:value(Set),
                                                                                        BinContext,
                                                                                        ?MOD_MAP),
@@ -373,7 +373,7 @@ decode_update_request_test_() ->
                                              {update, {<<"d">>, ?MAP_TYPE},
                                               {update, [{update, {<<"e">>, ?EMCNTR_TYPE}, {increment,5}}]}}
                                             ]}, a, ?MAP_TYPE:new()),
-              BinContext = ?MAP_TYPE:to_binary(?MAP_TYPE:precondition_context(Map)),
+              BinContext = riak_dt_vclock:to_binary(?MAP_TYPE:precondition_context(Map)),
               {struct, [_Type, _Value, {<<"context">>, JSONCtx}]} = fetch_response_to_json(set, ?MAP_TYPE:value(Map),
                                                                                            BinContext,
                                                                                            ModMap),
