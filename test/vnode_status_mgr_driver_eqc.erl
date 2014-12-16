@@ -1,5 +1,4 @@
 -module(vnode_status_mgr_driver_eqc).
-
 %% -------------------------------------------------------------------
 %%
 %% vnode_status_mgr_driver_eqc: An eqc that exercises the
@@ -25,6 +24,7 @@
 
 -ifdef(EQC).
 
+-include("vnode_status_mgr_test.hrl").
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -32,17 +32,18 @@
 -compile(export_all).
 -eqc_group_commands(true).
 
--record(state, {driver_pid :: pid(),
-                status_mgr_pid :: pid(),
-                lease_size :: pos_integer(),
-                lease :: pos_integer(),
-                previous_lease :: pos_integer(),
-                next_increment=1 :: pos_integer(),
-                increments :: pos_integer(),
-                counter=0 :: non_neg_integer(),
-                cleared=false :: boolean(),
-                current_result :: term(),
-                previous_result :: term()}).
+-record(test_state, {driver_pid :: pid(),
+                     status_mgr_pid :: pid(),
+                     lease_size :: pos_integer(),
+                     lease :: pos_integer(),
+                     previous_lease :: pos_integer(),
+                     next_increment=1 :: pos_integer(),
+                     increments :: pos_integer(),
+                     counter=0 :: non_neg_integer(),
+                     cleared=false :: boolean(),
+                     current_result :: term(),
+                     previous_result :: term()}).
+-define(STATE, #test_state).
 
 -spec prop_driver_api() -> eqc:property().
 prop_driver_api() ->
@@ -66,28 +67,28 @@ prop_driver_api() ->
 
 -spec initial_state() -> eqc_statem:symbolic_state().
 initial_state() ->
-    #state{driver_pid={var, driver_pid},
+    ?STATE{driver_pid={var, driver_pid},
            status_mgr_pid={var, status_mgr_pid},
            lease_size={var, lease_size},
            lease={var, lease_size}}.
 
 increment_pre(S, _Args) ->
-    S#state.driver_pid =/= undefined
-        andalso not S#state.cleared.
+    S?STATE.driver_pid =/= undefined
+        andalso not S?STATE.cleared.
 
 increment_args(S) ->
     [
-     S#state.driver_pid,
-     S#state.next_increment
+     S?STATE.driver_pid,
+     S?STATE.next_increment
     ].
 
 increment(Pid, Increments) ->
-        vnode_status_mgr_driver:increment_counter(Pid, Increments).
+    vnode_status_mgr_driver:increment_counter(Pid, Increments).
 
 increment_next(S, R, [_, Increments]) ->
-    Counter = S#state.counter,
-    Lease = S#state.lease,
-    LeaseSize = S#state.lease_size,
+    Counter = S?STATE.counter,
+    Lease = S?STATE.lease,
+    LeaseSize = S?STATE.lease_size,
     UpdLease = case Counter =:= Lease of
                    true ->
                        Lease + LeaseSize;
@@ -95,18 +96,18 @@ increment_next(S, R, [_, Increments]) ->
                        Lease
                end,
     NextIncrement=1,
-    S#state{counter=Counter+Increments,
+    S?STATE{counter=Counter+Increments,
             current_result=R,
             lease=UpdLease,
             previous_lease=Lease,
-            previous_result=S#state.current_result,
+            previous_result=S?STATE.current_result,
             next_increment=NextIncrement}.
 
 %% Cases to check:
 %% * Increment just below 80% counter threshold, verify counter_state has only incremented as expected and status mgr status is the same
 %% * Increment to 80% threshold, verify counter_state has leasing set to true. can't make assumptions about status_mgr state.
 %% * Increment counter to max to engage blocking for counter_lease if necessary, verify counter_state lease info matches status from status_mgr.
-increment_post(#state{counter=Counter,
+increment_post(?STATE{counter=Counter,
                       lease_size=LeaseSize,
                       previous_lease=Lease},
                [_, _Increments],
@@ -115,7 +116,7 @@ increment_post(#state{counter=Counter,
     Counter =:= driver_counter(DriverStatus)
         andalso driver_and_mgr_lease_match(DriverStatus, MgrStatus)
         andalso not leasing(DriverStatus);
-increment_post(#state{counter=Counter,
+increment_post(?STATE{counter=Counter,
                       lease_size=LeaseSize,
                       previous_lease=Lease},
                [_, _Increments],
@@ -123,7 +124,7 @@ increment_post(#state{counter=Counter,
   when (Lease - Counter) =:= trunc(0.2 * LeaseSize) + 1 ->
     Counter =:= driver_counter(DriverStatus)
         andalso not leasing(DriverStatus);
-increment_post(#state{counter=Counter,
+increment_post(?STATE{counter=Counter,
                       lease_size=LeaseSize,
                       previous_lease=Lease,
                       previous_result={OldDriverStatus, OldMgrStatus}},
@@ -133,7 +134,7 @@ increment_post(#state{counter=Counter,
     Counter =:= driver_counter(DriverStatus)
         andalso status_mgr_lease_changed(OldMgrStatus, MgrStatus)
         andalso driver_lease_changed(OldDriverStatus, DriverStatus);
-increment_post(#state{counter=Counter,
+increment_post(?STATE{counter=Counter,
                       previous_lease=Lease,
                       previous_result={_OldDriverStatus, _OldMgrStatus}},
                [_, _Increments],
@@ -146,49 +147,49 @@ increment_post(_S, _Args, _R) ->
     true.
 
 clear_pre(S, _Args) ->
-    S#state.driver_pid =/= undefined.
+    S?STATE.driver_pid =/= undefined.
 
 clear_args(S) ->
-    [S#state.driver_pid].
+    [S?STATE.driver_pid].
 
 clear(DriverPid) ->
     vnode_status_mgr_driver:clear_counter(DriverPid).
 
 clear_next(S, _V, _A) ->
-    S#state{cleared=true}.
+    S?STATE{cleared=true}.
 
-clear_post(#state{counter = Counter},
-                  _Args,
-                  {DriverStatus, MgrStatus}) ->
+clear_post(?STATE{counter = Counter},
+           _Args,
+           {DriverStatus, MgrStatus}) ->
     Counter =:= driver_counter(DriverStatus)
         andalso counter_cleared(MgrStatus)
         andalso vnodeid_cleared(MgrStatus).
 
 stop_pre(S, _Args) ->
-    S#state.driver_pid =/= undefined.
+    S?STATE.driver_pid =/= undefined.
 
 stop_args(S) ->
-    [S#state.driver_pid].
+    [S?STATE.driver_pid].
 
 stop(DriverPid) ->
     vnode_status_mgr_driver:stop(DriverPid).
 
 stop_next(S, _V, _A) ->
-    S#state{driver_pid=undefined,
+    S?STATE{driver_pid=undefined,
             status_mgr_pid=undefined}.
 
 stop_post(S, _Args, ok) ->
-    not (is_process_alive(S#state.driver_pid) orelse
-         is_process_alive(S#state.status_mgr_pid));
+    not (is_process_alive(S?STATE.driver_pid) orelse
+         is_process_alive(S?STATE.status_mgr_pid));
 stop_post(_S, _Args, _) ->
     false.
 
 kill_status_mgr_pre(S, _Args) ->
-    S#state.driver_pid =/= undefined.
+    S?STATE.driver_pid =/= undefined.
 
 kill_status_mgr_args(S) ->
-    [S#state.driver_pid,
-     S#state.status_mgr_pid].
+    [S?STATE.driver_pid,
+     S?STATE.status_mgr_pid].
 
 kill_status_mgr(DriverPid, MgrPid) ->
     _ = exit(MgrPid, kill),
@@ -200,9 +201,9 @@ kill_status_mgr(DriverPid, MgrPid) ->
 kill_status_mgr_next(S, _R, _A) ->
     S.
 
-kill_status_mgr_post(#state{counter=Counter},
-               [_, OldMgrPid],
-               DriverStatus) ->
+kill_status_mgr_post(?STATE{counter=Counter},
+                     [_, OldMgrPid],
+                     DriverStatus) ->
     Counter =:= driver_counter(DriverStatus)
         andalso not is_process_alive(OldMgrPid)
         andalso is_process_alive(status_mgr_pid(DriverStatus))
@@ -220,35 +221,43 @@ weight(_S, kill_status_mgr) -> 3.
 %%% wee little helpers
 %%%===================================================================
 
+-spec driver_counter(driver_state()) -> non_neg_integer().
 driver_counter(Status) ->
-    element(2, element(3, Status)).
+    Status#state.counter#counter_state.cnt.
 
+-spec status_mgr_lease_changed(orddict:orddict(), orddict:orddict()) -> boolean().
 status_mgr_lease_changed(Status, Status) ->
     false;
 status_mgr_lease_changed(OldStatus, CurrentStatus) ->
     not (element(2, orddict:find(counter, orddict:from_list(OldStatus))) =:=
-        element(2, orddict:find(counter, orddict:from_list(CurrentStatus)))).
+             element(2, orddict:find(counter, orddict:from_list(CurrentStatus)))).
 
+-spec driver_lease_changed(driver_state(), driver_state()) -> boolean().
 driver_lease_changed(Status, Status) ->
     false;
 driver_lease_changed(OldStatus, CurrentStatus) ->
-    not (element(3, element(3, OldStatus)) =:=
-        element(3, element(3, CurrentStatus))).
+    not (OldStatus#state.counter#counter_state.lease =:=
+             CurrentStatus#state.counter#counter_state.lease).
 
+-spec driver_and_mgr_lease_match(driver_state(), orddict:orddict()) -> boolean().
 driver_and_mgr_lease_match(DriverStatus, MgrStatus) ->
-    element(3, element(3, DriverStatus)) =:=
+    DriverStatus#state.counter#counter_state.lease =:=
         element(2, orddict:find(counter, orddict:from_list(MgrStatus))).
 
+-spec leasing(driver_state()) -> boolean().
 leasing(Status) ->
-    element(5, element(3, Status)).
+    Status#state.counter#counter_state.leasing.
 
+-spec counter_cleared(orddict:orddict()) -> boolean().
 counter_cleared(Status) ->
     orddict:find(counter, orddict:from_list(Status)) =:= error.
 
+-spec vnodeid_cleared(orddict:orddict()) -> boolean().
 vnodeid_cleared(Status) ->
     orddict:find(vnodeid, orddict:from_list(Status)) =:= error.
 
+-spec status_mgr_pid(driver_state()) -> pid().
 status_mgr_pid(DriverStatus) ->
-    element(4, DriverStatus).
+    DriverStatus#state.status_mgr_pid.
 
 -endif.

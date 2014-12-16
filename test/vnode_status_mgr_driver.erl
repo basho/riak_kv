@@ -1,3 +1,4 @@
+-module(vnode_status_mgr_driver).
 %% -------------------------------------------------------------------
 %%
 %% vnode_status_mgr_driver: A module that emulates the interaction
@@ -22,7 +23,6 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
--module(vnode_status_mgr_driver).
 
 -behaviour(gen_server).
 
@@ -50,27 +50,7 @@
          terminate/2,
          code_change/3]).
 
-%% The `counter_state' and `state' record fields were directly
-%% extracted from `riak_kv_vnode'.
--record(counter_state, {
-          %% The number of new epoch writes co-ordinated by this vnode
-          %% What even is a "key epoch?" It is any time a key is
-          %% (re)created. A new write, a write not yet coordinated by
-          %% this vnode, a write where local state is unreadable.
-          cnt = 0 :: non_neg_integer(),
-          %% Counter leased up-to. For totally new state/id
-          %% this will be that flush threshold See config value
-          %% `{riak_kv, counter_lease_size}'
-          lease = 0 :: non_neg_integer(),
-          lease_size = 0 :: non_neg_integer(),
-          %% Has a lease been requested but not granted yet
-          leasing = false :: boolean()
-         }).
-
--record(state, {vnodeid :: undefined | binary(),
-                counter :: #counter_state{},
-                status_mgr_pid :: pid()}).
--type state() :: #state{}.
+-include("vnode_status_mgr_test.hrl").
 
 -type init_args() :: {pid(), non_neg_integer()}.
 -type vnodeid() :: binary().
