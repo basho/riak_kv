@@ -33,8 +33,6 @@ lease_counter_args(_S) ->
     ].
 
 lease_counter(Lease) ->
-    %% @TODO (rdb) handle the 32 bit threshold, roll over to new
-    %% id. Basics first.
     [{status, LastId, MoCnt, Pid}] = ets:lookup(vnode_status, status),
     NewMoLease = MoCnt + Lease,
     {NewMoId, NewCntrModel} = case {MoCnt == ?MAX_INT, NewMoLease >=  ?MAX_INT} of

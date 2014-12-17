@@ -1218,10 +1218,17 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
                        State#state{modstate=ModState1}
                end,
     {ok, UpdState};
-handle_info({counter_lease, {FromPid, VnodeId, NewLease}}, State=#state{status_mgr_pid=FromPid}) ->
+handle_info({counter_lease, {FromPid, VnodeId, NewLease}}, State=#state{status_mgr_pid=FromPid, vnodeid=VnodeId}) ->
     #state{counter=CounterState} = State,
     CS1 = CounterState#counter_state{lease=NewLease, leasing=false},
-    State2 = State#state{counter=CS1, vnodeid=VnodeId},
+    State2 = State#state{counter=CS1},
+    {ok, State2};
+handle_info({counter_lease, {FromPid, NewVnodeId, NewLease}}, State=#state{status_mgr_pid=FromPid, idx=Idx}) ->
+    %% Lease rolled over MAX_INT (new vnodeid signifies this) so reset counter
+    #state{counter=CounterState} = State,
+    CS1 = CounterState#counter_state{lease=NewLease, leasing=false, cnt=1},
+    State2 = State#state{vnodeid=NewVnodeId, counter=CS1},
+    lager:info("New Vnode id for ~p. Epoch counter rolled over.", [Idx]),
     {ok, State2}.
 
 handle_exit(Pid, Reason, State=#state{status_mgr_pid=Pid, idx=Index, counter=CntrState}) ->
@@ -2389,7 +2396,7 @@ blocking_lease_counter(State) ->
 blocking_lease_counter(_State, {MaxErrs, MaxErrs, _MaxTime}) ->
     {error, counter_lease_max_errors};
 blocking_lease_counter(State, {ErrCnt, MaxErrors, MaxTime}) ->
-    #state{idx=Index, status_mgr_pid=Pid, counter=CounterState} = State,
+    #state{idx=Index, vnodeid=VId, status_mgr_pid=Pid, counter=CounterState} = State,
     #counter_state{lease_size=LeaseSize} = CounterState,
     Start = os:timestamp(),
     receive
@@ -2400,9 +2407,13 @@ blocking_lease_counter(State, {ErrCnt, MaxErrors, MaxTime}) ->
             NewState = State#state{status_mgr_pid=NewPid},
             Elapsed = timer:now_diff(os:timestamp(), Start),
             blocking_lease_counter(NewState, {ErrCnt+1, MaxErrors, MaxTime - Elapsed});
-        {counter_lease, {Pid, VnodeId, NewLease}} ->
+        {counter_lease, {Pid, VId, NewLease}} ->
             NewCS = CounterState#counter_state{lease=NewLease, leasing=false},
-            {ok, State#state{counter=NewCS, vnodeid=VnodeId}}
+            {ok, State#state{counter=NewCS}};
+        {counter_lease, {Pid, NewVId, NewLease}} ->
+            lager:info("New Vnode id for ~p. Epoch counter rolled over.", [Index]),
+            NewCS = CounterState#counter_state{lease=NewLease, leasing=false, cnt=1},
+            {ok, State#state{vnodeid=NewVId, counter=NewCS}}
     after
         MaxTime ->
             {error, counter_lease_timeout}
@@ -2533,6 +2544,84 @@ highest_actor(ActorBase, Obj) ->
     {Actor, Epoch, riak_object:actor_counter(Actor, Obj)}.
 
 -ifdef(TEST).
+
+-define(MGR, riak_kv_vnode_status_mgr).
+-define(MAX_INT, 4294967295).
+
+%% @private test the vnode and vnode mgr interaction NOTE: sets up and
+%% tearsdown inside the test, the mgr needs the pid of the test
+%% process to send messages. @TODO(rdb) find a better way
+blocking_test_() ->
+    {setup, fun() -> ok end,
+     fun(_) -> ok = file:delete("undefined/kv_vnode/0") end,
+     {spawn, [{"Blocking",
+               fun() ->
+                       {ok, Pid} = ?MGR:start_link(self(), 0),
+                       {ok, {VId, CounterState}} = get_vnodeid_and_counter(Pid, 100),
+                       #counter_state{cnt=Cnt, lease=Leased, lease_size=LS, leasing=L} = CounterState,
+                       ?assertEqual(0, Cnt),
+                       ?assertEqual(100, Leased),
+                       ?assertEqual(100, LS),
+                       ?assertEqual(false, L),
+                       State = #state{vnodeid=VId, status_mgr_pid=Pid, counter=CounterState},
+                       S2=#state{counter=#counter_state{leasing=L2, cnt=C2}} = update_counter(State),
+                       ?assertEqual(false, L2),
+                       ?assertEqual(1, C2),
+                       S3 = lists:foldl(fun(_, S) ->
+                                                update_counter(S)
+                                        end,
+                                        S2,
+                                        lists:seq(1, 98)),
+                       #state{counter=#counter_state{leasing=L3, cnt=C3}} = S3,
+                       ?assertEqual(true, L3),
+                       ?assertEqual(99, C3),
+                       S4 = update_counter(S3),
+                       #state{counter=#counter_state{lease=Leased2, leasing=L4, cnt=C4}} = S4,
+                       ?assertEqual(false, L4),
+                       ?assertEqual(100, C4),
+                       ?assertEqual(200, Leased2),
+                       {ok, cleared} = ?MGR:clear_vnodeid(Pid),
+                       ok = ?MGR:stop(Pid)
+               end}
+             ]
+     }
+    }.
+
+%% @private tests that the counter rolls over to 1 when a new vnode id
+%% is assigned
+rollover_test_() ->
+    {setup, fun() -> ok end,
+     fun(_) ->
+             ok = file:delete("undefined/kv_vnode/0") end,
+     {spawn, [{"Rollover",
+               fun() ->
+                       {ok, Pid} = ?MGR:start_link(self(), 0),
+                       {ok, {VId, CounterState}} = get_vnodeid_and_counter(Pid, ?MAX_INT),
+                       #counter_state{cnt=Cnt, lease=Leased, lease_size=LS, leasing=L} = CounterState,
+                       ?assertEqual(0, Cnt),
+                       ?assertEqual((?MAX_INT), Leased),
+                       ?assertEqual((?MAX_INT), LS),
+                       ?assertEqual(false, L),
+                       %% fiddle the counter to the max int size-2
+                       State = #state{vnodeid=VId, status_mgr_pid=Pid, counter=CounterState#counter_state{cnt=(?MAX_INT-2)}},
+                       S2=#state{counter=#counter_state{leasing=L2, cnt=C2}} = update_counter(State),
+                       ?assertEqual(true, L2),
+                       ?assertEqual((?MAX_INT-1), C2),
+                       %% Vnode ID should roll over, and counter reset
+                       #state{vnodeid=VId2, counter=#counter_state{leasing=L3, cnt=C3}} = update_counter(S2),
+
+                       ?assert(VId /= VId2),
+                       ?assertEqual(false, L3),
+                       ?assertEqual(1, C3),
+
+                       {ok, cleared} = ?MGR:clear_vnodeid(Pid),
+                       ok = ?MGR:stop(Pid)
+               end}
+             ]}
+    }.
+
+
+
 
 dummy_backend(BackendMod) ->
     Ring = riak_core_ring:fresh(16,node()),

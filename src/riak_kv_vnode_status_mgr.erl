@@ -180,6 +180,7 @@ handle_call(stop, _From, State) ->
 %%--------------------------------------------------------------------
 %% @private
 %%--------------------------------------------------------------------
+
 -spec handle_cast({lease, non_neg_integer()}, #state{}) ->
                          {noreply, #state{}}.
 handle_cast({lease, LeaseSize}, State) ->
