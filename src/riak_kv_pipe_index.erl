@@ -103,6 +103,15 @@ keysend_loop(ReqId, Partition, FittingDetails) ->
 
 keysend(_Bucket, [], _Partition, _FittingDetails) ->
     ok;
+keysend(Bucket, [{o,Key,BinRiakObj}|Keys], Partition, FittingDetails) ->
+    RiakObj = riak_object:from_binary(Bucket, Key, BinRiakObj),
+    Out = {ok, RiakObj, undefined},
+    case riak_pipe_vnode_worker:send_output(Out, Partition, FittingDetails) of
+        ok ->
+            keysend(Bucket, Keys, Partition, FittingDetails);
+        ER ->
+            ER
+    end;
 keysend(Bucket, [Key | Keys], Partition, FittingDetails) ->
     SKey = strip_index(Key),
     Out = if
