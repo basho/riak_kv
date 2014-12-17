@@ -2552,7 +2552,7 @@ highest_actor(ActorBase, Obj) ->
 %% tearsdown inside the test, the mgr needs the pid of the test
 %% process to send messages. @TODO(rdb) find a better way
 blocking_test_() ->
-    {setup, fun() -> ok end,
+    {setup, fun() -> (catch ok = file:delete("undefined/kv_vnode/0")) end,
      fun(_) -> ok = file:delete("undefined/kv_vnode/0") end,
      {spawn, [{"Blocking",
                fun() ->
@@ -2590,7 +2590,7 @@ blocking_test_() ->
 %% @private tests that the counter rolls over to 1 when a new vnode id
 %% is assigned
 rollover_test_() ->
-    {setup, fun() -> ok end,
+    {setup, fun() -> (catch ok = file:delete("undefined/kv_vnode/0")) end,
      fun(_) ->
              ok = file:delete("undefined/kv_vnode/0") end,
      {spawn, [{"Rollover",
