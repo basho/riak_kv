@@ -390,7 +390,7 @@ v1_counter_from_binary(CounterBin) ->
 crdt_from_binary(<<TypeLen:32/integer, Type:TypeLen/binary, CRDTBin/binary>>) ->
     try
         Mod = binary_to_existing_atom(Type, latin1),
-        Val = Mod:from_binary(CRDTBin),
+        {ok, Val} = Mod:from_binary(CRDTBin),
         to_record(Mod, Val) of
         ?CRDT{}=CRDT ->
             {ok, CRDT}
@@ -471,7 +471,21 @@ get_context(Type, Value) ->
                               io:format(user, Str, Args) end, P)).
 
 -define(TEST_TIME_SECONDS, 10).
+-define(TIMED_QC(Prop), eqc:quickcheck(?QC_OUT(eqc:testing_time(?TEST_TIME_SECONDS, Prop)))).
 
+eqc_test_() ->
+    {timeout,
+     60,
+     ?_test(?TIMED_QC(prop_binary_roundtrip()))}.
+
+prop_binary_roundtrip() ->
+    ?FORALL({_Type, Mod}, oneof(?MOD_MAP), 
+            begin
+                {ok, ?CRDT{mod=SMod, value=SValue}} = from_binary(to_binary(?CRDT{mod=Mod, value=Mod:new()})),
+                conjunction([{module, equals(Mod, SMod)},
+                             {value, Mod:equal(SValue, Mod:new())}])
+            end).
+                
 
 -endif.
 -endif.
