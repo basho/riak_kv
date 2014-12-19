@@ -43,6 +43,8 @@
          determine_data_root/0,
          exchange_bucket/4,
          exchange_segment/3,
+         estimate_keys/1,
+         estimate_keys/2,
          hash_index_data/1,
          hash_object/2,
          update/2,
@@ -213,6 +215,14 @@ clear(Tree) ->
 expire(Tree) ->
     gen_server:call(Tree, expire, infinity).
 
+%% @doc Estimate total number of keys in index_hashtree
+estimate_keys(Tree) ->
+    gen_server:call(Tree, estimate_keys, infinity).
+
+%% @doc Estimate total number of keys in index_hashtree
+estimate_keys(Tree, IndexN) ->
+    gen_server:call(Tree, {estimate_keys, IndexN}, infinity).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -315,6 +325,24 @@ handle_call(expire, _From, State) ->
     State2 = State#state{expired=true},
     lager:info("Manually expired tree: ~p", [State#state.index]),
     {reply, ok, State2};
+
+handle_call(estimate_keys, _From,  State=#state{trees=Trees}) ->
+    EstimateNrKeys =
+        orddict:fold(fun(_, Tree, Acc) ->
+                             {ok, Value} = hashtree:estimate_keys(Tree) ,
+                             Value + Acc
+                     end,
+                     0, Trees),
+    {reply, {ok, EstimateNrKeys}, State};
+
+handle_call({estimate_keys, IndexN}, _From,  State=#state{trees=Trees}) ->
+    case orddict:find(IndexN, Trees) of
+        {ok, Tree} ->
+            {ok, EstimateNrKeys} = hashtree:estimate_keys(Tree),
+            {reply, {ok, EstimateNrKeys}, State};
+        error ->
+            {reply, not_responsible, State}
+    end;
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
