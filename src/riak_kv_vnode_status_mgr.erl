@@ -378,7 +378,11 @@ vnode_status_test_() ->
                  ?cmd("chmod -w kv_vnode_status_test"),
                  Index = 0,
                  File = vnode_status_filename(Index),
-                 ?assertEqual({error, eacces}, write_vnode_status(orddict:new(), File))
+                 try
+                     write_vnode_status(orddict:new(), File)
+                 catch _Err:{badmatch, Reason} ->
+                         ?assertEqual({error, eacces}, Reason)
+                 end
              end),
       ?_test(begin % create successfully
                  ?cmd("chmod +w kv_vnode_status_test"),
@@ -389,7 +393,7 @@ vnode_status_test_() ->
       ?_test(begin % update successfully
                  Index = 0,
                  File = vnode_status_filename(Index),
-                 {ok, [{created, true}]} = read_vnode_status(File),
+                 {ok, [{created, true}, {version, 2}]} = read_vnode_status(File),
                  ?assertEqual(ok, write_vnode_status([{updated, true}], File))
              end),
       ?_test(begin % update failure
