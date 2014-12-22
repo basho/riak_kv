@@ -159,14 +159,19 @@
 %% default value for `counter_lease' in `#counter_state{}'
 %% NOTE: these MUST be positive integers!
 %% @see non_neg_env/3
--define(DEFAULT_CNTR_LEASE, 1000).
+-define(DEFAULT_CNTR_LEASE, 10000).
+%% On advise/review from Scott decided to cap the size of leases. 50m
+%% is a lot of new epochs for a single vnode, and it saves us from
+%% buring through vnodeids in the worst case.
+-define(MAX_CNTR_LEASE, 50000000).
 %% Should these cuttlefish-able?  If it takes more than 20 attempts to
 %% fsync the vnode counter to disk, die. (NOTE this is not ERRS*TO but
 %% first to trip see blocking_lease_counter/3)
 -define(DEFAULT_CNTR_LEASE_ERRS, 20).
-%% If it takes more than 5 seconds to fsync the vnode counter to disk,
+%% If it takes more than 20 seconds to fsync the vnode counter to disk,
 %% die
--define(DEFAULT_CNTR_LEASE_TO, 5000). % 5 seconds!
+-define(DEFAULT_CNTR_LEASE_TO, 20000). % 20 seconds!
+
 
 %% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
 %% brain. It scans as if true -> thing; true -> thang end. So, here is
@@ -437,7 +442,8 @@ init([Index]) ->
     WorkerPoolSize = app_helper:get_env(riak_kv, worker_pool_size, 10),
     %%  This _has_ to be a non_neg_integer(), and really, if it is
     %%  zero, you are fysncing every.single.key epoch.
-    CounterLeaseSize = non_neg_env(riak_kv, counter_lease_size, ?DEFAULT_CNTR_LEASE),
+    CounterLeaseSize = min(?MAX_CNTR_LEASE,
+                           non_neg_env(riak_kv, counter_lease_size, ?DEFAULT_CNTR_LEASE)),
     {ok, StatusMgr} = riak_kv_vnode_status_mgr:start_link(self(), Index),
     {ok, {VId, CounterState}} = get_vnodeid_and_counter(StatusMgr, CounterLeaseSize),
     DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
@@ -2365,7 +2371,8 @@ maybe_lease_counter(State=#state{counter=#counter_state{leasing=true}}) ->
     %% not yet at the blocking stage, waiting on a lease
     State;
 maybe_lease_counter(State) ->
-    #state{status_mgr_pid=MgrPid, counter=CS=#counter_state{cnt=Cnt, lease=Lease, lease_size=LeaseSize}} = State,
+    #state{status_mgr_pid=MgrPid, counter=CS=#counter_state{cnt=Cnt, lease=Lease,
+                                                            lease_size=LeaseSize}} = State,
     %% @TODO (rdb) configurable??
     %% has more than 80% of the lease been used?
     CS2 = if (Lease - Cnt) =< 0.2 * LeaseSize  ->

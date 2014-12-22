@@ -7,7 +7,7 @@
 
 -module(kv_vnode_status_mgr_eqc).
 
-
+-ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eqc/include/eqc_statem.hrl").
 
@@ -23,24 +23,23 @@
 initial_state() ->
     #state{}.
 
-
 %% ------ Grouped operator: lease_counter
 lease_counter_args(_S) ->
     [
 
-     frequency([{5, ?SUCHTHAT(Lease, ?LET(I, largeint(), abs(I)), Lease =< ?MAX_INT andalso Lease > 0)},
-                {5, ?SUCHTHAT(Lease, ?LET(I, int(), abs(I)), Lease =< ?MAX_INT andalso Lease > 0)}])
+     frequency([{5, ?SUCHTHAT(Lease, ?LET(I, largeint(), abs(I)), Lease > 0)},
+                {5, ?SUCHTHAT(Lease, ?LET(I, int(), abs(I)), Lease > 0)}])
     ].
 
 lease_counter(Lease) ->
     [{status, LastId, MoCnt, Pid}] = ets:lookup(vnode_status, status),
     NewMoLease = MoCnt + Lease,
-    {NewMoId, NewCntrModel} = case {MoCnt == ?MAX_INT, NewMoLease >=  ?MAX_INT} of
+    {NewMoId, NewCntrModel} = case {MoCnt == ?MAX_INT, NewMoLease >  ?MAX_INT} of
                                   {true, _} ->
                                       %% New Id
-                                      {LastId+1, Lease};
+                                      {LastId+1, min(Lease, ?MAX_INT)};
                                   {false, true} ->
-                                      {LastId, ?MAX_INT};
+                                      {LastId+1, min(?MAX_INT, Lease)};
                                   {false, false} ->
                                       {LastId, NewMoLease}
                               end,
@@ -49,7 +48,7 @@ lease_counter(Lease) ->
                              {counter_lease, {_, Id, NewLease}} ->
                                  {Id, NewLease}
                          after
-                             5000 -> %% 5 seconds (is this ok?)
+                             60000 -> %% one minute!
                                  io:format("timeout!!!! ~p ~n", [erlang:is_process_alive(Pid)]),
                                  timeout
                          end,
@@ -79,8 +78,9 @@ prop_monotonic() ->
                 ets:new(vnode_status, [named_table, set]),
                 ets:new(vnodeids, [named_table, set]),
                 {ok, Pid} = riak_kv_vnode_status_mgr:start_link(self(), 1),
-                ets:insert(vnode_status, {status, 1, 0, Pid}),
-
+                {ok, {ID, _Counter, _Lease}} = riak_kv_vnode_status_mgr:get_vnodeid_and_counter(Pid, 1),
+                true =  ets:insert(vnode_status, {status, 1, 1, Pid}),
+                true = ets:insert(vnodeids, {ID}),
                 {H, S, Res} = run_commands(?MODULE,Cmds),
                 [{status, Id, MoCntr, Pid}] = ets:lookup(vnode_status, status),
                 VnodeIds = ets:info(vnodeids, size),
@@ -104,3 +104,4 @@ prop_monotonic() ->
                        )
             end).
 
+-endif.

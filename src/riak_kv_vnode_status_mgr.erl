@@ -55,6 +55,7 @@
 
 %% only 32 bits per counter, when you hit that, get a new vnode id
 -define(MAX_CNTR, 4294967295).
+-define(VNODE_STATUS_VERSION, 2).
 
 %%%===================================================================
 %%% API
@@ -84,8 +85,7 @@ start_link(VnodePid, Index) ->
                                            Counter :: non_neg_integer(),
                                            LeaseSize :: non_neg_integer()}}.
 get_vnodeid_and_counter(Pid, LeaseSize) when is_integer(LeaseSize),
-                                          LeaseSize > 0,
-                                          LeaseSize =< ?MAX_CNTR ->
+                                             LeaseSize > 0 ->
     %% @TODO decide on a sane timeout for getting a vnodeid/cntr pair
     %% onto disk.
     gen_server:call(Pid, {vnodeid, LeaseSize}).
@@ -105,8 +105,7 @@ get_vnodeid_and_counter(Pid, LeaseSize) when is_integer(LeaseSize),
 %%--------------------------------------------------------------------
 -spec lease_counter(pid(), non_neg_integer()) -> ok.
 lease_counter(Pid, LeaseSize) when is_integer(LeaseSize),
-                                          LeaseSize > 0,
-                                          LeaseSize =< ?MAX_CNTR ->
+                                   LeaseSize > 0  ->
     gen_server:cast(Pid, {lease, LeaseSize}).
 
 %%--------------------------------------------------------------------
@@ -209,33 +208,42 @@ code_change(_OldVsn, State, _Extra) ->
 -spec get_counter_lease(non_neg_integer(), status()) ->
                            {non_neg_integer(), non_neg_integer(), binary(), status()}.
 get_counter_lease(LeaseSize, Status) ->
-    PrevLease = get_status_item(counter, Status, ?MAX_CNTR),
+    PrevLease = get_status_item(counter, Status, undefined),
     VnodeId0 = get_status_item(vnodeid, Status, undefined),
-    if
-        (VnodeId0 == undefined) or (PrevLease == ?MAX_CNTR) ->
-            {VnodeId, Status2} = assign_vnodeid(erlang:now(),
-                                                riak_core_nodeid:get(),
-                                                Status),
-            {0, LeaseSize, VnodeId, orddict:store(counter, LeaseSize, Status2)};
-        true ->
-            %% The lease on disk exists, and is less than the max.
-            %% @TODO (rdb) fudge factor? Should it be at least N greater than max?
-            %% otherwise you might flush, only to hand out a lease of 1!
-            %%
-            %% Make a lease that is greater than that on disk, but not
-            %%  larger than the 32 bit int limit.  This may be a lease
-            %%  smaller than request. Say LeaseSize is 4 billion, and
-            %%  this is the second lease, you're only getting a lease
-            %%  of 500million-ish. I thought this made more sense than
-            %%  giving the full size lease by generating a new
-            %%  vnodeid, since a new vnodeid means more actors for all
-            %%  keys touched by the vnode. A very badly configured
-            %%  vnode (trigger lease at 1% usage, lease size of
-            %%  4billion) will casue many vnode ids to be generated if
-            %%  we don't use this "best lease" scheme.
-            LeaseTo = min(PrevLease + LeaseSize, ?MAX_CNTR),
-            {PrevLease, LeaseTo, VnodeId0, orddict:store(counter, LeaseTo, Status)}
+    Version = get_status_item(version, Status, 1),
+
+    case {Version, PrevLease, VnodeId0} of
+        {_, _, undefined} ->
+            new_id_and_counter(Status, min(LeaseSize, ?MAX_CNTR));
+        {1, undefined, ID} ->
+            %% Upgrade, no counter existed, don't force a new vnodeid
+            %% Is there still some edge here, with UP->DOWN->UP grade?
+            %% We think not. Downgrade would keep the same vnode file,
+            %% and the pre-epochal vnodeid would be used. Upgrade
+            %% again picks up the same counter. Or, if the file is
+            %% re-written while downgraded, it can only be for a new
+            %% ID, so still safe.
+            {0, LeaseSize, ID, orddict:store(counter, LeaseSize, Status)};
+        {?VNODE_STATUS_VERSION, undefined, _ID} ->
+            %% Lost counter? Wha? New ID
+            new_id_and_counter(Status, min(LeaseSize, ?MAX_CNTR));
+        {?VNODE_STATUS_VERSION, Leased, _ID} when Leased + LeaseSize > ?MAX_CNTR ->
+            new_id_and_counter(Status, min(LeaseSize, ?MAX_CNTR));
+        {?VNODE_STATUS_VERSION, Leased, ID} ->
+            NewLease = Leased + LeaseSize,
+            {PrevLease, NewLease, ID, orddict:store(counter, NewLease, Status)}
     end.
+
+%% @private generate a new ID and assign a new counter, and lease up
+%% to `LeaseSize'.
+-spec new_id_and_counter(status(), non_neg_integer()) ->
+                                {non_neg_integer(), non_neg_integer(), binary(), status()}.
+new_id_and_counter(Status, LeaseSize) ->
+    {VnodeId, Status2} = assign_vnodeid(erlang:now(),
+                                        riak_core_nodeid:get(),
+                                        Status),
+    {0, LeaseSize, VnodeId, orddict:store(counter, LeaseSize, Status2)}.
+
 
 %% @private Provide a `proplists:get_value/3' like function for status
 %% orddict.
@@ -281,7 +289,7 @@ assign_vnodeid(Now, NodeId, Status) ->
 read_vnode_status(File) ->
     case file:consult(File) of
         {ok, [Status]} when is_list(Status) ->
-            {ok, orddict:erase(version, orddict:from_list(Status))};
+            {ok, orddict:from_list(Status)};
         {error, enoent} ->
             %% doesn't exist? same as empty list
             {ok, orddict:new()};
@@ -289,14 +297,21 @@ read_vnode_status(File) ->
             Er
     end.
 
--define(VNODE_STATUS_VERSION, 2).
+-ifdef(TEST).
+%% @private don't make testers suffer through the fsync time
+-spec write_vnode_status(status(), file:filename()) -> ok.
+write_vnode_status(Status, File) ->
+    VersionedStatus = orddict:store(version, ?VNODE_STATUS_VERSION, Status),
+    ok = file:write_file(File, io_lib:format("~p.", [orddict:to_list(VersionedStatus)])).
+-else.
 %% @private write the vnode status. This is why the file is guarded by
 %% the process. This file should have no concurrent access, and MUST
 %% not be written at any other place/time in the system.
 -spec write_vnode_status(status(), file:filename()) -> ok.
 write_vnode_status(Status, File) ->
     VersionedStatus = orddict:store(version, ?VNODE_STATUS_VERSION, Status),
-    riak_core_util:replace_file(File, io_lib:format("~p.", [orddict:to_list(VersionedStatus)])).
+    ok = riak_core_util:replace_file(File, io_lib:format("~p.", [orddict:to_list(VersionedStatus)])).
+-endif.
 
 -ifdef(TEST).
 
