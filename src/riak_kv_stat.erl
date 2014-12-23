@@ -672,7 +672,7 @@ read_repair_aggr_stats(Pfx) ->
     Spec = fun(Type, Reason) ->
                    {function,exometer,aggregate,
                     [ [{{[Pfx,?APP,node,gets,read_repairs,'_',Type,Reason],'_','_'},
-                        [], [true]}], [one,count] ], value, [one,count]}
+                        [], [true]}], [one,count] ], proplist, [one,count]}
            end,
     [
      {[read_repairs,primary,notfound], Spec(primary, notfound), [],
