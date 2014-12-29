@@ -75,7 +75,8 @@
 -define(EMPTY_VTAG_BIN, <<"e">>).
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
--export([increment_vclock/2, increment_vclock/3]).
+-export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
+-export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([hash/1, approximate_size/2]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
@@ -640,6 +641,29 @@ increment_vclock(Object=#r_object{bucket=B}, ClientId, Timestamp) ->
     %% a frontier object, then there must only ever be a single value
     %% when we increment, so add the dot here.
     assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled(B)).
+
+%% @doc Prune vclock
+-spec prune_vclock(riak_object(), vclock:timestamp(), [proplists:property()]) ->
+                          riak_object().
+prune_vclock(Obj=#r_object{vclock=VC}, PruneTime, BucketProps) ->
+    VC2 = vclock:prune(VC, PruneTime, BucketProps),
+    Obj#r_object{vclock=VC2}.
+
+%% @doc Does the `riak_object' descend the provided `vclock'?
+-spec vclock_descends(riak_object(), vclock:vclock()) -> boolean().
+vclock_descends(#r_object{vclock=ObjVC}, VC) ->
+    vclock:descends(ObjVC, VC).
+
+%% @doc get the list of all actors that have touched this object.
+-spec all_actors(riak_object()) -> [binary()] | [].
+all_actors(#r_object{vclock=VC}) ->
+    vclock:all_nodes(VC).
+
+%%$ @doc get the counter for the given actor, 0 if not present
+-spec actor_counter(vclock:vclock_node(), riak_object()) ->
+                           non_neg_integer().
+actor_counter(Actor, #r_object{vclock=VC}) ->
+    vclock:get_counter(Actor, VC).
 
 %% @private assign the dot to the value only if DVV is enabled. Only
 %% call with a valid dot. Only assign dot when there is a single value
