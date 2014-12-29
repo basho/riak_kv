@@ -2599,7 +2599,7 @@ blocking_test_() ->
 rollover_test_() ->
     {setup, fun() -> (catch file:delete("undefined/kv_vnode/0")) end,
      fun(_) ->
-             ok = file:delete("undefined/kv_vnode/0") end,
+             file:delete("undefined/kv_vnode/0") end,
      {spawn, [{"Rollover",
                fun() ->
                        {ok, Pid} = ?MGR:start_link(self(), 0),
@@ -2626,9 +2626,6 @@ rollover_test_() ->
                end}
              ]}
     }.
-
-
-
 
 dummy_backend(BackendMod) ->
     Ring = riak_core_ring:fresh(16,node()),
