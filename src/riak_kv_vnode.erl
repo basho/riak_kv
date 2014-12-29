@@ -2560,7 +2560,7 @@ highest_actor(ActorBase, Obj) ->
 %% process to send messages. @TODO(rdb) find a better way
 blocking_test_() ->
     {setup, fun() -> (catch file:delete("undefined/kv_vnode/0")) end,
-     fun(_) -> ok = file:delete("undefined/kv_vnode/0") end,
+     fun(_) -> file:delete("undefined/kv_vnode/0") end,
      {spawn, [{"Blocking",
                fun() ->
                        {ok, Pid} = ?MGR:start_link(self(), 0),
