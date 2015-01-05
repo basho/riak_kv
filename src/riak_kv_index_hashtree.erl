@@ -37,6 +37,7 @@
          terminate/2, code_change/3]).
 
 -export([get_lock/2,
+         wait_for_lock/2,
          compare/3,
          compare/4,
          compare/5,
@@ -73,6 +74,7 @@
                 vnode_pid,
                 built,
                 expired :: boolean(),
+                waiting_for_lock :: undefined | pid(),
                 lock :: undefined | reference(),
                 path,
                 build_time,
@@ -190,6 +192,21 @@ get_lock(Tree, Type) ->
 get_lock(Tree, Type, Pid) ->
     gen_server:call(Tree, {get_lock, Type, Pid}, infinity).
 
+
+%% @doc Acquire the lock for the specified index_hashtree if not already
+%%      locked, and associate the lock with the calling process.
+%%      When not_built pid are saved and given the lock when build finish.
+-spec wait_for_lock(pid(), any()) -> ok | not_built | already_locked.
+wait_for_lock(Tree, Type) ->
+    wait_for_lock(Tree, Type, self()).
+
+%% @doc Acquire the lock for the specified index_hashtree if not already
+%%      locked, and associate the lock with the provided pid.
+-spec wait_for_lock(pid(), any(), pid()) -> ok | not_built | already_locked.
+wait_for_lock(Tree, Type, Pid) ->
+    gen_server:call(Tree, {wait_for_lock, Type, Pid}, infinity).
+
+
 %% @doc Poke the specified index_hashtree to ensure the tree is
 %%      built/rebuilt as needed. This is periodically called by the
 %%      {@link riak_kv_entropy_manager}.
@@ -271,6 +288,14 @@ handle_call({new_tree, Id}, _From, State) ->
 handle_call({get_lock, Type, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Pid, State),
     {reply, Reply, State2};
+
+handle_call({wait_for_lock, Type, Pid}, _From, State) ->
+    case do_get_lock(Type, Pid, State) of
+        {not_built, State2} ->
+            {reply, not_built, State2#state{waiting_for_lock = {Type, Pid}}};
+        {Result, State2} ->
+            {reply, Result, State2}
+    end;
 
 handle_call({insert, Items, Options}, _From, State) ->
     State2 = do_insert(Items, Options, State),
@@ -370,7 +395,8 @@ handle_cast(build_failed, State) ->
     {noreply, State2};
 handle_cast(build_finished, State) ->
     State2 = do_build_finished(State),
-    {noreply, State2};
+    State3 = do_inform_waiting(State2),
+    {noreply, State3};
 
 handle_cast({start_exchange_remote, FsmPid, From, _IndexN}, State) ->
     %% Concurrency lock already acquired, try to acquire tree lock.
@@ -618,6 +644,14 @@ do_build_finished(State=#state{index=Index, built=_Pid}) ->
     _ = hashtree:write_meta(<<"build_time">>, term_to_binary(BuildTime), Tree0),
     riak_kv_entropy_info:tree_built(Index, BuildTime),
     State#state{built=true, build_time=BuildTime, expired=false}.
+
+do_inform_waiting(#state{waiting_for_lock = {Type, Waiting}} = State) when is_pid(Waiting) ->
+    {ok, State2} = do_get_lock(Type, Waiting, State),
+    Waiting ! {hashtree_lock, State2#state.index},
+    State2#state{waiting_for_lock = undefined};
+
+do_inform_waiting(State) ->
+    State.
 
 %% Determine the build time for all trees associated with this
 %% index. The build time is stored as metadata in the on-disk file. If

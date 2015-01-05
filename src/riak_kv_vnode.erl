@@ -579,7 +579,12 @@ handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
             %% after the vnode was already running
             case HT of
                 undefined ->
-                    State2 = maybe_create_hashtrees(State),
+                    case riak_repl2_fssource:get_strategy() == aae of
+                        true ->
+                            State2 = maybe_create_hashtrees(true, State);
+                        _ ->
+                            State2 = maybe_create_hashtrees(State)
+                    end,
                     {reply, {ok, State2#state.hashtrees}, State2};
                 _ ->
                     {reply, {ok, HT}, State}
