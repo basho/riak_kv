@@ -1,4 +1,3 @@
--module(vnode_status_mgr_driver_eqc).
 %% -------------------------------------------------------------------
 %%
 %% vnode_status_mgr_driver_eqc: An eqc that exercises the
@@ -21,6 +20,7 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
+-module(vnode_status_mgr_driver_eqc).
 
 -ifdef(EQC).
 
@@ -45,18 +45,48 @@
                      previous_result :: term()}).
 -define(STATE, #test_state).
 
+
+-define(NUMTESTS, 1000).
+-define(QC_OUT(P),
+        eqc:on_output(fun(Str, Args) ->
+                              io:format(user, Str, Args) end, P)).
+
+%%====================================================================
+%% eunit test
+%%====================================================================
+
+eqc_test_() ->
+    {timeout, 40,
+     ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(20,
+                                                         ?QC_OUT(prop_driver_api())
+                                                        )
+                                       )
+                  )}.
+
+run() ->
+    run(?NUMTESTS).
+
+run(Count) ->
+    eqc:quickcheck(eqc:numtests(Count, prop_driver_api())).
+
+check() ->
+    eqc:check(prop_driver_api()).
+
+
+
 -spec prop_driver_api() -> eqc:property().
 prop_driver_api() ->
     ?FORALL(Cmds,
             non_empty(noshrink(commands(?MODULE))),
             begin
+                CounterLeaseSize = 10,
                 %% TODO: Much less kludgy way of cleanup
                 file:delete("undefined/kv_vnode/0"),
-                {ok, Pid} = vnode_status_mgr_driver:start_link(10),
+                {ok, Pid} = vnode_status_mgr_driver:start_link(CounterLeaseSize),
                 MgrPid = status_mgr_pid(vnode_status_mgr_driver:status(Pid)),
                 {H, S, Res} = run_commands(?MODULE, Cmds, [{driver_pid, Pid},
                                                            {status_mgr_pid, MgrPid},
-                                                           {lease_size, 10}]),
+                                                           {lease_size, CounterLeaseSize}]),
                 aggregate(command_names(Cmds),
                           pretty_commands(?MODULE,
                                           Cmds,
