@@ -216,7 +216,7 @@ get_counter_lease(LeaseSize0, Status) ->
 
     case {Version, PrevLease, VnodeId0} of
         {_, _, undefined} ->
-            new_id_and_counter(Status, min(LeaseSize, ?MAX_CNTR));
+            new_id_and_counter(Status, LeaseSize);
         {1, undefined, ID} ->
             %% Upgrade, no counter existed, don't force a new vnodeid
             %% Is there still some edge here, with UP->DOWN->UP grade?
