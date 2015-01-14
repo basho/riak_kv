@@ -207,10 +207,12 @@ code_change(_OldVsn, State, _Extra) ->
 %% interface to server.
 -spec get_counter_lease(non_neg_integer(), status()) ->
                            {non_neg_integer(), non_neg_integer(), binary(), status()}.
-get_counter_lease(LeaseSize, Status) ->
+get_counter_lease(LeaseSize0, Status) ->
     PrevLease = get_status_item(counter, Status, undefined),
     VnodeId0 = get_status_item(vnodeid, Status, undefined),
     Version = get_status_item(version, Status, 1),
+
+    LeaseSize = min(LeaseSize0, ?MAX_CNTR),
 
     case {Version, PrevLease, VnodeId0} of
         {_, _, undefined} ->
@@ -226,9 +228,9 @@ get_counter_lease(LeaseSize, Status) ->
             {0, LeaseSize, ID, orddict:store(counter, LeaseSize, Status)};
         {?VNODE_STATUS_VERSION, undefined, _ID} ->
             %% Lost counter? Wha? New ID
-            new_id_and_counter(Status, min(LeaseSize, ?MAX_CNTR));
+            new_id_and_counter(Status, LeaseSize);
         {?VNODE_STATUS_VERSION, Leased, _ID} when Leased + LeaseSize > ?MAX_CNTR ->
-            new_id_and_counter(Status, min(LeaseSize, ?MAX_CNTR));
+            new_id_and_counter(Status, LeaseSize);
         {?VNODE_STATUS_VERSION, Leased, ID} ->
             NewLease = Leased + LeaseSize,
             {PrevLease, NewLease, ID, orddict:store(counter, NewLease, Status)}
@@ -257,7 +259,7 @@ get_status_item(Item, Status, Default) ->
     end.
 
 %% @private generate a file name for the vnode status, and ensure the
-%% path to exixts.
+%% path to exists.
 -spec vnode_status_filename(non_neg_integer()) -> file:filename().
 vnode_status_filename(Index) ->
     P_DataDir = app_helper:get_env(riak_core, platform_data_dir),
@@ -344,8 +346,8 @@ assign_vnodeid_restart_later_ts_test() ->
 
 %% Check assigning a vnodeid with a earlier date - just in case of clock skew
 assign_vnodeid_restart_earlier_ts_test() ->
-    Now1 = {1000,224520,343546}, %% <<70,116,143,150>>
-    Now2 = {1000,224520,343446}, %% <<70,116,143,250>>
+    Now1 = {1000,224520,343546}, %% <<70,116,143,250>>
+    Now2 = {1000,224520,343446}, %% <<70,116,143,150>>
     NodeId = <<1, 2, 3, 4>>,
     {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
     ?assertEqual(<<1, 2, 3, 4, 70,116,143,250>>, Vid1),

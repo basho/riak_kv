@@ -2487,10 +2487,14 @@ maybe_new_key_epoch(true, State, LocalObj, IncomingObj) ->
                                               InCntr > LocalCntr ->
                     %% In coming actor-epoch or counter greater than
                     %% local, some byzantine failure, new epoch.
-                    %%
-                    %% @TODO (rdb) do we log/stat here?
+                    B = riak_object:bucket(LocalObj),
+                    K = riak_object:key(LocalObj),
+
+                    lager:info("Inbound clock entry for ~p in ~p/~p greater than local",
+                               [VId, B, K]),
                     new_key_epoch(State);
-                _ -> %% just use local id
+                _ ->
+                    %% just use local id
                     %% Return the highest local epoch ID for this
                     %% key. This may be the pre-epoch ID (i.e. no
                     %% epoch), which is good, no reason to force a new
