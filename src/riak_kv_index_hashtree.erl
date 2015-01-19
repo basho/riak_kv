@@ -431,7 +431,7 @@ handle_info({'DOWN', Ref, _, _, _}, State) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_Reason, State) -> 
+terminate(_Reason, State) ->
     close_trees(State),
     ok.
 
@@ -972,7 +972,6 @@ get_locks(all, Type, Index, Pid) ->
         ok ->
             get_locks(vnode, Type, Index, Pid);
         _ ->
-            lager:debug("failed riak_kv_entropy_manager:get_lock/2"),
             false
     end;
 
@@ -981,7 +980,6 @@ get_locks(vnode, Type, Index, Pid) ->
         ok ->
             true;
         _ ->
-            lager:debug("failed maybe_get_vnode_lock/3"),
             false
     end.
 
