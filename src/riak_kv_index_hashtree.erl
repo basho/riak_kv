@@ -75,7 +75,7 @@
                 vnode_pid,
                 built,
                 expired :: boolean(),
-                waiting_for_lock :: undefined | pid(),
+                waiting_for_lock :: undefined | {any(), pid()},
                 lock :: undefined | reference(),
                 path,
                 build_time,
@@ -197,7 +197,7 @@ get_lock(Tree, Type, Pid) ->
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the calling process.
 %%      When not_built pid are saved and given the lock when build finish.
--spec wait_for_lock(pid(), any()) -> ok | not_built | already_locked.
+-spec wait_for_lock(pid(), any()) -> ok | building | not_built | already_locked.
 wait_for_lock(Tree, Type) ->
     wait_for_lock(Tree, Type, self()).
 
@@ -598,7 +598,7 @@ do_new_tree(Id, State=#state{trees=Trees, path=Path}) ->
     Trees2 = orddict:store(Id, NewTree, Trees),
     State#state{trees=Trees2}.
 
--spec do_get_lock(any(), pid(), state()) -> {building, not_built | ok | already_locked, state()}.
+-spec do_get_lock(any(), pid(), state()) -> {building | not_built | ok | already_locked, state()}.
 do_get_lock(_, _, State) when is_pid(State#state.built) ->
     lager:debug("Building: ~p :: ~p", [State#state.index, State#state.built]),
     {building, State};
