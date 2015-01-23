@@ -203,7 +203,7 @@ wait_for_lock(Tree, Type) ->
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the provided pid.
--spec wait_for_lock(pid(), any(), pid()) -> ok | not_built | already_locked.
+-spec wait_for_lock(pid(), any(), pid()) -> ok | building | not_built | already_locked.
 wait_for_lock(Tree, Type, Pid) ->
     gen_server:call(Tree, {wait_for_lock, Type, Pid}, 60000).
 
@@ -599,6 +599,9 @@ do_new_tree(Id, State=#state{trees=Trees, path=Path}) ->
     State#state{trees=Trees2}.
 
 -spec do_get_lock(any(), pid(), state()) -> {building | not_built | ok | already_locked, state()}.
+ do_get_lock(_, _, State) when State#state.waiting_for_lock /= undefined ->
+    lager:debug("Already waiting for lock: ~p ~p", [State#state.index, State#state.waiting_for_lock]),
+    {already_locked, State};
 do_get_lock(_, _, State) when is_pid(State#state.built) ->
     lager:debug("Building: ~p :: ~p", [State#state.index, State#state.built]),
     {building, State};
@@ -657,9 +660,9 @@ do_build_finished(State=#state{index=Index, built=_Pid}) ->
     State#state{built=true, build_time=BuildTime, expired=false}.
 
 do_inform_waiting(#state{waiting_for_lock = {Type, Waiting}} = State) when is_pid(Waiting) ->
-    {ok, State2} = do_get_lock(Type, Waiting, State),
+    {ok, State2} = do_get_lock(Type, Waiting, State#state{waiting_for_lock = undefined}),
     Waiting ! {hashtree_lock, State2#state.index},
-    State2#state{waiting_for_lock = undefined};
+    State;
 
 do_inform_waiting(State) ->
     State.
