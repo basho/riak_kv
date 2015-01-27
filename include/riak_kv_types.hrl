@@ -34,8 +34,12 @@
 
 -define(DATATYPE_STATS_DEFAULTS, [actor_count]).
 
--define(R1_DATATYPE_VERSIONS, [{?COUNTER_TYPE, 2}]).
--define(R2_DATATYPE_VERSIONS, [{?MAP_TYPE, 2}, {?SET_TYPE, 2}, {?COUNTER_TYPE, 2}]).
+%% These proplists represent the current versions of supported
+%% datatypes. The naming `EN_DATATYPE_VERSIONS' means `Epoch' and
+%% number. `N' is incremented when any new version of any datatype is
+%% introduced, thus bumping the data type `Epoch'.
+-define(E1_DATATYPE_VERSIONS, [{?COUNTER_TYPE, 2}]).
+-define(E2_DATATYPE_VERSIONS, [{?MAP_TYPE, 2}, {?SET_TYPE, 2}, {?COUNTER_TYPE, 2}]).
 
 -type crdt() :: ?CRDT{}.
 -type crdt_op() :: ?CRDT_OP{}.
