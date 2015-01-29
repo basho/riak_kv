@@ -432,9 +432,11 @@ crdt_version(Mod) ->
         1 ->
             proplists:get_value(Mod, ?E1_DATATYPE_VERSIONS, 1);
         _ ->
-            %% use any term except true to unset app env. Default to
-            %% `1' for any unknown CRDT version
-            proplists:get_value(Mod, riak_core_capability:get({riak_kv, crdt_epoch_versions}, ?E1_DATATYPE_VERSIONS), 1)
+            %% use any term except the integer `1' to unset app env
+            %% and use capability negotiated CRDT version epoch.
+            %% Default to 1 for any unknown CRDT version.
+            NegotiatedCap = riak_core_capability:get({riak_kv, crdt_epoch_versions}, ?E1_DATATYPE_VERSIONS),
+            proplists:get_value(Mod, NegotiatedCap, 1)
     end.
 
 %% @doc turn a string token / atom into a
