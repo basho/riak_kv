@@ -191,6 +191,10 @@ start(_Type, _StartArgs) ->
                                           [?TOP_LEVEL_TYPES, [pncounter], []],
                                           []),
 
+            riak_core_capability:register({riak_kv, crdt_epoch_versions},
+                                          [?E2_DATATYPE_VERSIONS, ?E1_DATATYPE_VERSIONS],
+                                          ?E1_DATATYPE_VERSIONS),
+
             riak_core_capability:register({riak_kv, put_fsm_ack_execute},
                                           [enabled, disabled],
                                           disabled),
