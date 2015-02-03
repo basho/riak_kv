@@ -58,6 +58,7 @@
          clear/1,
          expire/1,
          destroy/1,
+         nonblocking_destroy/1,
          index_2i_n/0]).
 
 -export([poke/1,
@@ -197,13 +198,15 @@ get_lock(Tree, Type, Pid) ->
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the calling process.
 %%      When not_built pid are saved and given the lock when build finish.
--spec wait_for_lock(pid(), any()) -> ok | building | not_built | already_locked.
+%%      Users of this function should monitor the tree pid to find out 
+%%      when exits unexpectedly
+-spec wait_for_lock(pid(), any()) -> ok | not_built | already_locked.
 wait_for_lock(Tree, Type) ->
     wait_for_lock(Tree, Type, self()).
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the provided pid.
--spec wait_for_lock(pid(), any(), pid()) -> ok | building | not_built | already_locked.
+-spec wait_for_lock(pid(), any(), pid()) -> ok | not_built | already_locked.
 wait_for_lock(Tree, Type, Pid) ->
     gen_server:call(Tree, {wait_for_lock, Type, Pid}, 60000).
 
@@ -227,6 +230,11 @@ stop(Tree) ->
 -spec destroy(pid()) -> ok.
 destroy(Tree) ->
     gen_server:call(Tree, destroy, infinity).
+
+%% @doc Destroy the specified index_hashtree, which will destroy all
+%%      associated hashtrees and terminate.
+nonblocking_destroy(Tree) ->
+    gen_server:cast(Tree, destroy).
 
 %% @doc Clear the specified index_hashtree, clearing all associated hashtrees
 clear(Tree) ->
@@ -295,8 +303,8 @@ handle_call({get_lock, Type, Pid}, _From, State) ->
 
 handle_call({wait_for_lock, Type, Pid}, _From, State) ->
     case do_get_lock(Type, Pid, State) of
-        {building, State2} ->
-            {reply, building, State2#state{waiting_for_lock = {Type, Pid}}};
+        {not_built, State2} ->
+            {reply, not_built, State2#state{waiting_for_lock = {Type, Pid}}};
         {Result, State2} ->
             {reply, Result, State2}
     end;
@@ -397,13 +405,18 @@ handle_cast({delete, Items}, State) ->
     State2 = do_delete(Items, State),
     {noreply, State2};
 
+handle_cast(destroy, State) ->
+    State2 = destroy_trees(State),
+    {stop, normal, State2};
+
 handle_cast(build_failed, State) ->
     riak_kv_entropy_manager:requeue_poke(State#state.index),
-    State2 = State#state{built=false},
+    State2 = do_inform_waiting(failed, State#state{built=false}),
     {noreply, State2};
+
 handle_cast(build_finished, State) ->
     State2 = do_build_finished(State),
-    State3 = do_inform_waiting(State2),
+    State3 = do_inform_waiting(finished, State2),
     {noreply, State3};
 
 handle_cast({start_exchange_remote, FsmPid, From, _IndexN}, State) ->
@@ -598,13 +611,13 @@ do_new_tree(Id, State=#state{trees=Trees, path=Path}) ->
     Trees2 = orddict:store(Id, NewTree, Trees),
     State#state{trees=Trees2}.
 
--spec do_get_lock(any(), pid(), state()) -> {building | not_built | ok | already_locked, state()}.
+-spec do_get_lock(any(), pid(), state()) -> {not_built | ok | already_locked, state()}.
  do_get_lock(_, _, State) when State#state.waiting_for_lock /= undefined ->
     lager:debug("Already waiting for lock: ~p ~p", [State#state.index, State#state.waiting_for_lock]),
     {already_locked, State};
 do_get_lock(_, _, State) when is_pid(State#state.built) ->
     lager:debug("Building: ~p :: ~p", [State#state.index, State#state.built]),
-    {building, State};
+    {not_built, State};
 do_get_lock(_, _, State) when State#state.built /= true ->
     lager:debug("Not built: ~p :: ~p", [State#state.index, State#state.built]),
     {not_built, State};
@@ -659,12 +672,14 @@ do_build_finished(State=#state{index=Index, built=_Pid}) ->
     riak_kv_entropy_info:tree_built(Index, BuildTime),
     State#state{built=true, build_time=BuildTime, expired=false}.
 
-do_inform_waiting(#state{waiting_for_lock = {Type, Waiting}} = State) when is_pid(Waiting) ->
+do_inform_waiting(finished, #state{waiting_for_lock = {Type, Waiting}} = State) when is_pid(Waiting) ->
     {ok, State2} = do_get_lock(Type, Waiting, State#state{waiting_for_lock = undefined}),
     Waiting ! {hashtree_lock, State2#state.index},
     State;
-
-do_inform_waiting(State) ->
+do_inform_waiting(failed, #state{waiting_for_lock = {_Type, Waiting}} = State) when is_pid(Waiting) ->
+    Waiting ! {hashtree_build_fail, State#state.index},
+    State#state{waiting_for_lock = undefined};
+do_inform_waiting(_ ,State) ->
     State.
 
 %% Determine the build time for all trees associated with this
