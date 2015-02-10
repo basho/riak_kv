@@ -1642,14 +1642,22 @@ fold_fun(keys, BufferMod, none, undefined) ->
             BufferMod:add(Key, Buffer)
     end;
 fold_fun(keys, BufferMod, none, {Bucket, Index, N, NumPartitions}) ->
-    fun(_, Key, Buffer) ->
-            Hash = riak_core_util:chash_key({Bucket, Key}),
-            case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
-                Index ->
-                    BufferMod:add(Key, Buffer);
-                _ ->
-                    Buffer
-            end
+    EmitFun = fun(Key, Emit, Buffer) ->
+                      Hash = riak_core_util:chash_key({Bucket, Key}),
+                      case riak_core_ring:future_index(
+                             Hash, Index, N, NumPartitions, NumPartitions) of
+                          Index ->
+                              BufferMod:add(Emit, Buffer);
+                          _ ->
+                              Buffer
+                      end
+              end,
+    fun(_, {o, Key, _} = Obj, Buffer) ->
+            EmitFun(Key, Obj, Buffer);
+       (_, {_Term, Key} = TermKey, Buffer) ->
+            EmitFun(Key, TermKey , Buffer);
+       (_, Key, Buffer) ->
+            EmitFun(Key, Key, Buffer)
     end;
 fold_fun(keys, BufferMod, Filter, undefined) ->
     fun(_, Key, Buffer) ->
@@ -1661,19 +1669,27 @@ fold_fun(keys, BufferMod, Filter, undefined) ->
             end
     end;
 fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
-    fun(_, Key, Buffer) ->
-            Hash = riak_core_util:chash_key({Bucket, Key}),
-            case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
-                Index ->
-                    case Filter(Key) of
-                        true ->
-                            BufferMod:add(Key, Buffer);
-                        false ->
-                            Buffer
-                    end;
-                _ ->
-                    Buffer
-            end
+    EmitFun = fun(Key, Emit, Buffer) ->
+                      Hash = riak_core_util:chash_key({Bucket, Key}),
+                      case riak_core_ring:future_index(
+                             Hash, Index, N, NumPartitions, NumPartitions) of
+                          Index ->
+                              case Filter(Key) of
+                                  true ->
+                                      BufferMod:add(Emit, Buffer);
+                                  false ->
+                                      Buffer
+                              end;
+                          _ ->
+                              Buffer
+                      end
+              end,
+    fun(_, {o, Key, _} = Obj, Buffer) ->
+            EmitFun(Key, Obj, Buffer);
+       (_, {_Term, Key} = TermKey, Buffer) ->
+            EmitFun(Key, TermKey , Buffer);
+       (_, Key, Buffer) ->
+            EmitFun(Key, Key, Buffer)
     end.
 
 %% @private
