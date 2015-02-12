@@ -32,17 +32,17 @@
          produce_body/2,
          pretty_print/2
         ]).
+-export([get_stats/0]).
 
 -include_lib("webmachine/include/webmachine.hrl").
 
 -record(ctx, {}).
--type context() :: #ctx{}.
 
 init(_) ->
     {ok, #ctx{}}.
 
--spec encodings_provided(#wm_reqdata{}, context()) ->
-         {[term()], #wm_reqdata{}, context()}.
+%% @spec encodings_provided(webmachine:wrq(), context()) ->
+%%         {[encoding()], webmachine:wrq(), context()}
 %% @doc Get the list of encodings this resource provides.
 %%      "identity" is provided for all methods, and "gzip" is
 %%      provided for GET as well
@@ -55,8 +55,8 @@ encodings_provided(ReqData, Context) ->
             {[{"identity", fun(X) -> X end}], ReqData, Context}
     end.
 
--spec content_types_provided(#wm_reqdata{}, context()) ->
-    {[term()], #wm_reqdata{}, context()}.
+%% @spec content_types_provided(webmachine:wrq(), context()) ->
+%%          {[ctype()], webmachine:wrq(), context()}
 %% @doc Get the list of content types this resource provides.
 %%      "application/json" and "text/plain" are both provided
 %%      for all requests.  "text/plain" is a "pretty-printed"
@@ -74,17 +74,17 @@ forbidden(RD, Ctx) ->
     {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx}.
 
 produce_body(ReqData, Ctx) ->
-    Body = mochijson2:encode({struct, get_stats()}),
+    Stats= riak_kv_http_cache:get_stats(),
+    Body = mochijson2:encode({struct, Stats}),
     {Body, ReqData, Ctx}.
 
--spec pretty_print(#wm_reqdata{}, context()) ->
-          {string(), #wm_reqdata{}, context()}.
+%% @spec pretty_print(webmachine:wrq(), context()) ->
+%%          {string(), webmachine:wrq(), context()}
 %% @doc Format the respons JSON object is a "pretty-printed" style.
 pretty_print(RD1, C1=#ctx{}) ->
     {Json, RD2, C2} = produce_body(RD1, C1),
     {json_pp:print(binary_to_list(list_to_binary(Json))), RD2, C2}.
 
+
 get_stats() ->
-    {value, {disk, Disk}, Stats} = lists:keytake(disk, 1, riak_kv_stat:get_stats()),
-    DiskFlat = [{struct, [{id, list_to_binary(Id)}, {size, Size}, {used, Used}]} || {Id, Size, Used} <- Disk],
-    lists:append([Stats, [{disk, DiskFlat}], riak_core_stat:get_stats(), yz_stat:search_stats()]).
+    riak_kv_status:get_stats(web).

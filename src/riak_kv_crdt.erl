@@ -353,7 +353,9 @@ new(B, K, Mod) ->
 to_binary(CRDT=?CRDT{mod=?V1_COUNTER_TYPE}) ->
     to_binary(CRDT, ?V1_VERS);
 to_binary(?CRDT{mod=Mod, value=Value}) ->
-    CRDTBin = Mod:to_binary(Value),
+    %% Store the CRDT in the version that is negotiated cluster wide
+    Version = crdt_version(Mod),
+    {ok, CRDTBin} = Mod:to_binary(Version, Value),
     Type = atom_to_binary(Mod, latin1),
     TypeLen = byte_size(Type),
     <<?TAG:8/integer, ?V2_VERS:8/integer, TypeLen:32/integer, Type:TypeLen/binary, CRDTBin/binary>>.
@@ -390,11 +392,14 @@ v1_counter_from_binary(CounterBin) ->
             {error, {Class, Err}}
         end.
 
-%% @private attempt to deserialize a v2 CRDT.
+%% @private attempt to deserialize a v2 CRDT (That is a data type, not a 1.4 counter)
 crdt_from_binary(<<TypeLen:32/integer, Type:TypeLen/binary, CRDTBin/binary>>) ->
     try
         Mod = binary_to_existing_atom(Type, latin1),
-        Val = Mod:from_binary(CRDTBin),
+        %% You don't need a target version, as Mod:from_binary/1 will
+        %% always give you the highest version you can work with,
+        %% assuming Mod:to_binary/2 was called before storing.
+        {ok, Val} = Mod:from_binary(CRDTBin),
         to_record(Mod, Val) of
         ?CRDT{}=CRDT ->
             {ok, CRDT}
@@ -415,9 +420,28 @@ to_record(?SET_TYPE, Val) ->
     ?SET_TYPE(Val).
 
 %% @doc Check cluster capability for crdt support
-%% @TODO what does this mean for Maps?
 supported(Mod) ->
     lists:member(Mod, riak_core_capability:get({riak_kv, crdt}, [])).
+
+%% @private get the binary version for a crdt mod, default to `1' for
+%% pre-versioned.
+-spec crdt_version(module()) -> pos_integer().
+crdt_version(Mod) ->
+    %% due to the riak-2.0.4 disaster where mixed format maps were
+    %% written to disk (see riak#667 for more) override the cluster
+    %% negotiated capability with an env var, this is to ensure that
+    %% in a multi-cluster environment, Epoch 1 binary format is used until
+    %% all clusters are Epoch 2 capable.
+    case app_helper:get_env(riak_kv, mdc_crdt_epoch) of
+        1 ->
+            proplists:get_value(Mod, ?E1_DATATYPE_VERSIONS, 1);
+        _ ->
+            %% use any term except the integer `1' to unset app env
+            %% and use capability negotiated CRDT version epoch.
+            %% Default to 1 for any unknown CRDT version.
+            NegotiatedCap = riak_core_capability:get({riak_kv, crdt_epoch_versions}, ?E1_DATATYPE_VERSIONS),
+            proplists:get_value(Mod, NegotiatedCap, 1)
+    end.
 
 %% @doc turn a string token / atom into a
 %% CRDT type
@@ -475,7 +499,21 @@ get_context(Type, Value) ->
                               io:format(user, Str, Args) end, P)).
 
 -define(TEST_TIME_SECONDS, 10).
+-define(TIMED_QC(Prop), eqc:quickcheck(?QC_OUT(eqc:testing_time(?TEST_TIME_SECONDS, Prop)))).
 
+eqc_test_() ->
+    {timeout,
+     60,
+     ?_test(?TIMED_QC(prop_binary_roundtrip()))}.
+
+prop_binary_roundtrip() ->
+    ?FORALL({_Type, Mod}, oneof(?MOD_MAP), 
+            begin
+                {ok, ?CRDT{mod=SMod, value=SValue}} = from_binary(to_binary(?CRDT{mod=Mod, value=Mod:new()})),
+                conjunction([{module, equals(Mod, SMod)},
+                             {value, Mod:equal(SValue, Mod:new())}])
+            end).
+                
 
 -endif.
 -endif.

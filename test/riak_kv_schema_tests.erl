@@ -270,11 +270,15 @@ commit_hooks_test() ->
     Config = cuttlefish_unit:generate_templated_config(
                ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context(), predefined_schema()),
     ?assertEqual({error, apply_translations,
-                  {error, [
-                           {error, "Translation for 'riak_core.default_bucket_props.postcommit'"
-                            " found invalid configuration: incorrect hook format 'jsLOL'"},
-                           {error, "Translation for 'riak_core.default_bucket_props.precommit'"
-                            " found invalid configuration: incorrect hook format 'bad:mod:fun'"}
+                  {errorlist, [
+                               {error,
+                                {translation_invalid_configuration,
+                                 {"riak_core.default_bucket_props.postcommit",
+                                  "incorrect hook format 'jsLOL'"}}},
+                               {error,
+                                {translation_invalid_configuration,
+                                 {"riak_core.default_bucket_props.precommit",
+                                  "incorrect hook format 'bad:mod:fun'"}}}
                            ]}}, Config).
 
 datatype_compression_validator_test() ->
@@ -302,10 +306,11 @@ correct_error_handling_by_multibackend_test() ->
         Conf, context(), predefined_schema()),
 
 
-    ?assertMatch({error, apply_translations, {error, _}}, Config),
-    {error, apply_translations, {error, [Error]}} = Config,
+    ?assertMatch({error, apply_translations, {errorlist, _}}, Config),
+    {error, apply_translations, {errorlist, [Error]}} = Config,
 
-    ?assertNotEqual({error,"Error running translation for riak_kv.multi_backend, [error, function_clause]."}, Error),
+    ?assertMatch({error, {translation_invalid_configuration, _}},
+                 Error),
     ok.
 
 all_backend_multi_test() ->

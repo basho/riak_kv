@@ -175,15 +175,11 @@ down([Node]) ->
 -spec(status([]) -> ok).
 status([]) ->
     try
-        case riak_kv_status:statistics() of
-            [] ->
-                io:format("riak_kv_stat is not enabled.\n", []);
-            Stats ->
-                StatString = format_stats(Stats,
+        Stats = riak_kv_status:statistics(),
+	StatString = format_stats(Stats,
                     ["-------------------------------------------\n",
-                        io_lib:format("1-minute stats for ~p~n",[node()])]),
-                io:format("~s\n", [StatString])
-        end
+		     io_lib:format("1-minute stats for ~p~n",[node()])]),
+	io:format("~s\n", [StatString])
     catch
         Exception:Reason ->
             lager:error("Status failed ~p:~p", [Exception,
@@ -317,7 +313,7 @@ aae_status([]) ->
     io:format("~n"),
     aae_repair_status(ExchangeInfo).
 
-aae_exchange_status(ExchangeInfo) -> 
+aae_exchange_status(ExchangeInfo) ->
     io:format("~s~n", [string:centre(" Exchanges ", 79, $=)]),
     io:format("~-49s  ~-12s  ~-12s~n", ["Index", "Last (ago)", "All (ago)"]),
     io:format("~79..-s~n", [""]),
@@ -664,7 +660,7 @@ repair_2i(Args) ->
                     _ = [io:format("\t~p\n", [Idx]) || Idx <- IdxList],
                     ok;
                 false ->
-                    io:format("Will repair 2i data on ~p partitions\n", 
+                    io:format("Will repair 2i data on ~p partitions\n",
                               [length(IdxList)]),
                     ok
             end,

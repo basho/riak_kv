@@ -266,7 +266,7 @@ merge(OldObject, NewObject) ->
     Bucket = bucket(OldObject),
     DVV = dvv_enabled(Bucket),
     {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
-    riak_kv_stat:update({riak_object_merge, CRDT, Time}),
+    ok = riak_kv_stat:update({riak_object_merge, CRDT, Time}),
     OldObject#r_object{contents=Contents,
                        vclock=vclock:merge([OldObject#r_object.vclock,
                                             NewObj1#r_object.vclock]),
