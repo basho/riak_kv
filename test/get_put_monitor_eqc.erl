@@ -64,7 +64,7 @@ exit_gracefully(S) ->
     [end_and_wait(Pid, normal) || Pid <- PutList ++ GetList].
 
 reset_test_state() ->
-    Servers = [riak_kv_stat, riak_core_stat_cache],
+    Servers = [riak_kv_stat],
     [riak_kv_test_util:wait_for_unregister(Server) || Server <- Servers],
     application:stop(folsom),
     ok = application:start(folsom),

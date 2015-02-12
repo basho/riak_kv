@@ -124,8 +124,7 @@ maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
                           _ ->
                               undefined
                       end,
-            riak_kv_stat:update({Stat, Bucket, Duration, ObjSize}),
-            ok;
+            ok = riak_kv_stat:update({Stat, Bucket, Duration, ObjSize});
         _ ->
             ok
     end.

@@ -61,6 +61,9 @@ init([]) ->
                   {riak_kv_js_manager, start_link,
                   [?JSPOOL_HOOK, read_js_pool_size(hook_js_vm_count, "hook callback")]},
                   permanent, 30000, worker, [riak_kv_js_manager]},
+    HTTPCache = {riak_kv_http_cache,
+		 {riak_kv_http_cache, start_link, []},
+		 permanent, 5000, worker, [riak_kv_http_cache]},
     JSSup = {riak_kv_js_sup,
              {riak_kv_js_sup, start_link, []},
              permanent, infinity, supervisor, [riak_kv_js_sup]},
@@ -111,7 +114,8 @@ init([]) ->
         JSSup,
         MapJSPool,
         ReduceJSPool,
-        HookJSPool
+        HookJSPool,
+        HTTPCache
     ]),
 
     % Run the proesses...

@@ -171,6 +171,7 @@ cycle(Zs, N, []) ->
     cycle(Zs, N, Zs).
 
 start_mock_servers() ->
+
     %% Start new core_vnode based EQC FSM test mock
     case whereis(fsm_eqc_vnode) of
         undefined -> ok;
@@ -182,12 +183,12 @@ start_mock_servers() ->
     {ok, _Pid3} = fsm_eqc_vnode:start_link(),
     application:load(riak_core),
     application:start(crypto),
-    application:start(folsom),
+    exometer:start(),
     start_fake_get_put_monitor(),
-    riak_core_stat_cache:start_link(),
     riak_kv_stat:register_stats(),
     riak_core_metadata_manager:start_link([{data_dir, "fsm_eqc_test_data"}]),
     riak_core_ring_events:start_link(),
+    riak_core_ring_manager:start_link(test),
     riak_core_node_watcher_events:start_link(),
     riak_core_node_watcher:start_link(),
     riak_core_node_watcher:service_up(riak_kv, self()),
@@ -196,8 +197,10 @@ start_mock_servers() ->
 cleanup_mock_servers() ->
     stop_fake_get_put_monitor(),
     riak_kv_test_util:stop_process(riak_core_metadata_manager),
+    riak_kv_test_util:stop_process(riak_core_ring_manager),
     application:stop(folsom),
-    application:stop(riak_core).
+    application:stop(riak_core),
+    exometer:stop().
 
 make_options([], Options) ->
     Options;

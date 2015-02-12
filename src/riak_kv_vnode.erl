@@ -483,7 +483,7 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
                Sender, State=#state{idx=Idx}) ->
     StartTS = os:timestamp(),
     riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
-    UpdState = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
+    {_Reply, UpdState} = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
     update_vnode_stats(vnode_put, Idx, StartTS),
     {noreply, UpdState};
 
@@ -616,7 +616,7 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
             {Reply, ModState3} =
             case Mod:put(Bucket, Key, IndexSpecs, undefined, ModState2) of
                 {ok, UpModState2} ->
-                    riak_kv_stat:update(vnode_index_refresh),
+                    ok = riak_kv_stat:update(vnode_index_refresh),
                     {ok, UpModState2};
                 {error, Reason, UpModState2} ->
                     {{error, Reason}, UpModState2}
@@ -677,9 +677,10 @@ handle_command(?KV_VNODE_STATUS_REQ{},
                _Sender,
                State=#state{idx=Index,
                             mod=Mod,
-                            modstate=ModState}) ->
+                            modstate=ModState,
+                            vnodeid=VId}) ->
     BackendStatus = {backend_status, Mod, Mod:status(ModState)},
-    VNodeStatus = [BackendStatus],
+    VNodeStatus = [BackendStatus, {vnodeid, VId}],
     {reply, {vnode_status, Index, VNodeStatus}, State};
 handle_command({reformat_object, BKey}, _Sender, State) ->
     {Reply, UpdState} = do_reformat(BKey, State),
@@ -847,7 +848,7 @@ handle_coverage_index(Bucket, ItemFilter, Query,
     case IndexBackend of
         true ->
             %% Update stats...
-            riak_kv_stat:update(vnode_index_read),
+            ok = riak_kv_stat:update(vnode_index_read),
 
             ResultFun = ResultFunFun(Bucket, Sender),
             BufSize = buffer_size_for_index_query(Query, DefaultBufSz),
@@ -907,17 +908,53 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
             {noreply, State}
     end.
 
-%% While in handoff, vnodes have the option of returning {forward, State}
-%% which will cause riak_core to forward the request to the handoff target
-%% node. For riak_kv, we issue a put locally as well as forward it in case
-%% the vnode has already handed off the previous version. All other requests
-%% are handled locally and not forwarded since the relevant data may not have
-%% yet been handed off to the target node. Since we do not forward deletes it
-%% is possible that we do not clear a tombstone that was already handed off.
-%% This is benign as the tombstone will eventually be re-deleted.
+%% While in handoff, vnodes have the option of returning {forward,
+%% State}, or indeed, {forward, Req, State} which will cause riak_core
+%% to forward the request to the handoff target node. For riak_kv, we
+%% issue a put locally as well as forward it in case the vnode has
+%% already handed off the previous version. All other requests are
+%% handled locally and not forwarded since the relevant data may not
+%% have yet been handed off to the target node. Since we do not
+%% forward deletes it is possible that we do not clear a tombstone
+%% that was already handed off.  This is benign as the tombstone will
+%% eventually be re-deleted. NOTE: this makes write requests N+M where
+%% M is the number of vnodes forwarding.
 handle_handoff_command(Req=?KV_PUT_REQ{}, Sender, State) ->
-    {noreply, NewState} = handle_command(Req, Sender, State),
-    {forward, NewState};
+    ?KV_PUT_REQ{options=Options} = Req,
+    case proplists:get_value(coord, Options, false) of
+        false ->
+            {noreply, NewState} = handle_command(Req, Sender, State),
+            {forward, NewState};
+        true ->
+            %% riak_kv#1046 - don't make fake siblings. Perform the
+            %% put, and create a new request to forward on, that
+            %% contains the frontier, much like the value returned to
+            %% a put fsm, then replicated.
+            #state{idx=Idx} = State,
+            ?KV_PUT_REQ{bkey=BKey,
+                        object=Object,
+                        req_id=ReqId,
+                        start_time=StartTime,
+                        options=Options} = Req,
+            StartTS = os:timestamp(),
+            riak_core_vnode:reply(Sender, {w, Idx, ReqId}),
+            {Reply, UpdState} = do_put(Sender, BKey,  Object, ReqId, StartTime, Options, State),
+            update_vnode_stats(vnode_put, Idx, StartTS),
+
+            case Reply of
+                %%  NOTE: Coord is always `returnbody` as a put arg
+                {dw, Idx, NewObj, ReqId} ->
+                    %% DO NOT coordinate again at the next owner!
+                    NewReq = Req?KV_PUT_REQ{options=proplists:delete(coord, Options),
+                                            object=NewObj},
+                    {forward, NewReq, UpdState};
+                _Error ->
+                    %% Don't forward a failed attempt to put, as you
+                    %% need the successful object
+                    {noreply, UpdState}
+            end
+    end;
+
 %% Handle all unspecified cases locally without forwarding
 handle_handoff_command(Req, Sender, State) ->
     handle_command(Req, Sender, State).
@@ -1202,7 +1239,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     riak_core_vnode:reply(Sender, Reply),
 
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
-    UpdState.
+    {Reply, UpdState}.
 
 do_backend_delete(BKey, RObj, State = #state{idx = Idx,
                                              mod = Mod,
@@ -1378,7 +1415,7 @@ handle_crdt(false, _CRDTOp, _Vid, RObj) ->
 
 do_crdt_update(RObj, VId, CRDTOp) ->
     {Time, Value} = timer:tc(riak_kv_crdt, update, [RObj, VId, CRDTOp]),
-    riak_kv_stat:update({vnode_dt_update, get_crdt_mod(CRDTOp), Time}),
+    ok = riak_kv_stat:update({vnode_dt_update, get_crdt_mod(CRDTOp), Time}),
     Value.
 
 get_crdt_mod(Int) when is_integer(Int) -> ?COUNTER_TYPE;
@@ -1909,7 +1946,9 @@ get_vnodeid(Index) ->
     F = fun(Status) ->
                 case proplists:get_value(vnodeid, Status, undefined) of
                     undefined ->
-                        assign_vnodeid(os:timestamp(),
+                        %% using now as we want different values per
+                        %% vnode id on a node
+                        assign_vnodeid(erlang:now(),
                                        riak_core_nodeid:get(),
                                        Status);
                     VnodeId ->
@@ -1921,8 +1960,8 @@ get_vnodeid(Index) ->
 %% Assign a unique vnodeid, making sure the timestamp is unique by incrementing
 %% into the future if necessary.
 assign_vnodeid(Now, NodeId, Status) ->
-    {Mega, Sec, _Micro} = Now,
-    NowEpoch = 1000000*Mega + Sec,
+    {_Mega, Sec, Micro} = Now,
+    NowEpoch = 1000000*Sec + Micro,
     LastVnodeEpoch = proplists:get_value(last_epoch, Status, 0),
     VnodeEpoch = erlang:max(NowEpoch, LastVnodeEpoch+1),
     VnodeId = <<NodeId/binary, VnodeEpoch:32/integer>>,
@@ -2005,19 +2044,19 @@ wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
 -spec update_vnode_stats(vnode_get | vnode_put, partition(), erlang:timestamp()) ->
                                 ok.
 update_vnode_stats(Op, Idx, StartTS) ->
-    riak_kv_stat:update({Op, Idx, timer:now_diff( os:timestamp(), StartTS)}).
+    ok = riak_kv_stat:update({Op, Idx, timer:now_diff( os:timestamp(), StartTS)}).
 
 %% @private
 update_index_write_stats(false, _IndexSpecs) ->
     ok;
 update_index_write_stats(true, IndexSpecs) ->
     {Added, Removed} = count_index_specs(IndexSpecs),
-    riak_kv_stat:update({vnode_index_write, Added, Removed}).
+    ok = riak_kv_stat:update({vnode_index_write, Added, Removed}).
 
 %% @private
 update_index_delete_stats(IndexSpecs) ->
     {_Added, Removed} = count_index_specs(IndexSpecs),
-    riak_kv_stat:update({vnode_index_delete, Removed}).
+    ok = riak_kv_stat:update({vnode_index_delete, Removed}).
 
 %% @private
 %% @doc Given a list of index specs, return the number to add and
@@ -2287,43 +2326,44 @@ new_md_cache(VId) ->
 
 %% Check assigning a vnodeid twice in the same second
 assign_vnodeid_restart_same_ts_test() ->
-    Now1 = {1314,224520,343446}, %% TS=1314224520
-    Now2 = {1314,224520,345865}, %% as unsigned net-order int <<78,85,121,136>>
+    Now1 = {1314,224520,343446}, %% TS=(224520 * 100000) + 343446
+    Now2 = {1314,224520,343446}, %% as unsigned net-order int <<70,116,143,150>>
     NodeId = <<1, 2, 3, 4>>,
     {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
-    ?assertEqual(<<1, 2, 3, 4, 78, 85, 121, 136>>, Vid1),
+    ?assertEqual(<<1, 2, 3, 4, 70, 116, 143, 150>>, Vid1),
     %% Simulate clear
     Status2 = proplists:delete(vnodeid, Status1),
     %% Reassign
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
-    ?assertEqual(<<1, 2, 3, 4, 78, 85, 121, 137>>, Vid2).
+    ?assertEqual(<<1, 2, 3, 4, 70, 116, 143, 151>>, Vid2).
 
-%% Check assigning a vnodeid with a later date
+%% Check assigning a vnodeid with a later date, but less than 11.57
+%% days later!
 assign_vnodeid_restart_later_ts_test() ->
-    Now1 = {1000,000000,0}, %% <<59,154,202,0>>
-    Now2 = {2000,000000,0}, %% <<119,53,148,0>>
+    Now1 = {1000,224520,343446}, %% <<70,116,143,150>>
+    Now2 = {1000,224520,343546}, %% <<70,116,143,250>>
     NodeId = <<1, 2, 3, 4>>,
     {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
-    ?assertEqual(<<1, 2, 3, 4, 59,154,202,0>>, Vid1),
+    ?assertEqual(<<1, 2, 3, 4, 70,116,143,150>>, Vid1),
     %% Simulate clear
     Status2 = proplists:delete(vnodeid, Status1),
     %% Reassign
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
-    ?assertEqual(<<1, 2, 3, 4, 119,53,148,0>>, Vid2).
+    ?assertEqual(<<1, 2, 3, 4, 70,116,143,250>>, Vid2).
 
-%% Check assigning a vnodeid with a later date - just in case of clock skew
+%% Check assigning a vnodeid with a earlier date - just in case of clock skew
 assign_vnodeid_restart_earlier_ts_test() ->
-    Now1 = {2000,000000,0}, %% <<119,53,148,0>>
-    Now2 = {1000,000000,0}, %% <<59,154,202,0>>
+    Now1 = {1000,224520,343546}, %% <<70,116,143,150>>
+    Now2 = {1000,224520,343446}, %% <<70,116,143,250>>
     NodeId = <<1, 2, 3, 4>>,
     {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
-    ?assertEqual(<<1, 2, 3, 4, 119,53,148,0>>, Vid1),
+    ?assertEqual(<<1, 2, 3, 4, 70,116,143,250>>, Vid1),
     %% Simulate clear
     Status2 = proplists:delete(vnodeid, Status1),
     %% Reassign
     %% Should be greater than last offered - which is the 2mil timestamp
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
-    ?assertEqual(<<1, 2, 3, 4, 119,53,148,1>>, Vid2).
+    ?assertEqual(<<1, 2, 3, 4, 70,116,143,251>>, Vid2).
 
 %% Test
 vnode_status_test_() ->
@@ -2424,8 +2464,7 @@ list_buckets_test_() ->
              clean_test_dirs(),
              application:start(sasl),
              Env = application:get_all_env(riak_kv),
-             application:start(folsom),
-             riak_core_stat_cache:start_link(),
+	     exometer:start(),
              riak_kv_stat:register_stats(),
              {ok, _} = riak_core_bg_manager:start(),
              riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
@@ -2433,10 +2472,9 @@ list_buckets_test_() ->
      end,
      fun(Env) ->
              riak_core_ring_manager:cleanup_ets(test),
-             riak_core_stat_cache:stop(),
              riak_kv_test_util:stop_process(riak_core_metadata_manager),
              riak_kv_test_util:stop_process(riak_core_bg_manager),
-             application:stop(folsom),
+	     exometer:stop(),
              application:stop(sasl),
              [application:unset_env(riak_kv, K) ||
                  {K, _V} <- application:get_all_env(riak_kv)],

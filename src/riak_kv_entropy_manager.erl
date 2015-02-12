@@ -555,7 +555,7 @@ enqueue_exchange(E={Index, _RemoteIdx, _IndexN}, State) ->
         false ->
             State
     end;
-enqueue_exchange({Index, IndexN}, State) -> 
+enqueue_exchange({Index, IndexN}, State) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Exchanges = all_pairwise_exchanges(Index, Ring),
     Exchanges2 = [Exchange || Exchange={_, _, IdxN} <- Exchanges,
@@ -760,7 +760,11 @@ set_aae_throttle_kill(Bool) when Bool == true; Bool == false ->
 
 get_max_local_vnodeq() ->
     try
-        {element(2,lists:keyfind(riak_kv_vnodeq_max, 1, riak_core_stat:get_stats())), node()}
+	{ok, [{max,M}]} =
+	    exometer:get_value(
+	      [riak_core_stat:prefix(),riak_core,vnodeq,riak_kv_vnode],
+	      [max]),
+	{M, node()}
     catch _X:_Y ->
             %% This can fail locally if riak_core & riak_kv haven't finished their setup.
             {0, node()}

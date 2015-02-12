@@ -22,6 +22,7 @@
 -module(riak_kv_status).
 
 -export([statistics/0,
+         get_stats/1,
          ringready/0,
          transfers/0,
          vnode_status/0,
@@ -35,7 +36,7 @@
 
 -spec(statistics() -> [any()]).
 statistics() ->
-    riak_kv_stat:get_stats() ++ riak_core_stat:get_stats().
+    get_stats(console).
 
 ringready() ->
     riak_core_status:ringready().
@@ -48,8 +49,7 @@ transfers() ->
 vnode_status() ->
     %% Get the kv vnode indexes and the associated pids for the node.
     PrefLists = riak_core_vnode_manager:all_index_pid(riak_kv_vnode),
-    %% Using the Pids for this request byepasses overload protection
-    riak_kv_vnode:vnode_status([{Idx, node()} || {Idx, _Pid} <- PrefLists]).
+    riak_kv_vnode:vnode_status(PrefLists).
 
 %% @doc Get status of 2i reformat. If the backend requires reformatting, a boolean
 %%      value is returned indicating if all partitions on the node have completed
@@ -81,3 +81,45 @@ are_indexes_fixed(riak_kv_eleveldb_backend, Status) ->
 are_indexes_fixed(riak_kv_multi_backend, {_Idx, [{backend_status,_,Status}]}) ->
     Statuses = [S || {_, S} <- Status, lists:member({mod, riak_kv_eleveldb_backend}, Status)],
     fixed_index_status(riak_kv_eleveldb_backend, Statuses).
+
+get_stats(web) ->
+    aliases()
+        ++ expand_disk_stats(riak_kv_stat_bc:disk_stats())
+        ++ riak_kv_stat_bc:app_stats();
+get_stats(console) ->
+    aliases()
+        ++ riak_kv_stat_bc:disk_stats()
+        ++ riak_kv_stat_bc:app_stats().
+
+aliases() ->
+    Grouped = exometer_alias:prefix_foldl(
+                <<>>,
+                fun(Alias, Entry, DP, Acc) ->
+                        orddict:append(Entry, {DP, Alias}, Acc)
+                end, orddict:new()),
+    lists:keysort(
+      1,
+      lists:foldl(
+        fun({K, DPs}, Acc) ->
+                case exometer:get_value(K, [D || {D,_} <- DPs]) of
+                    {ok, Vs} when is_list(Vs) ->
+                        lists:foldr(fun({D,V}, Acc1) ->
+                                            {_,N} = lists:keyfind(D,1,DPs),
+                                            [{N,V}|Acc1]
+                                    end, Acc, Vs);
+                    Other ->
+                        Val = case Other of
+                                  {ok, disabled} -> undefined;
+                                  _ -> 0
+                              end,
+                        lists:foldr(fun({_,N}, Acc1) ->
+                                            [{N,Val}|Acc1]
+                                    end, Acc, DPs)
+                end
+        end, [], orddict:to_list(Grouped))).
+
+
+expand_disk_stats([{disk, Stats}]) ->
+    [{disk, [{struct, [{id, list_to_binary(Id)}, {size, Size}, {used, Used}]}
+             || {Id, Size, Used} <- Stats]}].
+

@@ -391,7 +391,7 @@ process_post(RD0, Ctx0=#ctx{client=C, bucket_type=T, bucket=B, module=Mod}) ->
 produce_json(RD, Ctx=#ctx{module=Mod, data=RObj, include_context=I}) ->
     Type = riak_kv_crdt:from_mod(Mod),
     {{RespCtx, Value}, Stats} = riak_kv_crdt:value(RObj, Mod),
-    _ = [ riak_kv_stat:update(S) || S <- Stats ],
+    _ = [ ok = riak_kv_stat:update(S) || S <- Stats ],
     ModMap = riak_kv_crdt:mod_map(Type),
     Body = riak_kv_crdt_json:fetch_response_to_json(
                      Type, Value, get_context(RespCtx,I), ModMap),
