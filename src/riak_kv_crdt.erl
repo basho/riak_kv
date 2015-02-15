@@ -28,6 +28,8 @@
 -export([log_merge_errors/4, meta/2, merge_value/2]).
 %% MR helper funs
 -export([value/1, counter_value/1, set_value/1, map_value/1]).
+%% Other helper funs
+-export([is_crdt/1]).
 
 -include("riak_kv_wm_raw.hrl").
 -include("riak_object.hrl").
@@ -127,6 +129,19 @@ set_value(RObj) ->
 map_value(RObj) ->
     {{_Ctx, Map}, _Stats}  = value(RObj, ?MAP_TYPE),
     Map.
+
+%% @doc convenience function for (e.g.) Yokozuna. Checks the bucket props for
+%% the object, if it has a supported datatype entry, returns true; otherwise
+%% false if not a 2.0 CRDT.
+-spec is_crdt(riak_object:riak_object()) -> boolean().
+is_crdt(RObj) ->
+    Bucket = riak_object:bucket(RObj),
+    case riak_core_bucket:get_bucket(Bucket) of
+        BProps when is_list(BProps) ->
+            Type = proplists:get_value(datatype, BProps),
+            Mod = riak_kv_crdt:to_mod(Type),
+            supported(Mod)
+    end.
 
 %% @TODO in riak_dt change value to query allow query to take an
 %% argument, (so as to query subfields of map, or set membership etc)
@@ -503,13 +518,13 @@ eqc_test_() ->
      ?_test(?TIMED_QC(prop_binary_roundtrip()))}.
 
 prop_binary_roundtrip() ->
-    ?FORALL({_Type, Mod}, oneof(?MOD_MAP), 
+    ?FORALL({_Type, Mod}, oneof(?MOD_MAP),
             begin
                 {ok, ?CRDT{mod=SMod, value=SValue}} = from_binary(to_binary(?CRDT{mod=Mod, value=Mod:new()})),
                 conjunction([{module, equals(Mod, SMod)},
                              {value, Mod:equal(SValue, Mod:new())}])
             end).
-                
+
 
 -endif.
 -endif.
