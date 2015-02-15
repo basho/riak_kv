@@ -137,14 +137,16 @@ map_value(RObj) ->
 %% @doc convenience function for (e.g.) Yokozuna. Checks the bucket props for
 %% the object, if it has a supported datatype entry, returns true; otherwise
 %% false if not a 2.0 CRDT.
--spec is_crdt(riak_object:riak_object()) -> boolean().
+-spec is_crdt(riak_object:riak_object()) -> boolean()|{error,_}.
 is_crdt(RObj) ->
     Bucket = riak_object:bucket(RObj),
     case riak_core_bucket:get_bucket(Bucket) of
         BProps when is_list(BProps) ->
             Type = proplists:get_value(datatype, BProps),
             Mod = riak_kv_crdt:to_mod(Type),
-            supported(Mod)
+            supported(Mod);
+        {error, _}=Err ->
+            Err
     end.
 
 %% @TODO in riak_dt change value to query allow query to take an
@@ -507,6 +509,57 @@ get_context(Type, Value) ->
 %% ===================================================================
 -ifdef(TEST).
 
+is_crdt_test_() ->
+{setup,
+     fun() ->
+             meck:new(riak_core_bucket),
+             meck:new(riak_core_capability, []),
+             meck:expect(riak_core_capability, get,
+                         fun({riak_kv, crdt}, []) ->
+                                 [pncounter,riak_dt_pncounter,riak_dt_orswot,
+                                  riak_dt_map];
+                            (X, Y) -> meck:passthrough([X, Y]) end),
+             ok
+     end,
+     fun(_) ->
+             meck:unload(riak_core_capability),
+             meck:unload(riak_core_bucket)
+     end,
+     [
+      ?_test(begin
+                 meck:expect(riak_core_bucket, get_bucket,
+                             fun(_Bucket) -> [{datatype, foo}] end),
+                 Bucket = {<<"counterz">>, <<"crdt">>},
+                 BTProps = riak_core_bucket:get_bucket(Bucket),
+                 ?assertEqual(foo, proplists:get_value(datatype, BTProps)),
+                 ?assertNot(is_crdt(riak_object:new(Bucket, <<"k1">>, hello)))
+             end),
+      ?_test(begin
+                 Bucket = {<<"t">>, <<"bucketjumpy">>},
+                 ?assertNot(is_crdt(riak_object:new(Bucket, <<"k1">>, hi)))
+             end),
+      ?_test(begin
+                 meck:expect(riak_core_bucket, get_bucket,
+                             fun({<<"maps">>, _Name}) -> [{datatype, map}];
+                                ({<<"sets">>, _Name}) -> [{datatype, set}];
+                                ({<<"counters">>, _Name}) -> [{datatype, counter}];
+                                ({X, Y}) -> meck:passthrough([X, Y]) end),
+                 Bucket1 = {<<"maps">>, <<"crdt">>},
+                 Bucket2 = {<<"sets">>, <<"crdt">>},
+                 Bucket3 = {<<"counters">>, <<"crdt">>},
+                 BTPropsMap = riak_core_bucket:get_bucket(Bucket1),
+                 BTPropsSet = riak_core_bucket:get_bucket(Bucket2),
+                 BTPropsCounter = riak_core_bucket:get_bucket(Bucket3),
+                 ?assertEqual(map, proplists:get_value(datatype, BTPropsMap)),
+                 ?assertEqual(set, proplists:get_value(datatype, BTPropsSet)),
+                 ?assertEqual(counter,
+                              proplists:get_value(datatype, BTPropsCounter)),
+                 [?assert(is_crdt(riak_object:new(B, K, V)))
+                  || {B, K, V} <- [{Bucket1, <<"k1">>, hi},
+                                 {Bucket2, <<"k2">>, hey},
+                                 {Bucket3, <<"k3">>, hey}]]
+
+             end)]}.
 
 -ifdef(EQC).
 -define(QC_OUT(P),
