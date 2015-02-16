@@ -29,7 +29,7 @@
 %% and secondary indexes (if supported).
 {mapping, "storage_backend", "riak_kv.storage_backend", [
   {default, {{storage_backend}} },
-  {datatype, {enum, [bitcask, leveldb, memory, multi]}}
+  {datatype, {enum, [bitcask, leveldb, memory, multi, prefix_multi]}}
 ]}.
 
 {translation,
@@ -41,8 +41,24 @@
       leveldb -> riak_kv_eleveldb_backend;
       memory -> riak_kv_memory_backend;
       multi -> riak_kv_multi_backend;
+      prefix_multi -> riak_kv_multi_prefix_backend;
       _Default -> riak_kv_bitcask_backend
     end
+ end}.
+
+%% @doc Simplify prefix_multi configuration for Riak CS. Keep this
+%% commented out unless Riak is configured for Riak CS.
+{mapping, "cs_version", "riak_kv.riak_cs_version", [
+  {commented, 020000},
+  {datatype, integer},
+  {validators, ["verify_cs_backend"]}
+]}.
+
+{validator,
+ "verify_cs_backend",
+ "must be later than CS 2.0.0",
+ fun(Value) when is_integer(Value) andalso Value >= 20000-> true;
+    (_) -> false
  end}.
 
 %% @doc Restrict how fast AAE can build hash trees. Building the tree

@@ -149,6 +149,29 @@ capabilities(_Bucket, State) ->
 %% @doc Start the backends
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
+    case app_helper:get_prop_or_env(riak_cs_version, Config, riak_kv) of
+        CSVersion when is_integer(CSVersion) andalso CSVersion >= 020000 ->
+            %% This case makes riak.conf much simpler in case of CS
+            %% use, reduces confurations to just setting backend =
+            %% prefix_multi and cs_version = 20000. If storage
+            %% calculation needed, then adding paths of riak_cs and
+            %% riak_cs_multibag as we have been doing is required.
+            _ = lager:debug("~p starting as Riak CS ~p backend for partition ~p",
+                            [?MODULE, CSVersion, Partition]),
+            ok = application:set_env(riak_kv, multi_backend_prefix_list,
+                                     [{<<"0b:">>,be_blocks}]),
+            ok = application:set_env(riak_kv, multi_backend_default, be_default),
+            MBConfigs = [{be_default,riak_kv_eleveldb_backend,
+                          app_helper:get_env(eleveldb)},
+                         {be_blocks,riak_kv_bitcask_backend,
+                          app_helper:get_env(bitcask)}],
+            ok = application:set_env(riak_kv, multi_backend, MBConfigs);
+        _ ->
+            ok
+    end,
+    start_1(Partition, Config).
+
+start_1(Partition, Config) ->
     %% Sanity checking
     BPrefixList =  app_helper:get_prop_or_env(multi_backend_prefix_list, Config,
                                               riak_kv, []),
