@@ -143,7 +143,7 @@ process_stream(#kv_mrc_sink{ref=ReqId,
              clear_state_req(State)}
     end;
 
-process_stream({'DOWN', Ref, process, Pid, Reason}, Ref,
+process_stream({'DOWN', Ref, process, Pid, Reason}, _PipeRef,
                State=#state{req=#rpbmapredreq{},
                             req_ctx=#pipe_ctx{sender={Pid, Ref}}=PipeCtx}) ->
     %% the async input sender exited
@@ -160,7 +160,7 @@ process_stream({'DOWN', Ref, process, Pid, Reason}, Ref,
             {error, {format, "Error sending inputs: ~p", [Reason]},
              clear_state_req(State)}
     end;
-process_stream({'DOWN', Mon, process, Pid, Reason}, _,
+process_stream({'DOWN', Mon, process, Pid, Reason}, _PipeRef,
                State=#state{req=#rpbmapredreq{},
                             req_ctx=#pipe_ctx{sink={Pid, Mon}}=PipeCtx}) ->
     %% the sink died, which it shouldn't be able to do before
