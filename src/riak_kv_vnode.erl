@@ -45,6 +45,7 @@
          repair_status/1,
          repair_filter/1,
          hashtree_pid/1,
+         hashtree_pid/2,
          rehash/3,
          refresh_index_data/4,
          request_hashtree_pid/1,
@@ -346,10 +347,12 @@ repair_filter(Target) ->
                                 riak_core_bucket:default_object_nval(),
                                 fun object_info/1).
 
--spec hashtree_pid(index()) -> {ok, pid()} | {error, wrong_node}.
+-spec hashtree_pid(index(), true | false) -> {ok, pid()} | {error, wrong_node}.
 hashtree_pid(Partition) ->
+    hashtree_pid(Partition, true).
+hashtree_pid(Partition, CheckEntropyEnabled) ->
     riak_core_vnode_master:sync_command({Partition, node()},
-                                        {hashtree_pid, node()},
+                                        {hashtree_pid, node(), CheckEntropyEnabled},
                                         riak_kv_vnode_master,
                                         infinity).
 
@@ -364,7 +367,7 @@ request_hashtree_pid(Partition) ->
 %% which could be a raw process, fsm, gen_server, etc.
 request_hashtree_pid(Partition, Sender) ->
     riak_core_vnode_master:command({Partition, node()},
-                                   {hashtree_pid, node()},
+                                   {hashtree_pid, node(), true},
                                    Sender,
                                    riak_kv_vnode_master).
 
@@ -571,7 +574,7 @@ handle_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0,
     do_fold(FoldWrapper, Acc0, Sender, Opts, State);
 
 %% entropy exchange commands
-handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
+handle_command({hashtree_pid, Node, CheckEntropyEnabled}, _, State=#state{hashtrees=HT}) ->
     %% Handle riak_core request forwarding during ownership handoff.
     case node() of
         Node ->
@@ -579,7 +582,12 @@ handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
             %% after the vnode was already running
             case HT of
                 undefined ->
-                    State2 = maybe_create_hashtrees(State),
+                    case CheckEntropyEnabled of
+                        false ->
+                            State2 = maybe_create_hashtrees(true, State);
+                        _ ->
+                            State2 = maybe_create_hashtrees(State)
+                    end,
                     {reply, {ok, State2#state.hashtrees}, State2};
                 _ ->
                     {reply, {ok, HT}, State}

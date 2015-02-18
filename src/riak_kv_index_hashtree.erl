@@ -37,6 +37,7 @@
          terminate/2, code_change/3]).
 
 -export([get_lock/2,
+         wait_for_lock/2,
          compare/3,
          compare/4,
          compare/5,
@@ -57,9 +58,11 @@
          clear/1,
          expire/1,
          destroy/1,
+         nonblocking_destroy/1,
          index_2i_n/0]).
 
 -export([poke/1,
+         build/1,
          get_build_time/1]).
 
 -type index() :: non_neg_integer().
@@ -73,6 +76,7 @@
                 vnode_pid,
                 built,
                 expired :: boolean(),
+                waiting_for_lock :: undefined | {any(), pid()},
                 lock :: undefined | reference(),
                 path,
                 build_time,
@@ -190,12 +194,32 @@ get_lock(Tree, Type) ->
 get_lock(Tree, Type, Pid) ->
     gen_server:call(Tree, {get_lock, Type, Pid}, infinity).
 
+
+%% @doc Acquire the lock for the specified index_hashtree if not already
+%%      locked, and associate the lock with the calling process.
+%%      When not_built pid are saved and given the lock when build finish.
+%%      Users of this function should monitor the tree pid to find out 
+%%      when exits unexpectedly
+-spec wait_for_lock(pid(), any()) -> ok | not_built | already_locked.
+wait_for_lock(Tree, Type) ->
+    wait_for_lock(Tree, Type, self()).
+
+%% @doc Acquire the lock for the specified index_hashtree if not already
+%%      locked, and associate the lock with the provided pid.
+-spec wait_for_lock(pid(), any(), pid()) -> ok | not_built | already_locked.
+wait_for_lock(Tree, Type, Pid) ->
+    gen_server:call(Tree, {wait_for_lock, Type, Pid}, 60000).
+
+
 %% @doc Poke the specified index_hashtree to ensure the tree is
 %%      built/rebuilt as needed. This is periodically called by the
 %%      {@link riak_kv_entropy_manager}.
 -spec poke(pid()) -> ok.
 poke(Tree) ->
     gen_server:cast(Tree, poke).
+
+build(Tree) ->
+    gen_server:cast(Tree, build).
 
 %% @doc Terminate the specified index_hashtree.
 stop(Tree) ->
@@ -206,6 +230,11 @@ stop(Tree) ->
 -spec destroy(pid()) -> ok.
 destroy(Tree) ->
     gen_server:call(Tree, destroy, infinity).
+
+%% @doc Destroy the specified index_hashtree, which will destroy all
+%%      associated hashtrees and terminate.
+nonblocking_destroy(Tree) ->
+    gen_server:cast(Tree, destroy).
 
 %% @doc Clear the specified index_hashtree, clearing all associated hashtrees
 clear(Tree) ->
@@ -271,6 +300,14 @@ handle_call({new_tree, Id}, _From, State) ->
 handle_call({get_lock, Type, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Pid, State),
     {reply, Reply, State2};
+
+handle_call({wait_for_lock, Type, Pid}, _From, State) ->
+    case do_get_lock(Type, Pid, State) of
+        {not_built, State2} ->
+            {reply, not_built, State2#state{waiting_for_lock = {Type, Pid}}};
+        {Result, State2} ->
+            {reply, Result, State2}
+    end;
 
 handle_call({insert, Items, Options}, _From, State) ->
     State2 = do_insert(Items, Options, State),
@@ -352,6 +389,10 @@ handle_cast(poke, State) ->
     State2 = do_poke(State),
     {noreply, State2};
 
+handle_cast(build, State) ->
+    State1 = maybe_build(vnode, State),
+    {noreply, State1};
+
 handle_cast(stop, State) ->
     close_trees(State),
     {stop, normal, State};
@@ -364,13 +405,19 @@ handle_cast({delete, Items}, State) ->
     State2 = do_delete(Items, State),
     {noreply, State2};
 
+handle_cast(destroy, State) ->
+    State2 = destroy_trees(State),
+    {stop, normal, State2};
+
 handle_cast(build_failed, State) ->
     riak_kv_entropy_manager:requeue_poke(State#state.index),
-    State2 = State#state{built=false},
+    State2 = do_inform_waiting(failed, State#state{built=false}),
     {noreply, State2};
+
 handle_cast(build_finished, State) ->
     State2 = do_build_finished(State),
-    {noreply, State2};
+    State3 = do_inform_waiting(finished, State2),
+    {noreply, State3};
 
 handle_cast({start_exchange_remote, FsmPid, From, _IndexN}, State) ->
     %% Concurrency lock already acquired, try to acquire tree lock.
@@ -565,6 +612,12 @@ do_new_tree(Id, State=#state{trees=Trees, path=Path}) ->
     State#state{trees=Trees2}.
 
 -spec do_get_lock(any(), pid(), state()) -> {not_built | ok | already_locked, state()}.
+ do_get_lock(_, _, State) when State#state.waiting_for_lock /= undefined ->
+    lager:debug("Already waiting for lock: ~p ~p", [State#state.index, State#state.waiting_for_lock]),
+    {already_locked, State};
+do_get_lock(_, _, State) when is_pid(State#state.built) ->
+    lager:debug("Building: ~p :: ~p", [State#state.index, State#state.built]),
+    {not_built, State};
 do_get_lock(_, _, State) when State#state.built /= true ->
     lager:debug("Not built: ~p :: ~p", [State#state.index, State#state.built]),
     {not_built, State};
@@ -618,6 +671,16 @@ do_build_finished(State=#state{index=Index, built=_Pid}) ->
     _ = hashtree:write_meta(<<"build_time">>, term_to_binary(BuildTime), Tree0),
     riak_kv_entropy_info:tree_built(Index, BuildTime),
     State#state{built=true, build_time=BuildTime, expired=false}.
+
+do_inform_waiting(finished, #state{waiting_for_lock = {Type, Waiting}} = State) when is_pid(Waiting) ->
+    {ok, State2} = do_get_lock(Type, Waiting, State#state{waiting_for_lock = undefined}),
+    Waiting ! {hashtree_lock, State2#state.index},
+    State;
+do_inform_waiting(failed, #state{waiting_for_lock = {_Type, Waiting}} = State) when is_pid(Waiting) ->
+    Waiting ! {hashtree_build_fail, State#state.index},
+    State#state{waiting_for_lock = undefined};
+do_inform_waiting(_ ,State) ->
+    State.
 
 %% Determine the build time for all trees associated with this
 %% index. The build time is stored as metadata in the on-disk file. If
@@ -808,7 +871,7 @@ do_compare(Id, Remote, AccFun, Acc, From, State) ->
 -spec do_poke(state()) -> state().
 do_poke(State) ->
     State1 = maybe_rebuild(maybe_expire(State)),
-    State2 = maybe_build(State1),
+    State2 = maybe_build(all, State1),
     State2.
 
 -spec maybe_expire(state()) -> state().
@@ -842,27 +905,27 @@ destroy_trees(State) ->
     _ = hashtree:destroy(Tree0),
     State2.
 
--spec maybe_build(state()) -> state().
-maybe_build(State=#state{built=false}) ->
+-spec maybe_build(vnode | all, state()) -> state().
+maybe_build(Locks, State=#state{built=false}) ->
     Self = self(),
     Pid = spawn_link(fun() ->
-                             build_or_rehash(Self, State)
+                             build_or_rehash(Locks, Self, State)
                      end),
     State#state{built=Pid};
-maybe_build(State) ->
+maybe_build(_Locks, State) ->
     %% Already built or build in progress
     State.
 
 %% If the on-disk data is not marked as previously being built, then trigger
 %% a fold/build. Otherwise, trigger a rehash to ensure the hashtrees match the
 %% current on-disk segments.
--spec build_or_rehash(pid(), state()) -> ok.
-build_or_rehash(Self, State=#state{index=Index}) ->
+-spec build_or_rehash(vnode | all, pid(), state()) -> ok.
+build_or_rehash(Locks, Self, State=#state{index=Index}) ->
     Type = case load_built(State) of
                false -> build;
                true  -> rehash
            end,
-    Locked = get_all_locks(Type, Index, self()),
+    Locked = get_locks(Locks, Type, Index, self()),
     build_or_rehash(Self, Locked, Type, State).
 
 build_or_rehash(Self, Locked, Type, #state{index=Index, trees=Trees}) ->
@@ -892,7 +955,7 @@ maybe_rebuild(State=#state{lock=undefined, built=true, expired=true, index=Index
                                      ok
                              end
                      end),
-    Locked = get_all_locks(build, Index, Pid),
+    Locked = get_locks(all, build, Index, Pid),
     case Locked of
         true ->
             State2 = clear_tree(State),
@@ -922,18 +985,22 @@ close_trees(State=#state{trees=Trees}) ->
     Trees3 = [{IdxN, hashtree:close(Tree)} || {IdxN, Tree} <- Trees2],
     State#state{trees=Trees3}.
 
-get_all_locks(Type, Index, Pid) ->
+get_locks(all, Type, Index, Pid) ->
     case riak_kv_entropy_manager:get_lock(Type, Pid) of
         ok ->
-            case maybe_get_vnode_lock(Type, Index, Pid) of
-                ok ->
-                    true;
-                _ ->
-                    false
-            end;
+            get_locks(vnode, Type, Index, Pid);
+        _ ->
+            false
+    end;
+
+get_locks(vnode, Type, Index, Pid) ->
+    case maybe_get_vnode_lock(Type, Index, Pid) of
+        ok ->
+            true;
         _ ->
             false
     end.
+
 
 maybe_get_vnode_lock(rehash, _Partition, _Pid) ->
     %% rehash operations do not need a vnode lock
