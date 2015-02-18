@@ -108,6 +108,7 @@
 -define(DEFAULT_TIMEOUT, 60000).
 
 -define(SINK_SYNC_PERIOD_DEFAULT, 10).
+-define(USE_RETURN_BODY_TRUE, use_return_body_true).
 
 -export([
          mapred/2,
@@ -140,6 +141,7 @@
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
 -include("riak_kv_mrc_sink.hrl").
+-include("riak_kv_index.hrl").
 
 -export_type([map_query_fun/0,
               reduce_query_fun/0,
@@ -248,8 +250,14 @@ mapred_stream(Query) ->
          {{ok, riak_pipe:pipe()}, NumKeeps :: integer()}.
 mapred_stream(Query, Options) when is_list(Options) ->
     NumKeeps = count_keeps_in_query(Query),
-    {riak_pipe:exec(mr2pipe_phases(Query),
-                    [{log, sink},{trace,[error]}]++Options),
+    Phases0 = mr2pipe_phases(Query),
+    TraceOpt = app_helper:get_env(riak_kv, pipe_log_level, [error]),
+    %% This is part of optimization utilizing return_body
+    Phases = case proplists:get_value(?USE_RETURN_BODY_TRUE, Options) of
+                 true -> tl(Phases0);
+                 _ -> Phases0
+             end,
+    {riak_pipe:exec(Phases, [{log, sink},{trace,TraceOpt}]++Options),
      NumKeeps}.
 
 %% @doc Setup the MapReduce plumbing, including separate process to
@@ -262,10 +270,25 @@ mapred_stream(Query, Options) when is_list(Options) ->
 %% context.
 -spec mapred_stream_sink(input(), [query_part()], timeout()) ->
          {ok, #mrc_ctx{}} | {error, term()}.
+mapred_stream_sink({index, _Bucket, <<"$bucket">>, _Start, _End} = Inputs, Query, Timeout) ->
+    %% Optimization exactly when folding whole bucket and using 2i:
+    %% set return_body=true as csbucket does, and omit duplicate read
+    %% from disk by riak_kv_pipe_listkeys and riak_kv_pipe_get.
+    Options = case riak_core_capability:get({riak_kv, mapred_2i_pipe}, false) of
+                  true -> [?USE_RETURN_BODY_TRUE];
+                  _ -> []
+              end,
+    mapred_stream_sink(Inputs, Query, Options, Timeout);
 mapred_stream_sink(Inputs, Query, Timeout) ->
+    mapred_stream_sink(Inputs, Query, [], Timeout).
+
+-spec mapred_stream_sink(input(), [query_part()], list(), timeout()) ->
+                                  {ok, #mrc_ctx{}} | {error, term()}.
+mapred_stream_sink(Inputs, Query, Options0, Timeout) ->
     {ok, Sink} = riak_kv_mrc_sink:start(self(), []),
-    Options = [{sink, #fitting{pid=Sink}},
-               {sink_type, {fsm, sink_sync_period(), infinity}}],
+    Options = Options0 ++
+        [{sink, #fitting{pid=Sink}},
+         {sink_type, {fsm, sink_sync_period(), infinity}}],
     try mapred_stream(Query, Options) of
         {{ok, Pipe}, NumKeeps} ->
             %% catch just in case the pipe or sink has already died
@@ -287,7 +310,6 @@ mapred_stream_sink(Inputs, Query, Timeout) ->
             _ = riak_kv_mrc_sink:stop(Sink),
             {error, {Fitting, Reason}}
     end.
-    
 
 %% The plan functions are useful for seeing equivalent (we hope) pipeline.
 
@@ -398,6 +420,7 @@ map2pipe(FunSpec, Arg, Keep, I, QueryT) ->
                   _ ->
                       Arg
               end,
+
     [#fitting_spec{name={kvget_map,I},
                    module=riak_kv_pipe_get,
                    chashfun={riak_kv_pipe_get, bkey_chash},
@@ -609,12 +632,32 @@ send_inputs(Pipe, {index, Bucket, Index, Key}, Timeout) ->
             NewInput = {modfun, riak_index, mapred_index, [Bucket, Query]},
             send_inputs(Pipe, NewInput, Timeout)
     end;
+
 send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey}, Timeout) ->
     Query = {range, Index, StartKey, EndKey},
     case riak_core_capability:get({riak_kv, mapred_2i_pipe}, false) of
         true ->
+            Query2 = case Index of
+                        %% This head is special optimization to omit
+                        %% listkeys and getting the value.  riak_pipe
+                        %% phases should have been optimized at
+                        %% mapred_stream/2, by replacing
+                        %% riak_kv_pipe_listkeys+riak_kv_pipe_get with
+                        %% riak_kv_pipe_index. See riak_kv_pipe_index
+                        %% for how it handles this output.
+                        <<"$bucket">> ->
+                            ?KV_INDEX_Q{filter_field= <<"$bucket">>,
+                                        start_term=StartKey,
+                                        start_inclusive=true,
+                                        end_term=EndKey,
+                                        end_inclusive=true,
+                                        start_key=StartKey,
+                                        return_body=true};
+                        %% This head is default
+                        _ -> Query
+                    end,
             riak_kv_pipe_index:queue_existing_pipe(
-              Pipe, Bucket, Query, Timeout);
+              Pipe, Bucket, Query2, Timeout);
         _ ->
             NewInput = {modfun, riak_index, mapred_index, [Bucket, Query]},
             send_inputs(Pipe, NewInput, Timeout)
