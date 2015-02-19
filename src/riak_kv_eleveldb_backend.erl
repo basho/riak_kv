@@ -31,6 +31,7 @@
          stop/1,
          get/3,
          put/5,
+         async_put/5,
          delete/4,
          drop/1,
          fix_index/3,
@@ -197,6 +198,15 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
 
     %% Perform the write...
     case eleveldb:write(Ref, Updates1 ++ Updates2, WriteOpts) of
+        ok ->
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
+
+async_put(Context, Bucket, PrimaryKey, Val, #state{ref=Ref, write_opts=WriteOpts}=State) ->
+    StorageKey = to_object_key(Bucket, PrimaryKey),
+    case eleveldb:async_put(Ref, Context, StorageKey, Val, WriteOpts) of
         ok ->
             {ok, State};
         {error, Reason} ->

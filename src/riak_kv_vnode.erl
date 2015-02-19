@@ -1074,15 +1074,20 @@ handle_info({ts_put, From, RObj}, State=#state{mod=Mod, modstate=ModState}) ->
     %% EncodedVal = riak_object:to_binary(v1, RObj),
     EncodedVal = riak_object:to_binary(v0, RObj),
 
-    {Reply, ModState2} = case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
-                             {ok, UpModState} ->
-                                 %% update_hashtree(Bucket, Key, EncodedVal, State),
-                                 {ok, UpModState};
-                             {error, Reason, UpModState} ->
-                                 {{error, Reason}, UpModState}
-                         end,
-    From ! {ts_reply, Reply},
+    Context = {ts_reply, From},
+    {_Reply, ModState2} = case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
+                              {ok, UpModState} ->
+                                  {ok, UpModState};
+                              {error, Reason, UpModState} ->
+                                  From ! {ts_reply, {error, Reason}},
+                                  {{error, Reason}, UpModState}
+                          end,
     {ok, State#state{modstate=ModState2}};
+
+handle_info({{ts_reply, From}, Reply}, State) ->
+    %% TODO: Update AAE
+    From ! {ts_reply, Reply},
+    {ok, State};
 
 handle_info({set_concurrency_limit, Lock, Limit}, State) ->
     try_set_concurrency_limit(Lock, Limit),
