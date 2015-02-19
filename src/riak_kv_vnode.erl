@@ -1068,6 +1068,22 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
+handle_info({ts_put, From, RObj}, State=#state{mod=Mod, modstate=ModState}) ->
+    Bucket = riak_object:bucket(RObj),
+    Key = riak_object:key(RObj),
+    %% EncodedVal = riak_object:to_binary(v1, RObj),
+    EncodedVal = riak_object:to_binary(v0, RObj),
+
+    {Reply, ModState2} = case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
+                             {ok, UpModState} ->
+                                 %% update_hashtree(Bucket, Key, EncodedVal, State),
+                                 {ok, UpModState};
+                             {error, Reason, UpModState} ->
+                                 {{error, Reason}, UpModState}
+                         end,
+    From ! {ts_reply, Reply},
+    {ok, State#state{modstate=ModState2}};
+
 handle_info({set_concurrency_limit, Lock, Limit}, State) ->
     try_set_concurrency_limit(Lock, Limit),
     {ok, State};
