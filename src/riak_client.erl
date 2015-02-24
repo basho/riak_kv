@@ -340,50 +340,10 @@ maybe_normal_put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(
     end.
 
 immutable_put(RObj, Options, {?MODULE, [_Node, _ClientId]}) ->
-    %% Copied/modified from riak_kv_put_fsm...
-    %% TODO: Move this out of riak_client?
-    Bucket = riak_object:bucket(RObj),
-    BKey = {Bucket, riak_object:key(RObj)},
-    BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
-    DocIdx = riak_core_util:chash_key(BKey, BucketProps),
-    Bucket_N = get_option(n_val, BucketProps),
-    N = Bucket_N,
-    BadCoordinators = [],
-    Preflist2 = 
-        case get_option(sloppy_quorum, Options, true) of
-            true ->
-                UpNodes = riak_core_node_watcher:nodes(riak_kv),
-                riak_core_apl:get_apl_ann(DocIdx, N, 
-                                          UpNodes -- BadCoordinators);
-            false ->
-                Preflist1 =
-                    riak_core_apl:get_primary_apl(DocIdx, N, riak_kv),
-                [X || X = {{_Index, Node}, _Type} <- Preflist1,
-                      not lists:member(Node, BadCoordinators)]
-        end,
-    _ = [begin
-             Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx),
-             {Proxy, Node} ! {ts_put, self(), RObj},
-             ok
-         end || {{Idx, Node}, _} <- Preflist2],
-    %% TODO: Currently hardcoded to R=all and fixed 1ms timeout. Fix.
-    _ = [receive
-             {ts_reply, _Reply} ->
-                 ok
-         after 1000 ->
-                 error
-         end || _ <- Preflist2],
-    ok.
-
-get_option(Name, Options) ->
-    get_option(Name, Options, undefined).
-
-get_option(Name, Options, Default) ->
-    case lists:keyfind(Name, 1, Options) of
-        {_, Val} ->
-            Val;
-        false ->
-            Default
+    {ok, Pid} = riak_kv_immutable_put:start_link({RObj, Options, self()}),
+    % TODO: consider adding a monitor in case immutable_fsm crashes
+    receive
+        {Pid, Response} -> Response
     end.
 
 %% @spec delete(riak_object:bucket(), riak_object:key(), riak_client()) ->
