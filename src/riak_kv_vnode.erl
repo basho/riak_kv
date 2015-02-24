@@ -1068,25 +1068,37 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
-handle_info({ts_put, From, RObj}, State=#state{mod=Mod, modstate=ModState}) ->
+handle_info({ts_put, From, RObj, Type}, State=#state{mod=Mod, modstate=ModState}) ->
     Bucket = riak_object:bucket(RObj),
     Key = riak_object:key(RObj),
-    %% EncodedVal = riak_object:to_binary(v1, RObj),
     EncodedVal = riak_object:to_binary(v0, RObj),
-
-    Context = {ts_reply, From},
-    {_Reply, ModState2} = case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
-                              {ok, UpModState} ->
-                                  {ok, UpModState};
-                              {error, Reason, UpModState} ->
-                                  From ! {ts_reply, {error, Reason}},
-                                  {{error, Reason}, UpModState}
-                          end,
+    case erlang:function_exported(Mod, async_put, 5) of
+        true ->
+            Context = {ts_reply, From, Type},
+            {_Reply, ModState2} =
+                case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
+                    {ok, UpModState} ->
+                        {ok, UpModState};
+                    {error, Reason, UpModState} ->
+                        From ! {ts_reply, {error, Reason}},
+                        {{error, Reason}, UpModState}
+                end;
+        false ->
+            {Reply, ModState2} =
+                case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
+                    {ok, UpModState} ->
+                        %% update_hashtree(Bucket, Key, EncodedVal, State),
+                        {ok, UpModState};
+                    {error, Reason, UpModState} ->
+                        {{error, Reason}, UpModState}
+                end,
+            From ! {ts_reply, Reply}
+    end,
     {ok, State#state{modstate=ModState2}};
 
-handle_info({{ts_reply, From}, Reply}, State) ->
+handle_info({{ts_reply, From, Type}, Reply}, State) ->
     %% TODO: Update AAE
-    From ! {ts_reply, Reply},
+    From ! {ts_reply, Reply, Type},
     {ok, State};
 
 handle_info({set_concurrency_limit, Lock, Limit}, State) ->
