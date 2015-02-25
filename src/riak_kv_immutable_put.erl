@@ -18,20 +18,8 @@
 %% -------------------------------------------------------------------
 -module(riak_kv_immutable_put).
 
-% TODO change this to gen_server or simple proc
--behaviour(gen_fsm).
-
 %% API
 -export([start_link/1]).
-
-%% gen_fsm callbacks
--export([init/1,
-    wait/2,
-    handle_event/3,
-    handle_sync_event/4,
-    handle_info/3,
-    terminate/3,
-    code_change/4]).
 
 -define(SERVER, ?MODULE).
 
@@ -49,17 +37,22 @@
 %%
 %% Description:
 %%
-%% This FSM will cast a set of ts_put messages to a computed set of
+%% This module defines an intermediate process that stands between
+%% riak_client and a collection of riak_kv_vnodes, mediating asynchronous
+%% put operations in the special case where the immutable flag is
+%% set on a bucket.
+%%
+%% This proc will cast a set of ts_put messages to a computed set of
 %% vnodes, and wait until a desired set of writes have succeeded.
 %% Once the desired number of writes have succeeded (within a specified
-%% timeout), this FSM will terminate and send an ok message back to
+%% timeout), the proc will terminate and send an ok message back to
 %% the caller.  If the desired number of writes have not responded within
-%% a specified amount of time (default: 1sec), the FSM will terminate
-%% and send an {error, timedout} message back to the caller.  This FSM
+%% a specified amount of time (default: 1sec), the proc will terminate
+%% and send an {error, timeout} message back to the caller.  This proc
 %% is guaranteed to terminate within the specified timeout in either one
 %% of these scenarios.
 %%
-%% The behavior of this FSM is driven in part by the following pieces
+%% The behavior of the proc is driven in part by the following pieces
 %% of configuration:
 %%
 %% sloppy_quorum
@@ -75,26 +68,19 @@
 %%% API
 %%%===================================================================
 
-start_link(Args) ->
-    gen_fsm:start_link(?MODULE, [Args], []).
-
-%%%===================================================================
-%%% gen_fsm callbacks
-%%%===================================================================
-
-init({RObj, Options, From}) ->
+start_link({RObj, Options, From, RecvTimeout}) ->
     Bucket = riak_object:bucket(RObj),
     BKey = {Bucket, riak_object:key(RObj)},
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
     DocIdx = riak_core_util:chash_key(BKey, BucketProps),
     NVal = riak_kv_util:get_option(n_val, BucketProps),
     PW = get(pw, BucketProps, NVal, Options),
+    %% W (writes) is max of configured writes and durable writes (if specified)
     W = case get(dw, BucketProps, NVal, Options) of
-        error   -> get(w, BucketProps, NVal, Options);
-        DW      -> erlang:max(DW, get(w, BucketProps, NVal, Options))
-    end,
-    % TODO handle malformed W, PW values; raise error in init ?
-    Timeout = riak_kv_util:get_option(timeout, Options, 1000),
+            error   -> get(w, BucketProps, NVal, Options);
+            DW      -> erlang:max(DW, get(w, BucketProps, NVal, Options))
+        end,
+    Timeout = erlang:max(RecvTimeout, 0),
     Preflist =
         case riak_kv_util:get_option(sloppy_quorum, Options, true) of
             true ->
@@ -104,74 +90,56 @@ init({RObj, Options, From}) ->
                 riak_core_apl:get_primary_apl(DocIdx, NVal, riak_kv)
         end,
     %% Cast a ts_put to all nodes in the selected preflist.  Response will be sent
-    %% back to this proc.  See handle_info({ts_reply, ...})
+    %% back to this proc.  See wait({ts_reply, ...})
     [begin
          Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx),
          {Proxy, Node} ! {ts_put, self(), RObj, Type},
          ok
      end || {{Idx, Node}, Type} <- Preflist],
-    {
-        ok, wait,
-        #state{w = W, pw = PW, timeout_at = current_ms() + Timeout, from = From},
-        Timeout
-    }.
+    spawn_link(fun() -> wait(#state{w = W, pw = PW, timeout_at = current_ms() + Timeout, from = From}) end).
 
-wait(timeout, #state{timeout_at = TimeoutAt} = State) ->
-    CurrentMs = current_ms(),
-    if
-        CurrentMs >= TimeoutAt ->
-            {stop, timed_out, State};
-        ?ELSE ->
-            %% ASSERT TimeoutAt \geq current_ms()
-            {next_state, wait, State, TimeoutAt - current_ms()}
-    end.
 
-handle_event(_Event, StateName, State) ->
-    {next_state, StateName, State}.
-
-handle_sync_event(_Event, _From, StateName, State) ->
-    Reply = ok,
-    {reply, Reply, StateName, State}.
-
-handle_info(
-    {ts_reply, _Reply, Type}, _StateName,
-    #state{
-        pw = PW, w = W,
-        primaries = Primaries, total = Total,
-        timeout_at = TimeoutAt
-    } = State) ->
-
-    NewPrimaries = case Type of
-        primary ->
-            Primaries + 1;
-        fallback ->
-            Primaries
-    end,
-    NewTotal = Total + 1,
-
-    if
-        PW /= error andalso NewPrimaries >= PW ->
-            {stop, ok, State};
-        PW =:= error andalso NewTotal >= W ->
-            {stop, ok, State};
-        ?ELSE ->
-            %% ASSERT TimeoutAt \geq current_ms()
-            Timeout = TimeoutAt - current_ms(),
-            {next_state, wait, State#state{primaries = NewPrimaries, total = NewTotal}, Timeout}
-    end;
-handle_info(_Info, StateName, State) ->
-    {next_state, StateName, State}.
-
-terminate(Reason, _StateName, #state{from = From} = _State) ->
-    From ! {self(), Reason},
-    ok.
-
-code_change(_OldVsn, StateName, State, _Extra) ->
-    {ok, StateName, State}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+wait(
+    #state{
+        pw = PW, w = W,
+        primaries = Primaries, total = Total,
+        timeout_at = TimeoutAt,
+        from = From
+    } = State
+) ->
+    Timeout = erlang:max(TimeoutAt - current_ms(), 0),
+    receive
+        {ts_reply, _Reply, Type} ->
+            NewPrimaries = case Type of
+                               primary ->
+                                   Primaries + 1;
+                               fallback ->
+                                   Primaries
+                           end,
+            NewTotal = Total + 1,
+            case enoughReplies(W, PW, NewPrimaries, NewTotal) of
+                true ->
+                    From ! {self(), ok};
+                false ->
+                    wait(State#state{primaries = NewPrimaries, total = NewTotal})
+            end
+    after
+        Timeout ->
+            From ! {error, timeout}
+    end.
+
+enoughReplies(W, PW, Primaries, TotalReplies) ->
+    EnoughTotal = W >= TotalReplies,
+    EnoughPrimaries = case PW of
+                          error ->  true;
+                          _ ->      PW >= Primaries
+                      end,
+    EnoughTotal andalso EnoughPrimaries.
 
 
 get(Key, BucketProps, N, Options) ->
@@ -182,5 +150,6 @@ get(Key, BucketProps, N, Options) ->
     ).
 
 current_ms() ->
+    % TODO use os:timestamp instead?  Lower overhead?
     {MegaSecs, Secs, MicroSecs} = erlang:now(),
-    (MegaSecs*1000000 + Secs)*1000000 + MicroSecs.
+    (MegaSecs*1000000 + Secs)*1000 + erlang:round(MicroSecs/1000).

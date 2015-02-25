@@ -1073,30 +1073,30 @@ handle_info({ts_put, From, RObj, Type}, State=#state{mod=Mod, modstate=ModState}
     EncodedVal = riak_object:to_binary(v0, RObj),
     case erlang:function_exported(Mod, async_put, 5) of
         true ->
-            Context = {ts_reply, From, Type},
+            Context = {ts_reply, From, Type, Bucket, Key, EncodedVal},
             {_Reply, ModState2} =
                 case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
                     {ok, UpModState} ->
                         {ok, UpModState};
                     {error, Reason, UpModState} ->
-                        From ! {ts_reply, {error, Reason}},
+                        From ! {ts_reply, {error, Reason}, Type},
                         {{error, Reason}, UpModState}
                 end;
         false ->
             {Reply, ModState2} =
                 case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
                     {ok, UpModState} ->
-                        %% update_hashtree(Bucket, Key, EncodedVal, State),
+                        update_hashtree(Bucket, Key, EncodedVal, State),
                         {ok, UpModState};
                     {error, Reason, UpModState} ->
                         {{error, Reason}, UpModState}
                 end,
-            From ! {ts_reply, Reply}
+            From ! {ts_reply, Reply, Type}
     end,
     {ok, State#state{modstate=ModState2}};
 
-handle_info({{ts_reply, From, Type}, Reply}, State) ->
-    %% TODO: Update AAE
+handle_info({{ts_reply, From, Type, Bucket, Key, EncodedVal} = _Context, Reply}, State) ->
+    update_hashtree(Bucket, Key, EncodedVal, State),
     From ! {ts_reply, Reply, Type},
     {ok, State};
 
