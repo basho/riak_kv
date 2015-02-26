@@ -340,10 +340,12 @@ maybe_normal_put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(
     end.
 
 immutable_put(RObj, Options, {?MODULE, [_Node, _ClientId]}) ->
-    {ok, Pid} = riak_kv_immutable_put:start_link({RObj, Options, self(), recv_timeout(Options)}),
+    {ok, Pid} = riak_kv_immutable_put:start_link({RObj, Options, recv_timeout(Options)}),
     % TODO: consider adding a monitor in case immutable_fsm crashes
     receive
         {Pid, Response} -> Response
+    after recv_timeout(Options) ->
+        {error, timeout}
     end.
 
 %% @spec delete(riak_object:bucket(), riak_object:key(), riak_client()) ->

@@ -68,7 +68,18 @@
 %%% API
 %%%===================================================================
 
-start_link({RObj, Options, From, RecvTimeout}) ->
+start_link(Args) ->
+    % TODO add monitor
+    From = self(),
+    {ok, spawn_link(fun() -> start(Args, From) end)}.
+
+
+
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
+
+start({RObj, Options, RecvTimeout}, From) ->
     Bucket = riak_object:bucket(RObj),
     BKey = {Bucket, riak_object:key(RObj)},
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
@@ -96,13 +107,7 @@ start_link({RObj, Options, From, RecvTimeout}) ->
          {Proxy, Node} ! {ts_put, self(), RObj, Type},
          ok
      end || {{Idx, Node}, Type} <- Preflist],
-    spawn_link(fun() -> wait(#state{w = W, pw = PW, timeout_at = current_ms() + Timeout, from = From}) end).
-
-
-
-%%%===================================================================
-%%% Internal functions
-%%%===================================================================
+    wait(#state{w = W, pw = PW, timeout_at = current_ms() + Timeout, from = From}).
 
 wait(
     #state{
@@ -124,22 +129,28 @@ wait(
             NewTotal = Total + 1,
             case enoughReplies(W, PW, NewPrimaries, NewTotal) of
                 true ->
-                    From ! {self(), ok};
+                    reply(From, ok);
                 false ->
                     wait(State#state{primaries = NewPrimaries, total = NewTotal})
-            end
+            end;
+        Reply ->
+            reply(From, {error, spurious_reply, Reply})
     after
         Timeout ->
-            From ! {error, timeout}
+            reply(From, {error, timeout})
     end.
 
 enoughReplies(W, PW, Primaries, TotalReplies) ->
-    EnoughTotal = W >= TotalReplies,
+    EnoughTotal = W =< TotalReplies,
     EnoughPrimaries = case PW of
                           error ->  true;
-                          _ ->      PW >= Primaries
+                          0     ->  true;
+                          _ ->      PW =< Primaries
                       end,
     EnoughTotal andalso EnoughPrimaries.
+
+reply(From, Term) ->
+    From ! {self(), Term}.
 
 
 get(Key, BucketProps, N, Options) ->
