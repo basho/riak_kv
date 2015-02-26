@@ -48,7 +48,8 @@
          overload_reply/1,
          get_backend_config/3,
          is_modfun_allowed/2,
-         get_option/2]).
+         get_option/2,
+         get_option/3]).
 
 -include_lib("riak_kv_vnode.hrl").
 
