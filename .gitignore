@@ -1,3 +1,4 @@
+.rebar/*
 .eunit/*
 deps/*
 priv/*
