@@ -821,6 +821,7 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
     handle_coverage_index(Bucket, ItemFilter, Query,
                           FilterVNodes, Sender, State, fun result_fun_ack/2).
 
+-spec prepare_index_query(?KV_INDEX_Q{}) -> ?KV_INDEX_Q{}.
 prepare_index_query(#riak_kv_index_v3{term_regex=RE} = Q) when
         RE =/= undefined ->
     {ok, CompiledRE} = re:compile(RE),
