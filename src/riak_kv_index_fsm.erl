@@ -50,11 +50,17 @@
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
+-ifdef(namespaced_types).
+-type riak_kv_index_fsm_dict() :: dict:dict().
+-else.
+-type riak_kv_index_fsm_dict() :: dict().
+-endif.
+
 -record(state, {from :: from(),
                 pagination_sort :: boolean(),
                 merge_sort_buffer = undefined :: sms:sms() | undefined,
                 max_results :: all | pos_integer(),
-                results_per_vnode = dict:new() :: dict(),
+                results_per_vnode = dict:new() :: riak_kv_index_fsm_dict(),
                 results_sent = 0 :: non_neg_integer()}).
 
 %% @doc Returns `true' if the new ack-based backpressure index

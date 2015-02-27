@@ -35,7 +35,13 @@
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
--record(state, {buckets=sets:new() :: set(),
+-ifdef(namespaced_types).
+-type riak_kv_buckets_fsm_set() :: sets:set().
+-else.
+-type riak_kv_buckets_fsm_set() :: set().
+-endif.
+
+-record(state, {buckets=sets:new() :: riak_kv_buckets_fsm_set(),
                 from :: from(),
                 stream=false :: boolean(),
                 type :: binary()

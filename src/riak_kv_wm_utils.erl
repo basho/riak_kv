@@ -48,6 +48,12 @@
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
 
+-ifdef(namespaced_types).
+-type riak_kv_wm_utils_dict() :: dict:dict().
+-else.
+-type riak_kv_wm_utils_dict() :: dict().
+-endif.
+
 -type jsonpropvalue() :: integer()|string()|boolean()|{struct,[jsonmodfun()]}.
 -type jsonmodfun() :: {ModBinary :: term(), binary()}|{FunBinary :: term(), binary()}.
 -type erlpropvalue() :: integer()|string()|boolean().
@@ -99,7 +105,7 @@ default_encodings() ->
     [{"identity", fun(X) -> X end},
      {"gzip", fun(X) -> zlib:gzip(X) end}].
 
--spec multipart_encode_body(string(), binary(), {dict(), binary()}, term()) ->
+-spec multipart_encode_body(string(), binary(), {riak_kv_wm_utils_dict(), binary()}, term()) ->
     iolist().
 %% @doc Produce one part of a multipart body, representing one sibling
 %%      of a multi-valued document.
@@ -200,8 +206,7 @@ format_uri(_Type, Bucket, Key, Prefix, 2) ->
 format_uri(Type, Bucket, Key, _Prefix, 3) ->
     io_lib:format("/types/~s/buckets/~s/keys/~s", [Type, Bucket, Key]).
 
-
--spec get_ctype(dict(), term()) -> string().
+-spec get_ctype(riak_kv_wm_utils_dict(), term()) -> string().
 %% @doc Work out the content type for this object - use the metadata if provided
 get_ctype(MD,V) ->
     case dict:find(?MD_CTYPE, MD) of

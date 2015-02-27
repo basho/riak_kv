@@ -179,6 +179,13 @@
               timeout,      %% integer() - passed-in timeout value in ms
               security      %% security context
              }).
+
+-ifdef(namespaced_types).
+-type riak_kv_wm_object_dict() :: dict:dict().
+-else.
+-type riak_kv_wm_object_dict() :: dict().
+-endif.
+
 -type context() :: #ctx{}.
 
 -type link() :: {{Bucket::binary(), Key::binary()}, Tag::binary()}.
@@ -1057,7 +1064,7 @@ last_modified(RD, Ctx) ->
             {lists:max(LMDates), RD, Ctx}
     end.
 
--spec normalize_last_modified(dict()) -> calendar:datetime().
+-spec normalize_last_modified(riak_kv_wm_object_dict()) -> calendar:datetime().
 %% @doc Extract and convert the Last-Modified metadata into a normalized form
 %%      for use in the last_modified/2 callback.
 normalize_last_modified(MD) ->
@@ -1136,7 +1143,7 @@ extract_links_1([LinkHeader|Rest], BucketRegex, KeyRegex, BucketAcc, KeyAcc) ->
 extract_links_1([], _BucketRegex, _KeyRegex, BucketAcc, KeyAcc) ->
     {BucketAcc, KeyAcc}.
 
--spec get_ctype(dict(), term()) -> string().
+-spec get_ctype(riak_kv_wm_object_dict(), term()) -> string().
 %% @doc Work out the content type for this object - use the metadata if provided
 get_ctype(MD,V) ->
     case dict:find(?MD_CTYPE, MD) of

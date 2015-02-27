@@ -47,8 +47,14 @@
 -define(V1_VERS, 1).
 -define(V2_VERS, 2).
 
+-ifdef(namespaced_types).
+-type riak_kv_crdt_dict() :: dict:dict().
+-else.
+-type riak_kv_crdt_dict() :: dict().
+-endif.
+
 -type crdts() :: [{DT_MOD::module(), crdt()}].
--type ro_content() :: {Meta::dict(), Value::binary()}.
+-type ro_content() :: {Meta::riak_kv_crdt_dict(), Value::binary()}.
 -type ro_contents() :: [ro_content()].
 -type precondition_error() :: {error, {precondition, {not_present, term()}}}.
 
@@ -151,7 +157,7 @@ is_crdt(RObj) ->
 
 %% @TODO in riak_dt change value to query allow query to take an
 %% argument, (so as to query subfields of map, or set membership etc)
--spec crdt_value(module(), error | {ok, {dict(), crdt()}}) ->
+-spec crdt_value(module(), error | {ok, {riak_kv_crdt_dict(), crdt()}}) ->
                         {binary(), riak_dt:value()}.
 crdt_value(Type, error) ->
     {<<>>, Type:value(Type:new())};
