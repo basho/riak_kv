@@ -50,7 +50,9 @@
          decode/2,
          encode/1,
          process/2,
-         process_stream/3]).
+         process_stream/3,
+         bucket_type/2,
+         maybe_create_bucket_type/2]).
 
 -record(state, {client,    % local client
                 req,       % current request (for multi-message requests like list keys)
@@ -186,8 +188,17 @@ check_bucket_type(Type) ->
             error
     end.
 
--spec maybe_create_bucket_type(binary(), binary()) -> binary() | {binary(), binary()}.
+-spec maybe_create_bucket_type(binary()|undefined, binary()) -> riak_core_bucket:bucket().
 maybe_create_bucket_type(<<"default">>, Bucket) ->
+    Bucket;
+maybe_create_bucket_type(undefined, Bucket) ->
     Bucket;
 maybe_create_bucket_type(Type, Bucket) when is_binary(Type) ->
     {Type, Bucket}.
+
+%% always construct {Type, Bucket} tuple, filling in default type if needed
+-spec bucket_type(binary()|undefined, binary()) -> riak_core_bucket:bucket().
+bucket_type(undefined, B) ->
+    {<<"default">>, B};
+bucket_type(T, B) ->
+    {T, B}.
