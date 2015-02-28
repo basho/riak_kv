@@ -2,7 +2,7 @@
 %%
 %% riak_kv_web: setup Riak's KV HTTP interface
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -119,7 +119,13 @@ raw_dispatch(Name) ->
       riak_kv_wm_link_walker, Props},
 
      {Prefix ++ ["buckets", bucket, "index", field, '*'],
-      riak_kv_wm_index, Props}
+      riak_kv_wm_index, Props},
+
+     {Prefix ++ ["ring", "coverage"],
+      riak_kv_wm_apiep, Props},
+
+     {Prefix ++ ["ring", "coverage", "bucket", bucket, "key", key],
+      riak_kv_wm_apiep, Props}
 
     ] || {Prefix, Props} <- Props2 ]).
 
