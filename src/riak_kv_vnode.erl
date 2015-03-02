@@ -693,6 +693,12 @@ handle_command({fix_incorrect_index_entry, {done, ForUpgrade}}, _Sender,
         {error, _Reason} ->
             {reply, error, State}
     end;
+handle_command({ts_write_batch, {{Table, Series}, TSBatch}}, _Sender,
+               State = #state{mod=Mod, modstate=ModState}) ->
+    lager:info("Storing batch ~p/~p", [Table, Series]),
+    {Reply, UpdState} = Mod:ts_write_batch(TSBatch, ModState),
+    {reply, Reply, State#state{modstate=UpdState}};
+
 handle_command({fix_incorrect_index_entry, Keys, ForUpgrade},
                _Sender,
                State=#state{mod=Mod,

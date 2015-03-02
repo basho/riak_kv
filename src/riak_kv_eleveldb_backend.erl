@@ -31,6 +31,7 @@
          stop/1,
          get/3,
          put/5,
+         ts_write_batch/2,
          delete/4,
          drop/1,
          fix_index/3,
@@ -70,6 +71,9 @@
                 read_opts = [],
                 write_opts = [],
                 fold_opts = [{fill_cache, false}],
+                ts_ref :: eleveldb:db_ref(),
+                ts_open_opts, 
+                ts_data_root :: string(),
                 fixed_indexes = false, %% true if legacy indexes have be rewritten
                 legacy_indexes = false %% true if new writes use legacy indexes (downgrade)
                }).
@@ -202,6 +206,10 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
         {error, Reason} ->
             {error, Reason, State}
     end.
+
+ts_write_batch(Batch, State = #state{ts_ref=Ref}) ->
+    Reply = eleveldb:write(Ref, Batch, []),
+    {Reply, State}.
 
 indexes_fixed(#state{ref=Ref,read_opts=ReadOpts}) ->
     case eleveldb:get(Ref, to_md_key(?FIXED_INDEXES_KEY), ReadOpts) of
@@ -587,6 +595,8 @@ init_state(DataRoot, Config) ->
     %% Use read options for folding, but FORCE fill_cache to false
     FoldOpts = lists:keystore(fill_cache, 1, ReadOpts, {fill_cache, false}),
 
+    TSOpenOpts = [{time_series, true}|OpenOpts],
+
     %% Warn if block_size is set
     SSTBS = proplists:get_value(sst_block_size, OpenOpts, false),
     BS = proplists:get_value(block_size, OpenOpts, false),
@@ -604,9 +614,11 @@ init_state(DataRoot, Config) ->
 
     %% Generate a debug message with the options we'll use for each operation
     lager:debug("Datadir ~s options for LevelDB: ~p\n",
-                [DataRoot, [{open, OpenOpts}, {read, ReadOpts}, {write, WriteOpts}, {fold, FoldOpts}]]),
+                [DataRoot, [{open, OpenOpts}, {read, ReadOpts}, {write, WriteOpts}, {fold, FoldOpts}, {ts_open, TSOpenOpts}]]),
     #state { data_root = DataRoot,
+             ts_data_root = filename:join([DataRoot, "timeseries"]),
              open_opts = OpenOpts,
+             ts_open_opts = TSOpenOpts,
              read_opts = ReadOpts,
              write_opts = WriteOpts,
              fold_opts = FoldOpts,
@@ -614,8 +626,14 @@ init_state(DataRoot, Config) ->
 
 %% @private
 open_db(State) ->
-    RetriesLeft = app_helper:get_env(riak_kv, eleveldb_open_retries, 30),
-    open_db(State, max(1, RetriesLeft), undefined).
+    RetriesLeft0 = app_helper:get_env(riak_kv, eleveldb_open_retries, 30),
+    RetriesLeft = max(1, RetriesLeft0),
+    case open_db(State, RetriesLeft, undefined) of
+        {ok, State2} ->
+            open_ts_db(State2, RetriesLeft, undefined);
+        Err ->
+            Err
+    end.
 
 open_db(_State0, 0, LastError) ->
     {error, LastError};
@@ -628,6 +646,31 @@ open_db(State0, RetriesLeft, _) ->
         %% out to disk.  The process is gone, but the NIF resource cleanup
         %% may not have completed.
         {error, {db_open, OpenErr}=Reason} ->
+            case lists:prefix("IO error: lock ", OpenErr) of
+                true ->
+                    SleepFor = app_helper:get_env(riak_kv, eleveldb_open_retry_delay, 2000),
+                    lager:debug("Leveldb backend retrying ~p in ~p ms after error ~s\n",
+                                [State0#state.data_root, SleepFor, OpenErr]),
+                    timer:sleep(SleepFor),
+                    open_db(State0, RetriesLeft - 1, Reason);
+                false ->
+                    {error, Reason}
+            end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+open_ts_db(_State0, 0, LastError) ->
+    {error, LastError};
+open_ts_db(State0, RetriesLeft, _) ->
+    case eleveldb:open(State0#state.ts_data_root, State0#state.ts_open_opts) of
+        {ok, Ref} ->
+            {ok, State0#state { ts_ref = Ref }};
+        %% Check specifically for lock error, this can be caused if
+        %% a crashed vnode takes some time to flush leveldb information
+        %% out to disk.  The process is gone, but the NIF resource cleanup
+        %% may not have completed.
+        {error, {ts_db_open, OpenErr}=Reason} ->
             case lists:prefix("IO error: lock ", OpenErr) of
                 true ->
                     SleepFor = app_helper:get_env(riak_kv, eleveldb_open_retry_delay, 2000),

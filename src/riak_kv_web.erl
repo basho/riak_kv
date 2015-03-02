@@ -44,6 +44,7 @@ dispatch_table() ->
         riak_kv_wm_mapred, MapredProps},
        {[proplists:get_value(prefix, StatsProps)],
         riak_kv_wm_stats, StatsProps},
+       {["ts", "insert"], riak_kv_wm_ts_insert, []},
        {["ping"], riak_kv_wm_ping, []}]).
 
 raw_dispatch() ->
