@@ -20,8 +20,8 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_get_core).
--export([init/8, add_result/3, result_shortcode/1, enough/1, response/1,
-         has_all_results/1, final_action/1, info/1]).
+-export([init/8, add_result/3, result_shortcode/1, enough/1, response/1, response/2,
+         has_all_results/1, final_action/1, final_action/2, info/1]).
 -export_type([getcore/0, result/0, reply/0, final_action/0]).
 
 -ifdef(TEST).
@@ -132,12 +132,16 @@ enough(_) ->
 
 %% Get success/fail response once enough results received
 -spec response(getcore()) -> {reply(), getcore()}.
+response(GetCore) ->
+    response(GetCore, false).
+
+-spec response(getcore(), boolean()) -> {reply(), getcore()}.
 %% Met quorum
-response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
+response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore, Immutable)
         when NumOK >= R andalso NumPOK >= PR ->
     #getcore{results = Results, allow_mult=AllowMult,
         deletedvclock = DeletedVClock} = GetCore,
-    {ObjState, MObj} = Merged = merge(Results, AllowMult),
+    {ObjState, MObj} = Merged = merge(Results, AllowMult, Immutable),
     Reply = case ObjState of
         ok ->
             Merged; % {ok, MObj}
@@ -149,18 +153,18 @@ response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
     {Reply, GetCore#getcore{merged = Merged}};
 %% everything was either a tombstone or a notfound
 response(#getcore{num_notfound = NumNotFound, num_ok = NumOK,
-        num_deleted = NumDel, num_fail = NumFail} = GetCore)
+        num_deleted = NumDel, num_fail = NumFail} = GetCore, _Immutable)
         when NumNotFound + NumDel > 0, NumOK - NumDel == 0, NumFail == 0  ->
     {{error, notfound}, GetCore};
 %% We've satisfied R, but not PR
-response(#getcore{r = R, pr = PR, num_ok = NumR, num_pok = NumPR} = GetCore)
+response(#getcore{r = R, pr = PR, num_ok = NumR, num_pok = NumPR} = GetCore, _Immutable)
       when PR > 0, NumPR < PR, NumR >= R ->
     check_overload({error, {pr_val_unsatisfied, PR,  NumPR}}, GetCore);
 %% PR and/or R are unsatisfied, but PR is more restrictive
-response(#getcore{r = R, num_pok = NumPR, pr = PR} = GetCore) when PR >= R ->
+response(#getcore{r = R, num_pok = NumPR, pr = PR} = GetCore, _Immutable) when PR >= R ->
     check_overload({error, {pr_val_unsatisfied, PR,  NumPR}}, GetCore);
 %% PR and/or R are unsatisfied, but R is more restrictive
-response(#getcore{r = R, num_ok = NumR} = GetCore) ->
+response(#getcore{r = R, num_ok = NumR} = GetCore, _Immutable) ->
     check_overload({error, {r_val_unsatisfied, R,  NumR}}, GetCore).
 
 %% Check for vnode overload
@@ -178,6 +182,12 @@ has_all_results(#getcore{n = N, num_ok = NOk,
                          num_fail = NFail, num_notfound = NNF}) ->
     NOk + NFail + NNF >= N.
 
+%% Effects final_action(GetCode, false)
+%%
+-spec final_action(getcore(), boolean()) -> {final_action(), getcore()}.
+final_action(GetCore) ->
+    final_action(GetCore, false).
+
 %% Decide on any post-response actions
 %% nop - do nothing
 %% {readrepair, Indices, MObj} - send read repairs iff any vnode has ancestor data
@@ -187,10 +197,10 @@ has_all_results(#getcore{n = N, num_ok = NOk,
 %%
 -spec final_action(getcore()) -> {final_action(), getcore()}.
 final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
-                                allow_mult = AllowMult}) ->
+                                allow_mult = AllowMult}, Immutable) ->
     Merged = case Merged0 of
                  undefined ->
-                     merge(Results, AllowMult);
+                     merge(Results, AllowMult, Immutable);
                  _ ->
                      Merged0
              end,
@@ -249,13 +259,13 @@ info(#getcore{num_ok = NumOks, num_fail = NumFail, results = Results}) ->
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
-merge(Replies, AllowMult) ->
+merge(Replies, AllowMult, Immutable) ->
     RObjs = [RObj || {_I, {ok, RObj}} <- Replies],
     case RObjs of
         [] ->
             {notfound, undefined};
         _ ->
-            Merged = riak_object:reconcile(RObjs, AllowMult), % include tombstones
+            Merged = riak_object:reconcile(RObjs, AllowMult, Immutable), % include tombstones
             case riak_kv_util:is_x_deleted(Merged) of
                 true ->
                     {tombstone, Merged};

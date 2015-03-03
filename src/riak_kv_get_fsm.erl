@@ -63,6 +63,7 @@
                 req_id :: non_neg_integer(),
                 starttime :: pos_integer(),
                 get_core :: riak_kv_get_core:getcore(),
+                immutable :: boolean(),
                 timeout :: infinity | pos_integer(),
                 tref    :: reference(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
@@ -225,6 +226,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
             new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
                                                 n = N,
                                                 bucket_props=Props,
+                                                immutable=lists:member({immutable, true}, Props),
                                                 preflist2 = Preflist2,
                                                 tracked_bucket = StatTracked,
                                                 crdt_op = CrdtOp})
@@ -322,7 +324,8 @@ preflist_for_tracing(Preflist) ->
 
 %% @private
 waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = GetCore,
-                                                                  trace=Trace}) ->
+                                                                  trace=Trace,
+                                                                  immutable=Immutable}) ->
     case Trace of
         true ->
             ShortCode = riak_kv_get_core:result_shortcode(VnodeResult),
@@ -334,7 +337,7 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
     UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
     case riak_kv_get_core:enough(UpdGetCore) of
         true ->
-            {Reply, UpdGetCore2} = riak_kv_get_core:response(UpdGetCore),
+            {Reply, UpdGetCore2} = riak_kv_get_core:response(UpdGetCore, Immutable),
             NewStateData = client_reply(Reply, StateData#state{get_core = UpdGetCore2}),
             update_stats(Reply, NewStateData),
             maybe_finalize(NewStateData);
@@ -414,8 +417,8 @@ maybe_finalize(StateData=#state{get_core = GetCore}) ->
         false -> {next_state,waiting_read_repair,StateData}
     end.
 
-finalize(StateData=#state{get_core = GetCore, trace = Trace }) ->
-    {Action, UpdGetCore} = riak_kv_get_core:final_action(GetCore),
+finalize(StateData=#state{get_core = GetCore, trace = Trace, immutable=Immutable}) ->
+    {Action, UpdGetCore} = riak_kv_get_core:final_action(GetCore, Immutable),
     UpdStateData = StateData#state{get_core = UpdGetCore},
     case Action of
         delete ->

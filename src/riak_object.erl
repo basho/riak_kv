@@ -80,7 +80,7 @@
                          %% Shanley's(11) + Joe's(42)
 -define(EMPTY_VTAG_BIN, <<"e">>).
 
--export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
+-export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, reconcile/3, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([hash/1, approximate_size/2]).
@@ -196,21 +196,38 @@ ancestors(Objects) ->
 strict_descendant(O1, O2) ->
     vclock:dominates(riak_object:vclock(O1), riak_object:vclock(O2)).
 
-%% @doc  Reconcile a list of riak objects.  If AllowMultiple is true,
+%% @doc  Effects reconcile(Objects, AllowMultiple, false)
+-spec reconcile([riak_object()], boolean()) -> riak_object().
+reconcile(Objects, AllowMultiple) ->
+    reconcile(Objects, AllowMultiple, false).
+
+%% @doc  Reconcile a list of riak objects.  If Immutable is true, then
+%%       take the lowest (in lexicographic order) hash value of the list
+%%       of input object.  This provides a deterministically random selection
+%%       from the input set.  Otherwise, if AllowMultiple is true,
 %%       the riak_object returned may contain multiple values if Objects
 %%       contains sibling versions (objects that could not be syntactically
 %%       merged).   If AllowMultiple is false, the riak_object returned will
 %%       contain the value of the most-recently-updated object, as per the
 %%       X-Riak-Last-Modified header.
--spec reconcile([riak_object()], boolean()) -> riak_object().
-reconcile(Objects, AllowMultiple) ->
-    RObj = reconcile(remove_dominated(Objects)),
-    case AllowMultiple of
-        false ->
-            Contents = [most_recent_content(RObj#r_object.contents)],
-            RObj#r_object{contents=Contents};
+-spec reconcile([riak_object()], boolean(), boolean()) -> riak_object().
+reconcile(Objects, AllowMultiple, Immutable) ->
+    case Immutable of
         true ->
-            RObj
+            {RObj, _Hash} = hd(lists:sort(
+                fun({_RObj1, Hash1}, {_RObj2, Hash2}) -> Hash1 =< Hash2 end,
+                [{RObj, crypto:hash(sha, term_to_binary(RObj))} || RObj <- Objects]
+            )),
+            RObj;
+        _ ->
+            RObj = reconcile(remove_dominated(Objects)),
+            case AllowMultiple of
+                false ->
+                    Contents = [most_recent_content(RObj#r_object.contents)],
+                    RObj#r_object{contents=Contents};
+                true ->
+                    RObj
+            end
     end.
 
 %% @private remove all Objects from the list that are causally
