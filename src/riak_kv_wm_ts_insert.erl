@@ -161,9 +161,8 @@ check_body(RD, State) ->
      NewState}.
 
 parse_ts_input(B0) ->
-    Batch0 = append_varint(1, <<>>),
     {Family, B1} = parse_line(B0),
-    Batch1 = append_string(Family, Batch0),
+    Batch1 = append_string(Family, <<>>),
     {Series, B2} = parse_line(B1),
     Batch2 = append_string(Series, Batch1),
     Batch3 = append_points(Batch2, B2),
