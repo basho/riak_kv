@@ -699,6 +699,12 @@ handle_command({ts_write_batch, {{Table, Series}, TSBatch}}, _Sender,
     {Reply, UpdState} = Mod:ts_write_batch(TSBatch, ModState),
     {reply, Reply, State#state{modstate=UpdState}};
 
+handle_command({ts_query, TSQuery}, Sender,
+               State = #state{mod=Mod, modstate=ModState}) ->
+    lager:info("TS query ~p\n", [TSQuery]),
+    {Reply, UpdState} = Mod:ts_query(TSQuery, Sender, ModState),
+    {reply, Reply, State#state{modstate=UpdState}};
+               
 handle_command({fix_incorrect_index_entry, Keys, ForUpgrade},
                _Sender,
                State=#state{mod=Mod,

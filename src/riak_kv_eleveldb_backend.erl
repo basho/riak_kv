@@ -32,6 +32,7 @@
          get/3,
          put/5,
          ts_write_batch/2,
+         ts_query/3,
          delete/4,
          drop/1,
          fix_index/3,
@@ -210,6 +211,38 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
 ts_write_batch(Batch, State = #state{ts_ref=Ref}) ->
     Reply = eleveldb:write(Ref, Batch, []),
     {Reply, State}.
+
+ts_query(TSQuery, Sender, State = #state{ts_ref=DB}) ->
+    WorkerPid = spawn(ts_scan_fun(DB, TSQuery, Sender)),
+    {{ok, WorkerPid}, State}.
+
+ts_scan_fun(DB, {Family, Series, Time1, Time2}, Sender) ->
+    fun() ->
+            S = eleveldb:ts_key({Family, Series, Time1}),
+            E = eleveldb:ts_key({Family, Series, Time2}),
+            {ok, {MsgRef, AckRef}} = eleveldb:range_scan(DB, S, E, []),
+            process_ts_batch(MsgRef, AckRef, Sender)
+    end.
+
+process_ts_batch(MsgRef, AckRef, Sender) ->
+    receive
+        {range_scan_end, MsgRef} ->
+            lager:info("End of batch"),
+            riak_core_vnode:reply(Sender, ts_batch_end);
+        {range_scan_batch, MsgRef, Batch} ->
+            Size = byte_size(Batch),
+            lager:info("Batch of size ~p", [Size]),
+            riak_core_vnode:reply(Sender, {ts_batch, Batch}),
+            ack_ts_batch(MsgRef, AckRef, Sender, Size)
+    end.
+
+ack_ts_batch(MsgRef, AckRef, Sender, Size) ->
+    case eleveldb:range_scan_ack(AckRef, Size) of
+        ok ->
+            process_ts_batch(MsgRef, AckRef, Sender);
+        needs_reack ->
+            ack_ts_batch(MsgRef, AckRef, Sender, 0)
+    end.
 
 indexes_fixed(#state{ref=Ref,read_opts=ReadOpts}) ->
     case eleveldb:get(Ref, to_md_key(?FIXED_INDEXES_KEY), ReadOpts) of
