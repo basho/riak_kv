@@ -201,7 +201,7 @@ strict_descendant(O1, O2) ->
 reconcile(Objects, AllowMultiple) ->
     reconcile(Objects, AllowMultiple, false).
 
-%% @doc  Reconcile a list of riak objects.  If Immutable is true, then
+%% @doc  Reconcile a list of riak objects.  If FastPath is true, then
 %%       take the lowest (in lexicographic order) hash value of the list
 %%       of input object.  This provides a deterministically random selection
 %%       from the input set.  Otherwise, if AllowMultiple is true,
@@ -211,8 +211,8 @@ reconcile(Objects, AllowMultiple) ->
 %%       contain the value of the most-recently-updated object, as per the
 %%       X-Riak-Last-Modified header.
 -spec reconcile([riak_object()], boolean(), boolean()) -> riak_object().
-reconcile(Objects, AllowMultiple, Immutable) ->
-    case Immutable of
+reconcile(Objects, AllowMultiple, FastPath) ->
+    case FastPath of
         true ->
             {RObj, _Hash} = hd(lists:sort(
                 fun({_RObj1, Hash1}, {_RObj2, Hash2}) -> Hash1 =< Hash2 end,

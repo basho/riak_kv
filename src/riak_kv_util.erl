@@ -176,7 +176,7 @@ consistent_object(Bucket) ->
 immutable_object(Bucket) ->
     case riak_core_bucket:get_bucket(Bucket) of
         Props when is_list(Props) ->
-            lists:member({immutable, true}, Props);
+            lists:member({fast_path, true}, Props);
         {error, _}=Err ->
             Err
     end.

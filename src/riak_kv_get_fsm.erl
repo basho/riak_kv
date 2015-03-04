@@ -63,7 +63,6 @@
                 req_id :: non_neg_integer(),
                 starttime :: pos_integer(),
                 get_core :: riak_kv_get_core:getcore(),
-                immutable :: boolean(),
                 timeout :: infinity | pos_integer(),
                 tref    :: reference(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
@@ -226,14 +225,13 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
             new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
                                                 n = N,
                                                 bucket_props=Props,
-                                                immutable=lists:member({immutable, true}, Props),
                                                 preflist2 = Preflist2,
                                                 tracked_bucket = StatTracked,
                                                 crdt_op = CrdtOp})
     end.
 
 %% @private
-validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
+validate(timeout, StateData=#state{bkey={Bucket,_Key}, from = {raw, ReqId, _Pid}, options = Options,
                                    n = N, bucket_props = BucketProps, preflist2 = PL2,
                                    trace=Trace}) ->
     ?DTRACE(Trace, ?C_GET_FSM_VALIDATE, [], ["validate"]),
@@ -268,6 +266,7 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
             DeletedVClock = get_option(deletedvclock, Options, false),
             GetCore = riak_kv_get_core:init(N, R, PR, FailThreshold,
                                             NotFoundOk, AllowMult,
+                                            riak_kv_util:immutable_object(Bucket),
                                             DeletedVClock, IdxType),
             new_state_timeout(execute, StateData#state{get_core = GetCore,
                                                        timeout = Timeout,
@@ -324,8 +323,7 @@ preflist_for_tracing(Preflist) ->
 
 %% @private
 waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = GetCore,
-                                                                  trace=Trace,
-                                                                  immutable=Immutable}) ->
+                                                                  trace=Trace}) ->
     case Trace of
         true ->
             ShortCode = riak_kv_get_core:result_shortcode(VnodeResult),
@@ -337,7 +335,7 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
     UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
     case riak_kv_get_core:enough(UpdGetCore) of
         true ->
-            {Reply, UpdGetCore2} = riak_kv_get_core:response(UpdGetCore, Immutable),
+            {Reply, UpdGetCore2} = riak_kv_get_core:response(UpdGetCore),
             NewStateData = client_reply(Reply, StateData#state{get_core = UpdGetCore2}),
             update_stats(Reply, NewStateData),
             maybe_finalize(NewStateData);
@@ -417,8 +415,8 @@ maybe_finalize(StateData=#state{get_core = GetCore}) ->
         false -> {next_state,waiting_read_repair,StateData}
     end.
 
-finalize(StateData=#state{get_core = GetCore, trace = Trace, immutable=Immutable}) ->
-    {Action, UpdGetCore} = riak_kv_get_core:final_action(GetCore, Immutable),
+finalize(StateData=#state{get_core = GetCore, trace = Trace}) ->
+    {Action, UpdGetCore} = riak_kv_get_core:final_action(GetCore),
     UpdStateData = StateData#state{get_core = UpdGetCore},
     case Action of
         delete ->
