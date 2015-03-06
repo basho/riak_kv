@@ -19,20 +19,22 @@
 -module(riak_kv_immutable_put).
 
 %% API
--export([start_link/1]).
-
--define(SERVER, ?MODULE).
+-export([start_link/3]).
+-export([init/1,
+    handle_call/3,
+    handle_cast/2,
+    handle_info/2,
+    terminate/2,
+    code_change/3]).
 
 -record(state, {
     w, pw,
     primaries = 0,
     total = 0,
-    timeout_at,
     from
 }).
 
--define(ELSE, true). % improves readability of if-then-else clauses
-
+-define(DEFAULT_TIMEOUT, 60000).
 
 %%
 %% Description:
@@ -68,18 +70,14 @@
 %%% API
 %%%===================================================================
 
-start_link(Args) ->
-    % TODO add monitor
-    From = self(),
-    {ok, spawn_link(fun() -> start(Args, From) end)}.
+start_link(Self, RObj, Options) ->
+    gen_server:start_link(?MODULE, [Self, RObj, Options], []).
 
+init(Args) ->
+    gen_server:cast(self(), {async_init, Args}),
+    {ok, #state{}}.
 
-
-%%%===================================================================
-%%% Internal functions
-%%%===================================================================
-
-start({RObj, Options, RecvTimeout}, From) ->
+async_init([From, RObj, Options], State) ->
     Bucket = riak_object:bucket(RObj),
     BKey = {Bucket, riak_object:key(RObj)},
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
@@ -91,7 +89,13 @@ start({RObj, Options, RecvTimeout}, From) ->
             error   -> get(w, BucketProps, NVal, Options);
             DW      -> erlang:max(DW, get(w, BucketProps, NVal, Options))
         end,
-    Timeout = erlang:max(RecvTimeout, 0),
+    case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
+        N when is_integer(N) andalso N > 0 ->
+            timer:send_after(N, timeout);
+        _ ->
+            % TODO handle bad timoeout
+            ok
+    end,
     Preflist =
         case riak_kv_util:get_option(sloppy_quorum, Options, true) of
             true ->
@@ -111,38 +115,51 @@ start({RObj, Options, RecvTimeout}, From) ->
          {Proxy, Node} ! {ts_put, self(), RObj4, Type},
          ok
      end || {{Idx, Node}, Type} <- Preflist],
-    wait(#state{w = W, pw = PW, timeout_at = current_ms() + Timeout, from = From}).
+    State#state{w = W, pw = PW, from = From}.
 
-wait(
-    #state{
+
+handle_call(_Request, _From, State) ->
+    {reply, ok, State}.
+
+handle_cast({async_init, Args}, State) ->
+    {noreply, async_init(Args, State)}.
+
+handle_info({ts_reply, _Reply, Type}, #state{
         pw = PW, w = W,
         primaries = Primaries, total = Total,
-        timeout_at = TimeoutAt,
         from = From
-    } = State
-) ->
-    Timeout = erlang:max(TimeoutAt - current_ms(), 0),
-    receive
-        {ts_reply, _Reply, Type} ->
-            NewPrimaries = case Type of
-                               primary ->
-                                   Primaries + 1;
-                               fallback ->
-                                   Primaries
-                           end,
-            NewTotal = Total + 1,
-            case enoughReplies(W, PW, NewPrimaries, NewTotal) of
-                true ->
-                    reply(From, ok);
-                false ->
-                    wait(State#state{primaries = NewPrimaries, total = NewTotal})
-            end;
-        Reply ->
-            reply(From, {error, spurious_reply, Reply})
-    after
-        Timeout ->
-            reply(From, {error, timeout})
-    end.
+    } = State) ->
+    NewPrimaries = case Type of
+                       primary ->
+                           Primaries + 1;
+                       fallback ->
+                           Primaries
+                   end,
+    NewTotal = Total + 1,
+    case enoughReplies(W, PW, NewPrimaries, NewTotal) of
+        true ->
+            reply(From, ok),
+            {stop, normal, State};
+        false ->
+            {noreply, State#state{primaries = NewPrimaries, total = NewTotal}}
+    end;
+handle_info(timeout, #state{from = From} = State) ->
+    reply(From, {error, timeout}),
+    {stop, normal, State}.
+
+
+terminate(_Reason, _State) ->
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+
+
+
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
 
 enoughReplies(W, PW, Primaries, TotalReplies) ->
     EnoughTotal = W =< TotalReplies,
@@ -163,8 +180,3 @@ get(Key, BucketProps, N, Options) ->
         riak_kv_util:get_option(Key, Options, default),
         BucketProps, N
     ).
-
-current_ms() ->
-    % TODO use os:timestamp instead?  Lower overhead?
-    {MegaSecs, Secs, MicroSecs} = erlang:now(),
-    (MegaSecs*1000000 + Secs)*1000 + erlang:round(MicroSecs/1000).
