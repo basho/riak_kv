@@ -231,7 +231,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
     end.
 
 %% @private
-validate(timeout, StateData=#state{bkey={Bucket,_Key}, from = {raw, ReqId, _Pid}, options = Options,
+validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
                                    n = N, bucket_props = BucketProps, preflist2 = PL2,
                                    trace=Trace}) ->
     ?DTRACE(Trace, ?C_GET_FSM_VALIDATE, [], ["validate"]),
@@ -266,7 +266,6 @@ validate(timeout, StateData=#state{bkey={Bucket,_Key}, from = {raw, ReqId, _Pid}
             DeletedVClock = get_option(deletedvclock, Options, false),
             GetCore = riak_kv_get_core:init(N, R, PR, FailThreshold,
                                             NotFoundOk, AllowMult,
-                                            riak_kv_util:immutable_object(Bucket),
                                             DeletedVClock, IdxType),
             new_state_timeout(execute, StateData#state{get_core = GetCore,
                                                        timeout = Timeout,
@@ -415,7 +414,7 @@ maybe_finalize(StateData=#state{get_core = GetCore}) ->
         false -> {next_state,waiting_read_repair,StateData}
     end.
 
-finalize(StateData=#state{get_core = GetCore, trace = Trace}) ->
+finalize(StateData=#state{get_core = GetCore, trace = Trace }) ->
     {Action, UpdGetCore} = riak_kv_get_core:final_action(GetCore),
     UpdStateData = StateData#state{get_core = UpdGetCore},
     case Action of

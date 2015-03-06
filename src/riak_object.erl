@@ -80,7 +80,7 @@
                          %% Shanley's(11) + Joe's(42)
 -define(EMPTY_VTAG_BIN, <<"e">>).
 
--export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, reconcile/3, equal/2]).
+-export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([hash/1, approximate_size/2]).
@@ -196,38 +196,21 @@ ancestors(Objects) ->
 strict_descendant(O1, O2) ->
     vclock:dominates(riak_object:vclock(O1), riak_object:vclock(O2)).
 
-%% @doc  Effects reconcile(Objects, AllowMultiple, false)
--spec reconcile([riak_object()], boolean()) -> riak_object().
-reconcile(Objects, AllowMultiple) ->
-    reconcile(Objects, AllowMultiple, false).
-
-%% @doc  Reconcile a list of riak objects.  If FastPath is true, then
-%%       take the lowest (in lexicographic order) hash value of the list
-%%       of input object.  This provides a deterministically random selection
-%%       from the input set.  Otherwise, if AllowMultiple is true,
+%% @doc  Reconcile a list of riak objects.  If AllowMultiple is true,
 %%       the riak_object returned may contain multiple values if Objects
 %%       contains sibling versions (objects that could not be syntactically
 %%       merged).   If AllowMultiple is false, the riak_object returned will
 %%       contain the value of the most-recently-updated object, as per the
 %%       X-Riak-Last-Modified header.
--spec reconcile([riak_object()], boolean(), boolean()) -> riak_object().
-reconcile(Objects, AllowMultiple, FastPath) ->
-    case FastPath of
+-spec reconcile([riak_object()], boolean()) -> riak_object().
+reconcile(Objects, AllowMultiple) ->
+    RObj = reconcile(remove_dominated(Objects)),
+    case AllowMultiple of
+        false ->
+            Contents = [most_recent_content(RObj#r_object.contents)],
+            RObj#r_object{contents=Contents};
         true ->
-            {RObj, _Hash} = hd(lists:sort(
-                fun({_RObj1, Hash1}, {_RObj2, Hash2}) -> Hash1 =< Hash2 end,
-                [{RObj, crypto:hash(sha, term_to_binary(RObj))} || RObj <- Objects]
-            )),
-            RObj;
-        _ ->
-            RObj = reconcile(remove_dominated(Objects)),
-            case AllowMultiple of
-                false ->
-                    Contents = [most_recent_content(RObj#r_object.contents)],
-                    RObj#r_object{contents=Contents};
-                true ->
-                    RObj
-            end
+            RObj
     end.
 
 %% @private remove all Objects from the list that are causally
@@ -287,14 +270,33 @@ compare_content_dates(C1,C2) ->
 merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
     Bucket = bucket(OldObject),
-    DVV = dvv_enabled(Bucket),
-    {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
-    ok = riak_kv_stat:update({riak_object_merge, CRDT, Time}),
-    OldObject#r_object{contents=Contents,
-                       vclock=vclock:merge([OldObject#r_object.vclock,
-                                            NewObj1#r_object.vclock]),
-                       updatemetadata=dict:store(clean, true, dict:new()),
-                       updatevalue=undefined}.
+    case riak_kv_util:immutable_object(Bucket) of
+        true ->
+            merge_fastpath(OldObject, NewObj1);
+        _ ->
+            DVV = dvv_enabled(Bucket),
+            {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
+            ok = riak_kv_stat:update({riak_object_merge, CRDT, Time}),
+            OldObject#r_object{contents=Contents,
+                vclock=vclock:merge([OldObject#r_object.vclock,
+                    NewObj1#r_object.vclock]),
+                updatemetadata=dict:store(clean, true, dict:new()),
+                updatevalue=undefined}
+    end.
+
+%% @doc Special case fastpath merge, in the case where the fast_path property is
+%%      set on the bucket (type).  In this case, take the lesser (in lexical order)
+%%      of the SHA1 hash of each object.
+%%
+-spec merge_fastpath(riak_object(), riak_object()) -> riak_object().
+merge_fastpath(OldObject, NewObject) ->
+    lager:info("FDUSHIN> merge_fastpath(~p, ~p)", [OldObject, NewObject]),
+    case crypto:hash(sha, term_to_binary(OldObject)) =< crypto:hash(sha, term_to_binary(NewObject)) of
+        true ->
+            OldObject;
+        _ ->
+            NewObject
+    end.
 
 
 %% @doc Merge the r_objects contents by converting the inner dict to

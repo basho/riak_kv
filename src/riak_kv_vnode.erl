@@ -1071,7 +1071,9 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
 handle_info({ts_put, From, RObj, Type}, State=#state{mod=Mod, modstate=ModState, vnodeid = VId}) ->
     Bucket = riak_object:bucket(RObj),
     Key = riak_object:key(RObj),
-    IncrementedRObj = riak_object:increment_vclock(RObj, VId, os:timestamp()),
+    UpdatedRobj = riak_object:apply_updates(riak_object:update_last_modified(RObj)),
+    IncrementedRObj = riak_object:increment_vclock(UpdatedRobj, VId, os:timestamp()),
+    lager:info("FDUSHIN> RObj: ~p", [RObj]),
     EncodedVal = riak_object:to_binary(v0, IncrementedRObj),
     case erlang:function_exported(Mod, async_put, 5) of
         true ->
