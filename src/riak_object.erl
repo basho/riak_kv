@@ -270,7 +270,7 @@ compare_content_dates(C1,C2) ->
 merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
     Bucket = bucket(OldObject),
-    case riak_kv_util:immutable_object(Bucket) of
+    case riak_kv_util:get_fast_path(Bucket) of
         true ->
             merge_fastpath(OldObject, NewObj1);
         _ ->
@@ -290,7 +290,6 @@ merge(OldObject, NewObject) ->
 %%
 -spec merge_fastpath(riak_object(), riak_object()) -> riak_object().
 merge_fastpath(OldObject, NewObject) ->
-    lager:info("FDUSHIN> merge_fastpath(~p, ~p)", [OldObject, NewObject]),
     case crypto:hash(sha, term_to_binary(OldObject)) =< crypto:hash(sha, term_to_binary(NewObject)) of
         true ->
             OldObject;

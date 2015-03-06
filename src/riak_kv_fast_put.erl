@@ -16,7 +16,9 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
--module(riak_kv_immutable_put).
+-module(riak_kv_fast_put).
+
+-behaviour(gen_server).
 
 %% API
 -export([start_link/3]).
@@ -39,9 +41,9 @@
 %%
 %% Description:
 %%
-%% This module defines an intermediate process that stands between
+%% This module defines an intermediate proc that stands between
 %% riak_client and a collection of riak_kv_vnodes, mediating asynchronous
-%% put operations in the special case where the immutable flag is
+%% put operations in the special case where the fast_path flag is
 %% set on a bucket.
 %%
 %% This proc will cast a set of ts_put messages to a computed set of

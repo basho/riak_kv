@@ -330,18 +330,17 @@ put(RObj, W, DW, Timeout, Options, {?MODULE, [_Node, _ClientId]}=THIS) ->
     put(RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options], THIS).
 
 maybe_normal_put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
-    case immutable_object(Node, riak_object:bucket(RObj)) of
+    case fast_path(Node, riak_object:bucket(RObj)) of
         true ->
-            immutable_put(RObj, Options, THIS);
+            fast_put(RObj, Options, THIS);
         false ->
             normal_put(RObj, Options, THIS);
         {error,_}=Err ->
             Err
     end.
 
-immutable_put(RObj, Options, {?MODULE, [_Node, _ClientId]}) ->
-    {ok, Pid} = riak_kv_immutable_put:start_link(self(), RObj, Options),
-    % TODO: consider adding a monitor in case immutable_fsm crashes
+fast_put(RObj, Options, {?MODULE, [_Node, _ClientId]}) ->
+    {ok, Pid} = riak_kv_fast_put:start_link(self(), RObj, Options),
     receive
         {Pid, Response} -> Response
     after recv_timeout(Options) ->
@@ -890,10 +889,10 @@ consistent_object(Node, Bucket) ->
             Result
     end.
 
-immutable_object(Node, Bucket) when Node =:= node() ->
-    riak_kv_util:immutable_object(Bucket);
-immutable_object(Node, Bucket) ->
-    case rpc:call(Node, riak_kv_util, immutable_object, [Bucket]) of
+fast_path(Node, Bucket) when Node =:= node() ->
+    riak_kv_util:get_fast_path(Bucket);
+fast_path(Node, Bucket) ->
+    case rpc:call(Node, riak_kv_util, fast_path_object, [Bucket]) of
         {badrpc, {'EXIT', {undef, _}}} ->
             false;
         {badrpc, _}=Err ->
