@@ -102,9 +102,13 @@ start({RObj, Options, RecvTimeout}, From) ->
         end,
     %% Cast a ts_put to all nodes in the selected preflist.  Response will be sent
     %% back to this proc.  See wait({ts_reply, ...})
+    {RandomId, _} = random:uniform_s(1000000000, os:timestamp()),
+    RObj2 = riak_object:set_vclock(RObj, vclock:fresh(RandomId, 1)),
+    RObj3 = riak_object:update_last_modified(RObj2),
+    RObj4 = riak_object:apply_updates(RObj3),
     [begin
          Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx),
-         {Proxy, Node} ! {ts_put, self(), RObj, Type},
+         {Proxy, Node} ! {ts_put, self(), RObj4, Type},
          ok
      end || {{Idx, Node}, Type} <- Preflist],
     wait(#state{w = W, pw = PW, timeout_at = current_ms() + Timeout, from = From}).
