@@ -290,6 +290,7 @@ merge(OldObject, NewObject) ->
 %%
 -spec merge_fastpath(riak_object(), riak_object()) -> riak_object().
 merge_fastpath(OldObject, NewObject) ->
+    ok = riak_kv_stat:update(fast_path_merge),
     case crypto:hash(sha, term_to_binary(OldObject)) =< crypto:hash(sha, term_to_binary(NewObject)) of
         true ->
             OldObject;
