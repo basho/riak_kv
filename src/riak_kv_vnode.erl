@@ -695,13 +695,13 @@ handle_command({fix_incorrect_index_entry, {done, ForUpgrade}}, _Sender,
     end;
 handle_command({ts_write_batch, {{Table, Series}, TSBatch}}, _Sender,
                State = #state{mod=Mod, modstate=ModState}) ->
-    lager:info("Storing batch ~p/~p", [Table, Series]),
+    lager:debug("Storing batch ~p/~p", [Table, Series]),
     {Reply, UpdState} = Mod:ts_write_batch(TSBatch, ModState),
     {reply, Reply, State#state{modstate=UpdState}};
 
 handle_command({ts_query, TSQuery}, Sender,
                State = #state{mod=Mod, modstate=ModState}) ->
-    lager:info("TS query ~p\n", [TSQuery]),
+    lager:debug("TS query ~p\n", [TSQuery]),
     {Reply, UpdState} = Mod:ts_query(TSQuery, Sender, ModState),
     {reply, Reply, State#state{modstate=UpdState}};
                

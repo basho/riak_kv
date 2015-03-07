@@ -235,7 +235,9 @@ stream_ts_results(State = #stream_state{msg_ref = Ref,
             stream_ts_results(State#stream_state{mon_ref=NewMonRef});
         {'DOWN', MonRef, _, _, Info} ->
             lager:warning("TS query producer died ~p", [Info]),
-            {["TS query producer died", "\r\n--", Boundary, "--\r\n"],
+            {["\r\n--", Boundary, "\r\n", 
+              "Content-Type: text/plain\r\n\r\n",
+              "TS query producer died", "\r\n--", Boundary, "--\r\n"],
              gone};
         {Ref, ts_batch_end} ->
             lager:info("TS batch end"),
@@ -254,7 +256,9 @@ stream_ts_results(State = #stream_state{msg_ref = Ref,
             {[], fun() -> stream_ts_results(State) end}
     after
        Timeout ->
-            {[<<"Batch time out">>, 
+            {["\r\n--", Boundary, "\r\n", 
+              "Content-Type: text/plain\r\n\r\n",
+              "Batch time out", 
               "\r\n--", Boundary, "--\r\n"],
              done}
     end.
@@ -267,8 +271,10 @@ result_part(TSBatch, Boundary) ->
 
 parse_batch(<<>>, Bin) ->
     Bin;
-parse_batch(<<Time:64, B/binary>>, Out) ->
-    {Val, B1} = eleveldb:parse_string(B),
+parse_batch(B, Out) ->
+    {Key, B1} = eleveldb:parse_string(B),
+    {Val, B2} = eleveldb:parse_string(B1),
+    <<Time:64, _/binary>> = Key,
     TimeStr = integer_to_binary(Time),
     Out2 = <<Out/binary, TimeStr/binary, " ", Val/binary, "\r\n">>,
-    parse_batch(B1, Out2).
+    parse_batch(B2, Out2).

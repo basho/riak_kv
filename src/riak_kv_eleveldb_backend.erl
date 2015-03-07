@@ -227,11 +227,11 @@ ts_scan_fun(DB, {Family, Series, Time1, Time2}, Sender) ->
 process_ts_batch(MsgRef, AckRef, Sender) ->
     receive
         {range_scan_end, MsgRef} ->
-            lager:info("End of batch"),
+            lager:debug("End of batch"),
             riak_core_vnode:reply(Sender, ts_batch_end);
         {range_scan_batch, MsgRef, Batch} ->
             Size = byte_size(Batch),
-            lager:info("Batch of size ~p", [Size]),
+            lager:debug("Batch of size ~p", [Size]),
             riak_core_vnode:reply(Sender, {ts_batch, Batch}),
             ack_ts_batch(MsgRef, AckRef, Sender, Size)
     end.

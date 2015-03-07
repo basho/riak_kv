@@ -99,7 +99,7 @@ store_ts_batch({{Family, Series}, _TSBatch} = TSInput) ->
     Preflist = [{VnodeIdx, Node} ||
                 {{VnodeIdx, Node}, primary}
                 <- riak_core_apl:get_primary_apl(Idx, N, riak_kv)],
-    lager:info("Storing batch ~p", [TSInput]),
+    % lager:info("Storing batch ~p", [TSInput]),
     riak_core_vnode_master:sync_command(hd(Preflist), {ts_write_batch, TSInput},
                                         riak_kv_vnode_master,
                                         60000),
