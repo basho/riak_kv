@@ -432,6 +432,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                    need, MinVnodes}}, StateData0);
         true ->
             AllowMult = get_option(allow_mult, BucketProps),
+            DVVEnabled = riak_object:dvv_bprops_enabled(BucketProps),
             Options = flatten_options(Options0 ++ ?DEFAULT_OPTS, []),
             Disable = get_option(disable_hooks, Options),
             Precommit =
@@ -460,6 +461,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                             N-PW+1,  % cannot ever get PW replies
                                             N-DW+1,  % cannot ever get DW replies
                                             AllowMult,
+                                            DVVEnabled,
                                             ReturnBody,
                                             IdxType),
             VNodeOpts = handle_options(Options, VNodeOpts0),
