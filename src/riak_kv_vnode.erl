@@ -1106,7 +1106,8 @@ handle_handoff_data(BinObj, State) ->
     try
         {BKey, Val} = decode_binary_object(BinObj),
         {B, K} = BKey,
-        case do_diffobj_put(BKey, riak_object:from_binary(B, K, Val),
+        BProps = riak_core_bucket:get_bucket(),
+        case do_diffobj_put(BKey, riak_object:from_binary(B, K, Val), BProps,
                             State) of
             {ok, UpdModState} ->
                 {reply, ok, State#state{modstate=UpdModState}};
@@ -1501,7 +1502,7 @@ prepare_put(State=#state{mod=Mod,
             end;
         {ok, OldObj} ->
             {ActorId, State2} = maybe_new_key_epoch(Coord, State, OldObj, RObj),
-            case put_merge(Coord, LWW, OldObj, RObj, ActorId, StartTime) of
+            case put_merge(Coord, LWW, OldObj, RObj, ActorId, StartTime, BProps) of
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs, State2};
                 {newobj, NewObj} ->
@@ -1666,13 +1667,15 @@ select_newest_content(Mult) ->
          Mult)).
 
 %% @private
-put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
+put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime, _BProps) -> % coord=false, LWW=true
     %% @TODO Do we need to mark the clock dirty here? I think so
     %% @TODO Check the clock of the incoming object, if it is more advanced
     %% for our actor than we are then something is amiss, and we need
     %% to mark the actor as dirty for this key
     {newobj, UpdObj};
-put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
+put_merge(false, false, CurObj, UpdObj, _VId, _StartTime, BProps) -> % coord=false, LWW=false
+    Is_dvv = riak_object:is_dvv_bprop(BProps),
+    Is_write_once = riak_object:is_write_once_bprop(BProps),
     %% a downstream merge, or replication of a coordinated PUT
     %% Merge the value received with local replica value
     %% and store the value IFF it is different to what we already have
@@ -1680,17 +1683,18 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
     %% @TODO Check the clock of the incoming object, if it is more advanced
     %% for our actor than we are then something is amiss, and we need
     %% to mark the actor as dirty for this key
-    ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
+    ResObj = riak_object:syntactic_merge(CurObj, UpdObj, Is_dvv, Is_write_once),
     case riak_object:equal(ResObj, CurObj) of
         true ->
             {oldobj, CurObj};
         false ->
             {newobj, ResObj}
     end;
-put_merge(true, LWW, CurObj, UpdObj, VId, StartTime) ->
+put_merge(true, LWW, CurObj, UpdObj, VId, StartTime, BProps) ->
     %% @TODO If the current object has a dirty clock, we need to start
     %% a new per key epoch and mark clock as clean.
-    {newobj, riak_object:update(LWW, CurObj, UpdObj, VId, StartTime)}.
+    Is_dvv = riak_object:is_dvv_bprop(BProps),
+    {newobj, riak_object:update(LWW, CurObj, UpdObj, VId, StartTime, Is_dvv)}.
 
 %% @private
 do_get(_Sender, BKey, ReqID,
@@ -1992,7 +1996,7 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
 
 %% @private
 %% upon receipt of a handoff datum, there is no client FSM
-do_diffobj_put({Bucket, Key}=BKey, DiffObj,
+do_diffobj_put({Bucket, Key}=BKey, DiffObj, BProps,
                StateData=#state{mod=Mod,
                                 modstate=ModState,
                                 idx=Idx}) ->
@@ -2023,7 +2027,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
             %% Merge handoff values with the current - possibly discarding
             %% if out of date.  Ok to set VId/Starttime undefined as
             %% they are not used for non-coordinating puts.
-            case put_merge(false, false, OldObj, DiffObj, undefined, undefined) of
+            case put_merge(false, false, OldObj, DiffObj, undefined, undefined, BProps) of
                 {oldobj, _} ->
                     {ok, ModState};
                 {newobj, NewObj} ->
