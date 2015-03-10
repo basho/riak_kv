@@ -47,9 +47,7 @@
          get_fast_path/1,
          overload_reply/1,
          get_backend_config/3,
-         is_modfun_allowed/2,
-         get_option/2,
-         get_option/3]).
+         is_modfun_allowed/2]).
 
 -include_lib("riak_kv_vnode.hrl").
 
@@ -457,17 +455,6 @@ is_modfun_allowed(Mod, _Fun) ->
             end;
         _ ->
             true
-    end.
-
-get_option(Name, Options) ->
-    get_option(Name, Options, undefined).
-
-get_option(Name, Options, Default) ->
-    case lists:keyfind(Name, 1, Options) of
-        {_, Val} ->
-            Val;
-        false ->
-            Default
     end.
 
 

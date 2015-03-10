@@ -84,7 +84,7 @@ async_init([From, RObj, Options], State) ->
     BKey = {Bucket, riak_object:key(RObj)},
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
     DocIdx = riak_core_util:chash_key(BKey, BucketProps),
-    NVal = riak_kv_util:get_option(n_val, BucketProps),
+    NVal = proplists:get_value(n_val, BucketProps),
     PW = get(pw, BucketProps, NVal, Options),
     %% W (writes) is max of configured writes and durable writes (if specified)
     W = case get(dw, BucketProps, NVal, Options) of
@@ -99,7 +99,7 @@ async_init([From, RObj, Options], State) ->
             ok
     end,
     Preflist =
-        case riak_kv_util:get_option(sloppy_quorum, Options, true) of
+        case proplists:get_value(sloppy_quorum, Options, true) of
             true ->
                 UpNodes = riak_core_node_watcher:nodes(riak_kv),
                 riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes);
@@ -179,6 +179,6 @@ reply(From, Term) ->
 get(Key, BucketProps, N, Options) ->
     riak_kv_util:expand_rw_value(
         Key,
-        riak_kv_util:get_option(Key, Options, default),
+        proplists:get_value(Key, Options, default),
         BucketProps, N
     ).
