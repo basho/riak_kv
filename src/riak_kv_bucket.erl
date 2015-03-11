@@ -165,7 +165,8 @@ validate([{BoolProp, MaybeBool}|T], ValidProps, Errors) when is_atom(BoolProp), 
                                                              orelse BoolProp =:= basic_quorum
                                                              orelse BoolProp =:= last_write_wins
                                                              orelse BoolProp =:= notfound_ok
-                                                             orelse BoolProp =:= stat_tracked ->
+                                                             orelse BoolProp =:= stat_tracked
+                                                             orelse BoolProp =:= fast_path ->
     case coerce_bool(MaybeBool) of
         error ->
             validate(T, ValidProps, [{BoolProp, not_boolean}|Errors]);
