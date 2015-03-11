@@ -41,8 +41,8 @@
 %%      {bucket, key}), in a JSON form.
 get_entrypoints_json(Proto, Options) ->
     mochijson2:encode(
-       {struct, [{struct, EP} ||
-                    EP <- prettify(get_entrypoints(Proto, Options))]}).
+       {array, [{struct, EP} ||
+                   EP <- prettify(get_entrypoints(Proto, Options))]}).
 
 
 -spec get_entrypoints(proto(), get_entrypoints_option()) -> [ep()].
@@ -78,7 +78,7 @@ prettify(EPList) ->
     %% prettify addresses, convert now's
     [[{addr, prettify_addr(Addr)},
       {port, Port},
-      {last_checked, unixtime(LastChecked)}] ||
+      {last_checked, strptime(LastChecked)}] ||
         [{addr, Addr}, {port, Port}, {last_checked, LastChecked}] <- EPList].
 
 %% @private
@@ -87,9 +87,14 @@ prettify_addr(not_routed) ->
 prettify_addr(Addr) ->
     list_to_binary(inet:ntoa(Addr)).
 
+-spec strptime({integer(), integer(), integer()}) -> binary().
 %% @private
-unixtime({NowMega, NowSec, _}) ->
-    NowMega * 1000 * 1000 + NowSec.
+strptime(Now) ->
+    {{Y, O, D}, {H, I, S}} =
+        calendar:now_to_universal_time(Now),
+    list_to_binary(io_lib:format(
+      "~4..0B-~2..0B-~2..0BT~2..0B:~2..0B:~2..0B",
+      [Y, O, D, H, I, S])).
 
 -spec flatten_one_level([[any()]]) -> [any()].
 %% @private
