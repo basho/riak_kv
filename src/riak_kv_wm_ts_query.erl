@@ -111,7 +111,7 @@ do_ts_query({Family, Series, _, _} = TSQuery) ->
     Preflist = [{VnodeIdx, Node} ||
                 {{VnodeIdx, Node}, primary}
                 <- riak_core_apl:get_primary_apl(Idx, N, riak_kv)],
-    lager:info("Query TS ~p", [TSQuery]),
+    lager:debug("Query TS ~p", [TSQuery]),
     ReplyRef = make_ref(),
     riak_core_vnode_master:command(Preflist,
                                    {ts_query, TSQuery},
@@ -226,41 +226,64 @@ ts_results_chunked(RD, State=#stream_state{}) ->
      State2}.
 
 stream_ts_results(State = #stream_state{msg_ref = Ref,
-                                        mon_ref = MonRef,
+                                        mon_ref = undefined,
                                         boundary = Boundary,
                                         timeout = Timeout}) ->
     receive
         {Ref, {ok, Pid}} ->
             NewMonRef = erlang:monitor(process, Pid),
-            stream_ts_results(State#stream_state{mon_ref=NewMonRef});
-        {'DOWN', MonRef, _, _, Info} ->
-            lager:warning("TS query producer died ~p", [Info]),
-            {["\r\n--", Boundary, "\r\n", 
-              "Content-Type: text/plain\r\n\r\n",
-              "TS query producer died", "\r\n--", Boundary, "--\r\n"],
-             gone};
+            stream_ts_results(State#stream_state{mon_ref=NewMonRef})
+    after
+       Timeout ->
+            lager:error("Time out for Pid!!"),
+            drain_batches(Ref),
+            {["\r\n--", Boundary, "\r\n" 
+              "Content-Type: text/plain\r\n\r\n"
+              "ERROR\r\n"
+              "Initial request time out time out"
+              "\r\n--", Boundary, "--\r\n"],
+             done}
+    end;
+stream_ts_results(State = #stream_state{msg_ref = Ref,
+                                        mon_ref = MonRef,
+                                        boundary = Boundary,
+                                        timeout = Timeout}) ->
+    receive
         {Ref, ts_batch_end} ->
-            lager:info("TS batch end"),
+            lager:debug("TS batch end"),
             erlang:demonitor(MonRef, [flush]),
             {iolist_to_binary(
                ["\r\n--", Boundary, "--\r\n"]),
              done};
         {Ref, {ts_batch, TSBatch}} ->
             OutBatch = result_part(TSBatch, Boundary),
-            lager:info("TS batch:\n~p\n", [OutBatch]),
+            lager:debug("TS batch:\n~p\n", [OutBatch]),
             {OutBatch,
              fun() -> stream_ts_results(State) end};
-        {_, {ts_batch, _}} ->
-            {[], fun() -> stream_ts_results(State) end};
-        {_, ts_batch_end} ->
-            {[], fun() -> stream_ts_results(State) end}
-    after
-       Timeout ->
+        {'DOWN', MonRef, _, _, Info} ->
+            lager:warning("TS query producer died ~p", [Info]),
             {["\r\n--", Boundary, "\r\n", 
               "Content-Type: text/plain\r\n\r\n",
+              "TS query producer died", "\r\n--", Boundary, "--\r\n"],
+             done}
+    after
+       Timeout ->
+            lager:error("Time out!!"),
+            {["\r\n--", Boundary, "\r\n", 
+              "Content-Type: text/plain\r\n\r\n",
+              "ERROR\r\n"
               "Batch time out", 
               "\r\n--", Boundary, "--\r\n"],
              done}
+    end.
+
+drain_batches(Ref) ->
+    receive
+        {Ref, _} ->
+            drain_batches(Ref)
+    after
+        0 ->
+            ok
     end.
 
 result_part(TSBatch, Boundary) ->
