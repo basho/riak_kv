@@ -112,6 +112,7 @@
 
 -record(state, {idx :: partition(),
                 mod :: module(),
+                async_put :: boolean(),
                 modstate :: term(),
                 mrjobs :: term(),
                 vnodeid :: undefined | binary(),
@@ -419,6 +420,7 @@ init([Index]) ->
             State = #state{idx=Index,
                            async_folding=AsyncFolding,
                            mod=Mod,
+                           async_put = erlang:function_exported(Mod, async_put, 5),
                            modstate=ModState,
                            vnodeid=VId,
                            delete_mode=DeleteMode,
@@ -1068,11 +1070,11 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
-handle_info({ts_put, From, RObj, Type}, State=#state{mod=Mod, modstate=ModState}) ->
+handle_info({ts_put, From, RObj, Type}, State=#state{mod=Mod, async_put=AsyncPut, modstate=ModState}) ->
     Bucket = riak_object:bucket(RObj),
     Key = riak_object:key(RObj),
     EncodedVal = riak_object:to_binary(v0, RObj),
-    case erlang:function_exported(Mod, async_put, 5) of
+    case AsyncPut of
         true ->
             Context = {ts_reply, From, Type, Bucket, Key, EncodedVal},
             {_Reply, ModState2} =
