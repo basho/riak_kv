@@ -1070,13 +1070,13 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
-handle_info({ts_put, From, RObj, Type}, State=#state{mod=Mod, async_put=AsyncPut, modstate=ModState}) ->
+handle_info({ts_put, From, RObj, ReqId, Type}, State=#state{mod=Mod, async_put=AsyncPut, modstate=ModState}) ->
     Bucket = riak_object:bucket(RObj),
     Key = riak_object:key(RObj),
     EncodedVal = riak_object:to_binary(v0, RObj),
     case AsyncPut of
         true ->
-            Context = {ts_reply, From, Type, Bucket, Key, EncodedVal},
+            Context = {ts_reply, From, ReqId, Type, Bucket, Key, EncodedVal},
             {_Reply, ModState2} =
                 case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
                     {ok, UpModState} ->
@@ -1094,13 +1094,13 @@ handle_info({ts_put, From, RObj, Type}, State=#state{mod=Mod, async_put=AsyncPut
                     {error, Reason, UpModState} ->
                         {{error, Reason}, UpModState}
                 end,
-            From ! {ts_reply, Reply, Type}
+            From ! {ts_reply, ReqId, Reply, Type}
     end,
     {ok, State#state{modstate=ModState2}};
 
-handle_info({{ts_reply, From, Type, Bucket, Key, EncodedVal} = _Context, Reply}, State) ->
+handle_info({{ts_reply, From, ReqId, Type, Bucket, Key, EncodedVal} = _Context, Reply}, State) ->
     update_hashtree(Bucket, Key, EncodedVal, State),
-    From ! {ts_reply, Reply, Type},
+    From ! {ts_reply, ReqId, Reply, Type},
     {ok, State};
 
 handle_info({set_concurrency_limit, Lock, Limit}, State) ->
@@ -1930,6 +1930,8 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
 -spec update_hashtree(binary(), binary(),
                       riak_object:riak_object() | binary(),
                       state()) -> ok.
+update_hashtree(_Bucket, _Key, _RObj, #state{hashtrees=undefined}) ->
+    ok;
 update_hashtree(Bucket, Key, BinObj, State) when is_binary(BinObj) ->
     RObj = riak_object:from_binary(Bucket, Key, BinObj),
     update_hashtree(Bucket, Key, RObj, State);
