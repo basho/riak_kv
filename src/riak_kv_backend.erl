@@ -73,22 +73,12 @@ callback_after(Time, Ref, Msg) when is_integer(Time), is_reference(Ref) ->
 -ifdef(TEST).
 
 standard_test(BackendMod, Config) ->
-    {spawn,
-     [
-      {setup,
-       local,
-       fun() -> setup({BackendMod, Config}) end,
-       fun cleanup/1,
-       fun(X) ->
-               [basic_store_and_fetch(X),
-                fold_buckets(X),
-                fold_keys(X),
-                delete_object(X),
-                fold_objects(X),
-                empty_check(X)
-               ]
-       end
-      }]}.
+    {"Basic Backend",
+     fun() ->
+             {Mod, State} = setup({BackendMod, Config}),
+             State2 = basic_store_and_fetch(Mod, State),
+             cleanup({Mod, State2})
+     end}.
 
 make_test_bucket(Backend, Suffix) ->
     try
@@ -110,120 +100,105 @@ make_bs_and_ks(Backend) ->
      make_test_key(Backend, 1),
      make_test_key(Backend, 2)}.
 
-basic_store_and_fetch({Backend, State}) ->
+basic_store_and_fetch(Backend, State) ->
     {B1, B2, K1, K2} = make_bs_and_ks(Backend),
-    {"basic store and fetch test",
-     fun() ->
-             ?assertMatch({ok, _},
-                          Backend:put(B1, K1, [], <<"v1">>, State)),
-             ?assertMatch({ok, _},
-                          Backend:put(B2, K2, [], <<"v2">>, State)),
-             ?assertMatch({ok,<<"v2">>, _},
-                          Backend:get(B2, K2, State)),
-             ?assertMatch({error, not_found, _},
-                          Backend:get(B1, <<"k3">>, State))
-     end
-    }.
+    {ok, State2} = Backend:put(B1, K1, [], <<"v1">>, State),
+    {ok, State3} = Backend:put(B2, K2, [], <<"v2">>, State2),
+    {ok,<<"v2">>, State4} = Backend:get(B2, K2, State3),
+    {error, not_found, State5} = Backend:get(B1, <<"k3">>, State4),
+    fold_buckets(Backend, State5).
 
-fold_buckets({Backend, State}) ->
+fold_buckets(Backend, State) ->
     {B1, B2, _K1, _K2} = make_bs_and_ks(Backend),
-    {"bucket folding test",
-     fun() ->
-             FoldBucketsFun =
-                 fun(Bucket, Acc) ->
-                         [Bucket | Acc]
-                 end,
+    FoldBucketsFun =
+        fun(Bucket, Acc) ->
+                [Bucket | Acc]
+        end,
 
-             ?assertEqual([B1, B2],
-                           begin
-                               {ok, Buckets1} =
-                                   Backend:fold_buckets(FoldBucketsFun,
-                                                        [],
-                                                        [],
-                                                        State),
-                               lists:sort(Buckets1)
-                           end)
-     end
-    }.
+    ?assertEqual([B1, B2],
+                 begin
+                     {ok, Buckets1} =
+                         Backend:fold_buckets(FoldBucketsFun,
+                                              [],
+                                              [],
+                                              State),
+                     lists:sort(Buckets1)
+                 end),
+    fold_keys(Backend, State).
 
-fold_keys({Backend, State}) ->
+fold_keys(Backend, State) ->
     {B1, B2, K1, K2} = make_bs_and_ks(Backend),
-    {"key folding test",
-     fun() ->
-             FoldKeysFun =
-                 fun(Bucket, Key, Acc) ->
-                         [{Bucket, Key} | Acc]
-                 end,
-             FoldKeysFun1 =
-                 fun(_Bucket, Key, Acc) ->
-                         [Key | Acc]
-                 end,
-             FoldKeysFun2 =
-                 fun(Bucket, Key, Acc) ->
-                         case Bucket =:= B1 of
-                             true ->
-                                 [Key | Acc];
-                             false ->
-                                 Acc
-                         end
-                 end,
-             FoldKeysFun3 =
-                 fun(Bucket, Key, Acc) ->
-                         case Bucket =:= B1 of
-                             true ->
-                                 Acc;
-                             false ->
-                                 [Key | Acc]
-                         end
-                 end,
 
-             ?assertEqual([{B1, K1}, {B2, K2}],
-                          begin
-                              {ok, Keys1} =
-                                  Backend:fold_keys(FoldKeysFun,
-                                                    [],
-                                                    [],
-                                                    State),
-                              lists:sort(Keys1)
-                          end),
-             ?assertEqual({ok, [K1]},
-                          Backend:fold_keys(FoldKeysFun1,
-                                            [],
-                                            [{bucket, B1}],
-                                            State)),
-             ?assertEqual({ok, [K2]},
-                          Backend:fold_keys(FoldKeysFun1,
-                                            [],
-                                            [{bucket, B2}],
-                                            State)),
-             ?assertEqual({ok, [K1]},
-                          Backend:fold_keys(FoldKeysFun2, [], [], State)),
-             ?assertEqual({ok, [K1]},
-                          Backend:fold_keys(FoldKeysFun2,
-                                            [],
-                                            [{bucket, B1}],
-                                            State)),
-             ?assertEqual({ok, [K2]},
-                          Backend:fold_keys(FoldKeysFun3, [], [], State)),
-             ?assertEqual({ok, []},
-                          Backend:fold_keys(FoldKeysFun3,
-                                            [],
-                                            [{bucket, B1}],
-                                            State))
-     end
-    }.
+    FoldKeysFun =
+        fun(Bucket, Key, Acc) ->
+                [{Bucket, Key} | Acc]
+        end,
+    FoldKeysFun1 =
+        fun(_Bucket, Key, Acc) ->
+                [Key | Acc]
+        end,
+    FoldKeysFun2 =
+        fun(Bucket, Key, Acc) ->
+                case Bucket =:= B1 of
+                    true ->
+                        [Key | Acc];
+                    false ->
+                        Acc
+                end
+        end,
+    FoldKeysFun3 =
+        fun(Bucket, Key, Acc) ->
+                case Bucket =:= B1 of
+                    true ->
+                        Acc;
+                    false ->
+                        [Key | Acc]
+                end
+        end,
 
-delete_object({Backend, State}) ->
+    ?assertEqual([{B1, K1}, {B2, K2}],
+                 begin
+                     {ok, Keys1} =
+                         Backend:fold_keys(FoldKeysFun,
+                                           [],
+                                           [],
+                                           State),
+                     lists:sort(Keys1)
+                 end),
+    ?assertEqual({ok, [K1]},
+                 Backend:fold_keys(FoldKeysFun1,
+                                   [],
+                                   [{bucket, B1}],
+                                   State)),
+    ?assertEqual({ok, [K2]},
+                 Backend:fold_keys(FoldKeysFun1,
+                                   [],
+                                   [{bucket, B2}],
+                                   State)),
+    ?assertEqual({ok, [K1]},
+                 Backend:fold_keys(FoldKeysFun2, [], [], State)),
+    ?assertEqual({ok, [K1]},
+                 Backend:fold_keys(FoldKeysFun2,
+                                   [],
+                                   [{bucket, B1}],
+                                   State)),
+    ?assertEqual({ok, [K2]},
+                 Backend:fold_keys(FoldKeysFun3, [], [], State)),
+    ?assertEqual({ok, []},
+                 Backend:fold_keys(FoldKeysFun3,
+                                   [],
+                                   [{bucket, B1}],
+                                   State)),
+        delete_object(Backend, State).
+
+delete_object(Backend, State) ->
     {_B1, B2, _K1, K2} = make_bs_and_ks(Backend),
-    {"object deletion test",
-     fun() ->
-             ?assertMatch({ok, _}, Backend:delete(B2, K2, [], State)),
-             ?assertMatch({error, not_found, _},
-                          Backend:get(B2, K2, State))
-     end
-    }.
+    {ok, State2} =  Backend:delete(B2, K2, [], State),
+    ?assertMatch({error, not_found, _},
+                 Backend:get(B2, K2, State2)),
+    fold_objects(Backend, State2).
 
-fold_objects({Backend, State}) ->
+fold_objects(Backend, State) ->
     {B1, _B2, K1, _K2} = make_bs_and_ks(Backend),
     B3 = make_test_bucket(Backend, 3),
     K3 = make_test_key(Backend, 3),
@@ -231,62 +206,55 @@ fold_objects({Backend, State}) ->
                                true         -> {BK, riak_object:get_value(X)}
                             end || {BK, X} <- Os]
                 end,
-    {"object folding test",
-     fun() ->
-             FoldKeysFun =
-                 fun(Bucket, Key, Acc) ->
-                         [{Bucket, Key} | Acc]
-                 end,
-             FoldObjectsFun =
-                 fun(Bucket, Key, Value, Acc) ->
-                         [{{Bucket, Key}, Value} | Acc]
-                 end,
-             ?assertEqual([{B1, K1}],
-                          begin
-                              {ok, Keys} =
-                                  Backend:fold_keys(FoldKeysFun,
-                                                    [],
-                                                    [],
-                                                    State),
-                              lists:sort(Keys)
-                          end),
+    FoldKeysFun =
+        fun(Bucket, Key, Acc) ->
+                [{Bucket, Key} | Acc]
+        end,
+    FoldObjectsFun =
+        fun(Bucket, Key, Value, Acc) ->
+                [{{Bucket, Key}, Value} | Acc]
+        end,
+    ?assertEqual([{B1, K1}],
+                 begin
+                     {ok, Keys} =
+                         Backend:fold_keys(FoldKeysFun,
+                                           [],
+                                           [],
+                                           State),
+                     lists:sort(Keys)
+                 end),
 
-             ?assertEqual([{{B1,K1}, <<"v1">>}],
-                          begin
-                              {ok, Objects1} =
-                                  Backend:fold_objects(FoldObjectsFun,
-                                                       [],
-                                                       [],
-                                                       State),
-                              lists:sort(ObjFilter(Objects1))
-                          end),
-             ?assertMatch({ok, _},
-                          Backend:put(B3, K3, [], <<"v3">>, State)),
-             ?assertEqual([{{B1,K1},<<"v1">>},
-                           {{B3,K3},<<"v3">>}],
-                          begin
-                              {ok, Objects} =
-                                  Backend:fold_objects(FoldObjectsFun,
-                                                       [],
-                                                       [],
-                                                       State),
-                              lists:sort(ObjFilter(Objects))
-                          end)
-     end
-    }.
+    ?assertEqual([{{B1,K1}, <<"v1">>}],
+                 begin
+                     {ok, Objects1} =
+                         Backend:fold_objects(FoldObjectsFun,
+                                              [],
+                                              [],
+                                              State),
+                     lists:sort(ObjFilter(Objects1))
+                 end),
+    {ok, State2} =  Backend:put(B3, K3, [], <<"v3">>, State),
+    ?assertEqual([{{B1,K1},<<"v1">>},
+                  {{B3,K3},<<"v3">>}],
+                 begin
+                     {ok, Objects} =
+                         Backend:fold_objects(FoldObjectsFun,
+                                              [],
+                                              [],
+                                              State2),
+                     lists:sort(ObjFilter(Objects))
+                 end),
+    empty_check(Backend, State).
 
-empty_check({Backend, State}) ->
+empty_check(Backend, State) ->
     {B1, _B2, K1, _K2} = make_bs_and_ks(Backend),
     B3 = make_test_bucket(Backend, 3),
     K3 = make_test_key(Backend, 3),
-    {"is_empty test",
-     fun() ->
-             ?assertEqual(false, Backend:is_empty(State)),
-             ?assertMatch({ok, _}, Backend:delete(B1,K1, [], State)),
-             ?assertMatch({ok, _}, Backend:delete(B3,K3, [], State)),
-             ?assertEqual(true, Backend:is_empty(State))
-     end
-    }.
+    ?assertEqual(false, Backend:is_empty(State)),
+    {ok, State2} = Backend:delete(B1,K1, [], State),
+    {ok, State3} = Backend:delete(B3,K3, [], State2),
+    ?assertEqual(true, Backend:is_empty(State3)),
+    State3.
 
 setup({BackendMod, Config}) ->
     %% Start the backend

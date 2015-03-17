@@ -110,6 +110,21 @@
                 reqid :: term(),
                 target :: pid()}).
 
+-record(counter_state, {
+          %% The number of new epoch writes co-ordinated by this vnode
+          %% What even is a "key epoch?" It is any time a key is
+          %% (re)created. A new write, a write not yet coordinated by
+          %% this vnode, a write where local state is unreadable.
+          cnt = 0 :: non_neg_integer(),
+          %% Counter leased up-to. For totally new state/id
+          %% this will be that flush threshold See config value
+          %% `{riak_kv, counter_lease_size}'
+          lease = 0 :: non_neg_integer(),
+          lease_size = 0 :: non_neg_integer(),
+          %% Has a lease been requested but not granted yet
+          leasing = false :: boolean()
+         }).
+
 -record(state, {idx :: partition(),
                 mod :: module(),
                 modstate :: term(),
@@ -126,15 +141,42 @@
                 forward :: node() | [{integer(), node()}],
                 hashtrees :: pid(),
                 md_cache :: ets:tab(),
-                md_cache_size :: pos_integer() }).
+                md_cache_size :: pos_integer(),
+                counter :: #counter_state{},
+                status_mgr_pid :: pid() %% a process that manages vnode status persistence
+               }).
 
 -type index_op() :: add | remove.
 -type index_value() :: integer() | binary().
 -type index() :: non_neg_integer().
 -type state() :: #state{}.
+-type vnodeid() :: binary().
+-type counter_lease_error() :: {error, counter_lease_max_errors | counter_lease_timeout}.
 
 -define(MD_CACHE_BASE, "riak_kv_vnode_md_cache").
 -define(DEFAULT_HASHTREE_TOKENS, 90).
+
+%% default value for `counter_lease' in `#counter_state{}'
+%% NOTE: these MUST be positive integers!
+%% @see non_neg_env/3
+-define(DEFAULT_CNTR_LEASE, 10000).
+%% On advise/review from Scott decided to cap the size of leases. 50m
+%% is a lot of new epochs for a single vnode, and it saves us from
+%% buring through vnodeids in the worst case.
+-define(MAX_CNTR_LEASE, 50000000).
+%% Should these cuttlefish-able?  If it takes more than 20 attempts to
+%% fsync the vnode counter to disk, die. (NOTE this is not ERRS*TO but
+%% first to trip see blocking_lease_counter/3)
+-define(DEFAULT_CNTR_LEASE_ERRS, 20).
+%% If it takes more than 20 seconds to fsync the vnode counter to disk,
+%% die
+-define(DEFAULT_CNTR_LEASE_TO, 20000). % 20 seconds!
+
+
+%% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
+%% brain. It scans as if true -> thing; true -> thang end. So, here is
+%% a macro, ?ELSE to use in if statements. You're welcome.
+-define(ELSE, true).
 
 -record(putargs, {returnbody :: boolean(),
                   coord:: boolean(),
@@ -398,7 +440,12 @@ init([Index]) ->
     IndexBufSize = app_helper:get_env(riak_kv, index_buffer_size, 100),
     KeyBufSize = app_helper:get_env(riak_kv, key_buffer_size, 100),
     WorkerPoolSize = app_helper:get_env(riak_kv, worker_pool_size, 10),
-    {ok, VId} = get_vnodeid(Index),
+    %%  This _has_ to be a non_neg_integer(), and really, if it is
+    %%  zero, you are fysncing every.single.key epoch.
+    CounterLeaseSize = min(?MAX_CNTR_LEASE,
+                           non_neg_env(riak_kv, counter_lease_size, ?DEFAULT_CNTR_LEASE)),
+    {ok, StatusMgr} = riak_kv_vnode_status_mgr:start_link(self(), Index),
+    {ok, {VId, CounterState}} = get_vnodeid_and_counter(StatusMgr, CounterLeaseSize),
     DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
     AsyncFolding = app_helper:get_env(riak_kv, async_folds, true) == true,
     MDCacheSize = app_helper:get_env(riak_kv, vnode_md_cache_size),
@@ -421,6 +468,8 @@ init([Index]) ->
                            mod=Mod,
                            modstate=ModState,
                            vnodeid=VId,
+                           counter=CounterState,
+                           status_mgr_pid=StatusMgr,
                            delete_mode=DeleteMode,
                            bucket_buf_size=BucketBufSize,
                            index_buf_size=IndexBufSize,
@@ -678,9 +727,13 @@ handle_command(?KV_VNODE_STATUS_REQ{},
                State=#state{idx=Index,
                             mod=Mod,
                             modstate=ModState,
+                            counter=CS,
                             vnodeid=VId}) ->
     BackendStatus = {backend_status, Mod, Mod:status(ModState)},
-    VNodeStatus = [BackendStatus, {vnodeid, VId}],
+    #counter_state{cnt=Cnt, lease=Lease, lease_size=LeaseSize, leasing=Leasing} = CS,
+    CounterStatus = [{counter, Cnt}, {counter_lease, Lease},
+                     {counter_lease_size, LeaseSize}, {counter_leasing, Leasing}],
+    VNodeStatus = [BackendStatus, {vnodeid, VId} | CounterStatus],
     {reply, {vnode_status, Index, VNodeStatus}, State};
 handle_command({reformat_object, BKey}, _Sender, State) ->
     {Reply, UpdState} = do_reformat(BKey, State),
@@ -1044,17 +1097,17 @@ maybe_calc_handoff_size(#state{mod=Mod,modstate=ModState}) ->
         false -> undefined
     end.
 
-delete(State=#state{idx=Index,mod=Mod, modstate=ModState}) ->
+delete(State=#state{status_mgr_pid=StatusMgr, mod=Mod, modstate=ModState}) ->
     %% clear vnodeid first, if drop removes data but fails
     %% want to err on the side of creating a new vnodeid
-    {ok, cleared} = clear_vnodeid(Index),
-    case Mod:drop(ModState) of
-        {ok, UpdModState} ->
-            ok;
-        {error, Reason, UpdModState} ->
-            lager:error("Failed to drop ~p. Reason: ~p~n", [Mod, Reason]),
-            ok
-    end,
+    {ok, cleared} = clear_vnodeid(StatusMgr),
+    UpdModState = case Mod:drop(ModState) of
+                      {ok, S} ->
+                          S;
+                      {error, Reason, S2} ->
+                          lager:error("Failed to drop ~p. Reason: ~p~n", [Mod, Reason]),
+                          S2
+                  end,
     case State#state.hashtrees of
         undefined ->
             ok;
@@ -1170,8 +1223,33 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
                    {{error, _}, ModState1} ->
                        State#state{modstate=ModState1}
                end,
-    {ok, UpdState}.
+    {ok, UpdState};
+handle_info({counter_lease, {FromPid, VnodeId, NewLease}}, State=#state{status_mgr_pid=FromPid, vnodeid=VnodeId}) ->
+    #state{counter=CounterState} = State,
+    CS1 = CounterState#counter_state{lease=NewLease, leasing=false},
+    State2 = State#state{counter=CS1},
+    {ok, State2};
+handle_info({counter_lease, {FromPid, NewVnodeId, NewLease}}, State=#state{status_mgr_pid=FromPid, idx=Idx}) ->
+    %% Lease rolled over MAX_INT (new vnodeid signifies this) so reset counter
+    #state{counter=CounterState} = State,
+    CS1 = CounterState#counter_state{lease=NewLease, leasing=false, cnt=1},
+    State2 = State#state{vnodeid=NewVnodeId, counter=CS1},
+    lager:info("New Vnode id for ~p. Epoch counter rolled over.", [Idx]),
+    {ok, State2}.
 
+handle_exit(Pid, Reason, State=#state{status_mgr_pid=Pid, idx=Index, counter=CntrState}) ->
+    lager:error("Vnode status manager exit ~p", [Reason]),
+    %% The status manager died, start a new one
+    #counter_state{lease_size=LeaseSize, leasing=Leasing} = CntrState,
+    {ok, NewPid} = riak_kv_vnode_status_mgr:start_link(self(), Index),
+
+    if Leasing ->
+            %% Crashed when getting a lease, try again
+            ok = riak_kv_vnode_status_mgr:lease_counter(NewPid, LeaseSize);
+       ?ELSE ->
+            ok
+    end,
+    {noreply, State#state{status_mgr_pid=NewPid}};
 handle_exit(_Pid, Reason, State) ->
     %% A linked processes has died so the vnode
     %% process should take appropriate action here.
@@ -1210,18 +1288,18 @@ raw_put({Idx, Node}, Key, Obj) ->
 %% @private
 %% upon receipt of a client-initiated put
 do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
-    case proplists:get_value(bucket_props, Options) of
-        undefined ->
-            BProps = riak_core_bucket:get_bucket(Bucket);
-        BProps ->
-            BProps
-    end,
-    case proplists:get_value(rr, Options, false) of
-        true ->
-            PruneTime = undefined;
-        false ->
-            PruneTime = StartTime
-    end,
+    BProps =  case proplists:get_value(bucket_props, Options) of
+                  undefined ->
+                      riak_core_bucket:get_bucket(Bucket);
+                  Props ->
+                      Props
+              end,
+    PruneTime = case proplists:get_value(rr, Options, false) of
+                    true ->
+                        undefined;
+                    false ->
+                        StartTime
+                end,
     Coord = proplists:get_value(coord, Options, false),
     CRDTOp = proplists:get_value(counter_op, Options, proplists:get_value(crdt_op, Options, undefined)),
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
@@ -1234,8 +1312,8 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        starttime=StartTime,
                        prunetime=PruneTime,
                        crdt_op = CRDTOp},
-    {PrepPutRes, UpdPutArgs} = prepare_put(State, PutArgs),
-    {Reply, UpdState} = perform_put(PrepPutRes, State, UpdPutArgs),
+    {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
+    {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
 
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
@@ -1286,19 +1364,21 @@ prepare_put(State=#state{vnodeid=VId,
             ObjToStore =
                 case Coord of
                     true ->
+                        %% Do we need to use epochs here? I guess we
+                        %% don't care, and since we don't read, we
+                        %% can't.
                         riak_object:increment_vclock(RObj, VId, StartTime);
                     false ->
                         RObj
                 end,
-            {{true, ObjToStore}, PutArgs#putargs{is_index = false}};
+            {{true, ObjToStore}, PutArgs#putargs{is_index = false}, State};
         false ->
             prepare_put(State, PutArgs, IndexBackend)
     end.
-prepare_put(#state{vnodeid=VId,
-                   mod=Mod,
-                   modstate=ModState,
-                   idx=Idx,
-                   md_cache=MDCache},
+prepare_put(State=#state{mod=Mod,
+                         modstate=ModState,
+                         idx=Idx,
+                         md_cache=MDCache},
             PutArgs=#putargs{bkey={Bucket, Key}=BKey,
                              robj=RObj,
                              bprops=BProps,
@@ -1315,12 +1395,12 @@ prepare_put(#state{vnodeid=VId,
             undefined ->
                 true;
             Clock ->
-                case vclock:descends(riak_object:vclock(RObj), Clock) of
-                    true ->
-                        false;
-                    _ ->
-                        true
-                end
+                %% We need to perform a local get, to merge contents,
+                %% if the local object has events unseen by the
+                %% incoming object. If the incoming object descends
+                %% the cache (i.e. has seen all its events) no need to
+                %% do a local get and merge, just overwrite.
+                not riak_object:vclock_descends(RObj, Clock)
         end,
     GetReply =
         case RequiresGet of
@@ -1344,20 +1424,22 @@ prepare_put(#state{vnodeid=VId,
                 false ->
                     IndexSpecs = []
             end,
-            case prepare_new_put(Coord, RObj, VId, StartTime, CRDTOp) of
+            %% local not found, start a per key epoch
+            {EpochId, State2} = new_key_epoch(State),
+            case prepare_new_put(Coord, RObj, EpochId, StartTime, CRDTOp) of
                 {error, E} ->
-                    {{fail, Idx, E}, PutArgs};
+                    {{fail, Idx, E}, PutArgs, State2};
                 ObjToStore ->
                     {{true, ObjToStore},
                      PutArgs#putargs{index_specs=IndexSpecs,
-                                     is_index=IndexBackend}}
+                                     is_index=IndexBackend}, State2}
             end;
         {ok, OldObj} ->
-            case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
+            {ActorId, State2} = maybe_new_key_epoch(Coord, State, OldObj, RObj),
+            case put_merge(Coord, LWW, OldObj, RObj, ActorId, StartTime) of
                 {oldobj, OldObj1} ->
-                    {{false, OldObj1}, PutArgs};
+                    {{false, OldObj1}, PutArgs, State2};
                 {newobj, NewObj} ->
-                    VC = riak_object:vclock(NewObj),
                     AMObj = enforce_allow_mult(NewObj, BProps),
                     IndexSpecs = case IndexBackend of
                                      true ->
@@ -1371,30 +1453,28 @@ prepare_put(#state{vnodeid=VId,
                                                  riak_object:diff_index_specs(AMObj,
                                                                               OldObj)
                                          end;
-                                    false ->
+                                     false ->
                                          []
-                    end,
+                                 end,
                     ObjToStore = case PruneTime of
                                      undefined ->
                                          AMObj;
                                      _ ->
-                                         riak_object:set_vclock(AMObj,
-                                                                vclock:prune(VC,
-                                                                             PruneTime,
-                                                                             BProps))
-                    end,
-                    case handle_crdt(Coord, CRDTOp, VId, ObjToStore) of
+                                         riak_object:prune_vclock(AMObj, PruneTime, BProps)
+                                 end,
+                    case handle_crdt(Coord, CRDTOp, ActorId, ObjToStore) of
                         {error, E} ->
-                            {{fail, Idx, E}, PutArgs};
+                            {{fail, Idx, E}, PutArgs, State2};
                         ObjToStore2 ->
                             {{true, ObjToStore2},
                              PutArgs#putargs{index_specs=IndexSpecs,
-                                             is_index=IndexBackend}}
+                                             is_index=IndexBackend}, State2}
                     end
             end
     end.
 
 %% @Doc in the case that this a co-ordinating put, prepare the object.
+%% NOTE the `VId' is a new epoch actor for this object
 prepare_new_put(true, RObj, VId, StartTime, undefined) ->
     riak_object:increment_vclock(RObj, VId, StartTime);
 prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
@@ -1404,6 +1484,8 @@ prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
     %% Make a new crdt, stuff it in the riak_object
     do_crdt_update(VClockUp, VId, CRDTOp);
 prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
+    %% @TODO Not coordindating, not found local, is there an entry for
+    %% us in the clock? If so, mark as dirty
     RObj.
 
 handle_crdt(_, undefined, _VId, RObj) ->
@@ -1520,11 +1602,19 @@ select_newest_content(Mult) ->
 
 %% @private
 put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
+    %% @TODO Do we need to mark the clock dirty here? I think so
+    %% @TODO Check the clock of the incoming object, if it is more advanced
+    %% for our actor than we are then something is amiss, and we need
+    %% to mark the actor as dirty for this key
     {newobj, UpdObj};
 put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
     %% a downstream merge, or replication of a coordinated PUT
     %% Merge the value received with local replica value
     %% and store the value IFF it is different to what we already have
+    %%
+    %% @TODO Check the clock of the incoming object, if it is more advanced
+    %% for our actor than we are then something is amiss, and we need
+    %% to mark the actor as dirty for this key
     ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
     case riak_object:equal(ResObj, CurObj) of
         true ->
@@ -1533,6 +1623,8 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
             {newobj, ResObj}
     end;
 put_merge(true, LWW, CurObj, UpdObj, VId, StartTime) ->
+    %% @TODO If the current object has a dirty clock, we need to start
+    %% a new per key epoch and mark clock as clean.
     {newobj, riak_object:update(LWW, CurObj, UpdObj, VId, StartTime)}.
 
 %% @private
@@ -1940,91 +2032,23 @@ max_hashtree_tokens() ->
                        anti_entropy_max_async,
                        ?DEFAULT_HASHTREE_TOKENS).
 
-%% @private
-%% Get the vnodeid, assigning and storing if necessary
-get_vnodeid(Index) ->
-    F = fun(Status) ->
-                case proplists:get_value(vnodeid, Status, undefined) of
-                    undefined ->
-                        %% using now as we want different values per
-                        %% vnode id on a node
-                        assign_vnodeid(erlang:now(),
-                                       riak_core_nodeid:get(),
-                                       Status);
-                    VnodeId ->
-                        {VnodeId, Status}
-                end
-        end,
-    update_vnode_status(F, Index). % Returns {ok, VnodeId} | {error, Reason}
-
-%% Assign a unique vnodeid, making sure the timestamp is unique by incrementing
-%% into the future if necessary.
-assign_vnodeid(Now, NodeId, Status) ->
-    {_Mega, Sec, Micro} = Now,
-    NowEpoch = 1000000*Sec + Micro,
-    LastVnodeEpoch = proplists:get_value(last_epoch, Status, 0),
-    VnodeEpoch = erlang:max(NowEpoch, LastVnodeEpoch+1),
-    VnodeId = <<NodeId/binary, VnodeEpoch:32/integer>>,
-    UpdStatus = [{vnodeid, VnodeId}, {last_epoch, VnodeEpoch} |
-                 proplists:delete(vnodeid,
-                                  proplists:delete(last_epoch, Status))],
-    {VnodeId, UpdStatus}.
+%% @private Get the vnodeid, assigning and storing if necessary.  Also
+%% get the current op counter, using the (new?) threshold to assign
+%% and store a new leased counter if needed. NOTE: this is different
+%% to the previous function, as it will now _always_ store a new
+%% status to disk as it will grab a new lease.
+%%
+%%  @TODO document the need for, and invariants of the counter
+-spec get_vnodeid_and_counter(pid(), non_neg_integer()) ->
+                                     {ok, {vnodeid(), #counter_state{}}} |
+                                     {error, Reason::term()}.
+get_vnodeid_and_counter(StatusMgr, CounterLeaseSize) ->
+    {ok, {VId, Counter, Lease}} = riak_kv_vnode_status_mgr:get_vnodeid_and_counter(StatusMgr, CounterLeaseSize),
+    {ok, {VId, #counter_state{cnt=Counter, lease=Lease, lease_size=CounterLeaseSize}}}.
 
 %% Clear the vnodeid - returns {ok, cleared}
-clear_vnodeid(Index) ->
-    F = fun(Status) ->
-                {cleared, proplists:delete(vnodeid, Status)}
-        end,
-    update_vnode_status(F, Index). % Returns {ok, VnodeId} | {error, Reason}
-
-update_vnode_status(F, Index) ->
-    VnodeFile = vnode_status_filename(Index),
-    ok = filelib:ensure_dir(VnodeFile),
-    case read_vnode_status(VnodeFile) of
-        {ok, Status} ->
-            update_vnode_status2(F, Status, VnodeFile);
-        {error, enoent} ->
-            update_vnode_status2(F, [], VnodeFile);
-        ER ->
-            ER
-    end.
-
-update_vnode_status2(F, Status, VnodeFile) ->
-    case F(Status) of
-        {Ret, Status} -> % No change
-            {ok, Ret};
-        {Ret, UpdStatus} ->
-            case write_vnode_status(UpdStatus, VnodeFile) of
-                ok ->
-                    {ok, Ret};
-                ER ->
-                    ER
-            end
-    end.
-
-vnode_status_filename(Index) ->
-    P_DataDir = app_helper:get_env(riak_core, platform_data_dir),
-    VnodeStatusDir = app_helper:get_env(riak_kv, vnode_status,
-                                        filename:join(P_DataDir, "kv_vnode")),
-    filename:join(VnodeStatusDir, integer_to_list(Index)).
-
-read_vnode_status(File) ->
-    case file:consult(File) of
-        {ok, [Status]} when is_list(Status) ->
-            {ok, proplists:delete(version, Status)};
-        ER ->
-            ER
-    end.
-
-write_vnode_status(Status, File) ->
-    VersionedStatus = [{version, 1} | proplists:delete(version, Status)],
-    TmpFile = File ++ "~",
-    case file:write_file(TmpFile, io_lib:format("~p.", [VersionedStatus])) of
-        ok ->
-            file:rename(TmpFile, File);
-        ER ->
-            ER
-    end.
+clear_vnodeid(StatusMgr) ->
+    riak_kv_vnode_status_mgr:clear_vnodeid(StatusMgr).
 
 %% @private
 wait_for_vnode_status_results([], _ReqId, Acc) ->
@@ -2322,102 +2346,290 @@ new_md_cache(VId) ->
     %% term format is {TimeStamp, Key, ValueTuple}
     ets:new(MDCacheName, [ordered_set, {keypos,2}]).
 
+%% @private increment the per vnode coordinating put counter,
+%% flushing/leasing if needed
+-spec update_counter(state()) -> state().
+update_counter(State=#state{counter=CounterState}) ->
+    #counter_state{cnt=Counter0} = CounterState,
+    Counter = Counter0 +  1,
+    maybe_lease_counter(State#state{counter=CounterState#counter_state{cnt=Counter}}).
+
+
+%% @private we can never use a counter that is greater or equal to the
+%% one fysnced to disk. If the incremented counter is == to the
+%% current Lease, we must block until the new Lease is stored. If the
+%% current counter is 80% through the current lease, and we have not
+%% asked for a new lease, ask for one.  If we're less than 80% through
+%% the lease, do nothing.  If not yet blocking(equal) and we already
+%% asked for a new lease, do nothing.
+maybe_lease_counter(State=#state{counter=#counter_state{cnt=Lease, lease=Lease,
+                                                        leasing=true}}) ->
+    %% Block until we get a new lease, or crash the vnode
+    {ok, NewState} = blocking_lease_counter(State),
+    NewState;
+maybe_lease_counter(State=#state{counter=#counter_state{leasing=true}}) ->
+    %% not yet at the blocking stage, waiting on a lease
+    State;
+maybe_lease_counter(State) ->
+    #state{status_mgr_pid=MgrPid, counter=CS=#counter_state{cnt=Cnt, lease=Lease,
+                                                            lease_size=LeaseSize}} = State,
+    %% @TODO (rdb) configurable??
+    %% has more than 80% of the lease been used?
+    CS2 = if (Lease - Cnt) =< 0.2 * LeaseSize  ->
+                  ok = riak_kv_vnode_status_mgr:lease_counter(MgrPid, LeaseSize),
+                  CS#counter_state{leasing=true};
+             ?ELSE ->
+                  CS
+          end,
+    State#state{counter=CS2}.
+
+%% @private by now, we have to be waiting for a lease, or an exit,
+%% from the mgr. Block until we receive a lease. If we get an exit,
+%% retry a number of times. If we get neither in a reasonable time,
+%% return an error.
+-spec blocking_lease_counter(#state{}) ->
+                                    {ok, #state{}} |
+                                    counter_lease_error().
+blocking_lease_counter(State) ->
+    {MaxErrs, MaxTime} = get_counter_wait_values(),
+    blocking_lease_counter(State, {0, MaxErrs, MaxTime}).
+
+-spec blocking_lease_counter(#state{}, {Errors :: non_neg_integer(),
+                                        MaxErrors :: non_neg_integer(),
+                                        TimeRemainingMillis :: non_neg_integer()}
+                            ) ->
+                                    {ok, #state{}} |
+                                    counter_lease_error().
+blocking_lease_counter(_State, {MaxErrs, MaxErrs, _MaxTime}) ->
+    {error, counter_lease_max_errors};
+blocking_lease_counter(State, {ErrCnt, MaxErrors, MaxTime}) ->
+    #state{idx=Index, vnodeid=VId, status_mgr_pid=Pid, counter=CounterState} = State,
+    #counter_state{lease_size=LeaseSize} = CounterState,
+    Start = os:timestamp(),
+    receive
+        {'EXIT', Pid, Reason} ->
+            lager:error("Failed to lease counter ~p", [Reason]),
+            {ok, NewPid} = riak_kv_vnode_status_mgr:start_link(self(), Index),
+            ok = riak_kv_vnode_status_mgr:lease_counter(NewPid, LeaseSize),
+            NewState = State#state{status_mgr_pid=NewPid},
+            Elapsed = timer:now_diff(os:timestamp(), Start),
+            blocking_lease_counter(NewState, {ErrCnt+1, MaxErrors, MaxTime - Elapsed});
+        {counter_lease, {Pid, VId, NewLease}} ->
+            NewCS = CounterState#counter_state{lease=NewLease, leasing=false},
+            {ok, State#state{counter=NewCS}};
+        {counter_lease, {Pid, NewVId, NewLease}} ->
+            lager:info("New Vnode id for ~p. Epoch counter rolled over.", [Index]),
+            NewCS = CounterState#counter_state{lease=NewLease, leasing=false, cnt=1},
+            {ok, State#state{vnodeid=NewVId, counter=NewCS}}
+    after
+        MaxTime ->
+            {error, counter_lease_timeout}
+    end.
+
+%% @private get the configured values for blocking waiting on
+%% lease/ID. Ensure that non invalid values come in.
+-spec get_counter_wait_values() ->
+                                     {MaxErrors :: non_neg_integer(),
+                                      MaxTime :: non_neg_integer()}.
+get_counter_wait_values() ->
+    MaxErrors = non_neg_env(riak_kv, counter_lease_errors, ?DEFAULT_CNTR_LEASE_ERRS),
+    MaxTime = non_neg_env(riak_kv, counter_lease_timeout, ?DEFAULT_CNTR_LEASE_TO),
+    {MaxErrors, MaxTime}.
+
+%% @private we don't want to crash riak because of a dodgy config
+%% value, and by this point, cuttlefish be praised, we should have
+%% sane values. However, if not, ignore negative values for timeout
+%% and max errors, use the defaults, and log the insanity. Note this
+%% expects the macro configured defaults to be positive integers!
+-spec non_neg_env(atom(), atom(), pos_integer()) -> pos_integer().
+non_neg_env(App, EnvVar, Default) when is_integer(Default),
+                                       Default > 0 ->
+    case app_helper:get_env(App, EnvVar, Default) of
+        N when is_integer(N),
+               N > 0 ->
+            N;
+        X ->
+            lager:warning("Non-integer/Negative integer ~p for vnode counter config ~p."
+                          " Using default ~p",
+                          [X, EnvVar, Default]),
+            Default
+    end.
+
+%% @private to keep put_merge/6 side effect free (as it is exported
+%% for testing) introspect the state and local/incoming objects and
+%% return the actor ID for a put, and possibly updated state. NOTE
+%% side effects, in that the vnode status on disk can change.
+%% Why might we need a new key epoch?
+%% 1. local not found (handled in prepare_put/3
+%% 2. local found, but never acted on this key before (or don't remember it!)
+%% 3. local found, local acted, but incoming has greater count or actor epoch
+%%    This one is tricky, since it indicates some byzantine failure somewhere.
+-spec maybe_new_key_epoch(boolean(), #state{},
+                          riak_object:riak_object(),
+                          riak_object:riak_object()) ->
+                                 {binary(), #state{}}.
+maybe_new_key_epoch(false, State, _, _) ->
+    %% Never add a new key epoch when not coordinating
+    %% @TODO (rdb) need to mark actor as dirty though.
+    {State#state.vnodeid, State};
+maybe_new_key_epoch(true, State, LocalObj, IncomingObj) ->
+    #state{vnodeid=VId} = State,
+    %% @TODO (rdb) maybe optimise since highly likey both objects
+    %% share the majority of actors, maybe a single umerged list of
+    %% actors, somehow tagged by local | incoming?
+    case highest_actor(VId, LocalObj) of
+        {undefined, 0, 0} -> %% Not present locally
+            %% Never acted on this object before, new epoch.
+            new_key_epoch(State);
+        {LocalId, LocalEpoch, LocalCntr} -> %% Present locally
+            case highest_actor(VId, IncomingObj) of
+                {_InId, InEpoch, InCntr} when InEpoch > LocalEpoch;
+                                              InCntr > LocalCntr ->
+                    %% In coming actor-epoch or counter greater than
+                    %% local, some byzantine failure, new epoch.
+                    B = riak_object:bucket(LocalObj),
+                    K = riak_object:key(LocalObj),
+
+                    lager:info("Inbound clock entry for ~p in ~p/~p greater than local",
+                               [VId, B, K]),
+                    new_key_epoch(State);
+                _ ->
+                    %% just use local id
+                    %% Return the highest local epoch ID for this
+                    %% key. This may be the pre-epoch ID (i.e. no
+                    %% epoch), which is good, no reason to force a new
+                    %% epoch on all old keys.
+                    {LocalId, State}
+            end
+    end.
+
+%% @private generate an epoch actor, and update the vnode state.
+-spec new_key_epoch(#state{}) -> {EpochActor :: binary(), #state{}}.
+new_key_epoch(State) ->
+    NewState=#state{counter=#counter_state{cnt=Cntr}, vnodeid=VId} = update_counter(State),
+    EpochId = key_epoch_actor(VId, Cntr),
+    {EpochId, NewState}.
+
+%% @private generate a new epoch ID for a key
+-spec key_epoch_actor(vnodeid(), pos_integer()) -> binary().
+key_epoch_actor(ActorBin, Cntr) ->
+    <<ActorBin/binary, Cntr:32/integer>>.
+
+%% @private highest actor is the latest/greatest epoch actor for a
+%% key. It is the actor we want to increment for the current event,
+%% given that we are not starting a new epoch for the key.  Must work
+%% with non-epochal and epochal actors.  The return tuple is
+%% `{ActorId, Epoch, Counter}' where `ActorId' is the highest ID
+%% starting with `ActorBase' that has acted on this key, undefined if
+%% never acted before. `KeyEpoch' is the highest epoch for the
+%% `ActorBase'. `Counter' is the greatest event seen by the `VnodeId'.
+-spec highest_actor(binary(), riak_object:riak_object()) ->
+    {ActorId :: binary() | undefined,
+     KeyEpoch :: non_neg_integer(),
+     Counter :: non_neg_integer()}.
+highest_actor(ActorBase, Obj) ->
+    ActorSize = size(ActorBase),
+    Actors = riak_object:all_actors(Obj),
+
+    {Actor, Epoch} = lists:foldl(fun(Actor, {HighestActor, HighestEpoch}) ->
+                                         case Actor of
+                                             <<ActorBase:ActorSize/binary, Epoch:32/integer>>
+                                               when Epoch > HighestEpoch ->
+                                                 {Actor, Epoch};
+                                             %% Since an actor without
+                                             %% an epoch is lower than
+                                             %% an actor with one,
+                                             %% this means in the
+                                             %% unmatched case, the
+                                             %% ActorBase passes
+                                             %% through as the highest
+                                             %% actor, and the epoch
+                                             %% (of zero) passes
+                                             %% through too.
+                                             _ ->  {HighestActor, HighestEpoch}
+                                         end
+                                 end,
+                                 {undefined, 0},
+                                 Actors),
+    %% get the greatest event for the highest/latest actor
+    {Actor, Epoch, riak_object:actor_counter(Actor, Obj)}.
+
 -ifdef(TEST).
 
-%% Check assigning a vnodeid twice in the same second
-assign_vnodeid_restart_same_ts_test() ->
-    Now1 = {1314,224520,343446}, %% TS=(224520 * 100000) + 343446
-    Now2 = {1314,224520,343446}, %% as unsigned net-order int <<70,116,143,150>>
-    NodeId = <<1, 2, 3, 4>>,
-    {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
-    ?assertEqual(<<1, 2, 3, 4, 70, 116, 143, 150>>, Vid1),
-    %% Simulate clear
-    Status2 = proplists:delete(vnodeid, Status1),
-    %% Reassign
-    {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
-    ?assertEqual(<<1, 2, 3, 4, 70, 116, 143, 151>>, Vid2).
+-define(MGR, riak_kv_vnode_status_mgr).
+-define(MAX_INT, 4294967295).
 
-%% Check assigning a vnodeid with a later date, but less than 11.57
-%% days later!
-assign_vnodeid_restart_later_ts_test() ->
-    Now1 = {1000,224520,343446}, %% <<70,116,143,150>>
-    Now2 = {1000,224520,343546}, %% <<70,116,143,250>>
-    NodeId = <<1, 2, 3, 4>>,
-    {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
-    ?assertEqual(<<1, 2, 3, 4, 70,116,143,150>>, Vid1),
-    %% Simulate clear
-    Status2 = proplists:delete(vnodeid, Status1),
-    %% Reassign
-    {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
-    ?assertEqual(<<1, 2, 3, 4, 70,116,143,250>>, Vid2).
+%% @private test the vnode and vnode mgr interaction NOTE: sets up and
+%% tearsdown inside the test, the mgr needs the pid of the test
+%% process to send messages. @TODO(rdb) find a better way
+blocking_test_() ->
+    {setup, fun() -> (catch file:delete("undefined/kv_vnode/0")) end,
+     fun(_) -> file:delete("undefined/kv_vnode/0") end,
+     {spawn, [{"Blocking",
+               fun() ->
+                       {ok, Pid} = ?MGR:start_link(self(), 0),
+                       {ok, {VId, CounterState}} = get_vnodeid_and_counter(Pid, 100),
+                       #counter_state{cnt=Cnt, lease=Leased, lease_size=LS, leasing=L} = CounterState,
+                       ?assertEqual(0, Cnt),
+                       ?assertEqual(100, Leased),
+                       ?assertEqual(100, LS),
+                       ?assertEqual(false, L),
+                       State = #state{vnodeid=VId, status_mgr_pid=Pid, counter=CounterState},
+                       S2=#state{counter=#counter_state{leasing=L2, cnt=C2}} = update_counter(State),
+                       ?assertEqual(false, L2),
+                       ?assertEqual(1, C2),
+                       S3 = lists:foldl(fun(_, S) ->
+                                                update_counter(S)
+                                        end,
+                                        S2,
+                                        lists:seq(1, 98)),
+                       #state{counter=#counter_state{leasing=L3, cnt=C3}} = S3,
+                       ?assertEqual(true, L3),
+                       ?assertEqual(99, C3),
+                       S4 = update_counter(S3),
+                       #state{counter=#counter_state{lease=Leased2, leasing=L4, cnt=C4}} = S4,
+                       ?assertEqual(false, L4),
+                       ?assertEqual(100, C4),
+                       ?assertEqual(200, Leased2),
+                       {ok, cleared} = ?MGR:clear_vnodeid(Pid),
+                       ok = ?MGR:stop(Pid)
+               end}
+             ]
+     }
+    }.
 
-%% Check assigning a vnodeid with a earlier date - just in case of clock skew
-assign_vnodeid_restart_earlier_ts_test() ->
-    Now1 = {1000,224520,343546}, %% <<70,116,143,150>>
-    Now2 = {1000,224520,343446}, %% <<70,116,143,250>>
-    NodeId = <<1, 2, 3, 4>>,
-    {Vid1, Status1} = assign_vnodeid(Now1, NodeId, []),
-    ?assertEqual(<<1, 2, 3, 4, 70,116,143,250>>, Vid1),
-    %% Simulate clear
-    Status2 = proplists:delete(vnodeid, Status1),
-    %% Reassign
-    %% Should be greater than last offered - which is the 2mil timestamp
-    {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
-    ?assertEqual(<<1, 2, 3, 4, 70,116,143,251>>, Vid2).
-
-%% Test
-vnode_status_test_() ->
-    {setup,
-     fun() ->
-             filelib:ensure_dir("kv_vnode_status_test/.test"),
-             ?cmd("chmod u+rwx kv_vnode_status_test"),
-             ?cmd("rm -rf kv_vnode_status_test"),
-             application:set_env(riak_kv, vnode_status, "kv_vnode_status_test"),
-             ok
-     end,
+%% @private tests that the counter rolls over to 1 when a new vnode id
+%% is assigned
+rollover_test_() ->
+    {setup, fun() -> (catch file:delete("undefined/kv_vnode/0")) end,
      fun(_) ->
-             application:unset_env(riak_kv, vnode_status),
-             ?cmd("chmod u+rwx kv_vnode_status_test"),
-             ?cmd("rm -rf kv_vnode_status_test"),
-             ok
-     end,
-     [?_test(begin % initial create failure
-                 ?cmd("rm -rf kv_vnode_status_test || true"),
-                 ?cmd("mkdir kv_vnode_status_test"),
-                 ?cmd("chmod -w kv_vnode_status_test"),
-                 F = fun([]) ->
-                             {shouldfail, [badperm]}
-                     end,
-                 Index = 0,
-                 ?assertEqual({error, eacces},  update_vnode_status(F, Index))
-             end),
-      ?_test(begin % create successfully
-                 ?cmd("chmod +w kv_vnode_status_test"),
+             file:delete("undefined/kv_vnode/0") end,
+     {spawn, [{"Rollover",
+               fun() ->
+                       {ok, Pid} = ?MGR:start_link(self(), 0),
+                       {ok, {VId, CounterState}} = get_vnodeid_and_counter(Pid, ?MAX_INT),
+                       #counter_state{cnt=Cnt, lease=Leased, lease_size=LS, leasing=L} = CounterState,
+                       ?assertEqual(0, Cnt),
+                       ?assertEqual((?MAX_INT), Leased),
+                       ?assertEqual((?MAX_INT), LS),
+                       ?assertEqual(false, L),
+                       %% fiddle the counter to the max int size-2
+                       State = #state{vnodeid=VId, status_mgr_pid=Pid, counter=CounterState#counter_state{cnt=(?MAX_INT-2)}},
+                       S2=#state{counter=#counter_state{leasing=L2, cnt=C2}} = update_counter(State),
+                       ?assertEqual(true, L2),
+                       ?assertEqual((?MAX_INT-1), C2),
+                       %% Vnode ID should roll over, and counter reset
+                       #state{vnodeid=VId2, counter=#counter_state{leasing=L3, cnt=C3}} = update_counter(S2),
 
-                 F = fun([]) ->
-                             {created, [created]}
-                     end,
-                 Index = 0,
-                 ?assertEqual({ok, created}, update_vnode_status(F, Index))
-             end),
-      ?_test(begin % update successfully
-                 F = fun([created]) ->
-                             {updated, [updated]}
-                     end,
-                 Index = 0,
-                 ?assertEqual({ok, updated}, update_vnode_status(F, Index))
-             end),
-      ?_test(begin % update failure
-                 ?cmd("chmod 000 kv_vnode_status_test/0"),
-                 ?cmd("chmod 500 kv_vnode_status_test"),
-                 F = fun([updated]) ->
-                             {shouldfail, [updatedagain]}
-                     end,
-                 Index = 0,
-                 ?assertEqual({error, eacces},  update_vnode_status(F, Index))
-             end)
+                       ?assert(VId /= VId2),
+                       ?assertEqual(false, L3),
+                       ?assertEqual(1, C3),
 
-     ]}.
+                       {ok, cleared} = ?MGR:clear_vnodeid(Pid),
+                       ok = ?MGR:stop(Pid)
+               end}
+             ]}
+    }.
 
 dummy_backend(BackendMod) ->
     Ring = riak_core_ring:fresh(16,node()),
