@@ -35,29 +35,22 @@ ms_to_timestamp(Time) ->
     {0, Seconds, MicroSeconds}.
 
 -spec quanta(time_ms(), non_neg_integer(), time_unit()) -> time_ms() | err().
-quanta(Time, QuantaSize, Unit) ->
-    case lists:member(Unit, [d, h, m, s]) of
-        true ->
-            Ms = unit_to_ms(Unit),
-            Diff = Time rem (QuantaSize*Ms),
-            Time - Diff;
-        false ->
-            large_quanta(Time, QuantaSize, Unit)
-    end.
-
--spec large_quanta(time_ms(), non_neg_integer(), mo | y) -> time_ms() | err().
-large_quanta(Time, QuantaSize, mo) ->
+quanta(Time, QuantaSize, Unit) when Unit == d; Unit == h; Unit == m; Unit == s ->
+    Ms = unit_to_ms(Unit),
+    Diff = Time rem (QuantaSize*Ms),
+    Time - Diff;
+quanta(Time, QuantaSize, mo) ->
     Timestamp = ms_to_timestamp(Time),
     Month = months_since_1970(Timestamp),
     MonthQuanta = Month - (Month rem QuantaSize),
     months_since_1970_to_ms(MonthQuanta);
-large_quanta(Time, QuantaSize, y) ->
+quanta(Time, QuantaSize, y) ->
     Timestamp = ms_to_timestamp(Time),
     {{Year, _, _}, _} = calendar:now_to_universal_time(Timestamp),
     YearsSince1970 = Year - 1970,
     YearQuanta = Year - (YearsSince1970 rem QuantaSize),
     years_since_1970_to_ms(YearQuanta);
-large_quanta(_, _, Unit) ->
+quanta(_, _, Unit) ->
     {error, {invalid_unit, Unit}}.
 
 %% @doc Return the time in milliseconds since 00:00 GMT Jan 1, 1970 (Unix Epoch)
@@ -143,7 +136,6 @@ assert_hours(Quanta, OkTimes) ->
 
 quanta_hours_test() ->
     assert_hours(12, [0, 12]),
-    assert_hours(15, [15]),
     assert_hours(24, [0]).
 
 assert_days(Days) ->
