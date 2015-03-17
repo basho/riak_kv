@@ -36,6 +36,12 @@
     from
 }).
 
+-define(DICT_TYPE, dict).
+
+-record(state, {
+    entries = ?DICT_TYPE:new()
+}).
+
 -define(DEFAULT_TIMEOUT, 60000).
 
 
@@ -112,36 +118,39 @@ put(RObj, Options) ->
 %%%===================================================================
 
 init(_) ->
-    {ok, dummy}.
+    {ok, #state{}}.
 
 handle_call(_Request, _From, State) ->
     {reply, undefined, State}.
 
 handle_cast({put, RObj, ReqId, Preflist, #rec{from=From}=Rec}, State) ->
-    case erlang:put(ReqId, Rec) of
-        undefined ->
+    NewState = case do_put(ReqId, Rec, State) of
+        {undefined, S} ->
             [begin
                  Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx),
                  {Proxy, Node} ! {ts_put, self(), RObj, ReqId, Type},
                  ok
-             end || {{Idx, Node}, Type} <- Preflist];
-        _AlreadyDefined ->
-            reply(From, ReqId, {error, request_id_already_defined})
+             end || {{Idx, Node}, Type} <- Preflist],
+            S;
+        {_AlreadyDefined, S} ->
+            reply(From, ReqId, {error, request_id_already_defined}),
+            S
     end,
-    {noreply, State};
+    {noreply, NewState};
 handle_cast({cancel, ReqId}, State) ->
-    case erlang:erase(ReqId) of
-        undefined ->
-            ok;
-        #rec{from=From} ->
-            reply(From, ReqId, {error, timeout})
+    NewState = case do_erase(ReqId, State) of
+        {undefined, S} ->
+            S;
+        {#rec{from=From}, S} ->
+            reply(From, ReqId, {error, timeout}),
+            S
     end,
-    {noreply, State};
+    {noreply, NewState};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info({ts_reply, ReqId, _Reply, Type}, State) ->
-    case erlang:get(ReqId) of
+    case do_get(ReqId, State) of
         undefined->
             % the entry was likely purged by the timeout mechanism
             {noreply, State};
@@ -158,14 +167,16 @@ handle_info({ts_reply, ReqId, _Reply, Type}, State) ->
                                    Primaries
                            end,
             NewTotal = Total + 1,
-            case enoughReplies(W, PW, NewPrimaries, NewTotal) of
+            NewState = case enoughReplies(W, PW, NewPrimaries, NewTotal) of
                 true ->
-                    erlang:erase(ReqId),
-                    reply(From, ReqId, ok);
+                    {_, S} = do_erase(ReqId, State),
+                    reply(From, ReqId, ok),
+                    S;
                 false ->
-                    erlang:put(ReqId, Rec#rec{primaries = NewPrimaries, total = NewTotal})
+                    {_, S} = do_put(ReqId, Rec#rec{primaries = NewPrimaries, total = NewTotal}, State),
+                    S
             end,
-            {noreply, State}
+            {noreply, NewState}
     end;
 handle_info(_Msg, State) ->
     {noreply, State}.
@@ -206,3 +217,26 @@ get(Key, BucketProps, N, Options) ->
 %% See riak_kv_ensemble_router:random for justification
 random(N) ->
     erlang:phash2(erlang:statistics(io), N) + 1.
+
+
+do_put(ReqId, Rec, #state{entries=Entries} = State) ->
+    case do_get(ReqId, State) of
+        undefined ->
+            {undefined, State#state{entries=?DICT_TYPE:store(ReqId, Rec, Entries)}};
+        OldValue ->
+            {OldValue, State#state{entries=?DICT_TYPE:store(ReqId, Rec, Entries)}}
+    end.
+
+do_get(ReqId, #state{entries=Entries} = _State) ->
+    case ?DICT_TYPE:find(ReqId, Entries) of
+        {ok, Value} -> Value;
+        error -> undefined
+    end.
+
+do_erase(ReqId, #state{entries=Entries} = State) ->
+    case do_get(ReqId, State) of
+        undefined ->
+            {undefined, State};
+        OldValue ->
+            {OldValue, State#state{entries=?DICT_TYPE:erase(ReqId, Entries)}}
+    end.
