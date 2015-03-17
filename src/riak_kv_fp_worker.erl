@@ -21,7 +21,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, put/2, put/3, workers/0]).
+-export([start_link/1, put/2, workers/0]).
 -export([init/1,
     handle_call/3,
     handle_cast/2,
@@ -59,9 +59,6 @@ start_link(Name) ->
     gen_server:start_link({local, Name}, ?MODULE, [], []).
 
 put(RObj, Options) ->
-    put(RObj, Options, ?DEFAULT_TIMEOUT).
-
-put(RObj, Options, Timeout) ->
     Bucket = riak_object:bucket(RObj),
     BKey = {Bucket, riak_object:key(RObj)},
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
@@ -90,6 +87,12 @@ put(RObj, Options, Timeout) ->
     gen_server:cast(Worker,
         {put, RObj4, ReqId, Preflist, #rec{w=W, pw=PW, from=self()}}
     ),
+    Timeout = case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
+        N when is_integer(N) andalso N > 0 ->
+            N;
+        _ ->
+            ?DEFAULT_TIMEOUT
+    end,
     receive
         {'DOWN', ReqId, process, _Pid, _Reason} ->
             {error, riak_kv_fast_put_server_crashed};
@@ -97,7 +100,7 @@ put(RObj, Options, Timeout) ->
             erlang:demonitor(ReqId),
             Response
     after Timeout ->
-        gen_server:cast(?MODULE, {cancel, ReqId}),
+        gen_server:cast(Worker, {cancel, ReqId}),
         receive
             {ReqId, Response} ->
                 Response
@@ -124,6 +127,14 @@ handle_cast({put, RObj, ReqId, Preflist, #rec{from=From}=Rec}, State) ->
              end || {{Idx, Node}, Type} <- Preflist];
         _AlreadyDefined ->
             reply(From, ReqId, {error, request_id_already_defined})
+    end,
+    {noreply, State};
+handle_cast({cancel, ReqId}, State) ->
+    case erlang:erase(ReqId) of
+        undefined ->
+            ok;
+        #rec{from=From} ->
+            reply(From, ReqId, {error, timeout})
     end,
     {noreply, State};
 handle_cast(_Msg, State) ->
@@ -156,15 +167,8 @@ handle_info({ts_reply, ReqId, _Reply, Type}, State) ->
             end,
             {noreply, State}
     end;
-handle_info({cancel, ReqId}, State) ->
-    case erlang:erase(ReqId) of
-        undefined ->
-            ok;
-        {ReqId, #rec{from=From}} ->
-            reply(From, ReqId, {error, timeout})
-    end,
+handle_info(_Msg, State) ->
     {noreply, State}.
-
 
 terminate(_Reason, _State) ->
     ok.

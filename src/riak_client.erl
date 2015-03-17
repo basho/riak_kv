@@ -340,7 +340,7 @@ maybe_normal_put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(
     end.
 
 fast_put(RObj, Options, {?MODULE, [_Node, _ClientId]}) ->
-    riak_kv_fp_worker:put(RObj, Options, recv_timeout(Options)).
+    riak_kv_fp_worker:put(RObj, Options).
 
 %% @spec delete(riak_object:bucket(), riak_object:key(), riak_client()) ->
 %%        ok |
