@@ -1,15 +1,15 @@
+%% @doc This module serves to generate time quanta on multi - (year, month, day, hour, minute,
+%% second) boundaries. The quanta are based on an origin time of Jan 1, 1970 00:00:00 (Unix Epoch).
+%% The function <em>quanta/3</em> takes a time in milliseconds to bucketize, a size of the quanta, and the
+%% units of said quanta. For instance, the following call would create buckets for timestamps on 15
+%% minute boundaries: <em>quanta(Time, 15, m)</em>. The quanta time is returned in milliseconds since the
+%% Unix epoch.
+
 -module(riak_kv_quanta).
 
 -export([quanta/3,
          timestamp_to_ms/1,
          ms_to_timestamp/1]).
-
-%% @doc This module serves to generate time quanta on multi - (year, month, day, hour, minute,
-%% second) boundaries. The quanta are based on an origin time of Jan 1, 1970 00:00:00 (Unix Epoch).
-%% The function `quanta/3` takes a time in milliseconds to quantify, a size of the quanta, and the
-%% units of said quanta. For instance, the following call would create buckets for timestamps on 15
-%% minute boundaries: `quanta(Time, 15, m)`. The quanta time is returned in milliseconds since the
-%% Unix epoch.
 
 %% @doc A timestamp in millisconds representing number of millisconds from Unix epoch
 -type time_ms() :: non_neg_integer().
@@ -19,7 +19,7 @@
 
 -type err() :: {error, term()}.
 
-%% The Number of Days from Jan 1, 0 to Jan 1, 1970
+%% @doc The Number of Days from Jan 1, 0 to Jan 1, 1970
 %% We need this to compute years and months properly including leap years and variable length
 %% months.
 -define(DAYS_FROM_0_TO_1970, 719528).
@@ -32,7 +32,7 @@
                               io:format(user, Str, Args) end, P)).
 -compile(export_all).
 -endif.
--endif.
+-endif. %% @clear
 
 %% @doc Return the time in milliseconds since 00:00 GMT Jan 1, 1970 (Unix Epoch)
 -spec timestamp_to_ms(erlang:timestamp()) -> time_ms().
