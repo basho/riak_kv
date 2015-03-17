@@ -13,6 +13,16 @@
 %% months.
 -define(DAYS_FROM_0_TO_1970, 719528).
 
+-ifdef(TEST).
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-define(QC_OUT(P),
+        eqc:on_output(fun(Str, Args) ->
+                              io:format(user, Str, Args) end, P)).
+-compile(export_all).
+-endif.
+-endif.
+
 %% @doc Return the time in milliseconds since 00:00 GMT Jan 1, 1970 (Unix Epoch)
 -spec timestamp_to_ms(erlang:timestamp()) -> time_ms().
 timestamp_to_ms({Mega, Secs, Micro}) ->
@@ -155,6 +165,84 @@ quanta_days_test() ->
     assert_days(29),
     assert_days(30),
     assert_days(31).
+
+-ifdef(EQC).
+prop_quanta_bounded_test() ->
+    ?assertEqual(true, eqc:quickcheck(?QC_OUT(prop_quanta_bounded()))).
+
+prop_quanta_month_boundary_test() ->
+    ?assertEqual(true, eqc:quickcheck(?QC_OUT(prop_quanta_month_boundary()))).
+
+prop_quanta_year_boundary_test() ->
+    ?assertEqual(true, eqc:quickcheck(?QC_OUT(prop_quanta_year_boundary()))).
+
+%% Ensure that Quantas are always bounded, meaning that any time is no more than one quanta ahead of
+%% the quanta start.
+prop_quanta_bounded() ->
+    ?FORALL({Date, Time, {Quanta, Unit}}, {date_gen(), time_gen(), quanta_gen()},
+        begin
+            DateTime = {Date, Time},
+            SecondsFrom0To1970 = ?DAYS_FROM_0_TO_1970 * (unit_to_ms(d) div 1000),
+            DateMs = (calendar:datetime_to_gregorian_seconds(DateTime) - SecondsFrom0To1970)*1000,
+            QuantaMs = quanta(DateMs, Quanta, Unit),
+            QuantaSize = quanta_in_ms(Quanta, Unit),
+            (DateMs - QuantaMs) =< QuantaSize
+        end).
+
+%% Ensure quantas for months are always on a monthly boundary
+prop_quanta_month_boundary() ->
+    ?FORALL({Date, Time, {Quanta, Unit}}, {date_gen(), time_gen(), month_gen()},
+        begin
+            Timestamp = quanta_now_from_datetime({Date, Time}, Quanta, Unit),
+            {{_, _, Day}, QuantaTime} = calendar:now_to_datetime(Timestamp),
+            Day =:= 1 andalso QuantaTime =:= {0,0,0}
+        end).
+
+%% Ensure quantas for years are always on a yearly boundary
+prop_quanta_year_boundary() ->
+    ?FORALL({Date, Time, {Quanta, Unit}}, {date_gen(), time_gen(), year_gen()},
+        begin
+            Timestamp = quanta_now_from_datetime({Date, Time}, Quanta, Unit),
+            {{_, Month, Day}, QuantaTime} = calendar:now_to_datetime(Timestamp),
+            Month =:= 1 andalso Day =:= 1 andalso QuantaTime =:= {0,0,0}
+        end).
+
+-endif.
+
+quanta_now_from_datetime(DateTime, Quanta, Unit) ->
+    SecondsFrom0To1970 = ?DAYS_FROM_0_TO_1970 * (unit_to_ms(d) div 1000),
+    DateMs = (calendar:datetime_to_gregorian_seconds(DateTime) - SecondsFrom0To1970)*1000,
+    QuantaMs = quanta(DateMs, Quanta, Unit),
+    ms_to_timestamp(QuantaMs).
+
+
+quanta_in_ms(Quanta, mo) ->
+    months_since_1970_to_ms(Quanta);
+quanta_in_ms(Quanta, y) ->
+    %% Just use max # days in year for safety
+    Quanta*366*unit_to_ms(d);
+quanta_in_ms(Quanta, Unit) ->
+    Quanta*unit_to_ms(Unit).
+
+
+%% EQC Generators
+date_gen() ->
+    ?SUCHTHAT(Date, {choose(1970, 2015), choose(1, 12), choose(1, 31)}, calendar:valid_date(Date)).
+
+time_gen() ->
+    {choose(1, 23), choose(1, 59), choose(1, 59)}.
+
+month_gen() ->
+    {choose(1, 100), mo}.
+
+year_gen() ->
+    {choose(1, 40), y}.
+
+quanta_gen() ->
+    oneof([month_gen(),
+           year_gen(),
+           {choose(1,2000), h},
+           {choose(1, 60), m}]).
 
 
 -endif.
