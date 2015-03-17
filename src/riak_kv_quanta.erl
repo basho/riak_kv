@@ -207,7 +207,6 @@ prop_quanta_year_boundary() ->
             Month =:= 1 andalso Day =:= 1 andalso QuantaTime =:= {0,0,0}
         end).
 
--endif.
 
 quanta_now_from_datetime(DateTime, Quanta, Unit) ->
     SecondsFrom0To1970 = ?DAYS_FROM_0_TO_1970 * (unit_to_ms(d) div 1000),
@@ -223,7 +222,6 @@ quanta_in_ms(Quanta, y) ->
     Quanta*366*unit_to_ms(d);
 quanta_in_ms(Quanta, Unit) ->
     Quanta*unit_to_ms(Unit).
-
 
 %% EQC Generators
 date_gen() ->
@@ -244,5 +242,6 @@ quanta_gen() ->
            {choose(1,2000), h},
            {choose(1, 60), m}]).
 
+-endif.
 
 -endif.
