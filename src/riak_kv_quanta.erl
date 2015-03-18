@@ -11,11 +11,11 @@
          timestamp_to_ms/1,
          ms_to_timestamp/1]).
 
-%% @doc A timestamp in millisconds representing number of millisconds from Unix epoch
 -type time_ms() :: non_neg_integer().
+%% A timestamp in millisconds representing number of millisconds from Unix epoch
 
-%% @doc The units of quantization available to quanta/3
 -type time_unit() :: y | mo | d | h | m | s.
+%%  The units of quantization available to quanta/3
 
 -type err() :: {error, term()}.
 
@@ -32,19 +32,13 @@
                               io:format(user, Str, Args) end, P)).
 -compile(export_all).
 -endif.
--endif. %% @clear
+-endif.
+%% @clear
+%% @end
 
-%% @doc Return the time in milliseconds since 00:00 GMT Jan 1, 1970 (Unix Epoch)
--spec timestamp_to_ms(erlang:timestamp()) -> time_ms().
-timestamp_to_ms({Mega, Secs, Micro}) ->
-    Mega*1000000000 + Secs*1000 + Micro div 1000.
-
--spec ms_to_timestamp(time_ms()) -> erlang:timestamp().
-ms_to_timestamp(Time) ->
-    Seconds = Time div 1000,
-    MicroSeconds = (Time rem 1000) * 1000,
-    {0, Seconds, MicroSeconds}.
-
+%% @doc Given the time in milliseconds since the unix epoch and a time range and unit eg (15, m),
+%% generate the starting timestamp of the range (quanta) in milliseconds since the epoch where the
+%% time belongs. Note that Time - Quanta is less than or equal to QuantaSize * Unit (in milliseconds).
 -spec quanta(time_ms(), non_neg_integer(), time_unit()) -> time_ms() | err().
 quanta(Time, QuantaSize, Unit) when Unit == d; Unit == h; Unit == m; Unit == s ->
     Ms = unit_to_ms(Unit),
@@ -63,6 +57,18 @@ quanta(Time, QuantaSize, y) ->
     years_since_1970_to_ms(YearQuanta);
 quanta(_, _, Unit) ->
     {error, {invalid_unit, Unit}}.
+
+%% @doc Return the time in milliseconds since 00:00 GMT Jan 1, 1970 (Unix Epoch)
+-spec timestamp_to_ms(erlang:timestamp()) -> time_ms().
+timestamp_to_ms({Mega, Secs, Micro}) ->
+    Mega*1000000000 + Secs*1000 + Micro div 1000.
+
+%% @doc Return an erlang:timestamp() given the time in milliseconds since the Unix Epoch
+-spec ms_to_timestamp(time_ms()) -> erlang:timestamp().
+ms_to_timestamp(Time) ->
+    Seconds = Time div 1000,
+    MicroSeconds = (Time rem 1000) * 1000,
+    {0, Seconds, MicroSeconds}.
 
 %% @doc Return the time in milliseconds since 00:00 GMT Jan 1, 1970 (Unix Epoch)
 %% This accounts for leap years. Yay!
