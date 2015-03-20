@@ -1070,10 +1070,7 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
-handle_info({ts_put, From, RObj, ReqId, Type}, State=#state{mod=Mod, async_put=AsyncPut, modstate=ModState}) ->
-    Bucket = riak_object:bucket(RObj),
-    Key = riak_object:key(RObj),
-    EncodedVal = riak_object:to_binary(v0, RObj),
+handle_info({ts_put, From, Bucket, Key, EncodedVal, ReqId, Type}, State=#state{mod=Mod, async_put=AsyncPut, modstate=ModState}) ->
     case AsyncPut of
         true ->
             Context = {ts_reply, From, ReqId, Type, Bucket, Key, EncodedVal},

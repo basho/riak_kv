@@ -39,7 +39,8 @@
 -define(DICT_TYPE, dict).
 
 -record(state, {
-    entries = ?DICT_TYPE:new()
+    entries = ?DICT_TYPE:new(),
+    proxies = ?DICT_TYPE:new()
 }).
 
 -define(DEFAULT_TIMEOUT, 60000).
@@ -51,14 +52,14 @@
 
 workers() ->
     {
-        riak_kv_fp_worker0,
-        riak_kv_fp_worker1,
-        riak_kv_fp_worker2,
-        riak_kv_fp_worker3,
-        riak_kv_fp_worker4,
-        riak_kv_fp_worker5,
-        riak_kv_fp_worker6,
-        riak_kv_fp_worker7
+        riak_kv_fp_worker00,
+        riak_kv_fp_worker01,
+        riak_kv_fp_worker02,
+        riak_kv_fp_worker03,
+        riak_kv_fp_worker04,
+        riak_kv_fp_worker05,
+        riak_kv_fp_worker06,
+        riak_kv_fp_worker07
     }.
 
 start_link(Name) ->
@@ -87,11 +88,15 @@ put(RObj, Options) ->
     R = random(size(Workers)),
     Worker = element(R, workers()),
     ReqId = erlang:monitor(process, Worker),
+    %{RandomId, _} = random:uniform_s(1000000000, os:timestamp()),
     RObj2 = riak_object:set_vclock(RObj, vclock:fresh(ReqId, 1)),
     RObj3 = riak_object:update_last_modified(RObj2),
     RObj4 = riak_object:apply_updates(RObj3),
+    Bucket = riak_object:bucket(RObj4),
+    Key = riak_object:key(RObj4),
+    EncodedVal = riak_object:to_binary(v0, RObj4),
     gen_server:cast(Worker,
-        {put, RObj4, ReqId, Preflist, #rec{w=W, pw=PW, from=self()}}
+        {put, Bucket, Key, EncodedVal, ReqId, Preflist, #rec{w=W, pw=PW, from=self()}}
     ),
     Timeout = case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
         N when is_integer(N) andalso N > 0 ->
@@ -123,16 +128,11 @@ init(_) ->
 handle_call(_Request, _From, State) ->
     {reply, undefined, State}.
 
-handle_cast({put, RObj, ReqId, Preflist, #rec{from=From}=Rec}, State) ->
+handle_cast({put, Bucket, Key, EncodedVal, ReqId, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
     NewState = case do_put(ReqId, Rec, State) of
         {undefined, S} ->
-            [begin
-                 Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx),
-                 {Proxy, Node} ! {ts_put, self(), RObj, ReqId, Type},
-                 ok
-             end || {{Idx, Node}, Type} <- Preflist],
-            S;
-        {_AlreadyDefined, S} ->
+            S#state{proxies=send_vnodes(Preflist, Proxies, Bucket, Key, EncodedVal, ReqId)};
+        {_, S} ->
             reply(From, ReqId, {error, request_id_already_defined}),
             S
     end,
@@ -193,6 +193,24 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+send_vnodes([], Proxies, _Bucket, _Key, _EncodedVal, _ReqId) ->
+    Proxies;
+send_vnodes([{{Idx, Node}, Type}|Rest], Proxies, Bucket, Key, EncodedVal, ReqId) ->
+    {Proxy, NewProxies} = get_proxy(Idx, Proxies),
+    {Proxy, Node} ! {ts_put, self(), Bucket, Key, EncodedVal, ReqId, Type},
+    send_vnodes(Rest, NewProxies, Bucket, Key, EncodedVal, ReqId).
+
+
+get_proxy(Idx, Proxies) ->
+    case ?DICT_TYPE:find(Idx, Proxies) of
+        {ok, Value} ->
+            {Value, Proxies};
+        error ->
+            Proxy = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx),
+            {Proxy, ?DICT_TYPE:store(Idx, Proxy, Proxies)}
+    end.
+
 
 enoughReplies(W, PW, Primaries, TotalReplies) ->
     EnoughTotal = W =< TotalReplies,
