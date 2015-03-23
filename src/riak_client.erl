@@ -78,9 +78,11 @@ new(Node, ClientId) ->
 %%      R-value for the nodes have responded with a value or error.
 %% @equiv get(Bucket, Key, R, default_timeout())
 get(Bucket, Key, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    gg:format("in get (1)~n"),
     get(Bucket, Key, [], THIS).
 
 normal_get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}) ->
+    gg:format("in normal get~n"),
     Me = self(),
     ReqId = mk_reqid(),
     case node() of
@@ -95,6 +97,7 @@ normal_get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}) ->
     wait_for_reqid(ReqId, Timeout).
 
 consistent_get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}) ->
+    gg:format("in consistent get~n"),
     BKey = {Bucket, Key},
     Ensemble = ensemble(BKey),
     Timeout = recv_timeout(Options),
@@ -140,6 +143,7 @@ maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as R-value for the nodes
 %%      have responded with a value or error.
 get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
+    gg:format("in get (2)~n"),
     case consistent_object(Node, Bucket) of
         true ->
             consistent_get(Bucket, Key, Options, THIS);
@@ -160,6 +164,7 @@ get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Option
 %%      nodes have responded with a value or error.
 %% @equiv get(Bucket, Key, R, default_timeout())
 get(Bucket, Key, R, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    gg:format("in get (3)~n"),
     get(Bucket, Key, [{r, R}], THIS).
 
 %% @spec get(riak_object:bucket(), riak_object:key(), R :: integer(),
@@ -177,6 +182,7 @@ get(Bucket, Key, R, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) when
                                   is_binary(Key),
                                   (is_atom(R) or is_integer(R)),
                                   is_integer(Timeout) ->
+    gg:format("in get (4)~n"),
     get(Bucket, Key, [{r, R}, {timeout, Timeout}], THIS).
 
 
@@ -193,6 +199,7 @@ put(RObj, {?MODULE, [_Node, _ClientId]}=THIS) -> put(RObj, [], THIS).
 
 
 normal_put(RObj, Options, {?MODULE, [Node, ClientId]}) ->
+    gg:format("in normal put~n"),
     Me = self(),
     ReqId = mk_reqid(),
     case ClientId of
@@ -219,6 +226,7 @@ normal_put(RObj, Options, {?MODULE, [Node, ClientId]}) ->
     wait_for_reqid(ReqId, Timeout).
 
 consistent_put(RObj, Options, {?MODULE, [Node, _ClientId]}) ->
+    gg:format("in consistent_put~n"),
     Bucket = riak_object:bucket(RObj),
     BKey = {Bucket, riak_object:key(RObj)},
     Ensemble = ensemble(BKey),
@@ -273,6 +281,8 @@ consistent_put_type(RObj, Options) ->
 %%       {error, Err :: term(), details()}
 %% @doc Store RObj in the cluster.
 put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
+    gg:format("in put (3) RObj is ~p~n- Options is ~p~n- THIS is ~p~n", [riak_object_json:encode(RObj), Options, THIS]),
+    gg:format("Raw is ~p~n", [RObj]),
     case consistent_object(Node, riak_object:bucket(RObj)) of
         true ->
             consistent_put(RObj, Options, THIS);
@@ -314,6 +324,7 @@ put(RObj, W, DW, {?MODULE, [_Node, _ClientId]}=THIS) -> put(RObj, [{w, W}, {dw, 
 %%      at least DW nodes have stored it in their storage backend, or
 %%      TimeoutMillisecs passes.
 put(RObj, W, DW, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    gg:format("in put/5~n"),
     put(RObj,  [{w, W}, {dw, DW}, {timeout, Timeout}], THIS).
 
 %% @spec put(RObj::riak_object:riak_object(), W :: integer(), RW :: integer(),
@@ -327,6 +338,7 @@ put(RObj, W, DW, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      at least DW nodes have stored it in their storage backend, or
 %%      TimeoutMillisecs passes.
 put(RObj, W, DW, Timeout, Options, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    gg:format("in put/6~n"),
     put(RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options], THIS).
 
 %% @spec delete(riak_object:bucket(), riak_object:key(), riak_client()) ->
