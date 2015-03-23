@@ -10,7 +10,7 @@
 %% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 %% KIND, either express or implied.  See the License for the
 %% specific language governing permissions and limitations
-%% under the License.    
+%% under the License.
 
 %% Constants used by the raw_http resources
 
@@ -23,6 +23,7 @@
 -define(MD_LASTMOD,  <<"X-Riak-Last-Modified">>).
 -define(MD_USERMETA, <<"X-Riak-Meta">>).
 -define(MD_INDEX,    <<"index">>).
+-define(MD_LI_IDX,   <<"composite-indices">>).
 -define(MD_DELETED,  <<"X-Riak-Deleted">>).
 
 %% Names of HTTP header fields
