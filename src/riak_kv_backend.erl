@@ -244,7 +244,7 @@ fold_objects(Backend, State) ->
                                               State2),
                      lists:sort(ObjFilter(Objects))
                  end),
-    empty_check(Backend, State).
+    empty_check(Backend, State2).
 
 empty_check(Backend, State) ->
     {B1, _B2, K1, _K2} = make_bs_and_ks(Backend),
