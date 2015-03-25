@@ -27,12 +27,13 @@
 %% -type colocation() :: any().
 
 -record(riak_field, {
-	  name = throw("field 'name' in #riak_field{} is required") :: binary(),
-	  type = throw("field 'type' in #riak_field{} is required"):: field_type()
+	  name     :: binary(),
+	  position :: binary(),
+	  type     :: field_type()
 	 }).
 
 -record(ddl, {
-	  bucket     = throw("field 'bucket' in #ddl{} is required") :: binary(),
-	  fields     = []                                            :: [riak_field()],
-	  colocation = throw("field 'bucket' in #ddl{} is required") :: colocation()
+	  bucket          :: binary(),
+	  fields     = [] :: [riak_field()],
+	  colocation      :: colocation()
 	 }).
