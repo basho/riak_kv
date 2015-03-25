@@ -396,9 +396,9 @@ validate_update_default_props(New) ->
     %% Only called if not already a consistent, datatype, fast_path
     %% bucket. Check that none of those are being set to `true'/valid
     %% datatypes.
-    ensure_not_present(New, [], [], [{datatype, ""},
-                                     {consistent, false, ""},
-                                     {fast_path, false, ""}]).
+    ensure_not_present(New, [], [], [{datatype, "`datatype` must not be defined."},
+                                     {consistent, false, "Fast Path buckets must not be consistent=true"},
+                                     {fast_path, false, "Cannot set existing bucket type to `fast_path`"}]).
 
 %% @private validate that strongly-consistent types and buckets do not
 %% have their n_val changed, nor become eventually consistent
