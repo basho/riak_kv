@@ -71,10 +71,10 @@ put(RObj, Options) ->
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
     DocIdx = riak_core_util:chash_key(BKey, BucketProps),
     NVal = proplists:get_value(n_val, BucketProps),
-    PW = get(pw, BucketProps, NVal, Options),
-    W = case get(dw, BucketProps, NVal, Options) of
-            error   -> get(w, BucketProps, NVal, Options);
-            DW      -> erlang:max(DW, get(w, BucketProps, NVal, Options))
+    PW = get_rw_value(pw, BucketProps, NVal, Options),
+    W = case get_rw_value(dw, BucketProps, NVal, Options) of
+            error   -> get_rw_value(w, BucketProps, NVal, Options);
+            DW      -> erlang:max(DW, get_rw_value(w, BucketProps, NVal, Options))
         end,
     Preflist =
         case proplists:get_value(sloppy_quorum, Options, true) of
@@ -88,13 +88,15 @@ put(RObj, Options) ->
     R = random(size(Workers)),
     Worker = element(R, workers()),
     ReqId = erlang:monitor(process, Worker),
-    %{RandomId, _} = random:uniform_s(1000000000, os:timestamp()),
-    RObj2 = riak_object:set_vclock(RObj, vclock:fresh(ReqId, 1)),
+    % ActorId = erlang:phash2(ReqId),
+    % RObj2 = riak_object:set_vclock(RObj, vclock:fresh(ActorId, 1)),
+    RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
     RObj3 = riak_object:update_last_modified(RObj2),
     RObj4 = riak_object:apply_updates(RObj3),
     Bucket = riak_object:bucket(RObj4),
     Key = riak_object:key(RObj4),
-    EncodedVal = riak_object:to_binary(v0, RObj4),
+    % EncodedVal = riak_object:to_binary(v0, RObj4),
+    EncodedVal = riak_object:to_binary(v1, RObj4),
     gen_server:cast(Worker,
         {put, Bucket, Key, EncodedVal, ReqId, Preflist, #rec{w=W, pw=PW, from=self()}}
     ),
@@ -129,7 +131,7 @@ handle_call(_Request, _From, State) ->
     {reply, undefined, State}.
 
 handle_cast({put, Bucket, Key, EncodedVal, ReqId, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
-    NewState = case do_put(ReqId, Rec, State) of
+    NewState = case store_request_record(ReqId, Rec, State) of
         {undefined, S} ->
             S#state{proxies=send_vnodes(Preflist, Proxies, Bucket, Key, EncodedVal, ReqId)};
         {_, S} ->
@@ -138,7 +140,7 @@ handle_cast({put, Bucket, Key, EncodedVal, ReqId, Preflist, #rec{from=From}=Rec}
     end,
     {noreply, NewState};
 handle_cast({cancel, ReqId}, State) ->
-    NewState = case do_erase(ReqId, State) of
+    NewState = case erase_request_record(ReqId, State) of
         {undefined, S} ->
             S;
         {#rec{from=From}, S} ->
@@ -149,8 +151,8 @@ handle_cast({cancel, ReqId}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({ts_reply, ReqId, _Reply, Type}, State) ->
-    case do_get(ReqId, State) of
+handle_info({ReqId, {ts_reply, ok, Type}}, State) ->
+    case get_request_record(ReqId, State) of
         undefined->
             % the entry was likely purged by the timeout mechanism
             {noreply, State};
@@ -169,16 +171,20 @@ handle_info({ts_reply, ReqId, _Reply, Type}, State) ->
             NewTotal = Total + 1,
             NewState = case enoughReplies(W, PW, NewPrimaries, NewTotal) of
                 true ->
-                    {_, S} = do_erase(ReqId, State),
+                    {_, S} = erase_request_record(ReqId, State),
                     reply(From, ReqId, ok),
                     S;
                 false ->
-                    {_, S} = do_put(ReqId, Rec#rec{primaries = NewPrimaries, total = NewTotal}, State),
+                    {_, S} = store_request_record(ReqId, Rec#rec{primaries = NewPrimaries, total = NewTotal}, State),
                     S
             end,
             {noreply, NewState}
     end;
-handle_info(_Msg, State) ->
+handle_info({_ReqId, {ts_reply, {error, overload}, _Type}}, State) ->
+    % consume overload messages.  May result in client's timing out
+    {noreply, State};
+handle_info(Msg, State) ->
+    lager:error("Unexpected message sent to ~p: ~p", [?MODULE, Msg]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -198,7 +204,11 @@ send_vnodes([], Proxies, _Bucket, _Key, _EncodedVal, _ReqId) ->
     Proxies;
 send_vnodes([{{Idx, Node}, Type}|Rest], Proxies, Bucket, Key, EncodedVal, ReqId) ->
     {Proxy, NewProxies} = get_proxy(Idx, Proxies),
-    {Proxy, Node} ! {ts_put, self(), Bucket, Key, EncodedVal, ReqId, Type},
+    Message = {ts_put, Bucket, Key, EncodedVal, Type},
+    gen_fsm:send_event(
+        {Proxy, Node},
+        riak_core_vnode_master:make_request(Message, {raw, ReqId, self()}, Idx)
+    ),
     send_vnodes(Rest, NewProxies, Bucket, Key, EncodedVal, ReqId).
 
 
@@ -225,7 +235,7 @@ reply(From, ReqId, Term) ->
     From ! {ReqId, Term}.
 
 
-get(Key, BucketProps, N, Options) ->
+get_rw_value(Key, BucketProps, N, Options) ->
     riak_kv_util:expand_rw_value(
         Key,
         proplists:get_value(Key, Options, default),
@@ -237,22 +247,22 @@ random(N) ->
     erlang:phash2(erlang:statistics(io), N) + 1.
 
 
-do_put(ReqId, Rec, #state{entries=Entries} = State) ->
-    case do_get(ReqId, State) of
+store_request_record(ReqId, Rec, #state{entries=Entries} = State) ->
+    case get_request_record(ReqId, State) of
         undefined ->
             {undefined, State#state{entries=?DICT_TYPE:store(ReqId, Rec, Entries)}};
         OldValue ->
             {OldValue, State#state{entries=?DICT_TYPE:store(ReqId, Rec, Entries)}}
     end.
 
-do_get(ReqId, #state{entries=Entries} = _State) ->
+get_request_record(ReqId, #state{entries=Entries} = _State) ->
     case ?DICT_TYPE:find(ReqId, Entries) of
         {ok, Value} -> Value;
         error -> undefined
     end.
 
-do_erase(ReqId, #state{entries=Entries} = State) ->
-    case do_get(ReqId, State) of
+erase_request_record(ReqId, #state{entries=Entries} = State) ->
+    case get_request_record(ReqId, State) of
         undefined ->
             {undefined, State};
         OldValue ->
