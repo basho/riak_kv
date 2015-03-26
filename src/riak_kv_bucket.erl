@@ -184,8 +184,8 @@ validate_update_typed_bucket(Existing, New) ->
 %% wild!
 -spec validate_default_bucket(props(), props()) -> {props(), errors()}.
 validate_default_bucket(Existing, New) ->
-    Unvalidated = merge(New, Existing),
-    validate(Unvalidated, [], []).
+    {Good, Bad} = validate(New, [], []),
+    {merge(Good, Existing), Bad}.
 
 %% @private properties in new overwrite those in old
 -spec merge(props(), props()) -> props().
@@ -397,8 +397,8 @@ validate_update_default_props(New) ->
     %% bucket. Check that none of those are being set to `true'/valid
     %% datatypes.
     ensure_not_present(New, [], [], [{datatype, "`datatype` must not be defined."},
-                                     {consistent, false, "Fast Path buckets must not be consistent=true"},
-                                     {fast_path, false, "Cannot set existing bucket type to `fast_path`"}]).
+                                     {consistent, true, "Fast Path buckets must not be consistent=true"},
+                                     {fast_path, true, "Cannot set existing bucket type to `fast_path`"}]).
 
 %% @private validate that strongly-consistent types and buckets do not
 %% have their n_val changed, nor become eventually consistent
@@ -478,7 +478,7 @@ validate_update_fp_props(NewFP, New) ->
 -spec validate_fp_props(props(), props(), errors()) -> {props(), props(), errors()}.
 validate_fp_props(Unvalidated, Valid, Errors) ->
     ensure_not_present(Unvalidated, Valid, Errors,
-                       [{consistent, false, "Fast Path buckets must not be consistent=true"},
+                       [{consistent, true, "Fast Path buckets must not be consistent=true"},
                         {datatype, "Fast Path buckets must not have datatype defined"}
                        ]).
 
@@ -491,16 +491,16 @@ validate_fp_props(Unvalidated, Valid, Errors) ->
                                                      {atom(), term()}]) ->
                                 {props(), props(), props()}.
 ensure_not_present(Unvalidated, Valid, Errors, InvalidPropsSpec) ->
-    lists:foldl(fun({Key, Allowed, ErrorMessage}, {U, V, E}) ->
+    lists:foldl(fun({Key, NotAllowed, ErrorMessage}, {U, V, E}) ->
                         case lists:keytake(Key, 1, U) of
                             false ->
                                 {U, V, E};
                             {value, {Key, Val}, U2} ->
                                 Val2 = coerce_bool(Val),
-                                if Val2 /= Allowed ->
+                                if Val2 == NotAllowed ->
                                         {U2, V, [{Key, ErrorMessage} | E]};
                                    true ->
-                                        {U2, [{Key, Allowed} | V], E}
+                                        {U, V, E}
                                 end
                         end;
                    ({Key, ErrorMessage}, {U, V, E}) ->
@@ -650,102 +650,64 @@ prop_create_valid() ->
                            only_create_if_valid(Result, New)))
             end).
 
-%% As of 2.0pre? validate/4 must merge the new and existing props,
-%% verify that.
+%% As of 2.* validate/4 must merge the new and existing props, verify
+%% that. Not sure if this test isn't just a tautology. Reviewer?
 prop_merges() ->
-    ?FORALL({Bucket, Existing0, New0}, {gen_bucket(update, any),
-                                      gen_existing(), gen_new(update)},
+    ?FORALL({Bucket, Existing0, New}, {gen_bucket(update, any),
+                                       gen_existing(),
+                                       gen_new(update)},
             begin
-                %Existing0 = lists:keydelete(fast_path, 1, Existing00),
-                New = lists:keydelete(fast_path, 1, New0),
                 %% ensure default buckets are not marked consistent or fast_path since that is invalid
                 Existing = case default_bucket(Bucket) of
                                true -> lists:keydelete(fast_path, 1, lists:keydelete(consistent, 1, Existing0));
                                false -> Existing0
                            end,
-                Result={Good, _Bad} = validate(update, Bucket, Existing, New),
+                Result={Good, Bad} = validate(update, Bucket, Existing, New),
 
-                DefaultBucket = default_bucket(Bucket),
-                HasAllowMult = has_allow_mult(New),
-                AllowMult = allow_mult(New),
-                HasDatatype = has_datatype(Existing),
-                NValChanged = n_val_changed(Existing, New),
-                ExistingFastPath = is_fp(Existing),
-                NewFastPath = is_fp(New),
-                IsConsistent = is_consistent(Existing),
-                NewConsistent = proplists:get_value(consistent, New),
-                Expected = case {DefaultBucket, HasAllowMult, AllowMult, HasDatatype,
-                                 NValChanged, IsConsistent, NewConsistent, ExistingFastPath, NewFastPath} of
-                               %% default bucket, attempted to change consistent to invalid value
-                               %% allow_mult may be invalid too
-                               {true,_, Mult, _, _, false, notvalid, _, _} ->
-                                   maybe_bad_mult(Mult, merge(lists:keydelete(consistent, 1, New), Existing));
-                               %% default bucket, attempted to change consistent to true
-                               %% allow_mult may be invalid too
-                               {true, _, Mult, _, _, false, true, _, _} ->
-                                   maybe_bad_mult(Mult, merge(lists:keydelete(consistent, 1, New), Existing));
-                               %% all valid for default type buckets
-                               {true, _, Mult,  _, _, _, _, _, _} when Mult /= error ->
-                                   merge(New, Existing);
-                               %% default bucket: allow mult is invalid
-                               {true, true, _, _, _, _, _, _, _} ->
-                                   maybe_bad_mult(error, merge(New, Existing));
+                %% All we really want to check is that every key in
+                %% Good replaces the same key in Existing, right?
+                %% Remove `Bad' from the inputs to validate.
+                {NoBadExisting, OnlyGoodNew} = lists:foldl(fun({Name, _Err}, {Old, Neu}) ->
+                                                                   {value, V, Neu2} = lists:keytake(Name, 1, Neu),
+                                                                   %% only
+                                                                   %% want
+                                                                   %% to
+                                                                   %% remove
+                                                                   %% the
+                                                                   %% exact
+                                                                   %% bad
+                                                                   %% value
+                                                                   %% from
+                                                                   %% existing,
+                                                                   %% not
+                                                                   %% the
+                                                                   %% bad
+                                                                   %% key!
+                                                                   {lists:delete(V, Old),
+                                                                    Neu2}
+                                                           end,
+                                                           {Existing, New},
+                                                           Bad),
 
-                               % non-default existing fast_path
-                               {false, _, _, _, _, _, _, true, _} ->
-                                   [];
-
-                               %% typed bucket, allow mult changed but not consistent or data type
-                               {false, true, Mult,  false, _, false, _, _, _} when Mult /= error ->
-                                   %% the n_val is the only valid change we generate in this case. can't change
-                                   %% data type or consistent peroperty
-                                   NVal = proplists:get_value(n_val, New, proplists:get_value(n_val, Existing)),
-                                   merge([proplists:lookup(allow_mult, New), {n_val, NVal}], Existing);
-                               %% typed bucket, allow_mult change is invalid. n_val has changed. not a datatype or
-                               %% consistent
-                               {false, true, error, false, true, false, _, _, _} ->
-                                   merge([proplists:lookup(n_val, New)], Existing);
-                               %% typed bucket, allow_mult change is invalid and n_val hasn't changed
-                               {false, true, error, false, false, false, _, _, _} ->
-                                   Existing;
-                               %% typed bucket, strongly-consistent, both n_val and consistent value are invalid changes
-                               {false, _, Mult,_,true,true,false, _, _} ->
-                                   maybe_bad_mult(Mult,
-                                                  merge(lists:keydelete(consistent, 1, lists:keydelete(n_val, 1, New)), Existing));
-                               %% typed bucket, strongly-consistent, both n_val and consistent value are invalid changes
-                               {false, _, Mult,_,true,true,notvalid, _, _} ->
-                                   maybe_bad_mult(Mult,
-                                                  merge(lists:keydelete(consistent, 1, lists:keydelete(n_val, 1, New)), Existing));
-                               %% typed bucket, strongly-consistent, n_val change is invalid
-                               {false, _, Mult,_,true,true,_, _, _} ->
-                                   maybe_bad_mult(Mult, merge(lists:keydelete(n_val, 1, New), Existing));
-                               %% typed bucket, strongly-consistent, consistent value change is invalid
-                               {false, _, Mult, _, _, true, false, _, _} ->
-                                   maybe_bad_mult(Mult, merge(lists:keydelete(consistent, 1, New), Existing));
-                               %% typed bucket, strongly-consistent, consistent value change is invalid
-                               {false, _, Mult, _, _, true, notvalid, _, _} ->
-                                   maybe_bad_mult(Mult, merge(lists:keydelete(consistent, 1, New), Existing));
-                               %% typed bucket, strongly-consistent, all good (except maybe allow_mult)
-                               {false, _, Mult, _, _, true, _, _, _} ->
-                                   maybe_bad_mult(Mult, merge(New, Existing));
-                               %% typed bucket, strongly-consistent, all good (except maybe allow_mult)
-                               {false, true, _Mult, true,_, _, _, _, _} ->
-                                   NVal = proplists:get_value(n_val, New, proplists:get_value(n_val, Existing)),
-                                   merge([{n_val, NVal}], Existing);
-                               %% typed bucket, bucket not strongly consistent or a data type, all valid
-                               {false,_,_,_,_,false,_, _, _} ->
-                                   merge(New, Existing)
-                           end,
-
+                %% What's left are the good ones from `New'. Replace
+                %% their keys in `Existing'. `Expected' is the input
+                %% set, minus the `Bad' properties, and plus the
+                %% `Good' ones. Compare that to output props `from
+                %% validate/4' to verify the merge happens as
+                %% expected.
+                Expected  = lists:ukeymerge(1, lists:ukeysort(1, OnlyGoodNew),
+                                            lists:ukeysort(1, NoBadExisting)),
                 ?WHENFAIL(
                    begin
                        io:format("Bucket ~p~n", [Bucket]),
                        io:format("Existing ~p~n", [lists:sort(Existing)]),
                        io:format("New ~p~n", [New]),
                        io:format("Result ~p~n", [Result]),
+                       io:format("Expected ~p~n", [lists:sort(Expected)]),
                        io:format("Diff ~p~n", [sets:to_list(sets:subtract(sets:from_list(Expected), sets:from_list(Good)))])
                    end,
-                   sets:is_subset(sets:from_list(Expected), sets:from_list(Good)))
+                   lists:sort(Expected) == lists:sort(Good)
+                  )
             end).
 
 %% Generators
@@ -773,9 +735,9 @@ gen_bucket() ->
     oneof([{<<"default">>, binary(20)}, binary(20)]).
 
 gen_existing() ->
-    Defaults0 = riak_core_bucket_type:defaults(),
-    Defaults = lists:keydelete(allow_mult, 1, Defaults0),
-    ?LET(Special, oneof([gen_valid_mult_dt(), gen_valid_fp(), gen_valid_consistent(), []]), Defaults ++ Special).
+    Defaults = lists:ukeysort(1, riak_core_bucket_type:defaults()),
+    ?LET(Special, oneof([gen_valid_mult_dt(), gen_valid_fp(), gen_valid_consistent(), []]),
+         lists:ukeymerge(1, lists:ukeysort(1, Special), Defaults)).
 
 gen_maybe_consistent() ->
     oneof([[], gen_valid_consistent()]).
