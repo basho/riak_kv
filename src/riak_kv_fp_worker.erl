@@ -96,8 +96,7 @@ put(RObj, Options) ->
     %% TODO: add a vclock:fresh/3 that takes os:timestamp() as argument to
     %% save more gettimeofday() calls.
     RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
-    %% TODO: add an update_last_modified/2 that takes os:timestamp as an argument
-    RObj3 = riak_object:update_last_modified(RObj2),
+    RObj3 = riak_object:update_last_modified(RObj2, StartTS),
     RObj4 = riak_object:apply_updates(RObj3),
     Bucket = riak_object:bucket(RObj4),
     Key = riak_object:key(RObj4),
