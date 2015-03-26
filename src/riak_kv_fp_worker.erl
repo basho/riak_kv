@@ -31,6 +31,8 @@
 
 -record(rec, {
     w, pw,
+    start_ts,
+    size,
     primaries = 0,
     total = 0,
     from
@@ -66,6 +68,7 @@ start_link(Name) ->
     gen_server:start_link({local, Name}, ?MODULE, [], []).
 
 put(RObj, Options) ->
+    StartTS = os:timestamp(),
     Bucket = riak_object:bucket(RObj),
     BKey = {Bucket, riak_object:key(RObj)},
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
@@ -90,7 +93,10 @@ put(RObj, Options) ->
     ReqId = erlang:monitor(process, Worker),
     % ActorId = erlang:phash2(ReqId),
     % RObj2 = riak_object:set_vclock(RObj, vclock:fresh(ActorId, 1)),
+    %% TODO: add a vclock:fresh/3 that takes os:timestamp() as argument to
+    %% save more gettimeofday() calls.
     RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
+    %% TODO: add an update_last_modified/2 that takes os:timestamp as an argument
     RObj3 = riak_object:update_last_modified(RObj2),
     RObj4 = riak_object:apply_updates(RObj3),
     Bucket = riak_object:bucket(RObj4),
@@ -98,7 +104,9 @@ put(RObj, Options) ->
     % EncodedVal = riak_object:to_binary(v0, RObj4),
     EncodedVal = riak_object:to_binary(v1, RObj4),
     gen_server:cast(Worker,
-        {put, Bucket, Key, EncodedVal, ReqId, Preflist, #rec{w=W, pw=PW, from=self()}}
+        {put, Bucket, Key, EncodedVal, ReqId, Preflist, #rec{w=W, pw=PW, from=self(),
+                                                             start_ts=StartTS,
+                                                             size=size(EncodedVal)}}
     ),
     Timeout = case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
         N when is_integer(N) andalso N > 0 ->
@@ -160,7 +168,9 @@ handle_info({ReqId, {ts_reply, ok, Type}}, State) ->
             #rec{
                 pw = PW, w = W,
                 primaries = Primaries, total = Total,
-                from = From
+                from = From,
+                start_ts = StartTS,
+                size = Size
             } = Rec,
             NewPrimaries = case Type of
                                primary ->
@@ -171,8 +181,10 @@ handle_info({ReqId, {ts_reply, ok, Type}}, State) ->
             NewTotal = Total + 1,
             NewState = case enoughReplies(W, PW, NewPrimaries, NewTotal) of
                 true ->
-                    {_, S} = erase_request_record(ReqId, State),
                     reply(From, ReqId, ok),
+                    {_, S} = erase_request_record(ReqId, State),
+                    Usecs = timer:now_diff(os:timestamp(), StartTS),
+                    riak_kv_stat:update({writeonce_put, Usecs, Size}),
                     S;
                 false ->
                     {_, S} = store_request_record(ReqId, Rec#rec{primaries = NewPrimaries, total = NewTotal}, State),
