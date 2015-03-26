@@ -72,6 +72,10 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 
+process(#rpbapiepreq{bkey = undefined} = Req, State) ->
+    process(Req#rpbapiepreq{bkey = #rpbbucketkey{bucket = undefined,
+                                                 key = undefined}},
+            State);
 process(#rpbapiepreq{bkey = #rpbbucketkey{bucket = Bucket, key = Key},
                      proto = Proto,
                      force_update = ForceUpdate}, State) ->
