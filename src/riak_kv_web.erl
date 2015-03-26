@@ -124,8 +124,6 @@ raw_dispatch(Name) ->
      {Prefix ++ ["ring", "coverage"],
       riak_kv_wm_apiep, Props},
 
-     %% TODO: remove after apiep collection and reporting gets
-     %% subsumed in the "preflist" request
      {Prefix ++ ["ring", "coverage", "bucket", bucket, "key", key],
       riak_kv_wm_apiep, Props}
 
