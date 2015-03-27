@@ -63,20 +63,20 @@ workers() ->
         riak_kv_fp_worker07
     }.
 
+%% @spec start_link(atom()) -> {ok, pid()} | ignore | {error, term()}
 start_link(Name) ->
     gen_server:start_link({local, Name}, ?MODULE, [], []).
 
+%% @spec put(RObj :: riak_object:riak_object(), riak_object:options(), riak_object:riak_client()) ->
+%%        ok |
+%%       {error, timeout} |
+%%       {error, term()}
 put(RObj, Options) ->
     Bucket = riak_object:bucket(RObj),
     BKey = {Bucket, riak_object:key(RObj)},
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
     DocIdx = riak_core_util:chash_key(BKey, BucketProps),
     NVal = proplists:get_value(n_val, BucketProps),
-    PW = get_rw_value(pw, BucketProps, NVal, Options),
-    W = case get_rw_value(dw, BucketProps, NVal, Options) of
-            error   -> get_rw_value(w, BucketProps, NVal, Options);
-            DW      -> erlang:max(DW, get_rw_value(w, BucketProps, NVal, Options))
-        end,
     Preflist =
         case proplists:get_value(sloppy_quorum, Options, true) of
             true ->
@@ -85,40 +85,45 @@ put(RObj, Options) ->
             false ->
                 riak_core_apl:get_primary_apl(DocIdx, NVal, riak_kv)
         end,
-    Workers = workers(),
-    R = random(size(Workers)),
-    Worker = element(R, workers()),
-    ReqId = erlang:monitor(process, Worker),
-    RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
-    RObj3 = riak_object:update_last_modified(RObj2),
-    RObj4 = riak_object:apply_updates(RObj3),
-    Bucket = riak_object:bucket(RObj4),
-    Key = riak_object:key(RObj4),
-    EncodedVal = riak_object:to_binary(v1, RObj4),
-    gen_server:cast(
-        Worker,
-        {put, Bucket, Key, EncodedVal, ReqId, Preflist,
-            #rec{w=W, pw=PW, n_val=NVal, from=self()}
-        }
-    ),
-    Timeout = case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
-        N when is_integer(N) andalso N > 0 ->
-            N;
-        _ ->
-            ?DEFAULT_TIMEOUT
-    end,
-    receive
-        {'DOWN', ReqId, process, _Pid, _Reason} ->
-            {error, riak_kv_fast_put_server_crashed};
-        {ReqId, Response} ->
-            erlang:demonitor(ReqId),
-            Response
-    after Timeout ->
-        gen_server:cast(Worker, {cancel, ReqId}),
-        receive
-            {ReqId, Response} ->
-                Response
-        end
+    case validate_options(NVal, Preflist, Options, BucketProps) of
+        {ok, W, PW} ->
+            Workers = workers(),
+            R = random(size(Workers)),
+            Worker = element(R, workers()),
+            ReqId = erlang:monitor(process, Worker),
+            RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
+            RObj3 = riak_object:update_last_modified(RObj2),
+            RObj4 = riak_object:apply_updates(RObj3),
+            Bucket = riak_object:bucket(RObj4),
+            Key = riak_object:key(RObj4),
+            EncodedVal = riak_object:to_binary(v1, RObj4),
+            gen_server:cast(
+                Worker,
+                {put, Bucket, Key, EncodedVal, ReqId, Preflist,
+                    #rec{w=W, pw=PW, n_val=NVal, from=self()}
+                }
+            ),
+            Timeout = case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
+                          N when is_integer(N) andalso N > 0 ->
+                              N;
+                          _ ->
+                              ?DEFAULT_TIMEOUT
+                      end,
+            receive
+                {'DOWN', ReqId, process, _Pid, _Reason} ->
+                    {error, riak_kv_fast_put_server_crashed};
+                {ReqId, Response} ->
+                    erlang:demonitor(ReqId, [flush]),
+                    Response
+            after Timeout ->
+                gen_server:cast(Worker, {cancel, ReqId}),
+                receive
+                    {ReqId, Response} ->
+                        Response
+                end
+            end;
+        Error ->
+            Error
     end.
 
 %%%===================================================================
@@ -171,16 +176,15 @@ handle_info({ReqId, {ts_reply, Reply, Type}}, State) ->
                         {PrimaryOkays + 1, FallbackOkays, Errors};
                     {ok, fallback} ->
                         {PrimaryOkays, FallbackOkays + 1, Errors};
-                    {{error, Reason}, primary} ->
-                        {PrimaryOkays, FallbackOkays, [{error, {primary, Reason}} | Errors]};
-                    {{error, Reason}, fallback} ->
-                        {PrimaryOkays, FallbackOkays, [{error, {fallback, Reason}} | Errors]}
+                    {{error, Reason}, _} ->
+                        {PrimaryOkays, FallbackOkays, [Reason | Errors]}
                 end,
-            case enough(W, PW, NVal, PrimaryOkays1, FallbackOkays1, Errors1) of
-                {true, Response} ->
+            % TODO use riak_kv_put_core here instead
+            case enough(W, PW, NVal, PrimaryOkays1 + FallbackOkays1, PrimaryOkays1, length(Errors1)) of
+                true ->
                     {_, NewState} = erase_request_record(ReqId, State),
-                    reply(From, ReqId, Response);
-                {false, _} ->
+                    reply(From, ReqId, response(W, PW, NVal, PrimaryOkays1 + FallbackOkays1, PrimaryOkays1, Errors1, length(Errors)));
+                false ->
                     NewRec = Rec#rec{
                         primary_okays = PrimaryOkays1,
                         fallback_okays = FallbackOkays1,
@@ -190,8 +194,7 @@ handle_info({ReqId, {ts_reply, Reply, Type}}, State) ->
             end,
             {noreply, NewState}
     end;
-handle_info(Msg, State) ->
-    lager:error("Unexpected message sent to ~p: ~p", [?MODULE, Msg]),
+handle_info(_Msg, State) ->
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -206,6 +209,30 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+validate_options(NVal, Preflist, Options, BucketProps) ->
+    PW = get_rw_value(pw, BucketProps, NVal, Options),
+    W = case get_rw_value(dw, BucketProps, NVal, Options) of
+            error   -> get_rw_value(w, BucketProps, NVal, Options);
+            DW      -> erlang:max(DW, get_rw_value(w, BucketProps, NVal, Options))
+        end,
+    NumPrimaries = length([x || {_, primary} <- Preflist]),
+    NumVnodes = length(Preflist),
+    MinVnodes = lists:max([1, W, PW]),
+    if
+        PW =:= error ->
+            {error, pw_val_violation};
+        W =:= error ->
+            {error, w_val_violation};
+        (W > NVal) or (PW > NVal) ->
+            {error, {n_val_violation, NVal}};
+        PW > NumPrimaries ->
+            {error, {pw_val_unsatisfied, PW, NumPrimaries}};
+        NumVnodes < MinVnodes ->
+            {error, {insufficient_vnodes, NumVnodes, need, MinVnodes}};
+        true ->
+            {ok, W, PW}
+    end.
 
 send_vnodes([], Proxies, _Bucket, _Key, _EncodedVal, _ReqId) ->
     Proxies;
@@ -229,23 +256,33 @@ get_proxy(Idx, Proxies) ->
     end.
 
 
-enough(W, PW, NVal, NumPrimaryOkays, NumFallbackOkays, Errors) ->
-    case PW of
-        Val when is_integer(Val) andalso Val > 0 ->
-            enough(PW, NumPrimaryOkays, NVal, Errors);
-        _Rubbish ->
-            enough(W, NumPrimaryOkays + NumFallbackOkays, NVal, Errors)
-    end.
+enough(W, PW, _NVal, NumW, _NumPW, _NumErrors)  when W =< NumW, PW =< 0 ->
+    true;
+enough(W, PW, _NVal, NumW, NumPW, _NumErrors)   when W =< NumW, 0 < PW, PW =< NumPW ->
+    true;
+enough(W, PW, NVal, _NumW, _NumPW, NumErrors)   when PW =< 0, (NVal - NumErrors) < W ->
+    true;
+enough(_W, PW, NVal, _NumW, _NumPW, NumErrors)  when 0 < PW, (NVal - NumErrors) < PW ->
+    true;
+enough(_W, _PW, _NVal, _NumW, _NumPW, _NumErrors) ->
+    false.
 
-enough(Threshold, Okays, TotalPossible, Errors) ->
-    case Threshold =< Okays of
-        true -> {true, ok};
-        false ->
-            NumErrors = length(Errors),
-            case (TotalPossible - NumErrors) < Threshold of
-                true -> {true, {error, too_many_fails}};
-                false -> {false, noreply}
-            end
+response(W, PW, _NVal, NumW, _NumPW, _Errors, _NumErrors)   when W =< NumW, PW =< 0 ->
+    ok;
+response(W, PW, _NVal, NumW, NumPW, _Errors, _NumErrors)    when W =< NumW, 0 < PW, PW =< NumPW ->
+    ok;
+response(W, PW, NVal, NumW, _NumPW, Errors, NumErrors)      when PW =< 0, (NVal - NumErrors) < W ->
+    overload_trumps(Errors, {error, {w_val_unsatisfied, W, NumW}});
+response(_W, PW, NVal, _NumW, NumPW, Errors, NumErrors)     when 0 < PW, (NVal - NumErrors) < PW ->
+    overload_trumps(Errors, {error, {pw_val_unsatisfied, PW, NumPW}}).
+
+
+overload_trumps(Errors, Default) ->
+    case lists:member({error, overload}, Errors) of
+        true ->
+            {error, overload};
+        _->
+            Default
     end.
 
 reply(From, ReqId, Term) ->
@@ -259,7 +296,7 @@ get_rw_value(Key, BucketProps, N, Options) ->
         BucketProps, N
     ).
 
-%% See riak_kv_ensemble_router:random for justification
+
 random(N) ->
     erlang:phash2(erlang:statistics(io), N) + 1.
 
