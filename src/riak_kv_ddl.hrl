@@ -20,20 +20,19 @@
 %%
 %% -------------------------------------------------------------------
 
-%% TODO these types will be improved as the timeseries work progresses
--type riak_field() :: any().
--type field_type() :: binary | int | float | timeseries | boolean | any.
-%% TODO fix up type definitions etc, etc
-%% -type colocation() :: any().
-
 -record(riak_field, {
-	  name     :: binary(),
-	  position :: binary(),
-	  type     :: field_type()
+	  name     = <<>>  :: list(),
+	  position         :: pos_integer(),
+	  type             :: field_type(),
+	  optional = false :: boolean()
 	 }).
+
+-type field_type()         :: simple_field_type() | complex_field_type().
+-type simple_field_type()  :: binary | integer | float | timestamp | boolean | set.
+-type complex_field_type() :: {map, [#riak_field{}]} | any.
 
 -record(ddl, {
 	  bucket          :: binary(),
-	  fields     = [] :: [riak_field()],
+	  fields     = [] :: [#riak_field{}],
 	  colocation      :: colocation()
 	 }).
