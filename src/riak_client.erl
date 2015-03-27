@@ -332,15 +332,17 @@ put(RObj, W, DW, Timeout, Options, {?MODULE, [_Node, _ClientId]}=THIS) ->
 maybe_normal_put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
     case fast_path(Node, riak_object:bucket(RObj)) of
         true ->
-            fast_put(RObj, Options, THIS);
+            fast_put(Node, RObj, Options, THIS);
         false ->
             normal_put(RObj, Options, THIS);
         {error,_}=Err ->
             Err
     end.
 
-fast_put(RObj, Options, {?MODULE, [_Node, _ClientId]}) ->
-    riak_kv_fp_worker:put(RObj, Options).
+fast_put(Node, RObj, Options, {?MODULE, [_Node, _ClientId]}) when Node =:= node()->
+    riak_kv_fp_worker:put(RObj, Options);
+fast_put(Node, RObj, Options, {?MODULE, [_Node, _ClientId]}) ->
+    rpc:call(Node, riak_kv_fp_worker, put, [RObj, Options]).
 
 %% @spec delete(riak_object:bucket(), riak_object:key(), riak_client()) ->
 %%        ok |
@@ -887,7 +889,7 @@ consistent_object(Node, Bucket) ->
 fast_path(Node, Bucket) when Node =:= node() ->
     riak_kv_util:get_fast_path(Bucket);
 fast_path(Node, Bucket) ->
-    case rpc:call(Node, riak_kv_util, fast_path_object, [Bucket]) of
+    case rpc:call(Node, riak_kv_util, get_fast_path, [Bucket]) of
         {badrpc, {'EXIT', {undef, _}}} ->
             false;
         {badrpc, _}=Err ->
