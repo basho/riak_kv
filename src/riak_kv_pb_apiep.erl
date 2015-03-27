@@ -73,8 +73,8 @@ encode(Message) ->
 
 
 process(#rpbapiepreq{bkey = undefined} = Req, State) ->
-    process(Req#rpbapiepreq{bkey = #rpbbucketkey{bucket = undefined,
-                                                 key = undefined}},
+    process(Req#rpbapiepreq{bkey = #rpbbucketkey{bucket = <<>>,
+                                                 key = <<>>}},
             State);
 process(#rpbapiepreq{bkey = #rpbbucketkey{bucket = Bucket, key = Key},
                      proto = Proto,
