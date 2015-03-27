@@ -29,6 +29,8 @@
     terminate/2,
     code_change/3]).
 
+-include_lib("riak_kv_vnode.hrl").
+
 -record(rec, {
     w, pw, n_val,
     primary_okays = 0,
@@ -157,7 +159,7 @@ handle_cast({cancel, ReqId}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({ReqId, {ts_reply, Reply, Type}}, State) ->
+handle_info({ReqId, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}}, State) ->
     case get_request_record(ReqId, State) of
         undefined->
             % the entry was likely purged by the timeout mechanism
@@ -238,7 +240,7 @@ send_vnodes([], Proxies, _Bucket, _Key, _EncodedVal, _ReqId) ->
     Proxies;
 send_vnodes([{{Idx, Node}, Type}|Rest], Proxies, Bucket, Key, EncodedVal, ReqId) ->
     {Proxy, NewProxies} = get_proxy(Idx, Proxies),
-    Message = {ts_put, Bucket, Key, EncodedVal, Type},
+    Message = ?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_val=EncodedVal, type=Type},
     gen_fsm:send_event(
         {Proxy, Node},
         riak_core_vnode_master:make_request(Message, {raw, ReqId, self()}, Idx)

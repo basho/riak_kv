@@ -512,8 +512,8 @@ handle_overload_command(?KV_GET_REQ{req_id=ReqID}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqID});
 handle_overload_command(?KV_VNODE_STATUS_REQ{}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {vnode_status, Idx, [{error, overload}]});
-handle_overload_command({ts_put, _Bucket, _Key, _EncodedVal, Type}, Sender, _Idx) ->
-    riak_core_vnode:reply(Sender, {ts_reply, {error, overload}, Type});
+handle_overload_command(?KV_W1C_PUT_REQ{type=Type}, Sender, _Idx) ->
+    riak_core_vnode:reply(Sender, ?KV_W1C_PUT_REPLY{reply={error, overload}, type=Type});
 handle_overload_command(_, Sender, _) ->
     riak_core_vnode:reply(Sender, {error, mailbox_overload}).
 
@@ -819,16 +819,17 @@ handle_command({get_index_entries, Opts},
             {reply, ignore, State}
     end;
 
-handle_command({ts_put, Bucket, Key, EncodedVal, Type}, From, State=#state{mod=Mod, async_put=AsyncPut, modstate=ModState}) ->
+handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_val=EncodedVal, type=Type},
+        From, State=#state{mod=Mod, async_put=AsyncPut, modstate=ModState}) ->
     case AsyncPut of
         true ->
-            Context = {ts_reply, From, Type, Bucket, Key, EncodedVal},
+            Context = {w1c_async_put, From, Type, Bucket, Key, EncodedVal},
             {_Reply, ModState2} =
                 case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
                     {ok, UpModState} ->
                         {ok, UpModState};
                     {error, Reason, UpModState} ->
-                        riak_core_vnode:reply(From, {ts_reply, {error, Reason}, Type}),
+                        riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}),
                         {{error, Reason}, UpModState}
                 end;
         false ->
@@ -840,7 +841,7 @@ handle_command({ts_put, Bucket, Key, EncodedVal, Type}, From, State=#state{mod=M
                     {error, Reason, UpModState} ->
                         {{error, Reason}, UpModState}
                 end,
-            riak_core_vnode:reply(From, {ts_reply, Reply, Type})
+            riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type})
     end,
     {noreply, State#state{modstate=ModState2}}.
 
@@ -1042,8 +1043,8 @@ handle_handoff_command(Req=?KV_PUT_REQ{}, Sender, State) ->
             end
     end;
 
-handle_handoff_command({ts_put, Bucket, Key, EncodedVal, Type}, Sender, State) ->
-    {noreply, NewState} = handle_command({ts_put, Bucket, Key, EncodedVal, Type}, Sender, State),
+handle_handoff_command(?KV_W1C_PUT_REQ{}=Request, Sender, State) ->
+    {noreply, NewState} = handle_command(Request, Sender, State),
     {forward, NewState};
 
 %% Handle all unspecified cases locally without forwarding
@@ -1158,9 +1159,9 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
 
-handle_info({{ts_reply, From, Type, Bucket, Key, EncodedVal} = _Context, Reply}, State) ->
+handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal} = _Context, Reply}, State) ->
     update_hashtree(Bucket, Key, EncodedVal, State),
-    riak_core_vnode:reply(From, {ts_reply, Reply, Type}),
+    riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
     {ok, State};
 
 handle_info({set_concurrency_limit, Lock, Limit}, State) ->
