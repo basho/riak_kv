@@ -30,9 +30,10 @@
     code_change/3]).
 
 -record(rec, {
-    w, pw,
-    primaries = 0,
-    total = 0,
+    w, pw, n_val,
+    primary_okays = 0,
+    fallback_okays = 0,
+    errors = [],
     from
 }).
 
@@ -88,17 +89,17 @@ put(RObj, Options) ->
     R = random(size(Workers)),
     Worker = element(R, workers()),
     ReqId = erlang:monitor(process, Worker),
-    % ActorId = erlang:phash2(ReqId),
-    % RObj2 = riak_object:set_vclock(RObj, vclock:fresh(ActorId, 1)),
     RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
     RObj3 = riak_object:update_last_modified(RObj2),
     RObj4 = riak_object:apply_updates(RObj3),
     Bucket = riak_object:bucket(RObj4),
     Key = riak_object:key(RObj4),
-    % EncodedVal = riak_object:to_binary(v0, RObj4),
     EncodedVal = riak_object:to_binary(v1, RObj4),
-    gen_server:cast(Worker,
-        {put, Bucket, Key, EncodedVal, ReqId, Preflist, #rec{w=W, pw=PW, from=self()}}
+    gen_server:cast(
+        Worker,
+        {put, Bucket, Key, EncodedVal, ReqId, Preflist,
+            #rec{w=W, pw=PW, n_val=NVal, from=self()}
+        }
     ),
     Timeout = case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
         N when is_integer(N) andalso N > 0 ->
@@ -151,38 +152,44 @@ handle_cast({cancel, ReqId}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({ReqId, {ts_reply, ok, Type}}, State) ->
+handle_info({ReqId, {ts_reply, Reply, Type}}, State) ->
     case get_request_record(ReqId, State) of
         undefined->
             % the entry was likely purged by the timeout mechanism
             {noreply, State};
         Rec ->
             #rec{
-                pw = PW, w = W,
-                primaries = Primaries, total = Total,
+                pw = PW, w = W, n_val=NVal,
+                primary_okays = PrimaryOkays,
+                fallback_okays = FallbackOkays,
+                errors = Errors,
                 from = From
             } = Rec,
-            NewPrimaries = case Type of
-                               primary ->
-                                   Primaries + 1;
-                               fallback ->
-                                   Primaries
-                           end,
-            NewTotal = Total + 1,
-            NewState = case enoughReplies(W, PW, NewPrimaries, NewTotal) of
-                true ->
-                    {_, S} = erase_request_record(ReqId, State),
-                    reply(From, ReqId, ok),
-                    S;
-                false ->
-                    {_, S} = store_request_record(ReqId, Rec#rec{primaries = NewPrimaries, total = NewTotal}, State),
-                    S
+            {PrimaryOkays1, FallbackOkays1, Errors1} =
+                case {Reply, Type} of
+                    {ok, primary} ->
+                        {PrimaryOkays + 1, FallbackOkays, Errors};
+                    {ok, fallback} ->
+                        {PrimaryOkays, FallbackOkays + 1, Errors};
+                    {{error, Reason}, primary} ->
+                        {PrimaryOkays, FallbackOkays, [{error, {primary, Reason}} | Errors]};
+                    {{error, Reason}, fallback} ->
+                        {PrimaryOkays, FallbackOkays, [{error, {fallback, Reason}} | Errors]}
+                end,
+            case enough(W, PW, NVal, PrimaryOkays1, FallbackOkays1, Errors1) of
+                {true, Response} ->
+                    {_, NewState} = erase_request_record(ReqId, State),
+                    reply(From, ReqId, Response);
+                {false, _} ->
+                    NewRec = Rec#rec{
+                        primary_okays = PrimaryOkays1,
+                        fallback_okays = FallbackOkays1,
+                        errors = Errors1
+                    },
+                    {_, NewState} = store_request_record(ReqId, NewRec, State)
             end,
             {noreply, NewState}
     end;
-handle_info({_ReqId, {ts_reply, {error, overload}, _Type}}, State) ->
-    % consume overload messages.  May result in client's timing out
-    {noreply, State};
 handle_info(Msg, State) ->
     lager:error("Unexpected message sent to ~p: ~p", [?MODULE, Msg]),
     {noreply, State}.
@@ -222,14 +229,24 @@ get_proxy(Idx, Proxies) ->
     end.
 
 
-enoughReplies(W, PW, Primaries, TotalReplies) ->
-    EnoughTotal = W =< TotalReplies,
-    EnoughPrimaries = case PW of
-                          error ->  true;
-                          0     ->  true;
-                          _ ->      PW =< Primaries
-                      end,
-    EnoughTotal andalso EnoughPrimaries.
+enough(W, PW, NVal, NumPrimaryOkays, NumFallbackOkays, Errors) ->
+    case PW of
+        Val when is_integer(Val) andalso Val > 0 ->
+            enough(PW, NumPrimaryOkays, NVal, Errors);
+        _Rubbish ->
+            enough(W, NumPrimaryOkays + NumFallbackOkays, NVal, Errors)
+    end.
+
+enough(Threshold, Okays, TotalPossible, Errors) ->
+    case Threshold =< Okays of
+        true -> {true, ok};
+        false ->
+            NumErrors = length(Errors),
+            case (TotalPossible - NumErrors) < Threshold of
+                true -> {true, {error, too_many_fails}};
+                false -> {false, noreply}
+            end
+    end.
 
 reply(From, ReqId, Term) ->
     From ! {ReqId, Term}.

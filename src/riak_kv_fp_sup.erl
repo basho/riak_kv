@@ -40,9 +40,7 @@ start_link() ->
     {ok, {SupFlags :: {RestartStrategy :: supervisor:strategy(),
         MaxR :: non_neg_integer(), MaxT :: non_neg_integer()},
         [ChildSpec :: supervisor:child_spec()]
-    }} |
-    ignore |
-    {error, Reason :: term()}).
+    }}).
 init([]) ->
     Workers = riak_kv_fp_worker:workers(),
     Children = [
