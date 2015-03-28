@@ -58,11 +58,7 @@ init() ->
 decode(Code, Bin) when Code == 90 ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
-        #rpbapiepreq{bkey = undefined,
-                     proto = P,
-                     force_update = ForceUpdate} ->
-            {ok, Msg, {"riak_kv.apiep", {{<<>>, <<>>}, P, ForceUpdate}}};
-        #rpbapiepreq{bkey = #rpbbucketkey{bucket = B, key = K},
+        #rpbapiepreq{bucket = B, key = K,
                      proto = P,
                      force_update = ForceUpdate} ->
             {ok, Msg, {"riak_kv.apiep", {{B, K}, P, ForceUpdate}}}
@@ -72,11 +68,7 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 
-process(#rpbapiepreq{bkey = undefined} = Req, State) ->
-    process(Req#rpbapiepreq{bkey = #rpbbucketkey{bucket = <<>>,
-                                                 key = <<>>}},
-            State);
-process(#rpbapiepreq{bkey = #rpbbucketkey{bucket = Bucket, key = Key},
+process(#rpbapiepreq{bucket = Bucket, key = Key,
                      proto = Proto,
                      force_update = ForceUpdate}, State) ->
     EPList = riak_kv_apiep:get_entrypoints(
