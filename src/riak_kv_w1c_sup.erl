@@ -16,7 +16,7 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
--module(riak_kv_fp_sup).
+-module(riak_kv_w1c_sup).
 
 -behaviour(supervisor).
 
@@ -42,11 +42,11 @@ start_link() ->
         [ChildSpec :: supervisor:child_spec()]
     }}).
 init([]) ->
-    Workers = riak_kv_fp_worker:workers(),
+    Workers = riak_kv_w1c_worker:workers(),
     Children = [
         {
-            Name, {riak_kv_fp_worker, start_link, [Name]},
-            permanent, 5000, worker, [riak_kv_fp_worker]
+            Name, {riak_kv_w1c_worker, start_link, [Name]},
+            permanent, 5000, worker, [riak_kv_w1c_worker]
         } || Name <- tuple_to_list(Workers)],
     {ok, {{one_for_one, 10, 10}, Children}}.
 

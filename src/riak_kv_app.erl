@@ -103,7 +103,7 @@ start(_Type, _StartArgs) ->
        {rw, quorum},
        {basic_quorum, false},
        {notfound_ok, true},
-       {fast_path, false}
+       {write_once, false}
    ]),
 
     %% Check the storage backend

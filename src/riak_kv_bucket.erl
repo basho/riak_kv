@@ -115,9 +115,9 @@ validate_create_bucket_type(BucketProps) ->
         %% type is explicitly or implicitly not intended to be consistent
         Consistent when Consistent =:= false orelse
                         Consistent =:= undefined ->
-            {Unvalidated, Valid, Errors} = case get_boolean(fast_path, BucketProps) of
+            {Unvalidated, Valid, Errors} = case get_boolean(write_once, BucketProps) of
                 true ->
-                    validate_create_fp_props(BucketProps);
+                    validate_create_w1c_props(BucketProps);
                 _ ->
                     validate_create_dt_props(BucketProps)
             end;
@@ -138,7 +138,7 @@ validate_update_bucket_type(Existing, New) ->
     {merge(Good, Existing), Bad}.
 
 %% @private pick the validation function depending on existing type.
--spec validate_update_type(Type :: consistent | datatype | fast_path | default,
+-spec validate_update_type(Type :: consistent | datatype | write_once | default,
                            Existing :: props(),
                            New :: props()) ->
                                   {Unvalidated :: props(),
@@ -146,9 +146,9 @@ validate_update_bucket_type(Existing, New) ->
                                    Errors :: props()}.
 validate_update_type(consistent, Existing, New) ->
     validate_update_consistent_props(Existing, New);
-validate_update_type(fast_path, _Existing, New) ->
-    NewFastPath = proplists:get_value(fast_path, New),
-    validate_update_fp_props(NewFastPath, New);
+validate_update_type(write_once, _Existing, New) ->
+    NewFastPath = proplists:get_value(write_once, New),
+    validate_update_w1c_props(NewFastPath, New);
 validate_update_type(datatype, Existing, New) ->
     validate_update_dt_props(Existing, New);
 validate_update_type(default, _Existing, New) ->
@@ -156,18 +156,18 @@ validate_update_type(default, _Existing, New) ->
 
 %% @private figure out what `type' the existing bucket is.  NOTE: only
 %% call with validated props from existing buckets!!
--spec type(props()) -> consistent | default | datatype | fast_path.
+-spec type(props()) -> consistent | default | datatype | write_once.
 type(Props) ->
     type(proplists:get_value(consistent, Props, false),
-         proplists:get_value(fast_path, Props, false),
+         proplists:get_value(write_once, Props, false),
          proplists:get_value(datatype, Props, false)).
 
 -spec type(boolean(), boolean(), atom()) ->
-                  consistent | default | datatype | fast_path.
+                  consistent | default | datatype | write_once.
 type(_Consistent=true, _FastPath, _DataType) ->
     consistent;
 type(_Consistent, _FastPath=true, _DataType) ->
-    fast_path;
+    write_once;
 type(_Consistent=false, _FastPath=false, _DataType=false) ->
     default;
 type(_, _, _) ->
@@ -208,10 +208,10 @@ validate([{BoolProp, MaybeBool}|T], ValidProps, Errors) when is_atom(BoolProp), 
         Bool ->
             validate(T, [{BoolProp, Bool}|ValidProps], Errors)
     end;
-validate([{fast_path, Value}|T], ValidProps, Errors) ->
+validate([{write_once, Value}|T], ValidProps, Errors) ->
     case Value of
-        false -> validate(T, [{fast_path, false} | ValidProps], Errors);
-        _ -> validate(T, ValidProps, [{fast_path, "cannot update fast_path property"}|Errors])
+        false -> validate(T, [{write_once, false} | ValidProps], Errors);
+        _ -> validate(T, ValidProps, [{write_once, "cannot update write_once property"}|Errors])
     end;
 validate([{consistent, Value}|T], ValidProps, Errors) ->
     case Value of
@@ -304,8 +304,8 @@ coerce_bool(_) ->
 %% value to true? Well, the user maybe type "fals" so lets be careful.
 -spec validate_create_consistent_props(any(), props()) -> {props(), props(), errors()}.
 validate_create_consistent_props(true, New) ->
-    % fast_path and consistent can't both be true
-    case get_boolean(fast_path, New) of
+    % write_once and consistent can't both be true
+    case get_boolean(write_once, New) of
         true ->
             {lists:keydelete(consistent, 1, New), [], [{consistent, "Fast path buckets must be not be consistent=true"}]};
         _ ->
@@ -372,19 +372,19 @@ validate_create_dt_props(Unvalidated0, Valid, Invalid) ->
     end.
 
 
-%% @private Riak fast_path support requires a bucket type where
-%% fast_path is set to true.  This function validates that when
-%% fast_path is set to true, other properties are consistent.
-%% See validate_create_fp_props/3 for an enumeration of these rules.
--spec validate_create_fp_props(props()) -> {props(), props(), errors()}.
-validate_create_fp_props(New) ->
-    validate_create_fp_props(proplists:get_value(fast_path, New), New).
+%% @private Riak write_once support requires a bucket type where
+%% write_once is set to true.  This function validates that when
+%% write_once is set to true, other properties are consistent.
+%% See validate_create_w1c_props/3 for an enumeration of these rules.
+-spec validate_create_w1c_props(props()) -> {props(), props(), errors()}.
+validate_create_w1c_props(New) ->
+    validate_create_w1c_props(proplists:get_value(write_once, New), New).
 
-%% @private validate the fast_path, if present
--spec validate_create_fp_props(true, props()) -> {props(), props(), errors()}.
-validate_create_fp_props(true, New) ->
-    Unvalidated = lists:keydelete(fast_path, 1, New),
-    validate_fp_props(Unvalidated, [{fast_path, true}], []).
+%% @private validate the write_once, if present
+-spec validate_create_w1c_props(true, props()) -> {props(), props(), errors()}.
+validate_create_w1c_props(true, New) ->
+    Unvalidated = lists:keydelete(write_once, 1, New),
+    validate_w1c_props(Unvalidated, [{write_once, true}], []).
 
 %% @private checks that a bucket that is not a special immutable type
 %% is not attempting to become one.
@@ -393,12 +393,12 @@ validate_create_fp_props(true, New) ->
                                             Valid :: props(),
                                             Error :: props()}.
 validate_update_default_props(New) ->
-    %% Only called if not already a consistent, datatype, fast_path
+    %% Only called if not already a consistent, datatype, write_once
     %% bucket. Check that none of those are being set to `true'/valid
     %% datatypes.
     ensure_not_present(New, [], [], [{datatype, "`datatype` must not be defined."},
                                      {consistent, true, "Fast Path buckets must not be consistent=true"},
-                                     {fast_path, true, "Cannot set existing bucket type to `fast_path`"}]).
+                                     {write_once, true, "Cannot set existing bucket type to `write_once`"}]).
 
 %% @private validate that strongly-consistent types and buckets do not
 %% have their n_val changed, nor become eventually consistent
@@ -456,27 +456,27 @@ validate_update_dt_props(New, Valid, Invalid) ->
 end.
 
 %% @private
-%% precondition: Existing contains {fast_path, true}
--spec validate_update_fp_props(boolean() | undefined, props()) ->
+%% precondition: Existing contains {write_once, true}
+-spec validate_update_w1c_props(boolean() | undefined, props()) ->
                                       {props(), props(), errors()}.
-validate_update_fp_props(NewFP, New) ->
-    Unvalidated = lists:keydelete(fast_path, 1, New),
+validate_update_w1c_props(NewFP, New) ->
+    Unvalidated = lists:keydelete(write_once, 1, New),
     case NewFP of
         Unchanged when Unchanged == true orelse Unchanged == undefined ->
-            validate_fp_props(Unvalidated, [{fast_path, true}], []);
+            validate_w1c_props(Unvalidated, [{write_once, true}], []);
         _ ->
-            validate_fp_props(Unvalidated, [],
-                              [{fast_path, "Cannot modify fast_path property once set to true"}])
+            validate_w1c_props(Unvalidated, [],
+                              [{write_once, "Cannot modify write_once property once set to true"}])
     end.
 
-%% @private validate the boolean property, if `fast_path' was present.
-%% precondition: fast_path is not an entry in Unvalidated
-%%               fastpath is an entry in Valid
-%% The following rules apply when fastpath is true:
+%% @private validate the boolean property, if `write_once' was present.
+%% precondition: write_once is not an entry in Unvalidated
+%%               write_once is an entry in Valid
+%% The following rules apply when write_once is true:
 %%   - datatype may not be defined
 %%   - consistent may not be true
--spec validate_fp_props(props(), props(), errors()) -> {props(), props(), errors()}.
-validate_fp_props(Unvalidated, Valid, Errors) ->
+-spec validate_w1c_props(props(), props(), errors()) -> {props(), props(), errors()}.
+validate_w1c_props(Unvalidated, Valid, Errors) ->
     ensure_not_present(Unvalidated, Valid, Errors,
                        [{consistent, true, "Fast Path buckets must not be consistent=true"},
                         {datatype, "Fast Path buckets must not have datatype defined"}
@@ -599,7 +599,7 @@ test_merges(TestTimeSecs) ->
 %%     allow_mult must remain true
 %%   * the consistent property cannot change and neither can the n_val if
 %%     the type is consistent
-%%   * the fast_path property cannot change
+%%   * the write_once property cannot change
 prop_immutable() ->
     ?FORALL(Args, gen_args(no_default_buckets),
             begin
@@ -638,14 +638,14 @@ prop_create_valid() ->
                        io:format("Existing ~p~n", [Existing]),
                        io:format("New ~p~n", [New]),
                        io:format("Result ~p~n", [Result]),
-                       io:format("{has_datatype, valid_datatype, allow_mult, has_fp, valid_fp, has_consistent, valid_consistent}~n"),
+                       io:format("{has_datatype, valid_datatype, allow_mult, has_w1c, valid_w1c, has_consistent, valid_consistent}~n"),
                        io:format("{~p,~p,~p,~p,~p,~p,~p}~n~n",
                                  [has_datatype(New), valid_datatype(New), allow_mult(New),
-                                     has_fp(New), valid_fp(New),
+                                     has_w1c(New), valid_w1c(New),
                                      has_consistent(New), valid_consistent(New)])
                    end,
-                   collect(with_title("{has_datatype, valid_datatype, allow_mult, has_fp, valid_fp, has_consistent, valid_consistent}"),
-                           {has_datatype(New), valid_datatype(New), allow_mult(New), has_fp(New), valid_fp(New),
+                   collect(with_title("{has_datatype, valid_datatype, allow_mult, has_w1c, valid_w1c, has_consistent, valid_consistent}"),
+                           {has_datatype(New), valid_datatype(New), allow_mult(New), has_w1c(New), valid_w1c(New),
                            has_consistent(New), valid_consistent(New)},
                            only_create_if_valid(Result, New)))
             end).
@@ -657,9 +657,9 @@ prop_merges() ->
                                        gen_existing(),
                                        gen_new(update)},
             begin
-                %% ensure default buckets are not marked consistent or fast_path since that is invalid
+                %% ensure default buckets are not marked consistent or write_once since that is invalid
                 Existing = case default_bucket(Bucket) of
-                               true -> lists:keydelete(fast_path, 1, lists:keydelete(consistent, 1, Existing0));
+                               true -> lists:keydelete(write_once, 1, lists:keydelete(consistent, 1, Existing0));
                                false -> Existing0
                            end,
                 Result={Good, Bad} = validate(update, Bucket, Existing, New),
@@ -736,7 +736,7 @@ gen_bucket() ->
 
 gen_existing() ->
     Defaults = lists:ukeysort(1, riak_core_bucket_type:defaults()),
-    ?LET(Special, oneof([gen_valid_mult_dt(), gen_valid_fp(), gen_valid_consistent(), []]),
+    ?LET(Special, oneof([gen_valid_mult_dt(), gen_valid_w1c(), gen_valid_consistent(), []]),
          lists:ukeymerge(1, lists:ukeysort(1, Special), Defaults)).
 
 gen_maybe_consistent() ->
@@ -759,7 +759,7 @@ gen_valid_mult_dt(true) ->
 gen_new(update) ->
     ?LET({Mult, Datatype, FastPath, Consistent, NVal},
          {gen_allow_mult(), oneof([[], gen_datatype_property()]),
-          oneof([[], gen_valid_fp()]),
+          oneof([[], gen_valid_w1c()]),
           oneof([[], gen_maybe_bad_consistent()]), oneof([[], [{n_val, choose(1, 10)}]])},
          Mult ++ Datatype ++ FastPath ++ Consistent ++ NVal);
 gen_new(create) ->
@@ -774,7 +774,7 @@ gen_new(create) ->
                  {5, gen_maybe_bad_consistent()},
                  {5, []}]
             ),
-            gen_fp()
+            gen_w1c()
         },
         Defaults ++ Mult ++ DatatypeOrConsistent ++ FastPath).
 
@@ -787,14 +787,14 @@ gen_datatype_property() ->
 gen_datatype() ->
     ?LET(Datamod, oneof(?V2_TOP_LEVEL_TYPES), riak_kv_crdt:from_mod(Datamod)).
 
-%gen_maybe_bad_fp() ->
-%    oneof([gen_valid_fp(), {fast_path, rubbish}]).
+%gen_maybe_bad_w1c() ->
+%    oneof([gen_valid_w1c(), {write_once, rubbish}]).
 
-gen_fp() ->
-    ?LET(FastPath, frequency([{9, bool()}, {1, binary()}]), [{fast_path, FastPath}]).
+gen_w1c() ->
+    ?LET(FastPath, frequency([{9, bool()}, {1, binary()}]), [{write_once, FastPath}]).
 
-gen_valid_fp() ->
-    ?LET(FastPath, bool(), [{fast_path, FastPath}]).
+gen_valid_w1c() ->
+    ?LET(FastPath, bool(), [{write_once, FastPath}]).
 
 %% helpers
 
@@ -816,10 +816,10 @@ immutable(update, New, Existing, {_Good, Bad}) ->
             NewAM = proplists:get_value(allow_mult, New),
             ExistingDT = proplists:get_value(datatype, Existing),
             immutable_dt(NewDT, NewAM, ExistingDT, Bad);
-        fast_path ->
-            OldFP = proplists:get_value(fast_path, Existing),
-            NewFP = proplists:get_value(fast_path, New),
-            immutable_fast_path(OldFP, NewFP, New, Bad);
+        write_once ->
+            OldFP = proplists:get_value(write_once, Existing),
+            NewFP = proplists:get_value(write_once, New),
+            immutable_write_once(OldFP, NewFP, New, Bad);
         default ->
             %% doesn't mean valid props, just that there is no
             %% immutability constraint.
@@ -862,13 +862,13 @@ immutable_consistent(_Consistent, _OldN, _NewN, Bad) ->
     has_consistent(Bad) andalso has_n_val(Bad).
 
 %% @private only called when the existing bucket type is immutable All
-%% that has to be true is that the bucket type is still fast_path
-immutable_fast_path(true, New, NewProps, Bad) when New == true orelse New == undefined ->
-    not has_fast_path(Bad) andalso undefined_props([datatype, {consistent, true}], NewProps, Bad);
-immutable_fast_path(true, _New, NewProps, Bad) ->
-    has_fast_path(Bad) andalso undefined_props([datatype, {consistent, true}], NewProps, Bad);
-immutable_fast_path(_Existing, true, _NewProps, Bad) ->
-    has_fast_path(Bad).
+%% that has to be true is that the bucket type is still write_once
+immutable_write_once(true, New, NewProps, Bad) when New == true orelse New == undefined ->
+    not has_write_once(Bad) andalso undefined_props([datatype, {consistent, true}], NewProps, Bad);
+immutable_write_once(true, _New, NewProps, Bad) ->
+    has_write_once(Bad) andalso undefined_props([datatype, {consistent, true}], NewProps, Bad);
+immutable_write_once(_Existing, true, _NewProps, Bad) ->
+    has_write_once(Bad).
 
 %% @private every prop in Names that is present in Props, must be in
 %% Errors.
@@ -927,10 +927,10 @@ immutable_dt(_, _, _, Bad) ->
 only_create_if_valid({Good, Bad}, New) ->
     DT = proplists:get_value(datatype, New),
     AM = proplists:get_value(allow_mult, New),
-    FP = get_boolean(fast_path, New),
+    FP = get_boolean(write_once, New),
     CS = proplists:get_value(consistent, New),
     case {DT, AM, FP, CS} of
-        %% fast_path true entails data type undefined and consistent false or undefined
+        %% write_once true entails data type undefined and consistent false or undefined
         {_DataType, _AllowMult, true, _Consistent} ->
             not has_datatype(Good)
                 andalso not is_consistent(Good)
@@ -983,11 +983,11 @@ valid_datatype(Props) ->
     Datatype = proplists:get_value(datatype, Props),
     lists:member(riak_kv_crdt:to_mod(Datatype), ?V2_TOP_LEVEL_TYPES).
 
-has_fp(Props) ->
-    proplists:get_value(fast_path, Props) /= undefined.
+has_w1c(Props) ->
+    proplists:get_value(write_once, Props) /= undefined.
 
-valid_fp(Props) ->
-    case proplists:get_value(fast_path, Props) of
+valid_w1c(Props) ->
+    case proplists:get_value(write_once, Props) of
         true ->
             true;
         false ->
@@ -996,8 +996,8 @@ valid_fp(Props) ->
             false
     end.
 
-is_fp(Props) ->
-    proplists:get_value(fast_path, Props) =:= true.
+is_w1c(Props) ->
+    proplists:get_value(write_once, Props) =:= true.
 
 has_consistent(Props) ->
     proplists:get_value(consistent, Props) /= undefined.
@@ -1024,8 +1024,8 @@ n_val_changed(Existing, New) ->
     proplists:get_value(n_val, Existing) =/= NewN andalso
         NewN =/= undefined.
 
-has_fast_path(Bad) ->
-    proplists:get_value(fast_path, Bad) /= undefined.
+has_write_once(Bad) ->
+    proplists:get_value(write_once, Bad) /= undefined.
 
 default_bucket({<<"default">>, _}) ->
     true;

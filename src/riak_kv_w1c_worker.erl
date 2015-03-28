@@ -16,7 +16,7 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
--module(riak_kv_fp_worker).
+-module(riak_kv_w1c_worker).
 
 -behaviour(gen_server).
 
@@ -55,14 +55,14 @@
 
 workers() ->
     {
-        riak_kv_fp_worker00,
-        riak_kv_fp_worker01,
-        riak_kv_fp_worker02,
-        riak_kv_fp_worker03,
-        riak_kv_fp_worker04,
-        riak_kv_fp_worker05,
-        riak_kv_fp_worker06,
-        riak_kv_fp_worker07
+        riak_kv_w1c_worker00,
+        riak_kv_w1c_worker01,
+        riak_kv_w1c_worker02,
+        riak_kv_w1c_worker03,
+        riak_kv_w1c_worker04,
+        riak_kv_w1c_worker05,
+        riak_kv_w1c_worker06,
+        riak_kv_w1c_worker07
     }.
 
 %% @spec start_link(atom()) -> {ok, pid()} | ignore | {error, term()}
@@ -113,7 +113,7 @@ put(RObj, Options) ->
                       end,
             receive
                 {'DOWN', ReqId, process, _Pid, _Reason} ->
-                    {error, riak_kv_fast_put_server_crashed};
+                    {error, riak_kv_w1c_server_crashed};
                 {ReqId, Response} ->
                     erlang:demonitor(ReqId, [flush]),
                     Response

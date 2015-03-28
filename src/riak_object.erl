@@ -271,9 +271,9 @@ compare_content_dates(C1,C2) ->
 merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
     Bucket = bucket(OldObject),
-    case riak_kv_util:get_fast_path(Bucket) of
+    case riak_kv_util:get_write_once(Bucket) of
         true ->
-            merge_fastpath(OldObject, NewObj1);
+            merge_write_once(OldObject, NewObj1);
         _ ->
             DVV = dvv_enabled(Bucket),
             {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
@@ -285,13 +285,13 @@ merge(OldObject, NewObject) ->
                 updatevalue=undefined}
     end.
 
-%% @doc Special case fastpath merge, in the case where the fast_path property is
+%% @doc Special case write_once merge, in the case where the write_once property is
 %%      set on the bucket (type).  In this case, take the lesser (in lexical order)
 %%      of the SHA1 hash of each object.
 %%
--spec merge_fastpath(riak_object(), riak_object()) -> riak_object().
-merge_fastpath(OldObject, NewObject) ->
-    ok = riak_kv_stat:update(fast_path_merge),
+-spec merge_write_once(riak_object(), riak_object()) -> riak_object().
+merge_write_once(OldObject, NewObject) ->
+    ok = riak_kv_stat:update(write_once_merge),
     case crypto:hash(sha, term_to_binary(OldObject)) =< crypto:hash(sha, term_to_binary(NewObject)) of
         true ->
             OldObject;

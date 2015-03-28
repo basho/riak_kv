@@ -267,8 +267,8 @@ do_update(precommit_fail) ->
     exometer:update([?PFX, ?APP, precommit_fail], 1);
 do_update(postcommit_fail) ->
     exometer:update([?PFX, ?APP, postcommit_fail], 1);
-do_update(fast_path_merge) ->
-    exometer:update([?PFX, ?APP, fast_path_merge], 1);
+do_update(write_once_merge) ->
+    exometer:update([?PFX, ?APP, write_once_merge], 1);
 do_update({fsm_spawned, Type}) when Type =:= gets; Type =:= puts ->
     exometer:update([?PFX, ?APP, node, Type, fsm, active], 1);
 do_update({fsm_exit, Type}) when Type =:= gets; Type =:= puts  ->
@@ -600,7 +600,7 @@ stats() ->
      {mapper_count, counter, [], [{value, executing_mappers}]},
      {precommit_fail, counter, [], [{value, precommit_fail}]},
      {postcommit_fail, counter, [], [{value, postcommit_fail}]},
-     {fast_path_merge, counter, [], [{value, fast_path_merge}]},
+     {write_once_merge, counter, [], [{value, write_once_merge}]},
      {[vnode, backend, leveldb, read_block_error],
       {function, ?MODULE, leveldb_read_block_errors, [], match, value}, [],
       [{value, leveldb_read_block_error}]},
