@@ -147,8 +147,8 @@ validate_update_bucket_type(Existing, New) ->
 validate_update_type(consistent, Existing, New) ->
     validate_update_consistent_props(Existing, New);
 validate_update_type(write_once, _Existing, New) ->
-    NewFastPath = proplists:get_value(write_once, New),
-    validate_update_w1c_props(NewFastPath, New);
+    NewWriteOnce = proplists:get_value(write_once, New),
+    validate_update_w1c_props(NewWriteOnce, New);
 validate_update_type(datatype, Existing, New) ->
     validate_update_dt_props(Existing, New);
 validate_update_type(default, _Existing, New) ->
@@ -164,11 +164,11 @@ type(Props) ->
 
 -spec type(boolean(), boolean(), atom()) ->
                   consistent | default | datatype | write_once.
-type(_Consistent=true, _FastPath, _DataType) ->
+type(_Consistent=true, _WriteOnce, _DataType) ->
     consistent;
-type(_Consistent, _FastPath=true, _DataType) ->
+type(_Consistent, _WriteOnce=true, _DataType) ->
     write_once;
-type(_Consistent=false, _FastPath=false, _DataType=false) ->
+type(_Consistent=false, _WriteOnce=false, _DataType=false) ->
     default;
 type(_, _, _) ->
     datatype.
@@ -307,7 +307,7 @@ validate_create_consistent_props(true, New) ->
     % write_once and consistent can't both be true
     case get_boolean(write_once, New) of
         true ->
-            {lists:keydelete(consistent, 1, New), [], [{consistent, "Fast path buckets must be not be consistent=true"}]};
+            {lists:keydelete(consistent, 1, New), [], [{consistent, "Write once buckets must be not be consistent=true"}]};
         _ ->
             {lists:keydelete(consistent, 1, New), [{consistent, true}], []}
     end;
@@ -397,7 +397,7 @@ validate_update_default_props(New) ->
     %% bucket. Check that none of those are being set to `true'/valid
     %% datatypes.
     ensure_not_present(New, [], [], [{datatype, "`datatype` must not be defined."},
-                                     {consistent, true, "Fast Path buckets must not be consistent=true"},
+                                     {consistent, true, "Write once buckets must not be consistent=true"},
                                      {write_once, true, "Cannot set existing bucket type to `write_once`"}]).
 
 %% @private validate that strongly-consistent types and buckets do not
@@ -478,8 +478,8 @@ validate_update_w1c_props(NewFP, New) ->
 -spec validate_w1c_props(props(), props(), errors()) -> {props(), props(), errors()}.
 validate_w1c_props(Unvalidated, Valid, Errors) ->
     ensure_not_present(Unvalidated, Valid, Errors,
-                       [{consistent, true, "Fast Path buckets must not be consistent=true"},
-                        {datatype, "Fast Path buckets must not have datatype defined"}
+                       [{consistent, true, "Write once buckets must not be consistent=true"},
+                        {datatype, "Write once buckets must not have datatype defined"}
                        ]).
 
 %% @private any property in `InvalidPropsSpec' present in
@@ -757,16 +757,16 @@ gen_valid_mult_dt(true) ->
     ?LET(Datatype, gen_datatype(), [{allow_mult, true}, {datatype, Datatype}]).
 
 gen_new(update) ->
-    ?LET({Mult, Datatype, FastPath, Consistent, NVal},
+    ?LET({Mult, Datatype, WriteOnce, Consistent, NVal},
          {gen_allow_mult(), oneof([[], gen_datatype_property()]),
           oneof([[], gen_valid_w1c()]),
           oneof([[], gen_maybe_bad_consistent()]), oneof([[], [{n_val, choose(1, 10)}]])},
-         Mult ++ Datatype ++ FastPath ++ Consistent ++ NVal);
+         Mult ++ Datatype ++ WriteOnce ++ Consistent ++ NVal);
 gen_new(create) ->
     Defaults0 = riak_core_bucket_type:defaults(),
     Defaults = lists:keydelete(allow_mult, 1, Defaults0),
     ?LET(
-        {Mult, DatatypeOrConsistent, FastPath},
+        {Mult, DatatypeOrConsistent, WriteOnce},
         {
             gen_allow_mult(),
             frequency(
@@ -776,7 +776,7 @@ gen_new(create) ->
             ),
             gen_w1c()
         },
-        Defaults ++ Mult ++ DatatypeOrConsistent ++ FastPath).
+        Defaults ++ Mult ++ DatatypeOrConsistent ++ WriteOnce).
 
 gen_allow_mult() ->
     ?LET(Mult, frequency([{9, bool()}, {1, binary()}]), [{allow_mult, Mult}]).
@@ -791,10 +791,10 @@ gen_datatype() ->
 %    oneof([gen_valid_w1c(), {write_once, rubbish}]).
 
 gen_w1c() ->
-    ?LET(FastPath, frequency([{9, bool()}, {1, binary()}]), [{write_once, FastPath}]).
+    ?LET(WriteOnce, frequency([{9, bool()}, {1, binary()}]), [{write_once, WriteOnce}]).
 
 gen_valid_w1c() ->
-    ?LET(FastPath, bool(), [{write_once, FastPath}]).
+    ?LET(WriteOnce, bool(), [{write_once, WriteOnce}]).
 
 %% helpers
 
@@ -940,12 +940,12 @@ only_create_if_valid({Good, Bad}, New) ->
             ;
         %% if consistent or datatype properties are not defined then properties should be
         %% valid since no other properties generated can be in valid
-        {undefined, _AllowMult, _FastPath, Consistent} when Consistent =:= false orelse
+        {undefined, _AllowMult, _WriteOnce, Consistent} when Consistent =:= false orelse
                                                  Consistent =:= undefined ->
             true;
         %% if datatype is defined, its not a consistent type and allow_mult=true
         %% then the datatype must be valid
-        {Datatype, true, _FastPath,  Consistent} when Consistent =:= false orelse
+        {Datatype, true, _WriteOnce,  Consistent} when Consistent =:= false orelse
                                           Consistent =:= undefined ->
             case lists:member(riak_kv_crdt:to_mod(Datatype), ?V2_TOP_LEVEL_TYPES) of
                 true ->
@@ -956,7 +956,7 @@ only_create_if_valid({Good, Bad}, New) ->
         %% if the datatype is defined, the type is not consistent and allow_mult is false
         %% then allow_mult should be in the Bad list and the datatype may be depending on if it
         %% is valid
-        {Datatype, _, _FastPath,  Consistent} when Consistent =:= false orelse
+        {Datatype, _, _WriteOnce,  Consistent} when Consistent =:= false orelse
                                        Consistent =:= undefined->
             case lists:member(riak_kv_crdt:to_mod(Datatype), ?V2_TOP_LEVEL_TYPES) of
                 true ->
