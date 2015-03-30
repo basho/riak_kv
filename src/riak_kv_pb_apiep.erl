@@ -91,5 +91,6 @@ process_stream(_, _, State) ->
     {ignore, State}.
 
 %% @private
+-spec unixtime({non_neg_integer(), integer(), integer()}) -> non_neg_integer().
 unixtime({NowMega, NowSec, _}) ->
     NowMega * 1000 * 1000 + NowSec.
