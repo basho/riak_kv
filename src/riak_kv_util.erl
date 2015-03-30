@@ -44,7 +44,7 @@
          exact_puts_active/0,
          gets_active/0,
          consistent_object/1,
-         get_fast_path/1,
+         get_write_once/1,
          overload_reply/1,
          get_backend_config/3,
          is_modfun_allowed/2]).
@@ -170,11 +170,11 @@ consistent_object(Bucket) ->
             Err
     end.
 
--spec get_fast_path(binary() | {binary(),binary()}) -> true | false | {error,_}.
-get_fast_path(Bucket) ->
+-spec get_write_once(binary() | {binary(),binary()}) -> true | false | {error,_}.
+get_write_once(Bucket) ->
     case riak_core_bucket:get_bucket(Bucket) of
         Props when is_list(Props) ->
-            lists:member({fast_path, true}, Props);
+            lists:member({write_once, true}, Props);
         {error, _}=Err ->
             Err
     end.

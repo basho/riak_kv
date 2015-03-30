@@ -81,7 +81,8 @@
 -define(EMPTY_VTAG_BIN, <<"e">>).
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
--export([increment_vclock/2, increment_vclock/3]).
+-export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
+-export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([hash/1, approximate_size/2]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
@@ -270,9 +271,9 @@ compare_content_dates(C1,C2) ->
 merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
     Bucket = bucket(OldObject),
-    case riak_kv_util:get_fast_path(Bucket) of
+    case riak_kv_util:get_write_once(Bucket) of
         true ->
-            merge_fastpath(OldObject, NewObj1);
+            merge_write_once(OldObject, NewObj1);
         _ ->
             DVV = dvv_enabled(Bucket),
             {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
@@ -284,13 +285,13 @@ merge(OldObject, NewObject) ->
                 updatevalue=undefined}
     end.
 
-%% @doc Special case fastpath merge, in the case where the fast_path property is
+%% @doc Special case write_once merge, in the case where the write_once property is
 %%      set on the bucket (type).  In this case, take the lesser (in lexical order)
 %%      of the SHA1 hash of each object.
 %%
--spec merge_fastpath(riak_object(), riak_object()) -> riak_object().
-merge_fastpath(OldObject, NewObject) ->
-    ok = riak_kv_stat:update(fast_path_merge),
+-spec merge_write_once(riak_object(), riak_object()) -> riak_object().
+merge_write_once(OldObject, NewObject) ->
+    ok = riak_kv_stat:update(write_once_merge),
     case crypto:hash(sha, term_to_binary(OldObject)) =< crypto:hash(sha, term_to_binary(NewObject)) of
         true ->
             OldObject;
@@ -666,6 +667,29 @@ increment_vclock(Object=#r_object{bucket=B}, ClientId, Timestamp) ->
     %% a frontier object, then there must only ever be a single value
     %% when we increment, so add the dot here.
     assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled(B)).
+
+%% @doc Prune vclock
+-spec prune_vclock(riak_object(), vclock:timestamp(), [proplists:property()]) ->
+                          riak_object().
+prune_vclock(Obj=#r_object{vclock=VC}, PruneTime, BucketProps) ->
+    VC2 = vclock:prune(VC, PruneTime, BucketProps),
+    Obj#r_object{vclock=VC2}.
+
+%% @doc Does the `riak_object' descend the provided `vclock'?
+-spec vclock_descends(riak_object(), vclock:vclock()) -> boolean().
+vclock_descends(#r_object{vclock=ObjVC}, VC) ->
+    vclock:descends(ObjVC, VC).
+
+%% @doc get the list of all actors that have touched this object.
+-spec all_actors(riak_object()) -> [binary()] | [].
+all_actors(#r_object{vclock=VC}) ->
+    vclock:all_nodes(VC).
+
+%%$ @doc get the counter for the given actor, 0 if not present
+-spec actor_counter(vclock:vclock_node(), riak_object()) ->
+                           non_neg_integer().
+actor_counter(Actor, #r_object{vclock=VC}) ->
+    vclock:get_counter(Actor, VC).
 
 %% @private assign the dot to the value only if DVV is enabled. Only
 %% call with a valid dot. Only assign dot when there is a single value

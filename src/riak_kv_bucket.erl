@@ -115,7 +115,12 @@ validate_create_bucket_type(BucketProps) ->
         %% type is explicitly or implicitly not intended to be consistent
         Consistent when Consistent =:= false orelse
                         Consistent =:= undefined ->
-            {Unvalidated, Valid, Errors} = validate_create_dt_props(BucketProps);
+            {Unvalidated, Valid, Errors} = case get_boolean(write_once, BucketProps) of
+                true ->
+                    validate_create_w1c_props(BucketProps);
+                _ ->
+                    validate_create_dt_props(BucketProps)
+            end;
         %% type may be consistent (the value may not be valid)
         Consistent ->
             {Unvalidated, Valid, Errors} = validate_create_consistent_props(Consistent, BucketProps)
@@ -123,19 +128,50 @@ validate_create_bucket_type(BucketProps) ->
     validate(Unvalidated, Valid, Errors).
 
 %% @private update phase of bucket type. Merges properties from
-%% existing with valid new properties
+%% existing with valid new properties. Existing can be assumed valid,
+%% since they were validated by the `create' phase.
 -spec validate_update_bucket_type(props(), props()) -> {props(), errors()}.
 validate_update_bucket_type(Existing, New) ->
-    case proplists:get_value(consistent, Existing) of
-        %% type is explicitly or implicitly not already consistent
-        Consistent when Consistent =:= false orelse
-                        Consistent =:= undefined ->
-            {Unvalidated, Valid, Errors} = validate_update_dt_props(Existing, New);
-        _Consistent ->
-            {Unvalidated, Valid, Errors} = validate_update_consistent_props(Existing, New)
-    end,
+    Type = type(Existing),
+    {Unvalidated, Valid, Errors} = validate_update_type(Type, Existing, New),
     {Good, Bad} = validate(Unvalidated, Valid, Errors),
     {merge(Good, Existing), Bad}.
+
+%% @private pick the validation function depending on existing type.
+-spec validate_update_type(Type :: consistent | datatype | write_once | default,
+                           Existing :: props(),
+                           New :: props()) ->
+                                  {Unvalidated :: props(),
+                                   Valid  :: props(),
+                                   Errors :: props()}.
+validate_update_type(consistent, Existing, New) ->
+    validate_update_consistent_props(Existing, New);
+validate_update_type(write_once, _Existing, New) ->
+    NewFastPath = proplists:get_value(write_once, New),
+    validate_update_w1c_props(NewFastPath, New);
+validate_update_type(datatype, Existing, New) ->
+    validate_update_dt_props(Existing, New);
+validate_update_type(default, _Existing, New) ->
+    validate_update_default_props(New).
+
+%% @private figure out what `type' the existing bucket is.  NOTE: only
+%% call with validated props from existing buckets!!
+-spec type(props()) -> consistent | default | datatype | write_once.
+type(Props) ->
+    type(proplists:get_value(consistent, Props, false),
+         proplists:get_value(write_once, Props, false),
+         proplists:get_value(datatype, Props, false)).
+
+-spec type(boolean(), boolean(), atom()) ->
+                  consistent | default | datatype | write_once.
+type(_Consistent=true, _FastPath, _DataType) ->
+    consistent;
+type(_Consistent, _FastPath=true, _DataType) ->
+    write_once;
+type(_Consistent=false, _FastPath=false, _DataType=false) ->
+    default;
+type(_, _, _) ->
+    datatype.
 
 %% @private just delegates, but I added it to illustrate the many
 %% possible type of validation.
@@ -148,8 +184,8 @@ validate_update_typed_bucket(Existing, New) ->
 %% wild!
 -spec validate_default_bucket(props(), props()) -> {props(), errors()}.
 validate_default_bucket(Existing, New) ->
-    Unvalidated = merge(New, Existing),
-    validate(Unvalidated, [], []).
+    {Good, Bad} = validate(New, [], []),
+    {merge(Good, Existing), Bad}.
 
 %% @private properties in new overwrite those in old
 -spec merge(props(), props()) -> props().
@@ -165,13 +201,17 @@ validate([{BoolProp, MaybeBool}|T], ValidProps, Errors) when is_atom(BoolProp), 
                                                              orelse BoolProp =:= basic_quorum
                                                              orelse BoolProp =:= last_write_wins
                                                              orelse BoolProp =:= notfound_ok
-                                                             orelse BoolProp =:= stat_tracked
-                                                             orelse BoolProp =:= fast_path ->
+                                                             orelse BoolProp =:= stat_tracked ->
     case coerce_bool(MaybeBool) of
         error ->
             validate(T, ValidProps, [{BoolProp, not_boolean}|Errors]);
         Bool ->
             validate(T, [{BoolProp, Bool}|ValidProps], Errors)
+    end;
+validate([{write_once, Value}|T], ValidProps, Errors) ->
+    case Value of
+        false -> validate(T, [{write_once, false} | ValidProps], Errors);
+        _ -> validate(T, ValidProps, [{write_once, "cannot update write_once property"}|Errors])
     end;
 validate([{consistent, Value}|T], ValidProps, Errors) ->
     case Value of
@@ -264,7 +304,13 @@ coerce_bool(_) ->
 %% value to true? Well, the user maybe type "fals" so lets be careful.
 -spec validate_create_consistent_props(any(), props()) -> {props(), props(), errors()}.
 validate_create_consistent_props(true, New) ->
-    {lists:keydelete(consistent, 1, New), [{consistent, true}], []};
+    % write_once and consistent can't both be true
+    case get_boolean(write_once, New) of
+        true ->
+            {lists:keydelete(consistent, 1, New), [], [{consistent, "Fast path buckets must be not be consistent=true"}]};
+        _ ->
+            {lists:keydelete(consistent, 1, New), [{consistent, true}], []}
+    end;
 validate_create_consistent_props(false, New) ->
     {lists:keydelete(consistent, 1, New), [{consistent, false}], []};
 validate_create_consistent_props(undefined, New) ->
@@ -325,6 +371,35 @@ validate_create_dt_props(Unvalidated0, Valid, Invalid) ->
             {Unvalidated, Valid, [{allow_mult, Err} | Invalid]}
     end.
 
+
+%% @private Riak write_once support requires a bucket type where
+%% write_once is set to true.  This function validates that when
+%% write_once is set to true, other properties are consistent.
+%% See validate_create_w1c_props/3 for an enumeration of these rules.
+-spec validate_create_w1c_props(props()) -> {props(), props(), errors()}.
+validate_create_w1c_props(New) ->
+    validate_create_w1c_props(proplists:get_value(write_once, New), New).
+
+%% @private validate the write_once, if present
+-spec validate_create_w1c_props(true, props()) -> {props(), props(), errors()}.
+validate_create_w1c_props(true, New) ->
+    Unvalidated = lists:keydelete(write_once, 1, New),
+    validate_w1c_props(Unvalidated, [{write_once, true}], []).
+
+%% @private checks that a bucket that is not a special immutable type
+%% is not attempting to become one.
+-spec validate_update_default_props(New :: props()) ->
+                                           {Unvalidated :: props(),
+                                            Valid :: props(),
+                                            Error :: props()}.
+validate_update_default_props(New) ->
+    %% Only called if not already a consistent, datatype, write_once
+    %% bucket. Check that none of those are being set to `true'/valid
+    %% datatypes.
+    ensure_not_present(New, [], [], [{datatype, "`datatype` must not be defined."},
+                                     {consistent, true, "Fast Path buckets must not be consistent=true"},
+                                     {write_once, true, "Cannot set existing bucket type to `write_once`"}]).
+
 %% @private validate that strongly-consistent types and buckets do not
 %% have their n_val changed, nor become eventually consistent
 -spec validate_update_consistent_props(props(), props()) -> {props(), props(), errors()}.
@@ -353,18 +428,12 @@ validate_update_consistent_props(Existing, New) ->
             {Unvalidated, [], [{n_val, NErr}, {consistent, CErr}]}
     end.
 
-
-
 %% @private somewhat duplicates the create path, but easier to read
 %% this way, and chars are free
 -spec validate_update_dt_props(props(), props()) -> {props(), props(), errors()}.
 validate_update_dt_props(Existing, New0) ->
     New = lists:keydelete(datatype, 1, New0),
     case {proplists:get_value(datatype, Existing), proplists:get_value(datatype, New0)} of
-        {undefined, undefined} ->
-            {New, [], []};
-        {undefined, _Datatype} ->
-            {New, [], [{datatype, "Cannot add datatype to existing bucket"}]};
         {_Datatype, undefined} ->
             validate_update_dt_props(New, [] , []);
         {Datatype, Datatype} ->
@@ -386,6 +455,64 @@ validate_update_dt_props(New, Valid, Invalid) ->
             {Unvalidated, Valid, [{allow_mult, "Cannot change datatype bucket from allow_mult=true"} | Invalid]}
 end.
 
+%% @private
+%% precondition: Existing contains {write_once, true}
+-spec validate_update_w1c_props(boolean() | undefined, props()) ->
+                                      {props(), props(), errors()}.
+validate_update_w1c_props(NewFP, New) ->
+    Unvalidated = lists:keydelete(write_once, 1, New),
+    case NewFP of
+        Unchanged when Unchanged == true orelse Unchanged == undefined ->
+            validate_w1c_props(Unvalidated, [{write_once, true}], []);
+        _ ->
+            validate_w1c_props(Unvalidated, [],
+                              [{write_once, "Cannot modify write_once property once set to true"}])
+    end.
+
+%% @private validate the boolean property, if `write_once' was present.
+%% precondition: write_once is not an entry in Unvalidated
+%%               write_once is an entry in Valid
+%% The following rules apply when write_once is true:
+%%   - datatype may not be defined
+%%   - consistent may not be true
+-spec validate_w1c_props(props(), props(), errors()) -> {props(), props(), errors()}.
+validate_w1c_props(Unvalidated, Valid, Errors) ->
+    ensure_not_present(Unvalidated, Valid, Errors,
+                       [{consistent, true, "Fast Path buckets must not be consistent=true"},
+                        {datatype, "Fast Path buckets must not have datatype defined"}
+                       ]).
+
+%% @private any property in `InvalidPropsSpec' present in
+%% `Unvalidated' will be added to `Errors'. Returned is the as yet
+%% unvalidated remainder properties from `Unvalidated', the properties
+%% from `InvalidPropsSpec' that were present and not invalid added to
+%% `Valid' and the accumulated errors added to `Errors'.
+-spec ensure_not_present(props(), props(), props(), [{atom(), term(), string()} |
+                                                     {atom(), term()}]) ->
+                                {props(), props(), props()}.
+ensure_not_present(Unvalidated, Valid, Errors, InvalidPropsSpec) ->
+    lists:foldl(fun({Key, NotAllowed, ErrorMessage}, {U, V, E}) ->
+                        case lists:keytake(Key, 1, U) of
+                            false ->
+                                {U, V, E};
+                            {value, {Key, Val}, U2} ->
+                                Val2 = coerce_bool(Val),
+                                if Val2 == NotAllowed ->
+                                        {U2, V, [{Key, ErrorMessage} | E]};
+                                   true ->
+                                        {U, V, E}
+                                end
+                        end;
+                   ({Key, ErrorMessage}, {U, V, E}) ->
+                        case lists:keytake(Key, 1, U) of
+                            false -> {U, V, E};
+                            {value, {Key, _Val}, U2} ->
+                                {U2, V, [{Key, ErrorMessage} | E]}
+                        end
+                end,
+                {Unvalidated, Valid, Errors},
+                InvalidPropsSpec).
+
 %% @private just grab the allow_mult value if it exists
 -spec allow_mult(props()) -> boolean() | 'undefined' | 'error'.
 allow_mult(Props) ->
@@ -395,6 +522,17 @@ allow_mult(Props) ->
         MaybeBool ->
             coerce_bool(MaybeBool)
     end.
+
+%% @private coerce the value under key to be a boolean, if defined; undefined, otherwise.
+-spec get_boolean(PropName::atom(), props()) -> boolean() | 'undefined' | 'error'.
+get_boolean(Key, Props) ->
+    case proplists:get_value(Key, Props) of
+        undefined ->
+            undefined;
+        MaybeBool ->
+            coerce_bool(MaybeBool)
+    end.
+
 
 %%
 %% EUNIT tests...
@@ -428,19 +566,19 @@ coerce_bool_test_ () ->
 -define(TEST_TIME_SECS, 10).
 
 immutable_test_() ->
-    {timeout, ?TEST_TIME_SECS+5, [?_assert(test_immutable() =:= true)]}.
+   {timeout, ?TEST_TIME_SECS+5, [?_assert(test_immutable() =:= true)]}.
 
 valid_test_() ->
-    {timeout, ?TEST_TIME_SECS+5, [?_assert(test_create() =:= true)]}.
+   {timeout, ?TEST_TIME_SECS+5, [?_assert(test_create() =:= true)]}.
 
 merges_props_test_() ->
     {timeout, ?TEST_TIME_SECS+5, [?_assert(test_merges() =:= true)]}.
 
 test_immutable() ->
-    test_immutable(?TEST_TIME_SECS).
+   test_immutable(?TEST_TIME_SECS).
 
 test_immutable(TestTimeSecs) ->
-        eqc:quickcheck(eqc:testing_time(TestTimeSecs, ?QC_OUT(prop_immutable()))).
+       eqc:quickcheck(eqc:testing_time(TestTimeSecs, ?QC_OUT(prop_immutable()))).
 
 test_create() ->
     test_create(?TEST_TIME_SECS).
@@ -461,6 +599,7 @@ test_merges(TestTimeSecs) ->
 %%     allow_mult must remain true
 %%   * the consistent property cannot change and neither can the n_val if
 %%     the type is consistent
+%%   * the write_once property cannot change
 prop_immutable() ->
     ?FORALL(Args, gen_args(no_default_buckets),
             begin
@@ -499,103 +638,76 @@ prop_create_valid() ->
                        io:format("Existing ~p~n", [Existing]),
                        io:format("New ~p~n", [New]),
                        io:format("Result ~p~n", [Result]),
-                       io:format("{has_datatype, valid_datatype, allow_mult, has_consistent, valid_consistent}~n"),
-                       io:format("{~p,~p,~p,~p,~p}~n~n",
-                                 [has_datatype(New), valid_datatype(New), allow_mult(New), has_consistent(New), valid_consistent(New)])
+                       io:format("{has_datatype, valid_datatype, allow_mult, has_w1c, valid_w1c, has_consistent, valid_consistent}~n"),
+                       io:format("{~p,~p,~p,~p,~p,~p,~p}~n~n",
+                                 [has_datatype(New), valid_datatype(New), allow_mult(New),
+                                     has_w1c(New), valid_w1c(New),
+                                     has_consistent(New), valid_consistent(New)])
                    end,
-                   collect(with_title("{has_datatype, valid_datatype, allow_mult, has_consistent, valid_consistent}"),
-                           {has_datatype(New), valid_datatype(New), allow_mult(New), has_consistent(New), valid_consistent(New)},
+                   collect(with_title("{has_datatype, valid_datatype, allow_mult, has_w1c, valid_w1c, has_consistent, valid_consistent}"),
+                           {has_datatype(New), valid_datatype(New), allow_mult(New), has_w1c(New), valid_w1c(New),
+                           has_consistent(New), valid_consistent(New)},
                            only_create_if_valid(Result, New)))
             end).
 
-%% As of 2.0pre? validate/4 must merge the new and existing props,
-%% verify that.
+%% As of 2.* validate/4 must merge the new and existing props, verify
+%% that. Not sure if this test isn't just a tautology. Reviewer?
 prop_merges() ->
     ?FORALL({Bucket, Existing0, New}, {gen_bucket(update, any),
-                                      gen_existing(), gen_new(update)},
+                                       gen_existing(),
+                                       gen_new(update)},
             begin
-                %% ensure default buckets are not marked consistent since that is invalid
+                %% ensure default buckets are not marked consistent or write_once since that is invalid
                 Existing = case default_bucket(Bucket) of
-                               true -> lists:keydelete(consistent, 1, Existing0);
+                               true -> lists:keydelete(write_once, 1, lists:keydelete(consistent, 1, Existing0));
                                false -> Existing0
                            end,
-                Result={Good, _Bad} = validate(update, Bucket, Existing, New),
+                Result={Good, Bad} = validate(update, Bucket, Existing, New),
 
-                DefaultBucket = default_bucket(Bucket),
-                HasAllowMult = has_allow_mult(New),
-                AllowMult = allow_mult(New),
-                HasDatatype = has_datatype(Existing),
-                NValChanged = n_val_changed(Existing, New),
-                IsConsistent = is_consistent(Existing),
-                NewConsistent = proplists:get_value(consistent, New),
-                Expected = case {DefaultBucket, HasAllowMult, AllowMult, HasDatatype,
-                                 NValChanged, IsConsistent, NewConsistent} of
-                               %% default bucket, attempted to change consistent to invalid value
-                               %% allow_mult may be invalid too
-                               {true,_, Mult, _, _, false, notvalid} ->
-                                   maybe_bad_mult(Mult, merge(lists:keydelete(consistent, 1, New), Existing));
-                               %% default bucket, attempted to change consistent to true
-                               %% allow_mult may be invalid too
-                               {true, _, Mult, _, _, false, true} ->
-                                   maybe_bad_mult(Mult, merge(lists:keydelete(consistent, 1, New), Existing));
-                               %% all valid for default type buckets
-                               {true, _, Mult,  _, _, _, _} when Mult /= error ->
-                                   merge(New, Existing);
-                               %% default bucket: allow mult is invalid
-                               {true, true, _, _, _, _, _} ->
-                                   maybe_bad_mult(error, merge(New, Existing));
+                %% All we really want to check is that every key in
+                %% Good replaces the same key in Existing, right?
+                %% Remove `Bad' from the inputs to validate.
+                {NoBadExisting, OnlyGoodNew} = lists:foldl(fun({Name, _Err}, {Old, Neu}) ->
+                                                                   {value, V, Neu2} = lists:keytake(Name, 1, Neu),
+                                                                   %% only
+                                                                   %% want
+                                                                   %% to
+                                                                   %% remove
+                                                                   %% the
+                                                                   %% exact
+                                                                   %% bad
+                                                                   %% value
+                                                                   %% from
+                                                                   %% existing,
+                                                                   %% not
+                                                                   %% the
+                                                                   %% bad
+                                                                   %% key!
+                                                                   {lists:delete(V, Old),
+                                                                    Neu2}
+                                                           end,
+                                                           {Existing, New},
+                                                           Bad),
 
-                               %% typed bucket, allow mult changed but not consistent or data type
-                               {false, true, Mult,  false, _, false, _} when Mult /= error ->
-                                   %% the n_val is the only valid change we generate in this case. can't change
-                                   %% data type or consistent peroperty
-                                   NVal = proplists:get_value(n_val, New, proplists:get_value(n_val, Existing)),
-                                   merge([proplists:lookup(allow_mult, New), {n_val, NVal}], Existing);
-                               %% typed bucket, allow_mult change is invalid. n_val has changed. not a datatype or
-                               %% consistent
-                               {false, true, error, false, true, false, _} ->
-                                   merge([proplists:lookup(n_val, New)], Existing);
-                               %% typed bucket, allow_mult change is invalid and n_val hasn't changed
-                               {false, true, error, false, false, false, _} ->
-                                   Existing;
-                               %% typed bucket, strongly-consistent, both n_val and consistent value are invalid changes
-                               {false, _, Mult,_,true,true,false} ->
-                                   maybe_bad_mult(Mult,
-                                                  merge(lists:keydelete(consistent, 1, lists:keydelete(n_val, 1, New)), Existing));
-                               %% typed bucket, strongly-consistent, both n_val and consistent value are invalid changes
-                               {false, _, Mult,_,true,true,notvalid} ->
-                                   maybe_bad_mult(Mult,
-                                                  merge(lists:keydelete(consistent, 1, lists:keydelete(n_val, 1, New)), Existing));
-                               %% typed bucket, strongly-consistent, n_val change is invalid
-                               {false, _, Mult,_,true,true,_} ->
-                                   maybe_bad_mult(Mult, merge(lists:keydelete(n_val, 1, New), Existing));
-                               %% typed bucket, strongly-consistent, consistent value change is invalid
-                               {false, _, Mult, _, _, true, false} ->
-                                   maybe_bad_mult(Mult, merge(lists:keydelete(consistent, 1, New), Existing));
-                               %% typed bucket, strongly-consistent, consistent value change is invalid
-                               {false, _, Mult, _, _, true, notvalid} ->
-                                   maybe_bad_mult(Mult, merge(lists:keydelete(consistent, 1, New), Existing));
-                               %% typed bucket, strongly-consistent, all good (except maybe allow_mult)
-                               {false, _, Mult, _, _, true, _} ->
-                                   maybe_bad_mult(Mult, merge(New, Existing));
-                               %% typed bucket, strongly-consistent, all good (except maybe allow_mult)
-                               {false, true, _Mult, true,_, _, _} ->
-                                   NVal = proplists:get_value(n_val, New, proplists:get_value(n_val, Existing)),
-                                   merge([{n_val, NVal}], Existing);
-                               %% typed bucket, bucket not strongly consistent or a data type, all valid
-                               {false,_,_,_,_,false,_} ->
-                                   merge(New, Existing)
-                           end,
-
+                %% What's left are the good ones from `New'. Replace
+                %% their keys in `Existing'. `Expected' is the input
+                %% set, minus the `Bad' properties, and plus the
+                %% `Good' ones. Compare that to output props `from
+                %% validate/4' to verify the merge happens as
+                %% expected.
+                Expected  = lists:ukeymerge(1, lists:ukeysort(1, OnlyGoodNew),
+                                            lists:ukeysort(1, NoBadExisting)),
                 ?WHENFAIL(
                    begin
                        io:format("Bucket ~p~n", [Bucket]),
                        io:format("Existing ~p~n", [lists:sort(Existing)]),
                        io:format("New ~p~n", [New]),
                        io:format("Result ~p~n", [Result]),
+                       io:format("Expected ~p~n", [lists:sort(Expected)]),
                        io:format("Diff ~p~n", [sets:to_list(sets:subtract(sets:from_list(Expected), sets:from_list(Good)))])
                    end,
-                   sets:is_subset(sets:from_list(Expected), sets:from_list(Good)))
+                   lists:sort(Expected) == lists:sort(Good)
+                  )
             end).
 
 %% Generators
@@ -623,10 +735,9 @@ gen_bucket() ->
     oneof([{<<"default">>, binary(20)}, binary(20)]).
 
 gen_existing() ->
-    Defaults0 = riak_core_bucket_type:defaults(),
-    Defaults = lists:keydelete(allow_mult, 1, Defaults0),
-    ?LET({MultDT, Consistent}, {gen_valid_mult_dt(), gen_maybe_consistent()},
-         Defaults ++ MultDT ++ Consistent).
+    Defaults = lists:ukeysort(1, riak_core_bucket_type:defaults()),
+    ?LET(Special, oneof([gen_valid_mult_dt(), gen_valid_w1c(), gen_valid_consistent(), []]),
+         lists:ukeymerge(1, lists:ukeysort(1, Special), Defaults)).
 
 gen_maybe_consistent() ->
     oneof([[], gen_valid_consistent()]).
@@ -646,17 +757,26 @@ gen_valid_mult_dt(true) ->
     ?LET(Datatype, gen_datatype(), [{allow_mult, true}, {datatype, Datatype}]).
 
 gen_new(update) ->
-    ?LET({Mult, Datatype, Consistent, NVal},
+    ?LET({Mult, Datatype, FastPath, Consistent, NVal},
          {gen_allow_mult(), oneof([[], gen_datatype_property()]),
+          oneof([[], gen_valid_w1c()]),
           oneof([[], gen_maybe_bad_consistent()]), oneof([[], [{n_val, choose(1, 10)}]])},
-         Mult ++ Datatype ++ Consistent ++ NVal);
+         Mult ++ Datatype ++ FastPath ++ Consistent ++ NVal);
 gen_new(create) ->
     Defaults0 = riak_core_bucket_type:defaults(),
     Defaults = lists:keydelete(allow_mult, 1, Defaults0),
-    ?LET({Mult, DatatypeOrConsistent}, {gen_allow_mult(), frequency([{5, gen_datatype_property()},
-                                                                     {5, gen_maybe_bad_consistent()},
-                                                                     {5, []}])},
-         Defaults ++ Mult ++ DatatypeOrConsistent).
+    ?LET(
+        {Mult, DatatypeOrConsistent, FastPath},
+        {
+            gen_allow_mult(),
+            frequency(
+                [{5, gen_datatype_property()},
+                 {5, gen_maybe_bad_consistent()},
+                 {5, []}]
+            ),
+            gen_w1c()
+        },
+        Defaults ++ Mult ++ DatatypeOrConsistent ++ FastPath).
 
 gen_allow_mult() ->
     ?LET(Mult, frequency([{9, bool()}, {1, binary()}]), [{allow_mult, Mult}]).
@@ -666,25 +786,45 @@ gen_datatype_property() ->
 
 gen_datatype() ->
     ?LET(Datamod, oneof(?V2_TOP_LEVEL_TYPES), riak_kv_crdt:from_mod(Datamod)).
+
+%gen_maybe_bad_w1c() ->
+%    oneof([gen_valid_w1c(), {write_once, rubbish}]).
+
+gen_w1c() ->
+    ?LET(FastPath, frequency([{9, bool()}, {1, binary()}]), [{write_once, FastPath}]).
+
+gen_valid_w1c() ->
+    ?LET(FastPath, bool(), [{write_once, FastPath}]).
+
 %% helpers
 
+gen_string_bool() ->
+    oneof(["true", "false"]).
+
+-spec immutable(Phase :: create | update,
+                New :: props(),
+                Existing :: props(),
+                Result :: {props(), errors()}) -> boolean().
 immutable(create, _,  _, _) ->
     true;
 immutable(_, _New, undefined, _) ->
     true;
 immutable(update, New, Existing, {_Good, Bad}) ->
-    case proplists:get_value(consistent, Existing) of
-        Consistent when Consistent =:= false orelse
-                        Consistent =:= undefined ->
-            %% not an existing consistent type (or bucket) so validate it
-            %% as a datatype (immutable_dt also covers the case where it was
-            %% not a datatype, yes i know this is kind of wierd when you read the
-            %% test, sorry...)
+    case type(Existing)  of
+        datatype ->
             NewDT = proplists:get_value(datatype, New),
             NewAM = proplists:get_value(allow_mult, New),
             ExistingDT = proplists:get_value(datatype, Existing),
             immutable_dt(NewDT, NewAM, ExistingDT, Bad);
-        true ->
+        write_once ->
+            OldFP = proplists:get_value(write_once, Existing),
+            NewFP = proplists:get_value(write_once, New),
+            immutable_write_once(OldFP, NewFP, New, Bad);
+        default ->
+            %% doesn't mean valid props, just that there is no
+            %% immutability constraint.
+            true;
+        consistent ->
             %% existing type (or bucket) is consistent
             immutable_consistent(New, Existing, Bad)
     end.
@@ -721,14 +861,31 @@ immutable_consistent(_Consistent, OldN, NewN, Bad) when OldN =:= NewN orelse
 immutable_consistent(_Consistent, _OldN, _NewN, Bad) ->
     has_consistent(Bad) andalso has_n_val(Bad).
 
+%% @private only called when the existing bucket type is immutable All
+%% that has to be true is that the bucket type is still write_once
+immutable_write_once(true, New, NewProps, Bad) when New == true orelse New == undefined ->
+    not has_write_once(Bad) andalso undefined_props([datatype, {consistent, true}], NewProps, Bad);
+immutable_write_once(true, _New, NewProps, Bad) ->
+    has_write_once(Bad) andalso undefined_props([datatype, {consistent, true}], NewProps, Bad);
+immutable_write_once(_Existing, true, _NewProps, Bad) ->
+    has_write_once(Bad).
+
+%% @private every prop in Names that is present in Props, must be in
+%% Errors.
+undefined_props(Names, Props, Errors) ->
+    lists:all(fun({Name, Value}) ->
+                      (Value /= proplists:get_value(Name, Props)) orelse
+                          lists:keymember(Name, 1, Errors);
+                 (Name) ->
+                      (not lists:keymember(Name, 1, Props)) orelse
+                          lists:keymember(Name, 1, Errors)
+              end,
+              Names).
 
 %% If data type and allow mult and are in New they must match what is in existing
 %% or be in Bad
-immutable_dt(undefined, undefined, _Meh1, _Bad) ->
+immutable_dt(_NewDT=undefined, _NewAllowMult=undefined, _ExistingDT, _Bad) ->
     %% datatype and allow_mult are not being modified, so its valid
-    true;
-immutable_dt(undefined, _, undefined, _Bad) ->
-    %% data type not in new or existing, so its valid
     true;
 immutable_dt(_Datatype, undefined, _Datatype, _Bad) ->
     %% data types from new and existing match and allow mult not modified, valid
@@ -751,7 +908,7 @@ immutable_dt(_Datatype, false, undefined, Bad) ->
 immutable_dt(_Datatype, false, _Datatype, Bad) ->
     %% attempt to set allow_mult to false when data type set is invalid, datatype not modified
     has_allow_mult(Bad);
-immutable_dt(undefined, false, _Meh, Bad) ->
+immutable_dt(undefined, false, _Datatype, Bad) ->
     %% data type not modified but exists and allow_mult set to false is invalid
     has_allow_mult(Bad);
 immutable_dt(_Datatype, false, _Datatype2, Bad) ->
@@ -770,16 +927,25 @@ immutable_dt(_, _, _, Bad) ->
 only_create_if_valid({Good, Bad}, New) ->
     DT = proplists:get_value(datatype, New),
     AM = proplists:get_value(allow_mult, New),
+    FP = get_boolean(write_once, New),
     CS = proplists:get_value(consistent, New),
-    case {DT, AM, CS} of
+    case {DT, AM, FP, CS} of
+        %% write_once true entails data type undefined and consistent false or undefined
+        {_DataType, _AllowMult, true, _Consistent} ->
+            not has_datatype(Good)
+                andalso not is_consistent(Good)
+                % NB. (!P v Q) iff P => Q
+                andalso (not has_datatype(New) or has_datatype(Bad))
+                andalso (not is_consistent(New) or has_consistent(Bad))
+            ;
         %% if consistent or datatype properties are not defined then properties should be
         %% valid since no other properties generated can be in valid
-        {undefined, _AllowMult, Consistent} when Consistent =:= false orelse
+        {undefined, _AllowMult, _FastPath, Consistent} when Consistent =:= false orelse
                                                  Consistent =:= undefined ->
             true;
         %% if datatype is defined, its not a consistent type and allow_mult=true
         %% then the datatype must be valid
-        {Datatype, true, Consistent} when Consistent =:= false orelse
+        {Datatype, true, _FastPath,  Consistent} when Consistent =:= false orelse
                                           Consistent =:= undefined ->
             case lists:member(riak_kv_crdt:to_mod(Datatype), ?V2_TOP_LEVEL_TYPES) of
                 true ->
@@ -790,7 +956,7 @@ only_create_if_valid({Good, Bad}, New) ->
         %% if the datatype is defined, the type is not consistent and allow_mult is false
         %% then allow_mult should be in the Bad list and the datatype may be depending on if it
         %% is valid
-        {Datatype, _, Consistent} when Consistent =:= false orelse
+        {Datatype, _, _FastPath,  Consistent} when Consistent =:= false orelse
                                        Consistent =:= undefined->
             case lists:member(riak_kv_crdt:to_mod(Datatype), ?V2_TOP_LEVEL_TYPES) of
                 true ->
@@ -800,10 +966,10 @@ only_create_if_valid({Good, Bad}, New) ->
             end;
         %% the type is consistent, whether it has a datatype or allow_mult set is irrelevant (for now
         %% at least)
-        {_, _, true} ->
+        {_, _, _, true} ->
             has_consistent(Good);
         %% the type was not inconsistent (explicitly or implicitly) but the value is invalid
-        {_, _, _Consistent} ->
+        {_, _, _, _Consistent} ->
             has_consistent(Bad)
     end.
 
@@ -816,6 +982,22 @@ has_allow_mult(Props) ->
 valid_datatype(Props) ->
     Datatype = proplists:get_value(datatype, Props),
     lists:member(riak_kv_crdt:to_mod(Datatype), ?V2_TOP_LEVEL_TYPES).
+
+has_w1c(Props) ->
+    proplists:get_value(write_once, Props) /= undefined.
+
+valid_w1c(Props) ->
+    case proplists:get_value(write_once, Props) of
+        true ->
+            true;
+        false ->
+            true;
+        _ ->
+            false
+    end.
+
+is_w1c(Props) ->
+    proplists:get_value(write_once, Props) =:= true.
 
 has_consistent(Props) ->
     proplists:get_value(consistent, Props) /= undefined.
@@ -841,6 +1023,9 @@ n_val_changed(Existing, New) ->
     NewN = proplists:get_value(n_val, New),
     proplists:get_value(n_val, Existing) =/= NewN andalso
         NewN =/= undefined.
+
+has_write_once(Bad) ->
+    proplists:get_value(write_once, Bad) /= undefined.
 
 default_bucket({<<"default">>, _}) ->
     true;
