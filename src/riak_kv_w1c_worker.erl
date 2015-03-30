@@ -240,7 +240,7 @@ send_vnodes([], Proxies, _Bucket, _Key, _EncodedVal, _ReqId) ->
     Proxies;
 send_vnodes([{{Idx, Node}, Type}|Rest], Proxies, Bucket, Key, EncodedVal, ReqId) ->
     {Proxy, NewProxies} = get_proxy(Idx, Proxies),
-    Message = ?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_val=EncodedVal, type=Type},
+    Message = ?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
     gen_fsm:send_event(
         {Proxy, Node},
         riak_core_vnode_master:make_request(Message, {raw, ReqId, self()}, Idx)
