@@ -111,7 +111,7 @@
                 target :: pid()}).
 
 -record(counter_state, {
-          %% kill switch, if for any reason one wants disable per-key-epochc, then set
+          %% kill switch, if for any reason one wants disable per-key-epoch, then set
           %% [{riak_kv, [{per_key_epoch, false}]}].
           use = true :: boolean(),
           %% The number of new epoch writes co-ordinated by this vnode
