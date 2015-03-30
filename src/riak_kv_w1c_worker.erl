@@ -192,7 +192,7 @@ handle_info({ReqId, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}}, State) ->
                     reply(From, ReqId, response(W, PW, NVal, PrimaryOkays1 + FallbackOkays1, PrimaryOkays1, Errors1, length(Errors))),
                     {_, NewState} = erase_request_record(ReqId, State),
                     Usecs = timer:now_diff(os:timestamp(), StartTS),
-                    riak_kv_stat:update({writeonce_put, Usecs, Size});
+                    riak_kv_stat:update({write_once_put, Usecs, Size});
                 false ->
                     NewRec = Rec#rec{
                         primary_okays = PrimaryOkays1,

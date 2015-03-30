@@ -308,11 +308,11 @@ do_update({consistent_put, _Bucket, Microsecs, ObjSize}) ->
     ok = exometer:update([P, ?APP, consistent, puts], 1),
     ok = exometer:update([P, ?APP, consistent, puts, time], Microsecs),
     create_or_update([P, ?APP, consistent, puts, objsize], ObjSize, histogram);
-do_update({writeonce_put, Microsecs, ObjSize}) ->
+do_update({write_once_put, Microsecs, ObjSize}) ->
     P = ?PFX,
-    ok = exometer:update([P, ?APP, writeonce, puts], 1),
-    ok = exometer:update([P, ?APP, writeonce, puts, time], Microsecs),
-    create_or_update([P, ?APP, writeonce, puts, objsize], ObjSize, histogram).
+    ok = exometer:update([P, ?APP, write_once, puts], 1),
+    ok = exometer:update([P, ?APP, write_once, puts, time], Microsecs),
+    create_or_update([P, ?APP, write_once, puts, objsize], ObjSize, histogram).
 
 
 %% private
@@ -677,18 +677,18 @@ stats() ->
                                                    {95    , consistent_put_objsize_95},
                                                    {99    , consistent_put_objsize_99},
                                                    {max   , consistent_put_objsize_100}]},
-     {[writeonce, puts], spiral, [], [{one, writeonce_puts},
-                                       {count, writeonce_puts_total}]},
-     {[writeonce, puts, time], histogram, [], [{mean  , writeonce_put_time_mean},
-                                                {median, writeonce_put_time_median},
-                                                {95    , writeonce_put_time_95},
-                                                {99    , writeonce_put_time_99},
-                                                {max   , writeonce_put_time_100}]},
-     {[writeonce, puts, objsize], histogram, [], [{mean  , writeonce_put_objsize_mean},
-                                                   {median, writeonce_put_objsize_median},
-                                                   {95    , writeonce_put_objsize_95},
-                                                   {99    , writeonce_put_objsize_99},
-                                                   {max   , writeonce_put_objsize_100}]},
+     {[write_once, puts], spiral, [], [{one, write_once_puts},
+                                       {count, write_once_puts_total}]},
+     {[write_once, puts, time], histogram, [], [{mean  , write_once_put_time_mean},
+                                                {median, write_once_put_time_median},
+                                                {95    , write_once_put_time_95},
+                                                {99    , write_once_put_time_99},
+                                                {max   , write_once_put_time_100}]},
+     {[write_once, puts, objsize], histogram, [], [{mean  , write_once_put_objsize_mean},
+                                                   {median, write_once_put_objsize_median},
+                                                   {95    , write_once_put_objsize_95},
+                                                   {99    , write_once_put_objsize_99},
+                                                   {max   , write_once_put_objsize_100}]},
      {[storage_backend], {function, app_helper, get_env, [riak_kv, storage_backend], match, value},
       [], [{value, storage_backend}]},
      {[ring_stats], {function, riak_kv_stat_bc, ring_stats, [], proplist, [ring_members,
