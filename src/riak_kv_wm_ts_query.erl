@@ -237,7 +237,7 @@ stream_ts_results(State = #stream_state{msg_ref = Ref,
        Timeout ->
             lager:error("Time out for Pid!!"),
             drain_batches(Ref),
-            {["\r\n--", Boundary, "\r\n" 
+            {["\r\n--", Boundary, "\r\n"
               "Content-Type: text/plain\r\n\r\n"
               "ERROR\r\n"
               "Initial request time out time out"
@@ -262,17 +262,17 @@ stream_ts_results(State = #stream_state{msg_ref = Ref,
              fun() -> stream_ts_results(State) end};
         {'DOWN', MonRef, _, _, Info} ->
             lager:warning("TS query producer died ~p", [Info]),
-            {["\r\n--", Boundary, "\r\n", 
+            {["\r\n--", Boundary, "\r\n",
               "Content-Type: text/plain\r\n\r\n",
               "TS query producer died", "\r\n--", Boundary, "--\r\n"],
              done}
     after
        Timeout ->
             lager:error("Time out!!"),
-            {["\r\n--", Boundary, "\r\n", 
+            {["\r\n--", Boundary, "\r\n",
               "Content-Type: text/plain\r\n\r\n",
               "ERROR\r\n"
-              "Batch time out", 
+              "Batch time out",
               "\r\n--", Boundary, "--\r\n"],
              done}
     end.
@@ -297,7 +297,27 @@ parse_batch(<<>>, Bin) ->
 parse_batch(B, Out) ->
     {Key, B1} = eleveldb:parse_string(B),
     {Val, B2} = eleveldb:parse_string(B1),
+    Val2 = case msgpack:unpack(Val, [{format, jsx}]) of
+               {error, _} ->
+                   Val;
+               {ok, KVPairs} ->
+                   lists:foldl(
+                       fun({K, V0}, <<>>) ->
+                            V = typecast(V0),
+                            <<K/binary, "=", V/binary>>;
+                          ({K, V0}, Acc) ->
+                            V = typecast(V0),
+                            <<Acc/binary, ", ", K/binary, "=", V/binary>>
+                       end, <<>>, KVPairs)
+
+           end,
     <<Time:64, _/binary>> = Key,
     TimeStr = integer_to_binary(Time),
-    Out2 = <<Out/binary, TimeStr/binary, " ", Val/binary, "\r\n">>,
+    Out2 = <<Out/binary, TimeStr/binary, " ", Val2/binary, "\r\n">>,
     parse_batch(B2, Out2).
+
+typecast(Val) when is_integer(Val) ->
+    integer_to_binary(Val);
+typecast(Val) ->
+    Val.
+

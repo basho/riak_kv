@@ -175,9 +175,26 @@ append_points(Batch, <<C:8, _/binary>>)
     Batch;
 append_points(Batch, Input) ->
     {TimestampBin, Input1} = parse_timestamp(<<>>, Input),
-    {Val, Input2} = parse_line(Input1),
+    {Val0, Input2} = parse_line(Input1),
+    Val = pack(Val0),
     Batch1 = append_string(Val, <<Batch/binary, TimestampBin/binary>>),
     append_points(Batch1, Input2).
+
+pack(Val) ->
+    KVPairs = binary:split(Val, <<", ">>, [global, trim]),
+    Data = lists:foldl(fun(KVPair, Acc) ->
+                           [K, V0] = binary:split(KVPair, <<"=">>),
+                           V = typecast(V0),
+                           [{K, V} | Acc]
+                       end, [], KVPairs),
+    msgpack:pack(lists:reverse(Data), [{format, jsx}]).
+
+typecast(Val) ->
+    try
+        binary_to_integer(Val)
+    catch _:_ ->
+        Val
+    end.
 
 parse_line(Bin) ->
     parse_line(<<>>, Bin).
