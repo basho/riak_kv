@@ -96,7 +96,7 @@
 -export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 -export([is_robject/1]).
--export([update_last_modified/1]).
+-export([update_last_modified/1, update_last_modified/2]).
 -export([strict_descendant/2]).
 
 %% @doc Constructor for new riak objects.
@@ -1053,6 +1053,11 @@ decode_maybe_binary(<<0, Bin/binary>>) ->
 %% Update X-Riak-VTag and X-Riak-Last-Modified in the object's metadata, if
 %% necessary.
 update_last_modified(RObj) ->
+    update_last_modified(RObj, os:timestamp()).
+
+%% Update X-Riak-VTag and X-Riak-Last-Modified in the object's metadata, if
+%% necessary with an external timestamp passed in.
+update_last_modified(RObj, TS) ->
     MD0 = case dict:find(clean, riak_object:get_update_metadata(RObj)) of
               {ok, true} ->
                   %% There have been no changes to updatemetadata. If we stash the
@@ -1078,9 +1083,8 @@ update_last_modified(RObj) ->
     %% which should serve the same purpose.  It was possible to generate two
     %% objects with the same vclock on 0.14.2 if the same clientid was used in
     %% the same second.  It can be revisited post-1.0.0.
-    Now = os:timestamp(),
-    NewMD = dict:store(?MD_VTAG, riak_kv_util:make_vtag(Now),
-                       dict:store(?MD_LASTMOD, Now, MD0)),
+    NewMD = dict:store(?MD_VTAG, riak_kv_util:make_vtag(TS),
+                       dict:store(?MD_LASTMOD, TS, MD0)),
     riak_object:update_metadata(RObj, NewMD).
 
 %%

@@ -33,6 +33,8 @@
 
 -record(rec, {
     w, pw, n_val,
+    start_ts,
+    size,
     primary_okays = 0,
     fallback_okays = 0,
     errors = [],
@@ -74,6 +76,7 @@ start_link(Name) ->
 %%       {error, timeout} |
 %%       {error, term()}
 put(RObj, Options) ->
+    StartTS = os:timestamp(),
     Bucket = riak_object:bucket(RObj),
     BKey = {Bucket, riak_object:key(RObj)},
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
@@ -102,9 +105,9 @@ put(RObj, Options) ->
             gen_server:cast(
                 Worker,
                 {put, Bucket, Key, EncodedVal, ReqId, Preflist,
-                    #rec{w=W, pw=PW, n_val=NVal, from=self()}
-                }
-            ),
+                 #rec{w=W, pw=PW, n_val=NVal, from=self(),
+                      start_ts=StartTS,
+                      size=size(EncodedVal)}}),
             Timeout = case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
                           N when is_integer(N) andalso N > 0 ->
                               N;
@@ -170,7 +173,9 @@ handle_info({ReqId, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}}, State) ->
                 primary_okays = PrimaryOkays,
                 fallback_okays = FallbackOkays,
                 errors = Errors,
-                from = From
+                from = From,
+                start_ts = StartTS,
+                size = Size
             } = Rec,
             {PrimaryOkays1, FallbackOkays1, Errors1} =
                 case {Reply, Type} of
@@ -184,8 +189,10 @@ handle_info({ReqId, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}}, State) ->
             % TODO use riak_kv_put_core here instead
             case enough(W, PW, NVal, PrimaryOkays1 + FallbackOkays1, PrimaryOkays1, length(Errors1)) of
                 true ->
+                    reply(From, ReqId, response(W, PW, NVal, PrimaryOkays1 + FallbackOkays1, PrimaryOkays1, Errors1, length(Errors))),
                     {_, NewState} = erase_request_record(ReqId, State),
-                    reply(From, ReqId, response(W, PW, NVal, PrimaryOkays1 + FallbackOkays1, PrimaryOkays1, Errors1, length(Errors)));
+                    Usecs = timer:now_diff(os:timestamp(), StartTS),
+                    riak_kv_stat:update({write_once_put, Usecs, Size});
                 false ->
                     NewRec = Rec#rec{
                         primary_okays = PrimaryOkays1,
