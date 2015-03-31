@@ -9,7 +9,7 @@
 
 -record(riak_kv_w1c_put_req_v1, {
     bkey :: {binary(),binary()},
-    encoded_val :: binary(),
+    encoded_obj :: binary(),
     type :: primary | fallback
     % start_time :: non_neg_integer(), Jon to add?
 }).

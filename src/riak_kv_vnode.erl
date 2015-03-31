@@ -819,7 +819,7 @@ handle_command({get_index_entries, Opts},
             {reply, ignore, State}
     end;
 
-handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_val=EncodedVal, type=Type},
+handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
         From, State=#state{idx=Idx, mod=Mod, async_put=AsyncPut, modstate=ModState}) ->
     StartTS = os:timestamp(),
     case AsyncPut of
