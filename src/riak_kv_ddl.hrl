@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 
--record(riak_field, {
+-record(riak_field_v1, {
 	  name     = <<>>  :: list(),
 	  position         :: pos_integer(),
 	  type             :: field_type(),
@@ -29,10 +29,10 @@
 
 -type field_type()         :: simple_field_type() | complex_field_type().
 -type simple_field_type()  :: binary | integer | float | timestamp | boolean | set.
--type complex_field_type() :: {map, [#riak_field{}]} | any.
+-type complex_field_type() :: {map, [#riak_field_v1{}]} | any.
 
--record(ddl, {
-	  bucket          :: binary(),
-	  fields     = [] :: [#riak_field{}],
-	  partition_key   :: #partition_key{}
+-record(ddl_v1, {
+	  bucket             :: binary(),
+	  fields        = [] :: [#riak_field_v1{}],
+	  partition_key      :: #partition_key_v1{}
 	 }).
