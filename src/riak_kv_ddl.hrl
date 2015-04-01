@@ -34,5 +34,5 @@
 -record(ddl, {
 	  bucket          :: binary(),
 	  fields     = [] :: [#riak_field{}],
-	  colocation      :: colocation()
+	  partition_key   :: #partition_key{}
 	 }).
