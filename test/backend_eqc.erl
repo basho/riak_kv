@@ -293,6 +293,26 @@ init_backend(Backend, _Volatile, Config) ->
     {ok, S} = Backend:start(Partition, Config),
     S.
 
+async_put(Bucket, Key, Val, Backend, BeState) ->
+    case erlang:function_exported(Backend, async_put, 5) of
+        true ->
+            %% Imperfect, not overlapping puts
+            %% TODO: Refine model to check for received messages
+            Context = {some_context, make_ref()},
+            {ok, BeState2} = Backend:async_put(Context, Bucket, Key, Val, BeState),
+            receive
+                {Context, Reply} ->
+                    {Reply, BeState2};
+                Other ->
+                    {error, {unexpected_message, Other}}
+            after
+                5000 ->
+                    {error, async_put_timeout}
+            end;
+        false  ->
+            Backend:put(Bucket, Key, [], Val, BeState)
+    end.
+
 drop(Backend, State) ->
     State1 = case Backend:drop(State) of
                  {ok, NewState} ->
@@ -392,6 +412,8 @@ next_state_data(stopped, running, S, R, {call, _M, init_backend, _}) ->
 next_state_data(_From, _To, S, _R, {call, _M, put, [Bucket, Key, IndexSpecs, Val, _]}) ->
     S#qcst{d = orddict:store({Bucket, Key}, Val, S#qcst.d),
            i = update_indexes(Bucket, Key, IndexSpecs, S#qcst.i)};
+next_state_data(_From, _To, S, _R, {call, _M, async_put, [Bucket, Key, Val, _Backend, _BeState]}) ->
+    S#qcst{d = orddict:store({Bucket, Key}, Val, S#qcst.d)};
 next_state_data(_From, _To, S, _R, {call, _M, delete, [Bucket, Key|_]}) ->
     D1 = orddict:erase({Bucket, Key}, S#qcst.d),
     D2 = try
@@ -422,6 +444,7 @@ running(#qcst{backend=Backend,
               i=Indexes}=Q) ->
     [
      {history, {call, Backend, put, [bucket(Q), key(Q), index_specs(), val(), State]}},
+     {history, {call, ?MODULE, async_put, [bucket(Q), key(Q), val(), Backend, State]}},
      {history, {call, Backend, get, [bucket(Q), key(Q), State]}},
      {history, {call, ?MODULE, delete, [bucket(Q), key(Q), Backend, State, Indexes]}},
      {history, {call, Backend, fold_buckets, [fold_buckets_fun(), get_fold_buffer(), g_opts(), State]}},
@@ -451,6 +474,9 @@ postcondition(_From, _To, S, _C={call, _M, get, [Bucket, Key, _BeState]}, R) ->
     end;
 postcondition(_From, _To, _S,
               {call, _M, put, [_Bucket, _Key, _IndexEntries, _Val, _BeState]}, {R, _RState}) ->
+    R =:= ok orelse R =:= already_exists;
+postcondition(_From, _To, _S,
+              {call, _M, async_put, [_Bucket, _Key, _Val, _Backend, _BeState]}, {R, _RState}) ->
     R =:= ok orelse R =:= already_exists;
 postcondition(_From, _To, _S,
               {call, _M, delete, _}, {R, _RState}) ->

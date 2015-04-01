@@ -130,6 +130,7 @@
 
 -record(state, {idx :: partition(),
                 mod :: module(),
+                async_put :: boolean(),
                 modstate :: term(),
                 mrjobs :: term(),
                 vnodeid :: undefined | binary(),
@@ -470,6 +471,7 @@ init([Index]) ->
             State = #state{idx=Index,
                            async_folding=AsyncFolding,
                            mod=Mod,
+                           async_put = erlang:function_exported(Mod, async_put, 5),
                            modstate=ModState,
                            vnodeid=VId,
                            counter=CounterState,
@@ -510,6 +512,8 @@ handle_overload_command(?KV_GET_REQ{req_id=ReqID}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqID});
 handle_overload_command(?KV_VNODE_STATUS_REQ{}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {vnode_status, Idx, [{error, overload}]});
+handle_overload_command(?KV_W1C_PUT_REQ{type=Type}, Sender, _Idx) ->
+    riak_core_vnode:reply(Sender, ?KV_W1C_PUT_REPLY{reply={error, overload}, type=Type});
 handle_overload_command(_, Sender, _) ->
     riak_core_vnode:reply(Sender, {error, mailbox_overload}).
 
@@ -813,6 +817,29 @@ handle_command({get_index_entries, Opts},
         false ->
             lager:error("Backend ~p does not support incorrect index query", [Mod]),
             {reply, ignore, State}
+    end;
+
+%% NB. The following two function clauses discriminate on the async_put State field
+handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
+                From, State=#state{mod=Mod, async_put=true, modstate=ModState}) ->
+    StartTS = os:timestamp(),
+    Context = {w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS},
+    case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
+        {ok, UpModState} ->
+            {noreply, State#state{modstate=UpModState}};
+        {error, Reason, UpModState} ->
+            {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
+    end;
+handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
+                _From, State=#state{idx=Idx, mod=Mod, async_put=false, modstate=ModState}) ->
+    StartTS = os:timestamp(),
+    case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
+        {ok, UpModState} ->
+            update_hashtree(Bucket, Key, EncodedVal, State),
+            update_vnode_stats(vnode_put, Idx, StartTS),
+            {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
+        {error, Reason, UpModState} ->
+            {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
     end.
 
 %% @doc Handle a coverage request.
@@ -1013,6 +1040,10 @@ handle_handoff_command(Req=?KV_PUT_REQ{}, Sender, State) ->
             end
     end;
 
+handle_handoff_command(?KV_W1C_PUT_REQ{}=Request, Sender, State) ->
+    {noreply, NewState} = handle_command(Request, Sender, State),
+    {forward, NewState};
+
 %% Handle all unspecified cases locally without forwarding
 handle_handoff_command(Req, Sender, State) ->
     handle_command(Req, Sender, State).
@@ -1124,6 +1155,13 @@ delete(State=#state{status_mgr_pid=StatusMgr, mod=Mod, modstate=ModState}) ->
 terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
     Mod:stop(ModState),
     ok.
+
+handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
+            State=#state{idx=Idx}) ->
+    update_hashtree(Bucket, Key, EncodedVal, State),
+    riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
+    update_vnode_stats(vnode_put, Idx, StartTS),
+    {ok, State};
 
 handle_info({set_concurrency_limit, Lock, Limit}, State) ->
     try_set_concurrency_limit(Lock, Limit),
@@ -1993,6 +2031,8 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
 -spec update_hashtree(binary(), binary(),
                       riak_object:riak_object() | binary(),
                       state()) -> ok.
+update_hashtree(_Bucket, _Key, _RObj, #state{hashtrees=undefined}) ->
+    ok;
 update_hashtree(Bucket, Key, BinObj, State) when is_binary(BinObj) ->
     RObj = riak_object:from_binary(Bucket, Key, BinObj),
     update_hashtree(Bucket, Key, RObj, State);
