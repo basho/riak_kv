@@ -667,27 +667,13 @@ prop_merges() ->
                 %% All we really want to check is that every key in
                 %% Good replaces the same key in Existing, right?
                 %% Remove `Bad' from the inputs to validate.
-                {NoBadExisting, OnlyGoodNew} = lists:foldl(fun({Name, _Err}, {Old, Neu}) ->
-                                                                   {value, V, Neu2} = lists:keytake(Name, 1, Neu),
-                                                                   %% only
-                                                                   %% want
-                                                                   %% to
-                                                                   %% remove
-                                                                   %% the
-                                                                   %% exact
-                                                                   %% bad
-                                                                   %% value
-                                                                   %% from
-                                                                   %% existing,
-                                                                   %% not
-                                                                   %% the
-                                                                   %% bad
-                                                                   %% key!
-                                                                   {lists:delete(V, Old),
-                                                                    Neu2}
-                                                           end,
-                                                           {Existing, New},
-                                                           Bad),
+                F = fun({Name, _Err}, {Old, Neu}) ->
+                    {value, V, Neu2} = lists:keytake(Name, 1, Neu),
+                    %% only want to remove the exact bad value from existing,
+                    %% not the bad key!
+                    {lists:delete(V, Old), Neu2}
+                end,
+                {NoBadExisting, OnlyGoodNew} = lists:foldl(F, {Existing, New}, Bad),
 
                 %% What's left are the good ones from `New'. Replace
                 %% their keys in `Existing'. `Expected' is the input
