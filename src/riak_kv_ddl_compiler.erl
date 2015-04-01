@@ -239,7 +239,7 @@ filter_ast([H | T], Acc) ->
 	_         -> filter_ast(T, [H | Acc])
     end.
 
--spec build_extract_fn([#riak_field{}] , pos_integer(), [ast()]) ->
+-spec build_extract_fn([[#riak_field{}]], pos_integer(), ast()) ->
 			      {expr(), pos_integer()}.
 build_extract_fn([], LineNo, Acc) ->
     Clauses = lists:flatten(lists:reverse(Acc)),
@@ -339,6 +339,7 @@ make_validation_funs(Fields, LineNo, FunNo) ->
     Fun = make_fun(FunName, 1, [ClauseS, ClauseF], LineNo2),
     {[Fun], LineNo2, Maps, FunNo + 1}.
 
+-spec make_fun(atom(), pos_integer(), ast(), pos_integer()) -> expr().
 make_fun(FunName, Arity, Clause, LineNo) ->
     {function, LineNo, FunName, Arity, Clause}.
 
@@ -421,7 +422,7 @@ make_integer(I, LineNo) when is_integer(I) -> {integer, LineNo, I}.
 -spec make_atom(atom(), pos_integer()) -> expr().
 make_atom(A, LineNo) when is_atom(A) -> {atom, LineNo, A}.
 
--spec make_call(expr(), expr(), pos_integer()) -> expr().
+-spec make_call(expr(), ast(), pos_integer()) -> expr().
 make_call(FnName, Args, LineNo) ->
     {call, LineNo, FnName, Args}.
 
@@ -493,11 +494,11 @@ make_module_attr(ModName, LineNo) ->
 make_export_attr(LineNo) ->
     {{attribute, LineNo, export, [
 				  {validate,          1},
-				  {extract,             2},
+				  {extract,           2},
 				  {get_partition_key, 2}
 				 ]}, LineNo + 1}.
 
-%%-ifdef(TEST).
+-ifdef(TEST).
 -compile(export_all).
 
 -define(VALID,   true).
@@ -1540,4 +1541,4 @@ complex_partition_key_test_() ->
     Expected = {2, {3, "something", pong}, {2, 3, pang}},
     ?_assertEqual(Expected, Result).
 
-%%-endif.
+-endif.
