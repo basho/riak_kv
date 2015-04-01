@@ -885,15 +885,16 @@ stop_exometer_test_env() ->
 
 create_or_update_histogram_test() ->
     ok = start_exometer_test_env(),
-
-    Metric = [riak_kv,put_fsm,counter,time],
-    ok = repeat_create_or_update(Metric, 1, histogram, 100),
-    ?assertNotEqual(exometer:get_value(Metric), 0),
-    Stats = get_stats(),
-    %%lager:info("stats prop list ~s", [Stats]),
-    ?assertNotEqual(proplists:get_value({node_put_fsm_counter_time_mean}, Stats), 0),
-
-    ok = stop_exometer_test_env().
+    try
+        Metric = [riak_kv,put_fsm,counter,time],
+        ok = repeat_create_or_update(Metric, 1, histogram, 100),
+        ?assertNotEqual(exometer:get_value(Metric), 0),
+        Stats = get_stats(),
+        %%lager:info("stats prop list ~s", [Stats]),
+        ?assertNotEqual(proplists:get_value({node_put_fsm_counter_time_mean}, Stats), 0)
+    after
+        ok = stop_exometer_test_env()
+    end.
 
 repeat_create_or_update(Name, UpdateVal, Type, Times) when Times > 0 ->
     repeat_create_or_update(Name, UpdateVal, Type, Times, 0).
