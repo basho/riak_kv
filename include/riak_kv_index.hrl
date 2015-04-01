@@ -45,23 +45,36 @@
           max_results :: integer() | undefined
          }).
 
--record(colocation, {
-	  create_key_fn      :: atom(),
-	  args          = [] :: list()
+-record(param, {
+	  name :: string()
+	 }).
+
+-record(hash_fn, {
+	  mod       :: atom(),
+	  fn        :: atom(),
+	  args = [] :: [#param{} | any()]
+	 }).
+
+-record(partition_key, {
+	  ast = [] :: [#hash_fn{}| #param{}]
+	 }).
+
+-record(local_key, {
+	  key = [] :: [#param{}]
 	 }).
 
 %% TODO these types will be improved over the duration of the time series project
--type selection()  :: term().
--type filter()     :: term().
--type operator()   :: term().
--type sorter()     :: term().
--type combinator() :: term().
--type colocation() :: #colocation{}.
--type limit()      :: any().
+-type selection()     :: term().
+-type filter()        :: term().
+-type operator()      :: term().
+-type sorter()        :: term().
+-type combinator()    :: term().
+-type limit()         :: any().
 
 -record(riak_kv_li_index_v1, {
 	  key              :: binary(),
-	  colocation       :: colocation(),
+	  partition_key    :: #partition_key{},
+	  local_key        :: #local_key{},
 	  selections  = [] :: [selection()],
 	  filters     = [] :: [filter()],
 	  operators   = [] :: [operator()],
