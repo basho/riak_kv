@@ -819,33 +819,28 @@ handle_command({get_index_entries, Opts},
             {reply, ignore, State}
     end;
 
+%% NB. The following two function clauses discriminate on the async_put State field
 handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
-        From, State=#state{idx=Idx, mod=Mod, async_put=AsyncPut, modstate=ModState}) ->
+                From, State=#state{mod=Mod, async_put=true, modstate=ModState}) ->
     StartTS = os:timestamp(),
-    case AsyncPut of
-        true ->
-            Context = {w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS},
-            {_Reply, ModState2} =
-                case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
-                    {ok, UpModState} ->
-                        {ok, UpModState};
-                    {error, Reason, UpModState} ->
-                        riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}),
-                        {{error, Reason}, UpModState}
-                end;
-        false ->
-            {Reply, ModState2} =
-                case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
-                    {ok, UpModState} ->
-                        update_hashtree(Bucket, Key, EncodedVal, State),
-                        {ok, UpModState};
-                    {error, Reason, UpModState} ->
-                        {{error, Reason}, UpModState}
-                end,
-            riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
-            update_vnode_stats(vnode_put, Idx, StartTS)
-    end,
-    {noreply, State#state{modstate=ModState2}}.
+    Context = {w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS},
+    case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
+        {ok, UpModState} ->
+            {noreply, State#state{modstate=UpModState}};
+        {error, Reason, UpModState} ->
+            {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
+    end;
+handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
+                _From, State=#state{idx=Idx, mod=Mod, async_put=false, modstate=ModState}) ->
+    StartTS = os:timestamp(),
+    case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
+        {ok, UpModState} ->
+            update_hashtree(Bucket, Key, EncodedVal, State),
+            update_vnode_stats(vnode_put, Idx, StartTS),
+            {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
+        {error, Reason, UpModState} ->
+            {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
+    end.
 
 %% @doc Handle a coverage request.
 %% More information about the specification for the ItemFilter
