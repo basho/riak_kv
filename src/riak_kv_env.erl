@@ -122,7 +122,14 @@ test_file_limit(FileLimit0) ->
                      ++ "4096 is recommended", [FileLimit]};
                 false ->
                     {info, "Open file limit: ~p", [FileLimit]}
+            end,
+            case FileLimit >= erlang:system_info(port_limit) of
+                true ->
+                    {warn, "Erlang ports limit should be greater than open "
+                     ++ "file limit",[]};
+                false -> ok
             end
+
     end.
 
 %% @private
