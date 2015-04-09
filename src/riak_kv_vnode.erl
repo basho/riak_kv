@@ -1271,11 +1271,19 @@ delete_hash(RObj) ->
 prepare_put(State=#state{vnodeid=VId,
                          mod=Mod,
                          modstate=ModState},
-            PutArgs=#putargs{bkey={Bucket, _Key},
+            PutArgs=#putargs{bkey={Bucket, Key},
                              lww=LWW,
                              coord=Coord,
                              robj=RObj,
                              starttime=StartTime}) ->
+
+    %% if this is a composite index write we need to change the key to be
+    %% the key we will actually write into leveldb
+    NewK = maybe_rewrite_li_key(RObj, Key),
+    gg:format("in riak_kv_vnode Key is ~p~nNewK is ~p~n",
+	      [sext:decode(Key), sext:decode(NewK)]),
+    NPutArgs = PutArgs#putargs{bkey = {Bucket, NewK}},
+
     %% Can we avoid reading the existing object? If this is not an
     %% index backend, and the bucket is set to last-write-wins, then
     %% no need to incur additional get. Otherwise, we need to read the
@@ -1291,9 +1299,9 @@ prepare_put(State=#state{vnodeid=VId,
                     false ->
                         RObj
                 end,
-            {{true, ObjToStore}, PutArgs#putargs{is_index = false}};
+            {{true, ObjToStore}, NPutArgs#putargs{is_index = false}};
         false ->
-            prepare_put(State, PutArgs, IndexBackend)
+            prepare_put(State, NPutArgs, IndexBackend)
     end.
 prepare_put(#state{vnodeid=VId,
                    mod=Mod,
@@ -1492,6 +1500,13 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
             end
     end,
     {Reply, UpdState}.
+
+%% @private
+maybe_rewrite_li_key(RObj, Key) ->
+    case riak_object:is_li(RObj) of
+	true  -> riak_object:get_li_key(RObj);
+	false -> Key
+    end.
 
 %% @private
 %% enforce allow_mult bucket property so that no backend ever stores
