@@ -41,19 +41,12 @@
 	 make_helper_mod/2
 	]).
 
-%% a helper function for destructuring data objects
-%% the generated helper functions cannot contain
-%% record definitions because of the build cycle
-%% so this function can be called out to to pick
-%% apart the DDL records
--export([
-	 get_partition_key/2
-	]).
 
 -define(NODEBUGOUTPUT, false).
 -define(DEBUGOUTPUT,   true).
--define(IGNORE,    true).
--define(DONTIGNORE,          false).
+-define(IGNORE,        true).
+-define(DONTIGNORE,    false).
+-define(NOPREFIX,      []).
 
 %% you have to start line and positions nos somewhere
 -define(POSNOSTART,  1).
@@ -80,7 +73,7 @@ make_helper_mod(#ddl_v1{} = DDL, OutputDir) ->
 -spec make_helper_mod(#ddl_v1{}, string(), boolean()) ->
 			     {module, atom()} | {'error', tuple()}.
 make_helper_mod(#ddl_v1{} = DDL, OutputDir, HasDebugOutput) ->
-    case validate(DDL) of
+    case validate_ddl(DDL) of
 	true ->
 	    {Module, AST} = compile(DDL, OutputDir, HasDebugOutput),
 	    {ok, Module, Bin} = compile:forms(AST),
@@ -90,7 +83,11 @@ make_helper_mod(#ddl_v1{} = DDL, OutputDir, HasDebugOutput) ->
 	    {error, {invalid_ddl, Errs}}
     end.
 
-validate(#ddl_v1{fields = Fields}) ->
+%%
+%% Funs to validate id the DDL definition is correct
+%%
+
+validate_ddl(#ddl_v1{fields = Fields}) ->
     Ret1 = validate_fields(Fields, []),
     Ret2 = validate_positions(Fields),
     case lists:merge(Ret1, Ret2) of
@@ -167,6 +164,10 @@ validate_fields([#riak_field_v1{name     = N,
 validate_fields([H | T], Acc) ->
     validate_fields(T, [{invalid_field, H} | Acc]).
 
+%%
+%% funs to compile the DDL to its helper module AST
+%%
+
 -spec compile(#ddl_v1{}, string(), boolean()) ->
 		     {module, ast()} | {'error', tuple()}.
 compile(#ddl_v1{} = DDL, OutputDir, HasDebugOutput) ->
@@ -174,8 +175,9 @@ compile(#ddl_v1{} = DDL, OutputDir, HasDebugOutput) ->
 	    fields        = Fields} = DDL,
     {ModName, Attrs, LineNo} = make_attrs(Bucket, ?LINENOSTART),
     {VFns, LineNo2} = build_validn_fns([Fields], LineNo, ?POSNOSTART, [], []),
-    {ExtractFn, LineNo3} = build_extract_fn([Fields], LineNo2, []),
-    AST = Attrs ++ VFns ++ [ExtractFn] ++ [{eof, LineNo3}],
+    {ExtractFn, LineNo3} = build_extract_fn([Fields],  LineNo2, []),
+    {GetTypeFn, LineNo4} = build_get_type_fn([Fields], LineNo3, []),
+    AST = Attrs ++ VFns ++ [ExtractFn] ++ [GetTypeFn] ++ [{eof, LineNo4}],
     if HasDebugOutput ->
 	    ASTFileName = filename:join([OutputDir, ModName]) ++ ".ast",
 	    write_file(ASTFileName, io_lib:format("~p", [AST]));
@@ -234,27 +236,24 @@ filter_ast([H | T], Acc) ->
 
 -spec build_extract_fn([[#riak_field_v1{}]], pos_integer(), ast()) ->
 			      {expr(), pos_integer()}.
+%% the functions that extract the value from a particular field and those that return the field tupe
+%% have the same structure, so we build them at the same time
 build_extract_fn([], LineNo, Acc) ->
     Clauses = lists:flatten(lists:reverse(Acc)),
     Fn = make_fun(extract, 2, Clauses, LineNo),
     {Fn, LineNo};
 build_extract_fn([Fields | T], LineNo, Acc) ->
-    {Fns, LineNo2} = make_extract_cls(Fields, LineNo, none, []),
+    {Fns, LineNo2} = make_extract_cls(Fields, LineNo, ?NOPREFIX, []),
     build_extract_fn(T, LineNo2, [Fns | Acc]).
 
 make_extract_cls([], LineNo, _Prefix, Acc) ->
-    {lists:reverse(Acc), LineNo};
-make_extract_cls([H | T], LineNo, Prefix, Acc) ->
-    #riak_field_v1{name = Nm, type = Ty, position = P} = H,
-    Arg = make_string(Nm, LineNo),
-    Pos = make_integer(P, LineNo),
-    NPref = {Args, Poses} = case Prefix of
-				none     -> {[Arg], [Pos]};
-				{As, Ps} -> {[Arg | As], [Pos | Ps]}
-
-			    end,
+    {lists:reverse(Acc), LineNo + 1};
+make_extract_cls([#riak_field_v1{type = Ty} = H | T], LineNo, Prefix, Acc) ->
+    NPref  = [H | Prefix],
+    Args   = [make_string(Nm,  LineNo) || #riak_field_v1{name     = Nm} <- NPref],
+    Poses  = [make_integer(P,  LineNo) || #riak_field_v1{position = P}  <- NPref],
     Conses = make_conses(Args, LineNo, {nil, LineNo}),
-    Var = make_var('Obj', LineNo),
+    Var    = make_var('Obj', LineNo),
     %% you need to reverse the lists of the positions to
     %% get the calls to element to nest correctly
     Body = make_elem_calls(lists:reverse(Poses), LineNo, Var),
@@ -266,9 +265,45 @@ make_extract_cls([H | T], LineNo, Prefix, Acc) ->
 		{Cls, NLNo} = make_extract_cls(MapFields, LineNo, NPref, Acc),
 		{[Cl | Cls], NLNo};
 	    _ ->
-		{[Cl | Acc], LineNo + 1}
+		{[Cl | Acc], LineNo}
 	end,
     make_extract_cls(T, NewLineNo, Prefix, NewA).
+
+-spec build_get_type_fn([[#riak_field_v1{}]], pos_integer(), ast()) ->
+			      {expr(), pos_integer()}.
+%% the functions that extract the value from a particular field and those that return the field tupe
+%% have the same structure, so we build them at the same time
+build_get_type_fn([], LineNo, Acc) ->
+    Clauses = lists:flatten(lists:reverse(Acc)),
+    Fn = make_fun(get_field_type, 1, Clauses, LineNo),
+    {Fn, LineNo + 1};
+build_get_type_fn([Fields | T], LineNo, Acc) ->
+    {Fns, LineNo2} = make_get_type_cls(Fields, LineNo, ?NOPREFIX, []),
+    build_get_type_fn(T, LineNo2, [Fns | Acc]).
+
+make_get_type_cls([], LineNo, _Prefix, Acc) ->
+    {lists:reverse(Acc), LineNo};
+make_get_type_cls([#riak_field_v1{type = Ty} = H | T], LineNo, Prefix, Acc) ->
+    NPref  = [H | Prefix],
+    Args   = [make_string(Nm,  LineNo) || #riak_field_v1{name     = Nm} <- NPref],
+    Conses = make_conses(Args, LineNo, {nil, LineNo}),
+    %% you need to reverse the lists of the positions to
+    %% get the calls to element to nest correctly
+    Body = case Ty of
+		{map, _}  -> make_atom(map, LineNo);
+		_         -> make_atom(Ty, LineNo)
+	    end,
+    Guard = [],
+    Cl = make_clause([Conses], Guard, Body, LineNo),
+    {NewA, NewLineNo} =
+	case Ty of
+	    {map, MapFields} ->
+		{Cls, NLNo} = make_get_type_cls(MapFields, LineNo, NPref, Acc),
+		{[Cl | Cls], NLNo};
+	    _ ->
+		{[Cl | Acc], LineNo}
+	end,
+    make_get_type_cls(T, NewLineNo, Prefix, NewA).
 
 make_conses([], _LineNo, Conses)  -> Conses;
 make_conses([H | T], LineNo, Acc) -> NewAcc = {cons, LineNo, H, Acc},
@@ -301,7 +336,7 @@ build_validn_fns([Fields | T], LineNo, FunNo, Acc1, Acc2) ->
 
 -spec make_attrs(binary(), pos_integer()) -> {atom(), ast(), pos_integer()}.
 make_attrs(Bucket, LineNo) when is_binary(Bucket)    ->
-    ModName = make_module_name(Bucket),
+    ModName = riak_kv_ddl:make_module_name(Bucket),
     {ModAttr, LineNo1} = make_module_attr(ModName, LineNo),
     {ExpAttr, LineNo2} = make_export_attr(LineNo1),
     {ModName, [ModAttr, ExpAttr], LineNo2}.
@@ -458,9 +493,9 @@ make_fail_clause(LineNo) ->
 
 -spec get_fn_name(pos_integer()) -> atom().
 get_fn_name(1) ->
-    validate;
+    validate_obj;
 get_fn_name(FunNo) when is_integer(FunNo) ->
-    list_to_atom("validate" ++ integer_to_list(FunNo)).
+    list_to_atom("validate_obj" ++ integer_to_list(FunNo)).
 
 -spec make_clause(ast(), guards(), expr(), pos_integer()) -> expr().
 make_clause(Args, Guards, Body, LineNo) ->
@@ -472,56 +507,15 @@ make_string(String, LineNo) ->
 make_tuple(Fields, LineNo) ->
     {tuple, LineNo, Fields}.
 
-make_module_name(Bucket) ->
-    Nonce = binary_to_list(base64:encode(crypto:hash(md4, Bucket))),
-    Nonce2 = remove_hooky_chars(Nonce),
-    ModName = "riak_ddl_helper_mod_" ++ Nonce2,
-    list_to_atom(ModName).
-
-remove_hooky_chars(Nonce) ->
-    re:replace(Nonce, "[/|\+|\.|=]", "", [global, {return, list}]).
-
 make_module_attr(ModName, LineNo) ->
     {{attribute, LineNo, module, ModName}, LineNo + 1}.
 
 make_export_attr(LineNo) ->
     {{attribute, LineNo, export, [
-				  {validate,          1},
-				  {extract,           2}
+				  {validate_obj,   1},
+				  {get_field_type, 1},
+				  {extract,        2}
 				 ]}, LineNo + 1}.
-
-%%
-%% Helper Fns
-%%
-
--spec get_partition_key(#ddl_v1{}, tuple()) -> tuple().
-get_partition_key(#ddl_v1{bucket = B, partition_key = PK}, Obj)
-  when is_tuple(Obj) ->
-    Mod = make_module_name(B),
-    #partition_key_v1{ast = Params} = PK,
-    _Key = build(Params, Obj, Mod, []).
-
--spec build([#param_v1{}], tuple(), atom(), any()) -> tuple().
-build([], _Obj, _Mod, A) ->
-    list_to_tuple(lists:reverse(A));
-build([#param_v1{name = Nm} | T], Obj, Mod, A) ->
-    Val = Mod:extract(Obj, Nm),
-    build(T, Obj, Mod, [Val | A]);
-build([#hash_fn_v1{mod  = Md,
-		   fn   = Fn,
-		   args = Args} | T], Obj, Mod, A) ->
-    A2 = convert(Args, Obj, Mod, []),
-    Res = erlang:apply(Md, Fn, A2),
-    build(T, Obj, Mod, [Res | A]).
-
--spec convert([#param_v1{}], tuple(), atom(), [any()]) -> any().
-convert([], _Obj, _Mod, Acc) ->
-    lists:reverse(Acc);
-convert([#param_v1{name = Nm} | T], Obj, Mod, Acc) ->
-    Val = Mod:extract(Obj, Nm),
-    convert(T, Obj, Mod, [Val | Acc]);
-convert([Atom | T], Obj, Mod, Acc) ->
-    convert(T, Obj, Mod, [Atom | Acc]).
 
 -ifdef(TEST).
 -compile(export_all).
@@ -536,15 +530,17 @@ convert([Atom | T], Obj, Mod, Acc) ->
 %%
 
 make_ddl(Bucket, Fields) when is_binary(Bucket) ->
-    make_ddl(Bucket, Fields, #partition_key_v1{}).
+    make_ddl(Bucket, Fields, #partition_key_v1{}, #local_key_v1{}).
 
-make_ddl(Bucket, Fields, #partition_key_v1{} = PK) when is_binary(Bucket) ->
+make_ddl(Bucket, Fields, PK) when is_binary(Bucket) ->
+    make_ddl(Bucket, Fields, PK, #local_key_v1{}).
+
+make_ddl(Bucket, Fields, #partition_key_v1{} = PK, #local_key_v1{} = LK)
+  when is_binary(Bucket) ->
     #ddl_v1{bucket        = Bucket,
 	    fields        = Fields,
-	    partition_key = PK}.
-
-partition(A, B, C) ->
-    {A, B, C}.
+	    partition_key = PK,
+	    local_key     = LK}.
 
 %%
 %% Unit Tests
@@ -558,7 +554,7 @@ simplest_valid_test_() ->
 				   type     = binary}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({<<"ewrewr">>}),
+    Result = Module:validate_obj({<<"ewrewr">>}),
     ?_assertEqual(?VALID, Result).
 
 simple_valid_binary_test_() ->
@@ -572,7 +568,7 @@ simple_valid_binary_test_() ->
 				   type     = binary}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({<<"ewrewr">>, <<"werewr">>}),
+    Result = Module:validate_obj({<<"ewrewr">>, <<"werewr">>}),
     ?_assertEqual(?VALID, Result).
 
 simple_valid_integer_test_() ->
@@ -589,7 +585,7 @@ simple_valid_integer_test_() ->
 				   type     = integer}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({999, -9999, 0}),
+    Result = Module:validate_obj({999, -9999, 0}),
     ?_assertEqual(?VALID, Result).
 
 simple_valid_float_test_() ->
@@ -606,7 +602,7 @@ simple_valid_float_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({432.22, -23423.22, -0.0}),
+    Result = Module:validate_obj({432.22, -23423.22, -0.0}),
     ?_assertEqual(?VALID, Result).
 
 simple_valid_boolean_test_() ->
@@ -620,7 +616,7 @@ simple_valid_boolean_test_() ->
 				   type     = boolean}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({true, false}),
+    Result = Module:validate_obj({true, false}),
     ?_assertEqual(?VALID, Result).
 
 simple_valid_timestamp_test_() ->
@@ -637,7 +633,7 @@ simple_valid_timestamp_test_() ->
 				   type     = timestamp}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({234324, 23424, 34636}),
+    Result = Module:validate_obj({234324, 23424, 34636}),
     ?_assertEqual(?VALID, Result).
 
 simple_valid_map_1_test_() ->
@@ -659,7 +655,7 @@ simple_valid_map_1_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({<<"ewrewr">>, {<<"erko">>}, 4.4}),
+    Result = Module:validate_obj({<<"ewrewr">>, {<<"erko">>}, 4.4}),
     ?_assertEqual(?VALID, Result).
 
 simple_valid_map_2_test_() ->
@@ -684,7 +680,7 @@ simple_valid_map_2_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({<<"ewrewr">>, {<<"erko">>, -999}, 4.4}),
+    Result = Module:validate_obj({<<"ewrewr">>, {<<"erko">>, -999}, 4.4}),
     ?_assertEqual(?VALID, Result).
 
 simple_valid_optional_1_test_() ->
@@ -696,7 +692,7 @@ simple_valid_optional_1_test_() ->
 				   optional = true}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({[]}),
+    Result = Module:validate_obj({[]}),
     ?_assertEqual(?VALID, Result).
 
 simple_valid_optional_2_test_() ->
@@ -732,7 +728,7 @@ simple_valid_optional_2_test_() ->
 				   optional = true}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({[], [], [], [], [], [], []}),
+    Result = Module:validate_obj({[], [], [], [], [], [], []}),
     ?_assertEqual(?VALID, Result).
 
 simple_valid_optional_3_test_() ->
@@ -748,7 +744,7 @@ simple_valid_optional_3_test_() ->
 				   optional = false}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({[], <<"edible">>}),
+    Result = Module:validate_obj({[], <<"edible">>}),
     ?_assertEqual(?VALID, Result).
 
 complex_valid_optional_1_test_() ->
@@ -774,7 +770,7 @@ complex_valid_optional_1_test_() ->
 				   optional = false}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({[], {1, []}}),
+    Result = Module:validate_obj({[], {1, []}}),
     ?_assertEqual(?VALID, Result).
 
 complex_valid_map_1_test_() ->
@@ -810,7 +806,7 @@ complex_valid_map_1_test_() ->
 				   type     = integer}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({1, {1, {3, 4}, 1}, 1}),
+    Result = Module:validate_obj({1, {1, {3, 4}, 1}, 1}),
     ?_assertEqual(?VALID, Result).
 
 complex_valid_map_2_test_() ->
@@ -857,7 +853,7 @@ complex_valid_map_2_test_() ->
 				   type     = integer}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({1, {1, {1, 1, {1, 1}}, 1}, 1}),
+    Result = Module:validate_obj({1, {1, {1, 1, {1, 1}}, 1}, 1}),
     ?_assertEqual(?VALID, Result).
 
 complex_valid_map_3_test_() ->
@@ -889,7 +885,7 @@ complex_valid_map_3_test_() ->
 				   type     = Map1}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({{2, {3}, {4}}}),
+    Result = Module:validate_obj({{2, {3}, {4}}}),
     ?_assertEqual(?VALID, Result).
 
 simple_valid_any_test_() ->
@@ -906,7 +902,7 @@ simple_valid_any_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({<<"ewrewr">>, [a, b, d], 4.4}),
+    Result = Module:validate_obj({<<"ewrewr">>, [a, b, d], 4.4}),
     ?_assertEqual(?VALID, Result).
 
 simple_valid_set_test_() ->
@@ -923,7 +919,7 @@ simple_valid_set_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({<<"ewrewr">>, [a, b, d], 4.4}),
+    Result = Module:validate_obj({<<"ewrewr">>, [a, b, d], 4.4}),
     ?_assertEqual(?VALID, Result).
 
 simple_valid_mixed_test_() ->
@@ -943,7 +939,7 @@ simple_valid_mixed_test_() ->
 				   type     = timestamp}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({<<"ewrewr">>, 99, 4.4, 5555}),
+    Result = Module:validate_obj({<<"ewrewr">>, 99, 4.4, 5555}),
     ?_assertEqual(?VALID, Result).
 
 %% invalid tests
@@ -958,7 +954,7 @@ simple_invalid_binary_test_() ->
 				   type     = binary}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({<<"ewrewr">>, 55}),
+    Result = Module:validate_obj({<<"ewrewr">>, 55}),
     ?_assertEqual(?INVALID, Result).
 
 simple_invalid_integer_test_() ->
@@ -975,7 +971,7 @@ simple_invalid_integer_test_() ->
 				   type     = integer}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({999, -9999, 0,0}),
+    Result = Module:validate_obj({999, -9999, 0,0}),
     ?_assertEqual(?INVALID, Result).
 
 simple_invalid_float_test_() ->
@@ -992,7 +988,7 @@ simple_invalid_float_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({432.22, -23423.22, [a, b, d]}),
+    Result = Module:validate_obj({432.22, -23423.22, [a, b, d]}),
     ?_assertEqual(?INVALID, Result).
 
 simple_invalid_boolean_test_() ->
@@ -1009,7 +1005,7 @@ simple_invalid_boolean_test_() ->
 				   type     = boolean}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({true, false, [a, b, d]}),
+    Result = Module:validate_obj({true, false, [a, b, d]}),
     ?_assertEqual(?INVALID, Result).
 
 simple_invalid_set_test_() ->
@@ -1026,7 +1022,7 @@ simple_invalid_set_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({<<"ewrewr">>, [444.44], 4.4}),
+    Result = Module:validate_obj({<<"ewrewr">>, [444.44], 4.4}),
     ?_assertEqual(?VALID, Result).
 
 simple_invalid_timestamp_1_test_() ->
@@ -1043,7 +1039,7 @@ simple_invalid_timestamp_1_test_() ->
 				   type     = timestamp}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({234.324, 23424, 34636}),
+    Result = Module:validate_obj({234.324, 23424, 34636}),
     ?_assertEqual(?INVALID, Result).
 
 simple_invalid_timestamp_2_test_() ->
@@ -1060,7 +1056,7 @@ simple_invalid_timestamp_2_test_() ->
 				   type     = timestamp}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({234324, -23424, 34636}),
+    Result = Module:validate_obj({234324, -23424, 34636}),
     ?_assertEqual(?INVALID, Result).
 
 simple_invalid_timestamp_3_test_() ->
@@ -1077,7 +1073,7 @@ simple_invalid_timestamp_3_test_() ->
 				   type     = timestamp}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({234324, 0, 34636}),
+    Result = Module:validate_obj({234324, 0, 34636}),
     ?_assertEqual(?INVALID, Result).
 
 simple_invalid_map_1_test_() ->
@@ -1099,7 +1095,7 @@ simple_invalid_map_1_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({<<"ewrewr">>, {99}, 4.4}),
+    Result = Module:validate_obj({<<"ewrewr">>, {99}, 4.4}),
     ?_assertEqual(?INVALID, Result).
 
 simple_invalid_map_2_test_() ->
@@ -1124,7 +1120,7 @@ simple_invalid_map_2_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({<<"ewrewr">>, {<<"erer">>}, 4.4}),
+    Result = Module:validate_obj({<<"ewrewr">>, {<<"erer">>}, 4.4}),
     ?_assertEqual(?INVALID, Result).
 
 simple_invalid_map_3_test_() ->
@@ -1149,7 +1145,7 @@ simple_invalid_map_3_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({<<"ewrewr">>, {<<"bingo">>, <<"bango">>, <<"erk">>}, 4.4}),
+    Result = Module:validate_obj({<<"ewrewr">>, {<<"bingo">>, <<"bango">>, <<"erk">>}, 4.4}),
     ?_assertEqual(?INVALID, Result).
 
 simple_invalid_map_4_test_() ->
@@ -1171,7 +1167,7 @@ simple_invalid_map_4_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({<<"ewrewr">>, [99], 4.4}),
+    Result = Module:validate_obj({<<"ewrewr">>, [99], 4.4}),
     ?_assertEqual(?INVALID, Result).
 
 complex_invalid_map_1_test_() ->
@@ -1207,7 +1203,7 @@ complex_invalid_map_1_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({<<"ewrewr">>,
+    Result = Module:validate_obj({<<"ewrewr">>,
 			      {<<"erko">>,
 			       {<<"yerk">>, 33.0}
 			      },
@@ -1229,7 +1225,7 @@ too_small_tuple_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({432.22, -23423.22}),
+    Result = Module:validate_obj({432.22, -23423.22}),
     ?_assertEqual(?INVALID, Result).
 
 too_big_tuple_test_() ->
@@ -1246,7 +1242,7 @@ too_big_tuple_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Result = Module:validate({432.22, -23423.22, 44.44, 65.43}),
+    Result = Module:validate_obj({432.22, -23423.22, 44.44, 65.43}),
     ?_assertEqual(?INVALID, Result).
 
 %% invalid DDL tests
@@ -1380,7 +1376,7 @@ simple_valid_map_extract_test_() ->
 				   type     = float}
 		   ]),
     {module, Module} = make_helper_mod(DDL),
-    Obj = {<<"eek-a-mouse">>, {<<"jibjib">>}, 4.4},
+    Obj = {<<"erk">>, {<<"jibjib">>}, 3.0},
     Result = (catch Module:extract(Obj, ["erko", "yarple"])),
     ?_assertEqual(<<"jibjib">>, Result).
 
@@ -1417,153 +1413,5 @@ complex_valid_map_extract_test_() ->
     Path = ["Top_Map", "Level_1_map1", "in_Map_1"],
     Res = (catch Module:extract(Obj, Path)),
     ?_assertEqual(3, Res).
-
-%%
-%% get partition_key tests
-%%
-
-simplest_partition_key_test_() ->
-    Name = "yando",
-    PK = #partition_key_v1{ast = [
-				  #param_v1{name = [Name]}
-				 ]},
-    DDL = make_ddl(<<"simplest_partition_key_test">>,
-		   [
-		    #riak_field_v1{name     = Name,
-				   position = 1,
-				   type     = binary}
-		   ],
-		   PK),
-    {module, _Module} = make_helper_mod(DDL),
-    Obj = {<<"yarble">>},
-    Result = (catch get_partition_key(DDL, Obj)),
-    ?_assertEqual({<<"yarble">>}, Result).
-
-simple_partition_key_test_() ->
-    Name1 = "yando",
-    Name2 = "buckle",
-    PK = #partition_key_v1{ast = [
-				  #param_v1{name = [Name1]},
-				  #param_v1{name = [Name2]}
-				 ]},
-    DDL = make_ddl(<<"simple_partition_key_test">>,
-		   [
-		    #riak_field_v1{name     = Name2,
-				   position = 1,
-				   type     = binary},
-		    #riak_field_v1{name     = "sherk",
-				   position = 2,
-				   type     = binary},
-		    #riak_field_v1{name     = Name1,
-				   position = 3,
-				   type     = binary}
-		   ],
-		   PK),
-    {module, _Module} = make_helper_mod(DDL),
-    Obj = {<<"one">>, <<"two">>, <<"three">>},
-    Result = (catch get_partition_key(DDL, Obj)),
-    ?_assertEqual({<<"three">>, <<"one">>}, Result).
-
-function_partition_key_test_() ->
-    Name1 = "yando",
-    Name2 = "buckle",
-    PK = #partition_key_v1{ast = [
-				  #param_v1{name = [Name1]},
-				  #hash_fn_v1{mod  = ?MODULE,
-					      fn   = partition,
-					      args = [
-						      #param_v1{name = [Name2]},
-						      15,
-						      m
-						     ]
-					     }
-				 ]},
-    DDL = make_ddl(<<"function_partition_key_test">>,
-		   [
-		    #riak_field_v1{name     = Name2,
-				   position = 1,
-				   type     = timestamp},
-		    #riak_field_v1{name     = "sherk",
-				   position = 2,
-				   type     = binary},
-		    #riak_field_v1{name     = Name1,
-				   position = 3,
-				   type     = binary}
-		   ],
-		   PK),
-    {module, _Module} = make_helper_mod(DDL),
-    Obj = {1234567890, <<"two">>, <<"three">>},
-    Result = (catch get_partition_key(DDL, Obj)),
-    Expected = {<<"three">>, {1234567890, 15, m}},
-    ?_assertEqual(Expected, Result).
-
-complex_partition_key_test_() ->
-    Name0 = "yerp",
-    Name1 = "yando",
-    Name2 = "buckle",
-    Name3 = "doodle",
-    PK = #partition_key_v1{ast = [
-				  #param_v1{name = [Name0, Name1]},
-				  #hash_fn_v1{mod  = ?MODULE,
-					      fn   = partition,
-					      args = [
-						      #param_v1{name = [
-									Name0,
-									Name2,
-									Name3
-								       ]},
-						      "something",
-						      pong
-						     ]
-					     },
-				  #hash_fn_v1{mod  = ?MODULE,
-					      fn   = partition,
-					      args = [
-						      #param_v1{name = [
-									Name0,
-									Name1
-								       ]},
-						      #param_v1{name = [
-									Name0,
-									Name2,
-									Name3
-								       ]},
-						      pang
-						     ]
-					     }
-				 ]},
-    Map3 = {map, [
-		  #riak_field_v1{name     = "in_Map_2",
-				 position = 1,
-				 type     = integer}
-		 ]},
-    Map2 = {map, [
-		  #riak_field_v1{name     = Name3,
-				 position = 1,
-				 type     = integer}
-		 ]},
-    Map1 = {map, [
-		  #riak_field_v1{name     = Name1,
-				 position = 1,
-				 type     = integer},
-		  #riak_field_v1{name     = Name2,
-				 position = 2,
-				 type     = Map2},
-		  #riak_field_v1{name     = "Level_1_map2",
-				 position = 3,
-				 type     = Map3}
-		 ]},
-    DDL = make_ddl(<<"complex_partition_key_test">>,
-		   [
-		    #riak_field_v1{name     = Name0,
-				   position = 1,
-				   type     = Map1}
-		   ],
-		   PK),
-    {module, _Module} = make_helper_mod(DDL, "/tmp"),
-    Obj = {{2, {3}, {4}}},
-    Result = (catch get_partition_key(DDL, Obj)),
-    Expected = {2, {3, "something", pong}, {2, 3, pang}},
-    ?_assertEqual(Expected, Result).
 
 -endif.
