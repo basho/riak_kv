@@ -196,7 +196,7 @@ check_sysctls(Checklist) ->
           case os:cmd("PATH=/sbin:/bin:/usr/bin:/usr/local/bin:/usr/local/sbin " 
                       ++ "which sysctl") of
               [] -> 
-                    lager:info("sysctls not found, skipping"),
+                    lager:info("sysctl not found, skipping"),
                     notfound;
               P -> string:strip(P,right,$\n)
           end;
