@@ -1,8 +1,9 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_api_pb_apiep: Protobuff callbacks providing a `location service'
-%%                    to external clients for optimal access to hosts
-%%                    with partitions containing known buckets/key
+%% riak_api_pb_apiep.erl: Protobuff callbacks providing a `location
+%%                        service' to external clients for optimal
+%%                        access to hosts with partitions containing
+%%                        known buckets/key
 %%
 %% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -74,16 +75,34 @@ process(#rpbapiepreq{bucket = Bucket, key = Key,
     EPList = riak_kv_apiep:get_entrypoints(
                Proto, [{bkey, {Bucket, Key}},
                        {force_update, ForceUpdate}]),
-    APList = lists:map(fun(EP) -> {?plget(addr, EP),
-                                   ?plget(port, EP),
-                                   ?plget(last_checked, EP)} end, EPList),
+    APList =
+        lists:filtermap(
+          fun(EP) ->
+                  %% well, we know the elements in this preflist come
+                  %% in a certain order (in which case we would just
+                  %% match them in function head), but let's treat it
+                  %% as if it might not.
+                  case {?plget(addr, EP),
+                        ?plget(port, EP),
+                        ?plget(last_checked, EP)} of
+                      {A, _, _} when is_atom(A) ->
+                          %% but also, we filter entries like
+                          %% no_interfaces or not_routed which are of
+                          %% no interest to clients
+                          false;
+                      APL ->
+                          {true, APL}
+                  end
+               end, EPList),
     {reply, #rpbapiepresp{
                eplist = [#rpbapiep{
-                            addr = if Addr == not_routed -> <<"not_routed">>;
-                                      el/=se -> list_to_binary(inet:ntoa(Addr)) end,
+                            addr = if is_atom(MaybeAddr) ->
+                                           list_to_binary(atom_to_list(MaybeAddr));
+                                      el/=se -> list_to_binary(inet:ntoa(MaybeAddr))
+                                   end,
                             port = Port,
                             last_checked = unixtime(LastChecked)} ||
-                            {Addr, Port, LastChecked} <- APList]},
+                            {MaybeAddr, Port, LastChecked} <- APList]},
      State}.
 
 

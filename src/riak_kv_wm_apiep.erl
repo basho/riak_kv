@@ -1,8 +1,9 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_wm_apiep: Webmachine resource providing a `location service'
-%%                   to external clients for optimal access to hosts
-%%                   with partitions containing known buckets/key.
+%% riak_kv_wm_apiep.erl: Webmachine resource providing a `location
+%%                       service' to external clients for optimal
+%%                       access to hosts with partitions containing
+%%                       known buckets/key.
 %%
 %% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -65,12 +66,11 @@
 
 -type wm_reqdata() :: #wm_reqdata{}.
 -type unixtime() :: non_neg_integer().
--type proto() :: pbc|http.
 -define(DEFAULT_CACHE_EXPIRY_TIME, 15).
 
 -record(ctx, {bucket :: string(),
               key :: string(),
-              proto = pbc :: proto(),
+              proto = pbc :: riak_api_lib:proto(),
               force_update = false :: boolean(),
               expiry_time = ?DEFAULT_CACHE_EXPIRY_TIME :: unixtime()
              }).
