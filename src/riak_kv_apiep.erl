@@ -71,7 +71,8 @@ get_entrypoints(Proto, Options) ->
 %% Local functions
 %% ===================================================================
 
--spec get_entrypoints_(riak_api_lib:proto(), [node()], boolean(), boolean()) ->
+-spec get_entrypoints_(riak_api_lib:proto(), all|[node()],
+                       boolean()|any(), boolean()|any()) ->
                               [riak_api_lib:ep()].
 %% @private
 get_entrypoints_(Proto, Nodes, ForceUpdate, ReportUnroutedAddresses) ->

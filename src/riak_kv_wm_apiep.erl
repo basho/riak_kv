@@ -68,8 +68,8 @@
 -type unixtime() :: non_neg_integer().
 -define(DEFAULT_CACHE_EXPIRY_TIME, 15).
 
--record(ctx, {bucket :: string(),
-              key :: string(),
+-record(ctx, {bucket :: binary(),
+              key :: binary(),
               proto = pbc :: riak_api_lib:proto(),
               force_update = false :: boolean(),
               expiry_time = ?DEFAULT_CACHE_EXPIRY_TIME :: unixtime()
@@ -171,7 +171,7 @@ make_response(RD, Ctx = #ctx{proto = Proto,
        Proto, Options), RD, Ctx}.
 
 -spec last_modified(wm_reqdata(), ctx()) ->
-    {string(), wm_reqdata(), ctx()}.
+    {calendar:datetime(), wm_reqdata(), ctx()}.
 last_modified(RD, Ctx = #ctx{expiry_time = Exp}) ->
     {calendar:gregorian_seconds_to_datetime(
        719528 * 86400  %% seconds in 1970 years since 0 AD (man calendar)
