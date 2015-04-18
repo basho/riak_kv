@@ -59,7 +59,7 @@
 -record(state, {from :: {raw, req_id(), pid()},
                 options=[] :: options(),
                 n :: pos_integer(),
-                preflist2 :: riak_core_apl:preflist2(),
+                preflist2 :: riak_core_apl:preflist_ann(),
                 req_id :: non_neg_integer(),
                 starttime :: pos_integer(),
                 get_core :: riak_kv_get_core:getcore(),
