@@ -637,7 +637,12 @@ handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
             case HT of
                 undefined ->
                     State2 = maybe_create_hashtrees(State),
-                    {reply, {ok, State2#state.hashtrees}, State2};
+                    case State2#state.hashtrees of
+                        undefined ->
+                            {reply, {error, wrong_node}, State2};
+                        _ ->
+                            {reply, {ok, State2#state.hashtrees}, State2}
+                    end;
                 _ ->
                     {reply, {ok, HT}, State}
             end;
