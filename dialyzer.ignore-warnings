@@ -1,11 +1,6 @@
 riak_core_pb.erl
-riak_kv_gcounter.erl:86: Function merge/2 has no local return
-riak_kv_gcounter.erl:87: The call riak_kv_gcounter:merge(GCnt1::any(),GCnt2::any(),[]) does not have an opaque term of type riak_kv_gcounter:gcounter() as 3rd argument
-riak_kv_gcounter.erl:100: The call riak_kv_gcounter:merge(Rest::any(),RestOfClock2::[tuple()],[{_,_},...]) does not have opaque terms as 2nd and 3rd arguments
-riak_kv_gcounter.erl:102: The call riak_kv_gcounter:merge(Rest::any(),Clock2::[tuple()],[{_,_},...]) does not have opaque terms as 2nd and 3rd arguments
 riak_kv_pipe_index.erl:164: Function queue_existing_pipe/4 has no local return
 riak_kv_pipe_listkeys.erl:159: Function queue_existing_pipe/3 has no local return
-riak_kv_pncounter.erl:101: Function merge/2 has no local return
 riak_kv_put_fsm.erl:822: The pattern <[COP = {'counter_op', _Amt} | T], Acc> can never match the type <[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()},...],[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()}]>
 riak_kv_put_fsm.erl:825: The pattern <[COP = {'crdt_op', _Op} | T], Acc> can never match the type <[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()},...],[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()}]>
 riak_kv_util.erl:304: The pattern 'error' can never match the type 'ok' | 'undefined'
