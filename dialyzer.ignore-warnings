@@ -1,8 +1,6 @@
 riak_core_pb.erl
 riak_kv_pipe_index.erl:164: Function queue_existing_pipe/4 has no local return
 riak_kv_pipe_listkeys.erl:159: Function queue_existing_pipe/3 has no local return
-riak_kv_put_fsm.erl:822: The pattern <[COP = {'counter_op', _Amt} | T], Acc> can never match the type <[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()},...],[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()}]>
-riak_kv_put_fsm.erl:825: The pattern <[COP = {'crdt_op', _Op} | T], Acc> can never match the type <[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()},...],[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()}]>
 riak_kv_util.erl:304: The pattern 'error' can never match the type 'ok' | 'undefined'
 riak_kv_vnode.erl:908: Invalid type specification for function riak_kv_vnode:prepare_index_query/1. The success typing is ('undefined' | {_,_}) -> 'undefined' | {_,_}
 riak_kv_vnode.erl:909: The pattern Q = {'riak_kv_index_v3', _, _, _, _, _, _, _, _, RE, _} can never match the type 'undefined' | {_,_}
