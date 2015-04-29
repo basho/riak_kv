@@ -76,7 +76,10 @@
         %% Some CRDTs and other client operations that cannot tolerate
         %% an automatic retry on the server side; those operations should
         %% use {retry_put_coordinator_failure, false}.
-        {retry_put_coordinator_failure, boolean()}.
+        {retry_put_coordinator_failure, boolean()} |
+        {returnbody, boolean()} |
+        {counter_op, term()} |
+        {crdt_op, term()}.
 
 -type options() :: [option()].
 
