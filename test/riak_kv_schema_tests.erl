@@ -3,13 +3,39 @@
 -include_lib("eunit/include/eunit.hrl").
 -compile(export_all).
 
+top_dir() ->
+    filename:dirname(code:where_is_file("riak_kv.app")) ++ "/../".
+
+find_deps_parent(Me) ->
+    %% Could check "../bitcask" for the parent directory but this does
+    %% a better job of identifying riak_kv as a nested dependency vs a
+    %% coincidentally-placed GitHub checkout
+    find_deps(
+      {mine, Me, filelib:is_dir(Me ++ "deps/bitcask")},
+      {parent, Me ++ "../../", filelib:is_dir(Me ++ "/../../deps/bitcask")}).
+
+find_deps({mine, Dir, true}, _) ->
+    Dir;
+find_deps(_, {parent, Dir, true}) ->
+    Dir;
+find_deps(_, _) ->
+    throw(no_deps_folder_found).
+
+
+map_to_top(Files) ->
+    TopDir = top_dir(),
+    DepsParent = find_deps_parent(TopDir),
+    lists:map(fun([$d,$e,$p,$s|_Rest]=Path) -> DepsParent++Path;
+                 (Path) -> TopDir ++ Path
+              end, Files).
+
 %% basic schema test will check to make sure that all defaults from the schema
 %% make it into the generated app.config
 basic_schema_test() ->
     %% The defaults are defined in ../priv/riak_kv.schema and multi_backend.schema.
     %% they are the files under test.
-    Config = cuttlefish_unit:generate_templated_config(
-        ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], [], context(), predefined_schema()),
+    Config = cuttlefish_unit:generate_templated_config(map_to_top(
+        ["priv/riak_kv.schema", "priv/multi_backend.schema"]), [], context(), predefined_schema()),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy", {on, []}),
     cuttlefish_unit:assert_config(Config, "riak_kv.storage_backend", riak_kv_bitcask_backend),
@@ -123,8 +149,8 @@ override_non_multi_backend_schema_test() ->
         {["anti_entropy", "use_background_manager"], on}
     ],
 
-    Config = cuttlefish_unit:generate_templated_config(
-        ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context(), predefined_schema()),
+    Config = cuttlefish_unit:generate_templated_config(map_to_top(
+        ["priv/riak_kv.schema", "priv/multi_backend.schema"]), Conf, context(), predefined_schema()),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy", {on, [debug]}),
     cuttlefish_unit:assert_config(Config, "riak_kv.storage_backend", riak_kv_eleveldb_backend),
@@ -203,8 +229,8 @@ multi_backend_test() ->
         {["multi_backend", "backend_two", "storage_backend"], "memory"}
     ],
 
-    Config = cuttlefish_unit:generate_templated_config(
-        ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context(), predefined_schema()),
+    Config = cuttlefish_unit:generate_templated_config(map_to_top(
+        ["priv/riak_kv.schema", "priv/multi_backend.schema"]), Conf, context(), predefined_schema()),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy", {on, []}),
     cuttlefish_unit:assert_config(Config, "riak_kv.storage_backend", riak_kv_multi_backend),
@@ -267,8 +293,8 @@ commit_hooks_test() ->
             {["buckets", "default", "precommit"], "bad:mod:fun"},
             {["buckets", "default", "postcommit"], "jsLOL"}
            ],
-    Config = cuttlefish_unit:generate_templated_config(
-               ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context(), predefined_schema()),
+    Config = cuttlefish_unit:generate_templated_config(map_to_top(
+               ["priv/riak_kv.schema", "priv/multi_backend.schema"]), Conf, context(), predefined_schema()),
     ?assertEqual({error, apply_translations,
                   {errorlist, [
                                {error,
@@ -283,8 +309,8 @@ commit_hooks_test() ->
 
 datatype_compression_validator_test() ->
     Conf = [{["datatypes", "compression_level"], 10}],
-    Config = cuttlefish_unit:generate_templated_config(
-               ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context(), predefined_schema()),
+    Config = cuttlefish_unit:generate_templated_config(map_to_top(
+               ["priv/riak_kv.schema", "priv/multi_backend.schema"]), Conf, context(), predefined_schema()),
     cuttlefish_unit:assert_error_in_phase(Config, validation),
     ok.
 
@@ -294,15 +320,15 @@ correct_error_handling_by_multibackend_test() ->
         {["multi_backend", "default", "bitcask", "data_root"], "/data/default_bitcask"}
     ],
 
-    Config = cuttlefish_unit:generate_templated_config([
-        "../priv/riak_kv.schema",
-        "../priv/multi_backend.schema",
-        "../deps/bitcask/priv/bitcask.schema",
-        "../deps/bitcask/priv/bitcask_multi.schema",
-        "../deps/eleveldb/priv/eleveldb.schema",
-        "../deps/eleveldb/priv/eleveldb_multi.schema",
-        "../test/bad_bitcask_multi.schema"
-        ],
+    Config = cuttlefish_unit:generate_templated_config(map_to_top([
+        "priv/riak_kv.schema",
+        "priv/multi_backend.schema",
+        "deps/bitcask/priv/bitcask.schema",
+        "deps/bitcask/priv/bitcask_multi.schema",
+        "deps/eleveldb/priv/eleveldb.schema",
+        "deps/eleveldb/priv/eleveldb_multi.schema",
+        "test/bad_bitcask_multi.schema"
+        ]),
         Conf, context(), predefined_schema()),
 
 
@@ -332,14 +358,14 @@ all_backend_multi_test() ->
 
     ],
 
-    Config = cuttlefish_unit:generate_templated_config([
-        "../priv/riak_kv.schema",
-        "../priv/multi_backend.schema",
-        "../deps/bitcask/priv/bitcask.schema",
-        "../deps/bitcask/priv/bitcask_multi.schema",
-        "../deps/eleveldb/priv/eleveldb.schema",
-        "../deps/eleveldb/priv/eleveldb_multi.schema"
-        ],
+    Config = cuttlefish_unit:generate_templated_config(map_to_top([
+        "priv/riak_kv.schema",
+        "priv/multi_backend.schema",
+        "deps/bitcask/priv/bitcask.schema",
+        "deps/bitcask/priv/bitcask_multi.schema",
+        "deps/eleveldb/priv/eleveldb.schema",
+        "deps/eleveldb/priv/eleveldb_multi.schema"
+        ]),
         Conf, context(), predefined_schema()),
 
 
