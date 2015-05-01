@@ -330,14 +330,15 @@ assign_vnodeid(Now, NodeId, Status) ->
 %% empty status is returned.
 -spec read_vnode_status(file:filename()) -> {ok, status()}.
 read_vnode_status(File) ->
-    try riak_core_util:consult(File) of
+    try file:consult(File) of
         {ok, [Status]} when is_list(Status) ->
             {ok, orddict:from_list(Status)};
         {error, enoent} ->
             %% doesn't exist? same as empty
             {ok, orddict:new()};
         Er ->
-            %% "corruption" error, unreadable, log, and start anew
+            %% "corruption" error, some other posix error, unreadable:
+            %% Log, and start anew
             lager:error("Failed to consult vnode-status file ~p ~p", [File, Er]),
             {ok, orddict:new()}
     catch C:T ->
