@@ -2,7 +2,7 @@
 %%
 %% riak_kv_bitcask_backend: Bitcask Driver for Riak
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -252,120 +252,82 @@ delete(Bucket, Key, _IndexSpecs,
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
                    any(),
                    [],
-                   state()) -> {ok, any()} | {async, fun()} | {error, term()}.
-fold_buckets(FoldBucketsFun, Acc, Opts, #state{opts=BitcaskOpts,
-                                               data_dir=DataFile,
-                                               ref=Ref,
-                                               root=DataRoot}) ->
+                   state()) -> {async, fun()} | {error, term()}.
+fold_buckets(FoldBucketsFun, Acc, _Opts, #state{opts=BitcaskOpts,
+                                                data_dir=DataFile,
+                                                root=DataRoot}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
-    case lists:member(async_fold, Opts) of
-        true ->
-            ReadOpts = set_mode(read_only, BitcaskOpts),
-            
-            BucketFolder =
-                fun() ->
-                        case bitcask:open(filename:join(DataRoot, DataFile), ReadOpts) of
-                            Ref1 when is_reference(Ref1) ->
-                                try
-                                    {Acc1, _} =
-                                        bitcask:fold_keys(Ref1,
-                                                          FoldFun,
-                                                          {Acc, sets:new()}),
-                                        Acc1
-                                after
-                                    bitcask:close(Ref1)
-                                end;
-                            {error, Reason} ->
-                                {error, Reason}
-                        end
-                end,
-            {async, BucketFolder};
-        false ->
-            {FoldResult, _Bucketset} =
-                bitcask:fold_keys(Ref, FoldFun, {Acc, sets:new()}),
-            case FoldResult of
-                {error, _} ->
-                    FoldResult;
-                _ ->
-                    {ok, FoldResult}
-            end
-    end.
+    ReadOpts = set_mode(read_only, BitcaskOpts),
+    BucketFolder =
+        fun() ->
+                case bitcask:open(filename:join(DataRoot, DataFile), ReadOpts) of
+                    Ref1 when is_reference(Ref1) ->
+                        try
+                            {Acc1, _} =
+                                bitcask:fold_keys(Ref1,
+                                                  FoldFun,
+                                                  {Acc, sets:new()}),
+                            Acc1
+                        after
+                            bitcask:close(Ref1)
+                        end;
+                    {error, Reason} ->
+                        {error, Reason}
+                end
+        end,
+    {async, BucketFolder}.
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
-                state()) -> {ok, term()} | {async, fun()} | {error, term()}.
+                state()) -> {async, fun()} | {error, term()}.
 fold_keys(FoldKeysFun, Acc, Opts, #state{opts=BitcaskOpts,
                                          data_dir=DataFile,
-                                         ref=Ref,
                                          root=DataRoot}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_keys_fun(FoldKeysFun, Bucket),
-    case lists:member(async_fold, Opts) of
-        true ->
-            ReadOpts = set_mode(read_only, BitcaskOpts),
-            KeyFolder =
-                fun() ->
-                        case bitcask:open(filename:join(DataRoot, DataFile), ReadOpts) of
-                            Ref1 when is_reference(Ref1) ->
-                                try
-                                    bitcask:fold_keys(Ref1, FoldFun, Acc)
-                                after
-                                    bitcask:close(Ref1)
-                                end;
-                            {error, Reason} ->
-                                {error, Reason}
-                        end
-                end,
-            {async, KeyFolder};
-        false ->
-            FoldResult = bitcask:fold_keys(Ref, FoldFun, Acc),
-            case FoldResult of
-                {error, _} ->
-                    FoldResult;
-                _ ->
-                    {ok, FoldResult}
-            end
-    end.
+    ReadOpts = set_mode(read_only, BitcaskOpts),
+    KeyFolder =
+        fun() ->
+                case bitcask:open(filename:join(DataRoot, DataFile), ReadOpts) of
+                    Ref1 when is_reference(Ref1) ->
+                        try
+                            bitcask:fold_keys(Ref1, FoldFun, Acc)
+                        after
+                            bitcask:close(Ref1)
+                        end;
+                    {error, Reason} ->
+                        {error, Reason}
+                end
+        end,
+    {async, KeyFolder}.
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
-                   state()) -> {ok, any()} | {async, fun()} | {error, term()}.
+                   state()) -> {async, fun()} | {error, term()}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{opts=BitcaskOpts,
                                                data_dir=DataFile,
-                                               ref=Ref,
                                                root=DataRoot}) ->
     Bucket =  proplists:get_value(bucket, Opts),
     FoldFun = fold_objects_fun(FoldObjectsFun, Bucket),
-    case lists:member(async_fold, Opts) of
-        true ->
-            ReadOpts = set_mode(read_only, BitcaskOpts),
-            ObjectFolder =
-                fun() ->
-                        case bitcask:open(filename:join(DataRoot, DataFile), ReadOpts) of
-                            Ref1 when is_reference(Ref1) ->
-                                try
-                                    bitcask:fold(Ref1, FoldFun, Acc)
-                                after
-                                    bitcask:close(Ref1)
-                                end;
-                            {error, Reason} ->
-                                {error, Reason}
-                        end
-                end,
-            {async, ObjectFolder};
-        false ->
-            FoldResult = bitcask:fold(Ref, FoldFun, Acc),
-            case FoldResult of
-                {error, _} ->
-                    FoldResult;
-                _ ->
-                    {ok, FoldResult}
-            end
-    end.
+    ReadOpts = set_mode(read_only, BitcaskOpts),
+    ObjectFolder =
+        fun() ->
+                case bitcask:open(filename:join(DataRoot, DataFile), ReadOpts) of
+                    Ref1 when is_reference(Ref1) ->
+                        try
+                            bitcask:fold(Ref1, FoldFun, Acc)
+                        after
+                            bitcask:close(Ref1)
+                        end;
+                    {error, Reason} ->
+                        {error, Reason}
+                end
+        end,
+    {async, ObjectFolder}.
 
 %% @doc Delete all objects from this bitcask backend
 %% @TODO once bitcask has a more friendly drop function
