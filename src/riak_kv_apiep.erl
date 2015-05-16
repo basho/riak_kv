@@ -30,6 +30,7 @@
 -type bkey() :: {Bucket::binary(), Key::binary()}.
 -type get_entrypoints_api_options() ::
         [{force_update, boolean()} |
+         {check_key_exist, boolean()} |
          {bkey, bkey()} |
          {report_unrouted_addresses, boolean()}].  %% this option is not used by clients
 %% this type includes options for the user API call, and is therefore
@@ -54,22 +55,60 @@ get_entrypoints_json(Proto, Options) ->
 get_entrypoints(Proto, Options) ->
     ForceUpdate = ?plget(force_update, Options, false),
     ReportUnroutedAddresses = ?plget(report_unrouted_addresses, Options, false),
+    GetEPsFromNodes =
+        fun(BKey) -> get_entrypoints_from_nodes(
+                       BKey, Proto, ForceUpdate, ReportUnroutedAddresses) end,
     case ?plget(bkey, Options, {<<>>, <<>>}) of
         {<<>>, <<>>} ->
             get_entrypoints_(Proto, all, ForceUpdate, ReportUnroutedAddresses);
         BKey ->
-            UpNodes = riak_core_node_watcher:nodes(riak_kv),
-            Preflist = riak_core_apl:get_apl_ann(BKey, UpNodes),
-            Nodes =
-                lists:usort(
-                  [N || {{_Index, N}, _Type} <- Preflist]),  %% filter on type?
-            get_entrypoints_(Proto, Nodes, ForceUpdate, ReportUnroutedAddresses)
+            case ?plget(check_key_exist, Options, true) of
+                true ->
+                    case key_exists(BKey) of
+                        true ->
+                            GetEPsFromNodes(BKey);
+                        false ->
+                            []
+                    end;
+                false ->
+                    GetEPsFromNodes(BKey)
+            end
     end.
 
 
 %% ===================================================================
 %% Local functions
 %% ===================================================================
+
+%% @private
+key_exists({Bucket, Key}) ->
+    case riak_client:get(Bucket, Key,
+                         [{r, 1},  %% pick the most sloppy options
+                          {pr, 1},
+                          {basic_quorum, true},
+                          {notfound_ok, false},
+                          {details, false}],
+                         riak_client:new(node(), fafa_id)) of
+        {ok, _RiakObject} ->
+            true;
+        {error, notfound} ->
+            false;
+        {error, Reason} ->
+            lager:info(self(),
+                       "Checking for existence of ~p:~9999p, failed with reason ~9999p:"
+                       " assume 'notfound'", [Bucket, Key, Reason]),
+            false
+    end.
+
+%% @private
+get_entrypoints_from_nodes(BKey, Proto, ForceUpdate, ReportUnroutedAddresses) ->
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    Preflist = riak_core_apl:get_apl_ann(BKey, UpNodes),
+    Nodes =
+        lists:usort(
+          [N || {{_Index, N}, _Type} <- Preflist]),  %% filter on type?
+    get_entrypoints_(Proto, Nodes, ForceUpdate, ReportUnroutedAddresses).
+
 
 -spec get_entrypoints_(riak_api_lib:proto(), all|[node()],
                        boolean()|any(), boolean()|any()) ->

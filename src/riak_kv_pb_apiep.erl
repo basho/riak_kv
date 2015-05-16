@@ -61,8 +61,10 @@ decode(Code, Bin) when Code == 90 ->
     case Msg of
         #rpbapiepreq{bucket = B, key = K,
                      proto = P,
-                     force_update = ForceUpdate} ->
-            {ok, Msg, {"riak_kv.apiep", {{B, K}, P, ForceUpdate}}}
+                     force_update = ForceUpdate,
+                     check_key_exist = CheckKeyExist} ->
+            {ok, Msg, {"riak_kv.apiep",
+                       {{B, K}, P, ForceUpdate, CheckKeyExist}}}
     end.
 
 encode(Message) ->
@@ -71,10 +73,12 @@ encode(Message) ->
 
 process(#rpbapiepreq{bucket = Bucket, key = Key,
                      proto = Proto,
-                     force_update = ForceUpdate}, State) ->
+                     force_update = ForceUpdate,
+                     check_key_exist = CheckKeyExist}, State) ->
     EPList = riak_kv_apiep:get_entrypoints(
                Proto, [{bkey, {Bucket, Key}},
-                       {force_update, ForceUpdate}]),
+                       {force_update, ForceUpdate},
+                       {check_key_exist, CheckKeyExist}]),
     APList =
         lists:filtermap(
           fun(EP) ->

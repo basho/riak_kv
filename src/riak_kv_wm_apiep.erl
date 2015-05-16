@@ -72,6 +72,7 @@
               key :: binary(),
               proto = pbc :: riak_api_lib:proto(),
               force_update = false :: boolean(),
+              check_key_exist = true :: boolean(),
               expiry_time = ?DEFAULT_CACHE_EXPIRY_TIME :: unixtime()
              }).
 -type ctx() :: #ctx{}.
@@ -134,13 +135,15 @@ malformed_request(RD, Ctx) ->
            end,
            {true, []},
            [{"force_update", ["1", "0"], CheckOptionalParm},
+            {"check_key_exist", ["1", "0"], CheckOptionalParm},
             {"proto",  ["pbc", "http"], CheckOptionalParm}]) of
         {true, AssignedList} ->
             F = fun(P) -> proplists:get_value(P, AssignedList) end,
             {false, RD, Ctx#ctx{bucket = Bucket,
                                 key    = Key,
                                 proto  = list_to_atom(F("proto")),
-                                force_update = ("1" == F("force_update"))}};
+                                force_update = ("1" == F("force_update")),
+                                check_key_exist = ("1" == F("check_key_exist"))}};
         _ ->
             {true,
              error_response("invalid/insufficient parameters", RD),
@@ -164,8 +167,10 @@ content_types_provided(RD, Ctx) ->
     {iolist(), wm_reqdata(), ctx()}.
 make_response(RD, Ctx = #ctx{proto = Proto,
                              bucket = Bucket, key = Key,
-                             force_update = ForceUpdate}) ->
+                             force_update = ForceUpdate,
+                             check_key_exist = CheckKeyExist}) ->
     Options = [{force_update, ForceUpdate},
+               {check_key_exist, CheckKeyExist},
                {bkey, {Bucket, Key}}],
     {riak_kv_apiep:get_entrypoints_json(
        Proto, Options), RD, Ctx}.
