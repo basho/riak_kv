@@ -2615,13 +2615,18 @@ highest_actor(ActorBase, Obj) ->
 
 -define(MGR, riak_kv_vnode_status_mgr).
 -define(MAX_INT, 4294967295).
+-define(DATA_DIR, "riak_kv_vnode_blocking_test").
+
+blocking_setup() ->
+    application:set_env(riak_core, platform_data_dir, ?DATA_DIR),
+    (catch file:delete(?DATA_DIR ++ "/kv_vnode/0")).
 
 %% @private test the vnode and vnode mgr interaction NOTE: sets up and
 %% tearsdown inside the test, the mgr needs the pid of the test
 %% process to send messages. @TODO(rdb) find a better way
 blocking_test_() ->
-    {setup, fun() -> (catch file:delete("undefined/kv_vnode/0")) end,
-     fun(_) -> file:delete("undefined/kv_vnode/0") end,
+    {setup, fun() -> blocking_setup() end,
+     fun(_) -> file:delete(?DATA_DIR ++ "/kv_vnode/0") end,
      {spawn, [{"Blocking",
                fun() ->
                        {ok, Pid} = ?MGR:start_link(self(), 0, true),
