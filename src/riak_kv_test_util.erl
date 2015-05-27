@@ -156,6 +156,9 @@ setup(TestName, SetupFun) ->
     Deps = dep_apps(TestName, SetupFun),
     do_dep_apps(load, Deps),
 
+    %% Start epmd
+    os:cmd("epmd -daemon"),
+
     %% Start erlang node
     {ok, Hostname} = inet:gethostname(),
     TestNode = list_to_atom(TestName ++ "@" ++ Hostname),
