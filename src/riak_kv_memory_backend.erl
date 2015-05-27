@@ -269,7 +269,7 @@ delete(Bucket, Key, IndexSpecs, State=#state{data_ref=DataRef,
             UsedMemory1 = UsedMemory - object_size(Object),
             update_indexes(Bucket, Key, IndexSpecs, IndexRef),
             ets:delete(DataRef, {Bucket, Key});
-        [] -> 
+        [] ->
             UsedMemory1 = UsedMemory
     end,
     {ok, State#state{used_memory=UsedMemory1}}.
@@ -594,7 +594,7 @@ key_range_folder(_Folder, Acc, _DataRef, _DataKey, _Query) ->
 
 %% Iterates over a range of index postings
 index_range_folder(Folder, Acc0, IndexRef, {B, I, V, _K}=IndexKey,
-                   {QueryB, QueryI, Min, Max, StartKey, Incl}=Query) 
+                   {QueryB, QueryI, Min, Max, StartKey, Incl}=Query)
   when ((QueryB =:= undefined) orelse (QueryB =:= B)),
        ((QueryI =:= undefined) orelse (QueryI =:= I)),
        ((Min =:= undefined) orelse (V >= Min)),
@@ -707,7 +707,7 @@ object_size(Object) ->
 
 simple_test_() ->
     Config = [{test, true}, {test_table_opts, [public]}],
-    riak_kv_backend:standard_test(?MODULE, Config).
+    backend_test_util:standard_test(?MODULE, Config).
 
 ttl_test_() ->
     Config = [{ttl, 15}],
