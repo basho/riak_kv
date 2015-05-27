@@ -137,9 +137,9 @@ make_bk(1, Bucket, Key) ->
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config0) ->
     random:seed(erlang:now()),
-    {Config, KeyVsn} = 
+    {Config, KeyVsn} =
         case app_helper:get_prop_or_env(small_keys, Config0, bitcask) of
-            false -> 
+            false ->
                 C0 = proplists:delete(small_keys, Config0),
                 C1 = C0 ++ [{key_transform, fun key_transform_to_0/1}],
                 {C1, 0};
@@ -148,8 +148,8 @@ start(Partition, Config0) ->
                 C1 = C0 ++ [{key_transform, ?CURRENT_KEY_TRANS}],
                 {C1, ?VERSION_BYTE}
         end,
-        
-    %% Get the data root directory  
+
+    %% Get the data root directory
     case app_helper:get_prop_or_env(data_root, Config, bitcask) of
         undefined ->
             lager:error("Failed to create bitcask dir: data_root is not set"),
@@ -226,7 +226,7 @@ get(Bucket, Key, #state{ref=Ref, key_vsn=KVers}=State) ->
 -spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
-put(Bucket, PrimaryKey, _IndexSpecs, Val, 
+put(Bucket, PrimaryKey, _IndexSpecs, Val,
     #state{ref=Ref, key_vsn=KeyVsn}=State) ->
     BitcaskKey = make_bk(KeyVsn, Bucket, PrimaryKey),
     case bitcask:put(Ref, BitcaskKey, Val) of
@@ -242,7 +242,7 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val,
 %% is ignored.
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
                     {ok, state()}.
-delete(Bucket, Key, _IndexSpecs, 
+delete(Bucket, Key, _IndexSpecs,
        #state{ref=Ref, key_vsn=KeyVsn}=State) ->
     BitcaskKey = make_bk(KeyVsn, Bucket, Key),
     ok = bitcask:delete(Ref, BitcaskKey),
@@ -261,7 +261,7 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{opts=BitcaskOpts,
     case lists:member(async_fold, Opts) of
         true ->
             ReadOpts = set_mode(read_only, BitcaskOpts),
-            
+
             BucketFolder =
                 fun() ->
                         case bitcask:open(filename:join(DataRoot, DataFile), ReadOpts) of
@@ -857,14 +857,14 @@ finalize_upgrade(Dir) ->
 simple_test_() ->
     ?assertCmd("rm -rf test/bitcask-backend"),
     application:set_env(bitcask, data_root, ""),
-    riak_kv_backend:standard_test(?MODULE,
-                                        [{data_root, "test/bitcask-backend"}]).
+    backend_test_util:standard_test(?MODULE,
+                                    [{data_root, "test/bitcask-backend"}]).
 
 custom_config_test_() ->
     ?assertCmd("rm -rf test/bitcask-backend"),
     application:set_env(bitcask, data_root, ""),
-    riak_kv_backend:standard_test(?MODULE,
-                                        [{data_root, "test/bitcask-backend"}]).
+    backend_test_util:standard_test(?MODULE,
+                                    [{data_root, "test/bitcask-backend"}]).
 
 startup_data_dir_test() ->
     os:cmd("rm -rf test/bitcask-backend/*"),
@@ -946,12 +946,12 @@ key_version_test() ->
     ?_assertEqual([
                    {<<"b1">>, <<"k1">>},
                    {<<"b2">>, <<"k1">>},
-                   {<<"b3">>, <<"k1">>},                   
+                   {<<"b3">>, <<"k1">>},
                    {<<"b4">>, <<"k1">>},
                    {<<"b5">>, <<"k1">>}
                   ],
                   L).
-    
+
 -ifdef(EQC).
 
 eqc_test_() ->

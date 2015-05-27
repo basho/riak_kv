@@ -473,7 +473,7 @@ t0_number1(_BucketSuffix, Bucket, Key) ->
 -ifdef(TEST).
 simple_test() ->
    Config = [],
-   riak_kv_backend:standard_test(?MODULE, Config).
+   backend_test_util:standard_test(?MODULE, Config).
 
 -ifdef(EQC).
 eqc_test() ->
