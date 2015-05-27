@@ -583,7 +583,7 @@ key_range_folder(_Folder, Acc, _DataRef, _DataKey, _Query) ->
 
 %% Iterates over a range of index postings
 index_range_folder(Folder, Acc0, IndexRef, {B, I, V, _K}=IndexKey,
-                   {QueryB, QueryI, Min, Max, StartKey, Incl}=Query) 
+                   {QueryB, QueryI, Min, Max, StartKey, Incl}=Query)
   when ((QueryB =:= undefined) orelse (QueryB =:= B)),
        ((QueryI =:= undefined) orelse (QueryI =:= I)),
        ((Min =:= undefined) orelse (V >= Min)),
@@ -695,7 +695,7 @@ object_size(Object) ->
 -ifdef(TEST).
 
 simple_test_() ->
-    riak_kv_backend:standard_test(?MODULE, []).
+    backend_test_util:standard_test(?MODULE, []).
 
 ttl_test_() ->
     Config = [{ttl, 15}],
