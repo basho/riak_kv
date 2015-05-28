@@ -2626,12 +2626,16 @@ blocking_setup() ->
     application:set_env(riak_core, platform_data_dir, ?DATA_DIR),
     (catch file:delete(?DATA_DIR ++ "/kv_vnode/0")).
 
+blocking_teardown() ->
+    application:unset_env(riak_core, platform_data_dir),
+    (catch file:delete(?DATA_DIR ++ "/kv_vnode/0")).
+
 %% @private test the vnode and vnode mgr interaction NOTE: sets up and
 %% tearsdown inside the test, the mgr needs the pid of the test
 %% process to send messages. @TODO(rdb) find a better way
 blocking_test_() ->
     {setup, fun() -> blocking_setup() end,
-     fun(_) -> file:delete(?DATA_DIR ++ "/kv_vnode/0") end,
+     fun(_) -> blocking_teardown() end,
      {spawn, [{"Blocking",
                fun() ->
                        {ok, Pid} = ?MGR:start_link(self(), 0, true),
@@ -2743,7 +2747,7 @@ list_buckets_test_() ->
              clean_test_dirs(),
              application:start(sasl),
              Env = application:get_all_env(riak_kv),
-	     exometer:start(),
+         exometer:start(),
              riak_kv_stat:register_stats(),
              {ok, _} = riak_core_bg_manager:start(),
              riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
@@ -2753,7 +2757,7 @@ list_buckets_test_() ->
              riak_core_ring_manager:cleanup_ets(test),
              riak_kv_test_util:stop_process(riak_core_metadata_manager),
              riak_kv_test_util:stop_process(riak_core_bg_manager),
-	     exometer:stop(),
+         exometer:stop(),
              application:stop(sasl),
              [application:unset_env(riak_kv, K) ||
                  {K, _V} <- application:get_all_env(riak_kv)],
