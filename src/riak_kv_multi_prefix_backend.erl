@@ -426,18 +426,18 @@ maybe_mark_indexes_fixed(Mod, ModState, ForUpgrade) ->
     end.
 
 fix_index(BKeys, ForUpgrade, State) ->
-    % Group keys per bucket 
+    % Group keys per bucket
     PerBucket = lists:foldl(fun(BK={B,_},D) -> dict:append(B,BK,D) end, dict:new(), BKeys),
-    Result = 
+    Result =
         dict:fold(
             fun(Bucket, StorageKey, Acc = {Success, Ignore, Errors}) ->
                 {_, Mod,  ModState} = Backend = get_backend(Bucket, State),
                 case backend_can_index_reformat(Mod, ModState) of
-                    true -> 
-                            {S, I, E} = backend_fix_index(Backend, Bucket, 
+                    true ->
+                            {S, I, E} = backend_fix_index(Backend, Bucket,
                                                           StorageKey, ForUpgrade),
                             {Success + S, Ignore + I, Errors + E};
-                    false -> 
+                    false ->
                             Acc
                 end
             end, {0, 0, 0}, PerBucket),
@@ -445,7 +445,7 @@ fix_index(BKeys, ForUpgrade, State) ->
 
 backend_fix_index({_, Mod, ModState}, Bucket, StorageKey, ForUpgrade) ->
     case Mod:fix_index(StorageKey, ForUpgrade, ModState) of
-        {reply, Reply, _UpModState} -> 
+        {reply, Reply, _UpModState} ->
             Reply;
         {error, Reason} ->
            _ = lager:error("Failed to fix index for bucket ~p, key ~p, backend ~p: ~p",
@@ -703,7 +703,7 @@ backend_can_index_reformat(Mod, ModState) ->
 
 %%                        %% Run the standard backend test...
 %%                        Config = sample_config(),
-%%                        riak_kv_backend:standard_test(?MODULE, Config)
+%%                        backend_test_util:standard_test(?MODULE, Config)
 %%                end
 %%               }
 %%       end,
