@@ -46,6 +46,8 @@
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
 
+-include_lib("riak_core/include/riak_core_vnode.hrl").
+
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
 -define(DEFAULT_TIMEOUT, 60000).
@@ -720,10 +722,16 @@ get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
     Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
     MaxResults = proplists:get_value(max_results, Opts, all),
     PgSort = proplists:get_value(pagination_sort, Opts),
+    VNodeSearch = vnode_target(proplists:get_value(vnode_target, Opts)),
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults, PgSort]]),
+    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults, PgSort, VNodeSearch]]),
     wait_for_query_results(ReqId, Timeout).
+
+vnode_target(undefined) ->
+    all;
+vnode_target(N) ->
+    #vnode_selector{vnode_identifier=N}.
 
 %% @doc Run the provided index query, return a stream handle.
 -spec stream_get_index(Bucket :: binary(), Query :: riak_index:query_def(),
