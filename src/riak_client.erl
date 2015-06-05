@@ -731,7 +731,7 @@ get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
 vnode_target(undefined) ->
     all;
 vnode_target(N) ->
-    #vnode_selector{vnode_identifier=N}.
+    #vnode_coverage{vnode_identifier=N}.
 
 %% @doc Run the provided index query, return a stream handle.
 -spec stream_get_index(Bucket :: binary(), Query :: riak_index:query_def(),
