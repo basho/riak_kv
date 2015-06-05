@@ -722,7 +722,7 @@ get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
     Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
     MaxResults = proplists:get_value(max_results, Opts, all),
     PgSort = proplists:get_value(pagination_sort, Opts),
-    VNodeSearch = vnode_target(proplists:get_value(vnode_target, Opts)),
+    VNodeSearch = vnode_target(proplists:get_value(vnode_coverage, Opts)),
     Me = self(),
     ReqId = mk_reqid(),
     riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults, PgSort, VNodeSearch]]),
@@ -730,8 +730,11 @@ get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
 
 vnode_target(undefined) ->
     all;
-vnode_target(N) ->
-    #vnode_coverage{vnode_identifier=N}.
+vnode_target(Proplist) ->
+    #vnode_coverage{
+       vnode_identifier=proplists:get_value(partition, Proplist),
+       partition_filters=proplists:get_value(filters, Proplist, [])
+      }.
 
 %% @doc Run the provided index query, return a stream handle.
 -spec stream_get_index(Bucket :: binary(), Query :: riak_index:query_def(),
