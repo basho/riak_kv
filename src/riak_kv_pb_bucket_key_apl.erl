@@ -52,10 +52,10 @@ init() ->
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) when Code == 33 ->
-    Msg = #rpbgetbucketkeypreflistreq{type =T, bucket =B, key =Key} =
+    Msg = #rpbgetbucketkeypreflistreq{type =T, bucket =B, key =_Key} =
         riak_pb_codec:decode(Code, Bin),
     Bucket = riak_kv_pb_bucket:bucket_type(T, B),
-    {ok, Msg, {"riak_kv.get_preflist", {Bucket, Key}}}.
+    {ok, Msg, {"riak_kv.get_preflist", Bucket}}.
 
 %% @doc encode/1 callback. Encodes an outgoing response message.
 encode(Message) ->
