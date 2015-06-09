@@ -140,11 +140,16 @@ maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
 %% @doc Fetch the object at Bucket/Key.  Return a value as soon as R-value for the nodes
 %%      have responded with a value or error.
 get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
+    Postproc = fun(Obj) ->
+                       maybe_add_apiep(
+                         proplists:get_value(apiep_proto, Options),
+                         {Bucket, Key}, Obj)
+               end,
     case consistent_object(Node, Bucket) of
         true ->
-            consistent_get(Bucket, Key, Options, THIS);
+            Postproc(consistent_get(Bucket, Key, Options, THIS));
         false ->
-            normal_get(Bucket, Key, Options, THIS);
+            Postproc(normal_get(Bucket, Key, Options, THIS));
         {error,_}=Err ->
             Err
     end;
@@ -178,6 +183,23 @@ get(Bucket, Key, R, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) when
                                   (is_atom(R) or is_integer(R)),
                                   is_integer(Timeout) ->
     get(Bucket, Key, [{r, R}, {timeout, Timeout}], THIS).
+
+
+-spec maybe_add_apiep(Proto::pbc|http|undefined|any(), {riak_object:bucket(), riak_object:key()},
+                      {ok, riak_object:riak_object()} | {error, term()}) ->
+                      {ok, riak_object:riak_object()} | {error, term()}.
+%% @private
+%% Possibly discover and inject API entry points into object's metadata
+maybe_add_apiep(Proto, BKey, {ok, Obj})
+  when Proto == pbc; Proto == http ->
+    EPList = riak_kv_apiep:get_entrypoints(
+               Proto, [{bkey, BKey}, {force_update, false}]),
+    {ok, riak_object:apply_updates(
+           riak_object:update_metadata(
+             Obj, riak_object:set_apieps(
+                    EPList, riak_object:get_metadata(Obj))))};
+maybe_add_apiep(_, _, Pass) ->
+    Pass.
 
 
 %% @spec put(RObj :: riak_object:riak_object(), riak_client()) ->
