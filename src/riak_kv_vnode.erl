@@ -1985,14 +1985,8 @@ clear_vnodeid(Index) ->
 update_vnode_status(F, Index) ->
     VnodeFile = vnode_status_filename(Index),
     ok = filelib:ensure_dir(VnodeFile),
-    case read_vnode_status(VnodeFile) of
-        {ok, Status} ->
-            update_vnode_status2(F, Status, VnodeFile);
-        {error, enoent} ->
-            update_vnode_status2(F, [], VnodeFile);
-        ER ->
-            ER
-    end.
+    {ok, Status} = read_vnode_status(VnodeFile),
+    update_vnode_status2(F, Status, VnodeFile).
 
 update_vnode_status2(F, Status, VnodeFile) ->
     case F(Status) of
@@ -2014,11 +2008,22 @@ vnode_status_filename(Index) ->
     filename:join(VnodeStatusDir, integer_to_list(Index)).
 
 read_vnode_status(File) ->
-    case file:consult(File) of
-        {ok, [Status]} when is_list(Status) ->
-            {ok, proplists:delete(version, Status)};
-        ER ->
-            ER
+    try
+        case file:consult(File) of
+            {ok, [Status]} when is_list(Status) ->
+                {ok, proplists:delete(version, Status)};
+            {error, enoent} ->
+                %% doesn't exist? same as empty
+                {ok, []};
+            Er ->
+                %% "corruption" error, unreadable, log, and start anew
+                lager:error("Failed to consult vnode-status file ~p ~p", [File, Er]),
+                {ok, []}
+        end
+    catch C:T ->
+            %% consult threw
+            lager:error("Failed to consult vnode-status file ~p ~p ~p", [File, C, T]),
+            {ok, []}
     end.
 
 write_vnode_status(Status, File) ->
