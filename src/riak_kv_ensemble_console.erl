@@ -33,7 +33,6 @@
 
 -record(details, {enabled     :: boolean(),
                   active      :: boolean(),
-                  aae_enabled :: boolean(),
                   validation  :: strong | weak,
                   metadata    :: async  | sync,
                   ensembles   :: ensembles(),
