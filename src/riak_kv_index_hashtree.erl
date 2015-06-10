@@ -57,7 +57,8 @@
          clear/1,
          expire/1,
          destroy/1,
-         index_2i_n/0]).
+         index_2i_n/0,
+         get_trees/1]).
 
 -export([poke/1,
          get_build_time/1]).
@@ -178,6 +179,11 @@ compare(Id, Remote, AccFun, Tree) ->
 compare(Id, Remote, AccFun, Acc, Tree) ->
     gen_server:call(Tree, {compare, Id, Remote, AccFun, Acc}, infinity).
 
+%% @doc For testing only, retrieve the hashtree data structures. It is
+%% not safe to tamper with these structures due to the LevelDB backend.
+get_trees({test, Pid}) ->
+    gen_server:call(Pid, get_trees, infinity).
+
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the calling process.
 -spec get_lock(pid(), any()) -> ok | not_built | already_locked.
@@ -279,6 +285,9 @@ handle_call({insert, Items, Options}, _From, State) ->
 handle_call({delete, Items}, _From, State) ->
     State2 = do_delete(Items, State),
     {reply, ok, State2};
+
+handle_call(get_trees, _From, #state{trees=Trees}=State) ->
+    {reply, Trees, State};
 
 handle_call({update_tree, Id}, From, State) ->
     lager:debug("Updating tree: (vnode)=~p (preflist)=~p", [State#state.index, Id]),
