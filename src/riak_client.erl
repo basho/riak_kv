@@ -485,13 +485,26 @@ consistent_delete_vclock(Bucket, Key, VClock, Options, _Timeout, {?MODULE, [Node
 
 %% @spec get_cover(Bucket :: binary() | {binary(), binary()},
 %%                 riak_client()) ->
-%%       Plan :: riak_core_coverage_plan:coverage_plan() |
+%%       Plan :: list(atom(), term()) |
 %%       {error, Err :: term()}
 %% @doc Retrieve a coverage plan
 get_cover(Bucket, _Client) ->
     ReqId = mk_reqid(),
     N = riak_core_bucket:n_val(riak_core_bucket:get_bucket(Bucket)),
-    riak_core_coverage_plan:create_plan(all, N, 1, ReqId, riak_kv).
+    split_cover(riak_core_coverage_plan:create_plan(all, N, 1, ReqId, riak_kv)).
+
+split_cover({error, _}=Error) ->
+    Error;
+split_cover({VnodeList, FilterList}) ->
+    lists:map(fun({Hash, Node}) ->
+                      [{vnode_hash, Hash}, {node, Node}] ++
+                      case lists:keyfind(Hash, 1, FilterList) of
+                          false ->
+                              [];
+                          {Hash, Partitions} ->
+                              [{filters, Partitions}]
+                      end
+              end, VnodeList).
 
 %% @spec list_keys(riak_object:bucket(), riak_client()) ->
 %%       {ok, [Key :: riak_object:key()]} |
