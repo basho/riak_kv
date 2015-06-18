@@ -45,6 +45,7 @@
 -export([get_client_id/1]).
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
+-export([get_cover/2]).
 
 -include_lib("riak_core/include/riak_core_vnode.hrl").
 
@@ -481,6 +482,16 @@ consistent_delete_vclock(Bucket, Key, VClock, Options, _Timeout, {?MODULE, [Node
         {ok, Obj} when element(1, Obj) =:= r_object ->
             ok
     end.
+
+%% @spec get_cover(Bucket :: binary() | {binary(), binary()},
+%%                 riak_client()) ->
+%%       Plan :: riak_core_coverage_plan:coverage_plan() |
+%%       {error, Err :: term()}
+%% @doc Retrieve a coverage plan
+get_cover(Bucket, _Client) ->
+    ReqId = mk_reqid(),
+    N = riak_core_bucket:n_val(riak_core_bucket:get_bucket(Bucket)),
+    riak_core_coverage_plan:create_plan(all, N, 1, ReqId, riak_kv).
 
 %% @spec list_keys(riak_object:bucket(), riak_client()) ->
 %%       {ok, [Key :: riak_object:key()]} |
