@@ -742,21 +742,26 @@ get_index(Bucket, Query, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%       {error, timeout} |
 %%       {error, Err :: term()}
 %% @doc Run the provided index query.
+%%
+%% If defined in `Opts', `vnode_target' should be a proplist with
+%% `vnode_hash' as the hash that uniquely (barring failover)
+%% identifies a vnode, and optionally `filters' as coverage
+%% plan filters identifying individual partitions within that vnode.
 get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
     Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
     MaxResults = proplists:get_value(max_results, Opts, all),
     PgSort = proplists:get_value(pagination_sort, Opts),
-    VNodeSearch = vnode_target(proplists:get_value(vnode_coverage, Opts)),
+    VNodeCoverage = vnode_target(proplists:get_value(vnode_target, Opts)),
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults, PgSort, VNodeSearch]]),
+    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults, PgSort, VNodeCoverage]]),
     wait_for_query_results(ReqId, Timeout).
 
 vnode_target(undefined) ->
     all;
 vnode_target(Proplist) ->
     #vnode_coverage{
-       vnode_identifier=proplists:get_value(partition, Proplist),
+       vnode_identifier=proplists:get_value(vnode_hash, Proplist),
        partition_filters=proplists:get_value(filters, Proplist, [])
       }.
 
