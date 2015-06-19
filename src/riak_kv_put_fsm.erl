@@ -289,7 +289,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
     Props = 
         case is_tuple(Bucket) of
             false -> 
-                lists:keymerge(1, lists:keysort(1, BucketProps), 
+                lists:ukeymerge(1, lists:keysort(1, BucketProps),
                                lists:keysort(1, DefaultProps));
             true ->
                 BucketProps

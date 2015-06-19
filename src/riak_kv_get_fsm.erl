@@ -191,7 +191,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
     Props = 
         case is_tuple(Bucket) of
             false ->
-                lists:keymerge(1, lists:keysort(1, BucketProps), 
+                lists:ukeymerge(1, lists:keysort(1, BucketProps),
                                lists:keysort(1, DefaultProps));
             true ->
                 BucketProps
