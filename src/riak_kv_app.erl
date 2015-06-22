@@ -36,6 +36,7 @@
                    {riak_kv_pb_bucket_key_apl, 33, 34}, %% (Active) Preflist requests
                    {riak_kv_pb_csbucket, 40, 41}, %%  CS bucket folding support
                    {riak_kv_pb_counter, 50, 53}, %% counter requests
+                   {riak_kv_pb_coverage, 70, 71}, %% coverage requests
                    {riak_kv_pb_crdt, 80, 83} %% CRDT requests
                   ]).
 -define(MAX_FLUSH_PUT_FSM_RETRIES, 10).

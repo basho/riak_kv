@@ -24,13 +24,13 @@
 %% following request messages:</p>
 %%
 %% <pre>
-%%  ?? - RpbCoverageReq
+%%  70 - RpbCoverageReq
 %% </pre>
 %%
 %% <p>This service produces the following responses:</p>
 %%
 %% <pre>
-%%  ?? - RpbCoverageResp
+%%  71 - RpbCoverageResp
 %% </pre>
 %% @end
 
@@ -59,7 +59,7 @@ init() ->
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
-        #rpbcoverreq{type=T, bucket=B} ->
+        #rpbcoveragereq{type=T, bucket=B} ->
             Bucket = bucket_type(T, B),
             {ok, Msg, {"riak_kv.cover", Bucket}}
     end.
@@ -74,15 +74,35 @@ process_stream(_,_,State) ->
     {ignore, State}.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(#rpbcoverreq{type=T, bucket=B}, #state{client=Client} = State) ->
+process(#rpbcoveragereq{type=T, bucket=B}, #state{client=Client} = State) ->
     Bucket = bucket_type(T, B),
-    check_for_error(Client:get_cover(Bucket), State).
+    convert_list(Client:get_cover(Bucket), State).
 
-check_for_error({error, Error}, State) ->
+convert_list({error, Error}, State) ->
     {error, Error, State};
-check_for_error(Results, State) ->
-    %% XXX Have to do something more intelligent here
-    {reply, #rpbcoverresp{data=Results}, State}.
+convert_list(Results, State) ->
+    %% Pull hostnames & ports
+    %% Wrap each element of this list into a rpbcoverageentry
+    Resp = #rpbcoverageresp{
+              entries=
+                  lists:map(fun(P) ->
+                      Node = proplists:get(node, P),
+                      {Name, Port} = magically_steal_data(Node),
+                      Csum = erlang:adler32(term_to_binary(P)),
+                      #rpbcoverageentry{
+                         cover_context=term_to_binary({Csum, P}),
+                         hostname=Name,
+                         port=Port,
+                         keyspace_desc = <<"Please ignore me">>
+                        }
+              end,
+              Results)
+             },
+    {reply, Resp, State}.
+
+magically_steal_data(NodeName) ->
+    %% XXX DO NOT LEAVE THIS
+    {NodeName, 10018}.
 
 %% always construct {Type, Bucket} tuple, filling in default type if needed
 bucket_type(undefined, B) ->
