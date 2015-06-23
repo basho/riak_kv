@@ -780,13 +780,14 @@ stream_get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
     Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
     MaxResults = proplists:get_value(max_results, Opts, all),
     PgSort = proplists:get_value(pagination_sort, Opts),
+    VNodeCoverage = vnode_target(proplists:get_value(vnode_target, Opts)),
     Me = self(),
     ReqId = mk_reqid(),
     case riak_kv_index_fsm_sup:start_index_fsm(Node,
                                                [{raw, ReqId, Me},
                                                 [Bucket, none,
                                                  Query, Timeout,
-                                                 MaxResults, PgSort]]) of
+                                                 MaxResults, PgSort, VNodeCoverage]]) of
         {ok, Pid} ->
             {ok, ReqId, Pid};
         {error, Reason} ->

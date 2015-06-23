@@ -107,9 +107,24 @@ process(#rpbindexreq{} = Req, State) ->
             maybe_perform_query(QueryVal, Req, State)
     end.
 
+%% 2i requests can include a selected vnode target for parallel
+%% extraction purposes. A checksum is included to discourage tampering
+%% with the details.
+maybe_add_cover(undefined, Opts) ->
+    Opts;
+maybe_add_cover(Cover0, Opts) ->
+    {Csum, Cover} = binary_to_term(Cover0),
+    case Csum =:= erlang:adler32(term_to_binary(Cover)) of
+        true ->
+            Opts ++ [{vnode_target, Cover}];
+        false ->
+            Opts
+    end.
+
 maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
     #rpbindexreq{type=T, bucket=B, max_results=MaxResults, timeout=Timeout,
-                 pagination_sort=PgSort0, continuation=Continuation} = Req,
+                 pagination_sort=PgSort0, continuation=Continuation,
+                 cover_context=Cover} = Req,
     #state{client=Client} = State,
     Bucket = maybe_bucket_type(T, B),
     %% Special case: a continuation implies pagination even if no max_results
@@ -118,14 +133,16 @@ maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
                  _ -> true
              end,
     Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
-    Opts = riak_index:add_timeout_opt(Timeout, Opts0),
+    Opts1 = riak_index:add_timeout_opt(Timeout, Opts0),
+    Opts = maybe_add_cover(Cover, Opts1),
     {ok, ReqId, _FSMPid} = Client:stream_get_index(Bucket, Query, Opts),
     ReturnTerms = riak_index:return_terms(Req#rpbindexreq.return_terms, Query),
     {reply, {stream, ReqId}, State#state{req_id=ReqId, req=Req#rpbindexreq{return_terms=ReturnTerms}}};
 maybe_perform_query({ok, Query}, Req, State) ->
     #rpbindexreq{type=T, bucket=B, max_results=MaxResults,
                  return_terms=ReturnTerms0, timeout=Timeout,
-                 pagination_sort=PgSort0, continuation=Continuation} = Req,
+                 pagination_sort=PgSort0, continuation=Continuation,
+                 cover_context=Cover} = Req,
     #state{client=Client} = State,
     Bucket = maybe_bucket_type(T, B),
     PgSort = case Continuation of
@@ -133,7 +150,8 @@ maybe_perform_query({ok, Query}, Req, State) ->
                  _ -> true
              end,
     Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
-    Opts = riak_index:add_timeout_opt(Timeout, Opts0),
+    Opts1 = riak_index:add_timeout_opt(Timeout, Opts0),
+    Opts = maybe_add_cover(Cover, Opts1),
     ReturnTerms =  riak_index:return_terms(ReturnTerms0, Query),
     QueryResult = Client:get_index(Bucket, Query, Opts),
     handle_query_results(ReturnTerms, MaxResults, QueryResult , State).
