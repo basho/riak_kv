@@ -87,25 +87,55 @@ convert_list(Results, State) ->
               entries=
                   lists:map(fun(P) ->
                       Node = proplists:get_value(node, P),
-                      {Name, Port} = magically_steal_data(Node),
+                      Desc = format_coverage_md(
+                               proplists:get_value(vnode_hash, P),
+                               proplists:get_value(node, P),
+                               proplists:get_value(filters, P)),
+                      {IP, Port} = node_to_pb_details(Node),
                       Csum = erlang:adler32(term_to_binary(P)),
                       #rpbcoverageentry{
                          cover_context=term_to_binary({Csum, P}),
-                         %% latin1 is the sensible choice today, but
-                         %% once Erlang nodes can be named with utf-8
-                         %% it's not clear how we should handle this
-                         hostname=atom_to_binary(Name, latin1),
+                         ip=IP,
                          port=Port,
-                         keyspace_desc = <<"Please ignore me">>
+                         keyspace_desc=Desc
                         }
               end,
               Results)
              },
     {reply, Resp, State}.
 
-magically_steal_data(NodeName) ->
-    %% XXX DO NOT LEAVE THIS
-    {NodeName, 10018}.
+node_to_pb_details(NodeName) ->
+    handle_pb_response(
+      NodeName,
+      riak_core_util:safe_rpc(NodeName, application, get_env,
+                              [riak_api, pb])).
+
+handle_pb_response(NodeName, {badrpc, Error}) ->
+    %% XXX: Todo: do something more smarter here
+    lager:info("Coverage request: unable to request api endpoint "
+               "from node ~p (~p)",
+               [NodeName, Error]),
+    {unreachable, 0};
+handle_pb_response(NodeName, undefined) ->
+    %% XXX: Todo: do something more smarter here
+    lager:error("Coverage request: no api endpoint defined on "
+                "node ~p",
+                [NodeName]),
+    {undefined, 0};
+handle_pb_response(_NodeName, {ok, [{IP, Port}]}) ->
+    {IP, Port}.
+
+partition_id(Hash) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    riak_core_ring_util:hash_to_partition_id(Hash,
+                                             riak_core_ring:num_partitions(Ring)).
+
+format_coverage_md(Hash, Node, undefined) ->
+    PartID = partition_id(Hash),
+    unicode:characters_to_binary(io_lib:format("~s : ~B", [Node, PartID]), utf8);
+format_coverage_md(Hash, Node, _Filters) ->
+    PartID = partition_id(Hash),
+    unicode:characters_to_binary(io_lib:format("~s : ~B (subselection)", [Node, PartID]), utf8).
 
 %% always construct {Type, Bucket} tuple, filling in default type if needed
 bucket_type(undefined, B) ->
