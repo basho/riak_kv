@@ -86,7 +86,7 @@ convert_list(Results, State) ->
     Resp = #rpbcoverageresp{
               entries=
                   lists:map(fun(P) ->
-                      Node = proplists:get(node, P),
+                      Node = proplists:get_value(node, P),
                       {Name, Port} = magically_steal_data(Node),
                       Csum = erlang:adler32(term_to_binary(P)),
                       #rpbcoverageentry{
