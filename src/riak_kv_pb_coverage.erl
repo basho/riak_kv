@@ -91,7 +91,10 @@ convert_list(Results, State) ->
                       Csum = erlang:adler32(term_to_binary(P)),
                       #rpbcoverageentry{
                          cover_context=term_to_binary({Csum, P}),
-                         hostname=Name,
+                         %% latin1 is the sensible choice today, but
+                         %% once Erlang nodes can be named with utf-8
+                         %% it's not clear how we should handle this
+                         hostname=atom_to_binary(Name, latin1),
                          port=Port,
                          keyspace_desc = <<"Please ignore me">>
                         }
