@@ -38,6 +38,9 @@
 -type filter() :: none | fun((any()) -> boolean()) | [{atom(), atom(), [any()]}].
 -type index() :: non_neg_integer().
 
+%% An integer, and the number of bits to shift it left
+-type subpartition() :: { non_neg_integer(), pos_integer() }.
+
 %% ===================================================================
 %% Public API
 %% ===================================================================
@@ -58,7 +61,17 @@ build_filter(Filter) ->
     build_item_filter(Filter).
 
 
--spec build_filter(bucket(), filter(), [index()]) -> filter().
+-spec build_filter(bucket(), filter(), [index()]|subpartition()) -> filter().
+build_filter(Bucket, ItemFilterInput, {_Hash, _Mask}=SubP) ->
+    ItemFilter = build_item_filter(ItemFilterInput),
+    if
+        (ItemFilter == none) -> % only subpartition filtering required
+            SubpartitionFun = build_subpartition_fun(Bucket),
+            compose_sub_filter(SubP, SubpartitionFun);
+        true -> % key and vnode filtering
+            SubpartitionFun = build_subpartition_fun(Bucket),
+            compose_sub_filter(SubP, SubpartitionFun, ItemFilter)
+    end;
 build_filter(Bucket, ItemFilterInput, FilterVNode) ->
     ItemFilter = build_item_filter(ItemFilterInput),
 
@@ -84,6 +97,24 @@ build_filter(Bucket, ItemFilterInput, FilterVNode) ->
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
+
+%% @private
+build_subpartition_filter({Mask, BSL}, Fun) ->
+    fun(X) ->
+            <<Idx:160/integer>> = Fun(X),
+            (Mask bsl BSL) band Idx =:= (Mask bsl BSL)
+    end.
+
+%% @private
+compose_sub_filter(Subpartition, SubpFun) ->
+    build_subpartition_filter(Subpartition, SubpFun).
+
+
+compose_sub_filter(Subpartition, SubpFun, ItemFilter) ->
+    SubpFilter = build_subpartition_filter(Subpartition, SubpFun),
+    fun(Item) ->
+            ItemFilter(Item) andalso SubpFilter(Item)
+    end.
 
 %% @private
 compose_filter(KeySpaceIndexes, PrefListFun) ->
@@ -128,6 +159,15 @@ build_preflist_fun(Bucket, CHBin) ->
             chashbin:responsible_index(ChashKey, CHBin)
     end.
 
+%% @private
+build_subpartition_fun(Bucket) ->
+    fun({o, Key, _Value}) -> %% $ index return_body
+            riak_core_util:chash_key({Bucket, Key});
+       ({_Value, Key}) ->
+            riak_core_util:chash_key({Bucket, Key});
+       (Key) ->
+            riak_core_util:chash_key({Bucket, Key})
+    end.
 
 
 compose([]) ->
