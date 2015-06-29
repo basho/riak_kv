@@ -55,7 +55,7 @@
 -define(CANBEBLANK,  true).
 -define(CANTBEBLANK, false).
 
--type bucket()                :: atom().
+-type bucket()                :: binary().
 -type modulename()            :: atom().
 -type heirarchicalfieldname() :: [string()].
 
@@ -66,7 +66,7 @@ make_module_name(Bucket) when is_binary(Bucket) ->
     ModName = "riak_kv_ddl_helper_mod_" ++ Nonce2,
     list_to_atom(ModName).
 
--spec get_partition_key(#ddl_v1{}, tuple()) -> tuple().
+-spec get_partition_key(#ddl_v1{}, tuple()) -> binary().
 get_partition_key(#ddl_v1{bucket = B, partition_key = PK}, Obj)
   when is_tuple(Obj) ->
     Mod = make_module_name(B),
@@ -74,7 +74,7 @@ get_partition_key(#ddl_v1{bucket = B, partition_key = PK}, Obj)
     Key = build(Params, Obj, Mod, []),
     _K = sext:encode(Key).
 
--spec get_local_key(#ddl_v1{}, tuple()) -> tuple().
+-spec get_local_key(#ddl_v1{}, tuple()) -> binary().
 get_local_key(#ddl_v1{bucket = B, local_key = LK}, Obj) when is_tuple(Obj) ->
     Mod = make_module_name(B),
     #local_key_v1{ast = Params} = LK,
