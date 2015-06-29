@@ -25,7 +25,7 @@
 -export([
 	 create_plan/6
 	]).
-create_plan(VNodeSelector, NVal, PVC, ReqId, NodeCheckService, Request) ->
+create_plan(_VNodeSelector, _NVal, _PVC, _ReqId, _NodeCheckService, _Request) ->
     %% gg:format("in riak_kv_qry_coverage_plan with~n:" ++
     %%		  "- ~p~n- ~p~n- ~p~n- ~p~n- ~p~n- ~p~n",
     %%	      [VNodeSelector, NVal, PVC, ReqId, NodeCheckService, Request]),
