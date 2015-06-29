@@ -100,8 +100,8 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout]) ->
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, undefined]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) ->
-    gg:format("in riak_kv_index_fsm:init with MaxResults of:~n- ~p~n",
-	      [MaxResults]),
+    %% gg:format("in riak_kv_index_fsm:init with MaxResults of:~n- ~p~n",
+    %% 	      [MaxResults]),
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
