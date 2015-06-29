@@ -50,11 +50,11 @@
 %% The ItemFilterInput parameter can be the atom `none' to indicate
 %% no filtering based on the request items, a function that returns
 %% a boolean indicating whether or not the item should be included
-%% in the final results, or a list of tuples of the form 
-%% {Module, Function, Args}. The latter is the form used by 
+%% in the final results, or a list of tuples of the form
+%% {Module, Function, Args}. The latter is the form used by
 %% MapReduce filters such as those in the {@link riak_kv_mapred_filters}
 %% module. The list of tuples is composed into a function that is
-%% used to determine if an item should be included in the final 
+%% used to determine if an item should be included in the final
 %% result set.
 -spec build_filter(filter()) -> filter().
 build_filter(Filter) ->
@@ -91,7 +91,7 @@ build_filter(Bucket, ItemFilterInput, FilterVNode) ->
             {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
             PrefListFun = build_preflist_fun(Bucket, CHBin),
             %% Create a filter for the VNode
-            compose_filter(FilterVNode, PrefListFun, ItemFilter) 
+            compose_filter(FilterVNode, PrefListFun, ItemFilter)
     end.
 
 %% ====================================================================
@@ -102,7 +102,10 @@ build_filter(Bucket, ItemFilterInput, FilterVNode) ->
 build_subpartition_filter({Mask, BSL}, Fun) ->
     fun(X) ->
             <<Idx:160/integer>> = Fun(X),
-            (Mask bsl BSL) band Idx =:= (Mask bsl BSL)
+            %% lager:error("{~B, ~B} Result, Mask, Index: ~B, ~B, ~B",
+            %%             [Mask, BSL, FullMask band Idx,
+            %%              FullMask, Idx]),
+            Idx bsr BSL =:= Mask
     end.
 
 %% @private
@@ -186,4 +189,3 @@ compose([Filter | RestFilters], FilterFuns) ->
     {FilterMod, FilterFun, Args} = Filter,
     Fun = FilterMod:FilterFun(Args),
     compose(RestFilters, [Fun | FilterFuns]).
-

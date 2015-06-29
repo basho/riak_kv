@@ -45,7 +45,7 @@
 -export([get_client_id/1]).
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
--export([get_cover/2]).
+-export([get_cover/2, get_cover/3]).
 
 -include_lib("riak_core/include/riak_core_vnode.hrl").
 
@@ -488,10 +488,52 @@ consistent_delete_vclock(Bucket, Key, VClock, Options, _Timeout, {?MODULE, [Node
 %%       Plan :: list(atom(), term()) |
 %%       {error, Err :: term()}
 %% @doc Retrieve a coverage plan
-get_cover(Bucket, _Client) ->
+get_cover(Bucket, Client) ->
+    get_cover(Bucket, undefined, Client).
+
+%% The 2nd argument (minimum parallelization) values mean:
+%%     undefined -> standard coverage plan
+%%     0         -> One coverage plan element per partition
+%%     Y>0       -> At least Y elements (will be no fewer than ring size)
+get_cover(Bucket, undefined, _Client) ->
     ReqId = mk_reqid(),
-    N = riak_core_bucket:n_val(riak_core_bucket:get_bucket(Bucket)),
-    split_cover(riak_core_coverage_plan:create_plan(all, N, 1, ReqId, riak_kv)).
+    N = n_val(Bucket),
+    split_cover(riak_core_coverage_plan:create_plan(all, N, 1, ReqId, riak_kv));
+get_cover(Bucket, 0, _Client) ->
+    ReqId = mk_reqid(),
+    N = n_val(Bucket),
+    RingSize = ring_size(),
+    split_cover(riak_core_coverage_plan:create_plan(all, {N, RingSize, RingSize}, 1, ReqId, riak_kv));
+get_cover(Bucket, MinPar, _Client) ->
+    ReqId = mk_reqid(),
+    N = n_val(Bucket),
+    RingSize = ring_size(),
+    ParallelTally =
+        if
+            MinPar =< RingSize ->
+                RingSize;
+            true ->
+                next_power_of_two(MinPar)
+        end,
+
+%% XXX: will need to adapt split_cover for this list of values
+    split_cover(riak_core_coverage_plan:create_plan(all, {N, RingSize, ParallelTally}, 1, ReqId, riak_kv)).
+
+%% Crimes against computerkind
+next_power_of_two(X) ->
+    Next = 1 bsl length(hd(io_lib:format("~.2b", [X]))),
+    if X * 2 =:= Next -> X;
+       true -> Next
+    end.
+
+n_val(Bucket) ->
+    riak_core_bucket:n_val(riak_core_bucket:get_bucket(Bucket)).
+
+ring_size() ->
+    {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+    chashbin:num_partitions(CHBin).
+
+
 
 split_cover({error, _}=Error) ->
     Error;
@@ -504,7 +546,15 @@ split_cover({VnodeList, FilterList}) ->
                           {Hash, Partitions} ->
                               [{filters, Partitions}]
                       end
-              end, VnodeList).
+              end, VnodeList);
+split_cover(SubpartitionPlan) when is_list(SubpartitionPlan) ->
+    lists:map(fun({Hash, Node, { _Mask, _BSL }=Subp}) ->
+                      [{vnode_hash, Hash},
+                       {node, Node},
+                       {subpartition, Subp}]
+              end,
+              SubpartitionPlan).
+
 
 %% @spec list_keys(riak_object:bucket(), riak_client()) ->
 %%       {ok, [Key :: riak_object:key()]} |
@@ -762,7 +812,8 @@ vnode_target(undefined) ->
 vnode_target(Proplist) ->
     #vnode_coverage{
        vnode_identifier=proplists:get_value(vnode_hash, Proplist),
-       partition_filters=proplists:get_value(filters, Proplist, [])
+       partition_filters=proplists:get_value(filters, Proplist, []),
+       subpartition=proplists:get_value(subpartition, Proplist)
       }.
 
 %% @doc Run the provided index query, return a stream handle.

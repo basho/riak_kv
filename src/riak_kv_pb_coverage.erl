@@ -39,7 +39,7 @@
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 
 -behaviour(riak_api_pb_service).
-
+-compile(export_all).
 -export([init/0,
          decode/2,
          encode/1,
@@ -74,9 +74,10 @@ process_stream(_,_,State) ->
     {ignore, State}.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(#rpbcoveragereq{type=T, bucket=B}, #state{client=Client} = State) ->
+process(#rpbcoveragereq{type=T, bucket=B, min_partitions=P}, #state{client=Client} = State) ->
     Bucket = bucket_type(T, B),
-    convert_list(Client:get_cover(Bucket), State).
+    convert_list(Client:get_cover(Bucket, P), State).
+
 
 convert_list({error, Error}, State) ->
     {error, Error, State};
@@ -90,7 +91,8 @@ convert_list(Results, State) ->
                       Desc = format_coverage_md(
                                proplists:get_value(vnode_hash, P),
                                proplists:get_value(node, P),
-                               proplists:get_value(filters, P)),
+                               proplists:get_value(filters, P, []),
+                               proplists:get_value(subpartition, P)),
                       {IP, Port} = node_to_pb_details(Node),
                       Csum = erlang:adler32(term_to_binary(P)),
                       #rpbcoverageentry{
@@ -130,10 +132,13 @@ partition_id(Hash) ->
     riak_core_ring_util:hash_to_partition_id(Hash,
                                              riak_core_ring:num_partitions(Ring)).
 
-format_coverage_md(Hash, Node, undefined) ->
+format_coverage_md(Hash, Node, [], undefined) ->
     PartID = partition_id(Hash),
     unicode:characters_to_binary(io_lib:format("~s : ~B", [Node, PartID]), utf8);
-format_coverage_md(Hash, Node, _Filters) ->
+format_coverage_md(Hash, Node, [], {Mask, _BSL}) ->
+    PartID = partition_id(Hash),
+    unicode:characters_to_binary(io_lib:format("~s : ~B (subpartition ~B)", [Node, PartID, Mask]), utf8);
+format_coverage_md(Hash, Node, _Filters, undefined) ->
     PartID = partition_id(Hash),
     unicode:characters_to_binary(io_lib:format("~s : ~B (subselection)", [Node, PartID]), utf8).
 
