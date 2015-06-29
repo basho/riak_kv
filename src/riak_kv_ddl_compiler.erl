@@ -177,7 +177,13 @@ compile(#ddl_v1{} = DDL, OutputDir, HasDebugOutput) ->
     {VFns, LineNo2} = build_validn_fns([Fields], LineNo, ?POSNOSTART, [], []),
     {ExtractFn, LineNo3} = build_extract_fn([Fields],  LineNo2, []),
     {GetTypeFn, LineNo4} = build_get_type_fn([Fields], LineNo3, []),
-    AST = Attrs ++ VFns ++ [ExtractFn] ++ [GetTypeFn] ++ [{eof, LineNo4}],
+    {IsValidFn, LineNo5} = build_is_valid_fn([Fields], LineNo4, []),
+    AST = Attrs
+	++ VFns
+	++ [ExtractFn]
+	++ [GetTypeFn]
+	++ [IsValidFn]
+	++ [{eof, LineNo5}],
     if HasDebugOutput ->
 	    ASTFileName = filename:join([OutputDir, ModName]) ++ ".ast",
 	    write_file(ASTFileName, io_lib:format("~p", [AST]));
@@ -229,15 +235,11 @@ filter_ast([{eof, _} | T], Acc) ->
 filter_ast([H | T], Acc) ->
     case element(3, H) of
 	file      -> filter_ast(T, Acc);
-	%% type   -> filter_ast(T, Acc);
-	%% record -> filter_ast(T, Acc);
 	_         -> filter_ast(T, [H | Acc])
     end.
 
 -spec build_extract_fn([[#riak_field_v1{}]], pos_integer(), ast()) ->
 			      {expr(), pos_integer()}.
-%% the functions that extract the value from a particular field and those that return the field tupe
-%% have the same structure, so we build them at the same time
 build_extract_fn([], LineNo, Acc) ->
     Clauses = lists:flatten(lists:reverse(Acc)),
     Fn = make_fun(extract, 2, Clauses, LineNo),
@@ -269,10 +271,48 @@ make_extract_cls([#riak_field_v1{type = Ty} = H | T], LineNo, Prefix, Acc) ->
 	end,
     make_extract_cls(T, NewLineNo, Prefix, NewA).
 
+-spec build_is_valid_fn([[#riak_field_v1{}]], pos_integer(), ast()) ->
+			      {expr(), pos_integer()}.
+build_is_valid_fn([], LineNo, Acc) ->
+    {Fail, NewLineNo} = make_fail_clause(LineNo),
+    Clauses = lists:flatten(lists:reverse([Fail | Acc])),
+    Fn = make_fun(is_field_valid, 1, Clauses, LineNo),
+    {Fn, NewLineNo};
+build_is_valid_fn([Fields | T], LineNo, Acc) ->
+    {Fns, LineNo2} = make_is_valid_cls(Fields, LineNo, ?NOPREFIX, []),
+    build_is_valid_fn(T, LineNo2, [Fns | Acc]).
+
+make_is_valid_cls([], LineNo, Prefix, Acc) ->
+    %% handle the prefixes slightly differently here than to the next clause
+    Args = [make_string(Nm,  LineNo) || #riak_field_v1{name = Nm} <- Prefix],
+    WildArgs = [make_string("*", LineNo) | Args],
+    WildConses = make_conses(WildArgs, LineNo, {nil, LineNo}),
+    Body = make_atom(true, LineNo),
+    Guard = [],
+    WildCl = make_clause([WildConses], Guard, Body, LineNo),
+    {lists:reverse([WildCl | Acc]), LineNo};
+make_is_valid_cls([#riak_field_v1{type = Ty} = H | T], LineNo, Prefix, Acc) ->
+    %% handle the prefixes slightly differently here than to the perviousls clause
+    NPref  = [H | Prefix],
+    Args   = [make_string(Nm,  LineNo) || #riak_field_v1{name = Nm} <- NPref],
+    Conses = make_conses(Args, LineNo, {nil, LineNo}),
+    %% you need to reverse the lists of the positions to
+    %% get the calls to element to nest correctly
+    Body = make_atom(true, LineNo),
+    Guard = [],
+    Cl = make_clause([Conses], Guard, Body, LineNo),
+    {NewA, NewLineNo} =
+	case Ty of
+	    {map, MapFields} ->
+		{Cls, NLNo} = make_is_valid_cls(MapFields, LineNo, NPref, Acc),
+		{[Cl | Cls], NLNo};
+	    _ ->
+		{[Cl | Acc], LineNo}
+	end,
+    make_is_valid_cls(T, NewLineNo, Prefix, NewA).
+
 -spec build_get_type_fn([[#riak_field_v1{}]], pos_integer(), ast()) ->
 			      {expr(), pos_integer()}.
-%% the functions that extract the value from a particular field and those that return the field tupe
-%% have the same structure, so we build them at the same time
 build_get_type_fn([], LineNo, Acc) ->
     Clauses = lists:flatten(lists:reverse(Acc)),
     Fn = make_fun(get_field_type, 1, Clauses, LineNo),
@@ -285,7 +325,7 @@ make_get_type_cls([], LineNo, _Prefix, Acc) ->
     {lists:reverse(Acc), LineNo};
 make_get_type_cls([#riak_field_v1{type = Ty} = H | T], LineNo, Prefix, Acc) ->
     NPref  = [H | Prefix],
-    Args   = [make_string(Nm,  LineNo) || #riak_field_v1{name     = Nm} <- NPref],
+    Args   = [make_string(Nm,  LineNo) || #riak_field_v1{name = Nm} <- NPref],
     Conses = make_conses(Args, LineNo, {nil, LineNo}),
     %% you need to reverse the lists of the positions to
     %% get the calls to element to nest correctly
@@ -514,6 +554,7 @@ make_export_attr(LineNo) ->
     {{attribute, LineNo, export, [
 				  {validate_obj,   1},
 				  {get_field_type, 1},
+				  {is_field_valid, 1},
 				  {extract,        2}
 				 ]}, LineNo + 1}.
 
@@ -546,7 +587,7 @@ make_ddl(Bucket, Fields, #partition_key_v1{} = PK, #local_key_v1{} = LK)
 %% Unit Tests
 %%
 
-simplest_valid_test_() ->
+simplest_valid_test() ->
     DDL = make_ddl(<<"simplest_valid_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -555,9 +596,9 @@ simplest_valid_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({<<"ewrewr">>}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-simple_valid_binary_test_() ->
+simple_valid_binary_test() ->
     DDL = make_ddl(<<"simple_valid_binary_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -569,9 +610,9 @@ simple_valid_binary_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({<<"ewrewr">>, <<"werewr">>}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-simple_valid_integer_test_() ->
+simple_valid_integer_test() ->
     DDL = make_ddl(<<"simple_valid_integer_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -586,9 +627,9 @@ simple_valid_integer_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({999, -9999, 0}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-simple_valid_float_test_() ->
+simple_valid_float_test() ->
     DDL = make_ddl(<<"simple_valid_float_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -603,9 +644,9 @@ simple_valid_float_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({432.22, -23423.22, -0.0}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-simple_valid_boolean_test_() ->
+simple_valid_boolean_test() ->
     DDL = make_ddl(<<"simple_valid_boolean_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -617,9 +658,9 @@ simple_valid_boolean_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({true, false}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-simple_valid_timestamp_test_() ->
+simple_valid_timestamp_test() ->
     DDL = make_ddl(<<"simple_valid_timestamp_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -634,9 +675,9 @@ simple_valid_timestamp_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({234324, 23424, 34636}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-simple_valid_map_1_test_() ->
+simple_valid_map_1_test() ->
     Map = {map, [
 		 #riak_field_v1{name     = "yarple",
 				position = 1,
@@ -656,9 +697,9 @@ simple_valid_map_1_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({<<"ewrewr">>, {<<"erko">>}, 4.4}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-simple_valid_map_2_test_() ->
+simple_valid_map_2_test() ->
     Map = {map, [
 		 #riak_field_v1{name     = "yarple",
 				position = 1,
@@ -681,9 +722,9 @@ simple_valid_map_2_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({<<"ewrewr">>, {<<"erko">>, -999}, 4.4}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-simple_valid_optional_1_test_() ->
+simple_valid_optional_1_test() ->
     DDL = make_ddl(<<"simple_valid_optional_1_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -693,9 +734,9 @@ simple_valid_optional_1_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({[]}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-simple_valid_optional_2_test_() ->
+simple_valid_optional_2_test() ->
     DDL = make_ddl(<<"simple_valid_optional_2_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -729,9 +770,9 @@ simple_valid_optional_2_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({[], [], [], [], [], [], []}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-simple_valid_optional_3_test_() ->
+simple_valid_optional_3_test() ->
     DDL = make_ddl(<<"simple_valid_optional_3_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -745,9 +786,9 @@ simple_valid_optional_3_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({[], <<"edible">>}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-complex_valid_optional_1_test_() ->
+complex_valid_optional_1_test() ->
     Map = {map, [
 		 #riak_field_v1{name     = "yando",
 				position = 1,
@@ -771,9 +812,9 @@ complex_valid_optional_1_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({[], {1, []}}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-complex_valid_map_1_test_() ->
+complex_valid_map_1_test() ->
     Map2 = {map, [
 		  #riak_field_v1{name     = "dingle",
 				 position = 1,
@@ -807,9 +848,9 @@ complex_valid_map_1_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({1, {1, {3, 4}, 1}, 1}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-complex_valid_map_2_test_() ->
+complex_valid_map_2_test() ->
     Map3 = {map, [
 		  #riak_field_v1{name     = "yik",
 				 position = 1,
@@ -854,9 +895,9 @@ complex_valid_map_2_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({1, {1, {1, 1, {1, 1}}, 1}, 1}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-complex_valid_map_3_test_() ->
+complex_valid_map_3_test() ->
     Map3 = {map, [
 		  #riak_field_v1{name     = "in_Map_2",
 				 position = 1,
@@ -886,9 +927,9 @@ complex_valid_map_3_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({{2, {3}, {4}}}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-simple_valid_any_test_() ->
+simple_valid_any_test() ->
     DDL = make_ddl(<<"simple_valid_any_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -903,9 +944,9 @@ simple_valid_any_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({<<"ewrewr">>, [a, b, d], 4.4}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-simple_valid_set_test_() ->
+simple_valid_set_test() ->
     DDL = make_ddl(<<"simple_valid_any_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -920,9 +961,9 @@ simple_valid_set_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({<<"ewrewr">>, [a, b, d], 4.4}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-simple_valid_mixed_test_() ->
+simple_valid_mixed_test() ->
     DDL = make_ddl(<<"simple_valid_mixed_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -940,10 +981,10 @@ simple_valid_mixed_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({<<"ewrewr">>, 99, 4.4, 5555}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
 %% invalid tests
-simple_invalid_binary_test_() ->
+simple_invalid_binary_test() ->
     DDL = make_ddl(<<"simple_invalid_binary_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -955,9 +996,9 @@ simple_invalid_binary_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({<<"ewrewr">>, 55}),
-    ?_assertEqual(?INVALID, Result).
+    ?assertEqual(?INVALID, Result).
 
-simple_invalid_integer_test_() ->
+simple_invalid_integer_test() ->
     DDL = make_ddl(<<"simple_invalid_integer_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -972,9 +1013,9 @@ simple_invalid_integer_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({999, -9999, 0,0}),
-    ?_assertEqual(?INVALID, Result).
+    ?assertEqual(?INVALID, Result).
 
-simple_invalid_float_test_() ->
+simple_invalid_float_test() ->
     DDL = make_ddl(<<"simple_invalid_float_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -989,9 +1030,9 @@ simple_invalid_float_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({432.22, -23423.22, [a, b, d]}),
-    ?_assertEqual(?INVALID, Result).
+    ?assertEqual(?INVALID, Result).
 
-simple_invalid_boolean_test_() ->
+simple_invalid_boolean_test() ->
     DDL = make_ddl(<<"simple_invalid_boolean_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -1006,9 +1047,9 @@ simple_invalid_boolean_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({true, false, [a, b, d]}),
-    ?_assertEqual(?INVALID, Result).
+    ?assertEqual(?INVALID, Result).
 
-simple_invalid_set_test_() ->
+simple_invalid_set_test() ->
     DDL = make_ddl(<<"simple_invalid_set_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -1023,9 +1064,9 @@ simple_invalid_set_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({<<"ewrewr">>, [444.44], 4.4}),
-    ?_assertEqual(?VALID, Result).
+    ?assertEqual(?VALID, Result).
 
-simple_invalid_timestamp_1_test_() ->
+simple_invalid_timestamp_1_test() ->
     DDL = make_ddl(<<"simple_invalid_timestamp_1_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -1040,9 +1081,9 @@ simple_invalid_timestamp_1_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({234.324, 23424, 34636}),
-    ?_assertEqual(?INVALID, Result).
+    ?assertEqual(?INVALID, Result).
 
-simple_invalid_timestamp_2_test_() ->
+simple_invalid_timestamp_2_test() ->
     DDL = make_ddl(<<"simple_invalid_timestamp_2_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -1057,9 +1098,9 @@ simple_invalid_timestamp_2_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({234324, -23424, 34636}),
-    ?_assertEqual(?INVALID, Result).
+    ?assertEqual(?INVALID, Result).
 
-simple_invalid_timestamp_3_test_() ->
+simple_invalid_timestamp_3_test() ->
     DDL = make_ddl(<<"simple_invalid_timestamp_3_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -1074,9 +1115,9 @@ simple_invalid_timestamp_3_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({234324, 0, 34636}),
-    ?_assertEqual(?INVALID, Result).
+    ?assertEqual(?INVALID, Result).
 
-simple_invalid_map_1_test_() ->
+simple_invalid_map_1_test() ->
     Map = {map, [
 		 #riak_field_v1{name     = "yarple",
 				position = 1,
@@ -1096,9 +1137,9 @@ simple_invalid_map_1_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({<<"ewrewr">>, {99}, 4.4}),
-    ?_assertEqual(?INVALID, Result).
+    ?assertEqual(?INVALID, Result).
 
-simple_invalid_map_2_test_() ->
+simple_invalid_map_2_test() ->
     Map = {map, [
 		 #riak_field_v1{name     = "yarple",
 				position = 1,
@@ -1121,9 +1162,9 @@ simple_invalid_map_2_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({<<"ewrewr">>, {<<"erer">>}, 4.4}),
-    ?_assertEqual(?INVALID, Result).
+    ?assertEqual(?INVALID, Result).
 
-simple_invalid_map_3_test_() ->
+simple_invalid_map_3_test() ->
     Map = {map, [
 		 #riak_field_v1{name     = "yarple",
 				position = 1,
@@ -1146,9 +1187,9 @@ simple_invalid_map_3_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({<<"ewrewr">>, {<<"bingo">>, <<"bango">>, <<"erk">>}, 4.4}),
-    ?_assertEqual(?INVALID, Result).
+    ?assertEqual(?INVALID, Result).
 
-simple_invalid_map_4_test_() ->
+simple_invalid_map_4_test() ->
     Map = {map, [
 		 #riak_field_v1{name     = "yarple",
 				position = 1,
@@ -1168,9 +1209,9 @@ simple_invalid_map_4_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({<<"ewrewr">>, [99], 4.4}),
-    ?_assertEqual(?INVALID, Result).
+    ?assertEqual(?INVALID, Result).
 
-complex_invalid_map_1_test_() ->
+complex_invalid_map_1_test() ->
     Map2 = {map, [
 		  #riak_field_v1{name     = "dingle",
 				 position = 1,
@@ -1208,10 +1249,10 @@ complex_invalid_map_1_test_() ->
 			       {<<"yerk">>, 33.0}
 			      },
 			      4.4}),
-    ?_assertEqual(?INVALID, Result).
+    ?assertEqual(?INVALID, Result).
 
 %%% test the size of the tuples
-too_small_tuple_test_() ->
+too_small_tuple_test() ->
     DDL = make_ddl(<<"simple_too_small_tuple_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -1226,9 +1267,9 @@ too_small_tuple_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({432.22, -23423.22}),
-    ?_assertEqual(?INVALID, Result).
+    ?assertEqual(?INVALID, Result).
 
-too_big_tuple_test_() ->
+too_big_tuple_test() ->
     DDL = make_ddl(<<"simple_too_big_tuple_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -1243,11 +1284,11 @@ too_big_tuple_test_() ->
 		   ]),
     {module, Module} = make_helper_mod(DDL),
     Result = Module:validate_obj({432.22, -23423.22, 44.44, 65.43}),
-    ?_assertEqual(?INVALID, Result).
+    ?assertEqual(?INVALID, Result).
 
 %% invalid DDL tests
 
-simple_invalid_position_test_() ->
+simple_invalid_position_test() ->
     Duff = #riak_field_v1{name     = "erkle",
 			  position = 4,
 			  type     = float},
@@ -1263,9 +1304,9 @@ simple_invalid_position_test_() ->
 		   ]),
     {error, Err} = make_helper_mod(DDL),
     Expected = {invalid_ddl, [{wrong_position, {expected, 3}, Duff}]},
-    ?_assertEqual(Expected, Err).
+    ?assertEqual(Expected, Err).
 
-simple_invalid_vals_test_() ->
+simple_invalid_vals_test() ->
     Duff = #riak_field_v1{name     = oops_atom,
 			  position = 1.0,
 			  type     = random},
@@ -1276,9 +1317,9 @@ simple_invalid_vals_test_() ->
     {error, Err} = make_helper_mod(DDL),
     Expected = {invalid_ddl, [{invalid_field, Duff},
 			      {wrong_position, {expected, 1}, Duff}]},
-    ?_assertEqual(Expected, Err).
+    ?assertEqual(Expected, Err).
 
-simple_invalid_optional_test_() ->
+simple_invalid_optional_test() ->
     Map = {map, [
 		 #riak_field_v1{name     = "yando",
 				position = 1,
@@ -1295,10 +1336,10 @@ simple_invalid_optional_test_() ->
 		   ]),
     {error, Err} = make_helper_mod(DDL),
     Expected = {invalid_ddl, [{maps_cant_be_optional, Duff}]},
-    ?_assertEqual(Expected, Err).
+    ?assertEqual(Expected, Err).
 
 
-complex_invalid_vals_test_() ->
+complex_invalid_vals_test() ->
     Duff =  #riak_field_v1{name     = bert,
 			   position = 33,
 			   type     = shubert,
@@ -1324,13 +1365,13 @@ complex_invalid_vals_test_() ->
     {error, Err} = make_helper_mod(DDL),
     Expected = {invalid_ddl, [{invalid_field, Duff},
 			      {wrong_position, {expected, 2}, Duff}]},
-    ?_assertEqual(Expected, Err).
+    ?assertEqual(Expected, Err).
 
 %%
 %% Extract tests
 %%
 
-simplest_valid_extract_test_() ->
+simplest_valid_extract_test() ->
     DDL = make_ddl(<<"simplest_valid_extract_test">>,
 		   [
 		    #riak_field_v1{name     = "yando",
@@ -1340,9 +1381,9 @@ simplest_valid_extract_test_() ->
     {module, Module} = make_helper_mod(DDL),
     Obj = {<<"yarble">>},
     Result = (catch Module:extract(Obj, ["yando"])),
-    ?_assertEqual(<<"yarble">>, Result).
+    ?assertEqual(<<"yarble">>, Result).
 
-simple_valid_extract_test_() ->
+simple_valid_extract_test() ->
     DDL = make_ddl(<<"simple_valid_extract_test">>,
 		   [
 		    #riak_field_v1{name     = "scoobie",
@@ -1355,9 +1396,9 @@ simple_valid_extract_test_() ->
     {module, Module} = make_helper_mod(DDL),
     Obj = {44, <<"yarble">>},
     Result = (catch Module:extract(Obj, ["yando"])),
-    ?_assertEqual(<<"yarble">>, Result).
+    ?assertEqual(<<"yarble">>, Result).
 
-simple_valid_map_extract_test_() ->
+simple_valid_map_extract_test() ->
     Map = {map, [
 		 #riak_field_v1{name     = "yarple",
 				position = 1,
@@ -1378,9 +1419,9 @@ simple_valid_map_extract_test_() ->
     {module, Module} = make_helper_mod(DDL),
     Obj = {<<"erk">>, {<<"jibjib">>}, 3.0},
     Result = (catch Module:extract(Obj, ["erko", "yarple"])),
-    ?_assertEqual(<<"jibjib">>, Result).
+    ?assertEqual(<<"jibjib">>, Result).
 
-complex_valid_map_extract_test_() ->
+complex_valid_map_extract_test() ->
     Map3 = {map, [
 		  #riak_field_v1{name     = "in_Map_2",
 				 position = 1,
@@ -1412,6 +1453,6 @@ complex_valid_map_extract_test_() ->
     Obj = {{2, {3}, {4}}},
     Path = ["Top_Map", "Level_1_map1", "in_Map_1"],
     Res = (catch Module:extract(Obj, Path)),
-    ?_assertEqual(3, Res).
+    ?assertEqual(3, Res).
 
 -endif.
