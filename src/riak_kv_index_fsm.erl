@@ -28,10 +28,14 @@
 %%      commands to each of those VNodes, and compiles the
 %%      responses.
 %%
-%%      The number of VNodes required for full
+%%      For secondary indexes the number of VNodes required for full
 %%      coverage is based on the number
 %%      of partitions, the number of available physical
 %%      nodes, and the bucket n_val.
+%%
+%%      For composite keys the number of VNodes required
+%%      is based on the preflist for writing the collocated
+%%      data
 
 -module(riak_kv_index_fsm).
 
@@ -96,10 +100,12 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout]) ->
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, undefined]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) ->
+    %% gg:format("in riak_kv_index_fsm:init with MaxResults of:~n- ~p~n",
+    %% 	      [MaxResults]),
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
-    Paginating = is_integer(MaxResults) andalso MaxResults > 0, 
+    Paginating = is_integer(MaxResults) andalso MaxResults > 0,
     PgSort = case {Paginating, PgSort0} of
         {true, _} ->
             true;
@@ -110,7 +116,7 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) 
     end,
     %% Construct the key listing request
     Req = req(Bucket, ItemFilter, Query),
-    {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
+    {Req, MaxResults, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{from=From, max_results=MaxResults, pagination_sort=PgSort}}.
 
 plan(CoverageVNodes, State = #state{pagination_sort=true}) ->
@@ -119,8 +125,10 @@ plan(_CoverageVNodes, State) ->
     {ok, State}.
 
 process_results(_VNode, {error, Reason}, _State) ->
+    io:format("in riak_kv_index_fsm process_results (1)~n"),
     {error, Reason};
 process_results(_VNode, {From, _Bucket, _Results}, State=#state{max_results=X, results_sent=Y})  when Y >= X ->
+
     riak_kv_vnode:stop_fold(From),
     {done, State};
 process_results(VNode, {From, Bucket, Results}, State) ->
