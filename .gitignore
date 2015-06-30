@@ -17,3 +17,5 @@ dialyzer_unhandled_warnings
 dialyzer_warnings
 tags
 erln8.config
+.idea
+riak_kv.iml

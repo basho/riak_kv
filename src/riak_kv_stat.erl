@@ -267,6 +267,8 @@ do_update(precommit_fail) ->
     exometer:update([?PFX, ?APP, precommit_fail], 1);
 do_update(postcommit_fail) ->
     exometer:update([?PFX, ?APP, postcommit_fail], 1);
+do_update(write_once_merge) ->
+    exometer:update([?PFX, ?APP, write_once_merge], 1);
 do_update({fsm_spawned, Type}) when Type =:= gets; Type =:= puts ->
     exometer:update([?PFX, ?APP, node, Type, fsm, active], 1);
 do_update({fsm_exit, Type}) when Type =:= gets; Type =:= puts  ->
@@ -305,7 +307,12 @@ do_update({consistent_put, _Bucket, Microsecs, ObjSize}) ->
     P = ?PFX,
     ok = exometer:update([P, ?APP, consistent, puts], 1),
     ok = exometer:update([P, ?APP, consistent, puts, time], Microsecs),
-    create_or_update([P, ?APP, consistent, puts, objsize], ObjSize, histogram).
+    create_or_update([P, ?APP, consistent, puts, objsize], ObjSize, histogram);
+do_update({write_once_put, Microsecs, ObjSize}) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, write_once, puts], 1),
+    ok = exometer:update([P, ?APP, write_once, puts, time], Microsecs),
+    create_or_update([P, ?APP, write_once, puts, objsize], ObjSize, histogram).
 
 
 %% private
@@ -598,6 +605,7 @@ stats() ->
      {mapper_count, counter, [], [{value, executing_mappers}]},
      {precommit_fail, counter, [], [{value, precommit_fail}]},
      {postcommit_fail, counter, [], [{value, postcommit_fail}]},
+     {write_once_merge, counter, [], [{value, write_once_merge}]},
      {[vnode, backend, leveldb, read_block_error],
       {function, ?MODULE, leveldb_read_block_errors, [], match, value}, [],
       [{value, leveldb_read_block_error}]},
@@ -669,6 +677,18 @@ stats() ->
                                                    {95    , consistent_put_objsize_95},
                                                    {99    , consistent_put_objsize_99},
                                                    {max   , consistent_put_objsize_100}]},
+     {[write_once, puts], spiral, [], [{one, write_once_puts},
+                                       {count, write_once_puts_total}]},
+     {[write_once, puts, time], histogram, [], [{mean  , write_once_put_time_mean},
+                                                {median, write_once_put_time_median},
+                                                {95    , write_once_put_time_95},
+                                                {99    , write_once_put_time_99},
+                                                {max   , write_once_put_time_100}]},
+     {[write_once, puts, objsize], histogram, [], [{mean  , write_once_put_objsize_mean},
+                                                   {median, write_once_put_objsize_median},
+                                                   {95    , write_once_put_objsize_95},
+                                                   {99    , write_once_put_objsize_99},
+                                                   {max   , write_once_put_objsize_100}]},
      {[storage_backend], {function, app_helper, get_env, [riak_kv, storage_backend], match, value},
       [], [{value, storage_backend}]},
      {[ring_stats], {function, riak_kv_stat_bc, ring_stats, [], proplist, [ring_members,
@@ -865,15 +885,16 @@ stop_exometer_test_env() ->
 
 create_or_update_histogram_test() ->
     ok = start_exometer_test_env(),
-
-    Metric = [riak_kv,put_fsm,counter,time],
-    ok = repeat_create_or_update(Metric, 1, histogram, 100),
-    ?assertNotEqual(exometer:get_value(Metric), 0),
-    Stats = get_stats(),
-    %%lager:info("stats prop list ~s", [Stats]),
-    ?assertNotEqual(proplists:get_value({node_put_fsm_counter_time_mean}, Stats), 0),
-
-    ok = stop_exometer_test_env().
+    try
+        Metric = [riak_kv,put_fsm,counter,time],
+        ok = repeat_create_or_update(Metric, 1, histogram, 100),
+        ?assertNotEqual(exometer:get_value(Metric), 0),
+        Stats = get_stats(),
+        %%lager:info("stats prop list ~s", [Stats]),
+        ?assertNotEqual(proplists:get_value({node_put_fsm_counter_time_mean}, Stats), 0)
+    after
+        ok = stop_exometer_test_env()
+    end.
 
 repeat_create_or_update(Name, UpdateVal, Type, Times) when Times > 0 ->
     repeat_create_or_update(Name, UpdateVal, Type, Times, 0).

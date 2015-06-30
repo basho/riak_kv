@@ -82,7 +82,8 @@
 -define(EMPTY_VTAG_BIN, <<"e">>).
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
--export([increment_vclock/2, increment_vclock/3]).
+-export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
+-export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([hash/1, approximate_size/2]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
@@ -96,7 +97,7 @@
 -export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 -export([is_robject/1]).
--export([update_last_modified/1]).
+-export([update_last_modified/1, update_last_modified/2]).
 -export([strict_descendant/2]).
 -export([get_li_index/1, is_li/1, get_li_key/1]).
 
@@ -294,14 +295,33 @@ compare_content_dates(C1,C2) ->
 merge(OldObject, NewObject) ->
     NewObj1 = apply_updates(NewObject),
     Bucket = bucket(OldObject),
-    DVV = dvv_enabled(Bucket),
-    {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
-    ok = riak_kv_stat:update({riak_object_merge, CRDT, Time}),
-    OldObject#r_object{contents=Contents,
-                       vclock=vclock:merge([OldObject#r_object.vclock,
-                                            NewObj1#r_object.vclock]),
-                       updatemetadata=dict:store(clean, true, dict:new()),
-                       updatevalue=undefined}.
+    case riak_kv_util:get_write_once(Bucket) of
+        true ->
+            merge_write_once(OldObject, NewObj1);
+        _ ->
+            DVV = dvv_enabled(Bucket),
+            {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
+            ok = riak_kv_stat:update({riak_object_merge, CRDT, Time}),
+            OldObject#r_object{contents=Contents,
+                vclock=vclock:merge([OldObject#r_object.vclock,
+                    NewObj1#r_object.vclock]),
+                updatemetadata=dict:store(clean, true, dict:new()),
+                updatevalue=undefined}
+    end.
+
+%% @doc Special case write_once merge, in the case where the write_once property is
+%%      set on the bucket (type).  In this case, take the lesser (in lexical order)
+%%      of the SHA1 hash of each object.
+%%
+-spec merge_write_once(riak_object(), riak_object()) -> riak_object().
+merge_write_once(OldObject, NewObject) ->
+    ok = riak_kv_stat:update(write_once_merge),
+    case crypto:hash(sha, term_to_binary(OldObject)) =< crypto:hash(sha, term_to_binary(NewObject)) of
+        true ->
+            OldObject;
+        _ ->
+            NewObject
+    end.
 
 
 %% @doc Merge the r_objects contents by converting the inner dict to
@@ -672,6 +692,29 @@ increment_vclock(Object=#r_object{bucket=B}, ClientId, Timestamp) ->
     %% when we increment, so add the dot here.
     assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled(B)).
 
+%% @doc Prune vclock
+-spec prune_vclock(riak_object(), vclock:timestamp(), [proplists:property()]) ->
+                          riak_object().
+prune_vclock(Obj=#r_object{vclock=VC}, PruneTime, BucketProps) ->
+    VC2 = vclock:prune(VC, PruneTime, BucketProps),
+    Obj#r_object{vclock=VC2}.
+
+%% @doc Does the `riak_object' descend the provided `vclock'?
+-spec vclock_descends(riak_object(), vclock:vclock()) -> boolean().
+vclock_descends(#r_object{vclock=ObjVC}, VC) ->
+    vclock:descends(ObjVC, VC).
+
+%% @doc get the list of all actors that have touched this object.
+-spec all_actors(riak_object()) -> [binary()] | [].
+all_actors(#r_object{vclock=VC}) ->
+    vclock:all_nodes(VC).
+
+%%$ @doc get the counter for the given actor, 0 if not present
+-spec actor_counter(vclock:vclock_node(), riak_object()) ->
+                           non_neg_integer().
+actor_counter(Actor, #r_object{vclock=VC}) ->
+    vclock:get_counter(Actor, VC).
+
 %% @private assign the dot to the value only if DVV is enabled. Only
 %% call with a valid dot. Only assign dot when there is a single value
 %% in contents.
@@ -1034,6 +1077,11 @@ decode_maybe_binary(<<0, Bin/binary>>) ->
 %% Update X-Riak-VTag and X-Riak-Last-Modified in the object's metadata, if
 %% necessary.
 update_last_modified(RObj) ->
+    update_last_modified(RObj, os:timestamp()).
+
+%% Update X-Riak-VTag and X-Riak-Last-Modified in the object's metadata, if
+%% necessary with an external timestamp passed in.
+update_last_modified(RObj, TS) ->
     MD0 = case dict:find(clean, riak_object:get_update_metadata(RObj)) of
               {ok, true} ->
                   %% There have been no changes to updatemetadata. If we stash the
@@ -1059,9 +1107,8 @@ update_last_modified(RObj) ->
     %% which should serve the same purpose.  It was possible to generate two
     %% objects with the same vclock on 0.14.2 if the same clientid was used in
     %% the same second.  It can be revisited post-1.0.0.
-    Now = os:timestamp(),
-    NewMD = dict:store(?MD_VTAG, riak_kv_util:make_vtag(Now),
-                       dict:store(?MD_LASTMOD, Now, MD0)),
+    NewMD = dict:store(?MD_VTAG, riak_kv_util:make_vtag(TS),
+                       dict:store(?MD_LASTMOD, TS, MD0)),
     riak_object:update_metadata(RObj, NewMD).
 
 %%

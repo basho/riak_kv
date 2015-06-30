@@ -31,6 +31,7 @@
          stop/1,
          get/3,
          put/5,
+         async_put/5,
          delete/4,
          drop/1,
          fix_index/3,
@@ -203,6 +204,11 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
             {error, Reason, State}
     end.
 
+async_put(Context, Bucket, PrimaryKey, Val, #state{ref=Ref, write_opts=WriteOpts}=State) ->
+    StorageKey = to_object_key(Bucket, PrimaryKey),
+    eleveldb:async_put(Ref, Context, StorageKey, Val, WriteOpts),
+    {ok, State}.
+
 indexes_fixed(#state{ref=Ref,read_opts=ReadOpts}) ->
     case eleveldb:get(Ref, to_md_key(?FIXED_INDEXES_KEY), ReadOpts) of
         {ok, <<1>>} ->
@@ -253,9 +259,9 @@ fix_index(IndexKey, ForUpgrade, #state{ref=Ref,
 fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts) ->
     case eleveldb:get(Ref, IndexKey, ReadOpts) of
         {ok, _} ->
-            case from_index_key(IndexKey) of 
+            case from_index_key(IndexKey) of
                 {Bucket, Key, Field, Value} ->
-                    
+
                     NewKey = case ForUpgrade of
                                  true -> to_index_key(Bucket, Key, Field, Value);
                                  false -> to_legacy_index_key(Bucket, Key, Field, Value)
@@ -889,7 +895,7 @@ to_object_key(Bucket, Key) ->
 
 from_object_key(LKey) ->
     case (catch sext:decode(LKey)) of
-        {'EXIT', _} -> 
+        {'EXIT', _} ->
             lager:warning("Corrupted object key, discarding"),
             ignore;
         {o, Bucket, Key} ->
@@ -906,7 +912,7 @@ to_legacy_index_key(Bucket, Key, Field, Term) -> %% encode with legacy bignum en
 
 from_index_key(LKey) ->
     case (catch sext:decode(LKey)) of
-        {'EXIT', _} -> 
+        {'EXIT', _} ->
             lager:warning("Corrupted index key, discarding"),
             ignore;
         {i, Bucket, Field, Term, Key} ->
@@ -928,12 +934,12 @@ to_md_key(Key) ->
 simple_test_() ->
     ?assertCmd("rm -rf test/eleveldb-backend"),
     application:set_env(eleveldb, data_root, "test/eleveldb-backend"),
-    riak_kv_backend:standard_test(?MODULE, []).
+    backend_test_util:standard_test(?MODULE, []).
 
 custom_config_test_() ->
     ?assertCmd("rm -rf test/eleveldb-backend"),
     application:set_env(eleveldb, data_root, ""),
-    riak_kv_backend:standard_test(?MODULE, [{data_root, "test/eleveldb-backend"}]).
+    backend_test_util:standard_test(?MODULE, [{data_root, "test/eleveldb-backend"}]).
 
 retry_test_() ->
     {spawn, [fun retry/0, fun retry_fail/0]}.

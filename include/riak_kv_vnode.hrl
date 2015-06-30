@@ -7,6 +7,18 @@
           start_time :: non_neg_integer(),
           options :: list()}).
 
+-record(riak_kv_w1c_put_req_v1, {
+    bkey :: {binary(),binary()},
+    encoded_obj :: binary(),
+    type :: primary | fallback
+    % start_time :: non_neg_integer(), Jon to add?
+}).
+
+-record(riak_kv_w1c_put_reply_v1, {
+    reply :: ok | {error, term()},
+    type :: primary | fallback
+}).
+
 -record(riak_kv_get_req_v1, {
           bkey :: {binary(), binary()},
           req_id :: non_neg_integer()}).
@@ -56,6 +68,8 @@
          }).
 
 -define(KV_PUT_REQ, #riak_kv_put_req_v1).
+-define(KV_W1C_PUT_REQ, #riak_kv_w1c_put_req_v1).
+-define(KV_W1C_PUT_REPLY, #riak_kv_w1c_put_reply_v1).
 -define(KV_GET_REQ, #riak_kv_get_req_v1).
 -define(KV_LISTBUCKETS_REQ, #riak_kv_listbuckets_req_v1).
 -define(KV_LISTKEYS_REQ, #riak_kv_listkeys_req_v4).
