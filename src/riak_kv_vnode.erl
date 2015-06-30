@@ -1416,7 +1416,7 @@ prepare_put(State=#state{vnodeid=VId,
                     false ->
                         RObj
                 end,
-            {{true, ObjToStore}, NPutArgs#putargs{is_index = false}, State};
+            {{true, ObjToStore}, PutArgs#putargs{is_index = false}, State};
         false ->
             prepare_put(State, PutArgs, IndexBackend)
     end.
