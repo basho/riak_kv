@@ -1416,11 +1416,7 @@ prepare_put(State=#state{vnodeid=VId,
                     false ->
                         RObj
                 end,
-<<<<<<< HEAD
-            {{true, ObjToStore}, PutArgs#putargs{is_index = false}, State};
-=======
             {{true, ObjToStore}, NPutArgs#putargs{is_index = false}, State};
->>>>>>> ecb23ee... fixed for merge
         false ->
             prepare_put(State, PutArgs, IndexBackend)
     end.
