@@ -1047,8 +1047,8 @@ handle_handoff_command(Req=?KV_PUT_REQ{}, Sender, State) ->
 
 handle_handoff_command(?KV_W1C_PUT_REQ{}=Request, Sender, State) ->
     NewState0 = case handle_command(Request, Sender, State) of
-        {noreply, NewState} -> lager:info("FDUSHIN> w1c handle_handoff_command noreply", []), NewState;
-        {reply, Reply, NewState} -> lager:info("FDUSHIN> w1c handle_handoff_command reply: ~p", [Reply]), NewState
+        {noreply, NewState} -> NewState;
+        {reply, _Reply, NewState} -> NewState
     end,
     {forward, NewState0};
 
