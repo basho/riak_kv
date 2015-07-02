@@ -797,16 +797,12 @@ fold_keys_fun(FoldKeysFun, {index, Bucket, V1Q}) ->
     fold_keys_fun(FoldKeysFun, {index, Bucket, Q}).
 
 %% @private
-%% To stop a fold in progress when pagination limit is reached.
+%% @deprecated
+%% TODO: Remove this wrapper during a cleanup or refactor.
+%% This function used to catch the stop_fold exception, which actually breaks
+%% folds as pool workers have a special case for handling it.
 stoppable_fold(Fun, Bucket, Item, Acc) ->
-    try
-        Fun(Bucket, Item, Acc)
-    catch
-        stop_fold ->
-            throw({break, Acc})
-    end.
-
-
+    Fun(Bucket, Item, Acc).
 
 %% @private
 %% Return a function to fold over the objects on this backend
