@@ -1402,8 +1402,6 @@ prepare_put(State=#state{vnodeid=VId,
     %% if this is a composite index write we need to change the key to be
     %% the key we will actually write into leveldb
     NewK = maybe_rewrite_li_key(RObj, Key),
-    gg:format("in riak_kv_vnode Key is ~p~nNewK is ~p~n",
-	      [sext:decode(Key), sext:decode(NewK)]),
     NPutArgs = PutArgs#putargs{bkey = {Bucket, NewK}},
 
     %% Can we avoid reading the existing object? If this is not an
