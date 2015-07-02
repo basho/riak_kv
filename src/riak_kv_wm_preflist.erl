@@ -43,10 +43,13 @@
          content_types_provided/2,
          encodings_provided/2,
          produce_preflist_body/2,
-         malformed_request/2
+         malformed_request/2,
+         service_available/2
         ]).
 
 -record(ctx, {
+          client,     %% :: riak_client()             %% the store client
+          riak,       %% local | {node(), atom()}     %% params for riak client
           bucket_type :: binary(),                    %% bucket type (from uri)
           bucket      :: binary(),                    %% Bucket name (from uri)
           key         :: binary(),                    %% Key (from uri)
@@ -60,9 +63,10 @@
 
 -spec init(proplists:proplist()) -> {ok, context()}.
 %% @doc Initialize this resource.  This function extracts the
-%%      'prefix' and 'riak' properties from the dispatch args.
+%%      'riak' properties from the dispatch args.
 init(Props) ->
     {ok, #ctx{
+            riak=proplists:get_value(riak, Props),
             bucket_type=proplists:get_value(bucket_type, Props)}}.
 
 is_authorized(ReqData, Ctx) ->
@@ -80,6 +84,25 @@ is_authorized(ReqData, Ctx) ->
                     "instead.">>, ReqData), Ctx}
     end.
 
+-spec service_available(#wm_reqdata{}, context()) ->
+    {boolean(), #wm_reqdata{}, context()}.
+%% @doc Determine whether or not a connection to Riak
+%%      can be established. Also, extract query params.
+service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
+    Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
+    case riak_kv_wm_utils:get_riak_client(RiakProps,
+                                          riak_kv_wm_utils:get_client_id(RD)) of
+        {ok, C} ->
+            {true, RD, Ctx#ctx { client=C }};
+        Error ->
+            {false,
+             wrq:set_resp_body(
+               io_lib:format("Unable to connect to Riak: ~p~n", [Error]),
+               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx}
+    end.
+
+
 forbidden(RD, Ctx = #ctx{security=undefined}) ->
     {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
 forbidden(RD, Ctx) ->
@@ -88,7 +111,7 @@ forbidden(RD, Ctx) ->
             {true, RD, Ctx};
         false ->
             Res = riak_core_security:check_permission({"riak_kv.get_preflist",
-                                                       Ctx#ctx.bucket_type},
+                                                       {Ctx#ctx.bucket_type, Ctx#ctx.bucket}},
                                                       Ctx#ctx.security),
             case Res of
                 {false, Error, _} ->
