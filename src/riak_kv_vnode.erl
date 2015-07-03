@@ -193,7 +193,8 @@
                   starttime :: non_neg_integer(),
                   prunetime :: undefined| non_neg_integer(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
-                  crdt_op = undefined :: undefined | term() %% if set this is a crdt operation
+                  crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
+                  is_write_once = false :: boolean()
                  }).
 
 -spec maybe_create_hashtrees(state()) -> state().
@@ -1356,7 +1357,8 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        bprops=BProps,
                        starttime=StartTime,
                        prunetime=PruneTime,
-                       crdt_op = CRDTOp},
+                       crdt_op = CRDTOp,
+                       is_write_once = proplists:get_value(is_write_once,Options,false)},
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
@@ -1397,15 +1399,18 @@ prepare_put(State=#state{vnodeid=VId,
                              lww=LWW,
                              coord=Coord,
                              robj=RObj,
-                             starttime=StartTime}) ->
+                             starttime=StartTime,
+                             is_write_once = Is_write_once}) ->
     %% Can we avoid reading the existing object? If this is not an
-    %% index backend, and the bucket is set to last-write-wins, then
-    %% no need to incur additional get. Otherwise, we need to read the
+    %% index backend, and the bucket is set to last-write-wins or write_once,
+    %% then no need to incur additional get. Otherwise, we need to read the
     %% old object to know how the indexes have changed.
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
-    case LWW andalso not IndexBackend of
-        true ->
+    if
+        Is_write_once ->
+            {{true, RObj}, PutArgs#putargs{is_index = false}, State};
+        LWW andalso not IndexBackend ->
             ObjToStore =
                 case Coord of
                     true ->
@@ -1417,7 +1422,7 @@ prepare_put(State=#state{vnodeid=VId,
                         RObj
                 end,
             {{true, ObjToStore}, PutArgs#putargs{is_index = false}, State};
-        false ->
+        ?ELSE ->
             prepare_put(State, PutArgs, IndexBackend)
     end.
 prepare_put(State=#state{mod=Mod,
