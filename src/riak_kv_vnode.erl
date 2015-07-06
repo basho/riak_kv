@@ -1401,8 +1401,8 @@ prepare_put(State=#state{vnodeid=VId,
 
     %% if this is a composite index write we need to change the key to be
     %% the key we will actually write into leveldb
-    NewK = maybe_rewrite_li_key(RObj, Key),
-    NPutArgs = PutArgs#putargs{bkey = {Bucket, NewK}},
+    Key2 = maybe_rewrite_li_key(RObj, Key),
+    PutArgs2 = PutArgs#putargs{bkey = {Bucket, Key2}},
 
     %% Can we avoid reading the existing object? If this is not an
     %% index backend, and the bucket is set to last-write-wins, then
@@ -1422,9 +1422,9 @@ prepare_put(State=#state{vnodeid=VId,
                     false ->
                         RObj
                 end,
-            {{true, ObjToStore}, NPutArgs#putargs{is_index = false}, State};
+            {{true, ObjToStore}, PutArgs2#putargs{is_index = false}, State};
         false ->
-            prepare_put(State, NPutArgs, IndexBackend)
+            prepare_put(State, PutArgs2, IndexBackend)
     end.
 prepare_put(State=#state{mod=Mod,
                          modstate=ModState,

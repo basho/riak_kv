@@ -127,25 +127,25 @@ validate_fields([#riak_field_v1{name     = N,
 				position = P,
 				type     = Ty,
 				optional = O} | T], Acc)
-  when is_list(N),             % guard 1
-       is_integer(P)           % guard 2
-       andalso P > 0,
-       Ty == binary            % guard 3
-       orelse Ty =:= integer
-       orelse Ty =:= float
-       orelse Ty =:= boolean
-       orelse Ty =:= set
-       orelse Ty =:= timestamp
-       orelse Ty =:= any,
-       is_boolean(O) ->        % guard 4
+  when is_list(N),
+       (is_integer(P)
+	andalso P > 0),
+       (Ty == binary
+	orelse Ty =:= integer
+	orelse Ty =:= float
+	orelse Ty =:= boolean
+	orelse Ty =:= set
+	orelse Ty =:= timestamp
+	orelse Ty =:= any),
+       is_boolean(O) ->
     validate_fields(T, Acc);
 validate_fields([#riak_field_v1{name     = N,
 				position = P,
 				type     = {map, MapFields},
 				optional = false} | T], Acc)
-  when is_list(N),   % guard 1
-       is_integer(P) % guard 2
-       andalso P > 0
+  when is_list(N),
+       (is_integer(P)
+	andalso P > 0)
        ->
     NewAcc = case validate_fields(MapFields, []) of
 		 [] -> Acc;
@@ -156,9 +156,9 @@ validate_fields([#riak_field_v1{name     = N,
 				position = P,
 				type     = {map, _MapFields},
 				optional = true} = H | T], Acc)
-  when is_list(N),   % guard 1
-       is_integer(P) % guard 2
-       andalso P > 0
+  when is_list(N),
+       (is_integer(P)
+	andalso P > 0)
        ->
     validate_fields(T, [{maps_cant_be_optional, H} | Acc]);
 validate_fields([H | T], Acc) ->

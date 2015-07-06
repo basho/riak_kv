@@ -44,20 +44,21 @@
 	]).
 
 -ifdef(TEST).
-%% for debugging only
+%% these internal funs are exposed for the development period
+%% they are NOT part of the final API and the export statement
+%% will be removed
 -export([
 	 make_ddl/2,
 	 are_selections_valid/3
-
 	]).
 -endif.
 
 -define(CANBEBLANK,  true).
 -define(CANTBEBLANK, false).
 
--type bucket()                :: binary().
--type modulename()            :: atom().
--type heirarchicalfieldname() :: [string()].
+-type bucket()                 :: binary().
+-type modulename()             :: atom().
+-type hierarchical_fieldname() :: [string()].
 
 -spec make_module_name(bucket()) -> modulename().
 make_module_name(Bucket) when is_binary(Bucket) ->
@@ -103,7 +104,7 @@ convert([#param_v1{name = Nm} | T], Obj, Mod, Acc) ->
 convert([Atom | T], Obj, Mod, Acc) ->
     convert(T, Obj, Mod, [Atom | Acc]).
 
--spec is_valid_field(#ddl_v1{}, heirarchicalfieldname()) -> boolean().
+-spec is_valid_field(#ddl_v1{}, hierarchical_fieldname()) -> boolean().
 is_valid_field(#ddl_v1{bucket = B}, Field) when is_list(Field)->
     Mod = riak_kv_ddl:make_module_name(B),
     Mod:is_field_valid(Field).

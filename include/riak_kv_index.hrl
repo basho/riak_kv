@@ -53,6 +53,8 @@
 -type combinator()    :: term().
 -type limit()         :: any().
 
+%% this the query record for the local index (the composite index)
+%% as used in time series (and going forward)
 -record(riak_kv_li_index_v1, {
 	  bucket      = <<>> :: binary(),
 	  selections  = []   :: [selection()],
