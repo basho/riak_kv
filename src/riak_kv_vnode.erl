@@ -1403,18 +1403,23 @@ is_write_once(_) ->
 prepare_put(State=#state{vnodeid=VId,
                          mod=Mod,
                          modstate=ModState},
-            PutArgs=#putargs{bkey={Bucket, _Key},
+            PutArgs=#putargs{bkey={Bucket, Key},
                              lww=LWW,
                              coord=Coord,
                              robj=RObj,
                              starttime=StartTime}) ->
+    %% if this is a composite index write we need to change the key to be
+    %% the key we will actually write into leveldb
+    Key2 = maybe_rewrite_li_key(RObj, Key),
+    PutArgs2 = PutArgs#putargs{bkey = {Bucket, Key2}},
+
     %% Can we avoid reading the existing object? If this is not an
     %% index backend, and the bucket is set to last-write-wins or write_once,
     %% then no need to incur additional get. Otherwise, we need to read the
     %% old object to know how the indexes have changed.
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
-    Is_write_once = is_write_once(PutArgs),
+    Is_write_once = is_write_once(PutArgs2),
     if
         Is_write_once ->
             {{true, RObj}, PutArgs#putargs{is_index = false}, State};
@@ -1429,9 +1434,9 @@ prepare_put(State=#state{vnodeid=VId,
                     false ->
                         RObj
                 end,
-            {{true, ObjToStore}, PutArgs#putargs{is_index = false}, State};
+            {{true, ObjToStore}, PutArgs2#putargs{is_index = false}, State};
         ?ELSE ->
-            prepare_put(State, PutArgs, IndexBackend)
+            prepare_put(State, PutArgs2, IndexBackend)
     end.
 prepare_put(State=#state{mod=Mod,
                          modstate=ModState,
@@ -1652,6 +1657,13 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
             end
     end,
     {Reply, UpdState}.
+
+%% @private
+maybe_rewrite_li_key(RObj, Key) ->
+    case riak_object:is_li(RObj) of
+	true  -> riak_object:get_li_key(RObj);
+	false -> Key
+    end.
 
 %% @private
 %% enforce allow_mult bucket property so that no backend ever stores
