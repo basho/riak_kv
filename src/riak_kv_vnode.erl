@@ -194,7 +194,7 @@
                   prunetime :: undefined| non_neg_integer(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
                   crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
-                  is_write_once = false :: boolean()
+                  write_once :: not_write_once | {is_write_once, Encoded_robj::binary()}
                  }).
 
 -spec maybe_create_hashtrees(state()) -> state().
@@ -1348,6 +1348,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                 end,
     Coord = proplists:get_value(coord, Options, false),
     CRDTOp = proplists:get_value(counter_op, Options, proplists:get_value(crdt_op, Options, undefined)),
+    Write_once = proplists:get_value(write_once,Options,not_write_once),
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
                        coord=Coord,
                        lww=proplists:get_value(last_write_wins, BProps, false),
@@ -1358,7 +1359,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        starttime=StartTime,
                        prunetime=PruneTime,
                        crdt_op = CRDTOp,
-                       is_write_once = proplists:get_value(is_write_once,Options,false)},
+                       write_once = Write_once },
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
@@ -1392,6 +1393,13 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
 delete_hash(RObj) ->
     erlang:phash2(RObj, 4294967296).
 
+%%
+is_write_once(#putargs{ write_once = {is_write_once, Encoded_robj} }) 
+                                                when is_binary(Encoded_robj) ->
+    true;
+is_write_once(_) ->
+    false.
+
 prepare_put(State=#state{vnodeid=VId,
                          mod=Mod,
                          modstate=ModState},
@@ -1399,14 +1407,14 @@ prepare_put(State=#state{vnodeid=VId,
                              lww=LWW,
                              coord=Coord,
                              robj=RObj,
-                             starttime=StartTime,
-                             is_write_once = Is_write_once}) ->
+                             starttime=StartTime}) ->
     %% Can we avoid reading the existing object? If this is not an
     %% index backend, and the bucket is set to last-write-wins or write_once,
     %% then no need to incur additional get. Otherwise, we need to read the
     %% old object to know how the indexes have changed.
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
+    Is_write_once = is_write_once(PutArgs),
     if
         Is_write_once ->
             {{true, RObj}, PutArgs#putargs{is_index = false}, State};
@@ -1554,6 +1562,8 @@ get_crdt_mod(Int) when is_integer(Int) -> ?COUNTER_TYPE;
 get_crdt_mod(#crdt_op{mod=Mod}) -> Mod;
 get_crdt_mod(Atom) when is_atom(Atom) -> Atom.
 
+-spec perform_put(term(), #state{}, #putargs{}) ->
+        {PutResult::term(), #state{}}.
 perform_put({fail, _, _}=Reply, State, _PutArgs) ->
     {Reply, State};
 perform_put({false, Obj},
@@ -1566,6 +1576,10 @@ perform_put({false, _Obj},
             #putargs{returnbody=false,
                      reqid=ReqId}) ->
     {{dw, Idx, ReqId}, State};
+perform_put({true, _}, 
+            State,
+            #putargs{ write_once = {is_write_once, Encoded_robj} } = PutArgs) when is_binary(Encoded_robj) ->
+    perform_write_once_put(State, PutArgs);
 perform_put({true, Obj},
             State,
             #putargs{returnbody=RB,
@@ -1574,6 +1588,21 @@ perform_put({true, Obj},
                      index_specs=IndexSpecs}) ->
     {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State),
     {Reply, State2}.
+
+%%
+perform_write_once_put(#state{ idx = Idx, mod = Mod, modstate = ModState1 } = State,
+                       #putargs{bkey= {Bucket, Key},
+                                reqid=ReqID,
+                                index_specs=IndexSpecs,
+                                write_once = {is_write_once, Encoded_robj} }) ->
+    PutResult = Mod:put(Bucket, Key, IndexSpecs, Encoded_robj, ModState1),
+    case PutResult of
+        {ok, ModState2} ->
+            Reply = {dw, Idx, ReqID};
+        {error, Reason, ModState2} ->
+            Reply = {fail, Idx, Reason}
+    end,
+    {Reply, State#state{ modstate = ModState2 }}.
 
 actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
            State=#state{idx=Idx,

@@ -76,7 +76,11 @@
         %% Some CRDTs and other client operations that cannot tolerate
         %% an automatic retry on the server side; those operations should
         %% use {retry_put_coordinator_failure, false}.
-        {retry_put_coordinator_failure, boolean()}.
+        {retry_put_coordinator_failure, boolean()} |
+        {returnbody, boolean()} | % TODO just leaving this here for dialyzer...
+        {crdt_op, any()} | % TODO just leaving this here for dialyzer...
+        {counter_op, any()} | % TODO just leaving this here for dialyzer...
+        {is_write_once, boolean()}.
 
 -type options() :: [option()].
 
@@ -457,22 +461,24 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                 {[{returnbody,true}], false}
                         end
                 end,
+            RObj1 = apply_updates(RObj0, Options),
+            VNodeOpts1 = maybe_pre_encode_riak_object(RObj1, Options, VNodeOpts0),
             PutCore = riak_kv_put_core:init(N, W, PW, DW,
                                             N-PW+1,  % cannot ever get PW replies
                                             N-DW+1,  % cannot ever get DW replies
                                             AllowMult,
                                             ReturnBody,
                                             IdxType),
-            VNodeOpts = handle_options(Options, VNodeOpts0),
+            VNodeOpts2 = handle_options(Options, VNodeOpts1),
             StateData = StateData0#state{n=N,
                                          w=W,
                                          pw=PW, dw=DW, allowmult=AllowMult,
                                          precommit = Precommit,
                                          postcommit = Postcommit,
                                          req_id = ReqId,
-                                         robj = apply_updates(RObj0, Options),
+                                         robj = RObj1,
                                          putcore = PutCore,
-                                         vnode_options = VNodeOpts,
+                                         vnode_options = VNodeOpts2,
                                          timeout = Timeout},
             ?DTRACE(Trace, ?C_PUT_FSM_VALIDATE, [N, W, PW, DW], []),
             case Precommit of
@@ -481,6 +487,19 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                 _ ->
                     new_state_timeout(precommit, StateData)
             end
+    end.
+
+%% If the put is write once then pre-encode the riak object.
+-spec maybe_pre_encode_riak_object(riak_object:riak_object(),
+                                   [option()],
+                                   VNodeOptions1::list()) -> VNodeOptions2::list().
+maybe_pre_encode_riak_object(RObj, Options, VNodeOptions) ->
+    case get_option(is_write_once, Options) of
+        true ->
+            RObjEncoded = riak_object:to_binary(v1, RObj),
+            [{write_once, {is_write_once, RObjEncoded}} | VNodeOptions];
+        _ ->
+            VNodeOptions
     end.
 
 apply_updates(RObj0, Options) ->
@@ -826,7 +845,7 @@ handle_options([{crdt_op, _Op}=COP|T], Acc) ->
     VNodeOpts = [COP | Acc],
     handle_options(T, VNodeOpts);
 handle_options([{K, _V} = Opt|T], Acc)
-  when K == sloppy_quorum; K == n_val; K == is_write_once ->
+  when K == sloppy_quorum; K == n_val ->
     %% Take these options as-is
     handle_options(T, [Opt|Acc]);
 handle_options([{_,_}|T], Acc) -> handle_options(T, Acc).
@@ -1053,3 +1072,28 @@ dtrace_errstr(Term) ->
 %% This function is for dbg tracing purposes
 late_put_fsm_coordinator_ack(_Node) ->
     ok.
+
+%%% ============================================================================
+%%% Tests
+%%% ============================================================================
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+maybe_pre_encode_riak_object_1_test() ->
+    RObj = riak_object:new(<<"bucket">>, <<"key">>, <<"value">>),
+    VNodeOptions = maybe_pre_encode_riak_object(RObj, [{is_write_once, false}], []),
+    ?assertEqual(
+        [],
+        VNodeOptions
+    ).
+
+maybe_pre_encode_riak_object_2_test() ->
+    RObj = riak_object:new(<<"bucket">>, <<"key">>, <<"value">>),
+    VNodeOptions = maybe_pre_encode_riak_object(RObj, [{is_write_once, true}], []),
+    ?assertEqual(
+        [{write_once, {is_write_once, riak_object:to_binary(v1, RObj)}}],
+        VNodeOptions
+    ).
+
+-endif.
