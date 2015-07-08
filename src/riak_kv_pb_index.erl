@@ -45,7 +45,8 @@
          decode/2,
          encode/1,
          process/2,
-         process_stream/3]).
+         process_stream/3,
+         maybe_add_cover/2]).
 
 -record(state, {client, req_id, req, continuation, result_count=0}).
 
