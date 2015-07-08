@@ -99,13 +99,13 @@ build_filter(Bucket, ItemFilterInput, FilterVNode) ->
 %% ====================================================================
 
 %% @private
-build_subpartition_filter({Mask, BSL}, Fun) ->
+build_subpartition_filter({Mask, BSR}, Fun) ->
     fun(X) ->
             <<Idx:160/integer>> = Fun(X),
             %% lager:error("{~B, ~B} Result, Mask, Index: ~B, ~B, ~B",
-            %%             [Mask, BSL, FullMask band Idx,
+            %%             [Mask, BSR, FullMask band Idx,
             %%              FullMask, Idx]),
-            Idx bsr BSL =:= Mask
+            Idx bsr BSR =:= Mask
     end.
 
 %% @private
