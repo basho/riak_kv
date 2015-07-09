@@ -48,7 +48,6 @@
 -export([
 	 make_ddl/2,
 	 are_selections_valid/3
-
 	]).
 -endif.
 
@@ -113,12 +112,12 @@ is_query_valid(#ddl_v1{bucket = B} = DDL,
 				    selections = S,
 				    filters    = F}) ->
     ValidSelection = are_selections_valid(DDL, S, ?CANTBEBLANK),
-    ValidFilters = are_filters_valid(DDL, F),
+    ValidFilters   = are_filters_valid(DDL, F),
     case {ValidSelection, ValidFilters} of
 	{true, true} -> true;
 	_            -> {false, [
 				 {are_selections_valid, ValidSelection},
-				 {are_filters_valid, ValidFilters}
+				 {are_filters_valid,    ValidFilters}
 				]}
     end;
 is_query_valid(#ddl_v1{bucket = B1}, #riak_kv_li_index_v1{bucket = B2}) ->
@@ -126,6 +125,8 @@ is_query_valid(#ddl_v1{bucket = B1}, #riak_kv_li_index_v1{bucket = B2}) ->
 			"but query has a bucket of ~p~n", [B1, B2]),
     {false, {ddl_mismatch, lists:flatten(Msg)}}.
 
+are_filters_valid(#ddl_v1{}, []) ->
+    true;
 are_filters_valid(#ddl_v1{} = DDL, Filters) ->
     Fields = extract_fields(Filters),
     are_selections_valid(DDL, Fields, ?CANBEBLANK).
@@ -150,18 +151,25 @@ extract_fields(Fields) ->
 
 extract_f2([], Acc) ->
     lists:reverse(Acc);
-extract_f2([{Op, Field, _Val} | T], Acc) when Op =:= '='   orelse
-					      Op =:= 'and' orelse
-					      Op =:= 'or'  orelse
-					      Op =:= '>'   orelse
-					      Op =:= '<'   orelse
-					      Op =:= '=<'  orelse
+extract_f2([{Op, LHS, RHS} | T], Acc) when Op =:= '='    orelse
+					      Op =:= 'and_' orelse
+					      Op =:= 'or_'  orelse
+					      Op =:= '>'    orelse
+					      Op =:= '<'    orelse
+					      Op =:= '=<'   orelse
 					      Op =:= '>=' ->
-    NewAcc = case is_tuple(Field) of
-		 true  -> extract_f2([Field], Acc);
-		 false -> Acc
+    %% you have to double wrap the variable name inside the list of names
+    Acc2 = case is_tuple(LHS) of
+		 true  -> extract_f2([LHS], Acc);
+		 false -> [[LHS] | Acc]
 	     end,
-    extract_f2(T, NewAcc).
+    % note that the RHS is treated differently to the LHS - the LHS is always
+    % a field - but the RHS terminates on a value
+    Acc3 = case is_tuple(RHS) of
+	       true  -> extract_f2([RHS], Acc2);
+	       false -> Acc2
+	   end,
+    extract_f2(T, Acc3).
 
 remove_hooky_chars(Nonce) ->
     re:replace(Nonce, "[/|\+|\.|=]", "", [global, {return, list}]).
@@ -177,8 +185,8 @@ remove_hooky_chars(Nonce) ->
 %%
 %% Helper Fn for unit tests
 %%
-partition(A, B, C) ->
-    {A, B, C}.
+
+mock_partition_fn(A, B, C) -> {A, B, C}.
 
 make_ddl(Bucket, Fields) when is_binary(Bucket) ->
     make_ddl(Bucket, Fields, #partition_key_v1{}, #local_key_v1{}).
@@ -245,7 +253,7 @@ function_partition_key_test() ->
     PK = #partition_key_v1{ast = [
 				  #param_v1{name = [Name1]},
 				  #hash_fn_v1{mod  = ?MODULE,
-					      fn   = partition,
+					      fn   = mock_partition_fn,
 					      args = [
 						      #param_v1{name = [Name2]},
 						      15,
@@ -280,7 +288,7 @@ complex_partition_key_test() ->
     PK = #partition_key_v1{ast = [
 				  #param_v1{name = [Name0, Name1]},
 				  #hash_fn_v1{mod  = ?MODULE,
-					      fn   = partition,
+					      fn   = mock_partition_fn,
 					      args = [
 						      #param_v1{name = [
 									Name0,
@@ -292,7 +300,7 @@ complex_partition_key_test() ->
 						     ]
 					     },
 				  #hash_fn_v1{mod  = ?MODULE,
-					      fn   = partition,
+					      fn   = mock_partition_fn,
 					      args = [
 						      #param_v1{name = [
 									Name0,
@@ -503,7 +511,7 @@ partial_wildcard_are_selections_valid_test() ->
 				    position = 2,
 				    type     = integer}
 		    ]),
-    {module, _Module} = riak_kv_ddl_compiler:make_helper_mod(DDL),
+    {module, _Module} = riak_kv_ddl_compiler:make_helper_mod(DDL, "/tmp"),
     Res = are_selections_valid(DDL, Selections, ?CANTBEBLANK),
     ?assertEqual(true, Res).
 
@@ -521,11 +529,15 @@ partial_are_selections_valid_fail_test() ->
     {Res, _} = are_selections_valid(DDL, Selections, ?CANTBEBLANK),
     ?assertEqual(false, Res).
 
-simple_are_selections_valid_test() ->
-    Bucket = <<"simple_are_selections_valid_test">>,
+%%
+%% Query Validation tests
+%%
+
+simple_is_query_valid_test() ->
+    Bucket = <<"simple_is_query_valid_test">>,
     Selections  = [["temperature"], ["geohash"]],
-    Query = #riak_kv_li_index_v1{bucket      = Bucket,
-				 selections  = Selections},
+    Query = #riak_kv_li_index_v1{bucket     = Bucket,
+				 selections = Selections},
     DDL = make_ddl(Bucket,
 		    [
 		     #riak_field_v1{name     = "temperature",
@@ -539,11 +551,11 @@ simple_are_selections_valid_test() ->
     Res = riak_kv_ddl:is_query_valid(DDL, Query),
     ?assertEqual(true, Res).
 
-simple_validate_selections_fail_test() ->
-    Bucket = <<"simple_validate_selections_fail_test">>,
+simple_is_query_valid_fail_test() ->
+    Bucket = <<"simple_is_query_valid_fail_test">>,
     Selections  = [["temperature"], ["yerble"]],
-    Query = #riak_kv_li_index_v1{bucket      = Bucket,
-				 selections  = Selections},
+    Query = #riak_kv_li_index_v1{bucket     = Bucket,
+				 selections = Selections},
     DDL = make_ddl(Bucket,
 		    [
 		     #riak_field_v1{name     = "temperature",
@@ -557,14 +569,14 @@ simple_validate_selections_fail_test() ->
     {Res, _} = riak_kv_ddl:is_query_valid(DDL, Query),
     ?assertEqual(false, Res).
 
-simple_map_validate_selections_test() ->
-    Bucket = <<"simple_map_validate_selections__test">>,
+simple_is_query_valid_map_test() ->
+    Bucket = <<"simple_is_query_valid_map_test">>,
     Name0 = "name",
     Name1 = "temp",
     Name2 = "geo",
     Selections  = [["temp", "geo"], ["name"]],
-    Query = #riak_kv_li_index_v1{bucket      = Bucket,
-				 selections  = Selections},
+    Query = #riak_kv_li_index_v1{bucket     = Bucket,
+				 selections = Selections},
     Map = {map, [
 		 #riak_field_v1{name     = Name2,
 				position = 1,
@@ -583,14 +595,14 @@ simple_map_validate_selections_test() ->
     Res = riak_kv_ddl:is_query_valid(DDL, Query),
     ?assertEqual(true, Res).
 
-simple_map_wildcard_validate_selections_test() ->
-    Bucket = <<"simple_map_wildcard_validate_selections__test">>,
+simple_is_query_valid_map_wildcard_test() ->
+    Bucket = <<"simple_is_query_valid_map_wildcard_test">>,
     Name0 = "name",
     Name1 = "temp",
     Name2 = "geo",
     Selections  = [["temp", "*"], ["name"]],
-    Query = #riak_kv_li_index_v1{bucket      = Bucket,
-				 selections  = Selections},
+    Query = #riak_kv_li_index_v1{bucket     = Bucket,
+				 selections = Selections},
     Map = {map, [
 		 #riak_field_v1{name     = Name2,
 				position = 1,
@@ -608,5 +620,53 @@ simple_map_wildcard_validate_selections_test() ->
     {module, _ModName} = riak_kv_ddl_compiler:make_helper_mod(DDL),
     Res = riak_kv_ddl:is_query_valid(DDL, Query),
     ?assertEqual(true, Res).
+
+%%
+%% Tests for queries with non-null filters
+%%
+simple_filter_query_test() ->
+    Bucket = <<"simple_filter_query_test">>,
+    Selections  = [["temperature"], ["geohash"]],
+    Filters = [{and_, {'>', "temperature", 1}, {'<', "temperature", 15}}],
+    Query = #riak_kv_li_index_v1{bucket     = Bucket,
+				 selections = Selections,
+				 filters    = Filters},
+    DDL = make_ddl(Bucket,
+		    [
+		     #riak_field_v1{name     = "temperature",
+				    position = 1,
+				    type     = integer},
+		     #riak_field_v1{name     = "geohash",
+				    position = 2,
+				    type     = integer}
+		    ]),
+    {module, _ModName} = riak_kv_ddl_compiler:make_helper_mod(DDL),
+    Res = riak_kv_ddl:is_query_valid(DDL, Query),
+    ?assertEqual(true, Res).
+
+simple_filter_query_fail_test() ->
+    Bucket = <<"simple_filter_query_fail_test">>,
+    Selections  = [["temperature"], ["geohash"]],
+    Filters = [{and_, {'>', "gingerbread", 1}, {'<', "temperature", 15}}],
+    Query = #riak_kv_li_index_v1{bucket     = Bucket,
+				 selections = Selections,
+				 filters    = Filters},
+    DDL = make_ddl(Bucket,
+		    [
+		     #riak_field_v1{name     = "temperature",
+				    position = 1,
+				    type     = integer},
+		     #riak_field_v1{name     = "geohash",
+				    position = 2,
+				    type     = integer}
+		    ]),
+    {module, _ModName} = riak_kv_ddl_compiler:make_helper_mod(DDL),
+    Res = riak_kv_ddl:is_query_valid(DDL, Query),
+    Expected = {false, [
+			{are_selections_valid, true},
+			{are_filters_valid, {false, [{invalid_field, ["gingerbread"]}]}}
+			]
+	       },
+    ?assertEqual(Expected, Res).
 
 -endif.
