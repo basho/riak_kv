@@ -84,7 +84,7 @@ make_helper_mod(#ddl_v1{} = DDL, OutputDir, HasDebugOutput) ->
     end.
 
 %%
-%% Funs to validate id the DDL definition is correct
+%% Funs to validate if the DDL definition is correct
 %%
 
 validate_ddl(#ddl_v1{fields = Fields}) ->
