@@ -45,7 +45,7 @@
 -export([get_client_id/1]).
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
--export([get_cover/2, get_cover/3]).
+-export([get_cover/2, get_cover/3, replace_cover/5]).
 
 -include_lib("riak_core/include/riak_core_vnode.hrl").
 
@@ -495,22 +495,20 @@ get_cover(Bucket, Client) ->
 %%     undefined -> standard coverage plan
 %%     0         -> One coverage plan element per partition
 %%     Y>0       -> At least Y elements (will be no fewer than ring size)
-get_cover(Bucket, undefined, _Client) ->
-    ReqId = mk_reqid(),
-    N = n_val(Bucket),
-    split_cover(riak_core_coverage_plan:create_plan(all, N, 1, ReqId, riak_kv));
-get_cover(Bucket, 0, _Client) ->
+get_cover(Bucket, Parallelization, _Client) ->
     ReqId = mk_reqid(),
     N = n_val(Bucket),
     RingSize = ring_size(),
+    get_cover_aux(Parallelization, ReqId, N, RingSize).
+
+get_cover_aux(undefined, ReqId, N, _RingSize) ->
+    split_cover(riak_core_coverage_plan:create_plan(all, N, 1, ReqId, riak_kv));
+get_cover_aux(0, ReqId, N, RingSize) ->
     split_cover(
       riak_core_coverage_plan:create_subpartition_plan(all, N,
                                                        RingSize, 1,
                                                        ReqId, riak_kv));
-get_cover(Bucket, MinPar, _Client) ->
-    ReqId = mk_reqid(),
-    N = n_val(Bucket),
-    RingSize = ring_size(),
+get_cover_aux(MinPar, ReqId, N, RingSize) ->
     ParallelTally =
         if
             MinPar =< RingSize ->
@@ -523,6 +521,24 @@ get_cover(Bucket, MinPar, _Client) ->
       riak_core_coverage_plan:create_subpartition_plan(all, N,
                                                        ParallelTally, 1,
                                                        ReqId, riak_kv)).
+
+%% Will ignore the number of partitions, reconstruct from the coverage
+%% plan chunk we're replacing
+-spec replace_cover(Bucket :: binary() | {binary(), binary()},
+                    Parallelization :: undefined | non_neg_integer(),
+                    Replace :: {ok, list({atom(), term()})} |
+                               {error, Reason},
+                    OtherBroken :: list(
+                      {ok, list({atom(), term()})} |
+                      {error, Reason}),
+                    riak_client()) ->
+                           list({atom(), term()}) | {error, term()}.
+replace_cover(_Bucket, _P, {error, Reason}, _OtherBroken, _Client) ->
+    {error, Reason};
+replace_cover(_Bucket, _P, {ok, Replace}, _OtherBroken, _Client) ->
+    %% XXX Placeholder for testing
+    Replace.
+
 
 %% Crimes against computerkind
 next_power_of_two(X) ->

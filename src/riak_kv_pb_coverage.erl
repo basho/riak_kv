@@ -82,7 +82,12 @@ process(#rpbcoveragereq{type=T, bucket=B, min_partitions=P, replace_cover=undefi
     convert_list(Client:get_cover(Bucket, P), State);
 process(#rpbcoveragereq{type=T, bucket=B, min_partitions=P, replace_cover=R, unavailable_cover=U}, #state{client=Client} = State) ->
     Bucket = bucket_type(T, B),
-    convert_list(Client:replace_cover(Bucket, P, R, U), State).
+    convert_list(
+      Client:replace_cover(
+        Bucket, P,
+        checksum_binary_to_term(R),
+        lists:map(fun checksum_binary_to_term/1, U)),
+      State).
 
 -spec term_to_checksum_binary(term()) -> term().
 term_to_checksum_binary(C) ->
