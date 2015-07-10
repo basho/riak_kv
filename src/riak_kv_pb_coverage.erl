@@ -44,7 +44,10 @@
          decode/2,
          encode/1,
          process/2,
-         process_stream/3]).
+         process_stream/3,
+         checksum_binary_to_term/1,
+         term_to_checksum_binary/1
+        ]).
 
 -record(state, {client}).
 
@@ -74,10 +77,32 @@ process_stream(_,_,State) ->
     {ignore, State}.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(#rpbcoveragereq{type=T, bucket=B, min_partitions=P}, #state{client=Client} = State) ->
+process(#rpbcoveragereq{type=T, bucket=B, min_partitions=P, replace_cover=undefined}, #state{client=Client} = State) ->
     Bucket = bucket_type(T, B),
-    convert_list(Client:get_cover(Bucket, P), State).
+    convert_list(Client:get_cover(Bucket, P), State);
+process(#rpbcoveragereq{type=T, bucket=B, min_partitions=P, replace_cover=R, unavailable_cover=U}, #state{client=Client} = State) ->
+    Bucket = bucket_type(T, B),
+    convert_list(Client:replace_cover(Bucket, P, R, U), State).
 
+-spec term_to_checksum_binary(term()) -> term().
+term_to_checksum_binary(C) ->
+    Csum = erlang:adler32(term_to_binary(C)),
+    term_to_binary({Csum, C}).
+
+-spec checksum_binary_to_term(term()) -> {ok, term()} |
+                                         {'error', atom()}.
+checksum_binary_to_term(C) ->
+    verify_checksum_tuple(binary_to_term(C)).
+
+verify_checksum_tuple({Csum, Term}) ->
+    case Csum =:= erlang:adler32(term_to_binary(Term)) of
+        true ->
+            {ok, Term};
+        false ->
+            {error, invalid_checksum}
+    end;
+verify_checksum_tuple(_) ->
+    {error, invalid_structure}.
 
 convert_list({error, Error}, State) ->
     {error, Error, State};
@@ -94,9 +119,9 @@ convert_list(Results, State) ->
                                proplists:get_value(filters, P, []),
                                proplists:get_value(subpartition, P)),
                       {IP, Port} = node_to_pb_details(Node),
-                      Csum = erlang:adler32(term_to_binary(P)),
+
                       #rpbcoverageentry{
-                         cover_context=term_to_binary({Csum, P}),
+                         cover_context=term_to_checksum_binary(P),
                          ip=IP,
                          port=Port,
                          keyspace_desc=Desc

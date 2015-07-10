@@ -113,14 +113,16 @@ process(#rpbindexreq{} = Req, State) ->
 %% with the details.
 maybe_add_cover(undefined, Opts) ->
     Opts;
-maybe_add_cover(Cover0, Opts) ->
-    {Csum, Cover} = binary_to_term(Cover0),
-    case Csum =:= erlang:adler32(term_to_binary(Cover)) of
-        true ->
-            Opts ++ [{vnode_target, Cover}];
-        false ->
-            Opts
-    end.
+maybe_add_cover(Cover, Opts) ->
+    maybe_add_cover2(
+      riak_kv_pb_coverage:checksum_binary_to_term(Cover),
+      Opts
+     ).
+
+maybe_add_cover2({error, _Reason}, Opts) ->
+    Opts;
+maybe_add_cover2({ok, Cover}, Opts) ->
+    Opts ++ [{vnode_target, Cover}].
 
 maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
     #rpbindexreq{type=T, bucket=B, max_results=MaxResults, timeout=Timeout,
