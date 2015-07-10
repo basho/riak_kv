@@ -503,7 +503,7 @@ get_cover(Bucket, 0, _Client) ->
     ReqId = mk_reqid(),
     N = n_val(Bucket),
     RingSize = ring_size(),
-    split_cover(riak_core_coverage_plan:create_plan(all, {N, RingSize, RingSize}, 1, ReqId, riak_kv));
+    split_cover(riak_core_coverage_plan:create_subpartition_plan(all, N, RingSize, 1, ReqId, riak_kv));
 get_cover(Bucket, MinPar, _Client) ->
     ReqId = mk_reqid(),
     N = n_val(Bucket),
