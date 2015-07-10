@@ -193,25 +193,25 @@ put(RObj, {?MODULE, [_Node, _ClientId]}=THIS) -> put(RObj, [], THIS).
 
 
 normal_put(RObj, Options, {?MODULE, [Node, ClientId]}) ->
-    Me = self(),
     ReqId = mk_reqid(),
+    From = {raw, ReqId, self()},
     case ClientId of
         undefined ->
             case node() of
                 Node ->
-                    riak_kv_put_fsm:start_link({raw, ReqId, Me}, RObj, Options);
+                    riak_kv_put_fsm:start_link(From, RObj, Options);
                 _ ->
                     proc_lib:spawn_link(Node, riak_kv_put_fsm, start_link,
-                                        [{raw, ReqId, Me}, RObj, Options])
+                                        [From, RObj, Options])
             end;
         _ ->
             UpdObj = riak_object:increment_vclock(RObj, ClientId),
             case node() of
                 Node ->
-                    riak_kv_put_fsm:start_link({raw, ReqId, Me}, UpdObj, [asis|Options]);
+                    riak_kv_put_fsm:start_link(From, UpdObj, [asis|Options]);
                 _ ->
                     proc_lib:spawn_link(Node, riak_kv_put_fsm, start_link,
-                                        [{raw, ReqId, Me}, RObj, [asis|Options]])
+                                        [From, RObj, [asis|Options]])
             end
     end,
     %% TODO: Investigate adding a monitor here and eliminating the timeout.
