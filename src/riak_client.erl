@@ -516,8 +516,7 @@ get_cover(Bucket, MinPar, _Client) ->
                 next_power_of_two(MinPar)
         end,
 
-%% XXX: will need to adapt split_cover for this list of values
-    split_cover(riak_core_coverage_plan:create_plan(all, {N, RingSize, ParallelTally}, 1, ReqId, riak_kv)).
+    split_cover(riak_core_coverage_plan:create_subpartition_plan(all, N, ParallelTally, 1, ReqId, riak_kv)).
 
 %% Crimes against computerkind
 next_power_of_two(X) ->
