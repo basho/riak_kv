@@ -532,12 +532,12 @@ get_cover_aux(MinPar, ReqId, N, RingSize) ->
                       {ok, list({atom(), term()})} |
                       {error, Reason}),
                     riak_client()) ->
-                           list({atom(), term()}) | {error, term()}.
+                           list(list({atom(), term()})) | {error, term()}.
 replace_cover(_Bucket, _P, {error, Reason}, _OtherBroken, _Client) ->
     {error, Reason};
 replace_cover(_Bucket, _P, {ok, Replace}, _OtherBroken, _Client) ->
     %% XXX Placeholder for testing
-    Replace.
+    [Replace].
 
 
 %% Crimes against computerkind
