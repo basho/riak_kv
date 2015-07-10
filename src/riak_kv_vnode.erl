@@ -95,8 +95,10 @@
 -ifdef(TEST).
 %% Use values so that test compile doesn't give 'unused vars' warning.
 -define(INDEX(A,B,C), _=element(1,{A,B,C}), ok).
+-define(INDEX_BIN(A,B,C,D,E), _=element(1,{A,B,C,D,E}), ok).
 -else.
 -define(INDEX(Obj, Reason, Partition), yz_kv:index(Obj, Reason, Partition)).
+-define(INDEX_BIN(Bucket, Key, Obj, Reason, Partition), yz_kv:index_binary(Bucket, Key, Obj, Reason, Partition)).
 -endif.
 
 -ifdef(TEST).
@@ -841,6 +843,7 @@ handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=
     case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
         {ok, UpModState} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
+            ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
             update_vnode_stats(vnode_put, Idx, StartTS),
             {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
@@ -1164,6 +1167,7 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
             State=#state{idx=Idx}) ->
     update_hashtree(Bucket, Key, EncodedVal, State),
+    ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
     riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
     update_vnode_stats(vnode_put, Idx, StartTS),
     {ok, State};
