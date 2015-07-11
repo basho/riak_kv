@@ -523,7 +523,9 @@ get_cover_aux(MinPar, ReqId, N, RingSize) ->
                                                        ReqId, riak_kv)).
 
 %% Will ignore the number of partitions, reconstruct from the coverage
-%% plan chunk we're replacing
+%% plan chunk we're replacing. The `Replace' argument is an ok/error
+%% tuple because it is intended to be the result of
+%% `riak_kv_pb_coverage:checksum_binary_to_term'
 -spec replace_cover(Bucket :: binary() | {binary(), binary()},
                     Parallelization :: undefined | non_neg_integer(),
                     Replace :: {ok, list({atom(), term()})} |
@@ -535,9 +537,23 @@ get_cover_aux(MinPar, ReqId, N, RingSize) ->
                            list(list({atom(), term()})) | {error, term()}.
 replace_cover(_Bucket, _P, {error, Reason}, _OtherBroken, _Client) ->
     {error, Reason};
-replace_cover(_Bucket, _P, {ok, Replace}, _OtherBroken, _Client) ->
-    %% XXX Placeholder for testing
-    [Replace].
+replace_cover(Bucket, _P, {ok, Replace}, OtherBroken, _Client) ->
+    %% XXX Need to branch based on traditional vs subpartition
+    split_cover(
+      riak_core_coverage_plan:replace_subpartition_chunk(
+        proplists:get_value(vnode_hash, Replace),
+        proplists:get_value(node, Replace),
+        proplists:get_value(subpartition, Replace),
+        n_val(Bucket),
+        mk_reqid(),
+        extract_proplist_nodes(OtherBroken),
+        riak_kv)).
+
+extract_proplist_nodes(L) ->
+    lists:filtermap(fun({ok, Proplist}) ->
+                            {true, proplists:get_value(node, Proplist)};
+                       ({error, _}) -> false
+                    end, L).
 
 
 %% Crimes against computerkind
