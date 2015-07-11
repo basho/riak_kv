@@ -538,15 +538,37 @@ get_cover_aux(MinPar, ReqId, N, RingSize) ->
 replace_cover(_Bucket, _P, {error, Reason}, _OtherBroken, _Client) ->
     {error, Reason};
 replace_cover(Bucket, _P, {ok, Replace}, OtherBroken, _Client) ->
-    %% XXX Need to branch based on traditional vs subpartition
+    pick_cover_replacement(proplists:get_value(subpartition, Replace),
+                           n_val(Bucket), Replace,
+                           extract_proplist_nodes(OtherBroken)).
+
+pick_cover_replacement(undefined, NVal, Replace, DownNodes) ->
+    %% If `undefined', we didn't find a subpartition filter, so this
+    %% is a traditional coverage plan chunk
+    replace_traditional_cover(NVal, Replace, DownNodes);
+pick_cover_replacement(_Subp, NVal, Replace, DownNodes) ->
+    replace_subpartition_cover(NVal, Replace, DownNodes).
+
+replace_traditional_cover(NVal, Replace, DownNodes) ->
+    split_cover(
+      riak_core_coverage_plan:replace_traditional_chunk(
+        proplists:get_value(vnode_hash, Replace),
+        proplists:get_value(node, Replace),
+        proplists:get_value(filters, Replace),
+        NVal,
+        mk_reqid(),
+        DownNodes,
+        riak_kv)).
+
+replace_subpartition_cover(NVal, Replace, DownNodes) ->
     split_cover(
       riak_core_coverage_plan:replace_subpartition_chunk(
         proplists:get_value(vnode_hash, Replace),
         proplists:get_value(node, Replace),
         proplists:get_value(subpartition, Replace),
-        n_val(Bucket),
+        NVal,
         mk_reqid(),
-        extract_proplist_nodes(OtherBroken),
+        DownNodes,
         riak_kv)).
 
 extract_proplist_nodes(L) ->
@@ -571,9 +593,8 @@ ring_size() ->
     chashbin:num_partitions(CHBin).
 
 
-
-split_cover({error, _}=Error) ->
-    Error;
+split_cover({error, Term}) when is_atom(Term) ->
+    {error, atom_to_list(Term)};
 split_cover({VnodeList, FilterList}) ->
     lists:map(fun({Hash, Node}) ->
                       [{vnode_hash, Hash}, {node, Node}] ++
