@@ -554,7 +554,7 @@ replace_traditional_cover(NVal, Replace, DownNodes) ->
       riak_core_coverage_plan:replace_traditional_chunk(
         proplists:get_value(vnode_hash, Replace),
         proplists:get_value(node, Replace),
-        proplists:get_value(filters, Replace),
+        proplists:get_value(filters, Replace, []),
         NVal,
         mk_reqid(),
         DownNodes,
