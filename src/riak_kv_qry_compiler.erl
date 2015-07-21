@@ -85,7 +85,7 @@ compile_filter(#partition_key_v1{} = PK,
 						 Unit
 						]}
 			    ]} = PK,
-    Quanta = riak_kv_quanta:quanta(T1, T2, Quantity, Unit),
+    _Quanta = riak_kv_quanta:quanta(T1, T2, Quantity, Unit),
     [F];
 compile_filter(#partition_key_v1{} = _PK, Filter) ->
     {error, {filter_not_supported, Filter}}.
