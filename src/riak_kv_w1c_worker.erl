@@ -78,9 +78,9 @@ start_link(Name) ->
 put(RObj, Options) ->
     StartTS = os:timestamp(),
     Bucket = riak_object:bucket(RObj),
-    BKey = {Bucket, riak_object:key(RObj)},
-    BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
-    DocIdx = riak_core_util:chash_key(BKey, BucketProps),
+    Key = riak_object:key(RObj),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    DocIdx = riak_core_util:chash_key({Bucket, Key}, BucketProps),
     NVal = proplists:get_value(n_val, BucketProps),
     Preflist =
         case proplists:get_value(sloppy_quorum, Options, true) of
@@ -92,28 +92,21 @@ put(RObj, Options) ->
         end,
     case validate_options(NVal, Preflist, Options, BucketProps) of
         {ok, W, PW} ->
-            Workers = workers(),
-            R = random(size(Workers)),
-            Worker = element(R, workers()),
+            Worker = random_worker(),
+            EncodedVal = encoded_val(RObj),
             ReqId = erlang:monitor(process, Worker),
-            RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
-            RObj3 = riak_object:update_last_modified(RObj2),
-            RObj4 = riak_object:apply_updates(RObj3),
-            Bucket = riak_object:bucket(RObj4),
-            Key = riak_object:key(RObj4),
-            EncodedVal = riak_object:to_binary(v1, RObj4),
+            Timeout = case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
+                N when is_integer(N) andalso N > 0 ->
+                    N;
+                _ ->
+                    ?DEFAULT_TIMEOUT
+            end,
             gen_server:cast(
                 Worker,
                 {put, Bucket, Key, EncodedVal, ReqId, Preflist,
                  #rec{w=W, pw=PW, n_val=NVal, from=self(),
                       start_ts=StartTS,
                       size=size(EncodedVal)}}),
-            Timeout = case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
-                          N when is_integer(N) andalso N > 0 ->
-                              N;
-                          _ ->
-                              ?DEFAULT_TIMEOUT
-                      end,
             receive
                 {'DOWN', ReqId, process, _Pid, _Reason} ->
                     {error, riak_kv_w1c_server_crashed};
@@ -218,6 +211,20 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+
+random_worker() ->
+    Workers = workers(),
+    R = random(size(Workers)),
+    element(R, workers()).
+
+
+encoded_val(RObj) ->
+    RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
+    RObj3 = riak_object:update_last_modified(RObj2),
+    RObj4 = riak_object:apply_updates(RObj3),
+    riak_object:to_binary(v1, RObj4).
+
 
 validate_options(NVal, Preflist, Options, BucketProps) ->
     PW = get_rw_value(pw, BucketProps, NVal, Options),
