@@ -47,7 +47,7 @@
 	 ]).
 -endif.
 
--include("riak_kv_index.hrl").
+-include_lib("riak_ql/include/riak_ql_sql.hrl").
 
 -define(SERVER, ?MODULE).
 -define(NO_SIDEEFFECTS, []).
@@ -56,7 +56,7 @@
 
 -record(state, {
 	  name     :: atom(),
-	  qry = [] :: #riak_kv_li_index_v1{}
+	  qry = [] :: #riak_sql_v1{}
 	 }).
 
 %%%===================================================================
@@ -184,7 +184,7 @@ handle_req(Request, State) ->
 handle_side_effects([]) ->
     ok;
 handle_side_effects([{run_sub_query, {qry, Q}, {qid, QId}} | T]) ->
-    Bucket = Q#riak_kv_li_index_v1.bucket,
+    Bucket = Q#riak_sql_v1.'FROM',
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
