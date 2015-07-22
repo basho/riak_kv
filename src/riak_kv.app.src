@@ -18,7 +18,8 @@
                   os_mon,
                   riak_pipe,
                   riak_dt,
-                  riak_pb
+                  riak_pb,
+                  riak_ql
                  ]},
   {registered, []},
   {mod, {riak_kv_app, []}},
