@@ -50,6 +50,7 @@
 -endif.
 
 -include("riak_kv_qry_queue.hrl").
+-include("riak_kv_index.hrl").
 
 -define(SERVER, ?MODULE).
 
@@ -58,7 +59,7 @@
 -type name()      :: atom().
 -type query_id()  :: {node(), integer()}.
 -type statuses()  :: available | in_progress.
--type qry()       :: ?KV_LI_INDEX_Q{}.
+-type qry()       :: ?KV_SQL_Q{}.
 -type timestamp() :: pos_integer().
 
 -record(fsm, {

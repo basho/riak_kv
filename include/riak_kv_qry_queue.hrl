@@ -19,8 +19,8 @@
 %% under the License.
 %%%
 %%%-------------------------------------------------------------------
--include("riak_kv_index.hrl").
+-include_lib("riak_ql/include/riak_ql_sql.hrl").
 
 -record(queue_query, {
-	  qry = #riak_kv_li_index_v1{}
+	  qry = #riak_sql_v1{}
 	 }).
