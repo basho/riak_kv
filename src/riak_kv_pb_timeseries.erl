@@ -24,7 +24,7 @@ decode(Code, Bin) ->
             {ok, DecodedQuery} = decode_query(Q),
             PermAndTarget = decode_query_permissions(DecodedQuery),
             {ok, DecodedQuery, PermAndTarget};
-        #tsputreq{table=Table, columns=Columns, rows=Rows} ->
+        #tsputreq{table=Table, columns=_Columns, rows=_Rows} ->
             {ok, Msg, {"riak_kv.ts_put", Table}}
     end.
 
@@ -33,7 +33,7 @@ encode(Message) ->
 
 process(#tsputreq{table=_Table, columns=_Columns, rows=_Rows}, State) ->
     {reply, #tsputresp{}, State};
-process(_Ddl = #ddl_v1, State) ->
+process(_Ddl = #ddl_v1{}, State) ->
     {reply, #tsqueryresp{}, State};
 process({_DecodedQuery}, State) ->
     {reply, #tsqueryresp{}, State}.
@@ -42,10 +42,12 @@ process_stream(_, _, State)->
     {ignore, State}.
 
 decode_query(Query) ->
-    Query#tsinterpolation{base=BaseQuery, interpolations=Interpolations},
-    Lexed = riak_ql_lexer:get_tokens(BaseQuery),
-    {ok, Parsed} = riak_ql_parser:parse(Lexed),
-    Parsed.
+    case Query of
+        #tsinterpolation{base=BaseQuery, interpolations=_Interpolations} ->
+            Lexed = riak_ql_lexer:get_tokens(BaseQuery),
+            {ok, Parsed} = riak_ql_parser:parse(Lexed),
+            Parsed
+    end.
 
 decode_query_permissions(#ddl_v1{bucket=NewBucket}) ->
     {"riak_kv.ts_create_table", NewBucket};
