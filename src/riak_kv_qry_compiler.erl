@@ -34,17 +34,15 @@ compile(#ddl_v1{}, #riak_sql_v1{is_executable = true}) ->
     {error, 'query is already compiled'};
 compile(#ddl_v1{}, #riak_sql_v1{'SELECT' = []}) ->
     {error, 'full table scan not implmented'};
-compile(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
-				      'SELECT'      = F} = Q) ->
-    %% break out all the 'SELECT' into their own queries and then compile them
-    ListQ = [Q#riak_sql_v1{'SELECT' = [X]} || X <- F],
-    lists:flatten([comp2(DDL, X) || X <- ListQ]).
+compile(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false} = Q) ->
+    comp2(DDL, Q).
 
-comp2(#ddl_v1{partition_key = PK},
+comp2(#ddl_v1{bucket = B, partition_key = PK},
       #riak_sql_v1{is_executable = false,
 		   'WHERE'      = W} = Q) ->
-    case compile_where(PK, W) of
-	{error, E} -> {error, E};
+    Mod = riak_ql_ddl:make_module_name(B),
+    case compile_where(PK, W, Mod) of
+	{error, E} -> [{error, E}];
 	NewWs      -> [Q#riak_sql_v1{is_executable = true,
 	 			     'WHERE'        = [X]} || X <- NewWs]
     end.
@@ -55,58 +53,67 @@ comp2(#ddl_v1{partition_key = PK},
 %% just flip the 'and' clause
 compile_where(#partition_key_v1{} = PK,
 	       [{and_,
-		 {Op1, "timestamp", T1} = LHS,
-		 {Op2, "timestamp", T2} = RHS
-		}])
+		 {Op1, _, {int, T1}} = LHS,
+		 {Op2, _, {int, T2}} = RHS
+		}],
+	     Mod)
   when
       (is_integer(T1) andalso is_integer(T2))
       andalso
       ((Op1 =:= '<' orelse Op1 =:= '=<')
        andalso
 	 (Op2 =:= '>' orelse Op2 =:= '>='))->
-    compile_where(PK, [{and_, RHS, LHS}]);
+    compile_where(PK, [{and_, RHS, LHS}], Mod);
 compile_where(#partition_key_v1{} = PK,
 	       [{and_,
-		 {Op1, "timestamp", T1},
-		 {Op2, "timestamp", T2}
-		} = W])
+		 {Op1, Field, {int, T1}},
+		 {Op2, Field, {int, T2}}
+		} = Where],
+		Mod)
   when
       (is_integer(T1) andalso is_integer(T2))
       andalso
       ((Op1 =:= '>' orelse Op1 =:= '>=')
        andalso
 	 (Op2 =:= '<' orelse Op2 =:= '=<')) ->
-    #partition_key_v1{ast = [#hash_fn_v1{mod  = riak_ql_quanta,
-					 fn   = quantum,
-					 args = [
-						 #param_v1{name = ["timestamp"]},
-						 Quantity,
-						 Unit
-						]}
-			    ]} = PK,
-    case riak_ql_quanta:quanta(T1, T2, Quantity, Unit) of
-	{1, []}          -> [W];
-	{_N, Boundaries} -> StartClauses = [{'>=', X} || X <- Boundaries],
-			    EndClauses   = [{'<',  X} || X <- Boundaries],
-			    Starts = [{Op1, T1} | StartClauses],
-			    Ends   = EndClauses ++ [{Op2, T2}],
-			    make_wheres(Starts, Ends)
+    %% check that the field is of type 'timestamp'
+    case Mod:get_field_type([Field]) of
+	timestamp ->
+	    #partition_key_v1{ast = [#hash_fn_v1{mod  = riak_ql_quanta,
+						 fn   = quantum,
+						 args = [
+							 #param_v1{},
+							 Quantity,
+							 Unit
+							]}
+				    ]} = PK,
+	    case riak_ql_quanta:quanta(T1, T2, Quantity, Unit) of
+		{1, []}          -> [Where];
+		{_N, Boundaries} -> StartClauses = [{'>=', {int, X}} || X <- Boundaries],
+				    EndClauses   = [{'<',  {int, X}} || X <- Boundaries],
+				    Starts = [{Op1, {int, T1}} | StartClauses],
+				    Ends   = EndClauses ++ [{Op2, {int, T2}}],
+				    make_wheres(Starts, Ends, Field)
+	    end;
+	Other ->
+	    {error, {{not_timestamp_field, {Field, Other}}, Where}}
     end;
-compile_where(#partition_key_v1{} = _PK, Where) ->
+compile_where(#partition_key_v1{} = _PK, Where, _Mod) ->
     {error, {where_not_supported, Where}}.
 
-make_wheres(Starts, Ends) ->
-    make_w2(Starts, Ends, []).
+make_wheres(Starts, Ends, Field) ->
+    make_w2(Starts, Ends, Field, []).
 
-make_w2([], [], Acc) -> 
+make_w2([], [], _Field, Acc) -> 
     lists:reverse(Acc);
-make_w2([{Op1, V1} | T1], [{Op2, V2} | T2], Acc) -> 
-    make_w2(T1, T2, [make_where({Op1, V1}, {Op2, V2}) | Acc]).
+make_w2([{Op1, V1} | T1], [{Op2, V2} | T2], Field, Acc) -> 
+    NewAcc = [make_where({Op1, V1}, {Op2, V2}, Field) | Acc],
+    make_w2(T1, T2, Field, NewAcc).
 
-make_where({Op1, Start}, {Op2, End}) ->
+make_where({Op1, Start}, {Op2, End}, Field) ->
     {and_,
-     {Op1, "timestamp", Start},
-     {Op2, "timestamp", End}
+     {Op1, Field, Start},
+     {Op2, Field, End}
      }.
 
 -ifdef(TEST).
@@ -139,7 +146,7 @@ make_query(Bucket, Selections, Where) ->
 		 'WHERE'  = Where}.
 
 -define(MIN, 60 * 1000).
--define(NAME, "timestamp").
+-define(NAME, "time").
 
 basic_DDL_and_Q(Bucket) when is_binary(Bucket) ->
     PK = #partition_key_v1{ast = [
@@ -156,13 +163,13 @@ basic_DDL_and_Q(Bucket) when is_binary(Bucket) ->
 		   [
 		    #riak_field_v1{name     = ?NAME,
 				   position = 1,
-				   type     = binary}
+				   type     = timestamp}
 		   ],
 		   PK),
-    {module, _Module} = riak_ql_ddl_compiler:make_helper_mod(DDL),
+    {module, _Module} = riak_ql_ddl_compiler:make_helper_mod(DDL, "/tmp"),
     Q = make_query(Bucket, [["*"]], [{and_,
-				      {'>', ?NAME, 1 * ?MIN},
-				      {'<', ?NAME, 2 * ?MIN}
+				      {'>', ?NAME, {int, 1 * ?MIN}},
+				      {'<', ?NAME, {int, 2 * ?MIN}}
 				     }]),
     case riak_ql_ddl:is_query_valid(DDL, Q) of
 	false -> exit('invalid query');
@@ -179,14 +186,42 @@ simplest_test() ->
     Expected = [Q#riak_sql_v1{is_executable = true}],
     ?assertEqual(Expected, Got).
 
-simple_double_AND_test() ->
-    {DDL, Q} = basic_DDL_and_Q(<<"simple_double_AND_test">>),
-     #riak_sql_v1{'SELECT' = [F]} = Q,
-    Q2 = Q#riak_sql_v1{'SELECT' = [F, F]},
-    CompQ = Q#riak_sql_v1{is_executable = true},
+simple_spanning_boundary_test() ->
+    %% get basic query
+    {DDL, Q} = basic_DDL_and_Q(<<"simplest_test">>),
+    %% make new Where clause
+    NewW = [
+	    {and_,
+	     {'>', ?NAME, {int, 1 * ?MIN}},
+	     {'<', ?NAME, {int, 16 * ?MIN}}
+	    }
+	   ],
+    Q2 = Q#riak_sql_v1{'WHERE' = NewW},
     Got = compile(DDL, Q2),
-    Expected = [CompQ, CompQ],
+    %% now make the result - expecting 2 queries
+    W1 = [
+	    {and_,
+	     {'>', ?NAME, {int, 1 * ?MIN}},
+	     {'<', ?NAME, {int, 15 * ?MIN}}
+	    }
+	 ],
+    W2 = [
+	    {and_,
+	     {'>=', ?NAME, {int, 15 * ?MIN}},
+	     {'<',  ?NAME, {int, 16 * ?MIN}}
+	    }
+	 ],
+    Expected = [
+		Q#riak_sql_v1{is_executable = true,
+			      'WHERE'       = W1},
+		Q#riak_sql_v1{is_executable = true,
+			      'WHERE'       = W2}
+	       ],
     ?assertEqual(Expected, Got).
+
+%%
+%% Failing tests
+%%
 
 simplest_fail_test() ->
     {DDL, Q} = basic_DDL_and_Q(<<"simplest_fail_test">>),
@@ -203,37 +238,12 @@ simplest_compile_once_only_fail_test() ->
     Expected = {error, 'query is already compiled'},
     ?assertEqual(Expected, Got).
 
-simple_spanning_boundary_test() ->
-    %% get basic query
-    {DDL, Q} = basic_DDL_and_Q(<<"simplest_test">>),
-    %% make new Where clause
-    NewW = [
-	    {and_,
-	     {'>', ?NAME, 1 * ?MIN},
-	     {'<', ?NAME, 16 * ?MIN}
-	    }
-	   ],
-    Q2 = Q#riak_sql_v1{'WHERE' = NewW},
+no_where_clause_fail_test() ->
+    {DDL, Q} = basic_DDL_and_Q(<<"simplest_fail_test">>),
+    Where = [],
+    Q2 = Q#riak_sql_v1{'WHERE' = Where},
     Got = compile(DDL, Q2),
-    % now make the result - expecting 2 queries
-    W1 = [
-	    {and_,
-	     {'>', ?NAME, 1 * ?MIN},
-	     {'<', ?NAME, 15 * ?MIN}
-	    }
-	 ],
-    W2 = [
-	    {and_,
-	     {'>=', ?NAME, 15 * ?MIN},
-	     {'<',  ?NAME, 16 * ?MIN}
-	    }
-	 ],
-    Expected = [
-		Q#riak_sql_v1{is_executable = true,
-			      'WHERE'       = W1},
-		Q#riak_sql_v1{is_executable = true,
-			      'WHERE'       = W2}
-	       ],
+    Expected = [{error, {where_not_supported, Where}}],
     ?assertEqual(Expected, Got).
-
+    
 -endif.
