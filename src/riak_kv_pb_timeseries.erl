@@ -21,7 +21,7 @@ decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
         #tsqueryreq{query=Q}->
-            {ok, DecodedQuery} = decode_query(Q),
+            DecodedQuery = decode_query(Q),
             PermAndTarget = decode_query_permissions(DecodedQuery),
             {ok, DecodedQuery, PermAndTarget};
         #tsputreq{table=Table, columns=_Columns, rows=_Rows} ->
@@ -44,7 +44,7 @@ process_stream(_, _, State)->
 decode_query(Query) ->
     case Query of
         #tsinterpolation{base=BaseQuery, interpolations=_Interpolations} ->
-            Lexed = riak_ql_lexer:get_tokens(BaseQuery),
+            Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
             {ok, Parsed} = riak_ql_parser:parse(Lexed),
             Parsed
     end.
