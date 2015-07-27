@@ -32,11 +32,21 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 process(#tsputreq{table=_Table, columns=_Columns, rows=_Rows}, State) ->
-    {reply, #tsputresp{}, State};
+    {reply, tsputresp, State};
 process(_Ddl = #ddl_v1{}, State) ->
-    {reply, #tsqueryresp{}, State};
+    {reply, #tsqueryresp{
+               columns=[#tscolumndescription{
+                           name = <<"asdf">>,
+                           type = 'BINARY'}],
+               rows=[#tsrow{cells=[#tscell{binary_value = <<"jkl;">>}]}]},
+     State};
 process({_DecodedQuery}, State) ->
-    {reply, #tsqueryresp{}, State}.
+    {reply, #tsqueryresp{
+               columns=[#tscolumndescription{
+                           name = <<"asdf">>,
+                           type = 'BINARY'}],
+               rows=[#tsrow{cells=[#tscell{binary_value = <<"jkl;">>}]}]},
+     State}.
 
 process_stream(_, _, State)->
     {ignore, State}.
