@@ -704,12 +704,12 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket,
             fun(Bucket, Key, Acc) ->
                     case re:run(Key, TermRe) of
                         nomatch -> Acc;
-                        _ -> stoppable_fold(FoldKeysFun, Bucket, Key, Acc)
+                        _ -> FoldKeysFun(Bucket, Key, Acc)
                     end
             end;
         false ->
             fun(Bucket, Key, Acc) ->
-                    stoppable_fold(FoldKeysFun, Bucket, Key, Acc)
+                    FoldKeysFun(Bucket, Key, Acc)
             end
     end,
 
@@ -730,7 +730,7 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Term
     AccFun = case TermRe =:= undefined of
         true ->
             fun(Bucket, _Term, Val, Acc) ->
-                    stoppable_fold(FoldKeysFun, Bucket, Val, Acc)
+                    FoldKeysFun(Bucket, Val, Acc)
             end;
         false ->
             fun(Bucket, Term, Val, Acc) ->
@@ -738,7 +738,7 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Term
                         nomatch ->
                             Acc;
                         _ ->
-                            stoppable_fold(FoldKeysFun, Bucket, Val, Acc)
+                            FoldKeysFun(Bucket, Val, Acc)
                     end
             end
     end,
@@ -797,14 +797,6 @@ fold_keys_fun(FoldKeysFun, {index, Bucket, V1Q}) ->
     fold_keys_fun(FoldKeysFun, {index, Bucket, Q}).
 
 %% @private
-%% @deprecated
-%% TODO: Remove this wrapper during a cleanup or refactor.
-%% This function used to catch the stop_fold exception, which actually breaks
-%% folds as pool workers have a special case for handling it.
-stoppable_fold(Fun, Bucket, Item, Acc) ->
-    Fun(Bucket, Item, Acc).
-
-%% @private
 %% Return a function to fold over the objects on this backend
 fold_objects_fun(FoldObjectsFun, {index, FilterBucket, Q=?KV_INDEX_Q{}}) ->
     %% 2I query on $key or $bucket field with return_body
@@ -812,7 +804,7 @@ fold_objects_fun(FoldObjectsFun, {index, FilterBucket, Q=?KV_INDEX_Q{}}) ->
             ObjectKey = from_object_key(StorageKey),
             case riak_index:object_key_in_range(ObjectKey, FilterBucket, Q) of
                 {true, {Bucket, Key}} ->
-                    stoppable_fold(FoldObjectsFun, Bucket, {o, Key, Value}, Acc);
+                    FoldObjectsFun(Bucket, {o, Key, Value}, Acc);
                 {skip, _BK} ->
                     Acc;
                 _ ->
