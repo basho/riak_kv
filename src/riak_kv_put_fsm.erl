@@ -33,7 +33,8 @@
 
 -behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
--export([start_link/3]).
+-export([start/3, start/6,start/7]).
+-export([start_link/3,start_link/6,start_link/7]).
 -export([set_put_coordinator_failure_timeout/1,
          get_put_coordinator_failure_timeout/0]).
 -ifdef(TEST).
@@ -41,7 +42,7 @@
 -endif.
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
--export([awaiting_request/2, prepare/2, validate/2, precommit/2,
+-export([prepare/2, validate/2, precommit/2,
          waiting_local_vnode/2,
          waiting_remote_vnode/2,
          postcommit/2, finish/2]).
@@ -125,35 +126,41 @@
 %% Public API
 %% ===================================================================
 
--spec start_link(From::{raw, integer(), pid()}, riak_object:riak_object(), [option()]) ->
-    {ok, pid()}.
-start_link(From, RObject, PutOptions) ->
-    case get(?MODULE) of
-        Pid when is_pid(Pid) ->
-            case is_process_alive(Pid) of
-                true ->
-                    {ok, Pid};
-                false ->
-                    {ok, Pid} = start_link_new()
-            end;
+start(From, Object, PutOptions) ->
+    gen_fsm:start(?MODULE, [From, Object, PutOptions], []).
+
+%% In place only for backwards compatibility
+start(ReqId,RObj,W,DW,Timeout,ResultPid) ->
+    start_link(ReqId,RObj,W,DW,Timeout,ResultPid,[]).
+
+%% In place only for backwards compatibility
+start(ReqId,RObj,W,DW,Timeout,ResultPid,Options) ->
+    start_link(ReqId,RObj,W,DW,Timeout,ResultPid,Options).
+
+start_link(ReqId,RObj,W,DW,Timeout,ResultPid) ->
+    start_link(ReqId,RObj,W,DW,Timeout,ResultPid,[]).
+
+start_link(ReqId,RObj,W,DW,Timeout,ResultPid,Options) ->
+    start_link({raw, ReqId, ResultPid}, RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options]).
+
+start_link(From, Object, PutOptions) ->
+    case whereis(riak_kv_put_fsm_sj) of
         undefined ->
-            {ok, Pid} = start_link_new()
-    end,
-    put(?MODULE, Pid),
-    % now we have the pid (new or reused) send the actual put request to it
-    ok = put_req(Pid, From, RObject, PutOptions),
-    {ok, Pid}.
-
-%%
-put_req(Fsm_pid, From, RObject, Put_options) ->
-    ok = gen_fsm:send_event(Fsm_pid, {put_req, From, RObject, Put_options}).
-
-%%
-start_link_new() ->
-    % Is_monitored = true,
-    Args = [],
-    Proc_options = [],
-    gen_fsm:start_link(?MODULE, Args, Proc_options).
+            %% Overload protection disabled
+            Args = [From, Object, PutOptions, true],
+            gen_fsm:start_link(?MODULE, Args, []);
+        _ ->
+            Args = [From, Object, PutOptions, false],
+            case sidejob_supervisor:start_child(riak_kv_put_fsm_sj,
+                                                gen_fsm, start_link,
+                                                [?MODULE, Args, []]) of
+                {error, overload} ->
+                    riak_kv_util:overload_reply(From),
+                    {error, overload};
+                {ok, Pid} ->
+                    {ok, Pid}
+            end
+    end.
 
 set_put_coordinator_failure_timeout(MS) when is_integer(MS), MS >= 0 ->
     application:set_env(riak_kv, put_coordinator_failure_timeout, MS);
@@ -227,17 +234,35 @@ test_link(From, Object, PutOptions, StateProps) ->
 %% ====================================================================
 
 %% @private
-init([]) ->
-    % trap_exit so that we see the link exit messages from the riak client proc
-    process_flag(trap_exit, true),
-
-    % go to the awaiting request state
-    {ok, awaiting_request, no_state_yet};
 init([From, RObj, Options0, Monitor]) ->
-    % TODO this adds a monitor which writes stats on failure
+    BKey = {Bucket, Key} = {riak_object:bucket(RObj), riak_object:key(RObj)},
+    CoordTimeout = get_put_coordinator_failure_timeout(),
+    Trace = app_helper:get_env(riak_kv, fsm_trace_enabled),
+    Options = proplists:unfold(Options0),
+    StateData = #state{from = From,
+                       robj = RObj,
+                       bkey = BKey,
+                       trace = Trace,
+                       options = Options,
+                       timing = riak_kv_fsm_timing:add_timing(prepare, []),
+                       coordinator_timeout=CoordTimeout},
     (Monitor =:= true) andalso riak_kv_get_put_monitor:put_fsm_spawned(self()),
-
-    {ok, prepare, to_state(From, RObj, Options0), 0};
+    case Trace of
+        true ->
+            riak_core_dtrace:put_tag([Bucket, $,, Key]),
+            case riak_kv_util:is_x_deleted(RObj) of
+                true  ->
+                    TombNum = 1,
+                    TombStr = <<"tombstone">>;
+                false ->
+                    TombNum = 0,
+                    TombStr = <<>>
+            end,
+            ?DTRACE(?C_PUT_FSM_INIT, [TombNum], ["init", TombStr]);
+        _ ->
+            ok
+    end,        
+    {ok, prepare, StateData, 0};
 init({test, Args, StateProps}) ->
     %% Call normal init
     {ok, prepare, StateData, 0} = init(Args),
@@ -254,31 +279,6 @@ init({test, Args, StateProps}) ->
     %% Enter into the validate state, skipping any code that relies on the
     %% state of the rest of the system
     {ok, validate, TestStateData, 0}.
-
-%%
-to_state(From, RObj, Options0) ->
-    BKey = {riak_object:bucket(RObj), riak_object:key(RObj)},
-    CoordTimeout = get_put_coordinator_failure_timeout(),
-    Trace = app_helper:get_env(riak_kv, fsm_trace_enabled),
-    Options = proplists:unfold(Options0),
-    #state{
-        from = From,
-        robj = RObj,
-        bkey = BKey,
-        trace = Trace,
-        options = Options,
-        timing = riak_kv_fsm_timing:add_timing(prepare, []),
-        coordinator_timeout=CoordTimeout
-    }.
-        
-%% 
-awaiting_request({put_req, From, RObj, Options}, _) ->
-    {next_state, prepare, to_state(From, RObj, Options), 0};
-awaiting_request({Write_ack,_,_}, State) when Write_ack == dw orelse
-                                              Write_ack == w ->
-    {next_state, awaiting_request, State};
-awaiting_request(request_timeout, State) ->
-    {next_state, awaiting_request, State}.
 
 %% @private
 prepare(timeout, StateData0 = #state{from = From, robj = RObj,
@@ -696,7 +696,7 @@ postcommit(Reply, StateData = #state{putcore = PutCore,
     UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
     {next_state, postcommit, StateData#state{putcore = UpdPutCore}, 0}.
 
-finish(timeout, #state{timing = Timing, reply = Reply,
+finish(timeout, StateData = #state{timing = Timing, reply = Reply,
                                    bkey = {Bucket, _Key},
                                    trace = Trace,
                                    tracked_bucket = StatTracked,
@@ -717,7 +717,7 @@ finish(timeout, #state{timing = Timing, reply = Reply,
                                       Stages, StatTracked, CRDTMod}),
             ?DTRACE(Trace, ?C_PUT_FSM_FINISH, [0, Duration], [])
     end,
-    {next_state, awaiting_request, no_state_yet};
+    {stop, normal, StateData};
 finish(Reply, StateData = #state{putcore = PutCore,
                                  trace = Trace}) ->
     case Trace of
@@ -749,9 +749,6 @@ handle_info({ack, Node, now_executing}, StateName, StateData) ->
     late_put_fsm_coordinator_ack(Node),
     ok = riak_kv_stat:update(late_put_fsm_coordinator_ack),
     {next_state, StateName, StateData};
-handle_info({'EXIT', Terminating_pid, Reason}, _, State) ->
-    % we got a bad message from somewhere to just stop right there
-    {stop, {linked_proc_terminated, Terminating_pid, Reason}, State};
 handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
