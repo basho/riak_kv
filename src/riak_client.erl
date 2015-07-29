@@ -332,14 +332,10 @@ put(RObj, W, DW, Timeout, Options, {?MODULE, [_Node, _ClientId]}=THIS) ->
 maybe_normal_put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
     case is_write_once(Node, riak_object:bucket(RObj)) of
         true ->
-            RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
-            RObj3 = riak_object:update_last_modified(RObj2),
-            RObj4 = riak_object:apply_updates(RObj3),
-            
             % write once options to avoid doing a coordinated read before write
             % since we don't care about vclocks or merging existing values 
             Options2 = [{is_write_once, true} | Options],
-            normal_put(RObj4, Options2, THIS);
+            normal_put(RObj, Options2, THIS);
         false ->
             normal_put(RObj, Options, THIS);
         {error,_}=Err ->
