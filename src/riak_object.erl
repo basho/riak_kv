@@ -1014,25 +1014,26 @@ new_v1(Vclock, Siblings) ->
     VclockBin = term_to_binary(Vclock),
     VclockLen = byte_size(VclockBin),
     SibCount = length(Siblings),
-    SibsBin = [bin_content(Sib) || Sib <- Siblings],
-    [<<?MAGIC:8/integer, ?V1_VERS:8/integer, VclockLen:32/integer>>, VclockBin, <<SibCount:32/integer>>, SibsBin].
+    SibsBin = bin_contents(Siblings),
+    <<?MAGIC:8/integer, ?V1_VERS:8/integer, VclockLen:32/integer, VclockBin/binary, SibCount:32/integer, SibsBin/binary>>.
 
 bin_content(#r_content{metadata=Meta, value=Val}) ->
     ValBin = encode_maybe_binary(Val),
-    ValLen = iolist_size(ValBin),
+    ValLen = byte_size(ValBin),
     MetaBin = meta_bin(Meta),
     MetaLen = byte_size(MetaBin),
-    [<<ValLen:32/integer>>, ValBin, <<MetaLen:32/integer>>, MetaBin].
+    <<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBin:MetaLen/binary>>.
+
+bin_contents(Contents) ->
+    F = fun(Content, Acc) ->
+                <<Acc/binary, (bin_content(Content))/binary>>
+        end,
+    lists:foldl(F, <<>>, Contents).
 
 meta_bin(MD) ->
-    Fold_acc = {{undefined, <<0>>, undefined}, <<>>},
-    {{VTagVal, Deleted, LastModVal}, RestBin} = 
-        case dict:size(MD) of
-            0 ->
-                Fold_acc;
-            _ ->
-                dict:fold(fun fold_meta_to_bin/3, Fold_acc, MD)
-        end,
+    {{VTagVal, Deleted, LastModVal}, RestBin} = dict:fold(fun fold_meta_to_bin/3,
+                                                          {{undefined, <<0>>, undefined}, <<>>},
+                                                          MD),
     VTagBin = case VTagVal of
                   undefined ->  ?EMPTY_VTAG_BIN;
                   _ -> list_to_binary(VTagVal)
@@ -1057,14 +1058,14 @@ fold_meta_to_bin(?MD_DELETED, _, {{Vt,_Del,Lm},RestBin}) ->
     {{Vt, <<0>>, Lm}, RestBin};
 fold_meta_to_bin(Key, Value, {{_Vt,_Del,_Lm}=Elems,RestBin}) ->
     ValueBin = encode_maybe_binary(Value),
-    ValueLen = iolist_size(ValueBin),
+    ValueLen = byte_size(ValueBin),
     KeyBin = encode_maybe_binary(Key),
-    KeyLen = iolist_size(KeyBin),
+    KeyLen = byte_size(KeyBin),
     MetaBin = <<KeyLen:32/integer, KeyBin/binary, ValueLen:32/integer, ValueBin/binary>>,
     {Elems, <<RestBin/binary, MetaBin/binary>>}.
 
 encode_maybe_binary(Bin) when is_binary(Bin) ->
-    [<<1:8>>, Bin];
+    <<1, Bin/binary>>;
 encode_maybe_binary(Bin) ->
     <<0, (term_to_binary(Bin))/binary>>.
 
