@@ -330,17 +330,19 @@ put(RObj, W, DW, Timeout, Options, {?MODULE, [_Node, _ClientId]}=THIS) ->
     put(RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options], THIS).
 
 maybe_normal_put(RObj, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
-    case is_write_once(Node, riak_object:bucket(RObj)) of
+    case write_once(Node, riak_object:bucket(RObj)) of
         true ->
-            % write once options to avoid doing a coordinated read before write
-            % since we don't care about vclocks or merging existing values 
-            Options2 = [{is_write_once, true} | Options],
-            normal_put(RObj, Options2, THIS);
+            write_once_put(Node, RObj, Options, THIS);
         false ->
             normal_put(RObj, Options, THIS);
         {error,_}=Err ->
             Err
     end.
+
+write_once_put(Node, RObj, Options, {?MODULE, [_Node, _ClientId]}) when Node =:= node()->
+    riak_kv_w1c_worker:put(RObj, Options);
+write_once_put(Node, RObj, Options, {?MODULE, [_Node, _ClientId]}) ->
+    rpc:call(Node, riak_kv_w1c_worker, put, [RObj, Options]).
 
 %% @spec delete(riak_object:bucket(), riak_object:key(), riak_client()) ->
 %%        ok |
@@ -884,9 +886,9 @@ consistent_object(Node, Bucket) ->
             Result
     end.
 
-is_write_once(Node, Bucket) when Node =:= node() ->
+write_once(Node, Bucket) when Node =:= node() ->
     riak_kv_util:get_write_once(Bucket);
-is_write_once(Node, Bucket) ->
+write_once(Node, Bucket) ->
     case rpc:call(Node, riak_kv_util, get_write_once, [Bucket]) of
         {badrpc, {'EXIT', {undef, _}}} ->
             false;

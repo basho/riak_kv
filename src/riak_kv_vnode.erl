@@ -193,8 +193,7 @@
                   starttime :: non_neg_integer(),
                   prunetime :: undefined| non_neg_integer(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
-                  crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
-                  is_write_once = false :: boolean()
+                  crdt_op = undefined :: undefined | term() %% if set this is a crdt operation
                  }).
 
 -spec maybe_create_hashtrees(state()) -> state().
@@ -1357,8 +1356,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        bprops=BProps,
                        starttime=StartTime,
                        prunetime=PruneTime,
-                       crdt_op = CRDTOp,
-                       is_write_once = proplists:get_value(is_write_once,Options,false)},
+                       crdt_op = CRDTOp},
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
@@ -1399,22 +1397,19 @@ prepare_put(State=#state{vnodeid=VId,
                              lww=LWW,
                              coord=Coord,
                              robj=RObj,
-                             starttime=StartTime,
-                             is_write_once = Is_write_once}) ->
+                             starttime=StartTime}) ->
     %% if this is a composite index write we need to change the key to be
     %% the key we will actually write into leveldb
     Key2 = maybe_rewrite_li_key(RObj, Key),
     PutArgs2 = PutArgs#putargs{bkey = {Bucket, Key2}},
     %% Can we avoid reading the existing object? If this is not an
-    %% index backend, and the bucket is set to last-write-wins or write_once,
-    %% then no need to incur additional get. Otherwise, we need to read the
+    %% index backend, and the bucket is set to last-write-wins, then
+    %% no need to incur additional get. Otherwise, we need to read the
     %% old object to know how the indexes have changed.
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
-    if
-        Is_write_once ->
-            {{true, RObj}, PutArgs#putargs{is_index = false}, State};
-        LWW andalso not IndexBackend ->
+    case LWW andalso not IndexBackend of
+        true ->
             ObjToStore =
                 case Coord of
                     true ->

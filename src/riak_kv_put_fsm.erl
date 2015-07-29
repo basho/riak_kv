@@ -826,7 +826,7 @@ handle_options([{crdt_op, _Op}=COP|T], Acc) ->
     VNodeOpts = [COP | Acc],
     handle_options(T, VNodeOpts);
 handle_options([{K, _V} = Opt|T], Acc)
-  when K == sloppy_quorum; K == n_val; K == is_write_once ->
+  when K == sloppy_quorum; K == n_val ->
     %% Take these options as-is
     handle_options(T, [Opt|Acc]);
 handle_options([{_,_}|T], Acc) -> handle_options(T, Acc).
