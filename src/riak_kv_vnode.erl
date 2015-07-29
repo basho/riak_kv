@@ -468,10 +468,16 @@ init([Index]) ->
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
+            DoAsyncPut =  case app_helper:get_env(riak_kv, allow_async_put, true) of
+                true ->
+                    erlang:function_exported(Mod, async_put, 5);
+                _ ->
+                    false
+            end,
             State = #state{idx=Index,
                            async_folding=AsyncFolding,
                            mod=Mod,
-                           async_put = erlang:function_exported(Mod, async_put, 5),
+                           async_put = DoAsyncPut,
                            modstate=ModState,
                            vnodeid=VId,
                            counter=CounterState,
@@ -1046,8 +1052,16 @@ handle_handoff_command(Req=?KV_PUT_REQ{}, Sender, State) ->
     end;
 
 handle_handoff_command(?KV_W1C_PUT_REQ{}=Request, Sender, State) ->
-    {noreply, NewState} = handle_command(Request, Sender, State),
-    {forward, NewState};
+    NewState0 = case handle_command(Request, Sender, State) of
+        {noreply, NewState} ->
+            NewState;
+        {reply, Reply, NewState} ->
+            %% reply directly to the sender, as we will be forwarding the
+            %% the request on to the handoff node.
+            riak_core_vnode:reply(Sender, Reply),
+            NewState
+    end,
+    {forward, NewState0};
 
 %% Handle all unspecified cases locally without forwarding
 handle_handoff_command(Req, Sender, State) ->
