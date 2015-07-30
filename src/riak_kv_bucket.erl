@@ -119,7 +119,8 @@ validate_create_bucket_type(BucketProps) ->
         Consistent ->
             {Unvalidated, Valid, Errors} = validate_create_consistent_props(Consistent, BucketProps)
     end,
-    validate(Unvalidated, Valid, Errors).
+    {Good, Bad} = validate(Unvalidated, Valid, Errors),
+    validate_post_merge(Good, Bad).
 
 %% @private update phase of bucket type. Merges properties from
 %% existing with valid new properties
@@ -134,21 +135,22 @@ validate_update_bucket_type(Existing, New) ->
             {Unvalidated, Valid, Errors} = validate_update_consistent_props(Existing, New)
     end,
     {Good, Bad} = validate(Unvalidated, Valid, Errors),
-    {merge(Good, Existing), Bad}.
+    validate_post_merge(merge(Good, Existing), Bad).
 
 %% @private just delegates, but I added it to illustrate the many
 %% possible type of validation.
 -spec validate_update_typed_bucket(props(), props()) -> {props(), errors()}.
 validate_update_typed_bucket(Existing, New) ->
-    validate_update_bucket_type(Existing, New).
+    {Good, Bad} = validate_update_bucket_type(Existing, New),
+    validate_post_merge(Good, Bad).
 
 %% @private as far as datatypes go, default buckets are free to do as
 %% they please, the datatypes API only works on typed buckets. Go
 %% wild!
 -spec validate_default_bucket(props(), props()) -> {props(), errors()}.
 validate_default_bucket(Existing, New) ->
-    Unvalidated = merge(New, Existing),
-    validate(Unvalidated, [], []).
+    {Good, Bad} = validate(New, [], []),
+    validate_post_merge(merge(Good, Existing), Bad).
 
 %% @private properties in new overwrite those in old
 -spec merge(props(), props()) -> props().
@@ -384,6 +386,30 @@ validate_update_dt_props(New, Valid, Invalid) ->
             {Unvalidated, Valid, [{allow_mult, "Cannot change datatype bucket from allow_mult=true"} | Invalid]}
 end.
 
+%% Validate properties after they have all been individually validated, merged,
+%% and resolved to their final values. This allows for identifying invalid
+%% combinations of properties, such as `last_write_wins=true' and
+%% `dvv_enabled=true'.
+-spec validate_post_merge(props(), errors()) -> {props(), errors()}.
+validate_post_merge(Props, Errors) ->
+    %% Currently, we only have one validation rule to apply at this stage, so
+    %% just call the validation function directly. If more are added in the
+    %% future, it would be good to use function composition to compose the
+    %% individual validation functions into a single function.
+    validate_last_write_wins_implies_not_dvv_enabled({Props, Errors}).
+
+%% If `last_write_wins' is true, `dvv_enabled' must not also be true.
+validate_last_write_wins_implies_not_dvv_enabled({Props, Errors}) ->
+    case {last_write_wins(Props), dvv_enabled(Props)} of
+        {true, true} ->
+            {lists:keydelete(dvv_enabled, 1, Props),
+             [{dvv_enabled, true,
+               "If last_write_wins is true, dvv_enabled must be false"}
+              |Errors]};
+        {_, _} ->
+            {Props, Errors}
+    end.
+
 %% @private just grab the allow_mult value if it exists
 -spec allow_mult(props()) -> boolean() | 'undefined' | 'error'.
 allow_mult(Props) ->
@@ -393,6 +419,27 @@ allow_mult(Props) ->
         MaybeBool ->
             coerce_bool(MaybeBool)
     end.
+
+%% Boolean value of the `last_write_wins' property, or `undefined' if not present.
+-spec last_write_wins(props()) -> boolean() | 'undefined' | 'error'.
+last_write_wins(Props) ->
+    get_boolean(last_write_wins, Props).
+
+%% Boolean value of the `dvv_enabled' property, or `undefined' if not present.
+-spec dvv_enabled(props()) -> boolean() | 'undefined' | 'error'.
+dvv_enabled(Props) ->
+    get_boolean(dvv_enabled, Props).
+
+%% @private coerce the value under key to be a boolean, if defined; undefined, otherwise.
+-spec get_boolean(PropName::atom(), props()) -> boolean() | 'undefined' | 'error'.
+get_boolean(Key, Props) ->
+    case proplists:get_value(Key, Props) of
+        undefined ->
+            undefined;
+        MaybeBool ->
+            coerce_bool(MaybeBool)
+    end.
+
 
 %%
 %% EUNIT tests...
@@ -433,6 +480,34 @@ valid_test_() ->
 
 merges_props_test_() ->
     {timeout, ?TEST_TIME_SECS+5, [?_assert(test_merges() =:= true)]}.
+
+-define(LAST_WRITE_WINS, {last_write_wins, true}).
+-define(DVV_ENABLED, {dvv_enabled, true}).
+-define(LWW_DVV, [?LAST_WRITE_WINS, ?DVV_ENABLED]).
+validate_create_bucket_type_test() ->
+    {Validated, Errors} = validate_create_bucket_type(?LWW_DVV),
+    ?assertEqual([{last_write_wins, true}], Validated),
+    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
+
+validate_update_bucket_type_test() ->
+    {Validated, Errors} = validate_update_bucket_type([], ?LWW_DVV),
+    ?assertEqual([{last_write_wins, true}], Validated),
+    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
+
+validate_update_typed_bucket_test() ->
+    {Validated, Errors} = validate_update_typed_bucket([], ?LWW_DVV),
+    ?assertEqual([{last_write_wins, true}], Validated),
+    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
+
+validate_default_bucket_test() ->
+    {Validated, Errors} = validate_default_bucket([], ?LWW_DVV),
+    ?assertEqual([{last_write_wins, true}], Validated),
+    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
+
+validate_last_write_wins_implies_not_dvv_enabled_test() ->
+    {Validated, Errors} = validate_last_write_wins_implies_not_dvv_enabled({?LWW_DVV, []}),
+    ?assertEqual([{last_write_wins, true}], Validated),
+    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
 
 test_immutable() ->
     test_immutable(?TEST_TIME_SECS).
