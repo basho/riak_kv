@@ -399,6 +399,7 @@ validate_post_merge(Props, Errors) ->
     validate_last_write_wins_implies_not_dvv_enabled({Props, Errors}).
 
 %% If `last_write_wins' is true, `dvv_enabled' must not also be true.
+-spec validate_last_write_wins_implies_not_dvv_enabled({props(), errors()}) -> {props(), errors()}.
 validate_last_write_wins_implies_not_dvv_enabled({Props, Errors}) ->
     case {last_write_wins(Props), dvv_enabled(Props)} of
         {true, true} ->
