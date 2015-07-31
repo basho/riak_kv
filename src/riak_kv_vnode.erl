@@ -50,7 +50,8 @@
          request_hashtree_pid/1,
          request_hashtree_pid/2,
          reformat_object/2,
-         stop_fold/1]).
+         stop_fold/1,
+         get_modstate/1]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -183,6 +184,12 @@ maybe_create_hashtrees(true, State=#state{idx=Index,
         _ ->
             State
     end.
+
+%% @doc Reveal the underlying module state for testing
+-spec(get_modstate(state()) -> {atom(), state()}).
+get_modstate(_State=#state{mod=Mod,
+                           modstate=ModState}) ->
+    {Mod, ModState}.
 
 %% API
 start_vnode(I) ->
