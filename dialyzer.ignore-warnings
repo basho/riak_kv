@@ -56,6 +56,7 @@ Callback info about the riak_kv_backend behaviour is not available
 Unknown functions:
   dtrace:init/0
   yz_kv:index/3
+  yz_kv:index_binary/5
   yz_kv:should_handoff/1
   yz_stat:search_stats/0
 Unknown types:
