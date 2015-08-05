@@ -578,12 +578,8 @@ key_range_folder(Folder, Acc0, DataRef, {B, _K}=DataKey, {B, Q}) ->
             case riak_index:object_key_in_range(DataKey, B, Q) of
                 {true, DataKey} ->
                     %% add value to acc
-                    try
-                        Acc = Folder(Obj, Acc0),
-                        key_range_folder(Folder, Acc, DataRef, ets:next(DataRef, DataKey), {B, Q})
-                    catch stop_fold ->
-                            Acc0
-                    end;
+                    Acc = Folder(Obj, Acc0),
+                    key_range_folder(Folder, Acc, DataRef, ets:next(DataRef, DataKey), {B, Q});
                 {skip, DataKey} ->
                     key_range_folder(Folder, Acc0, DataRef, ets:next(DataRef, DataKey), {B, Q});
                 false -> Acc0
@@ -609,12 +605,8 @@ index_range_folder(Folder, Acc0, IndexRef, {B, I, V, _K}=IndexKey,
             %% Exclude start {val,key} from results
             index_range_folder(Folder, Acc0, IndexRef, ets:next(IndexRef, IndexKey), Query);
         {_, [Posting]} ->
-            try
-                Acc = Folder(Posting, Acc0),
-                index_range_folder(Folder, Acc, IndexRef, ets:next(IndexRef, IndexKey), Query)
-            catch stop_fold ->
-                    Acc0
-            end
+            Acc = Folder(Posting, Acc0),
+            index_range_folder(Folder, Acc, IndexRef, ets:next(IndexRef, IndexKey), Query)
     end;
 index_range_folder(_Folder, Acc, _IndexRef, _IndexKey, _Query) ->
     Acc.
