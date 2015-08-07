@@ -86,6 +86,7 @@
                 time_ref :: ets:tid(),
                 max_memory :: undefined | integer(),
                 used_memory=0 :: integer(),
+                put_obj_size=0 :: integer(),
                 ttl :: integer()}).
 
 -type state() :: #state{}.
@@ -241,7 +242,8 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
             UsedMemory + Size - Freed
     end,
     UsedMemory2 = UsedMemory1 - OldSize,
-    {ok, State#state{used_memory=UsedMemory2}}.
+    {ok, State#state{used_memory=UsedMemory2,
+                     put_obj_size=Size}}.
 
 %% @doc Delete an object from the memory backend
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
@@ -388,18 +390,24 @@ is_empty(#state{data_ref=DataRef}) ->
 -spec status(state()) -> [{atom(), term()}].
 status(#state{data_ref=DataRef,
               index_ref=IndexRef,
-              time_ref=TimeRef}) ->
+              time_ref=TimeRef,
+              used_memory=Memory,
+              put_obj_size=PutObjSize}) ->
     DataStatus = ets:info(DataRef),
     IndexStatus = ets:info(IndexRef),
     case TimeRef of
         undefined ->
             [{data_table_status, DataStatus},
-             {index_table_status, IndexStatus}];
+             {index_table_status, IndexStatus},
+             {used_memory, Memory},
+             {put_obj_size, PutObjSize}];
         _ ->
             TimeStatus = ets:info(TimeRef),
             [{data_table_status, DataStatus},
              {index_table_status, IndexStatus},
-             {time_table_status, TimeStatus}]
+             {time_table_status, TimeStatus},
+             {used_memory, Memory},
+             {put_obj_size, PutObjSize}]
     end.
 
 %% @doc Get the size of the memory backend. Returns a dynamic size
@@ -709,9 +717,12 @@ ttl_test_() ->
     Key = <<"Key">>,
     Value = <<"Value">>,
 
+
+    %% Put an object, but ignore its put_obj_size
+    {ok, State1} = put(Bucket, Key, [], Value, State),
+    State2 = State1#state{put_obj_size=0},
     [
-     %% Put an object
-     ?_assertEqual({ok, State}, put(Bucket, Key, [], Value, State)),
+     ?_assertEqual(State, State2),
      %% Wait 1 second to access it
      ?_assertEqual(ok, timer:sleep(1000)),
      ?_assertEqual({ok, Value, State}, get(Bucket, Key, State)),
