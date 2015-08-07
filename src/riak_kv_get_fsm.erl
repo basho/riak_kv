@@ -148,6 +148,9 @@ test_link(From, Bucket, Key, GetOptions, StateProps) ->
 
 %% @private
 init([From, Bucket, Key, Options0, Monitor]) ->
+    Reg_name = list_to_atom(atom_to_list(?MODULE) ++ "_" ++ pid_to_list(self())),
+    register(Reg_name, self()),
+
     StartNow = os:timestamp(),
     Options = proplists:unfold(Options0),
     StateData = #state{from = From,

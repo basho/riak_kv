@@ -65,6 +65,13 @@
 %% @spec new(Node, ClientId) -> riak_client()
 %% @doc Return a riak client instance.
 new(Node, ClientId) ->
+    try
+        Reg_name = list_to_atom(atom_to_list(?MODULE) ++ "_" ++ pid_to_list(self())),
+        register(Reg_name, self())
+    catch
+        _:_ ->
+            ok
+    end,
     {?MODULE, [Node,ClientId]}.
 
 %% @spec get(riak_object:bucket(), riak_object:key(), riak_client()) ->

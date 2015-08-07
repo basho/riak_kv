@@ -23,6 +23,8 @@
 -behaviour(riak_core_vnode).
 
 %% API
+-export([pids/0]).
+
 -export([test_vnode/1, put/7]).
 -export([start_vnode/1,
          start_vnodes/1,
@@ -437,7 +439,25 @@ reformat_object(Partition, BKey) ->
 
 %% VNode callbacks
 
+%%
+pids() ->
+    Starts_with = atom_to_list(?MODULE),
+    [P || P <- processes(), reg_name_starts_with(P, Starts_with)].
+
+%%
+reg_name_starts_with(P, Starts_with) ->
+    case process_info(P, registered_name) of
+        {registered_name, Name} ->
+            string:str(atom_to_list(Name), Starts_with) =/= 0;
+        _ ->
+            false
+    end.
+
 init([Index]) ->
+    Reg_name = binary_to_atom(iolist_to_binary(
+        [atom_to_list(?MODULE) ++ "_" ++ pid_to_list(self())]), latin1),
+    register(Reg_name, self()),
+
     Mod = app_helper:get_env(riak_kv, storage_backend),
     Configuration = app_helper:get_env(riak_kv),
     BucketBufSize = app_helper:get_env(riak_kv, bucket_buffer_size, 1000),
@@ -1576,8 +1596,8 @@ actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
                         modstate=ModState}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                        do_max_check) of
-        {{ok, UpdModState}, EncodedVal} ->
-            update_hashtree(Bucket, Key, EncodedVal, State),
+        {{ok, UpdModState}, _EncodedVal} ->
+            update_hashtree(Bucket, Key, Obj, State),
             maybe_cache_object(BKey, Obj, State),
             ?INDEX(Obj, put, Idx),
             case RB of
