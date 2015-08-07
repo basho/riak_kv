@@ -31,7 +31,7 @@
 
 %% API
 -export([start/3, start_link/3]).
-
+-export([pids/0]).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -271,7 +271,23 @@ estimate_keys(Tree, IndexN) ->
 %%% gen_server callbacks
 %%%===================================================================
 
+pids() ->
+    Starts_with = atom_to_list(?MODULE),
+    [P || P <- processes(), reg_name_starts_with(P, Starts_with)].
+
+%%
+reg_name_starts_with(P, Starts_with) ->
+    case process_info(P, registered_name) of
+        {registered_name, Name} ->
+            string:str(atom_to_list(Name), Starts_with) =/= 0;
+        _ ->
+            false
+    end.
+
 init([Index, VNPid, Opts]) ->
+    Reg_name = list_to_atom(atom_to_list(?MODULE) ++ "_" ++ pid_to_list(self())),
+    register(Reg_name, self()),
+    
     case determine_data_root() of
         undefined ->
             case riak_kv_entropy_manager:enabled() of
