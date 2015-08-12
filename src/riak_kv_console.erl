@@ -86,6 +86,10 @@ join(NodeStr, JoinFn, SuccessFmt, SuccessArgs) ->
                 io:format("Failed: This node cannot join itself in a "
                           "cluster~n"),
                 error;
+            {error, node_still_starting} ->
+                io:format("Failed: This node is still starting (or "
+                          "shutting down)~n"),
+                error;
             {error, _} ->
                 io:format("Join failed. Try again in a few moments.~n", []),
                 error
