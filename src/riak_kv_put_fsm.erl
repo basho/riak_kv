@@ -231,9 +231,6 @@ test_link(From, Object, PutOptions, StateProps) ->
 
 %% @private
 init([From, RObj, Options0, Monitor]) ->
-    Reg_name = list_to_atom(atom_to_list(?MODULE) ++ "_" ++ pid_to_list(self())),
-    register(Reg_name, self()),
-
     BKey = {Bucket, Key} = {riak_object:bucket(RObj), riak_object:key(RObj)},
     CoordTimeout = get_put_coordinator_failure_timeout(),
     Trace = app_helper:get_env(riak_kv, fsm_trace_enabled),
