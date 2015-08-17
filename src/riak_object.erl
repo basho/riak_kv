@@ -83,15 +83,16 @@
 -define(MSGPACK_ENCODING_FLAG, 2). %% Flag to indicate msgpack encoding
 
 -export([new/3, new/4, newts/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
+>>>>>>> Revert "WIP: Refactored get/put core/fsm and object to take DVV enabled"
 -export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
 -export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([hash/1, hash/2, approximate_size/2]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
 -export([encode_vclock/2, decode_vclock/2]).
--export([update/6, update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
+-export([update/5, update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
--export([apply_updates/1, syntactic_merge/3]).
+-export([merge/2, apply_updates/1, syntactic_merge/2]).
 -export([to_json/1, from_json/1]).
 -export([index_data/1, diff_index_data/2]).
 -export([index_specs/1, diff_index_specs/2]).
@@ -102,8 +103,6 @@
 -export([strict_descendant/2]).
 -export([get_ts_local_key/1]).
 -export([is_ts/1]).
--export([is_dvv_bprop/1]).
--export([is_write_once_bprop/1]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -229,9 +228,9 @@ strict_descendant(O1, O2) ->
 %%       merged).   If AllowMultiple is false, the riak_object returned will
 %%       contain the value of the most-recently-updated object, as per the
 %%       X-Riak-Last-Modified header.
--spec reconcile([riak_object()], boolean(), boolean()) -> riak_object().
-reconcile(Objects, AllowMultiple, DVVEnabled) ->
-    RObj = reconcile(remove_dominated(Objects), DVVEnabled),
+-spec reconcile([riak_object()], boolean()) -> riak_object().
+reconcile(Objects, AllowMultiple) ->
+    RObj = reconcile(remove_dominated(Objects)),
     case AllowMultiple of
         false ->
             Contents = [most_recent_content(RObj#r_object.contents)],
@@ -261,10 +260,8 @@ remove_dominated(Objects) ->
 %% merged riak_object remains that contains all sibling values. Only
 %% called with a list of conflicting objects. Use `remove_dominated/1'
 %% to get such a list first.
-reconcile(Objects, DVVEnabled) when is_list(Objects) ->
-    lists:foldl(fun(Obj,Acc) -> 
-                        syntactic_merge(Obj, Acc, DVVEnabled)
-                end,
+reconcile(Objects) ->
+    lists:foldl(fun syntactic_merge/2,
                 hd(Objects),
                 tl(Objects)).
 
@@ -313,8 +310,7 @@ merge(OldObject, NewObject) ->
             merge_write_once(OldObject, NewObj1);
         _ ->
             DVV = dvv_enabled(Bucket),
-            {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3,
-                                                 [NewObject, OldObject, DVV]),
+            {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
             ok = riak_kv_stat:update({riak_object_merge, CRDT, Time}),
             OldObject#r_object{contents=Contents,
                 vclock=vclock:merge([OldObject#r_object.vclock,
@@ -727,19 +723,21 @@ get_update_value(#r_object{updatevalue=UV}) -> UV.
 set_vclock(Object=#r_object{}, VClock) -> Object#r_object{vclock=VClock}.
 
 %% @doc  Increment the entry for ClientId in O's vclock.
--spec increment_vclock(riak_object(), vclock:vclock_node(),
-                       vclock:timestamp(), boolean()) -> riak_object().
-increment_vclock(Object, ClientId, unknown_timestamp, DVVEnabled) ->
+-spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object().
+increment_vclock(Object=#r_object{bucket=B}, ClientId) ->
     NewClock = vclock:increment(ClientId, Object#r_object.vclock),
     {ok, Dot} = vclock:get_dot(ClientId, NewClock),
-    assign_dot(Object#r_object{vclock=NewClock}, Dot, DVVEnabled);
-increment_vclock(Object, ClientId, Timestamp, DVVEnabled) ->
+    assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled(B)).
+
+%% @doc  Increment the entry for ClientId in O's vclock.
+-spec increment_vclock(riak_object(), vclock:vclock_node(), vclock:timestamp()) -> riak_object().
+increment_vclock(Object=#r_object{bucket=B}, ClientId, Timestamp) ->
     NewClock = vclock:increment(ClientId, Timestamp, Object#r_object.vclock),
     {ok, Dot} = vclock:get_dot(ClientId, NewClock),
     %% If it is true that we only ever increment the vclock to create
     %% a frontier object, then there must only ever be a single value
     %% when we increment, so add the dot here.
-    assign_dot(Object#r_object{vclock=NewClock}, Dot, DVVEnabled).
+    assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled(B)).
 
 %% @doc Prune vclock
 -spec prune_vclock(riak_object(), vclock:timestamp(), [proplists:property()]) ->
@@ -774,25 +772,14 @@ assign_dot(Object, Dot, true) ->
 assign_dot(Object, _Dot, _DVVEnabled) ->
     Object.
 
-%% @doc Return true if the DVV bucket property is enabled
-is_dvv_bprop(BProps) ->
+%% @private is dvv enabled on this node?
+-spec dvv_enabled(bucket()) -> boolean().
+dvv_enabled(Bucket) ->
+    BProps = riak_core_bucket:get_bucket(Bucket),
     %% default to `true`, since legacy buckets should have `false` by
     %% default, and typed should have `true` and `undefined` is not a
     %% valid return.
     proplists:get_value(dvv_enabled, BProps, true).
-
-%% @doc Return true if the DVV bucket property is enabled
-is_write_once_bprop(BProps) ->
-    %% default to `true`, since legacy buckets should have `false` by
-    %% default, and typed should have `true` and `undefined` is not a
-    %% valid return.
-    case lists:keyfind(write_once, 1, BProps) of
-        {write_once, true} ->
-            is_write_once;
-        _ ->
-            not_write_once
-    end.
-
 
 %% @doc Prepare a list of index specifications
 %% to pass to the backend. This function is for
@@ -897,13 +884,16 @@ is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
             end
     end.
 
+%% @doc a Put merge. Update a stored riak_object with the value from a
+%% new riak_object that has been put. Must be serialised by the
+%% `Actor' provided.
 -spec update(LWW :: boolean(), LocalObj :: riak_object(),
              NewObj :: riak_object(), Actor ::vclock:vclock_node(),
-             TimeStamp :: vclock:timestamp(), DVVEnabled :: boolean()) ->
+             TimeStamp :: vclock:timestamp()) ->
                     riak_object().
-update(true, _OldObject, NewObject, Actor, Timestamp, DVVEnabled) ->
-    increment_vclock(NewObject, Actor, Timestamp, DVVEnabled);
-update(false, OldObject, NewObject, Actor, Timestamp, DVVEnabled) ->
+update(true, _OldObject, NewObject, Actor, Timestamp) ->
+    increment_vclock(NewObject, Actor, Timestamp);
+update(false, OldObject, NewObject, Actor, Timestamp) ->
     %% Get the vclock we have for the local / old object
     LocalVC = vclock(OldObject),
     %% get the vclock from the new object
@@ -914,7 +904,7 @@ update(false, OldObject, NewObject, Actor, Timestamp, DVVEnabled) ->
     %% clock and overwrite.
     case vclock:descends(PutVC, LocalVC) of
         true ->
-            increment_vclock(NewObject, Actor, Timestamp, DVVEnabled);
+            increment_vclock(NewObject, Actor, Timestamp);
         false ->
             %% The new object is concurrent with some other value, so
             %% merge the new object and the old object.
@@ -922,14 +912,14 @@ update(false, OldObject, NewObject, Actor, Timestamp, DVVEnabled) ->
             FrontierClock = vclock:increment(Actor, Timestamp, MergedClock),
             {ok, Dot} = vclock:get_dot(Actor, FrontierClock),
             %% Assign an event to the new value
-            DottedPutObject = assign_dot(NewObject, Dot, DVVEnabled),
-            MergedObject = merge(DottedPutObject, OldObject, DVVEnabled, not_write_once),
+            Bucket = bucket(OldObject),
+            DottedPutObject = assign_dot(NewObject, Dot, dvv_enabled(Bucket)),
+            MergedObject = merge(DottedPutObject, OldObject),
             set_vclock(MergedObject, FrontierClock)
     end.
 
--spec syntactic_merge(riak_object(), riak_object(),
-                      DVVEnabled::boolean()) -> riak_object().
-syntactic_merge(CurrentObject, NewObject, DVVEnabled) ->
+-spec syntactic_merge(riak_object(), riak_object()) -> riak_object().
+syntactic_merge(CurrentObject, NewObject) ->
     %% Paranoia in case objects were incorrectly stored
     %% with update information.  Vclock is not updated
     %% but since no data is lost the objects will be
@@ -944,8 +934,7 @@ syntactic_merge(CurrentObject, NewObject, DVVEnabled) ->
                   end,
 
     case ancestors([UpdatedCurr, UpdatedNew]) of
-        [] ->
-            merge(UpdatedCurr, UpdatedNew, DVVEnabled, not_write_once);
+        [] -> merge(UpdatedCurr, UpdatedNew);
         [Ancestor] ->
             case equal(Ancestor, UpdatedCurr) of
                 true  -> UpdatedNew;

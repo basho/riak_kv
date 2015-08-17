@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_get_core).
--export([init/9, add_result/3, result_shortcode/1, enough/1, response/1,
+-export([init/8, add_result/3, result_shortcode/1, enough/1, response/1,
          has_all_results/1, final_action/1, info/1]).
 -export_type([getcore/0, result/0, reply/0, final_action/0]).
 
@@ -47,7 +47,6 @@
                   fail_threshold :: pos_integer(),
                   notfound_ok :: boolean(),
                   allow_mult :: boolean(),
-                  dvv_enabled :: boolean(),
                   deletedvclock :: boolean(),
                   results = [] :: [idxresult()],
                   merged :: {notfound | tombstone | ok,
@@ -67,17 +66,15 @@
 %% Initialize a get and return an opaque get core context
 -spec init(N::pos_integer(), R::pos_integer(), PR::pos_integer(),
            FailThreshold::pos_integer(), NotFoundOK::boolean(),
-           AllowMult::boolean(), DVVEnabled::boolean(), DeletedVClock::boolean(),
+           AllowMult::boolean(), DeletedVClock::boolean(),
            IdxType::idx_type()) -> getcore().
-init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DVVEnabled,
-     DeletedVClock, IdxType) ->
+init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, IdxType) ->
     #getcore{n = N,
              r = R,
              pr = PR,
              fail_threshold = FailThreshold,
              notfound_ok = NotFoundOk,
              allow_mult = AllowMult,
-             dvv_enabled = DVVEnabled,
              deletedvclock = DeletedVClock,
              idx_type = IdxType}.
 
@@ -138,9 +135,9 @@ enough(_) ->
 %% Met quorum
 response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
         when NumOK >= R andalso NumPOK >= PR ->
-    #getcore{results = Results, allow_mult=AllowMult, dvv_enabled = DVVEnabled,
+    #getcore{results = Results, allow_mult=AllowMult,
         deletedvclock = DeletedVClock} = GetCore,
-    {ObjState, MObj} = Merged = merge(Results, AllowMult, DVVEnabled),
+    {ObjState, MObj} = Merged = merge(Results, AllowMult),
     Reply = case ObjState of
         ok ->
             Merged; % {ok, MObj}
@@ -190,11 +187,10 @@ has_all_results(#getcore{n = N, num_ok = NOk,
 %%
 -spec final_action(getcore()) -> {final_action(), getcore()}.
 final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
-                                allow_mult = AllowMult,
-                                dvv_enabled = DVVEnabled}) ->
+                                allow_mult = AllowMult}) ->
     Merged = case Merged0 of
                  undefined ->
-                     merge(Results, AllowMult, DVVEnabled);
+                     merge(Results, AllowMult);
                  _ ->
                      Merged0
              end,
@@ -257,14 +253,13 @@ info(#getcore{num_ok = NumOks, num_fail = NumFail, results = Results}) ->
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
-merge(Replies, AllowMult, DVVEnabled) ->
+merge(Replies, AllowMult) ->
     RObjs = [RObj || {_I, {ok, RObj}} <- Replies],
     case RObjs of
         [] ->
             {notfound, undefined};
         _ ->
-            %% include tombstones
-            Merged = riak_object:reconcile(RObjs, AllowMult, DVVEnabled), 
+            Merged = riak_object:reconcile(RObjs, AllowMult), % include tombstones
             case riak_kv_util:is_x_deleted(Merged) of
                 true ->
                     {tombstone, Merged};
