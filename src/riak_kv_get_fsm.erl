@@ -264,7 +264,7 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
                         N - FailR + 1 % cannot ever get R 'ok' replies
                 end,
             AllowMult = get_option(allow_mult, BucketProps),
-            DVVEnabled = riak_object:dvv_bprop_enabled(BucketProps),
+            DVVEnabled = riak_object:dvv_bprops_enabled(BucketProps),
             NFOk0 = get_option(notfound_ok, Options, default),
             NotFoundOk = riak_kv_util:expand_value(notfound_ok, NFOk0, BucketProps),
             DeletedVClock = get_option(deletedvclock, Options, false),
