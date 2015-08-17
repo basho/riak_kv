@@ -23,8 +23,6 @@
 -behaviour(riak_core_vnode).
 
 %% API
--export([pids/0]).
-
 -export([test_vnode/1, put/7]).
 -export([start_vnode/1,
          start_vnodes/1,
@@ -439,25 +437,7 @@ reformat_object(Partition, BKey) ->
 
 %% VNode callbacks
 
-%%
-pids() ->
-    Starts_with = atom_to_list(?MODULE),
-    [P || P <- processes(), reg_name_starts_with(P, Starts_with)].
-
-%%
-reg_name_starts_with(P, Starts_with) ->
-    case process_info(P, registered_name) of
-        {registered_name, Name} ->
-            string:str(atom_to_list(Name), Starts_with) =/= 0;
-        _ ->
-            false
-    end.
-
 init([Index]) ->
-    Reg_name = binary_to_atom(iolist_to_binary(
-        [atom_to_list(?MODULE) ++ "_" ++ pid_to_list(self())]), latin1),
-    register(Reg_name, self()),
-
     Mod = app_helper:get_env(riak_kv, storage_backend),
     Configuration = app_helper:get_env(riak_kv),
     BucketBufSize = app_helper:get_env(riak_kv, bucket_buffer_size, 1000),
@@ -1106,8 +1086,7 @@ handle_handoff_data(BinObj, State) ->
     try
         {BKey, Val} = decode_binary_object(BinObj),
         {B, K} = BKey,
-        BProps = riak_core_bucket:get_bucket(),
-        case do_diffobj_put(BKey, riak_object:from_binary(B, K, Val), BProps,
+        case do_diffobj_put(BKey, riak_object:from_binary(B, K, Val),
                             State) of
             {ok, UpdModState} ->
                 {reply, ok, State#state{modstate=UpdModState}};
@@ -1502,7 +1481,7 @@ prepare_put(State=#state{mod=Mod,
             end;
         {ok, OldObj} ->
             {ActorId, State2} = maybe_new_key_epoch(Coord, State, OldObj, RObj),
-            case put_merge(Coord, LWW, OldObj, RObj, ActorId, StartTime, BProps) of
+            case put_merge(Coord, LWW, OldObj, RObj, ActorId, StartTime) of
                 {oldobj, OldObj1} ->
                     {{false, OldObj1}, PutArgs, State2};
                 {newobj, NewObj} ->
@@ -1597,8 +1576,8 @@ actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
                         modstate=ModState}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                        do_max_check) of
-        {{ok, UpdModState}, _EncodedVal} ->
-            update_hashtree(Bucket, Key, Obj, State),
+        {{ok, UpdModState}, EncodedVal} ->
+            update_hashtree(Bucket, Key, EncodedVal, State),
             maybe_cache_object(BKey, Obj, State),
             ?INDEX(Obj, put, Idx),
             case RB of
@@ -1667,15 +1646,13 @@ select_newest_content(Mult) ->
          Mult)).
 
 %% @private
-put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime, _BProps) -> % coord=false, LWW=true
+put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
     %% @TODO Do we need to mark the clock dirty here? I think so
     %% @TODO Check the clock of the incoming object, if it is more advanced
     %% for our actor than we are then something is amiss, and we need
     %% to mark the actor as dirty for this key
     {newobj, UpdObj};
-put_merge(false, false, CurObj, UpdObj, _VId, _StartTime, BProps) -> % coord=false, LWW=false
-    Is_dvv = riak_object:is_dvv_bprop(BProps),
-    Is_write_once = riak_object:is_write_once_bprop(BProps),
+put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
     %% a downstream merge, or replication of a coordinated PUT
     %% Merge the value received with local replica value
     %% and store the value IFF it is different to what we already have
@@ -1683,18 +1660,17 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime, BProps) -> % coord=fal
     %% @TODO Check the clock of the incoming object, if it is more advanced
     %% for our actor than we are then something is amiss, and we need
     %% to mark the actor as dirty for this key
-    ResObj = riak_object:syntactic_merge(CurObj, UpdObj, Is_dvv, Is_write_once),
+    ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
     case riak_object:equal(ResObj, CurObj) of
         true ->
             {oldobj, CurObj};
         false ->
             {newobj, ResObj}
     end;
-put_merge(true, LWW, CurObj, UpdObj, VId, StartTime, BProps) ->
+put_merge(true, LWW, CurObj, UpdObj, VId, StartTime) ->
     %% @TODO If the current object has a dirty clock, we need to start
     %% a new per key epoch and mark clock as clean.
-    Is_dvv = riak_object:is_dvv_bprop(BProps),
-    {newobj, riak_object:update(LWW, CurObj, UpdObj, VId, StartTime, Is_dvv)}.
+    {newobj, riak_object:update(LWW, CurObj, UpdObj, VId, StartTime)}.
 
 %% @private
 do_get(_Sender, BKey, ReqID,
@@ -1996,7 +1972,7 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
 
 %% @private
 %% upon receipt of a handoff datum, there is no client FSM
-do_diffobj_put({Bucket, Key}=BKey, DiffObj, BProps,
+do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                StateData=#state{mod=Mod,
                                 modstate=ModState,
                                 idx=Idx}) ->
@@ -2027,7 +2003,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj, BProps,
             %% Merge handoff values with the current - possibly discarding
             %% if out of date.  Ok to set VId/Starttime undefined as
             %% they are not used for non-coordinating puts.
-            case put_merge(false, false, OldObj, DiffObj, undefined, undefined, BProps) of
+            case put_merge(false, false, OldObj, DiffObj, undefined, undefined) of
                 {oldobj, _} ->
                     {ok, ModState};
                 {newobj, NewObj} ->

@@ -148,9 +148,6 @@ test_link(From, Bucket, Key, GetOptions, StateProps) ->
 
 %% @private
 init([From, Bucket, Key, Options0, Monitor]) ->
-    Reg_name = list_to_atom(atom_to_list(?MODULE) ++ "_" ++ pid_to_list(self())),
-    register(Reg_name, self()),
-
     StartNow = os:timestamp(),
     Options = proplists:unfold(Options0),
     StateData = #state{from = From,
@@ -264,13 +261,11 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
                         N - FailR + 1 % cannot ever get R 'ok' replies
                 end,
             AllowMult = get_option(allow_mult, BucketProps),
-            DVVEnabled = riak_object:dvv_bprop_enabled(BucketProps),
             NFOk0 = get_option(notfound_ok, Options, default),
             NotFoundOk = riak_kv_util:expand_value(notfound_ok, NFOk0, BucketProps),
             DeletedVClock = get_option(deletedvclock, Options, false),
             GetCore = riak_kv_get_core:init(N, R, PR, FailThreshold,
                                             NotFoundOk, AllowMult,
-                                            DVVEnabled,
                                             DeletedVClock, IdxType),
             new_state_timeout(execute, StateData#state{get_core = GetCore,
                                                        timeout = Timeout,
