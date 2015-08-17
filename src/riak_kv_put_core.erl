@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_put_core).
--export([init/10, add_result/2, enough/1, response/1,
+-export([init/9, add_result/2, enough/1, response/1,
          final/1, result_shortcode/1, result_idx/1]).
 -export_type([putcore/0, result/0, reply/0]).
 
@@ -49,7 +49,6 @@
                   dw_fail_threshold :: pos_integer(),
                   returnbody :: boolean(),
                   allowmult :: boolean(),
-                  dvv_enabled :: boolean(),
                   results = [] :: [idxresult()],
                   final_obj :: undefined | riak_object:riak_object(),
                   num_w = 0 :: non_neg_integer(),
@@ -67,15 +66,14 @@
 %% Initialize a put and return an opaque put core context
 -spec init(N::pos_integer(), W::non_neg_integer(), PW::non_neg_integer(),
            DW::non_neg_integer(), PWFail::pos_integer(), DWFail::pos_integer(),
-           AllowMult::boolean(), DVVEnabled::boolean(), ReturnBody::boolean(),
+           AllowMult::boolean(), ReturnBody::boolean(),
            IDXType::idx_type()) -> putcore().
 init(N, W, PW, DW, PWFailThreshold,
-     DWFailThreshold, AllowMult, DVVEnabled, ReturnBody, IdxType) ->
+     DWFailThreshold, AllowMult, ReturnBody, IdxType) ->
     #putcore{n = N, w = W, pw = PW, dw = DW,
              pw_fail_threshold = PWFailThreshold,
              dw_fail_threshold = DWFailThreshold,
              allowmult = AllowMult,
-             dvv_enabled = DVVEnabled,
              returnbody = ReturnBody,
              idx_type = IdxType}.
 
@@ -154,8 +152,7 @@ check_overload(Response, PutCore = #putcore{results=Results}) ->
 %% running reconcile until after the client reply is sent.
 -spec final(putcore()) -> {riak_object:riak_object()|undefined, putcore()}.
 final(PutCore = #putcore{final_obj = FinalObj, 
-                         results = Results, allowmult = AllowMult,
-                         dvv_enabled = DVVEnabled}) ->
+                         results = Results, allowmult = AllowMult}) ->
     case FinalObj of
         undefined ->
             RObjs = [RObj || {_Idx, {dw, RObj}} <- Results, RObj /= undefined],
@@ -163,8 +160,7 @@ final(PutCore = #putcore{final_obj = FinalObj,
                            [] ->
                                undefined;
                            _ ->
-                               riak_object:reconcile(RObjs, AllowMult,
-                                                    DVVEnabled)
+                               riak_object:reconcile(RObjs, AllowMult)
                        end,
             {ReplyObj, PutCore#putcore{final_obj = ReplyObj}};
         _ ->
