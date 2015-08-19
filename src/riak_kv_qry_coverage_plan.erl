@@ -25,30 +25,22 @@
 -export([
 	 create_plan/6
 	]).
-create_plan(VNodeSelector, NVal, PVC, ReqId, NodeCheckService, Request) ->
-    io:format("in riak_kv_qry_coverage_plan with~n:" ++
-    		  "- VNodeSelector:   ~p~n" ++
-		  "- NVal:            ~p~n" ++
-		  "- PVC              ~p~n" ++
-		  "- ReqId            ~p~n" ++
-		  "- NodeCheckService ~p~n" ++
-		  "- Request          ~p~n",
-    	      [VNodeSelector, NVal, PVC, ReqId, NodeCheckService,
-	       Request]),
-    BucketName = <<"TsBucket3">>, % riak_kv_util:get_bucket_from_req(Request),
+
+-include_lib("riak_ql/include/riak_ql_sql.hrl").
+
+create_plan(_VNodeSelector, NVal, _PVC, _ReqId, _NodeCheckService, Request) ->
+    BucketName = riak_kv_util:get_bucket_from_req(Request),
     Query = riak_local_index:get_query_from_req(Request),
-    Key = riak_local_index:get_key_from_li_query(Query),
-    DocIdx = riak_core_util:chash_key({BucketName, Key}),
-    BucketProps = riak_core_bucket:get_bucket(BucketName),
+    #riak_sql_v1{helper_mod    = Mod,
+		 partition_key = PK,
+		 'WHERE'       = W} = Query,
+    {startkey, StartKey} = proplists:lookup(startkey, W),
+    Key = riak_ql_ddl:make_key(Mod, PK, StartKey), 
+    Key2 = eleveldb_ts:encode_key(Key),
+    DocIdx = riak_core_util:chash_key({BucketName, Key2}),
+    %% BucketProps = riak_core_bucket:get_bucket(BucketName),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Perfs = riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes),
     {VNodes, _} = lists:unzip(Perfs),
     NoFilters = [],
-    io:format("More stuff:~n" ++
-		  "- BucketName:  ~p~n- Query:       ~p~n" ++
-		  "- Key:         ~p~n- DocIdx:      ~p~n" ++
-		  "- BucketProps: ~p~n- UpNodes:     ~p~n" ++
-		  "- Perfs:       ~p~n- VNodes:      ~p~n",
-	      [BucketName, Query, Key, DocIdx, BucketProps, UpNodes,
-	       Perfs, VNodes]),
     _CoveragePlan = {VNodes, NoFilters}.

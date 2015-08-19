@@ -64,7 +64,7 @@
 
 -record(fsm, {
 	  name                 :: name(),
-	  qry      = none      :: none | qry(),
+	  qry      = none      :: none | {any(), qry()},
 	  status   = available :: statuses()
 	 }).
 
@@ -259,7 +259,7 @@ handle_side_effects([H | T]) ->
 %%%===================================================================
 %%% Unit tests
 %%%===================================================================
-%%-ifdef(TEST).
+-ifdef(TEST).
 -compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
 
@@ -394,4 +394,4 @@ simple_overload_test() ->
     {SideEffects, Replies, Errors} = runner_TEST(Tests),
     ?assertEqual({[], [], []}, {SideEffects, Replies, Errors}).
 
-%%-endif.
+-endif.

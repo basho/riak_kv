@@ -42,6 +42,7 @@
 -behaviour(riak_core_coverage_fsm).
 
 -include_lib("riak_kv_vnode.hrl").
+-include_lib("riak_ql/include/riak_ql_sql.hrl").
 
 -export([init/2,
          plan/2,
@@ -77,6 +78,9 @@ use_ack_backpressure() ->
 
 %% @doc Construct the correct index command record.
 -spec req(binary(), term(), term()) -> term().
+req(Bucket, _ItemFilter, #riak_sql_v1{} = Q) ->
+    #riak_kv_sql_select_req_v1{bucket=Bucket,
+			       qry=Q};
 req(Bucket, ItemFilter, Query) ->
     case use_ack_backpressure() of
         true ->
@@ -100,8 +104,6 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout]) ->
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, undefined]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) ->
-    %% gg:format("in riak_kv_index_fsm:init with MaxResults of:~n- ~p~n",
-    %% 	      [MaxResults]),
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
@@ -125,10 +127,8 @@ plan(_CoverageVNodes, State) ->
     {ok, State}.
 
 process_results(_VNode, {error, Reason}, _State) ->
-    io:format("in riak_kv_index_fsm process_results (1)~n"),
     {error, Reason};
 process_results(_VNode, {From, _Bucket, _Results}, State=#state{max_results=X, results_sent=Y})  when Y >= X ->
-
     riak_kv_vnode:stop_fold(From),
     {done, State};
 process_results(VNode, {From, Bucket, Results}, State) ->

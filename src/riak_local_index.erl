@@ -25,10 +25,8 @@
 -module(riak_local_index).
 
 -export([
-	 get_key_from_li_query/1,
 	 get_bucket_from_req/1,
-	 get_query_from_req/1,
-	 is_li_index_query/1
+	 get_query_from_req/1
 	]).
 
 -include_lib("riak_ql/include/riak_ql_sql.hrl").
@@ -39,17 +37,9 @@
 %% Public API
 %% ===================================================================
 
-get_key_from_li_query(?KV_SQL_Q{partition_key = K}) -> K.
-
 get_bucket_from_req(#riak_kv_index_req_v1{bucket = B}) -> B;
 get_bucket_from_req(#riak_kv_index_req_v2{bucket = B}) -> B.
 
-get_query_from_req(#riak_kv_index_req_v1{qry = Q}) -> Q;
-get_query_from_req(#riak_kv_index_req_v2{qry = Q}) -> Q.
-
-is_li_index_query(#riak_kv_index_req_v1{qry = Q}) -> is_li_i2(Q);
-is_li_index_query(#riak_kv_index_req_v2{qry = Q}) -> is_li_i2(Q);
-is_li_index_query(_)                              -> false.
-
-is_li_i2(?KV_SQL_Q{}) -> true;
-is_li_i2(_)           -> false.
+get_query_from_req(#riak_kv_index_req_v1{qry = Q})      -> Q;
+get_query_from_req(#riak_kv_index_req_v2{qry = Q})      -> Q;
+get_query_from_req(#riak_kv_sql_select_req_v1{qry = Q}) -> Q.

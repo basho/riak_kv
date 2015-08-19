@@ -41,10 +41,15 @@
 	 code_change/3
 	]).
 
+%% Debuggin, yo
+-export([
+	 get_ddl_FIXUP/0
+	]).
+
 -ifdef(TEST).
 -export([
 	 runner_TEST/1
-	 ]).
+	]).
 -endif.
 
 -include_lib("riak_ql/include/riak_ql_sql.hrl").
@@ -55,8 +60,8 @@
 -define(NO_PG_SORT, undefined).
 
 -record(state, {
-	  name     :: atom(),
-	  qry = [] :: #riak_sql_v1{}
+	  name       :: atom(),
+	  qry = none :: none | #riak_sql_v1{}
 	 }).
 
 %%%===================================================================
@@ -112,7 +117,6 @@ init([Name]) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_call(Request, _From, State) ->
-    io:format("in riak_kv_qry: handling call~p~n", [Request]),
     {Reply, SEs, NewState} = handle_req(Request, State),
     ok = handle_side_effects(SEs),
     {reply, Reply, NewState}.
@@ -128,7 +132,7 @@ handle_call(Request, _From, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_cast(Msg, State) ->
-    io:format("in riak_kv_qry: handling call~p~n", [Msg]),
+    io:format("in handle cast for riak_kv_qry~n- ~p~n", [Msg]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -141,7 +145,8 @@ handle_cast(Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info(_Info, State) ->
+handle_info(Info, State) ->
+    io:format("in handle info for riak_kv_qry~n- ~p~n", [Info]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -174,11 +179,12 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 handle_req({execute, {QId, Qry}}, State) ->
     %% TODO make this run with multiple sub-queries
-    io:format("Executing ~p~n", [{QId, Qry}]),
-    SE = {run_sub_query, {qry, Qry}, {qid, QId}},
-    {ok, [SE], State};
-handle_req(Request, State) ->
-    io:format("Not handling ~p~n- with ~p~n", [Request, State]),
+    %% TODO fix this up properly
+    {ok, DDL} = get_ddl_FIXUP(),
+    Queries = riak_kv_qry_compiler:compile(DDL, Qry),
+    SEs = [{run_sub_query, {qry, X}, {qid, QId}} || X <- Queries],
+    {ok, SEs, State};
+handle_req(_Request, State) ->
     {ok, ?NO_SIDEEFFECTS, State}.
 
 handle_side_effects([]) ->
@@ -192,13 +198,24 @@ handle_side_effects([{run_sub_query, {qry, Q}, {qid, QId}} | T]) ->
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, [Bucket, none, Q, Timeout, CoverageFn]]),
     handle_side_effects(T);
 handle_side_effects([H | T]) ->
-    io:format("in riak_kv_qry:handling side_effect ~p~n", [H]),
+    io:format("in riak_kv_qry:handle_side_effects not handling ~p~n", [H]),
     handle_side_effects(T).
+
+get_ddl_FIXUP() ->
+    SQL = "CREATE TABLE GeoCheckin " ++
+	"(geohash varchar not null, " ++ 
+	"user varchar not null, " ++
+	"time timestamp not null, " ++ 
+	"weather varchar not null, " ++ 
+	"temperature varchar, " ++ 
+	"PRIMARY KEY((quantum(time, 15, s)), time, user))", 
+    Lexed = riak_ql_lexer:get_tokens(SQL),
+    {ok, _DDL} = riak_ql_parser:parse(Lexed).
 
 %%%===================================================================
 %%% Unit tests
 %%%===================================================================
-%%-ifdef(TEST).
+-ifdef(TEST).
 -compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
 
@@ -275,4 +292,4 @@ simple_init_test() ->
     Results = runner_TEST(Tests),
     ?assertEqual({[], [], []}, Results).
 
-%%-endif.
+-endif.

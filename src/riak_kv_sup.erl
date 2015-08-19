@@ -95,13 +95,13 @@ init([]) ->
                       {riak_kv_entropy_manager, start_link, []},
                       permanent, 30000, worker, [riak_kv_entropy_manager]},
 
-    EnsemblesKV =  {riak_kv_ensembles,
-                    {riak_kv_ensembles, start_link, []},
-                    permanent, 30000, worker, [riak_kv_ensembles]},
+    EnsemblesKV = {riak_kv_ensembles,
+		   {riak_kv_ensembles, start_link, []},
+		   permanent, 30000, worker, [riak_kv_ensembles]},
 
-    %% QrySup = {riak_kv_qry_sup,
-    %% 	      {riak_kv_qry_sup, start_link, []},
-    %% 	      permanent, infinity, supervisor, [riak_kv_qry_sup]},
+    QrySup = {riak_kv_qry_sup,
+    	      {riak_kv_qry_sup, start_link, []},
+    	      permanent, infinity, supervisor, [riak_kv_qry_sup]},
 
     % Figure out which processes we should run...
     HasStorageBackend = (app_helper:get_env(riak_kv, storage_backend) /= undefined),
@@ -119,7 +119,7 @@ init([]) ->
         IndexFsmSup,
         EntropyManager,
         [EnsemblesKV || riak_core_sup:ensembles_enabled()],
-	% QrySup,
+	QrySup,
         JSSup,
         MapJSPool,
         ReduceJSPool,

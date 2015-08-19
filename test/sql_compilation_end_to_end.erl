@@ -11,6 +11,7 @@
 
 -compile(export_all).
 
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 %%
 %% Testing Macros
@@ -28,7 +29,6 @@
 		   false ->
 		       ?assertEqual(Expected, invalid_query)
 	       end).
-
 
 %%
 %% Helper Funs
@@ -54,43 +54,39 @@ make_sql(Query) ->
 	      ++ "weather varchar not null, "
 	      ++ "temperature varchar, "
 	      ++ "PRIMARY KEY ((quantum(time, 15, m)), time, user))",
-	      "select weather from GeoCheckin where time > 3000 and time < 5000",
+	      "select weather from GeoCheckin where time > 3000 and time < 5000 and user = gordon",
 	     [
 	      #riak_sql_v1{'SELECT'      = [["weather"]],
 			   'FROM'        = <<"GeoCheckin">>,
 			   'WHERE'       = [
-					    {and_,
-					     {'>', "time", {int, 3000}},
-					     {'<', "time", {int, 5000}}}
+					    {startkey, [
+							{"time",  3000},
+							{"user", "gordon"}
+						       ]
+					    },
+					    {endkey,   [
+							{"time", 5000},
+							{"user", "gordon"}
+						       ]
+					    },
+					    {filter, []}
 					   ],
-			   is_executable = true}
-	      ]).
-
-?passing_test(spanning_qry_test, 
-	      "CREATE TABLE GeoCheckin " ++
-		  "(geohash varchar not null, " ++ 
-		  "user varchar not null, " ++
-		  "time timestamp not null, " ++ 
-		  "weather varchar not null, " ++ 
-		  "temperature varchar, " ++ 
-		  "PRIMARY KEY((quantum(time, 15, s)), time, user))", 
-	      "select weather from GeoCheckin where time > 3000 and time < 18000",
-	      [
-	      #riak_sql_v1{'SELECT'      = [["weather"]],
-			   'FROM'        = <<"GeoCheckin">>,
-			   'WHERE'       = [
-					    {and_,
-					     {'>', "time", {int, 3000}},
-					     {'<', "time", {int, 15000}}}
-					   ],
-			   is_executable = true},
-	      #riak_sql_v1{'SELECT'      = [["weather"]],
-			   'FROM'        = <<"GeoCheckin">>,
-			   'WHERE'       = [
-					    {and_,
-					     {'>=', "time", {int, 15000}},
-					     {'<',  "time", {int, 18000}}}
-					   ],
-			   is_executable = true}
-	      ]).
-
+			   helper_mod    = riak_ql_ddl:make_module_name(<<"GeoCheckin">>),
+			   partition_key = #key_v1{ast = [
+							 #hash_fn_v1{mod = riak_ql_quanta,
+								     fn = quantum,
+								    args = [
+									    #param_v1{name = ["time"]},
+									    15, 
+									    m
+									   ],
+								     type = timestamp}
+							 ]
+						  },
+			   is_executable = true,
+			   type          = timeseries,
+			   local_key = #key_v1{ast = [
+						     #param_v1{name = ["time"]},
+						     #param_v1{name = ["user"]}
+						     ]}}
+	     ]).
