@@ -1459,12 +1459,10 @@ prepare_put(State=#state{vnodeid=VId,
                              coord=Coord,
                              robj=RObj,
                              starttime=StartTime}) ->
-
     %% if this is a composite index write we need to change the key to be
     %% the key we will actually write into leveldb
     Key2 = maybe_rewrite_li_key(RObj, Key),
     PutArgs2 = PutArgs#putargs{bkey = {Bucket, Key2}},
-
     %% Can we avoid reading the existing object? If this is not an
     %% index backend, and the bucket is set to last-write-wins, then
     %% no need to incur additional get. Otherwise, we need to read the
