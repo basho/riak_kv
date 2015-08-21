@@ -404,7 +404,7 @@ validate_last_write_wins_implies_not_dvv_enabled({Props, Errors}) ->
     case {last_write_wins(Props), dvv_enabled(Props)} of
         {true, true} ->
             {lists:keydelete(dvv_enabled, 1, Props),
-             [{dvv_enabled, true,
+             [{dvv_enabled,
                "If last_write_wins is true, dvv_enabled must be false"}
               |Errors]};
         {_, _} ->
@@ -488,27 +488,27 @@ merges_props_test_() ->
 validate_create_bucket_type_test() ->
     {Validated, Errors} = validate_create_bucket_type(?LWW_DVV),
     ?assertEqual([{last_write_wins, true}], Validated),
-    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
+    ?assertMatch([{dvv_enabled, _Message}], Errors).
 
 validate_update_bucket_type_test() ->
     {Validated, Errors} = validate_update_bucket_type([], ?LWW_DVV),
     ?assertEqual([{last_write_wins, true}], Validated),
-    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
+    ?assertMatch([{dvv_enabled, _Message}], Errors).
 
 validate_update_typed_bucket_test() ->
     {Validated, Errors} = validate_update_typed_bucket([], ?LWW_DVV),
     ?assertEqual([{last_write_wins, true}], Validated),
-    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
+    ?assertMatch([{dvv_enabled, _Message}], Errors).
 
 validate_default_bucket_test() ->
     {Validated, Errors} = validate_default_bucket([], ?LWW_DVV),
     ?assertEqual([{last_write_wins, true}], Validated),
-    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
+    ?assertMatch([{dvv_enabled, _Message}], Errors).
 
 validate_last_write_wins_implies_not_dvv_enabled_test() ->
     {Validated, Errors} = validate_last_write_wins_implies_not_dvv_enabled({?LWW_DVV, []}),
     ?assertEqual([{last_write_wins, true}], Validated),
-    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
+    ?assertMatch([{dvv_enabled, _Message}], Errors).
 
 test_immutable() ->
     test_immutable(?TEST_TIME_SECS).
