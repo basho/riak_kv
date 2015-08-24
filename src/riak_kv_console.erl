@@ -176,10 +176,10 @@ down([Node]) ->
 status([]) ->
     try
         Stats = riak_kv_status:statistics(),
-	StatString = format_stats(Stats,
+        StatString = format_stats(Stats,
                     ["-------------------------------------------\n",
-		     io_lib:format("1-minute stats for ~p~n",[node()])]),
-	io:format("~s\n", [StatString])
+                     io_lib:format("1-minute stats for ~p~n",[node()])]),
+        io:format("~s\n", [StatString])
     catch
         Exception:Reason ->
             lager:error("Status failed ~p:~p", [Exception,
@@ -505,7 +505,39 @@ bucket_type_create([TypeStr, ""]) ->
     bucket_type_create(Type, EmptyProps);
 bucket_type_create([TypeStr, PropsStr]) ->
     Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
-    bucket_type_create(Type, catch mochijson2:decode(PropsStr)).
+    bucket_type_create(Type, catch mochijson2:decode(PropsStr),
+                       ts_file(ddl, PropsStr)).
+
+%% Quick hack allows us to piggy-back on existing `riak-admin' code
+%% without branching riak/riak_ee for now. riak-admin bucket-type
+%% create <type> ts:<filename> where the file contains the DDL.
+%%
+%% `file:consult/1' requires the records to be recognizable, so we'll
+%% just distribute the contents as a binary.
+%%
+%% XXX: Takes a bogus first argument to make sure the `ddl' atom
+%% exists during early days of this code
+ts_file(_Atom, [$t,$s,$:|Filename]) ->
+    interpret_ts_file(file:read_file(Filename));
+ts_file(_Atom, _) ->
+    false.
+
+%% Forcing this Erlang structure to look like a mochi conversion of
+%% JSON to be turned back into "proper" Erlang later is bloody stupid, but here we are
+ts_bt_props(DDL) ->
+    %% Don't forget to add any other time series-specific default
+    %% bucket type information here
+    {struct, [{<<"props">>, {struct, [{<<"ddl">>, DDL}]}}]}.
+
+interpret_ts_file({ok, Bin}) ->
+    ts_bt_props(Bin).
+
+%% Also a bit hackish; convert bucket_type_create/3 for handling the
+%% time series scenario back into bucket_type_create/2
+bucket_type_create(Type, {struct, Fields}, false) ->
+    bucket_type_create(Type, {struct, Fields});
+bucket_type_create(Type, _Error, {struct, Fields}) ->
+    bucket_type_create(Type, {struct, Fields}).
 
 bucket_type_create(Type, {struct, Fields}) ->
     case proplists:get_value(<<"props">>, Fields) of
