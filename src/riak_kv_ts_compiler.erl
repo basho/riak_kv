@@ -25,5 +25,7 @@
 -export([compile/4]).
 
 compile(Watcher, _DDL, Type, BeamDir) ->
+    File = filename:join(BeamDir, unicode:characters_to_list(Type, unicode) ++ ".beam"),
+    os:cmd("touch " ++ File),
     timer:sleep(10000),
-    gen_fsm:send_event(Watcher, {done, filename:join(BeamDir, Type ++ ".beam")}).
+    gen_fsm:send_event(Watcher, {done, File}).
