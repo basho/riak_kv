@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_ts_watcher: Polls for completion of DDL activities for bucket
+%% riak_kv_ts_watch_fsm: Polls for completion of DDL activities for bucket
 %% type activation
 %%
 %% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
@@ -28,21 +28,34 @@
 -include_lib("riak_core/include/riak_core_bucket_type.hrl").
 
 %% API
--export([start_link/3, waiting/2, compiling/2]).
+-export([start_link/3, waiting/2, compiling/2, compiled/2, failed/2]).
 
 %% gen_fsm callbacks
 -export([init/1, handle_event/3,
          handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
 
 -define(SERVER, ?MODULE).
--define(CMD_RETRY, 2000). %% How long to wait for CMD to propagate
--define(COMPILE_WAIT, 30000). %% How long to wait for the compilation mechanism to succeed before giving up
+
+ %% How long to wait for cluster metadata to propagate on startup
+-define(CMD_RETRY, 2000).
+
+ %% How long to wait for the compilation mechanism to succeed before
+ %% giving up.
+-define(COMPILE_WAIT, 30000).
+
+%% How long to wait for a new DDL or bucket type activation after the
+%% compile finishes. Should be longer in production, but useful to
+%% keep this short during development
+-define(CMD_UPDATE, 6000).
 
 -record(state, {
+          compiler_mod :: atom(),
           bucket_type :: binary(),
           supervisor :: pid(),
+          ddl = undefined :: term(),
           compiler = undefined :: 'undefined' | pid(),
-          beam_dir :: file:filename()
+          beam_dir :: file:filename(), %% Path to location to store beams
+          beam_file :: file:filename() %% Full path to compiled beam when complete
          }).
 
 
@@ -70,41 +83,22 @@ start_link(Type, Sup, Dir) ->
 %%                     {stop, StopReason}
 %% @end
 %%--------------------------------------------------------------------
-init([Type, Sup, Dir]) ->
-    {ok, waiting, #state{bucket_type=Type,
+init([Compiler, Type, Sup, Dir]) ->
+    {ok, waiting, #state{bucket_type=Type, compiler_mod=Compiler,
                          supervisor=Sup, beam_dir=Dir}, 1000}.
 
-cmd_exists(BucketType) ->
-    %% Would be nice to have a function in riak_core_bucket_type or
-    %% similar to get either the prefix or the actual metadata instead
-    %% of including a riak_core header file for this prefix
-    riak_core_metadata:get(?BUCKET_TYPE_PREFIX, BucketType).
+waiting(_Event, #state{supervisor=Sup, bucket_type=Type}=State) ->
+    %% Expecting timeout, but something else could notify us that the
+    %% metadata for our bucket type has been pushed to this node.
 
-waiting(_Event, #state{bucket_type=Type}=State) ->
-    %% Typically timeout, but something else could notify us that the
-    %% metadata for our bucket type has been pushed to this node
-    check_for_metadata(cmd_exists(Type), State).
-
-check_for_metadata(undefined, State) ->
-    {next_state, waiting, State, ?CMD_RETRY};
-check_for_metadata(Proplist, #state{beam_dir=Dir, bucket_type=Type}=State) ->
-    {NextState, Compiler} = spawn_build(proplists:get_value(ddl, Proplist), Type, Dir),
-    {next_state, NextState, State#state{compiler=Compiler}, ?COMPILE_WAIT}.
-%% Technically the above is a bit silly if spawn_build returned a
-%% failure; what purpose does the timeout serve? Not silly enough to
-%% introduce an almost entirely superfluous case statement, however.
-
-
-
-%% Must return a tuple with the next state atom, which can be `failed'
-%% if the DDL isn't actually present in the bucket type definition or
-%% `compiling' if the build process is spawned, and the spawned
-%% process in the latter case
-spawn_build(undefined, _Type, _Dir) ->
-    {failed, undefined};
-spawn_build(DDL, Type, Dir) ->
-    {compiling,
-     spawn_link(riak_kv_ts_compiler, compile, [self(), DDL, Type, Dir])}.
+    %% Make sure the bucket type isn't already active
+    case check_activated(Type) of
+        true ->
+            notify_supervisor(Sup, {activated, Type}),
+            {stop, {activated, Type}, State};
+        false ->
+            try_new_build(retrieve_ddl(Type), State)
+    end.
 
 compiling(timeout, #state{compiler=Pid, supervisor=Sup}=State) ->
     %% If the process is dead, it's possible that it has safely
@@ -122,14 +116,26 @@ compiling(timeout, #state{compiler=Pid, supervisor=Sup}=State) ->
             %% Assume a race condition we can ignore. Maybe.
             ok
     end;
-%% Can be success or failure; we don't care which. Tuple with result
-%% code and whatever useful message the compilation process can
-%% provide
-compiling(Completion, #state{supervisor=Sup}=State) ->
-    notify_supervisor(Sup, Completion),
-    {stop, Completion, State#state{compiler=undefined}}.
+compiling({done, FullPath}=Success, #state{supervisor=Sup}=State) ->
+    notify_supervisor(Sup, Success),
+    {next_state, compiled, State#state{compiler=undefined, beam_file=FullPath}, ?CMD_UPDATE};
+compiling({failed, _Reason}=Error, #state{supervisor=Sup}=State) ->
+    notify_supervisor(Sup, Error),
+    {next_state, failed, State#state{compiler=undefined}, ?CMD_UPDATE}.
 
-%% This is used strictly when we're ready to stop
+
+compiled(timeout, #state{supervisor=Sup, bucket_type=Type, ddl=OldDDL}=State) ->
+    case check_activated(Type) of
+        true ->
+            notify_supervisor(Sup, {activated, Type}),
+            {stop, {activated, Type}, State};
+        false ->
+            try_updated_build(OldDDL, retrieve_ddl(Type), compiled, State)
+    end.
+
+failed(timeout, #state{bucket_type=Type, ddl=OldDDL}=State) ->
+    try_updated_build(OldDDL, retrieve_ddl(Type), failed, State).
+
 notify_supervisor(Supervisor, Status) ->
     gen_server:cast(Supervisor, Status).
 
@@ -205,7 +211,8 @@ handle_info(_Info, StateName, State) ->
 terminate(_Reason, _StateName, #state{compiler=undefined}) ->
     ok;
 terminate(Reason, _StateName, #state{compiler=Pid}) ->
-    %% This should never be reached
+    %% Might be reached if node were shutting down before compilation
+    %% finished?
     exit(Pid, Reason).
 
 %%--------------------------------------------------------------------
@@ -223,3 +230,56 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% In state compiled, we need to watch for the activation of the type
+%% so we can close up shop
+check_activated(BucketType) ->
+    extract_activated(riak_core_metadata:get(?BUCKET_TYPE_PREFIX, BucketType)).
+
+extract_activated(undefined) ->
+    false;
+extract_activated(Proplist) ->
+    proplists:get_value(active, Proplist, false).
+
+
+%% In states waiting, compiled, failed we need to watch for DDL
+%% changes in cluster metadata. Will return the DDL term or undefined.
+retrieve_ddl(BucketType) ->
+    %% Would be nice to have a function in riak_core_bucket_type or
+    %% similar to get either the prefix or the actual metadata instead
+    %% of including a riak_core header file for this prefix
+    extract_ddl(riak_core_metadata:get(?BUCKET_TYPE_PREFIX, BucketType)).
+
+%% Helper function for `retrieve_ddl'
+extract_ddl(undefined) ->
+    undefined;
+extract_ddl(Proplist) ->
+    proplists:get_value(ddl, Proplist).
+
+spawn_build(Mod, DDL, Type, Dir) ->
+    spawn_link(Mod, compile, [self(), DDL, Type, Dir]).
+
+%% Function is called only from state waiting.  Arguable whether this
+%% function should advance us to failed if there is no DDL defined in
+%% the bucket type, but the net effect is largely the same. The only
+%% difference between advancing to failed and returning to waiting is
+%% whether the supervisor is notified about the "failure"
+try_new_build(undefined, State) ->
+    {next_state, waiting, State, ?CMD_RETRY};
+try_new_build(DDL, #state{bucket_type=Type, beam_dir=Dir, compiler_mod=Mod}=State) ->
+    Compiler = spawn_build(Mod, DDL, Type, Dir),
+    {next_state, compiling, State#state{compiler=Compiler, ddl=DDL}, ?COMPILE_WAIT}.
+
+%% Called from states compiled and failed
+try_updated_build(_LastDDL, _LastDDL, CurrentStateName, State) ->
+    {next_state, CurrentStateName, State, ?CMD_UPDATE};
+try_updated_build(_LastDDL, undefined, _CurrentStateName,
+                  #state{bucket_type=Type, supervisor=Sup}=State) ->
+    %% The only way for the new DDL to be undefined is if the type has
+    %% been removed from cluster metadata
+    notify_supervisor(Sup, {removed_type, Type}),
+    {stop, {removed_type, Type}, State};
+try_updated_build(_LastDDL, NewDDL, _StateName,
+                  #state{bucket_type=Type, beam_dir=Dir, compiler_mod=Mod}=State) ->
+    Compiler = spawn_build(Mod, NewDDL, Type, Dir),
+    {next_state, compiling, State#state{compiler=Compiler, ddl=NewDDL}, ?COMPILE_WAIT}.
