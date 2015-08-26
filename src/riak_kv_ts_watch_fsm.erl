@@ -25,28 +25,30 @@
 
 -behaviour(gen_fsm).
 
--include_lib("riak_core/include/riak_core_bucket_type.hrl").
-
 %% API
--export([start_link/3, waiting/2, compiling/2, compiled/2, failed/2]).
+-export([start_link/4, start_link/5,
+         waiting/2, compiling/2, compiled/2, failed/2]).
 
 %% gen_fsm callbacks
 -export([init/1, handle_event/3,
          handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
 
 -define(SERVER, ?MODULE).
+-define(BUCKET_TYPE_PREFIX, {core, bucket_types}).
 
- %% How long to wait for cluster metadata to propagate on startup
--define(CMD_RETRY, 2000).
+%% Can be overridden via `start_link/5' for testing
+-define(DEFAULT_TIMEOUTS,
+        [
+         %%%% Retries
+         %% Cluster metadata to propagate
+         {metadata_retry, 2000},
+         %% Bucket type updates (activation, ddl changes)
+         {update_retry, 6000},
 
- %% How long to wait for the compilation mechanism to succeed before
- %% giving up.
--define(COMPILE_WAIT, 30000).
-
-%% How long to wait for a new DDL or bucket type activation after the
-%% compile finishes. Should be longer in production, but useful to
-%% keep this short during development
--define(CMD_UPDATE, 6000).
+         %%%% Single-use timeouts
+         %% DDL compilation
+         {compile_wait, 30000}
+        ]).
 
 -record(state, {
           compiler_mod :: atom(),
@@ -55,7 +57,12 @@
           ddl = undefined :: term(),
           compiler = undefined :: 'undefined' | pid(),
           beam_dir :: file:filename(), %% Path to location to store beams
-          beam_file :: file:filename() %% Full path to compiled beam when complete
+          beam_file :: file:filename(), %% Full path to compiled beam when done
+
+          %% See DEFAULT_TIMEOUTS for definition
+          metadata_retry :: pos_integer(),
+          update_retry :: pos_integer(),
+          compile_wait :: pos_integer()
          }).
 
 
@@ -63,8 +70,11 @@
 %%% API
 %%%===================================================================
 
-start_link(Type, Sup, Dir) ->
-    gen_fsm:start_link(?MODULE, [Type, Sup, Dir], []).
+start_link(Compiler, Type, Sup, Dir) ->
+    start_link(Compiler, Type, Sup, Dir, []).
+
+start_link(Compiler, Type, Sup, Dir, Timeouts) ->
+    gen_fsm:start_link(?MODULE, [Compiler, Type, Sup, Dir, Timeouts], []).
 
 %%%===================================================================
 %%% gen_fsm callbacks
@@ -83,9 +93,19 @@ start_link(Type, Sup, Dir) ->
 %%                     {stop, StopReason}
 %% @end
 %%--------------------------------------------------------------------
-init([Compiler, Type, Sup, Dir]) ->
+init([Compiler, Type, Sup, Dir, Timeouts]) ->
+    %% Make sure all timeouts are available, with timeouts from any
+    %% caller-supplied list preferred
+    AllTimeouts = lists:ukeymerge(1, lists:sort(Timeouts), lists:sort(?DEFAULT_TIMEOUTS)),
+    MetadataRetry = proplists:get_value(metadata_retry, AllTimeouts),
+    UpdateRetry = proplists:get_value(update_retry, AllTimeouts),
+    CompileWait = proplists:get_value(compile_wait, AllTimeouts),
     {ok, waiting, #state{bucket_type=Type, compiler_mod=Compiler,
-                         supervisor=Sup, beam_dir=Dir}, 1000}.
+                         supervisor=Sup, beam_dir=Dir,
+                         metadata_retry=MetadataRetry,
+                         update_retry=UpdateRetry,
+                         compile_wait=CompileWait
+                        }, MetadataRetry}.
 
 waiting(_Event, #state{supervisor=Sup, bucket_type=Type}=State) ->
     %% Expecting timeout, but something else could notify us that the
@@ -116,12 +136,12 @@ compiling(timeout, #state{compiler=Pid, supervisor=Sup}=State) ->
             %% Assume a race condition we can ignore. Maybe.
             ok
     end;
-compiling({done, FullPath}=Success, #state{supervisor=Sup}=State) ->
+compiling({done, FullPath}=Success, #state{supervisor=Sup,update_retry=Timeout}=State) ->
     notify_supervisor(Sup, Success),
-    {next_state, compiled, State#state{compiler=undefined, beam_file=FullPath}, ?CMD_UPDATE};
-compiling({failed, _Reason}=Error, #state{supervisor=Sup}=State) ->
+    {next_state, compiled, State#state{compiler=undefined, beam_file=FullPath}, Timeout};
+compiling({failed, _Reason}=Error, #state{supervisor=Sup,update_retry=Timeout}=State) ->
     notify_supervisor(Sup, Error),
-    {next_state, failed, State#state{compiler=undefined}, ?CMD_UPDATE}.
+    {next_state, failed, State#state{compiler=undefined}, Timeout}.
 
 
 compiled(timeout, #state{supervisor=Sup, bucket_type=Type, ddl=OldDDL}=State) ->
@@ -264,15 +284,17 @@ spawn_build(Mod, DDL, Type, Dir) ->
 %% the bucket type, but the net effect is largely the same. The only
 %% difference between advancing to failed and returning to waiting is
 %% whether the supervisor is notified about the "failure"
-try_new_build(undefined, State) ->
-    {next_state, waiting, State, ?CMD_RETRY};
-try_new_build(DDL, #state{bucket_type=Type, beam_dir=Dir, compiler_mod=Mod}=State) ->
+try_new_build(undefined, #state{metadata_retry=Timeout}=State) ->
+    {next_state, waiting, State, Timeout};
+try_new_build(DDL, #state{bucket_type=Type,beam_dir=Dir,
+                          compiler_mod=Mod,compile_wait=Timeout}=State) ->
     Compiler = spawn_build(Mod, DDL, Type, Dir),
-    {next_state, compiling, State#state{compiler=Compiler, ddl=DDL}, ?COMPILE_WAIT}.
+    {next_state, compiling, State#state{compiler=Compiler, ddl=DDL}, Timeout}.
 
 %% Called from states compiled and failed
-try_updated_build(_LastDDL, _LastDDL, CurrentStateName, State) ->
-    {next_state, CurrentStateName, State, ?CMD_UPDATE};
+try_updated_build(_LastDDL, _LastDDL, CurrentStateName,
+                  #state{update_retry=Timeout}=State) ->
+    {next_state, CurrentStateName, State, Timeout};
 try_updated_build(_LastDDL, undefined, _CurrentStateName,
                   #state{bucket_type=Type, supervisor=Sup}=State) ->
     %% The only way for the new DDL to be undefined is if the type has
@@ -280,6 +302,7 @@ try_updated_build(_LastDDL, undefined, _CurrentStateName,
     notify_supervisor(Sup, {removed_type, Type}),
     {stop, {removed_type, Type}, State};
 try_updated_build(_LastDDL, NewDDL, _StateName,
-                  #state{bucket_type=Type, beam_dir=Dir, compiler_mod=Mod}=State) ->
+                  #state{bucket_type=Type,beam_dir=Dir,
+                         compiler_mod=Mod,compile_wait=Timeout}=State) ->
     Compiler = spawn_build(Mod, NewDDL, Type, Dir),
-    {next_state, compiling, State#state{compiler=Compiler, ddl=NewDDL}, ?COMPILE_WAIT}.
+    {next_state, compiling, State#state{compiler=Compiler, ddl=NewDDL}, Timeout}.
