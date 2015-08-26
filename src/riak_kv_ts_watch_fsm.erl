@@ -75,12 +75,12 @@
         StateName(Event, From, State) ->
                %% The tuple can be 3 or 4-arity, so we can't pattern match
                Tuple = StateName(Event, State),
-               Results = tuple_to_list(Tuple),
-               case hd(Results) of
+               {First, Second} = {element(1, Tuple), element(2, Tuple)},
+               case First of
                    stop ->
                        gen_fsm:reply(From, stopping);
                    next_state ->
-                       gen_fsm:reply(From, lists:nth(2, Results))
+                       gen_fsm:reply(From, Second)
                end,
                Tuple
 ).
@@ -148,16 +148,27 @@ waiting(_Event, #state{supervisor=Sup, bucket_type=Type}=State) ->
             try_new_build(retrieve_ddl(Type), State)
     end.
 
-compiling(timeout, #state{compiler=Pid, supervisor=Sup}=State) ->
-    %% If the process is dead, it's possible that it has safely
+compiling(timeout, #state{compiler=Pid, supervisor=Sup,
+                          update_retry=Timeout}=State) ->
+    %% If we got a timeout but the process is dead, either it safely
     %% terminated and has sent us a completion event we haven't
-    %% received yet. So, the only situation we care about here is if
-    %% the compilation mechanism has taken too long and the process is
-    %% alive; we have to consider this a failure
-    Reason = {failed, compile_timeout},
-    exit(Pid, Reason),
-    notify_supervisor(Sup, Reason),
-    {stop, Reason, State#state{compiler=undefined}};
+    %% received yet, or the process died and we haven't received the
+    %% EXIT message yet. In either case, if it's dead, we just stay in
+    %% compiling state until the appropriate message arrives (and hope
+    %% it does actually arrive, should think about a retry count).
+
+    %% Thus the only situation we care about here is if the
+    %% compilation mechanism has taken too long and the process is
+    %% alive; we have to consider this a failure.
+    case is_process_alive(Pid) of
+        true ->
+            Reason = {failed, compile_timeout},
+            exit(Pid, Reason),
+            notify_supervisor(Sup, Reason),
+            {next_state, failed, State#state{compiler=undefined}, Timeout};
+        false ->
+            {next_state, compiled, State, Timeout}
+    end;
 compiling({done, FullPath}=Success, #state{supervisor=Sup,update_retry=Timeout}=State) ->
     notify_supervisor(Sup, Success),
     {next_state, compiled, State#state{compiler=undefined, beam_file=FullPath}, Timeout};
