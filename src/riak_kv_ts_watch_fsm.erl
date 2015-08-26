@@ -65,6 +65,34 @@
           compile_wait :: pos_integer()
          }).
 
+-define(EQC, true). %% XXX
+
+-ifdef(EQC).
+-export([waiting/3, compiling/3, compiled/3, failed/3]).
+
+%% For testing with `gen_fsm:sync_send_event'
+-define(STATE_TEST(StateName),
+        StateName(Event, From, State) ->
+               %% The tuple can be 3 or 4-arity, so we can't pattern match
+               Tuple = StateName(Event, State),
+               Results = tuple_to_list(Tuple),
+               case hd(Results) of
+                   stop ->
+                       gen_fsm:reply(From, stopping);
+                   next_state ->
+                       gen_fsm:reply(From, lists:nth(2, Results))
+               end,
+               Tuple
+).
+
+?STATE_TEST(waiting).
+?STATE_TEST(compiling).
+?STATE_TEST(compiled).
+?STATE_TEST(failed).
+
+-endif. %% EQC
+
+
 
 %%%===================================================================
 %%% API
@@ -126,23 +154,16 @@ compiling(timeout, #state{compiler=Pid, supervisor=Sup}=State) ->
     %% received yet. So, the only situation we care about here is if
     %% the compilation mechanism has taken too long and the process is
     %% alive; we have to consider this a failure
-    case is_process_alive(Pid) of
-        true ->
-            Reason = {failed, compile_timeout},
-            exit(Pid, Reason),
-            notify_supervisor(Sup, Reason),
-            {stop, Reason, State#state{compiler=undefined}};
-        false ->
-            %% Assume a race condition we can ignore. Maybe.
-            ok
-    end;
+    Reason = {failed, compile_timeout},
+    exit(Pid, Reason),
+    notify_supervisor(Sup, Reason),
+    {stop, Reason, State#state{compiler=undefined}};
 compiling({done, FullPath}=Success, #state{supervisor=Sup,update_retry=Timeout}=State) ->
     notify_supervisor(Sup, Success),
     {next_state, compiled, State#state{compiler=undefined, beam_file=FullPath}, Timeout};
 compiling({failed, _Reason}=Error, #state{supervisor=Sup,update_retry=Timeout}=State) ->
     notify_supervisor(Sup, Error),
     {next_state, failed, State#state{compiler=undefined}, Timeout}.
-
 
 compiled(timeout, #state{supervisor=Sup, bucket_type=Type, ddl=OldDDL}=State) ->
     case check_activated(Type) of
@@ -156,8 +177,9 @@ compiled(timeout, #state{supervisor=Sup, bucket_type=Type, ddl=OldDDL}=State) ->
 failed(timeout, #state{bucket_type=Type, ddl=OldDDL}=State) ->
     try_updated_build(OldDDL, retrieve_ddl(Type), failed, State).
 
-notify_supervisor(Supervisor, Status) ->
-    gen_server:cast(Supervisor, Status).
+notify_supervisor(_Supervisor, _Status) ->
+    ok.
+%%    gen_server:cast(Supervisor, Status).
 
 
 %%--------------------------------------------------------------------
