@@ -192,6 +192,12 @@ waiting_compiling_post(_S, [_FSM, _Metadata], Next) ->
 
 
 %% --- Operation: waiting_stop ---
+
+%% XXX For now, don't test this. Need to figure out how not to have
+%% EQC throw a fit when the FSM shuts down.
+waiting_stop_pre(_) ->
+    false.
+
 %% @doc waiting_stop_args - Argument generator
 -spec waiting_stop_args(S :: eqc_statem:symbolic_state()) -> eqc_gen:gen([term()]).
 waiting_stop_args(#state{fsm=FSM}) ->
