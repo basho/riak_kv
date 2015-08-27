@@ -26,7 +26,7 @@
 -behaviour(gen_fsm).
 
 %% API
--export([start_link/4, start_link/5,
+-export([start/4, start/5, start_link/4, start_link/5,
          waiting/2, compiling/2, compiled/2, failed/2]).
 
 %% gen_fsm callbacks
@@ -103,6 +103,12 @@ start_link(Compiler, Type, Sup, Dir) ->
 
 start_link(Compiler, Type, Sup, Dir, Timeouts) ->
     gen_fsm:start_link(?MODULE, [Compiler, Type, Sup, Dir, Timeouts], []).
+
+start(Compiler, Type, Sup, Dir) ->
+    start(Compiler, Type, Sup, Dir, []).
+
+start(Compiler, Type, Sup, Dir, Timeouts) ->
+    gen_fsm:start(?MODULE, [Compiler, Type, Sup, Dir, Timeouts], []).
 
 %%%===================================================================
 %%% gen_fsm callbacks
