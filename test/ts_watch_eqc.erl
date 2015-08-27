@@ -35,16 +35,34 @@
 %% -- State ------------------------------------------------------------------
 -record(state,{
           fsm                  :: 'undefined'|pid(),
+          last_command         :: 'undefined'|atom(),
           state_name=waiting   :: atom(),
           bucket_type          :: binary(),
           type_definition      :: 'undefined'|list(tuple())
          }).
+
+-define(STATE_PATHS,
+        [
+         {undefined, [waiting]},
+         {waiting, [waiting, compiling, stop]},
+         {compiling, [compiling, failed, compiled]},
+         {compiled, [compiled, compiling, stop]}
+         {failed, [failed, compiling, stop]}
+        ]).
+
+
 
 %% @doc Returns the state in which each test case starts. (Unless a different
 %%      initial state is supplied explicitly to, e.g. commands/2.)
 -spec initial_state() -> eqc_statem:symbolic_state().
 initial_state() ->
     #state{}.
+
+weight(#state{last_command=Last}, Next) ->
+
+weight(_S,compiling) -> 5;
+weight(_S,insert_type) -> 5;
+weight(_S,_)     -> 1.
 
 %% -- Common pre-/post-conditions --------------------------------------------
 %% @doc General command filter, checked before a command is generated.
@@ -286,19 +304,20 @@ compiling_pre(_S) ->
 
 %% @doc compiling_args - Argument generator
 -spec compiling_args(S :: eqc_statem:symbolic_state()) -> eqc_gen:gen([term()]).
-compiling_args(_S) ->
-    [].
+compiling_args(#state{fsm=FSM}) ->
+    [FSM, elements([{elements([done, failed]), list(char())}, timeout])].
 
 %% @doc compiling_pre/2 - Precondition for compiling
 -spec compiling_pre(S, Args) -> boolean()
     when S    :: eqc_statem:symbolic_state(),
          Args :: [term()].
-compiling_pre(_S, []) ->
-    true.
+compiling_pre(#state{state_name=FSMState}, _Args) ->
+    io:format(user, "Saw compiling_pre/2 with state ~p~n", [FSMState]),
+    FSMState == compiling.
 
 %% @doc compiling - The actual operation
-compiling() ->
-    ok.
+compiling(FSM, CompileResult) ->
+    gen_fsm:sync_send_event(FSM, CompileResult).
 
 %% @doc compiling_callers - Which modules are allowed to call this operation. Default: [anyone]
 %% -spec compiling_callers() -> [atom()].
@@ -319,16 +338,22 @@ compiling_callouts(_S, []) ->
          Var  :: eqc_statem:var() | term(),
          Args :: [term()],
          NewS :: eqc_statem:symbolic_state() | eqc_state:dynamic_state().
-compiling_next(S, _Value, []) ->
-    S.
+compiling_next(S, Var, _Args) ->
+    S#state{state_name=Var}.
 
 %% @doc compiling_post - Postcondition for compiling
 -spec compiling_post(S, Args, Res) -> true | term()
     when S    :: eqc_state:dynamic_state(),
          Args :: [term()],
          Res  :: term().
-compiling_post(_S, [], _Res) ->
-    true.
+compiling_post(_S, [_FSM, {done, _Path}], compiled) ->
+    true;
+compiling_post(_S, [_FSM, {failed, _Path}], failed) ->
+    true;
+compiling_post(_S, [_FSM, timeout], failed) ->
+    true;
+compiling_post(_S, _Args, _Res) ->
+    false.
 
 %% @doc compiling_return - Return value for compiling
 -spec compiling_return(S, Args) -> term()
