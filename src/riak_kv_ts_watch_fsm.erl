@@ -45,9 +45,10 @@
          %% Bucket type updates (activation, ddl changes)
          {update_retry, 6000},
 
-         %%%% Single-use timeouts
-         %% DDL compilation
-         {compile_wait, 30000}
+         %%%% Single use timeouts
+         %% Immediate transition between states (but we need to be
+         %% able to configure long timeouts for testing)
+         {transition_timeout, 0}
         ]).
 
 -record(state, {
@@ -55,14 +56,12 @@
           bucket_type :: binary(),
           supervisor :: pid(),
           ddl = undefined :: term(),
-          compiler = undefined :: 'undefined' | pid(),
           beam_dir :: file:filename(), %% Path to location to store beams
-          beam_file :: file:filename(), %% Full path to compiled beam when done
 
           %% See DEFAULT_TIMEOUTS for definition
           metadata_retry :: pos_integer(),
           update_retry :: pos_integer(),
-          compile_wait :: pos_integer()
+          transition_timeout :: non_neg_integer()
          }).
 
 -define(EQC, true). %% XXX
@@ -130,62 +129,50 @@ start(Compiler, Type, Sup, Dir, Timeouts) ->
 init([Compiler, Type, Sup, Dir, Timeouts]) ->
     %% Make sure all timeouts are available, with timeouts from any
     %% caller-supplied list preferred
-    AllTimeouts = lists:ukeymerge(1, lists:sort(Timeouts), lists:sort(?DEFAULT_TIMEOUTS)),
-    MetadataRetry = proplists:get_value(metadata_retry, AllTimeouts),
-    UpdateRetry = proplists:get_value(update_retry, AllTimeouts),
-    CompileWait = proplists:get_value(compile_wait, AllTimeouts),
-    {ok, waiting, #state{bucket_type=Type, compiler_mod=Compiler,
-                         supervisor=Sup, beam_dir=Dir,
-                         metadata_retry=MetadataRetry,
-                         update_retry=UpdateRetry,
-                         compile_wait=CompileWait
-                        }, MetadataRetry}.
+    State = consolidate_timeouts(lists:ukeymerge(1, lists:sort(Timeouts), lists:sort(?DEFAULT_TIMEOUTS))),
 
-waiting(_Event, #state{supervisor=Sup, bucket_type=Type}=State) ->
+    {ok, waiting, State#state{bucket_type=Type, compiler_mod=Compiler,
+                              supervisor=Sup, beam_dir=Dir},
+     State#state.metadata_retry}.
+
+consolidate_timeouts(AllTimeouts) ->
+    Metadata = proplists:get_value(metadata_retry, AllTimeouts),
+    Update = proplists:get_value(update_retry, AllTimeouts),
+    Transition = proplists:get_value(transition_timeout, AllTimeouts),
+    #state{metadata_retry=Metadata,
+           update_retry=Update,
+           transition_timeout=Transition}.
+
+waiting(_Event, #state{bucket_type=Type}=State) ->
     %% Expecting timeout, but something else could notify us that the
     %% metadata for our bucket type has been pushed to this node.
 
     %% Make sure the bucket type isn't already active
     case check_activated(Type) of
         true ->
-            notify_supervisor(Sup, {activated, Type}),
             {stop, {activated, Type}, State};
         false ->
             try_new_build(retrieve_ddl(Type), State)
     end.
 
-compiling(timeout, #state{compiler=Pid, supervisor=Sup,
-                          update_retry=Timeout}=State) ->
-    %% If we got a timeout but the process is dead, either it safely
-    %% terminated and has sent us a completion event we haven't
-    %% received yet, or the process died and we haven't received the
-    %% EXIT message yet. In either case, if it's dead, we just stay in
-    %% compiling state until the appropriate message arrives (and hope
-    %% it does actually arrive, should think about a retry count).
+compiling(timeout, #state{ddl=DDL, compiler_mod=Mod,
+                          bucket_type=Type,
+                          beam_dir=BeamDirectory}=State) ->
+    compile_result(Mod:compile(DDL, Type, BeamDirectory),
+                   State).
 
-    %% Thus the only situation we care about here is if the
-    %% compilation mechanism has taken too long and the process is
-    %% alive; we have to consider this a failure.
-    case is_process_alive(Pid) of
-        true ->
-            Reason = {failed, compile_timeout},
-            exit(Pid, Reason),
-            notify_supervisor(Sup, Reason),
-            {next_state, failed, State#state{compiler=undefined}, Timeout};
-        false ->
-            {next_state, compiled, State, Timeout}
-    end;
-compiling({done, FullPath}=Success, #state{supervisor=Sup,update_retry=Timeout}=State) ->
-    notify_supervisor(Sup, Success),
-    {next_state, compiled, State#state{compiler=undefined, beam_file=FullPath}, Timeout};
-compiling({failed, _Reason}=Error, #state{supervisor=Sup,update_retry=Timeout}=State) ->
-    notify_supervisor(Sup, Error),
-    {next_state, failed, State#state{compiler=undefined}, Timeout}.
+compile_result(success,
+               #state{bucket_type=Type,
+                      supervisor=Sup,
+                      transition_timeout=Timeout}=State) ->
+    notify_supervisor(Sup, {success, Type}),
+    {next_state, compiled, State, Timeout};
+compile_result({fail, _Reason}=Error, State) ->
+    {stop, Error, State}.
 
-compiled(timeout, #state{supervisor=Sup, bucket_type=Type, ddl=OldDDL}=State) ->
+compiled(timeout, #state{bucket_type=Type, ddl=OldDDL}=State) ->
     case check_activated(Type) of
         true ->
-            notify_supervisor(Sup, {activated, Type}),
             {stop, {activated, Type}, State};
         false ->
             try_updated_build(OldDDL, retrieve_ddl(Type), compiled, State)
@@ -196,7 +183,7 @@ failed(timeout, #state{bucket_type=Type, ddl=OldDDL}=State) ->
 
 notify_supervisor(_Supervisor, _Status) ->
     ok.
-%%    gen_server:cast(Supervisor, Status).
+%%    riak_kv_ts_watch_sup:notify(Status).
 
 
 %%--------------------------------------------------------------------
@@ -248,10 +235,6 @@ handle_sync_event(_Event, _From, StateName, State) ->
 %%                   {stop, Reason, NewState}
 %% @end
 %%--------------------------------------------------------------------
-handle_info({'EXIT', Pid, Reason}, compiling, #state{supervisor=Sup,
-                                                     compiler=Pid}=State) ->
-    notify_supervisor(Sup, {failed, Reason}),
-    {stop, Reason, State#state{compiler=undefined}};
 handle_info(_Info, StateName, State) ->
     {next_state, StateName, State}.
 
@@ -267,12 +250,8 @@ handle_info(_Info, StateName, State) ->
 %% @spec terminate(Reason, StateName, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _StateName, #state{compiler=undefined}) ->
-    ok;
-terminate(Reason, _StateName, #state{compiler=Pid}) ->
-    %% Might be reached if node were shutting down before compilation
-    %% finished?
-    exit(Pid, Reason).
+terminate(_Reason, _StateName, _S) ->
+    ok.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -315,8 +294,8 @@ extract_ddl(undefined) ->
 extract_ddl(Proplist) ->
     proplists:get_value(ddl, Proplist).
 
-spawn_build(Mod, DDL, Type, Dir) ->
-    spawn_link(Mod, compile, [self(), DDL, Type, Dir]).
+%% spawn_build(Mod, DDL, Type, Dir) ->
+%%     spawn_link(Mod, compile, [self(), DDL, Type, Dir]).
 
 %% Function is called only from state waiting.  Arguable whether this
 %% function should advance us to failed if there is no DDL defined in
@@ -325,23 +304,18 @@ spawn_build(Mod, DDL, Type, Dir) ->
 %% whether the supervisor is notified about the "failure"
 try_new_build(undefined, #state{metadata_retry=Timeout}=State) ->
     {next_state, waiting, State, Timeout};
-try_new_build(DDL, #state{bucket_type=Type,beam_dir=Dir,
-                          compiler_mod=Mod,compile_wait=Timeout}=State) ->
-    Compiler = spawn_build(Mod, DDL, Type, Dir),
-    {next_state, compiling, State#state{compiler=Compiler, ddl=DDL}, Timeout}.
+try_new_build(DDL, #state{transition_timeout=Timeout}=State) ->
+    {next_state, compiling, State#state{ddl=DDL}, Timeout}.
 
 %% Called from states compiled and failed
 try_updated_build(_LastDDL, _LastDDL, CurrentStateName,
                   #state{update_retry=Timeout}=State) ->
     {next_state, CurrentStateName, State, Timeout};
 try_updated_build(_LastDDL, undefined, _CurrentStateName,
-                  #state{bucket_type=Type, supervisor=Sup}=State) ->
+                  #state{bucket_type=Type}=State) ->
     %% The only way for the new DDL to be undefined is if the type has
     %% been removed from cluster metadata
-    notify_supervisor(Sup, {removed_type, Type}),
     {stop, {removed_type, Type}, State};
 try_updated_build(_LastDDL, NewDDL, _StateName,
-                  #state{bucket_type=Type,beam_dir=Dir,
-                         compiler_mod=Mod,compile_wait=Timeout}=State) ->
-    Compiler = spawn_build(Mod, NewDDL, Type, Dir),
-    {next_state, compiling, State#state{compiler=Compiler, ddl=NewDDL}, Timeout}.
+                  #state{transition_timeout=Timeout}=State) ->
+    {next_state, compiling, State#state{ddl=NewDDL}, Timeout}.

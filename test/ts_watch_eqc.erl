@@ -35,18 +35,28 @@
 %% -- State ------------------------------------------------------------------
 -record(state,{
           fsm                  :: 'undefined'|pid(),
-          %% Represents the next SUT state name
-          next_state           :: atom(),
           bucket_type          :: 'undefined'|binary(),
-          type_definition      :: 'undefined'|list(tuple())
+          type_definition      :: 'undefined'|list(tuple()),
+
+          %% The `next_state' value as represented in the model state
+          %% has a very special purpose. It does *NOT* reflect the
+          %% state as returned by the code being tested; instead, it
+          %% is hard-coded to reflect the state we *THINK* the test
+          %% will return so that during the test generation phase of
+          %% EQC statem, we can use `weight/2' to intelligent derive
+          %% one of a small set of new commands that are valid for
+          %% this state.
+          next_state           :: atom()
+          %% TL;DR for next_state: DO NOT USE for postconditions, and
+          %% for `_next' functions set this as an atom, not as a
+          %% variable binding provided by EQC
          }).
 
 -define(STATE_EDGES,
         [
          {waiting, [waiting_waiting, waiting_compiling, waiting_stop]},
-         {compiling, [compiling_compiling, compiling_failed, compiling_compiled]},
+         {compiling, [compiling_stop, compiling_compiled]},
          {compiled, [compiled_compiled, compiled_compiling, compiled_stop]},
-         {failed, [failed_failed, failed_compiling, failed_stop]},
          {stop, []}
         ]).
 
@@ -76,9 +86,11 @@ initial_state() ->
 -spec command_precondition_common(S, Cmd) -> boolean()
     when S    :: eqc_statem:symbolic_state(),
          Cmd  :: atom().
-command_precondition_common(#state{bucket_type=Type}, Cmd) ->
-    (Cmd == init andalso Type == undefined) orelse
-        (Cmd /= init andalso Type /= undefined).
+command_precondition_common(#state{next_state=undefined}, Cmd) ->
+    Cmd == init;
+%% This is redundant with `weight/2' but necessary for shrinking
+command_precondition_common(#state{next_state=StateName}, Cmd) ->
+    lists:member(Cmd, proplists:get_value(StateName, ?STATE_EDGES)).
 
 %% -- Operations -------------------------------------------------------------
 
@@ -96,15 +108,15 @@ init(?MDPREFIX, Type) ->
     %% We can't launch the FSM until we have a type and this will only
     %% be invoked as the first operation
     {ok, Pid} =
-        riak_kv_ts_watch_fsm:start(ts_watch_compiler,
+        riak_kv_ts_watch_fsm:start(riak_kv_ts_compiler,
                                    Type,
                                    self(),
                                    "beam-dir-does-not-matter",
                                    %% Long timeouts so they don't
                                    %% fire and mess up our state
-                                   [{metadata_retry, 12000},
-                                    {update_retry, 12000},
-                                    {compile_wait, 12000}]),
+                                   [{metadata_retry, 100000},
+                                    {update_retry, 100000},
+                                    {transition_timeout, 100000}]),
     Pid.
 
 %% @doc init_next - Next state function
@@ -119,6 +131,7 @@ init_next(S, Pid, [_MDPrefix, Type]) ->
 
 
 %% --- Operation: waiting_waiting ---
+
 %% @doc waiting_waiting_args - Argument generator
 -spec waiting_waiting_args(S :: eqc_statem:symbolic_state()) -> eqc_gen:gen([term()]).
 waiting_waiting_args(#state{fsm=FSM}) ->
@@ -151,6 +164,7 @@ waiting_waiting_post(_S, [_FSM, undefined], Next) ->
 
 
 %% --- Operation: waiting_compiling ---
+
 %% @doc waiting_compiling_args - Argument generator
 -spec waiting_compiling_args(S :: eqc_statem:symbolic_state()) -> eqc_gen:gen([term()]).
 waiting_compiling_args(#state{fsm=FSM}) ->
@@ -171,7 +185,8 @@ waiting_compiling_callouts(#state{bucket_type=Type}, [_FSM, Metadata]) ->
           ?CALLOUT(
              riak_core_metadata, get,
              [{core, bucket_types}, Type],
-             Metadata)]).
+             Metadata)
+         ]).
 
 %% @doc waiting_compiling_next - Next state function
 -spec waiting_compiling_next(S, Var, Args) -> NewS
@@ -190,6 +205,86 @@ waiting_compiling_next(S, _NextStateName, [_FSM, Metadata]) ->
 waiting_compiling_post(_S, [_FSM, _Metadata], Next) ->
     Next == compiling.
 
+
+%% --- Operation: compiling_compiled ---
+%% @doc compiling_compiled_args - Argument generator
+-spec compiling_compiled_args(S :: eqc_statem:symbolic_state()) -> eqc_gen:gen([term()]).
+compiling_compiled_args(#state{fsm=FSM}) ->
+    [FSM].
+
+%% @doc compiling_compiled - The actual operation
+compiling_compiled(FSM) ->
+    gen_fsm:sync_send_event(FSM, timeout).
+
+%% @doc compiling_compiled_callouts - Callouts for compiling_compiled
+-spec compiling_compiled_callouts(S, Args) -> eqc_gen:gen(eqc_component:callout())
+    when S    :: eqc_statem:symbolic_state(),
+         Args :: [term()].
+compiling_compiled_callouts(
+  #state{bucket_type=Type}, [_FSM]) ->
+    ?SEQ([?CALLOUT(riak_kv_ts_compiler, compile,
+                   ["code", Type, "beam-dir-does-not-matter"],
+                   success)]).
+
+%% @doc compiling_compiled_next - Next state function
+-spec compiling_compiled_next(S, Var, Args) -> NewS
+    when S    :: eqc_statem:symbolic_state() | eqc_state:dynamic_state(),
+         Var  :: eqc_statem:var() | term(),
+         Args :: [term()],
+         NewS :: eqc_statem:symbolic_state() | eqc_state:dynamic_state().
+compiling_compiled_next(S, _NextStateName, [_FSM]) ->
+    S#state{next_state=compiled}.
+
+%% @doc compiling_compiled_post - Postcondition for compiling_compiled
+-spec compiling_compiled_post(S, Args, Res) -> true | term()
+    when S    :: eqc_state:dynamic_state(),
+         Args :: [term()],
+         Res  :: term().
+compiling_compiled_post(_S, [_FSM], Next) ->
+    Next == compiled.
+
+
+
+%% %% --- Operation: compiling_stop ---
+%% %% XXX: until we sort through EQC and stopped FSMs
+%% compiling_stop_pre(_) ->
+%%     false.
+
+%% %% @doc compiling_stop_args - Argument generator
+%% -spec compiling_stop_args(S :: eqc_statem:symbolic_state()) -> eqc_gen:gen([term()]).
+%% compiling_stop_args(_S) ->
+%%     gen_fsm:sync_send_event(FSM, timeout).
+
+%% %% @doc compiling_stop - The actual operation
+%% compiling_stop() ->
+%%     ok.
+
+%% %% @doc compiling_stop_callouts - Callouts for compiling_stop
+%% -spec compiling_stop_callouts(S, Args) -> eqc_gen:gen(eqc_component:callout())
+%%     when S    :: eqc_statem:symbolic_state(),
+%%          Args :: [term()].
+%% compiling_stop_callouts(#state{bucket_type=Type}, [_FSM, Metadata]) ->
+%%     ?SEQ([?CALLOUT(riak_kv_ts_compiler, compile,
+%%                    [DDL, Type,
+%%                     "beam-dir-does-not-matter"],
+%%                    {fail, Reason})]).
+
+%% %% @doc compiling_stop_post - Postcondition for compiling_stop
+%% -spec compiling_stop_post(S, Args, Res) -> true | term()
+%%     when S    :: eqc_state:dynamic_state(),
+%%          Args :: [term()],
+%%          Res  :: term().
+%% compiling_stop_post(_S, [_FSM, _Metadata], Next) ->
+%%     Next == stop.
+
+%% %% @doc compiling_stop_next - Next state function
+%% -spec compiling_stop_next(S, Var, Args) -> NewS
+%%     when S    :: eqc_statem:symbolic_state() | eqc_state:dynamic_state(),
+%%          Var  :: eqc_statem:var() | term(),
+%%          Args :: [term()],
+%%          NewS :: eqc_statem:symbolic_state() | eqc_state:dynamic_state().
+%% compiling_stop_next(S, NextStateName, [_FSM, Metadata]) ->
+%%     S#state{next_state=stop}.
 
 %% --- Operation: waiting_stop ---
 
@@ -277,6 +372,13 @@ api_spec() ->
                functions =
                    [
                     #api_fun{ name = get, arity = 2 }
+                   ]
+              },
+            #api_module {
+               name = riak_kv_ts_compiler,
+               functions =
+                   [
+                    #api_fun{ name = compile, arity = 3 }
                    ]
               }
            ]
