@@ -53,6 +53,10 @@
 %% Each transition info item is a tuple: {state, timestamp}
 %%
 %% States:
+
+%% notfound is a generated status if a client invokes get_status or
+%% dump_status on a type we haven't been notified of
+
 %%   {start_failed, Reason}
 %%   worker_started (worker launched, says nothing about compile started)
 %%   compile_started (from worker)
@@ -220,9 +224,13 @@ get_status(Type, Transitions) ->
 dump_status(Type, Transitions) ->
     all_status(lists:keyfind(Type, 1, Transitions)).
 
+latest_status(false) ->
+    notfound;
 latest_status({_Type, [H|_T], _Pid}) ->
     status_to_external(H).
 
+all_status(false) ->
+    notfound;
 all_status({_Type, List, _Pid}) ->
     List.
 
