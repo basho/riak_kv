@@ -395,6 +395,8 @@ erlify_bucket_prop({?JSON_CHASH, {struct, Props}}) ->
                     list_to_existing_atom(
                       binary_to_list(
                         proplists:get_value(?JSON_FUN, Props)))}};
+erlify_bucket_prop({<<"ddl">>, Value}) ->
+    {ddl, Value};
 erlify_bucket_prop({Prop, Value}) ->
     {list_to_existing_atom(binary_to_list(Prop)), Value}.
 

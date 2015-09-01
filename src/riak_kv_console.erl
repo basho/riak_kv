@@ -502,55 +502,50 @@ bucket_type_print_activate_result(Type, {error, not_ready}, _IsFirst) ->
 bucket_type_create([TypeStr, ""]) ->
     Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
     EmptyProps = {struct, [{<<"props">>, {struct, []}}]},
-    bucket_type_create(Type, EmptyProps);
+    Create_type_fn = fun riak_core_bucket_type:create/2,
+    bucket_type_create(Create_type_fn, Type, EmptyProps);
 bucket_type_create([TypeStr, PropsStr]) ->
     Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
-    bucket_type_create(Type, catch mochijson2:decode(PropsStr),
-                       ts_file(ddl, PropsStr)).
+    Create_type_fn =
+        fun(Props) ->
+            Result = riak_core_bucket_type:create(Type, Props),
+            bucket_type_print_create_result(Type, Result)
+        end,
+    bucket_type_create(Create_type_fn, Type, catch mochijson2:decode(PropsStr)).
 
-%% Quick hack allows us to piggy-back on existing `riak-admin' code
-%% without branching riak/riak_ee for now. riak-admin bucket-type
-%% create <type> ts:<filename> where the file contains the DDL.
-%%
-%% `file:consult/1' requires the records to be recognizable, so we'll
-%% just distribute the contents as a binary.
-%%
-%% XXX: Takes a bogus first argument to make sure the `ddl' atom
-%% exists during early days of this code
-ts_file(_Atom, [$t,$s,$:|Filename]) ->
-    interpret_ts_file(file:read_file(Filename));
-ts_file(_Atom, _) ->
-    false.
-
-%% Forcing this Erlang structure to look like a mochi conversion of
-%% JSON to be turned back into "proper" Erlang later is bloody stupid, but here we are
-ts_bt_props(DDL) ->
-    %% Don't forget to add any other time series-specific default
-    %% bucket type information here
-    {struct, [{<<"props">>, {struct, [{<<"ddl">>, DDL}]}}]}.
-
-interpret_ts_file({ok, Bin}) ->
-    ts_bt_props(Bin).
-
-%% Also a bit hackish; convert bucket_type_create/3 for handling the
-%% time series scenario back into bucket_type_create/2
-bucket_type_create(Type, {struct, Fields}, false) ->
-    bucket_type_create(Type, {struct, Fields});
-bucket_type_create(Type, _Error, {struct, Fields}) ->
-    bucket_type_create(Type, {struct, Fields}).
-
-bucket_type_create(Type, {struct, Fields}) ->
-    case proplists:get_value(<<"props">>, Fields) of
-        {struct, Props} ->
-            ErlProps = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props],
-            bucket_type_print_create_result(Type, riak_core_bucket_type:create(Type, ErlProps));
+-spec bucket_type_create(
+        Create_type_fn :: fun(([propslist:property()]) -> ok),
+        Type :: binary(),
+        JSON :: any()) -> ok | error.
+bucket_type_create(Create_type_fn, Type, {struct, Fields}) ->
+    case Fields of
+        [{<<"props", _/binary>>, {struct, Props_1}}] ->
+            {ok, Props_2} = maybe_parse_table_def(Props_1),
+            Props_3 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props_2],
+            Create_type_fn(Props_3);
         _ ->
             io:format("Cannot create bucket type ~ts: no props field found in json~n", [Type]),
             error
     end;
-bucket_type_create(Type, _) ->
+bucket_type_create(_, Type, _) ->
     io:format("Cannot create bucket type ~ts: invalid json~n", [Type]),
     error.
+
+%%
+-spec maybe_parse_table_def(Props :: list(proplists:property())) -> 
+        {ok, Props2 :: [proplists:property()]} | {error, any()}.
+maybe_parse_table_def(Props) ->
+    case lists:keytake(<<"table_def">>, 1, Props) of
+        false ->
+            {ok, Props};
+        {value, {<<"table_def">>, Table_def}, Props_no_def} ->
+            case riak_ql_parser:parse(riak_ql_lexer:get_tokens(binary_to_list(Table_def))) of
+                {ok, DDL} ->
+                    {ok, [{<<"ddl">>, DDL} | Props_no_def]};
+                {error, _} = E ->
+                    E
+            end
+    end.
 
 bucket_type_print_create_result(Type, ok) ->
     io:format("~ts created~n", [Type]),
@@ -878,3 +873,48 @@ bucket_error_xlate({Property, Error}) ->
     [atom_to_list(Property), ": ", io_lib:format("~p", [Error])];
 bucket_error_xlate(X) ->
     io_lib:format("~p", [X]).
+
+%%%
+%%% Unit tests
+%%%
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+json_props(Props) ->
+    JSON = lists:flatten(mochijson2:encode([{props, Props}])),
+    ?debugFmt("~s", [JSON]),
+    JSON.
+
+bucket_type_create_no_timeseries_test() ->
+    Ref = make_ref(),
+    JSON = json_props([{bucket_type, my_type}]),
+    bucket_type_create(
+        fun(<<"my_type">>, Props) -> put(Ref, Props) end,
+        <<"my_type">>,
+        mochijson2:decode(JSON)
+    ),
+    ?assertEqual(
+        [{bucket_type, <<"my_type">>}],
+        get(Ref)
+    ).
+
+bucket_type_create_with_timeseries_table_test() ->
+    Ref = make_ref(),
+    Table_def =
+        <<"CREATE TABLE times ",
+          "(time TIMESTAMP NOT NULL, ",
+          " PRIMARY KEY (time))">>,
+    JSON = json_props([{bucket_type, my_type}, 
+                       {table_def, Table_def}]),
+    bucket_type_create(
+        fun(Props) -> put(Ref, Props) end,
+        <<"my_type">>,
+        mochijson2:decode(JSON)
+    ),
+    ?assertMatch(
+        [{ddl, _}, {bucket_type, <<"my_type">>}],
+        get(Ref)
+    ).
+
+-endif.

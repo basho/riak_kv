@@ -26,8 +26,9 @@
 -behaviour(gen_fsm).
 
 %% API
--export([start/4, start/5, start_link/4, start_link/5,
-         waiting/2, compiling/2, compiled/2]).
+-export([start/3, start/4]).
+-export([start_link/3, start_link/4]).
+-export([waiting/2, compiling/2, compiled/2]).
 
 %% gen_fsm callbacks
 -export([init/1, handle_event/3,
@@ -52,7 +53,6 @@
         ]).
 
 -record(state, {
-          compiler_mod :: module(),
           bucket_type :: binary(),
           supervisor :: module(), %% Not actually our Erlang supervisor,
                                   %% just the service we report to
@@ -97,17 +97,17 @@
 %%% API
 %%%===================================================================
 
-start_link(Compiler, Type, Sup, Dir) ->
-    start_link(Compiler, Type, Sup, Dir, []).
+start_link(Type, Sup, Dir) ->
+    start_link(Type, Sup, Dir, []).
 
-start_link(Compiler, Type, Sup, Dir, Timeouts) ->
-    gen_fsm:start_link(?MODULE, [Compiler, Type, Sup, Dir, Timeouts], []).
+start_link(Type, Sup, Dir, Timeouts) ->
+    gen_fsm:start_link(?MODULE, [Type, Sup, Dir, Timeouts], []).
 
-start(Compiler, Type, Sup, Dir) ->
-    start(Compiler, Type, Sup, Dir, []).
+start(Type, Sup, Dir) ->
+    start(Type, Sup, Dir, []).
 
-start(Compiler, Type, Sup, Dir, Timeouts) ->
-    gen_fsm:start(?MODULE, [Compiler, Type, Sup, Dir, Timeouts], []).
+start(Type, Sup, Dir, Timeouts) ->
+    gen_fsm:start(?MODULE, [Type, Sup, Dir, Timeouts], []).
 
 %%%===================================================================
 %%% gen_fsm callbacks
@@ -126,12 +126,12 @@ start(Compiler, Type, Sup, Dir, Timeouts) ->
 %%                     {stop, StopReason}
 %% @end
 %%--------------------------------------------------------------------
-init([Compiler, Type, Sup, Dir, Timeouts]) ->
+init([ Type, Sup, Dir, Timeouts]) ->
     %% Make sure all timeouts are available, with timeouts from any
     %% caller-supplied list preferred
     State = consolidate_timeouts(lists:ukeymerge(1, lists:sort(Timeouts), lists:sort(?DEFAULT_TIMEOUTS))),
 
-    {ok, waiting, State#state{bucket_type=Type, compiler_mod=Compiler,
+    {ok, waiting, State#state{bucket_type=Type,
                               supervisor=Sup, beam_dir=Dir},
      State#state.metadata_retry}.
 
@@ -148,12 +148,11 @@ waiting(_Event, #state{supervisor=Sup, bucket_type=Type}=State) ->
             try_new_build(retrieve_ddl(Type), State)
     end.
 
-compiling(timeout, #state{ddl=DDL, compiler_mod=Mod,
-                          bucket_type=Type,
+compiling(timeout, #state{ddl=DDL, bucket_type=Type,
                           supervisor=Sup,
                           beam_dir=BeamDirectory}=State) ->
     notify_supervisor(Sup, Type, compiling),
-    compile_result(Mod:compile(DDL, Type, BeamDirectory),
+    compile_result(riak_kv_ts_compiler:compile(DDL, BeamDirectory),
                    State).
 
 compile_result(success,

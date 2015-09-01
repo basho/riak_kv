@@ -22,10 +22,22 @@
 
 -module(riak_kv_ts_compiler).
 
--export([compile/4]).
+-export([compile/2]).
 
-compile(Watcher, _DDL, Type, BeamDir) ->
-    File = filename:join(BeamDir, unicode:characters_to_list(Type, unicode) ++ ".beam"),
-    os:cmd("touch " ++ File),
-    timer:sleep(10000),
-    gen_fsm:send_event(Watcher, {done, File}).
+%%
+compile(DDL, BeamDir) ->
+    case riak_ql_ddl_compiler:make_helper_mod(DDL) of
+        {module, AST} ->
+            {ok, Module, Bin} = compile:forms(AST),
+            Filepath = beam_file_path(BeamDir, Module),
+            ok = filelib:ensure_dir(Filepath),
+            ok = file:write_file(Filepath, Bin),
+            success;
+        {error, _} = E ->
+            E
+    end.
+
+%%
+beam_file_path(BeamDir, Module) ->
+    Filename = atom_to_list(Module) ++ ".beam",
+    filename:join(BeamDir, Filename).
