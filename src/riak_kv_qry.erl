@@ -28,8 +28,9 @@
 
 %% Developer API
 -export([
-	 execute/2
-	 ]).
+         execute/2,
+         fetch/2
+        ]).
 
 %% gen_server callbacks
 -export([
@@ -59,10 +60,16 @@
 -define(NO_MAX_RESULTS, no_max_results).
 -define(NO_PG_SORT, undefined).
 
+-type qry_status() :: void | accumulating | complete.
+-type qry_result() :: [binary()].
+
 -record(state, {
-	  name       :: atom(),
-	  qry = none :: none | #riak_sql_v1{}
-	 }).
+          name       :: atom(),
+          qry = none :: none | #riak_sql_v1{},
+          qid = undefined :: {node(), non_neg_integer()},
+          status = void   :: qry_status(),
+          result = []     :: qry_result()
+         }).
 
 %%%===================================================================
 %%% OTP API
@@ -82,7 +89,10 @@ start_link(Name) ->
 %%% API
 %%%===================================================================
 execute(FSM, {QId, Qry}) ->
-    ok = gen_server:call(FSM, {execute, {QId, Qry}}).
+    gen_server:call(FSM, {execute, {QId, Qry}}).
+
+fetch(FSM, QId) ->
+    gen_server:call(FSM, {fetch, QId}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -117,9 +127,15 @@ init([Name]) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_call(Request, _From, State) ->
-    {Reply, SEs, NewState} = handle_req(Request, State),
-    ok = handle_side_effects(SEs),
-    {reply, Reply, NewState}.
+    case handle_req(Request, State) of
+        {ok, SEs, NewState} when is_list(SEs) ->
+            ok = handle_side_effects(SEs),
+            {reply, ok, NewState};
+        {Error, _, State} when is_atom(Error) ->
+            {reply, {error, Error}, State};
+        {Result, _, State} ->
+            {reply, Result, State}
+    end.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -145,9 +161,32 @@ handle_cast(Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info(Info, State) ->
-    io:format("in handle info for riak_kv_qry~n- ~p~n", [Info]),
+handle_info({QId, done},
+            State = #state{qid = QId,
+                           status = QStatus})
+  when QStatus =/= complete ->
+    {noreply, State#state{status = complete}};
+
+handle_info({QId, {results, [Chunk]}},
+            State = #state{qid = QId,
+                           status = QStatus,
+                           result = Accumulated})
+  when QStatus =:= void; QStatus =:= accumulating ->
+    {noreply, State#state{status = accumulating,
+                          result = [Chunk | Accumulated]}};
+
+%% what if some late chunks arrive?
+handle_info({QId, {results, _}},
+            State = #state{qid = QId,
+                           status = complete}) ->
+    lager:warn("Discarding late chunk on qid ~p", [QId]),
+    {noreply, State};
+
+%% other error conditions
+handle_info({QId1, _}, State = #state{qid = QId2}) ->
+    lager:warn("Bad query id ~p (expected ~p)", [QId1, QId2]),
     {noreply, State}.
+
 
 %%--------------------------------------------------------------------
 %% @private
@@ -177,13 +216,32 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+handle_req(_, State = #state{status = accumulating}) ->
+    {prev_query_unfinished, [], State};
+
 handle_req({execute, {QId, Qry}}, State) ->
     %% TODO make this run with multiple sub-queries
     %% TODO fix this up properly
     {ok, DDL} = get_ddl_FIXUP(),
     Queries = riak_kv_qry_compiler:compile(DDL, Qry),
     SEs = [{run_sub_query, {qry, X}, {qid, QId}} || X <- Queries],
-    {ok, SEs, State};
+    {ok, SEs, State#state{qid = QId,
+                          status = accumulating,
+                          result = []}};
+
+handle_req({fetch, QId}, State = #state{qid = QId2})
+  when QId =/= QId2 ->
+    {bad_query_id, [], State};
+handle_req({fetch, QId}, State = #state{qid = QId,
+                                        status = accumulating}) ->
+    {in_progress, [], State};
+handle_req({fetch, QId}, State = #state{qid = QId,
+                                        result = Result}) ->
+    {decode_results(Result), [], State#state{qid = undefined,
+                                             status = accumulating,
+                                             result = []}};
+
 handle_req(_Request, State) ->
     {ok, ?NO_SIDEEFFECTS, State}.
 
@@ -211,6 +269,18 @@ get_ddl_FIXUP() ->
 	"PRIMARY KEY((quantum(time, 15, s)), time, user))", 
     Lexed = riak_ql_lexer:get_tokens(SQL),
     {ok, _DDL} = riak_ql_parser:parse(Lexed).
+
+decode_results(ListOfBins) ->
+    decode_results(ListOfBins, []).
+decode_results([], Acc) ->
+    %% lists:reverse(Acc);  %% recall that ListOfBins is in fact
+    %% reversed (as it was accumulated from chunks in handle_info)
+    Acc;
+decode_results([Bin|Rest], Acc) ->
+    decode_results(
+      Rest, [eleveldb_ts:decode_record(Bin) | Acc]).
+
+
 
 %%%===================================================================
 %%% Unit tests
