@@ -277,8 +277,10 @@ decode_results([], Acc) ->
     %% reversed (as it was accumulated from chunks in handle_info)
     Acc;
 decode_results([Bin|Rest], Acc) ->
+    %% io:format("Decoding this: ~p\n", [Bin]),
+    Decoded = lists:map(fun eleveldb_ts:decode_record/1, Bin),
     decode_results(
-      Rest, [eleveldb_ts:decode_record(Bin) | Acc]).
+      Rest, [Decoded | Acc]).
 
 
 

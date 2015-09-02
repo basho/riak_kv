@@ -25,7 +25,8 @@
 
 %% User API
 -export([
-	 put_on_queue/1
+	 put_on_queue/1,
+         fetch/1
 	]).
 
 %% OTP API
@@ -84,6 +85,9 @@
 %%%===================================================================
 put_on_queue(Qry) ->
     gen_server:call(?MODULE, {put_on_queue, Qry}).
+
+fetch(QId) ->
+    gen_server:call(?MODULE, {fetch, QId}).
 
 %%%===================================================================
 %%% OTP API
@@ -232,6 +236,17 @@ handle_req({put_on_queue, Qry}, State) ->
 				      available_FSMs = NewAvl,
 				      next_query_id  = Id + 1},
 		   {Reply, [Disp], NewS}
+    end;
+handle_req({fetch, QId}, State = #state{fsms = FSMs}) ->
+    case [Name || #fsm{qry = {Qi, _}, name = Name} <- FSMs, QId == Qi] of
+        [Name] ->
+            %% it's not feasible to put a call to riak_kv_qry:fetch/1
+            %% alongside the :execute/2, because it's not so much
+            %% about side effects as retrieving result and returning
+            %% a value.
+            {riak_kv_qry:fetch(Name, QId), ?NO_SIDEEFFECTS, State};
+        _Eh ->
+            {{error, bad_qid}, ?NO_SIDEEFFECTS, State}
     end;
 handle_req(get_active_qrys, State) ->
     #state{fsms = FSMs} = State,
