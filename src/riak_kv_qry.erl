@@ -124,13 +124,13 @@ init([Name]) ->
 %%--------------------------------------------------------------------
 handle_call(Request, _From, State) ->
     case handle_req(Request, State) of
-        {ok, SEs, NewState} when is_list(SEs) ->
+        {ok, SEs, State9} when is_list(SEs) ->
             ok = handle_side_effects(SEs),
-            {reply, ok, NewState};
-        {Error, _, State} when is_atom(Error) ->
-            {reply, {error, Error}, State};
-        {Result, _, State} ->
-            {reply, Result, State}
+            {reply, ok, State9};
+        {Error, _, State9} when is_atom(Error) ->
+            {reply, {error, Error}, State9};
+        {Result, _, State9} ->
+            {reply, Result, State9}
     end.
 
 %%--------------------------------------------------------------------
