@@ -253,16 +253,32 @@ handle_side_effects([H | T]) ->
     io:format("in riak_kv_qry:handle_side_effects not handling ~p~n", [H]),
     handle_side_effects(T).
 
+
+decode_results(NestedListOfBins) ->
+    decode_results(lists:flatten(NestedListOfBins), []).
 decode_results([], Acc) ->
     %% lists:reverse(Acc);  %% recall that ListOfBins is in fact
     %% reversed (as it was accumulated from chunks in handle_info)
     Acc;
-decode_results([Bin|Rest], Acc) ->
-    %% io:format("Decoding this: ~p\n", [Bin]),
-    Decoded = lists:map(fun eleveldb_ts:decode_record/1, Bin),
+decode_results([BList|Rest], Acc) ->
+    Objects = unpack_objects(BList, []),
+    io:format("Records! ~p\n", [Objects]),
     decode_results(
-      Rest, [Decoded | Acc]).
+      Rest, [Objects | Acc]).
 
+unpack_objects(<<>>, Acc) ->
+    Acc;
+unpack_objects(Batch, Acc) ->
+    {Key, B1} = eleveldb:parse_string(Batch),
+    {Val, B2} = eleveldb:parse_string(B1),
+    io:format("K/V: ~p\n   :~p\n", [Key, size(Val)]),
+    %% don't care about bkey
+    Record =
+        eleveldb_ts:decode_record(
+          riak_object:get_value(
+            riak_object:from_binary(
+              <<>>, <<>>, Val))),
+    unpack_objects(B2, [Record | Acc]).
 
 
 %%%===================================================================
