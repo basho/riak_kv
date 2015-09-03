@@ -25,7 +25,7 @@
 
 %% User API
 -export([
-	 put_on_queue/1,
+	 put_on_queue/2,
          fetch/1
 	]).
 
@@ -83,8 +83,8 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-put_on_queue(Qry) ->
-    gen_server:call(?MODULE, {put_on_queue, Qry}).
+put_on_queue(Qry, DDL) ->
+    gen_server:call(?MODULE, {put_on_queue, Qry, DDL}).
 
 fetch(QId) ->
     gen_server:call(?MODULE, {fetch, QId}).
@@ -207,7 +207,7 @@ is_overloaded(#state{queued_qrys = Q,
 is_overloaded(#state{queued_qrys = Q,
 		     max_q_len   = Max}) when length(Q) <  Max -> false.
 
-handle_req({put_on_queue, Qry}, State) ->
+handle_req({put_on_queue, Qry, DDL}, State) ->
     #state{fsms           = FSMs,
 	   available_FSMs = Avl,
 	   queued_qrys    = Q,
@@ -231,7 +231,7 @@ handle_req({put_on_queue, Qry}, State) ->
 			    qry    = {QId, Qry}},
 		   NewFSMs = lists:keyreplace(H, 2, FSMs, F),
 		   NewAvl = T,
-		   Disp = {execute, {{fsm, H}, {QId, Qry}}},
+		   Disp = {execute, {{fsm, H}, {QId, Qry, DDL}}},
 		   NewS = State#state{fsms           = NewFSMs,
 				      available_FSMs = NewAvl,
 				      next_query_id  = Id + 1},
@@ -264,8 +264,8 @@ handle_req(Request, State) ->
 
 handle_side_effects([]) ->
     ok;
-handle_side_effects([{execute, {{fsm, FSM}, {QId, Qry}}} | T]) ->
-    ok = riak_kv_qry:execute(FSM, {QId, Qry}),
+handle_side_effects([{execute, {{fsm, FSM}, {QId, Qry, DDL}}} | T]) ->
+    ok = riak_kv_qry:execute(FSM, {QId, Qry, DDL}),
     handle_side_effects(T);
 handle_side_effects([H | T]) ->
     io:format("riak_kv_qry_queue:handling side_effect ~p~n", [H]),

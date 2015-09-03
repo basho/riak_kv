@@ -42,11 +42,6 @@
 	 code_change/3
 	]).
 
-%% Debuggin, yo
--export([
-	 get_ddl_FIXUP/0
-	]).
-
 -ifdef(TEST).
 -export([
 	 runner_TEST/1
@@ -65,6 +60,7 @@
 
 -record(state, {
           name       :: atom(),
+          ddl,
           qry = none :: none | #riak_sql_v1{},
           qid = undefined :: {node(), non_neg_integer()},
           status = void   :: qry_status(),
@@ -88,8 +84,8 @@ start_link(Name) ->
 %%%===================================================================
 %%% API
 %%%===================================================================
-execute(FSM, {QId, Qry}) ->
-    gen_server:call(FSM, {execute, {QId, Qry}}).
+execute(FSM, {QId, Qry, DDL}) ->
+    gen_server:call(FSM, {execute, {QId, Qry, DDL}}).
 
 fetch(FSM, QId) ->
     gen_server:call(FSM, {fetch, QId}).
@@ -220,10 +216,8 @@ code_change(_OldVsn, State, _Extra) ->
 handle_req(_, State = #state{status = accumulating}) ->
     {prev_query_unfinished, [], State};
 
-handle_req({execute, {QId, Qry}}, State) ->
+handle_req({execute, {QId, Qry, DDL}}, State) ->
     %% TODO make this run with multiple sub-queries
-    %% TODO fix this up properly
-    {ok, DDL} = get_ddl_FIXUP(),
     Queries = riak_kv_qry_compiler:compile(DDL, Qry),
     SEs = [{run_sub_query, {qry, X}, {qid, QId}} || X <- Queries],
     {ok, SEs, State#state{qid = QId,
@@ -259,19 +253,6 @@ handle_side_effects([H | T]) ->
     io:format("in riak_kv_qry:handle_side_effects not handling ~p~n", [H]),
     handle_side_effects(T).
 
-get_ddl_FIXUP() ->
-    SQL = "CREATE TABLE GeoCheckin " ++
-	"(geohash varchar not null, " ++ 
-	"user varchar not null, " ++
-	"time timestamp not null, " ++ 
-	"weather varchar not null, " ++ 
-	"temperature varchar, " ++ 
-	"PRIMARY KEY((quantum(time, 15, s)), time, user))", 
-    Lexed = riak_ql_lexer:get_tokens(SQL),
-    {ok, _DDL} = riak_ql_parser:parse(Lexed).
-
-decode_results(ListOfBins) ->
-    decode_results(ListOfBins, []).
 decode_results([], Acc) ->
     %% lists:reverse(Acc);  %% recall that ListOfBins is in fact
     %% reversed (as it was accumulated from chunks in handle_info)
