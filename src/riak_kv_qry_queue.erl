@@ -25,29 +25,29 @@
 
 %% User API
 -export([
-	 put_on_queue/2,
+         put_on_queue/2,
          fetch/1
-	]).
+        ]).
 
 %% OTP API
 -export([
-	 start_link/1
-	]).
+         start_link/1
+        ]).
 
 %% gen_server callbacks
 -export([
-	 init/1,
-	 handle_call/3,
-	 handle_cast/2,
-	 handle_info/2,
-	 terminate/2,
-	 code_change/3
-	]).
+         init/1,
+         handle_call/3,
+         handle_cast/2,
+         handle_info/2,
+         terminate/2,
+         code_change/3
+        ]).
 
 -ifdef(TEST).
 -export([
-	 runner_TEST/1
-	 ]).
+         runner_TEST/1
+         ]).
 -endif.
 
 -include("riak_kv_qry_queue.hrl").
@@ -64,21 +64,21 @@
 -type timestamp() :: pos_integer().
 
 -record(fsm, {
-	  name                 :: name(),
-	  qry      = none      :: none | {any(), qry()},
-	  status   = available :: statuses()
-	 }).
+          name                 :: name(),
+          qry      = none      :: none | {any(), qry()},
+          status   = available :: statuses()
+         }).
 
 -record(state, {
-	  fsms           = [],
-	  inflight_qrys  = [] :: [{query_id(), qry()}],
-	  queued_qrys    = [] :: [{query_id(), qry()}],
-	  available_FSMs = [] :: [name()],
-	  results        = [],
-	  timestamp      = timestamp() :: timestamp(),
-	  next_query_id  = 1,
-	  max_q_len      = 0
-	 }).
+          fsms           = [],
+          inflight_qrys  = [] :: [{query_id(), qry()}],
+          queued_qrys    = [] :: [{query_id(), qry()}],
+          available_FSMs = [] :: [name()],
+          results        = [],
+          timestamp      = timestamp() :: timestamp(),
+          next_query_id  = 1,
+          max_q_len      = 0
+         }).
 
 %%%===================================================================
 %%% API
@@ -119,11 +119,11 @@ start_link({MaxQueue, Names}) ->
 %% @end
 %%--------------------------------------------------------------------
 init([MaxQ, Names]) when is_integer(MaxQ) andalso MaxQ > 0,
-			 is_list(Names) ->
+                         is_list(Names) ->
     FSMs = [#fsm{name = X} || X <- Names],
     {ok, #state{fsms           = FSMs,
-		available_FSMs = Names,
-		max_q_len      = MaxQ}}.
+                available_FSMs = Names,
+                max_q_len      = MaxQ}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -203,39 +203,39 @@ timestamp() ->
     (MegaSeconds * 1000000000000) + (Seconds * 1000000) + MilliSeconds.
 
 is_overloaded(#state{queued_qrys = Q,
-		     max_q_len   = Max}) when length(Q) >= Max -> true;
+                     max_q_len   = Max}) when length(Q) >= Max -> true;
 is_overloaded(#state{queued_qrys = Q,
-		     max_q_len   = Max}) when length(Q) <  Max -> false.
+                     max_q_len   = Max}) when length(Q) <  Max -> false.
 
 handle_req({put_on_queue, Qry, DDL}, State) ->
     #state{fsms           = FSMs,
-	   available_FSMs = Avl,
-	   queued_qrys    = Q,
-	   next_query_id  = Id}  = State,
+           available_FSMs = Avl,
+           queued_qrys    = Q,
+           next_query_id  = Id}  = State,
     QId = {node(), Id},
     Reply = {qid, QId},
     %% naive case of short queues where we append the queued query to the end of the Q
     case Avl of
-	[]      -> case is_overloaded(State) of
-		       false ->
-			   NewS = State#state{queued_qrys   = Q ++ [{QId, Qry}],
-					      next_query_id = Id + 1},
-			   {Reply, ?NO_SIDEEFFECTS, NewS};
-		       true  ->
-			   Over = {overloaded,
-				   {max_queue_length, State#state.max_q_len}},
-			   {Over, ?NO_SIDEEFFECTS, State}
-		   end;
-	[H | T] -> F = #fsm{name   = H,
-			    status = in_progress,
-			    qry    = {QId, Qry}},
-		   NewFSMs = lists:keyreplace(H, 2, FSMs, F),
-		   NewAvl = T,
-		   Disp = {execute, {{fsm, H}, {QId, Qry, DDL}}},
-		   NewS = State#state{fsms           = NewFSMs,
-				      available_FSMs = NewAvl,
-				      next_query_id  = Id + 1},
-		   {Reply, [Disp], NewS}
+        []      -> case is_overloaded(State) of
+                       false ->
+                           NewS = State#state{queued_qrys   = Q ++ [{QId, Qry}],
+                                              next_query_id = Id + 1},
+                           {Reply, ?NO_SIDEEFFECTS, NewS};
+                       true  ->
+                           Over = {overloaded,
+                                   {max_queue_length, State#state.max_q_len}},
+                           {Over, ?NO_SIDEEFFECTS, State}
+                   end;
+        [H | T] -> F = #fsm{name   = H,
+                            status = in_progress,
+                            qry    = {QId, Qry}},
+                   NewFSMs = lists:keyreplace(H, 2, FSMs, F),
+                   NewAvl = T,
+                   Disp = {execute, {{fsm, H}, {QId, Qry, DDL}}},
+                   NewS = State#state{fsms           = NewFSMs,
+                                      available_FSMs = NewAvl,
+                                      next_query_id  = Id + 1},
+                   {Reply, [Disp], NewS}
     end;
 handle_req({fetch, QId}, State = #state{fsms = FSMs}) ->
     case [Name || #fsm{qry = {Qi, _}, name = Name} <- FSMs, QId == Qi] of
@@ -285,7 +285,7 @@ handle_side_effects([H | T]) ->
 -define(NO_OUTPUTS, []).
 
 runner_TEST(Tests) -> io:format("running tests ~p~n", [Tests]),
-		      test_r2(Tests, #state{}, 1, [], [], []).
+                      test_r2(Tests, #state{}, 1, [], [], []).
 
 test_r2([], _State, _LineNo, SideEffects, Replies, Errs) ->
     {lists:reverse(SideEffects), lists:reverse(Replies), lists:reverse(Errs)};
@@ -314,32 +314,32 @@ run({dump, errors}, State, LNo, SideEffects, Replies, Errs) ->
 run({msg, Msg}, State, _LNo, SideEffects, Replies, Errs) ->
     {Reply, SEs, NewState} = handle_req(Msg, State),
     NewSEs = case SEs of
-		 [] -> SideEffects;
-		 _  -> lists:flatten(SEs, SideEffects)
-	     end,
+                 [] -> SideEffects;
+                 _  -> lists:flatten(SEs, SideEffects)
+             end,
     io:format("after running ~p reply is ~p NewSEs is ~p~n", [Msg, Reply, NewSEs]),
     {NewState, NewSEs, [Reply | Replies], Errs};
 run({side_effect, G}, State, LNo, SEs, Replies, Errs) ->
     io:format("in side effects G is ~p~n-SEs is ~p~n", [G, SEs]),
     {NewSE, NewErrs}
-	= case SEs of
-	      []      -> Err = {error, {line_no, LNo}, {side_effect, {expected, []}, {got, G}}},
-			 {[], [Err | Errs]};
-	      [G | T] -> {T, Errs};
-	      [E | T] -> Err = {error, {line_no, LNo}, {side_effect, {expected, E}, {got, G}}},
-			 {T, [Err | Errs]}
-	  end,
+        = case SEs of
+              []      -> Err = {error, {line_no, LNo}, {side_effect, {expected, []}, {got, G}}},
+                         {[], [Err | Errs]};
+              [G | T] -> {T, Errs};
+              [E | T] -> Err = {error, {line_no, LNo}, {side_effect, {expected, E}, {got, G}}},
+                         {T, [Err | Errs]}
+          end,
     {State, NewSE, Replies, NewErrs};
 run({reply, G}, State, LNo, SideEffects, Replies, Errs) ->
     io:format("in replies G is ~p~n-Replies is ~p~n", [G, Replies]),
     {NewRs, NewErrs}
-	= case Replies of
-	      []      -> Err = {error, {line_no, LNo}, {reply, {expected, []}, {got, G}}},
-			 {[], [Err | Errs]};
-	      [G | T] -> {T, Errs};
-	      [E | T] -> Err = {error, {line_no, LNo}, {reply, {expected, E}, {got, G}}},
-			 {T, [Err | Errs]}
-	  end,
+        = case Replies of
+              []      -> Err = {error, {line_no, LNo}, {reply, {expected, []}, {got, G}}},
+                         {[], [Err | Errs]};
+              [G | T] -> {T, Errs};
+              [E | T] -> Err = {error, {line_no, LNo}, {reply, {expected, E}, {got, G}}},
+                         {T, [Err | Errs]}
+          end,
     {State, SideEffects, NewRs, NewErrs};
 run(H, State, LNo, SideEffects, Replies, Errs) ->
     Err = {error, {line_no, LNo}, {unknown_test_state, H}},
@@ -349,47 +349,47 @@ run(H, State, LNo, SideEffects, Replies, Errs) ->
 
 simple_init_test() ->
     Tests = [
-	     {run,   {init, {?MAX_Q_LEN, [fsm1, fsm2]}}},
-	     {msg,   get_active_qrys},
-	     {reply, {active_qrys, []}},
-	     {msg,   get_queued_qrys},
-	     {reply, {queued_qrys, []}}
-	   ],
+             {run,   {init, {?MAX_Q_LEN, [fsm1, fsm2]}}},
+             {msg,   get_active_qrys},
+             {reply, {active_qrys, []}},
+             {msg,   get_queued_qrys},
+             {reply, {queued_qrys, []}}
+           ],
     Results = runner_TEST(Tests),
     ?assertEqual({[], [], []}, Results).
 
 simple_queue_test() ->
     Tests = [
-	     {run,         {init, {?MAX_Q_LEN, [fsm1, fsm2]}}},
-	     {msg,         {put_on_queue, a_query}},
-	     {reply,       {qid, {node(), 1}}},
-	     {side_effect, {execute, {{fsm, fsm1}, {{node(), 1}, a_query}}}},
-	     {msg,         get_active_qrys},
-	     {reply,       {active_qrys, [{node(), 1}]}}
-	   ],
+             {run,         {init, {?MAX_Q_LEN, [fsm1, fsm2]}}},
+             {msg,         {put_on_queue, a_query}},
+             {reply,       {qid, {node(), 1}}},
+             {side_effect, {execute, {{fsm, fsm1}, {{node(), 1}, a_query}}}},
+             {msg,         get_active_qrys},
+             {reply,       {active_qrys, [{node(), 1}]}}
+           ],
     {SideEffects, Replies, Errors} = runner_TEST(Tests),
     ?assertEqual({[], [], []}, {SideEffects, Replies, Errors}).
 
 simple_queue_2_test() ->
     Tests = [
-	     {run,   {init, {?MAX_Q_LEN, [fsm1, fsm2]}}},
-	     {msg,   {put_on_queue, a_query}},
-	     {msg,   {put_on_queue, a_query}},
-	     {msg,   {put_on_queue, a_query}},
-	     {msg,   {put_on_queue, a_query}},
-	     {clear, replies},
-	     {clear, side_effects},
-	     {msg,   get_active_qrys},
-	     {reply, {active_qrys, [
-				    {node(), 1},
-				    {node(), 2}
-				   ]}},
-	     {msg,   get_queued_qrys},
-	     {reply, {queued_qrys, [
-				    {node(), 3},
-				    {node(), 4}
-				   ]}}
-	    ],
+             {run,   {init, {?MAX_Q_LEN, [fsm1, fsm2]}}},
+             {msg,   {put_on_queue, a_query}},
+             {msg,   {put_on_queue, a_query}},
+             {msg,   {put_on_queue, a_query}},
+             {msg,   {put_on_queue, a_query}},
+             {clear, replies},
+             {clear, side_effects},
+             {msg,   get_active_qrys},
+             {reply, {active_qrys, [
+                                    {node(), 1},
+                                    {node(), 2}
+                                   ]}},
+             {msg,   get_queued_qrys},
+             {reply, {queued_qrys, [
+                                    {node(), 3},
+                                    {node(), 4}
+                                   ]}}
+            ],
     {SideEffects, Replies, Errors} = runner_TEST(Tests),
     ?assertEqual({[], [], []}, {SideEffects, Replies, Errors}).
 
@@ -397,15 +397,15 @@ simple_queue_2_test() ->
 
 simple_overload_test() ->
     Tests = [
-	     {run,   {init, {?SHORT_Q, [fsm1, fsm2]}}},
-	     {msg,   {put_on_queue,  a_query}},
-	     {msg,   {put_on_queue,  a_query}},
-	     {msg,   {put_on_queue,  a_query}},
-	     {clear, replies},
-	     {clear, side_effects},
-	     {msg,   {put_on_queue,  a_query}},
-	     {reply, {overloaded, {max_queue_length, ?SHORT_Q}}}
-	    ],
+             {run,   {init, {?SHORT_Q, [fsm1, fsm2]}}},
+             {msg,   {put_on_queue,  a_query}},
+             {msg,   {put_on_queue,  a_query}},
+             {msg,   {put_on_queue,  a_query}},
+             {clear, replies},
+             {clear, side_effects},
+             {msg,   {put_on_queue,  a_query}},
+             {reply, {overloaded, {max_queue_length, ?SHORT_Q}}}
+            ],
     {SideEffects, Replies, Errors} = runner_TEST(Tests),
     ?assertEqual({[], [], []}, {SideEffects, Replies, Errors}).
 

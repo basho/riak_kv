@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%%
-%%% riak_kv_qry_q_fsm.hrl: defines the interfaces of the fsm
+%%% riak_kv_qry.hrl: defines the interfaces of the fsm
 %%%
 %%% Copyright (C) 2015 Basho Technologies, Inc. All rights reserved
 %%%

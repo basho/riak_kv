@@ -34,18 +34,18 @@
 
 %% gen_server callbacks
 -export([
-	 init/1,
-	 handle_call/3,
-	 handle_cast/2,
-	 handle_info/2,
-	 terminate/2,
-	 code_change/3
-	]).
+         init/1,
+         handle_call/3,
+         handle_cast/2,
+         handle_info/2,
+         terminate/2,
+         code_change/3
+        ]).
 
 -ifdef(TEST).
 -export([
-	 runner_TEST/1
-	]).
+         runner_TEST/1
+        ]).
 -endif.
 
 -include_lib("riak_ql/include/riak_ql_sql.hrl").
@@ -295,7 +295,7 @@ unpack_objects(Batch, Acc) ->
 -define(NO_OUTPUTS, []).
 
 runner_TEST(Tests) -> io:format("running tests ~p~n", [Tests]),
-		      test_r2(Tests, #state{}, 1, [], [], []).
+                      test_r2(Tests, #state{}, 1, [], [], []).
 
 test_r2([], _State, _LineNo, SideEffects, Replies, Errs) ->
     {lists:reverse(SideEffects), lists:reverse(Replies), lists:reverse(Errs)};
@@ -324,29 +324,29 @@ run({dump, errors}, State, LNo, SideEffects, Replies, Errs) ->
 run({msg, Msg}, State, _LNo, SideEffects, Replies, Errs) ->
     {Reply, SEs, NewState} = handle_req(Msg, State),
     NewSEs = case SEs of
-		 [] -> SideEffects;
-		 _  -> lists:flatten(SEs, SideEffects)
-	     end,
+                 [] -> SideEffects;
+                 _  -> lists:flatten(SEs, SideEffects)
+             end,
     {NewState, NewSEs, [Reply | Replies], Errs};
 run({side_effect, G}, State, LNo, SEs, Replies, Errs) ->
     {NewSE, NewErrs}
-	= case SEs of
-	      []      -> Err = {error, {line_no, LNo}, {side_effect, {expected, []}, {got, G}}},
-			 {[], [Err | Errs]};
-	      [G | T] -> {T, Errs};
-	      [E | T] -> Err = {error, {line_no, LNo}, {side_effect, {expected, E}, {got, G}}},
-			 {T, [Err | Errs]}
-	  end,
+        = case SEs of
+              []      -> Err = {error, {line_no, LNo}, {side_effect, {expected, []}, {got, G}}},
+                         {[], [Err | Errs]};
+              [G | T] -> {T, Errs};
+              [E | T] -> Err = {error, {line_no, LNo}, {side_effect, {expected, E}, {got, G}}},
+                         {T, [Err | Errs]}
+          end,
     {State, NewSE, Replies, NewErrs};
 run({reply, G}, State, LNo, SideEffects, Replies, Errs) ->
     {NewRs, NewErrs}
-	= case Replies of
-	      []      -> Err = {error, {line_no, LNo}, {reply, {expected, []}, {got, G}}},
-			 {[], [Err | Errs]};
-	      [G | T] -> {T, Errs};
-	      [E | T] -> Err = {error, {line_no, LNo}, {reply, {expected, E}, {got, G}}},
-			 {T, [Err | Errs]}
-	  end,
+        = case Replies of
+              []      -> Err = {error, {line_no, LNo}, {reply, {expected, []}, {got, G}}},
+                         {[], [Err | Errs]};
+              [G | T] -> {T, Errs};
+              [E | T] -> Err = {error, {line_no, LNo}, {reply, {expected, E}, {got, G}}},
+                         {T, [Err | Errs]}
+          end,
     {State, SideEffects, NewRs, NewErrs};
 run(H, State, LNo, SideEffects, Replies, Errs) ->
     Err = {error, {line_no, LNo}, {unknown_test_state, H}},
@@ -356,8 +356,8 @@ run(H, State, LNo, SideEffects, Replies, Errs) ->
 
 simple_init_test() ->
     Tests = [
-	     {run, {init, [fms1]}}
-	   ],
+             {run, {init, [fms1]}}
+           ],
     Results = runner_TEST(Tests),
     ?assertEqual({[], [], []}, Results).
 
