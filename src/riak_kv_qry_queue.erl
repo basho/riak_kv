@@ -51,29 +51,25 @@
 -endif.
 
 -include("riak_kv_qry_queue.hrl").
--include("riak_kv_index.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").  %% for #ddl_v1{}
 
 -define(SERVER, ?MODULE).
 
 -define(NO_SIDEEFFECTS, []).
 
--type name()      :: atom().
--type query_id()  :: {node(), integer()}.
--type statuses()  :: available | in_progress.
--type qry()       :: ?KV_SQL_Q{}.
--type timestamp() :: pos_integer().
-
 -record(fsm, {
-          name                 :: name(),
+          name                 :: qry_fsm_name(),
           qry      = none      :: none | {any(), qry()},
-          status   = available :: statuses()
+          status   = available :: qry_status()
          }).
+-type fsm() :: #fsm{}.
+-export_type([fsm/0]).  %% for specs in companion riak_kv_qry.erl
 
 -record(state, {
           fsms           = [],
           inflight_qrys  = [] :: [{query_id(), qry()}],
           queued_qrys    = [] :: [{query_id(), qry()}],
-          available_FSMs = [] :: [name()],
+          available_FSMs = [] :: [qry_fsm_name()],
           results        = [],
           timestamp      = timestamp() :: timestamp(),
           next_query_id  = 1,
@@ -83,11 +79,20 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
+
+-spec put_on_queue(qry(), #ddl_v1{}) -> ok | {error, atom()}.
+%% @doc Submit a query for execution. The query should be compatible
+%%      with the DDL supplied.  To get the results of running the
+%%      query, use fetch/1.
 put_on_queue(Qry, DDL) ->
     gen_server:call(?MODULE, {put_on_queue, Qry, DDL}).
 
+-spec fetch(query_id()) -> list() | {error, atom()}.
+%% @doc Fetch the results of execution of a previously submitted
+%%      query.
 fetch(QId) ->
     gen_server:call(?MODULE, {fetch, QId}).
+
 
 %%%===================================================================
 %%% OTP API

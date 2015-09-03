@@ -48,23 +48,22 @@
         ]).
 -endif.
 
+-include("riak_kv_qry_queue.hrl").
 -include_lib("riak_ql/include/riak_ql_sql.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -define(SERVER, ?MODULE).
 -define(NO_SIDEEFFECTS, []).
 -define(NO_MAX_RESULTS, no_max_results).
 -define(NO_PG_SORT, undefined).
 
--type qry_status() :: void | accumulating | complete.
--type qry_result() :: [binary()].
-
 -record(state, {
           name       :: atom(),
-          ddl,
+          ddl        :: undefined | #ddl_v1{},
           qry = none :: none | #riak_sql_v1{},
           qid = undefined :: {node(), non_neg_integer()},
-          status = void   :: qry_status(),
-          result = []     :: qry_result()
+          status = void   :: void | accumulating | complete,
+          result = []     :: [binary()]
          }).
 
 %%%===================================================================
@@ -84,9 +83,12 @@ start_link(Name) ->
 %%%===================================================================
 %%% API
 %%%===================================================================
+
+-spec execute(riak_kv_qry_queue:fsm(), {qry(), #ddl_v1{}, #ddl_v1{}}) -> ok | {error, atom()}.
 execute(FSM, {QId, Qry, DDL}) ->
     gen_server:call(FSM, {execute, {QId, Qry, DDL}}).
 
+-spec fetch(riak_kv_qry_queue:fsm(), query_id()) -> list() | {error, atom()}.
 fetch(FSM, QId) ->
     gen_server:call(FSM, {fetch, QId}).
 
@@ -144,7 +146,7 @@ handle_call(Request, _From, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_cast(Msg, State) ->
-    io:format("in handle cast for riak_kv_qry~n- ~p~n", [Msg]),
+    lager:debug("in handle cast for riak_kv_qry~n- ~p~n", [Msg]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -262,21 +264,19 @@ decode_results([], Acc) ->
     Acc;
 decode_results([BList|Rest], Acc) ->
     Objects = unpack_objects(BList, []),
-    io:format("Records! ~p\n", [Objects]),
     decode_results(
       Rest, [Objects | Acc]).
 
 unpack_objects(<<>>, Acc) ->
     Acc;
 unpack_objects(Batch, Acc) ->
-    {Key, B1} = eleveldb:parse_string(Batch),
-    {Val, B2} = eleveldb:parse_string(B1),
-    io:format("K/V: ~p\n   :~p\n", [Key, size(Val)]),
-    %% don't care about bkey
+    {_Key, B1} = eleveldb:parse_string(Batch),
+    { Val, B2} = eleveldb:parse_string(B1),
     Record =
         eleveldb_ts:decode_record(
           riak_object:get_value(
             riak_object:from_binary(
+              %% don't care about bkey
               <<>>, <<>>, Val))),
     unpack_objects(B2, [Record | Acc]).
 
