@@ -45,7 +45,7 @@ submit(Query, DDL) ->
             case riak_ql_ddl:is_query_valid(DDL, SQL) of
                 true ->
                     riak_kv_qry_queue:put_on_queue(SQL, DDL);
-                false ->
+                _ ->
                     {error, malformed_query}
             end
     end.
@@ -55,7 +55,7 @@ submit(Query, DDL) ->
 %% @doc Fetch the results of execution of a previously submitted
 %%      query.
 fetch(QId) ->
-    riak_kv_qry_worker:fetch(QId).
+    riak_kv_qry_queue:fetch(QId).
 
 
 %%%===================================================================

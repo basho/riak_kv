@@ -65,10 +65,10 @@
 -define(NO_PG_SORT, undefined).
 
 -record(state, {
-          name       :: atom(),
+          name       :: qry_fsm_name(),
           ddl        :: undefined | #ddl_v1{},
           qry = none :: none | #riak_sql_v1{},
-          qid = undefined :: {node(), non_neg_integer()},
+          qid = undefined :: undefined | {node(), non_neg_integer()},
           status = void   :: void | accumulating | complete,
           result = []     :: [binary()]
          }).
@@ -77,15 +77,10 @@
 %%% OTP API
 %%%===================================================================
 
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
-%% @end
-%%--------------------------------------------------------------------
+-spec start_link(qry_fsm_name()) -> {ok, pid()} | ignore | {error, term()}.
 start_link(Name) ->
     gen_server:start_link({local, Name}, ?MODULE, [Name], []).
+
 
 %%%===================================================================
 %%% API
@@ -99,38 +94,20 @@ execute(FSMName, {QId, Qry, DDL}) ->
 fetch(FSMName, QId) ->
     gen_server:call(FSMName, {fetch, QId}).
 
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
-%%--------------------------------------------------------------------
+-spec init([qry_fsm_name()]) -> {ok, #state{}}.
 %% @private
-%% @doc
-%% Initializes the server
-%%
-%% @spec init(Args) -> {ok, State} |
-%%                     {ok, State, Timeout} |
-%%                     ignore |
-%%                     {stop, Reason}
-%% @end
-%%--------------------------------------------------------------------
 init([Name]) ->
     {ok, #state{name = Name}}.
 
-%%--------------------------------------------------------------------
+
+-spec handle_call(term(), {pid(), term()}, #state{}) ->
+                         {reply, Reply::ok | {error, atom()} | list(), #state{}}.
 %% @private
-%% @doc
-%% Handling call messages
-%%
-%% @spec handle_call(Request, From, State) ->
-%%                                   {reply, Reply, State} |
-%%                                   {reply, Reply, State, Timeout} |
-%%                                   {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, Reply, State} |
-%%                                   {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
 handle_call(Request, _From, State) ->
     case handle_req(Request, State) of
         {ok, SEs, State9} when is_list(SEs) ->
@@ -142,30 +119,16 @@ handle_call(Request, _From, State) ->
             {reply, Result, State9}
     end.
 
-%%--------------------------------------------------------------------
+
+-spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
 %% @private
-%% @doc
-%% Handling cast messages
-%%
-%% @spec handle_cast(Msg, State) -> {noreply, State} |
-%%                                  {noreply, State, Timeout} |
-%%                                  {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
 handle_cast(Msg, State) ->
-    lager:debug("in handle cast for riak_kv_qry~n- ~p~n", [Msg]),
+    lager:info("Not handling cast message ~p\n", [Msg]),
     {noreply, State}.
 
-%%--------------------------------------------------------------------
+
+-spec handle_info(term(), #state{}) -> {noreply, #state{}}.
 %% @private
-%% @doc
-%% Handling all non call/cast messages
-%%
-%% @spec handle_info(Info, State) -> {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
 handle_info({QId, done},
             State = #state{qid = QId,
                            status = QStatus})
@@ -184,44 +147,34 @@ handle_info({QId, {results, [Chunk]}},
 handle_info({QId, {results, _}},
             State = #state{qid = QId,
                            status = complete}) ->
-    lager:warn("Discarding late chunk on qid ~p", [QId]),
+    lager:warning("Discarding late chunk on qid ~p", [QId]),
     {noreply, State};
 
 %% other error conditions
 handle_info({QId1, _}, State = #state{qid = QId2}) ->
-    lager:warn("Bad query id ~p (expected ~p)", [QId1, QId2]),
+    lager:warning("Bad query id ~p (expected ~p)", [QId1, QId2]),
     {noreply, State}.
 
 
-%%--------------------------------------------------------------------
+-spec terminate(term(), #state{}) -> term().
 %% @private
-%% @doc
-%% This function is called by a gen_server when it is about to
-%% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_server terminates
-%% with Reason. The return value is ignored.
-%%
-%% @spec terminate(Reason, State) -> void()
-%% @end
-%%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
     ok.
 
-%%--------------------------------------------------------------------
+
+-spec code_change(term() | {down, term()}, #state{}, term()) -> {ok, #state{}}.
 %% @private
-%% @doc
-%% Convert process state when code is changed
-%%
-%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
-%% @end
-%%--------------------------------------------------------------------
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
 
+-spec handle_req({atom(), term()}, #state{}) ->
+                        {atom() | list(list({Key::string(), term()})),
+                         list(), #state{}}.
 handle_req(_, State = #state{status = accumulating}) ->
     {prev_query_unfinished, [], State};
 
