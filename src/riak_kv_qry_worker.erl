@@ -178,7 +178,7 @@ handle_info({QId, {results, [Chunk]}},
                            result = Accumulated})
   when QStatus =:= void; QStatus =:= accumulating ->
     {noreply, State#state{status = accumulating,
-                          result = [Chunk | Accumulated]}};
+                          result = [decode_results(Chunk) | Accumulated]}};
 
 %% what if some late chunks arrive?
 handle_info({QId, {results, _}},
@@ -241,9 +241,9 @@ handle_req({fetch, QId}, State = #state{qid = QId,
     {in_progress, [], State};
 handle_req({fetch, QId}, State = #state{qid = QId,
                                         result = Result}) ->
-    {decode_results(Result), [], State#state{qid = undefined,
-                                             status = accumulating,
-                                             result = []}};
+    {Result, [], State#state{qid = undefined,
+                             status = accumulating,
+                             result = []}};
 
 handle_req(_Request, State) ->
     {ok, ?NO_SIDEEFFECTS, State}.
@@ -263,8 +263,8 @@ handle_side_effects([H | T]) ->
     handle_side_effects(T).
 
 
-decode_results(NestedListOfBins) ->
-    decode_results(lists:flatten(NestedListOfBins), []).
+decode_results(ListOfBins) ->
+    decode_results(ListOfBins, []).
 decode_results([], Acc) ->
     %% lists:reverse(Acc);  %% recall that ListOfBins is in fact
     %% reversed (as it was accumulated from chunks in handle_info)
