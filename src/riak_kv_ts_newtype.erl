@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_ts_newtype: Supervises local DDL compilation
+%% riak_kv_ts_newtype: 
 %%
 %% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -20,324 +20,152 @@
 %%
 %% -------------------------------------------------------------------
 
-%% XXX: would like to leverage supervisor:which_children on start to
-%% build the transitions data structure in case of a restart
-
 -module(riak_kv_ts_newtype).
-
 -behaviour(gen_server).
 
-%% API
--export([start_link/2, new_type/1, get_status/1, dump_status/1]).
+%% API.
+-export([start_link/0]).
+-export([new_type/1]).
 
-%% Worker API
--export([notify/2]).
-
-%% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
-
--define(SERVER, ?MODULE).
+%% gen_server.
+-export([init/1]).
+-export([handle_call/3]).
+-export([handle_cast/2]).
+-export([handle_info/2]).
+-export([terminate/2]).
+-export([code_change/3]).
 
 -record(state, {
-          compilation_supervisor   :: module(),
-          compiler_mod             :: module(),
-          transitions = []         :: list(tuple())
-         }).
+}).
 
-%% The transitions list is a list of tuples:
-%%    {type name, [transition info], worker process|undefined}
-%%
-%% List of transitions is most recent at the head
-%%
-%% Each transition info item is a tuple: {state, timestamp}
-%%
-%% States:
+-define(new_metadata_appeared,new_metadata_appeared).
+-define(BUCKET_TYPE_PREFIX, {core, bucket_types}).
 
-%% notfound is a generated status if a client invokes get_status or
-%% dump_status on a type we haven't been notified of
+%%% 
+%%% API.
+%%%
 
-%%   {start_failed, Reason}
-%%   worker_started (worker launched, says nothing about compile started)
-%%   compile_started (from worker)
-%%   {compile_failed, Reason} (from worker)
-%%   {worker_crashed, Reason}
-%%   compile_success (from worker)
-%%   activated
-%%   activated_no_compile (worker awoke from waiting to discover type
-%%                         already active)
-%%   deleted (type vanished before worker could finish its job)
+-spec start_link() -> {ok, pid()}.
+start_link() ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-%% Those transition states map to the following status codes as
-%% reported to anyone who asks:
-%%    running  | worker_started, compile_started
-%%    {failed, Reason}   | start_failed, compile_failed, worker_crashed
-%%    compiled | compile_success, activated
-%%    {error, <status>} where <status> is any of the others
-
-%%%===================================================================
-%%% API
-%%%===================================================================
-%% @doc Alert us to a new timeseries bucket type. Call
-%% asynchronously.
 -spec new_type(binary()) -> ok.
 new_type(BucketType) ->
     gen_server:cast(?MODULE, {new_type, BucketType}).
 
-get_status(BucketType) ->
-    gen_server:call(?MODULE, {status, BucketType}).
+%%% 
+%%% gen_server.
+%%%
 
-dump_status(BucketType) ->
-    gen_server:call(?MODULE, {dump, BucketType}).
+init([]) ->
+    process_flag(trap_exit, true),
+    
+    riak_kv_compile_tab:new(),
+    {ok, #state{}}.
 
-notify(Type, Status) ->
-    gen_server:cast(?MODULE, {notify, Type, Status}).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
-%% @end
-%%--------------------------------------------------------------------
-start_link(CompilationSup, CompilerMod) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE,
-                          [CompilationSup, CompilerMod], []).
-
-%%%===================================================================
-%%% gen_server callbacks
-%%%===================================================================
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Initializes the server
-%%
-%% @spec init(Args) -> {ok, State} |
-%%                     {ok, State, Timeout} |
-%%                     ignore |
-%%                     {stop, Reason}
-%% @end
-%%--------------------------------------------------------------------
-init([CompilationSup, CompilerMod]) ->
-    {ok, #state{compilation_supervisor=CompilationSup,
-                compiler_mod=CompilerMod}}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling call messages
-%%
-%% @spec handle_call(Request, From, State) ->
-%%                                   {reply, Reply, State} |
-%%                                   {reply, Reply, State, Timeout} |
-%%                                   {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, Reply, State} |
-%%                                   {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
-handle_call({status, Type}, _From, #state{transitions=Transitions}=State) ->
-    {reply, get_status(Type, Transitions), State};
-handle_call({dump, Type}, _From, #state{transitions=Transitions}=State) ->
-    {reply, dump_status(Type, Transitions), State};
 handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
+    {reply, ignored, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling cast messages
-%%
-%% @spec handle_cast(Msg, State) -> {noreply, State} |
-%%                                  {noreply, State, Timeout} |
-%%                                  {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
-handle_cast({new_type, Type}, State) ->
-    UpdatedTransitions = launch_worker(Type, State),
-    {noreply, State#state{transitions=UpdatedTransitions}};
-handle_cast({notify, Type, Status}, #state{transitions=Transitions}=State) ->
-    UpdatedTransitions = worker_update(Status, Type, Transitions),
-    {noreply, State#state{transitions=UpdatedTransitions}}.
-
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling all non call/cast messages
-%%
-%% @spec handle_info(Info, State) -> {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
-handle_info({'DOWN', _MonitorRef, process, _Pid, normal}, State) ->
-    %% We don't particularly care about normal exits, don't even need
-    %% (probably?) to clean them out of the transitions list
+handle_cast({new_type, Bucket_type}, State) ->
+    ok = do_new_type(Bucket_type),
     {noreply, State};
-handle_info({'DOWN', _MonitorRef, process, _Pid, restarting}, State) ->
-    %% This is our own kill; someone sent us a new_type message for a
-    %% type which was already under "construction". We updated the
-    %% transitions list already, no need to do anything further.
-    {noreply, State};
-handle_info({'DOWN', _MonitorRef, process, Pid, Reason},
-            #state{transitions=Transitions}=State) ->
-    %% Any other death reason, we should capture in our transitions list
-    {noreply, State#state{transitions=crashed(Pid, Reason, Transitions)}};
-handle_info(_Info, State) ->
+handle_cast(_Msg, State) ->
     {noreply, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called by a gen_server when it is about to
-%% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_server terminates
-%% with Reason. The return value is ignored.
-%%
-%% @spec terminate(Reason, State) -> void()
-%% @end
-%%--------------------------------------------------------------------
+handle_info({'EXIT', _, normal}, State) ->
+    % success
+    {noreply, State};
+handle_info({'EXIT', _, ?new_metadata_appeared}, State) ->
+    % this means that the process was interrupted while compiling by an update
+    % to the metadata
+    {noreply, State};
+handle_info({'EXIT', _, _Error}, State) ->
+    % compilation error, check
+    {noreply, State};
+handle_info(_, State) ->
+    {noreply, State}.
+
 terminate(_Reason, _State) ->
     ok.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Convert process state when code is changed
-%%
-%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
-%% @end
-%%--------------------------------------------------------------------
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-%%%===================================================================
-%%% Internal functions
-%%%===================================================================
+%%% 
+%%% Internal.
+%%%
 
-get_status(Type, Transitions) ->
-    latest_status(lists:keyfind(Type, 1, Transitions)).
-
-dump_status(Type, Transitions) ->
-    all_status(lists:keyfind(Type, 1, Transitions)).
-
-latest_status(false) ->
-    notfound;
-latest_status({_Type, [H|_T], _Pid}) ->
-    status_to_external(H).
-
-all_status(false) ->
-    notfound;
-all_status({_Type, List, _Pid}) ->
-    List.
-
-status_to_external(worker_started) ->
-    running;
-status_to_external(compile_started) ->
-    running;
-status_to_external({_Error, Reason}) ->
-    {failed, Reason};
-status_to_external(compile_success) ->
-    compiled;
-status_to_external(activated) ->
-    compiled.
-
-beam_directory() ->
-    %% XXX: Hack alert: on my devrel environment, the first item in
-    %% code:get_path/0 is basho-patches. Should do something smarter
-    hd(code:get_path()).
-
-%%     update_type(map_update(Status), {Pid}, Type, Transitions).
-
-%% Functions to update the transitions list
-crashed(Pid, Reason, Transitions) ->
-    {Type, _, Pid} = lists:keyfind(Pid, 3, Transitions),
-    update_type({crashed, Reason}, Type, Transitions).
-
-restarting(Type, Transitions) ->
-    lists:foreach(fun({MyType, _, Pid}) when MyType == Type -> exit(Pid, restarting);
-                     ({_, _, _}) -> ok
-                  end,
-                  Transitions),
-    Transitions.
-
-launching(Pid, Type, Transitions) ->
-    update_type(worker_started, Pid, Type, Transitions).
-
-failed_start(Reason, Type, Transitions) ->
-    update_type({start_failed, Reason}, Type, Transitions).
-
-worker_update(Status, Type, Transitions) ->
-    update_type(map_update(Status), Type, Transitions).
-
-%% Map worker status messages to the transition states we keep
-%% internally
-map_update(compiling) ->
-    compile_started;
-map_update({failed, Reason}) ->
-    {compile_failed, Reason};
-map_update(success) ->
-    compile_success;
-map_update(type_already_active) ->
-    activated_no_compile;
-map_update(type_deleted) ->
-    deleted;
-map_update(Other) ->
-    Other.
-
-launch_worker(Type, #state{compilation_supervisor=Sup,
-                           compiler_mod=CompilerMod,
-                           transitions=Transitions0}) ->
-
-    %% Because it seems to make sense at the moment, if we receive
-    %% duplicate calls of `new_type' with the same bucket type, we'll
-    %% assume something changed with the DDL and start over with a new
-    %% worker.
-    %%
-    %% XXX: Consider the need for code on the compiler/watcher side to
-    %% deal with cleanup.
-    Transitions1 = restarting(Type, Transitions0),
-
-    %% Launch a child
-    case supervisor:start_child(Sup,
-                                [CompilerMod, Type,
-                                 ?MODULE, beam_directory()]) of
-        {ok, Pid} ->
-            monitor(process, Pid),
-            Transitions2 = launching(Pid, Type, Transitions1);
-        {error, Reason} ->
-            lager:error("Cannot launch new TS compiler watcher: ~p",
-                        [Reason]),
-            Transitions2 = failed_start(Reason, Type, Transitions1)
+%%
+do_new_type(Bucket_type) ->
+    case riak_kv_compile_tab:is_compiling(Bucket_type) of
+        {true, Compiler_pid} ->
+            ok = stop_current_compilation(Compiler_pid);
+        false ->
+            ok
     end,
-    Transitions2.
+    start_compilation(Bucket_type, retrieve_ddl(Bucket_type)).
 
-%%%%%
-%% Remaining functions are for updating the bucket type in our
-%% transitions list
+%%
+stop_current_compilation(Compiler_pid) ->
+    case is_process_alive(Compiler_pid) of
+        true ->
+            exit(Compiler_pid, ?new_metadata_appeared),
+            ok = flush_exit_message(Compiler_pid);
+        false ->
+            ok
+    end.
 
-%% update_type/3 is for a simple status update
-update_type(Status, Type, Transitions) ->
-    Update = update_transition(Status, Type,
-                               lists:keyfind(Type, 1, Transitions)),
-    lists:keyreplace(Type, 1, Transitions, Update).
+%%
+flush_exit_message(Compiler_pid) ->
+    receive
+        {'EXIT', Compiler_pid, _} -> ok
+    after
+        1000 -> ok
+    end.
 
-%% update_type/4 is for a simple status update + pid replacement
-update_type(Status, NewPid, Type, Transitions) ->
-    Update = update_transition(Status, NewPid, Type,
-                               lists:keyfind(Type, 1, Transitions)),
-    lists:keyreplace(Type, 1, Transitions, Update).
+%%
+start_compilation(Bucket_type, DDL) ->
+    Pid = proc_lib:spawn_link(
+        fun() ->
+            ok = compile_and_store(tmp_beam_directory(), DDL)
+        end),
+    ok = riak_kv_compile_tab:insert(Bucket_type, DDL, Pid, compiling).
 
+%%
+compile_and_store(BeamDir, DDL) ->
+    case riak_ql_ddl_compiler:compile(DDL) of
+        {error, _} = E ->
+            E;
+        {_, AST} ->
+            {ok, Module, Bin} = compile:forms(AST),
+            ok = store_module(BeamDir, Module, Bin)
+    end.
 
-update_transition(Status, Type, false) ->
-    {Type, [{Status, erlang:timestamp()}], undefined};
-update_transition(Status, Type, {Type, TList, Pid}) ->
-    {Type, [{Status, erlang:timestamp()}] ++ TList, Pid}.
+%%
+store_module(Dir, Module, Bin) ->
+    Filepath = beam_file_path(Dir, Module),
+    ok = filelib:ensure_dir(Filepath),
+    ok = file:write_file(Filepath, Bin).
 
-update_transition(Status, NewPid, Type, false) ->
-    {Type, [{Status, erlang:timestamp()}], NewPid};
-update_transition(Status, NewPid, Type, {Type, TList, _Pid}) ->
-    {Type, [{Status, erlang:timestamp()}] ++ TList, NewPid}.
+%%
+beam_file_path(BeamDir, Module) ->
+    filename:join(BeamDir, [Module, ".beam"]).
+
+%% Return the directory where compiled DDL module beams are stored
+%% before bucket type activation.
+tmp_beam_directory() ->
+   Data_dir = app_helper:get_env(riak_core, platform_data_dir),
+   filename:join(Data_dir, ddl_tmp).
+
+%% Would be nice to have a function in riak_core_bucket_type or
+%% similar to get either the prefix or the actual metadata instead
+%% of including a riak_core header file for this prefix
+retrieve_ddl(Bucket_type) ->
+    extract_ddl(riak_core_metadata:get(?BUCKET_TYPE_PREFIX, Bucket_type)).
+
+%% Helper function for `retrieve_ddl'
+extract_ddl(undefined) ->
+    undefined;
+extract_ddl(Proplist) ->
+    proplists:get_value(ddl, Proplist).
+    

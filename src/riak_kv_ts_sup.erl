@@ -72,15 +72,10 @@ init([]) ->
 
     Restart = permanent,
     Shutdown = 2000,
-
-    WatcherSup = {watchersup, {riak_kv_ts_watch_sup, start_link, []},
-              Restart, Shutdown, supervisor, [riak_kv_ts_watch_sup]},
-
-    Newtype = {newtype, {riak_kv_ts_newtype, start_link,
-                         [riak_kv_ts_watch_sup, riak_kv_ts_compiler]},
+    Newtype = {riak_kv_ts_newtype, {riak_kv_ts_newtype, start_link, []},
                Restart, Shutdown, worker, [riak_kv_ts_newtype]},
 
-    {ok, {SupFlags, [WatcherSup, Newtype]}}.
+    {ok, {SupFlags, [Newtype]}}.
 
 %%%===================================================================
 %%% Internal functions

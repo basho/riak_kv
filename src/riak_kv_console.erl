@@ -541,11 +541,20 @@ maybe_parse_table_def(Props) ->
         {value, {<<"table_def">>, Table_def}, Props_no_def} ->
             case riak_ql_parser:parse(riak_ql_lexer:get_tokens(binary_to_list(Table_def))) of
                 {ok, DDL} ->
+                    ok = try_compile_ddl(DDL),
                     {ok, [{<<"ddl">>, DDL} | Props_no_def]};
                 {error, _} = E ->
                     E
             end
     end.
+
+%% Attempt to compile the DDL but don't do anything with the output, this is
+%% catch failures as early as possible. Also the error messages are easy to
+%% return at this point.
+try_compile_ddl(DDL) ->
+    {_, AST} = riak_ql_ddl_compiler:compile(DDL),
+    {ok, _, _} = compile:forms(AST),
+    ok.
 
 bucket_type_print_create_result(Type, ok) ->
     io:format("~ts created~n", [Type]),

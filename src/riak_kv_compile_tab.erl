@@ -1,6 +1,7 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_ts_compiler: Manages the DDL->AST->beam compilation
+%% riak_kv_compile_tab: Store the state about what bucket type DDLs
+%%                      have been compiled.
 %%
 %% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -20,24 +21,34 @@
 %%
 %% -------------------------------------------------------------------
 
--module(riak_kv_ts_compiler).
+%% TODO use dets
 
--export([compile/2]).
+-module(riak_kv_compile_tab).
 
-%%
-compile(DDL, BeamDir) ->
-    case riak_ql_ddl_compiler:make_helper_mod(DDL) of
-        {module, AST} ->
-            {ok, Module, Bin} = compile:forms(AST),
-            Filepath = beam_file_path(BeamDir, Module),
-            ok = filelib:ensure_dir(Filepath),
-            ok = file:write_file(Filepath, Bin),
-            success;
-        {error, _} = E ->
-            E
-    end.
+-export([is_compiling/1]).
+-export([new/0]).
+-export([insert/4]).
+
+-define(TABLE, ?MODULE).
 
 %%
-beam_file_path(BeamDir, Module) ->
-    Filename = atom_to_list(Module) ++ ".beam",
-    filename:join(BeamDir, Filename).
+new() ->
+	ets:new(?TABLE, [public, named_table]).
+
+%%
+insert(Bucket_type, DDL, Pid, State) when State == compiling orelse
+                                          State == compiled orelse
+                                          State == failed ->
+	ets:insert(?TABLE, {Bucket_type, DDL, Pid, State}),
+	ok.
+
+%%
+-spec is_compiling(Bucket_type :: binary()) ->
+	{true, pid()} | false.
+is_compiling(Bucket_type) ->
+	case ets:lookup(?TABLE, Bucket_type) of
+		{_,_,Pid,compiling} ->
+			{true, Pid};
+		_ ->
+			false
+	end.
