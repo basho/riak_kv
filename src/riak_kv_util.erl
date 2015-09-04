@@ -370,7 +370,7 @@ mark_indexes_reformatted(Idx, 0, ForUpgrade) ->
     lager:info("index reformat: marked partition ~p as fixed", [Idx]),
     ok;
 mark_indexes_reformatted(_Idx, _ErrorCount, _ForUpgrade) ->
-    undefined.
+    error.
 
 -ifndef(old_hash).
 md5(Bin) ->
