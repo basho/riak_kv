@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%%
-%%% riak_kv_qry_queue.erl: queues incoming queries
+%%% riak_kv_qry_queue.erl: Riak SQL worker pool and query queue manager
 %%%
 %%% Copyright (C) 2015 Basho Technologies, Inc. All rights reserved
 %%%
@@ -19,6 +19,9 @@
 %% under the License.
 %%%
 %%%-------------------------------------------------------------------
+
+%% @doc Manager of workers handling individual queries for Riak SQL.
+
 -module(riak_kv_qry_queue).
 
 -behaviour(gen_server).
@@ -81,9 +84,8 @@
 %%%===================================================================
 
 -spec put_on_queue(qry(), #ddl_v1{}) -> ok | {error, atom()}.
-%% @doc Submit a query for execution. The query should be compatible
-%%      with the DDL supplied.  To get the results of running the
-%%      query, use fetch/1.
+%% @doc Enqueue a prepared query for execution.  The query should be
+%%      compatible with the DDL supplied.
 put_on_queue(Qry, DDL) ->
     gen_server:call(?MODULE, {put_on_queue, Qry, DDL}).
 
@@ -249,7 +251,7 @@ handle_req({fetch, QId}, State = #state{fsms = FSMs}) ->
             %% alongside the :execute/2, because it's not so much
             %% about side effects as retrieving result and returning
             %% a value.
-            {riak_kv_qry:fetch(Name, QId), ?NO_SIDEEFFECTS, State};
+            {riak_kv_qry_worker:fetch(Name, QId), ?NO_SIDEEFFECTS, State};
         _Eh ->
             {{error, bad_qid}, ?NO_SIDEEFFECTS, State}
     end;
@@ -270,7 +272,7 @@ handle_req(Request, State) ->
 handle_side_effects([]) ->
     ok;
 handle_side_effects([{execute, {{fsm, FSM}, {QId, Qry, DDL}}} | T]) ->
-    ok = riak_kv_qry:execute(FSM, {QId, Qry, DDL}),
+    ok = riak_kv_qry_worker:execute(FSM, {QId, Qry, DDL}),
     handle_side_effects(T);
 handle_side_effects([H | T]) ->
     io:format("riak_kv_qry_queue:handling side_effect ~p~n", [H]),
