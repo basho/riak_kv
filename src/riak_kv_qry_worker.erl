@@ -91,13 +91,13 @@ start_link(Name) ->
 %%% API
 %%%===================================================================
 
--spec execute(riak_kv_qry_queue:fsm(), {qry(), #ddl_v1{}, #ddl_v1{}}) -> ok | {error, atom()}.
-execute(FSM, {QId, Qry, DDL}) ->
-    gen_server:call(FSM, {execute, {QId, Qry, DDL}}).
+-spec execute(qry_fsm_name(), {qry(), #ddl_v1{}, #ddl_v1{}}) -> ok | {error, atom()}.
+execute(FSMName, {QId, Qry, DDL}) ->
+    gen_server:call(FSMName, {execute, {QId, Qry, DDL}}).
 
--spec fetch(riak_kv_qry_queue:fsm(), query_id()) -> list() | {error, atom()}.
-fetch(FSM, QId) ->
-    gen_server:call(FSM, {fetch, QId}).
+-spec fetch(qry_fsm_name(), query_id()) -> list() | {error, atom()}.
+fetch(FSMName, QId) ->
+    gen_server:call(FSMName, {fetch, QId}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -242,7 +242,7 @@ handle_req({fetch, QId}, State = #state{qid = QId,
 handle_req({fetch, QId}, State = #state{qid = QId,
                                         result = Result}) ->
     {Result, [], State#state{qid = undefined,
-                             status = accumulating,
+                             status = void,
                              result = []}};
 
 handle_req(_Request, State) ->

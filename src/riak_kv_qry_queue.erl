@@ -65,14 +65,12 @@
           qry      = none      :: none | {any(), qry()},
           status   = available :: qry_status()
          }).
--type fsm() :: #fsm{}.
--export_type([fsm/0]).  %% for specs in companion riak_kv_qry.erl
 
 -record(state, {
           fsms           = [],
           inflight_qrys  = [] :: [{query_id(), qry()}],
           queued_qrys    = [] :: [{query_id(), qry()}],
-          available_FSMs = [] :: [qry_fsm_name()],
+          available_fsms = [] :: [qry_fsm_name()],
           results        = [],
           timestamp      = timestamp() :: timestamp(),
           next_query_id  = 1,
@@ -129,7 +127,7 @@ init([MaxQ, Names]) when is_integer(MaxQ) andalso MaxQ > 0,
                          is_list(Names) ->
     FSMs = [#fsm{name = X} || X <- Names],
     {ok, #state{fsms           = FSMs,
-                available_FSMs = Names,
+                available_fsms = Names,
                 max_q_len      = MaxQ}}.
 
 %%--------------------------------------------------------------------
@@ -216,7 +214,7 @@ is_overloaded(#state{queued_qrys = Q,
 
 handle_req({put_on_queue, Qry, DDL}, State) ->
     #state{fsms           = FSMs,
-           available_FSMs = Avl,
+           available_fsms = Avl,
            queued_qrys    = Q,
            next_query_id  = Id}  = State,
     QId = {node(), Id},
@@ -240,19 +238,29 @@ handle_req({put_on_queue, Qry, DDL}, State) ->
                    NewAvl = T,
                    Disp = {execute, {{fsm, H}, {QId, Qry, DDL}}},
                    NewS = State#state{fsms           = NewFSMs,
-                                      available_FSMs = NewAvl,
+                                      available_fsms = NewAvl,
                                       next_query_id  = Id + 1},
                    {Reply, [Disp], NewS}
     end;
-handle_req({fetch, QId}, State = #state{fsms = FSMs}) ->
-    case [Name || #fsm{qry = {Qi, _}, name = Name} <- FSMs, QId == Qi] of
-        [Name] ->
+handle_req({fetch, QId}, State = #state{fsms = FSMs,
+                                        available_fsms = Avl}) ->
+    case [FSM || FSM = #fsm{qry = {Qi, _}} <- FSMs, QId == Qi] of
+        [FSM = #fsm{name = Name}] ->
             %% it's not feasible to put a call to riak_kv_qry:fetch/1
             %% alongside the :execute/2, because it's not so much
             %% about side effects as retrieving result and returning
             %% a value.
-            {riak_kv_qry_worker:fetch(Name, QId), ?NO_SIDEEFFECTS, State};
-        _Eh ->
+            case riak_kv_qry_worker:fetch(Name, QId) of
+                {error, in_progress} = NotOurError ->
+                    NotOurError;
+                WorkerDone ->
+                    NewFSM = FSM#fsm{status = available, qry = none},
+                    NewFSMs = lists:keyreplace(FSM, 2, FSMs, NewFSM),  %% treating a noble record as lowly tuple?
+                    NewAvl = [Name | Avl],
+                    {WorkerDone, ?NO_SIDEEFFECTS, State#state{fsms           = NewFSMs,
+                                                              available_fsms = NewAvl}}
+            end;
+        [] ->
             {{error, bad_qid}, ?NO_SIDEEFFECTS, State}
     end;
 handle_req(get_active_qrys, State) ->
