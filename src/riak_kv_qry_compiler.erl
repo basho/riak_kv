@@ -3,7 +3,7 @@
 %% riak_kv_qry_compiler: generate the coverage for a hashed query
 %%
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -23,8 +23,8 @@
 -module(riak_kv_qry_compiler).
 
 -export([
-	 compile/2
-	]).
+         compile/2
+        ]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include_lib("riak_ql/include/riak_ql_sql.hrl").
@@ -42,14 +42,14 @@ compile(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false, type = sql} = Q) ->
 %% write that up in time
 comp2(#ddl_v1{local_key = LK, partition_key = PK} = DDL,
       #riak_sql_v1{is_executable = false,
-		   'WHERE'       = W} = Q) ->
+                   'WHERE'       = W} = Q) ->
     case compile_where(DDL, W) of
-	{error, E} -> [{error, E}];
-	NewWs      -> [Q#riak_sql_v1{is_executable = true,
-				     type          = timeseries,
-	 			     'WHERE'       = X,
-				     local_key     = LK,
-				     partition_key = PK} || X <- NewWs]
+        {error, E} -> [{error, E}];
+        NewWs      -> [Q#riak_sql_v1{is_executable = true,
+                                     type          = timeseries,
+                                     'WHERE'       = X,
+                                     local_key     = LK,
+                                     partition_key = PK} || X <- NewWs]
     end.
 
 %% going forward the compilation and restructuring of the queries will be a big piece of work
@@ -57,28 +57,28 @@ comp2(#ddl_v1{local_key = LK, partition_key = PK} = DDL,
 %% and go with that
 compile_where(DDL, Where) ->
     case is_timeseries(DDL, Where) of
-	false         -> {error, {where_not_supported, Where}};
-	{true, NewWs} -> NewWs
+        false         -> {error, {where_not_supported, Where}};
+        {true, NewWs} -> NewWs
 end.
 
-is_timeseries(#ddl_v1{bucket = _B, partition_key = PK, local_key = LK}, 
-	      [{and_, _LHS, _RHS} = W]) ->
+is_timeseries(#ddl_v1{bucket = _B, partition_key = PK, local_key = LK},
+              [{and_, _LHS, _RHS} = W]) ->
     try    #key_v1{ast = PAST} = PK,
-	   #key_v1{ast = LAST} = LK,
-	   LocalFields     = [X || #param_v1{name = X} <- LAST],
-	   PartitionFields = [X || #param_v1{name = X} <- PAST],
-	   QuantumFields   = [X || #hash_fn_v1{mod = riak_ql_quanta,
-					       fn   = quantum,
-					       args = [#param_v1{name = X} | _Rest]} <- PAST],
-	   StrippedW = strip(W, []),
-	   {StartW, EndW, Filter} = break_out_timeseries(StrippedW, LocalFields, QuantumFields),
-	   StartKey = rewrite(LK, StartW),
-	   EndKey = rewrite(LK, EndW),
-	   {true, [[
-		   {startkey, StartKey},
-		   {endkey,   EndKey},
-		   {filter,   Filter}
-		  ]]}
+           #key_v1{ast = LAST} = LK,
+           LocalFields     = [X || #param_v1{name = X} <- LAST],
+           PartitionFields = [X || #param_v1{name = X} <- PAST],
+           QuantumFields   = [X || #hash_fn_v1{mod = riak_ql_quanta,
+                                               fn   = quantum,
+                                               args = [#param_v1{name = X} | _Rest]} <- PAST],
+           StrippedW = strip(W, []),
+           {StartW, EndW, Filter} = break_out_timeseries(StrippedW, LocalFields, QuantumFields),
+           StartKey = rewrite(LK, StartW),
+           EndKey = rewrite(LK, EndW),
+           {true, [[
+                   {startkey, StartKey},
+                   {endkey,   EndKey},
+                   {filter,   Filter}
+                  ]]}
     catch  _:_ -> {error, {where_not_timeseries, W}}
     end;
 is_timeseries(_DLL, _Where) ->
@@ -97,8 +97,8 @@ get_fields([[H] | T], Ands, Acc) ->
 
 take(Key, Ands, Acc) ->
     case lists:keytake(Key, 2, Ands) of
-	{value, Val, NewAnds} -> take(Key, NewAnds, [Val | Acc]);
-	false                 -> {Ands, lists:sort(Acc)}
+        {value, Val, NewAnds} -> take(Key, NewAnds, [Val | Acc]);
+        false                 -> {Ands, lists:sort(Acc)}
     end.
 
 strip({and_, B, C}, Acc) -> strip(C, [B | Acc]);
@@ -114,8 +114,8 @@ rew2([], _W, _Acc) ->
     {error, invalid_rewrite};
 rew2([#param_v1{name = [N]} | T], W, Acc) ->
      case lists:keytake(N, 2, W) of
-	 false                           -> {error, invalid_rewrite};
-	 {value, {_, _, {_, Val}}, NewW} -> rew2(T, NewW, [{N, Val} | Acc])
+         false                           -> {error, invalid_rewrite};
+         {value, {_, _, {_, Val}}, NewW} -> rew2(T, NewW, [{N, Val} | Acc])
      end.
 
 -ifdef(TEST).
@@ -135,26 +135,26 @@ make_ddl(Bucket, Fields, PK) when is_binary(Bucket) ->
 make_ddl(Bucket, Fields, #key_v1{} = PK, #key_v1{} = LK)
   when is_binary(Bucket) ->
     #ddl_v1{bucket        = Bucket,
-	    fields        = Fields,
-	    partition_key = PK,
-	    local_key     = LK}.
+            fields        = Fields,
+            partition_key = PK,
+            local_key     = LK}.
 
 make_query(Bucket, Selections) ->
     make_query(Bucket, Selections, []).
 
 make_query(Bucket, Selections, Where) ->
     #riak_sql_v1{'FROM'   = Bucket,
-		 'SELECT' = Selections,
-		 'WHERE'  = Where}.
+                 'SELECT' = Selections,
+                 'WHERE'  = Where}.
 
 -define(MIN, 60 * 1000).
 -define(NAME, "time").
 
 is_query_valid(DDL, Q) ->
     case riak_ql_ddl:is_query_valid(DDL, Q) of
-	false -> exit('invalid query');
-	true  -> true
-    end.    
+        false -> exit('invalid query');
+        true  -> true
+    end.
 
 get_query(String) ->
     Lexed = riak_ql_lexer:get_tokens(String),
@@ -162,12 +162,12 @@ get_query(String) ->
 
 get_standard_ddl() ->
     SQL = "CREATE TABLE GeoCheckin " ++
-	"(geohash varchar not null, " ++ 
-	"user varchar not null, " ++
-	"time timestamp not null, " ++ 
-	"weather varchar not null, " ++ 
-	"temperature varchar, " ++ 
-	"PRIMARY KEY((quantum(time, 15, m)), time, user))", 
+        "(geohash varchar not null, " ++
+        "user varchar not null, " ++
+        "time timestamp not null, " ++
+        "weather varchar not null, " ++
+        "temperature varchar, " ++
+        "PRIMARY KEY((quantum(time, 15, m)), time, user))",
     Lexed = riak_ql_lexer:get_tokens(SQL),
     {ok, DDL} = riak_ql_parser:parse(Lexed),
     {module, _Module} = riak_ql_ddl_compiler:make_helper_mod(DDL),
@@ -183,17 +183,17 @@ get_standard_ddl() ->
 
 simple_rewrite_test() ->
     LK  = #key_v1{ast = [
-			 #param_v1{name = ["bob"]},
-			 #param_v1{name = ["ripple"]}
-			]},
+                         #param_v1{name = ["bob"]},
+                         #param_v1{name = ["ripple"]}
+                        ]},
     W   = [
-	   {'=', "bob",    {word, "yardle"}},
-	   {'>', "ripple", {int,  678}}
-	  ],
+           {'=', "bob",    {word, "yardle"}},
+           {'>', "ripple", {int,  678}}
+          ],
     Exp = [
-	   {"bob",    "yardle"}, 
-	   {"ripple", 678}
-	  ],
+           {"bob",    "yardle"},
+           {"ripple", 678}
+          ],
     Got = rewrite(LK, W),
     ?assertEqual(Exp, Got).
 
@@ -203,37 +203,37 @@ simple_rewrite_test() ->
 
 simple_rewrite_fail_1_test() ->
     LK  = #key_v1{ast = [
-			 #param_v1{name = ["bob"]},
-			 #param_v1{name = ["ripple"]}
-			]},
+                         #param_v1{name = ["bob"]},
+                         #param_v1{name = ["ripple"]}
+                        ]},
     W   = [
-	   {'=', "bob", {"word", "yardle"}}
-	  ],
+           {'=', "bob", {"word", "yardle"}}
+          ],
     Exp = {error, invalid_rewrite},
     Got = rewrite(LK, W),
     ?assertEqual(Exp, Got).
 
 simple_rewrite_fail_2_test() ->
     LK  = #key_v1{ast = [
-			 #param_v1{name = ["bob"]},
-			 #param_v1{name = ["archipelego"]}
-			]},
+                         #param_v1{name = ["bob"]},
+                         #param_v1{name = ["archipelego"]}
+                        ]},
     W   = [
-	   {'=', "bob", {"word", "yardle"}}
-	  ],
+           {'=', "bob", {"word", "yardle"}}
+          ],
     Exp = {error, invalid_rewrite},
     Got = rewrite(LK, W),
     ?assertEqual(Exp, Got).
 
 simple_rewrite_fail_3_test() ->
     LK  = #key_v1{ast = [
-			 #param_v1{name = ["bob"]},
-			 #param_v1{name = ["ripple"]},
-			 #param_v1{name = ["kumquat"]}
-		      ]},
+                         #param_v1{name = ["bob"]},
+                         #param_v1{name = ["ripple"]},
+                         #param_v1{name = ["kumquat"]}
+                      ]},
     W   = [
-	   {'=', "bob", {"word", "yardle"}}
-	  ],
+           {'=', "bob", {"word", "yardle"}}
+          ],
     Exp = {error, invalid_rewrite},
     Got = rewrite(LK, W),
     ?assertEqual(Exp, Got).
@@ -249,34 +249,34 @@ simplest_test() ->
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Expected = [Q#riak_sql_v1{is_executable = true,
-			      type          = timeseries,
-			      'WHERE'       = [
-					       {startkey, [
-							   {<<"time">>, 3000},
-							   {<<"user">>, <<"user_1">>}
-							   ]},
-					       {endkey,   [
-							   {<<"time">>, 5000},
-							   {<<"user">>, <<"user_1">>}
-							  ]},
-					       {filter,   []}
-					      ],
-			      partition_key = #key_v1{ast = [
-							     #hash_fn_v1{mod = riak_ql_quanta,
-									 fn = quantum,
-									 args = [
-										 #param_v1{name = [<<"time">>]},
-										 15, 
-										 m
-										],
-									 type = timestamp}
-							    ]
-						     },
-			      local_key = #key_v1{ast = [
-							 #param_v1{name = [<<"time">>]},
-							 #param_v1{name = [<<"user">>]}
-							]}
-		     }],
+                              type          = timeseries,
+                              'WHERE'       = [
+                                               {startkey, [
+                                                           {<<"time">>, 3000},
+                                                           {<<"user">>, <<"user_1">>}
+                                                           ]},
+                                               {endkey,   [
+                                                           {<<"time">>, 5000},
+                                                           {<<"user">>, <<"user_1">>}
+                                                          ]},
+                                               {filter,   []}
+                                              ],
+                              partition_key = #key_v1{ast = [
+                                                             #hash_fn_v1{mod = riak_ql_quanta,
+                                                                         fn = quantum,
+                                                                         args = [
+                                                                                 #param_v1{name = [<<"time">>]},
+                                                                                 15,
+                                                                                 m
+                                                                                ],
+                                                                         type = timestamp}
+                                                            ]
+                                                     },
+                              local_key = #key_v1{ast = [
+                                                         #param_v1{name = [<<"time">>]},
+                                                         #param_v1{name = [<<"user">>]}
+                                                        ]}
+                     }],
     ?assertEqual(Expected, Got).
 
 %%
