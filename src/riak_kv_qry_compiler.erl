@@ -252,12 +252,12 @@ simplest_test() ->
 			      type          = timeseries,
 			      'WHERE'       = [
 					       {startkey, [
-							   {"time", 3000},
-							   {"user", "user_1"}
+							   {<<"time">>, 3000},
+							   {<<"user">>, <<"user_1">>}
 							   ]},
 					       {endkey,   [
-							   {"time", 5000},
-							   {"user", "user_1"}
+							   {<<"time">>, 5000},
+							   {<<"user">>, <<"user_1">>}
 							  ]},
 					       {filter,   []}
 					      ],
@@ -265,7 +265,7 @@ simplest_test() ->
 							     #hash_fn_v1{mod = riak_ql_quanta,
 									 fn = quantum,
 									 args = [
-										 #param_v1{name = ["time"]},
+										 #param_v1{name = [<<"time">>]},
 										 15, 
 										 m
 										],
@@ -273,8 +273,8 @@ simplest_test() ->
 							    ]
 						     },
 			      local_key = #key_v1{ast = [
-							 #param_v1{name = ["time"]},
-							 #param_v1{name = ["user"]}
+							 #param_v1{name = [<<"time">>]},
+							 #param_v1{name = [<<"user">>]}
 							]}
 		     }],
     ?assertEqual(Expected, Got).

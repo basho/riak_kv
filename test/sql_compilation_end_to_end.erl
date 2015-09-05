@@ -56,17 +56,17 @@ make_sql(Query) ->
 	      ++ "PRIMARY KEY ((quantum(time, 15, m)), time, user))",
 	      "select weather from GeoCheckin where time > 3000 and time < 5000 and user = gordon",
 	     [
-	      #riak_sql_v1{'SELECT'      = [["weather"]],
+	      #riak_sql_v1{'SELECT'      = [[<<"weather">>]],
 			   'FROM'        = <<"GeoCheckin">>,
 			   'WHERE'       = [
 					    {startkey, [
-							{"time",  3000},
-							{"user", "gordon"}
+							{<<"time">>,  3000},
+							{<<"user">>, <<"gordon">>}
 						       ]
 					    },
 					    {endkey,   [
-							{"time", 5000},
-							{"user", "gordon"}
+							{<<"time">>, 5000},
+							{<<"user">>, <<"gordon">>}
 						       ]
 					    },
 					    {filter, []}
@@ -76,7 +76,7 @@ make_sql(Query) ->
 							 #hash_fn_v1{mod = riak_ql_quanta,
 								     fn = quantum,
 								    args = [
-									    #param_v1{name = ["time"]},
+									    #param_v1{name = [<<"time">>]},
 									    15, 
 									    m
 									   ],
@@ -86,7 +86,7 @@ make_sql(Query) ->
 			   is_executable = true,
 			   type          = timeseries,
 			   local_key = #key_v1{ast = [
-						     #param_v1{name = ["time"]},
-						     #param_v1{name = ["user"]}
+						     #param_v1{name = [<<"time">>]},
+						     #param_v1{name = [<<"user">>]}
 						     ]}}
 	     ]).
