@@ -110,13 +110,11 @@ init([Name]) ->
 %% @private
 handle_call(Request, _From, State) ->
     case handle_req(Request, State) of
-        {ok, SEs, State9} when is_list(SEs) ->
+        {{error, _} = Error, _SEs, NewState} ->
+            {reply, Error, NewState};
+        {Reply, SEs, NewState} ->
             ok = handle_side_effects(SEs),
-            {reply, ok, State9};
-        {Error, _, State9} when is_atom(Error) ->
-            {reply, {error, Error}, State9};
-        {Result, _, State9} ->
-            {reply, Result, State9}
+            {reply, Reply, NewState}
     end.
 
 
@@ -173,10 +171,10 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 -spec handle_req({atom(), term()}, #state{}) ->
-                        {atom() | list(list({Key::string(), term()})),
+                        {ok | {ok | error, term()},
                          list(), #state{}}.
 handle_req(_, State = #state{status = accumulating}) ->
-    {prev_query_unfinished, [], State};
+    {{error, prev_query_unfinished}, [], State};
 
 handle_req({execute, {QId, Qry, DDL}}, State) ->
     %% TODO make this run with multiple sub-queries
@@ -188,18 +186,19 @@ handle_req({execute, {QId, Qry, DDL}}, State) ->
 
 handle_req({fetch, QId}, State = #state{qid = QId2})
   when QId =/= QId2 ->
-    {bad_query_id, [], State};
+    {{error, bad_query_id}, [], State};
 handle_req({fetch, QId}, State = #state{qid = QId,
                                         status = accumulating}) ->
-    {in_progress, [], State};
+    {{error, in_progress}, [], State};
 handle_req({fetch, QId}, State = #state{qid = QId,
                                         result = Result}) ->
-    {Result, [], State#state{qid = undefined,
-                             status = void,
-                             result = []}};
+    {{ok, Result}, [], State#state{qid = undefined,
+                                   status = void,
+                                   result = []}};
 
 handle_req(_Request, State) ->
     {ok, ?NO_SIDEEFFECTS, State}.
+
 
 handle_side_effects([]) ->
     ok;

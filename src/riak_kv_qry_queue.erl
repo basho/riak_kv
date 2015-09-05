@@ -83,13 +83,13 @@
 %%% API
 %%%===================================================================
 
--spec put_on_queue(qry(), #ddl_v1{}) -> ok | {error, atom()}.
+-spec put_on_queue(qry(), #ddl_v1{}) -> {ok, query_id()} | {error, term()}.
 %% @doc Enqueue a prepared query for execution.  The query should be
 %%      compatible with the DDL supplied.
 put_on_queue(Qry, DDL) ->
     gen_server:call(?MODULE, {put_on_queue, Qry, DDL}).
 
--spec fetch(query_id()) -> list() | {error, atom()}.
+-spec fetch(query_id()) -> {ok, list()} | {error, atom()}.
 %% @doc Fetch the results of execution of a previously submitted
 %%      query.
 fetch(QId) ->
@@ -110,31 +110,16 @@ get_queued_qrys() ->
 %%% OTP API
 %%%===================================================================
 
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
-%% @end
-%%--------------------------------------------------------------------
 start_link({MaxQueue, Names}) ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [MaxQueue, Names], []).
+
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
-%%--------------------------------------------------------------------
+-spec init([non_neg_integer() | qry_fsm_name()]) -> {ok, #state{}}.
 %% @private
-%% @doc
-%% Initializes the server
-%%
-%% @spec init(Args) -> {ok, State} |
-%%                     {ok, State, Timeout} |
-%%                     ignore |
-%%                     {stop, Reason}.
-%% @end
-%%--------------------------------------------------------------------
 init([MaxQ, Names]) when is_integer(MaxQ) andalso MaxQ > 0,
                          is_list(Names) ->
     FSMs = [#fsm{name = X} || X <- Names],
@@ -142,106 +127,75 @@ init([MaxQ, Names]) when is_integer(MaxQ) andalso MaxQ > 0,
                 available_fsms = Names,
                 max_q_len      = MaxQ}}.
 
-%%--------------------------------------------------------------------
+
+-spec handle_call(term(), {pid(), term()}, #state{}) ->
+                         {reply, ok | {error, atom()} | list(), #state{}}.
 %% @private
-%% @doc
-%% Handling call messages
-%%
-%% @spec handle_call(Request, From, State) ->
-%%                                   {reply, Reply, State} |
-%%                                   {reply, Reply, State, Timeout} |
-%%                                   {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, Reply, State} |
-%%                                   {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
 handle_call(Request, _From, State) ->
     {Reply, SEs, NewState} = handle_req(Request, State),
     ok = handle_side_effects(SEs),
     {reply, Reply, NewState}.
 
-%%--------------------------------------------------------------------
+
+-spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
 %% @private
-%% @doc
-%% Handling cast messages
-%%
-%% @spec handle_cast(Msg, State) -> {noreply, State} |
-%%                                  {noreply, State, Timeout} |
-%%                                  {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-%%--------------------------------------------------------------------
+
+-spec handle_info(term(), #state{}) -> {noreply, #state{}}.
 %% @private
-%% @doc
-%% Handling all non call/cast messages
-%%
-%% @spec handle_info(Info, State) -> {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
 handle_info(_Info, State) ->
     {noreply, State}.
 
-%%-------------------------------------------------------------------
+
+-spec terminate(term(), #state{}) -> term().
 %% @private
-%% @doc
-%% This function is called by a gen_server when it is about to
-%% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_server terminates
-%% with Reason. The return value is ignored.
-%%
-%% @spec terminate(Reason, State) -> void()
-%% @end
-%%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
     ok.
 
-%%--------------------------------------------------------------------
+
+-spec code_change(term() | {down, term()}, #state{}, term()) -> {ok, #state{}}.
 %% @private
-%% @doc
-%% Convert process state when code is changed
-%%
-%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
-%% @end
-%%--------------------------------------------------------------------
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+-spec timestamp() -> non_neg_integer().
 timestamp() ->
-    {MegaSeconds,Seconds,MilliSeconds}=os:timestamp(),
-    (MegaSeconds * 1000000000000) + (Seconds * 1000000) + MilliSeconds.
+    {MegaSeconds, Seconds, MilliSeconds} = os:timestamp(),
+    (MegaSeconds * 1000*1000*1000*1000) + (Seconds * 1000*1000) + MilliSeconds.
 
+-spec is_overloaded(#state{}) -> boolean().
 is_overloaded(#state{queued_qrys = Q,
-                     max_q_len   = Max}) when length(Q) >= Max -> true;
-is_overloaded(#state{queued_qrys = Q,
-                     max_q_len   = Max}) when length(Q) <  Max -> false.
+                     max_q_len   = Max}) ->
+    length(Q) >= Max.
 
+-spec handle_req(tuple(), #state{}) ->
+                        {atom() | list(list({Key::string(), term()})),
+                         list(), #state{}}.
 handle_req({put_on_queue, Qry, DDL}, State) ->
     #state{fsms           = FSMs,
            available_fsms = Avl,
            queued_qrys    = Q,
            next_query_id  = Id}  = State,
     QId = {node(), Id},
-    Reply = {qid, QId},
+    OKReply = {ok, QId},
     %% naive case of short queues where we append the queued query to the end of the Q
     case Avl of
         []      -> case is_overloaded(State) of
                        false ->
                            NewS = State#state{queued_qrys   = Q ++ [{QId, Qry}],
                                               next_query_id = Id + 1},
-                           {Reply, ?NO_SIDEEFFECTS, NewS};
+                           {OKReply, ?NO_SIDEEFFECTS, NewS};
                        true  ->
                            Over = {overloaded,
                                    {max_queue_length, State#state.max_q_len}},
-                           {Over, ?NO_SIDEEFFECTS, State}
+                           {{error, Over}, ?NO_SIDEEFFECTS, State}
                    end;
         [H | T] -> F = #fsm{name   = H,
                             status = in_progress,
@@ -252,8 +206,9 @@ handle_req({put_on_queue, Qry, DDL}, State) ->
                    NewS = State#state{fsms           = NewFSMs,
                                       available_fsms = NewAvl,
                                       next_query_id  = Id + 1},
-                   {Reply, [Disp], NewS}
+                   {OKReply, [Disp], NewS}
     end;
+
 handle_req({fetch, QId}, State = #state{fsms = FSMs,
                                         available_fsms = Avl}) ->
     case [FSM || FSM = #fsm{qry = {Qi, _}} <- FSMs, QId == Qi] of
@@ -264,6 +219,8 @@ handle_req({fetch, QId}, State = #state{fsms = FSMs,
             %% a value.
             case riak_kv_qry_worker:fetch(Name, QId) of
                 {error, in_progress} = NotOurError ->
+                    %% no change to queue or pool state:
+                    %% let the query complete first
                     NotOurError;
                 WorkerDone ->
                     NewFSM = FSM#fsm{status = available, qry = none},
@@ -275,27 +232,31 @@ handle_req({fetch, QId}, State = #state{fsms = FSMs,
         [] ->
             {{error, bad_qid}, ?NO_SIDEEFFECTS, State}
     end;
+
 handle_req(get_active_qrys, State) ->
     #state{fsms = FSMs} = State,
-    AQs = [X || #fsm{qry = {X, _}, status = in_progress} <- FSMs],
-    Reply = {active_qrys, AQs},
+    Reply = [X || #fsm{qry = {X, _}, status = in_progress} <- FSMs],
     {Reply, ?NO_SIDEEFFECTS, State};
+
 handle_req(get_queued_qrys, State) ->
     #state{queued_qrys = Queue} = State,
-    Qs = [X || {X, _Y} <- Queue],
-    Reply = {queued_qrys, Qs},
+    Reply = [X || {X, _Y} <- Queue],
     {Reply, ?NO_SIDEEFFECTS, State};
-handle_req(Request, State) ->
-    io:format("Not handling ~p~n", [Request]),
-    {ok, ?NO_SIDEEFFECTS, State}.
 
+handle_req(Request, State) ->
+    lager:warning("Not handling ~p~n", [Request]),
+    {{error, unhandled_request}, ?NO_SIDEEFFECTS, State}.
+
+
+-spec handle_side_effects([{atom(), tuple()}]) -> ok.
 handle_side_effects([]) ->
     ok;
+
 handle_side_effects([{execute, {{fsm, FSM}, {QId, Qry, DDL}}} | T]) ->
     ok = riak_kv_qry_worker:execute(FSM, {QId, Qry, DDL}),
     handle_side_effects(T);
-handle_side_effects([H | T]) ->
-    io:format("riak_kv_qry_queue:handling side_effect ~p~n", [H]),
+
+handle_side_effects([_H | T]) ->
     handle_side_effects(T).
 
 %%%===================================================================
