@@ -27,7 +27,9 @@
 
 -export([
          submit/2,
-         fetch/1
+         fetch/1,
+         get_active_qrys/0,
+         get_queued_qrys/0
         ]).
 
 -include("riak_kv_qry_queue.hrl").
@@ -51,17 +53,32 @@ submit(Query, DDL) ->
     end.
 
 
--spec fetch(query_id()) -> list() | {error, atom()}.
+-spec fetch(query_id()) -> {ok, list()} | {error, atom()}.
 %% @doc Fetch the results of execution of a previously submitted
 %%      query.
 fetch(QId) ->
     riak_kv_qry_queue:fetch(QId).
 
 
+-spec get_active_qrys() -> [query_id()].
+%% @doc Get the list of queries currently being executed.
+get_active_qrys() ->
+    riak_kv_qry_queue:get_active_qrys().
+
+
+-spec get_queued_qrys() -> [query_id()].
+%% @doc Get the list of queries currently queued.
+get_queued_qrys() ->
+    riak_kv_qry_queue:get_queued_qrys().
+
+
 %%%===================================================================
 %%% Unit tests
 %%%===================================================================
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+
+%% specific unit tests are in riak_kv_qry_{worker,queue}.erl
 
 -endif.

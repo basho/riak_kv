@@ -29,7 +29,9 @@
 %% User API
 -export([
          put_on_queue/2,
-         fetch/1
+         fetch/1,
+         get_active_qrys/0,
+         get_queued_qrys/0
         ]).
 
 %% OTP API
@@ -92,6 +94,16 @@ put_on_queue(Qry, DDL) ->
 %%      query.
 fetch(QId) ->
     gen_server:call(?MODULE, {fetch, QId}).
+
+-spec get_active_qrys() -> [query_id()].
+%% @doc Get the list of queries currently being executed.
+get_active_qrys() ->
+    gen_server:call(?MODULE, get_active_qrys).
+
+-spec get_queued_qrys() -> [query_id()].
+%% @doc Get the list of queries currently queued.
+get_queued_qrys() ->
+    gen_server:call(?MODULE, get_queued_qrys).
 
 
 %%%===================================================================
