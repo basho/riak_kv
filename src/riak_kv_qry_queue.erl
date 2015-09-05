@@ -259,9 +259,11 @@ handle_side_effects([{execute, {{fsm, FSM}, {QId, Qry, DDL}}} | T]) ->
 handle_side_effects([_H | T]) ->
     handle_side_effects(T).
 
+
 %%%===================================================================
 %%% Unit tests
 %%%===================================================================
+
 -ifdef(TEST).
 -compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
@@ -339,9 +341,9 @@ simple_init_test() ->
     Tests = [
              {run,   {init, {?MAX_Q_LEN, [fsm1, fsm2]}}},
              {msg,   get_active_qrys},
-             {reply, {active_qrys, []}},
+             {reply, []},
              {msg,   get_queued_qrys},
-             {reply, {queued_qrys, []}}
+             {reply, []}
            ],
     Results = runner_TEST(Tests),
     ?assertEqual({[], [], []}, Results).
@@ -349,11 +351,11 @@ simple_init_test() ->
 simple_queue_test() ->
     Tests = [
              {run,         {init, {?MAX_Q_LEN, [fsm1, fsm2]}}},
-             {msg,         {put_on_queue, a_query}},
-             {reply,       {qid, {node(), 1}}},
-             {side_effect, {execute, {{fsm, fsm1}, {{node(), 1}, a_query}}}},
+             {msg,         {put_on_queue, a_query, a_ddl}},
+             {reply,       {ok, {node(), 1}}},
+             {side_effect, {execute, {{fsm, fsm1}, {{node(), 1}, a_query, a_ddl}}}},
              {msg,         get_active_qrys},
-             {reply,       {active_qrys, [{node(), 1}]}}
+             {reply,       [{node(), 1}]}
            ],
     {SideEffects, Replies, Errors} = runner_TEST(Tests),
     ?assertEqual({[], [], []}, {SideEffects, Replies, Errors}).
@@ -361,22 +363,22 @@ simple_queue_test() ->
 simple_queue_2_test() ->
     Tests = [
              {run,   {init, {?MAX_Q_LEN, [fsm1, fsm2]}}},
-             {msg,   {put_on_queue, a_query}},
-             {msg,   {put_on_queue, a_query}},
-             {msg,   {put_on_queue, a_query}},
-             {msg,   {put_on_queue, a_query}},
+             {msg,   {put_on_queue, a_query, a_ddl}},
+             {msg,   {put_on_queue, a_query, a_ddl}},
+             {msg,   {put_on_queue, a_query, a_ddl}},
+             {msg,   {put_on_queue, a_query, a_ddl}},
              {clear, replies},
              {clear, side_effects},
              {msg,   get_active_qrys},
-             {reply, {active_qrys, [
-                                    {node(), 1},
-                                    {node(), 2}
-                                   ]}},
+             {reply, [
+                      {node(), 1},
+                      {node(), 2}
+                     ]},
              {msg,   get_queued_qrys},
-             {reply, {queued_qrys, [
-                                    {node(), 3},
-                                    {node(), 4}
-                                   ]}}
+             {reply, [
+                      {node(), 3},
+                      {node(), 4}
+                     ]}
             ],
     {SideEffects, Replies, Errors} = runner_TEST(Tests),
     ?assertEqual({[], [], []}, {SideEffects, Replies, Errors}).
@@ -386,13 +388,13 @@ simple_queue_2_test() ->
 simple_overload_test() ->
     Tests = [
              {run,   {init, {?SHORT_Q, [fsm1, fsm2]}}},
-             {msg,   {put_on_queue,  a_query}},
-             {msg,   {put_on_queue,  a_query}},
-             {msg,   {put_on_queue,  a_query}},
+             {msg,   {put_on_queue, a_query, a_ddl}},
+             {msg,   {put_on_queue, a_query, a_ddl}},
+             {msg,   {put_on_queue, a_query, a_ddl}},
              {clear, replies},
              {clear, side_effects},
-             {msg,   {put_on_queue,  a_query}},
-             {reply, {overloaded, {max_queue_length, ?SHORT_Q}}}
+             {msg,   {put_on_queue,  a_query, a_ddl}},
+             {reply, {error, {overloaded, {max_queue_length, ?SHORT_Q}}}}
             ],
     {SideEffects, Replies, Errors} = runner_TEST(Tests),
     ?assertEqual({[], [], []}, {SideEffects, Replies, Errors}).
