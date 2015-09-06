@@ -221,7 +221,7 @@ handle_req({fetch, QId}, State = #state{fsms = FSMs,
                 {error, in_progress} = NotOurError ->
                     %% no change to queue or pool state:
                     %% let the query complete first
-                    NotOurError;
+                    {NotOurError, ?NO_SIDEEFFECTS, State};
                 WorkerDone ->
                     NewFSM = FSM#fsm{status = available, qry = none},
                     NewFSMs = lists:keyreplace(FSM, 2, FSMs, NewFSM),  %% treating a noble record as lowly tuple?
