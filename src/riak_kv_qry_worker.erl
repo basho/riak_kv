@@ -134,12 +134,16 @@ handle_info({QId, done},
     {noreply, State#state{status = complete}};
 
 handle_info({QId, {results, [Chunk]}},
-            State = #state{qid = QId,
+            State = #state{qid = QId, qry = Qry,
                            status = QStatus,
                            result = Accumulated})
   when QStatus =:= void; QStatus =:= accumulating ->
+    #riak_sql_v1{'SELECT' = SelectSpec} = Qry,
+    Decoded =
+        decode_results(
+          Chunk, SelectSpec),
     {noreply, State#state{status = accumulating,
-                          result = [decode_results(Chunk) | Accumulated]}};
+                          result = [Decoded | Accumulated]}};
 
 %% what if some late chunks arrive?
 handle_info({QId, {results, _}},
@@ -215,29 +219,44 @@ handle_side_effects([H | T]) ->
     handle_side_effects(T).
 
 
-decode_results(ListOfBins) ->
-    decode_results(ListOfBins, []).
-decode_results([], Acc) ->
+decode_results(ListOfBins, SelectSpec) ->
+    decode_results(ListOfBins, SelectSpec, []).
+decode_results([], _SelectSpec, Acc) ->
     %% lists:reverse(Acc);  %% recall that ListOfBins is in fact
     %% reversed (as it was accumulated from chunks in handle_info)
-    Acc;
-decode_results([BList|Rest], Acc) ->
-    Objects = unpack_objects(BList, []),
+    lists:flatten(Acc);
+decode_results([BList|Rest], SelectSpec, Acc) ->
+    Records = extract(BList, SelectSpec, []),
     decode_results(
-      Rest, [Objects | Acc]).
+      Rest, SelectSpec, [Records | Acc]).
 
-unpack_objects(<<>>, Acc) ->
+extract(<<>>, _SelectSpec, Acc) ->
     Acc;
-unpack_objects(Batch, Acc) ->
+extract(Batch, SelectSpec, Acc) ->
     {_Key, B1} = eleveldb:parse_string(Batch),
     { Val, B2} = eleveldb:parse_string(B1),
-    Record =
+    FullRecord =
         eleveldb_ts:decode_record(
           riak_object:get_value(
             riak_object:from_binary(
               %% don't care about bkey
               <<>>, <<>>, Val))),
-    unpack_objects(B2, [Record | Acc]).
+    Filtered =
+        filter_columns(
+          SelectSpec, FullRecord),
+    extract(B2, SelectSpec, [Filtered | Acc]).
+
+
+filter_columns(SelectSpec, KVList) ->
+    %% TODO: deal with operators and combinators
+    OnlyColumns = lists:foldl(
+                    fun([C], Acc) -> [binary_to_list(C)|Acc];
+                       (_, Acc) -> Acc
+                    end,
+                    [], SelectSpec),
+    lists:filter(
+      fun({Field, _Val}) -> lists:member(Field, OnlyColumns) end,
+      KVList).
 
 
 %%%===================================================================
