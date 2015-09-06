@@ -121,7 +121,7 @@ handle_call(Request, _From, State) ->
 -spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
 %% @private
 handle_cast(Msg, State) ->
-    lager:info("Not handling cast message ~p\n", [Msg]),
+    lager:info("Not handling cast message ~p", [Msg]),
     {noreply, State}.
 
 
@@ -177,23 +177,27 @@ code_change(_OldVsn, State, _Extra) ->
 -spec handle_req({atom(), term()}, #state{}) ->
                         {ok | {ok | error, term()},
                          list(), #state{}}.
-handle_req(_, State = #state{status = accumulating}) ->
-    {{error, prev_query_unfinished}, [], State};
-
-handle_req({execute, {QId, Qry, DDL}}, State) ->
-    %% TODO make this run with multiple sub-queries
-    Queries = riak_kv_qry_compiler:compile(DDL, Qry),
-    SEs = [{run_sub_query, {qry, X}, {qid, QId}} || X <- Queries],
-    {ok, SEs, State#state{qid = QId,
-                          status = accumulating,
-                          result = []}};
-
 handle_req({fetch, QId}, State = #state{qid = QId2})
   when QId =/= QId2 ->
     {{error, bad_query_id}, [], State};
+
+handle_req({execute, {QId, Qry, DDL}}, State = #state{status = void}) ->
+    %% TODO make this run with multiple sub-queries
+    Queries = riak_kv_qry_compiler:compile(DDL, Qry),
+    SEs = [{run_sub_query, {qry, X}, {qid, QId}} || X <- Queries],
+    {ok, SEs, State#state{qid = QId, qry = Qry, ddl = DDL,
+                          status = accumulating,
+                          result = []}};
+
+handle_req({execute, {QId, _, _}}, State = #state{status = Status})
+  when Status =/= void ->
+    lager:error("Qry queue manager should have cleared the status before assigning new query ~p", [QId]),
+    {{error, mismanagement}, [], State};
+
 handle_req({fetch, QId}, State = #state{qid = QId,
                                         status = accumulating}) ->
     {{error, in_progress}, [], State};
+
 handle_req({fetch, QId}, State = #state{qid = QId,
                                         result = Result}) ->
     {{ok, Result}, [], State#state{qid = undefined,
