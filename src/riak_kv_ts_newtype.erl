@@ -61,6 +61,10 @@ new_type(BucketType) ->
 
 init([]) ->
     process_flag(trap_exit, true),
+
+    % do this outside of init so that we get crash messages output to crash.log
+    % if it fails
+    self() ! add_ddl_ebin_to_path,
     {ok, #state{}}.
 
 handle_call(_Request, _From, State) ->
@@ -81,6 +85,9 @@ handle_info({'EXIT', _, ?new_metadata_appeared}, State) ->
     {noreply, State};
 handle_info({'EXIT', _, _Error}, State) ->
     % compilation error, check
+    {noreply, State};
+handle_info(add_ddl_ebin_to_path, State) ->
+    ok = add_ddl_ebin_to_path(),
     {noreply, State};
 handle_info(_, State) ->
     {noreply, State}.
@@ -138,7 +145,7 @@ flush_exit_message(Compiler_pid) ->
 start_compilation(Bucket_type, DDL) ->
     Pid = proc_lib:spawn_link(
         fun() ->
-            ok = compile_and_store(tmp_beam_directory(), Bucket_type, DDL)
+            ok = compile_and_store(ddl_ebin_directory(), Bucket_type, DDL)
         end),
     ok = riak_kv_compile_tab:insert(Bucket_type, DDL, Pid, compiling).
 
@@ -165,9 +172,9 @@ beam_file_path(BeamDir, Module) ->
 
 %% Return the directory where compiled DDL module beams are stored
 %% before bucket type activation.
-tmp_beam_directory() ->
+ddl_ebin_directory() ->
    Data_dir = app_helper:get_env(riak_core, platform_data_dir),
-   filename:join(Data_dir, ddl_tmp).
+   filename:join(Data_dir, ddl_ebin).
 
 %% Would be nice to have a function in riak_core_bucket_type or
 %% similar to get either the prefix or the actual metadata instead
@@ -192,3 +199,11 @@ put_ddl_module_name_in_metadata(Bucket_type, Module_name) ->
     Metadata2 = 
         lists:keystore(ddl_module, 1, Metadata1, {ddl_module, Module_name}),
     ok = riak_core_metadata:put(?BUCKET_TYPE_PREFIX, Bucket_type, Metadata2).
+
+%%
+add_ddl_ebin_to_path() ->
+    Ebin_path = ddl_ebin_directory(),
+    ok = filelib:ensure_dir(filename:join(Ebin_path, any)),
+    % the code module ensures that there are no duplicates
+    true = code:add_path(Ebin_path),
+    ok.
