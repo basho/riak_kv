@@ -135,7 +135,7 @@ set_value(RObj) ->
 
 %% @doc convenience for (e.g.) MapReduce functions. Pass an object,
 %% get a 2.0+ Map type value, or `[]' if no Map is present.
--spec map_value(riak_object:riak_object()) -> proplist:proplist().
+-spec map_value(riak_object:riak_object()) -> proplists:proplist().
 map_value(RObj) ->
     {{_Ctx, Map}, _Stats}  = value(RObj, ?MAP_TYPE),
     Map.

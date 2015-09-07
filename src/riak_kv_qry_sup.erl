@@ -69,8 +69,8 @@ init([]) ->
 			  _Name = list_to_atom("riak_kv_qry_" ++ Int)
 		  end,
     Names = [MakeNamesFn(X) || X <- lists:seq(1, NumFSMs)],
-    Riak_kv_qrys = [{X, {riak_kv_qry, start_link, [X]},
-		     Restart, Shutdown, Type, [riak_kv_qry]} || X <- Names],
+    Riak_kv_qrys = [{X, {riak_kv_qry_worker, start_link, [X]},
+		     Restart, Shutdown, Type, [riak_kv_qry_worker]} || X <- Names],
 
     Riak_kv_qry_q = {riak_kv_qry_queue,
 		     {riak_kv_qry_queue, start_link, [{MaxQ, Names}]},
