@@ -53,6 +53,8 @@
          aae_repair_status/1,
          aae_tree_status/1]).
 
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
+
 join([NodeStr]) ->
     join(NodeStr, fun riak_core:join/1,
          "Sent join request to ~s~n", [NodeStr]).
@@ -520,7 +522,7 @@ bucket_type_create([TypeStr, PropsStr]) ->
 bucket_type_create(Create_type_fn, Type, {struct, Fields}) ->
     case Fields of
         [{<<"props", _/binary>>, {struct, Props_1}}] ->
-            {ok, Props_2} = maybe_parse_table_def(Props_1),
+            {ok, Props_2} = maybe_parse_table_def(Type, Props_1),
             Props_3 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props_2],
             Create_type_fn(Props_3);
         _ ->
@@ -532,21 +534,34 @@ bucket_type_create(_, Type, _) ->
     error.
 
 %%
--spec maybe_parse_table_def(Props :: list(proplists:property())) -> 
+-spec maybe_parse_table_def(Bucket_type :: binary(),
+                            Props :: list(proplists:property())) -> 
         {ok, Props2 :: [proplists:property()]} | {error, any()}.
-maybe_parse_table_def(Props) ->
+maybe_parse_table_def(Bucket_type, Props) ->
     case lists:keytake(<<"table_def">>, 1, Props) of
         false ->
             {ok, Props};
         {value, {<<"table_def">>, Table_def}, Props_no_def} ->
             case riak_ql_parser:parse(riak_ql_lexer:get_tokens(binary_to_list(Table_def))) of
                 {ok, DDL} ->
+                    ok = assert_type_and_table_name_same(Bucket_type, DDL),
                     ok = try_compile_ddl(DDL),
                     {ok, [{<<"ddl">>, DDL} | Props_no_def]};
                 {error, _} = E ->
                     E
             end
     end.
+
+%%
+assert_type_and_table_name_same(Bucket_type, #ddl_v1{ bucket = Bucket_type }) ->
+    ok;
+assert_type_and_table_name_same(Bucket_type, #ddl_v1{ bucket = Table_name }) ->
+    io:format(
+        "Error, the bucket type could not be the created. The bucket type and table name must be the same~n"
+        "    bucket type was: ~s~n"
+        "    table name was:  ~s~n",
+        [Bucket_type, Table_name]),
+    {error, bucket_type_and_table_name_different}.
 
 %% Attempt to compile the DDL but don't do anything with the output, this is
 %% catch failures as early as possible. Also the error messages are easy to

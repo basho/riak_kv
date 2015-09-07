@@ -22,6 +22,7 @@
 %% -------------------------------------------------------------------
 
 %% TODO use dets
+%% TODO persist state in the metadata?
 
 -module(riak_kv_compile_tab).
 

@@ -64,6 +64,8 @@ start_link() ->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
+    riak_kv_compile_tab:new(),
+
     RestartStrategy = one_for_one,
     MaxRestarts = 1000,
     MaxSecondsBetweenRestarts = 3600,

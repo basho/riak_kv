@@ -41,6 +41,8 @@
 -define(new_metadata_appeared,new_metadata_appeared).
 -define(BUCKET_TYPE_PREFIX, {core, bucket_types}).
 
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
+
 %%% 
 %%% API.
 %%%
@@ -59,8 +61,6 @@ new_type(BucketType) ->
 
 init([]) ->
     process_flag(trap_exit, true),
-    
-    riak_kv_compile_tab:new(),
     {ok, #state{}}.
 
 handle_call(_Request, _From, State) ->
@@ -97,13 +97,24 @@ code_change(_OldVsn, State, _Extra) ->
 
 %%
 do_new_type(Bucket_type) ->
+    case retrieve_ddl(Bucket_type) of
+        undefined        ->
+            ok; % TODO is this ok?
+        already_compiled ->
+            ok;
+        #ddl_v1{} = DDL  ->
+            ok = maybe_stop_current_compilation(Bucket_type),
+            ok = start_compilation(Bucket_type, DDL)
+    end.
+
+%%
+maybe_stop_current_compilation(Bucket_type) ->
     case riak_kv_compile_tab:is_compiling(Bucket_type) of
         {true, Compiler_pid} ->
             ok = stop_current_compilation(Compiler_pid);
         false ->
             ok
-    end,
-    start_compilation(Bucket_type, retrieve_ddl(Bucket_type)).
+    end.
 
 %%
 stop_current_compilation(Compiler_pid) ->
@@ -127,18 +138,19 @@ flush_exit_message(Compiler_pid) ->
 start_compilation(Bucket_type, DDL) ->
     Pid = proc_lib:spawn_link(
         fun() ->
-            ok = compile_and_store(tmp_beam_directory(), DDL)
+            ok = compile_and_store(tmp_beam_directory(), Bucket_type, DDL)
         end),
     ok = riak_kv_compile_tab:insert(Bucket_type, DDL, Pid, compiling).
 
 %%
-compile_and_store(BeamDir, DDL) ->
+compile_and_store(BeamDir, Bucket_type, DDL) ->
     case riak_ql_ddl_compiler:compile(DDL) of
         {error, _} = E ->
             E;
         {_, AST} ->
-            {ok, Module, Bin} = compile:forms(AST),
-            ok = store_module(BeamDir, Module, Bin)
+            {ok, Module_name, Bin} = compile:forms(AST),
+            ok = store_module(BeamDir, Module_name, Bin),
+            ok = put_ddl_module_name_in_metadata(Bucket_type, Module_name)
     end.
 
 %%
@@ -161,11 +173,22 @@ tmp_beam_directory() ->
 %% similar to get either the prefix or the actual metadata instead
 %% of including a riak_core header file for this prefix
 retrieve_ddl(Bucket_type) ->
-    extract_ddl(riak_core_metadata:get(?BUCKET_TYPE_PREFIX, Bucket_type)).
+    retrieve_ddl_2(riak_core_metadata:get(?BUCKET_TYPE_PREFIX, Bucket_type)).
 
-%% Helper function for `retrieve_ddl'
-extract_ddl(undefined) ->
+%%
+retrieve_ddl_2(undefined) ->
     undefined;
-extract_ddl(Proplist) ->
-    proplists:get_value(ddl, Proplist).
-    
+retrieve_ddl_2(Proplist) ->
+    case proplists:is_defined(ddl_module, Proplist) of
+        true ->
+            already_compiled;
+        false ->
+            proplists:get_value(ddl, Proplist)
+    end.
+
+%%
+put_ddl_module_name_in_metadata(Bucket_type, Module_name) ->
+    Metadata1 = riak_core_metadata:get(?BUCKET_TYPE_PREFIX, Bucket_type),
+    Metadata2 = 
+        lists:keystore(ddl_module, 1, Metadata1, {ddl_module, Module_name}),
+    ok = riak_core_metadata:put(?BUCKET_TYPE_PREFIX, Bucket_type, Metadata2).
