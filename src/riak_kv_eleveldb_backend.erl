@@ -439,7 +439,7 @@ fold_indexes_fun(FoldIndexFun) ->
     end.
 
 range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
-						 ref=Ref}) ->
+					      ref=Ref}) ->
     {_, Bucket, Qry} = proplists:lookup(index, Opts),
     #riak_sql_v1{'WHERE'    = W,
 		 helper_mod = Mod,
