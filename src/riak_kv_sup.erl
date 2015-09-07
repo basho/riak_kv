@@ -99,6 +99,10 @@ init([]) ->
                     {riak_kv_ensembles, start_link, []},
                     permanent, 30000, worker, [riak_kv_ensembles]},
 
+    TimeSeries =  {riak_kv_ts_sup,
+                    {riak_kv_ts_sup, start_link, []},
+                    permanent, 30000, worker, [riak_kv_ts_sup]},
+
     % Figure out which processes we should run...
     HasStorageBackend = (app_helper:get_env(riak_kv, storage_backend) /= undefined),
 
@@ -108,6 +112,7 @@ init([]) ->
         GetFsmSup,
         PutFsmSup,
         FastPutSup,
+        TimeSeries,
         DeleteSup,
         SinkFsmSup,
         BucketsFsmSup,

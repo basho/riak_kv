@@ -37,6 +37,7 @@
                    {riak_kv_pb_csbucket, 40, 41}, %%  CS bucket folding support
                    {riak_kv_pb_counter, 50, 53}, %% counter requests
                    {riak_kv_pb_crdt, 80, 83} %% CRDT requests
+                   % ,{riak_kv_pb_timeseries, 90, 93} %% time series requests
                   ]).
 -define(MAX_FLUSH_PUT_FSM_RETRIES, 10).
 
@@ -60,11 +61,11 @@ start(_Type, _StartArgs) ->
              end,
     Base = [riak_core_stat:prefix(), riak_kv],
     riak_kv_exometer_sidejob:new_entry(Base ++ [put_fsm, sidejob],
-				       riak_kv_put_fsm_sj, "node_put_fsm",
-				       [{status, Status}]),
+                                       riak_kv_put_fsm_sj, "node_put_fsm",
+                                       [{status, Status}]),
     riak_kv_exometer_sidejob:new_entry(Base ++ [get_fsm, sidejob],
                                        riak_kv_get_fsm_sj, "node_get_fsm",
-				       [{status, Status}]),
+                                       [{status, Status}]),
 
     case app_helper:get_env(riak_kv, direct_stats, false) of
         true ->

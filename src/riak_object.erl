@@ -35,6 +35,7 @@
 -type bucket() :: binary() | {binary(), binary()}.
 %% -type bkey() :: {bucket(), key()}.
 -type value() :: term().
+-type li_index() :: {key(), [{binary(), index_value()}]}.
 
 -ifdef(namespaced_types).
 -type riak_object_dict() :: dict:dict().
@@ -98,6 +99,7 @@
 -export([is_robject/1]).
 -export([update_last_modified/1, update_last_modified/2]).
 -export([strict_descendant/2]).
+-export([get_li_index/1, is_li/1, get_li_key/1]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -213,6 +215,28 @@ reconcile(Objects, AllowMultiple) ->
         true ->
             RObj
     end.
+
+%% @doc get the composite index from a riak_object
+-spec get_li_index(riak_object()) -> li_index().
+get_li_index(RObj) when is_record(RObj, r_object) ->
+    MetaData = get_metadata(RObj),
+    case dict:find(?MD_LI_IDX, MetaData) of
+	{ok, LI} -> LI;
+	error    -> exit("attempting to read non-existent key")
+    end.
+
+%% @doc checks if the object has a composite index in it
+-spec is_li(riak_object()) -> boolean().
+is_li(RObj) when is_record(RObj, r_object) ->
+    MetaData = get_metadata(RObj),
+    dict:is_key(?MD_LI_IDX, MetaData).
+
+%% @doc gets the Local Index key
+%% TODO return error or crash?
+-spec get_li_key(riak_object()) -> key().
+get_li_key(RObj) when is_record(RObj, r_object) ->
+    MetaData = get_metadata(RObj),
+    _Key = dict:fetch(?MD_LI_IDX, MetaData).
 
 %% @private remove all Objects from the list that are causally
 %% dominated by any other object in the list. Only concurrent /
@@ -797,12 +821,12 @@ vclock_header(Doc) ->
 to_json(Obj) ->
     lager:warning("Change uses of riak_object:to_json/1 to riak_object_json:encode/1"),
     riak_object_json:encode(Obj).
- 
+
 %% @deprecated Use `riak_object_json:decode' now.
 from_json(JsonObj) ->
     lager:warning("Change uses of riak_object:from_json/1 to riak_object_json:decode/1"),
     riak_object_json:decode(JsonObj).
- 
+
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
     case dict:find(clean, M) of
         error -> true;
