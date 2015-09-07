@@ -56,7 +56,8 @@
 -endif.
 
 -include("riak_kv_qry_queue.hrl").
--include_lib("riak_ql/include/riak_ql_sql.hrl").
+%% TODO sort out inclusion policy
+%%-include_lib("riak_ql/include/riak_ql_sql.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -define(SERVER, ?MODULE).

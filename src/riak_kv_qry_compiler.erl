@@ -277,6 +277,45 @@ simplest_test() ->
                                                          #param_v1{name = [<<"user">>]}
                                                         ]}
                      }],
+    gg:format("in simplest~nExpected:~n- ~p~nGot:~n- ~p~n", [Expected, Got]),
+    ?assertEqual(Expected, Got).
+
+simple_spanning_boundary_test() ->
+    DDL = get_standard_ddl(),
+    Query = "select weather from GeoCheckin where time > 3000 and time < 16000 and user = \"user_1\"",
+    {ok, Q} = get_query(Query),
+    true = is_query_valid(DDL, Q),
+    %% get basic query
+    %% make new Where clause
+    NewW = [
+	    {and_, 
+	     {and_,
+	      {'>', ?NAME, {int,  1 * ?MIN}},
+	      {'<', ?NAME, {int, 16 * ?MIN}}
+	     },
+	     {'=', "user", {word, "user_1"}}
+	    }
+	   ],
+    Q2 = Q#riak_sql_v1{'WHERE' = NewW},
+    Got = compile(DDL, Q2),
+    %% now make the result - expecting 2 queries
+    W1 = [
+	  {startkey, "user_112323213"},
+	  {endkey,   "user_14345345"}
+	 ],
+    W2 = [
+	  {startkey, "user_1dlfkljfkldsjdsa"},
+	  {endkey,   "user_1wjweqoewoiei"}
+	 ],
+    Expected = [
+		Q#riak_sql_v1{is_executable = true,
+			      type          = timeseries,
+			      'WHERE'       = W1},
+		Q#riak_sql_v1{is_executable = true,
+			      type          = timeseries,
+			      'WHERE'       = W2}
+	       ],
+    gg:format("in simple spanning~nExpected:~n- ~p~nGot:~n- ~p~n", [Expected, Got]),
     ?assertEqual(Expected, Got).
 
 %%

@@ -90,3 +90,31 @@ make_sql(Query) ->
                                                      #param_v1{name = [<<"user">>]}
                                                      ]}}
              ]).
+
+?passing_test(spanning_qry_test, 
+	      "CREATE TABLE GeoCheckin " ++
+		  "(geohash varchar not null, " ++ 
+		  "user varchar not null, " ++
+		  "time timestamp not null, " ++ 
+		  "weather varchar not null, " ++ 
+		  "temperature varchar, " ++ 
+		  "PRIMARY KEY((quantum(time, 15, s)), time, user))", 
+	      "select weather from GeoCheckin where time > 3000 and time < 18000",
+	      [
+	      #riak_sql_v1{'SELECT'      = [["weather"]],
+			   'FROM'        = <<"GeoCheckin">>,
+			   'WHERE'       = [
+					     {startkey, '>', 3000},
+					     {endkey,   '<', 15000}
+					   ],
+			   is_executable = true,
+			   type          = timeseries},
+	      #riak_sql_v1{'SELECT'      = [["weather"]],
+			   'FROM'        = <<"GeoCheckin">>,
+			   'WHERE'       = [
+					     {startkey, '>=', 15000},
+					     {endkey,   '<',  18000}
+					   ],
+			   is_executable = true,
+			   type          = timeseries}
+	      ]).

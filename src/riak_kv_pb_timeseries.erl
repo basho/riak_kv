@@ -32,7 +32,7 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 process(#tsputreq{table=_Table, columns=Columns, rows=Rows}, State) ->
-    Data = make_data(Rows, Columns),
+    _Data = make_data(Rows, Columns),
     {reply, tsputresp, State};
 process(_Ddl = #ddl_v1{}, State) ->
     {reply, #tsqueryresp{
