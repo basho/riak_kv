@@ -42,6 +42,23 @@ make_sql(Query) ->
     Lexed = riak_ql_lexer:get_tokens(Query),
     {ok, _SQL} = riak_ql_parser:parse(Lexed).
 
+get_standard_pk() -> #key_v1{ast = [
+				#hash_fn_v1{mod = riak_ql_quanta,
+					    fn = quantum,
+					    args = [
+						    #param_v1{name = [<<"time">>]},
+						    15,
+						    s
+						   ],
+					    type = timestamp}
+			       ]
+			}.
+
+get_standard_lk() -> #key_v1{ast = [
+				    #param_v1{name = [<<"time">>]},
+				    #param_v1{name = [<<"user">>]}
+				   ]}.
+
 %%
 %% Passing Tests
 %%
@@ -53,7 +70,7 @@ make_sql(Query) ->
               ++ "time timestamp not null, "
               ++ "weather varchar not null, "
               ++ "temperature varchar, "
-              ++ "PRIMARY KEY ((quantum(time, 15, m)), time, user))",
+              ++ "PRIMARY KEY ((quantum(time, 15, s)), time, user))",
               "select weather from GeoCheckin where time > 3000 and time < 5000 and user = gordon",
              [
               #riak_sql_v1{'SELECT'      = [[<<"weather">>]],
@@ -72,23 +89,10 @@ make_sql(Query) ->
                                             {filter, []}
                                            ],
                            helper_mod    = riak_ql_ddl:make_module_name(<<"GeoCheckin">>),
-                           partition_key = #key_v1{ast = [
-                                                         #hash_fn_v1{mod = riak_ql_quanta,
-                                                                     fn = quantum,
-                                                                    args = [
-                                                                            #param_v1{name = [<<"time">>]},
-                                                                            15,
-                                                                            m
-                                                                           ],
-                                                                     type = timestamp}
-                                                         ]
-                                                  },
+                           partition_key = get_standard_pk(),
                            is_executable = true,
                            type          = timeseries,
-                           local_key = #key_v1{ast = [
-                                                     #param_v1{name = [<<"time">>]},
-                                                     #param_v1{name = [<<"user">>]}
-                                                     ]}}
+                           local_key     = get_standard_lk()}
              ]).
 
 ?passing_test(spanning_qry_test, 
@@ -99,22 +103,47 @@ make_sql(Query) ->
 		  "weather varchar not null, " ++ 
 		  "temperature varchar, " ++ 
 		  "PRIMARY KEY((quantum(time, 15, s)), time, user))", 
-	      "select weather from GeoCheckin where time > 3000 and time < 18000",
+	      "select weather from GeoCheckin where time > 3000 and time < 18000 "
+	      "and user = gordon",
 	      [
-	      #riak_sql_v1{'SELECT'      = [["weather"]],
+	      #riak_sql_v1{'SELECT'      = [[<<"weather">>]],
 			   'FROM'        = <<"GeoCheckin">>,
 			   'WHERE'       = [
-					     {startkey, '>', 3000},
-					     {endkey,   '<', 15000}
+	                                            {startkey, [
+                                                        {<<"time">>,  3000},
+                                                        {<<"user">>, <<"gordon">>}
+                                                       ]
+                                            },
+                                            {endkey,   [
+                                                        {<<"time">>, 15000},
+                                                        {<<"user">>, <<"gordon">>}
+                                                       ]
+                                            },
+                                            {filter, []}
 					   ],
+                           helper_mod    = riak_ql_ddl:make_module_name(<<"GeoCheckin">>),
+                           partition_key = get_standard_pk(),
 			   is_executable = true,
-			   type          = timeseries},
-	      #riak_sql_v1{'SELECT'      = [["weather"]],
+			   type          = timeseries,
+                           local_key     = get_standard_lk()},
+	      #riak_sql_v1{'SELECT'      = [[<<"weather">>]],
 			   'FROM'        = <<"GeoCheckin">>,
 			   'WHERE'       = [
-					     {startkey, '>=', 15000},
-					     {endkey,   '<',  18000}
+                                            {startkey, [
+                                                        {<<"time">>,  15000},
+                                                        {<<"user">>, <<"gordon">>}
+                                                       ]
+                                            },
+                                            {endkey,   [
+                                                        {<<"time">>, 18000},
+                                                        {<<"user">>, <<"gordon">>}
+                                                       ]
+                                            },
+                                            {filter, []}
 					   ],
+                           helper_mod    = riak_ql_ddl:make_module_name(<<"GeoCheckin">>),
+                           partition_key = get_standard_pk(),
 			   is_executable = true,
-			   type          = timeseries}
+			   type          = timeseries,
+                           local_key     = get_standard_lk()}
 	      ]).
