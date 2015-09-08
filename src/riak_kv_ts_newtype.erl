@@ -87,6 +87,8 @@ handle_info({'EXIT', _, _Error}, State) ->
     % compilation error, check
     {noreply, State};
 handle_info(add_ddl_ebin_to_path, State) ->
+    ok = riak_core_metadata_evt:swap_handler(
+        riak_kv_metadata_store_listener, []),
     ok = add_ddl_ebin_to_path(),
     {noreply, State};
 handle_info(_, State) ->
