@@ -71,7 +71,6 @@ make_data(Rows, Cols) ->
 make_d2([], _Cols, Acc) ->
     lists:reverse(Acc);
 make_d2([{tsrow, Row} | T], Cols, Acc) ->
-    gg:format("Row is ~p~n- Cols is ~p~n", [Row, Cols]),
     make_d2(T, Cols, [make_d3(Row, Cols, []) | Acc]).
 
 make_d3([], _Cols, Acc) ->
