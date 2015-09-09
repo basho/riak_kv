@@ -33,7 +33,7 @@ encode(Message) ->
 
 process(#tsputreq{table=Table, columns=_Columns, rows=Rows}, State) ->
     Data = make_data(Rows),
-    Mod = riak_ql_dd:make_module_name(Table),
+    Mod = riak_ql_ddl:make_module_name(Table),
     _Data2 = Mod:add_column_info(Data),
     {reply, tsputresp, State};
 process(_Ddl = #ddl_v1{}, State) ->
