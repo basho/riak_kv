@@ -1,7 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_compile_tab: Store the state about what bucket type DDLs
-%%                      have been compiled.
+%% Store the state about what bucket type DDLs have been compiled.
 %%
 %% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -22,34 +21,106 @@
 %% -------------------------------------------------------------------
 
 %% TODO use dets
-%% TODO persist state in the metadata?
 
 -module(riak_kv_compile_tab).
 
 -export([is_compiling/1]).
+-export([get_state/1]).
 -export([new/0]).
 -export([insert/4]).
+-export([update_state/2]).
 
 -define(TABLE, ?MODULE).
 
-%%
-new() ->
-	ets:new(?TABLE, [public, named_table]).
+-type compiling_state() :: compiling | compiled | failed.
+-export_type([compiling_state/0]).
+
+-define(is_state(S), 
+        (S == compiling orelse
+         S == compiled orelse
+         S == failed)).
 
 %%
-insert(Bucket_type, DDL, Pid, State) when State == compiling orelse
-                                          State == compiled orelse
-                                          State == failed ->
-	ets:insert(?TABLE, {Bucket_type, DDL, Pid, State}),
-	ok.
+new() ->
+    % public table so that it can be viewed through observer/shell
+    ets:new(?TABLE, [public, named_table]).
+
+%%
+insert(Bucket_type, DDL, Pid, State) ->
+    ets:insert(?TABLE, {Bucket_type, DDL, Pid, State}),
+    ok.
 
 %%
 -spec is_compiling(Bucket_type :: binary()) ->
-	{true, pid()} | false.
+    {true, pid()} | false.
 is_compiling(Bucket_type) ->
-	case ets:lookup(?TABLE, Bucket_type) of
-		{_,_,Pid,compiling} ->
-			{true, Pid};
-		_ ->
-			false
-	end.
+    case ets:lookup(?TABLE, Bucket_type) of
+        {_,_,Pid,compiling} ->
+            {true, Pid};
+        _ ->
+            false
+    end.
+
+-spec get_state(Bucket_type::binary()) ->
+        compiling_state().
+get_state(Bucket_type) when is_binary(Bucket_type) ->
+    case ets:lookup(?TABLE, Bucket_type) of
+        [{_,_,_,State}] ->
+            State;
+        [] ->
+            notfound
+    end.
+
+%%
+update_state(Pid, State) when is_pid(Pid), ?is_state(State) ->
+    case ets:match(?TABLE, {'$1','$2',Pid,'_'}) of
+        [[Bucket_type, DDL]] ->
+            insert(Bucket_type, DDL, Pid, State);
+        [] ->
+            notfound
+    end.
+
+%% ===================================================================
+%% EUnit tests
+%% ===================================================================
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+-define(in_process(TestCode),
+    Self = self(),
+    spawn_link(
+        fun() ->
+            _ = riak_kv_compile_tab:new(),
+            TestCode,
+            Self ! test_ok
+        end),
+    receive
+        test_ok -> ok
+    end
+).
+
+insert_test() ->
+    ?in_process(
+        begin
+            Pid = spawn(fun() -> ok end),
+            ok = insert(<<"my_type">>, {ddl_v1}, Pid, compiling),
+            ?assertEqual(
+                compiling,
+                get_state(<<"my_type">>)
+            )
+        end).
+
+update_state_test() ->
+    ?in_process(
+        begin
+            Pid = spawn(fun() -> ok end),
+            ok = insert(<<"my_type">>, {ddl_v1}, Pid, compiling),
+            ok = update_state(Pid, compiled),
+            ?assertEqual(
+                compiled,
+                get_state(<<"my_type">>)
+            )
+        end).
+
+-endif.

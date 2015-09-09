@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_ts_newtype: 
+%% riak_kv_ts_newtype 
 %%
 %% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -76,19 +76,20 @@ handle_cast({new_type, Bucket_type}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({'EXIT', _, normal}, State) ->
+handle_info({'EXIT', Pid, normal}, State) ->
     % success
+    _ = riak_kv_compile_tab:update_state(Pid, compiled),
     {noreply, State};
 handle_info({'EXIT', _, ?new_metadata_appeared}, State) ->
     % this means that the process was interrupted while compiling by an update
     % to the metadata
     {noreply, State};
-handle_info({'EXIT', _, _Error}, State) ->
+handle_info({'EXIT', Pid, _Error}, State) ->
     % compilation error, check
+    _ = riak_kv_compile_tab:update_state(Pid, failed),
     {noreply, State};
 handle_info(add_ddl_ebin_to_path, State) ->
-    ok = riak_core_metadata_evt:swap_handler(
-        riak_kv_metadata_store_listener, []),
+    ok = riak_core_metadata_evt:swap_handler(riak_kv_metadata_store_listener, []),
     ok = add_ddl_ebin_to_path(),
     {noreply, State};
 handle_info(_, State) ->
@@ -106,12 +107,12 @@ code_change(_OldVsn, State, _Extra) ->
 
 %%
 do_new_type(Bucket_type) ->
-    case retrieve_ddl(Bucket_type) of
-        undefined        ->
-            ok; % TODO is this ok?
-        already_compiled ->
+    DDL = retrieve_ddl(Bucket_type),
+    case riak_kv_compile_tab:get_state(Bucket_type) =/= compiled 
+            andalso is_record(DDL, ddl_v1) of
+        false ->
             ok;
-        #ddl_v1{} = DDL  ->
+        true ->
             ok = maybe_stop_current_compilation(Bucket_type),
             ok = start_compilation(Bucket_type, DDL)
     end.
@@ -147,19 +148,19 @@ flush_exit_message(Compiler_pid) ->
 start_compilation(Bucket_type, DDL) ->
     Pid = proc_lib:spawn_link(
         fun() ->
-            ok = compile_and_store(ddl_ebin_directory(), Bucket_type, DDL)
+            ok = compile_and_store(ddl_ebin_directory(), DDL)
         end),
     ok = riak_kv_compile_tab:insert(Bucket_type, DDL, Pid, compiling).
 
 %%
-compile_and_store(BeamDir, Bucket_type, DDL) ->
+compile_and_store(BeamDir, DDL) ->
     case riak_ql_ddl_compiler:compile(DDL) of
         {error, _} = E ->
             E;
         {_, AST} ->
             {ok, Module_name, Bin} = compile:forms(AST),
-            ok = store_module(BeamDir, Module_name, Bin),
-            ok = put_ddl_module_name_in_metadata(Bucket_type, Module_name)
+            ok = store_module(BeamDir, Module_name, Bin)
+            % ok = put_ddl_module_name_in_metadata(Bucket_type, Module_name)
     end.
 
 %%
@@ -187,20 +188,8 @@ retrieve_ddl(Bucket_type) ->
 %%
 retrieve_ddl_2(undefined) ->
     undefined;
-retrieve_ddl_2(Proplist) ->
-    case proplists:is_defined(ddl_module, Proplist) of
-        true ->
-            already_compiled;
-        false ->
-            proplists:get_value(ddl, Proplist)
-    end.
-
-%%
-put_ddl_module_name_in_metadata(Bucket_type, Module_name) ->
-    Metadata1 = riak_core_metadata:get(?BUCKET_TYPE_PREFIX, Bucket_type),
-    Metadata2 = 
-        lists:keystore(ddl_module, 1, Metadata1, {ddl_module, Module_name}),
-    ok = riak_core_metadata:put(?BUCKET_TYPE_PREFIX, Bucket_type, Metadata2).
+retrieve_ddl_2(Props) ->
+    proplists:get_value(ddl, Props, undefined).
 
 %%
 add_ddl_ebin_to_path() ->
