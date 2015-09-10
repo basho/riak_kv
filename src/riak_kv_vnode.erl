@@ -903,7 +903,14 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                 FilterVNodes, Sender, State) ->
     %% v2 = ack-based backpressure
     handle_coverage_index(Bucket, ItemFilter, Query,
-                          FilterVNodes, Sender, State, fun result_fun_ack/2).
+                          FilterVNodes, Sender, State, fun result_fun_ack/2);
+handle_coverage(#riak_kv_sql_select_req_v1{bucket=Bucket,
+					   qry=Query},
+                FilterVNodes, Sender, State) ->
+    ItemFilter = none,
+    handle_range_scan(Bucket, ItemFilter, Query,
+		      FilterVNodes, Sender, State, fun result_fun_ack/2).
+
 
 -spec prepare_index_query(?KV_INDEX_Q{}) -> ?KV_INDEX_Q{}.
 prepare_index_query(#riak_kv_index_v3{term_regex=RE} = Q) when
@@ -942,11 +949,34 @@ handle_coverage_index(Bucket, ItemFilter, Query,
             %% @HACK
             %% Really this should be decided in the backend
             %% if there was a index_query fun.
-            FoldType = case riak_index:return_body(Query) of
-                           true -> fold_objects;
-                           false -> fold_keys
-                       end,
+            FoldType = riak_index:return_foldtype(Query),
             handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
+                                    FilterVNodes, Sender, Opts, State);
+        false ->
+            {reply, {error, {indexes_not_supported, Mod}}, State}
+    end.
+
+handle_range_scan(Bucket, ItemFilter, Query,
+                      FilterVNodes, Sender,
+                      State=#state{mod=Mod,
+                                   key_buf_size=DefaultBufSz,
+                                   modstate=ModState},
+                      ResultFunFun) ->
+    {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
+    IndexBackend = lists:member(indexes, Capabilities),
+    case IndexBackend of
+        true ->
+            %% Update stats...
+            ok = riak_kv_stat:update(vnode_index_read),
+
+            ResultFun = ResultFunFun(Bucket, Sender),
+            BufSize = buffer_size_for_index_query(Query, DefaultBufSz),
+            Opts = [{index, Bucket, prepare_index_query(Query)},
+                    {bucket, Bucket}, {buffer_size, BufSize}],
+            %% @HACK
+            %% Really this should be decided in the backend
+            %% if there was a index_query fun.
+            handle_coverage_range_scan(range_scan, Bucket, ItemFilter, ResultFun,
                                     FilterVNodes, Sender, Opts, State);
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
@@ -987,11 +1017,42 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
                    Opts0
            end,
     case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
-        {async, AsyncWork} ->
-            {async, {fold, AsyncWork, FinishFun}, Sender, State};
-        _ ->
-            {noreply, State}
-    end.
+	      {async, AsyncWork} ->
+		  {async, {fold, AsyncWork, FinishFun}, Sender, State};
+	      _ ->
+		  {noreply, State}
+	  end.
+
+handle_coverage_range_scan(FoldType, Bucket, ItemFilter, ResultFun,
+                        FilterVNodes, Sender, Opts0,
+                        State=#state{async_folding=AsyncFolding,
+                                     idx=Index,
+                                     key_buf_size=DefaultBufSz,
+                                     mod=Mod,
+                                     modstate=ModState}) ->
+    %% Construct the filter function
+    FilterVNode = proplists:get_value(Index, FilterVNodes),
+    Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
+    BufferMod = riak_kv_fold_buffer,
+    BufferSize = proplists:get_value(buffer_size, Opts0, DefaultBufSz),
+    Buffer = BufferMod:new(BufferSize, ResultFun),
+    Extras = fold_extras_keys(Index, Bucket),
+    FoldFun = fold_fun(range_scan, BufferMod, Filter, Extras),
+    FinishFun = finish_fun(BufferMod, Sender),
+    {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
+    AsyncBackend = lists:member(async_fold, Capabilities),
+    Opts = case AsyncFolding andalso AsyncBackend of
+               true ->
+                   [async_fold | Opts0];
+               false ->
+                   Opts0
+           end,
+    case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
+	      {async, AsyncWork} ->
+		  {async, {fold, AsyncWork, FinishFun}, Sender, State};
+	      _ ->
+		  {noreply, State}
+	  end.
 
 %% While in handoff, vnodes have the option of returning {forward,
 %% State}, or indeed, {forward, Req, State} which will cause riak_core
@@ -1784,6 +1845,10 @@ fold_fun(buckets, BufferMod, Filter, _Extra) ->
                 false ->
                     Buffer
             end
+    end;
+fold_fun(range_scan, BufferMod, none, _Extra) ->
+    fun(Range, Buffer) ->
+            BufferMod:add(Range, Buffer)
     end;
 fold_fun(keys, BufferMod, none, undefined) ->
     fun(_, Key, Buffer) ->
