@@ -89,7 +89,8 @@ handle_info({'EXIT', Pid, _Error}, State) ->
     _ = riak_kv_compile_tab:update_state(Pid, failed),
     {noreply, State};
 handle_info(add_ddl_ebin_to_path, State) ->
-    ok = riak_core_metadata_evt:swap_handler(riak_kv_metadata_store_listener, []),
+    ok = riak_core_metadata_manager:swap_notification_handler(
+        ?BUCKET_TYPE_PREFIX, riak_kv_metadata_store_listener, []),
     ok = add_ddl_ebin_to_path(),
     {noreply, State};
 handle_info(_, State) ->
