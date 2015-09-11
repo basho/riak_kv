@@ -26,7 +26,7 @@
 
 -export([is_compiling/1]).
 -export([get_state/1]).
--export([new/0]).
+-export([new/1]).
 -export([insert/4]).
 -export([update_state/2]).
 
@@ -41,20 +41,20 @@
          S == failed)).
 
 %%
-new() ->
-    % public table so that it can be viewed through observer/shell
-    ets:new(?TABLE, [public, named_table]).
+new(File_dir) ->
+    File_path = filename:join(File_dir, [?TABLE, ".dets"]),
+    dets:open_file(?TABLE, [{type, set}, {repair, force}, {file, File_path}]).
 
 %%
 insert(Bucket_type, DDL, Pid, State) ->
-    ets:insert(?TABLE, {Bucket_type, DDL, Pid, State}),
+    dets:insert(?TABLE, {Bucket_type, DDL, Pid, State}),
     ok.
 
 %%
 -spec is_compiling(Bucket_type :: binary()) ->
     {true, pid()} | false.
 is_compiling(Bucket_type) ->
-    case ets:lookup(?TABLE, Bucket_type) of
+    case dets:lookup(?TABLE, Bucket_type) of
         {_,_,Pid,compiling} ->
             {true, Pid};
         _ ->
@@ -64,7 +64,7 @@ is_compiling(Bucket_type) ->
 -spec get_state(Bucket_type::binary()) ->
         compiling_state().
 get_state(Bucket_type) when is_binary(Bucket_type) ->
-    case ets:lookup(?TABLE, Bucket_type) of
+    case dets:lookup(?TABLE, Bucket_type) of
         [{_,_,_,State}] ->
             State;
         [] ->
@@ -73,7 +73,7 @@ get_state(Bucket_type) when is_binary(Bucket_type) ->
 
 %%
 update_state(Pid, State) when is_pid(Pid), ?is_state(State) ->
-    case ets:match(?TABLE, {'$1','$2',Pid,'_'}) of
+    case dets:match(?TABLE, {'$1','$2',Pid,'_'}) of
         [[Bucket_type, DDL]] ->
             insert(Bucket_type, DDL, Pid, State);
         [] ->
@@ -91,7 +91,7 @@ update_state(Pid, State) when is_pid(Pid), ?is_state(State) ->
     Self = self(),
     spawn_link(
         fun() ->
-            _ = riak_kv_compile_tab:new(),
+            _ = riak_kv_compile_tab:new("."),
             TestCode,
             Self ! test_ok
         end),
