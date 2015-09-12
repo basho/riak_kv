@@ -129,10 +129,12 @@ handle_cast(Msg, State) ->
 -spec handle_info(term(), #state{}) -> {noreply, #state{}}.
 %% @private
 handle_info({QId, done},
-            State = #state{qid = QId,
-                           status = QStatus})
-  when QStatus =/= complete ->
+            State = #state{qid = QId}) ->
     {noreply, State#state{status = complete}};
+
+handle_info({_QId, {results, [[]]}}, State) ->
+    lager:debug("Empty chunk on qid ~p", [_QId]),
+    {noreply, State};
 
 handle_info({QId, {results, [Chunk]}},
             State = #state{qid = QId, qry = Qry,
@@ -147,14 +149,15 @@ handle_info({QId, {results, [Chunk]}},
                           result = [Decoded | Accumulated]}};
 
 %% what if some late chunks arrive?
-handle_info({QId, {results, _}},
+handle_info({QId, {results, [[_LateData]]}},
             State = #state{qid = QId,
                            status = complete}) ->
-    lager:warning("Discarding late chunk on qid ~p", [QId]),
+    lager:debug("Discarding late chunk (~b bytes) on qid ~p", [size(_LateData), QId]),
     {noreply, State};
 
 %% other error conditions
-handle_info({QId1, _}, State = #state{qid = QId2}) ->
+handle_info({QId1, _}, State = #state{qid = QId2})
+  when QId1 =/= QId2 ->
     lager:warning("Bad query id ~p (expected ~p)", [QId1, QId2]),
     {noreply, State}.
 
