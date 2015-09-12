@@ -31,25 +31,54 @@ decode(Code, Bin) ->
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
+%% @ignore INSERT (as if)
 process(#tsputreq{table=Table, columns=_Columns, rows=Rows}, State) ->
     Data = make_data(Rows),
     Mod = riak_ql_ddl:make_module_name(Table),
     _Data2 = Mod:add_column_info(Data),
     {reply, tsputresp, State};
-process(_Ddl = #ddl_v1{}, State) ->
-    {reply, #tsqueryresp{
-               columns=[#tscolumndescription{
-                           name = <<"asdf">>,
-                           type = 'BINARY'}],
-               rows=[#tsrow{cells=[#tscell{binary_value = <<"jkl;">>}]}]},
+
+%% @ignore CREATE TABLE
+process(_DDL = #ddl_v1{}, State) ->
+    %% {module, Module} = riak_ql_ddl_compiler:make_helper_mod(DDL),
+    %% and what do we do with this DDL?
+    %% isn't bucket creation (primarily) effected via bucket activation (via riak-admin)?
+    {reply, #tsqueryresp{},
      State};
-process({_DecodedQuery}, State) ->
-    {reply, #tsqueryresp{
-               columns=[#tscolumndescription{
-                           name = <<"asdf">>,
-                           type = 'BINARY'}],
-               rows=[#tsrow{cells=[#tscell{binary_value = <<"jkl;">>}]}]},
-     State}.
+
+%% @ignore SELECT
+process(SQL = #riak_sql_v1{'FROM' = Bucket}, State) ->
+    Mod = riak_ql_ddl:make_module_name(Bucket),
+    DDL = Mod:get_ddl(),
+    case riak_kv_qry:submit(SQL, DDL) of
+        {ok, QId} ->
+            case riak_kv_qry:fetch(QId) of
+                {ok, Data} ->
+                    {reply, make_tsqueryresp(Data, fun Mod:get_field_type/1), State};
+                {error, Reason} ->
+                    {reply, #rpberrorresp{errcode = -1,
+                                          errmsg = lists:flatten(
+                                                     io_lib:format("~p", [Reason]))},
+                     State}
+            end;
+        {error, Reason} ->
+            {reply, #rpberrorresp{errcode = -2,
+                                  errmsg = lists:flatten(
+                                             io_lib:format("~p", [Reason]))},
+             State}
+    end.
+
+make_tsqueryresp([], _Fun) ->
+    #tsqueryresp{columns = [], rows = []};
+make_tsqueryresp(Data, GetFieldTypeF) ->
+    %% data come in batches
+    Rows = lists:flatten(Data),
+    %% get types and take the ordering of columns in the batches
+    {ColumnNames, _Values} = lists:unzip(hd(Data)),
+    ColumnTypes = lists:map(GetFieldTypeF, ColumnNames),
+    #tsqueryresp{columns = [#tscolumndescription{name = Name, type = Type}
+                            || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)],
+                 rows = make_data(Rows)}.
 
 process_stream(_, _, State)->
     {ignore, State}.
