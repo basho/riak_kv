@@ -26,7 +26,7 @@
 -module(riak_kv_qry).
 
 -export([
-         submit/2,
+         submit/1, submit/2,
          fetch/1,
          get_active_qrys/0,
          get_queued_qrys/0
@@ -35,22 +35,36 @@
 -include("riak_kv_qry_queue.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
--spec submit(string(), #ddl_v1{}) -> {ok, query_id()} | {error, atom()}.
+-spec submit(string() | #riak_sql_v1{}) -> {ok, query_id()} | {error, atom()}.
+%% @doc Parse a query, determine DDL from bucket (table name),
+%%      validate against that DDL, and submit the query for execution.
+%%      To get the results of running the query, use fetch/1.
+submit(Query) ->
+    submit(Query, undefined).
+
+-spec submit(string() | #riak_sql_v1{}, undefined | #ddl_v1{}) -> {ok, query_id()} | {error, atom()}.
 %% @doc Parse, validate against DDL, and submit a query for execution.
 %%      To get the results of running the query, use fetch/1.
-submit(Query, DDL) ->
+submit(Query, DDL) when is_list(Query) ->
     Lexed = riak_ql_lexer:get_tokens(Query),
     case riak_ql_parser:parse(Lexed) of
         {error, _Reason} = Error ->
             Error;
         {ok, SQL} ->
-            case riak_ql_ddl:is_query_valid(DDL, SQL) of
-                true ->
-                    riak_kv_qry_queue:put_on_queue(SQL, DDL);
-                _ ->
-                    {error, malformed_query}
-            end
+            submit(SQL, DDL)
+    end;
+submit(SQL = #riak_sql_v1{'FROM' = Bucket}, undefined) ->
+    Mod = riak_ql_ddl:make_module_name(Bucket),
+    DDL = Mod:get_ddl(),
+    submit(SQL, DDL);
+submit(SQL, DDL) ->
+    case riak_ql_ddl:is_query_valid(DDL, SQL) of
+        true ->
+            riak_kv_qry_queue:put_on_queue(SQL, DDL);
+        _ ->
+            {error, invalid_query}
     end.
+
 
 
 -spec fetch(query_id()) -> {ok, list()} | {error, atom()}.

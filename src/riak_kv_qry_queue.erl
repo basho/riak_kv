@@ -87,6 +87,7 @@
 %% @doc Enqueue a prepared query for execution.  The query should be
 %%      compatible with the DDL supplied.
 put_on_queue(Qry, DDL) ->
+    %% worker needs DDL to perform column filtering
     gen_server:call(?MODULE, {put_on_queue, Qry, DDL}).
 
 -spec fetch(query_id()) -> {ok, list()} | {error, atom()}.
