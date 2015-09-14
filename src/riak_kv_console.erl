@@ -516,7 +516,7 @@ bucket_type_create([TypeStr, PropsStr]) ->
     bucket_type_create(Create_type_fn, Type, catch mochijson2:decode(PropsStr)).
 
 -spec bucket_type_create(
-        Create_type_fn :: fun(([propslist:property()]) -> ok),
+        Create_type_fn :: fun(([proplists:property()]) -> ok),
         Type :: binary(),
         JSON :: any()) -> ok | error.
 bucket_type_create(Create_type_fn, Type, {struct, Fields}) ->

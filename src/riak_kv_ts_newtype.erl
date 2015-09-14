@@ -161,7 +161,6 @@ compile_and_store(BeamDir, DDL) ->
         {_, AST} ->
             {ok, Module_name, Bin} = compile:forms(AST),
             ok = store_module(BeamDir, Module_name, Bin)
-            % ok = put_ddl_module_name_in_metadata(Bucket_type, Module_name)
     end.
 
 %%

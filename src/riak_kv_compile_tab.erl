@@ -35,34 +35,41 @@
 -type compiling_state() :: compiling | compiled | failed.
 -export_type([compiling_state/0]).
 
--define(is_state(S), 
+-define(is_compiling_state(S), 
         (S == compiling orelse
          S == compiled orelse
          S == failed)).
 
-%%
+%% 
+-spec new(file:name()) ->
+        {ok, dets:tab_name()} | {error, any()}.
 new(File_dir) ->
     File_path = filename:join(File_dir, [?TABLE, ".dets"]),
     dets:open_file(?TABLE, [{type, set}, {repair, force}, {file, File_path}]).
 
 %%
-insert(Bucket_type, DDL, Pid, State) ->
-    dets:insert(?TABLE, {Bucket_type, DDL, Pid, State}),
+-spec insert(Bucket_type :: binary(),
+             DDL :: term(),
+             Compiler_pid :: pid(),
+             State :: compiling_state()) -> ok.
+insert(Bucket_type, DDL, Compiler_pid, State) ->
+    dets:insert(?TABLE, {Bucket_type, DDL, Compiler_pid, State}),
     ok.
 
-%%
+%% Check if the bucket type is in the compiling state.
 -spec is_compiling(Bucket_type :: binary()) ->
     {true, pid()} | false.
 is_compiling(Bucket_type) ->
     case dets:lookup(?TABLE, Bucket_type) of
-        {_,_,Pid,compiling} ->
+        [{_,_,Pid,compiling}] ->
             {true, Pid};
         _ ->
             false
     end.
 
--spec get_state(Bucket_type::binary()) ->
-        compiling_state().
+%%
+-spec get_state(Bucket_type :: binary()) ->
+        compiling_state() | notfound.
 get_state(Bucket_type) when is_binary(Bucket_type) ->
     case dets:lookup(?TABLE, Bucket_type) of
         [{_,_,_,State}] ->
@@ -71,11 +78,14 @@ get_state(Bucket_type) when is_binary(Bucket_type) ->
             notfound
     end.
 
-%%
-update_state(Pid, State) when is_pid(Pid), ?is_state(State) ->
-    case dets:match(?TABLE, {'$1','$2',Pid,'_'}) of
+%% Update the compilation state using the compiler pid as a key.
+-spec update_state(Compiler_pid :: pid(), State :: compiling_state()) ->
+        ok | notfound.
+update_state(Compiler_pid, State) when is_pid(Compiler_pid), 
+                                       ?is_compiling_state(State) ->
+    case dets:match(?TABLE, {'$1','$2',Compiler_pid,'_'}) of
         [[Bucket_type, DDL]] ->
-            insert(Bucket_type, DDL, Pid, State);
+            insert(Bucket_type, DDL, Compiler_pid, State);
         [] ->
             notfound
     end.
@@ -120,6 +130,17 @@ update_state_test() ->
             ?assertEqual(
                 compiled,
                 get_state(<<"my_type">>)
+            )
+        end).
+
+is_compiling_test() ->
+    ?in_process(
+        begin
+            Pid = spawn(fun() -> ok end),
+            ok = insert(<<"my_type">>, {ddl_v1}, Pid, compiling),
+            ?assertEqual(
+                {true, Pid},
+                is_compiling(<<"my_type">>)
             )
         end).
 
