@@ -1076,9 +1076,9 @@ fold_meta_to_bin(Key, Value, {{_Vt,_Del,_Lm}=Elems,RestBin}) ->
 %% @doc Encode the contents of a riak object, either using
 %% term_to_binary (if Enc == erlang), or msgpack encoding (if Enc ==
 %% msgpack)
-encode(Bin, Enc) when Enc == erlang ->
+encode(Bin, erlang) ->
     encode_maybe_binary(Bin);
-encode(Bin, Enc) when Enc == msgpack ->
+encode(Bin, msgpack) ->
     encode_msgpack(Bin).
 
 encode_msgpack(Bin) ->
@@ -1092,9 +1092,9 @@ encode_maybe_binary(Bin) ->
 %% @doc Decode the contents of a riak object, either using
 %% binary_to_term (if Enc == erlang), or msgpack decoding (if Enc ==
 %% msgpack)
-decode(ValBin, Enc) when Enc == erlang ->
+decode(ValBin, erlang) ->
     decode_maybe_binary(ValBin);
-decode(ValBin, Enc) when Enc == msgpack ->
+decode(ValBin, msgpack) ->
     decode_msgpack(ValBin).
 
 decode_msgpack(ValBin) ->
