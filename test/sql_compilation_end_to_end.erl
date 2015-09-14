@@ -1,6 +1,7 @@
 -module(sql_compilation_end_to_end).
 
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 %% this is a basic test of timeseries that writes a single element to the back end
 %% and checks it is correct
@@ -76,13 +77,21 @@ get_standard_lk() -> #key_v1{ast = [
                            'FROM'        = <<"GeoCheckin">>,
                            'WHERE'       = [
                                             {startkey, [
-                                                        {<<"time">>,  3000},
-                                                        {<<"user">>, <<"gordon">>}
+                                                        {<<"time">>,  
+							 timestamp, 
+							 3000},
+                                                        {<<"user">>, 
+							 binary,
+							 <<"gordon">>}
                                                        ]
                                             },
                                             {endkey,   [
-                                                        {<<"time">>, 5000},
-                                                        {<<"user">>, <<"gordon">>}
+                                                        {<<"time">>, 
+							 timestamp, 
+							 5000},
+                                                        {<<"user">>, 
+							 binary,
+							 <<"gordon">>}
                                                        ]
                                             },
                                             {filter, []}
@@ -108,14 +117,22 @@ get_standard_lk() -> #key_v1{ast = [
 	      #riak_sql_v1{'SELECT'      = [[<<"weather">>]],
 			   'FROM'        = <<"GeoCheckin">>,
 			   'WHERE'       = [
-	                                            {startkey, [
-                                                        {<<"time">>,  3000},
-                                                        {<<"user">>, <<"gordon">>}
+					    {startkey, [
+                                                        {<<"time">>, 
+							 timestamp,
+							 3000},
+                                                        {<<"user">>,
+							 binary,
+							 <<"gordon">>}
                                                        ]
                                             },
                                             {endkey,   [
-                                                        {<<"time">>, 15000},
-                                                        {<<"user">>, <<"gordon">>}
+                                                        {<<"time">>, 
+							 timestamp,
+							 15000},
+                                                        {<<"user">>, 
+							 binary,
+							 <<"gordon">>}
                                                        ]
                                             },
                                             {filter, []}
@@ -129,13 +146,21 @@ get_standard_lk() -> #key_v1{ast = [
 			   'FROM'        = <<"GeoCheckin">>,
 			   'WHERE'       = [
                                             {startkey, [
-                                                        {<<"time">>,  15000},
-                                                        {<<"user">>, <<"gordon">>}
+                                                        {<<"time">>,  
+							 timestamp,
+							 15000},
+                                                        {<<"user">>, 
+							 binary,
+							 <<"gordon">>}
                                                        ]
                                             },
                                             {endkey,   [
-                                                        {<<"time">>, 18000},
-                                                        {<<"user">>, <<"gordon">>}
+                                                        {<<"time">>, 
+							 timestamp,
+							 18000},
+                                                        {<<"user">>,
+							 binary,
+							 <<"gordon">>}
                                                        ]
                                             },
                                             {filter, []}
