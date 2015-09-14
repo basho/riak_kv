@@ -27,7 +27,6 @@
         ]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
--include_lib("riak_ql/include/riak_ql_sql.hrl").
 -include("riak_kv_index.hrl").
 
 compile(#ddl_v1{}, #riak_sql_v1{is_executable = true}) ->

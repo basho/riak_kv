@@ -1,7 +1,6 @@
 -module(sql_compilation_end_to_end).
 
 -include_lib("eunit/include/eunit.hrl").
--include_lib("riak_ql/include/riak_ql_sql.hrl").
 
 %% this is a basic test of timeseries that writes a single element to the back end
 %% and checks it is correct

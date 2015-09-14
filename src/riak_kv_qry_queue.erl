@@ -56,7 +56,7 @@
 -endif.
 
 -include("riak_kv_qry_queue.hrl").
--include_lib("riak_ql/include/riak_ql_ddl.hrl").  %% for #ddl_v1{}
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -define(SERVER, ?MODULE).
 

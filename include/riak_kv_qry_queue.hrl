@@ -24,7 +24,7 @@
 -define(RIAK_KV_QRY_QUEUE_HRL, included).
 
 -include("riak_kv_index.hrl").
--include_lib("riak_ql/include/riak_ql_sql.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -record(queue_query, {
           qry = #riak_sql_v1{}
