@@ -561,7 +561,7 @@ assert_type_and_table_name_same(Bucket_type, #ddl_v1{ bucket = Table_name }) ->
         "    bucket type was: ~s~n"
         "    table name was:  ~s~n",
         [Bucket_type, Table_name]),
-    {error, bucket_type_and_table_name_different}.
+    {error, {bucket_type_and_table_name_different, Bucket_type, Table_name}}.
 
 %% Attempt to compile the DDL but don't do anything with the output, this is
 %% catch failures as early as possible. Also the error messages are easy to
@@ -914,7 +914,7 @@ bucket_type_create_no_timeseries_test() ->
     Ref = make_ref(),
     JSON = json_props([{bucket_type, my_type}]),
     bucket_type_create(
-        fun(<<"my_type">>, Props) -> put(Ref, Props) end,
+        fun(Props) -> put(Ref, Props) end,
         <<"my_type">>,
         mochijson2:decode(JSON)
     ),
@@ -926,7 +926,7 @@ bucket_type_create_no_timeseries_test() ->
 bucket_type_create_with_timeseries_table_test() ->
     Ref = make_ref(),
     Table_def =
-        <<"CREATE TABLE times ",
+        <<"CREATE TABLE my_type ",
           "(time TIMESTAMP NOT NULL, ",
           " PRIMARY KEY (time))">>,
     JSON = json_props([{bucket_type, my_type}, 
@@ -939,6 +939,28 @@ bucket_type_create_with_timeseries_table_test() ->
     ?assertMatch(
         [{ddl, _}, {bucket_type, <<"my_type">>}],
         get(Ref)
+    ).
+
+bucket_type_and_table_name_must_match_test() ->
+    Ref = make_ref(),
+    Table_def =
+        <<"CREATE TABLE times ",
+          "(time TIMESTAMP NOT NULL, ",
+          " PRIMARY KEY (time))">>,
+    JSON = json_props([{bucket_type, my_type}, 
+                       {table_def, Table_def}]),
+    % if this error changes slightly it is not so important, as long as
+    % the bucket type is not allowed to be created.
+    ?assertError(
+        {badmatch,
+            {error,
+                {bucket_type_and_table_name_different,
+                    <<"my_type">>,<<"times">>}}},
+        bucket_type_create(
+            fun(Props) -> put(Ref, Props) end,
+            <<"my_type">>,
+            mochijson2:decode(JSON)
+        )
     ).
 
 -endif.
