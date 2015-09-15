@@ -38,7 +38,6 @@
 -record(state, {
 }).
 
--define(new_metadata_appeared,new_metadata_appeared).
 -define(BUCKET_TYPE_PREFIX, {core, bucket_types}).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
@@ -80,7 +79,7 @@ handle_info({'EXIT', Pid, normal}, State) ->
     % success
     _ = riak_kv_compile_tab:update_state(Pid, compiled),
     {noreply, State};
-handle_info({'EXIT', _, ?new_metadata_appeared}, State) ->
+handle_info({'EXIT', _, bucket_type_changed_mid_compile}, State) ->
     % this means that the process was interrupted while compiling by an update
     % to the metadata
     {noreply, State};
@@ -131,7 +130,7 @@ maybe_stop_current_compilation(Bucket_type) ->
 stop_current_compilation(Compiler_pid) ->
     case is_process_alive(Compiler_pid) of
         true ->
-            exit(Compiler_pid, ?new_metadata_appeared),
+            exit(Compiler_pid, bucket_type_changed_mid_compile),
             ok = flush_exit_message(Compiler_pid);
         false ->
             ok
