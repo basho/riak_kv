@@ -35,7 +35,7 @@
 -type compiling_state() :: compiling | compiled | failed.
 -export_type([compiling_state/0]).
 
--define(is_compiling_state(S), 
+-define(is_compiling_state(S),
         (S == compiling orelse
          S == compiled orelse
          S == failed)).
@@ -43,24 +43,24 @@
 %% 
 -spec new(file:name()) ->
         {ok, dets:tab_name()} | {error, any()}.
-new(File_dir) ->
-    File_path = filename:join(File_dir, [?TABLE, ".dets"]),
-    dets:open_file(?TABLE, [{type, set}, {repair, force}, {file, File_path}]).
+new(FileDir) ->
+    FilePath = filename:join(FileDir, [?TABLE, ".dets"]),
+    dets:open_file(?TABLE, [{type, set}, {repair, force}, {file, FilePath}]).
 
 %%
--spec insert(Bucket_type :: binary(),
+-spec insert(BucketType :: binary(),
              DDL :: term(),
-             Compiler_pid :: pid(),
+             CompilerPid :: pid(),
              State :: compiling_state()) -> ok.
-insert(Bucket_type, DDL, Compiler_pid, State) ->
-    dets:insert(?TABLE, {Bucket_type, DDL, Compiler_pid, State}),
+insert(BucketType, DDL, CompilerPid, State) ->
+    dets:insert(?TABLE, {BucketType, DDL, CompilerPid, State}),
     ok.
 
 %% Check if the bucket type is in the compiling state.
--spec is_compiling(Bucket_type :: binary()) ->
+-spec is_compiling(BucketType :: binary()) ->
     {true, pid()} | false.
-is_compiling(Bucket_type) ->
-    case dets:lookup(?TABLE, Bucket_type) of
+is_compiling(BucketType) ->
+    case dets:lookup(?TABLE, BucketType) of
         [{_,_,Pid,compiling}] ->
             {true, Pid};
         _ ->
@@ -68,10 +68,10 @@ is_compiling(Bucket_type) ->
     end.
 
 %%
--spec get_state(Bucket_type :: binary()) ->
+-spec get_state(BucketType :: binary()) ->
         compiling_state() | notfound.
-get_state(Bucket_type) when is_binary(Bucket_type) ->
-    case dets:lookup(?TABLE, Bucket_type) of
+get_state(BucketType) when is_binary(BucketType) ->
+    case dets:lookup(?TABLE, BucketType) of
         [{_,_,_,State}] ->
             State;
         [] ->
@@ -79,13 +79,13 @@ get_state(Bucket_type) when is_binary(Bucket_type) ->
     end.
 
 %% Update the compilation state using the compiler pid as a key.
--spec update_state(Compiler_pid :: pid(), State :: compiling_state()) ->
+-spec update_state(CompilerPid :: pid(), State :: compiling_state()) ->
         ok | notfound.
-update_state(Compiler_pid, State) when is_pid(Compiler_pid), 
+update_state(CompilerPid, State) when is_pid(CompilerPid),
                                        ?is_compiling_state(State) ->
-    case dets:match(?TABLE, {'$1','$2',Compiler_pid,'_'}) of
-        [[Bucket_type, DDL]] ->
-            insert(Bucket_type, DDL, Compiler_pid, State);
+    case dets:match(?TABLE, {'$1','$2',CompilerPid,'_'}) of
+        [[BucketType, DDL]] ->
+            insert(BucketType, DDL, CompilerPid, State);
         [] ->
             notfound
     end.

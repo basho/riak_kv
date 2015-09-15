@@ -47,17 +47,17 @@ init(_) ->
     {ok, #state{}}.
 
 
-handle_event({metadata_stored, Bucket_type}, State) ->
+handle_event({metadata_stored, BucketType}, State) ->
 	% catch here because if the handler throws an exception then it is removed
 	% from the listener list.
-	(catch riak_kv_ts_newtype:new_type(Bucket_type)),
+	(catch riak_kv_ts_newtype:new_type(BucketType)),
     {ok, State};
 handle_event(_Event, State) ->
     {ok, State}.
 
-handle_call({is_type_compiled, Bucket_type}, State) ->
-    Is_compiled = (riak_kv_compile_tab:get_state(Bucket_type) == compiled),
-    {ok, Is_compiled, State};
+handle_call({is_type_compiled, BucketType}, State) ->
+    IsCompiled = (riak_kv_compile_tab:get_state(BucketType) == compiled),
+    {ok, IsCompiled, State};
 handle_call(_Request, State) ->
     Reply = ok,
     {ok, Reply, State}.

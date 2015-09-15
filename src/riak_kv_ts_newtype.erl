@@ -69,8 +69,8 @@ init([]) ->
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
-handle_cast({new_type, Bucket_type}, State) ->
-    ok = do_new_type(Bucket_type),
+handle_cast({new_type, BucketType}, State) ->
+    ok = do_new_type(BucketType),
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -106,51 +106,51 @@ code_change(_OldVsn, State, _Extra) ->
 %%%
 
 %%
-do_new_type(Bucket_type) ->
-    DDL = retrieve_ddl(Bucket_type),
-    case riak_kv_compile_tab:get_state(Bucket_type) =/= compiled 
+do_new_type(BucketType) ->
+    DDL = retrieve_ddl(BucketType),
+    case riak_kv_compile_tab:get_state(BucketType) =/= compiled 
             andalso is_record(DDL, ddl_v1) of
         false ->
             ok;
         true ->
-            ok = maybe_stop_current_compilation(Bucket_type),
-            ok = start_compilation(Bucket_type, DDL)
+            ok = maybe_stop_current_compilation(BucketType),
+            ok = start_compilation(BucketType, DDL)
     end.
 
 %%
-maybe_stop_current_compilation(Bucket_type) ->
-    case riak_kv_compile_tab:is_compiling(Bucket_type) of
-        {true, Compiler_pid} ->
-            ok = stop_current_compilation(Compiler_pid);
+maybe_stop_current_compilation(BucketType) ->
+    case riak_kv_compile_tab:is_compiling(BucketType) of
+        {true, CompilerPid} ->
+            ok = stop_current_compilation(CompilerPid);
         false ->
             ok
     end.
 
 %%
-stop_current_compilation(Compiler_pid) ->
-    case is_process_alive(Compiler_pid) of
+stop_current_compilation(CompilerPid) ->
+    case is_process_alive(CompilerPid) of
         true ->
-            exit(Compiler_pid, bucket_type_changed_mid_compile),
-            ok = flush_exit_message(Compiler_pid);
+            exit(CompilerPid, bucket_type_changed_mid_compile),
+            ok = flush_exit_message(CompilerPid);
         false ->
             ok
     end.
 
 %%
-flush_exit_message(Compiler_pid) ->
+flush_exit_message(CompilerPid) ->
     receive
-        {'EXIT', Compiler_pid, _} -> ok
+        {'EXIT', CompilerPid, _} -> ok
     after
         1000 -> ok
     end.
 
 %%
-start_compilation(Bucket_type, DDL) ->
+start_compilation(BucketType, DDL) ->
     Pid = proc_lib:spawn_link(
         fun() ->
             ok = compile_and_store(ddl_ebin_directory(), DDL)
         end),
-    ok = riak_kv_compile_tab:insert(Bucket_type, DDL, Pid, compiling).
+    ok = riak_kv_compile_tab:insert(BucketType, DDL, Pid, compiling).
 
 %%
 compile_and_store(BeamDir, DDL) ->
@@ -158,8 +158,8 @@ compile_and_store(BeamDir, DDL) ->
         {error, _} = E ->
             E;
         {_, AST} ->
-            {ok, Module_name, Bin} = compile:forms(AST),
-            ok = store_module(BeamDir, Module_name, Bin)
+            {ok, ModuleName, Bin} = compile:forms(AST),
+            ok = store_module(BeamDir, ModuleName, Bin)
     end.
 
 %%
@@ -175,14 +175,14 @@ beam_file_path(BeamDir, Module) ->
 %% Return the directory where compiled DDL module beams are stored
 %% before bucket type activation.
 ddl_ebin_directory() ->
-   Data_dir = app_helper:get_env(riak_core, platform_data_dir),
-   filename:join(Data_dir, ddl_ebin).
+   DataDir = app_helper:get_env(riak_core, platform_data_dir),
+   filename:join(DataDir, ddl_ebin).
 
 %% Would be nice to have a function in riak_core_bucket_type or
 %% similar to get either the prefix or the actual metadata instead
 %% of including a riak_core header file for this prefix
-retrieve_ddl(Bucket_type) ->
-    retrieve_ddl_2(riak_core_metadata:get(?BUCKET_TYPE_PREFIX, Bucket_type)).
+retrieve_ddl(BucketType) ->
+    retrieve_ddl_2(riak_core_metadata:get(?BUCKET_TYPE_PREFIX, BucketType)).
 
 %%
 retrieve_ddl_2(undefined) ->
@@ -192,8 +192,8 @@ retrieve_ddl_2(Props) ->
 
 %%
 add_ddl_ebin_to_path() ->
-    Ebin_path = ddl_ebin_directory(),
-    ok = filelib:ensure_dir(filename:join(Ebin_path, any)),
+    Ebin_Path = ddl_ebin_directory(),
+    ok = filelib:ensure_dir(filename:join(Ebin_Path, any)),
     % the code module ensures that there are no duplicates
-    true = code:add_path(Ebin_path),
+    true = code:add_path(Ebin_Path),
     ok.
