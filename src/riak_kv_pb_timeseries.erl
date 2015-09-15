@@ -1,7 +1,6 @@
 -module(riak_kv_pb_timeseries).
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
--include_lib("riak_ql/include/riak_ql_sql.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -behaviour(riak_api_pb_service).
 

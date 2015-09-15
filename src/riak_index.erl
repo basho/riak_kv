@@ -46,7 +46,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--include_lib("riak_ql/include/riak_ql_sql.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_index.hrl").
 -define(TIMEOUT, 30000).

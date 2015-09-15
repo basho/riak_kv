@@ -26,7 +26,7 @@
 	 create_plan/6
 	]).
 
--include_lib("riak_ql/include/riak_ql_sql.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 create_plan(_VNodeSelector, NVal, _PVC, _ReqId, _NodeCheckService, Request) ->
     BucketName = riak_kv_util:get_bucket_from_req(Request),

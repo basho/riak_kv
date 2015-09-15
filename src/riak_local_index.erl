@@ -29,7 +29,7 @@
 	 get_query_from_req/1
 	]).
 
--include_lib("riak_ql/include/riak_ql_sql.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_index.hrl").
 -include("riak_kv_vnode.hrl").
 
