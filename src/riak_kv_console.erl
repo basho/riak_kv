@@ -903,9 +903,7 @@ bucket_error_xlate(X) ->
 -include_lib("eunit/include/eunit.hrl").
 
 json_props(Props) ->
-    JSON = lists:flatten(mochijson2:encode([{props, Props}])),
-    ?debugFmt("~s", [JSON]),
-    JSON.
+    lists:flatten(mochijson2:encode([{props, Props}])).
 
 bucket_type_create_no_timeseries_test() ->
     Ref = make_ref(),
