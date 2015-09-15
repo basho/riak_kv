@@ -40,7 +40,7 @@ process(_Ddl = #ddl_v1{}, State) ->
                            type = 'BINARY'}],
                rows=[#tsrow{cells=[#tscell{binary_value = <<"jkl;">>}]}]},
      State};
-process({_DecodedQuery}, State) ->
+process(DecodedQuery = #riak_sql_v1{}, State) ->
     {reply, #tsqueryresp{
                columns=[#tscolumndescription{
                            name = <<"asdf">>,
@@ -51,15 +51,34 @@ process({_DecodedQuery}, State) ->
 process_stream(_, _, State)->
     {ignore, State}.
 
-decode_query(Query) ->
-    case Query of
-        #tsinterpolation{base=BaseQuery, interpolations=_Interpolations} ->
-            Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
-            {ok, Parsed} = riak_ql_parser:parse(Lexed),
-            Parsed
-    end.
+decode_query(#tsinterpolation{base=BaseQuery, interpolations=Interpolations}) ->
+    Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
+    {ok, Parsed} = riak_ql_parser:parse(Lexed),
+    TypedInterpolations = type_interpolations(Interpolations),
+    riak_ql_interpolator:interpolate(Parsed, TypedInterpolations).
 
 decode_query_permissions(#ddl_v1{bucket=NewBucket}) ->
     {"riak_kv.ts_create_table", NewBucket};
 decode_query_permissions(#riak_sql_v1{'FROM'=Bucket}) ->
     {"riak_kv.ts_query", Bucket}.
+
+type_interpolations(Interpolations) ->
+    type_interpolations(Interpolations, []).
+
+type_interpolations([], Acc) ->
+    Acc;
+type_interpolations([Cell | Rest], Acc) ->
+    type_interpolations(Rest, [type_interpolation(Cell) | Acc]).
+
+type_interpolation(#tscell{binary_value = Val}) when Val =/= undefined ->
+    {binary, Val};
+type_interpolation(#tscell{integer_value = Val}) when is_integer(Val) ->
+    {integer, Val};
+type_interpolation(#tscell{numeric_value = Val}) when Val =/= undefined ->
+    {numeric, Val};
+type_interpolation(#tscell{timestamp_value = Val}) when is_integer(Val) ->
+    {timestamp, Val};
+type_interpolation(#tscell{boolean_value = Val}) when is_boolean(Val) ->
+    {boolean, Val}.
+
+
