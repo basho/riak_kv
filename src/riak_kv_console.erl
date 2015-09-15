@@ -53,6 +53,8 @@
          aae_repair_status/1,
          aae_tree_status/1]).
 
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
+
 join([NodeStr]) ->
     join(NodeStr, fun riak_core:join/1,
          "Sent join request to ~s~n", [NodeStr]).
@@ -151,9 +153,6 @@ down([Node]) ->
             ok ->
                 io:format("Success: ~p marked as down~n", [Node]),
                 ok;
-            {error, legacy_mode} ->
-                io:format("Cluster is currently in legacy mode~n"),
-                ok;
             {error, is_up} ->
                 io:format("Failed: ~s is up~n", [Node]),
                 error;
@@ -176,10 +175,10 @@ down([Node]) ->
 status([]) ->
     try
         Stats = riak_kv_status:statistics(),
-	StatString = format_stats(Stats,
+        StatString = format_stats(Stats,
                     ["-------------------------------------------\n",
-		     io_lib:format("1-minute stats for ~p~n",[node()])]),
-	io:format("~s\n", [StatString])
+                     io_lib:format("1-minute stats for ~p~n",[node()])]),
+        io:format("~s\n", [StatString])
     catch
         Exception:Reason ->
             lager:error("Status failed ~p:~p", [Exception,
@@ -502,23 +501,72 @@ bucket_type_print_activate_result(Type, {error, not_ready}, _IsFirst) ->
 bucket_type_create([TypeStr, ""]) ->
     Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
     EmptyProps = {struct, [{<<"props">>, {struct, []}}]},
-    bucket_type_create(Type, EmptyProps);
+    CreateTypeFn = fun riak_core_bucket_type:create/2,
+    bucket_type_create(CreateTypeFn, Type, EmptyProps);
 bucket_type_create([TypeStr, PropsStr]) ->
     Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
-    bucket_type_create(Type, catch mochijson2:decode(PropsStr)).
+    CreateTypeFn =
+        fun(Props) ->
+            Result = riak_core_bucket_type:create(Type, Props),
+            bucket_type_print_create_result(Type, Result)
+        end,
+    bucket_type_create(CreateTypeFn, Type, catch mochijson2:decode(PropsStr)).
 
-bucket_type_create(Type, {struct, Fields}) ->
-    case proplists:get_value(<<"props">>, Fields) of
-        {struct, Props} ->
-            ErlProps = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props],
-            bucket_type_print_create_result(Type, riak_core_bucket_type:create(Type, ErlProps));
+-spec bucket_type_create(
+        CreateTypeFn :: fun(([proplists:property()]) -> ok),
+        Type :: binary(),
+        JSON :: any()) -> ok | error.
+bucket_type_create(CreateTypeFn, Type, {struct, Fields}) ->
+    case Fields of
+        [{<<"props", _/binary>>, {struct, Props1}}] ->
+            {ok, Props2} = maybe_parse_table_def(Type, Props1),
+            Props3 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props2],
+            CreateTypeFn(Props3);
         _ ->
             io:format("Cannot create bucket type ~ts: no props field found in json~n", [Type]),
             error
     end;
-bucket_type_create(Type, _) ->
+bucket_type_create(_, Type, _) ->
     io:format("Cannot create bucket type ~ts: invalid json~n", [Type]),
     error.
+
+%%
+-spec maybe_parse_table_def(BucketType :: binary(),
+                            Props :: list(proplists:property())) -> 
+        {ok, Props2 :: [proplists:property()]} | {error, any()}.
+maybe_parse_table_def(BucketType, Props) ->
+    case lists:keytake(<<"table_def">>, 1, Props) of
+        false ->
+            {ok, Props};
+        {value, {<<"table_def">>, TableDef}, PropsNoDef} ->
+            case riak_ql_parser:parse(riak_ql_lexer:get_tokens(binary_to_list(TableDef))) of
+                {ok, DDL} ->
+                    ok = assert_type_and_table_name_same(BucketType, DDL),
+                    ok = try_compile_ddl(DDL),
+                    {ok, [{<<"ddl">>, DDL} | PropsNoDef]};
+                {error, _} = E ->
+                    E
+            end
+    end.
+
+%%
+assert_type_and_table_name_same(BucketType, #ddl_v1{ bucket = BucketType }) ->
+    ok;
+assert_type_and_table_name_same(BucketType, #ddl_v1{ bucket = TableName }) ->
+    io:format(
+        "Error, the bucket type could not be the created. The bucket type and table name must be the same~n"
+        "    bucket type was: ~s~n"
+        "    table name was:  ~s~n",
+        [BucketType, TableName]),
+    {error, {bucket_type_and_table_name_different, BucketType, TableName}}.
+
+%% Attempt to compile the DDL but don't do anything with the output, this is
+%% catch failures as early as possible. Also the error messages are easy to
+%% return at this point.
+try_compile_ddl(DDL) ->
+    {_, AST} = riak_ql_ddl_compiler:compile(DDL),
+    {ok, _, _} = compile:forms(AST),
+    ok.
 
 bucket_type_print_create_result(Type, ok) ->
     io:format("~ts created~n", [Type]),
@@ -846,3 +894,68 @@ bucket_error_xlate({Property, Error}) ->
     [atom_to_list(Property), ": ", io_lib:format("~p", [Error])];
 bucket_error_xlate(X) ->
     io_lib:format("~p", [X]).
+
+%%%
+%%% Unit tests
+%%%
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+json_props(Props) ->
+    lists:flatten(mochijson2:encode([{props, Props}])).
+
+bucket_type_create_no_timeseries_test() ->
+    Ref = make_ref(),
+    JSON = json_props([{bucket_type, my_type}]),
+    bucket_type_create(
+        fun(Props) -> put(Ref, Props) end,
+        <<"my_type">>,
+        mochijson2:decode(JSON)
+    ),
+    ?assertEqual(
+        [{bucket_type, <<"my_type">>}],
+        get(Ref)
+    ).
+
+bucket_type_create_with_timeseries_table_test() ->
+    Ref = make_ref(),
+    TableDef =
+        <<"CREATE TABLE my_type ",
+          "(time TIMESTAMP NOT NULL, ",
+          " PRIMARY KEY (time))">>,
+    JSON = json_props([{bucket_type, my_type}, 
+                       {table_def, TableDef}]),
+    bucket_type_create(
+        fun(Props) -> put(Ref, Props) end,
+        <<"my_type">>,
+        mochijson2:decode(JSON)
+    ),
+    ?assertMatch(
+        [{ddl, _}, {bucket_type, <<"my_type">>}],
+        get(Ref)
+    ).
+
+bucket_type_and_table_name_must_match_test() ->
+    Ref = make_ref(),
+    TableDef =
+        <<"CREATE TABLE times ",
+          "(time TIMESTAMP NOT NULL, ",
+          " PRIMARY KEY (time))">>,
+    JSON = json_props([{bucket_type, my_type}, 
+                       {table_def, TableDef}]),
+    % if this error changes slightly it is not so important, as long as
+    % the bucket type is not allowed to be created.
+    ?assertError(
+        {badmatch,
+            {error,
+                {bucket_type_and_table_name_different,
+                    <<"my_type">>,<<"times">>}}},
+        bucket_type_create(
+            fun(Props) -> put(Ref, Props) end,
+            <<"my_type">>,
+            mochijson2:decode(JSON)
+        )
+    ).
+
+-endif.

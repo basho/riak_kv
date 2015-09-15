@@ -51,6 +51,11 @@
           item_filter :: riak_kv_coverage_filter:filter(),
           qry :: riak_index:query_def()}).
 
+%% TODO get riak_ql types included properly somehow
+-record(riak_kv_sql_select_req_v1, {
+	  bucket :: binary() | tuple(),
+	  qry}).
+
 -record(riak_kv_vnode_status_req_v1, {}).
 
 -record(riak_kv_delete_req_v1, {

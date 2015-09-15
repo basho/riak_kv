@@ -50,6 +50,8 @@
 -export_type([pncounter/0, pncounter_op/0]).
 
 -opaque pncounter() :: {riak_kv_gcounter:gcounter(), riak_kv_gcounter:gcounter()}.
+%% Redeclaring pncounter() with -type to please dialyzer
+-type  pncounter_() :: {riak_kv_gcounter:gcounter(), riak_kv_gcounter:gcounter()}.
 -type pncounter_op() :: riak_kv_gcounter:gcounter_op() | decrement_op().
 -type decrement_op() :: decrement | {decrement, pos_integer()}.
 
@@ -97,7 +99,7 @@ update({decrement, By}, Actor, {Incr, Decr}) when is_integer(By), By > 0 ->
 
 %% @doc Merge two `pncounter()'s to a single `pncounter()'. This is the Least Upper Bound
 %% function described in the literature.
--spec merge(pncounter(), pncounter()) -> pncounter().
+-spec merge(pncounter_(), pncounter_()) -> pncounter_().
 merge({Incr1, Decr1}, {Incr2, Decr2}) ->
     MergedIncr =  riak_kv_gcounter:merge(Incr1, Incr2),
     MergedDecr =  riak_kv_gcounter:merge(Decr1, Decr2),

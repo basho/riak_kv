@@ -52,6 +52,11 @@
 -export_type([gcounter/0, gcounter_op/0]).
 
 -opaque gcounter() :: [entry()].
+%% Redeclaring gcounter() with -type for local use, to make dialyzer
+%% accept specs for merge/2,3.  Apparently, dialyzer only accepts
+%% standalone variables for args having an opaque type spec, whereas
+%% we call those functions with an expressly constructed lists.
+-type gcounter_() :: [entry()].
 
 -type entry() :: {Actor::term(), Count::pos_integer()}.
 -type gcounter_op() :: increment | {increment, pos_integer()}.
@@ -62,7 +67,7 @@ new() ->
     [].
 
 %% @doc Create a `gcounter()' with an initial update
--spec new(term(), pos_integer()) -> gcounter().
+-spec new(term(), pos_integer()) -> {ok, gcounter()}.
 new(Id, Count) when is_integer(Count), Count > 0 ->
     update({increment, Count}, Id, new()).
 
@@ -74,20 +79,20 @@ value(GCnt) ->
 %% @doc `increment' the entry in `GCnt' for `Actor' by 1 or `{increment, Amt}'.
 %% returns an updated `gcounter()' or error if `Amt' is not a `pos_integer()'
 -spec update(gcounter_op(), term(), gcounter()) ->
-                    gcounter().
+                    {ok, gcounter()}.
 update(increment, Actor, GCnt) ->
     {ok, increment_by(1, Actor, GCnt)};
 update({increment, Amount}, Actor, GCnt) when is_integer(Amount), Amount > 0 ->
-   {ok, increment_by(Amount, Actor, GCnt)}.
+    {ok, increment_by(Amount, Actor, GCnt)}.
 
 %% @doc Merge two `gcounter()'s to a single `gcounter()'. This is the Least Upper Bound
 %% function described in the literature.
--spec merge(gcounter(), gcounter()) -> gcounter().
+-spec merge(gcounter_(), gcounter_()) -> gcounter_().
 merge(GCnt1, GCnt2) ->
     merge(GCnt1, GCnt2, []).
 
 %% @private merge two counters.
--spec merge(gcounter(), gcounter(), gcounter()) -> gcounter().
+-spec merge(gcounter_(), gcounter_(), gcounter_()) -> gcounter_().
 merge([], [], Acc) ->
     lists:reverse(Acc);
 merge(LeftOver, [], Acc) ->

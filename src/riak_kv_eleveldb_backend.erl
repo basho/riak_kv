@@ -42,6 +42,7 @@
          fold_keys/4,
          fold_objects/4,
          fold_indexes/4,
+	 range_scan/4,
          is_empty/1,
          status/1,
          callback/3]).
@@ -54,6 +55,7 @@
                   ]}).
 
 -include("riak_kv_index.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -393,21 +395,21 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
                            eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
                        catch
                            {break, BrkResult} ->
-                               BrkResult
+			       BrkResult
                        end,
-            case ExtraFold of
-                true ->
-                    legacy_key_fold(Ref, FoldFun, AccFinal, FoldOpts1, Limiter);
-                false ->
-                    AccFinal
-            end
+		case ExtraFold of
+		    true ->
+			legacy_key_fold(Ref, FoldFun, AccFinal, FoldOpts1, Limiter);
+		    false ->
+			AccFinal
+		end
         end,
     case lists:member(async_fold, Opts) of
-        true ->
-            {async, KeyFolder};
-        false ->
-            {ok, KeyFolder()}
-    end.
+	      true ->
+		  {async, KeyFolder};
+	      false ->
+		  {ok, KeyFolder()}
+	  end.
 
 fold_indexes(FoldIndexFun, Acc, _Opts, #state{fold_opts=FoldOpts,
                                               ref=Ref}) ->
@@ -434,6 +436,44 @@ fold_indexes_fun(FoldIndexFun) ->
                 _ ->
                     throw({break, Acc})
             end
+    end.
+
+range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
+					      ref=Ref}) ->
+    {_, Bucket, Qry} = proplists:lookup(index, Opts),
+    #riak_sql_v1{'WHERE'    = W,
+		 helper_mod = Mod,
+		 local_key  = LK} = Qry,
+    %% this is all super-fugly
+    {startkey, StartK} = proplists:lookup(startkey, W),
+    {endkey,   EndK}   = proplists:lookup(endkey, W),
+    {filter,   Filter} = proplists:lookup(filter, W),
+    StartK2 = [{Field, Val} || {Field, _Type, Val} <- StartK],
+    StartK3 = riak_ql_ddl:make_key(Mod, LK, StartK2),
+    StartKey = eleveldb_ts:encode_key(StartK3),
+    StartKey2 = sext:encode({o, Bucket, StartKey}),
+    EndK2 = [{Field, Val} || {Field, _Type, Val} <- EndK],
+    EndK3 = riak_ql_ddl:make_key(Mod, LK, EndK2),
+    EndKey = eleveldb_ts:encode_key(EndK3),
+    EndKey2 = sext:encode({o, Bucket, EndKey}),
+    KeyFolder = fun() ->
+			{ok, {MsgRef, AckRef}} = eleveldb:range_scan(Ref, StartKey2, EndKey2, Filter),
+			receive_batch(AckRef, MsgRef, FoldIndexFun, Buffer, [])
+		end,
+    {async, KeyFolder}.
+
+%% TODO work out best way to handle a locked elevedb
+receive_batch(AckRef, MsgRef, FoldIndexFun, Buffer, Acc) ->
+    receive
+        {range_scan_end, MsgRef} ->
+	    FoldIndexFun(lists:reverse(Acc), Buffer);
+        {range_scan_batch, MsgRef, Batch} ->
+	    Size = byte_size(Batch),
+	    ok = eleveldb:range_scan_ack(AckRef, Size),
+	    receive_batch(AckRef, MsgRef, FoldIndexFun, Buffer, [Batch | Acc])
+    after
+	12000 ->
+	    exit("lock in eleveldb - not sure what to do")
     end.
 
 legacy_key_fold(Ref, FoldFun, Acc, FoldOpts0, Query={index, _, _}) ->

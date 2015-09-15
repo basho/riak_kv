@@ -633,7 +633,7 @@ do_build_finished(State=#state{index=Index, built=_Pid}) ->
 %% the tree was rehashed after a restart, this function should return
 %% the original build time. If this is a newly created tree (or if the
 %% on-disk time is invalid), the function returns the current time.
--spec get_build_time(hashtree()) -> calendar:t_now().
+-spec get_build_time(hashtree()) -> erlang:timestamp().
 get_build_time(Tree) ->
     Time = case hashtree:read_meta(<<"build_time">>, Tree) of
                {ok, TimeBin} ->
