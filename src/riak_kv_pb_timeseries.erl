@@ -41,8 +41,9 @@ process(#tsputreq{table=Table, columns=_Columns, rows=Rows}, State) ->
 process(_DDL = #ddl_v1{}, State) ->
     %% {module, Module} = riak_ql_ddl_compiler:make_helper_mod(DDL),
     %% and what do we do with this DDL?
-    %% isn't bucket creation (primarily) effected via bucket activation (via riak-admin)?
-    {reply, #tsqueryresp{},
+    %% bucket creation effected via bucket activation (via riak-admin)
+    {reply, #rpberrorresp{errcode = -3,
+                          errmsg = "CREATE TABLE not supported via client interface; use riak-admin command instead"},
      State};
 
 %% @ignore SELECT
