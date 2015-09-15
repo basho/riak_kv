@@ -34,11 +34,14 @@ create_plan(_VNodeSelector, NVal, _PVC, _ReqId, _NodeCheckService, Request) ->
     #riak_sql_v1{helper_mod    = Mod,
 		 partition_key = PK,
 		 'WHERE'       = W} = Query,
+    %% This is fugly because the physical format of the startkey
+    %% which is neede by eleveldb is being used by the query
+    %% planner which should only know about a more logical format
     {startkey, StartKey} = proplists:lookup(startkey, W),
-    Key = riak_ql_ddl:make_key(Mod, PK, StartKey), 
+    StartKey2 = [{Field, Val} || {Field, _Type, Val} <- StartKey],
+    Key = riak_ql_ddl:make_key(Mod, PK, StartKey2),
     Key2 = eleveldb_ts:encode_key(Key),
     DocIdx = riak_core_util:chash_key({BucketName, Key2}),
-    %% BucketProps = riak_core_bucket:get_bucket(BucketName),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Perfs = riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes),
     {VNodes, _} = lists:unzip(Perfs),
