@@ -71,6 +71,15 @@ workers() ->
 start_link(Name) ->
     gen_server:start_link({local, Name}, ?MODULE, [], []).
 
+%%
+get_key(RObj) ->
+    case riak_object:get_ts_local_key(RObj) of
+        {ok, LocalKey} ->
+            LocalKey;
+        error ->
+            riak_object:key(RObj)
+    end.
+
 %% @spec put(RObj :: riak_object:riak_object(), riak_object:options(), riak_object:riak_client()) ->
 %%        ok |
 %%       {error, timeout} |
@@ -78,8 +87,9 @@ start_link(Name) ->
 put(RObj, Options) ->
     StartTS = os:timestamp(),
     Bucket = riak_object:bucket(RObj),
-    BKey = {Bucket, riak_object:key(RObj)},
-    BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
+    Key = get_key(RObj),
+    BKey = {Bucket, Key},
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
     DocIdx = riak_core_util:chash_key(BKey, BucketProps),
     NVal = proplists:get_value(n_val, BucketProps),
     Preflist =
@@ -99,8 +109,6 @@ put(RObj, Options) ->
             RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
             RObj3 = riak_object:update_last_modified(RObj2),
             RObj4 = riak_object:apply_updates(RObj3),
-            Bucket = riak_object:bucket(RObj4),
-            Key = riak_object:key(RObj4),
             EncodedVal = riak_object:to_binary(v1, RObj4),
             gen_server:cast(
                 Worker,
@@ -114,6 +122,8 @@ put(RObj, Options) ->
                           _ ->
                               ?DEFAULT_TIMEOUT
                       end,
+            % this is not direct gen_server:call because the process that
+            % replies is not the one that received the cast
             receive
                 {'DOWN', ReqId, process, _Pid, _Reason} ->
                     {error, riak_kv_w1c_server_crashed};

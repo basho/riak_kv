@@ -551,9 +551,9 @@ maybe_parse_table_def(BucketType, Props) ->
     end.
 
 %%
--spec apply_timeseries_bucket_props(DDL::any(),
+-spec apply_timeseries_bucket_props(DDL::#ddl_v1{},
                                     Props1::[proplists:property()]) -> 
-        {ok, {Props2::[proplists:property()]}}.
+        {ok, Props2::[proplists:property()]}.
 apply_timeseries_bucket_props(DDL, Props1) ->
     Props2 = lists:keystore(
         <<"write_once">>, 1, Props1, {<<"write_once">>, true}),
