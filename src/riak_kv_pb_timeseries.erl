@@ -40,7 +40,7 @@ process(_Ddl = #ddl_v1{}, State) ->
                            type = 'BINARY'}],
                rows=[#tsrow{cells=[#tscell{binary_value = <<"jkl;">>}]}]},
      State};
-process(DecodedQuery = #riak_sql_v1{}, State) ->
+process(_DecodedQuery = #riak_sql_v1{}, State) ->
     {reply, #tsqueryresp{
                columns=[#tscolumndescription{
                            name = <<"asdf">>,
@@ -67,15 +67,15 @@ type_interpolations(Interpolations) ->
 
 type_interpolations([], Acc) ->
     Acc;
-type_interpolations([Cell | Rest], Acc) ->
-    type_interpolations(Rest, [type_interpolation(Cell) | Acc]).
+type_interpolations([#tskeycell{key=Key, value=Val} | Rest], Acc) ->
+    type_interpolations(Rest, [{binary_to_list(Key), type_interpolation(Val)} | Acc]).
 
 type_interpolation(#tscell{binary_value = Val}) when Val =/= undefined ->
-    {binary, Val};
+    {binary, iolist_to_binary(Val)};
 type_interpolation(#tscell{integer_value = Val}) when is_integer(Val) ->
     {integer, Val};
 type_interpolation(#tscell{numeric_value = Val}) when Val =/= undefined ->
-    {numeric, Val};
+    {numeric, iolist_to_binary(Val)};
 type_interpolation(#tscell{timestamp_value = Val}) when is_integer(Val) ->
     {timestamp, Val};
 type_interpolation(#tscell{boolean_value = Val}) when is_boolean(Val) ->
