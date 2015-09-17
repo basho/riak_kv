@@ -342,7 +342,7 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{fold_opts=FoldOpts,
                                                ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     FirstKey = to_first_key(undefined),
-    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    FoldOpts1 = [{start_key, FirstKey} | FoldOpts],
     BucketFolder =
         fun() ->
                 try
@@ -385,7 +385,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     %% Set up the fold...
     FirstKey = to_first_key(Limiter),
     FoldFun = fold_keys_fun(FoldKeysFun, Limiter),
-    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    FoldOpts1 = [{start_key, FirstKey} | FoldOpts],
     ExtraFold = not FixedIdx orelse WriteLegacyIdx,
     KeyFolder =
         fun() ->
@@ -517,7 +517,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
 
     %% Set up the fold...
     FirstKey = to_first_key(Limiter),
-    FoldOpts1 = IteratorRefresh ++ [{first_key, FirstKey} | FoldOpts],
+    FoldOpts1 = IteratorRefresh ++ [{start_key, FirstKey} | FoldOpts],
     FoldFun = fold_objects_fun(FoldObjectsFun, Limiter),
 
     ObjectFolder =
