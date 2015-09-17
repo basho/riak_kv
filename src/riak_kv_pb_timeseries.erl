@@ -39,6 +39,9 @@
 init() ->
     #state{}.
 
+-spec decode(integer(), binary()) ->
+                    {ok, #ddl_v1{} | #riak_sql_v1{} | #tsputreq{},
+                     {PermSpec::string(), Table::binary()}}.
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
@@ -50,23 +53,27 @@ decode(Code, Bin) ->
             {ok, Msg, {"riak_kv.ts_put", Table}}
     end.
 
+-spec encode(tuple()) -> {ok, iolist()}.
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
+-spec process(#ddl_v1{} | #riak_sql_v1{} | #tsputreq{}, #state{}) ->
+                     {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 %% @ignore INSERT (as if)
 process(#tsputreq{table=Table, columns=_Columns, rows=Rows}, State) ->
     Data = make_data(Rows),
     Mod = riak_ql_ddl:make_module_name(Table),
     _Data2 = Mod:add_column_info(Data),
-    {reply, tsputresp, State};
+    {reply, #tsputresp{}, State};
 
 %% @ignore CREATE TABLE
 process(_DDL = #ddl_v1{}, State) ->
     %% {module, Module} = riak_ql_ddl_compiler:make_helper_mod(DDL),
     %% and what do we do with this DDL?
-    %% bucket creation effected via bucket activation (via riak-admin)
+    %% isn't bucket creation (primarily) effected via bucket activation (via riak-admin)?
     {reply, #rpberrorresp{errcode = -3,
-                          errmsg = "CREATE TABLE not supported via client interface; use riak-admin command instead"},
+                          errmsg = "CREATE TABLE not supported via client interface;"
+                          " use riak-admin command instead"},
      State};
 
 %% @ignore SELECT
@@ -91,6 +98,9 @@ process(SQL = #riak_sql_v1{'FROM' = Bucket}, State) ->
              State}
     end.
 
+
+-spec make_tsqueryresp([[{binary(), term()}]], fun()) ->
+                              #tsqueryresp{}.
 make_tsqueryresp([], _Fun) ->
     #tsqueryresp{columns = [], rows = []};
 make_tsqueryresp(Data, GetFieldTypeF) ->
@@ -103,6 +113,8 @@ make_tsqueryresp(Data, GetFieldTypeF) ->
                             || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)],
                  rows = make_data(Rows)}.
 
+
+%% TODO: implement
 process_stream(_, _, State)->
     {ignore, State}.
 
@@ -114,10 +126,12 @@ decode_query(Query) ->
             Parsed
     end.
 
+-spec decode_query_permissions(#ddl_v1{} | #riak_sql_v1{}) -> {string(), binary()}.
 decode_query_permissions(#ddl_v1{bucket=NewBucket}) ->
     {"riak_kv.ts_create_table", NewBucket};
 decode_query_permissions(#riak_sql_v1{'FROM'=Bucket}) ->
     {"riak_kv.ts_query", Bucket}.
+
 
 make_data(Rows) ->
     make_d2(Rows, []).
