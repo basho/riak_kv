@@ -1,3 +1,26 @@
+%% -------------------------------------------------------------------
+%%
+%% riak_kv_pb_timeseries.erl: Riak TS protobuf callbacks
+%%
+%% Copyright (c) 2015 Basho Technologies, Inc.
+%%
+%% This file is provided to you under the Apache License,
+%% Version 2.0 (the "License"); you may not use this file
+%% except in compliance with the License.  You may obtain
+%% a copy of the License at
+%%
+%%   http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing,
+%% software distributed under the License is distributed on an
+%% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+%% KIND, either express or implied.  See the License for the
+%% specific language governing permissions and limitations
+%% under the License.
+%%
+%% -------------------------------------------------------------------
+%% @doc Callbacks for TS protobuf messages [codes 90..93]
+
 -module(riak_kv_pb_timeseries).
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
@@ -16,6 +39,9 @@
 init() ->
     #state{}.
 
+-spec decode(integer(), binary()) ->
+                    {ok, #ddl_v1{} | #riak_sql_v1{} | #tsputreq{},
+                     {PermSpec::string(), Table::binary()}}.
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
@@ -27,22 +53,27 @@ decode(Code, Bin) ->
             {ok, Msg, {"riak_kv.ts_put", Table}}
     end.
 
+-spec encode(tuple()) -> {ok, iolist()}.
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
+-spec process(#ddl_v1{} | #riak_sql_v1{} | #tsputreq{}, #state{}) ->
+                     {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 %% @ignore INSERT (as if)
 process(#tsputreq{table=Table, columns=_Columns, rows=Rows}, State) ->
     Data = make_data(Rows),
     Mod = riak_ql_ddl:make_module_name(Table),
     _Data2 = Mod:add_column_info(Data),
-    {reply, tsputresp, State};
+    {reply, #tsputresp{}, State};
 
 %% @ignore CREATE TABLE
 process(_DDL = #ddl_v1{}, State) ->
     %% {module, Module} = riak_ql_ddl_compiler:make_helper_mod(DDL),
     %% and what do we do with this DDL?
     %% isn't bucket creation (primarily) effected via bucket activation (via riak-admin)?
-    {reply, #tsqueryresp{},
+    {reply, #rpberrorresp{errcode = -3,
+                          errmsg = "CREATE TABLE not supported via client interface;"
+                          " use riak-admin command instead"},
      State};
 
 %% @ignore SELECT
@@ -67,6 +98,9 @@ process(SQL = #riak_sql_v1{'FROM' = Bucket}, State) ->
              State}
     end.
 
+
+-spec make_tsqueryresp([[{binary(), term()}]], fun()) ->
+                              #tsqueryresp{}.
 make_tsqueryresp([], _Fun) ->
     #tsqueryresp{columns = [], rows = []};
 make_tsqueryresp(Data, GetFieldTypeF) ->
@@ -79,6 +113,8 @@ make_tsqueryresp(Data, GetFieldTypeF) ->
                             || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)],
                  rows = make_data(Rows)}.
 
+
+%% TODO: implement
 process_stream(_, _, State)->
     {ignore, State}.
 
@@ -90,10 +126,12 @@ decode_query(Query) ->
             Parsed
     end.
 
+-spec decode_query_permissions(#ddl_v1{} | #riak_sql_v1{}) -> {string(), binary()}.
 decode_query_permissions(#ddl_v1{bucket=NewBucket}) ->
     {"riak_kv.ts_create_table", NewBucket};
 decode_query_permissions(#riak_sql_v1{'FROM'=Bucket}) ->
     {"riak_kv.ts_query", Bucket}.
+
 
 make_data(Rows) ->
     make_d2(Rows, []).
@@ -106,58 +144,58 @@ make_d2([{tsrow, Row} | T], Acc) ->
 make_d3([], Acc) ->
     list_to_tuple(lists:reverse(Acc));
 make_d3([#tscell{binary_value    = Bin,
-		 integer_value   = undefined,
-		 numeric_value   = undefined,
-		 timestamp_value = undefined,
-		 boolean_value   = undefined,
-		 set_value       = [],
-		 map_value       = undefined} | T], Acc) ->
+                 integer_value   = undefined,
+                 numeric_value   = undefined,
+                 timestamp_value = undefined,
+                 boolean_value   = undefined,
+                 set_value       = [],
+                 map_value       = undefined} | T], Acc) ->
     make_d3(T, [Bin | Acc]);
 make_d3([#tscell{binary_value    = undefined,
-		 integer_value   = Int,
-		 numeric_value   = undefined,
-		 timestamp_value = undefined,
-		 boolean_value   = undefined,
-		 set_value       = [],
-		 map_value       = undefined} | T], Acc) ->
+                 integer_value   = Int,
+                 numeric_value   = undefined,
+                 timestamp_value = undefined,
+                 boolean_value   = undefined,
+                 set_value       = [],
+                 map_value       = undefined} | T], Acc) ->
     make_d3(T, [Int | Acc]);
 make_d3([#tscell{binary_value    = undefined,
-		 integer_value   = undefined,
-		 numeric_value   = Num,
-		 timestamp_value = undefined,
-		 boolean_value   = undefined,
-		 set_value       = [],
-		 map_value       = undefined} | T], Acc) ->
+                 integer_value   = undefined,
+                 numeric_value   = Num,
+                 timestamp_value = undefined,
+                 boolean_value   = undefined,
+                 set_value       = [],
+                 map_value       = undefined} | T], Acc) ->
     make_d3(T, [Num | Acc]);
 make_d3([#tscell{binary_value    = undefined,
-		 integer_value   = undefined,
-		 numeric_value   = undefined,
-		 timestamp_value = Timestamp,
-		 boolean_value   = undefined,
-		 set_value       = [],
-		 map_value       = undefined} | T], Acc) ->
+                 integer_value   = undefined,
+                 numeric_value   = undefined,
+                 timestamp_value = Timestamp,
+                 boolean_value   = undefined,
+                 set_value       = [],
+                 map_value       = undefined} | T], Acc) ->
     make_d3(T, [Timestamp | Acc]);
 make_d3([#tscell{binary_value    = undefined,
-		 integer_value   = undefined,
-		 numeric_value   = undefined,
-		 timestamp_value = undefined,
-		 boolean_value   = Bool,
-		 set_value       = [],
-		 map_value       = undefined} | T], Acc) ->
+                 integer_value   = undefined,
+                 numeric_value   = undefined,
+                 timestamp_value = undefined,
+                 boolean_value   = Bool,
+                 set_value       = [],
+                 map_value       = undefined} | T], Acc) ->
     make_d3(T, [Bool | Acc]);
 make_d3([#tscell{binary_value    = undefined,
-		 integer_value   = undefined,
-		 numeric_value   = undefined,
-		 timestamp_value = undefined,
-		 boolean_value   = undefined,
-		 set_value       = Set,
-		 map_value       = undefined} | T], Acc) ->
+                 integer_value   = undefined,
+                 numeric_value   = undefined,
+                 timestamp_value = undefined,
+                 boolean_value   = undefined,
+                 set_value       = Set,
+                 map_value       = undefined} | T], Acc) ->
     make_d3(T, [Set | Acc]);
 make_d3([#tscell{binary_value    = undefined,
-		 integer_value   = undefined,
-		 numeric_value   = undefined,
-		 timestamp_value = undefined,
-		 boolean_value   = undefined,
-		 set_value       = [],
-		 map_value       = Map} | T], Acc) ->
+                 integer_value   = undefined,
+                 numeric_value   = undefined,
+                 timestamp_value = undefined,
+                 boolean_value   = undefined,
+                 set_value       = [],
+                 map_value       = Map} | T], Acc) ->
     make_d3(T, [Map | Acc]).
