@@ -71,15 +71,6 @@ workers() ->
 start_link(Name) ->
     gen_server:start_link({local, Name}, ?MODULE, [], []).
 
-%%
-get_key(RObj) ->
-    case riak_object:get_ts_local_key(RObj) of
-        {ok, LocalKey} ->
-            LocalKey;
-        error ->
-            riak_object:key(RObj)
-    end.
-
 %% @spec put(RObj :: riak_object:riak_object(), riak_object:options(), riak_object:riak_client()) ->
 %%        ok |
 %%       {error, timeout} |
@@ -87,7 +78,17 @@ get_key(RObj) ->
 put(RObj, Options) ->
     StartTS = os:timestamp(),
     Bucket = riak_object:bucket(RObj),
-    Key = get_key(RObj),
+    case riak_object:get_ts_local_key(RObj) of
+        {ok, LocalKey} ->
+            Key = LocalKey,
+            EncodeFn =
+                fun(XRObj) ->
+                    riak_object:to_binary(v1, XRObj, msgpack)
+                end;
+        error ->
+            Key = riak_object:key(RObj),
+            EncodeFn = fun(XRObj) -> riak_object:to_binary(v1, XRObj) end
+    end,
     BKey = {Bucket, Key},
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     DocIdx = riak_core_util:chash_key(BKey, BucketProps),
@@ -109,7 +110,7 @@ put(RObj, Options) ->
             RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
             RObj3 = riak_object:update_last_modified(RObj2),
             RObj4 = riak_object:apply_updates(RObj3),
-            EncodedVal = riak_object:to_binary(v1, RObj4),
+            EncodedVal = EncodeFn(RObj4),
             gen_server:cast(
                 Worker,
                 {put, Bucket, Key, EncodedVal, ReqId, Preflist,
