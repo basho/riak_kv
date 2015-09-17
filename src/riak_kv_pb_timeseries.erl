@@ -1,3 +1,26 @@
+%% -------------------------------------------------------------------
+%%
+%% riak_kv_pb_timeseries.erl: Riak TS protobuf callbacks
+%%
+%% Copyright (c) 2015 Basho Technologies, Inc.
+%%
+%% This file is provided to you under the Apache License,
+%% Version 2.0 (the "License"); you may not use this file
+%% except in compliance with the License.  You may obtain
+%% a copy of the License at
+%%
+%%   http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing,
+%% software distributed under the License is distributed on an
+%% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+%% KIND, either express or implied.  See the License for the
+%% specific language governing permissions and limitations
+%% under the License.
+%%
+%% -------------------------------------------------------------------
+%% @doc Callbacks for TS protobuf messages [codes 90..93]
+
 -module(riak_kv_pb_timeseries).
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
@@ -107,58 +130,58 @@ make_d2([{tsrow, Row} | T], Acc) ->
 make_d3([], Acc) ->
     list_to_tuple(lists:reverse(Acc));
 make_d3([#tscell{binary_value    = Bin,
-		 integer_value   = undefined,
-		 numeric_value   = undefined,
-		 timestamp_value = undefined,
-		 boolean_value   = undefined,
-		 set_value       = [],
-		 map_value       = undefined} | T], Acc) ->
+                 integer_value   = undefined,
+                 numeric_value   = undefined,
+                 timestamp_value = undefined,
+                 boolean_value   = undefined,
+                 set_value       = [],
+                 map_value       = undefined} | T], Acc) ->
     make_d3(T, [Bin | Acc]);
 make_d3([#tscell{binary_value    = undefined,
-		 integer_value   = Int,
-		 numeric_value   = undefined,
-		 timestamp_value = undefined,
-		 boolean_value   = undefined,
-		 set_value       = [],
-		 map_value       = undefined} | T], Acc) ->
+                 integer_value   = Int,
+                 numeric_value   = undefined,
+                 timestamp_value = undefined,
+                 boolean_value   = undefined,
+                 set_value       = [],
+                 map_value       = undefined} | T], Acc) ->
     make_d3(T, [Int | Acc]);
 make_d3([#tscell{binary_value    = undefined,
-		 integer_value   = undefined,
-		 numeric_value   = Num,
-		 timestamp_value = undefined,
-		 boolean_value   = undefined,
-		 set_value       = [],
-		 map_value       = undefined} | T], Acc) ->
+                 integer_value   = undefined,
+                 numeric_value   = Num,
+                 timestamp_value = undefined,
+                 boolean_value   = undefined,
+                 set_value       = [],
+                 map_value       = undefined} | T], Acc) ->
     make_d3(T, [Num | Acc]);
 make_d3([#tscell{binary_value    = undefined,
-		 integer_value   = undefined,
-		 numeric_value   = undefined,
-		 timestamp_value = Timestamp,
-		 boolean_value   = undefined,
-		 set_value       = [],
-		 map_value       = undefined} | T], Acc) ->
+                 integer_value   = undefined,
+                 numeric_value   = undefined,
+                 timestamp_value = Timestamp,
+                 boolean_value   = undefined,
+                 set_value       = [],
+                 map_value       = undefined} | T], Acc) ->
     make_d3(T, [Timestamp | Acc]);
 make_d3([#tscell{binary_value    = undefined,
-		 integer_value   = undefined,
-		 numeric_value   = undefined,
-		 timestamp_value = undefined,
-		 boolean_value   = Bool,
-		 set_value       = [],
-		 map_value       = undefined} | T], Acc) ->
+                 integer_value   = undefined,
+                 numeric_value   = undefined,
+                 timestamp_value = undefined,
+                 boolean_value   = Bool,
+                 set_value       = [],
+                 map_value       = undefined} | T], Acc) ->
     make_d3(T, [Bool | Acc]);
 make_d3([#tscell{binary_value    = undefined,
-		 integer_value   = undefined,
-		 numeric_value   = undefined,
-		 timestamp_value = undefined,
-		 boolean_value   = undefined,
-		 set_value       = Set,
-		 map_value       = undefined} | T], Acc) ->
+                 integer_value   = undefined,
+                 numeric_value   = undefined,
+                 timestamp_value = undefined,
+                 boolean_value   = undefined,
+                 set_value       = Set,
+                 map_value       = undefined} | T], Acc) ->
     make_d3(T, [Set | Acc]);
 make_d3([#tscell{binary_value    = undefined,
-		 integer_value   = undefined,
-		 numeric_value   = undefined,
-		 timestamp_value = undefined,
-		 boolean_value   = undefined,
-		 set_value       = [],
-		 map_value       = Map} | T], Acc) ->
+                 integer_value   = undefined,
+                 numeric_value   = undefined,
+                 timestamp_value = undefined,
+                 boolean_value   = undefined,
+                 set_value       = [],
+                 map_value       = Map} | T], Acc) ->
     make_d3(T, [Map | Acc]).
