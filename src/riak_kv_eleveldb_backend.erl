@@ -456,25 +456,21 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     EndK3 = riak_ql_ddl:make_key(Mod, LK, EndK2),
     EndKey = eleveldb_ts:encode_key(EndK3),
     EndKey2 = sext:encode({o, Bucket, EndKey}),
+    FoldFun = fun({K, V}, Acc) ->
+		     [{K, V} | Acc]
+	     end,
+    Options = [
+	       StartKey2,
+	       EndKey2,
+	       {fold_method, streaming},
+	       {range_filter, Filter},
+	       {encoding, msgpack}
+	      ],
     KeyFolder = fun() ->
-			{ok, {MsgRef, AckRef}} = eleveldb:range_scan(Ref, StartKey2, EndKey2, Filter),
-			receive_batch(AckRef, MsgRef, FoldIndexFun, Buffer, [])
+			Vals = eleveldb:fold(Ref, FoldFun, [], Options),
+			FoldIndexFun(lists:reverse(Vals), Buffer)
 		end,
     {async, KeyFolder}.
-
-%% TODO work out best way to handle a locked elevedb
-receive_batch(AckRef, MsgRef, FoldIndexFun, Buffer, Acc) ->
-    receive
-        {range_scan_end, MsgRef} ->
-	    FoldIndexFun(lists:reverse(Acc), Buffer);
-        {range_scan_batch, MsgRef, Batch} ->
-	    Size = byte_size(Batch),
-	    ok = eleveldb:range_scan_ack(AckRef, Size),
-	    receive_batch(AckRef, MsgRef, FoldIndexFun, Buffer, [Batch | Acc])
-    after
-	12000 ->
-	    exit("lock in eleveldb - not sure what to do")
-    end.
 
 legacy_key_fold(Ref, FoldFun, Acc, FoldOpts0, Query={index, _, _}) ->
     {_, FirstKey} = lists:keyfind(first_key, 1, FoldOpts0),
