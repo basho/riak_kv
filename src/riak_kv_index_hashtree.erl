@@ -483,7 +483,7 @@ hash_index_data(IndexData) when is_list(IndexData) ->
 fold_keys(Partition, Tree, HasIndexTree) ->
     FoldFun = fold_fun(Tree, HasIndexTree),
     Req = riak_core_util:make_fold_req(FoldFun,
-                                       0, false, 
+                                       0, false,
                                        [aae_reconstruction,
                                         {iterator_refresh, true}]),
     riak_core_vnode_master:sync_command({Partition, node()},
@@ -619,14 +619,22 @@ apply_tree(Id, Fun, State=#state{trees=Trees}) ->
     end.
 
 -spec do_build_finished(state()) -> state().
-do_build_finished(State=#state{index=Index, built=_Pid}) ->
+do_build_finished(State=#state{index=Index, built=_Pid, trees=Trees0}) ->
     lager:debug("Finished build: ~p", [Index]),
-    {_,Tree0} = hd(State#state.trees),
+    Trees = orddict:map(fun(_Id, Tree) ->
+                            try
+                                hashtree:flush_buffer(Tree)
+                            catch _:_ ->
+                                lager:warning("Failed to flush trees during build_finish"),
+                                Tree
+                            end
+                        end, Trees0),
+    {_, Tree0} = hd(Trees),
     BuildTime = get_build_time(Tree0),
     _ = hashtree:write_meta(<<"built">>, <<1>>, Tree0),
     _ = hashtree:write_meta(<<"build_time">>, term_to_binary(BuildTime), Tree0),
     riak_kv_entropy_info:tree_built(Index, BuildTime),
-    State#state{built=true, build_time=BuildTime, expired=false}.
+    State#state{built=true, build_time=BuildTime, expired=false, trees=Trees}.
 
 %% Determine the build time for all trees associated with this
 %% index. The build time is stored as metadata in the on-disk file. If
@@ -683,7 +691,7 @@ expand_item(_, Item, Others) ->
 do_insert_expanded([], _Opts, State) ->
     State;
 do_insert_expanded([{Id, Key, Hash}|Rest], Opts, State=#state{trees=Trees}) ->
-    State2 = 
+    State2 =
     case orddict:find(Id, Trees) of
         {ok, Tree} ->
             Tree2 = hashtree:insert(Key, Hash, Tree, Opts),
@@ -879,7 +887,7 @@ build_or_rehash(Self, Locked, Type, #state{index=Index, trees=Trees}) ->
         {true, build} ->
             lager:info("Starting AAE tree build: ~p", [Index]),
             fold_keys(Index, Self, has_index_tree(Trees)),
-            lager:info("Finished AAE tree build: ~p", [Index]), 
+            lager:info("Finished AAE tree build: ~p", [Index]),
             gen_server:cast(Self, build_finished);
         {true, rehash} ->
             lager:debug("Starting AAE tree rehash: ~p", [Index]),
