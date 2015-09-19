@@ -622,12 +622,7 @@ apply_tree(Id, Fun, State=#state{trees=Trees}) ->
 do_build_finished(State=#state{index=Index, built=_Pid, trees=Trees0}) ->
     lager:debug("Finished build: ~p", [Index]),
     Trees = orddict:map(fun(_Id, Tree) ->
-                            try
-                                hashtree:flush_buffer(Tree)
-                            catch _:_ ->
-                                lager:warning("Failed to flush trees during build_finish"),
-                                Tree
-                            end
+                            hashtree:flush_buffer(Tree)
                         end, Trees0),
     {_, Tree0} = hd(Trees),
     BuildTime = get_build_time(Tree0),
