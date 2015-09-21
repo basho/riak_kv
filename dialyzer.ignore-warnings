@@ -13,6 +13,7 @@ riak_kv_vnode.erl:2051: Function delete_from_hashtree/3 has no local return
 riak_kv_vnode.erl:2055: The call riak_kv_index_hashtree:async_delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ({binary(),binary()} | [{binary(),binary()}],pid()) -> 'ok'
 riak_kv_vnode.erl:2058: The call riak_kv_index_hashtree:delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ([{binary(),binary()}],pid()) -> 'ok'
 riak_kv_vnode.erl:2128: Function update_index_delete_stats/1 will never be called
+riak_kv_pb_timeseries.erl:169: Function put_data/3 has no local return
 # Callback info not available
 Callback info about the riak_core_vnode_worker behaviour is not available
 Callback info about the riak_core_coverage_fsm behaviour is not available
