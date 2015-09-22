@@ -50,9 +50,9 @@ make_key(#riak_sql_v1{helper_mod    = Mod,
 
 %%
 hash_for_nodes(NVal,
-               Bucket_type, Bucket_name, Key) when is_binary(BucketType),
-                                                   is_binary(BucketName),
-                                                   is_binary(Key) ->
+               BucketType, BucketName, Key) when is_binary(BucketType),
+                                                 is_binary(BucketName),
+                                                 is_binary(Key) ->
     DocIdx = riak_core_util:chash_key({{BucketType,BucketName}, Key}),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Perfs = riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes),
