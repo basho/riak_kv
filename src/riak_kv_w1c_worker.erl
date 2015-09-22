@@ -89,7 +89,7 @@ put(RObj, Options) ->
             Key = riak_object:key(RObj),
             EncodeFn = fun(XRObj) -> riak_object:to_binary(v1, XRObj) end
     end,
-    BKey = {Bucket, Key},
+    BKey = {Bucket, riak_object:key(RObj)},
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     DocIdx = riak_core_util:chash_key(BKey, BucketProps),
     NVal = proplists:get_value(n_val, BucketProps),
