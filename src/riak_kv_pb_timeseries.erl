@@ -38,11 +38,13 @@
 
 -record(state, {}).
 
--define(E_SUBMIT, -1).
--define(E_FETCH, -2).
--define(E_IRREG, -3).
--define(E_PUT, -4).
--define(E_NOCREATE, -5).
+%% these error codes are obviously local to this module,
+%% until a central place for error numbers is defined
+-define(E_SUBMIT,   1).
+-define(E_FETCH,    2).
+-define(E_IRREG,    3).
+-define(E_PUT,      4).
+-define(E_NOCREATE, 5).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
