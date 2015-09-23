@@ -17,7 +17,7 @@
 %% Testing Macros
 %%
 
--define(passing_test(Name, TableCreate, Query, Expected),
+-define(assert_test(Name, TableCreate, Query, Expected),
         Name() ->
                {ok, DDL} = make_ddl(TableCreate),
                {module, _Mod} = riak_ql_ddl_compiler:make_helper_mod(DDL),
@@ -63,7 +63,7 @@ get_standard_lk() -> #key_v1{ast = [
 %% Passing Tests
 %%
 
-?passing_test(plain_qry_test,
+?assert_test(plain_qry_test,
               "CREATE TABLE GeoCheckin "
               ++ "(geohash varchar not null, "
               ++ "user varchar not null, "
@@ -103,7 +103,25 @@ get_standard_lk() -> #key_v1{ast = [
                            local_key     = get_standard_lk()}
              ]).
 
-?passing_test(spanning_qry_test, 
+?assert_test(badarith_regression_test,
+              "CREATE TABLE GeoCheckin "
+              ++ "(geohash varchar not null, "
+              ++ "user varchar not null, "
+              ++ "time timestamp not null, "
+              ++ "weather varchar not null, "
+              ++ "temperature varchar, "
+              ++ "PRIMARY KEY ((quantum(time, 15, s)), time, user))",
+	     "select weather from GeoCheckin where time > 3000 and time < 5000",
+	     [{error,
+	       {invalid_where_clause,
+		{and_, 
+		 {'<', <<"time">>, {int, 5000}}, 
+		 {'>', <<"time">>, {int, 3000}}
+		}
+		}
+	      }]).
+
+?assert_test(spanning_qry_test, 
 	      "CREATE TABLE GeoCheckin " ++
 		  "(geohash varchar not null, " ++ 
 		  "user varchar not null, " ++
