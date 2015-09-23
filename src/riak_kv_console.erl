@@ -895,7 +895,8 @@ bucket_type_create_with_timeseries_table_test() ->
     TableDef =
         <<"CREATE TABLE my_type ",
           "(time TIMESTAMP NOT NULL, ",
-          " PRIMARY KEY (time))">>,
+	  "user varchar not null, ",
+          " PRIMARY KEY ((quantum(time, 15, m)), time, user))">>,
     JSON = json_props([{bucket_type, my_type}, 
                        {table_def, TableDef}]),
     bucket_type_create(
@@ -931,7 +932,8 @@ bucket_type_and_table_name_must_match_test() ->
     TableDef =
         <<"CREATE TABLE times ",
           "(time TIMESTAMP NOT NULL, ",
-          " PRIMARY KEY (time))">>,
+	  "user varchar not null, ",
+          " PRIMARY KEY (time, user))">>,
     JSON = json_props([{bucket_type, my_type}, 
                        {table_def, TableDef}]),
     % if this error changes slightly it is not so important, as long as
