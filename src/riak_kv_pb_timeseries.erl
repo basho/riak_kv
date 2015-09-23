@@ -23,7 +23,7 @@
 
 -module(riak_kv_pb_timeseries).
 
--include_lib("riak_kv/src/riak_kv_wm_raw.hrl").  %% for ?MD_LI_IDX
+-include("src/riak_kv_wm_raw.hrl").  %% for ?MD_LI_IDX
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_qry_queue.hrl").  %% for query_id().
@@ -38,11 +38,12 @@
 
 -record(state, {}).
 
--define(E_SUBMIT, -1).
--define(E_FETCH, -2).
--define(E_IRREG, -3).
--define(E_PUT, -4).
--define(E_NOCREATE, -5).
+%% temporary fix - Andrei's should overwrite with proper nos
+-define(E_SUBMIT,   99991).
+-define(E_FETCH,    99992).
+-define(E_IRREG,    99993).
+-define(E_PUT,      99994).
+-define(E_NOCREATE, 99995).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
