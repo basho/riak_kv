@@ -38,12 +38,13 @@
 
 -record(state, {}).
 
-%% temporary fix - Andrei's should overwrite with proper nos
--define(E_SUBMIT,   99991).
--define(E_FETCH,    99992).
--define(E_IRREG,    99993).
--define(E_PUT,      99994).
--define(E_NOCREATE, 99995).
+%% these error codes are obviously local to this module,
+%% until a central place for error numbers is defined
+-define(E_SUBMIT,   1).
+-define(E_FETCH,    2).
+-define(E_IRREG,    3).
+-define(E_PUT,      4).
+-define(E_NOCREATE, 5).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
