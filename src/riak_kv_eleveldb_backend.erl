@@ -460,12 +460,17 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
 		     [{K, V} | Acc]
 	     end,
     Options = [
-	       {first_key,    StartKey2},
-	       {end_key,      EndKey2},
-	       {fold_method,  streaming},
-	       {range_filter, Filter},
-	       {encoding,     msgpack}
-	      ],
+               {first_key,    StartKey2},
+               {end_key,      EndKey2},
+               {fold_method,  streaming},
+               {encoding,     msgpack} |
+               % do not include the range_filter option unless there are
+               % actual filters to execute
+               case Filter of
+                   [] -> [];
+                   _  -> [{range_filter, Filter}]
+               end
+              ],
     KeyFolder = fun() ->
 			Vals = eleveldb:fold(Ref, FoldFun, [], Options),
 			FoldIndexFun(lists:reverse(Vals), Buffer)
