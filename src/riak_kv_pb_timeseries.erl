@@ -23,7 +23,7 @@
 
 -module(riak_kv_pb_timeseries).
 
--include_lib("riak_kv/src/riak_kv_wm_raw.hrl").  %% for ?MD_LI_IDX
+-include("src/riak_kv_wm_raw.hrl").  %% for ?MD_LI_IDX
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_qry_queue.hrl").  %% for query_id().
