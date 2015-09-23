@@ -182,7 +182,7 @@ put_data(Data, Table, Mod) ->
 
               RObj0 = riak_object:new(Table, PK, Obj),
               MD_ = riak_object:get_update_metadata(RObj0),
-              MD  = dict:store(?MD_LI_IDX, LK, MD_),
+              MD  = dict:store(?MD_TS_LOCAL_KEY, LK, MD_),
               RObj = riak_object:update_metadata(RObj0, MD),
 
               case riak_client:put(RObj, {riak_client, [node(), undefined]}) of
