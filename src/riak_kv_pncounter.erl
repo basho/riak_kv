@@ -50,7 +50,14 @@
 -export_type([pncounter/0, pncounter_op/0]).
 
 -opaque pncounter() :: {riak_kv_gcounter:gcounter(), riak_kv_gcounter:gcounter()}.
-%% Redeclaring pncounter() with -type to please dialyzer
+%% Redeclaring pncounter() with -type to please dialyzer, which would
+%% otherwise issue the following warning:
+%%  riak_kv_pncounter.erl:100: Invalid type specification for
+%%    function riak_kv_pncounter:merge/2. The success typing is
+%%    ({[{_,pos_integer()}],[{_,pos_integer()}]},{[{_,pos_integer()}],[{_,pos_integer()}]})
+%%    -> {[{_,pos_integer()}],[{_,pos_integer()}]}
+%% Apparently, dialyzer only accepts plain variables for args having
+%% an opaque type spec.
 -type  pncounter_() :: {riak_kv_gcounter:gcounter(), riak_kv_gcounter:gcounter()}.
 -type pncounter_op() :: riak_kv_gcounter:gcounter_op() | decrement_op().
 -type decrement_op() :: decrement | {decrement, pos_integer()}.
