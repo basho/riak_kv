@@ -134,23 +134,22 @@ handle_info({_QId, {results, [[]]}}, State) ->
     lager:debug("Empty chunk on qid ~p", [_QId]),
     {noreply, State};
 
-handle_info({QId, {results, [Chunk]}},
+handle_info({QId, {results, Chunk}},
             State = #state{qid = QId, qry = Qry,
                            status = QStatus,
                            result = Accumulated})
-  when QStatus =:= void; QStatus =:= accumulating ->
+  when is_list(Chunk) andalso (QStatus == void orelse QStatus == accumulating) ->
     #riak_sql_v1{'SELECT' = SelectSpec} = Qry,
-    Decoded =
-        decode_results(
-          Chunk, SelectSpec),
+    Decoded = decode_results(lists:flatten(Chunk), SelectSpec),
     {noreply, State#state{status = accumulating,
                           result = [Decoded | Accumulated]}};
 
 %% what if some late chunks arrive?
-handle_info({QId, {results, [[_LateData]]}},
+handle_info({QId, {results, LateData}},
             State = #state{qid = QId,
                            status = complete}) ->
-    lager:debug("Discarding late chunk (~b bytes) on qid ~p", [size(_LateData), QId]),
+    lager:debug(
+      "Discarding ~p results.", [length(lists:flatten(LateData)), QId]),
     {noreply, State};
 
 %% other error conditions
@@ -202,7 +201,8 @@ handle_req({fetch, QId}, State = #state{qid = QId,
 
 handle_req({fetch, QId}, State = #state{qid = QId,
                                         result = Result}) ->
-    {{ok, Result}, [], State#state{qid = undefined,
+    Result2 = [lists:flatten(R) || R <- Result],
+    {{ok, Result2}, [], State#state{qid = undefined,
                                    status = void,
                                    result = []}};
 
@@ -224,46 +224,26 @@ handle_side_effects([H | T]) ->
     io:format("in riak_kv_qry:handle_side_effects not handling ~p~n", [H]),
     handle_side_effects(T).
 
+%%
+decode_results(KV_list, SelectSpec) ->
+    [extract_riak_object(SelectSpec, V) || {_,V} <- KV_list].
 
-decode_results(ListOfBins, SelectSpec) ->
-    decode_results(ListOfBins, SelectSpec, []).
-decode_results([], _SelectSpec, Acc) ->
-    %% lists:reverse(Acc);  %% recall that ListOfBins is in fact
-    %% reversed (as it was accumulated from chunks in handle_info)
-    lists:flatten(Acc);
-decode_results([BList|Rest], SelectSpec, Acc) ->
-    Records = extract(BList, SelectSpec, []),
-    decode_results(
-      Rest, SelectSpec, [Records | Acc]).
+%%
+extract_riak_object(SelectSpec, V) when is_binary(V) ->
+    % don't care about bkey
+    RObj = riak_object:from_binary(<<>>, <<>>, V),
+    FullRecord = riak_object:get_value(RObj),
+    filter_columns(lists:flatten(SelectSpec), FullRecord).
 
-extract(<<>>, _SelectSpec, Acc) ->
-    Acc;
-extract(Batch, SelectSpec, Acc) ->
-    {_Key, B1} = eleveldb:parse_string(Batch),
-    { Val, B2} = eleveldb:parse_string(B1),
-    FullRecord =
-        eleveldb_ts:decode_record(
-          riak_object:get_value(
-            riak_object:from_binary(
-              %% don't care about bkey
-              <<>>, <<>>, Val))),
-    Filtered =
-        filter_columns(
-          SelectSpec, FullRecord),
-    extract(B2, SelectSpec, [Filtered | Acc]).
-
-
-filter_columns(SelectSpec, KVList) ->
-    %% TODO: deal with operators and combinators
-    OnlyColumns = lists:foldl(
-                    fun([C], Acc) -> [binary_to_list(C)|Acc];
-                       (_, Acc) -> Acc
-                    end,
-                    [], SelectSpec),
-    lists:filter(
-      fun({Field, _Val}) -> lists:member(Field, OnlyColumns) end,
-      KVList).
-
+%% Pull out the values we're interested in based on the select,
+%% statement, e.g. select user, geoloc returns only user and geoloc columns.
+-spec filter_columns(SelectSpec::[binary()],
+                     ColValues::[{Field::binary(), Value::binary()}]) ->
+        ColValues2::[{Field::binary(), Value::binary()}].
+filter_columns([<<"*">>], ColValues) ->
+    ColValues;
+filter_columns(SelectSpec, ColValues) ->
+    [Col || {Field, _} = Col <- ColValues, lists:member(Field, SelectSpec)].
 
 %%%===================================================================
 %%% Unit tests
