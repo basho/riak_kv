@@ -68,7 +68,8 @@
           ddl        :: undefined | #ddl_v1{},
           qry = none :: none | #riak_sql_v1{},
           qid = undefined :: undefined | {node(), non_neg_integer()},
-          status = void   :: void | accumulating | complete,
+          n_chunks = 0    :: non_neg_integer(),
+          status = void   :: void | got_chunk | finished,
           result = []     :: [binary()]
          }).
 
@@ -127,29 +128,35 @@ handle_cast(Msg, State) ->
 -spec handle_info(term(), #state{}) -> {noreply, #state{}}.
 %% @private
 handle_info({QId, done},
-            State = #state{qid = QId}) ->
-    {noreply, State#state{status = complete}};
-
-handle_info({_QId, {results, [[]]}}, State) ->
-    lager:debug("Empty chunk on qid ~p", [_QId]),
-    {noreply, State};
+            State = #state{qid = QId,
+                           n_chunks = NChunks}) ->
+    lager:debug("Received ~b chunks on QId ~p", [NChunks, QId]),
+    {noreply, State#state{status = finished}};
 
 handle_info({QId, {results, Chunk}},
             State = #state{qid = QId, qry = Qry,
-                           status = QStatus,
-                           result = Accumulated})
-  when is_list(Chunk) andalso (QStatus == void orelse QStatus == accumulating) ->
+                           status = void}) ->
     #riak_sql_v1{'SELECT' = SelectSpec} = Qry,
-    Decoded = decode_results(lists:flatten(Chunk), SelectSpec),
-    {noreply, State#state{status = accumulating,
-                          result = [Decoded | Accumulated]}};
+    Decoded =
+        decode_results(
+          lists:flatten(Chunk), SelectSpec),
+    {noreply, State#state{status = got_chunk,
+                          n_chunks = 1,
+                          result = lists:append(Decoded)}};
 
-%% what if some late chunks arrive?
-handle_info({QId, {results, LateData}},
+%% extra N chunks where N == n_val, n_val > 0: discard
+handle_info({QId, {results, _ExtraChunk}},
             State = #state{qid = QId,
-                           status = complete}) ->
-    lager:debug(
-      "Discarding ~p results.", [length(lists:flatten(LateData)), QId]),
+                           n_chunks = NChunks,
+                           status = got_chunk}) ->
+    {noreply, State#state{n_chunks = NChunks + 1}};
+
+%% late chunks: warn
+handle_info({QId, {results, _LateData}},
+            State = #state{qid = QId,
+                           status = finished}) ->
+    lager:debug("Discarding late chunk (~b bytes) on qid ~p",
+                [length(lists:flatten(_LateData)), QId]),
     {noreply, State};
 
 %% other error conditions
@@ -186,9 +193,7 @@ handle_req({execute, {QId, Qry, DDL}}, State = #state{status = void}) ->
     %% TODO make this run with multiple sub-queries
     Queries = riak_kv_qry_compiler:compile(DDL, Qry),
     SEs = [{run_sub_query, {qry, X}, {qid, QId}} || X <- Queries],
-    {ok, SEs, State#state{qid = QId, qry = Qry, ddl = DDL,
-                          status = accumulating,
-                          result = []}};
+    {ok, SEs, State#state{qid = QId, qry = Qry, ddl = DDL}};
 
 handle_req({execute, {QId, _, _}}, State = #state{status = Status})
   when Status =/= void ->
@@ -196,8 +201,14 @@ handle_req({execute, {QId, _, _}}, State = #state{status = Status})
     {{error, mismanagement}, [], State};
 
 handle_req({fetch, QId}, State = #state{qid = QId,
-                                        status = accumulating}) ->
+                                        status = void}) ->
     {{error, in_progress}, [], State};
+
+handle_req({fetch, QId}, State = #state{qid = QId,
+                                        status = got_chunk,
+                                        result = Result}) ->
+    %% perhaps we can just return the first chunk now but leave FSM to mop up the rest
+    {{ok, Result}, [], State};
 
 handle_req({fetch, QId}, State = #state{qid = QId,
                                         result = Result}) ->
@@ -224,11 +235,6 @@ handle_side_effects([H | T]) ->
     io:format("in riak_kv_qry:handle_side_effects not handling ~p~n", [H]),
     handle_side_effects(T).
 
-%%
-decode_results(KV_list, SelectSpec) ->
-    [extract_riak_object(SelectSpec, V) || {_,V} <- KV_list].
-
-%%
 extract_riak_object(SelectSpec, V) when is_binary(V) ->
     % don't care about bkey
     RObj = riak_object:from_binary(<<>>, <<>>, V),
