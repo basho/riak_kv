@@ -212,8 +212,7 @@ handle_req({fetch, QId}, State = #state{qid = QId,
 
 handle_req({fetch, QId}, State = #state{qid = QId,
                                         result = Result}) ->
-    Result2 = [lists:flatten(R) || R <- Result],
-    {{ok, Result2}, [], State#state{qid = undefined,
+    {{ok, Result}, [], State#state{qid = undefined,
                                    status = void,
                                    result = []}};
 
