@@ -172,15 +172,15 @@ put_data(Data, Table, Mod) ->
     DDL = Mod:get_ddl(),
     lists:foldl(
       fun(Raw, ErrorsCnt) ->
-              Obj_ = Mod:add_column_info(Raw),
-              Obj  = eleveldb_ts:encode_record(Obj_),
+              Obj = Mod:add_column_info(Raw),
 
-              PK_  = riak_ql_ddl:get_partition_key(DDL, Raw),
-              PK   = eleveldb_ts:encode_key(PK_),
-              LK_  = riak_ql_ddl:get_local_key(DDL, Raw),
-              LK   = eleveldb_ts:encode_key(LK_),
+              PK  = eleveldb_ts:encode_key(
+                      riak_ql_ddl:get_partition_key(DDL, Raw)),
+              LK  = eleveldb_ts:encode_key(
+                      riak_ql_ddl:get_local_key(DDL, Raw)),
 
-              RObj0 = riak_object:new(Table, PK, Obj),
+              %% Bucket needs to be in duplicate, see riak_kv_qry_coverage_plan:create_plan
+              RObj0 = riak_object:new({Table, Table}, PK, Obj),
               MD_ = riak_object:get_update_metadata(RObj0),
               MD  = dict:store(?MD_TS_LOCAL_KEY, LK, MD_),
               RObj = riak_object:update_metadata(RObj0, MD),
