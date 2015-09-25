@@ -28,16 +28,21 @@
 %%      commands to each of those VNodes, and compiles the
 %%      responses.
 %%
-%%      The number of VNodes required for full
+%%      For secondary indexes the number of VNodes required for full
 %%      coverage is based on the number
 %%      of partitions, the number of available physical
 %%      nodes, and the bucket n_val.
+%%
+%%      For composite keys the number of VNodes required
+%%      is based on the preflist for writing the collocated
+%%      data
 
 -module(riak_kv_index_fsm).
 
 -behaviour(riak_core_coverage_fsm).
 
 -include_lib("riak_kv_vnode.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -export([init/2,
          plan/2,
@@ -73,6 +78,9 @@ use_ack_backpressure() ->
 
 %% @doc Construct the correct index command record.
 -spec req(binary(), term(), term()) -> term().
+req(Bucket, _ItemFilter, #riak_sql_v1{} = Q) ->
+    #riak_kv_sql_select_req_v1{bucket=Bucket,
+			       qry=Q};
 req(Bucket, ItemFilter, Query) ->
     case use_ack_backpressure() of
         true ->
@@ -99,7 +107,7 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) 
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
-    Paginating = is_integer(MaxResults) andalso MaxResults > 0, 
+    Paginating = is_integer(MaxResults) andalso MaxResults > 0,
     PgSort = case {Paginating, PgSort0} of
         {true, _} ->
             true;
@@ -110,7 +118,7 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) 
     end,
     %% Construct the key listing request
     Req = req(Bucket, ItemFilter, Query),
-    {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
+    {Req, MaxResults, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{from=From, max_results=MaxResults, pagination_sort=PgSort}}.
 
 plan(CoverageVNodes, State = #state{pagination_sort=true}) ->

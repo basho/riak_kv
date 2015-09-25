@@ -36,7 +36,7 @@
          to_index_query/2,
          make_continuation/1,
          return_terms/2,
-         return_body/1,
+         return_foldtype/1,
          upgrade_query/1,
          object_key_in_range/3,
          index_key_in_range/3,
@@ -46,6 +46,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_index.hrl").
 -define(TIMEOUT, 30000).
@@ -345,6 +346,8 @@ apply_continuation(Q, C) ->
 %% @doc upgrade a query to the current latest version
 upgrade_query(Q=?KV_INDEX_Q{}) ->
     Q;
+upgrade_query(Q=?KV_SQL_Q{}) ->
+    Q;
 upgrade_query(#riak_kv_index_v2{
                 start_key=StartKey,
                 filter_field=Field,
@@ -403,14 +406,13 @@ return_terms(true, OldQ) ->
 return_terms(_, _) ->
     false.
 
-%% @doc Should the object body of an indexed key
-%% be returned with the result?
-return_body(?KV_INDEX_Q{return_body=true, filter_field=FF})
+%% @doc what type of fold should be performed
+return_foldtype(?KV_INDEX_Q{return_body=true, filter_field=FF})
   when FF =:= ?KEYFIELD;
        FF =:= ?BUCKETFIELD ->
-    true;
-return_body(_) ->
-    false.
+    fold_objects;
+return_foldtype(_) ->
+    fold_keys.
 
 %% @doc is an index key in range for a 2i query?
 index_key_in_range({Bucket, Key, Field, Term}=IK, Bucket,
