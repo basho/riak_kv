@@ -123,7 +123,7 @@ process(SQL = #riak_sql_v1{'FROM' = Bucket}, State) ->
         {ok, QId} ->
             case fetch_with_patience(QId, ?FETCH_RETRIES) of
                 {ok, Data} ->
-                    {reply, make_tsqueryresp(Data, fun Mod:get_field_type/1), State};
+                    {reply, make_tsqueryresp(Data, Mod), State};
                 {error, Reason} ->
                     {reply, make_rpberrresp(?E_FETCH, Reason), State}
             end;
@@ -167,7 +167,7 @@ decode_query_permissions(#riak_sql_v1{'FROM'=Bucket}) ->
 % functions supporting INSERT
 
 
--spec put_data(list(list(riak_pb_ts_codec:ldbvalue())), binary(), module()) -> integer().
+-spec put_data([riak_pb_ts_codec:tsrow()], binary(), module()) -> integer().
 %% @ignore return count of records we failed to put
 put_data(Data, Table, Mod) ->
     DDL = Mod:get_ddl(),
@@ -214,12 +214,10 @@ fetch_with_patience(QId, N) ->
             Result
     end.
 
-
--spec make_tsqueryresp([[{binary(), term()}]], fun()) ->
-                              #tsqueryresp{}.
+-spec make_tsqueryresp([{binary(), term()}], module()) -> #tsqueryresp{}.
 make_tsqueryresp([], _Fun) ->
     #tsqueryresp{columns = [], rows = []};
-make_tsqueryresp(Rows, GetFieldTypeF) ->
+make_tsqueryresp(Rows, Module) ->
     %% as returned by fetch, we have in Rows a sequence of KV pairs,
     %% making records concatenated in a flat list
     ColumnNames = get_column_names(Rows),
@@ -228,7 +226,7 @@ make_tsqueryresp(Rows, GetFieldTypeF) ->
           fun(C) ->
                   %% make column a single-element list, as
                   %% encode_field_type requires
-                  riak_pb_ts_codec:encode_field_type(GetFieldTypeF([C]))
+                  riak_pb_ts_codec:encode_field_type(Module:get_field_type([C]))
           end, ColumnNames),
     Records = assemble_records(Rows, length(ColumnNames)),
     JustRows = lists:map(
