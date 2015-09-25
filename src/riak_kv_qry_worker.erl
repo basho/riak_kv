@@ -235,6 +235,11 @@ handle_side_effects([H | T]) ->
     io:format("in riak_kv_qry:handle_side_effects not handling ~p~n", [H]),
     handle_side_effects(T).
 
+
+decode_results(KVList, SelectSpec) ->
+    [extract_riak_object(SelectSpec, V) || {_, V} <- KVList].
+
+
 extract_riak_object(SelectSpec, V) when is_binary(V) ->
     % don't care about bkey
     RObj = riak_object:from_binary(<<>>, <<>>, V),
