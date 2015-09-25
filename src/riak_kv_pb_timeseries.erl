@@ -219,16 +219,38 @@ fetch_with_patience(QId, N) ->
 make_tsqueryresp([], _Fun) ->
     #tsqueryresp{columns = [], rows = []};
 make_tsqueryresp(Rows, GetFieldTypeF) ->
-    %% get types and take the ordering of columns in the batches
-    ARecord = hd(Rows),
-    %% plain column names need to be represented as a single-element list
-    ColumnNames = [[C] || {C, _V} <- ARecord],
-    ColumnTypes = lists:map(fun(C) -> riak_pb_ts_codec:encode_field_type(GetFieldTypeF(C)) end, ColumnNames),
-    %% drop column names in row data
-    JustRows =
+    %% as returned by fetch, we have in Rows a sequence of KV pairs,
+    %% making records concatenated in a flat list
+    ColumnNames = get_column_names(Rows),
+    ColumnTypes =
         lists:map(
-          fun(Row) -> [C || {_K, C} <- Row] end,
-          Rows),
+          fun(C) ->
+                  %% make column a single-element list, as
+                  %% encode_field_type requires
+                  riak_pb_ts_codec:encode_field_type(GetFieldTypeF([C]))
+          end, ColumnNames),
+    Records = assemble_records(Rows, length(ColumnNames)),
+    JustRows = lists:map(
+                 fun(Rec) -> [C || {_K, C} <- Rec] end,
+                 Records),
     #tsqueryresp{columns = [#tscolumndescription{name = Name, type = Type}
                             || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)],
                  rows = riak_pb_ts_codec:encode_rows(JustRows)}.
+
+get_column_names([{C1, _} | MoreRecords]) ->
+    {RestOfColumns, _DiscardedValues} =
+        lists:unzip(
+          lists:takewhile(
+            fun({Cn, _}) -> C1 /= Cn end,
+            MoreRecords)),
+    [C1|RestOfColumns].
+
+assemble_records(Rows, RecordSize) ->
+    assemble_records_(Rows, RecordSize, []).
+%% should we protect against incomplete records?
+assemble_records_([], _, Acc) ->
+    Acc;
+assemble_records_(RR, RSize, Acc) ->
+    Remaining = lists:nthtail(RSize, RR),
+    assemble_records_(
+      Remaining, RSize, [lists:sublist(RR, RSize) | Acc]).
