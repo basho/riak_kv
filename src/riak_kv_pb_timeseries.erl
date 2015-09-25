@@ -200,7 +200,7 @@ put_data(Data, Table, Mod) ->
 % functions supporting SELECT
 
 -spec fetch_with_patience(query_id(), non_neg_integer()) ->
-                                 {ok, [[{Key::binary(), riak_pb_ts_codec:ldbvalue()}]]} |
+                                 {ok, [{Key::binary(), riak_pb_ts_codec:ldbvalue()}]} |
                                  {error, atom()}.
 fetch_with_patience(QId, 0) ->
     lager:info("Query results on qid ~p not available after ~b secs\n", [QId, ?FETCH_RETRIES]),
