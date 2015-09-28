@@ -106,8 +106,8 @@
 new({T, B}, K, V) when is_binary(T), is_binary(B), is_binary(K) ->
     new_int({T, B}, K, V, no_initial_metadata);
 new(B, K, V) when is_binary(B), is_binary(K) ->
-    new_int(B, K, V, no_initial_metadata)
-.
+    new_int(B, K, V, no_initial_metadata).
+
 %% @doc Constructor for new riak objects with an initial content-type.
 -spec new(Bucket::bucket(), Key::key(), Value::value(),
           string() | riak_object_dict() | no_initial_metadata) -> riak_object().
