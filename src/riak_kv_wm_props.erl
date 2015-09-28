@@ -279,9 +279,10 @@ get_bucket_props_json(Client, Bucket) ->
 -spec accept_bucket_body(#wm_reqdata{}, context()) -> {true, #wm_reqdata{}, context()}.
 %% @doc Modify the bucket properties according to the body of the
 %%      bucket-level PUT request.
-accept_bucket_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, client=C, bucketprops=Props}) ->
-    ErlProps = lists:map(fun riak_kv_wm_utils:erlify_bucket_prop/1, Props),
-    case C:set_bucket({T,B}, ErlProps) of
+accept_bucket_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, client=C, bucketprops=Props1}) ->
+    {ok, Props2} = riak_kv_wm_utils:maybe_parse_table_def(T, Props1),
+    Props3 = lists:map(fun riak_kv_wm_utils:erlify_bucket_prop/1, Props2),
+    case C:set_bucket({T,B}, Props3) of
         ok ->
             {true, RD, Ctx};
         {error, Details} ->
