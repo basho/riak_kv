@@ -23,7 +23,8 @@
 -define(MD_LASTMOD,  <<"X-Riak-Last-Modified">>).
 -define(MD_USERMETA, <<"X-Riak-Meta">>).
 -define(MD_INDEX,    <<"index">>).
--define(MD_LI_IDX,   <<"composite-indices">>).
+-define(MD_LI_IDX,   <<"timeseries-local-key">>). % FIXME leaving this in for the bits repo, should be removed
+-define(MD_TS_LOCAL_KEY, <<"timeseries-local-key">>).
 -define(MD_DELETED,  <<"X-Riak-Deleted">>).
 
 %% Names of HTTP header fields
