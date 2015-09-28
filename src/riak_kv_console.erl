@@ -496,11 +496,6 @@ bucket_type_print_activate_result(Type, {error, undefined}, _IsFirst) ->
 bucket_type_print_activate_result(Type, {error, not_ready}, _IsFirst) ->
     bucket_type_print_status(Type, created).
 
-bucket_type_create([TypeStr, ""]) ->
-    Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
-    EmptyProps = {struct, [{<<"props">>, {struct, []}}]},
-    CreateTypeFn = fun riak_core_bucket_type:create/2,
-    bucket_type_create(CreateTypeFn, Type, EmptyProps);
 bucket_type_create([TypeStr, PropsStr]) ->
     Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
     CreateTypeFn =
@@ -508,7 +503,15 @@ bucket_type_create([TypeStr, PropsStr]) ->
             Result = riak_core_bucket_type:create(Type, Props),
             bucket_type_print_create_result(Type, Result)
         end,
-    bucket_type_create(CreateTypeFn, Type, catch mochijson2:decode(PropsStr)).
+    bucket_type_create(CreateTypeFn, Type, decode_json_props(PropsStr)).
+
+%% Attempt to decode the json to string or provide defaults if empty.
+%% mochijson2 has no types exported so returning any.
+-spec decode_json_props(JsonProps::string()) -> any().
+decode_json_props("") ->
+    {struct, [{<<"props">>, {struct, []}}]};
+decode_json_props(JsonProps) ->
+    catch mochijson2:decode(JsonProps).
 
 -spec bucket_type_create(
         CreateTypeFn :: fun(([proplists:property()]) -> ok),
