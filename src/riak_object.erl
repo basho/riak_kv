@@ -35,7 +35,6 @@
 -type bucket() :: binary() | {binary(), binary()}.
 %% -type bkey() :: {bucket(), key()}.
 -type value() :: term().
--type li_index() :: {key(), [{binary(), index_value()}]}.
 
 -ifdef(namespaced_types).
 -type riak_object_dict() :: dict:dict().
@@ -100,7 +99,7 @@
 -export([is_robject/1]).
 -export([update_last_modified/1, update_last_modified/2]).
 -export([strict_descendant/2]).
--export([get_li_index/1, is_li/1, get_li_key/1]).
+-export([get_ts_local_key/1]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -217,27 +216,14 @@ reconcile(Objects, AllowMultiple) ->
             RObj
     end.
 
-%% @doc get the composite index from a riak_object
--spec get_li_index(riak_object()) -> li_index().
-get_li_index(RObj) when is_record(RObj, r_object) ->
-    MetaData = get_metadata(RObj),
-    case dict:find(?MD_LI_IDX, MetaData) of
-	{ok, LI} -> LI;
-	error    -> exit("attempting to read non-existent key")
-    end.
-
-%% @doc checks if the object has a composite index in it
--spec is_li(riak_object()) -> boolean().
-is_li(RObj) when is_record(RObj, r_object) ->
-    MetaData = get_metadata(RObj),
-    dict:is_key(?MD_LI_IDX, MetaData).
-
 %% @doc gets the Local Index key
-%% TODO return error or crash?
--spec get_li_key(riak_object()) -> key().
-get_li_key(RObj) when is_record(RObj, r_object) ->
-    MetaData = get_metadata(RObj),
-    _Key = dict:fetch(?MD_LI_IDX, MetaData).
+-spec get_ts_local_key(riak_object()) ->
+        {ok, key()} | error.
+get_ts_local_key(RObj) when is_record(RObj, r_object) ->
+    % TODO 
+    % using update metadata while testing with ts_run2, updates should
+    % be applied by this point!
+    dict:find(?MD_TS_LOCAL_KEY, get_update_metadata(RObj)).
 
 %% @private remove all Objects from the list that are causally
 %% dominated by any other object in the list. Only concurrent /
@@ -1104,7 +1090,9 @@ decode_msgpack(ValBin) ->
 decode_maybe_binary(<<1, Bin/binary>>) ->
     Bin;
 decode_maybe_binary(<<0, Bin/binary>>) ->
-    binary_to_term(Bin).
+    binary_to_term(Bin);
+decode_maybe_binary(Bin) ->
+    decode_msgpack(Bin).
 
 %% Update X-Riak-VTag and X-Riak-Last-Modified in the object's metadata, if
 %% necessary.

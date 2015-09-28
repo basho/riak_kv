@@ -28,22 +28,33 @@
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
+%%
 create_plan(_VNodeSelector, NVal, _PVC, _ReqId, _NodeCheckService, Request) ->
-    BucketName = riak_kv_util:get_bucket_from_req(Request),
     Query = riak_local_index:get_query_from_req(Request),
-    #riak_sql_v1{helper_mod    = Mod,
-		 partition_key = PK,
-		 'WHERE'       = W} = Query,
-    %% This is fugly because the physical format of the startkey
-    %% which is neede by eleveldb is being used by the query
-    %% planner which should only know about a more logical format
-    {startkey, StartKey} = proplists:lookup(startkey, W),
+    Key2 = make_key(Query),
+    BucketName = riak_kv_util:get_bucket_from_req(Request),
+    VNodes = hash_for_nodes(NVal, BucketName, BucketName, Key2),
+    NoFilters = [],
+    _CoveragePlan = {VNodes, NoFilters}.
+
+%% This is fugly because the physical format of the startkey
+%% which is neede by eleveldb is being used by the query
+%% planner which should only know about a more logical format
+make_key(#riak_sql_v1{helper_mod    = Mod,
+                      partition_key = PartitionKey,
+                      'WHERE'       = Where}) ->
+    {startkey, StartKey} = proplists:lookup(startkey, Where),
     StartKey2 = [{Field, Val} || {Field, _Type, Val} <- StartKey],
-    Key = riak_ql_ddl:make_key(Mod, PK, StartKey2),
-    Key2 = eleveldb_ts:encode_key(Key),
-    DocIdx = riak_core_util:chash_key({BucketName, Key2}),
+    Key = riak_ql_ddl:make_key(Mod, PartitionKey, StartKey2),
+    eleveldb_ts:encode_key(Key).
+
+%%
+hash_for_nodes(NVal,
+               BucketType, BucketName, Key) when is_binary(BucketType),
+                                                 is_binary(BucketName),
+                                                 is_binary(Key) ->
+    DocIdx = riak_core_util:chash_key({{BucketType,BucketName}, Key}),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Perfs = riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes),
     {VNodes, _} = lists:unzip(Perfs),
-    NoFilters = [],
-    _CoveragePlan = {VNodes, NoFilters}.
+    VNodes.

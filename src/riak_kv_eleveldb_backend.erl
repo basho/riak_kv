@@ -342,7 +342,7 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{fold_opts=FoldOpts,
                                                ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     FirstKey = to_first_key(undefined),
-    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    FoldOpts1 = [{start_key, FirstKey} | FoldOpts],
     BucketFolder =
         fun() ->
                 try
@@ -385,7 +385,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     %% Set up the fold...
     FirstKey = to_first_key(Limiter),
     FoldFun = fold_keys_fun(FoldKeysFun, Limiter),
-    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    FoldOpts1 = [{start_key, FirstKey} | FoldOpts],
     ExtraFold = not FixedIdx orelse WriteLegacyIdx,
     KeyFolder =
         fun() ->
@@ -451,30 +451,31 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     StartK2 = [{Field, Val} || {Field, _Type, Val} <- StartK],
     StartK3 = riak_ql_ddl:make_key(Mod, LK, StartK2),
     StartKey = eleveldb_ts:encode_key(StartK3),
-    StartKey2 = sext:encode({o, Bucket, StartKey}),
+    StartKey2 = to_object_key({Bucket, Bucket}, StartKey),
     EndK2 = [{Field, Val} || {Field, _Type, Val} <- EndK],
     EndK3 = riak_ql_ddl:make_key(Mod, LK, EndK2),
     EndKey = eleveldb_ts:encode_key(EndK3),
-    EndKey2 = sext:encode({o, Bucket, EndKey}),
+    EndKey2 = to_object_key({Bucket, Bucket}, EndKey),
+    FoldFun = fun({K, V}, Acc) ->
+		     [{K, V} | Acc]
+	     end,
+    Options = [
+               {first_key,    StartKey2},
+               {end_key,      EndKey2},
+               {fold_method,  streaming},
+               {encoding,     msgpack} |
+               % do not include the range_filter option unless there are
+               % actual filters to execute
+               case Filter of
+                   [] -> [];
+                   _  -> [{range_filter, Filter}]
+               end
+              ],
     KeyFolder = fun() ->
-			{ok, {MsgRef, AckRef}} = eleveldb:range_scan(Ref, StartKey2, EndKey2, Filter),
-			receive_batch(AckRef, MsgRef, FoldIndexFun, Buffer, [])
+			Vals = eleveldb:fold(Ref, FoldFun, [], Options),
+			FoldIndexFun(lists:reverse(Vals), Buffer)
 		end,
     {async, KeyFolder}.
-
-%% TODO work out best way to handle a locked elevedb
-receive_batch(AckRef, MsgRef, FoldIndexFun, Buffer, Acc) ->
-    receive
-        {range_scan_end, MsgRef} ->
-	    FoldIndexFun(lists:reverse(Acc), Buffer);
-        {range_scan_batch, MsgRef, Batch} ->
-	    Size = byte_size(Batch),
-	    ok = eleveldb:range_scan_ack(AckRef, Size),
-	    receive_batch(AckRef, MsgRef, FoldIndexFun, Buffer, [Batch | Acc])
-    after
-	12000 ->
-	    exit("lock in eleveldb - not sure what to do")
-    end.
 
 legacy_key_fold(Ref, FoldFun, Acc, FoldOpts0, Query={index, _, _}) ->
     {_, FirstKey} = lists:keyfind(first_key, 1, FoldOpts0),
@@ -521,7 +522,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
 
     %% Set up the fold...
     FirstKey = to_first_key(Limiter),
-    FoldOpts1 = IteratorRefresh ++ [{first_key, FirstKey} | FoldOpts],
+    FoldOpts1 = IteratorRefresh ++ [{start_key, FirstKey} | FoldOpts],
     FoldFun = fold_objects_fun(FoldObjectsFun, Limiter),
 
     ObjectFolder =

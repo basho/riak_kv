@@ -23,9 +23,10 @@
 
 -module(riak_kv_pb_timeseries).
 
--include_lib("riak_kv/src/riak_kv_wm_raw.hrl").  %% for ?MD_LI_IDX
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
+
+-include("riak_kv_wm_raw.hrl").
 -include("riak_kv_qry_queue.hrl").  %% for query_id().
 
 -behaviour(riak_api_pb_service).
@@ -122,7 +123,7 @@ process(SQL = #riak_sql_v1{'FROM' = Bucket}, State) ->
         {ok, QId} ->
             case fetch_with_patience(QId, ?FETCH_RETRIES) of
                 {ok, Data} ->
-                    {reply, make_tsqueryresp(Data, fun Mod:get_field_type/1), State};
+                    {reply, make_tsqueryresp(Data, Mod), State};
                 {error, Reason} ->
                     {reply, make_rpberrresp(?E_FETCH, Reason), State}
             end;
@@ -166,23 +167,23 @@ decode_query_permissions(#riak_sql_v1{'FROM'=Bucket}) ->
 % functions supporting INSERT
 
 
--spec put_data(list(list(riak_pb_ts_codec:ldbvalue())), binary(), module()) -> integer().
+-spec put_data([riak_pb_ts_codec:tsrow()], binary(), module()) -> integer().
 %% @ignore return count of records we failed to put
 put_data(Data, Table, Mod) ->
     DDL = Mod:get_ddl(),
     lists:foldl(
       fun(Raw, ErrorsCnt) ->
-              Obj_ = Mod:add_column_info(Raw),
-              Obj  = eleveldb_ts:encode_record(Obj_),
+              Obj = Mod:add_column_info(Raw),
 
-              PK_  = riak_ql_ddl:get_partition_key(DDL, Raw),
-              PK   = eleveldb_ts:encode_key(PK_),
-              LK_  = riak_ql_ddl:get_local_key(DDL, Raw),
-              LK   = eleveldb_ts:encode_key(LK_),
+              PK  = eleveldb_ts:encode_key(
+                      riak_ql_ddl:get_partition_key(DDL, Raw)),
+              LK  = eleveldb_ts:encode_key(
+                      riak_ql_ddl:get_local_key(DDL, Raw)),
 
-              RObj0 = riak_object:new(Table, PK, Obj),
+              %% Bucket needs to be in duplicate, see riak_kv_qry_coverage_plan:create_plan
+              RObj0 = riak_object:new({Table, Table}, PK, Obj),
               MD_ = riak_object:get_update_metadata(RObj0),
-              MD  = dict:store(?MD_LI_IDX, LK, MD_),
+              MD  = dict:store(?MD_TS_LOCAL_KEY, LK, MD_),
               RObj = riak_object:update_metadata(RObj0, MD),
 
               case riak_client:put(RObj, {riak_client, [node(), undefined]}) of
@@ -199,7 +200,7 @@ put_data(Data, Table, Mod) ->
 % functions supporting SELECT
 
 -spec fetch_with_patience(query_id(), non_neg_integer()) ->
-                                 {ok, [[{Key::binary(), riak_pb_ts_codec:ldbvalue()}]]} |
+                                 {ok, [{Key::binary(), riak_pb_ts_codec:ldbvalue()}]} |
                                  {error, atom()}.
 fetch_with_patience(QId, 0) ->
     lager:info("Query results on qid ~p not available after ~b secs\n", [QId, ?FETCH_RETRIES]),
@@ -213,22 +214,42 @@ fetch_with_patience(QId, N) ->
             Result
     end.
 
-
--spec make_tsqueryresp([[{binary(), term()}]], fun()) ->
-                              #tsqueryresp{}.
+-spec make_tsqueryresp([{binary(), term()}], module()) -> #tsqueryresp{}.
 make_tsqueryresp([], _Fun) ->
     #tsqueryresp{columns = [], rows = []};
-make_tsqueryresp(Rows, GetFieldTypeF) ->
-    %% get types and take the ordering of columns in the batches
-    ARecord = hd(Rows),
-    %% plain column names need to be represented as a single-element list
-    ColumnNames = [[C] || {C, _V} <- ARecord],
-    ColumnTypes = lists:map(fun(C) -> riak_pb_ts_codec:encode_field_type(GetFieldTypeF(C)) end, ColumnNames),
-    %% drop column names in row data
-    JustRows =
+make_tsqueryresp(Rows, Module) ->
+    %% as returned by fetch, we have in Rows a sequence of KV pairs,
+    %% making records concatenated in a flat list
+    ColumnNames = get_column_names(Rows),
+    ColumnTypes =
         lists:map(
-          fun(Row) -> [C || {_K, C} <- Row] end,
-          Rows),
+          fun(C) ->
+                  %% make column a single-element list, as
+                  %% encode_field_type requires
+                  riak_pb_ts_codec:encode_field_type(Module:get_field_type([C]))
+          end, ColumnNames),
+    Records = assemble_records(Rows, length(ColumnNames)),
+    JustRows = lists:map(
+                 fun(Rec) -> [C || {_K, C} <- Rec] end,
+                 Records),
     #tsqueryresp{columns = [#tscolumndescription{name = Name, type = Type}
                             || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)],
                  rows = riak_pb_ts_codec:encode_rows(JustRows)}.
+
+get_column_names([{C1, _} | MoreRecords]) ->
+    {RestOfColumns, _DiscardedValues} =
+        lists:unzip(
+          lists:takewhile(
+            fun({Cn, _}) -> C1 /= Cn end,
+            MoreRecords)),
+    [C1|RestOfColumns].
+
+assemble_records(Rows, RecordSize) ->
+    assemble_records_(Rows, RecordSize, []).
+%% should we protect against incomplete records?
+assemble_records_([], _, Acc) ->
+    Acc;
+assemble_records_(RR, RSize, Acc) ->
+    Remaining = lists:nthtail(RSize, RR),
+    assemble_records_(
+      Remaining, RSize, [lists:sublist(RR, RSize) | Acc]).
