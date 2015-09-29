@@ -49,7 +49,6 @@ comp2(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
 
 %% now break out the query on quantum boundaries
 expand_query(#ddl_v1{local_key = LK, partition_key = PK}, Q, NewW) ->
-    %% bodge
     NewWs = expand_where(NewW, PK),
     [Q#riak_sql_v1{is_executable = true,
 		   type          = timeseries,
@@ -120,12 +119,18 @@ check_if_timeseries(#ddl_v1{bucket = B, partition_key = PK, local_key = LK},
 	   Mod = riak_ql_ddl:make_module_name(B),
 	   StartKey = rewrite(LK, StartW, Mod),
            EndKey = rewrite(LK, EndW, Mod),
-	   RewrittenFilter = add_types_to_filter(Filter, Mod),
-           {true, [
-                   {startkey, StartKey},
-                   {endkey,   EndKey},
-                   {filter,   RewrittenFilter}
-                  ]}
+	   HasErrs = [X || {error, _} = X <- [StartKey, EndKey]],
+	   case HasErrs of
+	       [] ->
+		   RewrittenFilter = add_types_to_filter(Filter, Mod),
+		   {true, [
+			   {startkey, StartKey},
+			   {endkey,   EndKey},
+			   {filter,   RewrittenFilter}
+			  ]};
+	       _ ->
+		   {error, {invalid_where_clause, W}}
+	   end
     catch  _:_ -> {error, {where_not_timeseries, W}}
     end;
 check_if_timeseries(_DLL, Where) ->
