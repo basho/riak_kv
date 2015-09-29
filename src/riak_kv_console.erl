@@ -936,11 +936,8 @@ bucket_type_and_table_name_must_match_test() ->
                        {table_def, TableDef}]),
     % if this error changes slightly it is not so important, as long as
     % the bucket type is not allowed to be created.
-    ?assertError(
-        {badmatch,
-            {error,
-                {bucket_type_and_table_name_different,
-                    <<"my_type">>,<<"times">>}}},
+    ?assertEqual(
+        error,
         bucket_type_create(
             fun(Props) -> put(Ref, Props) end,
             <<"my_type">>,
@@ -957,8 +954,8 @@ bucket_type_create_with_timeseries_table_error_when_write_once_set_to_false_test
     JSON = json_props([{bucket_type, my_type}, 
                        {table_def, TableDef},
                        {write_once, false}]),
-    ?assertError(
-        write_once_cannot_be_false,
+    ?assertEqual(
+        error,
         bucket_type_create(
             fun(Props) -> put(Ref, Props) end,
             <<"my_type">>,
