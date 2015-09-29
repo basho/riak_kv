@@ -80,7 +80,7 @@ use_ack_backpressure() ->
 -spec req(binary(), term(), term()) -> term().
 req(Bucket, _ItemFilter, #riak_sql_v1{} = Q) ->
     #riak_kv_sql_select_req_v1{bucket=Bucket,
-			       qry=Q};
+                               qry=Q};
 req(Bucket, ItemFilter, Query) ->
     case use_ack_backpressure() of
         true ->
@@ -104,6 +104,10 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout]) ->
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, undefined]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) ->
+    init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, all]);
+init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, AllowRemote]) ->
+    init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, {VNodeTarget, AllowRemote}]);
+init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget]) ->
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
@@ -118,7 +122,7 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) 
     end,
     %% Construct the key listing request
     Req = req(Bucket, ItemFilter, Query),
-    {Req, MaxResults, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
+    {Req, VNodeTarget, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{from=From, max_results=MaxResults, pagination_sort=PgSort}}.
 
 plan(CoverageVNodes, State = #state{pagination_sort=true}) ->
