@@ -460,7 +460,7 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
 		     [{K, V} | Acc]
 	     end,
     Options = [
-               {first_key,    StartKey2},
+               {start_key,    StartKey2},
                {end_key,      EndKey2},
                {fold_method,  streaming},
                {encoding,     msgpack} |
