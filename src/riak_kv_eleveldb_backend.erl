@@ -42,7 +42,7 @@
          fold_keys/4,
          fold_objects/4,
          fold_indexes/4,
-	 range_scan/4,
+         range_scan/4,
          is_empty/1,
          status/1,
          callback/3]).
@@ -55,6 +55,7 @@
                   ]}).
 
 -include("riak_kv_index.hrl").
+-include_lib("riak_ql/include/riak_ql_sql.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -ifdef(TEST).
@@ -395,21 +396,21 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
                            eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
                        catch
                            {break, BrkResult} ->
-			       BrkResult
+                               BrkResult
                        end,
-		case ExtraFold of
-		    true ->
-			legacy_key_fold(Ref, FoldFun, AccFinal, FoldOpts1, Limiter);
-		    false ->
-			AccFinal
-		end
+                case ExtraFold of
+                    true ->
+                        legacy_key_fold(Ref, FoldFun, AccFinal, FoldOpts1, Limiter);
+                    false ->
+                        AccFinal
+                end
         end,
     case lists:member(async_fold, Opts) of
-	      true ->
-		  {async, KeyFolder};
-	      false ->
-		  {ok, KeyFolder()}
-	  end.
+              true ->
+                  {async, KeyFolder};
+              false ->
+                  {ok, KeyFolder()}
+          end.
 
 fold_indexes(FoldIndexFun, Acc, _Opts, #state{fold_opts=FoldOpts,
                                               ref=Ref}) ->
@@ -439,11 +440,11 @@ fold_indexes_fun(FoldIndexFun) ->
     end.
 
 range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
-					      ref=Ref}) ->
+                                              ref=Ref}) ->
     {_, Bucket, Qry} = proplists:lookup(index, Opts),
     #riak_sql_v1{'WHERE'    = W,
-		 helper_mod = Mod,
-		 local_key  = LK} = Qry,
+                 helper_mod = Mod,
+                 local_key  = LK} = Qry,
     %% this is all super-fugly
     {startkey, StartK} = proplists:lookup(startkey, W),
     {endkey,   EndK}   = proplists:lookup(endkey, W),
@@ -457,8 +458,8 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     EndKey = eleveldb_ts:encode_key(EndK3),
     EndKey2 = to_object_key({Bucket, Bucket}, EndKey),
     FoldFun = fun({K, V}, Acc) ->
-		     [{K, V} | Acc]
-	     end,
+                     [{K, V} | Acc]
+             end,
     Options = [
                {first_key,    StartKey2},
                {end_key,      EndKey2},
@@ -472,9 +473,9 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
                end
               ],
     KeyFolder = fun() ->
-			Vals = eleveldb:fold(Ref, FoldFun, [], Options),
-			FoldIndexFun(lists:reverse(Vals), Buffer)
-		end,
+                        Vals = eleveldb:fold(Ref, FoldFun, [], Options),
+                        FoldIndexFun(lists:reverse(Vals), Buffer)
+                end,
     {async, KeyFolder}.
 
 legacy_key_fold(Ref, FoldFun, Acc, FoldOpts0, Query={index, _, _}) ->

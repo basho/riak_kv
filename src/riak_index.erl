@@ -47,6 +47,7 @@
 -endif.
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
+-include_lib("riak_ql/include/riak_ql_sql.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_index.hrl").
 -define(TIMEOUT, 30000).
@@ -216,9 +217,9 @@ is_field_match(Key, Suffix) when size(Suffix) < size(Key) ->
     %% suffix.
     Offset = size(Key) - size(Suffix),
     case Key of
-        <<_:Offset/binary, Suffix/binary>> -> 
+        <<_:Offset/binary, Suffix/binary>> ->
             true;
-        _ -> 
+        _ ->
             false
     end;
 is_field_match(_, _) ->

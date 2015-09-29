@@ -43,6 +43,7 @@
 
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
+-include_lib("riak_ql/include/riak_ql_sql.hrl").
 
 -export([init/2,
          plan/2,
@@ -80,7 +81,7 @@ use_ack_backpressure() ->
 -spec req(binary(), term(), term()) -> term().
 req(Bucket, _ItemFilter, #riak_sql_v1{} = Q) ->
     #riak_kv_sql_select_req_v1{bucket=Bucket,
-			       qry=Q};
+                               qry=Q};
 req(Bucket, ItemFilter, Query) ->
     case use_ack_backpressure() of
         true ->
