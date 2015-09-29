@@ -517,9 +517,18 @@ bucket_type_create([TypeStr, PropsStr]) ->
 bucket_type_create(CreateTypeFn, Type, {struct, Fields}) ->
     case Fields of
         [{<<"props", _/binary>>, {struct, Props1}}] ->
-            {ok, Props2} = riak_kv_wm_utils:maybe_parse_table_def(Type, Props1),
-            Props3 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props2],
-            CreateTypeFn(Props3);
+            case catch riak_kv_wm_utils:maybe_parse_table_def(Type, Props1) of
+                {ok, Props2} ->
+                    Props3 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props2],
+                    CreateTypeFn(Props3);
+                {error, ErrorMessage} when is_list(ErrorMessage) ->
+                    io:format(ErrorMessage),
+                    error;
+                {error, Error} ->
+                    io:format("~p~n", [Error]),
+                    error
+
+            end;
         _ ->
             io:format("Cannot create bucket type ~ts: no props field found in json~n", [Type]),
             error

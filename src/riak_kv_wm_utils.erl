@@ -443,11 +443,9 @@ method_to_perm('GET') ->
 method_to_perm('DELETE') ->
     "riak_kv.delete".
 
-%%%
-%%%
-%%%
-
-%%
+%% Given bucket properties, transform the `<<"table_def">>' property if it
+%% exists to riak_ql DDL and store it under the `<<"ddl">>' key, table_def
+%% is removed.  
 -spec maybe_parse_table_def(BucketType :: binary(),
                             Props :: list(proplists:property())) -> 
         {ok, Props2 :: [proplists:property()]} | {error, any()}.
@@ -482,11 +480,10 @@ apply_timeseries_bucket_props(DDL, Props1) ->
 assert_write_once_not_false(Props) ->
     case lists:keyfind(<<"write_once">>, 1, Props) of
         {<<"write_once">>, false} ->
-            io:format(
+            throw({error,
                 "Error, the bucket type could not be the created. "
                 "The write_once property had a value of false but must be true "
-                "or left blank~n"),
-            error(write_once_cannot_be_false);
+                "or left blank\n"});
         _ ->
             ok
     end.
@@ -494,13 +491,11 @@ assert_write_once_not_false(Props) ->
 %%
 assert_type_and_table_name_same(BucketType, #ddl_v1{ bucket = BucketType }) ->
     ok;
-assert_type_and_table_name_same(BucketType, #ddl_v1{ bucket = TableName }) ->
-    io:format(
+assert_type_and_table_name_same(BucketType1, #ddl_v1{ bucket = BucketType2 }) ->
+    throw({error, 
         "Error, the bucket type could not be the created. The bucket type and table name must be the same~n"
-        "    bucket type was: ~s~n"
-        "    table name was:  ~s~n",
-        [BucketType, TableName]),
-    {error, {bucket_type_and_table_name_different, BucketType, TableName}}.
+        "    bucket type was: " ++ binary_to_list(BucketType1) ++ "\n"
+        "    table name was:  " ++ binary_to_list(BucketType2) ++ "\n"}).
 
 %% Attempt to compile the DDL but don't do anything with the output, this is
 %% catch failures as early as possible. Also the error messages are easy to
