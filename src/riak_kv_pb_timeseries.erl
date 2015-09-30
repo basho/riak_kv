@@ -46,6 +46,7 @@
 -define(E_IRREG,    3).
 -define(E_PUT,      4).
 -define(E_NOCREATE, 5).
+-define(E_TYPE_MISSING, 6).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
@@ -95,7 +96,7 @@ process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
     Data = riak_pb_ts_codec:decode_rows(Rows),
     %% validate only the first row as we trust the client to send us
     %% perfectly uniform data wrt types and order
-    case Mod:validate_obj(hd(Data)) of
+    case (catch Mod:validate_obj(hd(Data))) of
         true ->
             %% however, prevent bad data to crash us
             try
@@ -112,7 +113,11 @@ process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
                     {reply, make_rpberrresp(?E_IRREG, {Class, Exception})}
             end;
         false ->
-                {reply, make_rpberrresp(?E_IRREG, "Invalid data")}
+                {reply, make_rpberrresp(?E_IRREG, "Invalid data")};
+        {_, {undef, _}} ->
+            {reply, make_rpberrresp(
+                ?E_TYPE_MISSING, 
+                io_lib:format("Failed to put records, bucket type ~s is missing.", [Table]))}
     end;
 
 %% @ignore SELECT
