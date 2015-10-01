@@ -25,6 +25,7 @@
                case riak_ql_ddl:is_query_valid(DDL, SQL) of
                    true ->
                        Got = riak_kv_qry_compiler:compile(DDL, SQL),
+		       gg:format("in ~p~n- Expected:~n- ~p~nGot:~n- ~p~n", [Name, Expected, Got]),
                        ?assertEqual(Expected, Got);
                    false ->
                        ?assertEqual(Expected, invalid_query)
@@ -94,7 +95,8 @@ get_standard_lk() -> #key_v1{ast = [
 							 <<"gordon">>}
                                                        ]
                                             },
-                                            {filter, []}
+                                            {filter, []},
+					    {start_inclusive,   false}
                                            ],
                            helper_mod    = riak_ql_ddl:make_module_name(<<"GeoCheckin">>),
                            partition_key = get_standard_pk(),
@@ -153,7 +155,9 @@ get_standard_lk() -> #key_v1{ast = [
 							 <<"gordon">>}
                                                        ]
                                             },
-                                            {filter, []}
+                                            {filter, []},
+					    {start_inclusive, false},
+					    {end_inclusive,   true}
 					   ],
                            helper_mod    = riak_ql_ddl:make_module_name(<<"GeoCheckin">>),
                            partition_key = get_standard_pk(),
@@ -181,8 +185,7 @@ get_standard_lk() -> #key_v1{ast = [
 							 <<"gordon">>}
                                                        ]
                                             },
-                                            {filter, []}
-					   ],
+                                            {filter, []}					   ],
                            helper_mod    = riak_ql_ddl:make_module_name(<<"GeoCheckin">>),
                            partition_key = get_standard_pk(),
 			   is_executable = true,
