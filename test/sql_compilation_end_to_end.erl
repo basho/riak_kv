@@ -25,7 +25,6 @@
                case riak_ql_ddl:is_query_valid(DDL, SQL) of
                    true ->
                        Got = riak_kv_qry_compiler:compile(DDL, SQL),
-		       gg:format("in ~p~n- Expected:~n- ~p~nGot:~n- ~p~n", [Name, Expected, Got]),
                        ?assertEqual(Expected, Got);
                    false ->
                        ?assertEqual(Expected, invalid_query)
