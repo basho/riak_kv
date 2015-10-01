@@ -470,29 +470,7 @@ simplest_test() ->
 	    ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
-<<<<<<< HEAD
-                              'WHERE'       = [
-                                               {startkey, [
-                                                           {<<"time">>,
-							    timestamp,
-							    3000},
-                                                           {<<"user">>,
-							    binary,
-							    <<"user_1">>}
-                                                           ]},
-                                               {endkey,   [
-                                                           {<<"time">>,
-							    timestamp,
-							    5000},
-                                                           {<<"user">>,
-							    binary,
-							    <<"user_1">>}
-                                                          ]},
-                                               {filter,   []}
-                                              ],
-=======
                               'WHERE'       = Where,
->>>>>>> 74fd24c9054bed9f6c416c5f9b89e7adca850fa0
                               partition_key = get_standard_pk(),
                               local_key     = get_standard_lk()
                      }],
@@ -539,10 +517,6 @@ simple_with_filter_2_test() ->
 			 {<<"time">>, timestamp, 5000},
 			 {<<"user">>, binary,    <<"user_1">>}
 			]},
-<<<<<<< HEAD
-	     {filter,   {'=', {field, <<"weather">>, binary},
-			 {const, <<"yankee">>}}}
-=======
 	     {filter,   {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}}
 	    ],
     Expected = [Q#riak_sql_v1{is_executable = true,
@@ -571,7 +545,6 @@ simple_with_filter_3_test() ->
 	     {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
 	     {start_inclusive, false},
 	     {end_inclusive,   true}
->>>>>>> 74fd24c9054bed9f6c416c5f9b89e7adca850fa0
 	    ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
@@ -588,23 +561,6 @@ simple_with_2_field_filter_test() ->
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-<<<<<<< HEAD
-	     {startkey, [
-			 {<<"time">>, timestamp, 3000},
-			 {<<"user">>, binary,    <<"user_1">>}
-			]},
-	     {endkey,   [
-			 {<<"time">>, timestamp, 5000},
-			 {<<"user">>, binary,    <<"user_1">>}
-			]},
-	     {filter,   {and_,
-			 {'=', {field, <<"weather">>,     binary},
-			  {const, <<"yankee">>}},
-			 {'=', {field, <<"temperature">>, binary},
-			  {const, <<"yelp">>}}
-			}
-	     }
-=======
 	     {startkey,        [
 				{<<"time">>, timestamp, 3000},
 				{<<"user">>, binary,    <<"user_1">>}
@@ -621,7 +577,6 @@ simple_with_2_field_filter_test() ->
 			       }
 	     },
 	     {start_inclusive, false}
->>>>>>> 74fd24c9054bed9f6c416c5f9b89e7adca850fa0
 	    ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
@@ -638,31 +593,6 @@ complex_with_4_field_filter_test() ->
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-<<<<<<< HEAD
-	     {startkey, [
-			 {<<"time">>, timestamp, 3000},
-			 {<<"user">>, binary,    <<"user_1">>}
-			]},
-	     {endkey,   [
-			 {<<"time">>, timestamp, 5000},
-			 {<<"user">>, binary,    <<"user_1">>}
-			]},
-	     {filter,   {and_,
-			 {or_,
-			  {'=', {field, <<"weather">>, binary},
-			   {const, <<"yankee">>}},
-			  {and_,
-			   {'=', {field, <<"geohash">>,     binary},
-			    {const, <<"erko">>}},
-			   {'=', {field, <<"temperature">>, binary},
-			    {const, <<"yelp">>}}
-			  }
-			 },
-			 {'=', {field, <<"extra">>, integer},
-			  {const, 1}}
-			}
-	     }
-=======
 	     {startkey,        [
 				{<<"time">>, timestamp, 3000},
 				{<<"user">>, binary,    <<"user_1">>}
@@ -687,7 +617,6 @@ complex_with_4_field_filter_test() ->
 			       }
 	     },
 	     {start_inclusive, false}
->>>>>>> 74fd24c9054bed9f6c416c5f9b89e7adca850fa0
 	    ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
@@ -707,27 +636,6 @@ simple_spanning_boundary_test() ->
     Got = compile(DDL, Q),
     %% now make the result - expecting 3 queries
     W1 = [
-<<<<<<< HEAD
-	  {startkey, [{<<"time">>, timestamp, 3000},
-		      {<<"user">>, binary, <<"user_1">>}]},
-	  {endkey,   [{<<"time">>, timestamp, 15000},
-		      {<<"user">>, binary, <<"user_1">>}]},
-	  {filter, []}
-	 ],
-    W2 = [
-	  {startkey, [{<<"time">>, timestamp, 15000},
-		      {<<"user">>, binary, <<"user_1">>}]},
-	  {endkey,   [{<<"time">>, timestamp, 30000},
-		      {<<"user">>, binary, <<"user_1">>}]},
-	  {filter, []}
-	 ],
-    W3 = [
-	  {startkey, [{<<"time">>, timestamp, 30000},
-		      {<<"user">>, binary, <<"user_1">>}]},
-	  {endkey,   [{<<"time">>, timestamp, 31000},
-		      {<<"user">>, binary, <<"user_1">>}]},
-	  {filter, []}
-=======
 	  {startkey,        [{<<"time">>, timestamp, 3000},
 			     {<<"user">>, binary, <<"user_1">>}]},
 	  {endkey,          [{<<"time">>, timestamp, 15000},
@@ -749,7 +657,6 @@ simple_spanning_boundary_test() ->
 	  {endkey,          [{<<"time">>, timestamp, 31000},
 			     {<<"user">>, binary, <<"user_1">>}]},
 	  {filter,          []}
->>>>>>> 74fd24c9054bed9f6c416c5f9b89e7adca850fa0
 	 ],
     Expected = [
 		Q#riak_sql_v1{is_executable = true,
