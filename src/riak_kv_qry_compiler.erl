@@ -29,11 +29,13 @@
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_index.hrl").
 
+-define(MAXSUBQ, 5).
+
 compile(#ddl_v1{}, #riak_sql_v1{is_executable = true}) ->
     {error, 'query is already compiled'};
 compile(#ddl_v1{}, #riak_sql_v1{'SELECT' = []}) ->
     {error, 'full table scan not implmented'};
-compile(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false, 
+compile(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
 				      type          = sql} = Q) ->
     comp2(DDL, Q).
 
@@ -49,13 +51,16 @@ comp2(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
 
 %% now break out the query on quantum boundaries
 expand_query(#ddl_v1{local_key = LK, partition_key = PK}, Q, NewW) ->
-    NewWs = expand_where(NewW, PK),
-    [Q#riak_sql_v1{is_executable = true,
-		   type          = timeseries,
-		   'WHERE'       = X,
-		   local_key     = LK,
-		   partition_key = PK} || X <- NewWs].
-	
+    case expand_where(NewW, PK) of
+	{error, E} ->
+	    {error, E};
+	NewWs ->
+	    [Q#riak_sql_v1{is_executable = true,
+			   type          = timeseries,
+			   'WHERE'       = X,
+			   local_key     = LK,
+			   partition_key = PK} || X <- NewWs]
+    end.
 
 expand_where(Where, #key_v1{ast = PAST}) ->
     GetMaxMinFun = fun({startkey, [{_, _, H} | _T]}, {_S, E}) ->
@@ -66,15 +71,19 @@ expand_where(Where, #key_v1{ast = PAST}) ->
 			   {S, E}
 		   end,
     {Min, Max} = lists:foldl(GetMaxMinFun, {"", ""}, Where),
-    [{[QField], Q, U}] = [{X, Y, Z} 
+    [{[QField], Q, U}] = [{X, Y, Z}
 			  || #hash_fn_v1{mod = riak_ql_quanta,
 					 fn   = quantum,
-					 args = [#param_v1{name = X}, Y, Z]} 
+					 args = [#param_v1{name = X}, Y, Z]}
 				 <- PAST],
     {NoSubQueries, Boundaries} = riak_ql_quanta:quanta(Min, Max, Q, U),
-    case NoSubQueries of
-	1 -> [Where];
-	_ -> _NewWs = make_wheres(Where, QField, Min, Max, Boundaries)
+    if
+	NoSubQueries =:= 1 ->
+	    [Where];
+	1 < NoSubQueries andalso NoSubQueries < ?MAXSUBQ ->
+	    _NewWs = make_wheres(Where, QField, Min, Max, Boundaries);
+	?MAXSUBQ < NoSubQueries ->
+	    {error, {too_many_subqueries, NoSubQueries}}
     end.
 
 make_wheres(Where, QField, Min, Max, Boundaries) ->
@@ -112,7 +121,7 @@ check_if_timeseries(#ddl_v1{bucket = B, partition_key = PK, local_key = LK},
            PartitionFields = [X || #param_v1{name = X} <- PAST],
            [QField] = [X || #hash_fn_v1{mod  = riak_ql_quanta,
 					fn   = quantum,
-					args = [#param_v1{name = X} | _Rest]} 
+					args = [#param_v1{name = X} | _Rest]}
 				<- PAST],
 	   StrippedW = strip(W, []),
 	   {StartW, EndW, Filter} = break_out_timeseries(StrippedW, LocalFields, [QField]),
@@ -167,7 +176,7 @@ add_types2([{Op, LHS, RHS} | T], Mod, Acc) when Op =:= and_ orelse
     add_types2(T, Mod, [NewAcc | Acc]);
 add_types2([{Op, Field, {_, Val}} | T], Mod, Acc) ->
     NewAcc = {Op, {field, Field, Mod:get_field_type([Field])}, {const, Val}},
-    add_types2(T, Mod, [NewAcc | Acc]).	      
+    add_types2(T, Mod, [NewAcc | Acc]).
 
 %% I know, not tail recursive could stackbust
 %% but not really
@@ -189,9 +198,9 @@ rew2([], _W, _Mod, _Acc) ->
 rew2([#param_v1{name = [N]} | T], W, Mod, Acc) ->
     Type = Mod:get_field_type([N]),
     case lists:keytake(N, 2, W) of
-	false                           -> 
+	false                           ->
 	    {error, invalid_rewrite};
-	{value, {_, _, {_, Val}}, NewW} -> 
+	{value, {_, _, {_, Val}}, NewW} ->
 	    rew2(T, NewW, Mod, [{N, Type, Val} | Acc])
     end.
 
@@ -296,9 +305,9 @@ simple_filter_typing_test() ->
     #ddl_v1{bucket = B} = get_long_ddl(),
     Mod = riak_ql_ddl:make_module_name(B),
     Filter = [
-	      {or_, 
+	      {or_,
 	       {'=', <<"weather">>, {word, <<"yankee">>}},
-	       {and_, 
+	       {and_,
 		{'=', <<"geohash">>,     {word, <<"erko">>}},
 		{'=', <<"temperature">>, {word, <<"yelp">>}}
 	       }
@@ -306,10 +315,10 @@ simple_filter_typing_test() ->
 	      {'=', <<"extra">>, {int, 1}}
 	     ],
     Got = add_types_to_filter(Filter, Mod),
-    Expected = {and_, 
-	    {or_, 
+    Expected = {and_,
+	    {or_,
 	     {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}},
-	     {and_, 
+	     {and_,
 	      {'=', {field, <<"geohash">>,     binary}, {const, <<"erko">>}},
 	      {'=', {field, <<"temperature">>, binary}, {const, <<"yelp">>}}
 	     }
@@ -405,19 +414,19 @@ simplest_test() ->
                               type          = timeseries,
                               'WHERE'       = [
                                                {startkey, [
-                                                           {<<"time">>, 
-							    timestamp, 
+                                                           {<<"time">>,
+							    timestamp,
 							    3000},
-                                                           {<<"user">>, 
+                                                           {<<"user">>,
 							    binary,
 							    <<"user_1">>}
                                                            ]},
                                                {endkey,   [
-                                                           {<<"time">>, 
-							    timestamp, 
+                                                           {<<"time">>,
+							    timestamp,
 							    5000},
-                                                           {<<"user">>, 
-							    binary, 
+                                                           {<<"user">>,
+							    binary,
 							    <<"user_1">>}
                                                           ]},
                                                {filter,   []}
@@ -442,7 +451,7 @@ simple_with_filter_test() ->
 			 {<<"time">>, timestamp, 5000},
 			 {<<"user">>, binary,    <<"user_1">>}
 			]},
-	     {filter,   {'=', {field, <<"weather">>, binary}, 
+	     {filter,   {'=', {field, <<"weather">>, binary},
 			 {const, <<"yankee">>}}}
 	    ],
     Expected = [Q#riak_sql_v1{is_executable = true,
@@ -468,10 +477,10 @@ simple_with_2_field_filter_test() ->
 			 {<<"time">>, timestamp, 5000},
 			 {<<"user">>, binary,    <<"user_1">>}
 			]},
-	     {filter,   {and_, 
-			 {'=', {field, <<"weather">>,     binary}, 
+	     {filter,   {and_,
+			 {'=', {field, <<"weather">>,     binary},
 			  {const, <<"yankee">>}},
-			 {'=', {field, <<"temperature">>, binary}, 
+			 {'=', {field, <<"temperature">>, binary},
 			  {const, <<"yelp">>}}
 			}
 	     }
@@ -499,18 +508,18 @@ complex_with_4_field_filter_test() ->
 			 {<<"time">>, timestamp, 5000},
 			 {<<"user">>, binary,    <<"user_1">>}
 			]},
-	     {filter,   {and_, 
-			 {or_, 
-			  {'=', {field, <<"weather">>, binary}, 
+	     {filter,   {and_,
+			 {or_,
+			  {'=', {field, <<"weather">>, binary},
 			   {const, <<"yankee">>}},
-			  {and_, 
-			   {'=', {field, <<"geohash">>,     binary}, 
+			  {and_,
+			   {'=', {field, <<"geohash">>,     binary},
 			    {const, <<"erko">>}},
-			   {'=', {field, <<"temperature">>, binary}, 
+			   {'=', {field, <<"temperature">>, binary},
 			    {const, <<"yelp">>}}
 			  }
 			 },
-			 {'=', {field, <<"extra">>, integer}, 
+			 {'=', {field, <<"extra">>, integer},
 			  {const, 1}}
 			}
 	     }
@@ -533,23 +542,23 @@ simple_spanning_boundary_test() ->
     Got = compile(DDL, Q),
     %% now make the result - expecting 3 queries
     W1 = [
-	  {startkey, [{<<"time">>, timestamp, 3000},  
+	  {startkey, [{<<"time">>, timestamp, 3000},
 		      {<<"user">>, binary, <<"user_1">>}]},
-	  {endkey,   [{<<"time">>, timestamp, 15000}, 
+	  {endkey,   [{<<"time">>, timestamp, 15000},
 		      {<<"user">>, binary, <<"user_1">>}]},
 	  {filter, []}
 	 ],
     W2 = [
-	  {startkey, [{<<"time">>, timestamp, 15000}, 
+	  {startkey, [{<<"time">>, timestamp, 15000},
 		      {<<"user">>, binary, <<"user_1">>}]},
-	  {endkey,   [{<<"time">>, timestamp, 30000}, 
+	  {endkey,   [{<<"time">>, timestamp, 30000},
 		      {<<"user">>, binary, <<"user_1">>}]},
 	  {filter, []}
 	 ],
     W3 = [
-	  {startkey, [{<<"time">>, timestamp, 30000}, 
+	  {startkey, [{<<"time">>, timestamp, 30000},
 		      {<<"user">>, binary, <<"user_1">>}]},
-	  {endkey,   [{<<"time">>, timestamp, 31000}, 
+	  {endkey,   [{<<"time">>, timestamp, 31000},
 		      {<<"user">>, binary, <<"user_1">>}]},
 	  {filter, []}
 	 ],
