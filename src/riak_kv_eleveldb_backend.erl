@@ -448,6 +448,15 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     {startkey, StartK} = proplists:lookup(startkey, W),
     {endkey,   EndK}   = proplists:lookup(endkey, W),
     {filter,   Filter} = proplists:lookup(filter, W),
+    StartInclusive = case proplists:lookup(start_inclusive, W) of
+			 none  -> [];
+			 STuple -> [STuple]
+		     end,
+    EndInclusive = case proplists:lookup(end_inclusive, W) of
+			 none  -> [];
+			 ETuple -> [ETuple]
+		     end,
+    AdditionalOptions = lists:flatten(StartInclusive ++ EndInclusive ++ Filter),
     StartK2 = [{Field, Val} || {Field, _Type, Val} <- StartK],
     StartK3 = riak_ql_ddl:make_key(Mod, LK, StartK2),
     StartKey = eleveldb_ts:encode_key(StartK3),
@@ -463,14 +472,8 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
                {start_key,    StartKey2},
                {end_key,      EndKey2},
                {fold_method,  streaming},
-               {encoding,     msgpack} |
-               % do not include the range_filter option unless there are
-               % actual filters to execute
-               case Filter of
-                   [] -> [];
-                   _  -> [{range_filter, Filter}]
-               end
-              ],
+               {encoding,     msgpack} 
+	      ] ++ AdditionalOptions,
     KeyFolder = fun() ->
 			Vals = eleveldb:fold(Ref, FoldFun, [], Options),
 			FoldIndexFun(lists:reverse(Vals), Buffer)
