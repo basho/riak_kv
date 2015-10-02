@@ -246,9 +246,6 @@ handle_side_effects([{run_sub_query, {qry, Q}, {qid, QId}} | T]) ->
     Me = self(),
     CoverageFn = {colocated, riak_kv_qry_coverage_plan},
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, [Bucket, none, Q, Timeout, all, undefined, CoverageFn]]),
-    handle_side_effects(T);
-handle_side_effects([H | T]) ->
-    lager:info("Not handling side effect ~p", [H]),
     handle_side_effects(T).
 
 decode_results(KVList, SelectSpec) ->
