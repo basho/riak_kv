@@ -29,6 +29,8 @@
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_index.hrl").
 
+-define(MAXSUBQ, 5).
+
 compile(#ddl_v1{}, #riak_sql_v1{is_executable = true}) ->
     {error, 'query is already compiled'};
 compile(#ddl_v1{}, #riak_sql_v1{'SELECT' = []}) ->
@@ -49,13 +51,16 @@ comp2(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
 
 %% now break out the query on quantum boundaries
 expand_query(#ddl_v1{local_key = LK, partition_key = PK}, Q, NewW) ->
-    NewWs = expand_where(NewW, PK),
-    [Q#riak_sql_v1{is_executable = true,
-		   type          = timeseries,
-		   'WHERE'       = X,
-		   local_key     = LK,
-		   partition_key = PK} || X <- NewWs].
-
+    case expand_where(NewW, PK) of
+	{error, E} ->
+	    {error, E};
+	NewWs ->
+	    [Q#riak_sql_v1{is_executable = true,
+			   type          = timeseries,
+			   'WHERE'       = X,
+			   local_key     = LK,
+			   partition_key = PK} || X <- NewWs]
+    end.
 
 expand_where(Where, #key_v1{ast = PAST}) ->
     GetMaxMinFun = fun({startkey, [{_, _, H} | _T]}, {_S, E}) ->
@@ -72,9 +77,13 @@ expand_where(Where, #key_v1{ast = PAST}) ->
 					 args = [#param_v1{name = X}, Y, Z]}
 				 <- PAST],
     {NoSubQueries, Boundaries} = riak_ql_quanta:quanta(Min, Max, Q, U),
-    case NoSubQueries of
-	1 -> [Where];
-	_ -> _NewWs = make_wheres(Where, QField, Min, Max, Boundaries)
+    if
+	NoSubQueries =:= 1 ->
+	    [Where];
+	1 < NoSubQueries andalso NoSubQueries < ?MAXSUBQ ->
+	    _NewWs = make_wheres(Where, QField, Min, Max, Boundaries);
+	?MAXSUBQ < NoSubQueries ->
+	    {error, {too_many_subqueries, NoSubQueries}}
     end.
 
 make_wheres(Where, QField, Min, Max, Boundaries) ->

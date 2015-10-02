@@ -64,13 +64,13 @@
 -define(NO_PG_SORT, undefined).
 
 -record(state, {
-          name       :: qry_fsm_name(),
-          ddl        :: undefined | #ddl_v1{},
-          qry = none :: none | #riak_sql_v1{},
-          qid = undefined :: undefined | {node(), non_neg_integer()},
-          n_chunks = 0    :: non_neg_integer(),
-          status = void   :: void | got_chunk | finished,
-          result = []     :: [binary()]
+          name                 :: qry_fsm_name(),
+          ddl                  :: undefined | #ddl_v1{},
+          qry      = none      :: none | #riak_sql_v1{},
+          qid      = undefined :: undefined | {node(), non_neg_integer()},
+          sub_qrys  = []       :: [integer()],
+          status    = void     :: void | accumulating_chunks | finished,
+          result    = []       :: [{non_neg_integer(), list()}] | [{binary(), term()}]
          }).
 
 %%%===================================================================
@@ -127,40 +127,60 @@ handle_cast(Msg, State) ->
 
 -spec handle_info(term(), #state{}) -> {noreply, #state{}}.
 %% @private
-handle_info({QId, done},
-            State = #state{qid = QId,
-                           n_chunks = NChunks}) ->
-    lager:debug("Received ~b chunks on QId ~p", [NChunks, QId]),
-    {noreply, State#state{status = finished}};
+%% sometimes we get finish statements after we have finished accumulating
+handle_info({{_SubQId, _QId}, done},
+            State = #state{status = finished}) ->
+    lager:debug("Received stray done on QId ~p (~p)", [_QId, _SubQId]),
+    {noreply, State};
+handle_info({{SubQId, QId}, done},
+            State = #state{qid       = QId,
+                           result    = IndexedChunks,
+                           sub_qrys  = SubQQ}) ->
+    lager:debug("Received done on QId ~p (~p); SubQQ: ~p", [QId, SubQId, SubQQ]),
+    case SubQQ of
+        [] ->
+            lager:debug("Done collecting on QId ~p (~p): ~p", [QId, SubQId, IndexedChunks]),
+            %% sort by index, to reassemble according to coverage plan
+            {_, R2} = lists:unzip(
+                        lists:sort(IndexedChunks)),
+            %% drop indexes, serialize
+            {noreply, State#state{status = finished,
+                                  result = lists:append(R2)}};
+        _MoreSubQueriesNotDone ->
+            {noreply, State}
+    end;
 
-handle_info({QId, {results, Chunk}},
-            State = #state{qid = QId, qry = Qry,
-                           status = void}) ->
+handle_info({{SubQId, QId}, {results, Chunk}},
+            State = #state{qid      = QId,
+                           qry      = Qry,
+                           result   = IndexedChunks,
+                           sub_qrys = SubQs}) ->
     #riak_sql_v1{'SELECT' = SelectSpec} = Qry,
-    Decoded =
-        decode_results(
-          lists:flatten(Chunk), SelectSpec),
-    {noreply, State#state{status = got_chunk,
-                          n_chunks = 1,
-                          result = lists:append(Decoded)}};
-
-%% extra N chunks where N == n_val, n_val > 0: discard
-handle_info({QId, {results, _ExtraChunk}},
-            State = #state{qid = QId,
-                           n_chunks = NChunks,
-                           status = got_chunk}) ->
-    {noreply, State#state{n_chunks = NChunks + 1}};
+    NewS = case lists:member(SubQId, SubQs) of
+               true ->
+                   Decoded = decode_results(lists:flatten(Chunk), SelectSpec),
+                   lager:debug("Got chunk on QId ~p (~p); SubQQ: ~p", [QId, SubQId, SubQs]),
+                   NSubQ = lists:delete(SubQId, SubQs),
+                   State#state{status   = accumulating_chunks,
+                               result   = [{SubQId, Decoded} | IndexedChunks],
+                               sub_qrys = NSubQ};
+               false ->
+                   %% discard;
+                   %% Don't touch state as it may have already 'finished'.
+                   State
+           end,
+    {noreply, NewS};
 
 %% late chunks: warn
-handle_info({QId, {results, _LateData}},
+handle_info({{SubQId, QId}, {results, _LateData}},
             State = #state{qid = QId,
                            status = finished}) ->
-    lager:debug("Discarding late chunk (~b bytes) on qid ~p",
-                [length(lists:flatten(_LateData)), QId]),
+    lager:debug("Discarding late chunk (~b bytes) on qid ~p (subqid ~p)",
+                [length(lists:flatten(_LateData)), QId, SubQId]),
     {noreply, State};
 
 %% other error conditions
-handle_info({QId1, _}, State = #state{qid = QId2})
+handle_info({{_SubQId, QId1}, _}, State = #state{qid = QId2})
   when QId1 =/= QId2 ->
     lager:warning("Bad query id ~p (expected ~p)", [QId1, QId2]),
     {noreply, State}.
@@ -192,33 +212,30 @@ handle_req({fetch, QId}, State = #state{qid = QId2})
 handle_req({execute, {QId, Qry, DDL}}, State = #state{status = void}) ->
     %% TODO make this run with multiple sub-queries
     Queries = riak_kv_qry_compiler:compile(DDL, Qry),
-    SEs = [{run_sub_query, {qry, X}, {qid, QId}} || X <- Queries],
-    {ok, SEs, State#state{qid = QId, qry = Qry, ddl = DDL}};
+    %% limit sub-queries and throw error
+    Indices = lists:seq(1, length(Queries)),
+    ZQueries = lists:zip(Indices, Queries),
+    SEs = [{run_sub_query, {qry, Q}, {qid, {I, QId}}} || {I, Q} <- ZQueries],
+    {ok, SEs, State#state{qid = QId, qry = Qry, ddl = DDL, sub_qrys = Indices}};
 
 handle_req({execute, {QId, _, _}}, State = #state{status = Status})
   when Status =/= void ->
     lager:error("Qry queue manager should have cleared the status before assigning new query ~p", [QId]),
     {{error, mismanagement}, [], State};
 
-handle_req({fetch, QId}, State = #state{qid = QId,
-                                        status = void}) ->
+handle_req({fetch, QId}, State = #state{qid    = QId,
+                                        status = S})
+  when S =:= void orelse
+       S =:= accumulating_chunks ->
     {{error, in_progress}, [], State};
 
-handle_req({fetch, QId}, State = #state{qid = QId,
-                                        status = got_chunk,
+handle_req({fetch, QId}, State = #state{qid    = QId,
+                                        status = finished,
                                         result = Result}) ->
-    %% perhaps we can just return the first chunk now but leave FSM to mop up the rest
     {{ok, Result}, [], State};
-
-handle_req({fetch, QId}, State = #state{qid = QId,
-                                        result = Result}) ->
-    {{ok, Result}, [], State#state{qid = undefined,
-                                   status = void,
-                                   result = []}};
 
 handle_req(_Request, State) ->
     {ok, ?NO_SIDEEFFECTS, State}.
-
 
 handle_side_effects([]) ->
     ok;
@@ -229,15 +246,11 @@ handle_side_effects([{run_sub_query, {qry, Q}, {qid, QId}} | T]) ->
     Me = self(),
     CoverageFn = {colocated, riak_kv_qry_coverage_plan},
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, [Bucket, none, Q, Timeout, all, undefined, CoverageFn]]),
-    handle_side_effects(T);
-handle_side_effects([H | T]) ->
-    io:format("in riak_kv_qry:handle_side_effects not handling ~p~n", [H]),
     handle_side_effects(T).
 
-
 decode_results(KVList, SelectSpec) ->
-    [extract_riak_object(SelectSpec, V) || {_, V} <- KVList].
-
+    lists:append(
+      [extract_riak_object(SelectSpec, V) || {_, V} <- KVList]).
 
 extract_riak_object(SelectSpec, V) when is_binary(V) ->
     % don't care about bkey
