@@ -161,11 +161,13 @@ check_if_timeseries(#ddl_v1{bucket = B, partition_key = PK, local_key = LK},
 	   case HasErrs of
 	       [] ->
 		   RewrittenFilter = add_types_to_filter(Filter, Mod),
+		   gg:format("Filter is ~p~n- RewrittenFitler is ~p~n",
+			     [Filter, RewrittenFilter]),
 		   {true, lists:flatten([
 					 {startkey, StartKey},
 					 {endkey,   EndKey},
 					 {filter,   RewrittenFilter}
-					] ++ IncStart ++IncEnd
+					] ++ IncStart ++ IncEnd
 				       )};
 	       _ ->
 		   {error, {invalid_where_clause, W}}
@@ -229,9 +231,9 @@ add_types2([{Op, Field, {_, Val}} | T], Mod, Acc) ->
 make_ands([]) ->
     [];
 make_ands([H | []]) ->
-    H;
+    [H];
 make_ands([H | T]) ->
-    {and_, H, make_ands(T)}.
+    [{and_, H, make_ands(T)}].
 
 rewrite(#key_v1{ast = AST}, W, Mod) ->
     rew2(AST, W, Mod, []).
