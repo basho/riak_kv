@@ -194,10 +194,10 @@ query_params(#rpbindexreq{index=Index, range_min=Min, range_max=Max,
       {continuation, Continuation}, {return_body, ReturnBody}].
 
 %% Return `keys', `terms', or `objects' depending on the value of
-%% `return_terms' and `return_body'
-response_type(_, true) ->
+%% `return_body' and `return_terms'
+response_type(true, _) ->
     objects;
-response_type(true, false) ->
+response_type(false, true) ->
     terms;
 response_type(_, _) ->
     keys.
