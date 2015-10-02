@@ -212,7 +212,7 @@ strip({and_, B, C}, Acc) -> strip(C, [B | Acc]);
 strip(A, Acc)            -> [A | Acc].
 
 add_types_to_filter(Filter, Mod) ->
-    add_types2(Filter, Mod, []).
+    maybe_make_list(add_types2(Filter, Mod, [])).
 
 add_types2([], _Mod, Acc) ->
     make_ands(lists:reverse(Acc));
@@ -224,14 +224,17 @@ add_types2([{Op, Field, {_, Val}} | T], Mod, Acc) ->
     NewAcc = {Op, {field, Field, Mod:get_field_type([Field])}, {const, Val}},
     add_types2(T, Mod, [NewAcc | Acc]).
 
+maybe_make_list([]) -> [];
+maybe_make_list(X)  -> [X]. 
+
 %% I know, not tail recursive could stackbust
 %% but not really
 make_ands([]) ->
     [];
 make_ands([H | []]) ->
-    [H];
+    H;
 make_ands([H | T]) ->
-    [{and_, H, make_ands(T)}].
+    {and_, H, make_ands(T)}.
 
 rewrite(#key_v1{ast = AST}, W, Mod) ->
     rew2(AST, W, Mod, []).
@@ -361,16 +364,16 @@ simple_filter_typing_test() ->
 	      {'=', <<"extra">>, {int, 1}}
 	     ],
     Got = add_types_to_filter(Filter, Mod),
-    Expected = {and_,
-	    {or_,
-	     {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}},
-	     {and_,
-	      {'=', {field, <<"geohash">>,     binary}, {const, <<"erko">>}},
-	      {'=', {field, <<"temperature">>, binary}, {const, <<"yelp">>}}
-	     }
-	    },
-	    {'=', {field, <<"extra">>, integer}, {const, 1}}
-	   },
+    Expected = [{and_,
+		 {or_,
+		  {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}},
+		  {and_,
+		   {'=', {field, <<"geohash">>,     binary}, {const, <<"erko">>}},
+		   {'=', {field, <<"temperature">>, binary}, {const, <<"yelp">>}}
+		  }
+		 },
+		 {'=', {field, <<"extra">>, integer}, {const, 1}}
+		}],
     ?assertEqual(Expected, Got).
 
 %%
@@ -491,7 +494,7 @@ simple_with_filter_1_test() ->
 				{<<"time">>, timestamp, 5000},
 				{<<"user">>, binary,    <<"user_1">>}
 			       ]},
-	     {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
+	     {filter,          [{'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}]},
 	     {start_inclusive, false}
 	    ],
     Expected = [Q#riak_sql_v1{is_executable = true,
@@ -517,7 +520,7 @@ simple_with_filter_2_test() ->
 			 {<<"time">>, timestamp, 5000},
 			 {<<"user">>, binary,    <<"user_1">>}
 			]},
-	     {filter,   {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}}
+	     {filter,   [{'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}]}
 	    ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
@@ -542,7 +545,7 @@ simple_with_filter_3_test() ->
 				{<<"time">>, timestamp, 5000},
 				{<<"user">>, binary,    <<"user_1">>}
 			       ]},
-	     {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
+	     {filter,          [{'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}]},
 	     {start_inclusive, false},
 	     {end_inclusive,   true}
 	    ],
@@ -569,12 +572,12 @@ simple_with_2_field_filter_test() ->
 				{<<"time">>, timestamp, 5000},
 				{<<"user">>, binary,    <<"user_1">>}
 			       ]},
-	     {filter,          {and_,
+	     {filter,          [{and_,
 				{'=', {field, <<"weather">>,     binary},
 				 {const, <<"yankee">>}},
 				{'=', {field, <<"temperature">>, binary},
 				 {const, <<"yelp">>}}
-			       }
+			       }]
 	     },
 	     {start_inclusive, false}
 	    ],
@@ -584,6 +587,7 @@ simple_with_2_field_filter_test() ->
                               partition_key = get_standard_pk(),
                               local_key     = get_standard_lk()
                      }],
+    gg:format("3 - Expected:~n- ~p~n- Got:~n- ~p~n", [Expected, Got]),
     ?assertEqual(Expected, Got).
 
 complex_with_4_field_filter_test() ->
@@ -601,7 +605,7 @@ complex_with_4_field_filter_test() ->
 				{<<"time">>, timestamp, 5000},
 				{<<"user">>, binary,    <<"user_1">>}
 			       ]},
-	     {filter,          {and_,
+	     {filter,          [{and_,
 				{or_,
 				 {'=', {field, <<"weather">>, binary},
 				  {const, <<"yankee">>}},
@@ -614,7 +618,7 @@ complex_with_4_field_filter_test() ->
 				},
 				{'=', {field, <<"extra">>, integer},
 				 {const, 1}}
-			       }
+			       }]
 	     },
 	     {start_inclusive, false}
 	    ],
@@ -624,6 +628,7 @@ complex_with_4_field_filter_test() ->
                               partition_key = get_standard_pk(),
                               local_key     = get_standard_lk()
                      }],
+    gg:format("4 - Expected:~n- ~p~n- Got:~n- ~p~n", [Expected, Got]),
     ?assertEqual(Expected, Got).
 
 %% got for 3 queries to get partition ordering problems flushed out
