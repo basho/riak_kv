@@ -161,8 +161,6 @@ check_if_timeseries(#ddl_v1{bucket = B, partition_key = PK, local_key = LK},
 	   case HasErrs of
 	       [] ->
 		   RewrittenFilter = add_types_to_filter(Filter, Mod),
-		   gg:format("Filter is ~p~n- RewrittenFitler is ~p~n",
-			     [Filter, RewrittenFilter]),
 		   {true, lists:flatten([
 					 {startkey, StartKey},
 					 {endkey,   EndKey},
