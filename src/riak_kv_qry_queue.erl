@@ -83,7 +83,7 @@
 %%% API
 %%%===================================================================
 
--spec put_on_queue(qry(), #ddl_v1{}) -> {ok, query_id()} | {error, term()}.
+-spec put_on_queue([qry()], #ddl_v1{}) -> {ok, query_id()} | {error, term()}.
 %% @doc Enqueue a prepared query for execution.  The query should be
 %%      compatible with the DDL supplied.
 put_on_queue(Qry, DDL) ->
@@ -179,7 +179,7 @@ is_overloaded(#state{queued_qrys = Q,
 -spec handle_req(tuple(), #state{}) ->
                         {atom() | list(list({Key::string(), term()})),
                          list(), #state{}}.
-handle_req({put_on_queue, Qry, DDL}, State) ->
+handle_req({put_on_queue, Queries, DDL}, State) ->
     #state{fsms           = FSMs,
            available_fsms = Avl,
            queued_qrys    = Q,
@@ -190,7 +190,7 @@ handle_req({put_on_queue, Qry, DDL}, State) ->
     case Avl of
         []      -> case is_overloaded(State) of
                        false ->
-                           NewS = State#state{queued_qrys   = Q ++ [{QId, Qry}],
+                           NewS = State#state{queued_qrys   = Q ++ [{QId, Queries}],
                                               next_query_id = Id + 1},
                            {OKReply, ?NO_SIDEEFFECTS, NewS};
                        true  ->
@@ -200,10 +200,10 @@ handle_req({put_on_queue, Qry, DDL}, State) ->
                    end;
         [H | T] -> F = #fsm{name   = H,
                             status = in_progress,
-                            qry    = {QId, Qry}},
+                            qry    = {QId, Queries}},
                    NewFSMs = lists:keyreplace(H, 2, FSMs, F),
                    NewAvl = T,
-                   Disp = {execute, {{fsm, H}, {QId, Qry, DDL}}},
+                   Disp = {execute, {{fsm, H}, {QId, Queries, DDL}}},
                    NewS = State#state{fsms           = NewFSMs,
                                       available_fsms = NewAvl,
                                       next_query_id  = Id + 1},
@@ -252,12 +252,8 @@ handle_req(Request, State) ->
 -spec handle_side_effects([{atom(), tuple()}]) -> ok.
 handle_side_effects([]) ->
     ok;
-
-handle_side_effects([{execute, {{fsm, FSM}, {QId, Qry, DDL}}} | T]) ->
-    ok = riak_kv_qry_worker:execute(FSM, {QId, Qry, DDL}),
-    handle_side_effects(T);
-
-handle_side_effects([_H | T]) ->
+handle_side_effects([{execute, {{fsm, FSM}, {QId, Queries, DDL}}} | T]) when is_list(Queries) ->
+    ok = riak_kv_qry_worker:execute(FSM, {QId, Queries, DDL}),
     handle_side_effects(T).
 
 

@@ -26,7 +26,7 @@
 -module(riak_kv_qry).
 
 -export([
-         submit/1, submit/2,
+         submit/2,
          fetch/1,
          get_active_qrys/0,
          get_queued_qrys/0
@@ -35,37 +35,34 @@
 -include("riak_kv_qry_queue.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
--spec submit(string() | #riak_sql_v1{}) -> {ok, query_id()} | {error, atom()}.
-%% @doc Parse a query, determine DDL from bucket (table name),
-%%      validate against that DDL, and submit the query for execution.
-%%      To get the results of running the query, use fetch/1.
-submit(Query) ->
-    submit(Query, undefined).
-
--spec submit(string() | #riak_sql_v1{}, undefined | #ddl_v1{}) -> {ok, query_id()} | {error, atom()}.
+-spec submit(string() | #riak_sql_v1{}, #ddl_v1{}) ->
+    {ok, query_id()} | {error, any()}.
 %% @doc Parse, validate against DDL, and submit a query for execution.
 %%      To get the results of running the query, use fetch/1.
-submit(Query, DDL) when is_list(Query) ->
-    Lexed = riak_ql_lexer:get_tokens(Query),
+submit(SQLString, DDL) when is_list(SQLString) ->
+    Lexed = riak_ql_lexer:get_tokens(SQLString),
     case riak_ql_parser:parse(Lexed) of
         {error, _Reason} = Error ->
             Error;
         {ok, SQL} ->
             submit(SQL, DDL)
     end;
-submit(SQL = #riak_sql_v1{'FROM' = Bucket}, undefined) ->
-    Mod = riak_ql_ddl:make_module_name(Bucket),
-    DDL = Mod:get_ddl(),
-    submit(SQL, DDL);
 submit(SQL, DDL) ->
+    maybe_submit_to_queue(SQL, DDL).
+
+maybe_submit_to_queue(SQL, DDL) ->
     case riak_ql_ddl:is_query_valid(DDL, SQL) of
         true ->
-            riak_kv_qry_queue:put_on_queue(SQL, DDL);
-        _ ->
-            {error, invalid_query}
+            Queries = riak_kv_qry_compiler:compile(DDL, SQL),
+            case riak_kv_qry_compiler:compile(DDL, SQL) of
+                {error,_} = Error ->
+                    Error;
+                Queries when is_list(Queries) ->
+                    riak_kv_qry_queue:put_on_queue(Queries, DDL)
+            end;
+        {false, Error} ->
+            {error, {invalid_query, Error}}
     end.
-
-
 
 -spec fetch(query_id()) -> {ok, list()} | {error, atom()}.
 %% @doc Fetch the results of execution of a previously submitted

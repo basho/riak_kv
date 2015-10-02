@@ -31,6 +31,8 @@
 
 -define(MAXSUBQ, 5).
 
+-spec compile(#ddl_v1{}, #riak_sql_v1{}) ->
+    [#riak_sql_v1{}] | {error, any()}.
 compile(#ddl_v1{}, #riak_sql_v1{is_executable = true}) ->
     {error, 'query is already compiled'};
 compile(#ddl_v1{}, #riak_sql_v1{'SELECT' = []}) ->
@@ -45,7 +47,7 @@ compile(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
 comp2(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
 				    'WHERE'       = W} = Q) ->
     case compile_where(DDL, W) of
-        {error, E} -> [{error, E}];
+        {error, E} -> {error, E};
         NewW       -> expand_query(DDL, Q, NewW)
     end.
 
@@ -131,7 +133,7 @@ compile_where(DDL, Where) ->
     case check_if_timeseries(DDL, Where) of
         {error, E}   -> {error, E};
         {true, NewW} -> NewW
-end.
+    end.
 
 check_if_timeseries(#ddl_v1{bucket = B, partition_key = PK, local_key = LK},
               [{and_, _LHS, _RHS} = W]) ->
@@ -167,10 +169,11 @@ check_if_timeseries(#ddl_v1{bucket = B, partition_key = PK, local_key = LK},
 					 {filter,   RewrittenFilter}
 					] ++ IncStart ++IncEnd
 				       )};
-	       _ ->
-		   {error, {invalid_where_clause, W}}
+	       Errors ->
+		   {error, {invalid_where_clause, Errors}}
 	   end
-    catch  _:_ -> {error, {where_not_timeseries, W}}
+    catch 
+        _:Reason -> {error, {where_not_timeseries, Reason}}
     end;
 check_if_timeseries(_DLL, Where) ->
     {error, {where_not_supported, Where}}.

@@ -86,9 +86,10 @@ start_link(Name) ->
 %%% API
 %%%===================================================================
 
--spec execute(qry_fsm_name(), {qry(), #ddl_v1{}, #ddl_v1{}}) -> ok | {error, atom()}.
-execute(FSMName, {QId, Qry, DDL}) ->
-    gen_server:call(FSMName, {execute, {QId, Qry, DDL}}).
+-spec execute(qry_fsm_name(), {query_id(), [#riak_sql_v1{}], #ddl_v1{}}) ->
+    ok | {error, atom()}.
+execute(FSMName, {QId, SubQueries, DDL}) ->
+    gen_server:call(FSMName, {execute, {QId, SubQueries, DDL}}).
 
 -spec fetch(qry_fsm_name(), query_id()) -> list() | {error, atom()}.
 fetch(FSMName, QId) ->
@@ -209,12 +210,11 @@ handle_req({fetch, QId}, State = #state{qid = QId2})
   when QId =/= QId2 ->
     {{error, bad_query_id}, [], State};
 
-handle_req({execute, {QId, Qry, DDL}}, State = #state{status = void}) ->
+handle_req({execute, {QId, [Qry|_] = SubQueries, DDL}}, State = #state{status = void}) ->
     %% TODO make this run with multiple sub-queries
-    Queries = riak_kv_qry_compiler:compile(DDL, Qry),
     %% limit sub-queries and throw error
-    Indices = lists:seq(1, length(Queries)),
-    ZQueries = lists:zip(Indices, Queries),
+    Indices = lists:seq(1, length(SubQueries)),
+    ZQueries = lists:zip(Indices, SubQueries),
     SEs = [{run_sub_query, {qry, Q}, {qid, {I, QId}}} || {I, Q} <- ZQueries],
     {ok, SEs, State#state{qid = QId, qry = Qry, ddl = DDL, sub_qrys = Indices}};
 
