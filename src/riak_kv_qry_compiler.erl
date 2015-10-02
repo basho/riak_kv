@@ -28,6 +28,7 @@
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_index.hrl").
+-include("riak_kv_ts_error_msgs.hrl").
 
 -define(MAXSUBQ, 5).
 
@@ -173,9 +174,15 @@ check_if_timeseries(#ddl_v1{bucket = B, partition_key = PK, local_key = LK},
 		   {error, {invalid_where_clause, Errors}}
 	   end
     catch 
-        _:Reason -> {error, {where_not_timeseries, Reason}}
+        error:{incomplete_where_clause, _} = E ->
+            {error, E};
+        error:Reason ->
+            % if it is not a known error then return the stack trace for
+            % debugging
+            {error, {where_not_timeseries, Reason, erlang:get_stacktrace()}}
     end;
 check_if_timeseries(_DLL, Where) ->
+    % TODO return the SQL string
     {error, {where_not_supported, Where}}.
 
 %% this is pretty brutal - it is assuming this is a time series query
@@ -195,9 +202,15 @@ includes([{Op1, Field, _} | T], Op2, Mod) ->
     end.
 
 break_out_timeseries(Ands, LocalFields, QuantumFields) ->
-    {NewAnds, [Ends, Starts]} = get_fields(QuantumFields, Ands, []),
-    {Filter, Body} = get_fields(LocalFields, NewAnds, []),
-    {[Starts | Body], [Ends | Body], Filter}.
+    case get_fields(QuantumFields, Ands, []) of
+        {NewAnds, [Ends, Starts]} ->
+            {Filter, Body} = get_fields(LocalFields, NewAnds, []),
+            {[Starts | Body], [Ends | Body], Filter};
+        {_, [{'>',_,_}]} ->
+            error({incomplete_where_clause, ?E_TSMSG_NO_UPPER_BOUND});
+        {_, [{'<',_,_}]} ->
+            error({incomplete_where_clause, ?E_TSMSG_NO_LOWER_BOUND})
+    end.
 
 get_fields([], Ands, Acc) ->
     {Ands, lists:sort(Acc)};

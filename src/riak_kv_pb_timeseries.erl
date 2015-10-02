@@ -127,6 +127,9 @@ process(SQL = #riak_sql_v1{'FROM' = Bucket}, State) ->
                 {error, Reason} ->
                     {reply, make_rpberrresp(?E_FETCH, Reason), State}
             end;
+        {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
+            ErrorMessage = lists:flatten(io_lib:format("~p: ~s", [E, Reason])),
+            {reply, make_rpberrresp(?E_SUBMIT, ErrorMessage), State};
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, Reason), State}
     end.

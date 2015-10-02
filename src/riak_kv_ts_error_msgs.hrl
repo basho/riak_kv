@@ -25,10 +25,10 @@
 
 -define(
     E_TSMSG_NO_UPPER_BOUND,
-    "Where clause has no upper bound."
+    <<"Where clause has no upper bound.">>
 ).
 
 -define(
     E_TSMSG_NO_LOWER_BOUND,
-    "Where clause has no lower bound."
+    <<"Where clause has no lower bound.">>
 ).
