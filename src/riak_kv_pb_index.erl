@@ -31,6 +31,7 @@
 %%
 %% <pre>
 %%  26 - RpbIndexResp
+%%  42 - RpbIndexBodyResp  (for return_body=true)
 %% </pre>
 %% @end
 
@@ -203,7 +204,7 @@ response_type(_, _) ->
 
 encode_results(objects, Results0, Continuation) ->
     Results = [encode_result(Res) || Res <- Results0],
-    #rpbindexresp{results=Results, continuation=Continuation};
+    #rpbindexbodyresp{objects=Results, continuation=Continuation};
 encode_results(terms, Results0, Continuation) ->
     Results = [encode_result(Res) || Res <- Results0],
     #rpbindexresp{results=Results, continuation=Continuation};
@@ -240,13 +241,24 @@ make_continuation(_, _, _)  ->
 %% @doc process_stream/3 callback. Handle streamed responses
 process_stream({ReqId, done}, ReqId, State=#state{req_id=ReqId,
                                                   continuation=Continuation,
-                                                  req=Req,
+                                                  req=#rpbindexreq{return_body=false}=Req,
                                                   result_count=Count}) ->
     %% Only add the continuation if there (may) be more results to send
     #rpbindexreq{max_results=MaxResults} = Req,
     Resp = case is_integer(MaxResults) andalso Count >= MaxResults of
                true -> #rpbindexresp{done=1, continuation=Continuation};
                false -> #rpbindexresp{done=1}
+           end,
+    {done, Resp, State};
+process_stream({ReqId, done}, ReqId, State=#state{req_id=ReqId,
+                                                  continuation=Continuation,
+                                                  req=Req,
+                                                  result_count=Count}) ->
+    %% Only add the continuation if there (may) be more results to send
+    #rpbindexreq{max_results=MaxResults} = Req,
+    Resp = case is_integer(MaxResults) andalso Count >= MaxResults of
+               true -> #rpbindexbodyresp{done=1, continuation=Continuation};
+               false -> #rpbindexbodyresp{done=1}
            end,
     {done, Resp, State};
 process_stream({ReqId, {results, []}}, ReqId, State=#state{req_id=ReqId}) ->
