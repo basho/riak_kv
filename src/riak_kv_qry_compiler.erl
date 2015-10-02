@@ -587,7 +587,6 @@ simple_with_2_field_filter_test() ->
                               partition_key = get_standard_pk(),
                               local_key     = get_standard_lk()
                      }],
-    gg:format("3 - Expected:~n- ~p~n- Got:~n- ~p~n", [Expected, Got]),
     ?assertEqual(Expected, Got).
 
 complex_with_4_field_filter_test() ->
@@ -628,7 +627,6 @@ complex_with_4_field_filter_test() ->
                               partition_key = get_standard_pk(),
                               local_key     = get_standard_lk()
                      }],
-    gg:format("4 - Expected:~n- ~p~n- Got:~n- ~p~n", [Expected, Got]),
     ?assertEqual(Expected, Got).
 
 %% got for 3 queries to get partition ordering problems flushed out
