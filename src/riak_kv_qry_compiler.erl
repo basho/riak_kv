@@ -160,8 +160,7 @@ check_if_timeseries(#ddl_v1{bucket = B, partition_key = PK, local_key = LK},
 			  true  -> [];
 			  false -> [{end_inclusive, true}]
 		      end,
-	   HasErrs = [X || {error, _} = X <- [StartKey, EndKey]],
-	   case HasErrs of
+	   case has_errors(StartKey, EndKey) of
 	       [] ->
 		   RewrittenFilter = add_types_to_filter(Filter, Mod),
 		   {true, lists:flatten([
@@ -171,7 +170,7 @@ check_if_timeseries(#ddl_v1{bucket = B, partition_key = PK, local_key = LK},
 					] ++ IncStart ++IncEnd
 				       )};
 	       Errors ->
-		   {error, {invalid_where_clause, Errors}}
+		   {error, Errors}
 	   end
     catch 
         error:{incomplete_where_clause, _} = E ->
@@ -184,6 +183,15 @@ check_if_timeseries(#ddl_v1{bucket = B, partition_key = PK, local_key = LK},
 check_if_timeseries(_DLL, Where) ->
     % TODO return the SQL string
     {error, {where_not_supported, Where}}.
+
+%%
+has_errors(StartKey, EndKey) ->
+    HasErrors = [EX || {error, EX} <- [StartKey, EndKey]],
+    case HasErrors of
+        [E,E] -> E;
+        [E]   -> E;
+        _     -> HasErrors
+    end.
 
 %% this is pretty brutal - it is assuming this is a time series query
 %% if it isn't this clause is mince
@@ -252,19 +260,20 @@ make_ands([H | T]) ->
 rewrite(#key_v1{ast = AST}, W, Mod) ->
     rew2(AST, W, Mod, []).
 
+
 rew2([], [], _Mod, Acc) ->
    lists:reverse(Acc);
 %% the rewrite should have consumed all the passed in values
 rew2([], _W, _Mod, _Acc) ->
-    {error, invalid_rewrite};
+    {error, {invalid_rewrite, _W}};
 rew2([#param_v1{name = [N]} | T], W, Mod, Acc) ->
     Type = Mod:get_field_type([N]),
     case lists:keytake(N, 2, W) of
 	false                           ->
-	    {error, invalid_rewrite};
+	    {error, {missing_param, ?E_MISSING_PARAM_IN_WHERE_CLAUSE(N)}};
 	{value, {_, _, {_, Val}}, NewW} ->
 	    rew2(T, NewW, Mod, [{N, Type, Val} | Acc])
-    end.
+end.
 
 -ifdef(TEST).
 -compile(export_all).
@@ -429,9 +438,10 @@ simple_rewrite_fail_1_test() ->
     W   = [
            {'=', <<"geohash">>, {"word", "yardle"}}
           ],
-    Exp = {error, invalid_rewrite},
-    Got = rewrite(LK, W, Mod),
-    ?assertEqual(Exp, Got).
+    ?assertEqual(
+        {error, {missing_param, ?E_MISSING_PARAM_IN_WHERE_CLAUSE("user")}},
+        rewrite(LK, W, Mod)
+    ).
 
 simple_rewrite_fail_2_test() ->
     #ddl_v1{bucket = B} = get_standard_ddl(),
@@ -443,9 +453,10 @@ simple_rewrite_fail_2_test() ->
     W   = [
            {'=', <<"user">>, {"word", "yardle"}}
           ],
-    Exp = {error, invalid_rewrite},
-    Got = rewrite(LK, W, Mod),
-    ?assertEqual(Exp, Got).
+    ?assertEqual(
+        {error, {missing_param, ?E_MISSING_PARAM_IN_WHERE_CLAUSE("geohash")}},
+        rewrite(LK, W, Mod)
+    ).
 
 simple_rewrite_fail_3_test() ->
     #ddl_v1{bucket = B} = get_standard_ddl(),
@@ -458,9 +469,12 @@ simple_rewrite_fail_3_test() ->
     W   = [
            {'=', <<"geohash">>, {"word", "yardle"}}
           ],
-    Exp = {error, invalid_rewrite},
-    Got = rewrite(LK, W, Mod),
-    ?assertEqual(Exp, Got).
+    % TODO only returns error info about the first missing param, temperature
+    %      should also be in the error message.
+    ?assertEqual(
+        {error, {missing_param, ?E_MISSING_PARAM_IN_WHERE_CLAUSE("user")}},
+        rewrite(LK, W, Mod)
+    ).
 
 %%
 %% complete query passing tests
@@ -705,9 +719,10 @@ no_where_clause_fail_test() ->
     %% now replace the where clause
     Where = [],
     Q2 = Q#riak_sql_v1{'WHERE' = Where},
-    Got = compile(DDL, Q2),
-    Expected = [{error, {where_not_supported, Where}}],
-    ?assertEqual(Expected, Got).
+    ?assertEqual(
+        {error, {where_not_supported, Where}},
+        compile(DDL, Q2)
+    ).
 
 simplest_fail_test() ->
     DDL = get_standard_ddl(),
@@ -717,9 +732,10 @@ simplest_fail_test() ->
     Where = [{xor_, {myop, "fakefield", 22}, {notherop, "real_gucci", atombomb}}],
     %% now replace the where clause
     Q2 = Q#riak_sql_v1{'WHERE' = Where},
-    Got = compile(DDL, Q2),
-    Expected = [{error, {where_not_supported, Where}}],
-    ?assertEqual(Expected, Got).
+    ?assertEqual(
+        {error, {where_not_supported, Where}},
+        compile(DDL, Q2)
+    ).
 
 simplest_compile_once_only_fail_test() ->
     DDL = get_standard_ddl(),

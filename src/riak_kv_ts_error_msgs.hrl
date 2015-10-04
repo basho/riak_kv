@@ -32,3 +32,8 @@
     E_TSMSG_NO_LOWER_BOUND,
     <<"Where clause has no lower bound.">>
 ).
+
+-define(
+    E_MISSING_PARAM_IN_WHERE_CLAUSE(ParamName),
+    iolist_to_binary(["Missing parameter ", ParamName, " in where clase."])
+).
