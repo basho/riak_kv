@@ -46,6 +46,9 @@
 -define(E_IRREG,    3).
 -define(E_PUT,      4).
 -define(E_NOCREATE, 5).
+-define(E_NOT_TS_TYPE, 6).
+-define(E_MISSING_TYPE, 7).
+-define(E_MISSING_TS_MODULE, 8).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
@@ -90,16 +93,16 @@ process(#ddl_v1{}, State) ->
 %% @ignore INSERT (as if)
 process(#tsputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
-process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
+process(#tsputreq{table = Bucket, columns = _Columns, rows = Rows}, State) ->
+    Mod = riak_ql_ddl:make_module_name(Bucket),
     Data = riak_pb_ts_codec:decode_rows(Rows),
     %% validate only the first row as we trust the client to send us
     %% perfectly uniform data wrt types and order
-    case Mod:validate_obj(hd(Data)) of
+    case (catch Mod:validate_obj(hd(Data))) of
         true ->
             %% however, prevent bad data to crash us
             try
-                case put_data(Data, Table, Mod) of
+                case put_data(Data, Bucket, Mod) of
                     0 ->
                         {reply, #tsputresp{}, State};
                     ErrorCount ->
@@ -109,10 +112,13 @@ process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
                 end
             catch
                 Class:Exception ->
-                    {reply, make_rpberrresp(?E_IRREG, {Class, Exception})}
+                    {reply, make_rpberrresp(?E_IRREG, to_string({Class, Exception}))}
             end;
         false ->
-                {reply, make_rpberrresp(?E_IRREG, "Invalid data")}
+            {reply, make_rpberrresp(?E_IRREG, "Invalid data")};
+        {_, {undef, _}} ->
+            BucketProps = riak_core_bucket:get_bucket(Bucket),
+            {reply, missing_helper_module(Bucket, BucketProps)}
     end;
 
 %% @ignore SELECT
@@ -125,10 +131,10 @@ process(SQL = #riak_sql_v1{'FROM' = Bucket}, State) ->
                 {ok, Data} ->
                     {reply, make_tsqueryresp(Data, Mod), State};
                 {error, Reason} ->
-                    {reply, make_rpberrresp(?E_FETCH, Reason), State}
+                    {reply, make_rpberrresp(?E_FETCH, to_string(Reason)), State}
             end;
         {error, Reason} ->
-            {reply, make_rpberrresp(?E_SUBMIT, Reason), State}
+            {reply, make_rpberrresp(?E_SUBMIT, to_string(Reason)), State}
     end.
 
 
@@ -149,11 +155,10 @@ decode_query(Query) ->
 %% local functions
 %% ---------------------------------------------------
 
--spec make_rpberrresp(integer(), term()) -> #rpberrorresp{}.
-make_rpberrresp(Code, Reason) ->
+-spec make_rpberrresp(integer(), string()) -> #rpberrorresp{}.
+make_rpberrresp(Code, Message) ->
     #rpberrorresp{errcode = Code,
-                  errmsg = lists:flatten(
-                             io_lib:format("~p", [Reason]))}.
+                  errmsg = lists:flatten(Message)}.
 
 
 -spec decode_query_permissions(#ddl_v1{} | #riak_sql_v1{}) -> {string(), binary()}.
@@ -162,6 +167,39 @@ decode_query_permissions(#ddl_v1{bucket=NewBucket}) ->
 decode_query_permissions(#riak_sql_v1{'FROM'=Bucket}) ->
     {"riak_kv.ts_query", Bucket}.
 
+%%
+-spec missing_helper_module(Bucket::binary(), 
+                            BucketProps::{error,any()} | [proplists:property()]) -> #rpberrorresp{}.
+missing_helper_module(Bucket, {error, _}) ->
+    missing_type_response(Bucket);
+missing_helper_module(Bucket, BucketProps) when is_binary(Bucket), is_list(BucketProps) ->
+    case lists:keymember(ddl, 1, BucketProps) of
+        true  -> missing_table_module_response(Bucket);
+        false -> not_timeseries_type_response(Bucket)
+    end.
+
+%%
+-spec missing_type_response(Bucket::binary()) -> #rpberrorresp{}.
+missing_type_response(Bucket) ->
+    make_rpberrresp(
+        ?E_MISSING_TYPE, 
+        io_lib:format("Failed to put records, bucket type ~s is missing.", [Bucket])).
+
+%%
+-spec not_timeseries_type_response(Bucket::binary()) -> #rpberrorresp{}.
+not_timeseries_type_response(Bucket) ->
+    make_rpberrresp(
+        ?E_NOT_TS_TYPE, 
+        io_lib:format("Attempt to put Time Series data to non Time Series bucket ~s.", [Bucket])).
+
+-spec missing_table_module_response(Bucket::binary()) -> #rpberrorresp{}.
+missing_table_module_response(Bucket) ->
+    make_rpberrresp(
+        ?E_MISSING_TS_MODULE,
+        io_lib:format("The compiled module for Time Series bucket ~s cannot be loaded.", [Bucket])).
+
+to_string(X) ->
+    io_lib:format("~p", [X]).
 
 %% ---------------------------------------------------
 % functions supporting INSERT
@@ -253,3 +291,29 @@ assemble_records_(RR, RSize, Acc) ->
     Remaining = lists:nthtail(RSize, RR),
     assemble_records_(
       Remaining, RSize, [lists:sublist(RR, RSize) | Acc]).
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+missing_helper_module_missing_type_test() ->
+    ?assertMatch(
+        #rpberrorresp{errcode = ?E_MISSING_TYPE },
+        missing_helper_module(<<"mytype">>, {error, any})
+    ).
+
+missing_helper_module_not_ts_type_test() ->
+    ?assertMatch(
+        #rpberrorresp{errcode = ?E_NOT_TS_TYPE },
+        missing_helper_module(<<"mytype">>, []) % no ddl property
+    ).
+
+%% if the bucket properties exist and they contain a ddl property then
+%% the bucket properties are in the correct state but the module is still
+%% missing.
+missing_helper_module_test() ->
+    ?assertMatch(
+        #rpberrorresp{errcode = ?E_MISSING_TS_MODULE },
+        missing_helper_module(<<"mytype">>, [{ddl, #ddl_v1{}}])
+    ).
+
+-endif.
