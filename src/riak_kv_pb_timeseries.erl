@@ -59,15 +59,20 @@ init() ->
 
 
 -spec decode(integer(), binary()) ->
-                    {ok, #ddl_v1{} | #riak_sql_v1{} | #tsputreq{},
-                     {PermSpec::string(), Table::binary()}}.
+    {ok, #ddl_v1{} | #riak_sql_v1{} | #tsputreq{},
+        {PermSpec::string(), Table::binary()}} |
+    {error,_}.
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
         #tsqueryreq{query = Q}->
-            DecodedQuery = decode_query(Q),
-            PermAndTarget = decode_query_permissions(DecodedQuery),
-            {ok, DecodedQuery, PermAndTarget};
+            case decode_query(Q) of
+                {ok, DecodedQuery} ->
+                    PermAndTarget = decode_query_permissions(DecodedQuery),
+                    {ok, DecodedQuery, PermAndTarget};
+                {error, Error} ->
+                    {error, decoder_parse_error_resp(Error)}
+            end;
         #tsputreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_put", Table}}
     end.
@@ -145,14 +150,19 @@ process(SQL = #riak_sql_v1{'FROM' = Bucket}, State) ->
 process_stream(_, _, State)->
     {ignore, State}.
 
-decode_query(Query) ->
-    case Query of
-        #tsinterpolation{base=BaseQuery, interpolations=_Interpolations} ->
-            Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
-            {ok, Parsed} = riak_ql_parser:parse(Lexed),
-            Parsed
-    end.
+-spec decode_query(Query::#tsinterpolation{}) ->
+    {error, _} | {ok, #ddl_v1{} | #riak_sql_v1{}}.
+decode_query(#tsinterpolation{ base = BaseQuery }) ->
+    Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
+    riak_ql_parser:parse(Lexed).
 
+decoder_parse_error_resp({Token, riak_ql_parser, _}) ->
+    flat_format("Unexpected token '~s'", [Token]);
+decoder_parse_error_resp(Error) ->
+    Error.
+
+flat_format(Format, Args) ->
+    lists:flatten(io_lib:format(Format, Args)).
 
 %% ---------------------------------------------------
 %% local functions
