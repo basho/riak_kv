@@ -457,6 +457,7 @@ validate_update_dt_props(New, Valid, Invalid) ->
             {Unvalidated, Valid, [{allow_mult, "Cannot change datatype bucket from allow_mult=true"} | Invalid]}
 end.
 
+<<<<<<< HEAD
 %% @private
 %% precondition: Existing contains {write_once, true}
 -spec validate_update_w1c_props(boolean() | undefined, props()) ->
@@ -515,6 +516,8 @@ ensure_not_present(Unvalidated, Valid, Errors, InvalidPropsSpec) ->
                 {Unvalidated, Valid, Errors},
                 InvalidPropsSpec).
 
+=======
+>>>>>>> 2.0
 %% Validate properties after they have all been individually validated, merged,
 %% and resolved to their final values. This allows for identifying invalid
 %% combinations of properties, such as `last_write_wins=true' and
@@ -533,7 +536,11 @@ validate_last_write_wins_implies_not_dvv_enabled({Props, Errors}) ->
     case {last_write_wins(Props), dvv_enabled(Props)} of
         {true, true} ->
             {lists:keydelete(dvv_enabled, 1, Props),
+<<<<<<< HEAD
              [{dvv_enabled,
+=======
+             [{dvv_enabled, true,
+>>>>>>> 2.0
                "If last_write_wins is true, dvv_enabled must be false"}
               |Errors]};
         {_, _} ->
@@ -617,27 +624,47 @@ merges_props_test_() ->
 validate_create_bucket_type_test() ->
     {Validated, Errors} = validate_create_bucket_type(?LWW_DVV),
     ?assertEqual([{last_write_wins, true}], Validated),
+<<<<<<< HEAD
     ?assertMatch([{dvv_enabled, _Message}], Errors).
+=======
+    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
+>>>>>>> 2.0
 
 validate_update_bucket_type_test() ->
     {Validated, Errors} = validate_update_bucket_type([], ?LWW_DVV),
     ?assertEqual([{last_write_wins, true}], Validated),
+<<<<<<< HEAD
     ?assertMatch([{dvv_enabled, _Message}], Errors).
+=======
+    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
+>>>>>>> 2.0
 
 validate_update_typed_bucket_test() ->
     {Validated, Errors} = validate_update_typed_bucket([], ?LWW_DVV),
     ?assertEqual([{last_write_wins, true}], Validated),
+<<<<<<< HEAD
     ?assertMatch([{dvv_enabled, _Message}], Errors).
+=======
+    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
+>>>>>>> 2.0
 
 validate_default_bucket_test() ->
     {Validated, Errors} = validate_default_bucket([], ?LWW_DVV),
     ?assertEqual([{last_write_wins, true}], Validated),
+<<<<<<< HEAD
     ?assertMatch([{dvv_enabled, _Message}], Errors).
+=======
+    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
+>>>>>>> 2.0
 
 validate_last_write_wins_implies_not_dvv_enabled_test() ->
     {Validated, Errors} = validate_last_write_wins_implies_not_dvv_enabled({?LWW_DVV, []}),
     ?assertEqual([{last_write_wins, true}], Validated),
+<<<<<<< HEAD
     ?assertMatch([{dvv_enabled, _Message}], Errors).
+=======
+    ?assertMatch([{dvv_enabled, true, _Message}], Errors).
+>>>>>>> 2.0
 
 test_immutable() ->
    test_immutable(?TEST_TIME_SECS).
@@ -709,8 +736,13 @@ prop_create_valid() ->
                                      has_w1c(New), valid_w1c(New),
                                      has_consistent(New), valid_consistent(New)])
                    end,
+<<<<<<< HEAD
                    collect(with_title("{has_datatype, valid_datatype, allow_mult, has_w1c, valid_w1c, has_consistent, valid_consistent, lww, dvv_enabled}"),
                            {has_datatype(New), valid_datatype(New), allow_mult(New), has_w1c(New), valid_w1c(New), has_consistent(New), valid_consistent(New), last_write_wins(New), dvv_enabled(New)},
+=======
+                   collect(with_title("{has_datatype, valid_datatype, allow_mult, has_consistent, valid_consistent, lww, dvv_enabled}"),
+                           {has_datatype(New), valid_datatype(New), allow_mult(New), has_consistent(New), valid_consistent(New), last_write_wins(New), dvv_enabled(New)},
+>>>>>>> 2.0
                            only_create_if_valid(Result, New)))
             end).
 
@@ -726,6 +758,7 @@ prop_merges() ->
                                true -> lists:keydelete(write_once, 1, lists:keydelete(consistent, 1, Existing0));
                                false -> Existing0
                            end,
+<<<<<<< HEAD
                 Result={Good, Bad} = validate(update, Bucket, Existing, New),
 
                 %% All we really want to check is that every key in
@@ -768,6 +801,93 @@ prop_merges() ->
                            false
                    end
                   )
+=======
+                _Result={Good, Bad} = validate(update, Bucket, Existing, New),
+
+                DefaultBucket = default_bucket(Bucket),
+                HasAllowMult = has_allow_mult(New),
+                AllowMult = allow_mult(New),
+                HasDatatype = has_datatype(Existing),
+                NValChanged = n_val_changed(Existing, New),
+                IsConsistent = is_consistent(Existing),
+                NewConsistent = proplists:get_value(consistent, New),
+                Expected0 = case {DefaultBucket, HasAllowMult, AllowMult, HasDatatype,
+                                 NValChanged, IsConsistent, NewConsistent} of
+                               %% default bucket, attempted to change consistent to invalid value
+                               %% allow_mult may be invalid too
+                               {true,_, Mult, _, _, false, notvalid} ->
+                                   maybe_bad_mult(Mult, merge(lists:keydelete(consistent, 1, New), Existing));
+                               %% default bucket, attempted to change consistent to true
+                               %% allow_mult may be invalid too
+                               {true, _, Mult, _, _, false, true} ->
+                                   maybe_bad_mult(Mult, merge(lists:keydelete(consistent, 1, New), Existing));
+                               %% all valid for default type buckets
+                               {true, _, Mult,  _, _, _, _} when Mult /= error ->
+                                   merge(New, Existing);
+                               %% default bucket: allow mult is invalid
+                               {true, true, _, _, _, _, _} ->
+                                   maybe_bad_mult(error, merge(New, Existing));
+
+                               %% typed bucket, allow mult changed but not consistent or data type
+                               {false, true, Mult,  false, _, false, _} when Mult /= error ->
+                                   %% the n_val is the only valid change we generate in this case. can't change
+                                   %% data type or consistent peroperty
+                                   NVal = proplists:get_value(n_val, New, proplists:get_value(n_val, Existing)),
+                                   merge([proplists:lookup(allow_mult, New), {n_val, NVal}], Existing);
+                               %% typed bucket, allow_mult change is invalid. n_val has changed. not a datatype or
+                               %% consistent
+                               {false, true, error, false, true, false, _} ->
+                                   merge([proplists:lookup(n_val, New)], Existing);
+                               %% typed bucket, allow_mult change is invalid and n_val hasn't changed
+                               {false, true, error, false, false, false, _} ->
+                                   Existing;
+                               %% typed bucket, strongly-consistent, both n_val and consistent value are invalid changes
+                               {false, _, Mult,_,true,true,false} ->
+                                   maybe_bad_mult(Mult,
+                                                  merge(lists:keydelete(consistent, 1, lists:keydelete(n_val, 1, New)), Existing));
+                               %% typed bucket, strongly-consistent, both n_val and consistent value are invalid changes
+                               {false, _, Mult,_,true,true,notvalid} ->
+                                   maybe_bad_mult(Mult,
+                                                  merge(lists:keydelete(consistent, 1, lists:keydelete(n_val, 1, New)), Existing));
+                               %% typed bucket, strongly-consistent, n_val change is invalid
+                               {false, _, Mult,_,true,true,_} ->
+                                   maybe_bad_mult(Mult, merge(lists:keydelete(n_val, 1, New), Existing));
+                               %% typed bucket, strongly-consistent, consistent value change is invalid
+                               {false, _, Mult, _, _, true, false} ->
+                                   maybe_bad_mult(Mult, merge(lists:keydelete(consistent, 1, New), Existing));
+                               %% typed bucket, strongly-consistent, consistent value change is invalid
+                               {false, _, Mult, _, _, true, notvalid} ->
+                                   maybe_bad_mult(Mult, merge(lists:keydelete(consistent, 1, New), Existing));
+                               %% typed bucket, strongly-consistent, all good (except maybe allow_mult)
+                               {false, _, Mult, _, _, true, _} ->
+                                   maybe_bad_mult(Mult, merge(New, Existing));
+                               %% typed bucket, strongly-consistent, all good (except maybe allow_mult)
+                               {false, true, _Mult, true,_, _, _} ->
+                                   NVal = proplists:get_value(n_val, New, proplists:get_value(n_val, Existing)),
+                                   merge([{n_val, NVal}], Existing);
+                               %% typed bucket, bucket not strongly consistent or a data type, all valid
+                               {false,_,_,_,_,false,_} ->
+                                   merge(New, Existing)
+                           end,
+                Expected = maybe_remove_dvv_enabled(Expected0),
+
+                ?WHENFAIL(
+                    begin
+                        io:format("Bucket ~p~n", [Bucket]),
+                        io:format("Existing ~p~n", [lists:sort(Existing)]),
+                        io:format("New ~p~n", [lists:sort(New)]),
+                        io:format("Expected ~p~n", [lists:sort(Expected)]),
+                        io:format("Result ~p~n", [{lists:sort(Good), lists:sort(Bad)}]),
+                        io:format("Diff ~p~n", [sets:to_list(sets:subtract(sets:from_list(Expected), sets:from_list(Good)))])
+                    end,
+                    case valid_dvv_lww({Good, Bad}) of
+                        true ->
+                            sets:is_subset(sets:from_list(Expected), sets:from_list(Good));
+                        _ ->
+                            false
+                    end
+                )
+>>>>>>> 2.0
             end).
 
 valid_dvv_lww({Good, Bad}) ->
@@ -807,9 +927,18 @@ gen_bucket() ->
     oneof([{<<"default">>, binary(20)}, binary(20)]).
 
 gen_existing() ->
+<<<<<<< HEAD
     Defaults = lists:ukeysort(1, riak_core_bucket_type:defaults()),
     ?LET(Special, oneof([gen_valid_mult_dt(), gen_valid_w1c(), gen_valid_consistent(), gen_valid_dvv_lww(), []]),
          lists:ukeymerge(1, lists:ukeysort(1, Special), Defaults)).
+=======
+    Defaults0 = riak_core_bucket_type:defaults(),
+    Defaults1 = lists:keydelete(allow_mult, 1, Defaults0),
+    Defaults2 = lists:keydelete(last_write_wins, 1, Defaults1),
+    Defaults  = lists:keydelete(dvv_enabled, 1, Defaults2),
+    ?LET({MultDT, Consistent, DvvLww}, {gen_valid_mult_dt(), gen_maybe_consistent(), gen_valid_dvv_lww()},
+         Defaults ++ MultDT ++ Consistent ++ DvvLww).
+>>>>>>> 2.0
 
 gen_maybe_consistent() ->
     oneof([[], gen_valid_consistent()]).
@@ -838,17 +967,28 @@ gen_valid_dvv_lww(false) ->
 
 gen_new(update) ->
     ?LET(
+<<<<<<< HEAD
         {Mult, Datatype, WriteOnce, Consistent, NVal, LastWriteWins, DvvEnabled},
         {
             gen_allow_mult(),
             oneof([[], gen_datatype_property()]),
             oneof([[], gen_valid_w1c()]),
+=======
+        {Mult, Datatype, Consistent, NVal, LastWriteWins, DvvEnabled},
+        {
+            gen_allow_mult(),
+            oneof([[], gen_datatype_property()]),
+>>>>>>> 2.0
             oneof([[], gen_maybe_bad_consistent()]),
             oneof([[], [{n_val, choose(1, 10)}]]),
             oneof([[], gen_lww()]),
             oneof([[], gen_dvv_enabled()])
         },
+<<<<<<< HEAD
         Mult ++ Datatype ++ WriteOnce ++ Consistent ++ NVal ++ LastWriteWins ++ DvvEnabled
+=======
+        Mult ++ Datatype ++ Consistent ++ NVal ++ LastWriteWins ++ DvvEnabled
+>>>>>>> 2.0
     );
 gen_new(create) ->
     Defaults0 = riak_core_bucket_type:defaults(),
@@ -856,6 +996,7 @@ gen_new(create) ->
     Defaults2 = lists:keydelete(last_write_wins, 1, Defaults1),
     Defaults = lists:keydelete(dvv_enabled, 1, Defaults2),
     ?LET(
+<<<<<<< HEAD
         {Mult, DatatypeOrConsistent, WriteOnce, LastWriteWins, DvvEnabled},
         {
             gen_allow_mult(),
@@ -864,6 +1005,15 @@ gen_new(create) ->
                        {5, []}]),
             gen_w1c(), gen_lww(), gen_dvv_enabled()},
          Defaults ++ Mult ++ DatatypeOrConsistent ++ WriteOnce ++ LastWriteWins ++ DvvEnabled).
+=======
+        {Mult, DatatypeOrConsistent, LastWriteWins, DvvEnabled},
+        {gen_allow_mult(),
+            frequency([{5, gen_datatype_property()},
+                       {5, gen_maybe_bad_consistent()},
+                       {5, []}]),
+            gen_lww(), gen_dvv_enabled()},
+         Defaults ++ Mult ++ DatatypeOrConsistent ++ LastWriteWins ++ DvvEnabled).
+>>>>>>> 2.0
 
 gen_allow_mult() ->
     ?LET(Mult, frequency([{9, bool()}, {1, binary()}]), [{allow_mult, Mult}]).
