@@ -105,8 +105,6 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, undefined]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, all]);
-init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, AllowRemote]) ->
-    init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, {VNodeTarget, AllowRemote}]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget]) ->
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
