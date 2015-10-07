@@ -53,8 +53,6 @@
          aae_repair_status/1,
          aae_tree_status/1]).
 
--include_lib("riak_ql/include/riak_ql_ddl.hrl").
-
 join([NodeStr]) ->
     join(NodeStr, fun riak_core:join/1,
          "Sent join request to ~s~n", [NodeStr]).
@@ -498,11 +496,6 @@ bucket_type_print_activate_result(Type, {error, undefined}, _IsFirst) ->
 bucket_type_print_activate_result(Type, {error, not_ready}, _IsFirst) ->
     bucket_type_print_status(Type, created).
 
-bucket_type_create([TypeStr, ""]) ->
-    Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
-    EmptyProps = {struct, [{<<"props">>, {struct, []}}]},
-    CreateTypeFn = fun riak_core_bucket_type:create/2,
-    bucket_type_create(CreateTypeFn, Type, EmptyProps);
 bucket_type_create([TypeStr, PropsStr]) ->
     Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
     CreateTypeFn =
@@ -510,7 +503,15 @@ bucket_type_create([TypeStr, PropsStr]) ->
             Result = riak_core_bucket_type:create(Type, Props),
             bucket_type_print_create_result(Type, Result)
         end,
-    bucket_type_create(CreateTypeFn, Type, catch mochijson2:decode(PropsStr)).
+    bucket_type_create(CreateTypeFn, Type, decode_json_props(PropsStr)).
+
+%% Attempt to decode the json to string or provide defaults if empty.
+%% mochijson2 has no types exported so returning any.
+-spec decode_json_props(JsonProps::string()) -> any().
+decode_json_props("") ->
+    {struct, [{<<"props">>, {struct, []}}]};
+decode_json_props(JsonProps) ->
+    catch mochijson2:decode(JsonProps).
 
 -spec bucket_type_create(
         CreateTypeFn :: fun(([proplists:property()]) -> ok),
@@ -519,9 +520,18 @@ bucket_type_create([TypeStr, PropsStr]) ->
 bucket_type_create(CreateTypeFn, Type, {struct, Fields}) ->
     case Fields of
         [{<<"props", _/binary>>, {struct, Props1}}] ->
-            {ok, Props2} = maybe_parse_table_def(Type, Props1),
-            Props3 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props2],
-            CreateTypeFn(Props3);
+            case catch riak_kv_wm_utils:maybe_parse_table_def(Type, Props1) of
+                {ok, Props2} ->
+                    Props3 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props2],
+                    CreateTypeFn(Props3);
+                {error, ErrorMessage} when is_list(ErrorMessage) ->
+                    io:format(ErrorMessage),
+                    error;
+                {error, Error} ->
+                    io:format("~p~n", [Error]),
+                    error
+
+            end;
         _ ->
             io:format("Cannot create bucket type ~ts: no props field found in json~n", [Type]),
             error
@@ -529,69 +539,6 @@ bucket_type_create(CreateTypeFn, Type, {struct, Fields}) ->
 bucket_type_create(_, Type, _) ->
     io:format("Cannot create bucket type ~ts: invalid json~n", [Type]),
     error.
-
-%%
--spec maybe_parse_table_def(BucketType :: binary(),
-                            Props :: list(proplists:property())) -> 
-        {ok, Props2 :: [proplists:property()]} | {error, any()}.
-maybe_parse_table_def(BucketType, Props) ->
-    case lists:keytake(<<"table_def">>, 1, Props) of
-        false ->
-            {ok, Props};
-        {value, {<<"table_def">>, TableDef}, PropsNoDef} ->
-            case riak_ql_parser:parse(riak_ql_lexer:get_tokens(binary_to_list(TableDef))) of
-                {ok, DDL} ->
-                    ok = assert_type_and_table_name_same(BucketType, DDL),
-                    ok = try_compile_ddl(DDL),
-                    ok = assert_write_once_not_false(PropsNoDef),
-                    apply_timeseries_bucket_props(DDL, PropsNoDef);
-                {error, _} = E ->
-                    E
-            end
-    end.
-
-%%
--spec apply_timeseries_bucket_props(DDL::#ddl_v1{},
-                                    Props1::[proplists:property()]) -> 
-        {ok, Props2::[proplists:property()]}.
-apply_timeseries_bucket_props(DDL, Props1) ->
-    Props2 = lists:keystore(
-        <<"write_once">>, 1, Props1, {<<"write_once">>, true}),
-    {ok, [{<<"ddl">>, DDL} | Props2]}.
-
-%% Time series must always use write_once so throw an error if the write_once
-%% property is ever set to false. This prevents a user thinking they have
-%% disabled write_once when it has been set to true internally.
-assert_write_once_not_false(Props) ->
-    case lists:keyfind(<<"write_once">>, 1, Props) of
-        {<<"write_once">>, false} ->
-            io:format(
-                "Error, the bucket type could not be the created. "
-                "The write_once property had a value of false but must be true "
-                "or left blank~n"),
-            error(write_once_cannot_be_false);
-        _ ->
-            ok
-    end.
-
-%%
-assert_type_and_table_name_same(BucketType, #ddl_v1{ bucket = BucketType }) ->
-    ok;
-assert_type_and_table_name_same(BucketType, #ddl_v1{ bucket = TableName }) ->
-    io:format(
-        "Error, the bucket type could not be the created. The bucket type and table name must be the same~n"
-        "    bucket type was: ~s~n"
-        "    table name was:  ~s~n",
-        [BucketType, TableName]),
-    {error, {bucket_type_and_table_name_different, BucketType, TableName}}.
-
-%% Attempt to compile the DDL but don't do anything with the output, this is
-%% catch failures as early as possible. Also the error messages are easy to
-%% return at this point.
-try_compile_ddl(DDL) ->
-    {_, AST} = riak_ql_ddl_compiler:compile(DDL),
-    {ok, _, _} = compile:forms(AST),
-    ok.
 
 bucket_type_print_create_result(Type, ok) ->
     io:format("~ts created~n", [Type]),
@@ -948,7 +895,8 @@ bucket_type_create_with_timeseries_table_test() ->
     TableDef =
         <<"CREATE TABLE my_type ",
           "(time TIMESTAMP NOT NULL, ",
-          " PRIMARY KEY (time))">>,
+	  "user varchar not null, ",
+          " PRIMARY KEY ((quantum(time, 15, m)), time, user))">>,
     JSON = json_props([{bucket_type, my_type}, 
                        {table_def, TableDef}]),
     bucket_type_create(
@@ -984,16 +932,14 @@ bucket_type_and_table_name_must_match_test() ->
     TableDef =
         <<"CREATE TABLE times ",
           "(time TIMESTAMP NOT NULL, ",
-          " PRIMARY KEY (time))">>,
+	  "user varchar not null, ",
+          " PRIMARY KEY (time, user))">>,
     JSON = json_props([{bucket_type, my_type}, 
                        {table_def, TableDef}]),
     % if this error changes slightly it is not so important, as long as
     % the bucket type is not allowed to be created.
-    ?assertError(
-        {badmatch,
-            {error,
-                {bucket_type_and_table_name_different,
-                    <<"my_type">>,<<"times">>}}},
+    ?assertEqual(
+        error,
         bucket_type_create(
             fun(Props) -> put(Ref, Props) end,
             <<"my_type">>,
@@ -1010,8 +956,8 @@ bucket_type_create_with_timeseries_table_error_when_write_once_set_to_false_test
     JSON = json_props([{bucket_type, my_type}, 
                        {table_def, TableDef},
                        {write_once, false}]),
-    ?assertError(
-        write_once_cannot_be_false,
+    ?assertEqual(
+        error,
         bucket_type_create(
             fun(Props) -> put(Ref, Props) end,
             <<"my_type">>,
