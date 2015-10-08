@@ -310,11 +310,9 @@ make_query(Bucket, Selections, Where) ->
 -define(MIN, 60 * 1000).
 -define(NAME, "time").
 
-is_query_valid(DDL, Q) ->
-    case riak_ql_ddl:is_query_valid(DDL, Q) of
-        false -> exit('invalid query');
-        true  -> true
-    end.
+is_query_valid(#ddl_v1{ bucket = BucketType } = DDL, Q) ->
+    Mod = riak_ql_ddl:make_module_name(BucketType),
+    riak_ql_ddl:is_query_valid(Mod, DDL, Q).
 
 get_query(String) ->
     Lexed = riak_ql_lexer:get_tokens(String),

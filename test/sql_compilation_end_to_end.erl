@@ -20,9 +20,9 @@
 -define(assert_test(Name, TableCreate, Query, Expected),
         Name() ->
                {ok, DDL} = make_ddl(TableCreate),
-               {module, _Mod} = riak_ql_ddl_compiler:make_helper_mod(DDL),
+               {module, Mod} = riak_ql_ddl_compiler:make_helper_mod(DDL),
                {ok, SQL} = make_sql(Query),
-               case riak_ql_ddl:is_query_valid(DDL, SQL) of
+               case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
                    true ->
                        Got = riak_kv_qry_compiler:compile(DDL, SQL),
                        ?assertEqual(Expected, Got);
