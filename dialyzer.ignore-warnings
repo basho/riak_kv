@@ -1,5 +1,4 @@
 riak_core_pb.erl
-riak_kv_pipe_index.erl:155: Function queue_existing_pipe/4 has no local return
 riak_kv_pipe_listkeys.erl:159: Function queue_existing_pipe/3 has no local return
 riak_kv_pncounter.erl:100: Function merge/2 has no local return
 riak_kv_put_fsm.erl:233: Function init/1 has no local return
