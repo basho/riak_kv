@@ -1,9 +1,4 @@
 riak_core_pb.erl
-riak_kv_put_fsm.erl:233: Function init/1 has no local return
-riak_kv_put_fsm.erl:238: Record construction #state{robj::riak_object:riak_object(),options::[any()],bkey::{binary() | {binary(),binary()},binary()},vnode_options::[],precommit::[],postcommit::[],timing::[{atom(),{non_neg_integer(),non_neg_integer(),non_neg_integer()}},...],trace::'undefined' | {'ok',_},tracked_bucket::'false',bad_coordinators::[]} violates the declared type of field trace::boolean()
-riak_kv_put_fsm.erl:269: The created fun has no local return
-riak_kv_put_fsm.erl:822: The pattern <[COP = {'counter_op', _Amt} | T], Acc> can never match the type <[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()},...],[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()}]>
-riak_kv_put_fsm.erl:825: The pattern <[COP = {'crdt_op', _Op} | T], Acc> can never match the type <[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()},...],[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()}]>
 riak_kv_util.erl:294: The pattern 'error' can never match the type 'ok' | 'undefined'
 riak_kv_vnode.erl:23: Callback info about the riak_core_vnode behaviour is not available
 riak_kv_vnode.erl:839: The pattern Q = {'riak_kv_index_v3', _, _, _, _, _, _, _, _, RE, _} can never match the type 'undefined' | {_,_}
