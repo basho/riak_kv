@@ -1,9 +1,5 @@
 riak_core_pb.erl
 riak_kv_util.erl:294: The pattern 'error' can never match the type 'ok' | 'undefined'
-riak_kv_wm_crdt.erl:387: Function produce_json/2 has no local return
-riak_kv_wm_crdt.erl:391: The call riak_kv_crdt_json:fetch_response_to_json(Type::'counter' | 'flag' | 'map' | 'register' | 'set' | 'undefined',Value::any(),'undefined' | binary(),[{'counter','riak_dt_pncounter'} | {'flag','riak_dt_od_flag'} | {'map','riak_dt_map'} | {'register','riak_dt_lwwreg'} | {'set','riak_dt_orswot'},...]) does not have an opaque term of type riak_kv_crdt_json:context() as 3rd argument
-riak_kv_wm_index.erl:214: Guard test is_integer(NormStart::'undefined' | binary()) can never succeed
-riak_kv_wm_utils.erl:288: The pattern {Scheme, _, Host, Port, _, _} can never match the type {'error','no_scheme' | {_,atom(),_}}
 cluster_info:dump_all_connected/1
 cluster_info:dump_nodes/2
 cluster_info:format/3
