@@ -1,16 +1,5 @@
 riak_core_pb.erl
 riak_kv_util.erl:294: The pattern 'error' can never match the type 'ok' | 'undefined'
-riak_kv_vnode.erl:23: Callback info about the riak_core_vnode behaviour is not available
-riak_kv_vnode.erl:839: The pattern Q = {'riak_kv_index_v3', _, _, _, _, _, _, _, _, RE, _} can never match the type 'undefined' | {_,_}
-riak_kv_vnode.erl:849: The pattern <{'riak_kv_index_v3', _, _, _, _, _, _, _, _, _, N}, DefaultSize> can never match the type <'undefined' | {_,_},'undefined' | pos_integer()>
-riak_kv_vnode.erl:1092: The call riak_kv_vnode:raw_put(HOTarget::atom(),Key::{binary() | {binary(),binary()},binary()},Obj::riak_object:riak_object()) will never return since it differs in the 1st argument from the success typing arguments: ({_,_},any(),any())
-riak_kv_vnode.erl:1214: Function raw_put/3 has no local return
-riak_kv_vnode.erl:1214: The pattern <{Idx, Node}, Key, Obj> can never match the type <atom(),{binary() | {binary(),binary()},binary()},riak_object:riak_object()>
-riak_kv_vnode.erl:1254: Function do_backend_delete/3 has no local return
-riak_kv_vnode.erl:1922: Function delete_from_hashtree/3 has no local return
-riak_kv_vnode.erl:1926: The call riak_kv_index_hashtree:async_delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ({binary(),binary()} | [{binary(),binary()}],pid()) -> 'ok'
-riak_kv_vnode.erl:1929: The call riak_kv_index_hashtree:delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ([{binary(),binary()}],pid()) -> 'ok'
-riak_kv_vnode.erl:2065: Function update_index_delete_stats/1 will never be called
 riak_kv_wm_crdt.erl:387: Function produce_json/2 has no local return
 riak_kv_wm_crdt.erl:391: The call riak_kv_crdt_json:fetch_response_to_json(Type::'counter' | 'flag' | 'map' | 'register' | 'set' | 'undefined',Value::any(),'undefined' | binary(),[{'counter','riak_dt_pncounter'} | {'flag','riak_dt_od_flag'} | {'map','riak_dt_map'} | {'register','riak_dt_lwwreg'} | {'set','riak_dt_orswot'},...]) does not have an opaque term of type riak_kv_crdt_json:context() as 3rd argument
 riak_kv_wm_index.erl:214: Guard test is_integer(NormStart::'undefined' | binary()) can never succeed
