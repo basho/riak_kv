@@ -23,7 +23,6 @@ Unknown types:
   mochijson2:json_string/0
   mochijson2:json_term/0
   mochijson2:json_value/0
-  proplist:proplist/0
   riak_core_apl:preflist2/0
   riak_dt:operation/0
   riak_dt:value/0
