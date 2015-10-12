@@ -66,6 +66,7 @@
 -type index_value() :: integer() | binary().
 -type binary_version() :: v0 | v1.
 
+-define(VAL_ENCODING, <<"val-encoding">>).
 -define(MAX_KEY_SIZE, 65536).
 
 -define(LASTMOD_LEN, 29). %% static length of rfc1123_date() type. Hard-coded in Erlang.
@@ -871,7 +872,8 @@ binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
     riak_object() | {error, 'bad_object_format'}.
 from_binary(_B,_K,<<131, _Rest/binary>>=ObjTerm) ->
     binary_to_term(ObjTerm);
-from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
+
+from_binary(B,K,<<?MAGIC:8/integer, _BinType:8/integer, Rest/binary>>=_ObjBin) ->
     %% Version 1 of binary riak object
     case Rest of
         <<VclockLen:32/integer, VclockBin:VclockLen/binary, SibCount:32/integer, SibsBin/binary>> ->
@@ -900,9 +902,17 @@ sib_of_binary(<<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, Met
     MDList0 = deleted_meta(Deleted, []),
     MDList1 = last_mod_meta({LMMega, LMSecs, LMMicro}, MDList0),
     MDList2 = vtag_meta(VTag, MDList1),
-    MDList = meta_of_binary(MetaRestBin, MDList2),
+    MDList3 = val_encoding_meta(ValBin, MDList2),
+    MDList = meta_of_binary(MetaRestBin, MDList3),
     MD = dict:from_list(MDList),
     {#r_content{metadata=MD, value=decode_maybe_binary(ValBin)}, Rest}.
+
+val_encoding_meta(<<0, _Rest/binary>>, MDList) ->
+    MDList;
+val_encoding_meta(<<1, _Rest/binary>>, MDList) ->
+    MDList;
+val_encoding_meta(<<Other:8, _Rest/binary>>, MDList) ->
+    [{?VAL_ENCODING, Other} | MDList].
 
 deleted_meta(<<1>>, MDList) ->
     [{?MD_DELETED, "true"} | MDList];
@@ -943,8 +953,8 @@ new_v1(Vclock, Siblings) ->
     SibsBin = bin_contents(Siblings),
     <<?MAGIC:8/integer, ?V1_VERS:8/integer, VclockLen:32/integer, VclockBin/binary, SibCount:32/integer, SibsBin/binary>>.
 
-bin_content(#r_content{metadata=Meta, value=Val}) ->
-    ValBin = encode_maybe_binary(Val),
+bin_content(#r_content{metadata=Meta0, value=Val}) ->
+    {ValBin, Meta} = encode_maybe_binary(Val, Meta0),
     ValLen = byte_size(ValBin),
     MetaBin = meta_bin(Meta),
     MetaLen = byte_size(MetaBin),
@@ -983,22 +993,30 @@ fold_meta_to_bin(?MD_DELETED, "true", Acc) ->
 fold_meta_to_bin(?MD_DELETED, _, {{Vt,_Del,Lm},RestBin}) ->
     {{Vt, <<0>>, Lm}, RestBin};
 fold_meta_to_bin(Key, Value, {{_Vt,_Del,_Lm}=Elems,RestBin}) ->
-    ValueBin = encode_maybe_binary(Value),
+    {ValueBin, _NewMeta} = encode_maybe_binary(Value, []),
     ValueLen = byte_size(ValueBin),
-    KeyBin = encode_maybe_binary(Key),
+    {KeyBin, _NewMeta} = encode_maybe_binary(Key, []),
     KeyLen = byte_size(KeyBin),
     MetaBin = <<KeyLen:32/integer, KeyBin/binary, ValueLen:32/integer, ValueBin/binary>>,
     {Elems, <<RestBin/binary, MetaBin/binary>>}.
 
-encode_maybe_binary(Bin) when is_binary(Bin) ->
-    <<1, Bin/binary>>;
-encode_maybe_binary(Bin) ->
-    <<0, (term_to_binary(Bin))/binary>>.
+encode_maybe_binary(Value, Meta) when is_binary(Value) ->
+    {TypeTag, NewMeta} = determine_binary_type(Meta),
+    {<<TypeTag, Value/binary>>, NewMeta};
+encode_maybe_binary(Value, Meta) ->
+    {<<0, (term_to_binary(Value))/binary>>, Meta}.
 
+determine_binary_type(Meta) ->
+    case dict:find(?VAL_ENCODING, Meta) of
+        error -> {1, Meta};
+        {ok, Val} -> {Val, dict:erase(?VAL_ENCODING, Meta)}
+    end.
 decode_maybe_binary(<<1, Bin/binary>>) ->
     Bin;
 decode_maybe_binary(<<0, Bin/binary>>) ->
-    binary_to_term(Bin).
+    binary_to_term(Bin);
+decode_maybe_binary(<<_Other:8, Bin/binary>>) ->
+    Bin.
 
 %% Update X-Riak-VTag and X-Riak-Last-Modified in the object's metadata, if
 %% necessary.
@@ -1084,7 +1102,7 @@ object_test() ->
     B = <<"buckets_are_binaries">>,
     K = <<"keys are binaries">>,
     V = <<"values are anything">>,
-    O = riak_object:new(B,K,V),
+    O = riak_object:new(B, K, V),
     B = riak_object:bucket(O),
     K = riak_object:key(O),
     V = riak_object:get_value(O),
@@ -1092,6 +1110,42 @@ object_test() ->
     1 = length(riak_object:get_values(O)),
     1 = length(riak_object:get_metadatas(O)),
     O.
+
+val_encoding_term_test() ->
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = {a, tuple, is, a, valid, value},
+    Object = riak_object:new(B, K, V),
+    Binary = to_binary(v1, Object),
+    FirstBinaryByte = get_binary_type_tag_from_full_binary(Binary),
+    %% term_to_binary format is 0
+    ?assertEqual(0, FirstBinaryByte).
+
+val_encoding_bin_test() ->
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"Some Binary Data">>,
+    Object = riak_object:new(B, K, V),
+    Binary = to_binary(v1, Object),
+    FirstBinaryByte = get_binary_type_tag_from_full_binary(Binary),
+    %% arbitrary binary format is 1
+    ?assertEqual(1, FirstBinaryByte).
+
+val_encoding_with_metadata_test() ->
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"Some Binary Data">>,
+    Object = riak_object:new(B, K, V, dict:from_list([{?VAL_ENCODING, 2}])),
+    Binary = to_binary(v1, Object),
+    FirstBinaryByte = get_binary_type_tag_from_full_binary(Binary),
+    %% When specified in binary, use the val_encoding version
+    ?assertEqual(2, FirstBinaryByte).
+
+get_binary_type_tag_from_full_binary(Binary) ->
+    <<?MAGIC:8/integer, ?V1_VERS:8/integer, VclockLen:32/integer, _VclockBin:VclockLen/binary, _SibCount:32/integer, SibsBin/binary>> = Binary,
+    <<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, _MetaBin:MetaLen/binary>> = SibsBin,
+    <<FirstBinaryByte:8, _Rest/binary>> = ValBin,
+    FirstBinaryByte.
 
 update_test() ->
     O = object_test(),
