@@ -50,7 +50,8 @@
          request_hashtree_pid/1,
          request_hashtree_pid/2,
          reformat_object/2,
-         stop_fold/1]).
+         stop_fold/1,
+         get_modstate/1]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -95,8 +96,10 @@
 -ifdef(TEST).
 %% Use values so that test compile doesn't give 'unused vars' warning.
 -define(INDEX(A,B,C), _=element(1,{A,B,C}), ok).
+-define(INDEX_BIN(A,B,C,D,E), _=element(1,{A,B,C,D,E}), ok).
 -else.
 -define(INDEX(Obj, Reason, Partition), yz_kv:index(Obj, Reason, Partition)).
+-define(INDEX_BIN(Bucket, Key, Obj, Reason, Partition), yz_kv:index_binary(Bucket, Key, Obj, Reason, Partition)).
 -endif.
 
 -ifdef(TEST).
@@ -229,6 +232,12 @@ maybe_create_hashtrees(true, State=#state{idx=Index,
         _ ->
             State
     end.
+
+%% @doc Reveal the underlying module state for testing
+-spec(get_modstate(state()) -> {atom(), state()}).
+get_modstate(_State=#state{mod=Mod,
+                           modstate=ModState}) ->
+    {Mod, ModState}.
 
 %% API
 start_vnode(I) ->
@@ -468,10 +477,16 @@ init([Index]) ->
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
+            DoAsyncPut =  case app_helper:get_env(riak_kv, allow_async_put, true) of
+                true ->
+                    erlang:function_exported(Mod, async_put, 5);
+                _ ->
+                    false
+            end,
             State = #state{idx=Index,
                            async_folding=AsyncFolding,
                            mod=Mod,
-                           async_put = erlang:function_exported(Mod, async_put, 5),
+                           async_put = DoAsyncPut,
                            modstate=ModState,
                            vnodeid=VId,
                            counter=CounterState,
@@ -841,6 +856,7 @@ handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=
     case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
         {ok, UpModState} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
+            ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
             update_vnode_stats(vnode_put, Idx, StartTS),
             {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
@@ -1107,8 +1123,16 @@ handle_handoff_command(Req=?KV_PUT_REQ{}, Sender, State) ->
     end;
 
 handle_handoff_command(?KV_W1C_PUT_REQ{}=Request, Sender, State) ->
-    {noreply, NewState} = handle_command(Request, Sender, State),
-    {forward, NewState};
+    NewState0 = case handle_command(Request, Sender, State) of
+        {noreply, NewState} ->
+            NewState;
+        {reply, Reply, NewState} ->
+            %% reply directly to the sender, as we will be forwarding the
+            %% the request on to the handoff node.
+            riak_core_vnode:reply(Sender, Reply),
+            NewState
+    end,
+    {forward, NewState0};
 
 %% Handle all unspecified cases locally without forwarding
 handle_handoff_command(Req, Sender, State) ->
@@ -1225,6 +1249,7 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
             State=#state{idx=Idx}) ->
     update_hashtree(Bucket, Key, EncodedVal, State),
+    ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
     riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
     update_vnode_stats(vnode_put, Idx, StartTS),
     {ok, State};

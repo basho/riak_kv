@@ -268,12 +268,12 @@ get_counter_lease(LeaseSize0, Status, ?VNODE_STATUS_VERSION) ->
         {?VNODE_STATUS_VERSION, undefined, _ID} ->
             %% Lost counter? Wha? New ID
             new_id_and_counter(Status, LeaseSize);
-        {?VNODE_STATUS_VERSION, Leased, _ID} when Leased + LeaseSize > ?MAX_CNTR ->
+        {_AnyVersion, Leased, _ID} when Leased + LeaseSize > ?MAX_CNTR ->
             %% Since `LeaseSize' must be > 0, there is no edge here
             %% where last lease size was ?MAX_CNTR and new lease size
             %% is 0.
             new_id_and_counter(Status, LeaseSize);
-        {?VNODE_STATUS_VERSION, Leased, ID} ->
+        {_AnyVersion, Leased, ID} ->
             NewLease = Leased + LeaseSize,
             {PrevLease, NewLease, ID, orddict:store(counter, NewLease, Status)}
     end.
@@ -364,6 +364,11 @@ write_vnode_status(Status, File, Version) ->
 -endif.
 
 -ifdef(TEST).
+
+%% What if we go v2->v1->v2? kv1142 suggests there is an error
+v2_v1_v2_test() ->
+    Res = get_counter_lease(10000, [{counter, 10000}, {vnodeid, <<"hi!">>}, {version, 1}], 2),
+    ?assertMatch({10000, 20000, <<"hi!">>, _Stat2}, Res).
 
 %% Check assigning a vnodeid twice in the same second
 assign_vnodeid_restart_same_ts_test() ->

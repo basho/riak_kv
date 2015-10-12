@@ -232,7 +232,7 @@ handle_req({fetch, QId}, State = #state{qid    = QId,
 handle_req({fetch, QId}, State = #state{qid    = QId,
                                         status = finished,
                                         result = Result}) ->
-    {{ok, Result}, [], State};
+    {{ok, Result}, [], State#state{ status = void, qry = none, ddl = undefined }};
 
 handle_req(_Request, State) ->
     {ok, ?NO_SIDEEFFECTS, State}.
