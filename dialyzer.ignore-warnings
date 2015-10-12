@@ -1,14 +1,6 @@
 riak_core_pb.erl
 riak_kv_pipe_index.erl:164: Function queue_existing_pipe/4 has no local return
 riak_kv_pipe_listkeys.erl:159: Function queue_existing_pipe/3 has no local return
-riak_kv_vnode.erl:1205: The call riak_kv_vnode:raw_put(HOTarget::atom(),Key::{binary() | {binary(),binary()},binary()},Obj::riak_object:riak_object()) will never return since it differs in the 1st argument from the success typing arguments: ({_,_},any(),any())
-riak_kv_vnode.erl:1327: Function raw_put/3 has no local return
-riak_kv_vnode.erl:1327: The pattern <{Idx, Node}, Key, Obj> can never match the type <atom(),{binary() | {binary(),binary()},binary()},riak_object:riak_object()>
-riak_kv_vnode.erl:1367: Function do_backend_delete/3 has no local return
-riak_kv_vnode.erl:2051: Function delete_from_hashtree/3 has no local return
-riak_kv_vnode.erl:2055: The call riak_kv_index_hashtree:async_delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ({binary(),binary()} | [{binary(),binary()}],pid()) -> 'ok'
-riak_kv_vnode.erl:2058: The call riak_kv_index_hashtree:delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ([{binary(),binary()}],pid()) -> 'ok'
-riak_kv_vnode.erl:2128: Function update_index_delete_stats/1 will never be called
 # Callback info not available
 Callback info about the riak_core_vnode_worker behaviour is not available
 Callback info about the riak_core_coverage_fsm behaviour is not available
