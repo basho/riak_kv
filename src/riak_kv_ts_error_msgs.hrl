@@ -35,5 +35,5 @@
 
 -define(
     E_MISSING_PARAM_IN_WHERE_CLAUSE(ParamName),
-    iolist_to_binary(["Missing parameter ", ParamName, " in where clase."])
+    iolist_to_binary(["Missing parameter ", ParamName, " in where clause."])
 ).
