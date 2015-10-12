@@ -456,7 +456,7 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
 			 none  -> [];
 			 ETuple -> [ETuple]
 		     end,
-    AdditionalOptions = lists:flatten(StartInclusive ++ EndInclusive ++ Filter),
+    AdditionalOptions = lists:flatten(StartInclusive ++ EndInclusive ++ [{range_filter, Filter}]),
     StartK2 = [{Field, Val} || {Field, _Type, Val} <- StartK],
     StartK3 = riak_ql_ddl:make_key(Mod, LK, StartK2),
     StartKey = eleveldb_ts:encode_key(StartK3),
@@ -472,7 +472,7 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
                {start_key,    StartKey2},
                {end_key,      EndKey2},
                {fold_method,  streaming},
-               {encoding,     msgpack} 
+               {encoding,     msgpack}
 	      ] ++ AdditionalOptions,
     KeyFolder = fun() ->
 			Vals = eleveldb:fold(Ref, FoldFun, [], Options),

@@ -236,7 +236,7 @@ strip({and_, B, C}, Acc) -> strip(C, [B | Acc]);
 strip(A, Acc)            -> [A | Acc].
 
 add_types_to_filter(Filter, Mod) ->
-    maybe_make_list(add_types2(Filter, Mod, [])).
+    add_types2(Filter, Mod, []).
 
 add_types2([], _Mod, Acc) ->
     make_ands(lists:reverse(Acc));
@@ -245,11 +245,9 @@ add_types2([{Op, LHS, RHS} | T], Mod, Acc) when Op =:= and_ orelse
     NewAcc = {Op, add_types2([LHS], Mod, []), add_types2([RHS], Mod, [])},
     add_types2(T, Mod, [NewAcc | Acc]);
 add_types2([{Op, Field, {_, Val}} | T], Mod, Acc) ->
+    % Val2 = msgpack:pack(Val, [{format,jsx}]),
     NewAcc = {Op, {field, Field, Mod:get_field_type([Field])}, {const, Val}},
     add_types2(T, Mod, [NewAcc | Acc]).
-
-maybe_make_list([]) -> [];
-maybe_make_list(X)  -> [X]. 
 
 %% I know, not tail recursive could stackbust
 %% but not really
