@@ -20,9 +20,9 @@
 -define(assert_test(Name, TableCreate, Query, Expected),
         Name() ->
                {ok, DDL} = make_ddl(TableCreate),
-               {module, _Mod} = riak_ql_ddl_compiler:make_helper_mod(DDL),
+               {module, Mod} = riak_ql_ddl_compiler:make_helper_mod(DDL),
                {ok, SQL} = make_sql(Query),
-               case riak_ql_ddl:is_query_valid(DDL, SQL) of
+               case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
                    true ->
                        Got = riak_kv_qry_compiler:compile(DDL, SQL),
                        ?assertEqual(Expected, Got);
@@ -113,7 +113,7 @@ get_standard_lk() -> #key_v1{ast = [
               ++ "temperature varchar, "
               ++ "PRIMARY KEY ((quantum(time, 15, s)), time, user))",
 	     "select weather from GeoCheckin where time > 3000 and time < 5000",
-	     {error, {missing_param, <<"Missing parameter user in where clase.">>}}).
+	     {error, {missing_param, <<"Missing parameter user in where clause.">>}}).
 
 ?assert_test(spanning_qry_test, 
 	      "CREATE TABLE GeoCheckin " ++
