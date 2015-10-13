@@ -36,13 +36,14 @@
 -export([code_change/3]).
 
 -record(state, {
+          initializing = true :: boolean()
 }).
 
 -define(BUCKET_TYPE_PREFIX, {core, bucket_types}).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
-%%% 
+%%%
 %%% API.
 %%%
 
@@ -54,17 +55,17 @@ start_link() ->
 new_type(BucketType) ->
     gen_server:cast(?MODULE, {new_type, BucketType}).
 
-%%% 
+%%%
 %%% gen_server.
 %%%
 
 init([]) ->
     process_flag(trap_exit, true),
 
-    % do this outside of init so that we get crash messages output to crash.log
-    % if it fails
-    self() ! add_ddl_ebin_to_path,
-    {ok, #state{}}.
+    % Update the VM code path outside of init so that we get crash
+    % messages output to crash.log if it fails. handle_info(timeout,
+    % State) will be invoked immediately
+    {ok, #state{}, 0}.
 
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
@@ -87,11 +88,11 @@ handle_info({'EXIT', Pid, _Error}, State) ->
     % compilation error, check
     _ = riak_kv_compile_tab:update_state(Pid, failed),
     {noreply, State};
-handle_info(add_ddl_ebin_to_path, State) ->
+handle_info(timeout, #state{initializing=true}=State) ->
     ok = riak_core_metadata_manager:swap_notification_handler(
         ?BUCKET_TYPE_PREFIX, riak_kv_metadata_store_listener, []),
     ok = add_ddl_ebin_to_path(),
-    {noreply, State};
+    {noreply, State#state{initializing=false}};
 handle_info(_, State) ->
     {noreply, State}.
 
