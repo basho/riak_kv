@@ -385,7 +385,7 @@ simple_filter_typing_test() ->
 	      {'=', <<"extra">>, {int, 1}}
 	     ],
     Got = add_types_to_filter(Filter, Mod),
-    Expected = [{and_,
+    Expected = {and_,
 		 {or_,
 		  {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}},
 		  {and_,
@@ -394,7 +394,7 @@ simple_filter_typing_test() ->
 		  }
 		 },
 		 {'=', {field, <<"extra">>, integer}, {const, 1}}
-		}],
+		},
     ?assertEqual(Expected, Got).
 
 %%
@@ -520,7 +520,7 @@ simple_with_filter_1_test() ->
 				{<<"time">>, timestamp, 5000},
 				{<<"user">>, binary,    <<"user_1">>}
 			       ]},
-	     {filter,          [{'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}]},
+	     {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
 	     {start_inclusive, false}
 	    ],
     Expected = [Q#riak_sql_v1{is_executable = true,
@@ -546,7 +546,7 @@ simple_with_filter_2_test() ->
 			 {<<"time">>, timestamp, 5000},
 			 {<<"user">>, binary,    <<"user_1">>}
 			]},
-	     {filter,   [{'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}]}
+	     {filter,   {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}}
 	    ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
@@ -571,7 +571,7 @@ simple_with_filter_3_test() ->
 				{<<"time">>, timestamp, 5000},
 				{<<"user">>, binary,    <<"user_1">>}
 			       ]},
-	     {filter,          [{'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}]},
+	     {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
 	     {start_inclusive, false},
 	     {end_inclusive,   true}
 	    ],
@@ -598,12 +598,12 @@ simple_with_2_field_filter_test() ->
 				{<<"time">>, timestamp, 5000},
 				{<<"user">>, binary,    <<"user_1">>}
 			       ]},
-	     {filter,          [{and_,
+	     {filter,          {and_,
 				{'=', {field, <<"weather">>,     binary},
 				 {const, <<"yankee">>}},
 				{'=', {field, <<"temperature">>, binary},
 				 {const, <<"yelp">>}}
-			       }]
+			       }
 	     },
 	     {start_inclusive, false}
 	    ],
@@ -630,7 +630,7 @@ complex_with_4_field_filter_test() ->
 				{<<"time">>, timestamp, 5000},
 				{<<"user">>, binary,    <<"user_1">>}
 			       ]},
-	     {filter,          [{and_,
+	     {filter,          {and_,
 				{or_,
 				 {'=', {field, <<"weather">>, binary},
 				  {const, <<"yankee">>}},
@@ -643,7 +643,7 @@ complex_with_4_field_filter_test() ->
 				},
 				{'=', {field, <<"extra">>, integer},
 				 {const, 1}}
-			       }]
+			       }
 	     },
 	     {start_inclusive, false}
 	    ],
