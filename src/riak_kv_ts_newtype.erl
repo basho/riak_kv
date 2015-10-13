@@ -63,7 +63,7 @@ init([]) ->
 
     % do this outside of init so that we get crash messages output to crash.log
     % if it fails
-    self() ! add_ddl_ebin_to_path,
+    gen_server:cast(self(), add_ddl_ebin_to_path),
     {ok, #state{}}.
 
 handle_call(_Request, _From, State) ->
@@ -71,6 +71,11 @@ handle_call(_Request, _From, State) ->
 
 handle_cast({new_type, BucketType}, State) ->
     ok = do_new_type(BucketType),
+    {noreply, State};
+handle_cast(add_ddl_ebin_to_path, State) ->
+    ok = riak_core_metadata_manager:swap_notification_handler(
+        ?BUCKET_TYPE_PREFIX, riak_kv_metadata_store_listener, []),
+    ok = add_ddl_ebin_to_path(),
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -86,11 +91,6 @@ handle_info({'EXIT', _, bucket_type_changed_mid_compile}, State) ->
 handle_info({'EXIT', Pid, _Error}, State) ->
     % compilation error, check
     _ = riak_kv_compile_tab:update_state(Pid, failed),
-    {noreply, State};
-handle_info(add_ddl_ebin_to_path, State) ->
-    ok = riak_core_metadata_manager:swap_notification_handler(
-        ?BUCKET_TYPE_PREFIX, riak_kv_metadata_store_listener, []),
-    ok = add_ddl_ebin_to_path(),
     {noreply, State};
 handle_info(_, State) ->
     {noreply, State}.
