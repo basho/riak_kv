@@ -66,7 +66,6 @@
 -type index_value() :: integer() | binary().
 -type binary_version() :: v0 | v1.
 
--define(VAL_ENCODING, <<"val-encoding">>).
 -define(MAX_KEY_SIZE, 65536).
 
 -define(LASTMOD_LEN, 29). %% static length of rfc1123_date() type. Hard-coded in Erlang.
@@ -912,7 +911,7 @@ val_encoding_meta(<<0, _Rest/binary>>, MDList) ->
 val_encoding_meta(<<1, _Rest/binary>>, MDList) ->
     MDList;
 val_encoding_meta(<<Other:8, _Rest/binary>>, MDList) ->
-    [{?VAL_ENCODING, Other} | MDList].
+    [{?MD_VAL_ENCODING, Other} | MDList].
 
 deleted_meta(<<1>>, MDList) ->
     [{?MD_DELETED, "true"} | MDList];
@@ -1007,9 +1006,9 @@ encode_maybe_binary(Value, Meta) ->
     {<<0, (term_to_binary(Value))/binary>>, Meta}.
 
 determine_binary_type(Meta) ->
-    case dict:find(?VAL_ENCODING, Meta) of
+    case dict:find(?MD_VAL_ENCODING, Meta) of
         error -> {1, Meta};
-        {ok, Val} -> {Val, dict:erase(?VAL_ENCODING, Meta)}
+        {ok, Val} -> {Val, dict:erase(?MD_VAL_ENCODING, Meta)}
     end.
 decode_maybe_binary(<<1, Bin/binary>>) ->
     Bin;
@@ -1117,7 +1116,7 @@ val_encoding_term_test() ->
     V = {a, tuple, is, a, valid, value},
     Object = riak_object:new(B, K, V),
     Binary = to_binary(v1, Object),
-    FirstBinaryByte = get_binary_type_tag_from_full_binary(Binary),
+    {FirstBinaryByte, _Meta} = get_binary_type_tag_and_metadata_from_full_binary(Binary),
     %% term_to_binary format is 0
     ?assertEqual(0, FirstBinaryByte).
 
@@ -1127,7 +1126,7 @@ val_encoding_bin_test() ->
     V = <<"Some Binary Data">>,
     Object = riak_object:new(B, K, V),
     Binary = to_binary(v1, Object),
-    FirstBinaryByte = get_binary_type_tag_from_full_binary(Binary),
+    {FirstBinaryByte, _Meta} = get_binary_type_tag_and_metadata_from_full_binary(Binary),
     %% arbitrary binary format is 1
     ?assertEqual(1, FirstBinaryByte).
 
@@ -1135,17 +1134,19 @@ val_encoding_with_metadata_test() ->
     B = <<"buckets are binaries">>,
     K = <<"keys are binaries">>,
     V = <<"Some Binary Data">>,
-    Object = riak_object:new(B, K, V, dict:from_list([{?VAL_ENCODING, 2}])),
+    Object = riak_object:new(B, K, V, dict:from_list([{?MD_VAL_ENCODING, 2}])),
     Binary = to_binary(v1, Object),
-    FirstBinaryByte = get_binary_type_tag_from_full_binary(Binary),
+    {FirstBinaryByte, Meta} = get_binary_type_tag_and_metadata_from_full_binary(Binary),
     %% When specified in binary, use the val_encoding version
-    ?assertEqual(2, FirstBinaryByte).
+    ?assertEqual(2, FirstBinaryByte),
+    ?assertNot(dict:is_key(?MD_VAL_ENCODING, Meta)).
 
-get_binary_type_tag_from_full_binary(Binary) ->
+get_binary_type_tag_and_metadata_from_full_binary(Binary) ->
     <<?MAGIC:8/integer, ?V1_VERS:8/integer, VclockLen:32/integer, _VclockBin:VclockLen/binary, _SibCount:32/integer, SibsBin/binary>> = Binary,
-    <<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, _MetaBin:MetaLen/binary>> = SibsBin,
+    <<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBinRest:MetaLen/binary>> = SibsBin,
+    <<_LMMega:32/integer, _LMSecs:32/integer, _LMMicro:32/integer, VTagLen:8/integer, _VTag:VTagLen/binary, _Deleted:1/binary-unit:8, MetaBin/binary>> = MetaBinRest,
     <<FirstBinaryByte:8, _Rest/binary>> = ValBin,
-    FirstBinaryByte.
+    {FirstBinaryByte, dict:from_list(meta_of_binary(MetaBin, []))}.
 
 update_test() ->
     O = object_test(),
