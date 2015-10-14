@@ -130,7 +130,16 @@ process(#tsputreq{table = Bucket, columns = _Columns, rows = Rows}, State) ->
 %% @ignore SELECT
 process(SQL = #riak_sql_v1{'FROM' = Bucket}, State) ->
     Mod = riak_ql_ddl:make_module_name(Bucket),
-    DDL = Mod:get_ddl(),
+    case (catch Mod:get_ddl()) of
+        {_, {undef, _}} ->
+            BucketProps = riak_core_bucket:get_bucket(Bucket),
+            {reply, missing_helper_module(Bucket, BucketProps), State};
+        DDL ->
+            submit_query(DDL, Mod, SQL, State)
+    end.
+
+%%
+submit_query(DDL, Mod, SQL, State) ->
     case riak_kv_qry:submit(SQL, DDL) of
         {ok, QId} ->
             case fetch_with_patience(QId, ?FETCH_RETRIES) of
@@ -197,14 +206,14 @@ missing_helper_module(Bucket, BucketProps) when is_binary(Bucket), is_list(Bucke
 missing_type_response(Bucket) ->
     make_rpberrresp(
         ?E_MISSING_TYPE,
-        io_lib:format("Failed to put records, bucket type ~s is missing.", [Bucket])).
+        io_lib:format("Bucket type ~s is missing.", [Bucket])).
 
 %%
 -spec not_timeseries_type_response(Bucket::binary()) -> #rpberrorresp{}.
 not_timeseries_type_response(Bucket) ->
     make_rpberrresp(
         ?E_NOT_TS_TYPE,
-        io_lib:format("Attempt to put Time Series data to non Time Series bucket ~s.", [Bucket])).
+        io_lib:format("Attempt Time Series operation on non Time Series bucket ~s.", [Bucket])).
 
 -spec missing_table_module_response(Bucket::binary()) -> #rpberrorresp{}.
 missing_table_module_response(Bucket) ->
