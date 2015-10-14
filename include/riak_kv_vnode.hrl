@@ -53,8 +53,8 @@
 
 %% TODO get riak_ql types included properly somehow
 -record(riak_kv_sql_select_req_v1, {
-	  bucket :: binary() | tuple(),
-	  qry}).
+          bucket :: {binary(), binary()},
+          qry}).
 
 -record(riak_kv_vnode_status_req_v1, {}).
 
