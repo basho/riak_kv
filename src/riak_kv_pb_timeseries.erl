@@ -111,19 +111,20 @@ process(#tsputreq{table = Bucket, columns = _Columns, rows = Rows}, State) ->
                     0 ->
                         {reply, #tsputresp{}, State};
                     ErrorCount ->
-                        {reply, make_rpberrresp(
-                                  ?E_PUT, io_lib:format("Failed to put ~b record(s)", [ErrorCount])),
-                         State}
+                        EPutMessage = io_lib:format("Failed to put ~b record(s)", [ErrorCount]),
+                        {reply, make_rpberrresp(?E_PUT, EPutMessage), State}
                 end
             catch
                 Class:Exception ->
-                    {reply, make_rpberrresp(?E_IRREG, to_string({Class, Exception}))}
+                    lager:error("error: ~p:~p~n~p", [Class,Exception,erlang:get_stacktrace()]),
+                    Error = make_rpberrresp(?E_IRREG, to_string({Class, Exception})),
+                    {reply, Error, State}
             end;
         false ->
-            {reply, make_rpberrresp(?E_IRREG, "Invalid data")};
+            {reply, make_rpberrresp(?E_IRREG, "Invalid data"), State};
         {_, {undef, _}} ->
             BucketProps = riak_core_bucket:get_bucket(Bucket),
-            {reply, missing_helper_module(Bucket, BucketProps)}
+            {reply, missing_helper_module(Bucket, BucketProps), State}
     end;
 
 %% @ignore SELECT
@@ -181,7 +182,7 @@ decode_query_permissions(#riak_sql_v1{'FROM'=Bucket}) ->
     {"riak_kv.ts_query", Bucket}.
 
 %%
--spec missing_helper_module(Bucket::binary(), 
+-spec missing_helper_module(Bucket::binary(),
                             BucketProps::{error,any()} | [proplists:property()]) -> #rpberrorresp{}.
 missing_helper_module(Bucket, {error, _}) ->
     missing_type_response(Bucket);
@@ -195,14 +196,14 @@ missing_helper_module(Bucket, BucketProps) when is_binary(Bucket), is_list(Bucke
 -spec missing_type_response(Bucket::binary()) -> #rpberrorresp{}.
 missing_type_response(Bucket) ->
     make_rpberrresp(
-        ?E_MISSING_TYPE, 
+        ?E_MISSING_TYPE,
         io_lib:format("Failed to put records, bucket type ~s is missing.", [Bucket])).
 
 %%
 -spec not_timeseries_type_response(Bucket::binary()) -> #rpberrorresp{}.
 not_timeseries_type_response(Bucket) ->
     make_rpberrresp(
-        ?E_NOT_TS_TYPE, 
+        ?E_NOT_TS_TYPE,
         io_lib:format("Attempt to put Time Series data to non Time Series bucket ~s.", [Bucket])).
 
 -spec missing_table_module_response(Bucket::binary()) -> #rpberrorresp{}.
