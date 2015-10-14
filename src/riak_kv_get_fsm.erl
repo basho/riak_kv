@@ -180,7 +180,7 @@ init({test, Args, StateProps}) ->
     {ok, validate, TestStateData, 0}.
 
 %% @private
-prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
+prepare(timeout, StateData=#state{bkey = {Bucket, Key},
                                   options=Options,
                                   trace=Trace}) ->
     ?DTRACE(Trace, ?C_GET_FSM_PREPARE, [], ["prepare"]),
@@ -196,7 +196,9 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
             true ->
                 BucketProps
         end,
-    DocIdx = riak_core_util:chash_key(BKey, BucketProps),
+
+    DocIdx = riak_core_util:chash_key({Bucket, riak_kv_pb_timeseries:pk(Key)}, BucketProps),
+
     Bucket_N = get_option(n_val, BucketProps),
     CrdtOp = get_option(crdt_op, Options),
     N = case get_option(n_val, Options) of
@@ -223,12 +225,14 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
                         riak_core_apl:get_apl_ann(DocIdx, N, UpNodes)
                 end,
             new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
-                                                n = N,
-                                                bucket_props=Props,
-                                                preflist2 = Preflist2,
-                                                tracked_bucket = StatTracked,
-                                                crdt_op = CrdtOp})
+                                                        bkey = {Bucket, riak_kv_pb_timeseries:lk(Key)},
+                                                        n = N,
+                                                        bucket_props=Props,
+                                                        preflist2 = Preflist2,
+                                                        tracked_bucket = StatTracked,
+                                                        crdt_op = CrdtOp})
     end.
+
 
 %% @private
 validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
