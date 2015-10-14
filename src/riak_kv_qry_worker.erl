@@ -103,8 +103,7 @@ fetch(FSMName, QId) ->
 -spec init([qry_fsm_name()]) -> {ok, #state{}}.
 %% @private
 init([Name]) ->
-    {ok, #state{name = Name}}.
-
+    {ok, new_state(Name)}.
 
 -spec handle_call(term(), {pid(), term()}, #state{}) ->
                          {reply, Reply::ok | {error, atom()} | list(), #state{}}.
@@ -203,6 +202,10 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
+-spec new_state(qry_fsm_name()) -> #state{}.
+new_state(Name) ->
+    #state{name = Name}.
+
 -spec handle_req({atom(), term()}, #state{}) ->
                         {ok | {ok | error, term()},
                          list(), #state{}}.
@@ -232,7 +235,9 @@ handle_req({fetch, QId}, State = #state{qid    = QId,
 handle_req({fetch, QId}, State = #state{qid    = QId,
                                         status = finished,
                                         result = Result}) ->
-    {{ok, Result}, [], State#state{ status = void, qry = none, ddl = undefined }};
+    % When the results are returned, reset the state completely except
+    % for the name.
+    {{ok, Result}, [], new_state(State#state.name)};
 
 handle_req(_Request, State) ->
     {ok, ?NO_SIDEEFFECTS, State}.
