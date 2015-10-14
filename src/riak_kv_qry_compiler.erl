@@ -136,20 +136,20 @@ compile_where(DDL, Where) ->
         {true, NewW} -> NewW
     end.
 
-check_if_timeseries(#ddl_v1{bucket = B, partition_key = PK, local_key = LK},
+check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK},
               [{and_, _LHS, _RHS} = W]) ->
     try    #key_v1{ast = PAST} = PK,
            #key_v1{ast = LAST} = LK,
            LocalFields     = [X || #param_v1{name = X} <- LAST],
            PartitionFields = [X || #param_v1{name = X} <- PAST],
            [QField] = [X || #hash_fn_v1{mod  = riak_ql_quanta,
-					fn   = quantum,
-					args = [#param_v1{name = X} | _Rest]}
-				<- PAST],
-	   StrippedW = strip(W, []),
-	   {StartW, EndW, Filter} = break_out_timeseries(StrippedW, LocalFields, [QField]),
-	   Mod = riak_ql_ddl:make_module_name(B),
-	   StartKey = rewrite(LK, StartW, Mod),
+                                        fn   = quantum,
+                                        args = [#param_v1{name = X} | _Rest]}
+                                <- PAST],
+           StrippedW = strip(W, []),
+           {StartW, EndW, Filter} = break_out_timeseries(StrippedW, LocalFields, [QField]),
+           Mod = riak_ql_ddl:make_module_name(T),
+           StartKey = rewrite(LK, StartW, Mod),
            EndKey = rewrite(LK, EndW, Mod),
 	   %% defaults on startkey and endkey are different
 	   IncStart = case includes(StartW, '>', Mod) of
@@ -284,32 +284,32 @@ end.
 %% Helper Fns for unit tests
 %%
 
-make_ddl(Bucket, Fields) when is_binary(Bucket) ->
-    make_ddl(Bucket, Fields, #key_v1{}, #key_v1{}).
+make_ddl(Table, Fields) when is_binary(Table) ->
+    make_ddl(Table, Fields, #key_v1{}, #key_v1{}).
 
-make_ddl(Bucket, Fields, PK) when is_binary(Bucket) ->
-    make_ddl(Bucket, Fields, PK, #key_v1{}).
+make_ddl(Table, Fields, PK) when is_binary(Table) ->
+    make_ddl(Table, Fields, PK, #key_v1{}).
 
-make_ddl(Bucket, Fields, #key_v1{} = PK, #key_v1{} = LK)
-  when is_binary(Bucket) ->
-    #ddl_v1{bucket        = Bucket,
+make_ddl(Table, Fields, #key_v1{} = PK, #key_v1{} = LK)
+  when is_binary(Table) ->
+    #ddl_v1{table         = Table,
             fields        = Fields,
             partition_key = PK,
             local_key     = LK}.
 
-make_query(Bucket, Selections) ->
-    make_query(Bucket, Selections, []).
+make_query(Table, Selections) ->
+    make_query(Table, Selections, []).
 
-make_query(Bucket, Selections, Where) ->
-    #riak_sql_v1{'FROM'   = Bucket,
+make_query(Table, Selections, Where) ->
+    #riak_sql_v1{'FROM'   = Table,
                  'SELECT' = Selections,
                  'WHERE'  = Where}.
 
 -define(MIN, 60 * 1000).
 -define(NAME, "time").
 
-is_query_valid(#ddl_v1{ bucket = BucketType } = DDL, Q) ->
-    Mod = riak_ql_ddl:make_module_name(BucketType),
+is_query_valid(#ddl_v1{ table = Table } = DDL, Q) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
     riak_ql_ddl:is_query_valid(Mod, DDL, Q).
 
 get_query(String) ->
@@ -372,8 +372,8 @@ get_standard_lk() ->
 %%
 
 simple_filter_typing_test() ->
-    #ddl_v1{bucket = B} = get_long_ddl(),
-    Mod = riak_ql_ddl:make_module_name(B),
+    #ddl_v1{table = T} = get_long_ddl(),
+    Mod = riak_ql_ddl:make_module_name(T),
     Filter = [
 	      {or_,
 	       {'=', <<"weather">>, {word, <<"yankee">>}},
@@ -404,8 +404,8 @@ simple_filter_typing_test() ->
 %% we have enough info to build a range scan
 %%
 simple_rewrite_test() ->
-    #ddl_v1{bucket = B} = get_standard_ddl(),
-    Mod = riak_ql_ddl:make_module_name(B),
+    #ddl_v1{table = T} = get_standard_ddl(),
+    Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
                          #param_v1{name = [<<"time">>]}
@@ -428,8 +428,8 @@ simple_rewrite_test() ->
 %% local key - there is no enough info for a range scan
 %%
 simple_rewrite_fail_1_test() ->
-    #ddl_v1{bucket = B} = get_standard_ddl(),
-    Mod = riak_ql_ddl:make_module_name(B),
+    #ddl_v1{table = T} = get_standard_ddl(),
+    Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
                          #param_v1{name = [<<"user">>]}
@@ -443,8 +443,8 @@ simple_rewrite_fail_1_test() ->
     ).
 
 simple_rewrite_fail_2_test() ->
-    #ddl_v1{bucket = B} = get_standard_ddl(),
-    Mod = riak_ql_ddl:make_module_name(B),
+    #ddl_v1{table = T} = get_standard_ddl(),
+    Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
                          #param_v1{name = [<<"user">>]}
@@ -458,8 +458,8 @@ simple_rewrite_fail_2_test() ->
     ).
 
 simple_rewrite_fail_3_test() ->
-    #ddl_v1{bucket = B} = get_standard_ddl(),
-    Mod = riak_ql_ddl:make_module_name(B),
+    #ddl_v1{table = T} = get_standard_ddl(),
+    Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
                          #param_v1{name = [<<"user">>]},
