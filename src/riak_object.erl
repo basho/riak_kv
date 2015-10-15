@@ -992,13 +992,15 @@ fold_meta_to_bin(?MD_DELETED, "true", Acc) ->
 fold_meta_to_bin(?MD_DELETED, _, {{Vt,_Del,Lm},RestBin}) ->
     {{Vt, <<0>>, Lm}, RestBin};
 fold_meta_to_bin(Key, Value, {{_Vt,_Del,_Lm}=Elems,RestBin}) ->
-    {ValueBin, _NewMeta} = encode_maybe_binary(Value, []),
+    {ValueBin, _NewMeta} = encode_maybe_binary(Value, no_meta),
     ValueLen = byte_size(ValueBin),
-    {KeyBin, _NewMeta} = encode_maybe_binary(Key, []),
+    {KeyBin, _NewMeta} = encode_maybe_binary(Key, no_meta),
     KeyLen = byte_size(KeyBin),
     MetaBin = <<KeyLen:32/integer, KeyBin/binary, ValueLen:32/integer, ValueBin/binary>>,
     {Elems, <<RestBin/binary, MetaBin/binary>>}.
 
+encode_maybe_binary(Value, no_meta) when is_binary(Value) ->
+    {<<1, Value/binary>>, no_meta};
 encode_maybe_binary(Value, Meta) when is_binary(Value) ->
     {TypeTag, NewMeta} = determine_binary_type(Meta),
     {<<TypeTag, Value/binary>>, NewMeta};
@@ -1137,7 +1139,7 @@ val_encoding_with_metadata_test() ->
     Object = riak_object:new(B, K, V, dict:from_list([{?MD_VAL_ENCODING, 2}])),
     Binary = to_binary(v1, Object),
     {FirstBinaryByte, Meta} = get_binary_type_tag_and_metadata_from_full_binary(Binary),
-    %% When specified in binary, use the val_encoding version
+    %% When specified in metadata, use the val_encoding version
     ?assertEqual(2, FirstBinaryByte),
     ?assertNot(dict:is_key(?MD_VAL_ENCODING, Meta)).
 
