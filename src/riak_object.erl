@@ -1136,11 +1136,13 @@ val_encoding_with_metadata_test() ->
     B = <<"buckets are binaries">>,
     K = <<"keys are binaries">>,
     V = <<"Some Binary Data">>,
-    Object = riak_object:new(B, K, V, dict:from_list([{?MD_VAL_ENCODING, 2}])),
+    Object = riak_object:new(B, K, V, dict:from_list([{?MD_VAL_ENCODING, 2}, {<<"X-Foo_MetaData">>, "Foo"}])),
     Binary = to_binary(v1, Object),
     {FirstBinaryByte, Meta} = get_binary_type_tag_and_metadata_from_full_binary(Binary),
     %% When specified in metadata, use the val_encoding version
     ?assertEqual(2, FirstBinaryByte),
+    %% Make sure <<"X-Riak-Val-Encoding">> metadata was removed, as it's encoded in the binary itself
+    %% and would be superfluous
     ?assertNot(dict:is_key(?MD_VAL_ENCODING, Meta)).
 
 get_binary_type_tag_and_metadata_from_full_binary(Binary) ->
