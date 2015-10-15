@@ -243,9 +243,9 @@ make_rpberrresp(Code, Message) ->
 
 
 -spec decode_query_permissions(#ddl_v1{} | #riak_sql_v1{}) -> {string(), binary()}.
-decode_query_permissions(#ddl_v1{table=NewBucketType}) ->
+decode_query_permissions(#ddl_v1{table = NewBucketType}) ->
     {"riak_kv.ts_create_table", NewBucketType};
-decode_query_permissions(#riak_sql_v1{'FROM'=Table}) ->
+decode_query_permissions(#riak_sql_v1{'FROM' = Table}) ->
     {"riak_kv.ts_query", Table}.
 
 %%
@@ -281,6 +281,7 @@ missing_table_module_response(BucketType) ->
 
 to_string(X) ->
     io_lib:format("~p", [X]).
+
 
 %% ---------------------------------------------------
 % functions supporting INSERT
@@ -344,7 +345,7 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
                                  {ok, [{Key::binary(), riak_pb_ts_codec:ldbvalue()}]} |
                                  {error, atom()}.
 fetch_with_patience(QId, 0) ->
-    lager:info("Query results on qid ~p not available after ~b secs\n", [QId, ?FETCH_RETRIES]),
+    lager:info("Query results on qid ~p not available after ~b secs", [QId, ?FETCH_RETRIES]),
     {ok, []};
 fetch_with_patience(QId, N) ->
     case riak_kv_qry_queue:fetch(QId) of
