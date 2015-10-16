@@ -197,7 +197,7 @@ query_params(#rpbindexreq{index=Index, range_min=Min, range_max=Max,
 %% `return_body' and `return_terms'
 response_type(true, _) ->
     objects;
-response_type(false, true) ->
+response_type(_, true) ->
     terms;
 response_type(_, _) ->
     keys.
