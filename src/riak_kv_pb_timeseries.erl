@@ -243,9 +243,10 @@ put_data(Data, Table, Mod) ->
 
               %% Bucket needs to be in duplicate, see riak_kv_qry_coverage_plan:create_plan
               RObj0 = riak_object:new({Table, Table}, PK, Obj),
-              MD_ = riak_object:get_update_metadata(RObj0),
-              MD  = dict:store(?MD_TS_LOCAL_KEY, LK, MD_),
-              RObj = riak_object:update_metadata(RObj0, MD),
+              MD = riak_object:get_update_metadata(RObj0),
+              MD1 = dict:store(?MD_TS_LOCAL_KEY, LK, MD),
+	      MD2 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD1),
+              RObj = riak_object:update_metadata(RObj0, MD2),
 
               case riak_client:put(RObj, {riak_client, [node(), undefined]}) of
                   {error, _Why} ->
