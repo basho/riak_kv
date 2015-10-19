@@ -666,16 +666,14 @@ simple_spanning_boundary_test() ->
 			     {<<"user">>, binary, <<"user_1">>}]},
 	  {endkey,          [{<<"time">>, timestamp, 15000},
 			     {<<"user">>, binary, <<"user_1">>}]},
-	  {filter,          []},
-	  {end_inclusive,   true}
+	  {filter,          []}
 	 ],
     W2 = [
 	  {startkey,        [{<<"time">>, timestamp, 15000},
 			     {<<"user">>, binary, <<"user_1">>}]},
 	  {endkey,          [{<<"time">>, timestamp, 30000},
 			     {<<"user">>, binary, <<"user_1">>}]},
-	  {filter,          []},
-	  {end_inclusive,   true}
+	  {filter,          []}
 	 ],
     W3 = [
 	  {startkey,        [{<<"time">>, timestamp, 30000},
