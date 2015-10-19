@@ -42,6 +42,7 @@
          fold_keys/4,
          fold_objects/4,
          fold_indexes/4,
+	 range_scan/4,
          is_empty/1,
          status/1,
          callback/3]).
@@ -54,6 +55,7 @@
                   ]}).
 
 -include("riak_kv_index.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -340,7 +342,7 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{fold_opts=FoldOpts,
                                                ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     FirstKey = to_first_key(undefined),
-    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    FoldOpts1 = [{start_key, FirstKey} | FoldOpts],
     BucketFolder =
         fun() ->
                 try
@@ -383,7 +385,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     %% Set up the fold...
     FirstKey = to_first_key(Limiter),
     FoldFun = fold_keys_fun(FoldKeysFun, Limiter),
-    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    FoldOpts1 = [{start_key, FirstKey} | FoldOpts],
     ExtraFold = not FixedIdx orelse WriteLegacyIdx,
     KeyFolder =
         fun() ->
@@ -393,21 +395,21 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
                            eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
                        catch
                            {break, BrkResult} ->
-                               BrkResult
+			       BrkResult
                        end,
-            case ExtraFold of
-                true ->
-                    legacy_key_fold(Ref, FoldFun, AccFinal, FoldOpts1, Limiter);
-                false ->
-                    AccFinal
-            end
+		case ExtraFold of
+		    true ->
+			legacy_key_fold(Ref, FoldFun, AccFinal, FoldOpts1, Limiter);
+		    false ->
+			AccFinal
+		end
         end,
     case lists:member(async_fold, Opts) of
-        true ->
-            {async, KeyFolder};
-        false ->
-            {ok, KeyFolder()}
-    end.
+	      true ->
+		  {async, KeyFolder};
+	      false ->
+		  {ok, KeyFolder()}
+	  end.
 
 fold_indexes(FoldIndexFun, Acc, _Opts, #state{fold_opts=FoldOpts,
                                               ref=Ref}) ->
@@ -435,6 +437,54 @@ fold_indexes_fun(FoldIndexFun) ->
                     throw({break, Acc})
             end
     end.
+
+range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
+					      ref=Ref}) ->
+    {_, Bucket, Qry} = proplists:lookup(index, Opts),
+    #riak_sql_v1{'WHERE'    = W,
+		 helper_mod = Mod,
+		 local_key  = LK} = Qry,
+    %% this is all super-fugly
+    {startkey, StartK} = proplists:lookup(startkey, W),
+    {endkey,   EndK}   = proplists:lookup(endkey, W),
+    {filter,   Filter} = proplists:lookup(filter, W),
+    StartInclusive = case proplists:lookup(start_inclusive, W) of
+			 none  -> [];
+			 STuple -> [STuple]
+		     end,
+    EndInclusive = case proplists:lookup(end_inclusive, W) of
+			 none  -> [];
+			 ETuple -> [ETuple]
+		     end,
+    AdditionalOptions = lists:flatten(StartInclusive ++ EndInclusive),
+    AdditionalOptions2 =
+        case Filter of
+            [] -> AdditionalOptions;
+            _  -> [{range_filter, Filter} | AdditionalOptions]
+        end,
+    StartK2 = [{Field, Val} || {Field, _Type, Val} <- StartK],
+    StartK3 = riak_ql_ddl:make_key(Mod, LK, StartK2),
+    StartKey = eleveldb_ts:encode_key(StartK3),
+    StartKey2 = to_object_key({Bucket, Bucket}, StartKey),
+    EndK2 = [{Field, Val} || {Field, _Type, Val} <- EndK],
+    EndK3 = riak_ql_ddl:make_key(Mod, LK, EndK2),
+    EndKey = eleveldb_ts:encode_key(EndK3),
+    EndKey2 = to_object_key({Bucket, Bucket}, EndKey),
+    FoldFun = fun({K, V}, Acc) ->
+		     [{K, V} | Acc]
+	     end,
+    Options = [
+               {start_key,    StartKey2},
+               {end_key,      EndKey2},
+               {fold_method,  streaming},
+               {encoding,     msgpack} |
+               AdditionalOptions2
+	      ],
+    KeyFolder = fun() ->
+			Vals = eleveldb:fold(Ref, FoldFun, [], Options),
+			FoldIndexFun(lists:reverse(Vals), Buffer)
+		end,
+    {async, KeyFolder}.
 
 legacy_key_fold(Ref, FoldFun, Acc, FoldOpts0, Query={index, _, _}) ->
     {_, FirstKey} = lists:keyfind(first_key, 1, FoldOpts0),
@@ -481,7 +531,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
 
     %% Set up the fold...
     FirstKey = to_first_key(Limiter),
-    FoldOpts1 = IteratorRefresh ++ [{first_key, FirstKey} | FoldOpts],
+    FoldOpts1 = IteratorRefresh ++ [{start_key, FirstKey} | FoldOpts],
     FoldFun = fold_objects_fun(FoldObjectsFun, Limiter),
 
     ObjectFolder =
@@ -710,12 +760,12 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket,
             fun(Bucket, Key, Acc) ->
                     case re:run(Key, TermRe) of
                         nomatch -> Acc;
-                        _ -> stoppable_fold(FoldKeysFun, Bucket, Key, Acc)
+                        _ -> FoldKeysFun(Bucket, Key, Acc)
                     end
             end;
         false ->
             fun(Bucket, Key, Acc) ->
-                    stoppable_fold(FoldKeysFun, Bucket, Key, Acc)
+                    FoldKeysFun(Bucket, Key, Acc)
             end
     end,
 
@@ -736,7 +786,7 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Term
     AccFun = case TermRe =:= undefined of
         true ->
             fun(Bucket, _Term, Val, Acc) ->
-                    stoppable_fold(FoldKeysFun, Bucket, Val, Acc)
+                    FoldKeysFun(Bucket, Val, Acc)
             end;
         false ->
             fun(Bucket, Term, Val, Acc) ->
@@ -744,7 +794,7 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Term
                         nomatch ->
                             Acc;
                         _ ->
-                            stoppable_fold(FoldKeysFun, Bucket, Val, Acc)
+                            FoldKeysFun(Bucket, Val, Acc)
                     end
             end
     end,
@@ -803,18 +853,6 @@ fold_keys_fun(FoldKeysFun, {index, Bucket, V1Q}) ->
     fold_keys_fun(FoldKeysFun, {index, Bucket, Q}).
 
 %% @private
-%% To stop a fold in progress when pagination limit is reached.
-stoppable_fold(Fun, Bucket, Item, Acc) ->
-    try
-        Fun(Bucket, Item, Acc)
-    catch
-        stop_fold ->
-            throw({break, Acc})
-    end.
-
-
-
-%% @private
 %% Return a function to fold over the objects on this backend
 fold_objects_fun(FoldObjectsFun, {index, FilterBucket, Q=?KV_INDEX_Q{}}) ->
     %% 2I query on $key or $bucket field with return_body
@@ -822,7 +860,7 @@ fold_objects_fun(FoldObjectsFun, {index, FilterBucket, Q=?KV_INDEX_Q{}}) ->
             ObjectKey = from_object_key(StorageKey),
             case riak_index:object_key_in_range(ObjectKey, FilterBucket, Q) of
                 {true, {Bucket, Key}} ->
-                    stoppable_fold(FoldObjectsFun, Bucket, {o, Key, Value}, Acc);
+                    FoldObjectsFun(Bucket, {o, Key, Value}, Acc);
                 {skip, _BK} ->
                     Acc;
                 _ ->

@@ -50,7 +50,8 @@
          request_hashtree_pid/1,
          request_hashtree_pid/2,
          reformat_object/2,
-         stop_fold/1]).
+         stop_fold/1,
+         get_modstate/1]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -95,8 +96,10 @@
 -ifdef(TEST).
 %% Use values so that test compile doesn't give 'unused vars' warning.
 -define(INDEX(A,B,C), _=element(1,{A,B,C}), ok).
+-define(INDEX_BIN(A,B,C,D,E), _=element(1,{A,B,C,D,E}), ok).
 -else.
 -define(INDEX(Obj, Reason, Partition), yz_kv:index(Obj, Reason, Partition)).
+-define(INDEX_BIN(Bucket, Key, Obj, Reason, Partition), yz_kv:index_binary(Bucket, Key, Obj, Reason, Partition)).
 -endif.
 
 -ifdef(TEST).
@@ -229,6 +232,12 @@ maybe_create_hashtrees(true, State=#state{idx=Index,
         _ ->
             State
     end.
+
+%% @doc Reveal the underlying module state for testing
+-spec(get_modstate(state()) -> {atom(), state()}).
+get_modstate(_State=#state{mod=Mod,
+                           modstate=ModState}) ->
+    {Mod, ModState}.
 
 %% API
 start_vnode(I) ->
@@ -468,10 +477,16 @@ init([Index]) ->
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
+            DoAsyncPut =  case app_helper:get_env(riak_kv, allow_async_put, true) of
+                true ->
+                    erlang:function_exported(Mod, async_put, 5);
+                _ ->
+                    false
+            end,
             State = #state{idx=Index,
                            async_folding=AsyncFolding,
                            mod=Mod,
-                           async_put = erlang:function_exported(Mod, async_put, 5),
+                           async_put = DoAsyncPut,
                            modstate=ModState,
                            vnodeid=VId,
                            counter=CounterState,
@@ -637,7 +652,12 @@ handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
             case HT of
                 undefined ->
                     State2 = maybe_create_hashtrees(State),
-                    {reply, {ok, State2#state.hashtrees}, State2};
+                    case State2#state.hashtrees of
+                        undefined ->
+                            {reply, {error, wrong_node}, State2};
+                        _ ->
+                            {reply, {ok, State2#state.hashtrees}, State2}
+                    end;
                 _ ->
                     {reply, {ok, HT}, State}
             end;
@@ -836,6 +856,7 @@ handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=
     case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
         {ok, UpModState} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
+            ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
             update_vnode_stats(vnode_put, Idx, StartTS),
             {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
@@ -903,7 +924,14 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                 FilterVNodes, Sender, State) ->
     %% v2 = ack-based backpressure
     handle_coverage_index(Bucket, ItemFilter, Query,
-                          FilterVNodes, Sender, State, fun result_fun_ack/2).
+                          FilterVNodes, Sender, State, fun result_fun_ack/2);
+handle_coverage(#riak_kv_sql_select_req_v1{bucket=Bucket,
+					   qry=Query},
+                FilterVNodes, Sender, State) ->
+    ItemFilter = none,
+    handle_range_scan(Bucket, ItemFilter, Query,
+		      FilterVNodes, Sender, State, fun result_fun_ack/2).
+
 
 -spec prepare_index_query(?KV_INDEX_Q{}) -> ?KV_INDEX_Q{}.
 prepare_index_query(#riak_kv_index_v3{term_regex=RE} = Q) when
@@ -942,11 +970,34 @@ handle_coverage_index(Bucket, ItemFilter, Query,
             %% @HACK
             %% Really this should be decided in the backend
             %% if there was a index_query fun.
-            FoldType = case riak_index:return_body(Query) of
-                           true -> fold_objects;
-                           false -> fold_keys
-                       end,
+            FoldType = riak_index:return_foldtype(Query),
             handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
+                                    FilterVNodes, Sender, Opts, State);
+        false ->
+            {reply, {error, {indexes_not_supported, Mod}}, State}
+    end.
+
+handle_range_scan(Bucket, ItemFilter, Query,
+                      FilterVNodes, Sender,
+                      State=#state{mod=Mod,
+                                   key_buf_size=DefaultBufSz,
+                                   modstate=ModState},
+                      ResultFunFun) ->
+    {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
+    IndexBackend = lists:member(indexes, Capabilities),
+    case IndexBackend of
+        true ->
+            %% Update stats...
+            ok = riak_kv_stat:update(vnode_index_read),
+
+            ResultFun = ResultFunFun(Bucket, Sender),
+            BufSize = buffer_size_for_index_query(Query, DefaultBufSz),
+            Opts = [{index, Bucket, prepare_index_query(Query)},
+                    {bucket, Bucket}, {buffer_size, BufSize}],
+            %% @HACK
+            %% Really this should be decided in the backend
+            %% if there was a index_query fun.
+            handle_coverage_range_scan(range_scan, Bucket, ItemFilter, ResultFun,
                                     FilterVNodes, Sender, Opts, State);
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
@@ -987,11 +1038,42 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
                    Opts0
            end,
     case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
-        {async, AsyncWork} ->
-            {async, {fold, AsyncWork, FinishFun}, Sender, State};
-        _ ->
-            {noreply, State}
-    end.
+	      {async, AsyncWork} ->
+		  {async, {fold, AsyncWork, FinishFun}, Sender, State};
+	      _ ->
+		  {noreply, State}
+	  end.
+
+handle_coverage_range_scan(FoldType, Bucket, ItemFilter, ResultFun,
+                        FilterVNodes, Sender, Opts0,
+                        State=#state{async_folding=AsyncFolding,
+                                     idx=Index,
+                                     key_buf_size=DefaultBufSz,
+                                     mod=Mod,
+                                     modstate=ModState}) ->
+    %% Construct the filter function
+    FilterVNode = proplists:get_value(Index, FilterVNodes),
+    Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
+    BufferMod = riak_kv_fold_buffer,
+    BufferSize = proplists:get_value(buffer_size, Opts0, DefaultBufSz),
+    Buffer = BufferMod:new(BufferSize, ResultFun),
+    Extras = fold_extras_keys(Index, Bucket),
+    FoldFun = fold_fun(range_scan, BufferMod, Filter, Extras),
+    FinishFun = finish_fun(BufferMod, Sender),
+    {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
+    AsyncBackend = lists:member(async_fold, Capabilities),
+    Opts = case AsyncFolding andalso AsyncBackend of
+               true ->
+                   [async_fold | Opts0];
+               false ->
+                   Opts0
+           end,
+    case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
+	      {async, AsyncWork} ->
+		  {async, {fold, AsyncWork, FinishFun}, Sender, State};
+	      _ ->
+		  {noreply, State}
+	  end.
 
 %% While in handoff, vnodes have the option of returning {forward,
 %% State}, or indeed, {forward, Req, State} which will cause riak_core
@@ -1041,8 +1123,16 @@ handle_handoff_command(Req=?KV_PUT_REQ{}, Sender, State) ->
     end;
 
 handle_handoff_command(?KV_W1C_PUT_REQ{}=Request, Sender, State) ->
-    {noreply, NewState} = handle_command(Request, Sender, State),
-    {forward, NewState};
+    NewState0 = case handle_command(Request, Sender, State) of
+        {noreply, NewState} ->
+            NewState;
+        {reply, Reply, NewState} ->
+            %% reply directly to the sender, as we will be forwarding the
+            %% the request on to the handoff node.
+            riak_core_vnode:reply(Sender, Reply),
+            NewState
+    end,
+    {forward, NewState0};
 
 %% Handle all unspecified cases locally without forwarding
 handle_handoff_command(Req, Sender, State) ->
@@ -1159,6 +1249,7 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
             State=#state{idx=Idx}) ->
     update_hashtree(Bucket, Key, EncodedVal, State),
+    ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
     riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
     update_vnode_stats(vnode_put, Idx, StartTS),
     {ok, State};
@@ -1393,7 +1484,7 @@ delete_hash(RObj) ->
 prepare_put(State=#state{vnodeid=VId,
                          mod=Mod,
                          modstate=ModState},
-            PutArgs=#putargs{bkey={Bucket, _Key},
+            PutArgs=#putargs{bkey={Bucket, _},
                              lww=LWW,
                              coord=Coord,
                              robj=RObj,
@@ -1773,6 +1864,10 @@ fold_fun(buckets, BufferMod, Filter, _Extra) ->
                 false ->
                     Buffer
             end
+    end;
+fold_fun(range_scan, BufferMod, none, _Extra) ->
+    fun(Range, Buffer) ->
+            BufferMod:add(Range, Buffer)
     end;
 fold_fun(keys, BufferMod, none, undefined) ->
     fun(_, Key, Buffer) ->

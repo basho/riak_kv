@@ -151,9 +151,6 @@ down([Node]) ->
             ok ->
                 io:format("Success: ~p marked as down~n", [Node]),
                 ok;
-            {error, legacy_mode} ->
-                io:format("Cluster is currently in legacy mode~n"),
-                ok;
             {error, is_up} ->
                 io:format("Failed: ~s is up~n", [Node]),
                 error;
@@ -176,10 +173,10 @@ down([Node]) ->
 status([]) ->
     try
         Stats = riak_kv_status:statistics(),
-	StatString = format_stats(Stats,
+        StatString = format_stats(Stats,
                     ["-------------------------------------------\n",
-		     io_lib:format("1-minute stats for ~p~n",[node()])]),
-	io:format("~s\n", [StatString])
+                     io_lib:format("1-minute stats for ~p~n",[node()])]),
+        io:format("~s\n", [StatString])
     catch
         Exception:Reason ->
             lager:error("Status failed ~p:~p", [Exception,
@@ -499,24 +496,47 @@ bucket_type_print_activate_result(Type, {error, undefined}, _IsFirst) ->
 bucket_type_print_activate_result(Type, {error, not_ready}, _IsFirst) ->
     bucket_type_print_status(Type, created).
 
-bucket_type_create([TypeStr, ""]) ->
-    Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
-    EmptyProps = {struct, [{<<"props">>, {struct, []}}]},
-    bucket_type_create(Type, EmptyProps);
 bucket_type_create([TypeStr, PropsStr]) ->
     Type = unicode:characters_to_binary(TypeStr, utf8, utf8),
-    bucket_type_create(Type, catch mochijson2:decode(PropsStr)).
+    CreateTypeFn =
+        fun(Props) ->
+            Result = riak_core_bucket_type:create(Type, Props),
+            bucket_type_print_create_result(Type, Result)
+        end,
+    bucket_type_create(CreateTypeFn, Type, decode_json_props(PropsStr)).
 
-bucket_type_create(Type, {struct, Fields}) ->
-    case proplists:get_value(<<"props">>, Fields) of
-        {struct, Props} ->
-            ErlProps = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props],
-            bucket_type_print_create_result(Type, riak_core_bucket_type:create(Type, ErlProps));
+%% Attempt to decode the json to string or provide defaults if empty.
+%% mochijson2 has no types exported so returning any.
+-spec decode_json_props(JsonProps::string()) -> any().
+decode_json_props("") ->
+    {struct, [{<<"props">>, {struct, []}}]};
+decode_json_props(JsonProps) ->
+    catch mochijson2:decode(JsonProps).
+
+-spec bucket_type_create(
+        CreateTypeFn :: fun(([proplists:property()]) -> ok),
+        Type :: binary(),
+        JSON :: any()) -> ok | error.
+bucket_type_create(CreateTypeFn, Type, {struct, Fields}) ->
+    case Fields of
+        [{<<"props", _/binary>>, {struct, Props1}}] ->
+            case catch riak_kv_wm_utils:maybe_parse_table_def(Type, Props1) of
+                {ok, Props2} ->
+                    Props3 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props2],
+                    CreateTypeFn(Props3);
+                {error, ErrorMessage} when is_list(ErrorMessage) ->
+                    io:format(ErrorMessage),
+                    error;
+                {error, Error} ->
+                    io:format("~p~n", [Error]),
+                    error
+
+            end;
         _ ->
             io:format("Cannot create bucket type ~ts: no props field found in json~n", [Type]),
             error
     end;
-bucket_type_create(Type, _) ->
+bucket_type_create(_, Type, _) ->
     io:format("Cannot create bucket type ~ts: invalid json~n", [Type]),
     error.
 
@@ -846,3 +866,103 @@ bucket_error_xlate({Property, Error}) ->
     [atom_to_list(Property), ": ", io_lib:format("~p", [Error])];
 bucket_error_xlate(X) ->
     io_lib:format("~p", [X]).
+
+%%%
+%%% Unit tests
+%%%
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+json_props(Props) ->
+    lists:flatten(mochijson2:encode([{props, Props}])).
+
+bucket_type_create_no_timeseries_test() ->
+    Ref = make_ref(),
+    JSON = json_props([{bucket_type, my_type}]),
+    bucket_type_create(
+        fun(Props) -> put(Ref, Props) end,
+        <<"my_type">>,
+        mochijson2:decode(JSON)
+    ),
+    ?assertEqual(
+        [{bucket_type, <<"my_type">>}],
+        get(Ref)
+    ).
+
+bucket_type_create_with_timeseries_table_test() ->
+    Ref = make_ref(),
+    TableDef =
+        <<"CREATE TABLE my_type ",
+          "(time TIMESTAMP NOT NULL, ",
+	  "user varchar not null, ",
+          " PRIMARY KEY ((quantum(time, 15, m)), time, user))">>,
+    JSON = json_props([{bucket_type, my_type}, 
+                       {table_def, TableDef}]),
+    bucket_type_create(
+        fun(Props) -> put(Ref, Props) end,
+        <<"my_type">>,
+        mochijson2:decode(JSON)
+    ),
+    ?assertMatch(
+        [{ddl, _}, {bucket_type, <<"my_type">>} | _],
+        get(Ref)
+    ).
+
+bucket_type_create_with_timeseries_table_is_write_once_test() ->
+    Ref = make_ref(),
+    TableDef =
+        <<"CREATE TABLE my_type ",
+          "(time TIMESTAMP NOT NULL, ",
+          " PRIMARY KEY (time))">>,
+    JSON = json_props([{bucket_type, my_type}, 
+                       {table_def, TableDef}]),
+    bucket_type_create(
+        fun(Props) -> put(Ref, Props) end,
+        <<"my_type">>,
+        mochijson2:decode(JSON)
+    ),
+    ?assertEqual(
+        {write_once, true},
+        lists:keyfind(write_once, 1, get(Ref))
+    ).
+
+bucket_type_and_table_name_must_match_test() ->
+    Ref = make_ref(),
+    TableDef =
+        <<"CREATE TABLE times ",
+          "(time TIMESTAMP NOT NULL, ",
+	  "user varchar not null, ",
+          " PRIMARY KEY (time, user))">>,
+    JSON = json_props([{bucket_type, my_type}, 
+                       {table_def, TableDef}]),
+    % if this error changes slightly it is not so important, as long as
+    % the bucket type is not allowed to be created.
+    ?assertEqual(
+        error,
+        bucket_type_create(
+            fun(Props) -> put(Ref, Props) end,
+            <<"my_type">>,
+            mochijson2:decode(JSON)
+        )
+    ).
+
+bucket_type_create_with_timeseries_table_error_when_write_once_set_to_false_test() ->
+    Ref = make_ref(),
+    TableDef =
+        <<"CREATE TABLE my_type ",
+          "(time TIMESTAMP NOT NULL, ",
+          " PRIMARY KEY (time))">>,
+    JSON = json_props([{bucket_type, my_type}, 
+                       {table_def, TableDef},
+                       {write_once, false}]),
+    ?assertEqual(
+        error,
+        bucket_type_create(
+            fun(Props) -> put(Ref, Props) end,
+            <<"my_type">>,
+            mochijson2:decode(JSON)
+        )
+    ).
+
+-endif.

@@ -649,3 +649,31 @@ end
   {datatype, bytesize},
   hidden
 ]}.
+
+%% @doc Number of concurrent queries to run per node
+{mapping, "riak_kv.query.concurrent_queries", "riak_kv.concurrent_queries", [
+  {default, 3},
+  {datatype, integer},
+  {validators, ["validate_concurrent_queries"]}
+]}.
+
+{validator,
+  "validate_concurrent_queries",
+  "must be an integer between 1 and 10",
+  fun(Value) when is_integer(Value) andalso Value > 0 andalso Value < 11 -> true;
+     (_) -> false
+  end}.
+
+%% @doc maximum query queue length
+{mapping, "riak_kv.query.maximum_query_queue_length", "riak_kv.query_queue_length", [
+  {default, 15},
+  {datatype, integer},
+  {validators, ["validate_concurrent_queries"]}
+]}.
+
+{validator,
+  "validate_concurrent_queries",
+  "must be an integer 0 or greater",
+  fun(Value) when is_integer(Value) andalso Value >= 0 -> true;
+     (_) -> false
+  end}.
