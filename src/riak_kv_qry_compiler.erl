@@ -83,7 +83,7 @@ expand_where(Where, #key_v1{ast = PAST}) ->
     if
 	NoSubQueries =:= 1 ->
 	    [Where];
-	1 < NoSubQueries andalso NoSubQueries < ?MAXSUBQ ->
+	1 < NoSubQueries andalso NoSubQueries =< ?MAXSUBQ ->
 	    _NewWs = make_wheres(Where, QField, Min, Max, Boundaries);
 	?MAXSUBQ < NoSubQueries ->
 	    {error, {too_many_subqueries, NoSubQueries}}
@@ -172,7 +172,7 @@ check_if_timeseries(#ddl_v1{bucket = B, partition_key = PK, local_key = LK},
 	       Errors ->
 		   {error, Errors}
 	   end
-    catch 
+    catch
         error:{incomplete_where_clause, _} = E ->
             {error, E};
         error:Reason ->
