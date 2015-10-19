@@ -953,7 +953,8 @@ new_v1(Vclock, Siblings) ->
     <<?MAGIC:8/integer, ?V1_VERS:8/integer, VclockLen:32/integer, VclockBin/binary, SibCount:32/integer, SibsBin/binary>>.
 
 bin_content(#r_content{metadata=Meta0, value=Val}) ->
-    {ValBin, Meta} = encode_maybe_binary(Val, Meta0),
+    {TypeTag, Meta} = determine_binary_type(Val, Meta0),
+    ValBin = encode_maybe_binary(Val, TypeTag),
     ValLen = byte_size(ValBin),
     MetaBin = meta_bin(Meta),
     MetaLen = byte_size(MetaBin),
@@ -992,26 +993,30 @@ fold_meta_to_bin(?MD_DELETED, "true", Acc) ->
 fold_meta_to_bin(?MD_DELETED, _, {{Vt,_Del,Lm},RestBin}) ->
     {{Vt, <<0>>, Lm}, RestBin};
 fold_meta_to_bin(Key, Value, {{_Vt,_Del,_Lm}=Elems,RestBin}) ->
-    {ValueBin, _NewMeta} = encode_maybe_binary(Value, no_meta),
+    ValueBin = encode_maybe_binary(Value),
     ValueLen = byte_size(ValueBin),
-    {KeyBin, _NewMeta} = encode_maybe_binary(Key, no_meta),
+    KeyBin = encode_maybe_binary(Key),
     KeyLen = byte_size(KeyBin),
     MetaBin = <<KeyLen:32/integer, KeyBin/binary, ValueLen:32/integer, ValueBin/binary>>,
     {Elems, <<RestBin/binary, MetaBin/binary>>}.
 
-encode_maybe_binary(Value, no_meta) when is_binary(Value) ->
-    {<<1, Value/binary>>, no_meta};
-encode_maybe_binary(Value, Meta) when is_binary(Value) ->
-    {TypeTag, NewMeta} = determine_binary_type(Meta),
-    {<<TypeTag, Value/binary>>, NewMeta};
-encode_maybe_binary(Value, Meta) ->
-    {<<0, (term_to_binary(Value))/binary>>, Meta}.
+encode_maybe_binary(Value) when is_binary(Value) ->
+    encode_maybe_binary(Value, 1);
+encode_maybe_binary(Value) when not is_binary(Value) ->
+    encode_maybe_binary(Value, 0).
+encode_maybe_binary(Value, TypeTag) when is_binary(Value) ->
+    <<TypeTag, Value/binary>>;
+encode_maybe_binary(Value, 0) when not is_binary(Value) ->
+    <<0, (term_to_binary(Value))/binary>>.
 
-determine_binary_type(Meta) ->
+determine_binary_type(Val, Meta) when is_binary(Val) ->
     case dict:find(?MD_VAL_ENCODING, Meta) of
         error -> {1, Meta};
-        {ok, Val} -> {Val, dict:erase(?MD_VAL_ENCODING, Meta)}
-    end.
+        {ok, TypeTag} -> {TypeTag, dict:erase(?MD_VAL_ENCODING, Meta)}
+    end;
+determine_binary_type(_Val, Meta) ->
+    {0, Meta}.
+
 decode_maybe_binary(<<1, Bin/binary>>) ->
     Bin;
 decode_maybe_binary(<<0, Bin/binary>>) ->
