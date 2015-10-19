@@ -109,10 +109,10 @@ put(RObj, Options) ->
             RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
             RObj3 = riak_object:update_last_modified(RObj2),
             RObj4 = riak_object:apply_updates(RObj3),
-	    MD  = riak_object:get_metadata(RObj4),
-	    MD1 = dict:erase(?MD_TS_LOCAL_KEY, MD),
+            MD  = riak_object:get_metadata(RObj4),
+            MD1 = dict:erase(?MD_TS_LOCAL_KEY, MD),
             RObj5 = riak_object:update_metadata(RObj4, MD1),
-	    EncodedVal = EncodeFn(RObj5),
+            EncodedVal = EncodeFn(RObj5),
 
             gen_server:cast(
                 Worker,
