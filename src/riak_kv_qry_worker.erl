@@ -162,7 +162,7 @@ handle_info({{SubQId, QId}, {results, Chunk}},
                    lager:debug("Got chunk on QId ~p (~p); SubQQ: ~p", [QId, SubQId, SubQs]),
                    NSubQ = lists:delete(SubQId, SubQs),
                    State#state{status   = accumulating_chunks,
-                               result   = [{SubQId, Decoded} | IndexedChunks],
+                               result   = lists:append(IndexedChunks, [{SubQId, Decoded}]),
                                sub_qrys = NSubQ};
                false ->
                    %% discard;
