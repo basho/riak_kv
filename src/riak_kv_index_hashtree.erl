@@ -28,6 +28,7 @@
 -behaviour(gen_server).
 
 -include_lib("riak_kv_vnode.hrl").
+-include("riak_kv_sweeper.hrl").
 
 %% API
 -export([start/3, start_link/3]).
@@ -58,7 +59,10 @@
          expire/1,
          destroy/1,
          index_2i_n/0,
-         get_trees/1]).
+         get_trees/1,
+         participate_in_sweep/2,
+         successfull_sweep/1,
+         failed_sweep/1]).
 
 -export([poke/1,
          get_build_time/1]).
@@ -87,10 +91,6 @@
 %% Magic Tree id for 2i data.
 -define(INDEX_2I_N, {0, 0}).
 
-%% Throttle used when folding over K/V data to build AAE trees: {Limit, Wait}.
-%% After traversing Limit bytes, the fold will sleep for Wait milliseconds.
-%% Default: 1 MB limit / 100 ms wait
--define(DEFAULT_BUILD_THROTTLE, {1000000, 100}).
 
 %%%===================================================================
 %%% API
@@ -221,6 +221,34 @@ clear(Tree) ->
 expire(Tree) ->
     gen_server:call(Tree, expire, infinity).
 
+participate_in_sweep(Index, Pid) ->
+    lookup_tree_and_call(Index, {participate_in_sweep, Pid}).
+
+successfull_sweep(Index) ->
+    lager:info("successfull_sweep ~p", [Index]),
+    lookup_tree_and_cast(Index, build_finished).
+
+failed_sweep(Index) ->
+    lager:info("failed_sweep ~p", [Index]),
+    lookup_tree_and_cast(Index, build_failed).
+
+lookup_tree_and_call(Index, Msg) ->
+    case riak_kv_entropy_manager:hashtree_pid(Index) of
+        {ok, Tree} ->
+            gen_server:call(Tree, Msg);
+        _ ->
+            false
+    end.
+
+lookup_tree_and_cast(Index, Msg) ->
+    case riak_kv_entropy_manager:hashtree_pid(Index) of
+        {ok, Tree} ->
+            gen_server:cast(Tree, Msg);
+        _ ->
+            false
+    end.
+
+
 %% @doc Estimate total number of keys in index_hashtree
 estimate_keys(Tree) ->
     gen_server:call(Tree, estimate_keys, infinity).
@@ -334,6 +362,16 @@ handle_call(expire, _From, State) ->
     State2 = State#state{expired=true},
     lager:info("Manually expired tree: ~p", [State#state.index]),
     {reply, ok, State2};
+
+handle_call({participate_in_sweep, Pid}, _From, #state{lock=undefined, built=true, expired=true} = State) ->
+    lager:info("participate_in_sweep true ~p ~p ~p", [State#state.lock, State#state.built, State#state.expired]),
+    do_participate_in_sweep(Pid, State);
+handle_call({participate_in_sweep, Pid}, _From, #state{built=sweep} = State) ->
+    lager:info("participate_in_sweep true ~p ~p ~p", [State#state.lock, State#state.built, State#state.expired]),
+    do_participate_in_sweep(Pid, State);
+handle_call({participate_in_sweep, _Pid}, _From, State) ->
+    lager:info("participate_in_sweep false ~p ~p ~p", [State#state.lock, State#state.built, State#state.expired]),
+    {reply, false, State};
 
 handle_call(estimate_keys, _From,  State=#state{trees=Trees}) ->
     EstimateNrKeys =
@@ -471,6 +509,8 @@ hash_index_data(IndexData) when is_list(IndexData) ->
     Bin = term_to_binary(lists:usort(IndexData)),
     riak_core_util:sha(Bin).
 
+
+
 %% Fold over a given vnode's data, inserting each object into the appropriate
 %% hashtree. Use the `if_missing' option to only insert the key/hash pair if
 %% the key does not already exist in the tree. This allows real-time updates
@@ -479,32 +519,16 @@ hash_index_data(IndexData) when is_list(IndexData) ->
 %% before the fold reaches the now out-of-date version of the object, the old
 %% key/hash pair will be ignored.
 %% If `HasIndexTree` is true, also update the index spec tree.
--spec fold_keys(index(), pid(), boolean()) -> ok.
-fold_keys(Partition, Tree, HasIndexTree) ->
-    FoldFun = fold_fun(Tree, HasIndexTree),
-    Req = riak_core_util:make_fold_req(FoldFun,
-                                       0, false, 
-                                       [aae_reconstruction,
-                                        {iterator_refresh, true}]),
-    riak_core_vnode_master:sync_command({Partition, node()},
-                                        Req,
-                                        riak_kv_vnode_master, infinity),
-    ok.
 
-get_build_throttle() ->
-    app_helper:get_env(riak_kv,
-                       anti_entropy_build_throttle,
-                       ?DEFAULT_BUILD_THROTTLE).
-
-maybe_throttle_build(RObjBin, Limit, Wait, Acc) ->
-    ObjSize = byte_size(RObjBin),
-    Acc2 = Acc + ObjSize,
-    if (Limit =/= 0) andalso (Acc2 > Limit) ->
-            lager:debug("Throttling AAE build for ~b ms", [Wait]),
-            timer:sleep(Wait),
-            0;
-       true ->
-            Acc2
+do_participate_in_sweep(Pid, #state{index = Index, trees = Trees} = State) ->
+    Locked = get_all_locks(build, Index, Pid),
+    case Locked of
+        true ->
+            State2 = clear_tree(State),
+            FoldFun = fold_fun(self(), has_index_tree(Trees)),
+            {reply, {true, FoldFun}, State2#state{built=Pid}};
+        _ ->
+            {reply, false, State}
     end.
 
 %% @doc Generate the folding function
@@ -512,26 +536,23 @@ maybe_throttle_build(RObjBin, Limit, Wait, Acc) ->
 -spec fold_fun(pid(), boolean()) -> fun().
 fold_fun(Tree, _HasIndexTree = false) ->
     ObjectFoldFun = object_fold_fun(Tree),
-    {Limit, Wait} = get_build_throttle(),
-    fun(BKey, RObj, Acc) ->
+    fun({BKey, RObj}) ->
             BinBKey = term_to_binary(BKey),
             ObjectFoldFun(BKey, RObj, BinBKey),
-            Acc2 = maybe_throttle_build(RObj, Limit, Wait, Acc),
-            Acc2
+            {BKey, RObj}
     end;
 fold_fun(Tree, _HasIndexTree = true) ->
     %% Index AAE backend, so hash the indexes
     ObjectFoldFun = object_fold_fun(Tree),
     IndexFoldFun = index_fold_fun(Tree),
-    {Limit, Wait} = get_build_throttle(),
-    fun(BKey = {Bucket, Key}, BinObj, Acc) ->
+    fun({BKey = {Bucket, Key}, BinObj}) ->
             RObj = riak_object:from_binary(Bucket, Key, BinObj),
             BinBKey = term_to_binary(BKey),
-            ObjectFoldFun(BKey, RObj, BinBKey),
             IndexFoldFun(RObj, BinBKey),
-            Acc2 = maybe_throttle_build(BinObj, Limit, Wait, Acc),
-            Acc2
+            ObjectFoldFun(BKey, RObj, BinBKey),
+            {BKey, BinObj}
     end.
+
 
 -spec object_fold_fun(pid()) -> fun().
 object_fold_fun(Tree) ->
@@ -816,7 +837,7 @@ do_compare(Id, Remote, AccFun, Acc, From, State) ->
 
 -spec do_poke(state()) -> state().
 do_poke(State) ->
-    State1 = maybe_rebuild(maybe_expire(State)),
+    State1 = maybe_expire(State),
     State2 = maybe_build(State1),
     State2.
 
@@ -854,10 +875,10 @@ destroy_trees(State) ->
 -spec maybe_build(state()) -> state().
 maybe_build(State=#state{built=false}) ->
     Self = self(),
-    Pid = spawn_link(fun() ->
-                             build_or_rehash(Self, State)
-                     end),
-    State#state{built=Pid};
+    spawn_link(fun() ->
+                       build_or_rehash(Self, State)
+               end),
+    State#state{built=sweep};
 maybe_build(State) ->
     %% Already built or build in progress
     State.
@@ -867,52 +888,22 @@ maybe_build(State) ->
 %% current on-disk segments.
 -spec build_or_rehash(pid(), state()) -> ok.
 build_or_rehash(Self, State=#state{index=Index}) ->
-    Type = case load_built(State) of
-               false -> build;
-               true  -> rehash
-           end,
-    Locked = get_all_locks(Type, Index, self()),
-    build_or_rehash(Self, Locked, Type, State).
-
-build_or_rehash(Self, Locked, Type, #state{index=Index, trees=Trees}) ->
-    case {Locked, Type} of
-        {true, build} ->
-            lager:info("Starting AAE tree build: ~p", [Index]),
-            fold_keys(Index, Self, has_index_tree(Trees)),
-            lager:info("Finished AAE tree build: ~p", [Index]), 
-            gen_server:cast(Self, build_finished);
-        {true, rehash} ->
-            lager:debug("Starting AAE tree rehash: ~p", [Index]),
-            _ = [hashtree:rehash_tree(T) || {_,T} <- Trees],
-            lager:debug("Finished AAE tree rehash: ~p", [Index]),
-            gen_server:cast(Self, build_finished);
-        _ ->
-            gen_server:cast(Self, build_failed)
+    case load_built(State) of
+        false ->
+            riak_kv_sweeper:sweep(Index);
+        true  ->
+            Locked = get_all_locks(rehash, Index, self()),
+            rehash(Self, Locked, State)
     end.
 
--spec maybe_rebuild(state()) -> state().
-maybe_rebuild(State=#state{lock=undefined, built=true, expired=true, index=Index}) ->
-    Self = self(),
-    Pid = spawn_link(fun() ->
-                             receive
-                                 {lock, Locked, State2} ->
-                                     build_or_rehash(Self, Locked, build, State2);
-                                 stop ->
-                                     ok
-                             end
-                     end),
-    Locked = get_all_locks(build, Index, Pid),
-    case Locked of
-        true ->
-            State2 = clear_tree(State),
-            Pid ! {lock, Locked, State2},
-            State2#state{built=Pid};
-        _ ->
-            Pid ! stop,
-            State
-    end;
-maybe_rebuild(State) ->
-    State.
+rehash(Self, true, #state{index=Index, trees=Trees}) ->
+    lager:debug("Starting AAE tree rehash: ~p", [Index]),
+    _ = [hashtree:rehash_tree(T) || {_,T} <- Trees],
+    lager:debug("Finished AAE tree rehash: ~p", [Index]),
+    gen_server:cast(Self, build_finished);
+rehash(Self, _Lock, _State) ->
+    gen_server:cast(Self, build_failed).
+
 
 %% Check if the trees contain the magic index tree
 -spec has_index_tree(orddict()) -> boolean().

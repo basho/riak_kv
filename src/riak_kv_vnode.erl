@@ -38,6 +38,8 @@
          list_keys/4,
          fold/3,
          fold/4,
+         sweep/2,
+         sweep_del/3,
          get_vclocks/2,
          vnode_status/1,
          ack_keys/1,
@@ -84,6 +86,7 @@
 -include_lib("riak_kv_map_phase.hrl").
 -include_lib("riak_core_pb.hrl").
 -include("riak_kv_types.hrl").
+-include("riak_kv_sweeper.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -178,6 +181,9 @@
 %% If it takes more than 20 seconds to fsync the vnode counter to disk,
 %% die
 -define(DEFAULT_CNTR_LEASE_TO, 20000). % 20 seconds!
+%%
+%% Number of crashes before a participant fun gets removed from a sweep 
+-define(MAX_SWEEP_CRASHES, 10).
 
 
 %% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
@@ -266,6 +272,11 @@ del(Preflist, BKey, ReqId) ->
     riak_core_vnode_master:command(Preflist,
                                    ?KV_DELETE_REQ{bkey=sanitize_bkey(BKey),
                                                   req_id=ReqId},
+                                   riak_kv_vnode_master).
+
+sweep_del(Preflist, BKey, RObj) ->
+    riak_core_vnode_master:command(Preflist,
+                                   {sweep_delete, sanitize_bkey(BKey), RObj},
                                    riak_kv_vnode_master).
 
 %% Issue a put for the object to the preflist, expecting a reply
@@ -359,6 +370,11 @@ fold(Preflist, Fun, Acc0, Options) ->
     riak_core_vnode_master:sync_spawn_command(Preflist,
                                               Req,
                                               riak_kv_vnode_master).
+
+sweep(Preflist, Participants) ->
+    riak_core_vnode_master:sync_command(Preflist,
+                                        {sweep, Participants},
+                                        riak_kv_vnode_master).
 
 get_vclocks(Preflist, BKeyList) ->
     riak_core_vnode_master:sync_spawn_command(Preflist,
@@ -622,6 +638,9 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
     end;
 handle_command(?KV_DELETE_REQ{bkey=BKey}, _Sender, State) ->
     do_delete(BKey, State);
+handle_command({sweep_delete, BKey, RObj}, _Sender, State) ->
+    State1 = do_backend_delete(BKey, RObj, State),
+    {reply, ok, State1};
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
     {reply, do_get_vclocks(BKeys, State), State};
 handle_command(#riak_core_fold_req_v1{} = ReqV1,
@@ -632,15 +651,10 @@ handle_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0,
                          forwardable=_Forwardable, opts=Opts}, Sender, State) ->
     %% The riak_core layer takes care of forwarding/not forwarding, so
     %% we ignore forwardable here.
-    %%
-    %% The function in riak_core used for object folding expects the
-    %% bucket and key pair to be passed as the first parameter, but in
-    %% riak_kv the bucket and key have been separated. This function
-    %% wrapper is to address this mismatch.
-    FoldWrapper = fun(Bucket, Key, Value, Acc) ->
-                          FoldFun({Bucket, Key}, Value, Acc)
-                  end,
-    do_fold(FoldWrapper, Acc0, Sender, Opts, State);
+    do_fold(FoldFun, Acc0, Sender, Opts, State);
+
+handle_command({sweep, Participants}, Sender, State) ->
+    do_sweep(Participants, Sender, State);
 
 %% entropy exchange commands
 handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
@@ -1401,6 +1415,7 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
     %% Calculate the index specs to remove...
     %% JDM: This should just be a tombstone by this point, but better
     %% safe than sorry.
+    lager:info("do_backend_delete ~p ~p ~p ~p", [Idx, BKey, RObj, ModState]),
     IndexSpecs = riak_object:diff_index_specs(undefined, RObj),
 
     %% Do the delete...
@@ -1412,7 +1427,8 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
             maybe_cache_evict(BKey, State),
             update_index_delete_stats(IndexSpecs),
             State#state{modstate = UpdModState};
-        {error, _Reason, UpdModState} ->
+        {error, Reason, UpdModState} ->
+            lager:info("Delete fail ~p", [Reason]),
             State#state{modstate = UpdModState}
     end.
 
@@ -1951,12 +1967,9 @@ do_delete(BKey, State) ->
     end.
 
 %% @private
-do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
-                                                 mod=Mod,
-                                                 modstate=ModState}) ->
-    {ok, Capabilities} = Mod:capabilities(ModState),
-    Opts0 = maybe_enable_async_fold(AsyncFolding, Capabilities, ReqOpts),
-    Opts = maybe_enable_iterator_refresh(Capabilities, Opts0),
+do_fold(FoldFun, Acc0, Sender, ReqOpts, State=#state{mod=Mod, modstate=ModState}) ->
+    Fun = convert_fun(FoldFun),
+    Opts = get_fold_opts(ReqOpts, State),
     case Mod:fold_objects(Fun, Acc0, Opts, ModState) of
         {ok, Acc} ->
             {reply, Acc, State};
@@ -1969,6 +1982,101 @@ do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
         ER ->
             {reply, ER, State}
     end.
+
+%% @private
+get_fold_opts(ReqOpts, #state{async_folding=AsyncFolding,
+                           mod=Mod,
+                           modstate=ModState}) ->
+    {ok, Capabilities} = Mod:capabilities(ModState),
+    Opts0 = maybe_enable_async_fold(AsyncFolding, Capabilities, ReqOpts),
+    maybe_enable_iterator_refresh(Capabilities, Opts0).
+
+%% The function in riak_core used for object folding expects the
+%% bucket and key pair to be passed as the first parameter, but in
+%% riak_kv the bucket and key have been separated. This function
+%% wrapper is to address this mismatch.
+convert_fun(FoldFun) ->
+    fun(Bucket, Key, Value, Acc) ->
+            FoldFun({Bucket, Key}, Value, Acc)
+    end.
+
+
+do_sweep([], _Sender, State=#state{idx=Index}) ->
+    lager:info("No participants in sweep ~p", [Index]),
+    {reply, no_participant, State};
+
+do_sweep(ActiveParticipants, Sender, State=#state{idx=Index, mod=Mod, modstate=ModState}) ->
+    CompleteFoldReq = make_complete_fold_req(),
+    InitialAcc = make_initial_acc(ActiveParticipants),
+
+    FoldFun = convert_fun(CompleteFoldReq),
+    Opts = get_fold_opts([sweep_fold, {iterator_refresh, true}], State),
+    case Mod:fold_objects(FoldFun, InitialAcc, Opts, ModState) of
+        {ok, Acc} ->
+            inform_participants(Acc, Index),
+            {reply, Acc, State};
+        {async, Work} ->
+            FinishFun =
+                fun(Acc) ->
+                        inform_participants(Acc, Index),
+                        lager:info("acc_succ ~p", [Acc]),
+                        riak_core_vnode:reply(Sender, Acc)
+                end,
+            {async, {fold, Work, FinishFun}, Sender, State};
+        ER ->
+            failed_sweep(ActiveParticipants, Index),
+            {reply, ER, State}
+    end.
+
+inform_participants({Succ, Failed}, Index) ->
+    successfull_sweep(Succ, Index),
+    failed_sweep(Failed, Index).
+
+successfull_sweep(Participants, Index) ->
+    [Module:successfull_sweep(Index) ||
+       {Module, _Fun, _Errors}  <- Participants].
+failed_sweep(Participants, Index) ->
+    [Module:failed_sweep(Index) ||
+       {Module, _Fun, _Errors}  <- Participants].
+
+%% @private
+make_complete_fold_req() ->
+    fun(BKey, RObjBin, Acc) ->
+            maybe_throttle_sweep(),
+            fold_funs({BKey, RObjBin}, Acc)
+    end.
+
+fold_funs({BKey, RObjBin}, {NonFailed, Failed}) ->
+    fold_funs({BKey, RObjBin}, NonFailed, {_Succ = [] , Failed}).
+
+fold_funs({_BKey, _RObjBin}, [],  {Succ, Failed}) ->
+    {lists:reverse(Succ), Failed};
+
+fold_funs({deleted, _RObjBin}, _, {Succ, Failed}) ->
+    {lists:reverse(Succ), Failed};
+
+fold_funs(KeyObj, [{Mod, Fun, ?MAX_SWEEP_CRASHES} | Rest], {Succ, Failed}) ->
+    lager:error("Sweeper fun ~p crashed to many times.", [Mod]),
+    fold_funs(KeyObj, Rest, {Succ, [{Mod, Fun, ?MAX_SWEEP_CRASHES} | Failed]});
+
+fold_funs({BKey, RObjBin}, [{Mod, Fun, Errors} | Rest], {Succ, Fail}) ->
+    try Fun({BKey, RObjBin}) of
+        Result ->
+            fold_funs(Result, Rest, {[{Mod, Fun, Errors} | Succ], Fail})
+    catch C:T ->
+            lager:error("Sweeper fun crashed ~p ~p ~p Key: ~p", [Mod, C, T, BKey]),
+            fold_funs({BKey, RObjBin}, Rest, {[{Mod, Fun, Errors + 1} | Succ], Fail})
+    end.
+
+maybe_throttle_sweep() ->
+    ok.
+
+make_initial_acc(ActiveParticipants) ->
+    %% Add initial error count
+    NonFailed = [{AP#sweep_participant.module, AP#sweep_participant.sweep_fun, _Errors = 0} ||
+     %% Sort list depening on fun typ.
+     AP <- lists:keysort(#sweep_participant.fun_type, ActiveParticipants)],
+    {NonFailed, _Fail = []}.
 
 %% @private
 maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->

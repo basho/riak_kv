@@ -26,6 +26,8 @@
 
 -behaviour(supervisor).
 
+-include("riak_kv_sweeper.hrl").
+
 -export([start_delete/2]).
 -export([start_link/0]).
 -export([init/1]).
@@ -41,6 +43,12 @@ start_link() ->
 %% @spec init([]) -> SupervisorTree
 %% @doc supervisor callback.
 init([]) ->
+    riak_kv_sweeper:add_sweep_participant(
+      #sweep_participant{ description = " Reap tombstones",
+                          module = riak_kv_delete,
+                          fun_type = ?DELETE_FUN,
+                          run_interval = 24 * 60 * 60 %% Once per day
+                        }),
     DeleteSpec = {undefined,
                {riak_kv_delete, start_link, []},
                temporary, 5000, worker, [riak_kv_delete]},
