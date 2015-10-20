@@ -99,11 +99,16 @@ init([]) ->
                     {riak_kv_ensembles, start_link, []},
                     permanent, 30000, worker, [riak_kv_ensembles]},
 
+    Sweeper  = {riak_kv_sweeper,
+                {riak_kv_sweeper, start_link, []},
+                permanent, 30000, worker, [riak_kv_sweeper]},
+
     % Figure out which processes we should run...
     HasStorageBackend = (app_helper:get_env(riak_kv, storage_backend) /= undefined),
 
     % Build the process list...
     Processes = lists:flatten([
+        Sweeper,
         ?IF(HasStorageBackend, VMaster, []),
         GetFsmSup,
         PutFsmSup,

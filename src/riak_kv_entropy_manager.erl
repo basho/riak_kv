@@ -21,6 +21,8 @@
 -module(riak_kv_entropy_manager).
 -behaviour(gen_server).
 
+-include("riak_kv_sweeper.hrl").
+
 %% API
 -export([start_link/0,
          manual_exchange/1,
@@ -33,6 +35,7 @@
          cancel_exchanges/0,
          get_lock/1,
          get_lock/2,
+         hashtree_pid/1,
          requeue_poke/1,
          start_exchange_remote/3,
          exchange_status/4]).
@@ -99,6 +102,9 @@ get_lock(Type) ->
 -spec get_lock(any(), pid()) -> ok | max_concurrency.
 get_lock(Type, Pid) ->
     gen_server:call(?MODULE, {get_lock, Type, Pid}, infinity).
+
+hashtree_pid(Index) ->
+    gen_server:call(?MODULE, {hashtree_pid, Index}).
 
 %% @doc Acquire the necessary locks for an entropy exchange with the specified
 %%      remote vnode. The request is sent to the remote entropy manager which
@@ -238,6 +244,15 @@ init([]) ->
                    exchange_queue=[]},
     State2 = reset_build_tokens(State),
     schedule_reset_build_tokens(),
+    RunInterval =
+        app_helper:get_env(riak_kv, aae_sweep_interval, 7 * 24 * 60 * 60), %% Once per week
+    riak_kv_sweeper:add_sweep_participant(
+      #sweep_participant{
+                         description = "AAE",
+                         module = riak_kv_index_hashtree,
+                         fun_type = ?OBSERV_FUN,
+                         run_interval = RunInterval
+                        }),
     {ok, State2}.
 
 handle_call({set_mode, Mode}, _From, State=#state{mode=CurrentMode}) ->
@@ -296,6 +311,17 @@ handle_call(cancel_exchanges, _From, State=#state{exchanges=Exchanges}) ->
                    Index
                end || {Index, _Ref, Pid} <- Exchanges],
     {reply, Indices, State};
+handle_call({hashtree_pid, Index}, _From, State=#state{trees=Trees}) ->
+    Reply =
+        case orddict:find(Index, Trees) of
+            {ok, Pid} ->
+                {ok, Pid};
+            _ ->
+                lager:error("tree pid not found for index: ~p", [Index]),
+                false
+        end,
+    {reply, Reply, State};
+
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 

@@ -30,8 +30,11 @@
 -include("riak_kv_wm_raw.hrl").
 
 -export([start_link/6, start_link/7, start_link/8, delete/8]).
+-export([participate_in_sweep/2, successfull_sweep/1, failed_sweep/1]).
 
 -include("riak_kv_dtrace.hrl").
+
+-define(SWEEP_DELETE_GRACE_PERIOD, 60 * 60 ). %% 1h
 
 start_link(ReqId, Bucket, Key, Options, Timeout, Client) ->
     {ok, proc_lib:spawn_link(?MODULE, delete, [ReqId, Bucket, Key,
@@ -189,10 +192,41 @@ get_w_options(Bucket, Options) ->
 %%       these values but a 2-tuple list, namely, 'sloppy_quorum'
 %%       cannot appear as a proplist-style property but must always
 %%       appear as {sloppy_quorum, boolean()}.
-
 extract_passthru_options(Options) ->
     [Opt || {K, _} = Opt <- Options,
             K == sloppy_quorum orelse K == n_val].
+
+
+%% riak_kv_sweeper callbacks
+participate_in_sweep(Index, _Pid) ->
+    {true, delete_fun(Index)}.
+
+delete_fun(Index) ->
+    fun({{Bucket, Key} = BKey, BinObj}) ->
+            RObj = riak_object:from_binary(Bucket, Key, BinObj),
+            case riak_kv_util:obj_not_deleted(RObj) of
+                undefined ->
+                    maybe_delete(BKey, RObj, Index);
+                _ ->
+                    {BKey, BinObj}
+            end
+    end.
+
+maybe_delete(BKey, RObj, Index) ->
+    app_helper:get_env(riak_kv,
+                       sweep_delete_grace_period,
+                       ?SWEEP_DELETE_GRACE_PERIOD),
+    riak_kv_vnode:sweep_del({Index, node()}, BKey, RObj),
+    lager:info("Deleted key ~p", [BKey]),
+    {deleted, RObj}.
+
+successfull_sweep(Index) ->
+    lager:info("successfull_sweep ~p", [Index]),
+    ok.
+
+failed_sweep(Index) ->
+    lager:info("failed_sweep ~p", [Index]),
+    ok.
 
 %% ===================================================================
 %% EUnit tests
