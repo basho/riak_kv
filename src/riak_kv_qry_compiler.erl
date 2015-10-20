@@ -95,13 +95,10 @@ make_wheres(Where, QField, Min, Max, Boundaries) ->
     Ends   = Boundaries ++ [Max],
     [HdW | Ws] = make_w2(Starts, Ends, QField, NewWhere, []),
     %% add the head options to the head
-    %% reverse the list
-    %% add an 'end_include' to all values except the tail
     %% add the tail options to the tail
     %% reverse again
     [TW | Rest] = lists:reverse([lists:flatten(HdW ++ [HeadOption]) | Ws]),
-    Rest2 = [X ++ [{end_inclusive, true}] || X <- Rest],
-    _Wheres = lists:reverse([lists:flatten(TW ++ [TailOption]) | Rest2]).
+    _Wheres = lists:reverse([lists:flatten(TW ++ [TailOption]) | Rest]).
 
 make_w2([], [], _QField, _Where, Acc) ->
     lists:reverse(Acc);
@@ -669,16 +666,14 @@ simple_spanning_boundary_test() ->
 			     {<<"user">>, binary, <<"user_1">>}]},
 	  {endkey,          [{<<"time">>, timestamp, 15000},
 			     {<<"user">>, binary, <<"user_1">>}]},
-	  {filter,          []},
-	  {end_inclusive,   true}
+	  {filter,          []}
 	 ],
     W2 = [
 	  {startkey,        [{<<"time">>, timestamp, 15000},
 			     {<<"user">>, binary, <<"user_1">>}]},
 	  {endkey,          [{<<"time">>, timestamp, 30000},
 			     {<<"user">>, binary, <<"user_1">>}]},
-	  {filter,          []},
-	  {end_inclusive,   true}
+	  {filter,          []}
 	 ],
     W3 = [
 	  {startkey,        [{<<"time">>, timestamp, 30000},
