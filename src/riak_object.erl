@@ -872,7 +872,7 @@ binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 from_binary(_B,_K,<<131, _Rest/binary>>=ObjTerm) ->
     binary_to_term(ObjTerm);
 
-from_binary(B,K,<<?MAGIC:8/integer, _BinType:8/integer, Rest/binary>>=_ObjBin) ->
+from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
     %% Version 1 of binary riak object
     case Rest of
         <<VclockLen:32/integer, VclockBin:VclockLen/binary, SibCount:32/integer, SibsBin/binary>> ->
