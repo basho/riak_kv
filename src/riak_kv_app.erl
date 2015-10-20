@@ -188,7 +188,7 @@ start(_Type, _StartArgs) ->
 
             riak_core_capability:register({riak_kv, vclock_data_encoding},
                                           [encode_zlib, encode_raw],
-                                          encode_zlib),
+                                          encode_raw),
 
             riak_core_capability:register({riak_kv, crdt},
                                           [?TOP_LEVEL_TYPES, [pncounter], []],
