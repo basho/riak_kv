@@ -45,6 +45,9 @@
 -export([get_client_id/1]).
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
+-export([get_cover/2, get_cover/3, replace_cover/5]).
+
+-include_lib("riak_core/include/riak_core_vnode.hrl").
 
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
@@ -480,6 +483,137 @@ consistent_delete_vclock(Bucket, Key, VClock, Options, _Timeout, {?MODULE, [Node
             ok
     end.
 
+%% @spec get_cover(Bucket :: binary() | {binary(), binary()},
+%%                 riak_client()) ->
+%%       Plan :: list(atom(), term()) |
+%%       {error, Err :: term()}
+%% @doc Retrieve a coverage plan
+get_cover(Bucket, Client) ->
+    get_cover(Bucket, undefined, Client).
+
+%% The 2nd argument (minimum parallelization) values mean:
+%%     undefined -> standard coverage plan
+%%     0         -> One coverage plan element per partition
+%%     Y>0       -> At least Y elements (will be no fewer than ring size)
+get_cover(Bucket, Parallelization, _Client) ->
+    ReqId = mk_reqid(),
+    N = n_val(Bucket),
+    RingSize = ring_size(),
+    get_cover_aux(Parallelization, ReqId, N, RingSize).
+
+get_cover_aux(undefined, ReqId, N, _RingSize) ->
+    split_cover(riak_core_coverage_plan:create_plan(all, N, 1, ReqId, riak_kv));
+get_cover_aux(0, ReqId, N, RingSize) ->
+    split_cover(
+      riak_core_coverage_plan:create_subpartition_plan(all, N,
+                                                       RingSize, 1,
+                                                       ReqId, riak_kv));
+get_cover_aux(MinPar, ReqId, N, RingSize) ->
+    ParallelTally =
+        if
+            MinPar =< RingSize ->
+                RingSize;
+            true ->
+                next_power_of_two(MinPar)
+        end,
+
+    split_cover(
+      riak_core_coverage_plan:create_subpartition_plan(all, N,
+                                                       ParallelTally, 1,
+                                                       ReqId, riak_kv)).
+
+%% Will ignore the number of partitions, reconstruct from the coverage
+%% plan chunk we're replacing. The `Replace' argument is an ok/error
+%% tuple because it is intended to be the result of
+%% `riak_kv_pb_coverage:checksum_binary_to_term'
+-spec replace_cover(Bucket :: binary() | {binary(), binary()},
+                    Parallelization :: undefined | non_neg_integer(),
+                    Replace :: {ok, list({atom(), term()})} |
+                               {error, Reason},
+                    OtherBroken :: list(
+                      {ok, list({atom(), term()})} |
+                      {error, Reason}),
+                    riak_client()) ->
+                           list(list({atom(), term()})) | {error, term()}.
+replace_cover(_Bucket, _P, {error, Reason}, _OtherBroken, _Client) ->
+    {error, Reason};
+replace_cover(Bucket, _P, {ok, Replace}, OtherBroken, _Client) ->
+    pick_cover_replacement(proplists:get_value(subpartition, Replace),
+                           n_val(Bucket), Replace,
+                           extract_proplist_nodes(OtherBroken)).
+
+pick_cover_replacement(undefined, NVal, Replace, DownNodes) ->
+    %% If `undefined', we didn't find a subpartition filter, so this
+    %% is a traditional coverage plan chunk
+    replace_traditional_cover(NVal, Replace, DownNodes);
+pick_cover_replacement(_Subp, NVal, Replace, DownNodes) ->
+    replace_subpartition_cover(NVal, Replace, DownNodes).
+
+replace_traditional_cover(NVal, Replace, DownNodes) ->
+    split_cover(
+      riak_core_coverage_plan:replace_traditional_chunk(
+        proplists:get_value(vnode_hash, Replace),
+        proplists:get_value(node, Replace),
+        proplists:get_value(filters, Replace, []),
+        NVal,
+        mk_reqid(),
+        DownNodes,
+        riak_kv)).
+
+replace_subpartition_cover(NVal, Replace, DownNodes) ->
+    split_cover(
+      riak_core_coverage_plan:replace_subpartition_chunk(
+        proplists:get_value(vnode_hash, Replace),
+        proplists:get_value(node, Replace),
+        proplists:get_value(subpartition, Replace),
+        NVal,
+        mk_reqid(),
+        DownNodes,
+        riak_kv)).
+
+extract_proplist_nodes(L) ->
+    lists:filtermap(fun({ok, Proplist}) ->
+                            {true, proplists:get_value(node, Proplist)};
+                       ({error, _}) -> false
+                    end, L).
+
+
+%% Crimes against computerkind
+next_power_of_two(X) ->
+    Next = 1 bsl length(hd(io_lib:format("~.2b", [X]))),
+    if X * 2 =:= Next -> X;
+       true -> Next
+    end.
+
+n_val(Bucket) ->
+    riak_core_bucket:n_val(riak_core_bucket:get_bucket(Bucket)).
+
+ring_size() ->
+    {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+    chashbin:num_partitions(CHBin).
+
+
+split_cover({error, Term}) when is_atom(Term) ->
+    {error, atom_to_list(Term)};
+split_cover({VnodeList, FilterList}) ->
+    lists:map(fun({Hash, Node}) ->
+                      [{vnode_hash, Hash}, {node, Node}] ++
+                      case lists:keyfind(Hash, 1, FilterList) of
+                          false ->
+                              [];
+                          {Hash, Partitions} ->
+                              [{filters, Partitions}]
+                      end
+              end, VnodeList);
+split_cover(SubpartitionPlan) when is_list(SubpartitionPlan) ->
+    lists:map(fun({Hash, Node, { _Mask, _BSL }=Subp}) ->
+                      [{vnode_hash, Hash},
+                       {node, Node},
+                       {subpartition, Subp}]
+              end,
+              SubpartitionPlan).
+
+
 %% @spec list_keys(riak_object:bucket(), riak_client()) ->
 %%       {ok, [Key :: riak_object:key()]} |
 %%       {error, timeout} |
@@ -716,14 +850,29 @@ get_index(Bucket, Query, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%       {error, timeout} |
 %%       {error, Err :: term()}
 %% @doc Run the provided index query.
+%%
+%% If defined in `Opts', `vnode_target' should be a proplist with
+%% `vnode_hash' as the hash that uniquely (barring failover)
+%% identifies a vnode, and optionally `filters' as coverage
+%% plan filters identifying individual partitions within that vnode.
 get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
     Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
     MaxResults = proplists:get_value(max_results, Opts, all),
     PgSort = proplists:get_value(pagination_sort, Opts),
+    VNodeCoverage = vnode_target(proplists:get_value(vnode_target, Opts)),
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults, PgSort]]),
+    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults, PgSort, VNodeCoverage]]),
     wait_for_query_results(ReqId, Timeout).
+
+vnode_target(undefined) ->
+    all;
+vnode_target(Proplist) ->
+    #vnode_coverage{
+       vnode_identifier=proplists:get_value(vnode_hash, Proplist),
+       partition_filters=proplists:get_value(filters, Proplist, []),
+       subpartition=proplists:get_value(subpartition, Proplist)
+      }.
 
 %% @doc Run the provided index query, return a stream handle.
 -spec stream_get_index(Bucket :: binary(), Query :: riak_index:query_def(),
@@ -740,13 +889,14 @@ stream_get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
     Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
     MaxResults = proplists:get_value(max_results, Opts, all),
     PgSort = proplists:get_value(pagination_sort, Opts),
+    VNodeCoverage = vnode_target(proplists:get_value(vnode_target, Opts)),
     Me = self(),
     ReqId = mk_reqid(),
     case riak_kv_index_fsm_sup:start_index_fsm(Node,
                                                [{raw, ReqId, Me},
                                                 [Bucket, none,
                                                  Query, Timeout,
-                                                 MaxResults, PgSort]]) of
+                                                 MaxResults, PgSort, VNodeCoverage]]) of
         {ok, Pid} ->
             {ok, ReqId, Pid};
         {error, Reason} ->
