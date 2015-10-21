@@ -9,7 +9,7 @@
 %%   information
 {mapping, "anti_entropy", "riak_kv.anti_entropy", [
   {datatype, {enum, [active, passive, 'active-debug']}},
-  {default, active}
+  {default, passive}
 ]}.
 
 {translation,
@@ -20,7 +20,7 @@
       active -> {on, []};
       'active-debug' -> {on, [debug]};
       passive -> {off, []};
-      _Default -> {on, []}
+      _Default -> {off, []}
     end
   end
 }.
