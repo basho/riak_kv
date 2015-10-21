@@ -50,7 +50,7 @@ submit(SQLString, DDL) when is_list(SQLString) ->
 submit(SQL, DDL) ->
     maybe_submit_to_queue(SQL, DDL).
 
-maybe_submit_to_queue(SQL, #ddl_v1{ table = BucketType } = DDL) ->
+maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
     Mod = riak_ql_ddl:make_module_name(BucketType),
     case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
         true ->

@@ -264,8 +264,13 @@ decode_results(KVList, SelectSpec) ->
 extract_riak_object(SelectSpec, V) when is_binary(V) ->
     % don't care about bkey
     RObj = riak_object:from_binary(<<>>, <<>>, V),
-    FullRecord = riak_object:get_value(RObj),
-    filter_columns(lists:flatten(SelectSpec), FullRecord).
+    case riak_object:get_value(RObj) of
+        <<>> ->
+            %% record was deleted
+            [];
+        FullRecord ->
+            filter_columns(lists:flatten(SelectSpec), FullRecord)
+    end.
 
 %% Pull out the values we're interested in based on the select,
 %% statement, e.g. select user, geoloc returns only user and geoloc columns.

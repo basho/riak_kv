@@ -489,9 +489,9 @@ assert_write_once_not_false(Props) ->
     end.
 
 %%
-assert_type_and_table_name_same(BucketType, #ddl_v1{ table = BucketType }) ->
+assert_type_and_table_name_same(BucketType, #ddl_v1{table = BucketType}) ->
     ok;
-assert_type_and_table_name_same(BucketType1, #ddl_v1{ table = BucketType2 }) ->
+assert_type_and_table_name_same(BucketType1, #ddl_v1{table = BucketType2}) ->
     throw({error,
         "Error, the bucket type could not be the created. The bucket type and table name must be the same~n"
         "    bucket type was: " ++ binary_to_list(BucketType1) ++ "\n"
