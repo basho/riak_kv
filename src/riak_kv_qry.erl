@@ -50,19 +50,25 @@ submit(SQLString, DDL) when is_list(SQLString) ->
 submit(SQL, DDL) ->
     maybe_submit_to_queue(SQL, DDL).
 
-maybe_submit_to_queue(SQL, DDL) ->
-    case riak_ql_ddl:is_query_valid(DDL, SQL) of
+maybe_submit_to_queue(SQL, #ddl_v1{ bucket = BucketType } = DDL) ->
+    Mod = riak_ql_ddl:make_module_name(BucketType),
+    case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
         true ->
-            Queries = riak_kv_qry_compiler:compile(DDL, SQL),
             case riak_kv_qry_compiler:compile(DDL, SQL) of
                 {error,_} = Error ->
                     Error;
                 Queries when is_list(Queries) ->
                     riak_kv_qry_queue:put_on_queue(Queries, DDL)
             end;
-        {false, Error} ->
-            {error, {invalid_query, Error}}
+        {false, Errors} ->
+            {error, {invalid_query, format_query_syntax_errors(Errors)}}
     end.
+
+%% Format the multiple syntax errors into a multiline error
+%% message. 
+format_query_syntax_errors(Errors) ->
+    iolist_to_binary(
+        [["\n", riak_ql_ddl:syntax_error_to_msg(E)] || E <- Errors]).
 
 -spec fetch(query_id()) -> {ok, list()} | {error, atom()}.
 %% @doc Fetch the results of execution of a previously submitted

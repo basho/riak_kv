@@ -111,25 +111,35 @@ process(#tsputreq{table = Bucket, columns = _Columns, rows = Rows}, State) ->
                     0 ->
                         {reply, #tsputresp{}, State};
                     ErrorCount ->
-                        {reply, make_rpberrresp(
-                                  ?E_PUT, io_lib:format("Failed to put ~b record(s)", [ErrorCount])),
-                         State}
+                        EPutMessage = io_lib:format("Failed to put ~b record(s)", [ErrorCount]),
+                        {reply, make_rpberrresp(?E_PUT, EPutMessage), State}
                 end
             catch
                 Class:Exception ->
-                    {reply, make_rpberrresp(?E_IRREG, to_string({Class, Exception}))}
+                    lager:error("error: ~p:~p~n~p", [Class,Exception,erlang:get_stacktrace()]),
+                    Error = make_rpberrresp(?E_IRREG, to_string({Class, Exception})),
+                    {reply, Error, State}
             end;
         false ->
-            {reply, make_rpberrresp(?E_IRREG, "Invalid data")};
+            {reply, make_rpberrresp(?E_IRREG, "Invalid data"), State};
         {_, {undef, _}} ->
             BucketProps = riak_core_bucket:get_bucket(Bucket),
-            {reply, missing_helper_module(Bucket, BucketProps)}
+            {reply, missing_helper_module(Bucket, BucketProps), State}
     end;
 
 %% @ignore SELECT
 process(SQL = #riak_sql_v1{'FROM' = Bucket}, State) ->
     Mod = riak_ql_ddl:make_module_name(Bucket),
-    DDL = Mod:get_ddl(),
+    case (catch Mod:get_ddl()) of
+        {_, {undef, _}} ->
+            BucketProps = riak_core_bucket:get_bucket(Bucket),
+            {reply, missing_helper_module(Bucket, BucketProps), State};
+        DDL ->
+            submit_query(DDL, Mod, SQL, State)
+    end.
+
+%%
+submit_query(DDL, Mod, SQL, State) ->
     case riak_kv_qry:submit(SQL, DDL) of
         {ok, QId} ->
             case fetch_with_patience(QId, ?FETCH_RETRIES) of
@@ -181,7 +191,7 @@ decode_query_permissions(#riak_sql_v1{'FROM'=Bucket}) ->
     {"riak_kv.ts_query", Bucket}.
 
 %%
--spec missing_helper_module(Bucket::binary(), 
+-spec missing_helper_module(Bucket::binary(),
                             BucketProps::{error,any()} | [proplists:property()]) -> #rpberrorresp{}.
 missing_helper_module(Bucket, {error, _}) ->
     missing_type_response(Bucket);
@@ -195,15 +205,15 @@ missing_helper_module(Bucket, BucketProps) when is_binary(Bucket), is_list(Bucke
 -spec missing_type_response(Bucket::binary()) -> #rpberrorresp{}.
 missing_type_response(Bucket) ->
     make_rpberrresp(
-        ?E_MISSING_TYPE, 
-        io_lib:format("Failed to put records, bucket type ~s is missing.", [Bucket])).
+        ?E_MISSING_TYPE,
+        io_lib:format("Bucket type ~s is missing.", [Bucket])).
 
 %%
 -spec not_timeseries_type_response(Bucket::binary()) -> #rpberrorresp{}.
 not_timeseries_type_response(Bucket) ->
     make_rpberrresp(
-        ?E_NOT_TS_TYPE, 
-        io_lib:format("Attempt to put Time Series data to non Time Series bucket ~s.", [Bucket])).
+        ?E_NOT_TS_TYPE,
+        io_lib:format("Attempt Time Series operation on non Time Series bucket ~s.", [Bucket])).
 
 -spec missing_table_module_response(Bucket::binary()) -> #rpberrorresp{}.
 missing_table_module_response(Bucket) ->
@@ -233,9 +243,10 @@ put_data(Data, Table, Mod) ->
 
               %% Bucket needs to be in duplicate, see riak_kv_qry_coverage_plan:create_plan
               RObj0 = riak_object:new({Table, Table}, PK, Obj),
-              MD_ = riak_object:get_update_metadata(RObj0),
-              MD  = dict:store(?MD_TS_LOCAL_KEY, LK, MD_),
-              RObj = riak_object:update_metadata(RObj0, MD),
+              MD = riak_object:get_update_metadata(RObj0),
+              MD1 = dict:store(?MD_TS_LOCAL_KEY, LK, MD),
+	      MD2 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD1),
+              RObj = riak_object:update_metadata(RObj0, MD2),
 
               case riak_client:put(RObj, {riak_client, [node(), undefined]}) of
                   {error, _Why} ->
