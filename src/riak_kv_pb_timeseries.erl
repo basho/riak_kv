@@ -37,6 +37,16 @@
          process/2,
          process_stream/3]).
 
+%% NOTE: Clients will work with table names. Those names map to a
+%% bucket type/bucket name tuple in Riak, with both the type name and
+%% the bucket name matching the table.
+%%
+%% Thus, as soon as code transitions from dealing with timeseries
+%% concepts to Riak KV concepts, the table name must be converted to a
+%% bucket tuple. This function is a convenient mechanism for doing so
+%% and making that transition more obvious.
+-export([table_to_bucket/1]).
+
 -record(state, {}).
 
 %% these error codes are obviously local to this module,
@@ -98,8 +108,8 @@ process(#ddl_v1{}, State) ->
 %% @ignore INSERT (as if)
 process(#tsputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
-process(#tsputreq{table = Bucket, columns = _Columns, rows = Rows}, State) ->
-    Mod = riak_ql_ddl:make_module_name(Bucket),
+process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
     Data = riak_pb_ts_codec:decode_rows(Rows),
     %% validate only the first row as we trust the client to send us
     %% perfectly uniform data wrt types and order
@@ -107,7 +117,7 @@ process(#tsputreq{table = Bucket, columns = _Columns, rows = Rows}, State) ->
         true ->
             %% however, prevent bad data to crash us
             try
-                case put_data(Data, Bucket, Mod) of
+                case put_data(Data, Table, Mod) of
                     0 ->
                         {reply, #tsputresp{}, State};
                     ErrorCount ->
@@ -123,17 +133,17 @@ process(#tsputreq{table = Bucket, columns = _Columns, rows = Rows}, State) ->
         false ->
             {reply, make_rpberrresp(?E_IRREG, "Invalid data"), State};
         {_, {undef, _}} ->
-            BucketProps = riak_core_bucket:get_bucket(Bucket),
-            {reply, missing_helper_module(Bucket, BucketProps), State}
+            BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
+            {reply, missing_helper_module(Table, BucketProps), State}
     end;
 
 %% @ignore SELECT
-process(SQL = #riak_sql_v1{'FROM' = Bucket}, State) ->
-    Mod = riak_ql_ddl:make_module_name(Bucket),
+process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
     case (catch Mod:get_ddl()) of
         {_, {undef, _}} ->
-            BucketProps = riak_core_bucket:get_bucket(Bucket),
-            {reply, missing_helper_module(Bucket, BucketProps), State};
+            BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
+            {reply, missing_helper_module(Table, BucketProps), State};
         DDL ->
             submit_query(DDL, Mod, SQL, State)
     end.
@@ -185,41 +195,41 @@ make_rpberrresp(Code, Message) ->
 
 
 -spec decode_query_permissions(#ddl_v1{} | #riak_sql_v1{}) -> {string(), binary()}.
-decode_query_permissions(#ddl_v1{bucket=NewBucket}) ->
-    {"riak_kv.ts_create_table", NewBucket};
-decode_query_permissions(#riak_sql_v1{'FROM'=Bucket}) ->
-    {"riak_kv.ts_query", Bucket}.
+decode_query_permissions(#ddl_v1{table=NewBucketType}) ->
+    {"riak_kv.ts_create_table", NewBucketType};
+decode_query_permissions(#riak_sql_v1{'FROM'=Table}) ->
+    {"riak_kv.ts_query", Table}.
 
 %%
--spec missing_helper_module(Bucket::binary(),
+-spec missing_helper_module(Table::binary(),
                             BucketProps::{error,any()} | [proplists:property()]) -> #rpberrorresp{}.
-missing_helper_module(Bucket, {error, _}) ->
-    missing_type_response(Bucket);
-missing_helper_module(Bucket, BucketProps) when is_binary(Bucket), is_list(BucketProps) ->
+missing_helper_module(Table, {error, _}) ->
+    missing_type_response(Table);
+missing_helper_module(Table, BucketProps) when is_binary(Table), is_list(BucketProps) ->
     case lists:keymember(ddl, 1, BucketProps) of
-        true  -> missing_table_module_response(Bucket);
-        false -> not_timeseries_type_response(Bucket)
+        true  -> missing_table_module_response(Table);
+        false -> not_timeseries_type_response(Table)
     end.
 
 %%
--spec missing_type_response(Bucket::binary()) -> #rpberrorresp{}.
-missing_type_response(Bucket) ->
+-spec missing_type_response(BucketType::binary()) -> #rpberrorresp{}.
+missing_type_response(BucketType) ->
     make_rpberrresp(
         ?E_MISSING_TYPE,
-        io_lib:format("Bucket type ~s is missing.", [Bucket])).
+        io_lib:format("Bucket type ~s is missing.", [BucketType])).
 
 %%
--spec not_timeseries_type_response(Bucket::binary()) -> #rpberrorresp{}.
-not_timeseries_type_response(Bucket) ->
+-spec not_timeseries_type_response(BucketType::binary()) -> #rpberrorresp{}.
+not_timeseries_type_response(BucketType) ->
     make_rpberrresp(
         ?E_NOT_TS_TYPE,
-        io_lib:format("Attempt Time Series operation on non Time Series bucket ~s.", [Bucket])).
+        io_lib:format("Attempt Time Series operation on non Time Series bucket type ~s.", [BucketType])).
 
--spec missing_table_module_response(Bucket::binary()) -> #rpberrorresp{}.
-missing_table_module_response(Bucket) ->
+-spec missing_table_module_response(BucketType::binary()) -> #rpberrorresp{}.
+missing_table_module_response(BucketType) ->
     make_rpberrresp(
         ?E_MISSING_TS_MODULE,
-        io_lib:format("The compiled module for Time Series bucket ~s cannot be loaded.", [Bucket])).
+        io_lib:format("The compiled module for Time Series bucket ~s cannot be loaded.", [BucketType])).
 
 to_string(X) ->
     io_lib:format("~p", [X]).
@@ -241,11 +251,10 @@ put_data(Data, Table, Mod) ->
               LK  = eleveldb_ts:encode_key(
                       riak_ql_ddl:get_local_key(DDL, Raw)),
 
-              %% Bucket needs to be in duplicate, see riak_kv_qry_coverage_plan:create_plan
-              RObj0 = riak_object:new({Table, Table}, PK, Obj),
+              RObj0 = riak_object:new(table_to_bucket(Table), PK, Obj),
               MD = riak_object:get_update_metadata(RObj0),
               MD1 = dict:store(?MD_TS_LOCAL_KEY, LK, MD),
-	      MD2 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD1),
+              MD2 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD1),
               RObj = riak_object:update_metadata(RObj0, MD2),
 
               case riak_client:put(RObj, {riak_client, [node(), undefined]}) of
@@ -315,6 +324,10 @@ assemble_records_(RR, RSize, Acc) ->
     Remaining = lists:nthtail(RSize, RR),
     assemble_records_(
       Remaining, RSize, [lists:sublist(RR, RSize) | Acc]).
+
+%% Utility API to limit some of the confusion over tables vs buckets
+table_to_bucket(Table) ->
+    {Table, Table}.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
