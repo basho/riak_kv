@@ -465,11 +465,11 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     StartK2 = [{Field, Val} || {Field, _Type, Val} <- StartK],
     StartK3 = riak_ql_ddl:make_key(Mod, LK, StartK2),
     StartKey = eleveldb_ts:encode_key(StartK3),
-    StartKey2 = to_object_key({Bucket, Bucket}, StartKey),
+    StartKey2 = to_object_key(Bucket, StartKey),
     EndK2 = [{Field, Val} || {Field, _Type, Val} <- EndK],
     EndK3 = riak_ql_ddl:make_key(Mod, LK, EndK2),
     EndKey = eleveldb_ts:encode_key(EndK3),
-    EndKey2 = to_object_key({Bucket, Bucket}, EndKey),
+    EndKey2 = to_object_key(Bucket, EndKey),
     FoldFun = fun({K, V}, Acc) ->
 		     [{K, V} | Acc]
 	     end,

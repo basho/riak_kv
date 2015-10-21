@@ -245,7 +245,8 @@ handle_req(_Request, State) ->
 handle_side_effects([]) ->
     ok;
 handle_side_effects([{run_sub_query, {qry, Q}, {qid, QId}} | T]) ->
-    Bucket = Q#riak_sql_v1.'FROM',
+    Table = Q#riak_sql_v1.'FROM',
+    Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
