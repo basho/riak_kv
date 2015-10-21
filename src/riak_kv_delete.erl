@@ -30,11 +30,9 @@
 -include("riak_kv_wm_raw.hrl").
 
 -export([start_link/6, start_link/7, start_link/8, delete/8]).
--export([participate_in_sweep/2, successfull_sweep/1, failed_sweep/1]).
+-export([participate_in_sweep/2, successfull_sweep/2, failed_sweep/2]).
 
 -include("riak_kv_dtrace.hrl").
-
--define(SWEEP_DELETE_GRACE_PERIOD, 60 * 60 ). %% 1h
 
 start_link(ReqId, Bucket, Key, Options, Timeout, Client) ->
     {ok, proc_lib:spawn_link(?MODULE, delete, [ReqId, Bucket, Key,
@@ -198,34 +196,51 @@ extract_passthru_options(Options) ->
 
 
 %% riak_kv_sweeper callbacks
-participate_in_sweep(Index, _Pid) ->
-    {true, delete_fun(Index)}.
+participate_in_sweep(_Index, _Pid) ->
+    InitialAcc = 0,
+    {ok, reap_fun(), InitialAcc}.
 
-delete_fun(Index) ->
-    fun({{Bucket, Key} = BKey, BinObj}) ->
-            RObj = riak_object:from_binary(Bucket, Key, BinObj),
+reap_fun() ->
+    fun({BKey, RObj}, Acc) ->
             case riak_kv_util:obj_not_deleted(RObj) of
                 undefined ->
-                    maybe_delete(BKey, RObj, Index);
+                    maybe_reap(BKey, RObj, Acc);
                 _ ->
-                    {BKey, BinObj}
+                    {ok, Acc}
             end
     end.
 
-maybe_delete(BKey, RObj, Index) ->
-    app_helper:get_env(riak_kv,
-                       sweep_delete_grace_period,
-                       ?SWEEP_DELETE_GRACE_PERIOD),
-    riak_kv_vnode:sweep_del({Index, node()}, BKey, RObj),
-    lager:info("Deleted key ~p", [BKey]),
-    {deleted, RObj}.
+maybe_reap(BKey, RObj, Acc) ->
+    case obj_outside_grace_period(RObj) of
+        true ->
+            lager:info("Deleted key ~p", [BKey]),
+            {deleted, Acc};
+        false ->
+            {ok, Acc}
+    end.
 
-successfull_sweep(Index) ->
+obj_outside_grace_period(RObj) ->
+    Contents = riak_object:get_contents(RObj),
+    case [{M, V} || {M, V} <- Contents,
+                    in_grace(M)] of
+        [] -> true;
+        _ -> false
+    end.
+
+in_grace(MetaData) ->
+    TombstoneGracePeriod =
+        app_helper:get_env(riak_kv, tombstone_grace_period),
+    Now = os:timestamp(),
+    LastMod = dict:fetch(<<"X-Riak-Last-Modified">>, MetaData),
+    lager:info("~p", [{TombstoneGracePeriod, Now, LastMod}]),
+    timer:now_diff(Now, LastMod) div 1000000 < TombstoneGracePeriod.
+
+successfull_sweep(Index, _FinalAcc) ->
     lager:info("successfull_sweep ~p", [Index]),
     ok.
 
-failed_sweep(Index) ->
-    lager:info("failed_sweep ~p", [Index]),
+failed_sweep(Index, Reason) ->
+    lager:info("failed_sweep ~p ~p", [Index, Reason]),
     ok.
 
 %% ===================================================================
