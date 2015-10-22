@@ -80,7 +80,7 @@
 -define(MAGIC, 53).      %% Magic number, as opposed to 131 for Erlang term-to-binary magic
                          %% Shanley's(11) + Joe's(42)
 -define(EMPTY_VTAG_BIN, <<"e">>).
--define(MSGPACK_MAGIC, 2). %% Magic number for msgpack encoding
+-define(MSGPACK_ENCODING_FLAG, 2). %% Flag to indicate msgpack encoding
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
@@ -1073,7 +1073,7 @@ encode(Bin, msgpack) ->
     encode_msgpack(Bin).
 
 encode_msgpack(Bin) ->
-    <<?MSGPACK_MAGIC:8/integer, (msgpack:pack(Bin, [{format, jsx}]))/binary>>.
+    <<?MSGPACK_ENCODING_FLAG:8/integer, (msgpack:pack(Bin, [{format, jsx}]))/binary>>.
 
 encode_maybe_binary(Bin) when is_binary(Bin) ->
     <<1, Bin/binary>>;
@@ -1090,7 +1090,7 @@ decode_maybe_binary(<<1, Bin/binary>>) ->
     Bin;
 decode_maybe_binary(<<0, Bin/binary>>) ->
     binary_to_term(Bin);
-decode_maybe_binary(<<?MSGPACK_MAGIC:8/integer, Bin/binary>>) ->
+decode_maybe_binary(<<?MSGPACK_ENCODING_FLAG:8/integer, Bin/binary>>) ->
     decode_msgpack(Bin);
 %% Add a catch-all for data that isn't formatted as we expect -- treat
 %% it like an external binary that we don't try to decode.
