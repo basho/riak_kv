@@ -80,6 +80,7 @@
 -define(MAGIC, 53).      %% Magic number, as opposed to 131 for Erlang term-to-binary magic
                          %% Shanley's(11) + Joe's(42)
 -define(EMPTY_VTAG_BIN, <<"e">>).
+-define(MSGPACK_ENCODING_FLAG, 2). %% Flag to indicate msgpack encoding
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
@@ -936,34 +937,38 @@ binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 -spec from_binary(bucket(),key(),binary(),encoding()) ->
     riak_object() | {error, 'bad_object_format'}.
 
-from_binary(B,K,Obj) ->
-    from_binary(B,K,Obj,erlang).
-from_binary(_B,_K,<<131, _Rest/binary>>=ObjTerm, _) ->
+%% Keep deprecated interface around, because I have a feeling someone
+%% will still try to use it
+
+from_binary(B,K,ObjTerm, _Enc) ->
+    from_binary(B, K, ObjTerm).
+
+from_binary(_B,_K,<<131, _Rest/binary>>=ObjTerm) ->
     binary_to_term(ObjTerm);
-from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin,Enc) ->
+from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
     %% Version 1 of binary riak object
     case Rest of
         <<VclockLen:32/integer, VclockBin:VclockLen/binary, SibCount:32/integer, SibsBin/binary>> ->
             Vclock = binary_to_term(VclockBin),
-            Contents = sibs_of_binary(SibCount, SibsBin, Enc),
+            Contents = sibs_of_binary(SibCount, SibsBin),
             #r_object{bucket=B,key=K,contents=Contents,vclock=Vclock};
         _Other ->
             {error, bad_object_format}
     end;
-from_binary(_B, _K, Obj = #r_object{}, _) ->
+from_binary(_B, _K, Obj = #r_object{}) ->
     Obj.
 
-sibs_of_binary(Count,SibsBin,Enc) ->
-    sibs_of_binary(Count, SibsBin, [], Enc).
+sibs_of_binary(Count,SibsBin) ->
+    sibs_of_binary(Count, SibsBin, []).
 
-sibs_of_binary(0, <<>>, Result, _) -> lists:reverse(Result);
-sibs_of_binary(0, _NotEmpty, _Result, _) ->
+sibs_of_binary(0, <<>>, Result) -> lists:reverse(Result);
+sibs_of_binary(0, _NotEmpty, _Result) ->
     {error, corrupt_contents};
-sibs_of_binary(Count, SibsBin, Result, Enc) ->
-    {Sib, SibsRest} = sib_of_binary(SibsBin, Enc),
-    sibs_of_binary(Count-1, SibsRest, [Sib | Result], Enc).
+sibs_of_binary(Count, SibsBin, Result) ->
+    {Sib, SibsRest} = sib_of_binary(SibsBin),
+    sibs_of_binary(Count-1, SibsRest, [Sib | Result]).
 
-sib_of_binary(<<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBin:MetaLen/binary, Rest/binary>>, Enc) ->
+sib_of_binary(<<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBin:MetaLen/binary, Rest/binary>>) ->
     <<LMMega:32/integer, LMSecs:32/integer, LMMicro:32/integer, VTagLen:8/integer, VTag:VTagLen/binary, Deleted:1/binary-unit:8, MetaRestBin/binary>> = MetaBin,
 
     MDList0 = deleted_meta(Deleted, []),
@@ -971,7 +976,7 @@ sib_of_binary(<<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, Met
     MDList2 = vtag_meta(VTag, MDList1),
     MDList = meta_of_binary(MetaRestBin, MDList2),
     MD = dict:from_list(MDList),
-    {#r_content{metadata=MD, value=decode(ValBin, Enc)}, Rest}.
+    {#r_content{metadata=MD, value=decode_maybe_binary(ValBin)}, Rest}.
 
 deleted_meta(<<1>>, MDList) ->
     [{?MD_DELETED, "true"} | MDList];
@@ -1060,28 +1065,22 @@ fold_meta_to_bin(Key, Value, {{_Vt,_Del,_Lm}=Elems,RestBin}) ->
     {Elems, <<RestBin/binary, MetaBin/binary>>}.
 
 %% @doc Encode the contents of a riak object, either using
-%% term_to_binary (if Enc == erlang), or msgpack encoding (if Enc ==
-%% msgpack)
+%% term_to_binary   (if Enc == erlang), or 
+%% msgpack encoding (if Enc == msgpack)
 encode(Bin, erlang) ->
     encode_maybe_binary(Bin);
 encode(Bin, msgpack) ->
     encode_msgpack(Bin).
 
 encode_msgpack(Bin) ->
-    msgpack:pack(Bin, [{format, jsx}]).
+    <<?MSGPACK_ENCODING_FLAG:8/integer, (msgpack:pack(Bin, [{format, jsx}]))/binary>>.
 
 encode_maybe_binary(Bin) when is_binary(Bin) ->
     <<1, Bin/binary>>;
 encode_maybe_binary(Bin) ->
     <<0, (term_to_binary(Bin))/binary>>.
 
-%% @doc Decode the contents of a riak object, either using
-%% binary_to_term (if Enc == erlang), or msgpack decoding (if Enc ==
-%% msgpack)
-decode(ValBin, erlang) ->
-    decode_maybe_binary(ValBin);
-decode(ValBin, msgpack) ->
-    decode_msgpack(ValBin).
+%% @doc Decode the contents of a riak object
 
 decode_msgpack(ValBin) ->
     {ok, Unpacked} = msgpack:unpack(ValBin, [{format, jsx}]),
@@ -1091,8 +1090,12 @@ decode_maybe_binary(<<1, Bin/binary>>) ->
     Bin;
 decode_maybe_binary(<<0, Bin/binary>>) ->
     binary_to_term(Bin);
-decode_maybe_binary(Bin) ->
-    decode_msgpack(Bin).
+decode_maybe_binary(<<?MSGPACK_ENCODING_FLAG:8/integer, Bin/binary>>) ->
+    decode_msgpack(Bin);
+%% Add a catch-all for data that isn't formatted as we expect -- treat
+%% it like an external binary that we don't try to decode.
+decode_maybe_binary(<<Bin/binary>>) ->
+    Bin.
 
 %% Update X-Riak-VTag and X-Riak-Last-Modified in the object's metadata, if
 %% necessary.
@@ -1479,6 +1482,20 @@ vclock_codec_test() ->
     VCs = [<<"BinVclock">>, {vclock, something, [], <<"blah">>}, vclock:fresh()],
     [ ?assertEqual({Method, VC}, {Method, decode_vclock(encode_vclock(Method, VC))})
      || VC <- VCs, Method <- [encode_raw, encode_zlib]].
+
+packObj_test() ->
+    io:format("packObj_test~n"),
+    Obj = riak_object:new(<<"bucket">>, <<"key">>, [{<<"field1">>, 1}, {<<"field2">>, 2.123}]),
+    PackedErl = riak_object:to_binary(v1, Obj, erlang),
+    PackedMsg = riak_object:to_binary(v1, Obj, msgpack),
+    ObjErl = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedErl, erlang),
+    ObjMsg = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedMsg, msgpack),
+    ObjErl2 = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedErl),
+    ObjMsg2 = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedMsg),
+    ?assertEqual(Obj, ObjErl),
+    ?assertEqual(Obj, ObjMsg),
+    ?assertEqual(Obj, ObjErl2),
+    ?assertEqual(Obj, ObjMsg2).
 
 dotted_values_reconcile() ->
     {B, K} = {<<"b">>, <<"k">>},
