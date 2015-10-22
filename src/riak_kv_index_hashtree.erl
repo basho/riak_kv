@@ -537,27 +537,26 @@ do_participate_in_sweep(Pid, #state{index = Index, trees = Trees} = State) ->
 -spec fold_fun(pid(), boolean()) -> fun().
 fold_fun(Tree, _HasIndexTree = false) ->
     ObjectFoldFun = object_fold_fun(Tree),
-    fun({BKey, RObj}, Acc) ->
+    fun({BKey, RObj}, Acc, [{bucket_props, BucketProps}]) ->
             BinBKey = term_to_binary(BKey),
-            ObjectFoldFun(BKey, RObj, BinBKey),
+            ObjectFoldFun(BKey, RObj, BinBKey, BucketProps),
             {ok, Acc}
     end;
 fold_fun(Tree, _HasIndexTree = true) ->
     %% Index AAE backend, so hash the indexes
     ObjectFoldFun = object_fold_fun(Tree),
     IndexFoldFun = index_fold_fun(Tree),
-    fun({BKey, RObj}, Acc) ->
+    fun({BKey, RObj}, Acc, [{bucket_props, BucketProps}]) ->
             BinBKey = term_to_binary(BKey),
             IndexFoldFun(RObj, BinBKey),
-            ObjectFoldFun(BKey, RObj, BinBKey),
+            ObjectFoldFun(BKey, RObj, BinBKey, BucketProps),
             {ok, Acc}
     end.
 
-
 -spec object_fold_fun(pid()) -> fun().
 object_fold_fun(Tree) ->
-    fun(BKey, RObj, BinBKey) ->
-            IndexN = riak_kv_util:get_index_n(BKey),
+    fun(BKey, RObj, BinBKey, BucketProps) ->
+            IndexN = riak_kv_util:get_index_n(BKey, BucketProps),
             insert([{IndexN, BinBKey, hash_object(BKey, RObj)}],
                    [if_missing],
                    Tree)

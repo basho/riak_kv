@@ -22,8 +22,10 @@
          fun_type :: integer(),     %% ?DELETE_FUN, ?MODIFY_FUN or ?OBSERV_FUN
          sweep_fun :: fun(),        %%
          run_interval :: integer(), %% Defines how often participant wants to run.
-         initial_acc,
-         options
+         initial_acc :: any(),
+         options = [] :: list(),
+         errors = 0 :: integer(),
+         fail_reason
         }).
 
 %% fun_type used to be able to sort the
