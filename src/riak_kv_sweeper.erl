@@ -86,7 +86,7 @@ stop_all_sweeps() ->
 stop_sweeps(_Module) ->
     ok.
 
-%% @private
+%% @private used by the sweeping process to report results when done.
 sweep_result(Index, Result) ->
     gen_server:call(?MODULE, {sweep_result, Index, Result}).
 
@@ -189,7 +189,7 @@ do_sweep(Index, #state{sweep_participants = SP, sweeps = Sweeps} = State) ->
                 spawn_link(fun() ->
                                    Result = riak_kv_vnode:sweep({Index, node()}, ActiveParticipants),
                                    lager:info("Sweep_result: ~p" ,[Result]),
-                                   ?MODULE:sweep_result(Index, clean_result(Result))
+                                   ?MODULE:sweep_result(Index, format_result(Result))
                            end),
             State#state{sweeps = start_sweep(Sweeps, Index, Pid, ActiveParticipants)}
     end.
@@ -242,7 +242,8 @@ ask_participants(Index, Participants) ->
          {_Module, Participant} <- dict:to_list(Participants)],
     
     %% Filter non active participants
-    [Participant#sweep_participant{sweep_fun = Fun} || {Participant, {true, Fun}} <- Funs].
+    [Participant#sweep_participant{sweep_fun = Fun, initial_acc = InitialAcc} ||
+      {Participant, {ok, Fun, InitialAcc}} <- Funs].
 
 update_finished_sweep(Index, Result, #state{sweeps = Sweeps} = State) ->
     Sweep = dict:fetch(Index, Sweeps),
@@ -296,10 +297,10 @@ find_oldes_sweep(Sweeps) ->
 %% elapsed_secs(Now, Start) ->
 %%     timer:now_diff(Now, Start) / 1000000.
 
-clean_result({Succ, Fail}) ->
-    clean_result(succ, Succ) ++ clean_result(fail, Fail).
-clean_result(SuccFail, Results) ->
-    [{Module, SuccFail} || {Module, _Fun, _Errors} <- Results].
+format_result(#sa{active_p = Succ, failed_p = Failed}) ->
+    format_result(succ, Succ) ++ format_result(fail, Failed).
+format_result(SuccFail, Results) ->
+    [{Module, SuccFail} || {Module, _Fun, _Acc, _Errors} <- Results].
 
 finish_sweep(Sweeps, #sweep{index = Index}) ->
     dict:update(Index,

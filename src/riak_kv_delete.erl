@@ -202,6 +202,7 @@ participate_in_sweep(_Index, _Pid) ->
 
 reap_fun() ->
     fun({BKey, RObj}, Acc) ->
+            BKey = bajs,
             case riak_kv_util:obj_not_deleted(RObj) of
                 undefined ->
                     maybe_reap(BKey, RObj, Acc);
