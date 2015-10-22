@@ -63,6 +63,7 @@
 -define(E_MISSING_TYPE, 7).
 -define(E_MISSING_TS_MODULE, 8).
 -define(E_DELETE,   9).
+-define(E_GET,     10).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
@@ -73,7 +74,7 @@ init() ->
 
 
 -spec decode(integer(), binary()) ->
-    {ok, #ddl_v1{} | #riak_sql_v1{} | #tsputreq{} | #tsdelreq{},
+    {ok, #ddl_v1{} | #riak_sql_v1{} | #tsputreq{} | #tsdelreq{} | #tsgetreq{},
         {PermSpec::string(), Table::binary()}} |
     {error,_}.
 decode(Code, Bin) ->
@@ -87,6 +88,8 @@ decode(Code, Bin) ->
                 {error, Error} ->
                     {error, decoder_parse_error_resp(Error)}
             end;
+        #tsgetreq{table = Table}->
+            {ok, Msg, {"riak_kv.ts_get", Table}};
         #tsputreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_put", Table}};
         #tsdelreq{table = Table} ->
@@ -107,7 +110,6 @@ process(#ddl_v1{}, State) ->
                             " use riak-admin command instead"),
      State};
 
-%% @ignore INSERT (as if)
 process(#tsputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
 process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
@@ -138,6 +140,36 @@ process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
             BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
             {reply, missing_helper_module(Table, BucketProps), State}
     end;
+
+
+process(#tsgetreq{table = Table, key = PbCompoundKey,
+                  timeout = Timeout},
+        State) ->
+    Options =
+        if Timeout == undefined -> [];
+           true -> [{timeout, Timeout}]
+        end,
+
+    CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
+
+    Mod = riak_ql_ddl:make_module_name(Table),
+    try Mod:get_ddl() of
+        DDL ->
+            PKLK = make_ts_keys(CompoundKey, DDL),
+            case riak_client:get(
+                   {Table, Table}, PKLK, Options, {riak_client, [node(), undefined]}) of
+                {ok, RObj} ->
+                    Record = riak_object:get_value(RObj),
+                    {_Columns, Row} = lists:unzip(Record),
+                    {reply, #tsgetresp{rows = riak_pb_ts_codec:encode_rows([Row])}, State};
+                {error, Reason} ->
+                    {reply, make_rpberrresp(?E_GET, to_string(Reason)), State}
+            end
+    catch error:{undef, _} ->
+            Props = riak_core_bucket:get_bucket(Table),
+            {reply, missing_helper_module(Table, Props), State}
+    end;
+
 
 process(#tsdelreq{table = Table, key = PbCompoundKey,
                   vclock = PbVClock, timeout = Timeout},
