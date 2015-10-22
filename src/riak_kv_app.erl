@@ -2,7 +2,7 @@
 %%
 %% riak_app: application startup for Riak
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -36,8 +36,9 @@
                    {riak_kv_pb_bucket_key_apl, 33, 34}, %% (Active) Preflist requests
                    {riak_kv_pb_csbucket, 40, 41}, %%  CS bucket folding support
                    {riak_kv_pb_counter, 50, 53}, %% counter requests
+                   {riak_kv_pb_coverage, 70, 71}, %% coverage requests
                    {riak_kv_pb_crdt, 80, 83}, %% CRDT requests
-                   {riak_kv_pb_timeseries, 90, 93} %% time series requests
+                   {riak_kv_pb_timeseries, 90, 95} %% time series requests
                   ]).
 -define(MAX_FLUSH_PUT_FSM_RETRIES, 10).
 
@@ -188,7 +189,7 @@ start(_Type, _StartArgs) ->
 
             riak_core_capability:register({riak_kv, vclock_data_encoding},
                                           [encode_zlib, encode_raw],
-                                          encode_zlib),
+                                          encode_raw),
 
             riak_core_capability:register({riak_kv, crdt},
                                           [?TOP_LEVEL_TYPES, [pncounter], []],

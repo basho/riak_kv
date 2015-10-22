@@ -20,12 +20,11 @@
 %%
 %% -------------------------------------------------------------------
 
-%% TODO use dets
-
 -module(riak_kv_compile_tab).
 
 -export([is_compiling/1]).
 -export([get_state/1]).
+-export([get_ddl/1]).
 -export([new/1]).
 -export([insert/4]).
 -export([update_state/2]).
@@ -74,6 +73,17 @@ get_state(BucketType) when is_binary(BucketType) ->
     case dets:lookup(?TABLE, BucketType) of
         [{_,_,_,State}] ->
             State;
+        [] ->
+            notfound
+    end.
+
+%%
+-spec get_ddl(BucketType :: binary()) ->
+        term() | notfound.
+get_ddl(BucketType) when is_binary(BucketType) ->
+    case dets:lookup(?TABLE, BucketType) of
+        [{_,DDL,_,_}] ->
+            DDL;
         [] ->
             notfound
     end.

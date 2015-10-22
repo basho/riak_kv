@@ -77,10 +77,10 @@ use_ack_backpressure() ->
     riak_core_capability:get({riak_kv, index_backpressure}, false) == true.
 
 %% @doc Construct the correct index command record.
--spec req(binary(), term(), term()) -> term().
+-spec req(binary()|tuple(binary()), term(), term()) -> term().
 req(Bucket, _ItemFilter, #riak_sql_v1{} = Q) ->
     #riak_kv_sql_select_req_v1{bucket=Bucket,
-			       qry=Q};
+                               qry=Q};
 req(Bucket, ItemFilter, Query) ->
     case use_ack_backpressure() of
         true ->

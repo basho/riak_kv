@@ -82,11 +82,12 @@ process(Req=#rpbcsbucketreq{}, State) ->
 maybe_perform_query({error, Reason}, _Req, State) ->
     {error, {format, Reason}, State};
 maybe_perform_query({ok, Query}, Req, State) ->
-    #rpbcsbucketreq{type=T, bucket=B, max_results=MaxResults, timeout=Timeout} = Req,
+    #rpbcsbucketreq{type=T, bucket=B, max_results=MaxResults, timeout=Timeout, cover_context=Cover} = Req,
     #state{client=Client} = State,
     Bucket = maybe_bucket_type(T, B),
-    Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults},
+    Opts0 = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults},
                                                 {pagination_sort, true}]),
+    Opts = riak_kv_pb_index:maybe_add_cover(Cover, Opts0),
     {ok, ReqId, _FSMPid} = Client:stream_get_index(Bucket, Query, Opts),
     {reply, {stream, ReqId}, State#state{req_id=ReqId, req=Req}}.
 

@@ -245,12 +245,16 @@ handle_req(_Request, State) ->
 handle_side_effects([]) ->
     ok;
 handle_side_effects([{run_sub_query, {qry, Q}, {qid, QId}} | T]) ->
-    Bucket = Q#riak_sql_v1.'FROM',
+    Table = Q#riak_sql_v1.'FROM',
+    Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
     CoverageFn = {colocated, riak_kv_qry_coverage_plan},
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, [Bucket, none, Q, Timeout, all, undefined, CoverageFn]]),
+    handle_side_effects(T);
+handle_side_effects([H | T]) ->
+    io:format("in riak_kv_qry:handle_side_effects not handling ~p~n", [H]),
     handle_side_effects(T).
 
 decode_results(KVList, SelectSpec) ->
@@ -260,8 +264,13 @@ decode_results(KVList, SelectSpec) ->
 extract_riak_object(SelectSpec, V) when is_binary(V) ->
     % don't care about bkey
     RObj = riak_object:from_binary(<<>>, <<>>, V),
-    FullRecord = riak_object:get_value(RObj),
-    filter_columns(lists:flatten(SelectSpec), FullRecord).
+    case riak_object:get_value(RObj) of
+        <<>> ->
+            %% record was deleted
+            [];
+        FullRecord ->
+            filter_columns(lists:flatten(SelectSpec), FullRecord)
+    end.
 
 %% Pull out the values we're interested in based on the select,
 %% statement, e.g. select user, geoloc returns only user and geoloc columns.

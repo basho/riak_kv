@@ -77,19 +77,19 @@ get_standard_lk() -> #key_v1{ast = [
                            'FROM'        = <<"GeoCheckin">>,
                            'WHERE'       = [
                                             {startkey, [
-                                                        {<<"time">>,  
-							 timestamp, 
+                                                        {<<"time">>,
+							 timestamp,
 							 3000},
-                                                        {<<"user">>, 
+                                                        {<<"user">>,
 							 binary,
 							 <<"gordon">>}
                                                        ]
                                             },
                                             {endkey,   [
-                                                        {<<"time">>, 
-							 timestamp, 
+                                                        {<<"time">>,
+							 timestamp,
 							 5000},
-                                                        {<<"user">>, 
+                                                        {<<"user">>,
 							 binary,
 							 <<"gordon">>}
                                                        ]
@@ -115,14 +115,14 @@ get_standard_lk() -> #key_v1{ast = [
 	     "select weather from GeoCheckin where time > 3000 and time < 5000",
 	     {error, {missing_param, <<"Missing parameter user in where clause.">>}}).
 
-?assert_test(spanning_qry_test, 
+?assert_test(spanning_qry_test,
 	      "CREATE TABLE GeoCheckin " ++
-		  "(geohash varchar not null, " ++ 
+		  "(geohash varchar not null, " ++
 		  "user varchar not null, " ++
-		  "time timestamp not null, " ++ 
-		  "weather varchar not null, " ++ 
-		  "temperature varchar, " ++ 
-		  "PRIMARY KEY((quantum(time, 15, s)), time, user))", 
+		  "time timestamp not null, " ++
+		  "weather varchar not null, " ++
+		  "temperature varchar, " ++
+		  "PRIMARY KEY((quantum(time, 15, s)), time, user))",
 	      "select weather from GeoCheckin where time > 3000 and time < 18000 "
 	      "and user = gordon",
 	      [
@@ -130,7 +130,7 @@ get_standard_lk() -> #key_v1{ast = [
 			   'FROM'        = <<"GeoCheckin">>,
 			   'WHERE'       = [
 					    {startkey, [
-                                                        {<<"time">>, 
+                                                        {<<"time">>,
 							 timestamp,
 							 3000},
                                                         {<<"user">>,
@@ -139,17 +139,16 @@ get_standard_lk() -> #key_v1{ast = [
                                                        ]
                                             },
                                             {endkey,   [
-                                                        {<<"time">>, 
+                                                        {<<"time">>,
 							 timestamp,
 							 15000},
-                                                        {<<"user">>, 
+                                                        {<<"user">>,
 							 binary,
 							 <<"gordon">>}
                                                        ]
                                             },
                                             {filter, []},
-					    {start_inclusive, false},
-					    {end_inclusive,   true}
+					    {start_inclusive, false}
 					   ],
                            helper_mod    = riak_ql_ddl:make_module_name(<<"GeoCheckin">>),
                            partition_key = get_standard_pk(),
@@ -160,16 +159,16 @@ get_standard_lk() -> #key_v1{ast = [
 			   'FROM'        = <<"GeoCheckin">>,
 			   'WHERE'       = [
                                             {startkey, [
-                                                        {<<"time">>,  
+                                                        {<<"time">>,
 							 timestamp,
 							 15000},
-                                                        {<<"user">>, 
+                                                        {<<"user">>,
 							 binary,
 							 <<"gordon">>}
                                                        ]
                                             },
                                             {endkey,   [
-                                                        {<<"time">>, 
+                                                        {<<"time">>,
 							 timestamp,
 							 18000},
                                                         {<<"user">>,

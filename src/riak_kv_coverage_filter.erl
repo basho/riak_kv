@@ -34,9 +34,12 @@
 
 -export_type([filter/0]).
 
--type bucket() :: binary().
+-type bucket() :: binary()|{binary(), binary()}.
 -type filter() :: none | fun((any()) -> boolean()) | [{atom(), atom(), [any()]}].
 -type index() :: non_neg_integer().
+
+%% An integer, and the number of bits to shift it left
+-type subpartition() :: { non_neg_integer(), pos_integer() }.
 
 %% ===================================================================
 %% Public API
@@ -47,18 +50,28 @@
 %% The ItemFilterInput parameter can be the atom `none' to indicate
 %% no filtering based on the request items, a function that returns
 %% a boolean indicating whether or not the item should be included
-%% in the final results, or a list of tuples of the form 
-%% {Module, Function, Args}. The latter is the form used by 
+%% in the final results, or a list of tuples of the form
+%% {Module, Function, Args}. The latter is the form used by
 %% MapReduce filters such as those in the {@link riak_kv_mapred_filters}
 %% module. The list of tuples is composed into a function that is
-%% used to determine if an item should be included in the final 
+%% used to determine if an item should be included in the final
 %% result set.
 -spec build_filter(filter()) -> filter().
 build_filter(Filter) ->
     build_item_filter(Filter).
 
 
--spec build_filter(bucket(), filter(), [index()]) -> filter().
+-spec build_filter(bucket(), filter(), [index()]|subpartition()) -> filter().
+build_filter(Bucket, ItemFilterInput, {_Hash, _Mask}=SubP) ->
+    ItemFilter = build_item_filter(ItemFilterInput),
+    if
+        (ItemFilter == none) -> % only subpartition filtering required
+            SubpartitionFun = build_subpartition_fun(Bucket),
+            compose_sub_filter(SubP, SubpartitionFun);
+        true -> % key and vnode filtering
+            SubpartitionFun = build_subpartition_fun(Bucket),
+            compose_sub_filter(SubP, SubpartitionFun, ItemFilter)
+    end;
 build_filter(Bucket, ItemFilterInput, FilterVNode) ->
     ItemFilter = build_item_filter(ItemFilterInput),
 
@@ -78,12 +91,33 @@ build_filter(Bucket, ItemFilterInput, FilterVNode) ->
             {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
             PrefListFun = build_preflist_fun(Bucket, CHBin),
             %% Create a filter for the VNode
-            compose_filter(FilterVNode, PrefListFun, ItemFilter) 
+            compose_filter(FilterVNode, PrefListFun, ItemFilter)
     end.
 
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
+
+%% @private
+build_subpartition_filter({Mask, BSR}, Fun) ->
+    fun(X) ->
+            <<Idx:160/integer>> = Fun(X),
+            %% lager:error("{~B, ~B} Result, Mask, Index: ~B, ~B, ~B",
+            %%             [Mask, BSR, FullMask band Idx,
+            %%              FullMask, Idx]),
+            Idx bsr BSR =:= Mask
+    end.
+
+%% @private
+compose_sub_filter(Subpartition, SubpFun) ->
+    build_subpartition_filter(Subpartition, SubpFun).
+
+
+compose_sub_filter(Subpartition, SubpFun, ItemFilter) ->
+    SubpFilter = build_subpartition_filter(Subpartition, SubpFun),
+    fun(Item) ->
+            ItemFilter(Item) andalso SubpFilter(Item)
+    end.
 
 %% @private
 compose_filter(KeySpaceIndexes, PrefListFun) ->
@@ -128,6 +162,15 @@ build_preflist_fun(Bucket, CHBin) ->
             chashbin:responsible_index(ChashKey, CHBin)
     end.
 
+%% @private
+build_subpartition_fun(Bucket) ->
+    fun({o, Key, _Value}) -> %% $ index return_body
+            riak_core_util:chash_key({Bucket, Key});
+       ({_Value, Key}) ->
+            riak_core_util:chash_key({Bucket, Key});
+       (Key) ->
+            riak_core_util:chash_key({Bucket, Key})
+    end.
 
 
 compose([]) ->
@@ -146,4 +189,3 @@ compose([Filter | RestFilters], FilterFuns) ->
     {FilterMod, FilterFun, Args} = Filter,
     Fun = FilterMod:FilterFun(Args),
     compose(RestFilters, [Fun | FilterFuns]).
-

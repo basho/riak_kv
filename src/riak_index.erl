@@ -40,7 +40,9 @@
          upgrade_query/1,
          object_key_in_range/3,
          index_key_in_range/3,
-         add_timeout_opt/2
+         add_timeout_opt/2,
+         is_system_index/1,
+         system_index_list/0
         ]).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -84,6 +86,18 @@ mapred_index(_Pipe, [Bucket, Query], Timeout) ->
     {ok, C} = riak:local_client(),
     {ok, ReqId, _} = C:stream_get_index(Bucket, Query, [{timeout, Timeout}]),
     {ok, Bucket, ReqId}.
+
+-spec is_system_index(binary()) -> boolean().
+is_system_index(<<"$bucket">>) ->
+    true;
+is_system_index(<<"$key">>) ->
+    true;
+is_system_index(_) ->
+    false.
+
+-spec system_index_list() -> list(binary()).
+system_index_list() ->
+    [<<"$bucket">>, <<"$key">>].
 
 %% @spec parse_object_hook(riak_object:riak_object()) ->
 %%         riak_object:riak_object() | {fail, [failure_reason()]}
@@ -216,9 +230,9 @@ is_field_match(Key, Suffix) when size(Suffix) < size(Key) ->
     %% suffix.
     Offset = size(Key) - size(Suffix),
     case Key of
-        <<_:Offset/binary, Suffix/binary>> -> 
+        <<_:Offset/binary, Suffix/binary>> ->
             true;
-        _ -> 
+        _ ->
             false
     end;
 is_field_match(_, _) ->
@@ -488,7 +502,14 @@ make_continuation([]) ->
     undefined;
 make_continuation(L) ->
     Last = lists:last(L),
-    base64:encode(term_to_binary(Last)).
+    encode_continuation(Last).
+
+%% @doc Helper function for `make_continuation/1'; results can be
+%% either keys or full objects, and we only wish to encode the key
+encode_continuation({o, Key, _Body}) ->
+    encode_continuation(Key);
+encode_continuation(Key) ->
+    base64:encode(term_to_binary(Key)).
 
 %% @doc decode a continuation received from the outside world.
 -spec decode_continuation(continuation() | undefined) -> last_result() | undefined.
