@@ -62,8 +62,8 @@
          index_2i_n/0,
          get_trees/1,
          participate_in_sweep/2,
-         successfull_sweep/1,
-         failed_sweep/1]).
+         successfull_sweep/2,
+         failed_sweep/2]).
 
 -export([poke/1,
          get_build_time/1]).
@@ -231,12 +231,12 @@ expire(Tree) ->
 participate_in_sweep(Index, Pid) ->
     lookup_tree_and_call(Index, {participate_in_sweep, Pid}).
 
-successfull_sweep(Index) ->
+successfull_sweep(Index, _FinalAcc) ->
     lager:info("successfull_sweep ~p", [Index]),
     lookup_tree_and_cast(Index, build_finished).
 
-failed_sweep(Index) ->
-    lager:info("failed_sweep ~p", [Index]),
+failed_sweep(Index, Reason) ->
+    lager:info("failed_sweep ~p ~p", [Index, Reason]),
     lookup_tree_and_cast(Index, build_failed).
 
 lookup_tree_and_call(Index, Msg) ->
@@ -554,7 +554,8 @@ do_participate_in_sweep(Pid, #state{index = Index, trees = Trees} = State) ->
         true ->
             State2 = clear_tree(State),
             FoldFun = fold_fun(self(), has_index_tree(Trees)),
-            {reply, {true, FoldFun}, State2#state{built=Pid}};
+            InitialAcc = 0,
+            {reply, {ok, FoldFun, InitialAcc}, State2#state{built=Pid}};
         _ ->
             {reply, false, State}
     end.
@@ -564,28 +565,27 @@ do_participate_in_sweep(Pid, #state{index = Index, trees = Trees} = State) ->
 -spec fold_fun(pid(), boolean()) -> fun().
 fold_fun(Tree, _HasIndexTree = false) ->
     ObjectFoldFun = object_fold_fun(Tree),
-    fun({BKey, RObj}) ->
+    fun({BKey, RObj}, Acc) ->
             BinBKey = term_to_binary(BKey),
             ObjectFoldFun(BKey, RObj, BinBKey),
-            {BKey, RObj}
+            {ok, Acc}
     end;
 fold_fun(Tree, _HasIndexTree = true) ->
     %% Index AAE backend, so hash the indexes
     ObjectFoldFun = object_fold_fun(Tree),
     IndexFoldFun = index_fold_fun(Tree),
-    fun({BKey = {Bucket, Key}, BinObj}) ->
-            RObj = riak_object:from_binary(Bucket, Key, BinObj),
+    fun({BKey, RObj}, Acc) ->
             BinBKey = term_to_binary(BKey),
             IndexFoldFun(RObj, BinBKey),
             ObjectFoldFun(BKey, RObj, BinBKey),
-            {BKey, BinObj}
+            {ok, Acc}
     end.
 
 
 -spec object_fold_fun(pid()) -> fun().
 object_fold_fun(Tree) ->
-    fun(BKey={Bucket,Key}, RObj, BinBKey) ->
-            IndexN = riak_kv_util:get_index_n({Bucket, Key}),
+    fun(BKey, RObj, BinBKey) ->
+            IndexN = riak_kv_util:get_index_n(BKey),
             insert([{IndexN, BinBKey, hash_object(BKey, RObj)}],
                    [if_missing],
                    Tree)

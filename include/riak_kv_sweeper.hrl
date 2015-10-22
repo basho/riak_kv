@@ -22,7 +22,7 @@
          fun_type :: integer(),     %% ?DELETE_FUN, ?MODIFY_FUN or ?OBSERV_FUN
          sweep_fun :: fun(),        %%
          run_interval :: integer(), %% Defines how often participant wants to run.
-         init_args,
+         initial_acc,
          options
         }).
 
@@ -36,9 +36,18 @@
         {
          index,
          state = idle :: idle | running,
-         pid,
+         pid :: pid | undefined,
          results = dict:new(),
          active_participants,  %% Active in current run
-         start_time,
-         end_time
+         start_time :: erlang:timestamp(),
+         end_time :: erlang:timestamp()
         }).
+
+%% Sweep accumulator
+-record(sa,
+        {index,
+         bucket_props = dict:new(),
+         active_p,
+         failed_p = [],
+         succ_p = []
+         }).
