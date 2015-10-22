@@ -23,13 +23,13 @@
 -module(riak_kv_qry_coverage_plan).
 
 -export([
-         create_plan/6
+         create_plan/5
         ]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 %%
-create_plan(_VNodeSelector, NVal, _PVC, _ReqId, _NodeCheckService, Request) ->
+create_plan(NVal, _PVC, _ReqId, _NodeCheckService, Request) ->
     Query = riak_local_index:get_query_from_req(Request),
     Key2 = make_key(Query),
     Bucket = riak_kv_util:get_bucket_from_req(Request),
