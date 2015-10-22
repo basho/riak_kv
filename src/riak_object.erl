@@ -1492,10 +1492,10 @@ packObj_test() ->
     ObjMsg = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedMsg, msgpack),
     ObjErl2 = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedErl),
     ObjMsg2 = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedMsg),
-    Res = (ObjErl == Obj) and (ObjMsg == Obj),
-    Res2 = (ObjErl2 == Obj) and (ObjMsg2 == Obj),
-    ?assert(Res and Res2),
-        {Res, Res2}.
+    ?assertEqual(Obj, ObjErl),
+    ?assertEqual(Obj, ObjMsg),
+    ?assertEqual(Obj, ObjErl2),
+    ?assertEqual(Obj, ObjMsg2).
 
 dotted_values_reconcile() ->
     {B, K} = {<<"b">>, <<"k">>},
