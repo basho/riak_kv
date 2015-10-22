@@ -251,7 +251,8 @@ init([]) ->
                          description = "AAE",
                          module = riak_kv_index_hashtree,
                          fun_type = ?OBSERV_FUN,
-                         run_interval = RunInterval
+                         run_interval = RunInterval,
+                         options = [bucket_props]
                         }),
     {ok, State2}.
 

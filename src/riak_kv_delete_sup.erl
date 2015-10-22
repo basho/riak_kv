@@ -47,7 +47,7 @@ init([]) ->
       #sweep_participant{ description = " Reap tombstones",
                           module = riak_kv_delete,
                           fun_type = ?DELETE_FUN,
-                          run_interval = 24 * 60 * 60 %% Once per day
+                          run_interval = 7 * 24 * 60 * 60 %% Once per week
                         }),
     DeleteSpec = {undefined,
                {riak_kv_delete, start_link, []},

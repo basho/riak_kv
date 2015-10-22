@@ -300,7 +300,7 @@ find_oldes_sweep(Sweeps) ->
 format_result(#sa{active_p = Succ, failed_p = Failed}) ->
     format_result(succ, Succ) ++ format_result(fail, Failed).
 format_result(SuccFail, Results) ->
-    [{Module, SuccFail} || {Module, _Fun, _Acc, _Errors} <- Results].
+    [{Module, SuccFail} || #sweep_participant{module = Module} <- Results].
 
 finish_sweep(Sweeps, #sweep{index = Index}) ->
     dict:update(Index,

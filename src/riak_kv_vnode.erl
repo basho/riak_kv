@@ -2039,10 +2039,10 @@ inform_participants(#sa{active_p = Succ, failed_p = Failed}, Index) ->
 
 successfull_sweep(Succ, Index) ->
     [Module:successfull_sweep(Index, FinalAcc) ||
-       {Module, _Fun, FinalAcc, _Errors}  <- Succ].
+       #sweep_participant{module = Module, initial_acc = FinalAcc}  <- Succ].
 failed_sweep(Failed, Index) ->
     [Module:failed_sweep(Index, Reason) ||
-       {Module, _Fun, _Acc, Reason}  <- Failed].
+       #sweep_participant{module = Module, fail_reason = Reason } <- Failed].
 
 %% @private
 make_complete_fold_req() ->
@@ -2057,46 +2057,78 @@ fold_funs({_BKey, _RObj}, #sa{active_p = [],
     SweepAcc#sa{active_p = lists:reverse(Succ),
                 succ_p = []};
 
-fold_funs(KeyObj, #sa{active_p = [{Mod, Fun, Acc, ?MAX_SWEEP_CRASHES} | Rest]} = SweepAcc) ->
-    lager:error("Sweeper fun ~p crashed to many times.", [Mod]),
-    fold_funs(KeyObj, SweepAcc#sa{active_p = Rest, failed_p = {Mod, Fun, Acc, max_sweep_crash}});
+%% Check if the sweep_participant have reached crash limit.
+fold_funs(KeyObj, #sa{failed_p = Failed,
+                      active_p = [#sweep_participant{errors = ?MAX_SWEEP_CRASHES,
+                                                     module = Module}
+                                      = Sweep | Rest]} = SweepAcc) ->
+    lager:error("Sweeper fun ~p crashed to many times.", [Module]),
+    fold_funs(KeyObj, SweepAcc#sa{active_p = Rest,
+                                  failed_p = [Sweep#sweep_participant{fail_reason = to_many_crashes} | Failed]});
 
-fold_funs({BKey, RObj}, #sa{active_p = [{Mod, Fun, Acc, Errors} | ActiveRest],
+fold_funs(deleted, #sa{active_p = [Sweep | ActiveRest],
+                       succ_p = Succ} = SweepAcc) ->
+    fold_funs(deleted, SweepAcc#sa{active_p = ActiveRest,
+                                   succ_p = [Sweep | Succ]});
+
+fold_funs({BKey, RObj}, #sa{active_p = [Sweep | ActiveRest],
                             succ_p = Succ} = SweepAcc) ->
-    try Fun({BKey, RObj}, Acc) of
+    #sweep_participant{sweep_fun = Fun,
+                       initial_acc = Acc,
+                       errors = Errors,
+					   options = Options} = Sweep,
+	{Opt, SweepAcc1} = maybe_add_opt_info({BKey, RObj}, SweepAcc, Options),
+
+    try Fun({BKey, RObj}, Acc, Opt) of
         {deleted, NewAcc} ->
-            riak_kv_vnode:sweep_del({SweepAcc#sa.index, node()}, BKey, RObj),
-            SweepAcc#sa{active_p = lists:reverse([{Mod, Fun, NewAcc, Errors} | Succ]),
-                        succ_p = []};
+            riak_kv_vnode:sweep_del({SweepAcc1#sa.index, node()}, BKey, RObj),
+            fold_funs(deleted,
+                      SweepAcc1#sa{active_p = ActiveRest,
+                                  succ_p = [Sweep#sweep_participant{initial_acc = NewAcc} | Succ]});
         {mutated, MutatedRObj, NewAcc} ->
             %% Do local put.
             fold_funs({BKey, MutatedRObj},
-                      SweepAcc#sa{active_p = ActiveRest,
-                                  succ_p = [{Mod, Fun, NewAcc, Errors} | Succ]});
+                      SweepAcc1#sa{active_p = ActiveRest,
+                                  succ_p = [Sweep#sweep_participant{initial_acc = NewAcc} | Succ]});
         {ok, NewAcc} ->
             fold_funs({BKey, RObj},
-                      SweepAcc#sa{active_p = ActiveRest,
-                                  succ_p = [{Mod, Fun, NewAcc, Errors} | Succ]})
+                      SweepAcc1#sa{active_p = ActiveRest,
+                                  succ_p = [Sweep#sweep_participant{initial_acc = NewAcc} | Succ]})
     catch C:T ->
-              lager:error("Sweeper fun crashed ~p ~p ~p Key: ~p", [Mod, C, T, BKey]),
+              lager:error("Sweeper fun crashed ~p ~p Key: ~p", [{C, T}, Sweep, BKey]),
               fold_funs({BKey, RObj},
-                        SweepAcc#sa{active_p = ActiveRest,
-                                    succ_p = [{Mod, Fun, Acc, Errors + 1} | Succ]})
+                        SweepAcc1#sa{active_p = ActiveRest,
+                                    succ_p = [Sweep#sweep_participant{errors = Errors + 1} | Succ]})
     end.
+
+maybe_add_opt_info({BKey, RObj}, SweepAcc, Options) ->
+	lists:foldl(fun(Option, InfoSweepAcc) ->
+						add_opt_info({BKey, RObj}, Option, InfoSweepAcc)
+				end, {[], SweepAcc}, Options).
+
+add_opt_info({{Bucket, _Key}, _RObj}, bucket_props, {OptInfo, #sa{bucket_props = BucketPropsDict} = SweepAcc}) ->
+	BucketProps = get_bucket_props(Bucket, BucketPropsDict),
+	BucketPropsDict1 = dict:store(Bucket, BucketProps, BucketPropsDict),
+	{[{bucket_props, BucketProps} | OptInfo], SweepAcc#sa{bucket_props = BucketPropsDict1}}.
+
+get_bucket_props(Bucket, BucketProps) ->
+	case dict:find(Bucket, BucketProps) of
+		{ok, Value} ->
+			Value;
+		_ ->
+			riak_core_bucket:get_bucket(Bucket)
+	end.
 
 maybe_throttle_sweep() ->
     ok.
 
 make_initial_acc(Index, ActiveParticipants) ->
     %% Add initial error count
-    Sweeps =
-        [{AP#sweep_participant.module,
-          AP#sweep_participant.sweep_fun,
-          AP#sweep_participant.initial_acc,
-          _Errors = 0} ||
+    SweepsParticipants =
+        [AP ||
          %% Sort list depening on fun typ.
          AP <- lists:keysort(#sweep_participant.fun_type, ActiveParticipants)],
-    #sa{index = Index, active_p = Sweeps}.
+    #sa{index = Index, active_p = SweepsParticipants}.
 
 %% @private
 maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
