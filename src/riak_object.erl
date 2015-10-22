@@ -1483,6 +1483,20 @@ vclock_codec_test() ->
     [ ?assertEqual({Method, VC}, {Method, decode_vclock(encode_vclock(Method, VC))})
      || VC <- VCs, Method <- [encode_raw, encode_zlib]].
 
+packObj_test() ->
+    io:format("packObj_test~n"),
+    Obj = riak_object:new(<<"bucket">>, <<"key">>, [{<<"field1">>, 1}, {<<"field2">>, 2.123}]),
+    PackedErl = riak_object:to_binary(v1, Obj, erlang),
+    PackedMsg = riak_object:to_binary(v1, Obj, msgpack),
+    ObjErl = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedErl, erlang),
+    ObjMsg = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedMsg, msgpack),
+    ObjErl2 = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedErl),
+    ObjMsg2 = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedMsg),
+    Res = (ObjErl == Obj) and (ObjMsg == Obj),
+    Res2 = (ObjErl2 == Obj) and (ObjMsg2 == Obj),
+    ?assert(Res and Res2),
+        {Res, Res2}.
+
 dotted_values_reconcile() ->
     {B, K} = {<<"b">>, <<"k">>},
     A = riak_object:increment_vclock(riak_object:new(B, K, <<"a">>), a),
