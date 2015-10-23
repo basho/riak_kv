@@ -38,7 +38,7 @@
                    {riak_kv_pb_counter, 50, 53}, %% counter requests
                    {riak_kv_pb_coverage, 70, 71}, %% coverage requests
                    {riak_kv_pb_crdt, 80, 83}, %% CRDT requests
-                   {riak_kv_pb_timeseries, 90, 95} %% time series requests
+                   {riak_kv_pb_timeseries, 90, 97} %% time series requests
                   ]).
 -define(MAX_FLUSH_PUT_FSM_RETRIES, 10).
 
