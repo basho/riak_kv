@@ -178,6 +178,21 @@ enable() ->
 disable() ->
     gen_server:call(?MODULE, disable, infinity).
 
+add_sweep_participant() ->
+    RunInterval =
+        app_helper:get_env(riak_kv, aae_sweep_interval, 7 * 24 * 60 * 60), %% Once per week
+    riak_kv_sweeper:add_sweep_participant(
+      #sweep_participant{
+                         description = "AAE",
+                         module = riak_kv_index_hashtree,
+                         fun_type = ?OBSERV_FUN,
+                         run_interval = RunInterval,
+                         options = [bucket_props]
+                        }).
+
+remove_sweep_participant() ->
+    riak_kv_sweeper:remove_sweep_participant(riak_kv_index_hashtree).
+
 %% @doc Manually trigger hashtree exchanges.
 %%      -- If an index is provided, trigger exchanges between the index and all
 %%         sibling indices for all index_n.
@@ -244,16 +259,12 @@ init([]) ->
                    exchange_queue=[]},
     State2 = reset_build_tokens(State),
     schedule_reset_build_tokens(),
-    RunInterval =
-        app_helper:get_env(riak_kv, aae_sweep_interval, 7 * 24 * 60 * 60), %% Once per week
-    riak_kv_sweeper:add_sweep_participant(
-      #sweep_participant{
-                         description = "AAE",
-                         module = riak_kv_index_hashtree,
-                         fun_type = ?OBSERV_FUN,
-                         run_interval = RunInterval,
-                         options = [bucket_props]
-                        }),
+    case enabled() of
+        true ->
+            add_sweep_participant();
+        _ ->
+            ok
+    end,
     {ok, State2}.
 
 handle_call({set_mode, Mode}, _From, State=#state{mode=CurrentMode}) ->
@@ -270,10 +281,12 @@ handle_call({manual_exchange, Exchange}, _From, State) ->
     {reply, ok, State2};
 handle_call(enable, _From, State) ->
     {_, Opts} = settings(),
+    add_sweep_participant(),
     application:set_env(riak_kv, anti_entropy, {on, Opts}),
     {reply, ok, State};
 handle_call(disable, _From, State) ->
     {_, Opts} = settings(),
+    remove_sweep_participant(),
     application:set_env(riak_kv, anti_entropy, {off, Opts}),
     _ = [riak_kv_index_hashtree:stop(T) || {_,T} <- State#state.trees],
     {reply, ok, State};
