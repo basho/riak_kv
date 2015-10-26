@@ -250,8 +250,11 @@ lookup_tree_and_cast(Index, Msg) ->
 
 
 %% @doc Estimate total number of keys in index_hashtree
-estimate_keys(Tree) ->
-    gen_server:call(Tree, estimate_keys, infinity).
+estimate_keys(Tree) when is_pid(Tree) ->
+    gen_server:call(Tree, estimate_keys, infinity);
+
+estimate_keys(Index) ->
+    lookup_tree_and_call(Index, estimate_keys).
 
 %% @doc Estimate total number of keys in index_hashtree
 estimate_keys(Tree, IndexN) ->
@@ -556,6 +559,7 @@ fold_fun(Tree, _HasIndexTree = true) ->
 -spec object_fold_fun(pid()) -> fun().
 object_fold_fun(Tree) ->
     fun(BKey, RObj, BinBKey, BucketProps) ->
+            %%timer:sleep(10000),
             IndexN = riak_kv_util:get_index_n(BKey, BucketProps),
             insert([{IndexN, BinBKey, hash_object(BKey, RObj)}],
                    [if_missing],

@@ -38,7 +38,8 @@
         {
          index,
          state = idle :: idle | running,
-         pid :: pid | undefined,
+         pid :: pid() | undefined,
+         worker_pid :: pid() | undefined,
          results = dict:new(),
          active_participants,  %% Active in current run
          start_time :: erlang:timestamp(),
@@ -51,5 +52,7 @@
          bucket_props = dict:new(),
          active_p,
          failed_p = [],
-         succ_p = []
+         succ_p = [],
+         estimated_keys = 0,
+         sweeped_keys = 0
          }).

@@ -202,6 +202,7 @@ participate_in_sweep(_Index, _Pid) ->
 
 reap_fun() ->
     fun({BKey, RObj}, Acc, _Opt) ->
+            %%timer:sleep(5000),
             case riak_kv_util:obj_not_deleted(RObj) of
                 undefined ->
                     maybe_reap(BKey, RObj, Acc);
@@ -232,7 +233,6 @@ in_grace(MetaData) ->
         app_helper:get_env(riak_kv, tombstone_grace_period),
     Now = os:timestamp(),
     LastMod = dict:fetch(<<"X-Riak-Last-Modified">>, MetaData),
-    lager:info("~p", [{TombstoneGracePeriod, Now, LastMod}]),
     timer:now_diff(Now, LastMod) div 1000000 < TombstoneGracePeriod.
 
 successfull_sweep(Index, _FinalAcc) ->
