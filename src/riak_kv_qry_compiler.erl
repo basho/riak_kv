@@ -242,9 +242,19 @@ add_types2([{Op, LHS, RHS} | T], Mod, Acc) when Op =:= and_ orelse
     NewAcc = {Op, add_types2([LHS], Mod, []), add_types2([RHS], Mod, [])},
     add_types2(T, Mod, [NewAcc | Acc]);
 add_types2([{Op, Field, {_, Val}} | T], Mod, Acc) ->
-    % Val2 = msgpack:pack(Val, [{format,jsx}]),
-    NewAcc = {Op, {field, Field, Mod:get_field_type([Field])}, {const, Val}},
+    NewType = Mod:get_field_type([Field]),
+    NewAcc = {Op, {field, Field, NewType}, {const, normalise(Val, NewType)}},
     add_types2(T, Mod, [NewAcc | Acc]).
+
+%% the query is prevalidated so the value can only convert down to one of these
+%% two values (but that may fail in the future)
+normalise(Val, boolean) ->
+    case string:to_lower(binary_to_list(Val)) of
+        "true"  -> true;
+        "false" -> false
+    end;
+normalise(X, _) ->
+    X.
 
 %% I know, not tail recursive could stackbust
 %% but not really
@@ -317,9 +327,10 @@ get_long_ddl() ->
     SQL = "CREATE TABLE GeoCheckin " ++
         "(geohash varchar not null, " ++
         "user varchar not null, " ++
-	"extra int not null, " ++
+	"extra integer not null, " ++
 	"more float not null, " ++
         "time timestamp not null, " ++
+        "myboolean boolean not null," ++
         "weather varchar not null, " ++
         "temperature varchar, " ++
         "PRIMARY KEY((quantum(time, 15, s)), time, user))",
@@ -640,6 +651,38 @@ complex_with_4_field_filter_test() ->
 				},
 				{'=', {field, <<"extra">>, integer},
 				 {const, 1}}
+			       }
+	     },
+	     {start_inclusive, false}
+	    ],
+    Expected = [Q#riak_sql_v1{is_executable = true,
+                              type          = timeseries,
+                              'WHERE'       = Where,
+                              partition_key = get_standard_pk(),
+                              local_key     = get_standard_lk()
+                     }],
+    ?assertEqual(Expected, Got).
+
+complex_with_boolean_rewrite_filter_test() ->
+    DDL = get_long_ddl(),
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and (myboolean = False or myboolean = tRue)",
+    {ok, Q} = get_query(Query),
+    true = is_query_valid(DDL, Q),
+    Got = compile(DDL, Q),
+    Where = [
+	     {startkey,        [
+				{<<"time">>, timestamp, 3000},
+				{<<"user">>, binary,    <<"user_1">>}
+			       ]},
+	     {endkey,          [
+				{<<"time">>, timestamp, 5000},
+				{<<"user">>, binary,    <<"user_1">>}
+			       ]},
+	     {filter,          	{or_,
+				 {'=', {field, <<"myboolean">>, boolean},
+				  {const, false}},
+                                 {'=', {field, <<"myboolean">>, boolean},
+                                  {const, true}}
 			       }
 	     },
 	     {start_inclusive, false}
