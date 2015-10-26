@@ -38,7 +38,7 @@
          list_keys/4,
          fold/3,
          fold/4,
-         sweep/2,
+         sweep/3,
          sweep_del/3,
          get_vclocks/2,
          vnode_status/1,
@@ -371,9 +371,9 @@ fold(Preflist, Fun, Acc0, Options) ->
                                               Req,
                                               riak_kv_vnode_master).
 
-sweep(Preflist, Participants) ->
+sweep(Preflist, Participants, EstimatedKeys) ->
     riak_core_vnode_master:sync_command(Preflist,
-                                        {sweep, Participants},
+                                        {sweep, Participants, EstimatedKeys},
                                         riak_kv_vnode_master).
 
 get_vclocks(Preflist, BKeyList) ->
@@ -653,8 +653,8 @@ handle_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0,
     %% we ignore forwardable here.
     do_fold(FoldFun, Acc0, Sender, Opts, State);
 
-handle_command({sweep, Participants}, Sender, State) ->
-    do_sweep(Participants, Sender, State);
+handle_command({sweep, Participants, EstimatedKeys}, Sender, State) ->
+    do_sweep(Participants, EstimatedKeys, Sender, State);
 
 %% entropy exchange commands
 handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
@@ -1422,7 +1422,7 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
     %% Calculate the index specs to remove...
     %% JDM: This should just be a tombstone by this point, but better
     %% safe than sorry.
-    lager:info("do_backend_delete ~p ~p ~p ~p", [Idx, BKey, RObj, ModState]),
+    %%lager:info("do_backend_delete ~p ~p ~p ~p", [Idx, BKey, RObj, ModState]),
     IndexSpecs = riak_object:diff_index_specs(undefined, RObj),
 
     %% Do the delete...
@@ -2008,13 +2008,13 @@ convert_fun(FoldFun) ->
     end.
 
 
-do_sweep([], _Sender, State=#state{idx=Index}) ->
+do_sweep([], _EstimatedKeys, _Sender, State=#state{idx=Index}) ->
     lager:info("No participants in sweep ~p", [Index]),
     {reply, no_participant, State};
 
-do_sweep(ActiveParticipants, Sender, State=#state{idx=Index, mod=Mod, modstate=ModState}) ->
+do_sweep(ActiveParticipants, EstimatedKeys, Sender, State=#state{idx=Index, mod=Mod, modstate=ModState}) ->
     CompleteFoldReq = make_complete_fold_req(),
-    InitialAcc = make_initial_acc(Index, ActiveParticipants),
+    InitialAcc = make_initial_acc(Index, ActiveParticipants, EstimatedKeys),
 
     Opts = get_fold_opts([sweep_fold, {iterator_refresh, true}], State),
     case Mod:fold_objects(CompleteFoldReq, InitialAcc, Opts, ModState) of
@@ -2027,10 +2027,10 @@ do_sweep(ActiveParticipants, Sender, State=#state{idx=Index, mod=Mod, modstate=M
                         inform_participants(Acc, Index),
                         riak_core_vnode:reply(Sender, Acc)
                 end,
-            {async, {fold, Work, FinishFun}, Sender, State};
-        ER ->
-            failed_sweep(ActiveParticipants, Index),
-            {reply, ER, State}
+            {async, {sweep, Work, FinishFun}, Sender, State};
+        Reason ->
+            failed_sweep(ActiveParticipants, Index, Reason),
+            {reply, Reason, State}
     end.
 
 inform_participants(#sa{active_p = Succ, failed_p = Failed}, Index) ->
@@ -2043,17 +2043,28 @@ successfull_sweep(Succ, Index) ->
 failed_sweep(Failed, Index) ->
     [Module:failed_sweep(Index, Reason) ||
        #sweep_participant{module = Module, fail_reason = Reason } <- Failed].
+failed_sweep(Failed, Index, Reason) ->
+    [Module:failed_sweep(Index, Reason) ||
+       #sweep_participant{module = Module} <- Failed].
 
 %% @private
 make_complete_fold_req() ->
-    fun(Bucket, Key, RObjBin, Acc) ->
+    fun(Bucket, Key, RObjBin, #sa{sweeped_keys = SweepKeys} = Acc) ->
             maybe_throttle_sweep(),
+            check_requests(Acc),
             RObj = riak_object:from_binary(Bucket, Key, RObjBin),
-            fold_funs({{Bucket, Key}, RObj}, Acc)
+            fold_funs({{Bucket, Key}, RObj}, Acc#sa{sweeped_keys = SweepKeys + 1})
     end.
 
-fold_funs({_BKey, _RObj}, #sa{active_p = [],
-                              succ_p = Succ} = SweepAcc) ->
+fold_funs(_, #sa{index = Index,
+                 failed_p = FailedParticipants,
+                 active_p = [],
+                 succ_p = []} = SweepAcc) ->
+    lager:info("No more participants in sweep of Index ~p Failed: ~p", [Index, FailedParticipants]),
+    throw(SweepAcc);
+
+fold_funs(_, #sa{active_p = [],
+                 succ_p = Succ} = SweepAcc) ->
     SweepAcc#sa{active_p = lists:reverse(Succ),
                 succ_p = []};
 
@@ -2062,9 +2073,9 @@ fold_funs(KeyObj, #sa{failed_p = Failed,
                       active_p = [#sweep_participant{errors = ?MAX_SWEEP_CRASHES,
                                                      module = Module}
                                       = Sweep | Rest]} = SweepAcc) ->
-    lager:error("Sweeper fun ~p crashed to many times.", [Module]),
+    lager:error("Sweeper fun ~p crashed too many times.", [Module]),
     fold_funs(KeyObj, SweepAcc#sa{active_p = Rest,
-                                  failed_p = [Sweep#sweep_participant{fail_reason = to_many_crashes} | Failed]});
+                                  failed_p = [Sweep#sweep_participant{fail_reason = too_many_crashes} | Failed]});
 
 fold_funs(deleted, #sa{active_p = [Sweep | ActiveRest],
                        succ_p = Succ} = SweepAcc) ->
@@ -2122,13 +2133,36 @@ get_bucket_props(Bucket, BucketProps) ->
 maybe_throttle_sweep() ->
     ok.
 
-make_initial_acc(Index, ActiveParticipants) ->
+check_requests(#sa{sweeped_keys = SweepKeys} = Acc) ->
+    case SweepKeys rem 100 of
+        0 ->
+            receive_request(Acc);
+        _ ->
+            ok
+    end.
+
+receive_request(Acc) ->
+    receive
+        {stop, From} ->
+            #sa{active_p = Active, succ_p = Succ, failed_p = Fail } = Acc,
+            Acc1 = #sa{active_p = [], succ_p = [], failed_p = Active ++ Succ + Fail},
+            lager:info("receive_stop"),
+            From ! ack,
+            throw({stop_sweep, Acc1});
+        {progress, From} ->
+            #sa{estimated_keys = EstimatedKeys, sweeped_keys = SweepedKeys} = Acc,
+            From ! {progress, {SweepedKeys, EstimatedKeys}}
+    after 0 ->
+        ok
+    end.
+
+make_initial_acc(Index, ActiveParticipants, EstimatedNrKeys) ->
     %% Add initial error count
     SweepsParticipants =
         [AP ||
          %% Sort list depening on fun typ.
          AP <- lists:keysort(#sweep_participant.fun_type, ActiveParticipants)],
-    #sa{index = Index, active_p = SweepsParticipants}.
+    #sa{index = Index, active_p = SweepsParticipants, estimated_keys = EstimatedNrKeys}.
 
 %% @private
 maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
