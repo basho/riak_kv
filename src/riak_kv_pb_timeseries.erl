@@ -104,6 +104,12 @@ init() ->
 decode_tsputreq(Bin) ->
     riak_pb_codec:decode(?TIMESERIES_PUT_REQ, Bin).
 
+%%
+%% this is the default function that executes if NIF not present
+%%  this function encodes tsqueryresp
+encode_tsqueryresp(Message) ->
+    riak_pb_codec:encode(Message).
+
 -spec decode(integer(), binary()) ->
     {ok, #ddl_v1{} | #riak_sql_v1{} | #tsputreq{} | #tsputreq2{} | #tsdelreq{} | #tsgetreq{},
         {PermSpec::string(), Table::binary()}} |
@@ -133,6 +139,8 @@ decode(Code, Bin) ->
 
 
 -spec encode(tuple()) -> {ok, iolist()}.
+encode(#tsqueryresp=Message) ->
+    {ok, encode_tsqueryresp(Message)};
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
