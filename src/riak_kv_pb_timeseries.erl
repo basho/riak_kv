@@ -37,9 +37,6 @@
          process/2,
          process_stream/3]).
 
-%% export for matthew debug
--export([decode_tsputreq/1]).
-
 %% NOTE: Clients will work with table names. Those names map to a
 %% bucket type/bucket name tuple in Riak, with both the type name and
 %% the bucket name matching the table.
@@ -52,6 +49,11 @@
 %% more utility functions for where TS and non-TS keys are dealt with
 %% equally.
 -export([pk/1, lk/1]).
+
+%% The protobuf message ID for a timeseries put request, needed to
+%% allow our nif interface to identify the message for which we wish
+%% to perform optimized decoding.
+-define(TIMESERIES_PUT_REQ, 92).
 
 -record(state, {}).
 
@@ -100,19 +102,15 @@ init() ->
 %% this is the default function that executes if NIF not present
 %%  this function decodes to tsputreq, NIF decodes to tsputreq2
 decode_tsputreq(Bin) ->
-    riak_pb_codec:decode(92, Bin).
-
-%%    lager:error("bubba printf decode, Msg: ~p", [Msg]),
-%%    {ok, Msg, {"riak_kv.ts_put", Msg#tsputreq.table}}.
+    riak_pb_codec:decode(?TIMESERIES_PUT_REQ, Bin).
 
 -spec decode(integer(), binary()) ->
     {ok, #ddl_v1{} | #riak_sql_v1{} | #tsputreq{} | #tsputreq2{} | #tsdelreq{} | #tsgetreq{},
         {PermSpec::string(), Table::binary()}} |
     {error,_}.
-decode(92, Bin) ->
+decode(?TIMESERIES_PUT_REQ, Bin) ->
     Msg=decode_tsputreq(Bin),
-    lager:error("bubba printf decode, Msg: ~p", [Msg]),
-    {ok, Msg, {"riak_kv.ts_put", Msg#tsputreq2.table}};
+    {ok, Msg, {"riak_kv.ts_put", extract_table(Msg)}};
 
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
@@ -488,6 +486,11 @@ lk({_PK, LK}) ->
 lk(NonTSKey) ->
     NonTSKey.
 
+
+extract_table(#tsputreq2{table=Table}) ->
+    Table;
+extract_table(#tsputreq{table=Table}) ->
+    Table.
 
 
 -ifdef(TEST).
