@@ -37,6 +37,9 @@
          process/2,
          process_stream/3]).
 
+%% export for matthew debug
+-export([decode_tsputreq/1]).
+
 %% NOTE: Clients will work with table names. Those names map to a
 %% bucket type/bucket name tuple in Riak, with both the type name and
 %% the bucket name matching the table.
@@ -51,6 +54,14 @@
 -export([pk/1, lk/1]).
 
 -record(state, {}).
+
+%% C++ protocol buffer return object, looks like tsputreq, but rows is different format
+-record(tsputreq2, {
+    table = erlang:error({required, table}),
+    columns = [],
+    rows = []
+}).
+
 
 %% per RIAK-1437, error codes assigned to TS are in the 1000-1500 range
 -define(E_SUBMIT,            1001).
@@ -71,14 +82,41 @@
 
 -spec init() -> any().
 init() ->
+    SoName = case code:priv_dir(?MODULE) of
+                 {error, bad_name} ->
+                     case code:which(?MODULE) of
+                         Filename when is_list(Filename) ->
+                             filename:join([filename:dirname(Filename),"../priv", "riak_kv_pb_timeseries"]);
+                         _ ->
+                             filename:join("../priv", "riak_kv_pb_timeseries")
+                     end;
+                 Dir ->
+                     filename:join(Dir, "riak_kv_pb_timeseries")
+             end,
+    erlang:load_nif(SoName, 0),
+
     #state{}.
 
 
+%%
+%% this is the default function that executes if NIF not present
+%%  this function decodes to tsputreq, NIF decodes to tsputreq2
+decode_tsputreq(Bin) ->
+    riak_pb_codec:decode(92, Bin).
+
+%%    lager:error("bubba printf decode, Msg: ~p", [Msg]),
+%%    {ok, Msg, {"riak_kv.ts_put", Msg#tsputreq.table}}.
+
 -spec decode(integer(), binary()) ->
-    {ok, #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+    {ok, #tsputreq{} | #tsputreq2{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
        | #ddl_v1{} | #riak_sql_v1{},
      {PermSpec::string(), Table::binary()}} |
     {error, _}.
+decode(92, Bin) ->
+    Msg=decode_tsputreq(Bin),
+    lager:error("bubba printf decode, Msg: ~p", [Msg]),
+    {ok, Msg, {"riak_kv.ts_put", Msg#tsputreq2.table}};
+
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
@@ -106,16 +144,18 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 
--spec process(atom() | #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+-spec process(atom() | #tsputreq{} | #tsputreq2{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
               | #ddl_v1{} | #riak_sql_v1{}, #state{}) ->
                      {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 process(#tsputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
-process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
+process(#tsputreq2{rows = []}, State) ->
+    {reply, #tsputresp{}, State};
+process(#tsputreq2{table = Table, columns = _Columns, rows = Data}, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
-    Data = riak_pb_ts_codec:decode_rows(Rows),
     %% validate only the first row as we trust the client to send us
     %% perfectly uniform data wrt types and order
+    lager:error("bubba printf process, Table: ~p, Data: ~p", [Table, Data]),
     case (catch Mod:validate_obj(hd(Data))) of
         true ->
             %% however, prevent bad data to crash us
@@ -140,6 +180,10 @@ process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
             {reply, missing_helper_module(Table, BucketProps), State}
     end;
 
+%% convert 3rd field making #tsputreq into #tsputreq2
+process(#tsputreq{table = Bucket, columns = Columns, rows = Rows}, State) ->
+    Data = riak_pb_ts_codec:decode_rows(Rows),
+    process(#tsputreq2{table = Bucket, columns = Columns, rows = Data}, State);
 
 process(#tsgetreq{table = Table, key = PbCompoundKey,
                   timeout = Timeout},
