@@ -3,7 +3,7 @@
 %% riak_kv_qry_coverage: generate the coverage for a hashed query
 %%
 %%
-%% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -23,17 +23,17 @@
 -module(riak_kv_qry_coverage_plan).
 
 -export([
-	 create_plan/6
-	]).
+         create_plan/5
+        ]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 %%
-create_plan(_VNodeSelector, NVal, _PVC, _ReqId, _NodeCheckService, Request) ->
+create_plan(NVal, _PVC, _ReqId, _NodeCheckService, Request) ->
     Query = riak_local_index:get_query_from_req(Request),
     Key2 = make_key(Query),
-    BucketName = riak_kv_util:get_bucket_from_req(Request),
-    VNodes = hash_for_nodes(NVal, BucketName, BucketName, Key2),
+    Bucket = riak_kv_util:get_bucket_from_req(Request),
+    VNodes = hash_for_nodes(NVal, Bucket, Key2),
     NoFilters = [],
     _CoveragePlan = {VNodes, NoFilters}.
 
@@ -50,10 +50,8 @@ make_key(#riak_sql_v1{helper_mod    = Mod,
 
 %%
 hash_for_nodes(NVal,
-               BucketType, BucketName, Key) when is_binary(BucketType),
-                                                 is_binary(BucketName),
-                                                 is_binary(Key) ->
-    DocIdx = riak_core_util:chash_key({{BucketType,BucketName}, Key}),
+               {_BucketType, _BucketName}=Bucket, Key) when is_binary(Key) ->
+    DocIdx = riak_core_util:chash_key({Bucket, Key}),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Perfs = riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes),
     {VNodes, _} = lists:unzip(Perfs),

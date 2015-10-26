@@ -456,15 +456,20 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
 			 none  -> [];
 			 ETuple -> [ETuple]
 		     end,
-    AdditionalOptions = lists:flatten(StartInclusive ++ EndInclusive ++ Filter),
+    AdditionalOptions = lists:flatten(StartInclusive ++ EndInclusive),
+    AdditionalOptions2 =
+        case Filter of
+            [] -> AdditionalOptions;
+            _  -> [{range_filter, Filter} | AdditionalOptions]
+        end,
     StartK2 = [{Field, Val} || {Field, _Type, Val} <- StartK],
     StartK3 = riak_ql_ddl:make_key(Mod, LK, StartK2),
     StartKey = eleveldb_ts:encode_key(StartK3),
-    StartKey2 = to_object_key({Bucket, Bucket}, {timeseries, StartKey}),
+    StartKey2 = to_object_key(Bucket, {timeseries, StartKey}),
     EndK2 = [{Field, Val} || {Field, _Type, Val} <- EndK],
     EndK3 = riak_ql_ddl:make_key(Mod, LK, EndK2),
     EndKey = eleveldb_ts:encode_key(EndK3),
-    EndKey2 = to_object_key({Bucket, Bucket}, {timeseries, EndKey}),
+    EndKey2 = to_object_key(Bucket, {timeseries, EndKey}),
     FoldFun = fun({K, V}, Acc) ->
 		     [{K, V} | Acc]
 	     end,
@@ -472,8 +477,9 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
                {start_key,    StartKey2},
                {end_key,      EndKey2},
                {fold_method,  streaming},
-               {encoding,     msgpack} 
-	      ] ++ AdditionalOptions,
+               {encoding,     msgpack} |
+               AdditionalOptions2
+	      ],
     KeyFolder = fun() ->
 			Vals = eleveldb:fold(Ref, FoldFun, [], Options),
 			FoldIndexFun(lists:reverse(Vals), Buffer)
@@ -754,12 +760,12 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket,
             fun(Bucket, Key, Acc) ->
                     case re:run(Key, TermRe) of
                         nomatch -> Acc;
-                        _ -> stoppable_fold(FoldKeysFun, Bucket, Key, Acc)
+                        _ -> FoldKeysFun(Bucket, Key, Acc)
                     end
             end;
         false ->
             fun(Bucket, Key, Acc) ->
-                    stoppable_fold(FoldKeysFun, Bucket, Key, Acc)
+                    FoldKeysFun(Bucket, Key, Acc)
             end
     end,
 
@@ -780,7 +786,7 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Term
     AccFun = case TermRe =:= undefined of
         true ->
             fun(Bucket, _Term, Val, Acc) ->
-                    stoppable_fold(FoldKeysFun, Bucket, Val, Acc)
+                    FoldKeysFun(Bucket, Val, Acc)
             end;
         false ->
             fun(Bucket, Term, Val, Acc) ->
@@ -788,7 +794,7 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Term
                         nomatch ->
                             Acc;
                         _ ->
-                            stoppable_fold(FoldKeysFun, Bucket, Val, Acc)
+                            FoldKeysFun(Bucket, Val, Acc)
                     end
             end
     end,
@@ -847,18 +853,6 @@ fold_keys_fun(FoldKeysFun, {index, Bucket, V1Q}) ->
     fold_keys_fun(FoldKeysFun, {index, Bucket, Q}).
 
 %% @private
-%% To stop a fold in progress when pagination limit is reached.
-stoppable_fold(Fun, Bucket, Item, Acc) ->
-    try
-        Fun(Bucket, Item, Acc)
-    catch
-        stop_fold ->
-            throw({break, Acc})
-    end.
-
-
-
-%% @private
 %% Return a function to fold over the objects on this backend
 fold_objects_fun(FoldObjectsFun, {index, FilterBucket, Q=?KV_INDEX_Q{}}) ->
     %% 2I query on $key or $bucket field with return_body
@@ -866,7 +860,7 @@ fold_objects_fun(FoldObjectsFun, {index, FilterBucket, Q=?KV_INDEX_Q{}}) ->
             ObjectKey = from_object_key(StorageKey),
             case riak_index:object_key_in_range(ObjectKey, FilterBucket, Q) of
                 {true, {Bucket, Key}} ->
-                    stoppable_fold(FoldObjectsFun, Bucket, {o, Key, Value}, Acc);
+                    FoldObjectsFun(Bucket, {o, Key, Value}, Acc);
                 {skip, _BK} ->
                     Acc;
                 _ ->

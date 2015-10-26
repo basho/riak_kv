@@ -55,8 +55,9 @@ handle_event({metadata_stored, BucketType}, State) ->
 handle_event(_Event, State) ->
     {ok, State}.
 
-handle_call({is_type_compiled, BucketType}, State) ->
-    IsCompiled = (riak_kv_compile_tab:get_state(BucketType) == compiled),
+handle_call({is_type_compiled, [BucketType, DDL]}, State) ->
+    IsCompiled = (riak_kv_compile_tab:get_state(BucketType) == compiled andalso
+                  riak_kv_compile_tab:get_ddl(BucketType) == DDL),
     {ok, IsCompiled, State};
 handle_call(_Request, State) ->
     Reply = ok,

@@ -83,7 +83,7 @@ expand_where(Where, #key_v1{ast = PAST}) ->
     if
 	NoSubQueries =:= 1 ->
 	    [Where];
-	1 < NoSubQueries andalso NoSubQueries < ?MAXSUBQ ->
+	1 < NoSubQueries andalso NoSubQueries =< ?MAXSUBQ ->
 	    _NewWs = make_wheres(Where, QField, Min, Max, Boundaries);
 	?MAXSUBQ < NoSubQueries ->
 	    {error, {too_many_subqueries, NoSubQueries}}
@@ -95,13 +95,10 @@ make_wheres(Where, QField, Min, Max, Boundaries) ->
     Ends   = Boundaries ++ [Max],
     [HdW | Ws] = make_w2(Starts, Ends, QField, NewWhere, []),
     %% add the head options to the head
-    %% reverse the list
-    %% add an 'end_include' to all values except the tail
     %% add the tail options to the tail
     %% reverse again
     [TW | Rest] = lists:reverse([lists:flatten(HdW ++ [HeadOption]) | Ws]),
-    Rest2 = [X ++ [{end_inclusive, true}] || X <- Rest],
-    _Wheres = lists:reverse([lists:flatten(TW ++ [TailOption]) | Rest2]).
+    _Wheres = lists:reverse([lists:flatten(TW ++ [TailOption]) | Rest]).
 
 make_w2([], [], _QField, _Where, Acc) ->
     lists:reverse(Acc);
@@ -136,20 +133,20 @@ compile_where(DDL, Where) ->
         {true, NewW} -> NewW
     end.
 
-check_if_timeseries(#ddl_v1{bucket = B, partition_key = PK, local_key = LK},
+check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK},
               [{and_, _LHS, _RHS} = W]) ->
     try    #key_v1{ast = PAST} = PK,
            #key_v1{ast = LAST} = LK,
            LocalFields     = [X || #param_v1{name = X} <- LAST],
            PartitionFields = [X || #param_v1{name = X} <- PAST],
            [QField] = [X || #hash_fn_v1{mod  = riak_ql_quanta,
-					fn   = quantum,
-					args = [#param_v1{name = X} | _Rest]}
-				<- PAST],
-	   StrippedW = strip(W, []),
-	   {StartW, EndW, Filter} = break_out_timeseries(StrippedW, LocalFields, [QField]),
-	   Mod = riak_ql_ddl:make_module_name(B),
-	   StartKey = rewrite(LK, StartW, Mod),
+                                        fn   = quantum,
+                                        args = [#param_v1{name = X} | _Rest]}
+                                <- PAST],
+           StrippedW = strip(W, []),
+           {StartW, EndW, Filter} = break_out_timeseries(StrippedW, LocalFields, [QField]),
+           Mod = riak_ql_ddl:make_module_name(T),
+           StartKey = rewrite(LK, StartW, Mod),
            EndKey = rewrite(LK, EndW, Mod),
 	   %% defaults on startkey and endkey are different
 	   IncStart = case includes(StartW, '>', Mod) of
@@ -172,7 +169,7 @@ check_if_timeseries(#ddl_v1{bucket = B, partition_key = PK, local_key = LK},
 	       Errors ->
 		   {error, Errors}
 	   end
-    catch 
+    catch
         error:{incomplete_where_clause, _} = E ->
             {error, E};
         error:Reason ->
@@ -236,7 +233,7 @@ strip({and_, B, C}, Acc) -> strip(C, [B | Acc]);
 strip(A, Acc)            -> [A | Acc].
 
 add_types_to_filter(Filter, Mod) ->
-    maybe_make_list(add_types2(Filter, Mod, [])).
+    add_types2(Filter, Mod, []).
 
 add_types2([], _Mod, Acc) ->
     make_ands(lists:reverse(Acc));
@@ -245,11 +242,9 @@ add_types2([{Op, LHS, RHS} | T], Mod, Acc) when Op =:= and_ orelse
     NewAcc = {Op, add_types2([LHS], Mod, []), add_types2([RHS], Mod, [])},
     add_types2(T, Mod, [NewAcc | Acc]);
 add_types2([{Op, Field, {_, Val}} | T], Mod, Acc) ->
+    % Val2 = msgpack:pack(Val, [{format,jsx}]),
     NewAcc = {Op, {field, Field, Mod:get_field_type([Field])}, {const, Val}},
     add_types2(T, Mod, [NewAcc | Acc]).
-
-maybe_make_list([]) -> [];
-maybe_make_list(X)  -> [X]. 
 
 %% I know, not tail recursive could stackbust
 %% but not really
@@ -286,35 +281,33 @@ end.
 %% Helper Fns for unit tests
 %%
 
-make_ddl(Bucket, Fields) when is_binary(Bucket) ->
-    make_ddl(Bucket, Fields, #key_v1{}, #key_v1{}).
+make_ddl(Table, Fields) when is_binary(Table) ->
+    make_ddl(Table, Fields, #key_v1{}, #key_v1{}).
 
-make_ddl(Bucket, Fields, PK) when is_binary(Bucket) ->
-    make_ddl(Bucket, Fields, PK, #key_v1{}).
+make_ddl(Table, Fields, PK) when is_binary(Table) ->
+    make_ddl(Table, Fields, PK, #key_v1{}).
 
-make_ddl(Bucket, Fields, #key_v1{} = PK, #key_v1{} = LK)
-  when is_binary(Bucket) ->
-    #ddl_v1{bucket        = Bucket,
+make_ddl(Table, Fields, #key_v1{} = PK, #key_v1{} = LK)
+  when is_binary(Table) ->
+    #ddl_v1{table         = Table,
             fields        = Fields,
             partition_key = PK,
             local_key     = LK}.
 
-make_query(Bucket, Selections) ->
-    make_query(Bucket, Selections, []).
+make_query(Table, Selections) ->
+    make_query(Table, Selections, []).
 
-make_query(Bucket, Selections, Where) ->
-    #riak_sql_v1{'FROM'   = Bucket,
+make_query(Table, Selections, Where) ->
+    #riak_sql_v1{'FROM'   = Table,
                  'SELECT' = Selections,
                  'WHERE'  = Where}.
 
 -define(MIN, 60 * 1000).
 -define(NAME, "time").
 
-is_query_valid(DDL, Q) ->
-    case riak_ql_ddl:is_query_valid(DDL, Q) of
-        false -> exit('invalid query');
-        true  -> true
-    end.
+is_query_valid(#ddl_v1{ table = Table } = DDL, Q) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
+    riak_ql_ddl:is_query_valid(Mod, DDL, Q).
 
 get_query(String) ->
     Lexed = riak_ql_lexer:get_tokens(String),
@@ -376,8 +369,8 @@ get_standard_lk() ->
 %%
 
 simple_filter_typing_test() ->
-    #ddl_v1{bucket = B} = get_long_ddl(),
-    Mod = riak_ql_ddl:make_module_name(B),
+    #ddl_v1{table = T} = get_long_ddl(),
+    Mod = riak_ql_ddl:make_module_name(T),
     Filter = [
 	      {or_,
 	       {'=', <<"weather">>, {word, <<"yankee">>}},
@@ -389,7 +382,7 @@ simple_filter_typing_test() ->
 	      {'=', <<"extra">>, {int, 1}}
 	     ],
     Got = add_types_to_filter(Filter, Mod),
-    Expected = [{and_,
+    Expected = {and_,
 		 {or_,
 		  {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}},
 		  {and_,
@@ -398,7 +391,7 @@ simple_filter_typing_test() ->
 		  }
 		 },
 		 {'=', {field, <<"extra">>, integer}, {const, 1}}
-		}],
+		},
     ?assertEqual(Expected, Got).
 
 %%
@@ -408,8 +401,8 @@ simple_filter_typing_test() ->
 %% we have enough info to build a range scan
 %%
 simple_rewrite_test() ->
-    #ddl_v1{bucket = B} = get_standard_ddl(),
-    Mod = riak_ql_ddl:make_module_name(B),
+    #ddl_v1{table = T} = get_standard_ddl(),
+    Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
                          #param_v1{name = [<<"time">>]}
@@ -432,8 +425,8 @@ simple_rewrite_test() ->
 %% local key - there is no enough info for a range scan
 %%
 simple_rewrite_fail_1_test() ->
-    #ddl_v1{bucket = B} = get_standard_ddl(),
-    Mod = riak_ql_ddl:make_module_name(B),
+    #ddl_v1{table = T} = get_standard_ddl(),
+    Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
                          #param_v1{name = [<<"user">>]}
@@ -447,8 +440,8 @@ simple_rewrite_fail_1_test() ->
     ).
 
 simple_rewrite_fail_2_test() ->
-    #ddl_v1{bucket = B} = get_standard_ddl(),
-    Mod = riak_ql_ddl:make_module_name(B),
+    #ddl_v1{table = T} = get_standard_ddl(),
+    Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
                          #param_v1{name = [<<"user">>]}
@@ -462,8 +455,8 @@ simple_rewrite_fail_2_test() ->
     ).
 
 simple_rewrite_fail_3_test() ->
-    #ddl_v1{bucket = B} = get_standard_ddl(),
-    Mod = riak_ql_ddl:make_module_name(B),
+    #ddl_v1{table = T} = get_standard_ddl(),
+    Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
                          #param_v1{name = [<<"user">>]},
@@ -524,7 +517,7 @@ simple_with_filter_1_test() ->
 				{<<"time">>, timestamp, 5000},
 				{<<"user">>, binary,    <<"user_1">>}
 			       ]},
-	     {filter,          [{'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}]},
+	     {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
 	     {start_inclusive, false}
 	    ],
     Expected = [Q#riak_sql_v1{is_executable = true,
@@ -550,7 +543,7 @@ simple_with_filter_2_test() ->
 			 {<<"time">>, timestamp, 5000},
 			 {<<"user">>, binary,    <<"user_1">>}
 			]},
-	     {filter,   [{'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}]}
+	     {filter,   {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}}
 	    ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
@@ -575,7 +568,7 @@ simple_with_filter_3_test() ->
 				{<<"time">>, timestamp, 5000},
 				{<<"user">>, binary,    <<"user_1">>}
 			       ]},
-	     {filter,          [{'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}]},
+	     {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
 	     {start_inclusive, false},
 	     {end_inclusive,   true}
 	    ],
@@ -602,12 +595,12 @@ simple_with_2_field_filter_test() ->
 				{<<"time">>, timestamp, 5000},
 				{<<"user">>, binary,    <<"user_1">>}
 			       ]},
-	     {filter,          [{and_,
+	     {filter,          {and_,
 				{'=', {field, <<"weather">>,     binary},
 				 {const, <<"yankee">>}},
 				{'=', {field, <<"temperature">>, binary},
 				 {const, <<"yelp">>}}
-			       }]
+			       }
 	     },
 	     {start_inclusive, false}
 	    ],
@@ -634,7 +627,7 @@ complex_with_4_field_filter_test() ->
 				{<<"time">>, timestamp, 5000},
 				{<<"user">>, binary,    <<"user_1">>}
 			       ]},
-	     {filter,          [{and_,
+	     {filter,          {and_,
 				{or_,
 				 {'=', {field, <<"weather">>, binary},
 				  {const, <<"yankee">>}},
@@ -647,7 +640,7 @@ complex_with_4_field_filter_test() ->
 				},
 				{'=', {field, <<"extra">>, integer},
 				 {const, 1}}
-			       }]
+			       }
 	     },
 	     {start_inclusive, false}
 	    ],
@@ -673,16 +666,14 @@ simple_spanning_boundary_test() ->
 			     {<<"user">>, binary, <<"user_1">>}]},
 	  {endkey,          [{<<"time">>, timestamp, 15000},
 			     {<<"user">>, binary, <<"user_1">>}]},
-	  {filter,          []},
-	  {end_inclusive,   true}
+	  {filter,          []}
 	 ],
     W2 = [
 	  {startkey,        [{<<"time">>, timestamp, 15000},
 			     {<<"user">>, binary, <<"user_1">>}]},
 	  {endkey,          [{<<"time">>, timestamp, 30000},
 			     {<<"user">>, binary, <<"user_1">>}]},
-	  {filter,          []},
-	  {end_inclusive,   true}
+	  {filter,          []}
 	 ],
     W3 = [
 	  {startkey,        [{<<"time">>, timestamp, 30000},

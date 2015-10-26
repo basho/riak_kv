@@ -30,6 +30,7 @@
     code_change/3]).
 
 -include_lib("riak_kv_vnode.hrl").
+-include("riak_kv_wm_raw.hrl").
 
 -record(rec, {
     w, pw, n_val,
@@ -85,7 +86,7 @@ put(RObj, Options) ->
             Key = {timeseries, LocalKey},
             EncodeFn =
                 fun(XRObj) ->
-                    riak_object:to_binary(v1, XRObj, msgpack)
+                  riak_object:to_binary(v1, XRObj, msgpack)
                 end;
         error ->
             Key = riak_object:key(RObj),
@@ -105,14 +106,16 @@ put(RObj, Options) ->
         end,
     case validate_options(NVal, Preflist, Options, BucketProps) of
         {ok, W, PW} ->
-            Workers = workers(),
-            R = random(size(Workers)),
-            Worker = element(R, workers()),
+            Worker = random_worker(),
             ReqId = erlang:monitor(process, Worker),
             RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
             RObj3 = riak_object:update_last_modified(RObj2),
             RObj4 = riak_object:apply_updates(RObj3),
-            EncodedVal = EncodeFn(RObj4),
+            MD  = riak_object:get_metadata(RObj4),
+            MD1 = dict:erase(?MD_TS_LOCAL_KEY, MD),
+            RObj5 = riak_object:update_metadata(RObj4, MD1),
+            EncodedVal = EncodeFn(RObj5),
+
             gen_server:cast(
                 Worker,
                 {put, Bucket, Key, EncodedVal, ReqId, Preflist,
@@ -231,6 +234,12 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+
+random_worker() ->
+    Workers = workers(),
+    R = random(size(Workers)),
+    element(R, workers()).
 
 validate_options(NVal, Preflist, Options, BucketProps) ->
     PW = get_rw_value(pw, BucketProps, NVal, Options),
