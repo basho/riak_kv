@@ -254,7 +254,7 @@ handle_side_effects([{run_sub_query, {qry, Q}, {qid, QId}} | T]) ->
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, [Bucket, none, Q, Timeout, all, undefined, CoverageFn]]),
     handle_side_effects(T);
 handle_side_effects([H | T]) ->
-    io:format("in riak_kv_qry:handle_side_effects not handling ~p~n", [H]),
+    lager:warning("in riak_kv_qry:handle_side_effects not handling ~p", [H]),
     handle_side_effects(T).
 
 decode_results(KVList, SelectSpec) ->
