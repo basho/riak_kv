@@ -160,8 +160,15 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
                    {Table, Table}, PKLK, Options, {riak_client, [node(), undefined]}) of
                 {ok, RObj} ->
                     Record = riak_object:get_value(RObj),
-                    {_Columns, Row} = lists:unzip(Record),
-                    {reply, #tsgetresp{rows = riak_pb_ts_codec:encode_rows([Row])}, State};
+                    {ColumnNames, Row} = lists:unzip(Record),
+                    %% the columns stored in riak_object are just
+                    %% names; we need names with types, so:
+                    ColumnTypes = get_column_types(ColumnNames, Mod),
+                    ColumnDescriptions = [#tscolumndescription{name = Name, type = Type}
+                                          || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)],
+                    Rows = riak_pb_ts_codec:encode_rows([Row]),
+                    {reply, #tsgetresp{columns = ColumnDescriptions,
+                                       rows = Rows}, State};
                 {error, Reason} ->
                     {reply, make_rpberrresp(?E_GET, to_string(Reason)), State}
             end
@@ -389,20 +396,14 @@ fetch_with_patience(QId, N) ->
     end.
 
 -spec make_tsqueryresp([{binary(), term()}], module()) -> #tsqueryresp{}.
-make_tsqueryresp([], _Fun) ->
+make_tsqueryresp([], _Module) ->
     #tsqueryresp{columns = [], rows = []};
-make_tsqueryresp(Rows, Module) ->
+make_tsqueryresp(FetchedRows, Mod) ->
     %% as returned by fetch, we have in Rows a sequence of KV pairs,
     %% making records concatenated in a flat list
-    ColumnNames = get_column_names(Rows),
-    ColumnTypes =
-        lists:map(
-          fun(C) ->
-                  %% make column a single-element list, as
-                  %% encode_field_type requires
-                  riak_pb_ts_codec:encode_field_type(Module:get_field_type([C]))
-          end, ColumnNames),
-    Records = assemble_records(Rows, length(ColumnNames)),
+    ColumnNames = get_column_names(FetchedRows),
+    ColumnTypes = get_column_types(ColumnNames, Mod),
+    Records = assemble_records(FetchedRows, length(ColumnNames)),
     JustRows = lists:map(
                  fun(Rec) -> [C || {_K, C} <- Rec] end,
                  Records),
@@ -417,6 +418,15 @@ get_column_names([{C1, _} | MoreRecords]) ->
             fun({Cn, _}) -> C1 /= Cn end,
             MoreRecords)),
     [C1|RestOfColumns].
+
+get_column_types(ColumnNames, Mod) ->
+    lists:map(
+      fun(C) ->
+              %% make column a single-element list, as
+              %% encode_field_type requires
+              riak_pb_ts_codec:encode_field_type(Mod:get_field_type([C]))
+      end, ColumnNames).
+
 
 assemble_records(Rows, RecordSize) ->
     assemble_records_(Rows, RecordSize, []).
