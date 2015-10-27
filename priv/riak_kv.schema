@@ -42,7 +42,7 @@
       memory -> riak_kv_memory_backend;
       multi -> riak_kv_multi_backend;
       prefix_multi -> riak_kv_multi_prefix_backend;
-      _Default -> riak_kv_bitcask_backend
+      _Default -> riak_kv_eleveldb_backend
     end
  end}.
 
