@@ -46,7 +46,7 @@ init([]) ->
     RunInterval =
         app_helper:get_env(riak_kv, reap_sweep_interval, 7 * 24 * 60 * 60), %% Once per week
     riak_kv_sweeper:add_sweep_participant(
-      #sweep_participant{ description = " Reap tombstones",
+      #sweep_participant{ description = "Reap tombstones",
                           module = riak_kv_delete,
                           fun_type = ?DELETE_FUN,
                           run_interval = RunInterval

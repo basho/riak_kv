@@ -101,7 +101,7 @@ report_worker_pid(Index, Pid) ->
 
 %% @private used by the sweeping process to report results when done.
 sweep_result(Index, Result) ->
-    gen_server:call(?MODULE, {sweep_result, Index, Result}).
+    gen_server:cast(?MODULE, {sweep_result, Index, Result}).
 
 %% ====================================================================
 %% Behavioural functions
@@ -113,14 +113,22 @@ sweep_result(Index, Result) ->
 init([]) ->
     process_flag(trap_exit, true),
     schedule_sweep_tick(),
-    {ok, #state{}}.
+    case get_persistent_participants() of
+        false ->
+            {ok, #state{}};
+        SP ->
+            {ok, #state{sweep_participants = SP}}
+    end.
 
 handle_call({add_sweep_participant, Participant}, _From, #state{sweep_participants = SP} = State) ->
-    {reply, ok, State#state{sweep_participants = dict:store(Participant#sweep_participant.module, Participant, SP)}};
+    SP1 = dict:store(Participant#sweep_participant.module, Participant, SP),
+    persist_participants(SP1),
+    {reply, ok, State#state{sweep_participants = SP1}};
 
 handle_call({remove_sweep_participant, Module}, _From, #state{sweep_participants = SP} = State) ->
     Reply = dict:is_key(Module, SP),
     SP1 = dict:erase(Module, SP),
+    persist_participants(SP1),
     {reply, Reply, State#state{sweep_participants = SP1}};
 
 handle_call({sweep_request, Index}, _From, State) ->
@@ -129,13 +137,13 @@ handle_call({sweep_request, Index}, _From, State) ->
 
 handle_call(status, _From, State) ->
     Progress = [sweep_progress(Sweep) || Sweep <- get_running_sweeps(State#state.sweeps)],
-    {reply, {Progress, dict:to_list(State#state.sweep_participants), dict:to_list(State#state.sweeps)}, State};
+    ProgressString = format_progress(Progress),
+    ParticipantsString = format_participants(dict:to_list(State#state.sweep_participants)),
+    SweepString = format_sweeps(dict:to_list(State#state.sweeps)),
+    {reply, lists:flatten(ProgressString ++ ParticipantsString ++ SweepString), State};
 
 handle_call(sweeps, _From, State) ->
     {reply, State#state.sweeps, State};
-
-handle_call({sweep_result, Index, Result}, _From, State) ->
-    {reply, ok, update_finished_sweep(Index, Result, State)};
 
 handle_call(stop_all_sweeps, _From, #state{sweeps = Sweeps} = State) ->
     [stop_sweep(Sweep) || Sweep <- get_running_sweeps(Sweeps)],
@@ -143,6 +151,9 @@ handle_call(stop_all_sweeps, _From, #state{sweeps = Sweeps} = State) ->
 
 handle_cast({worker_pid, Index, Pid}, State) ->
     {noreply, add_worker_pid(Index, Pid, State)};
+
+handle_cast({sweep_result, Index, Result}, State) ->
+    {noreply, update_finished_sweep(Index, Result, State)};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -245,14 +256,16 @@ sweep_progress(Sweep) ->
     %%{progress, {SweepedKeys, EstimatedKeys}} =
      send_to_sweep_worker(progress, Sweep).
 
-send_to_sweep_worker(Msg, #sweep{worker_pid = WorkPid }) ->
+send_to_sweep_worker(Msg, #sweep{worker_pid = WorkPid }) when is_pid(WorkPid)->
     WorkPid ! {Msg, self()},
     receive
         ack ->
             ok;
         Response ->
             Response
-    end.
+    end;
+send_to_sweep_worker(_Msg, _Sweep) ->
+    false.
 
 %% time_left_sweep_window() ->
 %% 	{_, {Hour, _, _}} = calendar:local_time(),
@@ -334,10 +347,10 @@ update_finished_sweep(Index, Result, #state{sweeps = Sweeps} = State) ->
 store_result(Result, #sweep{results = OldResult} = Sweep) ->
     TimeStamp = os:timestamp(),
     UpdatedResults =
-        lists:foldl(fun({Mod, OutCome}, Dict) ->
-                            dict:store(Mod, {TimeStamp, OutCome}, Dict)
+        lists:foldl(fun({Mod, Outcome}, Dict) ->
+                            dict:store(Mod, {TimeStamp, Outcome}, Dict)
                     end, OldResult, Result),
-    Sweep#sweep{results = UpdatedResults, end_time = os:timestamp()}.
+    Sweep#sweep{results = UpdatedResults, end_time = TimeStamp}.
 
 find_expired_participant(Sweeps, Participants) ->
     ExpiredMissingSweeps =
@@ -361,7 +374,7 @@ expired_or_missing(#sweep{index = Index, results = Result}, Participants) ->
              expired(Now, TS, RunInterval)
          end ||
          {Mod, {TS, _Outcome}} <- ResultList],
-    lager:info("Index: ~p Missing: ~p Expired: ~p", [Index, Missing, Expired]),
+    lager:info("Index: ~w Missing: ~w Expired: ~w", [Index, Missing, Expired]),
     lists:sum(Missing) + lists:sum(Expired).
 
 expired(Now, TS, RunInterval) ->
@@ -425,3 +438,79 @@ get_idle_sweeps(Sweeps) ->
 
 get_never_runned_sweeps(Sweeps) ->
     [Sweep || {_Index, #sweep{state = idle, results = ResDict} = Sweep} <- dict:to_list(Sweeps), dict:is_empty(ResDict)].
+
+format_sweeps(Sweeps) ->
+    Header =
+        io_lib:format("~s~n~-49s  ~-12s  ~-12s~n",
+                      [string:centre(" Sweeps ", 79, $=), 
+                       "Index",
+                       "Last (ago)",
+                       "Duration"]),
+    Now = os:timestamp(),
+    SortedSweeps = lists:keysort(1, Sweeps),
+    FormatedSweeps =
+        [begin
+             LastSweep = format_timestamp(Now, EndTime),
+             Duration = format_timestamp(EndTime, StartTime),
+             ResultsString = format_results(Now, Results),
+             io_lib:format("~-49b  ~-12s  ~-12s ~s ~n", [Index, LastSweep, Duration, ResultsString])
+         end 
+        || {Index, #sweep{state = _State, results = Results, end_time = EndTime, start_time = StartTime}} <- SortedSweeps],
+    Header ++ FormatedSweeps.
+
+format_results(Now, Results) ->
+    ResultList = dict:to_list(Results),
+    SortedResultList = lists:keysort(1, ResultList),
+    [begin
+        LastResult = format_timestamp(Now, TimeStamp),
+        io_lib:format("| ~s ~-1s ~-8s", [atom_to_list(Mod), string:to_upper(atom_to_list(Outcome)), LastResult])
+     end
+    || {Mod, {TimeStamp, Outcome}} <- SortedResultList].
+
+
+format_progress(_) ->
+    io_lib:format("~n", []).
+
+format_participants(SweepParticipants) ->
+    Header =
+        io_lib:format("~s~n~-20s  ~-20s ~-20s~n",
+                      [string:centre(" Sweep Participants ", 79, $=),
+                       "Module",
+                       "Desciption",
+                       "Run interval"]),
+    SortedSweepParticipants = lists:keysort(1, SweepParticipants),
+    lager:info("lixen ~p", [SortedSweepParticipants]),
+    FormatedParticipants =
+        [begin
+             IntervalString = format_interval(Interval * 1000000),
+             io_lib:format("~-20s  ~-20s ~-20s ~n", [atom_to_list(Mod), Desciption,  IntervalString])
+         end
+         || {Mod, #sweep_participant{description = Desciption, run_interval = Interval}}
+                <- SortedSweepParticipants],
+    Header ++ FormatedParticipants.
+
+format_timestamp(_Now, undefined) ->
+    "--";
+format_timestamp(undefined, _) ->
+    "--";
+format_timestamp(Now, TS) ->
+    case timer:now_diff(Now, TS) of
+        Diff when Diff > 0 ->
+            riak_core_format:human_time_fmt("~.1f", Diff);
+        _ ->
+            "--"
+    end.
+
+format_interval(Interval) ->
+    riak_core_format:human_time_fmt("~.1f", Interval).
+
+persist_participants(Participants) ->
+    file:write_file("participants.dat", io_lib:fwrite("~p.\n",[Participants])).
+
+get_persistent_participants() ->
+    case file:consult("participants.dat") of
+        {ok, Participants} ->
+            Participants;
+        _ ->
+            false
+    end.
