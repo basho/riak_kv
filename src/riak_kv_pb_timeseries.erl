@@ -139,7 +139,8 @@ decode(Code, Bin) ->
 
 
 -spec encode(tuple()) -> {ok, iolist()}.
-encode(#tsqueryresp=Message) ->
+encode(#tsqueryresp{}=Message) ->
+    lager:error("bubba printf encode, Message: ~p", [Message]),
     {ok, encode_tsqueryresp(Message)};
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
