@@ -22,7 +22,7 @@
          fun_type :: integer(),     %% ?DELETE_FUN, ?MODIFY_FUN or ?OBSERV_FUN
          sweep_fun :: fun(),        %%
          run_interval :: integer(), %% Defines how often participant wants to run.
-         initial_acc :: any(),
+         acc :: any(),
          options = [] :: list(),
          errors = 0 :: integer(),
          fail_reason
@@ -43,7 +43,9 @@
          results = dict:new(),
          active_participants,  %% Active in current run
          start_time :: erlang:timestamp(),
-         end_time :: erlang:timestamp()
+         end_time :: erlang:timestamp(),
+         estimated_keys = 0 ::non_neg_integer(),
+         swept_keys :: non_neg_integer() | undefined
         }).
 
 %% Sweep accumulator
@@ -53,6 +55,7 @@
          active_p,
          failed_p = [],
          succ_p = [],
-         estimated_keys = 0,
-         sweeped_keys = 0
+         estimated_keys = 0  :: non_neg_integer(),
+         swept_keys = 0  :: non_neg_integer()
          }).
+
