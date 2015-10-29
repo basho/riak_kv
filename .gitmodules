@@ -1,0 +1,3 @@
+[submodule "riak_kv_ts"]
+	path = riak_kv_ts
+	url = git@github.com:basho/riak_kv_ts
