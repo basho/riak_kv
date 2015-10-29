@@ -125,7 +125,8 @@ validate_create_bucket_type(BucketProps) ->
         Consistent ->
             {Unvalidated, Valid, Errors} = validate_create_consistent_props(Consistent, BucketProps)
     end,
-    validate(Unvalidated, Valid, Errors).
+    {Good, Bad} = validate(Unvalidated, Valid, Errors),
+    validate_post_merge(Good, Bad).
 
 %% @private update phase of bucket type. Merges properties from
 %% existing with valid new properties. Existing can be assumed valid,
@@ -135,7 +136,7 @@ validate_update_bucket_type(Existing, New) ->
     Type = type(Existing),
     {Unvalidated, Valid, Errors} = validate_update_type(Type, Existing, New),
     {Good, Bad} = validate(Unvalidated, Valid, Errors),
-    {merge(Good, Existing), Bad}.
+    validate_post_merge(merge(Good, Existing), Bad).
 
 %% @private pick the validation function depending on existing type.
 -spec validate_update_type(Type :: consistent | datatype | write_once | default,
@@ -177,7 +178,8 @@ type(_, _, _) ->
 %% possible type of validation.
 -spec validate_update_typed_bucket(props(), props()) -> {props(), errors()}.
 validate_update_typed_bucket(Existing, New) ->
-    validate_update_bucket_type(Existing, New).
+    {Good, Bad} = validate_update_bucket_type(Existing, New),
+    validate_post_merge(Good, Bad).
 
 %% @private as far as datatypes go, default buckets are free to do as
 %% they please, the datatypes API only works on typed buckets. Go
@@ -185,7 +187,7 @@ validate_update_typed_bucket(Existing, New) ->
 -spec validate_default_bucket(props(), props()) -> {props(), errors()}.
 validate_default_bucket(Existing, New) ->
     {Good, Bad} = validate(New, [], []),
-    {merge(Good, Existing), Bad}.
+    validate_post_merge(merge(Good, Existing), Bad).
 
 %% @private properties in new overwrite those in old
 -spec merge(props(), props()) -> props().
@@ -513,6 +515,31 @@ ensure_not_present(Unvalidated, Valid, Errors, InvalidPropsSpec) ->
                 {Unvalidated, Valid, Errors},
                 InvalidPropsSpec).
 
+%% Validate properties after they have all been individually validated, merged,
+%% and resolved to their final values. This allows for identifying invalid
+%% combinations of properties, such as `last_write_wins=true' and
+%% `dvv_enabled=true'.
+-spec validate_post_merge(props(), errors()) -> {props(), errors()}.
+validate_post_merge(Props, Errors) ->
+    %% Currently, we only have one validation rule to apply at this stage, so
+    %% just call the validation function directly. If more are added in the
+    %% future, it would be good to use function composition to compose the
+    %% individual validation functions into a single function.
+    validate_last_write_wins_implies_not_dvv_enabled({Props, Errors}).
+
+%% If `last_write_wins' is true, `dvv_enabled' must not also be true.
+-spec validate_last_write_wins_implies_not_dvv_enabled({props(), errors()}) -> {props(), errors()}.
+validate_last_write_wins_implies_not_dvv_enabled({Props, Errors}) ->
+    case {last_write_wins(Props), dvv_enabled(Props)} of
+        {true, true} ->
+            {lists:keydelete(dvv_enabled, 1, Props),
+             [{dvv_enabled,
+               "If last_write_wins is true, dvv_enabled must be false"}
+              |Errors]};
+        {_, _} ->
+            {Props, Errors}
+    end.
+
 %% @private just grab the allow_mult value if it exists
 -spec allow_mult(props()) -> boolean() | 'undefined' | 'error'.
 allow_mult(Props) ->
@@ -522,6 +549,16 @@ allow_mult(Props) ->
         MaybeBool ->
             coerce_bool(MaybeBool)
     end.
+
+%% Boolean value of the `last_write_wins' property, or `undefined' if not present.
+-spec last_write_wins(props()) -> boolean() | 'undefined' | 'error'.
+last_write_wins(Props) ->
+    get_boolean(last_write_wins, Props).
+
+%% Boolean value of the `dvv_enabled' property, or `undefined' if not present.
+-spec dvv_enabled(props()) -> boolean() | 'undefined' | 'error'.
+dvv_enabled(Props) ->
+    get_boolean(dvv_enabled, Props).
 
 %% @private coerce the value under key to be a boolean, if defined; undefined, otherwise.
 -spec get_boolean(PropName::atom(), props()) -> boolean() | 'undefined' | 'error'.
@@ -573,6 +610,34 @@ valid_test_() ->
 
 merges_props_test_() ->
     {timeout, ?TEST_TIME_SECS+5, [?_assert(test_merges() =:= true)]}.
+
+-define(LAST_WRITE_WINS, {last_write_wins, true}).
+-define(DVV_ENABLED, {dvv_enabled, true}).
+-define(LWW_DVV, [?LAST_WRITE_WINS, ?DVV_ENABLED]).
+validate_create_bucket_type_test() ->
+    {Validated, Errors} = validate_create_bucket_type(?LWW_DVV),
+    ?assertEqual([{last_write_wins, true}], Validated),
+    ?assertMatch([{dvv_enabled, _Message}], Errors).
+
+validate_update_bucket_type_test() ->
+    {Validated, Errors} = validate_update_bucket_type([], ?LWW_DVV),
+    ?assertEqual([{last_write_wins, true}], Validated),
+    ?assertMatch([{dvv_enabled, _Message}], Errors).
+
+validate_update_typed_bucket_test() ->
+    {Validated, Errors} = validate_update_typed_bucket([], ?LWW_DVV),
+    ?assertEqual([{last_write_wins, true}], Validated),
+    ?assertMatch([{dvv_enabled, _Message}], Errors).
+
+validate_default_bucket_test() ->
+    {Validated, Errors} = validate_default_bucket([], ?LWW_DVV),
+    ?assertEqual([{last_write_wins, true}], Validated),
+    ?assertMatch([{dvv_enabled, _Message}], Errors).
+
+validate_last_write_wins_implies_not_dvv_enabled_test() ->
+    {Validated, Errors} = validate_last_write_wins_implies_not_dvv_enabled({?LWW_DVV, []}),
+    ?assertEqual([{last_write_wins, true}], Validated),
+    ?assertMatch([{dvv_enabled, _Message}], Errors).
 
 test_immutable() ->
    test_immutable(?TEST_TIME_SECS).
@@ -644,9 +709,8 @@ prop_create_valid() ->
                                      has_w1c(New), valid_w1c(New),
                                      has_consistent(New), valid_consistent(New)])
                    end,
-                   collect(with_title("{has_datatype, valid_datatype, allow_mult, has_w1c, valid_w1c, has_consistent, valid_consistent}"),
-                           {has_datatype(New), valid_datatype(New), allow_mult(New), has_w1c(New), valid_w1c(New),
-                           has_consistent(New), valid_consistent(New)},
+                   collect(with_title("{has_datatype, valid_datatype, allow_mult, has_w1c, valid_w1c, has_consistent, valid_consistent, lww, dvv_enabled}"),
+                           {has_datatype(New), valid_datatype(New), allow_mult(New), has_w1c(New), valid_w1c(New), has_consistent(New), valid_consistent(New), last_write_wins(New), dvv_enabled(New)},
                            only_create_if_valid(Result, New)))
             end).
 
@@ -668,10 +732,14 @@ prop_merges() ->
                 %% Good replaces the same key in Existing, right?
                 %% Remove `Bad' from the inputs to validate.
                 F = fun({Name, _Err}, {Old, Neu}) ->
-                    {value, V, Neu2} = lists:keytake(Name, 1, Neu),
-                    %% only want to remove the exact bad value from existing,
-                    %% not the bad key!
-                    {lists:delete(V, Old), Neu2}
+                     case lists:keytake(Name, 1, Neu) of
+                         false ->
+                             {Old, Neu};
+                         {value, V, Neu2} ->
+                             %% only want to remove the exact bad value from existing,
+                             %% not the bad key!
+                             {lists:delete(V, Old), Neu2}
+                     end
                 end,
                 {NoBadExisting, OnlyGoodNew} = lists:foldl(F, {Existing, New}, Bad),
 
@@ -690,11 +758,29 @@ prop_merges() ->
                        io:format("New ~p~n", [New]),
                        io:format("Result ~p~n", [Result]),
                        io:format("Expected ~p~n", [lists:sort(Expected)]),
-                       io:format("Diff ~p~n", [sets:to_list(sets:subtract(sets:from_list(Expected), sets:from_list(Good)))])
+                       io:format("Expected - Good ~p~n", [sets:to_list(sets:subtract(sets:from_list(Expected), sets:from_list(Good)))]),
+                       io:format("Good - Expected ~p~n", [sets:to_list(sets:subtract(sets:from_list(Good), sets:from_list(Expected)))])
                    end,
-                   lists:sort(Expected) == lists:sort(Good)
+                   case valid_dvv_lww({Good, Bad}) of
+                       true ->
+                           lists:sort(maybe_remove_dvv_enabled(Expected)) == lists:sort(maybe_remove_dvv_enabled(Good));
+                       _ ->
+                           false
+                   end
                   )
             end).
+
+valid_dvv_lww({Good, Bad}) ->
+    case last_write_wins(Good) of
+        true ->
+            DvvEnabled = dvv_enabled(Good),
+            (DvvEnabled =:= undefined) orelse (not DvvEnabled) orelse has_dvv_enabled(Bad);
+        _ ->
+            true
+    end.
+
+maybe_remove_dvv_enabled(Props) ->
+    lists:keydelete(dvv_enabled, 1, lists:keydelete(last_write_wins, 1, Props)).
 
 %% Generators
 gen_args(GenDefBucket) ->
@@ -722,7 +808,7 @@ gen_bucket() ->
 
 gen_existing() ->
     Defaults = lists:ukeysort(1, riak_core_bucket_type:defaults()),
-    ?LET(Special, oneof([gen_valid_mult_dt(), gen_valid_w1c(), gen_valid_consistent(), []]),
+    ?LET(Special, oneof([gen_valid_mult_dt(), gen_valid_w1c(), gen_valid_consistent(), gen_valid_dvv_lww(), []]),
          lists:ukeymerge(1, lists:ukeysort(1, Special), Defaults)).
 
 gen_maybe_consistent() ->
@@ -742,33 +828,54 @@ gen_valid_mult_dt(false) ->
 gen_valid_mult_dt(true) ->
     ?LET(Datatype, gen_datatype(), [{allow_mult, true}, {datatype, Datatype}]).
 
+gen_valid_dvv_lww() ->
+    ?LET(LastWriteWins, bool(), gen_valid_dvv_lww(LastWriteWins)).
+
+gen_valid_dvv_lww(true) ->
+    [{last_write_wins, true}, {dvv_enabled, false}];
+gen_valid_dvv_lww(false) ->
+    ?LET(DvvEnabled, bool(), [{last_write_wins, false}, {dvv_enabled, DvvEnabled}]).
+
 gen_new(update) ->
-    ?LET({Mult, Datatype, WriteOnce, Consistent, NVal},
-         {gen_allow_mult(), oneof([[], gen_datatype_property()]),
-          oneof([[], gen_valid_w1c()]),
-          oneof([[], gen_maybe_bad_consistent()]), oneof([[], [{n_val, choose(1, 10)}]])},
-         Mult ++ Datatype ++ WriteOnce ++ Consistent ++ NVal);
-gen_new(create) ->
-    Defaults0 = riak_core_bucket_type:defaults(),
-    Defaults = lists:keydelete(allow_mult, 1, Defaults0),
     ?LET(
-        {Mult, DatatypeOrConsistent, WriteOnce},
+        {Mult, Datatype, WriteOnce, Consistent, NVal, LastWriteWins, DvvEnabled},
         {
             gen_allow_mult(),
-            frequency(
-                [{5, gen_datatype_property()},
-                 {5, gen_maybe_bad_consistent()},
-                 {5, []}]
-            ),
-            gen_w1c()
+            oneof([[], gen_datatype_property()]),
+            oneof([[], gen_valid_w1c()]),
+            oneof([[], gen_maybe_bad_consistent()]),
+            oneof([[], [{n_val, choose(1, 10)}]]),
+            oneof([[], gen_lww()]),
+            oneof([[], gen_dvv_enabled()])
         },
-        Defaults ++ Mult ++ DatatypeOrConsistent ++ WriteOnce).
+        Mult ++ Datatype ++ WriteOnce ++ Consistent ++ NVal ++ LastWriteWins ++ DvvEnabled
+    );
+gen_new(create) ->
+    Defaults0 = riak_core_bucket_type:defaults(),
+    Defaults1 = lists:keydelete(allow_mult, 1, Defaults0),
+    Defaults2 = lists:keydelete(last_write_wins, 1, Defaults1),
+    Defaults = lists:keydelete(dvv_enabled, 1, Defaults2),
+    ?LET(
+        {Mult, DatatypeOrConsistent, WriteOnce, LastWriteWins, DvvEnabled},
+        {
+            gen_allow_mult(),
+            frequency([{5, gen_datatype_property()},
+                       {5, gen_maybe_bad_consistent()},
+                       {5, []}]),
+            gen_w1c(), gen_lww(), gen_dvv_enabled()},
+         Defaults ++ Mult ++ DatatypeOrConsistent ++ WriteOnce ++ LastWriteWins ++ DvvEnabled).
 
 gen_allow_mult() ->
     ?LET(Mult, frequency([{9, bool()}, {1, binary()}]), [{allow_mult, Mult}]).
 
 gen_datatype_property() ->
     ?LET(Datattype, oneof([gen_datatype(), notadatatype]), [{datatype, Datattype}]).
+
+gen_lww() ->
+    ?LET(LwwWins, bool(), [{last_write_wins, LwwWins}]).
+
+gen_dvv_enabled() ->
+    ?LET(DvvEnabled, bool(), [{dvv_enabled, DvvEnabled}]).
 
 gen_datatype() ->
     ?LET(Datamod, oneof(?V2_TOP_LEVEL_TYPES), riak_kv_crdt:from_mod(Datamod)).
@@ -911,6 +1018,26 @@ immutable_dt(_, _, _, Bad) ->
     has_allow_mult(Bad) andalso has_datatype(Bad).
 
 only_create_if_valid({Good, Bad}, New) ->
+    case {last_write_wins(New), dvv_enabled(New)} of
+        {true, true} ->
+            case has_dvv_enabled(Bad) and has_last_write_wins(Good) of
+                true ->
+                    only_create_if_valid2({Good, Bad}, New);
+                _ ->
+                    false
+            end;
+        _ ->
+            only_create_if_valid2({Good, Bad}, New)
+    end.
+
+has_dvv_enabled(Props) ->
+    lists:keyfind(dvv_enabled, 1, Props) /= false.
+
+has_last_write_wins(Props) ->
+    lists:keyfind(last_write_wins, 1, Props) /= false.
+
+
+only_create_if_valid2({Good, Bad}, New) ->
     DT = proplists:get_value(datatype, New),
     AM = proplists:get_value(allow_mult, New),
     FP = get_boolean(write_once, New),
