@@ -1,3 +1,6 @@
+#!/usr/bin/make -f
+# -*- Makefile -*-
+
 .PHONY: deps test
 
 DIALYZER_FLAGS =
@@ -8,6 +11,7 @@ compile: deps
 	./rebar compile
 
 deps:
+	git submodule update --init --recursive
 	./rebar get-deps
 
 clean:
@@ -21,3 +25,10 @@ DIALYZER_APPS = kernel stdlib sasl erts ssl tools os_mon runtime_tools crypto in
 	xmerl webtool snmp public_key mnesia eunit syntax_tools compiler
 
 include tools.mk
+
+nif_build := $(wildcard riak_kv_ts/Makefile)
+
+ifneq ($(nif_build),)
+$(info Attempt to load nif_build: $(nif_build))
+include $(nif_build)
+endif
