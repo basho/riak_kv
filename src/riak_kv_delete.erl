@@ -196,25 +196,25 @@ extract_passthru_options(Options) ->
 
 
 %% riak_kv_sweeper callbacks
-participate_in_sweep(_Index, _Pid) ->
+participate_in_sweep(Index, _Pid) ->
     InitialAcc = 0,
-    {ok, reap_fun(), InitialAcc}.
+    {ok, reap_fun(Index), InitialAcc}.
 
-reap_fun() ->
+reap_fun(Index) ->
     fun({BKey, RObj}, Acc, _Opt) ->
             %%timer:sleep(5000),
             case riak_kv_util:obj_not_deleted(RObj) of
                 undefined ->
-                    maybe_reap(BKey, RObj, Acc);
+                    maybe_reap(BKey, RObj, Index, Acc);
                 _ ->
                     {ok, Acc}
             end
     end.
 
-maybe_reap(BKey, RObj, Acc) ->
+maybe_reap(_BKey, RObj, Index, Acc) ->
     case obj_outside_grace_period(RObj) of
         true ->
-            lager:info("Deleted key ~p", [BKey]),
+            riak_kv_stat:update({reap_tombstone, Index}),
             {deleted, Acc};
         false ->
             {ok, Acc}

@@ -166,6 +166,11 @@
 -define(MD_CACHE_BASE, "riak_kv_vnode_md_cache").
 -define(DEFAULT_HASHTREE_TOKENS, 90).
 
+
+%% Throttle used when sweeping over K/V data: {Limit, Wait}.
+%% Default: 100 keys limit / 100 ms wait
+-define(DEFAULT_SWEEP_THROTTLE, {100, 100}).
+
 %% default value for `counter_lease' in `#counter_state{}'
 %% NOTE: these MUST be positive integers!
 %% @see non_neg_env/3
@@ -2039,7 +2044,7 @@ inform_participants(#sa{active_p = Succ, failed_p = Failed}, Index) ->
 
 successfull_sweep(Succ, Index) ->
     [Module:successfull_sweep(Index, FinalAcc) ||
-       #sweep_participant{module = Module, initial_acc = FinalAcc}  <- Succ].
+       #sweep_participant{module = Module, acc = FinalAcc} <- Succ].
 failed_sweep(Failed, Index) ->
     [Module:failed_sweep(Index, Reason) ||
        #sweep_participant{module = Module, fail_reason = Reason } <- Failed].
@@ -2049,11 +2054,18 @@ failed_sweep(Failed, Index, Reason) ->
 
 %% @private
 make_complete_fold_req() ->
-    fun(Bucket, Key, RObjBin, #sa{sweeped_keys = SweepKeys} = Acc) ->
-            maybe_throttle_sweep(),
-            check_requests(Acc),
+    fun(Bucket, Key, RObjBin, #sa{index = Index, swept_keys = SweepKeys} = Acc) ->
+            maybe_throttle_sweep(Acc),
+            Acc1 =
+                case SweepKeys rem 1000 of
+                    0 ->
+                        riak_kv_sweeper:update_progress(Index, SweepKeys),
+                        receive_request(Acc);
+                    _ ->
+                        Acc
+                end,
             RObj = riak_object:from_binary(Bucket, Key, RObjBin),
-            fold_funs({{Bucket, Key}, RObj}, Acc#sa{sweeped_keys = SweepKeys + 1})
+            fold_funs({{Bucket, Key}, RObj}, Acc1#sa{swept_keys = SweepKeys + 1})
     end.
 
 fold_funs(_, #sa{index = Index,
@@ -2085,7 +2097,7 @@ fold_funs(deleted, #sa{active_p = [Sweep | ActiveRest],
 fold_funs({BKey, RObj}, #sa{active_p = [Sweep | ActiveRest],
                             succ_p = Succ} = SweepAcc) ->
     #sweep_participant{sweep_fun = Fun,
-                       initial_acc = Acc,
+                       acc = Acc,
                        errors = Errors,
 					   options = Options} = Sweep,
 	{Opt, SweepAcc1} = maybe_add_opt_info({BKey, RObj}, SweepAcc, Options),
@@ -2095,16 +2107,16 @@ fold_funs({BKey, RObj}, #sa{active_p = [Sweep | ActiveRest],
             riak_kv_vnode:sweep_del({SweepAcc1#sa.index, node()}, BKey, RObj),
             fold_funs(deleted,
                       SweepAcc1#sa{active_p = ActiveRest,
-                                  succ_p = [Sweep#sweep_participant{initial_acc = NewAcc} | Succ]});
+                                  succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
         {mutated, MutatedRObj, NewAcc} ->
             %% Do local put.
             fold_funs({BKey, MutatedRObj},
                       SweepAcc1#sa{active_p = ActiveRest,
-                                  succ_p = [Sweep#sweep_participant{initial_acc = NewAcc} | Succ]});
+                                  succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
         {ok, NewAcc} ->
             fold_funs({BKey, RObj},
                       SweepAcc1#sa{active_p = ActiveRest,
-                                  succ_p = [Sweep#sweep_participant{initial_acc = NewAcc} | Succ]})
+                                  succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]})
     catch C:T ->
               lager:error("Sweeper fun crashed ~p ~p Key: ~p", [{C, T}, Sweep, BKey]),
               fold_funs({BKey, RObj},
@@ -2130,30 +2142,43 @@ get_bucket_props(Bucket, BucketProps) ->
 			riak_core_bucket:get_bucket(Bucket)
 	end.
 
-maybe_throttle_sweep() ->
-    ok.
-
-check_requests(#sa{sweeped_keys = SweepKeys} = Acc) ->
-    case SweepKeys rem 100 of
+maybe_throttle_sweep(#sa{swept_keys = SweepKeys}) ->
+    {Limit, Wait} = get_sweep_throttle(),
+    case SweepKeys rem Limit of
         0 ->
-            receive_request(Acc);
+            timer:sleep(Wait);
         _ ->
             ok
     end.
 
-receive_request(Acc) ->
+get_sweep_throttle() ->
+    app_helper:get_env(riak_kv, sweep_throttle, ?DEFAULT_SWEEP_THROTTLE).
+
+receive_request(#sa{index = Index, active_p = Active, failed_p = Fail } = Acc) ->
     receive
-        {stop, From} ->
-            #sa{active_p = Active, succ_p = Succ, failed_p = Fail } = Acc,
-            Acc1 = #sa{active_p = [], succ_p = [], failed_p = Active ++ Succ + Fail},
-            lager:info("receive_stop"),
-            From ! ack,
+        {stop, From, Ref} ->
+            lager:info("stop sweep ~p", [Index]),
+            Active1 =
+                [ActiveSP#sweep_participant{fail_reason = sweep_stop } ||
+                 #sweep_participant{} = ActiveSP <- Active],
+            Acc1 = #sa{active_p = [],  failed_p = Active1 ++ Fail},
+            From ! {ack, Ref},
             throw({stop_sweep, Acc1});
-        {progress, From} ->
-            #sa{estimated_keys = EstimatedKeys, sweeped_keys = SweepedKeys} = Acc,
-            From ! {progress, {SweepedKeys, EstimatedKeys}}
+        {{disable, Module}, From, Ref} ->
+            lager:info("disable module ~p for in sweep ~p", [Index, Module]),
+            case lists:keytake(Module, #sweep_participant.module, Active) of
+                {value, SP, Active1} ->
+                    From ! {ack, Ref},
+                    Acc#sa{active_p = Active1,
+                           failed_p = [SP#sweep_participant{fail_reason = disable} | Fail]};
+                _ ->
+                    From ! {ack, Ref},
+                    Acc
+            end;
+        Request ->
+            lager:error("receive unknown: ~p", [Request])
     after 0 ->
-        ok
+        Acc
     end.
 
 make_initial_acc(Index, ActiveParticipants, EstimatedNrKeys) ->

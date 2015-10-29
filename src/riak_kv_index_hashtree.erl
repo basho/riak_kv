@@ -242,7 +242,7 @@ failed_sweep(Index, Reason) ->
 lookup_tree_and_call(Index, Msg) ->
     case riak_kv_entropy_manager:hashtree_pid(Index) of
         {ok, Tree} ->
-            gen_server:call(Tree, Msg);
+            gen_server:call(Tree, Msg, infinity);
         _ ->
             false
     end.

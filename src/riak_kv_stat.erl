@@ -180,6 +180,9 @@ do_update({vnode_put, Idx, USecs}) ->
     ok = exometer:update([P, ?APP, vnode, puts], 1),
     ok = create_or_update([P, ?APP, vnode, puts, time], USecs, histogram),
     do_per_index(puts, Idx, USecs);
+do_update({reap_tombstone, _Index}) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, vnode, reap_tombstone], 1);
 do_update(vnode_index_refresh) ->
     P = ?PFX,
     exometer:update([P, ?APP, vnode, index, refreshes], 1);
@@ -457,6 +460,8 @@ stats() ->
                                            {95    , vnode_put_fsm_time_95},
                                            {99    , vnode_put_fsm_time_99},
                                            {max   , vnode_put_fsm_time_100}]},
+     {[vnode, reap_tombstone], spiral, [], [{one  , vnode_reap_tombstone},
+                                            {count, vnode_reap_tombstone_total}]},
      {[vnode, index, refreshes], spiral, [], [{one  ,vnode_index_refreshes},
                                               {count, vnode_index_refreshes_total}]},
      {[vnode, index, reads], spiral, [], [{one  , vnode_index_reads},
