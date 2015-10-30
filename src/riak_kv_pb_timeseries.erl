@@ -422,7 +422,7 @@ assemble_records(Rows, RecordSize) ->
     assemble_records_(Rows, RecordSize, []).
 %% should we protect against incomplete records?
 assemble_records_([], _, Acc) ->
-    Acc;
+    lists:reverse(Acc);
 assemble_records_(RR, RSize, Acc) ->
     Remaining = lists:nthtail(RSize, RR),
     assemble_records_(
