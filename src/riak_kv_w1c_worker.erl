@@ -116,7 +116,10 @@ put(RObj, Options) ->
             after Timeout ->
                 gen_server:cast(Worker, {cancel, ReqId}),
                 receive
+                    {'DOWN', ReqId, process, _Pid, _Reason} ->
+                        {error, riak_kv_w1c_server_crashed};
                     {ReqId, Response} ->
+                        erlang:demonitor(ReqId, [flush]),
                         Response
                 end
             end;
