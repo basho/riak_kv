@@ -514,8 +514,8 @@ assert_third_param_is_quantum(_KeyComponent) ->
 
 %% @doc Verify primary key and local partition have the same elements
 assert_primary_and_local_keys_match(#ddl_v1{partition_key = #key_v1{ast = Primary}, local_key = #key_v1{ast = Local}}) ->
-    PrimaryList = lists:sort([query_field_name(F) || F <- Primary]),
-    LocalList = lists:sort([query_field_name(F) || F <- Local]),
+    PrimaryList = [query_field_name(F) || F <- Primary],
+    LocalList = [query_field_name(F) || F <- Local],
     case PrimaryList == LocalList of
         true -> ok;
         _Else ->
