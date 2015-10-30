@@ -459,6 +459,8 @@ maybe_parse_table_def(BucketType, Props) ->
                     ok = assert_type_and_table_name_same(BucketType, DDL),
                     ok = try_compile_ddl(DDL),
                     ok = assert_write_once_not_false(PropsNoDef),
+                    ok = assert_partition_key_length(DDL),
+                    ok = assert_primary_and_local_keys_match(DDL),
                     apply_timeseries_bucket_props(DDL, PropsNoDef);
                 {error, _} = E ->
                     E
@@ -496,6 +498,36 @@ assert_type_and_table_name_same(BucketType1, #ddl_v1{table = BucketType2}) ->
         "Error, the bucket type could not be the created. The bucket type and table name must be the same~n"
         "    bucket type was: " ++ binary_to_list(BucketType1) ++ "\n"
         "    table name was:  " ++ binary_to_list(BucketType2) ++ "\n"}).
+
+%% @doc Verify that the primary key has three components
+%%      and the first element is a quantum
+assert_partition_key_length(#ddl_v1{partition_key = {key_v1, Key}}) when length(Key) == 3 ->
+    assert_third_param_is_quantum(lists:nth(3, Key));
+assert_partition_key_length(_DDL) ->
+    throw({error, {primary_key, "Primary key is too short"}}).
+
+%% @doc Verify that the first element of the primary key is a quantum
+assert_third_param_is_quantum(#hash_fn_v1{mod=riak_ql_quanta, fn=quantum}) ->
+    ok;
+assert_third_param_is_quantum(_KeyComponent) ->
+    throw({error, {primary_key, "Third element of primary key must be a quantum"}}).
+
+%% @doc Verify primary key and local partition have the same elements
+assert_primary_and_local_keys_match(#ddl_v1{partition_key = #key_v1{ast = Primary}, local_key = #key_v1{ast = Local}}) ->
+    PrimaryList = [query_field_name(F) || F <- Primary],
+    LocalList = [query_field_name(F) || F <- Local],
+    case PrimaryList == LocalList of
+        true -> ok;
+        _Else ->
+            throw({error, {primary_key, "Local key does not match primary key"}})
+    end.
+
+%% Pull the name out of the appropriate record
+query_field_name(#hash_fn_v1{args = Args}) ->
+    Param = lists:keyfind(param_v1, 1, Args),
+    query_field_name(Param);
+query_field_name(#param_v1{name = Field}) ->
+    Field.
 
 %% Attempt to compile the DDL but don't do anything with the output, this is
 %% catch failures as early as possible. Also the error messages are easy to
