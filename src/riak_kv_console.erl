@@ -522,7 +522,6 @@ bucket_type_create(CreateTypeFn, Type, {struct, Fields}) ->
         [{<<"props", _/binary>>, {struct, Props1}}] ->
             case catch riak_kv_wm_utils:maybe_parse_table_def(Type, Props1) of
                 {ok, Props2} ->
-                    lager:info("OK Return"),
                     Props3 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props2],
                     CreateTypeFn(Props3);
                 {error, ErrorMessage} when is_list(ErrorMessage) ->
