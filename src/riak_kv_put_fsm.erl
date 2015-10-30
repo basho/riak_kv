@@ -90,7 +90,7 @@
                 dw :: non_neg_integer(),
                 pw :: non_neg_integer(),
                 coord_pl_entry :: {integer(), atom()},
-                preflist2 :: riak_core_apl:preflist2(),
+                preflist2 :: riak_core_apl:preflist_ann(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
                 req_id :: pos_integer(),
                 starttime :: pos_integer(), % start time to send to vnodes
