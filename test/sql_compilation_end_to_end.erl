@@ -42,22 +42,27 @@ make_sql(Query) ->
     Lexed = riak_ql_lexer:get_tokens(Query),
     {ok, _SQL} = riak_ql_parser:parse(Lexed).
 
-get_standard_pk() -> #key_v1{ast = [
-				#hash_fn_v1{mod = riak_ql_quanta,
-					    fn = quantum,
-					    args = [
-						    #param_v1{name = [<<"time">>]},
-						    15,
-						    s
-						   ],
-					    type = timestamp}
-			       ]
-			}.
+get_standard_pk() ->
+    #key_v1{ast = [
+                   #param_v1{name = [<<"geohash">>]},
+                   #param_v1{name = [<<"user">>]},
+                   #hash_fn_v1{mod = riak_ql_quanta,
+                               fn = quantum,
+                               args = [
+                                       #param_v1{name = [<<"time">>]},
+                                       15,
+                                       s
+                                      ],
+                               type = timestamp}
+                  ]
+           }.
 
-get_standard_lk() -> #key_v1{ast = [
-				    #param_v1{name = [<<"time">>]},
-				    #param_v1{name = [<<"user">>]}
-				   ]}.
+get_standard_lk() ->
+    #key_v1{ast = [
+                   #param_v1{name = [<<"geohash">>]},
+                   #param_v1{name = [<<"user">>]},
+                   #param_v1{name = [<<"time">>]}
+                  ]}.
 
 %%
 %% Passing Tests
@@ -70,28 +75,22 @@ get_standard_lk() -> #key_v1{ast = [
               ++ "time timestamp not null, "
               ++ "weather varchar not null, "
               ++ "temperature varchar, "
-              ++ "PRIMARY KEY ((quantum(time, 15, s)), time, user))",
-              "select weather from GeoCheckin where time > 3000 and time < 5000 and user = gordon",
+              ++ "PRIMARY KEY ((geohash, user, quantum(time, 15, s)), geohash, user, time))",
+              "select weather from GeoCheckin where time > 3000 and time < 5000 and user = gordon and geohash = Lithgae",
              [
               #riak_sql_v1{'SELECT'      = [[<<"weather">>]],
                            'FROM'        = <<"GeoCheckin">>,
                            'WHERE'       = [
                                             {startkey, [
-                                                        {<<"time">>,
-							 timestamp,
-							 3000},
-                                                        {<<"user">>,
-							 binary,
-							 <<"gordon">>}
+                                                        {<<"geohash">>, varchar,   <<"Lithgae">>},
+                                                        {<<"user">>, varchar, <<"gordon">>},
+                                                        {<<"time">>, timestamp, 3000}
                                                        ]
                                             },
                                             {endkey,   [
-                                                        {<<"time">>,
-							 timestamp,
-							 5000},
-                                                        {<<"user">>,
-							 binary,
-							 <<"gordon">>}
+                                                        {<<"geohash">>, varchar,   <<"Lithgae">>},
+                                                        {<<"user">>, varchar, <<"gordon">>},
+                                                        {<<"time">>, timestamp, 5000}
                                                        ]
                                             },
                                             {filter, []},
@@ -111,8 +110,8 @@ get_standard_lk() -> #key_v1{ast = [
               ++ "time timestamp not null, "
               ++ "weather varchar not null, "
               ++ "temperature varchar, "
-              ++ "PRIMARY KEY ((quantum(time, 15, s)), time, user))",
-	     "select weather from GeoCheckin where time > 3000 and time < 5000",
+              ++ "PRIMARY KEY ((geohash, user, quantum(time, 15, s)), geohash, user, time))",
+	     "select weather from GeoCheckin where time > 3000 and time < 5000 and geohash = Lithgae",
 	     {error, {missing_param, <<"Missing parameter user in where clause.">>}}).
 
 ?assert_test(spanning_qry_test,
@@ -122,33 +121,27 @@ get_standard_lk() -> #key_v1{ast = [
 		  "time timestamp not null, " ++
 		  "weather varchar not null, " ++
 		  "temperature varchar, " ++
-		  "PRIMARY KEY((quantum(time, 15, s)), time, user))",
+		  "PRIMARY KEY((geohash, user, quantum(time, 15, s)), geohash, user, time))",
 	      "select weather from GeoCheckin where time > 3000 and time < 18000 "
-	      "and user = gordon",
+	      "and user = gordon and geohash = Lithgae",
 	      [
-	      #riak_sql_v1{'SELECT'      = [[<<"weather">>]],
-			   'FROM'        = <<"GeoCheckin">>,
-			   'WHERE'       = [
-					    {startkey, [
-                                                        {<<"time">>,
-							 timestamp,
-							 3000},
-                                                        {<<"user">>,
-							 binary,
-							 <<"gordon">>}
-                                                       ]
-                                            },
-                                            {endkey,   [
-                                                        {<<"time">>,
-							 timestamp,
-							 15000},
-                                                        {<<"user">>,
-							 binary,
-							 <<"gordon">>}
-                                                       ]
-                                            },
-                                            {filter, []},
-					    {start_inclusive, false}
+         #riak_sql_v1{'SELECT'      = [[<<"weather">>]],
+                     'FROM'        = <<"GeoCheckin">>,
+                     'WHERE'       = [
+                          {startkey, [
+                             {<<"geohash">>, varchar,   <<"Lithgae">>},
+                             {<<"user">>, varchar, <<"gordon">>},
+                             {<<"time">>, timestamp, 3000}
+                                     ]
+                          },
+                          {endkey,   [
+                                      {<<"geohash">>, varchar,   <<"Lithgae">>},
+                                      {<<"user">>, varchar, <<"gordon">>},
+                                      {<<"time">>, timestamp, 15000}
+                                     ]
+                          },
+                          {filter, []},
+                          {start_inclusive, false}
 					   ],
                            helper_mod    = riak_ql_ddl:make_module_name(<<"GeoCheckin">>),
                            partition_key = get_standard_pk(),
@@ -158,28 +151,23 @@ get_standard_lk() -> #key_v1{ast = [
 	      #riak_sql_v1{'SELECT'      = [[<<"weather">>]],
 			   'FROM'        = <<"GeoCheckin">>,
 			   'WHERE'       = [
-                                            {startkey, [
-                                                        {<<"time">>,
-							 timestamp,
-							 15000},
-                                                        {<<"user">>,
-							 binary,
-							 <<"gordon">>}
-                                                       ]
-                                            },
-                                            {endkey,   [
-                                                        {<<"time">>,
-							 timestamp,
-							 18000},
-                                                        {<<"user">>,
-							 binary,
-							 <<"gordon">>}
-                                                       ]
-                                            },
-                                            {filter, []}					   ],
-                           helper_mod    = riak_ql_ddl:make_module_name(<<"GeoCheckin">>),
-                           partition_key = get_standard_pk(),
-			   is_executable = true,
-			   type          = timeseries,
-                           local_key     = get_standard_lk()}
+                          {startkey, [
+                             {<<"geohash">>, varchar,   <<"Lithgae">>},
+                             {<<"user">>, varchar, <<"gordon">>},
+                             {<<"time">>, timestamp, 15000}
+                                     ]
+                          },
+                          {endkey,   [
+                                      {<<"geohash">>, varchar,   <<"Lithgae">>},
+                                      {<<"user">>, varchar, <<"gordon">>},
+                                      {<<"time">>, timestamp, 18000}
+                                     ]
+                          },
+                          {filter, []}
+					   ],
+                     helper_mod    = riak_ql_ddl:make_module_name(<<"GeoCheckin">>),
+                     partition_key = get_standard_pk(),
+                     is_executable = true,
+                     type          = timeseries,
+                     local_key     = get_standard_lk()}
 	      ]).
