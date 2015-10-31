@@ -66,12 +66,14 @@ expand_query(#ddl_v1{local_key = LK, partition_key = PK}, Q, NewW) ->
     end.
 
 expand_where(Where, #key_v1{ast = PAST}) ->
-    GetMaxMinFun = fun({startkey, [{_, _, H} | _T]}, {_S, E}) ->
-			   {H, E};
-		      ({endkey,   [{_, _, H} | _T]}, {S, _E}) ->
-			   {S, H};
-		      (_, {S, E})  ->
-			   {S, E}
+    GetMaxMinFun = fun({startkey, Key}, {_S, E}) ->
+                           [{_, _, H} | _T] = lists:reverse(Key),
+                           {H, E};
+                      ({endkey, Key}, {S, _E}) ->
+                           [{_, _, H} | _T]  = lists:reverse(Key), 
+                           {S, H};
+                      (_, {S, E})  ->
+                           {S, E}
 		   end,
     {Min, Max} = lists:foldl(GetMaxMinFun, {"", ""}, Where),
     [{[QField], Q, U}] = [{X, Y, Z}
@@ -327,13 +329,13 @@ get_long_ddl() ->
     SQL = "CREATE TABLE GeoCheckin " ++
         "(geohash varchar not null, " ++
         "user varchar not null, " ++
-	"extra integer not null, " ++
-	"more float not null, " ++
+        "extra sint64 not null, " ++
+        "more double not null, " ++
         "time timestamp not null, " ++
         "myboolean boolean not null," ++
         "weather varchar not null, " ++
         "temperature varchar, " ++
-        "PRIMARY KEY((quantum(time, 15, s)), time, user))",
+        "PRIMARY KEY((geohash, user, quantum(time, 15, s)), geohash, user, time))",
     get_ddl(SQL).
 
 get_standard_ddl() ->
@@ -343,7 +345,7 @@ get_standard_ddl() ->
         "time timestamp not null, " ++
         "weather varchar not null, " ++
         "temperature varchar, " ++
-        "PRIMARY KEY((quantum(time, 15, s)), time, user))",
+        "PRIMARY KEY((geohash, user, quantum(time, 15, s)), geohash, user, time))",
     get_ddl(SQL).
 
 get_ddl(SQL) ->
@@ -354,6 +356,8 @@ get_ddl(SQL) ->
 
 get_standard_pk() ->
     #key_v1{ast = [
+		   #param_v1{name = [<<"geohash">>]},
+		   #param_v1{name = [<<"user">>]},
 		   #hash_fn_v1{mod = riak_ql_quanta,
 			       fn = quantum,
 			       args = [
@@ -367,8 +371,9 @@ get_standard_pk() ->
 
 get_standard_lk() ->
     #key_v1{ast = [
-		   #param_v1{name = [<<"time">>]},
-		   #param_v1{name = [<<"user">>]}
+		   #param_v1{name = [<<"geohash">>]},
+		   #param_v1{name = [<<"user">>]},
+		   #param_v1{name = [<<"time">>]}
 		  ]}.
 
 %%
@@ -386,8 +391,8 @@ simple_filter_typing_test() ->
 	      {or_,
 	       {'=', <<"weather">>, {word, <<"yankee">>}},
 	       {and_,
-		{'=', <<"geohash">>,     {word, <<"erko">>}},
-		{'=', <<"temperature">>, {word, <<"yelp">>}}
+          {'=', <<"geohash">>,     {word, <<"erko">>}},
+          {'=', <<"temperature">>, {word, <<"yelp">>}}
 	       }
 	      },
 	      {'=', <<"extra">>, {int, 1}}
@@ -395,13 +400,13 @@ simple_filter_typing_test() ->
     Got = add_types_to_filter(Filter, Mod),
     Expected = {and_,
 		 {or_,
-		  {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}},
+		  {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}},
 		  {and_,
-		   {'=', {field, <<"geohash">>,     binary}, {const, <<"erko">>}},
-		   {'=', {field, <<"temperature">>, binary}, {const, <<"yelp">>}}
+		   {'=', {field, <<"geohash">>,     varchar}, {const, <<"erko">>}},
+		   {'=', {field, <<"temperature">>, varchar}, {const, <<"yelp">>}}
 		  }
 		 },
-		 {'=', {field, <<"extra">>, integer}, {const, 1}}
+		 {'=', {field, <<"extra">>, sint64}, {const, 1}}
 		},
     ?assertEqual(Expected, Got).
 
@@ -423,7 +428,7 @@ simple_rewrite_test() ->
            {'>', <<"time">>,    {int,   678}}
           ],
     Exp = [
-           {<<"geohash">>,  binary,   "yardle"},
+           {<<"geohash">>,  varchar,   "yardle"},
            {<<"time">>,     timestamp, 678}
           ],
     Got = rewrite(LK, W, Mod),
@@ -489,21 +494,23 @@ simple_rewrite_fail_3_test() ->
 
 simplest_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\"",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user1' and geohash = 'Lithgae'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-	     {startkey,        [
-				{<<"time">>, timestamp, 3000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {endkey,          [
-				{<<"time">>, timestamp, 5000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {filter,          []},
-	     {start_inclusive, false}
+             {startkey, [
+                         {<<"geohash">>, varchar,   <<"Lithgae">>},
+                         {<<"user">>,    varchar,   <<"user1">>},
+                         {<<"time">>,    timestamp, 3000}
+                        ]},
+             {endkey,   [
+                         {<<"geohash">>, varchar,   <<"Lithgae">>},
+                         {<<"user">>,    varchar,   <<"user1">>},
+                         {<<"time">>,    timestamp, 5000}
+                        ]},
+             {filter,          []},
+             {start_inclusive, false}
 	    ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
@@ -515,21 +522,23 @@ simplest_test() ->
 
 simple_with_filter_1_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and weather = 'yankee'",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and geohash = 'Lithgae' and user = \"user_1\" and weather = 'yankee'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-	     {startkey,        [
-				{<<"time">>, timestamp, 3000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {endkey,          [
-				{<<"time">>, timestamp, 5000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
-	     {start_inclusive, false}
+             {startkey, [
+                         {<<"geohash">>, varchar,   <<"Lithgae">>},
+                         {<<"user">>,    varchar,   <<"user_1">>},
+                         {<<"time">>,    timestamp, 3000}
+                        ]},
+             {endkey,   [
+                         {<<"geohash">>, varchar,   <<"Lithgae">>},
+                         {<<"user">>,    varchar,   <<"user_1">>},
+                         {<<"time">>,    timestamp, 5000}
+                       ]},
+             {filter,  {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}}},
+             {start_inclusive, false}
 	    ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
@@ -541,21 +550,23 @@ simple_with_filter_1_test() ->
 
 simple_with_filter_2_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time >= 3000 and time < 5000 and user = \"user_1\" and weather = 'yankee'",
+    Query = "select weather from GeoCheckin where time >= 3000 and geohash = 'Lithgae' and time < 5000 and user = \"user_1\" and weather = 'yankee'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-	     {startkey, [
-			 {<<"time">>, timestamp, 3000},
-			 {<<"user">>, binary,    <<"user_1">>}
-			]},
-	     {endkey,   [
-			 {<<"time">>, timestamp, 5000},
-			 {<<"user">>, binary,    <<"user_1">>}
-			]},
-	     {filter,   {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}}
-	    ],
+             {startkey, [
+                         {<<"geohash">>, varchar,   <<"Lithgae">>},
+                         {<<"user">>,    varchar,   <<"user_1">>},
+                         {<<"time">>,    timestamp, 3000}
+                        ]},
+             {endkey,   [
+                         {<<"geohash">>, varchar,   <<"Lithgae">>},
+                         {<<"user">>,    varchar,   <<"user_1">>},
+                         {<<"time">>,    timestamp, 5000}
+                        ]},
+             {filter,   {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}}}
+            ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
                               'WHERE'       = Where,
@@ -566,23 +577,25 @@ simple_with_filter_2_test() ->
 
 simple_with_filter_3_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time <= 5000 and user = \"user_1\" and weather = 'yankee'",
+    Query = "select weather from GeoCheckin where geohash = 'Lithgae' and time > 3000 and time <= 5000 and user = \"user_1\" and weather = 'yankee'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-	     {startkey,        [
-				{<<"time">>, timestamp, 3000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {endkey,          [
-				{<<"time">>, timestamp, 5000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
-	     {start_inclusive, false},
-	     {end_inclusive,   true}
-	    ],
+          {startkey,        [
+                             {<<"geohash">>, varchar,   <<"Lithgae">>},
+                             {<<"user">>,    varchar,   <<"user_1">>},
+                             {<<"time">>,    timestamp, 3000}
+                            ]},
+          {endkey,          [
+                             {<<"geohash">>, varchar,   <<"Lithgae">>},
+                             {<<"user">>,    varchar,   <<"user_1">>},
+                             {<<"time">>,    timestamp, 5000}
+                            ]},
+             {filter,          {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}}},
+             {start_inclusive, false},
+             {end_inclusive,   true}
+            ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
                               'WHERE'       = Where,
@@ -593,28 +606,30 @@ simple_with_filter_3_test() ->
 
 simple_with_2_field_filter_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and weather = 'yankee' and temperature = 'yelp'",
+    Query = "select weather from GeoCheckin where geohash = 'Lithgae' and time > 3000 and time < 5000 and user = \"user_1\" and weather = 'yankee' and temperature = 'yelp'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-	     {startkey,        [
-				{<<"time">>, timestamp, 3000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {endkey,          [
-				{<<"time">>, timestamp, 5000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {filter,          {and_,
-				{'=', {field, <<"weather">>,     binary},
-				 {const, <<"yankee">>}},
-				{'=', {field, <<"temperature">>, binary},
-				 {const, <<"yelp">>}}
-			       }
-	     },
-	     {start_inclusive, false}
-	    ],
+          {startkey,        [
+                             {<<"geohash">>, varchar,   <<"Lithgae">>},
+                             {<<"user">>,    varchar,   <<"user_1">>},
+                             {<<"time">>,    timestamp, 3000}
+                            ]},
+          {endkey,          [
+                             {<<"geohash">>, varchar,   <<"Lithgae">>},
+                             {<<"user">>,    varchar,   <<"user_1">>},
+                             {<<"time">>,    timestamp, 5000}
+                            ]},
+             {filter,          {and_,
+                                {'=', {field, <<"weather">>,     varchar},
+                                 {const, <<"yankee">>}},
+                                {'=', {field, <<"temperature">>, varchar},
+                                 {const, <<"yelp">>}}
+                               }
+             },
+             {start_inclusive, false}
+            ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
                               'WHERE'       = Where,
@@ -625,31 +640,33 @@ simple_with_2_field_filter_test() ->
 
 complex_with_4_field_filter_test() ->
     DDL = get_long_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and extra = 1 and (weather = 'yankee' or (temperature = 'yelp' and geohash = 'erko'))",
+    Query = "select weather from GeoCheckin where geohash = 'Lithgae' and time > 3000 and time < 5000 and user = \"user_1\" and extra = 1 and (weather = 'yankee' or (temperature = 'yelp' and myboolean = true))",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-	     {startkey,        [
-				{<<"time">>, timestamp, 3000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {endkey,          [
-				{<<"time">>, timestamp, 5000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
+          {startkey,        [
+                             {<<"geohash">>, varchar,   <<"Lithgae">>},
+                             {<<"user">>,    varchar,   <<"user_1">>},
+                             {<<"time">>,    timestamp, 3000}
+                            ]},
+          {endkey,          [
+                             {<<"geohash">>, varchar,   <<"Lithgae">>},
+                             {<<"user">>,    varchar,   <<"user_1">>},
+                             {<<"time">>,    timestamp, 5000}
+                            ]},
 	     {filter,          {and_,
 				{or_,
-				 {'=', {field, <<"weather">>, binary},
+				 {'=', {field, <<"weather">>, varchar},
 				  {const, <<"yankee">>}},
 				 {and_,
-				  {'=', {field, <<"geohash">>,     binary},
-				   {const, <<"erko">>}},
-				  {'=', {field, <<"temperature">>, binary},
+				  {'=', {field, <<"myboolean">>, boolean},
+				   {const, true}},
+				  {'=', {field, <<"temperature">>,     varchar},
 				   {const, <<"yelp">>}}
 				 }
 				},
-				{'=', {field, <<"extra">>, integer},
+				{'=', {field, <<"extra">>, sint64},
 				 {const, 1}}
 			       }
 	     },
@@ -665,28 +682,30 @@ complex_with_4_field_filter_test() ->
 
 complex_with_boolean_rewrite_filter_test() ->
     DDL = get_long_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and (myboolean = False or myboolean = tRue)",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and geohash = 'Lithgae' and (myboolean = False or myboolean = tRue)",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-	     {startkey,        [
-				{<<"time">>, timestamp, 3000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {endkey,          [
-				{<<"time">>, timestamp, 5000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {filter,          	{or_,
-				 {'=', {field, <<"myboolean">>, boolean},
-				  {const, false}},
+             {startkey,        [
+                                {<<"geohash">>, varchar,   <<"Lithgae">>},
+                                {<<"user">>,    varchar,   <<"user_1">>},
+                                {<<"time">>,    timestamp, 3000}
+                               ]},
+             {endkey,          [
+                                {<<"geohash">>, varchar,   <<"Lithgae">>},
+                                {<<"user">>,    varchar,   <<"user_1">>},
+                                {<<"time">>,    timestamp, 5000}
+                               ]},
+             {filter,          	{or_,
+                                 {'=', {field, <<"myboolean">>, boolean},
+                                  {const, false}},
                                  {'=', {field, <<"myboolean">>, boolean},
                                   {const, true}}
-			       }
-	     },
-	     {start_inclusive, false}
-	    ],
+                                }
+             },
+             {start_inclusive, false}
+            ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
                               'WHERE'       = Where,
@@ -698,32 +717,50 @@ complex_with_boolean_rewrite_filter_test() ->
 %% got for 3 queries to get partition ordering problems flushed out
 simple_spanning_boundary_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time >= 3000 and time < 31000 and user = \"user_1\"",
+    Query = "select weather from GeoCheckin where time >= 3000 and time < 31000 and user = \"user_1\" and geohash = 'Lithgae'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     %% get basic query
     Got = compile(DDL, Q),
     %% now make the result - expecting 3 queries
     W1 = [
-	  {startkey,        [{<<"time">>, timestamp, 3000},
-			     {<<"user">>, binary, <<"user_1">>}]},
-	  {endkey,          [{<<"time">>, timestamp, 15000},
-			     {<<"user">>, binary, <<"user_1">>}]},
-	  {filter,          []}
-	 ],
+          {startkey,        [
+                             {<<"geohash">>, varchar,   <<"Lithgae">>},
+                             {<<"user">>,    varchar,   <<"user_1">>},
+                             {<<"time">>,    timestamp, 3000}
+                            ]},
+          {endkey,          [
+                             {<<"geohash">>, varchar,   <<"Lithgae">>},
+                             {<<"user">>,    varchar,   <<"user_1">>},
+                             {<<"time">>,    timestamp, 15000}
+                            ]},
+          {filter,          []}
+         ],
     W2 = [
-	  {startkey,        [{<<"time">>, timestamp, 15000},
-			     {<<"user">>, binary, <<"user_1">>}]},
-	  {endkey,          [{<<"time">>, timestamp, 30000},
-			     {<<"user">>, binary, <<"user_1">>}]},
-	  {filter,          []}
-	 ],
+          {startkey,        [
+                             {<<"geohash">>, varchar,   <<"Lithgae">>},
+                             {<<"user">>,    varchar,   <<"user_1">>},
+                             {<<"time">>,    timestamp, 15000}
+                            ]},
+          {endkey,          [
+                             {<<"geohash">>, varchar,   <<"Lithgae">>},
+                             {<<"user">>,    varchar,   <<"user_1">>},
+                             {<<"time">>,    timestamp, 30000}
+                            ]},
+          {filter,          []}
+         ],
     W3 = [
-	  {startkey,        [{<<"time">>, timestamp, 30000},
-			     {<<"user">>, binary, <<"user_1">>}]},
-	  {endkey,          [{<<"time">>, timestamp, 31000},
-			     {<<"user">>, binary, <<"user_1">>}]},
-	  {filter,          []}
+          {startkey,        [
+                             {<<"geohash">>, varchar,   <<"Lithgae">>},
+                             {<<"user">>,    varchar,   <<"user_1">>},
+                             {<<"time">>,    timestamp, 30000}
+                            ]},
+          {endkey,          [
+                             {<<"geohash">>, varchar,   <<"Lithgae">>},
+                             {<<"user">>,    varchar,   <<"user_1">>},
+                             {<<"time">>,    timestamp, 31000}
+                            ]},
+          {filter,          []}
 	 ],
     Expected = [
 		Q#riak_sql_v1{is_executable = true,
@@ -776,7 +813,7 @@ simplest_fail_test() ->
 
 simplest_compile_once_only_fail_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\"",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and geohash='somewherexxx'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     %% now try and compile twice
