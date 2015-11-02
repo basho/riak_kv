@@ -2060,7 +2060,7 @@ make_complete_fold_req() ->
                 case SweepKeys rem 1000 of
                     0 ->
                         riak_kv_sweeper:update_progress(Index, SweepKeys),
-                        receive_request(Acc);
+                        maybe_receive_request(Acc);
                     _ ->
                         Acc
                 end,
@@ -2075,6 +2075,7 @@ fold_funs(_, #sa{index = Index,
     lager:info("No more participants in sweep of Index ~p Failed: ~p", [Index, FailedParticipants]),
     throw(SweepAcc);
 
+%%% No active participants return all succ for next key to run
 fold_funs(_, #sa{active_p = [],
                  succ_p = Succ} = SweepAcc) ->
     SweepAcc#sa{active_p = lists:reverse(Succ),
@@ -2089,11 +2090,13 @@ fold_funs(KeyObj, #sa{failed_p = Failed,
     fold_funs(KeyObj, SweepAcc#sa{active_p = Rest,
                                   failed_p = [Sweep#sweep_participant{fail_reason = too_many_crashes} | Failed]});
 
+%% Key deleted nothing to do
 fold_funs(deleted, #sa{active_p = [Sweep | ActiveRest],
                        succ_p = Succ} = SweepAcc) ->
     fold_funs(deleted, SweepAcc#sa{active_p = ActiveRest,
                                    succ_p = [Sweep | Succ]});
 
+%% Main function: call fun with it's acc and aptionals
 fold_funs({BKey, RObj}, #sa{active_p = [Sweep | ActiveRest],
                             succ_p = Succ} = SweepAcc) ->
     #sweep_participant{sweep_fun = Fun,
@@ -2154,7 +2157,7 @@ maybe_throttle_sweep(#sa{swept_keys = SweepKeys}) ->
 get_sweep_throttle() ->
     app_helper:get_env(riak_kv, sweep_throttle, ?DEFAULT_SWEEP_THROTTLE).
 
-receive_request(#sa{index = Index, active_p = Active, failed_p = Fail } = Acc) ->
+maybe_receive_request(#sa{index = Index, active_p = Active, failed_p = Fail } = Acc) ->
     receive
         {stop, From, Ref} ->
             lager:info("stop sweep ~p", [Index]),
@@ -2181,8 +2184,9 @@ receive_request(#sa{index = Index, active_p = Active, failed_p = Fail } = Acc) -
         Acc
     end.
 
+%% Make sweep accumulator with all ActiveParticipants
+%% that will be called for each key
 make_initial_acc(Index, ActiveParticipants, EstimatedNrKeys) ->
-    %% Add initial error count
     SweepsParticipants =
         [AP ||
          %% Sort list depening on fun typ.
