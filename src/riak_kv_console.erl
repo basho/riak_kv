@@ -35,6 +35,7 @@
          cluster_info/1,
          down/1,
          aae_status/1,
+         sweep_status/1,
          repair_2i/1,
          reformat_indexes/1,
          reformat_objects/1,
@@ -355,6 +356,10 @@ format_timestamp(_Now, undefined) ->
     "--";
 format_timestamp(Now, TS) ->
     riak_core_format:human_time_fmt("~.1f", timer:now_diff(Now, TS)).
+
+sweep_status([]) ->
+    SweepStatus = riak_kv_sweeper:status(),
+    io:format(SweepStatus).
 
 parse_int(IntStr) ->
     try
