@@ -89,12 +89,12 @@ disable_sweep_scheduling() ->
     lager:info("Disable sweep scheduling"),
     application:set_env(riak_kv, sweeper_scheduler, false),
     stop_all_sweeps().
-
 enable_sweep_scheduling() ->
     lager:info("Enable sweep scheduling"),
     application:set_env(riak_kv, sweeper_scheduler, true).
 
-%% @private used by the sweeping process to report results when done.
+%% @private used by the sweeping worker to report pid to enable requests
+%% from riak_kv_sweeper.
 report_worker_pid(Index, Pid) ->
     gen_server:cast(?MODULE, {worker_pid, Index, Pid}).
 
@@ -102,6 +102,7 @@ report_worker_pid(Index, Pid) ->
 sweep_result(Index, Result) ->
     gen_server:cast(?MODULE, {sweep_result, Index, Result}).
 
+% @private used by the sweeping process to report progress.
 update_progress(Index, SweptKeys) ->
     gen_server:cast(?MODULE, {update_progress, Index, SweptKeys}).
 
@@ -165,7 +166,7 @@ handle_cast(_Msg, State) ->
 
 handle_info({'EXIT', Pid, Reason}, #state{sweeps = Sweeps} = State) ->
     SweepList = get_running_sweeps(Sweeps),
-    case {lists:keyfind(Pid, #sweep.pid,SweepList), Reason} of
+    case {lists:keyfind(Pid, #sweep.pid, SweepList), Reason} of
         {false, _} ->
             lager:error("Unknown proc ~p ~p", [Pid, Reason]),
             {noreply, State};
@@ -274,7 +275,6 @@ stop_sweep(Sweep) ->
 send_to_sweep_worker(Msg, #sweep{index = Index, worker_pid = WorkPid}) when is_pid(WorkPid)->
     Ref = make_ref(),
     WorkPid ! {Msg, self(), Ref},
-    lager:info("sending ~p to ~p", [Msg, WorkPid]),
     receive
         {ack, Ref} ->
             ok;
@@ -284,7 +284,7 @@ send_to_sweep_worker(Msg, #sweep{index = Index, worker_pid = WorkPid}) when is_p
         lager:error("No response from sweep proc index ~p ~p", [Index, WorkPid])
     end;
 send_to_sweep_worker(Msg,  #sweep{index = Index}) ->
-    lager:info("sending ~p to ~p failed" , [Msg, Index]),
+    lager:info("no worker pid ~p to ~p " , [Msg, Index]),
     false.
 
 in_sweep_window() ->
@@ -551,12 +551,19 @@ format_interval(Interval) ->
     riak_core_format:human_time_fmt("~.1f", Interval).
 
 persist_participants(Participants) ->
-    file:write_file("participants.dat", io_lib:fwrite("~p.\n",[Participants])).
+    file:write_file(sweep_file("participants.dat") , io_lib:fwrite("~p.\n",[Participants])).
 
 get_persistent_participants() ->
-    case file:consult("participants.dat") of
+    case file:consult(sweep_file("participants.dat")) of
         {ok, [Participants]} ->
             Participants;
         _ ->
             false
     end.
+
+sweep_file(File) ->
+    PDD = app_helper:get_env(riak_core, platform_data_dir, "/tmp"),
+    SweepDir = filename:join(PDD, ?MODULE),
+    SweepFile = filename:join(SweepDir, File),
+    ok = filelib:ensure_dir(SweepFile),
+    SweepFile.
