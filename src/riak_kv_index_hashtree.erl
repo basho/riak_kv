@@ -240,7 +240,7 @@ failed_sweep(Index, Reason) ->
     lookup_tree_and_cast(Index, build_failed).
 
 lookup_tree_and_call(Index, Msg) ->
-    case riak_kv_entropy_manager:hashtree_pid(Index) of
+    case riak_kv_vnode:hashtree_pid(Index) of
         {ok, Tree} ->
             gen_server:call(Tree, Msg, infinity);
         _ ->
@@ -248,13 +248,12 @@ lookup_tree_and_call(Index, Msg) ->
     end.
 
 lookup_tree_and_cast(Index, Msg) ->
-    case riak_kv_entropy_manager:hashtree_pid(Index) of
+    case riak_kv_vnode:hashtree_pid(Index) of
         {ok, Tree} ->
             gen_server:cast(Tree, Msg);
         _ ->
             false
     end.
-
 
 %% @doc Estimate total number of keys in index_hashtree
 estimate_keys(Tree) when is_pid(Tree) ->
@@ -386,23 +385,33 @@ handle_call({participate_in_sweep, _Pid}, _From, State) ->
     lager:info("participate_in_sweep false ~p ~p ~p", [State#state.lock, State#state.built, State#state.expired]),
     {reply, false, State};
 
-handle_call(estimate_keys, _From,  State=#state{trees=Trees}) ->
-    EstimateNrKeys =
-        orddict:fold(fun(_, Tree, Acc) ->
-                             {ok, Value} = hashtree:estimate_keys(Tree) ,
-                             Value + Acc
-                     end,
-                     0, Trees),
-    {reply, {ok, EstimateNrKeys}, State};
+handle_call(estimate_keys, From,  State=#state{trees=Trees}) ->
+    EstimateFun =
+        fun() ->
+                EstimateNrKeys =
+                    orddict:fold(fun(_, Tree, Acc) ->
+                                         {ok, Value} = hashtree:estimate_keys(Tree) ,
+                                         Value + Acc
+                                 end,
+                                 0, Trees),
+                gen_server:reply(From, EstimateNrKeys)
+        end,
+    spawn_link(EstimateFun),
+    {noreply, State};
 
-handle_call({estimate_keys, IndexN}, _From,  State=#state{trees=Trees}) ->
-    case orddict:find(IndexN, Trees) of
-        {ok, Tree} ->
-            {ok, EstimateNrKeys} = hashtree:estimate_keys(Tree),
-            {reply, {ok, EstimateNrKeys}, State};
-        error ->
-            {reply, not_responsible, State}
-    end;
+handle_call({estimate_keys, IndexN}, From,  State=#state{trees=Trees}) ->
+    EstimateFun =
+        fun() ->
+                case orddict:find(IndexN, Trees) of
+                    {ok, Tree} ->
+                        {ok, EstimateNrKeys} = hashtree:estimate_keys(Tree),
+                        gen_server:reply(From, {ok, EstimateNrKeys});
+                    error ->
+                        gen_server:reply(From, not_responsible)
+                end
+        end,
+    spawn_link(EstimateFun),
+    {noreply, State};
 
 handle_call(stop, _From, State0) ->
     State1 = close_trees(State0),
