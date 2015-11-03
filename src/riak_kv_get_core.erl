@@ -198,7 +198,7 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
     ReadRepairs = case ObjState of
                       notfound ->
                           [];
-                      _ -> % ok or tombstone
+                      ok ->
                           %% Any object that is strictly descended by
                           %% the merge result must be read-repaired,
                           %% this ensures even tombstones get repaired
@@ -206,9 +206,14 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                           %% dominated (in need of repair) indexes and
                           %% the list of not_found (in need of repair)
                           %% indexes.
-                          [{Idx, outofdate} || {Idx, {ok, RObj}} <- Results,
-                                  riak_object:strict_descendant(MObj, RObj)] ++
-                              [{Idx, notfound} || {Idx, {error, notfound}} <- Results]
+                          get_read_repairs(Results, MObj);
+                      tombstone ->
+                          case riak_kv_delete:obj_outside_grace_period(MObj) of
+                              false ->
+                                  get_read_repairs(Results, MObj);
+                              true ->
+                                  []
+                          end
                   end,
     Action = case ReadRepairs of
                  [] when ObjState == tombstone ->
@@ -228,6 +233,11 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                      {read_repair, ReadRepairs, MObj}
              end,
     {Action, GetCore#getcore{merged = Merged}}.
+
+get_read_repairs(Results, MObj) ->
+    [{Idx, outofdate} || {Idx, {ok, RObj}} <- Results,
+                         riak_object:strict_descendant(MObj, RObj)] ++
+        [{Idx, notfound} || {Idx, {error, notfound}} <- Results].
 
 %% Return request info
 -spec info(undefined | getcore()) -> [{vnode_oks, non_neg_integer()} |

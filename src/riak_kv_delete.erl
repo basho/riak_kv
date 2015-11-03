@@ -29,7 +29,7 @@
 -endif.
 -include("riak_kv_wm_raw.hrl").
 
--export([start_link/6, start_link/7, start_link/8, delete/8]).
+-export([start_link/6, start_link/7, start_link/8, delete/8, obj_outside_grace_period/1]).
 -export([participate_in_sweep/2, successfull_sweep/2, failed_sweep/2]).
 
 -include("riak_kv_dtrace.hrl").
@@ -202,7 +202,6 @@ participate_in_sweep(Index, _Pid) ->
 
 reap_fun(Index) ->
     fun({BKey, RObj}, Acc, _Opt) ->
-            %%timer:sleep(5000),
             case riak_kv_util:obj_not_deleted(RObj) of
                 undefined ->
                     maybe_reap(BKey, RObj, Index, Acc);
