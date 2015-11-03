@@ -39,14 +39,14 @@ compile(#ddl_v1{}, #riak_sql_v1{is_executable = true}) ->
 compile(#ddl_v1{}, #riak_sql_v1{'SELECT' = []}) ->
     {error, 'full table scan not implmented'};
 compile(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
-				      type          = sql} = Q) ->
+                                      type          = sql} = Q) ->
     comp2(DDL, Q).
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
 %% write that up in time
 comp2(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
-				    'WHERE'       = W} = Q) ->
+                    'WHERE'       = W} = Q) ->
     case compile_where(DDL, W) of
         {error, E} -> {error, E};
         NewW       -> expand_query(DDL, Q, NewW)
@@ -55,38 +55,38 @@ comp2(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
 %% now break out the query on quantum boundaries
 expand_query(#ddl_v1{local_key = LK, partition_key = PK}, Q, NewW) ->
     case expand_where(NewW, PK) of
-	{error, E} ->
-	    {error, E};
-	NewWs ->
-	    [Q#riak_sql_v1{is_executable = true,
-			   type          = timeseries,
-			   'WHERE'       = X,
-			   local_key     = LK,
-			   partition_key = PK} || X <- NewWs]
+    {error, E} ->
+        {error, E};
+    NewWs ->
+        [Q#riak_sql_v1{is_executable = true,
+               type          = timeseries,
+               'WHERE'       = X,
+               local_key     = LK,
+               partition_key = PK} || X <- NewWs]
     end.
 
 expand_where(Where, #key_v1{ast = PAST}) ->
-    GetMaxMinFun = fun({startkey, [{_, _, H} | _T]}, {_S, E}) ->
-			   {H, E};
-		      ({endkey,   [{_, _, H} | _T]}, {S, _E}) ->
-			   {S, H};
-		      (_, {S, E})  ->
-			   {S, E}
-		   end,
+    GetMaxMinFun = fun({startkey, List}, {_S, E}) ->
+                           {element(3, lists:last(List)), E};
+                      ({endkey,   List}, {S, _E}) ->
+                           {S, element(3, lists:last(List))};
+                      (_, {S, E})  ->
+                           {S, E}
+                   end,
     {Min, Max} = lists:foldl(GetMaxMinFun, {"", ""}, Where),
     [{[QField], Q, U}] = [{X, Y, Z}
-			  || #hash_fn_v1{mod = riak_ql_quanta,
-					 fn   = quantum,
-					 args = [#param_v1{name = X}, Y, Z]}
-				 <- PAST],
+              || #hash_fn_v1{mod = riak_ql_quanta,
+                     fn   = quantum,
+                     args = [#param_v1{name = X}, Y, Z]}
+                 <- PAST],
     {NoSubQueries, Boundaries} = riak_ql_quanta:quanta(Min, Max, Q, U),
     if
-	NoSubQueries =:= 1 ->
-	    [Where];
-	1 < NoSubQueries andalso NoSubQueries =< ?MAXSUBQ ->
-	    _NewWs = make_wheres(Where, QField, Min, Max, Boundaries);
-	?MAXSUBQ < NoSubQueries ->
-	    {error, {too_many_subqueries, NoSubQueries}}
+        NoSubQueries =:= 1 ->
+            [Where];
+        1 < NoSubQueries andalso NoSubQueries =< ?MAXSUBQ ->
+            _NewWs = make_wheres(Where, QField, Min, Max, Boundaries);
+        ?MAXSUBQ < NoSubQueries ->
+            {error, {too_many_subqueries, NoSubQueries}}
     end.
 
 make_wheres(Where, QField, Min, Max, Boundaries) ->
@@ -109,13 +109,13 @@ make_w2([Start | T1], [End | T2], QField, Where, Acc) ->
 
 extract_options(Where) ->
     {HeadOption, W1} = case lists:keytake(start_inclusive, 1, Where) of
-			     false                  -> {[], Where};
-			     {value, HdO, NewWhere} -> {HdO, NewWhere}
-			 end,
+                 false                  -> {[], Where};
+                 {value, HdO, NewWhere} -> {HdO, NewWhere}
+             end,
     {TailOption, W2} = case lists:keytake(end_inclusive, 1, W1) of
-			   false                  -> {[], W1};
-			   {value, TO, NewWhere2} -> {TO, NewWhere2}
-		       end,
+               false                  -> {[], W1};
+               {value, TO, NewWhere2} -> {TO, NewWhere2}
+               end,
     {HeadOption, TailOption, W2}.
 
 %% this rewrite is premised on the fact the the Query field is a timestamp
@@ -148,27 +148,27 @@ check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK},
            Mod = riak_ql_ddl:make_module_name(T),
            StartKey = rewrite(LK, StartW, Mod),
            EndKey = rewrite(LK, EndW, Mod),
-	   %% defaults on startkey and endkey are different
-	   IncStart = case includes(StartW, '>', Mod) of
-			  true  -> [{start_inclusive, false}];
-			  false -> []
-		      end,
-	   IncEnd = case includes(EndW, '<', Mod) of
-			  true  -> [];
-			  false -> [{end_inclusive, true}]
-		      end,
-	   case has_errors(StartKey, EndKey) of
-	       [] ->
-		   RewrittenFilter = add_types_to_filter(Filter, Mod),
-		   {true, lists:flatten([
-					 {startkey, StartKey},
-					 {endkey,   EndKey},
-					 {filter,   RewrittenFilter}
-					] ++ IncStart ++ IncEnd
-				       )};
-	       Errors ->
-		   {error, Errors}
-	   end
+           %% defaults on startkey and endkey are different
+           IncStart = case includes(StartW, '>', Mod) of
+                  true  -> [{start_inclusive, false}];
+                  false -> []
+                  end,
+           IncEnd = case includes(EndW, '<', Mod) of
+                  true  -> [];
+                  false -> [{end_inclusive, true}]
+                  end,
+           case has_errors(StartKey, EndKey) of
+               [] ->
+               RewrittenFilter = add_types_to_filter(Filter, Mod),
+               {true, lists:flatten([
+                         {startkey, StartKey},
+                         {endkey,   EndKey},
+                         {filter,   RewrittenFilter}
+                        ] ++ IncStart ++ IncEnd
+                           )};
+               Errors ->
+               {error, Errors}
+           end
     catch
         error:{incomplete_where_clause, _} = E ->
             {error, E};
@@ -197,13 +197,13 @@ includes([], _Op, _Mod) ->
 includes([{Op1, Field, _} | T], Op2, Mod) ->
     Type = Mod:get_field_type([Field]),
     case Type of
-	timestamp ->
-	    case Op1 of
-		Op2 -> true;
-		_   -> false
-	    end;
-	_ ->
-	    includes(T, Op2, Mod)
+        timestamp ->
+            case Op1 of
+            Op2 -> true;
+            _   -> false
+            end;
+        _ ->
+            includes(T, Op2, Mod)
     end.
 
 break_out_timeseries(Ands, LocalFields, QuantumFields) ->
@@ -238,7 +238,7 @@ add_types_to_filter(Filter, Mod) ->
 add_types2([], _Mod, Acc) ->
     make_ands(lists:reverse(Acc));
 add_types2([{Op, LHS, RHS} | T], Mod, Acc) when Op =:= and_ orelse
-						Op =:= or_  ->
+                        Op =:= or_  ->
     NewAcc = {Op, add_types2([LHS], Mod, []), add_types2([RHS], Mod, [])},
     add_types2(T, Mod, [NewAcc | Acc]);
 add_types2([{Op, Field, {_, Val}} | T], Mod, Acc) ->
@@ -277,10 +277,10 @@ rew2([], _W, _Mod, _Acc) ->
 rew2([#param_v1{name = [N]} | T], W, Mod, Acc) ->
     Type = Mod:get_field_type([N]),
     case lists:keytake(N, 2, W) of
-	false                           ->
-	    {error, {missing_param, ?E_MISSING_PARAM_IN_WHERE_CLAUSE(N)}};
-	{value, {_, _, {_, Val}}, NewW} ->
-	    rew2(T, NewW, Mod, [{N, Type, Val} | Acc])
+    false                           ->
+        {error, {missing_param, ?E_MISSING_PARAM_IN_WHERE_CLAUSE(N)}};
+    {value, {_, _, {_, Val}}, NewW} ->
+        rew2(T, NewW, Mod, [{N, Type, Val} | Acc])
 end.
 
 -ifdef(TEST).
@@ -326,24 +326,28 @@ get_query(String) ->
 get_long_ddl() ->
     SQL = "CREATE TABLE GeoCheckin " ++
         "(geohash varchar not null, " ++
+        "location varchar not null, " ++
         "user varchar not null, " ++
-	"extra integer not null, " ++
-	"more float not null, " ++
+        "extra integer not null, " ++
+        "more float not null, " ++
         "time timestamp not null, " ++
         "myboolean boolean not null," ++
         "weather varchar not null, " ++
         "temperature varchar, " ++
-        "PRIMARY KEY((quantum(time, 15, s)), time, user))",
+        "PRIMARY KEY((location, user, quantum(time, 15, 's')), " ++
+        "location, user, time))",
     get_ddl(SQL).
 
 get_standard_ddl() ->
     SQL = "CREATE TABLE GeoCheckin " ++
         "(geohash varchar not null, " ++
+        "location varchar not null, " ++
         "user varchar not null, " ++
         "time timestamp not null, " ++
         "weather varchar not null, " ++
         "temperature varchar, " ++
-        "PRIMARY KEY((quantum(time, 15, s)), time, user))",
+        "PRIMARY KEY((location, user, quantum(time, 15, 's')), " ++
+        "location, user, time))",
     get_ddl(SQL).
 
 get_ddl(SQL) ->
@@ -354,22 +358,25 @@ get_ddl(SQL) ->
 
 get_standard_pk() ->
     #key_v1{ast = [
-		   #hash_fn_v1{mod = riak_ql_quanta,
-			       fn = quantum,
-			       args = [
-				       #param_v1{name = [<<"time">>]},
-				       15,
-				       s
-				      ],
-			       type = timestamp}
-		  ]
-	   }.
+           #param_v1{name = [<<"location">>]},
+           #param_v1{name = [<<"user">>]},
+           #hash_fn_v1{mod = riak_ql_quanta,
+                   fn = quantum,
+                   args = [
+                       #param_v1{name = [<<"time">>]},
+                       15,
+                       s
+                      ],
+                   type = timestamp}
+          ]
+       }.
 
 get_standard_lk() ->
     #key_v1{ast = [
-		   #param_v1{name = [<<"time">>]},
-		   #param_v1{name = [<<"user">>]}
-		  ]}.
+           #param_v1{name = [<<"location">>]},
+           #param_v1{name = [<<"user">>]},
+           #param_v1{name = [<<"time">>]}
+          ]}.
 
 %%
 %% Unit tests
@@ -383,26 +390,26 @@ simple_filter_typing_test() ->
     #ddl_v1{table = T} = get_long_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     Filter = [
-	      {or_,
-	       {'=', <<"weather">>, {word, <<"yankee">>}},
-	       {and_,
-		{'=', <<"geohash">>,     {word, <<"erko">>}},
-		{'=', <<"temperature">>, {word, <<"yelp">>}}
-	       }
-	      },
-	      {'=', <<"extra">>, {int, 1}}
-	     ],
+          {or_,
+           {'=', <<"weather">>, {word, <<"yankee">>}},
+           {and_,
+        {'=', <<"geohash">>,     {word, <<"erko">>}},
+        {'=', <<"temperature">>, {word, <<"yelp">>}}
+           }
+          },
+          {'=', <<"extra">>, {int, 1}}
+         ],
     Got = add_types_to_filter(Filter, Mod),
     Expected = {and_,
-		 {or_,
-		  {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}},
-		  {and_,
-		   {'=', {field, <<"geohash">>,     binary}, {const, <<"erko">>}},
-		   {'=', {field, <<"temperature">>, binary}, {const, <<"yelp">>}}
-		  }
-		 },
-		 {'=', {field, <<"extra">>, integer}, {const, 1}}
-		},
+         {or_,
+          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}},
+          {and_,
+           {'=', {field, <<"geohash">>,     binary}, {const, <<"erko">>}},
+           {'=', {field, <<"temperature">>, binary}, {const, <<"yelp">>}}
+          }
+         },
+         {'=', {field, <<"extra">>, integer}, {const, 1}}
+        },
     ?assertEqual(Expected, Got).
 
 %%
@@ -489,22 +496,24 @@ simple_rewrite_fail_3_test() ->
 
 simplest_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\"",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and location = \"San Francisco\"",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-	     {startkey,        [
-				{<<"time">>, timestamp, 3000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {endkey,          [
-				{<<"time">>, timestamp, 5000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {filter,          []},
-	     {start_inclusive, false}
-	    ],
+         {startkey,        [
+                {<<"location">>, binary, <<"San Francisco">>},
+                {<<"user">>, binary,    <<"user_1">>},
+                {<<"time">>, timestamp, 3000}
+                   ]},
+         {endkey,          [
+                {<<"location">>, binary, <<"San Francisco">>},
+                {<<"user">>, binary,    <<"user_1">>},
+                {<<"time">>, timestamp, 5000}
+                   ]},
+         {filter,          []},
+         {start_inclusive, false}
+        ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
                               'WHERE'       = Where,
@@ -515,22 +524,24 @@ simplest_test() ->
 
 simple_with_filter_1_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and weather = 'yankee'",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and location = \"Scotland\" and weather = \"yankee\"",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-	     {startkey,        [
-				{<<"time">>, timestamp, 3000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {endkey,          [
-				{<<"time">>, timestamp, 5000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
-	     {start_inclusive, false}
-	    ],
+        {startkey,        [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 3000}
+        ]},
+        {endkey,          [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 5000}
+        ]},
+        {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
+        {start_inclusive, false}
+        ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
                               'WHERE'       = Where,
@@ -541,21 +552,23 @@ simple_with_filter_1_test() ->
 
 simple_with_filter_2_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time >= 3000 and time < 5000 and user = \"user_1\" and weather = 'yankee'",
+    Query = "select weather from GeoCheckin where time >= 3000 and time < 5000 and user = \"user_1\" and location = \"Scotland\" and weather = \"yankee\"",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-	     {startkey, [
-			 {<<"time">>, timestamp, 3000},
-			 {<<"user">>, binary,    <<"user_1">>}
-			]},
-	     {endkey,   [
-			 {<<"time">>, timestamp, 5000},
-			 {<<"user">>, binary,    <<"user_1">>}
-			]},
-	     {filter,   {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}}
-	    ],
+        {startkey,        [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 3000}
+        ]},
+        {endkey,          [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 5000}
+        ]},
+        {filter,   {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}}
+        ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
                               'WHERE'       = Where,
@@ -566,23 +579,25 @@ simple_with_filter_2_test() ->
 
 simple_with_filter_3_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time <= 5000 and user = \"user_1\" and weather = 'yankee'",
+    Query = "select weather from GeoCheckin where time > 3000 and time <= 5000 and user = \"user_1\" and location = \"Scotland\" and weather = \"yankee\"",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-	     {startkey,        [
-				{<<"time">>, timestamp, 3000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {endkey,          [
-				{<<"time">>, timestamp, 5000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
-	     {start_inclusive, false},
-	     {end_inclusive,   true}
-	    ],
+         {startkey,        [
+             {<<"location">>, binary, <<"Scotland">>},
+             {<<"user">>, binary,    <<"user_1">>},
+             {<<"time">>, timestamp, 3000}
+         ]},
+        {endkey,          [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 5000}
+        ]},
+         {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
+         {start_inclusive, false},
+         {end_inclusive,   true}
+        ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
                               'WHERE'       = Where,
@@ -593,28 +608,31 @@ simple_with_filter_3_test() ->
 
 simple_with_2_field_filter_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and weather = 'yankee' and temperature = 'yelp'",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and location = \"Scotland\" and weather = \"yankee\" and temperature = 'yelp'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-	     {startkey,        [
-				{<<"time">>, timestamp, 3000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {endkey,          [
-				{<<"time">>, timestamp, 5000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {filter,          {and_,
-				{'=', {field, <<"weather">>,     binary},
-				 {const, <<"yankee">>}},
-				{'=', {field, <<"temperature">>, binary},
-				 {const, <<"yelp">>}}
-			       }
-	     },
-	     {start_inclusive, false}
-	    ],
+        {startkey,        [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 3000}
+        ]},
+        {endkey,          [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 5000}
+        ]},
+         {filter,
+             {and_,
+                {'=', {field, <<"weather">>,     binary},
+                 {const, <<"yankee">>}},
+                {'=', {field, <<"temperature">>, binary},
+                 {const, <<"yelp">>}}
+             }
+         },
+         {start_inclusive, false}
+        ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
                               'WHERE'       = Where,
@@ -625,36 +643,39 @@ simple_with_2_field_filter_test() ->
 
 complex_with_4_field_filter_test() ->
     DDL = get_long_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and extra = 1 and (weather = 'yankee' or (temperature = 'yelp' and geohash = 'erko'))",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and location = \"Scotland\" and extra = 1 and (weather = 'yankee' or (temperature = 'yelp' and geohash = 'erko'))",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-	     {startkey,        [
-				{<<"time">>, timestamp, 3000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {endkey,          [
-				{<<"time">>, timestamp, 5000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {filter,          {and_,
-				{or_,
-				 {'=', {field, <<"weather">>, binary},
-				  {const, <<"yankee">>}},
-				 {and_,
-				  {'=', {field, <<"geohash">>,     binary},
-				   {const, <<"erko">>}},
-				  {'=', {field, <<"temperature">>, binary},
-				   {const, <<"yelp">>}}
-				 }
-				},
-				{'=', {field, <<"extra">>, integer},
-				 {const, 1}}
-			       }
-	     },
-	     {start_inclusive, false}
-	    ],
+        {startkey,        [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 3000}
+        ]},
+        {endkey,          [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 5000}
+        ]},
+         {filter,
+             {and_,
+                {or_,
+                 {'=', {field, <<"weather">>, binary},
+                  {const, <<"yankee">>}},
+                 {and_,
+                  {'=', {field, <<"geohash">>,     binary},
+                   {const, <<"erko">>}},
+                  {'=', {field, <<"temperature">>, binary},
+                   {const, <<"yelp">>}}
+                 }
+                },
+                {'=', {field, <<"extra">>, integer},
+                 {const, 1}}
+                   }
+         },
+         {start_inclusive, false}
+        ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
                               'WHERE'       = Where,
@@ -665,28 +686,31 @@ complex_with_4_field_filter_test() ->
 
 complex_with_boolean_rewrite_filter_test() ->
     DDL = get_long_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and (myboolean = False or myboolean = tRue)",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and location = \"Scotland\" and (myboolean = False or myboolean = tRue)",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
     Where = [
-	     {startkey,        [
-				{<<"time">>, timestamp, 3000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {endkey,          [
-				{<<"time">>, timestamp, 5000},
-				{<<"user">>, binary,    <<"user_1">>}
-			       ]},
-	     {filter,          	{or_,
-				 {'=', {field, <<"myboolean">>, boolean},
-				  {const, false}},
+        {startkey,        [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 3000}
+        ]},
+        {endkey,          [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 5000}
+        ]},
+         {filter,
+             {or_,
+                 {'=', {field, <<"myboolean">>, boolean},
+                  {const, false}},
                                  {'=', {field, <<"myboolean">>, boolean},
                                   {const, true}}
-			       }
-	     },
-	     {start_inclusive, false}
-	    ],
+                   }
+         },
+         {start_inclusive, false}
+        ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
                               'WHERE'       = Where,
@@ -698,50 +722,68 @@ complex_with_boolean_rewrite_filter_test() ->
 %% got for 3 queries to get partition ordering problems flushed out
 simple_spanning_boundary_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time >= 3000 and time < 31000 and user = \"user_1\"",
+    Query = "select weather from GeoCheckin where time >= 3000 and time < 31000 and user = \"user_1\" and location = \"Scotland\"",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     %% get basic query
     Got = compile(DDL, Q),
     %% now make the result - expecting 3 queries
     W1 = [
-	  {startkey,        [{<<"time">>, timestamp, 3000},
-			     {<<"user">>, binary, <<"user_1">>}]},
-	  {endkey,          [{<<"time">>, timestamp, 15000},
-			     {<<"user">>, binary, <<"user_1">>}]},
-	  {filter,          []}
-	 ],
+        {startkey,        [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 3000}
+        ]},
+        {endkey,          [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 15000}
+        ]},
+      {filter,          []}
+     ],
     W2 = [
-	  {startkey,        [{<<"time">>, timestamp, 15000},
-			     {<<"user">>, binary, <<"user_1">>}]},
-	  {endkey,          [{<<"time">>, timestamp, 30000},
-			     {<<"user">>, binary, <<"user_1">>}]},
-	  {filter,          []}
-	 ],
+        {startkey,        [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 15000}
+        ]},
+        {endkey,          [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 30000}
+        ]},
+      {filter,          []}
+     ],
     W3 = [
-	  {startkey,        [{<<"time">>, timestamp, 30000},
-			     {<<"user">>, binary, <<"user_1">>}]},
-	  {endkey,          [{<<"time">>, timestamp, 31000},
-			     {<<"user">>, binary, <<"user_1">>}]},
-	  {filter,          []}
-	 ],
+        {startkey,        [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 30000}
+        ]},
+        {endkey,          [
+            {<<"location">>, binary, <<"Scotland">>},
+            {<<"user">>, binary,    <<"user_1">>},
+            {<<"time">>, timestamp, 31000}
+        ]},
+      {filter,          []}
+     ],
     Expected = [
-		Q#riak_sql_v1{is_executable = true,
-			      type          = timeseries,
-			      'WHERE'       = W1,
-                              partition_key = get_standard_pk(),
-                              local_key     = get_standard_lk()},
-		Q#riak_sql_v1{is_executable = true,
-			      type          = timeseries,
-			      'WHERE'       = W2,
-                              partition_key = get_standard_pk(),
-                              local_key     = get_standard_lk()},
-		Q#riak_sql_v1{is_executable = true,
-			      type          = timeseries,
-			      'WHERE'       = W3,
-                              partition_key = get_standard_pk(),
-                              local_key     = get_standard_lk()}
-	       ],
+        Q#riak_sql_v1{is_executable = true,
+                  type          = timeseries,
+                  'WHERE'       = W1,
+                  partition_key = get_standard_pk(),
+                  local_key     = get_standard_lk()},
+        Q#riak_sql_v1{is_executable = true,
+                  type          = timeseries,
+                  'WHERE'       = W2,
+                  partition_key = get_standard_pk(),
+                  local_key     = get_standard_lk()},
+        Q#riak_sql_v1{is_executable = true,
+                  type          = timeseries,
+                  'WHERE'       = W3,
+                  partition_key = get_standard_pk(),
+                  local_key     = get_standard_lk()}
+           ],
     ?assertEqual(Expected, Got).
 
 %%
@@ -776,7 +818,7 @@ simplest_fail_test() ->
 
 simplest_compile_once_only_fail_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\"",
+    Query = "select weather from GeoCheckin where time >= 3000 and time < 5000 and user = \"user_1\" and location = \"Scotland\"",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     %% now try and compile twice
