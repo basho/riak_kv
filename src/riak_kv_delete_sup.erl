@@ -31,7 +31,7 @@
 -export([start_delete/2]).
 -export([start_link/0]).
 -export([init/1]).
--export([add_sweep_participant/0]).
+-export([maybe_add_sweep_participant/0]).
 
 start_delete(Node, Args) ->
     supervisor:start_child({?MODULE, Node}, Args).
@@ -44,16 +44,24 @@ start_link() ->
 %% @spec init([]) -> SupervisorTree
 %% @doc supervisor callback.
 init([]) ->
-    add_sweep_participant(),
+    maybe_add_sweep_participant(),
     DeleteSpec = {undefined,
                {riak_kv_delete, start_link, []},
                temporary, 5000, worker, [riak_kv_delete]},
 
     {ok, {{simple_one_for_one, 10, 10}, [DeleteSpec]}}.
 
-add_sweep_participant() ->
+maybe_add_sweep_participant() ->
     RunInterval =
-        app_helper:get_env(riak_kv, reap_sweep_interval, 7 * 24 * 60 * 60), %% Once per week
+        app_helper:get_env(riak_kv, reap_sweep_interval, undefined),
+    case RunInterval of
+        undefined ->
+            false;
+        _ ->
+            add_sweep_participant(RunInterval)
+    end.
+
+add_sweep_participant(RunInterval) ->
     riak_kv_sweeper:add_sweep_participant(
       #sweep_participant{ description = "Reap tombstones",
                           module = riak_kv_delete,

@@ -183,7 +183,7 @@ add_sweep_participant() ->
         app_helper:get_env(riak_kv, aae_sweep_interval, 7 * 24 * 60 * 60), %% Once per week
     riak_kv_sweeper:add_sweep_participant(
       #sweep_participant{
-                         description = "AAE",
+                         description = "AAE tree rebuild",
                          module = riak_kv_index_hashtree,
                          fun_type = ?OBSERV_FUN,
                          run_interval = RunInterval,
