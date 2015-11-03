@@ -39,7 +39,7 @@ compile(#ddl_v1{}, #riak_sql_v1{is_executable = true}) ->
 compile(#ddl_v1{}, #riak_sql_v1{'SELECT' = []}) ->
     {error, 'full table scan not implmented'};
 compile(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
-                      type          = sql} = Q) ->
+                                      type          = sql} = Q) ->
     comp2(DDL, Q).
 
 %% adding the local key here is a bodge
@@ -81,12 +81,12 @@ expand_where(Where, #key_v1{ast = PAST}) ->
                  <- PAST],
     {NoSubQueries, Boundaries} = riak_ql_quanta:quanta(Min, Max, Q, U),
     if
-    NoSubQueries =:= 1 ->
-        [Where];
-    1 < NoSubQueries andalso NoSubQueries =< ?MAXSUBQ ->
-        _NewWs = make_wheres(Where, QField, Min, Max, Boundaries);
-    ?MAXSUBQ < NoSubQueries ->
-        {error, {too_many_subqueries, NoSubQueries}}
+        NoSubQueries =:= 1 ->
+            [Where];
+        1 < NoSubQueries andalso NoSubQueries =< ?MAXSUBQ ->
+            _NewWs = make_wheres(Where, QField, Min, Max, Boundaries);
+        ?MAXSUBQ < NoSubQueries ->
+            {error, {too_many_subqueries, NoSubQueries}}
     end.
 
 make_wheres(Where, QField, Min, Max, Boundaries) ->
@@ -148,27 +148,27 @@ check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK},
            Mod = riak_ql_ddl:make_module_name(T),
            StartKey = rewrite(LK, StartW, Mod),
            EndKey = rewrite(LK, EndW, Mod),
-       %% defaults on startkey and endkey are different
-       IncStart = case includes(StartW, '>', Mod) of
-              true  -> [{start_inclusive, false}];
-              false -> []
-              end,
-       IncEnd = case includes(EndW, '<', Mod) of
-              true  -> [];
-              false -> [{end_inclusive, true}]
-              end,
-       case has_errors(StartKey, EndKey) of
-           [] ->
-           RewrittenFilter = add_types_to_filter(Filter, Mod),
-           {true, lists:flatten([
-                     {startkey, StartKey},
-                     {endkey,   EndKey},
-                     {filter,   RewrittenFilter}
-                    ] ++ IncStart ++ IncEnd
-                       )};
-           Errors ->
-           {error, Errors}
-       end
+           %% defaults on startkey and endkey are different
+           IncStart = case includes(StartW, '>', Mod) of
+                  true  -> [{start_inclusive, false}];
+                  false -> []
+                  end,
+           IncEnd = case includes(EndW, '<', Mod) of
+                  true  -> [];
+                  false -> [{end_inclusive, true}]
+                  end,
+           case has_errors(StartKey, EndKey) of
+               [] ->
+               RewrittenFilter = add_types_to_filter(Filter, Mod),
+               {true, lists:flatten([
+                         {startkey, StartKey},
+                         {endkey,   EndKey},
+                         {filter,   RewrittenFilter}
+                        ] ++ IncStart ++ IncEnd
+                           )};
+               Errors ->
+               {error, Errors}
+           end
     catch
         error:{incomplete_where_clause, _} = E ->
             {error, E};
@@ -197,13 +197,13 @@ includes([], _Op, _Mod) ->
 includes([{Op1, Field, _} | T], Op2, Mod) ->
     Type = Mod:get_field_type([Field]),
     case Type of
-    timestamp ->
-        case Op1 of
-        Op2 -> true;
-        _   -> false
-        end;
-    _ ->
-        includes(T, Op2, Mod)
+        timestamp ->
+            case Op1 of
+            Op2 -> true;
+            _   -> false
+            end;
+        _ ->
+            includes(T, Op2, Mod)
     end.
 
 break_out_timeseries(Ands, LocalFields, QuantumFields) ->
