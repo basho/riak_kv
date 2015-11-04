@@ -70,6 +70,7 @@
           qid      = undefined :: undefined | {node(), non_neg_integer()},
           sub_qrys  = []       :: [integer()],
           status    = void     :: void | accumulating_chunks | finished,
+          receiver_pid         :: pid(),
           result    = []       :: [{non_neg_integer(), list()}] | [{binary(), term()}]
          }).
 
@@ -95,7 +96,6 @@ execute(FSMName, {QId, SubQueries, DDL}) ->
 fetch(FSMName, QId) ->
     gen_server:call(FSMName, {fetch, QId}).
 
-
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -103,12 +103,13 @@ fetch(FSMName, QId) ->
 -spec init([qry_fsm_name()]) -> {ok, #state{}}.
 %% @private
 init([Name]) ->
+    self() ! pop_next_query,
     {ok, new_state(Name)}.
 
 -spec handle_call(term(), {pid(), term()}, #state{}) ->
                          {reply, Reply::ok | {error, atom()} | list(), #state{}}.
 %% @private
-handle_call(Request, _From, State) ->
+handle_call(Request, _, State) ->
     case handle_req(Request, State) of
         {{error, _} = Error, _SEs, NewState} ->
             {reply, Error, NewState};
@@ -124,9 +125,19 @@ handle_cast(Msg, State) ->
     lager:info("Not handling cast message ~p", [Msg]),
     {noreply, State}.
 
-
--spec handle_info(term(), #state{}) -> {noreply, #state{}}.
 %% @private
+-spec handle_info(term(), #state{}) -> {noreply, #state{}}.
+handle_info(pop_next_query, State1) ->
+    {query, ReceivePid, QId, Qry, DDL} = riak_kv_qry_queue:blocking_pop(),
+    Request = {execute, {QId, Qry, DDL}},
+    case handle_req(Request, State1) of
+        {{error, _} = Error, _, State2} ->
+            ReceivePid ! Error,
+            {noreply, new_state(State2#state.name)};
+        {ok, SEs, State2} ->
+            ok = handle_side_effects(SEs),
+            {noreply, State2#state{ receiver_pid = ReceivePid }}
+    end;
 %% sometimes we get finish statements after we have finished accumulating
 handle_info({{_SubQId, _QId}, done},
             State = #state{status = finished}) ->
@@ -134,6 +145,7 @@ handle_info({{_SubQId, _QId}, done},
     {noreply, State};
 handle_info({{SubQId, QId}, done},
             State = #state{qid       = QId,
+                           receiver_pid = ReceiverPid,
                            result    = IndexedChunks,
                            sub_qrys  = SubQQ}) ->
     lager:debug("Received done on QId ~p (~p); SubQQ: ~p", [QId, SubQId, SubQQ]),
@@ -141,11 +153,12 @@ handle_info({{SubQId, QId}, done},
         [] ->
             lager:debug("Done collecting on QId ~p (~p): ~p", [QId, SubQId, IndexedChunks]),
             %% sort by index, to reassemble according to coverage plan
-            {_, R2} = lists:unzip(
-                        lists:sort(IndexedChunks)),
+            {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
+            Results = lists:append(R2),
+            ReceiverPid ! {ok, Results},
+            self() ! pop_next_query,
             %% drop indexes, serialize
-            {noreply, State#state{status = finished,
-                                  result = lists:append(R2)}};
+            {noreply, new_state(State#state.name)};
         _MoreSubQueriesNotDone ->
             {noreply, State}
     end;
@@ -185,12 +198,10 @@ handle_info({{_SubQId, QId1}, _}, State = #state{qid = QId2})
     lager:warning("Bad query id ~p (expected ~p)", [QId1, QId2]),
     {noreply, State}.
 
-
 -spec terminate(term(), #state{}) -> term().
 %% @private
 terminate(_Reason, _State) ->
     ok.
-
 
 -spec code_change(term() | {down, term()}, #state{}, term()) -> {ok, #state{}}.
 %% @private
@@ -226,18 +237,18 @@ handle_req({execute, {QId, _, _}}, State = #state{status = Status})
     lager:error("Qry queue manager should have cleared the status before assigning new query ~p", [QId]),
     {{error, mismanagement}, [], State};
 
-handle_req({fetch, QId}, State = #state{qid    = QId,
-                                        status = S})
-  when S =:= void orelse
-       S =:= accumulating_chunks ->
-    {{error, in_progress}, [], State};
+% handle_req({fetch, QId}, State = #state{qid    = QId,
+%                                         status = S})
+%   when S =:= void orelse
+%        S =:= accumulating_chunks ->
+%     {{error, in_progress}, [], State};
 
-handle_req({fetch, QId}, State = #state{qid    = QId,
-                                        status = finished,
-                                        result = Result}) ->
-    % When the results are returned, reset the state completely except
-    % for the name.
-    {{ok, Result}, [], new_state(State#state.name)};
+% handle_req({fetch, QId}, State = #state{qid    = QId,
+%                                         status = finished,
+%                                         result = Result}) ->
+%     % When the results are returned, reset the state completely except
+%     % for the name.
+%     {{ok, Result}, [], new_state(State#state.name)};
 
 handle_req(_Request, State) ->
     {ok, ?NO_SIDEEFFECTS, State}.

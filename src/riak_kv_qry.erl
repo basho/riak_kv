@@ -58,14 +58,29 @@ maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
                 {error,_} = Error ->
                     Error;
                 Queries when is_list(Queries) ->
-                    riak_kv_qry_queue:put_on_queue(Queries, DDL)
+                    maybe_await_query_results(
+                        riak_kv_qry_queue:put_on_queue(self(), Queries, DDL))
             end;
         {false, Errors} ->
             {error, {invalid_query, format_query_syntax_errors(Errors)}}
     end.
 
+%%
+maybe_await_query_results({error,_} = Error) ->
+    Error;
+maybe_await_query_results(_) ->
+    % we can't use a gen_server call here because the reply needs to be
+    % from an fsm but one is not assigned if the query is queued.
+    receive
+        {ok, _} = Result ->
+            Result
+    after
+        10000 ->
+            {error, timeout}
+    end.
+
 %% Format the multiple syntax errors into a multiline error
-%% message. 
+%% message.
 format_query_syntax_errors(Errors) ->
     iolist_to_binary(
         [["\n", riak_ql_ddl:syntax_error_to_msg(E)] || E <- Errors]).
