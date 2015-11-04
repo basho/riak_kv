@@ -27,7 +27,6 @@
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -include("riak_kv_wm_raw.hrl").
--include("riak_kv_qry_queue.hrl").  %% for query_id().
 
 -behaviour(riak_api_pb_service).
 

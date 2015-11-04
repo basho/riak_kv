@@ -29,7 +29,6 @@
          submit/2
         ]).
 
--include("riak_kv_qry_queue.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -spec submit(string() | #riak_sql_v1{}, #ddl_v1{}) ->

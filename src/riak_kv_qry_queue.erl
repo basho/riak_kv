@@ -47,10 +47,14 @@
          code_change/3
         ]).
 
--include("riak_kv_qry_queue.hrl").
+-include("riak_kv_index.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -define(SERVER, ?MODULE).
+
+-type qry_fsm_name() :: atom().
+-type query_id()     :: {node(), integer()}.
+-type qry()          :: ?KV_SQL_Q{}.
 
 -record(state, {
           max_q_len ::integer(),

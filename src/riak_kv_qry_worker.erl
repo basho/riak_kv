@@ -49,7 +49,6 @@
         ]).
 -endif.
 
--include("riak_kv_qry_queue.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -define(NO_SIDEEFFECTS, []).
@@ -57,7 +56,7 @@
 -define(NO_PG_SORT, undefined).
 
 -record(state, {
-          name                 :: qry_fsm_name(),
+          name                 :: atom(),
           ddl                  :: undefined | #ddl_v1{},
           qry      = none      :: none | #riak_sql_v1{},
           qid      = undefined :: undefined | {node(), non_neg_integer()},
@@ -70,20 +69,19 @@
 %%%===================================================================
 %%% OTP API
 %%%===================================================================
-
--spec start_link(qry_fsm_name()) -> {ok, pid()} | ignore | {error, term()}.
-start_link(Name) ->
-    gen_server:start_link({local, Name}, ?MODULE, [Name], []).
+-spec start_link(RegisteredName::atom()) -> {ok, pid()} | ignore | {error, term()}.
+start_link(RegisteredName) ->
+    gen_server:start_link({local, RegisteredName}, ?MODULE, [RegisteredName], []).
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
--spec init([qry_fsm_name()]) -> {ok, #state{}}.
+-spec init([RegisteredName::atom()]) -> {ok, #state{}}.
 %% @private
-init([Name]) ->
+init([RegisteredName]) ->
     self() ! pop_next_query,
-    {ok, new_state(Name)}.
+    {ok, new_state(RegisteredName)}.
 
 -spec handle_call(term(), {pid(), term()}, #state{}) ->
                          {reply, Reply::ok | {error, atom()} | list(), #state{}}.
@@ -176,9 +174,9 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
--spec new_state(qry_fsm_name()) -> #state{}.
-new_state(Name) ->
-    #state{name = Name}.
+-spec new_state(RegisteredName::atom()) -> #state{}.
+new_state(RegisteredName) ->
+    #state{name = RegisteredName}.
 
 -spec handle_req({atom(), term()}, #state{}) ->
                         {ok | {ok | error, term()},
