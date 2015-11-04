@@ -394,7 +394,7 @@ handle_call(estimate_keys, From,  State=#state{trees=Trees}) ->
                                          Value + Acc
                                  end,
                                  0, Trees),
-                gen_server:reply(From, EstimateNrKeys)
+                gen_server:reply(From, {ok, EstimateNrKeys})
         end,
     spawn_link(EstimateFun),
     {noreply, State};
