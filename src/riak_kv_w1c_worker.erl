@@ -385,11 +385,12 @@ synchronize_put(Error, _Options) ->
 async_put_reply_loop([], Responses, _StartTime, _Timeout) ->
     Responses;
 async_put_reply_loop(ReqIds, Responses, StartTime, Timeout) ->
-    %% Processing large number of batched put requests will take some
-    %% period of time; keep decrementing the timeout to reflect the
-    %% gap between the original request and now, but always add a
-    %% second so we never have a timeout of zero.
-    EffectiveTimeout = trunc(timer:now_diff(os:timestamp(), StartTime)) + 1,
+    %% Processing a large number of batched put requests will take
+    %% some period of time; keep decrementing the timeout to reflect
+    %% the gap between the original request and now. Use max/2 in case
+    %% the clock behaves badly (good healthy paranoia, @JonMeredith)
+    EffectiveTimeout =
+        max(0, trunc(timer:now_diff(os:timestamp(), StartTime))),
     receive
         {'DOWN', ReqId, process, _Pid, _Reason} when is_reference(ReqId) ->
             async_put_reply_loop(lists:keydelete(ReqId, 1, ReqIds),
@@ -408,10 +409,15 @@ async_put_reply_loop(ReqIds, Responses, StartTime, Timeout) ->
                           end, ReqIds),
             %% Pause briefly to collect responses; sleep 10ms per
             %% outstanding process, with a floor of 100ms and a
-            %% ceiling of 500 ms
-            timer:sleep(min(max(length(ReqIds) * 10, 100), 500)),
+            %% ceiling of 500ms. All parameters configurable.
+            Pause = w1c_batch_cleanup_wait(length(ReqIds)),
+            timer:sleep(Pause),
             async_put_cleanup(ReqIds, Responses)
     end.
+
+w1c_batch_cleanup_wait(NumReqIds) ->
+    {MSecPerReq, MinWait, MaxWait} = app_helper:get_env(riak_kv, w1c_batch_cleanup_wait, {10, 100, 500}),
+    min(max(NumReqIds * MSecPerReq, MinWait), MaxWait).
 
 async_put_cleanup([], Responses) ->
     Responses;
@@ -425,8 +431,8 @@ async_put_cleanup(ReqIds, Responses) ->
             async_put_cleanup(lists:keydelete(ReqId, 1, ReqIds),
                               [Response|Responses])
     after 0 ->
-            %% We did the best we could. Cut the rope and move on
+            %% We did the best we could. Cut the cord and move on
             lists:foreach(fun({ReqId, _Worker}) -> erlang:demonitor(ReqId, [flush]) end,
-                          ReqIds)
-    end,
-    Responses.
+                          ReqIds),
+            lists:duplicate(length(ReqIds), {error, timeout}) ++ Responses
+    end.
