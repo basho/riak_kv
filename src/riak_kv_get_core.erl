@@ -195,26 +195,25 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                      Merged0
              end,
     {ObjState, MObj} = Merged,
-    ReadRepairs = case ObjState of
-                      notfound ->
-                          [];
-                      ok ->
-                          %% Any object that is strictly descended by
-                          %% the merge result must be read-repaired,
-                          %% this ensures even tombstones get repaired
-                          %% so reap will work. We join the list of
-                          %% dominated (in need of repair) indexes and
-                          %% the list of not_found (in need of repair)
-                          %% indexes.
-                          get_read_repairs(Results, MObj);
-                      tombstone ->
-                          case riak_kv_delete:obj_outside_grace_period(MObj) of
-                              false ->
-                                  get_read_repairs(Results, MObj);
-                              true ->
-                                  []
-                          end
-                  end,
+    ReadRepairs =
+        case ObjState of
+            notfound ->
+                [];
+            ok ->
+                get_read_repairs(Results, MObj);
+            tombstone ->
+                %% We only read repair in the grace period after
+                %% this the reaper start to work.
+                %% obj_outside_grace_period return false
+                %% when no grace period is defined too
+                %% keep legacy behavior
+                case riak_kv_delete:obj_outside_grace_period(MObj) of
+                    false ->
+                        get_read_repairs(Results, MObj);
+                    true ->
+                        []
+                end
+        end,
     Action = case ReadRepairs of
                  [] when ObjState == tombstone ->
                      %% Allow delete if merge object is deleted,
@@ -234,6 +233,13 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
              end,
     {Action, GetCore#getcore{merged = Merged}}.
 
+%% Any object that is strictly descended by
+%% the merge result must be read-repaired,
+%% this ensures even tombstones get repaired
+%% so reap will work. We join the list of
+%% dominated (in need of repair) indexes and
+%% the list of not_found (in need of repair)
+%% indexes.
 get_read_repairs(Results, MObj) ->
     [{Idx, outofdate} || {Idx, {ok, RObj}} <- Results,
                          riak_object:strict_descendant(MObj, RObj)] ++
