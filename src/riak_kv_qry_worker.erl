@@ -58,7 +58,6 @@
 -include("riak_kv_qry_queue.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
--define(SERVER, ?MODULE).
 -define(NO_SIDEEFFECTS, []).
 -define(NO_MAX_RESULTS, no_max_results).
 -define(NO_PG_SORT, undefined).
@@ -69,7 +68,7 @@
           qry      = none      :: none | #riak_sql_v1{},
           qid      = undefined :: undefined | {node(), non_neg_integer()},
           sub_qrys  = []       :: [integer()],
-          status    = void     :: void | accumulating_chunks | finished,
+          status    = void     :: void | accumulating_chunks,
           receiver_pid         :: pid(),
           result    = []       :: [{non_neg_integer(), list()}] | [{binary(), term()}]
          }).
@@ -138,11 +137,6 @@ handle_info(pop_next_query, State1) ->
             ok = handle_side_effects(SEs),
             {noreply, State2#state{ receiver_pid = ReceivePid }}
     end;
-%% sometimes we get finish statements after we have finished accumulating
-handle_info({{_SubQId, _QId}, done},
-            State = #state{status = finished}) ->
-    lager:debug("Received stray done on QId ~p (~p)", [_QId, _SubQId]),
-    {noreply, State};
 handle_info({{SubQId, QId}, done},
             State = #state{qid       = QId,
                            receiver_pid = ReceiverPid,
@@ -162,7 +156,6 @@ handle_info({{SubQId, QId}, done},
         _MoreSubQueriesNotDone ->
             {noreply, State}
     end;
-
 handle_info({{SubQId, QId}, {results, Chunk}},
             State = #state{qid      = QId,
                            qry      = Qry,
@@ -183,18 +176,8 @@ handle_info({{SubQId, QId}, {results, Chunk}},
                    State
            end,
     {noreply, NewS};
-
-%% late chunks: warn
-handle_info({{SubQId, QId}, {results, _LateData}},
-            State = #state{qid = QId,
-                           status = finished}) ->
-    lager:debug("Discarding late chunk (~b bytes) on qid ~p (subqid ~p)",
-                [length(lists:flatten(_LateData)), QId, SubQId]),
-    {noreply, State};
-
-%% other error conditions
-handle_info({{_SubQId, QId1}, _}, State = #state{qid = QId2})
-  when QId1 =/= QId2 ->
+handle_info({{_SubQId, QId1}, _}, State = #state{qid = QId2}) when QId1 =/= QId2 ->
+    %% catches late results or errors such getting results for invalid QIds.
     lager:warning("Bad query id ~p (expected ~p)", [QId1, QId2]),
     {noreply, State}.
 
@@ -220,10 +203,6 @@ new_state(Name) ->
 -spec handle_req({atom(), term()}, #state{}) ->
                         {ok | {ok | error, term()},
                          list(), #state{}}.
-handle_req({fetch, QId}, State = #state{qid = QId2})
-  when QId =/= QId2 ->
-    {{error, bad_query_id}, [], State};
-
 handle_req({execute, {QId, [Qry|_] = SubQueries, DDL}}, State = #state{status = void}) ->
     %% TODO make this run with multiple sub-queries
     %% limit sub-queries and throw error
@@ -236,19 +215,6 @@ handle_req({execute, {QId, _, _}}, State = #state{status = Status})
   when Status =/= void ->
     lager:error("Qry queue manager should have cleared the status before assigning new query ~p", [QId]),
     {{error, mismanagement}, [], State};
-
-% handle_req({fetch, QId}, State = #state{qid    = QId,
-%                                         status = S})
-%   when S =:= void orelse
-%        S =:= accumulating_chunks ->
-%     {{error, in_progress}, [], State};
-
-% handle_req({fetch, QId}, State = #state{qid    = QId,
-%                                         status = finished,
-%                                         result = Result}) ->
-%     % When the results are returned, reset the state completely except
-%     % for the name.
-%     {{ok, Result}, [], new_state(State#state.name)};
 
 handle_req(_Request, State) ->
     {ok, ?NO_SIDEEFFECTS, State}.
