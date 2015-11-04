@@ -80,7 +80,7 @@ start_link(RegisteredName) ->
 -spec init([RegisteredName::atom()]) -> {ok, #state{}}.
 %% @private
 init([RegisteredName]) ->
-    self() ! pop_next_query,
+    pop_next_query(),
     {ok, new_state(RegisteredName)}.
 
 -spec handle_call(term(), {pid(), term()}, #state{}) ->
@@ -127,8 +127,9 @@ handle_info({{SubQId, QId}, done},
             %% sort by index, to reassemble according to coverage plan
             {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
             Results = lists:append(R2),
+            % send the results to the waiting client process
             ReceiverPid ! {ok, Results},
-            self() ! pop_next_query,
+            pop_next_query(),
             %% drop indexes, serialize
             {noreply, new_state(State#state.name)};
         _MoreSubQueriesNotDone ->
@@ -236,6 +237,10 @@ filter_columns([<<"*">>], ColValues) ->
     ColValues;
 filter_columns(SelectSpec, ColValues) ->
     [Col || {Field, _} = Col <- ColValues, lists:member(Field, SelectSpec)].
+
+%% Send a message to this process to get the next query.
+pop_next_query() ->
+    self() ! pop_next_query.
 
 %%%===================================================================
 %%% Unit tests

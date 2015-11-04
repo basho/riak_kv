@@ -75,7 +75,8 @@ put_on_queue(ReceivePid, Qry, DDL) when is_pid(ReceivePid) ->
     %% worker needs DDL to perform column filtering
     gen_server:call(?SERVER, {push_query, ReceivePid, Qry, DDL}).
 
-%%
+%% Pop a query from the queue, this function will not return until a queue is
+%% read to be executed.
 -spec blocking_pop() ->
         {query, ReceivePid::pid(), QId::any(), [Qry::any()], DDL::any()}.
 blocking_pop() ->
