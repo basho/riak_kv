@@ -72,7 +72,7 @@ remove_sweep_participant(Module) ->
     gen_server:call(?MODULE, {remove_sweep_participant, Module}).
 
 %% @doc Initiat a sweep without using scheduling. Can be used as fold replacment.
--spec sweep(atom()) -> ok.
+-spec sweep(non_neg_integer()) -> ok.
 sweep(Index) ->
     gen_server:call(?MODULE, {sweep_request, Index}).
 
@@ -82,12 +82,13 @@ status() ->
     gen_server:call(?MODULE, status).
 
 %% @doc Stop all running sweeps
--spec stop_all_sweeps() ->  true | false.
+-spec stop_all_sweeps() ->  ok.
 stop_all_sweeps() ->
     gen_server:call(?MODULE, stop_all_sweeps).
 
 %% Stop scheduled sweeps and disable the scheduler from starting new sweeps
 %% Only allow manual sweeps throu sweep/1.
+-spec disable_sweep_scheduling() ->  ok.
 disable_sweep_scheduling() ->
     lager:info("Disable sweep scheduling"),
     application:set_env(riak_kv, sweeper_scheduler, false),

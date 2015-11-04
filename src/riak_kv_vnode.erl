@@ -1953,7 +1953,8 @@ do_delete(BKey, State) ->
                 undefined ->
                     case DeleteMode of
                         keep ->
-                            %% keep tombstones indefinitely
+                            %% keep tombstones indefinitely or
+                            %% until the reaper sweep remove it
                             {reply, {fail, Idx, del_mode_keep},
                              State#state{modstate=UpdModState}};
                         immediate ->
