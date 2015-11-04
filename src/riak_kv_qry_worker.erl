@@ -33,12 +33,6 @@
 %% OTP API
 -export([start_link/1]).
 
-%% Developer API
--export([
-         execute/2,
-         fetch/2
-        ]).
-
 %% gen_server callbacks
 -export([
          init/1,
@@ -80,20 +74,6 @@
 -spec start_link(qry_fsm_name()) -> {ok, pid()} | ignore | {error, term()}.
 start_link(Name) ->
     gen_server:start_link({local, Name}, ?MODULE, [Name], []).
-
-
-%%%===================================================================
-%%% API
-%%%===================================================================
-
--spec execute(qry_fsm_name(), {query_id(), [#riak_sql_v1{}], #ddl_v1{}}) ->
-    ok | {error, atom()}.
-execute(FSMName, {QId, SubQueries, DDL}) ->
-    gen_server:call(FSMName, {execute, {QId, SubQueries, DDL}}).
-
--spec fetch(qry_fsm_name(), query_id()) -> list() | {error, atom()}.
-fetch(FSMName, QId) ->
-    gen_server:call(FSMName, {fetch, QId}).
 
 %%%===================================================================
 %%% gen_server callbacks

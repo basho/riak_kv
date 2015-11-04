@@ -375,21 +375,6 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
 %% ---------------------------------------------------
 % functions supporting SELECT
 
-% -spec fetch_with_patience(query_id(), non_neg_integer()) ->
-%                                  {ok, [{Key::binary(), riak_pb_ts_codec:ldbvalue()}]} |
-%                                  {error, atom()}.
-% fetch_with_patience(QId, 0) ->
-%     lager:info("Query results on qid ~p not available after ~b secs", [QId, ?FETCH_RETRIES]),
-%     {ok, []};
-% fetch_with_patience(QId, N) ->
-%     case riak_kv_qry_queue:fetch(QId) of
-%         {error, in_progress} ->
-%             timer:sleep(1000),
-%             fetch_with_patience(QId, N-1);
-%         Result ->
-%             Result
-%     end.
-
 -spec make_tsqueryresp([{binary(), term()}], module()) -> #tsqueryresp{}.
 make_tsqueryresp([], _Module) ->
     #tsqueryresp{columns = [], rows = []};

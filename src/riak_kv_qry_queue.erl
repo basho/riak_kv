@@ -29,7 +29,6 @@
 %% User API
 -export([
          blocking_pop/0,
-         get_queued_qrys/0,
          put_on_queue/3
         ]).
 
@@ -77,12 +76,6 @@ put_on_queue(ReceivePid, Qry, DDL) when is_pid(ReceivePid) ->
         {query, ReceivePid::pid(), QId::any(), [Qry::any()], DDL::any()}.
 blocking_pop() ->
     gen_server:call(?SERVER, blocking_pop, infinity).
-
--spec get_queued_qrys() -> [query_id()].
-%% @doc Get the list of queries currently queued.
-get_queued_qrys() ->
-    gen_server:call(?SERVER, get_queued_qrys).
-
 
 %%%===================================================================
 %%% OTP API
@@ -168,7 +161,7 @@ do_push_query(QueryItem,
             case queue:len(Queue1) >= MaxQLen of
                 true  ->
                     % no space, return overload
-                    {reply, overload, State1};
+                    {reply, {error, overload}, State1};
                 false ->
                     % the query queue has space so push it
                     State2 =
