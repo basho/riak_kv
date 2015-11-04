@@ -140,7 +140,7 @@ async_put_replies(ReqIds, Options) ->
                   _ ->
                       ?DEFAULT_TIMEOUT
               end,
-    async_put_reply_loop(ReqIds, [], os:timestamp(), Timeout).
+    async_put_reply_loop(ReqIds, [], Timeout).
 
 
 %%%===================================================================
@@ -382,15 +382,9 @@ synchronize_put(Error, _Options) ->
     Error.
 
 %% Invoked by async_put_reply/2 to wait for all responses
-async_put_reply_loop([], Responses, _StartTime, _Timeout) ->
+async_put_reply_loop([], Responses, _Timeout) ->
     Responses;
-async_put_reply_loop(ReqIds, Responses, StartTime, Timeout) ->
-    %% Processing a large number of batched put requests will take
-    %% some period of time; keep decrementing the timeout to reflect
-    %% the gap between the original request and now. Use max/2 in case
-    %% the clock behaves badly (good healthy paranoia, @JonMeredith)
-    EffectiveTimeout =
-        max(0, trunc(timer:now_diff(os:timestamp(), StartTime))),
+async_put_reply_loop(ReqIds, Responses, Timeout) ->
     receive
         {'DOWN', ReqId, process, _Pid, _Reason} when is_reference(ReqId) ->
             async_put_reply_loop(lists:keydelete(ReqId, 1, ReqIds),
@@ -403,7 +397,7 @@ async_put_reply_loop(ReqIds, Responses, StartTime, Timeout) ->
                                  [Response|Responses],
                                  StartTime,
                                  Timeout)
-    after EffectiveTimeout ->
+    after Timeout ->
             lists:foreach(fun({ReqId, Worker}) ->
                                   gen_server:cast(Worker, {cancel, ReqId})
                           end, ReqIds),
