@@ -698,10 +698,9 @@ end
     end
  end}.
 
-
 {mapping, "tombstone.grace_period", "riak_kv.tombstone_grace_period", [
-  {default, "1w"},
-  {datatype, {duration, s}},
+  {default, off},
+  {datatype, [{duration, s}, flag]},
   hidden
 ]}.
 
