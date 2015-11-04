@@ -44,7 +44,7 @@
          active_participants,  %% Active in current run
          start_time :: erlang:timestamp(),
          end_time :: erlang:timestamp(),
-         estimated_keys = 0 ::non_neg_integer(),
+         estimated_keys :: {non_neg_integer(), erlang:timestamp()},
          swept_keys :: non_neg_integer() | undefined
         }).
 
