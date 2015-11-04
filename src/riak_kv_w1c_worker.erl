@@ -389,13 +389,11 @@ async_put_reply_loop(ReqIds, Responses, Timeout) ->
         {'DOWN', ReqId, process, _Pid, _Reason} when is_reference(ReqId) ->
             async_put_reply_loop(lists:keydelete(ReqId, 1, ReqIds),
                                  [{error, riak_kv_w1c_server_crashed}|Responses],
-                                 StartTime,
                                  Timeout);
         {ReqId, Response} when is_reference(ReqId) ->
             erlang:demonitor(ReqId, [flush]),
             async_put_reply_loop(lists:keydelete(ReqId, 1, ReqIds),
                                  [Response|Responses],
-                                 StartTime,
                                  Timeout)
     after Timeout ->
             lists:foreach(fun({ReqId, Worker}) ->
