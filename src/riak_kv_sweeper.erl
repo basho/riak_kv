@@ -113,8 +113,8 @@ update_progress(Index, SweptKeys) ->
 %% ====================================================================
 %% Behavioural functions
 %% ====================================================================
--record(state, {sweep_participants = dict:new() :: dict:dict(),
-                sweeps             = dict:new() :: dict:dict()
+-record(state, {sweep_participants = dict:new() :: dict(),
+                sweeps             = dict:new() :: dict()
                }).
 
 init([]) ->
