@@ -328,8 +328,8 @@ get_long_ddl() ->
         "(geohash varchar not null, " ++
         "location varchar not null, " ++
         "user varchar not null, " ++
-        "extra integer not null, " ++
-        "more float not null, " ++
+        "extra sint64 not null, " ++
+        "more double not null, " ++
         "time timestamp not null, " ++
         "myboolean boolean not null," ++
         "weather varchar not null, " ++
@@ -402,13 +402,13 @@ simple_filter_typing_test() ->
     Got = add_types_to_filter(Filter, Mod),
     Expected = {and_,
          {or_,
-          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}},
+          {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}},
           {and_,
-           {'=', {field, <<"geohash">>,     binary}, {const, <<"erko">>}},
-           {'=', {field, <<"temperature">>, binary}, {const, <<"yelp">>}}
+           {'=', {field, <<"geohash">>,     varchar}, {const, <<"erko">>}},
+           {'=', {field, <<"temperature">>, varchar}, {const, <<"yelp">>}}
           }
          },
-         {'=', {field, <<"extra">>, integer}, {const, 1}}
+         {'=', {field, <<"extra">>, sint64}, {const, 1}}
         },
     ?assertEqual(Expected, Got).
 
@@ -430,7 +430,7 @@ simple_rewrite_test() ->
            {'>', <<"time">>,    {int,   678}}
           ],
     Exp = [
-           {<<"geohash">>,  binary,   "yardle"},
+           {<<"geohash">>,  varchar,   "yardle"},
            {<<"time">>,     timestamp, 678}
           ],
     Got = rewrite(LK, W, Mod),
@@ -502,13 +502,13 @@ simplest_test() ->
     Got = compile(DDL, Q),
     Where = [
          {startkey,        [
-                {<<"location">>, binary, <<"San Francisco">>},
-                {<<"user">>, binary,    <<"user_1">>},
+                {<<"location">>, varchar, <<"San Francisco">>},
+                {<<"user">>, varchar,    <<"user_1">>},
                 {<<"time">>, timestamp, 3000}
                    ]},
          {endkey,          [
-                {<<"location">>, binary, <<"San Francisco">>},
-                {<<"user">>, binary,    <<"user_1">>},
+                {<<"location">>, varchar, <<"San Francisco">>},
+                {<<"user">>, varchar,    <<"user_1">>},
                 {<<"time">>, timestamp, 5000}
                    ]},
          {filter,          []},
@@ -530,16 +530,16 @@ simple_with_filter_1_test() ->
     Got = compile(DDL, Q),
     Where = [
         {startkey,        [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 3000}
         ]},
         {endkey,          [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 5000}
         ]},
-        {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
+        {filter,          {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}}},
         {start_inclusive, false}
         ],
     Expected = [Q#riak_sql_v1{is_executable = true,
@@ -558,16 +558,16 @@ simple_with_filter_2_test() ->
     Got = compile(DDL, Q),
     Where = [
         {startkey,        [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 3000}
         ]},
         {endkey,          [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 5000}
         ]},
-        {filter,   {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}}
+        {filter,   {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}}}
         ],
     Expected = [Q#riak_sql_v1{is_executable = true,
                               type          = timeseries,
@@ -585,16 +585,16 @@ simple_with_filter_3_test() ->
     Got = compile(DDL, Q),
     Where = [
          {startkey,        [
-             {<<"location">>, binary, <<"Scotland">>},
-             {<<"user">>, binary,    <<"user_1">>},
+             {<<"location">>, varchar, <<"Scotland">>},
+             {<<"user">>, varchar,    <<"user_1">>},
              {<<"time">>, timestamp, 3000}
          ]},
         {endkey,          [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 5000}
         ]},
-         {filter,          {'=', {field, <<"weather">>, binary}, {const, <<"yankee">>}}},
+         {filter,          {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}}},
          {start_inclusive, false},
          {end_inclusive,   true}
         ],
@@ -614,20 +614,20 @@ simple_with_2_field_filter_test() ->
     Got = compile(DDL, Q),
     Where = [
         {startkey,        [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 3000}
         ]},
         {endkey,          [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 5000}
         ]},
          {filter,
              {and_,
-                {'=', {field, <<"weather">>,     binary},
+                {'=', {field, <<"weather">>,     varchar},
                  {const, <<"yankee">>}},
-                {'=', {field, <<"temperature">>, binary},
+                {'=', {field, <<"temperature">>, varchar},
                  {const, <<"yelp">>}}
              }
          },
@@ -649,28 +649,28 @@ complex_with_4_field_filter_test() ->
     Got = compile(DDL, Q),
     Where = [
         {startkey,        [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 3000}
         ]},
         {endkey,          [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 5000}
         ]},
          {filter,
              {and_,
                 {or_,
-                 {'=', {field, <<"weather">>, binary},
+                 {'=', {field, <<"weather">>, varchar},
                   {const, <<"yankee">>}},
                  {and_,
-                  {'=', {field, <<"geohash">>,     binary},
+                  {'=', {field, <<"geohash">>,     varchar},
                    {const, <<"erko">>}},
-                  {'=', {field, <<"temperature">>, binary},
+                  {'=', {field, <<"temperature">>, varchar},
                    {const, <<"yelp">>}}
                  }
                 },
-                {'=', {field, <<"extra">>, integer},
+                {'=', {field, <<"extra">>, sint64},
                  {const, 1}}
                    }
          },
@@ -692,13 +692,13 @@ complex_with_boolean_rewrite_filter_test() ->
     Got = compile(DDL, Q),
     Where = [
         {startkey,        [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 3000}
         ]},
         {endkey,          [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 5000}
         ]},
          {filter,
@@ -730,39 +730,39 @@ simple_spanning_boundary_test() ->
     %% now make the result - expecting 3 queries
     W1 = [
         {startkey,        [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 3000}
         ]},
         {endkey,          [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 15000}
         ]},
       {filter,          []}
      ],
     W2 = [
         {startkey,        [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 15000}
         ]},
         {endkey,          [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 30000}
         ]},
       {filter,          []}
      ],
     W3 = [
         {startkey,        [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 30000}
         ]},
         {endkey,          [
-            {<<"location">>, binary, <<"Scotland">>},
-            {<<"user">>, binary,    <<"user_1">>},
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
             {<<"time">>, timestamp, 31000}
         ]},
       {filter,          []}

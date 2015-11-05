@@ -82,14 +82,14 @@ get_standard_lk() -> #key_v1{ast = [
                            'FROM'        = <<"GeoCheckin">>,
                            'WHERE'       = [
                                             {startkey, [
-                                                        {<<"location">>, binary, <<"Lithgae">>},
-                                                        {<<"user">>, binary, <<"gordon">>},
+                                                        {<<"location">>, varchar, <<"Lithgae">>},
+                                                        {<<"user">>, varchar, <<"gordon">>},
                                                         {<<"time">>, timestamp, 3000}
                                                        ]
                                             },
                                             {endkey,   [
-                                                        {<<"location">>, binary, <<"Lithgae">>},
-                                                        {<<"user">>, binary, <<"gordon">>},
+                                                        {<<"location">>, varchar, <<"Lithgae">>},
+                                                        {<<"user">>, varchar, <<"gordon">>},
                                                         {<<"time">>, timestamp, 5000}
                                                        ]
                                             },
@@ -132,14 +132,14 @@ get_standard_lk() -> #key_v1{ast = [
                'FROM'        = <<"GeoCheckin">>,
                'WHERE'       = [
                                     {startkey, [
-                                        {<<"location">>, binary, <<"Lithgae">>},
-                                        {<<"user">>, binary, <<"gordon">>},
+                                        {<<"location">>, varchar, <<"Lithgae">>},
+                                        {<<"user">>, varchar, <<"gordon">>},
                                         {<<"time">>, timestamp, 3000}
                                     ]
                                     },
                                     {endkey,   [
-                                        {<<"location">>, binary, <<"Lithgae">>},
-                                        {<<"user">>, binary, <<"gordon">>},
+                                        {<<"location">>, varchar, <<"Lithgae">>},
+                                        {<<"user">>, varchar, <<"gordon">>},
                                         {<<"time">>, timestamp, 15000}
                                         ]
                                     },
@@ -156,14 +156,14 @@ get_standard_lk() -> #key_v1{ast = [
                'FROM'        = <<"GeoCheckin">>,
                'WHERE'       = [
                                     {startkey, [
-                                        {<<"location">>, binary, <<"Lithgae">>},
-                                        {<<"user">>, binary, <<"gordon">>},
+                                        {<<"location">>, varchar, <<"Lithgae">>},
+                                        {<<"user">>, varchar, <<"gordon">>},
                                         {<<"time">>, timestamp, 15000}
                                     ]
                                     },
                                     {endkey,   [
-                                        {<<"location">>, binary, <<"Lithgae">>},
-                                        {<<"user">>, binary, <<"gordon">>},
+                                        {<<"location">>, varchar, <<"Lithgae">>},
+                                        {<<"user">>, varchar, <<"gordon">>},
                                         {<<"time">>, timestamp, 18000}
                                     ]
                                     },
