@@ -221,4 +221,32 @@ do_push_query_1_test() ->
         get(Ref)
     ).
 
+% no worker is waiting so queue the query
+do_push_query_2_test() ->
+    ?assertEqual(
+        do_push_query(
+            test_query,
+            #state{}),
+        {reply, ok, #state{ queued_qrys = ?Q(test_query) }}
+    ).
+
+% no worker is waiting so queue the query with other queries queued
+do_push_query_3_test() ->
+    {reply, ok, State} =
+        do_push_query(
+            test_query_3,
+            #state{ max_q_len = 3, queued_qrys = ?Q([test_query_2,test_query_1]) }),
+    ?assertEqual(
+        [test_query_1,test_query_2,test_query_3],
+        lists:sort(queue:to_list(State#state.queued_qrys))
+    ).
+
+% no worker is waiting but the queue is full, so overload!
+do_push_query_4_test() ->
+    State = #state{ max_q_len = 1, queued_qrys = ?Q([test_query_1]) },
+    ?assertEqual(
+        {reply, {error, overload}, State},
+        do_push_query(test_query_3, State)
+    ).
+
 -endif.
