@@ -72,14 +72,14 @@ workers() ->
 start_link(Name) ->
     gen_server:start_link({local, Name}, ?MODULE, [], []).
 
-%% @spec put(RObj :: riak_object:riak_object(), riak_object:options()) ->
+%% @spec put(RObj :: riak_object:riak_object(), proplists:proplist()) ->
 %%        ok |
 %%       {error, timeout} |
 %%       {error, term()}
 put(RObj, Options) ->
     synchronize_put(async_put(RObj, Options), Options).
 
--spec async_put(RObj :: riak_object:riak_object(), riak_object:options()) ->
+-spec async_put(RObj :: riak_object:riak_object(), proplists:proplist()) ->
                        {ok, {reference(), pid()}} |
                        {error, term()}.
 async_put(RObj, Options) ->
@@ -131,7 +131,7 @@ async_put(RObj, Options) ->
             Error
     end.
 
--spec async_put_replies(ReqIdTuples :: list({reference(), pid()}), riak_object:options()) ->
+-spec async_put_replies(ReqIdTuples :: list({reference(), pid()}), proplists:proplist()) ->
                                        list(term()).
 async_put_replies(ReqIdTuples, Options) ->
     async_put_reply_loop(ReqIdTuples, [], os:timestamp(),
