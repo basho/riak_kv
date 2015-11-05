@@ -131,16 +131,11 @@ async_put(RObj, Options) ->
             Error
     end.
 
--spec async_put_replies(ReqIds :: list({reference(), pid()}), riak_object:options()) ->
+-spec async_put_replies(ReqIdTuples :: list({reference(), pid()}), riak_object:options()) ->
                                        list(term()).
-async_put_replies(ReqIds, Options) ->
-    Timeout = case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
-                  N when is_integer(N) andalso N > 0 ->
-                      N;
-                  _ ->
-                      ?DEFAULT_TIMEOUT
-              end,
-    async_put_reply_loop(ReqIds, [], Timeout).
+async_put_replies(ReqIdTuples, Options) ->
+    async_put_reply_loop(ReqIdTuples, [], os:timestamp(),
+                         find_put_timeout(Options)).
 
 
 %%%===================================================================
@@ -353,15 +348,23 @@ erase_request_record(ReqId, #state{entries=Entries} = State) ->
 %%%% Functions to handle asynchronous puts
 
 %% Invoked by put/2 to turn the async request into a synchronous call
-synchronize_put({ok, {ReqId, Worker}}, Options) ->
-    Timeout = case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
-                  N when is_integer(N) andalso N > 0 ->
-                      N;
-                  _ ->
-                      ?DEFAULT_TIMEOUT
-              end,
-    %% this is not direct gen_server:call because the process that
-    %% replies is not the one that received the cast
+synchronize_put({ok, {_ReqId, _Worker}=ReqIdTuple}, Options) ->
+    wait_for_put_reply(ReqIdTuple, find_put_timeout(Options));
+synchronize_put(Error, _Options) ->
+    Error.
+
+%% Invoked by async_put_reply/2 to wait for all responses
+async_put_reply_loop([], Responses, _StartTime, _Timeout) ->
+    Responses;
+async_put_reply_loop([IdTuple|IdTuples], Responses, StartTime, Timeout) ->
+    async_put_reply_loop(IdTuples,
+                         [wait_for_put_reply(IdTuple,
+                                             remaining_put_timeout(
+                                               StartTime, Timeout))
+                          |Responses],
+                         StartTime, Timeout).
+
+wait_for_put_reply({ReqId, Worker}, Timeout) ->
     receive
         {'DOWN', ReqId, process, _Pid, _Reason} ->
             {error, riak_kv_w1c_server_crashed};
@@ -369,62 +372,22 @@ synchronize_put({ok, {ReqId, Worker}}, Options) ->
             erlang:demonitor(ReqId, [flush]),
             Response
     after Timeout ->
-            gen_server:cast(Worker, {cancel, ReqId}),
-            receive
-                {'DOWN', ReqId, process, _Pid, _Reason} ->
-                    {error, riak_kv_w1c_server_crashed};
-                {ReqId, Response} ->
-                    erlang:demonitor(ReqId, [flush]),
-                    Response
-            end
-    end;
-synchronize_put(Error, _Options) ->
-    Error.
-
-%% Invoked by async_put_reply/2 to wait for all responses
-async_put_reply_loop([], Responses, _Timeout) ->
-    Responses;
-async_put_reply_loop(ReqIds, Responses, Timeout) ->
-    receive
-        {'DOWN', ReqId, process, _Pid, _Reason} when is_reference(ReqId) ->
-            async_put_reply_loop(lists:keydelete(ReqId, 1, ReqIds),
-                                 [{error, riak_kv_w1c_server_crashed}|Responses],
-                                 Timeout);
-        {ReqId, Response} when is_reference(ReqId) ->
             erlang:demonitor(ReqId, [flush]),
-            async_put_reply_loop(lists:keydelete(ReqId, 1, ReqIds),
-                                 [Response|Responses],
-                                 Timeout)
-    after Timeout ->
-            lists:foreach(fun({ReqId, Worker}) ->
-                                  gen_server:cast(Worker, {cancel, ReqId})
-                          end, ReqIds),
-            %% Pause briefly to collect responses; sleep 10ms per
-            %% outstanding process, with a floor of 100ms and a
-            %% ceiling of 500ms. All parameters configurable.
-            Pause = w1c_batch_cleanup_wait(length(ReqIds)),
-            timer:sleep(Pause),
-            async_put_cleanup(ReqIds, Responses)
+            gen_server:cast(Worker, {cancel, ReqId}),
+            {error, timeout}
     end.
 
-w1c_batch_cleanup_wait(NumReqIds) ->
-    {MSecPerReq, MinWait, MaxWait} = app_helper:get_env(riak_kv, w1c_batch_cleanup_wait, {10, 100, 500}),
-    min(max(NumReqIds * MSecPerReq, MinWait), MaxWait).
+non_neg(X) ->
+    max(0, X).
 
-async_put_cleanup([], Responses) ->
-    Responses;
-async_put_cleanup(ReqIds, Responses) ->
-    receive
-        {'DOWN', ReqId, process, _Pid, _Reason} when is_reference(ReqId) ->
-            async_put_cleanup(lists:keydelete(ReqId, 1, ReqIds),
-                              [{error, riak_kv_w1c_server_crashed}|Responses]);
-        {ReqId, Response} when is_reference(ReqId) ->
-            erlang:demonitor(ReqId, [flush]),
-            async_put_cleanup(lists:keydelete(ReqId, 1, ReqIds),
-                              [Response|Responses])
-    after 0 ->
-            %% We did the best we could. Cut the cord and move on
-            lists:foreach(fun({ReqId, _Worker}) -> erlang:demonitor(ReqId, [flush]) end,
-                          ReqIds),
-            lists:duplicate(length(ReqIds), {error, timeout}) ++ Responses
+remaining_put_timeout(Start, Timeout) ->
+    non_neg(Timeout -
+                non_neg(trunc(timer:now_diff(os:timestamp(), Start)))).
+
+find_put_timeout(Options) ->
+    case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
+        N when is_integer(N) andalso N > 0 ->
+            N;
+        _ ->
+            ?DEFAULT_TIMEOUT
     end.
