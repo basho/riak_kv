@@ -325,13 +325,12 @@ to_string(X) ->
 %% ---------------------------------------------------
 % functions supporting INSERT
 
-
 -spec put_data([riak_pb_ts_codec:tsrow()], binary(), module()) -> integer().
 %% @ignore return count of records we failed to put
 put_data(Data, Table, Mod) ->
     DDL = Mod:get_ddl(),
-    lists:foldl(
-      fun(Raw, ErrorsCnt) ->
+    {ReqIds, FailReqs} = lists:foldl(
+      fun(Raw, {ReqIdsAcc, ErrorsCnt}) ->
               Obj = Mod:add_column_info(Raw),
 
               PK  = eleveldb_ts:encode_key(
@@ -345,15 +344,18 @@ put_data(Data, Table, Mod) ->
               MD2 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD1),
               RObj = riak_object:update_metadata(RObj0, MD2),
 
-              case riak_client:put(RObj, {riak_client, [node(), undefined]}) of
+              case riak_kv_w1c_worker:async_put(RObj, []) of
                   {error, _Why} ->
-                      ErrorsCnt + 1;
-                  _Ok ->
-                      ErrorsCnt
+                      {ReqIdsAcc, ErrorsCnt + 1};
+                  {ok, ReqId} ->
+                      {[ReqId | ReqIdsAcc], ErrorsCnt}
               end
       end,
-      0, Data).
-
+      {[], 0}, Data),
+    Responses = riak_kv_w1c_worker:async_put_replies(ReqIds, []),
+    length(lists:filter(fun({error, _}) -> true;
+                           (_) -> false
+                        end, Responses)) + FailReqs.
 
 make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
                                         fields = Fields}) ->
