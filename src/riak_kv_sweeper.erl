@@ -145,9 +145,9 @@ handle_call({sweep_request, Index}, _From, State) ->
     {reply, ok, State1};
 
 handle_call(status, _From, State) ->
-    ParticipantsString = format_participants(dict:to_list(State#state.sweep_participants)),
-    SweepString = format_sweeps(dict:to_list(State#state.sweeps)),
-    {reply, lists:flatten(ParticipantsString ++ SweepString), State};
+    Participants = dict:to_list(State#state.sweep_participants),
+    Sweep = dict:to_list(State#state.sweeps),
+    {reply, {Participants , Sweep}, State};
 
 handle_call(sweeps, _From, State) ->
     {reply, State#state.sweeps, State};
@@ -201,7 +201,6 @@ maybe_schedule_sweep(#state{sweeps = Sweeps} = State) ->
     CLR = concurrency_limit_reached(Sweeps),
     InSweepWindow = in_sweep_window(),
     SweepSchedulerEnabled = app_helper:get_env(riak_kv, sweeper_scheduler, true),
-    lager:info("CLR ~p  InSweepWindow ~p SweepSchedulerEnabled ~p ", [CLR, InSweepWindow, SweepSchedulerEnabled]),
     case InSweepWindow and not CLR and SweepSchedulerEnabled of
         true ->
             schedule_sweep(State);
@@ -243,7 +242,6 @@ do_sweep(Index, #state{sweep_participants = SP, sweeps = Sweeps} = State) ->
     AAEEnabled = riak_kv_entropy_manager:enabled(),
     EstimatedNrKeys = get_estimate_keys(Index, AAEEnabled, Sweeps),
 
-    lager:info("EstimatedNrKeys ~p ~p", [Index, EstimatedNrKeys]),
     case ask_participants(Index, SP) of
         [] ->
             State;
@@ -251,7 +249,6 @@ do_sweep(Index, #state{sweep_participants = SP, sweeps = Sweeps} = State) ->
             Pid =
                 spawn_link(fun() ->
                                    Result = riak_kv_vnode:sweep({Index, node()}, ActiveParticipants, EstimatedNrKeys),
-                                   lager:info("Sweep_result: ~p" ,[Result]),
                                    ?MODULE:sweep_result(Index, format_result(Result))
                            end),
             State#state{sweeps = start_sweep(Sweeps, Index, Pid, ActiveParticipants, EstimatedNrKeys)}
@@ -410,22 +407,19 @@ expired_or_missing(#sweep{index = Index, results = Result}, Participants) ->
     lager:info("Index: ~w Missing: ~w Expired: ~w", [Index, Missing, Expired]),
     lists:sum(Missing) + lists:sum(Expired).
 
+expired(_Now, _TS, disabled) ->
+    0;
 expired(Now, TS, RunInterval) ->
-    case elapsed_secs(Now, TS) - RunInterval of
-        N when N > 0 ->
-            N;
-        _ ->
-            0
-    end.
+    elapsed_secs(Now, TS) - RunInterval.
 
 run_interval(Mod, Participants) ->
     case dict:find(Mod, Participants) of
-        #sweep_participant{run_interval = RunInterval} ->
+        {ok, #sweep_participant{run_interval = RunInterval}} ->
             RunInterval;
         _ ->
             %% Participant have been disabled since last run.
             %% TODO: should we remove inactive results?
-            0
+            disabled
     end.
 
 elapsed_secs(Now, Start) ->
@@ -478,108 +472,9 @@ get_idle_sweeps(Sweeps) ->
     [Sweep || {_Index, #sweep{state = idle} = Sweep} <- dict:to_list(Sweeps)].
 
 get_never_runned_sweeps(Sweeps) ->
-    [Sweep || {_Index, #sweep{state = idle, results = ResDict} = Sweep} <- dict:to_list(Sweeps), dict:is_empty(ResDict)].
+    [Sweep || {_Index, #sweep{state = idle, results = ResDict} = Sweep} <- dict:to_list(Sweeps), dict:size(ResDict) == 0].
 
-format_sweeps(Sweeps) ->
-    Header =
-        io_lib:format("~s~n~-49s  ~-12s  ~-12s~n",
-                      [string:centre(" Sweeps ", 79, $=), 
-                       "Index",
-                       "Last (ago)",
-                       "Duration"]),
-    Now = os:timestamp(),
-    SortedSweeps = lists:keysort(1, Sweeps),
-    FormatedSweeps =
-        [begin
-             EndTime = Sweep#sweep.end_time,
-             LastSweep = format_timestamp(Now, EndTime),
-             Duration = format_timestamp(EndTime, Sweep#sweep.start_time),
-             ResultsString = format_results(Now, Sweep#sweep.results),
-             Progress = format_progress(Sweep),
-             io_lib:format("~-49b  ~-12s  ~-12s ~s ~n~s", [Index, LastSweep, Duration, ResultsString, Progress])
-         end
-         || {Index, Sweep} <- SortedSweeps],
-    Header ++ FormatedSweeps.
 
-format_progress(#sweep{state = idle}) ->
-    "";
-
-format_progress(#sweep{active_participants = AcitvePart, estimated_keys = {EstimatedKeys, _TS} , swept_keys = SweptKeys}) ->
-	format_active_participants(AcitvePart) ++
-    case EstimatedKeys of
-        EstimatedKeys when EstimatedKeys > 0 ->
-            progress(SweptKeys/EstimatedKeys, 80);
-        _ ->
-            format_progress_without_estimate(SweptKeys)
-    end.
-
-format_active_participants(AcitvePart) ->
-	io_lib:format("| Running: ", []) ++
-	[io_lib:format("| ~s", [atom_to_list(Mod)])
-	 || #sweep_participant{module = Mod} <- AcitvePart].
-
-format_progress_without_estimate(undefined) ->
-    "";
-format_progress_without_estimate(SweptKeys) ->
-    io_lib:format("~nRunning: no estimate swept ~p keys~n", [SweptKeys]).
-
-progress(PctDecimal, MaxSize) when PctDecimal > 1 ->
-	progress(1, MaxSize);
-
-progress(PctDecimal, MaxSize) ->
-    ProgressTotalSize = progress_size(MaxSize),
-    ProgressSize = trunc(PctDecimal * ProgressTotalSize),
-    PadSize = ProgressTotalSize - ProgressSize,
-    FormatStr = progress_fmt(ProgressSize, PadSize),
-    riak_core_format:fmt(FormatStr, ["", "", integer_to_list(trunc(PctDecimal * 100))]).
-
-progress_size(MaxSize) ->
-    MaxSize - 3. %% 3 fixed characters in progress bar
-
-progress_fmt(ArrowSize, PadSize) ->
-    riak_core_format:fmt("~n|~~~p..=s~~~p.. s| ~~3.. s%~n", [ArrowSize, PadSize]).
-
-format_results(Now, Results) ->
-    ResultList = dict:to_list(Results),
-    SortedResultList = lists:keysort(1, ResultList),
-    [begin
-        LastResult = format_timestamp(Now, TimeStamp),
-        io_lib:format("| ~s ~-4s ~-8s", [atom_to_list(Mod), string:to_upper(atom_to_list(Outcome)), LastResult])
-     end
-    || {Mod, {TimeStamp, Outcome}} <- SortedResultList].
-
-format_participants(SweepParticipants) ->
-    Header =
-        io_lib:format("~s~n~-25s  ~-20s ~-15s~n",
-                      [string:centre(" Sweep Participants ", 79, $=),
-                       "Module",
-                       "Desciption",
-                       "Run interval"]),
-    SortedSweepParticipants = lists:keysort(1, SweepParticipants),
-    lager:info("lixen ~p", [SortedSweepParticipants]),
-    FormatedParticipants =
-        [begin
-             IntervalString = format_interval(Interval * 1000000),
-             io_lib:format("~-25s  ~-20s ~-15s ~n", [atom_to_list(Mod), Desciption,  IntervalString])
-         end
-         || {Mod, #sweep_participant{description = Desciption, run_interval = Interval}}
-                <- SortedSweepParticipants],
-    Header ++ FormatedParticipants.
-
-format_timestamp(_Now, undefined) ->
-    "--";
-format_timestamp(undefined, _) ->
-    "--";
-format_timestamp(Now, TS) ->
-    case timer:now_diff(Now, TS) of
-        Diff when Diff > 0 ->
-            riak_core_format:human_time_fmt("~.1f", Diff);
-        _ ->
-            "--"
-    end.
-
-format_interval(Interval) ->
-    riak_core_format:human_time_fmt("~.1f", Interval).
 
 persist_participants(Participants) ->
     file:write_file(sweep_file("participants.dat") , io_lib:fwrite("~p.\n",[Participants])).
@@ -598,3 +493,6 @@ sweep_file(File) ->
     SweepFile = filename:join(SweepDir, File),
     ok = filelib:ensure_dir(SweepFile),
     SweepFile.
+
+
+
