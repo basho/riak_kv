@@ -178,6 +178,8 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
                                        rows = Rows}, State};
                 {error, {bad_key_length, Got, Need}} ->
                     {reply, key_element_count_mismatch(Got, Need), State};
+                {error, notfound} ->
+                    {reply, tsgetresp, State};
                 {error, Reason} ->
                     {reply, make_rpberrresp(?E_GET, to_string(Reason)), State}
             end
