@@ -53,19 +53,18 @@
 
 -record(state, {}).
 
-%% these error codes are obviously local to this module,
-%% until a central place for error numbers is defined
--define(E_SUBMIT,   1).
--define(E_FETCH,    2).
--define(E_IRREG,    3).
--define(E_PUT,      4).
--define(E_NOCREATE, 5).
--define(E_NOT_TS_TYPE, 6).
--define(E_MISSING_TYPE, 7).
--define(E_MISSING_TS_MODULE, 8).
--define(E_DELETE,   9).
--define(E_GET,     10).
--define(E_BAD_KEY_LENGTH, 11).
+%% per RIAK-1437, error codes assigned to TS are in the 1000-1500 range
+-define(E_SUBMIT,            1001).
+-define(E_FETCH,             1002).
+-define(E_IRREG,             1003).
+-define(E_PUT,               1004).
+-define(E_NOCREATE,          1005).
+-define(E_NOT_TS_TYPE,       1006).
+-define(E_MISSING_TYPE,      1007).
+-define(E_MISSING_TS_MODULE, 1008).
+-define(E_DELETE,            1009).
+-define(E_GET,               1010).
+-define(E_BAD_KEY_LENGTH,    1011).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
