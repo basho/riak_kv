@@ -1427,7 +1427,6 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
     %% Calculate the index specs to remove...
     %% JDM: This should just be a tombstone by this point, but better
     %% safe than sorry.
-    %%lager:info("do_backend_delete ~p ~p ~p ~p", [Idx, BKey, RObj, ModState]),
     IndexSpecs = riak_object:diff_index_specs(undefined, RObj),
 
     %% Do the delete...
@@ -1439,8 +1438,7 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
             maybe_cache_evict(BKey, State),
             update_index_delete_stats(IndexSpecs),
             State#state{modstate = UpdModState};
-        {error, Reason, UpdModState} ->
-            lager:info("Delete fail ~p", [Reason]),
+        {error, _Reason, UpdModState} ->
             State#state{modstate = UpdModState}
     end.
 
@@ -2158,10 +2156,9 @@ maybe_throttle_sweep(#sa{swept_keys = SweepKeys}) ->
 get_sweep_throttle() ->
     app_helper:get_env(riak_kv, sweep_throttle, ?DEFAULT_SWEEP_THROTTLE).
 
-maybe_receive_request(#sa{index = Index, active_p = Active, failed_p = Fail } = Acc) ->
+maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc) ->
     receive
         {stop, From, Ref} ->
-            lager:info("stop sweep ~p", [Index]),
             Active1 =
                 [ActiveSP#sweep_participant{fail_reason = sweep_stop } ||
                  #sweep_participant{} = ActiveSP <- Active],
@@ -2169,7 +2166,6 @@ maybe_receive_request(#sa{index = Index, active_p = Active, failed_p = Fail } = 
             From ! {ack, Ref},
             throw({stop_sweep, Acc1});
         {{disable, Module}, From, Ref} ->
-            lager:info("disable module ~p for in sweep ~p", [Index, Module]),
             case lists:keytake(Module, #sweep_participant.module, Active) of
                 {value, SP, Active1} ->
                     From ! {ack, Ref},

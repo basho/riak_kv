@@ -376,13 +376,10 @@ handle_call(expire, _From, State) ->
     {reply, ok, State2};
 
 handle_call({participate_in_sweep, Pid}, _From, #state{lock=undefined, built=true, expired=true} = State) ->
-    lager:info("participate_in_sweep true ~p ~p ~p", [State#state.lock, State#state.built, State#state.expired]),
     do_participate_in_sweep(Pid, State);
 handle_call({participate_in_sweep, Pid}, _From, #state{built=sweep} = State) ->
-    lager:info("participate_in_sweep true ~p ~p ~p", [State#state.lock, State#state.built, State#state.expired]),
     do_participate_in_sweep(Pid, State);
 handle_call({participate_in_sweep, _Pid}, _From, State) ->
-    lager:info("participate_in_sweep false ~p ~p ~p", [State#state.lock, State#state.built, State#state.expired]),
     {reply, false, State};
 
 handle_call(estimate_keys, From,  State=#state{trees=Trees}) ->
