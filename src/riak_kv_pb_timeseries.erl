@@ -24,6 +24,7 @@
 -module(riak_kv_pb_timeseries).
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
+-include_lib("riak_pb/include/riak_ts_pb.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -include("riak_kv_wm_raw.hrl").
@@ -398,8 +399,8 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
             LK = eleveldb_ts:encode_key(
                    riak_ql_ddl:get_local_key(DDL, BareValues)),
             {ok, {PK, LK}};
-       {Need, Got} ->
-            {error, {bad_key_length, Need, Got}}
+       {Got, Need} ->
+            {error, {bad_key_length, Got, Need}}
     end.
 
 
