@@ -28,7 +28,6 @@
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -include("riak_kv_wm_raw.hrl").
--include("riak_kv_qry_queue.hrl").  %% for query_id().
 
 -behaviour(riak_api_pb_service).
 
@@ -254,13 +253,8 @@ process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
 %%
 submit_query(DDL, Mod, SQL, State) ->
     case riak_kv_qry:submit(SQL, DDL) of
-        {ok, QId} ->
-            case fetch_with_patience(QId, ?FETCH_RETRIES) of
-                {ok, Data} ->
-                    {reply, make_tsqueryresp(Data, Mod), State};
-                {error, Reason} ->
-                    {reply, make_rpberrresp(?E_FETCH, to_string(Reason)), State}
-            end;
+        {ok, Data} ->
+            {reply, make_tsqueryresp(Data, Mod), State};
         {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
             ErrorMessage = lists:flatten(io_lib:format("~p: ~s", [E, Reason])),
             {reply, make_rpberrresp(?E_SUBMIT, ErrorMessage), State};
@@ -409,21 +403,6 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
 
 %% ---------------------------------------------------
 % functions supporting SELECT
-
--spec fetch_with_patience(query_id(), non_neg_integer()) ->
-                                 {ok, [{Key::binary(), riak_pb_ts_codec:ldbvalue()}]} |
-                                 {error, atom()}.
-fetch_with_patience(QId, 0) ->
-    lager:info("Query results on qid ~p not available after ~b secs", [QId, ?FETCH_RETRIES]),
-    {ok, []};
-fetch_with_patience(QId, N) ->
-    case riak_kv_qry_queue:fetch(QId) of
-        {error, in_progress} ->
-            timer:sleep(1000),
-            fetch_with_patience(QId, N-1);
-        Result ->
-            Result
-    end.
 
 -spec make_tsqueryresp([{binary(), term()}], module()) -> #tsqueryresp{}.
 make_tsqueryresp([], _Module) ->

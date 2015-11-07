@@ -48,7 +48,7 @@ start_link() ->
 
 %% @spec init([]) -> SupervisorTree
 init([]) ->
-    RestartStrategy = one_for_all,
+    RestartStrategy = one_for_one,
     MaxRestarts = 10,
     MaxSecondsBetweenRestarts = 10,
 
@@ -73,7 +73,7 @@ init([]) ->
 		     Restart, Shutdown, Type, [riak_kv_qry_worker]} || X <- Names],
 
     Riak_kv_qry_q = {riak_kv_qry_queue,
-		     {riak_kv_qry_queue, start_link, [{MaxQ, Names}]},
+		     {riak_kv_qry_queue, start_link, [MaxQ]},
 		     Restart, Shutdown, Type, [riak_kv_qry_queue]},
 
     {ok, {SupFlags, [
