@@ -24,6 +24,7 @@
 -module(riak_kv_pb_timeseries).
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
+-include_lib("riak_pb/include/riak_ts_pb.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -include("riak_kv_wm_raw.hrl").
@@ -51,18 +52,18 @@
 
 -record(state, {}).
 
-%% these error codes are obviously local to this module,
-%% until a central place for error numbers is defined
--define(E_SUBMIT,   1).
--define(E_FETCH,    2).
--define(E_IRREG,    3).
--define(E_PUT,      4).
--define(E_NOCREATE, 5).
--define(E_NOT_TS_TYPE, 6).
--define(E_MISSING_TYPE, 7).
--define(E_MISSING_TS_MODULE, 8).
--define(E_DELETE,   9).
--define(E_GET,     10).
+%% per RIAK-1437, error codes assigned to TS are in the 1000-1500 range
+-define(E_SUBMIT,            1001).
+-define(E_FETCH,             1002).
+-define(E_IRREG,             1003).
+-define(E_PUT,               1004).
+-define(E_NOCREATE,          1005).
+-define(E_NOT_TS_TYPE,       1006).
+-define(E_MISSING_TYPE,      1007).
+-define(E_MISSING_TS_MODULE, 1008).
+-define(E_DELETE,            1009).
+-define(E_GET,               1010).
+-define(E_BAD_KEY_LENGTH,    1011).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
@@ -154,9 +155,15 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
     Mod = riak_ql_ddl:make_module_name(Table),
     try Mod:get_ddl() of
         DDL ->
-            PKLK = make_ts_keys(CompoundKey, DDL),
-            case riak_client:get(
-                   {Table, Table}, PKLK, Options, {riak_client, [node(), undefined]}) of
+            Result =
+                case make_ts_keys(CompoundKey, DDL) of
+                    {ok, PKLK} ->
+                        riak_client:get(
+                          {Table, Table}, PKLK, Options, {riak_client, [node(), undefined]});
+                    ErrorReason ->
+                        ErrorReason
+                end,
+            case Result of
                 {ok, RObj} ->
                     Record = riak_object:get_value(RObj),
                     {ColumnNames, Row} = lists:unzip(Record),
@@ -168,6 +175,10 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
                     Rows = riak_pb_ts_codec:encode_rows([Row]),
                     {reply, #tsgetresp{columns = ColumnDescriptions,
                                        rows = Rows}, State};
+                {error, {bad_key_length, Got, Need}} ->
+                    {reply, key_element_count_mismatch(Got, Need), State};
+                {error, notfound} ->
+                    {reply, tsgetresp, State};
                 {error, Reason} ->
                     {reply, make_rpberrresp(?E_GET, to_string(Reason)), State}
             end
@@ -202,15 +213,20 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
     Mod = riak_ql_ddl:make_module_name(Table),
     try Mod:get_ddl() of
         DDL ->
-            PKLK = make_ts_keys(CompoundKey, DDL),
-            %% = {PK, LK} = Key to pass to riak_client:delete
             Result =
-                riak_client:delete_vclock(
-                  {Table, Table}, PKLK, VClock, Options,
-                  {riak_client, [node(), undefined]}),
+                case make_ts_keys(CompoundKey, DDL) of
+                    {ok, PKLK} ->
+                        riak_client:delete_vclock(
+                          {Table, Table}, PKLK, VClock, Options,
+                          {riak_client, [node(), undefined]});
+                    ErrorReason ->
+                        ErrorReason
+                end,
             case Result of
                 ok ->
                     {reply, tsdelresp, State};
+                {error, {bad_key_length, Got, Need}} ->
+                    {reply, key_element_count_mismatch(Got, Need), State};
                 {error, notfound} ->
                     {reply, tsdelresp, State};
                 {error, Reason} ->
@@ -312,6 +328,12 @@ missing_table_module_response(BucketType) ->
         ?E_MISSING_TS_MODULE,
         io_lib:format("The compiled module for Time Series bucket ~s cannot be loaded.", [BucketType])).
 
+-spec key_element_count_mismatch(Got::integer(), Need::integer()) -> #rpberrorresp{}.
+key_element_count_mismatch(Got, Need) ->
+    make_rpberrresp(
+      ?E_BAD_KEY_LENGTH,
+      io_lib:format("Key element count mismatch (key has ~b elements but ~b supplied).", [Need, Got])).
+
 to_string(X) ->
     io_lib:format("~p", [X]).
 
@@ -319,13 +341,12 @@ to_string(X) ->
 %% ---------------------------------------------------
 % functions supporting INSERT
 
-
 -spec put_data([riak_pb_ts_codec:tsrow()], binary(), module()) -> integer().
 %% @ignore return count of records we failed to put
 put_data(Data, Table, Mod) ->
     DDL = Mod:get_ddl(),
-    lists:foldl(
-      fun(Raw, ErrorsCnt) ->
+    {ReqIds, FailReqs} = lists:foldl(
+      fun(Raw, {ReqIdsAcc, ErrorsCnt}) ->
               Obj = Mod:add_column_info(Raw),
 
               PK  = eleveldb_ts:encode_key(
@@ -339,36 +360,45 @@ put_data(Data, Table, Mod) ->
               MD2 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD1),
               RObj = riak_object:update_metadata(RObj0, MD2),
 
-              case riak_client:put(RObj, {riak_client, [node(), undefined]}) of
+              case riak_kv_w1c_worker:async_put(RObj, []) of
                   {error, _Why} ->
-                      ErrorsCnt + 1;
-                  _Ok ->
-                      ErrorsCnt
+                      {ReqIdsAcc, ErrorsCnt + 1};
+                  {ok, ReqId} ->
+                      {[ReqId | ReqIdsAcc], ErrorsCnt}
               end
       end,
-      0, Data).
+      {[], 0}, Data),
+    Responses = riak_kv_w1c_worker:async_put_replies(ReqIds, []),
+    length(lists:filter(fun({error, _}) -> true;
+                           (_) -> false
+                        end, Responses)) + FailReqs.
 
-
+-spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], #ddl_v1{}) ->
+                          {ok, {binary(), binary()}} | {error, {bad_key_length, integer(), integer()}}.
 make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
                                         fields = Fields}) ->
-
     %% 1. use elements in Key to form a complete data record:
     KeyFields = [F || #param_v1{name = [F]} <- LKParams],
-    KeyAssigned = lists:zip(KeyFields, CompoundKey),
-    VoidRecord = [{F, void} || #riak_field_v1{name = F} <- Fields],
-    %% (void values will not be looked at in riak_ql_ddl:make_key;
-    %% only LK-constituent fields matter)
-    BareValues =
-        list_to_tuple(
-          [proplists:get_value(K, KeyAssigned)
-           || {K, _} <- VoidRecord, lists:member(K, KeyFields)]),
+    case {length(KeyFields), length(CompoundKey)} of
+        {_N, _N} ->
+            KeyAssigned = lists:zip(KeyFields, CompoundKey),
+            VoidRecord = [{F, void} || #riak_field_v1{name = F} <- Fields],
+            %% (void values will not be looked at in riak_ql_ddl:make_key;
+            %% only LK-constituent fields matter)
+            BareValues =
+                list_to_tuple(
+                  [proplists:get_value(K, KeyAssigned)
+                   || {K, _} <- VoidRecord, lists:member(K, KeyFields)]),
 
-    %% 2. make the PK and LK
-    PK = eleveldb_ts:encode_key(
-           riak_ql_ddl:get_partition_key(DDL, BareValues)),
-    LK = eleveldb_ts:encode_key(
-           riak_ql_ddl:get_local_key(DDL, BareValues)),
-    {PK, LK}.
+            %% 2. make the PK and LK
+            PK = eleveldb_ts:encode_key(
+                   riak_ql_ddl:get_partition_key(DDL, BareValues)),
+            LK = eleveldb_ts:encode_key(
+                   riak_ql_ddl:get_local_key(DDL, BareValues)),
+            {ok, {PK, LK}};
+       {Got, Need} ->
+            {error, {bad_key_length, Got, Need}}
+    end.
 
 
 %% ---------------------------------------------------
