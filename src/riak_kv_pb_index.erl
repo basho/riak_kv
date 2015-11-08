@@ -241,13 +241,13 @@ make_continuation(_, _, _)  ->
 %% @doc process_stream/3 callback. Handle streamed responses
 process_stream({ReqId, done}, ReqId, State=#state{req_id=ReqId,
                                                   continuation=Continuation,
-                                                  req=#rpbindexreq{return_body=false}=Req,
+                                                  req=#rpbindexreq{return_body=true}=Req,
                                                   result_count=Count}) ->
     %% Only add the continuation if there (may) be more results to send
     #rpbindexreq{max_results=MaxResults} = Req,
     Resp = case is_integer(MaxResults) andalso Count >= MaxResults of
-               true -> #rpbindexresp{done=1, continuation=Continuation};
-               false -> #rpbindexresp{done=1}
+               true -> #rpbindexbodyresp{done=1, continuation=Continuation};
+               false -> #rpbindexbodyresp{done=1}
            end,
     {done, Resp, State};
 process_stream({ReqId, done}, ReqId, State=#state{req_id=ReqId,
@@ -257,8 +257,8 @@ process_stream({ReqId, done}, ReqId, State=#state{req_id=ReqId,
     %% Only add the continuation if there (may) be more results to send
     #rpbindexreq{max_results=MaxResults} = Req,
     Resp = case is_integer(MaxResults) andalso Count >= MaxResults of
-               true -> #rpbindexbodyresp{done=1, continuation=Continuation};
-               false -> #rpbindexbodyresp{done=1}
+               true -> #rpbindexresp{done=1, continuation=Continuation};
+               false -> #rpbindexresp{done=1}
            end,
     {done, Resp, State};
 process_stream({ReqId, {results, []}}, ReqId, State=#state{req_id=ReqId}) ->
