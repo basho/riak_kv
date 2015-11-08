@@ -74,9 +74,10 @@ init() ->
 
 
 -spec decode(integer(), binary()) ->
-    {ok, #ddl_v1{} | #riak_sql_v1{} | #tsputreq{} | #tsdelreq{} | #tsgetreq{},
-        {PermSpec::string(), Table::binary()}} |
-    {error,_}.
+    {ok, #tsputreq{} | #tsdelreq{} | #tsgetreq{}
+       | #ddl_v1{} | #riak_sql_v1{},
+     {PermSpec::string(), Table::binary()}} |
+    {error, _}.
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
@@ -102,14 +103,9 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 
--spec process(atom() | #ddl_v1{} | #riak_sql_v1{} | #tsputreq{}, #state{}) ->
+-spec process(atom() | #tsputreq{} | #tsdelreq{} | #tsgetreq{}
+              | #ddl_v1{} | #riak_sql_v1{}, #state{}) ->
                      {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
-process(#ddl_v1{}, State) ->
-    {reply, make_rpberrresp(?E_NOCREATE,
-                            "CREATE TABLE not supported via client interface;"
-                            " use riak-admin command instead"),
-     State};
-
 process(#tsputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
 process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
@@ -125,7 +121,7 @@ process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
                     0 ->
                         {reply, #tsputresp{}, State};
                     ErrorCount ->
-                        EPutMessage = io_lib:format("Failed to put ~b record(s)", [ErrorCount]),
+                        EPutMessage = flat_format("Failed to put ~b record(s)", [ErrorCount]),
                         {reply, make_rpberrresp(?E_PUT, EPutMessage), State}
                 end
             catch
@@ -231,7 +227,7 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
                     {reply, tsdelresp, State};
                 {error, Reason} ->
                     {reply, make_rpberrresp(
-                              ?E_DELETE, io_lib:format("Failed to delete record: ~p", [Reason])),
+                              ?E_DELETE, flat_format("Failed to delete record: ~p", [Reason])),
                      State}
             end
     catch error:{undef, _} ->
@@ -239,6 +235,11 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
             {reply, missing_helper_module(Table, Props), State}
     end;
 
+process(#ddl_v1{}, State) ->
+    {reply, make_rpberrresp(?E_NOCREATE,
+                            "CREATE TABLE not supported via client interface;"
+                            " use riak-admin command instead"),
+     State};
 
 process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
@@ -256,7 +257,7 @@ submit_query(DDL, Mod, SQL, State) ->
         {ok, Data} ->
             {reply, make_tsqueryresp(Data, Mod), State};
         {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
-            ErrorMessage = lists:flatten(io_lib:format("~p: ~s", [E, Reason])),
+            ErrorMessage = flat_format("~p: ~s", [E, Reason]),
             {reply, make_rpberrresp(?E_SUBMIT, ErrorMessage), State};
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, to_string(Reason)), State}
@@ -313,29 +314,29 @@ missing_helper_module(Table, BucketProps) when is_binary(Table), is_list(BucketP
 missing_type_response(BucketType) ->
     make_rpberrresp(
         ?E_MISSING_TYPE,
-        io_lib:format("Bucket type ~s is missing.", [BucketType])).
+        flat_format("Bucket type ~s is missing.", [BucketType])).
 
 %%
 -spec not_timeseries_type_response(BucketType::binary()) -> #rpberrorresp{}.
 not_timeseries_type_response(BucketType) ->
     make_rpberrresp(
         ?E_NOT_TS_TYPE,
-        io_lib:format("Attempt Time Series operation on non Time Series bucket type ~s.", [BucketType])).
+        flat_format("Attempt Time Series operation on non Time Series bucket type ~s.", [BucketType])).
 
 -spec missing_table_module_response(BucketType::binary()) -> #rpberrorresp{}.
 missing_table_module_response(BucketType) ->
     make_rpberrresp(
         ?E_MISSING_TS_MODULE,
-        io_lib:format("The compiled module for Time Series bucket ~s cannot be loaded.", [BucketType])).
+        flat_format("The compiled module for Time Series bucket ~s cannot be loaded.", [BucketType])).
 
 -spec key_element_count_mismatch(Got::integer(), Need::integer()) -> #rpberrorresp{}.
 key_element_count_mismatch(Got, Need) ->
     make_rpberrresp(
       ?E_BAD_KEY_LENGTH,
-      io_lib:format("Key element count mismatch (key has ~b elements but ~b supplied).", [Need, Got])).
+      flat_format("Key element count mismatch (key has ~b elements but ~b supplied).", [Need, Got])).
 
 to_string(X) ->
-    io_lib:format("~p", [X]).
+    flat_format("~p", [X]).
 
 
 %% ---------------------------------------------------
