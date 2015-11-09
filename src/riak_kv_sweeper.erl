@@ -33,7 +33,14 @@
 -module(riak_kv_sweeper).
 -behaviour(gen_server).
 -include("riak_kv_sweeper.hrl").
+-ifdef(PULSE).
+-compile({parse_transform, pulse_instrument}).
+-endif.
+
 -ifdef(TEST).
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-endif.
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -494,5 +501,30 @@ sweep_file(File) ->
     ok = filelib:ensure_dir(SweepFile),
     SweepFile.
 
+%% ====================================================================
+%% Unit tests
+%% ====================================================================
+
+-ifdef(EQC).
+
+prop_in_window() ->
+    ?FORALL({NowHour, WindowLen, StartTime}, {choose(0, 23), choose(0, 23), choose(0, 23)},
+            begin
+                EndTime = (StartTime + WindowLen) rem 24,
+
+                %% Generate a set of all hours within this window
+                WindowHours = [H rem 24 || H <- lists:seq(StartTime, StartTime + WindowLen)],
+
+                %% If NowHour is in the set of windows hours, we expect our function
+                %% to indicate that we are in the window
+                ExpInWindow = lists:member(NowHour, WindowHours),
+                ?assertEqual(ExpInWindow, in_sweep_window(NowHour, {StartTime, EndTime})),
+                true
+            end).
+
+prop_in_window_test_() ->
+    {timeout, 30,
+     [fun() -> ?assert(eqc:quickcheck(prop_in_window())) end]}.
 
 
+-endif.
