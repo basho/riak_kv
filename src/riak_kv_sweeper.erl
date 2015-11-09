@@ -153,8 +153,8 @@ handle_call({sweep_request, Index}, _From, State) ->
 
 handle_call(status, _From, State) ->
     Participants = dict:to_list(State#state.sweep_participants),
-    Sweep = dict:to_list(State#state.sweeps),
-    {reply, {Participants , Sweep}, State};
+    Sweeps =   [Sweep || {_Index, Sweep} <- dict:to_list(State#state.sweeps)],
+    {reply, {Participants , Sweeps}, State};
 
 handle_call(sweeps, _From, State) ->
     {reply, State#state.sweeps, State};
