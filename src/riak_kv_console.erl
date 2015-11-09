@@ -364,43 +364,39 @@ format_timestamp(Now, TS) ->
 
 sweep_status([]) ->
     {Participants, Sweeps} = riak_kv_sweeper:status(),
-    ParticipantsString = format_participants(Participants),
-    SweepString = format_sweeps(Sweeps),
-    io:format(ParticipantsString ++SweepString).
+    format_participants(Participants),
+    format_sweeps(Sweeps).
 
 format_sweeps(Sweeps) ->
-    Header =
-        io_lib:format("~s~n~-49s  ~-12s  ~-12s~n",
-                      [string:centre(" Sweeps ", 79, $=),
-                       "Index",
-                       "Last (ago)",
-                       "Duration"]),
+    io:format("~s~n~-49s  ~-12s  ~-12s~n",
+              [string:centre(" Sweeps ", 79, $=),
+               "Index",
+               "Last (ago)",
+               "Duration"]),
     Now = os:timestamp(),
-    SortedSweeps = lists:keysort(1, Sweeps),
-    FormatedSweeps =
-        [begin
-             EndTime = Sweep#sweep.end_time,
-             LastSweep = format_timestamp(Now, EndTime),
-             Duration = format_timestamp(EndTime, Sweep#sweep.start_time),
-             ResultsString = format_results(Now, Sweep#sweep.results),
-             Progress = format_progress(Sweep),
-             io_lib:format("~-49b  ~-12s  ~-12s ~s ~n~s", [Index, LastSweep, Duration, ResultsString, Progress])
-         end
-         || {Index, Sweep} <- SortedSweeps],
-    Header ++ FormatedSweeps.
+    SortedSweeps = lists:keysort(#sweep.index, Sweeps),
+    [begin
+         EndTime = Sweep#sweep.end_time,
+         LastSweep = format_timestamp(Now, EndTime),
+         Duration = format_timestamp(EndTime, Sweep#sweep.start_time),
+         ResultsString = format_results(Now, Sweep#sweep.results),
+         Progress = format_progress(Sweep),
+         io:format("~-49b  ~-12s  ~-12s ~s ~n~s", [Sweep#sweep.index, LastSweep, Duration, ResultsString, Progress])
+     end
+     || Sweep <- SortedSweeps].
 
 format_progress(#sweep{state = idle}) ->
     "";
 
 format_progress(#sweep{active_participants = AcitvePart, estimated_keys = {EstimatedKeys, _TS} , swept_keys = SweptKeys}) ->
     format_active_participants(AcitvePart) ++
-    case EstimatedKeys of
-        EstimatedKeys when EstimatedKeys > 0 ->
-            progress(SweptKeys/EstimatedKeys, 80) ++
-            io_lib:format(" ~w of ~w keys swept ~n", [SweptKeys, EstimatedKeys]);
-        _ ->
-            format_progress_without_estimate(SweptKeys)
-    end.
+        case EstimatedKeys of
+            EstimatedKeys when EstimatedKeys > 0 ->
+                progress(SweptKeys/EstimatedKeys, 80) ++
+                    io_lib:format(" ~w of ~w keys swept ~n", [SweptKeys, EstimatedKeys]);
+            _ ->
+                format_progress_without_estimate(SweptKeys)
+        end.
 
 format_active_participants(AcitvePart) ->
     io_lib:format("| Running: ", []) ++
@@ -438,21 +434,18 @@ format_results(Now, Results) ->
     || {Mod, {TimeStamp, Outcome}} <- SortedResultList].
 
 format_participants(SweepParticipants) ->
-    Header =
-        io_lib:format("~s~n~-25s  ~-20s ~-15s~n",
-                      [string:centre(" Sweep Participants ", 79, $=),
-                       "Module",
-                       "Desciption",
-                       "Run interval"]),
+    io:format("~s~n~-25s  ~-20s ~-15s~n",
+              [string:centre(" Sweep Participants ", 79, $=),
+               "Module",
+               "Desciption",
+               "Run interval"]),
     SortedSweepParticipants = lists:keysort(1, SweepParticipants),
-    FormatedParticipants =
-        [begin
-             IntervalString = format_interval(Interval * 1000000),
-             io_lib:format("~-25s  ~-20s ~-15s ~n", [atom_to_list(Mod), Desciption,  IntervalString])
-         end
-         || {Mod, #sweep_participant{description = Desciption, run_interval = Interval}}
-                <- SortedSweepParticipants],
-    Header ++ FormatedParticipants.
+    [begin
+         IntervalString = format_interval(Interval * 1000000),
+         io:format("~-25s  ~-20s ~-15s ~n", [atom_to_list(Mod), Desciption,  IntervalString])
+     end
+     || {Mod, #sweep_participant{description = Desciption, run_interval = Interval}}
+            <- SortedSweepParticipants].
 
 format_interval(Interval) ->
     riak_core_format:human_time_fmt("~.1f", Interval).
