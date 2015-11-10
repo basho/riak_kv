@@ -379,7 +379,9 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
                                         fields = Fields}) ->
     %% 1. use elements in Key to form a complete data record:
     KeyFields = [F || #param_v1{name = [F]} <- LKParams],
-    case {length(KeyFields), length(CompoundKey)} of
+    Got = length(CompoundKey),
+    Need = length(KeyFields),
+    case {Got, Need} of
         {_N, _N} ->
             KeyAssigned = lists:zip(KeyFields, CompoundKey),
             VoidRecord = [{F, void} || #riak_field_v1{name = F} <- Fields],
@@ -396,8 +398,8 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
             LK = eleveldb_ts:encode_key(
                    riak_ql_ddl:get_local_key(DDL, BareValues)),
             {ok, {PK, LK}};
-       {Got, Need} ->
-            {error, {bad_key_length, Got, Need}}
+       {G, N} ->
+            {error, {bad_key_length, G, N}}
     end.
 
 
