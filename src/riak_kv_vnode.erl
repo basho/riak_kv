@@ -1181,8 +1181,15 @@ delete(State=#state{status_mgr_pid=StatusMgr, mod=Mod, modstate=ModState}) ->
     end,
     {ok, State#state{modstate=UpdModState,vnodeid=undefined,hashtrees=undefined}}.
 
-terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
+terminate(_Reason, #state{mod=Mod, modstate=ModState,hashtrees=Trees}) ->
     Mod:stop(ModState),
+
+    %% Explicitly stop the hashtree rather than relying on the process monitor
+    %% to detect the vnode exit.  As riak_kv_index_hashtree is not a supervised
+    %% process in the riak_kv application, on graceful shutdown riak_kv and
+    %% riak_core can complete their shutdown before the hashtree is written
+    %% to disk causing the hashtree to be closed dirty.
+    riak_kv_index_hashtree:sync_stop(Trees),
     ok.
 
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
