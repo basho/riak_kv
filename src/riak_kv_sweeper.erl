@@ -242,23 +242,22 @@ sweep_request(Index, #state{sweeps = Sweeps} = State) ->
 
 do_sweep(#sweep{index = Index}, State) ->
     do_sweep(Index, State);
-do_sweep(Index, #state{sweep_participants = SP, sweeps = Sweeps} = State) ->
-
+do_sweep(Index, #state{sweep_participants = SweepParticipants, sweeps = Sweeps} = State) ->
     %% Ask for estimate before we ask_participants since riak_kv_index_tree
     %% clears the trees if they are expired.
     AAEEnabled = riak_kv_entropy_manager:enabled(),
     EstimatedNrKeys = get_estimate_keys(Index, AAEEnabled, Sweeps),
-
-    case ask_participants(Index, SP) of
+    case ask_participants(Index, SweepParticipants) of
         [] ->
             State;
         ActiveParticipants ->
-            Pid =
-                spawn_link(fun() ->
-                                   Result = riak_kv_vnode:sweep({Index, node()}, ActiveParticipants, EstimatedNrKeys),
-                                   ?MODULE:sweep_result(Index, format_result(Result))
-                           end),
-            State#state{sweeps = start_sweep(Sweeps, Index, Pid, ActiveParticipants, EstimatedNrKeys)}
+            SweepFun =
+                fun() ->
+                        Result = riak_kv_vnode:sweep({Index, node()}, ActiveParticipants, EstimatedNrKeys),
+                        ?MODULE:sweep_result(Index, format_result(Result))
+                end,
+            Pid = spawn_link(SweepFun),
+            State#state{sweeps = sweep_started(Sweeps, Index, Pid, ActiveParticipants, SweepParticipants, EstimatedNrKeys)}
     end.
 
 get_estimate_keys(Index, AAEEnabled, Sweeps) ->
@@ -268,7 +267,7 @@ get_estimate_keys(Index, AAEEnabled, Sweeps) ->
 maybe_estimate_keys(Index, true, undefined) ->
 	get_estimtate(Index);
 maybe_estimate_keys(Index, true, {EstimatedNrKeys, TS}) ->
-	EstimateOutdated  = elapsed_secs(os:timestamp(), TS) > ?ESTIMATE_EXPIRY,
+	EstimateOutdated = elapsed_secs(os:timestamp(), TS) > ?ESTIMATE_EXPIRY,
 	case EstimateOutdated of
 		true ->
 			get_estimtate(Index);
@@ -394,30 +393,45 @@ find_expired_participant(Sweeps, Participants) ->
         [{expired_or_missing(Sweep, Participants), Sweep} || Sweep <- get_idle_sweeps(Sweeps)],
     MaxExpiredMissingSweep = hd(lists:reverse(lists:keysort(1, ExpiredMissingSweeps))),
     case MaxExpiredMissingSweep of
-        {0, _} -> [];
+        %% Non of the sweeps have a expired or missing participant.
+        {{0,0}, _} -> [];
         {_N, Sweep} -> Sweep
     end.
 
-expired_or_missing(#sweep{index = Index, results = Result}, Participants) ->
+expired_or_missing(#sweep{index = Index, results = Results}, Participants) ->
     Now = os:timestamp(),
-    ResultList = dict:to_list(Result),
-    Missing =
-        [RunInterval ||
-         {Module, #sweep_participant{module = Module, run_interval = RunInterval}}
-             <- dict:to_list(Participants), not lists:keymember(Module, 1, ResultList)],
+    ResultsList = dict:to_list(Results),
+    Missing = missing(run_interval, Participants, ResultsList),
     Expired =
         [begin
              RunInterval = run_interval(Mod, Participants),
              expired(Now, TS, RunInterval)
          end ||
-         {Mod, {TS, _Outcome}} <- ResultList],
+         {Mod, {TS, _Outcome}} <- ResultsList],
     lager:info("Index: ~w Missing: ~w Expired: ~w", [Index, Missing, Expired]),
-    lists:sum(Missing) + lists:sum(Expired).
+    MissingSum = lists:sum(Missing),
+    ExpiredSum = lists:sum(Expired),
+    {MissingSum, ExpiredSum}.
+
+missing(Return, Participants, ResultList) ->
+    [case Return of
+         run_interval ->
+             RunInterval;
+         module ->
+             Module
+     end ||
+     {Module, #sweep_participant{run_interval = RunInterval}}
+         <- dict:to_list(Participants), not lists:keymember(Module, 1, ResultList)].
 
 expired(_Now, _TS, disabled) ->
     0;
 expired(Now, TS, RunInterval) ->
-    elapsed_secs(Now, TS) - RunInterval.
+    case elapsed_secs(Now, TS) - RunInterval of
+        N when N < 0 ->
+            0;
+        N ->
+            N
+    end.
 
 run_interval(Mod, Participants) ->
     case dict:find(Mod, Participants) of
@@ -444,16 +458,26 @@ finish_sweep(Sweeps, #sweep{index = Index}) ->
                         Sweep#sweep{state = idle, pid = undefind, worker_pid = undefind}
                 end, Sweeps).
 
-start_sweep(Sweeps, Index, Pid, ActiveParticipants, EstimatedNrKeys) ->
+sweep_started(Sweeps, Index, Pid, ActiveParticipants, SweepParticipants, EstimatedNrKeys) ->
     TS = os:timestamp(),
     dict:update(Index,
                 fun(Sweep) ->
+                        Results = add_asked_to_results(Sweep#sweep.results, SweepParticipants),
                         Sweep#sweep{state = running,
                                     pid = Pid,
+                                    results = Results,
                                     estimated_keys = {EstimatedNrKeys, TS},
                                     active_participants = ActiveParticipants,
                                     start_time = TS}
                 end, Sweeps).
+
+add_asked_to_results(Results, SweepParticipants) ->
+    ResultList = dict:to_list(Results),
+    MissingResults = missing(module, SweepParticipants, ResultList),
+    TimeStamp = os:timestamp(),
+    lists:foldl(fun(Mod, Dict) ->
+                        dict:store(Mod, {TimeStamp, asked}, Dict)
+                end, Results, MissingResults).
 
 maybe_initiate_sweeps(#state{sweeps = Sweeps} = State) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
@@ -461,12 +485,23 @@ maybe_initiate_sweeps(#state{sweeps = Sweeps} = State) ->
     MissingIdx = [Idx || Idx <- Indices,
                          not dict:is_key(Idx, Sweeps)],
     Sweeps1 = add_sweeps(MissingIdx, Sweeps),
-    State#state{sweeps = Sweeps1}.
+
+    NotOwnerIdx = [Index || {Index, _Sweep} <- dict:to_list(Sweeps),
+                            not lists:member(Index, Indices)],
+    Sweeps2 = remove_sweeps(NotOwnerIdx, Sweeps1),
+
+    State#state{sweeps = Sweeps2}.
 
 add_sweeps(MissingIdx, Sweeps) ->
     lists:foldl(fun(Idx, SweepsDict) ->
                         dict:store(Idx, #sweep{index = Idx}, SweepsDict)
                 end, Sweeps, MissingIdx).
+
+remove_sweeps(NotOwnerIdx, Sweeps) ->
+    lists:foldl(fun(Idx, SweepsDict) ->
+                        lager:info("lixen_delete_sweep ~w", [Idx]),
+                        dict:erase(Idx, SweepsDict)
+                end, Sweeps, NotOwnerIdx).
 
 get_last_started_sweep(RunningSweeps) ->
     SortedSweeps = lists:keysort(#sweep.start_time, RunningSweeps),
@@ -480,8 +515,6 @@ get_idle_sweeps(Sweeps) ->
 
 get_never_runned_sweeps(Sweeps) ->
     [Sweep || {_Index, #sweep{state = idle, results = ResDict} = Sweep} <- dict:to_list(Sweeps), dict:size(ResDict) == 0].
-
-
 
 persist_participants(Participants) ->
     file:write_file(sweep_file("participants.dat") , io_lib:fwrite("~p.\n",[Participants])).
