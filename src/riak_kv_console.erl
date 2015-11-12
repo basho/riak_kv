@@ -376,9 +376,10 @@ format_sweeps(Sweeps) ->
     Now = os:timestamp(),
     SortedSweeps = lists:keysort(#sweep.index, Sweeps),
     [begin
+         StartTime = Sweep#sweep.start_time,
          EndTime = Sweep#sweep.end_time,
-         LastSweep = format_timestamp(Now, EndTime),
-         Duration = format_timestamp(EndTime, Sweep#sweep.start_time),
+         LastSweep = format_timestamp(Now, StartTime),
+         Duration = format_timestamp(EndTime, StartTime),
          ResultsString = format_results(Now, Sweep#sweep.results),
          Progress = format_progress(Sweep),
          io:format("~-49b  ~-12s  ~-12s ~s ~n~s", [Sweep#sweep.index, LastSweep, Duration, ResultsString, Progress])
@@ -429,7 +430,7 @@ format_results(Now, Results) ->
     SortedResultList = lists:keysort(1, ResultList),
     [begin
         LastResult = format_timestamp(Now, TimeStamp),
-        io_lib:format("| ~s ~-4s ~-8s", [atom_to_list(Mod), string:to_upper(atom_to_list(Outcome)), LastResult])
+        io_lib:format("| ~s ~-4s ~-9s", [atom_to_list(Mod), string:to_upper(atom_to_list(Outcome)), LastResult])
      end
     || {Mod, {TimeStamp, Outcome}} <- SortedResultList].
 
