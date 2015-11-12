@@ -179,8 +179,8 @@ disable() ->
     gen_server:call(?MODULE, disable, infinity).
 
 add_sweep_participant() ->
-    RunInterval =
-        app_helper:get_env(riak_kv, aae_sweep_interval, 7 * 24 * 60 * 60), %% Once per week
+    %% Expire time in ms run interval in s
+    RunInterval = riak_kv_index_hashtree:get_expire_time() / 1000,
     riak_kv_sweeper:add_sweep_participant(
       #sweep_participant{
                          description = "AAE tree rebuild",
