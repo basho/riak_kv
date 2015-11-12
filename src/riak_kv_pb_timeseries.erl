@@ -64,6 +64,7 @@
 -define(E_DELETE,            1009).
 -define(E_GET,               1010).
 -define(E_BAD_KEY_LENGTH,    1011).
+-define(E_LISTKEYS,          1012).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
@@ -74,7 +75,7 @@ init() ->
 
 
 -spec decode(integer(), binary()) ->
-    {ok, #tsputreq{} | #tsdelreq{} | #tsgetreq{}
+    {ok, #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
        | #ddl_v1{} | #riak_sql_v1{},
      {PermSpec::string(), Table::binary()}} |
     {error, _}.
@@ -94,7 +95,9 @@ decode(Code, Bin) ->
         #tsputreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_put", Table}};
         #tsdelreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_del", Table}}
+            {ok, Msg, {"riak_kv.ts_del", Table}};
+        #tslistkeysreq{table = Table} ->
+            {ok, Msg, {"riak_kv.ts_listkeys", Table}}
     end.
 
 
@@ -103,7 +106,7 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 
--spec process(atom() | #tsputreq{} | #tsdelreq{} | #tsgetreq{}
+-spec process(atom() | #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
               | #ddl_v1{} | #riak_sql_v1{}, #state{}) ->
                      {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 process(#tsputreq{rows = []}, State) ->
@@ -234,6 +237,30 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
             Props = riak_core_bucket:get_bucket(Table),
             {reply, missing_helper_module(Table, Props), State}
     end;
+
+
+process(#tslistkeysreq{table = Table, timeout = Timeout}, State) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
+    try Mod:get_ddl() of
+        DDL ->
+            Filter = none,
+            Result = riak_client:list_ts_keys(
+                       Table, Filter, Timeout, DDL,
+                       {riak_client, [node(), undefined]}),
+            case Result of
+                {ok, CompoundKeys} ->
+                    Keys = riak_pb_ts_codec:encode_rows([tuple_to_list(A) || A <- CompoundKeys]),
+                    {reply, #tslistkeysresp{keys = Keys, done = true}, State};
+                {error, Reason} ->
+                    {reply, make_rpberrresp(
+                              ?E_LISTKEYS, flat_format("Failed to list keys: ~p", [Reason])),
+                     State}
+            end
+    catch error:{undef, _} ->
+            Props = riak_core_bucket:get_bucket(Table),
+            {reply, missing_helper_module(Table, Props), State}
+    end;
+
 
 process(#ddl_v1{}, State) ->
     {reply, make_rpberrresp(?E_NOCREATE,
@@ -449,6 +476,9 @@ assemble_records_(RR, RSize, Acc) ->
     Remaining = lists:nthtail(RSize, RR),
     assemble_records_(
       Remaining, RSize, [lists:sublist(RR, RSize) | Acc]).
+
+%% ---------------------------------------------------
+% functions supporting list_keys
 
 %% Utility API to limit some of the confusion over tables vs buckets
 table_to_bucket(Table) ->

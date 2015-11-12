@@ -83,6 +83,7 @@
 -include_lib("riak_kv_index.hrl").
 -include_lib("riak_kv_map_phase.hrl").
 -include_lib("riak_core_pb.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_types.hrl").
 
 -ifdef(TEST).
@@ -911,6 +912,16 @@ handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
     Opts = [{bucket, Bucket}],
     handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
                             FilterVNodes, Sender, Opts, State);
+handle_coverage(#riak_kv_listkeys_ts_req_v1{table = Table,
+                                            item_filter = ItemFilter,
+                                            ddl = DDL},
+                FilterVNodes, Sender, State) ->
+    %% ack-based backpressure, I suppose
+    Bucket = {Table, Table},
+    ResultFun = result_fun_ack(Bucket, Sender),
+    Opts = [{bucket, Bucket}, {ddl, DDL}],
+    handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
+                            FilterVNodes, Sender, Opts, State);
 handle_coverage(#riak_kv_index_req_v1{bucket=Bucket,
                               item_filter=ItemFilter,
                               qry=Query},
@@ -972,7 +983,7 @@ handle_coverage_index(Bucket, ItemFilter, Query,
             %% if there was a index_query fun.
             FoldType = riak_index:return_foldtype(Query),
             handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
-                                    FilterVNodes, Sender, Opts, State);
+                                 FilterVNodes, Sender, Opts, State);
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
     end.
@@ -1027,7 +1038,16 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     BufferSize = proplists:get_value(buffer_size, Opts0, DefaultBufSz),
     Buffer = BufferMod:new(BufferSize, ResultFun),
     Extras = fold_extras_keys(Index, Bucket),
-    FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
+    %% if Options contain a DDL, then we are folding keys for
+    %% list_ts_keys
+    FoldFunSelector =
+        case proplists:get_value(ddl, Opts0) of
+            undefined ->
+                keys;
+            DDL ->
+                {keys, fun(Key) -> recover_ts_key(Key, DDL, Index) end}
+        end,
+    FoldFun = fold_fun(FoldFunSelector, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     AsyncBackend = lists:member(async_fold, Capabilities),
@@ -1043,6 +1063,25 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
 	      _ ->
 		  {noreply, State}
 	  end.
+
+-spec recover_ts_key(binary(), #ddl_v1{}, index()) -> [] | tuple().
+%% @private
+%% Get the full TS record, then reconstruct the TS key from it using
+%% provided DDL.
+recover_ts_key(Key, DDL = #ddl_v1{table = Table}, Index) ->
+    Bucket = {Table, Table},
+    {ok, RObj} = local_get(Index, {Bucket, Key}),
+    case riak_object:get_value(RObj) of
+        <<>> ->
+            [];
+        Record ->
+            {_Columns, Values} = lists:unzip(Record),
+            LK = riak_ql_ddl:get_local_key(DDL, list_to_tuple(Values)),
+            {_Types, LKValues} = lists:unzip(LK),
+            %% there is a lists:flatten on the way back, so:
+            list_to_tuple(LKValues)
+    end.
+
 
 handle_coverage_range_scan(FoldType, Bucket, ItemFilter, ResultFun,
                         FilterVNodes, Sender, Opts0,
@@ -1869,9 +1908,15 @@ fold_fun(range_scan, BufferMod, none, _Extra) ->
     fun(Range, Buffer) ->
             BufferMod:add(Range, Buffer)
     end;
+
 fold_fun(keys, BufferMod, none, undefined) ->
     fun(_, Key, Buffer) ->
             BufferMod:add(Key, Buffer)
+    end;
+fold_fun({keys, RecoverTsFun}, BufferMod, none, undefined) ->
+    fun(_, Key, Buffer) ->
+            CompounfKey = RecoverTsFun(Key),
+            BufferMod:add(CompounfKey, Buffer)
     end;
 fold_fun(keys, BufferMod, none, {Bucket, Index, N, NumPartitions}) ->
     fun(_, Key, Buffer) ->
@@ -1879,6 +1924,17 @@ fold_fun(keys, BufferMod, none, {Bucket, Index, N, NumPartitions}) ->
             case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
                 Index ->
                     BufferMod:add(Key, Buffer);
+                _ ->
+                    Buffer
+            end
+    end;
+fold_fun({keys, RecoverTsFun}, BufferMod, none, {Bucket, Index, N, NumPartitions}) ->
+    fun(_, Key, Buffer) ->
+            Hash = riak_core_util:chash_key({Bucket, Key}),
+            case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
+                Index ->
+                    CompoundKey = RecoverTsFun(Key),
+                    BufferMod:add(CompoundKey, Buffer);
                 _ ->
                     Buffer
             end
@@ -1892,6 +1948,16 @@ fold_fun(keys, BufferMod, Filter, undefined) ->
                     Buffer
             end
     end;
+fold_fun({keys, RecoverTsFun}, BufferMod, Filter, undefined) ->
+    fun(_, Key, Buffer) ->
+            CompoundKey = RecoverTsFun(Key),
+            case Filter(CompoundKey) of
+                true ->
+                    BufferMod:add(CompoundKey, Buffer);
+                false ->
+                    Buffer
+            end
+    end;
 fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
     fun(_, Key, Buffer) ->
             Hash = riak_core_util:chash_key({Bucket, Key}),
@@ -1900,6 +1966,22 @@ fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
                     case Filter(Key) of
                         true ->
                             BufferMod:add(Key, Buffer);
+                        false ->
+                            Buffer
+                    end;
+                _ ->
+                    Buffer
+            end
+    end;
+fold_fun({keys, RecoverTsFun}, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
+    fun(_, Key, Buffer) ->
+            Hash = riak_core_util:chash_key({Bucket, Key}),
+            case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
+                Index ->
+                    CompoundKey = RecoverTsFun(Key),
+                    case Filter(CompoundKey) of
+                        true ->
+                            BufferMod:add(CompoundKey, Buffer);
                         false ->
                             Buffer
                     end;

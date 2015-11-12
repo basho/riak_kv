@@ -72,6 +72,14 @@ req(Bucket, ItemFilter) ->
             #riak_kv_listkeys_req_v3{bucket=Bucket,
                                      item_filter=ItemFilter}
     end.
+%% @doc Construct listkeys request record for TS buckets, where keys
+%% are meaningless hashes (Local Keys) and should be converted to
+%% Compound Keys using the table's DDL.
+-spec req(binary(), term(), riak_ql_ddl:ddl()) -> term().
+req(Bucket, ItemFilter, DDL) ->
+    #riak_kv_listkeys_ts_req_v1{table = Bucket,
+                                item_filter = ItemFilter,
+                                ddl = DDL}.
 
 %% @doc Return a tuple containing the ModFun to call per vnode,
 %% the number of primary preflist vnodes the operation
@@ -94,7 +102,25 @@ init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout]) ->
     %% Construct the key listing request
     Req = req(Bucket, ItemFilter),
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
+     #state{from=From}};
+
+init(From={_, _, ClientPid}, [Table, ItemFilter, Timeout, DDL]) ->
+    %% identical to init/2 with 3-element 2nd parameter list, except
+    %% that we construct a special request which includes the DDL
+    riak_core_dtrace:put_tag(io_lib:format("~p", [Table])),
+    ClientNode = atom_to_list(node(ClientPid)),
+    PidStr = pid_to_list(ClientPid),
+    FilterX = if ItemFilter == none -> 0;
+                 true               -> 1
+              end,
+    ?DTRACE(?C_KEYS_INIT, [2, FilterX],
+            [<<"other">>, ClientNode, PidStr]),
+    BucketProps = riak_core_bucket:get_bucket(Table),
+    NVal = proplists:get_value(n_val, BucketProps),
+    Req = req(Table, ItemFilter, DDL),
+    {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{from=From}}.
+
 
 process_results({From, Bucket, Keys},
                 StateData=#state{from={raw, ReqId, ClientPid}}) ->

@@ -29,7 +29,7 @@
 -export([put/2,put/3,put/4,put/5,put/6]).
 -export([delete/3,delete/4,delete/5]).
 -export([delete_vclock/4,delete_vclock/5,delete_vclock/6]).
--export([list_keys/2,list_keys/3,list_keys/4]).
+-export([list_keys/2,list_keys/3,list_keys/4,list_ts_keys/5]).
 -export([stream_list_keys/2,stream_list_keys/3,stream_list_keys/4]).
 -export([filter_buckets/2]).
 -export([filter_keys/3,filter_keys/4]).
@@ -659,6 +659,22 @@ list_keys(Bucket, Filter, Timeout0, {?MODULE, [Node, _ClientId]}) ->
     Me = self(),
     ReqId = mk_reqid(),
     riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout]]),
+    wait_for_listkeys(ReqId).
+
+-spec list_ts_keys(Table::binary(), function() | none, pos_integer() | undefined, riak_ql_ddl:ddl(),
+                   riak_client()) ->
+                          {ok, [tuple()]} | {error, term()}.
+%% @doc Lists all keys in a timeseries Table. When it is not 'none',
+%%      Filter function is applied to the recovered compound key.
+list_ts_keys(Table, Filter, Timeout0, DDL, {?MODULE, [Node, _ClientId]}) ->
+    Timeout =
+        case Timeout0 of
+            T when is_integer(T) -> T;
+            _ -> ?DEFAULT_TIMEOUT*8
+        end,
+    Me = self(),
+    ReqId = mk_reqid(),
+    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Table, Filter, Timeout, DDL]]),
     wait_for_listkeys(ReqId).
 
 stream_list_keys(Bucket, {?MODULE, [_Node, _ClientId]}=THIS) ->
