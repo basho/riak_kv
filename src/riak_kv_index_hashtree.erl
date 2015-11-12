@@ -38,6 +38,7 @@
          terminate/2, code_change/3]).
 
 -export([get_lock/2,
+         get_expire_time/0,
          compare/3,
          compare/4,
          compare/5,
@@ -853,9 +854,8 @@ do_poke(State) ->
 -spec maybe_expire(state()) -> state().
 maybe_expire(State=#state{lock=undefined, built=true, expired=false}) ->
     Diff = timer:now_diff(os:timestamp(), State#state.build_time),
-    Expire = app_helper:get_env(riak_kv,
-                                anti_entropy_expire,
-                                ?DEFAULT_EXPIRE),
+    Expire = get_expire_time(),
+
     %% Need to convert from millsec to microsec
     case (Expire =/= never) andalso (Diff > (Expire * 1000)) of
         true ->
@@ -866,6 +866,9 @@ maybe_expire(State=#state{lock=undefined, built=true, expired=false}) ->
     end;
 maybe_expire(State) ->
     State.
+
+get_expire_time() ->
+    app_helper:get_env(riak_kv, anti_entropy_expire, ?DEFAULT_EXPIRE).
 
 -spec clear_tree(state()) -> state().
 clear_tree(State=#state{index=Index}) ->
