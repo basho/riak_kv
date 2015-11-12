@@ -257,7 +257,8 @@ do_sweep(Index, #state{sweep_participants = SweepParticipants, sweeps = Sweeps} 
                         ?MODULE:sweep_result(Index, format_result(Result))
                 end,
             Pid = spawn_link(SweepFun),
-            State#state{sweeps = sweep_started(Sweeps, Index, Pid, ActiveParticipants, SweepParticipants, EstimatedNrKeys)}
+            State#state{sweeps = sweep_started(Sweeps, Index, Pid, ActiveParticipants,
+                                               SweepParticipants, EstimatedNrKeys)}
     end.
 
 get_estimate_keys(Index, AAEEnabled, Sweeps) ->
@@ -288,8 +289,9 @@ get_estimtate(Index) ->
 	end.
 
 disable_sweep_participant_in_running_sweep(Module, Sweeps) ->
-    [disable_participant(Sweep, Module) || #sweep{active_participants = ActiveP} = Sweep <- get_running_sweeps(Sweeps),
-              lists:keymember(Module, #sweep_participant.module, ActiveP)].
+    [disable_participant(Sweep, Module) ||
+       #sweep{active_participants = ActiveP} = Sweep <- get_running_sweeps(Sweeps),
+       lists:keymember(Module, #sweep_participant.module, ActiveP)].
 
 disable_participant(Sweep, Module) ->
     send_to_sweep_worker({disable, Module}, Sweep).
@@ -355,8 +357,8 @@ schedule_sweep_tick() ->
 %% @private
 ask_participants(Index, Participants) ->
     Funs =
-        [{Participant, (Participant#sweep_participant.module):participate_in_sweep(Index, self())} ||
-         {_Module, Participant} <- dict:to_list(Participants)],
+        [{Participant, Module:participate_in_sweep(Index, self())} ||
+         {Module, Participant} <- dict:to_list(Participants)],
     
     %% Filter non active participants
     [Participant#sweep_participant{sweep_fun = Fun, acc = InitialAcc} ||
@@ -381,7 +383,10 @@ store_result({SweptKeys, Result}, #sweep{results = OldResult} = Sweep) ->
         lists:foldl(fun({Mod, Outcome}, Dict) ->
                             dict:store(Mod, {TimeStamp, Outcome}, Dict)
                     end, OldResult, Result),
-    Sweep#sweep{swept_keys = SweptKeys, estimated_keys = {SweptKeys, TimeStamp}, results = UpdatedResults, end_time = TimeStamp}.
+    Sweep#sweep{swept_keys = SweptKeys,
+                estimated_keys = {SweptKeys, TimeStamp},
+                results = UpdatedResults,
+                end_time = TimeStamp}.
 
 update_progress(Index, SweptKeys, #state{sweeps = Sweeps} = State) ->
     Sweep = dict:fetch(Index, Sweeps),
@@ -391,14 +396,14 @@ update_progress(Index, SweptKeys, #state{sweeps = Sweeps} = State) ->
 find_expired_participant(Sweeps, Participants) ->
     ExpiredMissingSweeps =
         [{expired_or_missing(Sweep, Participants), Sweep} || Sweep <- get_idle_sweeps(Sweeps)],
-    MaxExpiredMissingSweep = hd(lists:reverse(lists:keysort(1, ExpiredMissingSweeps))),
-    case MaxExpiredMissingSweep of
+    MostExpiredMissingSweep = hd(lists:reverse(lists:keysort(1, ExpiredMissingSweeps))),
+    case MostExpiredMissingSweep of
         %% Non of the sweeps have a expired or missing participant.
         {{0,0}, _} -> [];
         {_N, Sweep} -> Sweep
     end.
 
-expired_or_missing(#sweep{index = Index, results = Results}, Participants) ->
+expired_or_missing(#sweep{results = Results}, Participants) ->
     Now = os:timestamp(),
     ResultsList = dict:to_list(Results),
     Missing = missing(run_interval, Participants, ResultsList),
@@ -408,7 +413,6 @@ expired_or_missing(#sweep{index = Index, results = Results}, Participants) ->
              expired(Now, TS, RunInterval)
          end ||
          {Mod, {TS, _Outcome}} <- ResultsList],
-    lager:info("Index: ~w Missing: ~w Expired: ~w", [Index, Missing, Expired]),
     MissingSum = lists:sum(Missing),
     ExpiredSum = lists:sum(Expired),
     {MissingSum, ExpiredSum}.
@@ -468,7 +472,8 @@ sweep_started(Sweeps, Index, Pid, ActiveParticipants, SweepParticipants, Estimat
                                     results = Results,
                                     estimated_keys = {EstimatedNrKeys, TS},
                                     active_participants = ActiveParticipants,
-                                    start_time = TS}
+                                    start_time = TS,
+                                    end_time = undefined}
                 end, Sweeps).
 
 add_asked_to_results(Results, SweepParticipants) ->
@@ -514,7 +519,8 @@ get_idle_sweeps(Sweeps) ->
     [Sweep || {_Index, #sweep{state = idle} = Sweep} <- dict:to_list(Sweeps)].
 
 get_never_runned_sweeps(Sweeps) ->
-    [Sweep || {_Index, #sweep{state = idle, results = ResDict} = Sweep} <- dict:to_list(Sweeps), dict:size(ResDict) == 0].
+    [Sweep || {_Index, #sweep{state = idle, results = ResDict} = Sweep}
+                  <- dict:to_list(Sweeps), dict:size(ResDict) == 0].
 
 persist_participants(Participants) ->
     file:write_file(sweep_file("participants.dat") , io_lib:fwrite("~p.\n",[Participants])).
