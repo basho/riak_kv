@@ -442,7 +442,8 @@ format_participants(SweepParticipants) ->
                "Run interval"]),
     SortedSweepParticipants = lists:keysort(1, SweepParticipants),
     [begin
-         IntervalString = format_interval(Interval * 1000000),
+         IntervalValue = riak_kv_sweeper:get_run_interval(Interval),
+         IntervalString = format_interval(IntervalValue * 1000000),
          io:format("~-25s  ~-20s ~-15s ~n", [atom_to_list(Mod), Desciption,  IntervalString])
      end
      || {Mod, #sweep_participant{description = Desciption, run_interval = Interval}}

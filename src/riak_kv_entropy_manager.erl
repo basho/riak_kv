@@ -180,7 +180,7 @@ disable() ->
 
 add_sweep_participant() ->
     %% Expire time in ms run interval in s
-    RunInterval = riak_kv_index_hashtree:get_expire_time() / 1000,
+    RunInterval = fun() -> riak_kv_index_hashtree:get_expire_time() / 1000 end,
     riak_kv_sweeper:add_sweep_participant(
       #sweep_participant{
                          description = "AAE tree rebuild",

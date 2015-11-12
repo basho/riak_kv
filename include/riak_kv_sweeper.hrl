@@ -21,7 +21,7 @@
          module :: atom(),          %% module where the sweep call back lives.
          fun_type :: integer(),     %% ?DELETE_FUN, ?MODIFY_FUN or ?OBSERV_FUN
          sweep_fun :: fun(),        %%
-         run_interval :: integer(), %% Defines how often participant wants to run.
+         run_interval :: integer() | fun(), %% Defines how often participant wants to run.
          acc :: any(),
          options = [] :: list(),
          errors = 0 :: integer(),
