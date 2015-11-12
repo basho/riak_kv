@@ -47,7 +47,7 @@
 
 %% Default number of concurrent sweeps that are allowed to run.
 -define(DEFAULS_SWEEP_CONCURRENCY,2).
--define(DEFAULT_SWEEP_TICK, 60 * 1000). %% 1/min
+-define(DEFAULT_SWEEP_TICK, timer:minutes(5)).
 -define(ESTIMATE_EXPIRY, 24 * 3600).    %% 1 day in s
 
 %% ====================================================================
@@ -63,7 +63,8 @@
          update_progress/2,
          stop_all_sweeps/0,
          disable_sweep_scheduling/0,
-         enable_sweep_scheduling/0]).
+         enable_sweep_scheduling/0,
+         get_run_interval/1]).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -95,11 +96,12 @@ stop_all_sweeps() ->
 
 %% Stop scheduled sweeps and disable the scheduler from starting new sweeps
 %% Only allow manual sweeps throu sweep/1.
--spec disable_sweep_scheduling() ->  ok.
+-spec disable_sweep_scheduling() -> ok.
 disable_sweep_scheduling() ->
     lager:info("Disable sweep scheduling"),
     application:set_env(riak_kv, sweeper_scheduler, false),
     stop_all_sweeps().
+-spec enable_sweep_scheduling() ->  ok.
 enable_sweep_scheduling() ->
     lager:info("Enable sweep scheduling"),
     application:set_env(riak_kv, sweeper_scheduler, true).
@@ -126,7 +128,7 @@ update_progress(Index, SweptKeys) ->
 
 init([]) ->
     process_flag(trap_exit, true),
-    schedule_sweep_tick(),
+    schedule_initial_sweep_tick(),
     case get_persistent_participants() of
         false ->
             {ok, #state{}};
@@ -348,11 +350,15 @@ concurrency_limit_reached(Sweeps) ->
 get_concurrency_limit() ->
     app_helper:get_env(riak_kv, sweep_concurrency, ?DEFAULS_SWEEP_CONCURRENCY).
 
--spec schedule_sweep_tick() -> ok.
+schedule_initial_sweep_tick() ->
+    InitialTick = trunc(get_tick() * random:uniform()),
+    erlang:send_after(InitialTick, ?MODULE, sweep_tick).
+
 schedule_sweep_tick() ->
-    Tick = app_helper:get_env(riak_kv, sweep_tick, ?DEFAULT_SWEEP_TICK),
-    erlang:send_after(Tick, ?MODULE, sweep_tick),
-    ok.
+    erlang:send_after(get_tick(), ?MODULE, sweep_tick).
+
+get_tick() ->
+    app_helper:get_env(riak_kv, sweep_tick, ?DEFAULT_SWEEP_TICK).
 
 %% @private
 ask_participants(Index, Participants) ->
@@ -420,7 +426,7 @@ expired_or_missing(#sweep{results = Results}, Participants) ->
 missing(Return, Participants, ResultList) ->
     [case Return of
          run_interval ->
-             RunInterval;
+             get_run_interval(RunInterval);
          module ->
              Module
      end ||
@@ -440,12 +446,17 @@ expired(Now, TS, RunInterval) ->
 run_interval(Mod, Participants) ->
     case dict:find(Mod, Participants) of
         {ok, #sweep_participant{run_interval = RunInterval}} ->
-            RunInterval;
+            get_run_interval(RunInterval);
         _ ->
             %% Participant have been disabled since last run.
             %% TODO: should we remove inactive results?
             disabled
     end.
+
+get_run_interval(RunIntervalFun) when is_function(RunIntervalFun) ->
+    RunIntervalFun();
+get_run_interval(RunInterval) ->
+    RunInterval.
 
 elapsed_secs(Now, Start) ->
     timer:now_diff(Now, Start) div 1000000.
