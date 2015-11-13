@@ -38,7 +38,8 @@
          hashtree_pid/1,
          requeue_poke/1,
          start_exchange_remote/3,
-         exchange_status/4]).
+         exchange_status/4,
+         maybe_add_sweep_participant/0]).
 -export([all_pairwise_exchanges/2]).
 -export([get_aae_throttle/0,
          set_aae_throttle/1,
@@ -178,6 +179,14 @@ enable() ->
 disable() ->
     gen_server:call(?MODULE, disable, infinity).
 
+maybe_add_sweep_participant() ->
+    case enabled() of
+        true ->
+            add_sweep_participant();
+        _ ->
+            ok
+    end.
+
 add_sweep_participant() ->
     %% Expire time in ms run interval in s
     RunInterval = fun() -> riak_kv_index_hashtree:get_expire_time() / 1000 end,
@@ -259,12 +268,8 @@ init([]) ->
                    exchange_queue=[]},
     State2 = reset_build_tokens(State),
     schedule_reset_build_tokens(),
-    case enabled() of
-        true ->
-            add_sweep_participant();
-        _ ->
-            ok
-    end,
+    maybe_add_sweep_participant(),
+
     {ok, State2}.
 
 handle_call({set_mode, Mode}, _From, State=#state{mode=CurrentMode}) ->
@@ -281,8 +286,8 @@ handle_call({manual_exchange, Exchange}, _From, State) ->
     {reply, ok, State2};
 handle_call(enable, _From, State) ->
     {_, Opts} = settings(),
-    add_sweep_participant(),
     application:set_env(riak_kv, anti_entropy, {on, Opts}),
+    maybe_add_sweep_participant(),
     {reply, ok, State};
 handle_call(disable, _From, State) ->
     {_, Opts} = settings(),
