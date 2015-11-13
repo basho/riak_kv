@@ -594,7 +594,6 @@ fold_fun(Tree, _HasIndexTree = true) ->
 -spec object_fold_fun(pid()) -> fun().
 object_fold_fun(Tree) ->
     fun(BKey, RObj, BinBKey, BucketProps) ->
-            %%timer:sleep(10000),
             IndexN = riak_kv_util:get_index_n(BKey, BucketProps),
             insert([{IndexN, BinBKey, hash_object(BKey, RObj)}],
                    [if_missing],
