@@ -172,7 +172,7 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
                     ColumnTypes = get_column_types(ColumnNames, Mod),
                     ColumnDescriptions = [#tscolumndescription{name = Name, type = Type}
                                           || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)],
-                    Rows = riak_pb_ts_codec:encode_rows([Row]),
+                    Rows = riak_pb_ts_codec:encode_rows(ColumnTypes, [Row]),
                     {reply, #tsgetresp{columns = ColumnDescriptions,
                                        rows = Rows}, State};
                 {error, {bad_key_length, Got, Need}} ->
@@ -420,7 +420,7 @@ make_tsqueryresp(FetchedRows, Mod) ->
                  Records),
     #tsqueryresp{columns = [#tscolumndescription{name = Name, type = Type}
                             || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)],
-                 rows = riak_pb_ts_codec:encode_rows(JustRows)}.
+                 rows = riak_pb_ts_codec:encode_rows(ColumnTypes, JustRows)}.
 
 get_column_names([{C1, _} | MoreRecords]) ->
     {RestOfColumns, _DiscardedValues} =
