@@ -2132,16 +2132,17 @@ maybe_add_opt_info({BKey, RObj}, SweepAcc, Options) ->
 				end, {[], SweepAcc}, Options).
 
 add_opt_info({{Bucket, _Key}, _RObj}, bucket_props, {OptInfo, #sa{bucket_props = BucketPropsDict} = SweepAcc}) ->
-	BucketProps = get_bucket_props(Bucket, BucketPropsDict),
-	BucketPropsDict1 = dict:store(Bucket, BucketProps, BucketPropsDict),
+	{BucketProps, BucketPropsDict1} = get_bucket_props(Bucket, BucketPropsDict),
 	{[{bucket_props, BucketProps} | OptInfo], SweepAcc#sa{bucket_props = BucketPropsDict1}}.
 
-get_bucket_props(Bucket, BucketProps) ->
-	case dict:find(Bucket, BucketProps) of
-		{ok, Value} ->
-			Value;
+get_bucket_props(Bucket, BucketPropsDict) ->
+	case dict:find(Bucket, BucketPropsDict) of
+		{ok, BucketProps} ->
+			{BucketProps, BucketPropsDict};
 		_ ->
-			riak_core_bucket:get_bucket(Bucket)
+			BucketProps = riak_core_bucket:get_bucket(Bucket),
+            BucketPropsDict1 = dict:store(Bucket, BucketProps, BucketPropsDict),
+            {BucketProps, BucketPropsDict1}
 	end.
 
 maybe_throttle_sweep(#sa{swept_keys = SweepKeys}) ->
